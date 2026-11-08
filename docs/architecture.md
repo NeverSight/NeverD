@@ -5122,6 +5122,9 @@ Long operand sequences use the existing LLVM block hash for lookup instead of
 a serial combine per handle, retaining complete ordered-operand comparison.
 That external hash call stays outside the short lookup's stack frame.
 Native literal construction normalizes its inline value before interning.
+Wide literals use owned APInt keys that compare the width and every stored
+word. A repeated lookup borrows its input instead of allocating and formatting
+a decimal string; pool indices and context copy/move ownership remain stable.
 Low-word decision proofs capture the smaller of their local and remaining
 request allowances. Each operation admits and counts the same work locally;
 every exit commits that count, including refusals. The completed-reading memo

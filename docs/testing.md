@@ -3911,6 +3911,11 @@ overshifts and remainder by zero preserve the normalized scratch-slot invariant.
 `NativeLiteralOverloadsKeepEveryWidthAndWordBoundary` checks literal identity,
 constant-only plans and unchanged step counts at every width from 1 through
 257 bits. Constant plans must not request variable values.
+`WideLiteralsKeepEveryBitAndWidthAcrossPoolGrowthAndCopies` distinguishes zero,
+all-ones and every single-bit position at widths from 65 through 1,025 bits,
+including partial high limbs. Reusing the caller's value buffer, growing both
+intern tables, copying/moving contexts and destroying the original owner
+preserve every literal's complete identity.
 `SharedRootSubstitutionKeepsSimultaneousReplacements` covers shared descendants,
 repeated roots, and overlapping replacement keys at native and wide widths.
 Independent arithmetic checks that replacement values are not substituted again.

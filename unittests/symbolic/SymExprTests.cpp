@@ -113,6 +113,43 @@ TEST(SymExpr, InterningRetainsFullIdentityAcrossGrowthCopyAndMove) {
   EXPECT_FALSE(Assigned.hasVarName("after-copy"));
 }
 
+TEST(SymExpr, WideLiteralsKeepEveryBitAndWidthAcrossPoolGrowthAndCopies) {
+  SymContext Original;
+  std::vector<std::pair<llvm::APInt, SymRef>> Values;
+  auto Insert = [&](llvm::APInt Value) {
+    const auto Ref = Original.mkConst(Value);
+    Values.emplace_back(Value, Ref);
+    // Interning owns its value, even when the caller reuses its input buffer.
+    Value.flipAllBits();
+    EXPECT_EQ(Original.constValue(Ref), Values.back().first);
+  };
+  for (unsigned Width :
+       {65u, 66u, 127u, 128u, 129u, 255u, 256u, 257u, 513u, 1025u}) {
+    Insert(llvm::APInt::getZero(Width));
+    Insert(llvm::APInt::getAllOnes(Width));
+    for (unsigned Bit = 0; Bit < Width; ++Bit)
+      Insert(llvm::APInt::getOneBitSet(Width, Bit));
+  }
+  // Every entry has a different width or value, including words whose only
+  // difference is the last bit of a partial high limb.
+  ASSERT_EQ(Original.numNodes(), Values.size());
+  auto Copy = Original;
+  SymContext Assigned;
+  Assigned = Original;
+  Original = SymContext();
+  auto Moved = std::move(Copy);
+  for (auto *Ctx : {&Moved, &Assigned}) {
+    const auto Before = Ctx->numNodes();
+    for (auto It = Values.rbegin(); It != Values.rend(); ++It) {
+      EXPECT_EQ(Ctx->mkConst(It->first), It->second);
+      EXPECT_EQ(Ctx->constValue(It->second), It->first);
+    }
+    EXPECT_EQ(Ctx->numNodes(), Before);
+    const auto NewValue = llvm::APInt::getOneBitSet(2049, 2048);
+    EXPECT_EQ(Ctx->constValue(Ctx->mkConst(NewValue)), NewValue);
+  }
+}
+
 TEST(SymExpr, CollisionChainsSurviveIndependentCopiesAndOwnerDestruction) {
   // These different literal identities all have hash 0xfb58cd469c6a459e.
   constexpr std::array<std::pair<unsigned, uint64_t>, 5> Values{

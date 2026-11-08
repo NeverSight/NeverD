@@ -505,6 +505,7 @@ private:
   void retainLowWordProjection(SymRef Source, uint32_t Width, SymRef Image);
 
   llvm::APInt maskToWidth(const llvm::APInt &V, uint32_t Width) const;
+  SymRef internWideConst(const llvm::APInt &Value);
   uint32_t minimumVariableId(SymRef R) const;
 
   std::vector<SymNode> Nodes;
@@ -584,7 +585,7 @@ private:
   /// once more than one width uses it.  Name-only lookup must never choose one
   /// of several width-specific variables by accident.
   std::unordered_map<std::string, uint32_t> VarByName;
-  std::unordered_map<std::string, uint32_t> WideConstByKey;
+  llvm::DenseMap<llvm::APInt, uint32_t> WideConstByValue;
 
   struct InputSpaceKey {
     SymInputKind Kind = SymInputKind::Register;
