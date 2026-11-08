@@ -2828,6 +2828,12 @@ i386 ELF output through NeverC at O0/O2: 24 native C compilation checks retain
 raw i32 input and nonreturning IR, and reject an external helper or an old
 continuation in the emitted object. The dedicated SKINIT capability check works
 independently of long-mode-only system builtins.
+`scripts/check_x86_skinit_source.py` consumes that test's retained directory.
+With `--linker` pointing to `ld.lld`, it links the complete NeverC and Clang
+objects and compares original bytes against both C routes at the launch
+boundary. Nine input values cover low, image-valued and high-bit integers;
+separate EAX and image-store corruptions must be rejected. The script requires
+Capstone, LIEF and Unicorn and never executes SKINIT.
 Run the shared integer-width and pointer-address suites after changing this
 address/parameter boundary. The retained source snapshots, report hashes and
 independent LLVM/NeverC instruction-boundary checks are in the
