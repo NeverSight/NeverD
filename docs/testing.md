@@ -4683,6 +4683,45 @@ order and retain paired measurements and CPU time alongside output hashes.
 The full build's `neverd-acceleration-bench` target reports wall and process CPU
 time separately; use both when the host has competing workloads.
 
+Shared fork exports are owned at `scripts/fork_dependencies.py::refresh` and
+the `scripts/build.py` configure/build boundary. On POSIX, a successful
+configuration retires newly managed commit directories that are no longer
+referenced by the current snapshot, configured graph or named frozen readers.
+The ownership journal is written before creation, and its matching marker is
+removed last during retirement. Retry journals occupy fixed files. Existing
+unmarked exports are not adopted or deleted; reusable `_deps` build caches,
+installed SDKs and other build directories remain caller-owned.
+
+A failed configuration retains both the previous graph and pending snapshot.
+The next supported build first completes that pending configuration before
+refreshing remote heads. Fix the reported configuration error and rerun
+`scripts/build.py`; repeated failures do not export more revisions. Initial
+plain CMake configuration records a pending reader too, which the build wrapper
+completes. Do not run plain CMake and the wrapper concurrently in one directory.
+The wrapper passes its POSIX lock to CMake: interrupting or killing the Python
+owner does not permit retirement while its surviving CMake process still runs.
+An interrupted wrapper may therefore leave CMake finishing its current work.
+Windows retains the previous no-retirement policy; orphaned CMake reader
+locking there is not qualified by the POSIX implementation.
+
+Before retaining fork source paths for a frozen benchmark or external reader,
+register them while they are still current:
+
+```bash
+python3 scripts/fork_dependencies.py retain BUILD_DIR --reader frozen-baseline
+# Release only when no reader needs those exported source paths.
+python3 scripts/fork_dependencies.py release BUILD_DIR --reader frozen-baseline
+```
+
+`retain --snapshot SNAPSHOT.json` accepts an earlier saved snapshot only while
+its archives still exist. Reader names do not expire automatically. Run
+`python3 -m unittest scripts.tests.test_fork_dependencies scripts.tests.test_fork_export_lifecycle -v`
+for tiny local Git/archive/CMake fixtures covering normal refresh and builds,
+repeated success and configure failure, frozen readers and protected caches,
+archive failures, SIGINT/SIGTERM/SIGKILL, surviving CMake child locks and
+interrupted ownership creation/retirement. Tests remove their own fixture trees.
+They neither refresh the real dependency submodules nor clean real build trees.
+
 Local Capstone experiment drivers use
 `scripts/capstone_perf_lifecycle.py::Experiment` around preparation, compilation,
 validation and measurement. It owns one `.capstone-perf/current` directory under
