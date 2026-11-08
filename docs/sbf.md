@@ -609,6 +609,13 @@ all operands are literal values. The same known-successor rule serves ordinary
 context flow and memory-path replay; no extra specialization is created. The
 existing `skipped_constant_branch_successors` counter includes these constant
 outcomes over numeric ranges.
+On a 64-bit equality comparison's unequal edge, a known unsigned interval can
+exclude an interior value by retaining both remaining intervals. These bounds
+flow into returned tags, so a path that rejected a tag cannot contribute its
+payload when the caller selects that tag. The existing four-alternative limit
+still applies: if another split exceeds it, the incoming bounds are retained
+without that refinement. Unknown ordinary scalars and 32-bit comparisons gain
+no full-width exclusion from this rule.
 Exact 64-bit register copies retain the tag relation; redefinition, potentially
 aliasing tag writes, calls, memory copies and loop backedges discard it. Payload
 writes invalidate affected conditional fields through the existing typed-memory

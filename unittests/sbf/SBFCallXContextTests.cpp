@@ -12395,4 +12395,213 @@ TEST(SBFCallXContexts, OffsetSumProductsKeepDisjointFields) {
   RecordProperty("raw_executions", static_cast<int>(RawExecutions));
 }
 
+TEST(SBFCallXContexts, InteriorTagExclusionsKeepTheirOwnPayloads) {
+  size_t RawExecutions = 0;
+  for (unsigned Mode = 0; Mode != 4; ++Mode)
+    for (bool Reverse : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << Mode << ", reverse=" << Reverse);
+      const bool MutateTag = Mode == 3;
+      std::vector<test::EncodedInstruction> Text;
+      const auto Literal = [&](unsigned R, uint64_t Value) {
+        const size_t Slot = Text.size();
+        const auto Words = test::loadImm64(R, Value);
+        Text.insert(Text.end(), Words.begin(), Words.end());
+        return Slot;
+      };
+      Text.push_back(encode(Opcode::MOV64_REG, 1, 10));
+      Text.push_back(encode(Opcode::ADD64_IMM, 1, 0, 0, -16));
+      const size_t Call = Text.size();
+      Text.push_back({});
+      Text.push_back(encode(Opcode::LD_B_REG, 7, 10, -16));
+      const size_t Select = Text.size();
+      Text.push_back({});
+      Text.push_back(encode(Opcode::LD_DW_REG, 8, 10, -8));
+      const size_t OtherCallX = Text.size();
+      Text.push_back(encode(Opcode::CALL_REG, 8));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t Equal = Text.size();
+      Text.push_back(encode(Opcode::LD_DW_REG, 8, 10, -8));
+      const size_t EqualCallX = Text.size();
+      Text.push_back(encode(Opcode::CALL_REG, 8));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t Producer = Text.size();
+      Text.push_back(encode(Opcode::MOV64_REG, 6, 1));
+      Literal(3, kInputStart);
+      Text.push_back(encode(Opcode::LD_B_REG, 9, 3));
+      if (Mode == 2)
+        Text.push_back(encode(Opcode::MOV64_IMM, 4, 0, 0, 2));
+      const size_t Choose = Text.size();
+      Text.push_back({});
+      const size_t FirstTarget = Literal(2, 0);
+      Text.push_back(encode(Opcode::ST_DW_REG, 6, 2, 8));
+      if (MutateTag)
+        Text.push_back(encode(Opcode::MOV64_IMM, 9, 0, 0, 2));
+      const size_t Jump = Text.size();
+      Text.push_back({});
+      const size_t Second = Text.size();
+      const size_t SecondTarget = Literal(2, 0);
+      Text.push_back(encode(Opcode::ST_DW_REG, 6, 2, 8));
+      const size_t Tail = Text.size();
+      Text.push_back(encode(Opcode::ST_B_REG, 6, 9));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t A = Text.size();
+      Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t B = Text.size();
+      Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 43));
+      Text.push_back(encode(Opcode::EXIT));
+      Text[Call] = encode(Opcode::CALL_IMM, 0, 1, 0, Producer - Call - 1);
+      Text[Select] = encode(Opcode::JEQ64_IMM, 7, 0, Equal - Select - 1, 2);
+      Text[Choose] =
+          encode(Mode == 1   ? Opcode::JNE64_IMM
+                 : Mode == 2 ? Opcode::JEQ64_REG
+                             : Opcode::JEQ64_IMM,
+                 Mode == 2 ? 4 : 9, Mode == 2 ? 9 : 0, Second - Choose - 1, 2);
+      Text[Jump] = encode(Opcode::JA, 0, 0, Tail - Jump - 1);
+      for (const auto &[Slot, Target] :
+           {std::pair{FirstTarget, Mode == 1 ? B : A},
+            std::pair{SecondTarget, Mode == 1 ? A : B}}) {
+        const auto Words = test::loadImm64(2, kBytecodeStart + Target * 8);
+        std::copy(Words.begin(), Words.end(), Text.begin() + Slot);
+      }
+      auto Program = analyze(test::makeImage(Text, {}));
+      ASSERT_TRUE(static_cast<bool>(Program))
+          << llvm::toString(Program.takeError());
+      if (Reverse)
+        std::reverse(Program->Low.Edges.begin(), Program->Low.Edges.end());
+      auto Report = recoverCallXContexts(*Program);
+      ASSERT_TRUE(static_cast<bool>(Report))
+          << llvm::toString(Report.takeError());
+      checkSummaryReferences(*Report);
+      EXPECT_FALSE(Report->SpecializationBudgetExhausted);
+      for (const auto &[Slot, Target] :
+           {std::pair{EqualCallX, B}, std::pair{OtherCallX, A}}) {
+        bool Proven = false;
+        for (const auto &Site : Report->Contexts)
+          if (Site.CallXSlot == Slot && Site.TargetSlot) {
+            EXPECT_EQ(*Site.TargetSlot, Target);
+            Proven = true;
+          }
+        if (!MutateTag)
+          EXPECT_TRUE(Proven) << Slot;
+        else if (Slot == EqualCallX)
+          EXPECT_FALSE(Proven);
+      }
+      std::set<size_t> EqualTargets, OtherTargets;
+      for (unsigned Tag = 0; Tag != 256; ++Tag) {
+        ExecutionEnvironment Environment;
+        Environment.Memory.push_back(
+            {kInputStart, {static_cast<uint8_t>(Tag)}, false, "tag"});
+        auto Raw = executeRaw(*Program, std::move(Environment));
+        ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
+        ASSERT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+        EXPECT_EQ(Raw->ReturnValue, Tag == 2 ? 43u : 42u);
+        for (size_t I = 0; I + 1 < Raw->Trace.size(); ++I) {
+          if (Raw->Trace[I].Slot == EqualCallX)
+            EqualTargets.insert(Raw->Trace[I + 1].Slot);
+          if (Raw->Trace[I].Slot == OtherCallX)
+            OtherTargets.insert(Raw->Trace[I + 1].Slot);
+        }
+        ++RawExecutions;
+      }
+      EXPECT_EQ(EqualTargets,
+                MutateTag ? (std::set<size_t>{A, B}) : (std::set<size_t>{B}));
+      EXPECT_EQ(OtherTargets,
+                MutateTag ? (std::set<size_t>{}) : (std::set<size_t>{A}));
+    }
+  EXPECT_EQ(RawExecutions, 2048u);
+  RecordProperty("raw_executions", static_cast<int>(RawExecutions));
+}
+
+TEST(SBFCallXContexts, InteriorExclusionsKeepBoundsAtTheAlternativeLimit) {
+  size_t RawExecutions = 0;
+  for (bool Unknown : {false, true})
+    for (bool Reverse : {false, true}) {
+      SCOPED_TRACE(::testing::Message()
+                   << "unknown=" << Unknown << ", reverse=" << Reverse);
+      std::vector<test::EncodedInstruction> Text;
+      const auto Literal = [&](unsigned R, uint64_t Value) {
+        const size_t Slot = Text.size();
+        const auto Words = test::loadImm64(R, Value);
+        Text.insert(Text.end(), Words.begin(), Words.end());
+        return Slot;
+      };
+      const size_t SavedTarget = Literal(2, 0);
+      Text.push_back(encode(Opcode::ST_DW_REG, 10, 2, -8));
+      Literal(1, kInputStart);
+      Text.push_back(
+          encode(Unknown ? Opcode::LD_DW_REG : Opcode::LD_B_REG, 8, 1));
+      std::array<size_t, 4> Exclusions;
+      for (auto &Slot : Exclusions) {
+        Slot = Text.size();
+        Text.push_back({});
+      }
+      Text.push_back(encode(Opcode::AND64_IMM, 8, 0, 0, -8));
+      Literal(1, kHeapStart);
+      Text.push_back(encode(Opcode::ADD64_REG, 8, 1));
+      const size_t ChangedTarget = Literal(2, 0);
+      Text.push_back(encode(Opcode::ST_DW_REG, 8, 2));
+      Text.push_back(encode(Opcode::LD_DW_REG, 5, 10, -8));
+      const size_t CallX = Text.size();
+      Text.push_back(encode(Opcode::CALL_REG, 5));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t Excluded = Text.size();
+      Text.push_back(encode(Opcode::MOV64_IMM, 0));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t A = Text.size();
+      Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t B = Text.size();
+      Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 43));
+      Text.push_back(encode(Opcode::EXIT));
+      for (unsigned I = 0; I != Exclusions.size(); ++I)
+        Text[Exclusions[I]] = encode(Opcode::JEQ64_IMM, 8, 0,
+                                     Excluded - Exclusions[I] - 1, 2 + 2 * I);
+      for (const auto &[Slot, Target] :
+           {std::pair{SavedTarget, A}, std::pair{ChangedTarget, B}}) {
+        const auto Words = test::loadImm64(2, kBytecodeStart + Target * 8);
+        std::copy(Words.begin(), Words.end(), Text.begin() + Slot);
+      }
+      auto Program = analyze(test::makeImage(Text, {}));
+      ASSERT_TRUE(static_cast<bool>(Program))
+          << llvm::toString(Program.takeError());
+      if (Reverse)
+        std::reverse(Program->Low.Edges.begin(), Program->Low.Edges.end());
+      auto Report = recoverCallXContexts(*Program);
+      ASSERT_TRUE(static_cast<bool>(Report))
+          << llvm::toString(Report.takeError());
+      checkSummaryReferences(*Report);
+      EXPECT_FALSE(Report->SpecializationBudgetExhausted);
+      EXPECT_EQ(llvm::any_of(Report->Contexts,
+                             [&](const auto &Site) {
+                               return Site.CallXSlot == CallX &&
+                                      Site.TargetSlot == A;
+                             }),
+                !Unknown);
+      for (unsigned I = 0; I != 256 + unsigned(Unknown); ++I) {
+        const bool Alias = I == 256;
+        const uint64_t Value =
+            Alias
+                ? kStackStart + Program->Config.StackFrameSize - 8 - kHeapStart
+                : I;
+        std::vector<uint8_t> Input(8);
+        llvm::support::endian::write64le(Input.data(), Value);
+        ExecutionEnvironment Environment;
+        Environment.Memory.push_back({kInputStart, Input, false, "offset"});
+        Environment.Memory.push_back(
+            {kHeapStart, std::vector<uint8_t>(256), true, "heap"});
+        auto Raw = executeRaw(*Program, std::move(Environment));
+        ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
+        ASSERT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+        EXPECT_EQ(Raw->ReturnValue, Alias ? 43u
+                                    : (I == 2 || I == 4 || I == 6 || I == 8)
+                                        ? 0u
+                                        : 42u);
+        ++RawExecutions;
+      }
+    }
+  EXPECT_EQ(RawExecutions, 1026u);
+  RecordProperty("raw_executions", static_cast<int>(RawExecutions));
+}
+
 } // namespace neverd::sbf

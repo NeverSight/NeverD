@@ -509,6 +509,7 @@ bool refineAddressBranch(const MedInstruction *Last, size_t Successor,
       return true;
     const auto Before = Bounds.value_or(UnsignedValueRange{});
     auto Range = Before;
+    std::optional<UnsignedValueRange> LowerPart;
     bool Possible = true;
     switch (Predicate) {
     case Operation::Eq:
@@ -523,6 +524,12 @@ bool refineAddressBranch(const MedInstruction *Last, size_t Successor,
           ++Range.Lower;
       } else if (Range.Upper == Constant) {
         --Range.Upper;
+      } else if (Range.Lower < Constant && Constant < Range.Upper) {
+        // A tag excluded from the middle of a range needs both remaining
+        // intervals. Keeping the original hull would let this path supply a
+        // payload for the very tag its branch rejected.
+        LowerPart = UnsignedValueRange{Range.Lower, Constant - 1};
+        Range.Lower = Constant + 1;
       }
       break;
     }
@@ -556,17 +563,26 @@ bool refineAddressBranch(const MedInstruction *Last, size_t Successor,
     Reachable = true;
     // An unchanged captured value retains its equality identity. A narrowed
     // identity becomes a range rather than mutating globally shared bounds.
-    RegisterValue Narrowed =
-        Range == Before ? Value : unsignedRangeValue(Range);
-    if (Value.ValueKind == RegisterValue::Kind::Unknown &&
-        Range.Lower < kHeapStart)
-      Narrowed = {};
-    if (!Refined)
-      Refined = Narrowed;
-    else
-      Refined->join(Narrowed);
+    const auto Include = [&](UnsignedValueRange Part) {
+      RegisterValue Narrowed =
+          Part == Before ? Value : unsignedRangeValue(Part);
+      if (Value.ValueKind == RegisterValue::Kind::Unknown &&
+          Part.Lower < kHeapStart)
+        Narrowed = {};
+      if (!Refined)
+        Refined = Narrowed;
+      else
+        Refined->join(Narrowed);
+    };
+    Include(Range);
+    if (LowerPart)
+      Include(*LowerPart);
   }
   if (Reachable) {
+    // Splitting several intervals can exceed the existing alternative limit.
+    // The incoming value remains sound on this edge and retains its bounds.
+    if (Refined->unknown() && !State.Registers[Register].unknown())
+      return true;
     const uint16_t ReturnAliases =
         State.Nullable && (State.Nullable->Registers & registerBit(Register))
             ? State.Nullable->Registers
