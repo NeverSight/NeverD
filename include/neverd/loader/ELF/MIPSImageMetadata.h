@@ -34,12 +34,14 @@ struct MIPSImageMetadata {
   uint32_t ELFFlags = 0;
   /// The admitted instruction profile. Without .MIPS.abiflags, e_flags cannot
   /// distinguish Release 2 from Releases 3 and 5; only the R2 subset is
-  /// admitted.
+  /// admitted without that record. The MSA slice requires explicit R5 evidence.
   uint8_t ISARevision = 2;
   /// The ELF admits both classic and microMIPS code, not a global micro mode.
   bool HasMicroMIPS = false;
   /// Classic MIPS32 DSP ASE; the initial slice requires DSP execution enabled.
   bool HasDSP = false;
+  /// Initial classic MIPS32r5/o32 integer MSA slice, with FP64 register mode.
+  bool HasMSA = false;
   std::map<uint64_t, InstructionMode> CodeModeEntries;
   std::vector<MIPSCodeRegion> CodeRegions;
   bool HasABIFlags = false;

@@ -366,6 +366,8 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
     S.write(RD, Result, false);
     return true;
   }
+  case 30: // MSA
+    return liftMSA(S, Word);
   case 31: // SPECIAL3 integer bitfields and lane permutations
     return liftBitfield(S, Word) || liftDSP(S, Word);
   default:

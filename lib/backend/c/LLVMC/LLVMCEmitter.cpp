@@ -880,6 +880,25 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
   bool NeedsX86SystemStateDispatch = false;
   bool HasFloatingArithmetic = false;
   bool HasWin64Call = false;
+  const bool NeedsMIPSWideCarrier =
+      Opts.TheArch == Arch::MIPS32 || Opts.TheArch == Arch::MIPS32EL;
+  bool HasWideInteger = false;
+  const auto IsWideInteger = [](auto &&Visit, llvm::Type *Type) -> bool {
+    if (const auto *Integer = llvm::dyn_cast<llvm::IntegerType>(Type))
+      return Integer->getBitWidth() > 64 && Integer->getBitWidth() <= 128;
+    if (Type->isAggregateType())
+      for (auto *Element : Type->subtypes())
+        if (Visit(Visit, Element))
+          return true;
+    return false;
+  };
+  const auto NoteWideInteger = [&](llvm::Type *Type) {
+    if (NeedsMIPSWideCarrier && !HasWideInteger)
+      HasWideInteger = IsWideInteger(IsWideInteger, Type);
+  };
+  if (NeedsMIPSWideCarrier)
+    for (const auto &Global : Mod.globals())
+      NoteWideInteger(Global.getValueType());
   Win64CallABI.clear();
   std::set<std::string> Headers;
   // The routines the user declares that the unit calls: directly, and
@@ -905,6 +924,12 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
   };
 
   for (auto &Fn : Mod) {
+    // Declarations and aggregate definitions can survive selection of only
+    // one body, including a function referenced only through its address.
+    NoteWideInteger(Fn.getReturnType());
+    if (NeedsMIPSWideCarrier)
+      for (const auto &Arg : Fn.args())
+        NoteWideInteger(Arg.getType());
     if (!SelectedFunctions.contains(Fn))
       continue;
     // Windows exception handling prints as `__try` with the filter
@@ -916,10 +941,17 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
       Headers.insert("excpt.h");
     for (auto &BB : Fn) {
       for (auto &Inst : BB) {
-        for (const llvm::Use &Operand : Inst.operands())
+        NoteWideInteger(Inst.getType());
+        // Opaque pointer results do not describe the declared local storage.
+        if (NeedsMIPSWideCarrier)
+          if (const auto *Allocation = llvm::dyn_cast<llvm::AllocaInst>(&Inst))
+            NoteWideInteger(Allocation->getAllocatedType());
+        for (const llvm::Use &Operand : Inst.operands()) {
+          NoteWideInteger(Operand->getType());
           if (Operand->getType()->isPointerTy())
             if (const auto Addr = declaredImageDataVA(Operand.get()))
               NoteHeaderObject(*Addr);
+        }
         HasFloatingArithmetic |= Inst.getOpcode() == llvm::Instruction::FAdd ||
                                  Inst.getOpcode() == llvm::Instruction::FSub ||
                                  Inst.getOpcode() == llvm::Instruction::FMul ||
@@ -1265,10 +1297,13 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     OS << X86VirtualizationCompilerDispatch;
   if (NeedsX86SystemStateDispatch)
     OS << X86SystemStateCompilerDispatch;
-  if (Opts.TheArch == Arch::X86) {
-    // i386 Clang supports bit-precise integers but does not define the native
-    // 128-bit aliases used by LLVM C's 65..128-bit scalar carriers. Retain the
-    // same signed/unsigned operations, including packed FP results and MXCSR.
+  if (Opts.TheArch == Arch::X86 ||
+      (HasWideInteger &&
+       (Opts.TheArch == Arch::MIPS32 || Opts.TheArch == Arch::MIPS32EL))) {
+    // 32-bit x86/MIPS Clang supports bit-precise integers but does not define
+    // the native 128-bit aliases used by LLVM C's 65..128-bit scalar carriers.
+    // Retain the same signed/unsigned operations, including packed FP results
+    // and MXCSR.
     OS << "#if !defined(__SIZEOF_INT128__) && defined(__BITINT_MAXWIDTH__) && "
           "__BITINT_MAXWIDTH__ >= 128\n"
           "typedef unsigned _BitInt(128) __uint128_t;\n"
