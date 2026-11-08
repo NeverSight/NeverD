@@ -80,7 +80,11 @@ Reserved bank bits remain intact for the C++ owner to admit or reject.
 `NeverDUnitTests`) for the [fixed local APIC model](x86-local-apic.md). Build it
 through `scripts/build.py`; its assertions cover all fixed vectors and priority
 classes, acknowledgments, nested service and EOI obligations without executing
-a test binary. For a real save, compile projected bank initializers at O0/O2,
+a test binary. Its arrival source adds 7,680 message truth-table cases and
+960 complete two-slot lifetimes across every fixed vector, plus reserved-vector
+refusal and coalesced trigger-mode changes through EOI. These are constant
+expressions, not runtime tests or captured arrival traces.
+For a real save, compile projected bank initializers at O0/O2,
 inspect constant bytes, and keep hypothetical register transitions distinct
 from captured observations. No guest, handler or device callback need run.
 
