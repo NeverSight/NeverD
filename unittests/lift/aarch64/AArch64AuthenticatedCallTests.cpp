@@ -484,6 +484,9 @@ void checkTypedShape(const TypedShape &Shape, bool Native) {
     for (const auto &Binding : Bindings)
       Words += (Binding.Type->Size + kPointerBytes - 1) / kPointerBytes;
     auto Function = function(Variant.Key, false, Words, Variant.Raw);
+    const bool VectorReturn = isSourceAArch64Vector128Type(ReturnType);
+    if (VectorReturn)
+      Function.ReturnType = NdType::makeInt(kSourceAArch64Vector128Bytes);
     auto &Block = Function.Blocks.front();
     MedOp Call = Block.Ops[Variant.Raw ? 0 : 1];
     Hint->CallKind = Native ? SourceCallTypeHint::Kind::Native
@@ -560,17 +563,12 @@ void checkTypedShape(const TypedShape &Shape, bool Native) {
       Return.Inputs[0] = Widen.Output;
       Setup.push_back(std::move(Widen));
     }
-    if (ReturnType->Kind == NdTypeKind::Struct ||
-        ReturnType->Size > kPointerBytes) {
+    if (!VectorReturn && (ReturnType->Kind == NdTypeKind::Struct ||
+                          ReturnType->Size > kPointerBytes)) {
       MedVar Accumulator = MedVar::makeConst(0, kPointerBytes);
       int Id = kTypedTemporaryId + Bindings.size();
       unsigned Version = Call.Output.SSAVer;
-      auto Members = sourceABIValueMembers(ReturnType);
-      if (isSourceAArch64Vector128Type(ReturnType))
-        for (unsigned Offset = 0; Offset < kSourceAArch64Vector128Bytes;
-             Offset += kPointerBytes)
-          Members.push_back({NdType::makeInt(kPointerBytes), uint16_t(Offset)});
-      for (const auto &Member : Members) {
+      for (const auto &Member : sourceABIValueMembers(ReturnType)) {
         MedOp Extract;
         Extract.Opcode = NdOp::SUBBYTES;
         Extract.Output.Kind = MedVar::Temp;
