@@ -40,6 +40,74 @@ native objects from older syntax-only/metadata checks and retain source/probe
 and object hashes. Emission or compilation alone does not establish behavioral
 verification.
 
+Native objects are removed after recording their size and hash, including with
+`--retain-sources` and when compiler result collection fails. Sources and Rust
+probe inputs are kept only when explicitly requested.
+
+### Repeated runs and artifact ownership
+
+On POSIX, opt into an owned workspace for repeated qualification:
+
+```sh
+python3 scripts/run_sbf_corpus.py \
+  --worker build-sbf-qualification/bin/neverd-sbf-corpus \
+  --cache /path/to/sbf-assets \
+  --output build-sbf-qualification/corpus-candidate \
+  --artifact-workspace build-sbf-qualification \
+  --artifact-role corpus-current --pending-reader source-audit \
+  --retain-sources --compile --jobs 2 --timeout 60
+
+# Preserve this result as a baseline before replacing the current result.
+python3 scripts/sbf_artifacts.py --workspace build-sbf-qualification \
+  pin baseline-comparison corpus-current
+
+# Run the source audit, then release its pending reader.
+python3 scripts/sbf_artifacts.py --workspace build-sbf-qualification \
+  release source-audit
+```
+
+Only explicitly registered products are collected. Existing inputs, original
+source, unregistered results, shared SDKs and recovery archives are untouched.
+A completed bundle remains under its stable role until a later result replaces
+it. Additional reader pins keep baselines or failure reproductions alive; release
+each pin when that reader finishes or is deliberately abandoned. Reusing a
+pending reader name fails until it is released. Use stable role names across
+rounds instead of adding a new retained role for every attempt.
+
+Failed producer exceptions and cancelled attempts retain a bounded current
+receipt, input identities and diagnostic tails; their disposable products are
+removed. Ordinary termination cancels owned subprocesses before cleanup.
+`SIGKILL` cannot run cleanup: the next workspace entry recovers the interrupted
+producer only after its inherited child lease is no longer held. `recover` and
+`status` are explicit workspace commands. This mechanism does not discover old
+unregistered output directories or clean another task's files.
+
+`scripts.sbf_artifacts.ArtifactWorkspace` also supplies content-addressed worker
+snapshots and recoverable temporary source overlays for diagnostic drivers.
+Identical frozen workers share a file; named readers control retirement. Pass
+`--build-metadata` when its build receipts are stored separately from the worker.
+An overlay restores the exact original bytes, including uncommitted edits. If
+another edit intervenes, recovery fails with both copies preserved. Diagnostic
+build outputs are registered before compilation; changed executables are retired
+after their readers exit or on recovery, so restoring source cannot leave an
+instrumented binary to be mistaken for a canonical build. An unchanged reusable
+executable survives a build that fails before replacing it.
+
+The official SBPF oracle builder reuses one owned checkout and Cargo target
+cache beside its output on POSIX. Cargo still runs on every invocation to check
+its fingerprints. Changing the pinned upstream revision or Rust toolchain
+retires that target cache after checking for unrelated source edits. Checkout
+creation and publication are disposable; the source repository's worktree
+registry is not modified. Windows keeps the disposable build path and does not
+use POSIX artifact leases.
+
+Validate lifecycle changes without a corpus download or compiler build:
+
+```sh
+python3 -m unittest scripts.tests.test_sbf_artifacts \
+  scripts.tests.test_sbf_artifact_producers scripts.tests.test_sbf_corpus -v
+```
+
 `summary.native_compilation` counts C and Rust object results independently
 from source emission. A successfully exported file with a compiler timeout is
 an emission pass and a native-compilation failure. Cancellation retains the
