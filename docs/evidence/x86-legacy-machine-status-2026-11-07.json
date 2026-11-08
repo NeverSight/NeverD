@@ -1,0 +1,1985 @@
+{
+  "schema": 1,
+  "scope": "Protected SMSW/LMSW/CLTS and CLAC/STAC; i386 native builtin exposure",
+  "global_x86_complete": false,
+  "qualification_head": "ce5478965bc441f3a7a402416984e05951d78c7d",
+  "implementation_head": "bece7cfe071c698c1ba33b5b5eb860af6b313928",
+  "host": {
+    "kernel": "7.0.0-42-generic",
+    "cpu": [
+      {
+        "field": "Architecture:",
+        "data": "x86_64"
+      },
+      {
+        "field": "Vendor ID:",
+        "data": "GenuineIntel"
+      },
+      {
+        "field": "Model name:",
+        "data": "13th Gen Intel(R) Core(TM) i9-13900H"
+      },
+      {
+        "field": "CPU family:",
+        "data": "6"
+      },
+      {
+        "field": "Model:",
+        "data": "186"
+      },
+      {
+        "field": "Stepping:",
+        "data": "2"
+      }
+    ],
+    "p_core": 4,
+    "e_core": 12,
+    "linker_driver_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+  },
+  "implementation_sources": [
+    {
+      "path": "docs/architecture.md",
+      "sha256": "ea39752cc97ef1e2c130b0ec833f81c9fed46359f67d9693fa76927a2244bf1c"
+    },
+    {
+      "path": "docs/testing.md",
+      "sha256": "24ede80420c2a80de4f5ae6c36f470ebe208de05c40a340dec129ae17cf8c231"
+    },
+    {
+      "path": "include/neverd/translate/X86/X86LegacyExecution.h",
+      "sha256": "639e75aac5582b109cc2e3d20ebec5dcc506399a6ea9741d8b738de96e7c4211"
+    },
+    {
+      "path": "lib/translate/X86/X86LegacyExecution.cpp",
+      "sha256": "bc4be05d405495223ebcd6de8f36fdff01ff07079c535738e7b640109a2dcf71"
+    },
+    {
+      "path": "lib/translate/X86/X86LegacyScalar.h",
+      "sha256": "70905bbdd0e44df2867e01efff70b5f12cd4d2cf9bd6479f03f0bc47ae9b239f"
+    },
+    {
+      "path": "lib/translate/X86/X86LegacyScalarEncoding.cpp",
+      "sha256": "31db1c44fd2ff388cc983363d4531ec62b42748028bf2619ff65d716141622ea"
+    },
+    {
+      "path": "lib/translate/X86/X86LegacyScalarExecution.cpp",
+      "sha256": "70dc0a285ea9dc2bb420a29e2e1438637dad762dbf9b15c1157d40d2e3b6d01a"
+    },
+    {
+      "path": "unittests/translate/x86/X86LegacyDebugNativeTests.inc",
+      "sha256": "697e2673229438509c311ea3ecc81964847982145396c89ada1f04ab2a761422"
+    },
+    {
+      "path": "unittests/translate/x86/X86LegacyExecutionTests.cpp",
+      "sha256": "1aa2f9b5685acf341597c64a74b5a8642ada138f92e5d2850d07ebda35a05159"
+    },
+    {
+      "path": "unittests/translate/x86/X86LegacyMachineStatusNativeTests.inc",
+      "sha256": "5d0d4abeb792aa2992c174aca777bae1a7292abee5e3df7794d62d1accb89807"
+    },
+    {
+      "path": "unittests/translate/x86/X86LegacyMachineStatusTestEncoding.h",
+      "sha256": "65dcdcbf0b2eb3ee5f92a67586a8514d77088a4fe559f07e05b0ccaee64c8a73"
+    },
+    {
+      "path": "unittests/translate/x86/X86LegacyMachineStatusTests.inc",
+      "sha256": "7fe7a6541fbd74acecf8278b923a926f48efb3f482cfff1625f06b33191d8edc"
+    },
+    {
+      "path": "unittests/translate/x86/X86LegacyScalarNativeFixture.inc",
+      "sha256": "8ac6935271148721839c7e802a13698a6e28a694a51e64fef5ae45e7f1e82579"
+    },
+    {
+      "path": "unittests/translate/x86/X86LegacySourceTests.cpp",
+      "sha256": "3b88f23dc7e0991aa0309d46bcca6f49b1950ddfcef44e916dc4ad2c6192592c"
+    },
+    {
+      "path": "unittests/translate/x86/X86LegacyTestState.h",
+      "sha256": "9c3e041181290534e52b20402f99a32b4f6facf806713be5d5475745cc2611d3"
+    },
+    {
+      "path": "unittests/translate/x86/X86LegacyWatchpointNativeTests.inc",
+      "sha256": "3c9d74a9e351047e03ed32f21e90e2256dd12132aa09cfdf2ef6e2024a3c0908"
+    },
+    {
+      "path": "unittests/translate/x86/X86PagingNativeTests.cpp",
+      "sha256": "fe14ba5ef7969913b25c529d41986871949d1936d98ca9360844bfc5164e0512"
+    }
+  ],
+  "llvm": {
+    "fork_head": "1c51c12828cc0d8eb6089ee02614f3f86f2e95f5",
+    "neverd_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+    "pin": "neverd-llvm-v23.0.0-r6",
+    "release_created": false
+  },
+  "neverc": {
+    "head": "3cc5f58a12266b1c768ffc672be038aa7752bf14",
+    "status": "",
+    "new_common_builtins": [
+      "clts",
+      "clac",
+      "stac",
+      "hlt",
+      "vmxoff",
+      "stgi",
+      "clgi"
+    ],
+    "qualification": [
+      {
+        "core": "p",
+        "result_sha256": "1fd412e046e8d9c232ee0e55fad881ed6f7fc602bd2e764b0bb6a71a6baacd21",
+        "result": {
+          "profiles": [
+            {
+              "profile": "i386-O0",
+              "native": {
+                "native_query_comparisons": 1320,
+                "native_assertions": 2200
+              },
+              "codegen_forms": 35,
+              "object_sha256": "a555e0624966895a2bd00ff8957eb90bf8db858740cc821ed3c380fd39a00270"
+            },
+            {
+              "profile": "i386-O2",
+              "native": {
+                "native_query_comparisons": 1320,
+                "native_assertions": 2200
+              },
+              "codegen_forms": 35,
+              "object_sha256": "afed68455d4e66159a66e6a3ea9edfd036ce9589c1298731b0afef81f7cf2e62"
+            },
+            {
+              "profile": "x86_64-O0",
+              "native": {
+                "native_query_comparisons": 1320,
+                "native_assertions": 2200
+              },
+              "codegen_forms": 42,
+              "object_sha256": "f393241620c7ca39663dcdc28aed93b34919cc7ec1dad7a8698f2a6b1d639a69"
+            },
+            {
+              "profile": "x86_64-O2",
+              "native": {
+                "native_query_comparisons": 1320,
+                "native_assertions": 2200
+              },
+              "codegen_forms": 42,
+              "object_sha256": "02c92e9c764df138566f49acd925607a62577f7e2faa34273fc05b58f121f1fa"
+            }
+          ],
+          "wide_only_forms": [
+            "sldt_reg64",
+            "str_reg64",
+            "smsw_reg64",
+            "lar_reg64",
+            "lar_mem64",
+            "lsl_reg64",
+            "lsl_mem64"
+          ],
+          "commands": [
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=i386-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-fllvm-backend=$LLVM_BUILD/bin/llc",
+                "-fsyntax-only",
+                "$ARTIFACT_ROOT/neverc-qualified-p/long-mode-only.c"
+              ],
+              "exit_code": 0,
+              "log": "reject-wide"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=i386-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-fllvm-backend=$LLVM_BUILD/bin/llc",
+                "-O0",
+                "-S",
+                "-emit-llvm",
+                "$ARTIFACT_ROOT/neverc-qualified-p/builtins.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-p/i386-O0.ll"
+              ],
+              "exit_code": 0,
+              "log": "i386-O0-ir"
+            },
+            {
+              "command": [
+                "$LLVM_BUILD/bin/opt",
+                "-passes=verify",
+                "-disable-output",
+                "$ARTIFACT_ROOT/neverc-qualified-p/i386-O0.ll"
+              ],
+              "exit_code": 0,
+              "log": "i386-O0-verify"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=i386-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-fllvm-backend=$LLVM_BUILD/bin/llc",
+                "-O0",
+                "-c",
+                "$ARTIFACT_ROOT/neverc-qualified-p/builtins.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-p/i386-O0.o"
+              ],
+              "exit_code": 0,
+              "log": "i386-O0-object"
+            },
+            {
+              "command": [
+                "$LLVM_BUILD/bin/llvm-objdump",
+                "-d",
+                "$ARTIFACT_ROOT/neverc-qualified-p/i386-O0.o"
+              ],
+              "exit_code": 0,
+              "log": "i386-O0-disassembly"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=i386-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-fllvm-backend=$LLVM_BUILD/bin/llc",
+                "-O0",
+                "-c",
+                "$NEVERC_WORKTREE/tests/neverc/X86/i386_descriptor_queries.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-p/i386-O0-queries.o"
+              ],
+              "exit_code": 0,
+              "log": "i386-O0-queries"
+            },
+            {
+              "command": [
+                "$HOST_CLANG",
+                "-m32",
+                "-O2",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-no-pie",
+                "$NEVERC_WORKTREE/tests/neverc/X86/i386_descriptor_query_oracle.c",
+                "$ARTIFACT_ROOT/neverc-qualified-p/i386-O0-queries.o",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-p/i386-O0-native"
+              ],
+              "exit_code": 0,
+              "log": "i386-O0-link"
+            },
+            {
+              "command": [
+                "$ARTIFACT_ROOT/neverc-qualified-p/i386-O0-native"
+              ],
+              "exit_code": 0,
+              "log": "i386-O0-native"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=i386-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-fllvm-backend=$LLVM_BUILD/bin/llc",
+                "-O2",
+                "-S",
+                "-emit-llvm",
+                "$ARTIFACT_ROOT/neverc-qualified-p/builtins.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-p/i386-O2.ll"
+              ],
+              "exit_code": 0,
+              "log": "i386-O2-ir"
+            },
+            {
+              "command": [
+                "$LLVM_BUILD/bin/opt",
+                "-passes=verify",
+                "-disable-output",
+                "$ARTIFACT_ROOT/neverc-qualified-p/i386-O2.ll"
+              ],
+              "exit_code": 0,
+              "log": "i386-O2-verify"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=i386-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-fllvm-backend=$LLVM_BUILD/bin/llc",
+                "-O2",
+                "-c",
+                "$ARTIFACT_ROOT/neverc-qualified-p/builtins.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-p/i386-O2.o"
+              ],
+              "exit_code": 0,
+              "log": "i386-O2-object"
+            },
+            {
+              "command": [
+                "$LLVM_BUILD/bin/llvm-objdump",
+                "-d",
+                "$ARTIFACT_ROOT/neverc-qualified-p/i386-O2.o"
+              ],
+              "exit_code": 0,
+              "log": "i386-O2-disassembly"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=i386-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-fllvm-backend=$LLVM_BUILD/bin/llc",
+                "-O2",
+                "-c",
+                "$NEVERC_WORKTREE/tests/neverc/X86/i386_descriptor_queries.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-p/i386-O2-queries.o"
+              ],
+              "exit_code": 0,
+              "log": "i386-O2-queries"
+            },
+            {
+              "command": [
+                "$HOST_CLANG",
+                "-m32",
+                "-O2",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-no-pie",
+                "$NEVERC_WORKTREE/tests/neverc/X86/i386_descriptor_query_oracle.c",
+                "$ARTIFACT_ROOT/neverc-qualified-p/i386-O2-queries.o",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-p/i386-O2-native"
+              ],
+              "exit_code": 0,
+              "log": "i386-O2-link"
+            },
+            {
+              "command": [
+                "$ARTIFACT_ROOT/neverc-qualified-p/i386-O2-native"
+              ],
+              "exit_code": 0,
+              "log": "i386-O2-native"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=x86_64-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-O0",
+                "-S",
+                "-emit-llvm",
+                "$ARTIFACT_ROOT/neverc-qualified-p/builtins.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-p/x86_64-O0.ll"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O0-ir"
+            },
+            {
+              "command": [
+                "$LLVM_BUILD/bin/opt",
+                "-passes=verify",
+                "-disable-output",
+                "$ARTIFACT_ROOT/neverc-qualified-p/x86_64-O0.ll"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O0-verify"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=x86_64-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-O0",
+                "-c",
+                "$ARTIFACT_ROOT/neverc-qualified-p/builtins.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-p/x86_64-O0.o"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O0-object"
+            },
+            {
+              "command": [
+                "$LLVM_BUILD/bin/llvm-objdump",
+                "-d",
+                "$ARTIFACT_ROOT/neverc-qualified-p/x86_64-O0.o"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O0-disassembly"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=x86_64-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-O0",
+                "-c",
+                "$NEVERC_WORKTREE/tests/neverc/X86/i386_descriptor_queries.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-p/x86_64-O0-queries.o"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O0-queries"
+            },
+            {
+              "command": [
+                "$HOST_CLANG",
+                "-m64",
+                "-O2",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-no-pie",
+                "$NEVERC_WORKTREE/tests/neverc/X86/i386_descriptor_query_oracle.c",
+                "$ARTIFACT_ROOT/neverc-qualified-p/x86_64-O0-queries.o",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-p/x86_64-O0-native"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O0-link"
+            },
+            {
+              "command": [
+                "$ARTIFACT_ROOT/neverc-qualified-p/x86_64-O0-native"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O0-native"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=x86_64-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-O2",
+                "-S",
+                "-emit-llvm",
+                "$ARTIFACT_ROOT/neverc-qualified-p/builtins.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-p/x86_64-O2.ll"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O2-ir"
+            },
+            {
+              "command": [
+                "$LLVM_BUILD/bin/opt",
+                "-passes=verify",
+                "-disable-output",
+                "$ARTIFACT_ROOT/neverc-qualified-p/x86_64-O2.ll"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O2-verify"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=x86_64-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-O2",
+                "-c",
+                "$ARTIFACT_ROOT/neverc-qualified-p/builtins.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-p/x86_64-O2.o"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O2-object"
+            },
+            {
+              "command": [
+                "$LLVM_BUILD/bin/llvm-objdump",
+                "-d",
+                "$ARTIFACT_ROOT/neverc-qualified-p/x86_64-O2.o"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O2-disassembly"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=x86_64-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-O2",
+                "-c",
+                "$NEVERC_WORKTREE/tests/neverc/X86/i386_descriptor_queries.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-p/x86_64-O2-queries.o"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O2-queries"
+            },
+            {
+              "command": [
+                "$HOST_CLANG",
+                "-m64",
+                "-O2",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-no-pie",
+                "$NEVERC_WORKTREE/tests/neverc/X86/i386_descriptor_query_oracle.c",
+                "$ARTIFACT_ROOT/neverc-qualified-p/x86_64-O2-queries.o",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-p/x86_64-O2-native"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O2-link"
+            },
+            {
+              "command": [
+                "$ARTIFACT_ROOT/neverc-qualified-p/x86_64-O2-native"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O2-native"
+            }
+          ],
+          "compiler_sha256": "e31a29b9e843e7a700daa340d27408229fef8f4d30a8ac82a41d45d850b33f48",
+          "full_llc_sha256": "892b1b867c22d9e02141f0a54c0c0fd478c8dc0bfa3a2889f8907c4bcb11db0c"
+        }
+      },
+      {
+        "core": "e",
+        "result_sha256": "942b2b2b7c0ce1fb834a9a1a3361f433182bb120dcfe75d5999242683c351455",
+        "result": {
+          "profiles": [
+            {
+              "profile": "i386-O0",
+              "native": {
+                "native_query_comparisons": 1320,
+                "native_assertions": 2200
+              },
+              "codegen_forms": 35,
+              "object_sha256": "a555e0624966895a2bd00ff8957eb90bf8db858740cc821ed3c380fd39a00270"
+            },
+            {
+              "profile": "i386-O2",
+              "native": {
+                "native_query_comparisons": 1320,
+                "native_assertions": 2200
+              },
+              "codegen_forms": 35,
+              "object_sha256": "afed68455d4e66159a66e6a3ea9edfd036ce9589c1298731b0afef81f7cf2e62"
+            },
+            {
+              "profile": "x86_64-O0",
+              "native": {
+                "native_query_comparisons": 1320,
+                "native_assertions": 2200
+              },
+              "codegen_forms": 42,
+              "object_sha256": "f393241620c7ca39663dcdc28aed93b34919cc7ec1dad7a8698f2a6b1d639a69"
+            },
+            {
+              "profile": "x86_64-O2",
+              "native": {
+                "native_query_comparisons": 1320,
+                "native_assertions": 2200
+              },
+              "codegen_forms": 42,
+              "object_sha256": "02c92e9c764df138566f49acd925607a62577f7e2faa34273fc05b58f121f1fa"
+            }
+          ],
+          "wide_only_forms": [
+            "sldt_reg64",
+            "str_reg64",
+            "smsw_reg64",
+            "lar_reg64",
+            "lar_mem64",
+            "lsl_reg64",
+            "lsl_mem64"
+          ],
+          "commands": [
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=i386-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-fllvm-backend=$LLVM_BUILD/bin/llc",
+                "-fsyntax-only",
+                "$ARTIFACT_ROOT/neverc-qualified-e/long-mode-only.c"
+              ],
+              "exit_code": 0,
+              "log": "reject-wide"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=i386-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-fllvm-backend=$LLVM_BUILD/bin/llc",
+                "-O0",
+                "-S",
+                "-emit-llvm",
+                "$ARTIFACT_ROOT/neverc-qualified-e/builtins.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-e/i386-O0.ll"
+              ],
+              "exit_code": 0,
+              "log": "i386-O0-ir"
+            },
+            {
+              "command": [
+                "$LLVM_BUILD/bin/opt",
+                "-passes=verify",
+                "-disable-output",
+                "$ARTIFACT_ROOT/neverc-qualified-e/i386-O0.ll"
+              ],
+              "exit_code": 0,
+              "log": "i386-O0-verify"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=i386-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-fllvm-backend=$LLVM_BUILD/bin/llc",
+                "-O0",
+                "-c",
+                "$ARTIFACT_ROOT/neverc-qualified-e/builtins.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-e/i386-O0.o"
+              ],
+              "exit_code": 0,
+              "log": "i386-O0-object"
+            },
+            {
+              "command": [
+                "$LLVM_BUILD/bin/llvm-objdump",
+                "-d",
+                "$ARTIFACT_ROOT/neverc-qualified-e/i386-O0.o"
+              ],
+              "exit_code": 0,
+              "log": "i386-O0-disassembly"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=i386-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-fllvm-backend=$LLVM_BUILD/bin/llc",
+                "-O0",
+                "-c",
+                "$NEVERC_WORKTREE/tests/neverc/X86/i386_descriptor_queries.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-e/i386-O0-queries.o"
+              ],
+              "exit_code": 0,
+              "log": "i386-O0-queries"
+            },
+            {
+              "command": [
+                "$HOST_CLANG",
+                "-m32",
+                "-O2",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-no-pie",
+                "$NEVERC_WORKTREE/tests/neverc/X86/i386_descriptor_query_oracle.c",
+                "$ARTIFACT_ROOT/neverc-qualified-e/i386-O0-queries.o",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-e/i386-O0-native"
+              ],
+              "exit_code": 0,
+              "log": "i386-O0-link"
+            },
+            {
+              "command": [
+                "$ARTIFACT_ROOT/neverc-qualified-e/i386-O0-native"
+              ],
+              "exit_code": 0,
+              "log": "i386-O0-native"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=i386-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-fllvm-backend=$LLVM_BUILD/bin/llc",
+                "-O2",
+                "-S",
+                "-emit-llvm",
+                "$ARTIFACT_ROOT/neverc-qualified-e/builtins.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-e/i386-O2.ll"
+              ],
+              "exit_code": 0,
+              "log": "i386-O2-ir"
+            },
+            {
+              "command": [
+                "$LLVM_BUILD/bin/opt",
+                "-passes=verify",
+                "-disable-output",
+                "$ARTIFACT_ROOT/neverc-qualified-e/i386-O2.ll"
+              ],
+              "exit_code": 0,
+              "log": "i386-O2-verify"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=i386-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-fllvm-backend=$LLVM_BUILD/bin/llc",
+                "-O2",
+                "-c",
+                "$ARTIFACT_ROOT/neverc-qualified-e/builtins.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-e/i386-O2.o"
+              ],
+              "exit_code": 0,
+              "log": "i386-O2-object"
+            },
+            {
+              "command": [
+                "$LLVM_BUILD/bin/llvm-objdump",
+                "-d",
+                "$ARTIFACT_ROOT/neverc-qualified-e/i386-O2.o"
+              ],
+              "exit_code": 0,
+              "log": "i386-O2-disassembly"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=i386-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-fllvm-backend=$LLVM_BUILD/bin/llc",
+                "-O2",
+                "-c",
+                "$NEVERC_WORKTREE/tests/neverc/X86/i386_descriptor_queries.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-e/i386-O2-queries.o"
+              ],
+              "exit_code": 0,
+              "log": "i386-O2-queries"
+            },
+            {
+              "command": [
+                "$HOST_CLANG",
+                "-m32",
+                "-O2",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-no-pie",
+                "$NEVERC_WORKTREE/tests/neverc/X86/i386_descriptor_query_oracle.c",
+                "$ARTIFACT_ROOT/neverc-qualified-e/i386-O2-queries.o",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-e/i386-O2-native"
+              ],
+              "exit_code": 0,
+              "log": "i386-O2-link"
+            },
+            {
+              "command": [
+                "$ARTIFACT_ROOT/neverc-qualified-e/i386-O2-native"
+              ],
+              "exit_code": 0,
+              "log": "i386-O2-native"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=x86_64-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-O0",
+                "-S",
+                "-emit-llvm",
+                "$ARTIFACT_ROOT/neverc-qualified-e/builtins.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-e/x86_64-O0.ll"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O0-ir"
+            },
+            {
+              "command": [
+                "$LLVM_BUILD/bin/opt",
+                "-passes=verify",
+                "-disable-output",
+                "$ARTIFACT_ROOT/neverc-qualified-e/x86_64-O0.ll"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O0-verify"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=x86_64-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-O0",
+                "-c",
+                "$ARTIFACT_ROOT/neverc-qualified-e/builtins.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-e/x86_64-O0.o"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O0-object"
+            },
+            {
+              "command": [
+                "$LLVM_BUILD/bin/llvm-objdump",
+                "-d",
+                "$ARTIFACT_ROOT/neverc-qualified-e/x86_64-O0.o"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O0-disassembly"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=x86_64-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-O0",
+                "-c",
+                "$NEVERC_WORKTREE/tests/neverc/X86/i386_descriptor_queries.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-e/x86_64-O0-queries.o"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O0-queries"
+            },
+            {
+              "command": [
+                "$HOST_CLANG",
+                "-m64",
+                "-O2",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-no-pie",
+                "$NEVERC_WORKTREE/tests/neverc/X86/i386_descriptor_query_oracle.c",
+                "$ARTIFACT_ROOT/neverc-qualified-e/x86_64-O0-queries.o",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-e/x86_64-O0-native"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O0-link"
+            },
+            {
+              "command": [
+                "$ARTIFACT_ROOT/neverc-qualified-e/x86_64-O0-native"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O0-native"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=x86_64-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-O2",
+                "-S",
+                "-emit-llvm",
+                "$ARTIFACT_ROOT/neverc-qualified-e/builtins.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-e/x86_64-O2.ll"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O2-ir"
+            },
+            {
+              "command": [
+                "$LLVM_BUILD/bin/opt",
+                "-passes=verify",
+                "-disable-output",
+                "$ARTIFACT_ROOT/neverc-qualified-e/x86_64-O2.ll"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O2-verify"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=x86_64-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-O2",
+                "-c",
+                "$ARTIFACT_ROOT/neverc-qualified-e/builtins.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-e/x86_64-O2.o"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O2-object"
+            },
+            {
+              "command": [
+                "$LLVM_BUILD/bin/llvm-objdump",
+                "-d",
+                "$ARTIFACT_ROOT/neverc-qualified-e/x86_64-O2.o"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O2-disassembly"
+            },
+            {
+              "command": [
+                "$NEVERC_BUILD/bin/neverc",
+                "--target=x86_64-unknown-linux-gnu",
+                "-Werror",
+                "-fno-builtin-mimalloc",
+                "-fno-lto",
+                "-ffreestanding",
+                "-fno-pie",
+                "-O2",
+                "-c",
+                "$NEVERC_WORKTREE/tests/neverc/X86/i386_descriptor_queries.c",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-e/x86_64-O2-queries.o"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O2-queries"
+            },
+            {
+              "command": [
+                "$HOST_CLANG",
+                "-m64",
+                "-O2",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-no-pie",
+                "$NEVERC_WORKTREE/tests/neverc/X86/i386_descriptor_query_oracle.c",
+                "$ARTIFACT_ROOT/neverc-qualified-e/x86_64-O2-queries.o",
+                "-o",
+                "$ARTIFACT_ROOT/neverc-qualified-e/x86_64-O2-native"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O2-link"
+            },
+            {
+              "command": [
+                "$ARTIFACT_ROOT/neverc-qualified-e/x86_64-O2-native"
+              ],
+              "exit_code": 0,
+              "log": "x86_64-O2-native"
+            }
+          ],
+          "compiler_sha256": "e31a29b9e843e7a700daa340d27408229fef8f4d30a8ac82a41d45d850b33f48",
+          "full_llc_sha256": "892b1b867c22d9e02141f0a54c0c0fd478c8dc0bfa3a2889f8907c4bcb11db0c"
+        }
+      }
+    ]
+  },
+  "reference": {
+    "url": "https://cdrdv2-public.intel.com/789581/325383-sdm-vol-2abcd.pdf",
+    "sha256": "5fd1f57cabfd4b6b7cd0ce753d8c63dd6203f563324e706b5d9fabaf8df707bf"
+  },
+  "totals": {
+    "passed": 1410,
+    "failed": 0,
+    "skipped": 0,
+    "new_original_state_comparisons": 20880,
+    "new_original_debug_comparisons": 1920,
+    "neverc_codegen_form_checks": 308,
+    "neverc_native_query_comparisons": 10560
+  },
+  "builds": {
+    "native": {
+      "CMakeCache.txt": "47525d2f95f1a2862256d0cda1309689a93d9dda5ce02737e357bd8df0496287",
+      "NeverDX86LegacySourceTests": "ee58770c07630f2b8866ccc61e8401adedb50db67cd8947dcb5c412c4456ec8e",
+      "NeverDX86PagingTests": "bd39cb54109ce85d782fdf6e0d2039c93891aec1c440d6bae05c8adf3dc7b791",
+      "NeverDX86SystemStateTests": "043b4004a31c645f628f0cb1370c5785d272e9c1d0cf513bd0cf23eeae363134",
+      "libneverd.so": "91050719ef14b53da27d320ef78e0f94c4d9169099b860e175f572e322ff95be",
+      "neverd": "318564661789f96acc86510cbf3f4463797a4ae6e63983748dbb97eada072172",
+      "neverd-build-receipt.json": "552808d65a39e10cf2235ef0d2678dce31a06a78a3071926125a1034d5575996",
+      "neverd-dependency-inputs.json": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c"
+    },
+    "r6": {
+      "CMakeCache.txt": "1bf7e75ad734ab9e16d7af098d4af139162a75ffe9e75cf6113958ed0a302f80",
+      "NeverDX86LegacySourceTests": "66f2bbfd5800d373416a504d5320cd8f6a9ec2b4c776d2e4d161c6f30c8b183f",
+      "NeverDX86PagingTests": "b1e67fb6752d3df7b34aab9eb4da1090abbca2c7972ca8349167615c25df4522",
+      "NeverDX86SystemStateTests": "cb7f18f40d98ce446a8f3686aaf0dab05205f19ee8855c2f4e2102c1ee4183ae",
+      "libneverd.so": "e34885eaf63e536d9b0c10532b3e51920b1d26eec9fffbdf992487def42664c3",
+      "neverd": "063a4b6edd15bedab7f7bb0668fdfd6787debb48773891dd82c6c06f4b127c1b",
+      "neverd-build-receipt.json": "0656a4bc3bc7921792d6183a0641beebd35f5dc09e14165c358ce7166d2a3039",
+      "neverd-dependency-inputs.json": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c"
+    }
+  },
+  "runs": [
+    {
+      "name": "native-qualified-machine-status-e",
+      "sdk": "native",
+      "core": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_RUNNER",
+        "$ARTIFACT_ROOT/native-qualified-machine-status-e/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "$NEVERD_WORKTREE/build-x86-native/bin/NeverDX86PagingTests",
+        "--gtest_filter=LegacyMachineStatus/*:*OriginalMachineStatusAccessesAndTraps*",
+        "--gtest_output=json:$ARTIFACT_ROOT/native-qualified-machine-status-e/result.json"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD": "$NEVERD_WORKTREE/build-x86-native/bin/neverd",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "check",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "$NEVERC_WORKTREE/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC_LLC": "$LLVM_WORKTREE/build-intrinsics/bin/llc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "$ARTIFACT_ROOT/native-qualified-machine-status-e/exports"
+      },
+      "binary_sha256": "bd39cb54109ce85d782fdf6e0d2039c93891aec1c440d6bae05c8adf3dc7b791",
+      "source_head": "ce5478965bc441f3a7a402416984e05951d78c7d",
+      "source_tree": "a779466f51389e6fe42ad4fd3309103f34337711",
+      "source_status": "",
+      "exit_code": 0,
+      "seconds": 4.226,
+      "log_sha256": "e2a0c19d76a31ccee2370dc048913918a06427b55c3cf15efe042d0d9cff0028",
+      "result_sha256": "a8f639d30cce9fbe4f4e2ec06ff073306b3ad84052e86c7c99946cf0b3797a3c",
+      "tests": 12,
+      "failed": 0,
+      "skipped": [],
+      "passed": 12,
+      "original_comparisons": 480,
+      "cpu_program_comparisons": 0,
+      "cpu_comparisons": 5220,
+      "branch_selection_comparisons": 0,
+      "transfer_comparisons": 0,
+      "watchpoint_comparisons": 0,
+      "debug_cpu_comparisons": 0,
+      "debug_round_trips": 0,
+      "failures": []
+    },
+    {
+      "name": "native-qualified-machine-status-p",
+      "sdk": "native",
+      "core": "4",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_RUNNER",
+        "$ARTIFACT_ROOT/native-qualified-machine-status-p/tmp",
+        "taskset",
+        "-c",
+        "4",
+        "$NEVERD_WORKTREE/build-x86-native/bin/NeverDX86PagingTests",
+        "--gtest_filter=LegacyMachineStatus/*:*OriginalMachineStatusAccessesAndTraps*",
+        "--gtest_output=json:$ARTIFACT_ROOT/native-qualified-machine-status-p/result.json"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD": "$NEVERD_WORKTREE/build-x86-native/bin/neverd",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "$NEVERC_WORKTREE/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC_LLC": "$LLVM_WORKTREE/build-intrinsics/bin/llc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "$ARTIFACT_ROOT/native-qualified-machine-status-p/exports"
+      },
+      "binary_sha256": "bd39cb54109ce85d782fdf6e0d2039c93891aec1c440d6bae05c8adf3dc7b791",
+      "source_head": "ce5478965bc441f3a7a402416984e05951d78c7d",
+      "source_tree": "a779466f51389e6fe42ad4fd3309103f34337711",
+      "source_status": "",
+      "exit_code": 0,
+      "seconds": 2.454,
+      "log_sha256": "d3579e8c921bd4f52245c17d4849c4c941a252586a36d2d44460e1964d3b56c9",
+      "result_sha256": "fc97d26ecd92a1f211998a7043806f825ba4652ea8667a6f65889d365ad86793",
+      "tests": 12,
+      "failed": 0,
+      "skipped": [],
+      "passed": 12,
+      "original_comparisons": 480,
+      "cpu_program_comparisons": 0,
+      "cpu_comparisons": 5220,
+      "branch_selection_comparisons": 0,
+      "transfer_comparisons": 0,
+      "watchpoint_comparisons": 0,
+      "debug_cpu_comparisons": 0,
+      "debug_round_trips": 0,
+      "failures": []
+    },
+    {
+      "name": "native-qualified-regression-p",
+      "sdk": "native",
+      "core": "4",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_RUNNER",
+        "$ARTIFACT_ROOT/native-qualified-regression-p/tmp",
+        "taskset",
+        "-c",
+        "4",
+        "$NEVERD_WORKTREE/build-x86-native/bin/NeverDX86PagingTests",
+        "--gtest_filter=LegacyScalars/*:LegacyInteger/*:LegacySegmentLoads/*:LegacyDescriptors/*:LegacySystemSelectors/*:PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/0:PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/1",
+        "--gtest_output=json:$ARTIFACT_ROOT/native-qualified-regression-p/result.json"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD": "$NEVERD_WORKTREE/build-x86-native/bin/neverd",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "$NEVERC_WORKTREE/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC_LLC": "$LLVM_WORKTREE/build-intrinsics/bin/llc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "$ARTIFACT_ROOT/native-qualified-regression-p/exports"
+      },
+      "binary_sha256": "bd39cb54109ce85d782fdf6e0d2039c93891aec1c440d6bae05c8adf3dc7b791",
+      "source_head": "ce5478965bc441f3a7a402416984e05951d78c7d",
+      "source_tree": "a779466f51389e6fe42ad4fd3309103f34337711",
+      "source_status": "",
+      "exit_code": 0,
+      "seconds": 59.872,
+      "log_sha256": "45f2cc5aa16d0af70f9823396951798742f0d24d499d125d8cb4abf25aa8b09c",
+      "result_sha256": "f0e4d52c1eb703f5b43c3d5837c0fe54ca093fbf8f9d8c134a171ca97585fc43",
+      "tests": 68,
+      "failed": 0,
+      "skipped": [],
+      "passed": 68,
+      "original_comparisons": 0,
+      "cpu_program_comparisons": 0,
+      "cpu_comparisons": 143718,
+      "branch_selection_comparisons": 0,
+      "transfer_comparisons": 0,
+      "watchpoint_comparisons": 0,
+      "debug_cpu_comparisons": 0,
+      "debug_round_trips": 0,
+      "failures": []
+    },
+    {
+      "name": "native-qualified-software",
+      "sdk": "native",
+      "core": "4",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_RUNNER",
+        "$ARTIFACT_ROOT/native-qualified-software/tmp",
+        "taskset",
+        "-c",
+        "4",
+        "$NEVERD_WORKTREE/build-x86-native/bin/NeverDX86PagingTests",
+        "--gtest_filter=-*/*",
+        "--gtest_output=json:$ARTIFACT_ROOT/native-qualified-software/result.json"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD": "$NEVERD_WORKTREE/build-x86-native/bin/neverd",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "$NEVERC_WORKTREE/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC_LLC": "$LLVM_WORKTREE/build-intrinsics/bin/llc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "$ARTIFACT_ROOT/native-qualified-software/exports"
+      },
+      "binary_sha256": "bd39cb54109ce85d782fdf6e0d2039c93891aec1c440d6bae05c8adf3dc7b791",
+      "source_head": "ce5478965bc441f3a7a402416984e05951d78c7d",
+      "source_tree": "a779466f51389e6fe42ad4fd3309103f34337711",
+      "source_status": "",
+      "exit_code": 0,
+      "seconds": 0.249,
+      "log_sha256": "0c79c142980a2ee64f77c2ab326d40125ffcb87725ac9458e671d42817d2f15f",
+      "result_sha256": "0b5d3658fe028dcf0b36cf238f7c19fb982d81e25518601422b71d10bc2ce02f",
+      "tests": 326,
+      "failed": 0,
+      "skipped": [],
+      "passed": 326,
+      "original_comparisons": 0,
+      "cpu_program_comparisons": 0,
+      "cpu_comparisons": 0,
+      "branch_selection_comparisons": 64,
+      "transfer_comparisons": 0,
+      "watchpoint_comparisons": 0,
+      "debug_cpu_comparisons": 0,
+      "debug_round_trips": 0,
+      "failures": []
+    },
+    {
+      "name": "native-qualified-source-e",
+      "sdk": "native",
+      "core": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_RUNNER",
+        "$ARTIFACT_ROOT/native-qualified-source-e/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "$NEVERD_WORKTREE/build-x86-native/bin/NeverDX86LegacySourceTests",
+        "--gtest_filter=*",
+        "--gtest_output=json:$ARTIFACT_ROOT/native-qualified-source-e/result.json"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD": "$NEVERD_WORKTREE/build-x86-native/bin/neverd",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "check",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "$NEVERC_WORKTREE/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC_LLC": "$LLVM_WORKTREE/build-intrinsics/bin/llc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "$ARTIFACT_ROOT/native-qualified-source-e/exports"
+      },
+      "binary_sha256": "ee58770c07630f2b8866ccc61e8401adedb50db67cd8947dcb5c412c4456ec8e",
+      "source_head": "ce5478965bc441f3a7a402416984e05951d78c7d",
+      "runtime_library_sha256": "91050719ef14b53da27d320ef78e0f94c4d9169099b860e175f572e322ff95be",
+      "cli_sha256": "318564661789f96acc86510cbf3f4463797a4ae6e63983748dbb97eada072172",
+      "source_tree": "a779466f51389e6fe42ad4fd3309103f34337711",
+      "source_status": "",
+      "exit_code": 0,
+      "seconds": 10.07,
+      "log_sha256": "88c646f0e14ae6bb84c49290790e21ccec24d64c8fe47554b0acca1d40ad4bd5",
+      "result_sha256": "1035bef5d01e3fb036bd29a83d5b2a1d631b8e78467f2b91b67c5922119d9069",
+      "tests": 129,
+      "failed": 0,
+      "skipped": [],
+      "passed": 129,
+      "original_comparisons": 0,
+      "cpu_program_comparisons": 0,
+      "cpu_comparisons": 0,
+      "branch_selection_comparisons": 256,
+      "transfer_comparisons": 0,
+      "watchpoint_comparisons": 0,
+      "debug_cpu_comparisons": 0,
+      "debug_round_trips": 0,
+      "failures": []
+    },
+    {
+      "name": "native-qualified-source-p",
+      "sdk": "native",
+      "core": "4",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_RUNNER",
+        "$ARTIFACT_ROOT/native-qualified-source-p/tmp",
+        "taskset",
+        "-c",
+        "4",
+        "$NEVERD_WORKTREE/build-x86-native/bin/NeverDX86LegacySourceTests",
+        "--gtest_filter=*",
+        "--gtest_output=json:$ARTIFACT_ROOT/native-qualified-source-p/result.json"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD": "$NEVERD_WORKTREE/build-x86-native/bin/neverd",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "$NEVERC_WORKTREE/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC_LLC": "$LLVM_WORKTREE/build-intrinsics/bin/llc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "$ARTIFACT_ROOT/native-qualified-source-p/exports"
+      },
+      "binary_sha256": "ee58770c07630f2b8866ccc61e8401adedb50db67cd8947dcb5c412c4456ec8e",
+      "source_head": "ce5478965bc441f3a7a402416984e05951d78c7d",
+      "runtime_library_sha256": "91050719ef14b53da27d320ef78e0f94c4d9169099b860e175f572e322ff95be",
+      "cli_sha256": "318564661789f96acc86510cbf3f4463797a4ae6e63983748dbb97eada072172",
+      "source_tree": "a779466f51389e6fe42ad4fd3309103f34337711",
+      "source_status": "",
+      "exit_code": 0,
+      "seconds": 8.377,
+      "log_sha256": "b0d806fe4a9dff97dba24c783f7bfbbc033899c0f72f79d854d58ad213340e71",
+      "result_sha256": "13ab44d4821c341bc6fc2992cb11fe29cd661bfb375288f7e6839a1feeac95f5",
+      "tests": 129,
+      "failed": 0,
+      "skipped": [],
+      "passed": 129,
+      "original_comparisons": 0,
+      "cpu_program_comparisons": 0,
+      "cpu_comparisons": 0,
+      "branch_selection_comparisons": 256,
+      "transfer_comparisons": 0,
+      "watchpoint_comparisons": 0,
+      "debug_cpu_comparisons": 0,
+      "debug_round_trips": 0,
+      "failures": []
+    },
+    {
+      "name": "native-qualified-system-p",
+      "sdk": "native",
+      "core": "4",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_RUNNER",
+        "$ARTIFACT_ROOT/native-qualified-system-p/tmp",
+        "taskset",
+        "-c",
+        "4",
+        "$NEVERD_WORKTREE/build-x86-native/bin/NeverDX86SystemStateTests",
+        "--gtest_filter=*",
+        "--gtest_output=json:$ARTIFACT_ROOT/native-qualified-system-p/result.json"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD": "$NEVERD_WORKTREE/build-x86-native/bin/neverd",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "$NEVERC_WORKTREE/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC_LLC": "$LLVM_WORKTREE/build-intrinsics/bin/llc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "$ARTIFACT_ROOT/native-qualified-system-p/exports"
+      },
+      "binary_sha256": "043b4004a31c645f628f0cb1370c5785d272e9c1d0cf513bd0cf23eeae363134",
+      "source_head": "ce5478965bc441f3a7a402416984e05951d78c7d",
+      "source_tree": "a779466f51389e6fe42ad4fd3309103f34337711",
+      "source_status": "",
+      "exit_code": 0,
+      "seconds": 0.08,
+      "log_sha256": "6eaa3ae419af655ea36de27b9d2dc55b0439a16475be2f9befa3763292a6a565",
+      "result_sha256": "dc99808befebc25238409fcc438347eb9beaa27132a5e05adfec26629ad511fa",
+      "tests": 29,
+      "failed": 0,
+      "skipped": [],
+      "passed": 29,
+      "original_comparisons": 0,
+      "cpu_program_comparisons": 0,
+      "cpu_comparisons": 0,
+      "branch_selection_comparisons": 0,
+      "transfer_comparisons": 0,
+      "watchpoint_comparisons": 0,
+      "debug_cpu_comparisons": 0,
+      "debug_round_trips": 0,
+      "failures": []
+    },
+    {
+      "name": "r6-qualified-machine-status-e",
+      "sdk": "r6",
+      "core": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_RUNNER",
+        "$ARTIFACT_ROOT/r6-qualified-machine-status-e/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "$NEVERD_WORKTREE/build-x86/bin/NeverDX86PagingTests",
+        "--gtest_filter=LegacyMachineStatus/*:*OriginalMachineStatusAccessesAndTraps*",
+        "--gtest_output=json:$ARTIFACT_ROOT/r6-qualified-machine-status-e/result.json"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD": "$NEVERD_WORKTREE/build-x86/bin/neverd",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "check",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "$NEVERC_WORKTREE/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC_LLC": "$LLVM_WORKTREE/build-intrinsics/bin/llc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "$ARTIFACT_ROOT/r6-qualified-machine-status-e/exports"
+      },
+      "binary_sha256": "b1e67fb6752d3df7b34aab9eb4da1090abbca2c7972ca8349167615c25df4522",
+      "source_head": "ce5478965bc441f3a7a402416984e05951d78c7d",
+      "source_tree": "a779466f51389e6fe42ad4fd3309103f34337711",
+      "source_status": "",
+      "exit_code": 0,
+      "seconds": 4.1,
+      "log_sha256": "1f8eedd4d2bb677eba074272299e6d874d1da69e504d3a30acd66be1de3e857a",
+      "result_sha256": "9ac128fc0c71ce9de938673e04d8423f8d234262df07f9cd63815637b2558399",
+      "tests": 12,
+      "failed": 0,
+      "skipped": [],
+      "passed": 12,
+      "original_comparisons": 480,
+      "cpu_program_comparisons": 0,
+      "cpu_comparisons": 5220,
+      "branch_selection_comparisons": 0,
+      "transfer_comparisons": 0,
+      "watchpoint_comparisons": 0,
+      "debug_cpu_comparisons": 0,
+      "debug_round_trips": 0,
+      "failures": []
+    },
+    {
+      "name": "r6-qualified-machine-status-p",
+      "sdk": "r6",
+      "core": "4",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_RUNNER",
+        "$ARTIFACT_ROOT/r6-qualified-machine-status-p/tmp",
+        "taskset",
+        "-c",
+        "4",
+        "$NEVERD_WORKTREE/build-x86/bin/NeverDX86PagingTests",
+        "--gtest_filter=LegacyMachineStatus/*:*OriginalMachineStatusAccessesAndTraps*",
+        "--gtest_output=json:$ARTIFACT_ROOT/r6-qualified-machine-status-p/result.json"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD": "$NEVERD_WORKTREE/build-x86/bin/neverd",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "$NEVERC_WORKTREE/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC_LLC": "$LLVM_WORKTREE/build-intrinsics/bin/llc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "$ARTIFACT_ROOT/r6-qualified-machine-status-p/exports"
+      },
+      "binary_sha256": "b1e67fb6752d3df7b34aab9eb4da1090abbca2c7972ca8349167615c25df4522",
+      "source_head": "ce5478965bc441f3a7a402416984e05951d78c7d",
+      "source_tree": "a779466f51389e6fe42ad4fd3309103f34337711",
+      "source_status": "",
+      "exit_code": 0,
+      "seconds": 3.29,
+      "log_sha256": "63daae3bca5ffc87c8f47bc4018e3277e312ca4f167fcf36ffa8847447decb75",
+      "result_sha256": "cd2e446340288ada3b8d5203dbbce2717f83a10d8be16363a8b12034ed47584a",
+      "tests": 12,
+      "failed": 0,
+      "skipped": [],
+      "passed": 12,
+      "original_comparisons": 480,
+      "cpu_program_comparisons": 0,
+      "cpu_comparisons": 5220,
+      "branch_selection_comparisons": 0,
+      "transfer_comparisons": 0,
+      "watchpoint_comparisons": 0,
+      "debug_cpu_comparisons": 0,
+      "debug_round_trips": 0,
+      "failures": []
+    },
+    {
+      "name": "r6-qualified-regression-p",
+      "sdk": "r6",
+      "core": "4",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_RUNNER",
+        "$ARTIFACT_ROOT/r6-qualified-regression-p/tmp",
+        "taskset",
+        "-c",
+        "4",
+        "$NEVERD_WORKTREE/build-x86/bin/NeverDX86PagingTests",
+        "--gtest_filter=LegacyScalars/*:LegacyInteger/*:LegacySegmentLoads/*:LegacyDescriptors/*:LegacySystemSelectors/*:PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/0:PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/1",
+        "--gtest_output=json:$ARTIFACT_ROOT/r6-qualified-regression-p/result.json"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD": "$NEVERD_WORKTREE/build-x86/bin/neverd",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "$NEVERC_WORKTREE/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC_LLC": "$LLVM_WORKTREE/build-intrinsics/bin/llc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "$ARTIFACT_ROOT/r6-qualified-regression-p/exports"
+      },
+      "binary_sha256": "b1e67fb6752d3df7b34aab9eb4da1090abbca2c7972ca8349167615c25df4522",
+      "source_head": "ce5478965bc441f3a7a402416984e05951d78c7d",
+      "source_tree": "a779466f51389e6fe42ad4fd3309103f34337711",
+      "source_status": "",
+      "exit_code": 0,
+      "seconds": 61.219,
+      "log_sha256": "2bc4534c077b304a430b03c440ba89d74be9061719c985492a56176f6bd6eb21",
+      "result_sha256": "09da5520cfca470ec4f04e686cae3421c6628aadcea0a4a043fc186488a193c0",
+      "tests": 68,
+      "failed": 0,
+      "skipped": [],
+      "passed": 68,
+      "original_comparisons": 0,
+      "cpu_program_comparisons": 0,
+      "cpu_comparisons": 143718,
+      "branch_selection_comparisons": 0,
+      "transfer_comparisons": 0,
+      "watchpoint_comparisons": 0,
+      "debug_cpu_comparisons": 0,
+      "debug_round_trips": 0,
+      "failures": []
+    },
+    {
+      "name": "r6-qualified-software",
+      "sdk": "r6",
+      "core": "4",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_RUNNER",
+        "$ARTIFACT_ROOT/r6-qualified-software/tmp",
+        "taskset",
+        "-c",
+        "4",
+        "$NEVERD_WORKTREE/build-x86/bin/NeverDX86PagingTests",
+        "--gtest_filter=-*/*",
+        "--gtest_output=json:$ARTIFACT_ROOT/r6-qualified-software/result.json"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD": "$NEVERD_WORKTREE/build-x86/bin/neverd",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "$NEVERC_WORKTREE/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC_LLC": "$LLVM_WORKTREE/build-intrinsics/bin/llc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "$ARTIFACT_ROOT/r6-qualified-software/exports"
+      },
+      "binary_sha256": "b1e67fb6752d3df7b34aab9eb4da1090abbca2c7972ca8349167615c25df4522",
+      "source_head": "ce5478965bc441f3a7a402416984e05951d78c7d",
+      "source_tree": "a779466f51389e6fe42ad4fd3309103f34337711",
+      "source_status": "",
+      "exit_code": 0,
+      "seconds": 0.436,
+      "log_sha256": "3c39c25f64c8e46384846da413917783e3c8738fd4a3a15e7dbd347f4c834644",
+      "result_sha256": "a5d69902827c7680d3084bbb1bacbf465dd53a7b42625bb82d67934f3a8dfbbd",
+      "tests": 326,
+      "failed": 0,
+      "skipped": [],
+      "passed": 326,
+      "original_comparisons": 0,
+      "cpu_program_comparisons": 0,
+      "cpu_comparisons": 0,
+      "branch_selection_comparisons": 64,
+      "transfer_comparisons": 0,
+      "watchpoint_comparisons": 0,
+      "debug_cpu_comparisons": 0,
+      "debug_round_trips": 0,
+      "failures": []
+    },
+    {
+      "name": "r6-qualified-source-e",
+      "sdk": "r6",
+      "core": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_RUNNER",
+        "$ARTIFACT_ROOT/r6-qualified-source-e/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "$NEVERD_WORKTREE/build-x86/bin/NeverDX86LegacySourceTests",
+        "--gtest_filter=*",
+        "--gtest_output=json:$ARTIFACT_ROOT/r6-qualified-source-e/result.json"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD": "$NEVERD_WORKTREE/build-x86/bin/neverd",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "check",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "$NEVERC_WORKTREE/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC_LLC": "$LLVM_WORKTREE/build-intrinsics/bin/llc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "$ARTIFACT_ROOT/r6-qualified-source-e/exports"
+      },
+      "binary_sha256": "66f2bbfd5800d373416a504d5320cd8f6a9ec2b4c776d2e4d161c6f30c8b183f",
+      "source_head": "ce5478965bc441f3a7a402416984e05951d78c7d",
+      "runtime_library_sha256": "e34885eaf63e536d9b0c10532b3e51920b1d26eec9fffbdf992487def42664c3",
+      "cli_sha256": "063a4b6edd15bedab7f7bb0668fdfd6787debb48773891dd82c6c06f4b127c1b",
+      "source_tree": "a779466f51389e6fe42ad4fd3309103f34337711",
+      "source_status": "",
+      "exit_code": 0,
+      "seconds": 10.149,
+      "log_sha256": "367f9e68f01122d3dea5a17334e8b187536a8fb4a71c7d868ab9395fb551c951",
+      "result_sha256": "8e5e485c15b8499a15c4ef27688df204d366a45707ad84b0fa371f973cf6a3e4",
+      "tests": 129,
+      "failed": 0,
+      "skipped": [],
+      "passed": 129,
+      "original_comparisons": 0,
+      "cpu_program_comparisons": 0,
+      "cpu_comparisons": 0,
+      "branch_selection_comparisons": 256,
+      "transfer_comparisons": 0,
+      "watchpoint_comparisons": 0,
+      "debug_cpu_comparisons": 0,
+      "debug_round_trips": 0,
+      "failures": []
+    },
+    {
+      "name": "r6-qualified-source-p",
+      "sdk": "r6",
+      "core": "4",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_RUNNER",
+        "$ARTIFACT_ROOT/r6-qualified-source-p/tmp",
+        "taskset",
+        "-c",
+        "4",
+        "$NEVERD_WORKTREE/build-x86/bin/NeverDX86LegacySourceTests",
+        "--gtest_filter=*",
+        "--gtest_output=json:$ARTIFACT_ROOT/r6-qualified-source-p/result.json"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD": "$NEVERD_WORKTREE/build-x86/bin/neverd",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "$NEVERC_WORKTREE/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC_LLC": "$LLVM_WORKTREE/build-intrinsics/bin/llc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "$ARTIFACT_ROOT/r6-qualified-source-p/exports"
+      },
+      "binary_sha256": "66f2bbfd5800d373416a504d5320cd8f6a9ec2b4c776d2e4d161c6f30c8b183f",
+      "source_head": "ce5478965bc441f3a7a402416984e05951d78c7d",
+      "runtime_library_sha256": "e34885eaf63e536d9b0c10532b3e51920b1d26eec9fffbdf992487def42664c3",
+      "cli_sha256": "063a4b6edd15bedab7f7bb0668fdfd6787debb48773891dd82c6c06f4b127c1b",
+      "source_tree": "a779466f51389e6fe42ad4fd3309103f34337711",
+      "source_status": "",
+      "exit_code": 0,
+      "seconds": 6.829,
+      "log_sha256": "d56be04cc54c956c625c33089d4ad1ba939099b30b8ed20f8b654e8458fa96ee",
+      "result_sha256": "a6f113937b8e4b90db6adb78c0218dc6770b9d03d0fe377d47ad28c1808a7f7b",
+      "tests": 129,
+      "failed": 0,
+      "skipped": [],
+      "passed": 129,
+      "original_comparisons": 0,
+      "cpu_program_comparisons": 0,
+      "cpu_comparisons": 0,
+      "branch_selection_comparisons": 256,
+      "transfer_comparisons": 0,
+      "watchpoint_comparisons": 0,
+      "debug_cpu_comparisons": 0,
+      "debug_round_trips": 0,
+      "failures": []
+    },
+    {
+      "name": "r6-qualified-system-p",
+      "sdk": "r6",
+      "core": "4",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_RUNNER",
+        "$ARTIFACT_ROOT/r6-qualified-system-p/tmp",
+        "taskset",
+        "-c",
+        "4",
+        "$NEVERD_WORKTREE/build-x86/bin/NeverDX86SystemStateTests",
+        "--gtest_filter=*",
+        "--gtest_output=json:$ARTIFACT_ROOT/r6-qualified-system-p/result.json"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD": "$NEVERD_WORKTREE/build-x86/bin/neverd",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "$NEVERC_WORKTREE/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC_LLC": "$LLVM_WORKTREE/build-intrinsics/bin/llc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "$ARTIFACT_ROOT/r6-qualified-system-p/exports"
+      },
+      "binary_sha256": "cb7f18f40d98ce446a8f3686aaf0dab05205f19ee8855c2f4e2102c1ee4183ae",
+      "source_head": "ce5478965bc441f3a7a402416984e05951d78c7d",
+      "source_tree": "a779466f51389e6fe42ad4fd3309103f34337711",
+      "source_status": "",
+      "exit_code": 0,
+      "seconds": 0.082,
+      "log_sha256": "1d6848cfd55cb4bb9e35033985d8c77f6796f9413a358c8e50e907a0e73c9c12",
+      "result_sha256": "424a4c4706bbd0333acfd502753a49bb6b8d411f7ef16b53b5e11a2226989375",
+      "tests": 29,
+      "failed": 0,
+      "skipped": [],
+      "passed": 29,
+      "original_comparisons": 0,
+      "cpu_program_comparisons": 0,
+      "cpu_comparisons": 0,
+      "branch_selection_comparisons": 0,
+      "transfer_comparisons": 0,
+      "watchpoint_comparisons": 0,
+      "debug_cpu_comparisons": 0,
+      "debug_round_trips": 0,
+      "failures": []
+    }
+  ],
+  "diagnostics": {
+    "included_in_qualification_totals": false,
+    "logs_and_results_retained": true,
+    "failed_executables_retained": false,
+    "runs": [
+      {
+        "name": "native-probe-machine-p",
+        "role": "Initial failure: fetch-attempt test expectation, operand-override #UD, and changed-MP LMSW debug mismatch.",
+        "receipt_sha256": "1605e4050d23103a09615c68ceaf3037f0df2baf6cdc7121272cb17da90cab0d",
+        "source_head": "5f20e49b87399d0918d514e6c0243c729dbc1748",
+        "source_status": "",
+        "binary_sha256": "103afeb4581f4eabd33a2b35624f5f6b642583c7efcf6ffb13bb57fb3cb7896e",
+        "exit_code": 1,
+        "tests": 24,
+        "passed": 19,
+        "failed": 5,
+        "skipped": [],
+        "log_sha256": "a5b0ceab782162c83c9f88b2e324c89e0296204f63ce77b457e8c0f554889a17",
+        "result_sha256": "7ce7ec8bfd763747ac045c9435de5850af737c4f93af9c1587c353e87a925882"
+      },
+      {
+        "name": "native-probe-trace-p",
+        "role": "Traced failure: LMSW data comparator and native #UD on 66-prefixed CLAC/STAC.",
+        "receipt_sha256": "b572277e6729190545eaf05cde569716340a3d467e1a934d92073641638ae997",
+        "source_head": "5f20e49b87399d0918d514e6c0243c729dbc1748",
+        "source_status": " M unittests/translate/x86/X86LegacyScalarNativeFixture.inc\n M unittests/translate/x86/X86LegacyWatchpointNativeTests.inc\n",
+        "binary_sha256": "b53ce960dffca6063d2254b2848fc5d80d1ef7ab0069382c38e025fb43eed6a5",
+        "exit_code": 1,
+        "tests": 4,
+        "passed": 0,
+        "failed": 4,
+        "skipped": [],
+        "log_sha256": "66296c9d8f05bce428a687e43ab332bcf0e31ce8b22fa59375862a92a961d4ce",
+        "result_sha256": "d278bd4e917eec864465a52989b6872d15637df36d192c4d93cd60a61779420c"
+      },
+      {
+        "name": "native-probe-prefix-p",
+        "role": "Controlled unchanged-CR0 LMSW succeeds; operand-override #UD fix succeeds.",
+        "receipt_sha256": "e0e2d3c6151e3c9d3746ba51df64912265770d506b6e4a66ddc02614cc2be634",
+        "source_head": "5f20e49b87399d0918d514e6c0243c729dbc1748",
+        "source_status": " M lib/translate/X86/X86LegacyScalar.h\n M lib/translate/X86/X86LegacyScalarEncoding.cpp\n M lib/translate/X86/X86LegacyScalarExecution.cpp\n M unittests/translate/x86/X86LegacyMachineStatusTests.inc\n M unittests/translate/x86/X86LegacyScalarNativeFixture.inc\n M unittests/translate/x86/X86LegacyWatchpointNativeTests.inc\n",
+        "binary_sha256": "57871bf72bef6b42bc440987ecb2500f3d7864bfb6c20ae520506367b1758874",
+        "exit_code": 0,
+        "tests": 24,
+        "passed": 24,
+        "failed": 0,
+        "skipped": [],
+        "log_sha256": "23cafc6cd312a5752073a85ada6f704a6a373ab03a2d47f609892d4001949c42",
+        "result_sha256": "1b177a4fac701429080d229564756d0ebb1672ee706ff3049d95fd3c3960012f"
+      },
+      {
+        "name": "native-probe-ts-p",
+        "role": "TS-only-changing LMSW succeeds; fixed software state/data/TF/fault checks succeed.",
+        "receipt_sha256": "617f2433965341b917f22b7276aa11ebb401b3ec0bb5e6422ae0a36c8cbfdb80",
+        "source_head": "5f20e49b87399d0918d514e6c0243c729dbc1748",
+        "source_status": " M docs/architecture.md\n M docs/testing.md\n M lib/translate/X86/X86LegacyScalar.h\n M lib/translate/X86/X86LegacyScalarEncoding.cpp\n M lib/translate/X86/X86LegacyScalarExecution.cpp\n M unittests/translate/x86/X86LegacyMachineStatusTests.inc\n M unittests/translate/x86/X86LegacyScalarNativeFixture.inc\n M unittests/translate/x86/X86LegacySourceTests.cpp\n M unittests/translate/x86/X86LegacyWatchpointNativeTests.inc\n",
+        "binary_sha256": "bd39cb54109ce85d782fdf6e0d2039c93891aec1c440d6bae05c8adf3dc7b791",
+        "exit_code": 0,
+        "tests": 26,
+        "passed": 26,
+        "failed": 0,
+        "skipped": [],
+        "log_sha256": "8ce3181235cf24de8990c3b95c06e9774f2f2e6acdd8d0fa2e292fb9904f2dd5",
+        "result_sha256": "4df6a7d93d206e1346edc53b8f3298fdc0e0e32c9d29934f1274f307fd39941f"
+      },
+      {
+        "name": "native-source-ts-p",
+        "role": "Test fixture failure: reset discarded authenticated instruction bytes; fixed by reinstalling selected bytes.",
+        "receipt_sha256": "f62eb67bb7408a7e6e963f72e96883a69354a8bdf4c7cc17fa74f718e751dfc9",
+        "source_head": "5f20e49b87399d0918d514e6c0243c729dbc1748",
+        "source_status": " M docs/architecture.md\n M docs/testing.md\n M lib/translate/X86/X86LegacyScalar.h\n M lib/translate/X86/X86LegacyScalarEncoding.cpp\n M lib/translate/X86/X86LegacyScalarExecution.cpp\n M unittests/translate/x86/X86LegacyMachineStatusTests.inc\n M unittests/translate/x86/X86LegacyScalarNativeFixture.inc\n M unittests/translate/x86/X86LegacySourceTests.cpp\n M unittests/translate/x86/X86LegacyWatchpointNativeTests.inc\n",
+        "binary_sha256": "4810733226fb088cd06bf85ea6972dbd93fd243794cd700f99b8d6adec964133",
+        "exit_code": 1,
+        "tests": 28,
+        "passed": 24,
+        "failed": 4,
+        "skipped": [],
+        "log_sha256": "b9d64f75811224da38e4c2c01dccc9b9f50656c6a1c06e8b7334d883df4d77d1",
+        "result_sha256": "fca85481d7401cfaecef47b8f82e5cc562c2064bdc86ffc795bd74717c8e6282"
+      }
+    ],
+    "lmsw_comparison": {
+      "entry_cr0": "0x8001001f",
+      "changed_mp_ts_input": "0xdeadfff4",
+      "unchanged_input": "0xdeadffff",
+      "changed_ts_input": "0xdeadfff7",
+      "observation": "Changing MP/TS lost the native data trap; unchanged and TS-only inputs retained it. Final native debug comparison changes TS; fixed software and generated C separately qualify MP/EM/TS and fault atomicity.",
+      "inference": "Consistent with the KVM VMX LMSW interception path; this is not a trace of the running kernel exit.",
+      "reference": "https://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux/+/05e96e96a315fa49faca4da2aedd1761a218b616/arch/x86/kvm/vmx/vmx.c#5505"
+    }
+  },
+  "limits": [
+    "One CPU and ordinary RAM; existing protected-state and fault-order profiles remain required.",
+    "FullCR0 binds SMSW undefined upper bits to a target choice; Intel-host evidence is not cross-vendor coverage.",
+    "Changed-MP LMSW data-breakpoint behavior is not qualified by this KVM oracle; the retained diagnostic and native TS-only control distinguish that limit.",
+    "The NeverC privileged builtin checks prove native code generation, not successful user-mode execution.",
+    "General MOV-CR and mode transitions, task switching, other i386 banks, software SMM/SGX transitions and unowned asynchronous producers remain outside this qualification."
+  ]
+}
