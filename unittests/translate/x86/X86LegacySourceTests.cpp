@@ -11,6 +11,7 @@
 #include "../../lift/NeverDLiftFixture.h"
 #include "X86BranchDebugOracle.h"
 #include "X86LegacyBMITestEncoding.h"
+#include "X86LegacyControlTestEncoding.h"
 #include "X86LegacyDescriptorTestEncoding.h"
 #include "X86LegacyMachineStatusTestEncoding.h"
 #include "X86LegacySystemSelectorTestEncoding.h"
@@ -159,6 +160,27 @@ protected:
     for (const auto &U : Units)
       for (unsigned I = 0; I != U.Bytes.size(); ++I)
         put(U.Address + I, U.Bytes[I], GuestScalarWidth::I8);
+  }
+
+  void controlState(bool PAE = false, bool Code32 = true) {
+    resetLegacyState({.PhysicalAddressBits = 32, .PSE = true, .PAE = true});
+    S.Core.CPL = 0;
+    S.Core.Segments[1] = {0, UINT32_MAX, 8, uint16_t(Code32 ? 0xc09b : 0x809b),
+                          false};
+    S.Core.Segments[2] = {0, UINT32_MAX, 16, 0xc093, false};
+    S.EFlags = 0xed7;
+    O.ControlRegisters = X86LegacyControlRegisterBinding{0x88};
+    auto C = M->controls();
+    C.CR0 = 0x80010011;
+    C.CR4 = PAE ? 0x20 : 0;
+    if (PAE) {
+      C.PDPTE = {0x11001, 0, 0, 0};
+      put(0x10000, 0x11001);
+      put(0x11000, 0x12007);
+      for (unsigned I = 0; I != 32; ++I)
+        put(0x12000 + I * 8, I * 4096 | 7);
+    }
+    llvm::cantFail(M->bindControls(C));
   }
 
   void compile(llvm::ArrayRef<SourceUnit> Units, Driver &Run) {
@@ -1263,6 +1285,8 @@ TEST_P(X86LegacySourceTest,
   EXPECT_EQ(Run(&Context, &Budget), 258u);
   EXPECT_EQ(S.Core.GPR[0], 0x12345678u);
 }
+
+#include "X86LegacyControlSourceTests.inc"
 
 INSTANTIATE_TEST_SUITE_P(Compilers, X86LegacySourceTest, testing::Range(0u, 4u),
                          [](const testing::TestParamInfo<unsigned> &I) {

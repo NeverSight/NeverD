@@ -526,6 +526,19 @@ instruction chains and busy-write fault repair through Clang/NeverC O0/O2.
 Run these with both SDKs and qualified P/E cores, plus shared scalar,
 segment/query and ordinary system-state regressions.
 
+`X86LegacyControlTest.*`, `LegacyControl/*` and the `ControlRegister*` cases in
+`NeverDX86LegacySourceTests` cover protected MOV-CR. The fixed-value and
+original KVM cases vary code width, prefixes, all GPRs and ignored ModR/M mod
+bits; test CR0 normalization, privilege/#UD/#GP ordering and CR3/CR4 changes;
+and compare full controls, registers and flags. Software and generated C also
+test the PDPTE reload triggers, late reserved-entry faults, backing stops,
+repair/retry, mapping changes on the next fetch and new-IDT selection for a
+post-write #DB. The binding explicitly selects preserved undefined flags,
+source-retained ignored CR3 bits, ET=1, and present-only PDPTE reserved checks.
+The tests do not qualify real/IA-32e mode transfer, TLB timing, VMX/SMX entry,
+SMM or concurrent memory writers. Native compiler CR/DR operand transport is
+qualified separately by NeverC's system-register completion harness.
+
 `LegacyMachineStatus/*` qualifies original protected SMSW/LMSW/CLTS in legacy
 paging and PAE. It compares the complete control bank, registers, flags,
 exceptions and RAM across code/operand/address sizes, all GPRs, low CR0 bits,

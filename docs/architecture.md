@@ -101,6 +101,17 @@ architecturally undefined upper word to the target's CR0[31:16]; word register
 and memory forms need no undefined-result choice. Generated protected C calls
 this same boundary. These instructions do not enable real/VM86 transitions,
 task switching, general MOV-CR or virtual-machine interception semantics.
+`translate/X86/X86LegacyControlRegisters` separately owns original protected
+MOV-CR. Its explicit Intel binding preserves undefined arithmetic flags and
+binds nonpaging CR4 capabilities; paging capabilities come from
+`X86PagingFeatures`. Operand/address overrides and ModR/M mod do not change
+the register transfer's 32-bit width or add a memory operand. The owner checks
+architectural faults before staging CR0/CR2/CR3/CR4, uses `loadX86PAEPDPTE` for
+the specified PAE reload triggers, and publishes the complete control bank
+before post-instruction debug delivery. Failed loads retain the previous
+CR3 and all four PDPTEs. The following fetch uses the new mapping. Generated
+protected C reuses this owner. Valid real/IA-32e transfers and unbound memory
+domains refuse explicitly; they are not converted into invented #GP faults.
 CLAC/STAC use the existing target SMAP capability and raise #UD when it is
 absent, CPL is nonzero or an operand-size override is present. The recognized
 faulting encoding still authenticates the instruction fetch before #UD.
