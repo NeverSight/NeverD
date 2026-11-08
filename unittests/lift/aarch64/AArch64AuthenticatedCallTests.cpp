@@ -742,8 +742,9 @@ TEST(AArch64AuthenticatedCall, NativeTypesKeepTheOriginalIndirectTarget) {
     std::string Source;
     llvm::raw_string_ostream Out(Source);
     ASSERT_TRUE(HighCEmitter().emit({High}, Out, Options));
-    EXPECT_NE(Source.find(Variant.Raw ? kRawCallMacro : kResultCallMarker),
-              std::string::npos)
+    EXPECT_TRUE(llvm::StringRef(Source).contains(
+        Variant.Raw ? llvm::StringRef(kRawCallMacro)
+                    : llvm::StringRef(kResultCallMarker).rtrim()))
         << Source;
     EXPECT_EQ(Source.find(kResignBuiltin), std::string::npos) << Source;
     save(Case, kHighSource, Source);
