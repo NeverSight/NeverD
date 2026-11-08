@@ -3373,6 +3373,30 @@ struct Listing::Impl {
               return item;
             }
         }
+        // A recovered switch's table that its function's range also covers,
+        // as MSVC's unwind record covers the table after the code, lists as
+        // that table, and the padding up to it aligns it, as between
+        // functions.  Only slots the engine proved qualify.
+        if (asSwitchEntry(item, region, address))
+          return item;
+        if (const SwitchSlot *table = switchSlotFrom(address);
+            table && table->address < functions[f].end &&
+            (next == body.instructions.end() ||
+             next->address >= table->address)) {
+          const std::uint64_t start =
+              next == body.instructions.begin()
+                  ? functions[f].entry
+                  : std::prev(next)->address + std::prev(next)->size;
+          if (start <= address)
+            if (const auto alignment =
+                    paddingAlignment(start, table->address)) {
+              item.kind = ItemKind::Align;
+              item.start = start;
+              item.size = table->address - start;
+              item.alignment = alignment;
+              return item;
+            }
+        }
         if (dialect == OperandDialect::AArch64) {
           const std::uint64_t word = address & ~std::uint64_t{3};
           // Zero words the body does not reach read as UDF #0, which no one
@@ -4942,6 +4966,16 @@ struct Listing::Impl {
     --it;
     return address - it->address < switches[it->table].entrySize ? &*it
                                                                  : nullptr;
+  }
+
+  /// The first jump table slot at or after \p address, if one is.
+  const SwitchSlot *switchSlotFrom(std::uint64_t address) const {
+    const auto it =
+        std::lower_bound(switchSlots.begin(), switchSlots.end(), address,
+                         [](const SwitchSlot &slot, std::uint64_t value) {
+                           return slot.address < value;
+                         });
+    return it == switchSlots.end() ? nullptr : &*it;
   }
 
   /// Makes \p item the jump table slot holding \p address, when one does

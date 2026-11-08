@@ -2218,8 +2218,12 @@ Lost or incomplete proofs retain the original indirect transfer. The native func
 disassembly API publishes these same instruction boundaries and targets; raw
 disassembly remains linear. The worker uses recovered bodies for function
 listings and replaces their linear reference-scan results, so skipped bytes do
-not swallow real code targets. Analyst Undefine overrides presentation inside
-a function without deleting the function or changing the original bytes.
+not swallow real code targets. Bytes no recovered path reaches stay bytes; the
+listing never decodes past an unresolved indirect jump. A recovered switch's
+table inside its function's range, as an MSVC unwind record covers it, lists
+as that table from the engine's proven slots. Analyst Undefine overrides
+presentation inside a function without deleting the function or changing the
+original bytes.
 
 When a scalar target is not constant, the same expression builder can prove a
 bounded finite cover using shared operator evaluation and known bits. Every

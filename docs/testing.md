@@ -3533,6 +3533,13 @@ unreachable E9. HighC and LLVMC execute against that result at O0/O2 with UBSan;
 144 independent input pairs include zero, all ones, sign and alternating bits.
 The native test is skipped on other hosts.
 
+`NeverDWorkerSwitchListing` lists one generated PE whose bytes after an
+indirect jump differ in kind. An SEH termination handler sign-extends its
+selector before an unsigned 32-bit check and dispatches through an RVA table its
+unwind range covers: every case lists as an instruction, the dispatch says
+`switch jump` and each table slot is an `rva` entry for its case. An obfuscated
+constant branch keeps its skipped junk byte as `db 0E9h` and its target as code.
+
 `NeverDWorkerConstantBranch` also checks cold expression resolution and literal
 GUI listing jumps into forward and backward fragments, both C routes, retained
 stack names, chunk headers/footers, bytecode ownership, and reference overlays
