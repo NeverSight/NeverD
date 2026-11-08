@@ -9262,6 +9262,16 @@ names a member of it:
 - A frame address taken outside every member names a byte array that runs to
   the next member, access or address.
 
+HighC checks a storage address's known frame root and accumulates its signed
+offset in one bounded walk. Offset steps and alias/parent-frame rebases must
+fit without signed overflow; a zero mask is not a stack-alignment operation.
+An unassigned SSA-0 display heuristic still cannot authorize storage access.
+Failed proofs retain ordinary address expressions instead of inventing frame
+members, and each query observes the current aliases and frame layout.
+Typed pointer offsets and frame overlays also reject unrepresentable signed
+offsets. Ordered member distances use unsigned subtraction; alignment checks
+use low bits so the entry residue cannot cause signed overflow.
+
 Addresses print as the member holding them: `(uintptr_t)&stack_storage.var_m48`,
 `(CStringT*)&stack_storage.var_m48` for a pointer parameter, or
 `&stack_storage.var_m48[8]` inside an array. Frame aliases print the address

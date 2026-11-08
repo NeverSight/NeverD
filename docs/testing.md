@@ -22202,6 +22202,16 @@ MedStackAlignment reusable-entry query regressions exercise the existing scoped 
 
 `CDisplayFrameRecord` index regressions check duplicate-name owner precedence, layout replacement, current propagated types and disabled storage projection. The index is rebuilt with its layout snapshot; mutable types are read from their current slots.
 
+The same suite rejects zero alignment masks, overflowing signed offset chains,
+and overflowing alias/parent-frame rebases. It retains valid boundary
+differences, target entry-stack residues, the existing traversal bound and
+display-only roots without granting storage access. x86, x64, ARM, AArch64 and
+both byte orders of MIPS32/64 exercise root checks. Typed pointer offsets,
+frame overlays, member distances and alignment residues cover the adjacent
+arithmetic boundaries. Both C writers execute a zero-masked frame address at
+O0/O2 with undefined-behavior checks. Run `NeverDCDisplayFrameRecordTests` and
+the complete C-pointer/source ABI suites after changing this walk.
+
 `HighEntryStackOffsets.SharedIndexesKeepDefinitionAndPhiIdentities` checks register/temporary identities, ambiguous PHIs and a new conversion after mutation. Win64 forwarding checks use the same converter-owned definition and PHI indexes as production calls.
 
 HighControlFlowSemantics external-skip tests independently execute all 256 branch choices and preserve earlier nested incoming edges. Batched external-skip ownership must retain statement order and reject outside entries; the current upstream goto-splice and entry-label indexes are retained. Windows exception regressions qualify exceptional control flow.
