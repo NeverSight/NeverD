@@ -1017,6 +1017,17 @@ pair its own compile test and every LAR/LSL destination width its own completion
 test. The split preserves both C routes, LLVM output, O0/O2, and all register,
 memory, success/failure and optimized/unoptimized descriptor cases within the
 ordinary per-test timeout. NeverC variants still require `NEVERD_TEST_NEVERC`.
+The shared scalar MSR/port cases live in
+`unittests/lift/x86/X86ScalarSystemSourceTests.inc`. The Linux i386 native
+variant also requires `NEVERD_TEST_NEVERC_LLC` and compiles 168 complete C
+forms through the full LLVM driver. Retain its exports with
+`NEVERD_ISA_REGRESSION_ARTIFACT_DIR`, then run
+`scripts/check_x86_scalar_system_source.py --exports DIR --compiler COMPILER
+--backend-llc LLVM_LLC --output OUT`. Omit `--backend-llc` for stock Clang.
+The witness checks 8/16/32-bit ports, the complete MSR input, partial-register
+results, dead effects and callee-saved state against original instruction
+bytes; its selector/value/result corruptions must fail. It requires Capstone,
+LIEF and Unicorn and supplies controlled privileged completions.
 The AMX format-compilation and native completion/fault matrices likewise register
 each encoding separately, retaining all formats, both pipeline optimization
 settings and every source/native route. Parameter names retain the instruction
@@ -2822,6 +2833,18 @@ recorder before execution: eight ASan/UBSan caller-input observations retain
 an image-valued physical integer, and eight UBSan runs use a high-bit address
 to check ordinary DS loading and physical input together. Preprocessed source
 and caller bodies are checked to contain no launch before host execution.
+With `NEVERD_TEST_NEVERC` and `NEVERD_TEST_NEVERC_LLC` set,
+`NeverCI386EmitsNativeLaunchWithoutOldContinuation` also compiles the complete
+i386 ELF output through NeverC at O0/O2: 24 native C compilation checks retain
+raw i32 input and nonreturning IR, and reject an external helper or an old
+continuation in the emitted object. The dedicated SKINIT capability check works
+independently of long-mode-only system builtins.
+`scripts/check_x86_skinit_source.py` consumes that test's retained directory.
+With `--linker` pointing to `ld.lld`, it links the complete NeverC and Clang
+objects and compares original bytes against both C routes at the launch
+boundary. Nine input values cover low, image-valued and high-bit integers;
+separate EAX and image-store corruptions must be rejected. The script requires
+Capstone, LIEF and Unicorn and never executes SKINIT.
 Run the shared integer-width and pointer-address suites after changing this
 address/parameter boundary. The retained source snapshots, report hashes and
 independent LLVM/NeverC instruction-boundary checks are in the

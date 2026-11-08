@@ -4535,6 +4535,9 @@ SDKs rebuild and pass the same 79 checks and 3,008 compilation checks. All
 829 retained source, original-byte, IR and object exports are byte-identical
 to `c6c91892f1`, with unchanged NeverC, LLVM and Clang hashes. The integration
 receipt records that basis for reusing the complete-C behavior results.
+The later shared HighIR/MedIR and SEH integration at `65eb4b911c` also rebuilds
+both SDKs and passes all 79 checks and 3,008 compilation checks. Its 829
+exports remain byte-identical, and a separate receipt records the new binaries.
 
 Stopped native instructions qualify address/ASID transport and the C ABI.
 Separate CPL0 QEMU runs qualify VMCB/MSR round trips and continuation only
@@ -4543,3 +4546,64 @@ hardware VM-entry behavior. Windows/Darwin i386 source ABIs, full machine-mode
 transitions and task switching, remaining state banks, software SMM/SGX and
 unbound asynchronous producers remain open. The final LLVM release remains
 gated; the production pin stays `neverd-llvm-v23.0.0-r6`.
+
+## Native i386 secure-loader source interfaces (2026-11-08)
+
+NeverC now admits both `__builtin_ia32_skinit` and `__svm_skinit` in the
+Linux i386 frontend. Before this change, the portable spelling was undeclared
+and the Microsoft spelling could become an unresolved external function.
+Both now lower to `llvm.x86.skinit(i32)` with raw EAX bits and no old C
+continuation. NeverD selects this capability separately from long-mode-only
+system builtins, so both HighC and LLVM-to-C can use the native i386 path.
+The existing LLVM fork already supplies the intrinsic and code32 lowering.
+
+The [i386 SKINIT evidence](evidence/x86-i386-skinit-2026-11-08.json) records
+14 focused NeverD checks and 48 native i386 C compilation checks across the
+native fork and pinned r6 SDK. Linking the unchanged C objects from both
+NeverC and Clang gives 864 comparisons against independent original bytes;
+all 160 EAX/image-store corruption controls are rejected. The standalone
+NeverC witness passes 1,440 EAX boundary checks and eight negative controls,
+while the full LLVM witness passes 1,080 checks. All 185 x86/i386 frontend
+tests and the VMX, SVM, VMRUN and FLAGS regression matrices pass.
+
+All 25 integer-width tests and all 879 pointer-projection tests also pass.
+The 25 initially missing-fixture cases were completed after restoring the
+unchanged pinned corpus into the isolated worktree. No SKINIT or pointer
+qualification skips remain. These are instruction-boundary and
+source-transport qualifications: they do not execute SKINIT or qualify secure
+launch, attestation, processor reset or physical faults. Windows/Darwin i386
+source ABIs, the remaining architectural state/event gates and the existing
+90-finding source-global audit remain open. The production LLVM pin remains
+`neverd-llvm-v23.0.0-r6`; this batch does not publish a new LLVM release.
+
+## Native i386 scalar MSR and port source interfaces (2026-11-08)
+
+NeverC now registers portable WRMSR and all six scalar IN/OUT builtins in
+the common x86 frontend. Their existing native LLVM lowering preserves
+ECX and the complete EDX:EAX MSR value, the 16-bit port selector, and the
+8/16/32-bit port value. The portable RDMSR interface was already shared.
+Linux i386 machine output uses the full LLVM driver. Both NeverD C routes
+now select these native interfaces with the existing capability check.
+The shared tests live under `unittests/lift/x86` instead of the x86_64 file.
+
+The [scalar-system evidence](evidence/x86-i386-scalar-system-2026-11-08.json)
+records 21 selected NeverD tests and 1,344 native C checks across the full
+fork and r6 decompilation SDKs, including 336 i386 object compilation checks.
+All selected checks pass without skips. Complete C from both writers, compiled
+by NeverC and Clang at O0/O2, passes 2,016 controlled comparisons against
+original bytes; all 1,344 selector/value/result corruption controls fail as
+expected. These comparisons check partial EAX results, dead reads, imm8/DX
+ports, the full MSR input, return values and callee-saved state.
+
+NeverC's standalone i386 witness passes 156 comparisons and 80 negative
+controls across 48 objects. All 185 x86/i386 tests and the SKINIT, VMX, SVM,
+VMRUN and FLAGS regressions pass. The full LLVM fork passes the three selected
+MSR/system codegen suites. No LLVM enum, lowering or production SDK pin changed.
+
+Nine further i386 portable source entry points remain unavailable: WRMSRNS,
+INT, CPUIDEX and the six string-port interfaces. Each rejection is reproduced
+alongside a passing x64 native-IR control. Windows/Darwin i386 source ABIs and
+the broader state/event release gates also remain open. Controlled completions
+do not qualify physical MSR/port success; the strict source-global audit still
+has its 90 baseline findings. A new LLVM release remains gated on the overall
+completion work.

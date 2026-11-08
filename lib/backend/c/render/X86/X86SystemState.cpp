@@ -26,6 +26,8 @@ namespace {
 
 const char *compilerDispatch(const X86SystemStateNative &Plan,
                              Arch TargetArch) {
+  if (Plan.Assembly.Id == Intrinsic::X86Skinit)
+    return "NEVERD_X86_SKINIT";
   if (Plan.AdjustRpl)
     return "NEVERD_X86_ARPL";
   if (Plan.Assembly.Id == Intrinsic::X86HistoryReset)
