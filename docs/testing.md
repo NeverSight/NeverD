@@ -84,6 +84,11 @@ a test binary. Its arrival source adds 7,680 message truth-table cases and
 960 complete two-slot lifetimes across every fixed vector, plus reserved-vector
 refusal and coalesced trigger-mode changes through EOI. These are constant
 expressions, not runtime tests or captured arrival traces.
+The priority source checks all 256 initial TPR bytes against every legal CR8
+write, all 60 reserved source bits, paired-state import mismatch and post-write
+priority admission. Same-value writes must clear subpriority; reads, imports
+and refused writes must preserve their corresponding banks. These compile-only
+checks do not qualify MOV-CR8 execution or automatic scheduler synchronization.
 For a real save, compile projected bank initializers at O0/O2,
 inspect constant bytes, and keep hypothetical register transitions distinct
 from captured observations. No guest, handler or device callback need run.
@@ -7434,6 +7439,15 @@ invocation diagnostics when ordinary identifiers bypass recursive expansion.
 stream through hundreds of records and prototypes on all three data models.
 It checks macro redefinition, wide literals, declaration order and published
 names after overwriting the input and destroying the parse's token storage.
+`TypeParse.EmptyAndGrowingMacroReplacementsKeepDeclarations` checks large
+nested macro replacements, empty annotations and trailing empty expansions.
+It validates record members and literal sizes across all three data models,
+then checks that invalid bytes keep their positions and leave the library intact.
+`TypeParse.InvalidMacroReplacementsFailAtTheirInvocation` rejects lexical
+errors inside used macros, including malformed/overflowing numbers and unfinished
+literals or comments. Direct and nested uses retain the original diagnostic at
+the invocation. Single-function declarations, packing and transactional failure
+with `KeepGoing` are covered, as are unused, removed and redefined replacements.
 `TypeParse.PunctuationKeepsOperatorsDeclaratorsAndErrorPositions` checks
 longest-match operators, qualified names, callbacks, variadics, member access,
 constant expressions and transactional errors on ILP32, LP64 and LLP64. The

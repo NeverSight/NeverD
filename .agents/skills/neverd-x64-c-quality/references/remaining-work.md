@@ -1,5 +1,14 @@
 # Remaining x64 C-quality work
 
+The APIC owner now distinguishes CR8 reads, real writes and paired-state
+import. Same-value writes clear TPR subpriority; reads/imports retain it.
+Reserved-bit writes and mismatched CPU/APIC imports reject without effects.
+Compile-only proofs cover all initial TPR bytes, legal classes, every reserved
+source bit and post-write arbitration. The PPR equal-class subpriority choice
+is explicitly the QEMU/KVM profile, not a universal hardware claim. Scheduler
+completion notifications, paged MOV-CR8 admission, TPR/device wiring, complete
+environment import and both ordinary registry inputs remain open.
+
 The independent `X86LocalApicFixed` component now owns enabled fixed-message
 reception/coalescing, priority, nonconsuming selection, exact acknowledgment
 and ordinary EOI bank transitions. Arrivals preserve in-service requests;
@@ -1664,3 +1673,10 @@ including whole-unit typed callers and stack arguments. Native linkage and
 service dispatch remain environment bindings; this is not portable ordinary
 C or an implementation of the service. General incoming-slot/borrow proofs
 and physical interrupt/system entry return ownership remain separate work.
+
+- C header macros no longer hide lexical errors or use failed integer
+  conversions when expanded. The declaration lexer retains the diagnostic and
+  reports the actual invocation before types are published, including through
+  another macro. Unused/redefined/removed replacements retain prior behavior.
+  This corrects accepted malformed declarations; it does not supply missing
+  Windows prototypes or infer unknown entry state.
