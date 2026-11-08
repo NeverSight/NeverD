@@ -331,6 +331,58 @@ TEST(TypeParse, GrowingTokenStreamsKeepMacroValuesSpellingAndSourceOrder) {
   }
 }
 
+TEST(TypeParse, EmptyAndGrowingMacroReplacementsKeepDeclarations) {
+  constexpr unsigned Fields = 96;
+  constexpr unsigned Records = 24;
+  for (DataModel Model :
+       {DataModel::ILP32, DataModel::LP64, DataModel::LLP64}) {
+    SCOPED_TRACE(int(Model));
+    std::string Source = "#define EMPTY\n#define FIELDS ";
+    for (unsigned I = 0; I < Fields; ++I)
+      Source += "unsigned field" + std::to_string(I) + "; ";
+    Source += "\n#define BODY EMPTY FIELDS char tail[sizeof(u\"hi\")];\n"
+              "#define RECORD struct NAME { BODY };\nEMPTY\n";
+    for (unsigned I = 0; I < Records; ++I)
+      Source += "#define NAME Record" + std::to_string(I) +
+                "\nEMPTY RECORD EMPTY\n#undef NAME\n";
+    Source += "int Last(EMPTY unsigned value EMPTY); EMPTY";
+    TypeLibrary Library(Model);
+    const auto Read = parseCTypes(Source, Library);
+    ASSERT_TRUE(Read.ok());
+    ASSERT_EQ(Read.Types.size(), Records);
+    ASSERT_EQ(Read.Prototypes.size(), 1u);
+    Source.assign(Source.size(), '!');
+    for (unsigned I = 0; I < Records; ++I) {
+      const auto Name = "Record" + std::to_string(I);
+      EXPECT_EQ(Read.Types[I], Name);
+      const auto &Record = recordOf(Library, Name);
+      ASSERT_EQ(Record.Members.size(), Fields + 1);
+      for (unsigned J = 0; J < Fields; ++J) {
+        EXPECT_EQ(Record.Members[J].Name, "field" + std::to_string(J));
+        EXPECT_EQ(Record.Members[J].BitOffset, J * 32u);
+        EXPECT_EQ(Record.Members[J].Type->TheBuiltin, Builtin::UInt);
+      }
+      EXPECT_EQ(Record.Members.back().Type->Count, 6u);
+    }
+    const auto *Last = Library.findPrototype("Last");
+    ASSERT_NE(Last, nullptr);
+    ASSERT_EQ(Last->Params.size(), 1u);
+    EXPECT_EQ(Last->Params[0].Name, "value");
+    EXPECT_EQ(Last->Params[0].Type->TheBuiltin, Builtin::UInt);
+
+    const auto Before = renderTypes(Library, {}, {});
+    const auto Bad = parseCTypes("#define EMPTY\nEMPTY @ EMPTY\n"
+                                 "int After(void);\nEMPTY ` EMPTY",
+                                 Library);
+    ASSERT_EQ(Bad.Problems.size(), 2u);
+    EXPECT_EQ(Bad.Problems[0].Line, 2u);
+    EXPECT_EQ(Bad.Problems[0].Column, 7u);
+    EXPECT_EQ(Bad.Problems[1].Line, 4u);
+    EXPECT_EQ(Bad.Problems[1].Column, 7u);
+    EXPECT_EQ(renderTypes(Library, {}, {}), Before);
+  }
+}
+
 TEST(TypeParse, LaysAStructureOutAsMSVC) {
   const TypeLibrary Library = parsed(R"(
     struct A { char c; int i; short s; };

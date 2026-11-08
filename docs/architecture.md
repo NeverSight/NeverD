@@ -3307,6 +3307,9 @@ published types and diagnostics retain their existing ownership and positions.
 The parser's token streams and macro replacements use a non-inline
 `SmallVector`: their borrowed spellings permit trivial relocation during
 growth without changing token order or extending the parse's spelling arena.
+The lexer writes ordinary tokens into that sequence directly. Macro invocations
+are copied before their slot is removed and expansion can grow the sequence;
+empty replacements and invalid bytes leave no token behind.
 Token payloads precede their small metadata fields to avoid a leading alignment
 gap. Identifier runs use a local cursor within the input and update their stored
 position once: accepted identifier bytes cannot include a newline. Encoding prefixes still join only

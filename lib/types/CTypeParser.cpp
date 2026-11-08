@@ -126,14 +126,19 @@ public:
         continue;
       }
       LineStart = false;
-      Token Next = token();
+      // Ordinary tokens are already in their final storage. A macro replaces
+      // its invocation, which must be copied before expansion can grow Tokens.
+      Token &Next = Tokens.emplace_back();
+      token(Next);
       if (Next.Kind == TokenKind::Word)
         if (auto Found = Macros.find(Next.Text); Found != Macros.end()) {
-          expand(std::move(Next), Found->second, Tokens, 0);
+          const Token Invocation = Next;
+          Tokens.pop_back();
+          expand(Invocation, Found->second, Tokens, 0);
           continue;
         }
-      if (Next.Kind != TokenKind::End)
-        Tokens.push_back(std::move(Next));
+      if (Next.Kind == TokenKind::End)
+        Tokens.pop_back();
     }
     Token End;
     End.Line = Line;
@@ -159,8 +164,7 @@ private:
   }
 
   /// One token at the current place, comments and space skipped already.
-  Token token() {
-    Token Result;
+  void token(Token &Result) {
     Result.Line = Line;
     Result.Column = Column;
     const char C = Source[At];
@@ -187,12 +191,12 @@ private:
         if (Prefix) {
           quoted(Result);
           Result.Quoted = *Prefix;
-          return Result;
+          return;
         }
       }
       Result.Kind = TokenKind::Word;
       Result.Text = Word;
-      return Result;
+      return;
     }
     if (llvm::isDigit(C) ||
         (C == '.' && At + 1 < Source.size() && llvm::isDigit(Source[At + 1]))) {
@@ -215,7 +219,7 @@ private:
         Result.Kind = TokenKind::Number;
         Result.Text = Text;
         Result.Floating = true;
-        return Result;
+        return;
       }
       // Drop the suffixes: u, l, ll, i64 and their mixes.
       llvm::StringRef Digits = Text;
@@ -247,11 +251,11 @@ private:
       if (Digits.getAsInteger(Radix, Result.Value))
         problem(Result.Line, Result.Column,
                 "'" + Text.str() + "' is no integer this reads");
-      return Result;
+      return;
     }
     if (C == '"' || C == '\'') {
       quoted(Result);
-      return Result;
+      return;
     }
     // Choose the longest spelling by its first byte. Large SDK headers are
     // mostly declarations; a table walk for each bracket or semicolon adds
@@ -306,12 +310,11 @@ private:
       Result.Kind = TokenKind::Punct;
       Result.Text = Rest.take_front(PunctBytes);
       advance(PunctBytes);
-      return Result;
+      return;
     }
     problem(Line, Column,
             std::string("'") + C + "' cannot begin a declaration's word");
     advance();
-    return Token();
   }
 
   /// Reads the quoted literal at the current place into \p Result: a string,

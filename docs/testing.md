@@ -7331,6 +7331,10 @@ invocation diagnostics when ordinary identifiers bypass recursive expansion.
 stream through hundreds of records and prototypes on all three data models.
 It checks macro redefinition, wide literals, declaration order and published
 names after overwriting the input and destroying the parse's token storage.
+`TypeParse.EmptyAndGrowingMacroReplacementsKeepDeclarations` checks large
+nested macro replacements, empty annotations and trailing empty expansions.
+It validates record members and literal sizes across all three data models,
+then checks that invalid bytes keep their positions and leave the library intact.
 `TypeParse.PunctuationKeepsOperatorsDeclaratorsAndErrorPositions` checks
 longest-match operators, qualified names, callbacks, variadics, member access,
 constant expressions and transactional errors on ILP32, LP64 and LLP64. The
