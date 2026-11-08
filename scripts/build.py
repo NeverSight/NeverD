@@ -38,9 +38,22 @@ def configuration(cache, options):
     raise ValueError("Multi-config builds require an explicit --config Release or --config Debug.")
 
 
+def run_cmake(command, env, child_lock):
+    if os.name == "nt":
+        subprocess.run(command, env=env, check=True)
+        return
+    # subprocess.run kills CMake on KeyboardInterrupt, even when CMake has
+    # surviving descendants. Keep CMake alive with the inherited lock until
+    # it finishes supervising them, just as after wrapper SIGTERM/SIGKILL.
+    with subprocess.Popen(command, env=env, **child_lock) as child:
+        status = child.wait()
+    if status:
+        raise subprocess.CalledProcessError(status, command)
+
+
 def build(directory, options):
     directory = Path(directory).resolve()
-    with forks.build_lock(directory):
+    with forks.build_lock(directory) as lock_fd:
         receipt_path = directory / "neverd-build-receipt.json"
         receipt = {"status": "in_progress", "started_at": forks.timestamp(), "options": options,
                    "scope": "Only the requested build targets and configuration; not all features or tests."}
@@ -57,15 +70,27 @@ def build(directory, options):
                     raise RuntimeError(f"Clear FETCHCONTENT_SOURCE_DIR_{name.upper()} before "
                                        "a mainline build; local source overrides cannot follow the fork.")
             configuration(cache, options)
+            cmake = cache.get("CMAKE_COMMAND", "cmake")
+            child_lock = {"pass_fds": (lock_fd,)} if os.name != "nt" else {}
+            configure = [cmake, "-S", cache["CMAKE_HOME_DIRECTORY"], "-B", str(directory)]
+            exports = forks.Exports(directory)
+            if exports.state["pending"]:
+                # Resolve the previous, possibly partial graph before exporting
+                # another commit. Persistent configure failures cannot grow it.
+                snapshot = directory / ".neverd-deps/snapshot.json"
+                exports.begin_configuration()
+                env = {**os.environ, "NEVERD_DEPENDENCY_SNAPSHOT": forks.digest(snapshot)}
+                run_cmake(configure, env, child_lock)
+                forks.Exports(directory).configured()
             snapshot = forks.refresh(directory)
             receipt["snapshot"] = json.loads(snapshot.read_text())
             receipt["snapshot_sha256"] = forks.digest(snapshot)
             env = {**os.environ, "NEVERD_DEPENDENCY_SNAPSHOT": forks.digest(snapshot)}
-            cmake = cache.get("CMAKE_COMMAND", "cmake")
-            subprocess.run([cmake, "-S", cache["CMAKE_HOME_DIRECTORY"], "-B", str(directory)],
-                           env=env, check=True)
+            forks.Exports(directory).begin_configuration()
+            run_cmake(configure, env, child_lock)
+            forks.Exports(directory).configured()
             receipt["configuration"] = configuration(cache_values(directory), options)
-            subprocess.run([cmake, "--build", str(directory), *options], env=env, check=True)
+            run_cmake([cmake, "--build", str(directory), *options], env, child_lock)
             effective = directory / "neverd-dependency-inputs.json"
             if effective.exists():
                 receipt["configure_inputs"] = json.loads(effective.read_text())

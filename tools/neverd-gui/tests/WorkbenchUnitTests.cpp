@@ -62,6 +62,7 @@
 #include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QScreen>
+#include <QScrollBar>
 #include <QSet>
 #include <QSignalSpy>
 #include <QSplitter>
@@ -70,6 +71,7 @@
 #include <QStatusBar>
 #include <QStyleOptionButton>
 #include <QStyleOptionComboBox>
+#include <QStyleOptionSlider>
 #include <QTabBar>
 #include <QTemporaryDir>
 #include <QTest>
@@ -1993,6 +1995,80 @@ private slots:
              Qt::Edges(Qt::LeftEdge));
     QCOMPARE(WindowFrame::edgesAt(QPoint(8, 150), size, QMargins()),
              Qt::Edges());
+  }
+
+  void windowFrameLeavesScrollbarsClickable_data() {
+    QTest::addColumn<int>("edge");
+    QTest::newRow("left") << int(Qt::LeftEdge);
+    QTest::newRow("right") << int(Qt::RightEdge);
+    QTest::newRow("top") << int(Qt::TopEdge);
+    QTest::newRow("bottom") << int(Qt::BottomEdge);
+  }
+
+  void windowFrameLeavesScrollbarsClickable() {
+    QFETCH(int, edge);
+    QWidget window;
+    QVERIFY(WindowFrame::attach(window));
+    window.resize(400, 300);
+    const int shadow = ::neverd::limits::gui_config::kWindowFrameShadowExtent;
+    const bool vertical = edge == Qt::LeftEdge || edge == Qt::RightEdge;
+    struct ScrollBar : QScrollBar {
+      using QScrollBar::initStyleOption;
+      using QScrollBar::QScrollBar;
+    } scrollbar(vertical ? Qt::Vertical : Qt::Horizontal, &window);
+    scrollbar.setRange(0, 100);
+    scrollbar.setPageStep(20);
+    const QRect visible =
+        window.rect().adjusted(shadow, shadow, -shadow, -shadow);
+    scrollbar.setGeometry(
+        vertical
+            ? QRect(edge == Qt::LeftEdge ? visible.left()
+                                         : visible.right() - 11,
+                    visible.top() + 30, 12, visible.height() - 60)
+            : QRect(visible.left() + 30,
+                    edge == Qt::TopEdge ? visible.top() : visible.bottom() - 11,
+                    visible.width() - 60, 12));
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    const QRect original = window.geometry();
+    QPoint point = scrollbar.geometry().center();
+    if (edge == Qt::LeftEdge)
+      point.setX(scrollbar.geometry().left() + 1);
+    else if (edge == Qt::RightEdge)
+      point.setX(scrollbar.geometry().right() - 1);
+    else if (edge == Qt::TopEdge)
+      point.setY(scrollbar.geometry().top() + 1);
+    else
+      point.setY(scrollbar.geometry().bottom() - 1);
+    QVERIFY(WindowFrame::edgesAt(point, window.size(),
+                                 QMargins(shadow, shadow, shadow, shadow)));
+    // Deliver through QWindow, where the frame used to consume the press
+    // before QWidget could dispatch it to this scrollbar.
+    QTest::mouseClick(window.windowHandle(), Qt::LeftButton, {}, point);
+    QVERIFY(scrollbar.value() > 0);
+    QCOMPARE(window.geometry(), original);
+    QVERIFY(QWidget::mouseGrabber() != &window);
+
+    scrollbar.setValue(0);
+    QStyleOptionSlider option;
+    scrollbar.initStyleOption(&option);
+    const QRect thumb = scrollbar.style()->subControlRect(
+        QStyle::CC_ScrollBar, &option, QStyle::SC_ScrollBarSlider, &scrollbar);
+    if (vertical)
+      point.setY(scrollbar.y() + thumb.center().y());
+    else
+      point.setX(scrollbar.x() + thumb.center().x());
+    QCOMPARE(
+        scrollbar.style()->hitTestComplexControl(
+            QStyle::CC_ScrollBar, &option, point - scrollbar.pos(), &scrollbar),
+        QStyle::SC_ScrollBarSlider);
+    const QPoint end = point + (vertical ? QPoint(0, 40) : QPoint(40, 0));
+    QTest::mousePress(window.windowHandle(), Qt::LeftButton, {}, point);
+    QTest::mouseMove(window.windowHandle(), end);
+    QTest::mouseRelease(window.windowHandle(), Qt::LeftButton, {}, end);
+    QVERIFY(scrollbar.value() > 0);
+    QCOMPARE(window.geometry(), original);
+    QVERIFY(QWidget::mouseGrabber() != &window);
   }
 
   void titleBarControlsTheWindow() {

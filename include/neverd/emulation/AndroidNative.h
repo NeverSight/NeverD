@@ -114,6 +114,16 @@ struct NativeEventLogWrite {
   int32_t Result = 0;
 };
 
+/// One text write after API 28 radio-tag routing and transport clipping.
+/// Payload is the bounded byte prefix of priority, NUL-terminated tag and
+/// NUL-terminated message. Clipping may omit either NUL; this is not a
+/// snapshot.
+struct NativeTextLogWrite {
+  uint32_t ID = 0;
+  std::vector<uint8_t> Payload;
+  int32_t Result = 0;
+};
+
 /// One explicit successful LP64 dladdr observation. Address matches exactly;
 /// image membership and symbol selection are supplied, never inferred.
 struct NativeDladdrObservation {
@@ -157,6 +167,15 @@ struct AndroidNativeOptions {
   /// Missing, exhausted or mismatching writes stop before consuming an entry.
   /// At most 4096 entries / 1 MiB, each with 4..4068 exact payload bytes.
   std::optional<std::vector<NativeEventLogWrite>> EventLogWrites;
+  /// Exact main/radio/system/crash text writes and explicit liblog results.
+  /// Same count/total budget as EventLogWrites; complete 3..4068-byte payloads.
+  /// No host log, property filter, clock or successful transport is inferred.
+  std::optional<std::vector<NativeTextLogWrite>> TextLogWrites;
+  /// API 28 libc's abort_msg_t** binding. Absent is unknown; zero explicitly
+  /// models early libc initialization. A nonzero guest slot contains the live
+  /// first-message pointer. Reads, mmap and publication use ordinary guest RAM;
+  /// no slot or initial message is synthesized, and access checks stay lazy.
+  std::optional<uint64_t> AbortMessageSlot;
   std::vector<NativeMemoryRegion> Memory;
   std::vector<NativeMemoryRead> ReadMemory;
   /// Constructors normally execute before the call, sharing its budget.

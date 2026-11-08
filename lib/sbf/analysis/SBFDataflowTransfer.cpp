@@ -427,13 +427,24 @@ void applyRegisterTransfer(const MedInstruction &Instruction,
   } else if ((Instruction.Op == Operation::Add ||
               Instruction.Op == Operation::Sub) &&
              Instruction.Form == OperandForm::DstSrc &&
-             State[Instruction.Src].ValueKind ==
-                 RegisterValue::Kind::Constant) {
+             (State[Instruction.Src].ValueKind ==
+                  RegisterValue::Kind::Constant ||
+              (Instruction.Op == Operation::Add &&
+               Instruction.Width == kDoubleWordBitWidth &&
+               State[Instruction.Dst].ValueKind ==
+                   RegisterValue::Kind::Constant &&
+               State[Instruction.Src].ValueKind ==
+                   RegisterValue::Kind::UnsignedRange))) {
+    const bool Commute =
+        State[Instruction.Src].ValueKind != RegisterValue::Kind::Constant;
     MedInstruction Immediate = Instruction;
     Immediate.Form = OperandForm::DstImm;
     Immediate.Semantics.Source = OperandSourceKind::Immediate;
     Immediate.Semantics.Immediate = ImmediateExtension::Full64;
-    Immediate.Immediate = State[Instruction.Src].Value;
+    Immediate.Immediate =
+        State[Commute ? Instruction.Dst : Instruction.Src].Value;
+    if (Commute)
+      State[Instruction.Dst] = State[Instruction.Src];
     applyAddSubImmediate(Immediate, State[Instruction.Dst]);
   } else if (Instruction.Op == Operation::HighOr &&
              State[Instruction.Dst].ValueKind ==
@@ -448,6 +459,24 @@ void applyRegisterTransfer(const MedInstruction &Instruction,
             ? State[Instruction.Src]
             : RegisterValue{RegisterValue::Kind::Constant,
                             instructionImmediate(Instruction), 0};
+    if (Instruction.Op == Operation::And &&
+        Instruction.Width == kDoubleWordBitWidth &&
+        Left.ValueKind == RegisterValue::Kind::UnsignedRange &&
+        Right.ValueKind == RegisterValue::Kind::Constant &&
+        (Right.Value == 0 || std::has_single_bit(~Right.Value + 1))) {
+      const auto Bounds = *unsignedValueRange(Left);
+      if (Bounds.Lower <= Bounds.Upper) {
+        // Clearing a low-bit suffix is monotone on a nonwrapping unsigned
+        // interval. Other masks and symbolic identities use the ordinary
+        // conservative transfer below.
+        State[Instruction.Dst] = unsignedRangeValue(
+            {*evaluateScalarALU(Operation::And, Instruction.Width, Bounds.Lower,
+                                Right.Value),
+             *evaluateScalarALU(Operation::And, Instruction.Width, Bounds.Upper,
+                                Right.Value)});
+        return;
+      }
+    }
     // Symbolic addresses are affine expressions, never numeric ALU operands.
     const auto Value =
         Left.ValueKind == RegisterValue::Kind::Constant &&

@@ -14,6 +14,7 @@
 #define NEVERD_BACKEND_CODEGEN_MACHO_MACHOPATCH_H
 
 #include "neverd/backend/codegen/BinaryRewriter.h"
+#include "neverd/backend/codegen/MachO/MachOAuthenticatedFixups.h"
 
 #include "llvm/MC/BinaryRewrite.h"
 
@@ -51,10 +52,14 @@ public:
                              llvm::ArrayRef<uint8_t> Code,
                              llvm::StringRef SegName, Arch TargetArch) override;
 
-  /// Install a separately authenticated native producer image. MC owner and
-  /// range identities remain absent; storage and segment receipts are shared.
-  llvm::Error appendReplacementImage(std::vector<uint8_t> &Binary,
-                                     const CompiledImage &Image);
+  /// Install a replacement IR or native object image. Producer fixup receipts
+  /// generate authenticated recipes automatically at final section VAs.
+  /// Optional explicit recipes use final image VAs. Segment placement and
+  /// dyld installation commit together; this does not authorize publication
+  /// without the caller's code-signature and call/unwind ABI checks.
+  llvm::Error appendReplacementImage(
+      std::vector<uint8_t> &Binary, const CompiledImage &Image,
+      llvm::ArrayRef<MachOAuthenticatedFixup> AuthenticatedFixups = {});
 
 private:
   struct PatchLayout : PatchLayoutBase {

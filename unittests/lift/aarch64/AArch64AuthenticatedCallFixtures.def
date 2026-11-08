@@ -19,11 +19,26 @@
 #ifndef A64_CALL_TYPED_SHAPE
 #define A64_CALL_TYPED_SHAPE(Name, Parameters, ReturnKind, Fixed)
 #endif
+#ifndef A64_CALL_NATIVE_SHAPE
+#define A64_CALL_NATIVE_SHAPE(Name, Parameters, ReturnKind)
+#endif
 #ifndef A64_CALL_INTEGER_TYPE
 #define A64_CALL_INTEGER_TYPE(Kind, Bytes, Signed)
 #endif
 #ifndef A64_CALL_RECORD_TYPE
 #define A64_CALL_RECORD_TYPE(Kind, Fields)
+#endif
+#ifndef A64_CALL_VECTOR_TYPE
+#define A64_CALL_VECTOR_TYPE(Kind, Bytes, Spelling)
+#endif
+#ifndef A64_CALL_HVA_STORAGE_KIND
+#define A64_CALL_HVA_STORAGE_KIND(Kind)
+#endif
+#ifndef A64_CALL_HVA_COMPILER
+#define A64_CALL_HVA_COMPILER(Name, Bytes, Count, Indirect)
+#endif
+#ifndef A64_CALL_ARRAY_TYPE
+#define A64_CALL_ARRAY_TYPE(Kind, Element, Count)
 #endif
 #ifndef A64_CALL_NAMED_POINTER_TYPE
 #define A64_CALL_NAMED_POINTER_TYPE(Kind, Name)
@@ -35,14 +50,83 @@
 #define A64_CALL_TYPED_VARIANT(Key, Zero, Raw)
 #endif
 
+A64_CALL_TEXT(kLegacyPAuthIR, R"IR(
+@callback.ptrauth = private constant { ptr, i32, i64, i64 }
+  { ptr @callback, i32 0, i64 0, i64 0 }, section "llvm.ptrauth", align 8
+declare void @callback()
+define ptr @legacy_callback_address() {
+  ret ptr @callback.ptrauth
+}
+)IR")
 A64_CALL_TEXT(kUnknownTypedKind, "unknown authenticated call fixture type")
+A64_CALL_TEXT(kHVACompilerCase, "hva-clang-darwin")
+A64_CALL_VALUE(unsigned, kHVAIndirectParameters, 2)
+A64_CALL_TEXT(kHVACompilerSource, R"C(
+typedef unsigned char V64 __attribute__((vector_size(8)));
+typedef unsigned char V128 __attribute__((vector_size(16)));
+struct H64_1 { V64 a; };
+struct H64_2 { V64 a, b; };
+struct H64_3 { V64 a, b, c; };
+struct H64_4 { V64 a, b, c, d; };
+struct H128_1 { V128 a; };
+struct H128_2 { V128 a, b; };
+struct H128_3 { V128 a, b, c; };
+struct H128_4 { V128 a, b, c, d; };
+struct Nested64 { struct H64_2 a, b; };
+struct Nested128 { struct H128_2 a, b; };
+struct Array64 { V64 a[2], b[2]; };
+struct Array128 { V128 a[3]; };
+struct RecordArray { struct H128_2 a[2]; };
+struct Five64 { V64 a[5]; };
+struct Five128 { V128 a[5]; };
+struct Mixed { V64 a; V128 b; };
+#define PROBE(Type) \
+  extern struct Type take_##Type(struct Type); \
+  struct Type call_##Type(struct Type value) { return take_##Type(value); }
+PROBE(H64_1)
+PROBE(H64_2)
+PROBE(H64_3)
+PROBE(H64_4)
+PROBE(H128_1)
+PROBE(H128_2)
+PROBE(H128_3)
+PROBE(H128_4)
+PROBE(Nested64)
+PROBE(Nested128)
+PROBE(Array64)
+PROBE(Array128)
+PROBE(RecordArray)
+PROBE(Five64)
+PROBE(Five128)
+PROBE(Mixed)
+)C")
+A64_CALL_HVA_COMPILER("take_H64_1", 8, 1, false)
+A64_CALL_HVA_COMPILER("take_H64_2", 8, 2, false)
+A64_CALL_HVA_COMPILER("take_H64_3", 8, 3, false)
+A64_CALL_HVA_COMPILER("take_H64_4", 8, 4, false)
+A64_CALL_HVA_COMPILER("take_H128_1", 16, 1, false)
+A64_CALL_HVA_COMPILER("take_H128_2", 16, 2, false)
+A64_CALL_HVA_COMPILER("take_H128_3", 16, 3, false)
+A64_CALL_HVA_COMPILER("take_H128_4", 16, 4, false)
+A64_CALL_HVA_COMPILER("take_Nested64", 8, 4, false)
+A64_CALL_HVA_COMPILER("take_Nested128", 16, 4, false)
+A64_CALL_HVA_COMPILER("take_Array64", 8, 4, false)
+A64_CALL_HVA_COMPILER("take_Array128", 16, 3, false)
+A64_CALL_HVA_COMPILER("take_RecordArray", 16, 4, false)
+A64_CALL_HVA_COMPILER("take_Five64", 8, 5, true)
+A64_CALL_HVA_COMPILER("take_Five128", 16, 5, true)
+A64_CALL_HVA_COMPILER("take_Mixed", 16, 2, true)
 A64_CALL_TEXT(kFunction, "authenticated_dispatch")
 A64_CALL_TEXT(kTypedArgument, "value")
 A64_CALL_TEXT(kTypedDirectory, "typed-{0}-{1}-{2}-{3}")
 A64_CALL_TEXT(kRecoveredTypedDirectory, "recovered-{0}-{1}-{2}-{3}")
+A64_CALL_TEXT(kRecoveredResultStorageDirectory,
+              "recovered-result-storage-{0}-{1}-{2}")
 A64_CALL_TEXT(kNativeTypedCallerDirectory, "native-typed-caller-{0}-{1}")
 A64_CALL_TEXT(kNativeTypedDirectory, "native-typed-{0}-{1}-{2}")
 A64_CALL_TEXT(kResolvedCallback, "resolved_callback")
+A64_CALL_TEXT(kLoweredNativeDirectory, "lowered-native-storage")
+A64_CALL_TEXT(kLoweredNativeTypeDirectory, "lowered-native-storage-{0}")
 A64_CALL_TEXT(kTemporaryPrefix, "neverd-authenticated-call")
 A64_CALL_TEXT(kSourceExtension, "c")
 A64_CALL_TEXT(kLLVMExtension, "ll")
@@ -62,6 +146,7 @@ A64_CALL_TEXT(kNoStackProtectorOption, "-fno-stack-protector")
 A64_CALL_TEXT(kResultStorageDirectory, "result-storage-{0}-{1}-{2}")
 A64_CALL_TEXT(kAsyncUnwindOption, "-fasynchronous-unwind-tables")
 A64_CALL_TEXT(kAssemblyOption, "-S")
+A64_CALL_TEXT(kCompileOption, "-c")
 A64_CALL_TEXT(kLLVMOption, "-emit-llvm")
 A64_CALL_TEXT(kOutputOption, "-o")
 A64_CALL_TEXT(kNoOptimize, "-O0")
@@ -90,10 +175,13 @@ A64_CALL_VALUE(unsigned, kFloatBytes, 4)
 A64_CALL_VALUE(char, kFloatKind, 'f')
 A64_CALL_VALUE(char, kDoubleKind, 'd')
 A64_CALL_VALUE(char, kPointerKind, 'p')
+A64_CALL_VALUE(char, kVectorKind, 'V')
 A64_CALL_VALUE(unsigned, kPromotedIntegerBytes, 4)
 A64_CALL_VALUE(unsigned, kBitsPerByte, 8)
 A64_CALL_VALUE(int, kTypedTemporaryId, 128)
 A64_CALL_VALUE(uint64_t, kEntryAddress, 0x1000U)
+A64_CALL_VALUE(uint64_t, kCalleeAddress, 0x2000U)
+A64_CALL_VALUE(unsigned, kInstructionBytes, 4)
 A64_CALL_VALUE(int, kAuthenticationTemporaryId, 64)
 A64_CALL_VALUE(int, kCallResultId, 65)
 A64_CALL_VALUE(unsigned, kManyArguments, 10)
@@ -210,6 +298,64 @@ A64_CALL_TYPED_SHAPE("indirect-nested", "K", 'i', -1)
 A64_CALL_TYPED_SHAPE("indirect-spill", "iiiiiiiijK", 'i', -1)
 A64_CALL_TYPED_SHAPE("variadic-indirect", "ijJkK", 'i', 1)
 A64_CALL_TYPED_SHAPE("variadic-indirect-prefix", "iiiiiiiijkK", 'i', 9)
+A64_CALL_NATIVE_SHAPE("vector-one", "V", 'V')
+A64_CALL_NATIVE_SHAPE("vector-ten", "VVVVVVVVVV", 'V')
+A64_CALL_NATIVE_SHAPE("vector-mixed", "iVdVqVfV", 'V')
+A64_CALL_NATIVE_SHAPE("vector-packed-spill", "iiiiiiiibVVVVVVVVVVb", 'V')
+A64_CALL_NATIVE_SHAPE("vector-hfa-exhausted", "dddddddxV", 'V')
+A64_CALL_NATIVE_SHAPE("vector-indirect", "JV", 'V')
+A64_CALL_VECTOR_TYPE('e', kSourceAArch64Vector64Bytes,
+                     kSourceAArch64Vector64CType)
+A64_CALL_VECTOR_TYPE('V', kSourceAArch64Vector128Bytes,
+                     kSourceAArch64Vector128CType)
+A64_CALL_RECORD_TYPE('c', "e")
+A64_CALL_RECORD_TYPE('C', "ee")
+A64_CALL_RECORD_TYPE('l', "eee")
+A64_CALL_RECORD_TYPE('L', "eeee")
+A64_CALL_RECORD_TYPE('m', "V")
+A64_CALL_RECORD_TYPE('M', "VV")
+A64_CALL_RECORD_TYPE('F', "VVV")
+A64_CALL_RECORD_TYPE('G', "VVVV")
+A64_CALL_RECORD_TYPE('P', "CC")
+A64_CALL_RECORD_TYPE('R', "MM")
+A64_CALL_ARRAY_TYPE('T', 'e', 2)
+A64_CALL_RECORD_TYPE('U', "TT")
+A64_CALL_ARRAY_TYPE('X', 'V', 3)
+A64_CALL_RECORD_TYPE('Y', "X")
+A64_CALL_ARRAY_TYPE('N', 'f', 3)
+A64_CALL_RECORD_TYPE('D', "N")
+A64_CALL_RECORD_TYPE('E', "eeeee")
+A64_CALL_RECORD_TYPE('I', "VVVVV")
+A64_CALL_RECORD_TYPE('2', "eV")
+A64_CALL_RECORD_TYPE('3', "Vi")
+A64_CALL_ARRAY_TYPE('4', 'M', 2)
+A64_CALL_RECORD_TYPE('5', "4")
+A64_CALL_NATIVE_SHAPE("vector64-one", "e", 'e')
+A64_CALL_NATIVE_SHAPE("vector64-ten", "eeeeeeeeee", 'e')
+A64_CALL_NATIVE_SHAPE("hva64-one", "c", 'c')
+A64_CALL_NATIVE_SHAPE("hva64-two", "C", 'C')
+A64_CALL_NATIVE_SHAPE("hva64-three", "l", 'l')
+A64_CALL_NATIVE_SHAPE("hva64-four", "L", 'L')
+A64_CALL_NATIVE_SHAPE("hva128-one", "m", 'm')
+A64_CALL_NATIVE_SHAPE("hva128-two", "M", 'M')
+A64_CALL_NATIVE_SHAPE("hva128-three", "F", 'F')
+A64_CALL_NATIVE_SHAPE("hva128-four", "G", 'G')
+A64_CALL_NATIVE_SHAPE("hva64-nested", "P", 'P')
+A64_CALL_NATIVE_SHAPE("hva128-nested", "R", 'R')
+A64_CALL_NATIVE_SHAPE("hva64-array", "U", 'U')
+A64_CALL_NATIVE_SHAPE("hva128-array", "Y", 'Y')
+A64_CALL_NATIVE_SHAPE("hfa-array", "D", 'D')
+A64_CALL_NATIVE_SHAPE("hva64-last-bank", "ddddCee", 'C')
+A64_CALL_NATIVE_SHAPE("hva128-last-bank", "ddddddM", 'M')
+A64_CALL_NATIVE_SHAPE("hva64-exhausted", "ddddddld", 'l')
+A64_CALL_NATIVE_SHAPE("hva128-exhausted", "dddddddMV", 'M')
+A64_CALL_NATIVE_SHAPE("hva64-packed-spill", "iiiiiiiibddddddldb", 'l')
+A64_CALL_NATIVE_SHAPE("hva128-packed-spill", "iiiiiiiibdddddddbGe", 'G')
+A64_CALL_NATIVE_SHAPE("hva-mixed-banks", "qPdRVf", 'P')
+A64_CALL_NATIVE_SHAPE("non-hva-five", "EIG", 'G')
+A64_CALL_NATIVE_SHAPE("non-hva-mixed", "23R", 'R')
+A64_CALL_NATIVE_SHAPE("hva-record-array", "5", '5')
+A64_CALL_NATIVE_SHAPE("hva-word-record", "aCV", 'C')
 A64_CALL_TYPED_VARIANT(0, false, false)
 A64_CALL_TYPED_VARIANT(0, true, false)
 A64_CALL_TYPED_VARIANT(1, false, false)
@@ -236,3 +382,16 @@ A64_CALL_INDIRECT_FORBIDDEN_ATTRIBUTE(DereferenceableOrNull)
 #undef A64_CALL_RECORD_TYPE
 #undef A64_CALL_NAMED_POINTER_TYPE
 #undef A64_CALL_INDIRECT_FORBIDDEN_ATTRIBUTE
+
+#undef A64_CALL_NATIVE_SHAPE
+#undef A64_CALL_VECTOR_TYPE
+#undef A64_CALL_ARRAY_TYPE
+
+#undef A64_CALL_HVA_COMPILER
+
+A64_CALL_HVA_STORAGE_KIND('e')
+A64_CALL_HVA_STORAGE_KIND('C')
+A64_CALL_HVA_STORAGE_KIND('G')
+A64_CALL_HVA_STORAGE_KIND('5')
+
+#undef A64_CALL_HVA_STORAGE_KIND

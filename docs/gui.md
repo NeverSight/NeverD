@@ -235,6 +235,9 @@ click its dock button to return. A floating tab also offers **Dock back into
 main window** in its context menu. On Wayland the outer system title bar moves
 the window; use the inner bar to dock it. Menus and view dialogs belong to the
 floating window that opened them, and workbench shortcuts remain available.
+After docking, keyboard focus belongs to the pane in its new window; a late
+activation of the retiring floating caption does not forward focus to its
+former layout.
 Closing a floating pane and opening it again from the workbench returns it to
 the main window, using its last embedded position when available. Selecting an
 already open pane keeps its current placement.
@@ -929,6 +932,9 @@ How the rest of the frame is drawn depends on the system:
   Windows handles the sizing gesture. Full-screen windows cannot be resized.
 - On macOS the window keeps its frame and traffic lights, and its title bar
   turns transparent with the workbench's own drawn under it.
+
+Scrollbars that touch a window edge keep their full clickable track and draggable
+thumb. The adjacent frame and outer shadow still resize the window.
 
 To keep the system's whole frame instead, set `nativeTitleBar=true` in the
 `[ui]` group of the NeverD settings (`~/.config/NeverSight/NeverD.conf` on

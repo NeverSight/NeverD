@@ -7,6 +7,7 @@
 /// Original guest callers across relocation packing and CPU transports.
 //===----------------------------------------------------------------------===//
 #include "AndroidEventLogTestData.h"
+#include "AndroidTextLogTestData.h"
 #include "aarch64/AArch64FloatConversionCases.h"
 #include "gtest/gtest.h"
 
@@ -140,7 +141,7 @@ TEST_P(AndroidJNI, BinderTransportUsesGuestServiceAndRetainedReplyArenas) {
                                "",
                                "live Binder descriptor",
                                "outside the synchronous profile",
-                               "status exception/logging",
+                               "",
                                "",
                                "closed and reused",
                                "mapping is no longer live",
@@ -149,6 +150,7 @@ TEST_P(AndroidJNI, BinderTransportUsesGuestServiceAndRetainedReplyArenas) {
                                "",
                                "buffer is not readable"};
   for (unsigned mode = 0; mode != 15; ++mode) {
+    Options.Android->TextLogWrites = test::binderFailureLogWrites();
     Options.Android->ThreadLimit = mode == 11 || mode == 13 ? 3 : 2;
     state.binder_proxies = {
         {7, false,
@@ -168,9 +170,63 @@ TEST_P(AndroidJNI, BinderTransportUsesGuestServiceAndRetainedReplyArenas) {
             << result.Diagnostic;
         EXPECT_EQ(result.ReturnValue, 0u);
       }
+      EXPECT_EQ(result.TextLogWritesConsumed, mode == 7 ? 3u : 0u);
     }
   }
 }
+TEST_P(AndroidJNI, BinderFailedTransactionRequiresExactTextLogs) {
+  Options.LinuxTime.emplace().Clocks = {{7, {50, 0}}};
+  auto &device = Options.LinuxFiles.emplace().Devices["/dev/binder"];
+  device.Binder = true;
+  device.AccessMode = 2;
+  auto &state =
+      Options.Android->Application.emplace().service_manager.emplace();
+  state.cache.emplace().push_back({"alpha", 7});
+  using Binding = mobile::dalvik::AndroidApplicationSnapshot::ServiceManager::
+      BinderProxy::NativeBinding;
+  state.binder_proxies = {{7, false, Binding{3, 1, true}}};
+  Options.Android->ObserveJavaState = true;
+  for (unsigned mode = 0; mode != 7; ++mode)
+    for (unsigned form = 0; form != 3; ++form) {
+      SCOPED_TRACE(mode);
+      SCOPED_TRACE(form);
+      Options.Android->TextLogWrites = test::binderFailureLogWrites(-11);
+      auto &writes = Options.Android->TextLogWrites;
+      if (mode == 0)
+        writes.reset();
+      if (mode == 1)
+        writes->clear();
+      if (mode == 2)
+        writes->front().Payload[0] = 5;
+      if (mode == 3)
+        writes->front().ID = 3;
+      if (mode == 4)
+        writes->front().Payload[1] = 'X';
+      if (mode == 5)
+        writes->resize(2);
+      Options.Android->Arguments = {form, 7};
+      const auto result = run("jni_binder_transport");
+      if (mode == 6) {
+        EXPECT_EQ(result.Stop, ProcessStopReason::Returned)
+            << result.Diagnostic;
+        EXPECT_EQ(result.ReturnValue, 0u);
+      } else {
+        EXPECT_EQ(result.Stop, ProcessStopReason::UnsupportedService);
+        EXPECT_NE(result.Diagnostic.find("Android text log write"),
+                  std::string::npos)
+            << result.Diagnostic;
+      }
+      EXPECT_EQ(result.TextLogWritesConsumed, mode == 0
+                                                  ? std::optional<uint64_t>{}
+                                              : mode == 5 ? 2u
+                                              : mode == 6 ? 3u
+                                                          : 0u);
+      ASSERT_TRUE(result.JavaState);
+      EXPECT_TRUE(result.JavaState->framework.service_manager->binder_proxies[0]
+                      .native_binding->alive);
+    }
+}
+
 TEST_P(AndroidJNI, BinderObjectsRetainProxyIdentityAndDriverOwnership) {
   Options.LinuxTime.emplace().Clocks = {{7, {50, 0}}};
   Options.LinuxTime->AdvanceOnIdle = true;
@@ -285,12 +341,10 @@ TEST_P(AndroidJNI, JavaBinderDispatchUsesPoolAndIncomingNativeContinuations) {
         Options.LinuxTime->Clocks[0] = {123, 0};
       Options.Android->Arguments = {form, mode};
       auto result = run("jni_binder_dispatch");
-      if (mode == 2 || mode == 3 || mode == 4) {
+      if (mode == 3 || mode == 4) {
         EXPECT_EQ(result.Stop, ProcessStopReason::UnsupportedService)
             << result.Diagnostic;
-        const char *diagnostic = mode == 2 ? "object translation is not modeled"
-                                 : mode == 3 ? "BlockGuard"
-                                             : "clock";
+        const char *diagnostic = mode == 3 ? "BlockGuard" : "clock";
         EXPECT_NE(result.Diagnostic.find(diagnostic), std::string::npos)
             << result.Diagnostic;
       } else {
@@ -311,7 +365,7 @@ TEST_P(AndroidJNI, JavaBinderDispatchUsesPoolAndIncomingNativeContinuations) {
         EXPECT_EQ(calls->start_milliseconds, 123000u);
         ASSERT_EQ(calls->entries.size(), 1u);
         EXPECT_EQ(calls->entries[0].uid, 1000u);
-        EXPECT_EQ(calls->entries[0].count, mode == 2 || mode == 3 ? 1u : 3u);
+        EXPECT_EQ(calls->entries[0].count, mode == 3 ? 1u : 3u);
       }
     }
 }

@@ -11,7 +11,14 @@
 #include "neverd/emulation/ProcessReport.h"
 #include "neverd/emulation/ProcessSession.h"
 
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/Endian.h"
+
+#include <algorithm>
+#include <string>
 #include <tuple>
+#include <utility>
+#include <vector>
 
 namespace neverd::emulation {
 namespace {
@@ -27,6 +34,16 @@ void integer(std::vector<uint8_t> &Out, size_t Offset, uint64_t Value,
              unsigned Width) {
   for (unsigned I = 0; I < Width; ++I)
     Out[Offset + I] = Value >> (8 * I);
+}
+std::vector<uint8_t> abortRecord(llvm::StringRef Message) {
+  const uint64_t Size = 9 + Message.size();
+  std::vector<uint8_t> Bytes((Size + 4095) & ~uint64_t(4095));
+  integer(Bytes, 0, Size, 8);
+  std::copy(Message.bytes_begin(), Message.bytes_end(), Bytes.begin() + 8);
+  return Bytes;
+}
+uint64_t word(const std::vector<uint8_t> &Bytes, size_t Offset) {
+  return llvm::support::endian::read64le(Bytes.data() + Offset);
 }
 void expected(std::vector<uint8_t> &Out, unsigned Slot,
               const NativeLogRecord *Record) {
@@ -78,6 +95,50 @@ protected:
     Options.Android->Arguments = {Output, 0x800, 0, 0, NoTime, 3, 4};
     Options.InstructionQuantum = 17;
 #endif
+  }
+  void put(size_t Offset, llvm::StringRef Text) {
+    auto &Bytes = Options.Android->Memory[0].Bytes;
+    std::copy(Text.bytes_begin(), Text.bytes_end(), Bytes.begin() + Offset);
+    Bytes[Offset + Text.size()] = 0;
+  }
+  void bindAbortSlot(size_t Offset = 2048) {
+    Options.Android->AbortMessageSlot = Output + Offset;
+    integer(Options.Android->Memory[0].Bytes, Offset, 0, 8);
+    Options.Android->MallocFillByte = 0x5a;
+    Options.Android->Libraries["libc.so"] = {"android_set_abort_message"};
+  }
+  void prepareFormatted(unsigned Form, unsigned Mode, llvm::StringRef Format,
+                        llvm::StringRef Message) {
+    Options.Android->EntrySymbol = "log_formatted";
+    Options.Android->Libraries["liblog.so"] = {"__android_log_print",
+                                               "__android_log_buf_print",
+                                               "__android_log_vprint"};
+    put(4096, Format);
+    put(8192, "abcdef");
+    put(12288, "tag");
+    Options.Android->Arguments = {Output,        Form, Mode,  Output + 4096,
+                                  Output + 8192, 3,    0x106, Output + 12288};
+    std::vector<uint8_t> Payload{6, 't', 'a', 'g', 0};
+    Payload.insert(Payload.end(), Message.bytes_begin(), Message.bytes_end());
+    Payload.push_back(0);
+    const unsigned Buffer = Form == 1 || Form == 4 ? 3 : 0;
+    Options.Android->TextLogWrites = {
+        {{Buffer, Payload, -11}, {Buffer, Payload, INT32_MAX}}};
+  }
+  void checkTwoTextWrites() {
+    auto Result =
+        emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_EQ(Result->Stop, ProcessStopReason::Returned) << Result->Diagnostic;
+    EXPECT_EQ(Result->ReturnValue, 0u);
+    EXPECT_EQ(Result->TextLogWritesConsumed, 2u);
+    auto Expected = Options.Android->Memory[0].Bytes;
+    integer(Expected, 0, uint64_t(-11), 8);
+    integer(Expected, 8, 73, 8);
+    integer(Expected, 16, INT32_MAX, 8);
+    integer(Expected, 24, 73, 8);
+    ASSERT_EQ(Result->MemorySnapshots.size(), 1u);
+    EXPECT_EQ(Result->MemorySnapshots[0].Bytes, Expected);
   }
   void check(std::initializer_list<int> Indices) {
     auto R =
@@ -216,6 +277,667 @@ TEST_P(AndroidLog, DirectOptionsRejectMalformedAndOversizedSnapshots) {
     llvm::consumeError(R.takeError());
   }
 }
+TEST_P(AndroidLog, FormattedWritesShareGrammarStackedArgumentsAndResults) {
+  for (unsigned Form = 0; Form != 6; ++Form) {
+    SCOPED_TRACE(Form);
+    prepareFormatted(Form, 0, "%+08d|%#lx|%.3s|%d|%d|%d|%d|%d|%d",
+                     "-0000123|0xfedcba9876543210|abc|7|8|9|10|11|12");
+    checkTwoTextWrites();
+  }
+}
+
+TEST_P(AndroidLog, FormattedWritesClipTheBufferBeforeCStringLogging) {
+  for (unsigned Form = 0; Form != 6; ++Form) {
+    SCOPED_TRACE(Form);
+    for (unsigned Width : {0u, 1022u, 1023u, 1024u, 1000000000u}) {
+      SCOPED_TRACE(Width);
+      // API 28's 1024-byte buffer includes NUL. The transcript result, not
+      // the untruncated formatting count, is returned to the caller.
+      prepareFormatted(Form, Width + 10, "",
+                       std::string(std::min(Width, 1023u), ' '));
+      checkTwoTextWrites();
+    }
+    prepareFormatted(Form, 2, "%cignored", "");
+    checkTwoTextWrites();
+  }
+}
+
+TEST_P(AndroidLog, FormattedPrecisionDoesNotReadPastTheGuestPage) {
+  for (unsigned Form = 0; Form != 6; ++Form) {
+    SCOPED_TRACE(Form);
+    prepareFormatted(Form, 1, "%.*s", "ABCD");
+    auto &Bytes = Options.Android->Memory[0].Bytes;
+    std::copy_n("ABCD", 4,
+                Bytes.end() - 4); // No NUL; the next page is unmapped.
+    Options.Android->Arguments[4] = Output + Bytes.size() - 4;
+    checkTwoTextWrites();
+  }
+}
+
+TEST_P(AndroidLog, FormattedUnsupportedConversionsPrecedeTagAndLogReads) {
+  for (unsigned Form = 0; Form != 3; ++Form)
+    for (const char *Format : {"%n", "%f", "%ls", "bad%", "%c%n"}) {
+      SCOPED_TRACE(Form);
+      SCOPED_TRACE(Format);
+      prepareFormatted(Form, 3, Format, "");
+      Options.Android->Arguments[7] =
+          1; // Would fault if the tag were read first.
+      auto Result =
+          emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      EXPECT_EQ(Result->Stop, ProcessStopReason::UnsupportedService)
+          << Result->Diagnostic;
+      const std::string ExpectedReason =
+          std::string(Format) == "%ls"
+              ? "wide or length-qualified text conversion"
+          : std::string(Format) == "bad%" ? "incomplete format conversion"
+                                          : "unsupported format conversion";
+      EXPECT_NE(Result->Diagnostic.find(ExpectedReason), std::string::npos)
+          << Result->Diagnostic;
+      EXPECT_EQ(Result->TextLogWritesConsumed, 0u);
+      EXPECT_FALSE(Result->ReturnValue);
+      ASSERT_EQ(Result->MemorySnapshots.size(), 1u);
+      EXPECT_EQ(Result->MemorySnapshots[0].Bytes,
+                Options.Android->Memory[0].Bytes);
+    }
+}
+
+TEST_P(AndroidLog, FormattedWritesKeepExplicitTranscriptBoundaries) {
+  for (unsigned Mode = 0; Mode != 5; ++Mode) {
+    SCOPED_TRACE(Mode);
+    prepareFormatted(2, 0, "%d", "-123");
+    if (Mode == 0)
+      Options.Android->TextLogWrites.reset();
+    else if (Mode == 1)
+      Options.Android->TextLogWrites->clear();
+    else if (Mode == 2)
+      Options.Android->TextLogWrites->front().Payload[5] = '+';
+    else if (Mode == 3)
+      Options.Android->TextLogWrites->back().ID = 3;
+    else
+      Options.Android->Arguments[6] =
+          7; // Fatal abort-message state remains explicit.
+    auto Result =
+        emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, ProcessStopReason::UnsupportedService)
+        << Result->Diagnostic;
+    if (Mode == 0)
+      EXPECT_FALSE(Result->TextLogWritesConsumed);
+    else
+      EXPECT_EQ(Result->TextLogWritesConsumed, Mode == 3 ? 1u : 0u);
+    auto Expected = Options.Android->Memory[0].Bytes;
+    if (Mode == 3) {
+      integer(Expected, 0, uint64_t(-11), 8);
+      integer(Expected, 8, 73, 8);
+    }
+    ASSERT_EQ(Result->MemorySnapshots.size(), 1u);
+    EXPECT_EQ(Result->MemorySnapshots[0].Bytes, Expected);
+  }
+}
+
+TEST_P(AndroidLog, TextWritesShareOrderedResultsRoutingAndErrno) {
+  Options.Android->EntrySymbol = "log_text_write";
+  Options.Android->Libraries["liblog.so"] = {"__android_log_write"};
+  for (unsigned mode = 0; mode != 5; ++mode)
+    for (unsigned form = 0; form != 3; ++form) {
+      SCOPED_TRACE(mode);
+      SCOPED_TRACE(form);
+      const std::string tag = mode == 1 ? ""
+                              : mode >= 3
+                                  ? "RIL-abcdefghijklmnopqrstuvwxyz012345"
+                                  : "tag";
+      const std::string routed = mode == 4 && form == 1 ? tag
+                                 : mode >= 3 ? "use-Rlog/RLOG-RIL-abcdefghijklm"
+                                             : tag;
+      auto &memory = Options.Android->Memory[0].Bytes;
+      std::copy(tag.begin(), tag.end(), memory.begin() + 4096);
+      memory[4096 + tag.size()] = 0;
+      memory[8192] = 'h';
+      memory[8193] = 'i';
+      memory[8194] = 0;
+      const unsigned id = mode == 4 ? 1 : 3;
+      Options.Android->Arguments = {Output,
+                                    id,
+                                    mode == 2 ? 0x106u : 6u,
+                                    mode == 1 ? 0 : Output + 4096,
+                                    Output + 8192,
+                                    3,
+                                    form};
+      std::vector<uint8_t> payload{6};
+      payload.insert(payload.end(), routed.begin(), routed.end());
+      payload.insert(payload.end(), {0, 'h', 'i', 0});
+      const unsigned buffer = mode >= 3 ? 1 : form == 1 ? id : 0;
+      Options.Android->TextLogWrites = {{{buffer, payload, INT32_MAX},
+                                         {buffer, payload, -11},
+                                         {buffer, payload, 0}}};
+      auto result =
+          emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+      ASSERT_TRUE(bool(result)) << llvm::toString(result.takeError());
+      ASSERT_EQ(result->Stop, ProcessStopReason::Returned)
+          << result->Diagnostic;
+      EXPECT_EQ(result->ReturnValue, 0u);
+      EXPECT_EQ(result->TextLogWritesConsumed, 3u);
+      auto expected = memory;
+      const uint64_t returns[] = {INT32_MAX, uint64_t(-11), 0};
+      for (unsigned i = 0; i != 3; ++i) {
+        integer(expected, 16 * i, returns[i], 8);
+        integer(expected, 16 * i + 8, 73, 8);
+      }
+      ASSERT_EQ(result->MemorySnapshots.size(), 1u);
+      EXPECT_EQ(result->MemorySnapshots[0].Bytes, expected);
+    }
+}
+
+TEST_P(AndroidLog, AbortMessageKeepsTheFirstRecordAcrossCallsAndThreads) {
+  Options.Android->EntrySymbol = "log_abort_message";
+  for (unsigned Form = 0; Form != 4; ++Form)
+    for (unsigned Length : {0u, 5u, 5000u}) {
+      SCOPED_TRACE(Form);
+      SCOPED_TRACE(Length);
+      bindAbortSlot();
+      Options.Android->ThreadLimit = Form >= 2 ? 3 : 1;
+      const std::string Message(Length, 'm');
+      put(4096, Message);
+      auto Record = abortRecord(Message);
+      // The occupied slot must avoid even reading the second argument.
+      Options.Android->Arguments = {
+          Output, Output + 2048, Output + 4096, 1, Record.size(), Form, 0};
+      auto Result =
+          emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      ASSERT_EQ(Result->Stop, ProcessStopReason::Returned)
+          << Result->Diagnostic;
+      EXPECT_EQ(Result->ReturnValue, 0u);
+      EXPECT_FALSE(Result->TextLogWritesConsumed);
+      ASSERT_EQ(Result->MemorySnapshots.size(), 1u);
+      auto Expected = Options.Android->Memory[0].Bytes;
+      const auto Address = word(Result->MemorySnapshots[0].Bytes, 2048);
+      ASSERT_NE(Address, 0u);
+      EXPECT_EQ(Address % 4096, 0u);
+      integer(Expected, 2048, Address, 8);
+      for (unsigned I = 0; I != 2; ++I) {
+        integer(Expected, 16 * I, 73, 8);
+        integer(Expected, 16 * I + 8, Address, 8);
+      }
+      for (unsigned Offset : {10000u, 24000u})
+        std::copy(Record.begin(), Record.end(), Expected.begin() + Offset);
+      EXPECT_EQ(Result->MemorySnapshots[0].Bytes, Expected);
+    }
+}
+
+TEST_P(AndroidLog, AbortMessageUsesTheLiveSlotWithoutRetiringTheOldMapping) {
+  Options.Android->EntrySymbol = "log_abort_message";
+  for (unsigned Form = 0; Form != 2; ++Form) {
+    SCOPED_TRACE(Form);
+    bindAbortSlot();
+    put(4096, "first");
+    put(16384, "later");
+    Options.Android->Arguments = {
+        Output, Output + 2048, Output + 4096, Output + 16384, 4096, Form, 1};
+    auto Result =
+        emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_EQ(Result->Stop, ProcessStopReason::Returned) << Result->Diagnostic;
+    ASSERT_EQ(Result->MemorySnapshots.size(), 1u);
+    const auto &Bytes = Result->MemorySnapshots[0].Bytes;
+    const auto First = word(Bytes, 8), Second = word(Bytes, 24);
+    ASSERT_NE(First, 0u);
+    ASSERT_NE(Second, 0u);
+    EXPECT_NE(First, Second);
+    auto Expected = Options.Android->Memory[0].Bytes;
+    integer(Expected, 0, 73, 8);
+    integer(Expected, 8, First, 8);
+    integer(Expected, 16, 73, 8);
+    integer(Expected, 24, Second, 8);
+    integer(Expected, 2048, Second, 8);
+    auto Before = abortRecord("first"), After = abortRecord("later");
+    std::copy(Before.begin(), Before.end(), Expected.begin() + 10000);
+    std::copy(After.begin(), After.end(), Expected.begin() + 24000);
+    EXPECT_EQ(Bytes, Expected);
+  }
+}
+
+TEST_P(AndroidLog, AbortMessageBindingAndGuestAccessRemainLazy) {
+  Options.Android->EntrySymbol = "log_abort_message";
+  Options.Android->ObserveMemoryAtStop = true;
+  for (unsigned Mode = 0; Mode != 7; ++Mode) {
+    SCOPED_TRACE(Mode);
+    bindAbortSlot(8192);
+    put(4096, "fatal");
+    const bool ReadOnly = Mode == 4 || Mode == 5;
+    const bool Occupied = Mode == 2 || Mode == 5;
+    const bool Returned = Mode == 1 || Occupied;
+    if (Mode == 0)
+      Options.Android->AbortMessageSlot.reset();
+    else if (Mode == 1 || Mode == 3)
+      Options.Android->AbortMessageSlot = Mode == 1 ? 0 : 1;
+    if (Occupied)
+      integer(Options.Android->Memory[0].Bytes, 8192, 0xdeadbeef, 8);
+    Options.Android->Arguments = {
+        Output, Output + 8192,     Mode == 4 ? Output + 4096 : 1, 1, 0,
+        0,      ReadOnly ? 2u : 0u};
+    // The anonymous mmap policy chooses this free address in this profile.
+    Options.Android->ReadMemory = {{Output, 32768}, {0x100000000, 4096, false}};
+    auto Result =
+        emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, Returned    ? ProcessStopReason::Returned
+                            : Mode == 0 ? ProcessStopReason::UnsupportedService
+                                        : ProcessStopReason::RuntimeFailure)
+        << Result->Diagnostic;
+    ASSERT_EQ(Result->MemorySnapshots.size(), 2u);
+    auto Expected = Options.Android->Memory[0].Bytes;
+    if (Returned)
+      for (unsigned I = 0; I != 2; ++I) {
+        integer(Expected, 16 * I, 73, 8);
+        integer(Expected, 16 * I + 8, Occupied ? 0xdeadbeef : 0, 8);
+      }
+    EXPECT_EQ(Result->MemorySnapshots[0].Bytes, Expected);
+    if (Mode == 4) {
+      // Read-only slot publication fails after the complete mmap/copy.
+      EXPECT_EQ(Result->MemorySnapshots[1].Bytes, abortRecord("fatal"));
+      EXPECT_TRUE(Result->MemorySnapshots[1].Diagnostic.empty());
+    } else {
+      EXPECT_TRUE(Result->MemorySnapshots[1].Bytes.empty());
+      EXPECT_FALSE(Result->MemorySnapshots[1].Diagnostic.empty());
+    }
+  }
+}
+
+TEST_P(AndroidLog, FatalRawWritesKeepUnclippedAbortBytesAndExplicitResults) {
+  Options.Android->EntrySymbol = "log_fatal_write";
+  Options.Android->Libraries["liblog.so"] = {"__android_log_write",
+                                             "__android_log_buf_write"};
+  for (unsigned Form = 0; Form != 4; ++Form)
+    for (unsigned Mode = 0; Mode != 4; ++Mode) {
+      SCOPED_TRACE(Form);
+      SCOPED_TRACE(Mode);
+      bindAbortSlot();
+      const std::string Tag = Mode == 2   ? std::string(5000, 't')
+                              : Mode == 3 ? "RIL"
+                                          : "tag";
+      const std::string Message = Mode == 0   ? ""
+                                  : Mode == 1 ? "fatal"
+                                              : std::string(5000, 'm');
+      put(4096, Tag);
+      put(16384, Message);
+      const auto Record = abortRecord(Message);
+      const std::string WireTag = Mode == 3 ? "use-Rlog/RLOG-RIL" : Tag;
+      std::vector<uint8_t> Payload{7};
+      Payload.insert(Payload.end(), WireTag.begin(), WireTag.end());
+      Payload.push_back(0);
+      Payload.insert(Payload.end(), Message.begin(), Message.end());
+      Payload.push_back(0);
+      if (Payload.size() > 4068)
+        Payload.resize(4068);
+      const unsigned ID = Mode == 3 ? 1 : Form == 1 || Form == 3 ? 3 : 0;
+      Options.Android->TextLogWrites = {
+          {{ID, Payload, -11}, {ID, Payload, INT32_MAX}}};
+      Options.Android->Arguments = {Output,        Output + 2048,
+                                    Output + 4096, Output + 16384,
+                                    Form,          Record.size()};
+      auto Result =
+          emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      ASSERT_EQ(Result->Stop, ProcessStopReason::Returned)
+          << Result->Diagnostic;
+      EXPECT_EQ(Result->ReturnValue, 0u);
+      EXPECT_EQ(Result->TextLogWritesConsumed, 2u);
+      ASSERT_EQ(Result->MemorySnapshots.size(), 1u);
+      auto Expected = Options.Android->Memory[0].Bytes;
+      const auto Address = word(Result->MemorySnapshots[0].Bytes, 2048);
+      ASSERT_NE(Address, 0u);
+      EXPECT_EQ(Address % 4096, 0u);
+      integer(Expected, 2048, Address, 8);
+      integer(Expected, 0, uint64_t(-11), 8);
+      integer(Expected, 8, 73, 8);
+      integer(Expected, 16, INT32_MAX, 8);
+      integer(Expected, 24, 73, 8);
+      std::copy(Record.begin(), Record.end(), Expected.begin() + 24000);
+      EXPECT_EQ(Result->MemorySnapshots[0].Bytes, Expected);
+    }
+}
+
+TEST_P(AndroidLog, FatalFormattedWritesStoreTheFormattedBufferBeforeTransport) {
+  for (unsigned Form = 0; Form != 6; ++Form)
+    for (unsigned TagSize : {3u, 5000u}) {
+      SCOPED_TRACE(Form);
+      SCOPED_TRACE(TagSize);
+      prepareFormatted(Form, 5010, "", "");
+      bindAbortSlot();
+      Options.Android->EntrySymbol = "log_fatal_formatted";
+      const std::string Tag(TagSize, 't'), Message(1023, ' ');
+      put(12288, Tag);
+      auto Record = abortRecord(Message);
+      std::vector<uint8_t> Payload{7};
+      Payload.insert(Payload.end(), Tag.begin(), Tag.end());
+      Payload.push_back(0);
+      Payload.insert(Payload.end(), Message.begin(), Message.end());
+      Payload.push_back(0);
+      if (Payload.size() > 4068)
+        Payload.resize(4068);
+      for (auto &Write : *Options.Android->TextLogWrites)
+        Write.Payload = Payload;
+      Options.Android->Arguments = {
+          Output,        Output + 2048, Form,           5010,
+          Output + 4096, Output + 8192, Output + 12288, Record.size()};
+      auto Result =
+          emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      ASSERT_EQ(Result->Stop, ProcessStopReason::Returned)
+          << Result->Diagnostic;
+      EXPECT_EQ(Result->TextLogWritesConsumed, 2u);
+      ASSERT_EQ(Result->MemorySnapshots.size(), 1u);
+      auto Expected = Options.Android->Memory[0].Bytes;
+      const auto Address = word(Result->MemorySnapshots[0].Bytes, 2048);
+      ASSERT_NE(Address, 0u);
+      EXPECT_EQ(Address % 4096, 0u);
+      integer(Expected, 2048, Address, 8);
+      integer(Expected, 0, uint64_t(-11), 8);
+      integer(Expected, 8, 73, 8);
+      integer(Expected, 16, INT32_MAX, 8);
+      integer(Expected, 24, 73, 8);
+      std::copy(Record.begin(), Record.end(), Expected.begin() + 24000);
+      EXPECT_EQ(Result->MemorySnapshots[0].Bytes, Expected);
+    }
+}
+
+TEST_P(AndroidLog,
+       AbortMessageAllocationFailurePreservesTheSlotAndPermitsRetry) {
+  Options.MemoryLimit = 8 * 1024 * 1024;
+  Options.Android->EntrySymbol = "log_abort_exhaust";
+  for (unsigned Form = 0; Form != 2; ++Form) {
+    SCOPED_TRACE(Form);
+    bindAbortSlot();
+    put(4096, "retry");
+    auto Record = abortRecord("retry");
+    Options.Android->Arguments = {Output, Output + 2048, Output + 4096, Form,
+                                  Record.size()};
+    Options.Android->TextLogWrites = {
+        {{0, {7, 't', 'a', 'g', 0, 'r', 'e', 't', 'r', 'y', 0}, -11},
+         {0, {7, 't', 'a', 'g', 0, 'r', 'e', 't', 'r', 'y', 0}, 19}}};
+    auto Result =
+        emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_EQ(Result->Stop, ProcessStopReason::Returned) << Result->Diagnostic;
+    EXPECT_EQ(Result->ReturnValue, 0u);
+    EXPECT_EQ(Result->TextLogWritesConsumed, Form ? 2u : 0u);
+    ASSERT_EQ(Result->MemorySnapshots.size(), 1u);
+    auto Expected = Options.Android->Memory[0].Bytes;
+    const auto Address = word(Result->MemorySnapshots[0].Bytes, 2048);
+    ASSERT_NE(Address, 0u);
+    integer(Expected, 2048, Address, 8);
+    integer(Expected, 0, 12,
+            8); // ENOMEM from Bionic mmap, even if log returns.
+    integer(Expected, 8, 0, 8);
+    integer(Expected, 16, 73, 8);
+    integer(Expected, 24, Address, 8);
+    integer(Expected, 32, Form ? uint64_t(-11) : 0, 8);
+    integer(Expected, 40, Form ? 19 : 0, 8);
+    std::copy(Record.begin(), Record.end(), Expected.begin() + 24000);
+    EXPECT_EQ(Result->MemorySnapshots[0].Bytes, Expected);
+  }
+}
+
+TEST_P(AndroidLog, FatalPriorityUsesTheWholeIntBeforeTheWireByte) {
+  Options.Android->EntrySymbol = "log_text_write";
+  bindAbortSlot();
+  put(4096, "tag");
+  put(8192, "message");
+  Options.Android->Arguments = {Output,        0, 0x107, Output + 4096,
+                                Output + 8192, 2, 0};
+  std::vector<uint8_t> Payload{7,   't', 'a', 'g', 0,   'm', 'e',
+                               's', 's', 'a', 'g', 'e', 0};
+  Options.Android->TextLogWrites = {
+      {{0, Payload, -11}, {0, Payload, INT32_MAX}}};
+  checkTwoTextWrites(); // In particular, the empty abort slot stays empty.
+}
+
+TEST_P(AndroidLog, FatalPublicationPrecedesWireReadsAndTranscriptAdmission) {
+  Options.Android->EntrySymbol = "log_text_write";
+  Options.Android->ObserveMemoryAtStop = true;
+  Options.Android->ReadMemory = {{Output, 32768}, {0x100000000, 4096, false}};
+  for (unsigned Mode = 0; Mode != 9; ++Mode) {
+    SCOPED_TRACE(Mode);
+    bindAbortSlot();
+    put(4096, "fatal");
+    put(16384, "tag");
+    uint64_t Tag = Output + 16384, Message = Output + 4096;
+    if (Mode == 3 || Mode == 4) {
+      auto &Bytes = Options.Android->Memory[0].Bytes;
+      std::fill(Bytes.end() - 128, Bytes.end(), 'X');
+      Tag = Output + Bytes.size() - 128;
+      if (Mode == 4)
+        std::copy_n("RIL", 3, Bytes.end() - 128);
+    }
+    if (Mode == 5)
+      Tag = 1;
+    if (Mode == 6)
+      Message = 1;
+    if (Mode == 7)
+      Tag = Output + 2048 + 4;
+    if (Mode == 8)
+      Message = Output + 2048 + 4;
+    Options.Android->Arguments = {Output, Mode == 2 ? 2u : 0u, 7, Tag, Message,
+                                  1,      Mode == 2 ? 1u : 0u};
+    Options.Android->TextLogWrites = {{{0, {7, 'x', 0, 0}, -11}}};
+    if (Mode == 0)
+      Options.Android->TextLogWrites.reset();
+    if (Mode == 7)
+      Options.Android->TextLogWrites = {
+          {{0, {7, 1, 0, 'f', 'a', 't', 'a', 'l', 0}, -11}}};
+    if (Mode == 8)
+      Options.Android->TextLogWrites = {
+          {{0, {7, 't', 'a', 'g', 0, 1, 0}, -11}}};
+    const bool Stored = Mode < 4 || Mode >= 7;
+    auto Result =
+        emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, Mode >= 7  ? ProcessStopReason::Returned
+                            : Mode < 3 ? ProcessStopReason::UnsupportedService
+                                       : ProcessStopReason::RuntimeFailure)
+        << Result->Diagnostic;
+    if (Mode == 0)
+      EXPECT_FALSE(Result->TextLogWritesConsumed);
+    else
+      EXPECT_EQ(Result->TextLogWritesConsumed, Mode >= 7 ? 1u : 0u);
+    ASSERT_EQ(Result->MemorySnapshots.size(), 2u);
+    auto Expected = Options.Android->Memory[0].Bytes;
+    if (Stored)
+      integer(Expected, 2048, 0x100000000, 8);
+    if (Mode >= 7) {
+      integer(Expected, 0, uint64_t(-11), 8);
+      integer(Expected, 8, 73, 8);
+    }
+    EXPECT_EQ(Result->MemorySnapshots[0].Bytes, Expected);
+    if (Stored)
+      EXPECT_EQ(Result->MemorySnapshots[1].Bytes,
+                abortRecord(Mode == 8 ? "" : "fatal"));
+    else {
+      EXPECT_TRUE(Result->MemorySnapshots[1].Bytes.empty());
+      EXPECT_FALSE(Result->MemorySnapshots[1].Diagnostic.empty());
+    }
+  }
+}
+
+TEST_P(AndroidLog, TextTransportClipsTagAndMessageWithoutRepairingTerminators) {
+  Options.Android->EntrySymbol = "log_text_write";
+  Options.Android->Libraries["liblog.so"] = {"__android_log_write",
+                                             "__android_log_buf_write"};
+  std::vector<std::pair<std::string, std::string>> Cases;
+  for (auto [TagSize, MessageSize] : {std::pair{0u, 0u},
+                                      {3u, 4062u},
+                                      {3u, 4063u},
+                                      {3u, 4064u},
+                                      {4065u, 0u},
+                                      {4066u, 0u},
+                                      {4067u, 0u},
+                                      {4068u, 32u},
+                                      {5000u, 5000u}})
+    Cases.emplace_back(std::string(TagSize, 't'),
+                       std::string(MessageSize, 'm'));
+  Cases.emplace_back(std::string(4064, 't'),
+                     "\xe2\x82\xac"); // Cuts UTF-8 bytes.
+  Cases.emplace_back("RIL" + std::string(5000, 't'), std::string(5000, 'm'));
+  for (unsigned Form = 0; Form != 4; ++Form)
+    for (const auto &[Tag, Message] : Cases) {
+      SCOPED_TRACE(Form);
+      SCOPED_TRACE(Tag.size());
+      SCOPED_TRACE(Message.size());
+      put(4096, Tag);
+      put(16384, Message);
+      const bool Radio = Tag.starts_with("RIL");
+      const auto WireTag =
+          Radio ? "use-Rlog/RLOG-RIL" + std::string(14, 't') : Tag;
+      // Independent oracle: the wire is a prefix of three complete iovecs.
+      std::vector<uint8_t> Payload{6};
+      Payload.insert(Payload.end(), WireTag.begin(), WireTag.end());
+      Payload.push_back(0);
+      Payload.insert(Payload.end(), Message.begin(), Message.end());
+      Payload.push_back(0);
+      if (Payload.size() > 4068)
+        Payload.resize(4068);
+      const unsigned ID = Radio ? 1 : Form == 1 || Form == 3 ? 3 : 0;
+      Options.Android->Arguments = {Output,         3, 0x106, Output + 4096,
+                                    Output + 16384, 2, Form};
+      Options.Android->TextLogWrites = {
+          {{ID, Payload, -11}, {ID, Payload, INT32_MAX}}};
+      checkTwoTextWrites();
+    }
+}
+
+TEST_P(AndroidLog, FormattedTransportClipsAfterTheFormattingBuffer) {
+  for (unsigned Form = 0; Form != 6; ++Form)
+    for (unsigned TagSize : {3042u, 3043u, 4066u, 4067u, 5000u}) {
+      SCOPED_TRACE(Form);
+      SCOPED_TRACE(TagSize);
+      prepareFormatted(Form, 5010, "", ""); // %5000s first retains 1023 spaces.
+      const std::string Tag(TagSize, 't');
+      put(12288, Tag);
+      std::vector<uint8_t> Payload{6};
+      Payload.insert(Payload.end(), Tag.begin(), Tag.end());
+      Payload.push_back(0);
+      Payload.insert(Payload.end(), 1023, ' ');
+      Payload.push_back(0);
+      Payload.resize(4068);
+      for (auto &Write : *Options.Android->TextLogWrites)
+        Write.Payload = Payload;
+      checkTwoTextWrites();
+    }
+}
+
+TEST_P(AndroidLog, TextTransportStillReadsCompleteGuestStringsBeforeClipping) {
+  Options.Android->EntrySymbol = "log_text_write";
+  Options.Android->ObserveMemoryOnFailure = true;
+  Options.Android->Libraries["liblog.so"] = {"__android_log_write",
+                                             "__android_log_buf_write"};
+  for (unsigned Form = 0; Form != 4; ++Form)
+    for (unsigned Mode = 0; Mode != 3; ++Mode) {
+      SCOPED_TRACE(Form);
+      SCOPED_TRACE(Mode);
+      put(4096, std::string(5000, 't'));
+      put(16384, "message");
+      auto &Bytes = Options.Android->Memory[0].Bytes;
+      std::fill(Bytes.end() - 5000, Bytes.end(), 'x'); // Unmapped next page.
+      const uint64_t Unterminated = Output + Bytes.size() - 5000;
+      Options.Android->Arguments = {Output,
+                                    3,
+                                    6,
+                                    Mode == 1 ? Unterminated : Output + 4096,
+                                    Mode == 0   ? 1
+                                    : Mode == 2 ? Unterminated
+                                                : Output + 16384,
+                                    1,
+                                    Form};
+      std::vector<uint8_t> Payload(4068, 't');
+      Payload[0] = 6;
+      Options.Android->TextLogWrites = {
+          {{Form == 1 || Form == 3 ? 3u : 0u, Payload, 0}}};
+      auto Result =
+          emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      EXPECT_EQ(Result->Stop, ProcessStopReason::RuntimeFailure)
+          << Result->Diagnostic;
+      EXPECT_EQ(Result->TextLogWritesConsumed, 0u);
+      ASSERT_EQ(Result->MemorySnapshots.size(), 1u);
+      EXPECT_EQ(Result->MemorySnapshots[0].Bytes, Bytes);
+    }
+}
+
+TEST_P(AndroidLog, TextTransportMismatchPreservesTheCompletedPrefix) {
+  Options.Android->EntrySymbol = "log_text_write";
+  put(4096, "");
+  put(16384, std::string(5000, 'm'));
+  Options.Android->Arguments = {Output,         0, 6, Output + 4096,
+                                Output + 16384, 2, 0};
+  std::vector<uint8_t> Payload(4068, 'm');
+  Payload[0] = 6;
+  Payload[1] = 0;
+  Options.Android->TextLogWrites = {{{0, Payload, -11}, {0, Payload, 0}}};
+  Options.Android->TextLogWrites->back().Payload.back() = 'x';
+  auto Result =
+      emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Stop, ProcessStopReason::UnsupportedService)
+      << Result->Diagnostic;
+  EXPECT_NE(Result->Diagnostic.find("does not match the next entry"),
+            std::string::npos);
+  EXPECT_EQ(Result->TextLogWritesConsumed, 1u);
+  auto Expected = Options.Android->Memory[0].Bytes;
+  integer(Expected, 0, uint64_t(-11), 8);
+  integer(Expected, 8, 73, 8);
+  ASSERT_EQ(Result->MemorySnapshots.size(), 1u);
+  EXPECT_EQ(Result->MemorySnapshots[0].Bytes, Expected);
+}
+
+TEST_P(AndroidLog, TextWriteBoundariesAndInputAdmissionStayExplicit) {
+  Options.Android->EntrySymbol = "log_text_write";
+  auto &memory = Options.Android->Memory[0].Bytes;
+  memory[4096] = 0;
+  std::fill_n(memory.begin() + 8192, 4065, 'x');
+  memory[8192 + 4065] = 0;
+  std::vector<uint8_t> payload(4068, 'x');
+  payload[0] = 6;
+  payload[1] = 0;
+  payload.back() = 0;
+  for (unsigned mode = 0; mode != 9; ++mode) {
+    SCOPED_TRACE(mode);
+    Options.Android->Arguments = {
+        Output, 0, mode == 1 ? 7u : 6u, Output + 4096, Output + 8192, 1, 1};
+    Options.Android->TextLogWrites = {{{0, payload, 4068}}};
+    memory[8192 + 4065] = mode == 2 ? 'x' : 0;
+    memory[8192 + 4066] = 0;
+    if (mode == 2)
+      Options.Android->TextLogWrites->front().Payload.back() = 'x';
+    if (mode == 3)
+      Options.Android->Arguments[1] = 2;
+    if (mode == 4)
+      Options.Android->TextLogWrites->front().ID = 2;
+    if (mode == 5)
+      Options.Android->TextLogWrites->front().Payload.pop_back();
+    if (mode == 6)
+      Options.Android->TextLogWrites->front().Payload[4] = 0;
+    if (mode == 7)
+      Options.Android->TextLogWrites->assign(4097, {0, {6, 0, 0}, 0});
+    if (mode == 8)
+      Options.Android->TextLogWrites->assign(258, {0, payload, 0});
+    auto result =
+        emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+    if (mode >= 4) {
+      EXPECT_FALSE(bool(result));
+      llvm::consumeError(result.takeError());
+      continue;
+    }
+    ASSERT_TRUE(bool(result)) << llvm::toString(result.takeError());
+    EXPECT_EQ(result->Stop, mode == 0 || mode == 2
+                                ? ProcessStopReason::Returned
+                                : ProcessStopReason::UnsupportedService)
+        << result->Diagnostic;
+    EXPECT_EQ(result->TextLogWritesConsumed, mode == 0 || mode == 2 ? 1u : 0u);
+  }
+}
+
 TEST_P(AndroidLog, EventWritesShareExactOrderedResultsAndPreserveErrno) {
   Options.Android->EntrySymbol = "log_event_write";
   Options.Android->Libraries["liblog.so"] = {"__android_log_bwrite"};
@@ -318,6 +1040,97 @@ TEST_P(AndroidLog, EventWriteDirectInputsUseSharedAdmission) {
   ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
   EXPECT_EQ(R->Stop, ProcessStopReason::Returned) << R->Diagnostic;
   EXPECT_EQ(R->EventLogWritesConsumed, 0u);
+}
+
+TEST(AndroidLogOptions, TextWriteSchemaKeepsStrictBytesBuffersAndResults) {
+  auto parse = [](const std::string &items) {
+    return processOptionsFromJSON("{\"android\":{\"text_log_writes\":" + items +
+                                  "}}");
+  };
+  auto absent = processOptionsFromJSON(R"({"android":{}})");
+  ASSERT_TRUE(bool(absent));
+  EXPECT_FALSE(absent->Android->TextLogWrites);
+  auto empty = parse("[]");
+  ASSERT_TRUE(bool(empty));
+  ASSERT_TRUE(empty->Android->TextLogWrites);
+  EXPECT_TRUE(empty->Android->TextLogWrites->empty());
+  for (unsigned id : {0u, 1u, 3u, 4u}) {
+    auto valid = parse("[{\"log_id\":" + std::to_string(id) +
+                       ",\"payload\":\"06007800\",\"result\":-2147483648}]");
+    ASSERT_TRUE(bool(valid)) << llvm::toString(valid.takeError());
+    const auto &write = valid->Android->TextLogWrites->front();
+    EXPECT_EQ(write.ID, id);
+    EXPECT_EQ(write.Payload, (std::vector<uint8_t>{6, 0, 'x', 0}));
+    EXPECT_EQ(write.Result, INT32_MIN);
+  }
+  for (const char *invalid :
+       {"null", "{}", "[{}]", R"([{"payload":"060000","result":0}])",
+        R"([{"log_id":2,"payload":"060000","result":0}])",
+        R"([{"log_id":-1,"payload":"060000","result":0}])",
+        R"([{"log_id":4294967296,"payload":"060000","result":0}])",
+        R"([{"log_id":0,"payload":"0600","result":0}])",
+        R"([{"log_id":0,"payload":"060001","result":0}])",
+        R"([{"log_id":0,"payload":"06000000","result":0}])",
+        R"([{"log_id":0,"payload":"060z00","result":0}])",
+        R"([{"log_id":0,"payload":"060000","result":2147483648}])",
+        R"([{"log_id":0,"payload":"060000","result":0,"extra":0}])"}) {
+    auto result = parse(invalid);
+    EXPECT_FALSE(bool(result)) << invalid;
+    llvm::consumeError(result.takeError());
+  }
+}
+
+TEST(AndroidLogOptions, AbortMessageSlotPreservesAbsenceNullAndGuestBits) {
+  auto Absent = processOptionsFromJSON("{\"android\":{}}");
+  ASSERT_TRUE(bool(Absent)) << llvm::toString(Absent.takeError());
+  EXPECT_FALSE(Absent->Android->AbortMessageSlot);
+  for (const char *Value : {"0", "\"0\"", "\"0xffffffffffffffff\"", "4097"}) {
+    auto Result = processOptionsFromJSON(
+        std::string("{\"android\":{\"abort_message_slot\":") + Value + "}}");
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_TRUE(Result->Android->AbortMessageSlot);
+    EXPECT_EQ(*Result->Android->AbortMessageSlot,
+              std::string(Value) == "\"0xffffffffffffffff\"" ? UINT64_MAX
+              : std::string(Value) == "4097"                 ? 4097u
+                                                             : 0u);
+  }
+  for (const char *Value :
+       {"null", "true", "-1", "1.25", "{}", "[]", "\"bad\""}) {
+    auto Result = processOptionsFromJSON(
+        std::string("{\"android\":{\"abort_message_slot\":") + Value + "}}");
+    EXPECT_FALSE(bool(Result)) << Value;
+    if (!Result)
+      llvm::consumeError(Result.takeError());
+  }
+}
+
+TEST(AndroidLogOptions, TextTransportAcceptsOnlyCompleteOrFullSizePrefixes) {
+  for (unsigned Size : {4067u, 4068u, 4069u})
+    for (unsigned Shape = 0; Shape != 6; ++Shape) {
+      SCOPED_TRACE(Size);
+      SCOPED_TRACE(Shape);
+      std::string Payload(Size, 'x');
+      Payload[0] = 0; // A zero priority byte is independent of the terminators.
+      if (Shape == 1)
+        Payload.back() = 0; // Tag ends at the transport boundary.
+      if (Shape >= 2)
+        Payload[1] = 0;
+      if (Shape == 3 || Shape == 5)
+        Payload.back() = 0;
+      if (Shape >= 4)
+        Payload[2] = 0; // Trailing data after message NUL or a third NUL.
+      auto Result = processOptionsFromJSON(
+          "{\"android\":{\"text_log_writes\":[{\"log_id\":0,\"payload\":\"" +
+          llvm::toHex(Payload) + "\",\"result\":-11}]}}");
+      const bool Accepted =
+          Size <= 4068 && (Shape == 3 || (Size == 4068 && Shape < 3));
+      EXPECT_EQ(bool(Result), Accepted);
+      if (Result)
+        EXPECT_EQ(Result->Android->TextLogWrites->front().Payload,
+                  std::vector<uint8_t>(Payload.begin(), Payload.end()));
+      else
+        llvm::consumeError(Result.takeError());
+    }
 }
 
 TEST(AndroidLogOptions, EventWriteSchemaPreservesAbsenceBytesAndSignedResults) {

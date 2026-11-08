@@ -81,6 +81,17 @@ void Decoder::reset() {
 // The parallel phases each build a per-thread Decoder, so a failure here can be
 // reported from several worker threads at once — hence the serialized writes.
 bool Decoder::init(Arch TheArch, InstructionMode Mode) {
+  return initWithMIPSRevision(TheArch, Mode, 2);
+}
+
+bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
+                                   uint8_t Revision) {
+  if ((Mode == InstructionMode::MIPSClassic ||
+       Mode == InstructionMode::MicroMIPS) &&
+      !isMIPS(TheArch)) {
+    syncError() << "MIPS instruction mode requires a MIPS target\n";
+    return false;
+  }
   if (!isSingleInstructionMode(Mode)) {
     syncError() << (Mode == InstructionMode::MixedARMThumb
                         ? "mixed ARM/Thumb decoding unsupported\n"
@@ -118,16 +129,25 @@ bool Decoder::init(Arch TheArch, InstructionMode Mode) {
   case Arch::MIPS32EL:
   case Arch::MIPS64:
   case Arch::MIPS64EL:
-    if (Mode != InstructionMode::Default) {
-      syncError() << "MIPS requires the classic instruction mode\n";
+    if ((Mode != InstructionMode::Default &&
+         Mode != InstructionMode::MIPSClassic &&
+         Mode != InstructionMode::MicroMIPS) ||
+        (isMIPS64(TheArch) && Mode != InstructionMode::Default) ||
+        (Revision != 2 && Revision != 5) ||
+        (Revision == 5 &&
+         (isMIPS64(TheArch) || Mode == InstructionMode::MicroMIPS))) {
+      syncError() << "unsupported MIPS instruction mode\n";
       return false;
     }
     CsArch = CS_ARCH_MIPS;
     CsMode = static_cast<cs_mode>(
-        (isMIPS64(TheArch) ? CS_MODE_MIPS64R2 : CS_MODE_MIPS32R2) |
+        (isMIPS64(TheArch) ? CS_MODE_MIPS64R2
+         : Revision == 5   ? CS_MODE_MIPS32R5
+                           : CS_MODE_MIPS32R2) |
+        (Mode == InstructionMode::MicroMIPS ? CS_MODE_MICRO : 0) |
         (archLittleEndian(TheArch) ? CS_MODE_LITTLE_ENDIAN
                                    : CS_MODE_BIG_ENDIAN));
-    NewMIPS = std::make_unique<MIPSLifter>(TheArch);
+    NewMIPS = std::make_unique<MIPSLifter>(TheArch, Mode);
     break;
   default:
     syncError() << "unsupported arch for decoder\n";
@@ -161,6 +181,7 @@ bool Decoder::init(Arch TheArch, InstructionMode Mode) {
   InsnBuf = NewInsnBuf;
   TargetArch = TheArch;
   CurrentMode = Mode;
+  MIPSISARevision = Revision;
   Detail = true;
   Text = true;
   X86 = std::move(NewX86);
@@ -172,6 +193,10 @@ bool Decoder::init(Arch TheArch, InstructionMode Mode) {
 
 void Decoder::configureFor(const BinaryImage &Img) {
   configureX86For(Img);
+  if (MIPS) {
+    MIPS->setDSPEnabled(Img.MIPS && Img.MIPS->HasDSP);
+    MIPS->setMSAEnabled(Img.MIPS && Img.MIPS->HasMSA && MIPSISARevision == 5);
+  }
   if (AArch64)
     AArch64->setPreserveImmediateMemory(
         Img.isArm64e() &&
@@ -180,8 +205,19 @@ void Decoder::configureFor(const BinaryImage &Img) {
 }
 
 bool Decoder::init(const BinaryImage &Img) {
+  if (Img.Mode == InstructionMode::MixedMIPS) {
+    if (!isMIPS(Img.Arch) || !Img.MIPS || !Img.MIPS->HasMicroMIPS)
+      return false;
+    if (Img.instructionModeAt(Img.Entry))
+      return selectMode(Img, Img.Entry);
+    for (const auto &[Address, Mode] : Img.MIPS->CodeModeEntries)
+      if (Img.instructionModeAt(Address) == Mode)
+        return selectMode(Img, Address);
+    return false;
+  }
   if (Img.Mode != InstructionMode::MixedARMThumb) {
-    if (!init(Img.Arch, Img.Mode))
+    if (!initWithMIPSRevision(Img.Arch, Img.Mode,
+                              Img.MIPS ? Img.MIPS->ISARevision : 2))
       return false;
     configureFor(Img);
     return true;
@@ -197,18 +233,24 @@ bool Decoder::selectMode(const BinaryImage &Img, va_t Addr,
   if (Img.Arch == Arch::ARM &&
       !decoder_detail::isARMInstructionAligned(Addr, *Mode))
     return false;
-  if (Handle && TargetArch == Img.Arch && CurrentMode == *Mode) {
-    if (AArch64)
+  if (isMIPS(Img.Arch) &&
+      (Addr % (*Mode == InstructionMode::MicroMIPS ? 2 : 4) ||
+       (!isMIPS64(Img.Arch) && Addr > UINT32_MAX)))
+    return false;
+  const uint8_t Revision = Img.MIPS ? Img.MIPS->ISARevision : 2;
+  if (Handle && TargetArch == Img.Arch && CurrentMode == *Mode &&
+      (!MIPS || MIPSISARevision == Revision)) {
+    if (AArch64 || MIPS)
       configureFor(Img);
     return true;
   }
   const bool WasDetail = Detail;
   const bool WasText = Text;
-  if (!init(Img.Arch, *Mode))
+  if (!initWithMIPSRevision(Img.Arch, *Mode, Revision))
     return false;
   setDetail(WasDetail);
   setText(WasText);
-  if (AArch64)
+  if (AArch64 || MIPS)
     configureFor(Img);
   return true;
 }
@@ -233,7 +275,8 @@ int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
                        DecodedInsn &Out) {
   if (!beginDecode(Out) || !Handle || !InsnBuf)
     return 0;
-  if (MIPS && ((Addr & 3) || (!isMIPS64(TargetArch) && Addr > UINT32_MAX)))
+  if (MIPS && ((Addr % (CurrentMode == InstructionMode::MicroMIPS ? 2 : 4)) ||
+               (!isMIPS64(TargetArch) && Addr > UINT32_MAX)))
     return 0;
   const uint8_t *Code = Bytes;
   size_t Sz = Len;
@@ -275,6 +318,9 @@ int Decoder::decodeOneForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
 int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
                             DecodedInsn &Out) {
   if (!beginDecode(Out) || !Handle || !InsnBuf)
+    return 0;
+  if (MIPS && ((Addr % (CurrentMode == InstructionMode::MicroMIPS ? 2 : 4)) ||
+               (!isMIPS64(TargetArch) && Addr > UINT32_MAX)))
     return 0;
   const uint8_t *Code = Bytes;
   size_t Sz = Len;
@@ -376,7 +422,7 @@ bool Decoder::isAlignmentNop(const DecodedInsn &Insn) const {
        !hasAArch64DecodeOccurrence(Insn)))
     return false;
   if (MIPS)
-    return MIPS->word(*Insn.Raw) == 0;
+    return MIPS->isAlignmentNop(*Insn.Raw);
   if (X86 && decoder_detail::isX86AlignmentNop(Insn))
     return true;
   return alignmentNopLength(TargetArch, Insn.Raw->bytes, Insn.Size,

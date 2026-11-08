@@ -44,6 +44,7 @@
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/MIPS/MIPSDSPSource.h"
 #include "neverd/backend/MachineInstructionText.h"
 #include "neverd/backend/c/render/AArch64/AArch64ExclusiveC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
@@ -4785,6 +4786,28 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
   auto *IA = llvm::dyn_cast<llvm::InlineAsm>(Call.getCalledOperand());
   if (!IA)
     return false;
+  if (const auto Write = mips::dspControlSourceWrite(Call)) {
+    if (!Call.getFunction()->hasFnAttribute(mips::DSPSourceMarker) &&
+        !mips::imagePreservesDSPControl(Opts.Image))
+      throw std::invalid_argument(mips::MalformedDSPSource);
+    if (Opts.TheArch != Arch::MIPS32 && Opts.TheArch != Arch::MIPS32EL)
+      throw std::invalid_argument(mips::MalformedDSPSource);
+    emitIndent(Indent);
+    if (*Write) {
+      OS << "__asm__ volatile(" << mips::DSPWriteCAsm << " :: \"r\"((uint32_t)("
+         << valueStr(Call.getArgOperand(0)) << ")) : \"memory\");\n";
+    } else {
+      const std::string Output =
+          Call.use_empty() ? freshVar("nd_dspcontrol") : Name;
+      if (Call.use_empty()) {
+        OS << "uint32_t " << Output << ";\n";
+        emitIndent(Indent);
+      }
+      OS << "__asm__ volatile(" << mips::DSPReadCAsm << " : \"=r\"(" << Output
+         << ") :: \"memory\");\n";
+    }
+    return true;
+  }
   const bool ResultCall = Call.arg_size() == kResultCallInputCount &&
                           IA->getConstraintString() == kResultCallConstraints;
   const bool ValueCall = Call.arg_size() == kValueCallInputCount &&

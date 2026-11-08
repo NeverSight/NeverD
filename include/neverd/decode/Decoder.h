@@ -157,7 +157,8 @@ struct RelocatedScalarOperand {
 class Decoder {
 public:
   /// Decode an entire semantic unit. A missing/invalid delay slot is a decode
-  /// failure; ordinary disassembly APIs continue to consume four MIPS bytes.
+  /// failure; ordinary disassembly APIs consume one physical instruction,
+  /// including a two- or four-byte microMIPS instruction.
   int decodeUnitForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
                         DecodedExecutionUnit &Out);
   /// Lift in execution order, retaining the slot's operation ownership.
@@ -354,6 +355,8 @@ private:
 
   /// Select an authenticated initial mode for a mixed ARM/Thumb image.
   bool initARMImageMode(const BinaryImage &Img);
+  bool initWithMIPSRevision(Arch Target, InstructionMode Mode,
+                            uint8_t Revision);
 
   /// Configure the x86 platform ABI and x87 ownership, when active.
   void configureX86For(const BinaryImage &Img);
@@ -394,6 +397,7 @@ private:
   uint64_t AArch64DecodeGeneration = 0;
   Arch TargetArch = Arch::Unknown;
   InstructionMode CurrentMode = InstructionMode::Default;
+  uint8_t MIPSISARevision = 2;
   bool Strict = true;
   bool Detail = true;
   bool Text = true;

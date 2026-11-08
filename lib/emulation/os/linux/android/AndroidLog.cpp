@@ -21,6 +21,29 @@ namespace {
 constexpr uint32_t Nonblock = 0x800;
 constexpr size_t HeaderSize = 28, MessageSize = 5124;
 uint64_t negative(int Error) { return uint32_t(-Error); }
+bool textBuffer(uint32_t ID) {
+  return ID == 0 || ID == 1 || ID == 3 || ID == 4;
+}
+
+template <class Entry, class Matches>
+std::optional<uint32_t>
+consumeLogWrite(const std::optional<std::vector<Entry>> &Writes,
+                std::optional<uint64_t> &Consumed, Matches Match,
+                llvm::StringRef Kind, ProcessResult &Result) {
+  const char *Reason = nullptr;
+  if (!Writes)
+    Reason = "contract is not supplied";
+  else if (*Consumed == Writes->size())
+    Reason = "contract exhausted";
+  else if (!Match((*Writes)[*Consumed]))
+    Reason = "does not match the next entry";
+  if (Reason) {
+    Result.Stop = ProcessStopReason::UnsupportedService;
+    Result.Diagnostic = ("Android " + Kind + " log write " + Reason).str();
+    return std::nullopt;
+  }
+  return uint32_t((*Writes)[(*Consumed)++].Result);
+}
 } // namespace
 
 llvm::Error
@@ -61,21 +84,209 @@ llvm::Error validateEventLogWrites(
 }
 
 std::optional<uint32_t> Bionic::eventLogWrite(llvm::ArrayRef<uint8_t> Payload) {
-  const auto &Writes = Options.Android->EventLogWrites;
-  const char *Diagnostic = nullptr;
+  return consumeLogWrite(
+      Options.Android->EventLogWrites, Result.EventLogWritesConsumed,
+      [&](const NativeEventLogWrite &Write) {
+        return Payload == llvm::ArrayRef(Write.Payload);
+      },
+      "event", Result);
+}
+
+llvm::Error validateTextLogWrites(
+    const std::optional<std::vector<NativeTextLogWrite>> &Writes) {
   if (!Writes)
-    Diagnostic = "Android event log write contract is not supplied";
-  else if (*Result.EventLogWritesConsumed == Writes->size())
-    Diagnostic = "Android event log write contract exhausted";
-  else if (Payload !=
-           llvm::ArrayRef((*Writes)[*Result.EventLogWritesConsumed].Payload))
-    Diagnostic = "Android event log write does not match the next entry";
-  if (Diagnostic) {
-    Result.Stop = ProcessStopReason::UnsupportedService;
-    Result.Diagnostic = Diagnostic;
-    return std::nullopt;
+    return llvm::Error::success();
+  if (Writes->size() > LogRecordLimit)
+    return failure("too many Android text log writes");
+  uint64_t Bytes = 0;
+  for (const auto &Write : *Writes) {
+    const auto &P = Write.Payload;
+    Bytes += P.size() + sizeof(Write.ID) + sizeof(Write.Result);
+    if (!textBuffer(Write.ID) || P.size() < 3 || P.size() > LogPayloadLimit ||
+        Bytes > LogSnapshotLimit)
+      return failure(
+          "invalid Android text log write payload, buffer or total size");
+    // Only a full transport payload may omit either string terminator.
+    // A second NUL always ends the message; trailing bytes cannot be a prefix.
+    const auto Terminators = std::count(P.begin() + 1, P.end(), uint8_t(0));
+    if (Terminators > 2 || (Terminators == 2 && P.back() != 0) ||
+        (Terminators < 2 && P.size() != LogPayloadLimit))
+      return failure(
+          "invalid Android text log write payload, buffer or total size");
   }
-  return uint32_t((*Writes)[(*Result.EventLogWritesConsumed)++].Result);
+  return llvm::Error::success();
+}
+
+llvm::Expected<std::string> Bionic::logString(LogString Text) {
+  if (auto *Address = std::get_if<uint64_t>(&Text))
+    return string(*Address);
+  return std::get<llvm::StringRef>(Text).str();
+}
+
+llvm::Expected<bool> Bionic::setAbortMessage(LogString Message) {
+  const auto &Binding = Options.Android->AbortMessageSlot;
+  if (!Binding) {
+    Result.Stop = ProcessStopReason::UnsupportedService;
+    Result.Diagnostic =
+        "Android abort-message state requires android.abort_message_slot";
+    return false;
+  }
+  const uint64_t Slot = *Binding;
+  if (!Slot)
+    return true; // API 28 can be called before libc binds the slot.
+  if (auto E = access(Slot, 8, Read))
+    return std::move(E);
+  std::array<uint8_t, 8> Pointer;
+  if (auto E = CPU.read(Slot, Pointer))
+    return std::move(E);
+  if (llvm::support::endian::read64le(Pointer.data()))
+    return true; // First message wins without reading the new argument.
+  auto Text = logString(Message);
+  if (!Text)
+    return Text.takeError();
+  const uint64_t Size =
+      8 + Text->size() + 1; // LP64 abort_msg_t, including NUL.
+  ProcessServiceEvent Event{
+      0,
+      0,
+      {0, Size, linux_model::ProtRead | linux_model::ProtWrite,
+       linux_model::MapPrivate | linux_model::MapAnonymous, UINT64_MAX, 0},
+      std::nullopt};
+  auto Raw = kernelService(linux_model::ServiceKind::Mmap, Event);
+  if (!Raw)
+    return Raw.takeError();
+  auto Mapped = kernelResult(*Raw);
+  if (!Mapped)
+    return Mapped.takeError();
+  if (!*Mapped)
+    return false;
+  // Anonymous mmap completes synchronously; Bionic alone converts errno/-1.
+  const auto Address = std::get<uint64_t>(**Mapped);
+  if (Address == UINT64_MAX)
+    return true;
+  std::vector<uint8_t> Bytes(Size);
+  llvm::support::endian::write64le(Bytes.data(), Size);
+  std::copy(Text->begin(), Text->end(), Bytes.begin() + 8);
+  if (auto E = CPU.write(Address, Bytes))
+    return std::move(E);
+  // Publication follows the copy. A bad output slot retains mmap's effects.
+  if (auto E = access(Slot, 8, Write))
+    return std::move(E);
+  llvm::support::endian::write64le(Pointer.data(), Address);
+  if (auto E = CPU.write(Slot, Pointer))
+    return std::move(E);
+  return true;
+}
+
+BionicResult Bionic::abortMessageCall(const NativeCallEvent &Call) {
+  auto Stored = setAbortMessage(Call.Arguments[0]);
+  if (!Stored)
+    return Stored.takeError();
+  return *Stored ? value(0) : BionicResult(std::optional<BionicValue>());
+}
+
+llvm::Expected<std::optional<uint32_t>>
+Bionic::textLogWrite(uint32_t ID, int32_t Priority, LogString Tag,
+                     LogString Message) {
+  if (auto *Address = std::get_if<uint64_t>(&Tag); Address && !*Address)
+    Tag = llvm::StringRef();
+  std::string Routed;
+  if (ID != 1) {
+    // API 28 first inspects only the radio-dispatch prefix. Unrouted tags
+    // are scanned by strlen after abort-message publication, not before it.
+    auto ReadTagByte = [&](size_t Index) -> llvm::Expected<uint8_t> {
+      if (auto *Address = std::get_if<uint64_t>(&Tag)) {
+        if (Index > UINT64_MAX - *Address)
+          return failure(diagnostic::GuestPointer);
+        return byte(*Address + Index);
+      }
+      auto Text = std::get<llvm::StringRef>(Tag);
+      return Index < Text.size() ? uint8_t(Text[Index]) : uint8_t(0);
+    };
+    auto First = ReadTagByte(0);
+    if (!First)
+      return First.takeError();
+    struct RadioTag {
+      llvm::StringLiteral Text;
+      bool Prefix;
+    };
+    static constexpr RadioTag Tags[] = {
+        {"HTC_RIL", false}, {"RIL", true},   {"QC_RIL", true}, {"IMS", true},
+        {"AT", false},      {"GSM", false},  {"STK", false},   {"SMS", false},
+        {"CDMA", false},    {"PHONE", false}};
+    for (const auto &Candidate : Tags) {
+      if (*First != Candidate.Text.front())
+        continue;
+      bool Match = true;
+      for (size_t I = 1; I < Candidate.Text.size() + !Candidate.Prefix; ++I) {
+        auto Byte = ReadTagByte(I);
+        if (!Byte)
+          return Byte.takeError();
+        if (*Byte != (I < Candidate.Text.size() ? Candidate.Text[I] : 0)) {
+          Match = false;
+          break;
+        }
+      }
+      if (!Match)
+        continue;
+      auto FullTag = logString(Tag);
+      if (!FullTag)
+        return FullTag.takeError();
+      ID = 1;
+      Routed = "use-Rlog/RLOG-" + *FullTag;
+      Routed.resize(std::min<size_t>(Routed.size(), 31));
+      Tag = llvm::StringRef(Routed);
+      break;
+    }
+  }
+  if (Priority == 7) {
+    auto Stored = setAbortMessage(Message);
+    if (!Stored)
+      return Stored.takeError();
+    if (!*Stored)
+      return std::optional<uint32_t>();
+  }
+  auto TagBytes = logString(Tag);
+  if (!TagBytes)
+    return TagBytes.takeError();
+  auto MessageBytes = logString(Message);
+  if (!MessageBytes)
+    return MessageBytes.takeError();
+  if (!textBuffer(ID)) {
+    Result.Stop = ProcessStopReason::UnsupportedService;
+    Result.Diagnostic =
+        "Android text log write requires a main/radio/system/crash buffer";
+    return std::optional<uint32_t>();
+  }
+  std::vector<uint8_t> Payload;
+  Payload.reserve(std::min<size_t>(
+      LogPayloadLimit, TagBytes->size() + MessageBytes->size() + 3));
+  Payload.push_back(uint8_t(Priority));
+  // logd clips the concatenated priority/tag/message iovecs. A cut may land
+  // inside either string or just after its NUL; no replacement NUL is added.
+  for (llvm::StringRef Text : {*TagBytes, *MessageBytes}) {
+    auto Prefix = Text.take_front(LogPayloadLimit - Payload.size());
+    Payload.insert(Payload.end(), Prefix.begin(), Prefix.end());
+    if (Payload.size() < LogPayloadLimit)
+      Payload.push_back(0);
+  }
+  return consumeLogWrite(
+      Options.Android->TextLogWrites, Result.TextLogWritesConsumed,
+      [&](const NativeTextLogWrite &Write) {
+        return ID == Write.ID && Payload == Write.Payload;
+      },
+      "text", Result);
+}
+
+BionicResult Bionic::textLogCall(const NativeCallEvent &Call) {
+  const auto &A = Call.Arguments;
+  const unsigned Offset = Call.Name == symbol::TextLogBufferWrite ? 1 : 0;
+  auto Written = textLogWrite(Offset ? uint32_t(A[0]) : 0, int32_t(A[Offset]),
+                              A[Offset + 1], A[Offset + 2]);
+  if (!Written)
+    return Written.takeError();
+  return *Written ? value(**Written)
+                  : BionicResult(std::optional<BionicValue>());
 }
 
 BionicResult Bionic::eventLogCall(const NativeCallEvent &Call) {

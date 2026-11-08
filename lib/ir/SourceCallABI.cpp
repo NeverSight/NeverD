@@ -18,6 +18,7 @@
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
+#include <algorithm>
 #include <functional>
 #include <map>
 #include <set>
@@ -65,9 +66,33 @@ bool refuse(std::string &Error, const char *Reason) {
   return false;
 }
 } // namespace
+bool neverd::sourceCallRetainsNativeCarriers(const SourceCallTypeHint &Hint) {
+  return Hint.CallKind == SourceCallTypeHint::Kind::Native &&
+         Hint.Signature.Origin ==
+             SourceFunctionTypeHint::OriginKind::NativeAnalysis &&
+         Hint.Signature.Architecture == Arch::AArch64 &&
+         Hint.Signature.Convention ==
+             SourceFunctionTypeHint::ConventionKind::C &&
+         Hint.Signature.HasExplicitABI && Hint.AnalystFixedCount < 0 &&
+         !Hint.ByValueCopy;
+}
+
 bool neverd::sourceCallUsesMachineABI(const SourceCallTypeHint &Hint,
                                       BinaryFormat Format, bool Authenticated) {
+  const bool NativePhysical =
+      sourceCallRetainsNativeCarriers(Hint) &&
+      (hasIndirectSourceParameters(Hint.Signature) ||
+       isSourceAArch64VectorType(Hint.Signature.ReturnType) ||
+       !sourceAArch64VectorAggregateMembers(Hint.Signature.ReturnType)
+            .empty() ||
+       std::any_of(Hint.Signature.Parameters.begin(),
+                   Hint.Signature.Parameters.end(), [](const auto &Parameter) {
+                     return isSourceAArch64VectorType(Parameter.Type) ||
+                            !sourceAArch64VectorAggregateMembers(Parameter.Type)
+                                 .empty();
+                   }));
   return sourceCallRetainsResultStorage(Hint) ||
+         (Format == BinaryFormat::MachO && NativePhysical) ||
          (Authenticated && Format == BinaryFormat::MachO &&
           (Hint.CallKind == SourceCallTypeHint::Kind::Analyst ||
            Hint.CallKind == SourceCallTypeHint::Kind::Native) &&
@@ -77,7 +102,8 @@ bool neverd::sourceCallUsesMachineABI(const SourceCallTypeHint &Hint,
 }
 
 bool neverd::sourceCallRetainsResultStorage(const SourceCallTypeHint &Hint) {
-  return Hint.CallKind == SourceCallTypeHint::Kind::Analyst &&
+  return (Hint.CallKind == SourceCallTypeHint::Kind::Analyst ||
+          sourceCallRetainsNativeCarriers(Hint)) &&
          Hint.Signature.Architecture == Arch::AArch64 &&
          Hint.Signature.ReturnLocation.Kind ==
              SourceABICarrierKind::IndirectResultPointer;

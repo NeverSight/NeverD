@@ -1022,6 +1022,21 @@ while the document stands, and the client shows the page it kept; a page whose d
 was built again comes whole, under a new name. Without `if_none_match` replies are as
 before.
 
+A worker that advertises `page_delta` answers a `decompile` that carries `page_delta:
+true` beside a page's name, where that page changed but the worker still has the
+document it came from, with what changed instead: `{delta, base, etag, project_id,
+revision}`.  `base` is the page named; the client applies `delta`'s operations to it in
+order and takes `etag`, `project_id` and `revision` from the reply.  `["set", field,
+value]` and `["unset", field]` set or take away a field.  `["lines", field, count,
+[[line, text], ...]]` splits the field's text at line feeds into `count` lines and
+replaces those listed.  `["items", field, runs]` makes a list from the old one read once
+in order: `["same", n]` keeps the next n elements, `["shift", n, {key: amount}]` keeps
+them with those integer fields moved by amount, `["put", [values]]` replaces the next
+elements, `["skip", n]` drops n and `["new", [values]]` adds values.  An edit that moves
+the byte offsets of what follows a line, such as a comment or a name, changes a page by
+a few operations.  Where the operations would weigh more than half the page, or the
+document is gone, the page comes whole.
+
 `prepare_function {address}` analyzes the function at `address` and emits its source as
 a visit would, keeping nothing of the text, builds the listing a view decorates with,
 and replies `{address, prepared}`. A client
@@ -1037,7 +1052,10 @@ hits, misses}`. A look the store does not answer asks the engine. The owner keep
 what its reference scan found there too, and `background.scan_kept` says this
 session's index was finished from that.
 `metadata.listing_name_builds` counts how many times the listing has read its names
-again; a function's new name usually does not.
+again; a function's new name usually does not.  `metadata.named_view_comment_patches`
+and `metadata.named_view_name_patches` count the documents written from the one a view
+had with the image's comments, or functions' new names, taken into it, where those alone
+reached it since it was decorated.
 
 Source pages with edit metadata carry `code_names`, half-open UTF-8 spans in
 the complete displayed document. An address target has `kind:"address"`,

@@ -11,10 +11,12 @@
 #include "ELFLoaderDetail.h"
 
 #include "neverd/loader/ELF/ELFProgramMetadata.h"
+#include "neverd/loader/ELF/MIPSCodeMode.h"
 #include "neverd/loader/PointerRelocation.h"
 
 #include <cstring>
 #include <map>
+#include <type_traits>
 
 namespace neverd::elf_loader::detail {
 
@@ -77,7 +79,8 @@ llvm::Error collectMIPSDynamicGOT(const llvm::object::ELFFile<ELFT> &ELF,
         const bool Import = Symbol.st_shndx == SHN_UNDEF;
         if ((Type == R_MIPS_JUMP_SLOT || Type == R_MIPS_GLOB_DAT) && Import &&
             (Symbol.getType() == STT_FUNC || Symbol.getType() == STT_NOTYPE)) {
-          if constexpr (requires { Entry.r_addend; })
+          if constexpr (std::is_same_v<std::remove_cvref_t<decltype(Entry)>,
+                                       typename ELFT::Rela>)
             if (Entry.r_addend != 0)
               return llvm::createStringError(
                   llvm::inconvertibleErrorCode(),
@@ -180,8 +183,20 @@ llvm::Error collectMIPSDynamicGOT(const llvm::object::ELFFile<ELFT> &ELF,
       typename ELFT::Addr Value;
       std::memcpy(&Value, Bytes + (Local->second + I - First->second) * Width,
                   Width);
+      // st_other owns a defined function's encoding; st_value may be even
+      // while its GOT cell contains the serialized callable tag. Data symbols
+      // retain their literal address, even when they overlap executable bytes.
+      uint64_t Expected = Symbol.st_value;
+      if (Symbol.getType() == STT_FUNC &&
+          Img.Mode == InstructionMode::MixedMIPS) {
+        const va_t Address = normalizeCodeAddress(Expected, Img.Arch, Img.Mode);
+        const auto Mode = Img.instructionModeAt(Address);
+        if (!Mode)
+          return Fail("defined function has no instruction mode");
+        Expected = serializeCodePointer(Address, Img.Arch, *Mode);
+      }
       if (Symbol.getType() == STT_TLS || Symbol.getType() == STT_GNU_IFUNC ||
-          uint64_t(Value) != Symbol.st_value)
+          uint64_t(Value) != Expected)
         return Fail("requires unsupported runtime symbol resolution");
       recordAbsolutePointerRelocation(Img, Slot, Value);
       continue;

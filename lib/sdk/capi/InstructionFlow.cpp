@@ -12,6 +12,7 @@
 #include "neverd/decode/InstructionRelocations.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/libc/NoReturnLoadedTarget.h"
+#include "neverd/loader/ELF/MIPSCodeMode.h"
 #include "neverd/sdk/Limits.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/Parallel.h"
@@ -212,9 +213,12 @@ InstructionFlowScratch::summarize(const BinaryImage &Img, Decoder &Dec,
       const auto *Segment = Img.getSegmentFor(DI.Addr);
       const size_t Offset = DI.Addr - Segment->VA;
       DecodedExecutionUnit Unit;
-      if (!UnitDecoder->decodeUnitForLift(Segment->Data.data() + Offset,
+      if (!UnitDecoder->selectMode(Img, DI.Addr, Dec.currentMode()) ||
+          !UnitDecoder->decodeUnitForLift(Segment->Data.data() + Offset,
                                           Segment->Data.size() - Offset,
-                                          DI.Addr, Unit)) {
+                                          DI.Addr, Unit) ||
+          !mips::codeModeRangeMatches(Img, DI.Addr, Unit.spanBytes(),
+                                      UnitDecoder->currentMode())) {
         Flow.Kind = UnliftedFlow;
         Flow.Stack.Unknown = true;
         return Flow;

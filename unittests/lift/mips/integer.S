@@ -6,6 +6,51 @@
 .set noreorder
 .text
 
+.macro field_kernel name, operation, insert, pos, size
+.globl \name
+.type \name,@function
+\name:
+.if \insert
+  or $2,$5,$0
+.endif
+  jr $31
+  \operation $2,$4,\pos,\size
+.size \name,.-\name
+.endm
+
+.macro shuffle_kernel name, operation
+.globl \name
+.type \name,@function
+\name:
+  jr $31
+  \operation $2,$4
+.size \name,.-\name
+.endm
+
+#define MIPS_FIELD_KERNEL(Name, Op, Bits, Insert, Pos, Size) field_kernel Name,Op,Insert,Pos,Size
+#define MIPS_SHUFFLE_KERNEL(Name, Op, Bits, Lane, Permutation) shuffle_kernel Name,Op
+#include "MIPSBitfieldKernels.def"
+
+/* Strict word checks must remain conditional on actual slot execution. */
+.globl mips_word_likely
+.type mips_word_likely,@function
+mips_word_likely:
+  addiu $2,$0,7
+  beql $5,$0,1f
+  addiu $2,$4,1
+1:
+  jr $31
+  nop
+.size mips_word_likely,.-mips_word_likely
+
+.globl mips_word_zero
+.type mips_word_zero,@function
+mips_word_zero:
+  addiu $0,$4,1
+  jr $31
+  addiu $2,$0,7
+.size mips_word_zero,.-mips_word_zero
+
 .globl mips_add
 .type mips_add,@function
 mips_add:

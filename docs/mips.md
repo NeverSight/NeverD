@@ -1,7 +1,9 @@
 # MIPS analysis
 
 The experimental MIPS analysis path targets linked ELF programs with classic
-MIPS32 Release 2/o32 or MIPS64 Release 2/n64 instructions, in either byte order.
+MIPS32 Release 2/o32 or MIPS64 Release 2/n64 instructions, in either byte order,
+the bounded microMIPS32 Release 2/o32 subset, and the MIPS32 Release 5/o32
+integer MSA slice described below.
 The selected ELF profile determines register width, byte order, stack layout
 and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
 
@@ -19,7 +21,7 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   Known libc objects retain their external header declarations. HighC rejects
   partial/overlapping access or indexed byte backings for other COPY objects
   until those backings have an external-object contract.
-- Ordinary disassembly consumes four bytes. A delayed transfer and its slot
+- Classic disassembly consumes four bytes. A delayed transfer and its slot
   form an eight-byte semantic execution unit. The branch reads its condition
   and indirect target before the slot, writes its link before the slot, and
   transfers after it. Branch-likely instructions annul the slot on the false
@@ -29,6 +31,17 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   multiplication and aligned integer loads/stores have explicit lifter rules.
   MIPS64 word results are sign extended where the ISA requires it. Writes to
   `$zero` discard the result without discarding required memory effects.
+- SPECIAL3 `EXT`/`INS`, `DEXT`/`DEXTM`/`DEXTU`, `DINS`/`DINSM`/`DINSU`, and
+  `SEB`/`SEH`/`WSBH`/`DSBH`/`DSHD` use the encoding descriptors in
+  `MIPSBitfield.def`. Reserved fields and invalid bounds are refused before
+  emitting effects. Word forms sign extend their result, including a full-width
+  `EXT`; a 32-bit field extracted by `DEXT` remains zero extended.
+- MIPS64 Release 2 word-input restrictions are explicit checks for word
+  addition/subtraction, multiplication, count-leading operations, right
+  shifts/rotates and the word SPECIAL3 forms. Variable shift counts and
+  `SLL`/`SLLV` have no such restriction. A failed check refuses an architecturally
+  UNPREDICTABLE input before observable writes, including a `$zero` destination;
+  this strict analysis policy does not claim a guest architectural exception.
 - `LWL`/`LWR` and MIPS64 `LDL`/`LDR` retain the exact byte span of each
   instruction, including a discarded destination. They do not combine a pair
   into a wider speculative read. Source lowering retains guest alignment bits
@@ -71,13 +84,149 @@ Concrete LowIR transport and source parameter inference have separate validation
 boundaries; this source proof does not initialize absent machine registers.
 
 This is a strict subset. n32, historical MIPS I–V profiles, Release 6, MIPS16,
-microMIPS, floating point, DSP/MSA, privileged instructions, LL/SC reservations,
+microMIPS64, floating point, MSA/DSP forms beyond the slices below, privileged
+instructions, LL/SC reservations,
 unaligned merge stores and trapping arithmetic/division are not admitted by
 the current lifter. Unsupported instructions, missing slots and transfers in a
 delay slot produce errors, not replacement NOPs. Floating/aggregate source ABI
 classification, arbitrary PIC/gp recovery, raw-input target selection and
 native code rewriting are not claimed. Unicorn is a test reference, not a
 NeverD MIPS guest execution backend.
+
+The SPECIAL3 and word-input rules follow the operation/restriction sections of
+[MIPS64 Volume II, revision 2.50](https://0x04.net/~mwk/doc/mips/MD00087-2B-MIPS64BIS-AFP-02.50.pdf).
+The [Ghidra MIPS definitions at e45e5a62](https://github.com/NationalSecurityAgency/ghidra/tree/e45e5a62fd66c2e48514931f6e356aff33a79fcb/Ghidra/Processors/MIPS/data/languages)
+were a cross-check; the LowIR implementation and independent expectations are
+owned here. Decoder recognition alone does not qualify instruction semantics.
+
+## Classic MIPS32 DSP state and packed bytes
+
+The initial DSP slice admits classic MIPS32r2/o32 ELF in either byte order when
+`.MIPS.abiflags` declares the DSP ASE. It supports `RDDSP`, `WRDSP`, `ADDU.QB`
+and `ADDU_S.QB`. Decoder reuse consumes the current image's feature evidence;
+Capstone recognizing an encoding without that evidence does not authorize its
+lift. DSPR2, DSP64, microMIPS DSP, accumulators and other DSP instructions remain
+unsupported.
+
+The ten-bit control selector selects six field groups; its upper four bits are
+ignored. Partial writes preserve unselected fields, and packed byte additions
+set the sticky overflow flag even when the destination is `$zero`. Full writes
+can initialize an absent concrete DSPControl value; reads and partial updates
+never invent its initial state. Selector and encoding tables live in `.def`
+files and are shared by the owning semantics.
+
+DSPControl reads and writes remain effectful machine-state intrinsics through
+SSA and dead-code elimination. HighC, LLVM and LLVMC project them to explicit
+target state transfers. Their results remain visible to callers after return;
+no extra source parameter or zero-initialized C local substitutes for machine
+state. This source contract requires an enabled DSP execution environment and
+an original-target compiler. Disabled-DSP exception delivery is not modeled.
+Every generated function in a DSP image, including ordinary scalar functions
+and generated helpers, disables automatic DSP instruction selection with
+negative target features. Without an image, a batch containing DSP state
+transfers establishes the same contract for its siblings and source shards.
+Generated C requires Clang's scoped target attributes; both `-O0` and `-O2`
+are exercised with external `-mdsp` enabled.
+Explicit state transfers use local assembler directives. This prevents a
+compiler from replacing ordinary wide arithmetic with `ADDSC`/`ADDWC` and
+silently changing DSPControl. Source returns also require proof of the captured
+incoming link; a DSP result written to `$ra` cannot become an ordinary C return.
+Standalone MIPS32 LowIR with an explicit link write also requires this proof,
+including a zero-selector `RDDSP ra,0` reduced to a constant copy. Cross-call
+link spills remain outside the current source proof.
+
+The operation rules follow the
+[MIPS32 DSP ASE manual, revision 1.00](https://0x04.net/~mwk/doc/mips/MD00374-2B-MIPS32DSP-AFP-01.00.pdf).
+The pinned Unicorn model is checked with Status.MX enabled. Its zero-destination
+packed addition incorrectly omits the overflow update; independent manual
+expectations cover that case, and source roundtrip receipts record the oracle
+disagreement explicitly.
+
+## microMIPS32 instruction and source boundaries
+
+The loader accepts linked r2/o32 ELF with consistent microMIPS header and
+`.MIPS.abiflags` evidence. `st_other` supplies each defined function's encoding;
+an even `st_value` can name a microMIPS function. Entry tags, symbol ranges and
+incoming control-flow modes must agree. Mixed images retain local mode evidence
+through discovery, CFG construction and SDK instruction-flow requests; an
+unknown destination is not silently treated as classic code.
+
+The scalar decoder maps explicit microMIPS encodings into the existing integer
+semantic forms. The current set includes MOVE16, ADDU16/SUBU16, SLL16/SRL16,
+LI16, compact byte/halfword/word memory forms, SP/GP-relative word accesses,
+the 32-bit immediate/register forms listed in `MicroMIPSInteger.def`,
+BEQZ16/BNEZ16/B16, BEQ/BNE, J/JAL/JALS/JALX and the supported JR/JALR forms.
+Unlisted encodings are errors. This is not complete compressed-instruction
+coverage and does not admit MIPS16, other ISA revisions or DSP/MSA encodings.
+
+Physical instructions occupy two or four bytes, including four-byte heads at
+addresses congruent to two modulo four. The execution-unit record keeps the
+actual head and slot widths. JALR16/JALRS16 require four/two-byte slots, JRC has
+no slot, and a slot cannot itself transfer control. Link values retain the
+caller's mode tag, while direct JALX destinations and serialized indirect
+targets have distinct validation rules. Defined function GOT cells use callable
+tags; data symbol addresses keep their original bits.
+
+Both source routes retain microMIPS/nomicromips function attributes. A source
+return must prove the captured incoming RA, including its mode bit, from the
+original instruction boundaries and SSA. Tail calls and unproved stack restores
+across calls remain outside this source proof. Source tests currently target
+bounded integer leaves, memory effects, o32 stack arguments and branch/slot
+capture.
+
+Numeric microMIPS code-pointer reconstruction is explicitly refused. The tested
+Clang 22 compiler folds a microMIPS function pointer's low bit to zero in some
+integer expressions and static initializers; a function mode attribute does not
+establish that contract. HighC and LLVM share this qualification boundary when
+materializing a code identity. Unknown-mode import values, including whole or
+partial GOT reads, are also unqualified. Direct control identities, serialized
+callables and code-byte/data addresses are separate roles. These limits require
+a subsequent toolchain/source-contract increment, not merely another opcode.
+
+The microMIPS operation and slot rules were checked against
+[microMIPS32 Volume II, revision 5.04](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00582-2B-microMIPS32-AFP-05.04.pdf)
+and the pinned [GNU simulator definitions](https://gnu.googlesource.com/binutils-gdb/+/d01e823438c7dc264d6885fbbfeace4d8955dcb7/sim/mips/micromips.igen).
+The lifter's admitted ISA remains r2; this reference does not admit later forms.
+
+## Classic MIPS32 MSA integer vectors
+
+The initial MSA slice requires classic MIPS32 Release 5/o32 ELF in either byte
+order, with `.MIPS.abiflags` explicitly declaring MSA, 128-bit CPR1 registers
+and FP64 ABI tag 6. A reused decoder consumes the current revision as well as
+feature evidence; architecture-only initialization remains Release 2 without
+MSA. Other revisions, MSA64, microMIPS/MSA and DSP/MSA combinations are refused.
+
+`FILL.W`, `INSERT.W`, `COPY_S.W`, all four B/H/W/D formats of `ADDV` and
+`SUBV`, and `AND.V`/`OR.V`/`NOR.V`/`XOR.V` use exact encoding descriptors in
+`MIPSMSA.def`. The 32 W registers are 128-bit containers. Lane zero occupies
+the low bits in both byte orders; addition and subtraction wrap independently
+within each 8/16/32/64-bit lane. Logical operations consume all 128 bits.
+Inputs are captured before an overlapping destination is written. F registers
+share the low 64 bits of their corresponding W register.
+Scalar floating instructions remain unsupported: their future implementation
+must model the unpredictable remaining W bits, not preserve or zero them by
+assuming a generic subregister write.
+
+LowIR accepts all 32 W registers. Source qualification is narrower and runs
+before SSA/dead-code elimination: it accepts one ordinary leaf block with fully
+initialized vector dependencies, no calls, and no writes to the saved
+F20/F22/.../F30 low views. Without an Image, all
+W20..W31 writes are refused because other o32 FPABIs preserve additional views.
+MSA64 source is refused at this boundary too; no extra vector parameter is
+invented. Returns must retain the
+captured entry RA, including when `COPY_S.W` writes RA in a delay slot. General
+vector ABI, saved-FPR restoration and multi-block source proofs remain future
+work. Both C paths use Clang's bit-precise integer support for any surviving
+128-bit scalar temporaries on MIPS32.
+
+The execution contract requires MSA enabled with CU1/FR configured. It does not
+model disabled-MSA exceptions, MSA floating point/control state or arbitrary
+MSA guest execution. The operation and alias rules follow the MIPS32 MSA manual
+(MD00866, revision 1.12), sections ADDV, SUBV, AND/OR/NOR/XOR, COPY_S, FILL
+and INSERT. Owned execution
+fixtures validate scalar results, output bytes and the ABI-preserved low FPR
+views against an enabled P5600 reference; no unimplemented W-register API is
+used as an oracle.
 
 ## Tests
 
@@ -101,6 +250,11 @@ both orders at every offset with fixed and seeded random old machine values,
 and compare independently assembled expected bytes. Page-edge faults check
 whether the preceding merge read occurred. Branch-likely load fixtures check
 that an annulled invalid-memory slot returns normally and an executed slot faults.
+Bitfield tests enumerate every legal position/size and every raw five-bit field
+combination using independent expectations. Shuffle tests check byte/halfword
+order, sign extension, aliases and `$zero`; pinned Unicorn checks defined
+boundary inputs. Source fixtures cover all 13 forms, full-width fields,
+annulled invalid-word slots and retained checks for discarded results.
 
 ```sh
 python3 scripts/build.py build-mips --target NeverDMIPSTests NeverDMIPSIntegerTests NeverDMIPSFlowTests NeverDMIPSSDKTests NeverDMIPSPipelineTests neverd --parallel 4
@@ -114,6 +268,21 @@ original-image storage; either source route explicitly binds omitted original
 callees. See the
 [testing guide](testing.md#mips-elf-analysis-and-source-roundtrips) for setup.
 A registered test is not a claim that it has passed on every host.
+
+Use `roundtrip.py --encoding micro` for the five microMIPS assembly leaves in
+both byte orders and both C backends. The runner selects M14Kc, follows each ELF
+symbol's mode bit and recompiles each result for its original target. The
+BEQZ16 fixture specifies literal displacement bytes: the local-label spelling
+in the tested Clang 22 assembler emitted a zero displacement. Both branch
+outcomes are checked by original-target execution. Memory tests also compare
+literal 16/32-bit encodings with independent byte expectations and Unicorn,
+including sign extension, aliases, exact stores and failed/discarded loads.
+
+`neverd-mips-bench micromips|micromipsel capstone|decode|lift CODE REPEATS`
+uses matching microMIPS options for physical Capstone/Decoder comparisons.
+Decode plus lift is a separate workload. The paired regression runner continues
+to compare identical classic inputs and TP-Link requests against the retained
+baseline; support for new encodings is not a same-output speedup claim.
 
 The merge-load/MUL qualification used macOS arm64 Release, integrated with
 dev `e320fec5b`: 1,294 focused/shared CTest cases passed, including 169 MIPS
@@ -171,11 +340,47 @@ Integrations with dev `aac568578` and then `4c57243f`, using Capstone
 `8b81f225`, each passed all 221 MIPS cases and repeated all 240 source groups
 with identical generated source hashes. The final build also regenerated all
 selected firmware views with unchanged source hashes and verified call LLVM.
-Its current source receipt is
+Its original source receipt was
 `build-mips/roundtrip-source-pairs-shared-dev/results.json`; the integration
 commands and binary hashes are in
 `build-mips/source-merge-pairs/shared-dev-integration.json`. Earlier detailed
-reports are retained in verified local archives.
+reports, including that source receipt, are retained in verified local archives.
+
+The SPECIAL3/word-contract follow-up, integrated with dev `97f5f3797` and
+Capstone `6787c2f3`, passed all 248 MIPS cases, including exhaustive raw field
+admission and both endian forms of the MIPS64 word checks. All 344 source
+groups passed 4,600 normal inputs, 96 expected read faults and 24 explicit
+strict-word refusals. Source hashes and selected firmware C/LLVM hashes were
+unchanged by the dev integration; the `ubus` call LLVM module verified again.
+The current receipts are `build-mips/roundtrip-bitfields-dev/results.json` and
+`build-mips/bitfield-coverage/qualification.json`. Successful temporary
+objects/executables were removed; current source, hashes and compact receipts
+remain. This qualification used macOS arm64 Release, not Linux/Windows hosts
+or the still-unsupported profiles/extensions listed above.
+
+The microMIPS follow-up passed all 294 MIPS tests. The broader shared-boundary,
+pointer projection and metadata run selected 1,298 cases: 1,252 passed and 46
+existing fixture/toolchain-dependent cases were skipped, with no failures.
+All 344 classic source groups and 20 microMIPS source groups passed on macOS
+arm64 Release. The micro groups cover 44 inputs across both byte orders and
+both C backends. Import-memory regressions cover ordinary, partial, merge and
+dynamically indexed reads; adjacent ordinary data and external parameter
+storage remain admitted. Compact receipts are in
+`build-mips/compressed-ase/checkpoint.json`; the roundtrip producers remove
+their generated sources, objects and ELFs after their readers finish.
+
+The initial DSP32 addition passed all 313 MIPS tests. Its shared regression
+selected 1,317 tests: 1,271 passed and the same 46 fixture/toolchain-dependent
+cases were skipped. All 344 classic and 20 micro source groups still passed.
+The nine DSP leaves passed 72 source groups at `-O0`/`-O2` and 1,080 scalar and
+post-return DSPControl observations. Receipts distinguish 24 original-model
+zero-destination flag disagreements from generated-code results, which all
+matched independent expectations. Standalone RA writes, module/shard target
+attributes and generated helper scope have dedicated regressions. Compiler
+probes separately execute guarded wide arithmetic and non-inlined helpers.
+Raw results and managed cleanup receipts remain under
+`build-mips/compressed-ase/` and `build-mips/roundtrip-dsp-final/`; this does not
+qualify the DSP/MSA families listed as unsupported above.
 
 ## TP-Link firmware workflow
 

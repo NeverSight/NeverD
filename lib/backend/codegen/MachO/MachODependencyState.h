@@ -14,9 +14,35 @@
 #include "llvm/Support/Error.h"
 
 #include <array>
+#include <cstdint>
 #include <map>
+#include <string>
 #include <vector>
 namespace neverd {
+struct MachOChainedImport {
+  int64_t Ordinal = 0, Addend = 0;
+  unsigned Flags = 0;
+  std::string Name;
+};
+struct MachOChainedSlot {
+  uint64_t Offset = 0, Raw = 0;
+};
+struct MachOChainedSegment {
+  uint64_t VMAddr = 0, VMSize = 0, FileOff = 0, FileSize = 0;
+  uint32_t CommandOffset = 0, Protections = 0;
+  uint16_t PointerFormat = 0, PageSize = 0;
+  std::vector<MachOChainedSlot> Slots;
+};
+/// Owned facts from the strict reader, captured only for an installing caller.
+struct MachOChainedFixups {
+  uint64_t HeaderVA = 0;
+  uint32_t CommandOffset = 0;
+  bool Threaded = false;
+  unsigned LinkeditIndex = 0;
+  std::vector<MachOChainedSegment> Segments;
+  std::vector<MachOChainedImport> Imports;
+  std::vector<std::string> Libraries;
+};
 struct MachODependencyState {
   uint32_t CPUType = 0, CPUSubtype = 0;
   std::array<uint8_t, 32> Digest;
@@ -28,7 +54,8 @@ struct MachODependencyState {
 // byte. Its result is evidence for editing loader metadata, not best effort
 // data.
 llvm::Expected<MachODependencyState>
-readMachODependencyState(llvm::ArrayRef<uint8_t> Bytes);
+readMachODependencyState(llvm::ArrayRef<uint8_t> Bytes,
+                         MachOChainedFixups *Chained = nullptr);
 llvm::Error preserveMachODependencyState(const MachODependencyState &Before,
                                          const MachODependencyState &After);
 } // namespace neverd

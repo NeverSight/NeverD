@@ -105,6 +105,8 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
     if (!Profile)
       return Profile.takeError();
     Img.MIPS = *Profile;
+    if (Profile->HasMicroMIPS)
+      Img.Mode = InstructionMode::MixedMIPS;
   } else if constexpr (ELFT::Endianness == llvm::endianness::big) {
     return llvm::make_error<llvm::StringError>(
         "elf: big-endian is only supported for admitted MIPS profiles",
@@ -113,6 +115,8 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
 
   Img.Bits = ELFT::Is64Bits ? Bitness::Bits64 : Bitness::Bits32;
   Img.Entry = EH.e_entry;
+  if (isMIPS(Img.Arch))
+    Img.Entry = normalizeCodeAddress(Img.Entry, Img.Arch, Img.Mode);
   if (Img.Arch == Arch::ARM) {
     Img.Entry = clearThumbBit(Img.Entry);
     Img.ARMModeRequiresLocalEvidence = true;

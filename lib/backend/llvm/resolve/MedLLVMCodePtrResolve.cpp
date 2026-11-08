@@ -17,6 +17,8 @@
 #include "neverd/backend/DataSymbolMetadata.h"
 #include "neverd/backend/LLVMOriginalImageStorage.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/MIPS/MIPSDSPSource.h"
+#include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/llvm/LLVMName.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/debug/DebugContext.h"
@@ -25,6 +27,7 @@
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/MedCallLeftovers.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/ELF/MIPSCodeMode.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/Diagnostic.h"
@@ -266,6 +269,13 @@ MedLLVMEmitter::materializeImageFunctionDeclaration(va_t Entry,
   auto *Function = llvm::Function::Create(
       FT, llvm::GlobalValue::ExternalLinkage, Emitted, Mod);
   Function->addFnAttr(llvm::Attribute::NullPointerIsValid);
+  if (mips::imagePreservesDSPControl(Img))
+    mips::applyDSPSourceAttributes(*Function);
+  if (Img)
+    if (const auto Mode = Img->instructionModeAt(Entry))
+      if (const char *Attribute = mips::instructionModeLLVMAttribute(*Mode);
+          *Attribute)
+        Function->addFnAttr(Attribute);
   return Function;
 }
 
@@ -808,7 +818,14 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
     PtrSlotKind Kind = Slot.Kind;
     std::string ImportName = Slot.ImportName;
     if (Kind == PtrSlotKind::Code) {
-      TargetVA = normalizeCodeAddress(TargetVA, Img->Arch, Img->Mode);
+      const auto Target = mips::serializedCodeTarget(*Img, TargetVA);
+      if (!Target) {
+        syncError() << "med_llvm_emitter: MIPS code pointer tag conflicts with "
+                       "its destination mode\n";
+        FatalCodePointerResolution = true;
+        return nullptr;
+      }
+      TargetVA = *Target;
       // PE base relocations also cover loader-authenticated IAT veneers.  The
       // veneer is deliberately absent from MedIR, so giving it an accidental
       // containing-block identity makes success depend on linker layout.
@@ -918,6 +935,7 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
       // same exact symbol/addend identity as an immutable direct GOT load.
       FieldVal = resolveDataSymbolAddress(Binding->second);
     } else if (K.Kind == PtrSlotKind::Code) {
+      mips::requireNumericCodePointerSource(Img, K.TargetVA);
       llvm::Constant *Target = resolveImageFunctionAddress(K.TargetVA);
       if (!Target) {
         FatalCodePointerResolution = true;
@@ -976,6 +994,9 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
 
 llvm::GlobalValue *
 MedLLVMEmitter::importedSymbolIdentity(llvm::StringRef ImportName) {
+  // Both consumers materialize a numeric import address (including mirrored
+  // initializers). A dynamic import name supplies no destination encoding.
+  mips::requireNumericCodePointerSource(Img, InvalidVA);
   const std::string Name =
       llvm_name::fromObjectSymbol(ImportName, TargetFormat).str();
   bool CollidesWithLiftedSymbol = false;
@@ -3092,6 +3113,8 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
       return {.SawNonCode = true, .SawExplicit = true};
     const va_t Normalized =
         normalizeCodeAddress(Current.ConstVal, Img->Arch, Img->Mode);
+    if (!mips::serializedCodeTarget(*Img, Current.ConstVal))
+      return {.SawUnresolved = true, .SawExplicit = true};
     if (Current.Provenance == ConstantAddressProvenance::Address &&
         currentJumpTableOwnsStorageAddress(Normalized))
       return {.SawNonCode = true, .SawExplicit = true};
@@ -3178,7 +3201,10 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
         traceTableBaseConst(Root, 0, &SawLiteralLoad, nullptr, &SawArithmetic);
     if (!Folded || !SawArithmetic)
       return std::nullopt;
-    const va_t Target = normalizeCodeAddress(*Folded, Img->Arch, Img->Mode);
+    const auto Qualified = mips::serializedCodeTarget(*Img, *Folded);
+    if (!Qualified)
+      return std::nullopt;
+    const va_t Target = *Qualified;
     if (!resolveLiftedFunctionEntry(Target))
       return std::nullopt;
 
@@ -3474,11 +3500,13 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
       // keeping the stricter function-only policy above for indirect calls.
       Identity = resolveImageFunctionAddress(*Proof.CommonTarget);
     }
-    if (Identity)
+    if (Identity) {
+      mips::requireNumericCodePointerSource(Img, *Proof.CommonTarget);
       return Builder.CreatePtrToInt(
           Identity,
           sizeToType(V.Size > 0 ? V.Size : static_cast<uint16_t>(PointerSize)),
           RequireCodeRole ? "icall.target" : "code.value");
+    }
     // A string literal among the code is data a symbol names.
     if (!RequireCodeRole)
       if (llvm::Constant *Literal =
@@ -3793,8 +3821,16 @@ MedLLVMEmitter::tryResolveIndirectCallTarget(const MedVar &V,
     }
     bool SawLoad = false;
     if (auto VA = traceTableBaseConst(V, 0, &SawLoad); VA && SawLoad) {
-      const va_t Normalized = normalizeCodeAddress(*VA, Img->Arch, Img->Mode);
+      const auto Qualified = mips::serializedCodeTarget(*Img, *VA);
+      if (!Qualified) {
+        syncError() << "med_llvm_emitter: MIPS indirect callable has an "
+                       "invalid mode tag\n";
+        FatalCodePointerResolution = true;
+        return nullptr;
+      }
+      const va_t Normalized = *Qualified;
       if (llvm::Function *Function = resolveLiftedFunctionEntry(Normalized)) {
+        mips::requireNumericCodePointerSource(Img, Normalized);
         const unsigned PtrSize =
             Img->getPointerSize()
                 ? Img->getPointerSize()

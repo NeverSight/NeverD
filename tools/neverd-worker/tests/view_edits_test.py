@@ -9,6 +9,7 @@ with no view between them must each count: the first's forgetting is not lost to
 """
 from contextlib import ExitStack
 from pathlib import Path
+import json
 import sys
 import tempfile
 
@@ -46,6 +47,47 @@ def filled(clients, executable, path, data, visits=()):
     kept = ok(owner, "kept_renders")
     assert kept["complete"], kept
     return owner
+
+
+def apply_delta(page, delta):
+    """A kept page with what changed applied, as a client applies page_delta."""
+    page = json.loads(json.dumps(page))
+    for operation in delta["delta"]:
+        kind, field = operation[0], operation[1]
+        if kind == "set":
+            page[field] = operation[2]
+        elif kind == "unset":
+            del page[field]
+        elif kind == "lines":
+            lines = page[field].split("\n")
+            assert len(lines) == operation[2], (len(lines), operation)
+            for line, text in operation[3]:
+                lines[line] = text
+            page[field] = "\n".join(lines)
+        else:
+            assert kind == "items", operation
+            old, items, used = page[field], [], 0
+            for run in operation[2]:
+                if run[0] in ("same", "shift"):
+                    for item in old[used:used + run[1]]:
+                        item = dict(item) if run[0] == "shift" else item
+                        for key, amount in (run[2].items() if run[0] == "shift" else ()):
+                            item[key] += amount
+                        items.append(item)
+                    used += run[1]
+                elif run[0] == "skip":
+                    used += run[1]
+                elif run[0] == "put":
+                    items.extend(run[1])
+                    used += len(run[1])
+                else:
+                    assert run[0] == "new", run
+                    items.extend(run[1])
+            assert used == len(old), (used, len(old))
+            page[field] = items
+    for key in ("etag", "project_id", "revision"):
+        page[key] = delta[key]
+    return page
 
 
 def replica_view(client, address):
@@ -92,11 +134,14 @@ def run(executable):
         named = same_as_fresh("function name")
         for address in functions:
             assert "renamed_function" in named[address]["text"], named[address]["text"]
-        # A comment shows at its address.
+        # A comment shows at its address, written into a copy of the document
+        # that read it rather than decorated again.
+        patches = ok(owner, "metadata")["named_view_comment_patches"]
         ok(owner, "annotation_set", {"address": hex(functions[2]), "text": "a note here"})
         ok(owner, "save")
         noted = same_as_fresh("comment")
         assert "a note here" in noted[functions[2]]["text"], noted[functions[2]]
+        assert ok(owner, "metadata")["named_view_comment_patches"] > patches
         assert noted[functions[1]] == named[functions[1]]
         # And on a line inside a function.
         inner = next(at for row in noted[functions[1]]["rows"] for at in row["addresses"]
@@ -139,6 +184,22 @@ def run(executable):
                                           "if_none_match": kept_page["etag"]})
         assert not changed.get("unchanged") and "on the kept page" in changed["text"], changed
         assert changed["etag"] != kept_page["etag"]
+        # A client that applies what changed to the page it keeps reads that:
+        # applied, it is the page a read naming none gets.
+        ok(owner, "annotation_set", {"address": hex(functions[0]), "text": "on the kept page again"})
+        ok(owner, "save")
+        delta = ok(owner, "decompile", {"address": hex(functions[0]), "representation": "source",
+                                        "offset": 0, "limit": 200, "kept_only": True,
+                                        "if_none_match": changed["etag"], "page_delta": True})
+        assert "delta" in delta and delta["base"] == changed["etag"], delta
+        assert len(json.dumps(delta)) < len(json.dumps(changed)) / 2, delta
+        whole = ok(owner, "decompile", {"address": hex(functions[0]), "representation": "source",
+                                        "offset": 0, "limit": 200, "kept_only": True,
+                                        "if_none_match": ""})
+        assert apply_delta(changed, delta) == whole
+        assert "on the kept page again" in whole["text"], whole
+        ok(owner, "undo")
+        ok(owner, "save")
         ok(owner, "undo")
         ok(owner, "save")
         ok(owner, "undo")
@@ -181,8 +242,15 @@ def run(executable):
         ok(owner, "functions", {"offset": 0, "limit": 10})
         same_as_fresh("names read")
         reads = store_reads(owner)
+        renames = ok(owner, "metadata")["named_view_name_patches"]
         ok(owner, "rename", {"address": hex(functions[2]), "name": "after_many"})
         assert isinstance(view(owner, functions[0]), dict)
+        assert store_reads(owner) == reads, (store_reads(owner), reads)
+        # The view that reads the name has it written into a copy of its
+        # document, and reads as a new reader's does.
+        in_place = same_as_fresh("a name in place")
+        assert "after_many" in in_place[functions[2]]["text"], in_place[functions[2]]
+        assert ok(owner, "metadata")["named_view_name_patches"] > renames
         assert store_reads(owner) == reads, (store_reads(owner), reads)
         for count in range(140):
             ok(owner, "annotation_set", {"address": hex(functions[3]), "text": f"note {count}"})

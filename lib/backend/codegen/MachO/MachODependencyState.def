@@ -17,6 +17,7 @@
 MACHO_DEPENDENCY_VALUE(unsigned, kOrdinaryChainStride, 4)
 MACHO_DEPENDENCY_VALUE(unsigned, kRebasePhase, 0)
 MACHO_DEPENDENCY_VALUE(unsigned, kBindPhase, 1)
+MACHO_DEPENDENCY_TEXT(kLinkeditSegment, "__LINKEDIT")
 MACHO_DEPENDENCY_TEXT(kInvalidArm64eWord, "invalid arm64e pointer word")
 MACHO_DEPENDENCY_TEXT(kInvalidArm64eImport, "invalid arm64e import ordinal")
 MACHO_DEPENDENCY_TEXT(kArm64eAddendOverflow, "arm64e bind addend overflows")
@@ -29,6 +30,16 @@ MACHO_DEPENDENCY_TEXT(kInvalidChainOverflow,
                       "invalid or unowned chained overflow starts")
 MACHO_DEPENDENCY_TEXT(kOverlappingChainSlots,
                       "duplicate or overlapping chained pointer storage")
+
+MACHO_DEPENDENCY_TEXT(
+    kThreadedContract,
+    "threaded arm64e requires an exclusive ordinary bind stream")
+MACHO_DEPENDENCY_TEXT(kThreadedProgram,
+                      "invalid threaded ordinal table or program")
+MACHO_DEPENDENCY_TEXT(kThreadedStorage,
+                      "invalid threaded root or chain storage")
+MACHO_DEPENDENCY_TEXT(kThreadedCopies,
+                      "threaded bind names exceed copied-byte budget")
 
 #undef MACHO_DEPENDENCY_VALUE
 #undef MACHO_DEPENDENCY_TEXT

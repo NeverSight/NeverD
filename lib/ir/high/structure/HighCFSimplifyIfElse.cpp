@@ -1791,9 +1791,12 @@ static bool condReadsMemory(const HighExpr *E,
 
 /// Whether \p S itself may write memory.  Any call or store may, wherever it
 /// points: a callee can write through any pointer it reaches, and a store
-/// through one pointer can alias a load through another.
+/// through one pointer can alias a load through another.  An assignment to
+/// anything but a variable stores through its destination.
 static bool stmtMayWriteMemory(const HighStmt &S) {
-  if (S.Kind == StmtKind::Store || S.Kind == StmtKind::Call)
+  if (S.Kind == StmtKind::Store || S.Kind == StmtKind::Call ||
+      (S.Kind == StmtKind::Assign && S.Dst && S.Dst->Kind != ExprKind::Var &&
+       S.Dst->Kind != ExprKind::Phi))
     return true;
   bool Writes = false;
   forEachExpr(
@@ -1842,6 +1845,61 @@ static void filterLiveConds(std::vector<const HighExpr *> &Live,
   walkStmts(S.DefaultBody, Kill);
   for (const auto &Clause : S.EHClauseBodies)
     walkStmts(Clause, Kill);
+}
+
+/// Whether \p S or a statement nested in it may write memory.
+static bool stmtTreeMayWriteMemory(const HighStmt &S) {
+  bool Writes = false;
+  walkStatementTree(
+      S, [&](const HighStmt &N) { Writes = Writes || stmtMayWriteMemory(N); });
+  return Writes;
+}
+
+namespace {
+/// Whether Body(I, End) may write memory, asked for falling I while walking
+/// back from End. Each statement is scanned at most once, and only when a
+/// question reaches it.
+class LaterWrites {
+  const std::vector<HighStmt> &Body;
+  size_t Unscanned;
+  bool Writes = false;
+
+public:
+  LaterWrites(const std::vector<HighStmt> &Body, size_t End)
+      : Body(Body), Unscanned(End) {}
+
+  bool after(size_t I) {
+    for (; !Writes && Unscanned > I + 1; --Unscanned)
+      Writes = stmtTreeMayWriteMemory(Body[Unscanned - 1]);
+    return Writes;
+  }
+};
+} // namespace
+
+/// Whether \p E loads from memory. Two loads of one address read one value
+/// only while no write runs between them.
+static bool exprHasLoad(const HighExpr *E) {
+  if (!E)
+    return false;
+  if (E->Kind == ExprKind::Load)
+    return true;
+  bool Loads = false;
+  E->forEachChildExpr(
+      [&](const ExprPtr &Child) { Loads = Loads || exprHasLoad(Child.get()); });
+  return Loads;
+}
+
+/// Whether the outer test \p Cond, made before Body[0] runs, still holds when
+/// Body[End] runs: nothing before it writes memory the test reads, as a store
+/// to the slot it loaded does, or redefines a value it uses.
+static bool condHoldsThrough(const ExprPtr &Cond,
+                             const std::vector<HighStmt> &Body, size_t End) {
+  if (!Cond)
+    return false;
+  std::vector<const HighExpr *> Live{Cond.get()};
+  for (size_t K = 0; K < End && K < Body.size() && !Live.empty(); ++K)
+    filterLiveConds(Live, Body[K], nullptr);
+  return !Live.empty();
 }
 
 /// How many gotos of the function jump to each address.
@@ -2570,38 +2628,37 @@ static void hoistIdenticalIfElseSuffixesNested(std::vector<HighStmt> &Body,
   hoistIdenticalIfElseSuffixes(Body, Targets);
 }
 
+/// Substitutes the values Body[Begin, End) assigns into \p Cond, nearest
+/// definition first. A load reads memory where it is assigned; carried past a
+/// later write into the test, it would read what that write left, so its
+/// variable stays in the test.
 static ExprPtr composeTrailingAssigns(const std::vector<HighStmt> &Body,
                                       size_t Begin, size_t End, ExprPtr Cond) {
   if (!Cond || Begin > End)
     return Cond;
+  LaterWrites Writes(Body, End);
+  std::vector<MedVar> Pinned;
   for (size_t N = End; N > Begin; --N) {
     const HighStmt &S = Body[N - 1];
     if (!prefixOkForChain(S))
       break;
     MedVar Dest;
     ExprPtr Val;
-    if (!isValueAssign(S, Dest, Val) || !exprUsesVar(Cond.get(), Dest))
+    if (!isValueAssign(S, Dest, Val) || !exprUsesVar(Cond.get(), Dest) ||
+        llvm::any_of(Pinned,
+                     [&](const MedVar &V) { return sameMedVar(V, Dest); }))
       continue;
-    Cond = replaceVarInExpr(Cond, Dest, Val);
+    if (exprHasLoad(Val.get()) && Writes.after(N - 1))
+      Pinned.push_back(Dest);
+    else
+      Cond = replaceVarInExpr(Cond, Dest, Val);
   }
   return Cond;
 }
 
 static ExprPtr outerCondFromSiblings(const std::vector<HighStmt> &Body,
                                      size_t OuterI, ExprPtr Cond) {
-  if (!Cond)
-    return Cond;
-  for (size_t K = OuterI; K > 0; --K) {
-    const HighStmt &S = Body[K - 1];
-    if (!prefixOkForChain(S))
-      break;
-    MedVar Dest;
-    ExprPtr Val;
-    if (!isValueAssign(S, Dest, Val) || !exprUsesVar(Cond.get(), Dest))
-      continue;
-    Cond = replaceVarInExpr(Cond, Dest, Val);
-  }
-  return Cond;
+  return composeTrailingAssigns(Body, 0, OuterI, std::move(Cond));
 }
 
 static bool prefixesAllowSameTempId(const std::vector<HighStmt> &Body,
@@ -2837,11 +2894,16 @@ static bool destHasRealUse(const std::vector<HighStmt> &Body, size_t Skip,
   return true;
 }
 
+/// Whether dropUnusedTrailingAssigns may act in \p Med. The local cleanup
+/// recognizes Win64 predicate copies. Other ABIs need a function-wide
+/// reaching-use proof before a nested assignment can be dropped.
+static bool dropsPredicateCopies(const MedFunc *Med) {
+  return !Med || Med->CC == CallingConv::Win64;
+}
+
 static bool dropUnusedTrailingAssigns(std::vector<HighStmt> &Body, size_t End,
                                       const ExprPtr &Pred, const MedFunc *Med) {
-  // This local cleanup recognizes Win64 predicate copies. Other ABIs need a
-  // function-wide reaching-use proof before a nested assignment can be dropped.
-  if (Med && Med->CC != CallingConv::Win64)
+  if (!dropsPredicateCopies(Med))
     return false;
   bool Changed = false;
   std::optional<bool> ExternalExit;
@@ -2900,9 +2962,9 @@ static bool dropUnusedTrailingAssigns(std::vector<HighStmt> &Body, size_t End,
   return Changed;
 }
 
+/// \p Outer is the test of \p Stmt composed from the assignments before it.
 static std::optional<ExprPtr>
-peelInnerAgainstOuter(const HighStmt &Stmt, size_t OuterI,
-                      const std::vector<HighStmt> &Parent, size_t J) {
+peelInnerAgainstOuter(const HighStmt &Stmt, const ExprPtr &Outer, size_t J) {
   if (J >= Stmt.Body.size())
     return std::nullopt;
   const HighStmt &Inner = Stmt.Body[J];
@@ -2910,11 +2972,16 @@ peelInnerAgainstOuter(const HighStmt &Stmt, size_t OuterI,
       !Inner.Cond)
     return std::nullopt;
   const bool SameTempId = prefixesAllowSameTempId(Stmt.Body, 0, J);
-  if (auto Rest = dropAndPrefix(Stmt.Cond, Inner.Cond, SameTempId))
+  // The outer test proves the inner one only while the statements between
+  // leave what it reads alone: a store to the slot it loaded does not.
+  if (auto Rest = dropAndPrefix(Stmt.Cond, Inner.Cond, SameTempId);
+      Rest && condHoldsThrough(Stmt.Cond, Stmt.Body, J))
     return Rest;
-  return dropAndPrefix(outerCondFromSiblings(Parent, OuterI, Stmt.Cond),
-                       composeTrailingAssigns(Stmt.Body, 0, J, Inner.Cond),
-                       SameTempId);
+  auto Rest = dropAndPrefix(
+      Outer, composeTrailingAssigns(Stmt.Body, 0, J, Inner.Cond), SameTempId);
+  if (Rest && !condHoldsThrough(Outer, Stmt.Body, J))
+    return std::nullopt;
+  return Rest;
 }
 
 /// \p Substituted, when given, marks each Body[I] whose value now stands in
@@ -2930,12 +2997,17 @@ composePrefixesIntoCond(const std::vector<HighStmt> &Body, size_t Begin,
       return std::nullopt;
   if (Substituted)
     Substituted->assign(Body.size(), false);
+  LaterWrites Writes(Body, End);
   for (size_t N = End; N > Begin; --N) {
     const size_t I = N - 1;
     MedVar Dest;
     ExprPtr Val;
     if (!isValueAssign(Body[I], Dest, Val) || !exprUsesVar(Cond.get(), Dest))
       continue;
+    // A load carried past a later write into the test would read what that
+    // write left.
+    if (exprHasLoad(Val.get()) && Writes.after(I))
+      return std::nullopt;
     Cond = replaceVarInExpr(Cond, Dest, Val);
     if (Substituted)
       (*Substituted)[I] = true;
@@ -5559,6 +5631,10 @@ static bool structureIfElseList(std::vector<HighStmt> &Body, int MaxPasses,
           };
           std::optional<std::vector<bool>> DropsB;
           auto Rest = dropAndPrefix(OuterForPeel, Inner.Cond, SameTempId);
+          // The outer test proves the inner one only while the prefix leaves
+          // what it reads alone: a store to the slot it loaded does not.
+          if (Rest && !condHoldsThrough(OuterForPeel, Stmt.Body, InnerI))
+            Rest.reset();
           // A remainder the uncomposed test already leaves keeps reading the
           // prefix, so every prefix call still runs where it did. Otherwise
           // the dropped test held the outer test's own call: its prefix copy
@@ -5653,14 +5729,15 @@ static bool structureIfElseList(std::vector<HighStmt> &Body, int MaxPasses,
                 dropUnusedTrailingAssigns(Stmt.Body, InnerI, PredForDce, Med);
           }
         } else {
-          ExprPtr PredForDce =
+          // The outer test composed once: peeling each inner test and the
+          // predicate-copy cleanup read the same assignments before it.
+          const ExprPtr Outer =
               outerCondFromSiblings(Body, static_cast<size_t>(I), Stmt.Cond);
           for (size_t J = 0; J < Stmt.Body.size();) {
-            auto Rest =
-                peelInnerAgainstOuter(Stmt, static_cast<size_t>(I), Body, J);
+            auto Rest = peelInnerAgainstOuter(Stmt, Outer, J);
             if (!Rest) {
               NestedChanged |=
-                  dropUnusedTrailingAssigns(Stmt.Body, J, PredForDce, Med);
+                  dropUnusedTrailingAssigns(Stmt.Body, J, Outer, Med);
               ++J;
               continue;
             }
@@ -5680,13 +5757,13 @@ static bool structureIfElseList(std::vector<HighStmt> &Body, int MaxPasses,
                 }
               }
               NestedChanged |=
-                  dropUnusedTrailingAssigns(Stmt.Body, DropAt, PredForDce, Med);
+                  dropUnusedTrailingAssigns(Stmt.Body, DropAt, Outer, Med);
             } else if (isConstTrue(*Rest)) {
               ++J;
             } else {
               Stmt.Body[J].Cond = std::move(*Rest);
               NestedChanged |=
-                  dropUnusedTrailingAssigns(Stmt.Body, J, PredForDce, Med);
+                  dropUnusedTrailingAssigns(Stmt.Body, J, Outer, Med);
               ++J;
             }
             Changed = true;
@@ -5695,7 +5772,7 @@ static bool structureIfElseList(std::vector<HighStmt> &Body, int MaxPasses,
             if (Stmt.Body[J].Kind == StmtKind::If ||
                 Stmt.Body[J].Kind == StmtKind::IfElse)
               NestedChanged |=
-                  dropUnusedTrailingAssigns(Stmt.Body, J, PredForDce, Med);
+                  dropUnusedTrailingAssigns(Stmt.Body, J, Outer, Med);
           }
         }
       }
@@ -6236,14 +6313,19 @@ static bool structureIfElseList(std::vector<HighStmt> &Body, int MaxPasses,
              (IfElseFunctionTargets && IfElseFunctionTargets->count(Address));
     });
   }
-  for (size_t I = 0; I < Body.size(); ++I) {
+  for (size_t I = 0; dropsPredicateCopies(Med) && I < Body.size(); ++I) {
     HighStmt &S = Body[I];
     if ((S.Kind != StmtKind::If && S.Kind != StmtKind::IfElse) || !S.Cond)
       continue;
-    ExprPtr Pred = outerCondFromSiblings(Body, I, S.Cond);
+    // Composed only for a nested test that can use it.
+    ExprPtr Pred;
     for (size_t J = 0; J < S.Body.size(); ++J)
-      if (S.Body[J].Kind == StmtKind::If || S.Body[J].Kind == StmtKind::IfElse)
+      if (S.Body[J].Kind == StmtKind::If ||
+          S.Body[J].Kind == StmtKind::IfElse) {
+        if (!Pred)
+          Pred = outerCondFromSiblings(Body, I, S.Cond);
         NestedChanged |= dropUnusedTrailingAssigns(S.Body, J, Pred, Med);
+      }
   }
   // The bottom-up traversal already visited every child.  Visiting them
   // again doubles work at each nesting level, so it happens only when they

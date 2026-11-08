@@ -177,7 +177,7 @@ nativeOutputFrameEffects(const BinaryImage &Image,
       --Budget;
       if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
         continue;
-      const auto Site = nativeSourceCallKey(Op);
+      const auto Site = sourceCallOccurrenceKey(Op, Image.Arch);
       if (!Site || !Calls.count(*Site) || !Seen.insert(*Site).second)
         return std::nullopt;
     }
@@ -1420,7 +1420,7 @@ bool hasNativeSourceStateContract(
         return false;
       if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
         continue;
-      const auto Key = nativeSourceCallKey(Op);
+      const auto Key = sourceCallOccurrenceKey(Op, Image.Arch);
       if (!Key)
         return false;
       if (!Calls.count(*Key) || !NativeCalls.insert(*Key).second)

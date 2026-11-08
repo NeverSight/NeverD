@@ -6,6 +6,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/loader/BinaryImage.h"
@@ -1456,7 +1457,9 @@ TEST(HighCIntegerWidths, A32BitTargetSpellsA128BitIntegerAsBitInt) {
   Return.Kind = StmtKind::Return;
   Return.RetVal = Top;
   Func.Body = {std::move(Define), std::move(Return)};
-  for (const Arch Target : {Arch::ARM, Arch::X64}) {
+  for (const Arch Target :
+       {Arch::X86, Arch::ARM, Arch::MIPS32, Arch::MIPS32EL, Arch::X64,
+        Arch::AArch64, Arch::MIPS64, Arch::MIPS64EL}) {
     std::string Source;
     llvm::raw_string_ostream OS(Source);
     CEmitterOptions Options;
@@ -1465,9 +1468,12 @@ TEST(HighCIntegerWidths, A32BitTargetSpellsA128BitIntegerAsBitInt) {
     OS.flush();
     const bool Mapped =
         Source.find("#define __int128 _BitInt(128)") != std::string::npos;
-    EXPECT_EQ(Mapped, Target == Arch::ARM) << Source;
-    if (Target == Arch::ARM) {
-      const auto Errors = compileForTarget(Source, "armv7-linux-gnueabihf");
+    const bool Narrow = Target == Arch::X86 || Target == Arch::ARM ||
+                        Target == Arch::MIPS32 || Target == Arch::MIPS32EL;
+    EXPECT_EQ(Mapped, Narrow) << getArchName(Target) << Source;
+    if (Narrow) {
+      const auto Errors =
+          compileForTarget(Source, getTriple(Target, BinaryFormat::ELF));
       EXPECT_FALSE(Errors) << *Errors << Source;
     }
   }

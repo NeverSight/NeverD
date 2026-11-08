@@ -23,8 +23,11 @@
 #include "neverd/loader/MachO/DyldCacheLoad.h"
 #include "neverd/object/SectionNames.h"
 
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/CodeGen/CommandFlags.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
@@ -175,6 +178,44 @@ detectTargetFeatures(llvm::Module &Mod, Arch TheArch) {
   default:
     return {"", ""};
   }
+}
+
+#define CODEGEN_PAUTH_TEXT(Name, Text) static constexpr char Name[] = Text;
+#include "CodeGenPointerAuth.def"
+
+static bool supportsPointerAuthenticationGlobals(const llvm::Module &Module,
+                                                 bool RequireRecipes = false) {
+  for (const auto &Global : Module.globals())
+    if (Global.getSection() == kLegacyApplePAuthSection) {
+      llvm::WithColor::error() << kLegacyApplePAuthUnsupported;
+      return false;
+    }
+  if (!RequireRecipes)
+    return true;
+#if !__has_include("llvm/MC/MCPointerAuthInfo.h")
+  // The prebuilt compiler can emit native object authentication relocations,
+  // but its final-address callback cannot retain their signing schema. Detect
+  // nested constants as well as top-level pointer initializers before codegen.
+  llvm::SmallVector<const llvm::Constant *> Pending;
+  llvm::DenseSet<const llvm::Constant *> Seen;
+  for (const auto &Global : Module.globals())
+    if (Global.hasInitializer())
+      Pending.push_back(Global.getInitializer());
+  while (!Pending.empty()) {
+    const auto *Value = Pending.pop_back_val();
+    if (!Seen.insert(Value).second)
+      continue;
+    if (llvm::isa<llvm::ConstantPtrAuth>(Value)) {
+      llvm::WithColor::error() << kPAuthRecipeCallbackMissing;
+      return false;
+    }
+    for (const auto &Operand : Value->operands())
+      if (const auto *Nested = llvm::dyn_cast<llvm::Constant>(Operand))
+        if (!llvm::isa<llvm::GlobalValue>(Nested))
+          Pending.push_back(Nested);
+  }
+#endif
+  return true;
 }
 
 static bool supportsAArch64ReturnUnwind(const llvm::Module &Module,
@@ -361,7 +402,8 @@ CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
                                llvm::StringRef TargetTriple) {
   CodegenResult Result;
   ensureTargets();
-  if (!supportsX86NativeExtensions(Mod))
+  if (!supportsX86NativeExtensions(Mod) ||
+      !supportsPointerAuthenticationGlobals(Mod))
     return Result;
   if (Mod.getModuleFlag(macho_loader::cache_load::kAnalysisFlag)) {
     llvm::WithColor::error() << macho_loader::cache_load::kRebuildUnsupported;
@@ -594,7 +636,8 @@ llvm::mc_rewrite::RewriteResult Codegen::compileForRewrite(
     llvm::StringRef TargetTriple, RewriteInputKind InputKind) {
   llvm::mc_rewrite::RewriteResult Result;
   ensureTargets();
-  if (!supportsX86NativeExtensions(Mod)) {
+  if (!supportsX86NativeExtensions(Mod) ||
+      !supportsPointerAuthenticationGlobals(Mod, TargetArch == Arch::AArch64)) {
     Result.ImageValid = false;
     return Result;
   }

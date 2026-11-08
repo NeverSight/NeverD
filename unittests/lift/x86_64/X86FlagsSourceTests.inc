@@ -37,10 +37,10 @@ BinaryImage flagsFunction(Arch A, BinaryFormat Format, bool Word, bool Write) {
 
 void compileFlagsForms(llvm::StringRef Compiler = {}) {
   for (Arch A : {Arch::X86, Arch::X64}) {
-    if (A == Arch::X86 && !Compiler.empty())
-      continue; // NeverC does not expose an i386 frontend.
     for (auto Format :
-         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+      if (A == Arch::X86 && !Compiler.empty() && Format != BinaryFormat::ELF)
+        continue; // NeverC's i386 source platform is Linux.
       for (bool NoOpt : {false, true})
         for (bool Word : {false, true})
           for (bool Write : {false, true}) {
@@ -52,6 +52,7 @@ void compileFlagsForms(llvm::StringRef Compiler = {}) {
                                                   std::nullopt, false, false,
                                                   {}, {}, 0, true, Compiler));
           }
+    }
   }
 }
 } // namespace
@@ -252,10 +253,10 @@ TEST(X86FlagsSource, StockClangCompilesBothRoutesAndAllFormats) {
   RecordProperty("c_compilations", 192);
 }
 
-TEST(X86FlagsSource, NeverCCompilesBothNativeRoutesAndAllFormats) {
+TEST(X86FlagsSource, NeverCCompilesBothNativeRoutesAndSupportedFormats) {
   const char *Compiler = std::getenv("NEVERD_TEST_NEVERC");
   if (!Compiler || !llvm::sys::fs::exists(Compiler))
     GTEST_SKIP() << "set NEVERD_TEST_NEVERC to the qualified NeverC compiler";
   compileFlagsForms(Compiler);
-  RecordProperty("c_compilations", 96);
+  RecordProperty("c_compilations", 128);
 }

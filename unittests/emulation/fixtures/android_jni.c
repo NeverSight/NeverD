@@ -4447,6 +4447,7 @@ extern int open(const char *, int, ...);
 extern int close(int);
 extern int ioctl(int, unsigned long, void *);
 extern int *__errno(void);
+extern int __android_log_write(int, const char *, const char *);
 extern void *mmap(void *, U64, int, int, int, U64);
 extern int munmap(void *, U64);
 struct JBinderWR {
@@ -4612,9 +4613,9 @@ int jni_binder_transport(unsigned form, unsigned mode) {
     CHECK(!pthread_join(thread, &status) && !status);
     return C(vm, int, 5);
   }
-  for (unsigned turn = 0; turn != (mode <= 2 || mode == 11   ? 3
-                                   : mode == 3 || mode == 13 ? 2
-                                                             : 1);
+  for (unsigned turn = 0; turn != (mode <= 2 || mode == 11                ? 3
+                                   : mode == 3 || mode == 7 || mode == 13 ? 2
+                                                                          : 1);
        ++turn) {
     U8 result;
     if ((mode == 11 || mode == 13) && turn == 1) {
@@ -4646,7 +4647,7 @@ int jni_binder_transport(unsigned form, unsigned mode) {
       result = binder_transact(e, form, proxy, transact, data,
                                mode == 1 ? 0 : reply, mode == 6 ? 1 : 0);
     }
-    if (mode == 3 || mode == 4) {
+    if (mode == 3 || mode == 4 || mode == 7) {
       CHECK(!result && C(e, int, 228));
       Ref error = C(e, Ref, 15);
       C(e, void, 17);
@@ -4654,6 +4655,27 @@ int jni_binder_transport(unsigned form, unsigned mode) {
       Ref remote = C(e, Ref, 6, "android/os/RemoteException");
       CHECK(C(e, U8, 32, error, dead));
       CHECK(C(e, U8, 32, error, remote));
+      if (mode == 7) {
+        Ref get_message =
+            C(e, Ref, 33, dead, "getMessage", "()Ljava/lang/String;");
+        Ref message = parcel_result(e, 34, form, error, get_message);
+        const char *text = C(e, const char *, 169, message, (void *)0);
+        const char expected[] =
+            "Transaction failed on small parcel; remote process probably died";
+        CHECK(text);
+        for (unsigned i = 0; i != sizeof(expected); ++i)
+          CHECK(text[i] == expected[i]);
+        C(e, void, 170, message, text);
+        CHECK(parcel_result(e, 49, form, reply, position) == 4);
+        parcel_write(e, form, reply, seek, 1, 0);
+        CHECK(parcel_result(e, 49, form, reply, read) == 0x11223344);
+        if (!turn) {
+          *__errno() = 73;
+          CHECK(__android_log_write(6, "client", "caught Binder failure") ==
+                -11);
+          CHECK(*__errno() == 73);
+        }
+      }
       if (!turn && mode == 3)
         CHECK(!ioctl(server, 0x40046207UL, 0));
     } else {
@@ -5364,7 +5386,8 @@ static int jd_read(int fd, unsigned command, struct JBinderTX *tx) {
     CHECK(!result || *__errno() == 11);
     for (unsigned i = 0; i < wr.read_consumed / 4; ++i) {
       if (output[i] == command) {
-        jb_copy(tx, output + i + 1, 64);
+        if (tx)
+          jb_copy(tx, output + i + 1, 64);
         return 0;
       }
       CHECK(output[i] == 0x720c || output[i] == 0x7206 || output[i] == 0x720d);
@@ -5393,6 +5416,13 @@ static int jd_peer(int fd) {
     tx = (struct JBinderTX){
         handle, 0, turn == 3 ? 0x5f504e47 : 7, 16, 0, 0, 4, 0, (U64)&number, 0};
     CHECK(!jb_send(fd, 0x40406300, &tx, 64));
+    if (jd_mode == 2 && turn != 3) {
+      /* Exception serialization overwrote the reply's Binder tag. The driver
+       * fails this reply, retires the call and lets the Java pool resume. */
+      CHECK(!jd_read(fd, 0x7211, 0));
+      CHECK(!jd_failure && jd_calls == turn + 1);
+      continue;
+    }
     CHECK(!jd_read(fd, 0x80407203, &tx));
     CHECK(!jd_failure);
     if (turn == 3) {

@@ -41,11 +41,11 @@ x86VirtualizationNative(Intrinsic Id, Arch TargetArch,
   const auto C = x86VirtualizationContract(Id);
   X86VirtualizationNative Plan;
   Plan.Assembly = *Assembly;
-  Plan.Result = Id == Intrinsic::VmxPtrStore || Id == Intrinsic::VmxOff
-                    ? X86VirtualizationResult::None
-                    : C.Result;
+  Plan.Result =
+      Id == Intrinsic::VmxPtrStore ? X86VirtualizationResult::None : C.Result;
   std::string Name = Id == Intrinsic::VmxRead          ? "vmread.reg"
                      : Id == Intrinsic::VmxWriteMemory ? "vmwrite.mem"
+                     : Id == Intrinsic::VmxOff         ? "vmxoff.status"
                                                        : C.Mnemonic;
   Plan.AddressControls =
       C.MemoryArgument >= 0 && Space != NdMemoryAddressSpace::Default;
@@ -55,10 +55,6 @@ x86VirtualizationNative(Intrinsic Id, Arch TargetArch,
   }
   if (C.PhysicalAddress && TargetArch == Arch::X64 && PhysicalAddressBytes == 4)
     Name += ".addr32";
-  Plan.Builtin = "__builtin_ia32_" + Name;
-  for (char &Character : Plan.Builtin)
-    if (Character == '.')
-      Character = '_';
   const bool ModeSized =
       Plan.AddressControls || C.PhysicalAddress || Id == Intrinsic::VmxRead ||
       Id == Intrinsic::VmxReadMemory || Id == Intrinsic::VmxWrite ||
@@ -67,6 +63,13 @@ x86VirtualizationNative(Intrinsic Id, Arch TargetArch,
   if (ModeSized && TargetArch == Arch::X86)
     Name += "32";
   Plan.LLVMName = "llvm.x86." + Name;
+  // Physical-address SVM source APIs still require their own i386 ABI.
+  if (TargetArch == Arch::X64 || !C.PhysicalAddress) {
+    Plan.Builtin = "__builtin_ia32_" + Name;
+    for (char &Character : Plan.Builtin)
+      if (Character == '.')
+        Character = '_';
+  }
   return Plan;
 }
 

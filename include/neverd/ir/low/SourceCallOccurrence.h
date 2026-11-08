@@ -27,9 +27,14 @@ struct SourceCallOccurrenceKey {
   }
 };
 
-/// Direct calls require a full-width constant target. Indirect calls retain a
-/// static target only when the actual machine operand is constant.
+/// Identify a physical call with a 32-bit or 64-bit target operand. Indirect
+/// calls retain a static target only when the machine operand is constant.
+/// Architecture-specific proofs must use the overload below.
 std::optional<SourceCallOccurrenceKey>
 sourceCallOccurrenceKey(const LowOp &Operation);
+
+/// Additionally require the complete pointer width of the target architecture.
+std::optional<SourceCallOccurrenceKey>
+sourceCallOccurrenceKey(const LowOp &Operation, Arch Architecture);
 } // namespace neverd
 #endif

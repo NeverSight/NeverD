@@ -1,5 +1,6 @@
 #include "QueryService.h"
 
+#include "PageDelta.h"
 #include "ResourceLimits.h"
 #include "app/UnwindInfoWords.h"
 
@@ -222,6 +223,8 @@ struct QueryService::State {
   Sender sender;
   Limits limits;
   bool available = false, pumpScheduled = false, analysisComplete = false;
+  /// The worker sends what changed of a kept page (page_delta).
+  bool pageDeltas = false;
   quint64 epoch = 1, fence = 0, nextJob = 0;
   /// Advances when background analysis changes what reads list without a
   /// new revision; a read made before answers no read made after.
@@ -526,6 +529,9 @@ struct QueryService::State {
       job->keptEtag = kept ? kept->etag : QString();
       job->keptResponse = kept ? kept->response : QJsonObject();
       payload["if_none_match"] = job->keptEtag;
+      // One that keeps the document sends what changed of it instead.
+      if (pageDeltas && !job->keptEtag.isEmpty())
+        payload["page_delta"] = true;
     }
     dispatch(job,
              job->kind == Graph ? QString("cfg_summary") : job->spec.operation,
@@ -788,17 +794,37 @@ struct QueryService::State {
     if (job->kind == Read && status == "ok" &&
         job->spec.operation == QLatin1String("decompile")) {
       const auto payload = response.value("payload").toObject();
-      if (payload.value("unchanged").toBool()) {
-        if (job->keptEtag.isEmpty() ||
-            payload.value("etag").toString() != job->keptEtag) {
+      const bool delta = payload.contains("delta");
+      if (payload.value("unchanged").toBool() || delta) {
+        // The kept page, as of this reply, with what changed applied.
+        auto kept = job->keptResponse;
+        std::optional<QJsonObject> applied;
+        if (!job->keptEtag.isEmpty() &&
+            payload.value(delta ? "base" : "etag").toString() == job->keptEtag)
+          applied = delta ? page_delta::apply(kept.value("payload").toObject(),
+                                              payload.value("delta").toArray())
+                          : kept.value("payload").toObject();
+        if (!applied) {
+          // A reply the kept page does not take forgets that page, and the
+          // page is read whole, once.
+          keptPages.remove(keptPageKey(*job));
+          qCWarning(lcQueries).noquote()
+              << "kept page" << job->keptEtag << "does not take"
+              << (delta ? "the changes" : "the word") << "of" << job->wireId;
+          if (!job->keptEtag.isEmpty() && !job->cancelRequested) {
+            job->keptEtag.clear();
+            job->keptResponse = {};
+            auto whole = job->spec.payload;
+            whole["if_none_match"] = QString();
+            dispatch(job, job->spec.operation, whole);
+            return;
+          }
           finish(job, error("invalid_response",
                             "Worker named a page this client does not keep."));
           return;
         }
-        // The kept page, as of this reply.
-        auto kept = job->keptResponse;
-        auto keptPayload = kept.value("payload").toObject();
-        for (const char *field : {"project_id", "revision"})
+        auto keptPayload = std::move(*applied);
+        for (const char *field : {"project_id", "revision", "etag"})
           if (payload.contains(QLatin1String(field)))
             keptPayload[QLatin1String(field)] =
                 payload.value(QLatin1String(field));
@@ -813,6 +839,10 @@ struct QueryService::State {
             kept.remove(name);
         }
         response = kept;
+        if (delta)
+          keptPages.insert(keptPageKey(*job),
+                           new KeptPage{payload.value("etag").toString(),
+                                        cleanResponse(response)});
       } else if (payload.contains("etag")) {
         keptPages.insert(keptPageKey(*job),
                          new KeptPage{payload.value("etag").toString(),
@@ -895,6 +925,8 @@ void QueryService::resetSession() {
   if (guard)
     state_->notify();
 }
+void QueryService::setPageDeltas(bool deltas) { state_->pageDeltas = deltas; }
+
 void QueryService::setAvailable(bool available) {
   if (state_->available == available)
     return;

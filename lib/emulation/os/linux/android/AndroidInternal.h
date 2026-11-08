@@ -363,6 +363,16 @@ private:
   BionicResult logCall(const NativeCallEvent &Call);
   std::optional<uint32_t> eventLogWrite(llvm::ArrayRef<uint8_t> Payload);
   BionicResult eventLogCall(const NativeCallEvent &Call);
+  // Native pointers remain lazy across abort-message publication. Framework
+  // diagnostics and formatted messages already own their C-string bytes.
+  using LogString = std::variant<uint64_t, llvm::StringRef>;
+  llvm::Expected<std::string> logString(LogString Text);
+  llvm::Expected<bool> setAbortMessage(LogString Message);
+  BionicResult abortMessageCall(const NativeCallEvent &Call);
+  llvm::Expected<std::optional<uint32_t>>
+  textLogWrite(uint32_t ID, int32_t Priority, LogString Tag, LogString Message);
+  BionicResult textLogCall(const NativeCallEvent &Call);
+  BionicResult formatLogCall(const NativeCallEvent &Call);
   BionicResult unsupportedLog(llvm::StringRef Detail);
   struct InputStream {
     uint32_t FD;

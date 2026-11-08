@@ -4,6 +4,7 @@
 
 #include "LowInstructionSlice.h"
 
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/X86/X87Constant.h"
 #include "neverd/ir/X86/X87GuardedValue.h"
 #include "neverd/ir/X86/X87Value.h"
@@ -42,6 +43,14 @@ sourceCallOccurrenceKey(const LowOp &Operation) {
           : std::nullopt};
 }
 
+std::optional<SourceCallOccurrenceKey>
+sourceCallOccurrenceKey(const LowOp &Operation, Arch Architecture) {
+  if (Architecture == Arch::Unknown ||
+      Operation.Inputs[0].Size != getTargetRegInfo(Architecture).PointerSize)
+    return std::nullopt;
+  return sourceCallOccurrenceKey(Operation);
+}
+
 namespace {
 
 llvm::Error invalid(const llvm::Twine &Message) {
@@ -57,6 +66,8 @@ bool isKnownTargetMode(LowInstructionTargetMode Mode) {
   case LowInstructionTargetMode::ARM:
   case LowInstructionTargetMode::Thumb:
   case LowInstructionTargetMode::FromTargetBit0:
+  case LowInstructionTargetMode::MIPSClassic:
+  case LowInstructionTargetMode::MicroMIPS:
     return true;
   }
   return false;
@@ -456,6 +467,8 @@ llvm::Error validateControl(const LowBlock &Block,
     return invalid("instruction boundary has an unknown target mode");
   const bool IsARMMode = Boundary.Mode == InstructionMode::ARM ||
                          Boundary.Mode == InstructionMode::Thumb;
+  const bool IsMIPSMode = Boundary.Mode == InstructionMode::MIPSClassic ||
+                          Boundary.Mode == InstructionMode::MicroMIPS;
   switch (Boundary.TargetMode) {
   case LowInstructionTargetMode::Preserve:
     break;
@@ -466,9 +479,14 @@ llvm::Error validateControl(const LowBlock &Block,
           "fixed target mode requires a direct ARM control transfer");
     break;
   case LowInstructionTargetMode::FromTargetBit0:
-    if (!IsARMMode || (!IsIndirect && !IsReturn))
+    if ((!IsARMMode && !IsMIPSMode) || (!IsIndirect && !IsReturn))
       return invalid(
-          "target-bit mode exchange requires an ARM register transfer");
+          "target-bit mode exchange requires an ARM or MIPS register transfer");
+    break;
+  case LowInstructionTargetMode::MIPSClassic:
+  case LowInstructionTargetMode::MicroMIPS:
+    if (!IsMIPSMode || IsIndirect || (!IsBranch && !IsCall) || IsReturn)
+      return invalid("fixed MIPS target mode requires a direct MIPS transfer");
     break;
   }
 

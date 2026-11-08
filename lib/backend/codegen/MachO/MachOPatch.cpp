@@ -13,6 +13,7 @@
 
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
 
+#include "MachODependencyState.h"
 #include "MachOStrictLayout.h"
 #include "MachOSymbolResolution.h"
 
@@ -55,7 +56,8 @@ using namespace llvm::MachO;
 
 namespace {
 
-constexpr llvm::StringLiteral kPatchDataSegment = "__ND_DATA";
+#define MACHO_PATCH_TEXT(Name, Text) constexpr llvm::StringLiteral Name = Text;
+#include "MachOPatch.def"
 
 struct MachOSectionIdentity {
   std::string Name;
@@ -1241,23 +1243,50 @@ bool MachOPatcher::validateExecSegmentInstall(
          LinkeditFileEnd == Binary.size();
 }
 
-llvm::Error MachOPatcher::appendReplacementImage(std::vector<uint8_t> &Binary,
-                                                 const CompiledImage &Image) {
-  if (Image.InputKind != RewriteInputKind::ReplacementObject ||
-      !Image.Success || Image.Format != BinaryFormat::MachO ||
+llvm::Error MachOPatcher::appendReplacementImage(
+    std::vector<uint8_t> &Binary, const CompiledImage &Image,
+    llvm::ArrayRef<MachOAuthenticatedFixup> AuthenticatedFixups) {
+  if ((Image.InputKind != RewriteInputKind::ReplacementObject &&
+       Image.InputKind != RewriteInputKind::ReplacementIR) ||
+      !Image.Success || !Image.BaseVA || Image.Format != BinaryFormat::MachO ||
       Image.BaseVA != plannedExecSegmentVA(Binary, Image.TargetArch))
     return llvm::createStringError(llvm::errc::not_supported,
-                                   "native Mach-O placement identity changed");
+                                   kPlacementIdentity);
+  auto Recipes = collectMachOAuthenticatedFixups(Binary, Image);
+  if (!Recipes)
+    return Recipes.takeError();
+  Recipes->insert(Recipes->end(), AuthenticatedFixups.begin(),
+                  AuthenticatedFixups.end());
   auto Storage =
       validatePatchStorageLayout(Image, machoPageSize(Image.TargetArch));
   if (!Storage)
     return Storage.takeError();
-  ExecSegmentInstallReceipt Receipt;
-  if (appendExecSegmentImpl(Binary, Image.Bytes, kDefaultNdTextSegment,
-                            Image.TargetArch, &Receipt,
-                            Storage->WritableOffset) != Image.BaseVA)
-    return llvm::createStringError(llvm::errc::not_supported,
-                                   "native Mach-O segment installation failed");
+  const auto Install = [&](std::vector<uint8_t> &Candidate) -> llvm::Error {
+    ExecSegmentInstallReceipt Receipt;
+    if (appendExecSegmentImpl(Candidate, Image.Bytes, kDefaultNdTextSegment,
+                              Image.TargetArch, &Receipt,
+                              Storage->WritableOffset) != Image.BaseVA)
+      return llvm::createStringError(llvm::errc::not_supported,
+                                     kSegmentInstallation);
+    return installMachOAuthenticatedFixups(Candidate, *Recipes);
+  };
+  if (Recipes->empty())
+    return Install(Binary);
+  auto Before = readMachODependencyState(Binary);
+  if (!Before)
+    return Before.takeError();
+  auto Candidate = Binary;
+  if (auto Error = Install(Candidate))
+    return Error;
+  // Segment insertion itself can change ordinal-based rebase targets. The
+  // installer's internal comparison starts after insertion, so preserve the
+  // caller's original dependency identity across the complete transaction.
+  auto After = readMachODependencyState(Candidate);
+  if (!After)
+    return After.takeError();
+  if (auto Error = preserveMachODependencyState(*Before, *After))
+    return Error;
+  Binary.swap(Candidate);
   return llvm::Error::success();
 }
 

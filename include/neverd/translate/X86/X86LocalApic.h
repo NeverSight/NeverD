@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Local APIC priority, fixed-interrupt acknowledgment and ordinary EOI.
+/// Local APIC fixed arrivals, priority, acknowledgment and ordinary EOI.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_TRANSLATE_X86_X86LOCALAPIC_H
@@ -35,11 +35,22 @@ struct X86LocalApicEOI {
   bool Broadcast;
 };
 
-/// An owned bank for an enabled local APIC using ordinary fixed delivery/EOI.
+enum class X86LocalApicArrival : uint8_t {
+  RejectedVector,
+  IgnoredDeassertion,
+  Queued,
+  Coalesced,
+};
+
+/// An owned bank for an enabled modern APIC using ordinary fixed delivery/EOI
+/// and one coalescing IRR bit per vector (not the older P6 rejection profile).
+/// Equal task/service classes retain TPR's low PPR bits, as in QEMU/KVM;
+/// that choice is model-specific, not a property of every modern processor.
 /// The embedding binds that profile, synchronizes original TPR/CR8 writes and
-/// serializes access. APIC mode changes, arrivals, NMI/ExtINT arbitration,
-/// software interrupts, spurious vectors, auto-EOI/SynIC, posted interrupts,
-/// timer/device state and CPU IF/shadows/wakeup remain outside this component.
+/// serializes access. Arrival timing/routing, APIC mode changes, NMI/ExtINT
+/// arbitration, software interrupts, spurious vectors, auto-EOI/SynIC, posted
+/// interrupts, timer/device state and CPU IF/shadows/wakeup remain outside this
+/// component.
 ///
 /// nextFixedInterrupt is a nonconsuming local candidate. The continuation
 /// scheduler owns IF/shadow admission and calls its producer's accepted only
@@ -71,11 +82,62 @@ public:
     return X86LocalApicFixed(Initial);
   }
 
+  /// Import alongside an explicit CPU CR8 bank. A mismatch rejects the import
+  /// rather than choosing one observation or treating import as a CR8 write.
+  static constexpr std::optional<X86LocalApicFixed>
+  fromState(X86LocalApicFixedState Initial, uint64_t CR8) {
+    auto APIC = fromState(Initial);
+    if (!APIC || APIC->readCr8() != CR8)
+      return std::nullopt;
+    return APIC;
+  }
+
   constexpr const X86LocalApicFixedState &state() const { return State; }
+
+  /// Receive a fixed message already routed to this enabled APIC. This is
+  /// local bank acceptance, not processor delivery or a device-line update.
+  /// Edge messages ignore Asserted; level deassertions preserve every bank.
+  /// A new request can wait in IRR while the same vector remains in ISR.
+  /// Further requests coalesce, but still replace that vector's TMR bit.
+  /// Reserved vectors fail without inventing ESR/error-interrupt effects.
+  [[nodiscard]] constexpr X86LocalApicArrival
+  receiveFixedInterrupt(uint8_t Vector, bool LevelTriggered, bool Asserted) {
+    if (Vector < 16)
+      return X86LocalApicArrival::RejectedVector;
+    if (LevelTriggered && !Asserted)
+      return X86LocalApicArrival::IgnoredDeassertion;
+    const uint32_t Bit = uint32_t(1) << (Vector % 32);
+    const unsigned Word = Vector / 32;
+    const bool Pending = State.IRR[Word] & Bit;
+    State.IRR[Word] |= Bit;
+    if (LevelTriggered)
+      State.TMR[Word] |= Bit;
+    else
+      State.TMR[Word] &= ~Bit;
+    return Pending ? X86LocalApicArrival::Coalesced
+                   : X86LocalApicArrival::Queued;
+  }
 
   /// A byte write to the actual TPR. This does not synthesize a CR8 write or
   /// infer its completion from a changed CPU state; the producer owns those.
   constexpr void setTaskPriority(uint8_t Value) { State.TPR = Value; }
+
+  /// Read the enabled APIC's task-priority class, not PPR or ISR priority.
+  /// Read/import never discard the TPR subpriority that CR8 cannot represent.
+  constexpr uint64_t readCr8() const { return State.TPR >> 4; }
+
+  /// Apply an admitted, ordered CPL0 MOV-to-CR8 register effect. Reserved-bit
+  /// input rejects without changes; the caller owns instruction admission and
+  /// #GP delivery. Every valid write clears TPR's low nibble, including writes
+  /// of the same CR8 value. This is not state restoration or polling-time sync.
+  /// The embedding mirrors a successful write into its CPU bank, and serializes
+  /// it with direct TPR accesses and producer selection/acknowledgment.
+  [[nodiscard]] constexpr bool writeCr8(uint64_t Value) {
+    if (Value > 15)
+      return false;
+    setTaskPriority(uint8_t(Value << 4));
+    return true;
+  }
 
   constexpr uint8_t processorPriority() const {
     const uint8_t ServiceClass = highest(State.ISR).value_or(0) & 0xf0;
@@ -90,8 +152,8 @@ public:
   }
 
   /// Consume precisely the current candidate. A wrong, blocked or repeated
-  /// acknowledgment fails without changing any bank. Arrival/coalescing is
-  /// deliberately not modeled, so the producer cannot silently lose a source.
+  /// acknowledgment fails without changing any bank. The producer serializes
+  /// arrivals and TPR writes with its selection/acknowledgment boundary.
   constexpr bool acceptFixedInterrupt(uint8_t Vector) {
     if (nextFixedInterrupt() != Vector)
       return false;

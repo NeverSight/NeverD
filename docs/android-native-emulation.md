@@ -1304,6 +1304,13 @@ these statistics updates. Slow/statistics EventLog records and all five
 with native `__android_log_bwrite`. Encoding, byte truncation and signed results
 are modeled; missing writes and RemoteException handling remain unsupported.
 
+BinderProxy's FAILED_TRANSACTION JNI path uses the separate explicit
+[text-write transcript](android-log-reader.md#text-write-contract), shared
+with native `__android_log_write`, `__android_log_buf_write` and the shared
+print/vprint/buf_print formatting entries. It logs before
+creating the checked exception and message, preserves proxy liveness, and
+retains earlier reply-Parcel state when log input is missing.
+
 [StatLogger](https://android.googlesource.com/platform/frameworks/base/+/android-9.0.0_r1/core/java/com/android/internal/util/StatLogger.java)
 `logDurationStat(int,long)` updates counts, total/max duration, and per-second
 statistics in the retained Java arrays. It preserves signed comparisons,

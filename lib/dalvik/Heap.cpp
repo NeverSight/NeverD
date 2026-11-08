@@ -224,6 +224,7 @@ bool platformClass(std::string_view name) {
       "java/io/IOException",
       "android/os/RemoteException",
       "android/os/DeadObjectException",
+      "android/os/TransactionTooLargeException",
       "java/lang/Throwable",
       "java/lang/Exception",
       "java/lang/RuntimeException",
@@ -287,7 +288,8 @@ std::string_view javaParent(std::string_view name) {
   if (name == "java/lang/ArrayIndexOutOfBoundsException" ||
       name == "java/lang/StringIndexOutOfBoundsException")
     return "java/lang/IndexOutOfBoundsException";
-  if (name == "android/os/DeadObjectException")
+  if (name == "android/os/DeadObjectException" ||
+      name == "android/os/TransactionTooLargeException")
     return "android/os/RemoteException";
   if (name == "android/os/RemoteException")
     return "java/lang/Exception";

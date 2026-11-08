@@ -1,15 +1,33 @@
 # Remaining x64 C-quality work
 
-The independent `X86LocalApicFixed` component now owns enabled fixed-source
-priority, nonconsuming selection, exact acknowledgment and ordinary EOI bank
-transitions. Compile-only assertions cover every fixed vector and priority
-class, duplicate requests, nested service and external EOI obligations.
+The APIC owner now distinguishes CR8 reads, real writes and paired-state
+import. Same-value writes clear TPR subpriority; reads/imports retain it.
+Reserved-bit writes and mismatched CPU/APIC imports reject without effects.
+Compile-only proofs cover all initial TPR bytes, legal classes, every reserved
+source bit and post-write arbitration. The PPR equal-class subpriority choice
+is explicitly the QEMU/KVM profile, not a universal hardware claim. The
+successful-RAM scheduler now offers explicit `notify_cr8_writes` completion
+notifications, shared by both C routes and scheduled function/call views.
+Only successfully modeled writes notify, including same-value writes and the
+last budgeted instruction; the notification precedes the next poll. Imports,
+reads, rejections, native requests and preempting events do not notify. Default
+source remains unchanged. The embedding supplies the bridge and initial bank
+coherence; raw steps and unscheduled drivers retain their old contract. Paged
+MOV-CR8 admission, TPR aliases/device wiring, complete environment import and
+both ordinary registry inputs remain open.
+
+The independent `X86LocalApicFixed` component now owns enabled fixed-message
+reception/coalescing, priority, nonconsuming selection, exact acknowledgment
+and ordinary EOI bank transitions. Arrivals preserve in-service requests;
+coalesced messages still update TMR, while level deassertions preserve every
+bank. Compile-only assertions cover every fixed vector and priority class,
+the arrival truth table, two-slot lifetimes and external EOI obligations.
 `scripts/qemu_save_lapic.py` transports captured banks through that same C++
 validator, with an explicit delivery-profile binding and all other event
 evidence retained. It adds no default decompiler or instruction-loop work.
-This closes the local fixed-bank model and transport; arrivals, source
-arbitration, TPR/CR8/device wiring, complete environment import and both
-ordinary registry inputs remain open.
+This closes the local fixed-bank model, arrival transitions and transport;
+arrival routing/timing, source arbitration, TPR/CR8/device wiring, complete
+environment import and both ordinary registry inputs remain open.
 
 Offline event-boundary interpretation now distinguishes QEMU post-load
 exception reinjection from pending payloads and stale error codes. The
@@ -915,6 +933,12 @@ observation, including CPUID scratch exchanges. Calls, exits, partial writes
 and exceptional edges keep their incoming evidence. A VM entry that stores
 registers into an escaping machine-state frame can still have genuine inputs
 unknown after earlier calls; never erase those inputs or replace them with zero.
+Scalar call-exit constants also survive unique predecessor blocks, conditional
+arms and contiguous fallthroughs. The bounded pass evaluates each block once,
+resets inherited facts at joins and the ordinary entry, and requires agreement
+at every return. Public x64 COFF/ELF/Mach-O cases compare both C routes with the
+original machine instructions. This does not recover conditional image
+addresses, dynamic callee registers or an escaping VM's entry state.
 Source stack preparation now also discards post-entry scalar spills proved
 overwritten before observation. Explicit x86 flags transfers remain emitted;
 their frame loads/stores are already separate operations. Unread scratch
@@ -1602,6 +1626,12 @@ conditional memory, invocation lifetime and both C routes remain open.
 
 ## Established rules
 
+- HighC frame-address projection now checks the known root and signed offset
+  in one bounded walk. Zero alignment masks and overflowing offset/rebase
+  arithmetic cannot manufacture frame members or crash rendering. Both C
+  routes execute the zero-mask control at O0/O2; this does not recover unknown
+  incoming registers or broaden ordinary/state interface composition.
+
 - Integer record calls in LLVMC bind physical ABI pieces through the shared
   LLVM call-contract metadata. Compacted register banks and reordered stack
   operands retain their byte locations; incomplete or ambiguous carriers
@@ -1656,3 +1686,10 @@ including whole-unit typed callers and stack arguments. Native linkage and
 service dispatch remain environment bindings; this is not portable ordinary
 C or an implementation of the service. General incoming-slot/borrow proofs
 and physical interrupt/system entry return ownership remain separate work.
+
+- C header macros no longer hide lexical errors or use failed integer
+  conversions when expanded. The declaration lexer retains the diagnostic and
+  reports the actual invocation before types are published, including through
+  another macro. Unused/redefined/removed replacements retain prior behavior.
+  This corrects accepted malformed declarations; it does not supply missing
+  Windows prototypes or infer unknown entry state.

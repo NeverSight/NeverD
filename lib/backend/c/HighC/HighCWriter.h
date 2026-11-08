@@ -138,7 +138,7 @@ public:
   sourceConventionAttribute(SourceFunctionTypeHint::ConventionKind Convention);
   static std::string
   sourceParameterType(const SourceParameterTypeHint &Parameter,
-                      llvm::StringRef Name = {});
+                      llvm::StringRef Name = {}, bool DeclarationOnly = false);
   static std::optional<std::string> sourceValue(llvm::StringRef Text,
                                                 const TypeRef &Carrier,
                                                 const TypeRef &Source);
@@ -508,6 +508,9 @@ public:
   /// read-only pointer holds (MinGW's `.refptr.__imp__fmode`).
   std::optional<va_t> importDataSlotRead(const HighExpr &Address,
                                          uint16_t Size) const;
+  /// Reject file-byte projection of an unbound import value in a compressed
+  /// MIPS image, including partial reads and dynamically indexed backing.
+  void requireBoundImportMemory(va_t Address, uint64_t Size) const;
   /// The function this file defines that call \p E runs, or null: one named
   /// like it at another address is a different function.
   const HighFunc *calledDefinition(const HighExpr &E) const;
@@ -932,7 +935,10 @@ public:
   /// collapse to one C identifier. Display-only; does not invent call args.
   int debugSymRichness(const FunctionSym &FS) const;
   static TypeRef cDisplayType(const TypeRef &Ty);
-  std::optional<int64_t> frameDisplacement(const HighExpr &E) const;
+  /// A signed frame offset, with no overflowing step. Storage projections
+  /// require a known root; display-only queries may retain the SSA-0 heuristic.
+  std::optional<int64_t> frameDisplacement(const HighExpr &E,
+                                           bool RequireKnownRoot = false) const;
   /// Whether the \p Bytes bytes at \p A and those at \p B cannot overlap:
   /// both lie in the frame, or both are constant addresses, that far apart.
   bool disjointMemory(const HighExpr &A, const HighExpr &B,
@@ -1808,7 +1814,7 @@ public:
   const HighExpr *functionAddressArgument(const HighExpr &Arg);
   /// The entry FunctionAddressNames keys address constant \p Const by: its
   /// value, less the Thumb interworking bit of a certified code address.
-  va_t functionAddressKey(const HighExpr &Const) const;
+  std::optional<va_t> functionAddressKey(const HighExpr &Const) const;
   struct ImageBacking {
     va_t Base;
     va_t End;

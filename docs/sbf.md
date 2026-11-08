@@ -367,13 +367,25 @@ inside the nonreturning callee still participate, including calls executed
 before a mandatory loop or recursion cycle.
 
 Contextual joins retain complete sets of up to four register/stored-word
-alternatives. Numeric literals already contained in an unsigned range are
-removed before checking that limit. This preserves the complete numeric set
+alternatives. Numeric literals and ranges already contained in an unsigned
+range are removed before checking that limit. This preserves the complete numeric set
 and prevents one returned pointer from acquiring a redundant literal/range
 alias split. Frame-relative and captured identities remain distinct from
 numeric ranges. Transfers lift the canonical scalar operation over those sets;
-for example two immutable table bases can load the same target. Unknown is
-absorbing and set overflow widens to unknown, never a truncated list. Multiple
+for example two immutable table bases can load the same target. Arithmetic
+result unions use the same captured-address bounds as CFG and typed-memory
+joins. A 64-bit register addition whose complete literal result product exceeds
+that limit can retain an enclosing numeric range. Every product must evaluate;
+an unknown or symbolic result prevents this fallback. Constant-plus-range and
+range-plus-constant use the same canonical affine transfer. Ordinary integer
+CFG joins keep their existing widening policy.
+When captured identities exceed the alternative limit, their proven
+numeric bounds can still fit that limit and preserve disjoint memory facts;
+capture names alone never establish non-aliasing. A complete overflowing set of
+literal heap addresses can likewise retain its enclosing unsigned range. This
+does not enumerate the intervening values as CALLX targets or widen ordinary
+integer/code-address disjunctions. Unknown is absorbing and
+unrepresentable overflow widens to unknown, never a truncated list. Multiple
 remaining literal CALLX values are analyzed by refining the actual call-register
 input for each alternative and reusing the same caller ABI and memory-effect
 transfer as a singleton call. All returning register and memory outcomes are
@@ -586,8 +598,25 @@ wrapping/truncated ranges and cleanup calls retain conservative joins.
 The existing four-alternative bound applies to tag values and cases. A caller
 substitutes output fields and capture identities against its own entry before
 loading the returned tag.
-Its branch can then restore only fields common to all selected cases. Exact
-64-bit register copies retain the tag relation; redefinition, potentially
+Its branch can then restore only fields common to all selected cases.
+A comparison excludes a bounded tag case only when its equality or unsigned
+ordered outcome is the same for every numeric alternative. The comparison
+uses the instruction width: 32-bit comparisons first truncate the bounds, and
+a range crossing a low-word boundary admits every 32-bit value. Overlapping
+ranges that admit both outcomes remain possible. Signed comparisons, bit tests
+and nonnumeric coordinates retain the existing conservative behavior unless
+all operands are literal values. The same known-successor rule serves ordinary
+context flow and memory-path replay; no extra specialization is created. The
+existing `skipped_constant_branch_successors` counter includes these constant
+outcomes over numeric ranges.
+On a 64-bit equality comparison's unequal edge, a known unsigned interval can
+exclude an interior value by retaining both remaining intervals. These bounds
+flow into returned tags, so a path that rejected a tag cannot contribute its
+payload when the caller selects that tag. The existing four-alternative limit
+still applies: if another split exceeds it, the incoming bounds are retained
+without that refinement. Unknown ordinary scalars and 32-bit comparisons gain
+no full-width exclusion from this rule.
+Exact 64-bit register copies retain the tag relation; redefinition, potentially
 aliasing tag writes, calls, memory copies and loop backedges discard it. Payload
 writes invalidate affected conditional fields through the existing typed-memory
 owner. Unknown tag cases and other return shapes retain the ordinary
@@ -595,8 +624,15 @@ conservative join. Conditional state and comparison workspace consume the
 existing retained-state budget. `output_tagged_cases` and
 `instantiated_tagged_output_cases` report these partitions and their call
 bindings; they do not establish whole-program closure or allocation freshness.
+Full-width payloads may also carry deferred input-load expressions through a
+generic wrapper. Tagged and ordinary output fields share the same caller-input
+substitution and pre-call memory guards. A payload read before its source is
+overwritten retains that earlier value; an unknown write before the read still
+blocks the proof. Callee expression IDs never escape without rebinding to the
+caller's entry.
 Selecting tag cases also refines payloads loaded before the comparison, including
-their exact 64-bit register copies. The shared unchanged-load proof is limited
+their exact 64-bit register copies and rebound input-load expressions. The shared
+unchanged-load proof is limited
 to the same basic block and stops at stores or calls. Redefined carriers,
 changed load bases and narrow loads cannot acquire a full-word fact from later
 memory. A refined value rebuilds its origin instead of retaining payload
@@ -872,9 +908,18 @@ For example, null, a small sentinel and three captures sharing one heap bound
 retain three numeric alternatives. This preserves disjoint-write information
 without equating objects or raising the limit. A capture already covered by a
 numeric alternative adds no new possibility, including on later arrivals at
-that join. Unknown or wrapping capture
-bounds cannot supply that widening; frame coordinates remain typed, and an
-overflowing literal-only disjunction still becomes unknown.
+that join. Strictly contained numeric ranges likewise add no alternative;
+equal ranges deduplicate, while partly overlapping ranges retain both members.
+Containment uses the complete modular interval, including both parts of a
+wrapping candidate. Unknown or wrapping capture
+bounds cannot supply that widening; frame coordinates remain typed. An
+overflowing literal-only disjunction retains bounds only when every member is
+inside the heap region. Growing interval disjunctions still use the existing
+alternative limit; there is no additional integer-range fixed point.
+The canonical 64-bit AND transfer retains the endpoint enclosure when a constant
+mask clears a low-bit suffix of a nonwrapping unsigned interval. Other masks and
+wrapping intervals cannot use that monotonicity rule. Symbolic identities are
+not folded as numeric operands.
 Memory-access offsets use the shared modular address transfer, both for a
 local store and when collecting, binding or applying a callee's write summary.
 A heap interval shifted across address zero can still exclude a caller frame.
@@ -933,6 +978,40 @@ nested copy must still reach a matched return, and
 the wrapper's descriptor loads and stores still execute through the canonical
 memory owner. A zero argument alone does not establish preservation or erase
 an unknown branch or write.
+
+When all four specializations are occupied, a caller can also replay an acyclic
+scalar graph that reads and writes fixed scratch cells. Every required input
+register and read cell must contain complete literal or nonwrapping unsigned
+range alternatives. The replay partitions these inputs independently and proves
+every combination; a failed case rejects the complete joined result. Literal
+inputs keep the existing path with known branch successors. Range inputs use
+the canonical branch refinements, join forward CFG edges, and join every
+reachable return. Any reachable reverse-postorder backedge rejects the graph
+instead of starting another loop solver. These cases share the existing
+work and retained-state budgets and do not add cached specializations. The
+completed generic summary must bound every read and write to a fixed
+1/2/4/8-byte cell; unknown or
+frame-relative footprints do not qualify. Nested direct calls share the same
+path proof, work budget, memory budget and call-depth limits. Syscalls, opaque
+calls and unproven cycles reject the proof. Pending states and joined returns
+consume the existing retained-state budget. This adds no cached
+specialization and infers no initial heap contents or allocator contract.
+
+A complete set of successful heap-derived numeric returns names the one actual
+returned value with a captured identity and enclosing numeric bounds. Ordinary
+summaries, stored return carriers, and scalar replay share the heap lower-bound
+eligibility rule. An upper endpoint outside the heap region does not erase the
+value's identity or prove that every possible value is a mapped pointer. Its
+fields therefore remain conditional on that return when branches merge. A null
+alternative retains the existing conditional-definition rule: choosing the null
+path cannot define a new successful-return identity. This does not correlate
+other memory cells merely because their numeric alternatives match the return. The identity implies neither a fresh object nor
+separation from another pointer. The canonical typed-memory reader can read an
+unconditional absolute cell through its exact captured alias; it cannot expose
+a conditional captured field through an unrelated literal address. Width and
+overlapping-write rules remain unchanged. Successful scalar paths use the
+existing `instantiated_memory_path_instructions` and
+`instantiated_memory_path_stores` evidence fields.
 `captured_addresses`, bounded may-write
 intervals and `output_memory_copies` describe these additional facts separately
 from literal CALLX target proofs.

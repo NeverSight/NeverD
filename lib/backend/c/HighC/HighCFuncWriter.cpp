@@ -22,6 +22,8 @@
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/MIPS/MIPSDSPSource.h"
+#include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/c/render/AArch64/AArch64ReturnProtectionC.h"
 #include "neverd/backend/c/render/AArch64/AArch64SVEVectorState.h"
 #include "neverd/ir/SourceParameterPlacement.h"
@@ -270,9 +272,7 @@ std::string x86CIntrinsicTargetFeatures(const HighFunc &Func) {
 
 } // anonymous namespace
 
-uint16_t pointerBytes(Arch A) {
-  return (A == Arch::X86 || A == Arch::ARM) ? 4 : 8;
-}
+uint16_t pointerBytes(Arch A) { return getTargetRegInfo(A).PointerSize; }
 
 uint16_t countedBytes(const HighExpr &Operand) {
   if (Operand.Type)
@@ -6385,6 +6385,14 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   }
 
   if (EmitFunctionWrapper) {
+    if (isMIPS(Opts.TheArch))
+      OS << mips::dspSourceCAttribute(
+          Opts.Image,
+          MIPSScalarHelpers.count(Intrinsic::MIPSReadDSPControl) ||
+              MIPSScalarHelpers.count(Intrinsic::MIPSWriteDSPControl));
+    if (Opts.Image && isMIPS(Opts.TheArch))
+      if (const auto Mode = Opts.Image->instructionModeAt(Func.Entry))
+        OS << mips::instructionModeCAttribute(*Mode);
     if (Opts.Image && !Func.SourceTypeHint)
       if (dispatchFrame(Func.Entry))
         c_stub::writeDispatchFramePreamble(OS);

@@ -1,0 +1,25 @@
+//===- CodeGenPointerAuth.def - Imported PAC representations ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Legacy Apple LLVM globals are not the upstream LLVM ptrauth constants.
+//===----------------------------------------------------------------------===//
+
+CODEGEN_PAUTH_TEXT(kLegacyApplePAuthSection, "llvm.ptrauth")
+CODEGEN_PAUTH_TEXT(kLegacyApplePAuthUnsupported,
+                   "codegen: legacy Apple pointer authentication globals are "
+                   "unsupported by the configured LLVM; native C object "
+                   "compilation remains separate\n")
+
+CODEGEN_PAUTH_TEXT(kPAuthInstallationOwner,
+                   "codegen: pointer authentication requires an arm64e Mach-O "
+                   "replacement image with a dyld installation owner\n")
+
+CODEGEN_PAUTH_TEXT(
+    kPAuthRecipeCallbackMissing,
+    "codegen: configured LLVM lacks authenticated fixup recipe callbacks; "
+    "native object emission remains separate\n")
+
+#undef CODEGEN_PAUTH_TEXT

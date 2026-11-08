@@ -290,6 +290,7 @@ struct BoundRuntime {
   Program program{{}, std::map<std::string, std::string>{}};
   std::shared_ptr<Heap> heap = std::make_shared<Heap>();
   Runtime runtime;
+  AdmitInstruction admission = Admit;
   uint64_t proxy = 0, data = 0, reply = 0;
   static AndroidApplicationSnapshot application() {
     auto app = input(false);
@@ -317,7 +318,8 @@ struct BoundRuntime {
     auto [params, result] = prototype(signature);
     const auto *method =
         libraryMethod({owner, name, params, result}, is_static);
-    return runtime.library(*method, receiver, values, Admit, false, 11, 65536);
+    return runtime.library(*method, receiver, values, admission, false, 11,
+                           65536);
   }
   ExecutionResult transact(uint64_t source = 0,
                            uint64_t destination = UINT64_MAX) {
@@ -385,6 +387,161 @@ TEST(AndroidBinderTest,
   EXPECT_EQ(result.stop, ExecutionStop::Returned);
   EXPECT_EQ(result.value, 0u);
   EXPECT_FALSE(result.external);
+}
+
+TEST(AndroidBinderTest, FailedTransactionWithoutLogStateStopsAfterParcelError) {
+  BoundRuntime s;
+  s.call(Parcel, "writeInt", "(I)V", s.reply, {0x11223344});
+  EXPECT_EQ(s.call(Parcel, "dataPosition", "()I", s.reply).value, 4u);
+  auto result = s.complete(s.transact(), {INT32_MIN + 2});
+  expectStop(result, "text log write service is not supplied");
+  EXPECT_TRUE(result.exception.empty());
+  EXPECT_EQ(s.heap->get(s.reply)->Bytes,
+            (std::vector<uint8_t>{0x44, 0x33, 0x22, 0x11}));
+  auto snapshot = s.runtime.snapshot();
+  EXPECT_TRUE(snapshot.terminal); // Unsupported JNI dispatch cannot resume.
+  ASSERT_TRUE(snapshot.framework.service_manager);
+  ASSERT_TRUE(
+      snapshot.framework.service_manager->binder_proxies[0].native_binding);
+  EXPECT_TRUE(snapshot.framework.service_manager->binder_proxies[0]
+                  .native_binding->alive);
+}
+
+TEST(AndroidBinderTest, FailedTransactionLogsBeforeThrowingAndKeepsProxyAlive) {
+  for (int32_t logResult : {0, -11, INT32_MIN, INT32_MAX}) {
+    SCOPED_TRACE(logResult);
+    std::vector<std::string> logs;
+    auto svc = services();
+    svc.text_log_write = [&](uint32_t id, int32_t priority,
+                             std::string_view tag, std::string_view message) {
+      EXPECT_EQ(id, 0u);
+      EXPECT_EQ(priority, 6);
+      EXPECT_EQ(tag, "JavaBinder");
+      logs.emplace_back(message);
+      return ExecutionResult{ExecutionStop::Returned, uint32_t(logResult)};
+    };
+    BoundRuntime s(std::move(svc));
+    s.call(Parcel, "writeInt", "(I)V", s.reply, {0x11223344});
+    const auto failed = s.complete(s.transact(), {INT32_MIN + 2});
+    ASSERT_EQ(failed.stop, ExecutionStop::Thrown) << failed.diagnostic;
+    EXPECT_EQ(failed.exception, "android/os/DeadObjectException");
+    const auto exception = s.heap->get(failed.throwable);
+    ASSERT_TRUE(exception);
+    const auto message = s.call("Ljava/lang/Throwable;", "getMessage",
+                                "()Ljava/lang/String;", failed.throwable);
+    ASSERT_EQ(message.stop, ExecutionStop::Returned);
+    EXPECT_EQ(s.heap->get(message.value)->Bytes,
+              javaStringBytes("Transaction failed on small parcel; remote "
+                              "process probably died"));
+    EXPECT_EQ(s.call(Parcel, "dataPosition", "()I", s.reply).value, 4u);
+    EXPECT_EQ(s.heap->get(s.reply)->Bytes,
+              (std::vector<uint8_t>{0x44, 0x33, 0x22, 0x11}));
+    ASSERT_EQ(logs,
+              (std::vector<std::string>{
+                  "!!! FAILED BINDER TRANSACTION !!!  (parcel size = 0)"}));
+    // The reply's stored status fails locally before another native request.
+    const auto errorCheck = s.transact(s.reply, 0);
+    EXPECT_EQ(errorCheck.stop, ExecutionStop::Thrown);
+    EXPECT_FALSE(errorCheck.external);
+    EXPECT_NE(errorCheck.throwable, failed.throwable);
+    ASSERT_EQ(logs.size(), 2u);
+    EXPECT_EQ(logs[1], "!!! FAILED BINDER TRANSACTION !!!  (parcel size = 4)");
+    s.call(Parcel, "setDataPosition", "(I)V", s.reply, {204801});
+    const auto cursorSize = s.transact(s.reply, 0);
+    EXPECT_EQ(cursorSize.stop, ExecutionStop::Thrown);
+    EXPECT_EQ(cursorSize.exception, "android/os/TransactionTooLargeException");
+    ASSERT_EQ(logs.size(), 3u);
+    EXPECT_EQ(logs[2],
+              "!!! FAILED BINDER TRANSACTION !!!  (parcel size = 204801)");
+    EXPECT_TRUE(s.runtime.snapshot()
+                    .framework.service_manager->binder_proxies[0]
+                    .native_binding->alive);
+    const auto next = s.transact();
+    ASSERT_EQ(next.stop, ExecutionStop::Suspended) << next.diagnostic;
+    EXPECT_EQ(s.complete(next, {}).stop, ExecutionStop::Returned);
+  }
+}
+
+TEST(AndroidBinderTest, FailedTransactionUsesStrictRequestSizeThreshold) {
+  for (uint32_t size : {204799u, 204800u, 204801u})
+    for (bool alias : {false, true}) {
+      SCOPED_TRACE(size);
+      SCOPED_TRACE(alias);
+      auto svc = services();
+      unsigned writes = 0;
+      svc.text_log_write = [&](uint32_t, int32_t, std::string_view,
+                               std::string_view message) {
+        ++writes;
+        EXPECT_EQ(message,
+                  "!!! FAILED BINDER TRANSACTION !!!  (parcel size = " +
+                      std::to_string(size) + ")");
+        return ExecutionResult{};
+      };
+      BoundRuntime s(std::move(svc));
+      // Native reply dataSize is exact; unmarshall instead pads writes to 4.
+      BinderReply source;
+      source.bytes.emplace(size);
+      ASSERT_EQ(s.complete(s.transact(0, s.data), std::move(source)).stop,
+                ExecutionStop::Returned);
+      auto failed =
+          s.complete(s.transact(0, alias ? s.data : 0), {INT32_MIN + 2});
+      ASSERT_EQ(failed.stop, ExecutionStop::Thrown) << failed.diagnostic;
+      const bool large = size > 204800;
+      EXPECT_EQ(failed.exception,
+                large ? "android/os/TransactionTooLargeException"
+                      : "android/os/DeadObjectException");
+      EXPECT_EQ(writes, 1u);
+      ASSERT_TRUE(s.heap->get(failed.throwable));
+      EXPECT_EQ(s.heap->get(s.heap->get(failed.throwable)->Message)->Bytes,
+                javaStringBytes(large ? "data parcel size 204801 bytes"
+                                      : "Transaction failed on small parcel; "
+                                        "remote process probably died"));
+      EXPECT_TRUE(s.program.assignable("L" + failed.exception + ";",
+                                       "Landroid/os/RemoteException;"));
+      EXPECT_FALSE(s.program.assignable("L" + failed.exception + ";",
+                                        "Ljava/lang/RuntimeException;"));
+    }
+}
+
+TEST(AndroidBinderTest, FailedTransactionPreservesLogAndResourceStopOrder) {
+  for (unsigned mode = 0; mode != 5; ++mode) {
+    SCOPED_TRACE(mode);
+    unsigned writes = 0;
+    auto svc = services();
+    svc.text_log_write = [&](uint32_t, int32_t, std::string_view,
+                             std::string_view) {
+      ++writes;
+      if (mode == 0)
+        return ExecutionResult{
+            ExecutionStop::Unsupported, 0, {}, "missing observation"};
+      return ExecutionResult{ExecutionStop::Returned,
+                             mode == 1 ? uint64_t(UINT32_MAX) + 1 : 0};
+    };
+    BoundRuntime s(std::move(svc));
+    std::optional<unsigned> remaining;
+    s.admission = [&] {
+      if (remaining) {
+        if (!*remaining)
+          return ExecutionStop::InstructionLimit;
+        --*remaining;
+      }
+      return ExecutionStop::Returned;
+    };
+    s.call(Parcel, "writeInt", "(I)V", s.reply, {23});
+    auto request = s.transact();
+    if (mode == 2 || mode == 4)
+      remaining = mode == 2 ? 0 : 1; // Stop before or just after the log.
+    if (mode == 3)
+      while (s.heap->allocate(Object::Instance, "java/lang/Object", 0)) {
+      }
+    const auto result = s.complete(request, {INT32_MIN + 2});
+    EXPECT_EQ(result.stop, mode <= 1   ? ExecutionStop::Unsupported
+                           : mode == 3 ? ExecutionStop::HeapLimit
+                                       : ExecutionStop::InstructionLimit);
+    EXPECT_EQ(writes, mode == 2 ? 0u : 1u);
+    EXPECT_EQ(s.heap->get(s.reply)->Bytes, (std::vector<uint8_t>{23, 0, 0, 0}));
+    EXPECT_EQ(result.throwable, 0u);
+  }
 }
 
 TEST(AndroidBinderTest,
@@ -472,29 +629,46 @@ TEST(AndroidBinderTest, DexCallerCatchesNativeReplyAndCachedDeadObject) {
   method.tries = {{0, 3, {{"Landroid/os/RemoteException;", 5}}}};
   caller.methods.push_back(method);
   Program program({caller}, std::map<std::string, std::string>{});
-  auto heap = std::make_shared<Heap>();
-  Runtime runtime(program, heap, BoundRuntime::application(), services());
-  const auto *lookup = libraryMethod({"Landroid/os/ServiceManager;",
-                                      "getService",
-                                      {"Ljava/lang/String;"},
-                                      "Landroid/os/IBinder;"},
-                                     true);
-  std::array<uint64_t, 1> name{heap->literal("alpha")->Identity};
-  auto proxy = runtime.library(*lookup, 0, name, Admit).value;
-  const auto *obtain = libraryMethod({Parcel, "obtain", {}, Parcel}, true);
-  auto data = runtime.library(*obtain, 0, {}, Admit).value;
-  std::array<uint64_t, 5> args{proxy, 23, data, 0, 0};
-  const auto *body = program.findStatic(method.reference);
-  auto request = runtime.execute(*body, args, Admit, 65536, 11);
-  ASSERT_EQ(request.stop, ExecutionStop::Suspended) << request.diagnostic;
-  ExecutionResult completion;
-  completion.binder_reply = BinderReply{-32};
-  auto result = runtime.resume(request.continuation, 11, std::move(completion));
-  ASSERT_EQ(result.stop, ExecutionStop::Returned) << result.diagnostic;
-  EXPECT_EQ(result.value, 7u);
-  result = runtime.execute(*body, args, Admit, 65536, 11);
-  EXPECT_EQ(result.stop, ExecutionStop::Returned) << result.diagnostic;
-  EXPECT_EQ(result.value, 7u);
+  for (bool failed : {false, true}) {
+    unsigned writes = 0;
+    auto svc = services();
+    svc.text_log_write = [&](uint32_t, int32_t, std::string_view,
+                             std::string_view) {
+      ++writes;
+      return ExecutionResult{};
+    };
+    auto heap = std::make_shared<Heap>();
+    Runtime runtime(program, heap, BoundRuntime::application(), std::move(svc));
+    const auto *lookup = libraryMethod({"Landroid/os/ServiceManager;",
+                                        "getService",
+                                        {"Ljava/lang/String;"},
+                                        "Landroid/os/IBinder;"},
+                                       true);
+    std::array<uint64_t, 1> name{heap->literal("alpha")->Identity};
+    auto proxy = runtime.library(*lookup, 0, name, Admit).value;
+    const auto *obtain = libraryMethod({Parcel, "obtain", {}, Parcel}, true);
+    auto data = runtime.library(*obtain, 0, {}, Admit).value;
+    std::array<uint64_t, 5> args{proxy, 23, data, 0, 0};
+    const auto *body = program.findStatic(method.reference);
+    auto request = runtime.execute(*body, args, Admit, 65536, 11);
+    ASSERT_EQ(request.stop, ExecutionStop::Suspended) << request.diagnostic;
+    ExecutionResult completion;
+    completion.binder_reply = BinderReply{failed ? INT32_MIN + 2 : -32};
+    auto result =
+        runtime.resume(request.continuation, 11, std::move(completion));
+    ASSERT_EQ(result.stop, ExecutionStop::Returned) << result.diagnostic;
+    EXPECT_EQ(result.value, 7u);
+    EXPECT_EQ(writes, failed ? 1u : 0u);
+    result = runtime.execute(*body, args, Admit, 65536, 11);
+    if (failed) {
+      ASSERT_EQ(result.stop, ExecutionStop::Suspended);
+      completion.binder_reply = BinderReply{INT32_MIN + 2};
+      result = runtime.resume(result.continuation, 11, std::move(completion));
+      EXPECT_EQ(writes, 2u);
+    }
+    EXPECT_EQ(result.stop, ExecutionStop::Returned) << result.diagnostic;
+    EXPECT_EQ(result.value, 7u);
+  }
 }
 
 BinderReply binderObject(uint32_t type, uint64_t pointer, uint64_t cookie = 0,

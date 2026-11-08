@@ -120,9 +120,8 @@ LinuxFiles::binderIoctl(LinuxDeviceState &Device, uint32_t Request,
     return unsupported(Result, "Binder write buffer wraps");
   auto HasReturnError = [&] {
     const auto &Queue = Device.BinderThreadWork[CurrentTask];
-    return std::any_of(Queue.begin(), Queue.end(), [](const BinderWork &Work) {
-      return Work.Command == 0x7205 || Work.Command == 0x7211;
-    });
+    return std::any_of(Queue.begin(), Queue.end(),
+                       [](const BinderWork &Work) { return Work.ReturnError; });
   };
   // binder_thread_write stops at its pending return_error before touching any
   // further command bytes. Reading that error permits a later write to resume.
@@ -137,11 +136,7 @@ LinuxFiles::binderIoctl(LinuxDeviceState &Device, uint32_t Request,
   if (!Commands.empty())
     if (auto E = CPU.read(WriteBuffer + WriteConsumed, Commands))
       return std::move(E);
-  struct Decoded {
-    uint32_t Command;
-    size_t Offset, Size;
-  };
-  std::vector<Decoded> DecodedCommands;
+  uint64_t Consumed = WriteConsumed;
   unsigned Transactions = 0;
   for (size_t I = 0; I < Commands.size();) {
     uint32_t Command = llvm::support::endian::read32le(Commands.data() + I);
@@ -159,18 +154,16 @@ LinuxFiles::binderIoctl(LinuxDeviceState &Device, uint32_t Request,
     if (Transactions > 1)
       return unsupported(Result,
                          "Binder batch requires nested transaction semantics");
-    DecodedCommands.push_back({Command, I + 4, Size});
+    const auto Offset = I + 4;
     I += 4 + Size;
-  }
-  uint64_t Consumed = WriteConsumed;
-  for (const auto &[Command, Offset, Size] : DecodedCommands) {
-    Consumed = WriteConsumed + Offset + Size;
+    Consumed = WriteConsumed + I;
     if (Size) {
       auto Outcome =
           binderCommand(Device, Command,
                         llvm::ArrayRef(Commands).slice(Offset, Size), Result);
       if (!Outcome || !*Outcome)
         return Outcome;
+      // An error ends this write before even decoding the next command.
       if (HasReturnError())
         break;
       continue;

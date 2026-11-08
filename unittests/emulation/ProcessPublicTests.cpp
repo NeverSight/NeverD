@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 #include "../TestProcess.h"
 #include "AndroidEventLogTestData.h"
+#include "AndroidTextLogTestData.h"
 #include "DarwinAdvisoryLockTestData.h"
 #include "DarwinCallbackTestData.h"
 #include "DarwinCreatedAdvisoryLockTestData.h"
@@ -4440,6 +4441,194 @@ TEST_F(ProcessPublic, AndroidBinderThreadPolicyMatchesSDKAndCLI) {
 #endif
 }
 
+TEST_F(ProcessPublic, AndroidTextLogAbortMessageMatchesSDKAndCLI) {
+#ifndef NEVERD_ANDROID_FIXTURE_DIR
+  GTEST_SKIP() << "Android shared library fixtures unavailable";
+#else
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(Prefix, Directory));
+  const std::filesystem::path Root(Directory.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Output = (Root / OutputFile).string();
+  constexpr uint64_t Base = 0x22000000, Slot = Base + 2048;
+  for (const char *Variant : {"O0-none", "O2-relr"}) {
+    Path = (std::filesystem::path(NEVERD_ANDROID_FIXTURE_DIR) /
+            (std::string("log-") + Variant + ".so"))
+               .string();
+    for (unsigned Mode = 0; Mode != 8; ++Mode) {
+      SCOPED_TRACE(Variant);
+      SCOPED_TRACE(Mode);
+      // Seven pages cover the copied record and fit the inline JSON budget.
+      std::vector<uint8_t> Memory(28672, 0xc7);
+      std::fill_n(Memory.begin() + 2048, 8, 0);
+      std::copy_n("fatal", 6, Memory.begin() + 4096);
+      std::copy_n("tag", 4, Memory.begin() + 8192);
+      std::copy_n("%d", 3, Memory.begin() + 12288);
+      if (Mode == 4)
+        llvm::support::endian::write64le(Memory.data() + 2048, 0xdeadbeef);
+      auto Request = llvm::cantFail(llvm::json::parse(R"({
+        "backend":"unicorn","instruction_limit":200000,"instruction_quantum":83,
+        "android":{"initialize":false,"observe_memory_on_failure":true,
+          "libraries":{"libc.so":["android_set_abort_message"]},
+          "read_memory":[{"address":"0x22000000","size":28672}]}
+      })"));
+      auto &Android = *Request.getAsObject()->getObject(field::Android);
+      Android[field::Memory] = llvm::json::Array{
+          llvm::json::Object{{field::Address, "0x22000000"},
+                             {field::Size, 28672},
+                             {field::Bytes, llvm::toHex(Memory)}}};
+      if (Mode != 5)
+        Android[field::AbortMessageSlot] = Mode == 3 ? 0 : Mode == 6 ? 1 : Slot;
+      if (Mode == 7)
+        Android[field::AbortMessageSlot] = nullptr;
+      const bool Writes = Mode == 0 || Mode == 2 || Mode == 5;
+      if (Writes) {
+        Android[field::EntrySymbol] =
+            Mode == 2 ? "log_fatal_formatted" : "log_fatal_write";
+        Android[field::Arguments] =
+            Mode == 2
+                ? llvm::json::Array{Base,        Slot,         0,
+                                    0,           Base + 12288, Base + 4096,
+                                    Base + 8192, 4096}
+                : llvm::json::Array{Base,        Slot, Base + 8192,
+                                    Base + 4096, 0,    4096};
+        const std::string Message = Mode == 2 ? "-123" : "fatal";
+        std::vector<uint8_t> Payload{7, 't', 'a', 'g', 0};
+        Payload.insert(Payload.end(), Message.begin(), Message.end());
+        Payload.push_back(0);
+        Android[field::TextLogWrites] = llvm::json::Array{
+            llvm::json::Object{{field::LogID, 0},
+                               {field::LogPayload, llvm::toHex(Payload)},
+                               {field::Result, -11}},
+            llvm::json::Object{{field::LogID, 0},
+                               {field::LogPayload, llvm::toHex(Payload)},
+                               {field::Result, INT32_MAX}}};
+      } else {
+        Android[field::EntrySymbol] = "log_abort_message";
+        Android[field::Arguments] =
+            llvm::json::Array{Base,
+                              Slot,
+                              Mode == 3 || Mode == 4 ? 1 : Base + 4096,
+                              1,
+                              Mode == 1 ? 4096 : 0,
+                              Mode == 1 ? 1 : 0,
+                              0};
+      }
+      const auto Options = jsonText(std::move(*Request.getAsObject()));
+      auto Text = takeString(neverd_emulate_process_json(
+          Session, Path.c_str(), AndroidNativeAArch64, Options.c_str()));
+      if (Mode == 7) {
+        EXPECT_TRUE(Text.empty());
+        EXPECT_NE(
+            takeString(neverd_last_error(Session)).find("abort_message_slot"),
+            std::string::npos);
+        EXPECT_EQ(
+            runCLIRequest(Path, AndroidNativeAArch64, Options, Output, true),
+            process_cli::Error);
+        continue;
+      }
+      ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
+      auto Parsed = llvm::cantFail(llvm::json::parse(Text));
+      const auto *Report = Parsed.getAsObject();
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getString(field::Stop), Mode == 5
+                                                    ? "unsupported_service"
+                                                : Mode == 6 ? "runtime_failure"
+                                                            : "returned")
+          << Text;
+      if (Mode < 5)
+        EXPECT_EQ(Report->getString(field::ReturnValue), "0");
+      if (Writes)
+        EXPECT_EQ(Report->getObject(field::Android)
+                      ->getInteger(field::TextLogWritesConsumed),
+                  Mode == 5 ? 0 : 2);
+      EXPECT_EQ(runCLIRequest(Path, AndroidNativeAArch64, Options, Output),
+                Mode >= 5 ? process_cli::Incomplete : process_cli::Success);
+      ASSERT_NO_FATAL_FAILURE(expectCLIReport(Output, Parsed));
+    }
+  }
+#endif
+}
+
+TEST_F(ProcessPublic, AndroidTextLogTransportPrefixesMatchSDKAndCLI) {
+#ifndef NEVERD_ANDROID_FIXTURE_DIR
+  GTEST_SKIP() << "Android shared library fixtures unavailable";
+#else
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(Prefix, Directory));
+  const std::filesystem::path Root(Directory.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Output = (Root / OutputFile).string();
+  for (const char *Variant : {"O0-none", "O2-relr"}) {
+    Path = (std::filesystem::path(NEVERD_ANDROID_FIXTURE_DIR) /
+            (std::string("log-") + Variant + ".so"))
+               .string();
+    for (unsigned Mode = 0; Mode != 4; ++Mode) {
+      SCOPED_TRACE(Variant);
+      SCOPED_TRACE(Mode);
+      const std::string Tag(Mode == 0 ? 5000 : Mode == 1 ? 4066 : 1, 't');
+      const std::string Message(Mode < 2 ? 1 : 5000, 'm');
+      const unsigned MessageOffset = Mode < 2 ? 6000 : 2048;
+      std::vector<uint8_t> Memory(8192, 0xc7);
+      std::copy(Tag.begin(), Tag.end(), Memory.begin() + 128);
+      Memory[128 + Tag.size()] = 0;
+      std::copy(Message.begin(), Message.end(), Memory.begin() + MessageOffset);
+      Memory[MessageOffset + Message.size()] = 0;
+      std::vector<uint8_t> Payload{6};
+      Payload.insert(Payload.end(), Tag.begin(), Tag.end());
+      Payload.push_back(0);
+      Payload.insert(Payload.end(), Message.begin(), Message.end());
+      Payload.push_back(0);
+      Payload.resize(4068);
+      if (Mode == 3)
+        Payload[3] = 0; // A completed message cannot have trailing wire bytes.
+      auto Request = llvm::cantFail(llvm::json::parse(R"({
+        "backend":"unicorn","instruction_limit":200000,"instruction_quantum":83,
+        "android":{"initialize":false,"entry_symbol":"log_text_write",
+          "libraries":{"liblog.so":["__android_log_buf_write"]},
+          "read_memory":[{"address":"0x22000000","size":16}]}
+      })"));
+      auto &Android = *Request.getAsObject()->getObject(field::Android);
+      Android[field::Arguments] = llvm::json::Array{
+          0x22000000, 3, 6, 0x22000080, 0x22000000 + MessageOffset, 1, 3};
+      Android[field::Memory] = llvm::json::Array{
+          llvm::json::Object{{field::Address, "0x22000000"},
+                             {field::Size, 8192},
+                             {field::Bytes, llvm::toHex(Memory)}}};
+      Android[field::TextLogWrites] = llvm::json::Array{
+          llvm::json::Object{{field::LogID, 3},
+                             {field::LogPayload, llvm::toHex(Payload)},
+                             {field::Result, -11}}};
+      const auto Options = jsonText(std::move(*Request.getAsObject()));
+      auto Text = takeString(neverd_emulate_process_json(
+          Session, Path.c_str(), AndroidNativeAArch64, Options.c_str()));
+      if (Mode == 3) {
+        EXPECT_TRUE(Text.empty());
+        EXPECT_NE(takeString(neverd_last_error(Session))
+                      .find("invalid Android text log write"),
+                  std::string::npos);
+        EXPECT_EQ(
+            runCLIRequest(Path, AndroidNativeAArch64, Options, Output, true),
+            process_cli::Error);
+        continue;
+      }
+      ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
+      auto Parsed = llvm::cantFail(llvm::json::parse(Text));
+      const auto *Report = Parsed.getAsObject();
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getString(field::Stop), "returned") << Text;
+      EXPECT_EQ(Report->getString(field::ReturnValue), "0");
+      EXPECT_EQ(Report->getObject(field::Android)
+                    ->getInteger(field::TextLogWritesConsumed),
+                1);
+      EXPECT_EQ(runCLIRequest(Path, AndroidNativeAArch64, Options, Output),
+                process_cli::Success);
+      ASSERT_NO_FATAL_FAILURE(expectCLIReport(Output, Parsed));
+    }
+  }
+#endif
+}
+
 TEST_F(ProcessPublic, AndroidBinderNativeTransportMatchesSDKAndCLI) {
 #ifndef NEVERD_ANDROID_FIXTURE_DIR
   GTEST_SKIP() << "Android shared library fixtures unavailable";
@@ -4489,13 +4678,21 @@ TEST_F(ProcessPublic, AndroidBinderNativeTransportMatchesSDKAndCLI) {
         Binding["fd"] = Mode == 5 ? 77 : 3;
         Binding["handle"] = Mode == 7 ? 1 : 0;
         Binding["alive"] = Mode != 4;
+        llvm::json::Array Writes;
+        for (const auto &Write :
+             neverd::emulation::test::binderFailureLogWrites())
+          Writes.push_back(llvm::json::Object{
+              {field::LogID, Write.ID},
+              {field::LogPayload, llvm::toHex(Write.Payload)},
+              {field::Result, Write.Result}});
+        Android[field::TextLogWrites] = std::move(Writes);
         const auto Options = jsonText(std::move(*Request.getAsObject()));
         auto Text = takeString(neverd_emulate_process_json(
             Session, Path.c_str(), AndroidNativeAArch64, Options.c_str()));
         ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
         auto Parsed = llvm::cantFail(llvm::json::parse(Text));
         const bool Stopped =
-            (Mode >= 5 && Mode <= 10 && Mode != 8) || Mode == 14;
+            (Mode >= 5 && Mode <= 10 && Mode != 7 && Mode != 8) || Mode == 14;
         EXPECT_EQ(Parsed.getAsObject()->getString(field::Stop),
                   Stopped ? "unsupported_service" : "returned")
             << Text;
@@ -4658,7 +4855,7 @@ TEST_F(ProcessPublic, AndroidJavaBinderDispatchMatchesSDKAndCLI) {
             Session, Path.c_str(), AndroidNativeAArch64, Options.c_str()));
         ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
         auto Parsed = llvm::cantFail(llvm::json::parse(Text));
-        const bool Stopped = Mode >= 2 && Mode <= 4;
+        const bool Stopped = Mode == 3 || Mode == 4;
         EXPECT_EQ(Parsed.getAsObject()->getString(field::Stop),
                   Stopped     ? "unsupported_service"
                   : Mode == 1 ? "returned"
@@ -5937,7 +6134,9 @@ TEST_F(ProcessPublic, AndroidBinderProtocolMatchesSDKAndCLI) {
       "access_mode":2,"open_errno":0,"ioctls":[],"binder":true}]}})"));
   for (const char *Entry :
        {"binder_control", "binder_descriptions", "binder_threads",
-        "binder_service_transactions", "binder_missing_targets"}) {
+        "binder_service_transactions", "binder_missing_targets",
+        "binder_object_transaction"}) {
+    SCOPED_TRACE(Entry);
     (*Request.getAsObject()->getObject("android"))["entry_symbol"] = Entry;
     const auto Options = jsonText(*Request.getAsObject());
     const auto Text = takeString(neverd_emulate_process_json(

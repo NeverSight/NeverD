@@ -131,7 +131,8 @@ private slots:
     QCOMPARE(second["payload"].toObject()["text"].toString(), "kept text");
     QCOMPARE(second["payload"].toObject()["revision"].toString(), "2");
     QCOMPARE(second["revision"].toString(), "2");
-    // A word for a page this client does not keep is refused.
+    // A word for a page this client does not keep forgets the kept page, and
+    // the page is read whole.
     h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "y"}},
                              &h.owner, {});
     QTRY_COMPARE(h.sent.size(), 4);
@@ -143,7 +144,121 @@ private slots:
     QTRY_COMPARE(h.sent.size(), 5);
     h.reply(4, {{"unchanged", true}, {"etag", "another"}, {"revision", "3"}},
             "3");
-    QTRY_COMPARE(errorCode(third), "invalid_response");
+    QTRY_COMPARE(h.sent.size(), 6);
+    QCOMPARE(h.sent[5].operation, "decompile");
+    QCOMPARE(h.sent[5].payload["if_none_match"].toString(), QString());
+    QVERIFY(third.isEmpty());
+    h.reply(5,
+            {{"text", "read whole"}, {"etag", "tag-9-0-3"}, {"revision", "3"}},
+            "3");
+    QTRY_COMPARE(third["payload"].toObject()["text"].toString(), "read whole");
+    QCOMPARE(third["status"].toString(), "ok");
+    // The page read whole is the one kept; a worker that names a page again
+    // when none was named is refused rather than asked once more.
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "z"}},
+                             &h.owner, {});
+    QTRY_COMPARE(h.sent.size(), 7);
+    h.reply(6, {}, "4");
+    QTRY_VERIFY(!h.service.hasPending());
+    QJsonObject fourth;
+    h.service.subscribe(text(), &h.owner, [&](const QJsonObject &response) {
+      fourth = response;
+    });
+    QTRY_COMPARE(h.sent.size(), 8);
+    QCOMPARE(h.sent[7].payload["if_none_match"].toString(), "tag-9-0-3");
+    h.reply(7, {{"unchanged", true}, {"etag", "another"}, {"revision", "4"}},
+            "4");
+    QTRY_COMPARE(h.sent.size(), 9);
+    QCOMPARE(h.sent[8].payload["if_none_match"].toString(), QString());
+    h.reply(8, {{"unchanged", true}, {"etag", "another"}, {"revision", "4"}},
+            "4");
+    QTRY_COMPARE(errorCode(fourth), "invalid_response");
+    QCOMPARE(h.sent.size(), 9);
+  }
+
+  void sourcePageKeptTakesWhatChanged() {
+    Harness h;
+    establish(h);
+    h.service.setPageDeltas(true);
+    QJsonObject first;
+    h.service.subscribe(text(), &h.owner,
+                        [&](const QJsonObject &response) { first = response; });
+    QTRY_COMPARE(h.sent.size(), 1);
+    // A first read keeps nothing to apply changes to.
+    QVERIFY(!h.sent[0].payload.contains("page_delta"));
+    const QJsonArray names{QJsonObject{{"begin_byte", 0}, {"end_byte", 1}},
+                           QJsonObject{{"begin_byte", 2}, {"end_byte", 3}},
+                           QJsonObject{{"begin_byte", 4}, {"end_byte", 5}}};
+    h.reply(0, {{"text", "a\nb\nc"},
+                {"code_names", names},
+                {"etag", "tag-7-0-3"},
+                {"revision", "1"}});
+    QTRY_COMPARE(first["payload"].toObject()["text"].toString(), "a\nb\nc");
+    h.service.enqueueCommand("annotation_set", {{"address", "0x1"}}, &h.owner,
+                             {});
+    QTRY_COMPARE(h.sent.size(), 2);
+    h.reply(1, {}, "2");
+    QTRY_VERIFY(!h.service.hasPending());
+    // The next read names the kept page and takes what changed of it: a line
+    // and the names after it moved.
+    QJsonObject second;
+    h.service.subscribe(text(), &h.owner, [&](const QJsonObject &response) {
+      second = response;
+    });
+    QTRY_COMPARE(h.sent.size(), 3);
+    QCOMPARE(h.sent[2].payload["if_none_match"].toString(), "tag-7-0-3");
+    QVERIFY(h.sent[2].payload["page_delta"].toBool());
+    const QJsonArray changes{
+        QJsonArray{"lines", "text", 3, QJsonArray{QJsonArray{0, "a // x"}}},
+        QJsonArray{"items", "code_names",
+                   QJsonArray{QJsonArray{"same", 1},
+                              QJsonArray{"shift", 2,
+                                         QJsonObject{{"begin_byte", 5},
+                                                     {"end_byte", 5}}}}}};
+    h.reply(2,
+            {{"delta", changes},
+             {"base", "tag-7-0-3"},
+             {"etag", "tag-8-0-3"},
+             {"revision", "2"}},
+            "2");
+    QTRY_COMPARE(second["status"].toString(), "ok");
+    const auto page = second["payload"].toObject();
+    QCOMPARE(page["text"].toString(), "a // x\nb\nc");
+    QCOMPARE(page["code_names"].toArray()[0].toObject()["end_byte"].toInt(), 1);
+    QCOMPARE(page["code_names"].toArray()[2].toObject()["begin_byte"].toInt(),
+             9);
+    QCOMPARE(page["etag"].toString(), "tag-8-0-3");
+    QCOMPARE(page["revision"].toString(), "2");
+    // The page as changed is the one kept: the next read names it.
+    h.service.enqueueCommand("annotation_set", {{"address", "0x2"}}, &h.owner,
+                             {});
+    QTRY_COMPARE(h.sent.size(), 4);
+    h.reply(3, {}, "3");
+    QTRY_VERIFY(!h.service.hasPending());
+    QJsonObject third;
+    h.service.subscribe(text(), &h.owner,
+                        [&](const QJsonObject &response) { third = response; });
+    QTRY_COMPARE(h.sent.size(), 5);
+    QCOMPARE(h.sent[4].payload["if_none_match"].toString(), "tag-8-0-3");
+    // Changes that do not fit the kept page are not taken: the page is read
+    // whole, with no changes asked for.
+    h.reply(
+        4,
+        {{"delta", QJsonArray{QJsonArray{"lines", "text", 9, QJsonArray{}}}},
+         {"base", "tag-8-0-3"},
+         {"etag", "tag-9-0-3"},
+         {"revision", "3"}},
+        "3");
+    QTRY_COMPARE(h.sent.size(), 6);
+    QCOMPARE(h.sent[5].payload["if_none_match"].toString(), QString());
+    QVERIFY(!h.sent[5].payload.contains("page_delta"));
+    QVERIFY(third.isEmpty());
+    h.reply(
+        5, {{"text", "a // y\nb\nc"}, {"etag", "tag-9-0-3"}, {"revision", "3"}},
+        "3");
+    QTRY_COMPARE(third["payload"].toObject()["text"].toString(),
+                 "a // y\nb\nc");
+    QCOMPARE(third["payload"].toObject()["etag"].toString(), "tag-9-0-3");
   }
 
   void sectionEditsInvalidateCachedCodeAndAnalysis() {

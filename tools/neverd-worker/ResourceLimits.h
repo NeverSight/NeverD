@@ -504,6 +504,13 @@ inline constexpr std::int64_t kEngineReplicaAwaitWritePollMilliseconds = 2;
 /// A page's identity a client gives back (if_none_match): the worker's tag, a
 /// document and its lines.
 inline constexpr std::size_t kEngineMaxPageEtagBytes = 128;
+/// Documents a view had before it was built again, kept for the pages clients
+/// keep of them (page_delta): how many, and how many bytes in all.
+inline constexpr std::size_t kEngineMaxPreviousViews = 8;
+inline constexpr std::size_t kEngineMaxPreviousViewBytes = 32 * 1024 * 1024;
+/// A delta up to this size goes without weighing it against its page; a larger
+/// one goes only where it is under half the page.
+inline constexpr std::size_t kEngineSmallPageDeltaBytes = 4096;
 inline constexpr int kEngineExecuteImplDecompileLimitSizeFieldDefault = 512;
 inline constexpr int kEngineExecuteImplDecompileLimitSizeFieldMax = 2048;
 inline constexpr int kEngineExecuteImplCfgViewportLayoutRevisionStringFieldMax =

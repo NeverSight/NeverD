@@ -1,6 +1,7 @@
 #pragma once
 #include "CodeEdits.h"
 #include "DeferredRelease.h"
+#include "PageDelta.h"
 #include "Protocol.h"
 #include "RenderStore.h"
 #include "ResourceLimits.h"
@@ -322,6 +323,11 @@ private:
     std::string renders, facts;
   };
   StoreNames storeNames();
+  /// What the stores are kept under (renderStoreIdentity), or none where this
+  /// session keeps no stores.
+  std::optional<Json> storeIdentity();
+  /// The names of the stores kept under \p identity.
+  static StoreNames storeNames(Json identity);
   /// What the render just made read of what the user states, kept as the first
   /// page of its record, and whether what is kept under a record still reads
   /// the same.  Empty, and holding, for an engine that does not tell.
@@ -342,8 +348,10 @@ private:
   Json userFactsAnalysisReads() const;
   /// The job goes over a whole store for what the user changed.
   bool renderAheadVerifying_ = false;
-  /// Says that what the stores keep under \p before holds for the state now.
+  /// Says that what the stores keep under \p before holds for the state now,
+  /// whose stores are named \p after where the caller knows them.
   void keepStoresFor(const StoreNames &before);
+  void keepStoresFor(const StoreNames &before, const StoreNames &after);
   void openFactsStore(const std::string &name, bool writable);
   std::vector<std::string> keptListingFacts(const std::string &key);
   void keepListingFact(const std::string &key, std::string bytes);
@@ -380,12 +388,18 @@ private:
   /// goes, as its engine pages spell what changed; otherwise it builds again
   /// from them. Each document reads this as it is next asked for
   /// (readViewEdits).
+  /// What decoration alone writes of an edit into a copy of a document it
+  /// reached: a comment of the image's (CodeEdits::takeComments) or a
+  /// function's new name (CodeEdits::takeFunctionNames).
+  enum class ViewEditKind { Other, Comment, FunctionName };
   void keepNamedViewsThrough(std::uint64_t address,
-                             std::vector<std::string> names, bool pagesStale);
+                             std::vector<std::string> names, bool pagesStale,
+                             ViewEditKind kind = ViewEditKind::Other);
   struct ViewEdit {
     std::uint64_t address;
     std::vector<std::string> names;
     bool pagesStale;
+    ViewEditKind kind;
   };
   std::deque<ViewEdit> viewEdits_;
   std::uint64_t viewEditCount_ = 0;
@@ -494,6 +508,13 @@ private:
     bool readsKnown = false;
     /// Unique among the documents of this process: its pages' identity.
     std::uint64_t id = 0;
+    /// The line its function's definition begins on, as decoration read it.
+    std::optional<std::size_t> definitionLine;
+    /// Which edits that reached it decoration writes again: comments and the
+    /// functions renamed, which are written into a copy of it, or anything
+    /// else.
+    mutable bool commentsReached = false, othersReached = false;
+    mutable std::vector<std::uint64_t> renamedFunctions;
     /// Of the edits views have kept through, how many it has read.
     mutable std::uint64_t viewEditsRead = 0;
     /// Hashes of the identifiers its text spells, sorted, once an edit's names
@@ -570,9 +591,35 @@ private:
                                     std::size_t offset, std::size_t limit,
                                     const Json &options = Json::object(),
                                     EncodedPayload *encoded = nullptr,
-                                    const std::string *ifNoneMatch = nullptr);
+                                    const std::string *ifNoneMatch = nullptr,
+                                    bool pageDelta = false);
   std::uint64_t namedViewIds_ = 0;
+  /// Documents written from another with its comments or functions' names
+  /// taken (takeComments, takeFunctionNames).
+  std::uint64_t commentPatches_ = 0, namePatches_ = 0;
+  /// Something no edit a document notes changed what decoration reads: each
+  /// document decorates again from its pages.
+  void decorateNamedViewsAgain();
+  /// Measures and indexes \p full as \p document's value and keeps it under
+  /// \p key and \p sourceKey, as far as the documents' budget allows, where
+  /// \p reusable: the listing it read is still the one views read.
+  std::shared_ptr<const NamedView>
+  keepNamedView(std::shared_ptr<NamedView> document, Json full,
+                const std::string &key, const std::string &sourceKey,
+                bool reusable);
   std::string instanceTag_;
+  /// Documents views had before they were built again, which pages clients
+  /// keep may come from (page_delta): the newest last.
+  std::deque<std::shared_ptr<const NamedView>> previousViews_;
+  std::size_t previousViewBytes_ = 0;
+  void keepPreviousView(std::shared_ptr<const NamedView> document);
+  /// The page lines [start, end) of \p document make, without what a reply
+  /// says of the project or its name, read in place from \p document.
+  PageSource namedViewLines(const NamedView &document, std::size_t start,
+                            std::size_t end, bool first) const;
+  /// The page a client names with \p etag, where this worker still has the
+  /// document it came from, read in place from that document.
+  std::optional<PageSource> keptClientPage(const std::string &etag) const;
   /// Function-list order (indices into Listing::functionRows) for the last
   /// filter, sort and listing generation.
   std::string functionOrderKey_;

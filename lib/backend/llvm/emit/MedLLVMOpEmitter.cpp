@@ -15,6 +15,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/backend/LLVMValueProvenance.h"
+#include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
@@ -25,6 +26,7 @@
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/X86/I386PicAddress.h"
 #include "neverd/libc/LibCNames.h"
+#include "neverd/loader/ELF/MIPSCodeMode.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-op-emitter"
 #include "neverd/ir/TargetRegInfo.h"
@@ -288,11 +290,26 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     // BlockAddress versus numeric layout semantics.
     const MedVar &Input = Op.Inputs[0];
     llvm::Function *KnownFunction = nullptr;
-    if (Input.isConst() && isExactAddressProvenance(Input.Provenance)) {
+    const bool MixedMIPS = Img && (Img->Mode == InstructionMode::MixedMIPS ||
+                                   Img->Mode == InstructionMode::MicroMIPS);
+    if (Input.isConst() && isExactAddressProvenance(Input.Provenance) &&
+        !(MixedMIPS &&
+          Input.Provenance == ConstantAddressProvenance::DataAddress)) {
       const va_t Normalized =
           normalizeCodeAddress(Input.ConstVal, Img ? Img->Arch : TargetArch,
                                Img ? Img->Mode : InstructionMode::Default);
       KnownFunction = resolveLiftedFunctionEntry(Normalized);
+      if (KnownFunction && Img &&
+          !mips::serializedCodeTarget(*Img, Input.ConstVal)) {
+        if (Input.Provenance == ConstantAddressProvenance::CodeAddress) {
+          FatalCodePointerResolution = true;
+          throw std::invalid_argument(
+              "MIPS copied callable has an invalid mode tag");
+        }
+        KnownFunction = nullptr; // A code-byte address is not a callable.
+      }
+      if (KnownFunction)
+        mips::requireNumericCodePointerSource(Img, Normalized);
     }
     Result = KnownFunction ? Builder.CreatePtrToInt(KnownFunction,
                                                     sizeToType(Op.Output.Size),

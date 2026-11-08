@@ -50,9 +50,15 @@ constexpr std::optional<MergeLoad> mergeLoadOpcode(unsigned Opcode) {
   }
 }
 
+constexpr bool isDSPControlIntrinsic(Intrinsic Id) {
+  return Id == Intrinsic::MIPSReadDSPControl ||
+         Id == Intrinsic::MIPSWriteDSPControl;
+}
+
 constexpr bool isScalarIntrinsic(Intrinsic Id) {
   return mergeLoad(Id).has_value() || Id == Intrinsic::MIPSUnpredictable ||
-         Id == Intrinsic::MIPSRequireWord || Id == Intrinsic::MIPSLwrUpper;
+         Id == Intrinsic::MIPSRequireWord || Id == Intrinsic::MIPSLwrUpper ||
+         isDSPControlIntrinsic(Id);
 }
 
 struct ScalarShape {
@@ -74,6 +80,12 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
   if (Id == Intrinsic::MIPSRequireWord)
     return S.Inputs == 2 && !S.OutputBytes && S.FirstBytes == 8 &&
            (S.Target == Arch::Unknown || isMIPS64(S.Target));
+  if (Id == Intrinsic::MIPSWriteDSPControl)
+    return S.Inputs == 2 && !S.OutputBytes && S.FirstBytes == 4 &&
+           !isMIPS64(S.Target);
+  if (Id == Intrinsic::MIPSReadDSPControl)
+    return S.Inputs == 1 && S.OutputWritable && S.OutputBytes == 4 &&
+           !isMIPS64(S.Target);
   if (!S.OutputWritable || (S.OutputBytes != 4 && S.OutputBytes != 8))
     return false;
   if (Id == Intrinsic::MIPSUnpredictable)

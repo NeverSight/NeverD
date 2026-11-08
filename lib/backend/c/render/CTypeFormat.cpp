@@ -30,6 +30,7 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/ConvertUTF.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/MD5.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -708,6 +709,9 @@ std::string declarationToC(const TypeRef &Ty, llvm::StringRef Declarator) {
 
 namespace {
 
+#define NEVERD_C_RECORD_TEXT(Name, Text) inline constexpr char Name[] = Text;
+#include "../CRecordCall.def"
+
 /// The keywords of the records the unit being written spells by their tags
 /// (CRecordTagSpelling).
 thread_local llvm::function_ref<const char *(llvm::StringRef)> RecordTags;
@@ -810,6 +814,12 @@ std::string typeToC(const TypeRef &Ty) {
     std::function<std::string(const TypeRef &)> Code = [&](const TypeRef &T) {
       if (isSourceBooleanType(T))
         return std::string("b1");
+      if (isSourceAArch64VectorType(T))
+        return llvm::formatv(kSourceVectorRecordCode, T->Size).str();
+      if (T->Kind == NdTypeKind::Array)
+        return llvm::formatv(kSourceArrayRecordCode, T->ArrayCount,
+                             Code(T->ElemType))
+            .str();
       if (T->Kind == NdTypeKind::Float)
         return std::string(T->Size == 4 ? "f" : "d");
       // Record declarations share a translation unit. Equal storage widths

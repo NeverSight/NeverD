@@ -765,6 +765,10 @@ struct Listing::Impl {
   /// Names change only in a build, which advances generation first, and in
   /// functionRenamed, which keeps them.
   std::unordered_map<std::string, const Function *> functionsByName;
+  /// The names more than one function was listed under when functionsByName
+  /// was read, and any a rename gave a second function since: a name outside
+  /// it is one function's.
+  std::unordered_set<std::string> sharedFunctionNames;
   std::uint64_t functionsByNameGeneration = 0;
   mutable std::size_t ownFunctionCount = 0;
   mutable std::uint64_t ownFunctionCountGeneration = 0;
@@ -1431,9 +1435,11 @@ struct Listing::Impl {
   const Function *namedFunction(const std::string &name) {
     if (functionsByNameGeneration != generation) {
       functionsByName.clear();
+      sharedFunctionNames.clear();
       functionsByName.reserve(functions.size());
       for (const auto &function : functions)
-        functionsByName.try_emplace(function.name, &function);
+        if (!functionsByName.try_emplace(function.name, &function).second)
+          sharedFunctionNames.insert(function.name);
       functionsByNameGeneration = generation;
     }
     const auto found = functionsByName.find(name);
@@ -3367,6 +3373,30 @@ struct Listing::Impl {
               return item;
             }
         }
+        // A recovered switch's table that its function's range also covers,
+        // as MSVC's unwind record covers the table after the code, lists as
+        // that table, and the padding up to it aligns it, as between
+        // functions.  Only slots the engine proved qualify.
+        if (asSwitchEntry(item, region, address))
+          return item;
+        if (const SwitchSlot *table = switchSlotFrom(address);
+            table && table->address < functions[f].end &&
+            (next == body.instructions.end() ||
+             next->address >= table->address)) {
+          const std::uint64_t start =
+              next == body.instructions.begin()
+                  ? functions[f].entry
+                  : std::prev(next)->address + std::prev(next)->size;
+          if (start <= address)
+            if (const auto alignment =
+                    paddingAlignment(start, table->address)) {
+              item.kind = ItemKind::Align;
+              item.start = start;
+              item.size = table->address - start;
+              item.alignment = alignment;
+              return item;
+            }
+        }
         if (dialect == OperandDialect::AArch64) {
           const std::uint64_t word = address & ~std::uint64_t{3};
           // Zero words the body does not reach read as UDF #0, which no one
@@ -4938,6 +4968,16 @@ struct Listing::Impl {
                                                                  : nullptr;
   }
 
+  /// The first jump table slot at or after \p address, if one is.
+  const SwitchSlot *switchSlotFrom(std::uint64_t address) const {
+    const auto it =
+        std::lower_bound(switchSlots.begin(), switchSlots.end(), address,
+                         [](const SwitchSlot &slot, std::uint64_t value) {
+                           return slot.address < value;
+                         });
+    return it == switchSlots.end() ? nullptr : &*it;
+  }
+
   /// Makes \p item the jump table slot holding \p address, when one does
   /// within \p region.
   bool asSwitchEntry(Item &item, const Region &region, std::uint64_t address) {
@@ -5216,15 +5256,19 @@ bool Listing::functionRenamed(std::uint64_t address) {
   function->engineName = std::move(name);
   if (function->exported && d.exportRows.is_array())
     for (const auto &row : d.exportRows)
-      if (jsonAddress(row.value("addr", Json())) == address)
+      if (const auto at = row.find("addr");
+          (at != row.end() ? jsonAddress(*at) : 0) == address)
         if (auto exported = row.value("name", std::string());
             !exported.empty() && exported != function->name)
           d.exportAliases.emplace(std::move(exported), address);
   if (d.functionsByNameGeneration == previous) {
     d.functionsByName.erase(old);
-    if (const auto *same = d.functionNamed(old))
-      d.functionsByName.emplace(std::move(old), same);
-    d.functionsByName.try_emplace(function->name, function);
+    // Another function of the name given up keeps it.
+    if (d.sharedFunctionNames.contains(old))
+      if (const auto *same = d.functionNamed(old))
+        d.functionsByName.emplace(std::move(old), same);
+    if (!d.functionsByName.try_emplace(function->name, function).second)
+      d.sharedFunctionNames.insert(function->name);
     d.functionsByNameGeneration = d.generation;
   }
   if (d.ownFunctionCountGeneration == previous)

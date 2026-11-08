@@ -15,11 +15,33 @@
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/X86/X86Regs.h"
 
+#include "llvm/ADT/SmallVector.h"
+
 #include <algorithm>
 #include <set>
 #include <utility>
 
 namespace neverd {
+unsigned sourceAArch64VectorBytes(const NdType *Type) {
+  if (!Type)
+    return 0;
+  if (Type->SourceName == kSourceAArch64Vector64CType)
+    return kSourceAArch64Vector64Bytes;
+  if (Type->SourceName == kSourceAArch64Vector128CType)
+    return kSourceAArch64Vector128Bytes;
+  return 0;
+}
+
+bool isSourceAArch64VectorType(const NdType *Type) {
+  const unsigned Bytes = sourceAArch64VectorBytes(Type);
+  return Bytes && Type->Kind == NdTypeKind::Int && Type->Size == Bytes;
+}
+
+bool isSourceAArch64Vector128Type(const TypeRef &Type) {
+  return isSourceAArch64VectorType(Type) &&
+         Type->Size == kSourceAArch64Vector128Bytes;
+}
+
 bool isSourceBooleanType(const TypeRef &Type) {
   return Type && Type->Kind == NdTypeKind::Int && Type->Size == 1 &&
          !Type->IsSigned && Type->SourceName == kSourceBooleanCType;
@@ -47,6 +69,10 @@ bool equalTypes(const TypeRef &Left, const TypeRef &Right, unsigned Depth,
       Left->IsSigned != Right->IsSigned)
     return false;
   --Remaining;
+  if (sourceAArch64VectorBytes(Left) || sourceAArch64VectorBytes(Right))
+    return isSourceAArch64VectorType(Left) &&
+           isSourceAArch64VectorType(Right) &&
+           Left->SourceName == Right->SourceName;
   switch (Left->Kind) {
   case NdTypeKind::Void:
     return Left->Size == 0;
@@ -54,17 +80,18 @@ bool equalTypes(const TypeRef &Left, const TypeRef &Right, unsigned Depth,
     if (Left->SourceName == kSourceBooleanCType ||
         Right->SourceName == kSourceBooleanCType)
       return isSourceBooleanType(Left) && isSourceBooleanType(Right);
-    if (Left->Size == 16 &&
-        (Left->SourceName == kSourceAArch64Vector128CType ||
-         Right->SourceName == kSourceAArch64Vector128CType) &&
-        Left->SourceName != Right->SourceName)
-      return false;
     return Left->Size == 1 || Left->Size == 2 || Left->Size == 4 ||
            Left->Size == 8 || Left->Size == 16;
   case NdTypeKind::Float:
     return Left->Size == 4 || Left->Size == 8;
   case NdTypeKind::Ptr:
     if (Left->Size != 8 || !Left->Pointee || !Right->Pointee)
+      return false;
+    // Fixed arrays describe record members. A pointer-to-array declarator
+    // needs a separate source projection contract; structural equality must
+    // not grant that contract when adding array-valued members.
+    if (Left->Pointee->Kind == NdTypeKind::Array ||
+        Right->Pointee->Kind == NdTypeKind::Array)
       return false;
     // A named opaque pointee supplies identity, not a by-value layout.
     if (Left->Pointee->Kind == NdTypeKind::Struct &&
@@ -89,6 +116,14 @@ bool equalTypes(const TypeRef &Left, const TypeRef &Right, unsigned Depth,
         return false;
     return true;
   }
+  case NdTypeKind::Array:
+    if (!Left->ElemType || !Right->ElemType || !Left->ArrayCount ||
+        Left->ArrayCount != Right->ArrayCount || Left->ArrayCount > Remaining ||
+        uint64_t(Left->ElemType->Size) * Left->ArrayCount != Left->Size ||
+        uint64_t(Right->ElemType->Size) * Right->ArrayCount != Right->Size)
+      return false;
+    Remaining -= Left->ArrayCount;
+    return equalTypes(Left->ElemType, Right->ElemType, Depth + 1, Remaining);
   case NdTypeKind::Func:
     // These projections currently support the ordinary platform C convention.
     // A displayable stdcall/vectorcall callback is not evidence for that ABI.
@@ -115,7 +150,7 @@ bool equalTypes(const TypeRef &Left, const TypeRef &Right, unsigned Depth,
 }
 
 bool scalarType(const TypeRef &Type) {
-  if (!Type)
+  if (!Type || sourceAArch64VectorBytes(Type))
     return false;
   if (Type->Kind == NdTypeKind::Ptr) {
     // A named display record has an independently owned layout, and may be
@@ -139,6 +174,49 @@ bool scalarType(const TypeRef &Type) {
     return Type->Size == 4 || Type->Size == 8;
   return Type->Kind == NdTypeKind::Int && (Type->Size == 1 || Type->Size == 2 ||
                                            Type->Size == 4 || Type->Size == 8);
+}
+
+TypeRef darwinByValueType(const TypeRef &Type) {
+  if (Type->Kind != NdTypeKind::Struct)
+    return Type;
+  auto Record = std::make_shared<NdType>(*Type);
+  Record->Passing = NdRecordPassing::ByValue;
+  return Record;
+}
+
+bool assignDarwinParameterLocations(
+    SourceParameterTypeHint &Parameter,
+    llvm::ArrayRef<SourceParameterPiece> Pieces) {
+  const auto Members = sourceABIValueMembers(Parameter.Type);
+  Parameter.Location = {};
+  Parameter.Components.clear();
+  Parameter.IndirectByValue = Pieces.front().Indirect;
+  if (Parameter.IndirectByValue) {
+    Parameter.Location = Pieces.front().Location;
+  } else if (Members.empty()) {
+    Parameter.Location = Pieces.front().Location;
+    Parameter.Location.ExtendTo32Bits =
+        Parameter.Location.Kind == SourceABICarrierKind::IntegerRegister &&
+        Parameter.Type->Kind == NdTypeKind::Int &&
+        Parameter.Type->Size < kDarwinPromotedIntegerBytes;
+  } else {
+    for (const auto &Member : Members) {
+      const auto Piece =
+          std::find_if(Pieces.begin(), Pieces.end(), [&](const auto &Piece) {
+            return Piece.Offset <= Member.ByteOffset &&
+                   Member.ByteOffset + Member.Type->Size <=
+                       Piece.Offset + Piece.Location.ValueBytes;
+          });
+      if (Piece == Pieces.end())
+        return false;
+      auto Location = Piece->Location;
+      if (Location.Kind == SourceABICarrierKind::Stack)
+        Location.EntryStackOffset += Member.ByteOffset - Piece->Offset;
+      Location.ValueBytes = Member.Type->Size;
+      Parameter.Components.push_back(Location);
+    }
+  }
+  return true;
 }
 
 bool fail(std::string &Diagnostic, const char *Message) {
@@ -395,14 +473,33 @@ std::vector<SourceAggregateMember> sourceAggregateMembers(const TypeRef &Type) {
         Pending.push_back(
             {Member.Type->Fields[I],
              uint16_t(Member.ByteOffset + Member.Type->FieldOffsets[I])});
+    } else if (Member.Type->Kind == NdTypeKind::Array) {
+      for (uint32_t I = Member.Type->ArrayCount; I-- > 0;)
+        Pending.push_back(
+            {Member.Type->ElemType,
+             uint16_t(Member.ByteOffset + I * Member.Type->ElemType->Size)});
     } else {
-      if (!scalarType(Member.Type))
+      if (!scalarType(Member.Type) && !isSourceAArch64VectorType(Member.Type))
         return {};
       Result.push_back(std::move(Member));
     }
   }
   if (Result.empty())
     return {};
+  if (std::any_of(Result.begin(), Result.end(), [](const auto &Member) {
+        return isSourceAArch64VectorType(Member.Type);
+      })) {
+    const unsigned Bytes = Result.front().Type->Size;
+    if (Result.size() > kSourceAArch64MaxHVAMembers ||
+        Result.size() * Bytes != Type->Size ||
+        !std::all_of(Result.begin(), Result.end(), [&](const auto &Member) {
+          return isSourceAArch64VectorType(Member.Type) &&
+                 Member.Type->Size == Bytes &&
+                 Member.ByteOffset == (&Member - Result.data()) * Bytes;
+        }))
+      return {};
+    return Result;
+  }
   // A record of return registers takes no source convention's restrictions:
   // each member is the scalar one register carries, naturally aligned.
   if (Type->RegisterReturnRecord)
@@ -469,6 +566,14 @@ std::vector<SourceAggregateMember> sourceAggregateMembers(const TypeRef &Type) {
   return Result;
 }
 
+std::vector<SourceAggregateMember>
+sourceAArch64VectorAggregateMembers(const TypeRef &Type) {
+  auto Members = sourceAggregateMembers(Type);
+  if (!Members.empty() && isSourceAArch64VectorType(Members.front().Type))
+    return Members;
+  return {};
+}
+
 namespace {
 bool indirectDarwinRecord(const TypeRef &Type) {
   if (!Type || Type->Kind != NdTypeKind::Struct ||
@@ -480,7 +585,8 @@ bool indirectDarwinRecord(const TypeRef &Type) {
   Record->Passing = NdRecordPassing::ByValue;
   const auto Placement = placeSourceParameters(
       Arch::AArch64, BinaryFormat::MachO, NdType::makeVoid(), {Record});
-  return Placement && Placement->Parameters.front().size() == 1 &&
+  return Placement && Placement->Parameters.size() == 1 &&
+         Placement->Parameters.front().size() == 1 &&
          Placement->Parameters.front().front().Indirect;
 }
 } // namespace
@@ -525,7 +631,7 @@ sourceABIParameters(const SourceFunctionTypeHint &Hint) {
 
 std::vector<SourceAggregateMember> sourceABIValueMembers(const TypeRef &Type) {
   if (Type && Type->Kind == NdTypeKind::Int && Type->Size == kDarwinWideBytes &&
-      Type->SourceName != kSourceAArch64Vector128CType)
+      !sourceAArch64VectorBytes(Type))
     return {{NdType::makeInt(kDarwinWordBytes, false), 0},
             {NdType::makeInt(kDarwinWordBytes, false), kDarwinWordBytes}};
   return sourceAggregateMembers(Type);
@@ -639,14 +745,14 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
   auto ValidLocation = [&](const TypeRef &Type,
                            const SourceABIValueLocation &Location,
                            bool IsReturn) {
-    const bool Vector128 =
+    const bool Vector =
         Hint.Origin == SourceFunctionTypeHint::OriginKind::NativeAnalysis &&
-        Hint.Architecture == Arch::AArch64 && !IsReturn && Type &&
-        Type->Kind == NdTypeKind::Int && Type->Size == 16 &&
-        Type->SourceName == kSourceAArch64Vector128CType &&
-        Location.Kind == SourceABICarrierKind::FloatingRegister;
-    if ((!scalarType(Type) && !Vector128) ||
-        Location.ValueBytes != Type->Size ||
+        Hint.Architecture == Arch::AArch64 &&
+        Hint.Convention == SourceFunctionTypeHint::ConventionKind::C &&
+        isSourceAArch64VectorType(Type) &&
+        (Location.Kind == SourceABICarrierKind::FloatingRegister ||
+         (!IsReturn && Location.Kind == SourceABICarrierKind::Stack));
+    if ((!scalarType(Type) && !Vector) || Location.ValueBytes != Type->Size ||
         Type->SourceName == kSourceBooleanCType)
       return false;
     if (Location.ExtendTo32Bits &&
@@ -667,7 +773,7 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
     if (Location.EntryStackOffset != 0)
       return false;
     if (Location.Kind == SourceABICarrierKind::FloatingRegister)
-      return (Type->Kind == NdTypeKind::Float || Vector128) &&
+      return (Type->Kind == NdTypeKind::Float || Vector) &&
              TRI.isVectorReg(Location.RegisterOffset) &&
              (!IsReturn || Location.RegisterOffset == TRI.FPReturnReg);
     if (Location.Kind == SourceABICarrierKind::IntegerRegister)
@@ -676,7 +782,8 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
       // source boundary reinterprets the complete bits rather than converting
       // their integer value. Inferred signatures and result carriers keep
       // their existing restrictions.
-      return (Type->Kind != NdTypeKind::Float ||
+      return !sourceAArch64VectorBytes(Type) &&
+             (Type->Kind != NdTypeKind::Float ||
               (!IsReturn && Hint.Architecture == Arch::AArch64 &&
                Hint.Origin ==
                    SourceFunctionTypeHint::OriginKind::ExplicitSource &&
@@ -708,7 +815,8 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
       return std::equal(Parts.begin(), Parts.end(), Expected.begin(),
                         sameLocation);
     }
-    const bool Floating = Members.front().Type->Kind == NdTypeKind::Float;
+    const bool Floating = Members.front().Type->Kind == NdTypeKind::Float ||
+                          isSourceAArch64VectorType(Members.front().Type);
     if (Floating && Members.size() > 4)
       return false;
     const bool SwiftFourWordReturn =
@@ -766,7 +874,9 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
       return fail(Diagnostic, "Unsupported source record return carriers");
   } else if (!Hint.ReturnComponents.empty()) {
     if (Hint.ReturnType->Kind != NdTypeKind::Int ||
-        Hint.ReturnType->Size != 16 || Hint.ReturnComponents.size() != 2 ||
+        Hint.ReturnType->Size != 16 ||
+        sourceAArch64VectorBytes(Hint.ReturnType) ||
+        Hint.ReturnComponents.size() != 2 ||
         !EmptyLocation(Hint.ReturnLocation) || TRI.IntReturnRegs.size() < 2)
       return fail(Diagnostic, "Unsupported source return components");
     for (size_t I = 0; I != 2; ++I) {
@@ -790,7 +900,6 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
                       Hint.ReturnLocation.RegisterOffset);
   std::vector<std::pair<int64_t, int64_t>> StackRanges;
   size_t PhysicalCount = 0;
-  std::vector<uint64_t> FloatingRegisters;
   bool HasNativeVector = false;
   for (const auto &Parameter : Hint.Parameters) {
     if (Parameter.TheRole != SourceParameterTypeHint::Role::Ordinary &&
@@ -849,15 +958,13 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
                                : Parameter.Components;
     HasNativeVector |=
         Hint.Origin == SourceFunctionTypeHint::OriginKind::NativeAnalysis &&
-        Hint.Architecture == Arch::AArch64 && Parameter.Type &&
-        Parameter.Type->Kind == NdTypeKind::Int && Parameter.Type->Size == 16 &&
-        Parameter.Type->SourceName == kSourceAArch64Vector128CType;
+        Hint.Architecture == Arch::AArch64 &&
+        (isSourceAArch64VectorType(Parameter.Type) ||
+         !sourceAArch64VectorAggregateMembers(Parameter.Type).empty());
     PhysicalCount += Locations.size();
     if (PhysicalCount > static_cast<size_t>(limits::kMaxBoundSourceCallArgs))
       return fail(Diagnostic, "Source parameter carrier budget exceeded");
     for (const auto &Location : Locations) {
-      if (Location.Kind == SourceABICarrierKind::FloatingRegister)
-        FloatingRegisters.push_back(Location.RegisterOffset);
       if (Location.Kind == SourceABICarrierKind::Stack) {
         const int64_t Begin = Location.EntryStackOffset;
         const int64_t End = Begin + Location.ValueBytes;
@@ -874,14 +981,27 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
     }
   }
   if (HasNativeVector) {
-    if (FloatingRegisters.size() > TRI.FPParamRegs.size())
-      return fail(Diagnostic,
-                  "Native vector parameters exceed the floating register bank");
-    for (size_t Index = 0; Index < FloatingRegisters.size(); ++Index)
-      if (FloatingRegisters[Index] != TRI.FPParamRegs[Index])
-        return fail(Diagnostic,
-                    "Native vector parameters require a contiguous floating "
-                    "register prefix");
+    // Validate the complete PCS allocation at its owner. A contiguous prefix
+    // alone would allow a later vector to reuse registers exhausted by an HVA
+    // spill, or permit an HVA on the stack while its entire bank is available.
+    llvm::SmallVector<TypeRef> Types;
+    for (const auto &Parameter : Hint.Parameters)
+      Types.push_back(darwinByValueType(Parameter.Type));
+    const auto Placement = placeSourceParameters(
+        Arch::AArch64, BinaryFormat::MachO, Hint.ReturnType, Types);
+    if (!Placement || Placement->Parameters.size() != Types.size())
+      return fail(Diagnostic, kIncompleteDarwinPlacement);
+    for (size_t I = 0; I < Hint.Parameters.size(); ++I) {
+      const auto &Actual = Hint.Parameters[I];
+      auto Expected = Actual;
+      if (!assignDarwinParameterLocations(Expected, Placement->Parameters[I]) ||
+          Expected.IndirectByValue != Actual.IndirectByValue ||
+          !sameLocation(Expected.Location, Actual.Location) ||
+          Expected.Components.size() != Actual.Components.size() ||
+          !std::equal(Expected.Components.begin(), Expected.Components.end(),
+                      Actual.Components.begin(), sameLocation))
+        return fail(Diagnostic, kInvalidDarwinVectorPlacement);
+    }
   }
   return true;
 }
@@ -937,17 +1057,16 @@ bool assignDarwinSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,
       auto Type = Parameter.Type;
       if (Parameter.TheRole != SourceParameterTypeHint::Role::Ordinary ||
           (!scalarType(Type) &&
+           !(isSourceAArch64VectorType(Type) &&
+             Hint.Origin ==
+                 SourceFunctionTypeHint::OriginKind::NativeAnalysis) &&
            !(Type && Type->Kind == NdTypeKind::Int &&
              Type->Size == kDarwinWideBytes &&
-             Type->SourceName != kSourceAArch64Vector128CType) &&
+             !sourceAArch64VectorBytes(Type)) &&
            !(Records && (indirectDarwinRecord(Type) ||
                          !sourceAggregateMembers(Type).empty()))))
         return fail(Diagnostic, kUnsupportedDarwinValue);
-      if (Type->Kind == NdTypeKind::Struct) {
-        Type = std::make_shared<NdType>(*Type);
-        Type->Passing = NdRecordPassing::ByValue;
-      }
-      Types.push_back(std::move(Type));
+      Types.push_back(darwinByValueType(Type));
     }
     Placement = placeSourceParameters(Architecture, BinaryFormat::MachO,
                                       Hint.ReturnType, Types);
@@ -960,35 +1079,9 @@ bool assignDarwinSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,
     Parameter.Components.clear();
     Parameter.IndirectByValue = false;
     if (Placement) {
-      const auto &Pieces = Placement->Parameters[ParameterIndex];
-      const auto Members = sourceABIValueMembers(Parameter.Type);
-      Parameter.Location = {};
-      if (Pieces.front().Indirect) {
-        Parameter.IndirectByValue = true;
-        Parameter.Location = Pieces.front().Location;
-      } else if (Members.empty()) {
-        Parameter.Location = Pieces.front().Location;
-        Parameter.Location.ExtendTo32Bits =
-            Parameter.Location.Kind == SourceABICarrierKind::IntegerRegister &&
-            Parameter.Type->Kind == NdTypeKind::Int &&
-            Parameter.Type->Size < kDarwinPromotedIntegerBytes;
-      } else {
-        for (const auto &Member : Members) {
-          const auto Piece = std::find_if(
-              Pieces.begin(), Pieces.end(), [&](const auto &Piece) {
-                return Piece.Offset <= Member.ByteOffset &&
-                       Member.ByteOffset + Member.Type->Size <=
-                           Piece.Offset + Piece.Location.ValueBytes;
-              });
-          if (Piece == Pieces.end())
-            return fail(Diagnostic, kIncompleteDarwinPlacement);
-          auto Location = Piece->Location;
-          if (Location.Kind == SourceABICarrierKind::Stack)
-            Location.EntryStackOffset += Member.ByteOffset - Piece->Offset;
-          Location.ValueBytes = Member.Type->Size;
-          Parameter.Components.push_back(Location);
-        }
-      }
+      if (!assignDarwinParameterLocations(
+              Parameter, Placement->Parameters[ParameterIndex]))
+        return fail(Diagnostic, kIncompleteDarwinPlacement);
       continue;
     }
     if (Parameter.TheRole != SourceParameterTypeHint::Role::Ordinary) {
@@ -1022,7 +1115,8 @@ bool assignDarwinSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,
       const auto Members = sourceAggregateMembers(Parameter.Type);
       if (Members.empty() || mixedSwiftResult(Parameter.Type, Members))
         return fail(Diagnostic, "Unsupported Darwin record parameter ABI");
-      const bool Floating = Members.front().Type->Kind == NdTypeKind::Float;
+      const bool Floating = Members.front().Type->Kind == NdTypeKind::Float ||
+                            isSourceAArch64VectorType(Members.front().Type);
       if (Floating && Members.size() > 4) {
         if (Architecture != Arch::AArch64 ||
             Convention != SourceFunctionTypeHint::ConventionKind::C ||
@@ -1089,7 +1183,8 @@ bool assignDarwinSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,
         return fail(Diagnostic, "Mixed record result requires the Swift ABI");
       Hint.ReturnComponents = mixedSwiftResultLocations(Architecture);
     } else {
-      const bool Floating = Members.front().Type->Kind == NdTypeKind::Float;
+      const bool Floating = Members.front().Type->Kind == NdTypeKind::Float ||
+                            isSourceAArch64VectorType(Members.front().Type);
       const bool SwiftFourWordReturn =
           !Floating &&
           Convention == SourceFunctionTypeHint::ConventionKind::Swift &&
@@ -1106,6 +1201,13 @@ bool assignDarwinSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,
                       : SourceABICarrierKind::IntegerRegister,
              Bank[I], 0, Members[I].Type->Size});
     }
+  } else if (isSourceAArch64VectorType(Hint.ReturnType)) {
+    if (Architecture != Arch::AArch64 ||
+        Convention != SourceFunctionTypeHint::ConventionKind::C ||
+        Hint.Origin != SourceFunctionTypeHint::OriginKind::NativeAnalysis)
+      return fail(Diagnostic, kUnsupportedDarwinValue);
+    Hint.ReturnLocation = {SourceABICarrierKind::FloatingRegister,
+                           TRI.FPReturnReg, 0, Hint.ReturnType->Size};
   } else if (Hint.ReturnType->Kind == NdTypeKind::Int &&
              Hint.ReturnType->Size == 16 && TRI.IntReturnRegs.size() >= 2) {
     for (size_t I = 0; I != 2; ++I)

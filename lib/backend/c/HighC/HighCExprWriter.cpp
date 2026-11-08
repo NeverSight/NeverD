@@ -37,6 +37,7 @@
 #include "neverd/DataAccessWidths.h"
 #include "neverd/Limits.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/c/render/AArch64/AArch64AddressMemoryC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthLoadC.h"
@@ -65,6 +66,7 @@
 #include "neverd/libc/LibCRecordArguments.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/DataSymbolBinding.h"
+#include "neverd/loader/ELF/MIPSCodeMode.h"
 #include "neverd/loader/StringLiteralSymbols.h"
 #include "neverd/loader/SymbolDecoration.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -76,9 +78,11 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 
 namespace neverd {
@@ -2046,7 +2050,7 @@ std::string HighCWriter::importDataSlotIdentifier(va_t Addr) const {
 
 std::optional<va_t> HighCWriter::importDataSlotRead(const HighExpr &Address,
                                                     uint16_t Size) const {
-  if (!Opts.Image || Size == 0 || Size != Opts.Image->getPointerSize())
+  if (!Opts.Image || Size == 0)
     return std::nullopt;
   std::optional<va_t> Slot = constAddress(Address);
   if (!Slot) {
@@ -2058,9 +2062,26 @@ std::optional<va_t> HighCWriter::importDataSlotRead(const HighExpr &Address,
       if (const auto Holder = constAddress(*Pointer->Operands[0]))
         Slot = foldReadonlyScalar(*Holder, Size);
   }
-  if (!Slot || importDataSlotIdentifier(*Slot).empty())
+  if (Slot)
+    requireBoundImportMemory(*Slot, Size);
+  if (Size != Opts.Image->getPointerSize() || !Slot ||
+      importDataSlotIdentifier(*Slot).empty())
     return std::nullopt;
   return Slot;
+}
+
+void HighCWriter::requireBoundImportMemory(va_t Address, uint64_t Size) const {
+  if (!Size || (Opts.Image->Mode != InstructionMode::MixedMIPS &&
+                Opts.Image->Mode != InstructionMode::MicroMIPS))
+    return;
+  // ELF imports have no C slot-name prefix. Reading even one byte of the
+  // runtime slot can observe its encoding tag, absent from the file bytes.
+  const auto &Slots = Opts.Image->ImportStorageSlots;
+  const auto Next = Slots.lower_bound(Address);
+  if ((Next != Slots.end() && Next->first - Address < Size) ||
+      (Next != Slots.begin() &&
+       Address - std::prev(Next)->first < Opts.Image->getPointerSize()))
+    mips::requireNumericCodePointerSource(Opts.Image, InvalidVA);
 }
 
 const Symbol *HighCWriter::imageSymbolAt(va_t Addr) const {
@@ -3148,14 +3169,27 @@ const HighExpr *HighCWriter::functionAddressArgument(const HighExpr &Arg) {
       return nullptr;
     Cur = Forward->second;
   }
-  return Cur && Cur->Kind == ExprKind::Const &&
-                 isAddressProvenance(Cur->ConstProvenance) &&
-                 FunctionAddressNames.count(functionAddressKey(*Cur))
-             ? Cur
-             : nullptr;
+  if (Cur && Cur->Kind == ExprKind::Const &&
+      isAddressProvenance(Cur->ConstProvenance))
+    if (const auto Key = functionAddressKey(*Cur);
+        Key && FunctionAddressNames.count(*Key))
+      return Cur;
+  return nullptr;
 }
 
-va_t HighCWriter::functionAddressKey(const HighExpr &Const) const {
+std::optional<va_t>
+HighCWriter::functionAddressKey(const HighExpr &Const) const {
+  if (Opts.Image && (Opts.Image->Mode == InstructionMode::MixedMIPS ||
+                     Opts.Image->Mode == InstructionMode::MicroMIPS)) {
+    if (Const.ConstProvenance == ConstantAddressProvenance::DataAddress)
+      return std::nullopt;
+    const auto Entry = mips::serializedCodeTarget(*Opts.Image, Const.ConstVal);
+    if (!Entry &&
+        Const.ConstProvenance == ConstantAddressProvenance::CodeAddress)
+      throw std::invalid_argument(
+          "MIPS copied callable has an invalid mode tag");
+    return Entry;
+  }
   return Const.ConstProvenance == ConstantAddressProvenance::CodeAddress &&
                  Opts.Image
              ? normalizeCodeAddress(Const.ConstVal, Opts.Image->Arch,
@@ -4515,7 +4549,7 @@ HighCWriter::exprStrAsTypedArg(const HighExpr &E, const TypeRef &Expected,
   if (FunctionPointer(Expected))
     if (const HighExpr *Address = functionAddressArgument(E)) {
       const auto &Target =
-          FunctionAddressNames.at(functionAddressKey(*Address));
+          FunctionAddressNames.at(*functionAddressKey(*Address));
       if (!Target.Definition && FunctionAddressAliases.count(Target.Symbol))
         return "(" + Parameter() + ")" + castOperand(Text);
     }
@@ -5226,7 +5260,11 @@ HighCWriter::typedPointerOffset(const HighExpr &Addr) const {
       int64_t Delta = static_cast<int64_t>(RHS->ConstVal);
       if (RHS->Type && RHS->Type->Size == 4)
         Delta = static_cast<int32_t>(RHS->ConstVal);
-      Acc += Subtract ? -Delta : Delta;
+      int64_t Next;
+      if (Subtract ? llvm::SubOverflow(Acc, Delta, Next)
+                   : llvm::AddOverflow(Acc, Delta, Next))
+        return std::nullopt;
+      Acc = Next;
       Cur = LHS;
       continue;
     }
@@ -5234,7 +5272,8 @@ HighCWriter::typedPointerOffset(const HighExpr &Addr) const {
       int64_t Delta = static_cast<int64_t>(LHS->ConstVal);
       if (LHS->Type && LHS->Type->Size == 4)
         Delta = static_cast<int32_t>(LHS->ConstVal);
-      Acc += Delta;
+      if (llvm::AddOverflow(Acc, Delta, Acc))
+        return std::nullopt;
       Cur = RHS;
       continue;
     }
@@ -5440,7 +5479,8 @@ HighCWriter::frameTypedMemberAccess(int64_t Disp, uint16_t AccessSize) const {
     const bool CallRecord = canHaveInteriorFields(Slot.CallType);
     if (!Record && !CallRecord)
       continue;
-    const uint64_t Rel = static_cast<uint64_t>(Disp - SlotDisp);
+    const uint64_t Rel =
+        static_cast<uint64_t>(Disp) - static_cast<uint64_t>(SlotDisp);
     if (Dbg) {
       if (Record)
         Dbg->completeType(Slot.Type);
@@ -5705,14 +5745,21 @@ bool HighCWriter::isIntegerOverlayStore(const HighExpr &Val) const {
 std::optional<int64_t>
 HighCWriter::frameOverlayDisplacement(const HighExpr &Base,
                                       uint64_t Rel) const {
+  const auto AddRelativeOffset = [Rel](int64_t Disp) -> std::optional<int64_t> {
+    // Rel is unsigned: even an offset above INT64_MAX can fit when the
+    // frame displacement is negative. Compare before forming the sum.
+    if (Rel > static_cast<uint64_t>(INT64_MAX) - static_cast<uint64_t>(Disp))
+      return std::nullopt;
+    return static_cast<int64_t>(static_cast<uint64_t>(Disp) + Rel);
+  };
   if (const auto Disp = frameDisplacement(Base))
-    return *Disp + static_cast<int64_t>(Rel);
+    return AddRelativeOffset(*Disp);
   const HighExpr *Cur = unwrapIntegerView(&Base);
   if (Cur && Cur->Kind == ExprKind::Load && !Cur->Operands.empty() &&
       Cur->Operands[0] && Cur->MemoryOrdering == NdMemoryOrdering::None &&
       Cur->MemoryAddressSpace == NdMemoryAddressSpace::Default)
     if (const auto Disp = frameDisplacement(*Cur->Operands[0]))
-      return *Disp + static_cast<int64_t>(Rel);
+      return AddRelativeOffset(*Disp);
   return std::nullopt;
 }
 
@@ -5728,7 +5775,8 @@ TypeRef HighCWriter::frameTypedMemberType(int64_t Disp,
     const bool CallRecord = canHaveInteriorFields(Slot.CallType);
     if (!Record && !CallRecord)
       continue;
-    const uint64_t Rel = static_cast<uint64_t>(Disp - SlotDisp);
+    const uint64_t Rel =
+        static_cast<uint64_t>(Disp) - static_cast<uint64_t>(SlotDisp);
     if (Dbg) {
       if (Record)
         Dbg->completeType(Slot.Type);
@@ -6638,7 +6686,8 @@ bool HighCWriter::disjointMemory(const HighExpr &A, const HighExpr &B,
   return false;
 }
 
-std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
+std::optional<int64_t>
+HighCWriter::frameDisplacement(const HighExpr &E, bool RequireKnownRoot) const {
   if (!CurrentFunc ||
       FrameDisplacementDepth >= limits::kMaxFrameDisplacementDepth)
     return std::nullopt;
@@ -6651,6 +6700,12 @@ std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
       ProjectFrameAliasesIntoStorage ? FrameStorageSlots : FrameSlots;
   const HighExpr *Cur = unwrapIntegerView(&E);
   int64_t Acc = 0;
+  const auto AddOffset = [&](int64_t Offset) -> std::optional<int64_t> {
+    int64_t Result;
+    if (llvm::AddOverflow(Acc, Offset, Result))
+      return std::nullopt;
+    return Result;
+  };
   unsigned Depth = 0;
   while (Cur && Depth++ < limits::kMaxFrameDisplacementDepth) {
     Cur = unwrapIntegerView(Cur);
@@ -6670,7 +6725,7 @@ std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
       const uint64_t WidthMask = Cur->Type->Size == 4 ? UINT32_MAX : UINT64_MAX;
       const uint64_t Cleared = ~Mask->ConstVal & WidthMask;
       const uint64_t Alignment = Cleared + 1;
-      if (!Cleared || Alignment > kSyntheticStackAlignment ||
+      if (!Cleared || !Alignment || Alignment > kSyntheticStackAlignment ||
           (Alignment & Cleared) != 0 || CurrentFunc->FrameSize <= 0 ||
           Cur->Type->Size != getTargetRegInfo(Opts.TheArch).PointerSize)
         return std::nullopt;
@@ -6686,19 +6741,16 @@ std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
       if (*BaseDisp < INT64_MIN + Remainder)
         return std::nullopt;
       const int64_t AlignedDisp = *BaseDisp - Remainder;
-      if ((Acc > 0 && AlignedDisp > INT64_MAX - Acc) ||
-          (Acc < 0 && AlignedDisp < INT64_MIN - Acc))
-        return std::nullopt;
       // The synthetic byte buffer shares this alignment and entry residue;
       // rounding a proved in-frame address stays within its padded lower end.
-      return Acc + AlignedDisp;
+      return AddOffset(AlignedDisp);
     }
     if (Cur->Kind == ExprKind::Var) {
       if (isCatchFuncletParentFrame(Cur->Var)) {
         // rdx is the parent's established frame, the same rebase SEH handlers
         // use so [rdx+k] names the try body's var_mN slots.
         if (CurrentFunc->FrameSize > 0)
-          return Acc - CurrentFunc->FrameSize;
+          return AddOffset(-CurrentFunc->FrameSize);
         return Acc;
       }
       // SSA version zero is always the architectural entry SP. Exceptional
@@ -6708,7 +6760,9 @@ std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
         return Acc;
       auto Alias = FrameAliases.find(varName(Cur->Var));
       if (Alias != FrameAliases.end())
-        return Acc + Alias->second;
+        return AddOffset(Alias->second);
+      if (RequireKnownRoot && !isRegistrationEstablisherFrame(Cur->Var))
+        return std::nullopt;
       if (CurrentFunc->ExceptionMetadata && Cur->Var.Kind == MedVar::Reg &&
           Cur->Var.RenameTag < 0 &&
           Cur->Var.RegOff == getTargetRegInfo(Opts.TheArch).FramePointer) {
@@ -6718,9 +6772,10 @@ std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
         // Without that proof an arbitrary incoming EBP is not entry ESP - 4.
         if (Opts.TheArch == Arch::X86)
           return std::nullopt;
-        const int64_t Order[3] = {Acc - Slot, Acc, Acc + Slot};
-        for (int64_t Adj : Order)
-          if (Slots.count(Adj))
+        const std::optional<int64_t> Order[] = {AddOffset(-Slot), Acc,
+                                                AddOffset(Slot)};
+        for (const auto Adj : Order)
+          if (Adj && Slots.count(*Adj))
             return Adj;
         return Acc;
       }
@@ -6753,7 +6808,11 @@ std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
     int64_t Delta = static_cast<int64_t>(Imm->ConstVal);
     if (Imm->Type && Imm->Type->Size == 4)
       Delta = static_cast<int32_t>(Imm->ConstVal);
-    Acc += Subtract ? -Delta : Delta;
+    int64_t Next;
+    if (Subtract ? llvm::SubOverflow(Acc, Delta, Next)
+                 : llvm::AddOverflow(Acc, Delta, Next))
+      return std::nullopt;
+    Acc = Next;
     Cur = Base;
   }
   return std::nullopt;
@@ -6769,43 +6828,10 @@ bool HighCWriter::isRegistrationEstablisherFrame(const MedVar &V) const {
 
 std::optional<int64_t>
 HighCWriter::certifiedFrameStorageDisplacement(const HighExpr &E) const {
-  if (!CurrentFunc)
-    return std::nullopt;
   // frameDisplacement also has a display-only heuristic for an unassigned
   // SSA-0 value. That is insufficient to redirect a real memory address into
-  // stack_storage: require a known frame root along a constant-offset chain.
-  const HighExpr *Cur = &E;
-  unsigned Depth = 0;
-  while (Cur && Depth++ < limits::kMaxFrameDisplacementDepth) {
-    Cur = unwrapIntegerView(Cur);
-    if (!Cur)
-      return std::nullopt;
-    if (Cur->Kind == ExprKind::BinOp && Cur->Op == NdOp::INT_AND)
-      return frameDisplacement(E);
-    if (Cur->Kind == ExprKind::Var) {
-      if (!isSyntheticEntryStackPointer(Cur->Var, *CurrentFunc, Opts.TheArch) &&
-          !isCatchFuncletParentFrame(Cur->Var) &&
-          !isRegistrationEstablisherFrame(Cur->Var) &&
-          !FrameAliases.count(varName(Cur->Var)))
-        return std::nullopt;
-      return frameDisplacement(E);
-    }
-    if (Cur->Kind != ExprKind::BinOp || Cur->Operands.size() != 2 ||
-        !Cur->Operands[0] || !Cur->Operands[1] ||
-        (Cur->Op != NdOp::INT_ADD && Cur->Op != NdOp::INT_SUB))
-      return std::nullopt;
-    const HighExpr *LHS = unwrapIntegerView(Cur->Operands[0].get());
-    const HighExpr *RHS = unwrapIntegerView(Cur->Operands[1].get());
-    if (!LHS || !RHS)
-      return std::nullopt;
-    if (RHS->Kind == ExprKind::Const)
-      Cur = LHS;
-    else if (Cur->Op == NdOp::INT_ADD && LHS->Kind == ExprKind::Const)
-      Cur = RHS;
-    else
-      return std::nullopt;
-  }
-  return std::nullopt;
+  // stack_storage. Check the root in the same walk that accumulates its offset.
+  return frameDisplacement(E, /*RequireKnownRoot=*/true);
 }
 
 bool HighCWriter::frameStorageAlignmentHolds(const HighExpr &Call) {
@@ -6827,10 +6853,11 @@ bool HighCWriter::frameStorageAlignmentHolds(const HighExpr &Call) {
     return false;
   // The storage is aligned to the synthetic stack alignment, and the entry
   // stack pointer sits at its residue above an aligned lower part.
-  const int64_t Residue = static_cast<int64_t>(syntheticEntryStackResidue(
-      Opts.TheArch, Opts.Format, CurrentFunc->EntryKind));
-  const int64_t Alignment = static_cast<int64_t>(Bytes);
-  return ((*Disp + Residue) % Alignment + Alignment) % Alignment == 0;
+  const uint64_t Residue = syntheticEntryStackResidue(Opts.TheArch, Opts.Format,
+                                                      CurrentFunc->EntryKind);
+  // Bytes is a power of two: the unsigned sum preserves its low bits even
+  // when a signed displacement plus the entry residue would overflow.
+  return ((static_cast<uint64_t>(*Disp) + Residue) & (Bytes - 1)) == 0;
 }
 
 const HighFunc::VaStartForwarder *
@@ -7195,9 +7222,11 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
     }
     if (pointerNeedsIntegerView(DeclaredType))
       return PointerInteger("(uintptr_t)" + Name);
-    if (DeclaredType &&
-        DeclaredType->SourceName == kSourceAArch64Vector128CType)
-      return "__builtin_bit_cast(__int128, " + Name + ")";
+    if (isSourceAArch64VectorType(DeclaredType))
+      return "__builtin_bit_cast(" +
+             typeToC(
+                 NdType::makeInt(DeclaredType->Size, DeclaredType->IsSigned)) +
+             ", " + Name + ")";
     return Name;
   }
   case ExprKind::Const: {
@@ -7286,9 +7315,11 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
     }
     // A function's address prints as the function, whose designator C
     // converts to its address; it keeps the integer type the machine moves.
-    if (isAddressProvenance(E.ConstProvenance))
-      if (const auto Function =
-              FunctionAddressNames.find(functionAddressKey(E));
+    if (const auto Key = isAddressProvenance(E.ConstProvenance)
+                             ? functionAddressKey(E)
+                             : std::nullopt;
+        Key)
+      if (const auto Function = FunctionAddressNames.find(*Key);
           Function != FunctionAddressNames.end()) {
         const std::string Identifier =
             functionAddressIdentifier(Function->second);
@@ -7569,7 +7600,9 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
         !E.Operands[0]->Type || E.Type->Size != E.Operands[0]->Type->Size)
       llvm::report_fatal_error("HighC cannot render an invalid bit cast");
     const HighExpr &Src = *E.Operands[0];
-    if (E.Type->Kind == NdTypeKind::Int && Src.Type->Kind == NdTypeKind::Int) {
+    if (E.Type->Kind == NdTypeKind::Int && Src.Type->Kind == NdTypeKind::Int &&
+        !sourceAArch64VectorBytes(E.Type) &&
+        !sourceAArch64VectorBytes(Src.Type)) {
       if (E.Type->IsSigned == Src.Type->IsSigned) {
         std::string Text = exprStr(Src, ParentPrec);
         if (const auto Printed = printedIntegerType(Src))
@@ -7648,12 +7681,17 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
     return "&" + exprStr(*E.Operands[0], 99);
   }
   case ExprKind::Record: {
-    if (!E.Type || sourceAggregateMembers(E.Type).empty() ||
-        E.Operands.size() != E.Type->Fields.size())
-      llvm::report_fatal_error("HighC cannot render an invalid source record");
-    std::string Result = "(" + typeToC(E.Type) + "){";
+    const bool Array = E.Type && E.Type->Kind == NdTypeKind::Array;
+    if (!E.Type ||
+        (Array ? !equalSourceTypes(E.Type, E.Type)
+               : sourceAggregateMembers(E.Type).empty()) ||
+        E.Operands.size() !=
+            (Array ? E.Type->ArrayCount : E.Type->Fields.size()))
+      llvm::report_fatal_error(c_detail::kInvalidSourceRecord);
+    std::string Result = Array ? c_detail::kSourceArrayInitializerOpen
+                               : "(" + typeToC(E.Type) + "){";
     for (size_t I = 0; I < E.Operands.size(); ++I) {
-      const TypeRef &Field = E.Type->Fields[I];
+      const TypeRef &Field = Array ? E.Type->ElemType : E.Type->Fields[I];
       const HighExpr *Operand = E.Operands[I].get();
       const bool Equal = Operand && equalSourceTypes(Field, Operand->Type);
       // HighIR passes choose an integer value's signedness for its other
@@ -7664,7 +7702,7 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
                                  isPlainInteger(Operand->Type) &&
                                  Operand->Type->Size == Field->Size;
       if (!Equal && !Reinterpreted)
-        llvm::report_fatal_error("HighC source record field type disagrees");
+        llvm::report_fatal_error(c_detail::kInvalidSourceRecordFieldType);
       if (I)
         Result += ", ";
       if (Reinterpreted) {
@@ -7672,11 +7710,10 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
         continue;
       }
       const auto Text = exprStr(*E.Operands[I]);
-      if (E.Type->Fields[I]->Kind == NdTypeKind::Ptr) {
+      if (Field->Kind == NdTypeKind::Ptr) {
         // Pointer expressions retain their integer machine carrier in HighC.
         // A record initializer needs the same source conversion as a call.
-        const auto Value =
-            sourceValue(Text, E.Operands[I]->Type, E.Type->Fields[I]);
+        const auto Value = sourceValue(Text, E.Operands[I]->Type, Field);
         if (!Value)
           llvm::report_fatal_error("HighC source pointer field is invalid");
         Result += *Value;
@@ -7687,12 +7724,21 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
     return Result + "}";
   }
   case ExprKind::Field: {
-    if (E.Operands.size() != 1 || !E.Operands[0] || !E.Operands[0]->Type ||
-        E.Operands[0]->Type->Kind != NdTypeKind::Struct ||
+    if (E.Operands.size() != 1 || !E.Operands[0] || !E.Operands[0]->Type)
+      llvm::report_fatal_error(c_detail::kInvalidSourceRecordField);
+    const auto &Record = E.Operands[0]->Type;
+    if (Record->Kind == NdTypeKind::Array) {
+      if (E.ConstVal >= Record->ArrayCount ||
+          !equalSourceTypes(E.Type, Record->ElemType))
+        llvm::report_fatal_error(c_detail::kInvalidSourceRecordField);
+      return llvm::formatv(c_detail::kSourceArrayField, exprStr(*E.Operands[0]),
+                           E.ConstVal)
+          .str();
+    }
+    if (Record->Kind != NdTypeKind::Struct ||
         E.ConstVal >= E.Operands[0]->Type->Fields.size() ||
         !equalSourceTypes(E.Type, E.Operands[0]->Type->Fields[E.ConstVal]))
-      llvm::report_fatal_error("HighC cannot render an invalid source field");
-    const auto &Record = E.Operands[0]->Type;
+      llvm::report_fatal_error(c_detail::kInvalidSourceRecordField);
     if (!Record->SourceName.empty()) {
       const auto Field = Record->displayFieldPathAt(
           Record->FieldOffsets[E.ConstVal], E.Type->Size,

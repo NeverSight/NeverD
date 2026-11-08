@@ -1,4 +1,4 @@
-# Android log readers and explicit event writes
+# Android log readers and explicit writes
 
 The Android native API-28 profile models these liblog functions over an explicit
 visible snapshot: `android_logger_list_alloc`, `android_logger_list_alloc_time`,
@@ -143,8 +143,97 @@ unmodeled.
 
 This finite contract supplies neither logd sockets, credentials, filtering,
 timestamps, daemon persistence nor a live reader stream. Writes do not append
-to `log_records`. Java event readers, text logging and security/stats-buffer
+to `log_records`. Java event readers and security/stats-buffer
 writes remain outside this subset.
+
+## Text write contract
+
+`__android_log_write`, `__android_log_buf_write`, the three formatted liblog
+entries below and BinderProxy's API 28
+FAILED_TRANSACTION diagnostic share `android.text_log_writes`. Each entry has
+exactly `log_id`, `payload` and `result`. IDs 0, 1, 3 and 4 select main, radio,
+system and crash. Payload bytes are the first 4068 bytes of one priority byte,
+a NUL-terminated tag and a NUL-terminated message. Transport clipping can
+remove either terminator, the whole message, or part of a multibyte character;
+it does not add a replacement NUL. Results are signed int32 liblog outcomes,
+including filtering or transport errors; a matched negative result is a
+completed attempt. Transport preserves errno, including an error set by a
+preceding fatal-message allocation. Writes do not change `log_records`.
+
+The owner applies API 28's radio-tag routing and 31-byte rewritten tag, treats
+a null tag as empty, and narrows the priority to one byte. The transcript
+matches the resulting buffer and all payload bytes. Missing, exhausted or
+mismatching entries stop without consuming them. The report includes
+`android.text_log_writes_consumed` only when this input is supplied. C++ uses
+`AndroidNativeOptions::TextLogWrites`; both entry paths share validation and
+the existing ordered-write matcher. Payloads are 3..4068 bytes. Below the
+transport limit both terminators are required; at exactly 4068 bytes zero or
+one terminator is also valid. A second terminator must be the last byte.
+At most 4096 entries / 1 MiB including each buffer id and result are admitted.
+Validated hex payloads share the JSON payload accounting; metadata limits
+still apply. Raw native writes read both complete guest C strings before
+transport clipping, as required by the preceding `strlen` calls. A bad pointer
+or unterminated suffix still fails even when those bytes would not be sent.
+Radio-tag rewriting precedes clipping. Matched results remain explicit; the
+model does not derive success or a return byte count from the clipped length.
+
+`__android_log_print`, `__android_log_vprint` and `__android_log_buf_print`
+reuse Bionic's shared scalar formatter and AAPCS64 argument reader, including
+register/stack overflow slots and guest-owned `va_list` save areas. API 28 uses
+a 1024-byte formatting buffer including NUL: at most 1023 bytes reach the
+subsequent C-string write, and an embedded NUL ends that message. Formatting
+still reads all required arguments before the tag and log write. The return
+value is the explicit liblog result, not the untruncated formatting count.
+Caller `va_list` bytes are preserved. Formatting and transport leave errno
+intact; fatal-message mmap can set it. Unsupported conversions retain
+the formatter's existing boundary and consume no log entry.
+
+Priority exactly `ANDROID_LOG_FATAL` (int value 7) calls the same Bionic owner
+as direct or dynamically resolved `android_set_abort_message`. The low byte
+alone does not select fatal behavior. Both require the API 28 libc binding
+`android.abort_message_slot` (`AndroidNativeOptions::AbortMessageSlot` in C++):
+omission is unknown and stops explicitly; numeric zero models libc before the
+binding is initialized; a nonzero value is the guest address of its 8-byte
+pointer slot. JSON null is not numeric zero. The binding supplies no storage or
+initial pointer value: those bytes come from ordinary guest memory.
+
+An unbound or already nonzero slot returns without reading the message.
+Otherwise, the owner reads the C string and calls shared Linux anonymous mmap
+for `8 + strlen(message) + 1` bytes. The allocation starts with that unrounded
+LP64 size followed by the message and NUL; Linux owns page rounding, zeroed
+padding, placement, permissions and memory limits. The record is copied before
+the pointer is published. mmap failure leaves the slot unchanged and returns
+normally with Bionic errno; a later call may retry. Slot access is lazy, so a
+read-only empty slot faults after mapping/copying, while an occupied read-only
+slot is sufficient. These mappings are not malloc allocations. The first
+message remains shared across native threads; clearing the live slot permits
+another record without freeing the old one. Modeled native calls are atomic
+within the existing cooperative scheduler.
+
+Native liblog performs radio-prefix inspection/routing before the fatal
+setter, then reads the final tag/message for transport. This order preserves
+published state across later string faults, buffer refusals and missing or
+mismatching write transcripts, and observes aliases modified by publication.
+Raw abort records keep the complete message even when transport clips it;
+formatted records contain the preceding formatter's at-most-1023-byte result.
+Saving an abort message or writing a fatal log does not itself terminate the
+process. Ordinary memory snapshots observe the slot and record; there is no
+second host-side copy of the live abort pointer.
+
+This bounded subset requires explicit results and supplies no logd clock,
+property filter or host transport. Log assertions and Java Log wrappers remain
+explicit boundaries. Formatting-buffer clipping
+and transport clipping have separate byte limits; the shared text-write owner
+applies the latter after formatting and radio-tag routing.
+
+Binder logs priority ERROR (6), tag `JavaBinder`, and the data Parcel size
+after native completion. The write precedes exception creation, even when its
+matched result is negative. A size strictly greater than 200 KiB produces
+`TransactionTooLargeException` with `data parcel size N bytes`; smaller sizes
+produce `DeadObjectException` with the API 28 small-parcel heuristic message.
+Both remain checked RemoteException descendants. FAILED_TRANSACTION preserves
+proxy liveness; only the separate DEAD_OBJECT status marks it dead. Reply
+bytes/cursor and status-only error handling retain their existing ownership.
 
 ## ABI evidence and verification
 
@@ -169,6 +258,12 @@ References are pinned to AOSP `android-9.0.0_r1`:
   establish binary encoding, null strings and the liblog result/errno boundary.
 - [logd_writer.c](https://android.googlesource.com/platform/system/core/+/android-9.0.0_r1/liblog/logd_writer.c)
   clips the tag and payload iovecs to the maximum delivered payload.
+- [android_set_abort_message.cpp](https://android.googlesource.com/platform/bionic/+/android-9.0.0_r1/libc/bionic/android_set_abort_message.cpp)
+  and [libc_init_common.cpp](https://android.googlesource.com/platform/bionic/+/android-9.0.0_r1/libc/bionic/libc_init_common.cpp)
+  define the initialized slot binding, first-message rule, mmap layout and
+  publication order. The liblog writer above invokes it before its wire reads.
+- [android_util_Binder.cpp](https://android.googlesource.com/platform/frameworks/base/+/android-9.0.0_r1/core/jni/android_util_Binder.cpp)
+  fixes the FAILED_TRANSACTION text, log-before-exception order and size heuristic.
 - [reflection.cc](https://android.googlesource.com/platform/art/+/android-9.0.0_r1/runtime/reflection.cc)
   defines promoted variadic float conversion and raw jvalue float carriers.
 - API 28 [Integer](https://android.googlesource.com/platform/libcore/+/android-9.0.0_r1/ojluni/src/main/java/java/lang/Integer.java),
