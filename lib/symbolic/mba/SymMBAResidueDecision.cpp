@@ -844,7 +844,7 @@ class LowWordDecisions {
 
   const Bits &wordValue(uint32_t Index) const {
     return (*WordPages[Index / limits::kResidueWordPageEntries])
-                     [Index % limits::kResidueWordPageEntries];
+        [Index % limits::kResidueWordPageEntries];
   }
 
   // Result pages remain stable while the dense index table grows. Cached
