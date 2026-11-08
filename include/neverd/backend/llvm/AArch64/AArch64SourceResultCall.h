@@ -35,6 +35,11 @@ inline constexpr char kResultCallConstraints[] =
 #define RESULT_CALL_CLOBBER(Name) ",~{" Name "}"
 #include "AArch64SourceResultCall.def"
     ;
+inline constexpr char kValueCallConstraints[] =
+#define VALUE_CALL_INPUTS(Text) Text
+#define RESULT_CALL_CLOBBER(Name) ",~{" Name "}"
+#include "AArch64SourceResultCall.def"
+    ;
 inline constexpr char kResultCallCClobbers[] =
 #define RESULT_CALL_CLOBBER(Name) "\"" Name "\", "
 #include "AArch64SourceResultCall.def"
@@ -77,10 +82,12 @@ sourceResultCallStackBytes(llvm::ArrayRef<SourceABIParameter> Bindings) {
 /// just its declared carrier; unused lanes and record padding are not read.
 inline std::string
 sourceResultCallAsm(llvm::ArrayRef<SourceABIParameter> Bindings,
-                    std::optional<unsigned> Key,
+                    std::optional<unsigned> Key, bool RetainResultStorage,
                     llvm::ArrayRef<SourceABIParameter> Results = {}) {
   const auto &TRI = getTargetRegInfo(Arch::AArch64);
-  std::string Text = std::string(kResultCallMarker) + kResultCallPrefix;
+  std::string Text =
+      std::string(kResultCallMarker) +
+      (RetainResultStorage ? kResultCallPrefix : kValueCallPrefix);
   unsigned Slot = kResultCallHeaderWords;
   for (const auto &P : Bindings) {
     const auto &L = P.Location;
@@ -115,11 +122,12 @@ sourceResultCallAsm(llvm::ArrayRef<SourceABIParameter> Bindings,
                   Reg, L.EntryStackOffset)
                   .str();
   }
-  Text += llvm::formatv(kResultCallSuffix, !Key ? kResultCallRaw
-                                           : *Key == kAArch64PAuthKeyIA
-                                               ? kResultCallIA
-                                               : kResultCallIB)
-              .str();
+  Text +=
+      llvm::formatv(RetainResultStorage ? kResultCallSuffix : kValueCallSuffix,
+                    !Key                         ? kResultCallRaw
+                    : *Key == kAArch64PAuthKeyIA ? kResultCallIA
+                                                 : kResultCallIB)
+          .str();
   for (const auto &Result : Results) {
     const auto &L = Result.Location;
     const bool FP = L.Kind == SourceABICarrierKind::FloatingRegister;
@@ -145,7 +153,8 @@ sourceResultCallAsm(llvm::ArrayRef<SourceABIParameter> Bindings,
 /// compiler frame pointer even though the machine call does not consume it.
 inline std::string sourceResultCallAsmC(llvm::StringRef Assembly,
                                         llvm::StringRef Packet,
-                                        llvm::StringRef Frame) {
+                                        llvm::StringRef Frame,
+                                        llvm::StringRef StackBytes = {}) {
   std::string Text;
   for (size_t I = 0; I < Assembly.size(); ++I) {
     const char C = Assembly[I];
@@ -159,8 +168,8 @@ inline std::string sourceResultCallAsmC(llvm::StringRef Assembly,
     } else
       Text += C;
   }
-  return llvm::formatv(kResultCallAsmC, Text, Packet, Frame,
-                       kResultCallCClobbers)
+  return llvm::formatv(StackBytes.empty() ? kResultCallAsmC : kValueCallAsmC,
+                       Text, Packet, Frame, kResultCallCClobbers, StackBytes)
       .str();
 }
 } // namespace neverd

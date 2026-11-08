@@ -253,10 +253,10 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       throw std::invalid_argument(kResultCallError);
     const auto Results = sourceResultCallResults(Signature);
     std::string Result =
-        llvm::formatv(kResultCallPacketC, Packet,
-                      kResultCallHeaderWords + Bindings.size() + Results.size(),
-                      Target, Modifier, *Storage,
-                      sourceResultCallStackBytes(Bindings))
+        llvm::formatv(
+            RetainResultStorage ? kResultCallPacketC : kValueCallPacketC,
+            Packet, kResultCallHeaderWords + Bindings.size() + Results.size(),
+            Target, Modifier, *Storage, sourceResultCallStackBytes(Bindings))
             .str();
     unsigned At = 0;
     for (unsigned I = 0; I < ArgumentCount; ++I) {
@@ -289,8 +289,12 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       }
       Result += kResultCallArgumentEndC;
     }
-    Result += sourceResultCallAsmC(sourceResultCallAsm(Bindings, Key, Results),
-                                   Packet, kResultCallFrameC);
+    Result += sourceResultCallAsmC(
+        sourceResultCallAsm(Bindings, Key, RetainResultStorage, Results),
+        Packet, kResultCallFrameC,
+        RetainResultStorage
+            ? std::string()
+            : std::to_string(sourceResultCallStackBytes(Bindings)));
     if (Results.empty())
       return Result + kResultCallEndC;
     Result += llvm::formatv(kResultCallResultDeclarationC,

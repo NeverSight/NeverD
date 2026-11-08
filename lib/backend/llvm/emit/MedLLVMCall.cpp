@@ -1097,6 +1097,11 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           Builder.getInt64(sourceResultCallStackBytes(Bindings))};
       PacketValues.insert(PacketValues.end(), Carriers.begin(), Carriers.end());
       for (unsigned I = 0; I < PacketValues.size(); ++I) {
+        // Direct results have no x8 input. Pass the stack size as an assembly
+        // operand, avoiding unused packet stores and synthesized memset calls.
+        if (!RetainResultStorage && I >= kValueCallHeaderWords &&
+            I < kResultCallHeaderWords)
+          continue;
         auto *Slot = Builder.CreateGEP(I64Ty, Packet, Builder.getInt64(I));
         Builder.CreateStore(PacketValues[I], Slot);
       }
@@ -1104,13 +1109,22 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           Builder.CreateCall(llvm::Intrinsic::getOrInsertDeclaration(
                                  Mod, llvm::Intrinsic::frameaddress, {PtrTy}),
                              {Builder.getInt32(0)});
+      llvm::SmallVector<llvm::Value *, 3> AssemblyArgs{Packet, Frame};
+      llvm::SmallVector<llvm::Type *, 3> AssemblyTypes{PtrTy, PtrTy};
+      if (!RetainResultStorage) {
+        AssemblyArgs.push_back(
+            Builder.getInt64(sourceResultCallStackBytes(Bindings)));
+        AssemblyTypes.push_back(I64Ty);
+      }
       auto *AssemblyType =
-          llvm::FunctionType::get(Builder.getVoidTy(), {PtrTy, PtrTy}, false);
+          llvm::FunctionType::get(Builder.getVoidTy(), AssemblyTypes, false);
       auto *Assembly = llvm::InlineAsm::get(
-          AssemblyType, sourceResultCallAsm(Bindings, Key, Results),
-          kResultCallConstraints, /*hasSideEffects=*/true,
+          AssemblyType,
+          sourceResultCallAsm(Bindings, Key, RetainResultStorage, Results),
+          RetainResultStorage ? kResultCallConstraints : kValueCallConstraints,
+          /*hasSideEffects=*/true,
           /*isAlignStack=*/false, llvm::InlineAsm::AD_ATT, /*canThrow=*/true);
-      Call = Builder.CreateCall(Assembly, {Packet, Frame});
+      Call = Builder.CreateCall(Assembly, AssemblyArgs);
       if (!Results.empty()) {
         llvm::SmallVector<llvm::Value *, 4> Parts;
         llvm::SmallVector<SourceAggregateMember, 4> Members;

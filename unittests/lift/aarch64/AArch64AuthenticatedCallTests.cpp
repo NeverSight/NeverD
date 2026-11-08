@@ -267,6 +267,8 @@ void checkMachineCall(llvm::Module &Module, unsigned Key) {
           EXPECT_TRUE(Assembly->canThrow());
           EXPECT_TRUE(Assembly->hasSideEffects());
           EXPECT_TRUE(Call->getType()->isVoidTy());
+          EXPECT_EQ(Call->arg_size(), 3U);
+          EXPECT_EQ(Assembly->getConstraintString(), kValueCallConstraints);
           const char *Branch =
               Key == kAArch64PAuthKeyIA ? kResultCallIA : kResultCallIB;
           EXPECT_NE(Assembly->getAsmString().find(Branch), std::string::npos);

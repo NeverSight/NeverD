@@ -1381,6 +1381,9 @@ HighIR retains each complete logical argument. HighC evaluates it once and
 copies its declared pieces into the physical argument slots, using that same
 ABI mapping and excluding padding. Original-x8 calls retain their existing
 physical operands and exact storage address.
+Direct-result calls initialize only their target, modifier and actual argument
+pieces. They pass the outgoing stack size as a separate assembly operand;
+unused packet lanes and a nonexistent x8 result input need no initialization.
 This avoids an intermediate authentication or resign operation, including at
 O0; invalid signatures remain the responsibility of the original authenticated
 branch. Raw calls with direct results retain their existing typed C/LLVM path.
