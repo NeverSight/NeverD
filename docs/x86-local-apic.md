@@ -110,14 +110,24 @@ callback cannot fail after delivery effects.
 The existing scheduler owns IF/STI/MOV-SS admission and acknowledgment timing.
 For paged delivery, acceptance can precede a fault during IDT entry; the
 producer still consumes the accepted IRQ exactly once. A deferred/unaccepted
-event leaves these banks unchanged. This component does not add a callback,
-choose a global event, execute a handler, wake a halted CPU or advance PC.
-It is an explicit building block for a producer, not automatic scheduler wiring.
-In particular, the current scheduler has no CR8-write completion notification;
-its polling and acknowledgment callbacks alone cannot synchronize all writes.
-The successful-RAM source profile excludes TPR aliases, and the paged source
-currently leaves MOV CR8 at a native boundary. Neither contract is expanded by
-these register methods; completing the instruction/device wiring remains work.
+event leaves these banks unchanged. This component does not choose a global
+event, execute a handler, wake a halted CPU or advance PC.
+
+The successful-RAM scheduler's opt-in
+[`notify_cr8_writes` binding](x64-continuation-source.md#cr8-write-completion)
+provides the missing completed-write notification. Its bridge receives the
+already admitted CR8 value and existing producer context. A producer can apply
+`writeCr8(value)` there; failure would violate the completed-write contract,
+so it must not be silently ignored. Initial CPU/controller coherence remains a
+separate import obligation. Every later CR8 write must pass through the notified
+scheduled path; raw instruction functions and unscheduled drivers do not notify.
+The bridge runs on same-value writes too, before the next priority query, and
+never on a read or rejected/preempted write.
+
+The successful-RAM source profile still excludes TPR aliases, and the paged
+source leaves MOV CR8 at a native boundary. External TPR/CPU changes, device
+routing and full paged privilege/fault admission require their own binding.
+The local bank model and completion callback do not supply those environments.
 
 All queries visit at most the fixed eight-word banks they need. Acknowledgment
 and EOI touch only the selected word after bounded priority checks. Reception

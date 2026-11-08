@@ -127,6 +127,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
                                        "paged_memory",
                                        "paged_debug",
                                        "scheduled_events",
+                                       "notify_cr8_writes",
                                        "native_hyperv_hypercall_entry",
                                        "follow_internal_calls",
                                        "function_context",
@@ -234,6 +235,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
       {"paged_memory", &Options.PagedMemory},
       {"paged_debug", &Options.PagedDebug},
       {"scheduled_events", &Options.ScheduledEvents},
+      {"notify_cr8_writes", &Options.NotifyCr8Writes},
       {"follow_internal_calls", &Result.FollowInternalCalls},
       {"function_context", &Result.FunctionContext},
       {"pause_call_sites", &Result.PauseCallSites},
@@ -1190,6 +1192,22 @@ typedef struct neverd_x64_event_v1 {
         "unfinished CMPS/SCAS retain entry flags; prior elements survive "
         "later backing stops; IRQ/NMI eligibility is producer-owned and "
         "does not predict physical fast-string interruption grouping";
+  }
+  if (Request->Options.NotifyCr8Writes) {
+    llvm::json::Array Writes;
+    for (const auto &Unit : *Units)
+      if (Unit.WritesCr8)
+        Writes.push_back(hex(Unit.Address));
+    Report["cr8_write_notification"] = llvm::json::Object{
+        {"symbol", "neverd_x64_cr8_written_v1"},
+        {"instructions", std::move(Writes)},
+        {"domain", "successful-RAM scheduled drivers and their call views; "
+                   "once after each completed MOV to CR8, including "
+                   "same-value writes, before the next poll or return"},
+        {"effects", "cannot fail; update only the existing producer context; "
+                    "no state, shadows, budgets, code or RAM access; "
+                    "initial CPU/controller coherence is caller-owned; "
+                    "raw steps and unscheduled drivers do not notify"}};
   }
   if (Request->NativeRtmAbortRegions)
     Report["native_rtm_abort_environment"] = llvm::json::Object{

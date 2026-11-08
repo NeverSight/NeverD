@@ -1495,6 +1495,7 @@ static void original(neverd_x64_state_v6 *s, void *code, uint64_t *ram) {
 
 // These predicates reuse the scheduled-call fixture above.
 #include "X64CallSiteHandlerTests.inc"
+#include "X64Cr8WriteNotificationTests.inc"
 #include "X64StackObserverTests.inc"
 
 TEST_F(X64ContinuationExportTest,

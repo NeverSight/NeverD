@@ -18505,8 +18505,15 @@ See the [local APIC contract](x86-local-apic.md).
 Its CR8 read/write methods and paired CPU/APIC import check preserve the
 distinction between restoration and an actual same-value write. The former
 retains TPR subpriority; the latter clears it. Privilege/fault handling and
-instruction/device completion wiring remain with the embedding. The fixed
-PPR tie policy retains TPR subpriority as QEMU/KVM do, rather than inferring a
+device wiring remain with the embedding. The successful-RAM scheduler can
+explicitly opt into CR8-write completion notifications. Instruction lowering
+records modeled writes while lowering the authoritative task-priority
+transition; the shared scheduler calls the producer bridge only on that
+instruction's successful exit, including same-value writes. This requires no
+re-decoding, default-source change or ordinary-case runtime check. The embedding
+supplies the bridge and coherent initial banks. Paged MOV CR8 and TPR aliases
+retain their previous boundaries. The fixed PPR tie policy retains TPR
+subpriority as QEMU/KVM do, rather than inferring a
 model-specific choice for arbitrary hardware.
 
 `X64FunctionCallHandlers` composes a producer-declared delivered handler context

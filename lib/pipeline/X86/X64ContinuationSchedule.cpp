@@ -140,6 +140,14 @@ void emitScheduledDriver(
           },
           Options.PagedDebug ? "shadows->SSBlocked" : "");
       OS << "            break;\n";
+    } else if (Options.NotifyCr8Writes && Unit.WritesCr8) {
+      // The lowering owner marks modeled writes, not reads or native requests.
+      // Rejections preserve the producer; same-value completions still notify.
+      OS << " status = " << Unit.Function.Name
+         << "((uint8_t *)state);\n"
+            "            if (status == 0) "
+            "neverd_x64_cr8_written_v1(state->CR8, context);\n"
+            "            break;\n";
     } else
       OS << " status = " << Unit.Function.Name
          << (Options.PagedDebug ? "_paged_debug_step(state, memory_context, "
@@ -186,6 +194,19 @@ void emitX64ContinuationSchedule(
     llvm::ArrayRef<X64FunctionCallSite> CallSites,
     const X64FunctionCallSitePauses *CallSitePauses) {
   const bool Paged = Options.PagedMemory;
+  if (Options.NotifyCr8Writes)
+    OS << R"C(
+/* Completed modeled CR8 write, including an unchanged value. Called once
+ * after the instruction commits, before the next poll or driver return.
+ * The embedding must bind coherent initial CPU/controller state and use
+ * scheduled drivers for subsequent writes. This hook cannot fail: it may
+ * access only value and the existing producer context, never state, shadows,
+ * budgets, selected code or guest RAM. Raw steps and unscheduled drivers
+ * do not notify.
+ * No write notification is issued for a read, native request, rejected write
+ * or preempting event. */
+extern void neverd_x64_cr8_written_v1(uint64_t value, void *context);
+)C";
   OS << R"C(
 /* Instruction-boundary IRQ/NMI producer. peek returns 0=no event, 1=pending;
  * every peek consumes one poll-budget unit. It must not acknowledge the event

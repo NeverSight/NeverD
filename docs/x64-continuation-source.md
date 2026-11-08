@@ -191,6 +191,50 @@ limited to activation entry/exit and selected near-return checks. This
 interface does not close ordinary-C argument-recovery gaps or
 qualify a full Windows execution environment.
 
+### CR8 write completion
+
+Set `"notify_cr8_writes": true` together with `"scheduled_events": true` and
+`"event_delivery": true` to bind completed MOV-to-CR8 instructions to the
+existing event producer. This option supports the successful-RAM V6 profile;
+paged memory rejects it. The exported C declares a bridge supplied at link time:
+
+```c
+void neverd_x64_cr8_written_v1(uint64_t value, void *context);
+```
+
+`context` is the scheduler's existing producer context. Each successfully
+modeled MOV to CR8 calls the bridge once with the completed CR8 value, including
+same-value writes. The instruction has committed its state and next PC; the
+notification occurs before the next event poll or driver return, even when the
+instruction exhausted the budget. The callback cannot fail and may access only
+the supplied value and producer context. It must not access machine state,
+shadows, budgets, selected code or guest RAM. Its contract does not expose
+intermediate scheduler bookkeeping or permit reentry into the same scheduler.
+
+The bridge can call [`X86LocalApicFixed::writeCr8`](x86-local-apic.md) to clear
+TPR's low nibble and replace its priority class. Its input has already passed
+the instruction's range and privilege checks. The embedding must first bind
+coherent CPU/controller state and must serialize changes with event selection
+and acknowledgment. Imports and CR8 reads never clear TPR subpriority. A
+rejected write, native request, invalid producer, budget stop before execution,
+or preempting event emits no write notification. Invalid CR8 writes retain the
+successful-RAM profile's status-5 refusal; this option does not implement #GP
+fault delivery.
+
+The scheduler owns this notification in both C routes, including scheduled
+function contexts, checked entry views, original-CALL views and their resumption
+helpers. The manifest's `cr8_write_notification` object lists the symbol and
+selected write addresses. Raw instruction functions and unscheduled drivers
+retain their existing contracts and do not notify; embedders using the binding
+must route subsequent CR8 writes through scheduled entry points. TPR MMIO/MSR
+aliases, external CPU/controller changes and paged MOV-CR8 fault semantics remain
+outside this binding.
+
+Without the option, generated source and manifests retain their existing
+contents. Enabled output adds calls only at authenticated modeled CR8 writes;
+ordinary instruction cases acquire no priority comparison, polling work or
+runtime opt-in check.
+
 ### Scheduled function contexts
 
 Combining `"scheduled_events": true` with `function_context` adds
