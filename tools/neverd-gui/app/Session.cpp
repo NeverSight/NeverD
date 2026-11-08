@@ -307,6 +307,8 @@ void Session::receive(const QJsonObject &incoming) {
     capabilities_.clear();
     for (const auto &value : incoming.value("capabilities").toArray())
       capabilities_.insert(value.toString());
+    queries_.setPageDeltas(
+        capabilities_.contains(QStringLiteral("page_delta")));
     queries_.setAvailable(true);
     emit message(tr("Analysis engine %1 ready")
                      .arg(incoming.value("engine_version").toString()),

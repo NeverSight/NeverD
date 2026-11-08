@@ -85,6 +85,9 @@ public:
   void resetReadContext(const QString &project, const QString &revision);
   void setAvailable(bool available);
   bool available() const;
+  /// The worker sends what changed of a page this client keeps (page_delta),
+  /// which reads apply to it.
+  void setPageDeltas(bool deltas);
   QString projectId() const;
   QString revision() const;
   /// The current context change is a confirmed local display-name commit.
