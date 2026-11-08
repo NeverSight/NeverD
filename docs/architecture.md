@@ -18378,12 +18378,13 @@ same work allowance before returning.
 
 ### Explicit x64 continuation export
 
-`translate/X86/X86LocalApic.h` independently owns fixed-source APIC priority,
-acknowledgment and ordinary EOI bank transitions. It has no decoder/session
-dependency and is used only by explicit producers. CPU IF/shadow admission
-and acknowledgment timing stay in the continuation scheduler; arrivals,
-global event arbitration, TPR/CR8 synchronization and external EOI routing
-stay with the embedding. The offline QEMU bank adapter calls this type's
+`translate/X86/X86LocalApic.h` independently owns fixed-message reception,
+coalescing, APIC priority, acknowledgment and ordinary EOI bank transitions.
+Reception updates IRR/TMR without consuming a processor event. It has no
+decoder/session dependency and is used only by explicit producers. CPU IF/shadow
+admission and acknowledgment timing stay in the continuation scheduler;
+arrival routing/timing, global arbitration, TPR/CR8 synchronization and external
+EOI routing stay with the embedding. The offline QEMU bank adapter calls this type's
 constant initializer/validator instead of duplicating priority rules in Python.
 See the [local APIC contract](x86-local-apic.md).
 
