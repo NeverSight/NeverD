@@ -8,6 +8,8 @@
 //===----------------------------------------------------------------------===//
 
 TEST(X86VirtualizationSource, VmxoffRetainsFlagsAndTheLegacyVoidApi) {
+  const auto Legacy = llvm::Intrinsic::lookupIntrinsicID("llvm.x86.vmxoff");
+  RecordProperty("legacy_void_intrinsic_available", Legacy ? 1 : 0);
   for (const auto A : {Arch::X86, Arch::X64}) {
     const auto Plan = x86VirtualizationNative(Intrinsic::VmxOff, A,
                                               NdMemoryAddressSpace::Default);
@@ -23,10 +25,18 @@ TEST(X86VirtualizationSource, VmxoffRetainsFlagsAndTheLegacyVoidApi) {
     auto *Owner = llvm::Function::Create(Type, llvm::Function::ExternalLinkage,
                                          "owner", Module);
     Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Owner));
-    auto *Callee = llvm::Intrinsic::getOrInsertDeclaration(
-        &Module, llvm::Intrinsic::lookupIntrinsicID("llvm.x86.vmxoff"));
+    auto *Callee = Legacy
+                       ? llvm::Intrinsic::getOrInsertDeclaration(&Module, Legacy)
+                       : llvm::Function::Create(
+                             Type, llvm::Function::ExternalLinkage,
+                             "llvm.x86.vmxoff", Module);
     auto *Call = Builder.CreateCall(Callee);
     Builder.CreateRetVoid();
+    if (!Legacy) {
+      EXPECT_THROW(renderX86VirtualizationNativeCall(A, *Call, {}, false, {}),
+                   std::invalid_argument);
+      continue;
+    }
     auto Text = renderX86VirtualizationNativeCall(A, *Call, {}, false, {});
     ASSERT_TRUE(Text);
     EXPECT_NE(Text->find("__builtin_ia32_vmxoff("), std::string::npos);
