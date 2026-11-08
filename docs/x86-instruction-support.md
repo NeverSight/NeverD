@@ -4546,3 +4546,31 @@ hardware VM-entry behavior. Windows/Darwin i386 source ABIs, full machine-mode
 transitions and task switching, remaining state banks, software SMM/SGX and
 unbound asynchronous producers remain open. The final LLVM release remains
 gated; the production pin stays `neverd-llvm-v23.0.0-r6`.
+
+## Native i386 secure-loader source interfaces (2026-11-08)
+
+NeverC now admits both `__builtin_ia32_skinit` and `__svm_skinit` in the
+Linux i386 frontend. Before this change, the portable spelling was undeclared
+and the Microsoft spelling could become an unresolved external function.
+Both now lower to `llvm.x86.skinit(i32)` with raw EAX bits and no old C
+continuation. NeverD selects this capability separately from long-mode-only
+system builtins, so both HighC and LLVM-to-C can use the native i386 path.
+The existing LLVM fork already supplies the intrinsic and code32 lowering.
+
+The [i386 SKINIT evidence](evidence/x86-i386-skinit-2026-11-08.json) records
+14 focused NeverD checks and 48 native i386 C compilation checks across the
+native fork and pinned r6 SDK. Linking the unchanged C objects from both
+NeverC and Clang gives 864 comparisons against independent original bytes;
+all 160 EAX/image-store corruption controls are rejected. The standalone
+NeverC witness passes 1,440 EAX boundary checks and eight negative controls,
+while the full LLVM witness passes 1,080 checks. All 185 x86/i386 frontend
+tests and the VMX, SVM, VMRUN and FLAGS regression matrices pass.
+
+All 25 integer-width tests and 854 runnable pointer-projection tests also
+pass. The broader pointer suite skips 25 unavailable binary-corpus fixtures;
+the SKINIT-specific checks have no skips. These are instruction-boundary and
+source-transport qualifications: they do not execute SKINIT or qualify secure
+launch, attestation, processor reset or physical faults. Windows/Darwin i386
+source ABIs, the remaining architectural state/event gates and the existing
+90-finding source-global audit remain open. The production LLVM pin remains
+`neverd-llvm-v23.0.0-r6`; this batch does not publish a new LLVM release.
