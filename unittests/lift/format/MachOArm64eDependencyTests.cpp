@@ -206,6 +206,28 @@ TEST(MachOArm64eDependencies, RejectsMalformedOrOverlappingOverflowChains) {
   }
 }
 
+TEST(MachOArm64eDependencies, OrdinaryChainsShareMultiStartStorageChecks) {
+  for (unsigned Format : {DYLD_CHAINED_PTR_64, DYLD_CHAINED_PTR_64_OFFSET}) {
+    const auto Target =
+        kOrdinaryRebaseTarget + (Format == DYLD_CHAINED_PTR_64 ? kBase : 0);
+    auto Bytes = multiStartImage({Format, Target, kOrdinaryBind});
+    writeLE<uint32_t>(Bytes.data() + offsetof(mach_header_64, cpusubtype),
+                      CPU_SUBTYPE_ARM64_ALL);
+    auto State = readMachODependencyState(Bytes);
+    ASSERT_TRUE(bool(State)) << llvm::toString(State.takeError());
+    EXPECT_EQ(State->Slots.size(), 2u);
+    auto *Starts = Bytes.data() + kChains + kSegmentStart;
+    writeLE<uint16_t>(Starts +
+                          offsetof(dyld_chained_starts_in_segment, page_start) +
+                          kLastOverflowIndex * sizeof(uint16_t),
+                      DYLD_CHAINED_PTR_START_LAST);
+    auto Overlap = readMachODependencyState(Bytes);
+    EXPECT_FALSE(bool(Overlap));
+    if (!Overlap)
+      llvm::consumeError(Overlap.takeError());
+  }
+}
+
 TEST(MachOArm64eDependencies, RetainsSigningABIWhileRepackingChainMetadata) {
   for (const auto &Chain : Chains) {
     SCOPED_TRACE(Chain.Format);
