@@ -31,6 +31,7 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
+#include "llvm/MC/BinaryRewrite.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
@@ -289,7 +290,8 @@ void checkMachineCall(llvm::Module &Module, unsigned Key, bool Raw = false,
 void compile(const std::string &Source,
              const std::function<void(llvm::Module &)> &Inspect,
              llvm::StringRef Case, bool LLVMRoute, bool DarwinObject = false,
-             llvm::ArrayRef<llvm::StringRef> ExtraFlags = {}) {
+             llvm::ArrayRef<llvm::StringRef> ExtraFlags = {},
+             bool CompilerObject = false) {
 #ifdef NEVERD_TEST_CLANG
   const std::string Compiler = NEVERD_TEST_CLANG;
 #else
@@ -355,16 +357,39 @@ void compile(const std::string &Source,
     save(Case,
          llvm::formatv(kCompiledIR, Route, Optimization.drop_front()).str(),
          IR);
-    const auto Object = Codegen().compile(
-        *Module, Arch::AArch64,
-        DarwinObject ? BinaryFormat::MachO : BinaryFormat::ELF,
-        DarwinObject ? kTriple : llvm::StringRef());
-    ASSERT_TRUE(Object.Success);
-    save(Case,
-         llvm::formatv(kCompiledObject, Route, Optimization.drop_front()).str(),
-         llvm::StringRef(
-             reinterpret_cast<const char *>(Object.ObjectData.data()),
-             Object.ObjectData.size()));
+    if (CompilerObject) {
+      // A native C compiler owns its object and PAC IR dialect. The r6 LLVM
+      // importer separately refuses Apple Clang's legacy llvm.ptrauth globals.
+      for (const auto Flag : {kAssemblyOption, kLLVMOption})
+        Arguments.erase(std::remove(Arguments.begin(), Arguments.end(), Flag),
+                        Arguments.end());
+      Arguments.push_back(kCompileOption);
+      const int ObjectStatus = llvm::sys::ExecuteAndWait(
+          Compiler, Arguments, std::nullopt, Redirects, kCompilerTimeoutSeconds,
+          0, &Diagnostic);
+      Messages = llvm::MemoryBuffer::getFile(ErrorPath);
+      ASSERT_EQ(ObjectStatus, 0)
+          << Diagnostic
+          << (Messages ? (*Messages)->getBuffer().str() : std::string());
+      auto Bytes = llvm::MemoryBuffer::getFile(LLVMPath);
+      ASSERT_TRUE(Bytes);
+      save(Case,
+           llvm::formatv(kCompiledObject, Route, Optimization.drop_front())
+               .str(),
+           (*Bytes)->getBuffer());
+    } else {
+      const auto Object = Codegen().compile(
+          *Module, Arch::AArch64,
+          DarwinObject ? BinaryFormat::MachO : BinaryFormat::ELF,
+          DarwinObject ? kTriple : llvm::StringRef());
+      ASSERT_TRUE(Object.Success);
+      save(Case,
+           llvm::formatv(kCompiledObject, Route, Optimization.drop_front())
+               .str(),
+           llvm::StringRef(
+               reinterpret_cast<const char *>(Object.ObjectData.data()),
+               Object.ObjectData.size()));
+    }
     optimize(*Module);
     Inspect(*Module);
   }
@@ -1259,6 +1284,9 @@ TEST(AArch64AuthenticatedCall, LoweringRetainsNativeVectorAndOriginalX8) {
     checkMachineCall(Candidate, kAArch64PAuthKeyIA, true, true);
   };
   Inspect(*Module);
+  EXPECT_TRUE(Codegen()
+                  .compile(*Module, Arch::AArch64, BinaryFormat::MachO, kTriple)
+                  .Success);
   for (bool LLVMRoute : {false, true}) {
     CEmitterOptions Options;
     Options.TheArch = Arch::AArch64;
@@ -1275,6 +1303,24 @@ TEST(AArch64AuthenticatedCall, LoweringRetainsNativeVectorAndOriginalX8) {
           {HighConverter.convert(Med, Arch::AArch64)}, Out, Options));
     }
     compile(Source, Inspect, kLoweredNativeDirectory, LLVMRoute, true,
-            {kExceptionsOption, kNoStackProtectorOption});
+            {kExceptionsOption, kNoStackProtectorOption},
+            /*CompilerObject=*/true);
   }
+}
+
+TEST(AArch64AuthenticatedCall,
+     LegacyApplePACGlobalsRefuseBeforeCodeGeneration) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diagnostic;
+  auto Module = llvm::parseIR(llvm::MemoryBufferRef(kLegacyPAuthIR, kFunction),
+                              Diagnostic, Context);
+  ASSERT_TRUE(Module);
+  ASSERT_FALSE(llvm::verifyModule(*Module));
+  const auto Object =
+      Codegen().compile(*Module, Arch::AArch64, BinaryFormat::MachO, kTriple);
+  EXPECT_FALSE(Object.Success);
+  EXPECT_TRUE(Object.ObjectData.empty());
+  const auto Rewrite = Codegen().compileForRewrite(
+      *Module, Arch::AArch64, {}, BinaryFormat::MachO, kTriple);
+  EXPECT_FALSE(Rewrite.ImageValid);
 }

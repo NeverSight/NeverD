@@ -177,6 +177,18 @@ detectTargetFeatures(llvm::Module &Mod, Arch TheArch) {
   }
 }
 
+#define CODEGEN_PAUTH_TEXT(Name, Text) static constexpr char Name[] = Text;
+#include "CodeGenPointerAuth.def"
+
+static bool supportsPointerAuthenticationGlobals(const llvm::Module &Module) {
+  for (const auto &Global : Module.globals())
+    if (Global.getSection() == kLegacyApplePAuthSection) {
+      llvm::WithColor::error() << kLegacyApplePAuthUnsupported;
+      return false;
+    }
+  return true;
+}
+
 static bool supportsAArch64ReturnUnwind(const llvm::Module &Module,
                                         const llvm::Triple &Triple) {
   if (!Triple.isArm64e() || !Triple.isOSBinFormatMachO())
@@ -361,7 +373,8 @@ CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
                                llvm::StringRef TargetTriple) {
   CodegenResult Result;
   ensureTargets();
-  if (!supportsX86NativeExtensions(Mod))
+  if (!supportsX86NativeExtensions(Mod) ||
+      !supportsPointerAuthenticationGlobals(Mod))
     return Result;
   if (Mod.getModuleFlag(macho_loader::cache_load::kAnalysisFlag)) {
     llvm::WithColor::error() << macho_loader::cache_load::kRebuildUnsupported;
@@ -594,7 +607,8 @@ llvm::mc_rewrite::RewriteResult Codegen::compileForRewrite(
     llvm::StringRef TargetTriple, RewriteInputKind InputKind) {
   llvm::mc_rewrite::RewriteResult Result;
   ensureTargets();
-  if (!supportsX86NativeExtensions(Mod)) {
+  if (!supportsX86NativeExtensions(Mod) ||
+      !supportsPointerAuthenticationGlobals(Mod)) {
     Result.ImageValid = false;
     return Result;
   }

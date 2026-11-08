@@ -38,6 +38,14 @@
 #define A64_CALL_TYPED_VARIANT(Key, Zero, Raw)
 #endif
 
+A64_CALL_TEXT(kLegacyPAuthIR, R"IR(
+@callback.ptrauth = private constant { ptr, i32, i64, i64 }
+  { ptr @callback, i32 0, i64 0, i64 0 }, section "llvm.ptrauth", align 8
+declare void @callback()
+define ptr @legacy_callback_address() {
+  ret ptr @callback.ptrauth
+}
+)IR")
 A64_CALL_TEXT(kUnknownTypedKind, "unknown authenticated call fixture type")
 A64_CALL_TEXT(kFunction, "authenticated_dispatch")
 A64_CALL_TEXT(kTypedArgument, "value")
@@ -68,6 +76,7 @@ A64_CALL_TEXT(kNoStackProtectorOption, "-fno-stack-protector")
 A64_CALL_TEXT(kResultStorageDirectory, "result-storage-{0}-{1}-{2}")
 A64_CALL_TEXT(kAsyncUnwindOption, "-fasynchronous-unwind-tables")
 A64_CALL_TEXT(kAssemblyOption, "-S")
+A64_CALL_TEXT(kCompileOption, "-c")
 A64_CALL_TEXT(kLLVMOption, "-emit-llvm")
 A64_CALL_TEXT(kOutputOption, "-o")
 A64_CALL_TEXT(kNoOptimize, "-O0")
