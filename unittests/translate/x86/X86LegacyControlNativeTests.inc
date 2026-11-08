@@ -74,6 +74,24 @@ TEST_P(X86LegacyControlNativeTest, PrivilegeLockAndUndefinedRegisterPriority) {
   RecordProperty("cpu_comparisons", Comparisons);
 }
 
+TEST_P(X86LegacyControlNativeTest, RepeatAndSegmentPrefixesRemainRegisterOnly) {
+  for (uint8_t Prefix : {0xf2, 0xf3, 0x26, 0x2e, 0x36, 0x3e, 0x64, 0x65})
+    for (bool Code32 : {false, true})
+      for (bool Write : {false, true})
+        for (unsigned CR : {0u, 2u, 3u, 4u}) {
+          const uint32_t Value = CR == 0           ? 0x80050011
+                                 : CR == 2         ? 0xdeadbeef
+                                 : CR == 3         ? 0x10000
+                                 : GetParam() == 2 ? 0
+                                                   : 0x20;
+          ASSERT_NO_FATAL_FAILURE(
+              check(CR, Write, Value, 6, 0, Code32, false, 0, Prefix));
+          if (HasFailure())
+            return;
+        }
+  RecordProperty("cpu_comparisons", Comparisons);
+}
+
 TEST_P(X86LegacyControlNativeTest, CR0FixedIgnoredAndInvalidBits) {
   for (unsigned Bit = 0; Bit != 32; ++Bit)
     for (bool Set : {false, true}) {
