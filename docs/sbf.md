@@ -616,6 +616,13 @@ payload when the caller selects that tag. The existing four-alternative limit
 still applies: if another split exceeds it, the incoming bounds are retained
 without that refinement. Unknown ordinary scalars and 32-bit comparisons gain
 no full-width exclusion from this rule.
+If the same block stores the compared register as a full 64-bit word immediately
+before the comparison, the selected edge also narrows that stored value. The
+typed scratch value, its formal origin and the returned memory postcondition
+share this fact, so a later reload or caller does not lose an established range
+check. An alternate entry at the comparison, an intervening instruction, a
+changed base, or a truncated store does not supply this witness. This adds no
+alias or heap-initialization assumption and uses the existing value limit.
 Exact 64-bit register copies retain the tag relation; redefinition, potentially
 aliasing tag writes, calls, memory copies and loop backedges discard it. Payload
 writes invalidate affected conditional fields through the existing typed-memory

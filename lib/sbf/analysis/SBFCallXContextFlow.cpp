@@ -461,10 +461,12 @@ bool hasHeapAddressLowerBound(uint64_t Lower) {
 /// Narrow only scalar, unsigned comparisons. Unknown scalars acquire bounds
 /// here only when the comparison constrains a potential heap address. This
 /// domain does not introduce ordinary integer-range fixed points.
-bool refineAddressBranch(const MedInstruction *Last, size_t Successor,
+bool refineAddressBranch(const MedBlock &Block,
+                         const MedInstructionIndex &Index, size_t Successor,
                          ContextState &State, const SBFProgram &Program,
                          const SymbolicAddressSpace &Addresses,
                          uint16_t ReturnCarriers) {
+  const auto *Last = Index.find(Block.EndSlot - 1);
   if (!Last || Last->Width != kDoubleWordBitWidth ||
       Last->Semantics.Terminator != TerminatorKind::ConditionalJump)
     return true;
@@ -631,6 +633,29 @@ bool refineAddressBranch(const MedInstruction *Last, size_t Successor,
         if (ScalarOrigin)
           State.Origins[R] = *Refined;
       }
+    // A full-width store immediately before this comparison captured this
+    // very register value. The guard narrows that cell as well, even when the
+    // scalar has no equality identity. No alternate entry, intervening write,
+    // changed base or truncated store can inherit this local witness.
+    const auto *Stored =
+        Last->Slot > Block.StartSlot ? Index.find(Last->Slot - 1) : nullptr;
+    if (ScalarOrigin && Stored && Stored->Op == Operation::Store &&
+        Stored->Form == OperandForm::StoreReg &&
+        Stored->Width == kDoubleWordBitWidth && Stored->Src == Register &&
+        Stored->Dst != Register) {
+      if (const auto Address = memoryAddress(
+              State.Registers[Stored->Dst].singleton(), Stored->Offset)) {
+        State.Scratch.Values.writeValues(*Address, *Refined);
+        State.OriginScratch.Values.writeValues(*Address, *Refined);
+      }
+      RegisterState Entry{};
+      Entry[0] = State.Origins[Stored->Dst].singleton();
+      const auto Origin = substituteOrigin(
+          {RegisterValue::Kind::StackAddress, 1, Stored->Offset}, Entry,
+          Program);
+      if (Origin.ValueKind != RegisterValue::Kind::Unknown)
+        State.Postconditions.store(Origin, sizeof(uint64_t), *Refined);
+    }
   }
   return Reachable;
 }
@@ -4060,7 +4085,7 @@ ContextFlow::instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
             continue;
           if (auto Error = refineLoadedEquality(Block, NextSlot, Successor))
             return std::move(Error);
-          if (!refineAddressBranch(Last, NextSlot, Successor, Program,
+          if (!refineAddressBranch(Block, Index, NextSlot, Successor, Program,
                                    *CapturedAddresses, ReturnCarriers[Next]))
             continue;
           // Every CFG cycle crosses a reverse-postorder backedge. Reject it
@@ -5708,8 +5733,8 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
         if (auto Error =
                 refineLoadedEquality(MedBlock, NextSlot, SuccessorState))
           return std::move(Error);
-        if (!refineAddressBranch(Index.find(MedBlock.EndSlot - 1), NextSlot,
-                                 SuccessorState, Program, *CapturedAddresses,
+        if (!refineAddressBranch(MedBlock, Index, NextSlot, SuccessorState,
+                                 Program, *CapturedAddresses,
                                  ReturnCarriers[Successors[E]]))
           continue;
         // Reverse postorder identifies a DFS backedge even when the bytecode
@@ -5788,9 +5813,8 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
       return llvm::Error::success();
     if (auto Error = refineLoadedEquality(MedBlock, TailSlot, Path))
       return Error;
-    if (!refineAddressBranch(Index.find(MedBlock.EndSlot - 1), TailSlot, Path,
-                             Program, *CapturedAddresses,
-                             ReturnCarriers[*TaggedTail]))
+    if (!refineAddressBranch(MedBlock, Index, TailSlot, Path, Program,
+                             *CapturedAddresses, ReturnCarriers[*TaggedTail]))
       return llvm::Error::success();
     if (BlockOrder[*TaggedTail] <= BlockOrder[BlockID])
       widenCapturedValues(Path, *CapturedAddresses, CaptureOwners, Context.ID);
