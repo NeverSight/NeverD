@@ -99,6 +99,10 @@ public:
       llvm::function_ref<void(const RegisterValue &, const ProvenValueSet &,
                               std::optional<size_t>)>
           Visit) const;
+  void
+  visitScalarValues(llvm::function_ref<void(const RegisterValue &, unsigned,
+                                            const ProvenValueSet &)>
+                        Visit) const;
   void copyFrom(const RegisterValue &Source, const RegisterValue &Destination,
                 uint64_t Size, const SBFProgram &Program);
   void recordInputCopy(const RegisterValue &Source,

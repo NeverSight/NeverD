@@ -16139,6 +16139,20 @@ These writes run both inline and through a callee, with zero and positive
 memory offsets. `OffsetStoreRangesKeepModularFootprints` additionally checks
 positive and negative wrapped footprints through instruction transfer and
 summary binding, while ordinary scalar arithmetic remains conservative.
+`TaggedReturnPayloadsCrossAcyclicCleanup` checks literal and bounded input tags
+through a shared borrow-counter cleanup, byte/full-word fields, forward/backward
+layout and reversed CFG edge order. Raw executions distinguish disjoint writes,
+potential aliases, replaced payloads and overwritten tags; stale payloads cannot
+reappear after cleanup. `NarrowStoresRetainOnlyFittingNumericBounds` checks the
+1/2/4-byte typed-memory boundary, including high/wrapped ranges, pointer tags,
+partial writes and alternatives. The existing returned-tag regression also
+executes zero, nonzero and high input tags while full-width unknown tags remain
+unsupported.
+`FullVariantCacheKeepsOnlySelectedFirstCallProofs` checks the selected-path
+address proof after all four variants are occupied. Unknown branches, an earlier
+call, a repeated block and a possible alias write refuse that proof. Independent
+raw executions check the callback or loop, and the reported generic return
+remains unknown even when the first-call address is recovered.
 The pinned 72-file native-object scan described in [sbf-corpus.md](sbf-corpus.md)
 is separate from these synthetic execution tests and from official VM gates.
 

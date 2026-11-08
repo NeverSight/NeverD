@@ -121,6 +121,9 @@ struct CallXContextEvidence {
   bool IsRootContext = false;
   bool BeyondEntryBlock = false;
   bool EntryPrefixOnly = false;
+  /// Proven by replaying this caller's known CFG path to its first call;
+  /// the generic callee's return and memory effects remain unchanged.
+  bool CallerSeededFirstCall = false;
   bool GeneralizedInputs = false;
   CallXInputGeneralization InputGeneralization = CallXInputGeneralization::None;
   std::optional<size_t> InputExpression;
