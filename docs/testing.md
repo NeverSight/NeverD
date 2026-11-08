@@ -18913,6 +18913,12 @@ for a function whose unread proof covers R8.
 epilogue, and turns a `__finally` that local-unwinds there too into the `goto`
 it makes. `ABranchyHandlerFillsTheClause` folds the handler's own branch on the
 flag while unwinding.
+`SEHTerminationFrame.AFilterCallbackTakesTheSameEstablisher` certifies a filter
+callback's frame and the homes its parent saves for it, and `SEHFilterValue.*`
+prints each filter callback as its `__except` expression: the Counter read
+through the homed argument, `GetExceptionCode() == 0xC0000005`, a constant as
+`EXCEPTION_EXECUTE_HANDLER`, MSVC /O0's temporaries in the parent's frame gone
+when nothing else touches them, and the writes to a slot the parent reads kept.
 `ARM64SEHLocalUnwindTests.cpp` builds MSVC ARM64 /O0 parents that reach the
 import through a veneer: `ARM64SEHLocalUnwind.*` certifies the exit through
 an unrecorded veneer from the saved entry stack pointer, with the handler
@@ -18944,13 +18950,18 @@ and both of two nested finallys, fills through x1 whatever allocation the unwind
 codes give, prints a frame the parent cannot name that a handler forwards to a
 call as an unknown argument, keeps the comment for the unpublished registers, and
 `ARangeRunningPastTheEpilogueStillStructures` structures a `__try` whose range
-runs past the epilogue a branch around it skips to.
+runs past the epilogue a branch around it skips to. `ARMSEHFilterValue.*`
+publishes the frame pointer for a filter callback and prints the callback that
+reads the homed Counter through x1 as its `__except` expression.
 `WindowsEHModesCorpus.LocalUnwindReturnRunsTheFinallyOnceInTheClause` checks
 xcpt4's `eret` the same way on the original x64 FH4 binary: one increment in
 the `__except` arm, one in the filled clause and one in the normal-path copy,
 with no `_local_unwind`, target address or handler call left, and
 `LocalUnwindExitAgreesAloneAndInTheWholeUnit` prints the same function from a
-`--func` view as from the whole unit, and
+`--func` view as from the whole unit,
+`Xcpt4FilterCallbacksAreTheirExceptExpressions` prints every filter callback of
+xcpt4's x64 FH4 /O0 binary as its `__except` expression and the /O2 filter
+inside test58's termination handler as the Counter its frame homed, and
 `AArch64LocalUnwindExitAgreesAloneAndInTheWholeUnit` does so for the ARM64
 /O0 build's loop of two nested finallys, with no `_local_unwind` left.
 `EveryFinallyClauseOfXcpt4HoldsItsHandlerAsCode` decompiles the x64, ARM and

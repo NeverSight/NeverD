@@ -16,8 +16,8 @@
 namespace neverd {
 
 void collectUsedVarsExpr(const HighExpr &Expr,
-                         std::map<std::string, TypeRef> &Vars,
-                         VarNameFn VarFn, CallArgLimitFn ArgLimit) {
+                         std::map<std::string, TypeRef> &Vars, VarNameFn VarFn,
+                         CallArgLimitFn ArgLimit) {
   std::set<const HighExpr *> Seen;
   std::vector<const HighExpr *> Work{&Expr};
   while (!Work.empty()) {
@@ -53,7 +53,7 @@ void collectUsedVars(const std::vector<HighStmt> &Stmts,
                      std::map<std::string, TypeRef> &Vars, VarNameFn VarFn,
                      CallArgLimitFn ArgLimit) {
   for (auto &S : Stmts) {
-    forEachExpr(S, [&](const ExprPtr &E) {
+    forEachExprAndFilter(S, [&](const ExprPtr &E) {
       if (E)
         collectUsedVarsExpr(*E, Vars, VarFn, ArgLimit);
     });

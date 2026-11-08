@@ -660,6 +660,15 @@ void HighCWriter::collectFrameRecordMembers(const HighFunc &Func,
               /*Read=*/true);
       return;
     }
+    // A filter value writes as a store statement does (HighEHClause::
+    // FilterValue).
+    if (E.Kind == ExprKind::Store && E.Operands.size() == 2 && E.Operands[0] &&
+        E.Operands[1]) {
+      Address(*E.Operands[0], E.Operands[1]->Type, E.MemoryOrdering,
+              E.MemoryAddressSpace, /*Read=*/false);
+      Value(*E.Operands[1]);
+      return;
+    }
     if (E.Kind == ExprKind::Call)
       for (size_t I = 0; I < E.Operands.size(); ++I)
         if (const HighExpr *Operand = E.Operands[I].get()) {
@@ -2685,6 +2694,22 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
       Missing = HighExpr::makeConst(
           0, Op->Type && Op->Type->Size ? Op->Type->Size : 8);
       Op = Missing.get();
+    }
+    // <excpt.h>'s GetExceptionInformation() points to its own
+    // EXCEPTION_POINTERS, which the callee may take as a record of the unit's
+    // own: the pointer converts through void *.
+    if (Op->Kind == ExprKind::Call && !Op->IsIndirectCall &&
+        Op->CallTarget == "GetExceptionInformation") {
+      const TypeRef Parameter = Defined ? emittedParamTypeAt(*Defined, I)
+                                : Callee && I < Callee->Params.size()
+                                    ? Callee->Params[I].second
+                                    : nullptr;
+      if (Parameter && Parameter->Kind == NdTypeKind::Ptr &&
+          Parameter->Pointee &&
+          Parameter->Pointee->Kind == NdTypeKind::Struct) {
+        S += "(void *)GetExceptionInformation()";
+        continue;
+      }
     }
     Note = stringArgumentNote(*Op);
     // A string its parameter reads narrow prints as a narrow literal.

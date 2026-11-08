@@ -76,14 +76,16 @@ llvm::Expected<LowSEHEstablisherFrame> proveLowSEHEstablisherFrame(
     llvm::ArrayRef<LowSEHLocalUnwindExitSource> Exits = {});
 
 /// Windows x64 calls a termination handler (an out-of-line `__finally`
-/// callback) with its parent's EstablisherFrame as the second argument. For a
-/// parent without a frame register that is the SP every protected instruction
-/// runs with: the entry SP less the prologue's allocations. Returns those
-/// bytes when the normalized unwind actions and the decoded prologue name the
-/// same allocations, and no operation on an ordinary path into any scope that
-/// \p Handler terminates moves SP after the prologue. A frame register,
-/// chained or incomplete unwind data, a handler inside the function, another
-/// entry into the protected code and exhausted work refuse.
+/// callback) and a filter callback with its parent's EstablisherFrame as the
+/// second argument. For a parent without a frame register that is the SP every
+/// protected instruction runs with: the entry SP less the prologue's
+/// allocations. Returns those bytes when the normalized unwind actions and the
+/// decoded prologue name the same allocations, and no operation on an ordinary
+/// path into any scope that \p Handler terminates or filters moves SP after
+/// the prologue. A frame register, chained or incomplete unwind data, a
+/// handler inside the function, a callback that is both a filter and a
+/// termination handler, another entry into the protected code and exhausted
+/// work refuse.
 llvm::Expected<uint64_t> proveLowSEHTerminationFrame(const LowFunc &Parent,
                                                      va_t Handler,
                                                      const TargetRegInfo &TRI,
@@ -98,20 +100,20 @@ llvm::Expected<uint64_t> proveLowSEHFixedFrame(const LowFunc &Function,
                                                const TargetRegInfo &TRI,
                                                size_t &WorkRemaining);
 
-/// Where a Windows x64 function with termination handlers saves its incoming
-/// argument registers in its own entry block, before any of its protected
-/// ranges: entry-SP displacement to argument position.  MSVC homes them there
-/// for the handlers, which read them back through their EstablisherFrame.  Only
-/// a slot the function writes with nothing else at any address it computes
-/// from its stack pointer counts.
+/// Where a Windows x64 function with termination handlers or filter callbacks
+/// saves its incoming argument registers in its own entry block, before any of
+/// its protected ranges: entry-SP displacement to argument position.  MSVC
+/// homes them there for the callbacks, which read them back through their
+/// EstablisherFrame.  Only a slot the function writes with nothing else at any
+/// address it computes from its stack pointer counts.
 std::map<int64_t, unsigned> collectLowSEHHomedArguments(const LowFunc &Parent,
                                                         Arch TargetArch);
 
-/// The certified frame bytes of every termination handler of \p Parent, by
-/// handler entry. A handler whose frame is not proved is absent; each handler
-/// has its own `kMaxSEHEstablisherFrameWork` budget.  \p HandlerUnwindTargets
-/// are the blocks certified termination handlers' own local unwinds resume at,
-/// which ordinary flow need not enter.
+/// The certified frame bytes of every termination handler and filter callback
+/// of \p Parent, by callback entry. A callback whose frame is not proved is
+/// absent; each has its own `kMaxSEHEstablisherFrameWork` budget.
+/// \p HandlerUnwindTargets are the blocks certified termination handlers' own
+/// local unwinds resume at, which ordinary flow need not enter.
 std::map<va_t, uint64_t>
 collectLowSEHTerminationFrames(const LowFunc &Parent, Arch TargetArch,
                                const std::set<va_t> &HandlerUnwindTargets = {});
