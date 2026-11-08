@@ -1,3 +1,18 @@
+add_neverd_component_library(NeverDIRRegisters
+  TargetRegInfo.cpp
+  AArch64/TargetRegInfoAArch64.cpp
+  ARM/TargetRegInfoARM.cpp
+  MIPS/TargetRegInfoMIPS.cpp
+  X86/TargetRegInfoX86.cpp
+  ../lift/AArch64/AArch64Regs.cpp
+  ../lift/ARM/ARMRegs.cpp
+  ../lift/MIPS/MIPSRegs.cpp
+  ../lift/X86/X86Regs.cpp
+
+  LLVM_COMPONENTS
+  Support
+)
+
 add_subdirectory(intrinsics)
 add_subdirectory(low)
 add_subdirectory(med)
@@ -22,13 +37,9 @@ add_neverd_component_library(NeverDIR
   low/SourceFrameAnalysis.cpp
   low/SourceFrameBytes.cpp
   low/ImportCallee.cpp
-  TargetRegInfo.cpp
-  AArch64/TargetRegInfoAArch64.cpp
-  ARM/TargetRegInfoARM.cpp
-  MIPS/TargetRegInfoMIPS.cpp
-  X86/TargetRegInfoX86.cpp
 
   LINK_COMPONENTS
+  IRRegisters
   IRHigh
   IRMed
   IRLow

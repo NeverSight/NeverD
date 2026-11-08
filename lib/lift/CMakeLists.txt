@@ -5,7 +5,6 @@ add_neverd_component_library(NeverDLift
   MIPS/MIPSLiftMSA.cpp
   MIPS/MIPSLiftMemory.cpp
   MIPS/MIPSLiftMicro.cpp
-  MIPS/MIPSRegs.cpp
   AArch64/AArch64LiftArith.cpp
   AArch64/AArch64LiftAtomic.cpp
   AArch64/AArch64LiftBF16.cpp
@@ -54,7 +53,6 @@ add_neverd_component_library(NeverDLift
   AArch64/AArch64LiftShiftMulDiv.cpp
   AArch64/AArch64LiftSysMisc.cpp
   AArch64/AArch64Lifter.cpp
-  AArch64/AArch64Regs.cpp
   ARM/ARMLiftControl.cpp
   ARM/ARMLiftCore.cpp
   ARM/ARMLiftCoreArith.cpp
@@ -100,7 +98,6 @@ add_neverd_component_library(NeverDLift
   ARM/ARMLiftSIMDNEONShift.cpp
   ARM/ARMLiftSIMDSelect.cpp
   ARM/ARMLifter.cpp
-  ARM/ARMRegs.cpp
   X86/X86FPEncoding.cpp
   X86/X86MpxEncoding.cpp
   X86/X86MpxExecution.cpp
@@ -160,9 +157,9 @@ add_neverd_component_library(NeverDLift
   X86/X86LiftBoundedLeaf.cpp
   X86/X86LiftSHA512.cpp
   X86/X86Lifter.cpp
-  X86/X86Regs.cpp
 
   LINK_COMPONENTS
+  IRRegisters
   IRIntrinsics
   IRLowValidation
 )
