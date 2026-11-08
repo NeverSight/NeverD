@@ -427,13 +427,24 @@ void applyRegisterTransfer(const MedInstruction &Instruction,
   } else if ((Instruction.Op == Operation::Add ||
               Instruction.Op == Operation::Sub) &&
              Instruction.Form == OperandForm::DstSrc &&
-             State[Instruction.Src].ValueKind ==
-                 RegisterValue::Kind::Constant) {
+             (State[Instruction.Src].ValueKind ==
+                  RegisterValue::Kind::Constant ||
+              (Instruction.Op == Operation::Add &&
+               Instruction.Width == kDoubleWordBitWidth &&
+               State[Instruction.Dst].ValueKind ==
+                   RegisterValue::Kind::Constant &&
+               State[Instruction.Src].ValueKind ==
+                   RegisterValue::Kind::UnsignedRange))) {
+    const bool Commute =
+        State[Instruction.Src].ValueKind != RegisterValue::Kind::Constant;
     MedInstruction Immediate = Instruction;
     Immediate.Form = OperandForm::DstImm;
     Immediate.Semantics.Source = OperandSourceKind::Immediate;
     Immediate.Semantics.Immediate = ImmediateExtension::Full64;
-    Immediate.Immediate = State[Instruction.Src].Value;
+    Immediate.Immediate =
+        State[Commute ? Instruction.Dst : Instruction.Src].Value;
+    if (Commute)
+      State[Instruction.Dst] = State[Instruction.Src];
     applyAddSubImmediate(Immediate, State[Instruction.Dst]);
   } else if (Instruction.Op == Operation::HighOr &&
              State[Instruction.Dst].ValueKind ==

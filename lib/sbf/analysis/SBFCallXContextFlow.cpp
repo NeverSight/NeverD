@@ -2041,6 +2041,10 @@ registerResult(const MedInstruction &Instruction,
                const ProgramImage &Image, const SymbolicAddressSpace &Addresses,
                const StoredRegisterMemory *Memory = nullptr) {
   std::optional<ProvenValueSet> Output;
+  bool LiteralSum = Instruction.Op == Operation::Add &&
+                    Instruction.Form == OperandForm::DstSrc &&
+                    Instruction.Width == kDoubleWordBitWidth;
+  UnsignedValueRange SumBounds{UINT64_MAX, 0};
   for (const auto &Source : possibleValues(Input[Instruction.Src]))
     for (const auto &Destination : possibleValues(Input[Instruction.Dst])) {
       RegisterState Registers{};
@@ -2048,11 +2052,25 @@ registerResult(const MedInstruction &Instruction,
       Registers[Instruction.Src] = Source;
       applyRegisterTransfer(Instruction, Registers, Image, Memory);
       const ProvenValueSet Value(Registers[Instruction.Dst]);
+      if (LiteralSum) {
+        const auto Result = Value.singleton();
+        LiteralSum = Result.ValueKind == RegisterValue::Kind::Constant;
+        if (LiteralSum) {
+          SumBounds.Lower = std::min(SumBounds.Lower, Result.Value);
+          SumBounds.Upper = std::max(SumBounds.Upper, Result.Value);
+        }
+      }
       if (!Output)
         Output = Value;
       else
         Output->join(Value, &Addresses);
     }
+  // A finite Cartesian sum can exceed the disjunction limit before it is
+  // added to an address base. Keep an enclosure of every evaluated result,
+  // including wrapping sums; any unknown or symbolic result blocks this
+  // fallback. CFG joins retain their ordinary integer widening policy.
+  if (Output->unknown() && LiteralSum)
+    return unsignedRangeValue(SumBounds);
   return *Output;
 }
 

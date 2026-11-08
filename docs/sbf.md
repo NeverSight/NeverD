@@ -374,7 +374,12 @@ alias split. Frame-relative and captured identities remain distinct from
 numeric ranges. Transfers lift the canonical scalar operation over those sets;
 for example two immutable table bases can load the same target. Arithmetic
 result unions use the same captured-address bounds as CFG and typed-memory
-joins. When captured identities exceed the alternative limit, their proven
+joins. A 64-bit register addition whose complete literal result product exceeds
+that limit can retain an enclosing numeric range. Every product must evaluate;
+an unknown or symbolic result prevents this fallback. Constant-plus-range and
+range-plus-constant use the same canonical affine transfer. Ordinary integer
+CFG joins keep their existing widening policy.
+When captured identities exceed the alternative limit, their proven
 numeric bounds can still fit that limit and preserve disjoint memory facts;
 capture names alone never establish non-aliasing. A complete overflowing set of
 literal heap addresses can likewise retain its enclosing unsigned range. This
