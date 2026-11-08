@@ -331,6 +331,58 @@ TEST(TypeParse, GrowingTokenStreamsKeepMacroValuesSpellingAndSourceOrder) {
   }
 }
 
+TEST(TypeParse, EmptyAndGrowingMacroReplacementsKeepDeclarations) {
+  constexpr unsigned Fields = 96;
+  constexpr unsigned Records = 24;
+  for (DataModel Model :
+       {DataModel::ILP32, DataModel::LP64, DataModel::LLP64}) {
+    SCOPED_TRACE(int(Model));
+    std::string Source = "#define EMPTY\n#define FIELDS ";
+    for (unsigned I = 0; I < Fields; ++I)
+      Source += "unsigned field" + std::to_string(I) + "; ";
+    Source += "\n#define BODY EMPTY FIELDS char tail[sizeof(u\"hi\")];\n"
+              "#define RECORD struct NAME { BODY };\nEMPTY\n";
+    for (unsigned I = 0; I < Records; ++I)
+      Source += "#define NAME Record" + std::to_string(I) +
+                "\nEMPTY RECORD EMPTY\n#undef NAME\n";
+    Source += "int Last(EMPTY unsigned value EMPTY); EMPTY";
+    TypeLibrary Library(Model);
+    const auto Read = parseCTypes(Source, Library);
+    ASSERT_TRUE(Read.ok());
+    ASSERT_EQ(Read.Types.size(), Records);
+    ASSERT_EQ(Read.Prototypes.size(), 1u);
+    Source.assign(Source.size(), '!');
+    for (unsigned I = 0; I < Records; ++I) {
+      const auto Name = "Record" + std::to_string(I);
+      EXPECT_EQ(Read.Types[I], Name);
+      const auto &Record = recordOf(Library, Name);
+      ASSERT_EQ(Record.Members.size(), Fields + 1);
+      for (unsigned J = 0; J < Fields; ++J) {
+        EXPECT_EQ(Record.Members[J].Name, "field" + std::to_string(J));
+        EXPECT_EQ(Record.Members[J].BitOffset, J * 32u);
+        EXPECT_EQ(Record.Members[J].Type->TheBuiltin, Builtin::UInt);
+      }
+      EXPECT_EQ(Record.Members.back().Type->Count, 6u);
+    }
+    const auto *Last = Library.findPrototype("Last");
+    ASSERT_NE(Last, nullptr);
+    ASSERT_EQ(Last->Params.size(), 1u);
+    EXPECT_EQ(Last->Params[0].Name, "value");
+    EXPECT_EQ(Last->Params[0].Type->TheBuiltin, Builtin::UInt);
+
+    const auto Before = renderTypes(Library, {}, {});
+    const auto Bad = parseCTypes("#define EMPTY\nEMPTY @ EMPTY\n"
+                                 "int After(void);\nEMPTY ` EMPTY",
+                                 Library);
+    ASSERT_EQ(Bad.Problems.size(), 2u);
+    EXPECT_EQ(Bad.Problems[0].Line, 2u);
+    EXPECT_EQ(Bad.Problems[0].Column, 7u);
+    EXPECT_EQ(Bad.Problems[1].Line, 4u);
+    EXPECT_EQ(Bad.Problems[1].Column, 7u);
+    EXPECT_EQ(renderTypes(Library, {}, {}), Before);
+  }
+}
+
 TEST(TypeParse, LaysAStructureOutAsMSVC) {
   const TypeLibrary Library = parsed(R"(
     struct A { char c; int i; short s; };
@@ -611,6 +663,61 @@ TEST(TypeParse, ExpandedDiagnosticsOwnTheirTextAndInvocationPosition) {
   EXPECT_EQ(Quoted.Problems[0].Line, 2u);
   EXPECT_EQ(Quoted.Problems[0].Message,
             "a static assertion fails: expanded\ndiagnostic");
+}
+
+TEST(TypeParse, InvalidMacroReplacementsFailAtTheirInvocation) {
+  for (DataModel Model :
+       {DataModel::ILP32, DataModel::LP64, DataModel::LLP64}) {
+    SCOPED_TRACE(int(Model));
+    for (llvm::StringRef Body : {"@ unsigned", "18446744073709551616", "0xG1",
+                                 "\"unfinished", "/* unfinished"}) {
+      SCOPED_TRACE(Body.str());
+      TypeLibrary Library(Model);
+      ASSERT_TRUE(parseCTypes("struct Kept { int value; };", Library).ok());
+      const auto Before = renderTypes(Library, {}, {});
+      const auto Direct = parseCTypes(Body, Library);
+      ASSERT_FALSE(Direct.Problems.empty());
+      const std::string Definition = "#define BAD " + Body.str() + "\n";
+      for (llvm::StringRef Invocation : {"  BAD", "  ALIAS"}) {
+        ParseOptions Options;
+        Options.KeepGoing = true;
+        const auto Result =
+            parseCTypes(Definition + "#define ALIAS BAD\nint Before(void);\n" +
+                            Invocation.str() + " Call(void);\nint After(void);",
+                        Library, Options);
+        ASSERT_EQ(Result.Problems.size(), 1u);
+        EXPECT_EQ(Result.Problems[0].Line, 4u);
+        EXPECT_EQ(Result.Problems[0].Column, 3u);
+        EXPECT_EQ(Result.Problems[0].Message, Direct.Problems[0].Message);
+        EXPECT_EQ(renderTypes(Library, {}, {}), Before);
+      }
+      const auto Declaration = parseFunctionDeclaration(
+          Definition + "int Read(\n  BAD value);", Library);
+      ASSERT_FALSE(Declaration.ok());
+      ASSERT_EQ(Declaration.Problems.size(), 1u);
+      EXPECT_EQ(Declaration.Problems[0].Line, 3u);
+      EXPECT_EQ(Declaration.Problems[0].Column, 3u);
+      EXPECT_EQ(Declaration.Problems[0].Message, Direct.Problems[0].Message);
+      const auto Packing = parseCTypes(
+          Definition + "#pragma pack(BAD)\nstruct Packed { int value; };",
+          Library);
+      EXPECT_FALSE(Packing.ok());
+      EXPECT_EQ(renderTypes(Library, {}, {}), Before);
+
+      // Unused replacements, later redefinitions and removal must not make
+      // otherwise supported header declarations fail.
+      ASSERT_TRUE(parseCTypes(Definition + "int Unused(void);", Library).ok());
+      ASSERT_TRUE(parseCTypes(Definition + "#define BAD unsigned\n"
+                                           "BAD Redefined(void);",
+                              Library)
+                      .ok());
+      ASSERT_TRUE(parseCTypes(Definition +
+                                  "#undef BAD\n"
+                                  "typedef int BAD;\nBAD Removed(void);",
+                              Library)
+                      .ok());
+    }
+  }
 }
 
 TEST(TypeParse, OneDeclarationRetainsExpandedParameterNames) {
