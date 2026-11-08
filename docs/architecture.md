@@ -1324,8 +1324,9 @@ C routes use that same layout. Such raw calls also use the physical bridge,
 so an integer IR carrier cannot silently acquire the i128 general-register ABI.
 External C declarations retain the logical aggregate type without creating a
 copy; function-body projections still require their separate storage proof.
-This covers standalone full-width vector values; homogeneous vector aggregates
-remain unclassified until their member and register-bank ABI is represented.
+This covers standalone full-width vector values. General vector-containing
+record ABIs, including homogeneous vector aggregates, still need their member
+and register-bank classification.
 Call-occurrence identity can describe 32-bit or 64-bit targets, while native
 frame and Boolean-result proofs require the complete target architecture
 pointer width before granting a source projection.
@@ -1888,9 +1889,10 @@ automatic-lifting, nominal-frame and image regressions. Original-SP stack/call
 projection, fixed-image register post-index relocation and Apple native
 execution with CPTA enabled remain unqualified. Controlled Arm model execution
 qualifies the declared explicit-IR exports separately from an automatically
-lifted whole image. Native half and whole-vector C entry/return ABI and DWARF vector
-declarations remain separate, unqualified interfaces; integer bridges do not certify those native
-interfaces. Local scalable-vector interleaving uses the existing LLVM ELF
+lifted whole image. These CPA2 memory exports use integer bridges; they do not
+qualify native half/vector entry and return interfaces or DWARF vector
+declarations. Fixed-prototype SIMD128 call transport has its separate
+qualification above. Local scalable-vector interleaving uses the existing LLVM ELF
 profile, and does not qualify native Apple SVE or LLVMC scalable carriers.
 The owner follows the pinned
 [Arm 2025-09 AddressAdd and LDR specification](https://documentation-service.arm.com/documentation/ddi0602/2025-09?lang=en&rev=1).
