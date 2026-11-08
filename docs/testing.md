@@ -6954,7 +6954,8 @@ compiled by the linked SDK rather than sent to an incompatible system Clang.
 Linux i386 ELF source compilation through the full backend selected by
 `NEVERD_TEST_NEVERC_LLC`. It covers mode-sized VMCS/invalidation operands,
 fixed m64 management operands, default/NoOpt and FS/GS, checks native IR and
-machine output at O0/O2, and retains complete C plus independent `.bin` inputs
+machine output at O0/O2, including the actual code-mode capability dispatch,
+and retains complete C plus independent `.bin` inputs
 under `NEVERD_ISA_REGRESSION_ARTIFACT_DIR`.
 Run `scripts/check_x86_vmx_source.py --exports DIR --compiler NEVERC
 --backend-llc LLVM_LLC --output OUT` and separately with stock Clang (without
