@@ -1,6 +1,6 @@
 **言語**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 063226dd86688a1fb9f6d9741898c67d850f4398e9c652507a75f3b01d47ab90 -->
+<!-- i18n-source: eba5aa249bd6a7b45bc98a51faf985724d6cdfbb4dc21091fce89d6f541d01b8 -->
 
 <div align="center">
 
@@ -61,6 +61,8 @@ CLI・統合側・AI エージェントは **純粋 C API** 経由で同じエ�
 | **Mach-O** (macOS / iOS) | ✓ | ✓ | ✓ | ✓ |
 
 > 表の全セルは実装済みですが、統合テストの深さは異なります。詳細は[アーキテクチャのカバレッジ表](architecture.md#support-and-test-depth)を参照してください。Mach-O i386 では、現代の macOS が旧式の i386 実行ファイルをリンクできないため、`thin` 再配置可能オブジェクトを使用します。
+
+**MIPS ELF 解析は実験的な対応です。** MIPS32r2/o32 と MIPS64r2/n64 の両エンディアンで、厳密に限定した整数命令の逆アセンブル、CFG 復元、C および LLVM 出力に対応します。ネイティブコードの書き換えには対応していません。[MIPS の対応範囲とファームウェアの例（英語）](../mips.md)を参照してください。
 
 legacy EVM bytecode は native container と独立して対応します。Frontier から Fusaka
 までの 150 assigned opcode が専用 Low/Med/High IR、verified LLVM `i256`、C23

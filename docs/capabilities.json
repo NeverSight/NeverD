@@ -1764,8 +1764,6 @@
           "neverd_project_json",
           "neverd_register_flow_json",
           "neverd_relocs_json",
-          "neverd_rename_original",
-          "neverd_rename_take",
           "neverd_renames_json",
           "neverd_sections_json",
           "neverd_segments_json",

@@ -4,8 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 #ifdef NEVERD_ELF_PROGRAM_DIAGNOSTIC
-NEVERD_ELF_PROGRAM_DIAGNOSTIC(
-    ImageDiagnostic, "dynamic table requires a decoded ELF image")
+NEVERD_ELF_PROGRAM_DIAGNOSTIC(ImageDiagnostic,
+                              "dynamic table requires a decoded ELF image")
 NEVERD_ELF_PROGRAM_DIAGNOSTIC(
     TableDiagnostic,
     "ELF PT_DYNAMIC table is duplicate, truncated or unterminated")
