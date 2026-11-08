@@ -4530,6 +4530,12 @@ tests both pass. No selected test fails or skips. Compiler build, witness and
 audit revisions are recorded separately; the source-global audit retains its
 90 baseline findings in 29 unchanged files.
 
+After integrating dev's arm64e, Android and SBF updates at `0be6afb8ac`, both
+SDKs rebuild and pass the same 79 checks and 3,008 compilation checks. All
+829 retained source, original-byte, IR and object exports are byte-identical
+to `c6c91892f1`, with unchanged NeverC, LLVM and Clang hashes. The integration
+receipt records that basis for reusing the complete-C behavior results.
+
 Stopped native instructions qualify address/ASID transport and the C ABI.
 Separate CPL0 QEMU runs qualify VMCB/MSR round trips and continuation only
 within the selected TCG guest. They do not establish physical AMD TLB or
