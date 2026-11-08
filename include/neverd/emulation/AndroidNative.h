@@ -114,8 +114,10 @@ struct NativeEventLogWrite {
   int32_t Result = 0;
 };
 
-/// One bounded text write after API 28 radio-tag routing. Payload is priority,
-/// NUL-terminated tag, then NUL-terminated message; it is not a read snapshot.
+/// One text write after API 28 radio-tag routing and transport clipping.
+/// Payload is the bounded byte prefix of priority, NUL-terminated tag and
+/// NUL-terminated message. Clipping may omit either NUL; this is not a
+/// snapshot.
 struct NativeTextLogWrite {
   uint32_t ID = 0;
   std::vector<uint8_t> Payload;

@@ -4441,6 +4441,85 @@ TEST_F(ProcessPublic, AndroidBinderThreadPolicyMatchesSDKAndCLI) {
 #endif
 }
 
+TEST_F(ProcessPublic, AndroidTextLogTransportPrefixesMatchSDKAndCLI) {
+#ifndef NEVERD_ANDROID_FIXTURE_DIR
+  GTEST_SKIP() << "Android shared library fixtures unavailable";
+#else
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(Prefix, Directory));
+  const std::filesystem::path Root(Directory.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Output = (Root / OutputFile).string();
+  for (const char *Variant : {"O0-none", "O2-relr"}) {
+    Path = (std::filesystem::path(NEVERD_ANDROID_FIXTURE_DIR) /
+            (std::string("log-") + Variant + ".so"))
+               .string();
+    for (unsigned Mode = 0; Mode != 4; ++Mode) {
+      SCOPED_TRACE(Variant);
+      SCOPED_TRACE(Mode);
+      const std::string Tag(Mode == 0 ? 5000 : Mode == 1 ? 4066 : 1, 't');
+      const std::string Message(Mode < 2 ? 1 : 5000, 'm');
+      const unsigned MessageOffset = Mode < 2 ? 6000 : 2048;
+      std::vector<uint8_t> Memory(8192, 0xc7);
+      std::copy(Tag.begin(), Tag.end(), Memory.begin() + 128);
+      Memory[128 + Tag.size()] = 0;
+      std::copy(Message.begin(), Message.end(), Memory.begin() + MessageOffset);
+      Memory[MessageOffset + Message.size()] = 0;
+      std::vector<uint8_t> Payload{6};
+      Payload.insert(Payload.end(), Tag.begin(), Tag.end());
+      Payload.push_back(0);
+      Payload.insert(Payload.end(), Message.begin(), Message.end());
+      Payload.push_back(0);
+      Payload.resize(4068);
+      if (Mode == 3)
+        Payload[3] = 0; // A completed message cannot have trailing wire bytes.
+      auto Request = llvm::cantFail(llvm::json::parse(R"({
+        "backend":"unicorn","instruction_limit":200000,"instruction_quantum":83,
+        "android":{"initialize":false,"entry_symbol":"log_text_write",
+          "libraries":{"liblog.so":["__android_log_buf_write"]},
+          "read_memory":[{"address":"0x22000000","size":16}]}
+      })"));
+      auto &Android = *Request.getAsObject()->getObject(field::Android);
+      Android[field::Arguments] = llvm::json::Array{
+          0x22000000, 3, 6, 0x22000080, 0x22000000 + MessageOffset, 1, 3};
+      Android[field::Memory] = llvm::json::Array{
+          llvm::json::Object{{field::Address, "0x22000000"},
+                             {field::Size, 8192},
+                             {field::Bytes, llvm::toHex(Memory)}}};
+      Android[field::TextLogWrites] = llvm::json::Array{
+          llvm::json::Object{{field::LogID, 3},
+                             {field::LogPayload, llvm::toHex(Payload)},
+                             {field::Result, -11}}};
+      const auto Options = jsonText(std::move(*Request.getAsObject()));
+      auto Text = takeString(neverd_emulate_process_json(
+          Session, Path.c_str(), AndroidNativeAArch64, Options.c_str()));
+      if (Mode == 3) {
+        EXPECT_TRUE(Text.empty());
+        EXPECT_NE(takeString(neverd_last_error(Session))
+                      .find("invalid Android text log write"),
+                  std::string::npos);
+        EXPECT_EQ(
+            runCLIRequest(Path, AndroidNativeAArch64, Options, Output, true),
+            process_cli::Error);
+        continue;
+      }
+      ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
+      auto Parsed = llvm::cantFail(llvm::json::parse(Text));
+      const auto *Report = Parsed.getAsObject();
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getString(field::Stop), "returned") << Text;
+      EXPECT_EQ(Report->getString(field::ReturnValue), "0");
+      EXPECT_EQ(Report->getObject(field::Android)
+                    ->getInteger(field::TextLogWritesConsumed),
+                1);
+      EXPECT_EQ(runCLIRequest(Path, AndroidNativeAArch64, Options, Output),
+                process_cli::Success);
+      ASSERT_NO_FATAL_FAILURE(expectCLIReport(Output, Parsed));
+    }
+  }
+#endif
+}
+
 TEST_F(ProcessPublic, AndroidBinderNativeTransportMatchesSDKAndCLI) {
 #ifndef NEVERD_ANDROID_FIXTURE_DIR
   GTEST_SKIP() << "Android shared library fixtures unavailable";

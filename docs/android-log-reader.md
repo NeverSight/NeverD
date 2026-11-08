@@ -152,8 +152,10 @@ writes remain outside this subset.
 entries below and BinderProxy's API 28
 FAILED_TRANSACTION diagnostic share `android.text_log_writes`. Each entry has
 exactly `log_id`, `payload` and `result`. IDs 0, 1, 3 and 4 select main, radio,
-system and crash. Payload bytes contain one priority byte, a NUL-terminated
-tag and a NUL-terminated message. Results are signed int32 liblog outcomes,
+system and crash. Payload bytes are the first 4068 bytes of one priority byte,
+a NUL-terminated tag and a NUL-terminated message. Transport clipping can
+remove either terminator, the whole message, or part of a multibyte character;
+it does not add a replacement NUL. Results are signed int32 liblog outcomes,
 including filtering or transport errors; a matched negative result is a
 completed attempt and preserves errno. Writes do not change `log_records`.
 
@@ -163,10 +165,16 @@ matches the resulting buffer and all payload bytes. Missing, exhausted or
 mismatching entries stop without consuming them. The report includes
 `android.text_log_writes_consumed` only when this input is supplied. C++ uses
 `AndroidNativeOptions::TextLogWrites`; both entry paths share validation and
-the existing ordered-write matcher. Complete payloads are 3..4068 bytes,
-with at most 4096 entries / 1 MiB including each buffer id and result.
+the existing ordered-write matcher. Payloads are 3..4068 bytes. Below the
+transport limit both terminators are required; at exactly 4068 bytes zero or
+one terminator is also valid. A second terminator must be the last byte.
+At most 4096 entries / 1 MiB including each buffer id and result are admitted.
 Validated hex payloads share the JSON payload accounting; metadata limits
-still apply.
+still apply. Raw native writes read both complete guest C strings before
+transport clipping, as required by the preceding `strlen` calls. A bad pointer
+or unterminated suffix still fails even when those bytes would not be sent.
+Radio-tag rewriting precedes clipping. Matched results remain explicit; the
+model does not derive success or a return byte count from the clipped length.
 
 `__android_log_print`, `__android_log_vprint` and `__android_log_buf_print`
 reuse Bionic's shared scalar formatter and AAPCS64 argument reader, including
@@ -179,10 +187,10 @@ errno and caller `va_list` bytes are preserved. Unsupported conversions retain
 the formatter's existing boundary and consume no log entry.
 
 This bounded subset requires explicit results and supplies no logd clock,
-property filter or host transport. Transport truncation of an oversized
-combined tag/message payload, fatal abort-message state, log assertions and
-Java Log wrappers remain explicit boundaries. Formatting-buffer clipping does
-not imply support for these separate transport and process-state contracts.
+property filter or host transport. Fatal abort-message state, log assertions
+and Java Log wrappers remain explicit boundaries. Formatting-buffer clipping
+and transport clipping have separate byte limits; the shared text-write owner
+applies the latter after formatting and radio-tag routing.
 
 Binder logs priority ERROR (6), tag `JavaBinder`, and the data Parcel size
 after native completion. The write precedes exception creation, even when its

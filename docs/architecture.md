@@ -16096,8 +16096,10 @@ exact binary event bytes and share one consumption cursor. Write results never
 create visible reader records; omission, exhaustion and mismatch stay explicit.
 Bounded native text writes and Binder's FAILED_TRANSACTION diagnostic reuse
 this matcher with `text_log_writes`, a separate cursor and exact buffer id,
-priority, tag and message bytes. Radio-tag routing precedes matching; negative
-results complete without inferred transport success or errno changes.
+priority, tag and message bytes. Radio-tag routing precedes the shared 4068-byte
+transport prefix; admission accepts missing string terminators only at that
+full limit. Native C-string reads complete before clipping. Negative results
+complete without inferred transport success or errno changes.
 
 `AndroidProperties` builds one immutable guest property table from explicit
 inputs. Name lookup, stable `prop_info` identities, serials, legacy reads and
