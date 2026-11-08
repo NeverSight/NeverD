@@ -131,7 +131,7 @@ std::optional<SourceParameterPlacement> source_placement::placeAAPCS64(
       Placement.Parameters.push_back(std::move(Pieces));
       continue;
     }
-    if (isIntegerScalar(Type) && !isSourceAArch64Vector128Type(Type) &&
+    if (isIntegerScalar(Type) &&
         Type->Size <= kIntegerPairRegisters * kRegisterBytes) {
       Pieces = Integers(Type->Size, Type->Size);
     } else if (isFloatingScalar(Type) || isSourceAArch64Vector128Type(Type)) {
