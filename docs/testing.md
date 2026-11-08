@@ -22236,6 +22236,11 @@ doubleword merges and a merge read in an indirect call's slot. Uninitialized
 merge destinations cover both orders, all offsets, fixed and seeded random
 machine values, independent expected bytes and fault order at both page edges.
 An invalid-memory branch-likely slot is tested both annulled and executed.
+Bitfield and shuffle kernels cover all 13 classic SPECIAL3 forms and full-width
+fields with independent bit/lane expectations. MIPS64 invalid word inputs are
+tested separately as NeverD strict refusals, without executing architecturally
+UNPREDICTABLE originals. These checks cover both an executed/annulled likely
+slot and an instruction whose destination is `$zero`.
 HighC merge globals are also executed with the original image unmapped.
 LLVMC's original-image storage
 and either route's omitted original callees are explicitly bound at their
@@ -22249,3 +22254,36 @@ Failures retain their diagnostic artifacts. An unavailable compiler or oracle
 is a failure, not a skipped pass.
 Vendor firmware remains outside the committed fixtures. Its separate static
 receipt is [Archer C7 V5](firmware/archer-c7-v5.md).
+
+### MIPS decode/lift and firmware performance
+
+`neverd-mips-bench` is an opt-in target, excluded from the default build:
+
+```sh
+python3 scripts/build.py build-mips --target neverd-mips-bench --parallel 4
+build-mips/bin/neverd-mips-bench mips64el lift /path/to/owned-code.bin 100000
+```
+
+Profiles are `mips`, `mipsel`, `mips64` and `mips64el`. Stages are `capstone`
+(direct physical decoding), `decode` (NeverD physical decoding) and `lift`
+(decoding plus LowIR, including delay slots). Both decode paths use the same
+classic r2 profile, detail on and text off. The harness reuses decoder handles,
+counts physical instructions/LowOps and validates output fingerprints outside
+the timed loop. Invalid, truncated or unsupported input fails. Direct Capstone
+does not supply lift semantics and is not a decompiler throughput comparator.
+
+`tools/neverd-bench/mips-paired.py` alternates baseline/candidate runs, warms each
+job and retains CPU, wall, RSS, output hashes and every sample in an ignored
+output directory. It accepts matching CLI/SDK/benchmark directories, raw files
+named `PROFILE-unchanged.bin`, the retained Archer C7 `ubus`, dependency snapshots
+from `neverd-dependency-inputs.json`, and JSON toolchain manifests with `compiler`,
+`llvm`, `capstone` and `build` entries. Record exact versions/hashes, build flags
+and allocator selection in those manifests before each build; unequal inputs
+are refused. Run `--help` for explicit paths and repetition counts.
+
+Each baseline CLI must load its own matching SDK; the runner sets its library
+search path accordingly. It checks output identity for the selected `call`
+handler and discovered functions (limited to 250), with one/default threads and
+both C backends. New instruction coverage and additional strict checks are
+different work and require separate reporting, not same-output speedup claims.
+This small corpus and a shared host do not establish a cross-tool ranking.

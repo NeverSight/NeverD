@@ -29,6 +29,17 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   multiplication and aligned integer loads/stores have explicit lifter rules.
   MIPS64 word results are sign extended where the ISA requires it. Writes to
   `$zero` discard the result without discarding required memory effects.
+- SPECIAL3 `EXT`/`INS`, `DEXT`/`DEXTM`/`DEXTU`, `DINS`/`DINSM`/`DINSU`, and
+  `SEB`/`SEH`/`WSBH`/`DSBH`/`DSHD` use the encoding descriptors in
+  `MIPSBitfield.def`. Reserved fields and invalid bounds are refused before
+  emitting effects. Word forms sign extend their result, including a full-width
+  `EXT`; a 32-bit field extracted by `DEXT` remains zero extended.
+- MIPS64 Release 2 word-input restrictions are explicit checks for word
+  addition/subtraction, multiplication, count-leading operations, right
+  shifts/rotates and the word SPECIAL3 forms. Variable shift counts and
+  `SLL`/`SLLV` have no such restriction. A failed check refuses an architecturally
+  UNPREDICTABLE input before observable writes, including a `$zero` destination;
+  this strict analysis policy does not claim a guest architectural exception.
 - `LWL`/`LWR` and MIPS64 `LDL`/`LDR` retain the exact byte span of each
   instruction, including a discarded destination. They do not combine a pair
   into a wider speculative read. Source lowering retains guest alignment bits
@@ -79,6 +90,12 @@ classification, arbitrary PIC/gp recovery, raw-input target selection and
 native code rewriting are not claimed. Unicorn is a test reference, not a
 NeverD MIPS guest execution backend.
 
+The SPECIAL3 and word-input rules follow the operation/restriction sections of
+[MIPS64 Volume II, revision 2.50](https://0x04.net/~mwk/doc/mips/MD00087-2B-MIPS64BIS-AFP-02.50.pdf).
+The [Ghidra MIPS definitions at e45e5a62](https://github.com/NationalSecurityAgency/ghidra/tree/e45e5a62fd66c2e48514931f6e356aff33a79fcb/Ghidra/Processors/MIPS/data/languages)
+were a cross-check; the LowIR implementation and independent expectations are
+owned here. Decoder recognition alone does not qualify instruction semantics.
+
 ## Tests
 
 The owned fixtures in `unittests/lift/mips` do not contain vendor firmware.
@@ -101,6 +118,11 @@ both orders at every offset with fixed and seeded random old machine values,
 and compare independently assembled expected bytes. Page-edge faults check
 whether the preceding merge read occurred. Branch-likely load fixtures check
 that an annulled invalid-memory slot returns normally and an executed slot faults.
+Bitfield tests enumerate every legal position/size and every raw five-bit field
+combination using independent expectations. Shuffle tests check byte/halfword
+order, sign extension, aliases and `$zero`; pinned Unicorn checks defined
+boundary inputs. Source fixtures cover all 13 forms, full-width fields,
+annulled invalid-word slots and retained checks for discarded results.
 
 ```sh
 python3 scripts/build.py build-mips --target NeverDMIPSTests NeverDMIPSIntegerTests NeverDMIPSFlowTests NeverDMIPSSDKTests NeverDMIPSPipelineTests neverd --parallel 4

@@ -81,6 +81,11 @@ NdVar MIPSLifter::State::read(unsigned Register, uint16_t Bytes) {
   return resize(NdVar::reg(mipsreg::r(Register), Width), Bytes);
 }
 
+void MIPSLifter::State::requireWord(unsigned Register) {
+  if (Width == 8 && Register)
+    emitIntrinsic(Intrinsic::MIPSRequireWord, {}, {read(Register)});
+}
+
 void MIPSLifter::State::write(unsigned Register, NdVar Value, bool SignExtend) {
   if (!Register)
     return;
@@ -135,6 +140,10 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
       if ((Variable && SA != unsigned(Rotate)) ||
           (!Variable && RS != unsigned(Rotate)))
         return false;
+      // SLL/SLLV accept arbitrary upper bits; right shifts and rotates do not.
+      // Only the shifted value is constrained, never the variable count.
+      if (!Double && (Function & 3) != 0)
+        S.requireWord(RT);
       NdVar Shift = Variable
                         ? S.binary(NdOp::INT_AND, S.read(RS, Bytes),
                                    NdVar::cst(Bytes * 8 - 1, Bytes))
@@ -189,6 +198,10 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
         return false;
       const uint16_t Bytes = Function >= 28 ? 8 : 4;
       const bool Signed = (Function & 1) == 0;
+      if (Bytes == 4) {
+        S.requireWord(RS);
+        S.requireWord(RT);
+      }
       const NdVar Product = S.binary(
           NdOp::INT_MULT, S.resize(S.read(RS, Bytes), Bytes * 2, Signed),
           S.resize(S.read(RT, Bytes), Bytes * 2, Signed));
@@ -215,6 +228,10 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
         return false;
       const bool WordOperation = Function == 33 || Function == 35;
       const uint16_t Bytes = WordOperation ? 4 : S.Width;
+      if (WordOperation) {
+        S.requireWord(RS);
+        S.requireWord(RT);
+      }
       const NdOp Op = Function == 33 || Function == 45   ? NdOp::INT_ADD
                       : Function == 35 || Function == 47 ? NdOp::INT_SUB
                       : Function == 36                   ? NdOp::INT_AND
@@ -239,6 +256,7 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
   }
   switch (Opcode) {
   case 9: // ADDIU (32-bit operation even on MIPS64)
+    S.requireWord(RS);
     S.write(RT,
             S.binary(NdOp::INT_ADD, S.read(RS, 4), NdVar::cst(Immediate, 4)));
     return true;
@@ -269,10 +287,8 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
     return true;
   case 28: { // SPECIAL2: MUL, CLZ/CLO, DCLZ/DCLO
     if (Function == 2 && !SA) {
-      if (Wide) {
-        S.emitIntrinsic(Intrinsic::MIPSRequireWord, {}, {S.read(RS)});
-        S.emitIntrinsic(Intrinsic::MIPSRequireWord, {}, {S.read(RT)});
-      }
+      S.requireWord(RS);
+      S.requireWord(RT);
       S.write(RD, S.binary(NdOp::INT_MULT, S.read(RS, 4), S.read(RT, 4)));
       // MUL leaves both accumulators unpredictable, even when rd is zero.
       // Separate definitions let SSA discard either result independently.
@@ -288,6 +304,8 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
         (Function >= 36 && !Wide))
       return false;
     const uint16_t Bytes = Function >= 36 ? 8 : 4;
+    if (Bytes == 4)
+      S.requireWord(RS);
     NdVar Input = S.read(RS, Bytes);
     if (Function & 1) {
       NdVar Inverted = S.makeTemp(Bytes);
@@ -299,6 +317,8 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
     S.write(RD, Result, false);
     return true;
   }
+  case 31: // SPECIAL3 integer bitfields and lane permutations
+    return liftBitfield(S, Word);
   default:
     return false;
   }

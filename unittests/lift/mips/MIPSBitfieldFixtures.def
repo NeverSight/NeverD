@@ -1,0 +1,14 @@
+//===- MIPSBitfieldFixtures.def - Independent shuffle fixtures ------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Raw SPECIAL3 selectors and independent mathematical result categories.
+// Name, function, sa, source bytes, unit permutation (0 means sign extension).
+MIPS_SHUFFLE(WSBH, 0x20, 2, 4, 1)
+MIPS_SHUFFLE(SEB, 0x20, 16, 1, 0)
+MIPS_SHUFFLE(SEH, 0x20, 24, 2, 0)
+MIPS_SHUFFLE(DSBH, 0x24, 2, 8, 1)
+MIPS_SHUFFLE(DSHD, 0x24, 5, 8, 2)
+
+#undef MIPS_SHUFFLE

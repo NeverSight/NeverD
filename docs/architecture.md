@@ -15127,6 +15127,9 @@ PLT interpretation belongs to the ELF loader. `lib/lift/MIPS` owns integer
 semantics. A `DecodedExecutionUnit` captures a delayed transfer and its slot,
 while normal disassembly still consumes four bytes. LowIR records their byte
 ownership and execution order; MedIR expands predicated effects before SSA.
+`MIPSBitfield.def` owns the classic SPECIAL3 field/shuffle selectors and biases.
+The lifter validates encodings before emitting effects and reuses the explicit
+MIPS64 word-input contract; source backends do not reinterpret instruction bits.
 
 `MedMIPSMergeValues` owns the source-only proof for adjacent complementary
 merge loads in a single ordinary leaf block. It runs after SSA/projection/DCE
