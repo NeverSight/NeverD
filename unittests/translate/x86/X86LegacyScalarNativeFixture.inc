@@ -435,6 +435,7 @@ protected:
     ASSERT_EQ(Run->exit_reason, unsigned(KVM_EXIT_DEBUG));
     ASSERT_EQ(ioctl(CPU, KVM_GET_REGS, &Registers), 0);
     ASSERT_EQ(ioctl(CPU, KVM_GET_SREGS, &Special), 0);
+    SCOPED_TRACE(testing::Message() << "native event=" << get(Record, 4));
     if (Expected->InstructionCompleted) {
       EXPECT_EQ(Registers.rip, State.EIP);
     } else {

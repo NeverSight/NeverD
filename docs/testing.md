@@ -520,7 +520,16 @@ exceptions and RAM across code/operand/address sizes, all GPRs, low CR0 bits,
 ignored source bits, preserved control fields, CPL/UMIP, segment/page/alignment
 faults and original handler repair/retry. `OriginalMachineStatusAccessesAndTraps`
 uses real guest debug handlers to check exact word accesses and post-instruction
-CR0 publication. `X86LegacyMachineStatusTest.*` adds fixed expected values,
+CR0 publication. Its LMSW case clears TS while retaining MP/EM: KVM lets the
+guest own TS, whereas changing MP can take an intercepted LMSW path. On the
+qualified host, the latter lost the data-breakpoint trap; unchanged-CR0 and
+TS-only controls retained it. This agrees with the
+[KVM VMX control-register handler](https://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux/+/05e96e96a315fa49faca4da2aedd1761a218b616/arch/x86/kvm/vmx/vmx.c#5505),
+but is not a trace of the running kernel's VM exit. Keep the failing diagnostic
+receipts; do not use that intercepted case as architectural debug evidence.
+Fixed software and generated-C cases separately check MP/EM/TS publication
+before data/TF traps and no publication on a faulting read.
+`X86LegacyMachineStatusTest.*` adds fixed expected values,
 backing resume, sticky PE and prefetch refusal of missing choices or malformed
 encodings. `X86LegacySourceTest.MachineStatus*` executes compiled state-producing
 and consuming chains, faults/retry and single-step traps with Clang and NeverC
@@ -531,7 +540,9 @@ descriptor-builtin harness also checks CLTS on i386 and x64; privileged native
 builtins have code-generation coverage there, while these protected CPU tests
 own the original instruction state/fault comparisons.
 The same native matrix qualifies CLAC/STAC flag preservation and #UD privilege
-checks in both code sizes, and the guest debug tests cover their TF traps.
+checks in both code sizes, including #UD for the 66 prefix, and the guest debug
+tests cover their TF traps. Software tests check fetch-fault priority over that
+prefix's #UD; generated C checks the unchanged AC bit in the saved fault frame.
 Software tests also bind a target without SMAP. Generated C composes
 STAC → supervisor read of a user page → CLAC → denied read, checking the actual
 page-fault frame and preservation of the earlier loaded value.

@@ -237,8 +237,9 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
       const unsigned Reg = R.modRM(F.Source);
       F.SourceBytes = 2;
       if (Reg == 1 && (F.Source.Register == 2 || F.Source.Register == 3)) {
-        F.Operation = F.Source.Register == 2 ? Op::ClearAccessControl
-                                             : Op::SetAccessControl;
+        F.Operation = R.OperandOverride        ? Op::Undefined
+                      : F.Source.Register == 2 ? Op::ClearAccessControl
+                                               : Op::SetAccessControl;
       } else if (Reg == 4) {
         F.Operation = Op::StoreMachineStatus;
         std::swap(F.Source, F.Destination);

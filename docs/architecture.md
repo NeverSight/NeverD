@@ -102,7 +102,9 @@ and memory forms need no undefined-result choice. Generated protected C calls
 this same boundary. These instructions do not enable real/VM86 transitions,
 task switching, general MOV-CR or virtual-machine interception semantics.
 CLAC/STAC use the existing target SMAP capability and raise #UD when it is
-absent or CPL is nonzero. Their AC update commits through the same flags bank
+absent, CPL is nonzero or an operand-size override is present. The recognized
+faulting encoding still authenticates the instruction fetch before #UD.
+Their AC update commits through the same flags bank
 that controls the following explicit supervisor access; CR4.SMAP need not be
 enabled to change AC. No host feature probe decides the modeled instruction.
 `X86InstructionDebugProfile::Watchpoints` composes the same rules with scoped

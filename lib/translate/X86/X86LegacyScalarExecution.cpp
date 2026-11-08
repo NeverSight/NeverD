@@ -36,6 +36,10 @@ public:
     S.EIP = Fallthrough;
     uint32_t A = 0, B = 0;
     const unsigned N = F.Bytes;
+    if (F.Operation == Op::Undefined) {
+      fault(6);
+      return;
+    }
     if (F.Operation == Op::ClearAccessControl ||
         F.Operation == Op::SetAccessControl) {
       if (S.Core.CPL || !M.features().SMAP)

@@ -91,6 +91,8 @@ TEST_P(X86LegacyDebugNativeTest, OriginalMachineStatusAccessesAndTraps) {
       for (unsigned CPL : {0u, 3u})
         for (unsigned Form = 0; Form != 5; ++Form)
           for (unsigned Kind = 0; Kind != 6; ++Kind) {
+            SCOPED_TRACE(testing::Message() << "machine form=" << Form
+                                            << " comparator kind=" << Kind);
             Watchpoint W;
             auto Bytes = neverd::test::legacyMachineStatusBytes(Form, Code32,
                                                                 true, true, -1);
@@ -99,7 +101,9 @@ TEST_P(X86LegacyDebugNativeTest, OriginalMachineStatusAccessesAndTraps) {
             W.Instructions = {Bytes};
             W.MachineStatus = X86LegacyMachineStatusProfile::FullCR0;
             W.CR0 = 0x8001001f;
-            W.Operand = 0xdeadfff4;
+            // KVM lets the guest own TS. Changing MP instead can exit to its
+            // LMSW emulator, which does not reproduce the data-breakpoint trap.
+            W.Operand = Form == 1 ? 0xdeadfff7 : 0xdeadfff4;
             W.Flags = Kind == 2 ? 0x302 : 0x202;
             W.DR7 = Kind == 1 || Kind == 5 ? 0x10401 : 0x30401;
             W.DR[0] = Kind == 3 ? 0x8102 : Kind == 4 ? 0x8101 : 0x8100;

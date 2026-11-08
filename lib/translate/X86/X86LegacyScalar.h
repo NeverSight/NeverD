@@ -27,6 +27,7 @@
 namespace neverd::translate::detail {
 
 enum class X86LegacyScalarOperation {
+  Undefined,
   Move,
   MoveSigned,
   ConditionalMove,

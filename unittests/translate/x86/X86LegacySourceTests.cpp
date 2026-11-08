@@ -642,6 +642,67 @@ TEST_P(X86LegacySourceTest, MachineStatusAccessControlChangesSMAPPermission) {
   EXPECT_EQ(get(S.Core.GPR[4] + 4), 0x1008u);
 }
 
+TEST_P(X86LegacySourceTest, MachineStatusDataTrapObservesCommittedControl) {
+  const SourceUnit Instruction{0x1000, 32, {0x0f, 1, 0x33}};
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(compile({Instruction}, Run));
+  for (bool Fault : {false, true})
+    for (bool TF : {false, true}) {
+      SCOPED_TRACE(testing::Message() << "fault=" << Fault << " TF=" << TF);
+      resetLegacyState();
+      install({Instruction});
+      S.Core.CPL = 0;
+      S.Core.Segments[1] = {0, UINT32_MAX, 8, 0xc09b, false};
+      S.Core.Segments[2] = {0, UINT32_MAX, 16, 0xc093, false};
+      S.EFlags = TF ? 0x302 : 0x202;
+      S.Core.GPR[3] = 0x9000;
+      put(0x9000, 0xdeadfff4, GuestScalarWidth::I32);
+      O.Debug = X86LegacyDebugProfile::Watchpoints;
+      S.Debug.emplace();
+      S.Debug->DR[0] = 0x9001;
+      S.Debug->DR7 = 0x30401;
+      auto Controls = M->controls();
+      Controls.CR0 = 0x8005001f;
+      llvm::cantFail(M->bindControls(Controls));
+      if (Fault)
+        put(0x11024, 0, GuestScalarWidth::I32);
+      X86LegacySourceExecution Context(S, *M, O);
+      uint64_t Budget = 1;
+      ASSERT_EQ(Run(&Context, &Budget), 1u) << Context.lastError().str();
+      EXPECT_EQ(Budget, 0u);
+      EXPECT_EQ(Context.lastResult().DeliveredVector, Fault ? 14 : 1);
+      EXPECT_EQ(Context.lastResult().InstructionCompleted, !Fault);
+      EXPECT_EQ(M->controls().CR0, Fault ? 0x8005001fu : 0x80050015u);
+      EXPECT_EQ(S.Debug->DR6, Fault ? 0xffff0ff0u
+                              : TF  ? 0xffff4ff1u
+                                    : 0xffff0ff1u);
+      EXPECT_EQ(get(S.Core.GPR[4] + (Fault ? 4 : 0)),
+                Fault ? 0x1000u : 0x1003u);
+      EXPECT_EQ(get(0x9000), 0xdeadfff4u);
+    }
+}
+
+TEST_P(X86LegacySourceTest, MachineStatusAccessControlOperandOverrideFaults) {
+  for (uint8_t Opcode : {0xcau, 0xcbu}) {
+    resetLegacyState({.PhysicalAddressBits = 32, .SMAP = true});
+    Driver Run = nullptr;
+    ASSERT_NO_FATAL_FAILURE(
+        compile({{0x1000, 32, {0x66, 0x0f, 1, Opcode}}}, Run));
+    S.Core.CPL = 0;
+    S.Core.Segments[1] = {0, UINT32_MAX, 8, 0xc09b, false};
+    S.Core.Segments[2] = {0, UINT32_MAX, 16, 0xc093, false};
+    S.EFlags = 0x40ed7;
+    X86LegacySourceExecution Context(S, *M, O);
+    uint64_t Budget = 1;
+    ASSERT_EQ(Run(&Context, &Budget), 1u) << Context.lastError().str();
+    EXPECT_EQ(Budget, 0u);
+    EXPECT_EQ(Context.lastResult().DeliveredVector, 6);
+    EXPECT_FALSE(Context.lastResult().InstructionCompleted);
+    EXPECT_EQ(get(S.Core.GPR[4]), 0x1000u);
+    EXPECT_EQ(get(S.Core.GPR[4] + 8) & (1u << 18), 1u << 18);
+  }
+}
+
 TEST_P(X86LegacySourceTest,
        SystemSelectorsPublishCachesForFollowingInstructions) {
   for (bool Code32 : {false, true})

@@ -179,13 +179,44 @@ TEST_F(X86LegacyMachineStatusTest, ProfileAndExactGrammarRefuseBeforeFetch) {
   EXPECT_EQ(S.Core.GPR[0], 1u);
 }
 
+TEST_F(X86LegacyMachineStatusTest, LoadCommitsBeforeDataTrapButNotPageFault) {
+  for (bool Fault : {false, true})
+    for (bool TF : {false, true})
+      for (uint32_t Input : {0xfffffff0u, 0xfffffff4u, 0xfffffff7u}) {
+        SetUp();
+        kernel();
+        controls(0x8005001f);
+        S.EFlags = TF ? 0x302 : 0x202;
+        S.Core.GPR[3] = 0x9000;
+        put(0x9000, Input, GuestScalarWidth::I32);
+        O.Debug = X86LegacyDebugProfile::Watchpoints;
+        S.Debug.emplace();
+        S.Debug->DR[0] = 0x9001; // The second byte of the fixed word read.
+        S.Debug->DR7 = 0x30401;
+        if (Fault)
+          put(0x11024, 0, GuestScalarWidth::I32);
+        const auto R = run({0x0f, 1, 0x33});
+        EXPECT_EQ(R.DeliveredVector, Fault ? 14 : 1);
+        EXPECT_EQ(R.InstructionCompleted, !Fault);
+        EXPECT_EQ(M->controls().CR0,
+                  Fault ? 0x8005001fu : (0x80050011u | (Input & 14)));
+        EXPECT_EQ(S.Debug->DR6, Fault ? 0xffff0ff0u
+                                : TF  ? 0xffff4ff1u
+                                      : 0xffff0ff1u);
+        EXPECT_EQ(get(S.Core.GPR[4] + (Fault ? 4 : 0)),
+                  Fault ? 0x1000u : 0x1003u);
+        EXPECT_EQ(get(0x9000), Input);
+      }
+}
+
 TEST_F(X86LegacyMachineStatusTest,
        FetchFaultPrecedesPrivilegeAndControlChange) {
   controls(0x8005001f);
   put(0x11004, 0, GuestScalarWidth::I32);
   const auto R = run({0x0f, 6});
   ASSERT_EQ(R.DeliveredVector, 14);
-  EXPECT_FALSE(R.InstructionAttempted);
+  EXPECT_TRUE(
+      R.InstructionAttempted); // Architectural fetch faults consume an attempt.
   EXPECT_FALSE(R.InstructionCompleted);
   EXPECT_EQ(S.CR2, 0x1000u);
   EXPECT_EQ(M->controls().CR0, 0x8005001fu);
@@ -254,4 +285,25 @@ TEST_F(X86LegacyMachineStatusTest, AccessControlChangesNextSMAPRead) {
   EXPECT_EQ(get(S.Core.GPR[4]), 1u);
   EXPECT_EQ(get(S.Core.GPR[4] + 4), FaultPC);
   EXPECT_EQ(S.Core.GPR[0], 0x12345678u);
+}
+
+TEST_F(X86LegacyMachineStatusTest,
+       AccessControlOperandOverrideFaultsAfterFetch) {
+  for (bool Code32 : {false, true})
+    for (bool FetchFault : {false, true})
+      for (uint8_t Opcode : {0xcau, 0xcbu}) {
+        resetLegacyState({.PhysicalAddressBits = 32, .SMAP = true});
+        kernel();
+        S.Core.Segments[1].Attributes = Code32 ? 0xc09b : 0x809b;
+        S.EFlags = 0x40ed7;
+        if (FetchFault)
+          put(0x11004, 0, GuestScalarWidth::I32);
+        const auto R = run({0x66, 0x0f, 1, Opcode});
+        EXPECT_EQ(R.DeliveredVector, FetchFault ? 14 : 6);
+        EXPECT_TRUE(R.InstructionAttempted);
+        EXPECT_FALSE(R.InstructionCompleted);
+        EXPECT_EQ(get(S.Core.GPR[4] + (FetchFault ? 4 : 0)), 0x1000u);
+        EXPECT_EQ(get(S.Core.GPR[4] + (FetchFault ? 12 : 8)) & (1u << 18),
+                  1u << 18);
+      }
 }
