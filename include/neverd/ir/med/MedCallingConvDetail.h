@@ -107,6 +107,11 @@ bool liveInOnlyFeedsScratch(const MedFunc &Func, uint64_t ParamRegOff);
 /// reads the return register whatever the function returns.
 bool liveInReachesNonPushUse(const MedFunc &Func, uint64_t RegOff);
 
+/// Remove the store of a prologue's `push ecx` that only makes room for a local
+/// the function writes before it reads, and the register's live-in if nothing
+/// else reads it: it is no parameter.  i386 only.
+void dropReservingPushes(MedFunc &Func);
+
 /// Additional i386 integer inputs read through EBX, ESI or EDI. A saved
 /// register alone supplies no evidence: its incoming bits must reach a value
 /// use, rather than only storage, restoration or discarded scratch lanes.

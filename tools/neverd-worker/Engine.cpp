@@ -37,6 +37,7 @@
 #include <fstream>
 #include <limits>
 #include <map>
+#include <random>
 #include <set>
 #include <string_view>
 #include <system_error>
@@ -768,6 +769,9 @@ Engine::Engine()
       contributions_(std::make_unique<Contributions>()) {
   if (!session_)
     throw Error("engine_unavailable", "Cannot create NeverD session");
+  // Names this process's documents apart from another's.
+  std::random_device entropy;
+  instanceTag_ = std::to_string(entropy()) + std::to_string(entropy());
 }
 Engine::~Engine() {
   listing_.reset();
@@ -1475,6 +1479,7 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
     return nullptr;
   const auto key = cacheKey();
   auto document = std::make_shared<NamedView>();
+  document->id = ++namedViewIds_;
   {
     // The whole function, from as many engine pages as it fills: the engine
     // emits it once and pages it from there.
@@ -1803,7 +1808,8 @@ std::optional<Json> Engine::namedViewPage(std::uint64_t address,
                                           const std::string &representation,
                                           std::size_t offset, std::size_t limit,
                                           const Json &options,
-                                          EncodedPayload *encoded) {
+                                          EncodedPayload *encoded,
+                                          const std::string *ifNoneMatch) {
   const auto document = namedView(address, representation, options);
   if (!document)
     return std::nullopt;
@@ -1821,6 +1827,14 @@ std::optional<Json> Engine::namedViewPage(std::uint64_t address,
     --end;
   if (end == start && start < total)
     throw Error("budget_exceeded", "A code line exceeds the page byte budget");
+  // The same lines of the same document read the same: the client keeps them.
+  const auto etag = instanceTag_ + "-" + std::to_string(document->id) + "-" +
+                    std::to_string(start) + "-" + std::to_string(end);
+  if (ifNoneMatch && *ifNoneMatch == etag)
+    return Json{{"unchanged", true},
+                {"etag", etag},
+                {"project_id", projectId_},
+                {"revision", revision()}};
   if (encoded)
     for (auto it = document->pages.begin(); it != document->pages.end(); ++it)
       if (it->start == start && it->end == end) {
@@ -1871,6 +1885,8 @@ std::optional<Json> Engine::namedViewPage(std::uint64_t address,
   page["next_offset"] = end == total ? Json(nullptr) : Json(end);
   page["project_id"] = projectId_;
   page["revision"] = revision();
+  if (ifNoneMatch)
+    page["etag"] = etag;
   if (encoded) {
     // A page owns only already-serialized payload data. The response envelope
     // still supplies the current request id, project and cancellation state.
@@ -2860,6 +2876,39 @@ Json Engine::restoreAnalysis(const Json &snapshot) {
 
 bool Engine::comparesBinaries() { return ComparisonService::supported(); }
 
+bool Engine::takeNames(const std::map<std::uint64_t, std::string> &before,
+                       const std::map<std::uint64_t, std::string> &after) {
+  using RenameTake = int (*)(neverd_session_t, neverd_va_t, const char *);
+  static const auto take = engineSymbol<RenameTake>("neverd_rename_take");
+  if (!take)
+    return false;
+  // Row by row, as the owner took them, while no row takes a name another gave
+  // up: a step through two rows of one name would not read as the table does.
+  std::set<std::string> givenUp;
+  for (const auto &[address, name] : before)
+    if (const auto now = after.find(address);
+        now == after.end() || now->second != name)
+      givenUp.insert(name);
+  for (const auto &[address, name] : after)
+    if (const auto was = before.find(address);
+        (was == before.end() || was->second != name) && givenUp.contains(name))
+      return false;
+  for (const auto &[address, name] : before)
+    if (!after.contains(address) && take(session_, address, nullptr) != 0)
+      return false;
+  for (const auto &[address, name] : after)
+    if (const auto was = before.find(address);
+        (was == before.end() || was->second != name) &&
+        take(session_, address, name.c_str()) != 0)
+      return false;
+  // What the engine now holds is the table, or the table is read again.
+  std::map<std::uint64_t, std::string> taken;
+  for (const auto &row : backendJson(neverd_renames_json(session_)))
+    taken.emplace(parseAddress(row.at("addr").get<std::string>()),
+                  row.at("renamed").get<std::string>());
+  return taken == after;
+}
+
 Json Engine::updateAnalysisNames(const Json &snapshot) {
   requireLoaded();
   if (!readOnly_ || restoredSnapshot_.is_null())
@@ -2950,10 +2999,27 @@ Json Engine::updateAnalysisNames(const Json &snapshot) {
           neverd_func_find_by_addr(session_, address) < 0)
         dataRenamed = true;
     }
+  // Each name that changed, as the listing can take it where it stands: a
+  // function's as the owner's takes it, and data's.
+  const auto namesInPlace = [&] {
+    if (!listing_ || unnamed)
+      return false;
+    for (const auto &[address, name] : newNames) {
+      const auto before = oldNames.find(address);
+      if (before != oldNames.end() && before->second == name)
+        continue;
+      if (!(neverd_func_find_by_addr(session_, address) >= 0
+                ? listing_->functionRenamed(address)
+                : listing_->dataRenamed(address, name)))
+        return false;
+    }
+    return true;
+  };
   codeEdits_ = next.value("code_edits", Json::array());
   restoredSnapshot_ = snapshot;
   imageFactsRevision_.reset();
-  if (oldNames != newNames && neverd_renames_load(session_) != 0)
+  if (oldNames != newNames && !takeNames(oldNames, newNames) &&
+      neverd_renames_load(session_) != 0)
     throw Error("stale_snapshot", "Cannot read the project's names again");
   if (formatsChanged && !reloadOperandFormats())
     throw Error("stale_snapshot", "Cannot read the project's formats again");
@@ -3005,25 +3071,20 @@ Json Engine::updateAnalysisNames(const Json &snapshot) {
     if (declared)
       declarationsChanged();
     if (dataRenamed || itemsChanged) {
-      // Names of data and data items alone, each as the listing can take it.
-      bool inPlace = listing_ && !unnamed;
-      for (const auto &[address, name] : newNames) {
-        const auto before = oldNames.find(address);
-        if (!inPlace || (before != oldNames.end() && before->second == name))
-          continue;
-        inPlace = neverd_func_find_by_addr(session_, address) < 0 &&
-                  listing_->dataRenamed(address, name);
-      }
-      inPlace = inPlace && (!itemsChanged || listing_->dataItemsChanged());
+      // Names and data items, each as the listing can take it.
+      const bool inPlace =
+          namesInPlace() && (!itemsChanged || listing_->dataItemsChanged());
       if (!inPlace)
         namesChanged();
       else if (dataRenamed)
         dataNameChanged();
       else
         dataItemsChanged();
-    }
+    } else if (oldNames != newNames)
+      functionNamesChanged(!namesInPlace());
   } else if (oldNames != newNames)
-    functionNamesChanged(unnamed);
+    // As the owner's listing takes a function's new name.
+    functionNamesChanged(!namesInPlace());
   localNamesChanged();
   return {{"updated", true}};
 }
@@ -3178,6 +3239,7 @@ bool readsNoProjectFile(std::string_view operation) {
                                                     "listing",
                                                     "local_types_declare",
                                                     "metadata",
+                                                    "prepare_function",
                                                     "names",
                                                     "rename",
                                                     "resolve",
@@ -5365,7 +5427,8 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       operation != "function_type" && operation != "item_define" &&
       operation != "operand_format" && operation != "decompile" &&
       operation != "cfg" && operation != "cfg_summary" &&
-      operation != "cfg_viewport" && operation != "xrefs")
+      operation != "cfg_viewport" && operation != "xrefs" &&
+      operation != "prepare_function")
     throw Error("unsupported", "Unknown worker operation: " + operation);
   const auto address = parseAddress(stringField(p, "address"));
   if (operation == "disasm") {
@@ -6130,6 +6193,23 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     ~KeptOnly() { flag = false; }
   } keptOnlyScope{keptOnly_};
   keptOnly_ = p.is_object() && p.value("kept_only", false);
+  if (operation == "prepare_function") {
+    // What the source view after an edit the user is making reads: the
+    // function is analyzed and its source emitted now, as a visit would, and
+    // nothing kept of the text answers it.
+    const auto entry = functionEntry(address);
+    // A view's decoration reads the listing's names of functions, which a
+    // replica builds at its first view.
+    (void)listing().functionAliases();
+    prepareFunction(entry, "source");
+    try {
+      (void)engineViewPage(entry, "source", 0, true, Json::object(),
+                           Json::object().dump());
+    } catch (const Error &) {
+      // An engine that emits no source for it has prepared what it can.
+    }
+    return {{"address", hexAddress(entry)}, {"prepared", true}};
+  }
   if (operation == "decompile") {
     const auto representation = stringField(
         p, "representation", "c",
@@ -6171,8 +6251,16 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     if (representation == "low" || representation == "med" ||
         representation == "high" || representation == "llvm" ||
         representation == "c" || representation == "llvmc" || spelled) {
+      // A client that keeps pages names the one it has (if_none_match), and
+      // is answered without the encoded page another client reads.
+      const auto etags = p.contains("if_none_match");
+      const auto known =
+          etags ? stringField(p, "if_none_match", {},
+                              ::neverd::limits::worker::kEngineMaxPageEtagBytes)
+                : std::string();
       if (auto named = namedViewPage(entry, representation, offset, limit,
-                                     options, encoded))
+                                     options, etags ? nullptr : encoded,
+                                     etags ? &known : nullptr))
         return std::move(*named);
       if (keptOnly_)
         throw Error("not_kept", "No session has kept this view");

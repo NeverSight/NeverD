@@ -104,6 +104,9 @@ inline constexpr unsigned kCOFFRegistrationEHScanMaxInstallPushes = 4;
 /// size covers the widest prologue any of the three shapes below emits while
 /// staying far short of the previous function.
 inline constexpr size_t kCOFFRegistrationEHScanMaxInstallWindow = 64;
+/// How far past a `__finally` handler its normal path's `call` can land: past
+/// the reloads of what the runtime's way in has to fetch from the frame.
+inline constexpr size_t kMaxRegistrationBodyReload = 16;
 
 // lib/loader/COFF/eh/COFFRegistrationEHThrowInfo.cpp
 // MSVC TypeDescriptor includes two pointer words followed by a bounded

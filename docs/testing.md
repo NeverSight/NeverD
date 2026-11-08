@@ -6493,6 +6493,8 @@ with all of them written and each a step of the history, a view, an undo, a snap
 replica restores from and a save each find what was queued, a kill at any moment leaves
 a project that opens and takes edits, a write that fails fails a later edit and goes
 through once it can, and files changed behind the worker stop the next edit.
+`NeverDWorkerViewEdits` also checks a prepared function, a page named as kept, and a
+replica taking a function's and data's names in one update without reading names again.
 `NeverDWorkerViewEdits` reads every view after each edit an owner takes while keeping
 documents, a function's name, a comment, a colour, a new type and undoing them, and each
 must read field for field as a session that has just opened the project's files.
@@ -18597,9 +18599,14 @@ levels nesting their tries, a body that leaves the function ending the path of i
 try that starts where jumps enter it, an arm that does nothing, a jump out of a
 `__finally` staying a jump, code running on into a `__finally`, a loop on a
 register staying in its try, an entry inside a loop being a jump in the try, an arm
-starting at its handler, and a filter keeping its calls in order. `WindowsEHModesCorpus.EveryFinallyClauseOfXcpt4HoldsItsHandlerAsCode`
-holds the same for the whole of x86 `xcpt4`, with no loop that does nothing and every
-call a filter or the startup code's arm makes. Run these checks when changing
+starting at its handler, a filter keeping its calls in order, clang-cl's record in frame
+slots with its outlined filter and `__finally`, a clause that does nothing keeping its
+address, and a `push` that only makes room being no argument. `WindowsEHModesCorpus.EveryFinallyClauseOfXcpt4HoldsItsHandlerAsCode`
+holds the same for the whole of x86 `xcpt4`, with no loop that does nothing, no empty
+`__try` and every call a filter or the startup code's arm makes.
+`ClangClX86SehProbePrintsItsTries`, `X86StartupFramesPrintTheirTries` and
+`X86WinapiCallsPopWhatTheyTake` pin clang-cl's frames, the CRT's own frames and the
+stack pointer a Windows API call leaves. Run these checks when changing
 the call-removal range index; handler boundaries, remaining calls and clause
 results must stay unchanged.
 

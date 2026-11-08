@@ -278,6 +278,9 @@ inline constexpr int kQueryServiceStateClampArgument3 = 1024 * 1024 * 1024;
 inline constexpr int kQueryServiceStateLimitsMaxRequestBytesClampArgument3 =
     8 * 1024 * 1024;
 inline constexpr int kQueryServiceSetCacheBudgetMiBClampArgument3 = 1024;
+/// Source pages a query service keeps beyond their revision, which the worker
+/// answers still stand when their document does.
+inline constexpr int kQueryServiceKeptPages = 64;
 
 // tools/neverd-gui/app/MainWindow.cpp
 inline constexpr int

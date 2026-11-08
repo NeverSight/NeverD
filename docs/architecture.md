@@ -4663,7 +4663,13 @@ documents as they are (`Engine::keepNamedViewsThrough`, `Engine::readViewEdits`)
 Decoration asks for the image's names and comments by address, and the edit changes
 that one row (`CodeEdits::ImageFacts`), so a view costs the same among thousands.
 The GUI starts a replica on a function as its Set Type dialog opens
-(`AnalysisService::prepareRead`), so the render after the edit finds it ready.
+(`AnalysisService::prepareRead`) and has it prepare the function and build its listing
+(`prepare_function`), so the render after the edit finds its analysis and its callees'
+ready. A replica takes a function's new name in its listing as the owner does, and the
+names that changed row by row (`Engine::takeNames`), so its name index stands. A page the
+GUI keeps is named by the document and lines it came from; a later read names it
+(`if_none_match`), and while the document stands the worker says so instead of sending
+the page again (`QueryService::State::keptPages`).
 A replica takes those edits in place (`analysis_update_names`), since no analysis
 reads them: what it keeps of a view stays the view's. A note on a function and a data
 item, which nothing analyzed or rendered reads, leave the renders as they are, and a
@@ -16276,8 +16282,25 @@ jump still enters, which C cannot say, prints as a block with its handler in a
 comment, and the others settle again without it. A clause starts at its handler
 whatever order its statements were found in, since nothing but the runtime enters
 it, and statements at one address stay together, since a jump to it lands on the
-first. A frame whose record is not where the runtime leaves EBP, as clang-cl's, is
-not read this way: its handlers' code keeps the block view. `lib/ir/high/structure/X86/X86RegistrationDisplay.cpp` runs this and takes the
+first. clang-cl keeps its record below what its prologue pushes after EBP, so the
+runtime enters each handler below the frame's EBP, and it outlines its filters and
+`__finally` bodies. `RegistrationDisplayFrame` takes the handlers' own frame code out
+of the way, so they read as MSVC's do, and the normal path's call of an outlined body
+goes the way a `call` of an inline one does, its flag being `AbnormalTermination()`.
+A handler of any other shape leaves the frame in the block view.
+
+The loader finds a frame's entry from its own bytes where no symbol or padding says:
+clang-cl pads with no-ops, so `slotRecordEntry` reads the prologue that writes the
+record's words, and a caller of `__SEH_prolog4` has its own `push; push; call` once the
+code before it ends, by a jump away too. The shared prologue is no part of the frame it
+builds. What a frame's flow runs through is its code, whatever a boundary guess makes of
+its bytes (`getX86RegistrationBodyInstructions`).
+
+At the end, `dropUnreadRegistrationStackWrites` removes writes of stack words nothing
+reads: the arguments a call's own text says, and frame words no pointer reaches. With
+the handlers' code in the function's statements a word's reads are all in sight, which
+is why this runs here and not in the generic cleanup, which leaves exception frames
+alone. `lib/ir/high/structure/X86/X86RegistrationDisplay.cpp` runs this and takes the
 normal path's `call` of each body away. Within one call-removal pass, each
 queried body's merged ranges are computed once from the unchanged display facts,
 including empty results. Bodies are still searched in root-address order, and

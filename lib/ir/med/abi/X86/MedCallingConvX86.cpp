@@ -1113,6 +1113,255 @@ bool liveInReachesNonPushUse(const MedFunc &Func, uint64_t RegOff) {
   return liveInReachesUse(Func, RegOff, false, false);
 }
 
+namespace {
+
+/// Where the values of a function that come from the stack pointer point, from
+/// the stack pointer it was entered with.
+class StackValues {
+public:
+  explicit StackValues(const MedFunc &Func) : Func(Func) {
+    const uint64_t SP = getTargetRegInfo(Arch::X86).StackPointer;
+    for (const MedOp &Op : Func.Blocks.front().Ops) {
+      if (Op.Opcode != NdOp::COPY)
+        break;
+      if (isEntryLiveInCopy(Op, SP)) {
+        Offsets[valueKey(Op.Output)] = 0;
+        Offsets[valueKey(Op.Inputs[0])] = 0;
+      }
+    }
+    // Blocks come in an order that defines before most uses; a join of the same
+    // distance takes a second look.
+    for (unsigned Pass = 0; Pass < 2; ++Pass)
+      for (const MedBlock &Block : Func.Blocks) {
+        for (const PhiNode &Phi : Block.Phis) {
+          std::optional<int64_t> Agreed;
+          bool Same = true;
+          for (const auto &[Pred, Arg] : Phi.Args) {
+            (void)Pred;
+            const auto At = find(Arg);
+            Same &= At && (!Agreed || *Agreed == *At);
+            if (At)
+              Agreed = At;
+          }
+          if (Same && Agreed)
+            Offsets[valueKey(Phi.Output)] = *Agreed;
+        }
+        for (const MedOp &Op : Block.Ops)
+          note(Op);
+      }
+  }
+
+  std::optional<int64_t> find(const MedVar &V) const {
+    if (V.isConst())
+      return std::nullopt;
+    const auto It = Offsets.find(valueKey(V));
+    return It == Offsets.end() ? std::nullopt
+                               : std::optional<int64_t>(It->second);
+  }
+
+  /// Whether a pointer the function lets go of can reach the word at \p Slot:
+  /// one no higher than it, since nothing indexes a frame downward.
+  bool mayEscapeTo(int64_t Slot) const {
+    const auto Reaches = [&](const MedVar &V) {
+      const auto At = find(V);
+      return At && *At <= Slot + int64_t(sizeof(uint32_t)) - 1;
+    };
+    for (const MedBlock &Block : Func.Blocks) {
+      for (const PhiNode &Phi : Block.Phis)
+        if (!find(Phi.Output))
+          for (const auto &[Pred, Arg] : Phi.Args) {
+            (void)Pred;
+            if (Reaches(Arg))
+              return true;
+          }
+      for (const MedOp &Op : Block.Ops) {
+        if (carries(Op) || Op.Opcode == NdOp::LOAD)
+          continue;
+        for (unsigned I = 0; I < Op.NumInputs; ++I)
+          if (!(Op.Opcode == NdOp::STORE && I == 0) && Reaches(Op.Inputs[I]))
+            return true;
+      }
+    }
+    return false;
+  }
+
+private:
+  const MedFunc &Func;
+  llvm::DenseMap<ValueKey, int64_t> Offsets;
+
+  /// Whether \p Op only moves a stack address along, with its output known.
+  static bool carries(const MedOp &Op) {
+    switch (Op.Opcode) {
+    case NdOp::COPY:
+    case NdOp::INT_ZEXT:
+      return true;
+    case NdOp::INT_ADD:
+    case NdOp::INT_SUB:
+      return Op.NumInputs == 2 && Op.Inputs[1].isConst();
+    default:
+      return false;
+    }
+  }
+
+  void note(const MedOp &Op) {
+    if (!carries(Op) || !Op.NumInputs)
+      return;
+    const auto Base = find(Op.Inputs[0]);
+    if (!Base)
+      return;
+    int64_t Offset = *Base;
+    if (Op.Opcode == NdOp::INT_ADD)
+      Offset += llvm::SignExtend64<32>(Op.Inputs[1].ConstVal);
+    else if (Op.Opcode == NdOp::INT_SUB)
+      Offset -= llvm::SignExtend64<32>(Op.Inputs[1].ConstVal);
+    Offsets[valueKey(Op.Output)] = Offset;
+  }
+};
+
+/// Whether the word at \p Slot, written just before \p After in the entry
+/// block, is written again before anything reads it on every path.  A call
+/// could read it as its stack argument.
+bool wordIsWrittenBeforeRead(const MedFunc &Func, const StackValues &Stack,
+                             int64_t Slot, size_t After) {
+  const auto Overlaps = [&](const MedVar &Address, uint16_t Size) {
+    const auto At = Stack.find(Address);
+    return At && *At < Slot + int64_t(sizeof(uint32_t)) && Slot < *At + Size;
+  };
+  llvm::SmallVector<std::pair<int, size_t>, 8> Work{{0, After}};
+  llvm::DenseSet<int> Seen;
+  while (!Work.empty()) {
+    const auto [Id, From] = Work.pop_back_val();
+    if (Id < 0 || size_t(Id) >= Func.Blocks.size())
+      return false;
+    const MedBlock &Block = Func.Blocks[Id];
+    bool Ended = false;
+    for (size_t I = From; I < Block.Ops.size() && !Ended; ++I) {
+      const MedOp &Op = Block.Ops[I];
+      switch (Op.Opcode) {
+      case NdOp::CALL:
+      case NdOp::INDIR_CALL:
+        return false;
+      case NdOp::LOAD:
+        if (Op.NumInputs && Overlaps(Op.Inputs[0], Op.Output.Size))
+          return false;
+        break;
+      case NdOp::STORE:
+        if (Op.NumInputs < 2)
+          break;
+        if (Stack.find(Op.Inputs[0]) == Slot &&
+            Op.Inputs[1].Size == sizeof(uint32_t))
+          Ended = true;
+        else if (Overlaps(Op.Inputs[0], Op.Inputs[1].Size))
+          return false;
+        break;
+      default:
+        break;
+      }
+    }
+    if (Ended)
+      continue;
+    for (int Succ : Block.Succs)
+      if (Seen.insert(Succ).second)
+        Work.push_back({Succ, 0});
+  }
+  return true;
+}
+
+/// Whether anything but \p Copy reads the value \p LiveIn.
+bool isReadElsewhere(const MedFunc &Func, const MedVar &LiveIn,
+                     const MedOp &Copy) {
+  const auto Same = [&](const MedVar &V) {
+    return !V.isConst() && valueKey(V) == valueKey(LiveIn);
+  };
+  for (const MedBlock &Block : Func.Blocks) {
+    for (const PhiNode &Phi : Block.Phis)
+      for (const auto &[Pred, Arg] : Phi.Args) {
+        (void)Pred;
+        if (Same(Arg))
+          return true;
+      }
+    for (const MedOp &Op : Block.Ops) {
+      if (&Op == &Copy)
+        continue;
+      for (unsigned I = 0; I < Op.NumInputs; ++I)
+        if (Same(Op.Inputs[I]))
+          return true;
+    }
+  }
+  return false;
+}
+
+} // namespace
+
+void dropReservingPushes(MedFunc &Func) {
+  if (Func.Blocks.empty())
+    return;
+  MedBlock &Entry = Func.Blocks.front();
+  const TargetRegInfo &TRI = getTargetRegInfo(Arch::X86);
+  // What the registers a call need not preserve came in with.
+  llvm::SmallDenseMap<ValueKey, uint64_t, 8> Incoming;
+  for (const MedOp &Op : Entry.Ops) {
+    if (Op.Opcode != NdOp::COPY)
+      break;
+    for (const uint64_t Register : {x86reg::RAX, x86reg::RCX, x86reg::RDX})
+      if (isEntryLiveInCopy(Op, Register)) {
+        Incoming[valueKey(Op.Output)] = Register;
+        Incoming[valueKey(Op.Inputs[0])] = Register;
+      }
+  }
+  const auto IncomingRegister =
+      [&](const MedVar &V) -> std::optional<uint64_t> {
+    if (V.Kind != MedVar::Reg)
+      return std::nullopt;
+    if (const auto It = Incoming.find(valueKey(V)); It != Incoming.end())
+      return It->second;
+    // Written nowhere before this: `push eax` is all that reads it.
+    if (V.SSAVer == 0 &&
+        llvm::is_contained(
+            std::array<uint64_t, 3>{x86reg::RAX, x86reg::RCX, x86reg::RDX},
+            V.RegOff))
+      return V.RegOff;
+    return std::nullopt;
+  };
+  std::optional<StackValues> Stack;
+  llvm::SmallVector<size_t, 2> Dropped;
+  llvm::SmallVector<uint64_t, 2> Registers;
+  for (size_t I = 0; I < Entry.Ops.size(); ++I) {
+    const MedOp &Op = Entry.Ops[I];
+    if (Op.Opcode == NdOp::COPY ||
+        (Op.Opcode == NdOp::INT_SUB && Op.Output.Kind == MedVar::Reg &&
+         Op.Output.RegOff == TRI.StackPointer))
+      continue;
+    if (Op.Opcode != NdOp::STORE || Op.NumInputs < 2 ||
+        Op.Inputs[0].Kind != MedVar::Reg ||
+        Op.Inputs[0].RegOff != TRI.StackPointer)
+      break;
+    const auto Register = IncomingRegister(Op.Inputs[1]);
+    if (!Register)
+      continue;
+    if (!Stack)
+      Stack.emplace(Func);
+    const auto Slot = Stack->find(Op.Inputs[0]);
+    if (!Slot || Stack->mayEscapeTo(*Slot) ||
+        !wordIsWrittenBeforeRead(Func, *Stack, *Slot, I + 1))
+      continue;
+    Dropped.push_back(I);
+    Registers.push_back(*Register);
+  }
+  for (size_t K = Dropped.size(); K-- > 0;)
+    Entry.Ops.erase(Entry.Ops.begin() + static_cast<ptrdiff_t>(Dropped[K]));
+  // The register is no parameter when nothing else reads what it came in with.
+  for (const uint64_t Register : Registers) {
+    const auto Copy = llvm::find_if(Entry.Ops, [&](const MedOp &Op) {
+      return isEntryLiveInCopy(Op, Register);
+    });
+    if (Copy == Entry.Ops.end() || isReadElsewhere(Func, Copy->Output, *Copy) ||
+        isReadElsewhere(Func, Copy->Inputs[0], *Copy))
+      continue;
+    Entry.Ops.erase(Copy);
+  }
+}
+
 std::vector<uint64_t> additionalI386ParameterRegisters(const MedFunc &Func) {
   std::vector<uint64_t> Registers;
   if (Func.Blocks.empty())

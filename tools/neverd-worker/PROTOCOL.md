@@ -1006,6 +1006,20 @@ that advertises `kept_renders`, answers from what is kept and otherwise refuses 
 `kept_renders` replies `{kept, complete}`: how many records the store for the current
 inputs holds, and whether a job has reached every function.
 
+A `decompile` that carries `if_none_match` (empty for none) asks for its page's name:
+the reply's `etag` names the document and lines it came from in this worker. A later
+read that names that page is answered `{unchanged: true, etag, project_id, revision}`
+while the document stands, and the client shows the page it kept; a page whose document
+was built again comes whole, under a new name. Without `if_none_match` replies are as
+before.
+
+`prepare_function {address}` analyzes the function at `address` and emits its source as
+a visit would, keeping nothing of the text, builds the listing a view decorates with,
+and replies `{address, prepared}`. A client
+sends it to a replica while the user makes an edit that replica will render, so the view
+after the edit finds the function's analysis and its callees' ready; a `decompile` would
+answer from what is kept and prepare nothing.
+
 A job also keeps what a function's first look in `listing` asks the engine, in the
 project's `local/listing-facts` under the same inputs apart from the names of data,
 and any worker of that project reads it there. An owner takes up what its replica adds at most once a second.

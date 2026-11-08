@@ -79,6 +79,25 @@ checkedRegistrationRangeEnd(const BinaryImage &Img,
                             const ExceptionAddressRange &Range,
                             const std::vector<va_t> &Roots, size_t &Work);
 
+/// Whether the ordinary body at \p Begin ends before \p Boundary on every path.
+/// A direct jump out of the range and an `int3` end a path, unlike in a body's
+/// extent: only falling into the boundary, an edge that says nothing or an
+/// instruction across it keeps the two together.
+bool checkedRegistrationBodyClosesBefore(const BinaryImage &Img, va_t Begin,
+                                         va_t Boundary, size_t &Work);
+
+/// A word a prologue writes to its frame: `mov dword ptr [ebp + Slot], Value`.
+struct RegistrationFrameWord {
+  int32_t Slot = 0;
+  uint32_t Value = 0;
+};
+
+/// The constant words of the frame the instructions from \p Begin to \p End
+/// write, when they decode to exactly \p End and all run straight on.
+std::optional<std::vector<RegistrationFrameWord>>
+checkedRegistrationStraightPrologue(const BinaryImage &Img, va_t Begin,
+                                    va_t End, size_t &Work);
+
 /// Prove that an exact instruction belongs to a closed ordinary body rooted
 /// at Entry. Every reached instruction must have immutable, unambiguous byte
 /// and fixup ownership. This structural witness grants no returning-call ABI.
@@ -217,6 +236,25 @@ public:
       return std::nullopt;
     va_t SegEnd = Seg->VA + Usable;
     va_t End = It == Starts.end() ? SegEnd : std::min(*It, SegEnd);
+    if (End <= Begin || Address >= End)
+      return std::nullopt;
+    return ExceptionAddressRange{Begin, End};
+  }
+
+  /// The function a proved prologue at \p Begin starts, up to the next start
+  /// past
+  /// \p Address, which is in it: no symbol or padding need say where it begins.
+  std::optional<ExceptionAddressRange>
+  findFrom(const BinaryImage &Img, va_t Begin, va_t Address) const {
+    const Segment *Seg = Img.getSegmentFor(Begin);
+    if (!Seg || !Seg->isExecutable())
+      return std::nullopt;
+    const uint64_t Usable = std::min<uint64_t>(Seg->Size, Seg->Data.size());
+    if (Usable > InvalidVA - Seg->VA)
+      return std::nullopt;
+    const va_t SegEnd = Seg->VA + Usable;
+    const auto It = std::upper_bound(Starts.begin(), Starts.end(), Address);
+    const va_t End = It == Starts.end() ? SegEnd : std::min(*It, SegEnd);
     if (End <= Begin || Address >= End)
       return std::nullopt;
     return ExceptionAddressRange{Begin, End};

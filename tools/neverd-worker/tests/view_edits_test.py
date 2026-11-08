@@ -12,7 +12,7 @@ from pathlib import Path
 import sys
 import tempfile
 
-from listing_facts_test import ADDRESSES
+from listing_facts_test import ADDRESSES, DATA
 from pe_listing_facts_test import fixture as functions_fixture
 from render_ahead_test import done, render_ahead
 from source_variable_types_test import global_elf, ok
@@ -48,6 +48,14 @@ def filled(clients, executable, path, data, visits=()):
     return owner
 
 
+def replica_view(client, address):
+    reply = client.call("decompile", {"address": hex(address), "representation": "source",
+                                      "offset": 0, "limit": 200})
+    assert reply["status"] == "ok", reply
+    return {key: value for key, value in reply["payload"].items()
+            if key not in ("revision", "project_id")}
+
+
 def store_reads(client):
     """How many views the owner has read from what is kept, not from a document it holds."""
     return client.call("kept_renders")["background"]["render_ahead"]["hits"]
@@ -76,6 +84,9 @@ def run(executable):
             return seen
 
         first = same_as_fresh("nothing")
+        # A function prepared for an edit reads the same after it.
+        assert ok(owner, "prepare_function", {"address": hex(functions[1])})["prepared"]
+        assert same_as_fresh("prepared") == first
         # A function's name reads in its callers and in its own view, as it reads afresh.
         ok(owner, "rename", {"address": hex(functions[1]), "name": "renamed_function"})
         named = same_as_fresh("function name")
@@ -111,6 +122,27 @@ def run(executable):
         reply = ok(owner, "local_types_declare", {"language": "c", "source": "struct VIEW_NEW { unsigned value; };"})
         assert reply["unread"], reply
         assert same_as_fresh("new type") == noted
+        # A page the client keeps reads the same while its document stands, and
+        # the worker says so in place of sending it again.
+        kept_page = owner.call("decompile", {"address": hex(functions[0]), "representation": "source",
+                                             "offset": 0, "limit": 200, "kept_only": True,
+                                             "if_none_match": ""})["payload"]
+        ok(owner, "function_edit", {"address": hex(functions[2]), "attributes": {"color": "#405061"}})
+        again = ok(owner, "decompile", {"address": hex(functions[0]), "representation": "source",
+                                        "offset": 0, "limit": 200, "kept_only": True,
+                                        "if_none_match": kept_page["etag"]})
+        assert again["unchanged"] and again["etag"] == kept_page["etag"], again
+        ok(owner, "annotation_set", {"address": hex(functions[0]), "text": "on the kept page"})
+        ok(owner, "save")
+        changed = ok(owner, "decompile", {"address": hex(functions[0]), "representation": "source",
+                                          "offset": 0, "limit": 200, "kept_only": True,
+                                          "if_none_match": kept_page["etag"]})
+        assert not changed.get("unchanged") and "on the kept page" in changed["text"], changed
+        assert changed["etag"] != kept_page["etag"]
+        ok(owner, "undo")
+        ok(owner, "save")
+        ok(owner, "undo")
+        assert same_as_fresh("page identity undone") == noted
         # What they reach none of, the owner's documents answer.
         reads = store_reads(owner)
         ok(owner, "function_edit", {"address": hex(functions[2]), "attributes": {"color": "#405060"}})
@@ -156,6 +188,27 @@ def run(executable):
         ok(owner, "function_edit", {"address": hex(functions[1]), "attributes": {"type": None}})
         ok(owner, "local_types_declare", {"language": "c", "source": "struct VIEW_NEXT { unsigned value; };"})
         compare(executable, owner, path, functions, "declaration then type")
+
+        # A replica takes a function's new name and data's in one update as the
+        # owner takes them, without reading the names again, and reads as a
+        # replica restored afterwards.
+        replica = clients.enter_context(Client(executable))
+        ok(replica, "analysis_restore", ok(owner, "analysis_snapshot"))
+        for address in functions:
+            replica_view(replica, address)
+        builds = ok(replica, "metadata")["listing_name_builds"]
+        ok(owner, "rename", {"address": hex(functions[2]), "name": "replica_name"})
+        ok(owner, "rename", {"address": hex(DATA), "name": "replica_data"})
+        assert ok(replica, "analysis_update_names", ok(owner, "analysis_snapshot"))["updated"]
+        taken = {address: replica_view(replica, address) for address in functions}
+        assert ok(replica, "metadata")["listing_name_builds"] == builds
+        names = [row["name"] for row in ok(replica, "functions", {"offset": 0, "limit": 10})["items"]]
+        assert "replica_name" in names, names
+        with Client(executable) as restored:
+            ok(restored, "analysis_restore", ok(owner, "analysis_snapshot"))
+            for address, row in taken.items():
+                assert replica_view(restored, address) == row, hex(address)
+        replica.close()
 
         # A name of data, in what reads it and in nothing else.
         path = Path(directory) / "global.elf"

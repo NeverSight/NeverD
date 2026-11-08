@@ -30,6 +30,13 @@ bool isClause(Place P) { return P != kFunctionPlace && P % 2 == 0; }
 
 bool hasLabel(const HighStmt &S) { return S.Addr && S.Addr != InvalidVA; }
 
+/// The address a jump names to run the loop \p S from its head.
+std::optional<va_t> loopHead(const HighStmt &S) {
+  if (S.Kind == StmtKind::While && S.LoopHeaderAddr)
+    return S.LoopHeaderAddr;
+  return std::nullopt;
+}
+
 bool isEmptyAnchor(const HighStmt &S) {
   return S.Kind == StmtKind::Nop ||
          (S.Kind == StmtKind::Block && S.Body.empty());
@@ -199,6 +206,14 @@ public:
 
   std::vector<HighStmt> run(std::vector<HighStmt> Stmts) {
     Targets = gotoTargets(Stmts);
+    // A phi's copy carries the address of the jump it runs before, and
+    // structuring can leave it in an arm with that jump after the `if`.  No
+    // jump lands on it, and it names nothing: it runs right after the statement
+    // before it.
+    walkStmts(Stmts, [&](HighStmt &S) {
+      if (S.IsPhiCopy && !Targets.count(S.Addr))
+        S.Addr = 0;
+    });
     std::vector<HighStmt> Function;
     placeList(std::move(Stmts), kFunctionPlace, std::nullopt, false, Function);
     // What moves can hold more that does.
@@ -334,6 +349,8 @@ private:
       const HighStmt &S = List[I];
       if (hasLabel(S))
         return S.Addr;
+      if (const auto Head = loopHead(S))
+        return Head;
       if (S.Kind == StmtKind::Goto)
         return S.GotoTarget;
       if (!isEmptyAnchor(S))
@@ -350,7 +367,8 @@ private:
       // jump to an address lands on the first statement with it.
       size_t End = I + 1;
       while (End < Stmts.size() &&
-             (!hasLabel(Stmts[End]) || Stmts[End].Addr == Stmts[I].Addr))
+             ((!hasLabel(Stmts[End]) && !loopHead(Stmts[End])) ||
+              Stmts[End].Addr == Stmts[I].Addr))
         ++End;
       Group G;
       G.Begin = I;
@@ -365,6 +383,8 @@ private:
       }
       if (hasLabel(Stmts[I]))
         G.Label = Stmts[I].Addr;
+      else if (const auto Head = loopHead(Stmts[I]))
+        G.Label = *Head;
       Groups.push_back(G);
       I = End;
     }
@@ -389,6 +409,20 @@ private:
       I = Last;
     }
     return Groups;
+  }
+
+  /// Whether the group at \p I is the first in its list of the code only a
+  /// runtime entry runs.
+  bool startsRuntimeEntry(const std::vector<HighStmt> &Stmts,
+                          const std::vector<Group> &Groups, size_t I) const {
+    const auto OwnerOf = [&](size_t K) -> va_t {
+      if (!Groups[K].Label)
+        return 0;
+      const Stretch *At = stretchAt(*Groups[K].Label);
+      return At ? At->Owner : 0;
+    };
+    const va_t Owner = OwnerOf(I);
+    return Owner && (I == 0 || OwnerOf(I - 1) != Owner);
   }
 
   bool belongsElsewhere(Place P, Place Around, unsigned Self) const {
@@ -481,15 +515,25 @@ private:
     for (size_t I = 0; I < Groups.size(); ++I) {
       const Group &G = Groups[I];
       // Nothing runs what does nothing behind what ended, as the path past the
-      // `call` of a body that never comes back.
+      // `call` of a body that never comes back, but for where a runtime entry
+      // comes in, which no jump says: an arm can start with a local unwind.
       if (I && !Falling && !PreviousMoved && G.DoesNothing &&
-          !(G.Label && Targets.count(*G.Label)))
+          !(G.Label && Targets.count(*G.Label)) &&
+          !startsRuntimeEntry(Stmts, Groups, I))
         continue;
       Place At = Tree.normal(G.At);
       // What does nothing can stay in the statement around it, unless what ran
       // before it had to leave that statement.
       if (Around != kFunctionPlace && G.DoesNothing && !PreviousMoved)
         At = Around;
+      // A jump structuring lifted out of the arms before it runs after them
+      // all, whatever level its address had in one, and need not go anywhere to
+      // reach what is not in that scope.
+      if (Falling == &Out && FallingEnd == Out.size() && G.DoesNothing &&
+          Stmts[G.Begin].Kind == StmtKind::Goto)
+        if (const Stretch *To = stretchAt(Stmts[G.Begin].GotoTarget);
+            To && !Tree.within(Tree.ofStretch(*To), At))
+          At = Around;
       bool Move = belongsElsewhere(At, Around, Self);
       const std::optional<va_t> Next = nextLabel(Stmts, G.End, After);
       if (Move) {
@@ -1099,7 +1143,14 @@ private:
       const HighStmt &S = List[I];
       if (isEmptyAnchor(S) || writesRuntimeChain(S))
         continue;
-      if (S.Kind == StmtKind::Assign && I + 1 < List.size() &&
+      // The read of the chain's old head: a label can hold it in a block.
+      const bool ReadsTheHead =
+          S.Kind == StmtKind::Assign ||
+          (S.Kind == StmtKind::Block &&
+           llvm::all_of(S.Body, [](const HighStmt &Inner) {
+             return Inner.Kind == StmtKind::Assign;
+           }));
+      if (ReadsTheHead && I + 1 < List.size() &&
           writesRuntimeChain(List[I + 1]))
         continue;
       if (S.Kind == StmtKind::Goto)
