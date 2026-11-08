@@ -321,13 +321,29 @@ if(TARGET neverd_shared)
     set_tests_properties(NeverDCalleeSourceCLI PROPERTIES
       TIMEOUT 180 LABELS "NeverDCalleeSourceCLI")
     if(APPLE)
-      add_test(NAME NeverDArm64eSourceCallSDK
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/arm64e_source_calls_test.py"
-          --library $<TARGET_FILE:neverd_shared>
-          --compiler "${NEVERD_TEST_CLANG_EXECUTABLE}"
-          --artifacts "${CMAKE_CURRENT_BINARY_DIR}/arm64e-source-call-sdk")
-      set_tests_properties(NeverDArm64eSourceCallSDK PROPERTIES
-        TIMEOUT 120 LABELS "NeverDSourceCallABI")
+      set(_neverd_arm64e_call_fixture "${CMAKE_CURRENT_SOURCE_DIR}/Arm64eSourceCallFixtures.def")
+      set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${_neverd_arm64e_call_fixture}")
+      file(READ "${_neverd_arm64e_call_fixture}" _neverd_arm64e_calls)
+      string(JSON _neverd_arm64e_call_count LENGTH "${_neverd_arm64e_calls}" cases)
+      string(JSON _neverd_arm64e_call_prefix GET "${_neverd_arm64e_calls}" selection test_prefix)
+      string(JSON _neverd_arm64e_call_option GET "${_neverd_arm64e_calls}" selection case_option)
+      string(JSON _neverd_arm64e_call_timeout GET "${_neverd_arm64e_calls}" selection timeout_seconds)
+      math(EXPR _neverd_arm64e_call_last "${_neverd_arm64e_call_count} - 1")
+      foreach(_neverd_arm64e_call_index RANGE 0 ${_neverd_arm64e_call_last})
+        string(JSON _neverd_arm64e_call_name GET "${_neverd_arm64e_calls}"
+          cases ${_neverd_arm64e_call_index} name)
+        set(_neverd_arm64e_call_test "${_neverd_arm64e_call_prefix}.${_neverd_arm64e_call_name}")
+        add_test(NAME "${_neverd_arm64e_call_test}"
+          COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/arm64e_source_calls_test.py"
+            --library $<TARGET_FILE:neverd_shared>
+            --compiler "${NEVERD_TEST_CLANG_EXECUTABLE}"
+            "${_neverd_arm64e_call_option}" "${_neverd_arm64e_call_name}"
+            --artifacts "${CMAKE_CURRENT_BINARY_DIR}/arm64e-source-call-sdk/${_neverd_arm64e_call_name}")
+        set_tests_properties("${_neverd_arm64e_call_test}" PROPERTIES
+          TIMEOUT "${_neverd_arm64e_call_timeout}"
+          LABELS "NeverDSourceCallABI;${_neverd_arm64e_call_prefix}")
+      endforeach()
     endif()
     add_test(NAME NeverDBinaryDiffCLI
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/diff/cli_test.py"

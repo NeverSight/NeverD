@@ -27,7 +27,14 @@ def main():
     parser.add_argument("--artifacts", type=Path, required=True)
     parser.add_argument(FIXTURES["cleanup"]["keep_option"], action="store_true",
                         help=FIXTURES["cleanup"]["keep_help"])
+    parser.add_argument(FIXTURES["selection"]["case_option"],
+                        choices=[case["name"] for case in FIXTURES["cases"]],
+                        help=FIXTURES["selection"]["case_help"])
     args = parser.parse_args()
+    cases = [case for case in FIXTURES["cases"]
+             if args.case is None or case["name"] == args.case]
+    refused = (FIXTURES["refused"] if args.case is None or
+               args.case == FIXTURES["cases"][0]["name"] else [])
     args.artifacts.mkdir(parents=True, exist_ok=True)
     assembly = FIXTURES["assembly_prefix"]
     for case in FIXTURES["cases"]:
@@ -180,7 +187,7 @@ def main():
         for index in range(library.neverd_func_count(session)):
             name = take(library.neverd_func_name(session, index)).lstrip("_")
             symbols[name] = library.neverd_func_entry(session, index)
-        for case in FIXTURES["cases"]:
+        for case in cases:
             address = symbols[case["name"]]
             page = view(address, FIXTURES["routes"][0])
             assert "error" not in page, page
@@ -225,9 +232,10 @@ def main():
                                     case, source, route),
                                 "source_sha256": hashlib.sha256(
                                     source.read_bytes()).hexdigest()})
-        address = symbols[FIXTURES["cases"][0]["name"]]
-        page = view(address, FIXTURES["routes"][0])
-        for declaration in FIXTURES["refused"]:
+        if refused:
+            address = symbols[FIXTURES["cases"][0]["name"]]
+            page = view(address, FIXTURES["routes"][0])
+        for declaration in refused:
             edit = ({"declaration": declaration} if isinstance(declaration, str)
                     else declaration)
             request = {"call_types": [{
@@ -261,9 +269,9 @@ def main():
         for path in products:
             path.unlink()
     print(json.dumps({"compiled_source_routes":
-                      len(FIXTURES["cases"]) * len(FIXTURES["routes"]),
+                      len(cases) * len(FIXTURES["routes"]),
                       "refused_routes":
-                      len(FIXTURES["refused"]) * len(FIXTURES["routes"])}))
+                      len(refused) * len(FIXTURES["routes"])}))
 
 
 if __name__ == "__main__":

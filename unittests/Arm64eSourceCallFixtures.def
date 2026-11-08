@@ -647,5 +647,11 @@
     "keep_option": "--keep-products",
     "keep_help": "Retain generated binaries and objects after a successful run for further inspection.",
     "manifest": "products.json"
+  },
+  "selection": {
+    "case_option": "--case",
+    "case_help": "Run one SDK call shape; the first shape also checks declaration refusals.",
+    "test_prefix": "NeverDArm64eSourceCallSDK",
+    "timeout_seconds": 120
   }
 }
