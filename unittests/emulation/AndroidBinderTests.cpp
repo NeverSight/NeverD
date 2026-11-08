@@ -72,8 +72,8 @@ TEST_P(AndroidBinder, KernelThreadsHaveSeparateLoopers) {
 TEST_P(AndroidBinder, MissingPeersAndTransactionsDoNotSucceed) {
   for (const char *Entry :
        {"binder_unknown_transaction", "binder_blocking",
-        "binder_partial_command", "binder_object_transaction",
-        "binder_oneway_transaction"}) {
+        "binder_partial_command", "binder_oneway_transaction"}) {
+    SCOPED_TRACE(Entry);
     auto R = run(Entry);
     EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService) << R.Diagnostic;
     EXPECT_NE(R.Diagnostic.find("Binder"), std::string::npos) << R.Diagnostic;
@@ -87,9 +87,13 @@ TEST_P(AndroidBinder, GuestServicesExecuteSynchronousTransactionsAndReplies) {
   EXPECT_EQ(R.ReturnValue, 0u);
 }
 TEST_P(AndroidBinder, MissingTargetErrorsRemainQueuedUntilReadCapacityFits) {
-  auto R = run("binder_missing_targets");
-  EXPECT_EQ(R.Stop, ProcessStopReason::Returned) << R.Diagnostic;
-  EXPECT_EQ(R.ReturnValue, 0u);
+  for (const char *Entry :
+       {"binder_missing_targets", "binder_object_transaction"}) {
+    SCOPED_TRACE(Entry);
+    auto R = run(Entry);
+    EXPECT_EQ(R.Stop, ProcessStopReason::Returned) << R.Diagnostic;
+    EXPECT_EQ(R.ReturnValue, 0u);
+  }
 }
 TEST_P(AndroidBinder, LargeArenasRetainMultipleCopiedRequestsAndReplies) {
   auto R = run("binder_large_arena_transactions");

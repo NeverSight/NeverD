@@ -80,7 +80,11 @@ Reserved bank bits remain intact for the C++ owner to admit or reject.
 `NeverDUnitTests`) for the [fixed local APIC model](x86-local-apic.md). Build it
 through `scripts/build.py`; its assertions cover all fixed vectors and priority
 classes, acknowledgments, nested service and EOI obligations without executing
-a test binary. For a real save, compile projected bank initializers at O0/O2,
+a test binary. Its arrival source adds 7,680 message truth-table cases and
+960 complete two-slot lifetimes across every fixed vector, plus reserved-vector
+refusal and coalesced trigger-mode changes through EOI. These are constant
+expressions, not runtime tests or captured arrival traces.
+For a real save, compile projected bank initializers at O0/O2,
 inspect constant bytes, and keep hypothetical register transitions distinct
 from captured observations. No guest, handler or device callback need run.
 
@@ -16288,11 +16292,27 @@ regressions require complete explicit bindings and share the C++ fd validator.
 null/short/malformed reads, scalar/String object protection, marshalling exceptions,
 unmarshalling without metadata and duplicate native endpoint validation.
 `LinuxBinder.StrongObjects*`, `RepeatedExport*`, `ForwardedHandles*`,
-`FinalOpenRetirement*` and `MalformedObjectTables*` independently exercise LP64
+`FinalOpenRetirement*` independently exercise LP64
 offset bytes, buffer references,
 node acknowledgments, pointer/cookie restoration, third-open handle renumbering,
 owner retirement, dead handles, pending node notifications across two owner threads
-and rejection before payload effects on x64/AArch64.
+on x64/AArch64. `InvalidObjects*`, `InvalidReply*`, `UnalignedObjectTables*` and
+`UnmodeledObjectKinds*` check literal failed-request/reply bytes, incomplete
+headers/records, bad offsets/tags/cookies/handles, copied and translated arena
+bytes, prefix reference rollback, preservation of existing references, and
+failed allocation reuse. They distinguish server return-error and caller
+reply-error slots, partial read/write consumption, retained request leases and
+recovery through a later successful call. A failure stops before decoding a later
+unknown or truncated command. Repeated failed replies share the
+single unread caller-error slot. Valid unmodeled object kinds still stop before
+transaction effects. `FailedTransactionKeepsProxyAliveAtTheJNIExceptionBoundary`
+checks the next explicit JNI logging/exception boundary without marking the
+live proxy dead or discarding the old reply bytes; runtime execution remains
+terminal at that unsupported boundary.
+The native `binder_object_transaction` control checks that target lookup precedes
+an unreadable object table, then checks BR_FAILED_REPLY for an invalid object
+after a live manager is registered. All relocation/backend variants and
+`AndroidBinderProtocolMatchesSDKAndCLI` share this literal driver-response oracle.
 `AndroidJNI.BinderObjectsRetainProxyIdentityAndDriverOwnership` executes an original
 guest service through ordinary/V/A JNI at O0/O2 and all relocation/backend variants.
 It checks proxy reuse after recycle, forwarding a borrowed object table, null Binder
@@ -16344,9 +16364,10 @@ messages, retained tail bytes, unknown-runtime identity rethrow, checked/null
 cause boundaries, and virtual native message suspension/failure. Incoming
 exception tests check native reply lifetime and default statistics. The native
 peer checks three exception replies followed by ping, including untouched scalar
-tails. The overlapping-object exception reaches the shared driver translation
-boundary with its original offset table and one completed BinderCallsStats
-entry; neither the table nor the original acquisition is silently discarded.
+tails. The overlapping-object case retains its original offset table and reaches
+the shared driver's BR_FAILED_REPLY path three times, followed by a successful
+ping and three BinderCallsStats entries. The Java pool resumes after each failed
+reply; neither the table nor the original acquisition is silently discarded.
 `AndroidBinderDispatchTest` checks local and incoming Java dispatch, protected
 super calls and virtual descriptor overrides, exception cursor order, native
 continuation tokens, separate wrapper-pool reuse, reply-ack buffer lifetime,
@@ -22181,6 +22202,16 @@ MedStackAlignment reusable-entry query regressions exercise the existing scoped 
 
 `CDisplayFrameRecord` index regressions check duplicate-name owner precedence, layout replacement, current propagated types and disabled storage projection. The index is rebuilt with its layout snapshot; mutable types are read from their current slots.
 
+The same suite rejects zero alignment masks, overflowing signed offset chains,
+and overflowing alias/parent-frame rebases. It retains valid boundary
+differences, target entry-stack residues, the existing traversal bound and
+display-only roots without granting storage access. x86, x64, ARM, AArch64 and
+both byte orders of MIPS32/64 exercise root checks. Typed pointer offsets,
+frame overlays, member distances and alignment residues cover the adjacent
+arithmetic boundaries. Both C writers execute a zero-masked frame address at
+O0/O2 with undefined-behavior checks. Run `NeverDCDisplayFrameRecordTests` and
+the complete C-pointer/source ABI suites after changing this walk.
+
 `HighEntryStackOffsets.SharedIndexesKeepDefinitionAndPhiIdentities` checks register/temporary identities, ambiguous PHIs and a new conversion after mutation. Win64 forwarding checks use the same converter-owned definition and PHI indexes as production calls.
 
 HighControlFlowSemantics external-skip tests independently execute all 256 branch choices and preserve earlier nested incoming edges. Batched external-skip ownership must retain statement order and reject outside entries; the current upstream goto-splice and entry-label indexes are retained. Windows exception regressions qualify exceptional control flow.
@@ -22236,6 +22267,11 @@ doubleword merges and a merge read in an indirect call's slot. Uninitialized
 merge destinations cover both orders, all offsets, fixed and seeded random
 machine values, independent expected bytes and fault order at both page edges.
 An invalid-memory branch-likely slot is tested both annulled and executed.
+Bitfield and shuffle kernels cover all 13 classic SPECIAL3 forms and full-width
+fields with independent bit/lane expectations. MIPS64 invalid word inputs are
+tested separately as NeverD strict refusals, without executing architecturally
+UNPREDICTABLE originals. These checks cover both an executed/annulled likely
+slot and an instruction whose destination is `$zero`.
 HighC merge globals are also executed with the original image unmapped.
 LLVMC's original-image storage
 and either route's omitted original callees are explicitly bound at their
@@ -22249,3 +22285,38 @@ Failures retain their diagnostic artifacts. An unavailable compiler or oracle
 is a failure, not a skipped pass.
 Vendor firmware remains outside the committed fixtures. Its separate static
 receipt is [Archer C7 V5](firmware/archer-c7-v5.md).
+
+### MIPS decode/lift and firmware performance
+
+`neverd-mips-bench` is an opt-in target, excluded from the default build:
+
+```sh
+python3 scripts/build.py build-mips --target neverd-mips-bench --parallel 4
+build-mips/bin/neverd-mips-bench mips64el lift /path/to/owned-code.bin 100000
+```
+
+Profiles are `mips`, `mipsel`, `mips64` and `mips64el`. Stages are `capstone`
+(direct physical decoding), `decode` (NeverD physical decoding) and `lift`
+(decoding plus LowIR, including delay slots). Both decode paths request the same
+classic r2 profile, detail on and text off. The pinned Capstone fork suppresses
+rendered operand detail with text off; these physical decode measurements consume
+instruction sizes and IDs. The harness reuses decoder handles, counts physical
+instructions/LowOps and validates output fingerprints outside
+the timed loop. Invalid, truncated or unsupported input fails. Direct Capstone
+does not supply lift semantics and is not a decompiler throughput comparator.
+
+`tools/neverd-bench/mips-paired.py` alternates baseline/candidate runs, warms each
+job and retains CPU, wall, RSS, output hashes and every sample in an ignored
+output directory. It accepts matching CLI/SDK/benchmark directories, raw files
+named `PROFILE-unchanged.bin`, the retained Archer C7 `ubus`, dependency snapshots
+from `neverd-dependency-inputs.json`, and JSON toolchain manifests with `compiler`,
+`llvm`, `capstone` and `build` entries. Record exact versions/hashes, build flags
+and allocator selection in those manifests before each build; unequal inputs
+are refused. Run `--help` for explicit paths and repetition counts.
+
+Each baseline CLI must load its own matching SDK; the runner sets its library
+search path accordingly. It checks output identity for the selected `call`
+handler and discovered functions (limited to 250), with one/default threads and
+both C backends. New instruction coverage and additional strict checks are
+different work and require separate reporting, not same-output speedup claims.
+This small corpus and a shared host do not establish a cross-tool ranking.

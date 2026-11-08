@@ -285,12 +285,10 @@ TEST_P(AndroidJNI, JavaBinderDispatchUsesPoolAndIncomingNativeContinuations) {
         Options.LinuxTime->Clocks[0] = {123, 0};
       Options.Android->Arguments = {form, mode};
       auto result = run("jni_binder_dispatch");
-      if (mode == 2 || mode == 3 || mode == 4) {
+      if (mode == 3 || mode == 4) {
         EXPECT_EQ(result.Stop, ProcessStopReason::UnsupportedService)
             << result.Diagnostic;
-        const char *diagnostic = mode == 2 ? "object translation is not modeled"
-                                 : mode == 3 ? "BlockGuard"
-                                             : "clock";
+        const char *diagnostic = mode == 3 ? "BlockGuard" : "clock";
         EXPECT_NE(result.Diagnostic.find(diagnostic), std::string::npos)
             << result.Diagnostic;
       } else {
@@ -311,7 +309,7 @@ TEST_P(AndroidJNI, JavaBinderDispatchUsesPoolAndIncomingNativeContinuations) {
         EXPECT_EQ(calls->start_milliseconds, 123000u);
         ASSERT_EQ(calls->entries.size(), 1u);
         EXPECT_EQ(calls->entries[0].uid, 1000u);
-        EXPECT_EQ(calls->entries[0].count, mode == 2 || mode == 3 ? 1u : 3u);
+        EXPECT_EQ(calls->entries[0].count, mode == 3 ? 1u : 3u);
       }
     }
 }

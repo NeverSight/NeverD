@@ -271,6 +271,7 @@ inline constexpr int
         kMaxResolverAddresses;
 
 // lib/emulation/os/linux/kernel/LinuxBinderTransactions.cpp
+// Bound each copied payload and offset table, including malformed tables.
 inline constexpr int kMaxBinderTransactionBytes = 65536;
 
 // lib/emulation/os/linux/kernel/LinuxNetwork.cpp

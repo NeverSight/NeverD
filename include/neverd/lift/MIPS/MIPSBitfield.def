@@ -1,0 +1,32 @@
+//===- MIPSBitfield.def - Classic r2 bitfield forms -----------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// SPECIAL3 function, value bytes, lsb bias, msb/size bias, insert operation.
+// Extract sizes are rd + bias; insertion end positions are rd + bias.
+#ifndef NEVERD_MIPS_FIELD
+#define NEVERD_MIPS_FIELD(Name, Function, Bytes, PositionBias, LimitBias,      \
+                          Insert)
+#endif
+#ifndef NEVERD_MIPS_SHUFFLE
+#define NEVERD_MIPS_SHUFFLE(Name, Function, SA, Bytes, Kind)
+#endif
+
+NEVERD_MIPS_FIELD(EXT, 0x00, 4, 0, 1, false)
+NEVERD_MIPS_FIELD(DEXTM, 0x01, 8, 0, 33, false)
+NEVERD_MIPS_FIELD(DEXTU, 0x02, 8, 32, 1, false)
+NEVERD_MIPS_FIELD(DEXT, 0x03, 8, 0, 1, false)
+NEVERD_MIPS_FIELD(INS, 0x04, 4, 0, 1, true)
+NEVERD_MIPS_FIELD(DINSM, 0x05, 8, 0, 33, true)
+NEVERD_MIPS_FIELD(DINSU, 0x06, 8, 32, 33, true)
+NEVERD_MIPS_FIELD(DINS, 0x07, 8, 0, 1, true)
+
+NEVERD_MIPS_SHUFFLE(WSBH, 0x20, 0x02, 4, SwapBytes)
+NEVERD_MIPS_SHUFFLE(SEB, 0x20, 0x10, 4, SignByte)
+NEVERD_MIPS_SHUFFLE(SEH, 0x20, 0x18, 4, SignHalf)
+NEVERD_MIPS_SHUFFLE(DSBH, 0x24, 0x02, 8, SwapBytes)
+NEVERD_MIPS_SHUFFLE(DSHD, 0x24, 0x05, 8, ReverseHalves)
+
+#undef NEVERD_MIPS_FIELD
+#undef NEVERD_MIPS_SHUFFLE

@@ -14,6 +14,8 @@
 
 #include "llvm/Support/Endian.h"
 
+#include <utility>
+
 namespace neverd::emulation {
 namespace {
 using linux_model::ServiceKind;
@@ -277,17 +279,13 @@ TEST_P(LinuxBinder, TransactionBuffersKeepLP64LayoutAndPeerOwnership) {
   llvm::cantFail(cpu().write(Base + 1024, Tx));
   const uint8_t Payload[] = {0x00, 0xff, 0x61};
   llvm::cantFail(cpu().write(Base + 2048, Payload));
-  for (uint32_t Flags : {1u, 8u, 0x80000010u, 16u}) {
+  for (uint32_t Flags : {1u, 8u, 0x80000010u}) {
     SCOPED_TRACE(Flags);
     auto Invalid = Tx;
     llvm::support::endian::write32le(Invalid.data() + 20, Flags);
-    if (Flags == 16)
-      llvm::support::endian::write64le(Invalid.data() + 40, 8);
     llvm::cantFail(cpu().write(Base + 1024, Invalid));
     ASSERT_FALSE(Send(Client, 0x40406300, Base + 1024, 64));
-    EXPECT_NE(Report.Diagnostic.find(Flags == 16 ? "object table size"
-                                                 : "synchronous profile"),
-              std::string::npos)
+    EXPECT_NE(Report.Diagnostic.find("synchronous profile"), std::string::npos)
         << Report.Diagnostic;
     EXPECT_EQ(read(ServerMap, 4096), std::vector<uint8_t>(4096, 0));
     EXPECT_EQ(llvm::support::endian::read64le(read(Base + 264, 8).data()), 0u);
@@ -611,33 +609,335 @@ TEST_P(LinuxBinder,
   EXPECT_FALSE(S->BinderNodes.contains(0x1110));
 }
 
-TEST_P(LinuxBinder, MalformedObjectTablesFailBeforeReferencesOrPayloadEffects) {
+TEST_P(LinuxBinder, InvalidObjectsReturnFailedReplyAndReleaseTranslatedPrefix) {
   const auto Server = open(), Client = open();
   const auto SM = map(Server, 4096).value();
   auto S = Kernel->binderConnection(Server),
        C = Kernel->binderConnection(Client);
   ASSERT_EQ(call(ServiceKind::Ioctl, Server, 0x40046207), 0u);
-  for (unsigned Case = 0; Case != 7; ++Case) {
-    SCOPED_TRACE(Case);
-    auto Payload = object(Case == 4   ? 0x77622a85
-                          : Case == 5 ? 0x66642a85
-                          : Case == 6 ? 0x73682a85
-                                      : 0x73622a85,
-                          0x1234, 0x5678);
-    Payload.resize(48);
-    std::vector<uint64_t> Offsets{Case == 0 ? 1u : Case == 1 ? 28u : 0u};
-    if (Case == 2)
-      Offsets = {0, 0};
-    if (Case == 3)
-      Offsets = {24, 0};
-    EXPECT_FALSE(tx(Client, false, 0, Payload, Offsets));
+  const auto Local = object(0x73622a85, 0x1234, 0x5678);
+  auto Twice = Local;
+  Twice.insert(Twice.end(), Local.begin(), Local.end());
+  auto BadCookie = Twice;
+  llvm::support::endian::write64le(BadCookie.data() + 40, 0x9999);
+  auto BadTag = Twice;
+  llvm::support::endian::write32le(BadTag.data() + 24, 0xffffffff);
+  struct Invalid {
+    std::vector<uint8_t> Payload;
+    std::vector<uint64_t> Offsets;
+    std::optional<uint64_t> Translated;
+  };
+  std::vector<Invalid> Cases = {{{}, {0}, {}},
+                                {Local, {1}, {}},
+                                {Local, {UINT64_MAX}, {}},
+                                {{0x85, 0x2a, 0x62}, {0}, {}},
+                                {object(0xffffffff, 0), {0}, {}},
+                                {object(0x73682a85, 77), {0}, {}},
+                                {Local, {0, 0}, 0},
+                                {Twice, {0, 4}, 0},
+                                {Twice, {24, 0}, 24},
+                                {BadCookie, {0, 24}, 0},
+                                {BadTag, {0, 24}, 0}};
+  // Known but incomplete objects are malformed, even when their valid forms
+  // require an unsupported translation profile.
+  for (const auto &[Type, Size] : {std::pair{0x73622a85u, 24u},
+                                   {0x77622a85u, 24u},
+                                   {0x77682a85u, 24u},
+                                   {0x66642a85u, 24u},
+                                   {0x70742a85u, 40u},
+                                   {0x66646185u, 32u}}) {
+    auto Short = object(Type, 0);
+    Short.resize(Size - 1);
+    Cases.push_back({std::move(Short), {0}, {}});
+  }
+  for (size_t I = 0; I != Cases.size(); ++I) {
+    SCOPED_TRACE(I);
+    const auto &[Payload, Offsets, Translated] = Cases[I];
+    ASSERT_EQ(tx(Client, false, 0, Payload, Offsets), 0u) << Report.Diagnostic;
+    EXPECT_EQ(llvm::support::endian::read64le(read(Base + 264, 8).data()), 68u);
+    EXPECT_EQ(receive(Client),
+              (std::vector<uint8_t>{0x0c, 0x72, 0, 0, 0x11, 0x72, 0, 0}));
+    EXPECT_TRUE(Report.Diagnostic.empty());
+    EXPECT_TRUE(C->BinderNodes.empty());
+    EXPECT_TRUE(S->BinderHandles.empty());
+    EXPECT_TRUE(C->BinderOutgoing.empty());
+    EXPECT_TRUE(S->BinderProcessWork.empty());
+    EXPECT_TRUE(S->BinderBuffers.empty());
+    // SET_CONTEXT_MGR owns one permanent local strong reference.
+    EXPECT_EQ(S->BinderNodes.at(0)->LocalStrong, 1u);
+    auto Expected = Payload;
+    if (Translated) {
+      const auto Handle = object(0x73682a85, 1);
+      std::copy(Handle.begin(), Handle.end(), Expected.begin() + *Translated);
+    }
+    EXPECT_EQ(read(SM, Expected.size()), Expected);
+    const auto Table =
+        read(SM + ((Payload.size() + 7) & ~uint64_t(7)), Offsets.size() * 8);
+    for (size_t N = 0; N != Offsets.size(); ++N)
+      EXPECT_EQ(llvm::support::endian::read64le(Table.data() + N * 8),
+                Offsets[N]);
+  }
+  // A failed buffer never becomes a lease and its first arena slot is reusable.
+  ASSERT_EQ(send(Server, 0x630c), 0u);
+  ASSERT_EQ(tx(Client, false, 0, Local, {0}), 0u);
+  const auto Request = receive(Server);
+  ASSERT_EQ(Request.size(), 72u);
+  EXPECT_EQ(llvm::support::endian::read64le(Request.data() + 56), SM);
+  EXPECT_EQ(read(SM, 24), object(0x73682a85, 1));
+  EXPECT_TRUE(Kernel->binderBuffer(*S, SM, 24));
+}
+
+TEST_P(LinuxBinder, UnmodeledObjectKindsStopBeforeTranslationEffects) {
+  const auto Server = open(), Client = open();
+  const auto SM = map(Server, 4096).value();
+  auto S = Kernel->binderConnection(Server),
+       C = Kernel->binderConnection(Client);
+  ASSERT_EQ(call(ServiceKind::Ioctl, Server, 0x40046207), 0u);
+  for (const auto &[Type, Size] : {std::pair{0x77622a85u, 24u},
+                                   {0x77682a85u, 24u},
+                                   {0x66642a85u, 24u},
+                                   {0x70742a85u, 40u},
+                                   {0x66646185u, 32u}}) {
+    SCOPED_TRACE(Type);
+    auto Payload = object(0x73622a85, 0x1234, 0x5678);
+    auto Other = object(Type, 0);
+    Other.resize(Size);
+    Payload.insert(Payload.end(), Other.begin(), Other.end());
+    EXPECT_FALSE(tx(Client, false, 0, Payload, {0, 24}));
     EXPECT_EQ(Report.Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_NE(Report.Diagnostic.find("translation is not modeled"),
+              std::string::npos);
     EXPECT_TRUE(C->BinderNodes.empty());
     EXPECT_TRUE(S->BinderHandles.empty());
     EXPECT_TRUE(C->BinderOutgoing.empty());
     EXPECT_TRUE(S->BinderProcessWork.empty());
     EXPECT_EQ(read(SM, 4096), std::vector<uint8_t>(4096));
+    EXPECT_EQ(llvm::support::endian::read64le(read(Base + 264, 8).data()), 0u);
   }
+}
+
+TEST_P(LinuxBinder,
+       UnalignedObjectTablesFailAfterCopyWithoutObjectTranslation) {
+  const auto Server = open(), Client = open();
+  const auto SM = map(Server, 4096).value();
+  auto S = Kernel->binderConnection(Server),
+       C = Kernel->binderConnection(Client);
+  ASSERT_EQ(call(ServiceKind::Ioctl, Server, 0x40046207), 0u);
+  const auto Payload = object(0x73622a85, 0x1234, 0x5678);
+  llvm::cantFail(cpu().write(Base + 2048, Payload));
+  const uint8_t Offsets[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0xa5};
+  llvm::cantFail(cpu().write(Base + 3072, Offsets));
+  uint8_t Tx[64]{};
+  llvm::support::endian::write64le(Tx + 32, 24);
+  llvm::support::endian::write64le(Tx + 48, Base + 2048);
+  llvm::support::endian::write64le(Tx + 56, Base + 3072);
+  for (uint64_t Size : {1u, 7u, 9u}) {
+    SCOPED_TRACE(Size);
+    llvm::support::endian::write64le(Tx + 40, Size);
+    ASSERT_EQ(send(Client, 0x40406300, Tx), 0u) << Report.Diagnostic;
+    EXPECT_EQ(receive(Client),
+              (std::vector<uint8_t>{0x0c, 0x72, 0, 0, 0x11, 0x72, 0, 0}));
+    EXPECT_EQ(read(SM, 24), Payload);
+    EXPECT_EQ(read(SM + 24, Size),
+              std::vector<uint8_t>(Offsets, Offsets + Size));
+    EXPECT_TRUE(S->BinderBuffers.empty());
+    EXPECT_TRUE(S->BinderHandles.empty());
+    EXPECT_TRUE(C->BinderNodes.empty());
+  }
+  llvm::support::endian::write64le(Tx + 40, UINT64_MAX);
+  EXPECT_FALSE(send(Client, 0x40406300, Tx));
+  EXPECT_NE(Report.Diagnostic.find("object table budget"), std::string::npos);
+}
+
+TEST_P(LinuxBinder, InvalidReplyRetiresCallAndSeparatesBothErrorSlots) {
+  const auto Server = open(), Client = open();
+  const auto SM = map(Server, 4096).value(), CM = map(Client, 4096).value();
+  auto S = Kernel->binderConnection(Server),
+       C = Kernel->binderConnection(Client);
+  ASSERT_EQ(call(ServiceKind::Ioctl, Server, 0x40046207), 0u);
+  linux_model::ThreadContext Caller, Callee;
+  Caller.ID = 101;
+  Callee.ID = 201;
+  Task = &Caller;
+  ASSERT_EQ(tx(Client, false, 0), 0u);
+  Task = &Callee;
+  ASSERT_EQ(send(Server, 0x630c), 0u);
+  ASSERT_EQ(receive(Server).size(), 72u);
+  const auto Bad = object(0xffffffff, 0);
+  llvm::cantFail(cpu().write(Base + 2048, Bad));
+  llvm::cantFail(cpu().write(Base + 3072, std::vector<uint8_t>(8)));
+  uint8_t Commands[80]{};
+  llvm::support::endian::write32le(Commands, 0x40406301);
+  llvm::support::endian::write64le(Commands + 36, 24);
+  llvm::support::endian::write64le(Commands + 44, 8);
+  llvm::support::endian::write64le(Commands + 52, Base + 2048);
+  llvm::support::endian::write64le(Commands + 60, Base + 3072);
+  llvm::support::endian::write32le(Commands + 68, 0x40086303);
+  llvm::support::endian::write64le(Commands + 72, SM);
+  llvm::cantFail(cpu().write(Base + 512, Commands));
+  record(80, 0, Base + 512, 0, 0);
+  ASSERT_EQ(call(ServiceKind::Ioctl, Server, 0xc0306201, Base + 256), 0u)
+      << Report.Diagnostic;
+  EXPECT_EQ(llvm::support::endian::read64le(read(Base + 264, 8).data()), 68u);
+  EXPECT_TRUE(S->BinderIncoming.empty());
+  EXPECT_TRUE(C->BinderOutgoing.empty());
+  EXPECT_TRUE(C->BinderBuffers.empty());
+  EXPECT_TRUE(Kernel->binderBuffer(*S, SM, 0));
+  EXPECT_EQ(read(CM, 24), Bad);
+  EXPECT_TRUE(S->hasReadyBinderThreadWork(Callee.ID));
+  EXPECT_TRUE(C->hasReadyBinderThreadWork(Caller.ID));
+  EXPECT_FALSE(S->hasReadyBinderThreadWork(Caller.ID));
+  EXPECT_FALSE(C->hasReadyBinderThreadWork(Callee.ID));
+  // return_error holds COMPLETE on the server. It prevents even touching the
+  // next write's invalid address, and a short read cannot consume that slot.
+  record(4, 0, 1, 71, Base + 4096);
+  ASSERT_EQ(call(ServiceKind::Ioctl, Server, 0xc0306201, Base + 256), 0u);
+  EXPECT_EQ(llvm::support::endian::read64le(read(Base + 264, 8).data()), 0u);
+  EXPECT_EQ(llvm::support::endian::read64le(read(Base + 288, 8).data()), 4u);
+  record(80, 68, Base + 512, 72, Base + 4096);
+  ASSERT_EQ(call(ServiceKind::Ioctl, Server, 0xc0306201, Base + 256), 0u);
+  EXPECT_EQ(llvm::support::endian::read64le(read(Base + 264, 8).data()), 68u);
+  EXPECT_EQ(read(Base + 4096, 8),
+            (std::vector<uint8_t>{0x0c, 0x72, 0, 0, 6, 0x72, 0, 0}));
+  record(80, 68, Base + 512, 0, 0);
+  ASSERT_EQ(call(ServiceKind::Ioctl, Server, 0xc0306201, Base + 256), 0u);
+  EXPECT_EQ(llvm::support::endian::read64le(read(Base + 264, 8).data()), 80u);
+  EXPECT_TRUE(S->BinderBuffers.empty());
+
+  Task = &Caller;
+  record(0, 0, 0, 72, Base + 4096);
+  ASSERT_EQ(call(ServiceKind::Ioctl, Client, 0xc0306201, Base + 256), 0u);
+  EXPECT_EQ(read(Base + 4096, 8),
+            (std::vector<uint8_t>{0x0c, 0x72, 0, 0, 6, 0x72, 0, 0}));
+  // The caller's unread reply_error must allow writes. Reading that old error
+  // must not pop the new transaction that the caller has just started.
+  ASSERT_EQ(tx(Client, false, 0), 0u);
+  EXPECT_EQ(llvm::support::endian::read64le(read(Base + 264, 8).data()), 68u);
+  record(0, 0, 0, 72, Base + 4096);
+  ASSERT_EQ(call(ServiceKind::Ioctl, Client, 0xc0306201, Base + 256), 0u);
+  EXPECT_EQ(read(Base + 4096, 8),
+            (std::vector<uint8_t>{0x0c, 0x72, 0, 0, 0x11, 0x72, 0, 0}));
+  EXPECT_TRUE(C->BinderOutgoing.contains(Caller.ID));
+  Task = &Callee;
+  ASSERT_EQ(receive(Server).size(), 72u);
+  ASSERT_EQ(tx(Server, true, 0), 0u);
+  // Ordinary successful COMPLETE does not block the following free command.
+  ASSERT_EQ(ref(Server, 0x40086303, SM), 0u);
+  EXPECT_TRUE(S->BinderBuffers.empty());
+  ASSERT_EQ(receive(Server).size(), 8u);
+  Task = &Caller;
+  const auto Reply = receive(Client);
+  ASSERT_EQ(Reply.size(), 76u);
+  EXPECT_EQ(llvm::support::endian::read64le(Reply.data() + 60), CM);
+  EXPECT_TRUE(C->BinderOutgoing.empty());
+  ASSERT_EQ(ref(Client, 0x40086303, CM), 0u);
+}
+
+TEST_P(LinuxBinder, InvalidRepliesShareOneUnreadCallerErrorSlot) {
+  const auto Server = open(), Client = open();
+  const auto SM = map(Server, 4096).value();
+  ASSERT_TRUE(map(Client, 4096));
+  auto S = Kernel->binderConnection(Server),
+       C = Kernel->binderConnection(Client);
+  ASSERT_EQ(call(ServiceKind::Ioctl, Server, 0x40046207), 0u);
+  ASSERT_EQ(send(Server, 0x630c), 0u);
+  for (unsigned I = 0; I != 2; ++I) {
+    SCOPED_TRACE(I);
+    ASSERT_EQ(tx(Client, false, 0), 0u);
+    ASSERT_EQ(receive(Server).size(), 72u);
+    ASSERT_EQ(tx(Server, true, 0, object(0xffffffff, 0), {0}), 0u);
+    EXPECT_EQ(receive(Server),
+              (std::vector<uint8_t>{0x0c, 0x72, 0, 0, 6, 0x72, 0, 0}));
+    ASSERT_EQ(ref(Server, 0x40086303, SM), 0u);
+    EXPECT_TRUE(S->BinderIncoming.empty());
+    EXPECT_TRUE(C->BinderOutgoing.empty());
+  }
+  EXPECT_EQ(receive(Client),
+            (std::vector<uint8_t>{0x0c, 0x72, 0, 0, 6, 0x72, 0, 0, 0x11, 0x72,
+                                  0, 0, 6, 0x72, 0, 0}));
+  EXPECT_TRUE(C->BinderBuffers.empty());
+}
+
+TEST_P(LinuxBinder, InvalidObjectFailureStopsBeforeDecodingLaterCommands) {
+  const auto Server = open(), Client = open();
+  ASSERT_TRUE(map(Server, 4096));
+  ASSERT_EQ(call(ServiceKind::Ioctl, Server, 0x40046207), 0u);
+  ASSERT_EQ(tx(Client, false, 0, object(0xffffffff, 0), {0}), 0u);
+  auto Commands = read(Base + 512, 68);
+  ASSERT_EQ(receive(Client).size(), 8u);
+  Commands.resize(72);
+  for (uint32_t Tail : {0xffffffffu, 0x40406300u}) {
+    SCOPED_TRACE(Tail);
+    llvm::support::endian::write32le(Commands.data() + 68, Tail);
+    llvm::cantFail(cpu().write(Base + 512, Commands));
+    record(72, 0, Base + 512, 0, 0);
+    ASSERT_EQ(call(ServiceKind::Ioctl, Client, 0xc0306201, Base + 256), 0u)
+        << Report.Diagnostic;
+    EXPECT_EQ(llvm::support::endian::read64le(read(Base + 264, 8).data()), 68u);
+    EXPECT_EQ(receive(Client),
+              (std::vector<uint8_t>{0x0c, 0x72, 0, 0, 0x11, 0x72, 0, 0}));
+    // Only after consuming return_error does the unknown/incomplete next
+    // command reach the existing unsupported protocol boundary.
+    record(72, 68, Base + 512, 0, 0);
+    EXPECT_FALSE(call(ServiceKind::Ioctl, Client, 0xc0306201, Base + 256));
+    EXPECT_NE(
+        Report.Diagnostic.find(Tail == 0xffffffffu ? "protocol" : "incomplete"),
+        std::string::npos);
+  }
+}
+
+TEST_P(LinuxBinder, InvalidObjectsPreservePreexistingLocalAndRemoteReferences) {
+  const auto Server = open(), Client = open();
+  const auto SM = map(Server, 4096).value(), CM = map(Client, 4096).value();
+  auto S = Kernel->binderConnection(Server),
+       C = Kernel->binderConnection(Client);
+  ASSERT_EQ(call(ServiceKind::Ioctl, Server, 0x40046207), 0u);
+  ASSERT_EQ(send(Server, 0x630c), 0u);
+  ASSERT_EQ(tx(Client, false, 0), 0u);
+  ASSERT_EQ(receive(Server).size(), 72u);
+  const auto Local = object(0x73622a85, 0x1110, 0x2220);
+  ASSERT_EQ(tx(Server, true, 0, Local, {0}), 0u);
+  ASSERT_EQ(receive(Server).size(), 48u);
+  ASSERT_EQ(ref(Server, 0x40106308, 0x1110, 0x2220), 0u);
+  ASSERT_EQ(ref(Server, 0x40106309, 0x1110, 0x2220), 0u);
+  ASSERT_EQ(ref(Server, 0x40086303, SM), 0u);
+  ASSERT_EQ(receive(Client).size(), 76u);
+  ASSERT_EQ(ref(Client, 0x40046305, 1), 0u);
+  ASSERT_EQ(ref(Client, 0x40086303, CM), 0u);
+  const auto Node = S->BinderNodes.at(0x1110);
+  const auto Bad = object(0xffffffff, 0);
+  auto Payload = object(0x73682a85, 1);
+  Payload.insert(Payload.end(), Bad.begin(), Bad.end());
+  ASSERT_EQ(tx(Client, false, 0, Payload, {0, 24}), 0u);
+  EXPECT_EQ(receive(Client),
+            (std::vector<uint8_t>{0x0c, 0x72, 0, 0, 0x11, 0x72, 0, 0}));
+  EXPECT_EQ(read(SM, 24), Local); // Returned home before the later bad tag.
+  EXPECT_EQ(Node->LocalStrong, 0u);
+  EXPECT_EQ(Node->InternalStrong, 1u);
+  EXPECT_EQ(C->BinderHandles.at(1).Strong, 1u);
+  EXPECT_TRUE(S->BinderBuffers.empty());
+
+  ASSERT_EQ(tx(Client, false, 1), 0u);
+  ASSERT_EQ(receive(Server).size(), 72u);
+  EXPECT_EQ(Node->LocalStrong, 1u); // Original request's target lease.
+  Payload = Local;
+  Payload.insert(Payload.end(), Bad.begin(), Bad.end());
+  ASSERT_EQ(tx(Server, true, 0, Payload, {0, 24}), 0u);
+  EXPECT_EQ(read(CM, 24), object(0x73682a85, 1));
+  EXPECT_EQ(Node->LocalStrong, 1u);
+  EXPECT_EQ(Node->InternalStrong, 1u);
+  EXPECT_EQ(C->BinderHandles.at(1).Strong, 1u);
+  EXPECT_TRUE(C->BinderBuffers.empty());
+  EXPECT_TRUE(Kernel->binderBuffer(*S, SM, 0));
+  EXPECT_EQ(receive(Server),
+            (std::vector<uint8_t>{0x0c, 0x72, 0, 0, 6, 0x72, 0, 0}));
+  EXPECT_EQ(receive(Client), (std::vector<uint8_t>{0x0c, 0x72, 0, 0, 6, 0x72, 0,
+                                                   0, 0x11, 0x72, 0, 0}));
+  ASSERT_EQ(ref(Server, 0x40086303, SM), 0u);
+  EXPECT_EQ(Node->LocalStrong, 0u);
+  ASSERT_EQ(ref(Client, 0x40046306, 1), 0u);
+  EXPECT_EQ(receive(Server).size(), 44u);
+  EXPECT_FALSE(S->BinderNodes.contains(0x1110));
 }
 
 TEST_P(LinuxBinder, ModelCannotMixCapturedTransactionsOrMappings) {

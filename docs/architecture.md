@@ -9273,6 +9273,16 @@ names a member of it:
 - A frame address taken outside every member names a byte array that runs to
   the next member, access or address.
 
+HighC checks a storage address's known frame root and accumulates its signed
+offset in one bounded walk. Offset steps and alias/parent-frame rebases must
+fit without signed overflow; a zero mask is not a stack-alignment operation.
+An unassigned SSA-0 display heuristic still cannot authorize storage access.
+Failed proofs retain ordinary address expressions instead of inventing frame
+members, and each query observes the current aliases and frame layout.
+Typed pointer offsets and frame overlays also reject unrepresentable signed
+offsets. Ordered member distances use unsigned subtraction; alignment checks
+use low bits so the entry residue cannot cause signed overflow.
+
 Addresses print as the member holding them: `(uintptr_t)&stack_storage.var_m48`,
 `(CStringT*)&stack_storage.var_m48` for a pointer parameter, or
 `&stack_storage.var_m48[8]` inside an array. Frame aliases print the address
@@ -15141,6 +15151,9 @@ PLT interpretation belongs to the ELF loader. `lib/lift/MIPS` owns integer
 semantics. A `DecodedExecutionUnit` captures a delayed transfer and its slot,
 while normal disassembly still consumes four bytes. LowIR records their byte
 ownership and execution order; MedIR expands predicated effects before SSA.
+`MIPSBitfield.def` owns the classic SPECIAL3 field/shuffle selectors and biases.
+The lifter validates encodings before emitting effects and reuses the explicit
+MIPS64 word-input contract; source backends do not reinterpret instruction bits.
 
 `MedMIPSMergeValues` owns the source-only proof for adjacent complementary
 merge loads in a single ordinary leaf block. It runs after SSA/projection/DCE
@@ -17716,6 +17729,12 @@ and ioctl reader share `hasReadyBinderThreadWork`: activated private work takes
 priority, otherwise an idle entered/registered looper can take process work.
 Incoming or outgoing calls prevent that thread from taking another process
 transaction. This same rule wakes a native thread waiting in the pool.
+Invalid transaction objects follow the shared driver's BR_FAILED_REPLY path.
+Translation retains the valid prefix for reference cleanup and the copied arena
+bytes, without publishing a buffer lease. A failed reply retires both call
+records, acknowledges the server through its return-error slot, and notifies the
+caller through its separate reply-error slot. Only the former blocks command
+writes. Both use the existing node/handle and buffer-release owners.
 The native adapter
 only queues libbinder reference/free commands through that owner. Parcel validates
 object reads and protects scalar reads; `AndroidBinder.cpp` caches remote Java
@@ -17773,7 +17792,10 @@ Incoming Binder catches RuntimeException/RemoteException, rewinds without
 truncating the reply and invokes this same method; serialized exceptions count as
 handled calls and keep the normal reply-ack lifetime. Existing tail bytes remain
 observable. Overwrites retain Binder offsets; an invalid current object type
-reaches the shared Linux Binder translation boundary. Parcelable/class-loader
+produces the shared Linux driver's failed transaction response. The replying Java
+pool still receives completion, releases its native Parcels and accepts later
+calls. On the caller side, FAILED_TRANSACTION retains the explicit JNI
+status-exception/logging boundary. Parcelable/class-loader
 payloads, ServiceSpecificException,
 Throwable-cause construction, debug stack-trace parceling and uncaught logging
 remain explicit boundaries; no error reply or log record is fabricated.
@@ -18389,12 +18411,13 @@ same work allowance before returning.
 
 ### Explicit x64 continuation export
 
-`translate/X86/X86LocalApic.h` independently owns fixed-source APIC priority,
-acknowledgment and ordinary EOI bank transitions. It has no decoder/session
-dependency and is used only by explicit producers. CPU IF/shadow admission
-and acknowledgment timing stay in the continuation scheduler; arrivals,
-global event arbitration, TPR/CR8 synchronization and external EOI routing
-stay with the embedding. The offline QEMU bank adapter calls this type's
+`translate/X86/X86LocalApic.h` independently owns fixed-message reception,
+coalescing, APIC priority, acknowledgment and ordinary EOI bank transitions.
+Reception updates IRR/TMR without consuming a processor event. It has no
+decoder/session dependency and is used only by explicit producers. CPU IF/shadow
+admission and acknowledgment timing stay in the continuation scheduler;
+arrival routing/timing, global arbitration, TPR/CR8 synchronization and external
+EOI routing stay with the embedding. The offline QEMU bank adapter calls this type's
 constant initializer/validator instead of duplicating priority rules in Python.
 See the [local APIC contract](x86-local-apic.md).
 

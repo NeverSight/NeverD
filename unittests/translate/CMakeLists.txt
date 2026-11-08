@@ -1,4 +1,6 @@
-add_library(NeverDX86LocalApicProofs OBJECT x86/X86LocalApicProofs.cpp)
+add_library(NeverDX86LocalApicProofs OBJECT
+  x86/X86LocalApicProofs.cpp
+  x86/X86LocalApicArrivalProofs.cpp)
 target_compile_features(NeverDX86LocalApicProofs PRIVATE cxx_std_20)
 target_include_directories(NeverDX86LocalApicProofs PRIVATE
   "${CMAKE_SOURCE_DIR}/include")

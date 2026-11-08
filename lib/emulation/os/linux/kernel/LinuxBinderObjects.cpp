@@ -159,6 +159,10 @@ bool LinuxFiles::binderReleaseBuffer(LinuxDeviceState &Device,
         return false;
       }
     }
+  if (Buffer.Target) {
+    --Buffer.Target->LocalStrong;
+    binderQueueNode(Buffer.Target);
+  }
   for (const auto &Object : Buffer.References) {
     if (Object.Handle)
       binderReleaseHandle(Device, *Object.Handle, true);
@@ -166,10 +170,6 @@ bool LinuxFiles::binderReleaseBuffer(LinuxDeviceState &Device,
       --Object.Node->LocalStrong;
       binderQueueNode(Object.Node);
     }
-  }
-  if (Buffer.Target) {
-    --Buffer.Target->LocalStrong;
-    binderQueueNode(Buffer.Target);
   }
   return true;
 }
@@ -234,14 +234,13 @@ LinuxFiles::binderReferenceCommand(LinuxDeviceState &Device, uint32_t Command,
   return 0;
 }
 
-bool LinuxFiles::binderTranslateObjects(LinuxDeviceState &Source,
-                                        LinuxDeviceState &Target,
-                                        std::vector<uint8_t> &Payload,
-                                        BinderBuffer &Buffer,
-                                        ProcessResult &Result) {
+LinuxFiles::BinderObjectTranslation LinuxFiles::binderTranslateObjects(
+    LinuxDeviceState &Source, LinuxDeviceState &Target,
+    std::vector<uint8_t> &Payload, BinderBuffer &Buffer,
+    ProcessResult &Result) {
   auto Fail = [&](const char *Message) {
     unsupported(Result, Message);
-    return false;
+    return BinderObjectTranslation::Unsupported;
   };
   const auto SourceOwner =
       Buffer.Objects.empty() ? nullptr : binderOwner(Source);
@@ -254,12 +253,29 @@ bool LinuxFiles::binderTranslateObjects(LinuxDeviceState &Source,
   uint64_t Minimum = 0;
   for (auto Offset : Buffer.Objects) {
     if (Offset < Minimum || Offset % 4 || Offset > Payload.size() ||
-        Payload.size() - Offset < 24)
-      return Fail("Binder object offsets require aligned, ordered complete "
-                  "flat objects");
-    Minimum = Offset + 24;
+        Payload.size() - Offset < 4)
+      break;
     auto *Object = Payload.data() + Offset;
     const auto Type = llvm::support::endian::read32le(Object);
+    unsigned ObjectSize = 0;
+    switch (Type) {
+    case Binder:
+    case Handle:
+    case 0x77622a85: // BINDER_TYPE_WEAK_BINDER
+    case 0x77682a85: // BINDER_TYPE_WEAK_HANDLE
+    case 0x66642a85: // BINDER_TYPE_FD
+      ObjectSize = 24;
+      break;
+    case 0x70742a85: // BINDER_TYPE_PTR
+      ObjectSize = 40;
+      break;
+    case 0x66646185: // BINDER_TYPE_FDA
+      ObjectSize = 32;
+      break;
+    }
+    if (!ObjectSize || Payload.size() - Offset < ObjectSize)
+      break;
+    Minimum = Offset + ObjectSize;
     std::shared_ptr<BinderNode> Node;
     if (Type == Binder) {
       const auto Pointer = llvm::support::endian::read64le(Object + 8);
@@ -280,12 +296,12 @@ bool LinuxFiles::binderTranslateObjects(LinuxDeviceState &Source,
         NewNodes.emplace(Pointer, Node);
       }
       if (Node->Cookie != Cookie)
-        return Fail("Binder object cookie disagrees with its owned node");
+        break;
     } else if (Type == Handle) {
       const auto ID = llvm::support::endian::read32le(Object + 8);
       auto I = Source.BinderHandles.find(ID);
       if (I == Source.BinderHandles.end() || !I->second.Strong)
-        return Fail("Binder object requires an owned strong handle");
+        break;
       Node = I->second.Node;
     } else
       return Fail("Binder weak, descriptor and pointer object translation is "
@@ -324,7 +340,9 @@ bool LinuxFiles::binderTranslateObjects(LinuxDeviceState &Source,
       Buffer.References.push_back({Node, ID});
     }
   }
-  return true;
+  return Nodes.size() == Buffer.Objects.size()
+             ? BinderObjectTranslation::Translated
+             : BinderObjectTranslation::Rejected;
 }
 
 uint8_t LinuxFiles::binderNodeCommands(const BinderNode &Node,

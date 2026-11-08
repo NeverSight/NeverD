@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from elftools.elf.elffile import ELFFile
-from unicorn import (Uc, UcError, UC_ARCH_MIPS, UC_ERR_READ_UNMAPPED,
+from unicorn import (Uc, UcError, UC_ARCH_MIPS, UC_ERR_READ_UNMAPPED, UC_ERR_EXCEPTION,
                      UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_MODE_BIG_ENDIAN,
                      UC_MODE_MIPS32, UC_MODE_MIPS64)
 from unicorn import mips_const as mips
@@ -26,6 +26,15 @@ from unicorn import mips_const as mips
 
 PROFILES = [("mips", 32, False), ("mipsel", 32, True),
             ("mips64", 64, False), ("mips64el", 64, True)]
+KERNEL_FORMS = Path(__file__).with_name("MIPSBitfieldKernels.def").read_text()
+FIELDS = {name: tuple(map(int, (width, insert, pos, size)))
+          for name, width, insert, pos, size in re.findall(
+              r"MIPS_FIELD_KERNEL\((\w+),\s*\w+,\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\)",
+              KERNEL_FORMS)}
+SHUFFLES = {name: tuple(map(int, (width, lane, permutation)))
+            for name, width, lane, permutation in re.findall(
+                r"MIPS_SHUFFLE_KERNEL\((\w+),\s*\w+,\s*(\d+),\s*(\d+),\s*(\d+)\)",
+                KERNEL_FORMS)}
 DATA, STACK, STOP = 0x600000, 0x702000, 0x900000
 FUNCTIONS = ["mips_add", "mips_likely", "mips_load", "mips_store", "mips_stack",
              "mips_branch_capture", "mips_likely_store", "mips_call_slot",
@@ -37,6 +46,48 @@ FUNCTIONS = ["mips_add", "mips_likely", "mips_load", "mips_store", "mips_stack",
              "mips_merge_discard", "mips_merge_zero", "mips_likely_load",
              "mips_uninitialized_word", "mips_uninitialized_word_reverse",
              "mips_uninitialized_full", "mips_uninitialized_full_reverse"]
+
+
+FUNCTIONS += list(FIELDS) + list(SHUFFLES) + ["mips_word_likely", "mips_word_zero"]
+
+
+def word_value(value):
+    value &= 0xffffffff
+    return value - (1 << 32) if value & (1 << 31) else value
+
+
+def independent_result(function, inputs):
+    if function in FIELDS:
+        width, insert, pos, size = FIELDS[function]
+        source, old = inputs[0], inputs[1] if insert else 0
+        result = 0
+        for bit in range(width):
+            if insert:
+                value = (source >> (bit - pos)) if pos <= bit < pos + size else old >> bit
+            else:
+                value = source >> (bit + pos) if bit < size else 0
+            result |= (value & 1) << bit
+        return word_value(result) if width == 32 else result
+    if function in SHUFFLES:
+        width, lane, permutation = SHUFFLES[function]
+        source = inputs[0] & ((1 << width) - 1)
+        if not permutation:
+            return int.from_bytes((source & ((1 << (lane * 8)) - 1)).to_bytes(lane, "little"),
+                                  "little", signed=True)
+        source_bytes = source.to_bytes(width // 8, "little")
+        if permutation == 1:
+            result_bytes = b"".join(source_bytes[i:i + 2][::-1]
+                                    for i in range(0, len(source_bytes), 2))
+        else:
+            result_bytes = b"".join(source_bytes[i:i + 2]
+                                    for i in reversed(range(0, len(source_bytes), 2)))
+        result = int.from_bytes(result_bytes, "little")
+        return word_value(result) if width == 32 else result
+    if function == "mips_word_likely":
+        return word_value(inputs[0] + 1) if inputs[1] == 0 else 7
+    if function == "mips_word_zero":
+        return 7
+    return None
 
 
 def command(args, log):
@@ -96,6 +147,19 @@ def invoke(uc, entry, bits, little, arguments, old_destination=0):
 
 
 def cases(function, bits):
+    if function in FIELDS or function in SHUFFLES:
+        width = (FIELDS.get(function) or SHUFFLES[function])[0]
+        values = [0, -1, 0x00800000, 0x80000000, 0x0123456789abcdef,
+                  0x807fff0180fe0180, 0x8000000000000000, 0x7fffffffffffffff]
+        if width == 32:
+            values = [word_value(value) for value in values]
+        return [[value, values[(i + 1) % len(values)]]
+                if function in FIELDS and FIELDS[function][1] else [value]
+                for i, value in enumerate(values)]
+    if function == "mips_word_likely":
+        return [[0, 0], [-1, 0], [2147483647, 0], [0x100000001, 1]]
+    if function == "mips_word_zero":
+        return [[0], [-1], [-2147483648], [2147483647]]
     if function.startswith("mips_uninitialized_"):
         return [[DATA + offset] for offset in range(8)]
     if function == "mips_likely_load":
@@ -195,6 +259,9 @@ def main():
         command([*link, "-e", "mips_add", obj, "-o", original],
                 output / f"{profile}-link.log")
         for function in args.function or FUNCTIONS:
+            if function in FIELDS or function in SHUFFLES:
+                if (FIELDS.get(function) or SHUFFLES[function])[0] > bits:
+                    continue
             for backend in ("highc", "llvmc"):
                 tasks.append((profile, bits, little, flags, link, original, function, backend))
 
@@ -254,6 +321,9 @@ def main():
                 results.append(value)
             if results[0] != results[1]:
                 raise RuntimeError(f"{stem.name} inputs={inputs}: original={results[0]} generated={results[1]}")
+            expected = independent_result(function, inputs)
+            if expected is not None and results[0][0] != expected & ((1 << bits) - 1):
+                raise RuntimeError(f"{stem.name}: result disagrees with independent field/lane expectation")
             if uninitialized:
                 count = bits // 8 if "full" in function else 4
                 offset = inputs[0] - DATA
@@ -299,9 +369,27 @@ def main():
                                                       inputs, set(), prefix))
                 assert outcomes[0] == outcomes[1]
                 faults.append({"inputs": inputs, "result": outcomes[0]})
+        strict_refusals = []
+        if bits == 64 and function in ("mips_word_likely", "mips_word_zero"):
+            # Architectural UNPREDICTABLE input: test NeverD's explicit policy,
+            # never use the original machine's chosen result as an oracle.
+            for invalid in (0x100000001, 0x80000000, 0xffffffff00000001):
+                inputs = [invalid, 0] if function == "mips_word_likely" else [invalid]
+                uc, entry = emulator(rebuilt, bits, little, function,
+                                     original if backend == "llvmc" else None)
+                try:
+                    invoke(uc, entry, bits, little, inputs)
+                except UcError as error:
+                    if error.errno != UC_ERR_EXCEPTION:
+                        raise RuntimeError(f"strict word refusal raised an unexpected error: {error}") from error
+                    strict_refusals.append({"inputs": inputs, "error": error.errno,
+                                           "original_executed": False})
+                else:
+                    raise RuntimeError(f"{stem.name}: invalid word input was silently accepted")
         receipt = {"profile": profile, "function": function, "backend": backend,
                 "cases": observations,
                 "faults": faults,
+                "strict_word_refusals": strict_refusals,
                 "original_image_binding": backend == "llvmc",
                 "original_image_unmapped": standalone,
                 "original_callee_bindings": bound_callees,
