@@ -4458,7 +4458,8 @@ TEST_F(ProcessPublic, AndroidTextLogAbortMessageMatchesSDKAndCLI) {
     for (unsigned Mode = 0; Mode != 8; ++Mode) {
       SCOPED_TRACE(Variant);
       SCOPED_TRACE(Mode);
-      std::vector<uint8_t> Memory(32768, 0xc7);
+      // Seven pages cover the copied record and fit the inline JSON budget.
+      std::vector<uint8_t> Memory(28672, 0xc7);
       std::fill_n(Memory.begin() + 2048, 8, 0);
       std::copy_n("fatal", 6, Memory.begin() + 4096);
       std::copy_n("tag", 4, Memory.begin() + 8192);
@@ -4469,12 +4470,12 @@ TEST_F(ProcessPublic, AndroidTextLogAbortMessageMatchesSDKAndCLI) {
         "backend":"unicorn","instruction_limit":200000,"instruction_quantum":83,
         "android":{"initialize":false,"observe_memory_on_failure":true,
           "libraries":{"libc.so":["android_set_abort_message"]},
-          "read_memory":[{"address":"0x22000000","size":32768}]}
+          "read_memory":[{"address":"0x22000000","size":28672}]}
       })"));
       auto &Android = *Request.getAsObject()->getObject(field::Android);
       Android[field::Memory] = llvm::json::Array{
           llvm::json::Object{{field::Address, "0x22000000"},
-                             {field::Size, 32768},
+                             {field::Size, 28672},
                              {field::Bytes, llvm::toHex(Memory)}}};
       if (Mode != 5)
         Android[field::AbortMessageSlot] = Mode == 3 ? 0 : Mode == 6 ? 1 : Slot;
