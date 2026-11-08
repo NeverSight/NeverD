@@ -22266,9 +22266,11 @@ build-mips/bin/neverd-mips-bench mips64el lift /path/to/owned-code.bin 100000
 
 Profiles are `mips`, `mipsel`, `mips64` and `mips64el`. Stages are `capstone`
 (direct physical decoding), `decode` (NeverD physical decoding) and `lift`
-(decoding plus LowIR, including delay slots). Both decode paths use the same
-classic r2 profile, detail on and text off. The harness reuses decoder handles,
-counts physical instructions/LowOps and validates output fingerprints outside
+(decoding plus LowIR, including delay slots). Both decode paths request the same
+classic r2 profile, detail on and text off. The pinned Capstone fork suppresses
+rendered operand detail with text off; these physical decode measurements consume
+instruction sizes and IDs. The harness reuses decoder handles, counts physical
+instructions/LowOps and validates output fingerprints outside
 the timed loop. Invalid, truncated or unsupported input fails. Direct Capstone
 does not supply lift semantics and is not a decompiler throughput comparator.
 

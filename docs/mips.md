@@ -193,11 +193,23 @@ Integrations with dev `aac568578` and then `4c57243f`, using Capstone
 `8b81f225`, each passed all 221 MIPS cases and repeated all 240 source groups
 with identical generated source hashes. The final build also regenerated all
 selected firmware views with unchanged source hashes and verified call LLVM.
-Its current source receipt is
+Its original source receipt was
 `build-mips/roundtrip-source-pairs-shared-dev/results.json`; the integration
 commands and binary hashes are in
 `build-mips/source-merge-pairs/shared-dev-integration.json`. Earlier detailed
-reports are retained in verified local archives.
+reports, including that source receipt, are retained in verified local archives.
+
+The SPECIAL3/word-contract follow-up, integrated with dev `97f5f3797` and
+Capstone `6787c2f3`, passed all 248 MIPS cases, including exhaustive raw field
+admission and both endian forms of the MIPS64 word checks. All 344 source
+groups passed 4,600 normal inputs, 96 expected read faults and 24 explicit
+strict-word refusals. Source hashes and selected firmware C/LLVM hashes were
+unchanged by the dev integration; the `ubus` call LLVM module verified again.
+The current receipts are `build-mips/roundtrip-bitfields-dev/results.json` and
+`build-mips/bitfield-coverage/qualification.json`. Successful temporary
+objects/executables were removed; current source, hashes and compact receipts
+remain. This qualification used macOS arm64 Release, not Linux/Windows hosts
+or the still-unsupported profiles/extensions listed above.
 
 ## TP-Link firmware workflow
 
