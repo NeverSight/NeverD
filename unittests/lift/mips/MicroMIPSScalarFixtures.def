@@ -1,0 +1,33 @@
+//===- MicroMIPSScalarFixtures.def - Independent scalar expectations -----===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Target-order halfwords; a0=0x89abcdef, a1=0x12345678. Expected v0.
+MICRO_SCALAR(Move, 0x0c44, 0x0000, 2, 0x89abcdef)
+MICRO_SCALAR(Add16, 0x0558, 0x0000, 2, 0x9be02467)
+MICRO_SCALAR(Sub16, 0x0559, 0x0000, 2, 0x77777777)
+MICRO_SCALAR(Left16ZeroMeansEight, 0x2540, 0x0000, 2, 0xabcdef00)
+MICRO_SCALAR(Right16, 0x2543, 0x0000, 2, 0x44d5e6f7)
+MICRO_SCALAR(LiMinusOne, 0xed7f, 0x0000, 2, 0xffffffff)
+MICRO_SCALAR(LiPositive64, 0xed40, 0x0000, 2, 64)
+MICRO_SCALAR(Add32, 0x00a4, 0x1150, 4, 0x9be02467)
+MICRO_SCALAR(Sub32, 0x00a4, 0x11d0, 4, 0x77777777)
+MICRO_SCALAR(Or, 0x00a4, 0x1290, 4, 0x9bbfdfff)
+MICRO_SCALAR(And, 0x00a4, 0x1250, 4, 0x00204468)
+MICRO_SCALAR(Nor, 0x00a4, 0x12d0, 4, 0x64402000)
+MICRO_SCALAR(Xor, 0x00a4, 0x1310, 4, 0x9b9f9b97)
+MICRO_SCALAR(SignedLess, 0x00a4, 0x1350, 4, 1)
+MICRO_SCALAR(UnsignedLess, 0x00a4, 0x1390, 4, 0)
+MICRO_SCALAR(Left32, 0x0044, 0xf800, 4, 0x80000000)
+MICRO_SCALAR(Right32, 0x0044, 0xf840, 4, 1)
+MICRO_SCALAR(ArithmeticRight32, 0x0044, 0xf880, 4, 0xffffffff)
+MICRO_SCALAR(Rotate, 0x0044, 0x38c0, 4, 0xdf13579b)
+MICRO_SCALAR(AddImmediate, 0x3044, 0xffff, 4, 0x89abcdee)
+MICRO_SCALAR(OrImmediate, 0x5044, 0x8000, 4, 0x89abcdef)
+MICRO_SCALAR(XorImmediate, 0x7044, 0xffff, 4, 0x89ab3210)
+MICRO_SCALAR(AndImmediate, 0xd044, 0x8000, 4, 0x8000)
+MICRO_SCALAR(SignedLessImmediate, 0x9044, 0xffff, 4, 1)
+MICRO_SCALAR(UnsignedLessImmediate, 0xb044, 0xffff, 4, 1)
+
+#undef MICRO_SCALAR

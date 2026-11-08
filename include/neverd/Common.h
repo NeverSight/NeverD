@@ -350,29 +350,36 @@ constexpr bool isMIPS64(Arch A) {
 }
 
 enum class InstructionMode : uint8_t {
-  Default,
-  ARM,
-  Thumb,
-  /// Image metadata with distinct ARM and Thumb code regions. Consumers must
-  /// select a concrete mode for each authenticated instruction address.
-  MixedARMThumb
+#define NEVERD_INSTRUCTION_MODE(Name, Spelling, Concrete, Alignment) Name,
+#include "neverd/InstructionModes.def"
 };
 
 inline bool isSingleInstructionMode(InstructionMode Mode) {
-  return Mode == InstructionMode::Default || Mode == InstructionMode::ARM ||
-         Mode == InstructionMode::Thumb;
+  switch (Mode) {
+#define NEVERD_INSTRUCTION_MODE(Name, Spelling, Concrete, Alignment)           \
+  case InstructionMode::Name:                                                  \
+    return Concrete;
+#include "neverd/InstructionModes.def"
+  }
+  return false;
+}
+
+inline unsigned instructionModeAlignment(InstructionMode Mode) {
+  switch (Mode) {
+#define NEVERD_INSTRUCTION_MODE(Name, Spelling, Concrete, Alignment)           \
+  case InstructionMode::Name:                                                  \
+    return Alignment;
+#include "neverd/InstructionModes.def"
+  }
+  return 0;
 }
 
 inline const char *getInstructionModeName(InstructionMode Mode) {
   switch (Mode) {
-  case InstructionMode::Default:
-    return "default";
-  case InstructionMode::ARM:
-    return "arm";
-  case InstructionMode::Thumb:
-    return "thumb";
-  case InstructionMode::MixedARMThumb:
-    return "mixed_arm_thumb";
+#define NEVERD_INSTRUCTION_MODE(Name, Spelling, Concrete, Alignment)           \
+  case InstructionMode::Name:                                                  \
+    return Spelling;
+#include "neverd/InstructionModes.def"
   }
   return "unknown";
 }

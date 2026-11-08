@@ -11,15 +11,21 @@
 #include "../../../lib/backend/codegen/MachO/MachODependencyState.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/codegen/MachO/MachOAuthenticatedFixups.h"
+#include "neverd/backend/codegen/MachO/MachOPatch.h"
+#include "neverd/loader/Loader.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/MathExtras.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -50,17 +56,22 @@ std::vector<uint8_t> linkedImage(const ChainWords &Chain) {
   Header.magic = MH_MAGIC_64;
   Header.cputype = CPU_TYPE_ARM64;
   Header.cpusubtype = macho_loader::arm64e::kCPUSubtype;
-  Header.filetype = MH_DYLIB;
+  Header.filetype = MH_BUNDLE;
   Header.flags = MH_DYLDLINK | MH_TWOLEVEL;
   Header.ncmds = kCommandCount;
   Header.sizeofcmds = kSegmentCount * sizeof(segment_command_64) +
-                      kLibraryCommandBytes + sizeof(symtab_command) +
-                      sizeof(dysymtab_command) + sizeof(linkedit_data_command);
+                      sizeof(section_64) + kLibraryCommandBytes +
+                      sizeof(symtab_command) + sizeof(dysymtab_command) +
+                      sizeof(linkedit_data_command);
   Append(Header);
   for (unsigned I = 0; I < kSegmentCount; ++I) {
     segment_command_64 Segment{};
     Segment.cmd = LC_SEGMENT_64;
     Segment.cmdsize = sizeof(Segment);
+    if (I == 0) {
+      Segment.cmdsize += sizeof(section_64);
+      Segment.nsects = 1;
+    }
     const char *Names[] = {kTextSegment, kDataSegment, kLinkeditSegment};
     std::memcpy(Segment.segname, Names[I], std::strlen(Names[I]));
     Segment.vmaddr = kBase + I * kPage;
@@ -71,6 +82,16 @@ std::vector<uint8_t> linkedImage(const ChainWords &Chain) {
                         : I == 1 ? VM_PROT_WRITE
                                  : 0);
     Append(Segment);
+    if (I == 0) {
+      section_64 Text{};
+      std::memcpy(Text.segname, kTextSegment, sizeof(kTextSegment));
+      std::memcpy(Text.sectname, kTextSection, sizeof(kTextSection));
+      Text.addr = kBase + kOrdinaryRebaseTarget;
+      Text.offset = kOrdinaryRebaseTarget;
+      Text.size = kSlotBytes;
+      Text.flags = S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS;
+      Append(Text);
+    }
   }
   dylib_command Library{};
   Library.cmd = LC_LOAD_DYLIB;
@@ -141,6 +162,38 @@ std::vector<uint8_t> multiStartImage(const ChainWords &Chain) {
   writeLE<uint16_t>(Starts + StartOffset +
                         kLastOverflowIndex * sizeof(uint16_t),
                     DYLD_CHAINED_PTR_START_LAST | (kSecondSlot - kPage));
+  return Bytes;
+}
+
+std::vector<uint8_t> largePageImage(const ChainWords &Chain) {
+  const auto Small = linkedImage(Chain);
+  std::vector<uint8_t> Bytes(kSegmentCount * kLargePage);
+  for (size_t I = 0; I < kSegmentCount; ++I)
+    std::copy_n(Small.begin() + I * kPage, kPage,
+                Bytes.begin() + I * kLargePage);
+  unsigned SegmentIndex = 0;
+  const auto Shift = 2 * (kLargePage - kPage);
+  forEachMachOLoadCommand(
+      Bytes.data(), Bytes.size(),
+      [&](const uint8_t *Input, uint32_t ID, uint32_t, bool) {
+        auto *Command = Bytes.data() + (Input - Bytes.data());
+        if (ID == LC_SEGMENT_64) {
+          auto *Segment = reinterpret_cast<segment_command_64 *>(Command);
+          Segment->vmaddr = kBase + SegmentIndex * kLargePage;
+          Segment->fileoff = SegmentIndex++ * kLargePage;
+          Segment->vmsize = Segment->filesize = kLargePage;
+        } else if (ID == LC_SYMTAB) {
+          auto *Symbols = reinterpret_cast<symtab_command *>(Command);
+          Symbols->symoff += Shift;
+          Symbols->stroff += Shift;
+        } else if (ID == LC_DYLD_CHAINED_FIXUPS) {
+          reinterpret_cast<linkedit_data_command *>(Command)->dataoff += Shift;
+        }
+      });
+  auto *Starts = reinterpret_cast<dyld_chained_starts_in_segment *>(
+      Bytes.data() + kChains + Shift + kSegmentStart);
+  Starts->page_size = kLargePage;
+  Starts->segment_offset = kLargePage;
   return Bytes;
 }
 
@@ -327,6 +380,455 @@ TEST(MachOArm64eDependencies, UsesFormatAlignmentAndRetainsSlotAddresses) {
     auto Error = preserveMachODependencyState(*Before, *After);
     EXPECT_TRUE(bool(Error));
     llvm::consumeError(std::move(Error));
+  }
+}
+
+MachOAuthenticatedFixup installedFixup(bool Bind = false) {
+  MachOAuthenticatedFixup Fixup;
+  Fixup.Address = kBase + kInstalledSlot;
+  Fixup.Recipe.Diversity = kInstalledDiversity;
+  if (Bind) {
+    Fixup.Recipe.Symbol = kNewSymbol;
+    Fixup.Recipe.Module = kLibrary;
+    Fixup.Recipe.LibraryOrdinal = 1;
+    Fixup.Recipe.Addend = kNewImportAddend;
+    Fixup.Recipe.WeakImport = true;
+  } else {
+    Fixup.Recipe.Target = kBase + kInstalledTarget;
+  }
+  return Fixup;
+}
+
+TEST(MachOArm64eInstallation,
+     InstallsEveryKeyAndDiversityWithExactImportIdentity) {
+  struct SigningCase {
+    uint8_t Key;
+    bool AddressDiversity;
+    uint64_t Word;
+  };
+  constexpr SigningCase Cases[] = {
+#define ARM64E_INSTALL_CASE(Key, AddressDiversity, Word)                       \
+  {Key, AddressDiversity, Word},
+#include "MachOArm64eDependencyFixtures.def"
+  };
+  for (const auto &Chain : Chains) {
+    SCOPED_TRACE(Chain.Format);
+    for (const auto &Case : Cases) {
+      SCOPED_TRACE(Case.Word);
+      for (bool Bind : {false, true}) {
+        auto Bytes = multiStartImage(Chain);
+        const auto Original = Bytes;
+        auto Fixup = installedFixup(Bind);
+        Fixup.Recipe.Key = Case.Key;
+        Fixup.Recipe.AddressDiversity = Case.AddressDiversity;
+        auto Error = installMachOAuthenticatedFixups(Bytes, {Fixup});
+        if (Bind &&
+            macho_loader::arm64e::chainFormat(Chain.Format)->Segmented) {
+          EXPECT_TRUE(bool(Error));
+          llvm::consumeError(std::move(Error));
+          EXPECT_EQ(Bytes, Original);
+          continue;
+        }
+        ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+        EXPECT_EQ(readLE<uint64_t>(Bytes.data() + kInstalledSlot),
+                  Case.Word | (Bind ? kBindMask | 1 : kInstalledTarget));
+        Error = verifyMachOAuthenticatedFixups(Bytes, {Fixup});
+        EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+        // The analysis loader is a separate consumer of the installed image.
+        auto Image =
+            Loader::create(BinaryFormat::MachO)
+                ->loadBuffer(llvm::MemoryBufferRef(
+                    llvm::toStringRef(llvm::ArrayRef(Bytes)), kNewSymbol));
+        ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+        ASSERT_TRUE(Image->MachOAuthenticatedPointers.contains(Fixup.Address));
+        const auto &Recipe =
+            Image->MachOAuthenticatedPointers.at(Fixup.Address);
+        EXPECT_EQ(Recipe.Key, Case.Key);
+        EXPECT_EQ(Recipe.Diversity, kInstalledDiversity);
+        EXPECT_EQ(Recipe.AddressDiversity, Case.AddressDiversity);
+        EXPECT_EQ(Recipe.Symbol, Fixup.Recipe.Symbol);
+        EXPECT_EQ(Recipe.Module, Fixup.Recipe.Module);
+        EXPECT_EQ(Recipe.LibraryOrdinal, Fixup.Recipe.LibraryOrdinal);
+        EXPECT_EQ(Recipe.Addend, Fixup.Recipe.Addend);
+        EXPECT_EQ(Recipe.WeakImport, Fixup.Recipe.WeakImport);
+        EXPECT_EQ(Recipe.Target, Fixup.Recipe.Target);
+        // Replaying against a different discriminator must not validate.
+        Fixup.Recipe.Diversity ^= 1;
+        Error = verifyMachOAuthenticatedFixups(Bytes, {Fixup});
+        EXPECT_TRUE(bool(Error));
+        llvm::consumeError(std::move(Error));
+      }
+    }
+  }
+}
+
+TEST(MachOArm64eInstallation,
+     PreservesOldSlotsAndDeduplicatesOnlyExactImports) {
+  for (const auto &Chain : Chains) {
+    if (macho_loader::arm64e::chainFormat(Chain.Format)->Segmented)
+      continue;
+    auto Bytes = linkedImage(Chain);
+    const auto Original = Bytes;
+    auto Before = readMachODependencyState(Bytes);
+    ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
+    auto Same = installedFixup(true);
+    Same.Recipe.Symbol = kSymbol;
+    Same.Recipe.Addend = kImportAddend;
+    Same.Recipe.WeakImport = false;
+    auto Different = Same;
+    Different.Address += kSlotBytes;
+    Different.Recipe.WeakImport = true;
+    auto New = installedFixup(true);
+    New.Address += 2 * kSlotBytes;
+    std::vector<MachOAuthenticatedFixup> Fixups{New, Same, Different};
+    auto Error = installMachOAuthenticatedFixups(Bytes, Fixups);
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    MachOChainedFixups Installed;
+    auto After = readMachODependencyState(Bytes, &Installed);
+    ASSERT_TRUE(bool(After)) << llvm::toString(After.takeError());
+    EXPECT_EQ(Installed.Imports.size(), 3u);
+    EXPECT_EQ(After->Slots.size(), Before->Slots.size() + Fixups.size());
+    Error = preserveMachODependencyState(*Before, *After);
+    EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    auto Reordered = Original;
+    std::reverse(Fixups.begin(), Fixups.end());
+    Error = installMachOAuthenticatedFixups(Reordered, Fixups);
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    EXPECT_EQ(Bytes, Reordered);
+    // A second installation cannot overwrite an existing authenticated slot.
+    const auto Committed = Bytes;
+    Error = installMachOAuthenticatedFixups(Bytes, {Same});
+    EXPECT_TRUE(bool(Error));
+    llvm::consumeError(std::move(Error));
+    EXPECT_EQ(Bytes, Committed);
+  }
+}
+
+TEST(MachOArm64eInstallation, RefusesMalformedRequestsWithoutPublishingBytes) {
+  for (const auto &Chain : Chains) {
+    const auto Original = linkedImage(Chain);
+    const auto Check = [&](auto Change) {
+      auto Bytes = Original;
+      auto Fixup = installedFixup();
+      Change(Fixup);
+      auto Error = installMachOAuthenticatedFixups(Bytes, {Fixup});
+      EXPECT_TRUE(bool(Error));
+      llvm::consumeError(std::move(Error));
+      EXPECT_EQ(Bytes, Original);
+    };
+    Check([](auto &F) { F.Address = kBase + kPage; });
+    Check([](auto &F) { F.Address = kBase + kPage + kWordBytes; });
+    Check([](auto &F) { ++F.Address; });
+    Check([](auto &F) { F.Address = kBase + kPageEnd; });
+    Check([](auto &F) { F.Address = kBase; });
+    Check([](auto &F) { F.Address = kBase + kLinkedit; });
+    Check([](auto &F) { F.Address = InvalidVA; });
+    Check([](auto &F) { F.Recipe.Key = kWordBytes; });
+    Check([](auto &F) { F.Recipe.EncodedValue = 0; });
+    Check([](auto &F) { F.Recipe.Target = InvalidVA; });
+    Check([](auto &F) { F.Recipe.Target = kBase + kLinkedit; });
+    Check([](auto &F) { F.Recipe.Target = kBase - 1; });
+    Check([](auto &F) { F.Recipe.Addend = 1; });
+    Check([](auto &F) { F.Recipe.LibraryOrdinal = 1; });
+    Check([](auto &F) { F.Recipe.Symbol = kNewSymbol; });
+    Check([](auto &F) {
+      F = installedFixup(true);
+      F.Recipe.Module = kNewSymbol;
+    });
+    Check([](auto &F) {
+      F = installedFixup(true);
+      F.Recipe.LibraryOrdinal = kImportAddend;
+    });
+    Check([](auto &F) {
+      F = installedFixup(true);
+      F.Recipe.LibraryOrdinal = kSegmentCount;
+    });
+    auto Bytes = Original;
+    auto Fixup = installedFixup();
+    auto Error = installMachOAuthenticatedFixups(Bytes, {Fixup, Fixup});
+    EXPECT_TRUE(bool(Error));
+    llvm::consumeError(std::move(Error));
+    EXPECT_EQ(Bytes, Original);
+  }
+}
+
+TEST(MachOArm64eInstallation, EncodesLargePageGapsAndAllSpecialOrdinals) {
+  for (const auto &Chain : Chains) {
+    auto Bytes = largePageImage(Chain);
+    auto Near = installedFixup();
+    Near.Address += kLargePage - kPage;
+    auto Far = Near;
+    Far.Address += kFarSlot;
+    auto Error = installMachOAuthenticatedFixups(Bytes, {Far, Near});
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    MachOChainedFixups Installed;
+    auto State = readMachODependencyState(Bytes, &Installed);
+    ASSERT_TRUE(bool(State)) << llvm::toString(State.takeError());
+    const auto Format = macho_loader::arm64e::chainFormat(Chain.Format);
+    const auto &Data = Installed.Segments[1];
+    EXPECT_EQ(Data.PageSize, kLargePage);
+    ASSERT_EQ(Data.Slots.size(), 4u);
+    auto Word =
+        macho_loader::arm64e::decodePointerWord(Data.Slots[2].Raw, *Format);
+    ASSERT_TRUE(bool(Word));
+    // 12 KiB fits an 8-byte chain stride or segmented 12-bit next, but not
+    // the 4-byte stride of the 11-bit kernel/firmware next field.
+    EXPECT_EQ(Word->Next, Format->Stride == kSlotBytes || Format->Segmented
+                              ? kFarSlot / Format->Stride
+                              : 0);
+    Error = verifyMachOAuthenticatedFixups(Bytes, {Near, Far});
+    EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    if (Format->Segmented)
+      continue;
+    for (int64_t Ordinal = BIND_SPECIAL_DYLIB_WEAK_LOOKUP; Ordinal <= 0;
+         ++Ordinal) {
+      auto Special = installedFixup(true);
+      Special.Address = Far.Address + (1 - Ordinal) * kSlotBytes;
+      Special.Recipe.LibraryOrdinal = Ordinal;
+      Special.Recipe.Module.clear();
+      Error = installMachOAuthenticatedFixups(Bytes, {Special});
+      ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+      Error = verifyMachOAuthenticatedFixups(Bytes, {Special});
+      EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    }
+  }
+}
+
+TEST(MachOArm64eInstallation, InstallsFinalNewSegmentAddressesTransactionally) {
+  using Kind = llvm::mc_rewrite::RewriteSectionKind;
+  for (const auto &Chain : Chains) {
+    auto Bytes = largePageImage(Chain);
+    const auto Original = Bytes;
+    auto Before = readMachODependencyState(Bytes);
+    ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
+    MachOPatcher Patcher;
+    CompiledImage Image;
+    Image.Success = true;
+    Image.InputKind = RewriteInputKind::ReplacementObject;
+    Image.Format = BinaryFormat::MachO;
+    Image.TargetArch = Arch::AArch64;
+    Image.BaseVA = Patcher.plannedExecSegmentVA(Bytes, Image.TargetArch);
+    ASSERT_EQ(Image.BaseVA, kBase + 2 * kLargePage);
+    Image.Bytes.resize(kLargePage + kSlotBytes);
+    CompiledSection Code, Data;
+    Code.Name = kTextSegment;
+    Code.VA = Image.BaseVA;
+    Code.Size = kSlotBytes;
+    Code.Kind = Kind::Code;
+    Data.Name = kDataSegment;
+    Data.Offset = kLargePage;
+    Data.VA = Image.BaseVA + Data.Offset;
+    Data.Size = kSlotBytes;
+    Data.Kind = Kind::WritableData;
+    Image.Sections = {Code, Data};
+    auto Fixup = installedFixup();
+    Fixup.Address = Data.VA;
+    Fixup.Recipe.Target = Code.VA;
+    Fixup.Recipe.AddressDiversity = true;
+    auto Bad = Fixup;
+    Bad.Address = Code.VA;
+    auto Error = Patcher.appendReplacementImage(Bytes, Image, {Bad});
+    EXPECT_TRUE(bool(Error));
+    llvm::consumeError(std::move(Error));
+    EXPECT_EQ(Bytes, Original);
+    Error = Patcher.appendReplacementImage(Bytes, Image, {Fixup});
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    auto After = readMachODependencyState(Bytes);
+    ASSERT_TRUE(bool(After)) << llvm::toString(After.takeError());
+    Error = preserveMachODependencyState(*Before, *After);
+    EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    Error = verifyMachOAuthenticatedFixups(Bytes, {Fixup});
+    EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    if (macho_loader::arm64e::chainFormat(Chain.Format)->Segmented) {
+      // A segment may appear after LINKEDIT in load-command order while
+      // occupying an earlier VM range. Insertion changes its target ordinal
+      // even when the chain's owning segment and storage VA stay fixed.
+      auto Reordered = Original;
+      auto *Header = reinterpret_cast<mach_header_64 *>(Reordered.data());
+      segment_command_64 Extra{};
+      Extra.cmd = LC_SEGMENT_64;
+      Extra.cmdsize = sizeof(Extra);
+      std::memcpy(Extra.segname, kExtraSegment, sizeof(kExtraSegment));
+      Extra.vmaddr = kBase - kLargePage;
+      Extra.vmsize = kLargePage;
+      Extra.initprot = Extra.maxprot = VM_PROT_READ;
+      std::memcpy(Reordered.data() + sizeof(*Header) + Header->sizeofcmds,
+                  &Extra, sizeof(Extra));
+      Header->sizeofcmds += sizeof(Extra);
+      ++Header->ncmds;
+      writeLE<uint64_t>(Reordered.data() + kLargePage + kSlotBytes,
+                        kExtraSegmentTarget);
+      auto OldState = readMachODependencyState(Reordered);
+      ASSERT_TRUE(bool(OldState)) << llvm::toString(OldState.takeError());
+      const auto Snapshot = Reordered;
+      Error = Patcher.appendReplacementImage(Reordered, Image, {Fixup});
+      EXPECT_TRUE(bool(Error));
+      llvm::consumeError(std::move(Error));
+      EXPECT_EQ(Reordered, Snapshot);
+    }
+  }
+}
+
+TEST(MachOArm64eInstallation,
+     RetainsUnauthenticatedWordsInAuthenticatedChains) {
+  for (const auto &Chain : Chains) {
+    const auto Format = macho_loader::arm64e::chainFormat(Chain.Format);
+    const uint64_t Target = kOrdinaryRebaseTarget +
+                            (Format->Offset || Format->Segmented ? 0 : kBase);
+    auto Bytes =
+        linkedImage({Chain.Format, (Chain.First & kNextMask) | Target,
+                     Format->Segmented ? kUnauthenticatedSegmentedTarget
+                                       : kUnauthenticatedBind});
+    auto Before = readMachODependencyState(Bytes);
+    ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
+    auto Error = installMachOAuthenticatedFixups(Bytes, {installedFixup()});
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    auto After = readMachODependencyState(Bytes);
+    ASSERT_TRUE(bool(After)) << llvm::toString(After.takeError());
+    Error = preserveMachODependencyState(*Before, *After);
+    EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+  }
+}
+
+TEST(MachOArm64eInstallation, UpgradesEveryImportTableWithoutChangingBindings) {
+  for (const auto &Chain : Chains) {
+    if (macho_loader::arm64e::chainFormat(Chain.Format)->Segmented)
+      continue;
+    for (unsigned Format : {DYLD_CHAINED_IMPORT, DYLD_CHAINED_IMPORT_ADDEND,
+                            DYLD_CHAINED_IMPORT_ADDEND64}) {
+      auto Bytes = linkedImage(Chain);
+      auto *Header = reinterpret_cast<dyld_chained_fixups_header *>(
+          Bytes.data() + kChains);
+      Header->imports_format = Format;
+      auto *Import = Bytes.data() + kChains + kImportTable;
+      std::memset(Import, 0, sizeof(dyld_chained_import_addend64));
+      writeLE<uint32_t>(Import, 1);
+      if (Format == DYLD_CHAINED_IMPORT_ADDEND)
+        writeLE<int32_t>(Import + sizeof(uint32_t), kImportAddend);
+      if (Format == DYLD_CHAINED_IMPORT_ADDEND64)
+        writeLE<int64_t>(Import + sizeof(uint64_t), kImportAddend);
+      auto Before = readMachODependencyState(Bytes);
+      ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
+      auto Error =
+          installMachOAuthenticatedFixups(Bytes, {installedFixup(true)});
+      ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+      auto After = readMachODependencyState(Bytes);
+      ASSERT_TRUE(bool(After)) << llvm::toString(After.takeError());
+      Error = preserveMachODependencyState(*Before, *After);
+      EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    }
+  }
+}
+
+TEST(MachOArm64eInstallation,
+     DistinguishesSixteenAndTwentyFourBitImportIndices) {
+  for (unsigned Format :
+       {DYLD_CHAINED_PTR_ARM64E_USERLAND, DYLD_CHAINED_PTR_ARM64E_USERLAND24}) {
+    for (uint32_t Count : {kImportLimit16, kImportLimit16 + 1}) {
+      auto Bytes = linkedImage({Format, Chains[0].First, Chains[0].Second});
+      const auto Names =
+          kImportTable + Count * sizeof(dyld_chained_import_addend64);
+      const auto MetadataSize = Names + sizeof(kSymbol);
+      const auto StringTable = kChains + MetadataSize;
+      Bytes.resize(StringTable + 1);
+      for (uint32_t I = 0; I < Count; ++I) {
+        auto *Import = Bytes.data() + kChains + kImportTable +
+                       I * sizeof(dyld_chained_import_addend64);
+        writeLE<uint64_t>(Import, 1);
+        writeLE<int64_t>(Import + sizeof(uint64_t), kImportAddend);
+      }
+      std::memcpy(Bytes.data() + kChains + Names, kSymbol, sizeof(kSymbol));
+      auto *Header = reinterpret_cast<dyld_chained_fixups_header *>(
+          Bytes.data() + kChains);
+      Header->imports_count = Count;
+      Header->symbols_offset = Names;
+      forEachMachOLoadCommand(
+          Bytes.data(), Bytes.size(),
+          [&](const uint8_t *Input, uint32_t ID, uint32_t, bool) {
+            auto *Command = Bytes.data() + (Input - Bytes.data());
+            if (ID == LC_SEGMENT_64) {
+              auto *Segment = reinterpret_cast<segment_command_64 *>(Command);
+              if (readMachOName(Segment->segname) == kLinkeditSegment) {
+                Segment->filesize = Bytes.size() - kLinkedit;
+                Segment->vmsize = llvm::alignTo(Segment->filesize, kLargePage);
+              }
+            } else if (ID == LC_SYMTAB) {
+              auto *Symbols = reinterpret_cast<symtab_command *>(Command);
+              Symbols->symoff = Symbols->stroff = StringTable;
+            } else if (ID == LC_DYLD_CHAINED_FIXUPS) {
+              reinterpret_cast<linkedit_data_command *>(Command)->datasize =
+                  MetadataSize;
+            }
+          });
+      const auto Original = Bytes;
+      auto Error =
+          installMachOAuthenticatedFixups(Bytes, {installedFixup(true)});
+      if (Count > kImportLimit16 &&
+          Format == DYLD_CHAINED_PTR_ARM64E_USERLAND) {
+        EXPECT_TRUE(bool(Error));
+        llvm::consumeError(std::move(Error));
+        EXPECT_EQ(Bytes, Original);
+      } else {
+        ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+        EXPECT_EQ(readLE<uint64_t>(Bytes.data() + kInstalledSlot) &
+                      kImportLimit16,
+                  Count & kImportLimit16);
+        Error = verifyMachOAuthenticatedFixups(Bytes, {installedFixup(true)});
+        EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+      }
+    }
+  }
+}
+
+TEST(MachOArm64eInstallation, RetainsOpaqueTerminalSignatureForPublication) {
+  auto Original = linkedImage(Chains[0]);
+  auto *Header = reinterpret_cast<mach_header_64 *>(Original.data());
+  const auto CommandOffset = sizeof(*Header) + Header->sizeofcmds;
+  linkedit_data_command Signature{};
+  Signature.cmd = LC_CODE_SIGNATURE;
+  Signature.cmdsize = sizeof(Signature);
+  Signature.dataoff = Original.size();
+  Signature.datasize = kSlotBytes;
+  std::memcpy(Original.data() + CommandOffset, &Signature, sizeof(Signature));
+  ++Header->ncmds;
+  Header->sizeofcmds += sizeof(Signature);
+  Original.resize(Original.size() + Signature.datasize);
+  // The layout owner keeps this opaque staged signature; publication alone
+  // owns cryptographic validity and final code-limit/hash replacement.
+  writeLE<uint64_t>(Original.data() + Signature.dataoff, Chains[0].First);
+  forEachMachOLoadCommand(
+      Original.data(), Original.size(),
+      [&](const uint8_t *Input, uint32_t ID, uint32_t, bool) {
+        if (ID != LC_SEGMENT_64)
+          return;
+        auto Segment = readMachOSegment(Input, true);
+        if (readMachOName(Segment.SegName) != kLinkeditSegment)
+          return;
+        Segment.FileSize += Signature.datasize;
+        Segment.VMSize = llvm::alignTo(Segment.FileSize, kPage);
+        writeMachOSegment(Original.data() + (Input - Original.data()), true,
+                          Segment);
+      });
+  auto Bytes = Original;
+  auto Error = installMachOAuthenticatedFixups(Bytes, {installedFixup()});
+  ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+  const auto *Moved = reinterpret_cast<const linkedit_data_command *>(
+      Bytes.data() + CommandOffset);
+  EXPECT_EQ(uint64_t(Moved->dataoff) + Moved->datasize, Bytes.size());
+  EXPECT_EQ(readLE<uint64_t>(Bytes.data() + Moved->dataoff), Chains[0].First);
+  EXPECT_EQ(readLE<uint64_t>(Bytes.data() + Signature.dataoff),
+            Chains[0].First);
+  for (uint32_t Offset :
+       {uint32_t(0), Signature.dataoff - 1, Signature.dataoff + 1}) {
+    auto Bad = Original;
+    writeLE<uint32_t>(Bad.data() + CommandOffset +
+                          offsetof(linkedit_data_command, dataoff),
+                      Offset);
+    const auto Input = Bad;
+    Error = installMachOAuthenticatedFixups(Bad, {installedFixup()});
+    EXPECT_TRUE(bool(Error));
+    llvm::consumeError(std::move(Error));
+    EXPECT_EQ(Bad, Input);
   }
 }
 

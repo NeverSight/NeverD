@@ -1,0 +1,9 @@
+{
+  "lock": ".products.lock",
+  "pending_manifest": "products.pending.json",
+  "manifest": "products.json",
+  "invalid_product": "Artifact product must stay within its owning output directory",
+  "terminated": "Arm64e source call verification interrupted",
+  "changed_input": "Existing verifier input differs; use a separate output to preserve the baseline",
+  "pending_input": ".input.pending"
+}

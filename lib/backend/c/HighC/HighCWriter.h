@@ -508,6 +508,9 @@ public:
   /// read-only pointer holds (MinGW's `.refptr.__imp__fmode`).
   std::optional<va_t> importDataSlotRead(const HighExpr &Address,
                                          uint16_t Size) const;
+  /// Reject file-byte projection of an unbound import value in a compressed
+  /// MIPS image, including partial reads and dynamically indexed backing.
+  void requireBoundImportMemory(va_t Address, uint64_t Size) const;
   /// The function this file defines that call \p E runs, or null: one named
   /// like it at another address is a different function.
   const HighFunc *calledDefinition(const HighExpr &E) const;
@@ -1811,7 +1814,7 @@ public:
   const HighExpr *functionAddressArgument(const HighExpr &Arg);
   /// The entry FunctionAddressNames keys address constant \p Const by: its
   /// value, less the Thumb interworking bit of a certified code address.
-  va_t functionAddressKey(const HighExpr &Const) const;
+  std::optional<va_t> functionAddressKey(const HighExpr &Const) const;
   struct ImageBacking {
     va_t Base;
     va_t End;

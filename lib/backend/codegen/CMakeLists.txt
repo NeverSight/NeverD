@@ -72,6 +72,7 @@ add_neverd_component_library(NeverDCodeGen
   ELF/ELFSourceSymbols.cpp
   ELF/ELFSourceDependencies.cpp
   MachO/MachOCompactUnwindPatch.cpp
+  MachO/MachOAuthenticatedFixups.cpp
   MachO/MachOExceptionPatch.cpp
   MachO/MachOInplace.cpp
   MachO/MachOSourceDependencies.cpp

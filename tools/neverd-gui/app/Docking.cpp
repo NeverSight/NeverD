@@ -19,6 +19,7 @@
 #include <QCoreApplication>
 #include <QCursor>
 #include <QEnterEvent>
+#include <QFocusEvent>
 #include <QGraphicsOpacityEffect>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -417,6 +418,18 @@ public:
   }
 
 protected:
+  void focusInEvent(QFocusEvent *event) override {
+    // A drop transfers and destroys the floating layout before deleting its
+    // caption. Hiding the drop preview can reactivate that caption on Cocoa;
+    // it no longer owns any pane to receive the forwarded focus event.
+    if (auto *floating = titleBar()->floatingWindow();
+        floating && !floating->dropArea()) {
+      QWidget::focusInEvent(event);
+      return;
+    }
+    TitleBar::focusInEvent(event);
+  }
+
   void init() override {
     TitleBar::init();
     if (!titleBar()->floatingWindow())

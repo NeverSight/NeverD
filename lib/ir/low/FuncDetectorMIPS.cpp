@@ -11,6 +11,7 @@
 #include "FuncDetectorDetail.h"
 
 #include "neverd/ArchSupport.h"
+#include "neverd/loader/ELF/MIPSCodeMode.h"
 #include "neverd/support/BinaryEncoding.h"
 
 namespace neverd::func_detect_detail {
@@ -18,11 +19,20 @@ namespace neverd::func_detect_detail {
 void scanSegmentCallsMIPS(const BinaryImage &Img, Decoder &Dec,
                           const Segment *Seg, va_t Start, va_t End,
                           std::set<va_t> &Out, const Cancellation *Control) {
-  for (va_t At = (Start + 3) & ~va_t(3); At < End && End - At >= 4; At += 4) {
+  const bool Mixed = Img.Mode == InstructionMode::MixedMIPS ||
+                     Img.Mode == InstructionMode::MicroMIPS;
+  const unsigned Align = Mixed ? 2 : 4;
+  unsigned Step = Align;
+  for (va_t At = (Start + Align - 1) & ~va_t(Align - 1);
+       At < End && End - At >= Align; At += Step) {
     checkCancellation(Control);
+    Step = Align;
     const auto *Bytes = Seg->Data.data() + (At - Seg->VA);
-    if (readTargetEndian<uint32_t>(Bytes, archLittleEndian(Img.Arch)) >> 26 !=
-        3)
+    if (!Mixed &&
+        readTargetEndian<uint32_t>(Bytes, archLittleEndian(Img.Arch)) >> 26 !=
+            3)
+      continue;
+    if (!Dec.selectMode(Img, At))
       continue;
     DecodedExecutionUnit Unit;
     const int Size =
@@ -30,9 +40,20 @@ void scanSegmentCallsMIPS(const BinaryImage &Img, Decoder &Dec,
                               static_cast<size_t>(End - At), At, Unit);
     if (Size <= 0)
       continue;
+    Step = Unit.Head.Size;
     const va_t Target = Dec.directCallTarget(Unit.Head);
     if (Target == InvalidVA || !Img.isFunctionEntryCandidateAt(Target) ||
-        !Img.hasExecutableCodeOwnerRange(At, Size))
+        !Img.hasExecutableCodeOwnerRange(At, Size) ||
+        !mips::codeModeRangeMatches(Img, At, Size, Dec.currentMode()))
+      continue;
+    auto Destination = canonicalizeLowControlTarget(
+        Target, Dec.currentMode(),
+        Dec.controlTargetMode(Unit.Head, Dec.currentMode()));
+    if (!Destination) {
+      llvm::consumeError(Destination.takeError());
+      continue;
+    }
+    if (!Img.instructionModeAt(Destination->Address, Destination->Mode))
       continue;
     std::vector<LowOp> Ops;
     try {

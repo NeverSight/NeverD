@@ -1,0 +1,252 @@
+{
+  "schema": "neverd-arm64e-dyld-install-v1",
+  "overall_arm64e_complete": false,
+  "base_revision": "93d61bea02b0f0b484506f52257794b8c55c6569",
+  "implementation_revision": "25defabb63d739958b940d5c37f382ff481d23a5",
+  "integration_revision": "a1e2b6f89a4c969d38e62c57b05a66c7a060b65b",
+  "integrated_dev_revision": "bed045524af47c20f122074b9e560d9ac08a9841",
+  "changes": [
+    "Six authenticated chained formats with exact existing providers, local targets, all keys and address-diversity recipes",
+    "Complete segment-placement/install transaction preserves original identities; reordered segment targets fail without mutation",
+    "Terminal opaque code-signature relocation for the existing final publication signer",
+    "Independent AppleClang O0/O2 offline dyld_info and codesign checks for existing and appended storage",
+    "Unchanged compact unwind records and explicit signed DWARF state at every instruction"
+  ],
+  "toolchain": {
+    "profile": "Release",
+    "llvm_package": "neverd-llvm-v23.0.0-r6",
+    "llvm_source_patches_or_overlays": false,
+    "working_dependencies": {
+      "signatures": "20b9036f4367e1308a3d2f0b214e06859090a7af",
+      "third_party/capstone": "b8c22e0c16b1769dfa712547d4a5c5d49560ae46"
+    },
+    "latest_prebuilt_tag_observed": "neverd-llvm-v23.0.0-r6",
+    "prebuilt_tag_snapshot_sha256": "cc843a4beff649227304788c8ec7955554e0a00ee46dd175c7fefae552891c95",
+    "compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+    "macos_sdk": "15.5"
+  },
+  "installation_contract": {
+    "formats": [
+      1,
+      7,
+      9,
+      10,
+      12,
+      14
+    ],
+    "keys": [
+      "IA",
+      "IB",
+      "DA",
+      "DB"
+    ],
+    "address_diversity": [
+      false,
+      true
+    ],
+    "literal_recipe_cases": 88,
+    "segmented_bind_refusals": 8,
+    "new_provider_load_commands": false,
+    "installs_runtime_signed_pac": false
+  },
+  "validation": {
+    "focused": {
+      "tests": 20,
+      "passed": 20,
+      "failures": 0,
+      "skipped": 0,
+      "sha256": "fb78cd6c830bbbe010aa81603cc5a3c8708c78122571990f6ee9bb25a54c6c53",
+      "additional_assertion": "The actual compiler cleanup_frame has a compact entry with LSDA and a personality index; explicit signed DWARF alone cannot satisfy this check."
+    },
+    "initial_broad": {
+      "tests": 1372,
+      "failures": 7,
+      "skipped": 35,
+      "sha256": "a2a106f710ba90ede2c4d4095db1cd147a1f36ff4c745d68b6396b0ab5e98f6c",
+      "passed": 1330,
+      "failed_tests": [
+        "AllTargets/SourcePatchMatrix.CompilesInstallsAndExecutes/ELF_X86",
+        "AllTargets/SourcePatchMatrix.MutableStateAndReadOnlyData/ELF_X86",
+        "AllTargets/SourcePatchMatrix.OriginalFloatingPointAndStackArgumentABI/ELF_X86",
+        "AllTargets/SourcePatchMatrix.SourceEntrySurvivesImageRebasing/ELF_X86",
+        "CallbackTargets/SourcePatchOriginalCallbackMatrix.SourceCallsOriginalBeforeAndAfter/ELF_X86",
+        "CallbackTargets/SourcePatchOriginalCallbackMatrix.SuppliedIRCallsOriginal/ELF_X86",
+        "LinuxImports/SourcePatchELFDependencyMatrix.NewLibraryFunctionAndDataSlotsExecute/ELF_X86"
+      ],
+      "skip_reasons": {
+        "The execution host does not report the required ordered-memory feature": 1,
+        "this host cannot execute arm64e with all four active pointer signing keys and generic signatures": 1,
+        "this host cannot execute arm64e PAuth_LR with active keys": 1,
+        "this host cannot execute PACM with active IA/IB keys and a second diversifier": 1,
+        "set NEVERD_PARITY_BIN to a raw arm64 code file to enable": 1,
+        "explicit NeverC producer required for its optional matrix": 30
+      }
+    },
+    "integration": {
+      "tests": 1180,
+      "passed": 1165,
+      "skipped": 15,
+      "failures": 0,
+      "by_owner": {
+        "NeverDArm64eAnalysisTests": {
+          "passed": 419,
+          "skipped": 5
+        },
+        "NeverDSourcePatchLayoutTests": {
+          "passed": 14
+        },
+        "NeverDSourcePatchMatrixTests": {
+          "passed": 111,
+          "skipped": 10
+        },
+        "NeverDNativeExceptionRewriteContractTests": {
+          "passed": 286
+        },
+        "NeverDMachOPointerRelocationBoundaryTests": {
+          "passed": 335
+        }
+      },
+      "skipped_tests": [
+        "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+        "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+        "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+        "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+        "A64FastClassifyParity.OptionalRealBinaryWalk",
+        "NeverCProfiles/NeverCSourcePatchMatrix.CIRPreservesTargetLayout/MachO_X64",
+        "NeverCProfiles/NeverCSourcePatchMatrix.CIRPreservesTargetLayout/MachO_ARM64",
+        "NeverCProfiles/NeverCSourcePatchMatrix.CObjectPreservesTargetLayout/MachO_X64",
+        "NeverCProfiles/NeverCSourcePatchMatrix.CObjectPreservesTargetLayout/MachO_ARM64",
+        "NeverCProfiles/NeverCSourcePatchMatrix.HostedCUsesExactPayloadLayout/MachO_X64",
+        "NeverCProfiles/NeverCSourcePatchMatrix.HostedCUsesExactPayloadLayout/MachO_ARM64",
+        "NeverCProfiles/NeverCSourcePatchMatrix.HostedCHelpersAndRecursionKeepExactPayloadLayout/MachO_X64",
+        "NeverCProfiles/NeverCSourcePatchMatrix.HostedCHelpersAndRecursionKeepExactPayloadLayout/MachO_ARM64",
+        "NeverCProfiles/NeverCSourcePatchMatrix.CppSourceCannotPublishWithNeverC/MachO_X64",
+        "NeverCProfiles/NeverCSourcePatchMatrix.CppSourceCannotPublishWithNeverC/MachO_ARM64"
+      ],
+      "sha256": "96c3c76e07e0d8a547c4dc3e4a5c0207ce369dd1d3587e0ecce17625a21297bd",
+      "selection": "All Arm64eAnalysis, SourcePatchLayout, NativeExceptionRewriteContract and MachOPointerRelocationBoundary cases plus every Mach-O SourcePatchMatrix case, using unchanged registered CTest commands and timeouts."
+    },
+    "style": "clang-format 22.1.2 and git diff --check",
+    "documentation": "check_docs_i18n.py: 309 Markdown files, 10 locales"
+  },
+  "native_offline_oracles": {
+    "cases": [
+      {
+        "optimization": "-O0",
+        "appended_segments": false,
+        "installed_recipes": 16,
+        "compact_unwind_entries": 4,
+        "explicit_signed_cfi_rows": 5,
+        "artifacts": {
+          "dyld-info.txt": "a0f28090e0891c2516ac33d3078dd0e8361ab4ca2d31cdc9521d54245aa9d243",
+          "fixture.cpp": "8947cdeb58d20890651915dd4b0132ae5eafa8e35cd7152f4e0f5b816d8db4a3",
+          "installed.dylib": "db40ac1e5b5414aae8b21087819f88f9883609f3efb10ab26450fcd3517355ad",
+          "original.dylib": "5b6d7c06786c859e8acee72a499a240ba99c6720390d1564b7a2ce8e70d8648d",
+          "signed-frame.S": "d1b74afbfdb20a1c1ab1c495a25c45505e28c793c9b863f754bd0d268e7e6a9c",
+          "tools.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      {
+        "optimization": "-O0",
+        "appended_segments": true,
+        "installed_recipes": 16,
+        "compact_unwind_entries": 4,
+        "explicit_signed_cfi_rows": 5,
+        "artifacts": {
+          "dyld-info.txt": "32072942f1c8d6e80743bf6e6cc68fe7767f8526f99b53683fab7889e3669cd6",
+          "fixture.cpp": "8947cdeb58d20890651915dd4b0132ae5eafa8e35cd7152f4e0f5b816d8db4a3",
+          "installed.dylib": "46d01abcd4b71add3374ceb25354862abe2fb73732f7fb81bf1757f29627fed2",
+          "original.dylib": "907117d48fbae3ccfa81242da537b0b227d133d2691f48e7eef88c973e0e8d30",
+          "signed-frame.S": "d1b74afbfdb20a1c1ab1c495a25c45505e28c793c9b863f754bd0d268e7e6a9c",
+          "tools.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      {
+        "optimization": "-O2",
+        "appended_segments": false,
+        "installed_recipes": 16,
+        "compact_unwind_entries": 2,
+        "explicit_signed_cfi_rows": 5,
+        "artifacts": {
+          "dyld-info.txt": "7d45be1dfb678902000eede241676796a05beedfd73908534292f5f3e5891404",
+          "fixture.cpp": "8947cdeb58d20890651915dd4b0132ae5eafa8e35cd7152f4e0f5b816d8db4a3",
+          "installed.dylib": "db298eb510fd3e8d997f4de02a435fedf45dc5f39e31768b8ac791b492c7c0e8",
+          "original.dylib": "49cb1c75a3d8c18defaa4035f158c2b09238f4765fbe0543c90cde0ffa5f789e",
+          "signed-frame.S": "d1b74afbfdb20a1c1ab1c495a25c45505e28c793c9b863f754bd0d268e7e6a9c",
+          "tools.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      {
+        "optimization": "-O2",
+        "appended_segments": true,
+        "installed_recipes": 16,
+        "compact_unwind_entries": 2,
+        "explicit_signed_cfi_rows": 5,
+        "artifacts": {
+          "dyld-info.txt": "48d368730ad99c6cbcc95a8ff6ed21fc2ca1ba744852fd42fdd8d0c6f365564d",
+          "fixture.cpp": "8947cdeb58d20890651915dd4b0132ae5eafa8e35cd7152f4e0f5b816d8db4a3",
+          "installed.dylib": "faf2030913c6312789d56f1787cc47508f65224ec90971cf6151fbdc4fa2d971",
+          "original.dylib": "3c4a3e3a1f82c63369ea03701d5f2dda2ca3f941d9c2b8eda85b0cf3b756712d",
+          "signed-frame.S": "d1b74afbfdb20a1c1ab1c495a25c45505e28c793c9b863f754bd0d268e7e6a9c",
+          "tools.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    ],
+    "tools": [
+      "Apple Clang",
+      "codesign --force --sign -",
+      "codesign --verify --strict",
+      "dyld_info -fixups -fixup_chain_details"
+    ],
+    "executes_dyld_or_signed_unwinder": false,
+    "signed_dwarf_origin": "Explicit assembly fixture; compact C++ frames are Apple Clang generated."
+  },
+  "r6_i386_diagnosis": {
+    "failure": "compileImageForPatch: LLVM encoded an invalid i386 GOT anchor displacement; rebuild the corrected LLVM fork",
+    "llvm_package": "neverd-llvm-v23.0.0-r6",
+    "baseline_revision": "93d61bea02b0f0b484506f52257794b8c55c6569",
+    "files": [
+      {
+        "path": "lib/backend/codegen/CompiledImage.cpp",
+        "base_sha256": "eff5d3e858eccab1081b2d44d9b318103384526d7fe25726e06499cbbaa2db2f",
+        "working_sha256": "eff5d3e858eccab1081b2d44d9b318103384526d7fe25726e06499cbbaa2db2f",
+        "unchanged": true
+      },
+      {
+        "path": "lib/backend/codegen/ELF/ELFPatch.cpp",
+        "base_sha256": "116f22368cd4f62be1c61894b10db84488ae0a610262e2b525de92086dd1fce7",
+        "working_sha256": "116f22368cd4f62be1c61894b10db84488ae0a610262e2b525de92086dd1fce7",
+        "unchanged": true
+      },
+      {
+        "path": "unittests/SourcePatchMatrixTests.cpp",
+        "base_sha256": "19fc3c62369e4044b86a73499baa8e8c17bd9b7c69aa645b95e25c6af117ec4f",
+        "working_sha256": "19fc3c62369e4044b86a73499baa8e8c17bd9b7c69aa645b95e25c6af117ec4f",
+        "unchanged": true
+      }
+    ],
+    "guard_introduced": "da5cdeb977",
+    "fork_correction": "a898aeea912c038880173ff0fde05b4a7f1d00f4",
+    "interpretation": "All seven failures stop at the pre-existing ELF i386 compiler output check, before any Mach-O installation. The r6 package remains unchanged by user request. No baseline rebuild was performed."
+  },
+  "cleanup": {
+    "removed_products": 36,
+    "removed_logical_bytes": 2309802,
+    "inventory_sha256": "7466ed5366b2e44758ce6fd39044e7364b535ee4ca966db5fbf19541592810d7",
+    "retained": [
+      "Active build and dependency cache",
+      "O0/O2 original compiler inputs",
+      "Minimal original/failed-signature pair",
+      "Source inputs, tool output and diagnostics"
+    ]
+  },
+  "remaining": [
+    "Automatic fork MC/native-object signing-recipe handoff is not connected; r6 lacks the fork API and remains pinned by user preference",
+    "Legacy threaded dyld installation and new provider load-command admission remain unsupported",
+    "Changed existing segmented target ordinals are rejected rather than remapped",
+    "Native Apple authenticated dyld loading, signed C++ exception unwinding and full fault-PC/ESR qualification remain unavailable",
+    "Previous prototype inference, vector variadic and other-language ABI qualification limits remain; see prior vector aggregate evidence"
+  ],
+  "previous_qualification": "arm64e-vector-aggregates-2026-11-08.json",
+  "focused_revision": "079d7e47be1ba88a16927372f9585e2d495e9dae"
+}

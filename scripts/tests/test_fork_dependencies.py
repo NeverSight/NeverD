@@ -22,7 +22,7 @@ SOURCE_ROOT = forks.ROOT
 
 
 @unittest.skipUnless(shutil.which("git"), "Git is required")
-class ForkDependenciesTests(unittest.TestCase):
+class ForkFixture(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="neverd-fork-")
         self.addCleanup(self.temp.cleanup)
@@ -87,6 +87,8 @@ class ForkDependenciesTests(unittest.TestCase):
         with forks.build_lock(self.build), contextlib.redirect_stdout(io.StringIO()):
             return forks.refresh(self.build)
 
+
+class ForkDependenciesTests(ForkFixture):
     def test_tracks_default_branch_instead_of_a_release(self):
         first = forks.resolve_head(str(self.repository))
         self.assertEqual(first["branch"], "main3")
@@ -99,6 +101,8 @@ class ForkDependenciesTests(unittest.TestCase):
         path = self.refresh()
         before = path.read_bytes()
         old = json.loads(before)
+        with forks.build_lock(self.build):
+            forks.Exports(self.build).retain("frozen-baseline", old)
         self.write_revision(2)
         with patch.object(forks, "create_archive", side_effect=OSError("unavailable")):
             with self.assertRaises(OSError):

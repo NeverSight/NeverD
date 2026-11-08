@@ -13,6 +13,7 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/lift/ARM/ARMLifter.h"
+#include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/support/Diagnostic.h"
 
 #include "llvm/Support/raw_ostream.h"
@@ -64,6 +65,8 @@ void Decoder::liftARMToLow(
 LowInstructionTargetMode
 Decoder::controlTargetMode(const DecodedInsn &Insn,
                            InstructionMode SourceMode) const {
+  if (Insn.Raw && MIPS)
+    return MIPS->controlTargetMode(*Insn.Raw);
   if (!Insn.Raw || !ARM)
     return LowInstructionTargetMode::Preserve;
   return ARMLifter::controlTargetMode(Insn.Raw, SourceMode);

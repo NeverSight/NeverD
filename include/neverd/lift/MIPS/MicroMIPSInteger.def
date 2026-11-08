@@ -1,0 +1,37 @@
+//===- MicroMIPSInteger.def - Pre-R6 scalar encoding maps ----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Micro major, classic major. Both carry rs, rt and a 16-bit immediate,
+// with the two register fields exchanged in the microMIPS encoding.
+#ifdef NEVERD_MICRO_IMMEDIATE
+NEVERD_MICRO_IMMEDIATE(0x05, 0x24) // LBU
+NEVERD_MICRO_IMMEDIATE(0x06, 0x28) // SB
+NEVERD_MICRO_IMMEDIATE(0x07, 0x20) // LB
+NEVERD_MICRO_IMMEDIATE(0x0c, 0x09) // ADDIU
+NEVERD_MICRO_IMMEDIATE(0x0d, 0x25) // LHU
+NEVERD_MICRO_IMMEDIATE(0x0e, 0x29) // SH
+NEVERD_MICRO_IMMEDIATE(0x0f, 0x21) // LH
+NEVERD_MICRO_IMMEDIATE(0x14, 0x0d) // ORI
+NEVERD_MICRO_IMMEDIATE(0x1c, 0x0e) // XORI
+NEVERD_MICRO_IMMEDIATE(0x24, 0x0a) // SLTI
+NEVERD_MICRO_IMMEDIATE(0x2c, 0x0b) // SLTIU
+NEVERD_MICRO_IMMEDIATE(0x34, 0x0c) // ANDI
+NEVERD_MICRO_IMMEDIATE(0x3e, 0x2b) // SW
+NEVERD_MICRO_IMMEDIATE(0x3f, 0x23) // LW
+#undef NEVERD_MICRO_IMMEDIATE
+#endif
+
+// POOL32A minor, classic SPECIAL function. Reserved bit 10 must be zero.
+#ifdef NEVERD_MICRO_REGISTER
+NEVERD_MICRO_REGISTER(0x05, 0x21) // ADDU
+NEVERD_MICRO_REGISTER(0x07, 0x23) // SUBU
+NEVERD_MICRO_REGISTER(0x09, 0x24) // AND
+NEVERD_MICRO_REGISTER(0x0a, 0x25) // OR
+NEVERD_MICRO_REGISTER(0x0b, 0x27) // NOR
+NEVERD_MICRO_REGISTER(0x0c, 0x26) // XOR
+NEVERD_MICRO_REGISTER(0x0d, 0x2a) // SLT
+NEVERD_MICRO_REGISTER(0x0e, 0x2b) // SLTU
+#undef NEVERD_MICRO_REGISTER
+#endif

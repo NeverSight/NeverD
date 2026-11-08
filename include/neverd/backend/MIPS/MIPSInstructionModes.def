@@ -1,0 +1,10 @@
+//===- MIPSInstructionModes.def - Source encoding attributes ------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Preserve callable pointer tags when original-target source is rebuilt.
+MIPS_SOURCE_MODE(MIPSClassic, "nomicromips", "__attribute__((nomicromips)) ")
+MIPS_SOURCE_MODE(MicroMIPS, "micromips", "__attribute__((micromips)) ")
+
+#undef MIPS_SOURCE_MODE

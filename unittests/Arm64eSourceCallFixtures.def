@@ -645,7 +645,10 @@
   "assembly_unwind_exit": "  ldr x30,[sp,#8]\n.cfi_restore w30\n  add sp,sp,#16\n.cfi_def_cfa_offset 0\n  ret\n.cfi_endproc\n.p2align 2\n",
   "cleanup": {
     "keep_option": "--keep-products",
-    "keep_help": "Retain generated binaries and objects after a successful run for further inspection.",
+    "keep_help": "Retain generated binaries and objects for inspection, including failed runs.",
+    "input_binary": "calls.dylib",
+    "input_source": "calls.S",
+    "fixture_receipt": "input.json",
     "manifest": "products.json"
   },
   "selection": {

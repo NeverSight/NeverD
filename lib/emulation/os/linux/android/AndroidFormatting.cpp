@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 #include "AndroidArguments.h"
+#include "AndroidLog.h"
 
 #include <algorithm>
 #include <limits>
@@ -13,7 +14,8 @@ namespace neverd::emulation::android_model {
 // va_list, long, wchar_t, printf and the Windows DbgPrint model are not used.
 class Bionic::StringFormatter {
 public:
-  StringFormatter(Bionic &Model, const NativeCallEvent &Call)
+  StringFormatter(Bionic &Model, const NativeCallEvent &Call,
+                  bool Logging = false)
       : Model(Model), Call(Call), Remaining(Model.Options.MemoryLimit),
         CheckedSnprintf(Call.Name == symbol::SnprintfChk ||
                         Call.Name == symbol::VsnprintfChk),
@@ -24,15 +26,19 @@ public:
         HasVAList(Call.Name == symbol::Vsnprintf ||
                   Call.Name == symbol::Vsprintf ||
                   Call.Name == symbol::VsnprintfChk ||
-                  Call.Name == symbol::VsprintfChk),
-        FormatArgument(CheckedSnprintf  ? 4
-                       : CheckedSprintf ? 3
-                       : Bounded        ? 2
-                                        : 1),
+                  Call.Name == symbol::VsprintfChk ||
+                  Call.Name == symbol::TextLogVPrint),
+        FormatArgument(Logging
+                           ? (Call.Name == symbol::TextLogBufferPrint ? 3 : 2)
+                       : CheckedSnprintf ? 4
+                       : CheckedSprintf  ? 3
+                       : Bounded         ? 2
+                                         : 1),
         Arguments(Model, Call, FormatArgument + 1, Remaining) {}
 
   llvm::Expected<uint64_t> run();
-  bool isUnsupported() const { return Unsupported; }
+  llvm::Expected<std::string> logMessage();
+  BionicResult resultError(llvm::Error Error);
 
 private:
   Bionic &Model;
@@ -61,6 +67,7 @@ private:
   llvm::Error number(llvm::StringRef &Format, uint64_t &Value);
   llvm::Error emit(uint64_t Size, llvm::StringRef Text, char Repeated = 0);
   llvm::Error render(llvm::StringRef Format);
+  llvm::Error renderArguments();
 };
 
 llvm::Expected<std::string> Bionic::StringFormatter::text(uint64_t Address,
@@ -296,13 +303,7 @@ llvm::Expected<uint64_t> Bionic::StringFormatter::run() {
   // mapping, or promise the overflow/fortify failure path.
   if ((Bounded || CheckedSprintf) && Capacity > MaxCount)
     return unsupported(diagnostic::FormatCapacity);
-  auto Format = text(A[FormatArgument], UINT64_MAX);
-  if (!Format)
-    return Format.takeError();
-  if (HasVAList)
-    if (auto E = Arguments.initializeVAList(A[FormatArgument + 1]))
-      return std::move(E);
-  if (auto E = render(*Format))
+  if (auto E = renderArguments())
     return std::move(E);
   // A checked sprintf must fit its final NUL. Stop before publishing the
   // retained prefix: Bionic's partial writes and abort are not modeled.
@@ -318,17 +319,59 @@ llvm::Expected<uint64_t> Bionic::StringFormatter::run() {
   return Count;
 }
 
+llvm::Error Bionic::StringFormatter::renderArguments() {
+  const auto &A = Call.Arguments;
+  auto Format = text(A[FormatArgument], UINT64_MAX);
+  if (!Format)
+    return Format.takeError();
+  if (HasVAList)
+    if (auto E = Arguments.initializeVAList(A[FormatArgument + 1]))
+      return std::move(E);
+  return render(*Format);
+}
+
+llvm::Expected<std::string> Bionic::StringFormatter::logMessage() {
+  Capacity = LogFormattedBufferBytes;
+  if (auto E = renderArguments())
+    return std::move(E);
+  // vsnprintf retains at most LOG_BUF_SIZE-1 bytes. The following liblog
+  // write observes the first NUL, but all formatting still occurs before it.
+  return llvm::StringRef(reinterpret_cast<const char *>(Output.data()),
+                         Output.size())
+      .split('\0')
+      .first.str();
+}
+
+BionicResult Bionic::StringFormatter::resultError(llvm::Error Error) {
+  if (!Unsupported)
+    return std::move(Error);
+  Model.Result.Stop = ProcessStopReason::UnsupportedService;
+  Model.Result.Diagnostic = llvm::toString(std::move(Error));
+  return std::optional<BionicValue>();
+}
+
 BionicResult Bionic::format(const NativeCallEvent &Call) {
   StringFormatter Formatter(*this, Call);
   auto Value = Formatter.run();
-  if (!Value) {
-    auto E = Value.takeError();
-    if (!Formatter.isUnsupported())
-      return std::move(E);
-    Result.Stop = ProcessStopReason::UnsupportedService;
-    Result.Diagnostic = llvm::toString(std::move(E));
-    return std::optional<BionicValue>();
-  }
+  if (!Value)
+    return Formatter.resultError(Value.takeError());
   return std::optional<BionicValue>(*Value);
+}
+
+BionicResult Bionic::formatLogCall(const NativeCallEvent &Call) {
+  StringFormatter Formatter(*this, Call, true);
+  auto Message = Formatter.logMessage();
+  if (!Message)
+    return Formatter.resultError(Message.takeError());
+  const auto &A = Call.Arguments;
+  const unsigned Offset = Call.Name == symbol::TextLogBufferPrint ? 1 : 0;
+  // The native entry formats before __android_log[_buf]_write reads its tag.
+  auto Tag =
+      A[Offset + 1] ? string(A[Offset + 1]) : llvm::Expected<std::string>("");
+  if (!Tag)
+    return Tag.takeError();
+  auto Written = textLogWrite(Offset ? uint32_t(A[0]) : 0, int32_t(A[Offset]),
+                              *Tag, *Message);
+  return Written ? value(*Written) : BionicResult(std::optional<BionicValue>());
 }
 } // namespace neverd::emulation::android_model
