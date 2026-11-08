@@ -16475,7 +16475,18 @@ transcripts check stacked scalar arguments, unchanged va_list bytes, 1022/1023/
 1024-byte and large-width clipping, embedded NUL, bounded precision at a page
 edge, signed results and errno. Unsupported conversions precede tag reads and
 log consumption; missing, exhausted and mismatching transcripts preserve the
-completed prefix. Fatal state remains explicit.
+completed prefix. Missing fatal state remains explicit.
+`AndroidLog.AbortMessage*` checks direct/dynamic setters, parent/child first
+publication, live slot replacement without old-record retirement, exact LP64
+records and zeroed page padding, unbound/occupied/malformed/read-only slots,
+and genuine shared mmap exhaustion followed by a successful retry. Complete
+guest snapshots check errno, bytes and guards. `AndroidLog.Fatal*` combines
+all raw/formatted routes with transport clipping, radio routing, integer versus
+wire priority, post-publication faults/refusals, and slot aliases in both wire
+strings. Failed-snapshot options explicitly retain copied records when slot
+publication fails. Strict JSON checks distinguish absent, zero and invalid
+bindings; `ProcessPublic.AndroidTextLogAbortMessageMatchesSDKAndCLI` compares
+complete SDK/CLI reports, including state refusals and runtime failures.
 `AndroidJNI.BinderTransportUsesGuestServiceAndRetainedReplyArenas`
 executes real guest services through all three JNI forms, including three-round
 buffer retention/reuse, a reply recycled and reused by another native thread,
