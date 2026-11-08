@@ -183,6 +183,17 @@ llvm::Error Bionic::initializeDex() {
                  : ExecutionResult{
                        ExecutionStop::Unsupported, 0, {}, Result.Diagnostic};
     };
+    Services.text_log_write = [this](uint32_t ID, int32_t Priority,
+                                     std::string_view Tag,
+                                     std::string_view Message) {
+      using mobile::dalvik::ExecutionResult;
+      using mobile::dalvik::ExecutionStop;
+      auto Written = textLogWrite(ID, Priority, Tag, Message);
+      return Written
+                 ? ExecutionResult{ExecutionStop::Returned, *Written}
+                 : ExecutionResult{
+                       ExecutionStop::Unsupported, 0, {}, Result.Diagnostic};
+    };
     Services.uptime_milliseconds = [ReadClock] {
       return ReadClock(linux_model::ClockMonotonic, 1000000,
                        "Android monotonic time exceeds its range");

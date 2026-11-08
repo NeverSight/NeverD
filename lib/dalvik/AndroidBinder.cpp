@@ -11,6 +11,7 @@
 
 #include "neverd/dalvik/Limits.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <span>
 
@@ -253,7 +254,7 @@ AndroidFramework::binderTransact(Heap &heap, const Program &program,
   if (!binding->second.alive)
     return {ExecutionStop::Thrown, 0, "android/os/DeadObjectException"};
   if (parcelState(arguments[1]).error)
-    return completeBinder(heap, call, {parcelState(arguments[1]).error});
+    return completeBinder(heap, call, {parcelState(arguments[1]).error}, admit);
   auto read = readParcelBuffer(heap, arguments[1]);
   if (read.stop != ExecutionStop::Returned)
     return read;
@@ -312,9 +313,10 @@ ExecutionResult AndroidFramework::replaceParcel(Heap &heap, ParcelState &state,
     state.error = reply.status;
   return {};
 }
-ExecutionResult AndroidFramework::completeBinder(Heap &heap,
-                                                 const ExternalCall &call,
-                                                 BinderReply reply) {
+ExecutionResult
+AndroidFramework::completeBinder(Heap &heap, const ExternalCall &call,
+                                 BinderReply reply,
+                                 const AdmitInstruction &admit) {
   const auto receiver = call.binder->receiver, destination = call.binder->reply;
   if (reply.status == -32)
     binder_bindings.at(receiver).alive = false;
@@ -346,6 +348,51 @@ ExecutionResult AndroidFramework::completeBinder(Heap &heap,
     return {ExecutionStop::Thrown, 0, "java/lang/IllegalArgumentException"};
   case -12:
     return {ExecutionStop::Thrown, 0, "java/lang/OutOfMemoryError"};
+  case INT32_MIN + 2: { // FAILED_TRANSACTION; unlike DEAD_OBJECT, stays alive.
+    if (!services.text_log_write)
+      return {ExecutionStop::Unsupported,
+              0,
+              {},
+              "Android text log write service is not supplied"};
+    // JNI reads dataSize after transact, including when data and reply alias.
+    const auto size =
+        std::max<size_t>(parcelStorage(heap, call.binder->data).Bytes.size(),
+                         parcelState(call.binder->data).position);
+    auto stop = admit();
+    if (stop != ExecutionStop::Returned)
+      return {stop, 0, {}, "Android Binder failure log work budget exhausted"};
+    auto logged = services.text_log_write(
+        0, 6, "JavaBinder",
+        "!!! FAILED BINDER TRANSACTION !!!  (parcel size = " +
+            std::to_string(size) + ")");
+    if (logged.stop != ExecutionStop::Returned)
+      return logged;
+    if (logged.value > UINT32_MAX)
+      return {ExecutionStop::Unsupported,
+              0,
+              {},
+              "Android text log result exceeds its Java int carrier"};
+    const bool large =
+        size > ::neverd::limits::dalvik::kAndroidBinderLargeTransactionBytes;
+    const auto type = large ? "android/os/TransactionTooLargeException"
+                            : "android/os/DeadObjectException";
+    auto message = stringValue(heap,
+                               large ? "data parcel size " +
+                                           std::to_string(size) + " bytes"
+                                     : "Transaction failed on small parcel; "
+                                       "remote process probably died",
+                               admit);
+    if (message.stop != ExecutionStop::Returned)
+      return message;
+    auto exception = heap.allocate(Object::Throwable, type, 0);
+    if (!exception)
+      return {ExecutionStop::HeapLimit,
+              0,
+              {},
+              "Android Binder throwable storage budget exhausted"};
+    exception->Message = message.value;
+    return {ExecutionStop::Thrown, 0, type, {}, exception->Identity};
+  }
   default:
     return {ExecutionStop::Unsupported,
             0,

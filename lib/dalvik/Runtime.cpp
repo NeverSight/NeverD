@@ -220,7 +220,7 @@ struct Runtime::State::Engine {
           engine.completion.stop == ExecutionStop::Returned)
         engine.completion = engine.state.framework.completeBinder(
             *engine.state.heap, *engine.external,
-            std::move(*engine.completion.binder_reply));
+            std::move(*engine.completion.binder_reply), engine.admit);
       if (engine.external->complete)
         engine.completion =
             engine.external->complete(std::move(engine.completion));

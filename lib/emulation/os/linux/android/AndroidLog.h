@@ -21,6 +21,8 @@ llvm::Error
 validateLogRecords(const std::optional<std::vector<NativeLogRecord>> &Records);
 llvm::Error validateEventLogWrites(
     const std::optional<std::vector<NativeEventLogWrite>> &Writes);
+llvm::Error validateTextLogWrites(
+    const std::optional<std::vector<NativeTextLogWrite>> &Writes);
 } // namespace neverd::emulation::android_model
 // Preserve interface spellings; resource values are defined by Limits.h.
 namespace neverd::emulation::android_model {

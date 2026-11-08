@@ -4447,6 +4447,7 @@ extern int open(const char *, int, ...);
 extern int close(int);
 extern int ioctl(int, unsigned long, void *);
 extern int *__errno(void);
+extern int __android_log_write(int, const char *, const char *);
 extern void *mmap(void *, U64, int, int, int, U64);
 extern int munmap(void *, U64);
 struct JBinderWR {
@@ -4612,9 +4613,9 @@ int jni_binder_transport(unsigned form, unsigned mode) {
     CHECK(!pthread_join(thread, &status) && !status);
     return C(vm, int, 5);
   }
-  for (unsigned turn = 0; turn != (mode <= 2 || mode == 11   ? 3
-                                   : mode == 3 || mode == 13 ? 2
-                                                             : 1);
+  for (unsigned turn = 0; turn != (mode <= 2 || mode == 11                ? 3
+                                   : mode == 3 || mode == 7 || mode == 13 ? 2
+                                                                          : 1);
        ++turn) {
     U8 result;
     if ((mode == 11 || mode == 13) && turn == 1) {
@@ -4646,7 +4647,7 @@ int jni_binder_transport(unsigned form, unsigned mode) {
       result = binder_transact(e, form, proxy, transact, data,
                                mode == 1 ? 0 : reply, mode == 6 ? 1 : 0);
     }
-    if (mode == 3 || mode == 4) {
+    if (mode == 3 || mode == 4 || mode == 7) {
       CHECK(!result && C(e, int, 228));
       Ref error = C(e, Ref, 15);
       C(e, void, 17);
@@ -4654,6 +4655,27 @@ int jni_binder_transport(unsigned form, unsigned mode) {
       Ref remote = C(e, Ref, 6, "android/os/RemoteException");
       CHECK(C(e, U8, 32, error, dead));
       CHECK(C(e, U8, 32, error, remote));
+      if (mode == 7) {
+        Ref get_message =
+            C(e, Ref, 33, dead, "getMessage", "()Ljava/lang/String;");
+        Ref message = parcel_result(e, 34, form, error, get_message);
+        const char *text = C(e, const char *, 169, message, (void *)0);
+        const char expected[] =
+            "Transaction failed on small parcel; remote process probably died";
+        CHECK(text);
+        for (unsigned i = 0; i != sizeof(expected); ++i)
+          CHECK(text[i] == expected[i]);
+        C(e, void, 170, message, text);
+        CHECK(parcel_result(e, 49, form, reply, position) == 4);
+        parcel_write(e, form, reply, seek, 1, 0);
+        CHECK(parcel_result(e, 49, form, reply, read) == 0x11223344);
+        if (!turn) {
+          *__errno() = 73;
+          CHECK(__android_log_write(6, "client", "caught Binder failure") ==
+                -11);
+          CHECK(*__errno() == 73);
+        }
+      }
       if (!turn && mode == 3)
         CHECK(!ioctl(server, 0x40046207UL, 0));
     } else {

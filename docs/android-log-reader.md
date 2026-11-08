@@ -1,4 +1,4 @@
-# Android log readers and explicit event writes
+# Android log readers and explicit writes
 
 The Android native API-28 profile models these liblog functions over an explicit
 visible snapshot: `android_logger_list_alloc`, `android_logger_list_alloc_time`,
@@ -143,8 +143,43 @@ unmodeled.
 
 This finite contract supplies neither logd sockets, credentials, filtering,
 timestamps, daemon persistence nor a live reader stream. Writes do not append
-to `log_records`. Java event readers, text logging and security/stats-buffer
+to `log_records`. Java event readers and security/stats-buffer
 writes remain outside this subset.
+
+## Text write contract
+
+`__android_log_write`, `__android_log_buf_write` and BinderProxy's API 28
+FAILED_TRANSACTION diagnostic share `android.text_log_writes`. Each entry has
+exactly `log_id`, `payload` and `result`. IDs 0, 1, 3 and 4 select main, radio,
+system and crash. Payload bytes contain one priority byte, a NUL-terminated
+tag and a NUL-terminated message. Results are signed int32 liblog outcomes,
+including filtering or transport errors; a matched negative result is a
+completed attempt and preserves errno. Writes do not change `log_records`.
+
+The owner applies API 28's radio-tag routing and 31-byte rewritten tag, treats
+a null tag as empty, and narrows the priority to one byte. The transcript
+matches the resulting buffer and all payload bytes. Missing, exhausted or
+mismatching entries stop without consuming them. The report includes
+`android.text_log_writes_consumed` only when this input is supplied. C++ uses
+`AndroidNativeOptions::TextLogWrites`; both entry paths share validation and
+the existing ordered-write matcher. Complete payloads are 3..4068 bytes,
+with at most 4096 entries / 1 MiB including each buffer id and result.
+Validated hex payloads share the JSON payload accounting; metadata limits
+still apply.
+
+This bounded subset requires explicit results and supplies no logd clock,
+property filter or host transport. Oversized payload truncation, fatal
+abort-message state, formatted native log exports and Java Log wrappers
+remain explicit boundaries.
+
+Binder logs priority ERROR (6), tag `JavaBinder`, and the data Parcel size
+after native completion. The write precedes exception creation, even when its
+matched result is negative. A size strictly greater than 200 KiB produces
+`TransactionTooLargeException` with `data parcel size N bytes`; smaller sizes
+produce `DeadObjectException` with the API 28 small-parcel heuristic message.
+Both remain checked RemoteException descendants. FAILED_TRANSACTION preserves
+proxy liveness; only the separate DEAD_OBJECT status marks it dead. Reply
+bytes/cursor and status-only error handling retain their existing ownership.
 
 ## ABI evidence and verification
 
@@ -169,6 +204,8 @@ References are pinned to AOSP `android-9.0.0_r1`:
   establish binary encoding, null strings and the liblog result/errno boundary.
 - [logd_writer.c](https://android.googlesource.com/platform/system/core/+/android-9.0.0_r1/liblog/logd_writer.c)
   clips the tag and payload iovecs to the maximum delivered payload.
+- [android_util_Binder.cpp](https://android.googlesource.com/platform/frameworks/base/+/android-9.0.0_r1/core/jni/android_util_Binder.cpp)
+  fixes the FAILED_TRANSACTION text, log-before-exception order and size heuristic.
 - [reflection.cc](https://android.googlesource.com/platform/art/+/android-9.0.0_r1/runtime/reflection.cc)
   defines promoted variadic float conversion and raw jvalue float carriers.
 - API 28 [Integer](https://android.googlesource.com/platform/libcore/+/android-9.0.0_r1/ojluni/src/main/java/java/lang/Integer.java),

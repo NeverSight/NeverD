@@ -114,6 +114,14 @@ struct NativeEventLogWrite {
   int32_t Result = 0;
 };
 
+/// One bounded text write after API 28 radio-tag routing. Payload is priority,
+/// NUL-terminated tag, then NUL-terminated message; it is not a read snapshot.
+struct NativeTextLogWrite {
+  uint32_t ID = 0;
+  std::vector<uint8_t> Payload;
+  int32_t Result = 0;
+};
+
 /// One explicit successful LP64 dladdr observation. Address matches exactly;
 /// image membership and symbol selection are supplied, never inferred.
 struct NativeDladdrObservation {
@@ -157,6 +165,10 @@ struct AndroidNativeOptions {
   /// Missing, exhausted or mismatching writes stop before consuming an entry.
   /// At most 4096 entries / 1 MiB, each with 4..4068 exact payload bytes.
   std::optional<std::vector<NativeEventLogWrite>> EventLogWrites;
+  /// Exact main/radio/system/crash text writes and explicit liblog results.
+  /// Same count/total budget as EventLogWrites; complete 3..4068-byte payloads.
+  /// No host log, property filter, clock or successful transport is inferred.
+  std::optional<std::vector<NativeTextLogWrite>> TextLogWrites;
   std::vector<NativeMemoryRegion> Memory;
   std::vector<NativeMemoryRead> ReadMemory;
   /// Constructors normally execute before the call, sharing its budget.
