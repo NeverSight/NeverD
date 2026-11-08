@@ -355,7 +355,9 @@ std::optional<uint64_t> execute(const HighFunc &F, uint64_t Condition,
         Memory[Value(S.StoreAddr)] = Value(S.StoreVal);
       if (S.Kind == StmtKind::Call)
         (void)Value(S.CallExpr);
-      if (S.Kind == StmtKind::Assign)
+      if (S.Kind == StmtKind::Assign && S.Dst->Kind == ExprKind::Load)
+        Memory[Value(S.Dst->Operands.at(0))] = Value(S.Val);
+      else if (S.Kind == StmtKind::Assign)
         Values[varKey(S.Dst->Var)] = Value(S.Val);
       // No test statement raises an exception: a __try runs its body.
       if (S.Kind == StmtKind::Block || S.Kind == StmtKind::SEHTry) {
@@ -4231,6 +4233,85 @@ TEST(HighControlFlowSemantics,
   invertSkipGotos(F);
   EXPECT_EQ(execute(F, 0, true), 7U);
   EXPECT_EQ(execute(F, 1, true), 1U);
+}
+
+TEST(HighControlFlowSemantics, StoreBetweenNestedTestsKeepsTheInnerTest) {
+  // Each block of a bounded loop tests a budget slot, decrements it and the
+  // next block tests it again. Both tests load one slot, but the write between
+  // them changes it, so the outer test proves nothing about the inner one. A
+  // body that ends at the inner test and one with later work take different
+  // nested-test folds. MedIR reuses a temporary for each reload, and a write
+  // can be an assignment through its destination.
+  for (bool LaterWork : {false, true})
+    for (bool SameTemp : {false, true})
+      for (bool AssignThrough : {false, true}) {
+        SCOPED_TRACE(LaterWork);
+        SCOPED_TRACE(SameTemp);
+        SCOPED_TRACE(AssignThrough);
+        HighFunc F;
+        F.Entry = 0x1000;
+        F.ReturnType = NdType::makeInt(8);
+        auto Slot = [] { return HighExpr::makeConst(0x2000, 8); };
+        auto Budget = [&] {
+          return HighExpr::makeLoad(Slot(), NdType::makeInt(8));
+        };
+        auto Write = [&](va_t Address, ExprPtr Value) {
+          HighStmt S;
+          S.Addr = Address;
+          if (AssignThrough) {
+            S.Kind = StmtKind::Assign;
+            S.Dst = Budget();
+            S.Val = std::move(Value);
+          } else {
+            S.Kind = StmtKind::Store;
+            S.StoreAddr = Slot();
+            S.StoreVal = std::move(Value);
+          }
+          return S;
+        };
+        auto Temp = [&](bool Second) {
+          MedVar V;
+          V.Kind = MedVar::Temp;
+          V.Id = Second && !SameTemp ? 2 : 1;
+          V.SSAVer = Second ? 2 : 1;
+          V.Size = 8;
+          return HighExpr::makeVar(V);
+        };
+        auto Read = [&](va_t Address, bool Second) {
+          auto S = assign(Address, 0, 0);
+          S.Dst = Temp(Second);
+          S.Val = Budget();
+          return S;
+        };
+        auto NonZero = [&](bool Second) {
+          return HighExpr::makeBinop(NdOp::INT_NOTEQUAL, Temp(Second),
+                                     HighExpr::makeConst(0, 8));
+        };
+        HighStmt Inner;
+        Inner.Kind = StmtKind::If;
+        Inner.Addr = 0x1014;
+        Inner.Cond = NonZero(true);
+        Inner.Body = {result(0x1018, HighExpr::makeConst(1, 8))};
+        HighStmt Outer;
+        Outer.Kind = StmtKind::If;
+        Outer.Addr = 0x1008;
+        Outer.Cond = NonZero(false);
+        Outer.Body = {
+            Write(0x100c, HighExpr::makeBinop(NdOp::INT_SUB, Temp(false),
+                                              HighExpr::makeConst(1, 8))),
+            Read(0x1010, true), Inner};
+        if (LaterWork)
+          Outer.Body.push_back(result(0x101c, HighExpr::makeConst(2, 8)));
+        F.Body = {Write(0x1000, local(0)), Read(0x1004, false), Outer,
+                  result(0x1040, HighExpr::makeConst(0, 8))};
+
+        const uint64_t Expected[] = {0, LaterWork ? 2U : 0U, 1, 1};
+        for (uint64_t Input = 0; Input != 4; ++Input)
+          ASSERT_EQ(execute(F, Input), Expected[Input]);
+        structureIfElse(F, 10);
+        for (uint64_t Input = 0; Input != 4; ++Input)
+          EXPECT_EQ(execute(F, Input), Expected[Input]) << Input;
+      }
 }
 
 TEST(HighControlFlowSemantics, InlinedElseJoinPreservesPhiCopyBeforeWork) {

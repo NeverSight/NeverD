@@ -95,6 +95,7 @@ add_neverd_component_library(NeverDIRMed
   pass/MedConstantPropagation.cpp
   pass/MedImmutableTableScans.cpp
   pass/MedDCE.cpp
+  pass/MIPS/MedMIPSMergeValues.cpp
   pass/MedDisplay.cpp
   pass/MedMutableSource.cpp
   pass/MedNoReturn.cpp

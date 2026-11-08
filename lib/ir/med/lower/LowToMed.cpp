@@ -45,6 +45,7 @@
 #include "neverd/ir/low/X86/X86FourSourceShape.h"
 #include "neverd/ir/low/X86ArithmeticFlags.h"
 #include "neverd/ir/med/LowToMedError.h"
+#include "neverd/ir/med/MIPS/MIPSMergeValues.h"
 #include "neverd/ir/med/MedBoundCallStackArguments.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedCallTarget.h"
@@ -1876,6 +1877,8 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       // dead merge values before ABI recovery invents input parameters.
       propagate(Func);
       runDce(Func);
+      if (discardUnobservedMIPSMergeInputs(Func, Low, TheArch))
+        runDce(Func);
       debugVerifyMedFunc(Func, "MIPS scalar value projection");
     }
     detectCc(Func, TheArch, Fmt);
