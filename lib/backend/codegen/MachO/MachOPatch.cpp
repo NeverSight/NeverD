@@ -1241,8 +1241,9 @@ bool MachOPatcher::validateExecSegmentInstall(
          LinkeditFileEnd == Binary.size();
 }
 
-llvm::Error MachOPatcher::appendReplacementImage(std::vector<uint8_t> &Binary,
-                                                 const CompiledImage &Image) {
+llvm::Error MachOPatcher::appendReplacementImage(
+    std::vector<uint8_t> &Binary, const CompiledImage &Image,
+    llvm::ArrayRef<MachOAuthenticatedFixup> AuthenticatedFixups) {
   if (Image.InputKind != RewriteInputKind::ReplacementObject ||
       !Image.Success || Image.Format != BinaryFormat::MachO ||
       Image.BaseVA != plannedExecSegmentVA(Binary, Image.TargetArch))
@@ -1252,12 +1253,22 @@ llvm::Error MachOPatcher::appendReplacementImage(std::vector<uint8_t> &Binary,
       validatePatchStorageLayout(Image, machoPageSize(Image.TargetArch));
   if (!Storage)
     return Storage.takeError();
-  ExecSegmentInstallReceipt Receipt;
-  if (appendExecSegmentImpl(Binary, Image.Bytes, kDefaultNdTextSegment,
-                            Image.TargetArch, &Receipt,
-                            Storage->WritableOffset) != Image.BaseVA)
-    return llvm::createStringError(llvm::errc::not_supported,
-                                   "native Mach-O segment installation failed");
+  const auto Install = [&](std::vector<uint8_t> &Candidate) -> llvm::Error {
+    ExecSegmentInstallReceipt Receipt;
+    if (appendExecSegmentImpl(Candidate, Image.Bytes, kDefaultNdTextSegment,
+                              Image.TargetArch, &Receipt,
+                              Storage->WritableOffset) != Image.BaseVA)
+      return llvm::createStringError(
+          llvm::errc::not_supported,
+          "native Mach-O segment installation failed");
+    return installMachOAuthenticatedFixups(Candidate, AuthenticatedFixups);
+  };
+  if (AuthenticatedFixups.empty())
+    return Install(Binary);
+  auto Candidate = Binary;
+  if (auto Error = Install(Candidate))
+    return Error;
+  Binary.swap(Candidate);
   return llvm::Error::success();
 }
 

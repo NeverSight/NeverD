@@ -1379,9 +1379,30 @@ diversity accompany the final storage address and resolved unsigned target.
 Authenticated storage requires a consuming installer. Its result is not
 overwritten by the object writer's authentication metadata encoding. This MC
 contract is the handoff for a dyld fixup installer, not an offline PAC signing
-operation. NeverD's arm64e whole-image publication guard remains until storage
-installation and signed-unwind validation are complete; the r6 prebuilt does
-not yet expose the new fork interface.
+operation. The r6 prebuilt does not yet expose this fork interface.
+
+`MachOAuthenticatedFixups` installs explicit final-address signing recipes in
+linked arm64e chained images. It reuses the strict dependency reader's owned
+segments, imports and raw slots, preserves existing binding identities, and
+rebuilds single/multiple-start pages with each format's native stride and index
+width. Local targets retain their mapped image owner; imported targets retain
+the exact existing library ordinal, symbol, addend and weak flag. The six
+arm64e chain formats share the same pointer-field authority. Segmented chains
+cannot express binds and reject them. Imports may extend the table but do not
+create dependency load commands or infer a provider.
+
+Installation is transactional, including the optional recipe handoff in
+`MachOPatcher::appendReplacementImage`. New RX/RW placement precedes dyld
+encoding so address diversity uses the final storage VA. Re-decoding compares
+every requested recipe and preserves every original fixup. A staged signature
+remains opaque and terminal in LINKEDIT so the existing publication signer can
+replace it; retaining those bytes does not validate its old hashes. An
+independent replay also checks recipes after final code signing.
+
+This installation phase does not enable whole-image arm64e publication. The
+compiler/native-object producer handoff, legacy threaded-stream installation,
+new provider admission and native signed call/unwind execution remain separate
+contracts. The publication guard remains until those contracts are qualified.
 
 The shared AAPCS64 parameter placement owner describes Darwin fixed value
 spills with their natural size and alignment after either register bank is

@@ -1,0 +1,123 @@
+//===- MachOAuthenticatedNativeFixtures.def - Apple producer checks --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Compiler input and tool contracts for independent dyld installation checks.
+//===----------------------------------------------------------------------===//
+
+#ifndef MACHO_AUTH_NATIVE_TEXT
+#define MACHO_AUTH_NATIVE_TEXT(Name, Value)
+#endif
+#ifndef MACHO_AUTH_NATIVE_VALUE
+#define MACHO_AUTH_NATIVE_VALUE(Type, Name, Value)
+#endif
+#ifndef MACHO_AUTH_NATIVE_ARGS
+#define MACHO_AUTH_NATIVE_ARGS(Name, ...)
+#endif
+
+MACHO_AUTH_NATIVE_VALUE(unsigned, kToolTimeout, 30)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kInstructionBytes, 4)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kPointerBytes, 8)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kKeyCount, 4)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kPathCapacity, 128)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoFieldCount, 8)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoSegment, 0)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoSection, 1)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoAddress, 2)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoKind, 3)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoTarget, 4)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoDiversity, 5)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoAddressDiversity, 6)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoKey, 7)
+MACHO_AUTH_NATIVE_TEXT(kCompiler, "/usr/bin/clang++")
+MACHO_AUTH_NATIVE_TEXT(kXcrun, "/usr/bin/xcrun")
+MACHO_AUTH_NATIVE_TEXT(kTemporaryPrefix, "neverd-dyld-install")
+MACHO_AUTH_NATIVE_TEXT(kArtifactEnvironment, "NEVERD_ARM64E_DYLD_ARTIFACT_DIR")
+MACHO_AUTH_NATIVE_TEXT(kArtifactProperty, "arm64e_dyld_artifact_dir")
+MACHO_AUTH_NATIVE_TEXT(kSignedRowsProperty, "preserved_signed_cfi_rows")
+MACHO_AUTH_NATIVE_TEXT(kOptimizationProperty, "apple_clang_optimization")
+MACHO_AUTH_NATIVE_TEXT(kO0, "-O0")
+MACHO_AUTH_NATIVE_TEXT(kO2, "-O2")
+MACHO_AUTH_NATIVE_TEXT(kSourceFile, "fixture.cpp")
+MACHO_AUTH_NATIVE_TEXT(kDwarfSourceFile, "signed-frame.S")
+MACHO_AUTH_NATIVE_TEXT(kCompactFramesProperty, "preserved_compact_frames")
+MACHO_AUTH_NATIVE_TEXT(kOriginalFile, "original.dylib")
+MACHO_AUTH_NATIVE_TEXT(kInstalledFile, "installed.dylib")
+MACHO_AUTH_NATIVE_TEXT(kToolLog, "tools.log")
+MACHO_AUTH_NATIVE_TEXT(kDyldInfoFile, "dyld-info.txt")
+MACHO_AUTH_NATIVE_TEXT(kSlotSymbol, "_new_slots")
+MACHO_AUTH_NATIVE_TEXT(kRebaseSymbol, "_rebased")
+MACHO_AUTH_NATIVE_TEXT(kBindSymbol, "_bound")
+MACHO_AUTH_NATIVE_TEXT(kInstalledImportSymbol, "_getpid")
+MACHO_AUTH_NATIVE_TEXT(kMissingHost, "requires Apple Clang, ld, codesign and dyld_info")
+MACHO_AUTH_NATIVE_TEXT(kFixupsHeading, "fixups:")
+MACHO_AUTH_NATIVE_TEXT(kDataSegment, "__DATA")
+MACHO_AUTH_NATIVE_TEXT(kDataSection, "__data")
+MACHO_AUTH_NATIVE_TEXT(kAuthBind, "auth-bind")
+MACHO_AUTH_NATIVE_TEXT(kAuthRebase, "auth-rebase")
+MACHO_AUTH_NATIVE_TEXT(kDiversityPrefix, "(div=")
+MACHO_AUTH_NATIVE_TEXT(kAddressPrefix, "ad=")
+MACHO_AUTH_NATIVE_TEXT(kKeyPrefix, "key=")
+MACHO_AUTH_NATIVE_TEXT(kClosingParenthesis, ")")
+MACHO_AUTH_NATIVE_TEXT(kLibrarySeparator, "/")
+MACHO_AUTH_NATIVE_ARGS(kKeyNames, "IA", "IB", "DA", "DB")
+MACHO_AUTH_NATIVE_TEXT(kSource, R"cpp(
+#include <ptrauth.h>
+extern "C" int puts(const char *);
+using Function = int (*)(const char *);
+extern "C" {
+int datum = 42;
+int * __ptrauth(2, 1, 4660) rebased = &datum;
+Function __ptrauth(0, 1, 4660) bound = &puts;
+unsigned long long new_slots[16] = {
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+};
+int cleanups = 0;
+__attribute__((noinline)) int cleanup_frame(int value) {
+  struct Guard { ~Guard() { ++cleanups; } } guard;
+  if (value) throw value;
+  return puts("signed frame");
+}
+}
+)cpp")
+// Keep this explicit DWARF input separate from compiler-generated C++ frames.
+// GNU_args_size(0) forces a DWARF record without changing any register rule.
+MACHO_AUTH_NATIVE_TEXT(kDwarfSource, R"asm(
+.text
+.p2align 2
+.globl _dwarf_frame
+_dwarf_frame:
+.cfi_startproc
+.cfi_b_key_frame
+pacibsp
+.cfi_negate_ra_state
+stp x29, x30, [sp, #-16]!
+.cfi_def_cfa_offset 16
+.cfi_offset x29, -16
+.cfi_offset x30, -8
+mov x29, sp
+.cfi_def_cfa_register x29
+.cfi_escape 0x2e, 0
+mov w0, #7
+ldp x29, x30, [sp], #16
+.cfi_def_cfa sp, 0
+.cfi_restore x29
+.cfi_restore x30
+autibsp
+.cfi_negate_ra_state
+ret
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+MACHO_AUTH_NATIVE_ARGS(kCompileArgs, "-arch", "arm64e", "-dynamiclib",
+                      "-std=c++20", "-fno-omit-frame-pointer",
+                      "-fno-optimize-sibling-calls", "-Wl,-fixup_chains",
+                      "-Wl,-headerpad,0x1000")
+MACHO_AUTH_NATIVE_ARGS(kOutputArgs, "-o")
+MACHO_AUTH_NATIVE_ARGS(kInfoArgs, "dyld_info", "-fixups", "-fixup_chain_details")
+
+#undef MACHO_AUTH_NATIVE_TEXT
+#undef MACHO_AUTH_NATIVE_VALUE
+#undef MACHO_AUTH_NATIVE_ARGS
