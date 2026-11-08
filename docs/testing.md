@@ -3856,6 +3856,10 @@ The `masked-product-window` benchmark family (`--count 36`) retains degree-16–
 products, complemented inputs, one-factor parity changes and a third observed
 bit from the inner nonlinear product. Its eight-bit words also keep the high
 mask bit when the outer coefficient no longer discards it.
+`OddCoefficientRecoveryPreservesEveryWord` restores hidden affine inputs with
+odd coefficients, including one, minus one and high limbs, against independent
+full-width arithmetic at 1–257 bits. Native associative evaluation also covers
+long products and multiplication-chain boundaries against the APInt oracle.
 `PreparedParityPrefixesKeepTheirProductAndContext` checks that a completed
 prefix reduces the next reader's work at 8/64/257 bits, without changing its
 values. A different product, the same handle in another context, zero scratch

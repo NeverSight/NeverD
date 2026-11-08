@@ -488,12 +488,15 @@ bool cacheSharedAffineInputs(const SymContext &Ctx,
 
 std::optional<llvm::APInt> inverseOdd(const llvm::APInt &Coefficient,
                                       AffineResources &Resources) {
-  // Newton iteration doubles the correct low bits each time.  All arithmetic
-  // remains modulo the original word width, including widths above 64 bits.
+  // Every odd coefficient is its own inverse modulo eight: its square is
+  // 1 + 4*k*(k+1). Newton iteration doubles those three correct low bits.
+  // All arithmetic retains the original width, including widths above 64.
   if (!Resources.array(Coefficient.getNumWords(), sizeof(uint64_t)))
     return std::nullopt;
-  llvm::APInt Inverse(Coefficient.getBitWidth(), 1);
-  for (uint64_t Bits = 1; Bits < Coefficient.getBitWidth(); Bits *= 2) {
+  llvm::APInt Inverse = Coefficient;
+  if (Coefficient.isOne() || Coefficient.isAllOnes())
+    return Inverse;
+  for (uint64_t Bits = 3; Bits < Coefficient.getBitWidth(); Bits *= 2) {
     if (!Resources.product(Coefficient) || !Resources.product(Coefficient))
       return std::nullopt;
     Inverse *= 2 - Coefficient * Inverse;

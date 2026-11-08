@@ -1370,7 +1370,7 @@ TEST(SymExpr, EvaluationPlanReportsTheVariablesItReads) {
 TEST(SymExpr, NativeAssociativeEvaluationMatchesFullWidthArithmetic) {
   std::mt19937_64 Random(0x6e617279);
   for (unsigned Width = 1; Width <= 64; ++Width) {
-    for (unsigned Count : {2u, 3u, 8u, 33u}) {
+    for (unsigned Count : {2u, 3u, 5u, 6u, 7u, 8u, 33u, 257u}) {
       SCOPED_TRACE(::testing::Message()
                    << "width=" << Width << " operands=" << Count);
       SymContext Ctx;

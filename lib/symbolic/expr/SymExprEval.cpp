@@ -254,7 +254,21 @@ SymEvalPlan::evalU64With(llvm::function_ref<uint64_t(uint32_t)> Lookup) {
         // All operand steps, including input lookups, have already run.
         if (!(Res & St.Aux))
           break;
-        for (uint32_t K = 2; K < St.NumArgs; ++K)
+        uint32_t K = 2;
+        if (St.NumArgs - K >= 4) {
+          // Independent chains avoid serial multiplication latency on long
+          // products. Unsigned wraparound preserves every low result bit.
+          uint64_t B = 1, C = 1, D = 1;
+          do {
+            Res *= S[A[K]];
+            B *= S[A[K + 1]];
+            C *= S[A[K + 2]];
+            D *= S[A[K + 3]];
+            K += 4;
+          } while (St.NumArgs - K >= 4);
+          Res *= (B * C) * D;
+        }
+        for (; K < St.NumArgs; ++K)
           Res *= S[A[K]];
       }
       break;

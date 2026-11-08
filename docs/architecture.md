@@ -5057,7 +5057,8 @@ constructor's stack footprint. This analysis changes only evaluation and keeps
 all input lookups. Validation keeps its original full-width input assignments,
 sample count and work charges.
 Native long products stop when the initial operand pair is zero modulo the
-declared width, retaining the tight fold for other inputs. Their prepared steps
+declared width. Other long folds use four independent multiplication chains,
+then combine them in the same unsigned modular ring. Their prepared steps
 keep the width mask in the unused product payload, without enlarging a step
 or skipping input evaluation.
 Batch substitution uses one table for scheduled nodes and completed results.
@@ -14649,7 +14650,10 @@ strict cost decrease, and remaining work and storage allowances still apply;
 an incomplete optional attempt retains the previously established expression.
 
 Hidden affine inputs may supply exact inverse relations when a coefficient
-is odd. An even-scaled hidden input `P = k*T` can replace an arithmetic
+is odd. The coefficient itself supplies the first three inverse bits, since
+every odd square is one modulo eight; Newton refinement doubles that precision
+at the original width. One and minus one already have their complete inverse.
+An even-scaled hidden input `P = k*T` can replace an arithmetic
 multiple `d*T` with `q*P` only after checking `k*q = d` modulo the original
 word width; it never recovers `T` by dividing an even coefficient. Those
 substitutions apply only in arithmetic positions, preserving the independent

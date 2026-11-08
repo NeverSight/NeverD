@@ -9,6 +9,7 @@
 
 #include "neverd/symbolic/SymMBA.h"
 
+#include <random>
 #include <string>
 #include <vector>
 
@@ -93,6 +94,44 @@ TEST(SymMBAAffineFastPath, SameParityNeighboursPreserveActualRestoration) {
           Values[Ctx.varId(Y)] = YV;
           EXPECT_EQ(Ctx.evalU64(Restored, Values), Ctx.evalU64(E, Values));
         }
+    }
+  }
+}
+
+TEST(SymMBAAffineFastPath, OddCoefficientRecoveryPreservesEveryWord) {
+  std::mt19937_64 Random(0x4f4444494e564552);
+  for (unsigned Width : {1u, 2u, 3u, 8u, 16u, 32u, 64u, 65u, 128u, 257u}) {
+    auto Word = [&] {
+      llvm::APInt Value(Width, Random(), false, true);
+      for (unsigned Bit = 64; Bit < Width; Bit += 64)
+        Value |= llvm::APInt(Width, Random()).shl(Bit);
+      return Value;
+    };
+    for (unsigned Trial = 0; Trial < 16; ++Trial) {
+      SCOPED_TRACE(::testing::Message() << Width << " / " << Trial);
+      auto Coefficient = Word() | 1;
+      if (Trial < 2)
+        Coefficient =
+            Trial ? llvm::APInt::getAllOnes(Width) : llvm::APInt(Width, 1);
+      const auto Offset = Word();
+      SymContext Ctx;
+      const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+      const auto F = Ctx.mkAdd(Ctx.mkMul(Ctx.mkConst(Coefficient), X),
+                               Ctx.mkConst(Offset));
+      const auto Root = Ctx.mkAdd(Ctx.mkXor(F, Y), X);
+      detail::WorkBudget Budget(MBAOptions::UnlimitedWork);
+      const auto Abstract = detail::abstractToMBA(Ctx, Root, false, &Budget);
+      ASSERT_TRUE(Abstract);
+      SymEvalPlan Restored(Ctx,
+                           Ctx.substitute(Abstract->Body, Abstract->Hidden));
+      for (unsigned Sample = 0; Sample < 64; ++Sample) {
+        const auto XV = Word(), YV = Word();
+        const auto Expected = ((Coefficient * XV + Offset) ^ YV) + XV;
+        EXPECT_EQ(Restored.evalWith([&](uint32_t Id) -> const llvm::APInt * {
+          return Id == Ctx.varId(X) ? &XV : Id == Ctx.varId(Y) ? &YV : nullptr;
+        }),
+                  Expected);
+      }
     }
   }
 }
