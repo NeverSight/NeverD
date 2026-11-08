@@ -3215,6 +3215,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
         self.assertEqual(
             {row["id"]: row["status"] for row in document["capabilities"]},
             {
+                "analysis.mips.classic-r2": "experimental",
                 "analysis.ir-view.instruction-anchors": "experimental",
                 "analysis.materialized-image-sections": "experimental",
                 "analysis.external-bytecode-recovery": "experimental",
@@ -3246,6 +3247,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
         )
         no_surfaces = {"c": [], "python": [], "cli": [], "json": []}
         expected_surfaces = {
+            "analysis.mips.classic-r2": no_surfaces,
             "rewrite.interactive-byte-overlay": {
                 "c": [
                     "neverd_assemble_json",
