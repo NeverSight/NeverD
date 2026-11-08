@@ -2218,8 +2218,12 @@ Lost or incomplete proofs retain the original indirect transfer. The native func
 disassembly API publishes these same instruction boundaries and targets; raw
 disassembly remains linear. The worker uses recovered bodies for function
 listings and replaces their linear reference-scan results, so skipped bytes do
-not swallow real code targets. Analyst Undefine overrides presentation inside
-a function without deleting the function or changing the original bytes.
+not swallow real code targets. Bytes no recovered path reaches stay bytes; the
+listing never decodes past an unresolved indirect jump. A recovered switch's
+table inside its function's range, as an MSVC unwind record covers it, lists
+as that table from the engine's proven slots. Analyst Undefine overrides
+presentation inside a function without deleting the function or changing the
+original bytes.
 
 When a scalar target is not constant, the same expression builder can prove a
 bounded finite cover using shared operator evaluation and known bits. Every
@@ -8370,6 +8374,13 @@ definition and retains the lane's offset and width, so a comparison of AL or
 W0 need not expand the earlier EAX or X0 calculation. Both the comparison and
 the table index must reach that same lane through every incoming path. Partial
 writes, call clobbers, implicit extension rules and proof budgets still apply.
+A writer that copies an extended narrower value hides the extension: MSVC's
+`movsxd rcx, dword ptr [rax]` lifts as LOAD, INT_SEXT and a COPY into RCX, so an
+ECX guard's lane names an opaque RCX occurrence. When neither identity binds
+such a lane, both queries retry rooted at the narrower value the lane carries
+unchanged, found through whole-width copies and extensions in the guard's
+block. The resolver still proves both, the narrow-lane bound check keeps the
+domain below that value's sign bit, and a failed retry changes nothing.
 Exact guard-occurrence queries use the expanded CFG value-reconstruction depth
 limit. Guard syntax collection and materialization keep their separate, smaller
 expression limit. This lets a shallow guard cross a longer predecessor graph

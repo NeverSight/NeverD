@@ -487,6 +487,8 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     size_t IndexQuery = std::numeric_limits<size_t>::max();
     size_t DefQuery = std::numeric_limits<size_t>::max();
     size_t ExtendedLaneQuery = std::numeric_limits<size_t>::max();
+    size_t LaneSourceIndexQuery = std::numeric_limits<size_t>::max();
+    size_t LaneSourceDefQuery = std::numeric_limits<size_t>::max();
     bool IndexQueryUsesDefinition = false;
     size_t LiteralQuery = std::numeric_limits<size_t>::max();
     NdVar Literal;
@@ -507,6 +509,14 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
   std::vector<JumpTableValueQuery> ProofQueries;
   std::vector<std::pair<GuardSyntaxPtr, JumpTableValueQuery>>
       ExtendedLaneQueries;
+  // A lane leaf's index and definition identities rooted at the narrower value
+  // its complete writer extends; see extendedLaneSource below.
+  struct LaneSourceFallback {
+    GuardSyntaxPtr Node;
+    JumpTableValueQuery Index;
+    JumpTableValueQuery Def;
+  };
+  std::vector<LaneSourceFallback> LaneSourceQueries;
   std::vector<std::pair<GuardSyntaxPtr, bool>> GuardRoots;
 
   // GuardExpr constants are numeric values after relinking. An address with
@@ -1047,6 +1057,79 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     if (CondIndex < 0)
       continue;
 
+    // The narrower value whose bytes the low lane \p Lane of the register
+    // written at \p WriterIndex carries unchanged, as MSVC's
+    // `movsxd rcx, dword ptr [rax]` writes RCX from a sign-extended temporary
+    // (LOAD t4; INT_SEXT t8, t4; COPY rcx, t8) and an ECX guard reads t4.
+    // The writer and every source before that value must be a whole-width
+    // copy or a zero/sign extension in this block.  Returns that value's
+    // producer in the block, or else the value the extension reads.  This is
+    // only a proposal: the lane's identity queries must still prove it.
+    auto extendedLaneSource =
+        [&](int WriterIndex,
+            const NdVar &Lane) -> std::optional<JumpTableValueOccurrence> {
+      if (!Lane.isReg() || WriterIndex < 0 ||
+          Ops[WriterIndex].Output.Offset != Lane.Offset)
+        return std::nullopt;
+      int At = WriterIndex;
+      for (uint32_t Depth = 0;
+           Depth <= limits::kMaxJumpTableGuardExpressionDepth; ++Depth) {
+        if (!consumeGuardBuildWork())
+          return std::nullopt;
+        const LowOp &Op = Ops[At];
+        if (Op.NumInputs != 1)
+          return std::nullopt;
+        const NdVar &Input = Op.Inputs[0];
+        if ((!Input.isReg() && !Input.isTemp()) || Input.Size < Lane.Size)
+          return std::nullopt;
+        const bool Copy =
+            Op.Opcode == NdOp::COPY && Input.Size == Op.Output.Size;
+        const bool Extension =
+            (Op.Opcode == NdOp::INT_ZEXT || Op.Opcode == NdOp::INT_SEXT) &&
+            Input.Size < Op.Output.Size;
+        if (!Copy && !Extension)
+          return std::nullopt;
+        // The input's nearest writer, past an architectural extension of
+        // that same value into its container (an EAX write's RAX extension).
+        int Producer = -1;
+        for (int I = At - 1; I >= 0; --I) {
+          if (!consumeGuardBuildWork())
+            return std::nullopt;
+          const LowOp &Prior = Ops[I];
+          const NdVar &Out = Prior.Output;
+          if (Out.Space != Input.Space || Out.Size == 0 ||
+              Out.Offset >= Input.Offset + Input.Size ||
+              Input.Offset >= Out.Offset + Out.Size)
+            continue;
+          if (Out.Offset == Input.Offset && Out.Size == Input.Size) {
+            Producer = I;
+            break;
+          }
+          const bool ExtendsInput =
+              (Prior.Opcode == NdOp::INT_ZEXT ||
+               Prior.Opcode == NdOp::INT_SEXT) &&
+              Prior.NumInputs == 1 && Prior.Inputs[0].Space == Input.Space &&
+              Prior.Inputs[0].Offset == Input.Offset &&
+              Prior.Inputs[0].Size == Input.Size && Out.Offset == Input.Offset;
+          if (!ExtendsInput)
+            break;
+        }
+        // Sizes shrink only through extensions, so this value is extended.
+        if (Input.Size == Lane.Size) {
+          if (Producer < 0)
+            return JumpTableValueOccurrence{Input, Op.Addr, Op.Seq,
+                                            /*DefinedAtPoint=*/false};
+          return JumpTableValueOccurrence{Input, Ops[Producer].Addr,
+                                          Ops[Producer].Seq,
+                                          /*DefinedAtPoint=*/true};
+        }
+        if (Producer < 0)
+          return std::nullopt;
+        At = Producer;
+      }
+      return std::nullopt;
+    };
+
     std::set<BuildKey> Active;
     if (!consumeGuardBuildWork())
       return failIncomplete();
@@ -1253,8 +1336,23 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
       // A contained architectural lane is an identity candidate, not a
       // narrower version of the producer's arithmetic. Both reaching-value
       // queries must prove that very lane; otherwise this leaf stays unknown.
-      if (DefinedLane)
+      if (DefinedLane) {
+        // The complete writer's occurrence hides an extension it copies, so
+        // an ECX guard is not tied to the RCX index it sign-extends.  Keep a
+        // second pair of the same two queries rooted at the value the lane
+        // carries unchanged; it runs only when this pair proves nothing.
+        if (const auto Source = extendedLaneSource(DefIndex, V)) {
+          if (!consumeGuardBuildWork(/*two queries + alternatives=*/4))
+            return Finish({});
+          JumpTableValueQuery IndexFallback = ProofQueries[Node->IndexQuery];
+          IndexFallback.Alternatives.front() = *Source;
+          JumpTableValueQuery DefFallback = ProofQueries[Node->DefQuery];
+          DefFallback.Alternatives.front() = *Source;
+          LaneSourceQueries.push_back(
+              {Node, std::move(IndexFallback), std::move(DefFallback)});
+        }
         return Finish(Node);
+      }
       for (int I = 0; I < Def.NumInputs; ++I) {
         // Charge the input scan independently from recursive collection.
         if (!consumeGuardBuildWork())
@@ -1360,6 +1458,46 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
                               FallbackQueryComplete.begin(),
                               FallbackQueryComplete.end());
   }
+  // Lane-source identities only add evidence: they run for lanes no query
+  // above bound, and a pair that fails or cannot complete leaves its guard
+  // unbound and the proof's completeness as it was without them.  Only
+  // exhausting the shared guard budget fails the proof, as everywhere else.
+  std::vector<JumpTableValueQuery> LaneQueries;
+  std::vector<GuardSyntaxNode *> LaneNodes;
+  for (LaneSourceFallback &Fallback : LaneSourceQueries) {
+    GuardSyntaxNode &Node = *Fallback.Node;
+    if (!consumeGuardBuildWork(2))
+      return failIncomplete();
+    const bool Bound =
+        (ProofQueryComplete[Node.IndexQuery] && ProofResults[Node.IndexQuery] &&
+         ProofQueryComplete[Node.DefQuery] && ProofResults[Node.DefQuery]) ||
+        (Node.ExtendedLaneQuery < ProofResults.size() &&
+         ProofQueryComplete[Node.ExtendedLaneQuery] &&
+         ProofResults[Node.ExtendedLaneQuery]);
+    if (Bound)
+      continue;
+    LaneNodes.push_back(&Node);
+    LaneQueries.push_back(std::move(Fallback.Index));
+    LaneQueries.push_back(std::move(Fallback.Def));
+  }
+  if (!LaneQueries.empty()) {
+    bool LaneComplete = false;
+    std::vector<bool> LaneQueryComplete;
+    const auto LaneResults =
+        ResolveGuardQueries(LaneQueries, LaneQueryComplete, LaneComplete);
+    if (LaneResults.size() != LaneQueries.size() ||
+        LaneQueryComplete.size() != LaneQueries.size() ||
+        !consumeGuardBuildWork(LaneQueries.size()))
+      return failIncomplete();
+    for (size_t I = 0; I < LaneNodes.size(); ++I) {
+      LaneNodes[I]->LaneSourceIndexQuery = ProofResults.size();
+      ProofResults.push_back(LaneResults[2 * I]);
+      ProofQueryComplete.push_back(LaneQueryComplete[2 * I]);
+      LaneNodes[I]->LaneSourceDefQuery = ProofResults.size();
+      ProofResults.push_back(LaneResults[2 * I + 1]);
+      ProofQueryComplete.push_back(LaneQueryComplete[2 * I + 1]);
+    }
+  }
   std::map<const GuardSyntaxNode *, GuardExprPtr> ExprMemo;
   std::set<const GuardSyntaxNode *> ActiveExprs;
   bool SawIncompleteProofQuery = false;
@@ -1408,11 +1546,21 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
         Node->ExtendedLaneQuery < ProofResults.size();
     const bool ExtendedLaneComplete =
         ExtendedLanePresent && ProofQueryComplete[Node->ExtendedLaneQuery];
+    // Both lane-source identities must hold, exactly like IndexQuery with
+    // its DefQuery.
+    const bool LaneSourceMatches =
+        Node->LaneSourceIndexQuery < ProofResults.size() &&
+        Node->LaneSourceDefQuery < ProofResults.size() &&
+        ProofQueryComplete[Node->LaneSourceIndexQuery] &&
+        ProofResults[Node->LaneSourceIndexQuery] &&
+        ProofQueryComplete[Node->LaneSourceDefQuery] &&
+        ProofResults[Node->LaneSourceDefQuery];
     const bool IndexMatches =
         (IndexQueryComplete && ProofResults[Node->IndexQuery] &&
          (!Node->IndexQueryUsesDefinition ||
           (DefQueryComplete && ProofResults[Node->DefQuery]))) ||
-        (ExtendedLaneComplete && ProofResults[Node->ExtendedLaneQuery]);
+        (ExtendedLaneComplete && ProofResults[Node->ExtendedLaneQuery]) ||
+        LaneSourceMatches;
     if (IndexMatches) {
       Expr->K = GuardExpr::Kind::Index;
       Expr->ContainsIndex = true;

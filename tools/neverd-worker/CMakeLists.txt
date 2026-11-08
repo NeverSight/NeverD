@@ -242,6 +242,10 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/constant_branch_test.py"
                 "$<TARGET_FILE:neverd-worker>")
       set_tests_properties(NeverDWorkerConstantBranch PROPERTIES TIMEOUT 40)
+      add_test(NAME NeverDWorkerSwitchListing
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/switch_listing_test.py"
+                "$<TARGET_FILE:neverd-worker>")
+      set_tests_properties(NeverDWorkerSwitchListing PROPERTIES TIMEOUT 60)
       add_test(NAME NeverDWorkerScalarBranchValues
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/scalar_branch_value_test.py"
                 "$<TARGET_FILE:neverd-worker>" "${_neverd_worker_source_cc}")
