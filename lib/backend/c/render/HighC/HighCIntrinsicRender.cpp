@@ -13,6 +13,7 @@
 
 #include "neverd/backend/c/render/HighC/HighCIntrinsicRender.h"
 
+#include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64ExceptionReturn.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuthLoad.h"
@@ -20,10 +21,69 @@
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
 #include "neverd/ir/intrinsics/X86/X86Unsupported.h"
 
+#include "llvm/Support/ErrorHandling.h"
+
 #include <stdexcept>
 #include <string>
 
 namespace neverd {
+
+namespace {
+/// An alignment precondition (RequireAligned): the access faults, here a
+/// trap, when its address is not a multiple of the alignment and, given a
+/// third operand, that predicate holds.  An address relative to FS or GS
+/// needs the segment's base, which C does not have.
+std::string renderAlignmentPrecondition(
+    const HighExpr &Call, std::function<std::string(const HighExpr &)> ExprFn) {
+  const size_t Count = Call.Operands.size();
+  const HighExpr *Address = Count > 0 ? Call.Operands[0].get() : nullptr;
+  const HighExpr *Alignment = Count > 1 ? Call.Operands[1].get() : nullptr;
+  const HighExpr *Active = Count > 2 ? Call.Operands[2].get() : nullptr;
+  if ((Count != 2 && Count != 3) || !Address || !Alignment ||
+      Alignment->Kind != ExprKind::Const || (Count == 3 && !Active))
+    llvm::report_fatal_error("invalid alignment precondition intrinsic");
+  if (Call.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    llvm::report_fatal_error("segmented alignment precondition requires an "
+                             "architectural FS/GS base");
+  const uint64_t Bytes = Alignment->ConstVal;
+  if (Bytes == 0 || (Bytes & (Bytes - 1)) != 0)
+    llvm::report_fatal_error("alignment precondition is not a power of two");
+  // An 8-byte integer masks alike signed or not; a pointer, or anything
+  // narrower, converts first.  An operator binding looser than `&` keeps its
+  // parentheses.
+  std::string Value = ExprFn(*Address);
+  // So does an address the text spells as a pointer: a string literal, or
+  // an object's `&`.
+  if (!Address->Type || Address->Type->Kind != NdTypeKind::Int ||
+      Address->Type->Size != 8 || isStringLiteralText(Value) ||
+      llvm::StringRef(Value).starts_with("&"))
+    Value = "(uint64_t)(" + Value + ")";
+  else if (Address->Kind != ExprKind::Var && Address->Kind != ExprKind::Const &&
+           Address->Kind != ExprKind::Cast)
+    Value = "(" + Value + ")";
+  std::string Condition =
+      "(" + Value + " & " + std::to_string(Bytes - 1) + ") != 0";
+  if (Active)
+    Condition = "(" + ExprFn(*Active) + ") && " + Condition;
+  return "if (" + Condition + ")\n    __builtin_trap();\n";
+}
+
+} // namespace
+
+std::string renderMemoryIntrinsicStatement(
+    Arch TheArch, const HighExpr &Call, const HighExpr *PrimaryDst,
+    std::function<std::string(const HighExpr &)> ExprFn,
+    std::function<std::string(const MedVar &)> VarFn, IsAliveFn IsAlive,
+    SameWidthUnsignedFn SameWidthUnsigned, bool MsvcIntrinsics,
+    DisjointMemoryFn Disjoint) {
+  if (Call.Kind == ExprKind::Call &&
+      Call.IntrinsicId == Intrinsic::RequireAligned)
+    return renderAlignmentPrecondition(Call, std::move(ExprFn));
+  return renderX86SegmentedIntrinsicStatement(
+      TheArch, Call, PrimaryDst, std::move(ExprFn), std::move(VarFn),
+      std::move(IsAlive), std::move(SameWidthUnsigned), MsvcIntrinsics,
+      std::move(Disjoint));
+}
 
 std::string MultiOutputRender::operator()(
     Arch TheArch, Intrinsic IID, const std::vector<MedVar> &Outputs,

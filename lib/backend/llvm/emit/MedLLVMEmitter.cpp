@@ -625,7 +625,7 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
   if (Func.hasTypeInfo())
     RetType = mapNdtype(Func.ReturnType);
   else
-    RetType = llvm::Type::getInt64Ty(*Ctx);
+    RetType = llvm::Type::getIntNTy(*Ctx, TRI.PointerSize * 8);
 
   // A scalar floating-point return carried in a vector register (x86-64 XMM0,
   // AArch64 V0, ARM D0 for the internal VFP convention) is declared with the

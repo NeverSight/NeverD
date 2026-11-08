@@ -707,7 +707,13 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
             Builder.CreateBitCast(Args[I], llvm::Type::getX86_FP80Ty(*Ctx));
   }
 
-  auto *RetTy = llvm::Type::getInt64Ty(*Ctx);
+  // An untyped call returns one integer carrier unless LowIR explicitly
+  // models a wider result. Inventing i64 on a 32-bit target consumes a second
+  // register and, on big-endian o32, makes a truncation read v1 instead of v0.
+  const unsigned ReturnBytes =
+      std::max<unsigned>(getTargetRegInfo(TargetArch).PointerSize,
+                         std::min<unsigned>(Op.Output.Size, sizeof(uint64_t)));
+  auto *RetTy = llvm::Type::getIntNTy(*Ctx, ReturnBytes * 8);
   auto *I8Ty = llvm::Type::getInt8Ty(*Ctx);
   auto *I32Ty = llvm::Type::getInt32Ty(*Ctx);
   auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
@@ -1939,7 +1945,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       }
     }
 
-    llvm::Type *IRetTy = RetTy; // default i64
+    llvm::Type *IRetTy = RetTy; // recovered integer carrier width
     if (Op.Output.Kind == MedVar::Reg && Op.Output.Size > 0 &&
         ITRI.isVectorReg(Op.Output.RegOff)) {
       IRetTy = Vec2; // scalar FP result returned in v0/d0

@@ -52,6 +52,7 @@ add_neverd_component_library(NeverDIRMed
   abi/MedStackDeltaCache.cpp
   abi/MedCallConvention.cpp
   abi/ARM/MedCallConventionAAPCS32.cpp
+  abi/MIPS/MedCallConventionMIPS.cpp
   abi/AArch64/MedCallConventionAAPCS64.cpp
   abi/AArch64/MedCallConventionDarwinAArch64.cpp
   abi/X86/MedCallConventionI386.cpp

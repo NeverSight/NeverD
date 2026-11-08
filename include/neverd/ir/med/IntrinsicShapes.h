@@ -26,6 +26,7 @@
 #include "neverd/ir/intrinsics/AArch64/AArch64SVEPredicate.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64SVEVector.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
+#include "neverd/ir/intrinsics/IntrinsicValueEffects.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/intrinsics/X86/X64CallRCX.h"
 #include "neverd/ir/intrinsics/X86/X86AmxState.h"
@@ -687,16 +688,6 @@ inline X86FPStateShape x86FPStateMedShape(const MedOp &Op,
                        ? Op.Inputs[ImmediateIndex].ConstVal
                        : 0U,
       .AddressIsScalar = Op.NumInputs > 1 && Scalar};
-}
-
-/// Whether \p Id only checks a condition, and faults where it fails: the
-/// alignment an aligned access requires (`movdqa`), a division's divisor
-/// and quotient, BOUND's range and INTO's overflow.  It writes no register
-/// and no memory.
-constexpr bool onlyChecksForAFault(Intrinsic Id) {
-  return Id == Intrinsic::RequireAligned ||
-         Id == Intrinsic::X86RequireDivPrecondition || Id == Intrinsic::Bound ||
-         Id == Intrinsic::Into;
 }
 
 /// Whether \p Op ends the setup of a later call's arguments: what an argument

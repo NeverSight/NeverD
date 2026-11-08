@@ -14935,11 +14935,28 @@ for linked Mach-O, and
 [`PatchFullSubstRTTests.cpp`](../unittests/semantic/probe/patchfull/PatchFullSubstRTTests.cpp)
 for the 12-cell backend grid. See the [testing guide](testing.md) for commands.
 
+### Experimental MIPS ELF analysis
+
+MIPS32r2/o32 and MIPS64r2/n64 have separate big- and little-endian target
+identities. Linked ELF admission is owned by `ELFMIPSProfile`; dynamic GOT and
+PLT interpretation belongs to the ELF loader. `lib/lift/MIPS` owns integer
+semantics. A `DecodedExecutionUnit` captures a delayed transfer and its slot,
+while normal disassembly still consumes four bytes. LowIR records their byte
+ownership and execution order; MedIR expands predicated effects before SSA.
+
+The focused MIPS loader, integer, flow, SDK and pipeline suites cover these
+contracts. Owned kernels are recompiled from HighC and LLVMC for the original
+MIPS target and compared with their assembly originals in pinned Unicorn.
+The official Archer C7 V5 example qualifies selected static function views,
+not an entire firmware image. This is an analysis-only addition to the matrix
+above: no MIPS rewrite or guest-process execution backend is claimed. See
+[MIPS support](mips.md) for rejected profiles, ABI limits and reproduction.
+
 ## Where to edit
 
 | Change | Start here | Minimum focused verification |
 |--------|------------|------------------------------|
-| Add or fix an instruction | Matching files in `lib/lift/X86`, `AArch64`, or `ARM`; public lifter header if dispatch changes | Architecture test in `unittests/lift`; semantic roundtrip in `unittests/semantic` |
+| Add or fix an instruction | Matching files in `lib/lift/X86`, `AArch64`, `ARM`, or `MIPS`; public lifter header if dispatch changes | Architecture test in `unittests/lift`; semantic roundtrip in `unittests/semantic` |
 | Add an `NdOp` | `include/neverd/ir/NdOps.h`, then audit Low-to-Med, emitters/renderers, verifier/emulator, and dumps | `NeverDLiftTests` + relevant `NeverDSemanticTests` cases |
 | Change CFG or function discovery | `lib/ir/low`, `lib/loader/FunctionDiscovery*.cpp`, `lib/pipeline/PipelineFuncDetect.cpp` | Lift CFG/jump-table tests and focused semantic transform suite |
 | Add a PE input relocation or unwind rule | `lib/loader/COFF` | `COFFARMFormatTests` or a new focused loader fixture |

@@ -30,8 +30,9 @@ std::vector<va_t> codePointerTargetsOf(const BinaryImage &Img) {
     for (va_t Slot : Img.CodePtrRelocSlots)
       if (const uint8_t *Bytes = Img.readVA(Slot, PointerSize))
         Targets.push_back(normalizeCodeAddress(
-            static_cast<va_t>(readPtr(Bytes, Img.is64Bit())), Img.Arch,
-            Img.Mode));
+            static_cast<va_t>(
+                readPtr(Bytes, Img.is64Bit(), archLittleEndian(Img.Arch))),
+            Img.Arch, Img.Mode));
   llvm::sort(Targets);
   Targets.erase(std::unique(Targets.begin(), Targets.end()), Targets.end());
   return Targets;

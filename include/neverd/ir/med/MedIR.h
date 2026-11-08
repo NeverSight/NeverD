@@ -362,6 +362,8 @@ enum class CallingConv : uint8_t {
   CDECL,
   ARM_AAPCS,
   Unknown,
+  MIPS_O32,
+  MIPS_N64,
 };
 
 struct MedBlock {

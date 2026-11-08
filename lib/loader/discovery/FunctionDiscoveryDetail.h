@@ -22,6 +22,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 
 namespace neverd {
@@ -64,6 +65,13 @@ size_t scanImportThunksARM(BinaryImage &Img, const Segment &Seg,
                            const std::map<va_t, size_t> &Targets,
                            std::set<va_t> &Existing,
                            const ImportThunkCandidates &Candidates);
+
+/// Classic MIPS ELF PLT entry, including its required delay-slot update.
+std::optional<va_t> mipsImportThunkSlot(const BinaryImage &Img, va_t Address);
+size_t scanImportThunksMIPS(BinaryImage &Img, const Segment &Seg,
+                            const std::map<va_t, size_t> &Targets,
+                            std::set<va_t> &Existing,
+                            const ImportThunkCandidates &Candidates);
 
 /// The string literals an x86 image keeps in executable sections, as MSVC
 /// does in drivers and the kernel.  Function discovery must not take them for

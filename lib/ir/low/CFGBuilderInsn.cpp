@@ -16,6 +16,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "IndirectTailFrame.h"
+#include "LowInstructionSlice.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -32,52 +33,6 @@
 #include <algorithm>
 
 namespace neverd {
-
-namespace {
-
-bool isObservableInstructionEffect(NdOp Opcode) {
-  switch (Opcode) {
-  case NdOp::LOAD:
-  case NdOp::STORE:
-  case NdOp::ATOMIC_XCHG:
-  case NdOp::ATOMIC_ADD:
-  case NdOp::ATOMIC_CMPXCHG:
-  case NdOp::INTRINSIC:
-  case NdOp::INDIR_BR:
-  case NdOp::CALL:
-  case NdOp::INDIR_CALL:
-  case NdOp::RETURN:
-    return true;
-  default:
-    return false;
-  }
-}
-
-template <typename InstructionRecordT>
-bool hasInstructionLocalGuard(const InstructionRecordT &Rec) {
-  if (Rec.Mode != InstructionMode::ARM && Rec.Mode != InstructionMode::Thumb)
-    return false;
-  const va_t NextAddress = Rec.Addr + Rec.Size;
-  for (size_t GuardIndex = 0; GuardIndex < Rec.Ops.size(); ++GuardIndex) {
-    const LowOp &Guard = Rec.Ops[GuardIndex];
-    if (Guard.Opcode != NdOp::COND_BR || Guard.NumInputs < 1 ||
-        !Guard.Inputs[0].isConst() || Guard.Inputs[0].Offset != NextAddress)
-      continue;
-    // A real conditional direct branch is lifted as
-    // `COND_BR next,!condition; BRANCH target`.  The trailing BRANCH is the
-    // guest control transfer itself, not an instruction-local guard around an
-    // observable side effect.  isObservableInstructionEffect intentionally
-    // excludes BRANCH so these control-flow guards remain eligible as CFG
-    // range guards; predicated loads/stores/calls/returns stay marked.
-    for (size_t I = GuardIndex + 1;
-         I < Rec.Ops.size() && Rec.Ops[I].Addr == Guard.Addr; ++I)
-      if (isObservableInstructionEffect(Rec.Ops[I].Opcode))
-        return true;
-  }
-  return false;
-}
-
-} // namespace
 
 //===----------------------------------------------------------------------===//
 // convertIndirectTailCalls — model `bx reg`/`br reg`/`jmp *reg` (function
@@ -183,7 +138,8 @@ void CFGBuilder::classifyInsn(InsnRecord &Rec) {
     }
   }
 
-  Rec.IsInstructionGuard = hasInstructionLocalGuard(Rec);
+  Rec.IsInstructionGuard = detail::hasInstructionGuard(
+      Rec.Ops, Rec.Addr + Rec.Size, Rec.DelaySlot.has_value());
 
   // Preserve the immediate encoded by the guest instruction, not a synthetic
   // conditional guard the ARM lifter emitted around a register call/return.
@@ -272,6 +228,7 @@ CFGBuilder::makeInstructionBoundary(const InsnRecord &Rec,
   Boundary.Mode = Rec.Mode;
   Boundary.Immediate = Rec.Immediate;
   Boundary.TargetMode = Rec.TargetMode;
+  Boundary.DelaySlot = Rec.DelaySlot;
 
   auto AddFlag = [&](bool Set, LowInstructionControlFlag Flag) {
     if (Set)
@@ -517,7 +474,19 @@ void CFGBuilder::rewriteAsTailCall(InsnRecord &Rec) {
   // call-argument recovery) and replace them with CALL(retReg, target) +
   // RETURN(retReg), mirroring a real `call target; ret`.  Downstream ABI
   // recovery then recovers the call arguments set up before the branch.
-  Rec.Ops = directTailCallOperations(CurrentImg->Arch, Rec.Addr, Target);
+  auto Transfer = directTailCallOperations(CurrentImg->Arch, Rec.Addr, Target);
+  if (Rec.DelaySlot) {
+    // A delayed tail jump still performs every prefix and slot effect. Only
+    // its final transfer is replaced; physical-member slices stay stable.
+    const int Sequence = Rec.Ops.back().Seq;
+    Rec.Ops.pop_back();
+    for (size_t I = 0; I < Transfer.size(); ++I) {
+      Transfer[I].Seq = Sequence + I;
+      Rec.Ops.push_back(std::move(Transfer[I]));
+    }
+  } else {
+    Rec.Ops = std::move(Transfer);
+  }
 
   Rec.IsBranch = false;
   Rec.IsCond = false;
@@ -721,7 +690,7 @@ void CFGBuilder::rewriteAsIndirectTailCall(InsnRecord &Rec) {
   std::vector<LowOp> Rewritten;
   Rewritten.reserve(BranchIndex + 2);
   for (size_t I = 0; I < BranchIndex; ++I)
-    if (Keep[I])
+    if (Rec.DelaySlot || Keep[I])
       Rewritten.push_back(Rec.Ops[I]);
 
   LowOp Call;
@@ -729,12 +698,14 @@ void CFGBuilder::rewriteAsIndirectTailCall(InsnRecord &Rec) {
   Call.Output = RetReg;
   Call.addInput(Target);
   Call.Addr = At;
+  Call.Seq = Rec.Ops[BranchIndex].Seq;
   Rewritten.push_back(Call);
 
   LowOp Ret;
   Ret.Opcode = NdOp::RETURN;
   Ret.addInput(RetReg);
   Ret.Addr = At;
+  Ret.Seq = Call.Seq + 1;
   Rewritten.push_back(Ret);
   Rec.Ops = std::move(Rewritten);
 

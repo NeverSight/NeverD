@@ -128,22 +128,31 @@ va_t InternalNoReturnIndex::screenedEnd(va_t Target) const {
 
 bool InternalNoReturnIndex::decodeScreenedRange(
     va_t Target,
-    llvm::function_ref<bool(Decoder &, const DecodedInsn &)> Visit) const {
+    llvm::function_ref<bool(Decoder &, const DecodedExecutionUnit &)> Visit)
+    const {
   const va_t End = screenedEnd(Target);
   const Segment *Seg = Img.getSegmentFor(Target);
   Decoder Dec;
   if (End == InvalidVA || !Dec.init(Img))
     return false;
   for (va_t At = Target; At < End;) {
-    DecodedInsn Insn;
+    DecodedExecutionUnit Unit;
     const int Size =
         Dec.selectMode(Img, At)
-            ? Dec.decodeOne(Seg->Data.data() + (At - Seg->VA),
-                            static_cast<size_t>(End - At), At, Insn)
+            ? Dec.decodeUnitForLift(Seg->Data.data() + (At - Seg->VA),
+                                    static_cast<size_t>(End - At), At, Unit)
             : 0;
     if (Size <= 0)
       return false;
-    if (!Visit(Dec, Insn))
+    if (isMIPS(Img.Arch)) {
+      std::vector<LowOp> Ops;
+      try {
+        Dec.liftUnitToLow(Unit, Ops);
+      } catch (const UnliftedInstruction &) {
+        return false;
+      }
+    }
+    if (!Visit(Dec, Unit))
       break;
     At += static_cast<va_t>(Size);
   }
@@ -179,8 +188,9 @@ bool InternalNoReturnIndex::nothingReturns(va_t Target) const {
   // the return.
   std::vector<va_t> Unreached, Padding;
   bool FlowEnded = false;
-  const bool Decoded =
-      decodeScreenedRange(Target, [&](Decoder &Dec, const DecodedInsn &Insn) {
+  const bool Decoded = decodeScreenedRange(
+      Target, [&](Decoder &Dec, const DecodedExecutionUnit &Unit) {
+        const DecodedInsn &Insn = Unit.Head;
         const std::optional<bool> InsnReturns = Dec.returnsToCaller(Insn);
         const bool Ended = FlowEnded && Insn.Addr != Target;
         if (InsnReturns && *InsnReturns && Ended) {
@@ -229,11 +239,13 @@ bool InternalNoReturnIndex::entryFlowNeverResumes(va_t Target) const {
     if (!Seg || At < Seg->VA || At - Seg->VA >= Seg->Data.size())
       return false;
     const size_t Off = static_cast<size_t>(At - Seg->VA);
-    DecodedInsn Insn;
-    const int Size = Dec.selectMode(Img, At)
-                         ? Dec.decodeOne(Seg->Data.data() + Off,
-                                         Seg->Data.size() - Off, At, Insn)
-                         : 0;
+    DecodedExecutionUnit Unit;
+    const DecodedInsn &Insn = Unit.Head;
+    const int Size =
+        Dec.selectMode(Img, At)
+            ? Dec.decodeUnitForLift(Seg->Data.data() + Off,
+                                    Seg->Data.size() - Off, At, Unit)
+            : 0;
     if (Size <= 0 || !Img.hasExecutableCodeOwnerRange(At, Size))
       return false;
     Screened += static_cast<uint64_t>(Size);
@@ -243,14 +255,14 @@ bool InternalNoReturnIndex::entryFlowNeverResumes(va_t Target) const {
     // Only a callee's stated or named contract ends a call's path here.
     // Entry markers may also occur in a returning caller's continuation.
     const va_t Callee = Dec.directCallTarget(Insn);
-    if (Callee != InvalidVA && callNeverReturns(Img, Callee, NoReturnTargets))
-      continue;
     std::vector<LowOp> Ops;
     try {
-      Dec.liftToLow(Insn, Ops);
+      Dec.liftUnitToLow(Unit, Ops);
     } catch (const UnliftedInstruction &) {
       return false;
     }
+    if (Callee != InvalidVA && callNeverReturns(Img, Callee, NoReturnTargets))
+      continue;
     bool Ends = false, Branches = false;
     for (const LowOp &Op : Ops) {
       if (isArchitecturalNoReturn(Op)) {
@@ -286,12 +298,14 @@ InternalNoReturnIndex::screenedInstructions(va_t Target) const {
       return It->second;
   }
   std::vector<ScreenedInstruction> Found;
-  if (!decodeScreenedRange(Target, [&](Decoder &Dec, const DecodedInsn &Insn) {
-        Found.push_back({Insn.Addr, Dec.directCallTarget(Insn),
-                         Dec.returnsToCaller(Insn),
-                         Dec.isFunctionTerminator(Insn)});
-        return true;
-      }))
+  if (!decodeScreenedRange(
+          Target, [&](Decoder &Dec, const DecodedExecutionUnit &Unit) {
+            const DecodedInsn &Insn = Unit.Head;
+            Found.push_back({Insn.Addr, Dec.directCallTarget(Insn),
+                             Dec.returnsToCaller(Insn),
+                             Dec.isFunctionTerminator(Insn)});
+            return true;
+          }))
     Found.clear();
   std::lock_guard<std::mutex> Lock(Mutex);
   return Instructions.emplace(Target, std::move(Found)).first->second;
@@ -307,13 +321,13 @@ InternalNoReturnIndex::screenedTransfers(va_t Target) const {
   ScreenedTransfers Found;
   const va_t End = screenedEnd(Target);
   bool Unknown = false;
-  const bool Decoded =
-      decodeScreenedRange(Target, [&](Decoder &Dec, const DecodedInsn &Insn) {
+  const bool Decoded = decodeScreenedRange(
+      Target, [&](Decoder &Dec, const DecodedExecutionUnit &Unit) {
         std::vector<LowOp> Ops;
         // A byte no lifter reads leaves the range's branches unknown, as it
         // ends a CFG build.
         try {
-          Dec.liftToLow(Insn, Ops);
+          Dec.liftUnitToLow(Unit, Ops);
         } catch (const UnliftedInstruction &) {
           Unknown = true;
           return false;

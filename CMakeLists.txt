@@ -109,6 +109,7 @@ set(CAPSTONE_ARCHITECTURE_DEFAULT OFF CACHE BOOL "" FORCE)
 set(CAPSTONE_X86_SUPPORT       ON  CACHE BOOL "" FORCE)
 set(CAPSTONE_ARM_SUPPORT        ON  CACHE BOOL "" FORCE)
 set(CAPSTONE_AARCH64_SUPPORT    ON  CACHE BOOL "" FORCE)
+set(CAPSTONE_MIPS_SUPPORT       ON  CACHE BOOL "" FORCE)
 add_subdirectory(third_party/capstone)
 
 # Capstone's decode DFA is the single hottest dependency in the front end, so

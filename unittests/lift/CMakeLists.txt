@@ -1,3 +1,38 @@
+add_neverd_unittest(NeverDMIPSPipelineTests
+  mips/MIPSPipelineTests.cpp
+  LINK_COMPONENTS Pipeline BackendLLVM BackendC)
+
+if(TARGET neverd_shared)
+  add_neverd_unittest(NeverDMIPSSDKTests
+    mips/MIPSSDKTests.cpp
+    LINK_LIBS neverd_shared)
+  target_include_directories(NeverDMIPSSDKTests PRIVATE
+    "${CMAKE_SOURCE_DIR}/lib/sdk/capi")
+  if(WIN32)
+    target_link_libraries(NeverDMIPSSDKTests PRIVATE LLVMSupport NeverDPipeline)
+  endif()
+endif()
+
+add_neverd_unittest(NeverDMIPSFlowTests
+  mips/MIPSControlFlowTests.cpp
+  LINK_COMPONENTS IRMed IRLow Lift Decode)
+
+add_neverd_unittest(NeverDMIPSTests
+  mips/MIPSLoaderTests.cpp
+  LINK_COMPONENTS Loader)
+
+add_neverd_unittest(NeverDMIPSIntegerTests
+  mips/MIPSIntegerTests.cpp
+  LINK_COMPONENTS IRLow Lift Decode)
+if(NEVERD_ENABLE_SEMANTIC_TESTS AND NOT TARGET unicorn)
+  neverd_require_unicorn()
+endif()
+if(TARGET unicorn)
+  target_link_libraries(NeverDMIPSIntegerTests PRIVATE unicorn)
+  target_compile_definitions(NeverDMIPSIntegerTests PRIVATE
+    NEVERD_MIPS_UNICORN_REFERENCE=1)
+endif()
+
 add_neverd_unittest(NeverDX87CapabilityTests
   x86/X87CapabilitiesTests.cpp
   LINK_COMPONENTS IRLowValidation)

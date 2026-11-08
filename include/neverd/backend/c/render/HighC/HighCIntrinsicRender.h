@@ -192,6 +192,14 @@ bool x86UsesGnuIntrinsicHeader(Intrinsic Id);
 /// malformed architectural operands fail closed.  A forward REP MOVS or STOS
 /// of flat memory prints as memcpy or memset where those write exactly its
 /// bytes; MOVS needs \p Disjoint to prove its source and destination apart.
+/// Shared memory requirements, then architecture-specific memory effects.
+std::string renderMemoryIntrinsicStatement(
+    Arch TheArch, const HighExpr &Call, const HighExpr *PrimaryDst,
+    std::function<std::string(const HighExpr &)> ExprFn,
+    std::function<std::string(const MedVar &)> VarFn, IsAliveFn IsAlive = {},
+    SameWidthUnsignedFn SameWidthUnsigned = {}, bool MsvcIntrinsics = false,
+    DisjointMemoryFn Disjoint = {});
+
 std::string renderX86SegmentedIntrinsicStatement(
     Arch TheArch, const HighExpr &Call, const HighExpr *PrimaryDst,
     std::function<std::string(const HighExpr &)> ExprFn,

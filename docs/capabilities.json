@@ -2084,6 +2084,54 @@
   },
   "capabilities": [
     {
+      "id": "analysis.mips.classic-r2",
+      "kind": "analysis",
+      "status": "experimental",
+      "owner": "lift",
+      "targets": [
+        "mips",
+        "mipsel",
+        "mips64",
+        "mips64el"
+      ],
+      "docs": [
+        "docs/mips.md",
+        "docs/firmware/archer-c7-v5.md"
+      ],
+      "limitations": [
+        "linked MIPS32r2/o32 and MIPS64r2/n64 ELF only; n32, Release 6, compressed encodings and relocatable objects are rejected",
+        "strict integer subset; floating point, DSP/MSA, privileged operations, LL/SC, unaligned merge accesses and trapping arithmetic/division are unsupported",
+        "integer carrier recovery does not establish complete typed o32 wide/narrow or aggregate/floating ABI classification, arbitrary PIC/gp recovery, native rewriting or guest execution",
+        "firmware qualification covers selected Archer C7 V5 functions; independent owned fixtures qualify MIPS64"
+      ],
+      "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSPipelineTests",
+          "source": "unittests/lift/mips/MIPSPipelineTests.cpp",
+          "filter": "*/MIPSPipeline.ReturnSlotComputationReachesCAndLLVMWithCorrectABI/*",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSTests",
+          "source": "unittests/lift/mips/MIPSLoaderTests.cpp",
+          "filter": "*/MIPSLoader.RuntimeRelocationsCannotSilentlyKeepUnresolvedAddends/*",
+          "platforms": [
+            "darwin"
+          ]
+        }
+      ],
+      "public_surfaces": {
+        "c": [],
+        "python": [],
+        "cli": [],
+        "json": []
+      }
+    },
+    {
       "id": "analysis.ir-view.instruction-anchors",
       "kind": "analysis",
       "status": "experimental",

@@ -352,7 +352,8 @@ neverd::recordDataPointerTargets(BinaryImage &Img,
     const uint8_t *Bytes = Img.readVA(Slot, PointerSize);
     if (!Bytes)
       continue;
-    const va_t Target = static_cast<va_t>(readPtr(Bytes, Img.is64Bit()));
+    const va_t Target = static_cast<va_t>(
+        readPtr(Bytes, Img.is64Bit(), archLittleEndian(Img.Arch)));
     if (Code.claims(Target) || !InData(Target))
       continue;
     // The relocation as it would have been recorded had the target's section

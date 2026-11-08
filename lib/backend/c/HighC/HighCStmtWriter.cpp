@@ -643,7 +643,7 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
         IsEHRuntimeSpace(Stmt.Val->MemoryAddressSpace))
       return;
     if (Stmt.Val->Kind == ExprKind::Call) {
-      auto Rendered = renderX86SegmentedIntrinsicStatement(
+      auto Rendered = renderMemoryIntrinsicStatement(
           Opts.TheArch, *Stmt.Val, Stmt.Dst.get(),
           [this](const HighExpr &E) { return intrinsicOperandStr(E); },
           [this](const MedVar &V) { return varName(V); },
@@ -1375,7 +1375,7 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
     if (frameStorageAlignmentHolds(*Stmt.CallExpr))
       break;
     {
-      auto Rendered = renderX86SegmentedIntrinsicStatement(
+      auto Rendered = renderMemoryIntrinsicStatement(
           Opts.TheArch, *Stmt.CallExpr, nullptr,
           [this](const HighExpr &E) { return intrinsicOperandStr(E); },
           [this](const MedVar &V) { return varName(V); },

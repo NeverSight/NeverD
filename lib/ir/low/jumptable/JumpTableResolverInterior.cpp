@@ -463,7 +463,8 @@ bool CFGBuilder::resolveRelocatedInteriorBranch(const BinaryImage &Img,
   const uint8_t *P = Img.readVA(*SlotVA, Img.getPointerSize());
   if (!P)
     return false;
-  const va_t RawTarget = static_cast<va_t>(readPtr(P, Img.is64Bit()));
+  const va_t RawTarget =
+      static_cast<va_t>(readPtr(P, Img.is64Bit(), archLittleEndian(Img.Arch)));
   const va_t Target = normalizeCodeAddress(RawTarget, Img.Arch, Img.Mode);
   if (!isOwnedInteriorTarget(Img, Target))
     return false;

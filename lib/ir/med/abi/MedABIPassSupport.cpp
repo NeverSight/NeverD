@@ -643,7 +643,7 @@ bool PreSSAMedCallTargets::version(const MedOp &Original,
   for (unsigned I = 0; I < Op.NumInputs; ++I)
     Op.Inputs[I] = read(Op.Inputs[I]);
   if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
-      Op.Opcode == NdOp::INTRINSIC)
+      (Op.Opcode == NdOp::INTRINSIC && endsCallArgumentSetup(Op)))
     for (auto &[K, Version] : Versions) {
       if (!consumeCallTargetWork(WorkRemaining))
         return false;

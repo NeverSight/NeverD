@@ -16,6 +16,7 @@
 
 #include "EHFrameDetail.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/loader/DWARF/AArch64ReturnAddressState.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -233,7 +234,8 @@ ParseResult parseFrameSection(const BinaryImage &Img, const FrameSection &Sec,
     }
 
     const size_t EntryStart = Offset;
-    uint64_t Length = readLE<uint32_t>(Buf + Offset);
+    uint64_t Length =
+        readTargetEndian<uint32_t>(Buf + Offset, archLittleEndian(Img.Arch));
     Offset += 4;
     bool Is64BitDwarf = false;
     if (Length == 0xffffffffu) {
@@ -241,7 +243,8 @@ ParseResult parseFrameSection(const BinaryImage &Img, const FrameSection &Sec,
         malformed("truncated 64-bit DWARF frame entry length");
         break;
       }
-      Length = readLE<uint64_t>(Buf + Offset);
+      Length =
+          readTargetEndian<uint64_t>(Buf + Offset, archLittleEndian(Img.Arch));
       Offset += 8;
       Is64BitDwarf = true;
     }
@@ -260,8 +263,11 @@ ParseResult parseFrameSection(const BinaryImage &Img, const FrameSection &Sec,
       break;
     }
     const size_t IdOffset = Offset;
-    const uint64_t Id = Is64BitDwarf ? readLE<uint64_t>(Buf + Offset)
-                                     : uint64_t(readLE<uint32_t>(Buf + Offset));
+    const uint64_t Id =
+        Is64BitDwarf ? readTargetEndian<uint64_t>(Buf + Offset,
+                                                  archLittleEndian(Img.Arch))
+                     : uint64_t(readTargetEndian<uint32_t>(
+                           Buf + Offset, archLittleEndian(Img.Arch)));
     Offset += IdSize;
 
     if (Id == 0) {

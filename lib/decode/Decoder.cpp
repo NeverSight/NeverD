@@ -13,9 +13,11 @@
 
 #include "DecoderDetail.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/AArch64/AArch64Lifter.h"
 #include "neverd/lift/ARM/ARMLifter.h"
+#include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/lift/X86/X86Lifter.h"
 #include "neverd/support/Diagnostic.h"
 #include "neverd/support/ProloguePatterns.h"
@@ -73,6 +75,7 @@ void Decoder::reset() {
   X86.reset();
   ARM.reset();
   AArch64.reset();
+  MIPS.reset();
 }
 
 // The parallel phases each build a per-thread Decoder, so a failure here can be
@@ -89,6 +92,7 @@ bool Decoder::init(Arch TheArch, InstructionMode Mode) {
   std::unique_ptr<X86Lifter> NewX86;
   std::unique_ptr<ARMLifter> NewARM;
   std::unique_ptr<AArch64Lifter> NewAArch64;
+  std::unique_ptr<MIPSLifter> NewMIPS;
 
   switch (TheArch) {
   case Arch::X64:
@@ -109,6 +113,21 @@ bool Decoder::init(Arch TheArch, InstructionMode Mode) {
     CsMode = decoder_detail::armHandleMode(Mode);
     NewARM = std::make_unique<ARMLifter>(TheArch, Mode);
     NewARM->setStrict(Strict);
+    break;
+  case Arch::MIPS32:
+  case Arch::MIPS32EL:
+  case Arch::MIPS64:
+  case Arch::MIPS64EL:
+    if (Mode != InstructionMode::Default) {
+      syncError() << "MIPS requires the classic instruction mode\n";
+      return false;
+    }
+    CsArch = CS_ARCH_MIPS;
+    CsMode = static_cast<cs_mode>(
+        (isMIPS64(TheArch) ? CS_MODE_MIPS64R2 : CS_MODE_MIPS32R2) |
+        (archLittleEndian(TheArch) ? CS_MODE_LITTLE_ENDIAN
+                                   : CS_MODE_BIG_ENDIAN));
+    NewMIPS = std::make_unique<MIPSLifter>(TheArch);
     break;
   default:
     syncError() << "unsupported arch for decoder\n";
@@ -147,6 +166,7 @@ bool Decoder::init(Arch TheArch, InstructionMode Mode) {
   X86 = std::move(NewX86);
   ARM = std::move(NewARM);
   AArch64 = std::move(NewAArch64);
+  MIPS = std::move(NewMIPS);
   return true;
 }
 
@@ -212,6 +232,8 @@ bool Decoder::decodeArchitectureFallback(const uint8_t *Bytes, size_t Len,
 int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
                        DecodedInsn &Out) {
   if (!beginDecode(Out) || !Handle || !InsnBuf)
+    return 0;
+  if (MIPS && ((Addr & 3) || (!isMIPS64(TargetArch) && Addr > UINT32_MAX)))
     return 0;
   const uint8_t *Code = Bytes;
   size_t Sz = Len;
@@ -310,6 +332,8 @@ void Decoder::liftToLow(const DecodedInsn &Insn, std::vector<LowOp> &Ops,
     liftAArch64ToLow(Insn, Ops, ScalarRelocs);
   } else if (ARM) {
     liftARMToLow(Insn, Ops, ScalarRelocs);
+  } else if (MIPS) {
+    MIPS->lift(*Insn.Raw, Ops);
   } else {
     LowOp Nop;
     Nop.Opcode = NdOp::NOP;
@@ -343,7 +367,7 @@ bool Decoder::isFunctionTerminator(const DecodedInsn &Insn) const {
     return AArch64Lifter::isFunctionTerminator(Insn.Raw);
   if (ARM)
     return ARMLifter::isFunctionTerminator(Insn.Raw);
-  return false;
+  return MIPS && MIPS->isFunctionTerminator(*Insn.Raw);
 }
 
 bool Decoder::isAlignmentNop(const DecodedInsn &Insn) const {
@@ -351,6 +375,8 @@ bool Decoder::isAlignmentNop(const DecodedInsn &Insn) const {
       ((AArch64 || Insn.AArch64Occurrence) &&
        !hasAArch64DecodeOccurrence(Insn)))
     return false;
+  if (MIPS)
+    return MIPS->word(*Insn.Raw) == 0;
   if (X86 && decoder_detail::isX86AlignmentNop(Insn))
     return true;
   return alignmentNopLength(TargetArch, Insn.Raw->bytes, Insn.Size,
@@ -367,6 +393,8 @@ std::optional<bool> Decoder::returnsToCaller(const DecodedInsn &Insn) const {
     return AArch64Lifter::isReturn(Insn.Raw);
   if (ARM)
     return ARMLifter::isReturn(Insn.Raw);
+  if (MIPS)
+    return MIPS->isReturn(*Insn.Raw);
   return std::nullopt;
 }
 
@@ -391,7 +419,7 @@ va_t Decoder::directCallTarget(const DecodedInsn &Insn) const {
     return AArch64Lifter::directCallTarget(Insn.Raw);
   if (ARM)
     return ARMLifter::directCallTarget(Insn.Raw);
-  return InvalidVA;
+  return MIPS ? MIPS->directCallTarget(*Insn.Raw) : InvalidVA;
 }
 
 } // namespace neverd

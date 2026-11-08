@@ -96,6 +96,22 @@ collectDataSymbolBindings(const BinaryImage &Image) {
   return Bindings;
 }
 
+std::map<va_t, std::string> collectCopiedDataObjects(const BinaryImage &Image) {
+  std::map<va_t, std::string> Objects;
+  if (!Image.isELF() || Image.IsRelocatable)
+    return Objects;
+  for (const auto &Relocation : Image.Relocations) {
+    bool Copy = false;
+#define NEVERD_ELF_COPY_OBJECT(ISA, Kind)                                      \
+  Copy |= Image.Arch == Arch::ISA && Relocation.Type == llvm::ELF::Kind;
+#include "ELF/ELFDynamicRelocations.def"
+    if (Copy && Relocation.ELF && Relocation.ELF->Symbol &&
+        Relocation.ELF->Symbol->Name)
+      Objects.emplace(Relocation.Address, *Relocation.ELF->Symbol->Name);
+  }
+  return Objects;
+}
+
 std::map<va_t, std::string>
 collectExternalFunctionPointers(const BinaryImage &Image) {
   std::map<va_t, std::string> Pointers;
@@ -144,8 +160,9 @@ std::optional<va_t> relocatedCodeTarget(const BinaryImage &Image, va_t Slot) {
   const uint8_t *Bytes = Image.readVA(Slot, Width);
   if (!Bytes)
     return std::nullopt;
-  const va_t Target = normalizeCodeAddress(readPtr(Bytes, Image.is64Bit()),
-                                           Image.Arch, Image.Mode);
+  const va_t Target = normalizeCodeAddress(
+      readPtr(Bytes, Image.is64Bit(), archLittleEndian(Image.Arch)), Image.Arch,
+      Image.Mode);
   if (!Image.isCodeAddress(Target))
     return std::nullopt;
   return Target;

@@ -713,9 +713,11 @@ bool promoteFloatCallResult(MedFunc &Func, MedBlock &Blk, size_t OI,
     bool SawLow = false, SawHigh = false;
     while (OI + 1 + SyntheticWideHalves < Blk.Ops.size()) {
       const MedOp &Half = Blk.Ops[OI + 1 + SyntheticWideHalves];
-      if (!SawLow && isHalf(Half, TRI.IntReturnReg, 0))
+      if (!SawLow &&
+          isHalf(Half, TRI.IntReturnReg, TRI.integerReturnWordOffset(0)))
         SawLow = true;
-      else if (!SawHigh && isHalf(Half, TRI.IntReturnReg2, TRI.PointerSize))
+      else if (!SawHigh &&
+               isHalf(Half, TRI.IntReturnReg2, TRI.integerReturnWordOffset(1)))
         SawHigh = true;
       else
         break;
@@ -3938,8 +3940,24 @@ void recoverCallAbi(
       break;
     }
   }
+  // Call arguments become explicit only during this pass. A parameter
+  // inferred from a narrow local read must still carry every incoming byte
+  // forwarded to a callee. Reuse the same value-flow width proof as the
+  // initial parameter scan, including real truncations and redefinitions.
+  bool WidenedIntegerParameter = false;
+  if (!Func.SourceParametersBound && !Func.CallInfos.empty())
+    for (auto &Parameter : Func.Params)
+      if (Parameter.Size < TRI.FullRegWidth &&
+          IntegerLayout.registerIndex(Parameter.RegOff) >= 0) {
+        const auto Width = med_calling_conv_detail::findFirstUseSize(
+            Func, Parameter.RegOff, TRI);
+        if (Width > Parameter.Size) {
+          Parameter.Size = Width;
+          WidenedIntegerParameter = true;
+        }
+      }
   if (!Func.SourceParametersBound &&
-      (BoundFPResult || !PromoteFPParams.empty()))
+      (BoundFPResult || !PromoteFPParams.empty() || WidenedIntegerParameter))
     inferMedTypes(Func, TheArch, CalleeFPReturnSize);
 }
 

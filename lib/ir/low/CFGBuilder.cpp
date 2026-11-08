@@ -2678,8 +2678,9 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
         break;
       }
       PathMode = Dec.currentMode();
-      DecodedInsn DI;
-      int Sz = Dec.decodeOneForLift(Seg->Data.data() + Off, Remain, Cur, DI);
+      DecodedExecutionUnit Unit;
+      int Sz = Dec.decodeUnitForLift(Seg->Data.data() + Off, Remain, Cur, Unit);
+      const DecodedInsn &DI = Unit.Head;
       if (Sz <= 0) {
         DecodeFailureAddresses.insert(Cur);
         break;
@@ -2700,6 +2701,10 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       }
       ++DecodedInstructionCount;
       DecodedInstructionAddresses.insert(Cur);
+      if (Unit.HasDelaySlot) {
+        ++DecodedInstructionCount;
+        DecodedInstructionAddresses.insert(Cur + 4);
+      }
 
       const va_t InsnSize = static_cast<va_t>(Sz);
       if (InsnSize > std::numeric_limits<va_t>::max() - Cur) {
@@ -2720,7 +2725,8 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       const std::vector<RelocatedAddressOperand> &RelocatedOperands =
           Relocations.Addresses;
       try {
-        Dec.liftToLow(DI, Rec.Ops, Relocations.Addresses, Relocations.Scalars);
+        Rec.DelaySlot = Dec.liftUnitToLow(Unit, Rec.Ops, Relocations.Addresses,
+                                          Relocations.Scalars);
       } catch (const UnliftedInstruction &Failure) {
         UnsupportedInstructionAddresses.insert(Failure.getAddr());
         break;
@@ -2769,6 +2775,10 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       }
       ++LiftedInstructionCount;
       LiftedInstructionAddresses.insert(Cur);
+      if (Unit.HasDelaySlot) {
+        ++LiftedInstructionCount;
+        LiftedInstructionAddresses.insert(Cur + 4);
+      }
       Rec.FpuTopOut = Dec.getX86FpuTop();
       Rec.FpuReset = Dec.x86FpuDidReset();
 

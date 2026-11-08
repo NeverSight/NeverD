@@ -46,7 +46,8 @@ readELFProgramDynamicTable(const BinaryImage &Image) {
   if (!Image.isELF() || !Image.ELFMetadata ||
       (Image.Bits != Bitness::Bits32 && Image.Bits != Bitness::Bits64) ||
       Image.Raw.size() < llvm::ELF::EI_NIDENT ||
-      Image.Raw[llvm::ELF::EI_DATA] != llvm::ELF::ELFDATA2LSB)
+      (Image.Raw[llvm::ELF::EI_DATA] != llvm::ELF::ELFDATA2LSB &&
+       Image.Raw[llvm::ELF::EI_DATA] != llvm::ELF::ELFDATA2MSB))
     return failure(ImageDiagnostic);
   const ELFProgramHeader *Table = nullptr;
   for (const auto &Header : Image.ELFMetadata->ProgramHeaders) {
@@ -58,6 +59,10 @@ readELFProgramDynamicTable(const BinaryImage &Image) {
   }
   if (!Table)
     return std::vector<ELFDynamicEntry>();
+  if (Image.Raw[llvm::ELF::EI_DATA] == llvm::ELF::ELFDATA2MSB)
+    return Image.Bits == Bitness::Bits64
+               ? readTable<llvm::object::ELF64BE>(Image, *Table)
+               : readTable<llvm::object::ELF32BE>(Image, *Table);
   return Image.Bits == Bitness::Bits64
              ? readTable<llvm::object::ELF64LE>(Image, *Table)
              : readTable<llvm::object::ELF32LE>(Image, *Table);

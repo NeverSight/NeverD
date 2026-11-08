@@ -26,6 +26,7 @@ and `roadmap.md`. Shared images remain in `assets/`.
 | [ASAR extraction profile](web-asar-profile.md) | Packed/unpacked capture association, integrity states, member consumers and native Unicode dependency |
 | [Electron evidence profile](web-electron-profile.md) | Captured entry paths, manifest/source scope, window/bridge evidence and IPC channel candidates |
 | [HTML source profile](web-html-profile.md) | Bounded C++ script inventory, captured local references and original inline-source anchors |
+| [MIPS analysis](mips.md) | MIPS32/64 ELF profiles, delay slots, integer ABI, validation and TP-Link firmware example |
 | [Testing](testing.md) | Test suites, generated fixtures, Unicorn roundtrips, and incremental commands |
 | [Desktop workbench](gui.md) | Classic disassembler layout, worker separation, project databases, localization and MCP connections |
 | [Analysis image sections](analysis-sections.md) | Add materialized code/data through the C ABI, worker, CLI and workbench; native views and project persistence |

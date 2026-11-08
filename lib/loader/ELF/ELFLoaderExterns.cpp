@@ -106,14 +106,14 @@ void forEachObjectRelocation(const llvm::object::ELFFile<ELFT> &ELF,
       if (IsRela) {
         Elf_Rela R;
         std::memcpy(&R, Data + static_cast<size_t>(Off), sizeof(R));
-        Rel.Type = R.getType(false);
-        Rel.SymbolIndex = R.getSymbol(false);
+        Rel.Type = R.getType(ELF.isMips64EL());
+        Rel.SymbolIndex = R.getSymbol(ELF.isMips64EL());
         Rel.Addend = R.r_addend;
       } else {
         Elf_Rel R;
         std::memcpy(&R, Data + static_cast<size_t>(Off), sizeof(R));
-        Rel.Type = R.getType(false);
-        Rel.SymbolIndex = R.getSymbol(false);
+        Rel.Type = R.getType(ELF.isMips64EL());
+        Rel.SymbolIndex = R.getSymbol(ELF.isMips64EL());
         Rel.Addend = 0;
       }
       if (Rel.SymbolIndex == 0 || Rel.SymbolIndex >= SymsOr->size())
@@ -282,17 +282,37 @@ template llvm::Expected<ObjectExterns> planObjectExterns<llvm::object::ELF32LE>(
     const llvm::object::ELFFile<llvm::object::ELF32LE> &,
     llvm::ArrayRef<llvm::object::ELF32LE::Shdr>, const uint8_t *, size_t, Arch,
     va_t);
+
+template llvm::Expected<ObjectExterns> planObjectExterns<llvm::object::ELF32BE>(
+    const llvm::object::ELFFile<llvm::object::ELF32BE> &,
+    llvm::ArrayRef<llvm::object::ELF32BE::Shdr>, const uint8_t *, size_t, Arch,
+    va_t);
 template llvm::Expected<ObjectExterns> planObjectExterns<llvm::object::ELF64LE>(
     const llvm::object::ELFFile<llvm::object::ELF64LE> &,
     llvm::ArrayRef<llvm::object::ELF64LE::Shdr>, const uint8_t *, size_t, Arch,
+    va_t);
+
+template llvm::Expected<ObjectExterns> planObjectExterns<llvm::object::ELF64BE>(
+    const llvm::object::ELFFile<llvm::object::ELF64BE> &,
+    llvm::ArrayRef<llvm::object::ELF64BE::Shdr>, const uint8_t *, size_t, Arch,
     va_t);
 template void addObjectExterns<llvm::object::ELF32LE>(
     const llvm::object::ELFFile<llvm::object::ELF32LE> &,
     llvm::ArrayRef<llvm::object::ELF32LE::Shdr>, const std::vector<va_t> &,
     const ObjectExterns &, BinaryImage &);
+
+template void addObjectExterns<llvm::object::ELF32BE>(
+    const llvm::object::ELFFile<llvm::object::ELF32BE> &,
+    llvm::ArrayRef<llvm::object::ELF32BE::Shdr>, const std::vector<va_t> &,
+    const ObjectExterns &, BinaryImage &);
 template void addObjectExterns<llvm::object::ELF64LE>(
     const llvm::object::ELFFile<llvm::object::ELF64LE> &,
     llvm::ArrayRef<llvm::object::ELF64LE::Shdr>, const std::vector<va_t> &,
+    const ObjectExterns &, BinaryImage &);
+
+template void addObjectExterns<llvm::object::ELF64BE>(
+    const llvm::object::ELFFile<llvm::object::ELF64BE> &,
+    llvm::ArrayRef<llvm::object::ELF64BE::Shdr>, const std::vector<va_t> &,
     const ObjectExterns &, BinaryImage &);
 
 } // namespace detail

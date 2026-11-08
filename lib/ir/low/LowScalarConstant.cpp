@@ -9,6 +9,7 @@
 #include "neverd/ir/low/LowScalarConstant.h"
 
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/intrinsics/IntrinsicValueEffects.h"
 #include "neverd/ir/low/BlockRegisterConstant.h"
 #include "neverd/ir/low/CallRegisterBody.h"
 
@@ -279,15 +280,35 @@ bool visitScalarBlockValues(
         return {};
       return Registers.read(Value.Offset, Value.Size);
     };
-    for (const auto &Op : Block.Ops) {
-      if (Op.Addr != Instruction) {
+    size_t BoundaryIndex = 0;
+    for (size_t Index = 0; Index < Block.Ops.size(); ++Index) {
+      const auto &Op = Block.Ops[Index];
+      while (BoundaryIndex < Block.InstructionBoundaries.size() &&
+             Block.InstructionBoundaries[BoundaryIndex].FirstOp +
+                     Block.InstructionBoundaries[BoundaryIndex].OpCount <=
+                 Index)
+        ++BoundaryIndex;
+      // Temporaries belong to an execution unit. A delayed transfer captures
+      // its target before the slot and reads that same temporary afterwards,
+      // although its operations retain the two physical instruction addresses.
+      const va_t Owner =
+          BoundaryIndex < Block.InstructionBoundaries.size() &&
+                  Block.InstructionBoundaries[BoundaryIndex].FirstOp <= Index
+              ? Block.InstructionBoundaries[BoundaryIndex].Address
+              : Op.Addr;
+      if (Owner != Instruction) {
         Temps.clear();
-        Instruction = Op.Addr;
+        Instruction = Owner;
       }
       if (Select(Op))
         Observe(Op, ValueOf);
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
-          Op.Opcode == NdOp::INTRINSIC) {
+          (Op.Opcode == NdOp::INTRINSIC &&
+           !(Op.NumInputs && Op.Inputs[0].isConst() &&
+             Op.Inputs[0].Size == sizeof(Intrinsic) &&
+             Op.Inputs[0].Offset < static_cast<uint64_t>(Intrinsic::_Count) &&
+             onlyChecksForAFault(
+                 static_cast<Intrinsic>(Op.Inputs[0].Offset))))) {
         Registers.clear();
         Temps.clear();
         continue;
@@ -437,6 +458,11 @@ constantRegisterCallTargets(const CallRegisterBodyView &Function) {
       // Copying and evaluating the prefix both consume the same work cap.
       if (!Spend((*It)->Ops.size()))
         return {};
+      const auto Base = Prefix.Ops.size();
+      for (auto Boundary : (*It)->InstructionBoundaries) {
+        Boundary.FirstOp += Base;
+        Prefix.InstructionBoundaries.push_back(std::move(Boundary));
+      }
       Prefix.Ops.insert(Prefix.Ops.end(), (*It)->Ops.begin(), (*It)->Ops.end());
     }
     if (!visitScalarBlockValues(
