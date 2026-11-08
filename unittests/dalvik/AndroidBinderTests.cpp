@@ -388,6 +388,25 @@ TEST(AndroidBinderTest,
 }
 
 TEST(AndroidBinderTest,
+     FailedTransactionKeepsProxyAliveAtTheJNIExceptionBoundary) {
+  BoundRuntime s;
+  s.call(Parcel, "writeInt", "(I)V", s.reply, {0x11223344});
+  auto result = s.complete(s.transact(), {INT32_MIN + 2});
+  expectStop(result,
+             "native status exception/logging is not modeled: -2147483646");
+  EXPECT_TRUE(result.exception.empty());
+  EXPECT_EQ(s.call(Parcel, "dataPosition", "()I", s.reply).value, 4u);
+  EXPECT_EQ(s.heap->get(s.reply)->Bytes,
+            (std::vector<uint8_t>{0x44, 0x33, 0x22, 0x11}));
+  auto snapshot = s.runtime.snapshot();
+  ASSERT_TRUE(snapshot.framework.service_manager);
+  ASSERT_TRUE(
+      snapshot.framework.service_manager->binder_proxies[0].native_binding);
+  EXPECT_TRUE(snapshot.framework.service_manager->binder_proxies[0]
+                  .native_binding->alive);
+}
+
+TEST(AndroidBinderTest,
      DeadReplyCachesBpBinderLivenessAndCheckedExceptionHierarchy) {
   BoundRuntime s;
   auto request = s.transact();

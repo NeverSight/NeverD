@@ -16,6 +16,8 @@
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/FormatVariadic.h"
 
+#include <algorithm>
+
 namespace neverd::emulation::linux_model {
 namespace {
 constexpr uint32_t Reply = 0x40406301;
@@ -100,16 +102,17 @@ LinuxFiles::binderCommand(LinuxDeviceState &Device, uint32_t Command,
   if (Get64(32) > ::neverd::limits::emulation::kMaxBinderTransactionBytes)
     return unsupported(Result, "Binder transaction payload budget exhausted");
   const uint64_t Size = Get64(32), OffsetsSize = Get64(40);
-  if (OffsetsSize % 8 || OffsetsSize / 8 > Size / 24)
-    return unsupported(Result,
-                       "Binder object table size does not fit its payload");
+  if (OffsetsSize > ::neverd::limits::emulation::kMaxBinderTransactionBytes)
+    return unsupported(Result, "Binder object table budget exhausted");
   auto &OwnQueue = Device.BinderThreadWork[CurrentTask];
   if (OwnQueue.size() >=
       ::neverd::limits::emulation::
           kLinuxBinderTransactionsLinuxFilesBinderCommandOwnQueueSizeLimit)
     return unsupported(Result, "Binder thread work budget exhausted");
   auto Error = [&](uint32_t Code) -> Outcome {
-    OwnQueue.push_back({Code});
+    BinderWork Work{Code};
+    Work.ReturnError = true;
+    OwnQueue.push_back(std::move(Work));
     return Outcome(0);
   };
   std::shared_ptr<LinuxDeviceState> Target, Sender;
@@ -167,7 +170,8 @@ LinuxFiles::binderCommand(LinuxDeviceState &Device, uint32_t Command,
   auto Buffer = std::make_shared<BinderBuffer>();
   Buffer->Size = Size;
   Buffer->Objects.resize(OffsetsSize / 8);
-  const uint64_t Needed = Buffer->allocationSize();
+  const uint64_t Needed = std::max<uint64_t>(
+      8, ((Size + 7) & ~uint64_t(7)) + ((OffsetsSize + 7) & ~uint64_t(7)));
   if (Target->BinderBuffers.size() >=
       ::neverd::limits::emulation::
           kLinuxBinderTransactionsLinuxFilesBinderCommandTargetBinderBuffersSizeLimit)
@@ -220,7 +224,11 @@ LinuxFiles::binderCommand(LinuxDeviceState &Device, uint32_t Command,
   for (size_t I = 0; I < Buffer->Objects.size(); ++I)
     Buffer->Objects[I] =
         llvm::support::endian::read64le((**Offsets).data() + I * 8);
-  if (!binderTranslateObjects(Device, *Target, **Payload, *Buffer, Result))
+  const auto Translation =
+      OffsetsSize % 8
+          ? BinderObjectTranslation::Rejected
+          : binderTranslateObjects(Device, *Target, **Payload, *Buffer, Result);
+  if (Translation == BinderObjectTranslation::Unsupported)
     return std::nullopt;
   if (TargetNode) {
     ++TargetNode->LocalStrong;
@@ -234,6 +242,27 @@ LinuxFiles::binderCommand(LinuxDeviceState &Device, uint32_t Command,
                                           Offset + ((Size + 7) & ~uint64_t(7)),
                                           **Offsets))
       return std::move(E);
+  if (Translation == BinderObjectTranslation::Rejected) {
+    // The driver copied the bytes and translated a prefix, then released the
+    // target and prefix references. The failed allocation is reusable without
+    // clearing the mapped bytes and never becomes a delivered buffer lease.
+    if (!binderReleaseBuffer(*Target, *Buffer, Result))
+      return std::nullopt;
+    if (!IsReply)
+      return Error(Failed);
+    Device.BinderIncoming.erase(CurrentTask);
+    Target->BinderOutgoing.erase(Call->Thread);
+    auto &Queue = Target->BinderThreadWork[Call->Thread];
+    Queue.push_back({Complete});
+    // reply_error is a single slot; a second failed call retires normally
+    // without overwriting an unread failure from the previous call.
+    if (std::none_of(Queue.begin(), Queue.end(), [](const BinderWork &Work) {
+          return !Work.ReturnError &&
+                 (Work.Command == Failed || Work.Command == Dead);
+        }))
+      Queue.push_back({Failed});
+    return Error(Complete);
+  }
   Target->BinderBuffers.emplace(Offset, std::move(Buffer));
   BinderWork Work{
       IsReply ? Replied : Received,       Get32(16), Flags,

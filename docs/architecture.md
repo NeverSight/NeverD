@@ -17696,6 +17696,12 @@ and ioctl reader share `hasReadyBinderThreadWork`: activated private work takes
 priority, otherwise an idle entered/registered looper can take process work.
 Incoming or outgoing calls prevent that thread from taking another process
 transaction. This same rule wakes a native thread waiting in the pool.
+Invalid transaction objects follow the shared driver's BR_FAILED_REPLY path.
+Translation retains the valid prefix for reference cleanup and the copied arena
+bytes, without publishing a buffer lease. A failed reply retires both call
+records, acknowledges the server through its return-error slot, and notifies the
+caller through its separate reply-error slot. Only the former blocks command
+writes. Both use the existing node/handle and buffer-release owners.
 The native adapter
 only queues libbinder reference/free commands through that owner. Parcel validates
 object reads and protects scalar reads; `AndroidBinder.cpp` caches remote Java
@@ -17753,7 +17759,10 @@ Incoming Binder catches RuntimeException/RemoteException, rewinds without
 truncating the reply and invokes this same method; serialized exceptions count as
 handled calls and keep the normal reply-ack lifetime. Existing tail bytes remain
 observable. Overwrites retain Binder offsets; an invalid current object type
-reaches the shared Linux Binder translation boundary. Parcelable/class-loader
+produces the shared Linux driver's failed transaction response. The replying Java
+pool still receives completion, releases its native Parcels and accepts later
+calls. On the caller side, FAILED_TRANSACTION retains the explicit JNI
+status-exception/logging boundary. Parcelable/class-loader
 payloads, ServiceSpecificException,
 Throwable-cause construction, debug stack-trace parceling and uncaught logging
 remain explicit boundaries; no error reply or log record is fabricated.

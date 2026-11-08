@@ -336,10 +336,14 @@ private:
                                                  uint32_t Command,
                                                  llvm::ArrayRef<uint8_t> Data,
                                                  ProcessResult &Result);
-  bool binderTranslateObjects(LinuxDeviceState &Source,
-                              LinuxDeviceState &Target,
-                              std::vector<uint8_t> &Payload,
-                              BinderBuffer &Buffer, ProcessResult &Result);
+  enum class BinderObjectTranslation { Translated, Rejected, Unsupported };
+  // Rejection retains the translated prefix for driver cleanup. Unsupported
+  // profiles stop before acquiring references or changing the payload.
+  BinderObjectTranslation binderTranslateObjects(LinuxDeviceState &Source,
+                                                 LinuxDeviceState &Target,
+                                                 std::vector<uint8_t> &Payload,
+                                                 BinderBuffer &Buffer,
+                                                 ProcessResult &Result);
   uint8_t binderNodeCommands(const BinderNode &Node,
                              std::vector<uint8_t> &Output) const;
   void binderCommitNode(const std::shared_ptr<BinderNode> &Node,

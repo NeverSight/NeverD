@@ -4658,7 +4658,7 @@ TEST_F(ProcessPublic, AndroidJavaBinderDispatchMatchesSDKAndCLI) {
             Session, Path.c_str(), AndroidNativeAArch64, Options.c_str()));
         ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
         auto Parsed = llvm::cantFail(llvm::json::parse(Text));
-        const bool Stopped = Mode >= 2 && Mode <= 4;
+        const bool Stopped = Mode == 3 || Mode == 4;
         EXPECT_EQ(Parsed.getAsObject()->getString(field::Stop),
                   Stopped     ? "unsupported_service"
                   : Mode == 1 ? "returned"
