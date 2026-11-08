@@ -10963,6 +10963,14 @@ Legacy typed hypercall spellings do not establish full machine-state
 support. See [the KVM domain](x86-kvm-hypercalls.md). This inventory does not
 imply coverage of every newer SEV/SNP instruction.
 
+`backend/llvm/X86/X86VirtualizationNative.h` owns native LLVM names and
+available NeverC source spellings together. Mode-sized i386 VMCS and address
+APIs use the full fork's `32` names in both C renderers; management memory
+operands retain m64. An empty source spelling keeps the architecture's existing
+assembly projection where that source ABI is not yet implemented, such as
+physical-address i386 SVM operations. It does not change LLVM intrinsic
+availability or substitute an effect-free operation.
+
 VMX completion carries CF/ZF and clears OF/SF/AF/PF. Failed register VMREAD
 preserves its destination; memory VMREAD/VMWRITE retain their address inside
 the instruction so access and fault ordering are not replaced by ordinary

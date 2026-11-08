@@ -113,10 +113,12 @@ std::string nativeBody(const X86VirtualizationNative &Plan,
   for (size_t I = 0; I < Arguments.size(); ++I) {
     std::string Type = unsignedType(Plan.Assembly.InputBytes[I]);
     if (I == C.MemoryArgument && !Plan.AddressControls)
-      Type = Plan.Assembly.Id == Intrinsic::VmxReadMemory
-                 ? "unsigned long long *"
-             : Plan.Assembly.Id == Intrinsic::VmxPtrStore ? "void *"
-                                                          : "const void *";
+      Type =
+          Plan.Assembly.Id == Intrinsic::VmxReadMemory
+              ? (Plan.Assembly.TargetArch == Arch::X86 ? "unsigned *"
+                                                       : "unsigned long long *")
+          : Plan.Assembly.Id == Intrinsic::VmxPtrStore ? "void *"
+                                                       : "const void *";
     Argument("(" + Type + ")(" + Arguments[I] + ")");
   }
   if (Plan.Result == X86VirtualizationResult::Read) {
@@ -155,8 +157,7 @@ std::string renderInstruction(const X86VirtualizationAsm &Plan,
   const auto Native =
       x86VirtualizationNative(Plan.Id, Plan.TargetArch, Space,
                               C.PhysicalAddress ? Plan.InputBytes[0] : 0);
-  // NeverC's native builtin frontend currently targets x86-64 only.
-  if (!Native || Plan.TargetArch != Arch::X64)
+  if (!Native || Native->Builtin.empty())
     return Assembly;
   const bool Read = C.Result == X86VirtualizationResult::Read;
   const auto Body = nativeBody(*Native, Inputs, Read ? Outputs[0] : "",
@@ -607,7 +608,7 @@ renderX86VirtualizationNativeCall(Arch TargetArch, const llvm::CallBase &Call,
         if (!StatusOutput.empty())
           Assembly += " " + StatusOutput + " = " +
                       flagsToStatus("__neverd_vmx_flags") + ";";
-        if (TargetArch == Arch::X86)
+        if (Plan->Builtin.empty())
           return "{ " + Assembly + " }\n";
         std::string Text = "{ ";
         if (Read && !ResultLive)

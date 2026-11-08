@@ -6945,6 +6945,21 @@ compilations from both source routes at O0/O2, checking native intrinsic calls
 and the absence of inline assembly. That C test also runs with the old SDK's
 assembly IR. Stock Clang still compiles both C fallbacks; fork-only LLVM IR is
 compiled by the linked SDK rather than sent to an incompatible system Clang.
+`X86VirtualizationSource.NeverCI386CompilesBothRoutesWithoutAssembly` adds
+Linux i386 ELF source compilation through the full backend selected by
+`NEVERD_TEST_NEVERC_LLC`. It covers mode-sized VMCS/invalidation operands,
+fixed m64 management operands, default/NoOpt and FS/GS, checks native IR and
+machine output at O0/O2, and retains complete C plus independent `.bin` inputs
+under `NEVERD_ISA_REGRESSION_ARTIFACT_DIR`.
+Run `scripts/check_x86_vmx_source.py --exports DIR --compiler NEVERC
+--backend-llc LLVM_LLC --output OUT` and separately with stock Clang (without
+the backend option) to execute those unchanged C units. The controlled witness
+compares original native operands, widths, initialized memory, status and ABI
+restoration, and rejects an intact VMX operation with a discarded return.
+Segment bases are flat in this witness; VM entry success, descriptor validation
+and hardware VMCS execution are outside it. NeverC's separate VMX address
+witness owns nonzero segment-base transport and 16-bit address truncation.
+
 `LLVMCValues.NativeVirtualizationKeepsStatusAndFailedReadPrior` supplies controlled
 VMX completion values to check C status conversion, exact operand evaluation
 and failed-read preservation without executing privileged instructions.
