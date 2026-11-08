@@ -14,6 +14,9 @@
 
 #include "neverd/translate/X86/X86LegacyExecution.h"
 
+#include <cstdint>
+#include <optional>
+
 namespace neverd::translate::detail {
 
 struct X86LegacyControlInstruction {

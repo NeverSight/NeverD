@@ -11,6 +11,9 @@
 
 #include "llvm/Support/Errc.h"
 
+#include <cstdint>
+#include <utility>
+
 namespace neverd::translate::detail {
 namespace {
 
