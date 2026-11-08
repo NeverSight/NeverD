@@ -486,7 +486,8 @@ bool indirectDarwinRecord(const TypeRef &Type) {
   Record->Passing = NdRecordPassing::ByValue;
   const auto Placement = placeSourceParameters(
       Arch::AArch64, BinaryFormat::MachO, NdType::makeVoid(), {Record});
-  return Placement && Placement->Parameters.front().size() == 1 &&
+  return Placement && Placement->Parameters.size() == 1 &&
+         Placement->Parameters.front().size() == 1 &&
          Placement->Parameters.front().front().Indirect;
 }
 } // namespace

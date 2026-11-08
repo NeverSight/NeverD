@@ -894,3 +894,18 @@ TEST(SourceCallABI, NativeSIMD128UsesFullQRegistersAndAlignedStack) {
   Invalid.Architecture = Arch::X64;
   EXPECT_FALSE(validateSourceABI(Invalid, Error));
 }
+
+TEST(SourceCallABI, NativeVectorRecordsDoNotBecomeIntegerOrIndirectValues) {
+  const auto Vector = NdType::makeInt(kDarwinWideBytes);
+  Vector->SourceName = kSourceAArch64Vector128CType;
+  for (unsigned Count = 1; Count <= kDarwinHFAMembers; ++Count) {
+    const auto Record = NdType::makeStruct(std::vector<TypeRef>(Count, Vector));
+    auto H = contract({Record});
+    H.Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+    std::string Error;
+    EXPECT_FALSE(assignDarwinFixedSourceABI(H.Signature, Arch::AArch64, Error));
+    H.Signature.Parameters.clear();
+    H.Signature.ReturnType = Record;
+    EXPECT_FALSE(assignDarwinFixedSourceABI(H.Signature, Arch::AArch64, Error));
+  }
+}
