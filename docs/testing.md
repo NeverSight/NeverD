@@ -21283,6 +21283,27 @@ with an uncaught exception at both levels. They reproduce the boundary without
 handwritten frame CFI and are unavailable coverage, not passing NeverD signed
 unwind qualification.
 
+### Arm64e verifier artifact ownership
+
+The SDK call driver and `scripts/verify_arm64e_sp_memory.py` share
+`scripts/arm64e_artifacts.py`. They register each disposable object or executable
+before its compiler starts and persist the registry atomically. Success,
+failure and normal interruption all remove registered products. The next
+invocation recovers a killed run under the same output lock. Compiler children
+inherit that lock, so recovery waits for pending producers. The original SDK
+call assembly and dylib remain as a minimal fixture and are reused only when
+source, compiler version, command and binary digest agree. Input snapshots,
+source projections, diagnostic logs and explicitly retained products remain.
+The SP verifier uses the supplied SDK directly and refuses to overwrite a
+changed formal input in a reused output directory.
+
+`test_arm64e_artifact_lifecycle.py` exercises repeated success/failure/abort
+paths, the actual SDK and SP entry points, explicit retention, SIGKILL recovery
+and a compiler outliving its controller. It uses small fixtures and does not
+execute the arm64e research matrix. The external CPA2 environment separately
+owns its FVP cache and scratch lifecycle across primitive, generated-memory,
+grouped-memory and authenticated-call drivers.
+
 ## Selected callable checks
 
 `Win64CallContract.AddressOnlySymbolsDoNotInventCallableTypes` combines address-only output with integer, pointer, floating and void providers. `AddressOnlyCallbackConvertsToItsKnownParameterType` executes a typed callback. `SelectedWordCalleesKeepTheirPointerDeclarations` / `PipelineOutcome.OmittedPointerDeclarationsStayInSourceModules` combines separately selected callers and pointer-reading callees, and compares whole-unit output with cold/warm cache use. The x64/ARM64 PE, ELF and Mach-O input models compile and execute generated C at O0/O2 with UBSan. This validates host source execution, not native execution on every target platform. Run the call-contract, pointer-projection, source-ABI and callee-cache owners after changing this boundary.

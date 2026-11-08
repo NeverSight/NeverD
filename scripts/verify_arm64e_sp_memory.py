@@ -11,6 +11,8 @@ import shutil
 import subprocess
 import time
 
+from arm64e_artifacts import OwnedProducts
+
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = json.loads(Path(__file__).with_suffix(".def").read_text())
@@ -41,11 +43,11 @@ def validate_report(report, kind):
     return exports[0]
 
 
-def execute(command, directory, name, timeout, env):
+def execute(command, directory, name, timeout, env, products):
     (directory / (name + "-command.json")).write_text(
         json.dumps(command, indent=2) + "\n")
     try:
-        result = subprocess.run(command, env=env, text=True,
+        result = products.run(command, env=env, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 timeout=timeout, check=False)
     except subprocess.TimeoutExpired as error:
@@ -81,8 +83,12 @@ def main():
     if (len(args.neverd_revision) != CONFIG["revision_hex_length"] or
             any(c not in CONFIG["revision_hex_digits"] for c in args.neverd_revision)):
         parser.error(CONFIG["errors"]["revision"])
+    with OwnedProducts(args.output.resolve(), False) as products:
+        run_checks(args, profile, products)
+
+
+def run_checks(args, profile, products):
     output = args.output.resolve()
-    output.mkdir()
     env = dict(os.environ, SDKROOT=str(args.sdk.resolve()))
     env.pop("CCC_OVERRIDE_OPTIONS", None)
     compiler = shutil.which(args.compiler)
@@ -107,7 +113,7 @@ def main():
 
     save()
     execute([compiler, "--version"], output, "compiler-version",
-            CONFIG["compile_timeout_seconds"], env)
+            CONFIG["compile_timeout_seconds"], env, products)
     inputs_to_check = [("stack", args.stack_artifacts, args.stack_report)]
     if "control" in profile["test_reports"]:
         inputs_to_check.append(("control", args.control_artifacts, args.control_report))
@@ -116,10 +122,10 @@ def main():
                                  profile["test_reports"][kind])
         work = output / kind
         inputs = work / "inputs"
-        inputs.mkdir(parents=True)
-        shutil.copy2(test_report, inputs / "tests.json")
+        inputs.mkdir(parents=True, exist_ok=True)
+        products.copy_input(test_report, inputs / "tests.json")
         for name in CONFIG["input_files"]:
-            shutil.copy2(artifacts / name, inputs / name)
+            products.copy_input(artifacts / name, inputs / name)
         summary["inputs"][kind] = {
             "export_origin": origin,
             "sha256": {p.name: digest(p) for p in inputs.iterdir()},
@@ -144,26 +150,29 @@ def main():
         source = work / CONFIG["harness_file"]
         source.write_text(harness)
         harness_object = work / "harness.o"
+        products.append(harness_object)
         execute([compiler, *flags, CONFIG["harness_optimization"], "-c",
                  str(source), "-o", str(harness_object)],
-                work, "harness-compile", CONFIG["compile_timeout_seconds"], env)
+                work, "harness-compile", CONFIG["compile_timeout_seconds"], env, products)
         for route in CONFIG["routes"]:
             start = time.monotonic()
             directory = work / route["name"]
-            directory.mkdir()
+            directory.mkdir(exist_ok=True)
             projection = directory / "projection.o"
+            products.append(projection)
             if route["compile_c"]:
                 execute([compiler, *flags, route["optimization"], "-c",
                          str(inputs / route["file"]), "-o", str(projection)],
-                        directory, "projection-compile", CONFIG["compile_timeout_seconds"], env)
+                        directory, "projection-compile", CONFIG["compile_timeout_seconds"], env, products)
             else:
                 shutil.copy2(inputs / route["file"], projection)
             executable = directory / "verify"
+            products.append(executable)
             execute([compiler, *flags, str(projection), str(harness_object),
                      "-o", str(executable)], directory, "link",
-                    CONFIG["compile_timeout_seconds"], env)
+                    CONFIG["compile_timeout_seconds"], env, products)
             result = execute([str(executable)], directory, "execute",
-                             CONFIG["execution_timeout_seconds"], env)
+                             CONFIG["execution_timeout_seconds"], env, products)
             observation = json.loads(result.stdout) if kind == "stack" else {}
             if kind == "stack" and observation != profile["fault_observations"]:
                 raise ValueError(CONFIG["errors"]["observations"])
