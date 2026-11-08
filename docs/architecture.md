@@ -1324,6 +1324,11 @@ C routes use that same layout. Such raw calls also use the physical bridge,
 so an integer IR carrier cannot silently acquire the i128 general-register ABI.
 External C declarations retain the logical aggregate type without creating a
 copy; function-body projections still require their separate storage proof.
+This covers standalone full-width vector values; homogeneous vector aggregates
+remain unclassified until their member and register-bank ABI is represented.
+Call-occurrence identity can describe 32-bit or 64-bit targets, while native
+frame and Boolean-result proofs require the complete target architecture
+pointer width before granting a source projection.
 A resolved display name cannot replace that authenticated target,
 and exact LLVM call prototypes remain
 exact. Explicit source call-site prototypes and recovered native C prototypes

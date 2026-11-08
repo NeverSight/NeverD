@@ -48,8 +48,8 @@ inline constexpr char kResultCallCClobbers[] =
 /// Narrow carriers retain their word slots. A complete Q carrier occupies
 /// two aligned slots, so neither half overlaps another argument or result.
 struct SourceResultCallPacketLayout {
-  llvm::SmallVector<unsigned, 8> Arguments;
-  llvm::SmallVector<unsigned, 4> Results;
+  llvm::SmallVector<unsigned, kResultCallInlineArguments> Arguments;
+  llvm::SmallVector<unsigned, kResultCallInlineResults> Results;
   unsigned Words = kResultCallHeaderWords;
   unsigned Alignment = kResultCallWordBytes;
 };
@@ -77,7 +77,7 @@ sourceResultCallPacketLayout(llvm::ArrayRef<SourceABIParameter> Bindings,
 
 /// Result pieces of a validated Darwin signature. Indirect results retain
 /// original storage instead of reconstructing a new logical value.
-inline llvm::SmallVector<SourceABIParameter, 4>
+inline llvm::SmallVector<SourceABIParameter, kResultCallInlineResults>
 sourceResultCallResults(const SourceFunctionTypeHint &Signature) {
   if (Signature.ReturnType->Kind == NdTypeKind::Void ||
       Signature.ReturnLocation.Kind ==
@@ -86,7 +86,7 @@ sourceResultCallResults(const SourceFunctionTypeHint &Signature) {
   if (Signature.ReturnComponents.empty())
     return {{0, 0, {}, Signature.ReturnType, Signature.ReturnLocation}};
   const auto Members = sourceABIValueMembers(Signature.ReturnType);
-  llvm::SmallVector<SourceABIParameter, 4> Results;
+  llvm::SmallVector<SourceABIParameter, kResultCallInlineResults> Results;
   for (unsigned I = 0; I < Members.size(); ++I)
     Results.push_back({0,
                        Members[I].ByteOffset,

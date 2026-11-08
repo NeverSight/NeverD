@@ -26,6 +26,9 @@
 
 RESULT_CALL_INPUTS("r,r")
 VALUE_CALL_INPUTS("r,r,r")
+// Inline storage covers one parameter bank and the largest direct result.
+RESULT_CALL_VALUE(kResultCallInlineArguments, 8)
+RESULT_CALL_VALUE(kResultCallInlineResults, 4)
 RESULT_CALL_VALUE(kResultCallWordBytes, 8)
 RESULT_CALL_VALUE(kResultCallFloatBytes, 4)
 RESULT_CALL_VALUE(kResultCallHalfBytes, 2)
