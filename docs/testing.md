@@ -1956,9 +1956,26 @@ logical copies or `byval`/`sret` promises. Named-function C output is compiled
 by Apple Clang directly; Apple Clang's legacy `llvm.ptrauth` globals remain
 unsupported by r6 IR import. Ordinary and rewrite code-generation boundaries
 now reject that representation before the incompatible backend can abort.
-General vector-containing record ABIs (including HVAs), whole-image
-authentication installation and signed exception execution remain separate,
-incomplete work.
+That receipt predates HVA transport. The vector-aggregate profile below extends
+its fixed-call coverage; whole-image authentication installation and signed
+exception execution remain separate, incomplete work.
+
+`SourceCallABI.NativeHVA*` covers 64/128-bit homogeneous vector records with
+one to four members, nested records and arrays, natural stack offsets and whole
+FP-bank exhaustion. Invalid widths, layouts, incomplete carriers, foreign
+conventions and reuse of an exhausted bank reject. Five-member and mixed-width
+larger records retain indirect addresses and x8. Independent Clang C declarations
+check the Darwin HVA versus indirect classification at O0/O2. Source names must
+keep vector/integer records and array extents distinct.
+
+`ByShape/AArch64RecoveredAuthenticatedCall` adds short-vector and HVA shapes on
+all five object routes, including arrays of records, mixed GP/FP arguments,
+packed stack prefixes and larger non-HVA companions. HVA results write every
+64-bit word to caller observation storage; the independent environment checks
+all distinct expected words and guards on both sides. The LowIR integration
+also covers native HVA parameters alongside original x8 storage. These tests
+qualify transport of an established fixed C declaration, not general recovery,
+vector variadics, packed/union layouts or whole-image publication.
 
 `MachOArm64eDependencies` additionally verifies multi-start pages for all six
 supported arm64e chain formats and ordinary 64-bit chains. It checks complete

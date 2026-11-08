@@ -756,11 +756,22 @@ ExprPtr MedToHighConverter::sourceBitSlice(const ExprPtr &Value,
     Slice->Type = NdType::makeInt(Bytes, false);
     return Slice;
   }
-  if (Value->Type->Kind == NdTypeKind::Struct)
-    return HighExpr::makeBitCast(
-        HighExpr::makeRecordField(Value, static_cast<uint16_t>(ByteOffset),
-                                  Bytes),
-        NdType::makeInt(Bytes, false));
+  if (Value->Type->Kind == NdTypeKind::Struct) {
+    // A machine reader can observe part of a vector member (including its
+    // upper word). Select the complete source member before slicing its bits;
+    // record padding and slices spanning members are not source values.
+    for (const auto &Member : sourceAggregateMembers(Value->Type))
+      if (ByteOffset >= Member.ByteOffset &&
+          ByteOffset + Bytes <= Member.ByteOffset + Member.Type->Size) {
+        auto Field = HighExpr::makeBitCast(
+            HighExpr::makeRecordField(Value, Member.ByteOffset,
+                                      Member.Type->Size),
+            NdType::makeInt(Member.Type->Size, false));
+        return sourceBitSlice(Field, ByteOffset - Member.ByteOffset, Bytes,
+                              Depth + 1);
+      }
+    return HighExpr::makeUndef(Bytes);
+  }
   if (Value->Kind == ExprKind::BinOp && Value->Operands.size() >= 2) {
     if (Value->Op == NdOp::CONCAT && Value->Operands[1] &&
         Value->Operands[1]->Type) {

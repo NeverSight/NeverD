@@ -93,7 +93,7 @@ ExprPtr HighExpr::makeBitCast(ExprPtr Value, TypeRef Type) {
   // Inverse bit reinterpretations cancel without any numeric conversion.
   if (Value->Kind == ExprKind::BitCast && Value->Operands.size() == 1 &&
       Value->Operands[0] && Value->Operands[0]->Type &&
-      Value->Operands[0]->Type->str() == Type->str())
+      equalSourceTypes(Value->Operands[0]->Type, Type))
     return Value->Operands[0];
   auto E = std::make_shared<HighExpr>();
   E->Kind = ExprKind::BitCast;
@@ -111,13 +111,18 @@ ExprPtr HighExpr::makeRecord(TypeRef Type, std::vector<ExprPtr> Leaves) {
       return makeUndef(Type->Size);
   size_t Index = 0;
   std::function<ExprPtr(const TypeRef &)> Build = [&](const TypeRef &T) {
-    if (T->Kind != NdTypeKind::Struct)
+    if (T->Kind != NdTypeKind::Struct && T->Kind != NdTypeKind::Array)
       return Leaves[Index++];
     auto E = std::make_shared<HighExpr>();
     E->Kind = ExprKind::Record;
     E->Type = T;
-    for (const auto &Field : T->Fields)
-      E->Operands.push_back(Build(Field));
+    if (T->Kind == NdTypeKind::Array) {
+      for (uint32_t I = 0; I < T->ArrayCount; ++I)
+        E->Operands.push_back(Build(T->ElemType));
+    } else {
+      for (const auto &Field : T->Fields)
+        E->Operands.push_back(Build(Field));
+    }
     return E;
   };
   return Build(Type);
@@ -127,26 +132,38 @@ ExprPtr HighExpr::makeRecordField(ExprPtr Record, uint16_t Offset,
                                   uint16_t Bytes) {
   if (!Record || sourceAggregateMembers(Record->Type).empty())
     return makeUndef(Bytes);
-  while (Record->Type->Kind == NdTypeKind::Struct) {
+  while (Record->Type->Kind == NdTypeKind::Struct ||
+         Record->Type->Kind == NdTypeKind::Array) {
     const auto &T = Record->Type;
     size_t Index = 0;
-    for (; Index < T->Fields.size(); ++Index)
-      if (Offset >= T->FieldOffsets[Index] &&
-          Offset - T->FieldOffsets[Index] + Bytes <= T->Fields[Index]->Size)
-        break;
-    if (Index == T->Fields.size())
-      return makeUndef(Bytes);
-    Offset -= T->FieldOffsets[Index];
+    TypeRef Field;
+    const bool Array = T->Kind == NdTypeKind::Array;
+    if (Array) {
+      Index = Offset / T->ElemType->Size;
+      Offset %= T->ElemType->Size;
+      if (Index >= T->ArrayCount || Offset + Bytes > T->ElemType->Size)
+        return makeUndef(Bytes);
+      Field = T->ElemType;
+    } else {
+      for (; Index < T->Fields.size(); ++Index)
+        if (Offset >= T->FieldOffsets[Index] &&
+            Offset - T->FieldOffsets[Index] + Bytes <= T->Fields[Index]->Size)
+          break;
+      if (Index == T->Fields.size())
+        return makeUndef(Bytes);
+      Offset -= T->FieldOffsets[Index];
+      Field = T->Fields[Index];
+    }
     if (Record->Kind == ExprKind::Record &&
-        Record->Operands.size() == T->Fields.size()) {
+        Record->Operands.size() == (Array ? T->ArrayCount : T->Fields.size())) {
       if (!Record->Operands[Index] ||
-          !equalSourceTypes(Record->Operands[Index]->Type, T->Fields[Index]))
+          !equalSourceTypes(Record->Operands[Index]->Type, Field))
         return makeUndef(Bytes);
       Record = Record->Operands[Index];
     } else {
       auto E = std::make_shared<HighExpr>();
       E->Kind = ExprKind::Field;
-      E->Type = T->Fields[Index];
+      E->Type = std::move(Field);
       E->ConstVal = Index;
       E->Operands.push_back(std::move(Record));
       Record = std::move(E);
