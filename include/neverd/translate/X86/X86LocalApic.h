@@ -44,6 +44,8 @@ enum class X86LocalApicArrival : uint8_t {
 
 /// An owned bank for an enabled modern APIC using ordinary fixed delivery/EOI
 /// and one coalescing IRR bit per vector (not the older P6 rejection profile).
+/// Equal task/service classes retain TPR's low PPR bits, as in QEMU/KVM;
+/// that choice is model-specific, not a property of every modern processor.
 /// The embedding binds that profile, synchronizes original TPR/CR8 writes and
 /// serializes access. Arrival timing/routing, APIC mode changes, NMI/ExtINT
 /// arbitration, software interrupts, spurious vectors, auto-EOI/SynIC, posted
@@ -80,6 +82,16 @@ public:
     return X86LocalApicFixed(Initial);
   }
 
+  /// Import alongside an explicit CPU CR8 bank. A mismatch rejects the import
+  /// rather than choosing one observation or treating import as a CR8 write.
+  static constexpr std::optional<X86LocalApicFixed>
+  fromState(X86LocalApicFixedState Initial, uint64_t CR8) {
+    auto APIC = fromState(Initial);
+    if (!APIC || APIC->readCr8() != CR8)
+      return std::nullopt;
+    return APIC;
+  }
+
   constexpr const X86LocalApicFixedState &state() const { return State; }
 
   /// Receive a fixed message already routed to this enabled APIC. This is
@@ -109,6 +121,23 @@ public:
   /// A byte write to the actual TPR. This does not synthesize a CR8 write or
   /// infer its completion from a changed CPU state; the producer owns those.
   constexpr void setTaskPriority(uint8_t Value) { State.TPR = Value; }
+
+  /// Read the enabled APIC's task-priority class, not PPR or ISR priority.
+  /// Read/import never discard the TPR subpriority that CR8 cannot represent.
+  constexpr uint64_t readCr8() const { return State.TPR >> 4; }
+
+  /// Apply an admitted, ordered CPL0 MOV-to-CR8 register effect. Reserved-bit
+  /// input rejects without changes; the caller owns instruction admission and
+  /// #GP delivery. Every valid write clears TPR's low nibble, including writes
+  /// of the same CR8 value. This is not state restoration or polling-time sync.
+  /// The embedding mirrors a successful write into its CPU bank, and serializes
+  /// it with direct TPR accesses and producer selection/acknowledgment.
+  [[nodiscard]] constexpr bool writeCr8(uint64_t Value) {
+    if (Value > 15)
+      return false;
+    setTaskPriority(uint8_t(Value << 4));
+    return true;
+  }
 
   constexpr uint8_t processorPriority() const {
     const uint8_t ServiceClass = highest(State.ISR).value_or(0) & 0xf0;
