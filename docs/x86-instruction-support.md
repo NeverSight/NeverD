@@ -4535,6 +4535,9 @@ SDKs rebuild and pass the same 79 checks and 3,008 compilation checks. All
 829 retained source, original-byte, IR and object exports are byte-identical
 to `c6c91892f1`, with unchanged NeverC, LLVM and Clang hashes. The integration
 receipt records that basis for reusing the complete-C behavior results.
+The later shared HighIR/MedIR and SEH integration at `65eb4b911c` also rebuilds
+both SDKs and passes all 79 checks and 3,008 compilation checks. Its 829
+exports remain byte-identical, and a separate receipt records the new binaries.
 
 Stopped native instructions qualify address/ASID transport and the C ABI.
 Separate CPL0 QEMU runs qualify VMCB/MSR round trips and continuation only
