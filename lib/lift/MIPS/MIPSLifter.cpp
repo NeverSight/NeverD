@@ -17,6 +17,7 @@
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Endian.h"
 
 namespace neverd {
@@ -41,7 +42,7 @@ bool MIPSLifter::hasDelaySlot(uint32_t Word) {
   return (Opcode >= 2 && Opcode <= 7) || (Opcode >= 20 && Opcode <= 23);
 }
 
-std::optional<MIPSLifter::Encoding>
+LLVM_ATTRIBUTE_ALWAYS_INLINE std::optional<MIPSLifter::Encoding>
 MIPSLifter::encoding(const cs_insn &Instruction) const {
   if (Mode == InstructionMode::MicroMIPS)
     return microEncoding(Instruction);
