@@ -81,6 +81,11 @@ void Decoder::reset() {
 // The parallel phases each build a per-thread Decoder, so a failure here can be
 // reported from several worker threads at once — hence the serialized writes.
 bool Decoder::init(Arch TheArch, InstructionMode Mode) {
+  return initWithMIPSRevision(TheArch, Mode, 2);
+}
+
+bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
+                                   uint8_t Revision) {
   if ((Mode == InstructionMode::MIPSClassic ||
        Mode == InstructionMode::MicroMIPS) &&
       !isMIPS(TheArch)) {
@@ -127,13 +132,18 @@ bool Decoder::init(Arch TheArch, InstructionMode Mode) {
     if ((Mode != InstructionMode::Default &&
          Mode != InstructionMode::MIPSClassic &&
          Mode != InstructionMode::MicroMIPS) ||
-        (isMIPS64(TheArch) && Mode != InstructionMode::Default)) {
+        (isMIPS64(TheArch) && Mode != InstructionMode::Default) ||
+        (Revision != 2 && Revision != 5) ||
+        (Revision == 5 &&
+         (isMIPS64(TheArch) || Mode == InstructionMode::MicroMIPS))) {
       syncError() << "unsupported MIPS instruction mode\n";
       return false;
     }
     CsArch = CS_ARCH_MIPS;
     CsMode = static_cast<cs_mode>(
-        (isMIPS64(TheArch) ? CS_MODE_MIPS64R2 : CS_MODE_MIPS32R2) |
+        (isMIPS64(TheArch) ? CS_MODE_MIPS64R2
+         : Revision == 5   ? CS_MODE_MIPS32R5
+                           : CS_MODE_MIPS32R2) |
         (Mode == InstructionMode::MicroMIPS ? CS_MODE_MICRO : 0) |
         (archLittleEndian(TheArch) ? CS_MODE_LITTLE_ENDIAN
                                    : CS_MODE_BIG_ENDIAN));
@@ -171,6 +181,7 @@ bool Decoder::init(Arch TheArch, InstructionMode Mode) {
   InsnBuf = NewInsnBuf;
   TargetArch = TheArch;
   CurrentMode = Mode;
+  MIPSISARevision = Revision;
   Detail = true;
   Text = true;
   X86 = std::move(NewX86);
@@ -182,8 +193,10 @@ bool Decoder::init(Arch TheArch, InstructionMode Mode) {
 
 void Decoder::configureFor(const BinaryImage &Img) {
   configureX86For(Img);
-  if (MIPS)
+  if (MIPS) {
     MIPS->setDSPEnabled(Img.MIPS && Img.MIPS->HasDSP);
+    MIPS->setMSAEnabled(Img.MIPS && Img.MIPS->HasMSA && MIPSISARevision == 5);
+  }
   if (AArch64)
     AArch64->setPreserveImmediateMemory(
         Img.isArm64e() &&
@@ -203,7 +216,8 @@ bool Decoder::init(const BinaryImage &Img) {
     return false;
   }
   if (Img.Mode != InstructionMode::MixedARMThumb) {
-    if (!init(Img.Arch, Img.Mode))
+    if (!initWithMIPSRevision(Img.Arch, Img.Mode,
+                              Img.MIPS ? Img.MIPS->ISARevision : 2))
       return false;
     configureFor(Img);
     return true;
@@ -223,14 +237,16 @@ bool Decoder::selectMode(const BinaryImage &Img, va_t Addr,
       (Addr % (*Mode == InstructionMode::MicroMIPS ? 2 : 4) ||
        (!isMIPS64(Img.Arch) && Addr > UINT32_MAX)))
     return false;
-  if (Handle && TargetArch == Img.Arch && CurrentMode == *Mode) {
+  const uint8_t Revision = Img.MIPS ? Img.MIPS->ISARevision : 2;
+  if (Handle && TargetArch == Img.Arch && CurrentMode == *Mode &&
+      (!MIPS || MIPSISARevision == Revision)) {
     if (AArch64 || MIPS)
       configureFor(Img);
     return true;
   }
   const bool WasDetail = Detail;
   const bool WasText = Text;
-  if (!init(Img.Arch, *Mode))
+  if (!initWithMIPSRevision(Img.Arch, *Mode, Revision))
     return false;
   setDetail(WasDetail);
   setText(WasText);

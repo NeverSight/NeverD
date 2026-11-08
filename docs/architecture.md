@@ -15259,6 +15259,14 @@ the source backends preserve original-machine transfers through
 `MIPSDSPSource`. These transfers remain observable independently of integer
 return values, including when packed arithmetic discards its GPR destination.
 
+The MSA integer-vector slice consumes explicit r5/o32/FP64 metadata. Decoder handle
+reuse includes the ISA revision; `MIPSMSA.def` and `MIPSLiftMSA` own raw
+encodings and full-vector arithmetic. `MIPSRegs`/`TargetRegInfoMIPS` share W
+storage and low F views without assigning a floating ABI to ordinary integers.
+`MedMIPSSourceVectors` refuses unknown entry vectors, calls, saved FPR writes
+and multi-block source before optimization. It does not narrow LowIR register
+coverage or invent initial machine state.
+
 The focused MIPS loader, integer, flow, SDK and pipeline suites cover these
 contracts. Owned kernels are recompiled from HighC and LLVMC for the original
 MIPS target and compared with their assembly originals in pinned Unicorn.

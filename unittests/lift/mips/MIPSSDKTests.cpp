@@ -109,6 +109,47 @@ TEST_P(MIPSSDK, FunctionPagesKeepTheHeadAndSlotAsSeparateRows) {
   }
 }
 
+TEST_P(MIPSSDK, BenchmarkConsumesTheLoadedImageProfile) {
+  mips_test::ELFBytes File(GetParam());
+  File.abiFlags();
+  if (!File.Is64) {
+    File.Bytes[0xe3] = 5;
+    File.Bytes[0xe5] = 3;
+    File.Bytes[0xe7] = 6;
+    File.put(0xec, 0x200, 4);
+  }
+  const size_t Program = File.Is64 ? 64 : 52;
+  const size_t Width = File.Is64 ? 8 : 4;
+  File.put(Program + (File.Is64 ? 8 : 4), 0x100, Width);
+  File.put(Program + (File.Is64 ? 16 : 8), 0x10100, Width);
+  File.put(Program + (File.Is64 ? 24 : 12), 0x10100, Width);
+  File.put(Program + (File.Is64 ? 32 : 16), 16, Width);
+  File.put(Program + (File.Is64 ? 40 : 20), 16, Width);
+  File.put(0x100, File.Is64 ? 0x0085102d : 0x7b02201e, 4);
+  File.put(0x104, File.Is64 ? 0u : 0x78b00099u, 4);
+  File.put(0x108, 0x03e00008, 4);
+  File.put(0x10c, 0, 4);
+  const auto Path =
+      (std::filesystem::path(Directory.str().str()) / "benchmark.elf").string();
+  std::error_code Error;
+  llvm::raw_fd_ostream Output(Path, Error);
+  ASSERT_FALSE(Error);
+  Output.write(reinterpret_cast<const char *>(File.Bytes.data()),
+               File.Bytes.size());
+  Output.close();
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1)
+      << take(neverd_last_error(Session));
+  const auto Text = take(neverd_bench_decode(Session));
+  auto Result = llvm::json::parse(Text);
+  ASSERT_TRUE(bool(Result)) << Text << take(neverd_last_error(Session));
+  const auto *Object = Result->getAsObject();
+  ASSERT_NE(Object, nullptr);
+  EXPECT_EQ(Object->getString("arch"), getArchName(GetParam()));
+  EXPECT_EQ(Object->getInteger("exec_bytes"), 16);
+  EXPECT_EQ(Object->getInteger("bench_bytes"), 16);
+  EXPECT_EQ(Object->getInteger("insns"), 4);
+}
+
 TEST_P(MIPSSDK, FlowInspectionPreservesTheBorrowedPhysicalDecode) {
   auto Image = image({0x50800003, 0x27bd0010, 0x03e00008, 0, 0x03e00008, 0});
   Decoder Decode;

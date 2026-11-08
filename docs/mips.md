@@ -2,7 +2,8 @@
 
 The experimental MIPS analysis path targets linked ELF programs with classic
 MIPS32 Release 2/o32 or MIPS64 Release 2/n64 instructions, in either byte order,
-and the bounded microMIPS32 Release 2/o32 subset described below.
+the bounded microMIPS32 Release 2/o32 subset, and the MIPS32 Release 5/o32
+integer MSA slice described below.
 The selected ELF profile determines register width, byte order, stack layout
 and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
 
@@ -83,7 +84,7 @@ Concrete LowIR transport and source parameter inference have separate validation
 boundaries; this source proof does not initialize absent machine registers.
 
 This is a strict subset. n32, historical MIPS I–V profiles, Release 6, MIPS16,
-microMIPS64, floating point, MSA, DSP forms beyond the slice below, privileged
+microMIPS64, floating point, MSA/DSP forms beyond the slices below, privileged
 instructions, LL/SC reservations,
 unaligned merge stores and trapping arithmetic/division are not admitted by
 the current lifter. Unsupported instructions, missing slots and transfers in a
@@ -186,6 +187,46 @@ The microMIPS operation and slot rules were checked against
 [microMIPS32 Volume II, revision 5.04](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00582-2B-microMIPS32-AFP-05.04.pdf)
 and the pinned [GNU simulator definitions](https://gnu.googlesource.com/binutils-gdb/+/d01e823438c7dc264d6885fbbfeace4d8955dcb7/sim/mips/micromips.igen).
 The lifter's admitted ISA remains r2; this reference does not admit later forms.
+
+## Classic MIPS32 MSA integer vectors
+
+The initial MSA slice requires classic MIPS32 Release 5/o32 ELF in either byte
+order, with `.MIPS.abiflags` explicitly declaring MSA, 128-bit CPR1 registers
+and FP64 ABI tag 6. A reused decoder consumes the current revision as well as
+feature evidence; architecture-only initialization remains Release 2 without
+MSA. Other revisions, MSA64, microMIPS/MSA and DSP/MSA combinations are refused.
+
+`FILL.W`, `INSERT.W`, `COPY_S.W`, all four B/H/W/D formats of `ADDV` and
+`SUBV`, and `AND.V`/`OR.V`/`NOR.V`/`XOR.V` use exact encoding descriptors in
+`MIPSMSA.def`. The 32 W registers are 128-bit containers. Lane zero occupies
+the low bits in both byte orders; addition and subtraction wrap independently
+within each 8/16/32/64-bit lane. Logical operations consume all 128 bits.
+Inputs are captured before an overlapping destination is written. F registers
+share the low 64 bits of their corresponding W register.
+Scalar floating instructions remain unsupported: their future implementation
+must model the unpredictable remaining W bits, not preserve or zero them by
+assuming a generic subregister write.
+
+LowIR accepts all 32 W registers. Source qualification is narrower and runs
+before SSA/dead-code elimination: it accepts one ordinary leaf block with fully
+initialized vector dependencies, no calls, and no writes to the saved
+F20/F22/.../F30 low views. Without an Image, all
+W20..W31 writes are refused because other o32 FPABIs preserve additional views.
+MSA64 source is refused at this boundary too; no extra vector parameter is
+invented. Returns must retain the
+captured entry RA, including when `COPY_S.W` writes RA in a delay slot. General
+vector ABI, saved-FPR restoration and multi-block source proofs remain future
+work. Both C paths use Clang's bit-precise integer support for any surviving
+128-bit scalar temporaries on MIPS32.
+
+The execution contract requires MSA enabled with CU1/FR configured. It does not
+model disabled-MSA exceptions, MSA floating point/control state or arbitrary
+MSA guest execution. The operation and alias rules follow the MIPS32 MSA manual
+(MD00866, revision 1.12), sections ADDV, SUBV, AND/OR/NOR/XOR, COPY_S, FILL
+and INSERT. Owned execution
+fixtures validate scalar results, output bytes and the ABI-preserved low FPR
+views against an enabled P5600 reference; no unimplemented W-register API is
+used as an oracle.
 
 ## Tests
 

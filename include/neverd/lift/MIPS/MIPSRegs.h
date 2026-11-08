@@ -24,6 +24,17 @@ inline constexpr uint64_t r(unsigned Index) { return Index * SlotBytes; }
   inline constexpr uint64_t Name = r(Index);
 #include "neverd/lift/MIPS/MIPSRegisters.def"
 
+inline constexpr uint64_t VectorBase = 0x200;
+inline constexpr uint16_t VectorBytes = 16;
+inline constexpr unsigned VectorCount = 32;
+inline constexpr uint64_t w(unsigned Index) {
+  return VectorBase + Index * VectorBytes;
+}
+inline constexpr bool isVector(uint64_t Offset) {
+  return Offset >= VectorBase && Offset < w(VectorCount) &&
+         (Offset - VectorBase) % VectorBytes == 0;
+}
+
 } // namespace mipsreg
 
 const char *getMIPS32RegName(uint64_t Offset, uint16_t Size);

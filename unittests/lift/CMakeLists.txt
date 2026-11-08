@@ -1,5 +1,6 @@
 add_neverd_unittest(NeverDMIPSPipelineTests
   mips/MIPSDSPPipelineTests.cpp
+  mips/MIPSMSAPipelineTests.cpp
   mips/MicroMIPSPipelineTests.cpp
   mips/MIPSMergeValueTests.cpp
   mips/MIPSPipelineTests.cpp
@@ -27,6 +28,7 @@ add_neverd_unittest(NeverDMIPSTests
 
 add_neverd_unittest(NeverDMIPSIntegerTests
   mips/MIPSDSPTests.cpp
+  mips/MIPSMSATests.cpp
   mips/MicroMIPSIntegerTests.cpp
   mips/MIPSBitfieldTests.cpp
   mips/MIPSIntegerTests.cpp

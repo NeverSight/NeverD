@@ -355,6 +355,8 @@ private:
 
   /// Select an authenticated initial mode for a mixed ARM/Thumb image.
   bool initARMImageMode(const BinaryImage &Img);
+  bool initWithMIPSRevision(Arch Target, InstructionMode Mode,
+                            uint8_t Revision);
 
   /// Configure the x86 platform ABI and x87 ownership, when active.
   void configureX86For(const BinaryImage &Img);
@@ -395,6 +397,7 @@ private:
   uint64_t AArch64DecodeGeneration = 0;
   Arch TargetArch = Arch::Unknown;
   InstructionMode CurrentMode = InstructionMode::Default;
+  uint8_t MIPSISARevision = 2;
   bool Strict = true;
   bool Detail = true;
   bool Text = true;
