@@ -546,7 +546,7 @@ renderX86VirtualizationNativeCall(Arch TargetArch, const llvm::CallBase &Call,
         const bool Status = Plan->Result == X86VirtualizationResult::Flags;
         const size_t Count =
             C.Arguments + (Read ? 1 : 0) + (Plan->AddressControls ? 2 : 0);
-        bool Valid = Callee->isIntrinsic() && !Call.getNumOperandBundles() &&
+        bool Valid = Callee->getIntrinsicID() && !Call.getNumOperandBundles() &&
                      !Call.onlyReadsMemory() && !Call.onlyWritesMemory() &&
                      !Call.doesNotReturn() && Call.arg_size() == Count &&
                      Arguments.size() == Count;
