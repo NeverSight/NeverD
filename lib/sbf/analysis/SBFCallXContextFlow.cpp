@@ -422,10 +422,15 @@ mapSymbolicValues(const ProvenValueSet &Input,
 }
 
 void widenCapturedValues(ContextState &State,
-                         const SymbolicAddressSpace &Addresses) {
+                         const SymbolicAddressSpace &Addresses,
+                         llvm::ArrayRef<size_t> CaptureOwners, size_t Owner) {
   State.Tagged.reset();
   State.Nullable.reset();
   const auto Widen = [&](RegisterValue Value) {
+    // An incoming capture names one fixed value throughout this invocation.
+    // Keeping its identity does not preserve fields erased by may-alias writes.
+    if (CaptureOwners[Value.Value] != Owner)
+      return Value;
     const auto Range = unsignedValueRange(Value, &Addresses);
     return Range ? unsignedRangeValue(*Range) : RegisterValue{};
   };
@@ -5709,9 +5714,11 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
           continue;
         // Reverse postorder identifies a DFS backedge even when the bytecode
         // places an acyclic continuation before its allocating predecessor.
-        // Every cycle still crosses such an edge and loses capture identity.
+        // Every cycle still crosses such an edge and widens locally defined
+        // captures. Incoming identities remain fixed within this invocation.
         if (BlockOrder[Successors[E]] <= BlockOrder[BlockID])
-          widenCapturedValues(SuccessorState, *CapturedAddresses);
+          widenCapturedValues(SuccessorState, *CapturedAddresses, CaptureOwners,
+                              Context.ID);
         if (auto Error = Enqueue(Successors[E], SuccessorState, Defined))
           return std::move(Error);
       }
@@ -5786,7 +5793,7 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
                              ReturnCarriers[*TaggedTail]))
       return llvm::Error::success();
     if (BlockOrder[*TaggedTail] <= BlockOrder[BlockID])
-      widenCapturedValues(Path, *CapturedAddresses);
+      widenCapturedValues(Path, *CapturedAddresses, CaptureOwners, Context.ID);
     unsigned Width;
     ProvenValueSet Tag;
     RegisterValue Address;
