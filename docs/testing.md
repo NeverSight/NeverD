@@ -16274,7 +16274,15 @@ or tracing state; none claims a completed Binder transaction.
 `AndroidBinderTest` also checks authenticated native reply continuation,
 retained bytes/cursors, UNKNOWN_TRANSACTION error propagation, dead-object
 caching and checked exception ancestry, live arena reads, temporary replies and
-DEX catch/resume. `AndroidJNI.BinderTransportUsesGuestServiceAndRetainedReplyArenas`
+DEX catch/resume. FAILED_TRANSACTION cases check the strict 200 KiB threshold,
+alias/null replies, message identity, retained error/cursor/bytes, proxy liveness,
+log-before-throw ordering, negative log results and resource stops.
+`AndroidJNI.BinderFailedTransactionRequiresExactTextLogs` checks missing,
+exhausted and mismatching explicit logs through ordinary/V/A calls; its native
+client interleaves a text write between two failed transactions on the same
+proxy. `AndroidLog.Text*` checks direct/dynamic calls, buffer/priority bytes,
+null tags, radio routing, signed results, errno and bounded payload admission.
+`AndroidJNI.BinderTransportUsesGuestServiceAndRetainedReplyArenas`
 executes real guest services through all three JNI forms, including three-round
 buffer retention/reuse, a reply recycled and reused by another native thread,
 missing managers, declared dead proxies, invalid/reused descriptors and explicit

@@ -21,6 +21,29 @@ namespace {
 constexpr uint32_t Nonblock = 0x800;
 constexpr size_t HeaderSize = 28, MessageSize = 5124;
 uint64_t negative(int Error) { return uint32_t(-Error); }
+bool textBuffer(uint32_t ID) {
+  return ID == 0 || ID == 1 || ID == 3 || ID == 4;
+}
+
+template <class Entry, class Matches>
+std::optional<uint32_t>
+consumeLogWrite(const std::optional<std::vector<Entry>> &Writes,
+                std::optional<uint64_t> &Consumed, Matches Match,
+                llvm::StringRef Kind, ProcessResult &Result) {
+  const char *Reason = nullptr;
+  if (!Writes)
+    Reason = "contract is not supplied";
+  else if (*Consumed == Writes->size())
+    Reason = "contract exhausted";
+  else if (!Match((*Writes)[*Consumed]))
+    Reason = "does not match the next entry";
+  if (Reason) {
+    Result.Stop = ProcessStopReason::UnsupportedService;
+    Result.Diagnostic = ("Android " + Kind + " log write " + Reason).str();
+    return std::nullopt;
+  }
+  return uint32_t((*Writes)[(*Consumed)++].Result);
+}
 } // namespace
 
 llvm::Error
@@ -61,21 +84,87 @@ llvm::Error validateEventLogWrites(
 }
 
 std::optional<uint32_t> Bionic::eventLogWrite(llvm::ArrayRef<uint8_t> Payload) {
-  const auto &Writes = Options.Android->EventLogWrites;
-  const char *Diagnostic = nullptr;
+  return consumeLogWrite(
+      Options.Android->EventLogWrites, Result.EventLogWritesConsumed,
+      [&](const NativeEventLogWrite &Write) {
+        return Payload == llvm::ArrayRef(Write.Payload);
+      },
+      "event", Result);
+}
+
+llvm::Error validateTextLogWrites(
+    const std::optional<std::vector<NativeTextLogWrite>> &Writes) {
   if (!Writes)
-    Diagnostic = "Android event log write contract is not supplied";
-  else if (*Result.EventLogWritesConsumed == Writes->size())
-    Diagnostic = "Android event log write contract exhausted";
-  else if (Payload !=
-           llvm::ArrayRef((*Writes)[*Result.EventLogWritesConsumed].Payload))
-    Diagnostic = "Android event log write does not match the next entry";
-  if (Diagnostic) {
+    return llvm::Error::success();
+  if (Writes->size() > LogRecordLimit)
+    return failure("too many Android text log writes");
+  uint64_t Bytes = 0;
+  for (const auto &Write : *Writes) {
+    const auto &P = Write.Payload;
+    Bytes += P.size() + sizeof(Write.ID) + sizeof(Write.Result);
+    if (!textBuffer(Write.ID) || P.size() < 3 || P.size() > LogPayloadLimit ||
+        Bytes > LogSnapshotLimit || P.back() != 0 ||
+        std::count(P.begin() + 1, P.end(), uint8_t(0)) != 2)
+      return failure(
+          "invalid Android text log write payload, buffer or total size");
+  }
+  return llvm::Error::success();
+}
+
+std::optional<uint32_t> Bionic::textLogWrite(uint32_t ID, int32_t Priority,
+                                             llvm::StringRef Tag,
+                                             llvm::StringRef Message) {
+  std::string Routed;
+  if (ID != 1 && (Tag == "HTC_RIL" || Tag.starts_with("RIL") ||
+                  Tag.starts_with("QC_RIL") || Tag.starts_with("IMS") ||
+                  Tag == "AT" || Tag == "GSM" || Tag == "STK" || Tag == "SMS" ||
+                  Tag == "CDMA" || Tag == "PHONE")) {
+    ID = 1;
+    Routed = ("use-Rlog/RLOG-" + Tag).str();
+    Routed.resize(std::min<size_t>(Routed.size(), 31)); // API 28 tmp_tag[32].
+    Tag = Routed;
+  }
+  const char *Boundary = nullptr;
+  if (!textBuffer(ID))
+    Boundary = "requires a main/radio/system/crash buffer";
+  else if (Priority == 7)
+    Boundary = "requires native fatal abort-message state";
+  else if (Tag.size() + Message.size() + 3 > LogPayloadLimit)
+    Boundary = "requires payload truncation";
+  if (Boundary) {
     Result.Stop = ProcessStopReason::UnsupportedService;
-    Result.Diagnostic = Diagnostic;
+    Result.Diagnostic =
+        (llvm::Twine("Android text log write ") + Boundary).str();
     return std::nullopt;
   }
-  return uint32_t((*Writes)[(*Result.EventLogWritesConsumed)++].Result);
+  std::vector<uint8_t> Payload;
+  Payload.reserve(Tag.size() + Message.size() + 3);
+  Payload.push_back(uint8_t(Priority));
+  Payload.insert(Payload.end(), Tag.begin(), Tag.end());
+  Payload.push_back(0);
+  Payload.insert(Payload.end(), Message.begin(), Message.end());
+  Payload.push_back(0);
+  return consumeLogWrite(
+      Options.Android->TextLogWrites, Result.TextLogWritesConsumed,
+      [&](const NativeTextLogWrite &Write) {
+        return ID == Write.ID && Payload == Write.Payload;
+      },
+      "text", Result);
+}
+
+BionicResult Bionic::textLogCall(const NativeCallEvent &Call) {
+  const auto &A = Call.Arguments;
+  const unsigned Offset = Call.Name == symbol::TextLogBufferWrite ? 1 : 0;
+  auto Tag =
+      A[Offset + 1] ? string(A[Offset + 1]) : llvm::Expected<std::string>("");
+  if (!Tag)
+    return Tag.takeError();
+  auto Message = string(A[Offset + 2]);
+  if (!Message)
+    return Message.takeError();
+  auto Written = textLogWrite(Offset ? uint32_t(A[0]) : 0, int32_t(A[Offset]),
+                              *Tag, *Message);
+  return Written ? value(*Written) : BionicResult(std::optional<BionicValue>());
 }
 
 BionicResult Bionic::eventLogCall(const NativeCallEvent &Call) {

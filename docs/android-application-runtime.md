@@ -783,7 +783,13 @@ lazily sort the actual table and still protect object ranges. Strong-object read
 use the native hint search without sorting. Invalid outgoing records produce
 the shared Linux driver's BR_FAILED_REPLY. Failed replies complete the serving
 Java pool and retire the call while preserving the original request-buffer lease
-until its queued free. The caller's FAILED_TRANSACTION exception/logging dispatch
+until its queued free. The caller's FAILED_TRANSACTION diagnostic consumes the
+shared [text log write contract](android-log-reader.md#text-write-contract)
+before creating a checked exception and its message. Native completion reads
+the data Parcel size: strictly above 200 KiB selects TransactionTooLargeException,
+otherwise DeadObjectException. The small-payload heuristic does not change
+proxy liveness; a matched negative log result does not suppress the exception.
+Missing log state remains explicit. Other status exception/logging dispatch
 remains explicit. Unknown/unowned native
 release identities and weak/FD lifecycle operations also stop explicitly.
 Borrowed reply capacity initially equals its data length. An in-capacity scalar

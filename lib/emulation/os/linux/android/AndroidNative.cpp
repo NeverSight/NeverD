@@ -37,6 +37,8 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
     return std::move(E);
   if (auto E = validateEventLogWrites(Native.EventLogWrites))
     return std::move(E);
+  if (auto E = validateTextLogWrites(Native.TextLogWrites))
+    return std::move(E);
   if (!Native.ThreadLimit ||
       Native.ThreadLimit > thread_model::MaximumIdentities ||
       (Native.DrainThreads && Native.ThreadLimit == 1))
@@ -109,6 +111,10 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
   if (Native.EventLogWrites)
     for (const auto &Write : *Native.EventLogWrites)
       CatalogBytes += Write.Payload.size() + sizeof(Write.Result);
+  if (Native.TextLogWrites)
+    for (const auto &Write : *Native.TextLogWrites)
+      CatalogBytes +=
+          Write.Payload.size() + sizeof(Write.Result) + sizeof(Write.ID);
   if (Native.Libraries.size() >
       ::neverd::limits::emulation::kAndroidNativeRunNativeLibrariesSizeLimit)
     return failure(diagnostic::LibraryCount);
@@ -213,6 +219,8 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
   Result.InitializersEnabled = Native.Initialize;
   if (Native.EventLogWrites)
     Result.EventLogWritesConsumed = 0;
+  if (Native.TextLogWrites)
+    Result.TextLogWritesConsumed = 0;
   uint64_t TraceThreadID = linux_model::ThreadID;
   auto Observe = [&](uint64_t PC, uint32_t) {
     if (!Native.TraceLimit || Result.TraceTruncated)

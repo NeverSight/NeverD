@@ -28,6 +28,37 @@ extern void *dlopen(const char *, int);
 extern void *dlsym(void *, const char *);
 extern int dlclose(void *);
 extern int __android_log_bwrite(int, const void *, U64);
+extern int __android_log_write(int, const char *, const char *);
+extern int __android_log_buf_write(int, int, const char *, const char *);
+
+static __attribute__((noinline)) int
+direct_text_write(int Priority, const char *Tag, const char *Message) {
+  return __android_log_write(Priority, Tag, Message);
+}
+
+U64 log_text_write(U64 *Out, U64 ID, U64 Priority, const char *Tag,
+                   const char *Message, U64 Count, U64 Form) {
+  if (Count > 4)
+    return 1;
+  void *Library = Form == 2 ? dlopen("liblog.so", 2) : (void *)0;
+  int (*Write)(int, const char *, const char *) =
+      Form == 2 ? (int (*)(int, const char *, const char *))dlsym(
+                      Library, "__android_log_write")
+                : (void *)0;
+  if (Form == 2 && !Write)
+    return 2;
+  for (U64 I = 0; I != Count; ++I) {
+    *__errno() = 73;
+    Out[2 * I] =
+        (long)(Form == 1   ? __android_log_buf_write(ID, Priority, Tag, Message)
+               : Form == 2 ? Write(Priority, Tag, Message)
+                           : direct_text_write(Priority, Tag, Message));
+    Out[2 * I + 1] = *__errno();
+  }
+  if (Library && dlclose(Library))
+    return 3;
+  return 0;
+}
 
 static __attribute__((noinline)) int direct_event_write(const void *Payload,
                                                         U64 Size) {

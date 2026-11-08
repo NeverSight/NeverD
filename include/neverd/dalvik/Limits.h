@@ -19,6 +19,8 @@
 namespace neverd::limits::dalvik {
 // API 28 LOGGER_ENTRY_MAX_PAYLOAD, including the binary event's int32 tag.
 inline constexpr unsigned kAndroidEventLogPayloadBytes = 4068;
+// API 28 signalExceptionForError's strict size heuristic, not a driver limit.
+inline constexpr unsigned kAndroidBinderLargeTransactionBytes = 200 * 1024;
 
 // include/neverd/dalvik/Heap.h
 inline constexpr uint64_t kHeapByteLimit = 8 * 1024 * 1024;

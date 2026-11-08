@@ -15984,6 +15984,10 @@ The same owner admits a separate finite `event_log_writes` transcript. Native
 `__android_log_bwrite`, EventLog overloads and ServiceManager logging compare
 exact binary event bytes and share one consumption cursor. Write results never
 create visible reader records; omission, exhaustion and mismatch stay explicit.
+Bounded native text writes and Binder's FAILED_TRANSACTION diagnostic reuse
+this matcher with `text_log_writes`, a separate cursor and exact buffer id,
+priority, tag and message bytes. Radio-tag routing precedes matching; negative
+results complete without inferred transport success or errno changes.
 
 `AndroidProperties` builds one immutable guest property table from explicit
 inputs. Name lookup, stable `prop_info` identities, serials, legacy reads and
@@ -17770,8 +17774,14 @@ handled calls and keep the normal reply-ack lifetime. Existing tail bytes remain
 observable. Overwrites retain Binder offsets; an invalid current object type
 produces the shared Linux driver's failed transaction response. The replying Java
 pool still receives completion, releases its native Parcels and accepts later
-calls. On the caller side, FAILED_TRANSACTION retains the explicit JNI
-status-exception/logging boundary. Parcelable/class-loader
+calls. On the caller side, FAILED_TRANSACTION records its ERROR/JavaBinder
+diagnostic through the same explicit AndroidLog text-write owner as native
+text calls. A matched negative log result still reaches the JNI exception:
+request dataSize above 200 KiB selects TransactionTooLargeException; otherwise
+DeadObjectException carries the small-parcel message. Both use shared Throwable
+storage and checked RemoteException ancestry. This heuristic never marks the
+proxy dead. Unknown log outcomes stop after earlier Parcel state changes.
+Parcelable/class-loader
 payloads, ServiceSpecificException,
 Throwable-cause construction, debug stack-trace parceling and uncaught logging
 remain explicit boundaries; no error reply or log record is fabricated.
