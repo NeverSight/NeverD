@@ -1394,10 +1394,10 @@ test is explicitly skipped until a toolchain exposing the fork interface is used
 
 `MachOAuthenticatedFixups` installs final-address signing recipes in linked
 arm64e chained and legacy threaded images. It reuses the strict dependency
-reader's owned segments, imports and raw slots, preserves existing binding identities, and
-rebuilds single/multiple-start pages with each format's native stride and index
-width. Local targets retain their mapped image owner; imported targets retain
-the exact existing library ordinal, symbol, addend and weak flag. The six
+reader's owned segments, imports and raw slots, preserves existing binding
+identities, and rebuilds single/multiple-start pages with each format's native
+stride and index width. Local targets retain their mapped image owner; imported
+targets retain the exact existing library ordinal, symbol, addend and weak flag. The six
 arm64e chain formats share the same pointer-field authority. Segmented chains
 cannot express binds and reject them. Imports may extend the table but do not
 create dependency load commands or infer a provider.
@@ -1408,15 +1408,17 @@ table and APPLY roots, preserving raw import flags, signed addends and special
 library ordinals. Missing DONE, nonzero trailing bytes, duplicate roots and
 conflicting slot ownership fail without publication. Auxiliary rebase/weak/lazy
 streams remain unsupported alongside threaded chains; their phase ordering is
-not inferred.
+not inferred. The strict snapshot charges the existing threaded string-copy
+budget for the table, optional owned imports and each slot's symbol name.
+Repeated long imports therefore cannot create unbounded snapshot copies.
 
 Installation is transactional, including automatic producer receipts and the
 optional explicit recipe handoff in `MachOPatcher::appendReplacementImage`.
 Failed placement planning cannot authorize installation at the zero error
 sentinel. New RX/RW placement precedes dyld encoding so address diversity uses
-the final storage VA. Re-decoding compares
-every requested recipe and preserves every original fixup. A staged signature
-remains opaque and terminal in LINKEDIT so the existing publication signer can
+the final storage VA. Re-decoding compares every requested recipe and preserves
+every original fixup. A staged signature remains opaque and terminal in LINKEDIT
+so the existing publication signer can
 replace it; retaining those bytes does not validate its old hashes. An
 independent replay also checks recipes after final code signing.
 
