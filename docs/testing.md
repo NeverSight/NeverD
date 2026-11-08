@@ -22193,8 +22193,12 @@ The runner compiles the owned assembly and each generated C variant for all
 four width/byte-order profiles. It checks return values and memory effects,
 including taken/untaken likely branches, delayed calls, argument carriers,
 readonly/writable globals, image pointers, MUL, both word-merge orders,
-doubleword merges and a merge read in an indirect call's slot. HighC merge
-globals are also executed with the original image unmapped. LLVMC's original-image storage
+doubleword merges and a merge read in an indirect call's slot. Uninitialized
+merge destinations cover both orders, all offsets, fixed and seeded random
+machine values, independent expected bytes and fault order at both page edges.
+An invalid-memory branch-likely slot is tested both annulled and executed.
+HighC merge globals are also executed with the original image unmapped.
+LLVMC's original-image storage
 and either route's omitted original callees are explicitly bound at their
 original addresses; this qualifies the regenerated caller against that
 dependency contract. It does
