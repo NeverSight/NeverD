@@ -501,8 +501,11 @@ if its caller-visible return and memory transfer agree
 exactly with the completed generic summary. This currently requires unknown
 memory effects, no returned scratch/postcondition cells, the same scalar return
 alternatives and the same constant or unknown return origin. Any target facts
-in the dependency graph must also be covered by an independently published
-sibling under the same caller entry and call instruction. Instantiated
+in the dependency graph must also remain under the same caller entry and call
+instruction, through an independently published sibling or through the original
+edge's independently retained caller. Keeping only its callee is insufficient.
+Complete finite target sets remain distinct from separate singleton proofs.
+Instantiated
 expression proofs must retain the same expression, input values and loaded
 values; matching target addresses from different fields do not cover each
 other's conditions. The comparison borrows existing bounded witnesses and
@@ -569,11 +572,20 @@ definitions meet at CFG joins, and a definition-only change requeues the block
 even when its register values and origins stay equal. Final replay records the
 conditional reuse mask after those definitions converge.
 
-Schema 15 retains a bounded tag/payload relation for a common store-tag/exit
-tail. Every reachable return must use that tail, and every converged
-predecessor must supply a literal tag; equal tags meet their fields. The
-existing four-alternative bound applies. A caller substitutes output fields
-and capture identities against its own entry before loading the returned tag.
+Schema 15 introduced a bounded tag/payload relation for a shared store-tag/exit
+tail. Schema 16 extends it to bounded numeric tags and call-free cleanup blocks.
+A call-free cleanup block
+can also preserve tags already stored by its predecessors: the converged
+pointwise return selects a numeric field, and every reachable predecessor is
+replayed through the complete cleanup before its conditional fields are kept.
+All returns must use the same tail. Every case must supply literal tags or
+nonwrapping unsigned bounds; equal tag sets meet their fields, and overlapping
+sets retain every possible payload. Narrow stores preserve unsigned bounds
+only when the complete range fits their width. Unknown tags, pointer fragments,
+wrapping/truncated ranges and cleanup calls retain conservative joins.
+The existing four-alternative bound applies to tag values and cases. A caller
+substitutes output fields and capture identities against its own entry before
+loading the returned tag.
 Its branch can then restore only fields common to all selected cases. Exact
 64-bit register copies retain the tag relation; redefinition, potentially
 aliasing tag writes, calls, memory copies and loop backedges discard it. Payload
@@ -718,6 +730,16 @@ locally known arguments cannot authorize a callee branch they make impossible.
 The replay uses the canonical value and branch transfers and charges its
 instructions and temporary state to the existing query budgets. It neither
 allocates another specialization nor changes the generic return/memory result.
+
+Schema 16 reports `caller_seeded_first_call_path` when a concrete caller
+reaches the four-variant limit and the generic summary has lost its target
+expression. The same bounded replay can recover the selected first call's
+address directly from caller registers and typed scratch cells. It stops at
+unknown branches, repeated blocks and every earlier call; possible aliasing
+writes still invalidate spilled values. This proves only that address under
+the caller's selected path. It does not add candidate-callee summaries or
+change the generic callee's return value, memory effects or cache key. Replay
+instructions and temporary values use the existing query budgets.
 
 All generic roots remain available, but standalone specialization is skipped
 when the static CFG/direct-call graph cannot reach an unresolved CALLX; actual
@@ -922,19 +944,20 @@ partial loads, runtime/account contents, recursive effects, unresolved aliasing
 and unproved expressions remain open. No result rewrites global CALLX dispatch
 or closes its target set; dynamic fallback is mandatory.
 
-Schema 13 retains literal 1-, 2- and 4-byte scalar cells alongside full-width
-pointer/value cells. Narrow stores truncate literal bits; a partial pointer
-store cannot establish a pointer fragment. Loads require an exact address and
+Schema 13 introduced 1-, 2- and 4-byte scalar cells alongside full-width
+pointer/value cells. Narrow stores truncate literal bits. Schema 16 also preserves
+unsigned bounds when every value fits the stored width; a partial pointer store
+cannot establish a pointer fragment. Loads require an exact address and
 width: cells are neither assembled from adjacent stores nor sliced from larger
 stores. Complete copies preserve cell widths, and possibly overlapping writes
 invalidate them through the same typed-memory owner. Parameterized output fields
-carry these narrow constants across calls. The existing 128-cell limit and all
+carry these narrow numeric facts across calls. The existing 128-cell limit and all
 analysis budgets remain unchanged; the larger map keys consume the retained
 memory estimate. Full-width word counters keep their old meaning; separate
 `input_narrow_scalar_cells`, `output_narrow_scalar_cells` and
 `output_narrow_parameterized_fields` report narrow facts. Applied stored-value
-counts include both widths. This does not preserve tag/payload correlations
-between distinct return paths.
+counts include both widths. These pointwise cells alone do not preserve
+tag/payload correlations between distinct return paths.
 
 Contextual input keys retain full-width cells. Incoming narrow cells are
 projected to unknown before specialization; they cannot consume the four slots

@@ -175,7 +175,8 @@ private:
   llvm::SmallVector<RegisterValue, 1> Values;
 };
 
-/// Narrow stores retain only literal integer bits, never pointer fragments.
+/// Narrow stores retain literal bits and fitting unsigned bounds, never pointer
+/// fragments or wrapped numeric ranges.
 /// Unsupported widths and incomplete alternatives carry no scalar fact.
 ProvenValueSet truncateStoredValue(const ProvenValueSet &Value,
                                    uint64_t ByteWidth);

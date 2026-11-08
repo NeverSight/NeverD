@@ -408,9 +408,16 @@ ProvenValueSet truncateStoredValue(const ProvenValueSet &Value,
     return {};
   std::optional<ProvenValueSet> Result;
   for (auto Alternative : Value.values()) {
-    if (Alternative.ValueKind != RegisterValue::Kind::Constant)
+    const uint64_t Mask = (uint64_t{1} << (ByteWidth * kBitsPerByte)) - 1;
+    if (Alternative.ValueKind == RegisterValue::Kind::Constant) {
+      Alternative.Value &= Mask;
+    } else if (Alternative.ValueKind == RegisterValue::Kind::UnsignedRange) {
+      const auto Bounds = *unsignedValueRange(Alternative);
+      if (Bounds.Lower > Bounds.Upper || Bounds.Upper > Mask)
+        return {};
+    } else {
       return {};
-    Alternative.Value &= (uint64_t{1} << (ByteWidth * kBitsPerByte)) - 1;
+    }
     if (!Result)
       Result = Alternative;
     else

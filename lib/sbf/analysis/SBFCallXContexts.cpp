@@ -257,11 +257,12 @@ llvm::json::Object callXContextReportJSON(const SBFProgram &Program,
          generalizationName(Evidence.InputGeneralization)},
         {"result", resultName(Evidence.Result)},
         {"dynamic_fallback_required", true}};
-    Row["evidence_scope"] = Evidence.EntryPrefixOnly
-                                ? "direct_caller_entry_prefix"
-                            : !Evidence.InputExpressionValues.empty()
-                                ? "instantiated_generic_summary_inputs"
-                                : "whole_function_summary";
+    Row["evidence_scope"] =
+        Evidence.EntryPrefixOnly         ? "direct_caller_entry_prefix"
+        : Evidence.CallerSeededFirstCall ? "caller_seeded_first_call_path"
+        : !Evidence.InputExpressionValues.empty()
+            ? "instantiated_generic_summary_inputs"
+            : "whole_function_summary";
     if (Evidence.InputExpression)
       Row["target_input_expression"] =
           static_cast<int64_t>(*Evidence.InputExpression);
@@ -534,7 +535,7 @@ llvm::json::Object callXContextReportJSON(const SBFProgram &Program,
   const auto Translation =
       frameTranslationLimit(Program.Low.TheVersion, Program.Config);
   return llvm::json::Object{
-      {"schema", 15},
+      {"schema", 16},
       {"captured_addresses", std::move(Captures)},
       {"distinct_captures_prove_no_alias", false},
       {"frame_coordinates",

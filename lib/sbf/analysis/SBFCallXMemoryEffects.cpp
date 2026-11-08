@@ -409,6 +409,17 @@ void MemoryPostconditions::visitValues(
   }
 }
 
+void MemoryPostconditions::visitScalarValues(
+    llvm::function_ref<void(const RegisterValue &, unsigned,
+                            const ProvenValueSet &)>
+        Visit) const {
+  for (const auto &[Cell, Value] : Values) {
+    const auto &[Kind, Base, Offset, Width] = Cell;
+    if (const auto *Origins = std::get_if<ProvenValueSet>(&Value))
+      Visit({Kind, Base, Offset}, Width, *Origins);
+  }
+}
+
 void MemoryPostconditions::copyFrom(const RegisterValue &Source,
                                     const RegisterValue &Destination,
                                     uint64_t Size, const SBFProgram &Program) {
