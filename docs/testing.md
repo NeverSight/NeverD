@@ -4009,6 +4009,11 @@ the three input parities with independent 8/64/257-bit arithmetic, including
 mixed addition and multiplication, exact/one-short work and scratch storage.
 `ExactAndShortResourcesKeepCompleteWords` also checks shared decision-page
 views under exact/short scratch at 8/64/257 bits with independent arithmetic.
+`DeferredPartialCorrectionsKeepUnpairedFullWords` checks sparse and dense
+partial periods at 8/64/257 bits, reverse construction, complements and
+single-factor perturbations against an independent APInt product. It requires
+rewrites at each width and forbids cost growth, including retained originals
+when a partial proof cannot produce a smaller expression.
 Generated-reading regressions require the deep walk to simplify an original
 opaque division's numerator and propagate it through the emitted proof.
 Mixed quartic and degree-24 residuals must also leave work for the surrounding

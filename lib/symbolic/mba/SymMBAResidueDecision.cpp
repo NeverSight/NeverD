@@ -1908,9 +1908,20 @@ class LowWordDecisions {
       if (Failed)
         return {};
     }
-    if (auto It = State.Words.find(Key);
-        It != State.Words.end() && (IdentityOnly || It->second.Complete))
-      return It->second;
+    if (auto It = State.Words.find(Key); It != State.Words.end()) {
+      if (IdentityOnly || It->second.Complete)
+        return It->second;
+      const auto &Identity = *State.Keys[It->second.Identity - 1];
+      if (Identity[0] == UINT64_MAX && Identity[2] == R.index()) {
+        // An opaque identity already denotes this complete original word.
+        // Keep that representative when later reads expose more low bits;
+        // changing it would invalidate identities recorded by its parents.
+        if (!charge())
+          return {};
+        It->second.Complete = true;
+        return It->second;
+      }
+    }
     return expandWideSignature<IdentityOnly>(State, R, Count, Depth, Key);
   }
 
@@ -2197,6 +2208,10 @@ class LowWordDecisions {
     llvm::SmallVector<Bits, 16> Corrections;
     llvm::SmallVector<uint64_t, 16> RepeatedCorrections;
     unsigned LiteralCorrection = 0;
+    // Blocks spanning the two-bit correction period retain their streaming
+    // proof. In a partial block, singleton factors often dominate the work.
+    const bool DeferCorrections =
+        Retained && Factors.size() < (size_t(1) << (Count - 2));
     if constexpr (BatchCorrections) {
       if (!charge(1, (Factors.size() / 2) * sizeof(Bits)))
         return {};
@@ -2207,7 +2222,11 @@ class LowWordDecisions {
       RepeatedCorrections.reserve(Factors.size() / 2);
     }
     for (auto Factor : Factors) {
-      auto S = wideSignature(*State.Wide, Factor, Count);
+      // Retained singleton factors need only their exact pairing identity.
+      // Their original full words never consume an additive correction.
+      auto S = DeferCorrections
+                   ? wideSignature<true>(*State.Wide, Factor, Count)
+                   : wideSignature(*State.Wide, Factor, Count);
       if (Failed || !charge())
         return {};
       auto It = Unpaired.find(S.Identity);
@@ -2218,7 +2237,14 @@ class LowWordDecisions {
         Unpaired.emplace(S.Identity, std::make_pair(Factor, S));
       } else {
         auto A = It->second.first;
-        const auto &D = It->second.second.Delta;
+        auto Left = It->second.second;
+        if (DeferCorrections) {
+          Left = wideSignature(*State.Wide, A, Count);
+          S = wideSignature(*State.Wide, Factor, Count);
+          if (Failed || Left.Identity != S.Identity)
+            return {};
+        }
+        const auto &D = Left.Delta;
         auto Change = difference(Bits(S.Delta.begin(), S.Delta.end()),
                                  Bits(D.begin(), D.end()));
         Pairs.push_back(A);

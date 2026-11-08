@@ -1062,6 +1062,54 @@ TEST(SymMBAWidePairs, ExhaustsOddPartialBlockLowWords) {
       }
 }
 
+TEST(SymMBAWidePairs, DeferredPartialCorrectionsKeepUnpairedFullWords) {
+  std::mt19937_64 Random(0x4445464552524544);
+  for (unsigned Width : {8u, 64u, 257u}) {
+    unsigned Rewritten = 0;
+    for (unsigned Observed : {6u, 7u, 8u})
+      for (bool Dense : {false, true})
+        for (unsigned Complement : {0u, 1u})
+          for (bool Neighbor : {false, true}) {
+            const unsigned Period = 1u << (Observed - 2);
+            const unsigned Degree = Dense ? Period - 1 : Period / 2 + 1;
+            SCOPED_TRACE(::testing::Message() << Width << ':' << Degree << ':'
+                                              << Complement << ':' << Neighbor);
+            SymContext Ctx;
+            const auto F =
+                partialFixture(Ctx, Width, Degree, Neighbor, Observed,
+                               Observed - 3, Complement, Complement != 0);
+            detail::WorkBudget Budget(65536);
+            size_t Storage = 1 << 24;
+            const auto Result =
+                detail::foldResidueDecisions(Ctx, F.Input, Budget, Storage);
+            if (Result != F.Input) {
+              ++Rewritten;
+              EXPECT_LT(detail::readingCost(Ctx, Result),
+                        detail::readingCost(Ctx, F.Input));
+            }
+            // A lone pair may cost more to reconstruct than it saves. Such a
+            // partial proof must retain the original complete expression.
+            EXPECT_LE(detail::readingCost(Ctx, Result),
+                      detail::readingCost(Ctx, F.Input));
+            EXPECT_LE(Budget.used(), 65536u);
+            SymEvalPlan Reduced(Ctx, Result);
+            for (unsigned Trial = 0; Trial < 256; ++Trial) {
+              std::array<llvm::APInt, 3> Values;
+              for (auto &V : Values) {
+                V = llvm::APInt(Width, 0);
+                for (unsigned Bit = 0; Bit < Width; Bit += 64)
+                  V |= llvm::APInt(Width, Random()).shl(Bit);
+                if (Trial < 3)
+                  V = Trial == 2 ? llvm::APInt::getAllOnes(Width)
+                                 : llvm::APInt(Width, Trial);
+              }
+              ASSERT_EQ(Reduced.eval(Values), F.oracle(Values));
+            }
+          }
+    EXPECT_GT(Rewritten, 0u) << Width;
+  }
+}
+
 TEST(SymMBAWidePairs, PartialBlockRefusalsKeepOriginalFactors) {
   for (auto Limits : {std::pair<size_t, size_t>{0, 1 << 24},
                       {1, 1 << 24},

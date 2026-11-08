@@ -5473,6 +5473,11 @@ correction. The original full factor count still proves the other parity
 branch zero; recursive squares retain all their own factors. Other even
 blocks and projected groups keep their joint reconstruction. Degree-block
 admission only orders this search; it never establishes a pair or oddness.
+Within a partial two-bit correction period, retained factors first request
+pairing identities. Only an actual pair completes its additive corrections;
+both completed identities must agree. Blocks spanning that period retain the
+streaming proof. An opaque cached identity continues to denote its original
+whole word when completed, even if later reads expose additional low bits.
 Pairing indexes are constructed only for an admitted search and are confined
 to its active odd assumption, avoiding setup in ordinary low-word searches.
 Pair lookup uses exact hashed identities. Only unmatched identities are sorted,
