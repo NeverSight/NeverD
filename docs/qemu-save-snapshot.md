@@ -326,7 +326,8 @@ errors and rejection of an unrelated entry PC:
 python3 -m unittest scripts.tests.test_qemu_save_snapshot \
   scripts.tests.test_qemu_save_x64 scripts.tests.test_qemu_save_memory \
   scripts.tests.test_qemu_save_devices scripts.tests.test_qemu_save_q35 \
-  scripts.tests.test_qemu_save_controls scripts.tests.test_qemu_save_events -v
+  scripts.tests.test_qemu_save_controls scripts.tests.test_qemu_save_events \
+  scripts.tests.test_qemu_save_lapic -v
 ```
 
 The interpretation references are QEMU 10.2's
@@ -456,6 +457,42 @@ The independently authored interpretation follows QEMU 10.2's
 [CPU-common fields](https://github.com/qemu/qemu/blob/v10.2.0/hw/core/cpu-system.c)
 and [APIC fields](https://github.com/qemu/qemu/blob/v10.2.0/hw/intc/apic_common.c).
 It executes none of their callbacks or guest instructions.
+
+## Local APIC fixed-bank projection
+
+[`scripts/qemu_save_lapic.py`](../scripts/qemu_save_lapic.py) copies saved
+IRR/ISR/TMR and TPR into the existing
+[`X86LocalApicFixed` owner](x86-local-apic.md), with EOI-broadcast suppression
+from the saved spurious-vector register. Use it only with the explicit
+`enabled-lapic-fixed-normal-eoi` delivery profile in addition to the QEMU
+capture profile. Hardware/software APIC enable bits must agree with that
+binding. The binding does not prove the absence of SynIC/automatic EOI,
+other event sources or unsaved configuration.
+
+```sh
+python3 -m scripts.qemu_save_lapic paused.save \
+  --profile qemu-10.2-kvm-x64 \
+  --delivery-profile enabled-lapic-fixed-normal-eoi \
+  --cpu 0 --apic 0 --expect-pc 0xfffff80000123456 \
+  --cpp-initializer > captured-lapic.inc
+```
+
+The illustrative address must be replaced with the captured PC. Without
+`--cpp-initializer`, JSON retains the complete event projection as environment,
+including pending/injected/halted state and unknown instruction shadows.
+These are not consumed or cleared by bank transport. The C++20 initializer
+uses the owner type and `fromState` under `constexpr` and `static_assert`;
+it emits no dynamic initialization or duplicate table of layout offsets.
+Keep the JSON environment when using it. Copy the resulting model into owned
+mutable storage and maintain its explicit profile and TPR/CR8 bindings.
+
+Only the C++ owner decides whether fixed-vector bank bits are supported.
+Python preserves every bit: a reserved-vector bank remains visible in JSON
+and fails the emitted C++ assertion instead of being silently filtered.
+The adapter performs no priority selection, acknowledgment, EOI, additional
+RAM/device read or page-index rebuild. It closes bank transport to the fixed
+local model, not event-source composition, device effects, instruction-shadow
+recovery or a missing original function invocation.
 
 ## Supported save format
 

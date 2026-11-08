@@ -72,6 +72,18 @@ uncompared common fields remain unqualified. Existing V6/control outputs must
 stay identical after shared validation changes. No target program, instruction
 executor, event callback or VM runs; no native build is needed for this suite.
 
+Add `scripts.tests.test_qemu_save_lapic` for fixed APIC bank transport. It checks
+the explicit delivery profile, captured enable gates, retained pending/halted
+evidence, unknown shadows, EOI-suppression binding, ownership and CLI failures.
+Reserved bank bits remain intact for the C++ owner to admit or reject.
+`NeverDX86LocalApicProofs` is a compile-only object target (also included in
+`NeverDUnitTests`) for the [fixed local APIC model](x86-local-apic.md). Build it
+through `scripts/build.py`; its assertions cover all fixed vectors and priority
+classes, acknowledgments, nested service and EOI obligations without executing
+a test binary. For a real save, compile projected bank initializers at O0/O2,
+inspect constant bytes, and keep hypothetical register transitions distinct
+from captured observations. No guest, handler or device callback need run.
+
 `NeverDX64PagedExecutionTests` compiles actual paged HighC/LLVM-to-C exports
 through Clang and optional `NEVERD_TEST_NEVERC`, at O0/O2, and compares their
 scalar instruction completion and faults with independent original KVM CPU
