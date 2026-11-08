@@ -23,6 +23,7 @@
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/MedReturnValue.h"
 #include "neverd/ir/med/MedTypePass.h"
+#include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -400,6 +401,40 @@ TEST(ReturnContracts, CheckedAArch64PointersRemainReturnValues) {
           function(CalleeEntry, {block({Op, returning(Op.Output)})})};
       settleReturnContracts(Image, Result);
       EXPECT_EQ(Result.MedFuncs.front().ReturnsNoValue, Malformed);
+    }
+  }
+}
+
+TEST(ReturnContracts, MipsScalarMemoryEffectsDoNotEraseTheirReturnValues) {
+  for (Arch Target :
+       {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    const unsigned Width = getTargetRegInfo(Target).FullRegWidth;
+    for (auto Id : {Intrinsic::MIPSLwl, Intrinsic::MIPSLwr, Intrinsic::MIPSLdl,
+                    Intrinsic::MIPSLdr, Intrinsic::MIPSUnpredictable}) {
+      const unsigned Bytes =
+          Id == Intrinsic::MIPSLdl || Id == Intrinsic::MIPSLdr ? 8 : 4;
+      if (Bytes > Width)
+        continue;
+      for (bool Malformed : {false, true}) {
+        MedOp Op = intrinsic(Id);
+        Op.Output.TheArch = Target;
+        Op.Output.RegOff = mipsreg::V0;
+        Op.Output.Size = Id == Intrinsic::MIPSUnpredictable ? Width : Bytes;
+        if (Id != Intrinsic::MIPSUnpredictable) {
+          Op.addInput(MedVar::makeConst(0x3001, Width));
+          Op.addInput(MedVar::makeConst(0, Bytes));
+        }
+        if (Malformed)
+          Op.Output.Size = 1;
+        BinaryImage Image;
+        Image.Arch = Target;
+        Image.Format = BinaryFormat::ELF;
+        PipelineResult Result;
+        Result.MedFuncs = {
+            function(CalleeEntry, {block({Op, returning(Op.Output)})})};
+        settleReturnContracts(Image, Result);
+        EXPECT_EQ(Result.MedFuncs.front().ReturnsNoValue, Malformed);
+      }
     }
   }
 }

@@ -29,6 +29,19 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   multiplication and aligned integer loads/stores have explicit lifter rules.
   MIPS64 word results are sign extended where the ISA requires it. Writes to
   `$zero` discard the result without discarding required memory effects.
+- `LWL`/`LWR` and MIPS64 `LDL`/`LDR` retain the exact byte span of each
+  instruction, including a discarded destination. They do not combine a pair
+  into a wider speculative read. Source lowering retains guest alignment bits
+  when direct image data is rebound. Indexed merge reads into rebuilt image
+  storage still require an explicit address contract.
+- SPECIAL2 `MUL` computes the low word and explicitly invalidates both HI and
+  LO. Dead unpredictable results can be removed; an observed result cannot
+  become an old value or zero. MIPS64 word-input restrictions are checked.
+  A partial MIPS64 `LWR` separates its exact low word from its implementation
+  dependent upper word. A subsequent `LWL` can discard those upper bits;
+  source emission refuses an observed upper word unless it proves a result
+  shared by the ISA's permitted implementations.
+
 - o32 uses `$a0`–`$a3`, a 16-byte caller argument area and aligned register pairs
   for 64-bit integers. n64 uses registers 4–11 and eight-byte argument slots.
   Big-endian integer pairs put their high word first, and narrow stack scalars
@@ -38,10 +51,16 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   adapter still declines split o32 values, register-padding holes and narrow
   big-endian overflow slots; complete typed ABI reconstruction is not claimed.
 
+Two value-analysis gaps remain: source recovery can retain a false dependency
+on an uninitialized incoming destination across a complete merge pair, and
+concrete LowIR execution stops at a partial MIPS64 `LWR` with a noncanonical
+old upper word, even when a following instruction would discard it. The source
+roundtrip fixtures bind an explicit old value; they do not certify those gaps.
+
 This is a strict subset. n32, historical MIPS I–V profiles, Release 6, MIPS16,
 microMIPS, floating point, DSP/MSA, privileged instructions, LL/SC reservations,
-unaligned merge accesses and trapping arithmetic/division are not admitted by
-the initial lifter. Unsupported instructions, missing slots and transfers in a
+unaligned merge stores and trapping arithmetic/division are not admitted by
+the current lifter. Unsupported instructions, missing slots and transfers in a
 delay slot produce errors, not replacement NOPs. Floating/aggregate source ABI
 classification, arbitrary PIC/gp recovery, raw-input target selection and
 native code rewriting are not claimed. Unicorn is a test reference, not a
@@ -54,7 +73,10 @@ The ELF tests construct bytes independently of the loader. Integer semantics
 have mathematical expectations and a pinned Unicorn differential reference.
 Control tests cover pre-slot operand capture, visible links, annulment and
 independently entered slots. Pipeline tests check C/LLVM generation and target
-data layouts for all four width/byte-order combinations.
+data layouts for all four width/byte-order combinations. Merge-load tests cover
+every offset, bounded memory, discarded results, base/destination aliasing and
+faults. MUL tests distinguish unread HI/LO clobbers, separately restored
+accumulators and invalid MIPS64 word inputs.
 
 ```sh
 python3 scripts/build.py build-mips --target NeverDMIPSTests NeverDMIPSIntegerTests NeverDMIPSFlowTests NeverDMIPSSDKTests NeverDMIPSPipelineTests neverd --parallel 4

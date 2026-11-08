@@ -13,10 +13,12 @@
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/ELFLoader.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Verifier.h"
@@ -387,6 +389,242 @@ TEST_P(MIPSPipeline, ReadonlyAndWritableScalarsUseTheImageByteOrder) {
             << Text;
         EXPECT_EQ(Text.find("2018915346"), std::string::npos) << Text;
       }
+    }
+  }
+}
+
+TEST_P(MIPSPipeline, MergeOnlyImageReadsBindTheOriginalByteSpan) {
+  for (bool Writable : {false, true}) {
+    SCOPED_TRACE(Writable);
+    mips_test::ELFBytes File(GetParam());
+    File.Bytes.resize(0x308);
+    const unsigned Width = File.Is64 ? 8 : 4;
+    const size_t Head = File.Is64 ? 64 : 52;
+    const size_t Data = File.Is64 ? 120 : 84;
+    File.put(File.Is64 ? 56 : 44, 2, 2);
+    File.put(Head + (File.Is64 ? 4 : 24), 5, 4); // RX code
+    File.put(Data, 1, 4);
+    File.put(Data + (File.Is64 ? 4 : 24), Writable ? 6 : 4, 4);
+    File.put(Data + (File.Is64 ? 8 : 4), 0x300, Width);
+    File.put(Data + (File.Is64 ? 16 : 8), 0x10300, Width);
+    File.put(Data + (File.Is64 ? 32 : 16), 8, Width);
+    File.put(Data + (File.Is64 ? 40 : 20), 8, Width);
+    File.put(Data + (File.Is64 ? 48 : 28), 0x1000, Width);
+    File.put(0x300, 0x12345678, 4);
+    File.put(0x100, 0x3c040001, 4); // lui a0,1
+    File.put(0x104, 0x34840301, 4); // ori a0,a0,0x301
+    File.put(0x108, 0x00001025, 4); // or v0,zero,zero
+    File.put(0x10c, 0x88820000 | (File.Little ? 3 : 0), 4);
+    File.put(0x110, 0x98820000 | (File.Little ? 0 : 3), 4);
+    File.put(0x114, 0x03e00008, 4);
+    File.put(0x118, 0, 4);
+    ELFLoader Loader;
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    auto Function = Symbol::makeFunc(Image->Entry, 28);
+    Function.Name = "read_image_merge";
+    Image->Symbols.push_back(std::move(Function));
+    for (bool LLVM : {false, true}) {
+      SCOPED_TRACE(LLVM);
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.OnlyFunctionEntries = {Image->Entry};
+      Options.LiftMode = LLVM;
+      Options.EmitDumpOutput = false;
+      auto Result = Pipeline().run(*Image, Context, Options);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      if (LLVM) {
+        ASSERT_NE(Result.LlvmModule, nullptr);
+        EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+        EXPECT_EQ(Result.LlvmModule->getDataLayout().isLittleEndian(),
+                  File.Little);
+        unsigned Bytes = 0;
+        for (const auto &Function : *Result.LlvmModule)
+          for (const auto &Block : Function)
+            for (const auto &Instruction : Block)
+              if (const auto *Read =
+                      llvm::dyn_cast<llvm::LoadInst>(&Instruction))
+                if (Read->isVolatile()) {
+                  ++Bytes;
+                  EXPECT_TRUE(llvm::isa<llvm::GlobalVariable>(
+                      llvm::getUnderlyingObject(Read->getPointerOperand())));
+                }
+        EXPECT_GE(Bytes, 2u);
+      } else {
+        unsigned ScalarAddresses = 0;
+        for (auto &Function : Result.HighFuncs)
+          walkStmts(Function.Body, [&](HighStmt &Statement) {
+            forEachExpr(Statement, [&](const ExprPtr &Root) {
+              std::vector<ExprPtr> Pending{Root};
+              while (!Pending.empty()) {
+                const auto E = Pending.back();
+                Pending.pop_back();
+                if (!E)
+                  continue;
+                if ((E->IntrinsicId == Intrinsic::MIPSLwl ||
+                     E->IntrinsicId == Intrinsic::MIPSLwr) &&
+                    E->Operands[0]->Kind == ExprKind::Const) {
+                  E->Operands[0]->ConstProvenance =
+                      ConstantAddressProvenance::Scalar;
+                  ++ScalarAddresses;
+                }
+                Pending.insert(Pending.end(), E->Operands.begin(),
+                               E->Operands.end());
+              }
+            });
+          });
+        ASSERT_GE(ScalarAddresses, 2u);
+        CEmitterOptions Emit;
+        Emit.TheArch = GetParam();
+        Emit.Format = BinaryFormat::ELF;
+        Emit.Image = &*Image;
+        std::string Text;
+        llvm::raw_string_ostream Output(Text);
+        ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Output, Emit));
+        EXPECT_NE(Text.find("const volatile uint8_t"), std::string::npos)
+            << Text;
+        // Numeric value occurrences keep their spelling; actual memory
+        // arguments must be projected through the collected backing.
+        EXPECT_EQ(Text.find(")(66817)"), std::string::npos) << Text;
+        EXPECT_EQ(Text.find(")(0x10301)"), std::string::npos) << Text;
+        EXPECT_EQ(Text.find(")(66820)"), std::string::npos) << Text;
+        EXPECT_EQ(Text.find(")(0x10304)"), std::string::npos) << Text;
+      }
+    }
+  }
+}
+
+TEST_P(MIPSPipeline, MulDropsDeadAccumulatorsBeforeSourceABIRecovery) {
+  mips_test::ELFBytes File(GetParam());
+  File.put(0x100, 0x70851002, 4); // mul v0,a0,a1
+  File.put(0x104, 0x03e00008, 4);
+  File.put(0x108, 0, 4);
+  ELFLoader Loader;
+  auto Image = Loader.loadBuffer(File.buffer());
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  auto FunctionSymbol = Symbol::makeFunc(Image->Entry, 12);
+  FunctionSymbol.Name = "mips_mul";
+  Image->Symbols.push_back(std::move(FunctionSymbol));
+  for (bool LLVM : {false, true}) {
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.OnlyFunctionEntries = {Image->Entry};
+    Options.LiftMode = LLVM;
+    Options.EmitDumpOutput = false;
+    auto Result = Pipeline().run(*Image, Context, Options);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    ASSERT_EQ(Result.MedFuncs.size(), 1u);
+    EXPECT_EQ(Result.MedFuncs[0].Params.size(), 2u);
+    for (const auto &Block : Result.MedFuncs[0].Blocks)
+      for (const auto &Op : Block.Ops)
+        if (!Op.Dead && Op.Opcode == NdOp::INTRINSIC)
+          EXPECT_NE(Op.Inputs[0].ConstVal,
+                    uint64_t(Intrinsic::MIPSUnpredictable));
+    if (LLVM) {
+      ASSERT_NE(Result.LlvmModule, nullptr);
+      EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+    } else {
+      CEmitterOptions Emit;
+      Emit.TheArch = GetParam();
+      Emit.Format = BinaryFormat::ELF;
+      Emit.Image = &*Image;
+      std::string Text;
+      llvm::raw_string_ostream Output(Text);
+      EXPECT_TRUE(HighCEmitter().emit(Result.HighFuncs, Output, Emit));
+      EXPECT_EQ(Text.find("unpredictable"), std::string::npos) << Text;
+    }
+  }
+}
+
+TEST_P(MIPSPipeline,
+       MergePairsDiscardUnobservedImplementationDependentUpperWord) {
+  for (bool Reverse : {false, true}) {
+    SCOPED_TRACE(Reverse);
+    mips_test::ELFBytes File(GetParam());
+    File.put(0x100, 0x00a01025, 4); // or v0,a1,zero: arbitrary incoming bits
+    const uint32_t Left = 0x88820000 | (File.Little ? 3 : 0);
+    const uint32_t Right = 0x98820000 | (File.Little ? 0 : 3);
+    File.put(0x104, Reverse ? Right : Left, 4);
+    File.put(0x108, Reverse ? Left : Right, 4);
+    File.put(0x10c, 0x03e00008, 4);
+    File.put(0x110, 0, 4);
+    ELFLoader Loader;
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    auto FunctionSymbol = Symbol::makeFunc(Image->Entry, 20);
+    FunctionSymbol.Name = "mips_merge_pair";
+    Image->Symbols.push_back(std::move(FunctionSymbol));
+    for (bool LLVM : {false, true}) {
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.OnlyFunctionEntries = {Image->Entry};
+      Options.LiftMode = LLVM;
+      Options.EmitDumpOutput = false;
+      auto Result = Pipeline().run(*Image, Context, Options);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      ASSERT_EQ(Result.MedFuncs.size(), 1u);
+      EXPECT_FALSE(Result.MedFuncs[0].ReturnsNoValue);
+      unsigned Loads = 0;
+      for (const auto &Block : Result.MedFuncs[0].Blocks)
+        for (const auto &Op : Block.Ops)
+          if (!Op.Dead && Op.Opcode == NdOp::INTRINSIC) {
+            EXPECT_NE(Op.Inputs[0].ConstVal, uint64_t(Intrinsic::MIPSLwrUpper));
+            Loads += Op.Inputs[0].ConstVal == uint64_t(Intrinsic::MIPSLwl) ||
+                     Op.Inputs[0].ConstVal == uint64_t(Intrinsic::MIPSLwr);
+          }
+      EXPECT_EQ(Loads, 2u);
+      if (LLVM) {
+        ASSERT_NE(Result.LlvmModule, nullptr);
+        EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+        unsigned VolatileBytes = 0;
+        for (const auto &Function : *Result.LlvmModule)
+          for (const auto &Block : Function)
+            for (const auto &Instruction : Block)
+              if (const auto *Read =
+                      llvm::dyn_cast<llvm::LoadInst>(&Instruction))
+                VolatileBytes +=
+                    Read->isVolatile() && Read->getType()->isIntegerTy(8);
+        EXPECT_GE(VolatileBytes, 2u);
+      } else {
+        CEmitterOptions Emit;
+        Emit.TheArch = GetParam();
+        Emit.Format = BinaryFormat::ELF;
+        Emit.Image = &*Image;
+        std::string Text;
+        llvm::raw_string_ostream Output(Text);
+        EXPECT_TRUE(HighCEmitter().emit(Result.HighFuncs, Output, Emit));
+        EXPECT_NE(Text.find("const volatile uint8_t"), std::string::npos)
+            << Text;
+        EXPECT_EQ(Text.find("lwr_upper"), std::string::npos) << Text;
+      }
+    }
+  }
+}
+
+TEST_P(MIPSPipeline, ObservableMulAccumulatorsCannotBecomeStaleSourceValues) {
+  for (bool Overwrite : {false, true}) {
+    for (unsigned Read : {16u, 18u}) {
+      mips_test::ELFBytes File(GetParam());
+      File.put(0x100, 0x70851002, 4);                 // mul v0,a0,a1
+      File.put(0x104, Overwrite ? 0x00850018 : 0, 4); // mult a0,a1
+      File.put(0x108, 0x03e00008, 4);
+      File.put(0x10c, 0x00001000 | Read, 4); // mfhi/mflo v0
+      ELFLoader Loader;
+      auto Image = Loader.loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      auto FunctionSymbol = Symbol::makeFunc(Image->Entry, 16);
+      FunctionSymbol.Name = "mul_accumulator";
+      Image->Symbols.push_back(std::move(FunctionSymbol));
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.OnlyFunctionEntries = {Image->Entry};
+      Options.LiftMode = true;
+      Options.EmitDumpOutput = false;
+      auto Result = Pipeline().run(*Image, Context, Options);
+      EXPECT_EQ(Result.Success, Overwrite) << Result.Error;
+      if (!Overwrite)
+        EXPECT_NE(Result.Error.find("unpredictable"), std::string::npos)
+            << Result.Error;
     }
   }
 }

@@ -8,6 +8,7 @@ including byte order, instead of being retargeted to the host.
 """
 
 import argparse
+import hashlib
 import io
 import json
 import re
@@ -16,7 +17,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from elftools.elf.elffile import ELFFile
-from unicorn import Uc, UC_ARCH_MIPS, UC_MODE_BIG_ENDIAN, UC_MODE_MIPS32, UC_MODE_MIPS64
+from unicorn import (Uc, UcError, UC_ARCH_MIPS, UC_ERR_READ_UNMAPPED,
+                     UC_HOOK_CODE, UC_MODE_BIG_ENDIAN, UC_MODE_MIPS32, UC_MODE_MIPS64)
 from unicorn import mips_const as mips
 
 
@@ -27,7 +29,10 @@ FUNCTIONS = ["mips_add", "mips_likely", "mips_load", "mips_store", "mips_stack",
              "mips_branch_capture", "mips_likely_store", "mips_call_slot",
              "mips_ro_global", "mips_rw_global", "mips_jump_slot_load",
              "mips_jalr_slot", "mips_jalr_memory", "mips_conditional_link",
-             "mips_data_pointer", "mips_code_pointer"]
+             "mips_data_pointer", "mips_code_pointer", "mips_mul",
+             "mips_merge_word", "mips_merge_word_reverse", "mips_merge_full",
+             "mips_jalr_merge_slot", "mips_merge_ro_global", "mips_merge_rw_global",
+             "mips_merge_discard", "mips_merge_zero"]
 
 
 def command(args, log):
@@ -86,6 +91,18 @@ def invoke(uc, entry, bits, little, arguments):
 
 
 def cases(function, bits):
+    if function in ("mips_merge_discard", "mips_merge_zero"):
+        return [[DATA]]
+    if function in ("mips_merge_ro_global", "mips_merge_rw_global"):
+        return [[]]
+    if function == "mips_jalr_merge_slot":
+        return [[7, 11, DATA], [-1, 1, DATA], [0x12345678, 9, DATA]]
+    if function == "mips_mul":
+        return [[0, 0], [7, 11], [-1, 1], [-2147483648, 19],
+                [2147483647, 2147483647], [-2147483647, -1]]
+    if function.startswith("mips_merge_"):
+        return [[DATA + offset, old] for offset in range(8)
+                for old in (0, 0x12345678ABCDEF98, -1)]
     if function == "mips_jalr_memory" and bits == 64:
         return [[0, 0], [7, 11], [-1, 1], [-2147483648, 19],
                 [0x1234567800000001, 9], [0xFFFFFFFF, 1]]
@@ -110,6 +127,20 @@ def cases(function, bits):
     if function == "mips_rw_global":
         return [[0, 0x55667788]]
     return [[]]
+
+
+def fault_observation(uc, entry, bits, little, inputs, callees):
+    entered = []
+    uc.hook_add(UC_HOOK_CODE,
+                lambda _, address, _size, _data: entered.append(address)
+                if address in callees else None)
+    try:
+        invoke(uc, entry, bits, little, inputs)
+    except UcError as error:
+        if error.errno != UC_ERR_READ_UNMAPPED or entered:
+            raise RuntimeError(f"expected read fault before callee: {error}, entered={entered}") from error
+        return {"error": error.errno, "callee_entered": False}
+    raise RuntimeError("discarded merge read did not fault")
 
 
 def main():
@@ -182,8 +213,13 @@ def main():
         for inputs in cases(function, bits):
             results = []
             for path in (original, rebuilt):
+                # These HighC globals must survive relocation without the
+                # original image mapped. LLVMC explicitly binds original
+                # storage; other cases can bind original omitted callees.
+                standalone = backend == "highc" and function in (
+                    "mips_merge_ro_global", "mips_merge_rw_global")
                 uc, entry = emulator(path, bits, little, function,
-                                     original if path == rebuilt else None)
+                                     original if path == rebuilt and not standalone else None)
                 uc.mem_write(DATA, (0x12345678).to_bytes(4, "little" if little else "big") + bytes(range(4, 16)))
                 value = invoke(uc, entry, bits, little, inputs)
                 if function == "mips_rw_global":
@@ -192,12 +228,39 @@ def main():
             if results[0] != results[1]:
                 raise RuntimeError(f"{stem.name} inputs={inputs}: original={results[0]} generated={results[1]}")
             observations.append({"inputs": inputs, "result": results[0]})
-        return {"profile": profile, "function": function, "backend": backend,
+        faults = []
+        if function in ("mips_jalr_merge_slot", "mips_merge_discard", "mips_merge_zero"):
+            inputs = ([7, 11, DATA + 4096] if function == "mips_jalr_merge_slot"
+                      else [DATA + 4096])
+            callees = set()
+            for path in (original, rebuilt):
+                symbols = ELFFile(io.BytesIO(path.read_bytes())).get_section_by_name(".symtab")
+                callees.update(symbol["st_value"] for symbol in
+                               (symbols.get_symbol_by_name("mips_add") or [])
+                               if symbol["st_shndx"] != "SHN_UNDEF")
+            outcomes = []
+            for path in (original, rebuilt):
+                uc, entry = emulator(path, bits, little, function,
+                                     original if path == rebuilt else None)
+                outcomes.append(fault_observation(uc, entry, bits, little, inputs, callees))
+            assert outcomes[0] == outcomes[1]
+            faults.append({"inputs": inputs, "result": outcomes[0]})
+        receipt = {"profile": profile, "function": function, "backend": backend,
                 "cases": observations,
+                "faults": faults,
                 "original_image_binding": backend == "llvmc",
-                "original_callee_bindings": bound_callees}
+                "original_image_unmapped": standalone,
+                "original_callee_bindings": bound_callees,
+                "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                "rebuilt_sha256": hashlib.sha256(rebuilt.read_bytes()).hexdigest(),
+                "removed_bytes": obj.stat().st_size + rebuilt.stat().st_size}
+        # Successful binaries are reproducible from retained source, commands
+        # and hashes. Preserve failures until diagnosed, not every past build.
+        obj.unlink()
+        rebuilt.unlink()
+        return receipt
 
-    receipts, failures = [], []
+    receipts, failures, failed_profiles = [], [], set()
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = [pool.submit(compare, task) for task in tasks]
         for task, future in zip(tasks, futures):
@@ -207,8 +270,20 @@ def main():
                 print(f"PASS {task[0]} {task[6]} {task[7]}", flush=True)
             except Exception as error:
                 failures.append(str(error))
+                failed_profiles.add(task[0])
                 print(f"FAIL {task[0]} {task[6]} {task[7]}: {error}", flush=True)
-    (output / "results.json").write_text(json.dumps({"passed": receipts, "failures": failures}, indent=2) + "\n")
+    cleanup = {"removed_bytes": sum(r["removed_bytes"] for r in receipts),
+               "originals": {}}
+    for profile, _, _ in PROFILES:
+        if profile in failed_profiles:
+            continue
+        for suffix in (".o", ".elf"):
+            artifact = output / (profile + suffix)
+            cleanup["originals"][artifact.name] = hashlib.sha256(artifact.read_bytes()).hexdigest()
+            cleanup["removed_bytes"] += artifact.stat().st_size
+            artifact.unlink()
+    (output / "results.json").write_text(json.dumps({"passed": receipts, "failures": failures,
+                                                     "cleanup": cleanup}, indent=2) + "\n")
     print(f"{len(receipts)} passed, {len(failures)} failed", flush=True)
     return bool(failures)
 

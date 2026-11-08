@@ -15,8 +15,10 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/BlockRegisterConstant.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/med/MedConstantPropagation.h"
 #include "neverd/ir/med/MedPhiRecomposition.h"
+#include "neverd/ir/med/MedScalarShapes.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -95,6 +97,14 @@ void LowToMedConverter::propagate(MedFunc &Func) {
            Op.MemoryOrdering == NdMemoryOrdering::None &&
            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default;
   };
+  const auto PlainProjection = [](const MedOp &Op) {
+    return (Op.Opcode == NdOp::SUBBYTES || Op.Opcode == NdOp::CONCAT) &&
+           medScalarByteProjectionIsValid(Op) && Op.Output.Size && !Op.Dead &&
+           Op.RegistrationRoot == MedOp::RegistrationRootKind::None &&
+           !Op.SourceCallHint && Op.IntrinsicOutputs.empty() &&
+           Op.MemoryOrdering == NdMemoryOrdering::None &&
+           Op.MemoryAddressSpace == NdMemoryAddressSpace::Default;
+  };
 
   // Copy propagation: if def is COPY from another var, replace uses
   bool Changed = true;
@@ -136,6 +146,67 @@ void LowToMedConverter::propagate(MedFunc &Func) {
               Op.Inputs[I] = Replacement;
               Changed = true;
             }
+          }
+        }
+        if (Op.Opcode == NdOp::SUBBYTES && PlainProjection(Op)) {
+          const auto At = Defs.find(keyOf(Op.Inputs[0]));
+          if (At != Defs.end() && At->second->Opcode == NdOp::CONCAT &&
+              PlainProjection(*At->second) &&
+              At->second->Output.Size == Op.Inputs[0].Size) {
+            const auto &Join = *At->second;
+            uint64_t Offset = Op.Inputs[1].ConstVal;
+            const MedVar *Part = nullptr;
+            if (Offset >= Join.Inputs[1].Size) {
+              Offset -= Join.Inputs[1].Size;
+              Part = &Join.Inputs[0];
+            } else if (Op.Output.Size <= Join.Inputs[1].Size - Offset) {
+              Part = &Join.Inputs[1];
+            }
+            if (Part) {
+              Op.Inputs[0] = *Part;
+              if (!Offset && Part->Size == Op.Output.Size) {
+                Op.Opcode = NdOp::COPY;
+                Op.NumInputs = 1;
+              } else {
+                Op.Inputs[1] = MedVar::makeConst(Offset, Op.Inputs[1].Size);
+              }
+              Changed = true;
+            }
+          }
+        }
+        if (mipsScalarMedShapeIsValid(Op, TargetArch) &&
+            static_cast<Intrinsic>(Op.Inputs[0].ConstVal) ==
+                Intrinsic::MIPSLwrUpper) {
+          const auto &Address = Op.Inputs[1];
+          const auto &Old = Op.Inputs[2];
+          const auto StableScalar = [&](const MedVar &V) {
+            return V.isConst() &&
+                   (V.Provenance == ConstantAddressProvenance::Scalar ||
+                    (V.Provenance == ConstantAddressProvenance::Unknown &&
+                     !HasExactLoaderProvenance(V.ConstVal) &&
+                     !MayConstantRelocate(V.ConstVal, V.Size)));
+          };
+          bool Defined =
+              StableScalar(Address) &&
+              mips::mergeAccess(*mips::mergeLoad(Intrinsic::MIPSLwr),
+                                Address.ConstVal, archLittleEndian(TargetArch))
+                      .Count == 4;
+          Defined |= StableScalar(Old) &&
+                     Old.ConstVal == mips::signExtendWord(Old.ConstVal);
+          const auto At = Defs.find(keyOf(Old));
+          if (At != Defs.end()) {
+            const auto &Definition = *At->second;
+            Defined |= Definition.Opcode == NdOp::INT_SEXT &&
+                       Definition.NumInputs == 1 &&
+                       Definition.Output.Size == 8 &&
+                       Definition.Inputs[0].Size == 4 && !Definition.Dead;
+          }
+          if (Defined) {
+            Op.Opcode = NdOp::INT_ASHR;
+            Op.Inputs[0] = Op.Inputs[3];
+            Op.Inputs[1] = MedVar::makeConst(31, 4);
+            Op.NumInputs = 2;
+            Changed = true;
           }
         }
         if (PlainInvolution(Op)) {

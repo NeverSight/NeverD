@@ -15,8 +15,10 @@ No vendor executable was run and no device was flashed.
 - SquashFS 4/XZ starts at file offset `0x120a88`, with 14,114,313 bytes in
   its declared filesystem extent. Carve that range and extract it with 7-Zip.
 
-The local ignored `build-mips/firmware` directory contains the source receipt,
-archive, firmware member, carved filesystem, extracted tree and ELF inventory.
+The local ignored `build-mips/firmware` directory retains the source receipt,
+official archive, selected `ubus`/`libubus`/`libubox` files and the ELF inventory.
+The duplicate firmware member, disposable filesystem carve and unused extracted
+files were removed after inventory; they can be reproduced from the archive.
 There are 387 ELF children: 385 MIPS32r2/o32 and two MIPS I/o32. All are 32-bit
 big endian. This is the evidence for prioritizing MIPS32 big endian; MIPS64
 coverage uses separately generated owned fixtures.
@@ -44,7 +46,8 @@ Imports include `getopt`, `atoi`, `strcmp`, `ubus_connect`, `ubus_invoke`,
 `ubus_lookup`, `ubus_free` and uloop functions. The main function is the first
 end-to-end NeverD target; its instruction stream uses ordinary integer
 operations, calls and delay slots. The `call` handler additionally uses the
-SPECIAL2 `MUL` instruction, outside the initial supported subset.
+SPECIAL2 `MUL` instruction to scale its timeout. Its HI/LO clobbers must be
+represented even though this handler does not read those results.
 
 The independent dispatch-table decode at `0x4118e0` contains these four
 command handlers:
@@ -75,13 +78,13 @@ image and emitted both HighC and LLVMC for these original entries:
 | `0x4011b4` | `list` | emitted | emitted |
 | `0x400fcc` | `listen` | emitted | emitted |
 | `0x4011ec` | `send` | emitted | emitted |
-| `0x4012d0` | `call` | refused at `0x401390` | refused at `0x401390` |
+| `0x4012d0` | `call` | emitted | emitted |
 
-The refusal is the unimplemented SPECIAL2 `MUL v0,v1,v0` instruction
-(`0x70621002`) in the `call` handler; it scales the timeout by 1000.
-It is reported as incomplete lifting, rather than silently emitting a partial
-function. Successful emission alone is not a proof of runtime equivalence for
-these vendor functions.
+The former blocker at `0x401390` was SPECIAL2 `MUL v0,v1,v0`
+(`0x70621002`), which scales the timeout by 1000. The 68-instruction handler
+does not use merge loads; those are qualified by separate owned fixtures.
+Successful emission alone is not a proof of runtime equivalence for these
+vendor functions.
 
 The main output retains the `getopt` loop, the `atoi(optarg)` timeout update,
 `ubus_connect`, the four-entry `strcmp` dispatch loop, the indirect handler call
@@ -93,11 +96,20 @@ initializes a blob buffer, conditionally parses JSON, and calls
 decoded PLT, startup and dispatch-table anchors above. These observations
 establish useful static recovery, not a vulnerability finding.
 
+The `call` view checks for two or three arguments and returns `-2` otherwise.
+It initializes the blob buffer at `0x4119cc`, optionally parses the third
+argument as JSON, and returns `-1` on parse failure. It resolves the first
+argument with `ubus_lookup_id`, then passes the second argument, blob head,
+callback `0x40114c`, null callback data and timeout multiplied by 1000 to
+`ubus_invoke`. Lookup and invocation status values reach the return. These
+relationships agree with the independently decoded instructions and PLT;
+external prototypes and complete structure types remain inferred.
+
 Artifacts under the ignored `build-mips/firmware` directory include
-`ubus-{main,list,listen,send}-{highc,llvmc}.c`, per-invocation logs,
+`ubus-{main,list,call,listen,send}-{highc,llvmc}.c`, per-invocation logs,
 `neverd-analysis-results.json`, the original disassembly/import inventory,
-and main/list LowIR, MedIR, HighIR and CFG JSON/DOT. `neverd-ir-results.json`
-records success, diagnostics and hashes per view. The list handler also emits
+and main/list/call LowIR, MedIR, HighIR and CFG JSON/DOT. `neverd-ir-results.json`
+records success, diagnostics and hashes per view. The list and call handlers also emit
 raw LLVM IR through the SDK's LLVM verifier. The raw LLVM
 inspection route has a stricter code-pointer identity contract than LLVMC's
 original-image source projection; main's dispatch table is not yet qualified

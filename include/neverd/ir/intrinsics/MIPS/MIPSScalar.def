@@ -1,0 +1,39 @@
+//===- MIPSScalar.def - MIPS scalar intrinsic contracts ------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Define the desired table macro before including this file. Published IDs
+// and instruction encodings are stable; byte widths are architectural values.
+
+#ifndef NEVERD_MIPS_MERGE_LOAD
+#define NEVERD_MIPS_MERGE_LOAD(Id, Value, Opcode, Bytes, Left, CName)
+#endif
+#ifndef NEVERD_MIPS_SCALAR_INTRINSIC
+#define NEVERD_MIPS_SCALAR_INTRINSIC(Id, Value, CName)
+#endif
+#ifndef NEVERD_MIPS_SCALAR_TEXT
+#define NEVERD_MIPS_SCALAR_TEXT(Name, Text)
+#endif
+
+NEVERD_MIPS_MERGE_LOAD(MIPSLwl, 16000, 0x22, 4, true, "neverd_mips_lwl")
+NEVERD_MIPS_MERGE_LOAD(MIPSLwr, 16001, 0x26, 4, false, "neverd_mips_lwr")
+NEVERD_MIPS_MERGE_LOAD(MIPSLdl, 16002, 0x1a, 8, true, "neverd_mips_ldl")
+NEVERD_MIPS_MERGE_LOAD(MIPSLdr, 16003, 0x1b, 8, false, "neverd_mips_ldr")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSUnpredictable, 16004,
+                             "neverd_mips_unpredictable")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSRequireWord, 16005, "neverd_mips_require_word")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSLwrUpper, 16006, "neverd_mips_lwr_upper")
+
+NEVERD_MIPS_SCALAR_TEXT(kMalformedScalar,
+                        "invalid MIPS scalar intrinsic operand/output contract")
+NEVERD_MIPS_SCALAR_TEXT(
+    kUnpredictableResult,
+    "MIPS source output observes an architecturally unpredictable value")
+NEVERD_MIPS_SCALAR_TEXT(kPartialLwrRequiresWord,
+                        "partial MIPS64 LWR requires a sign-extended word or "
+                        "an explicit CPU policy")
+
+#undef NEVERD_MIPS_MERGE_LOAD
+#undef NEVERD_MIPS_SCALAR_INTRINSIC
+#undef NEVERD_MIPS_SCALAR_TEXT

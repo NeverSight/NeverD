@@ -20,6 +20,7 @@
 #include "../LibraryPrototype.h"
 #include "../UnalignedMemory.h"
 #include "../VariadicImportStub.h"
+#include "../render/MIPS/MIPSScalar.h"
 #include "../render/X86/X86AtomicRmw.h"
 #include "../render/X86/X86Bound.h"
 #include "../render/X86/X86DescriptorState.h"
@@ -642,6 +643,7 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
   Int128AsBitInt = false;
   X87Helpers.clear();
   X86FPStateHelpers.clear();
+  MIPSScalarHelpers.clear();
   UsesX87Extended = false;
   // A unit can hold two bodies of one entry, and a later unit a body at a
   // freed one's address.
@@ -708,6 +710,14 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
     }
     if (E.Kind == ExprKind::Call && isScalarLSEBuiltin(E.IntrinsicId))
       ScalarLSEBuiltins.insert(E.IntrinsicId);
+    if (E.Kind == ExprKind::Call && mips::isScalarIntrinsic(E.IntrinsicId)) {
+      if (!mipsScalarHighShapeIsValid(E, Opts.TheArch))
+        throw std::runtime_error(mips::kMalformedScalar);
+      auto [It, Inserted] = MIPSScalarHelpers.try_emplace(E.IntrinsicId);
+      if (Inserted)
+        It->second = GlobalIdentifierAllocator.allocate(
+            intrinsicCName(E.IntrinsicId), "nd_mips");
+    }
     if (const auto Bits = x86SaturatingLaneBits(E)) {
       auto [It, Inserted] =
           SaturatingLaneHelpers.try_emplace({E.IntrinsicId, *Bits});
@@ -895,6 +905,7 @@ void HighCWriter::writeMemoryHelpers() {
   for (const auto &[Key, Name] : SaturatingLaneHelpers)
     writeX86SaturatingLaneHelper(OS, Name, Key.first, Key.second);
   writeScalarLSEFallbacks(OS, ScalarLSEBuiltins);
+  writeMIPSScalarHelpers(OS, Opts.TheArch, MIPSScalarHelpers);
   // The accesses' types or assumptions are written only when an access can
   // name a type; otherwise every access keeps its portable byte copy.
   UnalignedTypesWritten = Opts.UseUnalignedPointers && NeedsUnalignedTypes;
@@ -3638,6 +3649,29 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
   };
   std::optional<AArch64ImmediateHighBases> ImageMemoryBases;
   std::function<void(const HighExpr &)> Visit = [&](const HighExpr &E) {
+    if (E.Kind == ExprKind::Call && mips::mergeLoad(E.IntrinsicId) &&
+        mipsScalarHighShapeIsValid(E, Opts.TheArch)) {
+      const auto Load = *mips::mergeLoad(E.IntrinsicId);
+      NoteAccessAddress(E.Operands[0]);
+      if (const auto VA = constAddress(*E.Operands[0])) {
+        const auto Access =
+            mips::mergeAccess(Load, *VA, archLittleEndian(Opts.TheArch));
+        if (const auto *Segment = Opts.Image->getSegmentFor(*VA)) {
+          if (!Segment->isReadable() || Access.First < Segment->VA ||
+              Access.First - Segment->VA > Segment->Size ||
+              Access.Count > Segment->Size - (Access.First - Segment->VA))
+            throw std::invalid_argument(kMIPSMergeImageAddress);
+          noteImageObject(Access.First, NdType::makeInt(1, false), false, true);
+          noteImageObject(*VA, NdType::makeInt(1, false), false, true);
+          auto &Object = ImageObjects[Access.First];
+          Object.IndexedBytes =
+              std::max<uint64_t>(Object.IndexedBytes, Access.Count);
+          Object.AddressTaken = true;
+        }
+      } else if (indexedImageBase(*E.Operands[0])) {
+        throw std::invalid_argument(kMIPSMergeImageAddress);
+      }
+    }
     const auto NoteImmediateStorage = [&](const auto &Instruction,
                                           const ExprPtr &Base) {
       const auto *Constant =

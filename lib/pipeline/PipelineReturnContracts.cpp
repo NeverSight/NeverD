@@ -662,6 +662,13 @@ private:
         Paths.push_back(ReturnedValue::SystemCallResult);
         return;
       }
+      // A merge read both observes memory and defines a scalar result. An
+      // unpredictable result must also remain observable so its backend can
+      // reject it, rather than silently changing the function to void.
+      if (Op.Output.Size && mipsScalarMedShapeIsValid(Op, Img.Arch)) {
+        Paths.push_back(ReturnedValue::Other);
+        return;
+      }
       if (isAArch64PAuthIntrinsic(Id) || aarch64CPAOperation(Id) ||
           isAArch64PAuthLoadIntrinsic(Id) ||
           isAArch64WritebackMemoryIntrinsic(Id) ||

@@ -10,8 +10,11 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/lift/X86/X86Regs.h"
 
 #include <algorithm>
@@ -376,4 +379,108 @@ TEST(MedDCE, ReachingDefinitionsAcceptTheFullBlockIdRange) {
     EXPECT_EQ(CallBlock.Ops.front().Opcode, NdOp::CALL);
   }
 }
+TEST(MedDCE, MipsUnpredictableDefinitionsAreIndependentAndSSAOwned) {
+  for (Arch Target :
+       {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL})
+    for (unsigned Observed : {0u, 1u, 2u})
+      for (bool Overwrite : {false, true}) {
+        SCOPED_TRACE(testing::Message() << unsigned(Target) << ':' << Observed
+                                        << ':' << Overwrite);
+        const unsigned Width = isMIPS64(Target) ? 8 : 4;
+        MedFunc Func;
+        Func.Blocks.resize(2);
+        Func.Blocks[0].Id = 0;
+        Func.Blocks[0].Succs = {1};
+        Func.Blocks[1].Id = 1;
+        Func.Blocks[1].Preds = {0};
+        const auto Value = [&](int Id, int Version, uint64_t Offset) {
+          auto V = reg(Id, Version, Width, Offset);
+          V.TheArch = Target;
+          return V;
+        };
+        const auto HI = Value(1, 1, mipsreg::HI);
+        const auto LO = Value(2, 1, mipsreg::LO);
+        for (auto Output : {HI, LO}) {
+          MedOp Op;
+          Op.Opcode = NdOp::INTRINSIC;
+          Op.Output = Output;
+          Op.addInput(MedVar::makeConst(uint64_t(Intrinsic::MIPSUnpredictable),
+                                        sizeof(Intrinsic)));
+          Func.Blocks[0].Ops.push_back(Op);
+        }
+        auto Input = Observed == 1 ? HI : LO;
+        if (Overwrite) {
+          MedOp Copy;
+          Copy.Opcode = NdOp::COPY;
+          Copy.Output = Input;
+          Copy.Output.SSAVer = 2;
+          Copy.addInput(MedVar::makeConst(123, Width));
+          Func.Blocks[1].Ops.push_back(Copy);
+          Input = Copy.Output;
+        }
+        MedOp Return;
+        Return.Opcode = NdOp::RETURN;
+        Return.addInput(Observed ? Input : MedVar::makeConst(7, Width));
+        Func.Blocks[1].Ops.push_back(Return);
+        LowToMedConverter().runRegisterDce(Func, Target);
+        EXPECT_EQ(Func.Blocks[0].Ops.size(), Observed && !Overwrite ? 1u : 0u);
+        if (Observed && !Overwrite)
+          EXPECT_EQ(Func.Blocks[0].Ops.front().Output, Input);
+      }
+}
+
+TEST(MedDCE, DeadMipsMergeResultsDropOldValuesButKeepBothReads) {
+  for (Arch Target :
+       {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL})
+    for (unsigned Observe : {0u, 1u, 2u}) {
+      SCOPED_TRACE(testing::Message() << unsigned(Target) << ':' << Observe);
+      const unsigned Width = isMIPS64(Target) ? 8 : 4;
+      MedFunc Func;
+      Func.Blocks.resize(2);
+      Func.Blocks[0].Id = 0;
+      Func.Blocks[0].Succs = {1};
+      Func.Blocks[1].Id = 1;
+      Func.Blocks[1].Preds = {0};
+      auto Old = reg(1, 1, 4, mipsreg::r(8));
+      Old.TheArch = Target;
+      MedOp Seed;
+      Seed.Opcode = NdOp::COPY;
+      Seed.Output = Old;
+      Seed.addInput(MedVar::makeConst(0x12345678, 4));
+      Func.Blocks[0].Ops.push_back(Seed);
+      MedVar Values[2];
+      for (unsigned I = 0; I != 2; ++I) {
+        auto &Value = Values[I];
+        Value = Old;
+        Value.Kind = MedVar::Temp;
+        Value.Id = I + 2;
+        MedOp Load;
+        Load.Opcode = NdOp::INTRINSIC;
+        Load.Output = Value;
+        Load.addInput(MedVar::makeConst(
+            uint64_t(I ? Intrinsic::MIPSLwr : Intrinsic::MIPSLwl),
+            sizeof(Intrinsic)));
+        Load.addInput(MedVar::makeConst(0x1001, Width));
+        Load.addInput(I ? Values[0] : Old);
+        Func.Blocks[0].Ops.push_back(Load);
+      }
+      MedOp Return;
+      Return.Opcode = NdOp::RETURN;
+      Return.addInput(Observe ? Values[Observe - 1] : MedVar::makeConst(7, 4));
+      Func.Blocks[1].Ops.push_back(Return);
+      LowToMedConverter().runRegisterDce(Func, Target);
+      const auto &Ops = Func.Blocks[0].Ops;
+      ASSERT_EQ(Ops.size(), Observe ? 3u : 2u);
+      for (unsigned I = 0; I != 2; ++I) {
+        const auto &Load = Ops[I + (Observe ? 1 : 0)];
+        EXPECT_EQ(Load.Opcode, NdOp::INTRINSIC);
+        EXPECT_EQ(Load.Inputs[1].ConstVal, 0x1001u);
+        const bool Live = Observe == 2 || (Observe == 1 && I == 0);
+        EXPECT_EQ(Load.Inputs[2].isConst(), !Live);
+        if (!Live)
+          EXPECT_EQ(Load.Inputs[2].ConstVal, 0u);
+      }
+    }
+}
+
 } // namespace
