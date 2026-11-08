@@ -3777,6 +3777,22 @@ nonlinear neighbors through all six source routes at O0/O2.
 at 8/64/65/128 bits against independent complete-word multiplication. The
 non-native cases must finish below 60,000 work units with output cost at most
 286, protecting dense reconstruction headroom without increasing its budget.
+`SharedLiteralPrefixesFinishAComplementedDegree256` keeps the default
+verification samples and the 65,536-unit request budget for a parsed degree-256
+product. Its eight-bit regression must finish with a short result; independent
+full-width products through 257 bits also check high limbs, carry boundaries and
+preservation of the source expression. The projected-complement worker fixture
+checks the common CLI and GUI source routes against the original machine-code
+product at both C optimization levels.
+`MaskedProductsObserveOnlyTheRequestedLiteralWindow` checks that discarded high
+mask bits do not force wider inner-product proofs. Six- through eight-bit windows
+must finish within the normal budget, while independent full-width products and
+an unscaled query in the same context retain every observable high bit. The
+masked-window worker fixture exercises the same boundary in emitted source.
+The `masked-product-window` benchmark family (`--count 36`) retains degree-16–64
+products, complemented inputs, one-factor parity changes and a third observed
+bit from the inner nonlinear product. Its eight-bit words also keep the high
+mask bit when the outer coefficient no longer discards it.
 `PreparedParityPrefixesKeepTheirProductAndContext` checks that a completed
 prefix reduces the next reader's work at 8/64/257 bits, without changing its
 values. A different product, the same handle in another context, zero scratch

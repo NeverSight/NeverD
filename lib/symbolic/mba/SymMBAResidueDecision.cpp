@@ -794,6 +794,15 @@ class LowWordDecisions {
     return It->second;
   }
 
+  // The decision domain observes at most eight low bits. Native literals
+  // already own their complete value inline; wider literals share the exact
+  // cached prefix instead of copying their APInt for every signature view.
+  uint64_t literalLowWord(SymRef R) {
+    if (Ctx.width(R) > 64)
+      return wideLiteralPrefix(R);
+    return charge() ? Ctx.node(R).Aux : 0;
+  }
+
   uint64_t constantWordKey(SymRef R, unsigned Count) {
     static_assert(limits::kMaxAffineResidueTableBits <= 8);
     const auto Constant = Ctx.operand(R, 0);
@@ -850,11 +859,11 @@ class LowWordDecisions {
     const auto Op = Ctx.op(R);
     Bits Result(Count, 0);
     if (Ctx.isConst(R)) {
-      const auto Value = literal(R);
-      if (!Value)
+      const auto Value = literalLowWord(R);
+      if (Failed)
         return Empty;
       for (unsigned I = 0; I < Count; ++I)
-        Result[I] = (*Value)[I];
+        Result[I] = (Value >> I) & 1;
     } else if (Op == SymOp::ZExt || Op == SymOp::SExt) {
       const auto Child = Ctx.operand(R, 0);
       const auto ChildBits = std::min(Count, Ctx.width(Child));
@@ -920,17 +929,16 @@ class LowWordDecisions {
       }
     } else if ((Op == SymOp::And || Op == SymOp::Or || Op == SymOp::Xor) &&
                Ctx.numOperands(R) == 2 && Ctx.isConst(Ctx.operand(R, 0))) {
-      const auto Literal = literal(Ctx.operand(R, 0));
-      if (!Literal)
-        return Empty;
+      // The exact observed literal is already part of this word's key.
+      const auto Literal = (Key >> 8) & 255;
       const unsigned Needed =
-          Op == SymOp::And ? std::min(Count, Literal->getActiveBits()) : Count;
+          Op == SymOp::And ? unsigned(std::bit_width(Literal)) : Count;
       if (Needed) {
         const auto &Value = word(Ctx.operand(R, 1), Needed, Depth + 1);
         // Constant bitwise operands select or complement existing edges;
         // they need neither a constant decision word nor an apply-cache entry.
         for (unsigned I = 0; I < Count; ++I) {
-          const bool Bit = (*Literal)[I];
+          const bool Bit = (Literal >> I) & 1;
           Result[I] = Op == SymOp::And  ? (Bit ? Value[I] : 0)
                       : Op == SymOp::Or ? (Bit ? 1 : Value[I])
                                         : (Value[I] ^ uint32_t(Bit));
@@ -1529,10 +1537,9 @@ class LowWordDecisions {
     const uint64_t Top = uint64_t(1) << (Count - 1);
     ResidueSignature Result;
     if (Ctx.isConst(R)) {
-      auto Value = literal(R);
-      if (!Value)
+      const auto Low = literalLowWord(R) & ((uint64_t(1) << Count) - 1);
+      if (Failed)
         return {};
-      const auto Low = Value->getLoBits(Count).getZExtValue();
       Result = {internSignature(State, {0, Count, Low & (Top - 1)}),
                 uint32_t(bool(Low & Top))};
     } else if (Op == SymOp::Add || Op == SymOp::Xor) {
@@ -1547,10 +1554,9 @@ class LowWordDecisions {
       for (size_t I = 0; I < OperandCount; ++I) {
         const auto Child = Ctx.operand(R, I);
         if (Ctx.isConst(Child)) {
-          auto Value = literal(Child);
-          if (!Value)
+          const auto Low = literalLowWord(Child) & ((uint64_t(1) << Count) - 1);
+          if (Failed)
             return {};
-          const auto Low = Value->getLoBits(Count).getZExtValue();
           if (Op == SymOp::Add)
             Literal += Low;
           else
@@ -1594,10 +1600,10 @@ class LowWordDecisions {
       }
     } else if (Op == SymOp::And && Ctx.numOperands(R) == 2 &&
                Ctx.isConst(Ctx.operand(R, 0))) {
-      auto Value = literal(Ctx.operand(R, 0));
-      if (!Value)
+      const auto Mask =
+          literalLowWord(Ctx.operand(R, 0)) & ((uint64_t(1) << Count) - 1);
+      if (Failed)
         return {};
-      const auto Mask = Value->getLoBits(Count).getZExtValue();
       if (!Mask)
         Result = {internSignature(State, {0, Count, 0}), 0};
       else {
@@ -1687,10 +1693,10 @@ class LowWordDecisions {
       return It->second.back();
     if (Ctx.numOperands(R) == 2 && Ctx.isConst(Ctx.operand(R, 0))) {
       if (Ctx.op(R) == SymOp::And) {
-        const auto Literal = literal(Ctx.operand(R, 0));
-        if (!Literal)
+        const auto Literal = literalLowWord(Ctx.operand(R, 0));
+        if (Failed)
           return 0;
-        return (*Literal)[Count - 1]
+        return ((Literal >> (Count - 1)) & 1)
                    ? highestBit(Ctx.operand(R, 1), Count, Depth + 1)
                    : 0;
       }
@@ -1794,10 +1800,9 @@ class LowWordDecisions {
       Result = {Identity, {D[0], D[1]}};
     };
     if (Ctx.isConst(R)) {
-      auto Value = literal(R);
-      if (!Value)
+      const auto Low = literalLowWord(R) & ((uint64_t(1) << Count) - 1);
+      if (Failed)
         return {};
-      const auto Low = Value->getLoBits(Count).getZExtValue();
       Result = {internSignature(State, {0, Count, Low & (Unit - 1)}),
                 {uint32_t(bool(Low & Unit)), uint32_t(bool(Low & (2 * Unit)))}};
     } else if (Op == SymOp::Add || Op == SymOp::Xor) {
@@ -1813,10 +1818,9 @@ class LowWordDecisions {
       for (size_t I = 0; I < OperandCount; ++I) {
         const auto Child = Ctx.operand(R, I);
         if (Ctx.isConst(Child)) {
-          auto Value = literal(Child);
-          if (!Value)
+          const auto Low = literalLowWord(Child) & ((uint64_t(1) << Count) - 1);
+          if (Failed)
             return {};
-          const auto Low = Value->getLoBits(Count).getZExtValue();
           Literal = Op == SymOp::Add ? Literal + Low : Literal ^ Low;
           Values.push_back({});
         } else {
@@ -1888,10 +1892,10 @@ class LowWordDecisions {
       }
     } else if (Op == SymOp::And && Ctx.numOperands(R) == 2 &&
                Ctx.isConst(Ctx.operand(R, 0))) {
-      auto Value = literal(Ctx.operand(R, 0));
-      if (!Value)
+      const auto Mask =
+          literalLowWord(Ctx.operand(R, 0)) & ((uint64_t(1) << Count) - 1);
+      if (Failed)
         return {};
-      const auto Mask = Value->getLoBits(Count).getZExtValue();
       if (!Mask)
         Result = {internSignature(State, {0, Count, 0}), {0, 0}};
       else {

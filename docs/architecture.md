@@ -5295,6 +5295,11 @@ temporary expression nodes; wide literal prefixes are copied and charged once
 per search. Word, projected-representative and pairing-signature caches share
 this normalization without changing any source constant or wider reading.
 Neutral observed constants reuse the operand directly.
+Literal decision bits and both pairing-signature readers reuse the same exact
+prefix. Constant bitwise operands use the residue already stored in their word
+key, including its active-bit bound, without rebuilding a full-width APInt.
+Full-value predicates, shift counts and emitted source constants retain their
+complete-width interpretation.
 Constant additions reuse the literal residue already present in the word key.
 Bits below its first set bit remain unchanged and cannot start a carry; a
 single-bit query constructs only the carry into its requested position.

@@ -989,6 +989,29 @@ def narrow_product_cross_terms_corpus(width, count):
     return rows
 
 
+def masked_product_window_corpus(width, count):
+    """Degree-16–64 products with high mask bits outside a six/eight-bit view.
+
+    Keep complemented and one-factor parity changes, plus a third low bit
+    that still observes the inner nonlinear product. At width eight the high
+    mask bit is observable in the complete window and must remain intact.
+    """
+    rows = []
+    for index in range(count):
+        kind = index % 36
+        degree, observed, mode = (16, 32, 64)[kind // 12], 6 + kind % 12 // 4, kind % 4
+        base = "(x^1)" if mode == 1 else "x"
+        mask = (1 << (width - 1)) | (7 if mode == 3 else 3)
+        factors = []
+        for i in range(degree):
+            offset = 2*i + int(mode == 2 and i == 0)
+            upper = f"(((y+{i})&-2)*((z+{2*i})&-2))"
+            factors.append(f"((({base}+{offset})^{upper})&{mask})")
+        rows.append(f"({3 << (width-observed)}*{'*'.join(factors)})"
+                    "+(x^y)+2*(x&y)+(z|w)+(z&w)")
+    return rows
+
+
 def residue_power_corpus(width, count):
     """Degree-16–512 grouped powers with an independent-parity multiplier.
 
@@ -1265,7 +1288,7 @@ def main():
                  "residue-product", "affine-residue", "prefix-residue", "residue-frontier",
                  "distributed-prefix", "multiple-residual", "carry-product",
                  "permuted-carry-product", "complemented-carry-product",
-                 "narrow-product-cross-terms",
+                 "narrow-product-cross-terms", "masked-product-window",
                  "residue-power", "residue-quotient", "residue-subgroup",
                  "sparse-linear-mixed-degree"),
         default="complement",
@@ -1308,6 +1331,7 @@ def main():
                 "permuted-carry-product": permuted_carry_product_corpus,
                 "complemented-carry-product": complemented_carry_product_corpus,
                 "narrow-product-cross-terms": narrow_product_cross_terms_corpus,
+                "masked-product-window": masked_product_window_corpus,
                 "residue-power": residue_power_corpus,
                 "residue-quotient": residue_quotient_corpus,
                 "residue-subgroup": residue_subgroup_corpus,

@@ -20,6 +20,17 @@ class WordOracleTests(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     self.equivalent(rows[index], rows[index + 1], width)
 
+    def test_masked_products_keep_parity_and_observed_carries(self):
+        for width in (8, 64, 257):
+            rows = bench.masked_product_window_corpus(width, 36)
+            # Six observed bits discard the high mask bit. Sixteen odd
+            # factors alternate 1 and 3; the even branch has eight zeros.
+            scale = (3 ** 9) << (width - 6)
+            self.equivalent(rows[0], f"x+y+z+w+{scale}*(x&1)", width)
+            self.equivalent(rows[1], f"x+y+z+w+{scale}*((~x)&1)", width)
+            with self.assertRaises(AssertionError):
+                self.equivalent(rows[2], rows[0], width)
+
     def test_residue_powers_keep_independent_parity_and_near_misses(self):
         for width in (8, 16, 32, 64):
             rows = bench.residue_power_corpus(width, 81)
