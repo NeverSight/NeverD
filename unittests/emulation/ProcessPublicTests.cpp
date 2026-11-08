@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 #include "../TestProcess.h"
 #include "AndroidEventLogTestData.h"
+#include "AndroidTextLogTestData.h"
 #include "DarwinAdvisoryLockTestData.h"
 #include "DarwinCallbackTestData.h"
 #include "DarwinCreatedAdvisoryLockTestData.h"
@@ -4489,13 +4490,21 @@ TEST_F(ProcessPublic, AndroidBinderNativeTransportMatchesSDKAndCLI) {
         Binding["fd"] = Mode == 5 ? 77 : 3;
         Binding["handle"] = Mode == 7 ? 1 : 0;
         Binding["alive"] = Mode != 4;
+        llvm::json::Array Writes;
+        for (const auto &Write :
+             neverd::emulation::test::binderFailureLogWrites())
+          Writes.push_back(llvm::json::Object{
+              {field::LogID, Write.ID},
+              {field::LogPayload, llvm::toHex(Write.Payload)},
+              {field::Result, Write.Result}});
+        Android[field::TextLogWrites] = std::move(Writes);
         const auto Options = jsonText(std::move(*Request.getAsObject()));
         auto Text = takeString(neverd_emulate_process_json(
             Session, Path.c_str(), AndroidNativeAArch64, Options.c_str()));
         ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
         auto Parsed = llvm::cantFail(llvm::json::parse(Text));
         const bool Stopped =
-            (Mode >= 5 && Mode <= 10 && Mode != 8) || Mode == 14;
+            (Mode >= 5 && Mode <= 10 && Mode != 7 && Mode != 8) || Mode == 14;
         EXPECT_EQ(Parsed.getAsObject()->getString(field::Stop),
                   Stopped ? "unsupported_service" : "returned")
             << Text;

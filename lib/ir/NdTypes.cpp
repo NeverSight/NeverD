@@ -12,6 +12,7 @@
 #include "neverd/ir/NdTypes.h"
 
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/SourceABI.h"
 
 #include "llvm/Support/raw_ostream.h"
 
@@ -53,14 +54,30 @@ bool layout(const NdType &T, uint16_t &Size, uint16_t &Alignment,
   if (!Budget || Depth > ::neverd::limits::ir::kNdTypesLayoutDepthLimit)
     return false;
   --Budget;
+  if (T.Kind == NdTypeKind::Array) {
+    if (!T.ElemType || !T.ArrayCount)
+      return false;
+    std::vector<uint16_t> ElementOffsets;
+    if (!layout(*T.ElemType, Size, Alignment, ElementOffsets, Depth + 1,
+                Budget))
+      return false;
+    const uint64_t Bytes = uint64_t(Size) * T.ArrayCount;
+    if (Bytes != T.Size || Bytes > ::neverd::limits::ir::kMaxNaturalStructBytes)
+      return false;
+    Size = static_cast<uint16_t>(Bytes);
+    return true;
+  }
   if (T.Kind != NdTypeKind::Struct) {
+    // The canonical short-vector spelling carries its natural size/alignment;
+    // an ordinary 128-bit integer does not acquire vector classification.
     const bool Scalar =
         (T.Kind == NdTypeKind::Int &&
          (T.Size == 1 || T.Size == 2 || T.Size == 4 || T.Size == 8)) ||
         (T.Kind == NdTypeKind::Float && (T.Size == 4 || T.Size == 8)) ||
         (T.Kind == NdTypeKind::Ptr && T.Size == 8 && T.Pointee);
     Size = Alignment = T.Size;
-    return Scalar;
+    return (Scalar && !sourceAArch64VectorBytes(&T)) ||
+           isSourceAArch64VectorType(&T);
   }
   if (T.Fields.empty() ||
       T.Fields.size() > ::neverd::limits::ir::kNdTypesLayoutTFieldsSizeLimit)

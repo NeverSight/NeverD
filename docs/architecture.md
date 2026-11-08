@@ -1325,10 +1325,31 @@ shared machine-call bridge described below, retaining the actual BLRAA/BLRAB
 and original result registers. Recovered bindings retain their native identity,
 effects and declaration checks before HighC selects that bridge. LLVM consumes
 their validated physical carriers without requiring analyst source authority.
-Scalar, 128-bit integer and direct record/HFA values share the same transport;
-indirect native copies and hidden results still require their separate storage
-proofs. Native 128-bit SIMD carriers are not integer pairs: authenticated
-calls using them reject until the packet layout can carry full vector registers.
+Scalar, 128-bit integer and direct record/HFA values share the same transport.
+Complete recovered fixed C bindings also retain the original indirect record
+address and x8 result buffer. They authorize neither a new logical copy nor
+alignment, aliasing, lifetime or pointee-access promises. Full SIMD128 values
+use one Q register or an aligned 16-byte stack object, with Q0 for their result.
+The shared packet assigns two aligned words to each Q carrier; LLVM and both
+C routes use that same layout. Such raw calls also use the physical bridge,
+so an integer IR carrier cannot silently acquire the i128 general-register ABI.
+External C declarations retain the logical aggregate type without creating a
+copy; function-body projections still require their separate storage proof.
+Short vectors retain their 64/128-bit widths. A homogeneous vector aggregate
+(HVA) has one to four same-width members after flattening natural nested
+records and arrays. The shared source layout and AAPCS64 placement owners
+assign complete D/Q members, exhaust the FP bank on a whole-aggregate spill,
+and retain natural stack alignment. Validation reuses that placement rather
+than accepting a merely contiguous register prefix. Results occupy D/Q0..3;
+partial machine reads first select the full logical member and then slice its
+bits. Anonymous C record identities distinguish vectors from integers and
+include array extents and element types. Complete larger non-HVAs retain their
+original indirect argument and x8 storage contracts. These recovered fixed C
+contracts do not infer a prototype or admit packed/union, variadic-vector or
+other language conventions.
+Call-occurrence identity can describe 32-bit or 64-bit targets, while native
+frame and Boolean-result proofs require the complete target architecture
+pointer width before granting a source projection.
 A resolved display name cannot replace that authenticated target,
 and exact LLVM call prototypes remain
 exact. Explicit source call-site prototypes and recovered native C prototypes
@@ -1351,6 +1372,16 @@ compares exception classes; complete ESR
 and exact fault-PC equality remain unqualified. Whole-image arm64e rebuilding
 still requires the separate
 authenticated storage, relocation and signed-unwind ABI contract.
+
+The NeverSight LLVM fork retains a typed pointer-authentication recipe in its
+binary-rewrite symbol requests and fixup hooks: key, discriminator and address
+diversity accompany the final storage address and resolved unsigned target.
+Authenticated storage requires a consuming installer. Its result is not
+overwritten by the object writer's authentication metadata encoding. This MC
+contract is the handoff for a dyld fixup installer, not an offline PAC signing
+operation. NeverD's arm64e whole-image publication guard remains until storage
+installation and signed-unwind validation are complete; the r6 prebuilt does
+not yet expose the new fork interface.
 
 The shared AAPCS64 parameter placement owner describes Darwin fixed value
 spills with their natural size and alignment after either register bank is
@@ -1888,9 +1919,10 @@ automatic-lifting, nominal-frame and image regressions. Original-SP stack/call
 projection, fixed-image register post-index relocation and Apple native
 execution with CPTA enabled remain unqualified. Controlled Arm model execution
 qualifies the declared explicit-IR exports separately from an automatically
-lifted whole image. Native half and whole-vector C entry/return ABI and DWARF vector
-declarations remain separate, unqualified interfaces; integer bridges do not certify those native
-interfaces. Local scalable-vector interleaving uses the existing LLVM ELF
+lifted whole image. These CPA2 memory exports use integer bridges; they do not
+qualify native half/vector entry and return interfaces or DWARF vector
+declarations. Fixed-prototype SIMD128 call transport has its separate
+qualification above. Local scalable-vector interleaving uses the existing LLVM ELF
 profile, and does not qualify native Apple SVE or LLVMC scalable carriers.
 The owner follows the pinned
 [Arm 2025-09 AddressAdd and LDR specification](https://documentation-service.arm.com/documentation/ddi0602/2025-09?lang=en&rev=1).
@@ -4711,8 +4743,10 @@ function's declaration does so too while the stores' names stand, which they do 
 it hides a prototype analysis read. Where comments alone reached a document since it
 was decorated, they are written into a copy of it as decoration writes them: each row's
 comment read again, its line's inline comment replaced and the spans after it moved
-(`CodeEdits::takeComments`); anything else that drops documents' keys decorates them
-again (`Engine::decorateNamedViewsAgain`).
+(`CodeEdits::takeComments`). A function's new name, taken in place, is written the same
+way into each name the document links to it (`CodeEdits::takeFunctionNames`), unless the
+name is given up or the text spells it otherwise; anything else that drops documents'
+keys decorates them again (`Engine::decorateNamedViewsAgain`).
 Decoration asks for the image's names and comments by address, and the edit changes
 that one row (`CodeEdits::ImageFacts`), so a view costs the same among thousands.
 The GUI starts a replica on a function as its Set Type dialog opens
@@ -12970,7 +13004,8 @@ with their existing Linux and report inventories. Keep control flow in C++ and
 independent test expectations in fixtures; ordinary punctuation and empty strings
 do not need vocabulary entries.
 
-`AndroidFormatting` owns both ordinary and fortify string formatting. Its
+`AndroidFormatting` owns ordinary/fortify string formatting and the native
+print/vprint/buf_print liblog entry points. Its
 entrypoint classification supplies the fixed-argument layout and object-size
 checks to one formatter and the shared AAPCS64 `ArgumentReader`; it does not
 duplicate conversion rules for checked imports, dynamic providers, SDK or CLI.
@@ -16019,6 +16054,10 @@ The same owner admits a separate finite `event_log_writes` transcript. Native
 `__android_log_bwrite`, EventLog overloads and ServiceManager logging compare
 exact binary event bytes and share one consumption cursor. Write results never
 create visible reader records; omission, exhaustion and mismatch stay explicit.
+Bounded native text writes and Binder's FAILED_TRANSACTION diagnostic reuse
+this matcher with `text_log_writes`, a separate cursor and exact buffer id,
+priority, tag and message bytes. Radio-tag routing precedes matching; negative
+results complete without inferred transport success or errno changes.
 
 `AndroidProperties` builds one immutable guest property table from explicit
 inputs. Name lookup, stable `prop_info` identities, serials, legacy reads and
@@ -17805,8 +17844,14 @@ handled calls and keep the normal reply-ack lifetime. Existing tail bytes remain
 observable. Overwrites retain Binder offsets; an invalid current object type
 produces the shared Linux driver's failed transaction response. The replying Java
 pool still receives completion, releases its native Parcels and accepts later
-calls. On the caller side, FAILED_TRANSACTION retains the explicit JNI
-status-exception/logging boundary. Parcelable/class-loader
+calls. On the caller side, FAILED_TRANSACTION records its ERROR/JavaBinder
+diagnostic through the same explicit AndroidLog text-write owner as native
+text calls. A matched negative log result still reaches the JNI exception:
+request dataSize above 200 KiB selects TransactionTooLargeException; otherwise
+DeadObjectException carries the small-parcel message. Both use shared Throwable
+storage and checked RemoteException ancestry. This heuristic never marks the
+proxy dead. Unknown log outcomes stop after earlier Parcel state changes.
+Parcelable/class-loader
 payloads, ServiceSpecificException,
 Throwable-cause construction, debug stack-trace parceling and uncaught logging
 remain explicit boundaries; no error reply or log record is fabricated.

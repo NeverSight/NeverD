@@ -906,15 +906,16 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   };
 
   const bool NativeValueCall =
-      CI && CI->SourceCallHint && Op.Opcode == NdOp::INDIR_CALL &&
+      CI && CI->SourceCallHint &&
       CI->SourceCallHint->CallKind == SourceCallTypeHint::Kind::Native &&
       TargetFormat == BinaryFormat::MachO && TargetArch == Arch::AArch64 &&
       (Authentication ||
-       (CI->SourceCallHint->Signature.HasExplicitABI &&
+       sourceCallUsesMachineABI(*CI->SourceCallHint, TargetFormat, false) ||
+       (Op.Opcode == NdOp::INDIR_CALL &&
+        CI->SourceCallHint->Signature.HasExplicitABI &&
         CI->SourceCallHint->Signature.Convention ==
             SourceFunctionTypeHint::ConventionKind::C &&
         !hasIndirectSourceParameters(CI->SourceCallHint->Signature) &&
-        sourceResultCallHasWordCarriers(CI->SourceCallHint->Signature) &&
         CI->SourceCallHint->Signature.ReturnLocation.Kind !=
             SourceABICarrierKind::IndirectResultPointer));
   if (CI && CI->SourceCallHint &&
@@ -937,16 +938,17 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         Analyst ? AnalystSourceProjection && Hint.AnalystSite &&
                       Hint.AnalystSite->Instruction == Op.Addr &&
                       Hint.AnalystSite->Sequence == Op.OriginSeq
-                : Target &&
+                : (Target || (Op.Opcode == NdOp::CALL && CallAddr)) &&
                       Hint.Signature.Convention ==
                           SourceFunctionTypeHint::ConventionKind::C &&
                       Hint.AnalystFixedCount < 0 && !Hint.ByValueCopy &&
-                      !hasIndirectSourceParameters(Hint.Signature) &&
-                      Hint.Signature.ReturnLocation.Kind !=
-                          SourceABICarrierKind::IndirectResultPointer;
+                      (!hasIndirectSourceParameters(Hint.Signature) ||
+                       sourceCallRetainsNativeCarriers(Hint)) &&
+                      (Hint.Signature.ReturnLocation.Kind !=
+                           SourceABICarrierKind::IndirectResultPointer ||
+                       RetainResultStorage);
     if (!ValidOccurrence || Hint.Signature.Architecture != TargetArch ||
         !validateSourceABI(Hint.Signature, Diagnostic) ||
-        (MachineCall && !sourceResultCallHasWordCarriers(Hint.Signature)) ||
         Args.size() != sourceABIParameters(Hint.Signature).size() +
                            unsigned(RetainResultStorage)) {
       Refuse(kSourceCallInvalidBinding);
@@ -1096,10 +1098,10 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       Function->addFnAttr(kResultCallFrameAttribute, kResultCallFrameAll);
       llvm::IRBuilder<> Allocation(&Function->getEntryBlock(),
                                    Function->getEntryBlock().begin());
-      auto *Packet = Allocation.CreateAlloca(
-          I64Ty, Allocation.getInt64(kResultCallHeaderWords + Carriers.size() +
-                                     Results.size()));
-      Packet->setAlignment(llvm::Align(kResultCallWordBytes));
+      const auto Layout = sourceResultCallPacketLayout(Bindings, Results);
+      auto *Packet =
+          Allocation.CreateAlloca(I64Ty, Allocation.getInt64(Layout.Words));
+      Packet->setAlignment(llvm::Align(Layout.Alignment));
       auto *Address = Builder.CreatePtrToInt(Callable, I64Ty);
       // A named symbol is a compiler code address. An original indirect
       // operand is already machine bits and must never be stripped here.
@@ -1125,7 +1127,10 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         if (!RetainResultStorage && I >= kValueCallHeaderWords &&
             I < kResultCallHeaderWords)
           continue;
-        auto *Slot = Builder.CreateGEP(I64Ty, Packet, Builder.getInt64(I));
+        const unsigned At = I < kResultCallHeaderWords
+                                ? I
+                                : Layout.Arguments[I - kResultCallHeaderWords];
+        auto *Slot = Builder.CreateGEP(I64Ty, Packet, Builder.getInt64(At));
         Builder.CreateStore(PacketValues[I], Slot);
       }
       auto *Frame =
@@ -1152,9 +1157,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         llvm::SmallVector<llvm::Value *, 4> Parts;
         llvm::SmallVector<SourceAggregateMember, 4> Members;
         for (unsigned I = 0; I < Results.size(); ++I) {
-          auto *Slot = Builder.CreateGEP(
-              I64Ty, Packet,
-              Builder.getInt64(kResultCallHeaderWords + Carriers.size() + I));
+          auto *Slot = Builder.CreateGEP(I64Ty, Packet,
+                                         Builder.getInt64(Layout.Results[I]));
           Parts.push_back(Builder.CreateLoad(mapNdtype(Results[I].Type), Slot));
           Members.push_back({Results[I].Type, Results[I].ByteOffset});
         }

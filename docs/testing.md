@@ -1925,8 +1925,90 @@ CTest instances; the receipt preserves the original failure and its resolution.
 The environment's `recovered_calls.py` requires its own exact 36-test report
 and rejects an explicit-prototype report substituted for it. This qualifies
 transport of an established recovered ABI, not automatic recovery accuracy.
-The authenticated native bridge explicitly rejects full 128-bit SIMD carriers,
-indirect by-value parameters and hidden results until their transport is proved.
+That receipt predates standalone SIMD128 and original native storage transport;
+its remaining-work statements describe the recorded revision. The newer native
+wide-storage qualification below supersedes those transport exclusions.
+
+The [native wide-storage receipt](evidence/arm64e-native-wide-storage-2026-11-08.json)
+qualifies complete standalone SIMD128 arguments and results, and recovered
+indirect record addresses with original x8 storage. The 47 fixed-prototype
+layouts include full Q registers, register-bank exhaustion, packed/aligned
+stack spills, scalar/HFA mixtures and indirect records. The vector oracle
+observes both 64-bit result words independently through an explicit outer
+X0/X1 record ABI; a symmetric checksum is not sufficient. The separate native
+x8 profile compares aliasing and guarded memory effects against the original
+caller storage. Across the two profiles, 1,200 unchanged Mach-O objects pass
+60 controlled model guests: 28,800 valid original/projected pairs and 69,120
+invalid-signature pairs, with zero exception-class differences. The earlier
+1,625 explicit, 25 original-x8 and 900 recovered objects are byte-identical to
+their existing baselines. Supplied NativeAnalysis fixtures establish transport
+of an already recovered ABI, not general inference accuracy.
+After integrating the shared HighC frame-offset changes from `dev`, the
+affected owners and ABI selections pass 2,404 instances with 21 explicit
+platform/toolchain skips. All 1,200 current objects still match the
+model-qualified bytes. The
+receipt records the model producer and the later integration revision
+separately; the model guests were not rerun for identical objects.
+
+The LowIR integration case checks the actual source-call binder and all three
+emission routes, retaining original input and result addresses without new
+logical copies or `byval`/`sret` promises. Named-function C output is compiled
+by Apple Clang directly; Apple Clang's legacy `llvm.ptrauth` globals remain
+unsupported by r6 IR import. Ordinary and rewrite code-generation boundaries
+now reject that representation before the incompatible backend can abort.
+That receipt predates HVA transport. The vector-aggregate profile below extends
+its fixed-call coverage; whole-image authentication installation and signed
+exception execution remain separate, incomplete work.
+
+`SourceCallABI.NativeHVA*` covers 64/128-bit homogeneous vector records with
+one to four members, nested records and arrays, natural stack offsets and whole
+FP-bank exhaustion. Invalid widths, layouts, incomplete carriers, foreign
+conventions and reuse of an exhausted bank reject. Five-member and mixed-width
+larger records retain indirect addresses and x8. Independent Clang C declarations
+check the Darwin HVA versus indirect classification at O0/O2. Source names must
+keep vector/integer records and array extents distinct.
+
+`ByShape/AArch64RecoveredAuthenticatedCall` adds short-vector and HVA shapes on
+all five object routes, including arrays of records, mixed GP/FP arguments,
+packed stack prefixes and larger non-HVA companions. HVA results write every
+64-bit word to caller observation storage; the independent environment checks
+all distinct expected words and guards on both sides. The LowIR integration
+also covers native HVA parameters alongside original x8 storage. These tests
+qualify transport of an established fixed C declaration, not general recovery,
+vector variadics, packed/union layouts or whole-image publication.
+
+The [vector-aggregate qualification](evidence/arm64e-vector-aggregates-2026-11-08.json)
+records 73 declarations and 1,825 original Mach-O objects across all five
+routes. Thirty controlled FVP guests at EL0/EL1 and four CPTA settings compare
+43,800 valid calls and 105,120 invalid signatures with zero exception-class
+differences. Forty HighC O0 objects require an external `memcpy` call. The
+environment translates only the declared BR26 relocation and verifies every
+linked byte against the original, permitting only that branch displacement;
+it does not recompile IR for an ELF ABI. Earlier explicit and x8 object
+baselines remain byte-identical, without claiming another model execution.
+
+Broader regression caught array equality admitting previously unsupported
+pointer-to-array declarations. The shared source-type boundary retains that
+rejection while admitting fixed arrays inside records. Native pointer inference
+and Swift projection tests exercise the original failures; projection grouping
+also distinguishes vector pointees and array element types. This qualification
+retains the first failing reports as well as the corrected checks.
+
+The NeverSight LLVM fork's authenticated-fixup tests cover Mach-O and ELF,
+all four keys, address diversity, local/external targets, aliases and addends.
+They require a consuming fixup installer and preserve its installed word.
+This verifies the MC interface needed by whole-image installation; it does
+not qualify new dyld storage or signed exception execution. The configured
+prebuilt package remains r6.
+
+The final qualification includes 2,498 distinct checks: 2,477 pass and 21
+retain their explicit platform/compiler skips. The first broad run's two
+type-boundary failures are fixed and recorded separately. The affected
+256-case repeat, 151 authenticated-call cases and 15 frame cases pass; all
+current and earlier canonical object profiles remain byte-identical. Native
+compiler-only unwind controls pass on ordinary arm64 at O0/O2, while both
+arm64e executables terminate with SIGKILL before reporting completion. This
+does not provide native signed-unwind qualification.
 
 `MachOArm64eDependencies` additionally verifies multi-start pages for all six
 supported arm64e chain formats and ordinary 64-bit chains. It checks complete
@@ -4601,6 +4683,29 @@ order and retain paired measurements and CPU time alongside output hashes.
 The full build's `neverd-acceleration-bench` target reports wall and process CPU
 time separately; use both when the host has competing workloads.
 
+Local Capstone experiment drivers use
+`scripts/capstone_perf_lifecycle.py::Experiment` around preparation, compilation,
+validation and measurement. It owns one `.capstone-perf/current` directory under
+the experiment root. Recipes, original corpora, frozen comparison libraries and
+reusable canonical build caches stay outside that directory and are inputs,
+not cleanup targets. Child producers call `managed_workspace()` so invoking a
+stage directly cannot bypass the owner. Compilation still uses `scripts/build.py`.
+
+A completed run can retain its workspace for named pending readers. Release the
+last reader only after saving the needed compact result and paired measurement
+evidence; `release --reader NAME --summary RESULT.json` then removes generated
+copies, binaries and expanded reports. A new run refuses to replace a workspace
+with pending readers. Failure and normal interruption retire it automatically;
+after a hard kill, the next start recovers it once the inherited child lock is
+released. This does not catch a hard kill with `finally`, scan other build trees,
+or delete historical source and diagnostic archives. Retry diagnostics use fixed
+files with log hashes and at most 16 KiB of raw log tails, rather than new report
+directories. The owner requires POSIX file locks and process groups.
+
+Run `python3 scripts/tests/test_capstone_perf_lifecycle.py -v` for small fixtures
+covering repeated success/failure, retained readers, protected inputs and caches,
+normal interruption, hard-kill recovery and interrupted creation/retirement.
+
 The [LowIR to MedIR component benchmark](../tools/neverd-bench/med-bench.md)
 reuses decoded functions and measures standalone conversion, including SSA.
 It verifies every result and checks canonical dump hashes outside the measured
@@ -5966,6 +6071,12 @@ controls, full-size close targets, and a padlock that opens and closes with the
 lock over the caption's own color. `doubleClickDetachStartsLocked` and
 `lockedDragsStayFloating` check the default lock, caption movement and rejected
 tab docking. `explicitDockIgnoresLock` clicks the dock button while locked.
+`retiredFloatingCaptionDoesNotRestoreFocus` transfers a complete floating
+layout into the main window, then delivers a focus event to its old caption
+before deferred deletion. This reproduces Cocoa reactivation while the drop
+preview hides. It also checks live-caption focus forwarding, deletion of the
+retired caption and keyboard focus in the newly docked pane. The lifecycle
+check runs offscreen as well as with a native window system.
 `quickStartChoosesWorkbenchSize` checks that accepting the startup greeting,
 including opening a recent file, maximizes the workbench, while reopening the
 dialog over a visible workbench preserves its state. `workbenchReopensWindowed`
@@ -16291,7 +16402,22 @@ or tracing state; none claims a completed Binder transaction.
 `AndroidBinderTest` also checks authenticated native reply continuation,
 retained bytes/cursors, UNKNOWN_TRANSACTION error propagation, dead-object
 caching and checked exception ancestry, live arena reads, temporary replies and
-DEX catch/resume. `AndroidJNI.BinderTransportUsesGuestServiceAndRetainedReplyArenas`
+DEX catch/resume. FAILED_TRANSACTION cases check the strict 200 KiB threshold,
+alias/null replies, message identity, retained error/cursor/bytes, proxy liveness,
+log-before-throw ordering, negative log results and resource stops.
+`AndroidJNI.BinderFailedTransactionRequiresExactTextLogs` checks missing,
+exhausted and mismatching explicit logs through ordinary/V/A calls; its native
+client interleaves a text write between two failed transactions on the same
+proxy. `AndroidLog.Text*` checks direct/dynamic calls, buffer/priority bytes,
+null tags, radio routing, signed results, errno and bounded payload admission.
+`AndroidLog.Formatted*` runs direct and dynamic print/vprint/buf_print calls
+at O0/O2 across relocation variants and available CPU backends. Independent
+transcripts check stacked scalar arguments, unchanged va_list bytes, 1022/1023/
+1024-byte and large-width clipping, embedded NUL, bounded precision at a page
+edge, signed results and errno. Unsupported conversions precede tag reads and
+log consumption; missing, exhausted and mismatching transcripts preserve the
+completed prefix. Fatal state and transport truncation remain explicit.
+`AndroidJNI.BinderTransportUsesGuestServiceAndRetainedReplyArenas`
 executes real guest services through all three JNI forms, including three-round
 buffer retention/reuse, a reply recycled and reused by another native thread,
 missing managers, declared dead proxies, invalid/reused descriptors and explicit
@@ -21233,6 +21359,27 @@ complete backtraces and C++ exception destruction; signed controls terminate
 with an uncaught exception at both levels. They reproduce the boundary without
 handwritten frame CFI and are unavailable coverage, not passing NeverD signed
 unwind qualification.
+
+### Arm64e verifier artifact ownership
+
+The SDK call driver and `scripts/verify_arm64e_sp_memory.py` share
+`scripts/arm64e_artifacts.py`. They register each disposable object or executable
+before its compiler starts and persist the registry atomically. Success,
+failure and normal interruption all remove registered products. The next
+invocation recovers a killed run under the same output lock. Compiler children
+inherit that lock, so recovery waits for pending producers. The original SDK
+call assembly and dylib remain as a minimal fixture and are reused only when
+source, compiler version, command and binary digest agree. Input snapshots,
+source projections, diagnostic logs and explicitly retained products remain.
+The SP verifier uses the supplied SDK directly and refuses to overwrite a
+changed formal input in a reused output directory.
+
+`test_arm64e_artifact_lifecycle.py` exercises repeated success/failure/abort
+paths, the actual SDK and SP entry points, explicit retention, SIGKILL recovery
+and a compiler outliving its controller. It uses small fixtures and does not
+execute the arm64e research matrix. The external CPA2 environment separately
+owns its FVP cache and scratch lifecycle across primitive, generated-memory,
+grouped-memory and authenticated-call drivers.
 
 ## Selected callable checks
 

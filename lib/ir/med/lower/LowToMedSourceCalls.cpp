@@ -345,9 +345,10 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
           (hasSwiftErrorResult(Hint->Signature) &&
            !isSwiftWillThrowSourceCall(*Hint, TargetArch) && !NativeError) ||
           // Logical by-value reconstruction needs a separate copy-storage
-          // proof. Analyst calls instead retain the original ABI pointer;
-          // they neither reconstruct the value nor introduce another copy.
+          // proof. Analyst and recovered native calls retain the original ABI
+          // pointer without reconstructing the value or introducing a copy.
           (Hint->CallKind != SourceCallTypeHint::Kind::Analyst &&
+           !sourceCallRetainsNativeCarriers(*Hint) &&
            hasIndirectSourceParameters(Hint->Signature) &&
            (!isObjCByValueCopyHint(*Hint, Low.Entry, TargetArch) ||
             Op.Opcode != NdOp::CALL || !Op.Inputs[0].isConst() ||

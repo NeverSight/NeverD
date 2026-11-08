@@ -363,6 +363,11 @@ private:
   BionicResult logCall(const NativeCallEvent &Call);
   std::optional<uint32_t> eventLogWrite(llvm::ArrayRef<uint8_t> Payload);
   BionicResult eventLogCall(const NativeCallEvent &Call);
+  std::optional<uint32_t> textLogWrite(uint32_t ID, int32_t Priority,
+                                       llvm::StringRef Tag,
+                                       llvm::StringRef Message);
+  BionicResult textLogCall(const NativeCallEvent &Call);
+  BionicResult formatLogCall(const NativeCallEvent &Call);
   BionicResult unsupportedLog(llvm::StringRef Detail);
   struct InputStream {
     uint32_t FD;

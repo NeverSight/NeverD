@@ -86,7 +86,7 @@ struct BufferState {
     ExternalCall call;
     call.kind = ExternalCall::BinderTransaction;
     call.binder.emplace().reply = id;
-    auto result = framework.completeBinder(heap, call, std::move(reply));
+    auto result = framework.completeBinder(heap, call, std::move(reply), Admit);
     ASSERT_EQ(result.stop, ExecutionStop::Returned) << result.diagnostic;
   }
   BinderReply borrowed(std::vector<uint8_t> &arena,

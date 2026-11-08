@@ -7222,9 +7222,11 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
     }
     if (pointerNeedsIntegerView(DeclaredType))
       return PointerInteger("(uintptr_t)" + Name);
-    if (DeclaredType &&
-        DeclaredType->SourceName == kSourceAArch64Vector128CType)
-      return "__builtin_bit_cast(__int128, " + Name + ")";
+    if (isSourceAArch64VectorType(DeclaredType))
+      return "__builtin_bit_cast(" +
+             typeToC(
+                 NdType::makeInt(DeclaredType->Size, DeclaredType->IsSigned)) +
+             ", " + Name + ")";
     return Name;
   }
   case ExprKind::Const: {
@@ -7598,7 +7600,9 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
         !E.Operands[0]->Type || E.Type->Size != E.Operands[0]->Type->Size)
       llvm::report_fatal_error("HighC cannot render an invalid bit cast");
     const HighExpr &Src = *E.Operands[0];
-    if (E.Type->Kind == NdTypeKind::Int && Src.Type->Kind == NdTypeKind::Int) {
+    if (E.Type->Kind == NdTypeKind::Int && Src.Type->Kind == NdTypeKind::Int &&
+        !sourceAArch64VectorBytes(E.Type) &&
+        !sourceAArch64VectorBytes(Src.Type)) {
       if (E.Type->IsSigned == Src.Type->IsSigned) {
         std::string Text = exprStr(Src, ParentPrec);
         if (const auto Printed = printedIntegerType(Src))
@@ -7677,12 +7681,17 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
     return "&" + exprStr(*E.Operands[0], 99);
   }
   case ExprKind::Record: {
-    if (!E.Type || sourceAggregateMembers(E.Type).empty() ||
-        E.Operands.size() != E.Type->Fields.size())
-      llvm::report_fatal_error("HighC cannot render an invalid source record");
-    std::string Result = "(" + typeToC(E.Type) + "){";
+    const bool Array = E.Type && E.Type->Kind == NdTypeKind::Array;
+    if (!E.Type ||
+        (Array ? !equalSourceTypes(E.Type, E.Type)
+               : sourceAggregateMembers(E.Type).empty()) ||
+        E.Operands.size() !=
+            (Array ? E.Type->ArrayCount : E.Type->Fields.size()))
+      llvm::report_fatal_error(c_detail::kInvalidSourceRecord);
+    std::string Result = Array ? c_detail::kSourceArrayInitializerOpen
+                               : "(" + typeToC(E.Type) + "){";
     for (size_t I = 0; I < E.Operands.size(); ++I) {
-      const TypeRef &Field = E.Type->Fields[I];
+      const TypeRef &Field = Array ? E.Type->ElemType : E.Type->Fields[I];
       const HighExpr *Operand = E.Operands[I].get();
       const bool Equal = Operand && equalSourceTypes(Field, Operand->Type);
       // HighIR passes choose an integer value's signedness for its other
@@ -7693,7 +7702,7 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
                                  isPlainInteger(Operand->Type) &&
                                  Operand->Type->Size == Field->Size;
       if (!Equal && !Reinterpreted)
-        llvm::report_fatal_error("HighC source record field type disagrees");
+        llvm::report_fatal_error(c_detail::kInvalidSourceRecordFieldType);
       if (I)
         Result += ", ";
       if (Reinterpreted) {
@@ -7701,11 +7710,10 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
         continue;
       }
       const auto Text = exprStr(*E.Operands[I]);
-      if (E.Type->Fields[I]->Kind == NdTypeKind::Ptr) {
+      if (Field->Kind == NdTypeKind::Ptr) {
         // Pointer expressions retain their integer machine carrier in HighC.
         // A record initializer needs the same source conversion as a call.
-        const auto Value =
-            sourceValue(Text, E.Operands[I]->Type, E.Type->Fields[I]);
+        const auto Value = sourceValue(Text, E.Operands[I]->Type, Field);
         if (!Value)
           llvm::report_fatal_error("HighC source pointer field is invalid");
         Result += *Value;
@@ -7716,12 +7724,21 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
     return Result + "}";
   }
   case ExprKind::Field: {
-    if (E.Operands.size() != 1 || !E.Operands[0] || !E.Operands[0]->Type ||
-        E.Operands[0]->Type->Kind != NdTypeKind::Struct ||
+    if (E.Operands.size() != 1 || !E.Operands[0] || !E.Operands[0]->Type)
+      llvm::report_fatal_error(c_detail::kInvalidSourceRecordField);
+    const auto &Record = E.Operands[0]->Type;
+    if (Record->Kind == NdTypeKind::Array) {
+      if (E.ConstVal >= Record->ArrayCount ||
+          !equalSourceTypes(E.Type, Record->ElemType))
+        llvm::report_fatal_error(c_detail::kInvalidSourceRecordField);
+      return llvm::formatv(c_detail::kSourceArrayField, exprStr(*E.Operands[0]),
+                           E.ConstVal)
+          .str();
+    }
+    if (Record->Kind != NdTypeKind::Struct ||
         E.ConstVal >= E.Operands[0]->Type->Fields.size() ||
         !equalSourceTypes(E.Type, E.Operands[0]->Type->Fields[E.ConstVal]))
-      llvm::report_fatal_error("HighC cannot render an invalid source field");
-    const auto &Record = E.Operands[0]->Type;
+      llvm::report_fatal_error(c_detail::kInvalidSourceRecordField);
     if (!Record->SourceName.empty()) {
       const auto Field = Record->displayFieldPathAt(
           Record->FieldOffsets[E.ConstVal], E.Type->Size,

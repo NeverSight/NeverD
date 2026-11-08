@@ -91,7 +91,8 @@ enum class ExprKind : uint8_t {
   /// same byte size; this never performs an integer/floating numeric
   /// conversion.
   BitCast,
-  /// One naturally laid-out source record, with one operand per direct field.
+  /// One naturally laid-out source record or nested array initializer, with
+  /// one operand per direct field or array element.
   Record,
   /// A register supplied by the runtime at a nonordinary entry. Capture it
   /// at EntryVA; it is not the register's value at the expression's use.

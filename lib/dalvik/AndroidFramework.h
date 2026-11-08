@@ -44,7 +44,8 @@ public:
   ExecutionResult openURL(Heap &heap, std::string_view scheme,
                           const AdmitInstruction &admit);
   ExecutionResult completeBinder(Heap &heap, const ExternalCall &call,
-                                 BinderReply reply);
+                                 BinderReply reply,
+                                 const AdmitInstruction &admit);
   ExecutionResult binderReference(BinderReferenceOperation operation,
                                   uint64_t pointer, uint64_t cookie);
   ExecutionResult dispatchBinder(Heap &heap, const Program &program,

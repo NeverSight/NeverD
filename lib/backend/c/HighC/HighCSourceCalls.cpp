@@ -78,8 +78,9 @@ std::optional<std::string> HighCWriter::sourceValue(llvm::StringRef Text,
   if (Carrier && Source && Carrier->Kind == NdTypeKind::Struct &&
       Source->Kind == NdTypeKind::Struct && equalSourceTypes(Carrier, Source))
     return Text.str();
-  if (integerPair(Carrier) && integerPair(Source) &&
-      Source->SourceName == kSourceAArch64Vector128CType)
+  if (Carrier->Kind == NdTypeKind::Int && Source->Kind == NdTypeKind::Int &&
+      Carrier->Size == Source->Size &&
+      (isSourceAArch64VectorType(Carrier) || isSourceAArch64VectorType(Source)))
     return "__builtin_bit_cast(" + typeToC(Source) + ", (" + typeToC(Carrier) +
            ")(" + Text.str() + "))";
   if (integerPair(Carrier) && integerPair(Source))
@@ -112,8 +113,10 @@ llvm::StringRef HighCWriter::sourceConventionAttribute(
 
 std::string
 HighCWriter::sourceParameterType(const SourceParameterTypeHint &Parameter,
-                                 llvm::StringRef Name) {
-  if (Parameter.IndirectByValue)
+                                 llvm::StringRef Name, bool DeclarationOnly) {
+  // A declaration specifies the callee's ABI without copying an object.
+  // Function bodies and value projections still require storage evidence.
+  if (Parameter.IndirectByValue && !DeclarationOnly)
     throw std::invalid_argument(
         "Indirect by-value source parameters require a copy storage proof");
   std::string Result = Name.empty()
@@ -208,13 +211,12 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
     const bool Analyst = Hint.CallKind == SourceCallTypeHint::Kind::Analyst;
     if ((Analyst && (!Hint.AnalystSite ||
                      Hint.AnalystSite->Instruction != E.CallSiteAddr)) ||
-        (!Analyst && (Hint.AnalystFixedCount >= 0 ||
-                      hasIndirectSourceParameters(Signature) ||
-                      Signature.ReturnLocation.Kind ==
-                          SourceABICarrierKind::IndirectResultPointer)) ||
+        (!Analyst && (Hint.AnalystFixedCount >= 0 || Hint.ByValueCopy ||
+                      (Signature.ReturnLocation.Kind ==
+                           SourceABICarrierKind::IndirectResultPointer &&
+                       !RetainResultStorage))) ||
         Signature.Architecture != Opts.TheArch ||
         !validateSourceABI(Signature, Diagnostic) ||
-        !sourceResultCallHasWordCarriers(Signature) ||
         E.Operands.size() != ArgumentCount + unsigned(RetainResultStorage) ||
         (E.IsIndirectCall && !E.IndirectTarget))
       throw std::invalid_argument(kResultCallError);
@@ -266,11 +268,16 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
     if (!Storage)
       throw std::invalid_argument(kResultCallError);
     const auto Results = sourceResultCallResults(Signature);
+    const auto Layout = sourceResultCallPacketLayout(Bindings, Results);
+    const auto Alignment =
+        Layout.Alignment > kResultCallWordBytes
+            ? llvm::formatv(kResultCallAlignmentC, Layout.Alignment).str()
+            : std::string();
     std::string Result =
-        llvm::formatv(
-            RetainResultStorage ? kResultCallPacketC : kValueCallPacketC,
-            Packet, kResultCallHeaderWords + Bindings.size() + Results.size(),
-            Target, Modifier, *Storage, sourceResultCallStackBytes(Bindings))
+        llvm::formatv(RetainResultStorage ? kResultCallPacketC
+                                          : kValueCallPacketC,
+                      Packet, Layout.Words, Target, Modifier, *Storage,
+                      sourceResultCallStackBytes(Bindings), Alignment)
             .str();
     unsigned At = 0;
     for (unsigned I = 0; I < ArgumentCount; ++I) {
@@ -282,11 +289,10 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       if (!Value)
         throw std::invalid_argument(kResultCallError);
       if (RetainResultStorage || Signature.Parameters[I].Components.empty()) {
-        Result +=
-            llvm::formatv(kResultCallArgumentC, declarationToC(Type, ValueName),
-                          *Value, Packet, kResultCallHeaderWords + At++,
-                          ValueName, Type->Size)
-                .str();
+        Result += llvm::formatv(kResultCallArgumentC,
+                                declarationToC(Type, ValueName), *Value, Packet,
+                                Layout.Arguments[At++], ValueName, Type->Size)
+                      .str();
         continue;
       }
       // HighIR owns one logical argument. Evaluate it once, then marshal only
@@ -297,7 +303,7 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       while (At < Bindings.size() && Bindings[At].ParameterIndex == I) {
         const auto &Piece = Bindings[At];
         Result += llvm::formatv(kResultCallArgumentPieceC, Packet,
-                                kResultCallHeaderWords + At, ValueName,
+                                Layout.Arguments[At], ValueName,
                                 Piece.ByteOffset, Piece.Type->Size)
                       .str();
         ++At;
@@ -317,8 +323,7 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
                   .str();
     for (unsigned I = 0; I < Results.size(); ++I)
       Result += llvm::formatv(kResultCallResultCopyC, ValueName,
-                              Results[I].ByteOffset, Packet,
-                              kResultCallHeaderWords + Bindings.size() + I,
+                              Results[I].ByteOffset, Packet, Layout.Results[I],
                               Results[I].Type->Size)
                     .str();
     const auto Value = sourceValue(ValueName, Signature.ReturnType, E.Type);
@@ -367,7 +372,9 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
           "The call-site result carrier is incompatible");
     return *Value;
   }
-  if ((hasIndirectSourceParameters(Hint.Signature) || Hint.ByValueCopy) &&
+  if (((hasIndirectSourceParameters(Hint.Signature) &&
+        !sourceCallRetainsNativeCarriers(Hint)) ||
+       Hint.ByValueCopy) &&
       (!CurrentFunc ||
        !isObjCByValueCopyHint(Hint, CurrentFunc->Entry, Opts.TheArch) ||
        E.IsIndirectCall || E.CallAddr != Hint.ByValueCopy->Site.StaticTarget))
@@ -1080,7 +1087,9 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
   if (Signature.Parameters.size() >
           ::neverd::limits::backend::
               kHighCSourceCallsHighCWriterRenderSourceCallExprSignatureParametersSizeLimit ||
-      E.Operands.size() != Signature.Parameters.size())
+      E.Operands.size() != (RetainResultStorage
+                                ? sourceABIParameters(Signature).size() + 1
+                                : Signature.Parameters.size()))
     return bad("argument count disagrees with the source declaration");
   std::string ABIDiagnostic;
   if (Signature.HasExplicitABI && !validateSourceABI(Signature, ABIDiagnostic))
@@ -1089,11 +1098,12 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
                           validateSourceABI(Signature, ABIDiagnostic);
   if (!Signature.ReturnType ||
       (Signature.ReturnType->Kind != NdTypeKind::Void &&
-       !scalar(Signature.ReturnType) && !PairResult &&
+       !scalar(Signature.ReturnType) && !PairResult && !RetainResultStorage &&
        sourceAggregateMembers(Signature.ReturnType).empty()))
     return bad("unsupported result type");
   for (const auto &Parameter : Signature.Parameters)
     if (!scalar(Parameter.Type) &&
+        !(Parameter.IndirectByValue && sourceCallRetainsNativeCarriers(Hint)) &&
         sourceAggregateMembers(Parameter.Type).empty() &&
         !(Signature.HasExplicitABI &&
           Signature.Origin ==

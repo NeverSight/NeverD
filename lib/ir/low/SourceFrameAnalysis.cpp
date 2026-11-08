@@ -592,7 +592,7 @@ public:
         }
       }
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
-        const auto Key = nativeSourceCallKey(Op);
+        const auto Key = sourceCallOccurrenceKey(Op, Architecture);
         if (!Key)
           return false;
         const auto Found = Calls.find(*Key);
@@ -2358,7 +2358,7 @@ bool observesTerminalNativeSourceState(const LowFunc &Function,
       return false;
     if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
       continue;
-    const auto Key = nativeSourceCallKey(Op);
+    const auto Key = sourceCallOccurrenceKey(Op, Architecture);
     if (!Key || !Calls.count(*Key) || SawTerminatingCall)
       return false;
     ++NativeCalls;
@@ -2466,7 +2466,7 @@ bool preservesNativeSourceLeafState(const LowFunc &Function, Arch Architecture,
             return false;
       if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
         continue;
-      const auto Key = nativeSourceCallKey(Op);
+      const auto Key = sourceCallOccurrenceKey(Op, Architecture);
       if (!Key || Index + 1 >= Block.Ops.size() ||
           Block.Ops[Index + 1].Opcode != NdOp::RETURN ||
           Block.Ops[Index + 1].Addr != Op.Addr)
@@ -2515,7 +2515,7 @@ bool preservesNativeSourceLeafState(const LowFunc &Function, Arch Architecture,
           AnyTaint |= Tainted(Input, J);
       }
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
-        const auto Key = nativeSourceCallKey(Op);
+        const auto Key = sourceCallOccurrenceKey(Op, Architecture);
         if (!Key)
           return false;
         const auto Found = Calls.find(*Key);

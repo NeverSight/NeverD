@@ -12,6 +12,7 @@
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
+#include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/backend/codegen/CodeGen.h"
 #include "neverd/backend/llvm/AArch64/AArch64SourceResultCall.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
@@ -31,6 +32,7 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
+#include "llvm/MC/BinaryRewrite.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
@@ -81,6 +83,17 @@ TypeRef typedParameter(char Kind) {
   if (Kind == kPointerKind)
     return NdType::makePtr(NdType::makeVoid());
   switch (Kind) {
+#define A64_CALL_VECTOR_TYPE(Kind, Bytes, Spelling)                            \
+  case Kind: {                                                                 \
+    auto Type = NdType::makeInt(Bytes);                                        \
+    Type->SourceName = Spelling;                                               \
+    return Type;                                                               \
+  }
+#define A64_CALL_ARRAY_TYPE(Kind, Element, Count)                              \
+  case Kind: {                                                                 \
+    auto Type = typedParameter(Element);                                       \
+    return NdType::makeArray(Type, Count, Count * Type->Size);                 \
+  }
 #define A64_CALL_NAMED_POINTER_TYPE(Kind, Name)                                \
   case Kind:                                                                   \
     return NdType::makePtr(NdType::makeNamedRecord(Name));
@@ -247,7 +260,8 @@ void checkBundle(llvm::Module &Module, unsigned Key, bool Zero,
   EXPECT_EQ(Module.getFunction(kStandaloneAuthentication), nullptr);
 }
 
-void checkMachineCall(llvm::Module &Module, unsigned Key) {
+void checkMachineCall(llvm::Module &Module, unsigned Key, bool Raw = false,
+                      bool HiddenResult = false) {
   ASSERT_FALSE(llvm::verifyModule(Module));
   const auto *Function = Module.getFunction(kFunction);
   ASSERT_NE(Function, nullptr);
@@ -267,10 +281,13 @@ void checkMachineCall(llvm::Module &Module, unsigned Key) {
           EXPECT_TRUE(Assembly->canThrow());
           EXPECT_TRUE(Assembly->hasSideEffects());
           EXPECT_TRUE(Call->getType()->isVoidTy());
-          EXPECT_EQ(Call->arg_size(), 3U);
-          EXPECT_EQ(Assembly->getConstraintString(), kValueCallConstraints);
-          const char *Branch =
-              Key == kAArch64PAuthKeyIA ? kResultCallIA : kResultCallIB;
+          EXPECT_EQ(Call->arg_size(), HiddenResult ? 2U : 3U);
+          EXPECT_EQ(Assembly->getConstraintString(),
+                    HiddenResult ? kResultCallConstraints
+                                 : kValueCallConstraints);
+          const char *Branch = Raw                         ? kResultCallRaw
+                               : Key == kAArch64PAuthKeyIA ? kResultCallIA
+                                                           : kResultCallIB;
           EXPECT_NE(Assembly->getAsmString().find(Branch), std::string::npos);
         }
       }
@@ -280,7 +297,8 @@ void checkMachineCall(llvm::Module &Module, unsigned Key) {
 void compile(const std::string &Source,
              const std::function<void(llvm::Module &)> &Inspect,
              llvm::StringRef Case, bool LLVMRoute, bool DarwinObject = false,
-             llvm::ArrayRef<llvm::StringRef> ExtraFlags = {}) {
+             llvm::ArrayRef<llvm::StringRef> ExtraFlags = {},
+             bool CompilerObject = false) {
 #ifdef NEVERD_TEST_CLANG
   const std::string Compiler = NEVERD_TEST_CLANG;
 #else
@@ -346,19 +364,102 @@ void compile(const std::string &Source,
     save(Case,
          llvm::formatv(kCompiledIR, Route, Optimization.drop_front()).str(),
          IR);
-    const auto Object = Codegen().compile(
-        *Module, Arch::AArch64,
-        DarwinObject ? BinaryFormat::MachO : BinaryFormat::ELF,
-        DarwinObject ? kTriple : llvm::StringRef());
-    ASSERT_TRUE(Object.Success);
-    save(Case,
-         llvm::formatv(kCompiledObject, Route, Optimization.drop_front()).str(),
-         llvm::StringRef(
-             reinterpret_cast<const char *>(Object.ObjectData.data()),
-             Object.ObjectData.size()));
+    if (CompilerObject) {
+      // A native C compiler owns its object and PAC IR dialect. The r6 LLVM
+      // importer separately refuses Apple Clang's legacy llvm.ptrauth globals.
+      for (const auto Flag : {kAssemblyOption, kLLVMOption})
+        Arguments.erase(std::remove(Arguments.begin(), Arguments.end(), Flag),
+                        Arguments.end());
+      Arguments.push_back(kCompileOption);
+      const int ObjectStatus = llvm::sys::ExecuteAndWait(
+          Compiler, Arguments, std::nullopt, Redirects, kCompilerTimeoutSeconds,
+          0, &Diagnostic);
+      Messages = llvm::MemoryBuffer::getFile(ErrorPath);
+      ASSERT_EQ(ObjectStatus, 0)
+          << Diagnostic
+          << (Messages ? (*Messages)->getBuffer().str() : std::string());
+      auto Bytes = llvm::MemoryBuffer::getFile(LLVMPath);
+      ASSERT_TRUE(Bytes);
+      save(Case,
+           llvm::formatv(kCompiledObject, Route, Optimization.drop_front())
+               .str(),
+           (*Bytes)->getBuffer());
+    } else {
+      const auto Object = Codegen().compile(
+          *Module, Arch::AArch64,
+          DarwinObject ? BinaryFormat::MachO : BinaryFormat::ELF,
+          DarwinObject ? kTriple : llvm::StringRef());
+      ASSERT_TRUE(Object.Success);
+      save(Case,
+           llvm::formatv(kCompiledObject, Route, Optimization.drop_front())
+               .str(),
+           llvm::StringRef(
+               reinterpret_cast<const char *>(Object.ObjectData.data()),
+               Object.ObjectData.size()));
+    }
     optimize(*Module);
     Inspect(*Module);
   }
+}
+
+TEST(AArch64AuthenticatedCall, HVARecordNamesKeepVectorAndArrayIdentity) {
+  const auto Word = NdType::makeInt(kPointerBytes);
+  const auto Vector = typedParameter(kVectorKind);
+  auto SmallVector = NdType::makeInt(kSourceAArch64Vector64Bytes);
+  SmallVector->SourceName = kSourceAArch64Vector64CType;
+  EXPECT_NE(typeToC(NdType::makeStruct({Word})),
+            typeToC(NdType::makeStruct({SmallVector})));
+  EXPECT_NE(typeToC(NdType::makeStruct({SmallVector})),
+            typeToC(NdType::makeStruct({Vector})));
+  const auto SmallArray = NdType::makeStruct(
+      {NdType::makeArray(SmallVector, kHVAIndirectParameters,
+                         kHVAIndirectParameters * SmallVector->Size)});
+  const auto WideArray = NdType::makeStruct({NdType::makeArray(
+      Vector, kHVAIndirectParameters, kHVAIndirectParameters * Vector->Size)});
+  EXPECT_NE(typeToC(SmallArray), typeToC(WideArray));
+  const auto LongerArray = NdType::makeStruct(
+      {NdType::makeArray(SmallVector, kHVAIndirectParameters + 1,
+                         (kHVAIndirectParameters + 1) * SmallVector->Size)});
+  EXPECT_NE(typeToC(SmallArray), typeToC(LongerArray));
+}
+
+TEST(AArch64AuthenticatedCall, HVAClassificationAgreesWithClangDarwin) {
+  const auto Inspect = [](llvm::Module &Module) {
+    const auto Check = [&](llvm::StringRef Name, unsigned Bytes, unsigned Count,
+                           bool Indirect) {
+      SCOPED_TRACE(Name.str());
+      auto *Function = Module.getFunction(Name);
+      ASSERT_NE(Function, nullptr);
+      auto *Type = Function->getFunctionType();
+      if (Indirect) {
+        ASSERT_EQ(Type->getNumParams(), kHVAIndirectParameters);
+        EXPECT_TRUE(Type->getReturnType()->isVoidTy());
+        EXPECT_TRUE(Type->getParamType(0)->isPointerTy());
+        EXPECT_TRUE(Type->getParamType(1)->isPointerTy());
+        EXPECT_TRUE(Function->hasParamAttribute(0, llvm::Attribute::StructRet));
+      } else {
+        ASSERT_EQ(Type->getNumParams(), 1U);
+        auto *Array = llvm::dyn_cast<llvm::ArrayType>(Type->getParamType(0));
+        ASSERT_NE(Array, nullptr);
+        EXPECT_EQ(Array->getNumElements(), Count);
+        auto *Vector =
+            llvm::dyn_cast<llvm::FixedVectorType>(Array->getElementType());
+        ASSERT_NE(Vector, nullptr);
+        EXPECT_EQ(
+            Module.getDataLayout().getTypeStoreSize(Vector).getFixedValue(),
+            Bytes);
+        EXPECT_EQ(Module.getDataLayout()
+                      .getTypeStoreSize(Type->getReturnType())
+                      .getFixedValue(),
+                  Count * Bytes);
+      }
+    };
+#define A64_CALL_HVA_COMPILER(Name, Bytes, Count, Indirect)                    \
+  Check(Name, Bytes, Count, Indirect);
+#include "AArch64AuthenticatedCallFixtures.def"
+  };
+  save(kHVACompilerCase, kHighSource, kHVACompilerSource);
+  compile(kHVACompilerSource, Inspect, kHVACompilerCase, false, true);
 }
 
 TEST(AArch64AuthenticatedCall, BothKeysAndZeroModifiersRemainOnTheCall) {
@@ -437,11 +538,29 @@ void checkTypedShape(const TypedShape &Shape, bool Native) {
       Hint->Signature.Parameters.push_back(
           {kTypedArgument, typedParameter(Kind)});
     std::string Diagnostic;
-    ASSERT_TRUE(assignAnalystCallABI(*Hint, Arch::AArch64, BinaryFormat::MachO,
-                                     Diagnostic))
+    if (Native)
+      Hint->Signature.Origin =
+          SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+    ASSERT_TRUE(Native ? assignDarwinFixedSourceABI(Hint->Signature,
+                                                    Arch::AArch64, Diagnostic)
+                       : assignAnalystCallABI(*Hint, Arch::AArch64,
+                                              BinaryFormat::MachO, Diagnostic))
         << Diagnostic;
     const auto Bindings = sourceABIParameters(Hint->Signature);
-    auto Function = function(Variant.Key, false, Bindings.size(), Variant.Raw);
+    unsigned Words = 0;
+    for (const auto &Binding : Bindings)
+      Words += (Binding.Type->Size + kPointerBytes - 1) / kPointerBytes;
+    const bool HVAReturn =
+        !sourceAArch64VectorAggregateMembers(ReturnType).empty();
+    auto Function =
+        function(Variant.Key, false, Words + unsigned(HVAReturn), Variant.Raw);
+    const bool VectorReturn = isSourceAArch64Vector128Type(ReturnType);
+    if (VectorReturn) {
+      Function.ReturnType = NdType::makeStruct(
+          {NdType::makeInt(kPointerBytes), NdType::makeInt(kPointerBytes)});
+      Function.MultiReturn = {{a64reg::X0, kPointerBytes, false},
+                              {a64reg::X1, kPointerBytes, false}};
+    }
     auto &Block = Function.Blocks.front();
     MedOp Call = Block.Ops[Variant.Raw ? 0 : 1];
     Hint->CallKind = Native ? SourceCallTypeHint::Kind::Native
@@ -461,9 +580,21 @@ void checkTypedShape(const TypedShape &Shape, bool Native) {
     Hint->Signature.ReturnType = ReturnType;
     std::vector<MedOp> Setup;
     std::vector<MedVar> Arguments;
+    unsigned Word = 2;
     for (unsigned I = 0; I < Bindings.size(); ++I) {
       const auto Type = Bindings[I].Type;
-      auto Argument = Function.Params[I + 2];
+      auto Argument = Function.Params[Word++];
+      if (Type->Size > kPointerBytes) {
+        MedOp Join;
+        Join.Opcode = NdOp::CONCAT;
+        Join.Output.Kind = MedVar::Temp;
+        Join.Output.Id = kTypedTemporaryId + I;
+        Join.Output.Size = Type->Size;
+        Join.addInput(Function.Params[Word++]);
+        Join.addInput(Argument);
+        Argument = Join.Output;
+        Setup.push_back(std::move(Join));
+      }
       if (Type->Size < Argument.Size) {
         MedOp Narrow;
         Narrow.Opcode = NdOp::COPY;
@@ -506,8 +637,69 @@ void checkTypedShape(const TypedShape &Shape, bool Native) {
       Return.Inputs[0] = Widen.Output;
       Setup.push_back(std::move(Widen));
     }
-    if (ReturnType->Kind == NdTypeKind::Struct ||
-        ReturnType->Size > kPointerBytes) {
+    if (VectorReturn) {
+      // The outer ABI observes both words independently through X0/X1. A
+      // temporary alone is not an AArch64 physical return-register definition.
+      for (unsigned I = 0; I < Function.MultiReturn.size(); ++I) {
+        MedOp Extract;
+        Extract.Opcode = NdOp::SUBBYTES;
+        Extract.Output = Call.Output;
+        Extract.Output.Kind = MedVar::Reg;
+        Extract.Output.Id = kTypedTemporaryId + Bindings.size() + I;
+        Extract.Output.RegOff = Function.MultiReturn[I].RegOff;
+        Extract.Output.Size = kPointerBytes;
+        ++Extract.Output.SSAVer;
+        Extract.addInput(Call.Output);
+        Extract.addInput(
+            MedVar::makeConst(I * kPointerBytes, kPromotedIntegerBytes));
+        if (!I)
+          Return.Inputs[0] = Extract.Output;
+        Setup.push_back(std::move(Extract));
+      }
+    }
+    if (HVAReturn) {
+      // Observe every word independently through caller-provided storage.
+      // Word slices also exercise the upper half of each 128-bit member.
+      int Id = kTypedTemporaryId + Bindings.size();
+      for (unsigned Offset = 0; Offset < ReturnType->Size;
+           Offset += kPointerBytes) {
+        MedOp Extract;
+        Extract.Opcode = NdOp::SUBBYTES;
+        Extract.Output.Kind = MedVar::Temp;
+        Extract.Output.Id = Id++;
+        Extract.Output.Size = kPointerBytes;
+        Extract.addInput(Call.Output);
+        Extract.addInput(MedVar::makeConst(Offset, kPromotedIntegerBytes));
+        Setup.push_back(Extract);
+        MedOp Address;
+        Address.Opcode = NdOp::INT_ADD;
+        Address.Output.Kind = MedVar::Temp;
+        Address.Output.Id = Id++;
+        Address.Output.Size = kPointerBytes;
+        Address.addInput(Function.Params.back());
+        Address.addInput(MedVar::makeConst(Offset, kPointerBytes));
+        Setup.push_back(Address);
+        MedOp Store;
+        Store.Opcode = NdOp::STORE;
+        Store.addInput(Address.Output);
+        Store.addInput(Extract.Output);
+        Setup.push_back(std::move(Store));
+      }
+      MedOp Result;
+      Result.Opcode = NdOp::COPY;
+      Result.Output.Kind = MedVar::Reg;
+      Result.Output.Id = Id;
+      Result.Output.TheArch = Arch::AArch64;
+      Result.Output.RegOff = a64reg::X0;
+      Result.Output.Size = kPointerBytes;
+      ++Result.Output.SSAVer;
+      Result.addInput(Function.Params.back());
+      Return.Inputs[0] = Result.Output;
+      Setup.push_back(std::move(Result));
+    }
+    if (!VectorReturn && !HVAReturn &&
+        (ReturnType->Kind == NdTypeKind::Struct ||
+         ReturnType->Size > kPointerBytes)) {
       MedVar Accumulator = MedVar::makeConst(0, kPointerBytes);
       int Id = kTypedTemporaryId + Bindings.size();
       unsigned Version = Call.Output.SSAVer;
@@ -556,12 +748,14 @@ void checkTypedShape(const TypedShape &Shape, bool Native) {
                                {}, nullptr, BinaryFormat::MachO);
     ASSERT_TRUE(Module);
     optimize(*Module);
+    const bool MachineCall =
+        sourceCallUsesMachineABI(*Hint, BinaryFormat::MachO, !Variant.Raw);
     const auto Inspect = [&](llvm::Module &Candidate) {
-      if (Variant.Raw)
+      if (!MachineCall)
         checkBundle(Candidate, Variant.Key, Variant.Zero,
                     Shape.Parameters.size(), true);
       else
-        checkMachineCall(Candidate, Variant.Key);
+        checkMachineCall(Candidate, Variant.Key, Variant.Raw);
       for (const auto &Block : *Candidate.getFunction(kFunction))
         for (const auto &Instruction : Block) {
           if (const auto *Return =
@@ -630,12 +824,12 @@ void checkTypedShape(const TypedShape &Shape, bool Native) {
             {MedToHighConverter().convert(Function, Arch::AArch64)}, Stream,
             Options));
       EXPECT_TRUE(llvm::StringRef(Source).contains(
-          Variant.Raw ? llvm::StringRef(kRawCallMacro)
-                      : llvm::StringRef(kResultCallMarker).rtrim()))
+          MachineCall ? llvm::StringRef(kResultCallMarker).rtrim()
+                      : llvm::StringRef(kRawCallMacro)))
           << Source;
       save(Case, LLVMRoute ? kLLVMSource : kHighSource, Source);
       llvm::SmallVector<llvm::StringRef, 2> Flags;
-      if (!Variant.Raw)
+      if (MachineCall)
         Flags = {kExceptionsOption, kNoStackProtectorOption};
       compile(Source, Inspect, Case, LLVMRoute, true, Flags);
     }
@@ -678,11 +872,13 @@ std::vector<TypedShape> recoveredShapes() {
     std::string Diagnostic;
     if (assignAnalystCallABI(Hint, Arch::AArch64, BinaryFormat::MachO,
                              Diagnostic) &&
-        !hasIndirectSourceParameters(Hint.Signature) &&
         Hint.Signature.ReturnLocation.Kind !=
             SourceABICarrierKind::IndirectResultPointer)
       Shapes.push_back(Shape);
   }
+#define A64_CALL_NATIVE_SHAPE(Name, Parameters, ReturnKind)                    \
+  Shapes.push_back({Name, Parameters, ReturnKind, -1});
+#include "AArch64AuthenticatedCallFixtures.def"
   return Shapes;
 }
 
@@ -1008,7 +1204,7 @@ TEST(AArch64AuthenticatedCall, OriginalLinkRegisterOperandsSurviveTheNewLink) {
 }
 } // namespace
 
-TEST(AArch64AuthenticatedCall, IndirectResultsKeepOriginalStorageAndPAC) {
+void checkResultStorage(bool Native) {
   for (const auto &Variant : TypedVariants) {
     auto Function = function(Variant.Key, false, 2, Variant.Raw);
     auto &Block = Function.Blocks.front();
@@ -1027,16 +1223,25 @@ TEST(AArch64AuthenticatedCall, IndirectResultsKeepOriginalStorageAndPAC) {
     if (!Variant.Raw && Variant.Zero)
       Block.Ops.front().Inputs[3] = MedVar::makeConst(0, kPointerBytes);
     auto Hint = std::make_shared<SourceCallTypeHint>();
-    Hint->CallKind = SourceCallTypeHint::Kind::Analyst;
+    Hint->CallKind = Native ? SourceCallTypeHint::Kind::Native
+                            : SourceCallTypeHint::Kind::Analyst;
+    if (Native) {
+      Hint->Signature.Origin =
+          SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+      Hint->TargetName = kResolvedCallback;
+    }
     Hint->Signature.ReturnType = NdType::makeStruct(
         {NdType::makeInt(kPointerBytes), NdType::makeFloat(kPointerBytes),
          NdType::makePtr(NdType::makeVoid())});
     Hint->Signature.Parameters = {{kTypedArgument, Hint->Signature.ReturnType}};
-    Hint->AnalystSite =
-        SourceCallOccurrenceKey{Call.Addr, Call.OriginSeq, NdOp::INDIR_CALL, 0};
+    if (!Native)
+      Hint->AnalystSite = SourceCallOccurrenceKey{Call.Addr, Call.OriginSeq,
+                                                  NdOp::INDIR_CALL, 0};
     std::string Diagnostic;
-    ASSERT_TRUE(assignAnalystCallABI(*Hint, Arch::AArch64, BinaryFormat::MachO,
-                                     Diagnostic))
+    ASSERT_TRUE(Native ? assignDarwinFixedSourceABI(Hint->Signature,
+                                                    Arch::AArch64, Diagnostic)
+                       : assignAnalystCallABI(*Hint, Arch::AArch64,
+                                              BinaryFormat::MachO, Diagnostic))
         << Diagnostic;
     Call.SourceCallHint = Hint;
     Block.Ops.insert(Block.Ops.end() - 1, std::move(Result));
@@ -1046,7 +1251,7 @@ TEST(AArch64AuthenticatedCall, IndirectResultsKeepOriginalStorageAndPAC) {
     ASSERT_EQ(Function.CallInfos.front().Args.size(),
               sourceABIParameters(Hint->Signature).size() + 1);
     MedLLVMEmitter Emitter;
-    Emitter.setAnalystSourceProjection(true);
+    Emitter.setAnalystSourceProjection(!Native);
     llvm::LLVMContext Context;
     auto Module = Emitter.emit({Function}, Context, kFunction, Arch::AArch64,
                                {}, nullptr, BinaryFormat::MachO);
@@ -1088,8 +1293,9 @@ TEST(AArch64AuthenticatedCall, IndirectResultsKeepOriginalStorageAndPAC) {
     Inspect(*Module);
     optimize(*Module);
     Inspect(*Module);
-    const auto Case = llvm::formatv(kResultStorageDirectory, Variant.Key,
-                                    Variant.Zero, Variant.Raw)
+    const auto Case = llvm::formatv(Native ? kRecoveredResultStorageDirectory
+                                           : kResultStorageDirectory,
+                                    Variant.Key, Variant.Zero, Variant.Raw)
                           .str();
     std::string IR;
     llvm::raw_string_ostream IRStream(IR);
@@ -1122,4 +1328,145 @@ TEST(AArch64AuthenticatedCall, IndirectResultsKeepOriginalStorageAndPAC) {
               {kExceptionsOption, kNoStackProtectorOption});
     }
   }
+}
+
+TEST(AArch64AuthenticatedCall, IndirectResultsKeepOriginalStorageAndPAC) {
+  checkResultStorage(false);
+}
+
+TEST(AArch64AuthenticatedCall, NativeIndirectResultsKeepOriginalStorageAndPAC) {
+  checkResultStorage(true);
+}
+
+void checkNativeVectorStorage(char Kind) {
+  const auto Word = NdType::makeInt(kPointerBytes);
+  const auto Pointer = NdType::makePtr(Word);
+  const auto Vector = typedParameter(Kind);
+  const auto Record = NdType::makeStruct({Word, Word, Word});
+  SourceFunctionTypeHint Entry, Callee;
+  Entry.Origin = Callee.Origin =
+      SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+  Entry.ReturnType = Word;
+  Entry.Parameters = {{kTypedArgument, Pointer},
+                      {kTypedArgument, Pointer},
+                      {kTypedArgument, Vector}};
+  Callee.ReturnType = Record;
+  Callee.Parameters = {{kTypedArgument, Record}, {kTypedArgument, Vector}};
+  std::string Diagnostic;
+  ASSERT_TRUE(assignDarwinFixedSourceABI(Entry, Arch::AArch64, Diagnostic))
+      << Diagnostic;
+  ASSERT_TRUE(assignDarwinFixedSourceABI(Callee, Arch::AArch64, Diagnostic))
+      << Diagnostic;
+  LowFunc Low;
+  Low.Entry = kEntryAddress;
+  Low.Name = kFunction;
+  Low.Blocks.emplace_back();
+  auto &Block = Low.Blocks.back();
+  Block.Id = 0;
+  Block.StartAddr = Low.Entry;
+  auto Add = [&](NdOp Opcode, NdVar Output,
+                 std::initializer_list<NdVar> Inputs) {
+    LowOp Op;
+    Op.Opcode = Opcode;
+    Op.Output = Output;
+    Op.Addr = Low.Entry + Block.Ops.size() * kInstructionBytes;
+    for (const auto &Input : Inputs)
+      Op.addInput(Input);
+    Block.Ops.push_back(Op);
+  };
+  Add(NdOp::COPY, NdVar::reg(a64reg::X8, kPointerBytes),
+      {NdVar::reg(a64reg::X1, kPointerBytes)});
+  Add(NdOp::CALL, {}, {NdVar::cst(kCalleeAddress, kPointerBytes)});
+  Add(NdOp::COPY, NdVar::reg(a64reg::X0, kPointerBytes),
+      {NdVar::cst(0, kPointerBytes)});
+  Add(NdOp::RETURN, {}, {NdVar::reg(a64reg::X0, kPointerBytes)});
+  Block.EndAddr = Low.Entry + Block.Ops.size() * kInstructionBytes;
+  const std::map<va_t, SourceFunctionTypeHint> Hints{{Low.Entry, Entry},
+                                                     {kCalleeAddress, Callee}};
+  LowToMedConverter Converter;
+  Converter.setSourceCallHintsEnabled(true);
+  Converter.setSourceCalleeTypeHints(&Hints);
+  auto Med = Converter.convert(Low, Arch::AArch64, BinaryFormat::MachO);
+  const std::map<va_t, std::string> Names{{kCalleeAddress, kResolvedCallback}};
+  recoverCallAbi(Med, Arch::AArch64, Names);
+  ASSERT_EQ(Med.CallInfos.size(), 1U);
+  const auto &Info = Med.CallInfos.front();
+  ASSERT_TRUE(Info.SourceCallHint);
+  EXPECT_TRUE(sourceCallRetainsNativeCarriers(*Info.SourceCallHint));
+  EXPECT_TRUE(sourceCallRetainsResultStorage(*Info.SourceCallHint));
+  ASSERT_EQ(Info.Args.size(), sourceABIParameters(Callee).size() + 1);
+  EXPECT_EQ(Info.Args.front().Size, kPointerBytes);
+  EXPECT_EQ(Info.Args[1].Size, sourceABIParameters(Callee)[1].Type->Size);
+  EXPECT_EQ(Info.Args.back().Size, kPointerBytes);
+  EXPECT_EQ(Info.Args.front().Kind, MedVar::Reg);
+  EXPECT_EQ(Info.Args.front().RegOff, a64reg::X0);
+  EXPECT_EQ(Info.Args.back().Kind, MedVar::Reg);
+  EXPECT_EQ(Info.Args.back().RegOff, a64reg::X1);
+  for (const auto &B : Med.Blocks)
+    for (const auto &Op : B.Ops) {
+      EXPECT_NE(Op.Opcode, NdOp::STORE);
+      if (Op.Opcode == NdOp::CALL)
+        EXPECT_EQ(Op.Output.Size, 0U);
+    }
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit({Med}, Context, kFunction, Arch::AArch64,
+                                      {{kCalleeAddress, kResolvedCallback}},
+                                      nullptr, BinaryFormat::MachO);
+  ASSERT_TRUE(Module);
+  const auto Inspect = [&](llvm::Module &Candidate) {
+    checkMachineCall(Candidate, kAArch64PAuthKeyIA, true, true);
+  };
+  Inspect(*Module);
+  EXPECT_TRUE(Codegen()
+                  .compile(*Module, Arch::AArch64, BinaryFormat::MachO, kTriple)
+                  .Success);
+  for (bool LLVMRoute : {false, true}) {
+    CEmitterOptions Options;
+    Options.TheArch = Arch::AArch64;
+    Options.Format = BinaryFormat::MachO;
+    Options.PreserveLLVMFunctionTypes = true;
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    if (LLVMRoute)
+      ASSERT_TRUE(LLVMCEmitter().emit(*Module, Out, Options));
+    else {
+      MedToHighConverter HighConverter;
+      HighConverter.setFuncNames(&Names);
+      ASSERT_TRUE(HighCEmitter().emit(
+          {HighConverter.convert(Med, Arch::AArch64)}, Out, Options));
+    }
+    const auto Case =
+        Kind == kVectorKind
+            ? std::string(kLoweredNativeDirectory)
+            : llvm::formatv(kLoweredNativeTypeDirectory, Kind).str();
+    compile(Source, Inspect, Case, LLVMRoute, true,
+            {kExceptionsOption, kNoStackProtectorOption},
+            /*CompilerObject=*/true);
+  }
+}
+
+TEST(AArch64AuthenticatedCall, LoweringRetainsNativeVectorAndOriginalX8) {
+  checkNativeVectorStorage(kVectorKind);
+}
+
+TEST(AArch64AuthenticatedCall, LoweringRetainsHVAAndOriginalX8) {
+#define A64_CALL_HVA_STORAGE_KIND(Kind) checkNativeVectorStorage(Kind);
+#include "AArch64AuthenticatedCallFixtures.def"
+}
+
+TEST(AArch64AuthenticatedCall,
+     LegacyApplePACGlobalsRefuseBeforeCodeGeneration) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diagnostic;
+  auto Module = llvm::parseIR(llvm::MemoryBufferRef(kLegacyPAuthIR, kFunction),
+                              Diagnostic, Context);
+  ASSERT_TRUE(Module);
+  ASSERT_FALSE(llvm::verifyModule(*Module));
+  const auto Object =
+      Codegen().compile(*Module, Arch::AArch64, BinaryFormat::MachO, kTriple);
+  EXPECT_FALSE(Object.Success);
+  EXPECT_TRUE(Object.ObjectData.empty());
+  const auto Rewrite = Codegen().compileForRewrite(
+      *Module, Arch::AArch64, {}, BinaryFormat::MachO, kTriple);
+  EXPECT_FALSE(Rewrite.ImageValid);
 }

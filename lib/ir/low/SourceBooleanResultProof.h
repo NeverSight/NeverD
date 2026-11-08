@@ -210,7 +210,7 @@ struct Transfer {
         return false;
       Remaining -= Cost;
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
-        const auto Key = sourceCallOccurrenceKey(Op);
+        const auto Key = sourceCallOccurrenceKey(Op, TRI.TheArch);
         // For an indirect call the complete dynamic target is an observable
         // input, in addition to the independently supplied ABI arguments.
         if (!Key || InputDiffers ||
@@ -611,7 +611,7 @@ proveSourceBooleanResultNormalization(
       Previous = Op.Addr;
       Instructions.insert(Op.Addr);
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
-        const auto Key = sourceCallOccurrenceKey(Op);
+        const auto Key = sourceCallOccurrenceKey(Op, Architecture);
         const bool IsSelected = Key && !(*Key < Selected) && !(Selected < *Key);
         if (!Key || (!IsSelected && !Calls.count(*Key)) ||
             !SeenCalls.insert(*Key).second)

@@ -4,6 +4,7 @@
 
 #include "LowInstructionSlice.h"
 
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/X86/X87Constant.h"
 #include "neverd/ir/X86/X87GuardedValue.h"
 #include "neverd/ir/X86/X87Value.h"
@@ -40,6 +41,14 @@ sourceCallOccurrenceKey(const LowOp &Operation) {
       Operation.Inputs[0].isConst()
           ? std::optional<va_t>(Operation.Inputs[0].Offset)
           : std::nullopt};
+}
+
+std::optional<SourceCallOccurrenceKey>
+sourceCallOccurrenceKey(const LowOp &Operation, Arch Architecture) {
+  if (Architecture == Arch::Unknown ||
+      Operation.Inputs[0].Size != getTargetRegInfo(Architecture).PointerSize)
+    return std::nullopt;
+  return sourceCallOccurrenceKey(Operation);
 }
 
 namespace {
