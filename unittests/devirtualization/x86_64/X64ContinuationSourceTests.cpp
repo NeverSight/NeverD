@@ -2158,6 +2158,33 @@ int main(void) {
       true, controlsOptions());
 }
 
+TEST(X64Cr8WriteNotification, MetadataComesFromModeledWrites) {
+  const auto Image = image(
+      {0x44, 0x0f, 0x22, 0xc0, 0x44, 0x0f, 0x20, 0xc3, 0x90, 0x0f, 0x22, 0xe0});
+  for (bool Paged : {false, true}) {
+    X64ContinuationSourceOptions Options;
+    Options.Profile = X64ContinuationProfile::KernelEventsNoFaultV6;
+    Options.MXCSRMask = 0xffbf;
+    Options.PagingAddressBits = 48;
+    Options.PagedMemory = Paged;
+    auto Units = buildX64ContinuationSource(
+        Image, {0x1000, 0x1004, 0x1008, 0x1009}, Options);
+    ASSERT_TRUE(bool(Units)) << llvm::toString(Units.takeError());
+    ASSERT_EQ(Units->size(), 4u);
+    EXPECT_EQ((*Units)[0].WritesCr8, !Paged);
+    EXPECT_EQ((*Units)[0].RequiresNativeExecution, Paged);
+    for (unsigned I = 1; I != Units->size(); ++I)
+      EXPECT_FALSE((*Units)[I].WritesCr8);
+    EXPECT_TRUE((*Units)[3].RequiresNativeExecution);
+    Options.NotifyCr8Writes = true;
+    auto Unbound = buildX64ContinuationSource(Image, {0x1000}, Options);
+    EXPECT_FALSE(bool(Unbound));
+    if (!Unbound)
+      EXPECT_NE(llvm::toString(Unbound.takeError()).find("CR8"),
+                std::string::npos);
+  }
+}
+
 TEST_F(X64ContinuationSourceTest, TaskPriorityRetainsInvalidWrites) {
   run({0x44, 0x0f, 0x20, 0xc0, 0x44, 0x0f, 0x22, 0xc1}, {0x1000, 0x1004}, R"C(
 int main(void) {
