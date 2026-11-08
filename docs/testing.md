@@ -6071,6 +6071,12 @@ controls, full-size close targets, and a padlock that opens and closes with the
 lock over the caption's own color. `doubleClickDetachStartsLocked` and
 `lockedDragsStayFloating` check the default lock, caption movement and rejected
 tab docking. `explicitDockIgnoresLock` clicks the dock button while locked.
+`retiredFloatingCaptionDoesNotRestoreFocus` transfers a complete floating
+layout into the main window, then delivers a focus event to its old caption
+before deferred deletion. This reproduces Cocoa reactivation while the drop
+preview hides. It also checks live-caption focus forwarding, deletion of the
+retired caption and keyboard focus in the newly docked pane. The lifecycle
+check runs offscreen as well as with a native window system.
 `quickStartChoosesWorkbenchSize` checks that accepting the startup greeting,
 including opening a recent file, maximizes the workbench, while reopening the
 dialog over a visible workbench preserves its state. `workbenchReopensWindowed`

@@ -27,6 +27,7 @@
 #include <QDebug>
 #include <QDir>
 #include <QFile>
+#include <QFocusEvent>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLabel>
@@ -52,8 +53,10 @@
 #include <kddockwidgets/LayoutSaver.h>
 #include <kddockwidgets/core/DropArea.h>
 #include <kddockwidgets/core/DropIndicatorOverlay.h>
+#include <kddockwidgets/core/FloatingWindow.h>
 #include <kddockwidgets/core/Group.h>
 #include <kddockwidgets/core/MainWindow.h>
+#include <kddockwidgets/core/TitleBar.h>
 #include <kddockwidgets/qtwidgets/views/DockWidget.h>
 #include <kddockwidgets/qtwidgets/views/MainWindow.h>
 #include <kddockwidgets/qtwidgets/views/TabBar.h>
@@ -530,6 +533,44 @@ private slots:
     QVERIFY(lockOverCaption());
     lock->setChecked(true);
     QSettings().remove(settings::NativeTitleBar);
+  }
+
+  void retiredFloatingCaptionDoesNotRestoreFocus() {
+    Desktop desktop;
+    auto *floating = desktop.Source.QWidget::window();
+    QVERIFY(QTest::qWaitForWindowExposed(floating));
+    floating->activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(floating));
+    QPointer<KD::QtWidgets::TitleBar> caption = desktop.titleBar();
+    QVERIFY(caption);
+    auto *controller = caption->titleBar()->floatingWindow();
+    QVERIFY(controller && controller->dropArea());
+
+    // An active floating caption still restores its pane's keyboard focus.
+    auto *content = desktop.Source.widget();
+    content->setFocus();
+    QVERIFY(content->hasFocus());
+    content->clearFocus();
+    QFocusEvent focus(QEvent::FocusIn, Qt::ActiveWindowFocusReason);
+    QApplication::sendEvent(caption, &focus);
+    QVERIFY(content->hasFocus());
+
+    auto *destination = desktop.Window.mainWindow()->dropArea();
+    destination->addMultiSplitter(controller->dropArea(),
+                                  KD::Location_OnBottom);
+    QCOMPARE(desktop.Source.QWidget::window(), &desktop.Window);
+    QVERIFY(caption);
+    QCOMPARE(controller->dropArea(), nullptr);
+    // Drop transfers and destroys the layout before deferred deletion of its
+    // old caption. Hiding the drag preview can synchronously reactivate that
+    // caption on Cocoa. Deliver that same event before processing deletes.
+    QApplication::sendEvent(caption, &focus);
+    QVERIFY(desktop.Source.isVisible());
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QTRY_VERIFY(!caption);
+    QVERIFY(place(desktop.Window, desktop.Window.pos()));
+    content->setFocus();
+    QTRY_VERIFY(content->hasFocus());
   }
 
   void customFloatingMoveAndResize() {
