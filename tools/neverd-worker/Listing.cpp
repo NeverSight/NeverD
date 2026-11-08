@@ -5361,13 +5361,15 @@ bool Listing::dataItemsChanged() {
   return true;
 }
 
-void Listing::declarationsChanged() {
+void Listing::declarationsChanged(bool viewsReadIt) {
   auto &d = *impl_;
   d.cache.invalidate();
   d.decoded.clear();
   d.decodedOrder.clear();
   // The table holds nothing a declaration changes, and names stand.
   const auto previous = d.generation++;
+  if (viewsReadIt)
+    ++d.functionNameGenerations;
   if (d.functionRowsGeneration == previous)
     d.functionRowsGeneration = d.generation;
   if (d.functionsByNameGeneration == previous)

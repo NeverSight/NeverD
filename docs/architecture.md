@@ -4679,7 +4679,9 @@ its write, which runs the same journaled transaction in order on a thread of its
 writing. What may read the project's files waits for it first. A document of a view
 notes the addresses its render read and its decoration looked up, and reads what such
 an edit reached when it is next asked for, so the edit leaves the owner's other
-documents as they are (`Engine::keepNamedViewsThrough`, `Engine::readViewEdits`).
+documents as they are (`Engine::keepNamedViewsThrough`, `Engine::readViewEdits`). A
+function's declaration does so too while the stores' names stand, which they do unless
+it hides a prototype analysis read.
 Decoration asks for the image's names and comments by address, and the edit changes
 that one row (`CodeEdits::ImageFacts`), so a view costs the same among thousands.
 The GUI starts a replica on a function as its Set Type dialog opens
