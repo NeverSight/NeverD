@@ -18502,6 +18502,12 @@ arrival routing/timing, global arbitration, TPR/CR8 synchronization and external
 EOI routing stay with the embedding. The offline QEMU bank adapter calls this type's
 constant initializer/validator instead of duplicating priority rules in Python.
 See the [local APIC contract](x86-local-apic.md).
+Its CR8 read/write methods and paired CPU/APIC import check preserve the
+distinction between restoration and an actual same-value write. The former
+retains TPR subpriority; the latter clears it. Privilege/fault handling and
+instruction/device completion wiring remain with the embedding. The fixed
+PPR tie policy retains TPR subpriority as QEMU/KVM do, rather than inferring a
+model-specific choice for arbitrary hardware.
 
 `X64FunctionCallHandlers` composes a producer-declared delivered handler context
 with a pending original CALL. The interface requires call-site pauses so that
