@@ -36,6 +36,41 @@ public:
     S.EIP = Fallthrough;
     uint32_t A = 0, B = 0;
     const unsigned N = F.Bytes;
+    if (F.SystemSelector) {
+      using System = X86LegacySystemSelector;
+      const auto Operation = *F.SystemSelector;
+      const bool Load =
+          Operation == System::LoadLDT || Operation == System::LoadTR;
+      if (S.Core.CPL && (Load || (M.controls().CR4 & (1u << 11)))) {
+        fault(13);
+        return;
+      }
+      if (Load) {
+        if (read(F.Source, 2, B))
+          accept(
+              loadLegacySystemSelector(S, M, Operation == System::LoadTR, B));
+      } else {
+        write(F.Destination, N,
+              Operation == System::StoreLDT ? S.Core.LDTR.Selector
+                                            : S.TR.Selector);
+      }
+      return;
+    }
+    if (F.DescriptorQuery) {
+      if (!read(F.Source, 2, B))
+        return;
+      auto Query = queryLegacyDescriptor(S.Core, M, *F.DescriptorQuery, B);
+      if (!Query) {
+        Failure = Query.takeError();
+        return;
+      }
+      if (!accept(static_cast<X86MemoryAccessResult &>(*Query)))
+        return;
+      if (Query->Visible && F.Destination.Register)
+        writeRegister(*F.Destination.Register, N, Query->Value);
+      S.EFlags = (S.EFlags & ~64u) | (Query->Visible ? 64 : 0);
+      return;
+    }
     if ((F.Operation == Op::CountPopulation && !O.IntegerExtensions->POPCNT) ||
         (F.carryChain() && !O.IntegerExtensions->ADX) ||
         (F.BMI && !F.BMI->enabled(*O.IntegerExtensions))) {

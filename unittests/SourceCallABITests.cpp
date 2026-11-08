@@ -815,3 +815,27 @@ TEST(SourceCallABI, RecordMemberProjectionDoesNotRequirePaddingOrDefineIt) {
   EXPECT_FALSE(sourceCallArgumentsDefined(F, *H.AnalystSite, Error));
 }
 } // namespace
+
+TEST(SourceCallABI, DarwinIndirectResultKeepsItsOriginalStorageContract) {
+  for (const auto Record :
+       {NdType::makeStruct(std::vector<TypeRef>(
+            kDarwinThreeMembers, NdType::makeInt(kDarwinRegisterBytes))),
+        NdType::makeStruct(std::vector<TypeRef>(
+            kDarwinTransformMembers, NdType::makeFloat(kDarwinRegisterBytes))),
+        NdType::makeStruct({NdType::makeInt(kDarwinRegisterBytes),
+                            NdType::makeFloat(kDarwinRegisterBytes),
+                            NdType::makePtr(NdType::makeVoid())})}) {
+    auto H = contract({Record, NdType::makeInt(kDarwinRegisterBytes)});
+    H.Signature.ReturnType = Record;
+    std::string Error;
+    ASSERT_TRUE(
+        assignAnalystCallABI(H, Arch::AArch64, BinaryFormat::MachO, Error))
+        << Error;
+    EXPECT_TRUE(sourceCallRetainsResultStorage(H));
+    EXPECT_EQ(H.Signature.ReturnLocation.RegisterOffset,
+              getTargetRegInfo(Arch::AArch64).indirectResultReg());
+    EXPECT_FALSE(H.ByValueCopy);
+    H.CallKind = SourceCallTypeHint::Kind::Native;
+    EXPECT_FALSE(sourceCallRetainsResultStorage(H));
+  }
+}

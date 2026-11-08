@@ -536,6 +536,14 @@ void Program::addAndroidFramework() {
       holder.reference = {type.name, "mObject", "J"};
       holder.access = {"private", "final"};
       type.fields.push_back(std::move(holder));
+      for (auto [name, descriptor] :
+           {std::pair{"mOwner", "Landroid/os/IInterface;"},
+            {"mDescriptor", "Ljava/lang/String;"}}) {
+        Field value;
+        value.reference = {type.name, name, descriptor};
+        value.access = {"private"};
+        type.fields.push_back(std::move(value));
+      }
     }
     if (std::string_view(name) == "android/os/IServiceManager")
       type.interfaces = {"Landroid/os/IInterface;"};
@@ -1081,7 +1089,7 @@ ExecutionResult AndroidFramework::field(Heap &heap, const Field &field,
       binder_tracing_enabled = bool(*write);
     return {ExecutionStop::Returned, binder_tracing_enabled};
   }
-  if (ref.owner == "Landroid/os/Binder;" && ref.name == "mObject") {
+  if (ref.owner == "Landroid/os/Binder;" && !field.access.contains("static")) {
     auto object = heap.get(receiver);
     auto entry = object->Fields.find(&field);
     if (entry == object->Fields.end())
@@ -1181,6 +1189,12 @@ ExecutionResult AndroidFramework::field(Heap &heap, const Field &field,
 AndroidFrameworkState AndroidFramework::inspect(const Heap &heap,
                                                 const Program &program) const {
   AndroidFrameworkState result;
+  if (binder_calls_start) {
+    auto &calls = result.binder_calls.emplace();
+    calls.start_milliseconds = *binder_calls_start;
+    for (const auto &[uid, count] : binder_calls)
+      calls.entries.push_back({uid, count});
+  }
   if (snapshot) {
     result.declared_phase = snapshot->phase;
     result.application_loader_established =
@@ -1576,6 +1590,8 @@ ExecutionResult AndroidFramework::execute(Heap &heap, const Program &program,
     return constructBinder(heap, program, receiver, admit);
   if (method.Op == BinderTransact || method.Op == BinderTransactNative)
     return binderTransact(heap, program, method, receiver, arguments, admit);
+  if (method.Op == BinderOnTransact || method.Op == BinderInterface)
+    return binderInterface(heap, program, method, receiver, arguments, admit);
   if (method.Op == BinderTracing) {
     const std::string_view name = method.Name;
     if (name == "isTracingEnabled")
@@ -1585,6 +1601,38 @@ ExecutionResult AndroidFramework::execute(Heap &heap, const Program &program,
   }
   if (method.Op == BinderGetStrictMode)
     return binderThreadPolicy();
+  if (method.Op == BinderJoin) {
+    std::optional<uint32_t> fd;
+    for (const auto &[endpoint, key] : binder_input_keys)
+      if (!endpoint.second) {
+        if (fd && fd != endpoint.first)
+          return {ExecutionStop::Unsupported,
+                  0,
+                  {},
+                  "Android Binder join requires one ProcessState connection"};
+        fd = endpoint.first;
+      }
+    if (!fd)
+      return {ExecutionStop::Unsupported,
+              0,
+              {},
+              "Android Binder join requires a cached context handle; native "
+              "ping is not modeled"};
+    ExecutionResult result{ExecutionStop::Suspended};
+    result.external.emplace();
+    result.external->kind = ExternalCall::BinderJoin;
+    result.external->binder.emplace().fd = *fd;
+    return result;
+  }
+  if (method.Op == BinderCallingIdentity) {
+    if (!services.binder_calling_identity)
+      return {ExecutionStop::Unsupported,
+              0,
+              {},
+              "Android Binder calling identity service is not supplied"};
+    return services.binder_calling_identity(std::string_view(method.Name) ==
+                                            "getCallingUid");
+  }
   if (method.Op == BinderSetStrictMode) {
     if (!services.set_binder_thread_policy)
       return {ExecutionStop::Unsupported,

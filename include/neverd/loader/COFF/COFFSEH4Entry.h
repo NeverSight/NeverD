@@ -67,9 +67,21 @@ struct X86SEH4EpilogueCall {
   ExceptionAddressRange Helper;
 };
 
+/// The caller's `push allocation; push table; call helper` and the helper's
+/// exact bytes: what the code does, for a view that shows it.  The handler it
+/// installs and the image's SafeSEH table are the checked form's to prove.
+std::optional<X86SEH4PrologueCall>
+getX86SEH4PrologueShape(const BinaryImage &Image,
+                        const ExceptionFunction &Function);
 std::optional<X86SEH4PrologueCall>
 getCheckedX86SEH4PrologueCall(const BinaryImage &Image,
                               const ExceptionFunction &Function);
+/// The same for the call of `__SEH_epilog4` at \p CallVA of the frame \p Entry
+/// builds.
+std::optional<X86SEH4EpilogueCall>
+getX86SEH4EpilogueShape(const BinaryImage &Image,
+                        const ExceptionFunction &Function,
+                        const X86SEH4PrologueCall &Entry, va_t CallVA);
 std::optional<X86SEH4EpilogueCall>
 getCheckedX86SEH4EpilogueCall(const BinaryImage &Image,
                               const ExceptionFunction &Function, va_t CallVA);

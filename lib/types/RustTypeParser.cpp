@@ -1321,10 +1321,10 @@ ParseResult parseRustTypes(llvm::StringRef Source, TypeLibrary &Library,
   std::vector<RToken> Tokens = lexRust(Source, Result.Problems);
   if (!Result.Problems.empty())
     return Result;
-  TypeLibrary Scratch(Library);
-  RustReader(std::move(Tokens), Scratch, Options, Result).run();
+  TypeLibrary::Trial Trial(Library);
+  RustReader(std::move(Tokens), Library, Options, Result).run();
   if (Result.Problems.empty())
-    Library = std::move(Scratch);
+    Trial.keep();
   return Result;
 }
 

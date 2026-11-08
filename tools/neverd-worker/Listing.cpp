@@ -774,6 +774,8 @@ struct Listing::Impl {
   /// The address each name of the listing leads to; the first address to
   /// take a name keeps it.
   std::unordered_map<std::string, std::uint64_t> listingNames;
+  /// The names functions would show but for another that holds them.
+  std::unordered_set<std::string> blockedDisplayNames;
   /// Executable import veneers and the import each forwards to.
   std::map<std::uint64_t, std::string> stubImports;
   /// Where an import's name leads, as its symbol and as code calls it: its
@@ -1285,18 +1287,23 @@ struct Listing::Impl {
   }
 
   void applyDisplayNames() {
+    blockedDisplayNames.clear();
+    const auto rename = [&](Function &function, std::string name) {
+      if (!parseDummyName(function.name))
+        return false;
+      if (listingNames.contains(name)) {
+        blockedDisplayNames.insert(std::move(name));
+        return false;
+      }
+      function.name = std::move(name);
+      return true;
+    };
     for (auto &function : functions)
       if (const auto name = pdbDisplayNames.find(function.entry);
           name != pdbDisplayNames.end() &&
           pdbFunctionNames.contains(function.entry) &&
-          parseDummyName(function.name) && !listingNames.contains(name->second))
-        function.name = name->second;
-    const auto rename = [&](Function &function, std::string name) {
-      if (!parseDummyName(function.name) || listingNames.contains(name))
-        return false;
-      function.name = std::move(name);
-      return true;
-    };
+          parseDummyName(function.name))
+        rename(function, name->second);
     for (const auto &[stub, import] : stubImports)
       if (auto *function = functionAtEntry(stub))
         if (rename(*function, thunkName(import)))
@@ -2048,7 +2055,7 @@ struct Listing::Impl {
 
   /// Read the user's data items. Their strings join the scan's, and replace
   /// what the scan read in their bytes.
-  void loadUserItems() {
+  void readUserItems() {
     userItems.clear();
     dataElementTypes.clear();
     userInstructions.clear();
@@ -2068,6 +2075,11 @@ struct Listing::Impl {
         if (address && item.size)
           userItems.emplace(address, std::move(item));
       }
+  }
+  void loadUserItems() {
+    readUserItems();
+    if (!itemsQuery)
+      return;
     std::erase_if(strings, [&](const StringItem &string) {
       return userItemOverlapping(string.address, string.length + string.unit);
     });
@@ -5231,16 +5243,137 @@ bool Listing::functionRenamed(std::uint64_t address) {
   return true;
 }
 
+bool Listing::dataRenamed(std::uint64_t address, const std::string &name) {
+  auto &d = *impl_;
+  if (!d.built || d.namesStale || d.functionAtEntry(address) ||
+      d.slots.contains(address) || d.switchTables.contains(address))
+    return false;
+  // A name among code stops what decoding finds there.
+  const int region = d.regionIndex(address);
+  if (region < 0 || d.regions[region].exec)
+    return false;
+  const auto shown = d.dataNames.find(address);
+  const auto string =
+      std::lower_bound(d.strings.begin(), d.strings.end(), address,
+                       [](const StringItem &item, std::uint64_t value) {
+                         return item.address < value;
+                       });
+  const bool isString = string != d.strings.end() && string->address == address;
+  if (shown == d.dataNames.end()) {
+    // A string takes its name in turn with the others, and a name ends an
+    // automatic item it falls inside.
+    if (isString)
+      return false;
+    if (const auto *item = d.autoDataAt(address);
+        item && item->first != address)
+      return false;
+  } else {
+    // A name given up goes to whatever else would hold it.
+    const auto &old = shown->second;
+    const auto held = d.listingNames.find(old);
+    if (held == d.listingNames.end() || held->second != address ||
+        d.blockedDisplayNames.contains(old))
+      return false;
+    for (const auto &[other, spelled] : d.dataNames)
+      if (other != address && spelled == old)
+        return false;
+    for (const auto &[other, table] : d.switchTables)
+      if (d.switchTableName(table) == old)
+        return false;
+  }
+  d.cache.invalidate();
+  const auto previous = d.generation++;
+  ++d.functionNameGenerations;
+  if (shown == d.dataNames.end()) {
+    for (auto *bounds : {&d.namedData, &d.dataBounds}) {
+      const auto at = std::lower_bound(bounds->begin(), bounds->end(), address);
+      if (at == bounds->end() || *at != address)
+        bounds->insert(at, address);
+    }
+    d.dataSizes.try_emplace(address, 0);
+    d.alignCache.clear();
+    d.looseGapCache.clear();
+    d.dataNames.emplace(address, name);
+  } else {
+    d.listingNames.erase(shown->second);
+    shown->second = name;
+    if (isString)
+      string->name = name;
+  }
+  d.listingNames.emplace(name, address);
+  // What holds functions alone.
+  if (d.functionsByNameGeneration == previous)
+    d.functionsByNameGeneration = d.generation;
+  if (d.ownFunctionCountGeneration == previous)
+    d.ownFunctionCountGeneration = d.generation;
+  if (d.functionRowsGeneration == previous)
+    d.functionRowsGeneration = d.generation;
+  return true;
+}
+
+bool Listing::dataItemsChanged() {
+  auto &d = *impl_;
+  if (!d.built || d.namesStale)
+    return false;
+  const auto before = std::move(d.userItems);
+  d.readUserItems();
+  const auto same = [](const auto &a, const auto &b) {
+    return a.size == b.size && a.kind == b.kind && a.encoding == b.encoding &&
+           a.type == b.type && a.elementSize == b.elementSize &&
+           a.count == b.count && a.alignment == b.alignment;
+  };
+  // What it holds of the bytes a row covers on either side: a string of the
+  // scan, which comes and goes with the items over it, code, or a function.
+  const auto plain = [&](std::uint64_t address, const auto &item) {
+    if (item.kind == StringItemKind || item.kind == CodeItemKind)
+      return false;
+    const int region = d.regionIndex(address);
+    if (region < 0 || d.regions[region].exec)
+      return false;
+    return std::none_of(d.scannedStrings.begin(), d.scannedStrings.end(),
+                        [&](const auto &string) {
+                          return string.address < address + item.size &&
+                                 address < string.address + string.length +
+                                               string.unit;
+                        });
+  };
+  for (const auto &[address, item] : before)
+    if (const auto now = d.userItems.find(address);
+        (now == d.userItems.end() || !same(item, now->second)) &&
+        !plain(address, item))
+      return false;
+  for (const auto &[address, item] : d.userItems)
+    if (const auto was = before.find(address);
+        (was == before.end() || !same(item, was->second)) &&
+        !plain(address, item))
+      return false;
+  // What else reads the items reads them as it lays a line out; only code's
+  // gaps keep where they stop.
+  d.cache.invalidate();
+  const auto previous = d.generation++;
+  ++d.functionNameGenerations;
+  if (d.functionsByNameGeneration == previous)
+    d.functionsByNameGeneration = d.generation;
+  if (d.ownFunctionCountGeneration == previous)
+    d.ownFunctionCountGeneration = d.generation;
+  if (d.functionRowsGeneration == previous)
+    d.functionRowsGeneration = d.generation;
+  return true;
+}
+
 void Listing::declarationsChanged() {
   auto &d = *impl_;
   d.cache.invalidate();
   d.decoded.clear();
   d.decodedOrder.clear();
-  // The table holds nothing a declaration changes.
-  const bool rows = d.functionRowsGeneration == d.generation;
-  ++d.generation;
-  if (rows)
+  // The table holds nothing a declaration changes, and names stand.
+  const auto previous = d.generation++;
+  if (d.functionRowsGeneration == previous)
     d.functionRowsGeneration = d.generation;
+  if (d.functionsByNameGeneration == previous)
+    d.functionsByNameGeneration = d.generation;
+  if (d.ownFunctionCountGeneration == previous)
+    d.ownFunctionCountGeneration = d.generation;
 }
 
 void Listing::functionNamesChanged() {
@@ -6232,9 +6365,14 @@ Json Listing::names() {
                        {"kind", function.thunk     ? "thunk"
                                 : function.library ? "library"
                                                    : "function"}});
+  std::vector<std::pair<std::uint64_t, const std::string *>> data;
+  data.reserve(d.dataNames.size());
   for (const auto &[address, name] : d.dataNames)
+    data.emplace_back(address, &name);
+  std::sort(data.begin(), data.end());
+  for (const auto &[address, name] : data)
     items.push_back(
-        {{"name", name}, {"address", hexAddress(address)}, {"kind", "data"}});
+        {{"name", *name}, {"address", hexAddress(address)}, {"kind", "data"}});
   for (const auto &[address, slot] : d.slots)
     items.push_back({{"name", slot.label},
                      {"address", hexAddress(address)},

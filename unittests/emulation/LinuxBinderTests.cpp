@@ -421,6 +421,54 @@ TEST_P(LinuxBinder, StrongObjectsPreserveIdentityAcrossRepliesAndReturnHome) {
   EXPECT_FALSE(S->BinderNodes.contains(0x10203040));
 }
 
+TEST_P(LinuxBinder, LooperReadinessMatchesActualProcessAndPrivateWork) {
+  const auto Server = open(), Client = open();
+  ASSERT_TRUE(map(Server, 4096));
+  ASSERT_TRUE(map(Client, 4096));
+  ASSERT_EQ(call(ServiceKind::Ioctl, Server, 0x40046207), 0u);
+  auto S = Kernel->binderConnection(Server);
+  auto C = Kernel->binderConnection(Client);
+  linux_model::ThreadContext Sender, OtherSender, Receiver, OtherReceiver;
+  Sender.ID = 101;
+  OtherSender.ID = 102;
+  Receiver.ID = 201;
+  OtherReceiver.ID = 202;
+  Task = &Sender;
+  ASSERT_EQ(tx(Client, false, 0), 0u);
+  EXPECT_FALSE(C->hasReadyBinderThreadWork(Sender.ID));
+  EXPECT_FALSE(S->hasReadyBinderThreadWork(Receiver.ID));
+  Task = &Receiver;
+  ASSERT_EQ(send(Server, 0x630c), 0u);
+  EXPECT_TRUE(S->hasReadyBinderThreadWork(Receiver.ID));
+  auto First = receive(Server);
+  ASSERT_EQ(First.size(), 72u);
+  EXPECT_EQ(llvm::support::endian::read32le(First.data() + 4), 0x80407202u);
+  Task = &OtherSender;
+  ASSERT_EQ(tx(Client, false, 0), 0u);
+  // The busy receiver cannot take the second request. Another entered looper
+  // can, without a private BR_REPLY to wake it.
+  EXPECT_FALSE(S->hasReadyBinderThreadWork(Receiver.ID));
+  EXPECT_FALSE(S->hasReadyBinderThreadWork(OtherReceiver.ID));
+  Task = &OtherReceiver;
+  ASSERT_EQ(send(Server, 0x630c), 0u);
+  EXPECT_TRUE(S->hasReadyBinderThreadWork(OtherReceiver.ID));
+  ASSERT_EQ(receive(Server).size(), 72u);
+  EXPECT_FALSE(S->hasReadyBinderThreadWork(OtherReceiver.ID));
+  ASSERT_EQ(tx(Server, true, 0), 0u);
+  EXPECT_TRUE(S->hasReadyBinderThreadWork(OtherReceiver.ID));
+  EXPECT_TRUE(C->hasReadyBinderThreadWork(OtherSender.ID));
+  EXPECT_FALSE(C->hasReadyBinderThreadWork(Sender.ID));
+  auto Acknowledged = receive(Server);
+  ASSERT_EQ(Acknowledged.size(), 8u);
+  EXPECT_EQ(llvm::support::endian::read32le(Acknowledged.data() + 4), 0x7206u);
+  Task = &OtherSender;
+  ASSERT_EQ(receive(Client).size(), 76u);
+  Task = &Receiver;
+  ASSERT_EQ(tx(Server, true, 0), 0u);
+  Task = &Sender;
+  ASSERT_EQ(receive(Client).size(), 76u);
+}
+
 TEST_P(LinuxBinder, RepeatedExportKeepsPendingNodeWorkOnItsFirstOwnerThread) {
   const auto Server = open(), Client = open();
   ASSERT_TRUE(map(Server, 4096));

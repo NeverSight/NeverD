@@ -606,14 +606,16 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
   // neither accumulation nor product matching depends on iteration order.
 
   llvm::DenseMap<uint32_t, TruthTable> Cache;
-  auto tableOf = [&](SymRef F) -> std::optional<TruthTable> {
+  // Each caller consumes the table before the next cache insertion, so no
+  // reference survives DenseMap growth. Wide tables need no per-hit copy.
+  auto tableOf = [&](SymRef F) -> const TruthTable * {
     auto It = Cache.find(F.index());
     if (It != Cache.end())
-      return It->second;
+      return &It->second;
     std::optional<TruthTable> Table = bitwiseTable(Ctx, F, AtomIds);
-    if (Table)
-      Cache.try_emplace(F.index(), *Table);
-    return Table;
+    if (!Table)
+      return nullptr;
+    return &Cache.try_emplace(F.index(), std::move(*Table)).first->second;
   };
 
   // A failed expansion discards the entire form. Check the combined cost of
@@ -652,7 +654,7 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
       llvm::SmallVector<MintermIndex, 8> Low, High;
       uint64_t DiagonalBits = ~uint64_t(0);
       for (SymRef Factor : Term.Factors) {
-        std::optional<TruthTable> Table = tableOf(Factor);
+        const TruthTable *Table = tableOf(Factor);
         if (!Table) {
           Budget.consume(Pending);
           return std::nullopt;
@@ -756,7 +758,7 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
 
     Selected.clear();
     for (SymRef Factor : Term.Factors) {
-      std::optional<TruthTable> Table = tableOf(Factor);
+      const TruthTable *Table = tableOf(Factor);
       if (!Table)
         return std::nullopt;
       Selected.push_back(selectedMinterms(*Table));
@@ -801,8 +803,9 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
       return std::nullopt;
     }
     forEachMonomial(Selected, Budget, [&](const Monomial &Key) {
-      auto It = Form.Higher.try_emplace(Key, llvm::APInt(Width, 0)).first;
-      It->second += Term.Coeff;
+      auto [It, Inserted] = Form.Higher.try_emplace(Key, Term.Coeff);
+      if (!Inserted)
+        It->second += Term.Coeff;
       return true;
     });
     if (Budget.exhausted())

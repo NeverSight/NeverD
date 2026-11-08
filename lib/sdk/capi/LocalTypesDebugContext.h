@@ -236,11 +236,11 @@ public:
   /// prototype a function's name binds, which a declaration hides
   /// (importPrototypeArguments).
   bool takeDeclarations(std::map<va_t, std::string> Next);
-  /// Defines the types \p Library has past those of this context's copy, as a
-  /// context made of \p Library does, and what was read through this context
-  /// stays.  Those types are new, and nothing it has read names them
-  /// (Session::takeUnreadTypes).
-  void takeNewTypes(const types::TypeLibrary &Library);
+  /// Defines the types \p Names of \p Library, as a context made of \p Library
+  /// does, and what was read through this context stays.  Those types are new,
+  /// and nothing it has read names them (Session::takeUnreadTypes).
+  void takeNewTypes(const types::TypeLibrary &Library,
+                    llvm::ArrayRef<std::string> Names);
 
   /// Notes in \p Reads each function whose declaration is asked for, declared
   /// or not.  \p Reads outlives this.

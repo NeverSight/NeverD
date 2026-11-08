@@ -753,21 +753,9 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
   if (Hint.ReturnType->Kind == NdTypeKind::Struct) {
     const auto &Return = Hint.ReturnLocation;
     if (Return.Kind == SourceABICarrierKind::IndirectResultPointer) {
-      const auto Members = sourceAggregateMembers(Hint.ReturnType);
-      const bool ThreeSignedWords =
-          Members.size() == 3 && Hint.ReturnType->Size == 24 &&
-          std::all_of(Members.begin(), Members.end(), [](const auto &M) {
-            return M.Type->Kind == NdTypeKind::Int && M.Type->Size == 8 &&
-                   M.Type->IsSigned;
-          });
-      const bool IndirectDoubles =
-          (Members.size() == 6 || Members.size() == 16) &&
-          Hint.ReturnType->Size == Members.size() * 8 &&
-          Members.front().Type->Kind == NdTypeKind::Float &&
-          Members.front().Type->Size == 8;
       if (Hint.Architecture != Arch::AArch64 ||
           Hint.Convention != SourceFunctionTypeHint::ConventionKind::C ||
-          (!ThreeSignedWords && !IndirectDoubles) ||
+          !indirectDarwinRecord(Hint.ReturnType) ||
           Return.RegisterOffset != TRI.indirectResultReg() ||
           Return.EntryStackOffset != 0 || Return.ValueBytes != 8 ||
           Return.ExtendTo32Bits || !Hint.ReturnComponents.empty())
@@ -1085,9 +1073,14 @@ bool assignDarwinSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,
   Hint.ReturnComponents.clear();
   if (Records && Hint.ReturnType->Kind == NdTypeKind::Struct) {
     const auto Members = sourceAggregateMembers(Hint.ReturnType);
-    if (Members.empty())
+    if (Architecture == Arch::AArch64 &&
+        Convention == SourceFunctionTypeHint::ConventionKind::C &&
+        indirectDarwinRecord(Hint.ReturnType)) {
+      Hint.ReturnLocation = {SourceABICarrierKind::IndirectResultPointer,
+                             TRI.indirectResultReg(), 0, TRI.PointerSize};
+    } else if (Members.empty()) {
       return fail(Diagnostic, "Unsupported Darwin record return ABI");
-    if (swiftBooleanTupleResult(Hint.ReturnType, Members)) {
+    } else if (swiftBooleanTupleResult(Hint.ReturnType, Members)) {
       if (Convention != SourceFunctionTypeHint::ConventionKind::Swift)
         return fail(Diagnostic, "Boolean tuple result requires the Swift ABI");
       Hint.ReturnComponents = swiftBooleanTupleResultLocations(Architecture);
@@ -1097,11 +1090,6 @@ bool assignDarwinSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,
       Hint.ReturnComponents = mixedSwiftResultLocations(Architecture);
     } else {
       const bool Floating = Members.front().Type->Kind == NdTypeKind::Float;
-      const bool IndirectDoubles =
-          Floating && (Members.size() == 6 || Members.size() == 16) &&
-          Hint.ReturnType->Size == Members.size() * 8 &&
-          Members.front().Type->Size == 8 && Architecture == Arch::AArch64 &&
-          Convention == SourceFunctionTypeHint::ConventionKind::C;
       const bool SwiftFourWordReturn =
           !Floating &&
           Convention == SourceFunctionTypeHint::ConventionKind::Swift &&
@@ -1109,17 +1097,10 @@ bool assignDarwinSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,
       const auto Bank = Floating              ? TRI.FPParamRegs
                         : SwiftFourWordReturn ? TRI.IntParamRegs
                                               : TRI.IntReturnRegs;
-      const bool Indirect =
-          IndirectDoubles ||
-          (!Floating && Members.size() == 3 && Architecture == Arch::AArch64 &&
-           Convention == SourceFunctionTypeHint::ConventionKind::C);
-      if (Indirect)
-        Hint.ReturnLocation = {SourceABICarrierKind::IndirectResultPointer,
-                               TRI.indirectResultReg(), 0, 8};
-      else if ((Floating && Architecture != Arch::AArch64 && !PointTransform) ||
-               Members.size() > Bank.size())
+      if ((Floating && Architecture != Arch::AArch64 && !PointTransform) ||
+          Members.size() > Bank.size())
         return fail(Diagnostic, "Unsupported Darwin record return ABI");
-      for (size_t I = 0; !Indirect && I < Members.size(); ++I)
+      for (size_t I = 0; I < Members.size(); ++I)
         Hint.ReturnComponents.push_back(
             {Floating ? SourceABICarrierKind::FloatingRegister
                       : SourceABICarrierKind::IntegerRegister,

@@ -109,6 +109,52 @@ TEST(TypeParse, IdentifierRunsKeepBoundariesAndSourcePositions) {
   }
 }
 
+TEST(TypeParse, ARefusedDeclarationLeavesTheLibraryAsItWas) {
+  TypeLibrary Library(DataModel::LP64);
+  ASSERT_TRUE(parseCTypes("struct KEPT { int value; }; int first(int a); "
+                          "typedef int NUMBER;",
+                          Library)
+                  .ok());
+  const auto Before = Library.types();
+  const LocalType *Kept = Library.find("KEPT");
+  std::vector<std::string> Order;
+  for (const auto &Entry : Library.prototypes())
+    Order.push_back(Entry.first().str());
+  // It redefines one, adds types and functions, and then fails.
+  EXPECT_FALSE(parseCTypes("struct KEPT { long other; }; struct NEW { int a; };"
+                           "int second(void); int third(void); struct",
+                           Library)
+                   .ok());
+  EXPECT_EQ(Library.types(), Before);
+  EXPECT_EQ(Library.find("KEPT"), Kept);
+  EXPECT_EQ(Library.find("NEW"), nullptr);
+  EXPECT_EQ(Library.findPrototype("second"), nullptr);
+  std::vector<std::string> After;
+  for (const auto &Entry : Library.prototypes())
+    After.push_back(Entry.first().str());
+  EXPECT_EQ(After, Order);
+  // What it took in the end reads as if nothing had been tried: the ordinal
+  // the refused one held goes to the next.
+  ASSERT_TRUE(parseCTypes("struct NEXT { int a; };", Library).ok());
+  EXPECT_EQ(Library.find("NEXT")->Ordinal, Before.size() + 1);
+  EXPECT_EQ(Library.size(), Before.size() + 1);
+  // A type removed in a trial that fails comes back under its ordinal.
+  {
+    TypeLibrary::Trial Trial(Library);
+    EXPECT_TRUE(Library.remove("KEPT"));
+    EXPECT_EQ(Library.find("KEPT"), nullptr);
+  }
+  EXPECT_EQ(Library.find("KEPT"), Kept);
+  EXPECT_EQ(Library.byOrdinal(Kept->Ordinal), Kept);
+  // And what a kept one changed stays.
+  {
+    TypeLibrary::Trial Trial(Library);
+    EXPECT_TRUE(Library.remove("NEXT"));
+    Trial.keep();
+  }
+  EXPECT_EQ(Library.find("NEXT"), nullptr);
+}
+
 TEST(TypeParse, StorageQualifiersKeepDeclaratorsAndKeywordBoundaries) {
   for (DataModel Model :
        {DataModel::ILP32, DataModel::LP64, DataModel::LLP64}) {
@@ -720,6 +766,75 @@ TEST(TypeParse, MicrosoftSizedByteKeepsPlainCharIdentity) {
           parsed(renderTypes(Library, {}, Options), {}, Model);
       Check(Again);
     }
+  }
+}
+
+TEST(TypeParse, NestedDeclaratorsKeepBindingWidthsAndQualifiers) {
+  for (DataModel Model :
+       {DataModel::ILP32, DataModel::LP64, DataModel::LLP64}) {
+    SCOPED_TRACE(int(Model));
+    const TypeLibrary Library = parsed(R"(
+      typedef int * const (__stdcall *Factory[3])(short, char * const *);
+      typedef long (*(*Chooser)(int (*)(char)))[2][5];
+      typedef int (* __ptr32 Narrow[2])(short);
+      typedef int (* __ptr64 Wide[2])(short);
+    )",
+                                       {}, Model);
+    const auto Check = [&](const TypeLibrary &Types) {
+      const auto *Factory = Types.find("Factory");
+      ASSERT_NE(Factory, nullptr);
+      ASSERT_NE(Factory->Target, nullptr);
+      const auto &Array = *Factory->Target;
+      ASSERT_EQ(Array.Kind, TypeExprKind::Array);
+      EXPECT_EQ(Array.Count, 3u);
+      ASSERT_NE(Array.Element, nullptr);
+      ASSERT_EQ(Array.Element->Kind, TypeExprKind::Pointer);
+      ASSERT_NE(Array.Element->Element, nullptr);
+      const auto &Call = Array.Element->Element->Function;
+      ASSERT_NE(Call, nullptr);
+      EXPECT_EQ(Call->Convention, Model == DataModel::ILP32
+                                      ? CallingConvention::Stdcall
+                                      : CallingConvention::Unspecified);
+      ASSERT_NE(Call->Return, nullptr);
+      EXPECT_EQ(Call->Return->Kind, TypeExprKind::Pointer);
+      EXPECT_TRUE(Call->Return->Const);
+      ASSERT_NE(Call->Return->Element, nullptr);
+      EXPECT_EQ(Call->Return->Element->TheBuiltin, Builtin::Int);
+      ASSERT_EQ(Call->Params.size(), 2u);
+      EXPECT_EQ(Call->Params[0].Type->TheBuiltin, Builtin::Short);
+      const auto &Parameter = Call->Params[1].Type;
+      ASSERT_EQ(Parameter->Kind, TypeExprKind::Pointer);
+      EXPECT_FALSE(Parameter->Const);
+      ASSERT_NE(Parameter->Element, nullptr);
+      EXPECT_EQ(Parameter->Element->Kind, TypeExprKind::Pointer);
+      EXPECT_TRUE(Parameter->Element->Const);
+
+      const auto *Chooser = Types.find("Chooser");
+      ASSERT_NE(Chooser, nullptr);
+      ASSERT_TRUE(Chooser->Target && Chooser->Target->Element);
+      const auto &Select = Chooser->Target->Element->Function;
+      ASSERT_NE(Select, nullptr);
+      ASSERT_TRUE(Select->Return && Select->Return->Element);
+      ASSERT_EQ(Select->Return->Kind, TypeExprKind::Pointer);
+      const auto &Matrix = Select->Return->Element;
+      EXPECT_EQ(Matrix->Count, 2u);
+      ASSERT_NE(Matrix->Element, nullptr);
+      EXPECT_EQ(Matrix->Element->Count, 5u);
+      EXPECT_EQ(Types.sizeOf(*Matrix), 10 * Types.builtinBytes(Builtin::Long));
+      ASSERT_EQ(Select->Params.size(), 1u);
+      ASSERT_TRUE(Select->Params[0].Type && Select->Params[0].Type->Element);
+      const auto &Callback = Select->Params[0].Type->Element->Function;
+      ASSERT_NE(Callback, nullptr);
+      ASSERT_EQ(Callback->Params.size(), 1u);
+      EXPECT_EQ(Callback->Params[0].Type->TheBuiltin, Builtin::Char);
+
+      EXPECT_EQ(Types.sizeOf(*makeNamed("Factory", TypeKind::Typedef)),
+                3 * pointerBytes(Model));
+      EXPECT_EQ(Types.sizeOf(*makeNamed("Narrow", TypeKind::Typedef)), 8u);
+      EXPECT_EQ(Types.sizeOf(*makeNamed("Wide", TypeKind::Typedef)), 16u);
+    };
+    Check(Library);
+    Check(parsed(renderTypes(Library, {}, {}), {}, Model));
   }
 }
 

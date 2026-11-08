@@ -64,6 +64,12 @@ inline constexpr std::size_t kEngineMaxCodePageBytes =
 /// working set of functions, bounded by retained bytes as well as count.
 inline constexpr std::size_t kEngineMaxNamedViewCacheBytes = 256 * 1024 * 1024;
 inline constexpr std::size_t kEngineMaxNamedViews = 512;
+/// Edits a kept document can be behind and still read for what reached it, and
+/// the bytes of its text it reads for names they took and gave up that are not
+/// one identifier (an identifier is looked up among those its text spells);
+/// past either, building it again from what is kept costs less.
+inline constexpr std::size_t kEngineMaxViewEdits = 128;
+inline constexpr std::size_t kEngineMaxViewEditTextBytes = 4 * 1024 * 1024;
 inline constexpr std::size_t kEngineMaxEncodedPages = 64;
 inline constexpr std::size_t kEngineMaxEncodedBytes = 8 * 1024 * 1024;
 /// Compact bytes of engine pages a replica keeps of the functions it renders
@@ -82,6 +88,13 @@ inline constexpr std::int64_t kListingFactsRefreshMilliseconds = 1000;
 /// longer in proportion.  A function renders in about 0.1 ms per byte, so the
 /// reader has paused for some fifty times what such a wait should cost.
 inline constexpr std::int64_t kRenderAheadHoldOffMilliseconds = 2000;
+/// Likewise each step of the summary job, a few functions' summaries or their
+/// callees read ahead (tens of milliseconds, at most about one), and the solve
+/// that ends it (about a second on a Windows kernel).  A reader who keeps going
+/// through functions renders them without the job, which goes on when they
+/// pause.
+inline constexpr std::int64_t kSummaryStepHoldOffMilliseconds = 1000;
+inline constexpr std::int64_t kSummarySolveHoldOffMilliseconds = 2000;
 inline constexpr std::int64_t kRenderAheadHoldOffMillisecondsPerKilobyte = 5000;
 /// The largest function the job renders.  A render cannot be interrupted, and
 /// a request that comes during one waits for it.  On a Windows kernel a

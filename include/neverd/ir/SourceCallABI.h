@@ -20,6 +20,9 @@ bool assignAnalystCallABI(SourceCallTypeHint &Hint, Arch Architecture,
 /// An indirect aggregate transports its existing address, without an extra
 /// load/copy, alignment promise, lifetime change or aliasing attribute.
 TypeRef sourceCallParameterType(const SourceParameterTypeHint &Parameter);
+/// A source-only declaration supplies an ABI, not permission to replace the
+/// original x8 storage with a temporary logical result.
+bool sourceCallRetainsResultStorage(const SourceCallTypeHint &Hint);
 /// System V x64 variadic floating operands also need the original AL vector
 /// count; an XMM value alone does not prove that the callee saved that bank.
 bool sourceCallVariadicStateDefined(const LowFunc &Function,

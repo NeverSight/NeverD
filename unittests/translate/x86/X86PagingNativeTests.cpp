@@ -10,6 +10,8 @@
 
 #include "../../HostCpu.h"
 #include "X86LegacyBMITestEncoding.h"
+#include "X86LegacyDescriptorTestEncoding.h"
+#include "X86LegacySystemSelectorTestEncoding.h"
 #include "X86PortDevice.h"
 #include "gtest/gtest.h"
 
@@ -656,6 +658,7 @@ TEST_P(X86PagingNativeTest, OriginalInstructionsMatchPagingFaultsAndCommit) {
 #include "X86LegacyDebugNativeTests.inc"
 #include "X86LegacyDebugRegisterNativeTests.inc"
 #include "X86LegacyDecimalNativeTests.inc"
+#include "X86LegacyDescriptorNativeTests.inc"
 #include "X86LegacyDivisionNativeTests.inc"
 #include "X86LegacyDoubleShiftNativeTests.inc"
 #include "X86LegacyEventNativeTests.inc"
@@ -677,6 +680,7 @@ TEST_P(X86PagingNativeTest, OriginalInstructionsMatchPagingFaultsAndCommit) {
 #include "X86LegacyStatusNativeTests.inc"
 #include "X86LegacyStepNativeTests.inc"
 #include "X86LegacyStringNativeTests.inc"
+#include "X86LegacySystemSelectorNativeTests.inc"
 #include "X86LegacyWatchpointNativeTests.inc"
 
 INSTANTIATE_TEST_SUITE_P(PagingModes, X86PagingNativeTest,

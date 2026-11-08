@@ -4059,6 +4059,57 @@ checks, including 133,760 original state/debug comparisons across both SDKs
 and qualified P/E cores. The other machine-state gaps and LLVM release gate
 remain open.
 
+### Protected descriptor queries
+
+Original protected LAR, LSL, VERR and VERW now use the scalar executor and
+shared generated-C dispatcher. The [descriptor query contract](x86-legacy-segments.md#protected-descriptor-queries)
+owns GDT/LDT visibility, read-only implicit table accesses, exact selector-word
+loads and staged GPR/ZF completion. Null, out-of-bounds and invisible selectors
+clear ZF; descriptor page/backing failures retain their separate fault/retry
+behavior. Queries neither require presence nor set descriptor accessed bits.
+LAR's undefined limit nibble requires the explicit `TableImage` CPU profile.
+
+LLVM already lowered these native instructions, but NeverC registered 28
+descriptor/machine builtin forms only for x64. Those forms now belong to its
+shared i386/x64 registry; seven wide forms remain x64-only. The explicit full
+LLVM backend emits i386 machine code directly, without an assembly fallback.
+The compiler qualification executes unprivileged queries in real i386 and x64
+processes; privileged operations have code-generation coverage.
+
+The [descriptor evidence](evidence/x86-legacy-descriptors-2026-11-07.json)
+records 1,154 passing checks and 198,400 original state/debug comparisons
+across both SDKs and qualified P/E cores. After dev integration, another 566
+checks pass, including the complete kernel-PDB type round-trip and generated
+C suites; the paging binaries remain byte-identical. NeverC contributes
+10,560 native query comparisons and 252 code-generation form checks.
+LDTR/TR loads use the separate system-selector owner below; task switching,
+real/VM86 and other unbound system-state domains remain open.
+No LLVM implementation change or new release is needed
+for this batch; the global release gate remains open and the pin stays r6.
+
+### Protected system selectors
+
+Original SLDT/STR/LLDT/LTR now use the shared protected scalar execution and
+generated-C dispatch. The [system-selector contract](x86-legacy-segments.md#protected-system-selectors)
+owns CPL/UMIP priority, selector-word accesses, GDT type/presence checks,
+LDTR/TR cache publication and the complete-descriptor LTR busy update. The
+loaded TR is visible to following event delivery; loading it does not perform
+a task switch. Protected LLDT retains its descriptor flag nibble, including
+the otherwise unused L bit, without making following instructions reject
+their own valid cache state. Native LLVM and NeverC forms already exist.
+The [system-selector evidence](evidence/x86-legacy-system-selectors-2026-11-07.json)
+records 1,250 passing checks with no skips, including 83,592 original state
+comparisons, 2,304 original data-debug comparisons and 48 new generated-C
+cases across both SDKs and qualified P/E cores. A descriptor aliasing its own
+legacy PTE exposed a stale TR limit: cache publication now uses the busy
+operation's updated image, retaining the page-walk dirty bit. The failing
+observation and its repaired regressions are both retained.
+After the SBF-only dev merge, another 260 SDK/source checks pass and both
+paging executables remain byte-identical; those receipts retain their actual
+integration commit.
+Task switching and the other machine-state domains still gate the final LLVM
+release; the production pin remains r6.
+
 ### Protected ARPL conditional completion
 
 The protected ordinary-RAM executor now runs original ARPL register and memory

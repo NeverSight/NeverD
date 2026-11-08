@@ -224,22 +224,34 @@ TypeExprRef qualified(TypeExprRef Type, bool Const, bool Volatile) {
   return Copy;
 }
 
-TypeLibrary::TypeLibrary(const TypeLibrary &Other)
-    : Model(Other.Model), ABI(Other.ABI), Prototypes(Other.Prototypes),
-      ByName(Other.ByName) {
-  ByOrdinal.reserve(Other.ByOrdinal.size());
-  for (const auto &Type : Other.ByOrdinal)
-    ByOrdinal.push_back(Type ? std::make_unique<LocalType>(*Type) : nullptr);
+TypeLibrary::Trial::Trial(TypeLibrary &Library) : Library(Library) {
+  assert(!Library.Tried && "one trial at a time");
+  Library.Tried = this;
 }
 
-TypeLibrary &TypeLibrary::operator=(const TypeLibrary &Other) {
-  if (this != &Other)
-    *this = TypeLibrary(Other);
-  return *this;
+TypeLibrary::Trial::~Trial() {
+  Library.Tried = nullptr;
+  if (Kept)
+    return;
+  if (PrototypesBefore)
+    Library.Prototypes = std::move(*PrototypesBefore);
+  for (auto Change = Changed.rbegin(); Change != Changed.rend(); ++Change) {
+    auto &Held = Library.ByOrdinal[Change->first - 1];
+    if (!Change->second) {
+      Library.ByName.erase(Held->Name);
+      Library.ByOrdinal.pop_back();
+      continue;
+    }
+    if (!Held)
+      Library.ByName[Change->second->Name] = Change->first;
+    Held = std::move(Change->second);
+  }
 }
 
 void TypeLibrary::definePrototype(std::string Name,
                                   std::shared_ptr<const FunctionDef> Function) {
+  if (Tried && !Tried->PrototypesBefore)
+    Tried->PrototypesBefore = Prototypes;
   Prototypes[Name] = std::move(Function);
 }
 
@@ -252,13 +264,18 @@ uint32_t TypeLibrary::define(LocalType Type) {
   auto Found = ByName.find(Type.Name);
   if (Found != ByName.end()) {
     Type.Ordinal = Found->second;
-    ByOrdinal[Found->second - 1] = std::make_unique<LocalType>(std::move(Type));
+    auto &Held = ByOrdinal[Found->second - 1];
+    if (Tried)
+      Tried->Changed.emplace_back(Found->second, Held);
+    Held = std::make_shared<const LocalType>(std::move(Type));
     return Found->second;
   }
   const auto Ordinal = static_cast<uint32_t>(ByOrdinal.size() + 1);
   Type.Ordinal = Ordinal;
+  if (Tried)
+    Tried->Changed.emplace_back(Ordinal, nullptr);
   ByName[Type.Name] = Ordinal;
-  ByOrdinal.push_back(std::make_unique<LocalType>(std::move(Type)));
+  ByOrdinal.push_back(std::make_shared<const LocalType>(std::move(Type)));
   return Ordinal;
 }
 
@@ -266,7 +283,10 @@ bool TypeLibrary::remove(llvm::StringRef Name) {
   auto Found = ByName.find(Name);
   if (Found == ByName.end())
     return false;
-  ByOrdinal[Found->second - 1].reset();
+  auto &Held = ByOrdinal[Found->second - 1];
+  if (Tried)
+    Tried->Changed.emplace_back(Found->second, Held);
+  Held.reset();
   ByName.erase(Found);
   return true;
 }

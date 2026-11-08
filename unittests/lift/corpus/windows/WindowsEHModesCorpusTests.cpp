@@ -293,19 +293,26 @@ TEST(WindowsEHModesCorpus, DecompilesRegistrationCalleeProofCycles) {
         << toString(OutputOrErr.takeError());
     EXPECT_TRUE(StringRef(*OutputOrErr).contains("encoding=x86-"));
     EXPECT_FALSE(guardedAnalysisBlocks(*OutputOrErr).empty());
-    if (Input == Inputs.front())
-      for (const char *Address : {"402812", "40288B", "402953", "4065C3"}) {
+    if (Input == Inputs.front()) {
+      // The normal path calls a `__finally` past the registers its handler
+      // reloads: code of the function that holds the body, not functions.
+      for (const char *Address : {"402812", "40288B", "402953"}) {
         SCOPED_TRACE(Address);
-        const std::string Marker =
-            std::string("/* neverd.entry: 0x") + Address + " */";
-        const size_t Start = OutputOrErr->find(Marker);
-        ASSERT_NE(Start, std::string::npos);
-        StringRef Body =
-            StringRef(*OutputOrErr).drop_front(Start + Marker.size());
-        Body = Body.take_front(Body.find("/* neverd.entry:"));
-        EXPECT_TRUE(Body.contains(std::string("int32_t sub_") + Address + "("));
-        EXPECT_FALSE(Body.contains("unknown return value"));
+        const StringRef Output(*OutputOrErr);
+        EXPECT_FALSE(Output.contains(std::string("/* neverd.entry: 0x") +
+                                     Address + " */"));
+        EXPECT_FALSE(Output.contains(std::string("sub_") + Address + "("));
       }
+      const std::string Marker = "/* neverd.entry: 0x4065C3 */";
+      const size_t Start = OutputOrErr->find(Marker);
+      ASSERT_NE(Start, std::string::npos);
+      StringRef Body =
+          StringRef(*OutputOrErr).drop_front(Start + Marker.size());
+      Body = Body.take_front(Body.find("/* neverd.entry:"));
+      // `memset` where the Windows prototypes are in the build.
+      EXPECT_TRUE(Body.contains("_4065C3("));
+      EXPECT_FALSE(Body.contains("unknown return value"));
+    }
   }
 }
 
@@ -897,7 +904,9 @@ TEST(WindowsEHModesCorpus, EveryFinallyClauseOfXcpt4HoldsItsHandlerAsCode) {
   ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
       << toString(ExpectationsOrErr.takeError());
   for (const ArtifactSelector &Selector :
-       {ArtifactSelector{"xcpt4", "msvc", "x86_64", "fh4", true, "o2"},
+       {ArtifactSelector{"xcpt4", "msvc", "x86", "native", true, "o2"},
+        ArtifactSelector{"xcpt4", "msvc", "x86", "native", true, "o0"},
+        ArtifactSelector{"xcpt4", "msvc", "x86_64", "fh4", true, "o2"},
         ArtifactSelector{"xcpt4", "msvc", "x86_64", "fh4", true, "o0"},
         ArtifactSelector{"xcpt4", "msvc", "arm", "native", true, "o2"},
         ArtifactSelector{"xcpt4", "msvc", "arm", "native", true, "o0"},
@@ -928,6 +937,19 @@ TEST(WindowsEHModesCorpus, EveryFinallyClauseOfXcpt4HoldsItsHandlerAsCode) {
     EXPECT_GT(Clauses, 20u);
     // A handler listed in an unstructured region's comment is as far from code.
     EXPECT_FALSE(Source.contains("* finally: action @"));
+    // Nothing in the program loops doing nothing: a jump that lands on itself
+    // has lost the code it was to run.
+    const StringRef Loop = "while (1) {";
+    for (size_t At = Source.find(Loop); At != StringRef::npos;
+         At = Source.find(Loop, At + 1))
+      EXPECT_FALSE(Source.substr(At + Loop.size()).ltrim().starts_with("}"))
+          << Source.substr(At, 80).str();
+    // A filter's calls are the filter: the test prints as it runs them.
+    if (Selector.Architecture == "x86") {
+      EXPECT_TRUE(Source.contains("\"filter 1...\""));
+      // The startup code's arm runs on past its first branch.
+      EXPECT_TRUE(Source.contains("_c_exit()"));
+    }
     const StringRef Entry = "/* neverd.entry: ";
     for (size_t At = Source.find(Entry); At != StringRef::npos;) {
       const size_t Next = Source.find(Entry, At + 1);

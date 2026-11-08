@@ -93,7 +93,9 @@ inline constexpr unsigned kMinResidueDecisionWidePairingBits = 6;
 inline constexpr std::size_t kResidueDecisionPartialPairingDivisor = 2;
 inline constexpr unsigned kResidueDecisionPolynomialFirstBits = 6;
 inline constexpr std::size_t kResidueDecisionPolynomialFirstNodes = 512;
-inline constexpr std::size_t kResidueDecisionMinMapBuckets = 64;
+// LLVM dense maps start with 64 buckets. Residue caches prepay each complete
+// bucket allocation before insertion, including this initial table.
+inline constexpr std::size_t kResidueMinDenseMapBuckets = 64;
 inline constexpr unsigned kMaxResidueDecisionSynthesisInputs = 6;
 inline constexpr unsigned kMaxUnconditionedResidueDecisionBits = 3;
 inline constexpr std::size_t kMaxResidueDecisionPolynomialTerms = 256;
@@ -110,6 +112,9 @@ inline constexpr std::size_t kMaxResidueWitnessWork = 1024;
 /// allocation.  Clamping a larger request rather than refusing it keeps a
 /// caller that asked for more from losing the optimality it could have had.
 inline constexpr unsigned kSymBitwiseMaxTabulatedAtoms = 4;
+// Packing care/value pairs for six inputs needs a 4096-bit membership table.
+// Larger prime-cover rounds keep the sparse hash-based representation.
+inline constexpr unsigned kSymBitwiseDirectImplicantAtoms = 6;
 
 // lib/symbolic/mba/SymMBA.cpp
 // This runs only on a completed answer. A local builder rule would change

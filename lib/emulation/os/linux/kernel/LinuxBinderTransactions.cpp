@@ -257,17 +257,11 @@ LinuxFiles::binderReadWork(LinuxDeviceState &Device, uint64_t Address,
                            uint64_t Size, ProcessResult &Result) {
   using Outcome = std::optional<uint64_t>;
   auto &Own = Device.BinderThreadWork[CurrentTask];
-  if (!Own.empty() && !Device.hasReadyBinderThreadWork(CurrentTask))
+  if (!Device.hasReadyBinderThreadWork(CurrentTask))
     return Outcome(0);
   // Kernel eligibility is fixed before draining this read. A thread with
   // private work cannot also take process work in that same read operation.
-  const bool ProcessEligible = Own.empty() &&
-                               !Device.BinderOutgoing.contains(CurrentTask) &&
-                               !Device.BinderIncoming.contains(CurrentTask) &&
-                               (Device.BinderLoopers.at(CurrentTask) & 3);
   auto &Queue = !Own.empty() ? Own : Device.BinderProcessWork;
-  if (Queue.empty() || (Own.empty() && !ProcessEligible))
-    return Outcome(0);
   if (!Memory)
     return unsupported(Result,
                        "Binder delivery requires mapped buffer ownership");

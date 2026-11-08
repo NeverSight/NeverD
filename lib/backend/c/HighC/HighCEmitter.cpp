@@ -38,6 +38,8 @@
 #include "neverd/backend/c/render/AArch64/AArch64PAuthLoadC.h"
 #include "neverd/backend/c/render/AArch64/AArch64WritebackMemoryC.h"
 #include "neverd/backend/c/render/X86/X86SegmentAsm.h"
+#include "neverd/backend/llvm/AArch64/AArch64SourceResultCall.h"
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/high/CxxObjectActions.h"
 #include "neverd/ir/high/HighSourceFlow.h"
 #include "neverd/ir/high/HighSwiftErrorProjection.h"
@@ -1756,6 +1758,7 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
   bool NeedsBool = false;
   bool HasFloatingArithmetic = false;
   bool NeedsAArch64RawCall = false;
+  bool NeedsAArch64ResultStorageCall = false;
   const auto CheckType = [&](const TypeRef &Type) {
     TypeRef Current = Type;
     while (Current && Current->Kind == NdTypeKind::Ptr)
@@ -1777,10 +1780,15 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
         Expr->Op == NdOp::FLOAT_ADD || Expr->Op == NdOp::FLOAT_SUB ||
         Expr->Op == NdOp::FLOAT_MULT || Expr->Op == NdOp::FLOAT_DIV;
     if (Expr->Kind == ExprKind::Call) {
+      NeedsAArch64ResultStorageCall |=
+          Expr->SourceCallHint &&
+          sourceCallRetainsResultStorage(*Expr->SourceCallHint);
       NeedsAArch64RawCall |=
-          Expr->IsIndirectCall &&
-          (!Expr->IndirectTarget ||
-           Expr->IndirectTarget->IntrinsicId != Intrinsic::A64_AuthBranch);
+          (Expr->SourceCallHint &&
+           sourceCallRetainsResultStorage(*Expr->SourceCallHint)) ||
+          (Expr->IsIndirectCall &&
+           (!Expr->IndirectTarget ||
+            Expr->IndirectTarget->IntrinsicId != Intrinsic::A64_AuthBranch));
       CheckType(knownCallReturnType(*Expr));
       if (Expr->SourceCallHint) {
         CheckType(Expr->SourceCallHint->Signature.ReturnType);
@@ -1819,6 +1827,8 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
     c_float::writeContractionPolicy(OS);
   if (Opts.TheArch == Arch::AArch64 && NeedsAArch64RawCall)
     OS << kAArch64PAuthCRawCallHeader;
+  if (NeedsAArch64ResultStorageCall)
+    OS << kResultCallCompilerContract;
   if (!Opts.EmitIncludes) {
     WriteInt128Spelling();
     if (NeedsBlockObject)
@@ -2298,7 +2308,8 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
     // `AbnormalTermination()` in a projected `__finally` is an <excpt.h>
     // intrinsic, included wherever an SEH region is printed; declaring it
     // would conflict with that header.
-    if (Name == "AbnormalTermination")
+    if (Name == "AbnormalTermination" || Name == "GetExceptionCode" ||
+        Name == "GetExceptionInformation")
       continue;
 
     std::string CleanName = Name;

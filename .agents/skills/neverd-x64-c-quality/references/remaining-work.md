@@ -1,5 +1,27 @@
 # Remaining x64 C-quality work
 
+The independent `X86LocalApicFixed` component now owns enabled fixed-source
+priority, nonconsuming selection, exact acknowledgment and ordinary EOI bank
+transitions. Compile-only assertions cover every fixed vector and priority
+class, duplicate requests, nested service and external EOI obligations.
+`scripts/qemu_save_lapic.py` transports captured banks through that same C++
+validator, with an explicit delivery-profile binding and all other event
+evidence retained. It adds no default decompiler or instruction-loop work.
+This closes the local fixed-bank model and transport; arrivals, source
+arbitration, TPR/CR8/device wiring, complete environment import and both
+ordinary registry inputs remain open.
+
+Offline event-boundary interpretation now distinguishes QEMU post-load
+exception reinjection from pending payloads and stale error codes. The
+separate `scripts/qemu_save_events.py` retains NMI phases/masking, injected
+software interrupts, halted/MP/crash/triple-fault state and APIC bit banks.
+Unsaved instruction shadows stay unknown unless explicitly bound; no event is
+selected, acknowledged or delivered. Shared CPU/APIC/subsection checks keep
+existing V6/control exports consistent, with no ordinary-decompiler or
+instruction-loop work. This closes event evidence interpretation only:
+arbitration, delivery composition, complete environment import and both
+ordinary registry inputs remain open.
+
 Offline paging/debug bank projection now emits the existing C++ state types
 through `scripts/qemu_save_controls.py`. It shares CPU/version/PC validation
 with the V6 bank adapter, retains saved controls and requires separate bindings

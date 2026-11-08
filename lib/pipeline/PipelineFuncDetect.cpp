@@ -248,6 +248,12 @@ Pipeline::detectFunctions(const BinaryImage &Img, Decoder &Dec,
   } else {
     FuncDetector Detector;
     FuncEntries = Detector.detect(Img, Dec);
+    if (const auto Interiors =
+            pipeline_detail::analysisFinallyInteriors(Img, Opts);
+        !Interiors.empty())
+      std::erase_if(FuncEntries, [&](const auto &Entry) {
+        return Interiors.count(Entry.first) != 0;
+      });
     LLVM_DEBUG(llvm::dbgs() << "pipeline: detected " << FuncEntries.size()
                             << " functions\n");
   }

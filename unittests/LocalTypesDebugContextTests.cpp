@@ -112,12 +112,12 @@ TEST(LocalTypesDebugContext, TakesDeclarationsAndNewTypesInPlace) {
                                  "Second; };",
                                  Grown)
                   .ok());
-  Context.takeNewTypes(Grown);
+  Context.takeNewTypes(Grown, {"Later"});
   EXPECT_EQ(Context.library().size(), Grown.size());
   EXPECT_TRUE(Context.takeDeclarations({{Entry, "struct Later *Entry(void)"}}));
   EXPECT_EQ(ReturnBytes(Entry), 8u);
   // A second take of what it holds adds nothing.
-  Context.takeNewTypes(Grown);
+  Context.takeNewTypes(Grown, {"Later"});
   EXPECT_EQ(Context.library().size(), Grown.size());
 }
 
@@ -143,7 +143,7 @@ TEST(LocalTypesDebugContext, NewTypesReadAsInAContextMadeOfThem) {
   ASSERT_TRUE(
       types::parseCTypes("struct Scope__Item { long long Value; };", *Grown)
           .ok());
-  Context.takeNewTypes(*Grown);
+  Context.takeNewTypes(*Grown, {"Scope__Item"});
   NamesOnlyDebugContext FreshNames;
   sdk::LocalTypesDebugContext Fresh(FreshNames, Grown);
   for (const std::vector<TypeRef> &Unit :

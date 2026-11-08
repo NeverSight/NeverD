@@ -15,6 +15,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/ir/high/HighIRPrint.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
@@ -409,7 +410,16 @@ TEST(ImmutableNativeCalls, GeneratedSourceMatchesOriginalARM64CallsAtO0AndO2) {
       Functions.emplace(Function.Entry, &Function);
     auto Bound =
         bindObjCSourceReferences(*F.high(), F.Image, nullptr, &Functions);
-    ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+    ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation << [&] {
+      std::string Source;
+      llvm::raw_string_ostream OS(Source);
+      for (const auto &S : F.high()->Body)
+        printHighStatementRows(
+            S, 0, [&](llvm::StringRef Row, const HighStmt *) { OS << Row; });
+      for (const auto &D : Bound.Diagnostics.Items)
+        OS << D.StatementAddress << ' ' << D.RelatedAddress << '\n';
+      return Source;
+    }();
     elimUnreadPrivateFrameStores(Bound.Function, F.Image.Arch);
     const auto Audit = std::find_if(
         F.Result.FunctionAudits.begin(), F.Result.FunctionAudits.end(),
@@ -3429,7 +3439,7 @@ TEST(ObjCSourceBindings, SwiftWitnessUndefRequiresExactDescriptorContract) {
     const auto Descriptor =
         MainActor        ? "_$sScMScAsMc"
         : StringProtocol ? "_$sSSSysMc"
-        : Range ? "_$sSnyxGSXsMc"
+        : Range          ? "_$sSnyxGSXsMc"
                 : "_$s7Combine19CurrentValueSubjectCyxq_GAA9PublisherAAMc";
     const auto Module =
         MainActor ? "/usr/lib/swift/libswift_Concurrency.dylib"
@@ -3475,7 +3485,7 @@ struct GenericWitnessFixture : SwiftWitnessAccessorFixture {
     const auto Descriptor =
         MainActor        ? "_$sScMScAsMc"
         : StringProtocol ? "_$sSSSysMc"
-        : Range ? "_$sSnyxGSXsMc"
+        : Range          ? "_$sSnyxGSXsMc"
                 : "_$s7Combine19CurrentValueSubjectCyxq_GAA9PublisherAAMc";
     Image.ImportStorageSlots.erase(ConformanceSlot);
     Image.ImportPtrSlots[ConformanceSlot] = Descriptor;

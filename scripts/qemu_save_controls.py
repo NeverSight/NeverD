@@ -12,20 +12,8 @@ import json
 from pathlib import Path
 import sys
 
-from scripts.qemu_save_snapshot import QemuSaveSnapshot, SnapshotError, _integer, _json_state, _object
-from scripts.qemu_save_x64 import PROFILE, _array, _captured_cpu, _uint
-
-
-def _subsection(record: dict, name: str) -> dict | None:
-    sections = _object(record["fields"].get("subsections", {}), "CPU subsections")
-    versions = record["subsection_versions"]
-    if (name in sections) != (name in versions):
-        raise SnapshotError(f"{name} subsection/version mismatch")
-    if name not in sections:
-        return None
-    if versions[name] != 1:
-        raise SnapshotError(f"control profile requires {name} subsection v1")
-    return _object(sections[name], name)
+from scripts.qemu_save_snapshot import QemuSaveSnapshot, SnapshotError, _integer, _json_state
+from scripts.qemu_save_x64 import PROFILE, _array, _captured_cpu, _subsection, _uint
 
 
 @dataclass

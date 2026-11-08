@@ -1363,3 +1363,121 @@ compiler and executable hashes, generated sources, libraries and raw results.
 Global completion remains open, including other unbound state banks, task
 switching, real/VM86 and general compatibility execution, software SMM/SGX
 transitions and external-event producers. LLVM release and pin remain at r6.
+
+## Protected descriptor queries
+
+`DescriptorQueries = X86LegacyDescriptorProfile::TableImage` enables LAR,
+LSL, VERR and VERW under `OrderedRAM`. Code and address widths are independent;
+66 changes LAR/LSL destination width and 67 changes memory addressing. The
+selector is always a word, including the low word of a register source. LAR
+and LSL preserve the full destination on failure; a successful word result
+preserves its high half. Only ZF changes. Register aliases capture the selector
+before publishing a destination.
+
+Null selectors, an unusable LDT, descriptors extending past the table limit,
+invisible privilege levels and disallowed types clear ZF. Conforming code
+bypasses the CPL/RPL versus DPL comparison. LAR admits data/code, LDT, 16/32-bit
+TSS and call/task gates; LSL excludes gates. VERR admits readable code/data,
+while VERW admits only writable data. Presence does not affect these queries,
+and no query sets the descriptor accessed bit or changes a segment cache.
+
+The explicit source word uses ordinary segment, page and alignment checks.
+Table reads are implicit supervisor accesses and remain faultable, even when
+a later type/privilege check would fail. An architectural fault enters the
+shared event owner with the original PC/GPR/flags; a physical backing stop
+preserves them for retry. Completed page-walk effects remain observable.
+Generated protected C uses the same dispatcher and attempt budget, including
+original handler repair followed by IRET and retry.
+
+The table profile returns the original descriptor limit nibble in LAR bits
+19:16. Intel defines these four result bits as undefined; this profile is an
+explicit CPU choice rather than an ISA-wide claim. LSL computes the granular
+byte limit before destination truncation. Prefix and exact-extent admission
+remains strict: LOCK/F2/F3, duplicate prefixes, truncated and trailing bytes
+are rejected before fetch. Unbound query profiles also refuse before fetch.
+
+The architectural reference is LAR, LSL and VERR/VERW in
+[Intel SDM Volume 2](https://cdrdv2-public.intel.com/789581/325383-sdm-vol-2abcd.pdf).
+This query owner does not load LDTR/TR or implement task switching. Existing
+native LLVM descriptor interfaces are independent of this owned-RAM execution
+path. NeverC now exposes 28 previously x64-only descriptor/machine builtin
+forms to i386 source through the common registry, preserving seven x64-only
+wide forms. Its explicit full LLVM backend emits the original instructions;
+privileged forms are checked for code generation, and unprivileged queries
+also execute in original Linux i386/x64 processes at O0/O2.
+
+The [November 7 descriptor qualification](evidence/x86-legacy-descriptors-2026-11-07.json)
+records 1,154 passing checks, 196,608 original descriptor-state comparisons,
+1,792 original data-debug comparisons and 48 new compiled-source cases across
+both SDKs and qualified P/E cores. Another 566 post-integration checks pass,
+including both complete type suites with the existing kernel PDB and all four
+generated-C suites. The paging executables remain byte-identical. Initial
+type runs without the PDB binding are retained as superseded records, with
+their skips excluded from the final counts. NeverC separately passes 10,560
+native query comparisons and 252 code-generation form checks across P/E cores.
+The archive binds actual source commits, compiler/dependency inputs, binaries,
+generated sources/libraries and raw result hashes. The LLVM release gate
+remains open and the pin remains r6.
+
+## Protected system selectors
+
+`SystemSelectors = X86LegacySystemSelectorProfile::ExclusiveTable` binds
+SLDT, STR, LLDT and LTR to one CPU with exclusive ordinary RAM. This is not a
+synchronization primitive for concurrent CPUs, DMA or MMIO. SLDT/STR write
+only a selector word to memory; word registers preserve their upper half and
+dword registers zero-extend. This is the modern target choice for SLDT's
+historically undefined upper register half. Stores do not read either table,
+and CR4.UMIP with CPL greater than zero raises #GP(0) before operand access.
+
+LLDT/LTR require CPL0 before reading their source word; operand-size prefixes
+do not widen the selector. GDT-only selection, table bounds, type and presence
+checks retain their architectural fault classes and order. Null LLDT preserves
+the supplied selector and marks the cache unusable; its hidden fields remain
+opaque. Null LTR faults. LLDT admits LDT descriptors; LTR admits available
+16/32-bit TSS descriptors and refuses busy TSS descriptors. Neither instruction
+checks DPL against RPL, accesses the TSS contents or changes EFLAGS.
+
+Implicit descriptor reads use supervisor access and 32-bit linear wrap. LTR
+then prepares a whole-qword write, reads the retained physical fragments and
+sets only the busy bit. The loaded TR cache uses that updated image, including
+page-walk A/D bits when the descriptor aliases its own page table.
+Read, write-protection and physical backing failures
+remain distinct. The original core/cache state is retained until the complete
+operation succeeds, while completed page-walk effects remain observable.
+TR publication precedes post-instruction debug/event delivery. Loading TR does
+not perform task switching or set CR0.TS. LLDT retains the raw descriptor flag
+nibble; its unused L bit must not cause the next instruction's state validation
+to reject that cache.
+
+The shared scalar owner provides segment/address decoding, exact instruction
+extent, alignment, data-watchpoint observation and generated-C dispatch. Missing
+profiles or malformed prefixes fail before fetch. A guest page-fault handler
+can make the original table writable, return with IRET and retry LTR without
+publishing a premature cache or busy bit. The generated-C tests also consume a
+newly loaded LDT through LSL and read back both system selectors.
+
+The references are SLDT, STR, LLDT and LTR in
+[Intel SDM Volume 2](https://cdrdv2-public.intel.com/789581/325383-sdm-vol-2abcd.pdf).
+The existing LLVM intrinsic lowering and NeverC's common i386/x64 registry
+already emit these native forms. This owned protected-state work does not
+advance the LLVM release or r6 pin. Other state banks, task switching,
+real/VM86/general compatibility execution, software SMM/SGX transitions and
+unowned external-event producers remain outside the completed contract.
+
+The [November 7 system-selector qualification](evidence/x86-legacy-system-selectors-2026-11-07.json)
+records 1,250 passing checks, no failures and no skips. Both SDKs and qualified
+P/E cores contribute 83,592 original state comparisons, 2,304 original
+data-debug comparisons and 48 new generated-C cases. The complete source
+suites retain 560 compiled libraries; shared scalar/segment/query and ordinary
+system-state regressions also pass. In the legacy self-referential PTE case,
+the original CPU loaded TR.limit `0x1067`; the initial implementation retained
+the earlier `0x1027`. The repaired owner caches the image after the busy write's
+translation has set D. Raw failed/fixed results, actual clean source commits,
+dependency inputs, executable/compiler hashes and generated artifacts remain
+in the evidence archive. The PAE matrices do not certify a high-physical-address
+self-referential descriptor/PTE case.
+
+After the later SBF-only dev integration, both rebuilt SDKs pass another 260
+source and ordinary system-state checks, retaining 280 additional compiled
+libraries. The paging executables remain byte-identical to the complete
+qualification. The evidence records this integration commit separately.

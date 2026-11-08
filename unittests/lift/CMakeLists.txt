@@ -2286,6 +2286,7 @@ add_neverd_unittest(NeverDSEHTerminationHandlerTests
   eh/ARMSEHFinallyBodyTests.cpp
   eh/ARM64SEHLocalUnwindTests.cpp
   eh/ARMSEHLocalUnwindTests.cpp
+  eh/X86SEHDisplayTests.cpp
   LINK_COMPONENTS Pipeline BackendC
 )
 target_include_directories(NeverDSEHTerminationHandlerTests PRIVATE

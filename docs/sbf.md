@@ -314,18 +314,36 @@ JSON exact-or-empty. Exhaustion returns `{"nodes":[],"edges":[]}` and sets
 ### Conditional CALLX caller evidence
 
 `recoverCallXContexts` analyzes complete recognized function CFGs with
-context-keyed function summaries. Keys project away entry registers that every
+context-keyed function summaries. The loader-entry root uses the shared initial
+ABI register facts, before unrelated CFG predecessors join the block. Its own
+solver still joins real loop backedges. Ordinary calls to that same slot keep
+their caller inputs; other recognized roots receive no loader-input assumption.
+An equality edge can also refine an unknown full-width load to the compared
+constant in the current memory facts. The load must be in the same block,
+with an unchanged address base and no intervening store or call. Exact 64-bit
+register copies can carry the loaded value to the comparison. Narrow loads
+do not establish the remaining bytes. This is a path condition, not a guest
+write or a non-aliasing assumption; scanning uses the existing visit budget.
+Keys project away entry registers that every
 path overwrites before reading, using a conservative interprocedural dependency
 fixed point. Its continuation dependencies stop at matched nonreturning calls;
 callee dependencies still participate. Scratch inputs are omitted only when the
-callee neither reads nor writes memory. Exact keys retain full-word scratch
+callee neither reads nor writes memory. A callee consisting only of `EXIT`
+does not require incoming r0 when its scalar return is unused. Backward input
+dependencies and concrete summary reuse share that decision; the call and its
+register transfer still execute. Live returns and callees with additional
+instructions retain their input dependencies. Exact keys retain full-word scratch
 facts, pointer kinds and memory-coordinate lanes. Once all four specialization
 slots are occupied, a completed summary can also be reused when its conservative
 read footprint proves that every changed word is unread. Loads, syscall read
 windows and nested callees share the footprint's address/alias rules. Unknown
-reads require matching the complete snapshot. Reads in a structurally
-nonreturning subtree without any reachable CALLX cannot affect return or target
-evidence; the whole-CFG fixed points establish both conditions. Reuse applies
+reads require matching the complete snapshot. Register and memory reads in a
+structurally nonreturning subtree guard reuse only when that subtree retains
+proven target evidence, including a target instantiated on its incoming edge.
+A returning child always keeps its input guards; reusing unknown evidence never
+creates a proof for different inputs. Register guards are relaxed only at the
+four-variant limit and for a stronger return or field result, preserving the
+existing exploration order while space remains. Reuse applies
 may-writes to the actual caller memory and restores proven output fields, never
 the old unread snapshot. The footprint and temporary comparisons consume the
 existing retained-state budget. Arguments and memory enter nested direct calls and
@@ -551,6 +569,38 @@ definitions meet at CFG joins, and a definition-only change requeues the block
 even when its register values and origins stay equal. Final replay records the
 conditional reuse mask after those definitions converge.
 
+Schema 15 retains a bounded tag/payload relation for a common store-tag/exit
+tail. Every reachable return must use that tail, and every converged
+predecessor must supply a literal tag; equal tags meet their fields. The
+existing four-alternative bound applies. A caller substitutes output fields
+and capture identities against its own entry before loading the returned tag.
+Its branch can then restore only fields common to all selected cases. Exact
+64-bit register copies retain the tag relation; redefinition, potentially
+aliasing tag writes, calls, memory copies and loop backedges discard it. Payload
+writes invalidate affected conditional fields through the existing typed-memory
+owner. Unknown tag cases and other return shapes retain the ordinary
+conservative join. Conditional state and comparison workspace consume the
+existing retained-state budget. `output_tagged_cases` and
+`instantiated_tagged_output_cases` report these partitions and their call
+bindings; they do not establish whole-program closure or allocation freshness.
+Selecting tag cases also refines payloads loaded before the comparison, including
+their exact 64-bit register copies. The shared unchanged-load proof is limited
+to the same basic block and stops at stores or calls. Redefined carriers,
+changed load bases and narrow loads cannot acquire a full-word fact from later
+memory. A refined value rebuilds its origin instead of retaining payload
+alternatives from the unselected cases.
+Each tag case also retains its capture definition history, even when writes
+have made an object's fields unknown. Selecting a tag can remove a newly
+imported name from caller history only when no selected case introduced it.
+Names already present before the call remain defined. Equal-tag predecessors
+union this history. A caller join that disagrees on which names were newly
+imported discards definition refinement and keeps the existing field partition.
+Private callee objects
+are not named merely to export their history. These histories and their binding
+workspace consume the existing retained-state budget.
+Tagged-return summaries are excluded from opaque-result and returned-object
+result coalescing; those equality checks do not compare conditional fields.
+
 Scratch inputs must agree whenever that context reads input memory or may
 change caller memory. A context with no memory dependency and preserved memory
 keeps the current caller's scratch at the return boundary. Its cached snapshot
@@ -565,6 +615,9 @@ keys and static dependency masks remain intact. Schema 5 additionally records
 generalized unknown. Cached input fields outside the conditional mask are not
 additional requirements on such an edge. The four-summary and resource budgets
 remain unchanged.
+The conditional register mask reports the guards on retained return/target
+evidence. Before capacity, the solver can still explore stricter register keys
+to seek additional proofs in a previously unproven nonreturning subtree.
 
 Branch bounds also constrain live copies with the same singleton entry-relative
 origin or immutable capture. Identical numeric ranges alone do not establish
@@ -790,6 +843,22 @@ identifies these edges; an acyclic jump to a smaller instruction slot retains
 its capture. Coordinate configuration is shared
 across the analysis and charged at its owner.
 
+A forward join keeps captured identities while its complete disjunction fits
+the four-alternative limit. On overflow, register and stored-value joins can
+replace captures with their proven unsigned bounds and retry the same limit.
+For example, null, a small sentinel and three captures sharing one heap bound
+retain three numeric alternatives. This preserves disjoint-write information
+without equating objects or raising the limit. A capture already covered by a
+numeric alternative adds no new possibility, including on later arrivals at
+that join. Unknown or wrapping capture
+bounds cannot supply that widening; frame coordinates remain typed, and an
+overflowing literal-only disjunction still becomes unknown.
+Memory-access offsets use the shared modular address transfer, both for a
+local store and when collecting, binding or applying a callee's write summary.
+A heap interval shifted across address zero can still exclude a caller frame.
+The resulting footprint supplies no scalar value or cell identity; ordinary
+register arithmetic keeps its nonwrapping range rules.
+
 Generic byte-copy postconditions snapshot entry fields after invalidating all
 preceding may-writes. They retain complete typed cells, meet at joins and disappear
 when a later destination write may overlap. Only generic summaries retain a
@@ -877,12 +946,38 @@ writes cannot restore a saved byte from an older invocation. The separate
 untyped descriptor byte buffer also remains projected out. Consuming caller
 narrow fields inside another function needs read-dependent input summaries and
 remains an explicit precision gap; this round does not claim that capability.
-Concrete functions whose
-completed generic summary contains CALLX sites process CFG joins in reverse
-postorder. Generic summaries and concrete forwarding wrappers retain FIFO
-scheduling, including the order in which they request the four cached
-specializations.
-The value lattice, all-path joins and resource limits remain unchanged.
+
+Within one invocation, CFG joins retain a captured object's fields when its
+capture was introduced on only one incoming path. The pointer and its fields
+remain conditional on that path. A capture already introduced on both paths
+still loses a field if either path forgets it. Possible-alias writes
+continue to invalidate every overlapping capture, and backedges still widen
+capture identities. This is not an allocation freshness or non-aliasing proof.
+The local definition history is charged to retained state and is reset at a
+summary entry; incoming captures keep the ordinary must-fact join there.
+A newly captured scalar return of exactly `null` or one nonzero captured value
+can discard that capture's definition on the null branch. This relation follows
+exact register copies, ends at calls, backedges and incompatible joins, and
+does not apply to a capture already introduced on an earlier path or iteration.
+It does not assume that allocation succeeds.
+A full-width store of a bounded heap value that feeds the return can introduce
+one immutable identity for that value. Predecessor ranges join before the store,
+so separate bounds checks and covered literals do not split its identity.
+A null/non-null return join retains those stores conditionally; a forwarding
+summary can carry
+them to a caller that tests the returned value. The non-null branch restores
+only surviving stored-identity facts. Overlapping and unknown writes invalidate
+them through the typed-memory owner; calls and backedges discard the older
+relation. Equal numerical ranges of separately obtained pointers never equate
+their identities. Conditional stores and temporary composition use the existing
+retained-state budget, with no allocation-success or non-overlap assumption.
+
+Functions without calls process CFG joins in reverse postorder, so acyclic
+predecessors merge before naming a stored return value. Concrete functions whose
+completed generic summary contains CALLX sites also use reverse postorder.
+Other generic summaries and concrete forwarding wrappers retain FIFO scheduling,
+including the order in which they request the four cached specializations.
+The scalar value lattice and resource limits remain unchanged.
 A concrete summary's proven target can also retain an independently instantiated
 generic input-expression witness when their actual target addresses agree.
 That witness does not change the concrete summary's return or memory transfer.

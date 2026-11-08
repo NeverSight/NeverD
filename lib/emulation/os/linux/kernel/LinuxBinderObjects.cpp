@@ -75,9 +75,15 @@ bool LinuxDeviceState::hasReadyBinderThreadWork(uint32_t Thread) const {
   auto I = BinderThreadWork.find(Thread);
   // Exported-node work and synchronous completion are deferred until a
   // reply/error activates the thread queue (binder_thread.process_todo).
-  return I != BinderThreadWork.end() &&
-         std::any_of(I->second.begin(), I->second.end(),
-                     [](const auto &Work) { return !Work.Node; });
+  if (I != BinderThreadWork.end() && !I->second.empty())
+    return std::any_of(I->second.begin(), I->second.end(),
+                       [](const auto &Work) { return !Work.Node; });
+  // Only an idle looper can receive process work. Native waits and driver
+  // reads share this decision, including private-work priority for this read.
+  const auto Looper = BinderLoopers.find(Thread);
+  return Looper != BinderLoopers.end() && (Looper->second & 3) &&
+         !BinderOutgoing.contains(Thread) && !BinderIncoming.contains(Thread) &&
+         !BinderProcessWork.empty();
 }
 
 LinuxDeviceState::~LinuxDeviceState() {

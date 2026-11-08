@@ -20,6 +20,7 @@
 
 #include "CxxCleanupScope.h"
 #include "HighCFSimplifyDetail.h"
+#include "X86/X86RegistrationDisplay.h"
 #include "X86/X86RegistrationFilter.h"
 #include "X86/X86RegistrationTry.h"
 
@@ -1860,6 +1861,14 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
   if (!Func.ExceptionMetadata)
     return;
   const ExceptionFunction &EH = *Func.ExceptionMetadata;
+  // An x86 frame in the decompile view says by its try levels what each scope
+  // guards.
+  if (const auto Display = RegistrationDisplay::build(Med, EH)) {
+    Display->structure(Func);
+    reportUnprotectedGuardedCode(Func, "after-exceptions");
+    invertSkipGotos(Func);
+    return;
+  }
   if (!Func.SEHLocalUnwindExits.empty()) {
     std::map<va_t, va_t> Exits;
     for (const MedSEHLocalUnwindExit &Exit : Func.SEHLocalUnwindExits)

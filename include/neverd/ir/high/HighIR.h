@@ -282,7 +282,9 @@ struct HighEHClause {
       CxxUnwindAction::ActionKind::None;
   int32_t UnwindObjectOffset = 0;
   std::vector<va_t> ContinuationVAs;
-  /// What a `__finally` clause's statements stand for (SEHFinallyBodies.h).
+  /// What a `__finally` clause's statements stand for (SEHFinallyBodies.h).  An
+  /// x86 `__except` clause in the decompile view says WholeBody as well: it
+  /// holds its handler, even when that leaves no statement.
   enum class FinallyBody : uint8_t {
     /// Nothing is known of the termination handler but its address.
     OutOfLine,
@@ -297,8 +299,10 @@ struct HighEHClause {
   FinallyBody FinallyKind = FinallyBody::OutOfLine;
   /// x86 registration EH: the value the filter thunk at \ref FilterOrActionVA
   /// returns, an expression in the function's frame, when the thunk computes
-  /// nothing else.  The thunk runs inside the exception dispatch rather than
-  /// at the try, so no HighIR pass reads or rewrites this as code of the body.
+  /// nothing else.  In the decompile view it can also say what the filter does
+  /// first, as the left side of a comma (`BinOp NOP`), and choose by `BinOp
+  /// SELECT`.  The thunk runs inside the exception dispatch rather than at the
+  /// try, so no HighIR pass reads or rewrites this as code of the body.
   ExprPtr FilterValue;
 
   /// Itanium: position of this clause's action in the call-site action chain,

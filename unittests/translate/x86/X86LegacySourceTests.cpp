@@ -11,6 +11,8 @@
 #include "../../lift/NeverDLiftFixture.h"
 #include "X86BranchDebugOracle.h"
 #include "X86LegacyBMITestEncoding.h"
+#include "X86LegacyDescriptorTestEncoding.h"
+#include "X86LegacySystemSelectorTestEncoding.h"
 #include "X86LegacyTestState.h"
 #include "X86PortDevice.h"
 
@@ -502,6 +504,170 @@ TEST_P(X86LegacySourceTest, IntegerFeatureBindingsSelectAliasesOrGuestUD) {
   EXPECT_EQ(S.Core.GPR[0], 0x98765432u);
   EXPECT_EQ(Bound.lastResult().DeliveredVector, 6);
   EXPECT_EQ(get(S.Core.GPR[4]), 0x1004u);
+}
+
+TEST_P(X86LegacySourceTest,
+       SystemSelectorsPublishCachesForFollowingInstructions) {
+  for (bool Code32 : {false, true})
+    for (bool Operand32 : {false, true}) {
+      resetLegacyState();
+      S.Core.CPL = 0;
+      S.Core.Segments[1] = {0, UINT32_MAX, 8,
+                            uint16_t(Code32 ? 0xc09b : 0x809b), false};
+      S.Core.Segments[2] = {0, UINT32_MAX, 16, 0xc093, false};
+      O.SystemSelectors = X86LegacySystemSelectorProfile::ExclusiveTable;
+      O.DescriptorQueries = X86LegacyDescriptorProfile::TableImage;
+      S.Core.GPR[0] = S.Core.GPR[2] = 0x89abcdef;
+      S.Core.GPR[3] = 7;
+      S.Core.GPR[6] = 64;
+      S.Core.GPR[7] = 59;
+      put(0x7040, 0x0020820090000007ULL);
+      put(0x7038, 0x0000890058000067ULL);
+      put(0x9000, 0x0000f20000001234ULL);
+      std::vector<SourceUnit> Units;
+      uint32_t PC = 0x1000;
+      for (const auto &[Form, Register] :
+           {std::pair{2u, 6}, {0u, 0}, {3u, 7}, {1u, 2}}) {
+        auto Bytes = test::legacySystemSelectorBytes(Form, Code32, Operand32,
+                                                     true, Register);
+        Units.push_back({PC, Code32 ? 32u : 16u, Bytes});
+        PC += Bytes.size();
+      }
+      auto Query =
+          test::legacyDescriptorBytes(1, Code32, Operand32, true, 1, 3);
+      Units.push_back({PC, Code32 ? 32u : 16u, Query});
+      Driver Run = nullptr;
+      ASSERT_NO_FATAL_FAILURE(compile(Units, Run));
+      X86LegacySourceExecution Context(S, *M, O);
+      uint64_t Budget = Units.size();
+      ASSERT_EQ(Run(&Context, &Budget), 258u) << Context.lastError().str();
+      EXPECT_EQ(Budget, 0u);
+      EXPECT_EQ(S.EIP, PC + Query.size());
+      EXPECT_EQ(S.Core.GPR[0], Operand32 ? 64u : 0x89ab0040u);
+      EXPECT_EQ(S.Core.GPR[2], Operand32 ? 59u : 0x89ab003bu);
+      EXPECT_EQ(S.Core.GPR[1], 0x1234u);
+      EXPECT_EQ(S.TR.Base, 0x5800u);
+      EXPECT_EQ(S.TR.Attributes, 0x8b);
+      EXPECT_EQ(S.Core.LDTR.Base, 0x9000u);
+      EXPECT_EQ(get(0x7038, GuestScalarWidth::I64), 0x00008b0058000067ULL);
+    }
+}
+
+TEST_P(X86LegacySourceTest, SystemSelectorBindingRefusesBeforeAttemptOrFetch) {
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(compile({{0x1000, 32, {0x0f, 0, 0xde}}}, Run));
+  O.SystemSelectors.reset();
+  X86LegacySourceExecution Context(S, *M, O);
+  uint64_t Budget = 1;
+  EXPECT_EQ(Run(&Context, &Budget), 256u);
+  EXPECT_EQ(Budget, 1u);
+  EXPECT_EQ(get(0x11004), 0x1007u);
+}
+
+TEST_P(X86LegacySourceTest, SystemSelectorBusyWriteFaultRepairAndRetry) {
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(
+      compile({{0x1000, 32, {0x0f, 0, 0xde}},
+               {0x1003, 32, {0x90}},
+               {0x2000, 32, {0xc7, 0x05, 0x20, 0x10, 1, 0, 3, 0x80, 0, 0}},
+               {0x200a, 32, {0x83, 0xc4, 4}},
+               {0x200d, 32, {0xcf}}},
+              Run));
+  O.SystemSelectors = X86LegacySystemSelectorProfile::ExclusiveTable;
+  S.Core.CPL = 0;
+  S.Core.Segments[1] = {0, UINT32_MAX, 8, 0xc09b, false};
+  S.Core.Segments[2] = {0, UINT32_MAX, 16, 0xc093, false};
+  S.Core.GDTRLimit = 0x103f;
+  S.Core.GPR[6] = 0x103b;
+  put(0x8038, 0x0000890058000067ULL);
+  put(0x11020, 0x8001, GuestScalarWidth::I32);
+  X86LegacySourceExecution Context(S, *M, O);
+  uint64_t Budget = 1;
+  ASSERT_EQ(Run(&Context, &Budget), 1u) << Context.lastError().str();
+  EXPECT_EQ(Context.lastResult().DeliveredVector, 14);
+  EXPECT_EQ(S.TR.Selector, 40);
+  EXPECT_EQ(S.CR2, 0x8038u);
+  EXPECT_EQ(get(S.Core.GPR[4]), 3u);
+  Budget = 5;
+  ASSERT_EQ(Run(&Context, &Budget), 258u) << Context.lastError().str();
+  EXPECT_EQ(S.TR.Selector, 0x103b);
+  EXPECT_EQ(S.EIP, 0x1004u);
+  EXPECT_EQ(get(0x8038, GuestScalarWidth::I64), 0x00008b0058000067ULL);
+}
+
+TEST_P(X86LegacySourceTest, DescriptorQueriesWidthsLDTAndInvalidSelectors) {
+  for (bool Code32 : {false, true})
+    for (bool Operand32 : {false, true}) {
+      std::vector<SourceUnit> Units;
+      for (unsigned Form = 0; Form != 4; ++Form)
+        Units.push_back({0x1000 + Form * 16, Code32 ? 32u : 16u,
+                         test::legacyDescriptorBytes(Form, Code32, Operand32)});
+      Driver Run = nullptr;
+      ASSERT_NO_FATAL_FAILURE(compile(Units, Run));
+      for (unsigned Form = 0; Form != 4; ++Form)
+        for (unsigned Case = 0; Case != 3; ++Case) {
+          resetLegacyState();
+          install(Units);
+          O.DescriptorQueries = X86LegacyDescriptorProfile::TableImage;
+          S.Core.Segments[1].Attributes = Code32 ? 0xc0fb : 0x80fb;
+          S.EIP = Units[Form].Address;
+          S.EFlags = 0xed7;
+          S.Core.GPR[0] = 0x12345678;
+          S.Core.GPR[6] = Case == 0 ? 0xabcd003b : Case == 1 ? 7 : 0;
+          S.Core.LDTR = {0x8000, 7, 48, 0x82, false};
+          put(Case == 1 ? 0x8000 : 0x7038, 0x00da720000001234ULL);
+          X86LegacySourceExecution Context(S, *M, O);
+          uint64_t Budget = 1;
+          ASSERT_EQ(Run(&Context, &Budget), 258u) << Context.lastError().str();
+          const uint32_t Value = Form == 0 ? 0xda7200 : 0xa1234fff;
+          EXPECT_EQ(S.Core.GPR[0], Case == 2 || Form >= 2 ? 0x12345678
+                                   : Operand32 ? Value
+                                               : 0x12340000 | uint16_t(Value));
+          EXPECT_EQ(S.EFlags, Case == 2 ? 0xe97u : 0xed7u);
+        }
+    }
+}
+
+TEST_P(X86LegacySourceTest, DescriptorProfileRefusesBeforeAttemptOrFetch) {
+  const std::vector<SourceUnit> Units{{0x1000, 32, {0x0f, 2, 0xc6}}};
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(compile(Units, Run));
+  O.DescriptorQueries.reset();
+  X86LegacySourceExecution Context(S, *M, O);
+  uint64_t Budget = 1;
+  EXPECT_EQ(Run(&Context, &Budget), 256u);
+  EXPECT_EQ(Budget, 1u);
+  EXPECT_EQ(get(0x11004), 0x1007u);
+}
+
+TEST_P(X86LegacySourceTest,
+       DescriptorPageFaultRepairAndRetryThroughGeneratedC) {
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(
+      compile({{0x1000, 32, {0x0f, 3, 0xc6}},
+               {0x1003, 32, {0x90}},
+               {0x2000, 32, {0xc7, 0x05, 0x20, 0x10, 1, 0, 7, 0x80, 0, 0}},
+               {0x200a, 32, {0x83, 0xc4, 4}},
+               {0x200d, 32, {0xcf}}},
+              Run));
+  O.DescriptorQueries = X86LegacyDescriptorProfile::TableImage;
+  S.Core.GDTRLimit = 0x103f;
+  S.Core.GPR[6] = 0x103b;
+  S.Core.GPR[0] = 0x12345678;
+  put(0x8038, 0x00da720000001234ULL);
+  put(0x11020, 0, GuestScalarWidth::I32);
+  X86LegacySourceExecution Context(S, *M, O);
+  uint64_t Budget = 1;
+  ASSERT_EQ(Run(&Context, &Budget), 1u) << Context.lastError().str();
+  EXPECT_EQ(Context.lastResult().DeliveredVector, 14);
+  EXPECT_EQ(S.Core.GPR[0], 0x12345678u);
+  EXPECT_EQ(S.CR2, 0x8038u);
+  EXPECT_EQ(get(S.Core.GPR[4]), 0u);
+  Budget = 5;
+  ASSERT_EQ(Run(&Context, &Budget), 258u) << Context.lastError().str();
+  EXPECT_EQ(S.Core.GPR[0], 0xa1234fffu);
+  EXPECT_EQ(S.EIP, 0x1004u);
+  EXPECT_EQ(S.Core.CPL, 3);
 }
 
 TEST_P(X86LegacySourceTest, BMIValuesBothCodeWidthsAndMultiplyDestinations) {

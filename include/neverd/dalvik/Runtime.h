@@ -50,14 +50,37 @@ struct BinderTransactionRequest {
   uint32_t code = 0, flags = 0, fd = 0, handle = 0;
   std::vector<uint64_t> objects;
   bool operator==(const BinderTransactionRequest &) const = default;
+  std::vector<uint8_t> bytes;
+};
+struct BinderIncoming {
+  uint64_t pointer = 0, cookie = 0;
+  uint32_t code = 0, flags = 0, uid = 0;
+  BinderReply data;
+};
+struct BinderResponse {
+  int32_t status = 0;
+  std::vector<uint8_t> bytes;
+  std::vector<uint64_t> objects;
 };
 struct ExternalCall {
-  enum Kind { Native, LoadLibrary, BinderTransaction } kind = Native;
+  enum Kind {
+    Native,
+    LoadLibrary,
+    BinderTransaction,
+    BinderJoin,
+    BinderSendReply,
+    JavaMethod
+  } kind = Native;
   const Method *method = nullptr;
   std::vector<uint64_t> arguments; // Shared heap identities, never JNI handles.
   std::string library;
   std::optional<BinderTransactionRequest> binder;
   std::string caller; // Declaring class of the actual DEX invocation.
+  // Framework upcalls resolve inside Runtime, sharing DEX/native activations.
+  // They never become a native ABI request. Arguments include the receiver.
+  std::optional<MethodRef> java_method;
+  std::function<ExecutionResult(ExecutionResult)> complete;
+  std::optional<BinderResponse> response;
 };
 struct ExecutionResult {
   ExecutionStop stop = ExecutionStop::Returned;
@@ -80,7 +103,9 @@ enum class BinderReferenceOperation {
   AcquireWeak,
   AcquireStrong,
   DeferStrongRelease,
-  DeferWeakRelease
+  DeferWeakRelease,
+  ReleaseDeferredStrong,
+  ReleaseDeferredWeak
 };
 struct RuntimeServices {
   // Nonnegative Java longs; elapsed realtime has its own boot-time epoch.
@@ -90,6 +115,8 @@ struct RuntimeServices {
   std::function<ExecutionResult(std::string_view, int32_t)> property_integer;
   // Process.myUid Java int bits from the shared OS identity owner.
   std::function<ExecutionResult()> process_uid;
+  std::function<ExecutionResult()> realtime_milliseconds;
+  std::function<ExecutionResult(bool)> binder_calling_identity; // true: uid
   // Exact LOG_ID_EVENTS bytes, including the little-endian int32 tag.
   // Returned values are liblog's Java int bits; negative values are not
   // exceptions. Missing transport state must return an explicit stop.
@@ -212,6 +239,9 @@ public:
   // Native libbinder reference notifications; no Java callback is dispatched.
   ExecutionResult binderReference(BinderReferenceOperation operation,
                                   uint64_t pointer, uint64_t cookie);
+  ExecutionResult dispatchBinder(BinderIncoming incoming,
+                                 const AdmitInstruction &admit,
+                                 uint64_t stack_bytes, uint64_t owner);
 
 private:
   struct State;

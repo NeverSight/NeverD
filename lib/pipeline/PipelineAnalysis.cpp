@@ -69,6 +69,33 @@ std::set<va_t> analysisCallbackEntries(const BinaryImage &Image,
   return Entries;
 }
 
+std::set<va_t> analysisFinallyInteriors(const BinaryImage &Image,
+                                        const PipelineOptions &Options) {
+  std::set<va_t> Interiors;
+  if (!enabled(Image, Options))
+    return Interiors;
+  for (const ExceptionFunction &Owner : Image.ExceptionMetadata.Functions) {
+    if (!Owner.Registration || Owner.Cxx)
+      continue;
+    for (const RegistrationScopeRecord &Scope : Owner.Registration->Scopes) {
+      if (!Scope.IsFinally)
+        continue;
+      // Each `mov r, [ebp + disp]` the handler starts with, of either width.
+      for (va_t At = Scope.HandlerVA; Owner.ownsCode(At);) {
+        const auto Code = readImmutableCodeBytes(Image, At, 2);
+        if (!Code || ((*Code)[0] != 0x8b && (*Code)[0] != 0x8a))
+          break;
+        const uint8_t Form = (*Code)[1] & 0xc7;
+        if (Form != 0x45 && Form != 0x85)
+          break;
+        At += Form == 0x45 ? 3 : 6;
+        Interiors.insert(At);
+      }
+    }
+  }
+  return Interiors;
+}
+
 bool hasAnalysisInstructionBody(const LowFunc &Function) {
   if (!Function.DecodedInstructionCount ||
       Function.DecodedInstructionCount != Function.LiftedInstructionCount ||

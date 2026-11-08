@@ -17,6 +17,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ir/high/MedToHigh.h"
+#include "../structure/X86/X86RegistrationRegions.h"
 
 #include "../../../loader/Swift/SwiftErrorSourceProjection.h"
 #include "../pass/HighDCEDetail.h"
@@ -27,6 +28,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceABI.h"
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/HighFlowOracle.h"
 #include "neverd/ir/high/HighSourceFlow.h"
@@ -368,6 +370,8 @@ ExprPtr MedToHighConverter::inlineableDefinition(VarKey Key) const {
 }
 
 TypeRef MedToHighConverter::sourceCallResultType(const MedOp &Op) const {
+  if (Op.SourceCallHint && sourceCallRetainsResultStorage(*Op.SourceCallHint))
+    return NdType::makeVoid();
   if (Op.SourceCallHint &&
       isNativeSwiftErrorSourceCall(*Op.SourceCallHint, TargetArch))
     if (auto Type = swiftErrorCallResultType(Op.SourceCallHint->Signature);
@@ -2028,6 +2032,12 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
   // label sits on.
   anchorDispatcherEntries(Func);
   recognizeVaStartForwarder(Func, TheArch);
+  // What dead-code cleanup removed since the regions were placed can leave a
+  // jump with nothing left to jump past.
+  if (Med.RegistrationStates && Med.RegistrationStates->Display) {
+    dropNaturalJumps(Func.Body);
+    keepRegistrationLabelsInReach(Func.Body);
+  }
   Trace.high(Func, "after-exceptions");
   auto TEnd = std::chrono::steady_clock::now();
 

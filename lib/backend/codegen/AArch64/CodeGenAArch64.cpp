@@ -13,6 +13,7 @@
 
 #include "../CodeGenDetail.h"
 
+#include "neverd/backend/llvm/AArch64/AArch64SourceResultCall.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64SVECPA.h"
 
@@ -69,7 +70,8 @@ detectTargetFeaturesAArch64(const std::set<std::string> &Names) {
   if (Has("aarch64.crc32"))
     F += ",+crc";
   bool NeedsPAuth = Has(kAArch64PAuthIntrinsicPattern) ||
-                    Has(kAArch64PAuthLLVMIntrinsicPattern);
+                    Has(kAArch64PAuthLLVMIntrinsicPattern) ||
+                    Has(kResultCallIA) || Has(kResultCallIB);
   for (const auto &Operation : kAArch64PAuthOperations)
     NeedsPAuth |= Has(Operation.Mnemonic);
   bool NeedsPAuthLR = false;

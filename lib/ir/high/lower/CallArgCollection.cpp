@@ -22,6 +22,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceABI.h"
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/low/ImportCallee.h"
@@ -521,6 +522,13 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
     const auto &Call = Ops[CallIdx];
     const auto &Signature = Call.SourceCallHint->Signature;
     const auto Bindings = sourceABIParameters(Signature);
+    if (sourceCallRetainsResultStorage(*Call.SourceCallHint)) {
+      if (Call.NumInputs != Bindings.size() + 2)
+        return {};
+      for (unsigned I = 1; I < Call.NumInputs; ++I)
+        Hinted.push_back(medvarToExpr(Call.Inputs[I]));
+      return Hinted;
+    }
     const size_t Count = Signature.HasExplicitABI ? Bindings.size()
                                                   : Signature.Parameters.size();
     const bool HasComponents =

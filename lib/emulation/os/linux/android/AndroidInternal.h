@@ -172,6 +172,9 @@ struct BinderThreadState {
   // API 28 IPCThreadState construction starts a new native thread at zero.
   uint32_t StrictModePolicy = 0;
   bool UsesBinder = false;
+  std::optional<std::pair<uint32_t, uint32_t>> CallingIdentity; // pid, uid
+  uint32_t LastTransactionFlags = 0;
+  std::vector<std::pair<uint64_t, uint64_t>> PendingWeak, PendingStrong;
   // API 28 freeBuffer uses self(), ignoring the originating thread cookie.
   // Recycle queues a free on the current thread's next driver exchange.
   std::vector<BinderPendingCommand> PendingCommands;
@@ -212,11 +215,17 @@ private:
   uint32_t BinderFD = 0;
   llvm::DenseMap<uint64_t, MemoryView> BinderIdentities;
   class BinderWait;
+  llvm::DenseMap<uint64_t, std::weak_ptr<BinderWait>> BinderDispatches;
+  unsigned BinderExecuting = 0;
   mobile::dalvik::ExecutionResult
   binderIdentity(mobile::dalvik::BinderIdentityOperation Operation,
                  uint64_t Address);
   BionicResult binderTransact(const mobile::dalvik::ExternalCall &Call,
                               std::shared_ptr<DexContinuation> Continuation);
+  BionicResult binderJoin(const mobile::dalvik::ExternalCall &Call,
+                          std::shared_ptr<DexContinuation> Continuation);
+  BionicResult binderSendReply(const mobile::dalvik::ExternalCall &Call,
+                               std::shared_ptr<DexContinuation> Continuation);
   BinderThreadState &binderThread();
   uint64_t tlsAddress() const;
   uint64_t threadID() const;

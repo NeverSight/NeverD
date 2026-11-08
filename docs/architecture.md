@@ -77,6 +77,20 @@ adapter performs the single source access and stages all writes; MULX captures
 EDX and the source before writing either destination, with the high half winning
 an alias. Explicit BMI features and undefined AF/PF (also SF for BEXTR) are
 validated by the execution boundary. Generated protected C calls that owner.
+`translate/X86/X86LegacyDescriptorQuery` owns protected LAR/LSL/VERR/VERW
+visibility, table reads and returned rights/limits. The scalar owner reads the
+selector word through the existing segment/page/alignment boundary and stages
+GPR/ZF publication. Invalid selectors return false visibility; a descriptor
+page or backing failure retains the original instruction state. Queries do not
+reuse segment-load fault checks or accessed-bit writes. The explicit table
+profile binds LAR's otherwise undefined limit nibble. Protected C reuses this
+same execution boundary.
+`translate/X86/X86LegacySystemSelector` owns protected LLDT/LTR cache loads
+and the whole-descriptor LTR busy update. The scalar adapter checks CPL/UMIP
+before explicit operand access and implements SLDT/STR through the common
+store boundary. The execution owner commits TR alongside the staged core,
+before debug/event entry. A shared table profile binds exclusive ordinary RAM;
+source export reuses it without duplicating cache or permission decisions.
 `X86InstructionDebugProfile::Watchpoints` composes the same rules with scoped
 `translate/X86/X86WatchpointObservation`. `X86PagedMemory` reports completed
 linear data reads and committed stores; physical page walks and fetches are
@@ -1327,6 +1341,45 @@ occupies one eight-byte pointer slot. Native logical by-value reconstruction
 still requires its separate copy-storage proof. Anonymous C record names reuse
 natural-layout validation independently of the stricter direct-value ABI check;
 naming a mixed record behind a pointer does not authorize passing it directly.
+Supplied Darwin C prototypes with an indirect result bind the original pre-call
+x8 address as an additional physical input. `AArch64SourceResultCall.def` owns
+one packet layout, assembly program and clobber list shared by LLVM, HighC and
+LLVMC. The bridge passes that address through the actual BLR, BLRAA or BLRAB;
+it does not allocate a logical result and copy it back after the call. Argument
+aliases and writes made during the call remain observable. The supplied result
+type uses the shared natural-record PCS classifier, including mixed records
+and the HFA size exception. It introduces no LLVM `sret`, `byval`, `noalias`,
+alignment or dereferenceability promise on the original storage. The existing
+native logical-result adapter still requires a reconstructible member layout.
+
+The bridge preserves the compiler's stack in a callee-saved register, reserves
+the Darwin red zone plus aligned outgoing arguments, and forces a compiler
+frame pointer. C compilation requires AArch64 Clang with `-fexceptions`; LLVM
+marks the assembly as potentially unwinding. These properties preserve the
+compiler's own frame contract, not a qualification of native signed exception
+unwinding or exact fault PCs. A named compiler code address is stripped before
+a raw register call; an original signed indirect operand retains its key and
+modifier and is never stripped to bypass authentication.
+
+The logical-copy proof also accepts complete pointers carried in fixed and
+variadic stack slots. It checks their reaching bytes, the record's actual
+alignment and initialized private storage. Stored frame pointers retain their
+provenance until a validated stack-copy carrier consumes them; unrelated live
+pointer spills still refuse. ABI recovery and source pointer-use analysis count
+the hidden result input without treating it as an ordinary prototype parameter.
+Copies cannot overlap another borrow, a hidden result or the outgoing argument
+area. Consuming a copy kills
+its initialized-byte identities, so a later read needs a new definite write.
+This remains an independently authenticated frame-effect proof; an analyst
+prototype alone cannot grant nonescape, copy lifetime or logical call
+reconstruction.
+
+Every HighIR DCE phase uses the same private-frame read proof. When the final
+liveness pass removes a frame read, private-store cleanup runs again so an
+unobserved initializer cannot retain an otherwise dead image address. Unknown
+reads, escaping frame addresses and unvalidated calls still prevent that
+cleanup; image relocation validation remains independent.
+
 Narrow integer
 register parameters and AArch64 narrow results retain the ABI's 32-bit
 sign/zero-extension guarantee separately from their source width. LLVM source
@@ -3190,10 +3243,11 @@ their existing typed handling before the ignored-annotation path.
 Named specifiers resolve their type and kind in one library lookup. Builtin
 spellings keep precedence, declared aliases keep their names, and pointer-sized
 and va_list fallback types apply only when the library has no declaration.
-Declarators with no added pointer, array or function modifiers reuse the inner
-composition directly. Composed declarators take ownership of their modifier
-lists and nested callable, keeping the same binding order and qualifiers
-without copying those temporary structures. Each composition is applied once,
+Declarators collect pointer, array and function modifiers in one list from
+the declared object toward its base type. Parenthesized declarators bind first,
+then suffixes in source order, then pointers in reverse source order. Applying
+the list backward preserves qualifiers and calling conventions without nested
+callable allocations. Each modifier is applied once,
 so its freshly parsed parameter lists become the resulting functions directly.
 
 `importPDBTypes` reads every named record and enumeration of a PDB's TPI
@@ -4527,7 +4581,9 @@ starts the job over. A render cannot be interrupted, so the job renders a
 function only after no request has come for a while, longer for a larger
 function, leaves a function a request took long to prepare prepared until the
 reader has paused for much longer, and leaves the largest functions and any of
-unknown size to their visits. Like a kept document, a render reads what the engine knew when it ran:
+unknown size to their visits. The summary job's steps and its solve, which a request
+also waits for, likewise wait for the reader to pause (`kSummaryStepHoldOffMilliseconds`),
+so a reader going through functions renders them without it. Like a kept document, a render reads what the engine knew when it ran:
 `BinaryImage::CodeRefTargets` is additive, so an address a function rendered
 earlier took, such as a funclet's `_local_unwind` continuation in its parent, can
 make the render differ from a first visit to that function in a new session.
@@ -4545,7 +4601,15 @@ A render notes every address it asks the user's name or declaration of, stated o
 not (`UserFactReads`), and its record keeps those with a digest of what they said
 (`neverd_user_reads`). It answers while they say the same
 (`neverd_user_reads_hold`), so such an edit costs only the renders that read it, and
-the job renders those again. What analysis reads of declarations no render's reads
+the job renders those again. Until it does, a render whose reads differ only in names
+of data the user states still answers, where it is C on one page and its text shows
+a spelling is all that moves (`neverd_user_reads_renamed_json`, `CodeEdits::respell`):
+the page is rewritten before decoration, so every field reads as a render under the
+new names does. Where the emitter decides more of a name than its spelling, a name it
+spells otherwise, a library header's object or a function's link name, or where the
+page has another use of the name, a number of the address, or a mention of the old
+name that is no token of its declaration or a use, it is left to a render.
+What analysis reads of declarations no render's reads
 cover, the prototype a declaration hides from a function's name and whether any
 declaration makes the context at all (`neverd_user_facts_analysis_reads_json`), so
 they stay in the inputs. Types new to the library that nothing names leave every
@@ -4568,6 +4632,22 @@ function, so a later session reads that and walks only what it leaves out.
 An index entry's page table must fit its record, as it must in the store file.
 An invalid index is discarded before reading pages; the original file still
 recovers every complete record.
+An edit costs what it changes. The owner's listing takes a name of data and a data
+item over bytes no string or code holds where they are (`Listing::dataRenamed`,
+`Listing::dataItemsChanged`), the session a name without reading its table
+(`neverd_rename_take`), and a declaration of types no other names reads them against
+what it read of the library once (`Session::LocalTypeNames`), on the library itself
+(`TypeLibrary::Trial`, which undoes a refused declaration). The GUI opens with `write_behind`: the reply to such an edit goes before
+its write, which runs the same journaled transaction in order on a thread of its own
+(`ProjectHistory::persistLater`), joined with what is queued behind one already
+writing. What may read the project's files waits for it first. A document of a view
+notes the addresses its render read and its decoration looked up, and reads what such
+an edit reached when it is next asked for, so the edit leaves the owner's other
+documents as they are (`Engine::keepNamedViewsThrough`, `Engine::readViewEdits`).
+Decoration asks for the image's names and comments by address, and the edit changes
+that one row (`CodeEdits::ImageFacts`), so a view costs the same among thousands.
+The GUI starts a replica on a function as its Set Type dialog opens
+(`AnalysisService::prepareRead`), so the render after the edit finds it ready.
 A replica takes those edits in place (`analysis_update_names`), since no analysis
 reads them: what it keeps of a view stays the view's. A note on a function and a data
 item, which nothing analyzed or rendered reads, leave the renders as they are, and a
@@ -4897,8 +4977,19 @@ Prepared arbitrary-width evaluation reuses each output slot's allocation for
 associative arithmetic and bitwise operations, starting from the first operand.
 A product stops multiplying after its complete word becomes zero; all input
 steps have already been evaluated. Standalone and prepared evaluation use the
-same operator implementation. Validation keeps its original full-width input
-assignments and sample count.
+same general operator implementation. Wide plans propagate the largest observed
+low-bit prefix from every use through modular arithmetic and bitwise operations.
+A constant product coefficient reduces the required factor prefix by its
+trailing-zero count. Prefixes fitting a native word use modular word arithmetic
+and inline APInt storage. Their wide product consumers first multiply the
+prefixes in that native modular ring, then restore the complete coefficient
+with one wide multiplication. Other consumers demand
+complete operands, including divisions, comparisons and shifts; a shared
+full-width use therefore prevents truncation. Precision propagation uses the
+resolved operand slots in a separate wide-only pass, preserving the native
+constructor's stack footprint. This analysis changes only evaluation and keeps
+all input lookups. Validation keeps its original full-width input assignments,
+sample count and work charges.
 Native long products stop when the initial operand pair is zero modulo the
 declared width, retaining the tight fold for other inputs. Their prepared steps
 keep the width mask in the unused product payload, without enlarging a step
@@ -4941,6 +5032,10 @@ their inline elements. Merge flags and exact lookup tables reuse their storage
 across rounds within one cover search. The neighbor index
 is initialized only when an indexed round is reached. Deduplication keys retain
 both complete value/care fields; discovery order and work admission are unchanged.
+For up to six inputs, a packed care/value pair indexes an exact membership
+bit in at most 4096 bits. Only that used prefix is cleared each round; larger
+covers initialize the general hash set instead. This retains the same grown
+terms and greedy tie order without a hash lookup for every small-cover merge.
 The shared exact MBA layer also recombines weighted literal AND/OR/XOR/NOT
 views of one opaque word. It constructs per-bit coefficients and a constant,
 then independently checks the pointwise grammar, constant difference and every
@@ -5175,9 +5270,17 @@ throughout reconstruction.
 Constant binary operands use exact low-word cache keys containing the other
 operand, operation, literal residue and precision. Native literals need no
 temporary expression nodes; wide literal prefixes are copied and charged once
-per search. Word and pairing-signature caches share this normalization without
-changing any source constant or wider reading. Neutral observed constants
-reuse the operand directly.
+per search. Word, projected-representative and pairing-signature caches share
+this normalization without changing any source constant or wider reading.
+Neutral observed constants reuse the operand directly.
+Constant additions reuse the literal residue already present in the word key.
+Bits below its first set bit remain unchanged and cannot start a carry; a
+single-bit query constructs only the carry into its requested position.
+Projected handles, known-zero facts and pairing signatures use exact-key
+dense tables, avoiding one heap allocation per cached fact. Their values are
+copied before recursion, and complete bucket growth is charged before insertion.
+Decision-word caches and interned signature keys retain stable references for
+callers that keep them across recursive insertions.
 Native key construction reads inline constants without entering the wide
 literal reader.
 Decision identity hits and terminal two-input Boolean operations return before
@@ -5208,6 +5311,11 @@ Products spanning the complete observed domain also normalize their factors
 once. Each operand needs only the bits still observable after the other
 factors' proved trailing zeros; the projection cache includes that precision.
 Neutral low-word constants bypass reconstruction of identity operations.
+Partial even pairing blocks coalesce exact two-bit correction words before
+constructing their sum. Four equal corrections vanish modulo four; two copies
+move their low bit into the high column. This avoids transient carry graphs
+for repetitions that cancel, while retaining every distinct correction and
+charging the sort, storage and remaining decisions to the same allowance.
 For a partial block of XOR factors, narrow nonlinear products can use
 exact lower decision bits as pairing identities. Their two actual upper bits
 form the additive correction, including cross terms that cannot be discarded
@@ -14421,8 +14529,18 @@ versions that counted n-ary nodes once and omitted all all-ones literals.
 Verification samples reuse the compiled evaluator's word-sized path when both
 plans and all context variables fit in 64 bits. Corner assignments and the
 random stream stay unchanged; wider inputs retain arbitrary-width evaluation.
+The evaluator lowers constant and variable leaves on their first worklist
+visit. Native inputs are loaded before the operator loop, in the original
+lookup order; shared inputs are still read once and unused inputs are omitted.
 Minterm expansion reuses one sorted combination buffer across its Cartesian
 walk while preserving combination order and per-combination work charges.
+It borrows cached factor tables only until the next cache insertion and
+initializes new coefficients from their first contribution, avoiding repeated
+wide-table copies and temporary zero coefficients during accumulation.
+Affine prefix inference stores completed value/known-mask facts by exact node
+and queried precision in a dense cache. Facts are copied before recursion;
+bucket growth is fully charged before allocation, and incomplete queries are
+never cached. Partial known bits still cannot stand in for constant prefixes.
 Textual coefficients that fit in 64 bits use one native integer parse; the
 constant builder still owns width truncation and zero extension, and larger
 literals retain arbitrary-precision parsing.
@@ -16098,6 +16216,63 @@ certified, or whose body is unavailable, keeps its address comment, which is the
 whole clause; the comment otherwise stays next to the code it names. The
 projection runs in the plain-C view as well as the C++ one, because SEH is C.
 
+An x86 `_except_handler3` or `_except_handler4` frame prints the same clauses
+from its own code, in the decompile view only. That view defers the native
+registration proofs, so `lib/ir/low/X86/RegistrationDisplayFrame.cpp` reads what
+to print from the instructions into `RegistrationDisplayFacts`, which grant a
+native reconstruction nothing: the try level of each stretch of code, from the
+stores into the frame's level slot and from `_local_unwind4` or `_local_unwind2`,
+which leaves it at `stop`; which code only one runtime entry runs; and where the
+prologue puts the frame and stack pointers, biased (`lea ebp, [esp - 0x70]`) or
+built by `__SEH_prolog4`. What only serves the runtime goes: the level stores, the
+record, the encoded table and cookie, the saved registers, the save of the stack
+pointer an `__except` handler's `mov esp, [ebp - 0x18]` reads as the constant
+distance it is, and each local unwind, whose `return` or `goto` says the same in
+C. A `__finally` is one body in the function, entered by the runtime at the
+scope's handler and on the normal path by a `call`, possibly past the registers
+the handler reloads (`PipelineAnalysis`' `analysisFinallyInteriors` keeps those
+addresses from becoming functions). A body whose `ret`s all put the frame pointer
+back is a `return` in the clause, so nothing runs after its `call`; a register the
+normal path goes on using is read back from the frame word the body wrote it to.
+A `__finally` body that reloads the saved stack pointer has left its clause, as a
+`goto` or `return` out of it does, and what follows is the function's again; the
+call past a body that never comes back ends its path, and code that runs on into a
+handler ends its `__try` there. A stdcall import through its slot pops what the
+caller pushed, as the other way to the code after a `__try`, through its handler,
+says by the saved stack pointer. `lib/ir/med/X86/RegistrationDisplayJoins.cpp` then
+gives each PHI of the stack or frame pointer that every way in agrees on that one
+distance from the entry stack pointer: these joins chain through a whole function,
+and no bounded proof of where the frame is follows them.
+
+Control-flow structuring knows nothing of scopes, and /O2 lays a scope's code out
+around its handlers. `lib/ir/high/structure/X86/X86RegistrationRegions.cpp` puts
+every statement where its try level says, each scope being one `__try` in the list
+its first statement was found in and a clause holding only what one handler's
+runtime entry runs. A statement whose neighbours went elsewhere is reached by a jump,
+what falls off the end of a list goes on by one, and code nothing can tell guards
+from not keeps a scope whole between two of its statements. The statements of each
+list are then laid out with what jumps enter first and what a jump goes on to next,
+and the jumps to what runs next anyway go: leaving a `__try` by its end is a normal
+termination, unlike the jump a local unwind became, and a jump out of a `__finally`
+stays because it stops an unwind. A single entry that cannot come first, the head of
+a loop in the scope, is the first statement of the `__try` jumping to it. A scope a
+jump still enters, which C cannot say, prints as a block with its handler in a
+comment, and the others settle again without it. A clause starts at its handler
+whatever order its statements were found in, since nothing but the runtime enters
+it, and statements at one address stay together, since a jump to it lands on the
+first. A frame whose record is not where the runtime leaves EBP, as clang-cl's, is
+not read this way: its handlers' code keeps the block view. `lib/ir/high/structure/X86/X86RegistrationDisplay.cpp` runs this and takes the
+normal path's `call` of each body away. Within one call-removal pass, each
+queried body's merged ranges are computed once from the unchanged display facts,
+including empty results. Bodies are still searched in root-address order, and
+clauses with no remaining call do not build their ranges. A filter's
+code leaves the listing as one expression (`HighEHClause::FilterValue`): branches
+are conditionals, what it does first a comma's left side, and the pointers the
+runtime leaves below the record `GetExceptionInformation()` and
+`GetExceptionCode()`, also where an `__except` arm reads the word a filter saved
+the code in. A filter one expression cannot say keeps its thunk's address and the
+scope still prints.
+
 A `return` or `goto` out of a `__try` compiles to a call of the runtime's
 `_local_unwind(TargetFrame, TargetIp)`. It runs the termination handler of
 each scope the jump leaves, innermost first, with the abnormal flag set and
@@ -17434,6 +17609,11 @@ stops explicitly, and scalar reads do not copy the entire retained buffer.
 identity, reference commands and node-control work. Buffer allocation leases
 retain object metadata and distinguish address reuse. Final device-open retirement
 drops process references; nodes weakly identify their owner. The native adapter
+and ioctl reader share `hasReadyBinderThreadWork`: activated private work takes
+priority, otherwise an idle entered/registered looper can take process work.
+Incoming or outgoing calls prevent that thread from taking another process
+transaction. This same rule wakes a native thread waiting in the pool.
+The native adapter
 only queues libbinder reference/free commands through that owner. Parcel validates
 object reads and protects scalar reads; `AndroidBinder.cpp` caches remote Java
 proxies by endpoint and rejects duplicate input endpoint identities. Dynamic
@@ -17452,8 +17632,33 @@ Strong writes use the shared Parcel data owner and feed the existing Linux
 object translator, including null and
 handle-zero records without metadata. Native reference notifications enter this
 same registry. The response reader queues pointer/cookie acknowledgments and
-flushes them only before another driver read; synchronous native release work
-remains deferred until the currently unsupported top-level dispatch path.
+flushes them only before another driver read. Synchronous waits defer release
+work into native thread queues; `Binder.joinThreadPool` drains weak references
+before one strong reference, repeating at an exhausted-input boundary.
+
+`dalvik/AndroidBinderDispatch.cpp` owns the API 28 JavaBBinder upcall. Local
+`Binder.transact` rewinds input, invokes the virtual `onTransact`, and rewinds
+reply only on normal return. Framework Java upcalls reuse Runtime's existing
+DEX/native activations, budgets and owner-local continuations. Protected super
+calls and virtual interface-descriptor overrides share method resolution;
+`attachInterface`, descriptor fields and local-interface lookup share storage.
+
+Native `Binder.joinThreadPool` requires an explicitly cached context handle on
+the shared ProcessState connection. It enters the Linux looper and dispatches
+actual BR_TRANSACTION records to the existing pointer/cookie association.
+Calling pid/uid, transaction flags and native policy belong to that thread and
+survive Java/native suspension. Incoming data and reply have non-owned Java
+wrappers with a separate six-slot pool. Recycling a wrapper does not destroy
+the underlying native Parcel. The shared driver sends BC_REPLY and acknowledges
+it before native Parcel references and input-buffer leases are released.
+Default BinderCallsStats retains its explicit realtime start and per-UID count
+(duration one), exposed only once materialized in `java_state.framework.binder_calls`.
+Native ping bypasses Java and statistics; an unhandled Java transaction returns
+UNKNOWN_TRANSACTION. No host clock, fabricated service response or Java heap
+identity substitutes for driver state. Semantics follow API 28
+[Binder.java](https://android.googlesource.com/platform/frameworks/base/+/android-9.0.0_r1/core/java/android/os/Binder.java),
+[BinderCallsStats.java](https://android.googlesource.com/platform/frameworks/base/+/android-9.0.0_r1/core/java/com/android/internal/os/BinderCallsStats.java)
+and [IPCThreadState.cpp](https://android.googlesource.com/platform/frameworks/native/+/android-9.0.0_r1/libs/binder/IPCThreadState.cpp).
 
 `enforceInterface` still requires incoming flags and the Java StrictMode upcall.
 `AndroidParcel.cpp` owns native capacity separately from initialized data.
@@ -17466,9 +17671,11 @@ final release uses the existing Linux strong/weak reference commands.
 In-capacity strong writes preserve JNI Binder conversion order before attempting
 the received offset-table pointer's realloc. The native adapter and C import use
 one `Bionic::reallocate` implementation. Binder arena pointers fail its allocation
-ownership check before memory access, even with zero offsets. Local Binder
-dispatch, nested/one-way transactions and weak objects/FDs remain explicit
-boundaries. ServiceManager `lookup_results` remain a separate semantic input;
+ownership check before memory access, even with zero offsets. Incoming context
+association, uncached context ping, automatic pool-thread creation/starvation
+timing, exception serialization/logging, tracing, changed-policy Java BlockGuard
+restoration, dump/shell/property callbacks, nested/one-way transactions and weak
+objects/FDs remain explicit boundaries. ServiceManager `lookup_results` remain a separate semantic input;
 this transport does not turn those entries into kernel peers or replies.
 
 JNI propagates runtime-service failure diagnostics unchanged. The error owner
@@ -18048,6 +18255,15 @@ same work allowance before returning.
 `X86LiftCoreArith` lowers legacy memory `LOCK ADD/SUB/INC/DEC` to one sequentially consistent `ATOMIC_ADD`. Flags use the returned old value after the memory operation; `INC/DEC` preserve CF. FS/GS address spaces remain attached. On x64, `LOCK AND/OR/XOR` use the shared system-state intrinsic owner and emit one native locked transaction. Its result packs PF/ZF/SF from that transaction; CF/OF are cleared and AF remains an explicit arbitrary effect. Widths and FS/GS address spaces remain part of the intrinsic contract. The i386 non-neutral logical forms and other unowned locked core arithmetic still refuse. This is a LowIR lifting contract; emitted native alignment and fault behavior need their own qualification.
 
 ### Explicit x64 continuation export
+
+`translate/X86/X86LocalApic.h` independently owns fixed-source APIC priority,
+acknowledgment and ordinary EOI bank transitions. It has no decoder/session
+dependency and is used only by explicit producers. CPU IF/shadow admission
+and acknowledgment timing stay in the continuation scheduler; arrivals,
+global event arbitration, TPR/CR8 synchronization and external EOI routing
+stay with the embedding. The offline QEMU bank adapter calls this type's
+constant initializer/validator instead of duplicating priority rules in Python.
+See the [local APIC contract](x86-local-apic.md).
 
 `X64FunctionCallHandlers` composes a producer-declared delivered handler context
 with a pending original CALL. The interface requires call-site pauses so that

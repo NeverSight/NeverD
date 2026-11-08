@@ -782,7 +782,9 @@ static void iterativeDCE(HighFunc &Func,
                             << ", " << Func.Body.size() << " stmts)\n");
     bool DCEChanged = false;
     {
-      const AssignmentEffects Effects(Func.Body);
+      // Copy propagation can expose a private-frame address after pre-DCE.
+      // Every phase must classify that read with the same frame contract.
+      const AssignmentEffects Effects(Func.Body, &Func);
       for (int Iter = 0;
            Iter < ::neverd::limits::ir::kHighDCEIterativeDCEIterLimit; ++Iter) {
         VarKeySet Refs;
@@ -1000,7 +1002,7 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
   // expansion dead. Remove them without feeding the shared result back through
   // copy propagation, which could create a cycle in the expression DAG.
   {
-    const AssignmentEffects Effects(Func.Body);
+    const AssignmentEffects Effects(Func.Body, &Func);
     for (int Iter = 0;
          Iter < ::neverd::limits::ir::
                     kHighDCEMedToHighConverterEliminateDeadStmtsIterLimit;
@@ -1015,6 +1017,9 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
     }
   }
   eliminateDeadConditions(Func.Body, referencedStatementEntries(Func.Body));
+  // The last liveness pass can delete a frame read that still kept its
+  // initialization live during the earlier private-store cleanup.
+  elimUnreadPrivateFrameStores(Func, TargetArch);
 
   if (WantDetail) {
     const auto TEnd = Clock::now();

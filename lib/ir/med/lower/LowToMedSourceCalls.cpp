@@ -338,6 +338,10 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
               Hint->TargetAddress;
       if (!Hint || Hint->Signature.Architecture != TargetArch ||
           !validateSourceABI(Hint->Signature, Diagnostic) ||
+          (Hint->Signature.ReturnLocation.Kind ==
+               SourceABICarrierKind::IndirectResultPointer &&
+           !sourceCallRetainsResultStorage(*Hint) &&
+           sourceAggregateMembers(Hint->Signature.ReturnType).empty()) ||
           (hasSwiftErrorResult(Hint->Signature) &&
            !isSwiftWillThrowSourceCall(*Hint, TargetArch) && !NativeError) ||
           // Logical by-value reconstruction needs a separate copy-storage
@@ -543,6 +547,9 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
           Extract.addInput(MedVar::makeConst(Offset, 4));
           ReturnOps.push_back(std::move(Extract));
         }
+      } else if (IndirectResult && sourceCallRetainsResultStorage(*Hint)) {
+        Op.addInput(ndVarToMedVar(
+            NdVar::reg(Return.RegisterOffset, Return.ValueBytes)));
       } else if (IndirectResult) {
         // Preserve the pre-call hidden pointer before SSA introduces the
         // caller-saved x8 clobber. A declared result initializes every record

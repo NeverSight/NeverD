@@ -125,9 +125,11 @@ TEST(AndroidBinderTest, DeclarationsMatchTheTransactionAndTracingContracts) {
   EXPECT_TRUE(field->access.contains("private"));
   EXPECT_TRUE(field->access.contains("volatile"));
   auto local = s.heap->allocate(Object::Instance, "android/os/Binder", 0);
-  expectStop(s.call("Landroid/os/IBinder;", "transact", Transaction,
-                    local->Identity, {1, 0, 0, 0}),
-             "local Binder onTransact");
+  auto dispatch = s.call("Landroid/os/IBinder;", "transact", Transaction,
+                         local->Identity, {1, 0, 0, 0});
+  ASSERT_EQ(dispatch.stop, ExecutionStop::Suspended);
+  ASSERT_TRUE(dispatch.external);
+  EXPECT_EQ(dispatch.external->kind, ExternalCall::JavaMethod);
 }
 
 TEST(AndroidBinderTest, TracingMethodsAndFieldShareProcessStateAndAdmission) {

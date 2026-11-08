@@ -11,8 +11,9 @@ public tools should be cited deliberately where NeverD builds on them.  A
 marker with no citation or explanation instead requires review, so the checker
 asks for either a documented allowance or a terminology correction.
 
-Every repository allowance is listed below with a reason, so an allowed hit is
-a decision somebody made rather than a pattern nobody tightened.
+Every repository allowance is listed below or in the adjacent .def data with a
+reason, so an allowed hit is a decision somebody made rather than a pattern
+nobody tightened.
 """
 
 from __future__ import annotations
@@ -1509,6 +1510,17 @@ HISTORY_ALLOWED: tuple[HistoryAllowance, ...] = (
             "babb2a9a88efdce5ec4b5dc7ad997b064ce243740880f9318ff8d671e0d32dab",
         }),
     ),
+) + tuple(
+    HistoryAllowance(
+        **{
+            **entry,
+            "commits": frozenset(entry["commits"]),
+            "line_sha256": frozenset(entry["line_sha256"]),
+        }
+    )
+    for entry in json.loads(
+        Path(__file__).with_suffix(".def").read_text(encoding="utf-8")
+    )
 )
 
 

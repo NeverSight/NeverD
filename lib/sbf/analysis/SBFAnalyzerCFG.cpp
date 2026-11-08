@@ -321,19 +321,12 @@ runRegisterDataflow(SBFProgram &Program,
     // all-Unknown RegisterState for every block in the program. A real
     // backedge still meets this value through the ordinary Inputs lattice.
     RegisterState Boundary;
-    if (IsFunctionRoot[ID])
+    if (ID == EntryBlock)
+      Boundary = programEntryRegisterFacts(Program);
+    else if (IsFunctionRoot[ID])
       Boundary[kFramePointerRegister] = {
           RegisterValue::Kind::StackAddress,
           initialFramePointer(Program.Low.TheVersion, Program.Config), 0};
-    if (ID == EntryBlock) {
-      Boundary[kFirstArgumentRegister] = {RegisterValue::Kind::Constant,
-                                          kInputStart, 0};
-      Boundary[kInstructionDataRegister] =
-          hasFeature(Program.ActiveRuntimeFeatures,
-                     RuntimeFeature::InstructionDataPointer)
-              ? RegisterValue{RegisterValue::Kind::InstructionDataAddress, 0, 0}
-              : RegisterValue{RegisterValue::Kind::Constant, 0, 0};
-    }
     Program.Med.Blocks[ID].Inputs = std::move(Boundary);
     ++Stats.BoundarySeedCount;
     Stats.PeakBoundaryWorkspaceEntryCount = 1;

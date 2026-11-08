@@ -17,6 +17,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/SourceABI.h"
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/IntrinsicTermination.h"
 #include "neverd/ir/low/ImportCallee.h"
@@ -1129,7 +1130,9 @@ void recoverCallAbi(
         const size_t Count = Explicit
                                  ? sourceABIParameters(Hint.Signature).size()
                                  : Hint.Signature.Parameters.size();
-        if (Valid && Op.NumInputs == Count + 1) {
+        if (Valid &&
+            Op.NumInputs ==
+                Count + 1 + unsigned(sourceCallRetainsResultStorage(Hint))) {
           CI.SourceCallHint = Op.SourceCallHint;
           if (Hint.CallKind == SourceCallTypeHint::Kind::Analyst)
             CI.VarArgFixedCount = Hint.AnalystFixedCount;

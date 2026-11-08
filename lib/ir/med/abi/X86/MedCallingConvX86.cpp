@@ -16,6 +16,7 @@
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
+#include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -165,6 +166,11 @@ void med_calling_conv_detail::detectCdeclStackParams(MedFunc &Func,
     };
     switch (Def->Opcode) {
     case NdOp::COPY:
+      // The decompile view prints a handler in its function's frame, so what a
+      // handler alone reads of the incoming arguments is a parameter too.
+      if (Func.AnalysisOnly &&
+          Def->RegistrationRoot != MedOp::RegistrationRootKind::None)
+        return registrationRootEntryStackOffset(*Def);
       if (Def->NumInputs == 1) {
         const MedVar &In = Def->Inputs[0];
         if (In.Kind == MedVar::Reg && In.RegOff == SpOff && In.Id == V.Id &&

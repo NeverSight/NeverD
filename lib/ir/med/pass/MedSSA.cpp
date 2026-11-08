@@ -25,6 +25,7 @@
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MedCallLeftovers.h"
 #include "neverd/ir/med/MedStackAlignment.h"
+#include "neverd/ir/med/X86/X86RegistrationDisplayJoins.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/ExceptionInfo.h"
 
@@ -1764,6 +1765,9 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
       }
     }
   }
+  if (Func.AnalysisOnly && Low.RegistrationStates &&
+      Low.RegistrationStates->Display)
+    settleRegistrationDisplayJoins(Func);
 }
 
 } // namespace neverd

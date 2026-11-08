@@ -133,13 +133,14 @@ def run(executable):
         # Cache eviction above can retire first; acquire the current baseline.
         first = source(client)
 
-        # Image comments and renames invalidate every previously kept source,
-        # including A after another function became the active pipeline.
+        # An image comment reads in the source kept of A after another function
+        # became the active pipeline, and asks no engine for it: its pages do not
+        # say it, decoration does.
         source(client, B)
         ok(client, "annotation_set", {"address": hex(int(A, 16) + 2),
                                        "text": "current source comment"})
         commented = source(client)
-        assert commented["fixture_pages"] > first["fixture_pages"]
+        assert commented["fixture_pages"] == first["fixture_pages"], commented
         assert "current source comment" in commented["text"], commented
         source(client, B)
         reused(source(client), commented)

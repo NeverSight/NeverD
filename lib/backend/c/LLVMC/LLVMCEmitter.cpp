@@ -62,6 +62,7 @@
 #include "neverd/backend/c/render/LLVMC/LLVMCIntrinsicRender.h"
 #include "neverd/backend/c/render/SyscallHelpers.h"
 #include "neverd/backend/c/render/X86/X86SegmentAsm.h"
+#include "neverd/backend/llvm/AArch64/AArch64SourceResultCall.h"
 #include "neverd/backend/llvm/AArch64/LLVMAArch64AuthenticatedCall.h"
 #include "neverd/backend/llvm/AArch64/LLVMAArch64ReturnProtection.h"
 #include "neverd/backend/llvm/LLVMFloatingCall.h"
@@ -91,6 +92,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/IntrinsicsAArch64.h"
 #include "llvm/IR/IntrinsicsX86.h"
@@ -863,6 +865,7 @@ void LLVMCWriter::recordSourceNames(const llvm::Module &Mod) {
 
 void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
   bool NeedsAArch64RawCall = false;
+  bool NeedsAArch64ResultStorageCall = false;
   bool NeedsX86SystemRegisterDispatch = false;
   bool NeedsX86ScalarSystemDispatch = false;
   bool NeedsX86Flags16Dispatch = false;
@@ -918,6 +921,11 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
                                  Inst.getOpcode() == llvm::Instruction::FMul ||
                                  Inst.getOpcode() == llvm::Instruction::FDiv;
         if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Inst)) {
+          if (const auto *Assembly =
+                  llvm::dyn_cast<llvm::InlineAsm>(Call->getCalledOperand()))
+            NeedsAArch64ResultStorageCall |=
+                llvm::StringRef(Assembly->getAsmString())
+                    .starts_with(kResultCallMarker);
           NeedsAArch64RawCall |=
               Call->isIndirectCall() && !Call->isInlineAsm() &&
               !Call->getOperandBundle(kAArch64PAuthCallBundle);
@@ -1312,6 +1320,8 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     c_float::writeContractionPolicy(OS.stream());
   if (Opts.TheArch == Arch::AArch64 && NeedsAArch64RawCall)
     OS << kAArch64PAuthCRawCallHeader;
+  if (NeedsAArch64ResultStorageCall)
+    OS << kResultCallCompilerContract;
   // The accesses' types or assumptions are written only when an access can
   // name a type; otherwise every access keeps its portable byte copy.
   UnalignedTypesWritten = Opts.UseUnalignedPointers && NeedsUnalignedTypes;

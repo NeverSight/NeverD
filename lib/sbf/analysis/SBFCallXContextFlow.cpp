@@ -133,6 +133,59 @@ void pushAbstractFrame(RegisterState &State, const SBFProgram &Program) {
   }
 }
 
+struct TaggedMemoryCase {
+  uint64_t Tag = 0;
+  StoredRegisterMemory Values;
+  MemoryPostconditions Postconditions;
+  // May-definition history, independent of whether an object's fields remain
+  // known. Summary names are rebound only when they escape into the caller.
+  std::vector<uint64_t> DefinedCaptures;
+
+  bool operator==(const TaggedMemoryCase &) const = default;
+};
+
+// A complete, bounded partition of one returned tag. The summary address is
+// entry-relative; a caller substitutes it before retaining any conditional
+// cells. Register copies refer to this tag only until their next definition.
+struct TaggedMemory {
+  RegisterValue Address;
+  unsigned Width = 0;
+  uint16_t Registers = 0;
+  std::vector<TaggedMemoryCase> Cases;
+  // Only names newly introduced by this call can be removed by selecting a
+  // case. A definition that predates the call remains part of caller history.
+  std::vector<uint64_t> ConditionalCaptures;
+
+  uint64_t retainedByteEstimate() const {
+    uint64_t Bytes = Cases.capacity() * sizeof(TaggedMemoryCase) +
+                     ConditionalCaptures.capacity() * sizeof(uint64_t);
+    for (const auto &Case : Cases)
+      Bytes += Case.Values.retainedByteEstimate() +
+               Case.Postconditions.retainedByteEstimate() +
+               Case.DefinedCaptures.capacity() * sizeof(uint64_t);
+    return Bytes;
+  }
+
+  bool operator==(const TaggedMemory &) const = default;
+};
+
+struct NullableCapture {
+  uint64_t Capture;
+  uint16_t Registers;
+  bool ConditionalDefinition = true;
+  // Full-width stores of this exact value on every non-null path. Numeric
+  // ranges and independent expression alternatives do not establish identity.
+  StoredRegisterMemory Values;
+  MemoryPostconditions Postconditions;
+
+  uint64_t retainedByteEstimate() const {
+    return Values.retainedByteEstimate() +
+           Postconditions.retainedByteEstimate();
+  }
+
+  bool operator==(const NullableCapture &) const = default;
+};
+
 struct ContextState {
   std::array<ProvenValueSet, kRegisterCount> Registers{};
   ScratchState Scratch;
@@ -144,6 +197,28 @@ struct ContextState {
   // supplies full-width store, overlap and coordinate invalidation semantics.
   StoredRegisterMemory InputSpills;
   MemoryEffects InputWrites;
+  std::optional<TaggedMemory> Tagged;
+  // Captures introduced by this invocation on any path reaching this state.
+  // A missing field of an already introduced capture is unknown. A capture
+  // absent from the other path has no value there, so its own fields can stay
+  // conditional on the surviving pointer. This never proves non-aliasing.
+  std::vector<uint64_t> DefinedCaptures;
+  // One scalar return, exactly {null, captured value}, with conditional stores
+  // of that identity. Copies retain the relation until their next definition.
+  // A null branch removes a name only if its definition was also conditional.
+  std::optional<NullableCapture> Nullable;
+
+  bool definesCapture(uint64_t Capture) const {
+    return std::binary_search(DefinedCaptures.begin(), DefinedCaptures.end(),
+                              Capture);
+  }
+
+  void defineCapture(uint64_t Capture) {
+    const auto Position = std::lower_bound(DefinedCaptures.begin(),
+                                           DefinedCaptures.end(), Capture);
+    if (Position == DefinedCaptures.end() || *Position != Capture)
+      DefinedCaptures.insert(Position, Capture);
+  }
 
   ContextState() = default;
   ContextState(const MachineState &State) : Scratch(State.Scratch) {
@@ -161,7 +236,78 @@ struct ContextState {
   }
 
   void join(const ContextState &Other, const SBFProgram &Program,
+            const std::shared_ptr<const StoredMemoryCoordinates> &Coordinates,
             MemoryPostconditions::ExpressionJoin MergeExpression = nullptr) {
+    const auto IsNull = [](const ContextState &State) {
+      const auto Value = State.Registers[0].singleton();
+      return Value.ValueKind == RegisterValue::Kind::Constant &&
+             Value.Value == 0;
+    };
+    const auto ReturnFacts =
+        [&](const ContextState &State) -> std::optional<NullableCapture> {
+      if (State.Nullable && (State.Nullable->Registers & registerBit(0)))
+        return State.Nullable;
+      const auto Value = State.Registers[0].singleton();
+      const auto Bounds =
+          unsignedValueRange(Value, Coordinates->Addresses.get());
+      if (Value.ValueKind != RegisterValue::Kind::SymbolicAddress ||
+          Value.Offset || !Bounds || !Bounds->Lower)
+        return std::nullopt;
+      NullableCapture Facts{Value.Value, registerBit(0), true, {}, {}};
+      Facts.Values.setCoordinates(Coordinates);
+      Facts.Values.includeCells(State.Scratch.Values, [&](const auto &Address) {
+        return State.Scratch.Values.readValues(Address).singleton() == Value;
+      });
+      State.Postconditions.visitValues(
+          [&](const auto &Address, const auto &Stored, auto) {
+            if (Stored.singleton() == Value)
+              Facts.Postconditions.store(Address, sizeof(uint64_t), Stored);
+          });
+      return Facts;
+    };
+    if (Nullable && Other.Nullable &&
+        Nullable->Capture == Other.Nullable->Capture) {
+      Nullable->Registers &= Other.Nullable->Registers;
+      Nullable->ConditionalDefinition &= Other.Nullable->ConditionalDefinition;
+      Nullable->Values.joinValues(Other.Nullable->Values);
+      Nullable->Postconditions.meet(Other.Nullable->Postconditions);
+      if (!Nullable->Registers)
+        Nullable.reset();
+    } else if (IsNull(*this) || IsNull(Other)) {
+      const auto &Zero = IsNull(*this) ? *this : Other;
+      auto Facts = ReturnFacts(IsNull(*this) ? Other : *this);
+      if (Facts) {
+        Facts->Registers = registerBit(0);
+        Facts->ConditionalDefinition &= !Zero.definesCapture(Facts->Capture);
+      }
+      Nullable = std::move(Facts);
+    } else if (Nullable || Other.Nullable) {
+      auto Left = ReturnFacts(*this);
+      auto Right = ReturnFacts(Other);
+      if (Left && Right && Left->Capture == Right->Capture) {
+        Left->Registers = registerBit(0);
+        Left->ConditionalDefinition &= Right->ConditionalDefinition;
+        Left->Values.joinValues(Right->Values);
+        Left->Postconditions.meet(Right->Postconditions);
+        Nullable = std::move(Left);
+      } else {
+        Nullable.reset();
+      }
+    }
+    StoredRegisterMemory ConditionalObjects;
+    if (!DefinedCaptures.empty())
+      ConditionalObjects.includeCells(Scratch.Values, [&](const auto &Address) {
+        return Address.ValueKind == RegisterValue::Kind::SymbolicAddress &&
+               definesCapture(Address.Value) &&
+               !Other.definesCapture(Address.Value);
+      });
+    if (!Other.DefinedCaptures.empty())
+      ConditionalObjects.includeCells(
+          Other.Scratch.Values, [&](const auto &Address) {
+            return Address.ValueKind == RegisterValue::Kind::SymbolicAddress &&
+                   Other.definesCapture(Address.Value) &&
+                   !definesCapture(Address.Value);
+          });
     for (unsigned R = 0; R < kRegisterCount; ++R)
       if (InputExpressions[R] != Other.InputExpressions[R])
         InputExpressions[R] =
@@ -170,15 +316,50 @@ struct ContextState {
                                   Other.Origins[R], Other.InputExpressions[R])
                 : std::nullopt;
     for (unsigned R = 0; R < kRegisterCount; ++R)
-      Registers[R].join(Other.Registers[R]);
+      Registers[R].join(Other.Registers[R], Coordinates->Addresses.get());
     for (unsigned R = 0; R < kRegisterCount; ++R)
-      Origins[R].join(Other.Origins[R]);
+      Origins[R].join(Other.Origins[R], Coordinates->Addresses.get());
     Scratch.Memory.meet(Other.Scratch.Memory);
     Scratch.Values.joinValues(Other.Scratch.Values);
+    Scratch.Values.includeCells(ConditionalObjects,
+                                [](const auto &) { return true; });
+    for (const auto Capture : Other.DefinedCaptures)
+      defineCapture(Capture);
     OriginScratch.meet(Other.OriginScratch);
     Postconditions.meet(Other.Postconditions, MergeExpression);
     InputSpills.meet(Other.InputSpills);
     InputWrites.include(Other.InputWrites, symbolicInputs(), Program);
+    if (!Tagged || !Other.Tagged || Tagged->Address != Other.Tagged->Address ||
+        Tagged->Width != Other.Tagged->Width ||
+        Tagged->Cases.size() != Other.Tagged->Cases.size() ||
+        !std::equal(
+            Tagged->Cases.begin(), Tagged->Cases.end(),
+            Other.Tagged->Cases.begin(),
+            [](const auto &A, const auto &B) { return A.Tag == B.Tag; })) {
+      Tagged.reset();
+    } else {
+      Tagged->Registers &= Other.Tagged->Registers;
+      const bool SameDefinitions =
+          Tagged->ConditionalCaptures == Other.Tagged->ConditionalCaptures;
+      if (!SameDefinitions)
+        Tagged->ConditionalCaptures.clear();
+      for (size_t I = 0; I < Tagged->Cases.size(); ++I) {
+        Tagged->Cases[I].Values.joinValues(Other.Tagged->Cases[I].Values);
+        Tagged->Cases[I].Postconditions.meet(
+            Other.Tagged->Cases[I].Postconditions, MergeExpression);
+        auto &Captures = Tagged->Cases[I].DefinedCaptures;
+        if (SameDefinitions) {
+          for (uint64_t Capture : Other.Tagged->Cases[I].DefinedCaptures) {
+            const auto Position =
+                std::lower_bound(Captures.begin(), Captures.end(), Capture);
+            if (Position == Captures.end() || *Position != Capture)
+              Captures.insert(Position, Capture);
+          }
+        } else {
+          Captures.clear();
+        }
+      }
+    }
   }
 };
 
@@ -242,6 +423,8 @@ mapSymbolicValues(const ProvenValueSet &Input,
 
 void widenCapturedValues(ContextState &State,
                          const SymbolicAddressSpace &Addresses) {
+  State.Tagged.reset();
+  State.Nullable.reset();
   const auto Widen = [&](RegisterValue Value) {
     const auto Range = unsignedValueRange(Value, &Addresses);
     return Range ? unsignedRangeValue(*Range) : RegisterValue{};
@@ -267,7 +450,7 @@ bool hasValueIdentity(const RegisterValue &Origin) {
 /// here only when the comparison constrains a potential heap address. This
 /// domain does not introduce ordinary integer-range fixed points.
 bool refineAddressBranch(const MedInstruction *Last, size_t Successor,
-                         ContextState &State,
+                         ContextState &State, const SBFProgram &Program,
                          const SymbolicAddressSpace &Addresses,
                          uint16_t ReturnCarriers) {
   if (!Last || Last->Width != kDoubleWordBitWidth ||
@@ -377,6 +560,34 @@ bool refineAddressBranch(const MedInstruction *Last, size_t Successor,
       Refined->join(Narrowed);
   }
   if (Reachable) {
+    const uint16_t ReturnAliases =
+        State.Nullable && (State.Nullable->Registers & registerBit(Register))
+            ? State.Nullable->Registers
+            : 0;
+    if (ReturnAliases) {
+      const auto Value = Refined->singleton();
+      if (Value.ValueKind == RegisterValue::Kind::Constant &&
+          Value.Value == 0) {
+        if (State.Nullable->ConditionalDefinition)
+          std::erase(State.DefinedCaptures, State.Nullable->Capture);
+        State.Nullable.reset();
+      } else if (llvm::all_of(Refined->values(), [&](const auto &Alternative) {
+                   const auto Bounds =
+                       unsignedValueRange(Alternative, &Addresses);
+                   return Bounds && Bounds->Lower != 0 &&
+                          Bounds->Lower <= Bounds->Upper;
+                 })) {
+        State.Scratch.Values.includeCells(State.Nullable->Values,
+                                          [](const auto &) { return true; });
+        std::array<ProvenValueSet, kRegisterCount> Identity;
+        const auto Inputs = symbolicInputs();
+        for (unsigned R = 0; R < kRegisterCount; ++R)
+          Identity[R] = Inputs[R];
+        State.Postconditions.include(State.Nullable->Postconditions, Identity,
+                                     Program);
+        State.Nullable.reset();
+      }
+    }
     const auto Origin = State.Origins[Register].singleton();
     const bool ScalarOrigin =
         llvm::all_of(Refined->values(), [](const RegisterValue &Value) {
@@ -385,8 +596,9 @@ bool refineAddressBranch(const MedInstruction *Last, size_t Successor,
                  Value.ValueKind == RegisterValue::Kind::SymbolicAddress;
         });
     for (unsigned R = 0; R < kRegisterCount; ++R)
-      if (R == Register || (hasValueIdentity(Origin) &&
-                            State.Origins[R].singleton() == Origin)) {
+      if (R == Register || (ReturnAliases & registerBit(R)) ||
+          (hasValueIdentity(Origin) &&
+           State.Origins[R].singleton() == Origin)) {
         State.Registers[R] = *Refined;
         if (ScalarOrigin)
           State.Origins[R] = *Refined;
@@ -450,7 +662,12 @@ uint64_t stateBytes(const ContextState &State) {
                    State.OriginScratch.retainedByteEstimate() +
                    State.Postconditions.retainedByteEstimate() +
                    State.InputSpills.retainedByteEstimate() +
-                   State.InputWrites.Writes.capacity() * sizeof(MemoryWrite);
+                   State.InputWrites.Writes.capacity() * sizeof(MemoryWrite) +
+                   State.DefinedCaptures.capacity() * sizeof(uint64_t);
+  if (State.Tagged)
+    Bytes += State.Tagged->retainedByteEstimate();
+  if (State.Nullable)
+    Bytes += State.Nullable->retainedByteEstimate();
   for (const auto &Value : State.Registers)
     Bytes += Value.allocatedBytes();
   for (const auto &Origin : State.Origins)
@@ -493,6 +710,7 @@ struct FunctionContext : llvm::FoldingSetNode {
   size_t EntryBlock;
   ContextState Input;
   std::optional<ContextState> Return;
+  std::optional<TaggedMemory> TaggedReturn;
   std::vector<CallXContextEvidence> Sites;
   std::vector<ContextCall> Calls;
   bool IsRoot = false;
@@ -504,6 +722,10 @@ struct FunctionContext : llvm::FoldingSetNode {
   // The symbolic lane can express an argument using its relation to the entry
   // frame even when the body never reads r10. Preserve that anchor on reuse.
   uint16_t ReuseInputRegisters = registerBit(kFramePointerRegister);
+  // Keep exploring the original register inputs while variant space remains.
+  // At capacity, reads confined to nonreturning, unproven subtrees cannot
+  // guard the returning value or the target evidence already retained.
+  uint16_t ObservableInputRegisters = registerBit(kFramePointerRegister);
   // The generic node outlives replaceable forwarding variants, so eviction
   // cannot repeatedly rediscover the same exploratory image binding.
   uint16_t ExploredImageRegisters = 0;
@@ -597,8 +819,22 @@ private:
                                          bool &CoveringInputs);
   llvm::Error computeInputDependencies();
   llvm::Error computeReturnReachability();
+  uint16_t usedCalleeInputs(const MedInstruction &Call, size_t Entry,
+                            uint16_t Inputs) const {
+    // EXIT alone observes only its scalar result. If the caller discards
+    // that result, incoming r0 cannot affect the continuation or memory.
+    if (!LiveCallReturns[Call.Slot] &&
+        Index.find(Program.Med.Blocks[Entry].StartSlot)->Op == Operation::Exit)
+      return Inputs & ~registerBit(kReturnRegister);
+    return Inputs;
+  }
+  llvm::Error refineLoadedEquality(const MedBlock &Block, size_t Successor,
+                                   ContextState &State);
+  llvm::Expected<std::array<std::optional<RegisterValue>, kRegisterCount>>
+  unchangedLoadedCells(const MedBlock &Block, uint16_t Registers,
+                       const ContextState &State);
   ContextState genericInput() const;
-  llvm::Expected<RegisterValue> captureAddress(size_t Owner, size_t CallSlot,
+  llvm::Expected<RegisterValue> captureAddress(size_t Owner, size_t Slot,
                                                uint64_t Source,
                                                UnsignedValueRange Bounds);
   llvm::Error collectEntryPrefixes(CallXContextReport &Report);
@@ -655,11 +891,24 @@ private:
   void transfer(const MedInstruction &Instruction, ContextState &State,
                 MissingRegisters *Missing);
   void transferValues(const MedInstruction &Instruction, ContextState &State);
+  void transferTaggedMemory(const MedInstruction &Instruction,
+                            ContextState &State);
+  llvm::Expected<bool> refineTaggedBranch(const MedBlock &Block,
+                                          size_t Successor,
+                                          ContextState &State);
   void refineOrigins(const FunctionContext &Context, ContextState &State);
   llvm::Expected<size_t> inputExpression(CallXInputExpression Expression);
   llvm::Expected<std::optional<size_t>>
   inputUnionExpression(llvm::ArrayRef<size_t> Alternatives);
   llvm::Error joinStates(ContextState &State, const ContextState &Other);
+  bool needsSummaryInputGuards(const FunctionContext &Summary,
+                               const ContextCall &Edge) const {
+    // A structurally nonreturning subtree cannot affect caller returns. Its
+    // inputs still guard any target evidence retained there or on this edge.
+    // Reusing an unknown target cannot invent a proof for different inputs.
+    return MayReturnFromBlock[Summary.EntryBlock] ||
+           Summary.HasTargetEvidence || !Edge.InputExpressionTargets.empty();
+  }
   llvm::Expected<std::optional<size_t>> inputMemoryGuard(MemoryEffects Effects);
   void addMemoryReadEffects(MemoryEffects &Effects,
                             const MedInstruction &Instruction,
@@ -748,8 +997,10 @@ private:
       Specializations;
   std::vector<uint16_t> InputRegisters;
   std::vector<uint16_t> ReturnCarriers;
+  std::vector<bool> StoredReturnValues;
   std::vector<bool> LiveCallReturns;
   std::vector<bool> ReadsMemory;
+  std::vector<bool> ContainsCalls;
   std::vector<bool> ReachesCallX;
   size_t ProjectedRegisters = 0;
   size_t ProjectedScratchSnapshots = 0;
@@ -1005,8 +1256,8 @@ ContextFlow::unblockedRecursiveCall(FunctionContext &Context) const {
 
 bool ContextFlow::hasCompletedObjectResult(
     const FunctionContext &Context) const {
-  if (!Context.Complete || !Context.Return || !Context.Effects.Unknown ||
-      !Context.Return->Scratch.Memory.empty() ||
+  if (!Context.Complete || !Context.Return || Context.TaggedReturn ||
+      !Context.Effects.Unknown || !Context.Return->Scratch.Memory.empty() ||
       Context.Return->Postconditions.copyCount() ||
       Context.Return->Postconditions.expressionCount() ||
       Context.Return->InputExpressions[kReturnRegister])
@@ -1047,7 +1298,7 @@ ContextFlow::completedObjectBinding(const FunctionContext &Original,
   if (A.Offset != B.Offset)
     return NoBinding;
   // Equal bounds alone do not identify a returned value. Require the same
-  // capturing call and source capture as well. Neither this rename
+  // capturing instruction and source as well. Neither this rename
   // nor a distinct capture ID establishes freshness or non-aliasing.
   const auto Source = [&](const FunctionContext &Owner, uint64_t Capture) {
     auto It = CaptureIndex.lower_bound(
@@ -1210,8 +1461,8 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
   // Start with the opaque-memory case: no returned cells or affine return
   // origins can be lost, and the scalar result must agree exactly.
   const auto OpaqueReturn = [](const FunctionContext &Context) {
-    if (!Context.Complete || !Context.Return || !Context.Effects.Unknown ||
-        !Context.Return->Scratch.empty() ||
+    if (!Context.Complete || !Context.Return || Context.TaggedReturn ||
+        !Context.Effects.Unknown || !Context.Return->Scratch.empty() ||
         Context.Return->Postconditions.size() ||
         Context.Return->Postconditions.copyCount())
       return false;
@@ -1566,10 +1817,9 @@ ContextState ContextFlow::genericInput() const {
 }
 
 llvm::Expected<RegisterValue>
-ContextFlow::captureAddress(size_t Owner, size_t CallSlot, uint64_t Source,
+ContextFlow::captureAddress(size_t Owner, size_t Slot, uint64_t Source,
                             UnsignedValueRange Bounds) {
-  const auto Key =
-      std::tuple(Owner, CallSlot, Source, Bounds.Lower, Bounds.Upper);
+  const auto Key = std::tuple(Owner, Slot, Source, Bounds.Lower, Bounds.Upper);
   if (const auto It = CaptureIndex.find(Key); It != CaptureIndex.end())
     return RegisterValue{RegisterValue::Kind::SymbolicAddress, It->second, 0};
   const uint64_t Bytes = 2 * sizeof(UnsignedValueRange) + 2 * sizeof(size_t) +
@@ -1589,10 +1839,13 @@ llvm::Error ContextFlow::computeInputDependencies() {
   InputRegisters.resize(Count);
   ReturnCarriers.resize(Count);
   LiveCallReturns.resize(Program.Low.Instructions.size(), true);
+  StoredReturnValues.resize(Program.Low.Instructions.size());
   ReadsMemory.resize(Count);
+  ContainsCalls.resize(Count);
   ReachesCallX.resize(Count);
-  if (auto Error = retain(Count * (2 * sizeof(uint16_t) + 2 * sizeof(bool)) +
-                          (LiveCallReturns.capacity() + kBitsPerByte - 1) /
+  if (auto Error = retain(Count * (2 * sizeof(uint16_t) + 3 * sizeof(bool)) +
+                          (LiveCallReturns.capacity() +
+                           StoredReturnValues.capacity() + kBitsPerByte - 1) /
                               kBitsPerByte))
     return Error;
   // Direct call dependencies participate in the same monotone fixed point as
@@ -1639,11 +1892,13 @@ llvm::Error ContextFlow::computeInputDependencies() {
     uint16_t Uses = 0;
     uint16_t ReturnUses = 0;
     bool Memory = false;
+    bool Calls = false;
     bool CallX = false;
     for (size_t E = Offsets[ID]; E < Offsets[ID + 1]; ++E) {
       Uses |= InputRegisters[Successors[E]];
       ReturnUses |= ReturnCarriers[Successors[E]];
       Memory |= ReadsMemory[Successors[E]];
+      Calls |= ContainsCalls[Successors[E]];
       CallX |= ReachesCallX[Successors[E]];
     }
     const auto &Block = Program.Med.Blocks[ID];
@@ -1656,6 +1911,7 @@ llvm::Error ContextFlow::computeInputDependencies() {
       ++DependencyVisits;
       CallInputs Callee;
       if (I->Call != CallKind::None) {
+        Calls = true;
         // Uses is the live-out mask at this call. The same fixed point includes
         // CFG successors and direct callees that consume r0 as an input.
         LiveCallReturns[I->Slot] = Uses & registerBit(kReturnRegister);
@@ -1672,7 +1928,8 @@ llvm::Error ContextFlow::computeInputDependencies() {
             CallX = false;
             LiveCallReturns[I->Slot] = false;
           }
-          Callee = {InputRegisters[Entry], ReadsMemory[Entry]};
+          Callee = {usedCalleeInputs(*I, Entry, InputRegisters[Entry]),
+                    ReadsMemory[Entry]};
           CallX |= ReachesCallX[Entry];
         } else {
           CallX |= I->Call != CallKind::Syscall;
@@ -1680,6 +1937,9 @@ llvm::Error ContextFlow::computeInputDependencies() {
       }
       if (I->Op == Operation::Exit)
         ReturnUses |= registerBit(kReturnRegister);
+      if (I->Op == Operation::Store && I->Form == OperandForm::StoreReg &&
+          I->Width == kDoubleWordBitWidth)
+        StoredReturnValues[I->Slot] = ReturnUses & registerBit(I->Src);
       if (I->Call != CallKind::None) {
         ReturnUses &=
             ~((uint16_t{1} << callClobberedRegisterCount(I->Call)) - 1);
@@ -1700,11 +1960,13 @@ llvm::Error ContextFlow::computeInputDependencies() {
       Memory |= Dependencies.Memory;
     }
     if (Uses == InputRegisters[ID] && ReturnUses == ReturnCarriers[ID] &&
-        Memory == ReadsMemory[ID] && CallX == ReachesCallX[ID])
+        Memory == ReadsMemory[ID] && Calls == ContainsCalls[ID] &&
+        CallX == ReachesCallX[ID])
       continue;
     InputRegisters[ID] = Uses;
     ReturnCarriers[ID] = ReturnUses;
     ReadsMemory[ID] = Memory;
+    ContainsCalls[ID] = Calls;
     ReachesCallX[ID] = CallX;
     for (size_t E = ReverseOffsets[ID]; E < ReverseOffsets[ID + 1]; ++E)
       if (!Queued[Reverse[E]]) {
@@ -1771,11 +2033,7 @@ void ContextFlow::addMemoryAccessEffects(MemoryEffects &Effects,
                    }))
     Origins = State.Registers[AddressRegister];
   for (const auto &Origin : possibleValues(Origins)) {
-    RegisterState Base{};
-    Base[0] = Origin;
-    Effects.addWrite(substituteOrigin({RegisterValue::Kind::StackAddress, 1,
-                                       Instruction.Offset},
-                                      Base, Program),
+    Effects.addWrite(offsetMemoryAccess(Origin, Instruction.Offset),
                      Instruction.Width / kBitsPerByte, Program,
                      CapturedAddresses.get());
   }
@@ -1922,8 +2180,37 @@ ContextFlow::inputUnionExpression(llvm::ArrayRef<size_t> Alternatives) {
 
 llvm::Error ContextFlow::joinStates(ContextState &State,
                                     const ContextState &Other) {
+  uint64_t Temporary =
+      State.DefinedCaptures.empty() && Other.DefinedCaptures.empty()
+          ? 0
+          : sizeof(StoredRegisterMemory) +
+                State.Scratch.Values.retainedByteEstimate() +
+                Other.Scratch.Values.retainedByteEstimate() +
+                2 *
+                    (State.DefinedCaptures.size() +
+                     Other.DefinedCaptures.size()) *
+                    sizeof(uint64_t);
+  for (const auto *Input : std::array<const ContextState *, 2>{&State, &Other})
+    if (Input->Tagged)
+      for (const auto &Case : Input->Tagged->Cases)
+        Temporary += 2 * Case.DefinedCaptures.size() * sizeof(uint64_t);
+  if (State.Nullable || Other.Nullable ||
+      State.Registers[0].singleton() ==
+          RegisterValue{RegisterValue::Kind::Constant, 0, 0} ||
+      Other.Registers[0].singleton() ==
+          RegisterValue{RegisterValue::Kind::Constant, 0, 0})
+    for (const auto *Input :
+         std::array<const ContextState *, 2>{&State, &Other}) {
+      Temporary += Input->Scratch.Values.retainedByteEstimate() +
+                   Input->Postconditions.retainedByteEstimate();
+      if (Input->Nullable)
+        Temporary += Input->Nullable->retainedByteEstimate();
+    }
+  if (auto Error = retain(Temporary))
+    return Error;
+  const auto Release = llvm::scope_exit([&] { RetainedBytes -= Temporary; });
   llvm::Error Failure = llvm::Error::success();
-  State.join(Other, Program,
+  State.join(Other, Program, Coordinates,
              [&](const ProvenValueSet &Left, std::optional<size_t> LeftID,
                  const ProvenValueSet &Right,
                  std::optional<size_t> RightID) -> std::optional<size_t> {
@@ -2280,6 +2567,149 @@ ProvenValueSet ContextFlow::loadOrigin(const MedInstruction &Instruction,
       Instruction.Width / kBitsPerByte);
 }
 
+void ContextFlow::transferTaggedMemory(const MedInstruction &Instruction,
+                                       ContextState &State) {
+  if (!State.Tagged)
+    return;
+  if (Instruction.Call != CallKind::None) {
+    // A fresh call can install its own result below. Retaining an older
+    // partition across arbitrary calls or memory copies requires a separate
+    // complete effect/identity proof.
+    State.Tagged.reset();
+    return;
+  }
+  auto &Tagged = *State.Tagged;
+  if (Instruction.Op == Operation::Store) {
+    StoredRegisterMemory Tag;
+    Tag.setCoordinates(Coordinates);
+    Tag.writeValues(Tagged.Address,
+                    RegisterValue{RegisterValue::Kind::Constant, 0, 0},
+                    Tagged.Width);
+    for (const auto &Base : possibleValues(State.Registers[Instruction.Dst])) {
+      const auto Address = memoryAddress(Base, Instruction.Offset);
+      if (!Address) {
+        State.Tagged.reset();
+        return;
+      }
+      Tag.invalidate(*Address, Instruction.Width / kBitsPerByte);
+      if (Tag.empty()) {
+        State.Tagged.reset();
+        return;
+      }
+      for (auto &Case : Tagged.Cases)
+        Case.Values.invalidate(*Address, Instruction.Width / kBitsPerByte);
+    }
+    RegisterState Entry{};
+    Entry[0] = State.Origins[Instruction.Dst].singleton();
+    const auto Origin = substituteOrigin(
+        {RegisterValue::Kind::StackAddress, 1, Instruction.Offset}, Entry,
+        Program);
+    for (auto &Case : Tagged.Cases)
+      Case.Postconditions.store(Origin, Instruction.Width / kBitsPerByte, {});
+  }
+  if (!Instruction.Semantics.WritesDestination)
+    return;
+  const bool Copy = Instruction.Op == Operation::Mov &&
+                    Instruction.Form == OperandForm::DstSrc &&
+                    Instruction.Width == kDoubleWordBitWidth &&
+                    (Tagged.Registers & registerBit(Instruction.Src));
+  const bool Load = Instruction.Op == Operation::Load &&
+                    Instruction.Width / kBitsPerByte == Tagged.Width &&
+                    memoryAddress(State.Registers[Instruction.Src].singleton(),
+                                  Instruction.Offset) == Tagged.Address;
+  Tagged.Registers &= ~registerBit(Instruction.Dst);
+  if (Copy || Load)
+    Tagged.Registers |= registerBit(Instruction.Dst);
+}
+
+llvm::Expected<bool> ContextFlow::refineTaggedBranch(const MedBlock &Block,
+                                                     size_t Successor,
+                                                     ContextState &State) {
+  const auto *Last = Index.find(Block.EndSlot - 1);
+  if (!Last || !State.Tagged ||
+      Last->Semantics.Terminator != TerminatorKind::ConditionalJump)
+    return true;
+  auto &Tagged = *State.Tagged;
+  const uint16_t Read =
+      registerBit(Last->Dst) |
+      (Last->Semantics.Source == OperandSourceKind::SourceRegister
+           ? registerBit(Last->Src)
+           : 0);
+  if (!(Read & Tagged.Registers))
+    return true;
+  ContextState Probe;
+  Probe.Registers = State.Registers;
+  llvm::erase_if(Tagged.Cases, [&](const auto &Case) {
+    for (unsigned R = 0; R < kRegisterCount; ++R)
+      if (Tagged.Registers & registerBit(R))
+        Probe.Registers[R] =
+            RegisterValue{RegisterValue::Kind::Constant, Case.Tag, 0};
+    const auto Selected = knownBranchSuccessor(Last, Probe);
+    return Selected && *Selected != Successor;
+  });
+  if (Tagged.Cases.empty())
+    return false;
+  std::erase_if(State.DefinedCaptures, [&](uint64_t Capture) {
+    return std::binary_search(Tagged.ConditionalCaptures.begin(),
+                              Tagged.ConditionalCaptures.end(), Capture) &&
+           llvm::none_of(Tagged.Cases, [&](const auto &Case) {
+             return std::binary_search(Case.DefinedCaptures.begin(),
+                                       Case.DefinedCaptures.end(), Capture);
+           });
+  });
+  const auto &First = Tagged.Cases.front();
+  const uint64_t Temporary = sizeof(TaggedMemoryCase) +
+                             First.Values.retainedByteEstimate() +
+                             First.Postconditions.retainedByteEstimate();
+  if (auto Error = retain(Temporary))
+    return std::move(Error);
+  const auto Release = llvm::scope_exit([&] { RetainedBytes -= Temporary; });
+  TaggedMemoryCase Facts{First.Tag, First.Values, First.Postconditions, {}};
+  ProvenValueSet Tags(
+      RegisterValue{RegisterValue::Kind::Constant, Facts.Tag, 0});
+  for (const auto &Case : llvm::drop_begin(Tagged.Cases)) {
+    Facts.Values.joinValues(Case.Values);
+    Facts.Postconditions.meet(Case.Postconditions);
+    Tags.join(RegisterValue{RegisterValue::Kind::Constant, Case.Tag, 0});
+  }
+  State.Scratch.Values.includeCells(Facts.Values,
+                                    [](const RegisterValue &) { return true; });
+  std::array<ProvenValueSet, kRegisterCount> Identity;
+  const auto Inputs = symbolicInputs();
+  for (unsigned R = 0; R < kRegisterCount; ++R) {
+    Identity[R] = Inputs[R];
+    if (Tagged.Registers & registerBit(R)) {
+      State.Registers[R] = Tags;
+      State.Origins[R] = Tags;
+    }
+  }
+  State.Postconditions.include(Facts.Postconditions, Identity, Program);
+  uint16_t LoadedRegisters = 0;
+  for (unsigned R = 0; R < kRegisterCount; ++R)
+    if (State.Registers[R].singleton().ValueKind ==
+        RegisterValue::Kind::Unknown)
+      LoadedRegisters |= registerBit(R);
+  if (LoadedRegisters) {
+    auto Cells = unchangedLoadedCells(Block, LoadedRegisters, State);
+    if (!Cells)
+      return Cells.takeError();
+    for (unsigned R = 0; R < kRegisterCount; ++R) {
+      if (!(*Cells)[R])
+        continue;
+      const auto &Value = State.Scratch.Values.readValues(*(*Cells)[R]);
+      if (!Value.unknown() && Value != State.Registers[R]) {
+        State.Registers[R] = Value;
+        // The old origin joined the unselected payloads as well. Rebuild its
+        // literal/capture or frame-relative origin from this selected value.
+        State.Origins[R] = {};
+      }
+    }
+  }
+  if (Tagged.Cases.size() == 1)
+    State.Tagged.reset();
+  return true;
+}
+
 void ContextFlow::transferValues(const MedInstruction &Instruction,
                                  ContextState &State) {
   const auto OriginAddress = [&](unsigned Register) {
@@ -2504,8 +2934,119 @@ void ContextFlow::refineOrigins(const FunctionContext &Context,
   }
 }
 
+llvm::Expected<std::array<std::optional<RegisterValue>, kRegisterCount>>
+ContextFlow::unchangedLoadedCells(const MedBlock &Block, uint16_t Registers,
+                                  const ContextState &State) {
+  std::array<std::optional<RegisterValue>, kRegisterCount> Cells;
+  std::array<unsigned, kRegisterCount> Carriers;
+  for (unsigned R = 0; R < kRegisterCount; ++R)
+    Carriers[R] = R;
+  uint16_t Changed = 0;
+  // All carriers share one bounded walk. A store/call ends the memory epoch;
+  // a changed load base cannot use its current register value.
+  for (size_t Slot = Block.EndSlot - 1; Registers && Slot > Block.StartSlot;) {
+    const auto *Instruction = Index.find(--Slot);
+    if (!Instruction)
+      continue;
+    if (auto Error = visit())
+      return Error;
+    if (Instruction->Call != CallKind::None ||
+        Instruction->Op == Operation::Store)
+      break;
+    if (!Instruction->Semantics.WritesDestination)
+      continue;
+    for (unsigned R = 0; R < kRegisterCount; ++R) {
+      if (!(Registers & registerBit(R)) || Instruction->Dst != Carriers[R])
+        continue;
+      if (Instruction->Op == Operation::Mov &&
+          Instruction->Form == OperandForm::DstSrc &&
+          Instruction->Width == kDoubleWordBitWidth) {
+        Carriers[R] = Instruction->Src;
+      } else {
+        if (Instruction->Op == Operation::Load &&
+            Instruction->Semantics.MemoryWidth == kDoubleWordBitWidth &&
+            Instruction->Src != Instruction->Dst &&
+            !(Changed & registerBit(Instruction->Src))) {
+          Cells[R] =
+              memoryAddress(State.Registers[Instruction->Src].singleton(),
+                            Instruction->Offset);
+        }
+        Registers &= ~registerBit(R);
+      }
+    }
+    Changed |= registerBit(Instruction->Dst);
+  }
+  return Cells;
+}
+
+llvm::Error ContextFlow::refineLoadedEquality(const MedBlock &Block,
+                                              size_t Successor,
+                                              ContextState &State) {
+  const auto *Branch = Index.find(Block.EndSlot - 1);
+  if (!Branch || Branch->Width != kDoubleWordBitWidth ||
+      (Branch->Op != Operation::Eq && Branch->Op != Operation::Ne) ||
+      (Successor == *Branch->BranchTarget) != (Branch->Op == Operation::Eq))
+    return llvm::Error::success();
+  unsigned Register = Branch->Dst;
+  RegisterValue Equal =
+      Branch->Semantics.Source == OperandSourceKind::SourceRegister
+          ? State.Registers[Branch->Src].singleton()
+          : RegisterValue{RegisterValue::Kind::Constant,
+                          normalizeImmediate(Branch->Immediate,
+                                             Branch->Semantics.Immediate),
+                          0};
+  if (Equal.ValueKind != RegisterValue::Kind::Constant) {
+    if (Branch->Semantics.Source != OperandSourceKind::SourceRegister)
+      return llvm::Error::success();
+    Equal = State.Registers[Branch->Dst].singleton();
+    Register = Branch->Src;
+  }
+  if (Equal.ValueKind != RegisterValue::Kind::Constant ||
+      !State.Registers[Register].unknown())
+    return llvm::Error::success();
+  auto Cells = unchangedLoadedCells(Block, registerBit(Register), State);
+  if (!Cells)
+    return Cells.takeError();
+  if (const auto &Address = (*Cells)[Register]) {
+    // This edge proves the value of an unchanged cell, not a guest write.
+    State.Scratch.Values.writeValues(*Address, Equal);
+    State.Registers[Register] = Equal;
+  }
+  return llvm::Error::success();
+}
+
 void ContextFlow::transfer(const MedInstruction &Instruction,
                            ContextState &State, MissingRegisters *Missing) {
+  transferTaggedMemory(Instruction, State);
+  if (State.Nullable && Instruction.Op == Operation::Store) {
+    for (const auto &Base : possibleValues(State.Registers[Instruction.Dst])) {
+      const auto Address = memoryAddress(Base, Instruction.Offset);
+      if (Address)
+        State.Nullable->Values.invalidate(*Address,
+                                          Instruction.Width / kBitsPerByte);
+      else
+        State.Nullable->Values.clear();
+    }
+    RegisterState Entry{};
+    Entry[0] = State.Origins[Instruction.Dst].singleton();
+    State.Nullable->Postconditions.store(
+        substituteOrigin(
+            {RegisterValue::Kind::StackAddress, 1, Instruction.Offset}, Entry,
+            Program),
+        Instruction.Width / kBitsPerByte, {});
+  }
+  if (State.Nullable && Instruction.Semantics.WritesDestination) {
+    const bool Copy =
+        Instruction.Op == Operation::Mov &&
+        Instruction.Form == OperandForm::DstSrc &&
+        Instruction.Width == kDoubleWordBitWidth &&
+        (State.Nullable->Registers & registerBit(Instruction.Src));
+    State.Nullable->Registers &= ~registerBit(Instruction.Dst);
+    if (Copy)
+      State.Nullable->Registers |= registerBit(Instruction.Dst);
+    if (!State.Nullable->Registers)
+      State.Nullable.reset();
+  }
   const RegisterValue Base = State.Registers[Instruction.Src].singleton();
   const auto Address = Instruction.Op == Operation::Load
                            ? effectiveAddress(Base, Instruction.Offset)
@@ -2905,6 +3446,7 @@ llvm::Error ContextFlow::instantiateTargetInputs(FunctionContext &Caller,
 llvm::Expected<bool> ContextFlow::call(FunctionContext &Context,
                                        const MedInstruction &Instruction,
                                        ContextState &State, bool Collect) {
+  State.Tagged.reset();
   if (Instruction.Call != CallKind::Indirect)
     return callTarget(Context, Instruction, State, Collect);
   const auto Targets = State.Registers[Instruction.CallRegister].values();
@@ -3227,6 +3769,7 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
                                              const MedInstruction &Instruction,
                                              ContextState &State,
                                              bool Collect) {
+  State.Nullable.reset();
   // Resolved runtime calls keep the one canonical memory-effect owner.
   if (Instruction.Call == CallKind::Syscall) {
     Context.HasMemoryTransfer |=
@@ -3399,14 +3942,8 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
       }
     }
   }
-  // A structurally nonreturning subtree cannot affect caller returns.
-  // Its reads still guard any target evidence actually retained in the
-  // completed subtree or instantiated on this edge. Reusing an unknown target
-  // cannot invent a proof, even if different memory could refine that target.
   const bool ObservableCalleeReads =
-      Callee &&
-      (MayReturnFromBlock[Callee->EntryBlock] || Callee->HasTargetEvidence ||
-       !Edge.InputExpressionTargets.empty());
+      Callee && needsSummaryInputGuards(*Callee, Edge);
 
   const auto IncludeCalleeReads = [&] {
     if (!Collect || !ObservableCalleeReads || Edge.LegacyRuntime)
@@ -3552,6 +4089,11 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
   ProvenValueSet ReturnOrigins;
   llvm::Error CaptureError = llvm::Error::success();
   std::set<size_t> ImportedCaptures;
+  std::optional<bool> NullableWasNew;
+  std::map<uint64_t, uint64_t> NewCaptures;
+  uint64_t NewCaptureBytes = 0;
+  const auto ReleaseNewCaptures =
+      llvm::scope_exit([&] { RetainedBytes -= NewCaptureBytes; });
   const auto BindCapture = [&](RegisterValue Value) {
     if (Edge.LegacyRuntime || !Callee ||
         CaptureOwners[Value.Value] != Callee->ID)
@@ -3564,6 +4106,21 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
       return RegisterValue{};
     }
     ImportedCaptures.insert(Bound->Value);
+    if (Callee->Return && Callee->Return->Nullable &&
+        Value.Value == Callee->Return->Nullable->Capture && !NullableWasNew)
+      NullableWasNew = !State.definesCapture(Bound->Value);
+    if (Callee->TaggedReturn && !State.definesCapture(Bound->Value)) {
+      constexpr uint64_t Bytes =
+          sizeof(decltype(NewCaptures)::value_type) + 4 * sizeof(void *);
+      if (auto Error = retain(Bytes)) {
+        CaptureError =
+            llvm::joinErrors(std::move(CaptureError), std::move(Error));
+        return RegisterValue{};
+      }
+      NewCaptureBytes += Bytes;
+      NewCaptures.emplace(Value.Value, Bound->Value);
+    }
+    State.defineCapture(Bound->Value);
     Bound->Offset = Value.Offset;
     return *Bound;
   };
@@ -3576,6 +4133,113 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
     ReturnOrigins = substituteOrigins(
         mapSymbolicValues(Callee->Return->Origins[0], BindCapture), OriginEntry,
         Program);
+  if (CaptureError)
+    return std::move(CaptureError);
+  std::optional<NullableCapture> ReturnedNullable;
+  uint64_t ReturnedNullableBytes = 0;
+  const auto ReleaseReturnedNullable =
+      llvm::scope_exit([&] { RetainedBytes -= ReturnedNullableBytes; });
+  if (Callee && Callee->Return && Callee->Return->Nullable &&
+      (Callee->Return->Nullable->Registers & registerBit(0)) &&
+      !Edge.LegacyRuntime) {
+    const auto &Template = *Callee->Return->Nullable;
+    const auto Capture = BindCapture(
+        {RegisterValue::Kind::SymbolicAddress, Template.Capture, 0});
+    if (CaptureError)
+      return std::move(CaptureError);
+    MemoryPostconditions Fields = Template.Postconditions;
+    Fields.transformSymbols(BindCapture);
+    if (CaptureError)
+      return std::move(CaptureError);
+    ScratchState Values;
+    Values.Values.setCoordinates(Coordinates);
+    Fields.apply(Values, ValueEntry.Registers, Program, &State.Scratch);
+    auto Objects = Template.Values;
+    rebaseReturnedFrame(Objects, ReturnFrameDelta);
+    if (Callee->Generic &&
+        Edge.InputGeneralization !=
+            CallXInputGeneralization::EquivalentGenericInputs)
+      Objects.discardFrameCoordinates();
+    Objects.transformSymbols(BindCapture);
+    if (CaptureError)
+      return std::move(CaptureError);
+    Values.Values.includeCells(Objects, [](const auto &) { return true; });
+    ReturnedNullable = NullableCapture{Capture.Value,
+                                       registerBit(0),
+                                       Template.ConditionalDefinition &&
+                                           NullableWasNew.value_or(false),
+                                       std::move(Values.Values),
+                                       {}};
+    ReturnedNullable->Postconditions.include(Fields, OriginEntry, Program);
+    ReturnedNullableBytes = ReturnedNullable->retainedByteEstimate() +
+                            Fields.retainedByteEstimate() +
+                            Objects.retainedByteEstimate();
+    if (auto Error = retain(ReturnedNullableBytes)) {
+      ReturnedNullableBytes = 0;
+      return std::move(Error);
+    }
+  }
+  if (CaptureError)
+    return std::move(CaptureError);
+  std::optional<TaggedMemory> ReturnedTagged;
+  uint64_t ReturnedTaggedBytes = 0;
+  const auto ReleaseReturnedTagged =
+      llvm::scope_exit([&] { RetainedBytes -= ReturnedTaggedBytes; });
+  if (Callee && Callee->TaggedReturn && !Edge.LegacyRuntime) {
+    const auto &Template = *Callee->TaggedReturn;
+    const auto Address = memoryAddress(
+        substituteOrigins(mapSymbolicValues(Template.Address, BindCapture),
+                          ValueEntry.Registers, Program)
+            .singleton());
+    StoredRegisterMemory Owner;
+    Owner.setCoordinates(Coordinates);
+    if (Address && Owner.canModelRange(*Address, Template.Width)) {
+      ReturnedTagged = TaggedMemory{*Address, Template.Width, 0, {}, {}};
+      for (const auto &Original : Template.Cases) {
+        MemoryPostconditions Fields = Original.Postconditions;
+        Fields.transformSymbols(BindCapture);
+        ScratchState Values;
+        Values.Values.setCoordinates(Coordinates);
+        Fields.apply(Values, ValueEntry.Registers, Program, &State.Scratch);
+        auto Applied =
+            applyStoredExpressions(Fields, ValueEntry, State.Scratch, Values);
+        if (!Applied)
+          return Applied.takeError();
+        auto Objects = Original.Values;
+        rebaseReturnedFrame(Objects, ReturnFrameDelta);
+        Objects.transformSymbols(BindCapture);
+        Values.Values.includeCells(Objects, [](const auto &) { return true; });
+        const uint64_t Temporary = Fields.retainedByteEstimate() +
+                                   Values.retainedByteEstimate() +
+                                   Objects.retainedByteEstimate();
+        if (auto Error = retain(Temporary))
+          return std::move(Error);
+        const auto Release =
+            llvm::scope_exit([&] { RetainedBytes -= Temporary; });
+        const auto Tag =
+            Values.Values.readValues(*Address, Template.Width).singleton();
+        if (Tag.ValueKind != RegisterValue::Kind::Constant ||
+            Tag.Value != Original.Tag) {
+          ReturnedTagged.reset();
+          break;
+        }
+        TaggedMemoryCase Case;
+        Case.Tag = Original.Tag;
+        Case.Values = std::move(Values.Values);
+        // Callee expression IDs were evaluated against this call's entry.
+        // Only substituted origins can enter the caller's formal lane.
+        Fields.discardExpressions();
+        Case.Postconditions.include(Fields, OriginEntry, Program);
+        ReturnedTagged->Cases.push_back(std::move(Case));
+        const uint64_t Bytes = ReturnedTagged->retainedByteEstimate();
+        if (auto Error = retain(Bytes - ReturnedTaggedBytes))
+          return std::move(Error);
+        ReturnedTaggedBytes = Bytes;
+      }
+      if (ReturnedTagged)
+        Edge.InstantiatedTaggedOutputCases = ReturnedTagged->Cases.size();
+    }
+  }
   if (CaptureError)
     return std::move(CaptureError);
   std::optional<size_t> ReturnExpression;
@@ -3810,6 +4474,7 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
       State.Registers[kReturnRegister] = std::move(InstantiatedReturn);
     State.Registers[0] = mapSymbolicValues(State.Registers[0], BindCapture);
     std::optional<ProvenValueSet> CapturedReturn;
+    std::optional<uint64_t> NewCapture;
     for (auto Value : State.Registers[0].values()) {
       if (NeedsReturnExpression &&
           Value.ValueKind == RegisterValue::Kind::UnsignedRange &&
@@ -3820,6 +4485,11 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
         if (!Captured)
           return Captured.takeError();
         Value = *Captured;
+        const auto Bounds = (*CapturedAddresses)[Value.Value];
+        if (!State.definesCapture(Value.Value) && Bounds.Lower != 0 &&
+            Bounds.Lower <= Bounds.Upper)
+          NewCapture = Value.Value;
+        State.defineCapture(Value.Value);
       }
       if (!CapturedReturn)
         CapturedReturn = Value;
@@ -3828,8 +4498,45 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
     }
     if (CapturedReturn && !Edge.LegacyRuntime)
       State.Registers[0] = *CapturedReturn;
+    const auto IsNullableReturn = [&](uint64_t Capture) {
+      return State.Registers[0].values().size() == 2 &&
+             llvm::all_of(State.Registers[0].values(), [&](const auto &Value) {
+               return (Value.ValueKind == RegisterValue::Kind::Constant &&
+                       Value.Value == 0) ||
+                      (Value.ValueKind ==
+                           RegisterValue::Kind::SymbolicAddress &&
+                       Value.Value == Capture && Value.Offset == 0);
+             });
+    };
+    if (NewCapture && !Edge.LegacyRuntime && IsNullableReturn(*NewCapture))
+      State.Nullable =
+          NullableCapture{*NewCapture, registerBit(0), true, {}, {}};
+    if (ReturnedNullable && IsNullableReturn(ReturnedNullable->Capture))
+      State.Nullable = std::move(ReturnedNullable);
     if (CaptureError)
       return std::move(CaptureError);
+    if (ReturnedTagged) {
+      // Binding other return lanes can introduce additional escaping names.
+      // Complete the per-case history after all bindings, without creating
+      // names for private objects that never escaped the callee.
+      for (const auto &[Source, Bound] : NewCaptures) {
+        ReturnedTagged->ConditionalCaptures.push_back(Bound);
+        for (size_t I = 0; I < ReturnedTagged->Cases.size(); ++I) {
+          const auto &Definitions =
+              Callee->TaggedReturn->Cases[I].DefinedCaptures;
+          if (std::binary_search(Definitions.begin(), Definitions.end(),
+                                 Source))
+            ReturnedTagged->Cases[I].DefinedCaptures.push_back(Bound);
+        }
+      }
+      llvm::sort(ReturnedTagged->ConditionalCaptures);
+      for (auto &Case : ReturnedTagged->Cases)
+        llvm::sort(Case.DefinedCaptures);
+      const uint64_t Bytes = ReturnedTagged->retainedByteEstimate();
+      if (auto Error = retain(Bytes - ReturnedTaggedBytes))
+        return std::move(Error);
+      ReturnedTaggedBytes = Bytes;
+    }
     if (!State.Registers[0].unknown() &&
         llvm::all_of(State.Registers[0].values(),
                      [](const RegisterValue &Value) {
@@ -3847,6 +4554,7 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
     State.OriginScratch = std::move(PreservedOrigins);
     State.OriginScratch.Memory.clear();
     State.Postconditions = std::move(PreservedPostconditions);
+    State.Tagged = std::move(ReturnedTagged);
   }
   if (Context.Generic) {
     for (unsigned R = 0; R < callClobberedRegisterCount(Instruction.Call); ++R)
@@ -3944,27 +4652,38 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
       if (!Continues)
         return Continues.takeError();
       CallInputs Callee;
+      uint16_t ObservableRegisters = AllRegisters;
       if (Collect) {
         Callee = {0, false};
+        ObservableRegisters = 0;
         for (size_t I = FirstEdge; I < Context.Calls.size(); ++I) {
           const auto &Edge = Context.Calls[I];
           if (Edge.Barrier != CallXSummaryBarrier::None || Edge.LegacyRuntime) {
             Callee = {};
+            ObservableRegisters = AllRegisters;
             break;
           }
           const auto &Summary = *Contexts[*Edge.CalleeSummaryID];
-          if (Summary.Generic) {
-            Callee.Registers |= InputRegisters[Summary.EntryBlock];
-            Callee.Memory |= ReadsMemory[Summary.EntryBlock];
-          } else {
-            Callee.Registers |= Summary.ReuseInputRegisters;
-            Callee.Memory |= Summary.ReuseReadsMemory;
-          }
+          Callee.Registers |= usedCalleeInputs(
+              *Instruction, Summary.EntryBlock,
+              Summary.Generic ? InputRegisters[Summary.EntryBlock]
+                              : Summary.ReuseInputRegisters);
+          Callee.Memory |= Summary.Generic ? ReadsMemory[Summary.EntryBlock]
+                                           : Summary.ReuseReadsMemory;
+          if (needsSummaryInputGuards(Summary, Edge))
+            ObservableRegisters |= usedCalleeInputs(
+                *Instruction, Summary.EntryBlock,
+                Summary.Generic ? InputRegisters[Summary.EntryBlock]
+                                : Summary.ObservableInputRegisters);
         }
       }
       const auto Dependencies = instructionDependencies(*Instruction, Callee);
       if (Collect) {
         Context.ReuseInputRegisters |= Dependencies.Reads & ~Defined;
+        Context.ObservableInputRegisters |=
+            instructionDependencies(*Instruction, {ObservableRegisters, false})
+                .Reads &
+            ~Defined;
         Context.ReuseReadsMemory |= Dependencies.Memory;
       }
       Defined |= Dependencies.Writes;
@@ -3984,6 +4703,7 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
       const auto Dependencies = instructionDependencies(*Instruction);
       if (Collect) {
         Context.ReuseInputRegisters |= Dependencies.Reads & ~Defined;
+        Context.ObservableInputRegisters |= Dependencies.Reads & ~Defined;
         Context.ReuseReadsMemory |= Dependencies.Memory;
       }
       Defined |= Dependencies.Writes;
@@ -3996,6 +4716,29 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
                                Instruction->Dst);
       if (Collect && Instruction->Op == Operation::Load) {
         addMemoryReadEffects(Context.ReadEffects, *Instruction, State);
+      }
+      if (StoredReturnValues[Slot]) {
+        const unsigned Source = Instruction->Src;
+        const auto Value = State.Registers[Source].singleton();
+        if (Value.ValueKind == RegisterValue::Kind::UnsignedRange &&
+            Value.Value >= kHeapStart &&
+            Value.Value < kHeapStart + kMemoryRegionSize) {
+          // Name the stored value after predecessor ranges have joined. The
+          // store and later return then share one identity, even when several
+          // bounds checks or a covered literal reach this instruction.
+          auto Capture = captureAddress(Context.ID, Slot, Source,
+                                        *unsignedValueRange(Value));
+          if (!Capture)
+            return Capture.takeError();
+          const auto Origin = State.Origins[Source].singleton();
+          for (unsigned R = 0; R < kRegisterCount; ++R)
+            if (R == Source || (hasValueIdentity(Origin) &&
+                                State.Origins[R].singleton() == Origin)) {
+              State.Registers[R] = *Capture;
+              State.Origins[R] = *Capture;
+            }
+          State.defineCapture(Capture->Value);
+        }
       }
       if (Context.Generic)
         if (auto Error = transferInputExpression(*Instruction, State))
@@ -4083,6 +4826,11 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
     Input.Origins[R] = Origins[R];
   Input.OriginScratch.clear();
   Input.Postconditions.clear();
+  Input.Tagged.reset();
+  // Incoming names belong to callers, not to the invocation being summarized.
+  // Their fields still use the ordinary must-fact join within this summary.
+  Input.DefinedCaptures = std::vector<uint64_t>{};
+  Input.Nullable.reset();
   Input.InputExpressions = {};
   Input.InputSpills.clear();
   Input.InputWrites = {};
@@ -4160,9 +4908,15 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
         continue;
       bool Same = true;
       bool CoveringInputs = false;
+      bool RelaxedInputGuards = false;
       for (unsigned R = 0; R < kRegisterCount; ++R)
         if ((Candidate->ReuseInputRegisters & registerBit(R)) &&
             Candidate->Input.Registers[R] != Input.Registers[R]) {
+          if (AtCapacity &&
+              !(Candidate->ObservableInputRegisters & registerBit(R))) {
+            RelaxedInputGuards = true;
+            continue;
+          }
           const auto Value = Input.Registers[R].singleton();
           if (!AtCapacity ||
               Value.ValueKind != RegisterValue::Kind::UnsignedRange) {
@@ -4191,7 +4945,7 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
       const bool DifferentMemory =
           (Candidate->ReuseReadsMemory || !Candidate->PreservesMemory) &&
           Candidate->Input.Scratch != Input.Scratch;
-      if (DifferentMemory || CoveringInputs) {
+      if (DifferentMemory || CoveringInputs || RelaxedInputGuards) {
         // Keep exact scratch variants while space remains. The projected
         // output uses may-write effects, which can be less precise than a
         // fresh execution even when the changed input fields are unread.
@@ -4249,7 +5003,7 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
         if (Candidate->RootGeneration < RootGeneration)
           return Candidate;
         ContextState Widened = Candidate->Input;
-        Widened.join(Input, Program);
+        Widened.join(Input, Program, Coordinates);
         if (Widened.Registers == Input.Registers &&
             Widened.Scratch == Input.Scratch)
           return Candidate;
@@ -4303,10 +5057,12 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
 
   std::map<size_t, BlockState> States;
   std::deque<size_t> Worklist;
-  // Converge concrete indirect sites before requesting their callees again.
-  // Generic summaries and concrete forwarding wrappers retain FIFO order, so
-  // their early demands do not displace later bounded callee specializations.
-  const bool Ordered = !Generic && !GenericContexts.at(Entry)->Sites.empty();
+  // Leaf CFGs merge predecessor ranges before naming stored return values.
+  // Concrete indirect sites also converge before requesting their callees
+  // again. Other callers keep FIFO order so their early demands do not
+  // displace later bounded callee specializations.
+  const bool Ordered = !ContainsCalls[Entry] ||
+                       (!Generic && !GenericContexts.at(Entry)->Sites.empty());
   const auto Later = [&](size_t Left, size_t Right) {
     return BlockOrder[Left] > BlockOrder[Right];
   };
@@ -4332,6 +5088,13 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
           State.Origins[R] = {};
           State.InputExpressions[R].reset();
         }
+      if (State.Tagged)
+        State.Tagged->Registers &= Inputs;
+      if (State.Nullable) {
+        State.Nullable->Registers &= Inputs;
+        if (!State.Nullable->Registers)
+          State.Nullable.reset();
+      }
       if (!ReadsMemory[BlockID])
         State.InputWrites = {};
     };
@@ -4360,6 +5123,9 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
         Merged.InputExpressions == It->second.Entry.InputExpressions &&
         Merged.InputSpills == It->second.Entry.InputSpills &&
         Merged.InputWrites == It->second.Entry.InputWrites &&
+        Merged.Tagged == It->second.Entry.Tagged &&
+        Merged.DefinedCaptures == It->second.Entry.DefinedCaptures &&
+        Merged.Nullable == It->second.Entry.Nullable &&
         MergedDefinitions == It->second.DefinitelyWritten)
       return llvm::Error::success();
     const uint64_t OldCharge = StateCharge(It->second.Entry);
@@ -4411,8 +5177,17 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
         }
         ContextState SuccessorState = State;
         const size_t NextSlot = Program.Med.Blocks[Successors[E]].StartSlot;
+        auto TaggedReachable =
+            refineTaggedBranch(MedBlock, NextSlot, SuccessorState);
+        if (!TaggedReachable)
+          return TaggedReachable.takeError();
+        if (!*TaggedReachable)
+          continue;
+        if (auto Error =
+                refineLoadedEquality(MedBlock, NextSlot, SuccessorState))
+          return std::move(Error);
         if (!refineAddressBranch(Index.find(MedBlock.EndSlot - 1), NextSlot,
-                                 SuccessorState, *CapturedAddresses,
+                                 SuccessorState, Program, *CapturedAddresses,
                                  ReturnCarriers[Successors[E]]))
           continue;
         // Reverse postorder identifies a DFS backedge even when the bytecode
@@ -4425,6 +5200,130 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
       }
     }
   }
+  // A common store-tag/exit tail destroys the correlation at its entry join.
+  // Recover its complete partition from converged predecessor exits only.
+  // Other return shapes remain in the ordinary pointwise domain.
+  std::optional<size_t> TaggedTail;
+  const MedInstruction *TagStore = nullptr;
+  size_t ReturnBlocks = 0;
+  for (const auto &[BlockID, Block] : States) {
+    const auto &MedBlock = Program.Med.Blocks[BlockID];
+    const auto *Last = Index.find(MedBlock.EndSlot - 1);
+    if (!Last || Last->Op != Operation::Exit)
+      continue;
+    ++ReturnBlocks;
+    const auto *First = Index.find(MedBlock.StartSlot);
+    if (First && First->Op == Operation::Store &&
+        First->Form == OperandForm::StoreReg &&
+        First->Slot + First->SlotWidth == Last->Slot && BlockID != Entry) {
+      TaggedTail = BlockID;
+      TagStore = First;
+    }
+  }
+  if (ReturnBlocks != 1)
+    TaggedTail.reset();
+  std::optional<TaggedMemory> TaggedReturn;
+  uint64_t TaggedBytes = 0;
+  bool RejectedTag = false;
+  const auto ReleaseTagged =
+      llvm::scope_exit([&] { RetainedBytes -= TaggedBytes; });
+  const auto CollectTagged = [&](size_t BlockID,
+                                 const ContextState &State) -> llvm::Error {
+    if (!TaggedTail || RejectedTag ||
+        !llvm::is_contained(llvm::ArrayRef(Successors)
+                                .slice(Offsets[BlockID],
+                                       Offsets[BlockID + 1] - Offsets[BlockID]),
+                            *TaggedTail))
+      return llvm::Error::success();
+    const auto &MedBlock = Program.Med.Blocks[BlockID];
+    const auto Selected =
+        knownBranchSuccessor(Index.find(MedBlock.EndSlot - 1), State);
+    const size_t TailSlot = Program.Med.Blocks[*TaggedTail].StartSlot;
+    if (Selected && *Selected != TailSlot)
+      return llvm::Error::success();
+    const uint64_t Temporary = stateBytes(State);
+    if (auto Error = retain(Temporary))
+      return Error;
+    const auto Release = llvm::scope_exit([&] { RetainedBytes -= Temporary; });
+    ContextState Path = State;
+    auto TaggedReachable = refineTaggedBranch(MedBlock, TailSlot, Path);
+    if (!TaggedReachable)
+      return TaggedReachable.takeError();
+    if (!*TaggedReachable)
+      return llvm::Error::success();
+    if (auto Error = refineLoadedEquality(MedBlock, TailSlot, Path))
+      return Error;
+    if (!refineAddressBranch(Index.find(MedBlock.EndSlot - 1), TailSlot, Path,
+                             Program, *CapturedAddresses,
+                             ReturnCarriers[*TaggedTail]))
+      return llvm::Error::success();
+    if (BlockOrder[*TaggedTail] <= BlockOrder[BlockID])
+      widenCapturedValues(Path, *CapturedAddresses);
+    const unsigned Width = TagStore->Width / kBitsPerByte;
+    const auto Tag =
+        truncateStoredValue(Path.Registers[TagStore->Src], Width).singleton();
+    refineOrigins(Context, Path);
+    RegisterState Entry{};
+    Entry[0] = Path.Origins[TagStore->Dst].singleton();
+    const auto Address = substituteOrigin(
+        {RegisterValue::Kind::StackAddress, 1, TagStore->Offset}, Entry,
+        Program);
+    if (Tag.ValueKind != RegisterValue::Kind::Constant ||
+        Address.ValueKind == RegisterValue::Kind::Unknown ||
+        (TaggedReturn &&
+         (TaggedReturn->Address != Address || TaggedReturn->Width != Width))) {
+      RejectedTag = true;
+      return llvm::Error::success();
+    }
+    if (auto Error = visit())
+      return Error;
+    transfer(*TagStore, Path, nullptr);
+    if (!TaggedReturn)
+      TaggedReturn = TaggedMemory{Address, Width, 0, {}, {}};
+    TaggedMemoryCase Case;
+    Case.Tag = Tag.Value;
+    Case.Postconditions = std::move(Path.Postconditions);
+    Case.Postconditions.discardInputCopies();
+    Case.Postconditions.store(Address, Width, Tag);
+    Case.Values.setCoordinates(Coordinates);
+    Case.Values.includeCells(Path.Scratch.Values, [&](const auto &Cell) {
+      return Cell.ValueKind == RegisterValue::Kind::SymbolicAddress &&
+             CaptureOwners[Cell.Value] == Context.ID;
+    });
+    Case.DefinedCaptures = std::move(Path.DefinedCaptures);
+    std::erase_if(Case.DefinedCaptures, [&](uint64_t Capture) {
+      return CaptureOwners[Capture] != Context.ID;
+    });
+    auto Existing = llvm::find_if(TaggedReturn->Cases, [&](const auto &Old) {
+      return Old.Tag == Case.Tag;
+    });
+    if (Existing == TaggedReturn->Cases.end()) {
+      if (TaggedReturn->Cases.size() == kCallXContextValueAlternatives) {
+        RejectedTag = true;
+        return llvm::Error::success();
+      }
+      TaggedReturn->Cases.push_back(std::move(Case));
+    } else {
+      Existing->Values.joinValues(Case.Values);
+      Existing->Postconditions.meet(Case.Postconditions);
+      for (uint64_t Capture : Case.DefinedCaptures) {
+        auto &Captures = Existing->DefinedCaptures;
+        const auto Position =
+            std::lower_bound(Captures.begin(), Captures.end(), Capture);
+        if (Position == Captures.end() || *Position != Capture)
+          Captures.insert(Position, Capture);
+      }
+    }
+    const uint64_t Bytes = TaggedReturn->retainedByteEstimate();
+    if (Bytes > TaggedBytes) {
+      if (auto Error = retain(Bytes - TaggedBytes))
+        return Error;
+    } else {
+      RetainedBytes -= TaggedBytes - Bytes;
+    }
+    TaggedBytes = Bytes;
+    return llvm::Error::success();
+  };
   // Publish no provisional call or target: replay only the fixed-point entry
   // states. Cache nodes created while converging are not automatically roots.
   for (const auto &[BlockID, Block] : States) {
@@ -4435,6 +5334,8 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
       return Continues.takeError();
     if (!*Continues)
       continue;
+    if (auto Error = CollectTagged(BlockID, State))
+      return std::move(Error);
     const MedBlock &MedBlock = Program.Med.Blocks[BlockID];
     const MedInstruction *Last = Index.find(MedBlock.EndSlot - 1);
     if (!Last || Last->Op != Operation::Exit)
@@ -4445,6 +5346,13 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
       if (auto Error = joinStates(*Context.Return, State))
         return std::move(Error);
     }
+  }
+  if (!RejectedTag && TaggedReturn && TaggedReturn->Cases.size() > 1) {
+    llvm::sort(TaggedReturn->Cases,
+               [](const auto &A, const auto &B) { return A.Tag < B.Tag; });
+    Context.TaggedReturn = std::move(TaggedReturn);
+    Context.RetainedBytes += TaggedBytes;
+    TaggedBytes = 0;
   }
   Context.HasTargetEvidence = llvm::any_of(Context.Sites, [](const auto &Site) {
     return Site.TargetAddress || !Site.TargetValueAlternatives.unknown();
@@ -4622,8 +5530,15 @@ llvm::Expected<CallXContextReport> ContextFlow::run() {
     }
     ++RootGeneration;
     ContextState Input;
+    // Whole-function replay starts at the loader's virtual predecessor. The
+    // global block fixed point may already have joined unrelated roots or
+    // backedges into this block. Our CFG solver joins real backedges itself;
+    // ordinary calls to this same slot retain their actual caller inputs.
+    const auto Boundary = Slot == Program.Low.EntrySlot
+                              ? programEntryRegisterFacts(Program)
+                              : Program.Med.Blocks[It->second].Inputs;
     for (unsigned R = 0; R < kRegisterCount; ++R)
-      Input.Registers[R] = Program.Med.Blocks[It->second].Inputs[R];
+      Input.Registers[R] = Boundary[R];
     auto Root = summarize(It->second, Input);
     if (!Root) {
       if (!SpecializationBudgetExhausted)
@@ -4692,7 +5607,7 @@ llvm::Expected<CallXContextReport> ContextFlow::run() {
     Summary.EntrySlot = Program.Med.Blocks[Context->EntryBlock].StartSlot;
     Summary.InputRegisterMask = InputRegisters[Context->EntryBlock];
     Summary.ReadsInputMemory = ReadsMemory[Context->EntryBlock];
-    Summary.ReuseInputRegisterMask = Context->ReuseInputRegisters;
+    Summary.ReuseInputRegisterMask = Context->ObservableInputRegisters;
     Summary.ReuseReadsInputMemory = Context->ReuseReadsMemory;
     for (unsigned R = 0; R < kRegisterCount; ++R) {
       Summary.Inputs[R] = Context->Input.Registers[R].singleton();
@@ -4736,6 +5651,8 @@ llvm::Expected<CallXContextReport> ContextFlow::run() {
     }
     Summary.OutputMemoryCopies =
         Context->Return ? Context->Return->Postconditions.copyCount() : 0;
+    Summary.OutputTaggedCases =
+        Context->TaggedReturn ? Context->TaggedReturn->Cases.size() : 0;
     ReturnInputElements += Summary.OutputMemoryCopies;
     Summary.InputScratchWords = Context->Input.Scratch.Values.wordCount();
     Summary.InputNarrowScalarCells =
@@ -4766,7 +5683,8 @@ llvm::Expected<CallXContextReport> ContextFlow::run() {
     Summary.MinimumDepth = Depth[Context->ID];
     ReturnInputElements += Summary.ReturnInputAlternatives.size();
     // Charge the added public metadata while the private summaries still live.
-    if (auto Error = retain(sizeof(Summary.ReturnValueExpression) +
+    if (auto Error = retain(sizeof(Summary.OutputTaggedCases) +
+                            sizeof(Summary.ReturnValueExpression) +
                             sizeof(Summary.OutputFieldValueExpressions) +
                             sizeof(Summary.ReturnInputAlternatives) +
                             Summary.ReturnInputAlternatives.capacity() *
@@ -4776,7 +5694,8 @@ llvm::Expected<CallXContextReport> ContextFlow::run() {
     if (Context->IsRoot)
       AddSites(*Context, nullptr);
     for (const auto &Edge : Context->Calls) {
-      if (auto Error = retain(sizeof(Edge.CompletedResultBinding)))
+      if (auto Error = retain(sizeof(Edge.CompletedResultBinding) +
+                              sizeof(Edge.InstantiatedTaggedOutputCases)))
         return std::move(Error);
       Report.SummaryEdges.push_back(Edge);
       if (Edge.CalleeSummaryID)

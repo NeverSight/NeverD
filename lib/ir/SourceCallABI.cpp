@@ -65,6 +65,12 @@ bool refuse(std::string &Error, const char *Reason) {
   return false;
 }
 } // namespace
+bool neverd::sourceCallRetainsResultStorage(const SourceCallTypeHint &Hint) {
+  return Hint.CallKind == SourceCallTypeHint::Kind::Analyst &&
+         Hint.Signature.Architecture == Arch::AArch64 &&
+         Hint.Signature.ReturnLocation.Kind ==
+             SourceABICarrierKind::IndirectResultPointer;
+}
 bool neverd::assignAnalystCallABI(SourceCallTypeHint &Hint, Arch Architecture,
                                   BinaryFormat Format, std::string &Error) {
   auto &Signature = Hint.Signature;
@@ -83,9 +89,6 @@ bool neverd::assignAnalystCallABI(SourceCallTypeHint &Hint, Arch Architecture,
                                             Architecture, Error);
     if (!Assigned)
       return false;
-    if (Signature.ReturnLocation.Kind ==
-        SourceABICarrierKind::IndirectResultPointer)
-      return refuse(Error, kIndirectAnalystResult);
     return true;
   }
   if ((Architecture != Arch::X64 && Architecture != Arch::AArch64) ||

@@ -157,6 +157,7 @@ struct CallXSummaryEdge {
   bool PreservedOlderFrames = false;
   bool AppliedMemoryEffects = false;
   size_t AppliedStoredValues = 0;
+  size_t InstantiatedTaggedOutputCases = 0;
   bool InstantiatedReturnInputExpression = false;
   std::optional<size_t> InstantiatedCopySlot;
   uint64_t InstantiatedCopyBytes = 0;
@@ -223,6 +224,7 @@ struct CallXFunctionSummary {
   size_t OutputNarrowParameterizedFields = 0;
   size_t OutputFieldValueExpressions = 0;
   size_t OutputMemoryCopies = 0;
+  size_t OutputTaggedCases = 0;
 };
 
 struct CallXContextReport {

@@ -63,9 +63,19 @@ RegistrationRoots::RegistrationRoots(const LowFunc &Low, Arch Architecture,
       (HasCxxFrame
            ? (Chain.RegistrationOffset == -12 && Chain.TryLevelOffset == -4) ||
                  cxxRegistrationFrameCoordinate(EH, State).has_value()
-           : Chain.RegistrationOffset == -16 && Chain.TryLevelOffset == -4);
+           : (Chain.RegistrationOffset == -16 && Chain.TryLevelOffset == -4) ||
+                 (State && State->Display && State->Display->FrameFromEntry));
   Realigned = HasCxxFrame && Low.Entry == EH.CodeRange.Begin &&
               realignedRegistrationFrameCoordinate(EH, State).has_value();
+  // A handler prints in this frame, whatever stack the runtime runs it on.
+  if (Direct && HasSEHFrame && State && State->Display &&
+      State->Display->StackFromEntry)
+    for (const auto &Scope : Chain.Scopes)
+      for (const va_t Root : {Scope.HandlerVA, Scope.FilterVA})
+        if (Root)
+          RestoredStacks.emplace(
+              Root,
+              std::make_pair(va_t(0), *State->Display->StackFromEntry + 4));
   if (!(Direct || Realigned) || !HasCxxFrame || !State ||
       !State->CxxContinuationsComplete ||
       State->CxxContinuations.size() > limits::kMaxRegistrationEHRecords)
@@ -190,7 +200,14 @@ void RegistrationRoots::initialize(
       Value.Size != 4)
     return;
   const auto &TRI = getTargetRegInfo(Arch::X86);
-  if (Value.RegOff == TRI.FramePointer) {
+  const auto *Display =
+      Low.RegistrationStates && Low.RegistrationStates->Display
+          ? &*Low.RegistrationStates->Display
+          : nullptr;
+  if (Value.RegOff == TRI.FramePointer && Display && Display->FrameFromEntry) {
+    Op.RegistrationRoot = MedOp::RegistrationRootKind::DisplayFramePointer;
+    Op.RegistrationStackOffset = *Display->FrameFromEntry;
+  } else if (Value.RegOff == TRI.FramePointer) {
     Op.RegistrationRoot =
         Realigned ? MedOp::RegistrationRootKind::RealignedFramePointer
                   : MedOp::RegistrationRootKind::EstablishedFramePointer;
