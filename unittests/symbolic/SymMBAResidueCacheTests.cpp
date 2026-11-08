@@ -97,42 +97,46 @@ TEST(SymMBAResiduePolynomialCache, PreservesCofactorsWhenOutputSupportGrows) {
 }
 
 TEST(SymMBAResiduePolynomialCache, ExactAndShortResourcesKeepCompleteWords) {
-  SymContext FullCtx;
-  const auto FullFixture = polynomialCacheFixture(FullCtx, 64);
-  detail::WorkBudget FullBudget(65536);
-  size_t FullStorage = 1 << 24;
-  const auto Full = detail::foldResidueDecisions(FullCtx, FullFixture.Input,
-                                                 FullBudget, FullStorage);
-  ASSERT_NE(Full, FullFixture.Input);
-  const auto Work = FullBudget.used();
-  const size_t Bytes = (1 << 24) - FullStorage;
-  ASSERT_GT(Work, 1u);
-  ASSERT_GT(Bytes, 1u);
-  for (auto Limits : {std::pair<size_t, size_t>{0, Bytes},
-                      {1, Bytes},
-                      {Work, 0},
-                      {Work - 1, Bytes},
-                      {Work, Bytes - 1},
-                      {Work, Bytes}}) {
-    SCOPED_TRACE(::testing::Message() << Limits.first << ':' << Limits.second);
-    SymContext Ctx;
-    const auto F = polynomialCacheFixture(Ctx, 64);
-    detail::WorkBudget Budget(Limits.first);
-    size_t Storage = Limits.second;
-    const auto Result =
-        detail::foldResidueDecisions(Ctx, F.Input, Budget, Storage);
-    EXPECT_LE(Budget.used(), Limits.first);
-    EXPECT_LE(Storage, Limits.second);
-    if (Limits.first <= 1 || !Limits.second)
-      EXPECT_EQ(Result, F.Input);
-    if (Limits.first == Work && Limits.second == Bytes)
-      EXPECT_EQ(Result.index(), Full.index());
-    // A later optional refusal may retain a finished shorter reading. Either
-    // result must still satisfy the independent complete-width expression.
-    SymEvalPlan Reduced(Ctx, Result);
-    for (unsigned Trial = 0; Trial < 64; ++Trial) {
-      const auto Values = polynomialCacheValues(64, Trial);
-      EXPECT_EQ(Reduced.eval(Values), F.oracle(Values)) << Trial;
+  for (unsigned Width : {8u, 64u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext FullCtx;
+    const auto FullFixture = polynomialCacheFixture(FullCtx, Width);
+    detail::WorkBudget FullBudget(65536);
+    size_t FullStorage = 1 << 24;
+    const auto Full = detail::foldResidueDecisions(FullCtx, FullFixture.Input,
+                                                   FullBudget, FullStorage);
+    ASSERT_NE(Full, FullFixture.Input);
+    const auto Work = FullBudget.used();
+    const size_t Bytes = (1 << 24) - FullStorage;
+    ASSERT_GT(Work, 1u);
+    ASSERT_GT(Bytes, 1u);
+    for (auto Limits : {std::pair<size_t, size_t>{0, Bytes},
+                        {1, Bytes},
+                        {Work, 0},
+                        {Work - 1, Bytes},
+                        {Work, Bytes - 1},
+                        {Work, Bytes}}) {
+      SCOPED_TRACE(::testing::Message()
+                   << Limits.first << ':' << Limits.second);
+      SymContext Ctx;
+      const auto F = polynomialCacheFixture(Ctx, Width);
+      detail::WorkBudget Budget(Limits.first);
+      size_t Storage = Limits.second;
+      const auto Result =
+          detail::foldResidueDecisions(Ctx, F.Input, Budget, Storage);
+      EXPECT_LE(Budget.used(), Limits.first);
+      EXPECT_LE(Storage, Limits.second);
+      if (Limits.first <= 1 || !Limits.second)
+        EXPECT_EQ(Result, F.Input);
+      if (Limits.first == Work && Limits.second == Bytes)
+        EXPECT_EQ(Result.index(), Full.index());
+      // A later optional refusal may retain a finished shorter reading. Either
+      // result must still satisfy the independent complete-width expression.
+      SymEvalPlan Reduced(Ctx, Result);
+      for (unsigned Trial = 0; Trial < 64; ++Trial) {
+        const auto Values = polynomialCacheValues(Width, Trial);
+        EXPECT_EQ(Reduced.eval(Values), F.oracle(Values)) << Trial;
+      }
     }
   }
 }

@@ -17,6 +17,7 @@
 
 #include "neverd/symbolic/Limits.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/Hashing.h"
@@ -109,7 +110,10 @@ class LowWordDecisions {
   }
   llvm::DenseMap<uint64_t, std::pair<uint32_t, uint32_t>> Adders;
   llvm::DenseMap<uint64_t, uint32_t> Parities;
-  using WordPage = std::array<Bits, limits::kResidueWordPageEntries>;
+  // Observed words are bounded by the residue precision. Published entries
+  // need neither a growable buffer nor per-entry lifetime management.
+  using StoredWord = std::array<uint32_t, limits::kMaxAffineResidueTableBits>;
+  using WordPage = std::array<StoredWord, limits::kResidueWordPageEntries>;
   llvm::DenseMap<uint64_t, uint32_t> Words;
   std::vector<std::unique_ptr<WordPage>> WordPages;
   uint32_t WordCount = 0;
@@ -337,7 +341,8 @@ class LowWordDecisions {
     llvm_unreachable("unknown Boolean operation");
   }
 
-  Bits calculate(SymOp Op, const Bits &A, const Bits &B) {
+  Bits calculate(SymOp Op, llvm::ArrayRef<uint32_t> A,
+                 llvm::ArrayRef<uint32_t> B) {
     if (!charge(1 + A.size()))
       return Bits(A.size(), 0);
     // Modulo two, addition is XOR and multiplication is AND. The word-step
@@ -346,17 +351,17 @@ class LowWordDecisions {
     if (A.size() == 1)
       return {Op == SymOp::Add ? applyCharged<Xor>(A.front(), B.front())
                                : applyCharged<And>(A.front(), B.front())};
-    auto Zeros = [](const Bits &Value) {
+    auto Zeros = [](llvm::ArrayRef<uint32_t> Value) {
       return size_t(std::find_if(Value.begin(), Value.end(),
                                  [](uint32_t V) { return V != 0; }) -
                     Value.begin());
     };
     const size_t ZA = Zeros(A);
     if (ZA == A.size())
-      return Op == SymOp::Add ? B : A;
+      return Bits(Op == SymOp::Add ? B : A);
     const size_t ZB = Zeros(B);
     if (ZB == B.size())
-      return Op == SymOp::Add ? A : B;
+      return Bits(Op == SymOp::Add ? A : B);
     const size_t Shift = Op == SymOp::Mul ? ZA + ZB : std::min(ZA, ZB);
     if (Shift) {
       Bits Result(A.size(), 0);
@@ -377,21 +382,22 @@ class LowWordDecisions {
       return Result;
     }
     if (Op == SymOp::Mul) {
-      auto One = [](const Bits &V) {
+      auto One = [](llvm::ArrayRef<uint32_t> V) {
         return V.front() == 1 && std::all_of(V.begin() + 1, V.end(),
                                              [](uint32_t B) { return !B; });
       };
       if (One(A))
-        return B;
+        return Bits(B);
       if (One(B))
-        return A;
+        return Bits(A);
     }
     // Every complemented edge fits in a 16-bit lane. Pack both complete
     // ordered words, retaining their precision and operation separately.
     // Dense buckets own the inline result; no reference escapes a lookup.
     static_assert(2 * limits::kMaxResidueDecisionNodes <= (1u << 16));
     static_assert(limits::kMaxAffineResidueTableBits <= 8);
-    const bool Ordered = A < B;
+    const bool Ordered =
+        std::lexicographical_compare(A.begin(), A.end(), B.begin(), B.end());
     const auto &Left = Ordered ? A : B;
     const auto &Right = Ordered ? B : A;
     WordOperation Key{{}, unsigned(A.size()), Op};
@@ -563,7 +569,7 @@ class LowWordDecisions {
     return expandParity(A, B, C, Depth, Key, Complement);
   }
 
-  Bits add(const Bits &A, const Bits &B) {
+  Bits add(llvm::ArrayRef<uint32_t> A, llvm::ArrayRef<uint32_t> B) {
     Bits Result;
     uint32_t Carry = 0;
     for (size_t I = 0; I < A.size(); ++I) {
@@ -578,7 +584,7 @@ class LowWordDecisions {
     return Result;
   }
 
-  Bits square(const Bits &A) {
+  Bits square(llvm::ArrayRef<uint32_t> A) {
     // For an odd word A=1+2U, A*A=1+4*(U*U+U). Only N-2 bits
     // of U survive, so avoid constructing the unobserved upper carries.
     if (A.size() > 2 && A.front() == 1) {
@@ -604,7 +610,7 @@ class LowWordDecisions {
     return Result;
   }
 
-  Bits multiply(const Bits &A, const Bits &B) {
+  Bits multiply(llvm::ArrayRef<uint32_t> A, llvm::ArrayRef<uint32_t> B) {
     Bits Result(A.size(), 0);
     for (size_t I = 0; I < B.size() && !Failed; ++I) {
       if (!B[I])
@@ -868,27 +874,23 @@ class LowWordDecisions {
            (uint64_t(Ctx.op(R)) << 16) | (Low << 8) | Count;
   }
 
-  const Bits &wordValue(uint32_t Index) const {
-    return (*WordPages[Index / limits::kResidueWordPageEntries])
+  llvm::ArrayRef<uint32_t> wordValue(uint32_t Index, unsigned Count) const {
+    const auto &Word = (*WordPages[Index / limits::kResidueWordPageEntries])
         [Index % limits::kResidueWordPageEntries];
+    // The complete lookup key already binds the requested precision.
+    return {Word.data(), Count};
   }
 
-  // Shared zero words are needed only on an absorbing value or failed proof;
-  // keep their lazy-initialization guard out of ordinary cache hits.
-  static const Bits &emptyWord(unsigned Count) {
-    static const auto EmptyWords = [] {
-      std::array<Bits, limits::kMaxAffineResidueTableBits + 1> Result;
-      for (unsigned I = 0; I < Result.size(); ++I)
-        Result[I].resize(I, 0);
-      return Result;
-    }();
-    return EmptyWords[Count];
+  static llvm::ArrayRef<uint32_t> emptyWord(unsigned Count) {
+    static constexpr std::array<uint32_t, limits::kMaxAffineResidueTableBits>
+        Zeros{};
+    return {Zeros.data(), Count};
   }
 
   // Result pages remain stable while the dense index table grows. Cached
   // words are immutable until the parity assumption changes; no view escapes
   // that phase. Cache hits pay for lookup, without copying each bit.
-  const Bits &word(SymRef R, unsigned Count, unsigned Depth = 0) {
+  llvm::ArrayRef<uint32_t> word(SymRef R, unsigned Count, unsigned Depth = 0) {
     if (!charge())
       return emptyWord(Count);
     // The complete low-word key preserves the source expression and avoids
@@ -912,7 +914,7 @@ class LowWordDecisions {
         return word(Ctx.operand(R, 0), Count, Depth + 1);
     }
     if (auto It = Words.find(Key); It != Words.end())
-      return wordValue(It->second);
+      return wordValue(It->second, Count);
     if (!charge(Count) || Depth >= limits::kMaxResidueDecisionDepth) {
       Failed = true;
       return emptyWord(Count);
@@ -921,8 +923,8 @@ class LowWordDecisions {
   }
 
   LLVM_ATTRIBUTE_NOINLINE
-  const Bits &expandWord(SymRef R, unsigned Count, unsigned Depth,
-                         uint64_t Key) {
+  llvm::ArrayRef<uint32_t> expandWord(SymRef R, unsigned Count, unsigned Depth,
+                                      uint64_t Key) {
     const auto Op = Ctx.op(R);
     Bits Result(Count, 0);
     if (Ctx.isConst(R)) {
@@ -943,7 +945,7 @@ class LowWordDecisions {
       const auto &Value = word(Ctx.operand(R, 0), Count + Offset, Depth + 1);
       std::copy(Value.begin() + Offset, Value.end(), Result.begin());
     } else if (Op == SymOp::Not) {
-      Result = word(Ctx.operand(R, 0), Count, Depth + 1);
+      Result.assign(word(Ctx.operand(R, 0), Count, Depth + 1));
       for (auto &Bit : Result)
         Bit = apply<Xor>(Bit, 1);
     } else if (Op == SymOp::Shl && Ctx.isConst(Ctx.operand(R, 1))) {
@@ -1122,9 +1124,9 @@ class LowWordDecisions {
     }
     auto &Stored =
         (*WordPages[Page])[WordCount % limits::kResidueWordPageEntries];
-    Stored = std::move(Result);
+    std::copy(Result.begin(), Result.end(), Stored.begin());
     Words.try_emplace(Key, WordCount++);
-    return Stored;
+    return {Stored.data(), Count};
   }
 
   // Count equal and complementary bits before carry propagation. A pair of
@@ -1385,7 +1387,7 @@ class LowWordDecisions {
       return One;
     }
     if (Factors.size() == 1)
-      return word(Factors.front(), Observed);
+      return Bits(word(Factors.front(), Observed));
     // Write every group as (L + 2^Split H_i). Since 3*Split >= Observed,
     // only the constant, linear and quadratic elementary sums survive.
     // Group equality comes from complete decision words, never from samples.
@@ -1807,7 +1809,7 @@ class LowWordDecisions {
     }
     const uint64_t Key = (uint64_t(R.index()) << 8) | Count;
     if (auto It = Words.find(Key); It != Words.end())
-      return wordValue(It->second).back();
+      return wordValue(It->second, Count).back();
     if (Ctx.numOperands(R) == 2 && Ctx.isConst(Ctx.operand(R, 0))) {
       if (Ctx.op(R) == SymOp::And) {
         const auto Literal = literalLowWord(Ctx.operand(R, 0));
@@ -2089,16 +2091,16 @@ class LowWordDecisions {
         Children.insert(Children.begin(), {uint64_t(Op) + 1, Count});
         Save(internSignature(State, std::move(Children)), D);
       } else {
-        const Bits *Value = nullptr;
+        std::optional<llvm::ArrayRef<uint32_t>> Value;
         if (Count == State.NarrowPrecision)
-          Value = &word(R, IdentityOnly ? Count - 2 : Count);
+          Value = word(R, IdentityOnly ? Count - 2 : Count);
         else if (Count < State.NarrowPrecision) {
           if (!charge())
             return {};
           const auto It =
               Words.find((uint64_t(R.index()) << 8) | State.NarrowPrecision);
           if (It != Words.end())
-            Value = &wordValue(It->second);
+            Value = wordValue(It->second, State.NarrowPrecision);
         }
         if (!Value) {
           Result = {internSignature(State, {UINT64_MAX, Count, R.index()}),
@@ -2559,21 +2561,21 @@ public:
             if (Failed || !charge(1 + Split))
               return Root;
             if (!Votes)
-              Prefix = Low;
-            if (Prefix == Low) {
+              Prefix.assign(Low);
+            if (Low.equals(Prefix)) {
               Votes += Entry.Count;
             } else if (Votes > Entry.Count) {
               Votes -= Entry.Count;
             } else {
               Votes = Entry.Count - Votes;
-              Prefix = Low;
+              Prefix.assign(Low);
             }
           }
           for (auto &[Id, Entry] : Copies) {
             const auto &Low = word(SymRef(Id), Split);
             if (Failed || !charge(1 + Split))
               return Root;
-            Entry.Matches = Low == Prefix;
+            Entry.Matches = Low.equals(Prefix);
           }
         } else {
           size_t Votes = 0;
@@ -2584,8 +2586,8 @@ public:
             if (Failed || !charge(1 + Split))
               return Root;
             if (!Votes)
-              Prefix = Low;
-            if (Prefix == Low)
+              Prefix.assign(Low);
+            if (Low.equals(Prefix))
               ++Votes;
             else
               --Votes;
@@ -2613,7 +2615,7 @@ public:
             const auto &Low = word(Factor, Split);
             if (Failed || !charge(1 + Split))
               return Root;
-            Matches = Low == Prefix;
+            Matches = Low.equals(Prefix);
           }
           if (Matches) {
             Factors[Out++] = Factor;
@@ -2824,7 +2826,7 @@ public:
           return Root;
         // Equality holds under the same selector as the product proof. Scale
         // and the retained zeros discard every unobserved representative bit.
-        if (Value == Product)
+        if (Value.equals(Product))
           WholeWord = Representative;
       }
     }

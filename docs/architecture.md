@@ -5377,6 +5377,9 @@ Projected handles, known-zero facts and pairing signatures use exact-key
 dense tables, avoiding one heap allocation per cached fact. Their values are
 copied before recursion, and complete bucket growth is charged before insertion.
 Decision-word results live in stable small pages behind a dense index table.
+Each published word stores only its bounded edge array; the exact lookup key
+owns its precision. Arithmetic readers borrow immutable views rather than
+growable containers.
 Complete page and pointer-array growth is charged before allocation; a parity
 change clears the index and reuses the already-paid pages. No word view escapes
 that phase. Interned signature keys also retain stable references for callers
