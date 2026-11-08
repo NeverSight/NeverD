@@ -1977,6 +1977,39 @@ also covers native HVA parameters alongside original x8 storage. These tests
 qualify transport of an established fixed C declaration, not general recovery,
 vector variadics, packed/union layouts or whole-image publication.
 
+The [vector-aggregate qualification](evidence/arm64e-vector-aggregates-2026-11-08.json)
+records 73 declarations and 1,825 original Mach-O objects across all five
+routes. Thirty controlled FVP guests at EL0/EL1 and four CPTA settings compare
+43,800 valid calls and 105,120 invalid signatures with zero exception-class
+differences. Forty HighC O0 objects require an external `memcpy` call. The
+environment translates only the declared BR26 relocation and verifies every
+linked byte against the original, permitting only that branch displacement;
+it does not recompile IR for an ELF ABI. Earlier explicit and x8 object
+baselines remain byte-identical, without claiming another model execution.
+
+Broader regression caught array equality admitting previously unsupported
+pointer-to-array declarations. The shared source-type boundary retains that
+rejection while admitting fixed arrays inside records. Native pointer inference
+and Swift projection tests exercise the original failures; projection grouping
+also distinguishes vector pointees and array element types. This qualification
+retains the first failing reports as well as the corrected checks.
+
+The NeverSight LLVM fork's authenticated-fixup tests cover Mach-O and ELF,
+all four keys, address diversity, local/external targets, aliases and addends.
+They require a consuming fixup installer and preserve its installed word.
+This verifies the MC interface needed by whole-image installation; it does
+not qualify new dyld storage or signed exception execution. The configured
+prebuilt package remains r6.
+
+The final qualification includes 2,498 distinct checks: 2,477 pass and 21
+retain their explicit platform/compiler skips. The first broad run's two
+type-boundary failures are fixed and recorded separately. The affected
+256-case repeat, 151 authenticated-call cases and 15 frame cases pass; all
+current and earlier canonical object profiles remain byte-identical. Native
+compiler-only unwind controls pass on ordinary arm64 at O0/O2, while both
+arm64e executables terminate with SIGKILL before reporting completion. This
+does not provide native signed-unwind qualification.
+
 `MachOArm64eDependencies` additionally verifies multi-start pages for all six
 supported arm64e chain formats and ordinary 64-bit chains. It checks complete
 signing/import/slot identity, unterminated or reused overflow entries,

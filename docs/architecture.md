@@ -1373,6 +1373,16 @@ and exact fault-PC equality remain unqualified. Whole-image arm64e rebuilding
 still requires the separate
 authenticated storage, relocation and signed-unwind ABI contract.
 
+The NeverSight LLVM fork retains a typed pointer-authentication recipe in its
+binary-rewrite symbol requests and fixup hooks: key, discriminator and address
+diversity accompany the final storage address and resolved unsigned target.
+Authenticated storage requires a consuming installer. Its result is not
+overwritten by the object writer's authentication metadata encoding. This MC
+contract is the handoff for a dyld fixup installer, not an offline PAC signing
+operation. NeverD's arm64e whole-image publication guard remains until storage
+installation and signed-unwind validation are complete; the r6 prebuilt does
+not yet expose the new fork interface.
+
 The shared AAPCS64 parameter placement owner describes Darwin fixed value
 spills with their natural size and alignment after either register bank is
 exhausted. ELF and Windows ARM64 retain eight-byte stack slots. Darwin variadic
