@@ -8420,7 +8420,12 @@ without treating depth exhaustion as a completed proof or skipping replay.
 When separate predecessor arms guard one selector, scalar comparison literals
 can propose a finite envelope even though no single guard dominates the load.
 The joined-domain query must prove every incoming value and a dense prefix;
-the proposal supplies no table capacity or range authority. Equal incoming
+the proposal supplies no table capacity or range authority. A PE two-level
+index table is the exception, as it is for a dominating guard: its unreached
+index bytes are unused, so a proven joined domain with holes is bounded by its
+last reaching value. MSVC's CRT reaches one such dispatch with a byte that one
+path's `and al, 0Fh; test al, al; je; cmp al, 20h; ja` left in 1..15 and that
+another path compared equal to 20h. Equal incoming
 values keep their real predecessor-join provenance after deduplication, only
 for that query mode. Predicate disjunctions and SELECTs cannot manufacture it.
 A guard operand reloaded from memory may nominate the nearest literal STORE
