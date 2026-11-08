@@ -2822,6 +2822,12 @@ recorder before execution: eight ASan/UBSan caller-input observations retain
 an image-valued physical integer, and eight UBSan runs use a high-bit address
 to check ordinary DS loading and physical input together. Preprocessed source
 and caller bodies are checked to contain no launch before host execution.
+With `NEVERD_TEST_NEVERC` and `NEVERD_TEST_NEVERC_LLC` set,
+`NeverCI386EmitsNativeLaunchWithoutOldContinuation` also compiles the complete
+i386 ELF output through NeverC at O0/O2: 24 native C compilation checks retain
+raw i32 input and nonreturning IR, and reject an external helper or an old
+continuation in the emitted object. The dedicated SKINIT capability check works
+independently of long-mode-only system builtins.
 Run the shared integer-width and pointer-address suites after changing this
 address/parameter boundary. The retained source snapshots, report hashes and
 independent LLVM/NeverC instruction-boundary checks are in the
