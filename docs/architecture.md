@@ -15134,6 +15134,12 @@ semantics. A `DecodedExecutionUnit` captures a delayed transfer and its slot,
 while normal disassembly still consumes four bytes. LowIR records their byte
 ownership and execution order; MedIR expands predicated effects before SSA.
 
+`MedMIPSMergeValues` owns the source-only proof for adjacent complementary
+merge loads in a single ordinary leaf block. It runs after SSA/projection/DCE
+and before ABI recovery, binds physical LowIR occurrences to MedIR, and removes
+only a first load's unobserved old-value operand. Both reads remain ordered;
+calls, PHIs, exceptional flow and unproved uses retain their original inputs.
+
 The focused MIPS loader, integer, flow, SDK and pipeline suites cover these
 contracts. Owned kernels are recompiled from HighC and LLVMC for the original
 MIPS target and compared with their assembly originals in pinned Unicorn.
@@ -17758,8 +17764,9 @@ Framework upcalls materialize thrown identities through Runtime's existing owner
 Incoming Binder catches RuntimeException/RemoteException, rewinds without
 truncating the reply and invokes this same method; serialized exceptions count as
 handled calls and keep the normal reply-ack lifetime. Existing tail bytes remain
-observable. Overlapping a retained Binder object still stops at Parcel's object
-metadata boundary. Parcelable/class-loader payloads, ServiceSpecificException,
+observable. Overwrites retain Binder offsets; an invalid current object type
+reaches the shared Linux Binder translation boundary. Parcelable/class-loader
+payloads, ServiceSpecificException,
 Throwable-cause construction, debug stack-trace parceling and uncaught logging
 remain explicit boundaries; no error reply or log record is fabricated.
 See API 28 [Parcel.java](https://android.googlesource.com/platform/frameworks/base/+/android-9.0.0_r1/core/java/android/os/Parcel.java).
@@ -17772,6 +17779,20 @@ making spare bytes readable. In-capacity borrowed writes use the native memory
 owner and retain read-only faults. `AndroidBinderObjects.cpp` tracks native-only
 remote references across copied Parcels independently of Java proxy creation;
 final release uses the existing Linux strong/weak reference commands.
+Parcel writes retain existing object offsets and strong acquisitions, including
+duplicate or non-append strong writes. Owned release walks the current table
+backwards and decodes the current bytes at each offset. Unknown tags and null
+local pointers release nothing; overwriting a record can therefore leave its
+original reference alive. Scalar/String read validation lazily sorts the actual
+table, while object reads use the native forward/backward hint search without
+sorting. Reply replacement releases the old records before replacing their
+bytes. Unmarshalling refuses retained offsets even in an unsorted table; when
+all offsets are dropped, native truncation releases them forwards.
+Borrowed in-place writes keep IPC ownership; detachment acquires the
+current records before releasing the lease. Weak/FD lifecycle operations and
+release through an unknown or unowned native identity stop explicitly.
+These rules follow API 28
+[Parcel.cpp](https://android.googlesource.com/platform/frameworks/native/+/android-9.0.0_r1/libs/binder/Parcel.cpp).
 In-capacity strong writes preserve JNI Binder conversion order before attempting
 the received offset-table pointer's realloc. The native adapter and C import use
 one `Bionic::reallocate` implementation. Binder arena pointers fail its allocation

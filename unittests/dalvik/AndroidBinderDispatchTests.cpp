@@ -363,6 +363,57 @@ TEST(AndroidBinderDispatchTest, IncomingPingAndFalseUseNativeStatusReplies) {
 }
 
 TEST(AndroidBinderDispatchTest,
+     IncomingExceptionKeepsOverwrittenObjectOffsets) {
+  State s(stub(true), incomingServices());
+  auto incoming = exportBinder(s);
+  unsigned releases = 0;
+  incoming.data.release = [&] { ++releases; };
+  auto pending =
+      s.runtime.dispatchBinder(std::move(incoming), Admit, 65536, 11);
+  ASSERT_EQ(pending.stop, ExecutionStop::Suspended) << pending.diagnostic;
+  ASSERT_EQ(pending.external->kind, ExternalCall::Native);
+  const auto reply = pending.external->arguments[3];
+  s.write(reply, 42);
+  ASSERT_EQ(s.call({Parcel, "writeStrongBinder", {"Landroid/os/IBinder;"}, "V"},
+                   reply, {s.binder})
+                .stop,
+            ExecutionStop::Returned);
+  ASSERT_EQ(s.call({Parcel, "setDataPosition", {"I"}, "V"}, reply, {4}).stop,
+            ExecutionStop::Returned);
+  ASSERT_EQ(s.call({Parcel, "writeStrongBinder", {"Landroid/os/IBinder;"}, "V"},
+                   reply, {s.binder})
+                .stop,
+            ExecutionStop::Returned);
+  auto result = s.runtime.resume(
+      pending.continuation, 11,
+      {ExecutionStop::Thrown, 0, "java/lang/IllegalArgumentException"});
+  ASSERT_EQ(result.stop, ExecutionStop::Suspended) << result.diagnostic;
+  ASSERT_EQ(result.external->kind, ExternalCall::BinderSendReply);
+  EXPECT_EQ(result.external->response->status, 0);
+  EXPECT_EQ(result.external->response->objects, (std::vector<uint64_t>{4, 4}));
+  std::vector<uint8_t> expected{253, 255, 255, 255, 255, 255,
+                                255, 255, 0,   0,   0,   0};
+  const auto &object = s.heap->get(s.data)->Bytes;
+  expected.insert(expected.end(), object.begin() + 8, object.end());
+  EXPECT_EQ(result.external->response->bytes, expected);
+  const auto calls = s.runtime.snapshot().framework.binder_calls;
+  ASSERT_TRUE(calls);
+  ASSERT_EQ(calls->entries.size(), 1u);
+  EXPECT_EQ(calls->entries[0].count, 1u);
+  EXPECT_EQ(releases, 0u);
+  // A driver failure must keep the ordinary pending reply lifetime; the
+  // managed boundary cannot erase the table or invent a successful reply.
+  auto stopped = s.runtime.resume(result.continuation, 11,
+                                  {ExecutionStop::Unsupported,
+                                   0,
+                                   {},
+                                   "driver rejected current object type"});
+  EXPECT_EQ(stopped.stop, ExecutionStop::Unsupported);
+  EXPECT_EQ(stopped.diagnostic, "driver rejected current object type");
+  EXPECT_EQ(releases, 0u);
+}
+
+TEST(AndroidBinderDispatchTest,
      IncomingStopsKeepClockExceptionAndStackBoundaries) {
   State throwing(stub(false, true), incomingServices());
   auto error =

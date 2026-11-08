@@ -1,4 +1,5 @@
 add_neverd_unittest(NeverDMIPSPipelineTests
+  mips/MIPSMergeValueTests.cpp
   mips/MIPSPipelineTests.cpp
   LINK_COMPONENTS Pipeline BackendLLVM BackendC)
 

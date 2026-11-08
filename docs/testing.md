@@ -16303,7 +16303,11 @@ compares 36 complete public report pairs, including dynamic proxy `key:null`.
 `AndroidLocalBinderTest.*` checks independent strong-object wire bytes, null
 metadata, holder weak-cache replacement, shared ownership across Parcels,
 unmarshalling reference retirement, DEX subclass construction, native service
-admission and deferred synchronous release notifications.
+admission and deferred synchronous release notifications. Literal overwrite
+controls cover partial invalid tags, null pointers, changed cookies, duplicate
+offset acquisitions and releases, foreign release cookies, and lazy sorting of
+non-append metadata. Unmarshalling retains its explicit boundary for unsorted
+offsets and releases fully dropped records in native forward order.
 `AndroidJNI.BinderLocalObjectsAndOwnedParcelWritesUseSharedTransport` exports
 local Java objects through the shared Linux driver, echoes them as the original
 Java objects, and writes a returned remote proxy alongside null and handle zero.
@@ -16311,13 +16315,16 @@ The multi-object case replaces an expired weak cache before export, spans native
 read buffers and checks pointer/cookie ACK ordering. Ordinary/V/A forms exercise
 altered holder permissions, same-address
 mapping replacement, unconstructed objects, borrowed strong-write growth and
-non-append metadata boundaries. The matching
+successful repeated-offset writes followed by recycle and reuse. The matching
 `ProcessPublic.AndroidBinderLocalWritesMatchSDKAndCLI` compares 42 full report
 pairs at O0/O2. These tests do not claim local transaction callback dispatch.
 `AndroidParcelBufferTest.*` checks literal native capacities, live byte copies,
 capacity no-ops, protected in-place writes, reference acquisition before free,
 duplicate handles shared across copies, Java proxy promotion, local identity
 lifetime, retained `unmarshall` metadata and bounded storage reservations.
+Overwrite controls verify current-handle release order, retained old references,
+borrowed mapping permissions, acquisition from changed live bytes, and release
+of a long old reply before replacing it with a shorter buffer.
 `AndroidJNI.ParcelBorrowedRepliesGrowWithSharedBinderOwnership` exercises
 ordinary/V/A calls through real guest peers: automatic/explicit growth, arena
 slot reuse, scalar and strong writes, native-only remote handle retention and
@@ -16337,7 +16344,9 @@ messages, retained tail bytes, unknown-runtime identity rethrow, checked/null
 cause boundaries, and virtual native message suspension/failure. Incoming
 exception tests check native reply lifetime and default statistics. The native
 peer checks three exception replies followed by ping, including untouched scalar
-tails; object overlap remains an explicit metadata-mutation stop.
+tails. The overlapping-object exception reaches the shared driver translation
+boundary with its original offset table and one completed BinderCallsStats
+entry; neither the table nor the original acquisition is silently discarded.
 `AndroidBinderDispatchTest` checks local and incoming Java dispatch, protected
 super calls and virtual descriptor overrides, exception cursor order, native
 continuation tokens, separate wrapper-pool reuse, reply-ack buffer lifetime,
@@ -22223,8 +22232,12 @@ The runner compiles the owned assembly and each generated C variant for all
 four width/byte-order profiles. It checks return values and memory effects,
 including taken/untaken likely branches, delayed calls, argument carriers,
 readonly/writable globals, image pointers, MUL, both word-merge orders,
-doubleword merges and a merge read in an indirect call's slot. HighC merge
-globals are also executed with the original image unmapped. LLVMC's original-image storage
+doubleword merges and a merge read in an indirect call's slot. Uninitialized
+merge destinations cover both orders, all offsets, fixed and seeded random
+machine values, independent expected bytes and fault order at both page edges.
+An invalid-memory branch-likely slot is tested both annulled and executed.
+HighC merge globals are also executed with the original image unmapped.
+LLVMC's original-image storage
 and either route's omitted original callees are explicitly bound at their
 original addresses; this qualifies the regenerated caller against that
 dependency contract. It does

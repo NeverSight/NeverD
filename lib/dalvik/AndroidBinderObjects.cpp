@@ -162,7 +162,6 @@ AndroidFramework::acquireParcelObjects(ParcelState &state,
       if (valid.stop != ExecutionStop::Returned)
         return valid;
       ++node->second.references;
-      state.references.push_back({cookie});
     } else if (type == 0x73682a85) {
       if (!state.fd)
         return unsupported(
@@ -172,27 +171,53 @@ AndroidFramework::acquireParcelObjects(ParcelState &state,
       if (retained.stop != ExecutionStop::Returned)
         return retained;
       ++binder_parcel_handles[std::make_pair(*state.fd, handle)];
-      state.references.push_back({0, handle});
-    } else
+    } else if (type == 0x77622a85 || type == 0x77682a85 || type == 0x66642a85)
       return unsupported(
           "Android Parcel acquisition of weak or FD objects is not modeled");
+    // acquire_object logs unknown types without acquiring a reference.
   }
-  std::reverse(state.references.begin(), state.references.end());
+  state.owns_objects = true;
   return {};
 }
 
-ExecutionResult AndroidFramework::releaseParcelObjects(ParcelState &state) {
-  while (!state.references.empty()) {
-    const auto reference = state.references.back();
-    if (reference.cookie) {
-      --local_binders.find(reference.cookie)->second.references;
-      state.references.pop_back();
-      auto released = retireLocalBinder(reference.cookie);
+ExecutionResult AndroidFramework::releaseParcelObjects(
+    ParcelState &state, std::span<const uint8_t> bytes, bool reverse) {
+  if (!state.owns_objects)
+    return {}; // IPC owns the borrowed buffer's references.
+  // releaseObjects walks backwards; continueWrite drops a suffix forwards.
+  // A failed native release is terminal, after any preceding reference effects.
+  const auto count = state.objects.size();
+  for (size_t i = 0; i != count; ++i) {
+    const auto *flat =
+        bytes.data() + state.objects[reverse ? count - 1 - i : i];
+    const auto type = llvm::support::endian::read32le(flat);
+    const auto pointer = llvm::support::endian::read64le(flat + 8);
+    const auto cookie = llvm::support::endian::read64le(flat + 16);
+    if (type == 0x73622a85 && pointer) {
+      auto node = local_binders.find(cookie);
+      if (node == local_binders.end() || !node->second.references)
+        return unsupported(
+            "Android Parcel release requires a live owned native "
+            "Binder reference");
+      auto valid = services.binder_identity(BinderIdentityOperation::Validate,
+                                            node->second.pointer);
+      if (valid.stop != ExecutionStop::Returned)
+        return valid;
+      --node->second.references;
+      auto released = retireLocalBinder(cookie);
       if (released.stop != ExecutionStop::Returned)
         return released;
-    } else {
-      const auto endpoint = std::make_pair(*state.fd, reference.handle);
+      continue;
+    }
+    if (type == 0x73682a85) {
+      if (!state.fd)
+        return unsupported(
+            "Android Parcel Binder handle has no native connection");
+      const auto endpoint = std::make_pair(*state.fd, uint32_t(pointer));
       auto entry = binder_parcel_handles.find(endpoint);
+      if (entry == binder_parcel_handles.end())
+        return unsupported("Android Parcel release requires an owned native "
+                           "Binder handle reference");
       if (entry->second == 1) {
         if (!binder_handles.contains(endpoint) &&
             !binder_input_keys.contains(endpoint)) {
@@ -207,9 +232,13 @@ ExecutionResult AndroidFramework::releaseParcelObjects(ParcelState &state) {
         binder_parcel_handles.erase(entry);
       } else
         --entry->second;
-      state.references.pop_back();
-    }
+    } else if (type == 0x77622a85 || type == 0x77682a85 || type == 0x66642a85)
+      return unsupported(
+          "Android Parcel release of weak or FD objects is not modeled");
+    // A null local Binder or an unknown tag releases nothing. In particular,
+    // invalidating a record does not undo its original strong acquisition.
   }
+  state.objects.clear();
   return {};
 }
 

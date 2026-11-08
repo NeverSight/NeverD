@@ -1,5 +1,6 @@
 {
   "schema": "neverd-arm64e-recovered-call-faults-v1",
+  "path_normalization": "Embedded command and diagnostic paths are repository-relative. report_sha256 fields identify the original, unnormalized reports.",
   "overall_arm64e_complete": false,
   "scope": "Controlled PAC execution for complete recovered NativeAnalysis fixed C prototypes with scalar, 128-bit integer and direct record/HFA values. ABI recovery accuracy itself is not established by supplied IR fixtures. All five unchanged Mach-O routes require original exception classes. Raw indirect calls are controls. Indirect by-value copies, hidden results, signed exception unwinding, authenticated whole-image execution, native Apple PAC and exact fault PC/full ESR remain unqualified.",
   "base_revision": "a72fcd510e017ea95aeedb26f84a86ed3cde894c",
@@ -998,6 +999,5 @@
     "historical_archive_sha256": "8df260f4a1ef6e3fadf822846cd68b85ab30f3c227bc5d1f26188f7e69bbafc0",
     "historical_recovery_index_sha256": "1f24824fd6637670c8b38944b56d0858227c35633f59e3e13b2bcfc7f11c45ab",
     "exclusive_reclaimed_total_bytes": null
-  },
-  "path_presentation": "Repository-relative paths in diagnostic excerpts; report hashes refer to the retained original files."
+  }
 }

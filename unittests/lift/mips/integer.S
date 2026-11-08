@@ -100,6 +100,63 @@ mips_merge_full:
   nop
 .size mips_merge_full,.-mips_merge_full
 
+/* These destinations deliberately have no incoming source argument. */
+.macro complete_merge name, wide, reverse
+.globl \name
+.type \name,@function
+\name:
+.if \wide
+.if \reverse
+#ifdef __MIPSEL__
+  ldr $2,0($4)
+  ldl $2,7($4)
+#else
+  ldr $2,7($4)
+  ldl $2,0($4)
+#endif
+.else
+#ifdef __MIPSEL__
+  ldl $2,7($4)
+  ldr $2,0($4)
+#else
+  ldl $2,0($4)
+  ldr $2,7($4)
+#endif
+.endif
+.else
+.if \reverse
+#ifdef __MIPSEL__
+  lwr $2,0($4)
+  lwl $2,3($4)
+#else
+  lwr $2,3($4)
+  lwl $2,0($4)
+#endif
+.else
+#ifdef __MIPSEL__
+  lwl $2,3($4)
+  lwr $2,0($4)
+#else
+  lwl $2,0($4)
+  lwr $2,3($4)
+#endif
+.endif
+.endif
+  jr $31
+  nop
+.size \name,.-\name
+.endm
+
+complete_merge mips_uninitialized_word,0,0
+complete_merge mips_uninitialized_word_reverse,0,1
+#ifdef WIDE
+complete_merge mips_uninitialized_full,1,0
+complete_merge mips_uninitialized_full_reverse,1,1
+#else
+complete_merge mips_uninitialized_full,0,0
+complete_merge mips_uninitialized_full_reverse,0,1
+#endif
+
 .globl mips_merge_ro_global
 .type mips_merge_ro_global,@function
 mips_merge_ro_global:
@@ -159,6 +216,17 @@ mips_likely:
   jr $31
   or $2,$5,$0
 .size mips_likely,.-mips_likely
+
+.globl mips_likely_load
+.type mips_likely_load,@function
+mips_likely_load:
+  addiu $2,$0,3
+  beql $5,$0,1f
+  lw $2,0($4)
+1:
+  jr $31
+  nop
+.size mips_likely_load,.-mips_likely_load
 
 .globl mips_load
 .type mips_load,@function

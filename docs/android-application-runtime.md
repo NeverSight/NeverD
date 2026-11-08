@@ -767,14 +767,22 @@ a new native identity while retaining the same Java object.
 
 `writeStrongBinder` writes local objects, bound remote proxies and null values
 into owned Parcels. API 28 cold-thread flags are `0x113`; null and handle-zero
-records have no object-table entry. Owned local entries retain native strong
-references until recycle, unmarshalling or successful reply replacement. The
+records have no object-table entry. Owned local entries acquire native strong
+references, with release at recycle, unmarshalling or reply replacement. The
 same Linux Binder owner translates local objects to handles and restores their
 cookies on return, preserving Java identity. Synchronous response processing
 queues pointer/cookie ACKs and flushes them at the next driver exchange. Release
 notifications remain deferred, as in native `waitForResponse`; top-level
-thread-pool/polling dispatch that drains those releases is not yet modeled.
-Overwriting object bytes or inserting non-append metadata stops explicitly.
+thread-pool dispatch drains them at an exhausted-input boundary.
+Overwrites retain existing offsets and strong acquisitions. Strong writes append
+metadata even at repeated or earlier positions. Release walks the current table
+backwards and decodes the current object bytes: changing a cookie or handle
+changes the released reference; invalid tags and null local pointers release
+nothing, so the original acquisition can remain alive. Scalar/String reads
+lazily sort the actual table and still protect object ranges. Strong-object reads
+use the native hint search without sorting. Invalid outgoing records remain an
+explicit shared Linux Binder translation boundary. Unknown/unowned native
+release identities and weak/FD lifecycle operations also stop explicitly.
 Borrowed reply capacity initially equals its data length. An in-capacity scalar
 or String write accesses the original mapping and preserves its permissions;
 a read-only arena produces a native memory failure. Growth detaches the Parcel:
@@ -797,6 +805,6 @@ An empty table still retains its received nonnull pointer. The allocator check
 precedes reads or writes even after the arena is protected or freed. Growing data
 capacity first detaches the Parcel and permits ordinary owned object writes.
 Other external owners whose borrowed table realloc succeeds remain unsupported.
-Weak/FD object translation, one-way/nested transactions, local Binder dispatch,
-remaining native error/logging cases and `enforceInterface` remain unsupported.
+Weak/FD object translation, one-way/nested transactions, remaining native
+error/logging cases and `enforceInterface` remain unsupported.
 ServiceManager semantic lookup replies still do not execute this transport.
