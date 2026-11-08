@@ -624,8 +624,15 @@ conservative join. Conditional state and comparison workspace consume the
 existing retained-state budget. `output_tagged_cases` and
 `instantiated_tagged_output_cases` report these partitions and their call
 bindings; they do not establish whole-program closure or allocation freshness.
+Full-width payloads may also carry deferred input-load expressions through a
+generic wrapper. Tagged and ordinary output fields share the same caller-input
+substitution and pre-call memory guards. A payload read before its source is
+overwritten retains that earlier value; an unknown write before the read still
+blocks the proof. Callee expression IDs never escape without rebinding to the
+caller's entry.
 Selecting tag cases also refines payloads loaded before the comparison, including
-their exact 64-bit register copies. The shared unchanged-load proof is limited
+their exact 64-bit register copies and rebound input-load expressions. The shared
+unchanged-load proof is limited
 to the same basic block and stops at stores or calls. Redefined carriers,
 changed load bases and narrow loads cannot acquire a full-word fact from later
 memory. A refined value rebuilds its origin instead of retaining payload
