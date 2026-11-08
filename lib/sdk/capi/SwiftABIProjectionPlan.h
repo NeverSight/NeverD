@@ -51,8 +51,10 @@ inline void type(std::string &Key, const TypeRef &Type, unsigned Depth = 0) {
   number(Key, Type->IsSigned);
   // Boolean identity also matters through pointers and callback signatures,
   // whose own physical carriers do not distinguish i1 from an integer byte.
-  if (Type->Kind == NdTypeKind::Int)
+  if (Type->Kind == NdTypeKind::Int) {
     number(Key, isSourceBooleanType(Type));
+    number(Key, sourceAArch64VectorBytes(Type));
+  }
   if (Type->Kind == NdTypeKind::Ptr)
     type(Key, Type->Pointee, Depth + 1);
   else if (Type->Kind == NdTypeKind::Struct) {
@@ -62,6 +64,9 @@ inline void type(std::string &Key, const TypeRef &Type, unsigned Depth = 0) {
       number(Key, Type->FieldOffsets[I]);
       type(Key, Type->Fields[I], Depth + 1);
     }
+  } else if (Type->Kind == NdTypeKind::Array) {
+    number(Key, Type->ArrayCount);
+    type(Key, Type->ElemType, Depth + 1);
   } else if (Type->Kind == NdTypeKind::Func) {
     type(Key, Type->RetType, Depth + 1);
     number(Key, Type->ParamTypes.size());

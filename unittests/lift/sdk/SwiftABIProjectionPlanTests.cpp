@@ -106,6 +106,29 @@ TEST(SwiftABIProjectionPlan, RegisterAndStackLocationsArePartOfTheFullHint) {
   EXPECT_EQ(Plan.Batches.size(), 4U);
 }
 
+TEST(SwiftABIProjectionPlan, PointeeVectorsAndArrayElementsKeepIdentity) {
+  const auto Word = NdType::makeInt(sizeof(uint64_t));
+  auto Vector = std::make_shared<NdType>(*Word);
+  Vector->SourceName = kSourceAArch64Vector64CType;
+  const auto ArrayRecord = [](unsigned ElementBytes) {
+    return NdType::makeStruct(
+        {NdType::makeArray(NdType::makeInt(ElementBytes),
+                           sizeof(uint64_t) / ElementBytes, sizeof(uint64_t)),
+         NdType::makeFloat(sizeof(double))});
+  };
+  for (const auto &[Left, Right] :
+       {std::pair{Word, Vector}, std::pair{ArrayRecord(sizeof(uint32_t)),
+                                           ArrayRecord(sizeof(uint16_t))}}) {
+    ASSERT_TRUE(Left);
+    ASSERT_TRUE(Right);
+    auto A = signature(NdType::makePtr(Left), Arch::AArch64);
+    auto B = signature(NdType::makePtr(Right), Arch::AArch64);
+    const auto Entry = getTargetRegInfo(Arch::AArch64).PointerSize;
+    auto Plan = planABIProjections({row(0, Entry, A), row(1, Entry, B)}, {});
+    EXPECT_EQ(Plan.Batches.size(), 2U);
+  }
+}
+
 TEST(SwiftABIProjectionPlan, PairResultsAndCallbackTypesKeepCompleteABIKeys) {
   for (auto Architecture : {Arch::AArch64, Arch::X64}) {
     auto Pair = signature(NdType::makeInt(8), Architecture);

@@ -78,9 +78,9 @@ std::optional<std::string> HighCWriter::sourceValue(llvm::StringRef Text,
   if (Carrier && Source && Carrier->Kind == NdTypeKind::Struct &&
       Source->Kind == NdTypeKind::Struct && equalSourceTypes(Carrier, Source))
     return Text.str();
-  if (integerPair(Carrier) && integerPair(Source) &&
-      (isSourceAArch64Vector128Type(Carrier) ||
-       isSourceAArch64Vector128Type(Source)))
+  if (Carrier->Kind == NdTypeKind::Int && Source->Kind == NdTypeKind::Int &&
+      Carrier->Size == Source->Size &&
+      (isSourceAArch64VectorType(Carrier) || isSourceAArch64VectorType(Source)))
     return "__builtin_bit_cast(" + typeToC(Source) + ", (" + typeToC(Carrier) +
            ")(" + Text.str() + "))";
   if (integerPair(Carrier) && integerPair(Source))

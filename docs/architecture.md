@@ -1335,9 +1335,18 @@ C routes use that same layout. Such raw calls also use the physical bridge,
 so an integer IR carrier cannot silently acquire the i128 general-register ABI.
 External C declarations retain the logical aggregate type without creating a
 copy; function-body projections still require their separate storage proof.
-This covers standalone full-width vector values. General vector-containing
-record ABIs, including homogeneous vector aggregates, still need their member
-and register-bank classification.
+Short vectors retain their 64/128-bit widths. A homogeneous vector aggregate
+(HVA) has one to four same-width members after flattening natural nested
+records and arrays. The shared source layout and AAPCS64 placement owners
+assign complete D/Q members, exhaust the FP bank on a whole-aggregate spill,
+and retain natural stack alignment. Validation reuses that placement rather
+than accepting a merely contiguous register prefix. Results occupy D/Q0..3;
+partial machine reads first select the full logical member and then slice its
+bits. Anonymous C record identities distinguish vectors from integers and
+include array extents and element types. Complete larger non-HVAs retain their
+original indirect argument and x8 storage contracts. These recovered fixed C
+contracts do not infer a prototype or admit packed/union, variadic-vector or
+other language conventions.
 Call-occurrence identity can describe 32-bit or 64-bit targets, while native
 frame and Boolean-result proofs require the complete target architecture
 pointer width before granting a source projection.
@@ -1363,6 +1372,16 @@ compares exception classes; complete ESR
 and exact fault-PC equality remain unqualified. Whole-image arm64e rebuilding
 still requires the separate
 authenticated storage, relocation and signed-unwind ABI contract.
+
+The NeverSight LLVM fork retains a typed pointer-authentication recipe in its
+binary-rewrite symbol requests and fixup hooks: key, discriminator and address
+diversity accompany the final storage address and resolved unsigned target.
+Authenticated storage requires a consuming installer. Its result is not
+overwritten by the object writer's authentication metadata encoding. This MC
+contract is the handoff for a dyld fixup installer, not an offline PAC signing
+operation. NeverD's arm64e whole-image publication guard remains until storage
+installation and signed-unwind validation are complete; the r6 prebuilt does
+not yet expose the new fork interface.
 
 The shared AAPCS64 parameter placement owner describes Darwin fixed value
 spills with their natural size and alignment after either register bank is

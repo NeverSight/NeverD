@@ -7,12 +7,23 @@
 
 namespace neverd {
 
-/// C vector spelling for an entire AArch64 q-register passed by value.
-/// Keep its 16 bytes distinct from a 128-bit integer's x-register ABI.
+/// Canonical C short-vector spellings for AArch64 D/Q carriers. Their ABI is
+/// distinct from same-sized integers carried in X registers.
 #define SOURCE_ABI_TYPE_VALUE(Name, Value)                                     \
   inline constexpr unsigned Name = Value;
 #define SOURCE_ABI_TYPE_TEXT(Name, Text) inline constexpr char Name[] = Text;
 #include "SourceABI.def"
+/// Width required by a reserved vector spelling, or zero for other types.
+/// A malformed carrier can still have that spelling; validate its shape with
+/// isSourceAArch64VectorType before assigning a location.
+unsigned sourceAArch64VectorBytes(const NdType *Type);
+inline unsigned sourceAArch64VectorBytes(const TypeRef &Type) {
+  return sourceAArch64VectorBytes(Type.get());
+}
+bool isSourceAArch64VectorType(const NdType *Type);
+inline bool isSourceAArch64VectorType(const TypeRef &Type) {
+  return isSourceAArch64VectorType(Type.get());
+}
 bool isSourceAArch64Vector128Type(const TypeRef &Type);
 
 /// A genuine C Boolean preserves swiftcc i1, unlike an unsigned byte. Its
@@ -42,8 +53,15 @@ struct SourceAggregateMember {
 /// separately validated Swift result ABI may transport that mixed shape.
 /// A flat unsigned-word/opaque-pointer/Boolean Swift result retains all three
 /// fields and excludes the seven trailing padding bytes.
-/// Nested records retain their declared layout. Other mixtures fail.
+/// One to four homogeneous short vectors retain their full 64/128-bit members.
+/// Nested records and arrays retain their declared layout. Other mixtures fail.
 std::vector<SourceAggregateMember> sourceAggregateMembers(const TypeRef &Type);
+
+/// A complete natural HVA: one to four equally sized 64/128-bit short vectors,
+/// including nested records and arrays. Other record classifications return
+/// no members; they are not implicitly indirect values.
+std::vector<SourceAggregateMember>
+sourceAArch64VectorAggregateMembers(const TypeRef &Type);
 
 /// Scalar pieces of a supported logical source value. A 128-bit integer
 /// contributes two unsigned machine words; records retain their leaf types.

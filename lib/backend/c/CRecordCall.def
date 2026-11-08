@@ -22,5 +22,15 @@ NEVERD_C_RECORD_TEXT(kUnknownNamedRecordField,
                      "A named source record field has no complete C spelling")
 NEVERD_C_RECORD_TEXT(kInvalidSourceRecordABI,
                      "A source call needs a complete direct value ABI")
+NEVERD_C_RECORD_TEXT(kInvalidSourceRecord,
+                     "HighC cannot render an invalid source record")
+NEVERD_C_RECORD_TEXT(kInvalidSourceRecordFieldType,
+                     "HighC source record field type disagrees")
+NEVERD_C_RECORD_TEXT(kInvalidSourceRecordField,
+                     "HighC cannot render an invalid source field")
+NEVERD_C_RECORD_TEXT(kSourceArrayField, "({0})[{1}]")
+NEVERD_C_RECORD_TEXT(kSourceArrayInitializerOpen, "{")
+NEVERD_C_RECORD_TEXT(kSourceVectorRecordCode, "v{0}")
+NEVERD_C_RECORD_TEXT(kSourceArrayRecordCode, "a{0}_{1}_e")
 
 #undef NEVERD_C_RECORD_TEXT

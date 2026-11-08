@@ -1956,9 +1956,59 @@ logical copies or `byval`/`sret` promises. Named-function C output is compiled
 by Apple Clang directly; Apple Clang's legacy `llvm.ptrauth` globals remain
 unsupported by r6 IR import. Ordinary and rewrite code-generation boundaries
 now reject that representation before the incompatible backend can abort.
-General vector-containing record ABIs (including HVAs), whole-image
-authentication installation and signed exception execution remain separate,
-incomplete work.
+That receipt predates HVA transport. The vector-aggregate profile below extends
+its fixed-call coverage; whole-image authentication installation and signed
+exception execution remain separate, incomplete work.
+
+`SourceCallABI.NativeHVA*` covers 64/128-bit homogeneous vector records with
+one to four members, nested records and arrays, natural stack offsets and whole
+FP-bank exhaustion. Invalid widths, layouts, incomplete carriers, foreign
+conventions and reuse of an exhausted bank reject. Five-member and mixed-width
+larger records retain indirect addresses and x8. Independent Clang C declarations
+check the Darwin HVA versus indirect classification at O0/O2. Source names must
+keep vector/integer records and array extents distinct.
+
+`ByShape/AArch64RecoveredAuthenticatedCall` adds short-vector and HVA shapes on
+all five object routes, including arrays of records, mixed GP/FP arguments,
+packed stack prefixes and larger non-HVA companions. HVA results write every
+64-bit word to caller observation storage; the independent environment checks
+all distinct expected words and guards on both sides. The LowIR integration
+also covers native HVA parameters alongside original x8 storage. These tests
+qualify transport of an established fixed C declaration, not general recovery,
+vector variadics, packed/union layouts or whole-image publication.
+
+The [vector-aggregate qualification](evidence/arm64e-vector-aggregates-2026-11-08.json)
+records 73 declarations and 1,825 original Mach-O objects across all five
+routes. Thirty controlled FVP guests at EL0/EL1 and four CPTA settings compare
+43,800 valid calls and 105,120 invalid signatures with zero exception-class
+differences. Forty HighC O0 objects require an external `memcpy` call. The
+environment translates only the declared BR26 relocation and verifies every
+linked byte against the original, permitting only that branch displacement;
+it does not recompile IR for an ELF ABI. Earlier explicit and x8 object
+baselines remain byte-identical, without claiming another model execution.
+
+Broader regression caught array equality admitting previously unsupported
+pointer-to-array declarations. The shared source-type boundary retains that
+rejection while admitting fixed arrays inside records. Native pointer inference
+and Swift projection tests exercise the original failures; projection grouping
+also distinguishes vector pointees and array element types. This qualification
+retains the first failing reports as well as the corrected checks.
+
+The NeverSight LLVM fork's authenticated-fixup tests cover Mach-O and ELF,
+all four keys, address diversity, local/external targets, aliases and addends.
+They require a consuming fixup installer and preserve its installed word.
+This verifies the MC interface needed by whole-image installation; it does
+not qualify new dyld storage or signed exception execution. The configured
+prebuilt package remains r6.
+
+The final qualification includes 2,498 distinct checks: 2,477 pass and 21
+retain their explicit platform/compiler skips. The first broad run's two
+type-boundary failures are fixed and recorded separately. The affected
+256-case repeat, 151 authenticated-call cases and 15 frame cases pass; all
+current and earlier canonical object profiles remain byte-identical. Native
+compiler-only unwind controls pass on ordinary arm64 at O0/O2, while both
+arm64e executables terminate with SIGKILL before reporting completion. This
+does not provide native signed-unwind qualification.
 
 `MachOArm64eDependencies` additionally verifies multi-start pages for all six
 supported arm64e chain formats and ordinary 64-bit chains. It checks complete
@@ -21296,6 +21346,27 @@ complete backtraces and C++ exception destruction; signed controls terminate
 with an uncaught exception at both levels. They reproduce the boundary without
 handwritten frame CFI and are unavailable coverage, not passing NeverD signed
 unwind qualification.
+
+### Arm64e verifier artifact ownership
+
+The SDK call driver and `scripts/verify_arm64e_sp_memory.py` share
+`scripts/arm64e_artifacts.py`. They register each disposable object or executable
+before its compiler starts and persist the registry atomically. Success,
+failure and normal interruption all remove registered products. The next
+invocation recovers a killed run under the same output lock. Compiler children
+inherit that lock, so recovery waits for pending producers. The original SDK
+call assembly and dylib remain as a minimal fixture and are reused only when
+source, compiler version, command and binary digest agree. Input snapshots,
+source projections, diagnostic logs and explicitly retained products remain.
+The SP verifier uses the supplied SDK directly and refuses to overwrite a
+changed formal input in a reused output directory.
+
+`test_arm64e_artifact_lifecycle.py` exercises repeated success/failure/abort
+paths, the actual SDK and SP entry points, explicit retention, SIGKILL recovery
+and a compiler outliving its controller. It uses small fixtures and does not
+execute the arm64e research matrix. The external CPA2 environment separately
+owns its FVP cache and scratch lifecycle across primitive, generated-memory,
+grouped-memory and authenticated-call drivers.
 
 ## Selected callable checks
 

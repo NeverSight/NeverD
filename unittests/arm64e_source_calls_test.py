@@ -12,7 +12,12 @@ import json
 from pathlib import Path
 import platform
 import re
+import sys
 import subprocess
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from arm64e_artifacts import OwnedProducts
 
 
 FIXTURES = json.loads(
@@ -31,6 +36,12 @@ def main():
                         choices=[case["name"] for case in FIXTURES["cases"]],
                         help=FIXTURES["selection"]["case_help"])
     args = parser.parse_args()
+    with OwnedProducts(args.artifacts, args.keep_products,
+                       (FIXTURES["cleanup"]["input_binary"],)) as products:
+        run_cases(args, products)
+
+
+def run_cases(args, products):
     cases = [case for case in FIXTURES["cases"]
              if args.case is None or case["name"] == args.case]
     refused = (FIXTURES["refused"] if args.case is None or
@@ -47,15 +58,23 @@ def main():
         assembly += FIXTURES[case.get("exit", "assembly_variadic_exit" if variadic else
                              "assembly_exit")]
     assembly += FIXTURES["assembly_suffix"]
-    original = args.artifacts / "calls.S"
-    binary = args.artifacts / "calls.dylib"
-    products = [binary]
+    original = args.artifacts / FIXTURES["cleanup"]["input_source"]
+    binary = args.artifacts / FIXTURES["cleanup"]["input_binary"]
+    command = [args.compiler, "-target", FIXTURES["triple"], "-dynamiclib",
+               "-nostdlib", "-lSystem", str(original), "-o", str(binary)]
+    compiler_version = products.run([args.compiler, "--version"], check=True,
+                                    stdout=subprocess.PIPE, text=True).stdout
+    identity = {"source_sha256": hashlib.sha256(assembly.encode()).hexdigest(),
+                "command": command, "compiler_version": compiler_version}
+    receipt = args.artifacts / FIXTURES["cleanup"]["fixture_receipt"]
+    previous = json.loads(receipt.read_text()) if receipt.exists() else {}
     original.write_text(assembly)
-    subprocess.run(
-        [args.compiler, "-target", FIXTURES["triple"], "-dynamiclib",
-         "-nostdlib", "-lSystem", str(original), "-o", str(binary)],
-        check=True,
-    )
+    if (previous.get("identity") != identity or not binary.is_file() or
+            previous.get("binary_sha256") != hashlib.sha256(binary.read_bytes()).hexdigest()):
+        products.run(command, check=True)
+        receipt.write_text(json.dumps({"identity": identity,
+                                      "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest()},
+                                     indent=2) + "\n")
 
     library = ctypes.CDLL(str(args.library.resolve()))
     pointer = ctypes.c_void_p
@@ -112,6 +131,7 @@ def main():
             stem = policy["stem"].format(name=case["name"], route=route, optimization=optimization)
             executable = args.artifacts / stem
             obj = executable.with_suffix(".o")
+            products.extend((obj, executable))
             commands = [
                 [args.compiler, "-target", FIXTURES["native_triple"],
                  *FIXTURES["native_flags"], optimization, "-c", str(source), "-o", str(obj)],
@@ -121,9 +141,8 @@ def main():
             ]
             with (args.artifacts / (stem + ".log")).open("w") as log:
                 for command in commands:
-                    result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT)
+                    result = products.run(command, stdout=log, stderr=subprocess.STDOUT)
                     assert result.returncode == 0, (stem, result.returncode)
-            products.extend((obj, executable))
         summary.append({"name": case["name"], "route": route,
                         "native_unwind_executions": len(FIXTURES["optimizations"]),
                         "signed_unwind_qualified": False})
@@ -160,18 +179,18 @@ def main():
         for optimization in FIXTURES["optimizations"]:
             stem = case["name"] + "-" + route + optimization
             executable = args.artifacts / stem
-            compiled = subprocess.run(
+            products.append(executable)
+            compiled = products.run(
                 [args.compiler, "-target", FIXTURES["native_triple"],
                  *FIXTURES["native_flags"], optimization, str(source),
                  str(harness), "-o", str(executable)], stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, text=True)
             (args.artifacts / (stem + ".log")).write_text(compiled.stdout)
             assert compiled.returncode == 0, (stem, compiled.stdout)
-            executed = subprocess.run([str(executable)], stdout=subprocess.PIPE,
+            executed = products.run([str(executable)], stdout=subprocess.PIPE,
                                       stderr=subprocess.STDOUT, text=True)
             assert executed.returncode == 0, (stem, executed.returncode,
                                               executed.stdout)
-            products.append(executable)
         execute_unwind(case, source, route, prototype, parameter_types)
         return len(FIXTURES["optimizations"])
 
@@ -215,7 +234,8 @@ def main():
                 source.write_text(result["text"])
                 for optimization in FIXTURES["optimizations"]:
                     obj = args.artifacts / (stem + optimization + ".o")
-                    compiled = subprocess.run(
+                    products.append(obj)
+                    compiled = products.run(
                         [args.compiler, "-target", FIXTURES["triple"],
                          *FIXTURES["compile_flags"], optimization, "-c",
                          str(source), "-o", str(obj)],
@@ -225,7 +245,6 @@ def main():
                     (args.artifacts / (stem + optimization + ".log")).write_text(
                         compiled.stdout)
                     assert compiled.returncode == 0, (stem, compiled.stdout)
-                    products.append(obj)
                 summary.append({"name": case["name"], "route": route,
                                 "applied": True,
                                 "native_executions": execute_variadic(
@@ -255,19 +274,6 @@ def main():
         library.neverd_session_destroy(session)
         (args.artifacts / "summary.json").write_text(
             json.dumps(summary, indent=2) + "\n")
-    product_records = {
-        path.relative_to(args.artifacts).as_posix(): {
-            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-            "bytes": path.stat().st_size,
-        }
-        for path in products
-    }
-    (args.artifacts / FIXTURES["cleanup"]["manifest"]).write_text(
-        json.dumps({"retained": args.keep_products, "products": product_records},
-                   indent=2) + "\n")
-    if not args.keep_products:
-        for path in products:
-            path.unlink()
     print(json.dumps({"compiled_source_routes":
                       len(cases) * len(FIXTURES["routes"]),
                       "refused_routes":
