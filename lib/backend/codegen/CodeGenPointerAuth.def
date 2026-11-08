@@ -13,4 +13,13 @@ CODEGEN_PAUTH_TEXT(kLegacyApplePAuthUnsupported,
                    "unsupported by the configured LLVM; native C object "
                    "compilation remains separate\n")
 
+CODEGEN_PAUTH_TEXT(kPAuthInstallationOwner,
+                   "codegen: pointer authentication requires an arm64e Mach-O "
+                   "replacement image with a dyld installation owner\n")
+
+CODEGEN_PAUTH_TEXT(
+    kPAuthRecipeCallbackMissing,
+    "codegen: configured LLVM lacks authenticated fixup recipe callbacks; "
+    "native object emission remains separate\n")
+
 #undef CODEGEN_PAUTH_TEXT

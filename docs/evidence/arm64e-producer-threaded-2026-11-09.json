@@ -1,0 +1,253 @@
+{
+  "schema": "neverd-arm64e-producer-threaded-v1",
+  "overall_arm64e_complete": false,
+  "base_revision": "1dee800ccf0d4cb9454c7999b04954c20a2cf8bc",
+  "changes": [
+    "Retain typed MC signing receipts at final placement and automatically translate local or exact-existing-provider recipes for dyld installation.",
+    "Rebuild legacy threaded ordinal tables and APPLY roots using the same bytecode and pointer owners as analysis.",
+    "Reject failed zero-address placement before publication, including unsigned replacement images.",
+    "Preserve signed unwind records and code-signature extents across both legacy and modern installation.",
+    "Charge the existing threaded copied-string budget for the decoded table, owned imports and per-slot symbol identities; reject amplification before mutation."
+  ],
+  "toolchain": {
+    "profile": "Release",
+    "llvm_package": "neverd-llvm-v23.0.0-r6",
+    "llvm_source_patches_or_overlays": false,
+    "compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+    "macos_sdk": "15.5",
+    "clang_format": "22.1.2",
+    "working_dependencies": {
+      "signatures": "20b9036f4367e1308a3d2f0b214e06859090a7af",
+      "third_party/capstone": "b8c22e0c16b1769dfa712547d4a5c5d49560ae46"
+    }
+  },
+  "validation": {
+    "apple_offline_matrix": {
+      "cases": 8,
+      "optimization": [
+        "O0",
+        "O2"
+      ],
+      "storage": [
+        "existing",
+        "appended RX/RW"
+      ],
+      "format": [
+        "modern chained",
+        "legacy threaded"
+      ],
+      "signed_runtime_execution": false,
+      "compact_frame_count": {
+        "O0": 4,
+        "O2": 2
+      },
+      "signed_cfi_rows_per_case": 5
+    },
+    "real_call_throw_controls": [
+      {
+        "optimization": "-O0",
+        "compile": 0,
+        "diagnostic": "",
+        "sha256": "c728eddfa6aa6cf3f696587895accf18d60a393994598ebf58776e7fae9b4dfb",
+        "returncode": -9,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "optimization": "-O2",
+        "compile": 0,
+        "diagnostic": "",
+        "sha256": "1131d742d97054447556b88651e3ca82ec23b2cdd709e2e93904172d7e30b838",
+        "returncode": -9,
+        "stdout": "",
+        "stderr": ""
+      }
+    ],
+    "minimal_abi_launch_controls": {
+      "source": "https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.140.69/bsd/kern/kern_exec.c#L1398-L1424",
+      "preview_boot_arg_present": false,
+      "controls": [
+        {
+          "arch": "arm64",
+          "compile": 0,
+          "compile_diagnostic": "",
+          "sha256": "9af080e7c947ecb6cf2e3149ae2138f363a0b743202e6eb56674af6422545f7e",
+          "cpu_type": 16777228,
+          "cpu_subtype": 0,
+          "signature_verify": 0,
+          "signature_diagnostic": "",
+          "returncode": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "arch": "arm64e",
+          "compile": 0,
+          "compile_diagnostic": "",
+          "sha256": "4364ffd33b254d34ba0c6debf634d5381e84b135d79d1acd4f09b5550499d60a",
+          "cpu_type": 16777228,
+          "cpu_subtype": 2147483650,
+          "signature_verify": 0,
+          "signature_diagnostic": "",
+          "returncode": -9,
+          "stdout": "",
+          "stderr": ""
+        }
+      ]
+    },
+    "focused_final": {
+      "tests": 34,
+      "passed": 33,
+      "failures": 0,
+      "skipped": 1,
+      "sha256": "39538bf275ce21217b96bb182001e415c1f459b9c8b205a7c2faf637f3951aca"
+    },
+    "copy_budget_regression": {
+      "red_xml_sha256": "9737d68b2726feac751a09f7b914147394e31eec628ede6a773fdfa24012c006",
+      "red_failure": "16 references to a 1 MiB symbol were accepted beyond the existing copied-string budget.",
+      "green": "Included in focused_final; admitted lower count and snapshot/installer refusal preserve the original bytes.",
+      "new_policy_limit": false
+    },
+    "initial_broad_registered_totals": {
+      "tests": 1602,
+      "passed": 1595,
+      "failed": 0,
+      "skipped": 7,
+      "sha256": "17fe397efc9665454de81ff34603fdf8c8132a2b7df1dfef9a39d717c4ae90c5",
+      "qualification_limit": "Includes 530 supplemental registrations from executables not rebuilt for this revision; not used as current-revision coverage."
+    },
+    "integration": {
+      "tests": 1073,
+      "passed": 1067,
+      "skipped": 6,
+      "failed": 0,
+      "aggregation": "Each registered case is matched in order by exact name to registered-selection.json, then classified by command executable. One timed-out case is replaced by its isolated successful rerun using its unchanged registered command and 120-second timeout.",
+      "by_executable": {
+        "NeverDArm64eAnalysisTests": {
+          "passed": 432,
+          "failed": 0,
+          "skipped": 6
+        },
+        "NeverDMachOPointerRelocationBoundaryTests": {
+          "passed": 335
+        },
+        "NeverDNativeExceptionRewriteContractTests": {
+          "passed": 286
+        },
+        "NeverDSourcePatchLayoutTests": {
+          "passed": 14
+        }
+      },
+      "initial_by_executable": {
+        "NeverDArm64eAnalysisTests": {
+          "passed": 431,
+          "failed": 1,
+          "skipped": 6
+        },
+        "NeverDMachOPointerRelocationBoundaryTests": {
+          "passed": 335
+        },
+        "NeverDNativeExceptionRewriteContractTests": {
+          "passed": 286
+        },
+        "NeverDSourcePatchLayoutTests": {
+          "passed": 14
+        }
+      },
+      "supplemental_registrations_excluded": {
+        "NeverDLiftTests": 523,
+        "NeverDObjCSourceCallTests": 7
+      },
+      "initial_xml_sha256": "a82910fa6876858fb4ebb39d6d5d8d534ca8c3d52f8bb4f0f1ed5079c3db2474",
+      "registration_sha256": "1faf68f61d0bd5c8c0c0acc08dbb74717f6333f3fda711bd8f98ca8f9f0084b0",
+      "isolated_rerun_xml_sha256": "abd8f7894951c4a75cddd501d502f5367b56b0ecc2c575c507720781cb84b5fd",
+      "isolated_rerun": {
+        "name": "AArch64AddressMemory.NarrowAliasedIndicesSurviveDecodedSSAAndBothSourceABIs",
+        "result": "passed",
+        "registered_timeout_seconds": 120,
+        "initial_result": "timeout",
+        "interpretation": "The same binary and registered timeout pass without concurrent CTest cases; shared-host contention is consistent with this result. No timeout or semantics changed."
+      },
+      "skipped_tests": [
+        {
+          "name": "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+          "executable": "NeverDArm64eAnalysisTests",
+          "diagnostic": "The execution host does not report the required ordered-memory feature"
+        },
+        {
+          "name": "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+          "executable": "NeverDArm64eAnalysisTests",
+          "diagnostic": "this host cannot execute arm64e with all four active pointer signing keys and generic signatures"
+        },
+        {
+          "name": "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+          "executable": "NeverDArm64eAnalysisTests",
+          "diagnostic": "this host cannot execute arm64e PAuth_LR with active keys"
+        },
+        {
+          "name": "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+          "executable": "NeverDArm64eAnalysisTests",
+          "diagnostic": "this host cannot execute PACM with active IA/IB keys and a second diversifier"
+        },
+        {
+          "name": "A64FastClassifyParity.OptionalRealBinaryWalk",
+          "executable": "NeverDArm64eAnalysisTests",
+          "diagnostic": "set NEVERD_PARITY_BIN to a raw arm64 code file to enable"
+        },
+        {
+          "name": "MachOArm64eInstallation.MCProducerCapturesRecipesThroughFinalPlacement",
+          "executable": "NeverDArm64eAnalysisTests",
+          "diagnostic": "configured LLVM predates authenticated MC recipe callbacks"
+        }
+      ],
+      "command": "ctest --test-dir build-arm64e --build-config Release -L '^(NeverDArm64eAnalysisTests|NeverDSourcePatchLayoutTests|NeverDNativeExceptionRewriteContractTests|NeverDMachOPointerRelocationBoundaryTests)$' --output-on-failure --parallel 4",
+      "binary_sha256": {
+        "NeverDArm64eAnalysisTests": "a3b45d524dcdc72e0caf8841881820f904205f925e1da795834565efb6589a92",
+        "NeverDMachOPointerRelocationBoundaryTests": "847f8224b05e0b565cde6439dc99523729a0a2b9dc37e15770584374c2556cf6",
+        "NeverDNativeExceptionRewriteContractTests": "f132cdb6c109632ade533d65d707a67cfdbb50a4e656ea3255b524774bb7e745",
+        "NeverDSourcePatchLayoutTests": "b98ce96597abbbe290fbbdd220964ab7277ca3f61b1adc9814a79381b1032de2"
+      }
+    },
+    "style": "clang-format 22.1.2 and git diff --check passed for changed C/C++/def files.",
+    "documentation": {
+      "changed_links": "Architecture/testing links and structure passed; qualification JSON parses.",
+      "baseline_issue": "The merged dev revision has README source-hash drift in all ten project.md translations. README.md and those translations are unchanged by this branch."
+    }
+  },
+  "oracle_limits": {
+    "otool_source": "https://github.com/apple-oss-distributions/cctools/blob/main/otool/dyld_bind_info.c",
+    "otool_source_sha256": "28b193a356404f53a50ca8164532f35a75751006a14a5f5825825e5a387a025a",
+    "legacy_key_decoder": "(value >> 49) & 2 drops the low key bit. All four raw keys are checked; decoded names independently cover IA/DA only.",
+    "legacy_rebases": "Checked by strict replay and the separate analysis loader; otool does not list legacy rebases."
+  },
+  "remaining_boundaries": [
+    "The actual new MC callback integration requires a post-r6 fork toolchain; r6 explicitly skips that test.",
+    "r6 nested ptrauth globals refuse final-address rewriting while native object emission retains relocations; r6 inline assembly authentication is not qualified.",
+    "Native object relocation-to-installation handoff, new provider admission and newly emitted authenticated read-only storage/RELRO need separate ownership.",
+    "Real authenticated dyld calls and signed C++ exception unwinding remain unavailable: both compiler-original O0/O2 controls terminate with SIGKILL before output.",
+    "Whole-image arm64e publication remains closed; no complete arm64e, CPA2/CPTA or fault-PC/ESR execution claim."
+  ],
+  "implementation_revision": "cd96f3336fe543b650b621f4d016da5079b1c4c2",
+  "integration_revision": "a75cd187bb7affd89d98e510027e5a408b78be42",
+  "integrated_dev_revision": "2aa63ac96969fb8d2c4f59cb3de91fb3ac088b34",
+  "cleanup": {
+    "removed_files": 42,
+    "removed_bytes": 2737097,
+    "retained": "Active incremental build, test/source fixtures, logs, XML and hashed source evidence; completed native fixture libraries and runtime probes were removed. The timeout source and stderr were retained before their temporary copies and executable were removed.",
+    "manifests": [
+      "cleanup.json",
+      "native-initial-products.json",
+      "native-fixed-products.json",
+      "native-probe-cleanup.json",
+      "unused-source-cleanup.json",
+      "native-probe/abi-launch-control-results.json",
+      "timeout-cleanup.json"
+    ]
+  },
+  "external_cpa2_ci_access": {
+    "verified": false,
+    "diagnostic": "The selected GitHub connection changed or is unavailable. Reopen Code Review.",
+    "fallback_used": false,
+    "pull_request": "https://github.com/gmh5225/test_mac_intel/pull/3"
+  }
+}

@@ -14,6 +14,7 @@
 
 #include "neverd/loader/Limits.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
+#include "neverd/loader/MachO/MachOThreadedBind.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -22,6 +23,7 @@
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/Support/LEB128.h"
 
+#include <algorithm>
 #include <cstring>
 #include <iterator>
 #include <limits>
@@ -30,7 +32,7 @@
 #include <utility>
 #include <vector>
 
-namespace neverd::macho_loader::detail {
+namespace neverd::macho_loader {
 namespace {
 using namespace llvm::MachO;
 
@@ -111,12 +113,10 @@ std::optional<BindOperation> readOperation(const uint8_t *&P,
   return Op;
 }
 
-struct StreamKind {
-  bool Threaded = false;
-  bool Malformed = false;
-};
+} // namespace
 
-StreamKind classify(llvm::ArrayRef<uint8_t> Bytes, bool Lazy) {
+threaded::StreamKind threaded::classify(llvm::ArrayRef<uint8_t> Bytes,
+                                        bool Lazy) {
   StreamKind Kind;
   const uint8_t *P = Bytes.begin();
   size_t Operations = 0;
@@ -133,26 +133,15 @@ StreamKind classify(llvm::ArrayRef<uint8_t> Bytes, bool Lazy) {
   return Kind;
 }
 
-struct ChainRoot {
-  unsigned SegmentIndex;
-  uint64_t Offset;
-};
-
-struct ThreadedPlan {
-  std::vector<Arm64eImportRecord> Imports;
-  std::vector<ChainRoot> Roots;
-  size_t CopiedBytes = 0;
-};
-
-std::optional<ThreadedPlan> plan(llvm::ArrayRef<uint8_t> Bytes,
-                                 const BinaryImage &Img) {
-  ThreadedPlan Plan;
+std::optional<threaded::Program> threaded::decode(llvm::ArrayRef<uint8_t> Bytes,
+                                                  size_t LibraryCount) {
+  Program Plan;
   std::optional<uint64_t> TableSize;
   std::optional<int64_t> Library;
   std::optional<unsigned> Segment;
   llvm::StringRef Symbol;
   uint8_t Type = 0;
-  bool Weak = false;
+  uint8_t Flags = 0;
   int64_t Addend = 0;
   uint64_t Offset = 0;
   const auto charge = [&](size_t Bytes) {
@@ -162,14 +151,18 @@ std::optional<ThreadedPlan> plan(llvm::ArrayRef<uint8_t> Bytes,
     return true;
   };
   const uint8_t *P = Bytes.begin();
+  size_t Operations = 0;
+  bool Done = false;
   while (P != Bytes.end()) {
     auto Op = readOperation(P, Bytes.end());
-    if (!Op)
+    if (!Op || ++Operations > limits::loader::kMachOThreadedMaxOpcodes)
       return std::nullopt;
     switch (Op->Opcode) {
     case BIND_OPCODE_DONE:
-      if (Op->Immediate)
+      if (Op->Immediate ||
+          std::any_of(P, Bytes.end(), [](uint8_t Byte) { return Byte != 0; }))
         return std::nullopt;
+      Done = true;
       P = Bytes.end();
       break;
     case BIND_OPCODE_SET_DYLIB_ORDINAL_IMM:
@@ -191,7 +184,7 @@ std::optional<ThreadedPlan> plan(llvm::ArrayRef<uint8_t> Bytes,
                             BIND_SYMBOL_FLAGS_NON_WEAK_DEFINITION))
         return std::nullopt;
       Symbol = Op->Symbol;
-      Weak = Op->Immediate & BIND_SYMBOL_FLAGS_WEAK_IMPORT;
+      Flags = Op->Immediate;
       break;
     case BIND_OPCODE_SET_TYPE_IMM:
       Type = Op->Immediate;
@@ -208,26 +201,12 @@ std::optional<ThreadedPlan> plan(llvm::ArrayRef<uint8_t> Bytes,
     case BIND_OPCODE_DO_BIND: {
       if (Op->Immediate || !TableSize || Plan.Imports.size() >= *TableSize ||
           !Library || *Library < BIND_SPECIAL_DYLIB_WEAK_LOOKUP ||
-          (*Library > 0 &&
-           uint64_t(*Library) > Img.MachODylibReferences.size()) ||
+          (*Library > 0 && uint64_t(*Library) > LibraryCount) ||
           Type != BIND_TYPE_POINTER || Symbol.empty())
         return std::nullopt;
-      llvm::StringRef Module;
-      llvm::StringRef DisplayModule = kExternModule;
-      bool WeakImport = Weak;
-      if (*Library > 0) {
-        const auto &Reference = Img.MachODylibReferences[*Library - 1];
-        Module = Reference.Name;
-        if (Module.empty())
-          return std::nullopt;
-        DisplayModule = Module;
-        WeakImport |= Reference.Weak;
-      }
-      if (!charge(Symbol.size()) || !charge(Module.size()) ||
-          !charge(DisplayModule.size()))
+      if (!charge(Symbol.size()))
         return std::nullopt;
-      Plan.Imports.push_back({Symbol.str(), Module.str(), DisplayModule.str(),
-                              Addend, WeakImport, true, *Library});
+      Plan.Imports.push_back({Symbol.str(), *Library, Addend, Flags});
       break;
     }
     case arm64e::kThreadedOpcode:
@@ -249,18 +228,20 @@ std::optional<ThreadedPlan> plan(llvm::ArrayRef<uint8_t> Bytes,
       return std::nullopt;
     }
   }
-  if (!TableSize || Plan.Imports.size() != *TableSize)
+  if (!Done || !TableSize || Plan.Imports.size() != *TableSize)
     return std::nullopt;
   return Plan;
 }
 
+namespace detail {
+namespace {
 std::optional<std::vector<Arm64eFixup>>
-walk(const ThreadedPlan &Plan, va_t Base, const BinaryImage &Img) {
+walk(const threaded::Program &Plan, llvm::ArrayRef<Arm64eImportRecord> Imports,
+     size_t CopiedBytes, va_t Base, const BinaryImage &Img) {
   const auto Format = *arm64e::chainFormat(DYLD_CHAINED_PTR_ARM64E);
   std::vector<Arm64eFixup> Pending;
   std::set<va_t> Seen;
   std::set<unsigned> CheckedOwners;
-  size_t CopiedBytes = Plan.CopiedBytes;
   for (const auto &Root : Plan.Roots) {
     if (Root.SegmentIndex >= Img.Segments.size())
       return std::nullopt;
@@ -304,7 +285,7 @@ walk(const ThreadedPlan &Plan, va_t Base, const BinaryImage &Img) {
       if (!Storage)
         return std::nullopt;
       auto Fixup = decodeArm64eFixup(readLE<uint64_t>(Storage), Format, Slot,
-                                     Base, Plan.Imports, Img);
+                                     Base, Imports, Img);
       if (!Fixup)
         return std::nullopt;
       // Indirect-symbol tables may already describe this slot. Reuse the
@@ -363,8 +344,8 @@ bool parseThreadedBindStreams(const uint8_t *BasePtr, size_t FileSize,
     return fail();
   if (!Bind || !Lazy)
     return Img.isArm64e() ? fail() : false;
-  const auto Kind = classify(*Bind, false);
-  const auto LazyKind = classify(*Lazy, true);
+  const auto Kind = threaded::classify(*Bind);
+  const auto LazyKind = threaded::classify(*Lazy, true);
   if (LazyKind.Threaded || ((Kind.Malformed || LazyKind.Malformed) &&
                             (Kind.Threaded || Img.isArm64e())))
     return fail();
@@ -375,17 +356,40 @@ bool parseThreadedBindStreams(const uint8_t *BasePtr, size_t FileSize,
       TextVMAddr == InvalidVA || !Lazy->empty() || Info.RebaseSize ||
       Info.WeakBindSize)
     return fail();
-  auto Plan = plan(*Bind, Img);
+  auto Plan = threaded::decode(*Bind, Img.MachODylibReferences.size());
   if (!Plan)
     return fail();
-  auto Fixups = walk(*Plan, TextVMAddr, Img);
+  std::vector<Arm64eImportRecord> Imports;
+  Imports.reserve(Plan->Imports.size());
+  size_t CopiedBytes = Plan->CopiedBytes;
+  for (auto &Record : Plan->Imports) {
+    llvm::StringRef Module;
+    llvm::StringRef DisplayModule = kExternModule;
+    bool Weak = Record.Flags & BIND_SYMBOL_FLAGS_WEAK_IMPORT;
+    if (Record.Ordinal > 0) {
+      const auto &Reference = Img.MachODylibReferences[Record.Ordinal - 1];
+      Module = Reference.Name;
+      if (Module.empty())
+        return fail();
+      DisplayModule = Module;
+      Weak |= Reference.Weak;
+    }
+    const size_t Extra = Module.size() + DisplayModule.size();
+    if (Extra > limits::loader::kMachOThreadedMaxCopiedBytes - CopiedBytes)
+      return fail();
+    CopiedBytes += Extra;
+    Imports.push_back({std::move(Record.Name), Module.str(),
+                       DisplayModule.str(), Record.Addend, Weak, true,
+                       Record.Ordinal});
+  }
+  auto Fixups = walk(*Plan, Imports, CopiedBytes, TextVMAddr, Img);
   if (!Fixups)
     return fail();
 
   std::set<std::string> Names;
   for (const auto &Import : Img.Imports)
     Names.insert(Import.Name);
-  for (const auto &Record : Plan->Imports) {
+  for (const auto &Record : Imports) {
     if (!Names.insert(Record.Name).second)
       continue;
     Import Entry;
@@ -398,4 +402,5 @@ bool parseThreadedBindStreams(const uint8_t *BasePtr, size_t FileSize,
   return true;
 }
 
-} // namespace neverd::macho_loader::detail
+} // namespace detail
+} // namespace neverd::macho_loader

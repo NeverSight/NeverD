@@ -134,6 +134,14 @@ struct PatchLayoutBase {
 // CompiledImage — multi-section rewrite-backend output ready for placement
 // ===--------------------------------------------------------------------===//
 
+/// Runtime signing schema retained from a producer relocation. The target is
+/// still the fixup's symbolic expression; this is never a process PAC value.
+struct CompiledPointerAuthentication {
+  uint8_t Key = 0;
+  uint16_t Diversity = 0;
+  bool AddressDiversity = false;
+};
+
 /// One symbolic fixup owned by a CompiledSection.  Symbol strings are copied
 /// while LLVM's MC callback is live; no numeric address is used as a substitute
 /// for symbol identity.  SubtractSymbol is non-empty for an `Add - Sub`
@@ -160,6 +168,9 @@ struct CompiledFixupReference {
   uint64_t ResolvedValue = 0;
   /// Stable target spelling of Kind when provided by the compiler receipt.
   std::string KindName;
+  /// Requires format-owned installation after final placement. Raw image bytes
+  /// contain zero at this slot until the dyld recipe is installed.
+  std::optional<CompiledPointerAuthentication> PointerAuth;
 };
 
 /// One native section produced for a CompiledImage.  Allocated in-image

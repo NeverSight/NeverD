@@ -21502,13 +21502,32 @@ diversity settings, local/import identities, special library ordinals,
 4/16 KiB pages, overflow starts, new RX/RW segments, signature extents,
 reordered segment-target ordinals and unchanged input on rejection.
 Independent literal words and the separate analysis loader check the installed
-representation.
+representation. The same suite covers legacy threaded ordinal-table/root
+installation, raw NON_WEAK_DEFINITION flags, signed addends, all special
+ordinals, complete-program rejection and automatic compiled receipt handoff
+into both formats. Provider ambiguity and failed placement planning are rejected
+without mutation. The actual
+MC compilation test requires the fork's `MCPointerAuthInfo` interface and
+explicitly skips with r6; authored receipts do not substitute for that producer
+qualification. The compiler boundary control first emits and loads a native
+object containing a nested `ptrauth` constant, then requires either a retained
+rewrite recipe on a capable fork or explicit refusal with r6.
+Long-name controls distinguish an admitted shared symbol from repeated copies
+that exhaust the threaded budget; both snapshot decoding and installation must
+reject the latter before changing the image.
 
 `AppleClang/MachOArm64eNativeInstallation.*` compiles actual arm64e dylibs at
 O0/O2, installs sixteen recipes including a new libSystem import both in
 existing storage and in newly appended RX/RW segments, re-signs with the
 production signer, verifies the result strictly and asks Apple's
-`dyld_info` to decode every target, key and discriminator. Compiler-generated
+`dyld_info` to decode every target, key and discriminator for modern chains.
+The legacy matrix uses `ld-classic -no_fixup_chains` and `otool -dyld_info` to
+independently decode bind diversity, address diversity and symbols. Current
+`dyld_info` refuses old arm64e bind opcodes, and `otool` does not list legacy
+rebases. Its legacy key decoder also drops the low key bit (`& 2`); tests check
+both raw key bits for all four keys and the decoded names for IA/DA. IB/DB do
+not have an independent decoded-name oracle on this toolchain. Legacy rebases
+are checked by strict replay and the separate analysis loader. Compiler-generated
 C++ compact frames retain their ranges, encodings, personality slots and LSDA
 addresses. A separate, explicit assembly input supplies signed DWARF CFI for
 instruction-by-instruction IB state replay; it is not compiler-generated
@@ -21516,8 +21535,10 @@ exception-unwind evidence. These tests inspect files and do not execute dyld,
 C++ cleanup or the native signed unwinder. Non-Apple hosts explicitly skip the
 Apple-tool cases. `NEVERD_ARM64E_DYLD_ARTIFACT_DIR` exports qualification inputs
 and diagnostics; ordinary runs remove their temporary directory.
-The [qualification record](evidence/arm64e-dyld-install-2026-11-08.json)
-records the native inputs, integration checks and remaining validation limits.
+The [producer/threaded qualification record](evidence/arm64e-producer-threaded-2026-11-09.json)
+records integration checks and the remaining producer/runtime limits. The
+[earlier chained-only record](evidence/arm64e-dyld-install-2026-11-08.json)
+retains its original native inputs and validation results.
 
 ### Arm64e verifier artifact ownership
 

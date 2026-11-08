@@ -20,10 +20,19 @@
 
 namespace neverd {
 
+struct CompiledImage;
+
 struct MachOAuthenticatedFixup {
   va_t Address = 0;
   MachOAuthenticatedPointer Recipe;
 };
+
+/// Translate producer receipts at their final section VAs. External symbols
+/// must identify one exact existing dyld provider; conflicting providers are
+/// rejected. Explicit recipes remain useful for caller-owned new dependencies.
+llvm::Expected<std::vector<MachOAuthenticatedFixup>>
+collectMachOAuthenticatedFixups(llvm::ArrayRef<uint8_t> Original,
+                                const CompiledImage &Image);
 
 /// Install new recipes in writable file-backed storage. Imports name an exact
 /// existing dylib ordinal (or a dyld special ordinal); Target is already the

@@ -47,14 +47,15 @@ using namespace neverd;
 #include "MachOAuthenticatedNativeFixtures.def"
 
 class MachOArm64eNativeInstallation
-    : public ::testing::TestWithParam<std::tuple<const char *, bool>> {};
+    : public ::testing::TestWithParam<std::tuple<const char *, bool, bool>> {};
 
 TEST_P(MachOArm64eNativeInstallation,
        AppleImageKeepsSignedFramesAndDyldRecipes) {
 #ifndef __APPLE__
   GTEST_SKIP() << kMissingHost;
 #else
-  const auto [Optimization, AppendSegments] = GetParam();
+  const auto [Optimization, AppendSegments, Threaded] = GetParam();
+  RecordProperty(kThreadedProperty, Threaded);
   RecordProperty(kAppendProperty, AppendSegments);
   llvm::SmallString<kPathCapacity> Directory;
   const auto *Root = std::getenv(kArtifactEnvironment);
@@ -111,6 +112,25 @@ TEST_P(MachOArm64eNativeInstallation,
   };
   llvm::SmallVector<llvm::StringRef> Args{kCompiler};
   Args.append(std::begin(kCompileArgs), std::end(kCompileArgs));
+  std::string LinkerOption;
+  if (Threaded) {
+    const auto LinkerPath = Path(kClassicLinkerPath);
+    const llvm::StringRef FindArgs[] = {kXcrun, kFindTool, kClassicLinker};
+    const std::optional<llvm::StringRef> Redirects[] = {std::nullopt,
+                                                        LinkerPath, Log};
+    if (llvm::sys::ExecuteAndWait(kXcrun, FindArgs, std::nullopt, Redirects,
+                                  kToolTimeout))
+      GTEST_SKIP() << kClassicMissing;
+    auto Linker = llvm::MemoryBuffer::getFile(LinkerPath);
+    ASSERT_TRUE(bool(Linker));
+    LinkerOption =
+        std::string(kLinkerOption) + (*Linker)->getBuffer().trim().str();
+    Args.push_back(LinkerOption);
+    Args.push_back(kLegacyDeployment);
+    Args.push_back(kThreadedOption);
+  } else {
+    Args.push_back(kChainedOption);
+  }
   Args.push_back(Optimization);
   RecordProperty(kOptimizationProperty, Optimization);
   Args.push_back(Source);
@@ -192,21 +212,51 @@ TEST_P(MachOArm64eNativeInstallation,
   Error = macho_signing::verifyStrict(InstalledPath);
   ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
   Args.assign({kXcrun});
-  Args.append(std::begin(kInfoArgs), std::end(kInfoArgs));
+  if (Threaded)
+    Args.append(std::begin(kThreadedInfoArgs), std::end(kThreadedInfoArgs));
+  else
+    Args.append(std::begin(kInfoArgs), std::end(kInfoArgs));
   Args.push_back(InstalledPath);
   ASSERT_EQ(Run(kXcrun, Args, InfoPath), 0);
   auto Info = llvm::MemoryBuffer::getFile(InfoPath);
   ASSERT_TRUE(bool(Info));
-  EXPECT_TRUE((*Info)->getBuffer().contains(kFixupsHeading));
-  // Check Apple's independently decoded target and complete signing schema,
-  // not just successful parsing or a raw word printed in another column.
+  EXPECT_TRUE((*Info)->getBuffer().contains(Threaded ? kThreadedHeading
+                                                     : kFixupsHeading));
+  // Check Apple's independently decoded target and signing schema. Its legacy
+  // otool decoder drops the low key bit; check that field from the printed
+  // pointer as well and use the decoded key name only where it is reliable.
   llvm::SmallVector<llvm::StringRef> Lines;
   (*Info)->getBuffer().split(Lines, '\n');
   for (const auto &Fixup : Fixups) {
+    if (Threaded && Fixup.Recipe.Symbol.empty())
+      continue; // Apple's otool reports the legacy bind table only.
     unsigned Matches = 0;
     for (auto Line : Lines) {
       llvm::SmallVector<llvm::StringRef> Fields;
       Line.trim().split(Fields, ' ', -1, false);
+      if (Threaded) {
+        if (Fields.size() != kThreadedInfoCount)
+          continue;
+        uint64_t Address;
+        if (Fields[kThreadedInfoAddress].getAsInteger(0, Address) ||
+            Address != Fixup.Address)
+          continue;
+        ++Matches;
+        unsigned Diversity;
+        ASSERT_FALSE(Fields[kThreadedInfoDiversity].getAsInteger(0, Diversity));
+        EXPECT_EQ(Diversity, Fixup.Recipe.Diversity);
+        EXPECT_EQ(Fields[kThreadedInfoAddressDiversity],
+                  Fixup.Recipe.AddressDiversity ? kTrue : kFalse);
+        uint64_t Pointer;
+        ASSERT_FALSE(Fields[kThreadedInfoPointer].getAsInteger(0, Pointer));
+        EXPECT_EQ((Pointer >> kThreadedPointerKeyShift) &
+                      kThreadedPointerKeyMask,
+                  Fixup.Recipe.Key);
+        if (!(Fixup.Recipe.Key & kThreadedToolMissingKeyBit))
+          EXPECT_EQ(Fields[kThreadedInfoKey], kKeyNames[Fixup.Recipe.Key]);
+        EXPECT_EQ(Fields[kThreadedInfoSymbol], Fixup.Recipe.Symbol);
+        continue;
+      }
       // dyld_info leaves both name columns blank for sectionless segments.
       if (!AppendSegments) {
         if (Fields.size() != kInfoFieldCount + kInfoLocationFields ||
@@ -327,5 +377,6 @@ TEST_P(MachOArm64eNativeInstallation,
 }
 INSTANTIATE_TEST_SUITE_P(AppleClang, MachOArm64eNativeInstallation,
                          ::testing::Combine(::testing::Values(kO0, kO2),
+                                            ::testing::Bool(),
                                             ::testing::Bool()));
 } // namespace
