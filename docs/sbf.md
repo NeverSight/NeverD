@@ -1063,8 +1063,11 @@ Within one invocation, CFG joins retain a captured object's fields when its
 capture was introduced on only one incoming path. The pointer and its fields
 remain conditional on that path. A capture already introduced on both paths
 still loses a field if either path forgets it. Possible-alias writes
-continue to invalidate every overlapping capture, and backedges still widen
-capture identities. This is not an allocation freshness or non-aliasing proof.
+continue to invalidate every overlapping capture. Backedges widen identities
+created by the current invocation; incoming captures name fixed values for that
+invocation and keep fields that survived ordinary write invalidation. The caller
+still widens its own captures when its loop invokes the callee again. This is
+not an allocation freshness or non-aliasing proof.
 The local definition history is charged to retained state and is reset at a
 summary entry; incoming captures keep the ordinary must-fact join there.
 A newly captured scalar return of exactly `null` or one nonzero captured value

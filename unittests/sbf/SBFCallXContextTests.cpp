@@ -12911,4 +12911,122 @@ TEST(SBFCallXContexts, RestoredEntryWordsPreserveCallerMemory) {
   RecordProperty("raw_executions", static_cast<int>(RawExecutions));
 }
 
+TEST(SBFCallXContexts, IncomingCapturedFieldsSurviveCalleeBackedges) {
+  unsigned RawExecutions = 0;
+  for (bool Clobber : {false, true})
+    for (bool Reverse : {false, true}) {
+      SCOPED_TRACE(Clobber);
+      SCOPED_TRACE(Reverse);
+      std::vector<test::EncodedInstruction> Text;
+      const auto Literal = [&](unsigned Register, uint64_t Value) {
+        const size_t Slot = Text.size();
+        const auto Words = test::loadImm64(Register, Value);
+        Text.insert(Text.end(), Words.begin(), Words.end());
+        return Slot;
+      };
+      Literal(1, kInputStart);
+      const size_t AcquireCall = Text.size();
+      Text.push_back({});
+      const size_t Null = Text.size();
+      Text.push_back({});
+      Text.push_back(encode(Opcode::MOV64_REG, 6, 0));
+      const size_t InitialTarget = Literal(3, 0);
+      Text.push_back(encode(Opcode::ST_DW_REG, 6, 3, 8));
+      Literal(2, kInputStart + 8);
+      Text.push_back(encode(Opcode::LD_DW_REG, 2, 2));
+      Text.push_back(encode(Opcode::MOV64_REG, 1, 6));
+      const size_t LoopCall = Text.size();
+      Text.push_back({});
+      const size_t Exit = Text.size();
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t Loop = Text.size();
+      Text.push_back(encode(Opcode::MOV64_REG, 6, 1));
+      Text.push_back(encode(Opcode::MOV64_REG, 7, 2));
+      const size_t Header = Text.size();
+      Text.push_back({});
+      std::optional<size_t> ReplacementTarget;
+      if (Clobber) {
+        Literal(3, kInputStart + 16);
+        Text.push_back(encode(Opcode::LD_DW_REG, 3, 3));
+        ReplacementTarget = Literal(4, 0);
+        // This may alias the incoming object's field. Keeping its identity
+        // must not retain a field invalidated by a possibly overlapping
+        // write.
+        Text.push_back(encode(Opcode::ST_DW_REG, 3, 4, 8));
+      }
+      Text.push_back(encode(Opcode::ADD64_IMM, 7, 0, 0, -1));
+      const size_t Back = Text.size();
+      Text.push_back(encode(Opcode::JA, 0, 0, Header - Back - 1));
+      const size_t Read = Text.size();
+      Text.push_back(encode(Opcode::LD_DW_REG, 5, 6, 8));
+      const size_t CallX = Text.size();
+      Text.push_back(encode(Opcode::CALL_REG, 5));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t Acquire = Text.size();
+      Text.push_back(encode(Opcode::LD_DW_REG, 0, 1));
+      Literal(2, kHeapStart + 8);
+      Text.push_back(encode(Opcode::JGE64_REG, 0, 2, 1));
+      Text.push_back(encode(Opcode::MOV64_IMM, 0));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t FirstTarget = Text.size();
+      Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t SecondTarget = Text.size();
+      Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 43));
+      Text.push_back(encode(Opcode::EXIT));
+      Text[AcquireCall] =
+          encode(Opcode::CALL_IMM, 0, 1, 0, Acquire - AcquireCall - 1);
+      Text[LoopCall] = encode(Opcode::CALL_IMM, 0, 1, 0, Loop - LoopCall - 1);
+      Text[Null] = encode(Opcode::JEQ64_IMM, 0, 0, Exit - Null - 1);
+      Text[Header] = encode(Opcode::JEQ64_IMM, 7, 0, Read - Header - 1);
+      for (const auto &[Slot, Target] :
+           {std::pair{InitialTarget, FirstTarget},
+            std::pair{ReplacementTarget.value_or(InitialTarget),
+                      ReplacementTarget ? SecondTarget : FirstTarget}}) {
+        const auto Words = test::loadImm64(Slot == InitialTarget ? 3 : 4,
+                                           kBytecodeStart + Target * 8);
+        std::copy(Words.begin(), Words.end(), Text.begin() + Slot);
+      }
+      auto Program = analyze(test::makeImage(Text, {}));
+      ASSERT_TRUE(static_cast<bool>(Program))
+          << llvm::toString(Program.takeError());
+      if (Reverse)
+        std::reverse(Program->Low.Edges.begin(), Program->Low.Edges.end());
+      auto Report = recoverCallXContexts(*Program);
+      ASSERT_TRUE(static_cast<bool>(Report))
+          << llvm::toString(Report.takeError());
+      checkSummaryReferences(*Report);
+      EXPECT_FALSE(Report->SpecializationBudgetExhausted);
+      bool Proven = false;
+      for (const auto &Site : Report->Contexts)
+        if (!Site.EntryPrefixOnly && Site.CallXSlot == CallX &&
+            Site.TargetSlot) {
+          Proven = true;
+          EXPECT_FALSE(Clobber);
+          EXPECT_EQ(*Site.TargetSlot, FirstTarget);
+        }
+      EXPECT_EQ(Proven, !Clobber);
+      for (uint64_t Count : {1u, 2u, 4u})
+        for (bool Alias : {false, true}) {
+          ExecutionEnvironment Environment;
+          std::vector<uint8_t> Input(24);
+          llvm::support::endian::write64le(Input.data(), kHeapStart + 16);
+          llvm::support::endian::write64le(Input.data() + 8, Count);
+          llvm::support::endian::write64le(Input.data() + 16,
+                                           kHeapStart + (Alias ? 16 : 64));
+          Environment.Memory.push_back({kInputStart, Input, false, "input"});
+          Environment.Memory.push_back(
+              {kHeapStart, std::vector<uint8_t>(128), true, "objects"});
+          auto Raw = executeRaw(*Program, std::move(Environment));
+          ASSERT_TRUE(static_cast<bool>(Raw))
+              << llvm::toString(Raw.takeError());
+          EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+          EXPECT_EQ(Raw->ReturnValue, Clobber && Alias ? 43u : 42u);
+          ++RawExecutions;
+        }
+    }
+  EXPECT_EQ(RawExecutions, 24u);
+  RecordProperty("raw_executions", static_cast<int>(RawExecutions));
+}
+
 } // namespace neverd::sbf
