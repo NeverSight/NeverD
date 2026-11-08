@@ -1324,5 +1324,170 @@
         "failures": []
       }
     ]
-  }
+  },
+  "publication_integrations": [
+    {
+      "head": "6180b9e360c9ecbc027c98ff5154691f58e15d70",
+      "upstream_head": "0649e51540d8110cc522c2ace9461adf77dcca90",
+      "scope": "Dev advanced before atomic publication with SBF memory-analysis fixes. Merged, rebuilt shared runtime/CLI dependencies in both SDKs and reran complete generated C suites. Paging/system binaries retain baseline qualification by identical hashes.",
+      "implementation_code_hashes_unchanged": true,
+      "passed": 306,
+      "failed": 0,
+      "skipped": 0,
+      "reused_unchanged_binaries": {
+        "native": {
+          "NeverDX86PagingTests": "9f7bfe7d6dad7e4772f49af1f62a8192a07066d013b1b95630d5e89b8f3ca2c4",
+          "NeverDX86SystemStateTests": "9be6f2aa01301306620701c260b47bfffce01da6cb0351c2bb864b1423487fcf"
+        },
+        "r6": {
+          "NeverDX86PagingTests": "ee10c46492ab5ad086d8304136f4ccaac2c887aac61a6e3c937bb6513b59a50d",
+          "NeverDX86SystemStateTests": "e6d2c05e2dcc90cbff9e681bb029538eb329eb802b631bbb6dcff439d68fd5aa"
+        }
+      },
+      "builds": {
+        "native": {
+          "CMakeCache.txt": "66f6a750e630d0aabb10101b76b8d6cac0b301790ba527dd855c3f14ffae32f6",
+          "NeverDX86LegacySourceTests": "0e29484c7e54cce28ca153aa1e4be510c3dc1d830adb272c893803577d8b5c10",
+          "NeverDX86PagingTests": "9f7bfe7d6dad7e4772f49af1f62a8192a07066d013b1b95630d5e89b8f3ca2c4",
+          "NeverDX86SystemStateTests": "9be6f2aa01301306620701c260b47bfffce01da6cb0351c2bb864b1423487fcf",
+          "libneverd.so": "05ff540e0228a402a86842d8df32da48a6424e811096ed1d2d7bbec0274716a6",
+          "neverd": "236adffd03b1ea5b52981b0f4305e319b354c9dbb469feb86192076de45ea278",
+          "neverd-build-receipt.json": "306bb968cdce51444dd8949b0a172526dabf61d84eeb123e141932fbc80d26ec",
+          "neverd-dependency-inputs.json": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c"
+        },
+        "r6": {
+          "CMakeCache.txt": "2273cbc87fe3a2ffcc6316e2a63c1004d507c9c8d085f0034a3f8596f03cffb0",
+          "NeverDX86LegacySourceTests": "f5a0881a71342d17ea3da3d02fdd80926aa2369fb82f63182acdc78747870d49",
+          "NeverDX86PagingTests": "ee10c46492ab5ad086d8304136f4ccaac2c887aac61a6e3c937bb6513b59a50d",
+          "NeverDX86SystemStateTests": "e6d2c05e2dcc90cbff9e681bb029538eb329eb802b631bbb6dcff439d68fd5aa",
+          "libneverd.so": "24e37608471a0ff42fb8b7aba0087ddc0b89a344a364d0a600e39f836f0c3766",
+          "neverd": "f2c06f9a26c4a24432f673e5babbeb901cd5eba4b46f2c41944ececbd5bf99f6",
+          "neverd-build-receipt.json": "2b956db8892a14e94e1cc219915b803dfe71b3ae23acafc597fc793bb69aaf13",
+          "neverd-dependency-inputs.json": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c"
+        }
+      },
+      "runs": [
+        {
+          "name": "native-sbf-integration-source",
+          "sdk": "native",
+          "core": "4",
+          "command": [
+            "unshare",
+            "--user",
+            "--map-root-user",
+            "--mount",
+            "python3",
+            "$PRIVATE_TMP_RUNNER",
+            "$ARTIFACT_ROOT/native-sbf-integration-source/tmp",
+            "taskset",
+            "-c",
+            "4",
+            "$NEVERD_WORKTREE/build-x86-native/bin/NeverDX86LegacySourceTests",
+            "--gtest_filter=*",
+            "--gtest_output=json:$ARTIFACT_ROOT/native-sbf-integration-source/result.json"
+          ],
+          "environment": {
+            "NEVERD_THREADS": "1",
+            "TMPDIR": "/tmp",
+            "NEVERD": "$NEVERD_WORKTREE/build-x86-native/bin/neverd",
+            "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+            "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+            "NEVERD_TEST_LEGACY_CALL": "store",
+            "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+            "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+            "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+            "NEVERD_TEST_NEVERC": "$NEVERC_WORKTREE/build-neverc/bin/neverc",
+            "NEVERD_TEST_NEVERC_LLC": "$LLVM_WORKTREE/build-intrinsics/bin/llc",
+            "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "$ARTIFACT_ROOT/native-sbf-integration-source/exports"
+          },
+          "binary_sha256": "0e29484c7e54cce28ca153aa1e4be510c3dc1d830adb272c893803577d8b5c10",
+          "source_head": "6180b9e360c9ecbc027c98ff5154691f58e15d70",
+          "runtime_library_sha256": "05ff540e0228a402a86842d8df32da48a6424e811096ed1d2d7bbec0274716a6",
+          "cli_sha256": "236adffd03b1ea5b52981b0f4305e319b354c9dbb469feb86192076de45ea278",
+          "neverc_sha256": "66c4494d1c1f88691bbd1ed6be519149905b257ba67542f9b16ec1e0fb0e8429",
+          "neverc_llc_sha256": "892b1b867c22d9e02141f0a54c0c0fd478c8dc0bfa3a2889f8907c4bcb11db0c",
+          "host_clang_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "source_tree": "e0aeed0880e58901033d56aeafe299e65b97e43f",
+          "source_status": "",
+          "exit_code": 0,
+          "seconds": 7.418,
+          "log_sha256": "b30dbd90139043ed53b77a31288450ece9888b6c906d5173aa37819fc1a82ebc",
+          "result_sha256": "6280ddb9d92d16dc10b792677677e830126a3389661b7cd5c180db5ccec04c69",
+          "tests": 153,
+          "failed": 0,
+          "skipped": [],
+          "passed": 153,
+          "original_comparisons": 0,
+          "cpu_program_comparisons": 0,
+          "cpu_comparisons": 0,
+          "branch_selection_comparisons": 256,
+          "transfer_comparisons": 0,
+          "watchpoint_comparisons": 0,
+          "debug_cpu_comparisons": 0,
+          "debug_round_trips": 0,
+          "failures": []
+        },
+        {
+          "name": "r6-sbf-integration-source",
+          "sdk": "r6",
+          "core": "4",
+          "command": [
+            "unshare",
+            "--user",
+            "--map-root-user",
+            "--mount",
+            "python3",
+            "$PRIVATE_TMP_RUNNER",
+            "$ARTIFACT_ROOT/r6-sbf-integration-source/tmp",
+            "taskset",
+            "-c",
+            "4",
+            "$NEVERD_WORKTREE/build-x86/bin/NeverDX86LegacySourceTests",
+            "--gtest_filter=*",
+            "--gtest_output=json:$ARTIFACT_ROOT/r6-sbf-integration-source/result.json"
+          ],
+          "environment": {
+            "NEVERD_THREADS": "1",
+            "TMPDIR": "/tmp",
+            "NEVERD": "$NEVERD_WORKTREE/build-x86/bin/neverd",
+            "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+            "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+            "NEVERD_TEST_LEGACY_CALL": "store",
+            "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+            "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+            "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+            "NEVERD_TEST_NEVERC": "$NEVERC_WORKTREE/build-neverc/bin/neverc",
+            "NEVERD_TEST_NEVERC_LLC": "$LLVM_WORKTREE/build-intrinsics/bin/llc",
+            "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "$ARTIFACT_ROOT/r6-sbf-integration-source/exports"
+          },
+          "binary_sha256": "f5a0881a71342d17ea3da3d02fdd80926aa2369fb82f63182acdc78747870d49",
+          "source_head": "6180b9e360c9ecbc027c98ff5154691f58e15d70",
+          "runtime_library_sha256": "24e37608471a0ff42fb8b7aba0087ddc0b89a344a364d0a600e39f836f0c3766",
+          "cli_sha256": "f2c06f9a26c4a24432f673e5babbeb901cd5eba4b46f2c41944ececbd5bf99f6",
+          "neverc_sha256": "66c4494d1c1f88691bbd1ed6be519149905b257ba67542f9b16ec1e0fb0e8429",
+          "neverc_llc_sha256": "892b1b867c22d9e02141f0a54c0c0fd478c8dc0bfa3a2889f8907c4bcb11db0c",
+          "host_clang_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "source_tree": "e0aeed0880e58901033d56aeafe299e65b97e43f",
+          "source_status": "",
+          "exit_code": 0,
+          "seconds": 7.523,
+          "log_sha256": "15ab0fe2a1a828f965129301a4e3c04fe6e80cd0c47bf16de92e102549128528",
+          "result_sha256": "a91363a107ba784c3a017a00b4fd677b99e6a7b6a7d8bc35af9fad1c27227ebc",
+          "tests": 153,
+          "failed": 0,
+          "skipped": [],
+          "passed": 153,
+          "original_comparisons": 0,
+          "cpu_program_comparisons": 0,
+          "cpu_comparisons": 0,
+          "branch_selection_comparisons": 256,
+          "transfer_comparisons": 0,
+          "watchpoint_comparisons": 0,
+          "debug_cpu_comparisons": 0,
+          "debug_round_trips": 0,
+          "failures": []
+        }
+      ]
+    }
+  ]
 }
