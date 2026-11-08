@@ -815,6 +815,7 @@ tests. These are development checkpoints, not a released or pinned SDK.
 | `llvm.x86.vmwrite.mem`, `llvm.x86.vmwrite.mem32` | x86-64 and i386 respectively | Native VMWRITE reads its word-sized source memory itself; no eager compiler load changes its fault ordering. |
 | `llvm.x86.vmclear`, `llvm.x86.vmptrld`, `llvm.x86.vmxon` | i386 and x86-64 | Status plus an instruction-owned m64 physical-address operand. |
 | `llvm.x86.vmptrst`, `llvm.x86.vmxoff` | i386 and x86-64 | Void APIs with real memory/state effects and EFLAGS definitions. VMPTRST writes m64 in either mode. |
+| `llvm.x86.vmxoff.status` | i386 and x86-64 | Returns the native i8 VMX status, including VMfail under [SMM dual-monitor treatment](https://cdrdv2-public.intel.com/825750/326019-sdm-vol-3c.pdf). The existing void API remains available when the caller discards completion. |
 | `llvm.x86.vmlaunch`, `llvm.x86.vmresume` | i386 and x86-64 | Return status on falling-through VMfail only; VMCS-controlled transfers remain separate. |
 | `llvm.x86.invept`, `llvm.x86.invvpid` | x86-64 | Full i64 type selector, instruction-owned m128 descriptor and the same VMX completion status. |
 | `llvm.x86.invept32`, `llvm.x86.invvpid32` | i386 | Full i32 type selector and the same m128 descriptor/status contract. Wrong-mode APIs fail explicitly. |
@@ -4406,3 +4407,82 @@ from successful intrinsic qualification. Full real/VM86/IA-32e mode transfers,
 task switching, other i386 banks, software SMM/SGX transitions and unbound
 asynchronous producers remain open. The final LLVM release and pin/gitlink
 update stay gated, and the production pin remains r6.
+
+## Native i386 FLAGS source interfaces (2026-11-08)
+
+NeverC now exposes `__builtin_ia32_readeflags_u32()` and
+`__builtin_ia32_writeeflags_u32(unsigned)`. The generic `__readeflags` and
+`__writeeflags` interfaces select u32/u64 from the code target and retain their
+source ABI types. The previous i386 path emitted an i64 read into an i32
+temporary and called the u64 write intrinsic with an i32 argument; the LLVM
+verifier rejected that write. Explicit dword APIs reject x64, and explicit
+qword APIs remain x64-only. Word APIs retain their two-byte stack operations.
+
+The [FLAGS width evidence](evidence/x86-flags-widths-2026-11-08.json) records
+native code generation, mode/argument refusal, unused snapshots, memory
+ordering and compiler stack guards. Both NeverD C routes now compile i386 ELF
+through NeverC's full LLVM backend, with `NEVERD_TEST_NEVERC_LLC` selecting the
+qualified tool. x64 ELF/COFF/Mach-O and stock Clang remain in the source matrix.
+The two SDKs pass 24 source checks and 1,280 C compile checks, with
+41,943,040 generated-C write comparisons. NeverC separately passes 179 x86
+checks, 5,016 controlled CR/DR completions and 19,922,944 native FLAGS
+comparisons. These selected matrices have no failures or skips. The subsequent
+SBF/LAPIC/C type-parser integration passes twelve more source checks and 640 C
+compile checks. All 96 complete C exports per SDK match both qualified cores
+byte for byte, with unchanged compiler hashes; the evidence records that reuse.
+Original CPU witnesses compare all TF-clear low words and incoming/outgoing
+AC/ID combinations on P/E cores, restore host flags before returning to C, and
+reject wrong-width writes and fabricated snapshots. They qualify the selected
+Linux CPL3 compiler ABI; arithmetic flags across C calls, privileged execution,
+faults and asynchronous state have separate contracts.
+
+The full LLVM fork already supplies the native dword FLAGS instructions, so
+this change adds no LLVM fork patch or release. The r6 SDK pin remains. The
+LLVM gitlink inherited from the concurrent arm64e integration is recorded
+separately. The source-global audit still has 90 baseline findings in 29
+unchanged NeverC files. Real/VM86/IA-32e transitions, task switching, remaining
+i386 state banks, software SMM/SGX and unbound asynchronous producers remain
+open; the final x86 completion and LLVM release gates are not closed.
+
+## Native i386 VMX and VMXOFF completion (2026-11-08)
+
+NeverC adds fourteen mode-specific VMCS/invalidation and explicit-address
+interfaces for i386. Microsoft VMREAD/VMWRITE now select i32 intrinsics for
+their i386 `size_t` arguments; management memory operands remain m64. The
+new `__builtin_ia32_vmxoff_status` and `llvm.x86.vmxoff.status` retain VMfail
+under dual-monitor SMM treatment. The older void interfaces retain their ABI.
+
+Both NeverD C routes select the native i386 spellings from the shared
+virtualization plan. Complete translation-unit tests caught and corrected
+the old x64-only prelude conditions. The LLVM renderer uses the status API
+when the SDK supplies it and exact assembly otherwise. Native-call admission
+requires the SDK's intrinsic ID; a reserved `llvm.` name alone is insufficient.
+The r6 test also checks this refusal because r6 lacks even the legacy void
+VMXOFF intrinsic. Explicit versioned context contracts remain separate.
+
+The [VMX width/status evidence](evidence/x86-vmx-widths-status-2026-11-08.json)
+records 27 source/SDK checks, 2,912 C compilation checks and 2,592 controlled
+comparisons of complete generated C against independent original bytes across
+the native and r6 SDKs. The native SDK emits 426 native modules with no
+assembly fallback. NeverC passes 182 x86 tests, 18,144 controlled VMX checks,
+1,792 actual x64 CPL3 fault boundaries and 12,582,912 native FLAGS regression
+comparisons. The full LLVM fork passes seven VMX lit tests and 292 direct
+controlled checks. The selected matrices have no failures or skips; receipts
+record exact source revisions, compiler hashes and negative controls.
+After the dev CR8-notification and Android-log integration, 29 source/SDK/value
+checks and 2,912 C compilation checks pass. All 756 complete exports match the
+initial qualification byte for byte, with unchanged compiler/backend hashes;
+the generated-C behavior evidence is reused on that explicit basis. The two
+additional value checks retain VMRUN guest outputs and failed-VMREAD prior
+values. Public evidence uses portable path variables.
+
+These checks qualify Linux i386 source generation through NeverC's full LLVM
+backend and x64 source generation across ELF/COFF/Mach-O. Controlled VMX
+completions do not establish successful hardware VM entry or a hardware VMCS.
+The complete-C witness uses flat segment bases; separate address witnesses
+cover nonzero bases and 16-bit truncation. Windows/Darwin i386 native source
+qualification, physical-address i386 SVM source APIs, full real/VM86/IA-32e
+transitions, task switching, remaining state banks, software SMM/SGX and
+unbound asynchronous producers remain open. The production SDK pin remains
+`neverd-llvm-v23.0.0-r6`; the LLVM gitlink records the published VMXOFF source
+change, and no final LLVM release is claimed.

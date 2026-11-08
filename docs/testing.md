@@ -386,10 +386,18 @@ with the native NeverC builtin and a stock Clang GNU fallback, separately from
 the original-state KVM matrix. LLVM frontend/code16 regressions and compiler
 stack/red-zone guards qualify their own interfaces.
 The same witness accepts `--bits 32` for full LLVM/Clang and unchanged i386 C
-exports. Its separate cdecl assembly capture preserves callee-saved registers
+exports. NeverC uses `--backend-llc LLC` for its supported Linux i386 target.
+Its separate cdecl assembly capture preserves callee-saved registers
 and restores host flags before returning to the multilib C driver. Run native
 LLVM objects from both SDK profiles as ELF32 too. This qualifies the selected
-compiler ABI paths; NeverC still refuses an i386 frontend request.
+compiler ABI paths. `--image-bits 32` also checks dword writes, including every
+old/new AC/ID combination; `--image-bits 64` selects native x64 images. Builtin
+probes compare returned snapshots too and reject a fabricated read result.
+`--spelling generic` checks NeverC's mode-dependent `__readeflags/__writeeflags`
+interfaces. Arithmetic flags across a function ABI remain outside this witness.
+`X86FlagsSource.NeverCCompilesBothNativeRoutesAndSupportedFormats` adds the i386
+ELF source matrix through `NEVERD_TEST_NEVERC_LLC`; it does not admit Windows or
+Darwin i386 frontend targets.
 
 `LegacyDecimal/*` uses the same fixture for AAA/AAS/DAA/DAS/AAM/AAD. It checks
 every AL with incoming AF/CF, AH carry/borrow boundaries, every immediate base,
@@ -6932,11 +6940,38 @@ one query with leaf 7/subleaf 1, and stores four high-bit output words into
 The qualified native LLVM SDK adds a 426-module virtualization matrix covering
 both word sizes, three formats, default/NoOpt, FS/GS and long-mode narrow SVM
 addresses. Older SDKs explicitly skip that native-IR requirement while retaining
-the assembly route. Set `NEVERD_TEST_NEVERC=/path/to/neverc` to exercise 888 C
+the assembly route. A qualified SDK lacking `llvm.x86.vmxoff.status` retains
+the exact VMXOFF assembly and records those modules separately. The void API
+cannot carry VMfail under SMM dual-monitor treatment; observable flags always
+use the status API or the instruction's actual CF/ZF. The compatibility test
+`VmxoffRetainsFlagsAndTheLegacyVoidApi` also checks the old void C projection.
+When the SDK does not define that old intrinsic either, the test checks that
+the same-named unregistered declaration is refused; it never constructs an
+intrinsic declaration from ID zero. The recorded property distinguishes those
+two SDK capabilities without skipping the status-plan check.
+Set `NEVERD_TEST_NEVERC=/path/to/neverc` to exercise 888 C
 compilations from both source routes at O0/O2, checking native intrinsic calls
 and the absence of inline assembly. That C test also runs with the old SDK's
 assembly IR. Stock Clang still compiles both C fallbacks; fork-only LLVM IR is
 compiled by the linked SDK rather than sent to an incompatible system Clang.
+`X86VirtualizationSource.NeverCI386CompilesBothRoutesWithoutAssembly` adds
+Linux i386 ELF source compilation through the full backend selected by
+`NEVERD_TEST_NEVERC_LLC`. It covers mode-sized VMCS/invalidation operands,
+fixed m64 management operands, default/NoOpt and FS/GS, checks native IR and
+machine output at O0/O2, including the actual code-mode capability dispatch,
+and retains complete C plus independent `.bin` inputs
+under `NEVERD_ISA_REGRESSION_ARTIFACT_DIR`.
+Run `scripts/check_x86_vmx_source.py --exports DIR --compiler NEVERC
+--backend-llc LLVM_LLC --output OUT` and separately with stock Clang (without
+the backend option) to execute those unchanged C units. The controlled witness
+compares original native operands, widths, initialized memory, status and ABI
+restoration, and rejects intact VMX operations with discarded returns, including
+VMXOFF. VMXOFF is checked at all three completion statuses; VMPTRST is a
+success-only operation that defines VMX completion flags.
+Segment bases are flat in this witness; VM entry success, descriptor validation
+and hardware VMCS execution are outside it. NeverC's separate VMX address
+witness owns nonzero segment-base transport and 16-bit address truncation.
+
 `LLVMCValues.NativeVirtualizationKeepsStatusAndFailedReadPrior` supplies controlled
 VMX completion values to check C status conversion, exact operand evaluation
 and failed-read preservation without executing privileged instructions.

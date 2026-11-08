@@ -1648,7 +1648,7 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
       if ((Opts.TheArch == Arch::X64 || Opts.TheArch == Arch::X86) &&
           isX86ScalarSystemIntrinsic(Ex.IntrinsicId))
         NeedsX86ScalarSystemDispatch = true;
-      if (Opts.TheArch == Arch::X64 &&
+      if ((Opts.TheArch == Arch::X64 || Opts.TheArch == Arch::X86) &&
           x86VirtualizationContract(Ex.IntrinsicId).Mnemonic)
         NeedsX86VirtualizationDispatch = true;
       if (Opts.TheArch == Arch::X64 || Opts.TheArch == Arch::X86)
