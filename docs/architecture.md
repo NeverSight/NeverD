@@ -9874,16 +9874,21 @@ Count-only and unsummarized calls still use ordinary argument recovery.
 
 The same owner proves scalar exit constants for bounded, complete x64 bodies
 without calls, intrinsics, unresolved control flow or exceptional/independent
-entries. It uses the existing LowIR scalar evaluator within each return block
-and intersects the full-register constants at every return. It does not read
-image memory or turn an address identity into an integer fact. The operation
-budget lives in `Limits.h`; there is no inter-block symbolic search. LowToMed
-publishes these extra register definitions after the call, before SSA, for
+entries. It uses the existing LowIR scalar evaluator within each block
+and carries register facts through unique predecessors, including conditional
+arms and contiguous fallthroughs. Joins and the ordinary entry begin without
+inherited facts; unreachable cycles keep only local facts. Temporaries never
+cross a block boundary. Full-register constants must agree at every return.
+It does not read image memory or turn an address identity into an integer fact.
+The operation budget lives in `Limits.h`, and each admitted block is evaluated
+once without a symbolic fixed point. Local argument-read summaries continue
+to use their own block facts. LowToMed publishes these extra register
+definitions after the call, before SSA, for
 both C routes. Ordinary ABI result registers keep their existing return
 contract. Deferred source views, native session recovery and omitted-callee
 memo keys retain the same facts, including their memory accounting. Dynamic
-callee outputs and constants requiring predecessor reasoning remain separate
-machine-state recovery work.
+callee outputs, conditional address values and facts requiring agreement at
+joins remain separate machine-state recovery work.
 
 C source emission preserves a wholly unrecovered call-clobber or MedIR
 `Unspecified` value with an analysis-only LLVM call, rather than `freeze undef`

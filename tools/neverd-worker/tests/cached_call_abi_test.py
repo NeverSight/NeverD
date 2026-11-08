@@ -90,6 +90,39 @@ def check_cached_helpers(worker, directory):
     assert path.read_bytes() == binary
 
 
+def check_split_exit_constants(worker, directory):
+    binary, _ = image()
+    data = bytearray(binary)
+    code = bytearray.fromhex("53 4889cb 4883ec20 e8")
+    code.extend(struct.pack("<i", 0x100 - len(code) - 4))
+    code.extend(bytes.fromhex("48890b 4883c420 5b c3"))
+    data[0x200:0x200 + len(code)] = code
+    # Both returns inherit ECX=27 from before the branch; EDX selects the
+    # ordinary return value. The caller observes RCX after the omitted callee.
+    body = bytes.fromhex("b91b000000 85d2 7406 b802000000 c3 b801000000 c3")
+    data[0x300:0x300 + len(body)] = body
+    path = Path(directory) / "split-exit.exe"
+    path.write_bytes(data)
+    for prepared in (False, True):
+        with Client(worker) as client:
+            ok(client, "open", {"path": str(path), "analysis": False,
+                                "warm": False, "read_only": True})
+            if prepared:
+                ok(client, "decompile", {"address": hex(ENTRY + 0x100),
+                                          "representation": "c"})
+            order = ("llvmc", "c") if prepared else ("c", "llvmc")
+            for representation in order:
+                result = ok(client, "decompile", {
+                    "address": hex(ENTRY), "representation": representation,
+                    "limit": 2048})
+                assert result["complete"], result
+                text = result["text"]
+                assert "__builtin_trap" not in text and "unknown" not in text, text
+                assert f"sub_{ENTRY + 0x100:X}(" in text, text
+                assert re.search(r"\b(?:27|0x1[Bb])\b", text), text
+    assert path.read_bytes() == data
+
+
 def ok(client, operation, payload=None):
     result = client.call(operation, payload or {})
     assert result["status"] == "ok", result
@@ -137,6 +170,7 @@ def call_arguments(text):
 def run(worker, compiler=None):
     with tempfile.TemporaryDirectory(prefix="neverd-cached-abi-") as directory:
         check_cached_helpers(worker, directory)
+        check_split_exit_constants(worker, directory)
         for cached in (False, True):
             path = Path(directory) / ("cached.sys" if cached else "direct.sys")
             binary = fixture(cached)
@@ -165,7 +199,7 @@ def run(worker, compiler=None):
                         result = subprocess.run(command, capture_output=True, text=True, timeout=30)
                         assert result.returncode == 0, result.stdout + result.stderr + text
             assert path.read_bytes() == binary
-    print("direct/cached Win64 imports: all seven operands and scalar result passed")
+    print("direct/cached Win64 imports and split-block scratch results passed")
 
 
 if __name__ == "__main__":
