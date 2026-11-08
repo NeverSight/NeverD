@@ -708,7 +708,22 @@ StoredRegisterMemory::readValues(const RegisterValue &Address,
   if (!Key)
     return Unknown;
   const auto It = Values.find(memoryKey(*Key, ByteWidth));
-  return It == Values.end() ? Unknown : It->second;
+  if (It != Values.end())
+    return It->second;
+  if (Key->ValueKind == RegisterValue::Kind::SymbolicAddress) {
+    const auto Bounds = addressValueRange(*Key, symbolicAddresses().get());
+    if (Bounds && Bounds->Lower == Bounds->Upper) {
+      // Absolute cells hold unconditional facts. An exact captured alias can
+      // read them, but the reverse would expose a conditional object's fields
+      // on paths where that captured identity was never defined.
+      const auto Absolute = Values.find(memoryKey(
+          coordinateAddress(Bounds->Lower, MemoryCoordinate::Absolute),
+          ByteWidth));
+      if (Absolute != Values.end())
+        return Absolute->second;
+    }
+  }
+  return Unknown;
 }
 
 void StoredRegisterMemory::meet(const StoredRegisterMemory &Other) {
