@@ -1227,6 +1227,7 @@ TEST(X86VirtualizationSource, QualifiedSdkUsesNativeVirtualizationCalls) {
   if (!llvm::Intrinsic::lookupIntrinsicID("llvm.x86.vmread.address"))
     GTEST_SKIP() << "requires the qualified native virtualization SDK";
   unsigned Cases = 0;
+  unsigned AssemblyCases = 0;
   for (const auto A : {Arch::X86, Arch::X64})
     for (const auto Format :
          {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
@@ -1254,15 +1255,24 @@ TEST(X86VirtualizationSource, QualifiedSdkUsesNativeVirtualizationCalls) {
                          nullptr, {}, {}, &IR, &Object);
             if (::testing::Test::HasFailure())
               return;
-            EXPECT_NE(IR.find("@" + Plan->LLVMName + "("), std::string::npos)
-                << IR;
-            EXPECT_EQ(IR.find("asm sideeffect \"" + std::string(C.Mnemonic)),
-                      std::string::npos)
-                << IR;
-            ++Cases;
+            if (llvm::Intrinsic::lookupIntrinsicID(Plan->LLVMName)) {
+              EXPECT_NE(IR.find("@" + Plan->LLVMName + "("), std::string::npos)
+                  << IR;
+              EXPECT_EQ(IR.find("asm sideeffect \"" + std::string(C.Mnemonic)),
+                        std::string::npos)
+                  << IR;
+              ++Cases;
+            } else {
+              EXPECT_EQ(E.Id, Intrinsic::VmxOff);
+              EXPECT_NE(IR.find("asm sideeffect \"vmxoff"), std::string::npos)
+                  << IR;
+              EXPECT_EQ(IR.find("@llvm.x86.vmxoff("), std::string::npos) << IR;
+              ++AssemblyCases;
+            }
           }
         }
   RecordProperty("native_modules", Cases);
+  RecordProperty("assembly_modules", AssemblyCases);
 }
 
 namespace {

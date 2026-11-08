@@ -815,6 +815,7 @@ tests. These are development checkpoints, not a released or pinned SDK.
 | `llvm.x86.vmwrite.mem`, `llvm.x86.vmwrite.mem32` | x86-64 and i386 respectively | Native VMWRITE reads its word-sized source memory itself; no eager compiler load changes its fault ordering. |
 | `llvm.x86.vmclear`, `llvm.x86.vmptrld`, `llvm.x86.vmxon` | i386 and x86-64 | Status plus an instruction-owned m64 physical-address operand. |
 | `llvm.x86.vmptrst`, `llvm.x86.vmxoff` | i386 and x86-64 | Void APIs with real memory/state effects and EFLAGS definitions. VMPTRST writes m64 in either mode. |
+| `llvm.x86.vmxoff.status` | i386 and x86-64 | Returns the native i8 VMX status, including VMfail under [SMM dual-monitor treatment](https://cdrdv2-public.intel.com/825750/326019-sdm-vol-3c.pdf). The existing void API remains available when the caller discards completion. |
 | `llvm.x86.vmlaunch`, `llvm.x86.vmresume` | i386 and x86-64 | Return status on falling-through VMfail only; VMCS-controlled transfers remain separate. |
 | `llvm.x86.invept`, `llvm.x86.invvpid` | x86-64 | Full i64 type selector, instruction-owned m128 descriptor and the same VMX completion status. |
 | `llvm.x86.invept32`, `llvm.x86.invvpid32` | i386 | Full i32 type selector and the same m128 descriptor/status contract. Wrong-mode APIs fail explicitly. |

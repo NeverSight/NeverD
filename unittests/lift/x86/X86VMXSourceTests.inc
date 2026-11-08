@@ -7,6 +7,36 @@
 /// Both C routes retain mode-sized VMCS words and instruction-owned memory.
 //===----------------------------------------------------------------------===//
 
+TEST(X86VirtualizationSource, VmxoffRetainsFlagsAndTheLegacyVoidApi) {
+  for (const auto A : {Arch::X86, Arch::X64}) {
+    const auto Plan = x86VirtualizationNative(Intrinsic::VmxOff, A,
+                                              NdMemoryAddressSpace::Default);
+    ASSERT_TRUE(Plan);
+    EXPECT_EQ(Plan->LLVMName, "llvm.x86.vmxoff.status");
+    EXPECT_EQ(Plan->Builtin, "__builtin_ia32_vmxoff_status");
+    EXPECT_EQ(Plan->Result, X86VirtualizationResult::Flags);
+
+    llvm::LLVMContext Context;
+    llvm::Module Module("legacy-vmxoff", Context);
+    llvm::IRBuilder<> Builder(Context);
+    auto *Type = llvm::FunctionType::get(Builder.getVoidTy(), false);
+    auto *Owner = llvm::Function::Create(Type, llvm::Function::ExternalLinkage,
+                                         "owner", Module);
+    Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Owner));
+    auto *Callee = llvm::Intrinsic::getOrInsertDeclaration(
+        &Module, llvm::Intrinsic::lookupIntrinsicID("llvm.x86.vmxoff"));
+    auto *Call = Builder.CreateCall(Callee);
+    Builder.CreateRetVoid();
+    auto Text = renderX86VirtualizationNativeCall(A, *Call, {}, false, {});
+    ASSERT_TRUE(Text);
+    EXPECT_NE(Text->find("__builtin_ia32_vmxoff("), std::string::npos);
+    EXPECT_EQ(Text->find("__builtin_ia32_vmxoff_status("), std::string::npos);
+    Call->setOnlyReadsMemory();
+    EXPECT_THROW(renderX86VirtualizationNativeCall(A, *Call, {}, false, {}),
+                 std::invalid_argument);
+  }
+}
+
 TEST(X86VirtualizationSource, NeverCI386CompilesBothRoutesWithoutAssembly) {
   const char *Compiler = std::getenv("NEVERD_TEST_NEVERC");
   const char *Backend = std::getenv("NEVERD_TEST_NEVERC_LLC");

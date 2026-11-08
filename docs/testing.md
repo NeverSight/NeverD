@@ -6940,7 +6940,12 @@ one query with leaf 7/subleaf 1, and stores four high-bit output words into
 The qualified native LLVM SDK adds a 426-module virtualization matrix covering
 both word sizes, three formats, default/NoOpt, FS/GS and long-mode narrow SVM
 addresses. Older SDKs explicitly skip that native-IR requirement while retaining
-the assembly route. Set `NEVERD_TEST_NEVERC=/path/to/neverc` to exercise 888 C
+the assembly route. A qualified SDK lacking `llvm.x86.vmxoff.status` retains
+the exact VMXOFF assembly and records those modules separately. The void API
+cannot carry VMfail under SMM dual-monitor treatment; observable flags always
+use the status API or the instruction's actual CF/ZF. The compatibility test
+`VmxoffRetainsFlagsAndTheLegacyVoidApi` also checks the old void C projection.
+Set `NEVERD_TEST_NEVERC=/path/to/neverc` to exercise 888 C
 compilations from both source routes at O0/O2, checking native intrinsic calls
 and the absence of inline assembly. That C test also runs with the old SDK's
 assembly IR. Stock Clang still compiles both C fallbacks; fork-only LLVM IR is
@@ -6955,7 +6960,9 @@ Run `scripts/check_x86_vmx_source.py --exports DIR --compiler NEVERC
 --backend-llc LLVM_LLC --output OUT` and separately with stock Clang (without
 the backend option) to execute those unchanged C units. The controlled witness
 compares original native operands, widths, initialized memory, status and ABI
-restoration, and rejects an intact VMX operation with a discarded return.
+restoration, and rejects intact VMX operations with discarded returns, including
+VMXOFF. VMXOFF is checked at all three completion statuses; VMPTRST is a
+success-only operation that defines VMX completion flags.
 Segment bases are flat in this witness; VM entry success, descriptor validation
 and hardware VMCS execution are outside it. NeverC's separate VMX address
 witness owns nonzero segment-base transport and 16-bit address truncation.

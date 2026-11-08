@@ -23,7 +23,9 @@ import unicorn.x86_const as regs
 CODE, STOP, STACK, PAGE = 0x10000, 0x1FFFF, 0x80000, 0x1000
 OPERATIONS = {"vmread", "vmwrite", "invept", "invvpid", "vmclear", "vmptrld",
               "vmptrst", "vmxon", "vmxoff", "vmlaunch", "vmresume", "stgi", "clgi"}
-PRESERVE_FLAGS = {"vmptrst", "vmxoff", "stgi", "clgi"}
+PRESERVE_FLAGS = {"stgi", "clgi"}
+SUCCESS_ONLY = PRESERVE_FLAGS | {"vmptrst"}
+INSTRUCTION_BUDGET = 10000
 PAYLOAD = 0x9172536485A6B7C8
 
 
@@ -52,7 +54,7 @@ def execute(code, entry, status):
          regs.UC_X86_REG_EBP))}
     for register, value in saved.items():
         machine.reg_write(register, value)
-    machine.emu_start(CODE + entry, instruction.address, count=10000)
+    machine.emu_start(CODE + entry, instruction.address, count=INSTRUCTION_BUDGET)
     assert machine.reg_read(regs.UC_X86_REG_EIP) == instruction.address
 
     def register(number):
@@ -71,10 +73,12 @@ def execute(code, entry, status):
             offset = machine.reg_read(register(operand.mem.index)) if operand.mem.index else 0
             destination = (base + offset * operand.mem.scale + operand.mem.disp) & 0xFFFFFFFF
             memory_operand = operand
-            observation["inputs"].append([
+            memory_input = [
                 "memory", operand.size,
-                instruction.reg_name(operand.mem.segment) if operand.mem.segment else "",
-                bytes(machine.mem_read(destination, operand.size)).hex()])
+                instruction.reg_name(operand.mem.segment) if operand.mem.segment else ""]
+            if instruction.mnemonic not in ("vmread", "vmptrst"):
+                memory_input.append(bytes(machine.mem_read(destination, operand.size)).hex())
+            observation["inputs"].append(memory_input)
         else:
             raise AssertionError("unexpected immediate VMX operand")
     if instruction.mnemonic == "vmread" and status == 0:
@@ -91,7 +95,7 @@ def execute(code, entry, status):
         flags = machine.reg_read(regs.UC_X86_REG_EFLAGS) & ~0x8D5
         machine.reg_write(regs.UC_X86_REG_EFLAGS,
                           flags | 2 | (0x40 if status == 1 else 1 if status == 2 else 0))
-    machine.emu_start(instruction.address + instruction.size, STOP, count=10000)
+    machine.emu_start(instruction.address + instruction.size, STOP, count=INSTRUCTION_BUDGET)
     assert machine.reg_read(regs.UC_X86_REG_EIP) == STOP, "completion did not return"
     assert machine.reg_read(regs.UC_X86_REG_ESP) == sp + 4, "stack was not restored"
     assert all(machine.reg_read(r) == v for r, v in saved.items()), "callee-saved register changed"
@@ -114,7 +118,7 @@ def main():
     sources = sorted(args.exports.glob("vmx32_*.c"))
     assert sources, "no complete VMX C exports"
     records = []
-    rejected = False
+    rejected = set()
     for source in sources:
         stem, route = source.stem.rsplit(".", 1)
         original = source.with_name(stem + ".bin")
@@ -122,7 +126,7 @@ def main():
         decoder = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
         operation, = [i.mnemonic for i in decoder.disasm(original_code, CODE)
                       if i.mnemonic in OPERATIONS]
-        statuses = ((0,) if operation in PRESERVE_FLAGS else
+        statuses = ((0,) if operation in SUCCESS_ONLY else
                     (1, 2) if operation in ("vmlaunch", "vmresume") else (0, 1, 2))
         baseline = {status: execute(original_code, 0, status) for status in statuses}
         for opt in ("O0", "O2"):
@@ -157,22 +161,23 @@ def main():
             for status in statuses:
                 result = execute(code, symbol.value, status)
                 assert result == baseline[status], f"{source.name}/{opt}/{status}: {result} != {baseline[status]}"
-            if not rejected and 1 in statuses and baseline[1]["result"]:
+            if operation not in rejected and 1 in statuses and baseline[1]["result"]:
                 returns = [i for i in decoder.disasm(code, CODE) if i.mnemonic == "ret"]
                 assert len(returns) == 1
                 position = returns[0].address - CODE
                 wrong = code[:position] + b"\x31\xc0\xc3" + code[position + returns[0].size:]
                 assert execute(wrong, symbol.value, 1) != baseline[1], "discarded-status control was accepted"
-                rejected = True
+                rejected.add(operation)
             records.append({"source": source.name, "source_sha256": digest(source),
                             "original_sha256": digest(original), "optimization": opt,
                             "object_sha256": digest(obj), "comparisons": len(statuses)})
             (args.output / "results.json").write_text(json.dumps({
                 "compiler_sha256": digest(args.compiler),
                 "backend_sha256": digest(args.backend_llc) if args.backend_llc else None,
-                "negative_control_rejected": rejected, "profiles": records,
+                "negative_control_rejected": bool(rejected),
+                "discarded_status_controls": sorted(rejected), "profiles": records,
                 "comparisons": sum(r["comparisons"] for r in records)}, indent=2) + "\n")
-    assert rejected
+    assert "vmxoff" in rejected, "VMXOFF discarded-status control was not checked"
     print(f"PASS: {len(records)} complete C profiles; {sum(r['comparisons'] for r in records)} original-byte controlled comparisons")
 
 

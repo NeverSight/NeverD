@@ -41,11 +41,11 @@ x86VirtualizationNative(Intrinsic Id, Arch TargetArch,
   const auto C = x86VirtualizationContract(Id);
   X86VirtualizationNative Plan;
   Plan.Assembly = *Assembly;
-  Plan.Result = Id == Intrinsic::VmxPtrStore || Id == Intrinsic::VmxOff
-                    ? X86VirtualizationResult::None
-                    : C.Result;
+  Plan.Result =
+      Id == Intrinsic::VmxPtrStore ? X86VirtualizationResult::None : C.Result;
   std::string Name = Id == Intrinsic::VmxRead          ? "vmread.reg"
                      : Id == Intrinsic::VmxWriteMemory ? "vmwrite.mem"
+                     : Id == Intrinsic::VmxOff         ? "vmxoff.status"
                                                        : C.Mnemonic;
   Plan.AddressControls =
       C.MemoryArgument >= 0 && Space != NdMemoryAddressSpace::Default;

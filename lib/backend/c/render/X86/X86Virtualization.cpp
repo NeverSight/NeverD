@@ -531,8 +531,15 @@ renderX86VirtualizationNativeCall(Arch TargetArch, const llvm::CallBase &Call,
          {NdMemoryAddressSpace::Default, NdMemoryAddressSpace::X86FS,
           NdMemoryAddressSpace::X86GS})
       for (const uint16_t PhysicalBytes : {4, 8}) {
-        const auto Plan = x86VirtualizationNative(
+        auto Plan = x86VirtualizationNative(
             Id, TargetArch, Space, C.PhysicalAddress ? PhysicalBytes : 0);
+        // The compatibility API intentionally discards completion. Lifting
+        // observable VMXOFF flags uses the separate status-returning API.
+        if (Plan && Id == Intrinsic::VmxOff && Name == "llvm.x86.vmxoff") {
+          Plan->LLVMName = "llvm.x86.vmxoff";
+          Plan->Builtin = "__builtin_ia32_vmxoff";
+          Plan->Result = X86VirtualizationResult::None;
+        }
         if (!Plan || Name != Plan->LLVMName)
           continue;
         const bool Read = Plan->Result == X86VirtualizationResult::Read;

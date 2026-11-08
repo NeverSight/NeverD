@@ -196,12 +196,13 @@ llvm::Value *MedLLVMEmitter::emitX86Virtualization(const MedOp &Op,
       x86VirtualizationNative(Id, TargetArch, Op.MemoryAddressSpace,
                               C.PhysicalAddress ? Op.Inputs[1].Size : 0);
   // The production SDK remains pinned until the complete instruction release.
-  // This marker identifies the fork's qualified VMX/SVM interfaces; older
-  // SDKs retain the exact assembly contract rather than declaring fake APIs.
-  if (Native && llvm::Intrinsic::lookupIntrinsicID("llvm.x86.vmread.address")) {
-    const auto IID = llvm::Intrinsic::lookupIntrinsicID(Native->LLVMName);
-    if (!IID)
-      llvm::report_fatal_error("native virtualization SDK is incomplete");
+  // The marker identifies the fork's qualified effects. Check the individual
+  // API as well: older SDKs lack VMXOFF status and must retain its real flags.
+  const auto IID =
+      Native && llvm::Intrinsic::lookupIntrinsicID("llvm.x86.vmread.address")
+          ? llvm::Intrinsic::lookupIntrinsicID(Native->LLVMName)
+          : llvm::Intrinsic::not_intrinsic;
+  if (IID) {
     if (Native->Result == X86VirtualizationResult::Read)
       Arguments.push_back(llvm::ConstantInt::get(sizeToType(Word), 0));
     if (Native->AddressControls) {
