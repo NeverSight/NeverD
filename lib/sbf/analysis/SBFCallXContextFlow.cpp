@@ -2031,7 +2031,7 @@ llvm::ArrayRef<RegisterValue> possibleValues(const ProvenValueSet &Values) {
 ProvenValueSet
 registerResult(const MedInstruction &Instruction,
                const std::array<ProvenValueSet, kRegisterCount> &Input,
-               const ProgramImage &Image,
+               const ProgramImage &Image, const SymbolicAddressSpace &Addresses,
                const StoredRegisterMemory *Memory = nullptr) {
   std::optional<ProvenValueSet> Output;
   for (const auto &Source : possibleValues(Input[Instruction.Src]))
@@ -2044,7 +2044,7 @@ registerResult(const MedInstruction &Instruction,
       if (!Output)
         Output = Value;
       else
-        Output->join(Value);
+        Output->join(Value, &Addresses);
     }
   return *Output;
 }
@@ -2887,7 +2887,8 @@ void ContextFlow::transferValues(const MedInstruction &Instruction,
         State.Origins[Instruction.Dst] = LoadedOrigin;
     } else {
       State.Origins[Instruction.Dst] =
-          registerResult(Instruction, State.Origins, Program.ExecutableImage);
+          registerResult(Instruction, State.Origins, Program.ExecutableImage,
+                         *CapturedAddresses);
     }
   }
   if (Instruction.Op == Operation::Store) {
@@ -2948,7 +2949,7 @@ void ContextFlow::transferValues(const MedInstruction &Instruction,
   } else {
     State.Registers[Instruction.Dst] =
         registerResult(Instruction, State.Registers, Program.ExecutableImage,
-                       &Scalar.Scratch.Values);
+                       *CapturedAddresses, &Scalar.Scratch.Values);
   }
 }
 

@@ -372,8 +372,12 @@ removed before checking that limit. This preserves the complete numeric set
 and prevents one returned pointer from acquiring a redundant literal/range
 alias split. Frame-relative and captured identities remain distinct from
 numeric ranges. Transfers lift the canonical scalar operation over those sets;
-for example two immutable table bases can load the same target. Unknown is
-absorbing and set overflow widens to unknown, never a truncated list. Multiple
+for example two immutable table bases can load the same target. Arithmetic
+result unions use the same captured-address bounds as CFG and typed-memory
+joins. When captured identities exceed the alternative limit, their proven
+numeric bounds can still fit that limit and preserve disjoint memory facts;
+capture names alone never establish non-aliasing. Unknown is absorbing and
+unrepresentable overflow widens to unknown, never a truncated list. Multiple
 remaining literal CALLX values are analyzed by refining the actual call-register
 input for each alternative and reusing the same caller ABI and memory-effect
 transfer as a singleton call. All returning register and memory outcomes are
