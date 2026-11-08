@@ -4004,6 +4004,9 @@ reconstruction, casts, shifted constant tables with overshifts and opaque
 division inputs. Zero words must preserve their original width. Attempt-cache
 tests cover context isolation, storage refusal and reuse under larger scratch
 allowances when storage did not limit the preceding search.
+`SymMBAResiduePolynomialCache.SingleBitArithmeticKeepsCompleteWords` exhausts
+the three input parities with independent 8/64/257-bit arithmetic, including
+mixed addition and multiplication, exact/one-short work and scratch storage.
 Generated-reading regressions require the deep walk to simplify an original
 opaque division's numerator and propagate it through the emitted proof.
 Mixed quartic and degree-24 residuals must also leave work for the surrounding

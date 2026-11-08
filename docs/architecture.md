@@ -5386,6 +5386,11 @@ precision and operation retained separately. Dense buckets own their inline
 results; callers copy those results before recursion. Bucket growth is prepaid
 against scratch storage, avoiding per-operation hash-node allocation without
 weakening exact identity or changing the work allowance.
+Single-bit addition and multiplication reuse the complete XOR/AND application
+cache: their word-step admission already pays for that bit's lookup, and any
+recursive frontier retains its own charges. Wider arithmetic finds each
+operand's first nonzero edge once, using the same scan for zero-word identities
+and trailing-zero projection.
 Native key construction reads inline constants without entering the wide
 literal reader.
 Decision identity hits and terminal two-input Boolean operations return before

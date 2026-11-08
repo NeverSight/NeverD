@@ -157,4 +157,55 @@ TEST(SymMBAResiduePolynomialCache, HasIndependentNativeWidthProofs) {
   }
 }
 
+TEST(SymMBAResiduePolynomialCache, SingleBitArithmeticKeepsCompleteWords) {
+  for (unsigned Width : {8u, 64u, 257u}) {
+    auto input = [&](SymContext &Ctx) {
+      const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+      const auto Z = Ctx.mkVar("z", Width);
+      return Ctx.mkMul({Ctx.mkConst(llvm::APInt(Width, 1).shl(Width - 1)),
+                        Ctx.mkXor(Ctx.mkAdd(X, Y), Z),
+                        Ctx.mkAdd(Ctx.mkMul(Y, Z), X)});
+    };
+    SymContext FullCtx;
+    const auto Root = input(FullCtx);
+    detail::WorkBudget FullBudget(65536);
+    size_t FullStorage = 1 << 24;
+    const auto Full =
+        detail::foldResidueDecisions(FullCtx, Root, FullBudget, FullStorage);
+    ASSERT_NE(Full, Root);
+    const auto Work = FullBudget.used();
+    const size_t Bytes = (1 << 24) - FullStorage;
+    ASSERT_GT(Work, 1u);
+    ASSERT_GT(Bytes, 1u);
+    for (auto Limits : {std::pair<size_t, size_t>{0, Bytes},
+                        {Work - 1, Bytes},
+                        {Work, Bytes - 1},
+                        {Work, Bytes}}) {
+      SCOPED_TRACE(::testing::Message()
+                   << Width << ':' << Limits.first << ':' << Limits.second);
+      SymContext Ctx;
+      const auto Original = input(Ctx);
+      detail::WorkBudget Budget(Limits.first);
+      size_t Storage = Limits.second;
+      const auto Result =
+          detail::foldResidueDecisions(Ctx, Original, Budget, Storage);
+      EXPECT_LE(Budget.used(), Limits.first);
+      EXPECT_LE(Storage, Limits.second);
+      if (Limits.first == Work && Limits.second == Bytes)
+        EXPECT_EQ(Result.index(), Full.index());
+      SymEvalPlan Plan(Ctx, Result);
+      for (unsigned Trial = 0; Trial < 128; ++Trial) {
+        auto Values = polynomialCacheValues(Width, Trial);
+        for (unsigned I = 0; I < Values.size(); ++I)
+          Values[I] = (Values[I] & ~llvm::APInt(Width, 1)) |
+                      llvm::APInt(Width, (Trial >> I) & 1);
+        const auto Expected = llvm::APInt(Width, 1).shl(Width - 1) *
+                              ((Values[0] + Values[1]) ^ Values[2]) *
+                              (Values[1] * Values[2] + Values[0]);
+        EXPECT_EQ(Plan.eval(Values), Expected);
+      }
+    }
+  }
+}
+
 } // namespace

@@ -277,6 +277,13 @@ class LowWordDecisions {
   uint32_t apply(uint32_t A, uint32_t B, unsigned Depth = 0) {
     if (!charge())
       return 0;
+    return applyCharged<Op>(A, B, Depth);
+  }
+
+  // The caller has already paid for this Boolean lookup. Recursive frontier
+  // visits still go through apply(), with their own cumulative admission.
+  template <Operation Op>
+  uint32_t applyCharged(uint32_t A, uint32_t B, unsigned Depth = 0) {
     uint32_t Complement = 0;
     if constexpr (Op == Or) {
       A ^= 1;
@@ -333,20 +340,23 @@ class LowWordDecisions {
   Bits calculate(SymOp Op, const Bits &A, const Bits &B) {
     if (!charge(1 + A.size()))
       return Bits(A.size(), 0);
-    auto Zero = [](const Bits &Value) {
-      return std::all_of(Value.begin(), Value.end(),
-                         [](uint32_t V) { return !V; });
-    };
-    if (Zero(A))
-      return Op == SymOp::Add ? B : A;
-    if (Zero(B))
-      return Op == SymOp::Add ? A : B;
+    // Modulo two, addition is XOR and multiplication is AND. The word-step
+    // admission above already funds this single bit's lookup. Reuse the
+    // complete Boolean cache instead of building another word key and entry.
+    if (A.size() == 1)
+      return {Op == SymOp::Add ? applyCharged<Xor>(A.front(), B.front())
+                               : applyCharged<And>(A.front(), B.front())};
     auto Zeros = [](const Bits &Value) {
       return size_t(std::find_if(Value.begin(), Value.end(),
                                  [](uint32_t V) { return V != 0; }) -
                     Value.begin());
     };
-    const size_t ZA = Zeros(A), ZB = Zeros(B);
+    const size_t ZA = Zeros(A);
+    if (ZA == A.size())
+      return Op == SymOp::Add ? B : A;
+    const size_t ZB = Zeros(B);
+    if (ZB == B.size())
+      return Op == SymOp::Add ? A : B;
     const size_t Shift = Op == SymOp::Mul ? ZA + ZB : std::min(ZA, ZB);
     if (Shift) {
       Bits Result(A.size(), 0);
