@@ -97,6 +97,7 @@ add_neverd_component_library(NeverDIRMed
   pass/MedDCE.cpp
   pass/MIPS/MedMIPSMergeValues.cpp
   pass/MIPS/MedMIPSReturnTargets.cpp
+  pass/MIPS/MedMIPSSourceVectors.cpp
   pass/MedDisplay.cpp
   pass/MedMutableSource.cpp
   pass/MedNoReturn.cpp

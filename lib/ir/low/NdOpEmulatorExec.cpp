@@ -170,7 +170,9 @@ bool NdOpEmulator::executeArith(const LowOp &Op) {
                     Op.Inputs[0].Size > sizeof(uint64_t) ||
                     Op.Inputs[1].Size > sizeof(uint64_t))) {
     if (Op.Output.Size == 0 || Op.Inputs[0].Size != Op.Output.Size ||
-        Op.Inputs[1].Size != Op.Output.Size)
+        Op.Inputs[1].Size != Op.Output.Size ||
+        !knownOperandBytes(Op.Inputs[0], 0, Op.Inputs[0].Size) ||
+        !knownOperandBytes(Op.Inputs[1], 0, Op.Inputs[1].Size))
       return false;
     const std::vector<uint8_t> A = readOperandBytes(Op.Inputs[0]);
     const std::vector<uint8_t> B = readOperandBytes(Op.Inputs[1]);
@@ -2783,7 +2785,8 @@ bool NdOpEmulator::executeMisc(const LowOp &Op) {
       return false;
     if (Op.Output.Size > sizeof(uint64_t) ||
         Op.Inputs[0].Size > sizeof(uint64_t)) {
-      if (Op.Output.Size == 0 || Op.Inputs[0].Size != Op.Output.Size)
+      if (Op.Output.Size == 0 || Op.Inputs[0].Size != Op.Output.Size ||
+          !knownOperandBytes(Op.Inputs[0], 0, Op.Inputs[0].Size))
         return false;
       std::vector<uint8_t> Value = readOperandBytes(Op.Inputs[0]);
       for (uint8_t &Byte : Value)

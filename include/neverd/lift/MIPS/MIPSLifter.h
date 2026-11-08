@@ -41,6 +41,7 @@ public:
   bool isFunctionTerminator(const cs_insn &Instruction) const;
   va_t directCallTarget(const cs_insn &Instruction) const;
   void setDSPEnabled(bool Enabled) { HasDSP = Enabled; }
+  void setMSAEnabled(bool Enabled) { HasMSA = Enabled; }
 
 private:
   struct State : LiftStateBase {
@@ -60,6 +61,7 @@ private:
   bool liftBitfield(State &S, uint32_t Word) const;
   bool liftMemory(State &S, uint32_t Word) const;
   bool liftDSP(State &S, uint32_t Word) const;
+  bool liftMSA(State &S, uint32_t Word) const;
   struct Encoding {
     uint32_t Word;
     unsigned SlotBytes = 0;
@@ -71,6 +73,7 @@ private:
   Arch Target;
   InstructionMode Mode;
   bool HasDSP = false;
+  bool HasMSA = false;
 };
 
 } // namespace neverd

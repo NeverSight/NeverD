@@ -116,6 +116,33 @@ TEST_P(MIPSLoader, DSPCapabilityRequiresClassic32BitProfileEvidence) {
   }
 }
 
+TEST_P(MIPSLoader, MSARequiresRevisionFiveAndFP64VectorEvidence) {
+  for (unsigned Variant = 0; Variant != 7; ++Variant) {
+    ELFBytes File(GetParam());
+    File.abiFlags();
+    File.Bytes[0xe3] = Variant == 1 ? 2 : 5;
+    File.Bytes[0xe5] = Variant == 2 ? 2 : 3;
+    File.Bytes[0xe7] = Variant == 3 ? 3 : 6;
+    File.put(0xec, Variant == 4 ? 0 : Variant == 5 ? 0x201 : 0x200, 4);
+    if (Variant == 6)
+      File.Bytes[0xe3] = 6;
+    ELFLoader Loader;
+    auto Image = Loader.loadBuffer(File.buffer());
+    const bool Admitted = Variant == 0 && !File.Is64;
+    ASSERT_EQ(bool(Image), Admitted);
+    if (Image) {
+      EXPECT_TRUE(Image->MIPS->HasMSA);
+      EXPECT_EQ(Image->MIPS->ISARevision, 5);
+    } else {
+      llvm::consumeError(Image.takeError());
+    }
+    std::vector<LoadCandidate> Candidates;
+    ELFLoader::identify(File.buffer(), Candidates);
+    ASSERT_EQ(Candidates.size(), 1u);
+    EXPECT_EQ(Candidates[0].Loadable, Admitted);
+  }
+}
+
 TEST_P(MIPSLoader, DynamicProgramTagsUseTheImageByteOrder) {
   ELFBytes File(GetParam());
   File.dynamicSymbols(0);

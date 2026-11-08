@@ -4822,7 +4822,8 @@ GUI keeps is named by the document and lines it came from; a later read names it
 the page again (`QueryService::State::keptPages`). Where an edit built the document
 again, a worker that still has the old one sends what changed of the page
 (`page_delta`: lines replaced and the offsets after them shifted, `pageDelta`), which the
-GUI applies to the page it keeps (`page_delta::apply`).
+GUI applies to the page it keeps (`page_delta::apply`); a reply the kept page does not
+take forgets that page, and the GUI reads the page whole once.
 A replica takes those edits in place (`analysis_update_names`), since no analysis
 reads them: what it keeps of a view stays the view's. The owner's snapshot for it does
 not wait for the write (`analysis_snapshot` `in_memory`): the replica takes the names
@@ -9904,16 +9905,21 @@ Count-only and unsummarized calls still use ordinary argument recovery.
 
 The same owner proves scalar exit constants for bounded, complete x64 bodies
 without calls, intrinsics, unresolved control flow or exceptional/independent
-entries. It uses the existing LowIR scalar evaluator within each return block
-and intersects the full-register constants at every return. It does not read
-image memory or turn an address identity into an integer fact. The operation
-budget lives in `Limits.h`; there is no inter-block symbolic search. LowToMed
-publishes these extra register definitions after the call, before SSA, for
+entries. It uses the existing LowIR scalar evaluator within each block
+and carries register facts through unique predecessors, including conditional
+arms and contiguous fallthroughs. Joins and the ordinary entry begin without
+inherited facts; unreachable cycles keep only local facts. Temporaries never
+cross a block boundary. Full-register constants must agree at every return.
+It does not read image memory or turn an address identity into an integer fact.
+The operation budget lives in `Limits.h`, and each admitted block is evaluated
+once without a symbolic fixed point. Local argument-read summaries continue
+to use their own block facts. LowToMed publishes these extra register
+definitions after the call, before SSA, for
 both C routes. Ordinary ABI result registers keep their existing return
 contract. Deferred source views, native session recovery and omitted-callee
 memo keys retain the same facts, including their memory accounting. Dynamic
-callee outputs and constants requiring predecessor reasoning remain separate
-machine-state recovery work.
+callee outputs, conditional address values and facts requiring agreement at
+joins remain separate machine-state recovery work.
 
 C source emission preserves a wholly unrecovered call-clobber or MedIR
 `Unspecified` value with an analysis-only LLVM call, rather than `freeze undef`
@@ -15270,6 +15276,14 @@ the source backends preserve original-machine transfers through
 `MIPSDSPSource`. These transfers remain observable independently of integer
 return values, including when packed arithmetic discards its GPR destination.
 
+The MSA integer-vector slice consumes explicit r5/o32/FP64 metadata. Decoder handle
+reuse includes the ISA revision; `MIPSMSA.def` and `MIPSLiftMSA` own raw
+encodings and full-vector arithmetic. `MIPSRegs`/`TargetRegInfoMIPS` share W
+storage and low F views without assigning a floating ABI to ordinary integers.
+`MedMIPSSourceVectors` refuses unknown entry vectors, calls, saved FPR writes
+and multi-block source before optimization. It does not narrow LowIR register
+coverage or invent initial machine state.
+
 The focused MIPS loader, integer, flow, SDK and pipeline suites cover these
 contracts. Owned kernels are recompiled from HighC and LLVMC for the original
 MIPS target and compared with their assembly originals in pinned Unicorn.
@@ -16126,8 +16140,10 @@ exact binary event bytes and share one consumption cursor. Write results never
 create visible reader records; omission, exhaustion and mismatch stay explicit.
 Bounded native text writes and Binder's FAILED_TRANSACTION diagnostic reuse
 this matcher with `text_log_writes`, a separate cursor and exact buffer id,
-priority, tag and message bytes. Radio-tag routing precedes matching; negative
-results complete without inferred transport success or errno changes.
+priority, tag and message bytes. Radio-tag routing precedes the shared 4068-byte
+transport prefix; admission accepts missing string terminators only at that
+full limit. Native C-string reads complete before clipping. Negative results
+complete without inferred transport success or errno changes.
 
 `AndroidProperties` builds one immutable guest property table from explicit
 inputs. Name lookup, stable `prop_info` identities, serials, legacy reads and
@@ -18549,8 +18565,15 @@ See the [local APIC contract](x86-local-apic.md).
 Its CR8 read/write methods and paired CPU/APIC import check preserve the
 distinction between restoration and an actual same-value write. The former
 retains TPR subpriority; the latter clears it. Privilege/fault handling and
-instruction/device completion wiring remain with the embedding. The fixed
-PPR tie policy retains TPR subpriority as QEMU/KVM do, rather than inferring a
+device wiring remain with the embedding. The successful-RAM scheduler can
+explicitly opt into CR8-write completion notifications. Instruction lowering
+records modeled writes while lowering the authoritative task-priority
+transition; the shared scheduler calls the producer bridge only on that
+instruction's successful exit, including same-value writes. This requires no
+re-decoding, default-source change or ordinary-case runtime check. The embedding
+supplies the bridge and coherent initial banks. Paged MOV CR8 and TPR aliases
+retain their previous boundaries. The fixed PPR tie policy retains TPR
+subpriority as QEMU/KVM do, rather than inferring a
 model-specific choice for arbitrary hardware.
 
 `X64FunctionCallHandlers` composes a producer-declared delivered handler context

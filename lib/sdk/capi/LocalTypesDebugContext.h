@@ -239,8 +239,11 @@ public:
   /// Defines the types \p Names of \p Library, as a context made of \p Library
   /// does, and what was read through this context stays.  Those types are new,
   /// and nothing it has read names them (Session::takeUnreadTypes).
+  /// \p NamesHold: they are spelled by the names they have, and no other name
+  /// moves for them (Session::takeUnreadTypes' own names), so what spells the
+  /// library's names spells theirs as one made of \p Library would, and stays.
   void takeNewTypes(const types::TypeLibrary &Library,
-                    llvm::ArrayRef<std::string> Names);
+                    llvm::ArrayRef<std::string> Names, bool NamesHold = false);
 
   /// Notes in \p Reads each function whose declaration is asked for, declared
   /// or not.  \p Reads outlives this.

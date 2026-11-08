@@ -272,9 +272,7 @@ std::string x86CIntrinsicTargetFeatures(const HighFunc &Func) {
 
 } // anonymous namespace
 
-uint16_t pointerBytes(Arch A) {
-  return (A == Arch::X86 || A == Arch::ARM) ? 4 : 8;
-}
+uint16_t pointerBytes(Arch A) { return getTargetRegInfo(A).PointerSize; }
 
 uint16_t countedBytes(const HighExpr &Operand) {
   if (Operand.Type)

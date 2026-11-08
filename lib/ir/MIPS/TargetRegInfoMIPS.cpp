@@ -31,6 +31,14 @@ constexpr uint64_t N64Saved[] = {mipsreg::r(16), mipsreg::r(17), mipsreg::r(18),
                                  mipsreg::r(22), mipsreg::r(23), mipsreg::GP,
                                  mipsreg::FP};
 constexpr uint64_t ReturnRegisters[] = {mipsreg::V0, mipsreg::V1};
+constexpr auto VectorViews = [] {
+  std::array<SubRegEntry, mipsreg::VectorCount * 2> Result{};
+  for (unsigned I = 0; I != mipsreg::VectorCount; ++I) {
+    Result[I * 2] = {mipsreg::w(I), 16, mipsreg::w(I), 8, 0, false};
+    Result[I * 2 + 1] = {mipsreg::w(I), 16, mipsreg::w(I), 4, 0, false};
+  }
+  return Result;
+}();
 
 } // namespace
 
@@ -49,6 +57,10 @@ const TargetRegInfo &getMIPSRegInfo(Arch Target) {
       Info.ProgramCounter = mipsreg::PC;
       Info.PointerSize = Info.FullRegWidth = Wide ? 8 : 4;
       Info.MinInsnAlign = 4;
+      Info.VecRegBase = mipsreg::VectorBase;
+      Info.VecRegStride = Info.VecRegWidth = mipsreg::VectorBytes;
+      Info.VecRegCount = mipsreg::VectorCount;
+      Info.SubRegs = VectorViews;
       Info.IntParamRegs =
           Wide ? llvm::ArrayRef(N64Parameters) : llvm::ArrayRef(O32Parameters);
       Info.IntReturnReg = mipsreg::V0;

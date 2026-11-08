@@ -16463,13 +16463,19 @@ exhausted and mismatching explicit logs through ordinary/V/A calls; its native
 client interleaves a text write between two failed transactions on the same
 proxy. `AndroidLog.Text*` checks direct/dynamic calls, buffer/priority bytes,
 null tags, radio routing, signed results, errno and bounded payload admission.
+`AndroidLog.TextTransport*` checks clipping inside tag/message, a cut after tag
+NUL, byte cuts inside UTF-8, full guest-string reads beyond the retained prefix,
+and partial transcript effects. `FormattedTransport*` composes the 1023-byte
+formatting limit with transport clipping. C++/JSON admission checks complete
+short payloads and capped prefixes with zero, one or two terminators; SDK/CLI
+coverage uses `ProcessPublic.AndroidTextLogTransportPrefixesMatchSDKAndCLI`.
 `AndroidLog.Formatted*` runs direct and dynamic print/vprint/buf_print calls
 at O0/O2 across relocation variants and available CPU backends. Independent
 transcripts check stacked scalar arguments, unchanged va_list bytes, 1022/1023/
 1024-byte and large-width clipping, embedded NUL, bounded precision at a page
 edge, signed results and errno. Unsupported conversions precede tag reads and
 log consumption; missing, exhausted and mismatching transcripts preserve the
-completed prefix. Fatal state and transport truncation remain explicit.
+completed prefix. Fatal state remains explicit.
 `AndroidJNI.BinderTransportUsesGuestServiceAndRetainedReplyArenas`
 executes real guest services through all three JNI forms, including three-round
 buffer retention/reuse, a reply recycled and reused by another native thread,
@@ -20227,12 +20233,20 @@ Run `NeverDObjCSourceCallTests` (`SourceFrameAnalysis.*`) and `NeverDCSourcePres
 `CallRegisterEffects.ExitConstants*` in `NeverDFPParameterMaskTests` checks
 agreement at every return, block ordering, partial and unknown writes, calls,
 intrinsics, address provenance, independent/exceptional roots, exact/short
-work budgets and ordinary ABI result ownership. `CallExitRegisters.*` in
-`NeverDWin64CallContractTests` executes decoded x64 COFF/ELF/Mach-O callers
+work budgets and ordinary ABI result ownership. Unique-predecessor cases cover
+conditional arms, contiguous and inconsistent fallthroughs, joins, a long
+register-carry chain and instruction temporaries that must not cross blocks.
+`CallExitRegisters.*` in `NeverDWin64CallContractTests` executes decoded x64
+COFF/ELF/Mach-O callers
 through both C routes, with source optimization enabled and disabled, at C
 O0/O2 with UBSan. The oracle observes the non-return register's stored value
-and the ordinary call result. This qualifies bounded scalar constants, not
-dynamic machine-state returns or other architectures.
+and the ordinary call result. The constant-scratch case also executes the
+original public machine code on Linux x64, including a direct jump and both
+conditional return paths whose scratch definition precedes the branch. Other
+hosts execute the generated C against the fixture's scalar results without
+executing x64 bytes. This qualifies
+bounded scalar constants, not dynamic machine-state returns or other
+architectures.
 `CallExitRegisters.PureRegisterLeafKeepsDynamicExtraResults` independently
 executes recovered query results against native CPUID on x64 COFF/ELF/Mach-O
 inputs through both C routes at O0/O2 with UBSan. Source execution selects the
@@ -21642,6 +21656,25 @@ compiler paths and uniquely named source/manifest pairs. Run the existing
 function/call/scheduled/handler export suites as compatibility regressions;
 their compile-time models remain distinct from these runtime comparisons.
 
+`X64Cr8WriteNotificationTest.*` compiles both C routes with switch/direct
+selection at O0/O2, checks default/disabled source and manifest identity, and
+rejects unsupported opt-in contracts atomically. Compile-only predicates retain
+the actual MOV-CR8/read/NOP/UD2/CALL/RET/IRETQ bodies and event scheduler. They cover
+symbolic legal and reserved-bit writes, same-value subpriority clearing, reads,
+notification-before-poll ordering, budgets, native stops, IRQ deferral and
+preemption, exception delivery, original IRETQ before the deferred write, and
+checked-entry/original-CALL resumption.
+An independent producer checks CPU/TPR coherence and counts notifications;
+no callback is executed. Plain descriptor/stack RAM operands are bound to a
+single declared object at `[0x10000, 0x14000)` by the existing bounded proof
+helper. The proof copy explicitly inlines the scheduler and call wrappers when
+HighC IRET exceeds the ordinary optimizer threshold; every body and guard is
+retained, and unmodified exports compile separately. LLVM must reduce every
+predicate to one block returning constant zero.
+`X64Cr8WriteNotification.MetadataComesFromModeledWrites` checks lowering-owned
+write metadata, including the unchanged paged native boundary. These checks do
+not qualify a live device environment or paged MOV-CR8 fault delivery.
+
 `X64ScheduledFunctionContextTest.*` checks scheduled activation admission,
 disabled source/manifest identity and O0/O2 compilation in both C routes.
 Each route has 22 nonpaged and
@@ -22568,6 +22601,29 @@ recorded separately; generated results must always satisfy the manual-derived
 expectation. The managed artifact lifecycle retires each generated object and
 executable after its comparisons.
 
+`MIPSMSATests` covers scalar word transfers across all vector registers,
+B/H/W/D carry and borrow boundaries, full-container logical operations and
+aliasing, independent byte-wise expectations, missing state, decoder reuse and
+P5600 reference execution. Loader cases check r5/MSA/CPR128/FP64 evidence;
+pipeline cases check both source routes and unchanged refusals with/without an
+Image. The owned MSA source runner recompiles eighteen scalar/memory leaves in both
+byte orders at O0/O2 through HighC and LLVMC. It checks each output byte and the
+preserved F20/F22/.../F30 low64 values, maps original/generated ELF separately,
+and retires scratch on success and failure:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=third_party/unicorn/bindings/python:scripts \
+  LIBUNICORN_PATH=build-mips/roundtrip \
+  python3 unittests/lift/mips/msa-roundtrip.py --neverd build-mips/bin/neverd \
+  --clang /path/to/clang --ld /path/to/ld.lld --output build-mips/roundtrip-msa
+```
+
+The same runner exports LLVMC's live 128-bit funnel-shift fixture from
+`NeverDMIPSPipelineTests` beside the CLI, recompiles it for both byte orders at
+O0/O2, and compares execution with an arbitrary-precision integer oracle.
+Storage-only 128-bit locals and address-taken external declarations receive
+separate target syntax checks; those four checks do not claim linked execution.
+
 ### MIPS decode/lift and firmware performance
 
 `neverd-mips-bench` is an opt-in target, excluded from the default build:
@@ -22578,11 +22634,13 @@ build-mips/bin/neverd-mips-bench mips64el lift /path/to/owned-code.bin 100000
 ```
 
 Profiles are `mips`, `mipsel`, `mips64`, `mips64el`, `micromips`,
-`micromipsel`, `mipsdsp` and `mipsdspel`. The DSP profiles explicitly select
-the admitted classic32 DSP capability. Stages are `capstone`
+`micromipsel`, `mipsdsp`, `mipsdspel`, `mipsmsa` and `mipsmsael`. The DSP
+profiles explicitly select the admitted classic32 DSP capability; MSA profiles
+select classic32 r5/o32 FP64 with the admitted integer vector instructions.
+Stages are `capstone`
 (direct physical decoding), `decode` (NeverD physical decoding) and `lift`
 (decoding plus LowIR, including delay slots). Both decode paths request the same
-selected r2 encoding profile, detail on and text off. The pinned Capstone fork suppresses
+selected encoding/revision profile, detail on and text off. The pinned Capstone fork suppresses
 rendered operand detail with text off; these physical decode measurements consume
 instruction sizes and IDs. The harness reuses decoder handles, counts physical
 instructions/LowOps and validates output fingerprints outside

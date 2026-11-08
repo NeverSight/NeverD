@@ -796,27 +796,34 @@ struct QueryService::State {
       const auto payload = response.value("payload").toObject();
       const bool delta = payload.contains("delta");
       if (payload.value("unchanged").toBool() || delta) {
-        if (job->keptEtag.isEmpty() ||
-            payload.value(delta ? "base" : "etag").toString() !=
-                job->keptEtag) {
+        // The kept page, as of this reply, with what changed applied.
+        auto kept = job->keptResponse;
+        std::optional<QJsonObject> applied;
+        if (!job->keptEtag.isEmpty() &&
+            payload.value(delta ? "base" : "etag").toString() == job->keptEtag)
+          applied = delta ? page_delta::apply(kept.value("payload").toObject(),
+                                              payload.value("delta").toArray())
+                          : kept.value("payload").toObject();
+        if (!applied) {
+          // A reply the kept page does not take forgets that page, and the
+          // page is read whole, once.
+          keptPages.remove(keptPageKey(*job));
+          qCWarning(lcQueries).noquote()
+              << "kept page" << job->keptEtag << "does not take"
+              << (delta ? "the changes" : "the word") << "of" << job->wireId;
+          if (!job->keptEtag.isEmpty() && !job->cancelRequested) {
+            job->keptEtag.clear();
+            job->keptResponse = {};
+            auto whole = job->spec.payload;
+            whole["if_none_match"] = QString();
+            dispatch(job, job->spec.operation, whole);
+            return;
+          }
           finish(job, error("invalid_response",
                             "Worker named a page this client does not keep."));
           return;
         }
-        // The kept page, as of this reply, with what changed applied.
-        auto kept = job->keptResponse;
-        auto keptPayload = kept.value("payload").toObject();
-        if (delta) {
-          auto applied =
-              page_delta::apply(keptPayload, payload.value("delta").toArray());
-          if (!applied) {
-            finish(job, error("invalid_response",
-                              "Worker sent changes the kept page does not "
-                              "take."));
-            return;
-          }
-          keptPayload = std::move(*applied);
-        }
+        auto keptPayload = std::move(*applied);
         for (const char *field : {"project_id", "revision", "etag"})
           if (payload.contains(QLatin1String(field)))
             keptPayload[QLatin1String(field)] =

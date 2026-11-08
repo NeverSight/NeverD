@@ -62,7 +62,7 @@ int main(int Argc, char **Argv) try {
                                 "capstone|decode|lift RAW_CODE REPEATS");
   Arch Target = Arch::Unknown;
   InstructionMode Encoding = InstructionMode::Default;
-  bool DSP = false;
+  bool DSP = false, MSA = false;
 #define NEVERD_MIPS_BENCH_PROFILE(Name, Value)                                 \
   if (std::string_view(Argv[1]) == #Name)                                      \
     Target = Arch::Value;
@@ -77,6 +77,12 @@ int main(int Argc, char **Argv) try {
   if (std::string_view(Argv[1]) == #Name) {                                    \
     Target = Arch::Value;                                                      \
     DSP = true;                                                                \
+  }
+#include "mips-bench.def"
+#define NEVERD_MIPS_MSA_BENCH_PROFILE(Name, Value)                             \
+  if (std::string_view(Argv[1]) == #Name) {                                    \
+    Target = Arch::Value;                                                      \
+    MSA = true;                                                                \
   }
 #include "mips-bench.def"
   if (!isMIPS(Target))
@@ -109,6 +115,8 @@ int main(int Argc, char **Argv) try {
   Profile.Mode = Encoding;
   Profile.MIPS.emplace();
   Profile.MIPS->HasDSP = DSP;
+  Profile.MIPS->HasMSA = MSA;
+  Profile.MIPS->ISARevision = MSA ? 5 : 2;
   Profile.MIPS->HasMicroMIPS = Encoding == InstructionMode::MicroMIPS;
   if (!Decode.init(Profile))
     throw std::runtime_error("decoder initialization failed");
@@ -116,7 +124,9 @@ int main(int Argc, char **Argv) try {
   Decode.setText(false);
   Capstone Reference;
   const auto Mode = static_cast<cs_mode>(
-      (isMIPS64(Target) ? CS_MODE_MIPS64R2 : CS_MODE_MIPS32R2) |
+      (isMIPS64(Target) ? CS_MODE_MIPS64R2
+       : MSA            ? CS_MODE_MIPS32R5
+                        : CS_MODE_MIPS32R2) |
       (Encoding == InstructionMode::MicroMIPS ? CS_MODE_MICRO : 0) |
       (archLittleEndian(Target) ? CS_MODE_LITTLE_ENDIAN : CS_MODE_BIG_ENDIAN));
   if (cs_open(CS_ARCH_MIPS, Mode, &Reference.Handle) != CS_ERR_OK ||

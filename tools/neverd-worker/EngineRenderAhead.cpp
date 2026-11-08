@@ -211,11 +211,19 @@ void Engine::currentNamesInView(Json &view) const {
 }
 
 Engine::StoreNames Engine::storeNames() {
+  auto identity = storeIdentity();
+  return identity ? storeNames(std::move(*identity)) : StoreNames{};
+}
+
+std::optional<Json> Engine::storeIdentity() {
   const auto project = projectJson();
   if (!browseCacheEnabled_ || !project.is_object() ||
       !project.contains("folder"))
-    return {};
-  auto identity = renderStoreIdentity();
+    return std::nullopt;
+  return renderStoreIdentity();
+}
+
+Engine::StoreNames Engine::storeNames(Json identity) {
   const auto &runtime = BrowseCache::runtimeIdentity();
   StoreNames names;
   names.renders = BrowseCache::digest(runtime + identity.dump());
@@ -261,23 +269,32 @@ void Engine::openRenderStore(const std::string &mode) {
 }
 
 void Engine::keepStoresFor(const StoreNames &before) {
+  StoreNames names;
+  try {
+    names = storeNames();
+  } catch (const std::exception &) {
+    // Later sessions render again.
+  }
+  keepStoresFor(before, names);
+}
+
+void Engine::keepStoresFor(const StoreNames &before, const StoreNames &after) {
   rendersStoreRead_ = false;
   factsStoreRead_ = false;
   try {
-    const auto names = storeNames();
     const auto project = projectJson();
-    if (!before.renders.empty() && !names.renders.empty()) {
+    if (!before.renders.empty() && !after.renders.empty()) {
       RenderStore::keepFor(projectLocalFolder(project, "render-ahead"),
-                           before.renders, names.renders);
+                           before.renders, after.renders);
       // What is open holds for them too.
       if (rendersStoreName_ == before.renders)
-        rendersStoreName_ = names.renders;
+        rendersStoreName_ = after.renders;
     }
-    if (!before.facts.empty() && !names.facts.empty()) {
+    if (!before.facts.empty() && !after.facts.empty()) {
       RenderStore::keepFor(projectLocalFolder(project, "listing-facts"),
-                           before.facts, names.facts);
+                           before.facts, after.facts);
       if (factsStoreName_ == before.facts)
-        factsStoreName_ = names.facts;
+        factsStoreName_ = after.facts;
     }
   } catch (const std::exception &) {
     // Later sessions render again.

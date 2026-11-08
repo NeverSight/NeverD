@@ -531,6 +531,10 @@ struct Session {
     /// Each listed function's entry and name as the index read them, hashed:
     /// a list that changed revision but reads the same keeps the index.
     std::vector<uint64_t> Spelled;
+    /// The names more than one listed function had when the index read them,
+    /// and any a name taken since gave a second: a name outside it is one
+    /// function's.
+    std::unordered_set<std::string> Shared;
   };
   std::optional<FunctionNameIndex> NameIndex;
   /// A listed function's entry and name, hashed (FunctionNameIndex::Spelled).
