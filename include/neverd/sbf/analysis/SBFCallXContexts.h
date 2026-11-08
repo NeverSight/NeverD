@@ -213,6 +213,8 @@ struct CallXFunctionSummary {
   bool MayReturn = false;
   bool IsRoot = false;
   bool GeneralizedInputs = false;
+  // Caller-visible effects after a matched return. Temporary stores whose
+  // exact original bytes are restored need not clobber the caller snapshot.
   bool PreservesCallerMemory = false;
   bool WritesOnlyOwnAndChildFrames = false;
   bool MayWriteUnknownMemory = true;
