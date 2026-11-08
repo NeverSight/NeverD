@@ -1018,24 +1018,31 @@ void RegistrationDisplay::settleLists(std::vector<HighStmt> &List,
 }
 
 void RegistrationDisplay::dropBodyCalls(HighFunc &Func) const {
+  if (Facts->Stretches.empty())
+    return;
   // The body of each clause that holds one, what it left and whether it
   // returns.
-  std::map<va_t, const HighStmt *> Filled;
+  std::map<va_t, std::optional<std::vector<ExceptionAddressRange>>> Filled;
   forEachList(Func.Body, [&](std::vector<HighStmt> &List) {
     for (const HighStmt &S : List)
       if (S.Kind == StmtKind::SEHTry && S.EHClauses.size() == 1 &&
           S.EHClauses[0].Kind == HighEHClauseKind::SEHFinally &&
           S.EHClauses[0].FinallyKind == HighEHClause::FinallyBody::WholeBody)
-        Filled.emplace(S.EHClauses[0].FilterOrActionVA, &S);
+        Filled.try_emplace(S.EHClauses[0].FilterOrActionVA);
   });
   if (Filled.empty())
     return;
+  // The display facts stay fixed while calls are removed. Resolve each
+  // queried body once; an engaged empty vector also remembers a missing body.
+  // A clause with no remaining call needs no range scan.
   auto Holder = [&](va_t Target) -> std::optional<va_t> {
-    for (const auto &[Root, Try] : Filled)
-      if (const auto Ranges = bodyAt(Root))
-        for (const ExceptionAddressRange &R : *Ranges)
-          if (R.contains(Target))
-            return Root;
+    for (auto &[Root, Ranges] : Filled) {
+      if (!Ranges)
+        Ranges = bodyAt(Root).value_or(std::vector<ExceptionAddressRange>{});
+      for (const ExceptionAddressRange &R : *Ranges)
+        if (R.contains(Target))
+          return Root;
+    }
     return std::nullopt;
   };
   // A `goto` out of a `__try` runs the clause, and lands on what ran the body

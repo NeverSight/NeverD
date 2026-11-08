@@ -16245,7 +16245,10 @@ whatever order its statements were found in, since nothing but the runtime enter
 it, and statements at one address stay together, since a jump to it lands on the
 first. A frame whose record is not where the runtime leaves EBP, as clang-cl's, is
 not read this way: its handlers' code keeps the block view. `lib/ir/high/structure/X86/X86RegistrationDisplay.cpp` runs this and takes the
-normal path's `call` of each body away. A filter's
+normal path's `call` of each body away. Within one call-removal pass, each
+queried body's merged ranges are computed once from the unchanged display facts,
+including empty results. Bodies are still searched in root-address order, and
+clauses with no remaining call do not build their ranges. A filter's
 code leaves the listing as one expression (`HighEHClause::FilterValue`): branches
 are conditionals, what it does first a comma's left side, and the pointers the
 runtime leaves below the record `GetExceptionInformation()` and

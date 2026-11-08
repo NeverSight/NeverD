@@ -18560,7 +18560,9 @@ try that starts where jumps enter it, an arm that does nothing, a jump out of a
 register staying in its try, an entry inside a loop being a jump in the try, an arm
 starting at its handler, and a filter keeping its calls in order. `WindowsEHModesCorpus.EveryFinallyClauseOfXcpt4HoldsItsHandlerAsCode`
 holds the same for the whole of x86 `xcpt4`, with no loop that does nothing and every
-call a filter or the startup code's arm makes.
+call a filter or the startup code's arm makes. Run these checks when changing
+the call-removal range index; handler boundaries, remaining calls and clause
+results must stay unchanged.
 
 `NeverDRelocatedFunctionEntryTests` checks LLVM's shared entry evidence across
 x86, x64, Thumb and AArch64 with PE, ELF and Mach-O images. It covers bounded
