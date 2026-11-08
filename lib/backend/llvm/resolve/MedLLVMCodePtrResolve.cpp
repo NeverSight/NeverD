@@ -803,8 +803,8 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
     }
     if (Off < Cur)
       continue; // overlapping/duplicate slot — skip
-    uint64_t TargetVA = 0;
-    std::memcpy(&TargetVA, Data + Off, PtrSz);
+    uint64_t TargetVA =
+        readPtr(Data + Off, PtrSz == 8, archLittleEndian(Img->Arch));
     PtrSlotKind Kind = Slot.Kind;
     std::string ImportName = Slot.ImportName;
     if (Kind == PtrSlotKind::Code) {

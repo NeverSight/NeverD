@@ -14,6 +14,7 @@
 
 #include "EHFrameDetail.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/loader/DWARF/AArch64ReturnAddressState.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -163,9 +164,13 @@ bool decodeCFIProgram(const uint8_t *Buf, size_t Size, size_t Cursor,
                                                         : 4;
       if (!rangeInBounds(Cursor, Width, End))
         return fail("truncated DWARF advance_loc operand");
-      uint64_t Delta = Width == 1   ? Buf[Cursor]
-                       : Width == 2 ? readLE<uint16_t>(Buf + Cursor)
-                                    : readLE<uint32_t>(Buf + Cursor);
+      uint64_t Delta =
+          Width == 1 ? Buf[Cursor]
+          : Width == 2
+              ? readTargetEndian<uint16_t>(Buf + Cursor,
+                                           !Img || archLittleEndian(Img->Arch))
+              : readTargetEndian<uint32_t>(Buf + Cursor,
+                                           !Img || archLittleEndian(Img->Arch));
       Cursor += Width;
       Insn.Kind = CFIOpKind::AdvanceLoc;
       Insn.Offset = static_cast<int64_t>(Delta);

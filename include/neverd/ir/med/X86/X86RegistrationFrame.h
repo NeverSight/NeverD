@@ -40,6 +40,11 @@ cxxRegistrationFrameCoordinate(const ExceptionFunction &EH,
 std::optional<RegistrationFrameCoordinate>
 cxxRegistrationFrameCoordinate(const MedFunc &Function);
 
+/// Whether the `ret` at \p Address of \p Func, a frame in the decompile view,
+/// goes back to the runtime that called its filter or to the `call` of its
+/// `__finally` body, not out of the function.
+bool isRegistrationDisplayRuntimeReturn(const MedFunc &Func, va_t Address);
+
 /// Coordinate of a source-frame runtime definition. Callback ESP is a
 /// separate invocation's stack and deliberately has no parent coordinate.
 std::optional<RegistrationFrameCoordinate>

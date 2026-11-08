@@ -19,8 +19,10 @@
 #include <array>
 #include <compare>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -424,8 +426,56 @@ struct RegistrationSEH4PrologueEffect {
   bool operator==(const RegistrationSEH4PrologueEffect &) const = default;
 };
 
+/// What the decompile view of an x86 `_except_handler3` or `_except_handler4`
+/// frame, which has none of the native proofs, reads from the frame's own code.
+/// It says what to print; it grants nothing to a native reconstruction.
+struct RegistrationDisplayFacts {
+  struct Stretch {
+    ExceptionAddressRange Range;
+    /// The try levels this code runs at, ascending.
+    std::vector<int32_t> Levels;
+    /// The handler or filter only whose runtime entry runs this code, or zero
+    /// when ordinary flow runs it too or more than one entry does.
+    va_t Owner = 0;
+    /// Nothing here can raise or be seen: it calls nothing and touches only the
+    /// frame, as `mov eax, 255` on its way out of a `__try` does.
+    bool Quiet = false;
+
+    bool operator==(const Stretch &Other) const {
+      return Range.Begin == Other.Range.Begin && Range.End == Other.Range.End &&
+             Levels == Other.Levels && Owner == Other.Owner &&
+             Quiet == Other.Quiet;
+    }
+  };
+  /// In address order.
+  std::vector<Stretch> Stretches;
+  /// The frame pointer's distance from the entry stack pointer, which the
+  /// prologue sets where it can be read: not -4 in a frame it biases.
+  std::optional<int32_t> FrameFromEntry;
+  /// The stack pointer's distance from the entry stack pointer once the
+  /// prologue is done, which a handler's own stack stands in for: it prints in
+  /// this frame.
+  std::optional<int32_t> StackFromEntry;
+  /// The calls of `_local_unwind4` and `_local_unwind2`: the `return` or `goto`
+  /// that follows each says the same in C.
+  std::set<va_t> LocalUnwinds;
+  /// The calls that leave nothing in the result register: those, and the calls
+  /// of a `__finally` body.
+  std::set<va_t> NoValueCalls;
+  /// The `ret`s that go back to the `call` of a `__finally` body.
+  std::set<va_t> FinallyReturns;
+  /// Where the code reads and writes each word of the frame, by its distance
+  /// from the frame pointer, and the words whose address it takes.
+  std::map<int32_t, std::vector<va_t>> FrameReads;
+  std::map<int32_t, std::vector<va_t>> FrameWrites;
+  std::set<int32_t> FrameAddressesTaken;
+
+  bool operator==(const RegistrationDisplayFacts &) const = default;
+};
+
 struct RegistrationStateAnalysis {
   std::vector<RegistrationBlockState> Blocks;
+  std::optional<RegistrationDisplayFacts> Display;
   bool Complete = false;
   bool CallbackStatesComplete = true;
   bool RegistrationLifetimeComplete = false;

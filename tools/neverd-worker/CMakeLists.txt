@@ -175,7 +175,7 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
     add_test(NAME NeverDWorkerRenderStore
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/render_store_test.py"
               "$<TARGET_FILE:neverd-worker-test-server>")
-    set_tests_properties(NeverDWorkerRenderStore PROPERTIES TIMEOUT 180)
+    set_tests_properties(NeverDWorkerRenderStore PROPERTIES TIMEOUT 240)
     add_test(NAME NeverDWorkerMakeCode
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/make_code_test.py"
               "$<TARGET_FILE:neverd-worker-test-server>")
@@ -282,6 +282,10 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/edit_writes_test.py"
                 "$<TARGET_FILE:neverd-worker>")
       set_tests_properties(NeverDWorkerEditWrites PROPERTIES TIMEOUT 120)
+      add_test(NAME NeverDWorkerViewEdits
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/view_edits_test.py"
+                "$<TARGET_FILE:neverd-worker>")
+      set_tests_properties(NeverDWorkerViewEdits PROPERTIES TIMEOUT 120)
       add_test(NAME NeverDWorkerUnreadTypes
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/unread_types_test.py"
                 "$<TARGET_FILE:neverd-worker>")

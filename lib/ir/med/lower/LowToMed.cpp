@@ -1688,13 +1688,12 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
     simplifyCfg(Func);
     debugVerifyMedFunc(Func, "simplifyCfg");
 
-    // ARM predication is flattened in LowIR as an instruction-local guard plus
-    // its same-address effects.  Materialize that micro-CFG before SSA so the
-    // skip path keeps the incoming architectural registers while the effect
-    // path receives the new definitions.  Doing this in the LLVM emitter would
-    // be too late: SSA would already have treated every effect as
-    // unconditional.
-    materializePredicatedEffects(Func);
+    // ARM predication and MIPS annulled slots use execution-unit guards.
+    // Materialize that micro-CFG before SSA so the skip path keeps the incoming
+    // architectural registers while the effect path receives the new
+    // definitions.  Doing this in the LLVM emitter would be too late: SSA would
+    // already have treated every effect as unconditional.
+    materializePredicatedEffects(Func, Low);
     debugVerifyMedFunc(Func, "materializePredicatedEffects");
 
     // Apple clang's prologue stack-probe (____chkstk_darwin) is modeled as an

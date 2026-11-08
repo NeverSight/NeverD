@@ -19,6 +19,7 @@
 #include "neverd/loader/ELF/ELFLoader.h"
 
 #include "ELFLoaderDetail.h"
+#include "ELFMIPSProfile.h"
 
 #include "neverd/Limits.h"
 #include "neverd/loader/DWARF/ItaniumEH.h"
@@ -65,6 +66,14 @@ Arch tripleToArch(llvm::Triple::ArchType TA) {
   case llvm::Triple::arm:
   case llvm::Triple::thumb:
     return Arch::ARM;
+  case llvm::Triple::mips:
+    return Arch::MIPS32;
+  case llvm::Triple::mipsel:
+    return Arch::MIPS32EL;
+  case llvm::Triple::mips64:
+    return Arch::MIPS64;
+  case llvm::Triple::mips64el:
+    return Arch::MIPS64EL;
   default:
     return Arch::Unknown;
   }
@@ -90,6 +99,17 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
   if (Img.Arch == Arch::Unknown)
     return llvm::make_error<llvm::StringError>("elf: unsupported architecture",
                                                llvm::inconvertibleErrorCode());
+
+  if (isMIPS(Img.Arch)) {
+    auto Profile = elf_loader::readMIPSProfile(Obj);
+    if (!Profile)
+      return Profile.takeError();
+    Img.MIPS = *Profile;
+  } else if constexpr (ELFT::Endianness == llvm::endianness::big) {
+    return llvm::make_error<llvm::StringError>(
+        "elf: big-endian is only supported for admitted MIPS profiles",
+        llvm::inconvertibleErrorCode());
+  }
 
   Img.Bits = ELFT::Is64Bits ? Bitness::Bits64 : Bitness::Bits32;
   Img.Entry = EH.e_entry;
@@ -182,9 +202,41 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
   elf_loader::detail::DynamicSections<ELFT> Reconstructed;
   llvm::ArrayRef<Elf_Shdr> Tables = *SectionsOr;
   llvm::StringRef TableNames = ShStrTab;
-  if (!IsRelocatable && SectionsOr->empty()) {
+  if (!IsRelocatable && (SectionsOr->empty() || isMIPS(Img.Arch))) {
+    const size_t DiagnosticsBefore = Img.LoadDiagnostics.size();
     Reconstructed =
         elf_loader::detail::reconstructDynamicSections<ELFT>(ELF, Img);
+    if (isMIPS(Img.Arch)) {
+      for (size_t I = DiagnosticsBefore; I < Img.LoadDiagnostics.size(); ++I)
+        if (Img.LoadDiagnostics[I].Code == "elf.dynamic_table_invalid")
+          return llvm::createStringError(
+              llvm::inconvertibleErrorCode(),
+              "elf: invalid MIPS runtime table: %s",
+              Img.LoadDiagnostics[I].Message.c_str());
+      if (!SectionsOr->empty()) {
+        // PT_DYNAMIC is authoritative even when the file retains an
+        // incomplete section table. Keep static sections and their indexes,
+        // replacing runtime table descriptions with the checked program view.
+        std::vector<Elf_Shdr> Merged(SectionsOr->begin(), SectionsOr->end());
+        for (auto &Header : Merged)
+          if (Header.sh_type == SHT_DYNSYM || Header.sh_type == SHT_DYNAMIC ||
+              ((Header.sh_flags & SHF_ALLOC) &&
+               (Header.sh_type == SHT_REL || Header.sh_type == SHT_RELA ||
+                Header.sh_type == SHT_RELR ||
+                Header.sh_type == SHT_ANDROID_REL ||
+                Header.sh_type == SHT_ANDROID_RELA)))
+            Header = {};
+        const auto Base = Merged.size();
+        for (auto Header : Reconstructed.Headers) {
+          Header.sh_name = Header.sh_name + ShStrTab.size();
+          if (Header.sh_link)
+            Header.sh_link = Header.sh_link + Base;
+          Merged.push_back(Header);
+        }
+        Reconstructed.Headers = std::move(Merged);
+        Reconstructed.Names = ShStrTab.str() + Reconstructed.Names;
+      }
+    }
     Tables = Reconstructed.Headers;
     TableNames = Reconstructed.Names;
   }
@@ -224,6 +276,10 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
   Progress.check();
   // --- .rela.plt / .rel.plt imports ---
   elf_loader::parsePLTImports(ELF, Tables, TableNames, Data, Size, Img);
+  if (isMIPS(Img.Arch))
+    if (auto Error =
+            elf_loader::detail::collectMIPSDynamicGOT(ELF, Tables, Img))
+      return Error;
 
   Progress.check();
   // --- Loader-invoked lifecycle arrays and legacy constructor sections ---
@@ -323,8 +379,9 @@ ELFLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
     return llvm::make_error<llvm::StringError>("elf: bad magic",
                                                llvm::inconvertibleErrorCode());
 
-  if (Data[llvm::ELF::EI_DATA] != llvm::ELF::ELFDATA2LSB)
-    return llvm::make_error<llvm::StringError>("elf: big-endian not supported",
+  if (Data[llvm::ELF::EI_DATA] != llvm::ELF::ELFDATA2LSB &&
+      Data[llvm::ELF::EI_DATA] != llvm::ELF::ELFDATA2MSB)
+    return llvm::make_error<llvm::StringError>("elf: invalid byte order",
                                                llvm::inconvertibleErrorCode());
 
   Progress.report("parse", 0, 1, "ELF tables");
@@ -347,6 +404,10 @@ ELFLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
     if (auto *ELF64 = llvm::dyn_cast<llvm::object::ELF64LEObjectFile>(Obj))
       return loadELF(*ELF64, Img, Progress);
     if (auto *ELF32 = llvm::dyn_cast<llvm::object::ELF32LEObjectFile>(Obj))
+      return loadELF(*ELF32, Img, Progress);
+    if (auto *ELF64 = llvm::dyn_cast<llvm::object::ELF64BEObjectFile>(Obj))
+      return loadELF(*ELF64, Img, Progress);
+    if (auto *ELF32 = llvm::dyn_cast<llvm::object::ELF32BEObjectFile>(Obj))
       return loadELF(*ELF32, Img, Progress);
     return llvm::make_error<llvm::StringError>("elf: unsupported ELF class",
                                                llvm::inconvertibleErrorCode());
@@ -445,8 +506,8 @@ void ELFLoader::identify(llvm::MemoryBufferRef Buffer,
           .str();
   // The checks load() makes, in its order.
   bool SupportedSBF = false;
-  if (Bytes[EI_DATA] != ELFDATA2LSB) {
-    Row.Reason = getLoadReasonText(LoadReason::BigEndian).str();
+  if (Bytes[EI_DATA] != ELFDATA2LSB && Bytes[EI_DATA] != ELFDATA2MSB) {
+    Row.Reason = "elf: invalid byte order";
   } else if (isSBFELF(Bytes, SupportedSBF)) {
     Row.TheArch = Arch::SBF;
     Row.Loadable = SupportedSBF;
@@ -462,7 +523,15 @@ void ELFLoader::identify(llvm::MemoryBufferRef Buffer,
   } else {
     Row.TheArch = tripleToArch((*Obj)->getArch());
     Row.Loadable = Row.TheArch != Arch::Unknown;
-    if (!Row.Loadable)
+    if (isMIPS(Row.TheArch)) {
+      if (auto Profile = elf_loader::readMIPSProfile(**Obj); !Profile) {
+        Row.Loadable = false;
+        Row.Reason = llvm::toString(Profile.takeError());
+      }
+    } else if (Row.BigEndian) {
+      Row.Loadable = false;
+      Row.Reason = getLoadReasonText(LoadReason::BigEndian).str();
+    } else if (!Row.Loadable)
       Row.Reason =
           llvm::formatv(getLoadReasonText(LoadReason::Processor).data(),
                         MachineName)

@@ -5225,6 +5225,9 @@ void MainWindow::setType() {
   if (name.isEmpty())
     name = displayAddress(*function);
   const auto epoch = session_.epoch();
+  // What the dialog states, a replica renders: it starts on it as the user
+  // types.
+  session_.prepareFunctionRead(*function);
   SetTypeDialog dialog(session_, *function, parameter, name, commandWindow(),
                        variable);
   const bool accepted = dialog.exec() == QDialog::Accepted;

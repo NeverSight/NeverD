@@ -90,6 +90,8 @@ public:
   /// earlier sessions kept without one.
   bool analysisReplicaStarted() const { return analysis_.replicaStarted(); }
   bool analysisReplicaReady() const { return analysis_.replicaReady(); }
+  /// An edit the user is making will have a replica render \p address.
+  void prepareFunctionRead(quint64 address) { analysis_.prepareRead(address); }
   QueryService &analysisQueries(const QJsonObject &payload, QObject *owner) {
     return analysis_.queries(payload, owner);
   }

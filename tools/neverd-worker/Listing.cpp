@@ -5283,6 +5283,7 @@ bool Listing::dataRenamed(std::uint64_t address, const std::string &name) {
   }
   d.cache.invalidate();
   const auto previous = d.generation++;
+  ++d.functionNameGenerations;
   if (shown == d.dataNames.end()) {
     for (auto *bounds : {&d.namedData, &d.dataBounds}) {
       const auto at = std::lower_bound(bounds->begin(), bounds->end(), address);

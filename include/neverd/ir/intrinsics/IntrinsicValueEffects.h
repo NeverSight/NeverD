@@ -15,6 +15,16 @@
 
 namespace neverd {
 
+/// Whether Id only checks a condition and faults where it fails: alignment,
+/// a division's divisor and quotient, BOUND's range and INTO's overflow.
+/// It writes no register
+/// and no memory.
+constexpr bool onlyChecksForAFault(Intrinsic Id) {
+  return Id == Intrinsic::RequireAligned ||
+         Id == Intrinsic::X86RequireDivPrecondition || Id == Intrinsic::Bound ||
+         Id == Intrinsic::Into;
+}
+
 /// Positive contracts for intrinsic operations whose complete effects are
 /// explicit input/output values. This is stronger than isSideeffectIntrinsic:
 /// a removable read-only memory operation still observes its address operand.

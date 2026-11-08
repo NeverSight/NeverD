@@ -1,5 +1,6 @@
 add_neverd_component_library(NeverDDecode
   Decoder.cpp
+  DecoderExecutionUnit.cpp
   NativeOperands.cpp
   InstructionRelocations.cpp
 

@@ -185,7 +185,8 @@ void recordRuntimePointerArray(va_t Addr, uint64_t Size, std::vector<va_t> &Out,
     const uint8_t *P = Img.readVA(Addr + I * PtrSize, PtrSize);
     if (!P)
       break;
-    va_t Target = static_cast<va_t>(readPtr(P, Img.is64Bit()));
+    va_t Target = static_cast<va_t>(
+        readPtr(P, Img.is64Bit(), archLittleEndian(Img.Arch)));
     if (Target == 0)
       continue;
     recordARMCodePointerMode(Img, Target, ARMCodePointerUse::Called);
@@ -247,7 +248,8 @@ bool recordIRelativeResolver(uint32_t RelocType, va_t Slot,
     const uint8_t *P = Img.readVA(Slot, Img.getPointerSize());
     if (!P)
       return false;
-    Resolver = static_cast<va_t>(readPtr(P, Img.is64Bit()));
+    Resolver = static_cast<va_t>(
+        readPtr(P, Img.is64Bit(), archLittleEndian(Img.Arch)));
   }
   return Img.recordRuntimeFunction(normalizeELFFunctionAddress(Resolver, Img));
 }
@@ -448,14 +450,14 @@ void parsePLTImports(const llvm::object::ELFFile<ELFT> &ELF,
     if (HasAddend) {
       Elf_Rela Rela;
       std::memcpy(&Rela, Data + ROff, sizeof(Rela));
-      SymIdx = Rela.getSymbol(false);
-      Type = Rela.getType(false);
+      SymIdx = Rela.getSymbol(ELF.isMips64EL());
+      Type = Rela.getType(ELF.isMips64EL());
       Offset = Rela.r_offset;
     } else {
       Elf_Rel Rel;
       std::memcpy(&Rel, Data + ROff, sizeof(Rel));
-      SymIdx = Rel.getSymbol(false);
-      Type = Rel.getType(false);
+      SymIdx = Rel.getSymbol(ELF.isMips64EL());
+      Type = Rel.getType(ELF.isMips64EL());
       Offset = Rel.r_offset;
     }
 
@@ -555,7 +557,10 @@ void parseNotes(const llvm::object::ELFFile<ELFT> &ELF, const uint8_t *Data,
     const uint8_t *P = Data + PH.p_offset;
     const uint8_t *End = P + PH.p_filesz;
     while (static_cast<size_t>(End - P) >= sizeof(ELFNoteHeader)) {
-      auto NH = readELFNoteHeader(P);
+      const ELFNoteHeader NH{
+          llvm::support::endian::read32<ELFT::Endianness>(P),
+          llvm::support::endian::read32<ELFT::Endianness>(P + 4),
+          llvm::support::endian::read32<ELFT::Endianness>(P + 8)};
 
       uint64_t NameAlign = elfNoteAlign(NH.NameSz);
       uint64_t DescAlign = elfNoteAlign(NH.DescSz);
@@ -583,9 +588,8 @@ void parseNotes(const llvm::object::ELFFile<ELFT> &ELF, const uint8_t *Data,
           NH.DescSz == 4 * sizeof(uint32_t) && Img.ELFMetadata) {
         const uint8_t *Desc =
             P + sizeof(ELFNoteHeader) + static_cast<size_t>(NameAlign);
-        const uint32_t System = uint32_t(Desc[0]) | uint32_t(Desc[1]) << 8 |
-                                uint32_t(Desc[2]) << 16 |
-                                uint32_t(Desc[3]) << 24;
+        const uint32_t System =
+            llvm::support::endian::read32<ELFT::Endianness>(Desc);
         auto &Metadata = *Img.ELFMetadata;
         Metadata.ConflictingGNUABISystems |=
             Metadata.GNUABISystem && *Metadata.GNUABISystem != System;
@@ -626,35 +630,75 @@ template void parseDynamic<llvm::object::ELF32LE>(
     llvm::ArrayRef<llvm::object::ELF32LE::Shdr>,
     const llvm::object::ELF32LE::Shdr &, const uint8_t *, size_t,
     BinaryImage &);
+
+template void parseDynamic<llvm::object::ELF32BE>(
+    const llvm::object::ELFFile<llvm::object::ELF32BE> &,
+    llvm::ArrayRef<llvm::object::ELF32BE::Shdr>,
+    const llvm::object::ELF32BE::Shdr &, const uint8_t *, size_t,
+    BinaryImage &);
 template void parseDynamic<llvm::object::ELF64LE>(
     const llvm::object::ELFFile<llvm::object::ELF64LE> &,
     llvm::ArrayRef<llvm::object::ELF64LE::Shdr>,
     const llvm::object::ELF64LE::Shdr &, const uint8_t *, size_t,
     BinaryImage &);
 
+template void parseDynamic<llvm::object::ELF64BE>(
+    const llvm::object::ELFFile<llvm::object::ELF64BE> &,
+    llvm::ArrayRef<llvm::object::ELF64BE::Shdr>,
+    const llvm::object::ELF64BE::Shdr &, const uint8_t *, size_t,
+    BinaryImage &);
+
 template void parsePLTImports<llvm::object::ELF32LE>(
     const llvm::object::ELFFile<llvm::object::ELF32LE> &,
     llvm::ArrayRef<llvm::object::ELF32LE::Shdr>, llvm::StringRef,
+    const uint8_t *, size_t, BinaryImage &);
+
+template void parsePLTImports<llvm::object::ELF32BE>(
+    const llvm::object::ELFFile<llvm::object::ELF32BE> &,
+    llvm::ArrayRef<llvm::object::ELF32BE::Shdr>, llvm::StringRef,
     const uint8_t *, size_t, BinaryImage &);
 template void parsePLTImports<llvm::object::ELF64LE>(
     const llvm::object::ELFFile<llvm::object::ELF64LE> &,
     llvm::ArrayRef<llvm::object::ELF64LE::Shdr>, llvm::StringRef,
     const uint8_t *, size_t, BinaryImage &);
 
+template void parsePLTImports<llvm::object::ELF64BE>(
+    const llvm::object::ELFFile<llvm::object::ELF64BE> &,
+    llvm::ArrayRef<llvm::object::ELF64BE::Shdr>, llvm::StringRef,
+    const uint8_t *, size_t, BinaryImage &);
+
 template void parseGOTEntries<llvm::object::ELF32LE>(
     const llvm::object::ELFFile<llvm::object::ELF32LE> &,
     llvm::ArrayRef<llvm::object::ELF32LE::Shdr>, const uint8_t *, size_t,
+    BinaryImage &);
+
+template void parseGOTEntries<llvm::object::ELF32BE>(
+    const llvm::object::ELFFile<llvm::object::ELF32BE> &,
+    llvm::ArrayRef<llvm::object::ELF32BE::Shdr>, const uint8_t *, size_t,
     BinaryImage &);
 template void parseGOTEntries<llvm::object::ELF64LE>(
     const llvm::object::ELFFile<llvm::object::ELF64LE> &,
     llvm::ArrayRef<llvm::object::ELF64LE::Shdr>, const uint8_t *, size_t,
     BinaryImage &);
 
+template void parseGOTEntries<llvm::object::ELF64BE>(
+    const llvm::object::ELFFile<llvm::object::ELF64BE> &,
+    llvm::ArrayRef<llvm::object::ELF64BE::Shdr>, const uint8_t *, size_t,
+    BinaryImage &);
+
 template void parseNotes<llvm::object::ELF32LE>(
     const llvm::object::ELFFile<llvm::object::ELF32LE> &, const uint8_t *,
     size_t, BinaryImage &);
+
+template void parseNotes<llvm::object::ELF32BE>(
+    const llvm::object::ELFFile<llvm::object::ELF32BE> &, const uint8_t *,
+    size_t, BinaryImage &);
 template void parseNotes<llvm::object::ELF64LE>(
     const llvm::object::ELFFile<llvm::object::ELF64LE> &, const uint8_t *,
+    size_t, BinaryImage &);
+
+template void parseNotes<llvm::object::ELF64BE>(
+    const llvm::object::ELFFile<llvm::object::ELF64BE> &, const uint8_t *,
     size_t, BinaryImage &);
 
 } // namespace elf_loader

@@ -1,13 +1,16 @@
 #pragma once
+#include "CodeEdits.h"
 #include "DeferredRelease.h"
 #include "Protocol.h"
 #include "RenderStore.h"
 #include "ResourceLimits.h"
 
 #include "neverd/sdk/NeverDCAPISession.h"
+#include "neverd/support/ProjectFiles.h"
 
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <list>
@@ -158,7 +161,13 @@ private:
   /// A read-only replica is checked against the owner's loaded input and
   /// committed sidecars before any expensive operation is admitted.
   Json analysisSnapshot();
+  /// analysisSnapshot, stating \p state of the user's facts.
+  Json analysisSnapshot(Json state);
   Json browseCacheIdentity();
+  /// \p identity, a snapshot, with what else says what a cached page read: the
+  /// project's files but for \p unread.
+  Json browseCacheIdentity(Json identity,
+                           const std::vector<project_files::File> &unread);
   Json restoreAnalysis(const Json &snapshot);
   Json updateAnalysisNames(const Json &snapshot);
   Json restoredSnapshot_;
@@ -345,6 +354,41 @@ private:
   /// the view's.  Taking a name away from one (\p unnamed) changes what the
   /// listing shows it as, and the others are read as a view is decorated.
   void functionNamesChanged(bool unnamed);
+  /// Before an edit that keeps views: what an earlier one left for the next
+  /// view to forget goes now, and namedViewsTakeRevision answers for this edit
+  /// alone.
+  void settleNamedViews();
+  /// An edit at \p address, with \p names it took and gave up, reached the
+  /// views that read it, and no other.  With \p pagesStale such a document
+  /// goes, as its engine pages spell what changed; otherwise it builds again
+  /// from them. Each document reads this as it is next asked for
+  /// (readViewEdits).
+  void keepNamedViewsThrough(std::uint64_t address,
+                             std::vector<std::string> names, bool pagesStale);
+  struct ViewEdit {
+    std::uint64_t address;
+    std::vector<std::string> names;
+    bool pagesStale;
+  };
+  std::deque<ViewEdit> viewEdits_;
+  std::uint64_t viewEditCount_ = 0;
+  void readViewEdits(const std::string &sourceKey);
+  /// What views keep stands through the revision an edit moved to, and with
+  /// \p storesStand so do the stores open: nothing the edit changed is read
+  /// into what they are kept under.
+  void namedViewsTakeRevision(bool storesStand);
+  std::uint64_t cacheGenerationBefore_ = 0;
+  void forgetGraphsAndText();
+  /// What the render a view replays read, in the form neverd_user_reads wrote.
+  std::string keptReads_;
+  /// A document replaying pages reads what the render they came from read, and
+  /// what its decoration looked up.
+  struct NamedView;
+  void noteRenderReads(NamedView &document) const;
+  void noteDecorationReads(NamedView &document, const Json &view,
+                           std::uint64_t function) const;
+  /// Starts at one so that documents never hold a key from before a forget.
+  std::uint64_t namedViewsEpoch_ = 1;
   /// open.write_behind: an edit's reply need not wait for its write.
   bool writeBehind_ = false;
   void persistEdit(ProjectHistory &store, Json state);
@@ -360,9 +404,12 @@ private:
   bool keptPageReadsCurrentNames(const Json &page) const;
   /// The session's renames as neverd_renames_json lists them, read once for all
   /// a revision's views: a project can hold thousands.
-  const Json &renameRows() const;
-  mutable Json renameRows_;
-  mutable std::optional<std::uint64_t> renameRowsRevision_;
+  /// The image's names and comments, read once for each revision that does not
+  /// take them in place (namedViewsTakeRevision).
+  const CodeEdits::ImageFacts &imageFacts() const;
+  mutable CodeEdits::ImageFacts imageFacts_;
+  mutable std::optional<std::uint64_t> imageFactsRevision_;
+  bool imageFactsHeld_ = false;
   /// States the names of \p view's functions as they are named now.
   void currentNamesInView(Json &view) const;
   /// When the last request was answered.
@@ -424,6 +471,16 @@ private:
     std::string engineRepresentation;
     Json value;
     std::vector<std::size_t> lines;
+    /// Every address an edit of which reaches this document, sorted, where they
+    /// are known: its render's reads and what its decoration looked up.
+    std::vector<std::uint64_t> reads;
+    bool readsKnown = false;
+    /// Of the edits views have kept through, how many it has read.
+    mutable std::uint64_t viewEditsRead = 0;
+    /// Hashes of the identifiers its text spells, sorted, once an edit's names
+    /// are first looked for in it.
+    mutable std::vector<std::uint64_t> spelled;
+    mutable bool spelledRead = false;
     // Decide once after decoration. Older engines may return unsorted rows
     // or overlapping name spans; those retain their original order while
     // filtering cached numeric bounds.
@@ -459,6 +516,8 @@ private:
   void unindexNamedView(NamedViewPosition position);
   std::size_t namedViewBytes_ = 0, encodedPageBytes_ = 0;
   std::uint64_t namedViewsRevision_ = 0, namedViewsListingGeneration_ = 0;
+  /// The listing's whole generation documents were decorated under.
+  std::uint64_t namedViewsGeneration_ = 0;
   /// Revisions that changed local display names alone, which drop nothing the
   /// engine prepared (localNamesChanged).
   std::uint64_t localNameRevisions_ = 0;

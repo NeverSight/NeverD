@@ -1,6 +1,6 @@
 **Idiomas**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: e1b18ca385ee2c0da797d70ea8b6d1d166393d196100096863a20662b72d11db -->
+<!-- i18n-source: 064a675b88d7887beb6eb1c62907468231caafde8b4f397b3f3ad6cb75e9c8bd -->
 
 [← Proyecto NeverD](project.md)
 
@@ -24,6 +24,7 @@ Las guías en inglés se encuentran directamente en `docs/`. Las traducciones se
 | [Perfil de extracción ASAR (inglés)](../web-asar-profile.md) | Asociación de capturas internas y externas, estados de integridad, consumidores de miembros y dependencia Unicode nativa |
 | [Perfil de evidencia Electron (inglés)](../web-electron-profile.md) | Rutas de entrada capturadas, alcance de manifiestos y fuentes, evidencia de ventanas y puentes, canales IPC candidatos |
 | [Perfil de fuentes HTML (inglés)](../web-html-profile.md) | Inventario acotado de scripts en C++, referencias locales capturadas y anclas originales de fuentes en línea |
+| [Análisis MIPS (inglés)](../mips.md) | Perfiles ELF MIPS32/64, ranuras de retardo, ABI entero, validación y ejemplo de firmware TP-Link |
 | [Pruebas](testing.md) | Suites, fixtures generadas, recorridos Unicorn y comandos incrementales |
 | [Banco de trabajo de escritorio (inglés)](../gui.md) | Disposición de desensamblador clásico, worker separado, bases de datos de proyecto, localización y conexiones MCP |
 | [Secciones de la imagen de análisis (inglés)](../analysis-sections.md) | Añadir código y datos materializados mediante la ABI C, el worker, la CLI y el entorno de trabajo; vistas nativas y persistencia del proyecto |

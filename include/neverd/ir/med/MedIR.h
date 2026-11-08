@@ -208,6 +208,10 @@ struct MedOp {
     DisplacedFramePointer,
     /// ESP restored into a suspended catch invocation by a nested catchret.
     RestoredCallbackStackPointer,
+    /// Runtime EBP where the decompile view read the function's prologue to put
+    /// it: RegistrationStackOffset is its distance from the entry stack
+    /// pointer.
+    DisplayFramePointer,
   };
   NdOp Opcode = NdOp::NOP;
   NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None;
@@ -362,6 +366,8 @@ enum class CallingConv : uint8_t {
   CDECL,
   ARM_AAPCS,
   Unknown,
+  MIPS_O32,
+  MIPS_N64,
 };
 
 struct MedBlock {

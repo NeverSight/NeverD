@@ -1,0 +1,896 @@
+{
+  "schema": "neverd-arm64e-copy-result-abi-v1",
+  "overall_arm64e_complete": false,
+  "scope": "Original x8 storage for supplied Darwin AArch64 call prototypes, shared LLVM/HighC/LLVMC call transport, and independently certified logical-copy pointers in fixed and variadic stack slots. This is not automatic complete prototype recovery or complete arm64e qualification.",
+  "initial_base_revision": "6b46d7db11742ce6cc1d8b4ce1f6d26aadfe932a",
+  "integrated_dev_revision": "09b639acc8c48038c3d04e456ee7be81abd310bd",
+  "owner_and_sdk_tested_revision": "5573f2a6d5095399a5286b7de942eea3dc87fdc4",
+  "model_producer_revision": "a4896e1303fdae70bf8a8ffc27621af92817e65b",
+  "environment_repository": "https://github.com/gmh5225/test_mac_intel",
+  "environment_revision": "9eb04cd261e6cf35347866665557775eee495712",
+  "environment_pr": "https://github.com/gmh5225/test_mac_intel/pull/3",
+  "changes": [
+    "Retain the original pre-call x8 input through LowIR, ABI recovery, source pointer-use analysis, LLVM and both C projections. Keep parameter/result aliases and writes observable during the call; do not copy a logical result back afterward.",
+    "Share packet layout, assembly and clobbers in AArch64SourceResultCall.def. Raw BLR and IA/IB authenticated calls preserve their original target and modifier. Only named compiler code addresses are stripped before raw calls.",
+    "Use the natural-record PCS classifier for indirect results, including mixed and five-member homogeneous records, without sret/byval/noalias/nonnull/alignment/dereferenceability promises on original storage.",
+    "Force a compiler frame, retain its SP in a callee-saved register, reserve aligned outgoing arguments plus the Darwin red zone, and mark assembly as potentially unwinding. C output requires AArch64 Clang with -fexceptions.",
+    "Prove complete stack-carried copy-pointer bytes, actual type alignment, initialized private storage, nonoverlap and post-consumption lifetime. Retain taint on unrelated pointer spills; share the same decisions with native-state preservation queries.",
+    "Use the existing private-frame read proof during every HighIR DCE phase. Re-run private-store cleanup after final liveness changes so unobserved initializers do not retain unrelocatable image addresses. Unknown memory observers and escapes still refuse cleanup."
+  ],
+  "primary_contracts": [
+    "https://github.com/ARM-software/abi-aa/blob/main/aapcs64/aapcs64.rst#69-result-return",
+    "https://developer.apple.com/documentation/xcode/writing-arm64-code-for-apple-platforms",
+    "https://llvm.org/docs/LangRef.html#inline-assembler-expressions",
+    "https://llvm.org/docs/PointerAuth.html"
+  ],
+  "toolchain": {
+    "configuration": "Release",
+    "llvm_package": "neverd-llvm-v23.0.0-r6",
+    "llvm_source_patches_or_overlays": false,
+    "source_compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)\nTarget: arm64-apple-darwin24.6.0\nThread model: posix\nInstalledDir: /Library/Developer/CommandLineTools/usr/bin",
+    "build_receipt_sha256": "9b1f02eb62fde3f455352174caf633ad87919fcf80a621856e85e553620b7e75",
+    "build_status": "success",
+    "build_options": [
+      "--target",
+      "NeverDSourceCallABITests",
+      "NeverDAArch64AuthenticatedCallTests",
+      "NeverDSourceEntryBindingTests",
+      "NeverDArm64eAnalysisTests",
+      "NeverDLLVMCValueTests",
+      "NeverDObjCSourceCallTests",
+      "NeverDAAPCS64CallContractTests",
+      "NeverDIntegerCallArgumentsTests",
+      "NeverDMedPrologueSavesTests",
+      "NeverDHighControlFlowTests",
+      "NeverDTypesTests",
+      "NeverDCPointerProjectionTests",
+      "neverd_shared",
+      "--parallel",
+      "4"
+    ],
+    "capstone_revision": "b8c22e0c16b1769dfa712547d4a5c5d49560ae46",
+    "freestanding_export_flags": [
+      "-ffreestanding",
+      "-fexceptions",
+      "-fno-stack-protector"
+    ],
+    "freestanding_export_contract": "The controlled guest has no Darwin stack-check runtime. Strict extraction rejects text relocations without editing instructions. Public SDK native C executions independently use normal host compiler defaults."
+  },
+  "validation": {
+    "owner_regressions": {
+      "tests": 4892,
+      "passed": 4815,
+      "skipped": [
+        "HeaderLibrary.OptionalUCRTExportsKeepFloatingVarargAndCallbackContracts",
+        "HeaderLibrary.OptionalUCRTTerminationNeedsItsDeclarationContext",
+        "HeaderLibrary.OptionalUCRTStreamsKeepTheirOwnOpaqueRecord",
+        "PDBTypeImportKernel.RebuildsTheKernelTypes",
+        "TypeParseKernel.ReadsBackEveryKernelTypeAsRendered",
+        "HighCPointerAddresses.AtomicFetchAddComposesIntoCompare",
+        "HighCPointerAddresses.CorpusFuncLoadCxxEhProbePrintsThrow",
+        "HighCPointerAddresses.CorpusBufferedCatchUsesParentFrameForIndex",
+        "HighCPointerAddresses.CorpusSehIndexedBufferUsesSameFrame",
+        "HighCPointerAddresses.CorpusFuncLoadGsCookieReturnsOnTheValidPath",
+        "HighCPointerAddresses.CorpusFuncLoadGsHandlerCheckReturnsOne",
+        "HighCPointerAddresses.CorpusCalleeSavesAreNotStoresOfLaterArguments",
+        "HighCPointerAddresses.CorpusFuncLoadCxxEhProbeCatchReturnsValue",
+        "HighCPointerAddresses.CorpusFuncLoadCxxEhProbeNestedCatchReturnsValues",
+        "HighCPointerAddresses.CorpusFuncLoadCxxEhProbePrintsUnwindDestructor",
+        "HighCPointerAddresses.CorpusArmPredicatedBranchesStayForwardJumps",
+        "HighCPointerAddresses.CorpusFuncLoadSehProbeRaisesImmediate",
+        "HighCPointerAddresses.FuncLoadUsesDebugFunctionNameOnSynthesizedEntry",
+        "HighCPointerAddresses.CorpusFuncLoadX86FilterThunksPrintTheirValue",
+        "HighCPointerAddresses.CorpusFuncLoadX86SehProbeExceptAssignsResult",
+        "HighCPointerAddresses.CorpusRustFormatKeepsTheEntryStackPointer",
+        "HighCPointerAddresses.MemoryExchangePreservesTypedPointerMemberBits",
+        "HighCPointerAddresses.MemoryExchangeReturnsItsSnapshotThroughBothRoutes",
+        "HighCPointerAddresses.MemoryAdditionReturnsItsSnapshotThroughBothRoutes",
+        "HighCPointerAddresses.DirectionFlagIsClearOnEntry",
+        "HighCPointerAddresses.FlatRepeatedFillsAndCopiesRetainMachineCompletion",
+        "HighCPointerAddresses.AnX87ValueRoundsToTheDoubleItIsStoredAs",
+        "HighCPointerAddresses.X87ArithmeticComputesInLongDouble",
+        "HighCPointerAddresses.AnX87StoreWritesItsTenBytes",
+        "HighCPointerAddresses.AScalarFloatArgumentIsADoubleParameter",
+        "HighCPointerAddresses.AnIntegerConvertedIntoXMM0IsNoParameter",
+        "HighCPointerAddresses.RecordsNamedLikeFunctionsAreSpelledByTheirTags",
+        "HighCPointerAddresses.TrapsUseTheBuiltinsTheirHeadersDeclare",
+        "HighCPointerAddresses.GnuToolchainsReadCpuidThroughCpuidH",
+        "HighCPointerAddresses.GnuLibrariesHeadersDeclareTheirExtensions",
+        "HighCPointerAddresses.UnderscoredHeaderRoutinesTakeTheirStreams",
+        "HighCPointerAddresses.GnuProgramObjectsAreTheHeaders",
+        "HighCPointerAddresses.LargeFileComparatorsTakeTheirOwnRecords",
+        "HighCPointerAddresses.AlignedAccessesInRelocatedWordsKeepTheirResidue",
+        "HighCPointerAddresses.HeaderRecordsNamedLikeTheirFunctionsKeepTags",
+        "HighCPointerAddresses.AlignedReadsOfAStringAlignItsArray",
+        "LLVMCPointerAddresses.CorpusCalleeSavesStayOutOfTheFrame",
+        "LLVMCPointerAddresses.CorpusFuncLoadGsCookieDoesNotLoadNull",
+        "LLVMCPointerAddresses.CorpusFuncLoadSehProbeHasSingleWin64Arg",
+        "LLVMCPointerAddresses.CorpusFuncLoadSehProbeLlvmcExceptContainsHandler",
+        "LLVMCPointerAddresses.CorpusOptimizedSehResultIsAssignedOnBothPaths",
+        "LLVMCPointerAddresses.CorpusSehProbeCliLlvmcKeepsProtectedEffects",
+        "LLVMCPointerAddresses.CorpusFuncLoadGsWrappedSehLlvmcNestsHandlerBodies",
+        "LLVMCPointerAddresses.CorpusFuncLoadCxxEhProbeCatchContinuationEmits",
+        "LLVMCPointerAddresses.CorpusFuncLoadCxxEhProbeLlvmOptIsVerifierClean",
+        "LLVMCPointerAddresses.CorpusFuncLoadSehProbeLlvmOptIsVerifierClean",
+        "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+        "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+        "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+        "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+        "A64FastClassifyParity.OptionalRealBinaryWalk",
+        "LLVMCValues.PrefetchKeepsComputedAndSegmentedMemoryOperands",
+        "LLVMCValues.NativeSHA256KeepsVectorInputsAndInstructionFeatures",
+        "LLVMCValues.SHAFeaturesComposeWithNativeInstructionFallbacks",
+        "LLVMCValues.RtmFeaturesComposeWithShaAcrossNativeAndAssemblyCalls",
+        "LLVMCValues.NativeVirtualizationKeepsStatusAndFailedReadPrior",
+        "LLVMCValues.NativeDescriptorReadKeepsExplicitPrior",
+        "LLVMCValues.NativeDescriptorAddressesKeepSegmentWidthAndPrior",
+        "LLVMCValues.TargetIndexWidthKeepsNegativeFrameOffsets",
+        "LLVMCValues.X87MemoryViewsRetainBitsAndTenByteExtents",
+        "LLVMCValues.X87FiniteConstantsKeepExtendedPrecisionAndRange",
+        "LLVMCValues.X86NativeDivideKeepsBothResultsAndDeadResultFaults",
+        "LLVMCValues.X86BitStringIntrinsicsMatchOriginalMemoryAndFaults",
+        "LLVMCValues.X86DivideIntrinsicsMatchOriginalResultsAndFaults",
+        "LLVMCValues.NativeAssemblyKeepsOperandSnapshotsAcrossBranches",
+        "LLVMCValues.I386WideCarriersRetainWrappingShiftsAndSignedComparison",
+        "LLVMCValues.WideIntegerConstantsPreserveEveryWordAndStoreExtent",
+        "LLVMCValues.WideConstantsPreserveEveryStoredByte",
+        "LLVMCValues.AWeakImportIsDeclaredWeak",
+        "LLVMCValues.SelectedFunctionKeeps32BitSynthesizedTableStorage",
+        "LLVMCValues.VariadicCallSiteKeepsWindowsFloatingRegisterDuplicates",
+        "LLVMCValues.AFixedCallSiteKeepsItsOwnCallingConvention"
+      ],
+      "failures": 0,
+      "selection": "Actual rebuilt executable paths from complete CTest JSON inventory, selected by test indices; not labels alone.",
+      "instances_per_executable": {
+        "NeverDSourceCallABITests": 26,
+        "NeverDTypesTests": 196,
+        "NeverDObjCSourceCallTests": 1915,
+        "NeverDIntegerCallArgumentsTests": 13,
+        "NeverDAAPCS64CallContractTests": 29,
+        "NeverDSourceEntryBindingTests": 547,
+        "NeverDHighControlFlowTests": 537,
+        "NeverDCPointerProjectionTests": 879,
+        "NeverDArm64eAnalysisTests": 408,
+        "NeverDLLVMCValueTests": 153,
+        "NeverDMedPrologueSavesTests": 117,
+        "NeverDAArch64AuthenticatedCallTests": 72
+      },
+      "final_qualification": {
+        "tests": 4892,
+        "passed": 4815,
+        "failures": 0,
+        "initial_failures": [
+          "AArch64ImmediateMemory.ImageContextPreservesEveryRuntimeParameterAccess",
+          "AArch64PairMemory.OwnedImagesValidateBothAccessesAndReturnedBases"
+        ],
+        "serial_timeout_resolution": {
+          "status": 0,
+          "tests": 2,
+          "test_indices": [
+            16048,
+            16084
+          ],
+          "parallel": 1,
+          "timeout_override": false,
+          "passed": 2,
+          "junit_sha256": "f414439fe2353b2398fddf974651840090cce3cbf825e239874e90a8a3427681",
+          "log_sha256": "a262d14f419db6f44c55d197cdbe001b2c051180e105151055a3aede31f094fb"
+        },
+        "note": "Initial phase reports remain unchanged. Only timed-out cases are rerun serially, with their existing CTest limits; repetitions do not increase the qualified instance count."
+      },
+      "skip_reason_counts": {
+        "This build has no local Microsoft UCRT provider": 3,
+        "NEVERD_TYPES_NTKRNLMP names no ntkrnlmp.pdb": 1,
+        "NEVERD_TYPES_NTKRNLMP is not set": 1,
+        "Native x64 memory operations require an x64 host": 3,
+        "<NeverD>/unittests/corpus/corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/cxx_eh_probe-msvc-x86_64-fh4-no-gs-o0.exe is missing": 7,
+        "<NeverD>/unittests/corpus/corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/seh_probe-msvc-x86_64-fh4-no-gs-o0.exe is missing": 8,
+        "<NeverD>/unittests/corpus/corpus/windows-eh/msvc/x86_64/fh4/gs/o0/abi-probe/seh_probe-msvc-x86_64-fh4-gs-o0.exe is missing": 3,
+        "<NeverD>/unittests/corpus/corpus/windows-eh/clang-cl/x86_64/fh3/gs/o0/abi-probe/cxx_eh_probe-clang-cl-x86_64-fh3-gs-o0.exe is missing": 2,
+        "<NeverD>/unittests/corpus/corpus/windows-eh/msvc/vs2019/arm/native/gs/o2/windows-seh-tests/xcpt4-msvc-arm-native-gs-o2.exe is missing": 1,
+        "<NeverD>/unittests/corpus/corpus/windows-eh/msvc/vs2019/x86/native/no-gs/o0/windows-seh-tests/xcpt4-msvc-x86-native-no-gs-o0.exe is missing": 1,
+        "<NeverD>/unittests/corpus/corpus/windows-eh/msvc/x86/native/no-gs/o0/abi-probe/seh_probe-msvc-x86-native-no-gs-o0.exe is missing": 1,
+        "<NeverD>/unittests/corpus/corpus/rust-eh/x86_64-unknown-linux-gnu/unwind/o0/bin/rust_eh_probe-x86_64-unknown-linux-gnu-unwind-o0 is missing": 1,
+        "Native x64 exchanges require an x64 host": 1,
+        "the generated x64 intrinsics require an x64 compiler host": 9,
+        "typed x87 execution requires x64 and an 80-bit long double": 2,
+        "the generated declarations require glibc headers": 6,
+        "<NeverD>/unittests/corpus/corpus/windows-eh/msvc/x86_64/fh4/gs/o2/abi-probe/seh_probe-msvc-x86_64-fh4-gs-o2.exe is missing": 1,
+        "The execution host does not report the required ordered-memory feature": 1,
+        "this host cannot execute arm64e with all four active pointer signing keys and generic signatures": 1,
+        "this host cannot execute arm64e PAuth_LR with active keys": 1,
+        "this host cannot execute PACM with active IA/IB keys and a second diversifier": 1,
+        "set NEVERD_PARITY_BIN to a raw arm64 code file to enable": 1,
+        "the prefetch instructions need an x86 host": 1,
+        "SHA-256 native oracle requires the host SHA feature": 1,
+        "the C retains x86 instructions; running it requires an x86 host": 2,
+        "requires the qualified native virtualization SDK": 1,
+        "requires native Linux x86-64 descriptor queries": 2,
+        "requires native Linux i386/x64 execution": 3,
+        "requires native Linux i386/x64 binary80 execution": 2,
+        "requires original Linux x64 bit-string instructions": 1,
+        "requires the original Linux x64 DIV/IDIV oracle": 1,
+        "32-bit scalar C execution requires Linux i386 support": 2,
+        "this Clang lacks the _BitInt width the C spells": 2,
+        "requires native ELF undefined-weak linkage": 1,
+        "Native Windows x64 ABI execution requires x64": 2
+      },
+      "phases": [
+        {
+          "phase": "fast",
+          "tests": 4771,
+          "status": 8,
+          "parallel": 4,
+          "passed": 4692,
+          "failures": [
+            "AArch64ImmediateMemory.ImageContextPreservesEveryRuntimeParameterAccess",
+            "AArch64PairMemory.OwnedImagesValidateBothAccessesAndReturnedBases"
+          ],
+          "skipped_count": 77
+        },
+        {
+          "phase": "serial",
+          "tests": 1,
+          "status": 0,
+          "parallel": 1,
+          "passed": 1,
+          "failures": [],
+          "skipped_count": 0
+        },
+        {
+          "phase": "incoming",
+          "tests": 55,
+          "status": 0,
+          "parallel": 2,
+          "passed": 55,
+          "failures": [],
+          "skipped_count": 0
+        },
+        {
+          "phase": "typed",
+          "tests": 65,
+          "status": 0,
+          "parallel": 4,
+          "passed": 65,
+          "failures": [],
+          "skipped_count": 0
+        }
+      ],
+      "junit_sha256": {
+        "fast.xml": "7a6bd64966908e60ce76f6623a2b15a7ee68e9b4a79f6046e5cbefbb1085b160",
+        "serial.xml": "1a770aab7e6482a361d83d0a8c156540928950d84e8e723ebe292818630452a8",
+        "incoming.xml": "61ed2df72ba7922fce011d68f7e5739f0ed6112c7b16357137acc93ed9358a8a",
+        "typed.xml": "d5ace43d7fbef216c44a8aabeda348af92e15b470c01bbcf023d058872f6a834"
+      },
+      "inventory_sha256": "a54adf3c79c544b39bb99dd40dddd1c7b6121f0860bb2da10b7e69b90e0f84f9",
+      "selection_sha256": "717ffd8bd29137404abb006ec401fcb7832dba85cef9605f989c47e3d234d924"
+    },
+    "public_sdk": {
+      "revision": "5573f2a6d5095399a5286b7de942eea3dc87fdc4",
+      "library_sha256": "7dbc9fd5005a6a955a056249cacdc1f9ffa71723396e88d4377db584aad09320",
+      "passed": true,
+      "source_projections": 82,
+      "arm64e_object_compilations": 164,
+      "native_arm64_executions": 180,
+      "native_ordinary_unwind_executions": 6,
+      "refusals": 14,
+      "summary_sha256": "639645454c770adaf582e0d50105f90e447454d58208eb11ebfefaef040e2a02",
+      "native_authenticated_control": "native-pac-control.json",
+      "signed_unwind_qualified": false,
+      "direct_named_result_target": "object compilation only; the native matrix covers indirect calls"
+    },
+    "environment_admission_tests": {
+      "tests": 43,
+      "failures": 0,
+      "log_sha256": "6ec4af6c4349f555e22c7c250205a1cac13d2794671d4242e239c0f1f1416813"
+    },
+    "format": {
+      "version": "22.1.2",
+      "status": "passed",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "remote_ci": {
+      "status": "unavailable",
+      "reason": "The selected GitHub connection changed or is unavailable. Reopen Code Review."
+    },
+    "baseline": {
+      "library_revision": "98711bca3aa368fab07b7a5ed55132c8e71dcb66",
+      "before_library_sha256": "84797d61f7fb0293670c772dd8d29b791c822f2f785a326bcb21d806558048a2",
+      "source_call_abi_hashes": {
+        "98711bca3aa368fab07b7a5ed55132c8e71dcb66": "1e09dfc64df6fd0a50e8c89d8a9be260a74ce0b4c377cbae1d7bbf4a9ed59575",
+        "6b46d7db11742ce6cc1d8b4ce1f6d26aadfe932a": "1e09dfc64df6fd0a50e8c89d8a9be260a74ce0b4c377cbae1d7bbf4a9ed59575"
+      },
+      "result": "The first new x8_alias SDK projection was refused: An indirect call result needs a complete storage ABI. This retained library was not rebuilt at the initial base."
+    },
+    "initial_failures": {
+      "library_sha256": "305813b0d809d618f829a53ba090ddbcd5f96993073313e875550e61bf32f24c",
+      "failures": [
+        "Codegen feature inference omitted PAC for the new result-storage assembly",
+        "Logical stack-pointer stores were rejected before reaching copy-argument validation",
+        "ABI recovery omitted the original x8 carrier and dropped the explicit LLVMC call contract; x8_alias LLVM-C O0 terminated with SIGBUS"
+      ],
+      "logs": [
+        "storage-initial.log",
+        "copies.log",
+        "sdk-initial.log"
+      ]
+    },
+    "export_contract_failures": {
+      "failures": [
+        {
+          "boundary": "strict Mach-O text extraction",
+          "cause": "Freestanding C export inherited Apple Clang stack-protector references to the Darwin runtime",
+          "change": "Use explicit -fno-stack-protector only for the freestanding result-storage unit export; keep the extractor strict and public SDK compilation defaults unchanged"
+        },
+        {
+          "boundary": "HighC unit fixture",
+          "cause": "The synthetic MedIR RETURN had a constant operand without an x0 definition, although AArch64 RETURN can carry a return address",
+          "change": "Add the real x0 COPY before RETURN and reject LLVM trap calls in all projected fixtures"
+        }
+      ],
+      "prior_native_model_guests_passed": 6,
+      "prior_full_matrix_passed": false,
+      "log": "model-export-contract-failure.log"
+    },
+    "shared_regression_resolution": {
+      "abi_expectations": "Five existing source ABI tests assumed only three signed words or six/sixteen doubles could use x8. Updated the valid natural-record cases while retaining malformed Swift/carrier/layout refusals. The 37-case focused aggregate rerun passes.",
+      "image_publication": "Two ImmutableNativeCalls.Generated* cases retained a private frame reload and its 0x3020 initializer after immutable target projection. Passing the function to all AssignmentEffects instances removed the dead read; final private-store cleanup then removed the dead initializer. Relocation validation was not weakened.",
+      "intermediate_failures_retained": [
+        "immutable-high-ir.log",
+        "immutable-fixed.log"
+      ],
+      "final_report_sha256": "7925fc30fe5448941d1f5af5d9130b2c350648908a393815ef563c082dbb73f8",
+      "final_passed": 2
+    },
+    "cancelled_mixed_owner_run": {
+      "result": "Cancelled; not a qualification run.",
+      "reason": "Duplicate CTest case names spread labels to 2273 stale NeverDLiftTests cases and 8 unbuilt NeverDSEHRuntimeMemoryTests cases. The final run uses actual rebuilt executable paths.",
+      "log_sha256": "246ec88772ba009771779474071c7c7f837d905cd6c1b78ee5f71f8e60398b0c"
+    },
+    "latest_dev_integration": {
+      "revision": "ad229f65eba7e855b44c25d63d347bd967fd76db",
+      "integrated_dev_revision": "64fabf148536754daf9d0ee06098bf4faa1a82bb",
+      "build_receipt_sha256": "0495734974d696abffc1ab8ceaa5a34c6a7bab0ff3881b7c3dad2f0bae8996ed",
+      "sdk": {
+        "library_sha256": "a0f22599bf6d672eb927c0f6f359b8eecdf126c23837c55213585f25a06d1cae",
+        "source_projections": 82,
+        "arm64e_object_compilations": 164,
+        "native_arm64_executions": 180,
+        "native_ordinary_unwind_executions": 6,
+        "refusals": 14,
+        "summary_sha256": "ffd2ac9e30d91fe51bab20a56a7550e47c4aaa29a9640caf9659edfc745db14d",
+        "active_native_pac_qualified": false,
+        "signed_unwind_qualified": false
+      },
+      "selection": {
+        "instances_per_executable": {
+          "NeverDSourceCallABITests": 26,
+          "NeverDTypesTests": 197,
+          "NeverDObjCSourceCallTests": 189,
+          "NeverDIntegerCallArgumentsTests": 13,
+          "NeverDAAPCS64CallContractTests": 29,
+          "NeverDHighControlFlowTests": 538,
+          "NeverDLLVMCValueTests": 153,
+          "NeverDMedPrologueSavesTests": 117,
+          "NeverDAArch64AuthenticatedCallTests": 72
+        },
+        "selection_sha256": "b79595b6a74c6ba0491537afe02d4c133e58d1f5b4a3c5206ea80985f48b19e4",
+        "inventory_sha256": "ae864c64536b1ef44ad77541881845c708f19b81584a04aaeafdd50bbde17d6f",
+        "method": "Actual executable owners, plus related source ABI/frame/immutable-image suites in the rebuilt ObjC source owner."
+      },
+      "phases": [
+        {
+          "phase": "fast",
+          "status": 0,
+          "tests": 1267,
+          "parallel": 2,
+          "timeout_override": false,
+          "passed": 1241,
+          "skipped": [
+            "HeaderLibrary.OptionalUCRTExportsKeepFloatingVarargAndCallbackContracts",
+            "HeaderLibrary.OptionalUCRTTerminationNeedsItsDeclarationContext",
+            "HeaderLibrary.OptionalUCRTStreamsKeepTheirOwnOpaqueRecord",
+            "PDBTypeImportKernel.RebuildsTheKernelTypes",
+            "TypeParseKernel.ReadsBackEveryKernelTypeAsRendered",
+            "LLVMCValues.PrefetchKeepsComputedAndSegmentedMemoryOperands",
+            "LLVMCValues.NativeSHA256KeepsVectorInputsAndInstructionFeatures",
+            "LLVMCValues.SHAFeaturesComposeWithNativeInstructionFallbacks",
+            "LLVMCValues.RtmFeaturesComposeWithShaAcrossNativeAndAssemblyCalls",
+            "LLVMCValues.NativeVirtualizationKeepsStatusAndFailedReadPrior",
+            "LLVMCValues.NativeDescriptorReadKeepsExplicitPrior",
+            "LLVMCValues.NativeDescriptorAddressesKeepSegmentWidthAndPrior",
+            "LLVMCValues.TargetIndexWidthKeepsNegativeFrameOffsets",
+            "LLVMCValues.X87MemoryViewsRetainBitsAndTenByteExtents",
+            "LLVMCValues.X87FiniteConstantsKeepExtendedPrecisionAndRange",
+            "LLVMCValues.X86NativeDivideKeepsBothResultsAndDeadResultFaults",
+            "LLVMCValues.X86BitStringIntrinsicsMatchOriginalMemoryAndFaults",
+            "LLVMCValues.X86DivideIntrinsicsMatchOriginalResultsAndFaults",
+            "LLVMCValues.NativeAssemblyKeepsOperandSnapshotsAcrossBranches",
+            "LLVMCValues.I386WideCarriersRetainWrappingShiftsAndSignedComparison",
+            "LLVMCValues.WideIntegerConstantsPreserveEveryWordAndStoreExtent",
+            "LLVMCValues.WideConstantsPreserveEveryStoredByte",
+            "LLVMCValues.AWeakImportIsDeclaredWeak",
+            "LLVMCValues.SelectedFunctionKeeps32BitSynthesizedTableStorage",
+            "LLVMCValues.VariadicCallSiteKeepsWindowsFloatingRegisterDuplicates",
+            "LLVMCValues.AFixedCallSiteKeepsItsOwnCallingConvention"
+          ],
+          "failed": [],
+          "junit_sha256": "3e9bb982c8f76da2ab4911f179260bd452c0b9bd671438b3a8f32a265708d72d"
+        },
+        {
+          "phase": "incoming",
+          "status": 0,
+          "tests": 2,
+          "parallel": 1,
+          "timeout_override": false,
+          "passed": 2,
+          "skipped": [],
+          "failed": [],
+          "junit_sha256": "81e7a65f0d51bdafb7e3151e7a84272397def1f6920eb356466510bd013740ed"
+        },
+        {
+          "phase": "typed",
+          "status": 0,
+          "tests": 65,
+          "parallel": 4,
+          "timeout_override": false,
+          "passed": 65,
+          "skipped": [],
+          "failed": [],
+          "junit_sha256": "fcc516dd9f3cf169cc6a92424cd5d5c7b62a756a77272a99627d20d2d50e0aa9"
+        }
+      ],
+      "object_equivalence": {
+        "original_x8": {
+          "exported_objects": 25,
+          "identical_objects": 25,
+          "differences": [],
+          "meaning": "Byte equivalence preserves earlier evidence and its limits; this is not a new model execution."
+        },
+        "earlier_typed_calls": {
+          "exported_objects": 1625,
+          "identical_objects": 1625,
+          "differences": [],
+          "meaning": "Byte equivalence preserves earlier evidence and its limits; this is not a new model execution."
+        }
+      },
+      "passed": true,
+      "qualified_tests": 1334,
+      "qualified_passes": 1308,
+      "qualified_skips": 26,
+      "qualification_sha256": "09d1ab1bea1cd7a6dac215335c92af81e8446681f23efe57bd008ab112a5aaae",
+      "reason": "A newer dev changed shared HighIR effect/demand analysis, type rendering and SDK view behavior. Rebuild the original targets, repeat the public SDK matrix, run affected source/frame/type/control-flow/call regressions, and regenerate model inputs. The earlier complete owner qualification is retained separately.",
+      "format": {
+        "version": "22.1.2",
+        "status": "passed",
+        "base": "64fabf148536754daf9d0ee06098bf4faa1a82bb",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "source_provenance": {
+        "passed": true,
+        "history_commits": 16,
+        "files": 11754,
+        "unit_tests_passed": 46,
+        "initial_inherited_findings": 8,
+        "normalization_commit": "1925b0941",
+        "normalization_scope": "Only eight identical compiler home-directory prefixes in the inherited x86 descriptor receipt. All other JSON values, commands, test results and artifact hashes are unchanged.",
+        "history_scope": "The adjacent provenance .def adds the exact file, publication/cleanup revisions and one line digest. Current files, other revisions and external policies remain checked.",
+        "log_sha256": "287d9804922fe7bc2d12c0f9c3037f8cec06536f737a4e832d3277ae5c5ebdcf",
+        "unit_log_sha256": "b91a0dbe8ffa2505f4291dbd1319726ea17264d416291d22f9befad586c6109f"
+      }
+    }
+  },
+  "native_pac_control": {
+    "independent_runs": [
+      {
+        "key": "a",
+        "bad_signature": false,
+        "optimization": "-O0",
+        "status": 77,
+        "stdout": "",
+        "signature_changed": false
+      },
+      {
+        "key": "a",
+        "bad_signature": false,
+        "optimization": "-O2",
+        "status": 77,
+        "stdout": "",
+        "signature_changed": false
+      },
+      {
+        "key": "a",
+        "bad_signature": true,
+        "optimization": "-O0",
+        "status": 77,
+        "stdout": "",
+        "signature_changed": false
+      },
+      {
+        "key": "a",
+        "bad_signature": true,
+        "optimization": "-O2",
+        "status": 77,
+        "stdout": "",
+        "signature_changed": false
+      },
+      {
+        "key": "b",
+        "bad_signature": false,
+        "optimization": "-O0",
+        "status": 77,
+        "stdout": "",
+        "signature_changed": false
+      },
+      {
+        "key": "b",
+        "bad_signature": false,
+        "optimization": "-O2",
+        "status": 77,
+        "stdout": "",
+        "signature_changed": false
+      },
+      {
+        "key": "b",
+        "bad_signature": true,
+        "optimization": "-O0",
+        "status": 77,
+        "stdout": "",
+        "signature_changed": false
+      },
+      {
+        "key": "b",
+        "bad_signature": true,
+        "optimization": "-O2",
+        "status": 77,
+        "stdout": "",
+        "signature_changed": false
+      }
+    ],
+    "qualified": false,
+    "interpretation": "A/B signing left target bits unchanged at O0/O2; good and corrupted probes both returned the same value. Ordinary arm64 authenticated transport checks do not count as active PAC validation.",
+    "signed_exception_unwinding_qualified": false
+  },
+  "model": {
+    "model_only": true,
+    "version": "Arm FVP 11.32+19",
+    "docker_image": "sha256:b60022df2f5f52d4461b273e3b44190abb85effff05cbb52e1ed25818f010023",
+    "binary_sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+    "summary_sha256": "e367fcf9034d11604201eeea044815142e3d9bc3f8f5c51326d285ab6d180029",
+    "provenance_sha256": "f31f94506a2aba5fc712697247a0a41bb2514c5fc7caf16969e5a4a59564a41c",
+    "routes": 5,
+    "variants": 5,
+    "guests": 30,
+    "valid_pairs": 600,
+    "invalid_signature_pairs": 1440,
+    "exception_class_differences": 0,
+    "native_apple_pac_qualified": false,
+    "exact_fault_pc_or_esr_qualified": false,
+    "results": [
+      {
+        "route": "native-macho",
+        "level": 1,
+        "el0": false,
+        "passed": true,
+        "guest_sha256": "a228713b4c1feb6a50165fef6856a5839632ad5d55005cac9212ee78a12e4593",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "native-macho",
+        "level": 1,
+        "el0": true,
+        "passed": true,
+        "guest_sha256": "d55a1b25300e06516c6d66841385d867443801653678c0887ae823433432183b",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "native-macho",
+        "level": 4,
+        "el0": false,
+        "passed": true,
+        "guest_sha256": "89195bdfd22fab391cebf79b5e16ab7c0e57d84fb0f901bc1cb7e8756fcab2b1",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "native-macho",
+        "level": 4,
+        "el0": true,
+        "passed": true,
+        "guest_sha256": "6ca28c34375d397cca4c74bbb51d5a43c08e61a4989c1563236a429f5c0192cf",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "native-macho",
+        "level": 5,
+        "el0": false,
+        "passed": true,
+        "guest_sha256": "ee31ec2c655df92fee1f4746a614fee4ae62ebfb34beccbb29fab8c33ebdf0fb",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "native-macho",
+        "level": 5,
+        "el0": true,
+        "passed": true,
+        "guest_sha256": "daa9621a58717516fa5b5ee1038d93f92d937b8d5fc75ce70f0165963a9cdfac",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "high-O0",
+        "level": 1,
+        "el0": false,
+        "passed": true,
+        "guest_sha256": "4b7d848454e1bc4e7ce0624983f8e9aed13348bd5253052af475088615b795ec",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "high-O0",
+        "level": 1,
+        "el0": true,
+        "passed": true,
+        "guest_sha256": "78a99ae292fb63187bd092d3cadaf9073db0bf035f66b7759be73bc68cf18660",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "high-O0",
+        "level": 4,
+        "el0": false,
+        "passed": true,
+        "guest_sha256": "73f81d687cf1066455cb84001ef966daa38c51cad205411222e67eec6ea0fa13",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "high-O0",
+        "level": 4,
+        "el0": true,
+        "passed": true,
+        "guest_sha256": "a0fdf90a0498e556b25600d73bf1b7c571b75437aa2b5c8c22beddb855e1b1eb",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "high-O0",
+        "level": 5,
+        "el0": false,
+        "passed": true,
+        "guest_sha256": "22934f6e44e939f691937a48beb2ad834cababedf09978cb2852531f1121e649",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "high-O0",
+        "level": 5,
+        "el0": true,
+        "passed": true,
+        "guest_sha256": "c96c38341cd04addc7fb1831817e036d105a50ca13fbe1336e154058734296e7",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "high-O2",
+        "level": 1,
+        "el0": false,
+        "passed": true,
+        "guest_sha256": "c74c0c927a883b86ac598f270a5af52761bf9dd10098344ebc4528567fab24aa",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "high-O2",
+        "level": 1,
+        "el0": true,
+        "passed": true,
+        "guest_sha256": "cfe0d2ce5ebfc474f69b7259f9d8447abeaf2ec3829e9868bb07ab221fe84f11",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "high-O2",
+        "level": 4,
+        "el0": false,
+        "passed": true,
+        "guest_sha256": "6f775b37d94d5abc867741abd190434517485f54bc9470643e89099e5a993816",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "high-O2",
+        "level": 4,
+        "el0": true,
+        "passed": true,
+        "guest_sha256": "24ddb0df85b0593ebbde66d59a08e6f7d85df629e88a7b4c8127fd8fed8c24b9",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "high-O2",
+        "level": 5,
+        "el0": false,
+        "passed": true,
+        "guest_sha256": "be18578bc9ffcfef7bbcc14deb581029ed6f7c1823a273bd0b0b6617436b21c6",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "high-O2",
+        "level": 5,
+        "el0": true,
+        "passed": true,
+        "guest_sha256": "6bc5c2c444944942e92567f0c672fe8b9dc5f814009e33762f0599adb45015d9",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "llvm-O0",
+        "level": 1,
+        "el0": false,
+        "passed": true,
+        "guest_sha256": "62fed11289ff1461c2e58d47eddf649219b6d9a397858faf64d6eac77f41a520",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "llvm-O0",
+        "level": 1,
+        "el0": true,
+        "passed": true,
+        "guest_sha256": "f7813dc785e411f48030ce3f030d000b0b6e60465976ccfb114b2d69d82a7178",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "llvm-O0",
+        "level": 4,
+        "el0": false,
+        "passed": true,
+        "guest_sha256": "8f3c687c60b3b55bc24a245da7dca57a67e0bee8bf7cd6f979afebab4fa4e587",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "llvm-O0",
+        "level": 4,
+        "el0": true,
+        "passed": true,
+        "guest_sha256": "2cab57701316859d7d2b461dda8ded170f15a57c37d7e2e4e49026db76387b51",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "llvm-O0",
+        "level": 5,
+        "el0": false,
+        "passed": true,
+        "guest_sha256": "a6dd8503f7b53bf8750e8b0d484c7ca9c1861173da79e86bead7851c6a726879",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "llvm-O0",
+        "level": 5,
+        "el0": true,
+        "passed": true,
+        "guest_sha256": "f10c5a8e23040d91a74787f31b99b516b1e189392225a407d4c111b330ee38c2",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "llvm-O2",
+        "level": 1,
+        "el0": false,
+        "passed": true,
+        "guest_sha256": "c74c0c927a883b86ac598f270a5af52761bf9dd10098344ebc4528567fab24aa",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "llvm-O2",
+        "level": 1,
+        "el0": true,
+        "passed": true,
+        "guest_sha256": "cfe0d2ce5ebfc474f69b7259f9d8447abeaf2ec3829e9868bb07ab221fe84f11",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "llvm-O2",
+        "level": 4,
+        "el0": false,
+        "passed": true,
+        "guest_sha256": "6f775b37d94d5abc867741abd190434517485f54bc9470643e89099e5a993816",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "llvm-O2",
+        "level": 4,
+        "el0": true,
+        "passed": true,
+        "guest_sha256": "24ddb0df85b0593ebbde66d59a08e6f7d85df629e88a7b4c8127fd8fed8c24b9",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "llvm-O2",
+        "level": 5,
+        "el0": false,
+        "passed": true,
+        "guest_sha256": "be18578bc9ffcfef7bbcc14deb581029ed6f7c1823a273bd0b0b6617436b21c6",
+        "original_exception_class_qualified": true
+      },
+      {
+        "route": "llvm-O2",
+        "level": 5,
+        "el0": true,
+        "passed": true,
+        "guest_sha256": "6bc5c2c444944942e92567f0c672fe8b9dc5f814009e33762f0599adb45015d9",
+        "original_exception_class_qualified": true
+      }
+    ]
+  },
+  "exports": {
+    "files": 60,
+    "objects": 25,
+    "objects_sha256": {
+      "result-storage-0-false-false/high-O0.o": "c81fd5ac1c48bca0e920dd46badad284a8850defaeecc1ee817bf4a5000a15c2",
+      "result-storage-0-false-false/high-O2.o": "aafb35b394dcb426b8469368bd7f21ef94de2cdc156b04f179699b2088984fb5",
+      "result-storage-0-false-false/llvm-O0.o": "939a9fc3de350ecc140fc8cbb659304628e6e742f019c010b07c86aa3374b9d5",
+      "result-storage-0-false-false/llvm-O2.o": "aafb35b394dcb426b8469368bd7f21ef94de2cdc156b04f179699b2088984fb5",
+      "result-storage-0-false-false/native-macho.o": "c68cc82435dd87f3de992561eebc238f7534642643da0c5b87e27598ff30c982",
+      "result-storage-0-false-true/high-O0.o": "ffcf46fcf2d356505170ec8e104a3a2db3dc3de02c7ac31ce43227d22312d945",
+      "result-storage-0-false-true/high-O2.o": "3d9c51354713968160fcef234ae991b2390487a985ad0c7ebbd87845131dae9c",
+      "result-storage-0-false-true/llvm-O0.o": "ca5959a7e7111ad4467d47848ca7721c86a05f6d97d72fba06685d8455cd956e",
+      "result-storage-0-false-true/llvm-O2.o": "3d9c51354713968160fcef234ae991b2390487a985ad0c7ebbd87845131dae9c",
+      "result-storage-0-false-true/native-macho.o": "ff98b55f30c5acf0af27b6dd9bfe80628cded317e10ba30ed8d04f083b81161a",
+      "result-storage-0-true-false/high-O0.o": "bc394517209984c541c8466625e035d14b5901e809ec65317a8e5335afecc7d6",
+      "result-storage-0-true-false/high-O2.o": "5ac77b4c045db2e79a8f72c3ae7487003bd8b2b980b3dd1f5f19dd3703d8e0c0",
+      "result-storage-0-true-false/llvm-O0.o": "5357919846c56d2f2090cf6541817943cf21a3d9a2e1281e323a8ae6cf429e09",
+      "result-storage-0-true-false/llvm-O2.o": "5ac77b4c045db2e79a8f72c3ae7487003bd8b2b980b3dd1f5f19dd3703d8e0c0",
+      "result-storage-0-true-false/native-macho.o": "272e1373a9118c56942078529b97a0f2ce37630fb4397da84d5fe98b1e16670e",
+      "result-storage-1-false-false/high-O0.o": "a599b148aa954e134dd615b43b6414a145630f276f312d1fcbbb0d6971e3f24b",
+      "result-storage-1-false-false/high-O2.o": "d91673a1452b96981b165d6683ea5eefbdec0fc743b9c68a95ff4841a21d57f2",
+      "result-storage-1-false-false/llvm-O0.o": "229d59cb53e26ef90b7d20ace6727f0ada85e838cc86f41ebc3055351f7f9f16",
+      "result-storage-1-false-false/llvm-O2.o": "d91673a1452b96981b165d6683ea5eefbdec0fc743b9c68a95ff4841a21d57f2",
+      "result-storage-1-false-false/native-macho.o": "bcf61159c9e4af823b36214cbc0d5dee6bf4cab742527c6983196ac7764c74d6",
+      "result-storage-1-true-false/high-O0.o": "8bdc9e56a8eb71c4327b17a8a4ddc13229f867dd22dd0d39a85f8131b6a773a9",
+      "result-storage-1-true-false/high-O2.o": "8354ca3663b074ef3a9d69c91b63fdfda3eeefce3d6dc80fa1470144bd6598bb",
+      "result-storage-1-true-false/llvm-O0.o": "eda2de3ffca07de206fb5955322e9cb2334a53719eb824649d39d20380dcafc0",
+      "result-storage-1-true-false/llvm-O2.o": "8354ca3663b074ef3a9d69c91b63fdfda3eeefce3d6dc80fa1470144bd6598bb",
+      "result-storage-1-true-false/native-macho.o": "320dcea498acdf91e0608666bbf594275833e118eee71e9aa38a7bcc13d17d35"
+    },
+    "test_report_sha256": "870de51988ba3423a0ec92e5420e592c9a4ae7cdfd5399b10b517b9df4a06c61",
+    "integrated_equivalence": {
+      "model_producer_revision": "a4896e1303fdae70bf8a8ffc27621af92817e65b",
+      "integrated_producer_revision": "5573f2a6d5095399a5286b7de942eea3dc87fdc4",
+      "identical_objects": 25,
+      "differences": [],
+      "objects_sha256": {
+        "result-storage-1-false-false/llvm-O0.o": "229d59cb53e26ef90b7d20ace6727f0ada85e838cc86f41ebc3055351f7f9f16",
+        "result-storage-1-false-false/high-O0.o": "a599b148aa954e134dd615b43b6414a145630f276f312d1fcbbb0d6971e3f24b",
+        "result-storage-1-false-false/native-macho.o": "bcf61159c9e4af823b36214cbc0d5dee6bf4cab742527c6983196ac7764c74d6",
+        "result-storage-1-false-false/llvm-O2.o": "d91673a1452b96981b165d6683ea5eefbdec0fc743b9c68a95ff4841a21d57f2",
+        "result-storage-1-false-false/high-O2.o": "d91673a1452b96981b165d6683ea5eefbdec0fc743b9c68a95ff4841a21d57f2",
+        "result-storage-0-true-false/llvm-O0.o": "5357919846c56d2f2090cf6541817943cf21a3d9a2e1281e323a8ae6cf429e09",
+        "result-storage-0-true-false/high-O0.o": "bc394517209984c541c8466625e035d14b5901e809ec65317a8e5335afecc7d6",
+        "result-storage-0-true-false/native-macho.o": "272e1373a9118c56942078529b97a0f2ce37630fb4397da84d5fe98b1e16670e",
+        "result-storage-0-true-false/llvm-O2.o": "5ac77b4c045db2e79a8f72c3ae7487003bd8b2b980b3dd1f5f19dd3703d8e0c0",
+        "result-storage-0-true-false/high-O2.o": "5ac77b4c045db2e79a8f72c3ae7487003bd8b2b980b3dd1f5f19dd3703d8e0c0",
+        "result-storage-1-true-false/llvm-O0.o": "eda2de3ffca07de206fb5955322e9cb2334a53719eb824649d39d20380dcafc0",
+        "result-storage-1-true-false/high-O0.o": "8bdc9e56a8eb71c4327b17a8a4ddc13229f867dd22dd0d39a85f8131b6a773a9",
+        "result-storage-1-true-false/native-macho.o": "320dcea498acdf91e0608666bbf594275833e118eee71e9aa38a7bcc13d17d35",
+        "result-storage-1-true-false/llvm-O2.o": "8354ca3663b074ef3a9d69c91b63fdfda3eeefce3d6dc80fa1470144bd6598bb",
+        "result-storage-1-true-false/high-O2.o": "8354ca3663b074ef3a9d69c91b63fdfda3eeefce3d6dc80fa1470144bd6598bb",
+        "result-storage-0-false-false/llvm-O0.o": "939a9fc3de350ecc140fc8cbb659304628e6e742f019c010b07c86aa3374b9d5",
+        "result-storage-0-false-false/high-O0.o": "c81fd5ac1c48bca0e920dd46badad284a8850defaeecc1ee817bf4a5000a15c2",
+        "result-storage-0-false-false/native-macho.o": "c68cc82435dd87f3de992561eebc238f7534642643da0c5b87e27598ff30c982",
+        "result-storage-0-false-false/llvm-O2.o": "aafb35b394dcb426b8469368bd7f21ef94de2cdc156b04f179699b2088984fb5",
+        "result-storage-0-false-false/high-O2.o": "aafb35b394dcb426b8469368bd7f21ef94de2cdc156b04f179699b2088984fb5",
+        "result-storage-0-false-true/llvm-O0.o": "ca5959a7e7111ad4467d47848ca7721c86a05f6d97d72fba06685d8455cd956e",
+        "result-storage-0-false-true/high-O0.o": "ffcf46fcf2d356505170ec8e104a3a2db3dc3de02c7ac31ce43227d22312d945",
+        "result-storage-0-false-true/native-macho.o": "ff98b55f30c5acf0af27b6dd9bfe80628cded317e10ba30ed8d04f083b81161a",
+        "result-storage-0-false-true/llvm-O2.o": "3d9c51354713968160fcef234ae991b2390487a985ad0c7ebbd87845131dae9c",
+        "result-storage-0-false-true/high-O2.o": "3d9c51354713968160fcef234ae991b2390487a985ad0c7ebbd87845131dae9c"
+      },
+      "test_report_sha256": "b6fa2a07853a95c141ee8807299e4a8ad958eb47507b46cd2e8a44130e14cb32",
+      "meaning": "The controlled model executed the recorded earlier producer. These newly generated objects have identical bytes; they are not a second model execution."
+    },
+    "prior_typed_matrix_equivalence": {
+      "previous_receipt": "docs/evidence/arm64e-indirect-image-abi-2026-11-07.json",
+      "previous_receipt_sha256": "5b55fc94c7323f9caffcbdd34ea19841c94103fd26b0a2011263224706d7b20e",
+      "integrated_producer_revision": "5573f2a6d5095399a5286b7de942eea3dc87fdc4",
+      "exported_objects": 1625,
+      "identical_objects": 1625,
+      "differences": [],
+      "meaning": "Earlier controlled-model evidence is reused only for byte-identical objects; those earlier executions are not new runs."
+    }
+  },
+  "remaining": [
+    "Automatic logical by-value reconstruction still requires independent effect/copy certificates. Arbitrary layouts, array fields, packed/overaligned records and further vector ABI shapes remain outside the admitted contracts.",
+    "The earlier non-x8 typed-call matrix retains its recorded C O0 exception-class differences. Byte-identical exports preserve that earlier qualification and its limits; they do not remove those differences.",
+    "The new controlled PAC model qualifies one aliased original-x8 storage shape across five key/modifier variants. Other stack/FP/variadic hidden-result shapes have ordinary native transport and object-compilation evidence, not equivalent active-PAC execution evidence.",
+    "Whole-image authenticated storage creation, import installation, relocation emission and native signed Darwin exception unwinding remain separate gaps.",
+    "Automatic complete prototype recovery, authenticated special-language calls, native Apple CPA2 and exact fault PC/ESR remain unqualified.",
+    "Explicit variadic prototypes still require a nonempty fixed prefix."
+  ]
+}

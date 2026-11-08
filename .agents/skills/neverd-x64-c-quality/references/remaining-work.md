@@ -1,5 +1,16 @@
 # Remaining x64 C-quality work
 
+The independent `X86LocalApicFixed` component now owns enabled fixed-source
+priority, nonconsuming selection, exact acknowledgment and ordinary EOI bank
+transitions. Compile-only assertions cover every fixed vector and priority
+class, duplicate requests, nested service and external EOI obligations.
+`scripts/qemu_save_lapic.py` transports captured banks through that same C++
+validator, with an explicit delivery-profile binding and all other event
+evidence retained. It adds no default decompiler or instruction-loop work.
+This closes the local fixed-bank model and transport; arrivals, source
+arbitration, TPR/CR8/device wiring, complete environment import and both
+ordinary registry inputs remain open.
+
 Offline event-boundary interpretation now distinguishes QEMU post-load
 exception reinjection from pending payloads and stale error codes. The
 separate `scripts/qemu_save_events.py` retains NMI phases/masking, injected

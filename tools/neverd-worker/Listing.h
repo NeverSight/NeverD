@@ -198,7 +198,8 @@ public:
   std::uint64_t generation() const;
   /// generation() but for what only functions' names change, which a function's
   /// engine pages do not spell: a view reads them as its decoration runs.  Data
-  /// items reach no view at all.
+  /// items reach no view at all, and a name of data only the pages of what read
+  /// it, by their reads.
   std::uint64_t viewGeneration() const;
 
 private:

@@ -4082,9 +4082,33 @@ across both SDKs and qualified P/E cores. After dev integration, another 566
 checks pass, including the complete kernel-PDB type round-trip and generated
 C suites; the paging binaries remain byte-identical. NeverC contributes
 10,560 native query comparisons and 252 code-generation form checks.
-LDTR/TR loads, task switching, real/VM86 and other unbound system-state domains
-remain separate work. No LLVM implementation change or new release is needed
+LDTR/TR loads use the separate system-selector owner below; task switching,
+real/VM86 and other unbound system-state domains remain open.
+No LLVM implementation change or new release is needed
 for this batch; the global release gate remains open and the pin stays r6.
+
+### Protected system selectors
+
+Original SLDT/STR/LLDT/LTR now use the shared protected scalar execution and
+generated-C dispatch. The [system-selector contract](x86-legacy-segments.md#protected-system-selectors)
+owns CPL/UMIP priority, selector-word accesses, GDT type/presence checks,
+LDTR/TR cache publication and the complete-descriptor LTR busy update. The
+loaded TR is visible to following event delivery; loading it does not perform
+a task switch. Protected LLDT retains its descriptor flag nibble, including
+the otherwise unused L bit, without making following instructions reject
+their own valid cache state. Native LLVM and NeverC forms already exist.
+The [system-selector evidence](evidence/x86-legacy-system-selectors-2026-11-07.json)
+records 1,250 passing checks with no skips, including 83,592 original state
+comparisons, 2,304 original data-debug comparisons and 48 new generated-C
+cases across both SDKs and qualified P/E cores. A descriptor aliasing its own
+legacy PTE exposed a stale TR limit: cache publication now uses the busy
+operation's updated image, retaining the page-walk dirty bit. The failing
+observation and its repaired regressions are both retained.
+After the SBF-only dev merge, another 260 SDK/source checks pass and both
+paging executables remain byte-identical; those receipts retain their actual
+integration commit.
+Task switching and the other machine-state domains still gate the final LLVM
+release; the production pin remains r6.
 
 ### Protected ARPL conditional completion
 
@@ -4298,3 +4322,34 @@ records 32 O0/O2 profiles across P/E cores, including code16 and x32:
 value/stack corruption controls. The direct NeverC and NeverC-IR profiles
 both pass in i386 and x64. These counts qualify the source contract above;
 they do not close the separate original-image context and event domains.
+
+## Protected machine status and i386 system builtins (2026-11-07)
+
+Protected original-byte execution and generated C now support SMSW, LMSW,
+CLTS, CLAC and STAC. LMSW retains PE, reads a fixed word and changes only
+MP/EM/TS; CLTS clears TS. CR0 commits before post-instruction debug delivery
+and remains unchanged on operand faults or unavailable backing. Dword-register
+SMSW requires an explicit FullCR0 choice for its undefined high word.
+CLAC/STAC use the bound target SMAP capability, preserve unrelated flags and
+deliver #UD for a 66 prefix. The shared fetch owner retains fault priority.
+
+The [qualification evidence](evidence/x86-legacy-machine-status-2026-11-07.json)
+records 1,410 passing checks, no failures or skips, across both LLVM SDKs and
+qualified P/E cores. New original-instruction coverage comprises 20,880 state
+and 1,920 debug comparisons. Generated C runs through Clang/NeverC O0/O2.
+After integrating the subsequent HighIR frame-read changes, both SDKs pass
+368 additional P-core checks covering the complete generated-C suite, machine
+status and ordinary system state; the implementation code hashes are unchanged.
+The native LMSW debug case changes TS; the observed KVM interception limit for
+changing MP is retained with the failed diagnostic receipts and described in
+[the testing contract](testing.md). Fixed software and generated C separately
+check the broader CR0 update before data/TF traps and fault atomicity.
+
+NeverC now exposes CLTS, CLAC, STAC, HLT, VMXOFF, STGI and CLGI on i386 through
+the existing native LLVM intrinsics. Its harness passes 308 code-generation
+form checks and 10,560 native descriptor-query comparisons; these counts do
+not claim privileged user-mode execution. SWAPGS remains x64-only. No LLVM
+lowering change was needed. General MOV-CR/mode transitions, task switching,
+other i386 state banks, software SMM/SGX and unbound asynchronous producers
+remain open; the final LLVM release and pin/gitlink update stay gated, with
+the production pin at r6.

@@ -13,6 +13,7 @@
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceABI.h"
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/MedNoReturn.h"
@@ -479,7 +480,9 @@ static std::vector<TypeRef> inferPointerParameters(
           (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
           Op.SourceCallHint &&
           validateSourceABI(Op.SourceCallHint->Signature, Error) &&
-          Op.NumInputs == Parameters.size() + 1;
+          Op.NumInputs ==
+              Parameters.size() + 1 +
+                  unsigned(sourceCallRetainsResultStorage(*Op.SourceCallHint));
       if (!BoundCall &&
           (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)) {
         const auto Found = Calls.find({Block.Id, static_cast<int>(OpIndex)});
@@ -552,15 +555,16 @@ static std::vector<TypeRef> inferPointerParameters(
         Ambiguous = true;
       for (unsigned Index = 0; Index < Op.NumInputs; ++Index) {
         unsigned Role = Scalar;
-        if (BoundCall && Index) {
-          const auto &Type = Parameters[Index - 1].Type;
+        const auto Type = BoundCall && Index && Index <= Parameters.size()
+                              ? Parameters[Index - 1].Type
+                              : nullptr;
+        if (Type) {
           if (Type->Kind == NdTypeKind::Ptr && Type->Size == PointerBytes)
             Role = Pointer;
         }
         // Other operations may consume integer bits, compare addresses, or
         // change their identity. They never seed pointer evidence here.
-        Seed(Op.Inputs[Index], Role,
-             BoundCall && Index ? Parameters[Index - 1].Type : nullptr);
+        Seed(Op.Inputs[Index], Role, Type);
       }
     }
   }

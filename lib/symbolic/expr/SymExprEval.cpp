@@ -26,6 +26,52 @@
 
 namespace neverd::symbolic {
 
+namespace {
+
+bool preservesLowBits(SymOp Op) {
+  return Op == SymOp::Add || Op == SymOp::Mul || Op == SymOp::And ||
+         Op == SymOp::Or || Op == SymOp::Xor || Op == SymOp::Not;
+}
+
+// Run only for wide plans, after lowering has resolved every operand slot.
+// Keeping this pass out of the constructor also keeps its scratch storage and
+// register saves out of native plans. Step is SymEvalPlan's private step type.
+template <typename Step>
+LLVM_ATTRIBUTE_NOINLINE void
+prepareWidePrefixes(const SymContext &Ctx, SymRef Root, uint32_t RootSlot,
+                    size_t NumSlots, llvm::MutableArrayRef<Step> Steps,
+                    llvm::ArrayRef<uint32_t> ArgSlots) {
+  llvm::SmallVector<unsigned, 64> Needed(NumSlots, 1);
+  Needed[RootSlot] = Ctx.width(Root);
+  for (auto &St : llvm::reverse(Steps)) {
+    const auto Demand = Needed[St.OutputSlot];
+    const bool Prefix = preservesLowBits(St.Op);
+    if (Prefix && Demand <= 64)
+      St.Width = Demand;
+    const auto Operands = Ctx.operands(St.Node);
+    unsigned Zeros = 0;
+    if (St.Op == SymOp::Mul && Ctx.isConst(Operands.front()))
+      Zeros = Ctx.constValue(Operands.front()).countr_zero();
+    if (Zeros && Demand > 64) {
+      const unsigned FactorBits = Demand - std::min(Demand - 1, Zeros);
+      if (FactorBits <= 64)
+        St.Aux = ~uint64_t(0) >> (64 - FactorBits);
+    }
+    for (size_t I = 0; I < Operands.size(); ++I) {
+      unsigned Bits = Ctx.width(Operands[I]);
+      if (Prefix) {
+        Bits = Demand;
+        if (Zeros && !Ctx.isConst(Operands[I]))
+          Bits -= std::min(Bits - 1, Zeros);
+      }
+      auto &Required = Needed[ArgSlots[St.FirstArg + I]];
+      Required = std::max(Required, Bits);
+    }
+  }
+}
+
+} // namespace
+
 bool SymContext::fitsU64(SymRef R) const {
   llvm::DenseSet<uint32_t> Seen;
   llvm::SmallVector<SymRef, 32> Work{R};
@@ -67,22 +113,38 @@ SymEvalPlan::SymEvalPlan(const SymContext &Ctx, SymRef Root)
                       limits::symbolic::kSymExprTraversalInlineBuckets>
       Slot;
   llvm::SmallVector<std::pair<SymRef, bool>, 64> Work{{Root, false}};
-  llvm::SmallVector<SymRef, 64> PostOrder;
+  llvm::SmallVector<std::pair<SymRef, uint32_t>, 64> PostOrder;
   size_t OperandCount = 0;
+  uint32_t NextSlot = 0;
 
   while (!Work.empty()) {
     auto [Cur, Expanded] = Work.pop_back_val();
     if (Expanded) {
-      auto Position = Slot.find(Cur.index());
-      if (Position->second)
-        continue;
-      Position->second = static_cast<uint32_t>(PostOrder.size()) + 1;
-      PostOrder.push_back(Cur);
-      OperandCount += Ctx.numOperands(Cur);
+      const auto OutputSlot = NextSlot++;
+      Slot.find(Cur.index())->second = OutputSlot + 1;
+      PostOrder.emplace_back(Cur, OutputSlot);
       continue;
     }
-    if (!Slot.try_emplace(Cur.index(), 0).second)
+    auto [Position, New] = Slot.try_emplace(Cur.index(), 0);
+    if (!New)
       continue;
+    const auto &N = Ctx.node(Cur);
+    if (N.Width > 64)
+      FitsU64 = false;
+    // Leaves need neither operand resolution nor a second worklist visit.
+    // Lower them now and keep inputs first in their original lookup order.
+    if (N.Op == SymOp::Const || N.Op == SymOp::Var) {
+      const auto OutputSlot = NextSlot++;
+      Position->second = OutputSlot + 1;
+      if (N.Op == SymOp::Const) {
+        ConstantSlots.emplace_back(OutputSlot, Cur);
+      } else {
+        Vars.push_back(static_cast<uint32_t>(N.Aux));
+        Steps.push_back({N.Op, N.Width, N.Aux, 0, 0, Cur, OutputSlot});
+      }
+      continue;
+    }
+    OperandCount += N.NumOperands;
     Work.emplace_back(Cur, true);
     for (SymRef C : Ctx.operands(Cur))
       Work.emplace_back(C, false);
@@ -90,21 +152,10 @@ SymEvalPlan::SymEvalPlan(const SymContext &Ctx, SymRef Root)
 
   // Lower to flat steps.  Operand slots are resolved here, once, so the
   // evaluation loops never touch the hash map or the DAG.
-  Steps.reserve(PostOrder.size());
+  Steps.reserve(NextSlot);
   ArgSlots.reserve(OperandCount);
-  uint32_t NextSlot = 0;
-  for (SymRef R : PostOrder) {
+  for (auto [R, OutputSlot] : PostOrder) {
     const SymNode &N = Ctx.node(R);
-    const auto OutputSlot = NextSlot++;
-    if (N.Width > 64)
-      FitsU64 = false;
-    if (N.Op == SymOp::Const) {
-      ConstantSlots.emplace_back(OutputSlot, R);
-      continue;
-    }
-    if (N.Op == SymOp::Var)
-      Vars.push_back(static_cast<uint32_t>(N.Aux));
-
     Step S;
     S.Op = N.Op;
     S.Width = N.Width;
@@ -130,9 +181,15 @@ SymEvalPlan::SymEvalPlan(const SymContext &Ctx, SymRef Root)
   Vars.erase(std::unique(Vars.begin(), Vars.end()), Vars.end());
 
   if (FitsU64) {
-    ScratchU64.resize(PostOrder.size());
+    ScratchU64.resize(NextSlot);
     for (const auto &[Slot, Node] : ConstantSlots)
       ScratchU64[Slot] = Ctx.node(Node).Aux;
+  } else {
+    // A scaled wide product observes only a prefix of each remaining factor.
+    // Other operators retain complete operands: a high bit can affect even
+    // the lowest result bit of a comparison, division or right shift.
+    prepareWidePrefixes(Ctx, Root, RootSlot, NextSlot,
+                        llvm::MutableArrayRef<Step>(Steps), ArgSlots);
   }
 }
 
@@ -169,7 +226,10 @@ SymEvalPlan::evalU64With(llvm::function_ref<uint64_t(uint32_t)> Lookup) {
   const uint32_t *Args = ArgSlots.data();
   uint64_t *S = ScratchU64.data();
 
-  for (const Step &St : Steps) {
+  for (const Step &St : llvm::ArrayRef<Step>(Steps).take_front(Vars.size()))
+    S[St.OutputSlot] = mask(Lookup(static_cast<uint32_t>(St.Aux)), St.Width);
+
+  for (const Step &St : llvm::ArrayRef<Step>(Steps).drop_front(Vars.size())) {
     const auto I = St.OutputSlot;
     const uint32_t *A = Args + St.FirstArg;
     uint32_t W = St.Width;
@@ -177,10 +237,8 @@ SymEvalPlan::evalU64With(llvm::function_ref<uint64_t(uint32_t)> Lookup) {
 
     switch (St.Op) {
     case SymOp::Const:
-      llvm_unreachable("constants are initialized before evaluation");
     case SymOp::Var:
-      Res = Lookup(static_cast<uint32_t>(St.Aux));
-      break;
+      llvm_unreachable("inputs and constants are initialized before operators");
     case SymOp::Add:
       // Canonical associative nodes have at least two operands. Evaluate
       // that common pair directly, then fold any remaining operands.
@@ -454,6 +512,12 @@ llvm::APInt SymEvalPlan::evalWith(
     // A lookup may throw; the same plan must remain usable on the next call.
     for (const auto &[Slot, Node] : ConstantSlots)
       ScratchAP[Slot] = Ctx.constValue(Node);
+    // Prefix slots fit in APInt's inline word. Their scaled-product consumers
+    // multiply the complete prefix before restoring the wide coefficient;
+    // every other full-width use already prevented this narrowing.
+    for (const Step &St : Steps)
+      if (St.Width <= 64 && preservesLowBits(St.Op))
+        ScratchAP[St.OutputSlot] = llvm::APInt(St.Width, 0);
   }
   for (const Step &St : Steps) {
     const auto I = St.OutputSlot;
@@ -465,6 +529,53 @@ llvm::APInt SymEvalPlan::evalWith(
         ScratchAP[I] = *V;
       else
         ScratchAP[I] = V ? V->zextOrTrunc(St.Width) : llvm::APInt(St.Width, 0);
+      continue;
+    }
+
+    if (St.Width <= 64 && preservesLowBits(St.Op)) {
+      auto Word = [&](size_t K) { return ScratchAP[A[K]].getRawData()[0]; };
+      uint64_t Value = Word(0);
+      switch (St.Op) {
+      case SymOp::Add:
+        for (size_t K = 1; K < St.NumArgs; ++K)
+          Value += Word(K);
+        break;
+      case SymOp::Mul:
+        for (size_t K = 1; K < St.NumArgs; ++K)
+          Value *= Word(K);
+        break;
+      case SymOp::And:
+        for (size_t K = 1; K < St.NumArgs; ++K)
+          Value &= Word(K);
+        break;
+      case SymOp::Or:
+        for (size_t K = 1; K < St.NumArgs; ++K)
+          Value |= Word(K);
+        break;
+      case SymOp::Xor:
+        for (size_t K = 1; K < St.NumArgs; ++K)
+          Value ^= Word(K);
+        break;
+      case SymOp::Not:
+        Value = ~Value;
+        break;
+      default:
+        llvm_unreachable("not a low-prefix operator");
+      }
+      ScratchAP[I] = Value & (~uint64_t(0) >> (64 - St.Width));
+      continue;
+    }
+
+    if (St.Op == SymOp::Mul && St.Aux) {
+      // All nonconstant factors are observed modulo the prepared mask.
+      // Multiplying their prefixes first is exact in that ring. Restoring
+      // the original coefficient then needs just one wide multiplication,
+      // and preserves every output bit any parent can observe.
+      uint64_t Product = ScratchAP[A[1]].getRawData()[0];
+      for (size_t K = 2; K < St.NumArgs; ++K)
+        Product *= ScratchAP[A[K]].getRawData()[0];
+      ScratchAP[I] = ScratchAP[A[0]];
+      ScratchAP[I] *= Product & St.Aux;
       continue;
     }
 

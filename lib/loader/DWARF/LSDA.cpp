@@ -6,6 +6,7 @@
 
 #include "neverd/loader/DWARF/LSDA.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/loader/LanguageRuntime.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -79,8 +80,10 @@ std::string readItaniumTypeName(const BinaryImage &Img, va_t TypeInfoVA) {
   const uint8_t *NameSlot = Img.readVA(TypeInfoVA + PtrSize, PtrSize);
   if (!NameSlot)
     return {};
-  const va_t NameVA = PtrSize == 4 ? va_t(readLE<uint32_t>(NameSlot))
-                                   : va_t(readLE<uint64_t>(NameSlot));
+  const va_t NameVA = PtrSize == 4 ? va_t(readTargetEndian<uint32_t>(
+                                         NameSlot, archLittleEndian(Img.Arch)))
+                                   : va_t(readTargetEndian<uint64_t>(
+                                         NameSlot, archLittleEndian(Img.Arch)));
   return readMappedCString(Img, NameVA);
 }
 

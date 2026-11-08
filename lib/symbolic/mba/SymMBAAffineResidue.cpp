@@ -15,6 +15,7 @@
 #include "Limits.h"
 #include "SymMBADetail.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 
 #include <algorithm>
@@ -488,7 +489,10 @@ struct PrefixValue {
 struct PrefixConstants {
   SymContext &Ctx;
   Resources &Res;
-  std::map<std::pair<uint32_t, unsigned>, PrefixValue> Values;
+  // The node and queried precision form one exact key. Prefix facts are
+  // copied before recursion, and no reader depends on cache iteration order.
+  // A valid precision is below 64, distinct from both dense-map sentinels.
+  llvm::DenseMap<uint64_t, PrefixValue> Values{};
   bool ExpandTopXors = false;
 
   std::optional<uint64_t> get(SymRef R, unsigned Bits) {
@@ -510,7 +514,7 @@ struct PrefixConstants {
     const uint64_t Mask = (uint64_t(1) << Bits) - 1;
     if (Op == SymOp::Const && Ctx.width(R) <= 64)
       return {Ctx.node(R).Aux & Mask, Mask};
-    auto Key = std::make_pair(R.index(), Bits);
+    const auto Key = (uint64_t(R.index()) << 32) | Bits;
     if (auto It = Values.find(Key); It != Values.end())
       return It->second;
     if (Depth >= limits::kMaxAffineResidueDepth)
@@ -592,10 +596,20 @@ struct PrefixConstants {
       return Result;
     };
     auto Value = Evaluate();
-    if (Res.Failed || !Res.charge(1, sizeof(decltype(Values)::value_type) +
-                                         4 * sizeof(void *)))
+    if (Res.Failed || !Res.charge(1))
       return {};
-    Values.emplace(Key, Value);
+    // Keys and facts live entirely in buckets, with no per-entry allocation.
+    // Charge cumulative allocations at LLVM's 3/4 load boundary, before growth.
+    const auto Buckets =
+        Values.getMemorySize() / sizeof(decltype(Values)::value_type);
+    if ((Values.size() + 1) * 4 >= Buckets * 3) {
+      const auto Next =
+          std::max(limits::kResidueMinDenseMapBuckets, 2 * Buckets);
+      if (!Res.charge(0, Next * sizeof(decltype(Values)::value_type)))
+        return {};
+      Values.reserve(Values.size() + 1);
+    }
+    Values.try_emplace(Key, Value);
     return Value;
   }
 };
@@ -1315,7 +1329,8 @@ SymRef synthesizeResidualResidueTable(
   };
   if (!AddColumn({}, llvm::APInt(Needed, 1), Tables[N]))
     return Root;
-  PrefixConstants Prefixes{Ctx, Res, {}, MultipleResiduals};
+  PrefixConstants Prefixes{
+      .Ctx = Ctx, .Res = Res, .ExpandTopXors = MultipleResiduals};
   for (size_t I = 0; I < N; ++I) {
     const auto &Table = Tables[I];
     if (std::none_of(Table.begin(), Table.end(), [](uint64_t V) { return V; }))
@@ -2100,7 +2115,7 @@ static SymRef foldProjectedProductResiduesImpl(SymContext &Ctx, SymRef Root,
   // coarser precision. Start there so unrelated higher bits cannot obscure
   // the useful congruence. This estimate only orders attempts: every rewrite
   // still requires complete coefficient maps and an exact residue bound.
-  PrefixConstants Prefixes{Ctx, Res, {}};
+  PrefixConstants Prefixes{.Ctx = Ctx, .Res = Res};
   bool WitnessChecked = false;
   bool Nonzero = false;
   auto Prove = [&](unsigned Bits) {
@@ -2245,7 +2260,7 @@ static SymRef foldResidualProductResiduesImpl(SymContext &Ctx, SymRef Root,
   }
   llvm::SmallVector<SymRef, 16> Inputs(Ctx.operands(Root));
   auto Operands = llvm::ArrayRef<SymRef>(Inputs).drop_front(HasScale);
-  PrefixConstants Prefixes{Ctx, Res, {}};
+  PrefixConstants Prefixes{.Ctx = Ctx, .Res = Res};
   SymRef Best = Root;
   bool DecisionAttempted = false;
   bool DecisionComplete = false;
@@ -2368,7 +2383,7 @@ foldAffineProductResidues(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
   std::vector<Factor> Factors;
   Factors.reserve(N);
   unsigned Needed = ReadWidth;
-  PrefixConstants Prefixes{Ctx, Res, {}};
+  PrefixConstants Prefixes{.Ctx = Ctx, .Res = Res};
   const bool ProjectedFactors =
       ProjectedHint ? *ProjectedHint : hasProjectedResidueFactors(Ctx, Root);
   const bool Project =

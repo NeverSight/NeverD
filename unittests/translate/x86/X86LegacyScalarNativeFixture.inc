@@ -26,8 +26,11 @@ protected:
   std::optional<uint32_t> BitCountUndefinedFlags;
   std::optional<uint32_t> BMIUndefinedFlags;
   std::optional<X86LegacyDescriptorProfile> DescriptorQueries;
+  std::optional<X86LegacySystemSelectorProfile> SystemSelectors;
+  std::optional<X86LegacyMachineStatusProfile> MachineStatus;
   std::optional<X86LegacyAtomicProfile> Atomics;
   std::optional<uint32_t> MemoryHigh;
+  std::optional<uint32_t> RepairPage;
   /// Bind only architectural undefined bits from the independent original CPU.
   /// All defined values, flags, faults and memory still come from the model.
   std::optional<uint32_t> DecimalUndefinedMask;
@@ -114,7 +117,8 @@ protected:
     std::vector<std::vector<uint8_t>> Repair;
     auto RetryBytes = Bytes;
     if (Case == 12 || Case == 21 || Case == 23) {
-      const uint32_t Page = (Case == 21 || Case == 23) ? 0xd000 : Data & ~4095u;
+      const uint32_t Page = RepairPage.value_or(
+          (Case == 21 || Case == 23) ? 0xd000 : Data & ~4095u);
       const uint32_t PTE = PT + (Page >> 12) * PW;
       Repair = {{0xc7, 0x05, uint8_t(PTE), uint8_t(PTE >> 8),
                  uint8_t(PTE >> 16), 0, uint8_t(Page | 7), uint8_t(Page >> 8),
@@ -280,6 +284,8 @@ protected:
     Options.BitCountUndefinedFlags = BitCountUndefinedFlags;
     Options.BMIUndefinedFlags = BMIUndefinedFlags;
     Options.DescriptorQueries = DescriptorQueries;
+    Options.SystemSelectors = SystemSelectors;
+    Options.MachineStatus = MachineStatus;
     Options.Atomics = Atomics;
     Options.Strings = Strings;
     Options.FarTransfers = FarTransfers;
@@ -429,6 +435,7 @@ protected:
     ASSERT_EQ(Run->exit_reason, unsigned(KVM_EXIT_DEBUG));
     ASSERT_EQ(ioctl(CPU, KVM_GET_REGS, &Registers), 0);
     ASSERT_EQ(ioctl(CPU, KVM_GET_SREGS, &Special), 0);
+    SCOPED_TRACE(testing::Message() << "native event=" << get(Record, 4));
     if (Expected->InstructionCompleted) {
       EXPECT_EQ(Registers.rip, State.EIP);
     } else {
@@ -445,6 +452,10 @@ protected:
     EXPECT_EQ(Registers.rflags & ~uint64_t{0x10000},
               State.EFlags & ~uint32_t{0x10000});
     EXPECT_EQ(Special.cr2, State.CR2);
+    EXPECT_EQ(Special.cr0, Memory->controls().CR0);
+    EXPECT_EQ(Special.cr3, Memory->controls().CR3);
+    EXPECT_EQ(Special.cr4, Memory->controls().CR4);
+    EXPECT_EQ(Special.efer, Memory->controls().EFER);
     for (unsigned I = 0; I != Segments.size(); ++I) {
       const auto Native = Cache(*Segments[I]);
       const auto &Model = State.Core.Segments[I];
@@ -457,6 +468,19 @@ protected:
       EXPECT_EQ(Native.Base, Model.Base);
       EXPECT_EQ(Native.Limit, Model.Limit);
       EXPECT_EQ(Native.Attributes, Model.Attributes);
+    }
+    if (SystemSelectors) {
+      for (const auto &[Native, Model] :
+           {std::pair{Cache(Special.ldt), State.Core.LDTR},
+            std::pair{Cache(Special.tr), State.TR}}) {
+        EXPECT_EQ(Native.Selector, Model.Selector);
+        EXPECT_EQ(Native.Unusable, Model.Unusable);
+        if (!Model.Unusable) {
+          EXPECT_EQ(Native.Base, Model.Base);
+          EXPECT_EQ(Native.Limit, Model.Limit);
+          EXPECT_EQ(Native.Attributes, Model.Attributes);
+        }
+      }
     }
     if (PendingEvent) {
       kvm_vcpu_events Final{};

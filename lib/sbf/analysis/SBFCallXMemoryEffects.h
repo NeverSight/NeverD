@@ -7,7 +7,8 @@
 /// \file
 /// Private mod/ref summaries. Symbolic StackAddress bases 1..11 denote entry
 /// registers, with base 11 denoting the entry frame. They are never VM values
-/// or addresses and are used only with the canonical register transfer.
+/// or addresses; shared transfers bind their scalar values and access
+/// footprints.
 ///
 //===----------------------------------------------------------------------===//
 

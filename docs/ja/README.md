@@ -1,6 +1,6 @@
 **Languages**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: e1b18ca385ee2c0da797d70ea8b6d1d166393d196100096863a20662b72d11db -->
+<!-- i18n-source: 064a675b88d7887beb6eb1c62907468231caafde8b4f397b3f3ad6cb75e9c8bd -->
 
 [← NeverD プロジェクト](project.md)
 
@@ -24,6 +24,7 @@
 | [ASAR 抽出プロファイル（英語）](../web-asar-profile.md) | 格納済み・外部ファイルの取得対応、整合性状態、メンバーの利用側とネイティブ Unicode 依存関係 |
 | [Electron 証拠プロファイル（英語）](../web-electron-profile.md) | 取得した入口パス、マニフェストとソースの範囲、ウィンドウ・ブリッジの証拠と IPC チャネル候補 |
 | [HTML ソースプロファイル（英語）](../web-html-profile.md) | 有界な C++ スクリプト一覧、取得したローカル参照と元のインラインソース位置 |
+| [MIPS 解析（英語）](../mips.md) | MIPS32/64 ELF プロファイル、遅延スロット、整数 ABI、検証、TP-Link ファームウェアの例 |
 | [テスト](testing.md) | テストスイート、生成 fixture、Unicorn ラウンドトリップ、増分コマンド |
 | [デスクトップワークベンチ (英語)](../gui.md) | 従来の逆アセンブラ風レイアウト、独立ワーカー、プロジェクトデータベース、多言語対応、MCP 接続 |
 | [解析イメージのセクション（英語）](../analysis-sections.md) | C ABI、ワーカー、CLI、ワークベンチによるコードとデータの追加、ネイティブ表示とプロジェクトへの保存 |

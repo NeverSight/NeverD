@@ -1,0 +1,318 @@
+/* Independent kernels for MIPS source/LLVM roundtrips. Build with
+ * --target=mips{,el}-linux-gnu -march=mips32r2 -mabi=32, or
+ * --target=mips64{,el}-linux-gnuabi64 -march=mips64r2 -mabi=64 -DWIDE.
+ * Use -mno-abicalls -fno-pic; link ET_EXEC at a fixed address with ld.lld.
+ */
+.set noreorder
+.text
+
+.globl mips_add
+.type mips_add,@function
+mips_add:
+  jr $31
+#ifdef WIDE
+  daddu $2,$4,$5
+#else
+  addu $2,$4,$5
+#endif
+.size mips_add,.-mips_add
+
+.globl mips_likely
+.type mips_likely,@function
+mips_likely:
+  beql $4,$0,1f
+  addiu $5,$5,3
+  jr $31
+  or $2,$5,$0
+1:
+  jr $31
+  or $2,$5,$0
+.size mips_likely,.-mips_likely
+
+.globl mips_load
+.type mips_load,@function
+mips_load:
+  jr $31
+  lw $2,0($4)
+.size mips_load,.-mips_load
+
+.globl mips_store
+.type mips_store,@function
+mips_store:
+  sw $5,0($4)
+  jr $31
+  lw $2,0($4)
+.size mips_store,.-mips_store
+
+.globl mips_stack
+.type mips_stack,@function
+mips_stack:
+#ifdef WIDE
+  daddu $2,$4,$5
+  daddu $2,$2,$6
+  daddu $2,$2,$7
+  daddu $2,$2,$8
+  daddu $2,$2,$9
+  daddu $2,$2,$10
+  daddu $2,$2,$11
+  ld $12,0($29)
+  jr $31
+  daddu $2,$2,$12
+#else
+  addu $2,$4,$5
+  addu $2,$2,$6
+  addu $2,$2,$7
+  lw $8,16($29)
+  jr $31
+  addu $2,$2,$8
+#endif
+.size mips_stack,.-mips_stack
+
+/* The condition is captured before its delay slot overwrites a0. */
+.globl mips_branch_capture
+.type mips_branch_capture,@function
+mips_branch_capture:
+  beq $4,$0,1f
+  addiu $4,$0,99
+  jr $31
+  addiu $2,$0,7
+1:
+  jr $31
+  addiu $2,$0,11
+.size mips_branch_capture,.-mips_branch_capture
+
+/* A likely slot must leave memory untouched on the false path. */
+.globl mips_likely_store
+.type mips_likely_store,@function
+mips_likely_store:
+  beql $5,$0,1f
+  sw $6,0($4)
+1:
+  jr $31
+  lw $2,0($4)
+.size mips_likely_store,.-mips_likely_store
+
+/* Save/restore the caller link; the call slot creates the callee argument. */
+.globl mips_call_slot
+.type mips_call_slot,@function
+mips_call_slot:
+#ifdef WIDE
+  daddiu $29,$29,-32
+  sd $31,24($29)
+#else
+  addiu $29,$29,-24
+  sw $31,20($29)
+#endif
+  jal mips_add
+  addiu $5,$0,13
+#ifdef WIDE
+  ld $31,24($29)
+  jr $31
+  daddiu $29,$29,32
+#else
+  lw $31,20($29)
+  jr $31
+  addiu $29,$29,24
+#endif
+.size mips_call_slot,.-mips_call_slot
+
+.globl mips_ro_global
+.type mips_ro_global,@function
+mips_ro_global:
+  lui $4,%hi(ro_value)
+  jr $31
+  lw $2,%lo(ro_value)($4)
+.size mips_ro_global,.-mips_ro_global
+
+.globl mips_rw_global
+.type mips_rw_global,@function
+mips_rw_global:
+  lui $4,%hi(rw_value)
+  lw $2,%lo(rw_value)($4)
+  jr $31
+  sw $5,%lo(rw_value)($4)
+.size mips_rw_global,.-mips_rw_global
+
+.section .rodata,"a",@progbits
+.p2align 2
+.type ro_value,@object
+ro_value: .word 0x12345678
+.size ro_value,4
+.data
+.p2align 2
+.globl rw_value
+.type rw_value,@object
+rw_value: .word 0x12345678
+.size rw_value,4
+
+.text
+.globl mips_jump_slot_load
+.type mips_jump_slot_load,@function
+mips_jump_slot_load:
+#ifdef WIDE
+  daddiu $29,$29,-32
+  sd $31,24($29)
+#else
+  addiu $29,$29,-24
+  sw $31,20($29)
+#endif
+  beq $5,$0,1f
+  nop
+  addiu $5,$5,1
+1:
+  jal mips_add
+  lw $4,0($4)
+#ifdef WIDE
+  ld $31,24($29)
+  jr $31
+  daddiu $29,$29,32
+#else
+  lw $31,20($29)
+  jr $31
+  addiu $29,$29,24
+#endif
+.size mips_jump_slot_load,.-mips_jump_slot_load
+
+.globl mips_jalr_slot
+.type mips_jalr_slot,@function
+mips_jalr_slot:
+#ifdef WIDE
+  daddiu $29,$29,-32
+  sd $31,24($29)
+#else
+  addiu $29,$29,-24
+  sw $31,20($29)
+#endif
+  lui $25,%hi(mips_add)
+  ori $25,$25,%lo(mips_add)
+  jalr $31,$25
+  addiu $25,$0,0
+#ifdef WIDE
+  ld $31,24($29)
+  jr $31
+  daddiu $29,$29,32
+#else
+  lw $31,20($29)
+  jr $31
+  addiu $29,$29,24
+#endif
+.size mips_jalr_slot,.-mips_jalr_slot
+
+.globl mips_jalr_memory
+.type mips_jalr_memory,@function
+mips_jalr_memory:
+#ifdef WIDE
+  daddiu $29,$29,-32
+  sd $31,24($29)
+#else
+  addiu $29,$29,-24
+  sw $31,20($29)
+#endif
+  lui $25,%hi(mips_add)
+  ori $25,$25,%lo(mips_add)
+  jalr $31,$25
+  sw $4,0($29)
+#ifdef WIDE
+  ld $31,24($29)
+  jr $31
+  daddiu $29,$29,32
+#else
+  lw $31,20($29)
+  jr $31
+  addiu $29,$29,24
+#endif
+.size mips_jalr_memory,.-mips_jalr_memory
+
+.globl mips_return13
+.type mips_return13,@function
+mips_return13:
+  jr $31
+  addiu $2,$0,13
+.size mips_return13,.-mips_return13
+
+.globl mips_conditional_link
+.type mips_conditional_link,@function
+mips_conditional_link:
+#ifdef WIDE
+  daddiu $29,$29,-32
+  sd $31,24($29)
+#else
+  addiu $29,$29,-24
+  sw $31,20($29)
+#endif
+  addiu $2,$0,3
+  bgezal $4,mips_return13
+  addiu $2,$2,2
+#ifdef WIDE
+  ld $31,24($29)
+  jr $31
+  daddiu $29,$29,32
+#else
+  lw $31,20($29)
+  jr $31
+  addiu $29,$29,24
+#endif
+.size mips_conditional_link,.-mips_conditional_link
+
+/* Read a target-sized pointer stored in the image, then its scalar object. */
+.globl mips_data_pointer
+.type mips_data_pointer,@function
+mips_data_pointer:
+  lui $4,%hi(data_pointer)
+#ifdef WIDE
+  ld $4,%lo(data_pointer)($4)
+#else
+  lw $4,%lo(data_pointer)($4)
+#endif
+  jr $31
+  lw $2,0($4)
+.size mips_data_pointer,.-mips_data_pointer
+
+.globl mips_code_pointer
+.type mips_code_pointer,@function
+mips_code_pointer:
+#ifdef WIDE
+  daddiu $29,$29,-32
+  sd $31,24($29)
+#else
+  addiu $29,$29,-24
+  sw $31,20($29)
+#endif
+  lui $25,%hi(code_pointer)
+#ifdef WIDE
+  ld $25,%lo(code_pointer)($25)
+#else
+  lw $25,%lo(code_pointer)($25)
+#endif
+  jalr $31,$25
+  addiu $25,$0,0
+#ifdef WIDE
+  ld $31,24($29)
+  jr $31
+  daddiu $29,$29,32
+#else
+  lw $31,20($29)
+  jr $31
+  addiu $29,$29,24
+#endif
+.size mips_code_pointer,.-mips_code_pointer
+
+.section .rodata,"a",@progbits
+.p2align 3
+.type data_pointer,@object
+data_pointer:
+#ifdef WIDE
+  .dword rw_value
+#else
+  .word rw_value
+#endif
+.size data_pointer,.-data_pointer
+.p2align 3
+.type code_pointer,@object
+code_pointer:
+#ifdef WIDE
+  .dword mips_add
+#else
+  .word mips_add
+#endif
+.size code_pointer,.-code_pointer

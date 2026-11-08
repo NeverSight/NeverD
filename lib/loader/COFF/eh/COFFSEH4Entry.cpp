@@ -22,8 +22,8 @@
 namespace neverd::coff_loader {
 
 std::optional<X86SEH4PrologueCall>
-getCheckedX86SEH4PrologueCall(const BinaryImage &Image,
-                              const ExceptionFunction &Function) {
+getX86SEH4PrologueShape(const BinaryImage &Image,
+                        const ExceptionFunction &Function) {
   if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
       Image.Format != BinaryFormat::COFF ||
       Function.ParseStatus != ExceptionParseStatus::Complete ||
@@ -78,14 +78,7 @@ getCheckedX86SEH4PrologueCall(const BinaryImage &Image,
       return std::nullopt;
   const va_t Cookie = Image.Base + Image.DynInfo.SecurityCookieRVA;
   if (readLE<uint32_t>(Code->data() + 1) != Chain.HandlerVA ||
-      readLE<uint32_t>(Code->data() + 30) != Cookie ||
-      !Image.readVA(Cookie, 4) ||
-      !getCheckedX86EH4CookieCheck(Image, Chain.HandlerVA))
-    return std::nullopt;
-  const registration_detail::SafeSEHTable SafeSEH(Image);
-  if (SafeSEH.isMalformed() ||
-      (SafeSEH.isPresent() &&
-       !isCheckedX86SafeSEHHandlerReference(Image, Chain.HandlerVA)))
+      readLE<uint32_t>(Code->data() + 30) != Cookie || !Image.readVA(Cookie, 4))
     return std::nullopt;
 
   X86SEH4PrologueCall Result{{Entry, Entry + Size},
@@ -118,11 +111,25 @@ getCheckedX86SEH4PrologueCall(const BinaryImage &Image,
   return Result;
 }
 
+std::optional<X86SEH4PrologueCall>
+getCheckedX86SEH4PrologueCall(const BinaryImage &Image,
+                              const ExceptionFunction &Function) {
+  auto Result = getX86SEH4PrologueShape(Image, Function);
+  if (!Result || !getCheckedX86EH4CookieCheck(Image, Result->HandlerVA))
+    return std::nullopt;
+  const registration_detail::SafeSEHTable SafeSEH(Image);
+  if (SafeSEH.isMalformed() ||
+      (SafeSEH.isPresent() &&
+       !isCheckedX86SafeSEHHandlerReference(Image, Result->HandlerVA)))
+    return std::nullopt;
+  return Result;
+}
+
 std::optional<X86SEH4EpilogueCall>
-getCheckedX86SEH4EpilogueCall(const BinaryImage &Image,
-                              const ExceptionFunction &Function, va_t CallVA) {
-  const auto Entry = getCheckedX86SEH4PrologueCall(Image, Function);
-  if (!Entry || CallVA < Entry->Caller.End || CallVA > UINT32_MAX - 5 ||
+getX86SEH4EpilogueShape(const BinaryImage &Image,
+                        const ExceptionFunction &Function,
+                        const X86SEH4PrologueCall &Entry, va_t CallVA) {
+  if (CallVA < Entry.Caller.End || CallVA > UINT32_MAX - 5 ||
       CallVA + 5 > Function.CodeRange.End)
     return std::nullopt;
   const auto Call = readImmutablePE32CodeBytes(Image, CallVA, 5, {});
@@ -135,13 +142,22 @@ getCheckedX86SEH4EpilogueCall(const BinaryImage &Image,
                                      0x5b, 0x8b, 0xe5, 0x5d, 0x51, 0xc3};
   if (Target > UINT32_MAX - (sizeof(Body) - 1) ||
       Function.CodeRange.overlaps({Target, Target + sizeof(Body)}) ||
-      Entry->Helper.overlaps({Target, Target + sizeof(Body)}))
+      Entry.Helper.overlaps({Target, Target + sizeof(Body)}))
     return std::nullopt;
   const auto Code = readImmutablePE32CodeBytes(Image, Target, sizeof(Body), {});
   if (!Code || !std::equal(std::begin(Body), std::end(Body), Code->begin()))
     return std::nullopt;
   return X86SEH4EpilogueCall{{CallVA, CallVA + 5},
                              {Target, Target + sizeof(Body)}};
+}
+
+std::optional<X86SEH4EpilogueCall>
+getCheckedX86SEH4EpilogueCall(const BinaryImage &Image,
+                              const ExceptionFunction &Function, va_t CallVA) {
+  const auto Entry = getCheckedX86SEH4PrologueCall(Image, Function);
+  if (!Entry)
+    return std::nullopt;
+  return getX86SEH4EpilogueShape(Image, Function, *Entry, CallVA);
 }
 
 } // namespace neverd::coff_loader

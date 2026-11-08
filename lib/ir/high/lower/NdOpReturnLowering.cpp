@@ -601,6 +601,8 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
         High = medvarToExpr(Reaching);
     }
     if (High) {
+      if (TRI.IntegerReturnPairHighFirst)
+        std::swap(High, RetVal);
       auto Pair = HighExpr::makeBinop(
           NdOp::CONCAT, sourceBitSlice(High, 0, TRI.PointerSize),
           sourceBitSlice(RetVal, 0, TRI.PointerSize));

@@ -559,6 +559,11 @@ dwarfStackPointerRegister(llvm::Triple::ArchType Arch) {
   case llvm::Triple::aarch64:
   case llvm::Triple::aarch64_be:
     return 31;
+  case llvm::Triple::mips:
+  case llvm::Triple::mipsel:
+  case llvm::Triple::mips64:
+  case llvm::Triple::mips64el:
+    return 29;
   default:
     return std::nullopt;
   }
@@ -579,6 +584,11 @@ dwarfFramePointerRegister(llvm::Triple::ArchType Arch) {
   case llvm::Triple::aarch64:
   case llvm::Triple::aarch64_be:
     return 29;
+  case llvm::Triple::mips:
+  case llvm::Triple::mipsel:
+  case llvm::Triple::mips64:
+  case llvm::Triple::mips64el:
+    return 30;
   default:
     return std::nullopt;
   }

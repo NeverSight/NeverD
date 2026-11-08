@@ -1,6 +1,6 @@
 **Langues**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: e1b18ca385ee2c0da797d70ea8b6d1d166393d196100096863a20662b72d11db -->
+<!-- i18n-source: 064a675b88d7887beb6eb1c62907468231caafde8b4f397b3f3ad6cb75e9c8bd -->
 
 [← Projet NeverD](project.md)
 
@@ -24,6 +24,7 @@ Les guides anglais se trouvent directement dans `docs/`. Les traductions sont re
 | [Profil d’extraction ASAR (anglais)](../web-asar-profile.md) | Association des captures internes et externes, états d’intégrité, consommateurs des membres et dépendance Unicode native |
 | [Profil de preuves Electron (anglais)](../web-electron-profile.md) | Chemins d’entrée capturés, périmètre des manifestes et sources, preuves de fenêtres et ponts, canaux IPC candidats |
 | [Profil source HTML (anglais)](../web-html-profile.md) | Inventaire C++ borné des scripts, références locales capturées et ancres des sources intégrées originales |
+| [Analyse MIPS (anglais)](../mips.md) | Profils ELF MIPS32/64, delay slots, ABI entier, validation et exemple de firmware TP-Link |
 | [Tests](testing.md) | Suites, fixtures générées, allers-retours Unicorn et commandes incrémentales |
 | [Atelier de bureau (anglais)](../gui.md) | Disposition de désassembleur classique, worker séparé, bases de projet, localisation et connexions MCP |
 | [Sections de l’image d’analyse (anglais)](../analysis-sections.md) | Ajout de code et de données matérialisés via l’ABI C, le worker, la CLI et l’atelier ; vues natives et persistance du projet |

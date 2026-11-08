@@ -13,6 +13,7 @@
 #include "X86LegacyBMI.h"
 #include "X86LegacyDescriptorQuery.h"
 #include "X86LegacyEncoding.h"
+#include "X86LegacySystemSelector.h"
 
 #include "neverd/ir/X86/X86DecimalAdjust.h"
 #include "neverd/translate/X86/X86LegacyExecution.h"
@@ -26,6 +27,7 @@
 namespace neverd::translate::detail {
 
 enum class X86LegacyScalarOperation {
+  Undefined,
   Move,
   MoveSigned,
   ConditionalMove,
@@ -40,6 +42,11 @@ enum class X86LegacyScalarOperation {
   ComplementFlag,
   Address,
   AdjustPrivilege,
+  StoreMachineStatus,
+  LoadMachineStatus,
+  ClearTaskSwitch,
+  ClearAccessControl,
+  SetAccessControl,
   Bound,
   Exchange,
   ExchangeAdd,
@@ -112,6 +119,7 @@ struct X86LegacyScalarInstruction {
   std::optional<X86DecimalAdjustInstruction> Adjustment;
   std::optional<X86LegacyBMIInstruction> BMI;
   std::optional<X86LegacyDescriptorQuery> DescriptorQuery;
+  std::optional<X86LegacySystemSelector> SystemSelector;
   unsigned Bytes = 4, SourceBytes = 4, Condition = 0;
   unsigned CounterBytes = 0;
   uint16_t Discard = 0;
@@ -219,6 +227,8 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32);
 struct X86LegacyScalarResult : X86MemoryAccessResult {
   /// Successful branch decision, independent of target/fallthrough equality.
   bool TakenBranch = false;
+  /// Publish with the completed instruction, before any post-instruction trap.
+  std::optional<uint64_t> CR0;
 };
 
 llvm::Expected<X86LegacyScalarResult>

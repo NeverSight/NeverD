@@ -184,9 +184,19 @@ template llvm::Error buildSegments<llvm::object::ELF32LE>(
     const llvm::object::ELFFile<llvm::object::ELF32LE> &,
     llvm::ArrayRef<llvm::object::ELF32LE::Shdr>, llvm::StringRef,
     const uint8_t *, size_t, const std::vector<va_t> &, bool, BinaryImage &);
+
+template llvm::Error buildSegments<llvm::object::ELF32BE>(
+    const llvm::object::ELFFile<llvm::object::ELF32BE> &,
+    llvm::ArrayRef<llvm::object::ELF32BE::Shdr>, llvm::StringRef,
+    const uint8_t *, size_t, const std::vector<va_t> &, bool, BinaryImage &);
 template llvm::Error buildSegments<llvm::object::ELF64LE>(
     const llvm::object::ELFFile<llvm::object::ELF64LE> &,
     llvm::ArrayRef<llvm::object::ELF64LE::Shdr>, llvm::StringRef,
+    const uint8_t *, size_t, const std::vector<va_t> &, bool, BinaryImage &);
+
+template llvm::Error buildSegments<llvm::object::ELF64BE>(
+    const llvm::object::ELFFile<llvm::object::ELF64BE> &,
+    llvm::ArrayRef<llvm::object::ELF64BE::Shdr>, llvm::StringRef,
     const uint8_t *, size_t, const std::vector<va_t> &, bool, BinaryImage &);
 
 } // namespace detail

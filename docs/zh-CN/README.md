@@ -1,6 +1,6 @@
 **语言**: [English](../README.md) | [简体中文](README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: e1b18ca385ee2c0da797d70ea8b6d1d166393d196100096863a20662b72d11db -->
+<!-- i18n-source: 064a675b88d7887beb6eb1c62907468231caafde8b4f397b3f3ad6cb75e9c8bd -->
 
 [← NeverD 项目](project.md)
 
@@ -24,6 +24,7 @@
 | [ASAR 提取配置（英文）](../web-asar-profile.md) | 包内与包外捕获关联、完整性状态、成员使用方及原生 Unicode 依赖 |
 | [Electron 证据配置（英文）](../web-electron-profile.md) | 捕获的入口路径、清单与源码范围、窗口和桥接证据及 IPC 通道候选 |
 | [HTML 源码配置（英文）](../web-html-profile.md) | 有界 C++ 脚本清单、捕获的本地引用与原始内联源码锚点 |
+| [MIPS 分析（英文）](../mips.md) | MIPS32/64 ELF 配置、延迟槽、整数 ABI、验证与 TP-Link 固件示例 |
 | [测试](testing.md) | 测试套件、生成 fixture、Unicorn 往返与增量命令 |
 | [桌面工作台 (英文)](../gui.md) | 经典反汇编器布局、独立工作进程、项目数据库、本地化和 MCP 连接 |
 | [分析镜像节区（英文）](../analysis-sections.md) | 通过 C ABI、工作进程、CLI 和工作台添加已物化的代码与数据；原生视图和项目持久化 |

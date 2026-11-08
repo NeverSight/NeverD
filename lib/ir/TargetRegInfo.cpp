@@ -283,6 +283,11 @@ const TargetRegInfo &getTargetRegInfo(Arch TheArch) {
     return A64RegInfo;
   case Arch::ARM:
     return ARMRegInfo;
+  case Arch::MIPS32:
+  case Arch::MIPS32EL:
+  case Arch::MIPS64:
+  case Arch::MIPS64EL:
+    return getMIPSRegInfo(TheArch);
   default:
     return UnknownRegInfo;
   }
@@ -435,8 +440,8 @@ IntegerArgumentLayout TargetRegInfo::integerArgumentLayout(bool IsWin64) const {
   IntegerArgumentLayout Layout;
   Layout.Registers = Win64 ? Win64ParamRegs : IntParamRegs;
   Layout.SlotBytes = PointerSize;
-  Layout.CallStackBase =
-      Win64 ? int64_t(Layout.Registers.size()) * PointerSize : 0;
+  Layout.CallStackBase = Win64 ? int64_t(Layout.Registers.size()) * PointerSize
+                               : CallStackArgumentBase;
   Layout.EntryStackBase =
       Layout.CallStackBase + (CallPushesReturnAddress ? PointerSize : 0);
   return Layout;

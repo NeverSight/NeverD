@@ -180,6 +180,26 @@ bool breaksOutOf(const std::vector<HighStmt> &Stmts) {
   return false;
 }
 
+/// Whether a `__leave` in \p Stmts runs on past the try that holds them.
+bool leavesTheTry(const std::vector<HighStmt> &Stmts) {
+  for (const HighStmt &S : Stmts) {
+    if (S.Kind == StmtKind::Goto && S.LeavesTry)
+      return true;
+    // A try nested here takes the `__leave`s of its body for its own.
+    if (S.Kind != StmtKind::SEHTry && leavesTheTry(S.Body))
+      return true;
+    if (leavesTheTry(S.ElseBody) || leavesTheTry(S.DefaultBody))
+      return true;
+    for (const SwitchCase &Case : S.Cases)
+      if (leavesTheTry(Case.Body))
+        return true;
+    for (const auto &ClauseBody : S.EHClauseBodies)
+      if (leavesTheTry(ClauseBody))
+        return true;
+  }
+  return false;
+}
+
 bool stmtAlwaysExit(TryExitTest Hidden, TryExitTest LeftOut,
                     const HighStmt &Stmt) {
   if (Hidden(Stmt))
@@ -197,7 +217,7 @@ bool stmtAlwaysExit(TryExitTest Hidden, TryExitTest LeftOut,
     // with no break that ends it, nothing falls out of it.
     return (!Stmt.Cond ||
             (Stmt.Cond->Kind == ExprKind::Const && Stmt.Cond->ConstVal != 0)) &&
-           !breaksOutOf(Stmt.Body);
+           !breaksOutOf(Stmt.Body) && !leavesTheTry(Stmt.Body);
   case StmtKind::IfElse:
     return stmtsAlwaysExit(Hidden, LeftOut, Stmt.Body, Stmt.Body.size()) &&
            stmtsAlwaysExit(Hidden, LeftOut, Stmt.ElseBody,
@@ -337,6 +357,17 @@ void HighCWriter::emitRenderedStatement(int Indent, llvm::StringRef Text) {
 
 // A filter's disposition prints under the name <excpt.h> gives it.
 std::string HighCWriter::sehFilterValueText(const HighExpr &Value) {
+  // An x86 filter runs in its function's frame, and what it does before it
+  // decides is its own: `first, rest` (HighEHClause::FilterValue).
+  if (Value.Kind == ExprKind::BinOp && Value.Op == NdOp::NOP &&
+      Value.Operands.size() == 2 && Value.Operands[0] && Value.Operands[1])
+    return exprStr(*Value.Operands[0]) + ", " +
+           sehFilterValueText(*Value.Operands[1]);
+  if (Value.Kind == ExprKind::BinOp && Value.Op == NdOp::SELECT &&
+      Value.Operands.size() == 3 && Value.Operands[1] && Value.Operands[2])
+    return "(" + exprStr(*Value.Operands[0]) + ") ? (" +
+           sehFilterValueText(*Value.Operands[1]) + ") : (" +
+           sehFilterValueText(*Value.Operands[2]) + ")";
   const HighExpr *Inner = unwrapIntegerView(&Value);
   if (Inner && Inner->Kind == ExprKind::Const) {
     const uint64_t Width = Inner->Type && Inner->Type->Size < 8
@@ -643,7 +674,7 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
         IsEHRuntimeSpace(Stmt.Val->MemoryAddressSpace))
       return;
     if (Stmt.Val->Kind == ExprKind::Call) {
-      auto Rendered = renderX86SegmentedIntrinsicStatement(
+      auto Rendered = renderMemoryIntrinsicStatement(
           Opts.TheArch, *Stmt.Val, Stmt.Dst.get(),
           [this](const HighExpr &E) { return intrinsicOperandStr(E); },
           [this](const MedVar &V) { return varName(V); },
@@ -1375,7 +1406,7 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
     if (frameStorageAlignmentHolds(*Stmt.CallExpr))
       break;
     {
-      auto Rendered = renderX86SegmentedIntrinsicStatement(
+      auto Rendered = renderMemoryIntrinsicStatement(
           Opts.TheArch, *Stmt.CallExpr, nullptr,
           [this](const HighExpr &E) { return intrinsicOperandStr(E); },
           [this](const MedVar &V) { return varName(V); },
@@ -1746,7 +1777,8 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
       // An arm whose handler is where the try falls through ends there, and
       // so does a copy of one: its handler has no label of its own.
       if (Stmt.EHClauseBodies.front().empty() &&
-          !FallthroughExceptArms.count(&Stmt)) {
+          !FallthroughExceptArms.count(&Stmt) &&
+          Clause.FinallyKind != HighEHClause::FinallyBody::WholeBody) {
         if (!CurrentFunc || !CurrentFunc->ExceptionMetadata ||
             !CurrentFunc->ExceptionMetadata->ownsCode(Clause.HandlerVA)) {
           emitIndent(Indent + 1);
@@ -2722,6 +2754,8 @@ void HighCWriter::decideExceptArms(const HighFunc &Func) {
               fallthroughAddresses(Stmts, I, Continuation);
           if (hasFallthroughExceptClause(S) &&
               S.EHClauseBodies.front().empty() &&
+              S.EHClauses.front().FinallyKind !=
+                  HighEHClause::FinallyBody::WholeBody &&
               EH.ownsCode(S.EHClauses.front().HandlerVA)) {
             // A try printed in pieces falls into its next piece first.
             const va_t Handler = S.EHClauses.front().HandlerVA;

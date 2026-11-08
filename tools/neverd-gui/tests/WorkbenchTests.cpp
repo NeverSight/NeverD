@@ -7405,22 +7405,61 @@ private slots:
       rendered = code.allText();
       QVERIFY(!rendered.isEmpty());
     }
-    Session session(QString::fromLocal8Bit(TEST_WORKER));
-    session.open(path);
-    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
-    CodeText code(session);
-    code.resize(900, 700);
-    code.show();
-    code.load(Base + 32, QStringLiteral("source"));
-    QTRY_VERIFY_WITH_TIMEOUT(code.complete(), NativeOpenTimeoutMs);
-    QCOMPARE(code.allText(), rendered);
-    // The owner answered: no replica has started.
+    {
+      Session session(QString::fromLocal8Bit(TEST_WORKER));
+      session.open(path);
+      QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+      CodeText code(session);
+      code.resize(900, 700);
+      code.show();
+      code.load(Base + 32, QStringLiteral("source"));
+      QTRY_VERIFY_WITH_TIMEOUT(code.complete(), NativeOpenTimeoutMs);
+      QCOMPARE(code.allText(), rendered);
+      // The owner answered: no replica has started.
+      QTest::qWait(100);
+      QVERIFY(!session.analysisReplicaStarted());
+      // A view no session kept starts one.  The first page this session's
+      // engine writes is for this request.
+      QCOMPARE(readPages(session, Base + 48), 1);
+      QVERIFY(session.analysisReplicaStarted());
+    }
+    // An edit about to be read starts one, though its function is kept.
+    Session editing(QString::fromLocal8Bit(TEST_WORKER));
+    editing.open(path);
+    QTRY_VERIFY_WITH_TIMEOUT(editing.loaded(), OpenTimeoutMs);
     QTest::qWait(100);
-    QVERIFY(!session.analysisReplicaStarted());
-    // A view no session kept starts one.  The first page this session's engine
-    // writes is for this request.
-    QCOMPARE(readPages(session, Base + 48), 1);
-    QVERIFY(session.analysisReplicaStarted());
+    QVERIFY(!editing.analysisReplicaStarted());
+    editing.prepareFunctionRead(Base + 32);
+    QVERIFY(editing.analysisReplicaStarted());
+    QTRY_VERIFY_WITH_TIMEOUT(editing.analysisReplicaReady(), OpenTimeoutMs);
+  }
+
+  void analysisReplicaReadsAFunctionAnEditIsAboutToChange() {
+    // Without the job the engine's pages are this read's and the next one's.
+    const auto forget = qScopeGuard(
+        [] { QSettings().remove(settings::SymbolicSimplification); });
+    SourceDefaults::instance().setSymbolic(true);
+    QTemporaryDir directory;
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    session.open(writeFixture(
+        directory,
+        QStringLiteral("summaries-ready-render-store-source-cache.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    session.prepareFunctionRead(Base);
+    QTRY_VERIFY_WITH_TIMEOUT(session.analysisReplicaReady(), OpenTimeoutMs);
+    QObject owner;
+    int pages = 0;
+    const QJsonObject function{{"address", hexAddress(Base)},
+                               {"representation", "c"}};
+    session.analysisQueries(function, &owner)
+        .subscribe({"decompile", function}, &owner,
+                   [&](const QJsonObject &response) {
+                     pages = response.value("payload")
+                                 .toObject()
+                                 .value("fixture_pages")
+                                 .toInt(-1);
+                   });
+    QTRY_COMPARE_WITH_TIMEOUT(pages, 2, OpenTimeoutMs);
   }
 
   void analysisReplicaRendersNothingAheadForViewsOpeningUnderOptions() {

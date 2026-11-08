@@ -256,8 +256,10 @@ llvm::Error validateX86LegacySegmentState(const X86LegacySegmentState &State,
     if (auto Error = validateX86LegacySegmentCache(
             static_cast<X86SegmentRegister>(I), State.Segments[I]))
       return std::move(Error);
+  // Protected LLDT retains the descriptor's flag nibble, including the
+  // otherwise unused L bit. It does not make the LDT a long code segment.
   if (!State.LDTR.Unusable && ((State.LDTR.Attributes & 0x9f) != 0x82 ||
-                               (State.LDTR.Attributes & 0x2f00)))
+                               (State.LDTR.Attributes & 0x0f00)))
     return invalid("legacy segment execution requires a loaded LDT cache");
   const auto &CS = State.Segments[unsigned(X86SegmentRegister::CS)];
   if ((CS.Selector & 3) != State.CPL)

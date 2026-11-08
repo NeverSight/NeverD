@@ -39,6 +39,11 @@ namespace neverd::sbf {
 /// Abstract value of every SBF register at one program point.
 using RegisterState = std::array<RegisterValue, kRegisterCount>;
 
+/// The canonical loader ABI boundary before any guest instruction executes.
+/// Seed it once for the program entry; real CFG backedges must still join it.
+/// Calls to that same entry use their caller's registers instead.
+RegisterState programEntryRegisterFacts(const SBFProgram &Program);
+
 /// The address a base register and a displacement designate, when the base is
 /// known well enough to name one.
 std::optional<va_t> effectiveAddress(const RegisterValue &Base,
@@ -137,6 +142,11 @@ addressValueRange(const RegisterValue &Value,
 std::optional<RegisterValue> memoryAddress(const RegisterValue &Base,
                                            int64_t Displacement = 0);
 
+/// Address operand for a possible memory access. Unlike scalar arithmetic,
+/// shifting a numeric interval may retain wrapped endpoints. Such a footprint
+/// supplies no address identity and must not become a scalar register fact.
+RegisterValue offsetMemoryAccess(RegisterValue Base, int64_t Displacement);
+
 /// Full-width stored values, retaining address provenance independently of the
 /// descriptor byte view. In particular, a frame-relative pointer is never a
 /// literal integer merely because its analysis coordinates were serialized.
@@ -152,7 +162,11 @@ public:
   RegisterValue singleton() const;
   llvm::ArrayRef<RegisterValue> values() const { return Values; }
   bool unknown() const { return Values.empty(); }
-  void join(const ProvenValueSet &Other);
+  /// Keep identities within the disjunction limit. On overflow, available
+  /// capture bounds may preserve a numeric disjunction without those
+  /// identities.
+  void join(const ProvenValueSet &Other,
+            const SymbolicAddressSpace *Addresses = nullptr);
   void profile(llvm::FoldingSetNodeID &ID) const;
   uint64_t allocatedBytes() const;
   bool operator==(const ProvenValueSet &) const = default;

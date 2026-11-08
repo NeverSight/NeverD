@@ -182,6 +182,10 @@ struct TargetRegInfo {
   /// link register.  Set by getTargetRegInfo().
   bool CallPushesReturnAddress = false;
 
+  /// Stack argument base at the call site for this target's default ABI.
+  /// o32 reserves four argument words even when arguments fit in registers.
+  int64_t CallStackArgumentBase = 0;
+
   /// A small aggregate is returned entirely in integer registers or entirely
   /// in vector registers (an AArch64 HFA), never in a mix of both.  Set by
   /// getTargetRegInfo().
@@ -451,6 +455,14 @@ struct TargetRegInfo {
   /// (AArch64 XZR, kept as a register in a table index's address); none on
   /// targets without one.  Set by getTargetRegInfo().
   std::optional<uint64_t> ZeroRegister;
+
+  /// In a two-register integer result, the first carrier holds the high
+  /// word (MIPS big endian). Scalar results still use IntReturnReg.
+  bool IntegerReturnPairHighFirst = false;
+
+  unsigned integerReturnWordOffset(unsigned Lane) const {
+    return (IntegerReturnPairHighFirst ? 1 - Lane : Lane) * PointerSize;
+  }
 };
 
 /// Return the register info table for the given architecture.

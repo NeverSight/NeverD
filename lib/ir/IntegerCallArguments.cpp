@@ -11,6 +11,7 @@
 
 #include "neverd/ir/IntegerCallArguments.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 
@@ -25,7 +26,7 @@ std::optional<FixedIntegerCallArguments>
 neverd::fixedIntegerCallArguments(Arch A, BinaryFormat F,
                                   const TypeRef &ReturnType,
                                   llvm::ArrayRef<TypeRef> Parameters) {
-  if ((A != Arch::X64 && A != Arch::AArch64) || !ReturnType ||
+  if ((A != Arch::X64 && A != Arch::AArch64 && !isMIPS(A)) || !ReturnType ||
       Parameters.size() > static_cast<size_t>(limits::kMaxBoundSourceCallArgs))
     return std::nullopt;
   const auto Scalar = [&](const TypeRef &Type) {
@@ -125,7 +126,7 @@ neverd::integerCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
         Result.Registers = std::max(Result.Registers, Argument + 1);
       } else if (Location.Kind == SourceABICarrierKind::Stack) {
         if (!Piece.Indirect && Type->Alignment > Layout.SlotBytes &&
-            !(A == Arch::X86 && F == BinaryFormat::COFF))
+            !(A == Arch::X86 && F == BinaryFormat::COFF) && !isMIPS(A))
           return std::nullopt;
         const int64_t Offset =
             Location.EntryStackOffset - Layout.EntryStackBase;
@@ -152,6 +153,11 @@ neverd::integerCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
       }
     }
     if (!Parameter.Indirect) {
+      // Big-endian register pairs arrive high word first. Validate and
+      // assemble by significance while retaining each physical argument index.
+      std::sort(
+          Parameter.Pieces.begin(), Parameter.Pieces.end(),
+          [](const auto &L, const auto &R) { return L.Offset < R.Offset; });
       unsigned Covered = 0;
       for (const auto &Piece : Parameter.Pieces) {
         if (Piece.Offset != Covered)

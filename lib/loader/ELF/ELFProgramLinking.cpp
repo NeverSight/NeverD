@@ -63,7 +63,8 @@ public:
 
 llvm::Expected<ELFProgramLinking>
 readELFProgramLinking(const BinaryImage &Image) {
-  if (!Image.isELF() || !Image.ELFMetadata || Image.Bits != Bitness::Bits64)
+  if (!Image.isELF() || !Image.ELFMetadata || Image.Bits != Bitness::Bits64 ||
+      (Image.Arch != Arch::X64 && Image.Arch != Arch::AArch64))
     return failure("requires ELF64LE program metadata");
   auto Dynamic = readELFProgramDynamicTable(Image);
   if (!Dynamic)

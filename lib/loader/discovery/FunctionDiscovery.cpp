@@ -46,7 +46,11 @@ const Import *BinaryImage::decodeImportThunkAt(va_t Addr) const {
     return nullptr;
   };
 
-  if (decodesImportThunks()) {
+  if (isMIPS(Arch)) {
+    const auto Slot = mipsImportThunkSlot(*this, Addr);
+    return Slot ? ByIAT(*Slot) : nullptr;
+  }
+  if (Arch == Arch::X86 || Arch == Arch::X64) {
     if (!hasExecutableCodeOwnerRange(Addr, x86::kJmpIndirectLen))
       return nullptr;
     const uint8_t *Bytes = readVA(Addr, x86::kJmpIndirectLen);
@@ -259,6 +263,13 @@ void scanImportThunks(BinaryImage &Img) {
       Added +=
           scanImportThunksARM(Img, Seg, TargetImports, Existing, Candidates);
       break;
+    case Arch::MIPS32:
+    case Arch::MIPS32EL:
+    case Arch::MIPS64:
+    case Arch::MIPS64EL:
+      Added +=
+          scanImportThunksMIPS(Img, Seg, TargetImports, Existing, Candidates);
+      break;
     default:
       break;
     }
@@ -271,9 +282,9 @@ void scanImportThunks(BinaryImage &Img) {
 /// The alignment of an address a prologue can begin at on \p A.  ARM probing
 /// accepts both ARM and Thumb, so Thumb's halfword alignment is kept.
 static size_t prologueAlignment(Arch A) {
-  return A == Arch::AArch64 ? aarch64::kInsnSize
-         : A == Arch::ARM   ? arm::kThumbInsnSize
-                            : 1;
+  return A == Arch::AArch64 || isMIPS(A) ? 4
+         : A == Arch::ARM                ? arm::kThumbInsnSize
+                                         : 1;
 }
 
 bool checkPrologueAtOffset(const Segment &Seg, size_t Off, Arch A) {
@@ -373,7 +384,7 @@ void recordRelocatedLiteralTargets(BinaryImage &Img) {
     const uint8_t *Bytes = Img.readVA(Slot, Img.getPointerSize());
     if (!Bytes)
       continue;
-    const va_t Addr = readPtr(Bytes, Img.is64Bit());
+    const va_t Addr = readPtr(Bytes, Img.is64Bit(), archLittleEndian(Img.Arch));
     const auto [It, Inserted] = Classified.try_emplace(Addr, false);
     if (!Inserted)
       continue;
@@ -666,8 +677,10 @@ void scanDataFuncPointers(BinaryImage &Img, const LoadProgress &Progress) {
       if (!OwnerEnd || *OwnerEnd < Cur || PtrSize > *OwnerEnd - Cur)
         break;
       const size_t I = static_cast<size_t>(Cur - Seg->VA);
-      uint64_t Val = normalizeCodeAddress(
-          readPtr(Seg->Data.data() + I, Img.is64Bit()), Img.Arch, Img.Mode);
+      uint64_t Val =
+          normalizeCodeAddress(readPtr(Seg->Data.data() + I, Img.is64Bit(),
+                                       archLittleEndian(Img.Arch)),
+                               Img.Arch, Img.Mode);
       // Only an authenticated JMP reader supplies case-label evidence.
       // A CALL through the same slot independently requires a function entry.
       if (Img.CodePtrRelocSlots.count(Cur) &&

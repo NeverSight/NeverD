@@ -34,6 +34,8 @@ bool hasValidRegistrationRootShape(const MedOp &Op) {
   case MedOp::RegistrationRootKind::DisplacedFramePointer:
     return Op.Output.RegOff == TRI.FramePointer &&
            Op.RegistrationStackOffset == 0;
+  case MedOp::RegistrationRootKind::DisplayFramePointer:
+    return Op.Output.RegOff == TRI.FramePointer;
   case MedOp::RegistrationRootKind::CallbackStackPointer:
     return Op.Output.RegOff == TRI.StackPointer &&
            Op.RegistrationStackOffset == 0;
@@ -53,12 +55,37 @@ bool hasValidRegistrationRootShape(const MedOp &Op) {
   return false;
 }
 
+bool isRegistrationDisplayRuntimeReturn(const MedFunc &Func, va_t Address) {
+  if (!Func.RegistrationStates || !Func.RegistrationStates->Display ||
+      !Func.ExceptionMetadata || !Func.ExceptionMetadata->Registration)
+    return false;
+  const RegistrationDisplayFacts &Facts = *Func.RegistrationStates->Display;
+  if (Facts.FinallyReturns.count(Address))
+    return true;
+  const auto After =
+      llvm::upper_bound(Facts.Stretches, Address,
+                        [](va_t A, const RegistrationDisplayFacts::Stretch &S) {
+                          return A < S.Range.Begin;
+                        });
+  if (After == Facts.Stretches.begin())
+    return false;
+  const auto &Stretch = *std::prev(After);
+  return Stretch.Owner && Stretch.Range.contains(Address) &&
+         llvm::any_of(Func.ExceptionMetadata->Registration->Scopes,
+                      [&](const RegistrationScopeRecord &Scope) {
+                        return !Scope.IsFinally &&
+                               Scope.FilterVA == Stretch.Owner;
+                      });
+}
+
 std::optional<int64_t> registrationRootEntryStackOffset(const MedOp &Op) {
   if (!hasValidRegistrationRootShape(Op))
     return std::nullopt;
   switch (Op.RegistrationRoot) {
   case MedOp::RegistrationRootKind::EstablishedFramePointer:
     return -4;
+  case MedOp::RegistrationRootKind::DisplayFramePointer:
+    return Op.RegistrationStackOffset;
   case MedOp::RegistrationRootKind::RestoredStackPointer:
     return int64_t(Op.RegistrationStackOffset) - 4;
   case MedOp::RegistrationRootKind::CallbackStackPointer:

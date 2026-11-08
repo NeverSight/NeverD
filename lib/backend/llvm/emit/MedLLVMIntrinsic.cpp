@@ -326,6 +326,51 @@ void MedLLVMEmitter::emitVoidInlineAsm(const char *Mnemonic, const MedOp &Op,
 
 bool MedLLVMEmitter::emitSideeffectIntrinsic(const MedOp &Op, Intrinsic IC,
                                              llvm::IRBuilder<> &Builder) {
+  if (IC == Intrinsic::RequireAligned) {
+    if ((Op.NumInputs != 3 && Op.NumInputs != 4) || Op.Output.Size != 0 ||
+        Op.Inputs[1].Size != 8 || Op.Inputs[2].Size != 8 ||
+        !Op.Inputs[2].isConst() ||
+        (Op.NumInputs == 4 && Op.Inputs[3].Size != 1))
+      llvm::report_fatal_error("invalid alignment precondition intrinsic");
+    if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+      llvm::report_fatal_error(
+          "segmented alignment precondition requires an architectural "
+          "FS/GS base");
+    const uint64_t Alignment = Op.Inputs[2].ConstVal;
+    if (Alignment == 0 || (Alignment & (Alignment - 1)) != 0)
+      llvm::report_fatal_error("alignment precondition is not a power of two");
+    llvm::Value *Value = getVar(Op.Inputs[1], Builder);
+    if (!Value->getType()->isIntegerTy())
+      llvm::report_fatal_error("alignment precondition value is not integer");
+    llvm::Value *Misaligned = Builder.CreateICmpNE(
+        Builder.CreateAnd(
+            Value, llvm::ConstantInt::get(Value->getType(), Alignment - 1)),
+        llvm::ConstantInt::get(Value->getType(), 0), "misaligned");
+    if (Op.NumInputs == 4) {
+      llvm::Value *Guard = getVar(Op.Inputs[3], Builder);
+      if (!Guard->getType()->isIntegerTy(8))
+        llvm::report_fatal_error(
+            "alignment precondition guard is not an i8 predicate");
+      llvm::Value *Active = Builder.CreateICmpNE(
+          Guard, llvm::ConstantInt::get(Guard->getType(), 0),
+          "alignment.active");
+      Misaligned =
+          Builder.CreateAnd(Active, Misaligned, "active.and.misaligned");
+    }
+    llvm::Function *Function = Builder.GetInsertBlock()->getParent();
+    llvm::BasicBlock *Trap =
+        llvm::BasicBlock::Create(*Ctx, "alignment.trap", Function);
+    llvm::BasicBlock *Continue =
+        llvm::BasicBlock::Create(*Ctx, "alignment.ok", Function);
+    Builder.CreateCondBr(Misaligned, Trap, Continue);
+    Builder.SetInsertPoint(Trap);
+    llvm::Function *TrapFn =
+        llvm::Intrinsic::getOrInsertDeclaration(Mod, llvm::Intrinsic::trap);
+    Builder.CreateCall(TrapFn, {});
+    Builder.CreateUnreachable();
+    Builder.SetInsertPoint(Continue);
+    return true;
+  }
   // An SMC or HVC #0 runs under the SMC Calling Convention with its registers
   // pinned: the function identifier and arguments in x0-x7 (r0-r7), the
   // results out of x0-x3, which bind the outputs the lift gave it.

@@ -32,7 +32,7 @@ sourceCallOccurrenceKey(const LowOp &Operation) {
   if ((Operation.Opcode != NdOp::CALL &&
        Operation.Opcode != NdOp::INDIR_CALL) ||
       Operation.Seq < 0 || Operation.NumInputs != 1 ||
-      Operation.Inputs[0].Size != 8 ||
+      (Operation.Inputs[0].Size != 4 && Operation.Inputs[0].Size != 8) ||
       (Operation.Opcode == NdOp::CALL && !Operation.Inputs[0].isConst()))
     return std::nullopt;
   return SourceCallOccurrenceKey{
@@ -288,58 +288,6 @@ struct DerivedControl {
   std::optional<uint64_t> CallTarget;
 };
 
-bool isInstructionGuardEffect(NdOp Opcode) {
-  switch (Opcode) {
-  case NdOp::LOAD:
-  case NdOp::STORE:
-  case NdOp::ATOMIC_XCHG:
-  case NdOp::ATOMIC_ADD:
-  case NdOp::ATOMIC_CMPXCHG:
-  case NdOp::INTRINSIC:
-  case NdOp::INDIR_BR:
-  case NdOp::CALL:
-  case NdOp::INDIR_CALL:
-  case NdOp::RETURN:
-    return true;
-  default:
-    return false;
-  }
-}
-
-bool hasCanonicalInstructionGuard(const LowBlock &Block,
-                                  const LowInstructionBoundary &Boundary) {
-  const uint64_t End = Boundary.FirstOp + Boundary.OpCount;
-  const va_t NextAddress = Boundary.Address + Boundary.Size;
-  std::optional<uint64_t> GuardIndex;
-
-  for (uint64_t I = Boundary.FirstOp; I < End; ++I) {
-    const LowOp &Op = Block.Ops[static_cast<size_t>(I)];
-    if (Op.Opcode != NdOp::COND_BR)
-      continue;
-    if (GuardIndex || Op.NumInputs < 2 || !Op.Inputs[0].isConst() ||
-        Op.Inputs[0].Offset != NextAddress)
-      return false;
-    GuardIndex = I;
-  }
-  if (!GuardIndex)
-    return false;
-
-  // A direct conditional ARM branch is itself represented as
-  // `COND_BR next,!condition; BRANCH target`; the BRANCH is guest control
-  // flow, not a guarded same-instruction effect.  Keep it out of the effect
-  // set just as CFGBuilder's producer does.
-  bool HasEffect = false;
-  for (uint64_t I = Boundary.FirstOp; I < End; ++I) {
-    const LowOp &Op = Block.Ops[static_cast<size_t>(I)];
-    if (!isInstructionGuardEffect(Op.Opcode) || Op.Opcode == NdOp::COND_BR)
-      continue;
-    if (I < *GuardIndex)
-      return false;
-    HasEffect = true;
-  }
-  return HasEffect;
-}
-
 DerivedControl deriveControl(const LowBlock &Block,
                              const LowInstructionBoundary &Boundary) {
   DerivedControl Result;
@@ -427,7 +375,10 @@ llvm::Error validateControl(const LowBlock &Block,
   const bool IsInstructionGuard =
       Has(LowInstructionControlFlag::InstructionGuard);
 
-  const bool HasCanonicalGuard = hasCanonicalInstructionGuard(Block, Boundary);
+  const bool HasCanonicalGuard = detail::hasInstructionGuard(
+      llvm::ArrayRef<LowOp>(Block.Ops).slice(Boundary.FirstOp,
+                                             Boundary.OpCount),
+      Boundary.Address + Boundary.Size, Boundary.DelaySlot.has_value());
   if (IsInstructionGuard != HasCanonicalGuard)
     return invalid(IsInstructionGuard
                        ? "instruction-local guard metadata is not backed by a "
@@ -435,11 +386,12 @@ llvm::Error validateControl(const LowBlock &Block,
                        : "canonical same-instruction guard is missing its "
                          "instruction-local metadata");
 
-  if (IsInstructionGuard && ((!IsBranch || !IsConditional) ||
-                             (Boundary.Mode != InstructionMode::ARM &&
-                              Boundary.Mode != InstructionMode::Thumb)))
-    return invalid(
-        "instruction-local guard requires conditional ARM control flags");
+  if (IsInstructionGuard &&
+      ((!IsBranch || !IsConditional) ||
+       (Boundary.Mode != InstructionMode::ARM &&
+        Boundary.Mode != InstructionMode::Thumb && !Boundary.DelaySlot)))
+    return invalid("instruction-local guard requires conditional ARM or "
+                   "delayed control flags");
 
   switch (Boundary.Control) {
   case LowInstructionControl::None:

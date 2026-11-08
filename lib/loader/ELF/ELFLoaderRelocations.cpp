@@ -198,8 +198,8 @@ void collectRelocations(const llvm::object::ELFFile<ELFT> &ELF,
         RE.Address = R.r_offset;
         RE.Addend = R.r_addend;
         RE.HasExplicitAddend = IsAndroidRela;
-        RE.Type = R.getType(false);
-        Record(std::move(RE), R.getSymbol(false), R.r_info);
+        RE.Type = R.getType(ELF.isMips64EL());
+        Record(std::move(RE), R.getSymbol(ELF.isMips64EL()), R.r_info);
       }
       continue;
     }
@@ -218,8 +218,8 @@ void collectRelocations(const llvm::object::ELFFile<ELFT> &ELF,
         RE.Address = R.r_offset;
         RE.Addend = R.r_addend;
         RE.HasExplicitAddend = true;
-        RE.Type = R.getType(false);
-        SymIdx = R.getSymbol(false);
+        RE.Type = R.getType(ELF.isMips64EL());
+        SymIdx = R.getSymbol(ELF.isMips64EL());
         RawInfo = R.r_info;
       } else {
         if (!rangeInBounds(ROff64, sizeof(Elf_Rel), Size))
@@ -227,8 +227,8 @@ void collectRelocations(const llvm::object::ELFFile<ELFT> &ELF,
         Elf_Rel R;
         std::memcpy(&R, Data + static_cast<size_t>(ROff64), sizeof(R));
         RE.Address = R.r_offset;
-        RE.Type = R.getType(false);
-        SymIdx = R.getSymbol(false);
+        RE.Type = R.getType(ELF.isMips64EL());
+        SymIdx = R.getSymbol(ELF.isMips64EL());
         RawInfo = R.r_info;
       }
       Record(std::move(RE), SymIdx, RawInfo);
@@ -275,7 +275,8 @@ void applyDynamicRelativeRelocations(
         continue;
       const size_t Off = static_cast<size_t>(SlotVA - Sec.VA);
       if (rangeInBounds(Off, PtrSize, Sec.Data.size()))
-        writePtr(Sec.Data.data() + Off, TargetVA, ELFT::Is64Bits);
+        writePtr(Sec.Data.data() + Off, TargetVA, ELFT::Is64Bits,
+                 ELFT::Endianness == llvm::endianness::little);
       break;
     }
 
@@ -299,8 +300,8 @@ void applyDynamicRelativeRelocations(
       const bool HasExplicitAddend = SH.sh_type == SHT_ANDROID_RELA;
       for (const Elf_Rela &R : *RelasOr) {
         const va_t SlotVA = static_cast<va_t>(R.r_offset);
-        const uint32_t Type = R.getType(false);
-        const uint32_t Symbol = R.getSymbol(false);
+        const uint32_t Type = R.getType(ELF.isMips64EL());
+        const uint32_t Symbol = R.getSymbol(ELF.isMips64EL());
         if (Symbol != 0 || !IsRelative(Type))
           continue;
         uint64_t TargetVA = 0;
@@ -310,7 +311,8 @@ void applyDynamicRelativeRelocations(
           const uint8_t *Existing = Img.readVA(SlotVA, PtrSize);
           if (!Existing)
             continue;
-          TargetVA = readPtr(Existing, ELFT::Is64Bits);
+          TargetVA = readPtr(Existing, ELFT::Is64Bits,
+                             ELFT::Endianness == llvm::endianness::little);
         }
         ApplyPointerSlot(SlotVA, TargetVA);
       }
@@ -339,10 +341,13 @@ void applyDynamicRelativeRelocations(
         if (!rangeInBounds(EntryOff, PtrSize, Size))
           break;
         const uint64_t Entry =
-            readPtr(Data + static_cast<size_t>(EntryOff), ELFT::Is64Bits);
+            readPtr(Data + static_cast<size_t>(EntryOff), ELFT::Is64Bits,
+                    ELFT::Endianness == llvm::endianness::little);
         if ((Entry & 1) == 0) {
           if (const uint8_t *P = Img.readVA(Entry, PtrSize))
-            ApplyPointerSlot(Entry, readPtr(P, ELFT::Is64Bits));
+            ApplyPointerSlot(
+                Entry, readPtr(P, ELFT::Is64Bits,
+                               ELFT::Endianness == llvm::endianness::little));
           HaveCursor = Entry <= InvalidVA - PtrSize;
           if (HaveCursor)
             Cursor = Entry + PtrSize;
@@ -360,7 +365,9 @@ void applyDynamicRelativeRelocations(
             break;
           const va_t SlotVA = Cursor + Delta;
           if (const uint8_t *P = Img.readVA(SlotVA, PtrSize))
-            ApplyPointerSlot(SlotVA, readPtr(P, ELFT::Is64Bits));
+            ApplyPointerSlot(
+                SlotVA, readPtr(P, ELFT::Is64Bits,
+                                ELFT::Endianness == llvm::endianness::little));
         }
         HaveCursor = Cursor <= InvalidVA - BitmapSpan;
         if (HaveCursor)
@@ -400,8 +407,8 @@ void applyDynamicRelativeRelocations(
         Elf_Rela R;
         std::memcpy(&R, Data + static_cast<size_t>(EntryOff), sizeof(R));
         SlotVA = static_cast<va_t>(R.r_offset);
-        Type = R.getType(false);
-        Symbol = R.getSymbol(false);
+        Type = R.getType(ELF.isMips64EL());
+        Symbol = R.getSymbol(ELF.isMips64EL());
         TargetVA = static_cast<typename ELFT::Addr>(R.r_addend);
       } else {
         if (!rangeInBounds(EntryOff, sizeof(Elf_Rel), Size))
@@ -409,12 +416,13 @@ void applyDynamicRelativeRelocations(
         Elf_Rel R;
         std::memcpy(&R, Data + static_cast<size_t>(EntryOff), sizeof(R));
         SlotVA = static_cast<va_t>(R.r_offset);
-        Type = R.getType(false);
-        Symbol = R.getSymbol(false);
+        Type = R.getType(ELF.isMips64EL());
+        Symbol = R.getSymbol(ELF.isMips64EL());
         const uint8_t *Existing = Img.readVA(SlotVA, PtrSize);
         if (!Existing)
           continue;
-        TargetVA = readPtr(Existing, ELFT::Is64Bits);
+        TargetVA = readPtr(Existing, ELFT::Is64Bits,
+                           ELFT::Endianness == llvm::endianness::little);
       }
       if (Symbol == 0) {
         if (IsRelative(Type))
@@ -534,14 +542,14 @@ llvm::Error applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
             Elf_Rela R;
             std::memcpy(&R, Data + static_cast<size_t>(EntryOff), sizeof(R));
             FieldOffset = R.r_offset;
-            Type = R.getType(false);
+            Type = R.getType(ELF.isMips64EL());
           } else {
             if (!rangeInBounds(EntryOff, sizeof(Elf_Rel), Size))
               break;
             Elf_Rel R;
             std::memcpy(&R, Data + static_cast<size_t>(EntryOff), sizeof(R));
             FieldOffset = R.r_offset;
-            Type = R.getType(false);
+            Type = R.getType(ELF.isMips64EL());
           }
           const ObjectRelocationWriterFootprint Footprint =
               objectRelocationWriterFootprint(Img.Arch, Type);
@@ -667,16 +675,16 @@ llvm::Error applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
         std::memcpy(&R, Data + static_cast<size_t>(ROff64), sizeof(R));
         RAddr = R.r_offset;
         RAddend = R.r_addend;
-        RType = R.getType(false);
-        RSym = R.getSymbol(false);
+        RType = R.getType(ELF.isMips64EL());
+        RSym = R.getSymbol(ELF.isMips64EL());
       } else {
         if (!rangeInBounds(ROff64, sizeof(Elf_Rel), Size))
           break;
         Elf_Rel R;
         std::memcpy(&R, Data + static_cast<size_t>(ROff64), sizeof(R));
         RAddr = R.r_offset;
-        RType = R.getType(false);
-        RSym = R.getSymbol(false);
+        RType = R.getType(ELF.isMips64EL());
+        RSym = R.getSymbol(ELF.isMips64EL());
       }
 
       va_t SymVal = 0;
@@ -1446,27 +1454,57 @@ template void collectRelocations<llvm::object::ELF32LE>(
     const llvm::object::ELFFile<llvm::object::ELF32LE> &,
     llvm::ArrayRef<llvm::object::ELF32LE::Shdr>, llvm::StringRef,
     const uint8_t *, size_t, bool, BinaryImage &);
+
+template void collectRelocations<llvm::object::ELF32BE>(
+    const llvm::object::ELFFile<llvm::object::ELF32BE> &,
+    llvm::ArrayRef<llvm::object::ELF32BE::Shdr>, llvm::StringRef,
+    const uint8_t *, size_t, bool, BinaryImage &);
 template void collectRelocations<llvm::object::ELF64LE>(
     const llvm::object::ELFFile<llvm::object::ELF64LE> &,
     llvm::ArrayRef<llvm::object::ELF64LE::Shdr>, llvm::StringRef,
+    const uint8_t *, size_t, bool, BinaryImage &);
+
+template void collectRelocations<llvm::object::ELF64BE>(
+    const llvm::object::ELFFile<llvm::object::ELF64BE> &,
+    llvm::ArrayRef<llvm::object::ELF64BE::Shdr>, llvm::StringRef,
     const uint8_t *, size_t, bool, BinaryImage &);
 
 template llvm::Error applyRelocations<llvm::object::ELF32LE>(
     const llvm::object::ELFFile<llvm::object::ELF32LE> &,
     llvm::ArrayRef<llvm::object::ELF32LE::Shdr>, const uint8_t *, size_t,
     const std::vector<va_t> &, bool, const ObjectExterns &, BinaryImage &);
+
+template llvm::Error applyRelocations<llvm::object::ELF32BE>(
+    const llvm::object::ELFFile<llvm::object::ELF32BE> &,
+    llvm::ArrayRef<llvm::object::ELF32BE::Shdr>, const uint8_t *, size_t,
+    const std::vector<va_t> &, bool, const ObjectExterns &, BinaryImage &);
 template llvm::Error applyRelocations<llvm::object::ELF64LE>(
     const llvm::object::ELFFile<llvm::object::ELF64LE> &,
     llvm::ArrayRef<llvm::object::ELF64LE::Shdr>, const uint8_t *, size_t,
+    const std::vector<va_t> &, bool, const ObjectExterns &, BinaryImage &);
+
+template llvm::Error applyRelocations<llvm::object::ELF64BE>(
+    const llvm::object::ELFFile<llvm::object::ELF64BE> &,
+    llvm::ArrayRef<llvm::object::ELF64BE::Shdr>, const uint8_t *, size_t,
     const std::vector<va_t> &, bool, const ObjectExterns &, BinaryImage &);
 
 template void applyDynamicRelativeRelocations<llvm::object::ELF32LE>(
     const llvm::object::ELFFile<llvm::object::ELF32LE> &,
     llvm::ArrayRef<llvm::object::ELF32LE::Shdr>, const uint8_t *, size_t,
     BinaryImage &);
+
+template void applyDynamicRelativeRelocations<llvm::object::ELF32BE>(
+    const llvm::object::ELFFile<llvm::object::ELF32BE> &,
+    llvm::ArrayRef<llvm::object::ELF32BE::Shdr>, const uint8_t *, size_t,
+    BinaryImage &);
 template void applyDynamicRelativeRelocations<llvm::object::ELF64LE>(
     const llvm::object::ELFFile<llvm::object::ELF64LE> &,
     llvm::ArrayRef<llvm::object::ELF64LE::Shdr>, const uint8_t *, size_t,
+    BinaryImage &);
+
+template void applyDynamicRelativeRelocations<llvm::object::ELF64BE>(
+    const llvm::object::ELFFile<llvm::object::ELF64BE> &,
+    llvm::ArrayRef<llvm::object::ELF64BE::Shdr>, const uint8_t *, size_t,
     BinaryImage &);
 
 } // namespace detail

@@ -892,7 +892,7 @@ bool Engine::reloadOperandFormats() {
   return true;
 }
 void Engine::namesChanged() {
-  renameRowsRevision_.reset();
+  imageFactsRevision_.reset();
   forgetNamedViews();
   graphs_.clear();
   if (listing_)
@@ -904,21 +904,22 @@ void Engine::namesChanged() {
   functionOrder_.clear();
 }
 void Engine::dataNameChanged() {
-  renameRowsRevision_.reset();
+  imageFactsRevision_.reset();
   forgetNamedViews();
   graphs_.clear();
   textKey_.clear();
   textCache_.clear();
   textLines_.clear();
 }
-void Engine::dataItemsChanged() {
+void Engine::dataItemsChanged() { forgetGraphsAndText(); }
+void Engine::forgetGraphsAndText() {
   graphs_.clear();
   textKey_.clear();
   textCache_.clear();
   textLines_.clear();
 }
 void Engine::functionNamesChanged(bool unnamed) {
-  renameRowsRevision_.reset();
+  imageFactsRevision_.reset();
   graphs_.clear();
   if (listing_ && unnamed)
     listing_->functionNamesChanged();
@@ -1098,6 +1099,7 @@ void Engine::unindexNamedView(NamedViewPosition position) {
     namedViewsBySource_.erase(source);
 }
 void Engine::forgetNamedViews() {
+  imageFactsRevision_.reset();
   for (auto &document : namedViews_)
     releases_.retire(std::move(document));
   namedViews_.clear();
@@ -1105,18 +1107,142 @@ void Engine::forgetNamedViews() {
   namedViewsBySource_.clear();
   namedViewBytes_ = 0;
   encodedPageBytes_ = 0;
+  ++namedViewsEpoch_;
+  viewEdits_.clear();
+  restartRenderAhead();
+}
+
+void Engine::settleNamedViews() {
+  if (listing_)
+    syncNamedViews();
+  imageFactsHeld_ = imageFactsRevision_ == revision_;
+  cacheGenerationBefore_ = listing_ ? listing_->cacheGeneration() : 0;
+}
+
+void Engine::keepNamedViewsThrough(std::uint64_t address,
+                                   std::vector<std::string> names,
+                                   bool pagesStale) {
+  if (viewEdits_.size() == ::neverd::limits::worker::kEngineMaxViewEdits)
+    viewEdits_.pop_front();
+  viewEdits_.push_back({address, std::move(names), pagesStale});
+  ++viewEditCount_;
+}
+
+void Engine::readViewEdits(const std::string &sourceKey) {
+  const auto found = namedViewsBySource_.find(sourceKey);
+  if (found == namedViewsBySource_.end())
+    return;
+  const auto position = found->second;
+  const auto &document = **position;
+  const auto unread = viewEditCount_ - document.viewEditsRead;
+  if (!unread)
+    return;
+  const auto &reads = document.reads;
+  const auto text = document.value.find("text");
+  std::size_t read = 0;
+  bool readEnough = false;
+  const auto identifierChar = [](char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_';
+  };
+  const auto hashOf = [](std::string_view token) {
+    return static_cast<std::uint64_t>(std::hash<std::string_view>{}(token));
+  };
+  const auto reaches = [&](const ViewEdit &edit) {
+    if (!document.readsKnown ||
+        std::binary_search(reads.begin(), reads.end(), edit.address) ||
+        text == document.value.end() || !text->is_string())
+      return true;
+    // A name a token of the text spells may now resolve there.
+    const std::string_view spelled = text->get_ref<const std::string &>();
+    for (const auto &name : edit.names) {
+      if (name.empty())
+        continue;
+      if (!std::all_of(name.begin(), name.end(), identifierChar)) {
+        // Spelled otherwise than as one identifier: wherever it is.
+        read += spelled.size();
+        readEnough =
+            read > ::neverd::limits::worker::kEngineMaxViewEditTextBytes;
+        if (readEnough || spelled.find(name) != std::string_view::npos)
+          return true;
+        continue;
+      }
+      if (!document.spelledRead) {
+        for (std::size_t at = 0; at < spelled.size();) {
+          if (!identifierChar(spelled[at])) {
+            ++at;
+            continue;
+          }
+          const auto begin = at;
+          while (at < spelled.size() && identifierChar(spelled[at]))
+            ++at;
+          document.spelled.push_back(hashOf(spelled.substr(begin, at - begin)));
+        }
+        std::sort(document.spelled.begin(), document.spelled.end());
+        document.spelled.erase(
+            std::unique(document.spelled.begin(), document.spelled.end()),
+            document.spelled.end());
+        document.spelledRead = true;
+      }
+      if (std::binary_search(document.spelled.begin(), document.spelled.end(),
+                             hashOf(name)))
+        return true;
+    }
+    return false;
+  };
+  // Behind what is remembered, it may read anything.
+  bool stale = unread > viewEdits_.size(), decorated = false;
+  if (!stale)
+    for (auto edit = viewEdits_.end() - static_cast<std::ptrdiff_t>(unread);
+         edit != viewEdits_.end() && !stale; ++edit)
+      if ((!decorated || edit->pagesStale) && reaches(*edit))
+        (edit->pagesStale || readEnough ? stale : decorated) = true;
+  if (stale) {
+    unindexNamedView(position);
+    namedViewBytes_ -= document.bytes;
+    encodedPageBytes_ -= document.pageBytes;
+    releases_.retire(std::move(*position));
+    namedViews_.erase(position);
+    return;
+  }
+  if (decorated)
+    if (const auto key = namedViewsByKey_.find(document.key);
+        key != namedViewsByKey_.end())
+      namedViewsByKey_.erase(key);
+  document.viewEditsRead = viewEditCount_;
+}
+
+void Engine::namedViewsTakeRevision(bool storesStand) {
+  forgetEncodedPages();
+  namedViewsRevision_ = revision_;
+  if (listing_)
+    namedViewsGeneration_ = listing_->generation();
+  if (imageFactsHeld_)
+    imageFactsRevision_ = revision_;
+  // What such an edit changed no store is kept under (renderStoreIdentity).
+  if (storesStand && listing_ && rendersSayTheirReads()) {
+    const auto generation = listing_->cacheGeneration();
+    if (rendersStoreGeneration_ == cacheGenerationBefore_)
+      rendersStoreGeneration_ = generation;
+    if (factsStoreGeneration_ == cacheGenerationBefore_)
+      factsStoreGeneration_ = generation;
+  }
+  // What the job has rendered reads as far as its reads say.
   restartRenderAhead();
 }
 
 void Engine::localNamesChanged() {
-  renameRowsRevision_.reset();
   // Local display names do not change instructions, functions or the prepared
   // pipeline. Keep original documents for checked, lazy redecoration; encoded
   // pages and already decorated documents still belong to their old revision.
+  const bool held = imageFactsRevision_ == revision_;
   ++revision_;
+  if (held)
+    imageFactsRevision_ = revision_;
   ++localNameRevisions_;
   namedViewsRevision_ = revision_;
   forgetEncodedPages();
+  namedViewsByKey_.clear();
 }
 
 void Engine::forgetEncodedPages() {
@@ -1244,6 +1370,12 @@ void Engine::syncNamedViews() {
     namedViewsRevision_ = revision_;
     namedViewsListingGeneration_ = generation;
   }
+  // Decoration reads what else the listing's generation says, as functions'
+  // names: each document builds again from its pages.
+  if (namedViewsGeneration_ != listing().generation()) {
+    namedViewsByKey_.clear();
+    namedViewsGeneration_ = listing().generation();
+  }
 }
 
 std::string Engine::namedViewSourceKey(std::uint64_t address,
@@ -1293,12 +1425,13 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
   const auto cacheKey = [&] {
     syncNamedViews();
     return hexAddress(address) + ":" + representation + ":" +
-           std::to_string(revision_) + ":" +
-           std::to_string(listing().generation()) + ":" + optionText;
+           std::to_string(namedViewsEpoch_) + ":" +
+           std::to_string(listing().viewGeneration()) + ":" + optionText;
   };
   const auto lookupKey = cacheKey();
   const auto sourceKey =
       namedViewSourceKey(address, representation, optionText);
+  readViewEdits(sourceKey);
   if (const auto cached = namedViewsByKey_.find(lookupKey);
       cached != namedViewsByKey_.end()) {
     namedViews_.splice(namedViews_.begin(), namedViews_, cached->second);
@@ -1314,6 +1447,7 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
   if (reused && !reused->original.empty())
     original = Json::parse(reused->original);
   keptRenamed_ = nullptr;
+  keptReads_.clear();
   // A first visit to a function rendered ahead reads those pages.
   const std::vector<std::string> renderedPages =
       reused || recovery
@@ -1491,10 +1625,16 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
           displayNames.emplace(source.substr(begin, end - begin), *alias);
       }
     }
+    if (reused && reused->readsKnown) {
+      document->reads = reused->reads;
+      document->readsKnown = true;
+    } else if (replay) {
+      noteRenderReads(*document);
+    }
     if (sourceView && !recovery)
       CodeEdits::decorate(
-          full, codeEditRow(address), address, representation, renameRows(),
-          backendJson(neverd_annotations_json(session_)), displayNames,
+          full, codeEditRow(address), address, representation, imageFacts(),
+          displayNames,
           [this](const std::string &name) -> std::optional<std::uint64_t> {
             // The address the resolve operation answers, without describing
             // the function there; a query it refuses names nothing.
@@ -1515,6 +1655,8 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
               return std::nullopt;
             }
           });
+    if (document->readsKnown)
+      noteDecorationReads(*document, full, address);
     std::vector<std::pair<std::size_t, std::ptrdiff_t>> shift;
     if (!sourceView) {
       full["text"] = renameIdentifiers(full["text"].get<std::string>(),
@@ -1587,6 +1729,7 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
                    document->orderedCodeNames);
     document->value = std::move(full);
     document->key = key;
+    document->viewEditsRead = viewEditCount_;
     document->sourceKey = sourceKey;
     // If resolving source names changed the listing while decorating this
     // document, it remains usable for this response but is not reusable yet.
@@ -1980,6 +2123,15 @@ void Engine::prefillStep() {
     prefillState_ = PrefillState::Done;
 }
 bool Engine::summaryStep() {
+  // A request that comes during a step waits for it: a step runs once the
+  // reader has paused, and the solve, the longest, once they have for longer.
+  namespace limits = ::neverd::limits::worker;
+  const auto idle = std::chrono::steady_clock::now() - lastRequest_;
+  if (idle <
+      std::chrono::milliseconds(summaryState_ == SummaryState::Solving
+                                    ? limits::kSummarySolveHoldOffMilliseconds
+                                    : limits::kSummaryStepHoldOffMilliseconds))
+    return false;
   if (prefillPending()) {
     try {
       prefillStep();
@@ -2466,7 +2618,9 @@ Json Engine::codeEditRow(std::uint64_t address) const {
   return nullptr;
 }
 
-Json Engine::analysisSnapshot() {
+Json Engine::analysisSnapshot() { return analysisSnapshot(userState()); }
+
+Json Engine::analysisSnapshot(Json state) {
   requireLoaded();
   // A declined PDB names no file to have changed.
   if (pdbInput_.contains("path") &&
@@ -2517,7 +2671,7 @@ Json Engine::analysisSnapshot() {
   return {{"schema", 1},
           {"open", options},
           {"input_sha256", inputHash()},
-          {"state", userState()},
+          {"state", std::move(state)},
           {"declared_types",
            declaresLocalTypes() ? typeDeclarationRows() : Json::array()},
           {"analysis_sections", std::move(analysisSections)},
@@ -2532,7 +2686,11 @@ Json Engine::analysisSnapshot() {
 }
 
 Json Engine::browseCacheIdentity() {
-  auto identity = analysisSnapshot();
+  return browseCacheIdentity(analysisSnapshot(), {});
+}
+
+Json Engine::browseCacheIdentity(
+    Json identity, const std::vector<project_files::File> &unread) {
   // Execution/presentation choices do not change the loaded analysis input.
   // A writer's completed facts are also usable by a read-only consumer.
   identity["open"] = loadOptions() ? backendJson(loadOptions().json(session_))
@@ -2546,7 +2704,8 @@ Json Engine::browseCacheIdentity() {
   const auto folder = utf8Path(project.at("folder").get<std::string>());
   for (const auto &file : project_files::Files) {
     if (!file.Shared || file.Id == project_files::File::Manifest ||
-        file.Id == project_files::File::Bookmarks)
+        file.Id == project_files::File::Bookmarks ||
+        std::find(unread.begin(), unread.end(), file.Id) != unread.end())
       continue;
     const auto path = folder / std::string(file.Path);
     if (!fs::exists(path))
@@ -2793,7 +2952,7 @@ Json Engine::updateAnalysisNames(const Json &snapshot) {
     }
   codeEdits_ = next.value("code_edits", Json::array());
   restoredSnapshot_ = snapshot;
-  renameRowsRevision_.reset();
+  imageFactsRevision_.reset();
   if (oldNames != newNames && neverd_renames_load(session_) != 0)
     throw Error("stale_snapshot", "Cannot read the project's names again");
   if (formatsChanged && !reloadOperandFormats())
@@ -4218,6 +4377,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     std::string reply;
     StoreNames storesBefore;
     if (operation == "local_types_declare") {
+      settleNamedViews();
       try {
         storesBefore = storeNames();
       } catch (const std::exception &) {
@@ -4284,6 +4444,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
         })) {
       keepStoresFor(storesBefore);
       ++revision_;
+      namedViewsTakeRevision(false);
       return result;
     }
     // Structure offsets name the members of the types as they are now.
@@ -5308,10 +5469,17 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
          {"address", hexAddress(address)},
          {"before", ownedString(neverd_annotation_get(session_, address))},
          {"after", text}});
+    settleNamedViews();
     neverd_annotation_set(session_, address, text.c_str());
     dirty_ = true;
-    commentsChanged();
+    if (listing_)
+      listing_->commentsChanged();
+    forgetGraphsAndText();
+    imageFacts_.commented(address, text);
+    // Decoration writes it where the document's rows state its address.
+    keepNamedViewsThrough(address, {}, false);
     ++revision_;
+    namedViewsTakeRevision(true);
     return {{"address", hexAddress(address)},
             {"text", text},
             {"dirty", true},
@@ -5369,6 +5537,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     for (const auto &item : renames)
       if (parseAddress(item.at("addr").get<std::string>()) == address)
         after = item;
+    settleNamedViews();
     // The session takes the name from here, so the reply need not wait for the
     // disk (ProjectHistory::persistLater).
     using RenameTake = int (*)(neverd_session_t, neverd_va_t, const char *);
@@ -5391,13 +5560,39 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
               : neverd_renames_load(session_)) != 0)
       throw Error("reload_failed", "Rename was saved but could not be reloaded",
                   {{"saved", true}});
-    if (listing_ && listing_->functionRenamed(address))
-      functionNamesChanged(false);
-    else if (listing_ && index < 0 && listing_->dataRenamed(address, name))
-      dataNameChanged();
+    // What a view may spell of it: the name, the one given up, and the one the
+    // engine has for it.
+    const std::vector<std::string> spellings{
+        name, after.value("original", std::string()),
+        before.is_object() ? before.value("renamed", std::string())
+                           : std::string()};
+    // As the engine's row now reads.
+    using RenameOriginal = const char *(*)(neverd_session_t, neverd_va_t);
+    static const auto engineOriginal =
+        engineSymbol<RenameOriginal>("neverd_rename_original");
+    if (imageFactsHeld_ && engineOriginal)
+      imageFacts_.renamed(address,
+                          ownedString(engineOriginal(session_, address)), name);
     else
+      imageFactsHeld_ = false;
+    const bool functionInPlace = listing_ && listing_->functionRenamed(address);
+    const bool dataInPlace = !functionInPlace && listing_ && index < 0 &&
+                             listing_->dataRenamed(address, name);
+    if (functionInPlace) {
+      // Decoration reads a function's name.
+      functionNamesChanged(false);
+      keepNamedViewsThrough(address, spellings, false);
+    } else if (dataInPlace) {
+      // The pages of what read it spell a name of data.
+      imageFactsRevision_.reset();
+      forgetGraphsAndText();
+      keepNamedViewsThrough(address, spellings, true);
+    } else
       namesChanged();
     ++revision_;
+    // A function's name may bind a prototype its declaration then hides.
+    if (functionInPlace || dataInPlace)
+      namedViewsTakeRevision(dataInPlace);
     return {{"address", hexAddress(address)}, {"name", name}, {"saved", true}};
   }
   if (operation == "function_attributes") {
@@ -5465,6 +5660,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       stated = p.at("attributes").dump();
     }
     auto &store = history();
+    settleNamedViews();
     // The engine checks the edit; the rows it then holds are the new table.
     if ((edit     ? attributes.edit(session_, address, stated.c_str())
          : create ? edits.create(session_, address)
@@ -5499,11 +5695,15 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       return functionRowsRead(
           row.is_null() ? Json::array() : Json::array({row}), declarations);
     };
+    // A note on it reaches no view.
+    const bool noted = edit && rowRead(before, true) == rowRead(after, true);
     if (!edit || rowRead(before, false) != rowRead(after, false))
       functionsChanged();
-    else if (rowRead(before, true) != rowRead(after, true))
+    else if (!noted)
       declarationsChanged();
     ++revision_;
+    if (noted)
+      namedViewsTakeRevision(true);
     Json result{{"address", hexAddress(address)}, {"saved", true}};
     if (edit)
       result["row"] = after;
@@ -5513,6 +5713,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
   }
   if (operation == "item_define") {
     requireWriter();
+    settleNamedViews();
     const auto &items = dataItems();
     if (!items)
       throw Error("unsupported", "This engine keeps no data items");
@@ -5711,11 +5912,14 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       namesChanged();
       throw;
     }
-    if (listing_ && listing_->dataItemsChanged())
+    const bool itemsInPlace = listing_ && listing_->dataItemsChanged();
+    if (itemsInPlace)
       dataItemsChanged();
     else
       namesChanged();
     ++revision_;
+    if (itemsInPlace)
+      namedViewsTakeRevision(true);
     return {{"address", hexAddress(start)},
             {"kind", after.at("kind")},
             {"size", action == "code" ? Json(size) : after.at("size")},

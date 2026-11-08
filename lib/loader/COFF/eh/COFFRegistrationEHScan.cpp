@@ -167,9 +167,13 @@ std::optional<va_t> directInstallEntry(const BinaryImage &Img,
   if (Code[Cursor] != 0x68 ||
       readLE<uint32_t>(Code + Cursor + 1) != Site.HandlerVA ||
       Code[Prefix] != 0x64 || Code[Prefix + 1] != 0xa1 ||
-      readLE<uint32_t>(Code + Prefix + 2) != 0 || Code[Prefix + 6] != 0x50 ||
-      Code[Prefix + 7] != 0x64 || Code[Prefix + 8] != 0x89 ||
-      Code[Prefix + 9] != 0x25 || readLE<uint32_t>(Code + Prefix + 10) != 0)
+      readLE<uint32_t>(Code + Prefix + 2) != 0 || Code[Prefix + 6] != 0x50)
+    return std::nullopt;
+  // A scope-table frame with a cookie goes on to allocate and encode before it
+  // publishes the record; the seed, table and handler already name this frame.
+  if (IsCxx &&
+      (Code[Prefix + 7] != 0x64 || Code[Prefix + 8] != 0x89 ||
+       Code[Prefix + 9] != 0x25 || readLE<uint32_t>(Code + Prefix + 10) != 0))
     return std::nullopt;
   return Entry;
 }
@@ -402,6 +406,12 @@ std::vector<InstallSite> findInstallSites(const BinaryImage &Img,
         }
       }
       if (Entry && Range->contains(*Entry)) {
+        // A hot-patchable function starts at the `mov edi, edi` before its
+        // scope-table frame.
+        if (!Site.Identity.CxxFuncInfoVA && *Entry >= Range->Begin + 2)
+          if (const auto *Patch = Img.readVA(*Entry - 2, 2);
+              Patch && Patch[0] == 0x8b && Patch[1] == 0xff)
+            *Entry -= 2;
         Range->Begin = *Entry;
         Site.HasPhysicalEntry = true;
       }

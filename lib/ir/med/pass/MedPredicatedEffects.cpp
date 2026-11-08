@@ -1,11 +1,12 @@
-//===- MedPredicatedEffects.cpp - Materialize ARM predicates -*- C++ -*-===//
+//===- MedPredicatedEffects.cpp - Materialize execution-unit predicates -*- C++
+//-*-===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Splits a flattened ARM instruction-local predicate guard into ordinary
+/// Splits a flattened execution-unit predicate guard into ordinary
 /// guard and effect blocks before SSA construction.
 ///
 //===----------------------------------------------------------------------===//
@@ -77,9 +78,24 @@ std::optional<int> successorAtAddress(const MedFunc &Func,
 
 } // namespace
 
-void LowToMedConverter::materializePredicatedEffects(MedFunc &Func) {
-  if (TargetArch != Arch::ARM || Func.Blocks.empty())
+void LowToMedConverter::materializePredicatedEffects(MedFunc &Func,
+                                                     const LowFunc &Low) {
+  if ((TargetArch != Arch::ARM && !isMIPS(TargetArch)) || Func.Blocks.empty())
     return;
+
+  // Source boundaries own the slot membership, including operations that
+  // return to the head address after the slot. Do not infer units from nearby
+  // addresses: the slot can also be an independent CFG entry.
+  std::map<va_t, va_t> GuardedSlots;
+  if (isMIPS(TargetArch))
+    for (const auto &Block : Low.Blocks)
+      for (const auto &Boundary : Block.InstructionBoundaries)
+        if (Boundary.DelaySlot &&
+            hasLowInstructionControlFlag(
+                Boundary.ControlFlags,
+                LowInstructionControlFlag::InstructionGuard))
+          GuardedSlots.emplace(Boundary.Address,
+                               Boundary.Address + Boundary.DelaySlot->Offset);
 
   const size_t OriginalBlockCount = Func.Blocks.size();
   std::vector<MedBlock> AddedBlocks;
@@ -115,9 +131,14 @@ void LowToMedConverter::materializePredicatedEffects(MedFunc &Func) {
           !Guard.Inputs[0].isConst())
         continue;
 
+      const auto Slot = GuardedSlots.find(Guard.Addr);
+      if (isMIPS(TargetArch) && Slot == GuardedSlots.end())
+        continue;
       size_t EffectEnd = GuardIndex + 1;
       while (EffectEnd < GuardBlock.Ops.size() &&
-             GuardBlock.Ops[EffectEnd].Addr == Guard.Addr)
+             (GuardBlock.Ops[EffectEnd].Addr == Guard.Addr ||
+              (Slot != GuardedSlots.end() &&
+               GuardBlock.Ops[EffectEnd].Addr == Slot->second)))
         ++EffectEnd;
       if (EffectEnd == GuardIndex + 1)
         continue;
@@ -132,8 +153,8 @@ void LowToMedConverter::materializePredicatedEffects(MedFunc &Func) {
       // a different-address tail would indicate malformed or legacy MedIR.
       // Refuse to guess where such operations belong.
       if (EffectEnd != GuardBlock.Ops.size())
-        llvm::report_fatal_error(
-            "predicated ARM effect is not the final guest instruction");
+        llvm::report_fatal_error("predicated execution-unit effect is not the "
+                                 "final guest instruction");
 
       const va_t SkipAddress = Guard.Inputs[0].ConstVal;
       const std::optional<int> ExistingSkip =
@@ -198,7 +219,7 @@ void LowToMedConverter::materializePredicatedEffects(MedFunc &Func) {
     for (int Successor : Block.Succs) {
       if (Successor < 0 || static_cast<size_t>(Successor) >= Func.Blocks.size())
         llvm::report_fatal_error(
-            "predicated ARM effect has an invalid successor");
+            "predicated execution-unit effect has an invalid successor");
       Func.Blocks[Successor].Preds.push_back(Block.Id);
     }
     for (const ExceptionalEdge &Edge : Block.ExceptionalSuccs) {

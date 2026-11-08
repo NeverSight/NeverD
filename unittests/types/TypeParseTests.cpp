@@ -109,6 +109,52 @@ TEST(TypeParse, IdentifierRunsKeepBoundariesAndSourcePositions) {
   }
 }
 
+TEST(TypeParse, ARefusedDeclarationLeavesTheLibraryAsItWas) {
+  TypeLibrary Library(DataModel::LP64);
+  ASSERT_TRUE(parseCTypes("struct KEPT { int value; }; int first(int a); "
+                          "typedef int NUMBER;",
+                          Library)
+                  .ok());
+  const auto Before = Library.types();
+  const LocalType *Kept = Library.find("KEPT");
+  std::vector<std::string> Order;
+  for (const auto &Entry : Library.prototypes())
+    Order.push_back(Entry.first().str());
+  // It redefines one, adds types and functions, and then fails.
+  EXPECT_FALSE(parseCTypes("struct KEPT { long other; }; struct NEW { int a; };"
+                           "int second(void); int third(void); struct",
+                           Library)
+                   .ok());
+  EXPECT_EQ(Library.types(), Before);
+  EXPECT_EQ(Library.find("KEPT"), Kept);
+  EXPECT_EQ(Library.find("NEW"), nullptr);
+  EXPECT_EQ(Library.findPrototype("second"), nullptr);
+  std::vector<std::string> After;
+  for (const auto &Entry : Library.prototypes())
+    After.push_back(Entry.first().str());
+  EXPECT_EQ(After, Order);
+  // What it took in the end reads as if nothing had been tried: the ordinal
+  // the refused one held goes to the next.
+  ASSERT_TRUE(parseCTypes("struct NEXT { int a; };", Library).ok());
+  EXPECT_EQ(Library.find("NEXT")->Ordinal, Before.size() + 1);
+  EXPECT_EQ(Library.size(), Before.size() + 1);
+  // A type removed in a trial that fails comes back under its ordinal.
+  {
+    TypeLibrary::Trial Trial(Library);
+    EXPECT_TRUE(Library.remove("KEPT"));
+    EXPECT_EQ(Library.find("KEPT"), nullptr);
+  }
+  EXPECT_EQ(Library.find("KEPT"), Kept);
+  EXPECT_EQ(Library.byOrdinal(Kept->Ordinal), Kept);
+  // And what a kept one changed stays.
+  {
+    TypeLibrary::Trial Trial(Library);
+    EXPECT_TRUE(Library.remove("NEXT"));
+    Trial.keep();
+  }
+  EXPECT_EQ(Library.find("NEXT"), nullptr);
+}
+
 TEST(TypeParse, StorageQualifiersKeepDeclaratorsAndKeywordBoundaries) {
   for (DataModel Model :
        {DataModel::ILP32, DataModel::LP64, DataModel::LLP64}) {

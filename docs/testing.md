@@ -72,6 +72,18 @@ uncompared common fields remain unqualified. Existing V6/control outputs must
 stay identical after shared validation changes. No target program, instruction
 executor, event callback or VM runs; no native build is needed for this suite.
 
+Add `scripts.tests.test_qemu_save_lapic` for fixed APIC bank transport. It checks
+the explicit delivery profile, captured enable gates, retained pending/halted
+evidence, unknown shadows, EOI-suppression binding, ownership and CLI failures.
+Reserved bank bits remain intact for the C++ owner to admit or reject.
+`NeverDX86LocalApicProofs` is a compile-only object target (also included in
+`NeverDUnitTests`) for the [fixed local APIC model](x86-local-apic.md). Build it
+through `scripts/build.py`; its assertions cover all fixed vectors and priority
+classes, acknowledgments, nested service and EOI obligations without executing
+a test binary. For a real save, compile projected bank initializers at O0/O2,
+inspect constant bytes, and keep hypothetical register transitions distinct
+from captured observations. No guest, handler or device callback need run.
+
 `NeverDX64PagedExecutionTests` compiles actual paged HighC/LLVM-to-C exports
 through Clang and optional `NEVERD_TEST_NEVERC`, at O0/O2, and compares their
 scalar instruction completion and faults with independent original KVM CPU
@@ -499,6 +511,53 @@ verified native machine output without helpers or inline assembly, and
 original i386/x64 query execution. Privileged builtins have code-generation
 coverage only; the separate protected NeverD fixtures own their state/fault
 contracts.
+
+`LegacySystemSelectors/*` qualifies original SLDT/STR/LLDT/LTR, including
+every descriptor access byte and flag nibble, CPL/RPL, independent code,
+operand and address widths, register choices, UMIP, invalid selectors,
+read-only/split tables and original page-repair/IRET/retry. The fixture compares
+both system caches as well as registers, flags, exception frames and table
+bytes. `OriginalSystemSelectorReadsAndBusyWrite` observes source-word and
+whole-descriptor read/write footprints, including TF. The software
+`X86LegacySystemSelectorTest.*` checks fixed expected values, unavailable
+backing, rejected profiles and continuation with the retained LDTR flag nibble.
+`X86LegacySourceTest.SystemSelector*` compiles cache-producing/consuming
+instruction chains and busy-write fault repair through Clang/NeverC O0/O2.
+Run these with both SDKs and qualified P/E cores, plus shared scalar,
+segment/query and ordinary system-state regressions.
+
+`LegacyMachineStatus/*` qualifies original protected SMSW/LMSW/CLTS in legacy
+paging and PAE. It compares the complete control bank, registers, flags,
+exceptions and RAM across code/operand/address sizes, all GPRs, low CR0 bits,
+ignored source bits, preserved control fields, CPL/UMIP, segment/page/alignment
+faults and original handler repair/retry. `OriginalMachineStatusAccessesAndTraps`
+uses real guest debug handlers to check exact word accesses and post-instruction
+CR0 publication. Its LMSW case clears TS while retaining MP/EM: KVM lets the
+guest own TS, whereas changing MP can take an intercepted LMSW path. On the
+qualified host, the latter lost the data-breakpoint trap; unchanged-CR0 and
+TS-only controls retained it. This agrees with the
+[KVM VMX control-register handler](https://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux/+/05e96e96a315fa49faca4da2aedd1761a218b616/arch/x86/kvm/vmx/vmx.c#5505),
+but is not a trace of the running kernel's VM exit. Keep the failing diagnostic
+receipts; do not use that intercepted case as architectural debug evidence.
+Fixed software and generated-C cases separately check MP/EM/TS publication
+before data/TF traps and no publication on a faulting read.
+`X86LegacyMachineStatusTest.*` adds fixed expected values,
+backing resume, sticky PE and prefetch refusal of missing choices or malformed
+encodings. `X86LegacySourceTest.MachineStatus*` executes compiled state-producing
+and consuming chains, faults/retry and single-step traps with Clang and NeverC
+at O0/O2. Run both SDKs on the qualified P/E cores and the shared scalar,
+descriptor/selector and system-state regressions. FullCR0 is an explicit target
+choice, not a universal definition of SMSW's undefined high word. NeverC's
+descriptor-builtin harness also checks CLTS on i386 and x64; privileged native
+builtins have code-generation coverage there, while these protected CPU tests
+own the original instruction state/fault comparisons.
+The same native matrix qualifies CLAC/STAC flag preservation and #UD privilege
+checks in both code sizes, including #UD for the 66 prefix, and the guest debug
+tests cover their TF traps. Software tests check fetch-fault priority over that
+prefix's #UD; generated C checks the unchanged AC bit in the saved fault frame.
+Software tests also bind a target without SMAP. Generated C composes
+STAC → supervisor read of a user page → CLAC → denied read, checking the actual
+page-fault frame and preservation of the earlier loaded value.
 
 `NeverDLLVMCValueTests --gtest_filter=LLVMCValues.X86BitString*` rejects
 weakened native bit-string declarations and executes all twelve LLVM-to-C
@@ -1749,6 +1808,60 @@ the earlier regression failures remain in the receipt. This profile retains
 indirect argument addresses and existing image signing recipes; logical copies,
 hidden result buffers, new authenticated storage/imports, relocation emission
 and native signed unwinding still require their separate contracts.
+
+`SourceCallABI.DarwinIndirectResultKeepsItsOriginalStorageContract` checks the
+x8 result classifier and separates physical storage from native logical values.
+The `SourceFrameAnalysis.Logical*` cases cover fixed and variadic stacked copy
+pointers, missing effect certificates, partial pointer bytes, expired copies
+and overlap with another outgoing stack value. The public
+`arm64e_source_calls_test.py` adds original x8 storage, parameter/result aliases,
+callee writes visible during the call, clobbered x8, floating and stacked
+operands, variadics, mixed records, five-float results and direct/A-key/B-key
+calls. Native callbacks are independent assembly and inspect storage guards;
+C routes compile at O0/O2 with `-fexceptions`. The original and both C routes
+also execute ordinary C++ exception unwinding across an x8 call at O0/O2.
+The complete SDK profile passes 82 projections, 164 arm64e object compilations,
+180 ordinary arm64 executions, six ordinary unwind checks and 14 refusals.
+Independent A/B signing controls in the ordinary arm64 host process leave the
+pointer unchanged, so its authenticated transport checks are not active PAC
+evidence. Native signed unwinding remains unqualified.
+
+`AArch64AuthenticatedCall.IndirectResultsKeepOriginalStorageAndPAC` exports
+five key/modifier variants for direct LLVM and HighC/LLVMC at O0/O2. The
+synthetic MedIR explicitly defines x0 before returning and rejects projected
+traps. Freestanding C exports use `-fexceptions -fno-stack-protector` because
+the controlled guest has no Darwin stack-check runtime. The extractor still
+requires unchanged, relocation-free text; ordinary SDK executables retain
+normal host compiler defaults.
+
+The [logical-copy and original-x8 receipt](evidence/arm64e-copy-result-abi-2026-11-07.json)
+records 30 passing controlled PAC guests for this original-storage fixture:
+600 valid original/projected pairs and 1,440 invalid-signature pairs across
+LLVM and both C routes. Every route requires the original exception class;
+there is no C O0 allowance in this profile. The callback reads through a
+parameter alias during result writes, records the exact buffer address and
+clobbers x8. This execution scope is smaller than the SDK's stack/FP/variadic
+transport matrix. The receipt distinguishes the actual model producer from
+later integrated exports and records their object hashes.
+After dev integration, all 25 original-x8 objects and all 1,625 objects from
+the earlier typed-call matrix retain their recorded bytes. The final Release
+regression covers 4,892 instances from twelve rebuilt executables: 4,815 pass
+and 77 explicitly skip for recorded host or fixture prerequisites. Two
+parallel timeouts pass serially with the unchanged CTest limits; both initial
+and retry reports remain bound by the receipt. The public SDK rerun records
+the tested revision and library hash independently of the model producer.
+The earlier non-x8 typed-call matrix retains the C O0 exception-class
+differences recorded in its own receipt; byte-identical exports preserve
+that qualification and its limits.
+After integrating dev `64fabf148`, the additional qualification at `ad229f65e`
+rebuilds the same targets and repeats the complete public SDK matrix. Of 1,334
+affected call, frame, type and HighIR test instances, 1,308 pass and 26 explicitly
+skip; none fail or time out. All 25 original-x8 and 1,625 earlier typed-call
+objects again match the recorded model inputs. The receipt retains this
+integration check separately from the earlier complete owner regression.
+`ImmutableNativeCalls.Generated*` checks ordinary and loop-frame image
+publication after dead private reads and their initializers disappear. The
+relocation validator still rejects unbound live image addresses.
 
 `NeverDLanguageEHTests` checks the unified signing query's image/function
 provenance, exact PCs, source scopes and bounded CIE lookup.
@@ -6380,6 +6493,9 @@ with all of them written and each a step of the history, a view, an undo, a snap
 replica restores from and a save each find what was queued, a kill at any moment leaves
 a project that opens and takes edits, a write that fails fails a later edit and goes
 through once it can, and files changed behind the worker stop the next edit.
+`NeverDWorkerViewEdits` reads every view after each edit an owner takes while keeping
+documents, a function's name, a comment, a colour, a new type and undoing them, and each
+must read field for field as a session that has just opened the project's files.
 `NeverDWorkerUnreadTypes` declares types nothing has read and those something has: one
 that names a type yet unknown and new enumerators stay unread, while the type named,
 a replacement, a prototype and a type that takes an enumerator's name are not, each
@@ -15990,6 +16106,37 @@ A registered legacy runtime invalidates memory even when its file-local callee
 is pure. Selected
 target proofs are checked against raw bytecode execution. The optional query
 retains dynamic fallback and does not qualify closed-world devirtualization.
+`EqualLoadedFieldsRefineOnlyUnchangedMemory` checks equality facts through a
+following callee's field reload. It covers both equality edges, immediate and
+swapped register comparisons, register copies and reversed CFG edge order.
+Known and unknown stores, calls, changed address bases and narrow loads must
+not inherit an earlier full-word equality. Independent raw executions check
+both input branches and the different callback selected after a mutation.
+`DiscardedReturnOnlyCallsDoNotConsumeInputVariants` checks that unused results
+from `EXIT`-only callees do not split wrapper summaries by incoming r0. It
+crosses two forwarding layers and reverses CFG edge order, while live returns,
+stores and branches retain their dependencies. Raw bytecode checks the return
+and stored value independently of the summary assertions.
+`TaggedPayloadLoadsKeepTheirEarlierMemoryEpoch` loads a payload before checking
+its returned tag, both directly and through a register copy. It checks byte and
+full-word tags and reversed CFG edge order. Register clobbers, changed bases,
+intervening stores/calls and narrow loads cannot reuse the earlier full-word
+field. Raw bytecode execution independently checks both branches and the
+different callback values after mutations.
+`OverflowingCapturesKeepOnlyProvenNumericBounds` exercises the five-alternative
+join through the typed-memory owner, including both input orders, unavailable
+or wrapping bounds, negative offsets and frame coordinates. Rejoining captures
+already covered by the widened range must leave the state unchanged.
+`OverflowingCapturedWritesPreserveDisjointStackFields` joins three returned
+captures with two sentinels in registers and a spilled field. Independent raw
+execution covers every branch, with reversed CFG edge order, bounded heap
+writes, overlapping stack writes, shifted addresses and unknown bounds. A
+selector skips invalid sentinel writes at runtime without refining the joined
+pointer. Possible aliases must still invalidate the saved callback.
+These writes run both inline and through a callee, with zero and positive
+memory offsets. `OffsetStoreRangesKeepModularFootprints` additionally checks
+positive and negative wrapped footprints through instruction transfer and
+summary binding, while ordinary scalar arithmetic remains conservative.
 The pinned 72-file native-object scan described in [sbf-corpus.md](sbf-corpus.md)
 is separate from these synthetic execution tests and from official VM gates.
 
@@ -16179,6 +16326,13 @@ and EventLog public-interface cases after changing this boundary.
 
 Build the owning executable first, then select its label. This avoids relinking
 unrelated large semantic targets.
+
+In a reused build tree, duplicate GoogleTest names can carry labels from
+several executables. Inspect `ctest --show-only=json-v1` and its `command`
+fields before treating a label selection as a rebuilt-owner run. If it also
+selects stale or unbuilt executables, select the matching test indices with
+`ctest -I` or run the rebuilt executable with a GoogleTest filter. Preserve
+the inventory with the test report.
 
 On macOS, a standalone Clang (including Homebrew LLVM) may need an explicit
 SDK when a fixture links generated source. Run CTest with
@@ -18432,6 +18586,22 @@ and its i386 build `mingw_text_data32.exe`, which keep a -1-headed pointer
 table in `.text` as GNU ld keeps `__CTOR_LIST__`: the table is data, the
 pointer to it in `.data` points to data, and its entry is a slot that holds
 code.
+
+`unittests/lift/eh/X86SEHDisplayTests.cpp`, in the same binary, gives the pipeline
+an x86 `_except_handler3` frame byte for byte: `X86SEHDisplay.*` pins the `__finally`
+holding its body with the `call` gone and the address comment kept, the abnormal
+flag cleared inside the `__try`, the filter forms (a constant, `GetExceptionCode()`,
+a call passing `GetExceptionInformation()`, a write before the value), nested
+levels nesting their tries, a body that leaves the function ending the path of its
+`call`, an ordinary local that is no try level, a scope laid out in pieces being one
+try that starts where jumps enter it, an arm that does nothing, a jump out of a
+`__finally` staying a jump, code running on into a `__finally`, a loop on a
+register staying in its try, an entry inside a loop being a jump in the try, an arm
+starting at its handler, and a filter keeping its calls in order. `WindowsEHModesCorpus.EveryFinallyClauseOfXcpt4HoldsItsHandlerAsCode`
+holds the same for the whole of x86 `xcpt4`, with no loop that does nothing and every
+call a filter or the startup code's arm makes. Run these checks when changing
+the call-removal range index; handler boundaries, remaining calls and clause
+results must stay unchanged.
 
 `NeverDRelocatedFunctionEntryTests` checks LLVM's shared entry evidence across
 x86, x64, Thumb and AArch64 with PE, ELF and Mach-O images. It covers bounded
@@ -21942,4 +22112,39 @@ SymConditionalControls and SymMBASelector Boolean-word tests use exhaustive smal
 
 SymMBARewriteCache regressions compare cold/hot work counts rather than wall-clock thresholds. Completed unchanged subtrees, opaque parent compositions, refused siblings, working-set eviction and option/context/work boundaries retain exact derivation semantics. SymMBASparseContext additionally checks placeholder declaration reuse without hiding caller inputs or carrying declarations across contexts.
 
-`HighControlFlowSemantics.UnusedValuesDropReadsOfTheirOwnFrame` keeps unused reads through pointers and past the frame while dropping reads of the private frame, across stack-adjustment chains longer than one address walk. `HighCPointerAddresses.UnusedFieldLoadIsNotARegistersEntryValue` keeps a register's entry value from taking a later unused field load's name. `SymState.AnUnreadRunOfAPartlyKnownWordIsOneInput`, `SymMBARewriteCache.RecoveredWordChoicesStayInTheEvictionOrder` and `SymMBAKnownFacts.ConstantsBesideSeveralTermsStillFold` cover unread byte runs, cache eviction of recovered word choices and masks beside several terms.
+`HighControlFlowSemantics.UnusedValuesDropReadsOfTheirOwnFrame` keeps unused reads through pointers and past the frame while dropping reads of the private frame, across stack-adjustment chains longer than one address walk. `HighCPointerAddresses.UnusedFieldLoadIsNotARegistersEntryValue` keeps a register's entry value from taking a later unused field load's name. `SymState.AnUnreadRunOfAPartlyKnownWordIsOneInput`, `SymMBARewriteCache.RecoveredWordChoicesStayInTheEvictionOrder` and `SymMBAKnownFacts.ConstantsBesideSeveralTermsStillFold` cover unread byte runs, cache eviction of recovered word choices and masks beside several terms. `HighControlFlowSemantics.UnusedOwnFrameReadsFollowEveryStackAdjustment` proves a read of the private frame through i386's sign-extended stack adjustment and in a function whose locals are all temporaries, so an unused reload no longer keeps its register's save. `HighCPointerAddresses.ImmutableSlotLoadsConvertTheirAddressOnce` converts a read-only GOT slot's address to an integer once.
+
+## MIPS ELF analysis and source roundtrips
+
+The experimental [MIPS analysis](mips.md) path has focused targets
+`NeverDMIPSTests` (ELF admission, endian data, GOT/PLT and unwind records),
+`NeverDMIPSIntegerTests` (integer semantics and pinned Unicorn),
+`NeverDMIPSFlowTests` (delay-slot ownership, capture and annulment),
+`NeverDMIPSSDKTests` (physical disassembly rows and flow) and
+`NeverDMIPSPipelineTests` (ABI recovery and both source paths).
+
+```sh
+python3 scripts/build.py build-mips --target NeverDMIPSTests NeverDMIPSIntegerTests NeverDMIPSFlowTests NeverDMIPSSDKTests NeverDMIPSPipelineTests neverd --parallel 4
+ctest --test-dir build-mips --build-config Release -L '^NeverDMIPS.*Tests$' --output-on-failure --parallel 4
+```
+
+`unittests/lift/mips/roundtrip.py` is an additional standalone differential
+runner. It needs clang and lld with MIPS targets, pyelftools, and the repository's
+pinned Unicorn native library/Python bindings. Pass the built CLI, compiler,
+linker and an ignored output directory explicitly:
+
+```sh
+LIBUNICORN_PATH=/path/to/repo-pinned-unicorn-library PYTHONPATH="$PWD/third_party/unicorn/bindings/python" python3 unittests/lift/mips/roundtrip.py --neverd build-mips/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld --output build-mips/roundtrip
+```
+
+The runner compiles the owned assembly and each generated C variant for all
+four width/byte-order profiles. It checks return values and memory effects,
+including taken/untaken likely branches, delayed calls, argument carriers,
+readonly/writable globals and image pointers. LLVMC's original-image storage
+and either route's omitted original callees are explicitly bound at their
+original addresses; this qualifies the regenerated caller against that
+dependency contract. It does
+not claim a standalone rebuilt firmware. `results.json` records each case and
+any failure; an unavailable compiler or oracle is a failure, not a skipped pass.
+Vendor firmware remains outside the committed fixtures. Its separate static
+receipt is [Archer C7 V5](firmware/archer-c7-v5.md).

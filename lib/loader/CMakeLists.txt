@@ -83,6 +83,8 @@ add_neverd_component_library(NeverDLoader
   ELF/ARMEHABIUnwind.cpp
   ELF/ELFDynamicSections.cpp
   ELF/ELFLoader.cpp
+  ELF/ELFMIPSProfile.cpp
+  ELF/ELFMIPSDynamic.cpp
   ELF/ELFLoaderExterns.cpp
   ELF/ELFLoaderRelocations.cpp
   ELF/ELFLoaderSections.cpp
@@ -178,6 +180,7 @@ add_neverd_component_library(NeverDLoader
   discovery/AArch64/FunctionDiscoveryAArch64.cpp
   discovery/ARM/FunctionDiscoveryARM.cpp
   discovery/X86/FunctionDiscoveryX86.cpp
+  discovery/MIPS/FunctionDiscoveryMIPS.cpp
   language/LanguageEH.cpp
   language/LanguagePersonality.cpp
   language/LanguageRuntime.cpp

@@ -55,6 +55,7 @@ add_neverd_component_library(NeverDIRRegistrationState
   X86/RegistrationStateSEHThread.cpp
   X86/RegistrationStateLocalUnwind.cpp
   X86/RegistrationStateLocalUnwindReceipt.cpp
+  X86/RegistrationDisplayFrame.cpp
   X86/RegistrationStateTryLevel.cpp
   X86/RegistrationUnwindFrame.cpp
   X86/RegistrationJumpContinuation.cpp
@@ -127,6 +128,7 @@ add_neverd_component_library(NeverDIRLow
   CallRegisterUnread.cpp
   CircleRange.cpp
   FuncDetector.cpp
+  FuncDetectorMIPS.cpp
   X86/FuncDetectorX86.cpp
   ARM/FuncDetectorARM.cpp
   AArch64/FuncDetectorAArch64.cpp

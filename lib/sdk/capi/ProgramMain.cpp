@@ -255,7 +255,18 @@ std::optional<va_t> startRoutineMain(const BinaryImage &Img) {
         try {
           const InstructionRelocations Relocations =
               instructionRelocations(Img, DI);
-          Dec.liftToLow(DI, Ops, Relocations.Addresses, Relocations.Scalars);
+          if (isMIPS(Img.Arch)) {
+            const auto *Segment = Img.getSegmentFor(DI.Addr);
+            const size_t Offset = DI.Addr - Segment->VA;
+            DecodedExecutionUnit Unit;
+            if (!Dec.decodeUnitForLift(Segment->Data.data() + Offset,
+                                       Segment->Data.size() - Offset, DI.Addr,
+                                       Unit))
+              return false;
+            Dec.liftUnitToLow(Unit, Ops);
+          } else {
+            Dec.liftToLow(DI, Ops, Relocations.Addresses, Relocations.Scalars);
+          }
         } catch (const UnliftedInstruction &) {
           return false;
         }
@@ -263,7 +274,8 @@ std::optional<va_t> startRoutineMain(const BinaryImage &Img) {
         for (const LowOp &Op : Ops) {
           // The entry's first call is the start routine's, or not.
           if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
-            Main = passedMain(Img, Registers, Before, State, Op);
+            Main = passedMain(Img, Registers, isMIPS(Img.Arch) ? State : Before,
+                              State, Op);
             return false;
           }
           if (transfersControl(Op.Opcode))

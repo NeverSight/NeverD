@@ -163,10 +163,34 @@ class PrivateFrameReads {
                                                0, Known);
   }
 
+  // A temporary carries no target, and a function's locals can all be
+  // temporaries: the first register any expression names gives the target.
+  void findArchitecture() {
+    HighExprSet Seen;
+    walkStmts(Func->Body, [&](const HighStmt &S) {
+      forEachExpr(S, [&](const ExprPtr &Root) {
+        std::vector<const HighExpr *> Pending{Root.get()};
+        while (!Pending.empty() && Architecture == Arch::Unknown) {
+          const HighExpr *E = Pending.back();
+          Pending.pop_back();
+          if (!E || !Seen.insert(E).second)
+            continue;
+          if (E->Kind == ExprKind::Var)
+            Architecture = E->Var.TheArch;
+          E->forEachChildExpr(
+              [&](const ExprPtr &Child) { Pending.push_back(Child.get()); });
+        }
+      });
+    });
+  }
+
   // Stack adjustments form long chains of single definitions, so resolve them
   // once in statement order instead of walking the chain from every read.
   void index() {
     Indexed = true;
+    findArchitecture();
+    if (Architecture == Arch::Unknown)
+      return;
     VarKeyMap<unsigned> Definitions;
     walkStmts(Func->Body, [&](const HighStmt &S) {
       const HighExpr *Call =
@@ -177,11 +201,7 @@ class PrivateFrameReads {
       if (S.Kind != StmtKind::Assign || !S.Dst || !isLocalExpr(*S.Dst))
         return;
       ++Definitions[VK(S.Dst->Var)];
-      if (Architecture == Arch::Unknown)
-        Architecture = S.Dst->Var.TheArch;
     });
-    if (Architecture == Arch::Unknown)
-      return;
     walkStmts(Func->Body, [&](const HighStmt &S) {
       if (S.Kind != StmtKind::Assign || !S.Dst || !S.Val ||
           S.Dst->Kind != ExprKind::Var || Definitions[VK(S.Dst->Var)] != 1)
@@ -782,7 +802,9 @@ static void iterativeDCE(HighFunc &Func,
                             << ", " << Func.Body.size() << " stmts)\n");
     bool DCEChanged = false;
     {
-      const AssignmentEffects Effects(Func.Body);
+      // Copy propagation can expose a private-frame address after pre-DCE.
+      // Every phase must classify that read with the same frame contract.
+      const AssignmentEffects Effects(Func.Body, &Func);
       for (int Iter = 0;
            Iter < ::neverd::limits::ir::kHighDCEIterativeDCEIterLimit; ++Iter) {
         VarKeySet Refs;
@@ -1000,7 +1022,7 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
   // expansion dead. Remove them without feeding the shared result back through
   // copy propagation, which could create a cycle in the expression DAG.
   {
-    const AssignmentEffects Effects(Func.Body);
+    const AssignmentEffects Effects(Func.Body, &Func);
     for (int Iter = 0;
          Iter < ::neverd::limits::ir::
                     kHighDCEMedToHighConverterEliminateDeadStmtsIterLimit;
@@ -1015,6 +1037,9 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
     }
   }
   eliminateDeadConditions(Func.Body, referencedStatementEntries(Func.Body));
+  // The last liveness pass can delete a frame read that still kept its
+  // initialization live during the earlier private-store cleanup.
+  elimUnreadPrivateFrameStores(Func, TargetArch);
 
   if (WantDetail) {
     const auto TEnd = Clock::now();

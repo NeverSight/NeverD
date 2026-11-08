@@ -51,6 +51,7 @@
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/MedNoReturn.h"
 #include "neverd/ir/med/X86/I386PicAddress.h"
+#include "neverd/ir/med/X86/X86RegistrationFrame.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/SymbolDecoration.h"
 #include "neverd/loader/SymbolSpelling.h"
@@ -237,6 +238,8 @@ FunctionFacts collectFacts(const MedFunc &Func, const TargetRegInfo &TRI,
         if (!Output.isConst())
           Facts.IntrinsicOutputDefs.emplace(keyOf(Output), &Op);
       if (Op.Opcode == NdOp::RETURN) {
+        if (isRegistrationDisplayRuntimeReturn(Func, Op.Addr))
+          continue;
         const auto Returned = returnRegisterAt(
             Func, Block, static_cast<size_t>(&Op - Block.Ops.data()), TRI,
             Target);
@@ -635,6 +638,13 @@ private:
     }
     case NdOp::CALL:
     case NdOp::INDIR_CALL:
+      // A local unwind or a `__finally` body's `call` leaves whatever it
+      // leaves: no value the function means unless a caller reads it.
+      if (F.Func->RegistrationStates && F.Func->RegistrationStates->Display &&
+          F.Func->RegistrationStates->Display->NoValueCalls.count(Op.Addr)) {
+        Paths.push_back(ReturnedValue::Incoming);
+        return;
+      }
       Paths.push_back(callReturnsNoValue(F, Op) ? ReturnedValue::Undefined
                                                 : ReturnedValue::Other);
       return;
