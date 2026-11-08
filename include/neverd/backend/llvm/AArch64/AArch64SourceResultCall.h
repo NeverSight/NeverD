@@ -1,13 +1,14 @@
-//===- AArch64SourceResultCall.h - Original x8 call transport --*- C++ -*-===//
+//===- AArch64SourceResultCall.h - Darwin machine calls -------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// A checked Darwin C call with an unproven result buffer must pass that exact
-/// address in x8. A by-value result or LLVM sret would introduce storage and
-/// validity promises. This bridge owns the complete call, including outgoing
-/// stack arguments. x20 keeps the compiler's SP across the C ABI callee; the
+/// Checked Darwin C calls retain their original authenticated branch and result
+/// carriers. An unproven result buffer must pass its exact address in x8; a
+/// by-value result or LLVM sret would introduce storage and validity promises.
+/// This bridge owns the complete call, including outgoing stack arguments.
+/// x20 keeps the compiler's SP across the C ABI callee; the
 /// reserved red zone protects caller locals even in generated leaf functions.
 //===----------------------------------------------------------------------===//
 #ifndef NEVERD_BACKEND_LLVM_AARCH64_AARCH64SOURCERESULTCALL_H
@@ -18,6 +19,7 @@
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/FormatVariadic.h"
 
 #include <algorithm>
@@ -38,6 +40,27 @@ inline constexpr char kResultCallCClobbers[] =
 #include "AArch64SourceResultCall.def"
     ;
 
+/// Result pieces of a validated Darwin signature. Indirect results retain
+/// original storage instead of reconstructing a new logical value.
+inline llvm::SmallVector<SourceABIParameter, 4>
+sourceResultCallResults(const SourceFunctionTypeHint &Signature) {
+  if (Signature.ReturnType->Kind == NdTypeKind::Void ||
+      Signature.ReturnLocation.Kind ==
+          SourceABICarrierKind::IndirectResultPointer)
+    return {};
+  if (Signature.ReturnComponents.empty())
+    return {{0, 0, {}, Signature.ReturnType, Signature.ReturnLocation}};
+  const auto Members = sourceABIValueMembers(Signature.ReturnType);
+  llvm::SmallVector<SourceABIParameter, 4> Results;
+  for (unsigned I = 0; I < Members.size(); ++I)
+    Results.push_back({0,
+                       Members[I].ByteOffset,
+                       {},
+                       Members[I].Type,
+                       Signature.ReturnComponents[I]});
+  return Results;
+}
+
 inline unsigned
 sourceResultCallStackBytes(llvm::ArrayRef<SourceABIParameter> Bindings) {
   unsigned Bytes = 0;
@@ -54,7 +77,8 @@ sourceResultCallStackBytes(llvm::ArrayRef<SourceABIParameter> Bindings) {
 /// just its declared carrier; unused lanes and record padding are not read.
 inline std::string
 sourceResultCallAsm(llvm::ArrayRef<SourceABIParameter> Bindings,
-                    std::optional<unsigned> Key) {
+                    std::optional<unsigned> Key,
+                    llvm::ArrayRef<SourceABIParameter> Results = {}) {
   const auto &TRI = getTargetRegInfo(Arch::AArch64);
   std::string Text = std::string(kResultCallMarker) + kResultCallPrefix;
   unsigned Slot = kResultCallHeaderWords;
@@ -91,11 +115,30 @@ sourceResultCallAsm(llvm::ArrayRef<SourceABIParameter> Bindings,
                   Reg, L.EntryStackOffset)
                   .str();
   }
-  return Text + llvm::formatv(kResultCallSuffix, !Key ? kResultCallRaw
-                                                 : *Key == kAArch64PAuthKeyIA
-                                                     ? kResultCallIA
-                                                     : kResultCallIB)
-                    .str();
+  Text += llvm::formatv(kResultCallSuffix, !Key ? kResultCallRaw
+                                           : *Key == kAArch64PAuthKeyIA
+                                               ? kResultCallIA
+                                               : kResultCallIB)
+              .str();
+  for (const auto &Result : Results) {
+    const auto &L = Result.Location;
+    const bool FP = L.Kind == SourceABICarrierKind::FloatingRegister;
+    const auto &Bank = FP ? TRI.FPParamRegs : TRI.IntReturnRegs;
+    const unsigned Register =
+        std::find(Bank.begin(), Bank.end(), L.RegisterOffset) - Bank.begin();
+    Text += llvm::formatv(
+                kResultCallResultStore,
+                L.ValueBytes == kResultCallByteBytes   ? kResultCallStoreByte
+                : L.ValueBytes == kResultCallHalfBytes ? kResultCallStoreHalf
+                                                       : kResultCallStoreWord,
+                FP ? (L.ValueBytes == kResultCallFloatBytes ? kResultCallS
+                                                            : kResultCallD)
+                   : (L.ValueBytes <= kResultCallFloatBytes ? kResultCallW
+                                                            : kResultCallX),
+                Register, Slot++ * kResultCallWordBytes)
+                .str();
+  }
+  return Text;
 }
 
 /// Render the same assembly program in GNU C. The second input requires a

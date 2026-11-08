@@ -1642,8 +1642,11 @@ retaining all five authentication variants and both C routes at O0/O2 within
 the ordinary per-test timeout. Stable shape names identify failures and permit
 parallel scheduling. All 325 typed groups emit actual Mach-O objects on five
 routes. Narrow register arguments
-and results require the correct LLVM extension attribute; stack arguments
-retain their source width. The outer fixture explicitly writes the complete
+and results require the correct LLVM extension attribute on the raw typed
+route; authenticated routes require one potentially unwinding machine call
+with the original BLRAA/BLRAB and no separate auth, resign or trap operation.
+Their independent model callbacks check argument extensions, stack widths and
+every logical return piece. The outer fixture explicitly writes the complete
 X0 return carrier, and a constant result cannot stand in for the callback's
 value. Set `NEVERD_ARM64E_CALL_ABI_ARTIFACT_DIR` to retain the nine integer
 groups and 325 typed groups with all five object routes. Composite result
@@ -1792,6 +1795,11 @@ The complete SDK profile passes 82 projections, 164 arm64e object compilations,
 Independent A/B signing controls in the ordinary arm64 host process leave the
 pointer unchanged, so its authenticated transport checks are not active PAC
 evidence. Native signed unwinding remains unqualified.
+
+Successful public SDK runs remove their generated dylib, objects and executable
+harnesses after recording hashes and sizes in `products.json`. Sources, logs
+and summaries remain available. Use `--keep-products` only when those binaries
+are still needed for inspection; failed runs preserve their products.
 
 `AArch64AuthenticatedCall.IndirectResultsKeepOriginalStorageAndPAC` exports
 five key/modifier variants for direct LLVM and HighC/LLVMC at O0/O2. The

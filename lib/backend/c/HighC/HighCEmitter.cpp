@@ -1782,7 +1782,11 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
     if (Expr->Kind == ExprKind::Call) {
       NeedsAArch64ResultStorageCall |=
           Expr->SourceCallHint &&
-          sourceCallRetainsResultStorage(*Expr->SourceCallHint);
+          sourceCallUsesMachineABI(*Expr->SourceCallHint, Opts.Format,
+                                   Expr->IsIndirectCall &&
+                                       Expr->IndirectTarget &&
+                                       Expr->IndirectTarget->IntrinsicId ==
+                                           Intrinsic::A64_AuthBranch);
       NeedsAArch64RawCall |=
           (Expr->SourceCallHint &&
            sourceCallRetainsResultStorage(*Expr->SourceCallHint)) ||

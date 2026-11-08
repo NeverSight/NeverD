@@ -642,5 +642,10 @@
     "source": "#include <stdint.h>\nextern \"C\" {{ {prototype} }}\nstruct Token {{ uint64_t Value; }};\nextern \"C\" __attribute__((noinline)) void throwing_target(void) {{ throw Token{{0x123456789abcdefULL}}; }}\nint main() {{\n  uint64_t Storage[5] = {{11, 22, 33, 44, 55}};\n  try {{ {name}(({target})throwing_target, ({modifier})0, ({storage})&Storage[1]); }}\n  catch (const Token &Value) {{ return Value.Value != 0x123456789abcdefULL || Storage[0] != 11 || Storage[1] != 22 || Storage[2] != 33 || Storage[3] != 44 || Storage[4] != 55; }}\n  return 1;\n}}\n"
   },
   "assembly_unwind_entry": ".globl _{name}\n_{name}:\n.cfi_startproc\n  sub sp,sp,#16\n.cfi_def_cfa_offset 16\n  str x30,[sp,#8]\n.cfi_offset w30, -8\n  mov x16,x0\n  mov x17,x1\n",
-  "assembly_unwind_exit": "  ldr x30,[sp,#8]\n.cfi_restore w30\n  add sp,sp,#16\n.cfi_def_cfa_offset 0\n  ret\n.cfi_endproc\n.p2align 2\n"
+  "assembly_unwind_exit": "  ldr x30,[sp,#8]\n.cfi_restore w30\n  add sp,sp,#16\n.cfi_def_cfa_offset 0\n  ret\n.cfi_endproc\n.p2align 2\n",
+  "cleanup": {
+    "keep_option": "--keep-products",
+    "keep_help": "Retain generated binaries and objects after a successful run for further inspection.",
+    "manifest": "products.json"
+  }
 }

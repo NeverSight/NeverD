@@ -199,13 +199,14 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
     }
     return Callee;
   };
-  if (sourceCallRetainsResultStorage(Hint)) {
+  const bool RetainResultStorage = sourceCallRetainsResultStorage(Hint);
+  if (sourceCallUsesMachineABI(Hint, Opts.Format, AuthenticatedTarget)) {
     std::string Diagnostic;
     const auto Bindings = sourceABIParameters(Signature);
     if (!Hint.AnalystSite || Hint.AnalystSite->Instruction != E.CallSiteAddr ||
         Signature.Architecture != Opts.TheArch ||
         !validateSourceABI(Signature, Diagnostic) ||
-        E.Operands.size() != Bindings.size() + 1 ||
+        E.Operands.size() != Bindings.size() + unsigned(RetainResultStorage) ||
         (E.IsIndirectCall && !E.IndirectTarget))
       throw std::invalid_argument(kResultCallError);
     std::optional<unsigned> Key;
@@ -242,14 +243,18 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
     const auto Packet = aarch64PAuthTemporary(kResultCallPacket, Names);
     const auto ValueName = aarch64PAuthTemporary(kResultCallValue, Names);
     const auto Storage =
-        sourceValue(Arguments[Bindings.size()], E.Operands.back()->Type,
-                    NdType::makeInt(kResultCallWordBytes, false));
+        RetainResultStorage
+            ? sourceValue(Arguments[Bindings.size()], E.Operands.back()->Type,
+                          NdType::makeInt(kResultCallWordBytes, false))
+            : std::optional<std::string>(std::to_string(0));
     if (!Storage)
       throw std::invalid_argument(kResultCallError);
+    const auto Results = sourceResultCallResults(Signature);
     std::string Result =
         llvm::formatv(kResultCallPacketC, Packet,
-                      kResultCallHeaderWords + Bindings.size(), Target,
-                      Modifier, *Storage, sourceResultCallStackBytes(Bindings))
+                      kResultCallHeaderWords + Bindings.size() + Results.size(),
+                      Target, Modifier, *Storage,
+                      sourceResultCallStackBytes(Bindings))
             .str();
     for (unsigned I = 0; I < Bindings.size(); ++I) {
       const auto Value =
@@ -262,10 +267,23 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
                               ValueName, Bindings[I].Type->Size)
                     .str();
     }
-    return Result +
-           sourceResultCallAsmC(sourceResultCallAsm(Bindings, Key), Packet,
-                                kResultCallFrameC) +
-           kResultCallEndC;
+    Result += sourceResultCallAsmC(sourceResultCallAsm(Bindings, Key, Results),
+                                   Packet, kResultCallFrameC);
+    if (Results.empty())
+      return Result + kResultCallEndC;
+    Result += llvm::formatv(kResultCallResultDeclarationC,
+                            declarationToC(Signature.ReturnType, ValueName))
+                  .str();
+    for (unsigned I = 0; I < Results.size(); ++I)
+      Result += llvm::formatv(kResultCallResultCopyC, ValueName,
+                              Results[I].ByteOffset, Packet,
+                              kResultCallHeaderWords + Bindings.size() + I,
+                              Results[I].Type->Size)
+                    .str();
+    const auto Value = sourceValue(ValueName, Signature.ReturnType, E.Type);
+    if (!Value)
+      throw std::invalid_argument(kResultCallError);
+    return Result + llvm::formatv(kResultCallValueEndC, *Value).str();
   }
   if (Hint.CallKind == SourceCallTypeHint::Kind::Analyst) {
     std::string Diagnostic;

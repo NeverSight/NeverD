@@ -1,4 +1,4 @@
-//===- AArch64SourceResultCall.def - Original x8 call transport -*- C++ -*-===//
+//===- AArch64SourceResultCall.def - Darwin machine calls ------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
@@ -42,6 +42,7 @@ RESULT_CALL_TEXT(kResultCallIA, "blraa x16, x17")
 RESULT_CALL_TEXT(kResultCallIB, "blrab x16, x17")
 RESULT_CALL_TEXT(kResultCallLoad, "{0} {1}{2}, [x19, #{3}]\n")
 RESULT_CALL_TEXT(kResultCallStore, "{0} {1}9, [sp, #{2}]\n")
+RESULT_CALL_TEXT(kResultCallResultStore, "\n{0} {1}{2}, [x19, #{3}]")
 RESULT_CALL_TEXT(kResultCallLoadByte, "ldrb")
 RESULT_CALL_TEXT(kResultCallLoadSignedByte, "ldrsb")
 RESULT_CALL_TEXT(kResultCallLoadHalf, "ldrh")
@@ -65,16 +66,20 @@ RESULT_CALL_TEXT(
     kResultCallAsmC,
     "__asm__ volatile(\"{0}\" : : \"r\"({1}), \"r\"({2}) : {3}\"unwind\");")
 RESULT_CALL_TEXT(kResultCallEndC, " (void)0; })")
+RESULT_CALL_TEXT(kResultCallResultDeclarationC, "{0}; ")
+RESULT_CALL_TEXT(kResultCallResultCopyC,
+                 "__builtin_memcpy((unsigned char *)&{0} + {1}, &{2}[{3}], "
+                 "{4}); ")
+RESULT_CALL_TEXT(kResultCallValueEndC, " {0}; }})")
 RESULT_CALL_TEXT(kResultCallFrameC, "__builtin_frame_address(0)")
 RESULT_CALL_TEXT(kResultCallDirectC, "__neverd_aarch64_code_address({0})")
-RESULT_CALL_TEXT(
-    kResultCallError,
-    "The original indirect-result storage call has incomplete carriers")
+RESULT_CALL_TEXT(kResultCallError,
+                 "The AArch64 source call has incomplete carriers")
 RESULT_CALL_TEXT(kResultCallFrameAttribute, "frame-pointer")
 RESULT_CALL_TEXT(kResultCallFrameAll, "all")
 RESULT_CALL_TEXT(kResultCallCompilerContract,
                  "\n#if !defined(__aarch64__) || !defined(__clang__) || "
-                 "!defined(__EXCEPTIONS)\n#error \"AArch64 result-storage "
+                 "!defined(__EXCEPTIONS)\n#error \"AArch64 machine ABI "
                  "calls require AArch64 Clang and -fexceptions\"\n#endif\n")
 RESULT_CALL_CLOBBER("x0")
 RESULT_CALL_CLOBBER("x1")
