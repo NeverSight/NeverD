@@ -16292,11 +16292,27 @@ regressions require complete explicit bindings and share the C++ fd validator.
 null/short/malformed reads, scalar/String object protection, marshalling exceptions,
 unmarshalling without metadata and duplicate native endpoint validation.
 `LinuxBinder.StrongObjects*`, `RepeatedExport*`, `ForwardedHandles*`,
-`FinalOpenRetirement*` and `MalformedObjectTables*` independently exercise LP64
+`FinalOpenRetirement*` independently exercise LP64
 offset bytes, buffer references,
 node acknowledgments, pointer/cookie restoration, third-open handle renumbering,
 owner retirement, dead handles, pending node notifications across two owner threads
-and rejection before payload effects on x64/AArch64.
+on x64/AArch64. `InvalidObjects*`, `InvalidReply*`, `UnalignedObjectTables*` and
+`UnmodeledObjectKinds*` check literal failed-request/reply bytes, incomplete
+headers/records, bad offsets/tags/cookies/handles, copied and translated arena
+bytes, prefix reference rollback, preservation of existing references, and
+failed allocation reuse. They distinguish server return-error and caller
+reply-error slots, partial read/write consumption, retained request leases and
+recovery through a later successful call. A failure stops before decoding a later
+unknown or truncated command. Repeated failed replies share the
+single unread caller-error slot. Valid unmodeled object kinds still stop before
+transaction effects. `FailedTransactionKeepsProxyAliveAtTheJNIExceptionBoundary`
+checks the next explicit JNI logging/exception boundary without marking the
+live proxy dead or discarding the old reply bytes; runtime execution remains
+terminal at that unsupported boundary.
+The native `binder_object_transaction` control checks that target lookup precedes
+an unreadable object table, then checks BR_FAILED_REPLY for an invalid object
+after a live manager is registered. All relocation/backend variants and
+`AndroidBinderProtocolMatchesSDKAndCLI` share this literal driver-response oracle.
 `AndroidJNI.BinderObjectsRetainProxyIdentityAndDriverOwnership` executes an original
 guest service through ordinary/V/A JNI at O0/O2 and all relocation/backend variants.
 It checks proxy reuse after recycle, forwarding a borrowed object table, null Binder
@@ -16348,9 +16364,10 @@ messages, retained tail bytes, unknown-runtime identity rethrow, checked/null
 cause boundaries, and virtual native message suspension/failure. Incoming
 exception tests check native reply lifetime and default statistics. The native
 peer checks three exception replies followed by ping, including untouched scalar
-tails. The overlapping-object exception reaches the shared driver translation
-boundary with its original offset table and one completed BinderCallsStats
-entry; neither the table nor the original acquisition is silently discarded.
+tails. The overlapping-object case retains its original offset table and reaches
+the shared driver's BR_FAILED_REPLY path three times, followed by a successful
+ping and three BinderCallsStats entries. The Java pool resumes after each failed
+reply; neither the table nor the original acquisition is silently discarded.
 `AndroidBinderDispatchTest` checks local and incoming Java dispatch, protected
 super calls and virtual descriptor overrides, exception cursor order, native
 continuation tokens, separate wrapper-pool reuse, reply-ack buffer lifetime,

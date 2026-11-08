@@ -265,8 +265,28 @@ int binder_missing_targets(void) {
 }
 int binder_object_transaction(void) {
   int fd = open("/dev/binder", 2 | 0x800);
+  CHECK(fd >= 0);
+  /* A missing target fails before even copying the unreadable object table. */
   struct Transaction tx = {0, 0, 9, 0, 0, 0, 0, 8, 0, 0};
-  return send_message(fd, 0x40406300, &tx);
+  CHECK(!send_message(fd, 0x40406300, &tx));
+  unsigned output[32] = {0};
+  struct WriteRead wr = {0, 0, 0, sizeof(output), 0, (U64)output};
+  CHECK(!exchange(fd, &wr) && wr.read_consumed == 8 && output[0] == 0x720c &&
+        output[1] == 0x7205);
+  int server = open("/dev/binder", 2 | 0x800);
+  CHECK(server >= 0);
+  void *arena = mmap(0, 4096, 1, 2, server, 0);
+  CHECK(arena != (void *)-1);
+  CHECK(!ioctl(server, 0x40046207UL, 0));
+  /* Once the target exists, the copied offset names a missing flat object. */
+  U64 offset = 0;
+  tx.offsets = (U64)&offset;
+  CHECK(!send_message(fd, 0x40406300, &tx));
+  wr = (struct WriteRead){0, 0, 0, sizeof(output), 0, (U64)output};
+  CHECK(!exchange(fd, &wr) && wr.read_consumed == 8 && output[0] == 0x720c &&
+        output[1] == 0x7211);
+  CHECK(!munmap(arena, 4096) && !close(server) && !close(fd));
+  return 0;
 }
 int binder_large_arena_transactions(void) {
   int server = open("/dev/binder", 2 | 0x800);

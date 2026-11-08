@@ -69,6 +69,10 @@ struct BinderWork {
   std::shared_ptr<BinderCall> Call;
   // Command zero is queued kernel node-reference work, not a wire command.
   std::shared_ptr<BinderNode> Node;
+  // The driver's return_error slot stops command writes until it is read.
+  // A failed reply uses this slot for the server's BR_TRANSACTION_COMPLETE;
+  // the caller's separate reply_error slot does not stop its writes.
+  bool ReturnError = false;
 };
 struct GPUAllocation {
   MemoryView Bytes;

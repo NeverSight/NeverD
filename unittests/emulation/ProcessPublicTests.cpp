@@ -4658,7 +4658,7 @@ TEST_F(ProcessPublic, AndroidJavaBinderDispatchMatchesSDKAndCLI) {
             Session, Path.c_str(), AndroidNativeAArch64, Options.c_str()));
         ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
         auto Parsed = llvm::cantFail(llvm::json::parse(Text));
-        const bool Stopped = Mode >= 2 && Mode <= 4;
+        const bool Stopped = Mode == 3 || Mode == 4;
         EXPECT_EQ(Parsed.getAsObject()->getString(field::Stop),
                   Stopped     ? "unsupported_service"
                   : Mode == 1 ? "returned"
@@ -5937,7 +5937,9 @@ TEST_F(ProcessPublic, AndroidBinderProtocolMatchesSDKAndCLI) {
       "access_mode":2,"open_errno":0,"ioctls":[],"binder":true}]}})"));
   for (const char *Entry :
        {"binder_control", "binder_descriptions", "binder_threads",
-        "binder_service_transactions", "binder_missing_targets"}) {
+        "binder_service_transactions", "binder_missing_targets",
+        "binder_object_transaction"}) {
+    SCOPED_TRACE(Entry);
     (*Request.getAsObject()->getObject("android"))["entry_symbol"] = Entry;
     const auto Options = jsonText(*Request.getAsObject());
     const auto Text = takeString(neverd_emulate_process_json(
