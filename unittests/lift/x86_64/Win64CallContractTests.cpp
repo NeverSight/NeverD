@@ -3996,8 +3996,10 @@ TEST(CallExitRegisters, ConstantScratchValueReachesTheCallersStore) {
           ASSERT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
           std::string Oracle;
           llvm::raw_string_ostream Check(Oracle);
-          Check << "\n#include <sys/mman.h>\n"
-                   "#include <string.h>\nint main(void) {\n"
+          Check << "\n#include <string.h>\n"
+                   "#if defined(__linux__) && defined(__x86_64__)\n"
+                   "#include <sys/mman.h>\n#endif\nint main(void) {\n"
+                   "#if defined(__linux__) && defined(__x86_64__)\n"
                    "  const uint8_t original[] = {";
           for (uint8_t Byte : Code)
             Check << unsigned(Byte) << ',';
@@ -4008,16 +4010,23 @@ TEST(CallExitRegisters, ConstantScratchValueReachesTheCallersStore) {
                    "  memcpy(native, original, sizeof(original));\n"
                    "  typedef uint64_t ("
                 << (Windows ? "__attribute__((ms_abi)) " : "")
-                << "*fn)(uint64_t *, uint32_t);\n"
+                << "*fn)(uint64_t *, uint32_t);\n#endif\n"
                    "  for (uint32_t choice = 0; choice != 2; ++choice) {\n"
-                   "    uint64_t machine = 999, source = 999;\n"
-                   "    uint64_t expected = ((fn)native)(&machine, choice);\n"
+                   "    uint64_t machine = 27, source = 999;\n"
+                   "    uint64_t expected = "
+                << (Shape == 2 ? "choice ? 2 : 1" : "1")
+                << ";\n#if defined(__linux__) && defined(__x86_64__)\n"
+                   "    machine = 999;\n"
+                   "    uint64_t original = ((fn)native)(&machine, choice);\n"
+                   "    if (original != expected) return 12;\n#endif\n"
                    "    uint64_t actual = observe_exit(&source"
                 << (Shape == 2 ? ", choice" : "")
                 << ");\n"
                    "    if (machine != 27 || source != machine || "
                    "actual != expected) return 11;\n"
-                   "  }\n  return munmap(native, sizeof(original)) != 0;\n}\n";
+                   "  }\n#if defined(__linux__) && defined(__x86_64__)\n"
+                   "  return munmap(native, sizeof(original)) != 0;\n"
+                   "#else\n  return 0;\n#endif\n}\n";
           for (llvm::StringRef Level : {"-O0", "-O2"})
             source_call_execution_test::compileAndRun(
                 "#define _GNU_SOURCE\n" + Source + Oracle,

@@ -20235,8 +20235,10 @@ COFF/ELF/Mach-O callers
 through both C routes, with source optimization enabled and disabled, at C
 O0/O2 with UBSan. The oracle observes the non-return register's stored value
 and the ordinary call result. The constant-scratch case also executes the
-original public machine code, including a direct jump and both conditional
-return paths whose scratch definition precedes the branch. This qualifies
+original public machine code on Linux x64, including a direct jump and both
+conditional return paths whose scratch definition precedes the branch. Other
+hosts execute the generated C against the fixture's scalar results without
+executing x64 bytes. This qualifies
 bounded scalar constants, not dynamic machine-state returns or other
 architectures.
 `CallExitRegisters.PureRegisterLeafKeepsDynamicExtraResults` independently
