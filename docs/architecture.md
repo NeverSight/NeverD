@@ -5582,6 +5582,13 @@ Immutable constant slots are initialized once and excluded from the repeated
 evaluation stream. Explicit output slots preserve the original DAG's operand
 order. The public node count still includes constants, retaining the solver's
 existing conservative work charges.
+Reused native evaluation plans propagate the required low bits across all
+consumers before aliasing modularly neutral literal operations to their input
+slots. A shared comparison, division or right shift still requires complete
+operands. This preparation starts only after the first evaluation, keeping
+one-shot calls free of the extra traversal. Input callbacks, original scratch
+slots and the public work count remain unchanged; native and AP evaluation
+share the prepared plan. Wide prefix evaluation uses the same demand rules.
 Arbitrary-width plans read prior operand slots directly through the shared
 operator evaluator, avoiding temporary copies of wide integers at every step.
 They initialize immutable constant slots before any external input callback,

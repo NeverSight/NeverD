@@ -2368,14 +2368,16 @@ class LowWordDecisions {
     // need no highest-bit signature or correction; pair exact handles first
     // and prove only odd multiplicities at this precision. Smaller recursive
     // products retain the ordinary signature search.
-    llvm::DenseMap<uint32_t, bool> OddMultiplicity;
+    // Widen source indices so even the largest valid handle cannot alias a
+    // dense-map sentinel. These are context identities, not bounded edges.
+    llvm::DenseMap<uint64_t, bool> OddMultiplicity;
     if (PairIdentical) {
       for (auto Factor : Factors) {
         if (!charge())
           return {};
         auto It = OddMultiplicity.find(Factor.index());
         if (It == OddMultiplicity.end()) {
-          if (!charge(1, sizeof(uint32_t) + sizeof(bool)) ||
+          if (!charge(1, sizeof(uint64_t) + sizeof(bool)) ||
               !reserveEntry(OddMultiplicity))
             return {};
           OddMultiplicity.try_emplace(Factor.index(), true);

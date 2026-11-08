@@ -655,12 +655,17 @@ public:
   bool fitsU64() const { return FitsU64; }
 
   /// Lowered DAG nodes, including constants: the solver's conservative cost
-  /// model remains unchanged when immutable slots need no repeated work.
-  size_t numSteps() const { return Steps.size() + ConstantSlots.size(); }
+  /// model remains unchanged when constant or neutral slots need no work.
+  size_t numSteps() const {
+    return FitsU64 ? ScratchU64.size() : Steps.size() + ConstantSlots.size();
+  }
 
   SymRef root() const { return Root; }
 
 private:
+  enum class NativePreparation : uint8_t { FirstEvaluation, AwaitReuse, Done };
+  void prepareNativeReuse();
+
   /// One node lowered to its operator, width and operand slots.  Slots are
   /// positions in the scratch buffer. Operands precede the output slot;
   /// constants occupy slots but need no repeated evaluation step.
@@ -691,6 +696,7 @@ private:
   std::vector<llvm::APInt> ScratchAP;
   uint32_t RootSlot = 0;
   bool FitsU64 = true;
+  NativePreparation NativeState = NativePreparation::FirstEvaluation;
 };
 
 } // namespace neverd::symbolic

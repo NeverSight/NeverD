@@ -10160,6 +10160,13 @@ all-ones and high-bit assignments against independent arithmetic.
 `EvaluationPlansKeepInterleavedConstantSlots` alternates native and wide
 evaluation over interleaved literal and input slots, checks missing inputs,
 and retains the original DAG node count used by budget consumers.
+`NativeResiduesKeepSharedFullWidthUses` compares scaled literal-wrapped factors
+against independent APInt arithmetic at 8/16/32/64 bits. Shared right shifts,
+comparisons and division (including zero divisors) retain complete values.
+Alternating native and AP evaluation checks the first-use/reuse transition,
+every input callback and the unchanged work count after preparation.
+`NativeArithmeticKeepsMixedWidthConsumersExact` checks native arithmetic and
+its wide zero-extended consumers at every native bit width.
 `BalancedCarryColumnsFinishRotatedProducts` checks degree-64 products whose
 rotated construction order previously exhausted the shared work budget.
 `InterruptedCarryColumnsRetainCompleteValues` checks six short allowances
