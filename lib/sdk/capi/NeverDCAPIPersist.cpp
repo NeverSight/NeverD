@@ -240,9 +240,16 @@ std::optional<std::string> nameProblem(const Session &S, va_t Addr,
   const auto importing = [&](va_t At) {
     return At == 0 || S.Img.findImportAt(At) != nullptr;
   };
-  for (const FuncInfo &F : S.Functions)
-    if (F.Entry != Addr && F.Name == Name && !importing(F.Entry))
-      return usedAt(F.Entry);
+  // A name no listed function has, where the index of their names reads the
+  // list as it is, leads to none of them.
+  const bool Indexed = S.NameIndex &&
+                       S.NameIndex->Revision == S.FunctionListRevision &&
+                       S.NameIndex->List == S.Functions.data() &&
+                       S.NameIndex->Count == S.Functions.size();
+  if (!Indexed || S.NameIndex->FirstNamed.contains(Name.str()))
+    for (const FuncInfo &F : S.Functions)
+      if (F.Entry != Addr && F.Name == Name && !importing(F.Entry))
+        return usedAt(F.Entry);
   for (const auto &[Other, Renamed] : S.Renames)
     if (Other != Addr && Renamed == Name)
       return usedAt(Other);
@@ -417,10 +424,11 @@ bool functionNameMoved(Session &S, va_t Addr, const std::string *Name) {
   if (S.NameIndex && S.NameIndex->Revision == S.FunctionListRevision &&
       S.NameIndex->List == S.Functions.data() &&
       S.NameIndex->Count == S.Functions.size()) {
-    const auto Others = llvm::count_if(S.Functions, [&](const FuncInfo &Other) {
-      return Other.Name == F.Name;
-    });
-    if (Others == 1)
+    const bool Alone = !S.NameIndex->Shared.contains(F.Name) ||
+                       llvm::count_if(S.Functions, [&](const FuncInfo &Other) {
+                         return Other.Name == F.Name;
+                       }) == 1;
+    if (Alone)
       S.NameIndex->FirstNamed.erase(F.Name);
     else
       S.NameIndex.reset();
@@ -440,8 +448,11 @@ bool functionNameMoved(Session &S, va_t Addr, const std::string *Name) {
     // The first of the name in the list.
     const auto [Named, Inserted] =
         S.NameIndex->FirstNamed.try_emplace(F.Name, *Function);
-    if (!Inserted && *Function < Named->second)
-      Named->second = *Function;
+    if (!Inserted) {
+      S.NameIndex->Shared.insert(F.Name);
+      if (*Function < Named->second)
+        Named->second = *Function;
+    }
     S.NameIndex->Spelled[*Function] = Session::spelledFunction(F);
   }
   return true;

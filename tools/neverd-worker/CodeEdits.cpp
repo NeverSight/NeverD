@@ -108,6 +108,32 @@ struct Token {
   std::size_t begin, end;
   std::string text;
 };
+/// Whether tokens(text) may hold a token that reads \p name, without making
+/// them: a character wherever it is, and an identifier where it ends a word
+/// and does not continue one.  A word inside a comment or a string counts too,
+/// which tokens() skips.
+bool mayHoldToken(const std::string &text, const std::string &name) {
+  const auto word = [](char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+  };
+  if (name.size() == 1)
+    return text.find(name[0]) != std::string::npos;
+  if (name.empty() ||
+      !(std::isalpha(static_cast<unsigned char>(name[0])) || name[0] == '_') ||
+      !std::all_of(name.begin(), name.end(), word))
+    return false;
+  for (auto at = text.find(name); at != std::string::npos;
+       at = text.find(name, at + 1)) {
+    const bool continues =
+        at > 0 && (std::isalpha(static_cast<unsigned char>(text[at - 1])) ||
+                   text[at - 1] == '_');
+    const auto end = at + name.size();
+    if (!continues && (end == text.size() || !word(text[end])))
+      return true;
+  }
+  return false;
+}
+
 std::vector<Token> tokens(const std::string &text) {
   std::vector<Token> result;
   for (std::size_t i = 0; i < text.size();) {
@@ -1516,18 +1542,18 @@ bool CodeEdits::takeFunctionNames(Json &view,
   // holds; a new name the text spells may link a word that linked nothing.
   for (const auto address : renamed) {
     const auto name = image.names.find(address);
-    if (name == image.names.end())
+    if (name == image.names.end() || mayHoldToken(decorated, name->second))
       return false;
-    for (const auto &token : tokens(decorated))
-      if (token.text == name->second)
-        return false;
   }
   std::vector<Replacement> replacements;
   for (const auto &name : *names) {
-    if (name.value("kind", std::string()) != "address" ||
-        !name.contains("address") || !name["address"].is_string())
+    const auto kind = name.find("kind");
+    const auto address = name.find("address");
+    if (kind == name.end() || !kind->is_string() ||
+        kind->get_ref<const std::string &>() != "address" ||
+        address == name.end() || !address->is_string())
       continue;
-    const auto at = parseAddress(name["address"].get<std::string>());
+    const auto at = parseAddress(address->get_ref<const std::string &>());
     if (std::find(renamed.begin(), renamed.end(), at) == renamed.end())
       continue;
     const auto begin = name.value("begin_byte", std::size_t{0});
@@ -1548,8 +1574,8 @@ bool CodeEdits::takeFunctionNames(Json &view,
   const ByteShifts shifted(replacements);
   for (auto &name : *names)
     for (const char *field : {"begin_byte", "end_byte"})
-      if (name.contains(field))
-        name[field] = shifted(name[field].get<std::size_t>());
+      if (const auto at = name.find(field); at != name.end())
+        *at = shifted(at->get<std::size_t>());
   remapPageSpans(view, shifted);
   view["text"] = replaced(decorated, replacements);
   return true;

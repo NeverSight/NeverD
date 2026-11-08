@@ -131,7 +131,8 @@ private slots:
     QCOMPARE(second["payload"].toObject()["text"].toString(), "kept text");
     QCOMPARE(second["payload"].toObject()["revision"].toString(), "2");
     QCOMPARE(second["revision"].toString(), "2");
-    // A word for a page this client does not keep is refused.
+    // A word for a page this client does not keep forgets the kept page, and
+    // the page is read whole.
     h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "y"}},
                              &h.owner, {});
     QTRY_COMPARE(h.sent.size(), 4);
@@ -143,7 +144,36 @@ private slots:
     QTRY_COMPARE(h.sent.size(), 5);
     h.reply(4, {{"unchanged", true}, {"etag", "another"}, {"revision", "3"}},
             "3");
-    QTRY_COMPARE(errorCode(third), "invalid_response");
+    QTRY_COMPARE(h.sent.size(), 6);
+    QCOMPARE(h.sent[5].operation, "decompile");
+    QCOMPARE(h.sent[5].payload["if_none_match"].toString(), QString());
+    QVERIFY(third.isEmpty());
+    h.reply(5,
+            {{"text", "read whole"}, {"etag", "tag-9-0-3"}, {"revision", "3"}},
+            "3");
+    QTRY_COMPARE(third["payload"].toObject()["text"].toString(), "read whole");
+    QCOMPARE(third["status"].toString(), "ok");
+    // The page read whole is the one kept; a worker that names a page again
+    // when none was named is refused rather than asked once more.
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "z"}},
+                             &h.owner, {});
+    QTRY_COMPARE(h.sent.size(), 7);
+    h.reply(6, {}, "4");
+    QTRY_VERIFY(!h.service.hasPending());
+    QJsonObject fourth;
+    h.service.subscribe(text(), &h.owner, [&](const QJsonObject &response) {
+      fourth = response;
+    });
+    QTRY_COMPARE(h.sent.size(), 8);
+    QCOMPARE(h.sent[7].payload["if_none_match"].toString(), "tag-9-0-3");
+    h.reply(7, {{"unchanged", true}, {"etag", "another"}, {"revision", "4"}},
+            "4");
+    QTRY_COMPARE(h.sent.size(), 9);
+    QCOMPARE(h.sent[8].payload["if_none_match"].toString(), QString());
+    h.reply(8, {{"unchanged", true}, {"etag", "another"}, {"revision", "4"}},
+            "4");
+    QTRY_COMPARE(errorCode(fourth), "invalid_response");
+    QCOMPARE(h.sent.size(), 9);
   }
 
   void sourcePageKeptTakesWhatChanged() {
@@ -210,7 +240,8 @@ private slots:
                         [&](const QJsonObject &response) { third = response; });
     QTRY_COMPARE(h.sent.size(), 5);
     QCOMPARE(h.sent[4].payload["if_none_match"].toString(), "tag-8-0-3");
-    // Changes that do not fit the kept page are refused.
+    // Changes that do not fit the kept page are not taken: the page is read
+    // whole, with no changes asked for.
     h.reply(
         4,
         {{"delta", QJsonArray{QJsonArray{"lines", "text", 9, QJsonArray{}}}},
@@ -218,7 +249,16 @@ private slots:
          {"etag", "tag-9-0-3"},
          {"revision", "3"}},
         "3");
-    QTRY_COMPARE(errorCode(third), "invalid_response");
+    QTRY_COMPARE(h.sent.size(), 6);
+    QCOMPARE(h.sent[5].payload["if_none_match"].toString(), QString());
+    QVERIFY(!h.sent[5].payload.contains("page_delta"));
+    QVERIFY(third.isEmpty());
+    h.reply(
+        5, {{"text", "a // y\nb\nc"}, {"etag", "tag-9-0-3"}, {"revision", "3"}},
+        "3");
+    QTRY_COMPARE(third["payload"].toObject()["text"].toString(),
+                 "a // y\nb\nc");
+    QCOMPARE(third["payload"].toObject()["etag"].toString(), "tag-9-0-3");
   }
 
   void sectionEditsInvalidateCachedCodeAndAnalysis() {
