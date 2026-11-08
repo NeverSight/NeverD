@@ -1602,6 +1602,12 @@ conditional memory, invocation lifetime and both C routes remain open.
 
 ## Established rules
 
+- HighC frame-address projection now checks the known root and signed offset
+  in one bounded walk. Zero alignment masks and overflowing offset/rebase
+  arithmetic cannot manufacture frame members or crash rendering. Both C
+  routes execute the zero-mask control at O0/O2; this does not recover unknown
+  incoming registers or broaden ordinary/state interface composition.
+
 - Integer record calls in LLVMC bind physical ABI pieces through the shared
   LLVM call-contract metadata. Compacted register banks and reordered stack
   operands retain their byte locations; incomplete or ambiguous carriers
