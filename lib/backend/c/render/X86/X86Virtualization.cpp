@@ -295,8 +295,9 @@ renderX86VirtualizationCall(Arch TargetArch, const llvm::CallInst &Call,
     return {};
   const uint16_t Word = TargetArch == Arch::X64 ? 8 : 4;
   bool Known = false;
-  const auto Mnemonic =
-      llvm::StringRef(Asm->getAsmString()).split('\n').first.split(' ').first;
+  auto Instruction = llvm::StringRef(Asm->getAsmString());
+  Instruction.consume_front("addr16 ");
+  const auto Mnemonic = Instruction.split('\n').first.split(' ').first;
   const Intrinsic Inventory[] = {
 #define NEVERD_X86_VIRTUALIZATION(Id, ...) Intrinsic::Id,
 #include "neverd/ir/intrinsics/X86/X86Virtualization.def"
