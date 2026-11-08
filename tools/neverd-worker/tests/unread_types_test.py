@@ -132,11 +132,15 @@ def run(executable):
             removed = ok(owner, "local_types_forget", {"names": ["APPLIED"]})
             assert removed["removed"] == ["APPLIED"], removed
             same_as_fresh("taken away")
+            # The owner prints the function while the type is away.
+            assert "->value" not in source(owner, "c")
             reply = declare(owner, "struct APPLIED { unsigned long long cookie; "
                                    "unsigned long long value; unsigned long long slots[2]; };")
             assert not reply["unread"], reply
             views = same_as_fresh("back")
             assert "->value" in views["c"], views["c"]
+            # And so does the owner's own render, printed while the type was away.
+            assert source(owner, "c") == views["c"]
             # Undo takes the types away again.
             ok(owner, "undo")
             ok(owner, "undo")
