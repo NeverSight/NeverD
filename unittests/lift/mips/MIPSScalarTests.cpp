@@ -172,11 +172,16 @@ TEST_P(MIPSScalar, MulInvalidatesBothAccumulatorsUntilTheyAreOverwritten) {
                                      : UINT64_C(0x80000003));
     EXPECT_FALSE(Emulator.getRegister(mipsreg::HI));
     EXPECT_FALSE(Emulator.getRegister(mipsreg::LO));
-    EXPECT_FALSE(execute(Emulator, 0x00001010)); // mfhi v0
-    EXPECT_FALSE(execute(Emulator, 0x00001012)); // mflo v0
+    EXPECT_TRUE(execute(Emulator, 0x00001010)); // mfhi v0 transports unknown
+    EXPECT_FALSE(Emulator.getRegister(mipsreg::V0));
+    EXPECT_FALSE(Emulator.getRegisterBytes(mipsreg::V0));
+    EXPECT_TRUE(execute(Emulator, 0x00001012)); // mflo v0 transports unknown
+    EXPECT_FALSE(Emulator.getRegister(mipsreg::V0));
+    EXPECT_FALSE(execute(Emulator, 0x00441021)); // addu v0,v0,a0 observes it
     ASSERT_TRUE(execute(Emulator, 0x00800011));  // mthi a0
     ASSERT_TRUE(execute(Emulator, 0x00001010));
-    EXPECT_FALSE(execute(Emulator, 0x00001012));
+    EXPECT_TRUE(execute(Emulator, 0x00001012));
+    EXPECT_FALSE(Emulator.getRegister(mipsreg::V0));
     ASSERT_TRUE(execute(Emulator, 0x00850018)); // mult a0,a1
     ASSERT_TRUE(execute(Emulator, 0x00001012));
     EXPECT_FALSE(Emulator.skips().any());
@@ -189,6 +194,266 @@ TEST_P(MIPSScalar, MulInvalidatesBothAccumulatorsUntilTheyAreOverwritten) {
     Emulator.setRegister(mipsreg::V0, 123);
     EXPECT_FALSE(execute(Emulator, 0x70851002));
     EXPECT_EQ(Emulator.getRegister(mipsreg::V0), 123u);
+  }
+}
+
+TEST_P(MIPSScalar, CompletePairsDiscardArbitraryIncomingBitsInEitherOrder) {
+  const bool Wide = isMIPS64(GetParam());
+  const bool Little = archLittleEndian(GetParam());
+  const std::array<uint8_t, 16> Data = {0x80, 0x91, 0xa2, 0xb3, 0x44, 0x55,
+                                        0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb,
+                                        0xcc, 0xdd, 0xee, 0xff};
+  for (unsigned Size : {4u, 8u}) {
+    if (Size == 8 && !Wide)
+      continue;
+    for (unsigned Offset = 0; Offset != Size; ++Offset)
+      for (bool LeftFirst : {false, true})
+        for (uint64_t Old : {UINT64_C(0x12345678abcdef98),
+                             UINT64_C(0x0000000080000000), UINT64_MAX}) {
+          SCOPED_TRACE(testing::Message() << Size << ':' << Offset << ':'
+                                          << LeftFirst << ':' << Old);
+          auto Image = image(0x2000, Data);
+          NdOpEmulator Emulator(Image);
+          Emulator.setStrictMode(true);
+          Emulator.setLoadCollect(true);
+          Emulator.setRegister(mipsreg::A0, 0x2000 + Offset);
+          Emulator.setRegister(mipsreg::V0, Wide ? Old : uint32_t(Old));
+          const uint32_t Left = ((Size == 4 ? 0x22u : 0x1au) << 26) |
+                                (4 << 21) | (2 << 16) | (Little ? Size - 1 : 0);
+          const uint32_t Right = ((Size == 4 ? 0x26u : 0x1bu) << 26) |
+                                 (4 << 21) | (2 << 16) |
+                                 (Little ? 0 : Size - 1);
+          ASSERT_TRUE(execute(Emulator, LeftFirst ? Left : Right));
+          ASSERT_TRUE(execute(Emulator, LeftFirst ? Right : Left));
+          uint64_t Expected = 0;
+          for (unsigned I = 0; I != Size; ++I)
+            Expected |= uint64_t(Data[Offset + I])
+                        << (8 * (Little ? I : Size - 1 - I));
+          if (Size == 4 && Wide)
+            Expected = mips::signExtendWord(Expected);
+          EXPECT_EQ(Emulator.getRegister(mipsreg::V0), Expected);
+          EXPECT_GE(Emulator.getLoadRecords().size(), Size);
+          EXPECT_FALSE(Emulator.skips().any());
+        }
+  }
+}
+
+TEST_P(MIPSScalar, PartialLwrExposesOnlyBitsSharedByBothPermittedResults) {
+  if (!isMIPS64(GetParam()))
+    return;
+  const std::array<uint8_t, 4> Data = {0x11, 0x22, 0x33, 0x44};
+  auto Image = image(0x2000, Data);
+  NdOpEmulator Emulator(Image);
+  Emulator.setStrictMode(true);
+  Emulator.setRegister(mipsreg::A0, 0x2000);
+  // The upper word can be 0x00000080 or zero. Bit 39 is the sole difference.
+  Emulator.setRegister(mipsreg::V0, UINT64_C(0x0000008012345678));
+  ASSERT_TRUE(execute(Emulator, 0x98820001)); // lwr v0,1(a0)
+  EXPECT_FALSE(Emulator.getRegister(mipsreg::V0));
+  EXPECT_FALSE(Emulator.getRegisterBytes(mipsreg::V0));
+  auto Slice = [&](NdVar Source, unsigned Offset, unsigned Bytes) {
+    LowOp Op;
+    Op.Opcode = NdOp::SUBBYTES;
+    Op.Output = NdVar::tmp(0x9000, Bytes);
+    Op.addInput(Source);
+    Op.addInput(NdVar::cst(Offset, 8));
+    return Emulator.step(Op);
+  };
+  ASSERT_TRUE(Slice(NdVar::reg(mipsreg::V0, 8), 0, 4));
+  EXPECT_EQ(Emulator.getRegister(0x9000), archLittleEndian(GetParam())
+                                              ? UINT64_C(0x12443322)
+                                              : UINT64_C(0x12341122));
+  ASSERT_TRUE(Slice(NdVar::reg(mipsreg::V0, 8), 5, 3));
+  EXPECT_EQ(Emulator.getRegister(0x9000), 0u);
+  ASSERT_TRUE(Slice(NdVar::reg(mipsreg::V0, 8), 4, 1));
+  EXPECT_FALSE(Emulator.getRegister(0x9000));
+  LowOp Extend;
+  Extend.Opcode = NdOp::INT_SEXT;
+  Extend.Output = NdVar::tmp(0x9010, 8);
+  Extend.addInput(NdVar::tmp(0x9000, 1));
+  ASSERT_TRUE(Emulator.step(Extend));
+  ASSERT_TRUE(Slice(NdVar::tmp(0x9010, 8), 4, 4));
+  EXPECT_FALSE(Emulator.getRegister(0x9000));
+  Extend.Opcode = NdOp::INT_ZEXT;
+  Extend.Inputs[0] = NdVar::reg(mipsreg::V0, 4);
+  ASSERT_TRUE(Emulator.step(Extend));
+  ASSERT_TRUE(Slice(NdVar::tmp(0x9010, 8), 4, 4));
+  EXPECT_EQ(Emulator.getRegister(0x9000), 0u);
+
+  // A word store observes only the defined low word; a doubleword store
+  // would expose the implementation-dependent bit and must refuse.
+  EXPECT_FALSE(execute(Emulator, 0xfc820000)); // sd v0,0(a0)
+  ASSERT_TRUE(execute(Emulator, 0xac820000));  // sw v0,0(a0)
+  ASSERT_TRUE(execute(Emulator, 0x8c830000));  // lw v1,0(a0)
+  EXPECT_EQ(Emulator.getRegister(mipsreg::V1), archLittleEndian(GetParam())
+                                                   ? UINT64_C(0x12443322)
+                                                   : UINT64_C(0x12341122));
+
+  Emulator.setRegister(mipsreg::A0, 0x3000);
+  EXPECT_FALSE(
+      execute(Emulator, 0x88820001)); // fault leaves uncertain rt intact
+  EXPECT_FALSE(Emulator.getRegister(mipsreg::V0));
+  ASSERT_TRUE(Slice(NdVar::reg(mipsreg::V0, 8), 0, 4));
+  EXPECT_EQ(Emulator.getRegister(0x9000), archLittleEndian(GetParam())
+                                              ? UINT64_C(0x12443322)
+                                              : UINT64_C(0x12341122));
+}
+
+TEST_P(MIPSScalar, CompletePairsRefineAFullyUnknownDestination) {
+  const bool Wide = isMIPS64(GetParam());
+  const bool Little = archLittleEndian(GetParam());
+  const std::array<uint8_t, 16> Data = {0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5,
+                                        0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb,
+                                        0xfc, 0xfd, 0xfe, 0xff};
+  for (unsigned Size : {4u, 8u}) {
+    if (Size == 8 && !Wide)
+      continue;
+    for (bool LeftFirst : {false, true}) {
+      auto Image = image(0x2000, Data);
+      NdOpEmulator Emulator(Image);
+      Emulator.setStrictMode(true);
+      Emulator.setRegister(mipsreg::A0, 0x2001);
+      LowOp Unknown;
+      Unknown.Opcode = NdOp::INTRINSIC;
+      Unknown.Output = NdVar::reg(mipsreg::V0, Wide ? 8 : 4);
+      Unknown.addInput(NdVar::cst(uint64_t(Intrinsic::MIPSUnpredictable),
+                                  sizeof(Intrinsic)));
+      ASSERT_TRUE(Emulator.step(Unknown));
+      const uint32_t Left = ((Size == 4 ? 0x22u : 0x1au) << 26) | (4 << 21) |
+                            (2 << 16) | (Little ? Size - 1 : 0);
+      const uint32_t Right = ((Size == 4 ? 0x26u : 0x1bu) << 26) | (4 << 21) |
+                             (2 << 16) | (Little ? 0 : Size - 1);
+      ASSERT_TRUE(execute(Emulator, LeftFirst ? Left : Right));
+      EXPECT_FALSE(Emulator.getRegister(mipsreg::V0));
+      ASSERT_TRUE(execute(Emulator, LeftFirst ? Right : Left));
+      uint64_t Expected = 0;
+      for (unsigned I = 0; I != Size; ++I)
+        Expected |= uint64_t(Data[I + 1]) << (8 * (Little ? I : Size - 1 - I));
+      if (Size == 4 && Wide)
+        Expected = mips::signExtendWord(Expected);
+      EXPECT_EQ(Emulator.getRegister(mipsreg::V0), Expected);
+      EXPECT_FALSE(Emulator.skips().any());
+    }
+  }
+}
+
+TEST_P(MIPSScalar, UnknownValuesRespectWritesCallsResetAndMissingOperands) {
+  auto Image = image(0x2000, {});
+  NdOpEmulator Emulator(Image);
+  Emulator.setStrictMode(true);
+  const unsigned Width = isMIPS64(GetParam()) ? 8 : 4;
+  LowOp Unknown;
+  Unknown.Opcode = NdOp::INTRINSIC;
+  Unknown.Output = NdVar::reg(mipsreg::HI, Width);
+  Unknown.addInput(
+      NdVar::cst(uint64_t(Intrinsic::MIPSUnpredictable), sizeof(Intrinsic)));
+  ASSERT_TRUE(Emulator.step(Unknown));
+  LowOp Copy;
+  Copy.Opcode = NdOp::COPY;
+  Copy.Output = NdVar::reg(mipsreg::S0, Width);
+  Copy.addInput(NdVar::reg(mipsreg::HI, Width));
+  ASSERT_TRUE(Emulator.step(Copy));
+  EXPECT_FALSE(Emulator.getRegister(mipsreg::S0));
+
+  Copy.Output = NdVar::tmp(0x9000, Width);
+  ASSERT_TRUE(Emulator.step(Copy));
+  Copy.Output.Size = 1;
+  Copy.Inputs[0] = NdVar::cst(0x56, 1);
+  ASSERT_TRUE(Emulator.step(Copy));
+  EXPECT_EQ(Emulator.getRegister(0x9000), 0x56u); // fresh narrow temporary
+  Copy.Output = NdVar::reg(mipsreg::S0, 1);
+  ASSERT_TRUE(Emulator.step(Copy));
+  EXPECT_FALSE(Emulator.getRegister(mipsreg::S0)); // partial physical overwrite
+  LowOp Slice;
+  Slice.Opcode = NdOp::SUBBYTES;
+  Slice.Output = NdVar::tmp(0x9000, 1);
+  Slice.addInput(NdVar::reg(mipsreg::S0, Width));
+  Slice.addInput(NdVar::cst(0, Width));
+  ASSERT_TRUE(Emulator.step(Slice));
+  EXPECT_EQ(Emulator.getRegister(0x9000), 0x56u);
+
+  Copy.Output = NdVar::tmp(0x9000, Width);
+  Copy.Inputs[0] = NdVar::reg(mipsreg::T9, Width); // never seeded
+  ASSERT_TRUE(Emulator.step(Copy));
+  EXPECT_FALSE(Emulator.getRegister(0x9000));
+  LowOp Join;
+  Join.Opcode = NdOp::CONCAT;
+  Join.Output = NdVar::tmp(0x9000, 8);
+  Join.addInput(NdVar::reg(mipsreg::HI, 4));
+  Join.addInput(NdVar::reg(mipsreg::T9, 4));
+  ASSERT_TRUE(Emulator.step(Join));
+  EXPECT_FALSE(Emulator.getRegister(0x9000));
+
+  LowOp Store;
+  Store.Opcode = NdOp::STORE;
+  Store.addInput(NdVar::cst(0x2000, Width));
+  Store.addInput(NdVar::reg(mipsreg::S0, Width));
+  EXPECT_FALSE(Emulator.step(Store));
+  Emulator.setCallPreservedRegisters({mipsreg::S0});
+  LowOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.addInput(NdVar::cst(0x4000, Width));
+  ASSERT_TRUE(Emulator.step(Call));
+  EXPECT_FALSE(Emulator.getRegister(mipsreg::S0));
+  EXPECT_FALSE(Emulator.getRegister(mipsreg::HI));
+  ASSERT_TRUE(Emulator.step(Slice));
+  EXPECT_EQ(Emulator.getRegister(0x9000), 0x56u);
+  Emulator.setRegister(mipsreg::S0, 0x1234);
+  EXPECT_EQ(Emulator.getRegister(mipsreg::S0), 0x1234u);
+  ASSERT_TRUE(Emulator.step(Unknown));
+  Emulator.setRegisterBytes(mipsreg::HI, std::array<uint8_t, 1>{0x78});
+  EXPECT_EQ(Emulator.getRegister(mipsreg::HI), 0x78u);
+  ASSERT_TRUE(Emulator.step(Unknown));
+  Emulator.reset();
+  EXPECT_FALSE(Emulator.getRegister(mipsreg::HI));
+  Emulator.setRegister(mipsreg::HI, 0x90);
+  EXPECT_EQ(Emulator.getRegister(mipsreg::HI), 0x90u);
+}
+
+TEST_P(MIPSScalar, UncertainTransportRejectsMalformedViewsBeforeWriting) {
+  auto Image = image(0x2000, {});
+  NdOpEmulator Emulator(Image);
+  const unsigned Width = isMIPS64(GetParam()) ? 8 : 4;
+  LowOp Unknown;
+  Unknown.Opcode = NdOp::INTRINSIC;
+  Unknown.Output = NdVar::reg(mipsreg::HI, Width);
+  Unknown.addInput(
+      NdVar::cst(uint64_t(Intrinsic::MIPSUnpredictable), sizeof(Intrinsic)));
+  ASSERT_TRUE(Emulator.step(Unknown));
+  for (unsigned Case = 0; Case != 7; ++Case) {
+    SCOPED_TRACE(Case);
+    Emulator.setRegister(mipsreg::V0, 123);
+    LowOp Copy;
+    Copy.Opcode = NdOp::COPY;
+    Copy.Output = NdVar::reg(mipsreg::V0, Width);
+    Copy.addInput(NdVar::reg(mipsreg::HI, Width));
+    switch (Case) {
+    case 0:
+      Copy.Output.Size = 0;
+      break;
+    case 1:
+      Copy.Output.Size = 16; // vector uncertainty has no scalar contract
+      break;
+    case 2:
+      Copy.Inputs[0].Size = 0;
+      break;
+    case 3:
+      Copy.addInput(NdVar::cst(0, Width));
+      break;
+    case 4:
+      Copy.Opcode = NdOp::SUBBYTES;
+      Copy.addInput(NdVar::cst(Width, Width));
+      break;
+    case 5:
+      Copy.MemoryAddressSpace = NdMemoryAddressSpace::X86GS;
+      break;
+    case 6:
+      Copy.MemoryOrdering = NdMemoryOrdering::Acquire;
+      break;
+    }
+    EXPECT_FALSE(Emulator.step(Copy));
+    EXPECT_EQ(Emulator.getRegister(mipsreg::V0), 123u);
+    EXPECT_FALSE(Emulator.skips().any());
   }
 }
 

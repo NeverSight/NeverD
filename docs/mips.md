@@ -51,11 +51,18 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   adapter still declines split o32 values, register-padding holes and narrow
   big-endian overflow slots; complete typed ABI reconstruction is not claimed.
 
-Two value-analysis gaps remain: source recovery can retain a false dependency
-on an uninitialized incoming destination across a complete merge pair, and
-concrete LowIR execution stops at a partial MIPS64 `LWR` with a noncanonical
-old upper word, even when a following instruction would discard it. The source
-roundtrip fixtures bind an explicit old value; they do not certify those gaps.
+LowIR execution retains the common known bits of the two permitted partial
+MIPS64 `LWR` upper words. Scalar COPY, SUBBYTES, CONCAT and integer extensions
+transport that uncertainty, so a later complementary load can produce a fully
+known value. Public register reads refuse a view containing unknown bits;
+stores, arithmetic and control also refuse any unknown bits they observe.
+Narrow reads can still consume a defined low word. This does not select a CPU's
+implementation-dependent behavior or give uninitialized registers a zero value.
+
+Source recovery still can retain a false dependency on an uninitialized incoming
+destination across a complete merge pair. The source roundtrip fixtures bind
+an explicit old value; they do not certify that remaining gap. Concrete LowIR
+transport and source parameter inference have separate validation boundaries.
 
 This is a strict subset. n32, historical MIPS I–V profiles, Release 6, MIPS16,
 microMIPS, floating point, DSP/MSA, privileged instructions, LL/SC reservations,
@@ -77,6 +84,12 @@ data layouts for all four width/byte-order combinations. Merge-load tests cover
 every offset, bounded memory, discarded results, base/destination aliasing and
 faults. MUL tests distinguish unread HI/LO clobbers, separately restored
 accumulators and invalid MIPS64 word inputs.
+Partial-value tests also cover both merge orders with arbitrary old upper
+words, common known-bit slices, sign extension of unknown sign bits, narrow
+versus wide stores, malformed transports, partial register writes, temporary
+reuse, explicit seeding, reset and preserved/volatile call state. MFHI/MFLO can
+transport an unpredictable result; querying or computing with that result
+still refuses it until the observed bits are overwritten.
 
 ```sh
 python3 scripts/build.py build-mips --target NeverDMIPSTests NeverDMIPSIntegerTests NeverDMIPSFlowTests NeverDMIPSSDKTests NeverDMIPSPipelineTests neverd --parallel 4
