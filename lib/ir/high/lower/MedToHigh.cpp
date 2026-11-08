@@ -17,10 +17,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ir/high/MedToHigh.h"
-#include "../structure/X86/X86RegistrationRegions.h"
 
 #include "../../../loader/Swift/SwiftErrorSourceProjection.h"
 #include "../pass/HighDCEDetail.h"
+#include "../structure/X86/X86RegistrationDisplay.h"
+#include "../structure/X86/X86RegistrationRegions.h"
 #include "AnalysisCall.h"
 #include "HighEntryStackOffsets.h"
 #include "MedMutableToHigh.h"
@@ -1954,6 +1955,7 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
     reduceLateGotos(Func);
     nameRepeatedValues(Func);
     anchorDispatcherEntries(Func);
+    finishRegistrationDisplay(Func, Med, TheArch);
     Trace.high(Func, "after-exceptions");
     return Func;
   }
@@ -2034,10 +2036,7 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
   recognizeVaStartForwarder(Func, TheArch);
   // What dead-code cleanup removed since the regions were placed can leave a
   // jump with nothing left to jump past.
-  if (Med.RegistrationStates && Med.RegistrationStates->Display) {
-    dropNaturalJumps(Func.Body);
-    keepRegistrationLabelsInReach(Func.Body);
-  }
+  finishRegistrationDisplay(Func, Med, TheArch);
   Trace.high(Func, "after-exceptions");
   auto TEnd = std::chrono::steady_clock::now();
 

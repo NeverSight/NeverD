@@ -313,6 +313,14 @@ std::optional<X86CookieCheckSuccessPath>
 getCheckedX86CookieCheckSuccessPath(const BinaryImage &Img, va_t CheckVA);
 bool hasCheckedX86CookieCheckSuccessPath(const BinaryImage &Img, va_t CheckVA);
 
+/// The instructions ordinary flow runs from \p Function's entry and each
+/// runtime entry its table names, in the code it owns: what is no function of
+/// its own, whatever its bytes look like, as a `push ecx` that lands on a
+/// 16-byte boundary in the middle of a `__finally`.
+std::set<va_t>
+getX86RegistrationBodyInstructions(const BinaryImage &Image,
+                                   const ExceptionFunction &Function);
+
 } // namespace neverd::coff_loader
 
 #endif // NEVERD_LOADER_COFF_COFFREGISTRATIONEH_H

@@ -456,6 +456,14 @@ struct RegistrationDisplayFacts {
   /// prologue is done, which a handler's own stack stands in for: it prints in
   /// this frame.
   std::optional<int32_t> StackFromEntry;
+  /// The registration record's distance from the frame pointer: clang-cl's sits
+  /// lower than MSVC's by what its prologue pushes after setting EBP.
+  int32_t RecordFromFrame = -16;
+  /// What each outlined `__finally` handler calls with its frame, and the calls
+  /// of that function that run it on the normal path: clang-cl compiles the
+  /// body to a function of its own.
+  std::map<va_t, va_t> OutlinedBodies;
+  std::map<va_t, va_t> OutlinedCalls;
   /// The calls of `_local_unwind4` and `_local_unwind2`: the `return` or `goto`
   /// that follows each says the same in C.
   std::set<va_t> LocalUnwinds;

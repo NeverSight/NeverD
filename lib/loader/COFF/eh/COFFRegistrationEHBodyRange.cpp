@@ -9,6 +9,7 @@
 #include "../../ReadOnlyBytesIndex.h"
 #include "COFFRegistrationEHDetail.h"
 
+#include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/Limits.h"
 
 #include "llvm/ADT/ScopeExit.h"
@@ -16,6 +17,7 @@
 #include <algorithm>
 #include <capstone/capstone.h>
 #include <map>
+#include <set>
 #include <vector>
 
 namespace neverd::coff_loader::registration_detail {
@@ -25,7 +27,8 @@ std::optional<va_t> checkBodyRange(const BinaryImage &Img,
                                    const ExceptionAddressRange &Range,
                                    const std::vector<va_t> &Roots, size_t &Work,
                                    std::optional<va_t> RequiredInstruction,
-                                   IndexedPE32CodeBytes *CodeBytes = nullptr) {
+                                   IndexedPE32CodeBytes *CodeBytes = nullptr,
+                                   bool JumpsMayLeave = false) {
   if (Img.Arch != Arch::X86 || Img.Bits != Bitness::Bits32 ||
       Img.Format != BinaryFormat::COFF || !Range.isValid() ||
       Range.End > uint64_t(UINT32_MAX) + 1 || Roots.empty() ||
@@ -93,12 +96,17 @@ std::optional<va_t> checkBodyRange(const BinaryImage &Img,
         if (X86.op_count != 1 || X86.operands[0].type != X86_OP_IMM)
           return std::nullopt;
         const va_t Target = uint32_t(X86.operands[0].imm);
-        if (!Range.contains(Target))
+        if (Range.contains(Target))
+          Pending.push_back(Target);
+        else if (!JumpsMayLeave)
           return std::nullopt;
-        Pending.push_back(Target);
         if (Instruction->id == X86_INS_JMP)
           break;
       }
+      // A compiler's `int3` after a call that does not return runs nothing on,
+      // which is all a body closing before a frame's own entry has to say.
+      if (JumpsMayLeave && Instruction->id == X86_INS_INT3)
+        break;
       // Calls retain their ordinary continuation without absorbing the
       // callee. Traps conservatively retain fallthrough too: this boundary
       // proof must not invent a no-return contract or discard resumed code.
@@ -132,6 +140,136 @@ checkedRegistrationRangeEnd(const BinaryImage &Img,
                             const ExceptionAddressRange &Range,
                             const std::vector<va_t> &Roots, size_t &Work) {
   return checkBodyRange(Img, Range, Roots, Work, std::nullopt);
+}
+
+std::optional<std::vector<RegistrationFrameWord>>
+checkedRegistrationStraightPrologue(const BinaryImage &Img, va_t Begin,
+                                    va_t End, size_t &Work) {
+  if (Img.Arch != Arch::X86 || Img.Bits != Bitness::Bits32 || Begin >= End)
+    return std::nullopt;
+  csh Handle = 0;
+  if (cs_open(CS_ARCH_X86, CS_MODE_32, &Handle) != CS_ERR_OK)
+    return std::nullopt;
+  const auto Close = llvm::scope_exit([&] { cs_close(&Handle); });
+  if (cs_option(Handle, CS_OPT_DETAIL, CS_OPT_ON) != CS_ERR_OK)
+    return std::nullopt;
+  auto *Instruction = cs_malloc(Handle);
+  if (!Instruction)
+    return std::nullopt;
+  const auto Free = llvm::scope_exit([&] { cs_free(Instruction, 1); });
+  std::vector<RegistrationFrameWord> Words;
+  for (va_t Address = Begin; Address < End;) {
+    if (Work >= limits::kMaxRegistrationEHStateWork)
+      return std::nullopt;
+    ++Work;
+    const va_t At = Address;
+    size_t Remaining = std::min<uint64_t>(15, End - Address);
+    const uint8_t *Cursor = Img.readVA(Address, Remaining);
+    if (!Cursor ||
+        !cs_disasm_iter(Handle, &Cursor, &Remaining, &Address, Instruction) ||
+        !Instruction->detail ||
+        !Img.hasExecutableCodeOwnerRange(At, Instruction->size) ||
+        cs_insn_group(Handle, Instruction, CS_GRP_JUMP) ||
+        cs_insn_group(Handle, Instruction, CS_GRP_CALL) ||
+        cs_insn_group(Handle, Instruction, CS_GRP_RET) ||
+        cs_insn_group(Handle, Instruction, CS_GRP_IRET) ||
+        cs_insn_group(Handle, Instruction, CS_GRP_INT))
+      return std::nullopt;
+    const auto &X86 = Instruction->detail->x86;
+    if (Instruction->id == X86_INS_MOV && X86.op_count == 2 &&
+        X86.operands[0].type == X86_OP_MEM &&
+        X86.operands[1].type == X86_OP_IMM && X86.operands[0].size == 4 &&
+        X86.operands[0].mem.base == X86_REG_EBP &&
+        X86.operands[0].mem.index == X86_REG_INVALID &&
+        X86.operands[0].mem.segment == X86_REG_INVALID)
+      Words.push_back(
+          {int32_t(X86.operands[0].mem.disp), uint32_t(X86.operands[1].imm)});
+  }
+  return Words;
+}
+
+} // namespace neverd::coff_loader::registration_detail
+
+namespace neverd::coff_loader {
+
+std::set<va_t>
+getX86RegistrationBodyInstructions(const BinaryImage &Image,
+                                   const ExceptionFunction &Function) {
+  std::set<va_t> Reached;
+  if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
+      !Function.Registration)
+    return Reached;
+  csh Handle = 0;
+  if (cs_open(CS_ARCH_X86, CS_MODE_32, &Handle) != CS_ERR_OK)
+    return Reached;
+  const auto Close = llvm::scope_exit([&] { cs_close(&Handle); });
+  if (cs_option(Handle, CS_OPT_DETAIL, CS_OPT_ON) != CS_ERR_OK)
+    return Reached;
+  auto *Instruction = cs_malloc(Handle);
+  if (!Instruction)
+    return Reached;
+  const auto Free = llvm::scope_exit([&] { cs_free(Instruction, 1); });
+  std::vector<va_t> Pending{Function.CodeRange.Begin};
+  std::vector<va_t> Finally;
+  for (const RegistrationScopeRecord &Scope : Function.Registration->Scopes) {
+    if (Scope.HandlerVA)
+      Pending.push_back(Scope.HandlerVA);
+    if (Scope.FilterVA)
+      Pending.push_back(Scope.FilterVA);
+    if (Scope.IsFinally && Scope.HandlerVA)
+      Finally.push_back(Scope.HandlerVA);
+  }
+  size_t Work = 0;
+  while (!Pending.empty()) {
+    va_t Address = Pending.back();
+    Pending.pop_back();
+    while (Function.ownsCode(Address) && !Reached.count(Address) &&
+           Work < limits::kMaxRegistrationEHStateWork) {
+      ++Work;
+      const va_t Begin = Address;
+      size_t Remaining = 15;
+      const uint8_t *Cursor = Image.readVA(Address, Remaining);
+      if (!Cursor ||
+          !cs_disasm_iter(Handle, &Cursor, &Remaining, &Address, Instruction) ||
+          !Instruction->detail)
+        break;
+      Reached.insert(Begin);
+      if (cs_insn_group(Handle, Instruction, CS_GRP_RET) ||
+          cs_insn_group(Handle, Instruction, CS_GRP_IRET))
+        break;
+      const auto &X86 = Instruction->detail->x86;
+      const bool Direct =
+          X86.op_count == 1 && X86.operands[0].type == X86_OP_IMM;
+      if (cs_insn_group(Handle, Instruction, CS_GRP_JUMP)) {
+        if (Direct)
+          Pending.push_back(uint32_t(X86.operands[0].imm));
+        if (Instruction->id == X86_INS_JMP)
+          break;
+      } else if (cs_insn_group(Handle, Instruction, CS_GRP_CALL) && Direct) {
+        // The normal path's call of a `__finally` body, past what the runtime's
+        // way in reloads first.
+        const va_t Target = uint32_t(X86.operands[0].imm);
+        if (llvm::any_of(Finally, [&](va_t Root) {
+              return Target >= Root &&
+                     Target - Root <=
+                         ::neverd::limits::loader::kMaxRegistrationBodyReload;
+            }))
+          Pending.push_back(Target);
+      }
+    }
+  }
+  return Reached;
+}
+
+} // namespace neverd::coff_loader
+
+namespace neverd::coff_loader::registration_detail {
+
+bool checkedRegistrationBodyClosesBefore(const BinaryImage &Img, va_t Begin,
+                                         va_t Boundary, size_t &Work) {
+  return checkBodyRange(Img, {Begin, Boundary}, {Begin}, Work, std::nullopt,
+                        nullptr, /*JumpsMayLeave=*/true)
+      .has_value();
 }
 
 bool checkedRegistrationBodyOwnsInstruction(const BinaryImage &Img,

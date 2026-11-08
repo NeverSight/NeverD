@@ -1396,6 +1396,9 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
   if (const std::optional<CallingConv> CC = callingConventionOf(TheArch, Fmt))
     Func.CC = *CC;
 
+  if (TheArch == Arch::X86)
+    med_calling_conv_detail::dropReservingPushes(Func);
+
   // --- Build the ordered parameter register list ---
   std::vector<uint64_t> ParamRegs;
   llvm::ArrayRef<uint64_t> IntegerRegs =

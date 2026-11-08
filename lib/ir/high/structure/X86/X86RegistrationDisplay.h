@@ -77,6 +77,11 @@ private:
   };
   std::optional<SettledFinally>
   settleClause(HighStmt &Try, const std::set<va_t> &Leaving) const;
+  /// Whether the code at \p Address runs past the scope of the handler \p Root,
+  /// as the normal path's call of its outlined body does.
+  bool hasLeftScope(va_t Address, va_t Root) const;
+  /// The flag a handler passes the outlined body at \p Root, in its call.
+  void nameAbnormalTermination(std::vector<HighStmt> &Body, va_t Root) const;
   void takeNormalPath(std::vector<HighStmt> &List, size_t Index,
                       const SettledFinally &Finally,
                       const std::set<va_t> &Labels,
@@ -101,6 +106,21 @@ private:
   /// returns, when one name or constant says.
   mutable std::map<va_t, ExprPtr> BodyResults;
 };
+
+/// Remove the writes of stack words nothing reads, once cleanup has settled
+/// what reads them: the arguments a call's own text says, and frame words
+/// nothing can see.  The handlers are statements like any other here, so unlike
+/// in a function whose handlers are out of line a word's reads are all in
+/// sight.
+void dropUnreadRegistrationStackWrites(HighFunc &Func,
+                                       const RegistrationDisplayFacts &Facts,
+                                       Arch Architecture);
+
+/// What cleanup since the regions were placed leaves to settle: jumps with
+/// nothing left to jump past or onto, the writes of stack words nothing reads,
+/// and labels a later copy moved out of reach.
+void finishRegistrationDisplay(HighFunc &Func, const MedFunc &Med,
+                               Arch Architecture);
 
 } // namespace neverd
 

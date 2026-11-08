@@ -18593,9 +18593,14 @@ levels nesting their tries, a body that leaves the function ending the path of i
 try that starts where jumps enter it, an arm that does nothing, a jump out of a
 `__finally` staying a jump, code running on into a `__finally`, a loop on a
 register staying in its try, an entry inside a loop being a jump in the try, an arm
-starting at its handler, and a filter keeping its calls in order. `WindowsEHModesCorpus.EveryFinallyClauseOfXcpt4HoldsItsHandlerAsCode`
-holds the same for the whole of x86 `xcpt4`, with no loop that does nothing and every
-call a filter or the startup code's arm makes. Run these checks when changing
+starting at its handler, a filter keeping its calls in order, clang-cl's record in frame
+slots with its outlined filter and `__finally`, a clause that does nothing keeping its
+address, and a `push` that only makes room being no argument. `WindowsEHModesCorpus.EveryFinallyClauseOfXcpt4HoldsItsHandlerAsCode`
+holds the same for the whole of x86 `xcpt4`, with no loop that does nothing, no empty
+`__try` and every call a filter or the startup code's arm makes.
+`ClangClX86SehProbePrintsItsTries`, `X86StartupFramesPrintTheirTries` and
+`X86WinapiCallsPopWhatTheyTake` pin clang-cl's frames, the CRT's own frames and the
+stack pointer a Windows API call leaves. Run these checks when changing
 the call-removal range index; handler boundaries, remaining calls and clause
 results must stay unchanged.
 

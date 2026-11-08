@@ -9,6 +9,8 @@
 
 #include "COFFRegistrationEHDetail.h"
 
+#include "neverd/loader/COFF/COFFSEH4Entry.h"
+
 #include "llvm/ADT/STLExtras.h"
 
 #include <tuple>
@@ -47,6 +49,9 @@ void recoverRegistrationCallbackRanges(ExceptionFunction &F,
         Cleanups.insert(Action.ActionVA);
   }
 
+  // The shared prologue is no part of the frame it builds, and a tentative
+  // range past a handler can hold it.
+  const auto Prologue = getX86SEH4PrologueShape(Img, F);
   std::vector<ExceptionAddressRange> Ranges{F.CodeRange};
   for (va_t Address : Callbacks) {
     if (!isExecutableAddress(Img, Address) || Cleanups.count(Address))
@@ -63,7 +68,10 @@ void recoverRegistrationCallbackRanges(ExceptionFunction &F,
       continue;
     // The language table owns the callback entry, not any preceding bytes
     // that an inferred function range happens to include.
-    Ranges.push_back({Address, Range->End});
+    va_t End = Range->End;
+    if (Prologue && Address < Prologue->Helper.Begin)
+      End = std::min(End, Prologue->Helper.Begin);
+    Ranges.push_back({Address, End});
   }
   for (auto &Range : Ranges) {
     // A cleanup has its own establisher-frame ABI. It remains an external
@@ -98,8 +106,8 @@ void recoverRegistrationCallbackRanges(ExceptionFunction &F,
        F.Personality == ExceptionPersonality::CxxFrameHandlerX86);
   size_t Work = 0;
   for (auto Chunk : Chunks) {
-    if (((KnownSEH && !F.Cxx) || CleanupOnlyCxx) && Chain.RegistrationOffset &&
-        Chain.TryLevelOffset) {
+    if (((KnownSEH && !F.Cxx) || CleanupOnlyCxx) &&
+        ((Chain.RegistrationOffset && Chain.TryLevelOffset) || Prologue)) {
       std::vector<va_t> Roots;
       if (Chunk.contains(Entry))
         Roots.push_back(Entry);
