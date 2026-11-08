@@ -9,6 +9,7 @@
 
 #include "neverd/translate/X86/X86LegacyExecution.h"
 
+#include "X86LegacyControlRegisters.h"
 #include "X86LegacyExecutionInternal.h"
 #include "X86LegacyFarTransfer.h"
 #include "X86LegacyFastSystem.h"
@@ -37,6 +38,7 @@ llvm::Error invalid(const char *Message) {
 
 struct LegacyInstruction {
   std::optional<X86DebugRegisterEncoding> DebugRegister;
+  std::optional<detail::X86LegacyControlInstruction> ControlRegister;
   std::optional<detail::X86LegacySegmentInstruction> Segment;
   std::optional<detail::X86LegacyScalarInstruction> Scalar;
   std::optional<detail::X86LegacyFastSystemInstruction> FastSystem;
@@ -57,6 +59,7 @@ decodeInstruction(llvm::ArrayRef<uint8_t> Instruction, bool Code32) {
     return invalid("MOV-DR binding contains trailing bytes");
   LegacyInstruction I{
       DebugRegister,
+      detail::decodeLegacyControlRegister(Instruction, Code32),
       detail::decodeLegacySegmentInstruction(Instruction, Code32),
       detail::decodeLegacyScalarInstruction(Instruction, Code32),
       detail::decodeLegacyFastSystem(Instruction, Code32),
@@ -85,7 +88,7 @@ decodeInstruction(llvm::ArrayRef<uint8_t> Instruction, bool Code32) {
            (I.Body.size() == 3 && I.Body[0] == 0xca);
   if (!I.Segment && !I.Scalar && !I.FastSystem && !I.String && !I.Port &&
       !I.Far && !Single && !I.INT && !I.UD2 && !I.IRET && !I.RETF &&
-      !I.DebugRegister)
+      !I.DebugRegister && !I.ControlRegister)
     return invalid("unsupported or malformed legacy step instruction");
   return I;
 }
@@ -150,8 +153,15 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   auto Decoded = decodeInstruction(Instruction, Code32);
   if (!Decoded)
     return Decoded.takeError();
-  auto &[DebugRegister, Segment, Scalar, FastSystem, String, Port, Far, Body,
-         Width, IRET, RETF, INT, UD2] = *Decoded;
+  auto &[DebugRegister, ControlRegister, Segment, Scalar, FastSystem, String,
+         Port, Far, Body, Width, IRET, RETF, INT, UD2] = *Decoded;
+  if (ControlRegister) {
+    if (!Options.ControlRegisters)
+      return invalid("MOV-CR requires a bound Intel control-register profile");
+    if (auto Error = detail::validateLegacyControlBinding(
+            Memory, *Options.ControlRegisters))
+      return std::move(Error);
+  }
   if (Scalar && Scalar->DescriptorQuery &&
       Options.DescriptorQueries != X86LegacyDescriptorProfile::TableImage)
     return invalid("legacy descriptor query requires a bound table profile");
@@ -423,12 +433,29 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   }
   auto Next = State.Core;
   auto NextTR = State.TR;
-  std::optional<uint64_t> NextCR0;
+  auto NextControls = Memory.controls();
+  auto NextCR2 = State.CR2;
   uint32_t Flags = State.EFlags;
   bool SS = false, STI = false, RepeatContinue = false;
   bool TakenBranch = false;
   auto NextIP = uint32_t(State.EIP + Instruction.size());
-  if (!R.Exception && DebugRegister) {
+  if (!R.Exception && ControlRegister) {
+    auto Staged = State;
+    auto Got = detail::executeLegacyControlRegister(Staged, NextControls,
+                                                    Memory, *ControlRegister,
+                                                    *Options.ControlRegisters);
+    if (!Got)
+      return Got.takeError();
+    if (Accept(*Got)) {
+      if (State.Debug &&
+          !x86InstructionDebugValid(State.Debug->DR6, State.Debug->DR7,
+                                    State.Debug->DebugCTL, *Options.Debug,
+                                    NextControls.CR4, State.Debug->PendingData))
+        return invalid("MOV-CR requests unbound debug controls");
+      Next = Staged.Core;
+      NextCR2 = Staged.CR2;
+    }
+  } else if (!R.Exception && DebugRegister) {
     auto Bank = *State.Debug;
     const auto Result = x86AccessDebugRegister(
         Bank, Next.GPR[DebugRegister->Access.General], DebugRegister->Access,
@@ -531,7 +558,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       Flags = Staged.EFlags;
       TakenBranch = Got->TakenBranch;
       NextTR = Staged.TR;
-      NextCR0 = Got->CR0;
+      if (Got->CR0)
+        NextControls.CR0 = *Got->CR0;
     } else if (BoundMpx && Got->Exception && Got->Exception->Vector == 5) {
       // This is an architectural effect of #BR, before attempting IDT entry.
       // Unlike GPR/EIP/FLAGS staging, it survives delivery faults and #DF.
@@ -585,18 +613,16 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
                  false);
   if (R.BackingFault)
     return R;
+  NextControls.RFlags = RepeatContinue ? Flags | 0x10000u : Flags & ~0x10000u;
+  if (auto Error = Memory.bindControls(NextControls))
+    return std::move(Error);
   State.Core = Next;
   State.TR = NextTR;
+  State.CR2 = NextCR2;
   State.EIP = NextIP;
-  State.EFlags = RepeatContinue ? Flags | 0x10000u : Flags & ~0x10000u;
+  State.EFlags = NextControls.RFlags;
   State.SSBlocked = SS;
   State.STIBlocked = STI;
-  auto Controls = Memory.controls();
-  if (NextCR0)
-    Controls.CR0 = *NextCR0;
-  Controls.RFlags = State.EFlags;
-  if (auto Error = Memory.bindControls(Controls))
-    return std::move(Error);
   R.InstructionCompleted = !RepeatContinue;
   if (RepeatContinue)
     R.Status = X86LegacyExecutionStatus::RepeatContinue;

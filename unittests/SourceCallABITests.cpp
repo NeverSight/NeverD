@@ -837,5 +837,75 @@ TEST(SourceCallABI, DarwinIndirectResultKeepsItsOriginalStorageContract) {
     EXPECT_FALSE(H.ByValueCopy);
     H.CallKind = SourceCallTypeHint::Kind::Native;
     EXPECT_FALSE(sourceCallRetainsResultStorage(H));
+    H.Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+    H.AnalystSite.reset();
+    EXPECT_TRUE(sourceCallRetainsResultStorage(H));
+    EXPECT_TRUE(sourceCallUsesMachineABI(H, BinaryFormat::MachO, false));
+    H.AnalystFixedCount = 0;
+    EXPECT_FALSE(sourceCallRetainsResultStorage(H));
+  }
+}
+
+TEST(SourceCallABI, NativeSIMD128UsesFullQRegistersAndAlignedStack) {
+  const auto Vector = NdType::makeInt(kDarwinWideBytes);
+  Vector->SourceName = kSourceAArch64Vector128CType;
+  auto H = contract(std::vector<TypeRef>(
+      kDarwinRegisterArguments + kDarwinExtraArguments, Vector));
+  H.CallKind = SourceCallTypeHint::Kind::Native;
+  H.AnalystSite.reset();
+  H.Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+  H.Signature.ReturnType = Vector;
+  std::string Error;
+  ASSERT_TRUE(assignDarwinFixedSourceABI(H.Signature, Arch::AArch64, Error))
+      << Error;
+  EXPECT_TRUE(sourceCallUsesMachineABI(H, BinaryFormat::MachO, false));
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  EXPECT_EQ(H.Signature.ReturnLocation.RegisterOffset, TRI.FPReturnReg);
+  EXPECT_EQ(H.Signature.ReturnLocation.ValueBytes, kDarwinWideBytes);
+  EXPECT_TRUE(H.Signature.ReturnComponents.empty());
+  for (unsigned I = 0; I < H.Signature.Parameters.size(); ++I) {
+    const auto &Parameter = H.Signature.Parameters[I];
+    EXPECT_TRUE(Parameter.Components.empty());
+    EXPECT_EQ(Parameter.Location.ValueBytes, kDarwinWideBytes);
+    if (I < kDarwinRegisterArguments) {
+      EXPECT_EQ(Parameter.Location.Kind,
+                SourceABICarrierKind::FloatingRegister);
+      EXPECT_EQ(Parameter.Location.RegisterOffset, TRI.FPParamRegs[I]);
+    } else {
+      EXPECT_EQ(Parameter.Location.Kind, SourceABICarrierKind::Stack);
+      EXPECT_EQ(Parameter.Location.EntryStackOffset,
+                (I - kDarwinRegisterArguments) * kDarwinWideBytes);
+    }
+  }
+  auto Invalid = H.Signature;
+  Invalid.Parameters.back().Location.EntryStackOffset += kDarwinRegisterBytes;
+  EXPECT_FALSE(validateSourceABI(Invalid, Error));
+  Invalid = H.Signature;
+  Invalid.Parameters.front().Location.ValueBytes = kDarwinRegisterBytes;
+  EXPECT_FALSE(validateSourceABI(Invalid, Error));
+  Invalid = H.Signature;
+  Invalid.ReturnLocation.Kind = SourceABICarrierKind::IntegerRegister;
+  Invalid.ReturnLocation.RegisterOffset = TRI.IntReturnReg;
+  EXPECT_FALSE(validateSourceABI(Invalid, Error));
+  Invalid = H.Signature;
+  Invalid.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+  EXPECT_FALSE(validateSourceABI(Invalid, Error));
+  Invalid = H.Signature;
+  Invalid.Architecture = Arch::X64;
+  EXPECT_FALSE(validateSourceABI(Invalid, Error));
+}
+
+TEST(SourceCallABI, NativeVectorRecordsDoNotBecomeIntegerOrIndirectValues) {
+  const auto Vector = NdType::makeInt(kDarwinWideBytes);
+  Vector->SourceName = kSourceAArch64Vector128CType;
+  for (unsigned Count = 1; Count <= kDarwinHFAMembers; ++Count) {
+    const auto Record = NdType::makeStruct(std::vector<TypeRef>(Count, Vector));
+    auto H = contract({Record});
+    H.Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+    std::string Error;
+    EXPECT_FALSE(assignDarwinFixedSourceABI(H.Signature, Arch::AArch64, Error));
+    H.Signature.Parameters.clear();
+    H.Signature.ReturnType = Record;
+    EXPECT_FALSE(assignDarwinFixedSourceABI(H.Signature, Arch::AArch64, Error));
   }
 }

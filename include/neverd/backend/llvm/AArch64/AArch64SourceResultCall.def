@@ -26,6 +26,9 @@
 
 RESULT_CALL_INPUTS("r,r")
 VALUE_CALL_INPUTS("r,r,r")
+// Inline storage covers one parameter bank and the largest direct result.
+RESULT_CALL_VALUE(kResultCallInlineArguments, 8)
+RESULT_CALL_VALUE(kResultCallInlineResults, 4)
 RESULT_CALL_VALUE(kResultCallWordBytes, 8)
 RESULT_CALL_VALUE(kResultCallFloatBytes, 4)
 RESULT_CALL_VALUE(kResultCallHalfBytes, 2)
@@ -65,13 +68,16 @@ RESULT_CALL_TEXT(kResultCallW, "w")
 RESULT_CALL_TEXT(kResultCallX, "x")
 RESULT_CALL_TEXT(kResultCallS, "s")
 RESULT_CALL_TEXT(kResultCallD, "d")
+RESULT_CALL_TEXT(kResultCallQ, "q")
+RESULT_CALL_TEXT(kResultCallAlignmentC, "__attribute__((aligned({0}))) ")
 RESULT_CALL_TEXT(kResultCallPacket, "__neverd_result_call")
 RESULT_CALL_TEXT(kResultCallValue, "__neverd_result_argument")
-RESULT_CALL_TEXT(kResultCallPacketC,
-                 "({{ uint64_t {0}[{1}] = {{(uint64_t)({2}), (uint64_t)({3}), "
-                 "(uint64_t)({4}), {5}}; ")
+RESULT_CALL_TEXT(
+    kResultCallPacketC,
+    "({{ {6}uint64_t {0}[{1}] = {{(uint64_t)({2}), (uint64_t)({3}), "
+    "(uint64_t)({4}), {5}}; ")
 RESULT_CALL_TEXT(kValueCallPacketC,
-                 "({{ uint64_t {0}[{1}]; {0}[0] = (uint64_t)({2}); "
+                 "({{ {6}uint64_t {0}[{1}]; {0}[0] = (uint64_t)({2}); "
                  "{0}[1] = (uint64_t)({3}); ")
 RESULT_CALL_TEXT(kResultCallArgumentC,
                  "{{ {0} = {1}; __builtin_memcpy(&{2}[{3}], &{4}, {5}); } ")

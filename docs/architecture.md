@@ -101,6 +101,17 @@ architecturally undefined upper word to the target's CR0[31:16]; word register
 and memory forms need no undefined-result choice. Generated protected C calls
 this same boundary. These instructions do not enable real/VM86 transitions,
 task switching, general MOV-CR or virtual-machine interception semantics.
+`translate/X86/X86LegacyControlRegisters` separately owns original protected
+MOV-CR. Its explicit Intel binding preserves undefined arithmetic flags and
+binds nonpaging CR4 capabilities; paging capabilities come from
+`X86PagingFeatures`. Operand/address overrides and ModR/M mod do not change
+the register transfer's 32-bit width or add a memory operand. The owner checks
+architectural faults before staging CR0/CR2/CR3/CR4, uses `loadX86PAEPDPTE` for
+the specified PAE reload triggers, and publishes the complete control bank
+before post-instruction debug delivery. Failed loads retain the previous
+CR3 and all four PDPTEs. The following fetch uses the new mapping. Generated
+protected C reuses this owner. Valid real/IA-32e transfers and unbound memory
+domains refuse explicitly; they are not converted into invented #GP faults.
 CLAC/STAC use the existing target SMAP capability and raise #UD when it is
 absent, CPL is nonzero or an operand-size override is present. The recognized
 faulting encoding still authenticates the instruction fetch before #UD.
@@ -1314,10 +1325,22 @@ shared machine-call bridge described below, retaining the actual BLRAA/BLRAB
 and original result registers. Recovered bindings retain their native identity,
 effects and declaration checks before HighC selects that bridge. LLVM consumes
 their validated physical carriers without requiring analyst source authority.
-Scalar, 128-bit integer and direct record/HFA values share the same transport;
-indirect native copies and hidden results still require their separate storage
-proofs. Native 128-bit SIMD carriers are not integer pairs: authenticated
-calls using them reject until the packet layout can carry full vector registers.
+Scalar, 128-bit integer and direct record/HFA values share the same transport.
+Complete recovered fixed C bindings also retain the original indirect record
+address and x8 result buffer. They authorize neither a new logical copy nor
+alignment, aliasing, lifetime or pointee-access promises. Full SIMD128 values
+use one Q register or an aligned 16-byte stack object, with Q0 for their result.
+The shared packet assigns two aligned words to each Q carrier; LLVM and both
+C routes use that same layout. Such raw calls also use the physical bridge,
+so an integer IR carrier cannot silently acquire the i128 general-register ABI.
+External C declarations retain the logical aggregate type without creating a
+copy; function-body projections still require their separate storage proof.
+This covers standalone full-width vector values. General vector-containing
+record ABIs, including homogeneous vector aggregates, still need their member
+and register-bank classification.
+Call-occurrence identity can describe 32-bit or 64-bit targets, while native
+frame and Boolean-result proofs require the complete target architecture
+pointer width before granting a source projection.
 A resolved display name cannot replace that authenticated target,
 and exact LLVM call prototypes remain
 exact. Explicit source call-site prototypes and recovered native C prototypes
@@ -1877,9 +1900,10 @@ automatic-lifting, nominal-frame and image regressions. Original-SP stack/call
 projection, fixed-image register post-index relocation and Apple native
 execution with CPTA enabled remain unqualified. Controlled Arm model execution
 qualifies the declared explicit-IR exports separately from an automatically
-lifted whole image. Native half and whole-vector C entry/return ABI and DWARF vector
-declarations remain separate, unqualified interfaces; integer bridges do not certify those native
-interfaces. Local scalable-vector interleaving uses the existing LLVM ELF
+lifted whole image. These CPA2 memory exports use integer bridges; they do not
+qualify native half/vector entry and return interfaces or DWARF vector
+declarations. Fixed-prototype SIMD128 call transport has its separate
+qualification above. Local scalable-vector interleaving uses the existing LLVM ELF
 profile, and does not qualify native Apple SVE or LLVMC scalable carriers.
 The owner follows the pinned
 [Arm 2025-09 AddressAdd and LDR specification](https://documentation-service.arm.com/documentation/ddi0602/2025-09?lang=en&rev=1).
@@ -4697,7 +4721,13 @@ notes the addresses its render read and its decoration looked up, and reads what
 an edit reached when it is next asked for, so the edit leaves the owner's other
 documents as they are (`Engine::keepNamedViewsThrough`, `Engine::readViewEdits`). A
 function's declaration does so too while the stores' names stand, which they do unless
-it hides a prototype analysis read.
+it hides a prototype analysis read. Where comments alone reached a document since it
+was decorated, they are written into a copy of it as decoration writes them: each row's
+comment read again, its line's inline comment replaced and the spans after it moved
+(`CodeEdits::takeComments`). A function's new name, taken in place, is written the same
+way into each name the document links to it (`CodeEdits::takeFunctionNames`), unless the
+name is given up or the text spells it otherwise; anything else that drops documents'
+keys decorates them again (`Engine::decorateNamedViewsAgain`).
 Decoration asks for the image's names and comments by address, and the edit changes
 that one row (`CodeEdits::ImageFacts`), so a view costs the same among thousands.
 The GUI starts a replica on a function as its Set Type dialog opens
@@ -9261,6 +9291,16 @@ names a member of it:
   `uint8_t var_m30[10]`, which their views index.
 - A frame address taken outside every member names a byte array that runs to
   the next member, access or address.
+
+HighC checks a storage address's known frame root and accumulates its signed
+offset in one bounded walk. Offset steps and alias/parent-frame rebases must
+fit without signed overflow; a zero mask is not a stack-alignment operation.
+An unassigned SSA-0 display heuristic still cannot authorize storage access.
+Failed proofs retain ordinary address expressions instead of inventing frame
+members, and each query observes the current aliases and frame layout.
+Typed pointer offsets and frame overlays also reject unrepresentable signed
+offsets. Ordered member distances use unsigned subtraction; alignment checks
+use low bits so the entry residue cannot cause signed overflow.
 
 Addresses print as the member holding them: `(uintptr_t)&stack_storage.var_m48`,
 `(CStringT*)&stack_storage.var_m48` for a pointer parameter, or
@@ -15130,6 +15170,9 @@ PLT interpretation belongs to the ELF loader. `lib/lift/MIPS` owns integer
 semantics. A `DecodedExecutionUnit` captures a delayed transfer and its slot,
 while normal disassembly still consumes four bytes. LowIR records their byte
 ownership and execution order; MedIR expands predicated effects before SSA.
+`MIPSBitfield.def` owns the classic SPECIAL3 field/shuffle selectors and biases.
+The lifter validates encodings before emitting effects and reuses the explicit
+MIPS64 word-input contract; source backends do not reinterpret instruction bits.
 
 `MedMIPSMergeValues` owns the source-only proof for adjacent complementary
 merge loads in a single ordinary leaf block. It runs after SSA/projection/DCE
@@ -18397,12 +18440,13 @@ same work allowance before returning.
 
 ### Explicit x64 continuation export
 
-`translate/X86/X86LocalApic.h` independently owns fixed-source APIC priority,
-acknowledgment and ordinary EOI bank transitions. It has no decoder/session
-dependency and is used only by explicit producers. CPU IF/shadow admission
-and acknowledgment timing stay in the continuation scheduler; arrivals,
-global event arbitration, TPR/CR8 synchronization and external EOI routing
-stay with the embedding. The offline QEMU bank adapter calls this type's
+`translate/X86/X86LocalApic.h` independently owns fixed-message reception,
+coalescing, APIC priority, acknowledgment and ordinary EOI bank transitions.
+Reception updates IRR/TMR without consuming a processor event. It has no
+decoder/session dependency and is used only by explicit producers. CPU IF/shadow
+admission and acknowledgment timing stay in the continuation scheduler;
+arrival routing/timing, global arbitration, TPR/CR8 synchronization and external
+EOI routing stay with the embedding. The offline QEMU bank adapter calls this type's
 constant initializer/validator instead of duplicating priority rules in Python.
 See the [local APIC contract](x86-local-apic.md).
 

@@ -5,6 +5,7 @@
 #include "neverd/lift/AArch64/AArch64Regs.h"
 
 #include <iterator>
+#include <utility>
 
 using namespace neverd;
 
@@ -237,8 +238,32 @@ TEST(NativeBooleanResultProof, ExactOccurrenceIdentityComesFromLowIR) {
       Changed.Inputs[0] = NdVar::reg(a64reg::X3, 8);
       break;
     }
-    EXPECT_FALSE(sourceCallOccurrenceKey(Changed));
+    EXPECT_FALSE(sourceCallOccurrenceKey(Changed, Arch::AArch64));
   }
+}
+
+TEST(NativeBooleanResultProof, OccurrenceWidthMatchesEachArchitecture) {
+  const std::pair<Arch, unsigned> Cases[] = {
+#define SOURCE_CALL_TARGET_ARCH(Architecture, Width)                           \
+  {Arch::Architecture, Width},
+#include "SourceCallOccurrenceFixtures.def"
+#undef SOURCE_CALL_TARGET_ARCH
+  };
+  for (const auto &[Architecture, Width] : Cases) {
+    SCOPED_TRACE(static_cast<unsigned>(Architecture));
+    for (const auto Opcode : {NdOp::CALL, NdOp::INDIR_CALL}) {
+      auto Op = call();
+      Op.Opcode = Opcode;
+      Op.Inputs[0].Size = Width;
+      EXPECT_TRUE(sourceCallOccurrenceKey(Op));
+      EXPECT_TRUE(sourceCallOccurrenceKey(Op, Architecture));
+      Op.Inputs[0].Size *= 2;
+      EXPECT_FALSE(sourceCallOccurrenceKey(Op, Architecture));
+      Op.Inputs[0].Size /= 4;
+      EXPECT_FALSE(sourceCallOccurrenceKey(Op, Architecture));
+    }
+  }
+  EXPECT_FALSE(sourceCallOccurrenceKey(call(), Arch::Unknown));
 }
 
 TEST(NativeBooleanResultProof, CompleteMasksKeepOnlyTheOriginalLowBit) {

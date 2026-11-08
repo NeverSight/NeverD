@@ -28,6 +28,7 @@ protected:
   std::optional<X86LegacyDescriptorProfile> DescriptorQueries;
   std::optional<X86LegacySystemSelectorProfile> SystemSelectors;
   std::optional<X86LegacyMachineStatusProfile> MachineStatus;
+  std::optional<X86LegacyControlRegisterBinding> ControlRegisters;
   std::optional<X86LegacyAtomicProfile> Atomics;
   std::optional<uint32_t> MemoryHigh;
   std::optional<uint32_t> RepairPage;
@@ -286,6 +287,7 @@ protected:
     Options.DescriptorQueries = DescriptorQueries;
     Options.SystemSelectors = SystemSelectors;
     Options.MachineStatus = MachineStatus;
+    Options.ControlRegisters = ControlRegisters;
     Options.Atomics = Atomics;
     Options.Strings = Strings;
     Options.FarTransfers = FarTransfers;
@@ -456,6 +458,16 @@ protected:
     EXPECT_EQ(Special.cr3, Memory->controls().CR3);
     EXPECT_EQ(Special.cr4, Memory->controls().CR4);
     EXPECT_EQ(Special.efer, Memory->controls().EFER);
+#ifdef KVM_GET_SREGS2
+    if (ControlRegisters && (Special.cr0 & (1u << 31)) &&
+        (Special.cr4 & 0x20)) {
+      kvm_sregs2 Extended{};
+      ASSERT_EQ(ioctl(CPU, KVM_GET_SREGS2, &Extended), 0);
+      ASSERT_TRUE(Extended.flags & KVM_SREGS2_FLAGS_PDPTRS_VALID);
+      for (unsigned I = 0; I != 4; ++I)
+        EXPECT_EQ(Extended.pdptrs[I], Memory->controls().PDPTE[I]);
+    }
+#endif
     for (unsigned I = 0; I != Segments.size(); ++I) {
       const auto Native = Cache(*Segments[I]);
       const auto &Model = State.Core.Segments[I];

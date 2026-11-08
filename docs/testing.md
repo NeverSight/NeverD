@@ -80,7 +80,11 @@ Reserved bank bits remain intact for the C++ owner to admit or reject.
 `NeverDUnitTests`) for the [fixed local APIC model](x86-local-apic.md). Build it
 through `scripts/build.py`; its assertions cover all fixed vectors and priority
 classes, acknowledgments, nested service and EOI obligations without executing
-a test binary. For a real save, compile projected bank initializers at O0/O2,
+a test binary. Its arrival source adds 7,680 message truth-table cases and
+960 complete two-slot lifetimes across every fixed vector, plus reserved-vector
+refusal and coalesced trigger-mode changes through EOI. These are constant
+expressions, not runtime tests or captured arrival traces.
+For a real save, compile projected bank initializers at O0/O2,
 inspect constant bytes, and keep hypothetical register transitions distinct
 from captured observations. No guest, handler or device callback need run.
 
@@ -525,6 +529,19 @@ backing, rejected profiles and continuation with the retained LDTR flag nibble.
 instruction chains and busy-write fault repair through Clang/NeverC O0/O2.
 Run these with both SDKs and qualified P/E cores, plus shared scalar,
 segment/query and ordinary system-state regressions.
+
+`X86LegacyControlTest.*`, `LegacyControl/*` and the `ControlRegister*` cases in
+`NeverDX86LegacySourceTests` cover protected MOV-CR. The fixed-value and
+original KVM cases vary code width, prefixes, all GPRs and ignored ModR/M mod
+bits; test CR0 normalization, privilege/#UD/#GP ordering and CR3/CR4 changes;
+and compare full controls, registers and flags. Software and generated C also
+test the PDPTE reload triggers, late reserved-entry faults, backing stops,
+repair/retry, mapping changes on the next fetch and new-IDT selection for a
+post-write #DB. The binding explicitly selects preserved undefined flags,
+source-retained ignored CR3 bits, ET=1, and present-only PDPTE reserved checks.
+The tests do not qualify real/IA-32e mode transfer, TLB timing, VMX/SMX entry,
+SMM or concurrent memory writers. Native compiler CR/DR operand transport is
+qualified separately by NeverC's system-register completion harness.
 
 `LegacyMachineStatus/*` qualifies original protected SMSW/LMSW/CLTS in legacy
 paging and PAE. It compares the complete control bank, registers, flags,
@@ -1908,8 +1925,40 @@ CTest instances; the receipt preserves the original failure and its resolution.
 The environment's `recovered_calls.py` requires its own exact 36-test report
 and rejects an explicit-prototype report substituted for it. This qualifies
 transport of an established recovered ABI, not automatic recovery accuracy.
-The authenticated native bridge explicitly rejects full 128-bit SIMD carriers,
-indirect by-value parameters and hidden results until their transport is proved.
+That receipt predates standalone SIMD128 and original native storage transport;
+its remaining-work statements describe the recorded revision. The newer native
+wide-storage qualification below supersedes those transport exclusions.
+
+The [native wide-storage receipt](evidence/arm64e-native-wide-storage-2026-11-08.json)
+qualifies complete standalone SIMD128 arguments and results, and recovered
+indirect record addresses with original x8 storage. The 47 fixed-prototype
+layouts include full Q registers, register-bank exhaustion, packed/aligned
+stack spills, scalar/HFA mixtures and indirect records. The vector oracle
+observes both 64-bit result words independently through an explicit outer
+X0/X1 record ABI; a symmetric checksum is not sufficient. The separate native
+x8 profile compares aliasing and guarded memory effects against the original
+caller storage. Across the two profiles, 1,200 unchanged Mach-O objects pass
+60 controlled model guests: 28,800 valid original/projected pairs and 69,120
+invalid-signature pairs, with zero exception-class differences. The earlier
+1,625 explicit, 25 original-x8 and 900 recovered objects are byte-identical to
+their existing baselines. Supplied NativeAnalysis fixtures establish transport
+of an already recovered ABI, not general inference accuracy.
+After integrating the shared HighC frame-offset changes from `dev`, the
+affected owners and ABI selections pass 2,404 instances with 21 explicit
+platform/toolchain skips. All 1,200 current objects still match the
+model-qualified bytes. The
+receipt records the model producer and the later integration revision
+separately; the model guests were not rerun for identical objects.
+
+The LowIR integration case checks the actual source-call binder and all three
+emission routes, retaining original input and result addresses without new
+logical copies or `byval`/`sret` promises. Named-function C output is compiled
+by Apple Clang directly; Apple Clang's legacy `llvm.ptrauth` globals remain
+unsupported by r6 IR import. Ordinary and rewrite code-generation boundaries
+now reject that representation before the incompatible backend can abort.
+General vector-containing record ABIs (including HVAs), whole-image
+authentication installation and signed exception execution remain separate,
+incomplete work.
 
 `MachOArm64eDependencies` additionally verifies multi-start pages for all six
 supported arm64e chain formats and ordinary 64-bit chains. It checks complete
@@ -22206,6 +22255,16 @@ MedStackAlignment reusable-entry query regressions exercise the existing scoped 
 
 `CDisplayFrameRecord` index regressions check duplicate-name owner precedence, layout replacement, current propagated types and disabled storage projection. The index is rebuilt with its layout snapshot; mutable types are read from their current slots.
 
+The same suite rejects zero alignment masks, overflowing signed offset chains,
+and overflowing alias/parent-frame rebases. It retains valid boundary
+differences, target entry-stack residues, the existing traversal bound and
+display-only roots without granting storage access. x86, x64, ARM, AArch64 and
+both byte orders of MIPS32/64 exercise root checks. Typed pointer offsets,
+frame overlays, member distances and alignment residues cover the adjacent
+arithmetic boundaries. Both C writers execute a zero-masked frame address at
+O0/O2 with undefined-behavior checks. Run `NeverDCDisplayFrameRecordTests` and
+the complete C-pointer/source ABI suites after changing this walk.
+
 `HighEntryStackOffsets.SharedIndexesKeepDefinitionAndPhiIdentities` checks register/temporary identities, ambiguous PHIs and a new conversion after mutation. Win64 forwarding checks use the same converter-owned definition and PHI indexes as production calls.
 
 HighControlFlowSemantics external-skip tests independently execute all 256 branch choices and preserve earlier nested incoming edges. Batched external-skip ownership must retain statement order and reject outside entries; the current upstream goto-splice and entry-label indexes are retained. Windows exception regressions qualify exceptional control flow.
@@ -22261,6 +22320,11 @@ doubleword merges and a merge read in an indirect call's slot. Uninitialized
 merge destinations cover both orders, all offsets, fixed and seeded random
 machine values, independent expected bytes and fault order at both page edges.
 An invalid-memory branch-likely slot is tested both annulled and executed.
+Bitfield and shuffle kernels cover all 13 classic SPECIAL3 forms and full-width
+fields with independent bit/lane expectations. MIPS64 invalid word inputs are
+tested separately as NeverD strict refusals, without executing architecturally
+UNPREDICTABLE originals. These checks cover both an executed/annulled likely
+slot and an instruction whose destination is `$zero`.
 HighC merge globals are also executed with the original image unmapped.
 LLVMC's original-image storage
 and either route's omitted original callees are explicitly bound at their
@@ -22274,3 +22338,38 @@ Failures retain their diagnostic artifacts. An unavailable compiler or oracle
 is a failure, not a skipped pass.
 Vendor firmware remains outside the committed fixtures. Its separate static
 receipt is [Archer C7 V5](firmware/archer-c7-v5.md).
+
+### MIPS decode/lift and firmware performance
+
+`neverd-mips-bench` is an opt-in target, excluded from the default build:
+
+```sh
+python3 scripts/build.py build-mips --target neverd-mips-bench --parallel 4
+build-mips/bin/neverd-mips-bench mips64el lift /path/to/owned-code.bin 100000
+```
+
+Profiles are `mips`, `mipsel`, `mips64` and `mips64el`. Stages are `capstone`
+(direct physical decoding), `decode` (NeverD physical decoding) and `lift`
+(decoding plus LowIR, including delay slots). Both decode paths request the same
+classic r2 profile, detail on and text off. The pinned Capstone fork suppresses
+rendered operand detail with text off; these physical decode measurements consume
+instruction sizes and IDs. The harness reuses decoder handles, counts physical
+instructions/LowOps and validates output fingerprints outside
+the timed loop. Invalid, truncated or unsupported input fails. Direct Capstone
+does not supply lift semantics and is not a decompiler throughput comparator.
+
+`tools/neverd-bench/mips-paired.py` alternates baseline/candidate runs, warms each
+job and retains CPU, wall, RSS, output hashes and every sample in an ignored
+output directory. It accepts matching CLI/SDK/benchmark directories, raw files
+named `PROFILE-unchanged.bin`, the retained Archer C7 `ubus`, dependency snapshots
+from `neverd-dependency-inputs.json`, and JSON toolchain manifests with `compiler`,
+`llvm`, `capstone` and `build` entries. Record exact versions/hashes, build flags
+and allocator selection in those manifests before each build; unequal inputs
+are refused. Run `--help` for explicit paths and repetition counts.
+
+Each baseline CLI must load its own matching SDK; the runner sets its library
+search path accordingly. It checks output identity for the selected `call`
+handler and discovered functions (limited to 250), with one/default threads and
+both C backends. New instruction coverage and additional strict checks are
+different work and require separate reporting, not same-output speedup claims.
+This small corpus and a shared host do not establish a cross-tool ranking.

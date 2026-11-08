@@ -17,6 +17,9 @@ add_neverd_tool(neverd-med-bench
   med-bench.cpp
   LINK_COMPONENTS Pipeline)
 
+add_executable(neverd-mips-bench EXCLUDE_FROM_ALL mips-bench.cpp)
+target_link_libraries(neverd-mips-bench PRIVATE NeverDDecode NeverDLift)
+
 if(NEVERD_ENABLE_CPU_EMULATION)
   add_neverd_tool(neverd-cpu-bench
     cpu-bench.cpp

@@ -10,6 +10,7 @@
 
 #include "../../HostCpu.h"
 #include "X86LegacyBMITestEncoding.h"
+#include "X86LegacyControlTestEncoding.h"
 #include "X86LegacyDescriptorTestEncoding.h"
 #include "X86LegacyMachineStatusTestEncoding.h"
 #include "X86LegacySystemSelectorTestEncoding.h"
@@ -656,6 +657,7 @@ TEST_P(X86PagingNativeTest, OriginalInstructionsMatchPagingFaultsAndCommit) {
 #include "X86LegacyBitNativeTests.inc"
 #include "X86LegacyBoundNativeTests.inc"
 #include "X86LegacyConditionNativeTests.inc"
+#include "X86LegacyControlNativeTests.inc"
 #include "X86LegacyDebugNativeTests.inc"
 #include "X86LegacyDebugRegisterNativeTests.inc"
 #include "X86LegacyDecimalNativeTests.inc"

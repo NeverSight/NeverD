@@ -1,0 +1,18 @@
+//===- SourceCallOccurrenceFixtures.def - Call target widths -----*- C++
+//-*-===//
+//
+// NeverD Decompiler
+//
+/// \file
+/// Define SOURCE_CALL_TARGET_ARCH(Architecture, Bytes) before inclusion.
+//
+//===----------------------------------------------------------------------===//
+
+SOURCE_CALL_TARGET_ARCH(AArch64, 8)
+SOURCE_CALL_TARGET_ARCH(X64, 8)
+SOURCE_CALL_TARGET_ARCH(ARM, 4)
+SOURCE_CALL_TARGET_ARCH(X86, 4)
+SOURCE_CALL_TARGET_ARCH(MIPS32, 4)
+SOURCE_CALL_TARGET_ARCH(MIPS32EL, 4)
+SOURCE_CALL_TARGET_ARCH(MIPS64, 8)
+SOURCE_CALL_TARGET_ARCH(MIPS64EL, 8)

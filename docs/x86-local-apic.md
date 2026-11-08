@@ -2,12 +2,14 @@
 
 [`X86LocalApicFixed`](../include/neverd/translate/X86/X86LocalApic.h) owns a
 copy of IRR, ISR, TMR, TPR and the EOI-broadcast suppression bit. It supplies
-local fixed-interrupt priority and ordinary acknowledgment/EOI transitions
-for an explicitly bound, enabled APIC. It has no dependency on a decoder,
-guest-memory provider, SDK session or host APIC.
+local fixed-message reception, priority and ordinary acknowledgment/EOI
+transitions for an explicitly bound, enabled modern APIC. The profile uses
+one coalescing IRR bit per vector; older P6 rejection behavior is outside it.
+It has no dependency on a decoder, guest-memory provider, SDK session or host
+APIC.
 
 The producer must establish that this limited profile applies and serialize
-access to the object. APIC configuration changes, arrivals/coalescing,
+access to the object. Arrival routing/timing, APIC configuration changes,
 NMI/ExtINT arbitration, spurious/software interrupts, SynIC/automatic EOI,
 posted interrupts, timer/device behavior and CPU wakeup are outside it.
 The class does not construct a complete interrupt controller or certify a
@@ -18,6 +20,31 @@ saved machine as runnable.
 `fromState` copies the initial banks and rejects fixed-vector bits 0–15 in
 IRR, ISR or TMR. It does not clear invalid bits. The returned optional owns
 its state; `state()` exposes a const view. No allocation or cache is used.
+
+`receiveFixedInterrupt(vector, levelTriggered, asserted)` receives an already
+routed fixed message. The result distinguishes four outcomes:
+
+| Result | Bank effect |
+| --- | --- |
+| `RejectedVector` | Vectors 0–15 are unsupported; no effect or invented ESR/error interrupt. |
+| `IgnoredDeassertion` | A level-triggered deassertion changes nothing, including existing IRR/TMR bits. |
+| `Queued` | A previously clear IRR bit becomes set; TMR takes the message's trigger mode. |
+| `Coalesced` | IRR was already set and stays set; TMR still takes the new message's trigger mode. |
+
+Edge-triggered messages ignore the asserted bit. Reception leaves ISR, TPR
+and EOI suppression unchanged and does not depend on CPU IF, instruction
+shadows or current priority. Those gates affect later processor delivery,
+not reception into IRR. A vector may have one request in service and another
+pending; further arrivals collapse into that pending bit, without a hidden
+counter or queue. TMR describes the latest admitted trigger mode even when
+the vector is already in service. A level deassertion never withdraws a
+pending request or clears its trigger bit.
+
+Reception is not processor delivery, device-line sampling or destination
+selection. The embedding supplies arrival timing and already matched fixed
+messages, keeps access serialized and handles unsupported vectors explicitly.
+It must not infer messages from a timer, stale injected-event field or saved
+IRR bit: a captured IRR bit is already pending in the imported bank.
 
 `processorPriority()` retains the full TPR when its priority class is at
 least the highest ISR class. Otherwise it returns that ISR class with zero
@@ -50,8 +77,9 @@ The [continuation scheduler](x64-continuation-source.md) already accepts
 `nextFixedInterrupt()` to fill `Vector` and `Kind=2`, and use
 `acceptFixedInterrupt()` for acknowledgment. The embedding must compose that
 source with other event sources and keep the bank/TPR unchanged between
-selection and acknowledgment. A false acknowledgment is a producer contract
-error; the scheduler's `accepted` callback cannot fail after delivery effects.
+selection and acknowledgment, including serializing arrival calls. A false
+acknowledgment is a producer contract error; the scheduler's `accepted`
+callback cannot fail after delivery effects.
 
 The existing scheduler owns IF/STI/MOV-SS admission and acknowledgment timing.
 For paged delivery, acceptance can precede a fault during IDT entry; the
@@ -60,8 +88,9 @@ event leaves these banks unchanged. This component does not add a callback,
 choose a global event, execute a handler, wake a halted CPU or advance PC.
 It is an explicit building block for a producer, not automatic scheduler wiring.
 
-All queries visit at most the fixed eight-word banks they need. Mutations touch
-only the selected word after bounded priority checks. Existing decompilation
+All queries visit at most the fixed eight-word banks they need. Acknowledgment
+and EOI touch only the selected word after bounded priority checks. Reception
+reads/writes only the selected IRR/TMR words, with no scan. Existing decompilation
 and generated instruction loops acquire no work unless an embedding explicitly
 uses this component in its producer. No whole-request speedup is claimed.
 
@@ -86,6 +115,14 @@ edge/level EOI and broadcast suppression. It builds an object without a test
 executable or guest execution. It is also a dependency of `NeverDUnitTests`.
 These proofs establish the declared register model; they are not an original
 hardware oracle or a full event-environment qualification.
+
+The arrival proof source adds 7,680 independently tabulated message cases over
+every fixed vector and 960 complete two-slot lifetimes. These retain unrelated
+bank bits, distinguish trigger mode from message level, reject all reserved
+vectors and check both directions of trigger-mode replacement through
+coalescing and EOI. Each vector has a separate constant evaluation; no compiler
+evaluation limit is raised. Neither these proofs nor a saved bank supplies an
+observed future arrival stream.
 
 The independently authored rules follow Intel's
 [local APIC priority and EOI specification](https://cdrdv2-public.intel.com/874240/325462-090-sdm-vol-1-2abcd-3abcd-4.pdf),

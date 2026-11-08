@@ -13,6 +13,7 @@
 #include "SourceCallExecution.h"
 #include "gtest/gtest.h"
 
+#include "neverd/Limits.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
@@ -24,6 +25,8 @@
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Program.h"
+
+#include <limits>
 
 namespace {
 using namespace neverd;
@@ -320,4 +323,271 @@ TEST(CDisplayFrameRecord, ProjectedReadsUseCurrentSlotsAndFirstNameOwner) {
   Writer.ProjectFrameAliasesIntoStorage = false;
   Writer.collectFrameRecordMembers(F, 64, 64);
   EXPECT_TRUE(Writer.FrameRecordMembers.empty());
+}
+
+namespace {
+struct FrameDisplacementCase {
+  HighFunc Function;
+  CEmitterOptions Options;
+  llvm::raw_null_ostream Out;
+  HighCWriter Writer{Out, Options, nullptr};
+  ExprPtr Stack;
+
+  explicit FrameDisplacementCase(Arch TheArch = Arch::X64)
+      : Options{.TheArch = TheArch,
+                .Format =
+                    isMIPS(TheArch) ? BinaryFormat::ELF : BinaryFormat::COFF} {
+    Function.FrameSize = 64;
+    Writer.CurrentFunc = &Function;
+    MedVar V;
+    V.Kind = MedVar::Reg;
+    V.RegOff = getTargetRegInfo(TheArch).StackPointer;
+    V.Size = getTargetRegInfo(TheArch).PointerSize;
+    V.TheArch = TheArch;
+    Stack = HighExpr::makeVar(V, NdType::makeInt(V.Size, false));
+  }
+
+  ExprPtr step(NdOp Op, ExprPtr Base, uint64_t Bits) const {
+    auto E = HighExpr::makeBinop(Op, std::move(Base),
+                                 HighExpr::makeConst(Bits, Stack->Var.Size));
+    E->Type = Stack->Type;
+    return E;
+  }
+};
+} // namespace
+
+TEST(CDisplayFrameRecord, ZeroMaskIsNotAStackAlignment) {
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64, Arch::MIPS32,
+                 Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(A));
+    FrameDisplacementCase C(A);
+    const auto Zero = C.step(NdOp::INT_AND, C.Stack, 0);
+    EXPECT_FALSE(C.Writer.frameDisplacement(*Zero));
+    EXPECT_FALSE(C.Writer.certifiedFrameStorageDisplacement(*Zero));
+    EXPECT_EQ(C.Writer.FrameDisplacementDepth, 0u);
+    EXPECT_EQ(C.Writer.certifiedFrameStorageDisplacement(*C.Stack), 0);
+  }
+}
+
+TEST(CDisplayFrameRecord, BothWritersExecuteZeroMaskedFrameAddresses) {
+  for (bool LLVM : {false, true}) {
+    SCOPED_TRACE(LLVM);
+    FrameDisplacementCase C;
+    C.Options.EmitIncludes = false;
+    std::string Text;
+    llvm::raw_string_ostream Out(Text);
+    if (LLVM) {
+      llvm::LLVMContext Context;
+      llvm::Module Module("zero-mask", Context);
+      Module.setDataLayout("e-p:64:64");
+      llvm::IRBuilder<> B(Context);
+      auto *Function = llvm::Function::Create(
+          llvm::FunctionType::get(B.getInt64Ty(), false),
+          llvm::GlobalValue::ExternalLinkage, "zero_mask", Module);
+      auto *Entry = llvm::BasicBlock::Create(Context, "entry", Function);
+      B.SetInsertPoint(Entry);
+      auto *Frame = B.CreateAlloca(B.getInt64Ty());
+      B.CreateStore(B.getInt64(7), Frame);
+      auto *Address = B.CreatePtrToInt(Frame, B.getInt64Ty());
+      // Keep the instruction for the writer instead of IRBuilder folding it.
+      auto *Masked =
+          llvm::BinaryOperator::CreateAnd(Address, B.getInt64(0), "", Entry);
+      B.CreateRet(Masked);
+      ASSERT_TRUE(LLVMCEmitter().emit(Module, Out, C.Options, nullptr, nullptr,
+                                      Function));
+    } else {
+      C.Function.Name = "zero_mask";
+      C.Function.ReturnType = C.Stack->Type;
+      HighStmt Store, Return;
+      Store.Kind = StmtKind::Store;
+      Store.StoreAddr = C.step(NdOp::INT_SUB, C.Stack, 16);
+      Store.StoreVal = HighExpr::makeConst(7, 8);
+      Return.Kind = StmtKind::Return;
+      Return.RetVal = C.step(NdOp::INT_AND, C.Stack, 0);
+      C.Function.Body = {Store, Return};
+      ASSERT_TRUE(HighCEmitter().emit({C.Function}, Out, C.Options));
+    }
+    Out.flush();
+    for (llvm::StringRef Optimization : {"-O0", "-O2"})
+      source_call_execution_test::compileAndRun(
+          "#include <stdint.h>\n" + Text +
+              "\nint main(void) { return zero_mask() != 0; }\n",
+          {Optimization, "-fsanitize=undefined", "-fsanitize-trap=undefined"});
+  }
+}
+
+TEST(CDisplayFrameRecord, StorageOffsetsRequireCurrentKnownRoots) {
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64, Arch::MIPS32,
+                 Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(A));
+    FrameDisplacementCase C(A);
+    const auto Address =
+        C.step(NdOp::INT_ADD, C.step(NdOp::INT_SUB, C.Stack, 16), 4);
+    EXPECT_EQ(C.Writer.certifiedFrameStorageDisplacement(*Address), -12);
+    MedVar Unknown;
+    Unknown.Kind = MedVar::Temp;
+    Unknown.Id = 17;
+    Unknown.Size = C.Stack->Var.Size;
+    Unknown.TheArch = A;
+    const auto Root = HighExpr::makeVar(Unknown, C.Stack->Type);
+    const auto Unproved = C.step(NdOp::INT_SUB, Root, 12);
+    // Display heuristics cannot redirect a real address into frame storage.
+    EXPECT_EQ(C.Writer.frameDisplacement(*Unproved), -12);
+    EXPECT_FALSE(C.Writer.certifiedFrameStorageDisplacement(*Unproved));
+    auto &Alias = C.Writer.FrameAliases[C.Writer.varName(Unknown)];
+    Alias = -16;
+    EXPECT_EQ(C.Writer.certifiedFrameStorageDisplacement(*Unproved), -28);
+    Alias = -32;
+    EXPECT_EQ(C.Writer.certifiedFrameStorageDisplacement(*Unproved), -44);
+    C.Writer.FrameAliases.clear();
+    EXPECT_FALSE(C.Writer.certifiedFrameStorageDisplacement(*Unproved));
+    EXPECT_FALSE(C.Writer.frameDisplacement(
+        *C.step(NdOp::INT_AND, Unproved, uint64_t(-16))));
+  }
+}
+
+TEST(CDisplayFrameRecord, FrameAlignmentKeepsTheEntryResidue) {
+  for (Arch A : {Arch::X64, Arch::AArch64}) {
+    FrameDisplacementCase C(A);
+    const auto Address = C.step(
+        NdOp::INT_AND, C.step(NdOp::INT_SUB, C.Stack, 20), uint64_t(-16));
+    // Win64 CALL leaves an eight-byte return cell; AArch64 leaves SP aligned.
+    EXPECT_EQ(C.Writer.certifiedFrameStorageDisplacement(*Address),
+              A == Arch::X64 ? -24 : -32);
+    const auto Invalid = C.step(NdOp::INT_AND, C.Stack, uint64_t(-3));
+    EXPECT_FALSE(C.Writer.certifiedFrameStorageDisplacement(*Invalid));
+  }
+}
+
+TEST(CDisplayFrameRecord, UnrepresentableOffsetsCannotWrapIntoFrameSlots) {
+  FrameDisplacementCase C;
+  constexpr int64_t Low = std::numeric_limits<int64_t>::min();
+  constexpr int64_t High = std::numeric_limits<int64_t>::max();
+  const ExprPtr Invalid[] = {
+      C.step(NdOp::INT_ADD, C.step(NdOp::INT_ADD, C.Stack, High), 1),
+      C.step(NdOp::INT_SUB, C.step(NdOp::INT_ADD, C.Stack, Low), 1),
+      C.step(NdOp::INT_SUB, C.Stack, Low)};
+  for (const auto &E : Invalid) {
+    EXPECT_FALSE(C.Writer.frameDisplacement(*E));
+    EXPECT_FALSE(C.Writer.certifiedFrameStorageDisplacement(*E));
+  }
+  // Subtraction must not first negate INT64_MIN: the combined difference fits.
+  const auto Difference =
+      C.step(NdOp::INT_SUB, C.step(NdOp::INT_SUB, C.Stack, Low), 1);
+  EXPECT_EQ(C.Writer.certifiedFrameStorageDisplacement(*Difference), High);
+  const auto Sum =
+      C.step(NdOp::INT_ADD, C.step(NdOp::INT_ADD, C.Stack, High), Low);
+  EXPECT_EQ(C.Writer.certifiedFrameStorageDisplacement(*Sum), -1);
+}
+
+TEST(CDisplayFrameRecord, AliasAndParentFrameRebasesCannotOverflow) {
+  FrameDisplacementCase C;
+  constexpr int64_t Low = std::numeric_limits<int64_t>::min();
+  constexpr int64_t High = std::numeric_limits<int64_t>::max();
+  MedVar V;
+  V.Kind = MedVar::Temp;
+  V.Id = 17;
+  V.Size = 8;
+  V.TheArch = Arch::X64;
+  const auto Alias = HighExpr::makeVar(V, C.Stack->Type);
+  C.Writer.FrameAliases[C.Writer.varName(V)] = High;
+  EXPECT_FALSE(C.Writer.certifiedFrameStorageDisplacement(
+      *C.step(NdOp::INT_ADD, Alias, 1)));
+  V.Kind = MedVar::Param;
+  V.Id = 1;
+  const auto Parent = HighExpr::makeVar(V, C.Stack->Type);
+  EXPECT_EQ(C.Writer.certifiedFrameStorageDisplacement(*Parent), -64);
+  EXPECT_FALSE(C.Writer.certifiedFrameStorageDisplacement(
+      *C.step(NdOp::INT_ADD, Parent, Low)));
+  EXPECT_EQ(C.Writer.certifiedFrameStorageDisplacement(
+                *C.step(NdOp::INT_ADD, Parent, Low + 64)),
+            Low);
+}
+
+TEST(CDisplayFrameRecord,
+     DisplayFrameNeighborsDoNotOverflowOrAuthorizeStorage) {
+  FrameDisplacementCase C;
+  C.Function.ExceptionMetadata.emplace();
+  MedVar FP = C.Stack->Var;
+  FP.RegOff = getTargetRegInfo(Arch::X64).FramePointer;
+  const auto Root = HighExpr::makeVar(FP, C.Stack->Type);
+  for (int64_t Offset : {std::numeric_limits<int64_t>::min(),
+                         std::numeric_limits<int64_t>::max()}) {
+    C.Writer.FrameSlots.clear();
+    C.Writer.FrameSlots[Offset].Name = "edge";
+    const auto Address = C.step(NdOp::INT_ADD, Root, Offset);
+    EXPECT_EQ(C.Writer.frameDisplacement(*Address), Offset);
+    EXPECT_FALSE(C.Writer.certifiedFrameStorageDisplacement(*Address));
+  }
+}
+
+TEST(CDisplayFrameRecord, OffsetWalkStopsAtTheExistingBound) {
+  FrameDisplacementCase C;
+  auto Address = C.Stack;
+  for (unsigned I = 0; I != limits::kMaxFrameDisplacementDepth; ++I)
+    Address = C.step(NdOp::INT_ADD, Address, 1);
+  EXPECT_FALSE(C.Writer.frameDisplacement(*Address));
+  EXPECT_FALSE(C.Writer.certifiedFrameStorageDisplacement(*Address));
+  EXPECT_EQ(C.Writer.FrameDisplacementDepth, 0u);
+  EXPECT_EQ(C.Writer.certifiedFrameStorageDisplacement(*C.Stack), 0);
+}
+
+TEST(CDisplayFrameRecord, TypedOffsetsAndOverlaysCannotWrapIntoMembers) {
+  FrameDisplacementCase C;
+  constexpr int64_t Low = std::numeric_limits<int64_t>::min();
+  constexpr int64_t High = std::numeric_limits<int64_t>::max();
+  for (const auto &E :
+       {C.step(NdOp::INT_ADD, C.step(NdOp::INT_ADD, C.Stack, High), 1),
+        C.step(NdOp::INT_SUB, C.step(NdOp::INT_ADD, C.Stack, Low), 1),
+        C.step(NdOp::INT_SUB, C.Stack, Low)})
+    EXPECT_FALSE(C.Writer.typedPointerOffset(*E));
+  const auto Difference =
+      C.step(NdOp::INT_SUB, C.step(NdOp::INT_SUB, C.Stack, Low), 1);
+  const auto Offset = C.Writer.typedPointerOffset(*Difference);
+  ASSERT_TRUE(Offset);
+  EXPECT_EQ(Offset->first, C.Stack.get());
+  EXPECT_EQ(Offset->second, static_cast<uint64_t>(High));
+  const auto Last = C.step(NdOp::INT_ADD, C.Stack, High);
+  EXPECT_FALSE(C.Writer.frameOverlayDisplacement(*Last, 1));
+  EXPECT_EQ(C.Writer.frameOverlayDisplacement(*Last, 0), High);
+  const auto First = C.step(NdOp::INT_ADD, C.Stack, Low);
+  EXPECT_EQ(C.Writer.frameOverlayDisplacement(*First, UINT64_MAX), High);
+}
+
+TEST(CDisplayFrameRecord, DistantFrameSlotsCannotBecomeTypedMembers) {
+  FrameDisplacementCase C;
+  RecordContext Debug;
+  constexpr int64_t Low = std::numeric_limits<int64_t>::min();
+  auto &Slot = C.Writer.FrameSlots[Low];
+  Slot.Name = "edge";
+  Slot.Type = Debug.Record;
+  EXPECT_TRUE(C.Writer.frameTypedMemberType(Low + 8, 8));
+  EXPECT_FALSE(C.Writer.frameTypedMemberType(0, 8));
+  EXPECT_FALSE(C.Writer.frameTypedMemberAccess(0, 8));
+  EXPECT_FALSE(
+      C.Writer.frameTypedMemberType(std::numeric_limits<int64_t>::max(), 8));
+}
+
+TEST(CDisplayFrameRecord, AlignmentChecksUseOffsetResiduesWithoutOverflow) {
+  for (Arch A : {Arch::X64, Arch::AArch64}) {
+    FrameDisplacementCase C(A);
+    C.Writer.FrameStorageActive = true;
+    C.Writer.ProjectFrameAliasesIntoStorage = true;
+    const uint64_t Residue = A == Arch::X64 ? 8 : 0;
+    for (const int64_t Offset :
+         {std::numeric_limits<int64_t>::max(),
+          std::numeric_limits<int64_t>::max() - 7,
+          std::numeric_limits<int64_t>::min(), int64_t(-8), int64_t(-9)}) {
+      for (const uint64_t Alignment : {1, 2, 4, 8, 16}) {
+        HighExpr Check;
+        Check.Kind = ExprKind::Call;
+        Check.IntrinsicId = Intrinsic::RequireAligned;
+        Check.Operands = {C.step(NdOp::INT_ADD, C.Stack, Offset),
+                          HighExpr::makeConst(Alignment, 8)};
+        EXPECT_EQ(
+            C.Writer.frameStorageAlignmentHolds(Check),
+            ((static_cast<uint64_t>(Offset) + Residue) & (Alignment - 1)) == 0);
+      }
+    }
+  }
 }

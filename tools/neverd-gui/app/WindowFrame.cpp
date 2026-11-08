@@ -22,6 +22,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QScreen>
+#include <QScrollBar>
 #include <QSurfaceFormat>
 #include <QTimer>
 #include <QWidget>
@@ -331,6 +332,11 @@ bool WindowFrame::resizable() const {
 Qt::Edges WindowFrame::resizeEdgesAt(QPoint at) const {
   auto edges =
       resizable() ? edgesAt(at, window_.size(), margins_) : Qt::Edges();
+  // A scrollbar can occupy the inner resize band. Deliver its complete
+  // track and thumb to QWidget instead of starting a window resize first.
+  // The outer shadow and neighboring frame remain resize targets.
+  if (edges && qobject_cast<QScrollBar *>(window_.childAt(at)))
+    return {};
   if (window_.minimumWidth() == window_.maximumWidth())
     edges &= ~(Qt::LeftEdge | Qt::RightEdge);
   if (window_.minimumHeight() == window_.maximumHeight())

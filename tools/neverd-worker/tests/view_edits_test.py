@@ -134,11 +134,14 @@ def run(executable):
         named = same_as_fresh("function name")
         for address in functions:
             assert "renamed_function" in named[address]["text"], named[address]["text"]
-        # A comment shows at its address.
+        # A comment shows at its address, written into a copy of the document
+        # that read it rather than decorated again.
+        patches = ok(owner, "metadata")["named_view_comment_patches"]
         ok(owner, "annotation_set", {"address": hex(functions[2]), "text": "a note here"})
         ok(owner, "save")
         noted = same_as_fresh("comment")
         assert "a note here" in noted[functions[2]]["text"], noted[functions[2]]
+        assert ok(owner, "metadata")["named_view_comment_patches"] > patches
         assert noted[functions[1]] == named[functions[1]]
         # And on a line inside a function.
         inner = next(at for row in noted[functions[1]]["rows"] for at in row["addresses"]
@@ -239,8 +242,15 @@ def run(executable):
         ok(owner, "functions", {"offset": 0, "limit": 10})
         same_as_fresh("names read")
         reads = store_reads(owner)
+        renames = ok(owner, "metadata")["named_view_name_patches"]
         ok(owner, "rename", {"address": hex(functions[2]), "name": "after_many"})
         assert isinstance(view(owner, functions[0]), dict)
+        assert store_reads(owner) == reads, (store_reads(owner), reads)
+        # The view that reads the name has it written into a copy of its
+        # document, and reads as a new reader's does.
+        in_place = same_as_fresh("a name in place")
+        assert "after_many" in in_place[functions[2]]["text"], in_place[functions[2]]
+        assert ok(owner, "metadata")["named_view_name_patches"] > renames
         assert store_reads(owner) == reads, (store_reads(owner), reads)
         for count in range(140):
             ok(owner, "annotation_set", {"address": hex(functions[3]), "text": f"note {count}"})

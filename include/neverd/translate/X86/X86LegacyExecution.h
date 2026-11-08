@@ -149,6 +149,22 @@ enum class X86LegacySystemSelectorProfile : uint8_t { ExclusiveTable };
 /// follows CR0[31:16]. Required only for that form, independently of host CPU.
 enum class X86LegacyMachineStatusProfile : uint8_t { FullCR0 };
 
+/// CR4 capability bits not owned by X86PagingFeatures: VME/PVI/TSD/DE,
+/// MCE/PGE/PCE, OSFXSR/OSXMMEXCPT/UMIP, VMXE/SMXE, FSGSBASE/PCIDE/OSXSAVE,
+/// KL/CET/UINTR/LASS/LAM. Reserved bits are not CPU capabilities.
+inline constexpr uint32_t kX86LegacyOtherCR4FeatureMask = 0x1a8f6fcf;
+
+/// Intel, outside VMX/SMX/SMM/transactions, with exclusive ordinary RAM and
+/// fresh page walks. Arithmetic flags are preserved; CR0 ignores reserved low
+/// bits and fixes ET=1; ignored CR3 bits retain the source image. PAE validates
+/// reserved bits only in present PDPTEs. Paging capabilities come solely from
+/// X86PagingFeatures. OtherCR4Features binds the remaining supported CR4 bits,
+/// independently of the host. Valid requests for unbound memory/mode domains
+/// refuse instead of inventing #GP. No real/IA-32e transfer is implied.
+struct X86LegacyControlRegisterBinding {
+  uint32_t OtherCR4Features = 0;
+};
+
 /// One ordinary-RAM element per step, with destination-first CMPS reads.
 /// Incomplete comparisons retain entry flags; completed elements retain their
 /// memory/register effects across faults and producer-selected IRQ/NMI entry.
@@ -290,6 +306,7 @@ struct X86LegacyExecutionOptions {
   std::optional<X86LegacyDescriptorProfile> DescriptorQueries;
   std::optional<X86LegacySystemSelectorProfile> SystemSelectors;
   std::optional<X86LegacyMachineStatusProfile> MachineStatus;
+  std::optional<X86LegacyControlRegisterBinding> ControlRegisters;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {

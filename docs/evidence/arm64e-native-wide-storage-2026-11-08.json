@@ -1,0 +1,1137 @@
+{
+  "schema": "neverd-arm64e-native-wide-storage-v1",
+  "overall_arm64e_complete": false,
+  "path_normalization": "Command and diagnostic paths are repository-relative; report hashes identify original unnormalized reports.",
+  "producer_revision": "b3910f11f305507f94a888f7bc75bd7692272c23",
+  "integrated_dev": "97f5f3797",
+  "environment_repository": "https://github.com/gmh5225/test_mac_intel",
+  "environment_revision": "800daa5e69a26f6e16faaae25ac7a7ade8216194",
+  "environment_pr": "https://github.com/gmh5225/test_mac_intel/pull/3",
+  "changes": [
+    "NativeAnalysis fixed Darwin C calls transport complete SIMD128 values in Q registers, aligned stack slots and Q0 results through one shared packet layout.",
+    "Recovered indirect records retain original address operands and x8 output storage, without logical copies or stronger memory, lifetime and aliasing promises.",
+    "Native frame and Boolean-result proofs require the complete architecture target width; generic 32-bit call-occurrence identity remains available.",
+    "Unmodelled HVA records do not become integer or indirect arguments. Legacy Apple llvm.ptrauth globals refuse before incompatible backend code generation instead of aborting."
+  ],
+  "toolchain": {
+    "profile": "Release",
+    "llvm_package": "neverd-llvm-v23.0.0-r6",
+    "llvm_source_patches_or_overlays": false,
+    "source_compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+    "container_image": "sha256:b60022df2f5f52d4461b273e3b44190abb85effff05cbb52e1ed25818f010023",
+    "model_archive_sha256": "b6835fd07cb390c7a32f84fe1cead84bde992813b49679137b3a7a0a026e92de",
+    "model_binary_sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+    "working_dependencies": {
+      "signatures": "20b9036f4367e1308a3d2f0b214e06859090a7af",
+      "third_party/capstone": "b8c22e0c16b1769dfa712547d4a5c5d49560ae46",
+      "policy": "Existing working-tree dependency revisions are recorded, not staged as arm64e changes."
+    }
+  },
+  "validation": {
+    "instances": 2410,
+    "passed": 2389,
+    "skipped": 21,
+    "failures": 0,
+    "by_owner": {
+      "NeverDAArch64AuthenticatedCallTests": {
+        "COMPLETED": 122
+      },
+      "NeverDSourceCallABITests": {
+        "COMPLETED": 28
+      },
+      "NeverDObjCSourceCallTests": {
+        "COMPLETED": 1918
+      },
+      "NeverDLLVMCValueTests": {
+        "COMPLETED": 132,
+        "SKIPPED": 21
+      },
+      "NeverDLiftTests": {
+        "COMPLETED": 112
+      },
+      "NeverDSourceEntryBindingTests": {
+        "COMPLETED": 77
+      }
+    },
+    "skip_details": [
+      {
+        "test": "LLVMCValues.PrefetchKeepsComputedAndSegmentedMemoryOperands",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:231\nthe prefetch instructions need an x86 host\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.NativeSHA256KeepsVectorInputsAndInstructionFeatures",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:373\nSHA-256 native oracle requires the host SHA feature\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.SHAFeaturesComposeWithNativeInstructionFallbacks",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.RtmFeaturesComposeWithShaAcrossNativeAndAssemblyCalls",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:593: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:593: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:593: true\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:593: true\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.NativeVirtualizationKeepsStatusAndFailedReadPrior",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:817\nrequires the qualified native virtualization SDK\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.NativeDescriptorReadKeepsExplicitPrior",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:935\nrequires native Linux x86-64 descriptor queries\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.NativeDescriptorAddressesKeepSegmentWidthAndPrior",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:997\nrequires native Linux x86-64 descriptor queries\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.TargetIndexWidthKeepsNegativeFrameOffsets",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:1113\nrequires native Linux i386/x64 execution\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.X87MemoryViewsRetainBitsAndTenByteExtents",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:1151\nrequires native Linux i386/x64 binary80 execution\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.X87FiniteConstantsKeepExtendedPrecisionAndRange",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:1272\nrequires native Linux i386/x64 binary80 execution\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.X86NativeDivideKeepsBothResultsAndDeadResultFaults",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:1420\nrequires native Linux i386/x64 execution\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.X86BitStringIntrinsicsMatchOriginalMemoryAndFaults",
+        "reasons": [
+          "unittests/lift/core/../x86/X86NativeBitTestTests.inc:65\nrequires original Linux x64 bit-string instructions\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.X86DivideIntrinsicsMatchOriginalResultsAndFaults",
+        "reasons": [
+          "unittests/lift/core/../x86/X86NativeDivisionTests.inc:53\nrequires the original Linux x64 DIV/IDIV oracle\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.NativeAssemblyKeepsOperandSnapshotsAcrossBranches",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:1554\nrequires native Linux i386/x64 execution\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.I386WideCarriersRetainWrappingShiftsAndSignedComparison",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:3123\n32-bit scalar C execution requires Linux i386 support\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.WideIntegerConstantsPreserveEveryWordAndStoreExtent",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 160\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 160\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 256\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 256\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 288\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 288\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 512\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 512\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 1024\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 1024\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 2048\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 2048\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.WideConstantsPreserveEveryStoredByte",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 129\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 129\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 136\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 136\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 159\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 159\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 192\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 192\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 224\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 224\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 255\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 255\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 256\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 256\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 257\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 257\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 384\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 384\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 511\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 511\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 512\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 512\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 513\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 513\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 2047\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 2047\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 2048\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 2048\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 129\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 129\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 136\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 136\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 159\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 159\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 192\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 192\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 224\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 224\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 255\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 255\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 256\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 256\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 257\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 257\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 384\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 384\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 511\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 511\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 512\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 512\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 513\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 513\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 2047\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 2047\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 2048\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 2048\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.AWeakImportIsDeclaredWeak",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:4823\nrequires native ELF undefined-weak linkage\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.SelectedFunctionKeeps32BitSynthesizedTableStorage",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:7650\n32-bit scalar C execution requires Linux i386 support\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.VariadicCallSiteKeepsWindowsFloatingRegisterDuplicates",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:7754\nNative Windows x64 ABI execution requires x64\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.AFixedCallSiteKeepsItsOwnCallingConvention",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:7818\nNative Windows x64 ABI execution requires x64\n"
+        ]
+      }
+    ],
+    "owner_report_sha256": "4c754b419c836c01e4267a44d7766e17ae16046fc918a5c642be76bfb6115ba3",
+    "environment_unit_tests": 50,
+    "initial_owner_run": {
+      "revision": "4b7f66cede98ba1e9685121c05754881670743d0",
+      "counts": {
+        "NeverDSourceCallABITests": {
+          "COMPLETED": 27
+        },
+        "NeverDObjCSourceCallTests": {
+          "COMPLETED": 1914,
+          "FAILED": 3
+        },
+        "NeverDArm64eAnalysisTests": {
+          "COMPLETED": 406,
+          "SKIPPED": 5
+        },
+        "NeverDLLVMCValueTests": {
+          "COMPLETED": 132,
+          "SKIPPED": 21
+        }
+      },
+      "report_sha256": "2899f91e368eb3cb933745f9a2a936798e0adb3bfc771735c46e9f77eeb3f633"
+    },
+    "timeout_policy": "Registered CTest commands and unchanged per-case TIMEOUT values; no timeout override.",
+    "regression_resolution": "Three initial owner failures exposed 32-bit targets entering AArch64/x64 proofs after the generic MIPS32 call-identity extension. The shared architecture-aware overload fixes the proof boundary. Six stronger vector-return fixture failures required explicit X0/X1 outer return definitions; source and IR diagnostics remain retained.",
+    "environment_unit_report_sha256": "c089c7f94b92ea500d04be34613291d93bafbd3005f038303f8513480d3b878b"
+  },
+  "models": [
+    {
+      "profile": "model-recovered",
+      "scope": "Controlled PAC execution for complete recovered NativeAnalysis fixed C prototypes with scalar, 128-bit integer, full SIMD128, record/HFA and original indirect record address operands. ABI recovery accuracy itself is not established by supplied IR fixtures. All five unchanged Mach-O routes require original exception classes. Raw indirect calls are controls. Hidden results are qualified separately. Signed exception unwinding, authenticated whole-image execution, native Apple PAC and exact fault PC/full ESR remain unqualified.",
+      "shapes": 47,
+      "unchanged_macho_objects": 1175,
+      "passed_guests": 30,
+      "valid_original_projected_pairs": 28200,
+      "invalid_signature_pairs": 67680,
+      "exception_class_differences": 0,
+      "summary_sha256": "d95d31083954888f05ab7d34e0792f858a747b4ee621cb36373af2997b4af349",
+      "provenance_sha256": "6cddc724be72a17b02c96bcd0261228f8c8179efab7f3897dc5211118377b5f4",
+      "guests": [
+        {
+          "guest": "high-O0-pac0-el0",
+          "guest_sha256": "c4cb843c9e8d8df5555de3940c6d6dda177b4b8514c4bc6ac9e68e73d7f5895d",
+          "transcript_sha256": "64c2c0910ed06853117255d228d277fd4b199fc4eeb78a281c37c7f4c76e7833",
+          "report_sha256": "71412caf727f06c9381c41e5e6e665906fc0133e8030118bdba8533a4f5d1a29"
+        },
+        {
+          "guest": "high-O0-pac0-el1",
+          "guest_sha256": "31f07dc6cf25617aa50e24b3487d1fb0af30b8dcd10d0485cb42afd8c66d4af7",
+          "transcript_sha256": "9c7a12d3569b77dabb03add301d16738d2b92e8cc769d9425a8a8ae7732204a5",
+          "report_sha256": "3b7459fa1b33c5156e681d774de00b7ed13715db977f52edd54349244a985209"
+        },
+        {
+          "guest": "high-O0-pac2-el0",
+          "guest_sha256": "b53e8e891c2de84ccbed5196b713f0479170fb332ba89cf7c6c4b201646118df",
+          "transcript_sha256": "896be75f245dcab6d07a0d3cdf7544097349d9a750264f1604849098bcfa5ce1",
+          "report_sha256": "43066eb4502140d02888fefa0ee66a93e816467947189f92dbde99e1c5bcbb84"
+        },
+        {
+          "guest": "high-O0-pac2-el1",
+          "guest_sha256": "39af4c4e1a614b225af753adbb532b896ca12d35e8f2750ee27f3061e88d85d1",
+          "transcript_sha256": "0ddcc74bcae75c0e44f5f7c846361290f2803fe31ea6f9ff158c29293d99e93e",
+          "report_sha256": "0dad76bb1e4b12348168b887d59a1c760e2d59738bc320f9e74ef19d01b6f9e9"
+        },
+        {
+          "guest": "high-O0-pac3-el0",
+          "guest_sha256": "75938ebc16d9b58c1b5bab7cb256c0f12c70451df0ebcb1ae3f263223612fbee",
+          "transcript_sha256": "4ac612e390693911904d78fcc2b7b9175fd7994cd2496bf98052d4e2b81d0ec0",
+          "report_sha256": "0e8f0d70c0115510cfa387d5f68cf9c7e46225001e65cebae1ff45c82a9398d7"
+        },
+        {
+          "guest": "high-O0-pac3-el1",
+          "guest_sha256": "20181b8cda865acd1d97afec7b6922d98c9e0703ed54560f4beaeba5c5273dc6",
+          "transcript_sha256": "67d86538fa9159cf5ec3fc82d99e47452cf44d4e18149bd15d439b7742e8bdeb",
+          "report_sha256": "14a9815386fd80b3567ec8efda273220aa82ef2e305daa19d899f765be8bdfee"
+        },
+        {
+          "guest": "high-O2-pac0-el0",
+          "guest_sha256": "0306c13db563747b1949bee7dfdea157ea88a39de64553811f0a85643e7a3e85",
+          "transcript_sha256": "bec7ff863293d09d5dc4af54e8a0a3e08a2e8977820b21f7a513ed5e40b226ad",
+          "report_sha256": "9e289cc82cb8e6d3413eedafb8a7c976471ef82107a9474038f89794c2571dac"
+        },
+        {
+          "guest": "high-O2-pac0-el1",
+          "guest_sha256": "fd6f71362773b101d20943a37b4c2b5da8d832ee32959f82d7c6476dff716f4d",
+          "transcript_sha256": "d1edf5dbddca3ac140e5dd978be68ca12a66c287ed21f477dd6b1e9c3c5a8479",
+          "report_sha256": "1517b4304cb77a6213408623ae05fd06c4fce0998b8d169f885e29d001f80335"
+        },
+        {
+          "guest": "high-O2-pac2-el0",
+          "guest_sha256": "121a28da4decb4d84aa56b757aee47645eef1d6a6a1a9913fb19b56cf18129a4",
+          "transcript_sha256": "45e625529d469b7760b9e796f118b7bebf8e4efd4ca6c97e62eae0d9b1201937",
+          "report_sha256": "9d69b875442918750cdc84a60fc16464f6dc3b775062bb6db3529b81f303ce08"
+        },
+        {
+          "guest": "high-O2-pac2-el1",
+          "guest_sha256": "1339d1454b17fd364912a9ba44a83a939f0710f3e4e95d6f99d2d981113f10c2",
+          "transcript_sha256": "851cf11de30336025e41c7f723682330b29c025b7d9ded123c09320e9d4edfdf",
+          "report_sha256": "e2e3ca3306e31046826d4207f84443e39ba8d70cb6ec48c5f8bad6cdeeef631f"
+        },
+        {
+          "guest": "high-O2-pac3-el0",
+          "guest_sha256": "26458adb4fda0e4e0824aff3196b927043ad5e2fd3e758894aa0ec389f328f80",
+          "transcript_sha256": "f941a3cbe46034808c1d5fe7988757cdaf0961e67f7d0fea50e6d9e83afba4a3",
+          "report_sha256": "42532eeb4bd061e866590a7f96bf0e5964468d637b8b0153b1402071883bfbbf"
+        },
+        {
+          "guest": "high-O2-pac3-el1",
+          "guest_sha256": "d1232a032568a3020649831cf4c8501badd170ab497d1d0f45c7fc28b74dd2b7",
+          "transcript_sha256": "fd4274c7fe51662b60d216abf75a628874df32864a4bb05f2779115ade01d75a",
+          "report_sha256": "e462916e4dcba79893d8abd55cd6f0ecb38a16f896474199d9715c74eba42e2b"
+        },
+        {
+          "guest": "llvm-O0-pac0-el0",
+          "guest_sha256": "7103f093e92d4c463d541c28563a06237e75c91eb45086304b09bbb65c132472",
+          "transcript_sha256": "b1d8ac1c2fe3ca47dd7da1529c31f1d1d6e0e6f1a25dc5ecceb055c5a33adb8c",
+          "report_sha256": "dbac64c5195070c58c68ee5f8db682e4fbaa58d0f587ffe776939312ede5ebb0"
+        },
+        {
+          "guest": "llvm-O0-pac0-el1",
+          "guest_sha256": "bf70b89d20246013fdf0165f6ae525d6ed65589de7e77cbc2c6065328d6587a6",
+          "transcript_sha256": "57afd25a9cc00d9552f176c9b2a3f6c89e1fb9bebc67201ba8337cefdddfbc93",
+          "report_sha256": "274c9a1a4165bad2dc1ebff426fca4ccb708b1e1845f807a5482bf3311211d04"
+        },
+        {
+          "guest": "llvm-O0-pac2-el0",
+          "guest_sha256": "9b0b9cce928e016e6f42ac307707b0346a991dbb0a0ebf1cc1de407eda029ab0",
+          "transcript_sha256": "a5169c064d6ab20a19e2d166375dab44284aae868a685bb587ae49db99eef16c",
+          "report_sha256": "ae21fe1f5f742e89f30d111f6dd19e0753fb17560ed4bcdac405e1b075a00ba8"
+        },
+        {
+          "guest": "llvm-O0-pac2-el1",
+          "guest_sha256": "0dbf45dcb3411cef5ac48e5b4cce876d61e6e555ba7844f9195938ae2c15c96a",
+          "transcript_sha256": "d3620cf037e0bc3b8639c6133a0e22883effa3c16250b037206262fb8ec666cc",
+          "report_sha256": "248d38ed6e018e2af1539ade20d9845c5b8c0053bfefa7588a45b3ba7497e322"
+        },
+        {
+          "guest": "llvm-O0-pac3-el0",
+          "guest_sha256": "e263d20bd21c1013793d78504278b6e878c53d6a82548e07127ba3979fbf7650",
+          "transcript_sha256": "8c4ea86084599888b765db3161e11d593e5541e60e171aa93902af4c310bf108",
+          "report_sha256": "d4965ad3ef7510dc14abf9db527b45a4609423e08dd174d5af5d642ba2a3b214"
+        },
+        {
+          "guest": "llvm-O0-pac3-el1",
+          "guest_sha256": "c3c8459960b575a9656b2e1be18171c80ad911a25e90503525e7c4bbdc70e288",
+          "transcript_sha256": "fd9bffb9550b1c887ff2562565694e81e099ed5a72c1f1935167273057b54993",
+          "report_sha256": "fafa254b39c436639c4fd7eac54ae420b58aa3f6089f881226479ed6b568b378"
+        },
+        {
+          "guest": "llvm-O2-pac0-el0",
+          "guest_sha256": "c8732dd5ae767db5ede3a63a33a15baae00a2f44f50e46c5e2c557a4d65ee050",
+          "transcript_sha256": "687416a0d231c1b6a3b777ee852e5593917935add687c5f26812723dfc226bee",
+          "report_sha256": "a9890066d6870d5c817a3ecfba9b2cd298095ea64565820ea3da9c9f22478976"
+        },
+        {
+          "guest": "llvm-O2-pac0-el1",
+          "guest_sha256": "5d3f6fe3728469cb61111466e7734ffc1860ff83e3dd1df03eed670d5abe4c32",
+          "transcript_sha256": "3dcc4e799c37cc2b6f22147d5a5598de924d4af1ab010bba63af4f565f10e558",
+          "report_sha256": "885f741bab056465d85b255b1e5358db4facb9fd50ff021480893659412b3821"
+        },
+        {
+          "guest": "llvm-O2-pac2-el0",
+          "guest_sha256": "1b4c540a9f60c1b81c1059a5d72622bdc6c29fab16d2b33ecf03c35f4b13cff7",
+          "transcript_sha256": "5fed04a746039ad23b736a52d3294e5cb5f911c85539b66c2a4e3b735eba25d5",
+          "report_sha256": "9f84c716991eaf7296138e89760fa954c23a8e6d14753134664fb8c78a885758"
+        },
+        {
+          "guest": "llvm-O2-pac2-el1",
+          "guest_sha256": "898728863912be7b136882659b2362869579bc49db5a27c47624fc96ece2085f",
+          "transcript_sha256": "16faee8fae0be84e22308a72bc72338a4d534bceebfb7e3a1c77100734591611",
+          "report_sha256": "1c85878ebadc9bff6846d00349e686026c30f87b491ecffa473498b9d2544e6e"
+        },
+        {
+          "guest": "llvm-O2-pac3-el0",
+          "guest_sha256": "0bc4b83b4f4c478d32f072516466db594fab3f8fa74a67dda55c08cba22711ea",
+          "transcript_sha256": "ba68e82040af1247df72003833e1907739bf5b62b6f76806949d655e3b4fed4e",
+          "report_sha256": "c57e6db1a934fcfa9f050ed4da93ff8e56c8de1a1c3d1661617656738326ebb1"
+        },
+        {
+          "guest": "llvm-O2-pac3-el1",
+          "guest_sha256": "6c96cc51fa062c79fdc5ae738bae81f2179c89d51ba8f0893e96eb91de052039",
+          "transcript_sha256": "4e005a60f1193118f49c480eed1a0df61da35ebee3e843556e63463121438316",
+          "report_sha256": "9f63ac7fef0744e9d70688ef5fce5946754af57b3ad187311c58ee15a34009fb"
+        },
+        {
+          "guest": "native-pac0-el0",
+          "guest_sha256": "993571673c3b36b64a97b78e631a563bfede82b3b54190e0cd78a7c11e3e7bbb",
+          "transcript_sha256": "07af2a64c4074034f98af771f703e78766d31129587bea42f4dab798d47dfd7a",
+          "report_sha256": "a739ac8bb612d91350ce7743204584142371b7b0477e4ec0f1e04c80a766f6d3"
+        },
+        {
+          "guest": "native-pac0-el1",
+          "guest_sha256": "b148bd314d4ccd203f7f33c7a2abec02e617f42a48156b848fa6433ce6f13807",
+          "transcript_sha256": "182fe97aeb86fb3b6e1694040e2ef14a132b20c31a39da05c673abd4e3989720",
+          "report_sha256": "f27d5e032bc02fa7e0ac86d80fd84d4cff6d6e154965bc839faee0f4e00c15f4"
+        },
+        {
+          "guest": "native-pac2-el0",
+          "guest_sha256": "eda038801ccfe8bf19d9f4b57caeb883102acb48ca84066e40342e52de74b46e",
+          "transcript_sha256": "ab4c15a91c5ae6557bbd57f6b34fb4a5ae268c2e3322216a77e66ef64cab71a8",
+          "report_sha256": "c0724a41545eb0a2bca45061853340c75b13aae40493def6c93ca4b051f3b170"
+        },
+        {
+          "guest": "native-pac2-el1",
+          "guest_sha256": "30b719f9e61678b1406eacba9dd0ab92c145e2e37229b89b1eb4888d51bf8561",
+          "transcript_sha256": "70a406d196ed22f05f1238438354605f33a2c280a3a25284bf4df308756c7325",
+          "report_sha256": "cf7a32d47e3c5aebcf8b3f01866e385ca9369a33cfb2574101019e8f314ec3b7"
+        },
+        {
+          "guest": "native-pac3-el0",
+          "guest_sha256": "9b22652bfdbb7d9d179eb04f7fb3ecad907c5365bafd199f43d68fac7e7081d3",
+          "transcript_sha256": "9216315d31430c01a10481bb2221a863288ace8775fc078a00dae50dd1bd6a8f",
+          "report_sha256": "cce580818f8e11ed7105756bd034294be29231d97d1ad02b183d738c088f9596"
+        },
+        {
+          "guest": "native-pac3-el1",
+          "guest_sha256": "04de8095af149782a26e6bb178695319a6c1fef249e8b90b6e6c0ad038f09402",
+          "transcript_sha256": "28b1e5f018c6c8de5901ca1d0e0d6661f8d2b464733b6e4b4ded6991e3fa83b1",
+          "report_sha256": "843b29ff58855dac6ff4588d7c06f4c4a75ca404ed0e04694dc4241a970db40e"
+        }
+      ]
+    },
+    {
+      "profile": "model-native-x8",
+      "scope": "Recovered NativeAnalysis fixed C prototypes retain the original indirect argument address and x8 output storage, including aliasing and memory effects, across five unchanged Mach-O routes. The controlled PAC/CPA2 matrix requires original exception classes. ABI inference, native Apple PAC, whole-image authentication and signed exception unwinding are not established.",
+      "shapes": 1,
+      "unchanged_macho_objects": 25,
+      "passed_guests": 30,
+      "valid_original_projected_pairs": 600,
+      "invalid_signature_pairs": 1440,
+      "exception_class_differences": 0,
+      "summary_sha256": "a813229f1a9103126684b63d69ce4b2a4e0867d651c36d2f6e9436c3f6d76be3",
+      "provenance_sha256": "b92411de968822285bee23138084f970b55dca134c0ed0b323e5c4bdf54e8aad",
+      "guests": [
+        {
+          "guest": "high-O0-pac0-el0",
+          "guest_sha256": "92d29e5c33aeee12e80d72f58f8aca5a9a7d88fd15d0f55560c7c3e75f4dc920",
+          "transcript_sha256": "d05c8729f066280d61fecc3d203f5be499b34862682498913f52d64e5739a01a",
+          "report_sha256": "602978d6ee7caa4f1c70d9b18bff0707cc830eb3e39797da7a03bed30431de6e"
+        },
+        {
+          "guest": "high-O0-pac0-el1",
+          "guest_sha256": "8b267cf56a5bcad98bd989ddf9d3998b0d8ef7bd18afeb86bd384850436eecb3",
+          "transcript_sha256": "128beee746870f0ddf0abc72c777565175d41724dc5beae8cb2ad5d92f9714d0",
+          "report_sha256": "5906f8b7529df339eda314fe28bcebc01002433fba549bff3fcbc84f065382f2"
+        },
+        {
+          "guest": "high-O0-pac2-el0",
+          "guest_sha256": "372a8f6425ddff4eabee23b43da37a881edb1d94ac8eaf4997bd1ffee87e6686",
+          "transcript_sha256": "b2e4fae33441061eb0ef23e0878030146ad5d56620fb269c1c0c4204807707ed",
+          "report_sha256": "860a1e3994c60d6b44c1c5015ddfcc0b0c7b674c8886a2eb44b1c30bb59a8dd3"
+        },
+        {
+          "guest": "high-O0-pac2-el1",
+          "guest_sha256": "86faf29b67d3dfc5b3793a6ad0a1639c147b37720882ccbc5333304d155f6d59",
+          "transcript_sha256": "4a7316df7cc103f686d14c9652c642786a6dfa82ea1a6b9975aa76c53ad2810e",
+          "report_sha256": "50dcdc9edf94fd2cf6d6b980c12d141c5ccaca0bada829ea69eeca72bda83b6f"
+        },
+        {
+          "guest": "high-O0-pac3-el0",
+          "guest_sha256": "82f3932004b0d57eb96413d869b54d5634d6e7638f775434d7491f99084c2f03",
+          "transcript_sha256": "b6ac683b3afe91e73e008732ebd71248643f56cf38646a5c10f9fade73830f3d",
+          "report_sha256": "f99372c341ea011ab4dc7c438a508551cc227745afbb1502759945b2c9ea2389"
+        },
+        {
+          "guest": "high-O0-pac3-el1",
+          "guest_sha256": "752f83c3ec7b2d47f814ce6b6ce31ae2aad9179b772ccf9316973659a8ab7f70",
+          "transcript_sha256": "030f8c6208c3ac86c482d25782da32adcc56aa34429818f2f532ddbd8f83f197",
+          "report_sha256": "88d891af4cd55eba741a2f48a096a62604332d1ecf496d4fba41f64bab382087"
+        },
+        {
+          "guest": "high-O2-pac0-el0",
+          "guest_sha256": "ef25b5fba95dd016a5e7144112f7cd2aef7b77c752f2f8ceaad02ba154a76783",
+          "transcript_sha256": "1ed55fd7f228014df94d4c43e3272bae8f67b066b31ca87a238b31023018b326",
+          "report_sha256": "9f39da6b07e65a20dca4c28473a07c361e25c1a349b6d016ac29bc232dbf75fc"
+        },
+        {
+          "guest": "high-O2-pac0-el1",
+          "guest_sha256": "b5b8c564833e2edcf9ed5c22b36b51a56788f21e91f50d9e60b0855379e6e628",
+          "transcript_sha256": "0a71bc6cb9cc44b8c196c2391633d6b6aeccf7c9ec831d6b92f4ea68ff3302d2",
+          "report_sha256": "b7bfd60e46b2d2584e0bb0069d6914cca13cbc0c2a69e4c5e47efabda70933f8"
+        },
+        {
+          "guest": "high-O2-pac2-el0",
+          "guest_sha256": "f4de3ebb577b4d40f4ad069943471fe4067b813c083b16153478264656276f83",
+          "transcript_sha256": "ef88ad65d03fd779143ddef46126a1433ec0cbd750f800581042b3721e9d0b78",
+          "report_sha256": "ec899b4d4325b6c638fb8cc4c652bf111b75c5d718a08db713660a103fb6c9af"
+        },
+        {
+          "guest": "high-O2-pac2-el1",
+          "guest_sha256": "ecfe893ad9478b9ae669d2abc8ee23b0c2ba1e5f4176b1c962c7d7cf39113246",
+          "transcript_sha256": "99e189b81c914022da14fd168966321c5cf3e2aa893b2fc37d0f97ef672f8344",
+          "report_sha256": "248bb066f2f2f52df64c12a964313054a3de68d3a3d94c97aaa54a64975a949e"
+        },
+        {
+          "guest": "high-O2-pac3-el0",
+          "guest_sha256": "48ab8fa6487000b5132118e4d4c88da2af064d3d27d1705af9502715a16b81ee",
+          "transcript_sha256": "e3df1d7e09143a7224b1d0cf2a0a6a4b1c927d68ca9b8884f73b03809a362525",
+          "report_sha256": "30466aefe05756c45e74e33fbd1dd5aaf3f74e5db1f5a50a9c9b0c3cf1bba16a"
+        },
+        {
+          "guest": "high-O2-pac3-el1",
+          "guest_sha256": "2b116fc3faf58dda5f19a0b28e872daf389b6cbfcff43bce6bc3f2f9d5ecd737",
+          "transcript_sha256": "fdb7cfb5d65621be67791f55e8eef04038cd305d29f1d6e7e42cc1607f128e80",
+          "report_sha256": "22684971c3a15487cb83858ecb553e5a9275a38bddc08ce7c643be930a18a21a"
+        },
+        {
+          "guest": "llvm-O0-pac0-el0",
+          "guest_sha256": "96585d5f2ad5d422ba8051d2d70d956b67bbe708adc8a0c99d8cd7bfddc1aa18",
+          "transcript_sha256": "88007d470e352dd513c3dc1be17550c5d8ec75fb8e41629218ee9260ebe801b7",
+          "report_sha256": "d935c9ec133c43f8d0a5f0dc70b210d3f482737fd3e692d090e44f37e4533c4b"
+        },
+        {
+          "guest": "llvm-O0-pac0-el1",
+          "guest_sha256": "285339ae50ce759fb064b9c069e35cd0324956478e2d53d53372b2bbdc4d3252",
+          "transcript_sha256": "2aac50075a8950229597c99d846eb90bc5c054b03fa8aa9f0b9f4e12f05d0e9d",
+          "report_sha256": "54080c40b8136fd14efd709c461fe5ef9f4fb734113ba25193d020f7efbfec35"
+        },
+        {
+          "guest": "llvm-O0-pac2-el0",
+          "guest_sha256": "b9728dcd8a6f14a2add68937095541a27d98f4340a43477ff79be739d09c9723",
+          "transcript_sha256": "8f15c367c5a84810b94c5de2b1bbb017fccfe851135bc08920473ba695e5ea79",
+          "report_sha256": "2f77c2103274686475c7e1929a026d1bb858778134031a86f4e7e6806d94de20"
+        },
+        {
+          "guest": "llvm-O0-pac2-el1",
+          "guest_sha256": "ba3d6d504c5b7d71d4d48994387b05bd9678c3213a6d77564e3622782f597681",
+          "transcript_sha256": "9f9f45cb05fc78af2422a5a291cd93b6a5d82ddf93f4165bc6d86f869ccd146c",
+          "report_sha256": "f537e8d3e56abde32d3ccac98e3bd7c97b4b1d171fd4788301a08c45079386ce"
+        },
+        {
+          "guest": "llvm-O0-pac3-el0",
+          "guest_sha256": "01f1d3c182e454c14853ed4da8bed21a5cb86aa66c585dc5df66b8b05d456fb1",
+          "transcript_sha256": "7a024b3025c1c94830952ec048d474377bb03153cbc2df92e0c5ed870ce974c1",
+          "report_sha256": "47c22a64ded8313e9db9b37f9cde428783c8f777230b11362b57f074fb73a645"
+        },
+        {
+          "guest": "llvm-O0-pac3-el1",
+          "guest_sha256": "6754139170d179977dd1fc55a73947e30badbd7db29428650692b64aa8f8a587",
+          "transcript_sha256": "68db1d78be519b50a143220e649b41a9626bd39dcabb463ccb26801a87b41c01",
+          "report_sha256": "d2c8a50b6f5e7fe815b6d70a4ff8ec88b6a711bfc37dce04527bd343248a4008"
+        },
+        {
+          "guest": "llvm-O2-pac0-el0",
+          "guest_sha256": "ef25b5fba95dd016a5e7144112f7cd2aef7b77c752f2f8ceaad02ba154a76783",
+          "transcript_sha256": "f9d50e9eb433e183c9ee8e492fd6af48cf4015683ae7d07a7bd914ce4242aeed",
+          "report_sha256": "2dd08254d4c031d4dc995f53d8327b14d1990d2f53707561ff716815a56c76a3"
+        },
+        {
+          "guest": "llvm-O2-pac0-el1",
+          "guest_sha256": "b5b8c564833e2edcf9ed5c22b36b51a56788f21e91f50d9e60b0855379e6e628",
+          "transcript_sha256": "7498805de63264a52491689331830ab9c10a543696ab918b470cf0c019551f2e",
+          "report_sha256": "035d16597b33dec0191954eb0fcaa4fab8f0733cd9903d65a594ff54851bc7c9"
+        },
+        {
+          "guest": "llvm-O2-pac2-el0",
+          "guest_sha256": "f4de3ebb577b4d40f4ad069943471fe4067b813c083b16153478264656276f83",
+          "transcript_sha256": "665645c2a189862bb8cdab90ae86a6a3d164580af8cb016c5f8bb857f3a2a441",
+          "report_sha256": "d7debcd7c860e7dcc6ccf4a88722396bbc4a38957365ee2aa7fb7d4b0663e2a4"
+        },
+        {
+          "guest": "llvm-O2-pac2-el1",
+          "guest_sha256": "ecfe893ad9478b9ae669d2abc8ee23b0c2ba1e5f4176b1c962c7d7cf39113246",
+          "transcript_sha256": "2dbdae98338639e6b536ce10d61ca45f4dab9b4f06ba5dd9e3f9bcdee16ef4b1",
+          "report_sha256": "f2da43b5e4283addc5b9026b01f4b0b53832b2857a5a3627cf969b1cfa0e8455"
+        },
+        {
+          "guest": "llvm-O2-pac3-el0",
+          "guest_sha256": "48ab8fa6487000b5132118e4d4c88da2af064d3d27d1705af9502715a16b81ee",
+          "transcript_sha256": "dcfb11883e2e1ff9829e1073e46400a745e6bba2b1e1d4bd285a88b75d215459",
+          "report_sha256": "d3cc8702911afc59dfa534ff30afa9ea9829713cfa3c17d0084a9d7981fe1fc6"
+        },
+        {
+          "guest": "llvm-O2-pac3-el1",
+          "guest_sha256": "2b116fc3faf58dda5f19a0b28e872daf389b6cbfcff43bce6bc3f2f9d5ecd737",
+          "transcript_sha256": "2c53a8b6fe30cea9cbc30ffb64b36db92c94c6e9a3c477d1e318960a69394d78",
+          "report_sha256": "16afe57bee6c4fc985b46311e97a5077af76c41a2f44f73d5afed411a472b1a5"
+        },
+        {
+          "guest": "native-macho-pac0-el0",
+          "guest_sha256": "12aca93a6a9de592caa01d15157bd48d0e95683d4e8ffa94feaa8e73331a97fa",
+          "transcript_sha256": "34ef540eb74f27239fc5239fad5dfb33fba13fae369196001019a3f9021eab86",
+          "report_sha256": "47d52956126247e34bd429981c5d638dbfbf7652c916203a2ce013c6d0dd4db9"
+        },
+        {
+          "guest": "native-macho-pac0-el1",
+          "guest_sha256": "92b8f20bf05f8e86424458a5277a299c4e214420d0a9c2b0912136a0da7220b0",
+          "transcript_sha256": "c8d1ffdd4e57bbe1aa2d174345640b58df9e0458dacec6daeb6bd7f3d8775240",
+          "report_sha256": "67b116757be8d8c6bff2c13776aef282ae8b02bcc4cb404c6092d07112982a75"
+        },
+        {
+          "guest": "native-macho-pac2-el0",
+          "guest_sha256": "e5da21cb581f0b074c79db67b6385b6bb1b4e5fef70b184528232ca90b542000",
+          "transcript_sha256": "cf6aef0320775ba3935205d2f94b08b2ff4e5a80fced3a891fe3510df290403d",
+          "report_sha256": "68323763988b474eae97fd9818580d4130b0f9c66249adfa2f1ce41098df12f7"
+        },
+        {
+          "guest": "native-macho-pac2-el1",
+          "guest_sha256": "81dcab3a27536cef5a97376321ce12916a3933c521e36ae0e44b414490739169",
+          "transcript_sha256": "d458b2807db2558820b14f0bc24281239db21e61c2001793a880a7283e76b3de",
+          "report_sha256": "2d5772615a5f6004c7896ef0aa5cb4f00214e61339b8a2a43c82f9cdd59ab6e8"
+        },
+        {
+          "guest": "native-macho-pac3-el0",
+          "guest_sha256": "8e6e46edf84a7aab3ac5eebcea9c9a1984e5d8fb173d86da822f0f583d508ef2",
+          "transcript_sha256": "cae8f74946b6b92cd7f4425a255722ac185226dcb56e89c3d48712ba0b4f10ea",
+          "report_sha256": "73fdb48e4303dc7671d48dea36a6817f505c094155ec71b36b575563dfe5bc51"
+        },
+        {
+          "guest": "native-macho-pac3-el1",
+          "guest_sha256": "96df313074b995fe32ea3594b669066cdb2aa1ea5fa8677a2e1f02541daecf7e",
+          "transcript_sha256": "04b406b1f548b91d28b5f1f58e84339e1cb19f85358dbf5dc7aa4b1495ccadda",
+          "report_sha256": "e81f6d93f65a34663f08e7c2b6e226374fd111881b8427aef2d9b8dcf921b2df"
+        }
+      ]
+    }
+  ],
+  "object_manifest": {
+    "file": "arm64e-native-wide-storage-objects-2026-11-08.json",
+    "sha256": "ebe44b08871fb519bf4317b667777c6607b3c8d6fe8a19984565eb3c253e2e5c",
+    "objects": 1200
+  },
+  "previous_profiles": {
+    "explicit": {
+      "objects": 1625,
+      "changed": [],
+      "new_model_execution": false
+    },
+    "analyst-x8": {
+      "objects": 25,
+      "changed": [],
+      "new_model_execution": false
+    },
+    "recovered-prior": {
+      "objects": 900,
+      "changed": [],
+      "new_model_execution": true
+    }
+  },
+  "specifications": [
+    "https://github.com/ARM-software/abi-aa/blob/main/aapcs64/aapcs64.rst",
+    "https://developer.apple.com/documentation/xcode/writing-arm64-code-for-apple-platforms"
+  ],
+  "remaining": [
+    "General vector-containing record ABIs (including homogeneous vector aggregates), and automatic recovery of every source prototype, remain unqualified.",
+    "Authenticated whole-image storage synthesis, import/fixup installation and signed-unwind rebuilding remain incomplete.",
+    "Native Apple PAC/CPA2 and signed exception execution, and exact fault PC/full ESR agreement remain unqualified.",
+    "The exact invalid-PAC exception class for generic untyped C O0 calls remains outside this fixed-prototype qualification.",
+    "Apple legacy llvm.ptrauth global import remains unsupported by the configured r6 backend; native C object compilation is separately tested."
+  ],
+  "remote_ci": {
+    "qualified": false,
+    "reason": "The GitHub diagnostics connector reports that the selected connection changed or is unavailable."
+  },
+  "cleanup": {
+    "removed_generated_files": 4501,
+    "removed_generated_bytes": 36131496,
+    "removed_shared_model_bytes": 261761470,
+    "inventory_sha256": "47bd80981c896d7af7520d0241d4551655f03d3fada9be5d4020f118210d2f83",
+    "retained": "Active Release build, 1200 current canonical Mach-O model inputs, earlier canonical baselines, source/IR, reports and necessary failure diagnostics.",
+    "earlier_failed_attempt": {
+      "removed_objects": 1200,
+      "removed_bytes": 1211880,
+      "inventory_sha256": "5710e5da44ad511d337f7cbcf9383e1494e667394f4ed2bbf0bd94d4d3daf259"
+    },
+    "superseded_diagnostics": {
+      "archive": "superseded-diagnostics.tar.gz",
+      "archive_sha256": "9bfb5d3e68018168fec50df70fbc204ca7042876d16a0fe7c3e6cfd1711a9e4a",
+      "index": "superseded-diagnostics-index.json",
+      "index_sha256": "3c057ed35926b623a4c951681269d59b19ffe362130739cec698bc9d18614e06",
+      "files": 6797,
+      "uncompressed_bytes": 38683021,
+      "compressed_bytes": 2126027,
+      "verified": "Every decompressed file matched its original size and SHA-256 before the loose copy was removed."
+    },
+    "integration_duplicate_objects": {
+      "files": 2921,
+      "bytes": 2934632,
+      "inventory_sha256": "f42227e7c0d06de11dc2d523e5f4a1ed0df5c748591eed72ff4a11dbdf43ca44",
+      "policy": "Removed only after every current model and earlier canonical profile matched byte-for-byte. Canonical inputs remain retained."
+    }
+  },
+  "integration": {
+    "tested_revision": "96d5194177fc35c7f365d6cacc8d1ecdcfed9a83",
+    "merged_dev_revision": "94f5d75d7dd4b04f6b401357955b0fa56846f9ec",
+    "scope": "The captured dev revision includes shared HighC frame-offset changes. Rebuild and rerun the affected owners, ABI selections and complete frame-record owner. Model guests retain their original producer; all current object bytes match the qualified canonical inputs.",
+    "validation": {
+      "instances": 2425,
+      "passed": 2404,
+      "skipped": 21,
+      "failures": 0,
+      "by_owner": {
+        "NeverDAArch64AuthenticatedCallTests": {
+          "COMPLETED": 122
+        },
+        "NeverDSourceCallABITests": {
+          "COMPLETED": 28
+        },
+        "NeverDObjCSourceCallTests": {
+          "COMPLETED": 1918
+        },
+        "NeverDLLVMCValueTests": {
+          "COMPLETED": 132,
+          "SKIPPED": 21
+        },
+        "NeverDLiftTests": {
+          "COMPLETED": 112
+        },
+        "NeverDSourceEntryBindingTests": {
+          "COMPLETED": 77
+        },
+        "NeverDCDisplayFrameRecordTests": {
+          "COMPLETED": 15
+        }
+      },
+      "skip_details": [
+        {
+          "test": "LLVMCValues.PrefetchKeepsComputedAndSegmentedMemoryOperands",
+          "reasons": [
+            "unittests/lift/core/LLVMCValueTests.cpp:231\nthe prefetch instructions need an x86 host\n"
+          ]
+        },
+        {
+          "test": "LLVMCValues.NativeSHA256KeepsVectorInputsAndInstructionFeatures",
+          "reasons": [
+            "unittests/lift/core/LLVMCValueTests.cpp:373\nSHA-256 native oracle requires the host SHA feature\n"
+          ]
+        },
+        {
+          "test": "LLVMCValues.SHAFeaturesComposeWithNativeInstructionFallbacks",
+          "reasons": [
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n"
+          ]
+        },
+        {
+          "test": "LLVMCValues.RtmFeaturesComposeWithShaAcrossNativeAndAssemblyCalls",
+          "reasons": [
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:593: false\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:593: false\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:593: true\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:593: true\n"
+          ]
+        },
+        {
+          "test": "LLVMCValues.NativeVirtualizationKeepsStatusAndFailedReadPrior",
+          "reasons": [
+            "unittests/lift/core/LLVMCValueTests.cpp:817\nrequires the qualified native virtualization SDK\n"
+          ]
+        },
+        {
+          "test": "LLVMCValues.NativeDescriptorReadKeepsExplicitPrior",
+          "reasons": [
+            "unittests/lift/core/LLVMCValueTests.cpp:935\nrequires native Linux x86-64 descriptor queries\n"
+          ]
+        },
+        {
+          "test": "LLVMCValues.NativeDescriptorAddressesKeepSegmentWidthAndPrior",
+          "reasons": [
+            "unittests/lift/core/LLVMCValueTests.cpp:997\nrequires native Linux x86-64 descriptor queries\n"
+          ]
+        },
+        {
+          "test": "LLVMCValues.TargetIndexWidthKeepsNegativeFrameOffsets",
+          "reasons": [
+            "unittests/lift/core/LLVMCValueTests.cpp:1113\nrequires native Linux i386/x64 execution\n"
+          ]
+        },
+        {
+          "test": "LLVMCValues.X87MemoryViewsRetainBitsAndTenByteExtents",
+          "reasons": [
+            "unittests/lift/core/LLVMCValueTests.cpp:1151\nrequires native Linux i386/x64 binary80 execution\n"
+          ]
+        },
+        {
+          "test": "LLVMCValues.X87FiniteConstantsKeepExtendedPrecisionAndRange",
+          "reasons": [
+            "unittests/lift/core/LLVMCValueTests.cpp:1272\nrequires native Linux i386/x64 binary80 execution\n"
+          ]
+        },
+        {
+          "test": "LLVMCValues.X86NativeDivideKeepsBothResultsAndDeadResultFaults",
+          "reasons": [
+            "unittests/lift/core/LLVMCValueTests.cpp:1420\nrequires native Linux i386/x64 execution\n"
+          ]
+        },
+        {
+          "test": "LLVMCValues.X86BitStringIntrinsicsMatchOriginalMemoryAndFaults",
+          "reasons": [
+            "unittests/lift/core/../x86/X86NativeBitTestTests.inc:65\nrequires original Linux x64 bit-string instructions\n"
+          ]
+        },
+        {
+          "test": "LLVMCValues.X86DivideIntrinsicsMatchOriginalResultsAndFaults",
+          "reasons": [
+            "unittests/lift/core/../x86/X86NativeDivisionTests.inc:53\nrequires the original Linux x64 DIV/IDIV oracle\n"
+          ]
+        },
+        {
+          "test": "LLVMCValues.NativeAssemblyKeepsOperandSnapshotsAcrossBranches",
+          "reasons": [
+            "unittests/lift/core/LLVMCValueTests.cpp:1554\nrequires native Linux i386/x64 execution\n"
+          ]
+        },
+        {
+          "test": "LLVMCValues.I386WideCarriersRetainWrappingShiftsAndSignedComparison",
+          "reasons": [
+            "unittests/lift/core/LLVMCValueTests.cpp:3123\n32-bit scalar C execution requires Linux i386 support\n"
+          ]
+        },
+        {
+          "test": "LLVMCValues.WideIntegerConstantsPreserveEveryWordAndStoreExtent",
+          "reasons": [
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 160\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 160\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 256\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 256\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 288\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 288\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 512\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 512\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 1024\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 1024\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 2048\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 2048\n"
+          ]
+        },
+        {
+          "test": "LLVMCValues.WideConstantsPreserveEveryStoredByte",
+          "reasons": [
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 129\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 129\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 136\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 136\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 159\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 159\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 192\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 192\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 224\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 224\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 255\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 255\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 256\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 256\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 257\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 257\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 384\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 384\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 511\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 511\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 512\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 512\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 513\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 513\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 2047\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 2047\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 2048\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 2048\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 129\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 129\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 136\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 136\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 159\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 159\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 192\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 192\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 224\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 224\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 255\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 255\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 256\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 256\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 257\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 257\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 384\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 384\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 511\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 511\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 512\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 512\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 513\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 513\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 2047\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 2047\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 2048\n",
+            "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 2048\n"
+          ]
+        },
+        {
+          "test": "LLVMCValues.AWeakImportIsDeclaredWeak",
+          "reasons": [
+            "unittests/lift/core/LLVMCValueTests.cpp:4823\nrequires native ELF undefined-weak linkage\n"
+          ]
+        },
+        {
+          "test": "LLVMCValues.SelectedFunctionKeeps32BitSynthesizedTableStorage",
+          "reasons": [
+            "unittests/lift/core/LLVMCValueTests.cpp:7650\n32-bit scalar C execution requires Linux i386 support\n"
+          ]
+        },
+        {
+          "test": "LLVMCValues.VariadicCallSiteKeepsWindowsFloatingRegisterDuplicates",
+          "reasons": [
+            "unittests/lift/core/LLVMCValueTests.cpp:7754\nNative Windows x64 ABI execution requires x64\n"
+          ]
+        },
+        {
+          "test": "LLVMCValues.AFixedCallSiteKeepsItsOwnCallingConvention",
+          "reasons": [
+            "unittests/lift/core/LLVMCValueTests.cpp:7818\nNative Windows x64 ABI execution requires x64\n"
+          ]
+        }
+      ],
+      "report_sha256": "935fb4677bb3d54fceaba5a241f5a8e493a32d2f4accc12d7b43b2e887114ea9",
+      "registered_timeouts_unchanged": true
+    },
+    "build": {
+      "profile": "Release",
+      "command": "python3 scripts/build.py build-arm64e --target NeverDAArch64AuthenticatedCallTests NeverDSourceCallABITests NeverDObjCSourceCallTests NeverDLLVMCValueTests NeverDLiftTests NeverDSourceEntryBindingTests NeverDCDisplayFrameRecordTests --parallel 6",
+      "log_sha256": "bc7245077d107b0239919a1695fe549c8d20048ba4d0e15736adfc507d3abb50",
+      "producer_sha256": "1dc4ecc3c3ff2afb4ef2ff87f42ac52f6d80662e973bf6c0039cdd88e1a84c22",
+      "binary_sha256": {
+        "NeverDAArch64AuthenticatedCallTests": "699e80858e4bc4644e0da2fe4168ef14d3c73784374a3cacc57981665e7105ec",
+        "NeverDSourceCallABITests": "4bbe10e54d5f3a49162fd098fae73789640a86a315fb16be6cb7995eedc13b22",
+        "NeverDObjCSourceCallTests": "a518bf5cf7725040aca8a8c7e5eae8e52e9d6050c284e016c725c27a25eb157e",
+        "NeverDLLVMCValueTests": "76c88c858617e308232d8b2cfb414d914e31c6b152ea5f6e6a5145804d20e00b",
+        "NeverDLiftTests": "5491155870edc5c292084309fbde86197c9f85da0b85d7aab0fe8b906ee91397",
+        "NeverDSourceEntryBindingTests": "a53fe7894e34798e3cd58d358004173574e87de538e1ee6bdb452f66189af3d0",
+        "NeverDCDisplayFrameRecordTests": "f804876c7f1b5aedee629f1028691b174df6fbefe258bc76215c4295c1266fc5"
+      },
+      "dependency_inputs": {
+        "purpose": "configure_inputs",
+        "schema": 1,
+        "sources": {
+          "neverd_highway": {
+            "branch": "master",
+            "commit": "1693ca7926ed12c5520623564e465cff97d93374",
+            "repository": "https://github.com/NeverSight/highway.git",
+            "selection": "managed",
+            "sha256": "f5149df5acb77cd9730ed8e5160f2deff0b02fe49cc45443fd396fdb5f0519d2",
+            "used": true
+          },
+          "neverd_mimalloc": {
+            "branch": "main3",
+            "commit": "e8e7bc41ce904b4c83fe20e87d93f24d5286315a",
+            "repository": "https://github.com/NeverSight/mimalloc.git",
+            "selection": "managed",
+            "sha256": "aea4126df4ada4e8f733e2a0f08642a8aabe6c2afc01886a1a9a259c18231ac3",
+            "used": true
+          },
+          "neverd_simdjson": {
+            "branch": "master",
+            "commit": "edb7016c62efbe6155226896cdba5736307190e3",
+            "repository": "https://github.com/NeverSight/simdjson.git",
+            "selection": "managed",
+            "sha256": "e4e849bbb16878f8555501cc09bf4a6d90d4a06ccfc67a202a3c030486c3823d",
+            "used": true
+          },
+          "neverd_simdutf": {
+            "branch": "master",
+            "commit": "8d82299606e675b50de8dc16fd118aae4b65bfde",
+            "repository": "https://github.com/NeverSight/simdutf.git",
+            "selection": "managed",
+            "sha256": "48e9c9fc33940bcc81cdaec785ce6e21ea20f7b03b7a26bff56abb41d2cf5126",
+            "used": true
+          },
+          "neverd_tbb": {
+            "branch": "master",
+            "commit": "d26e0502ca39f888c1266cbbf1e2c2226d31e41b",
+            "repository": "https://github.com/NeverSight/oneTBB.git",
+            "selection": "managed",
+            "sha256": "98300a443e43d047eabae27d3e30232efe7508b20d8e24a92ff2d54ef511761b",
+            "used": true
+          }
+        }
+      }
+    },
+    "object_comparison": {
+      "current_model_producer_revision": "b3910f11f305507f94a888f7bc75bd7692272c23",
+      "report_sha256": "6b0385e3928ed048bfb0f3d7021b62c4800467496e599632e1fc22619cba14a5",
+      "profiles": {
+        "recovered-current": {
+          "objects": 1175,
+          "changed": [],
+          "new_model_execution": false
+        },
+        "native-x8-current": {
+          "objects": 25,
+          "changed": [],
+          "new_model_execution": false
+        },
+        "explicit-prior": {
+          "objects": 1625,
+          "changed": [],
+          "new_model_execution": false
+        },
+        "analyst-x8-prior": {
+          "objects": 25,
+          "changed": [],
+          "new_model_execution": false
+        },
+        "recovered-prior": {
+          "objects": 900,
+          "changed": [],
+          "new_model_execution": false
+        }
+      }
+    }
+  },
+  "quality_checks": {
+    "clang_format_version": "22.1.2",
+    "changed_cpp_format": "passed",
+    "source_provenance": {
+      "passed": true,
+      "worktree_files": 11846
+    },
+    "localized_documentation": {
+      "passed": true,
+      "markdown_files": 309,
+      "locales": 10
+    },
+    "diff_whitespace": "passed"
+  }
+}

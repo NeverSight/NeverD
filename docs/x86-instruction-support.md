@@ -4349,7 +4349,60 @@ NeverC now exposes CLTS, CLAC, STAC, HLT, VMXOFF, STGI and CLGI on i386 through
 the existing native LLVM intrinsics. Its harness passes 308 code-generation
 form checks and 10,560 native descriptor-query comparisons; these counts do
 not claim privileged user-mode execution. SWAPGS remains x64-only. No LLVM
-lowering change was needed. General MOV-CR/mode transitions, task switching,
+lowering change was needed. The MOV-CR follow-up below closes bound protected
+transfers. Full mode transitions, task switching,
 other i386 state banks, software SMM/SGX and unbound asynchronous producers
 remain open; the final LLVM release and pin/gitlink update stay gated, with
 the production pin at r6.
+
+## Protected MOV-CR and native i386 CR/DR APIs (2026-11-08)
+
+Protected code16/code32 execution and generated C now share MOV-CR handling
+for CR0, CR2, CR3 and CR4. Register transfers stay 32-bit despite operand/address
+prefixes or the ignored ModRM `mod` field. LOCK and reserved CR indices deliver
+#UD before the CPL #GP check. The explicit Intel binding owns supported CR4
+features outside the existing paging feature owner and preserves undefined
+arithmetic flags. CR0 reserved bits are ignored and ET is fixed; CR3 ignored
+bits retain their input values.
+
+Control changes are staged with the core state. Active PAE CR3 writes and the
+specified CR0/CR4 changes reload all four hidden PDPTE registers through the
+paging owner. A reserved present PDPTE delivers #GP; unavailable physical
+backing stops execution. Both retain the previous control bank, and neither
+physical table access becomes a linear debug watchpoint. Successful changes
+commit before post-instruction #DB delivery and determine the next instruction
+fetch and handler translation. Generated C covers a new CR3 mapping, a #GP
+handler that repairs the table and retries, and a committed CR3 surviving a
+backing stop during debug entry.
+
+The [qualification evidence](evidence/x86-control-registers-2026-11-08.json)
+records 1,460 passing checks with no failures or skips across both LLVM
+SDKs and qualified P/E cores. New MOV-CR coverage includes
+11,096 original-instruction comparisons, including all four hidden PAE
+PDPTE registers. Generated C runs through Clang/NeverC O0/O2. NeverC passes
+87 frontend/code-generation checks and 5,016 controlled CR/DR completions
+across its full i386/x64 backend route and embedded x64 backend.
+The subsequent HighC frame/typed-pointer overflow and SBF memory-analysis
+integration stages add 612 passing generated-C checks across both SDKs. The paging and system-state
+executables remain byte-identical to their qualified baselines; their exact
+hashes and the unchanged MOV-CR implementation hashes are recorded in the
+same evidence.
+
+NeverC adds `__builtin_ia32_readcr32`, `writecr32`, `readdr32` and `writedr32`,
+with constant register indices and native LLVM intrinsics. Its i386 source
+profile is Linux; Microsoft spellings are checked with explicit MS extensions,
+without claiming a Windows i386 ABI. Microsoft CR/DR
+spellings select the target code mode and retain their declared source types;
+CR8 remains x64-only. Existing portable 64-bit names keep their signatures.
+The full LLVM fork already supplies the i386 lowering. NeverC's full-backend
+route emits native 32-bit instructions; its pruned embedded backend remains
+x64-only. Controlled completions verify register inputs/results, ordering,
+undefined-flag independence and the C ABI; they do not claim successful
+privileged host execution.
+
+The strict NeverC source-global audit retains 90 pre-existing findings in 29
+unchanged files; the evidence records byte-for-byte baseline checks separately
+from successful intrinsic qualification. Full real/VM86/IA-32e mode transfers,
+task switching, other i386 banks, software SMM/SGX transitions and unbound
+asynchronous producers remain open. The final LLVM release and pin/gitlink
+update stay gated, and the production pin remains r6.

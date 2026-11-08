@@ -380,12 +380,18 @@ private:
   /// goes, as its engine pages spell what changed; otherwise it builds again
   /// from them. Each document reads this as it is next asked for
   /// (readViewEdits).
+  /// What decoration alone writes of an edit into a copy of a document it
+  /// reached: a comment of the image's (CodeEdits::takeComments) or a
+  /// function's new name (CodeEdits::takeFunctionNames).
+  enum class ViewEditKind { Other, Comment, FunctionName };
   void keepNamedViewsThrough(std::uint64_t address,
-                             std::vector<std::string> names, bool pagesStale);
+                             std::vector<std::string> names, bool pagesStale,
+                             ViewEditKind kind = ViewEditKind::Other);
   struct ViewEdit {
     std::uint64_t address;
     std::vector<std::string> names;
     bool pagesStale;
+    ViewEditKind kind;
   };
   std::deque<ViewEdit> viewEdits_;
   std::uint64_t viewEditCount_ = 0;
@@ -494,6 +500,13 @@ private:
     bool readsKnown = false;
     /// Unique among the documents of this process: its pages' identity.
     std::uint64_t id = 0;
+    /// The line its function's definition begins on, as decoration read it.
+    std::optional<std::size_t> definitionLine;
+    /// Which edits that reached it decoration writes again: comments and the
+    /// functions renamed, which are written into a copy of it, or anything
+    /// else.
+    mutable bool commentsReached = false, othersReached = false;
+    mutable std::vector<std::uint64_t> renamedFunctions;
     /// Of the edits views have kept through, how many it has read.
     mutable std::uint64_t viewEditsRead = 0;
     /// Hashes of the identifiers its text spells, sorted, once an edit's names
@@ -573,6 +586,19 @@ private:
                                     const std::string *ifNoneMatch = nullptr,
                                     bool pageDelta = false);
   std::uint64_t namedViewIds_ = 0;
+  /// Documents written from another with its comments or functions' names
+  /// taken (takeComments, takeFunctionNames).
+  std::uint64_t commentPatches_ = 0, namePatches_ = 0;
+  /// Something no edit a document notes changed what decoration reads: each
+  /// document decorates again from its pages.
+  void decorateNamedViewsAgain();
+  /// Measures and indexes \p full as \p document's value and keeps it under
+  /// \p key and \p sourceKey, as far as the documents' budget allows, where
+  /// \p reusable: the listing it read is still the one views read.
+  std::shared_ptr<const NamedView>
+  keepNamedView(std::shared_ptr<NamedView> document, Json full,
+                const std::string &key, const std::string &sourceKey,
+                bool reusable);
   std::string instanceTag_;
   /// Documents views had before they were built again, which pages clients
   /// keep may come from (page_delta): the newest last.

@@ -1105,7 +1105,8 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
                          const std::string &representation,
                          const ImageFacts &image,
                          const FunctionAliases &displayNames,
-                         const Resolver &resolve) {
+                         const Resolver &resolve,
+                         std::optional<std::size_t> *definitionLine) {
   if (!source(representation))
     return;
   // A view's lists are read in place: each may hold a row for every line.
@@ -1418,6 +1419,10 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
   for (std::size_t i = 0; i + 1 < original.size(); ++i)
     if (original[i] == '\n')
       starts.push_back(i + 1);
+  if (definitionLine && definition)
+    *definitionLine = static_cast<std::size_t>(
+        std::upper_bound(starts.begin(), starts.end(), ts[*definition].begin) -
+        starts.begin() - 1);
   // The bases the user picked for numbers, on lines that still read as their
   // anchors.
   const auto numbers = edits.value("numbers", Json::object());
@@ -1496,5 +1501,138 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
   std::string decorated = replaced(original, replacements);
   view["text"] = std::move(decorated);
   view["code_names"] = std::move(names);
+}
+
+bool CodeEdits::takeFunctionNames(Json &view,
+                                  const std::vector<std::uint64_t> &renamed,
+                                  const ImageFacts &image) {
+  const auto text = view.find("text");
+  const auto names = view.find("code_names");
+  if (text == view.end() || !text->is_string() || names == view.end() ||
+      !names->is_array())
+    return false;
+  const auto &decorated = text->get_ref<const std::string &>();
+  // A name given up shows what the engine stated, which the view no longer
+  // holds; a new name the text spells may link a word that linked nothing.
+  for (const auto address : renamed) {
+    const auto name = image.names.find(address);
+    if (name == image.names.end())
+      return false;
+    for (const auto &token : tokens(decorated))
+      if (token.text == name->second)
+        return false;
+  }
+  std::vector<Replacement> replacements;
+  for (const auto &name : *names) {
+    if (name.value("kind", std::string()) != "address" ||
+        !name.contains("address") || !name["address"].is_string())
+      continue;
+    const auto at = parseAddress(name["address"].get<std::string>());
+    if (std::find(renamed.begin(), renamed.end(), at) == renamed.end())
+      continue;
+    const auto begin = name.value("begin_byte", std::size_t{0});
+    const auto end = name.value("end_byte", std::size_t{0});
+    if (end < begin || end > decorated.size())
+      return false;
+    const auto &shown = image.names.at(at);
+    if (decorated.compare(begin, end - begin, shown) != 0)
+      replacements.push_back({begin, end, shown});
+  }
+  if (replacements.empty())
+    return true;
+  std::sort(replacements.begin(), replacements.end(),
+            [](const auto &a, const auto &b) { return a.begin < b.begin; });
+  for (std::size_t i = 1; i < replacements.size(); ++i)
+    if (replacements[i].begin < replacements[i - 1].end)
+      return false;
+  const ByteShifts shifted(replacements);
+  for (auto &name : *names)
+    for (const char *field : {"begin_byte", "end_byte"})
+      if (name.contains(field))
+        name[field] = shifted(name[field].get<std::size_t>());
+  remapPageSpans(view, shifted);
+  view["text"] = replaced(decorated, replacements);
+  return true;
+}
+
+bool CodeEdits::takeComments(Json &view, std::uint64_t function,
+                             std::optional<std::size_t> definitionLine,
+                             const ImageFacts &image) {
+  const auto text = view.find("text");
+  const auto rows = view.find("rows");
+  if (text == view.end() || !text->is_string() || rows == view.end() ||
+      !rows->is_array())
+    return false;
+  const auto &decorated = text->get_ref<const std::string &>();
+  std::vector<std::size_t> starts{0};
+  for (std::size_t i = 0; i + 1 < decorated.size(); ++i)
+    if (decorated[i] == '\n')
+      starts.push_back(i + 1);
+  // Each row's comment as decorate reads it: a source note where the row has
+  // one, else the first of its addresses the image comments, else the
+  // function's own on its definition's line.
+  const auto &imageComments = image.comments;
+  std::unordered_map<std::size_t, unsigned> rowsOnLine;
+  std::vector<std::pair<Json *, std::string>> changed;
+  for (auto &mapping : *rows) {
+    const auto line = mapping.value("line", std::size_t{0});
+    const auto kept = mapping.find("code_comment");
+    if (line >= starts.size() || kept == mapping.end() || !kept->is_string())
+      continue;
+    ++rowsOnLine[line];
+    if (mapping.value("code_comment_is_source", false))
+      continue;
+    std::string comment;
+    if (!imageComments.empty()) {
+      if (const auto addresses = mapping.find("addresses");
+          addresses != mapping.end())
+        for (const auto &at : *addresses) {
+          const auto address = parseAddress(at.get<std::string>());
+          if (imageComments.contains(address)) {
+            comment = imageComments.at(address);
+            break;
+          }
+        }
+      if (comment.empty() && definitionLine == line &&
+          imageComments.contains(function))
+        comment = imageComments.at(function);
+    }
+    if (comment != kept->get_ref<const std::string &>())
+      changed.emplace_back(&mapping, std::move(comment));
+  }
+  if (changed.empty())
+    return true;
+  std::vector<Replacement> replacements;
+  for (const auto &[mapping, comment] : changed) {
+    const auto line = mapping->value("line", std::size_t{0});
+    if (rowsOnLine[line] != 1)
+      return false;
+    auto end = decorated.find('\n', starts[line]);
+    if (end == std::string::npos)
+      end = decorated.size();
+    const auto &before =
+        mapping->at("code_comment").get_ref<const std::string &>();
+    const auto written = before.empty() ? std::string() : inlineComment(before);
+    if (end - starts[line] < written.size() ||
+        decorated.compare(end - written.size(), written.size(), written) != 0)
+      return false;
+    replacements.push_back(
+        {end - written.size(), end,
+         comment.empty() ? std::string() : inlineComment(comment)});
+  }
+  std::sort(replacements.begin(), replacements.end(),
+            [](const auto &a, const auto &b) { return a.begin < b.begin; });
+  const ByteShifts shifted(replacements);
+  for (const auto &[mapping, comment] : changed)
+    (*mapping)["code_comment"] = comment;
+  if (const auto names = view.find("code_names");
+      names != view.end() && names->is_array())
+    for (auto &name : *names)
+      for (const char *field : {"begin_byte", "end_byte"})
+        if (name.contains(field))
+          name[field] = shifted(name[field].get<std::size_t>());
+  remapPageSpans(view, shifted);
+  view["text"] = replaced(decorated, replacements);
+  return true;
 }
 } // namespace neverd::worker
