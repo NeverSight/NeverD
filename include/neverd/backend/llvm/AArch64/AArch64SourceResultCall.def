@@ -70,7 +70,7 @@ RESULT_CALL_TEXT(kResultCallResultDeclarationC, "{0}; ")
 RESULT_CALL_TEXT(kResultCallResultCopyC,
                  "__builtin_memcpy((unsigned char *)&{0} + {1}, &{2}[{3}], "
                  "{4}); ")
-RESULT_CALL_TEXT(kResultCallValueEndC, " {0}; }})")
+RESULT_CALL_TEXT(kResultCallValueEndC, " {0}; })")
 RESULT_CALL_TEXT(kResultCallFrameC, "__builtin_frame_address(0)")
 RESULT_CALL_TEXT(kResultCallDirectC, "__neverd_aarch64_code_address({0})")
 RESULT_CALL_TEXT(kResultCallError,
