@@ -54,6 +54,7 @@
 #include "neverd/backend/LLVMAnalysisDispatch.h"
 #include "neverd/backend/LLVMOriginalImageStorage.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/MIPS/MIPSDSPSource.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/FloatingPointContract.h"
@@ -515,6 +516,8 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
   }
   writeRecordDefinitions(Rest);
   OS << Rest;
+  if (isMIPS(Opts.TheArch) && mips::modulePreservesDSPControl(Mod, Opts.Image))
+    OS << mips::DSPSourceCEnd;
 }
 
 std::string LLVMCWriter::recordPointerSpelling(const NdType &Record) {
@@ -1244,6 +1247,8 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     OS << "\n";
     IncludedHeaders.insert(Headers.begin(), Headers.end());
   }
+  if (isMIPS(Opts.TheArch) && mips::modulePreservesDSPControl(Mod, Opts.Image))
+    OS << mips::DSPSourceCBegin;
   if (NeedsX86SystemRegisterDispatch)
     OS << X86SystemRegisterCompilerDispatch;
   if (NeedsX86SegmentMoveDispatch)
@@ -2545,8 +2550,11 @@ void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
     // Calls the callee's prototype decides pass as many arguments as it
     // takes (printedCallArgLimit), which the declaration takes too.
     const std::optional<unsigned> Params = prototypedParamCount(Fn);
-    if (isMIPS(Opts.TheArch))
+    if (isMIPS(Opts.TheArch)) {
+      OS << mips::dspSourceCAttribute(Opts.Image,
+                                      Fn.hasFnAttribute(mips::DSPSourceMarker));
       OS << mips::instructionModeCAttribute(mips::instructionModeFromLLVM(Fn));
+    }
     if (Fn.hasFnAttribute("neverd.x64_dispatch_frame"))
       OS << "__attribute__((ms_abi)) ";
     // An i386 stdcall routine pops the arguments its calls push, which a C

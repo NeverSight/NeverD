@@ -62,6 +62,7 @@ int main(int Argc, char **Argv) try {
                                 "capstone|decode|lift RAW_CODE REPEATS");
   Arch Target = Arch::Unknown;
   InstructionMode Encoding = InstructionMode::Default;
+  bool DSP = false;
 #define NEVERD_MIPS_BENCH_PROFILE(Name, Value)                                 \
   if (std::string_view(Argv[1]) == #Name)                                      \
     Target = Arch::Value;
@@ -70,6 +71,12 @@ int main(int Argc, char **Argv) try {
   if (std::string_view(Argv[1]) == #Name) {                                    \
     Target = Arch::Value;                                                      \
     Encoding = InstructionMode::MicroMIPS;                                     \
+  }
+#include "mips-bench.def"
+#define NEVERD_MIPS_DSP_BENCH_PROFILE(Name, Value)                             \
+  if (std::string_view(Argv[1]) == #Name) {                                    \
+    Target = Arch::Value;                                                      \
+    DSP = true;                                                                \
   }
 #include "mips-bench.def"
   if (!isMIPS(Target))
@@ -96,7 +103,14 @@ int main(int Argc, char **Argv) try {
       Bytes.size() % (Encoding == InstructionMode::MicroMIPS ? 2 : 4))
     throw std::invalid_argument("expected a nonempty aligned MIPS code span");
   Decoder Decode;
-  if (!Decode.init(Target, Encoding))
+  BinaryImage Profile;
+  Profile.Arch = Target;
+  Profile.Bits = isMIPS64(Target) ? Bitness::Bits64 : Bitness::Bits32;
+  Profile.Mode = Encoding;
+  Profile.MIPS.emplace();
+  Profile.MIPS->HasDSP = DSP;
+  Profile.MIPS->HasMicroMIPS = Encoding == InstructionMode::MicroMIPS;
+  if (!Decode.init(Profile))
     throw std::runtime_error("decoder initialization failed");
   Decode.setDetail(true);
   Decode.setText(false);

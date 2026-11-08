@@ -53,6 +53,7 @@ NEVERD_MIPS_REGISTER(RA, 31, "ra", "ra")
 NEVERD_MIPS_REGISTER(HI, 32, "hi", "hi")
 NEVERD_MIPS_REGISTER(LO, 33, "lo", "lo")
 NEVERD_MIPS_REGISTER(PC, 34, "pc", "pc")
+NEVERD_MIPS_REGISTER(DSPControl, 35, "dspcontrol", "dspcontrol")
 
 NEVERD_MIPS_REGISTER_TEXT(UnknownRegister, "unknown_mips_register")
 
