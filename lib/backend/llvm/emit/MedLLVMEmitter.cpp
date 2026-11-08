@@ -27,6 +27,7 @@
 #include "neverd/Common.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/MIPS/MIPSDSPSource.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/llvm/LLVMCallContract.h"
@@ -43,6 +44,7 @@
 #include "neverd/ir/intrinsics/X86/X86Unsupported.h"
 #include "neverd/ir/med/AArch64/AArch64SVEState.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
+#include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/med/MedRawEnvironment.h"
 #include "neverd/ir/med/X86/X86CompactShape.h"
 #include "neverd/ir/med/X86/X86FourSourceShape.h"
@@ -735,6 +737,8 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
   auto *FuncTy = llvm::FunctionType::get(RetType, ParamTypes, Func.IsVariadic);
   auto *LLVMFunc = llvm::Function::Create(
       FuncTy, llvm::GlobalValue::ExternalLinkage, EmittedName, Mod);
+  if (mips::imagePreservesDSPControl(Img))
+    mips::applyDSPSourceAttributes(*LLVMFunc);
   if (Img && isMIPS(TargetArch))
     if (const auto Mode = Img->instructionModeAt(Func.Entry))
       if (const char *Attribute = mips::instructionModeLLVMAttribute(*Mode);
@@ -854,6 +858,7 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   // named (RefusedBodies), and the rest are checked before the first refusal
   // is thrown, so that a unit that leaves such bodies out can emit again
   // without them. A malformed operation fails at once.
+  bool PreserveDSPControl = mips::imagePreservesDSPControl(Img_);
   for (size_t Index = 0; Index != Funcs.size(); ++Index) {
     const MedFunc &Func = Funcs[Index];
     const bool WritesBody = !BodyMask || (*BodyMask)[Index];
@@ -894,6 +899,11 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
               "intrinsic has an invalid intrinsic ID shape");
         if (Op.Opcode == NdOp::INTRINSIC) {
           const auto Id = static_cast<Intrinsic>(Op.Inputs[0].ConstVal);
+          if (mips::isDSPControlIntrinsic(Id)) {
+            if (!mipsScalarMedShapeIsValid(Op, TheArch))
+              throw std::invalid_argument(mips::kMalformedScalar);
+            PreserveDSPControl = true;
+          }
           if ((Id == Intrinsic::Eret && TheArch != Arch::AArch64) ||
               !aarch64ExceptionReturnShapeIsValid(
                   Id, Op.NumInputs, Op.Output.Size, Op.IntrinsicOutputs.size()))
@@ -1722,6 +1732,12 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   }
 
   std::string VerifyErr;
+  // The module is one DSP state context, including ordinary sibling bodies
+  // and declarations whose state operations belong to another source shard.
+  if (PreserveDSPControl)
+    for (llvm::Function &Function : *Mod_)
+      if (!Function.isIntrinsic())
+        mips::applyDSPSourceAttributes(Function);
   llvm::raw_string_ostream VES(VerifyErr);
   if (llvm::verifyModule(*Mod_, &VES))
     syncWarning() << "med_llvm_emitter: verification: " << VerifyErr << "\n";

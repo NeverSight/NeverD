@@ -22457,6 +22457,22 @@ signed/unsigned loads, exact store bytes, failed writes and original-target
 execution. Source numeric callable/import values remain explicitly unqualified;
 the pipeline suite checks those refusals as well as ordinary leaf emission.
 
+`MIPSDSPTests` in the integer target covers every control selector, ignored
+selector bits, missing state, sticky flags, saturated lanes, destination/input
+aliases and discarded results. The pipeline target checks that DSPControl
+effects survive both source routes without invented source arguments. Return
+identity, standalone conversion, source shards and generated helper protection
+have separate regressions.
+`unittests/lift/mips/dsp-roundtrip.py` accepts the same explicit `--neverd`,
+`--clang`, `--ld` and `--output` arguments as the ordinary runner. Its nine
+owned `dsp.S` leaves check scalar results and DSPControl after returning, in
+both byte orders and both C routes at `-O0` and `-O2`, with external `-mdsp`
+enabled. It uses the pinned 74Kf model with
+Status.MX enabled. A known original-model zero-destination overflow defect is
+recorded separately; generated results must always satisfy the manual-derived
+expectation. The managed artifact lifecycle retires each generated object and
+executable after its comparisons.
+
 ### MIPS decode/lift and firmware performance
 
 `neverd-mips-bench` is an opt-in target, excluded from the default build:
@@ -22466,8 +22482,9 @@ python3 scripts/build.py build-mips --target neverd-mips-bench --parallel 4
 build-mips/bin/neverd-mips-bench mips64el lift /path/to/owned-code.bin 100000
 ```
 
-Profiles are `mips`, `mipsel`, `mips64`, `mips64el`, `micromips` and
-`micromipsel`. Stages are `capstone`
+Profiles are `mips`, `mipsel`, `mips64`, `mips64el`, `micromips`,
+`micromipsel`, `mipsdsp` and `mipsdspel`. The DSP profiles explicitly select
+the admitted classic32 DSP capability. Stages are `capstone`
 (direct physical decoding), `decode` (NeverD physical decoding) and `lift`
 (decoding plus LowIR, including delay slots). Both decode paths request the same
 selected r2 encoding profile, detail on and text off. The pinned Capstone fork suppresses

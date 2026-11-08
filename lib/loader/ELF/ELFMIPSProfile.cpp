@@ -209,11 +209,15 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
         Bytes[4] != (ELFT::Is64Bits ? 2 : 1))
       return profileError(
           "ABI flags conflict with the admitted R2 GPR profile");
+    const uint32_t ASE = Read32(12);
     if (Bytes[5] > 2 || Bytes[6] != 0 || Bytes[7] > 7 || Read32(8) != 0 ||
-        Read32(12) !=
+        (ASE & ~llvm::Mips::AFL_ASE_DSP) !=
             (Profile.HasMicroMIPS ? llvm::Mips::AFL_ASE_MICROMIPS : 0u) ||
         (Read32(16) & ~1u) != 0 || Read32(20) != 0)
       return profileError("unsupported ABI flags or instruction extensions");
+    Profile.HasDSP = ASE & llvm::Mips::AFL_ASE_DSP;
+    if (Profile.HasDSP && (ELFT::Is64Bits || Profile.HasMicroMIPS))
+      return profileError("DSP currently requires classic MIPS32r2/o32");
     Profile.HasABIFlags = true;
     Profile.FPABI = Bytes[7];
   }

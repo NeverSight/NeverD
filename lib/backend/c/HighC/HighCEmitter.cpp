@@ -2023,6 +2023,11 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
 
 void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   const auto NativeFrameConvention = [&](const HighFunc &Function) {
+    if (isMIPS(Opts.TheArch))
+      OS << mips::dspSourceCAttribute(
+          Opts.Image,
+          MIPSScalarHelpers.count(Intrinsic::MIPSReadDSPControl) ||
+              MIPSScalarHelpers.count(Intrinsic::MIPSWriteDSPControl));
     if (Opts.Image && isMIPS(Opts.TheArch))
       if (const auto Mode = Opts.Image->instructionModeAt(Function.Entry))
         OS << mips::instructionModeCAttribute(*Mode);
@@ -5136,6 +5141,15 @@ void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
   collectMemoryTypes(Funcs);
   discoverHiddenCxxThrowCtors(Funcs);
   writeIncludes(Funcs);
+  // Helpers are separate compiler functions even when spelled inline. Keep
+  // their wide arithmetic from introducing unmodeled DSPControl writes too.
+  const bool PreserveDSPControl =
+      isMIPS(Opts.TheArch) &&
+      (mips::imagePreservesDSPControl(Opts.Image) ||
+       MIPSScalarHelpers.count(Intrinsic::MIPSReadDSPControl) ||
+       MIPSScalarHelpers.count(Intrinsic::MIPSWriteDSPControl));
+  if (PreserveDSPControl)
+    OS << mips::DSPSourceCBegin;
   std::set<std::string> Records;
   std::function<void(const TypeRef &)> RecordType = [&](const TypeRef &Type) {
     if (Type && Type->Kind == NdTypeKind::Array) {
@@ -5235,6 +5249,8 @@ void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
         OS << "\n";
     }
   recordSourceNames(Funcs);
+  if (PreserveDSPControl)
+    OS << mips::DSPSourceCEnd;
 }
 
 bool HighCWriter::writeFunctionsInParallel(const std::vector<HighFunc> &Funcs) {

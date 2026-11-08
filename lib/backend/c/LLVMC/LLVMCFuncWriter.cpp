@@ -26,6 +26,7 @@
 #include "neverd/backend/LLVMAnalysisDispatch.h"
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/MIPS/MIPSDSPSource.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/ParameterSites.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
@@ -10213,9 +10214,12 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
     llvm::raw_string_ostream SignatureOS(Signature);
     if (Fn.hasFnAttribute(LLVMSourceBody))
       SignatureOS << "static ";
-    if (isMIPS(Opts.TheArch))
+    if (isMIPS(Opts.TheArch)) {
+      SignatureOS << mips::dspSourceCAttribute(
+          Opts.Image, Fn.hasFnAttribute(mips::DSPSourceMarker));
       SignatureOS << mips::instructionModeCAttribute(
           mips::instructionModeFromLLVM(Fn));
+    }
     SignatureOS << RetStr << " " << FName << "(";
 
     unsigned ParamIdx = 0;
