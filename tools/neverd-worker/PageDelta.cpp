@@ -14,6 +14,8 @@
 
 #include "PageDelta.h"
 
+#include "ResourceLimits.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <limits>
@@ -242,6 +244,15 @@ std::optional<Json> itemRuns(const Items &before, const Items &after,
   return runs;
 }
 
+/// How many elements \p runs send again.
+std::size_t putCount(const Json &runs) {
+  std::size_t sent = 0;
+  for (const auto &run : runs)
+    if (run[0] == "put" || run[0] == "new")
+      sent += run[1].size();
+  return sent;
+}
+
 using Field = PageSource::Field;
 
 /// The value a field holds, where it holds one as it stands.
@@ -395,18 +406,23 @@ Json pageDelta(const PageSource &before, const PageSource &after) {
     if (old)
       if (const auto oldItems = itemsOf(*old), newItems = itemsOf(now);
           oldItems && newItems) {
-        // A value every element that has its key takes, as a document's
-        // identity in each of its locals, is set once.
-        if (const auto each = eachOf(*oldItems, *newItems))
-          if (auto runs = itemRuns(*oldItems, *newItems, &*each)) {
-            operations.push_back(Json::array({"each", now.name, *each}));
-            if (!runs->empty() &&
-                !(runs->size() == 1 && (*runs)[0][0] == "same"))
-              operations.push_back(
-                  Json::array({"items", now.name, std::move(*runs)}));
-            continue;
-          }
-        if (auto runs = itemRuns(*oldItems, *newItems)) {
+        auto runs = itemRuns(*oldItems, *newItems);
+        // Where the runs send many elements again, a value every element
+        // that has its key takes, as a document's identity in each of its
+        // locals, is set once and the runs read the rest.
+        if (!runs ||
+            putCount(*runs) >
+                ::neverd::limits::worker::kEnginePageDeltaPutsWithoutEach)
+          if (const auto each = eachOf(*oldItems, *newItems))
+            if (auto eachRuns = itemRuns(*oldItems, *newItems, &*each);
+                eachRuns && (!runs || putCount(*eachRuns) < putCount(*runs))) {
+              operations.push_back(Json::array({"each", now.name, *each}));
+              if (!(eachRuns->size() == 1 && (*eachRuns)[0][0] == "same"))
+                operations.push_back(
+                    Json::array({"items", now.name, std::move(*eachRuns)}));
+              continue;
+            }
+        if (runs) {
           operations.push_back(
               Json::array({"items", now.name, std::move(*runs)}));
           continue;

@@ -511,6 +511,9 @@ inline constexpr std::size_t kEngineMaxPreviousViewBytes = 32 * 1024 * 1024;
 /// A delta up to this size goes without weighing it against its page; a larger
 /// one goes only where it is under half the page.
 inline constexpr std::size_t kEngineSmallPageDeltaBytes = 4096;
+/// A list whose runs send up to this many elements again is not searched for
+/// a value every element that has its key takes (page_delta "each").
+inline constexpr std::size_t kEnginePageDeltaPutsWithoutEach = 4;
 inline constexpr int kEngineExecuteImplDecompileLimitSizeFieldDefault = 512;
 inline constexpr int kEngineExecuteImplDecompileLimitSizeFieldMax = 2048;
 inline constexpr int kEngineExecuteImplCfgViewportLayoutRevisionStringFieldMax =
