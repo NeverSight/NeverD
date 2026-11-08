@@ -35,6 +35,11 @@ def main():
     parser.add_argument("--base-commit", required=True)
     parser.add_argument("--samples", type=int, required=True)
     parser.add_argument("--repeats", type=int, required=True)
+    profile_text = Path(__file__).with_name("mips-bench.def").read_text()
+    parser.add_argument(
+        "--profile", action="append",
+        choices=re.findall(r"^NEVERD_[A-Z0-9_]+_BENCH_PROFILE\((\w+),", profile_text, re.M),
+        help="repeat for selected shared profiles; defaults to the four classic profiles")
     args = parser.parse_args()
     if not hasattr(os, "wait4") or args.samples <= 0 or args.repeats <= 0:
         parser.error("requires POSIX wait4 and positive sample/repetition counts")
@@ -57,7 +62,7 @@ def run(args, artifacts, toolchain_a):
     artifacts.write("samples.json", [])
     artifacts.write("summary.json", {"status": "running"})
     profile_text = Path(__file__).with_name("mips-bench.def").read_text()
-    profiles = re.findall(r"^NEVERD_MIPS_BENCH_PROFILE\((\w+),", profile_text, re.M)
+    profiles = args.profile or re.findall(r"^NEVERD_MIPS_BENCH_PROFILE\((\w+),", profile_text, re.M)
     stages = re.findall(r'^NEVERD_MIPS_BENCH_STAGE\(\w+, "(\w+)"\)', profile_text, re.M)
     binaries = {"A": args.baseline.resolve(), "B": args.candidate.resolve()}
     jobs = []

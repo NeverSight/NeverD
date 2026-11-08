@@ -22702,6 +22702,9 @@ from `neverd-dependency-inputs.json`, and JSON toolchain manifests with `compile
 `llvm`, `capstone` and `build` entries. Record exact versions/hashes, build flags
 and allocator selection in those manifests before each build; unequal inputs
 are refused. Run `--help` for explicit paths and repetition counts.
+The default measures the four classic profiles. Repeat `--profile` to select
+other profiles supported by both binaries, supplying the corresponding
+`PROFILE-unchanged.bin` files; unsupported baseline instructions are errors.
 
 Each baseline CLI must load its own matching SDK; the runner sets its library
 search path accordingly. It checks output identity for the selected `call`
