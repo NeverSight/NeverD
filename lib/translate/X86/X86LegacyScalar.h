@@ -41,6 +41,11 @@ enum class X86LegacyScalarOperation {
   ComplementFlag,
   Address,
   AdjustPrivilege,
+  StoreMachineStatus,
+  LoadMachineStatus,
+  ClearTaskSwitch,
+  ClearAccessControl,
+  SetAccessControl,
   Bound,
   Exchange,
   ExchangeAdd,
@@ -221,6 +226,8 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32);
 struct X86LegacyScalarResult : X86MemoryAccessResult {
   /// Successful branch decision, independent of target/fallthrough equality.
   bool TakenBranch = false;
+  /// Publish with the completed instruction, before any post-instruction trap.
+  std::optional<uint64_t> CR0;
 };
 
 llvm::Expected<X86LegacyScalarResult>

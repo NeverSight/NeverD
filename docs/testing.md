@@ -514,6 +514,28 @@ instruction chains and busy-write fault repair through Clang/NeverC O0/O2.
 Run these with both SDKs and qualified P/E cores, plus shared scalar,
 segment/query and ordinary system-state regressions.
 
+`LegacyMachineStatus/*` qualifies original protected SMSW/LMSW/CLTS in legacy
+paging and PAE. It compares the complete control bank, registers, flags,
+exceptions and RAM across code/operand/address sizes, all GPRs, low CR0 bits,
+ignored source bits, preserved control fields, CPL/UMIP, segment/page/alignment
+faults and original handler repair/retry. `OriginalMachineStatusAccessesAndTraps`
+uses real guest debug handlers to check exact word accesses and post-instruction
+CR0 publication. `X86LegacyMachineStatusTest.*` adds fixed expected values,
+backing resume, sticky PE and prefetch refusal of missing choices or malformed
+encodings. `X86LegacySourceTest.MachineStatus*` executes compiled state-producing
+and consuming chains, faults/retry and single-step traps with Clang and NeverC
+at O0/O2. Run both SDKs on the qualified P/E cores and the shared scalar,
+descriptor/selector and system-state regressions. FullCR0 is an explicit target
+choice, not a universal definition of SMSW's undefined high word. NeverC's
+descriptor-builtin harness also checks CLTS on i386 and x64; privileged native
+builtins have code-generation coverage there, while these protected CPU tests
+own the original instruction state/fault comparisons.
+The same native matrix qualifies CLAC/STAC flag preservation and #UD privilege
+checks in both code sizes, and the guest debug tests cover their TF traps.
+Software tests also bind a target without SMAP. Generated C composes
+STAC → supervisor read of a user page → CLAC → denied read, checking the actual
+page-fault frame and preservation of the earlier loaded value.
+
 `NeverDLLVMCValueTests --gtest_filter=LLVMCValues.X86BitString*` rejects
 weakened native bit-string declarations and executes all twelve LLVM-to-C
 projections with live/dead results. The original-instruction oracle compares

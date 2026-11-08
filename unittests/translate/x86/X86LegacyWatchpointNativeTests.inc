@@ -83,6 +83,34 @@ TEST_P(X86LegacyDebugNativeTest, OriginalIntegerExtensionReadWatchpoints) {
   RecordProperty("original_comparisons", Comparisons);
 }
 
+TEST_P(X86LegacyDebugNativeTest, OriginalMachineStatusAccessesAndTraps) {
+  if (!neverd::test::supportsX86KVMPrefault(KVM))
+    GTEST_SKIP() << "Data-watchpoint oracle requires KVM pre-fault memory";
+  for (bool Code32 : {false, true})
+    for (bool Stack32 : {false, true})
+      for (unsigned CPL : {0u, 3u})
+        for (unsigned Form = 0; Form != 5; ++Form)
+          for (unsigned Kind = 0; Kind != 6; ++Kind) {
+            Watchpoint W;
+            auto Bytes = neverd::test::legacyMachineStatusBytes(Form, Code32,
+                                                                true, true, -1);
+            if (Form < 2)
+              Bytes.back() = (Bytes.back() & ~7u) | 7; // [EDI].
+            W.Instructions = {Bytes};
+            W.MachineStatus = X86LegacyMachineStatusProfile::FullCR0;
+            W.CR0 = 0x8001001f;
+            W.Operand = 0xdeadfff4;
+            W.Flags = Kind == 2 ? 0x302 : 0x202;
+            W.DR7 = Kind == 1 || Kind == 5 ? 0x10401 : 0x30401;
+            W.DR[0] = Kind == 3 ? 0x8102 : Kind == 4 ? 0x8101 : 0x8100;
+            ASSERT_NO_FATAL_FAILURE(compare(Code32, Stack32, true, CPL, Nop,
+                                            0xffff0ff0, false, {}, {}, W));
+            if (HasFailure())
+              return;
+          }
+  RecordProperty("original_comparisons", Comparisons);
+}
+
 TEST_P(X86LegacyDebugNativeTest, OriginalSystemSelectorReadsAndBusyWrite) {
   if (!neverd::test::supportsX86KVMPrefault(KVM))
     GTEST_SKIP() << "Data-watchpoint oracle requires KVM pre-fault memory";

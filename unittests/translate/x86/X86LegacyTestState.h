@@ -34,7 +34,8 @@ protected:
                               X86LegacyReturnProfile::OrderedFrame};
   std::unique_ptr<X86PagedMemory> M;
 
-  void resetLegacyState() {
+  void resetLegacyState(const X86PagingFeatures &Features = {
+                            .PhysicalAddressBits = 32}) {
     S = {};
     O.Scalars = X86LegacyScalarProfile::OrderedRAM;
     O.Calls = X86LegacyCallProfile::StoreBeforeTargetLimit;
@@ -43,8 +44,7 @@ protected:
     RAM.Memory.push_back({0, MemoryPermission::Read | MemoryPermission::Write,
                           0, std::vector<uint8_t>(0x20000)});
     M = llvm::cantFail(X86PagedMemory::create(
-        RAM, {.PhysicalAddressBits = 32},
-        {.CR0 = 0x80010001, .CR3 = 0x10000, .RFlags = 2}));
+        RAM, Features, {.CR0 = 0x80010001, .CR3 = 0x10000, .RFlags = 2}));
     put(0x10000, 0x11007, GuestScalarWidth::I32);
     for (unsigned I = 0; I != 32; ++I)
       put(0x11000 + I * 4, I * 4096 | 7, GuestScalarWidth::I32);
