@@ -52,7 +52,7 @@ commentStates(std::string_view text, LiteralSyntax syntax,
   }
   return states;
 }
-bool identifier(const std::string &name) {
+bool identifier(std::string_view name) {
   if (name.empty() ||
       name.size() >
           ::neverd::limits::worker::kCodeEditsIdentifierNameSizeLimit ||
@@ -135,8 +135,9 @@ bool mayHoldToken(const std::string &text, const std::string &name) {
   return false;
 }
 
-std::vector<Token> tokens(const std::string &text) {
-  std::vector<Token> result;
+/// Calls \p emit with the begin and end of each token of \p text, as tokens()
+/// reads them.
+template <class Emit> void eachToken(const std::string &text, Emit &&emit) {
   for (std::size_t i = 0; i < text.size();) {
     if (std::isspace(static_cast<unsigned char>(text[i]))) {
       ++i;
@@ -206,8 +207,30 @@ std::vector<Token> tokens(const std::string &text) {
           i < text.size() &&
           (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_'))
         ++i;
-    result.push_back({begin, i, text.substr(begin, i - begin)});
+    emit(begin, i);
   }
+}
+
+std::vector<Token> tokens(const std::string &text) {
+  std::vector<Token> result;
+  eachToken(text, [&](std::size_t begin, std::size_t end) {
+    result.push_back({begin, end, text.substr(begin, end - begin)});
+  });
+  return result;
+}
+
+/// A token read in place.
+struct TokenView {
+  std::size_t begin, end;
+  std::string_view text;
+};
+/// tokens(), read in place.
+std::vector<TokenView> tokenViews(const std::string &text) {
+  std::vector<TokenView> result;
+  eachToken(text, [&](std::size_t begin, std::size_t end) {
+    result.push_back(
+        {begin, end, std::string_view(text).substr(begin, end - begin)});
+  });
   return result;
 }
 
@@ -272,7 +295,7 @@ bool aliasIdentifier(const std::string &name) {
       "nullptr"};
   return identifier(name) && !type(name) && !keywords.contains(name);
 }
-bool member(const std::vector<Token> &ts, std::size_t i) {
+template <class Tokens> bool member(const Tokens &ts, std::size_t i) {
   return i && (ts[i - 1].text == "." ||
                (i > 1 && ts[i - 2].text == "-" && ts[i - 1].text == ">") ||
                (i > 1 && ts[i - 2].text == ":" && ts[i - 1].text == ":"));
@@ -961,19 +984,28 @@ std::optional<Respelling>
 respelling(const std::string &text, std::size_t bodyStart,
            const std::vector<std::pair<std::size_t, std::size_t>> &sourceNames,
            const Json &sourceVariables, const Json &renamed) {
-  const auto ts = tokens(text);
-  std::set<std::string> identifiers;
+  const auto ts = tokenViews(text);
+  // The identifiers it spells, sorted as a set of them would be.
+  std::vector<std::string_view> identifiers;
+  identifiers.reserve(ts.size());
   for (const auto &token : ts)
     if (identifier(token.text))
-      identifiers.insert(token.text);
+      identifiers.push_back(token.text);
+  std::sort(identifiers.begin(), identifiers.end());
+  identifiers.erase(std::unique(identifiers.begin(), identifiers.end()),
+                    identifiers.end());
+  const auto spells = [&](std::string_view name) {
+    return std::binary_search(identifiers.begin(), identifiers.end(), name);
+  };
   // A name another is numbered after: the allocator steps around it, so a
   // render under other names numbers it otherwise.
   const auto numberedAfter = [&](const std::string &name) {
     const auto prefix = name + "_";
-    for (auto at = identifiers.lower_bound(prefix);
+    for (auto at = std::lower_bound(identifiers.begin(), identifiers.end(),
+                                    std::string_view(prefix));
          at != identifiers.end() && at->starts_with(prefix); ++at)
       if (at->find_first_not_of("0123456789", prefix.size()) ==
-          std::string::npos)
+          std::string_view::npos)
         return true;
     return false;
   };
@@ -982,7 +1014,7 @@ respelling(const std::string &text, std::size_t bodyStart,
     return mark != std::string::npos && mark + 1 < name.size() &&
            name.find_first_not_of("0123456789", mark + 1) ==
                std::string::npos &&
-           identifiers.contains(name.substr(0, mark));
+           spells(std::string_view(name).substr(0, mark));
   };
   // What the C reads as a name of the function and not this global, which only
   // a render tells apart.
@@ -991,11 +1023,41 @@ respelling(const std::string &text, std::size_t bodyStart,
     if (!variable.contains("address"))
       others.insert(variable.value("name", std::string()));
   const auto globals = declaredGlobals(text);
-  std::string folded = text;
-  std::transform(folded.begin(), folded.end(), folded.begin(), [](char c) {
-    return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  });
-  std::unordered_map<std::string, std::string> spellings;
+  // How often the text spells \p spelled, an address as hexAddress writes it
+  // ("0x" and lower case digits), in either case and not followed by another
+  // hexadecimal digit.
+  const auto spelledNumbers = [&](const std::string &spelled) {
+    const auto at = [&](std::size_t from) {
+      for (from = text.find(spelled[0], from);
+           from != std::string::npos && from + spelled.size() <= text.size();
+           from = text.find(spelled[0], from + 1)) {
+        std::size_t k = 1;
+        while (k < spelled.size() &&
+               std::tolower(static_cast<unsigned char>(text[from + k])) ==
+                   static_cast<unsigned char>(spelled[k]))
+          ++k;
+        if (k == spelled.size())
+          return from;
+      }
+      return std::string::npos;
+    };
+    std::size_t numbers = 0;
+    for (auto found = at(0); found != std::string::npos;
+         found = at(found + spelled.size()))
+      if (found + spelled.size() == text.size() ||
+          !std::isxdigit(
+              static_cast<unsigned char>(text[found + spelled.size()])))
+        ++numbers;
+    return numbers;
+  };
+  // Each name of data that moves and its new spelling, the first of each.
+  std::vector<std::pair<std::string, std::string>> spellings;
+  const auto spellingOf = [&](std::string_view name) {
+    return std::find_if(spellings.begin(), spellings.end(),
+                        [&](const auto &spelling) {
+                          return std::string_view(spelling.first) == name;
+                        });
+  };
   std::unordered_map<std::uint64_t, std::string> shown;
   std::vector<std::tuple<std::uint64_t, std::string, std::string>> movedNames;
   std::set<std::string> taken;
@@ -1009,36 +1071,31 @@ respelling(const std::string &text, std::size_t bodyStart,
     if (global == globals.end() || !global->plain ||
         std::count_if(globals.begin(), globals.end(), isIt) != 1 ||
         others.contains(global->name) || numberedAfter(global->name) ||
-        numbered(global->name) || !identifier(name) ||
-        identifiers.contains(name) || others.contains(name) ||
-        numberedAfter(name) || !taken.insert(name).second)
+        numbered(global->name) || !identifier(name) || spells(name) ||
+        others.contains(name) || numberedAfter(name) ||
+        !taken.insert(name).second)
       return std::nullopt;
     // A constant of the address that printed as a number is one a name would
     // have the code spell as the object.
-    const auto spelled = hexAddress(address);
-    std::size_t numbers = 0;
-    for (auto at = folded.find(spelled); at != std::string::npos;
-         at = folded.find(spelled, at + spelled.size()))
-      if (at + spelled.size() == folded.size() ||
-          !std::isxdigit(
-              static_cast<unsigned char>(folded[at + spelled.size()])))
-        ++numbers;
-    if (numbers != 1)
+    if (spelledNumbers(hexAddress(address)) != 1)
       return std::nullopt;
-    spellings.emplace(global->name, name);
+    if (spellingOf(global->name) == spellings.end())
+      spellings.emplace_back(global->name, name);
     shown.emplace(address, name);
     movedNames.emplace_back(address, global->name, name);
   }
   std::vector<Replacement> replacements;
-  std::unordered_map<std::string, std::size_t> seen, inPrelude;
+  // By spelling: its tokens, and those of them in the prelude.
+  std::vector<std::size_t> seen(spellings.size()), inPrelude(spellings.size());
   std::unordered_map<std::string, std::size_t> addressed;
   for (std::size_t i = 0; i < ts.size() && ts[i].begin < bodyStart; ++i)
     if (ts[i].text == "&" && i + 1 < ts.size() && identifier(ts[i + 1].text) &&
         (!i || ts[i - 1].text != "&"))
-      addressed.emplace(ts[i + 1].text, 0);
+      addressed.emplace(std::string(ts[i + 1].text), 0);
   if (!addressed.empty()) {
     for (std::size_t i = 0; i < ts.size() && ts[i].begin < bodyStart; ++i)
-      if (const auto name = addressed.find(ts[i].text); name != addressed.end())
+      if (const auto name = addressed.find(std::string(ts[i].text));
+          name != addressed.end())
         ++name->second;
     // An initializer may take the address of an object by a symbol the page
     // declares nothing by, which a user's name of it replaces.
@@ -1048,17 +1105,18 @@ respelling(const std::string &text, std::size_t bodyStart,
   }
   for (std::size_t i = 0; i < ts.size(); ++i) {
     const auto &token = ts[i];
-    const auto to = spellings.find(token.text);
+    const auto to = spellingOf(token.text);
     if (to == spellings.end())
       continue;
-    ++seen[token.text];
+    const auto index = static_cast<std::size_t>(to - spellings.begin());
+    ++seen[index];
     if (member(ts, i))
       continue;
     if (token.begin < bodyStart)
-      ++inPrelude[token.text];
+      ++inPrelude[index];
     else if (i) {
       // A label, or a declaration of the body's.
-      const auto &before = ts[i - 1].text;
+      const auto before = ts[i - 1].text;
       if ((identifier(before) && before != "return" && before != "sizeof" &&
            before != "else" && before != "do" && before != "case") ||
           (i + 1 < ts.size() && ts[i + 1].text == ":"))
@@ -1069,9 +1127,10 @@ respelling(const std::string &text, std::size_t bodyStart,
   const auto word = [](char c) {
     return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
   };
-  for (const auto &[from, to] : spellings) {
+  for (std::size_t index = 0; index < spellings.size(); ++index) {
+    const auto &from = spellings[index].first;
     // The declaration alone, and no comment or string that spells it.
-    if (inPrelude[from] != 1)
+    if (inPrelude[index] != 1)
       return std::nullopt;
     std::size_t spelled = 0;
     for (auto at = text.find(from); at != std::string::npos;
@@ -1079,7 +1138,7 @@ respelling(const std::string &text, std::size_t bodyStart,
       if ((at == 0 || !word(text[at - 1])) &&
           (at + from.size() == text.size() || !word(text[at + from.size()])))
         ++spelled;
-    if (spelled != seen[from])
+    if (spelled != seen[index])
       return std::nullopt;
   }
   std::vector<std::pair<std::size_t, std::size_t>> moved;
