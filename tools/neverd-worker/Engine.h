@@ -570,9 +570,22 @@ private:
                                     std::size_t offset, std::size_t limit,
                                     const Json &options = Json::object(),
                                     EncodedPayload *encoded = nullptr,
-                                    const std::string *ifNoneMatch = nullptr);
+                                    const std::string *ifNoneMatch = nullptr,
+                                    bool pageDelta = false);
   std::uint64_t namedViewIds_ = 0;
   std::string instanceTag_;
+  /// Documents views had before they were built again, which pages clients
+  /// keep may come from (page_delta): the newest last.
+  std::deque<std::shared_ptr<const NamedView>> previousViews_;
+  std::size_t previousViewBytes_ = 0;
+  void keepPreviousView(std::shared_ptr<const NamedView> document);
+  /// The page lines [start, end) of \p document make, without what a reply
+  /// says of the project or its name.
+  Json namedViewLines(const NamedView &document, std::size_t start,
+                      std::size_t end, bool first) const;
+  /// The page a client names with \p etag, where this worker still has the
+  /// document it came from.
+  std::optional<Json> keptClientPage(const std::string &etag) const;
   /// Function-list order (indices into Listing::functionRows) for the last
   /// filter, sort and listing generation.
   std::string functionOrderKey_;
