@@ -1133,10 +1133,10 @@ void Engine::settleNamedViews() {
 
 void Engine::keepNamedViewsThrough(std::uint64_t address,
                                    std::vector<std::string> names,
-                                   bool pagesStale, bool comment) {
+                                   bool pagesStale, ViewEditKind kind) {
   if (viewEdits_.size() == ::neverd::limits::worker::kEngineMaxViewEdits)
     viewEdits_.pop_front();
-  viewEdits_.push_back({address, std::move(names), pagesStale, comment});
+  viewEdits_.push_back({address, std::move(names), pagesStale, kind});
   ++viewEditCount_;
 }
 
@@ -1218,8 +1218,12 @@ void Engine::readViewEdits(const std::string &sourceKey) {
         continue;
       }
       decorated = true;
-      (edit->comment ? document.commentsReached : document.othersReached) =
-          true;
+      if (edit->kind == ViewEditKind::Comment)
+        document.commentsReached = true;
+      else if (edit->kind == ViewEditKind::FunctionName)
+        document.renamedFunctions.push_back(edit->address);
+      else
+        document.othersReached = true;
     }
   if (stale) {
     unindexNamedView(position);
@@ -1473,13 +1477,20 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
       (!(*cached->second)->original.empty() ||
        !(*cached->second)->enginePages.empty()))
     reused = *cached->second;
-  // Comments alone reached it since decoration, under the same names: they
+  // Comments and functions' names alone reached it since decoration: they
   // are written into a copy of it as decoration writes them.
-  if (reused && sourceView && !recovery && reused->commentsReached &&
-      !reused->othersReached) {
+  if (reused && sourceView && !recovery && !reused->othersReached &&
+      (reused->commentsReached || !reused->renamedFunctions.empty())) {
     Json full = reused->value;
-    if (CodeEdits::takeComments(full, address, reused->definitionLine,
-                                imageFacts())) {
+    const bool named = !reused->renamedFunctions.empty();
+    if ((!named || CodeEdits::takeFunctionNames(full, reused->renamedFunctions,
+                                                imageFacts())) &&
+        (!reused->commentsReached ||
+         CodeEdits::takeComments(full, address, reused->definitionLine,
+                                 imageFacts()))) {
+      // A page's own statement of a function's name, as a kept page's.
+      if (named)
+        currentNamesInView(full);
       auto document = std::make_shared<NamedView>();
       document->id = ++namedViewIds_;
       document->enginePages = reused->enginePages;
@@ -1488,7 +1499,8 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
       document->reads = reused->reads;
       document->readsKnown = reused->readsKnown;
       document->definitionLine = reused->definitionLine;
-      ++commentPatches_;
+      commentPatches_ += reused->commentsReached;
+      namePatches_ += named;
       return keepNamedView(std::move(document), std::move(full), lookupKey,
                            sourceKey, cacheKey() == lookupKey);
     }
@@ -2614,6 +2626,7 @@ Json Engine::metadata() const {
           {"listing_facts", listingFactsJson()},
           {"listing_name_builds", listing_ ? listing_->nameBuilds() : 0},
           {"named_view_comment_patches", commentPatches_},
+          {"named_view_name_patches", namePatches_},
           {"dirty", dirty_},
           // How the file was read: for a binary file, its processor,
           // placement and platform, and whether detection chose the platform.
@@ -5789,7 +5802,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     forgetGraphsAndText();
     imageFacts_.commented(address, text);
     // Decoration writes it where the document's rows state its address.
-    keepNamedViewsThrough(address, {}, false, true);
+    keepNamedViewsThrough(address, {}, false, ViewEditKind::Comment);
     ++revision_;
     namedViewsTakeRevision(true);
     return {{"address", hexAddress(address)},
@@ -5893,7 +5906,8 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     if (functionInPlace) {
       // Decoration reads a function's name.
       functionNamesChanged(false);
-      keepNamedViewsThrough(address, spellings, false);
+      keepNamedViewsThrough(address, spellings, false,
+                            ViewEditKind::FunctionName);
     } else if (dataInPlace) {
       // The pages of what read it spell a name of data.
       imageFactsRevision_.reset();

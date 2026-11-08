@@ -930,6 +930,9 @@ How the rest of the frame is drawn depends on the system:
 - On macOS the window keeps its frame and traffic lights, and its title bar
   turns transparent with the workbench's own drawn under it.
 
+Scrollbars that touch a window edge keep their full clickable track and draggable
+thumb. The adjacent frame and outer shadow still resize the window.
+
 To keep the system's whole frame instead, set `nativeTitleBar=true` in the
 `[ui]` group of the NeverD settings (`~/.config/NeverSight/NeverD.conf` on
 Linux); the workbench reads it at startup.

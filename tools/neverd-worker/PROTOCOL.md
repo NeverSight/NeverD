@@ -1053,8 +1053,9 @@ what its reference scan found there too, and `background.scan_kept` says this
 session's index was finished from that.
 `metadata.listing_name_builds` counts how many times the listing has read its names
 again; a function's new name usually does not.  `metadata.named_view_comment_patches`
-counts the documents written from the one a view had with the image's comments taken
-into it, where comments alone reached it since it was decorated.
+and `metadata.named_view_name_patches` count the documents written from the one a view
+had with the image's comments, or functions' new names, taken into it, where those alone
+reached it since it was decorated.
 
 Source pages with edit metadata carry `code_names`, half-open UTF-8 spans in
 the complete displayed document. An address target has `kind:"address"`,

@@ -62,6 +62,15 @@ public:
   static bool takeComments(Json &view, std::uint64_t function,
                            std::optional<std::size_t> definitionLine,
                            const ImageFacts &image);
+  /// A view decorate wrote, after the functions at \p renamed took the names
+  /// \p image gives them: each name the view links to one of them shows its
+  /// new name, and the spans after it move, as decorate would write them.
+  /// False, with the view as it was, where one of them gave its name up or the
+  /// view spells a new name otherwise, which may lead there now; the view is
+  /// then decorated again.
+  static bool takeFunctionNames(Json &view,
+                                const std::vector<std::uint64_t> &renamed,
+                                const ImageFacts &image);
   /// Give a complete source view a source name wherever its code spells an
   /// identifier its identifier_symbols list (`fini`, which C calls the
   /// function `_fini`), so the identifier finds the function and reads as its
