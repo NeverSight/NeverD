@@ -685,8 +685,20 @@ class Parser {
 public:
   Parser(TokenList Tokens, TypeLibrary &Library, const ParseOptions &Options,
          ParseResult &Result)
-      : Tokens(std::move(Tokens)), Library(Library), Options(Options),
-        Result(Result), Cpp(Options.Lang == Language::Cpp) {}
+      : Parser(std::move(Tokens), Library, &Library, Options, Result) {}
+  struct ReadOnly {};
+  /// A parse that reads \p Library and changes nothing in it: the prototypes
+  /// the text declares are the parse's own (readPrototypes()), and one that
+  /// would define a type says so (definesTypes()).
+  Parser(TokenList Tokens, const TypeLibrary &Library, ReadOnly,
+         const ParseOptions &Options, ParseResult &Result)
+      : Parser(std::move(Tokens), Library, nullptr, Options, Result) {}
+
+  const llvm::StringMap<std::shared_ptr<const FunctionDef>> &
+  readPrototypes() const {
+    return ReadPrototypes;
+  }
+  bool definesTypes() const { return DefinesTypes; }
 
   void run() {
     while (peek().Kind != TokenKind::End) {
@@ -704,11 +716,37 @@ public:
            Named->Kind == TypeKind::Enum)) {
         LocalType Marked = *Named;
         Marked.TypedefNamed = true;
-        Library.define(std::move(Marked));
+        defineType(std::move(Marked));
       }
   }
 
 private:
+  Parser(TokenList Tokens, const TypeLibrary &Library, TypeLibrary *Writes,
+         const ParseOptions &Options, ParseResult &Result)
+      : Tokens(std::move(Tokens)), Library(Library), Writes(Writes),
+        Options(Options), Result(Result), Cpp(Options.Lang == Language::Cpp) {}
+
+  void defineType(LocalType Type) {
+    if (!Writes) {
+      DefinesTypes = true;
+      return;
+    }
+    Writes->define(std::move(Type));
+  }
+  void declarePrototype(std::string Name,
+                        std::shared_ptr<const FunctionDef> Function) {
+    if (!Writes) {
+      ReadPrototypes[Name] = std::move(Function);
+      return;
+    }
+    Writes->definePrototype(std::move(Name), std::move(Function));
+  }
+  const FunctionDef *prototypeNamed(llvm::StringRef Name) const {
+    if (const auto Own = ReadPrototypes.find(Name); Own != ReadPrototypes.end())
+      return Own->second.get();
+    return Library.findPrototype(Name);
+  }
+
   // Tokens.
   const Token &peek(size_t Ahead = 0) const {
     return Tokens[std::min(Pos + Ahead, Tokens.size() - 1)];
@@ -973,14 +1011,14 @@ private:
     // An earlier declaration of the same standing: the routine's own, or
     // another assembler name's where no own one is.
     if (NotedPrototypes.count(Name) && (Alias || Own))
-      if (const FunctionDef *Earlier = Library.findPrototype(Name);
+      if (const FunctionDef *Earlier = prototypeNamed(Name);
           Earlier && !passesAlike(*Earlier, *Function)) {
         fail(At, "'" + Name + "' is declared again with another type");
         return false;
       }
     if (!Alias)
       OwnNames.insert(Name);
-    Library.definePrototype(Name, std::move(Function));
+    declarePrototype(Name, std::move(Function));
     note(Result.Prototypes, NotedPrototypes, Name);
     return true;
   }
@@ -1180,7 +1218,7 @@ private:
         Local.Enum = Type->Enum;
       else
         Local.Record = Type->Record;
-      Library.define(std::move(Local));
+      defineType(std::move(Local));
       note(Result.Types, NotedTypes, Name);
       Named = makeNamed(Name, Kind);
     } else {
@@ -1264,7 +1302,7 @@ private:
       Local.Kind = TypeKind::Typedef;
       Local.Target = Type;
     }
-    Library.define(std::move(Local));
+    defineType(std::move(Local));
     note(Result.Types, NotedTypes, Name);
   }
 
@@ -1345,9 +1383,8 @@ private:
         if (!expect("(", "after " + W.str()))
           return false;
         const Token Of = take();
-        const FunctionDef *Routine = Of.Kind == TokenKind::Word
-                                         ? Library.findPrototype(Of.Text)
-                                         : nullptr;
+        const FunctionDef *Routine =
+            Of.Kind == TokenKind::Word ? prototypeNamed(Of.Text) : nullptr;
         if (Routine)
           Spec.Type = makeFunction(std::make_shared<FunctionDef>(*Routine));
         else if (Of.Kind == TokenKind::Word && Library.find(Of.Text))
@@ -1677,7 +1714,7 @@ private:
         Def->Union = Union;
         Def->Defined = false;
         Declared.Record = std::move(Def);
-        Library.define(std::move(Declared));
+        defineType(std::move(Declared));
         note(Result.Types, NotedTypes, Name);
       }
       return makeNamed(Name, Kind);
@@ -1723,7 +1760,7 @@ private:
     Local.Origin = Options.Origin;
     Local.Header = Header;
     Local.Record = std::move(Def);
-    Library.define(std::move(Local));
+    defineType(std::move(Local));
     note(Result.Types, NotedTypes, Name);
     return makeNamed(Name, Kind);
   }
@@ -1873,7 +1910,7 @@ private:
         auto Def = std::make_shared<EnumDef>();
         Def->Underlying = Underlying;
         Declared.Enum = std::move(Def);
-        Library.define(std::move(Declared));
+        defineType(std::move(Declared));
       }
       return makeNamed(Name, TypeKind::Enum);
     }
@@ -1934,7 +1971,7 @@ private:
     Local.Origin = Options.Origin;
     Local.Header = Header;
     Local.Enum = std::move(Def);
-    Library.define(std::move(Local));
+    defineType(std::move(Local));
     note(Result.Types, NotedTypes, Name);
     return makeNamed(Name, TypeKind::Enum);
   }
@@ -2556,7 +2593,13 @@ private:
 
   TokenList Tokens;
   size_t Pos = 0;
-  TypeLibrary &Library;
+  const TypeLibrary &Library;
+  /// The library definitions go to; none where the parse only reads.
+  TypeLibrary *Writes;
+  /// What a parse that only reads declares, and whether it would define a
+  /// type.
+  llvm::StringMap<std::shared_ptr<const FunctionDef>> ReadPrototypes;
+  bool DefinesTypes = false;
   const ParseOptions &Options;
   ParseResult &Result;
   /// The names Result lists.
@@ -2632,10 +2675,22 @@ FunctionDeclaration parseFunctionDeclaration(llvm::StringRef Source,
   llvm::StringSaver Spellings(Storage);
   TokenList Tokens = Lexer(Text, Result.Problems, Spellings).run();
   if (Result.Problems.empty()) {
-    TypeLibrary Scratch(Library);
     ParseOptions One = Options;
     One.KeepGoing = false;
-    Parser(std::move(Tokens), Scratch, One, Result).run();
+    // A declaration that only uses types reads against the library itself;
+    // one that would define a type reads again on a copy of its own, for the
+    // same problems as always.
+    Parser Reading(Tokens, Library, Parser::ReadOnly{}, One, Result);
+    Reading.run();
+    const llvm::StringMap<std::shared_ptr<const FunctionDef>> *Declares =
+        &Reading.readPrototypes();
+    std::optional<TypeLibrary> Scratch;
+    if (Reading.definesTypes()) {
+      Result = ParseResult();
+      Scratch.emplace(Library);
+      Parser(std::move(Tokens), *Scratch, One, Result).run();
+      Declares = &Scratch->prototypes();
+    }
     if (Result.Problems.empty()) {
       if (Result.Prototypes.size() != 1)
         Result.Problems.push_back(
@@ -2655,7 +2710,7 @@ FunctionDeclaration parseFunctionDeclaration(llvm::StringRef Source,
                        "types first"});
       else {
         Declared.Name = Result.Prototypes.front();
-        Declared.Function = Scratch.prototypes().lookup(Declared.Name);
+        Declared.Function = Declares->lookup(Declared.Name);
         // A name C lets a declaration use before it is defined, such as
         // `struct S *`, must still be one of the library's.
         LocalType Signature;

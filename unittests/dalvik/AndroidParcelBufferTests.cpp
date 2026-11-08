@@ -366,6 +366,114 @@ TEST(AndroidParcelBufferTest,
                                                 "free", "release 10"}));
 }
 
+TEST(AndroidParcelBufferTest, OverwritesReleaseCurrentHandlesInReverseOrder) {
+  BufferState s;
+  const auto id = s.obtain();
+  auto arena = remoteObjects();
+  s.install(id, s.borrowed(arena, {0, 24, 48}));
+  ASSERT_EQ(s.call("setDataCapacity", "(I)V", id, {100}).stop,
+            ExecutionStop::Returned);
+  s.seek(id, 0);
+  ASSERT_EQ(s.call("writeInt", "(I)V", id, {0}).stop, ExecutionStop::Returned);
+  s.seek(id, 32);
+  ASSERT_EQ(s.call("writeInt", "(I)V", id, {9}).stop, ExecutionStop::Returned);
+  ASSERT_EQ(s.call("recycle", "()V", id).stop, ExecutionStop::Returned);
+  EXPECT_EQ(s.events, (std::vector<std::string>{"acquire 9", "acquire 10",
+                                                "free", "release 9"}));
+  // The overwritten handle 10 keeps its original acquisition. Copying the
+  // original records again must acquire only the now-retired handle 9.
+  const auto reused = s.obtain();
+  s.install(reused, s.borrowed(arena, {0, 24, 48}));
+  ASSERT_EQ(s.call("setDataCapacity", "(I)V", reused, {100}).stop,
+            ExecutionStop::Returned);
+  EXPECT_EQ(s.events,
+            (std::vector<std::string>{"acquire 9", "acquire 10", "free",
+                                      "release 9", "acquire 9", "free"}));
+  ASSERT_EQ(s.call("recycle", "()V", reused).stop, ExecutionStop::Returned);
+  EXPECT_EQ(s.events.back(), "release 9");
+}
+
+TEST(AndroidParcelBufferTest, ShorterReplyReleasesRecordsBeforeReplacingBytes) {
+  BufferState s;
+  const auto id = s.obtain();
+  auto arena = remoteObjects();
+  s.install(id, s.borrowed(arena, {0, 24, 48}));
+  ASSERT_EQ(s.call("setDataCapacity", "(I)V", id, {100}).stop,
+            ExecutionStop::Returned);
+  std::vector<uint8_t> short_reply{42, 0, 0, 0};
+  s.install(id, s.borrowed(short_reply));
+  EXPECT_EQ(s.heap.get(id)->Bytes, short_reply);
+  EXPECT_EQ(s.events,
+            (std::vector<std::string>{"acquire 9", "acquire 10", "free",
+                                      "release 10", "release 9"}));
+  ASSERT_EQ(s.call("recycle", "()V", id).stop, ExecutionStop::Returned);
+  EXPECT_EQ(s.events.back(), "free");
+}
+
+TEST(AndroidParcelBufferTest, UnmarshallingReleasesDroppedOffsetsForwards) {
+  for (unsigned length : {0, 4}) {
+    SCOPED_TRACE(length);
+    BufferState s;
+    const auto id = s.obtain();
+    const auto records = remoteObjects();
+    std::vector<uint8_t> arena(8);
+    arena.insert(arena.end(), records.begin(), records.begin() + 48);
+    s.install(id, s.borrowed(arena, {8, 32}));
+    ASSERT_EQ(s.call("setDataCapacity", "(I)V", id, {80}).stop,
+              ExecutionStop::Returned);
+    EXPECT_EQ(s.events,
+              (std::vector<std::string>{"acquire 10", "acquire 9", "free"}));
+    const auto array = s.heap.allocateArray("[B", 4);
+    ASSERT_EQ(
+        s.call("unmarshall", "([BII)V", id, {array->Identity, 0, length}).stop,
+        ExecutionStop::Returned);
+    EXPECT_EQ(s.events,
+              (std::vector<std::string>{"acquire 10", "acquire 9", "free",
+                                        "release 9", "release 10"}));
+    EXPECT_EQ(s.heap.get(id)->Bytes, std::vector<uint8_t>(length));
+    ASSERT_EQ(s.call("recycle", "()V", id).stop, ExecutionStop::Returned);
+    EXPECT_EQ(s.events.size(), 5u);
+  }
+}
+
+TEST(AndroidParcelBufferTest, BorrowedOverwriteUsesPermissionsAndCurrentBytes) {
+  for (bool writable : {false, true}) {
+    SCOPED_TRACE(writable);
+    BufferState s;
+    const auto id = s.obtain();
+    auto arena = remoteObjects();
+    auto reply = s.borrowed(arena, {0, 24, 48});
+    reply.write = [&](uint64_t offset, std::span<const uint8_t> bytes) {
+      s.events.push_back("write");
+      EXPECT_EQ(offset, 24u);
+      if (!writable)
+        return ExecutionResult{
+            ExecutionStop::Invalid, 0, {}, "read-only arena"};
+      std::copy(bytes.begin(), bytes.end(), arena.begin() + offset);
+      return ExecutionResult{};
+    };
+    s.install(id, std::move(reply));
+    s.seek(id, 24);
+    auto result = s.call("writeInt", "(I)V", id, {0});
+    EXPECT_EQ(result.stop,
+              writable ? ExecutionStop::Returned : ExecutionStop::Invalid);
+    EXPECT_EQ(s.call("dataPosition", "()I", id).value, writable ? 28u : 24u);
+    if (writable) {
+      ASSERT_EQ(s.call("setDataCapacity", "(I)V", id, {100}).stop,
+                ExecutionStop::Returned);
+      EXPECT_EQ(s.heap.get(id)->Bytes, arena);
+      EXPECT_EQ(s.events,
+                (std::vector<std::string>{"write", "acquire 9", "free"}));
+    } else
+      EXPECT_EQ(result.diagnostic, "read-only arena");
+    ASSERT_EQ(s.call("recycle", "()V", id).stop, ExecutionStop::Returned);
+    EXPECT_EQ(s.events, writable
+                            ? (std::vector<std::string>{"write", "acquire 9",
+                                                        "free", "release 9"})
+                            : (std::vector<std::string>{"write", "free"}));
+  }
+}
+
 TEST(AndroidParcelBufferTest,
      CopyRetainsLocalAssociationAfterOriginalParcelRetires) {
   BufferState s;

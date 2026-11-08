@@ -375,6 +375,46 @@ TEST(TypeParse, ReportsForwardRecordsWithoutInventingTheirLayout) {
   EXPECT_EQ(Restored.findPrototype("Use")->Params.size(), 2u);
 }
 
+TEST(TypeParse, ADeclarationReadsItsOwnPrototypeAndLeavesTheLibrarys) {
+  const TypeLibrary Library = parsed(R"(
+    typedef struct _DEV { unsigned short Type, Size; } DEV, *PDEV;
+    int Dispatch(void);
+  )");
+  const FunctionDef *Before = Library.findPrototype("Dispatch");
+  const LocalType *Dev = Library.find("_DEV");
+  ASSERT_NE(Before, nullptr);
+  ASSERT_NE(Dev, nullptr);
+  // The text's own prototype answers its name, not the library's of it.
+  const FunctionDeclaration Read =
+      parseFunctionDeclaration("long Dispatch(PDEV Device)", Library);
+  ASSERT_TRUE(Read.ok()) << Read.Problems.front().Message;
+  ASSERT_EQ(Read.Function->Params.size(), 1u);
+  EXPECT_EQ(Library.findPrototype("Dispatch"), Before);
+  EXPECT_TRUE(Before->Params.empty());
+  // A routine the text declares twice reads against its first declaration.
+  const FunctionDeclaration Twice =
+      parseFunctionDeclaration("int Twice(void); long Twice(int x)", Library);
+  ASSERT_FALSE(Twice.ok());
+  EXPECT_NE(Twice.Problems.front().Message.find("declared again"),
+            std::string::npos)
+      << Twice.Problems.front().Message;
+  // One that defines a type reads as it always did, the type defined, and
+  // the library keeps its own.
+  const FunctionDeclaration Defines =
+      parseFunctionDeclaration("int f(struct _DEV { int a; } *d)", Library);
+  ASSERT_FALSE(Defines.ok());
+  EXPECT_EQ(Defines.Problems.front().Message,
+            "the declaration defines _DEV again; a function's declaration "
+            "only uses types");
+  const FunctionDeclaration Measures = parseFunctionDeclaration(
+      "int g(struct S2 { int a; } x, char b[sizeof(struct S2)])", Library);
+  ASSERT_FALSE(Measures.ok());
+  EXPECT_EQ(Measures.Problems.front().Message,
+            "S2 is not a local type; declare it among the local types first");
+  EXPECT_EQ(Library.find("_DEV"), Dev);
+  EXPECT_EQ(Library.find("S2"), nullptr);
+}
+
 TEST(TypeParse, ReadsOneFunctionsDeclarationAgainstTheLibrary) {
   // IDA's Y: one declaration, its semicolon optional, of the library's types.
   const TypeLibrary Library = parsed(R"(

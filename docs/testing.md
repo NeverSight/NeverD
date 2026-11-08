@@ -1890,6 +1890,36 @@ Apple PAC/CPA2 execution, signed unwinding and exact fault PC/full ESR remain
 outside this qualification. Generated products are removed after their hashes
 and results are recorded; canonical model inputs and necessary diagnostics remain.
 
+
+The [recovered-call receipt](evidence/arm64e-recovered-call-faults-2026-11-08.json)
+extends the strict exception-class check to 36 complete recovered fixed C
+prototypes: scalar, 128-bit integer, direct record and HFA values, including
+register-bank exhaustion and packed stack arguments. NativeAnalysis fixtures
+use no analyst call-site permission. Their 900 unchanged Mach-O objects pass
+30 controlled PAC guests across LLVM and HighC/LLVMC O0/O2, EL0/EL1 and all
+four CPTA control combinations: 21,600 valid pairs and 51,840 bad-signature
+pairs, with zero exception-class differences. The 1,625 explicit-prototype
+objects and 25 original-x8 objects remain byte-identical to their earlier
+qualified inputs; those profiles are not re-executed by this result.
+The selected Release owner regression records 861 passes and 26 explicit
+host/toolchain skips across 887 instances. One parallel timeout passes serially
+in the unchanged 120-second limit. The revised aggregate group adds 69 passing
+CTest instances; the receipt preserves the original failure and its resolution.
+The environment's `recovered_calls.py` requires its own exact 36-test report
+and rejects an explicit-prototype report substituted for it. This qualifies
+transport of an established recovered ABI, not automatic recovery accuracy.
+The authenticated native bridge explicitly rejects full 128-bit SIMD carriers,
+indirect by-value parameters and hidden results until their transport is proved.
+
+`MachOArm64eDependencies` additionally verifies multi-start pages for all six
+supported arm64e chain formats and ordinary 64-bit chains. It checks complete
+signing/import/slot identity, unterminated or reused overflow entries,
+duplicate and partially overlapping storage, malformed page bounds and
+unowned table data. This establishes dependency preservation, not new
+pointer signing or authenticated whole-image emission. The expanded Swift
+aggregate regression checks all logical return fields and separately observes
+full floating registers so their unknown upper lanes cannot become zeros.
+
 `ImmutableNativeCalls.Generated*` checks ordinary and loop-frame image
 publication after dead private reads and their initializers disappear. The
 relocation validator still rejects unbound live image addresses.
@@ -16273,7 +16303,11 @@ compares 36 complete public report pairs, including dynamic proxy `key:null`.
 `AndroidLocalBinderTest.*` checks independent strong-object wire bytes, null
 metadata, holder weak-cache replacement, shared ownership across Parcels,
 unmarshalling reference retirement, DEX subclass construction, native service
-admission and deferred synchronous release notifications.
+admission and deferred synchronous release notifications. Literal overwrite
+controls cover partial invalid tags, null pointers, changed cookies, duplicate
+offset acquisitions and releases, foreign release cookies, and lazy sorting of
+non-append metadata. Unmarshalling retains its explicit boundary for unsorted
+offsets and releases fully dropped records in native forward order.
 `AndroidJNI.BinderLocalObjectsAndOwnedParcelWritesUseSharedTransport` exports
 local Java objects through the shared Linux driver, echoes them as the original
 Java objects, and writes a returned remote proxy alongside null and handle zero.
@@ -16281,13 +16315,16 @@ The multi-object case replaces an expired weak cache before export, spans native
 read buffers and checks pointer/cookie ACK ordering. Ordinary/V/A forms exercise
 altered holder permissions, same-address
 mapping replacement, unconstructed objects, borrowed strong-write growth and
-non-append metadata boundaries. The matching
+successful repeated-offset writes followed by recycle and reuse. The matching
 `ProcessPublic.AndroidBinderLocalWritesMatchSDKAndCLI` compares 42 full report
 pairs at O0/O2. These tests do not claim local transaction callback dispatch.
 `AndroidParcelBufferTest.*` checks literal native capacities, live byte copies,
 capacity no-ops, protected in-place writes, reference acquisition before free,
 duplicate handles shared across copies, Java proxy promotion, local identity
 lifetime, retained `unmarshall` metadata and bounded storage reservations.
+Overwrite controls verify current-handle release order, retained old references,
+borrowed mapping permissions, acquisition from changed live bytes, and release
+of a long old reply before replacing it with a shorter buffer.
 `AndroidJNI.ParcelBorrowedRepliesGrowWithSharedBinderOwnership` exercises
 ordinary/V/A calls through real guest peers: automatic/explicit growth, arena
 slot reuse, scalar and strong writes, native-only remote handle retention and
@@ -16307,7 +16344,9 @@ messages, retained tail bytes, unknown-runtime identity rethrow, checked/null
 cause boundaries, and virtual native message suspension/failure. Incoming
 exception tests check native reply lifetime and default statistics. The native
 peer checks three exception replies followed by ping, including untouched scalar
-tails; object overlap remains an explicit metadata-mutation stop.
+tails. The overlapping-object exception reaches the shared driver translation
+boundary with its original offset table and one completed BinderCallsStats
+entry; neither the table nor the original acquisition is silently discarded.
 `AndroidBinderDispatchTest` checks local and incoming Java dispatch, protected
 super calls and virtual descriptor overrides, exception cursor order, native
 continuation tokens, separate wrapper-pool reuse, reply-ack buffer lifetime,

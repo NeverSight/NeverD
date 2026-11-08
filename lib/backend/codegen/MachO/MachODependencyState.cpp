@@ -23,6 +23,7 @@
 #include "llvm/Support/SHA256.h"
 
 #include <cstddef>
+#include <iterator>
 #include <set>
 
 namespace neverd {
@@ -525,6 +526,9 @@ struct Reader {
                        F.imports_offset))
       return fail("invalid chained segment count");
     std::vector<std::pair<uint64_t, uint64_t>> Ranges;
+    std::set<uint64_t> ChainSlots;
+    constexpr size_t StartOffset =
+        offsetof(dyld_chained_starts_in_segment, page_start);
     for (unsigned I = 0; I < Count; ++I) {
       const auto Relative =
           readLE<uint32_t>(C.data() + F.starts_offset + 4 + I * 4);
@@ -543,14 +547,12 @@ struct Reader {
           (Format != DYLD_CHAINED_PTR_64 &&
            Format != DYLD_CHAINED_PTR_64_OFFSET && !Arm64e) ||
           (Arm64e && State.CPUType != CPU_TYPE_ARM64) ||
-          (Size != 22 + Pages * 2 &&
-           Size != llvm::alignTo(22 + Pages * 2, 8)) ||
+          Size < StartOffset + Pages * sizeof(uint16_t) ||
+          (Size - StartOffset) % sizeof(uint16_t) ||
           !rangeInBounds(O, Size, F.imports_offset) ||
           readLE<uint32_t>(S + 16) || Segments[I].VMAddr < HeaderVA ||
           readLE<uint64_t>(S + 8) != Segments[I].VMAddr - HeaderVA ||
-          uint64_t(Pages) * Page > llvm::alignTo(Segments[I].FileSize, Page) ||
-          llvm::any_of(C.slice(O + 22 + Pages * 2, Size - 22 - Pages * 2),
-                       [](uint8_t V) { return V; }))
+          uint64_t(Pages) * Page > llvm::alignTo(Segments[I].FileSize, Page))
         return fail("chain start has invalid encoding or segment owner");
       if (PointerFormat && PointerFormat != Format)
         return fail("mixed chained pointer formats");
@@ -558,94 +560,135 @@ struct Reader {
       number(Digest, Format);
       number(Digest, Page);
       Ranges.emplace_back(O, O + Size);
+      const auto StartCount = (Size - StartOffset) / sizeof(uint16_t);
+      const auto StartAt = [&](unsigned Index) {
+        return readLE<uint16_t>(S + StartOffset + Index * sizeof(uint16_t));
+      };
+      std::set<unsigned> OverflowEntries;
+      unsigned UsedStarts = Pages;
       for (unsigned P = 0; P < Pages; ++P) {
-        unsigned At = readLE<uint16_t>(S + 22 + P * 2);
-        if (At == DYLD_CHAINED_PTR_START_NONE)
+        const auto Start = StartAt(P);
+        if (Start == DYLD_CHAINED_PTR_START_NONE)
           continue;
-        if (At & DYLD_CHAINED_PTR_START_MULTI)
-          return fail("multiple chain starts are not modeled");
-        while (true) {
-          if (!rangeInBounds(At, 8, Page))
-            return fail("chained pointer crosses a page");
-          const uint64_t Offset = uint64_t(P) * Page + At;
-          auto VA = slot(I, Offset, Arm64e ? Arm64e->Stride : Pointer);
-          if (!VA)
-            return VA.takeError();
-          const uint64_t Raw =
-              readLE<uint64_t>(B.data() + Segments[I].FileOff + Offset);
-          unsigned NextBytes = ((Raw >> 51) & 0xfff) * kOrdinaryChainStride;
-          if (Arm64e) {
-            const auto Word =
-                macho_loader::arm64e::decodePointerWord(Raw, *Arm64e);
-            if (!Word)
-              return fail(kInvalidArm64eWord);
-            NextBytes = Word->Next * Arm64e->Stride;
-            if (Word->Bind) {
-              if (Word->Target >= Imports.size())
-                return fail(kInvalidArm64eImport);
-              const auto &Import = Imports[Word->Target];
-              int64_t Addend;
-              if (llvm::AddOverflow(Import.Addend, Word->Addend, Addend))
-                return fail(kArm64eAddendOverflow);
-              if (auto E = bind(I, Offset, Import.Ordinal, Import.Name, Addend,
-                                Import.Flags, kBindPhase, Raw, Arm64e->Stride))
+        std::vector<unsigned> Starts;
+        if (Start & DYLD_CHAINED_PTR_START_MULTI) {
+          unsigned Index = Start & ~DYLD_CHAINED_PTR_START_MULTI;
+          if (Index < Pages)
+            return fail(kInvalidChainOverflow);
+          for (;;) {
+            if (Index >= StartCount || !OverflowEntries.insert(Index).second)
+              return fail(kInvalidChainOverflow);
+            const auto Value = StartAt(Index++);
+            const unsigned Offset = Value & ~DYLD_CHAINED_PTR_START_LAST;
+            if (!Starts.empty() && Offset <= Starts.back())
+              return fail(kInvalidChainOverflow);
+            Starts.push_back(Offset);
+            if (Value & DYLD_CHAINED_PTR_START_LAST)
+              break;
+          }
+          UsedStarts = std::max(UsedStarts, Index);
+        } else {
+          Starts.push_back(Start);
+        }
+        for (unsigned At : Starts) {
+          while (true) {
+            if (!rangeInBounds(At, 8, Page))
+              return fail("chained pointer crosses a page");
+            const uint64_t Offset = uint64_t(P) * Page + At;
+            auto VA = slot(I, Offset, Arm64e ? Arm64e->Stride : Pointer);
+            if (!VA)
+              return VA.takeError();
+            // Distinct starts must not revisit or partially overlap a slot,
+            // including one owned by the other bind/rebase phase.
+            const auto NextSlot = ChainSlots.lower_bound(*VA);
+            if ((NextSlot != ChainSlots.end() && *NextSlot - *VA < Pointer) ||
+                (NextSlot != ChainSlots.begin() &&
+                 *VA - *std::prev(NextSlot) < Pointer))
+              return fail(kOverlappingChainSlots);
+            ChainSlots.insert(NextSlot, *VA);
+            const uint64_t Raw =
+                readLE<uint64_t>(B.data() + Segments[I].FileOff + Offset);
+            unsigned NextBytes = ((Raw >> 51) & 0xfff) * kOrdinaryChainStride;
+            if (Arm64e) {
+              const auto Word =
+                  macho_loader::arm64e::decodePointerWord(Raw, *Arm64e);
+              if (!Word)
+                return fail(kInvalidArm64eWord);
+              NextBytes = Word->Next * Arm64e->Stride;
+              if (Word->Bind) {
+                if (Word->Target >= Imports.size())
+                  return fail(kInvalidArm64eImport);
+                const auto &Import = Imports[Word->Target];
+                int64_t Addend;
+                if (llvm::AddOverflow(Import.Addend, Word->Addend, Addend))
+                  return fail(kArm64eAddendOverflow);
+                if (auto E =
+                        bind(I, Offset, Import.Ordinal, Import.Name, Addend,
+                             Import.Flags, kBindPhase, Raw, Arm64e->Stride))
+                  return E;
+              } else {
+                uint64_t Base =
+                    Word->Authenticated || Arm64e->Offset ? HeaderVA : 0;
+                if (Arm64e->Segmented) {
+                  if (Word->SegmentIndex >= Segments.size() ||
+                      Word->Target > Segments[Word->SegmentIndex].VMSize)
+                    return fail(kInvalidArm64eSegment);
+                  Base = Segments[Word->SegmentIndex].VMAddr;
+                }
+                if (Word->Target > UINT64_MAX - Base)
+                  return fail(kArm64eTargetOverflow);
+                if (auto E = rebase(I, Offset, Base + Word->Target, Raw,
+                                    Arm64e->Stride))
+                  return E;
+              }
+              if (Word->Authenticated) {
+                // Slot identity above also owns address diversity. Retaining
+                // only the target/import would silently admit a different key
+                // or discriminator after image layout edits.
+                auto &Row = State.Slots.at(
+                    {*VA, Word->Bind ? kBindPhase : kRebasePhase});
+                number(Row, Word->Key);
+                number(Row, Word->Diversity);
+                number(Row, Word->AddressDiversity);
+              }
+            } else if (Raw >> 63) {
+              const unsigned Ord = Raw & 0xffffff;
+              if (Ord >= Imports.size() || ((Raw >> 32) & 0x7ffff))
+                return fail("invalid chained bind ordinal or reserved bits");
+              const auto &R = Imports[Ord];
+              const int64_t Add = (Raw >> 24) & 0xff;
+              if (R.Addend > INT64_MAX - Add)
+                return fail("chained addend overflow");
+              if (auto E = bind(I, Offset, R.Ordinal, R.Name, R.Addend + Add,
+                                R.Flags, 1, Raw))
                 return E;
             } else {
-              uint64_t Base =
-                  Word->Authenticated || Arm64e->Offset ? HeaderVA : 0;
-              if (Arm64e->Segmented) {
-                if (Word->SegmentIndex >= Segments.size() ||
-                    Word->Target > Segments[Word->SegmentIndex].VMSize)
-                  return fail(kInvalidArm64eSegment);
-                Base = Segments[Word->SegmentIndex].VMAddr;
+              if ((Raw >> 44) & 0x7f)
+                return fail("nonzero chained rebase reserved bits");
+              uint64_t Target =
+                  (Raw & 0xfffffffffULL) | (((Raw >> 36) & 0xff) << 56);
+              if (Format == DYLD_CHAINED_PTR_64_OFFSET) {
+                if (Target > UINT64_MAX - HeaderVA)
+                  return fail("chained rebase overflow");
+                Target += HeaderVA;
               }
-              if (Word->Target > UINT64_MAX - Base)
-                return fail(kArm64eTargetOverflow);
-              if (auto E = rebase(I, Offset, Base + Word->Target, Raw,
-                                  Arm64e->Stride))
+              if (auto E = rebase(I, Offset, Target, Raw))
                 return E;
             }
-            if (Word->Authenticated) {
-              // Slot identity above also owns address diversity. Retaining
-              // only the target/import would silently admit a different key
-              // or discriminator after image layout edits.
-              auto &Row =
-                  State.Slots.at({*VA, Word->Bind ? kBindPhase : kRebasePhase});
-              number(Row, Word->Key);
-              number(Row, Word->Diversity);
-              number(Row, Word->AddressDiversity);
-            }
-          } else if (Raw >> 63) {
-            const unsigned Ord = Raw & 0xffffff;
-            if (Ord >= Imports.size() || ((Raw >> 32) & 0x7ffff))
-              return fail("invalid chained bind ordinal or reserved bits");
-            const auto &R = Imports[Ord];
-            const int64_t Add = (Raw >> 24) & 0xff;
-            if (R.Addend > INT64_MAX - Add)
-              return fail("chained addend overflow");
-            if (auto E = bind(I, Offset, R.Ordinal, R.Name, R.Addend + Add,
-                              R.Flags, 1, Raw))
-              return E;
-          } else {
-            if ((Raw >> 44) & 0x7f)
-              return fail("nonzero chained rebase reserved bits");
-            uint64_t Target =
-                (Raw & 0xfffffffffULL) | (((Raw >> 36) & 0xff) << 56);
-            if (Format == DYLD_CHAINED_PTR_64_OFFSET) {
-              if (Target > UINT64_MAX - HeaderVA)
-                return fail("chained rebase overflow");
-              Target += HeaderVA;
-            }
-            if (auto E = rebase(I, Offset, Target, Raw))
-              return E;
+            if (!NextBytes)
+              break;
+            if (NextBytes < Pointer || NextBytes > Page - At)
+              return fail("overlapping or cross-page chain");
+            At += NextBytes;
           }
-          if (!NextBytes)
-            break;
-          if (NextBytes < Pointer || NextBytes > Page - At)
-            return fail("overlapping or cross-page chain");
-          At += NextBytes;
         }
       }
+      const size_t UsedBytes = StartOffset + UsedStarts * sizeof(uint16_t);
+      if (Size != UsedBytes && Size != llvm::alignTo(UsedBytes, Pointer))
+        return fail(kInvalidChainOverflow);
+      for (unsigned Index = Pages; Index < StartCount; ++Index)
+        if (!OverflowEntries.count(Index) && StartAt(Index))
+          return fail(kInvalidChainOverflow);
     }
     std::sort(Ranges.begin(), Ranges.end());
     for (size_t I = 1; I < Ranges.size(); ++I)

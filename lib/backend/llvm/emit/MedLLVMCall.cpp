@@ -905,8 +905,21 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       llvm::consumeError(std::move(Error));
   };
 
+  const bool NativeValueCall =
+      CI && CI->SourceCallHint && Op.Opcode == NdOp::INDIR_CALL &&
+      CI->SourceCallHint->CallKind == SourceCallTypeHint::Kind::Native &&
+      TargetFormat == BinaryFormat::MachO && TargetArch == Arch::AArch64 &&
+      (Authentication ||
+       (CI->SourceCallHint->Signature.HasExplicitABI &&
+        CI->SourceCallHint->Signature.Convention ==
+            SourceFunctionTypeHint::ConventionKind::C &&
+        !hasIndirectSourceParameters(CI->SourceCallHint->Signature) &&
+        sourceResultCallHasWordCarriers(CI->SourceCallHint->Signature) &&
+        CI->SourceCallHint->Signature.ReturnLocation.Kind !=
+            SourceABICarrierKind::IndirectResultPointer));
   if (CI && CI->SourceCallHint &&
-      CI->SourceCallHint->CallKind == SourceCallTypeHint::Kind::Analyst) {
+      (CI->SourceCallHint->CallKind == SourceCallTypeHint::Kind::Analyst ||
+       NativeValueCall)) {
     const auto &Hint = *CI->SourceCallHint;
 #define LLVM_SOURCE_CALL_VALUE(Type, Name, Value) constexpr Type Name = Value;
 #define LLVM_SOURCE_CALL_TEXT(Name, Text) constexpr char Name[] = Text;
@@ -919,14 +932,24 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       syncError() << "source call contract: " << Reason << "\n";
       FatalCodePointerResolution = true;
     };
-    if (!AnalystSourceProjection || !Hint.AnalystSite ||
-        Hint.AnalystSite->Instruction != Op.Addr ||
-        Hint.AnalystSite->Sequence != Op.OriginSeq ||
-        Hint.Signature.Architecture != TargetArch ||
+    const bool Analyst = Hint.CallKind == SourceCallTypeHint::Kind::Analyst;
+    const bool ValidOccurrence =
+        Analyst ? AnalystSourceProjection && Hint.AnalystSite &&
+                      Hint.AnalystSite->Instruction == Op.Addr &&
+                      Hint.AnalystSite->Sequence == Op.OriginSeq
+                : Target &&
+                      Hint.Signature.Convention ==
+                          SourceFunctionTypeHint::ConventionKind::C &&
+                      Hint.AnalystFixedCount < 0 && !Hint.ByValueCopy &&
+                      !hasIndirectSourceParameters(Hint.Signature) &&
+                      Hint.Signature.ReturnLocation.Kind !=
+                          SourceABICarrierKind::IndirectResultPointer;
+    if (!ValidOccurrence || Hint.Signature.Architecture != TargetArch ||
         !validateSourceABI(Hint.Signature, Diagnostic) ||
+        (MachineCall && !sourceResultCallHasWordCarriers(Hint.Signature)) ||
         Args.size() != sourceABIParameters(Hint.Signature).size() +
                            unsigned(RetainResultStorage)) {
-      Refuse("invalid or non-source-only occurrence binding");
+      Refuse(kSourceCallInvalidBinding);
       return;
     }
     std::vector<llvm::Type *> Types;
@@ -1159,7 +1182,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         Call->addParamAttr(I, Parameter.Type->IsSigned ? llvm::Attribute::SExt
                                                        : llvm::Attribute::ZExt);
     }
-    if (!MachineCall)
+    if (Analyst && !MachineCall)
       Call->setMetadata(
           "neverd.source.analyst-call",
           llvm::MDNode::get(

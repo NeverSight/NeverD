@@ -419,16 +419,12 @@ TEST(AArch64AuthenticatedCall, BothKeysAndZeroModifiersRemainOnTheCall) {
       }
 }
 
-class AArch64TypedAuthenticatedCall
-    : public ::testing::TestWithParam<TypedShape> {};
-
-TEST_P(AArch64TypedAuthenticatedCall,
-       ExplicitTypesKeepAuthenticationOnTheCall) {
-  const auto &Shape = GetParam();
+void checkTypedShape(const TypedShape &Shape, bool Native) {
   for (const auto &Variant : TypedVariants) {
-    const auto Case = llvm::formatv(kTypedDirectory, Shape.Name, Variant.Key,
-                                    Variant.Zero, Variant.Raw)
-                          .str();
+    const auto Case =
+        llvm::formatv(Native ? kRecoveredTypedDirectory : kTypedDirectory,
+                      Shape.Name, Variant.Key, Variant.Zero, Variant.Raw)
+            .str();
     SCOPED_TRACE(Case);
     // All entry carriers remain full-width integers so the independently
     // compiled ELF probe and Darwin wrapper have the same outer ABI. Only
@@ -448,12 +444,19 @@ TEST_P(AArch64TypedAuthenticatedCall,
     auto Function = function(Variant.Key, false, Bindings.size(), Variant.Raw);
     auto &Block = Function.Blocks.front();
     MedOp Call = Block.Ops[Variant.Raw ? 0 : 1];
-    Hint->CallKind = SourceCallTypeHint::Kind::Analyst;
+    Hint->CallKind = Native ? SourceCallTypeHint::Kind::Native
+                            : SourceCallTypeHint::Kind::Analyst;
+    if (Native) {
+      Hint->Signature.Origin =
+          SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+      Hint->TargetName = kResolvedCallback;
+    }
     Call.Addr = kEntryAddress;
     Call.OriginSeq = 0;
     Call.Output.Size = ReturnType->Size;
-    Hint->AnalystSite =
-        SourceCallOccurrenceKey{Call.Addr, Call.OriginSeq, NdOp::INDIR_CALL, 0};
+    if (!Native)
+      Hint->AnalystSite = SourceCallOccurrenceKey{Call.Addr, Call.OriginSeq,
+                                                  NdOp::INDIR_CALL, 0};
     Hint->AnalystFixedCount = Shape.Fixed;
     Hint->Signature.ReturnType = ReturnType;
     std::vector<MedOp> Setup;
@@ -547,7 +550,7 @@ TEST_P(AArch64TypedAuthenticatedCall,
     Setup.push_back(std::move(Return));
     Block.Ops = std::move(Setup);
     MedLLVMEmitter Emitter;
-    Emitter.setAnalystSourceProjection(true);
+    Emitter.setAnalystSourceProjection(!Native);
     llvm::LLVMContext Context;
     auto Module = Emitter.emit({Function}, Context, kFunction, Arch::AArch64,
                                {}, nullptr, BinaryFormat::MachO);
@@ -646,6 +649,51 @@ TEST_P(AArch64TypedAuthenticatedCall,
   }
 }
 
+class AArch64TypedAuthenticatedCall
+    : public ::testing::TestWithParam<TypedShape> {};
+
+TEST_P(AArch64TypedAuthenticatedCall,
+       ExplicitTypesKeepAuthenticationOnTheCall) {
+  checkTypedShape(GetParam(), false);
+}
+
+class AArch64RecoveredAuthenticatedCall
+    : public ::testing::TestWithParam<TypedShape> {};
+
+TEST_P(AArch64RecoveredAuthenticatedCall,
+       NativeTypesKeepAuthenticationOnTheCall) {
+  checkTypedShape(GetParam(), true);
+}
+
+std::vector<TypedShape> recoveredShapes() {
+  std::vector<TypedShape> Shapes;
+  for (const auto &Shape : TypedShapes) {
+    if (Shape.Fixed >= 0)
+      continue;
+    SourceCallTypeHint Hint;
+    Hint.Signature.ReturnType = typedParameter(Shape.ReturnKind);
+    for (char Kind : Shape.Parameters)
+      Hint.Signature.Parameters.push_back(
+          {kTypedArgument, typedParameter(Kind)});
+    std::string Diagnostic;
+    if (assignAnalystCallABI(Hint, Arch::AArch64, BinaryFormat::MachO,
+                             Diagnostic) &&
+        !hasIndirectSourceParameters(Hint.Signature) &&
+        Hint.Signature.ReturnLocation.Kind !=
+            SourceABICarrierKind::IndirectResultPointer)
+      Shapes.push_back(Shape);
+  }
+  return Shapes;
+}
+
+INSTANTIATE_TEST_SUITE_P(ByShape, AArch64RecoveredAuthenticatedCall,
+                         ::testing::ValuesIn(recoveredShapes()),
+                         [](const ::testing::TestParamInfo<TypedShape> &Info) {
+                           std::string Name = Info.param.Name.str();
+                           std::replace(Name.begin(), Name.end(), '-', '_');
+                           return Name;
+                         });
+
 INSTANTIATE_TEST_SUITE_P(ByShape, AArch64TypedAuthenticatedCall,
                          ::testing::ValuesIn(TypedShapes),
                          [](const ::testing::TestParamInfo<TypedShape> &Info) {
@@ -694,19 +742,87 @@ TEST(AArch64AuthenticatedCall, NativeTypesKeepTheOriginalIndirectTarget) {
     std::string Source;
     llvm::raw_string_ostream Out(Source);
     ASSERT_TRUE(HighCEmitter().emit({High}, Out, Options));
-    EXPECT_NE(Source.find(Variant.Raw ? kRawCallMacro : kResignBuiltin),
-              std::string::npos)
+    EXPECT_TRUE(llvm::StringRef(Source).contains(
+        Variant.Raw ? llvm::StringRef(kRawCallMacro)
+                    : llvm::StringRef(kResultCallMarker).rtrim()))
         << Source;
+    EXPECT_EQ(Source.find(kResignBuiltin), std::string::npos) << Source;
     save(Case, kHighSource, Source);
     compile(
         Source,
         [&](llvm::Module &Recompiled) {
-          checkBundle(Recompiled, Variant.Key, Variant.Zero, 1, Variant.Raw);
+          if (Variant.Raw)
+            checkBundle(Recompiled, Variant.Key, Variant.Zero, 1, true);
+          else
+            checkMachineCall(Recompiled, Variant.Key);
         },
-        Case, false, true);
+        Case, false, true,
+        Variant.Raw ? llvm::ArrayRef<llvm::StringRef>()
+                    : llvm::ArrayRef<llvm::StringRef>{kExceptionsOption,
+                                                      kNoStackProtectorOption});
+    if (!Variant.Raw && !Variant.Zero) {
+      auto TypedCaller = High;
+      TypedCaller.Params[2].Type = NdType::makeFloat(kPointerBytes);
+      std::string TypedSource;
+      llvm::raw_string_ostream TypedOut(TypedSource);
+      ASSERT_TRUE(HighCEmitter().emit({TypedCaller}, TypedOut, Options));
+      const auto TypedCase =
+          llvm::formatv(kNativeTypedCallerDirectory, Variant.Key, Variant.Zero)
+              .str();
+      save(TypedCase, kHighSource, TypedSource);
+      compile(TypedSource,
+              [&](llvm::Module &Recompiled) {
+                checkMachineCall(Recompiled, Variant.Key);
+                for (const auto &Block : *Recompiled.getFunction(kFunction))
+                  for (const auto &Instruction : Block) {
+                    EXPECT_FALSE(llvm::isa<llvm::FPToSIInst>(Instruction));
+                    EXPECT_FALSE(llvm::isa<llvm::FPToUIInst>(Instruction));
+                    EXPECT_FALSE(llvm::isa<llvm::SIToFPInst>(Instruction));
+                    EXPECT_FALSE(llvm::isa<llvm::UIToFPInst>(Instruction));
+                  }
+              },
+              TypedCase, false, true,
+              {kExceptionsOption, kNoStackProtectorOption});
+    }
     if (!Variant.Raw) {
+      const auto Emit = [&] {
+        llvm::LLVMContext Context;
+        auto Module =
+            MedLLVMEmitter().emit({Function}, Context, kFunction, Arch::AArch64,
+                                  {}, nullptr, BinaryFormat::MachO);
+        if (Module)
+          checkMachineCall(*Module, Variant.Key);
+        return bool(Module);
+      };
+      EXPECT_TRUE(Emit());
+      // A recovered display name is optional in LLVM and never supplies the
+      // callable address. HighIR above retains its own resolved display name.
+      Hint->TargetName.clear();
+      EXPECT_TRUE(Emit());
+      Hint->TargetName = kResolvedCallback;
+      Hint->Signature.HasExplicitABI = false;
+      EXPECT_FALSE(Emit());
+      Hint->Signature.HasExplicitABI = true;
+      auto &Argument = Function.CallInfos.front().Args.front();
+      const auto Width = Argument.Size;
+      Argument.Size = kPromotedIntegerBytes;
+      EXPECT_FALSE(Emit());
+      Argument.Size = Width;
+      const auto Parameter = Hint->Signature.Parameters.front();
+      auto &Vector = Hint->Signature.Parameters.front();
+      Vector.Type = NdType::makeInt(2 * kPointerBytes, false);
+      Vector.Type->SourceName = kSourceAArch64Vector128CType;
+      Vector.Location.ValueBytes = Vector.Type->Size;
+      ASSERT_TRUE(validateSourceABI(Hint->Signature, Diagnostic)) << Diagnostic;
+      EXPECT_FALSE(Emit());
+      std::string WideRefused;
+      llvm::raw_string_ostream WideOut(WideRefused);
+      EXPECT_THROW(HighCEmitter().emit({High}, WideOut, Options),
+                   std::invalid_argument);
+      Vector = Parameter;
       Hint->Signature.Convention =
           SourceFunctionTypeHint::ConventionKind::Swift;
+      EXPECT_FALSE(Emit());
       std::string Refused;
       llvm::raw_string_ostream RefusedOut(Refused);
       EXPECT_THROW(HighCEmitter().emit({High}, RefusedOut, Options),
