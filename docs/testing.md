@@ -22473,3 +22473,43 @@ handler and discovered functions (limited to 250), with one/default threads and
 both C backends. New instruction coverage and additional strict checks are
 different work and require separate reporting, not same-output speedup claims.
 This small corpus and a shared host do not establish a cross-tool ranking.
+
+Both MIPS Python drivers reuse their `--output` directory through
+`scripts/mips_validation_artifacts.py`. A new output must be empty; older,
+unmarked reports are never adopted or deleted. Keep SDKs, firmware, fixture
+inputs and pending comparison baselines outside that directory. The drivers
+read those inputs in place and do not copy or install SDKs.
+
+Generated objects, ELFs, successful C output and full per-command logs live in
+owned scratch storage. Each completed roundtrip removes its temporary files;
+the driver also removes scratch after failure or normal interruption. A later
+start reclaims scratch left by an uncatchable kill. One output lock, inherited
+by the compiler/CLI, prevents another invocation from reclaiming a surviving
+reader's files. This lock is separate from the existing build lock because the
+drivers never mutate the build cache or CTest's `LastTest.log`.
+The recorded process group also protects descendants that close inherited file
+descriptors. Scratch stays in place if a descendant outlives its command leader.
+A kill during the spawn handoff, before the process group was recorded, requires
+a reader audit; missing process identity is never treated as permission to
+delete. These drivers use POSIX process groups and locks.
+
+The reusable output retains the latest semantic/timing receipts and command
+hashes, with up to 8 KiB of diagnostic tail for each failed command. Failed
+generated sources are deduplicated by SHA-256 and verified after copying;
+only the current and preceding run's source evidence remain. This retention
+contract applies to newly owned validation output, not preexisting recovery
+archives or user files. Copy a receipt needed for a separate comparison outside
+the run directory before reusing it. Performance output disagreement retains
+both differing sources and blocks a timing claim.
+
+Run the small producer lifecycle checks without building a new SDK:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/test_mips_validation_artifacts.py -v
+```
+
+They exercise repeated success/failure, SIGTERM, SIGKILL recovery, surviving
+child readers, preserved inputs and the actual paired-measurement entry point
+with tiny fake commands. The roundtrip compiler-failure entry check uses the
+local pinned Unicorn bindings when available. These are artifact lifecycle
+checks, not performance or ISA qualification measurements.
