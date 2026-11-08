@@ -16305,6 +16305,10 @@ transaction effects. `FailedTransactionKeepsProxyAliveAtTheJNIExceptionBoundary`
 checks the next explicit JNI logging/exception boundary without marking the
 live proxy dead or discarding the old reply bytes; runtime execution remains
 terminal at that unsupported boundary.
+The native `binder_object_transaction` control checks that target lookup precedes
+an unreadable object table, then checks BR_FAILED_REPLY for an invalid object
+after a live manager is registered. All relocation/backend variants and
+`AndroidBinderProtocolMatchesSDKAndCLI` share this literal driver-response oracle.
 `AndroidJNI.BinderObjectsRetainProxyIdentityAndDriverOwnership` executes an original
 guest service through ordinary/V/A JNI at O0/O2 and all relocation/backend variants.
 It checks proxy reuse after recycle, forwarding a borrowed object table, null Binder
