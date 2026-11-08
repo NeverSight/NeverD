@@ -14,8 +14,12 @@ from pathlib import Path
 import platform
 import re
 import statistics
-import subprocess
+import shutil
+import sys
 import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+from mips_validation_artifacts import MIPSValidationArtifacts
 
 
 def digest(path):
@@ -42,9 +46,16 @@ def main():
         parser.error("toolchain manifests must identify compiler, LLVM, Capstone and build flags/allocator")
     if toolchain_a != toolchain_b:
         parser.error("toolchain/flags/allocator snapshots differ; rebuild a matching baseline")
-    if args.output.exists():
-        parser.error("output must be a new directory so a failed run cannot leave stale receipts")
-    args.output.mkdir(parents=True)
+    inputs = (args.baseline, args.candidate, args.code, args.firmware,
+              args.baseline_inputs, args.candidate_inputs,
+              args.baseline_toolchain, args.candidate_toolchain)
+    with MIPSValidationArtifacts(args.output, "mips-paired", inputs) as artifacts:
+        run(args, artifacts, toolchain_a)
+
+
+def run(args, artifacts, toolchain_a):
+    artifacts.write("samples.json", [])
+    artifacts.write("summary.json", {"status": "running"})
     profile_text = Path(__file__).with_name("mips-bench.def").read_text()
     profiles = re.findall(r"^NEVERD_MIPS_BENCH_PROFILE\((\w+),", profile_text, re.M)
     stages = re.findall(r'^NEVERD_MIPS_BENCH_STAGE\(\w+, "(\w+)"\)', profile_text, re.M)
@@ -64,10 +75,12 @@ def main():
                                          *flags, str(args.firmware.resolve())]))
     records = []
     for name, threads, kind, tail in jobs:
+        first_output = None
+        reference = artifacts.work / "reference.c"
         for sample in range(-1, args.samples): # First pair warms both sides.
             for variant in (("A", "B") if sample % 2 == 0 else ("B", "A")):
                 directory = binaries[variant]
-                stem = args.output / f"{name}-{sample}-{variant}"
+                stem = artifacts.work / f"{name}-{sample}-{variant}"
                 result_file = stem.with_suffix(".c")
                 command = [str(directory / ("neverd-mips-bench" if kind == "primitive" else "neverd")), *tail]
                 if kind == "request":
@@ -79,14 +92,14 @@ def main():
                     env["NEVERD_THREADS"] = threads
                 key = "DYLD_LIBRARY_PATH" if platform.system() == "Darwin" else "LD_LIBRARY_PATH"
                 env[key] = str(directory)
-                with stem.with_suffix(".stdout").open("wb") as stdout, stem.with_suffix(".stderr").open("wb") as stderr:
-                    start = time.monotonic()
-                    process = subprocess.Popen(command, env=env, stdout=stdout, stderr=stderr)
+                with artifacts.process(command, stem.with_suffix(".stdout"),
+                                       stem.with_suffix(".stderr"), env) as (process, start):
                     _, status, usage = os.wait4(process.pid, 0)
                     process.returncode = os.waitstatus_to_exitcode(status)
                     wall = time.monotonic() - start
                 if process.returncode:
-                    raise RuntimeError(f"{name}/{variant} exited {process.returncode}; retained {stem}")
+                    artifacts.keep_source(result_file)
+                    raise RuntimeError(f"{name}/{variant} exited {process.returncode}; see commands.json")
                 content = (json.loads(stem.with_suffix(".stdout").read_text()) if kind == "primitive"
                            else {"source_sha256": digest(result_file), "source_bytes": result_file.stat().st_size})
                 stable = {k: v for k, v in content.items() if k not in ("cpu_seconds", "wall_seconds")}
@@ -99,10 +112,20 @@ def main():
                     record["inner_cpu_seconds"] = content["cpu_seconds"]
                     record["inner_wall_seconds"] = content["wall_seconds"]
                 records.append(record)
-                (args.output / "samples.json").write_text(json.dumps(records, indent=2) + "\n")
+                artifacts.write("samples.json", records)
+                if first_output is None:
+                    first_output = stable
+                    if kind == "request":
+                        shutil.copyfile(result_file, reference)
+                elif stable != first_output:
+                    artifacts.keep_source(reference)
+                    artifacts.keep_source(result_file)
+                    raise RuntimeError(f"{name}: non-timing outputs differ; no comparable timing claim")
+                artifacts.discard(result_file, stem.with_suffix(".stdout"), stem.with_suffix(".stderr"))
         selected = [r for r in records if r["job"] == name]
         if any(r["output"] != selected[0]["output"] for r in selected):
             raise RuntimeError(f"{name}: non-timing outputs differ; no comparable timing claim")
+        artifacts.discard(reference)
         print("qualified", name, flush=True)
     for profile in profiles:
         reference = next(r["output"] for r in records if r["job"] == profile + "-capstone")
@@ -137,7 +160,7 @@ def main():
               "code_hashes": {p.name: digest(p) for p in args.code.glob("*-unchanged.bin")},
               "summaries": summaries,
               "limits": "Shared host, no CPU affinity pinning. Direct Capstone is a decode-only comparator; added word guards/new instruction forms are excluded from same-output speedup claims. No world-leading claim."}
-    (args.output / "summary.json").write_text(json.dumps(result, indent=2) + "\n")
+    artifacts.write("summary.json", result)
     print(json.dumps(result["summaries"], indent=2))
 
 

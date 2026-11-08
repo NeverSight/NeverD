@@ -14,6 +14,8 @@ import json
 import random
 import re
 import subprocess
+import sys
+from functools import partial
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -22,6 +24,9 @@ from unicorn import (Uc, UcError, UC_ARCH_MIPS, UC_ERR_READ_UNMAPPED, UC_ERR_EXC
                      UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_MODE_BIG_ENDIAN,
                      UC_MODE_MIPS32, UC_MODE_MIPS64)
 from unicorn import mips_const as mips
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
+from mips_validation_artifacts import MIPSValidationArtifacts
 
 
 PROFILES = [("mips", 32, False), ("mipsel", 32, True),
@@ -90,12 +95,11 @@ def independent_result(function, inputs):
     return None
 
 
-def command(args, log):
-    result = subprocess.run([str(x) for x in args], stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True, timeout=60)
-    log.write_text(result.stdout)
-    if result.returncode:
-        raise RuntimeError(f"{args[0]} exited {result.returncode}: {log}\n{result.stdout}")
+def run_command(artifacts, args, log):
+    with artifacts.process(args, log) as (process, _):
+        process.wait(timeout=60)
+    if process.returncode:
+        raise RuntimeError(f"{args[0]} exited {process.returncode}: {log.read_text()[-8192:]}")
 
 
 def emulator(path, bits, little, function, original=None):
@@ -234,8 +238,17 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--function", action="append", choices=FUNCTIONS)
     args = parser.parse_args()
-    output = args.output.resolve()
-    output.mkdir(parents=True, exist_ok=True)
+    with MIPSValidationArtifacts(args.output, "mips-roundtrip", (args.neverd, args.clang, args.ld)) as artifacts:
+        result = run(args, artifacts)
+        if result:
+            raise SystemExit(result)
+    return 0
+
+
+def run(args, artifacts):
+    output = artifacts.work
+    artifacts.write("results.json", {"passed": [], "failures": [], "complete": False})
+    command = partial(run_command, artifacts)
     headers = output / "includes"
     headers.mkdir(exist_ok=True)
     (headers / "string.h").write_text(
@@ -265,7 +278,7 @@ def main():
             for backend in ("highc", "llvmc"):
                 tasks.append((profile, bits, little, flags, link, original, function, backend))
 
-    def compare(task):
+    def compare_inner(task):
         profile, bits, little, flags, link, original, function, backend = task
         stem = output / f"{profile}-{function}-{backend}"
         source, obj, rebuilt = stem.with_suffix(".c"), stem.with_suffix(".o"), stem.with_suffix(".elf")
@@ -396,14 +409,22 @@ def main():
                 "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
                 "rebuilt_sha256": hashlib.sha256(rebuilt.read_bytes()).hexdigest(),
                 "removed_bytes": obj.stat().st_size + rebuilt.stat().st_size}
-        # Successful binaries are reproducible from retained source, commands
-        # and hashes. Preserve failures until diagnosed, not every past build.
-        obj.unlink()
-        rebuilt.unlink()
         return receipt
 
-    receipts, failures, failed_profiles = [], [], set()
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    def compare(task):
+        stem = output / f"{task[0]}-{task[6]}-{task[7]}"
+        try:
+            return compare_inner(task)
+        except BaseException:
+            artifacts.keep_source(stem.with_suffix(".c"))
+            raise
+        finally:
+            artifacts.discard(*(stem.with_suffix(suffix) for suffix in
+                                (".o", ".elf", ".c", ".decompile.log", ".compile.log", ".link.log")))
+
+    receipts, failures = [], []
+    pool = ThreadPoolExecutor(max_workers=4)
+    try:
         futures = [pool.submit(compare, task) for task in tasks]
         for task, future in zip(tasks, futures):
             try:
@@ -412,20 +433,23 @@ def main():
                 print(f"PASS {task[0]} {task[6]} {task[7]}", flush=True)
             except Exception as error:
                 failures.append(str(error))
-                failed_profiles.add(task[0])
                 print(f"FAIL {task[0]} {task[6]} {task[7]}: {error}", flush=True)
+            artifacts.write("results.json", {"passed": receipts, "failures": failures, "complete": False})
+    except BaseException:
+        artifacts.cancel()
+        raise
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
     cleanup = {"removed_bytes": sum(r["removed_bytes"] for r in receipts),
                "originals": {}}
     for profile, _, _ in PROFILES:
-        if profile in failed_profiles:
-            continue
         for suffix in (".o", ".elf"):
             artifact = output / (profile + suffix)
             cleanup["originals"][artifact.name] = hashlib.sha256(artifact.read_bytes()).hexdigest()
             cleanup["removed_bytes"] += artifact.stat().st_size
-            artifact.unlink()
-    (output / "results.json").write_text(json.dumps({"passed": receipts, "failures": failures,
-                                                     "cleanup": cleanup}, indent=2) + "\n")
+            artifacts.discard(artifact)
+    artifacts.write("results.json", {"passed": receipts, "failures": failures,
+                                      "cleanup": cleanup, "complete": True})
     print(f"{len(receipts)} passed, {len(failures)} failed", flush=True)
     return bool(failures)
 
