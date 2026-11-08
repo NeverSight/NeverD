@@ -1,5 +1,6 @@
 {
   "schema": "neverd-arm64e-recovered-call-faults-v1",
+  "path_normalization": "Embedded command and diagnostic paths are repository-relative. report_sha256 fields identify the original, unnormalized reports.",
   "overall_arm64e_complete": false,
   "scope": "Controlled PAC execution for complete recovered NativeAnalysis fixed C prototypes with scalar, 128-bit integer and direct record/HFA values. ABI recovery accuracy itself is not established by supplied IR fixtures. All five unchanged Mach-O routes require original exception classes. Raw indirect calls are controls. Indirect by-value copies, hidden results, signed exception unwinding, authenticated whole-image execution, native Apple PAC and exact fault PC/full ESR remain unqualified.",
   "base_revision": "a72fcd510e017ea95aeedb26f84a86ed3cde894c",
@@ -505,10 +506,10 @@
         "elapsed_seconds": 40.033665292023215,
         "timeout_override": false,
         "command": [
-          "/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/build-arm64e/bin/NeverDArm64eAnalysisTests",
+          "build-arm64e/bin/NeverDArm64eAnalysisTests",
           "--gtest_filter=AArch64AddressMemory.NarrowAliasedIndicesSurviveDecodedSSAAndBothSourceABIs",
           "--gtest_also_run_disabled_tests",
-          "--gtest_output=json:/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/build-arm64e/arm64e-native-call-faults-evidence/serial-retry.json"
+          "--gtest_output=json:build-arm64e/arm64e-native-call-faults-evidence/serial-retry.json"
         ]
       },
       "report_sha256": "784b4f934040160f7696d6541428ac1d6fde89a27b15f9f528df0eb1eb5b15f7"
@@ -541,7 +542,7 @@
               "testsuite": [
                 {
                   "name": "SwiftMixedCallAndReturnPreserveAllFourTypedFields",
-                  "file": "/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/unittests/lift/core/SourceAggregateTests.cpp",
+                  "file": "unittests/lift/core/SourceAggregateTests.cpp",
                   "line": 1322,
                   "status": "RUN",
                   "result": "COMPLETED",
@@ -550,7 +551,7 @@
                   "classname": "SourceAggregate",
                   "failures": [
                     {
-                      "failure": "/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/unittests/lift/core/SourceAggregateTests.cpp:1385\nExpected equality of these values:\n  Merges\n    Which is: 0\n  1U\n    Which is: 1\n",
+                      "failure": "unittests/lift/core/SourceAggregateTests.cpp:1385\nExpected equality of these values:\n  Merges\n    Which is: 0\n  1U\n    Which is: 1\n",
                       "type": ""
                     }
                   ]

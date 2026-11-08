@@ -59,10 +59,16 @@ stores, arithmetic and control also refuse any unknown bits they observe.
 Narrow reads can still consume a defined low word. This does not select a CPU's
 implementation-dependent behavior or give uninitialized registers a zero value.
 
-Source recovery still can retain a false dependency on an uninitialized incoming
-destination across a complete merge pair. The source roundtrip fixtures bind
-an explicit old value; they do not certify that remaining gap. Concrete LowIR
-transport and source parameter inference have separate validation boundaries.
+Source recovery proves complete adjacent merge pairs in a single ordinary leaf
+block before inferring parameters. It checks the original instruction
+occurrences, the directed address relation for the target byte order, and every
+use of the first result. Only the first core's unobserved incoming destination
+may become zero; the second still consumes the first result. Both reads and
+their fault order remain. Calls, PHIs, exceptional edges, other control flow,
+observed partial results and unproved address relationships retain the original
+dependency. Multi-block and nonadjacent pairs remain outside this proof.
+Concrete LowIR transport and source parameter inference have separate validation
+boundaries; this source proof does not initialize absent machine registers.
 
 This is a strict subset. n32, historical MIPS I–V profiles, Release 6, MIPS16,
 microMIPS, floating point, DSP/MSA, privileged instructions, LL/SC reservations,
@@ -90,6 +96,11 @@ versus wide stores, malformed transports, partial register writes, temporary
 reuse, explicit seeding, reset and preserved/volatile call state. MFHI/MFLO can
 transport an unpredictable result; querying or computing with that result
 still refuses it until the observed bits are overwritten.
+Complete-pair source fixtures also leave the destination uninitialized, exercise
+both orders at every offset with fixed and seeded random old machine values,
+and compare independently assembled expected bytes. Page-edge faults check
+whether the preceding merge read occurred. Branch-likely load fixtures check
+that an annulled invalid-memory slot returns normally and an executed slot faults.
 
 ```sh
 python3 scripts/build.py build-mips --target NeverDMIPSTests NeverDMIPSIntegerTests NeverDMIPSFlowTests NeverDMIPSSDKTests NeverDMIPSPipelineTests neverd --parallel 4
@@ -140,6 +151,31 @@ The final integration with dev `9e7932d73` and Capstone `20a8dd5f` rebuilt the
 CLI/MIPS targets, passed all 189 MIPS cases and regenerated the selected
 firmware views. The broader jump-table qualification remains tied to its
 recorded earlier dependency snapshot.
+
+The complete-pair source follow-up on dev `537264cf` passed 240 roundtrip
+groups (30 kernels, four profiles, both C routes): 3,832 normal inputs and 96
+expected read faults. These include uninitialized destinations, both page-edge
+fault orders and annulled/executed invalid-memory likely slots. The selected
+Archer C7 views were regenerated successfully. The source receipt is
+`build-mips/roundtrip-source-pairs-final/results.json`; the wider qualification
+is recorded in `build-mips/source-merge-pairs/qualification.json`.
+All 221 MIPS cases passed across the broad run and the final 69-case
+pipeline/proof suite, including actual base/destination aliasing and reversed
+address relations. The broader 818-case selection initially passed 808 cases;
+nine timed-out generated-source matrices completed on isolated reruns (eight
+through CTest, one direct run in 33 seconds). One x64/AArch64 native-hint
+assertion also fails with unchanged dev production code and the MIPS proof
+absent from the binary. It is recorded as an existing failure, not a passing
+check. These shared results retain their original dependency snapshot.
+Integrations with dev `aac568578` and then `4c57243f`, using Capstone
+`8b81f225`, each passed all 221 MIPS cases and repeated all 240 source groups
+with identical generated source hashes. The final build also regenerated all
+selected firmware views with unchanged source hashes and verified call LLVM.
+Its current source receipt is
+`build-mips/roundtrip-source-pairs-shared-dev/results.json`; the integration
+commands and binary hashes are in
+`build-mips/source-merge-pairs/shared-dev-integration.json`. Earlier detailed
+reports are retained in verified local archives.
 
 ## TP-Link firmware workflow
 

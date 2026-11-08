@@ -15128,6 +15128,12 @@ semantics. A `DecodedExecutionUnit` captures a delayed transfer and its slot,
 while normal disassembly still consumes four bytes. LowIR records their byte
 ownership and execution order; MedIR expands predicated effects before SSA.
 
+`MedMIPSMergeValues` owns the source-only proof for adjacent complementary
+merge loads in a single ordinary leaf block. It runs after SSA/projection/DCE
+and before ABI recovery, binds physical LowIR occurrences to MedIR, and removes
+only a first load's unobserved old-value operand. Both reads remain ordered;
+calls, PHIs, exceptional flow and unproved uses retain their original inputs.
+
 The focused MIPS loader, integer, flow, SDK and pipeline suites cover these
 contracts. Owned kernels are recompiled from HighC and LLVMC for the original
 MIPS target and compared with their assembly originals in pinned Unicorn.

@@ -14,6 +14,7 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/ELFLoader.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -563,6 +564,7 @@ TEST_P(MIPSPipeline,
       auto Result = Pipeline().run(*Image, Context, Options);
       ASSERT_TRUE(Result.Success) << Result.Error;
       ASSERT_EQ(Result.MedFuncs.size(), 1u);
+      EXPECT_EQ(Result.MedFuncs[0].Params.size(), 1u);
       EXPECT_FALSE(Result.MedFuncs[0].ReturnsNoValue);
       unsigned Loads = 0;
       for (const auto &Block : Result.MedFuncs[0].Blocks)
@@ -599,6 +601,103 @@ TEST_P(MIPSPipeline,
       }
     }
   }
+}
+
+TEST_P(MIPSPipeline, CompleteMergePairsDoNotReadAnUninitializedDestination) {
+  for (unsigned Bytes : {4u, 8u}) {
+    if (Bytes == 8 && !isMIPS64(GetParam()))
+      continue;
+    for (bool Reverse : {false, true}) {
+      SCOPED_TRACE(Bytes);
+      SCOPED_TRACE(Reverse);
+      mips_test::ELFBytes File(GetParam());
+      const uint32_t Left = ((Bytes == 8 ? 26u : 34u) << 26) | (4u << 21) |
+                            (2u << 16) | (File.Little ? Bytes - 1 : 0);
+      const uint32_t Right = ((Bytes == 8 ? 27u : 38u) << 26) | (4u << 21) |
+                             (2u << 16) | (File.Little ? 0 : Bytes - 1);
+      File.put(0x100, Reverse ? Right : Left, 4);
+      File.put(0x104, Reverse ? Left : Right, 4);
+      File.put(0x108, 0x03e00008, 4);
+      File.put(0x10c, 0, 4);
+      ELFLoader Loader;
+      auto Image = Loader.loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      auto Symbol = Symbol::makeFunc(Image->Entry, 16);
+      Symbol.Name = "mips_complete_pair";
+      Image->Symbols.push_back(std::move(Symbol));
+      for (bool LLVM : {false, true}) {
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.OnlyFunctionEntries = {Image->Entry};
+        Options.LiftMode = LLVM;
+        Options.EmitDumpOutput = false;
+        auto Result = Pipeline().run(*Image, Context, Options);
+        ASSERT_TRUE(Result.Success) << Result.Error;
+        ASSERT_EQ(Result.MedFuncs.size(), 1u);
+        EXPECT_EQ(Result.MedFuncs[0].Params.size(), 1u);
+        unsigned Loads = 0;
+        for (const auto &Block : Result.MedFuncs[0].Blocks)
+          for (const auto &Op : Block.Ops)
+            if (!Op.Dead && Op.Opcode == NdOp::INTRINSIC &&
+                mips::mergeLoad(
+                    static_cast<Intrinsic>(Op.Inputs[0].ConstVal))) {
+              if (!Loads)
+                EXPECT_TRUE(Op.Inputs[2].isConst());
+              ++Loads;
+            }
+        EXPECT_EQ(Loads, 2u);
+        if (LLVM) {
+          ASSERT_NE(Result.LlvmModule, nullptr);
+          EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+          EXPECT_EQ(
+              Result.LlvmModule->getFunction("mips_complete_pair")->arg_size(),
+              1u);
+        } else {
+          CEmitterOptions Emit;
+          Emit.TheArch = GetParam();
+          Emit.Format = BinaryFormat::ELF;
+          Emit.Image = &*Image;
+          std::string Text;
+          llvm::raw_string_ostream Output(Text);
+          ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Output, Emit));
+          EXPECT_EQ(Text.find("unknown_register"), std::string::npos) << Text;
+          EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+        }
+      }
+    }
+  }
+}
+
+TEST_P(MIPSPipeline,
+       MergePairsKeepOldBitsWhenTheAddressConsumesThePartialValue) {
+  mips_test::ELFBytes File(GetParam());
+  File.put(0x100, 0x00801025, 4);                         // or v0,a0,zero
+  File.put(0x104, 0x88420000 | (File.Little ? 3 : 0), 4); // lwl v0,off(v0)
+  File.put(0x108, 0x98420000 | (File.Little ? 0 : 3), 4); // lwr v0,off(v0)
+  File.put(0x10c, 0x03e00008, 4);
+  File.put(0x110, 0, 4);
+  ELFLoader Loader;
+  auto Image = Loader.loadBuffer(File.buffer());
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  auto FunctionSymbol = Symbol::makeFunc(Image->Entry, 20);
+  FunctionSymbol.Name = "mips_merge_address_alias";
+  Image->Symbols.push_back(std::move(FunctionSymbol));
+  llvm::LLVMContext Context;
+  PipelineOptions Options;
+  Options.OnlyFunctionEntries = {Image->Entry};
+  Options.EmitDumpOutput = false;
+  auto Result = Pipeline().run(*Image, Context, Options);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  ASSERT_EQ(Result.MedFuncs.size(), 1u);
+  unsigned FirstLoads = 0;
+  for (const auto &Block : Result.MedFuncs[0].Blocks)
+    for (const auto &Op : Block.Ops)
+      if (!Op.Dead && Op.Opcode == NdOp::INTRINSIC &&
+          Op.Inputs[0].ConstVal == uint64_t(Intrinsic::MIPSLwl)) {
+        EXPECT_FALSE(Op.Inputs[2].isConst());
+        ++FirstLoads;
+      }
+  EXPECT_EQ(FirstLoads, 1u);
 }
 
 TEST_P(MIPSPipeline, ObservableMulAccumulatorsCannotBecomeStaleSourceValues) {

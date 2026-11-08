@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import io
 import json
+import random
 import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -18,7 +19,8 @@ from pathlib import Path
 
 from elftools.elf.elffile import ELFFile
 from unicorn import (Uc, UcError, UC_ARCH_MIPS, UC_ERR_READ_UNMAPPED,
-                     UC_HOOK_CODE, UC_MODE_BIG_ENDIAN, UC_MODE_MIPS32, UC_MODE_MIPS64)
+                     UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_MODE_BIG_ENDIAN,
+                     UC_MODE_MIPS32, UC_MODE_MIPS64)
 from unicorn import mips_const as mips
 
 
@@ -32,7 +34,9 @@ FUNCTIONS = ["mips_add", "mips_likely", "mips_load", "mips_store", "mips_stack",
              "mips_data_pointer", "mips_code_pointer", "mips_mul",
              "mips_merge_word", "mips_merge_word_reverse", "mips_merge_full",
              "mips_jalr_merge_slot", "mips_merge_ro_global", "mips_merge_rw_global",
-             "mips_merge_discard", "mips_merge_zero"]
+             "mips_merge_discard", "mips_merge_zero", "mips_likely_load",
+             "mips_uninitialized_word", "mips_uninitialized_word_reverse",
+             "mips_uninitialized_full", "mips_uninitialized_full_reverse"]
 
 
 def command(args, log):
@@ -70,13 +74,14 @@ def emulator(path, bits, little, function, original=None):
     return uc, symbols[0]["st_value"]
 
 
-def invoke(uc, entry, bits, little, arguments):
+def invoke(uc, entry, bits, little, arguments, old_destination=0):
     width, registers = bits // 8, (8 if bits == 64 else 4)
     mask = (1 << bits) - 1
     for reg in range(1, 32):
         uc.reg_write(getattr(mips, f"UC_MIPS_REG_{reg}"), 0)
     uc.reg_write(mips.UC_MIPS_REG_SP, STACK)
     uc.reg_write(mips.UC_MIPS_REG_RA, STOP)
+    uc.reg_write(mips.UC_MIPS_REG_V0, old_destination & mask)
     for index, value in enumerate(arguments):
         value &= mask
         if index < registers:
@@ -91,6 +96,10 @@ def invoke(uc, entry, bits, little, arguments):
 
 
 def cases(function, bits):
+    if function.startswith("mips_uninitialized_"):
+        return [[DATA + offset] for offset in range(8)]
+    if function == "mips_likely_load":
+        return [[DATA, 0], [DATA, 1], [DATA + 4096, 1]]
     if function in ("mips_merge_discard", "mips_merge_zero"):
         return [[DATA]]
     if function in ("mips_merge_ro_global", "mips_merge_rw_global"):
@@ -129,18 +138,28 @@ def cases(function, bits):
     return [[]]
 
 
-def fault_observation(uc, entry, bits, little, inputs, callees):
+def fault_observation(uc, entry, bits, little, inputs, callees, prefix_read=None):
     entered = []
+    data_reads = []
     uc.hook_add(UC_HOOK_CODE,
                 lambda _, address, _size, _data: entered.append(address)
                 if address in callees else None)
+    if prefix_read is not None:
+        uc.hook_add(UC_HOOK_MEM_READ,
+                    lambda _, _access, address, _size, _value, _data:
+                    data_reads.append(address) if DATA <= address < DATA + 4096 else None)
     try:
         invoke(uc, entry, bits, little, inputs)
     except UcError as error:
         if error.errno != UC_ERR_READ_UNMAPPED or entered:
             raise RuntimeError(f"expected read fault before callee: {error}, entered={entered}") from error
-        return {"error": error.errno, "callee_entered": False}
-    raise RuntimeError("discarded merge read did not fault")
+        result = {"error": error.errno, "callee_entered": False}
+        if prefix_read is not None:
+            if bool(data_reads) != prefix_read:
+                raise RuntimeError(f"wrong fault ordering: preceding data reads={data_reads}") from error
+            result["read_valid_data_before_fault"] = bool(data_reads)
+        return result
+    raise RuntimeError("required memory read did not fault")
 
 
 def main():
@@ -210,7 +229,15 @@ def main():
         command([*rebuilt_link, "--image-base=0x1000000", *bindings,
                  "-e", function, obj, "-o", rebuilt], stem.with_suffix(".link.log"))
         observations = []
-        for inputs in cases(function, bits):
+        uninitialized = function.startswith("mips_uninitialized_")
+        old_values = [0]
+        if uninitialized:
+            rng = random.Random(97)
+            old_values += [0x12345678ABCDEF98, -1] + [rng.getrandbits(bits) for _ in range(8)]
+        data = (0xF2345678 if uninitialized else 0x12345678).to_bytes(
+            4, "little" if little else "big") + bytes(range(4, 16))
+        for inputs, old in ((values, old) for values in cases(function, bits)
+                            for old in old_values):
             results = []
             for path in (original, rebuilt):
                 # These HighC globals must survive relocation without the
@@ -220,14 +247,22 @@ def main():
                     "mips_merge_ro_global", "mips_merge_rw_global")
                 uc, entry = emulator(path, bits, little, function,
                                      original if path == rebuilt and not standalone else None)
-                uc.mem_write(DATA, (0x12345678).to_bytes(4, "little" if little else "big") + bytes(range(4, 16)))
-                value = invoke(uc, entry, bits, little, inputs)
+                uc.mem_write(DATA, data)
+                value = invoke(uc, entry, bits, little, inputs, old)
                 if function == "mips_rw_global":
                     value = (value, invoke(uc, entry, bits, little, inputs))
                 results.append(value)
             if results[0] != results[1]:
                 raise RuntimeError(f"{stem.name} inputs={inputs}: original={results[0]} generated={results[1]}")
-            observations.append({"inputs": inputs, "result": results[0]})
+            if uninitialized:
+                count = bits // 8 if "full" in function else 4
+                offset = inputs[0] - DATA
+                expected = int.from_bytes(data[offset:offset + count],
+                                          "little" if little else "big", signed=True)
+                if results[0][0] != expected & ((1 << bits) - 1):
+                    raise RuntimeError(f"{stem.name}: pair disagrees with independent byte assembly")
+            observations.append({"inputs": inputs, "old_destination": old,
+                                 "result": results[0]})
         faults = []
         if function in ("mips_jalr_merge_slot", "mips_merge_discard", "mips_merge_zero"):
             inputs = ([7, 11, DATA + 4096] if function == "mips_jalr_merge_slot"
@@ -245,6 +280,25 @@ def main():
                 outcomes.append(fault_observation(uc, entry, bits, little, inputs, callees))
             assert outcomes[0] == outcomes[1]
             faults.append({"inputs": inputs, "result": outcomes[0]})
+        if uninitialized or function == "mips_likely_load":
+            count = bits // 8 if "full" in function else 4
+            # Across either edge of the mapped page, one load succeeds and
+            # the other faults. Swapping order swaps the required read prefix.
+            fault_cases = [([DATA + 4096, 0], False)]
+            if uninitialized:
+                first_left = not function.endswith("_reverse")
+                upper_first = first_left == little
+                fault_cases = [([DATA - 1], upper_first),
+                               ([DATA + 4096 - count + 1], not upper_first)]
+            for inputs, prefix in fault_cases:
+                outcomes = []
+                for path in (original, rebuilt):
+                    uc, entry = emulator(path, bits, little, function,
+                                         original if path == rebuilt else None)
+                    outcomes.append(fault_observation(uc, entry, bits, little,
+                                                      inputs, set(), prefix))
+                assert outcomes[0] == outcomes[1]
+                faults.append({"inputs": inputs, "result": outcomes[0]})
         receipt = {"profile": profile, "function": function, "backend": backend,
                 "cases": observations,
                 "faults": faults,
