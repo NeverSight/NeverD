@@ -126,6 +126,17 @@ successfully, all 169 MIPS tests passed again, and the selected firmware views
 were regenerated. This follow-up covers the intervening SDK changes; the
 broader and source-roundtrip results above remain tied to their recorded build.
 
+The partial-value follow-up on dev `a72fcd510` passed 330 MIPS/shared cases.
+After adding the fully unknown-destination regression, all 64 MIPS integer
+cases and 691 jump-table cases passed. Six jump-table cases were skipped:
+two require a compiler-generated table shape this compiler did not produce,
+one requires an x86-64 Linux host, and three require unavailable QEMU user-mode
+executors. The selected firmware views still emit successfully. Receipts are
+`build-mips/ctest-partial-values-shared.log`,
+`build-mips/ctest-partial-values-jumptable.log` and
+`build-mips/partial-values/qualification.json`. The 200-group source result
+above belongs to the preceding merge-load increment, not a rerun of this one.
+
 ## TP-Link firmware workflow
 
 Start with the actual extracted ELF profile instead of assuming a device is
