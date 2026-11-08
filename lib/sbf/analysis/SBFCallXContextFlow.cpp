@@ -509,6 +509,7 @@ bool refineAddressBranch(const MedInstruction *Last, size_t Successor,
       return true;
     const auto Before = Bounds.value_or(UnsignedValueRange{});
     auto Range = Before;
+    std::optional<UnsignedValueRange> LowerPart;
     bool Possible = true;
     switch (Predicate) {
     case Operation::Eq:
@@ -523,6 +524,12 @@ bool refineAddressBranch(const MedInstruction *Last, size_t Successor,
           ++Range.Lower;
       } else if (Range.Upper == Constant) {
         --Range.Upper;
+      } else if (Range.Lower < Constant && Constant < Range.Upper) {
+        // A tag excluded from the middle of a range needs both remaining
+        // intervals. Keeping the original hull would let this path supply a
+        // payload for the very tag its branch rejected.
+        LowerPart = UnsignedValueRange{Range.Lower, Constant - 1};
+        Range.Lower = Constant + 1;
       }
       break;
     }
@@ -556,17 +563,26 @@ bool refineAddressBranch(const MedInstruction *Last, size_t Successor,
     Reachable = true;
     // An unchanged captured value retains its equality identity. A narrowed
     // identity becomes a range rather than mutating globally shared bounds.
-    RegisterValue Narrowed =
-        Range == Before ? Value : unsignedRangeValue(Range);
-    if (Value.ValueKind == RegisterValue::Kind::Unknown &&
-        Range.Lower < kHeapStart)
-      Narrowed = {};
-    if (!Refined)
-      Refined = Narrowed;
-    else
-      Refined->join(Narrowed);
+    const auto Include = [&](UnsignedValueRange Part) {
+      RegisterValue Narrowed =
+          Part == Before ? Value : unsignedRangeValue(Part);
+      if (Value.ValueKind == RegisterValue::Kind::Unknown &&
+          Part.Lower < kHeapStart)
+        Narrowed = {};
+      if (!Refined)
+        Refined = Narrowed;
+      else
+        Refined->join(Narrowed);
+    };
+    Include(Range);
+    if (LowerPart)
+      Include(*LowerPart);
   }
   if (Reachable) {
+    // Splitting several intervals can exceed the existing alternative limit.
+    // The incoming value remains sound on this edge and retains its bounds.
+    if (Refined->unknown() && !State.Registers[Register].unknown())
+      return true;
     const uint16_t ReturnAliases =
         State.Nullable && (State.Nullable->Registers & registerBit(Register))
             ? State.Nullable->Registers
@@ -943,7 +959,8 @@ private:
   void transferValues(const MedInstruction &Instruction, ContextState &State);
   void transferTaggedMemory(const MedInstruction &Instruction,
                             ContextState &State);
-  llvm::Expected<bool> refineTaggedBranch(const MedBlock &Block,
+  llvm::Expected<bool> refineTaggedBranch(const FunctionContext &Context,
+                                          const MedBlock &Block,
                                           size_t Successor,
                                           ContextState &State);
   void refineOrigins(const FunctionContext &Context, ContextState &State);
@@ -984,6 +1001,10 @@ private:
   applyStoredExpressions(const MemoryPostconditions &Postconditions,
                          const ContextState &Input,
                          const ScratchState &EntryMemory, ScratchState &Output);
+  llvm::Error composeStoredExpressions(
+      const MemoryPostconditions &Fields, const ContextState &State,
+      const std::array<ProvenValueSet, kRegisterCount> &OriginEntry,
+      std::vector<std::pair<RegisterValue, size_t>> &Composed);
   llvm::Error instantiateTargetInputs(FunctionContext &Caller,
                                       const FunctionContext &Callee,
                                       const ContextState &Input,
@@ -2692,9 +2713,10 @@ void ContextFlow::transferTaggedMemory(const MedInstruction &Instruction,
     Tagged.Registers |= registerBit(Instruction.Dst);
 }
 
-llvm::Expected<bool> ContextFlow::refineTaggedBranch(const MedBlock &Block,
-                                                     size_t Successor,
-                                                     ContextState &State) {
+llvm::Expected<bool>
+ContextFlow::refineTaggedBranch(const FunctionContext &Context,
+                                const MedBlock &Block, size_t Successor,
+                                ContextState &State) {
   const auto *Last = Index.find(Block.EndSlot - 1);
   if (!Last || !State.Tagged ||
       Last->Semantics.Terminator != TerminatorKind::ConditionalJump)
@@ -2771,6 +2793,30 @@ llvm::Expected<bool> ContextFlow::refineTaggedBranch(const MedBlock &Block,
         // The old origin joined the unselected payloads as well. Rebuild its
         // literal/capture or frame-relative origin from this selected value.
         State.Origins[R] = {};
+      } else if (Context.Generic && Value.unknown()) {
+        // The payload may still be a deferred entry-memory read. Refine its
+        // already loaded carrier with the selected case's rebound expression,
+        // using the same unchanged-load/epoch proof as concrete payloads.
+        llvm::Error Failure = llvm::Error::success();
+        Facts.Postconditions.visitValues([&](const RegisterValue &Origin,
+                                             const ProvenValueSet &,
+                                             std::optional<size_t> Expression) {
+          if (Failure || !Expression)
+            return;
+          if (auto Error = visit()) {
+            Failure = std::move(Error);
+            return;
+          }
+          const auto Address = memoryAddress(
+              substituteOrigins(Origin, Context.Input.Registers, Program)
+                  .singleton());
+          if (Address == (*Cells)[R]) {
+            State.InputExpressions[R] = Expression;
+            State.Origins[R] = {};
+          }
+        });
+        if (Failure)
+          return std::move(Failure);
       }
     }
   }
@@ -3381,6 +3427,43 @@ llvm::Expected<size_t> ContextFlow::applyStoredExpressions(
   return Applied;
 }
 
+llvm::Error ContextFlow::composeStoredExpressions(
+    const MemoryPostconditions &Fields, const ContextState &State,
+    const std::array<ProvenValueSet, kRegisterCount> &OriginEntry,
+    std::vector<std::pair<RegisterValue, size_t>> &Composed) {
+  // The caller charges and retains this buffer until its rebound IDs have
+  // entered the caller's postconditions. Both ordinary and tagged returns use
+  // the same input substitution and pre-call memory-epoch guards.
+  Composed.reserve(Fields.size());
+  llvm::Error Failure = llvm::Error::success();
+  Fields.visitValues([&](const RegisterValue &Address,
+                         const ProvenValueSet &Origins,
+                         std::optional<size_t> Expression) {
+    if (Failure)
+      return;
+    if (!Expression) {
+      if (!substituteOrigins(Origins, OriginEntry, Program).unknown())
+        return;
+      auto Root = inputOriginExpression(Origins);
+      if (!Root) {
+        Failure = Root.takeError();
+        return;
+      }
+      Expression = *Root;
+    }
+    if (!Expression)
+      return;
+    auto Bound = composeReturnExpression(*Expression, State, OriginEntry);
+    if (!Bound) {
+      Failure = Bound.takeError();
+      return;
+    }
+    if (*Bound)
+      Composed.emplace_back(Address, **Bound);
+  });
+  return Failure;
+}
+
 llvm::Error ContextFlow::instantiateTargetInputs(FunctionContext &Caller,
                                                  const FunctionContext &Callee,
                                                  const ContextState &Input,
@@ -3961,7 +4044,8 @@ ContextFlow::instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
           const auto ReleaseTemporary =
               llvm::scope_exit([&] { RetainedBytes -= Temporary; });
           ContextState Successor = State;
-          auto Reachable = refineTaggedBranch(Block, NextSlot, Successor);
+          auto Reachable =
+              refineTaggedBranch(Owner, Block, NextSlot, Successor);
           if (!Reachable)
             return Reachable.takeError();
           if (!*Reachable)
@@ -4590,9 +4674,26 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
         TaggedMemoryCase Case;
         Case.Tags = Original.Tags;
         Case.Values = std::move(Values.Values);
-        // Callee expression IDs were evaluated against this call's entry.
-        // Only substituted origins can enter the caller's formal lane.
+        std::vector<std::pair<RegisterValue, size_t>> Composed;
+        const uint64_t ComposedBytes =
+            Context.Generic && Fields.expressionCount()
+                ? Fields.size() * sizeof(decltype(Composed)::value_type)
+                : 0;
+        if (auto Error = retain(ComposedBytes))
+          return std::move(Error);
+        const auto ReleaseComposed =
+            llvm::scope_exit([&] { RetainedBytes -= ComposedBytes; });
+        if (ComposedBytes)
+          if (auto Error = composeStoredExpressions(Fields, State, OriginEntry,
+                                                    Composed))
+            return std::move(Error);
+        // Consume callee IDs against the actual call entry above; only
+        // explicitly rebound expressions can survive in the formal lane.
+        // Selecting the tag later restores the already captured payload,
+        // including when this call changed its original source cell.
         Fields.discardExpressions();
+        for (const auto &[Address, Expression] : Composed)
+          Fields.storeExpression(Address, Expression);
         Case.Postconditions.include(Fields, OriginEntry, Program);
         ReturnedTagged->Cases.push_back(std::move(Case));
         const uint64_t Bytes = ReturnedTagged->retainedByteEstimate();
@@ -4658,35 +4759,9 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
       ComposedBytes = 0;
       return std::move(Error);
     }
-    ComposedFields.reserve(ReturnedPostconditions.size());
-    llvm::Error Failure = llvm::Error::success();
-    ReturnedPostconditions.visitValues([&](const RegisterValue &Address,
-                                           const ProvenValueSet &Origins,
-                                           std::optional<size_t> Expression) {
-      if (Failure)
-        return;
-      if (!Expression) {
-        if (!substituteOrigins(Origins, OriginEntry, Program).unknown())
-          return;
-        auto Root = inputOriginExpression(Origins);
-        if (!Root) {
-          Failure = Root.takeError();
-          return;
-        }
-        Expression = *Root;
-      }
-      if (!Expression)
-        return;
-      auto Bound = composeReturnExpression(*Expression, State, OriginEntry);
-      if (!Bound) {
-        Failure = Bound.takeError();
-        return;
-      }
-      if (*Bound)
-        ComposedFields.emplace_back(Address, **Bound);
-    });
-    if (Failure)
-      return std::move(Failure);
+    if (auto Error = composeStoredExpressions(ReturnedPostconditions, State,
+                                              OriginEntry, ComposedFields))
+      return std::move(Error);
   }
   if (Collect) {
     if (!Callee || Edge.LegacyRuntime) {
@@ -5540,7 +5615,7 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
         ContextState SuccessorState = State;
         const size_t NextSlot = Program.Med.Blocks[Successors[E]].StartSlot;
         auto TaggedReachable =
-            refineTaggedBranch(MedBlock, NextSlot, SuccessorState);
+            refineTaggedBranch(Context, MedBlock, NextSlot, SuccessorState);
         if (!TaggedReachable)
           return TaggedReachable.takeError();
         if (!*TaggedReachable)
@@ -5618,7 +5693,8 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
       return Error;
     const auto Release = llvm::scope_exit([&] { RetainedBytes -= Temporary; });
     ContextState Path = State;
-    auto TaggedReachable = refineTaggedBranch(MedBlock, TailSlot, Path);
+    auto TaggedReachable =
+        refineTaggedBranch(Context, MedBlock, TailSlot, Path);
     if (!TaggedReachable)
       return TaggedReachable.takeError();
     if (!*TaggedReachable)
