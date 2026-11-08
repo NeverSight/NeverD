@@ -21,11 +21,13 @@ int Decoder::decodeUnitForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
   Out.Head = {};
   Out.Slot = {};
   const int Size = decodeOneForLift(Bytes, Len, Addr, Out.Head);
-  if (Size <= 0 || !MIPS ||
-      !MIPSLifter::hasDelaySlot(MIPS->word(*Out.Head.Raw)))
+  if (Size <= 0 || !MIPS)
     return Size;
-  if (Addr > InvalidVA - 8 || Len < 8 ||
-      (!isMIPS64(TargetArch) && Addr > UINT32_MAX - 7))
+  const unsigned RequiredSlot = MIPS->delaySlotBytes(*Out.Head.Raw);
+  if (!RequiredSlot)
+    return Size;
+  if (Addr > InvalidVA - Size || Len <= size_t(Size) ||
+      (!isMIPS64(TargetArch) && Addr > UINT32_MAX - Size))
     return 0;
 
   Out.HeadStorage = *Out.Head.Raw;
@@ -34,7 +36,12 @@ int Decoder::decodeUnitForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
     Out.HeadStorage.detail = &Out.HeadDetail;
   }
   Out.Head.Raw = &Out.HeadStorage;
-  if (decodeOneForLift(Bytes + 4, Len - 4, Addr + 4, Out.Slot) != 4)
+  const int SlotSize =
+      decodeOneForLift(Bytes + Size, Len - Size, Addr + Size, Out.Slot);
+  if (SlotSize <= 0 ||
+      (RequiredSlot != 1 && unsigned(SlotSize) != RequiredSlot) ||
+      Addr > InvalidVA - Size - SlotSize ||
+      (!isMIPS64(TargetArch) && Addr > UINT32_MAX - Size - SlotSize + 1))
     return 0;
   Out.SlotStorage = *Out.Slot.Raw;
   if (Out.Slot.Raw->detail) {

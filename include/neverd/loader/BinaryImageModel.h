@@ -776,6 +776,29 @@ struct BinaryImage {
   std::optional<InstructionMode>
   instructionModeAt(va_t Addr,
                     std::optional<InstructionMode> IncomingMode = {}) const {
+    if (isMIPS(Arch) && Mode == InstructionMode::MixedMIPS) {
+      if (!MIPS || !MIPS->HasMicroMIPS || !isCodeAddress(Addr) ||
+          (IncomingMode && *IncomingMode != InstructionMode::MIPSClassic &&
+           *IncomingMode != InstructionMode::MicroMIPS))
+        return std::nullopt;
+      std::optional<InstructionMode> Proven;
+      const auto Region =
+          std::upper_bound(MIPS->CodeRegions.begin(), MIPS->CodeRegions.end(),
+                           Addr, [](va_t Address, const MIPSCodeRegion &R) {
+                             return Address < R.Start;
+                           });
+      if (Region != MIPS->CodeRegions.begin() && Addr < std::prev(Region)->End)
+        Proven = std::prev(Region)->Mode;
+      if (const auto Entry = MIPS->CodeModeEntries.find(Addr);
+          Entry != MIPS->CodeModeEntries.end()) {
+        if (Proven && *Proven != Entry->second)
+          return std::nullopt;
+        Proven = Entry->second;
+      }
+      if (Proven && IncomingMode && Proven != IncomingMode)
+        return std::nullopt;
+      return Proven ? Proven : IncomingMode;
+    }
     if (Arch != neverd::Arch::ARM)
       return Mode;
     if (!isCodeAddress(Addr))
@@ -2014,7 +2037,13 @@ struct BinaryImage {
     if (DataInCode.count(Normalized) || isFunctionContinuationAt(Addr) ||
         !hasExecutableCodeOwnerAt(Normalized))
       return false;
-    if (Arch == neverd::Arch::AArch64 || isMIPS(Arch))
+    if (isMIPS(Arch)) {
+      const auto LocalMode = instructionModeAt(Normalized);
+      return LocalMode &&
+             Normalized % (*LocalMode == InstructionMode::MicroMIPS ? 2 : 4) ==
+                 0;
+    }
+    if (Arch == neverd::Arch::AArch64)
       return Normalized % 4 == 0;
     if (Arch == neverd::Arch::ARM) {
       const auto LocalMode = instructionModeAt(Normalized);

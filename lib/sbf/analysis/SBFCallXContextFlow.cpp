@@ -618,20 +618,63 @@ std::optional<size_t> knownBranchSuccessor(const MedInstruction *Last,
       Last->Semantics.Source == OperandSourceKind::SourceRegister
           ? State.Registers[Last->Src]
           : Immediate;
-  std::optional<bool> Taken;
-  for (const auto &Left : State.Registers[Last->Dst].values()) {
-    if (Left.ValueKind != RegisterValue::Kind::Constant)
+  const auto Outcome = [&](const RegisterValue &Left,
+                           const RegisterValue &RHS) -> std::optional<bool> {
+    if (Left.ValueKind == RegisterValue::Kind::Constant &&
+        RHS.ValueKind == RegisterValue::Kind::Constant)
+      return evaluateBranchCondition(Last->Op, Last->Width, Left.Value,
+                                     RHS.Value);
+    switch (Last->Op) {
+    case Operation::Eq:
+    case Operation::Ne:
+    case Operation::UGt:
+    case Operation::UGe:
+    case Operation::ULt:
+    case Operation::ULe:
+      break;
+    default:
+      // Unsigned interval endpoints do not bound a signed comparison or a
+      // bit-test. The exact scalar transfer above still handles those.
       return std::nullopt;
-    for (const auto &RHS : Right.values()) {
-      if (RHS.ValueKind != RegisterValue::Kind::Constant)
-        return std::nullopt;
-      const bool Outcome =
-          evaluateBranchCondition(Last->Op, Last->Width, Left.Value, RHS.Value);
-      if (Taken && *Taken != Outcome)
-        return std::nullopt;
-      Taken = Outcome;
     }
-  }
+    auto L = unsignedValueRange(Left);
+    auto R = unsignedValueRange(RHS);
+    if (!L || !R || L->Lower > L->Upper || R->Lower > R->Upper)
+      return std::nullopt;
+    if (Last->Width == kWordBitWidth) {
+      const auto Truncate = [](UnsignedValueRange Range) {
+        if (Range.Lower >> kWordBitWidth != Range.Upper >> kWordBitWidth)
+          return UnsignedValueRange{0, UINT32_MAX};
+        return UnsignedValueRange{static_cast<uint32_t>(Range.Lower),
+                                  static_cast<uint32_t>(Range.Upper)};
+      };
+      *L = Truncate(*L);
+      *R = Truncate(*R);
+    }
+    const bool Result =
+        evaluateBranchCondition(Last->Op, Last->Width, L->Lower, R->Lower);
+    if (Last->Op == Operation::Eq || Last->Op == Operation::Ne) {
+      const bool Overlap = L->Lower <= R->Upper && R->Lower <= L->Upper;
+      if (Overlap && (L->Lower != L->Upper || R->Lower != R->Upper))
+        return std::nullopt;
+      return Result;
+    }
+    // Ordered unsigned comparisons are monotone in both operands. Keep a
+    // successor only when every corner agrees, using the ISA scalar owner.
+    for (uint64_t LV : {L->Lower, L->Upper})
+      for (uint64_t RV : {R->Lower, R->Upper})
+        if (evaluateBranchCondition(Last->Op, Last->Width, LV, RV) != Result)
+          return std::nullopt;
+    return Result;
+  };
+  std::optional<bool> Taken;
+  for (const auto &Left : State.Registers[Last->Dst].values())
+    for (const auto &RHS : Right.values()) {
+      const auto Value = Outcome(Left, RHS);
+      if (!Value || (Taken && *Taken != *Value))
+        return std::nullopt;
+      Taken = *Value;
+    }
   if (!Taken)
     return std::nullopt;
   return *Taken ? *Last->BranchTarget : Last->Slot + Last->SlotWidth;
@@ -3558,7 +3601,32 @@ ContextFlow::instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
     return std::optional<MemoryPathInstantiation>{};
   if (!FixedMemory && !maximumCopyLength(Input.Registers[3]))
     return std::optional<MemoryPathInstantiation>{};
-  if (!FixedMemory && Input.Registers[3].values().size() > 1) {
+  const ProvenValueSet *Alternatives = nullptr;
+  std::optional<unsigned> AlternativeRegister;
+  std::optional<MemoryWrite> AlternativeCell;
+  if (FixedMemory) {
+    for (unsigned R = 0; R < kRegisterCount; ++R)
+      if ((InputRegisters[Entry] & registerBit(R)) &&
+          Input.Registers[R].values().size() > 1) {
+        Alternatives = &Input.Registers[R];
+        AlternativeRegister = R;
+        break;
+      }
+    if (!Alternatives)
+      for (const auto &Read : GenericContexts.at(Entry)->ReadEffects.Writes) {
+        const auto &Values = Input.Scratch.Values.readValues(
+            Read.Address, static_cast<unsigned>(Read.Size));
+        if (Values.values().size() > 1) {
+          Alternatives = &Values;
+          AlternativeCell = Read;
+          break;
+        }
+      }
+  } else if (Input.Registers[3].values().size() > 1) {
+    Alternatives = &Input.Registers[3];
+    AlternativeRegister = 3;
+  }
+  if (Alternatives) {
     std::optional<MemoryPathInstantiation> Joined;
     uint64_t JoinedBytes = 0;
     const auto InstantiationBytes = [](const MemoryPathInstantiation &Path) {
@@ -3569,19 +3637,25 @@ ContextFlow::instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
     };
     const auto ReleaseJoined =
         llvm::scope_exit([&] { RetainedBytes -= JoinedBytes; });
-    // Prove all members of the existing finite domain. Source/destination
-    // alternatives remain independent: no length/address correlation is
-    // guessed.
-    for (const auto &Length : Input.Registers[3].values()) {
+    // Partition one complete input domain at a time. Fixed scalar paths must
+    // prove every register/cell combination; transfer paths partition lengths
+    // only. No correlation between independently joined inputs is guessed.
+    for (const auto &Value : Alternatives->values()) {
       const uint64_t AlternativeBytes = stateBytes(Input);
       if (auto Error = retain(AlternativeBytes))
         return std::move(Error);
       const auto ReleaseAlternative =
           llvm::scope_exit([&] { RetainedBytes -= AlternativeBytes; });
       ContextState Alternative = Input;
-      Alternative.Registers[3] = Length;
-      Alternative.Origins[3] = Length;
-      auto Path = instantiateMemoryPath(Owner, Entry, Alternative);
+      if (AlternativeRegister) {
+        Alternative.Registers[*AlternativeRegister] = Value;
+        Alternative.Origins[*AlternativeRegister] = Value;
+      } else {
+        Alternative.Scratch.Values.writeValues(
+            AlternativeCell->Address, Value,
+            static_cast<unsigned>(AlternativeCell->Size));
+      }
+      auto Path = instantiateMemoryPath(Owner, Entry, Alternative, FixedMemory);
       if (!Path)
         return Path.takeError();
       if (!*Path)
@@ -4101,20 +4175,22 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
               Access.Size == sizeof(uint64_t)) &&
              isScratchRange(Access.Address.Value, Access.Size);
     };
+    const auto FiniteLiterals = [](const ProvenValueSet &Values) {
+      return !Values.unknown() &&
+             llvm::all_of(Values.values(), [](const RegisterValue &Value) {
+               return Value.ValueKind == RegisterValue::Kind::Constant;
+             });
+    };
     FixedMemory =
         llvm::all_of(Callee->Effects.Writes, FixedCell) &&
         llvm::all_of(Callee->ReadEffects.Writes, [&](const MemoryWrite &Read) {
           return FixedCell(Read) &&
-                 State.Scratch.Values
-                         .readValues(Read.Address,
-                                     static_cast<unsigned>(Read.Size))
-                         .singleton()
-                         .ValueKind == RegisterValue::Kind::Constant;
+                 FiniteLiterals(State.Scratch.Values.readValues(
+                     Read.Address, static_cast<unsigned>(Read.Size)));
         });
     for (unsigned R = 0; R < kRegisterCount; ++R)
       if ((InputRegisters[Callee->EntryBlock] & registerBit(R)) &&
-          State.Registers[R].singleton().ValueKind !=
-              RegisterValue::Kind::Constant)
+          !FiniteLiterals(State.Registers[R]))
         FixedMemory = false;
   }
   if ((CopiesCapturedValue || CopiesKnownFrameRange || UpdatesKnownDescriptor ||
@@ -4127,21 +4203,48 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
     if (*Copy) {
       if (FixedMemory) {
         auto &Output = (**Copy).Output;
-        const auto Value = Output.Registers[kReturnRegister].singleton();
-        if (Value.ValueKind == RegisterValue::Kind::Constant &&
-            Value.Value >= kHeapStart &&
-            Value.Value < kHeapStart + kMemoryRegionSize) {
-          // Keep the exact return's fields conditional on this call path,
-          // just like bounded symbolic returns. A literal key would lose its
-          // fields when joined with an allocation on another branch. The
-          // singleton bound preserves alias checks; it implies no freshness.
+        const auto &Values = Output.Registers[kReturnRegister];
+        std::optional<UnsignedValueRange> Bounds;
+        bool Complete = !Values.unknown();
+        bool HasNull = false;
+        for (const auto &Value : Values.values()) {
+          if (Value.ValueKind != RegisterValue::Kind::Constant) {
+            Complete = false;
+            break;
+          }
+          if (Value.Value == 0) {
+            HasNull = true;
+            continue;
+          }
+          if (Value.Value < kHeapStart ||
+              Value.Value >= kHeapStart + kMemoryRegionSize) {
+            Complete = false;
+            break;
+          }
+          if (!Bounds)
+            Bounds = UnsignedValueRange{Value.Value, Value.Value};
+          else {
+            Bounds->Lower = std::min(Bounds->Lower, Value.Value);
+            Bounds->Upper = std::max(Bounds->Upper, Value.Value);
+          }
+        }
+        if (Complete && Bounds) {
+          // Name the one actual returned pointer after proving every input
+          // case. Numeric bounds may widen, but this identity supplies neither
+          // freshness nor correlation with other independently joined cells.
           auto Captured =
-              captureAddress(Context.ID, Instruction.Slot, UINT64_MAX,
-                             {Value.Value, Value.Value});
+              captureAddress(Context.ID, Instruction.Slot, UINT64_MAX, *Bounds);
           if (!Captured)
             return Captured.takeError();
+          const bool New = !Output.definesCapture(Captured->Value);
           Output.Registers[kReturnRegister] = *Captured;
-          Output.Origins[kReturnRegister] = *Captured;
+          if (HasNull) {
+            Output.Registers[kReturnRegister].join(
+                RegisterValue{RegisterValue::Kind::Constant, 0, 0});
+            Output.Nullable = NullableCapture{
+                Captured->Value, registerBit(kReturnRegister), New, {}, {}};
+          }
+          Output.Origins[kReturnRegister] = Output.Registers[kReturnRegister];
           Output.defineCapture(Captured->Value);
         }
       }

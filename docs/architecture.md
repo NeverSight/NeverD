@@ -1335,9 +1335,18 @@ C routes use that same layout. Such raw calls also use the physical bridge,
 so an integer IR carrier cannot silently acquire the i128 general-register ABI.
 External C declarations retain the logical aggregate type without creating a
 copy; function-body projections still require their separate storage proof.
-This covers standalone full-width vector values. General vector-containing
-record ABIs, including homogeneous vector aggregates, still need their member
-and register-bank classification.
+Short vectors retain their 64/128-bit widths. A homogeneous vector aggregate
+(HVA) has one to four same-width members after flattening natural nested
+records and arrays. The shared source layout and AAPCS64 placement owners
+assign complete D/Q members, exhaust the FP bank on a whole-aggregate spill,
+and retain natural stack alignment. Validation reuses that placement rather
+than accepting a merely contiguous register prefix. Results occupy D/Q0..3;
+partial machine reads first select the full logical member and then slice its
+bits. Anonymous C record identities distinguish vectors from integers and
+include array extents and element types. Complete larger non-HVAs retain their
+original indirect argument and x8 storage contracts. These recovered fixed C
+contracts do not infer a prototype or admit packed/union, variadic-vector or
+other language conventions.
 Call-occurrence identity can describe 32-bit or 64-bit targets, while native
 frame and Boolean-result proofs require the complete target architecture
 pointer width before granting a source projection.
@@ -1363,6 +1372,42 @@ compares exception classes; complete ESR
 and exact fault-PC equality remain unqualified. Whole-image arm64e rebuilding
 still requires the separate
 authenticated storage, relocation and signed-unwind ABI contract.
+
+The NeverSight LLVM fork retains a typed pointer-authentication recipe in its
+binary-rewrite symbol requests and fixup hooks: key, discriminator and address
+diversity accompany the final storage address and resolved unsigned target.
+Authenticated storage requires a consuming installer. Its result is not
+overwritten by the object writer's authentication metadata encoding. This MC
+contract is the handoff for a dyld fixup installer, not an offline PAC signing
+operation. The r6 prebuilt does not yet expose this fork interface.
+
+`MachOAuthenticatedFixups` installs explicit final-address signing recipes in
+linked arm64e chained images. It reuses the strict dependency reader's owned
+segments, imports and raw slots, preserves existing binding identities, and
+rebuilds single/multiple-start pages with each format's native stride and index
+width. Local targets retain their mapped image owner; imported targets retain
+the exact existing library ordinal, symbol, addend and weak flag. The six
+arm64e chain formats share the same pointer-field authority. Segmented chains
+cannot express binds and reject them. Imports may extend the table but do not
+create dependency load commands or infer a provider.
+
+Installation is transactional, including the optional recipe handoff in
+`MachOPatcher::appendReplacementImage`. New RX/RW placement precedes dyld
+encoding so address diversity uses the final storage VA. Re-decoding compares
+every requested recipe and preserves every original fixup. A staged signature
+remains opaque and terminal in LINKEDIT so the existing publication signer can
+replace it; retaining those bytes does not validate its old hashes. An
+independent replay also checks recipes after final code signing.
+
+The complete transaction compares original dependencies from before segment
+insertion, including segmented pointers whose target ordinal would otherwise
+change when a new load command is inserted. Such a changed target is rejected
+without publishing any bytes.
+
+This installation phase does not enable whole-image arm64e publication. The
+compiler/native-object producer handoff, legacy threaded-stream installation,
+new provider admission and native signed call/unwind execution remain separate
+contracts. The publication guard remains until those contracts are qualified.
 
 The shared AAPCS64 parameter placement owner describes Darwin fixed value
 spills with their natural size and alignment after either register bank is
@@ -12985,7 +13030,8 @@ with their existing Linux and report inventories. Keep control flow in C++ and
 independent test expectations in fixtures; ordinary punctuation and empty strings
 do not need vocabulary entries.
 
-`AndroidFormatting` owns both ordinary and fortify string formatting. Its
+`AndroidFormatting` owns ordinary/fortify string formatting and the native
+print/vprint/buf_print liblog entry points. Its
 entrypoint classification supplies the fixed-argument layout and object-size
 checks to one formatter and the shared AAPCS64 `ArgumentReader`; it does not
 duplicate conversion rules for checked imports, dynamic providers, SDK or CLI.
@@ -15183,6 +15229,13 @@ calls, PHIs, exceptional flow and unproved uses retain their original inputs.
 The focused MIPS loader, integer, flow, SDK and pipeline suites cover these
 contracts. Owned kernels are recompiled from HighC and LLVMC for the original
 MIPS target and compared with their assembly originals in pinned Unicorn.
+The microMIPS32/o32 subset adds local instruction modes to the existing image
+and decoder owners. `MIPSCodeMode` validates serialized targets and complete
+unit spans; `MicroMIPSInteger.def` maps admitted scalar encodings without using
+Capstone aliases as semantics. `MedMIPSReturnTargets` proves source returns
+against captured entry RA, and `MIPSInstructionModeSource` owns mode attributes
+and the numeric code-pointer source qualification boundary. Actual two/four-byte
+head and slot lengths remain in the shared LowIR instruction records.
 The official Archer C7 V5 example qualifies selected static function views,
 not an entire firmware image. This is an analysis-only addition to the matrix
 above: no MIPS rewrite or guest-process execution backend is claimed. See

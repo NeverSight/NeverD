@@ -586,8 +586,18 @@ wrapping/truncated ranges and cleanup calls retain conservative joins.
 The existing four-alternative bound applies to tag values and cases. A caller
 substitutes output fields and capture identities against its own entry before
 loading the returned tag.
-Its branch can then restore only fields common to all selected cases. Exact
-64-bit register copies retain the tag relation; redefinition, potentially
+Its branch can then restore only fields common to all selected cases.
+A comparison excludes a bounded tag case only when its equality or unsigned
+ordered outcome is the same for every numeric alternative. The comparison
+uses the instruction width: 32-bit comparisons first truncate the bounds, and
+a range crossing a low-word boundary admits every 32-bit value. Overlapping
+ranges that admit both outcomes remain possible. Signed comparisons, bit tests
+and nonnumeric coordinates retain the existing conservative behavior unless
+all operands are literal values. The same known-successor rule serves ordinary
+context flow and memory-path replay; no extra specialization is created. The
+existing `skipped_constant_branch_successors` counter includes these constant
+outcomes over numeric ranges.
+Exact 64-bit register copies retain the tag relation; redefinition, potentially
 aliasing tag writes, calls, memory copies and loop backedges discard it. Payload
 writes invalidate affected conditional fields through the existing typed-memory
 owner. Unknown tag cases and other return shapes retain the ordinary
@@ -936,16 +946,23 @@ an unknown branch or write.
 
 When all four specializations are occupied, a caller can also replay an acyclic
 scalar path that reads and writes fixed scratch cells. Every required input
-register and read cell must contain one literal value. The completed generic
-summary must bound every read and write to a fixed 1/2/4/8-byte cell; unknown or
+register and read cell must contain a complete finite set of literal values.
+The replay partitions these inputs independently and proves every combination;
+a failed path rejects the complete joined result. These cases share the existing
+work and retained-state budgets and do not add cached specializations. The
+completed generic summary must bound every read and write to a fixed
+1/2/4/8-byte cell; unknown or
 frame-relative footprints do not qualify. Nested direct calls share the same
 path proof, work budget, memory budget and call-depth limits. Unknown branches,
 syscalls, opaque calls and repeated blocks reject the proof. This adds no cached
 specialization and infers no initial heap contents or allocator contract.
 
-A successful exact heap-address return retains a captured identity with a
-singleton numeric bound. Its fields therefore remain conditional on that
-return when branches merge. The identity implies neither a fresh object nor
+A complete set of successful literal heap-address returns names the one actual
+returned pointer with a captured identity and enclosing numeric bounds. Its
+fields therefore remain conditional on that return when branches merge. A null
+alternative retains the existing conditional-definition rule: choosing the null
+path cannot define a new successful-return identity. This does not correlate
+other memory cells merely because their numeric alternatives match the return. The identity implies neither a fresh object nor
 separation from another pointer. The canonical typed-memory reader can read an
 unconditional absolute cell through its exact captured alias; it cannot expose
 a conditional captured field through an unrelated literal address. Width and

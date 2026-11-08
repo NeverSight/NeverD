@@ -60,6 +60,7 @@ struct Reader {
   const symtab_command *Sym = nullptr;
   const dysymtab_command *Dyn = nullptr;
   MachODependencyState State;
+  MachOChainedFixups *Chained = nullptr;
   Bytes Digest;
   bool Bad = false;
   unsigned Pointer = 0;
@@ -144,12 +145,25 @@ struct Reader {
         [&](const uint8_t *P, uint32_t ID, uint32_t Size, bool Is64) {
           if (ID == getMachOSegmentCmdID(Is64)) {
             auto S = readMachOSegment(P, Is64);
+            if (Chained) {
+              if (readMachOName(S.SegName) == kLinkeditSegment)
+                Chained->LinkeditIndex = Segments.size();
+              Chained->Segments.push_back({S.VMAddr,
+                                           S.VMSize,
+                                           S.FileOff,
+                                           S.FileSize,
+                                           uint32_t(P - B.data()),
+                                           S.InitProt,
+                                           0,
+                                           0,
+                                           {}});
+            }
             Segments.push_back(S);
             if (S.FileOff == 0 && S.FileSize) {
               HeaderVA = S.VMAddr;
               ++HeaderCount;
             }
-            if (readMachOName(S.SegName) == "__LINKEDIT") {
+            if (readMachOName(S.SegName) == kLinkeditSegment) {
               LinkeditVA = S.VMAddr;
               LinkeditSize = S.VMSize;
               LinkeditOff = S.FileOff;
@@ -183,6 +197,9 @@ struct Reader {
             number(Row, D->dylib.compatibility_version);
             text(Row, reinterpret_cast<const char *>(P + O));
             State.Libraries.push_back(std::move(Row));
+            if (Chained)
+              Chained->Libraries.emplace_back(
+                  reinterpret_cast<const char *>(P + O));
           } else if (ID == LC_DYLD_INFO_ONLY || ID == LC_DYLD_INFO) {
             Bad |= Dyld != nullptr;
             Dyld = reinterpret_cast<const dyld_info_command *>(P);
@@ -207,6 +224,11 @@ struct Reader {
       return fail("ambiguous, static or classic dyld metadata is not modeled");
     for (const auto &L : State.Libraries)
       bytes(Digest, L);
+    if (Chained && Chain) {
+      Chained->HeaderVA = HeaderVA;
+      Chained->CommandOffset =
+          reinterpret_cast<const uint8_t *>(Chain) - B.data();
+    }
     return llvm::Error::success();
   }
   llvm::Error symbols() {
@@ -518,6 +540,8 @@ struct Reader {
       if (N.empty())
         return fail("empty chained symbol");
       Imports.push_back({Ordinal, Addend, Weak, N});
+      if (Chained)
+        Chained->Imports.push_back({Ordinal, Addend, Weak, N.str()});
     }
     const uint32_t Count = readLE<uint32_t>(C.data() + F.starts_offset);
     unsigned PointerFormat = 0;
@@ -557,6 +581,10 @@ struct Reader {
       if (PointerFormat && PointerFormat != Format)
         return fail("mixed chained pointer formats");
       PointerFormat = Format;
+      if (Chained) {
+        Chained->Segments[I].PointerFormat = Format;
+        Chained->Segments[I].PageSize = Page;
+      }
       number(Digest, Format);
       number(Digest, Page);
       Ranges.emplace_back(O, O + Size);
@@ -608,6 +636,8 @@ struct Reader {
             ChainSlots.insert(NextSlot, *VA);
             const uint64_t Raw =
                 readLE<uint64_t>(B.data() + Segments[I].FileOff + Offset);
+            if (Chained)
+              Chained->Segments[I].Slots.push_back({Offset, Raw});
             unsigned NextBytes = ((Raw >> 51) & 0xfff) * kOrdinaryChainStride;
             if (Arm64e) {
               const auto Word =
@@ -700,8 +730,11 @@ struct Reader {
 } // namespace
 
 llvm::Expected<MachODependencyState>
-readMachODependencyState(llvm::ArrayRef<uint8_t> B) {
+readMachODependencyState(llvm::ArrayRef<uint8_t> B,
+                         MachOChainedFixups *Chained) {
   Reader R;
+  MachOChainedFixups Details;
+  R.Chained = Chained ? &Details : nullptr;
   R.B = B;
   if (auto E = R.commands())
     return E;
@@ -751,6 +784,8 @@ readMachODependencyState(llvm::ArrayRef<uint8_t> B) {
     bytes(R.Digest, Value);
   }
   R.State.Digest = llvm::SHA256::hash(R.Digest);
+  if (Chained)
+    *Chained = std::move(Details);
   return std::move(R.State);
 }
 llvm::Error preserveMachODependencyState(const MachODependencyState &Before,

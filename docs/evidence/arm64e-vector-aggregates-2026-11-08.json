@@ -1,0 +1,737 @@
+{
+  "schema": "neverd-arm64e-vector-aggregates-v1",
+  "overall_arm64e_complete": false,
+  "producer_revision": "3b94c66d87d2d014ddcec812f39d19e3fb36ad64",
+  "integration_revision": "7be39e431a330de830b7028e35e1d5d6fdbc0b40",
+  "environment_repository": "https://github.com/gmh5225/test_mac_intel",
+  "environment_revision": "72c76b083f0ab55b8e7f03bbc0dbe5ab01fd9d25",
+  "environment_maintenance_revision": "71b8ed7301f4e73fe63e1519fe926ba9405da55b",
+  "environment_pr": "https://github.com/gmh5225/test_mac_intel/pull/3",
+  "changes": [
+    "Native fixed Darwin C declarations retain 64/128-bit short vectors and one-to-four-member HVA, including nested records and arrays, full FP-bank exhaustion, natural spills and all result words.",
+    "Larger complete non-HVA vector records retain original indirect argument and x8 result addresses. Anonymous C record names preserve vector and array identity.",
+    "Native LLVM, HighC O0/O2 and LLVMC O0/O2 share the validated physical call layout and original authenticated call instruction.",
+    "SDK/SP verifiers and the controlled model environment journal disposable products before producer launch and recover interruption without deleting formal inputs or active compiler output."
+  ],
+  "toolchain": {
+    "profile": "Release",
+    "llvm_package": "neverd-llvm-v23.0.0-r6",
+    "llvm_source_patches_or_overlays": false,
+    "compiler": "Apple clang 17.0.0 (clang-1700.0.13.5)",
+    "container_image": "sha256:b60022df2f5f52d4461b273e3b44190abb85effff05cbb52e1ed25818f010023",
+    "model": "FVP_Base_RevC-2xAEMvA 11.32+19",
+    "model_archive_sha256": "b6835fd07cb390c7a32f84fe1cead84bde992813b49679137b3a7a0a026e92de",
+    "model_binary_sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+    "working_dependencies": {
+      "signatures": "20b9036f4367e1308a3d2f0b214e06859090a7af",
+      "third_party/capstone": "b8c22e0c16b1769dfa712547d4a5c5d49560ae46"
+    }
+  },
+  "validation": {
+    "instances": 2498,
+    "passed": 2477,
+    "skipped": 21,
+    "failures": 0,
+    "by_owner": {
+      "NeverDAArch64AuthenticatedCallTests": {
+        "COMPLETED": 151
+      },
+      "NeverDSourceCallABITests": {
+        "COMPLETED": 30
+      },
+      "NeverDObjCSourceCallTests": {
+        "COMPLETED": 1919
+      },
+      "NeverDLLVMCValueTests": {
+        "COMPLETED": 132,
+        "SKIPPED": 21
+      },
+      "NeverDLiftTests": {
+        "COMPLETED": 112
+      },
+      "NeverDSourceEntryBindingTests": {
+        "COMPLETED": 77
+      },
+      "NeverDCDisplayFrameRecordTests": {
+        "COMPLETED": 15
+      },
+      "NeverDArm64eSourceCallSDK": {
+        "COMPLETED": 41
+      }
+    },
+    "skip_details": [
+      {
+        "test": "LLVMCValues.PrefetchKeepsComputedAndSegmentedMemoryOperands",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:231\nthe prefetch instructions need an x86 host\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.NativeSHA256KeepsVectorInputsAndInstructionFeatures",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:373\nSHA-256 native oracle requires the host SHA feature\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.SHAFeaturesComposeWithNativeInstructionFallbacks",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: false\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: false\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: false\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:480: true\nunittests/lift/core/LLVMCValueTests.cpp:479: true\nunittests/lift/core/LLVMCValueTests.cpp:478: true\nunittests/lift/core/LLVMCValueTests.cpp:477: true\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.RtmFeaturesComposeWithShaAcrossNativeAndAssemblyCalls",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:593: false\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:76\nthe C retains x86 instructions; running it requires an x86 host\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:593: true\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.NativeVirtualizationKeepsStatusAndFailedReadPrior",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:817\nrequires the qualified native virtualization SDK\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.NativeDescriptorReadKeepsExplicitPrior",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:935\nrequires native Linux x86-64 descriptor queries\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.NativeDescriptorAddressesKeepSegmentWidthAndPrior",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:997\nrequires native Linux x86-64 descriptor queries\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.TargetIndexWidthKeepsNegativeFrameOffsets",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:1113\nrequires native Linux i386/x64 execution\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.X87MemoryViewsRetainBitsAndTenByteExtents",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:1151\nrequires native Linux i386/x64 binary80 execution\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.X87FiniteConstantsKeepExtendedPrecisionAndRange",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:1272\nrequires native Linux i386/x64 binary80 execution\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.X86NativeDivideKeepsBothResultsAndDeadResultFaults",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:1420\nrequires native Linux i386/x64 execution\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.X86BitStringIntrinsicsMatchOriginalMemoryAndFaults",
+        "reasons": [
+          "unittests/lift/core/../x86/X86NativeBitTestTests.inc:65\nrequires original Linux x64 bit-string instructions\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.X86DivideIntrinsicsMatchOriginalResultsAndFaults",
+        "reasons": [
+          "unittests/lift/core/../x86/X86NativeDivisionTests.inc:53\nrequires the original Linux x64 DIV/IDIV oracle\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.NativeAssemblyKeepsOperandSnapshotsAcrossBranches",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:1554\nrequires native Linux i386/x64 execution\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.I386WideCarriersRetainWrappingShiftsAndSignedComparison",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:3123\n32-bit scalar C execution requires Linux i386 support\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.WideIntegerConstantsPreserveEveryWordAndStoreExtent",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 1024\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 160\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 2048\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 256\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 288\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3745: 512\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.WideConstantsPreserveEveryStoredByte",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 129\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 136\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 159\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 192\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 2047\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 2048\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 224\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 255\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 256\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 257\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 384\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 511\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 512\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: false\nunittests/lift/core/LLVMCValueTests.cpp:3834: 513\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 129\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 136\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 159\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 192\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 2047\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 2048\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 224\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 255\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 256\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 257\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 384\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 511\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 512\n",
+          "unittests/lift/core/LLVMCValueTests.cpp:79\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCValueTests.cpp:3835: true\nunittests/lift/core/LLVMCValueTests.cpp:3834: 513\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.AWeakImportIsDeclaredWeak",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:4823\nrequires native ELF undefined-weak linkage\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.SelectedFunctionKeeps32BitSynthesizedTableStorage",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:7650\n32-bit scalar C execution requires Linux i386 support\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.VariadicCallSiteKeepsWindowsFloatingRegisterDuplicates",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:7754\nNative Windows x64 ABI execution requires x64\n"
+        ]
+      },
+      {
+        "test": "LLVMCValues.AFixedCallSiteKeepsItsOwnCallingConvention",
+        "reasons": [
+          "unittests/lift/core/LLVMCValueTests.cpp:7818\nNative Windows x64 ABI execution requires x64\n"
+        ]
+      }
+    ],
+    "reports": {
+      "owners": {
+        "sha256": "32df9eb91b0bd669838a743f47fc9e4a26c9ba5237967e6d4274b9c0b3cb9cf5",
+        "registered_timeouts_unchanged": true
+      },
+      "abi": {
+        "sha256": "fcce4c16dab744cbcf10352b69eee0e4b73fee698392fa69c54d05a5b663908a",
+        "registered_timeouts_unchanged": true
+      }
+    },
+    "initial_revision": "6d74ddd443274da938c5cd9f10a24d846d61f0c9",
+    "initial_failures": [
+      {
+        "test": "NativeSourceHints.PointeeConflictsConvergeThroughSharedPhiUses",
+        "owner": "NeverDObjCSourceCallTests",
+        "status": 1
+      },
+      {
+        "test": "SwiftABIProjectionPlan.InvalidOrDuplicateIdentitiesCannotStackInOneBatch",
+        "owner": "NeverDObjCSourceCallTests",
+        "status": 1
+      }
+    ],
+    "post_fix_reports": {
+      "type-boundaries": {
+        "sha256": "0ee689a62962f73757bb6b8441fbe07c64d0fd04b6bb44f9fce456b54ec1868d",
+        "registered_timeouts_unchanged": true
+      },
+      "auth": {
+        "sha256": "4103a9413f195f411146cfcf333d8d688dc0f0d32a4c9a7c74feceb27aaec91a",
+        "registered_timeouts_unchanged": true
+      },
+      "frame": {
+        "sha256": "50365f4e08a63acf6f6c9addce4f95959ae531f75eb669201f7544990a16c57a",
+        "registered_timeouts_unchanged": true
+      }
+    },
+    "auth_report_sha256": "4c7fb499fb25f2b08223124471586fdfca0673d3c0bd1aebaef139e1f2703824",
+    "sdk_junit_sha256": "d721ed431f8548c09dd06c0291573acb2d1721c0ad5f9d3f804eea9f887eee75",
+    "environment_unit_tests": 60,
+    "sdk_sp_lifecycle_unit_tests": 5
+  },
+  "model": {
+    "shapes": 73,
+    "objects": 1825,
+    "passed_guests": 30,
+    "valid_original_projected_pairs": 43800,
+    "invalid_signature_pairs": 105120,
+    "exception_class_differences": 0,
+    "execution_levels": [
+      "EL1",
+      "EL0"
+    ],
+    "reported_pauth_levels": [
+      1,
+      4,
+      5
+    ],
+    "cpta_modes": [
+      "off",
+      "CPTA",
+      "CPTA0",
+      "CPTA+CPTA0"
+    ],
+    "summary_sha256": "0b7f3a85879c60be29ded7cee957f262f44972cf7650641fb47c066d01f05f24",
+    "provenance_sha256": "3d57c473b12f35f2a1999698fd77f74edfaba5b148b82d40ec6fd0c0497023e1",
+    "guests": [
+      {
+        "guest": "high-O0-pac0-el0",
+        "guest_sha256": "6a7165f2d01a5cc3bb7fc17e5fb2a4e9513e2f6b1a1eb3ce99c4943354ed394a",
+        "transcript_sha256": "5332cdf84f1f60ab0d84d3ae39d04befbf2caab390bd61cc1c3b6bf158fb4216",
+        "report_sha256": "ecf8e00a89716b196c5c5f46889fe142ef5991073947717cd038cb8f52876c18",
+        "linked_inputs_sha256": "f5eb49ceda4e56bab012063c5134c3e04f5dbe7c3606f3690620f94974f07bc4",
+        "declared_runtime_calls": 40
+      },
+      {
+        "guest": "high-O0-pac0-el1",
+        "guest_sha256": "4459c13908028c3d29cfa7ecbdd5065c1affedd821437d52ace3a55954f4685b",
+        "transcript_sha256": "1310ebf3e319d928bfb58abb4669d2d896ac70a316670cb5837ece6a91e1f330",
+        "report_sha256": "45494104573bc5ef593428ad596730f66dabd5632fbd1e9a561f3be119a468b3",
+        "linked_inputs_sha256": "878ad7b3ba657cf5f3bfd5ffc25847274a8a075bbde8f3f15b91fb9115c111a6",
+        "declared_runtime_calls": 40
+      },
+      {
+        "guest": "high-O0-pac2-el0",
+        "guest_sha256": "fefdcca718258a3a0d8c9ae2f3f1f090be9221a5b6f9aa69c8e9165630e793b4",
+        "transcript_sha256": "ea8af2a58059d762411ffd0768fe22bab210b99e70304a822b786967e2fb38b5",
+        "report_sha256": "22134f084ebf65fc631a037dfbba032817085da4547cf185a36fd2818b82ead5",
+        "linked_inputs_sha256": "b7f796db0bb5cc5a19aa8db69f6b9bc15e3a936612fd980f2293d14cceaf316b",
+        "declared_runtime_calls": 40
+      },
+      {
+        "guest": "high-O0-pac2-el1",
+        "guest_sha256": "77ee98fa26e12a95013a23aa089ce737c6f33d93cc9aee1b3f3227e790158c29",
+        "transcript_sha256": "1e5df1bda464632f65c2bf0e0b97102dec26a237ac230aa88276590dbbfc02e8",
+        "report_sha256": "d10493168b29b603ea7af35c88b33698fdeddb90dfe95371de700cc0dfd14d90",
+        "linked_inputs_sha256": "db0779e8e267643c4b885c46e07edb69b1c200173f84ed6f6e95b0ae2adb8eda",
+        "declared_runtime_calls": 40
+      },
+      {
+        "guest": "high-O0-pac3-el0",
+        "guest_sha256": "cbca754c026fd88c098e328e82a1676da401ad45d9430c5ef6007d65a64f849e",
+        "transcript_sha256": "4d1cea4e2e6729e641ce072429c2c922ec02116e4dd6277a20576eb03a03cc2c",
+        "report_sha256": "842bc2b2ff9aedffbc1149b51bfb6cf47f25c5e5e0d88dbad78eb9b8b6440459",
+        "linked_inputs_sha256": "a26b31786a968d3a01e5a1848a589d85df64f939726d3bc4c607877ec2ebbbf7",
+        "declared_runtime_calls": 40
+      },
+      {
+        "guest": "high-O0-pac3-el1",
+        "guest_sha256": "15d6a880e0aab559a75fbc30848758ab088b52d3325ddfcd1e3b12580ffb9142",
+        "transcript_sha256": "4ad3fcec8c045f56879cfb919629fbb9c472019a232a242f5b76b9cf4a2b1350",
+        "report_sha256": "1c88bc1c76f32303aabe59078ba1047e19fdce1bd3cb09661497574c99bfdb14",
+        "linked_inputs_sha256": "d6c9a2fdd8dd175bdb9b924d9e423498e440b015d58fea61707c3c67231d0b9a",
+        "declared_runtime_calls": 40
+      },
+      {
+        "guest": "high-O2-pac0-el0",
+        "guest_sha256": "d9b1d978aec821629c055c3506faf3e669470bdaa5bc82009f6824524218488c",
+        "transcript_sha256": "a91c9f89246acdba640e09927a01bc9b7ec2ccfc87056ce9b91f5351c08ccc92",
+        "report_sha256": "e28fa7d2ca7f09d2a43a01e7f7afaa224240668d4774c61bbe368a9bd0f1f6b9",
+        "linked_inputs_sha256": "1422f941a0b29faa1f024613819ffb9088195c8bcd473709909e83eabd540222",
+        "declared_runtime_calls": 0
+      },
+      {
+        "guest": "high-O2-pac0-el1",
+        "guest_sha256": "650628d27d6324b913166177201e371135321696c995f3cbac3139f955d12df9",
+        "transcript_sha256": "70942bcc04ab5347b1c03712760caa863ea93d59fccb1430eb378ceacec346b4",
+        "report_sha256": "e6e182d2b1db2d98ac923fb6b125e2b965b1c80029c605450ffa26e75f156c05",
+        "linked_inputs_sha256": "52ac613792fa3d481f5cd65cd980e638075552ac7b4292a5b781ec2ec1bac23c",
+        "declared_runtime_calls": 0
+      },
+      {
+        "guest": "high-O2-pac2-el0",
+        "guest_sha256": "c43435bf8ea88ed1a99b45a17f4330da7b03dcf3bbc2b9336f93c386be97e42d",
+        "transcript_sha256": "5aa61e3c6ed2c30a05aeb034e87e85a449218ea228f89358dc6248e77e40ca4b",
+        "report_sha256": "e6c49b4bb182d1149ba33471a3f89a740a7a8811b7baa84b6b27e43de5f7dc4b",
+        "linked_inputs_sha256": "e0a1bb57aae86c8443c45ae48a82924027f4503bc507fb6f3c8fc88cdaa81bff",
+        "declared_runtime_calls": 0
+      },
+      {
+        "guest": "high-O2-pac2-el1",
+        "guest_sha256": "07f0253fd31f951214157c30770c3e0696daf2de3d4e7ab6aefa8903bb3723cd",
+        "transcript_sha256": "0b1f6edb7ba1be3a0b586cda0b0b4f3877414628c479d0aba098228d5494f437",
+        "report_sha256": "55ed93e79264b5233843c2ac57356ff15947c54f79326815dd1a2c0c73da23b1",
+        "linked_inputs_sha256": "30fbf63617a4cff0ae4785e57542627f354fe9e99737e78b37db3a7d4b227571",
+        "declared_runtime_calls": 0
+      },
+      {
+        "guest": "high-O2-pac3-el0",
+        "guest_sha256": "8f9c1c177828c420f810bffc0d2c088d638937eb035952e4fcb4b60a6c523fc9",
+        "transcript_sha256": "5f586cba9779f335e04f2e5897727f23c3a4e3dd93808ee21a4ed235cef52bc7",
+        "report_sha256": "b0ac102cc5b7d126993d8cc801f879c27869cb90cd235652f117bb813b6cdb0e",
+        "linked_inputs_sha256": "b8162ea8c4bcd7204e0482b287687e416746ea0b67517570ae865411077e287c",
+        "declared_runtime_calls": 0
+      },
+      {
+        "guest": "high-O2-pac3-el1",
+        "guest_sha256": "a0536ec45948c0239da53c3d7071c954ea0f7af0ce952a87a9689d552017f637",
+        "transcript_sha256": "4f925832be701857808a846ae5ab382126a22f76357d35f5f7687fdeb26cd5c7",
+        "report_sha256": "45fa9286ad5a8feb74f65ddc19795b8391806a94a8eb99b2948ab7cdab284cce",
+        "linked_inputs_sha256": "7086f4e97bfa91c18f7521e906b0b2430f60d9d4d993030bed7a3b702f9d139d",
+        "declared_runtime_calls": 0
+      },
+      {
+        "guest": "llvm-O0-pac0-el0",
+        "guest_sha256": "07f51fdc450a7ef759d52180bfd62e635b134e9cad3b08a30ddab22130f222b4",
+        "transcript_sha256": "fac841c9e9d5cae1c6bd25a5be3489d5a5b9b49f544e92ba5f64933685244fd2",
+        "report_sha256": "1a5c9234d222cace097528654d9c885944f6374ad179ccde019800dd4eae8601",
+        "linked_inputs_sha256": "d06e83e36f155aa906225031f53b1ead5581471c1744ac2a8cf17e8c8d61ab97",
+        "declared_runtime_calls": 0
+      },
+      {
+        "guest": "llvm-O0-pac0-el1",
+        "guest_sha256": "618e14b790b7e3708a7cdce8f2886b4fbb18e4934224c618e3a446d23ee5d3da",
+        "transcript_sha256": "0a2d0881b3557aac4a4033581f259a9e599b157977722ba944d2ba1216975ca8",
+        "report_sha256": "1f35b842a4de6efa8fb956e945f7f2d47748b266fb674285a14a27de9469cf99",
+        "linked_inputs_sha256": "3c30ae34e02b0605cf9660e39b2991e96f5f9c5f554cb8ef0d7c541d2d5165d9",
+        "declared_runtime_calls": 0
+      },
+      {
+        "guest": "llvm-O0-pac2-el0",
+        "guest_sha256": "847bd8e342952d36c63f1fa37572a45db542a40275be727858b420a65a45c529",
+        "transcript_sha256": "28f77409e5fed693e6c873a1189eff8a1492bcda6c3bdcf66101ba0251357c2c",
+        "report_sha256": "b1db07dd181c4ce07ad922304ab9541a3c4226824970a2c33131959bd5557797",
+        "linked_inputs_sha256": "14c2524b201cf3df33676b71608c8927e1cd8dcc5ce34b871ca14b60a1c8df14",
+        "declared_runtime_calls": 0
+      },
+      {
+        "guest": "llvm-O0-pac2-el1",
+        "guest_sha256": "ae325c9250e29ea6e36e9eb02f2b4836f1892ab09ac726e7128c6ab50768bb4d",
+        "transcript_sha256": "08d9a323bf98e54f2ff29a753047bb36c1786ef22e2f68281b3ebdc8a1a4d98d",
+        "report_sha256": "9d477af48b37bddb6f8b9f325c49688697937a8e4ae379c784634774ab5fa629",
+        "linked_inputs_sha256": "7befb96c06f17a15ecc5e8250c242b69d2837d38d4a5ebc3afca42c8c72365d1",
+        "declared_runtime_calls": 0
+      },
+      {
+        "guest": "llvm-O0-pac3-el0",
+        "guest_sha256": "7968d0bf0189fb14d28ba43363c07075622ec6205c1147e76e2b9dd237419f43",
+        "transcript_sha256": "410bc38f0443649daea511a231ab7213652ad00293cb0687dd88238e4449f683",
+        "report_sha256": "e3a7fa16a7b18a6e744315c667676da2ed3a371f5da9b17a5649c97adf5912f7",
+        "linked_inputs_sha256": "f1329edd464b5274242c08975d48426b607c6106fbb428a7b9c8291b7b2aa2d6",
+        "declared_runtime_calls": 0
+      },
+      {
+        "guest": "llvm-O0-pac3-el1",
+        "guest_sha256": "34f2c79223fa59e916dd1d4c14e659c041f506a90c0c053da6324248181a81f2",
+        "transcript_sha256": "bfbb1e6ca61eb98da91e5c3f3b7c881cd4e19cea02be05a7850532760ae3e773",
+        "report_sha256": "dffe193934e206d732f1563d1b501a4570785d5fee5d32a525e3be54a3c05e90",
+        "linked_inputs_sha256": "54eadd9b1e85e32f84e4f9644297c4848ba1b24ca0d2249ae7d1ff25e9299fed",
+        "declared_runtime_calls": 0
+      },
+      {
+        "guest": "llvm-O2-pac0-el0",
+        "guest_sha256": "925bfc82b1f1608d7251bc22a7ed2836155f5554eede481c827faa21841d1b8d",
+        "transcript_sha256": "989cc6ead5e86f94394beec797f3ede0275a6f1ef80a7441464fe0597d7b686c",
+        "report_sha256": "f5bbf8eb9891fe82fe66be89fd4e00afc8c1dba59443bbf8ea9fe740f144b094",
+        "linked_inputs_sha256": "1e556b333dd9428508f9e1ec97d3ad7aee3664c8ab2c33f96755cd18fd36dde0",
+        "declared_runtime_calls": 0
+      },
+      {
+        "guest": "llvm-O2-pac0-el1",
+        "guest_sha256": "55a051dab159c55b628f20175f3e791415a11538916901a991fa530001c59aa7",
+        "transcript_sha256": "f757613f11b63d9e45d366e722becb75e2dbaf7e31dd0390fa111922f55acf37",
+        "report_sha256": "e7fac5e42a8f207ef5f1796966901f012e189e037e0423e27beecec049c8dbfe",
+        "linked_inputs_sha256": "497143cdf8fc59062248509fdbc182de5ca215f1f8279495e2da1179c847e30b",
+        "declared_runtime_calls": 0
+      },
+      {
+        "guest": "llvm-O2-pac2-el0",
+        "guest_sha256": "8c2907df146f0228d2aa1637c38ff1112afde0a164e5bd45d05d1ba509695f60",
+        "transcript_sha256": "ec0ec6d38eabb53d8dbac2eb8f6ac28c951403d0be5851d2d3f26f35ec400c53",
+        "report_sha256": "8db870403b08658d83a22eeb20e8697c04efae3cb49fae2033b13371b11eefcb",
+        "linked_inputs_sha256": "77a9bdf1e0e29257b33b99c07a57d2f2873a6c3b6e8e78620ac7604051547ff2",
+        "declared_runtime_calls": 0
+      },
+      {
+        "guest": "llvm-O2-pac2-el1",
+        "guest_sha256": "7245d13f9b9580758346a928ec7d9add812af6dc6cc75827f2dd026ecfaecab8",
+        "transcript_sha256": "0ddd85341f65a6a6237924c0b1c27325716132cf371c5df88119d2620450ac13",
+        "report_sha256": "2692d5425e2feefe51d78cdd61bf4b3342d4e48c7f5fef3c7be7c4d52ee5c47d",
+        "linked_inputs_sha256": "b10c1a7bd8662ed7d8797c30e96da80886ac8deb0ed7e7f279896c60d142ec5e",
+        "declared_runtime_calls": 0
+      },
+      {
+        "guest": "llvm-O2-pac3-el0",
+        "guest_sha256": "0c839e3b8f28a283ace4d155f22ac3de35d0ca81dd9c4ef99c9f96f6927f3b2a",
+        "transcript_sha256": "75ebc39e62ad016854eaf3ab63e76b3238aebaa5e471f72d3d5334f114f3a35f",
+        "report_sha256": "9a52f89a9f9a3ba9bab8fe7db13cd2f97d81b8b05072f7349ca1289a108f4083",
+        "linked_inputs_sha256": "692cb1c66b443c7d16fce26ff0b51988293ce343928e04322f718048d75e5dee",
+        "declared_runtime_calls": 0
+      },
+      {
+        "guest": "llvm-O2-pac3-el1",
+        "guest_sha256": "6cef2fafd2abe5868d4355c183e23bd0788482e1cc0db571b3097a463d2882c5",
+        "transcript_sha256": "ee88779e45a98cbcfa6fc2a6917dd0a8c19ee3f355bd6edcacb798e155bdd12b",
+        "report_sha256": "5df591862922a27c8aee3eb6a2b1541889dcebbc9c549ecc670a5912717ef9a6",
+        "linked_inputs_sha256": "65eb193dcab678e143f9570916ea390292f8538618d460ac0dc47629a8c4ab24",
+        "declared_runtime_calls": 0
+      },
+      {
+        "guest": "native-pac0-el0",
+        "guest_sha256": "bbc77e020db50f6d5483a0eff212571ebef9c35bbe8454c4d77b3043af4aeb08",
+        "transcript_sha256": "7fdfbe8faf6ab85b82697b69aa3f785109bd635db2b74ff3fe3368bce90c6ff9",
+        "report_sha256": "f20464084f21d31b585eb8513676db139e1a28d4e96830e5c69ae613cad1a401",
+        "linked_inputs_sha256": "e21203c6524ebb90b77305efa5edc947755a01fce5e047c486e89c1c26238cc7",
+        "declared_runtime_calls": 0
+      },
+      {
+        "guest": "native-pac0-el1",
+        "guest_sha256": "691759720ac977167eabb4efdd1fb6f08326d2711ac10ff27f2125eb10aab979",
+        "transcript_sha256": "2dbb16b52b073fa4d1768518059e09ab48b4c279824d71732f71417245b2eb2c",
+        "report_sha256": "251c8a55e9b954f9eb5f2ee0d3f85c79d74784e89221aa1eb0d8c064426996a4",
+        "linked_inputs_sha256": "82875cddac5cabfca751f2d3e1ef018d1e8bcb2b1d0ec99daed59568c6e0f083",
+        "declared_runtime_calls": 0
+      },
+      {
+        "guest": "native-pac2-el0",
+        "guest_sha256": "d05c0dc1f1e8c11fb73e071ea82235d7e7f687e4dd2bba8996d1206467d6dbed",
+        "transcript_sha256": "46b7e12940f2bba4e5f0101cec54fcaf7d76acdbcb5db2e671acd326f0bb76f7",
+        "report_sha256": "d20ec988458ff26d636a3ef31bad5aecc3f7f68388c9e6c92b863dbd70e65796",
+        "linked_inputs_sha256": "c4ee6a2180cd83062df3b3d66eab3c91e782cb1d5c6670d921d0dddf64d61454",
+        "declared_runtime_calls": 0
+      },
+      {
+        "guest": "native-pac2-el1",
+        "guest_sha256": "e09a84e5c92597e6c1122cc0c589cde9546e232ff5c7fdb49e71b6804b86b04d",
+        "transcript_sha256": "91b1a7ffb3ae5c47ac28d4cd49cc0e3b78db74bb4c3a5e4ccbe4e40b2e081490",
+        "report_sha256": "44aa784b447626b83d4438c68e482cb6fc6295c44853300df5c7348dd57d7a67",
+        "linked_inputs_sha256": "b456e44c534e65e9da94fd54afccb3b20e509a31289aec81be353b26fb514ae1",
+        "declared_runtime_calls": 0
+      },
+      {
+        "guest": "native-pac3-el0",
+        "guest_sha256": "849f9d83abc76e94a75ddc7df2507e6e0661e254644b6e77aa2528ceebd21895",
+        "transcript_sha256": "581f9e407f405c8958bad2ea6b5966a1aafbe79247a63a2c627cf35bcfffe882",
+        "report_sha256": "06a1c320517bb202f3687a3c1494058a656af9396e6357408564c1692de8dd21",
+        "linked_inputs_sha256": "fcf8e311f2cc7ad007e77de99633ab8f4c407a58161ac4ebbb07575a9c9954ea",
+        "declared_runtime_calls": 0
+      },
+      {
+        "guest": "native-pac3-el1",
+        "guest_sha256": "5a17281113ae464e55a1346128c677f8b7fb80e3a0b01aa46a629182af2c27d6",
+        "transcript_sha256": "e165851a9b559a8e0e6c95c33d02cdeb0f24f31ec90f498b02db641eded15809",
+        "report_sha256": "051b9dd575dfac0d4f1fcc6d048c1b7a7e1906605f3abb94871c5241650f840d",
+        "linked_inputs_sha256": "686b6a57aab834fcb934d910cf32c58af0ac990fb267fd5c09e2a39c476d06de",
+        "declared_runtime_calls": 0
+      }
+    ],
+    "runtime_relocations": {
+      "objects": 40,
+      "installed_across_guests": 240,
+      "kind": "External Mach-O ARM64_RELOC_BRANCH26 BL to undefined _memcpy, translated to ELF CALL26. Final linked bytes are verified exactly except the declared branch displacement to the tested freestanding memcpy.",
+      "raw_scope_correction": "The raw summary retained the older unchanged-routes wording. Forty HighC O0 objects required the declared runtime relocation; the input objects themselves are unchanged and no IR was recompiled or retargeted."
+    }
+  },
+  "object_manifest": {
+    "file": "arm64e-vector-aggregates-objects-2026-11-08.json",
+    "sha256": "b345f69cccfd3026b307b67add5067938955b659cbd2c8061f8c3424548e12e9",
+    "objects": 1825
+  },
+  "previous_profiles": [
+    {
+      "profile": "explicit",
+      "objects": 1625,
+      "changed": [],
+      "missing": []
+    },
+    {
+      "profile": "native-x8",
+      "objects": 25,
+      "changed": [],
+      "missing": []
+    },
+    {
+      "profile": "analyst-x8",
+      "objects": 25,
+      "changed": [],
+      "missing": []
+    },
+    {
+      "profile": "prior-recovered",
+      "objects": 1175,
+      "changed": [],
+      "missing": []
+    }
+  ],
+  "llvm_fork": {
+    "pull_request": "https://github.com/NeverSight/llvm-project/pull/7",
+    "merged_revision": "120d185f989c1e2916dd6a60b203739183600a94",
+    "tests": 10,
+    "failures": 0,
+    "report_sha256": "6e2d4237ae0e40797cbb1cd80e0a9c001692541cfb9ff85d0b3abe0e6e7fa023",
+    "contract": "MC rewrite resolver and fixup hooks retain key, discriminator, address diversity and final storage address. Authenticated storage requires a consuming installer. Mach-O/ELF, all keys, both address-diversity settings, local/external and alias/addend controls are covered.",
+    "prebuilt_r6_unchanged": true,
+    "neverd_whole_image_installation_qualified": false
+  },
+  "cleanup": {
+    "automatic_scratch": {
+      "completed": true,
+      "recovered_interrupted_scratch": false,
+      "removed_files": 2052,
+      "removed_bytes": 43155595
+    },
+    "verified_unused_products": {
+      "removed_files": 8660,
+      "removed_bytes": 25310101,
+      "retained": [
+        "current model installation",
+        "canonical Mach-O inputs",
+        "native diagnostic guests",
+        "source projections, commands and failure logs",
+        "active build and dependency caches"
+      ]
+    },
+    "cleanup_inventory_sha256": "ed9b254f21be22379a2bc277b58fc67ee5d4dfb8be1019c0ea92b4334ed8ac16",
+    "installer_removed_bytes": 88373544,
+    "installer_inventory_sha256": "abe9fed10bf7ad93ebeb3a2c7e92df1ddd5a99f4a48a0e825b96ae3244b6c424",
+    "post_fix_duplicate_objects": {
+      "files": 3510,
+      "bytes": 3593136,
+      "inventory_sha256": "90dec67b74a03b85a09de17b8844966982efa427550b68745d25f5dd42fadb54"
+    }
+  },
+  "remaining": [
+    "Automatic recovery of arbitrary source prototypes, vector variadics, packed/union layouts and other language ABIs are not qualified by these fixed C fixtures.",
+    "Authenticated whole-image storage/import installation and signed-unwind publication remain incomplete. The new fork MC interface is not dyld installation.",
+    "Native Apple PAC/CPA2 execution, signed exception unwinding, exact fault-PC/full ESR equality remain unqualified.",
+    "The exact invalid-PAC exception class of generic untyped C O0 calls is outside this fixed-prototype qualification.",
+    "The r6 backend still rejects legacy Apple llvm.ptrauth globals; r7 prebuilt delivery is separate."
+  ],
+  "remote_ci": {
+    "qualified": false,
+    "reason": "The GitHub diagnostics connector reports the selected connection changed or is unavailable."
+  },
+  "specifications": [
+    "https://github.com/ARM-software/abi-aa/blob/main/aapcs64/aapcs64.rst",
+    "https://developer.apple.com/documentation/xcode/writing-arm64-code-for-apple-platforms",
+    "https://clang.llvm.org/docs/PointerAuthentication.html",
+    "https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_exec.c"
+  ],
+  "post_fix_objects": {
+    "report_sha256": "39c2c7a1521af19248fd0aef54c2ace57ef050cc733e09c37707892f29309a79",
+    "profiles": [
+      {
+        "profile": "recovered-current",
+        "objects": 1825,
+        "changed": [],
+        "missing": [],
+        "new_model_execution": false
+      },
+      {
+        "profile": "explicit-prior",
+        "objects": 1625,
+        "changed": [],
+        "missing": [],
+        "new_model_execution": false
+      },
+      {
+        "profile": "native-x8-prior",
+        "objects": 25,
+        "changed": [],
+        "missing": [],
+        "new_model_execution": false
+      },
+      {
+        "profile": "analyst-x8-prior",
+        "objects": 25,
+        "changed": [],
+        "missing": [],
+        "new_model_execution": false
+      }
+    ],
+    "meaning": "All canonical objects remain byte-identical after the source type admission and grouping fix. The earlier model executions remain applicable; no second execution is claimed."
+  },
+  "native_signed_unwind_environment": {
+    "report_sha256": "a97872e0312d45ba0f8f4c8b64c7437b025e0d8bfe2606b082405d10312a3344",
+    "source_sha256": "681e67c6466d7b1f394ef243dacae762dac697428dd21c350eb51030c0a87cd5",
+    "observations": [
+      {
+        "architecture": "arm64",
+        "optimization": "O0",
+        "compile_returncode": 0,
+        "compile_stdout": "",
+        "compile_stderr": "",
+        "binary_sha256": "4967b8e6d4e3f06b0c899fe2810d5d4f7d673f36d0be462519309aae9ad2f614",
+        "binary_bytes": 34232,
+        "execute_returncode": 0,
+        "execute_stdout": "value=2 destructors=2\n",
+        "execute_stderr": "",
+        "unused_product_removed": true
+      },
+      {
+        "architecture": "arm64",
+        "optimization": "O2",
+        "compile_returncode": 0,
+        "compile_stdout": "",
+        "compile_stderr": "",
+        "binary_sha256": "766a08ae6b048648d667e061ff1a5995f749f011a0fd196dfa85f60df4bd9b9f",
+        "binary_bytes": 34184,
+        "execute_returncode": 0,
+        "execute_stdout": "value=2 destructors=2\n",
+        "execute_stderr": "",
+        "unused_product_removed": true
+      },
+      {
+        "architecture": "arm64e",
+        "optimization": "O0",
+        "compile_returncode": 0,
+        "compile_stdout": "",
+        "compile_stderr": "",
+        "binary_sha256": "442c29fbd9538d4ea6b018bd1c2b604d60cf2f9f0265a50fc091ac9f92efc9eb",
+        "binary_bytes": 34232,
+        "execute_returncode": -9,
+        "execute_stdout": "",
+        "execute_stderr": ""
+      },
+      {
+        "architecture": "arm64e",
+        "optimization": "O2",
+        "compile_returncode": 0,
+        "compile_stdout": "",
+        "compile_stderr": "",
+        "binary_sha256": "6af361b2cc67fd01fd7c36a77729303cd61f654120064a7e398c2ab8a669a3ef",
+        "binary_bytes": 34184,
+        "execute_returncode": -9,
+        "execute_stdout": "",
+        "execute_stderr": ""
+      }
+    ],
+    "qualified": false,
+    "conclusion": "Arm64 controls pass both backtrace and C++ cleanup at O0/O2. Compiled arm64e controls terminate with SIGKILL before reporting completion. This is an environment control, not NeverD signed-unwind qualification."
+  },
+  "quality_checks": {
+    "clang_format_version": "22.1.2",
+    "changed_cpp_format": "passed",
+    "source_provenance": "source provenance check passed: 11862 worktree files scanned",
+    "localized_documentation": "localized documentation check passed: 309 Markdown files, 10 locales",
+    "diff_whitespace": "passed"
+  }
+}

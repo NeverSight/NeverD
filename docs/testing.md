@@ -1964,9 +1964,59 @@ logical copies or `byval`/`sret` promises. Named-function C output is compiled
 by Apple Clang directly; Apple Clang's legacy `llvm.ptrauth` globals remain
 unsupported by r6 IR import. Ordinary and rewrite code-generation boundaries
 now reject that representation before the incompatible backend can abort.
-General vector-containing record ABIs (including HVAs), whole-image
-authentication installation and signed exception execution remain separate,
-incomplete work.
+That receipt predates HVA transport. The vector-aggregate profile below extends
+its fixed-call coverage; whole-image authentication installation and signed
+exception execution remain separate, incomplete work.
+
+`SourceCallABI.NativeHVA*` covers 64/128-bit homogeneous vector records with
+one to four members, nested records and arrays, natural stack offsets and whole
+FP-bank exhaustion. Invalid widths, layouts, incomplete carriers, foreign
+conventions and reuse of an exhausted bank reject. Five-member and mixed-width
+larger records retain indirect addresses and x8. Independent Clang C declarations
+check the Darwin HVA versus indirect classification at O0/O2. Source names must
+keep vector/integer records and array extents distinct.
+
+`ByShape/AArch64RecoveredAuthenticatedCall` adds short-vector and HVA shapes on
+all five object routes, including arrays of records, mixed GP/FP arguments,
+packed stack prefixes and larger non-HVA companions. HVA results write every
+64-bit word to caller observation storage; the independent environment checks
+all distinct expected words and guards on both sides. The LowIR integration
+also covers native HVA parameters alongside original x8 storage. These tests
+qualify transport of an established fixed C declaration, not general recovery,
+vector variadics, packed/union layouts or whole-image publication.
+
+The [vector-aggregate qualification](evidence/arm64e-vector-aggregates-2026-11-08.json)
+records 73 declarations and 1,825 original Mach-O objects across all five
+routes. Thirty controlled FVP guests at EL0/EL1 and four CPTA settings compare
+43,800 valid calls and 105,120 invalid signatures with zero exception-class
+differences. Forty HighC O0 objects require an external `memcpy` call. The
+environment translates only the declared BR26 relocation and verifies every
+linked byte against the original, permitting only that branch displacement;
+it does not recompile IR for an ELF ABI. Earlier explicit and x8 object
+baselines remain byte-identical, without claiming another model execution.
+
+Broader regression caught array equality admitting previously unsupported
+pointer-to-array declarations. The shared source-type boundary retains that
+rejection while admitting fixed arrays inside records. Native pointer inference
+and Swift projection tests exercise the original failures; projection grouping
+also distinguishes vector pointees and array element types. This qualification
+retains the first failing reports as well as the corrected checks.
+
+The NeverSight LLVM fork's authenticated-fixup tests cover Mach-O and ELF,
+all four keys, address diversity, local/external targets, aliases and addends.
+They require a consuming fixup installer and preserve its installed word.
+This verifies the MC interface needed by whole-image installation; it does
+not qualify new dyld storage or signed exception execution. The configured
+prebuilt package remains r6.
+
+The final qualification includes 2,498 distinct checks: 2,477 pass and 21
+retain their explicit platform/compiler skips. The first broad run's two
+type-boundary failures are fixed and recorded separately. The affected
+256-case repeat, 151 authenticated-call cases and 15 frame cases pass; all
+current and earlier canonical object profiles remain byte-identical. Native
+compiler-only unwind controls pass on ordinary arm64 at O0/O2, while both
+arm64e executables terminate with SIGKILL before reporting completion. This
+does not provide native signed-unwind qualification.
 
 `MachOArm64eDependencies` additionally verifies multi-start pages for all six
 supported arm64e chain formats and ordinary 64-bit chains. It checks complete
@@ -4641,6 +4691,45 @@ order and retain paired measurements and CPU time alongside output hashes.
 The full build's `neverd-acceleration-bench` target reports wall and process CPU
 time separately; use both when the host has competing workloads.
 
+Shared fork exports are owned at `scripts/fork_dependencies.py::refresh` and
+the `scripts/build.py` configure/build boundary. On POSIX, a successful
+configuration retires newly managed commit directories that are no longer
+referenced by the current snapshot, configured graph or named frozen readers.
+The ownership journal is written before creation, and its matching marker is
+removed last during retirement. Retry journals occupy fixed files. Existing
+unmarked exports are not adopted or deleted; reusable `_deps` build caches,
+installed SDKs and other build directories remain caller-owned.
+
+A failed configuration retains both the previous graph and pending snapshot.
+The next supported build first completes that pending configuration before
+refreshing remote heads. Fix the reported configuration error and rerun
+`scripts/build.py`; repeated failures do not export more revisions. Initial
+plain CMake configuration records a pending reader too, which the build wrapper
+completes. Do not run plain CMake and the wrapper concurrently in one directory.
+The wrapper passes its POSIX lock to CMake: interrupting or killing the Python
+owner does not permit retirement while its surviving CMake process still runs.
+An interrupted wrapper may therefore leave CMake finishing its current work.
+Windows retains the previous no-retirement policy; orphaned CMake reader
+locking there is not qualified by the POSIX implementation.
+
+Before retaining fork source paths for a frozen benchmark or external reader,
+register them while they are still current:
+
+```bash
+python3 scripts/fork_dependencies.py retain BUILD_DIR --reader frozen-baseline
+# Release only when no reader needs those exported source paths.
+python3 scripts/fork_dependencies.py release BUILD_DIR --reader frozen-baseline
+```
+
+`retain --snapshot SNAPSHOT.json` accepts an earlier saved snapshot only while
+its archives still exist. Reader names do not expire automatically. Run
+`python3 -m unittest scripts.tests.test_fork_dependencies scripts.tests.test_fork_export_lifecycle -v`
+for tiny local Git/archive/CMake fixtures covering normal refresh and builds,
+repeated success and configure failure, frozen readers and protected caches,
+archive failures, SIGINT/SIGTERM/SIGKILL, surviving CMake child locks and
+interrupted ownership creation/retirement. Tests remove their own fixture trees.
+They neither refresh the real dependency submodules nor clean real build trees.
+
 Local Capstone experiment drivers use
 `scripts/capstone_perf_lifecycle.py::Experiment` around preparation, compilation,
 validation and measurement. It owns one `.capstone-perf/current` directory under
@@ -6029,6 +6118,12 @@ controls, full-size close targets, and a padlock that opens and closes with the
 lock over the caption's own color. `doubleClickDetachStartsLocked` and
 `lockedDragsStayFloating` check the default lock, caption movement and rejected
 tab docking. `explicitDockIgnoresLock` clicks the dock button while locked.
+`retiredFloatingCaptionDoesNotRestoreFocus` transfers a complete floating
+layout into the main window, then delivers a focus event to its old caption
+before deferred deletion. This reproduces Cocoa reactivation while the drop
+preview hides. It also checks live-caption focus forwarding, deletion of the
+retired caption and keyboard focus in the newly docked pane. The lifecycle
+check runs offscreen as well as with a native window system.
 `quickStartChoosesWorkbenchSize` checks that accepting the startup greeting,
 including opening a recent file, maximizes the workbench, while reopening the
 dialog over a visible workbench preserves its state. `workbenchReopensWindowed`
@@ -16362,6 +16457,13 @@ exhausted and mismatching explicit logs through ordinary/V/A calls; its native
 client interleaves a text write between two failed transactions on the same
 proxy. `AndroidLog.Text*` checks direct/dynamic calls, buffer/priority bytes,
 null tags, radio routing, signed results, errno and bounded payload admission.
+`AndroidLog.Formatted*` runs direct and dynamic print/vprint/buf_print calls
+at O0/O2 across relocation variants and available CPU backends. Independent
+transcripts check stacked scalar arguments, unchanged va_list bytes, 1022/1023/
+1024-byte and large-width clipping, embedded NUL, bounded precision at a page
+edge, signed results and errno. Unsupported conversions precede tag reads and
+log consumption; missing, exhausted and mismatching transcripts preserve the
+completed prefix. Fatal state and transport truncation remain explicit.
 `AndroidJNI.BinderTransportUsesGuestServiceAndRetainedReplyArenas`
 executes real guest services through all three JNI forms, including three-round
 buffer retention/reuse, a reply recycled and reused by another native thread,
@@ -21305,6 +21407,53 @@ with an uncaught exception at both levels. They reproduce the boundary without
 handwritten frame CFI and are unavailable coverage, not passing NeverD signed
 unwind qualification.
 
+### Arm64e dyld installation
+
+`MachOArm64eInstallation.*` exercises transactional authenticated dyld
+installation in the six arm64e chain formats. It covers all keys and address
+diversity settings, local/import identities, special library ordinals,
+16/24-bit import indices, every import-table encoding, existing plain words,
+4/16 KiB pages, overflow starts, new RX/RW segments, signature extents,
+reordered segment-target ordinals and unchanged input on rejection.
+Independent literal words and the separate analysis loader check the installed
+representation.
+
+`AppleClang/MachOArm64eNativeInstallation.*` compiles actual arm64e dylibs at
+O0/O2, installs sixteen recipes including a new libSystem import both in
+existing storage and in newly appended RX/RW segments, re-signs with the
+production signer, verifies the result strictly and asks Apple's
+`dyld_info` to decode every target, key and discriminator. Compiler-generated
+C++ compact frames retain their ranges, encodings, personality slots and LSDA
+addresses. A separate, explicit assembly input supplies signed DWARF CFI for
+instruction-by-instruction IB state replay; it is not compiler-generated
+exception-unwind evidence. These tests inspect files and do not execute dyld,
+C++ cleanup or the native signed unwinder. Non-Apple hosts explicitly skip the
+Apple-tool cases. `NEVERD_ARM64E_DYLD_ARTIFACT_DIR` exports qualification inputs
+and diagnostics; ordinary runs remove their temporary directory.
+The [qualification record](evidence/arm64e-dyld-install-2026-11-08.json)
+records the native inputs, integration checks and remaining validation limits.
+
+### Arm64e verifier artifact ownership
+
+The SDK call driver and `scripts/verify_arm64e_sp_memory.py` share
+`scripts/arm64e_artifacts.py`. They register each disposable object or executable
+before its compiler starts and persist the registry atomically. Success,
+failure and normal interruption all remove registered products. The next
+invocation recovers a killed run under the same output lock. Compiler children
+inherit that lock, so recovery waits for pending producers. The original SDK
+call assembly and dylib remain as a minimal fixture and are reused only when
+source, compiler version, command and binary digest agree. Input snapshots,
+source projections, diagnostic logs and explicitly retained products remain.
+The SP verifier uses the supplied SDK directly and refuses to overwrite a
+changed formal input in a reused output directory.
+
+`test_arm64e_artifact_lifecycle.py` exercises repeated success/failure/abort
+paths, the actual SDK and SP entry points, explicit retention, SIGKILL recovery
+and a compiler outliving its controller. It uses small fixtures and does not
+execute the arm64e research matrix. The external CPA2 environment separately
+owns its FVP cache and scratch lifecycle across primitive, generated-memory,
+grouped-memory and authenticated-call drivers.
+
 ## Selected callable checks
 
 `Win64CallContract.AddressOnlySymbolsDoNotInventCallableTypes` combines address-only output with integer, pointer, floating and void providers. `AddressOnlyCallbackConvertsToItsKnownParameterType` executes a typed callback. `SelectedWordCalleesKeepTheirPointerDeclarations` / `PipelineOutcome.OmittedPointerDeclarationsStayInSourceModules` combines separately selected callers and pointer-reading callees, and compares whole-unit output with cold/warm cache use. The x64/ARM64 PE, ELF and Mach-O input models compile and execute generated C at O0/O2 with UBSan. This validates host source execution, not native execution on every target platform. Run the call-contract, pointer-projection, source-ABI and callee-cache owners after changing this boundary.
@@ -22363,12 +22512,23 @@ original addresses; this qualifies the regenerated caller against that
 dependency contract. It does
 not claim a standalone rebuilt firmware. `results.json` records each case and
 any failure, generated-source and binary hashes, and reclaimed bytes.
-Successful per-function `.o`/`.elf` artifacts are deleted immediately; original
-profile binaries are removed after all of that profile's comparisons pass.
-Failures retain their diagnostic artifacts. An unavailable compiler or oracle
-is a failure, not a skipped pass.
+Per-function objects, executables and successful generated sources are retired
+after each comparison. Once the workers have finished, the original profile
+binaries are retired as well. Failures retain bounded diagnostics and verified
+source evidence through the lifecycle contract below. An unavailable compiler
+or oracle is a failure, not a skipped pass.
 Vendor firmware remains outside the committed fixtures. Its separate static
 receipt is [Archer C7 V5](firmware/archer-c7-v5.md).
+
+Add `--encoding micro` to run the five microMIPS32/o32 leaves in both byte
+orders and both C backends. This selects `micromips.S` and M14Kc, follows the
+ELF symbol's callable tag, and preserves the original target on recompilation.
+The ordinary four-profile run remains the default. Only the micro fixture's
+functions may be selected with `--function` in that mode. The instruction-level
+`MicroMIPSInteger` tests separately check independent literal memory encodings,
+signed/unsigned loads, exact store bytes, failed writes and original-target
+execution. Source numeric callable/import values remain explicitly unqualified;
+the pipeline suite checks those refusals as well as ordinary leaf emission.
 
 ### MIPS decode/lift and firmware performance
 
@@ -22379,10 +22539,11 @@ python3 scripts/build.py build-mips --target neverd-mips-bench --parallel 4
 build-mips/bin/neverd-mips-bench mips64el lift /path/to/owned-code.bin 100000
 ```
 
-Profiles are `mips`, `mipsel`, `mips64` and `mips64el`. Stages are `capstone`
+Profiles are `mips`, `mipsel`, `mips64`, `mips64el`, `micromips` and
+`micromipsel`. Stages are `capstone`
 (direct physical decoding), `decode` (NeverD physical decoding) and `lift`
 (decoding plus LowIR, including delay slots). Both decode paths request the same
-classic r2 profile, detail on and text off. The pinned Capstone fork suppresses
+selected r2 encoding profile, detail on and text off. The pinned Capstone fork suppresses
 rendered operand detail with text off; these physical decode measurements consume
 instruction sizes and IDs. The harness reuses decoder handles, counts physical
 instructions/LowOps and validates output fingerprints outside
@@ -22404,3 +22565,43 @@ handler and discovered functions (limited to 250), with one/default threads and
 both C backends. New instruction coverage and additional strict checks are
 different work and require separate reporting, not same-output speedup claims.
 This small corpus and a shared host do not establish a cross-tool ranking.
+
+Both MIPS Python drivers reuse their `--output` directory through
+`scripts/mips_validation_artifacts.py`. A new output must be empty; older,
+unmarked reports are never adopted or deleted. Keep SDKs, firmware, fixture
+inputs and pending comparison baselines outside that directory. The drivers
+read those inputs in place and do not copy or install SDKs.
+
+Generated objects, ELFs, successful C output and full per-command logs live in
+owned scratch storage. Each completed roundtrip removes its temporary files;
+the driver also removes scratch after failure or normal interruption. A later
+start reclaims scratch left by an uncatchable kill. One output lock, inherited
+by the compiler/CLI, prevents another invocation from reclaiming a surviving
+reader's files. This lock is separate from the existing build lock because the
+drivers never mutate the build cache or CTest's `LastTest.log`.
+The recorded process group also protects descendants that close inherited file
+descriptors. Scratch stays in place if a descendant outlives its command leader.
+A kill during the spawn handoff, before the process group was recorded, requires
+a reader audit; missing process identity is never treated as permission to
+delete. These drivers use POSIX process groups and locks.
+
+The reusable output retains the latest semantic/timing receipts and command
+hashes, with up to 8 KiB of diagnostic tail for each failed command. Failed
+generated sources are deduplicated by SHA-256 and verified after copying;
+only the current and preceding run's source evidence remain. This retention
+contract applies to newly owned validation output, not preexisting recovery
+archives or user files. Copy a receipt needed for a separate comparison outside
+the run directory before reusing it. Performance output disagreement retains
+both differing sources and blocks a timing claim.
+
+Run the small producer lifecycle checks without building a new SDK:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/test_mips_validation_artifacts.py -v
+```
+
+They exercise repeated success/failure, SIGTERM, SIGKILL recovery, surviving
+child readers, preserved inputs and the actual paired-measurement entry point
+with tiny fake commands. The roundtrip compiler-failure entry check uses the
+local pinned Unicorn bindings when available. These are artifact lifecycle
+checks, not performance or ISA qualification measurements.

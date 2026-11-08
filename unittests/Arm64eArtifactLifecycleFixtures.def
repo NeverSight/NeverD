@@ -1,0 +1,19 @@
+{
+  "iterations": 4,
+  "output": "output",
+  "product": "projected.o",
+  "input": "calls.dylib",
+  "diagnostic": "diagnostic.log",
+  "payload": "lifecycle fixture",
+  "compiler_version": "fixture compiler",
+  "compiler": "fixture-clang",
+  "library": "fixture-library",
+  "child_timeout": 10,
+  "child": "import sys,time\nfrom pathlib import Path\nfrom arm64e_source_calls_test import OwnedProducts\nroot=Path(sys.argv[1])\nwith OwnedProducts(root,False) as products:\n path=root/\"projected.o\"\n products.append(path)\n path.write_text(\"partial compiler output\")\n print(\"ready\",flush=True)\n time.sleep(30)\n",
+  "ready": "ready",
+  "consumer": "import sys,time\nfrom pathlib import Path\nroot=Path(sys.argv[1])\n(root/\"projected.o\").write_text(\"pending consumer\")\n(root/\"ready\").write_text(\"ready\")\nend=time.monotonic()+10\nwhile not (root/\"release\").exists() and time.monotonic()<end: time.sleep(0.01)\n",
+  "consumer_ready": "ready",
+  "consumer_release": "release",
+  "consumer_wait_seconds": 10,
+  "producer": "import sys\nfrom pathlib import Path\nfrom arm64e_artifacts import OwnedProducts\nroot=Path(sys.argv[1])\nwith OwnedProducts(root,False) as products:\n products.append(root/\"projected.o\")\n products.run([sys.executable,\"-c\",sys.argv[2],str(root)])\n"
+}

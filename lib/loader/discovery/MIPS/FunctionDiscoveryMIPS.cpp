@@ -19,6 +19,12 @@ namespace neverd {
 std::optional<va_t> mipsImportThunkSlot(const BinaryImage &Img, va_t Address) {
   if (!Img.isELF() || Address % 4)
     return std::nullopt;
+  const auto Mode = Img.instructionModeAt(Address);
+  if (!Mode ||
+      (*Mode != InstructionMode::Default &&
+       *Mode != InstructionMode::MIPSClassic) ||
+      Img.instructionModeAt(Address + 15, *Mode) != Mode)
+    return std::nullopt;
   const uint8_t *Bytes = Img.readVA(Address, 16);
   if (!Bytes)
     return std::nullopt;

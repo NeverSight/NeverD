@@ -75,6 +75,8 @@ inline constexpr unsigned kAndroidJNIObjectLimit = 4096;
 inline constexpr unsigned kAndroidJNINativeFrameLimit = 64;
 
 // lib/emulation/os/linux/android/AndroidLog.h
+// API 28 liblog LOG_BUF_SIZE, including the terminating NUL.
+inline constexpr unsigned kAndroidLogFormattedBufferBytes = 1024;
 inline constexpr unsigned kAndroidLogLogRecordLimit = 4096;
 inline constexpr unsigned kAndroidLogLogSnapshotLimit = 1024 * 1024;
 

@@ -465,7 +465,22 @@ bool CFGBuilder::resolveRelocatedInteriorBranch(const BinaryImage &Img,
     return false;
   const va_t RawTarget =
       static_cast<va_t>(readPtr(P, Img.is64Bit(), archLittleEndian(Img.Arch)));
-  const va_t Target = normalizeCodeAddress(RawTarget, Img.Arch, Img.Mode);
+  va_t Target = normalizeCodeAddress(RawTarget, Img.Arch, Img.Mode);
+  std::optional<InstructionMode> MIPSMode;
+  if (Img.Mode == InstructionMode::MixedMIPS ||
+      Img.Mode == InstructionMode::MicroMIPS) {
+    auto Destination =
+        canonicalizeLowControlTarget(RawTarget, Rec.Mode, Rec.TargetMode);
+    if (!Destination) {
+      llvm::consumeError(Destination.takeError());
+      return false;
+    }
+    if (Img.instructionModeAt(Destination->Address, Destination->Mode) !=
+        Destination->Mode)
+      return false;
+    Target = Destination->Address;
+    MIPSMode = Destination->Mode;
+  }
   if (!isOwnedInteriorTarget(Img, Target))
     return false;
 
@@ -481,6 +496,10 @@ bool CFGBuilder::resolveRelocatedInteriorBranch(const BinaryImage &Img,
       if (Img.Arch == Arch::ARM)
         Rec.TargetMode = (RawTarget & 1) ? LowInstructionTargetMode::Thumb
                                          : LowInstructionTargetMode::ARM;
+      else if (MIPSMode)
+        Rec.TargetMode = *MIPSMode == InstructionMode::MicroMIPS
+                             ? LowInstructionTargetMode::MicroMIPS
+                             : LowInstructionTargetMode::MIPSClassic;
       else
         Rec.TargetMode = LowInstructionTargetMode::Preserve;
       return true;

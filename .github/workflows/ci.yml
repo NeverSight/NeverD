@@ -125,6 +125,7 @@ jobs:
             scripts.tests.test_run_native_cpu_methods \
             scripts.tests.test_first_fatal_snapshots \
             scripts.tests.test_neverd_bench_harness \
+            scripts.tests.test_mips_validation_artifacts \
             scripts.tests.test_benchmark_cpu \
             scripts.tests.test_benchmark_binary_diff \
             scripts.tests.test_benchmark_binary_diff_bindiff \
@@ -394,6 +395,7 @@ jobs:
           )
           if [[ "$RUNNER_OS" == "macOS" ]]; then
             tests+=(
+              scripts.tests.test_mips_validation_artifacts
               scripts.tests.test_audit_evm_opcode_metadata.EVMOpcodeAuditTests.test_darwin_sandbox_denies_host_sentinel_outside_capability_roots
               scripts.tests.test_generate_objc_receiver_declarations.ObjCReceiverDeclarationTests.test_compiler_distinguishes_interfaces_forwards_and_category_owners
             )

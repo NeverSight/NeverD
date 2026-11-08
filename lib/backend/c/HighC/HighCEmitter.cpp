@@ -59,12 +59,14 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/Common.h"
 #include "neverd/DataAccessWidths.h"
+#include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/c/render/HighC/HighCIntrinsicRender.h"
 #include "neverd/backend/c/render/SyscallHelpers.h"
 #include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/ELF/MIPSCodeMode.h"
 #include "neverd/loader/MachO/DarwinRuntimeCalls.h"
 #include "neverd/loader/StringLiteralSymbols.h"
 #include "neverd/loader/SymbolDecoration.h"
@@ -2021,6 +2023,9 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
 
 void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   const auto NativeFrameConvention = [&](const HighFunc &Function) {
+    if (Opts.Image && isMIPS(Opts.TheArch))
+      if (const auto Mode = Opts.Image->instructionModeAt(Function.Entry))
+        OS << mips::instructionModeCAttribute(*Mode);
     if (Opts.Image && !Function.SourceTypeHint &&
         x64DispatchFrame(*Opts.Image, Function.Entry))
       OS << "__attribute__((ms_abi)) ";
@@ -3663,6 +3668,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
       if (const auto VA = constAddress(*E.Operands[0])) {
         const auto Access =
             mips::mergeAccess(Load, *VA, archLittleEndian(Opts.TheArch));
+        requireBoundImportMemory(Access.First, Access.Count);
         if (const auto *Segment = Opts.Image->getSegmentFor(*VA)) {
           if (!Segment->isReadable() || Access.First < Segment->VA ||
               Access.First - Segment->VA > Segment->Size ||
@@ -3722,7 +3728,8 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
       return;
     }
     if (E.Kind == ExprKind::Const && isAddressProvenance(E.ConstProvenance))
-      noteFunctionAddress(functionAddressKey(E), Funcs);
+      if (const auto Key = functionAddressKey(E))
+        noteFunctionAddress(*Key, Funcs);
     if (isImageBaseConstant(E))
       ReachesImageBase = true;
     if (E.Kind == ExprKind::Const &&
@@ -4340,6 +4347,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
   auto FinishGroup = [&] {
     if (!GroupCount || !NeedsBacking)
       return;
+    requireBoundImportMemory(GroupBase, GroupEnd - GroupBase);
     const auto First = ImageObjects.find(GroupBase);
     ImageBacking Backing{
         GroupBase,
@@ -4454,6 +4462,7 @@ void HighCWriter::noteFunctionAddress(va_t Addr,
     return;
   for (const HighFunc &Func : Funcs)
     if (Func.Entry == Addr && !Func.Name.empty()) {
+      mips::requireNumericCodePointerSource(Opts.Image, Addr);
       FunctionAddressNames.emplace(Addr,
                                    FunctionAddressTarget{Func.Name, &Func});
       AddressTakenDefinitions.insert(&Func);
@@ -4465,6 +4474,7 @@ void HighCWriter::noteFunctionAddress(va_t Addr,
   const HighCImageFunctionSymbols &Symbols =
       SharedFunctionSymbols ? *SharedFunctionSymbols : *OwnFunctionSymbols;
   if (const auto Found = Symbols.find(Addr); Found != Symbols.end()) {
+    mips::requireNumericCodePointerSource(Opts.Image, Addr);
     const Symbol &Sym = *Found->second;
     FunctionAddressNames.emplace(Addr, FunctionAddressTarget{Sym.Name});
     AddressTakenFunctions.insert(Sym.Name);
@@ -4873,6 +4883,17 @@ std::optional<std::string> HighCWriter::relocatedSlotTarget(va_t Slot) const {
   const va_t Target =
       readPtr(Bytes, PointerBytes == 8, archLittleEndian(Opts.TheArch));
   if (Opts.Image->CodePtrRelocSlots.count(Slot)) {
+    if (Opts.Image->Mode == InstructionMode::MixedMIPS ||
+        Opts.Image->Mode == InstructionMode::MicroMIPS) {
+      const auto Entry = mips::serializedCodeTarget(*Opts.Image, Target);
+      if (!Entry)
+        throw std::invalid_argument(
+            "MIPS code pointer tag conflicts with its destination mode");
+      if (auto It = FunctionAddressNames.find(*Entry);
+          It != FunctionAddressNames.end())
+        return "(uintptr_t)&" + functionAddressIdentifier(It->second);
+      return std::nullopt;
+    }
     // A Thumb function's address carries its mode in bit 0.
     for (const va_t Entry : {Target, Target & ~va_t{1}})
       if (auto It = FunctionAddressNames.find(Entry);
@@ -5117,6 +5138,10 @@ void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
   writeIncludes(Funcs);
   std::set<std::string> Records;
   std::function<void(const TypeRef &)> RecordType = [&](const TypeRef &Type) {
+    if (Type && Type->Kind == NdTypeKind::Array) {
+      RecordType(Type->ElemType);
+      return;
+    }
     if (!Type || Type->Kind != NdTypeKind::Struct || !Type->SourceName.empty())
       return;
     const auto Name = typeToC(Type);

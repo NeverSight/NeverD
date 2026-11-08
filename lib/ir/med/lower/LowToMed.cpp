@@ -38,6 +38,7 @@
 #include "neverd/ir/low/LowIntrinsicOutputs.h"
 #include "neverd/ir/low/LowRawEnvironment.h"
 #include "neverd/ir/low/LowScalarConstant.h"
+#include "neverd/ir/low/MIPS/MIPSControlTarget.h"
 #include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/low/SEHFrameProof.h"
@@ -46,6 +47,7 @@
 #include "neverd/ir/low/X86ArithmeticFlags.h"
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MIPS/MIPSMergeValues.h"
+#include "neverd/ir/med/MIPS/MIPSReturnTargets.h"
 #include "neverd/ir/med/MedBoundCallStackArguments.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedCallTarget.h"
@@ -784,6 +786,18 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
   if (SEHPhysical)
     Physical = std::move(SEHPhysical->Function);
   const LowFunc &Low = Physical ? *Physical : SourceLow;
+  const bool QualifyMIPSReturns =
+      isMIPS(TheArch) &&
+      (Image ? (Image->Mode == InstructionMode::MixedMIPS ||
+                Image->Mode == InstructionMode::MicroMIPS)
+             : llvm::any_of(Low.Blocks, [](const auto &Block) {
+                 return llvm::any_of(
+                     Block.InstructionBoundaries, [](const auto &Boundary) {
+                       return Boundary.Mode == InstructionMode::MicroMIPS ||
+                              Boundary.Mode == InstructionMode::MIPSClassic;
+                     });
+               }));
+  bool MIPSReturnsQualified = !QualifyMIPSReturns;
   bool HasMIPSScalarValues = false;
   for (const LowBlock &Block : Low.Blocks)
     for (const LowOp &Op : Block.Ops) {
@@ -1183,6 +1197,14 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       // functions calls that function (BinaryImage::ConstantCodeSlots).
       std::optional<LowOp> DirectCall;
       std::optional<MedCallTarget> CachedTarget;
+      if (const auto &Call = LB.Ops[LowOpIndex];
+          QualifyMIPSReturns && Call.Opcode == NdOp::CALL && Call.NumInputs &&
+          Call.Inputs[0].isConst())
+        if (!Image || !qualifiedMIPSCallTarget(*Image, LB, LowOpIndex,
+                                               Call.Inputs[0].Offset))
+          throw LowToMedConversionError(
+              "MIPS direct call target has conflicting or unknown instruction "
+              "mode");
       if (const LowOp &Call = LB.Ops[LowOpIndex];
           Image && Call.Opcode == NdOp::INDIR_CALL && Call.NumInputs == 1 &&
           !Call.Inputs[0].isConst()) {
@@ -1198,6 +1220,15 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
         }
         const bool AnalystSite = OriginalSite && SourceCallSiteHints &&
                                  SourceCallSiteHints->count(*OriginalSite);
+        if (CachedTarget && !CachedTarget->ThroughSlot && !AnalystSite) {
+          const auto Target = qualifiedMIPSCallTarget(*Image, LB, LowOpIndex,
+                                                      CachedTarget->Address);
+          if (!Target)
+            throw LowToMedConversionError(
+                "MIPS recovered call target has conflicting or unknown "
+                "instruction mode");
+          CachedTarget->Address = *Target;
+        }
         if (CachedTarget && !CachedTarget->ThroughSlot && !AnalystSite &&
             !Image->IsRelocatable &&
             Image->hasExecutableCodeOwnerAt(CachedTarget->Address)) {
@@ -1212,9 +1243,15 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
           Call.Inputs[0].isConst())
         if (auto It = Image->ConstantCodeSlots.find(Call.Inputs[0].Offset);
             It != Image->ConstantCodeSlots.end()) {
+          const auto Target =
+              qualifiedMIPSCallTarget(*Image, LB, LowOpIndex, It->second);
+          if (!Target)
+            throw LowToMedConversionError(
+                "MIPS code slot target has conflicting or unknown instruction "
+                "mode");
           DirectCall = Call;
           DirectCall->Opcode = NdOp::CALL;
-          DirectCall->Inputs[0] = NdVar::cst(It->second, Call.Inputs[0].Size);
+          DirectCall->Inputs[0] = NdVar::cst(*Target, Call.Inputs[0].Size);
         }
       const LowOp &LOp = DirectCall ? *DirectCall : LB.Ops[LowOpIndex];
       while (BoundaryIndex < LB.InstructionBoundaries.size()) {
@@ -1672,6 +1709,8 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
     // selectors bind exactly as they would after the full pipeline.
     resolveSwitchSelectorPlans(Func);
     Func.SkippedSSA = true;
+    if (QualifyMIPSReturns)
+      throw LowToMedConversionError("MIPS source return proof requires SSA");
     projectOriginalAddressSelectors(Func);
     return Func;
   }
@@ -1717,6 +1756,13 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
     debugVerifyMedFunc(Func, "splitEntryLoopHeader");
     buildSsa(Func, Low);
     debugVerifyMedFunc(Func, "buildSsa");
+    if (QualifyMIPSReturns) {
+      MIPSReturnsQualified =
+          hasMIPSSourceReturnTargets(Low, Func, TheArch, Fmt);
+      if (!MIPSReturnsQualified)
+        throw LowToMedConversionError("MIPS source return target is not proven "
+                                      "to preserve the incoming link and mode");
+    }
 
     // The x86 lifter's PUSHF and the ARM lifter's MRS of APSR.
     foldMachineFlagsIntoStatusImages(Func);
@@ -1940,6 +1986,9 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
                                "copied blocks for "
                             << Func.Name << "\n");
   }
+  if (!MIPSReturnsQualified)
+    throw LowToMedConversionError(
+        "MIPS source return target qualification did not complete");
   return Func;
 }
 

@@ -31,6 +31,72 @@ extern int __android_log_bwrite(int, const void *, U64);
 extern int __android_log_write(int, const char *, const char *);
 extern int __android_log_buf_write(int, int, const char *, const char *);
 
+extern int __android_log_print(int, const char *, const char *, ...);
+extern int __android_log_buf_print(int, int, const char *, const char *, ...);
+extern int __android_log_vprint(int, const char *, const char *,
+                                __builtin_va_list);
+typedef int (*LogPrint)(int, const char *, const char *, ...);
+typedef int (*LogBufferPrint)(int, int, const char *, const char *, ...);
+typedef int (*LogVPrint)(int, const char *, const char *, __builtin_va_list);
+
+static __attribute__((noinline)) int
+variadic_text_log(LogVPrint Fn, int Priority, const char *Tag,
+                  const char *Format, ...) {
+  __builtin_va_list Args;
+  __builtin_va_start(Args, Format);
+  unsigned char Before[sizeof(Args)];
+  memcpy(Before, &Args, sizeof(Args));
+  int Result = Fn ? Fn(Priority, Tag, Format, Args)
+                  : __android_log_vprint(Priority, Tag, Format, Args);
+  for (U64 I = 0; I != sizeof(Args); ++I)
+    if (Before[I] != ((const unsigned char *)&Args)[I])
+      return -999;
+  __builtin_va_end(Args);
+  return Result;
+}
+
+// Each form reaches the same liblog write with real compiler-generated
+// AAPCS64 arguments, including integer overflow slots and a borrowed va_list.
+U64 log_formatted(U64 *Out, U64 Form, U64 Mode, const char *Format,
+                  const char *String, U64 ID, U64 Priority, const char *Tag) {
+  void *Library = Form >= 3 ? dlopen("liblog.so", 2) : (void *)0;
+  LogPrint Print =
+      Form == 3 ? (LogPrint)dlsym(Library, "__android_log_print") : (void *)0;
+  LogBufferPrint BufferPrint =
+      Form == 4 ? (LogBufferPrint)dlsym(Library, "__android_log_buf_print")
+                : (void *)0;
+  LogVPrint VPrint =
+      Form == 5 ? (LogVPrint)dlsym(Library, "__android_log_vprint") : (void *)0;
+  if (Form > 5 || (Form == 3 && !Print) || (Form == 4 && !BufferPrint) ||
+      (Form == 5 && !VPrint))
+    return 1;
+#define EMIT(...)                                                              \
+  (Form == 0   ? __android_log_print(Priority, Tag, __VA_ARGS__)               \
+   : Form == 1 ? __android_log_buf_print(ID, Priority, Tag, __VA_ARGS__)       \
+   : Form == 3 ? Print(Priority, Tag, __VA_ARGS__)                             \
+   : Form == 4 ? BufferPrint(ID, Priority, Tag, __VA_ARGS__)                   \
+               : variadic_text_log(VPrint, Priority, Tag, __VA_ARGS__))
+  for (U64 I = 0; I != 2; ++I) {
+    *__errno() = 73;
+    int Result;
+    if (Mode == 0)
+      Result =
+          EMIT(Format, -123, 0xfedcba9876543210UL, String, 7, 8, 9, 10, 11, 12);
+    else if (Mode == 1)
+      Result = EMIT(Format, 4, String);
+    else if (Mode == 2)
+      Result = EMIT(Format, 0);
+    else if (Mode == 3)
+      Result = EMIT(Format, 1.5);
+    else
+      Result = EMIT("%*s", (int)(Mode - 10), "");
+    Out[2 * I] = (long)Result;
+    Out[2 * I + 1] = *__errno();
+  }
+#undef EMIT
+  return Library ? dlclose(Library) : 0;
+}
+
 static __attribute__((noinline)) int
 direct_text_write(int Priority, const char *Tag, const char *Message) {
   return __android_log_write(Priority, Tag, Message);
