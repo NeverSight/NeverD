@@ -31,7 +31,7 @@ target_include_directories(neverd_worker_protocol PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/../../include")
 add_library(neverd_worker_graph STATIC GraphSnapshot.cpp GraphLayout.cpp)
 add_library(neverd_worker_format STATIC OperandFormat.cpp OperandFormatARM.cpp
-  OperandFormatSBF.cpp OperandFormatEVM.cpp CodeEdits.cpp)
+  OperandFormatSBF.cpp OperandFormatEVM.cpp CodeEdits.cpp PageDelta.cpp)
 target_link_libraries(neverd_worker_format PUBLIC neverd_worker_protocol)
 # Header-only tables shared with the engine, such as the wide characters.
 target_include_directories(neverd_worker_format PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../../include")
@@ -81,6 +81,9 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
   add_executable(neverd-worker-code-edits-tests tests/code_edits_tests.cpp)
   target_link_libraries(neverd-worker-code-edits-tests PRIVATE neverd_worker_format)
   add_test(NAME NeverDWorkerCodeEdits COMMAND neverd-worker-code-edits-tests)
+  add_executable(neverd-worker-page-delta-tests tests/page_delta_tests.cpp)
+  target_link_libraries(neverd-worker-page-delta-tests PRIVATE neverd_worker_format)
+  add_test(NAME NeverDWorkerPageDelta COMMAND neverd-worker-page-delta-tests)
   add_executable(neverd-worker-history-tests tests/history_tests.cpp ProjectHistory.cpp)
   target_link_libraries(neverd-worker-history-tests PRIVATE neverd_worker_format)
   add_test(NAME NeverDWorkerHistory COMMAND neverd-worker-history-tests)
