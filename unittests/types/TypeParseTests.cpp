@@ -665,6 +665,61 @@ TEST(TypeParse, ExpandedDiagnosticsOwnTheirTextAndInvocationPosition) {
             "a static assertion fails: expanded\ndiagnostic");
 }
 
+TEST(TypeParse, InvalidMacroReplacementsFailAtTheirInvocation) {
+  for (DataModel Model :
+       {DataModel::ILP32, DataModel::LP64, DataModel::LLP64}) {
+    SCOPED_TRACE(int(Model));
+    for (llvm::StringRef Body : {"@ unsigned", "18446744073709551616", "0xG1",
+                                 "\"unfinished", "/* unfinished"}) {
+      SCOPED_TRACE(Body.str());
+      TypeLibrary Library(Model);
+      ASSERT_TRUE(parseCTypes("struct Kept { int value; };", Library).ok());
+      const auto Before = renderTypes(Library, {}, {});
+      const auto Direct = parseCTypes(Body, Library);
+      ASSERT_FALSE(Direct.Problems.empty());
+      const std::string Definition = "#define BAD " + Body.str() + "\n";
+      for (llvm::StringRef Invocation : {"  BAD", "  ALIAS"}) {
+        ParseOptions Options;
+        Options.KeepGoing = true;
+        const auto Result =
+            parseCTypes(Definition + "#define ALIAS BAD\nint Before(void);\n" +
+                            Invocation.str() + " Call(void);\nint After(void);",
+                        Library, Options);
+        ASSERT_EQ(Result.Problems.size(), 1u);
+        EXPECT_EQ(Result.Problems[0].Line, 4u);
+        EXPECT_EQ(Result.Problems[0].Column, 3u);
+        EXPECT_EQ(Result.Problems[0].Message, Direct.Problems[0].Message);
+        EXPECT_EQ(renderTypes(Library, {}, {}), Before);
+      }
+      const auto Declaration = parseFunctionDeclaration(
+          Definition + "int Read(\n  BAD value);", Library);
+      ASSERT_FALSE(Declaration.ok());
+      ASSERT_EQ(Declaration.Problems.size(), 1u);
+      EXPECT_EQ(Declaration.Problems[0].Line, 3u);
+      EXPECT_EQ(Declaration.Problems[0].Column, 3u);
+      EXPECT_EQ(Declaration.Problems[0].Message, Direct.Problems[0].Message);
+      const auto Packing = parseCTypes(
+          Definition + "#pragma pack(BAD)\nstruct Packed { int value; };",
+          Library);
+      EXPECT_FALSE(Packing.ok());
+      EXPECT_EQ(renderTypes(Library, {}, {}), Before);
+
+      // Unused replacements, later redefinitions and removal must not make
+      // otherwise supported header declarations fail.
+      ASSERT_TRUE(parseCTypes(Definition + "int Unused(void);", Library).ok());
+      ASSERT_TRUE(parseCTypes(Definition + "#define BAD unsigned\n"
+                                           "BAD Redefined(void);",
+                              Library)
+                      .ok());
+      ASSERT_TRUE(parseCTypes(Definition +
+                                  "#undef BAD\n"
+                                  "typedef int BAD;\nBAD Removed(void);",
+                              Library)
+                      .ok());
+    }
+  }
+}
+
 TEST(TypeParse, OneDeclarationRetainsExpandedParameterNames) {
   const TypeLibrary Library;
   std::string Source =

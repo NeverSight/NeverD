@@ -31,7 +31,16 @@
 namespace neverd::types {
 namespace {
 
-enum class TokenKind : uint8_t { End, Word, Number, String, Punct, Pragma };
+enum class TokenKind : uint8_t {
+  End,
+  Word,
+  Number,
+  String,
+  Punct,
+  Pragma,
+  /// A macro replacement's lexical error, reported only when it is expanded.
+  Invalid
+};
 
 /// The prefix a quoted literal takes: none, L, u, U or u8, which say how
 /// wide its units are and, for a character, its type.
@@ -355,6 +364,10 @@ private:
       return;
     }
     for (Token Replacement : Replacements) {
+      if (Replacement.Kind == TokenKind::Invalid) {
+        problem(Word.Line, Word.Column, Replacement.Text.str());
+        return;
+      }
       Replacement.Line = Word.Line;
       Replacement.Column = Word.Column;
       if (Replacement.Kind == TokenKind::Word)
@@ -511,10 +524,19 @@ private:
       // A macro with parameters stands for no single word.
       if (Macro.empty() || Body.starts_with("("))
         return;
-      std::vector<SourceProblem> Ignored;
-      Lexer Inner(Body, Ignored, Spellings);
+      std::vector<SourceProblem> BodyProblems;
+      Lexer Inner(Body, BodyProblems, Spellings);
       TokenList Replacement = Inner.run();
       Replacement.pop_back();
+      if (!BodyProblems.empty()) {
+        // Retaining partial tokens could turn an invalid type into a valid
+        // one, or use the failed integer conversion's value. Keep the first
+        // diagnostic instead, without rejecting an unused replacement.
+        Token Invalid;
+        Invalid.Kind = TokenKind::Invalid;
+        Invalid.Text = Spellings.save(BodyProblems.front().Message);
+        Replacement.assign(1, Invalid);
+      }
       // A header NeverD renders names a system's types otherwise for
       // another system's compilers (#define X neverd_X); the declarations
       // read are the system's.
