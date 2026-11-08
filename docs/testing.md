@@ -16061,6 +16061,17 @@ A registered legacy runtime invalidates memory even when its file-local callee
 is pure. Selected
 target proofs are checked against raw bytecode execution. The optional query
 retains dynamic fallback and does not qualify closed-world devirtualization.
+`EqualLoadedFieldsRefineOnlyUnchangedMemory` checks equality facts through a
+following callee's field reload. It covers both equality edges, immediate and
+swapped register comparisons, register copies and reversed CFG edge order.
+Known and unknown stores, calls, changed address bases and narrow loads must
+not inherit an earlier full-word equality. Independent raw executions check
+both input branches and the different callback selected after a mutation.
+`DiscardedReturnOnlyCallsDoNotConsumeInputVariants` checks that unused results
+from `EXIT`-only callees do not split wrapper summaries by incoming r0. It
+crosses two forwarding layers and reverses CFG edge order, while live returns,
+stores and branches retain their dependencies. Raw bytecode checks the return
+and stored value independently of the summary assertions.
 The pinned 72-file native-object scan described in [sbf-corpus.md](sbf-corpus.md)
 is separate from these synthetic execution tests and from official VM gates.
 

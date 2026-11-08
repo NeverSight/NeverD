@@ -318,11 +318,21 @@ context-keyed function summaries. The loader-entry root uses the shared initial
 ABI register facts, before unrelated CFG predecessors join the block. Its own
 solver still joins real loop backedges. Ordinary calls to that same slot keep
 their caller inputs; other recognized roots receive no loader-input assumption.
+An equality edge can also refine an unknown full-width load to the compared
+constant in the current memory facts. The load must be in the same block,
+with an unchanged address base and no intervening store or call. Exact 64-bit
+register copies can carry the loaded value to the comparison. Narrow loads
+do not establish the remaining bytes. This is a path condition, not a guest
+write or a non-aliasing assumption; scanning uses the existing visit budget.
 Keys project away entry registers that every
 path overwrites before reading, using a conservative interprocedural dependency
 fixed point. Its continuation dependencies stop at matched nonreturning calls;
 callee dependencies still participate. Scratch inputs are omitted only when the
-callee neither reads nor writes memory. Exact keys retain full-word scratch
+callee neither reads nor writes memory. A callee consisting only of `EXIT`
+does not require incoming r0 when its scalar return is unused. Backward input
+dependencies and concrete summary reuse share that decision; the call and its
+register transfer still execute. Live returns and callees with additional
+instructions retain their input dependencies. Exact keys retain full-word scratch
 facts, pointer kinds and memory-coordinate lanes. Once all four specialization
 slots are occupied, a completed summary can also be reused when its conservative
 read footprint proves that every changed word is unread. Loads, syscall read

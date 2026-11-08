@@ -819,6 +819,17 @@ private:
                                          bool &CoveringInputs);
   llvm::Error computeInputDependencies();
   llvm::Error computeReturnReachability();
+  uint16_t usedCalleeInputs(const MedInstruction &Call, size_t Entry,
+                            uint16_t Inputs) const {
+    // EXIT alone observes only its scalar result. If the caller discards
+    // that result, incoming r0 cannot affect the continuation or memory.
+    if (!LiveCallReturns[Call.Slot] &&
+        Index.find(Program.Med.Blocks[Entry].StartSlot)->Op == Operation::Exit)
+      return Inputs & ~registerBit(kReturnRegister);
+    return Inputs;
+  }
+  llvm::Error refineLoadedEquality(const MedBlock &Block, size_t Successor,
+                                   ContextState &State);
   ContextState genericInput() const;
   llvm::Expected<RegisterValue> captureAddress(size_t Owner, size_t Slot,
                                                uint64_t Source,
@@ -1914,7 +1925,8 @@ llvm::Error ContextFlow::computeInputDependencies() {
             CallX = false;
             LiveCallReturns[I->Slot] = false;
           }
-          Callee = {InputRegisters[Entry], ReadsMemory[Entry]};
+          Callee = {usedCalleeInputs(*I, Entry, InputRegisters[Entry]),
+                    ReadsMemory[Entry]};
           CallX |= ReachesCallX[Entry];
         } else {
           CallX |= I->Call != CallKind::Syscall;
@@ -2899,6 +2911,74 @@ void ContextFlow::refineOrigins(const FunctionContext &Context,
         State.Registers[R] = Origin;
     }
   }
+}
+
+llvm::Error ContextFlow::refineLoadedEquality(const MedBlock &Block,
+                                              size_t Successor,
+                                              ContextState &State) {
+  const auto *Branch = Index.find(Block.EndSlot - 1);
+  if (!Branch || Branch->Width != kDoubleWordBitWidth ||
+      (Branch->Op != Operation::Eq && Branch->Op != Operation::Ne) ||
+      (Successor == *Branch->BranchTarget) != (Branch->Op == Operation::Eq))
+    return llvm::Error::success();
+  unsigned Register = Branch->Dst;
+  RegisterValue Equal =
+      Branch->Semantics.Source == OperandSourceKind::SourceRegister
+          ? State.Registers[Branch->Src].singleton()
+          : RegisterValue{RegisterValue::Kind::Constant,
+                          normalizeImmediate(Branch->Immediate,
+                                             Branch->Semantics.Immediate),
+                          0};
+  if (Equal.ValueKind != RegisterValue::Kind::Constant) {
+    if (Branch->Semantics.Source != OperandSourceKind::SourceRegister)
+      return llvm::Error::success();
+    Equal = State.Registers[Branch->Dst].singleton();
+    Register = Branch->Src;
+  }
+  if (Equal.ValueKind != RegisterValue::Kind::Constant ||
+      !State.Registers[Register].unknown())
+    return llvm::Error::success();
+
+  // This edge proves the value of an unchanged cell, not a guest write.
+  // Find its full-width load in this block only. A store or call ends the
+  // memory epoch; a changed load base cannot use its current register value.
+  unsigned Carrier = Register;
+  uint16_t Changed = 0;
+  for (size_t Slot = Branch->Slot; Slot > Block.StartSlot;) {
+    const auto *Instruction = Index.find(--Slot);
+    if (!Instruction)
+      continue;
+    if (auto Error = visit())
+      return Error;
+    if (Instruction->Call != CallKind::None ||
+        Instruction->Op == Operation::Store)
+      break;
+    if (!Instruction->Semantics.WritesDestination)
+      continue;
+    if (Instruction->Dst == Carrier) {
+      if (Instruction->Op == Operation::Mov &&
+          Instruction->Form == OperandForm::DstSrc &&
+          Instruction->Width == kDoubleWordBitWidth) {
+        Carrier = Instruction->Src;
+      } else {
+        if (Instruction->Op == Operation::Load &&
+            Instruction->Semantics.MemoryWidth == kDoubleWordBitWidth &&
+            Instruction->Src != Instruction->Dst &&
+            !(Changed & registerBit(Instruction->Src))) {
+          const auto Address =
+              memoryAddress(State.Registers[Instruction->Src].singleton(),
+                            Instruction->Offset);
+          if (Address) {
+            State.Scratch.Values.writeValues(*Address, Equal);
+            State.Registers[Register] = Equal;
+          }
+        }
+        break;
+      }
+    }
+    Changed |= registerBit(Instruction->Dst);
+  }
+  return llvm::Error::success();
 }
 
 void ContextFlow::transfer(const MedInstruction &Instruction,
@@ -4550,17 +4630,17 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
             break;
           }
           const auto &Summary = *Contexts[*Edge.CalleeSummaryID];
-          if (Summary.Generic) {
-            Callee.Registers |= InputRegisters[Summary.EntryBlock];
-            Callee.Memory |= ReadsMemory[Summary.EntryBlock];
-          } else {
-            Callee.Registers |= Summary.ReuseInputRegisters;
-            Callee.Memory |= Summary.ReuseReadsMemory;
-          }
+          Callee.Registers |= usedCalleeInputs(
+              *Instruction, Summary.EntryBlock,
+              Summary.Generic ? InputRegisters[Summary.EntryBlock]
+                              : Summary.ReuseInputRegisters);
+          Callee.Memory |= Summary.Generic ? ReadsMemory[Summary.EntryBlock]
+                                           : Summary.ReuseReadsMemory;
           if (needsSummaryInputGuards(Summary, Edge))
-            ObservableRegisters |= Summary.Generic
-                                       ? InputRegisters[Summary.EntryBlock]
-                                       : Summary.ObservableInputRegisters;
+            ObservableRegisters |= usedCalleeInputs(
+                *Instruction, Summary.EntryBlock,
+                Summary.Generic ? InputRegisters[Summary.EntryBlock]
+                                : Summary.ObservableInputRegisters);
         }
       }
       const auto Dependencies = instructionDependencies(*Instruction, Callee);
@@ -5069,6 +5149,9 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
           return TaggedReachable.takeError();
         if (!*TaggedReachable)
           continue;
+        if (auto Error =
+                refineLoadedEquality(MedBlock, NextSlot, SuccessorState))
+          return std::move(Error);
         if (!refineAddressBranch(Index.find(MedBlock.EndSlot - 1), NextSlot,
                                  SuccessorState, Program, *CapturedAddresses,
                                  ReturnCarriers[Successors[E]]))
@@ -5135,6 +5218,8 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
       return TaggedReachable.takeError();
     if (!*TaggedReachable)
       return llvm::Error::success();
+    if (auto Error = refineLoadedEquality(MedBlock, TailSlot, Path))
+      return Error;
     if (!refineAddressBranch(Index.find(MedBlock.EndSlot - 1), TailSlot, Path,
                              Program, *CapturedAddresses,
                              ReturnCarriers[*TaggedTail]))
