@@ -2423,6 +2423,7 @@ add_neverd_unittest(NeverDArm64eAnalysisTests
   aarch64/AArch64_FastClassifyParityTests.cpp
   format/MachOArm64eTests.cpp
   format/MachOArm64eDependencyTests.cpp
+  format/MachOAuthenticatedNativeTests.cpp
   format/MachOBindingIdentityTests.cpp
   format/MachOThreadedBindTests.cpp
   NO_PRETTY_VALUES
