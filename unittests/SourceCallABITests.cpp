@@ -1056,6 +1056,14 @@ TEST(SourceCallABI, NativeHVARejectsPartialAndUnprovenCarriers) {
     EXPECT_FALSE(NdType::makeStruct({WrongKind}));
     const auto BadArray = NdType::makeArray(Vector, kDarwinPairWords, Bytes);
     EXPECT_FALSE(NdType::makeStruct({BadArray}));
+    const auto Array =
+        NdType::makeArray(Vector, kDarwinPairWords, kDarwinPairWords * Bytes);
+    EXPECT_TRUE(equalSourceTypes(Array, Array));
+    const auto Pointer = NdType::makePtr(Array);
+    EXPECT_FALSE(equalSourceTypes(Pointer, Pointer));
+    auto ArrayPointer = nativeContract({Pointer}, NdType::makeVoid());
+    EXPECT_FALSE(assignDarwinFixedSourceABI(ArrayPointer.Signature,
+                                            Arch::AArch64, Error));
   }
 }
 

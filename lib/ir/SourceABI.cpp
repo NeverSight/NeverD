@@ -87,6 +87,12 @@ bool equalTypes(const TypeRef &Left, const TypeRef &Right, unsigned Depth,
   case NdTypeKind::Ptr:
     if (Left->Size != 8 || !Left->Pointee || !Right->Pointee)
       return false;
+    // Fixed arrays describe record members. A pointer-to-array declarator
+    // needs a separate source projection contract; structural equality must
+    // not grant that contract when adding array-valued members.
+    if (Left->Pointee->Kind == NdTypeKind::Array ||
+        Right->Pointee->Kind == NdTypeKind::Array)
+      return false;
     // A named opaque pointee supplies identity, not a by-value layout.
     if (Left->Pointee->Kind == NdTypeKind::Struct &&
         Right->Pointee->Kind == NdTypeKind::Struct && !Left->Pointee->IsEnum &&

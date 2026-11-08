@@ -96,4 +96,3 @@ class OwnedProducts(list):
         finally:
             signal.signal(signal.SIGTERM, self.previous_signal)
             self.lock.close()
-
