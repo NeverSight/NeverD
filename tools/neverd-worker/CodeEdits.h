@@ -44,11 +44,24 @@ public:
   /// False, with the page as it was, unless its text shows a spelling is all
   /// that moves.
   static bool respell(Json &page, const Json &renamed);
+  /// \p definitionLine, where given, takes the line the function's definition
+  /// begins on, which a function's own comment is written at.
   static void decorate(Json &view, const Json &row, std::uint64_t function,
                        const std::string &representation,
                        const ImageFacts &image,
                        const FunctionAliases &displayNames,
-                       const Resolver &resolve);
+                       const Resolver &resolve,
+                       std::optional<std::size_t> *definitionLine = nullptr);
+  /// A view decorate wrote for \p function, its definition on
+  /// \p definitionLine, after the image's comments changed and nothing else it
+  /// reads: each row's comment is read again as decorate reads it, and where
+  /// it changed its line's inline comment is replaced and the spans after it
+  /// move, as decorate would write them.  False, with the view as it was,
+  /// where a line with a changed comment holds more than one row or does not
+  /// end in the comment decorate wrote; the view is then decorated again.
+  static bool takeComments(Json &view, std::uint64_t function,
+                           std::optional<std::size_t> definitionLine,
+                           const ImageFacts &image);
   /// Give a complete source view a source name wherever its code spells an
   /// identifier its identifier_symbols list (`fini`, which C calls the
   /// function `_fini`), so the identifier finds the function and reads as its

@@ -76,6 +76,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -5226,7 +5227,11 @@ HighCWriter::typedPointerOffset(const HighExpr &Addr) const {
       int64_t Delta = static_cast<int64_t>(RHS->ConstVal);
       if (RHS->Type && RHS->Type->Size == 4)
         Delta = static_cast<int32_t>(RHS->ConstVal);
-      Acc += Subtract ? -Delta : Delta;
+      int64_t Next;
+      if (Subtract ? llvm::SubOverflow(Acc, Delta, Next)
+                   : llvm::AddOverflow(Acc, Delta, Next))
+        return std::nullopt;
+      Acc = Next;
       Cur = LHS;
       continue;
     }
@@ -5234,7 +5239,8 @@ HighCWriter::typedPointerOffset(const HighExpr &Addr) const {
       int64_t Delta = static_cast<int64_t>(LHS->ConstVal);
       if (LHS->Type && LHS->Type->Size == 4)
         Delta = static_cast<int32_t>(LHS->ConstVal);
-      Acc += Delta;
+      if (llvm::AddOverflow(Acc, Delta, Acc))
+        return std::nullopt;
       Cur = RHS;
       continue;
     }
@@ -5440,7 +5446,8 @@ HighCWriter::frameTypedMemberAccess(int64_t Disp, uint16_t AccessSize) const {
     const bool CallRecord = canHaveInteriorFields(Slot.CallType);
     if (!Record && !CallRecord)
       continue;
-    const uint64_t Rel = static_cast<uint64_t>(Disp - SlotDisp);
+    const uint64_t Rel =
+        static_cast<uint64_t>(Disp) - static_cast<uint64_t>(SlotDisp);
     if (Dbg) {
       if (Record)
         Dbg->completeType(Slot.Type);
@@ -5705,14 +5712,21 @@ bool HighCWriter::isIntegerOverlayStore(const HighExpr &Val) const {
 std::optional<int64_t>
 HighCWriter::frameOverlayDisplacement(const HighExpr &Base,
                                       uint64_t Rel) const {
+  const auto AddRelativeOffset = [Rel](int64_t Disp) -> std::optional<int64_t> {
+    // Rel is unsigned: even an offset above INT64_MAX can fit when the
+    // frame displacement is negative. Compare before forming the sum.
+    if (Rel > static_cast<uint64_t>(INT64_MAX) - static_cast<uint64_t>(Disp))
+      return std::nullopt;
+    return static_cast<int64_t>(static_cast<uint64_t>(Disp) + Rel);
+  };
   if (const auto Disp = frameDisplacement(Base))
-    return *Disp + static_cast<int64_t>(Rel);
+    return AddRelativeOffset(*Disp);
   const HighExpr *Cur = unwrapIntegerView(&Base);
   if (Cur && Cur->Kind == ExprKind::Load && !Cur->Operands.empty() &&
       Cur->Operands[0] && Cur->MemoryOrdering == NdMemoryOrdering::None &&
       Cur->MemoryAddressSpace == NdMemoryAddressSpace::Default)
     if (const auto Disp = frameDisplacement(*Cur->Operands[0]))
-      return *Disp + static_cast<int64_t>(Rel);
+      return AddRelativeOffset(*Disp);
   return std::nullopt;
 }
 
@@ -5728,7 +5742,8 @@ TypeRef HighCWriter::frameTypedMemberType(int64_t Disp,
     const bool CallRecord = canHaveInteriorFields(Slot.CallType);
     if (!Record && !CallRecord)
       continue;
-    const uint64_t Rel = static_cast<uint64_t>(Disp - SlotDisp);
+    const uint64_t Rel =
+        static_cast<uint64_t>(Disp) - static_cast<uint64_t>(SlotDisp);
     if (Dbg) {
       if (Record)
         Dbg->completeType(Slot.Type);
@@ -6638,7 +6653,8 @@ bool HighCWriter::disjointMemory(const HighExpr &A, const HighExpr &B,
   return false;
 }
 
-std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
+std::optional<int64_t>
+HighCWriter::frameDisplacement(const HighExpr &E, bool RequireKnownRoot) const {
   if (!CurrentFunc ||
       FrameDisplacementDepth >= limits::kMaxFrameDisplacementDepth)
     return std::nullopt;
@@ -6651,6 +6667,12 @@ std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
       ProjectFrameAliasesIntoStorage ? FrameStorageSlots : FrameSlots;
   const HighExpr *Cur = unwrapIntegerView(&E);
   int64_t Acc = 0;
+  const auto AddOffset = [&](int64_t Offset) -> std::optional<int64_t> {
+    int64_t Result;
+    if (llvm::AddOverflow(Acc, Offset, Result))
+      return std::nullopt;
+    return Result;
+  };
   unsigned Depth = 0;
   while (Cur && Depth++ < limits::kMaxFrameDisplacementDepth) {
     Cur = unwrapIntegerView(Cur);
@@ -6670,7 +6692,7 @@ std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
       const uint64_t WidthMask = Cur->Type->Size == 4 ? UINT32_MAX : UINT64_MAX;
       const uint64_t Cleared = ~Mask->ConstVal & WidthMask;
       const uint64_t Alignment = Cleared + 1;
-      if (!Cleared || Alignment > kSyntheticStackAlignment ||
+      if (!Cleared || !Alignment || Alignment > kSyntheticStackAlignment ||
           (Alignment & Cleared) != 0 || CurrentFunc->FrameSize <= 0 ||
           Cur->Type->Size != getTargetRegInfo(Opts.TheArch).PointerSize)
         return std::nullopt;
@@ -6686,19 +6708,16 @@ std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
       if (*BaseDisp < INT64_MIN + Remainder)
         return std::nullopt;
       const int64_t AlignedDisp = *BaseDisp - Remainder;
-      if ((Acc > 0 && AlignedDisp > INT64_MAX - Acc) ||
-          (Acc < 0 && AlignedDisp < INT64_MIN - Acc))
-        return std::nullopt;
       // The synthetic byte buffer shares this alignment and entry residue;
       // rounding a proved in-frame address stays within its padded lower end.
-      return Acc + AlignedDisp;
+      return AddOffset(AlignedDisp);
     }
     if (Cur->Kind == ExprKind::Var) {
       if (isCatchFuncletParentFrame(Cur->Var)) {
         // rdx is the parent's established frame, the same rebase SEH handlers
         // use so [rdx+k] names the try body's var_mN slots.
         if (CurrentFunc->FrameSize > 0)
-          return Acc - CurrentFunc->FrameSize;
+          return AddOffset(-CurrentFunc->FrameSize);
         return Acc;
       }
       // SSA version zero is always the architectural entry SP. Exceptional
@@ -6708,7 +6727,9 @@ std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
         return Acc;
       auto Alias = FrameAliases.find(varName(Cur->Var));
       if (Alias != FrameAliases.end())
-        return Acc + Alias->second;
+        return AddOffset(Alias->second);
+      if (RequireKnownRoot && !isRegistrationEstablisherFrame(Cur->Var))
+        return std::nullopt;
       if (CurrentFunc->ExceptionMetadata && Cur->Var.Kind == MedVar::Reg &&
           Cur->Var.RenameTag < 0 &&
           Cur->Var.RegOff == getTargetRegInfo(Opts.TheArch).FramePointer) {
@@ -6718,9 +6739,10 @@ std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
         // Without that proof an arbitrary incoming EBP is not entry ESP - 4.
         if (Opts.TheArch == Arch::X86)
           return std::nullopt;
-        const int64_t Order[3] = {Acc - Slot, Acc, Acc + Slot};
-        for (int64_t Adj : Order)
-          if (Slots.count(Adj))
+        const std::optional<int64_t> Order[] = {AddOffset(-Slot), Acc,
+                                                AddOffset(Slot)};
+        for (const auto Adj : Order)
+          if (Adj && Slots.count(*Adj))
             return Adj;
         return Acc;
       }
@@ -6753,7 +6775,11 @@ std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
     int64_t Delta = static_cast<int64_t>(Imm->ConstVal);
     if (Imm->Type && Imm->Type->Size == 4)
       Delta = static_cast<int32_t>(Imm->ConstVal);
-    Acc += Subtract ? -Delta : Delta;
+    int64_t Next;
+    if (Subtract ? llvm::SubOverflow(Acc, Delta, Next)
+                 : llvm::AddOverflow(Acc, Delta, Next))
+      return std::nullopt;
+    Acc = Next;
     Cur = Base;
   }
   return std::nullopt;
@@ -6769,43 +6795,10 @@ bool HighCWriter::isRegistrationEstablisherFrame(const MedVar &V) const {
 
 std::optional<int64_t>
 HighCWriter::certifiedFrameStorageDisplacement(const HighExpr &E) const {
-  if (!CurrentFunc)
-    return std::nullopt;
   // frameDisplacement also has a display-only heuristic for an unassigned
   // SSA-0 value. That is insufficient to redirect a real memory address into
-  // stack_storage: require a known frame root along a constant-offset chain.
-  const HighExpr *Cur = &E;
-  unsigned Depth = 0;
-  while (Cur && Depth++ < limits::kMaxFrameDisplacementDepth) {
-    Cur = unwrapIntegerView(Cur);
-    if (!Cur)
-      return std::nullopt;
-    if (Cur->Kind == ExprKind::BinOp && Cur->Op == NdOp::INT_AND)
-      return frameDisplacement(E);
-    if (Cur->Kind == ExprKind::Var) {
-      if (!isSyntheticEntryStackPointer(Cur->Var, *CurrentFunc, Opts.TheArch) &&
-          !isCatchFuncletParentFrame(Cur->Var) &&
-          !isRegistrationEstablisherFrame(Cur->Var) &&
-          !FrameAliases.count(varName(Cur->Var)))
-        return std::nullopt;
-      return frameDisplacement(E);
-    }
-    if (Cur->Kind != ExprKind::BinOp || Cur->Operands.size() != 2 ||
-        !Cur->Operands[0] || !Cur->Operands[1] ||
-        (Cur->Op != NdOp::INT_ADD && Cur->Op != NdOp::INT_SUB))
-      return std::nullopt;
-    const HighExpr *LHS = unwrapIntegerView(Cur->Operands[0].get());
-    const HighExpr *RHS = unwrapIntegerView(Cur->Operands[1].get());
-    if (!LHS || !RHS)
-      return std::nullopt;
-    if (RHS->Kind == ExprKind::Const)
-      Cur = LHS;
-    else if (Cur->Op == NdOp::INT_ADD && LHS->Kind == ExprKind::Const)
-      Cur = RHS;
-    else
-      return std::nullopt;
-  }
-  return std::nullopt;
+  // stack_storage. Check the root in the same walk that accumulates its offset.
+  return frameDisplacement(E, /*RequireKnownRoot=*/true);
 }
 
 bool HighCWriter::frameStorageAlignmentHolds(const HighExpr &Call) {
@@ -6827,10 +6820,11 @@ bool HighCWriter::frameStorageAlignmentHolds(const HighExpr &Call) {
     return false;
   // The storage is aligned to the synthetic stack alignment, and the entry
   // stack pointer sits at its residue above an aligned lower part.
-  const int64_t Residue = static_cast<int64_t>(syntheticEntryStackResidue(
-      Opts.TheArch, Opts.Format, CurrentFunc->EntryKind));
-  const int64_t Alignment = static_cast<int64_t>(Bytes);
-  return ((*Disp + Residue) % Alignment + Alignment) % Alignment == 0;
+  const uint64_t Residue = syntheticEntryStackResidue(Opts.TheArch, Opts.Format,
+                                                      CurrentFunc->EntryKind);
+  // Bytes is a power of two: the unsigned sum preserves its low bits even
+  // when a signed displacement plus the entry residue would overflow.
+  return ((static_cast<uint64_t>(*Disp) + Residue) & (Bytes - 1)) == 0;
 }
 
 const HighFunc::VaStartForwarder *

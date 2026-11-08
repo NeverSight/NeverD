@@ -4708,7 +4708,11 @@ notes the addresses its render read and its decoration looked up, and reads what
 an edit reached when it is next asked for, so the edit leaves the owner's other
 documents as they are (`Engine::keepNamedViewsThrough`, `Engine::readViewEdits`). A
 function's declaration does so too while the stores' names stand, which they do unless
-it hides a prototype analysis read.
+it hides a prototype analysis read. Where comments alone reached a document since it
+was decorated, they are written into a copy of it as decoration writes them: each row's
+comment read again, its line's inline comment replaced and the spans after it moved
+(`CodeEdits::takeComments`); anything else that drops documents' keys decorates them
+again (`Engine::decorateNamedViewsAgain`).
 Decoration asks for the image's names and comments by address, and the edit changes
 that one row (`CodeEdits::ImageFacts`), so a view costs the same among thousands.
 The GUI starts a replica on a function as its Set Type dialog opens
@@ -9272,6 +9276,16 @@ names a member of it:
   `uint8_t var_m30[10]`, which their views index.
 - A frame address taken outside every member names a byte array that runs to
   the next member, access or address.
+
+HighC checks a storage address's known frame root and accumulates its signed
+offset in one bounded walk. Offset steps and alias/parent-frame rebases must
+fit without signed overflow; a zero mask is not a stack-alignment operation.
+An unassigned SSA-0 display heuristic still cannot authorize storage access.
+Failed proofs retain ordinary address expressions instead of inventing frame
+members, and each query observes the current aliases and frame layout.
+Typed pointer offsets and frame overlays also reject unrepresentable signed
+offsets. Ordered member distances use unsigned subtraction; alignment checks
+use low bits so the entry residue cannot cause signed overflow.
 
 Addresses print as the member holding them: `(uintptr_t)&stack_storage.var_m48`,
 `(CStringT*)&stack_storage.var_m48` for a pointer parameter, or

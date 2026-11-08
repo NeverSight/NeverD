@@ -1133,10 +1133,10 @@ void Engine::settleNamedViews() {
 
 void Engine::keepNamedViewsThrough(std::uint64_t address,
                                    std::vector<std::string> names,
-                                   bool pagesStale) {
+                                   bool pagesStale, bool comment) {
   if (viewEdits_.size() == ::neverd::limits::worker::kEngineMaxViewEdits)
     viewEdits_.pop_front();
-  viewEdits_.push_back({address, std::move(names), pagesStale});
+  viewEdits_.push_back({address, std::move(names), pagesStale, comment});
   ++viewEditCount_;
 }
 
@@ -1202,13 +1202,25 @@ void Engine::readViewEdits(const std::string &sourceKey) {
     }
     return false;
   };
-  // Behind what is remembered, it may read anything.
+  // Behind what is remembered, it may read anything.  Decoration writes
+  // again what reaches it but for the pages; comments alone it writes into a
+  // copy (CodeEdits::takeComments).
   bool stale = unread > viewEdits_.size(), decorated = false;
   if (!stale)
     for (auto edit = viewEdits_.end() - static_cast<std::ptrdiff_t>(unread);
-         edit != viewEdits_.end() && !stale; ++edit)
-      if ((!decorated || edit->pagesStale) && reaches(*edit))
-        (edit->pagesStale || readEnough ? stale : decorated) = true;
+         edit != viewEdits_.end() && !stale; ++edit) {
+      if (!edit->pagesStale && decorated && document.othersReached)
+        continue;
+      if (!reaches(*edit))
+        continue;
+      if (edit->pagesStale || readEnough) {
+        stale = true;
+        continue;
+      }
+      decorated = true;
+      (edit->comment ? document.commentsReached : document.othersReached) =
+          true;
+    }
   if (stale) {
     unindexNamedView(position);
     namedViewBytes_ -= document.bytes;
@@ -1254,6 +1266,12 @@ void Engine::localNamesChanged() {
   ++localNameRevisions_;
   namedViewsRevision_ = revision_;
   forgetEncodedPages();
+  decorateNamedViewsAgain();
+}
+
+void Engine::decorateNamedViewsAgain() {
+  for (const auto &document : namedViews_)
+    document->othersReached = true;
   namedViewsByKey_.clear();
 }
 
@@ -1385,7 +1403,7 @@ void Engine::syncNamedViews() {
   // Decoration reads what else the listing's generation says, as functions'
   // names: each document builds again from its pages.
   if (namedViewsGeneration_ != listing().generation()) {
-    namedViewsByKey_.clear();
+    decorateNamedViewsAgain();
     namedViewsGeneration_ = listing().generation();
   }
 }
@@ -1455,6 +1473,26 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
       (!(*cached->second)->original.empty() ||
        !(*cached->second)->enginePages.empty()))
     reused = *cached->second;
+  // Comments alone reached it since decoration, under the same names: they
+  // are written into a copy of it as decoration writes them.
+  if (reused && sourceView && !recovery && reused->commentsReached &&
+      !reused->othersReached) {
+    Json full = reused->value;
+    if (CodeEdits::takeComments(full, address, reused->definitionLine,
+                                imageFacts())) {
+      auto document = std::make_shared<NamedView>();
+      document->id = ++namedViewIds_;
+      document->enginePages = reused->enginePages;
+      document->engineRepresentation = reused->engineRepresentation;
+      document->original = reused->original;
+      document->reads = reused->reads;
+      document->readsKnown = reused->readsKnown;
+      document->definitionLine = reused->definitionLine;
+      ++commentPatches_;
+      return keepNamedView(std::move(document), std::move(full), lookupKey,
+                           sourceKey, cacheKey() == lookupKey);
+    }
+  }
   Json original;
   if (reused && !reused->original.empty())
     original = Json::parse(reused->original);
@@ -1667,7 +1705,8 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
             } catch (const Error &) {
               return std::nullopt;
             }
-          });
+          },
+          &document->definitionLine);
     if (document->readsKnown)
       noteDecorationReads(*document, full, address);
     std::vector<std::pair<std::size_t, std::ptrdiff_t>> shift;
@@ -1718,6 +1757,20 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
         (*bounds)[field] =
             base +
             shiftedOffset((*bounds)[field].get<std::size_t>() - base, shift);
+    // If resolving source names changed the listing while decorating this
+    // document, it remains usable for this response but is not reusable yet.
+    const bool reusable = cacheKey() == key;
+    return keepNamedView(std::move(document), std::move(full), key, sourceKey,
+                         reusable);
+  }
+  return document;
+}
+
+std::shared_ptr<const Engine::NamedView>
+Engine::keepNamedView(std::shared_ptr<NamedView> document, Json full,
+                      const std::string &key, const std::string &sourceKey,
+                      bool reusable) {
+  {
     const auto &text = full["text"].get_ref<const std::string &>();
     document->lines.push_back(0);
     for (std::size_t i = 0; i < text.size(); ++i)
@@ -1744,9 +1797,7 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
     document->key = key;
     document->viewEditsRead = viewEditCount_;
     document->sourceKey = sourceKey;
-    // If resolving source names changed the listing while decorating this
-    // document, it remains usable for this response but is not reusable yet.
-    if (cacheKey() != key)
+    if (!reusable)
       return document;
     const auto jsonBytes = namedViewJsonBytes(document->value);
     auto overhead =
@@ -2562,6 +2613,7 @@ Json Engine::metadata() const {
           {"browse_cache", listing_ ? listing_->cacheStats() : Json()},
           {"listing_facts", listingFactsJson()},
           {"listing_name_builds", listing_ ? listing_->nameBuilds() : 0},
+          {"named_view_comment_patches", commentPatches_},
           {"dirty", dirty_},
           // How the file was read: for a binary file, its processor,
           // placement and platform, and whether detection chose the platform.
@@ -5737,7 +5789,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     forgetGraphsAndText();
     imageFacts_.commented(address, text);
     // Decoration writes it where the document's rows state its address.
-    keepNamedViewsThrough(address, {}, false);
+    keepNamedViewsThrough(address, {}, false, true);
     ++revision_;
     namedViewsTakeRevision(true);
     return {{"address", hexAddress(address)},
