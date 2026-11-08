@@ -335,6 +335,16 @@ uint16_t FirstUseSizes::of(uint64_t ParamRegOff) {
       }
     }
   }
+  // ABI recovery can publish the arguments after the initial parameter
+  // scan. Those reads consume the same entry values as operation operands;
+  // an earlier narrow spill does not narrow a subsequently forwarded value.
+  for (const auto &Call : Func.CallInfos)
+    for (size_t I = 0; I < Call.Args.size(); ++I) {
+      uint16_t Width = ConsumedWidth(Call.Args[I]);
+      if (Width && I < Call.ArgReadBytes.size())
+        Width = limitWidth(Width, Call.ArgReadBytes[I]);
+      MaxSz = std::max(MaxSz, Width);
+    }
   return MaxSz;
 }
 

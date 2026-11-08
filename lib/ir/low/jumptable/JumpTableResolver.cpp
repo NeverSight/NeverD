@@ -221,7 +221,8 @@ std::set<va_t> CFGBuilder::jumpTableProofRoots(
     if (!P)
       return Roots;
     CandidateTargets.insert(normalizeCodeAddress(
-        readPtr(P, CurrentImg->is64Bit()), CurrentImg->Arch, CurrentImg->Mode));
+        readPtr(P, CurrentImg->is64Bit(), archLittleEndian(CurrentImg->Arch)),
+        CurrentImg->Arch, CurrentImg->Mode));
   }
   if (CandidateTargets.empty())
     return Roots;
@@ -397,8 +398,9 @@ bool CFGBuilder::proveCandidateFiniteAbsoluteSiblings(
       const uint8_t *Bytes = Img.readVA(Slot, 4);
       if (!Bytes)
         return false;
-      const va_t Target =
-          normalizeCodeAddress(readPtr(Bytes, false), Img.Arch, Img.Mode);
+      const va_t Target = normalizeCodeAddress(
+          readPtr(Bytes, false, archLittleEndian(Img.Arch)), Img.Arch,
+          Img.Mode);
       if (!Scratch.isOwnedInteriorTarget(Img, Target) ||
           (Base == Info.BaseAddr && Target != PhysicalTargets[I]))
         return false;
@@ -4567,8 +4569,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       return {};
     const uint8_t *Bytes = Img.readVA(Slot, 4);
     if (!Img.CodePtrRelocSlots.count(Slot) || !Bytes ||
-        normalizeCodeAddress(readPtr(Bytes, false), Img.Arch, Img.Mode) !=
-            Certificate.Target ||
+        normalizeCodeAddress(readPtr(Bytes, false, archLittleEndian(Img.Arch)),
+                             Img.Arch, Img.Mode) != Certificate.Target ||
         !isOwnedInteriorTarget(Img, Certificate.Target))
       return {};
     JumpTableInfo PhysicalProbe;
@@ -6774,7 +6776,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
         if (!AnalysisComplete)
           return true;
         const uint8_t *P = Img.readVA(PointerSlot, Img.getPointerSize());
-        if (P && readPtr(P, Img.is64Bit()) == Slot)
+        if (P && readPtr(P, Img.is64Bit(), archLittleEndian(Img.Arch)) == Slot)
           return true;
       }
       // Value-keyed loader summaries do not identify a consuming
@@ -6865,7 +6867,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
           }
           for (va_t PointerSlot : Img.DataPtrRelocSlots) {
             const uint8_t *P = Img.readVA(PointerSlot, Img.getPointerSize());
-            if (P && !AddPotential(readPtr(P, Img.is64Bit())))
+            if (P && !AddPotential(
+                         readPtr(P, Img.is64Bit(), archLittleEndian(Img.Arch))))
               return;
           }
         };

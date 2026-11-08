@@ -35,6 +35,12 @@ struct DataSymbolBinding {
 std::map<va_t, DataSymbolBinding>
 collectDataSymbolBindings(const BinaryImage &Image);
 
+/// Objects whose storage is in the executable but whose initial contents
+/// come from another module through an admitted dynamic COPY relocation.
+/// Source emission must bind these objects externally, not initialize them
+/// from the executable's pre-relocation file bytes.
+std::map<va_t, std::string> collectCopiedDataObjects(const BinaryImage &Image);
+
 /// The pointer-width data words the dynamic loader starts at a function
 /// another module defines, by that function's name: an absolute symbol
 /// relocation with no addend against a non-weak function symbol, as a pointer

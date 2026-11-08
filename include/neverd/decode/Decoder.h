@@ -35,6 +35,7 @@ namespace neverd {
 class X86Lifter;
 class ARMLifter;
 class AArch64Lifter;
+class MIPSLifter;
 
 /// Thrown when the selected architecture cannot lift an instruction.
 /// x86 refuses unsupported instructions in both strict and permissive modes.
@@ -90,6 +91,32 @@ struct DecodedInsn {
   std::optional<AArch64DecodeOccurrence> AArch64Occurrence = std::nullopt;
 };
 
+/// A semantic unit with truthful physical-instruction identities. MIPS delayed
+/// transfers own two snapshots because decoding the slot reuses Capstone's
+/// instruction buffer. Other architectures retain their normal borrowed head.
+struct DecodedExecutionUnit {
+  DecodedInsn Head{};
+  DecodedInsn Slot{};
+  bool HasDelaySlot = false;
+
+  DecodedExecutionUnit() = default;
+  DecodedExecutionUnit(const DecodedExecutionUnit &) = delete;
+  DecodedExecutionUnit &operator=(const DecodedExecutionUnit &) = delete;
+
+  uint16_t spanBytes() const {
+    return Head.Size + (HasDelaySlot ? Slot.Size : 0);
+  }
+
+private:
+  friend class Decoder;
+  // Populated only by delayed decoding, before publishing their pointers.
+  // Do not clear the large Capstone detail banks for every ordinary opcode.
+  cs_insn HeadStorage;
+  cs_detail HeadDetail;
+  cs_insn SlotStorage;
+  cs_detail SlotDetail;
+};
+
 /// One loader-authenticated address occurrence inside an encoded instruction.
 /// FieldVA identifies the exact relocation field; TargetVA is the resolved
 /// address represented by that field, and Provenance records whether the
@@ -129,6 +156,16 @@ struct RelocatedScalarOperand {
 
 class Decoder {
 public:
+  /// Decode an entire semantic unit. A missing/invalid delay slot is a decode
+  /// failure; ordinary disassembly APIs continue to consume four MIPS bytes.
+  int decodeUnitForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
+                        DecodedExecutionUnit &Out);
+  /// Lift in execution order, retaining the slot's operation ownership.
+  /// The returned slot offsets are relative to the newly appended unit.
+  std::optional<LowDelaySlot>
+  liftUnitToLow(const DecodedExecutionUnit &Unit, std::vector<LowOp> &Ops,
+                llvm::ArrayRef<RelocatedAddressOperand> Relocs = {},
+                llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs = {});
   Decoder();
   ~Decoder();
 
@@ -364,6 +401,7 @@ private:
   std::unique_ptr<X86Lifter> X86;
   std::unique_ptr<ARMLifter> ARM;
   std::unique_ptr<AArch64Lifter> AArch64;
+  std::unique_ptr<MIPSLifter> MIPS;
 };
 
 } // namespace neverd

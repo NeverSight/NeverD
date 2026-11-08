@@ -326,7 +326,28 @@ inline bool isDarwinStackProbeName(llvm::StringRef Name) {
 
 /// Native ISA targets plus the Ethereum VM and Solana SBF virtual machines.
 /// Backend support (lift/codegen/patch): neverd/ArchSupport.h.
-enum class Arch : uint8_t { X64, AArch64, X86, ARM, EVM, SBF, Unknown };
+enum class Arch : uint8_t {
+  X64,
+  AArch64,
+  X86,
+  ARM,
+  EVM,
+  SBF,
+  Unknown,
+  MIPS32,
+  MIPS32EL,
+  MIPS64,
+  MIPS64EL
+};
+
+constexpr bool isMIPS(Arch A) {
+  return A == Arch::MIPS32 || A == Arch::MIPS32EL || A == Arch::MIPS64 ||
+         A == Arch::MIPS64EL;
+}
+
+constexpr bool isMIPS64(Arch A) {
+  return A == Arch::MIPS64 || A == Arch::MIPS64EL;
+}
 
 enum class InstructionMode : uint8_t {
   Default,
@@ -366,6 +387,14 @@ inline const char *getArchName(Arch A) {
     return "x86";
   case Arch::ARM:
     return "arm";
+  case Arch::MIPS32:
+    return "mips";
+  case Arch::MIPS32EL:
+    return "mipsel";
+  case Arch::MIPS64:
+    return "mips64";
+  case Arch::MIPS64EL:
+    return "mips64el";
   case Arch::EVM:
     return kEVMArchName.data();
   case Arch::SBF:

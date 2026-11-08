@@ -15,6 +15,7 @@
 #include "PipelineSourceStackAccesses.h"
 #include "PipelineWideIntReturnDetail.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/Common.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/LowToMed.h"
@@ -99,7 +100,9 @@ std::optional<va_t> resolveCallTargetVA(const MedFunc &MF,
     if (Sz > 8 || !rangeInBounds(Off, Sz, Seg->Data.size()))
       return std::nullopt;
     uint64_t Val = 0;
-    std::memcpy(&Val, Seg->Data.data() + Off, Sz);
+    for (unsigned I = 0; I < Sz; ++I)
+      Val |= uint64_t(Seg->Data[Off + I])
+             << (8 * (archLittleEndian(Img.Arch) ? I : Sz - I - 1));
     // The literal holds a signed PC-relative displacement; sign-extend so the
     // subsequent `+ pc` yields the absolute target.
     if (Sz < 8 && (Val & (1ull << (Sz * 8 - 1))))

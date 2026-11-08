@@ -77,8 +77,8 @@ static bool holdsOwnCodeAddress(const BinaryImage &Image, va_t Slot) {
     return true;
   const uint32_t Width = Image.getPointerSize();
   const uint8_t *Bytes = Width ? Image.readVA(Slot, Width) : nullptr;
-  return Bytes && Image.hasExecutableCodeOwnerAt(
-                      static_cast<va_t>(readPtr(Bytes, Width == 8)));
+  return Bytes && Image.hasExecutableCodeOwnerAt(static_cast<va_t>(readPtr(
+                      Bytes, Width == 8, archLittleEndian(Image.Arch))));
 }
 
 /// The function a call reaches through the pointer slot at \p Slot. Only an

@@ -52,6 +52,9 @@ placeAAPCS64(const TargetRegInfo &TRI, BinaryFormat F,
              const TypeRef &ReturnType, llvm::ArrayRef<TypeRef> ParamTypes,
              bool Variadic = false);
 std::optional<SourceParameterPlacement>
+placeMIPS(const TargetRegInfo &TRI, BinaryFormat F, const TypeRef &ReturnType,
+          llvm::ArrayRef<TypeRef> ParamTypes);
+std::optional<SourceParameterPlacement>
 placeI386(const TargetRegInfo &TRI, BinaryFormat F, const TypeRef &ReturnType,
           llvm::ArrayRef<TypeRef> ParamTypes);
 std::optional<SourceParameterPlacement>

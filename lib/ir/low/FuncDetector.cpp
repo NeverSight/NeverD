@@ -95,9 +95,10 @@ bool hasBoundedSemanticTerminator(
       if (!Dec.selectMode(Img, Cur, PathMode))
         return false;
       PathMode = Dec.currentMode();
-      DecodedInsn DI;
-      const int Sz = Dec.decodeOneForLift(Seg->Data.data() + Off,
-                                          Seg->Data.size() - Off, Cur, DI);
+      DecodedExecutionUnit Unit;
+      const int Sz = Dec.decodeUnitForLift(Seg->Data.data() + Off,
+                                           Seg->Data.size() - Off, Cur, Unit);
+      const DecodedInsn &DI = Unit.Head;
       if (Sz <= 0 || !DI.Raw)
         return false;
       if (!Img.hasExecutableCodeOwnerRange(Cur, static_cast<uint64_t>(Sz)))
@@ -106,15 +107,24 @@ bool hasBoundedSemanticTerminator(
           Img.instructionModeAt(Cur + Sz - 1, Dec.currentMode()) !=
               Dec.currentMode())
         return false;
-      if (Dec.isFunctionTerminator(DI))
+      if (Dec.isFunctionTerminator(DI)) {
+        if (Unit.HasDelaySlot) {
+          std::vector<LowOp> Ops;
+          try {
+            Dec.liftUnitToLow(Unit, Ops);
+          } catch (const UnliftedInstruction &) {
+            return false;
+          }
+        }
         return true;
+      }
 
       const va_t CallTarget = Dec.directCallTarget(DI);
       if (CallTarget != InvalidVA &&
           libc::isNoReturnLoadedTarget(Img, CallTarget)) {
         std::vector<LowOp> Ops;
         try {
-          Dec.liftToLow(DI, Ops);
+          Dec.liftUnitToLow(Unit, Ops);
         } catch (const UnliftedInstruction &) {
           return false;
         }
@@ -436,8 +446,9 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
       const uint8_t *Bytes = Img.readVA(Slot, PointerSize);
       if (!Bytes)
         continue;
-      const va_t Target = normalizeCodeAddress(readPtr(Bytes, Img.is64Bit()),
-                                               Img.Arch, Img.Mode);
+      const va_t Target = normalizeCodeAddress(
+          readPtr(Bytes, Img.is64Bit(), archLittleEndian(Img.Arch)), Img.Arch,
+          Img.Mode);
       if (RegistrationPointerRoles)
         if (const auto Source = RegistrationPointerRoles->Sources.find(Slot);
             Source != RegistrationPointerRoles->Sources.end() &&
@@ -1067,8 +1078,20 @@ bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
     if (!Dec.selectMode(Img, Cur, PathMode))
       return false;
     PathMode = Dec.currentMode();
-    DecodedInsn DI;
-    int Sz = Dec.decodeOneLight(Seg->Data.data() + Off, Remain, Cur, DI);
+    DecodedExecutionUnit Unit;
+    DecodedInsn &DI = Unit.Head;
+    int Sz =
+        isMIPS(Img.Arch)
+            ? Dec.decodeUnitForLift(Seg->Data.data() + Off, Remain, Cur, Unit)
+            : Dec.decodeOneLight(Seg->Data.data() + Off, Remain, Cur, DI);
+    if (Sz > 0 && isMIPS(Img.Arch)) {
+      std::vector<LowOp> Ops;
+      try {
+        Dec.liftUnitToLow(Unit, Ops);
+      } catch (const UnliftedInstruction &) {
+        return KeepInconclusive && !RequireCallableExit;
+      }
+    }
     if (Sz <= 0)
       return false;
     if (!DI.Raw)
@@ -1151,9 +1174,10 @@ bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
         if (!Dec.selectMode(Img, Cur, PathMode))
           return false;
         PathMode = Dec.currentMode();
-        DecodedInsn DI;
-        int Sz = Dec.decodeOneForLift(PathSeg->Data.data() + Off,
-                                      PathSeg->Data.size() - Off, Cur, DI);
+        DecodedExecutionUnit Unit;
+        int Sz = Dec.decodeUnitForLift(PathSeg->Data.data() + Off,
+                                       PathSeg->Data.size() - Off, Cur, Unit);
+        const DecodedInsn &DI = Unit.Head;
         if (Sz <= 0)
           return false;
         if (!Img.hasExecutableCodeOwnerRange(Cur, static_cast<uint64_t>(Sz)))
@@ -1166,7 +1190,7 @@ bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
 
         std::vector<LowOp> Ops;
         try {
-          Dec.liftToLow(DI, Ops);
+          Dec.liftUnitToLow(Unit, Ops);
         } catch (const UnliftedInstruction &) {
           return !NeedsCallableExit;
         }

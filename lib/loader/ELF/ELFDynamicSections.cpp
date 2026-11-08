@@ -155,13 +155,16 @@ reconstructDynamicSections(const llvm::object::ELFFile<ELFT> &ELF,
     return std::nullopt;
   };
   auto Word = [&](uint64_t Offset) {
-    return llvm::support::endian::read32le(ELF.base() + Offset);
+    return llvm::support::endian::read32<ELFT::Endianness>(ELF.base() + Offset);
   };
 
   // How many dynamic symbols there are.  Only a hash table says, for the
   // dynamic linker as for us: SysV's chain has one entry per symbol, and the
   // GNU table's last chain ends at the last symbol.
   auto SymbolCount = [&]() -> std::optional<uint64_t> {
+    if (isMIPS(Img.Arch))
+      if (const auto Count = Tag(DT_MIPS_SYMTABNO))
+        return Count;
     constexpr uint64_t HeaderWords = 4;
     if (std::optional<uint64_t> Address = Tag(DT_GNU_HASH)) {
       const std::optional<uint64_t> Header =
@@ -295,9 +298,17 @@ reconstructDynamicSections(const llvm::object::ELFFile<ELFT> &ELF,
 template DynamicSections<llvm::object::ELF32LE>
 reconstructDynamicSections<llvm::object::ELF32LE>(
     const llvm::object::ELFFile<llvm::object::ELF32LE> &, BinaryImage &);
+
+template DynamicSections<llvm::object::ELF32BE>
+reconstructDynamicSections<llvm::object::ELF32BE>(
+    const llvm::object::ELFFile<llvm::object::ELF32BE> &, BinaryImage &);
 template DynamicSections<llvm::object::ELF64LE>
 reconstructDynamicSections<llvm::object::ELF64LE>(
     const llvm::object::ELFFile<llvm::object::ELF64LE> &, BinaryImage &);
+
+template DynamicSections<llvm::object::ELF64BE>
+reconstructDynamicSections<llvm::object::ELF64BE>(
+    const llvm::object::ELFFile<llvm::object::ELF64BE> &, BinaryImage &);
 
 } // namespace detail
 } // namespace elf_loader

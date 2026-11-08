@@ -355,8 +355,16 @@ llvm::Error collectSymbols(const llvm::object::ELFFile<ELFT> &ELF,
 template llvm::Error buildSections<llvm::object::ELF32LE>(
     llvm::ArrayRef<llvm::object::ELF32LE::Shdr>, llvm::StringRef,
     const uint8_t *, size_t, const std::vector<va_t> &, bool, BinaryImage &);
+
+template llvm::Error buildSections<llvm::object::ELF32BE>(
+    llvm::ArrayRef<llvm::object::ELF32BE::Shdr>, llvm::StringRef,
+    const uint8_t *, size_t, const std::vector<va_t> &, bool, BinaryImage &);
 template llvm::Error buildSections<llvm::object::ELF64LE>(
     llvm::ArrayRef<llvm::object::ELF64LE::Shdr>, llvm::StringRef,
+    const uint8_t *, size_t, const std::vector<va_t> &, bool, BinaryImage &);
+
+template llvm::Error buildSections<llvm::object::ELF64BE>(
+    llvm::ArrayRef<llvm::object::ELF64BE::Shdr>, llvm::StringRef,
     const uint8_t *, size_t, const std::vector<va_t> &, bool, BinaryImage &);
 
 template llvm::Error collectSymbols<llvm::object::ELF32LE>(
@@ -365,10 +373,24 @@ template llvm::Error collectSymbols<llvm::object::ELF32LE>(
     llvm::ArrayRef<llvm::object::ELF32LE::Shdr>, size_t,
     const std::vector<va_t> &, bool, const std::map<std::string, va_t> &,
     BinaryImage &);
+
+template llvm::Error collectSymbols<llvm::object::ELF32BE>(
+    const llvm::object::ELFFile<llvm::object::ELF32BE> &,
+    llvm::ArrayRef<llvm::object::ELF32BE::Shdr>,
+    llvm::ArrayRef<llvm::object::ELF32BE::Shdr>, size_t,
+    const std::vector<va_t> &, bool, const std::map<std::string, va_t> &,
+    BinaryImage &);
 template llvm::Error collectSymbols<llvm::object::ELF64LE>(
     const llvm::object::ELFFile<llvm::object::ELF64LE> &,
     llvm::ArrayRef<llvm::object::ELF64LE::Shdr>,
     llvm::ArrayRef<llvm::object::ELF64LE::Shdr>, size_t,
+    const std::vector<va_t> &, bool, const std::map<std::string, va_t> &,
+    BinaryImage &);
+
+template llvm::Error collectSymbols<llvm::object::ELF64BE>(
+    const llvm::object::ELFFile<llvm::object::ELF64BE> &,
+    llvm::ArrayRef<llvm::object::ELF64BE::Shdr>,
+    llvm::ArrayRef<llvm::object::ELF64BE::Shdr>, size_t,
     const std::vector<va_t> &, bool, const std::map<std::string, va_t> &,
     BinaryImage &);
 

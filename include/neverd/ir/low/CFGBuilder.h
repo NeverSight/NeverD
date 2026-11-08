@@ -1219,6 +1219,7 @@ private:
     uint16_t Size;
     InstructionMode Mode = InstructionMode::Default;
     std::vector<LowOp> Ops;
+    std::optional<LowDelaySlot> DelaySlot;
     bool IsBranch = false;
     bool IsCond = false;
     bool IsCall = false;

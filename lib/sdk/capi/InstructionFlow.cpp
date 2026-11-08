@@ -198,7 +198,38 @@ InstructionFlowScratch::summarize(const BinaryImage &Img, Decoder &Dec,
     // The relocations inside the instruction make its relocated immediates
     // addresses, as they are to the pipeline.
     const InstructionRelocations Relocations = instructionRelocations(Img, DI);
-    Dec.liftToLow(DI, Ops, Relocations.Addresses, Relocations.Scalars);
+    if (isMIPS(Img.Arch)) {
+      if (!UnitDecoder || UnitArch != Img.Arch) {
+        UnitDecoder = std::make_unique<Decoder>();
+        if (!UnitDecoder->init(Img)) {
+          UnitDecoder.reset();
+          Flow.Kind = UnliftedFlow;
+          Flow.Stack.Unknown = true;
+          return Flow;
+        }
+        UnitArch = Img.Arch;
+      }
+      const auto *Segment = Img.getSegmentFor(DI.Addr);
+      const size_t Offset = DI.Addr - Segment->VA;
+      DecodedExecutionUnit Unit;
+      if (!UnitDecoder->decodeUnitForLift(Segment->Data.data() + Offset,
+                                          Segment->Data.size() - Offset,
+                                          DI.Addr, Unit)) {
+        Flow.Kind = UnliftedFlow;
+        Flow.Stack.Unknown = true;
+        return Flow;
+      }
+      const auto Slot = UnitDecoder->liftUnitToLow(Unit, Ops);
+      if (Slot) {
+        Flow.DelaySlotBytes = Slot->Size;
+        // The listing reports the slot's memory and stack effects in its
+        // own physical row. The head still uses the validated unit's transfer.
+        llvm::erase_if(Ops,
+                       [&](const LowOp &Op) { return Op.Addr != DI.Addr; });
+      }
+    } else {
+      Dec.liftToLow(DI, Ops, Relocations.Addresses, Relocations.Scalars);
+    }
   } catch (const UnliftedInstruction &) {
     // Nothing is known about what the instruction does, so it states no
     // transfer, no reference and no stack pointer.
@@ -341,11 +372,15 @@ InstructionFlowScratch::summarize(const BinaryImage &Img, Decoder &Dec,
         return Op.Opcode == NdOp::COND_BR;
       }))
     Flow.NoReturn = false;
+  if (Flow.DelaySlotBytes && Flow.Kind == "jump" &&
+      llvm::any_of(Ops,
+                   [](const LowOp &Op) { return Op.Opcode == NdOp::COND_BR; }))
+    Flow.Kind = "cjump";
   if (va_t Address = Dec.pcRelCodeRefTarget(DI); Address != InvalidVA)
     Offsets.push_back(Address);
   // The next instruction's address, which a call pushes and a system call
   // saves, is where execution returns, not an address the code refers to.
-  const va_t Next = DI.Addr + DI.Size;
+  const va_t Next = DI.Addr + DI.Size + Flow.DelaySlotBytes;
   for (const va_t Address : Offsets)
     if (Address != Next && Address != Flow.Target &&
         llvm::none_of(Flow.Refs, [&](const InstructionRef &Ref) {
@@ -443,11 +478,11 @@ std::vector<va_t> unsizedBody(const BinaryImage &Img, Decoder &Dec,
             return false;
           }
           Terminated = Dec.isFunctionTerminator(DI);
-          if (FollowsJumps) {
+          if (FollowsJumps || isMIPS(Img.Arch)) {
             const InstructionFlow Flow = Scratch.summarize(Img, Dec, DI);
             Status.Incomplete |=
                 Flow.Kind == UnliftedFlow || Flow.Kind == "ijump";
-            if ((Flow.Kind == "jump" || Flow.Kind == "cjump") &&
+            if (FollowsJumps && (Flow.Kind == "jump" || Flow.Kind == "cjump") &&
                 Flow.Target != InvalidVA && !OtherEntry(Flow.Target) &&
                 !Body.count(Flow.Target))
               Pending.push_back(Flow.Target);
@@ -457,6 +492,8 @@ std::vector<va_t> unsizedBody(const BinaryImage &Img, Decoder &Dec,
             if (Flow.Kind == "cjump")
               Terminated = false;
             Terminated |= Flow.NoReturn;
+            if (Terminated && Flow.DelaySlotBytes)
+              Body.insert(DI.Addr + DI.Size);
           }
           return !Terminated;
         });

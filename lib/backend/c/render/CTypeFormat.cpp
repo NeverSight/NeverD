@@ -1006,6 +1006,8 @@ std::string typeToCLLVM(llvm::Type *Ty) {
 llvm::SmallVector<const char *, 3> getArchIntrinsicHeaders(Arch TheArch) {
   if (TheArch == Arch::X86 || TheArch == Arch::X64)
     return getX86IntrinsicHeaders();
+  if (TheArch != Arch::ARM && TheArch != Arch::AArch64)
+    return {};
   auto Headers = getARMIntrinsicHeaders();
   if (TheArch == Arch::AArch64) {
     // arm_neon.h leaves the scalar half-precision intrinsics (vmulxh_f16) to

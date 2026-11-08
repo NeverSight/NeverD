@@ -60,6 +60,11 @@ See the guides for [EVM](docs/evm.md), [Solana SBF](docs/sbf.md), [mobile source
 
 > Every cell is implemented, but integration depth differs. See the [architecture coverage matrix](docs/architecture.md#support-and-test-depth). Mach-O i386 uses thin relocatable objects because modern macOS cannot link historical i386 executables.
 
+**MIPS ELF analysis is experimental:** MIPS32r2/o32 and MIPS64r2/n64,
+in both byte orders, support a strict integer subset through disassembly,
+CFG recovery, C and LLVM output. Native rewriting is not supported. See the
+[MIPS coverage and firmware example](docs/mips.md).
+
 Legacy EVM bytecode is supported independently of native containers: all 150 assigned opcodes through Fusaka feed dedicated Low/Med/High IR, verified LLVM `i256`, C23 `_BitInt(256)`, and Solidity output. See [EVM decompilation](docs/evm.md).
 
 Solana SBF v0-v4 ELF programs use a dedicated strict loader, complete

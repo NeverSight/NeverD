@@ -25,7 +25,7 @@ function(neverd_require_unicorn)
   set(CMAKE_POSITION_INDEPENDENT_CODE ON)
   set(UNICORN_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(UNICORN_INSTALL OFF CACHE BOOL "" FORCE)
-  set(UNICORN_ARCH "x86;arm;aarch64" CACHE STRING "" FORCE)
+  set(UNICORN_ARCH "x86;arm;aarch64;mips" CACHE STRING "" FORCE)
   add_subdirectory("${CMAKE_SOURCE_DIR}/third_party/unicorn"
                    "${CMAKE_BINARY_DIR}/third_party/unicorn"
                    EXCLUDE_FROM_ALL)

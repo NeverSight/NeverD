@@ -797,9 +797,12 @@ void MedToHighConverter::structureControlFlow(HighFunc &Func,
         CurBlock.StartAddr
             ? CurBlock.StartAddr
             : (CurBlock.Ops.empty() ? 0 : CurBlock.Ops.front().Addr);
+    // Enter before every effect of the block. A delayed transfer can emit
+    // its slot's statement first and its head-address call/branch later;
+    // finding that later address does not make it a valid entry anchor.
     if (Entry && Entry != InvalidVA &&
-        std::none_of(Func.Body.begin() + BlkBodyStart, Func.Body.end(),
-                     [Entry](const HighStmt &S) { return S.Addr == Entry; }))
+        (BlkBodyStart == Func.Body.size() ||
+         Func.Body[BlkBodyStart].Addr != Entry))
       MissingEntries.emplace_back(BlkBodyStart, Entry);
   }
 

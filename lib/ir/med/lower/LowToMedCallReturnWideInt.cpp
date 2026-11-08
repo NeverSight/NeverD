@@ -81,7 +81,7 @@ void LowToMedConverter::modelKnownWideCallReturns(MedFunc &Func) {
       LoOp.Output = OrigLo;
       LoOp.Output.SSAVer = 0;
       LoOp.addInput(Tv);
-      LoOp.addInput(MedVar::makeConst(0, Half));
+      LoOp.addInput(MedVar::makeConst(TRI.integerReturnWordOffset(0), Half));
 
       MedVar HiVar;
       HiVar.Kind = MedVar::Reg;
@@ -95,7 +95,7 @@ void LowToMedConverter::modelKnownWideCallReturns(MedFunc &Func) {
       HiOp.Addr = Op.Addr;
       HiOp.Output = HiVar;
       HiOp.addInput(Tv);
-      HiOp.addInput(MedVar::makeConst(Half, Half));
+      HiOp.addInput(MedVar::makeConst(TRI.integerReturnWordOffset(1), Half));
 
       Blk.Ops.insert(Blk.Ops.begin() + OI + 1, {LoOp, HiOp});
       OI += 2;
@@ -366,13 +366,13 @@ void modelCallWideIntReturn(MedFunc &Func, Arch TheArch,
       LoOp.Addr = OpAddr;
       LoOp.Output = makeReg(LoReg, OrigLo.Id, LoVer);
       LoOp.addInput(Tv);
-      LoOp.addInput(MedVar::makeConst(0, Half));
+      LoOp.addInput(MedVar::makeConst(TRI.integerReturnWordOffset(0), Half));
       MedOp HiOp;
       HiOp.Opcode = NdOp::SUBBYTES;
       HiOp.Addr = OpAddr;
       HiOp.Output = makeReg(HiReg, HiId, HiVer);
       HiOp.addInput(Tv);
-      HiOp.addInput(MedVar::makeConst(Half, Half));
+      HiOp.addInput(MedVar::makeConst(TRI.integerReturnWordOffset(1), Half));
       Blk.Ops.insert(Blk.Ops.begin() + OI + 1, {LoOp, HiOp});
 
       // An op that only derives a different-width VIEW of the SAME physical

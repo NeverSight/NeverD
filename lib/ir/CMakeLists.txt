@@ -13,6 +13,7 @@ add_neverd_component_library(NeverDIR
   SourceStackFrame.cpp
   SourceVariableFlow.cpp
   SourceParameterPlacement.cpp
+  MIPS/SourceParameterPlacementMIPS.cpp
   AArch64/SourceParameterPlacementAAPCS64.cpp
   X86/SourceParameterPlacementI386.cpp
   X86/SourceParameterPlacementSysV.cpp
@@ -24,6 +25,7 @@ add_neverd_component_library(NeverDIR
   TargetRegInfo.cpp
   AArch64/TargetRegInfoAArch64.cpp
   ARM/TargetRegInfoARM.cpp
+  MIPS/TargetRegInfoMIPS.cpp
   X86/TargetRegInfoX86.cpp
 
   LINK_COMPONENTS

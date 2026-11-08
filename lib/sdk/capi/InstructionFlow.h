@@ -17,6 +17,7 @@
 #ifndef NEVERD_LIB_SDK_CAPI_INSTRUCTIONFLOW_H
 #define NEVERD_LIB_SDK_CAPI_INSTRUCTIONFLOW_H
 
+#include "neverd/ArchSupport.h"
 #include "neverd/DataAccessWidths.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -30,6 +31,7 @@
 #include "llvm/ADT/StringRef.h"
 
 #include <functional>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -123,6 +125,8 @@ struct InstructionFlow {
   /// Collected only with a supplied NoReturnTargetIndex. Unknown targets and
   /// conditional calls keep their possible fallthrough.
   bool NoReturn = false;
+  /// Physical bytes executed after the head before its control transfer.
+  uint16_t DelaySlotBytes = 0;
 };
 
 /// The flow kind of an instruction the lifter cannot model.
@@ -157,6 +161,10 @@ public:
 private:
   const libc::NoReturnTargetIndex *NoReturnTargets;
   std::vector<LowOp> Ops;
+  // The physical listing's borrowed cs_insn must survive slot decoding.
+  // One separate unit decoder is reused for the worker's MIPS rows.
+  std::unique_ptr<Decoder> UnitDecoder;
+  Arch UnitArch = Arch::Unknown;
 };
 
 /// The pointer the loader stored in a relocated slot, as a code address when
@@ -166,7 +174,7 @@ inline std::optional<va_t> relocatedPointer(const BinaryImage &Img, va_t Slot) {
   const uint8_t *Bytes = Size ? Img.readVA(Slot, Size) : nullptr;
   if (!Bytes)
     return std::nullopt;
-  const va_t Target = readPtr(Bytes, Size == 8);
+  const va_t Target = readPtr(Bytes, Size == 8, archLittleEndian(Img.Arch));
   return Img.Arch == Arch::ARM && Img.CodePtrRelocSlots.count(Slot)
              ? clearThumbBit(Target)
              : Target;

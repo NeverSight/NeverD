@@ -21,6 +21,7 @@
 
 #include "JumpTableResolverDetail.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
 
@@ -1376,11 +1377,11 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
       return decodeTableEntry(Entry, W2, /*IsRelative=*/true,
                               /*IsSigned=*/false, JmpTab,
                               /*HasTargetBase=*/true, Img.Base, /*Scale=*/1,
-                              Img.getPointerSize());
-    std::optional<va_t> Target =
-        decodeTableEntry(Entry, W2, Relative, Relative, JmpTab,
-                         /*HasTargetBase=*/false, /*TargetBase=*/0,
-                         /*Scale=*/1, Img.getPointerSize());
+                              Img.getPointerSize(), archLittleEndian(Img.Arch));
+    std::optional<va_t> Target = decodeTableEntry(
+        Entry, W2, Relative, Relative, JmpTab,
+        /*HasTargetBase=*/false, /*TargetBase=*/0,
+        /*Scale=*/1, Img.getPointerSize(), archLittleEndian(Img.Arch));
     if (Target && !Relative)
       Target = canonicalizeAbsoluteTableCodeTarget(Img, *Target);
     return Target;

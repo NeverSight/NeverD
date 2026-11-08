@@ -8076,11 +8076,11 @@ std::optional<uint64_t> HighCWriter::foldReadonlyScalar(va_t Addr,
   case 1:
     return Bytes[0];
   case 2:
-    return readLE<uint16_t>(Bytes);
+    return readTargetEndian<uint16_t>(Bytes, archLittleEndian(Opts.TheArch));
   case 4:
-    return readLE<uint32_t>(Bytes);
+    return readTargetEndian<uint32_t>(Bytes, archLittleEndian(Opts.TheArch));
   case 8:
-    return readLE<uint64_t>(Bytes);
+    return readTargetEndian<uint64_t>(Bytes, archLittleEndian(Opts.TheArch));
   default:
     return std::nullopt;
   }

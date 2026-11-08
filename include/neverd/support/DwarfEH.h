@@ -14,6 +14,8 @@
 #ifndef NEVERD_SUPPORT_DWARFEH_H
 #define NEVERD_SUPPORT_DWARFEH_H
 
+#include "neverd/support/BinaryEncoding.h"
+
 #include <cstdint>
 #include <cstring>
 
@@ -79,45 +81,39 @@ inline size_t getEncodedSize(uint8_t Enc) {
 /// \p Cursor past the read bytes.  Returns the raw (unresolved) value.
 /// Only handles fixed-size formats (udata2/4/8, sdata2/4/8).
 inline int64_t readEncoded(const uint8_t *Buf, size_t BufSize, size_t &Cursor,
-                           uint8_t Enc) {
+                           uint8_t Enc, bool LittleEndian = true) {
   size_t Sz = getEncodedSize(Enc);
-  if (Sz == 0 || Cursor + Sz > BufSize)
+  if (Sz == 0 || !rangeInBounds(Cursor, Sz, BufSize))
     return 0;
   int64_t Val = 0;
   switch (getFormat(Enc)) {
   case Udata2: {
-    uint16_t V;
-    std::memcpy(&V, Buf + Cursor, sizeof(V));
+    const uint16_t V = readTargetEndian<uint16_t>(Buf + Cursor, LittleEndian);
     Val = V;
     break;
   }
   case Sdata2: {
-    int16_t V;
-    std::memcpy(&V, Buf + Cursor, sizeof(V));
+    const int16_t V = readTargetEndian<int16_t>(Buf + Cursor, LittleEndian);
     Val = V;
     break;
   }
   case Udata4: {
-    uint32_t V;
-    std::memcpy(&V, Buf + Cursor, sizeof(V));
+    const uint32_t V = readTargetEndian<uint32_t>(Buf + Cursor, LittleEndian);
     Val = V;
     break;
   }
   case Sdata4: {
-    int32_t V;
-    std::memcpy(&V, Buf + Cursor, sizeof(V));
+    const int32_t V = readTargetEndian<int32_t>(Buf + Cursor, LittleEndian);
     Val = V;
     break;
   }
   case Udata8: {
-    uint64_t V;
-    std::memcpy(&V, Buf + Cursor, sizeof(V));
+    const uint64_t V = readTargetEndian<uint64_t>(Buf + Cursor, LittleEndian);
     Val = static_cast<int64_t>(V);
     break;
   }
   case Sdata8: {
-    int64_t V;
-    std::memcpy(&V, Buf + Cursor, sizeof(V));
+    const int64_t V = readTargetEndian<int64_t>(Buf + Cursor, LittleEndian);
     Val = V;
     break;
   }

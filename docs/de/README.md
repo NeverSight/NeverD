@@ -1,6 +1,6 @@
 **Sprachen**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: e1b18ca385ee2c0da797d70ea8b6d1d166393d196100096863a20662b72d11db -->
+<!-- i18n-source: 064a675b88d7887beb6eb1c62907468231caafde8b4f397b3f3ad6cb75e9c8bd -->
 
 [← NeverD-Projekt](project.md)
 
@@ -24,6 +24,7 @@ Englische Anleitungen liegen direkt unter `docs/`. Übersetzungen sind in `ar/`,
 | [ASAR-Extraktionsprofil (Englisch)](../web-asar-profile.md) | Zuordnung interner und externer Erfassungen, Integritätszustände, Nutzer der Archiveinträge und native Unicode-Abhängigkeit |
 | [Electron-Evidenzprofil (Englisch)](../web-electron-profile.md) | Erfasste Einstiegspfade, Manifest- und Quellumfang, Fenster- und Bridge-Evidenz sowie mögliche IPC-Kanäle |
 | [HTML-Quellprofil (Englisch)](../web-html-profile.md) | Begrenztes C++-Skriptinventar, erfasste lokale Referenzen und ursprüngliche Inline-Quellanker |
+| [MIPS-Analyse (Englisch)](../mips.md) | MIPS32/64-ELF-Profile, Delay-Slots, Ganzzahl-ABI, Validierung und TP-Link-Firmware-Beispiel |
 | [Tests](testing.md) | Testsuiten, generierte Fixtures, Unicorn-Roundtrips und inkrementelle Befehle |
 | [Desktop-Arbeitsplatz (Englisch)](../gui.md) | Klassische Disassembler-Aufteilung, separater Worker, Projektdatenbanken, Lokalisierung und MCP-Verbindungen |
 | [Abschnitte des Analyseabbilds (Englisch)](../analysis-sections.md) | Materialisierten Code und Daten über C-ABI, Worker, CLI und Arbeitsoberfläche hinzufügen; native Ansichten und Projektspeicherung |

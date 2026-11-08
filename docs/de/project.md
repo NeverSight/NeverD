@@ -1,6 +1,6 @@
 **Sprachen**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 063226dd86688a1fb9f6d9741898c67d850f4398e9c652507a75f3b01d47ab90 -->
+<!-- i18n-source: eba5aa249bd6a7b45bc98a51faf985724d6cdfbb4dc21091fce89d6f541d01b8 -->
 
 <div align="center">
 
@@ -61,6 +61,8 @@ Verwendung, unterstützte Verträge und Grenzen stehen in den Leitfäden zu [EVM
 | **Mach-O** (macOS / iOS) | ✓ | ✓ | ✓ | ✓ |
 
 > Jede Zelle der Matrix ist implementiert, die Tiefe der Integrationstests variiert jedoch. Siehe die [Architektur-Abdeckungsmatrix](architecture.md#support-and-test-depth). Mach-O i386 verwendet relocatable `thin`-Objekte, weil modernes macOS historische i386-Executables nicht linken kann.
+
+**Die MIPS-ELF-Analyse ist experimentell:** MIPS32r2/o32 und MIPS64r2/n64 unterstützen in beiden Byte-Reihenfolgen eine strikt begrenzte Teilmenge von Ganzzahlbefehlen für Disassemblierung, CFG-Rekonstruktion sowie C- und LLVM-Ausgabe. Das Umschreiben nativen Codes wird nicht unterstützt. Siehe [MIPS-Abdeckung und Firmware-Beispiel (Englisch)](../mips.md).
 
 Legacy-EVM-Bytecode wird unabhängig von nativen Containern unterstützt: Alle
 150 Opcodes von Frontier bis Fusaka führen durch Low/Med/High IR, verifiziertes

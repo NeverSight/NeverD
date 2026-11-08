@@ -24,6 +24,7 @@
 #include "neverd/ir/med/X86/X86RepAddresses.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/loader/RelocationProvenance.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/Diagnostic.h"
 
 #include "llvm/ADT/ScopeExit.h"
@@ -4106,8 +4107,8 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
                   DataOnly = false;
                   break;
                 }
-                uint64_t Target = 0;
-                std::memcpy(&Target, Bytes, PointerSize);
+                uint64_t Target = readPtr(Bytes, PointerSize == 8,
+                                          archLittleEndian(Img->Arch));
                 if (PointerSize < 8)
                   Target &= (uint64_t(1) << (PointerSize * 8)) - 1;
                 Identities.insert({Target, Owner->second});
@@ -5250,7 +5251,9 @@ MedLLVMEmitter::traceTableBaseConst(const MedVar &V, int Depth, bool *SawLoad,
     if (Sz > 8 || !rangeInBounds(Off, Sz, Seg->Data.size()))
       return std::nullopt;
     uint64_t Val = 0;
-    std::memcpy(&Val, Seg->Data.data() + Off, Sz);
+    for (unsigned I = 0; I < Sz; ++I)
+      Val |= uint64_t{Seg->Data[Off + I]}
+             << (8 * (archLittleEndian(Img->Arch) ? I : Sz - I - 1));
     // A native-width absolute data-pointer relocation is an address-sized bit
     // pattern and must be zero/canonical-extended on a 32-bit target.  Other
     // literal loads may be signed PC-relative displacements; preserve their
@@ -6785,8 +6788,7 @@ bool MedLLVMEmitter::recoverAbsoluteDataPointerLoadIdentities(
     const uint8_t *Bytes = Img->readVA(Slot, PtrSize);
     if (!Bytes)
       return false;
-    uint64_t Target = 0;
-    std::memcpy(&Target, Bytes, PtrSize);
+    uint64_t Target = readPtr(Bytes, PtrSize == 8, archLittleEndian(Img->Arch));
     Target += Adjustment;
     if (PtrSize < 8)
       Target &= (uint64_t(1) << (PtrSize * 8)) - 1;
@@ -6960,8 +6962,8 @@ bool MedLLVMEmitter::recoverRelativeDataPointerTargets(
     const uint8_t *Bytes = Img->readVA(Slot, sizeof(int32_t));
     if (!Bytes)
       return false;
-    int32_t Displacement = 0;
-    std::memcpy(&Displacement, Bytes, sizeof(Displacement));
+    const int32_t Displacement =
+        readTargetEndian<int32_t>(Bytes, archLittleEndian(Img->Arch));
     uint64_t Target =
         Base + static_cast<uint64_t>(static_cast<int64_t>(Displacement));
     if (!isMaterializableReadOnlyDataAddress(Target))

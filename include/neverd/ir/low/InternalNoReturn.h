@@ -102,7 +102,8 @@ private:
   /// when there is no such range or a byte does not decode.
   bool decodeScreenedRange(
       va_t Target,
-      llvm::function_ref<bool(Decoder &, const DecodedInsn &)> Visit) const;
+      llvm::function_ref<bool(Decoder &, const DecodedExecutionUnit &)> Visit)
+      const;
   /// Whether the screened range of the function at \p Target holds no
   /// instruction that returns.  Memoized.
   bool nothingReturns(va_t Target) const;

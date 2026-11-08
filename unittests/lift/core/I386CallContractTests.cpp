@@ -756,7 +756,7 @@ TEST(I386CallContract, AStdcallImportIsDeclaredToPopItsArguments) {
             std::string::npos)
       << HighC;
   const std::string LLVMC = emitSource(Img, /*LLVMC=*/true);
-  EXPECT_NE(LLVMC.find("__attribute__((stdcall)) uint64_t "
+  EXPECT_NE(LLVMC.find("__attribute__((stdcall)) uint32_t "
                        "Validate(uint32_t, uint32_t);"),
             std::string::npos)
       << LLVMC;

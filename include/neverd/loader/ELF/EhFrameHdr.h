@@ -14,9 +14,10 @@
 #ifndef NEVERD_LOADER_ELF_EHFRAMEHDR_H
 #define NEVERD_LOADER_ELF_EHFRAMEHDR_H
 
+#include "neverd/ArchSupport.h"
+#include "neverd/loader/BinaryImage.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/DwarfEH.h"
-#include "neverd/loader/BinaryImage.h"
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -69,7 +70,8 @@ void addFunctionsFromEhFrameHdr(const uint8_t *Data, size_t FileSize,
   if (CntSize == 0 || !rangeInBounds(Cursor, CntSize, SecSize))
     return;
   uint32_t FdeCount = static_cast<uint32_t>(
-      readEncoded(Base, SecSize, Cursor, HdrFields.FdeCountEnc));
+      readEncoded(Base, SecSize, Cursor, HdrFields.FdeCountEnc,
+                  archLittleEndian(Img.Arch)));
 
   // FdeCount is an untrusted count; form the table size in 64 bits and use
   // rangeInBounds so the multiply cannot wrap the check into an out-of-bounds
@@ -83,8 +85,8 @@ void addFunctionsFromEhFrameHdr(const uint8_t *Data, size_t FileSize,
 
   [[maybe_unused]] size_t Added = 0;
   for (uint32_t F = 0; F < FdeCount; ++F) {
-    int32_t InitLoc;
-    std::memcpy(&InitLoc, Base + Cursor + F * kFdeEntrySize, sizeof(InitLoc));
+    const int32_t InitLoc = readTargetEndian<int32_t>(
+        Base + Cursor + F * kFdeEntrySize, archLittleEndian(Img.Arch));
 
     va_t FuncAddr;
     if (IsDataRel)

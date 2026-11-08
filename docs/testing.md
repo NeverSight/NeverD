@@ -22107,3 +22107,38 @@ SymConditionalControls and SymMBASelector Boolean-word tests use exhaustive smal
 SymMBARewriteCache regressions compare cold/hot work counts rather than wall-clock thresholds. Completed unchanged subtrees, opaque parent compositions, refused siblings, working-set eviction and option/context/work boundaries retain exact derivation semantics. SymMBASparseContext additionally checks placeholder declaration reuse without hiding caller inputs or carrying declarations across contexts.
 
 `HighControlFlowSemantics.UnusedValuesDropReadsOfTheirOwnFrame` keeps unused reads through pointers and past the frame while dropping reads of the private frame, across stack-adjustment chains longer than one address walk. `HighCPointerAddresses.UnusedFieldLoadIsNotARegistersEntryValue` keeps a register's entry value from taking a later unused field load's name. `SymState.AnUnreadRunOfAPartlyKnownWordIsOneInput`, `SymMBARewriteCache.RecoveredWordChoicesStayInTheEvictionOrder` and `SymMBAKnownFacts.ConstantsBesideSeveralTermsStillFold` cover unread byte runs, cache eviction of recovered word choices and masks beside several terms. `HighControlFlowSemantics.UnusedOwnFrameReadsFollowEveryStackAdjustment` proves a read of the private frame through i386's sign-extended stack adjustment and in a function whose locals are all temporaries, so an unused reload no longer keeps its register's save. `HighCPointerAddresses.ImmutableSlotLoadsConvertTheirAddressOnce` converts a read-only GOT slot's address to an integer once.
+
+## MIPS ELF analysis and source roundtrips
+
+The experimental [MIPS analysis](mips.md) path has focused targets
+`NeverDMIPSTests` (ELF admission, endian data, GOT/PLT and unwind records),
+`NeverDMIPSIntegerTests` (integer semantics and pinned Unicorn),
+`NeverDMIPSFlowTests` (delay-slot ownership, capture and annulment),
+`NeverDMIPSSDKTests` (physical disassembly rows and flow) and
+`NeverDMIPSPipelineTests` (ABI recovery and both source paths).
+
+```sh
+python3 scripts/build.py build-mips --target NeverDMIPSTests NeverDMIPSIntegerTests NeverDMIPSFlowTests NeverDMIPSSDKTests NeverDMIPSPipelineTests neverd --parallel 4
+ctest --test-dir build-mips --build-config Release -L '^NeverDMIPS.*Tests$' --output-on-failure --parallel 4
+```
+
+`unittests/lift/mips/roundtrip.py` is an additional standalone differential
+runner. It needs clang and lld with MIPS targets, pyelftools, and the repository's
+pinned Unicorn native library/Python bindings. Pass the built CLI, compiler,
+linker and an ignored output directory explicitly:
+
+```sh
+LIBUNICORN_PATH=/path/to/repo-pinned-unicorn-library PYTHONPATH="$PWD/third_party/unicorn/bindings/python" python3 unittests/lift/mips/roundtrip.py --neverd build-mips/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld --output build-mips/roundtrip
+```
+
+The runner compiles the owned assembly and each generated C variant for all
+four width/byte-order profiles. It checks return values and memory effects,
+including taken/untaken likely branches, delayed calls, argument carriers,
+readonly/writable globals and image pointers. LLVMC's original-image storage
+and either route's omitted original callees are explicitly bound at their
+original addresses; this qualifies the regenerated caller against that
+dependency contract. It does
+not claim a standalone rebuilt firmware. `results.json` records each case and
+any failure; an unavailable compiler or oracle is a failure, not a skipped pass.
+Vendor firmware remains outside the committed fixtures. Its separate static
+receipt is [Archer C7 V5](firmware/archer-c7-v5.md).

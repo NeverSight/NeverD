@@ -8,8 +8,8 @@
 /// Implementation detail of the ELF loader in `lib/loader/ELF`.  The phases
 /// declared here are the successive steps `loadELF` drives -- address-space
 /// layout, the section and symbol tables, and the relocation tables -- split
-/// across translation units and instantiated for ELF32LE and ELF64LE only.
-/// Nothing outside this directory may include this header.
+/// across translation units and instantiated for ELF32 and ELF64 in both byte
+/// orders. Nothing outside this directory may include this header.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -175,6 +175,13 @@ void applyDynamicRelativeRelocations(
     const llvm::object::ELFFile<ELFT> &ELF,
     llvm::ArrayRef<typename ELFT::Shdr> Sections, const uint8_t *Data,
     size_t Size, BinaryImage &Img);
+
+/// MIPS global GOT entries are bound by dynamic symbol order, without one
+/// relocation per cell. Retain those import identities and validate the table.
+template <typename ELFT>
+llvm::Error collectMIPSDynamicGOT(const llvm::object::ELFFile<ELFT> &ELF,
+                                  llvm::ArrayRef<typename ELFT::Shdr> Sections,
+                                  BinaryImage &Img);
 
 /// Record the defined symbols of every SHT_SYMTAB / SHT_DYNSYM section in
 /// `Img.Symbols`, and every global or weak function among them in

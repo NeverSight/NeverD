@@ -1,6 +1,6 @@
 **اللغات**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](project.md)
 
-<!-- i18n-source: 063226dd86688a1fb9f6d9741898c67d850f4398e9c652507a75f3b01d47ab90 -->
+<!-- i18n-source: eba5aa249bd6a7b45bc98a51faf985724d6cdfbb4dc21091fce89d6f541d01b8 -->
 
 <div align="center" dir="rtl">
 
@@ -61,6 +61,8 @@ CLI والمكاملون ووكلاء الذكاء الاصطناعي يستخد
 | **Mach-O** (macOS / iOS) | ✓ | ✓ | ✓ | ✓ |
 
 > نُفّذت كل خلية في المصفوفة، لكن عمق اختبارات التكامل يختلف. راجع [مصفوفة تغطية المعمارية](architecture.md#support-and-test-depth). يستخدم Mach-O i386 كائنات `thin` قابلة لإعادة التموضع لأن macOS الحديث لا يستطيع ربط ملفات i386 التنفيذية التاريخية.
+
+**تحليل MIPS ELF تجريبي:** يدعم MIPS32r2/o32 وMIPS64r2/n64 بكلا ترتيبي البايتات مجموعة فرعية محددة بدقة من تعليمات الأعداد الصحيحة لفك التجميع واستعادة CFG وإخراج C وLLVM. إعادة كتابة الشيفرة الأصلية غير مدعومة. راجع [نطاق دعم MIPS ومثال البرنامج الثابت (بالإنجليزية)](../mips.md).
 
 يدعم بايت كود EVM التقليدي مستقلًا عن الحاويات الأصلية: تمر كل opcodes المخصصة
 وعددها 150 من Frontier إلى Fusaka عبر Low/Med/High IR وLLVM `i256` متحقق وC23
