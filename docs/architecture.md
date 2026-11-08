@@ -16261,7 +16261,10 @@ whatever order its statements were found in, since nothing but the runtime enter
 it, and statements at one address stay together, since a jump to it lands on the
 first. A frame whose record is not where the runtime leaves EBP, as clang-cl's, is
 not read this way: its handlers' code keeps the block view. `lib/ir/high/structure/X86/X86RegistrationDisplay.cpp` runs this and takes the
-normal path's `call` of each body away. A filter's
+normal path's `call` of each body away. Within one call-removal pass, each
+queried body's merged ranges are computed once from the unchanged display facts,
+including empty results. Bodies are still searched in root-address order, and
+clauses with no remaining call do not build their ranges. A filter's
 code leaves the listing as one expression (`HighEHClause::FilterValue`): branches
 are conditionals, what it does first a comma's left side, and the pointers the
 runtime leaves below the record `GetExceptionInformation()` and
@@ -18251,6 +18254,15 @@ same work allowance before returning.
 `X86LiftCoreArith` lowers legacy memory `LOCK ADD/SUB/INC/DEC` to one sequentially consistent `ATOMIC_ADD`. Flags use the returned old value after the memory operation; `INC/DEC` preserve CF. FS/GS address spaces remain attached. On x64, `LOCK AND/OR/XOR` use the shared system-state intrinsic owner and emit one native locked transaction. Its result packs PF/ZF/SF from that transaction; CF/OF are cleared and AF remains an explicit arbitrary effect. Widths and FS/GS address spaces remain part of the intrinsic contract. The i386 non-neutral logical forms and other unowned locked core arithmetic still refuse. This is a LowIR lifting contract; emitted native alignment and fault behavior need their own qualification.
 
 ### Explicit x64 continuation export
+
+`translate/X86/X86LocalApic.h` independently owns fixed-source APIC priority,
+acknowledgment and ordinary EOI bank transitions. It has no decoder/session
+dependency and is used only by explicit producers. CPU IF/shadow admission
+and acknowledgment timing stay in the continuation scheduler; arrivals,
+global event arbitration, TPR/CR8 synchronization and external EOI routing
+stay with the embedding. The offline QEMU bank adapter calls this type's
+constant initializer/validator instead of duplicating priority rules in Python.
+See the [local APIC contract](x86-local-apic.md).
 
 `X64FunctionCallHandlers` composes a producer-declared delivered handler context
 with a pending original CALL. The interface requires call-site pauses so that
