@@ -1029,7 +1029,10 @@ revision}`.  `base` is the page named; the client applies `delta`'s operations t
 order and takes `etag`, `project_id` and `revision` from the reply.  `["set", field,
 value]` and `["unset", field]` set or take away a field.  `["lines", field, count,
 [[line, text], ...]]` splits the field's text at line feeds into `count` lines and
-replaces those listed.  `["items", field, runs]` makes a list from the old one read once
+replaces those listed.  `["each", field, {key: value}]` sets each key to its value in
+every element of the field's list that has the key, and in no other; a document's
+identity, which each of its locals carries, changes so with its engine text.
+`["items", field, runs]` makes a list from the old one read once
 in order: `["same", n]` keeps the next n elements, `["shift", n, {key: amount}]` keeps
 them with those integer fields moved by amount, `["put", [values]]` replaces the next
 elements, `["skip", n]` drops n and `["new", [values]]` adds values.  An edit that moves

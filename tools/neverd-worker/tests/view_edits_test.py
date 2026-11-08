@@ -64,6 +64,9 @@ def apply_delta(page, delta):
             for line, text in operation[3]:
                 lines[line] = text
             page[field] = "\n".join(lines)
+        elif kind == "each":
+            for item in page[field]:
+                item.update({key: value for key, value in operation[2].items() if key in item})
         else:
             assert kind == "items", operation
             old, items, used = page[field], [], 0

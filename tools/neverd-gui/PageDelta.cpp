@@ -5,8 +5,9 @@
 //===----------------------------------------------------------------------===//
 /// \file
 /// The operations neverd::worker::pageDelta writes: a field set or taken away,
-/// lines of a text replaced where the text has as many, and runs over a list
-/// that keep, shift the numbers of, replace, drop or add its elements.
+/// lines of a text replaced where the text has as many, a value set in every
+/// element of a list that has its key, and runs over a list that keep, shift
+/// the numbers of, replace, drop or add its elements.
 //===----------------------------------------------------------------------===//
 
 #include "PageDelta.h"
@@ -58,6 +59,26 @@ std::optional<QJsonObject> apply(QJsonObject page, const QJsonArray &delta) {
     }
     if (!page.contains(field))
       return std::nullopt;
+    if (kind == QLatin1String("each") && operation.size() == 3 &&
+        page[field].isArray() && operation[2].isObject()) {
+      const auto values = operation[2].toObject();
+      auto items = page[field].toArray();
+      for (qsizetype at = 0; at < items.size(); ++at) {
+        if (!items[at].isObject())
+          return std::nullopt;
+        auto object = items[at].toObject();
+        bool held = false;
+        for (auto value = values.begin(); value != values.end(); ++value)
+          if (object.contains(value.key())) {
+            object[value.key()] = value.value();
+            held = true;
+          }
+        if (held)
+          items[at] = object;
+      }
+      page[field] = items;
+      continue;
+    }
     if (kind == QLatin1String("lines") && operation.size() == 4 &&
         page[field].isString() && operation[3].isArray()) {
       auto lines =

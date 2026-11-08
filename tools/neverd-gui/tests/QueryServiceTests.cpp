@@ -186,9 +186,10 @@ private slots:
     QTRY_COMPARE(h.sent.size(), 1);
     // A first read keeps nothing to apply changes to.
     QVERIFY(!h.sent[0].payload.contains("page_delta"));
-    const QJsonArray names{QJsonObject{{"begin_byte", 0}, {"end_byte", 1}},
-                           QJsonObject{{"begin_byte", 2}, {"end_byte", 3}},
-                           QJsonObject{{"begin_byte", 4}, {"end_byte", 5}}};
+    const QJsonArray names{
+        QJsonObject{{"begin_byte", 0}, {"end_byte", 1}, {"identity", "0x1"}},
+        QJsonObject{{"begin_byte", 2}, {"end_byte", 3}},
+        QJsonObject{{"begin_byte", 4}, {"end_byte", 5}, {"identity", "0x1"}}};
     h.reply(0, {{"text", "a\nb\nc"},
                 {"code_names", names},
                 {"etag", "tag-7-0-3"},
@@ -199,8 +200,8 @@ private slots:
     QTRY_COMPARE(h.sent.size(), 2);
     h.reply(1, {}, "2");
     QTRY_VERIFY(!h.service.hasPending());
-    // The next read names the kept page and takes what changed of it: a line
-    // and the names after it moved.
+    // The next read names the kept page and takes what changed of it: a line,
+    // the identity every local of the text holds, and the names after it moved.
     QJsonObject second;
     h.service.subscribe(text(), &h.owner, [&](const QJsonObject &response) {
       second = response;
@@ -210,6 +211,7 @@ private slots:
     QVERIFY(h.sent[2].payload["page_delta"].toBool());
     const QJsonArray changes{
         QJsonArray{"lines", "text", 3, QJsonArray{QJsonArray{0, "a // x"}}},
+        QJsonArray{"each", "code_names", QJsonObject{{"identity", "0x2"}}},
         QJsonArray{"items", "code_names",
                    QJsonArray{QJsonArray{"same", 1},
                               QJsonArray{"shift", 2,
@@ -227,6 +229,11 @@ private slots:
     QCOMPARE(page["code_names"].toArray()[0].toObject()["end_byte"].toInt(), 1);
     QCOMPARE(page["code_names"].toArray()[2].toObject()["begin_byte"].toInt(),
              9);
+    QCOMPARE(page["code_names"].toArray()[0].toObject()["identity"].toString(),
+             "0x2");
+    QCOMPARE(page["code_names"].toArray()[2].toObject()["identity"].toString(),
+             "0x2");
+    QVERIFY(!page["code_names"].toArray()[1].toObject().contains("identity"));
     QCOMPARE(page["etag"].toString(), "tag-8-0-3");
     QCOMPARE(page["revision"].toString(), "2");
     // The page as changed is the one kept: the next read names it.
