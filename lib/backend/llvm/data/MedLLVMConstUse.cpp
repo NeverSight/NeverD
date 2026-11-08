@@ -21,6 +21,7 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
 
 #include "llvm/ADT/DenseSet.h"
 
@@ -137,11 +138,16 @@ bool MedLLVMEmitter::constUsedAsPointerImpl(uint64_t Val) const {
   auto reaches = [&](auto &&Match, bool FollowValueMergeArms) {
     for (const auto &Blk : CurMedFunc->Blocks)
       for (const auto &Op : Blk.Ops) {
-        if ((Op.Opcode != NdOp::LOAD && Op.Opcode != NdOp::STORE) ||
+        const bool MergeLoad =
+            mipsScalarMedShapeIsValid(Op) &&
+            mips::mergeLoad(static_cast<Intrinsic>(Op.Inputs[0].ConstVal))
+                .has_value();
+        if ((Op.Opcode != NdOp::LOAD && Op.Opcode != NdOp::STORE &&
+             !MergeLoad) ||
             Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
             Op.NumInputs < 1)
           continue;
-        std::vector<MedVar> Work{Op.Inputs[0]};
+        std::vector<MedVar> Work{Op.Inputs[MergeLoad ? 1 : 0]};
         std::set<std::tuple<int, int, int>> Seen;
         int Budget = ::neverd::limits::backend::kMedLLVMConstUseReachesBudget;
         while (!Work.empty() && Budget-- > 0) {

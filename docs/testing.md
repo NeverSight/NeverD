@@ -1675,8 +1675,11 @@ retaining all five authentication variants and both C routes at O0/O2 within
 the ordinary per-test timeout. Stable shape names identify failures and permit
 parallel scheduling. All 325 typed groups emit actual Mach-O objects on five
 routes. Narrow register arguments
-and results require the correct LLVM extension attribute; stack arguments
-retain their source width. The outer fixture explicitly writes the complete
+and results require the correct LLVM extension attribute on the raw typed
+route; authenticated routes require one potentially unwinding machine call
+with the original BLRAA/BLRAB and no separate auth, resign or trap operation.
+Their independent model callbacks check argument extensions, stack widths and
+every logical return piece. The outer fixture explicitly writes the complete
 X0 return carrier, and a constant result cannot stand in for the callback's
 value. Set `NEVERD_ARM64E_CALL_ABI_ARTIFACT_DIR` to retain the nine integer
 groups and 325 typed groups with all five object routes. Composite result
@@ -1701,7 +1704,8 @@ alignment or dereferenceability parameter attributes. Mixed and nested indirect
 records also exercise forward declarations for opaque pointer fields.
 Other hosts retain compilation
 and explicitly record that native execution is unavailable. Packed/union values,
-hidden results, and unpromoted scalar tails must refuse explicitly.
+hidden results without the original x8 carrier, and unpromoted scalar tails must
+refuse explicitly.
 Raw native execution does not qualify PAC behavior.
 `MachOArm64eDependencies` in `NeverDArm64eAnalysisTests` checks independently
 encoded linked images for all six arm64e chained-pointer formats. Chain metadata
@@ -1826,6 +1830,16 @@ Independent A/B signing controls in the ordinary arm64 host process leave the
 pointer unchanged, so its authenticated transport checks are not active PAC
 evidence. Native signed unwinding remains unqualified.
 
+Successful public SDK runs remove their generated dylib, objects and executable
+harnesses after recording hashes and sizes in `products.json`. Sources, logs
+and summaries remain available. Use `--keep-products` only when those binaries
+are still needed for inspection; failed runs preserve their products.
+CTest registers `NeverDArm64eSourceCallSDK.<shape>` for all 41 shapes under the
+`NeverDArm64eSourceCallSDK` label. Each retains the complete input image and
+both C routes at O0/O2; the first shape also owns all 14 declaration refusals.
+Every case keeps the 120-second limit. `--case NAME` selects the same unit for
+local diagnosis; omitting it still runs the complete SDK profile.
+
 `AArch64AuthenticatedCall.IndirectResultsKeepOriginalStorageAndPAC` exports
 five key/modifier variants for direct LLVM and HighC/LLVMC at O0/O2. The
 synthetic MedIR explicitly defines x0 before returning and rejects projected
@@ -1859,6 +1873,53 @@ affected call, frame, type and HighIR test instances, 1,308 pass and 26 explicit
 skip; none fail or time out. All 25 original-x8 and 1,625 earlier typed-call
 objects again match the recorded model inputs. The receipt retains this
 integration check separately from the earlier complete owner regression.
+
+The [authenticated-fault receipt](evidence/arm64e-authenticated-faults-2026-11-08.json)
+removes the intermediate-resign exception allowance for explicit Darwin C
+prototypes. All 1,625 current Mach-O objects pass unchanged-text admission;
+all 30 model guests pass with 39,000 valid original/projected pairs and
+93,600 invalid-signature pairs. Every route, including HighC and LLVMC O0,
+retains the original exception class: zero differences are permitted or observed.
+The strict assessor rejects eight old C O0 transcripts that the earlier profile
+accepted. That reassessment is separate from the new execution evidence.
+The 72 authenticated-call cases pass on the recorded producer; the complete
+selected regression contains 419 passes and 21 explicit host/toolchain skips.
+All 25 original-x8 objects still match their previously qualified model inputs.
+Generic and recovered-native C calls, complete image authentication, native
+Apple PAC/CPA2 execution, signed unwinding and exact fault PC/full ESR remain
+outside this qualification. Generated products are removed after their hashes
+and results are recorded; canonical model inputs and necessary diagnostics remain.
+
+
+The [recovered-call receipt](evidence/arm64e-recovered-call-faults-2026-11-08.json)
+extends the strict exception-class check to 36 complete recovered fixed C
+prototypes: scalar, 128-bit integer, direct record and HFA values, including
+register-bank exhaustion and packed stack arguments. NativeAnalysis fixtures
+use no analyst call-site permission. Their 900 unchanged Mach-O objects pass
+30 controlled PAC guests across LLVM and HighC/LLVMC O0/O2, EL0/EL1 and all
+four CPTA control combinations: 21,600 valid pairs and 51,840 bad-signature
+pairs, with zero exception-class differences. The 1,625 explicit-prototype
+objects and 25 original-x8 objects remain byte-identical to their earlier
+qualified inputs; those profiles are not re-executed by this result.
+The selected Release owner regression records 861 passes and 26 explicit
+host/toolchain skips across 887 instances. One parallel timeout passes serially
+in the unchanged 120-second limit. The revised aggregate group adds 69 passing
+CTest instances; the receipt preserves the original failure and its resolution.
+The environment's `recovered_calls.py` requires its own exact 36-test report
+and rejects an explicit-prototype report substituted for it. This qualifies
+transport of an established recovered ABI, not automatic recovery accuracy.
+The authenticated native bridge explicitly rejects full 128-bit SIMD carriers,
+indirect by-value parameters and hidden results until their transport is proved.
+
+`MachOArm64eDependencies` additionally verifies multi-start pages for all six
+supported arm64e chain formats and ordinary 64-bit chains. It checks complete
+signing/import/slot identity, unterminated or reused overflow entries,
+duplicate and partially overlapping storage, malformed page bounds and
+unowned table data. This establishes dependency preservation, not new
+pointer signing or authenticated whole-image emission. The expanded Swift
+aggregate regression checks all logical return fields and separately observes
+full floating registers so their unknown upper lanes cannot become zeros.
+
 `ImmutableNativeCalls.Generated*` checks ordinary and loop-frame image
 publication after dead private reads and their initializers disappear. The
 relocation validator still rejects unbound live image addresses.
@@ -16157,6 +16218,20 @@ These writes run both inline and through a callee, with zero and positive
 memory offsets. `OffsetStoreRangesKeepModularFootprints` additionally checks
 positive and negative wrapped footprints through instruction transfer and
 summary binding, while ordinary scalar arithmetic remains conservative.
+`TaggedReturnPayloadsCrossAcyclicCleanup` checks literal and bounded input tags
+through a shared borrow-counter cleanup, byte/full-word fields, forward/backward
+layout and reversed CFG edge order. Raw executions distinguish disjoint writes,
+potential aliases, replaced payloads and overwritten tags; stale payloads cannot
+reappear after cleanup. `NarrowStoresRetainOnlyFittingNumericBounds` checks the
+1/2/4-byte typed-memory boundary, including high/wrapped ranges, pointer tags,
+partial writes and alternatives. The existing returned-tag regression also
+executes zero, nonzero and high input tags while full-width unknown tags remain
+unsupported.
+`FullVariantCacheKeepsOnlySelectedFirstCallProofs` checks the selected-path
+address proof after all four variants are occupied. Unknown branches, an earlier
+call, a repeated block and a possible alias write refuse that proof. Independent
+raw executions check the callback or loop, and the reported generic return
+remains unknown even when the first-call address is recovered.
 The pinned 72-file native-object scan described in [sbf-corpus.md](sbf-corpus.md)
 is separate from these synthetic execution tests and from official VM gates.
 
@@ -16246,7 +16321,11 @@ compares 36 complete public report pairs, including dynamic proxy `key:null`.
 `AndroidLocalBinderTest.*` checks independent strong-object wire bytes, null
 metadata, holder weak-cache replacement, shared ownership across Parcels,
 unmarshalling reference retirement, DEX subclass construction, native service
-admission and deferred synchronous release notifications.
+admission and deferred synchronous release notifications. Literal overwrite
+controls cover partial invalid tags, null pointers, changed cookies, duplicate
+offset acquisitions and releases, foreign release cookies, and lazy sorting of
+non-append metadata. Unmarshalling retains its explicit boundary for unsorted
+offsets and releases fully dropped records in native forward order.
 `AndroidJNI.BinderLocalObjectsAndOwnedParcelWritesUseSharedTransport` exports
 local Java objects through the shared Linux driver, echoes them as the original
 Java objects, and writes a returned remote proxy alongside null and handle zero.
@@ -16254,13 +16333,16 @@ The multi-object case replaces an expired weak cache before export, spans native
 read buffers and checks pointer/cookie ACK ordering. Ordinary/V/A forms exercise
 altered holder permissions, same-address
 mapping replacement, unconstructed objects, borrowed strong-write growth and
-non-append metadata boundaries. The matching
+successful repeated-offset writes followed by recycle and reuse. The matching
 `ProcessPublic.AndroidBinderLocalWritesMatchSDKAndCLI` compares 42 full report
 pairs at O0/O2. These tests do not claim local transaction callback dispatch.
 `AndroidParcelBufferTest.*` checks literal native capacities, live byte copies,
 capacity no-ops, protected in-place writes, reference acquisition before free,
 duplicate handles shared across copies, Java proxy promotion, local identity
 lifetime, retained `unmarshall` metadata and bounded storage reservations.
+Overwrite controls verify current-handle release order, retained old references,
+borrowed mapping permissions, acquisition from changed live bytes, and release
+of a long old reply before replacing it with a shorter buffer.
 `AndroidJNI.ParcelBorrowedRepliesGrowWithSharedBinderOwnership` exercises
 ordinary/V/A calls through real guest peers: automatic/explicit growth, arena
 slot reuse, scalar and strong writes, native-only remote handle retention and
@@ -16275,6 +16357,14 @@ buffers/cursors, owner retention and missing allocator services.
 interior, freed and unreadable foreign pointers with an unreadable owned allocation.
 `ProcessPublic.AndroidParcelBorrowedGrowthMatchesSDKAndCLI` compares 108 complete
 reports at O0/O2, including all explicit failure outcomes.
+`AndroidParcelExceptionTest` checks seven literal exception tags, nullable UTF-16
+messages, retained tail bytes, unknown-runtime identity rethrow, checked/null
+cause boundaries, and virtual native message suspension/failure. Incoming
+exception tests check native reply lifetime and default statistics. The native
+peer checks three exception replies followed by ping, including untouched scalar
+tails. The overlapping-object exception reaches the shared driver translation
+boundary with its original offset table and one completed BinderCallsStats
+entry; neither the table nor the original acquisition is silently discarded.
 `AndroidBinderDispatchTest` checks local and incoming Java dispatch, protected
 super calls and virtual descriptor overrides, exception cursor order, native
 continuation tokens, separate wrapper-pool reuse, reply-ack buffer lifetime,
@@ -16286,7 +16376,7 @@ transactions, reply object translation, native ping and UNKNOWN_TRANSACTION.
 Ordinary/V/A calls also check local transact, missing realtime, Java exceptions
 and changed StrictMode policy. The successful peer exits the process after its
 checks; a live Binder pool never invents a normal Java return.
-`ProcessPublic.AndroidJavaBinderDispatchMatchesSDKAndCLI` compares 36 complete
+`ProcessPublic.AndroidJavaBinderDispatchMatchesSDKAndCLI` compares 42 complete
 reports at O0/O2 with the original 200,000-instruction bound.
 `LinuxBinder.LooperReadinessMatchesActualProcessAndPrivateWork` submits raw
 transactions across four thread identities on x86-64 and AArch64, checking that
@@ -18611,9 +18701,14 @@ levels nesting their tries, a body that leaves the function ending the path of i
 try that starts where jumps enter it, an arm that does nothing, a jump out of a
 `__finally` staying a jump, code running on into a `__finally`, a loop on a
 register staying in its try, an entry inside a loop being a jump in the try, an arm
-starting at its handler, and a filter keeping its calls in order. `WindowsEHModesCorpus.EveryFinallyClauseOfXcpt4HoldsItsHandlerAsCode`
-holds the same for the whole of x86 `xcpt4`, with no loop that does nothing and every
-call a filter or the startup code's arm makes. Run these checks when changing
+starting at its handler, a filter keeping its calls in order, clang-cl's record in frame
+slots with its outlined filter and `__finally`, a clause that does nothing keeping its
+address, and a `push` that only makes room being no argument. `WindowsEHModesCorpus.EveryFinallyClauseOfXcpt4HoldsItsHandlerAsCode`
+holds the same for the whole of x86 `xcpt4`, with no loop that does nothing, no empty
+`__try` and every call a filter or the startup code's arm makes.
+`ClangClX86SehProbePrintsItsTries`, `X86StartupFramesPrintTheirTries` and
+`X86WinapiCallsPopWhatTheyTake` pin clang-cl's frames, the CRT's own frames and the
+stack pointer a Windows API call leaves. Run these checks when changing
 the call-removal range index; handler boundaries, remaining calls and clause
 results must stay unchanged.
 
@@ -22154,11 +22249,21 @@ LIBUNICORN_PATH=/path/to/repo-pinned-unicorn-library PYTHONPATH="$PWD/third_part
 The runner compiles the owned assembly and each generated C variant for all
 four width/byte-order profiles. It checks return values and memory effects,
 including taken/untaken likely branches, delayed calls, argument carriers,
-readonly/writable globals and image pointers. LLVMC's original-image storage
+readonly/writable globals, image pointers, MUL, both word-merge orders,
+doubleword merges and a merge read in an indirect call's slot. Uninitialized
+merge destinations cover both orders, all offsets, fixed and seeded random
+machine values, independent expected bytes and fault order at both page edges.
+An invalid-memory branch-likely slot is tested both annulled and executed.
+HighC merge globals are also executed with the original image unmapped.
+LLVMC's original-image storage
 and either route's omitted original callees are explicitly bound at their
 original addresses; this qualifies the regenerated caller against that
 dependency contract. It does
 not claim a standalone rebuilt firmware. `results.json` records each case and
-any failure; an unavailable compiler or oracle is a failure, not a skipped pass.
+any failure, generated-source and binary hashes, and reclaimed bytes.
+Successful per-function `.o`/`.elf` artifacts are deleted immediately; original
+profile binaries are removed after all of that profile's comparisons pass.
+Failures retain their diagnostic artifacts. An unavailable compiler or oracle
+is a failure, not a skipped pass.
 Vendor firmware remains outside the committed fixtures. Its separate static
 receipt is [Archer C7 V5](firmware/archer-c7-v5.md).

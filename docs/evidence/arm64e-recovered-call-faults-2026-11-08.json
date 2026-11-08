@@ -1,0 +1,1003 @@
+{
+  "schema": "neverd-arm64e-recovered-call-faults-v1",
+  "path_normalization": "Embedded command and diagnostic paths are repository-relative. report_sha256 fields identify the original, unnormalized reports.",
+  "overall_arm64e_complete": false,
+  "scope": "Controlled PAC execution for complete recovered NativeAnalysis fixed C prototypes with scalar, 128-bit integer and direct record/HFA values. ABI recovery accuracy itself is not established by supplied IR fixtures. All five unchanged Mach-O routes require original exception classes. Raw indirect calls are controls. Indirect by-value copies, hidden results, signed exception unwinding, authenticated whole-image execution, native Apple PAC and exact fault PC/full ESR remain unqualified.",
+  "base_revision": "a72fcd510e017ea95aeedb26f84a86ed3cde894c",
+  "model_producer_revision": "3e2f9b76773f09dbefb3e6e92ceed74f815cbd90",
+  "additional_test_revision": "2e533756afd61175a96365535c0786ce27ef607c",
+  "environment_repository": "https://github.com/gmh5225/test_mac_intel",
+  "environment_revision": "71462f4faeeafefd28d5dd43ba8e52e904334b21",
+  "environment_pr": "https://github.com/gmh5225/test_mac_intel/pull/3",
+  "changes": [
+    "Reuse the validated physical machine-call bridge for complete recovered fixed Darwin C prototypes, preserving original authenticated target, key, modifier and result pieces through LLVM and both C routes.",
+    "Use declared caller parameter types while marshalling floating values; reject authenticated native single-Q 128-bit SIMD carriers, indirect by-value copies and hidden results until their separate transport is proved.",
+    "Admit multi-start pages in the strict whole-image dependency reader while preserving signing, slot, CPU ABI and import identity. Reject malformed overflow lists and duplicate or partially overlapping chain storage across bind/rebase phases.",
+    "Check Swift aggregate logical return values after scalar byte projection, and separately keep full-register consumers dependent on the actual call clobber. This adjusts a stale IR-shape test without changing production Swift semantics."
+  ],
+  "toolchain": {
+    "configuration": "Release",
+    "llvm_package": "neverd-llvm-v23.0.0-r6",
+    "llvm_source_patches_or_overlays": false,
+    "source_compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+    "model_archive_sha256": "b6835fd07cb390c7a32f84fe1cead84bde992813b49679137b3a7a0a026e92de",
+    "model_binary_sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+    "container_image": "sha256:b60022df2f5f52d4461b273e3b44190abb85effff05cbb52e1ed25818f010023",
+    "freestanding_authenticated_C_flags": [
+      "-fexceptions",
+      "-fno-stack-protector"
+    ]
+  },
+  "validation": {
+    "selected_owner_instances": 887,
+    "passed": 861,
+    "skipped": 26,
+    "final_failures": 0,
+    "unresolved_timeouts": 0,
+    "by_owner": {
+      "NeverDAArch64AuthenticatedCallTests": {
+        "COMPLETED": 108
+      },
+      "NeverDSourceCallABITests": {
+        "COMPLETED": 26
+      },
+      "NeverDObjCSourceCallTests": {
+        "COMPLETED": 189
+      },
+      "NeverDArm64eAnalysisTests": {
+        "COMPLETED": 406,
+        "SKIPPED": 5
+      },
+      "NeverDLLVMCValueTests": {
+        "COMPLETED": 132,
+        "SKIPPED": 21
+      }
+    },
+    "skip_details": [
+      {
+        "test": "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+        "reasons": [
+          "The execution host does not report the required ordered-memory feature"
+        ],
+        "full_diagnostic_sha256": [
+          "821e4916f7898e3015cafd7c5643b023dd8f65587c9aa55b6c2c86e3f28c28ed"
+        ]
+      },
+      {
+        "test": "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+        "reasons": [
+          "this host cannot execute arm64e with all four active pointer signing keys and generic signatures"
+        ],
+        "full_diagnostic_sha256": [
+          "0ad70ed7e8f231d0e4ce2a8c70d04d5a9576a822a1ec3990ce0e196a67b748c8"
+        ]
+      },
+      {
+        "test": "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+        "reasons": [
+          "this host cannot execute arm64e PAuth_LR with active keys"
+        ],
+        "full_diagnostic_sha256": [
+          "e9eaf0708874199f136ab8fb7d1a905f95bd5ae5054ea11bf4cded2d617eb165"
+        ]
+      },
+      {
+        "test": "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+        "reasons": [
+          "this host cannot execute PACM with active IA/IB keys and a second diversifier"
+        ],
+        "full_diagnostic_sha256": [
+          "10edfac37d31f43ac944b32ffcc411139ee96f5e0326a9b5ed87cacfb2d19720"
+        ]
+      },
+      {
+        "test": "A64FastClassifyParity.OptionalRealBinaryWalk",
+        "reasons": [
+          "set NEVERD_PARITY_BIN to a raw arm64 code file to enable"
+        ],
+        "full_diagnostic_sha256": [
+          "35befd58b8ad828ca3dc481258db4581790c7aa3ebf227ff0db2c619af937066"
+        ]
+      },
+      {
+        "test": "LLVMCValues.PrefetchKeepsComputedAndSegmentedMemoryOperands",
+        "reasons": [
+          "the prefetch instructions need an x86 host"
+        ],
+        "full_diagnostic_sha256": [
+          "74cd0a05523751abcf54d495cc3193fcae994e2887f6c4b57619b48e0f4eb37c"
+        ]
+      },
+      {
+        "test": "LLVMCValues.NativeSHA256KeepsVectorInputsAndInstructionFeatures",
+        "reasons": [
+          "SHA-256 native oracle requires the host SHA feature"
+        ],
+        "full_diagnostic_sha256": [
+          "c481a24ec7f20414ebdd0640419d1e1ba16d24ecab7fcf94a2f5f93937d3254b"
+        ]
+      },
+      {
+        "test": "LLVMCValues.SHAFeaturesComposeWithNativeInstructionFallbacks",
+        "reasons": [
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host"
+        ],
+        "full_diagnostic_sha256": [
+          "4e85b9d7bd64ce67de8f838aa3a88229d09a2fde0c6ff3a3c59597d31da895ce",
+          "4e85b9d7bd64ce67de8f838aa3a88229d09a2fde0c6ff3a3c59597d31da895ce",
+          "5cc14fee25f6fb7b60ac518d7db1778ea22885d9ef688b196005799d7d9bd359",
+          "5cc14fee25f6fb7b60ac518d7db1778ea22885d9ef688b196005799d7d9bd359",
+          "78a1ee4fde43ad446f926839c39a01ce7f886c9aadc2b830d667926fba3f5c4e",
+          "78a1ee4fde43ad446f926839c39a01ce7f886c9aadc2b830d667926fba3f5c4e",
+          "75a17ccf8d150bb483e62202e29df17f8cd39b92aae8f0ccb1f9231cbc0b0cc9",
+          "75a17ccf8d150bb483e62202e29df17f8cd39b92aae8f0ccb1f9231cbc0b0cc9",
+          "7120da6c61060439624af87e507363b706c0b702809ca595833e11016a8054ef",
+          "7120da6c61060439624af87e507363b706c0b702809ca595833e11016a8054ef",
+          "413e0d49dcffc1198ab8bd8eeb8ed32e2434132ff2ef18127b83d1a548039b1d",
+          "413e0d49dcffc1198ab8bd8eeb8ed32e2434132ff2ef18127b83d1a548039b1d",
+          "3e713b1f8e648301a2f74ae78ba7a29c8428027058aef154013c7a5c733acaf4",
+          "3e713b1f8e648301a2f74ae78ba7a29c8428027058aef154013c7a5c733acaf4",
+          "c5ace47a639f11301dc81a54d57141f162bf729d48093d08a30845841acd7a23",
+          "c5ace47a639f11301dc81a54d57141f162bf729d48093d08a30845841acd7a23",
+          "c45d7366aaeebf1918664c96da47d24f3c9ffee0abcc2841cc507d6f0325654d",
+          "c45d7366aaeebf1918664c96da47d24f3c9ffee0abcc2841cc507d6f0325654d",
+          "942118060107e02121cffdc82a181f09a8887c6935803e5e4491dff6da95cbd1",
+          "942118060107e02121cffdc82a181f09a8887c6935803e5e4491dff6da95cbd1",
+          "e78b977e497f261faf3d2873024231e0e2f378239c19a2facbce92e465a41731",
+          "e78b977e497f261faf3d2873024231e0e2f378239c19a2facbce92e465a41731",
+          "7283ad649c82dc495458f0b326a365a5fc4680d07610b301339655d26d9a2eed",
+          "7283ad649c82dc495458f0b326a365a5fc4680d07610b301339655d26d9a2eed",
+          "12950475991b4ee937e1c661c6128072b652ba2938876207ece88ecc5a74858b",
+          "12950475991b4ee937e1c661c6128072b652ba2938876207ece88ecc5a74858b",
+          "26387cff410239ce331c1ed42646547e7cd3c5120257569ba4d69fd0cacb903e",
+          "26387cff410239ce331c1ed42646547e7cd3c5120257569ba4d69fd0cacb903e",
+          "b2c606ce97122b7f5b14b61851ce76f8e5d26884b9a008f6ba5b7ab215f049cd",
+          "b2c606ce97122b7f5b14b61851ce76f8e5d26884b9a008f6ba5b7ab215f049cd",
+          "ff61bfe6ded26487a51ee20094451e176cc9c5c9cefde68433b2bbf223e8bc5a",
+          "ff61bfe6ded26487a51ee20094451e176cc9c5c9cefde68433b2bbf223e8bc5a"
+        ]
+      },
+      {
+        "test": "LLVMCValues.RtmFeaturesComposeWithShaAcrossNativeAndAssemblyCalls",
+        "reasons": [
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host",
+          "the C retains x86 instructions; running it requires an x86 host"
+        ],
+        "full_diagnostic_sha256": [
+          "1dbb6592baa6ef7fdefa9359bf478c10e5c5d5f7ad3f6aade2e2c25e18041d46",
+          "1dbb6592baa6ef7fdefa9359bf478c10e5c5d5f7ad3f6aade2e2c25e18041d46",
+          "078056e65f1e906b879c48861cc80c699493987b9aca8b2320267f8a9cd541a3",
+          "078056e65f1e906b879c48861cc80c699493987b9aca8b2320267f8a9cd541a3"
+        ]
+      },
+      {
+        "test": "LLVMCValues.NativeVirtualizationKeepsStatusAndFailedReadPrior",
+        "reasons": [
+          "requires the qualified native virtualization SDK"
+        ],
+        "full_diagnostic_sha256": [
+          "01f7e381faff411b786c28c3c52cdd6e1cd1b2cd9fc0ed6141642bdfb904fa08"
+        ]
+      },
+      {
+        "test": "LLVMCValues.NativeDescriptorReadKeepsExplicitPrior",
+        "reasons": [
+          "requires native Linux x86-64 descriptor queries"
+        ],
+        "full_diagnostic_sha256": [
+          "838249a9b739e7f5b998b6b4e17c7615562f15589b24f2bc63b5dbd830da51c7"
+        ]
+      },
+      {
+        "test": "LLVMCValues.NativeDescriptorAddressesKeepSegmentWidthAndPrior",
+        "reasons": [
+          "requires native Linux x86-64 descriptor queries"
+        ],
+        "full_diagnostic_sha256": [
+          "27e81388f73db3b5740d5454e6bbf37e071656f139d681d055272386fe1487b7"
+        ]
+      },
+      {
+        "test": "LLVMCValues.TargetIndexWidthKeepsNegativeFrameOffsets",
+        "reasons": [
+          "requires native Linux i386/x64 execution"
+        ],
+        "full_diagnostic_sha256": [
+          "1829b975fe4d18416b1a8adba014306db6c4e4a6981a5fb927d09b00d81c37a9"
+        ]
+      },
+      {
+        "test": "LLVMCValues.X87MemoryViewsRetainBitsAndTenByteExtents",
+        "reasons": [
+          "requires native Linux i386/x64 binary80 execution"
+        ],
+        "full_diagnostic_sha256": [
+          "18e9ac9f96e09278d8637f0df941eb5e2f21d8c45f98edb054b129f70af35792"
+        ]
+      },
+      {
+        "test": "LLVMCValues.X87FiniteConstantsKeepExtendedPrecisionAndRange",
+        "reasons": [
+          "requires native Linux i386/x64 binary80 execution"
+        ],
+        "full_diagnostic_sha256": [
+          "d8d2337488778f585de0e33d7051c502c9f55da8f9b85c3ee400d3dc8306332a"
+        ]
+      },
+      {
+        "test": "LLVMCValues.X86NativeDivideKeepsBothResultsAndDeadResultFaults",
+        "reasons": [
+          "requires native Linux i386/x64 execution"
+        ],
+        "full_diagnostic_sha256": [
+          "63a31ac1eeb89116d504fd12136d47831e459b4465f99094dd455990c7c72c1a"
+        ]
+      },
+      {
+        "test": "LLVMCValues.X86BitStringIntrinsicsMatchOriginalMemoryAndFaults",
+        "reasons": [
+          "requires original Linux x64 bit-string instructions"
+        ],
+        "full_diagnostic_sha256": [
+          "0bf590ff928466eead027b8bf4c5e73c1bbe738d7e2b4884e1077bdb71120e9e"
+        ]
+      },
+      {
+        "test": "LLVMCValues.X86DivideIntrinsicsMatchOriginalResultsAndFaults",
+        "reasons": [
+          "requires the original Linux x64 DIV/IDIV oracle"
+        ],
+        "full_diagnostic_sha256": [
+          "ce55f167d07605c7e70a20add3ab972eae3ca7007101eeb82272bf7e19d9dae2"
+        ]
+      },
+      {
+        "test": "LLVMCValues.NativeAssemblyKeepsOperandSnapshotsAcrossBranches",
+        "reasons": [
+          "requires native Linux i386/x64 execution"
+        ],
+        "full_diagnostic_sha256": [
+          "f564e3b882ea639a9c63f16815bc8a38c30cfe51f09301dfe0f26181e8205cd0"
+        ]
+      },
+      {
+        "test": "LLVMCValues.I386WideCarriersRetainWrappingShiftsAndSignedComparison",
+        "reasons": [
+          "32-bit scalar C execution requires Linux i386 support"
+        ],
+        "full_diagnostic_sha256": [
+          "9e59578de829189ccef2568a5f77c06f38a0376d0389d5734f066ecf4207bf7a"
+        ]
+      },
+      {
+        "test": "LLVMCValues.WideIntegerConstantsPreserveEveryWordAndStoreExtent",
+        "reasons": [
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells"
+        ],
+        "full_diagnostic_sha256": [
+          "db531c2c8cfefd1ea2db537ae53e4ee30d68865fbb1f840a87aabbc79c22e9ca",
+          "db531c2c8cfefd1ea2db537ae53e4ee30d68865fbb1f840a87aabbc79c22e9ca",
+          "550bc7fa0b46c4adef4ef9b549e5f9f64f0bc754b26672dfc662ffdf4abf9f9d",
+          "550bc7fa0b46c4adef4ef9b549e5f9f64f0bc754b26672dfc662ffdf4abf9f9d",
+          "6b07edc92a9565cdfe34b229fe4aa604d5ed3348f811d70bc03bbe13891f463e",
+          "6b07edc92a9565cdfe34b229fe4aa604d5ed3348f811d70bc03bbe13891f463e",
+          "0587a76dbe4044c7b1ad63cbefa49ea95ac94c56169756f8f62e7dbccf9a7578",
+          "0587a76dbe4044c7b1ad63cbefa49ea95ac94c56169756f8f62e7dbccf9a7578",
+          "c2fe83692a5c2d20de1ebe6699dba2a0de83c44b2e35ecb40f4b880867bfded5",
+          "c2fe83692a5c2d20de1ebe6699dba2a0de83c44b2e35ecb40f4b880867bfded5",
+          "7db2648a1a18b0078f876ff82dc7b83169033697e4fa5298838eb6ec31cfeed4",
+          "7db2648a1a18b0078f876ff82dc7b83169033697e4fa5298838eb6ec31cfeed4"
+        ]
+      },
+      {
+        "test": "LLVMCValues.WideConstantsPreserveEveryStoredByte",
+        "reasons": [
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells",
+          "this Clang lacks the _BitInt width the C spells"
+        ],
+        "full_diagnostic_sha256": [
+          "1bb99f33dd95f16fd00ff984bcb4a704a7b7b51bd77bfb707e5bb0b18f512abf",
+          "1bb99f33dd95f16fd00ff984bcb4a704a7b7b51bd77bfb707e5bb0b18f512abf",
+          "86c0dfd36cea82b73ca518fc489e0d34dc34858db80a3f49f9c1462f67748d60",
+          "86c0dfd36cea82b73ca518fc489e0d34dc34858db80a3f49f9c1462f67748d60",
+          "746818bc272d11bb265b1d455ea8cc5643fa992298e35ead9bcd1125439bf393",
+          "746818bc272d11bb265b1d455ea8cc5643fa992298e35ead9bcd1125439bf393",
+          "d3959e968b9914d38549cfc55bbc5ca983fd357309d1431b28aedb8f6b5cabf9",
+          "d3959e968b9914d38549cfc55bbc5ca983fd357309d1431b28aedb8f6b5cabf9",
+          "75cad0e02f2335a15e3de0ecedc49274a95a3aed263de9c4f23d90c20b56278b",
+          "75cad0e02f2335a15e3de0ecedc49274a95a3aed263de9c4f23d90c20b56278b",
+          "6dfdbf913820ff4feb78e42111b4087e9afdd72bdd6926cf7ab4a43bfc9a9ae4",
+          "6dfdbf913820ff4feb78e42111b4087e9afdd72bdd6926cf7ab4a43bfc9a9ae4",
+          "33d6f9a61a4b12eabb3cb3666df1d674b9d49ff767697b73f922cda441fb19bb",
+          "33d6f9a61a4b12eabb3cb3666df1d674b9d49ff767697b73f922cda441fb19bb",
+          "db7820621b5a51689ae75a734169938299a9caa6204b78b6e1dbfab0fa51ea18",
+          "db7820621b5a51689ae75a734169938299a9caa6204b78b6e1dbfab0fa51ea18",
+          "ffbc726148e45b68d4086ce37238679d542d5bfcd5f0af2c8dec3643b8276dc1",
+          "ffbc726148e45b68d4086ce37238679d542d5bfcd5f0af2c8dec3643b8276dc1",
+          "2ab4db74130cd33e620456e62bebd8826246e06828b1dee2875c5951968b0a78",
+          "2ab4db74130cd33e620456e62bebd8826246e06828b1dee2875c5951968b0a78",
+          "9a2be4d076529445c42caddc9e6f7397ca8c16dca8348b3283be06b790c56d93",
+          "9a2be4d076529445c42caddc9e6f7397ca8c16dca8348b3283be06b790c56d93",
+          "fa7524f5b10f4a6d9308fca66f0ec0401e617c169f6cf6df315744d344425347",
+          "fa7524f5b10f4a6d9308fca66f0ec0401e617c169f6cf6df315744d344425347",
+          "290b1dfe99f8cdf5dcb59292b49c1d333748f8a818ef40bc460781f8988ea811",
+          "290b1dfe99f8cdf5dcb59292b49c1d333748f8a818ef40bc460781f8988ea811",
+          "55b43178a80b1b33dce9cafae3091b852d57ce975eb2dfb0e18bca940bd8138d",
+          "55b43178a80b1b33dce9cafae3091b852d57ce975eb2dfb0e18bca940bd8138d",
+          "d4cda5ee52c3e5cb76a9ba0c973cab0dabebf83ecf0e5e21cafa5f8e13395412",
+          "d4cda5ee52c3e5cb76a9ba0c973cab0dabebf83ecf0e5e21cafa5f8e13395412",
+          "0ecac89d55f9a6bb7bc861164927c6a7abf044435c38bb26e965f51ec31e4070",
+          "0ecac89d55f9a6bb7bc861164927c6a7abf044435c38bb26e965f51ec31e4070",
+          "10bf9720d54d1986315e492b6963d2424ba58d6ac97c6fe2c176907673fd1594",
+          "10bf9720d54d1986315e492b6963d2424ba58d6ac97c6fe2c176907673fd1594",
+          "6b6bb12d4dc726530ac5e7e5bc73f9e038ea2bcd679e7b008d123a9086262098",
+          "6b6bb12d4dc726530ac5e7e5bc73f9e038ea2bcd679e7b008d123a9086262098",
+          "8921b60d717eb9ad36267338513ce38e2a4f6566301e23d3c078518bd0f6bf8f",
+          "8921b60d717eb9ad36267338513ce38e2a4f6566301e23d3c078518bd0f6bf8f",
+          "211ecdcfd9d128787fc8fa99ffb88120cfbd84c3c95f49ac3cf705584b1e9a4b",
+          "211ecdcfd9d128787fc8fa99ffb88120cfbd84c3c95f49ac3cf705584b1e9a4b",
+          "c84472b4b1bbed3e72bb8c45726b35dcc131a11c89f4c71bb7abdad563487007",
+          "c84472b4b1bbed3e72bb8c45726b35dcc131a11c89f4c71bb7abdad563487007",
+          "28e1fdd862618600ad4161ac88eda840346607f972d810df882688712f2b2a89",
+          "28e1fdd862618600ad4161ac88eda840346607f972d810df882688712f2b2a89",
+          "ef907dff8f6ad334f2bd4481e369b156bac584d5af2a45ff41f21bb778958f00",
+          "ef907dff8f6ad334f2bd4481e369b156bac584d5af2a45ff41f21bb778958f00",
+          "6f86c6fbeaf6f464aee6bfedd0ee947c991d5a7d9dff71d26f4df0d11ceff8a6",
+          "6f86c6fbeaf6f464aee6bfedd0ee947c991d5a7d9dff71d26f4df0d11ceff8a6",
+          "86b338c626016daff6e3bd3d880eb233aa440d15fba306511c458aae83a37c3b",
+          "86b338c626016daff6e3bd3d880eb233aa440d15fba306511c458aae83a37c3b",
+          "7f5015bae9089d2ee0e71974b6e39b6df2a8a713aa45a85f766c1d70200c8652",
+          "7f5015bae9089d2ee0e71974b6e39b6df2a8a713aa45a85f766c1d70200c8652",
+          "e9e8e93f1423a5dff483cc50005fa6f97cc47c1a6676d2a0fcbe2e11129bfd71",
+          "e9e8e93f1423a5dff483cc50005fa6f97cc47c1a6676d2a0fcbe2e11129bfd71",
+          "7713d68730058740f499ed4d665a6637c288f62c917289ee4a12d9195de2946e",
+          "7713d68730058740f499ed4d665a6637c288f62c917289ee4a12d9195de2946e"
+        ]
+      },
+      {
+        "test": "LLVMCValues.AWeakImportIsDeclaredWeak",
+        "reasons": [
+          "requires native ELF undefined-weak linkage"
+        ],
+        "full_diagnostic_sha256": [
+          "fbb3d384fb05ddede3588f3e5e70cdaee056d7e8a0089af5c3e973fd134dc0a4"
+        ]
+      },
+      {
+        "test": "LLVMCValues.SelectedFunctionKeeps32BitSynthesizedTableStorage",
+        "reasons": [
+          "32-bit scalar C execution requires Linux i386 support"
+        ],
+        "full_diagnostic_sha256": [
+          "2da40482228965f824ba6aff2a7cc225d9b3898db7f4e4cabe55da71acc6e273"
+        ]
+      },
+      {
+        "test": "LLVMCValues.VariadicCallSiteKeepsWindowsFloatingRegisterDuplicates",
+        "reasons": [
+          "Native Windows x64 ABI execution requires x64"
+        ],
+        "full_diagnostic_sha256": [
+          "944d149502a55c70a228efb8355c6cc9c183e8f0be60f7974850fb1c2eca2d2a"
+        ]
+      },
+      {
+        "test": "LLVMCValues.AFixedCallSiteKeepsItsOwnCallingConvention",
+        "reasons": [
+          "Native Windows x64 ABI execution requires x64"
+        ],
+        "full_diagnostic_sha256": [
+          "09aee03cbf4305841fd55bf2888b1da054e3afdda7178cab35f3a8070ee624b0"
+        ]
+      }
+    ],
+    "additional_source_aggregate_ctest_instances_passed": 69,
+    "environment_unit_tests_passed": 48,
+    "serial_retry": {
+      "initial": {
+        "name": "AArch64AddressMemory.NarrowAliasedIndicesSurviveDecodedSSAAndBothSourceABIs",
+        "owner": "NeverDArm64eAnalysisTests",
+        "status": "timeout",
+        "timeout_seconds": 120.0,
+        "timeout_override": false
+      },
+      "result": {
+        "name": "AArch64AddressMemory.NarrowAliasedIndicesSurviveDecodedSSAAndBothSourceABIs",
+        "status": 0,
+        "timeout_seconds": 120.0,
+        "elapsed_seconds": 40.033665292023215,
+        "timeout_override": false,
+        "command": [
+          "build-arm64e/bin/NeverDArm64eAnalysisTests",
+          "--gtest_filter=AArch64AddressMemory.NarrowAliasedIndicesSurviveDecodedSSAAndBothSourceABIs",
+          "--gtest_also_run_disabled_tests",
+          "--gtest_output=json:build-arm64e/arm64e-native-call-faults-evidence/serial-retry.json"
+        ]
+      },
+      "report_sha256": "784b4f934040160f7696d6541428ac1d6fde89a27b15f9f528df0eb1eb5b15f7"
+    },
+    "timeout_policy": "Original per-case CTest limits, four parallel processes. One parallel timeout passes serially with the unchanged 120-second limit. No selected RUN_SERIAL cases or timeout overrides.",
+    "source_fixture_diagnostic": {
+      "initial_failure": {
+        "name": "SourceAggregate.SwiftMixedCallAndReturnPreserveAllFourTypedFields",
+        "owner": "NeverDObjCSourceCallTests",
+        "status": 1,
+        "timeout_seconds": 120.0,
+        "timeout_override": false,
+        "report": {
+          "tests": 1,
+          "failures": 1,
+          "disabled": 0,
+          "errors": 0,
+          "timestamp": "2026-11-08T16:07:41Z",
+          "time": "0.003s",
+          "name": "AllTests",
+          "testsuites": [
+            {
+              "name": "SourceAggregate",
+              "tests": 1,
+              "failures": 1,
+              "disabled": 0,
+              "errors": 0,
+              "timestamp": "2026-11-08T16:07:41Z",
+              "time": "0.003s",
+              "testsuite": [
+                {
+                  "name": "SwiftMixedCallAndReturnPreserveAllFourTypedFields",
+                  "file": "unittests/lift/core/SourceAggregateTests.cpp",
+                  "line": 1322,
+                  "status": "RUN",
+                  "result": "COMPLETED",
+                  "timestamp": "2026-11-08T16:07:41Z",
+                  "time": "0.003s",
+                  "classname": "SourceAggregate",
+                  "failures": [
+                    {
+                      "failure": "unittests/lift/core/SourceAggregateTests.cpp:1385\nExpected equality of these values:\n  Merges\n    Which is: 0\n  1U\n    Which is: 1\n",
+                      "type": ""
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "report_sha256": "55e17fa70fcf09d5688a583ae6a2d7efb866a3eebf7dc44336adc9d98ffd3b24"
+      },
+      "resolved_by_test_revision": "2e533756afd61175a96365535c0786ce27ef607c",
+      "production_code_changed": false,
+      "fixed_report_sha256": "6cd47a0dfb21e02ae6a895df4f1e71b0a3681fbee12d09c96c25284dadf9881f",
+      "aggregate_ctest_report_sha256": "fbe4857f6be312aa21df6ec5a0960382d659bc5d9d1d53d67f4fe3156122331b"
+    },
+    "final_owner_report_sha256": "986f596fb32cd8e6251e2cd928a93e9dc3bcc3fabf3dea527f69edd928b482f7",
+    "commands": [
+      "python3 scripts/build.py build-arm64e --target NeverDObjCSourceCallTests --parallel 4 (final affected test rebuild)",
+      "ctest --test-dir build-arm64e --build-config Release --show-only=json-v1 (execute selected registered commands with their original CTest TIMEOUT)",
+      "ctest --test-dir build-arm64e --build-config Release -L ^NeverDObjCSourceCallTests$ -R ^SourceAggregate\\. --output-on-failure --parallel 4",
+      "python3 neverd-cpta/recovered_calls.py --artifacts EXPORTED_OBJECTS --test-report RECOVERED_GTEST_JSON --neverd-revision PRODUCER --output OUTPUT (controlled linux/amd64 container)",
+      "python3 scripts/check_clang_format.py --base a72fcd510e017ea95aeedb26f84a86ed3cde894c --clang-format clang-format-22.1.2",
+      "python3 scripts/check_docs_i18n.py",
+      "python3 scripts/check_source_provenance.py --history-commits 16",
+      "git diff --check"
+    ],
+    "rebuilt_targets": [
+      "NeverDAArch64AuthenticatedCallTests",
+      "NeverDArm64eAnalysisTests",
+      "NeverDSourceCallABITests",
+      "NeverDObjCSourceCallTests",
+      "NeverDLLVMCValueTests"
+    ],
+    "executables_sha256": {
+      "NeverDAArch64AuthenticatedCallTests": "28e56e33d5f9cf4440a736ca2ba259a37711cceeed915381294a9e71d7a2246a",
+      "NeverDArm64eAnalysisTests": "cbdfa2d5300bb0192ee4e5dddc35ec4f1ffce3f5a57aac90346ad10986759281",
+      "NeverDSourceCallABITests": "10497287f107a7943aed671c3e73d4d38176161caef183c8f6eef3742706f6aa",
+      "NeverDObjCSourceCallTests": "402e57b2d7da4a57557e4c03b1f5ec2a7c64a82cee8d1bc763d084a3c70a3531",
+      "NeverDLLVMCValueTests": "61b69d07537508c1afdf2aa9d91499e2d37455c98cff476b2cf21f7b04f52626"
+    }
+  },
+  "model": {
+    "passed_guests": 30,
+    "shapes": 36,
+    "key_modifier_and_raw_groups": 180,
+    "unchanged_macho_objects": 900,
+    "routes": [
+      "native",
+      "high-O0",
+      "high-O2",
+      "llvm-O0",
+      "llvm-O2"
+    ],
+    "reported_pauth_levels": [
+      1,
+      4,
+      5
+    ],
+    "exception_levels": [
+      0,
+      1
+    ],
+    "cpta_modes": [
+      "off",
+      "on",
+      "cpta0-only",
+      "both"
+    ],
+    "valid_pairs": 21600,
+    "invalid_signature_pairs": 51840,
+    "exception_class_differences": 0,
+    "alternate_exception_class_allowances": false,
+    "summary_sha256": "ce3e45274f60cb39d5e3416d0e30115637dcf26ca4da1cec41aecdbbf6c7dc6d",
+    "provenance_sha256": "8aaf91ebd5524b988ad8929eb058b3fe32ef1fc1399417cc2177ebcbd87f9dda",
+    "guests": [
+      {
+        "guest": "high-O0-pac0-el0",
+        "guest_sha256": "3004695d220f238af7338ca7689927cea281d411af3e7f5ffb943b32b09ebf6e",
+        "transcript_sha256": "0ed93d9651f7f256b770a4f256dbc3d10fa84b5e781b7652f294f306ce5adc7e",
+        "report_sha256": "8874c21f4958de2becee7e0fdc0c06bcb8e719720ba5a6bb719033365b801806",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "high-O0-pac0-el1",
+        "guest_sha256": "4e03f3b82e076a27f5498f517a8c1cc63c75fc60f8dd8cafb8005bbe413ac80b",
+        "transcript_sha256": "2e2ec054b4aaa236db42052656ef9793337f745bf55012c35bcc986d69ce1d19",
+        "report_sha256": "f0ef387e4d578aa32ed493c3a4eda5fb00a299f9aa25f511b78ae2819dca5de1",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "high-O0-pac2-el0",
+        "guest_sha256": "c9cebcf2c3481904faaf76f1a7459805194ff39172e3420be7e32e93bcfc5f46",
+        "transcript_sha256": "2a5fe9b8ae4d06bd64864b3354271b0b670e2ab3b3a0d9cb1c0d57c8fb470ec4",
+        "report_sha256": "84fa3e43817bac1d7043660f755521f57f860da7edd134356cb0a11509eb2e4d",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "high-O0-pac2-el1",
+        "guest_sha256": "70ee5455f828bcb8cb5c5e4f0538eaa1389509a1475df8938c2a8d38334bf69e",
+        "transcript_sha256": "09cede906f61c9c48ce6233ea9cd1d30dc08b6b66518614a3f64a46cbfba5900",
+        "report_sha256": "91e4b4a115d861c1e19f85687fb7cff6b8b4e7c458b5b552dd37d8ab698bb8bc",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "high-O0-pac3-el0",
+        "guest_sha256": "a805205d7d165a6f51d88b9e521608d01e3fb8f7e5f3235440e323679ca6949d",
+        "transcript_sha256": "39e5a0e67d60bae1f06981115946aeded98f982b03e7d39aee17d49c0ed5e72e",
+        "report_sha256": "764fc919eebb256d8865974dd213bf341f00c78e17ae7c5a813f056cfc8b2173",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "high-O0-pac3-el1",
+        "guest_sha256": "e0af55ff44c62f94089f4f9b316d557fd332fdc54a23e6a7629e81b53593f910",
+        "transcript_sha256": "244ff8a7473500940413385e5dae804c439be9d340530a2bdaefc1746cea5ccf",
+        "report_sha256": "ebc4df565c4330d766661b02dbdfffdec154374fe711a0a55368761041ec1aad",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "high-O2-pac0-el0",
+        "guest_sha256": "a60efb6e7d74dba1472f4a4391280387994ca2fc5b6add1657c9a41b3a4e5301",
+        "transcript_sha256": "8f06e7970e62a83f8004e5834db31b3a4e72825e8bba1985807a61cde6ea7080",
+        "report_sha256": "d7d73c1fd1ef8775bb04e0c31cc7673376f83a3c1f09a618ff9fbdbef7420472",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "high-O2-pac0-el1",
+        "guest_sha256": "db80d638068d4136e925f6a93f5fe260f2932265365ca61d3c056722af7a134d",
+        "transcript_sha256": "9fd3838b892c7ed8b79aa2847a2bff596ee64020e936b4d935fe0462c48c60dc",
+        "report_sha256": "85ff6fa282d81830739f733e9c1cd27a8c64cc2dde4a56989b46828c387982b9",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "high-O2-pac2-el0",
+        "guest_sha256": "1eb4a39cbf4a257577b95820744832fcd56f4a9db0214d0dde047ac34c63a2fe",
+        "transcript_sha256": "230e014f8fa4f43759d5bbb20cacb7531fb1dfe13b3bcb7a58af064075af191f",
+        "report_sha256": "7823bb036ddcf9ec1f9bd0764ed82b1b404bba2ad820f56923b6ec86dc841f89",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "high-O2-pac2-el1",
+        "guest_sha256": "97b0a79c628e9db665158f5cf83f52bd71f1d87045fec4111c73dc070c8865a7",
+        "transcript_sha256": "1c0ad510db3c77310abcd5ea4475ca92ddc8cff066f834d8ec1e866a334b5f8b",
+        "report_sha256": "74bfa5db207d79bdb64674912e5fb109d414c1a9952555cdcd4968689bd9de25",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "high-O2-pac3-el0",
+        "guest_sha256": "f737586ade63b3e66767c9992d616b8440502f44d9294f3cfb9d4cd1be1e163d",
+        "transcript_sha256": "d095072bd027fd7a02988f06cf7ae45cb60dbba24d147719ef0dafc9721646e0",
+        "report_sha256": "ed7a94b452e04da4f9baf5d11d91c51eb3dc573f9078b1fe0777c5cc39407f00",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "high-O2-pac3-el1",
+        "guest_sha256": "328017b07fcbc48870ea8f69cad2db5b9630e3ff74d272e800223d992e2bed1c",
+        "transcript_sha256": "283318240c4ae5d92f58309654ccd1b16b2ae4d793ba5bad48cb181c328eb1f7",
+        "report_sha256": "d345128bc1167fd16aa93035e15626be40f1e3f0ba853424e0001e887db4d5da",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O0-pac0-el0",
+        "guest_sha256": "4ac34ef7aadf865ab3f4758263b44370bf6df01bfcab3467a010e9768964105f",
+        "transcript_sha256": "25c1082156d19c4f4b629822844890702149ddd4621cdecdeb5c7ed124247572",
+        "report_sha256": "b9d8764b0b5b3d982fb5243daefc2d5d3b6631aec93f85121957d89b733335c7",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O0-pac0-el1",
+        "guest_sha256": "21b7658931af040cd9d2b2a29439a5a2bc6a890b44474c75af768223c671fe70",
+        "transcript_sha256": "682ebc51e437f0662982b8754000017542601fb83190e555c34801fb8be06d59",
+        "report_sha256": "83e731edc8f6973b5dd1610b48865f340d78c20e2af6b4c1599c9762b2d82032",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O0-pac2-el0",
+        "guest_sha256": "de043488ee7560bdcae83c88c8d634db58b375323c9e7a7de2a55e8815f1b975",
+        "transcript_sha256": "970725e9b2702d58c67abba0d88bad3e2f91e519e946ea99877aec341fe39baa",
+        "report_sha256": "bc29d197c2f881e97457850fb2d8723df6386fd225f143e34b41ba5a5424bc5d",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O0-pac2-el1",
+        "guest_sha256": "61c3c04cbe83fa52aef84205c54255fb8fd9ffd8d99e1a169f44e5078379dc9b",
+        "transcript_sha256": "1d1c2e84e2fa6ba11d8c624d4dfa0ddbe2e328044e78a9fcc7bb2316539e87cc",
+        "report_sha256": "5ec7f2b8db4bcc5e47d58f35924cf7fe3c1aaa21024afae1c99df6fe2b79db96",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O0-pac3-el0",
+        "guest_sha256": "94202b7b213653fceb16c64d8ad52b078f2913ba67737aabb34904191f7781c6",
+        "transcript_sha256": "8d171617082f6f49ebddf73951087bfdcb72d6ad6c2b9b424c3107d305dbf0e1",
+        "report_sha256": "29dde05aaa7c926915789e563d86bcf8069753d5e832d1e0f3b35d52dfc0aede",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O0-pac3-el1",
+        "guest_sha256": "9908f62f8200d5f684184d259f4743f98255214b2a28fa52d2da75806696c523",
+        "transcript_sha256": "35cd5cebe437cad2437a96468f8370b3844413fb0c6f9d5a14be8f2d5f1f12ba",
+        "report_sha256": "5e13cde3d7d0fdb8dffcecc8612b0f3f7dc8d26f925ccc5aa52f34b82b0209e9",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O2-pac0-el0",
+        "guest_sha256": "bff71dca17542ffdde1bd3c762430645d7ce7adb9ebb38197e58e11346fc7623",
+        "transcript_sha256": "47bb18d8294c0a54d28c1fa0914c4fc9c289265d0490b769445239924c342566",
+        "report_sha256": "69ed7dc2551fdd5844e99076debca648d65dde1f788b82726cff71addb3e317d",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O2-pac0-el1",
+        "guest_sha256": "2995a1c89591310ad4eb99cc8522f91de1c7eea6f2d9d022ac121113e2541b56",
+        "transcript_sha256": "253fb4b19b67a87c8e18f817e79dc76ae8aa4b4541d27e311432f1488d8f2d1c",
+        "report_sha256": "ded61627720bdd9b3dc9ba539f705b43b37ba2427f2f5ab7bddc151375aff75c",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O2-pac2-el0",
+        "guest_sha256": "9c82451e1a8507171f68290b662b5c3cce6159a9120b1d08f5d766635a7027d8",
+        "transcript_sha256": "cfeb3dd03c13d57be6161775c9854d1ba663e5ca9a2972b8aec171f8b58cbbe6",
+        "report_sha256": "da9f8234c56320af78f7fe13023b7942c5ab4021000dd1fc974e44430a566b2a",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O2-pac2-el1",
+        "guest_sha256": "451c294cb3f6230437186036aeb52bf79d315b93652325192299306aada5e8c5",
+        "transcript_sha256": "3434839d6a21a280f2d63efb344284c4d2d469254b648508847d68ffd83eeaa8",
+        "report_sha256": "8dc85efb805c9b62db75d652178f025b322a3a32258e3974ed667cbdb12f3c99",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O2-pac3-el0",
+        "guest_sha256": "f6330886878c199dae14bda0de015137b64230d3fdf8d5ab68becc3e87013970",
+        "transcript_sha256": "408fbacf1e875f8c60c4f27ee43b8058a84762c1a788909e354232103f221d6e",
+        "report_sha256": "262e9403c447bd8e314e1b18b241840911077b265af8aa3af7ea1feb9c6880ed",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O2-pac3-el1",
+        "guest_sha256": "cc2879f5f2e72e0b27b9e490f9b5cd78195d0d6d25c92e1e1ee45563def995af",
+        "transcript_sha256": "ad0b5e49dd8940eb6927115e559d739c45a9c30996225529c00d032b5edebee0",
+        "report_sha256": "de5281fda8b9a199d1ac267e46eeca5b84e5b1c10b43eeeb9da04b7f25b73867",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "native-pac0-el0",
+        "guest_sha256": "85d37accff1725e20eba0ada8f73f8ed63e30793f6e4ca3e73e912f0058b19ad",
+        "transcript_sha256": "e9aa90c20e331a89d6da7b42cd8ac42ed444e6fa012a46af8e2e0eae98fa2921",
+        "report_sha256": "a74f4210d06fc96db4cb2cbe59c06d86541bdf408a6b70c64fa62133e17d4e21",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "native-pac0-el1",
+        "guest_sha256": "8792f84f6f10564156d86974dc40ae31ccb8da13f9bd394d135c44a815537bf2",
+        "transcript_sha256": "cc200eea986924f06fab7db658571161e74fbabc21a51965d6df25c9c18204e4",
+        "report_sha256": "86c7ddfbc1979624288f302de023e977fc1a3c70afd7cd2f2f4594ea37e7318a",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "native-pac2-el0",
+        "guest_sha256": "f3594a3a04e10ced8c56f3bd2206af9f2261932c81528d63cbdbafc2a634fcf1",
+        "transcript_sha256": "5839a4cd2f8b8f73e55747dd4728087aa22a96f693b036c6851501c68abceee4",
+        "report_sha256": "819fbaa2982c5d5819c52d9533a7724c43a1f60f430a746e2e8af2a8740a822a",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "native-pac2-el1",
+        "guest_sha256": "7d31be5d6fc4bf58f3f0298db2292db27d1edab0546cf1eaa19a246113744894",
+        "transcript_sha256": "91354d69319a98a12f8415683bd3605e3e9a17566d0d97925724b5e9f89dcaf6",
+        "report_sha256": "9dfd3c4fa5fc39dfc5e49230bacfc2170dcc2fbc3bd45ab3a58f4b30837972e3",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "native-pac3-el0",
+        "guest_sha256": "278c63681586838349e3fb24ffb42325d4941c511ee9854425d48c72e957d6c2",
+        "transcript_sha256": "07130dda6b2ee399b2e34af4bbfe6fd0e8560fc24f31ea88d3bbbd7dbdfdab80",
+        "report_sha256": "fb9d53ea05e6aa5ee8c77b1be142aa460fb9f61d0132fc795b7ed6ce548ef3b7",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "native-pac3-el1",
+        "guest_sha256": "f4087baf37b8f26e14d29e2c2dec0d8811ff8ef12beb0afe61f6da24a6bcf8f1",
+        "transcript_sha256": "a1859fa37b98b5f8c38e66fcfdb487f24a46a0ad60676e576ab53dd10a0bf5ee",
+        "report_sha256": "e10f02faddb4508f80690890052c48ad026ddff60e872a124bebffd0b486b6eb",
+        "valid_pairs": 720,
+        "invalid_signature_pairs": 1728,
+        "exception_class_differences": 0
+      }
+    ]
+  },
+  "previous_profiles": {
+    "explicit_call_objects": 1625,
+    "explicit_call_objects_changed": 0,
+    "original_x8_objects": 25,
+    "original_x8_objects_changed": 0,
+    "new_model_execution": false,
+    "basis": "Byte-identical regenerated objects retain their earlier qualification; only the recovered profile receives new model execution.",
+    "receipts": [
+      "arm64e-authenticated-faults-2026-11-08.json",
+      "arm64e-copy-result-abi-2026-11-07.json"
+    ]
+  },
+  "object_manifest": {
+    "file": "arm64e-recovered-call-faults-objects-2026-11-08.json",
+    "sha256": "c50dc0d804cb4e5cfd4380e2210ff80aedb2a77563ee63f93a956d07fddfe899",
+    "objects": 900
+  },
+  "whole_image_dependency_checks": {
+    "passed_test_cases": 7,
+    "arm64e_pointer_formats": [
+      1,
+      7,
+      9,
+      10,
+      12,
+      14
+    ],
+    "ordinary_pointer_formats": [
+      2,
+      6
+    ],
+    "new_authentication_or_whole_image_execution": false,
+    "specifications": [
+      "https://github.com/apple-oss-distributions/dyld/blob/main/include/mach-o/fixup-chains.h",
+      "https://github.com/apple-oss-distributions/dyld/blob/main/common/MachOAnalyzer.cpp"
+    ]
+  },
+  "remaining": [
+    "Authenticated native SIMD128 single-Q carriers need a wider physical packet layout.",
+    "Recovered native indirect by-value copies and hidden results require separate original-storage proof; existing explicit original-x8 qualification is narrower.",
+    "Complete prototype recovery accuracy is not established by NativeAnalysis IR fixtures.",
+    "Authenticated whole-image storage synthesis, imports/fixup installation, relocation and signed unwind rebuilding remain unavailable.",
+    "Generic untyped C O0 calls may still differ in invalid-PAC exception class.",
+    "Native Apple PAC/CPA2 execution, signed exception unwinding and exact fault PC/full ESR remain unqualified."
+  ],
+  "remote_ci": {
+    "qualified": false,
+    "reason": "CI diagnostics reported the selected GitHub connection changed or is unavailable. Local owner and controlled-model results are recorded separately."
+  },
+  "cleanup": {
+    "current_products": [
+      {
+        "file": "before-product-cleanup.json",
+        "sha256": "016063402b5e765cff4ddd2e0f4d502fe72ec2b4663f5ee82c583825f6d81f2f",
+        "details": {
+          "reason": "Baseline generated C and test transcript prove the old auth-and-resign path. Objects have no current model reader.",
+          "count": 10,
+          "logical_bytes": 7776
+        }
+      },
+      {
+        "file": "focus-product-cleanup.json",
+        "sha256": "7084cd5eb7d9d059adb566dfc1c06cc11f3d080c81e5e2812060e157b0694651",
+        "details": {
+          "reason": "Focused ABI and rejection checks completed; final model consumes full owner exports instead.",
+          "count": 35,
+          "logical_bytes": 31352
+        }
+      },
+      {
+        "file": "model-products-cleanup.json",
+        "sha256": "a5fed92e4df4787d0b2f8e7b9e3fc912fc001e29335ca0b58ccbd1878b361453",
+        "details": {
+          "phase": "completed",
+          "model_summary_sha256": "ce3e45274f60cb39d5e3416d0e30115637dcf26ca4da1cec41aecdbbf6c7dc6d",
+          "count": 1090,
+          "logical_bytes": 21583856,
+          "allocated_bytes_nonexclusive": 25391104,
+          "exclusive_reclaimed_bytes": null,
+          "kept": "Canonical model/input, source/IR, reports, command logs and active build."
+        }
+      },
+      {
+        "file": "export-products-cleanup.json",
+        "sha256": "e58a354fdc9e5c615187300e9be4cf5e0c3a32b21b25b14b52287ced240e1413",
+        "details": {
+          "phase": "completed",
+          "count": 2617,
+          "logical_bytes": 2616048,
+          "allocated_bytes_nonexclusive": 10719232,
+          "exclusive_reclaimed_bytes": null,
+          "kept": "Current canonical model/input, previous qualified x8/explicit inputs, current source/IR and all required diagnostics."
+        }
+      }
+    ],
+    "retained": "Active Release build, current canonical model/input, earlier qualified x8/explicit baselines, source/IR and necessary diagnostics.",
+    "historical_evidence": "Historical unused installations and binaries were removed; superseded reports were content-addressed, archived and verified by full decompressed hashes before originals were removed.",
+    "historical_archive_sha256": "8df260f4a1ef6e3fadf822846cd68b85ab30f3c227bc5d1f26188f7e69bbafc0",
+    "historical_recovery_index_sha256": "1f24824fd6637670c8b38944b56d0858227c35633f59e3e13b2bcfc7f11c45ab",
+    "exclusive_reclaimed_total_bytes": null
+  }
+}

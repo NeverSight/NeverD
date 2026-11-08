@@ -13,6 +13,7 @@
 
 #include "llvm/Support/Endian.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <initializer_list>
 #include <map>
@@ -217,17 +218,11 @@ TEST(AndroidLocalBinderTest, ConstructorRequiresNativeServiceAndWorkAdmission) {
   }
 }
 
-TEST(AndroidLocalBinderTest, HolderAndObjectOverwriteFailuresKeepParcelBytes) {
+TEST(AndroidLocalBinderTest, ChangedHolderFailsBeforeWritingParcelBytes) {
   LocalState s;
   const auto binder = s.binder(), parcel = s.parcel();
   ASSERT_EQ(s.write(parcel, binder).stop, ExecutionStop::Returned);
   const auto expected = s.heap.get(parcel)->Bytes;
-  s.seek(parcel);
-  EXPECT_EQ(s.call(Parcel, "writeInt", "(I)V", parcel, {42}).stop,
-            ExecutionStop::Unsupported);
-  EXPECT_EQ(s.heap.get(parcel)->Bytes, expected);
-  EXPECT_EQ(s.write(parcel, binder).stop, ExecutionStop::Unsupported);
-  EXPECT_EQ(s.heap.get(parcel)->Bytes, expected);
   const auto *holder = s.program.findField({Binder, "mObject", "J"}, false);
   ASSERT_EQ(s.framework.field(s.heap, *holder, binder, 0, Admit).stop,
             ExecutionStop::Returned);
@@ -235,6 +230,150 @@ TEST(AndroidLocalBinderTest, HolderAndObjectOverwriteFailuresKeepParcelBytes) {
   EXPECT_EQ(s.write(parcel, binder).stop, ExecutionStop::Unsupported);
   EXPECT_EQ(s.heap.get(parcel)->Bytes, expected);
   EXPECT_EQ(s.call(Parcel, "dataPosition", "()I", parcel).value, 24u);
+}
+
+TEST(AndroidLocalBinderTest,
+     ScalarOverwritesKeepMetadataAndOriginalAcquisition) {
+  for (bool null_pointer : {false, true}) {
+    SCOPED_TRACE(null_pointer);
+    LocalState s;
+    const auto binder = s.binder(), parcel = s.parcel();
+    ASSERT_EQ(s.write(parcel, binder).stop, ExecutionStop::Returned);
+    auto expected = s.flat(0x5000, 0x5008);
+    s.seek(parcel, null_pointer ? 8 : 1);
+    ASSERT_EQ(s.call(Parcel, null_pointer ? "writeLong" : "writeInt",
+                     null_pointer ? "(J)V" : "(I)V", parcel, {0})
+                  .stop,
+              ExecutionStop::Returned);
+    std::fill_n(expected.begin() + (null_pointer ? 8 : 1), null_pointer ? 8 : 4,
+                0);
+    EXPECT_EQ(s.heap.get(parcel)->Bytes, expected);
+    s.seek(parcel);
+    EXPECT_EQ(s.call(Parcel, "readInt", "()I", parcel).value, 0u);
+    EXPECT_EQ(s.call(Parcel, "dataPosition", "()I", parcel).value, 4u);
+    EXPECT_EQ(s.call(Parcel, "marshall", "()[B", parcel).exception,
+              "java/lang/RuntimeException");
+    s.recycle(parcel); // Invalid tag/null pointer releases no strong reference.
+    const auto reused = s.parcel();
+    ASSERT_EQ(s.write(reused, binder).stop, ExecutionStop::Returned);
+    EXPECT_EQ(s.heap.get(reused)->Bytes, s.flat(0x5000, 0x5008));
+  }
+}
+
+TEST(AndroidLocalBinderTest, RepeatedOffsetAcquiresAndReleasesEachOccurrence) {
+  LocalState s;
+  const auto binder = s.binder(), parcel = s.parcel();
+  ASSERT_EQ(s.write(parcel, binder).stop, ExecutionStop::Returned);
+  s.seek(parcel);
+  ASSERT_EQ(s.write(parcel, binder).stop, ExecutionStop::Returned);
+  EXPECT_EQ(s.heap.get(parcel)->Bytes, s.flat(0x5000, 0x5008));
+  s.recycle(parcel);
+  const auto reused = s.parcel();
+  ASSERT_EQ(s.write(reused, binder).stop, ExecutionStop::Returned);
+  EXPECT_EQ(s.heap.get(reused)->Bytes, s.flat(0x6000, 0x6008));
+  EXPECT_FALSE(s.native.contains(0x5000));
+}
+
+TEST(AndroidLocalBinderTest,
+     ReleaseReadsTheCurrentCookieInsteadOfTheWrittenOne) {
+  LocalState s;
+  const auto a = s.binder(), b = s.binder();
+  const auto first = s.parcel(), second = s.parcel();
+  ASSERT_EQ(s.write(first, a).stop, ExecutionStop::Returned);
+  ASSERT_EQ(s.write(first, a).stop, ExecutionStop::Returned);
+  ASSERT_EQ(s.write(second, b).stop, ExecutionStop::Returned);
+  EXPECT_EQ(s.heap.get(second)->Bytes, s.flat(0x7000, 0x7008));
+  s.seek(second, 16);
+  ASSERT_EQ(s.call(Parcel, "writeLong", "(J)V", second, {0x6008}).stop,
+            ExecutionStop::Returned);
+  // Keep the pointer nonzero, but redirect decStrong to A's current cookie.
+  s.seek(first, 8);
+  ASSERT_EQ(s.call(Parcel, "writeLong", "(J)V", first, {0}).stop,
+            ExecutionStop::Returned);
+  s.recycle(second);
+  s.recycle(first);
+  const auto fresh_a = s.parcel(), fresh_b = s.parcel();
+  ASSERT_EQ(s.write(fresh_a, a).stop, ExecutionStop::Returned);
+  ASSERT_EQ(s.write(fresh_b, b).stop, ExecutionStop::Returned);
+  EXPECT_EQ(s.heap.get(fresh_a)->Bytes, s.flat(0x8000, 0x8008));
+  EXPECT_EQ(s.heap.get(fresh_b)->Bytes, s.flat(0x7000, 0x7008));
+}
+
+TEST(AndroidLocalBinderTest, ScalarReadSortsTheActualNonAppendObjectTable) {
+  LocalState s;
+  const auto binder = s.binder(), parcel = s.parcel();
+  for (unsigned i = 0; i != 6; ++i)
+    ASSERT_EQ(s.call(Parcel, "writeLong", "(J)V", parcel, {0}).stop,
+              ExecutionStop::Returned);
+  s.seek(parcel, 24);
+  ASSERT_EQ(s.write(parcel, binder).stop, ExecutionStop::Returned);
+  s.seek(parcel);
+  ASSERT_EQ(s.write(parcel, binder).stop, ExecutionStop::Returned);
+  s.seek(parcel);
+  EXPECT_EQ(s.read(parcel), 0u); // readObject does not sort [24, 0].
+  s.seek(parcel);
+  EXPECT_EQ(s.call(Parcel, "readInt", "()I", parcel).value, 0u);
+  s.seek(parcel);
+  EXPECT_EQ(s.read(parcel), binder); // validateReadData sorted to [0, 24].
+  EXPECT_EQ(s.read(parcel), binder);
+  s.recycle(parcel);
+  const auto reused = s.parcel();
+  ASSERT_EQ(s.write(reused, binder).stop, ExecutionStop::Returned);
+  EXPECT_EQ(s.heap.get(reused)->Bytes, s.flat(0x6000, 0x6008));
+}
+
+TEST(AndroidLocalBinderTest, OverwrittenUnsupportedRecordsFailAtRelease) {
+  for (uint32_t tag : {0x77622a85u, 0x77682a85u, 0x66642a85u}) {
+    SCOPED_TRACE(tag);
+    LocalState s;
+    const auto binder = s.binder(), parcel = s.parcel();
+    ASSERT_EQ(s.write(parcel, binder).stop, ExecutionStop::Returned);
+    s.seek(parcel);
+    ASSERT_EQ(s.call(Parcel, "writeInt", "(I)V", parcel, {tag}).stop,
+              ExecutionStop::Returned);
+    auto result = s.call(Parcel, "recycle", "()V", parcel);
+    EXPECT_EQ(result.stop, ExecutionStop::Unsupported);
+    EXPECT_NE(result.diagnostic.find("weak or FD"), std::string::npos);
+    EXPECT_EQ(s.heap.get(parcel)->Bytes.size(), 24u);
+    EXPECT_TRUE(s.native.contains(0x5000));
+  }
+}
+
+TEST(AndroidLocalBinderTest, UnmarshallingRejectsRetainedUnsortedOffsets) {
+  LocalState s;
+  const auto binder = s.binder(), parcel = s.parcel();
+  for (unsigned i = 0; i != 6; ++i)
+    ASSERT_EQ(s.call(Parcel, "writeLong", "(J)V", parcel, {0}).stop,
+              ExecutionStop::Returned);
+  s.seek(parcel, 24);
+  ASSERT_EQ(s.write(parcel, binder).stop, ExecutionStop::Returned);
+  s.seek(parcel);
+  ASSERT_EQ(s.write(parcel, binder).stop, ExecutionStop::Returned);
+  const auto original = s.heap.get(parcel)->Bytes;
+  const auto array = s.heap.allocateArray("[B", 4);
+  auto result =
+      s.call(Parcel, "unmarshall", "([BII)V", parcel, {array->Identity, 0, 4});
+  EXPECT_EQ(result.stop, ExecutionStop::Unsupported);
+  EXPECT_NE(result.diagnostic.find("retained Binder object metadata"),
+            std::string::npos);
+  EXPECT_EQ(s.heap.get(parcel)->Bytes, original);
+  EXPECT_EQ(s.call(Parcel, "dataPosition", "()I", parcel).value, 24u);
+}
+
+TEST(AndroidLocalBinderTest,
+     OverwrittenForeignCookieStopsBeforeRetiringIdentity) {
+  LocalState s;
+  const auto binder = s.binder(), parcel = s.parcel();
+  ASSERT_EQ(s.write(parcel, binder).stop, ExecutionStop::Returned);
+  s.seek(parcel, 16);
+  ASSERT_EQ(s.call(Parcel, "writeLong", "(J)V", parcel, {0x9008}).stop,
+            ExecutionStop::Returned);
+  auto result = s.call(Parcel, "recycle", "()V", parcel);
+  EXPECT_EQ(result.stop, ExecutionStop::Unsupported);
+  EXPECT_NE(result.diagnostic.find("live owned native Binder reference"),
+            std::string::npos);
+  EXPECT_TRUE(s.native.contains(0x5000));
+  EXPECT_EQ(s.heap.get(parcel)->Bytes, s.flat(0x5000, 0x9008));
 }
 
 TEST(AndroidLocalBinderTest, DexSubclassConstructorUsesTheSharedAssociation) {

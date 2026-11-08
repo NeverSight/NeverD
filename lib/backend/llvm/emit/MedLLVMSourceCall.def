@@ -19,5 +19,9 @@ LLVM_SOURCE_CALL_VALUE(unsigned, kSourceCallByteBits, 8)
 LLVM_SOURCE_CALL_TEXT(kSourceCallCarrierMissing,
                       "a complete argument carrier is unavailable")
 
+LLVM_SOURCE_CALL_TEXT(
+    kSourceCallInvalidBinding,
+    "invalid source occurrence or incomplete native value ABI")
+
 #undef LLVM_SOURCE_CALL_VALUE
 #undef LLVM_SOURCE_CALL_TEXT

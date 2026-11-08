@@ -28,6 +28,7 @@
 #include "neverd/symbolic/SymExplore.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 
 #include <array>
 #include <cstdint>
@@ -86,10 +87,13 @@ public:
   void reset();
 
   void setRegister(uint64_t RegOff, uint64_t Value);
+  /// Return the low 64 bits only when every bit in that view is known.
+  /// Slice a smaller defined view through SUBBYTES before observing it.
   std::optional<uint64_t> getRegister(uint64_t RegOff) const;
   /// Seed/read an exact vector register value for lifted SIMD semantics.  The
   /// scalar API remains the low-64-bit view used by jump-table emulation.
   void setRegisterBytes(uint64_t RegOff, llvm::ArrayRef<uint8_t> Value);
+  /// Refuse a byte view containing implementation-dependent scalar bits.
   std::optional<std::vector<uint8_t>> getRegisterBytes(uint64_t RegOff) const;
   /// Authenticate the complete x87 portion of a 64-bit FXSAVE image. SIMD and
   /// MXCSR are separate state owners; this snapshot never imports those fields.
@@ -245,6 +249,9 @@ private:
   const BinaryImage &Img;
   std::map<uint64_t, uint64_t> Registers;
   std::map<uint64_t, std::vector<uint8_t>> WideRegisters;
+  /// Sparse low-64-bit uncertainty. Registers holds private representatives;
+  /// public reads must never expose bits named by this mask.
+  llvm::DenseMap<uint64_t, uint64_t> UnknownBits;
   /// Distinct store starting addresses retain the bounded write-entry
   /// accounting contract.  Bytes are kept separately so differently sized
   /// and overlapping stores compose exactly when a later load spans them.
@@ -278,6 +285,12 @@ private:
   std::vector<uint64_t> CallPreservedRegs;
 
   uint64_t readOperand(const NdVar &Operand) const;
+  bool executeMIPSScalar(const LowOp &Op);
+  bool executeUncertainScalarCopy(const LowOp &Op);
+  uint64_t unknownOperandBits(const NdVar &Operand) const;
+  void setOutputUnknownBits(const NdVar &Output, uint64_t Bits);
+  bool availableOperandBytes(const NdVar &Operand, uint64_t Offset,
+                             uint64_t Bytes) const;
   std::vector<uint8_t> readOperandBytes(const NdVar &Operand) const;
   bool knownOperandBytes(const NdVar &Operand, uint64_t Offset,
                          uint64_t Bytes) const;
@@ -293,7 +306,7 @@ private:
                                                 unsigned Alignment, bool Write);
   std::optional<std::vector<uint8_t>>
   loadX86FPStateMemory(const LowOp &Op, uint16_t Bytes, unsigned Alignment);
-  void writeOutput(const NdVar &Output, uint64_t Value);
+  void writeOutput(const NdVar &Output, uint64_t Value, uint64_t Unknown = 0);
   void writeOutputBytes(const NdVar &Output, llvm::ArrayRef<uint8_t> Value);
   std::optional<std::vector<uint8_t>>
   loadMemoryBytes(uint64_t Addr, uint16_t Size, bool Wrap32 = false) const;

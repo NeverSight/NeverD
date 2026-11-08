@@ -567,6 +567,29 @@ void parseX86RegistrationExceptions(BinaryImage &Img) {
   for (Symbol &Sym : Img.Symbols)
     if (Sym.IsFunc && Thunks.count(Sym.Addr))
       Sym.IsFunc = false;
+  // A padding guess a frame's flow runs through is its code: `int3` is also
+  // `__debugbreak`, and what follows can read as a prologue.
+  std::vector<va_t> Guesses;
+  for (const Symbol &Sym : Img.Symbols)
+    if (Sym.IsFunc && Sym.IsBoundaryGuess)
+      Guesses.push_back(Sym.Addr);
+  llvm::sort(Guesses);
+  std::set<va_t> Interior;
+  for (const ExceptionFunction &F : Img.ExceptionMetadata.Functions) {
+    if (!F.Registration)
+      continue;
+    const auto First = llvm::upper_bound(Guesses, F.CodeRange.Begin);
+    if (First == Guesses.end() || *First >= F.CodeRange.End)
+      continue;
+    const std::set<va_t> Body = getX86RegistrationBodyInstructions(Img, F);
+    for (auto It = First; It != Guesses.end() && *It < F.CodeRange.End; ++It)
+      if (Body.count(*It))
+        Interior.insert(*It);
+  }
+  if (!Interior.empty())
+    llvm::erase_if(Img.Symbols, [&](const Symbol &Sym) {
+      return Sym.IsFunc && Sym.IsBoundaryGuess && Interior.count(Sym.Addr);
+    });
 }
 
 } // namespace neverd::coff_loader

@@ -29,8 +29,11 @@
 #include "neverd/ir/low/LowArchitecturalValue.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/ir/low/LowRawEnvironment.h"
+#include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/support/BinaryEncoding.h"
+
+#include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
 #include <array>
@@ -116,6 +119,7 @@ predicatedInstructionEnd(llvm::ArrayRef<LowOp> Ops,
 } // namespace
 
 void NdOpEmulator::reset() {
+  UnknownBits.clear();
   Registers.clear();
   WideRegisters.clear();
   MemStore.clear();
@@ -130,6 +134,7 @@ void NdOpEmulator::reset() {
 }
 
 void NdOpEmulator::setRegister(uint64_t RegOff, uint64_t Value) {
+  UnknownBits.erase(RegOff);
   if (RegOff == x86reg::FPU_CW || RegOff == x86reg::FPU_SW ||
       (RegOff >= x86reg::ST0 && RegOff <= x86reg::ST7)) {
     X87ContextKnown = false;
@@ -140,6 +145,8 @@ void NdOpEmulator::setRegister(uint64_t RegOff, uint64_t Value) {
 }
 
 std::optional<uint64_t> NdOpEmulator::getRegister(uint64_t RegOff) const {
+  if (!UnknownBits.empty() && UnknownBits.contains(RegOff))
+    return std::nullopt;
   auto It = Registers.find(RegOff);
   if (It != Registers.end())
     return It->second;
@@ -148,6 +155,7 @@ std::optional<uint64_t> NdOpEmulator::getRegister(uint64_t RegOff) const {
 
 void NdOpEmulator::setRegisterBytes(uint64_t RegOff,
                                     llvm::ArrayRef<uint8_t> Value) {
+  UnknownBits.erase(RegOff);
   if (RegOff == x86reg::FPU_CW || RegOff == x86reg::FPU_SW ||
       (RegOff >= x86reg::ST0 && RegOff <= x86reg::ST7)) {
     X87ContextKnown = false;
@@ -163,6 +171,8 @@ void NdOpEmulator::setRegisterBytes(uint64_t RegOff,
 
 std::optional<std::vector<uint8_t>>
 NdOpEmulator::getRegisterBytes(uint64_t RegOff) const {
+  if (!UnknownBits.empty() && UnknownBits.contains(RegOff))
+    return std::nullopt;
   if (auto It = WideRegisters.find(RegOff); It != WideRegisters.end())
     return It->second;
   auto Scalar = Registers.find(RegOff);
@@ -256,8 +266,8 @@ uint64_t NdOpEmulator::readOperand(const NdVar &Op) const {
   return 0;
 }
 
-bool NdOpEmulator::knownOperandBytes(const NdVar &Operand, uint64_t Offset,
-                                     uint64_t Bytes) const {
+bool NdOpEmulator::availableOperandBytes(const NdVar &Operand, uint64_t Offset,
+                                         uint64_t Bytes) const {
   if (Offset > Operand.Size || Bytes > Operand.Size - Offset)
     return false;
   if (Operand.isConst())
@@ -269,6 +279,17 @@ bool NdOpEmulator::knownOperandBytes(const NdVar &Operand, uint64_t Offset,
   const uint64_t Available =
       Wide == WideRegisters.end() ? sizeof(uint64_t) : Wide->second.size();
   return Offset <= Available && Bytes <= Available - Offset;
+}
+
+bool NdOpEmulator::knownOperandBytes(const NdVar &Operand, uint64_t Offset,
+                                     uint64_t Bytes) const {
+  if (!availableOperandBytes(Operand, Offset, Bytes))
+    return false;
+  if (UnknownBits.empty() || Offset >= sizeof(uint64_t) || !Bytes)
+    return true;
+  const auto Mask = llvm::maskTrailingOnes<uint64_t>(
+      unsigned(std::min<uint64_t>(Bytes, sizeof(uint64_t) - Offset) * 8));
+  return !(unknownOperandBits(Operand) & (Mask << (Offset * 8)));
 }
 
 std::vector<uint8_t> NdOpEmulator::readOperandBytes(const NdVar &Op) const {
@@ -312,9 +333,12 @@ NdOpEmulator::resolveMemoryAddress(const LowOp &Op, uint64_t Offset) const {
   return It->second + Offset;
 }
 
-void NdOpEmulator::writeOutput(const NdVar &Output, uint64_t Value) {
+void NdOpEmulator::writeOutput(const NdVar &Output, uint64_t Value,
+                               uint64_t Unknown) {
   if (!Output.isReg() && !Output.isTemp())
     return;
+  if (!UnknownBits.empty() || Unknown)
+    setOutputUnknownBits(Output, Unknown);
   uint64_t Mask = Output.Size < 8 ? (1ULL << (Output.Size * 8)) - 1 : ~0ULL;
   uint64_t Result = Value & Mask;
   if (Output.isReg() && Output.Size < 8) {
@@ -348,6 +372,8 @@ void NdOpEmulator::writeOutputBytes(const NdVar &Output,
                                     llvm::ArrayRef<uint8_t> Value) {
   if (!Output.isReg() && !Output.isTemp())
     return;
+  if (!UnknownBits.empty())
+    setOutputUnknownBits(Output, 0);
   if (Output.isReg()) {
     auto Existing = WideRegisters.find(Output.Offset);
     if (Existing != WideRegisters.end() &&
@@ -497,8 +523,11 @@ void NdOpEmulator::clobberVolatileRegisters() {
                                         CallPreservedRegs.end(), It->first);
     if (Preserved)
       ++It;
-    else
+    else {
+      if (!UnknownBits.empty())
+        UnknownBits.erase(It->first);
       It = Registers.erase(It);
+    }
   }
   for (auto It = WideRegisters.begin(); It != WideRegisters.end();) {
     if (!Registers.count(It->first))
@@ -524,9 +553,36 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following) {
   // Never approximate an invalid address-space tag as ordinary memory.
   if (!isKnownMemoryAddressSpace(Op.MemoryAddressSpace))
     return false;
+  if (!UnknownBits.empty()) {
+    if (Op.NumInputs > std::size(Op.Inputs))
+      return false;
+    bool ObservesUnknown = false;
+    for (unsigned I = 0; I < Op.NumInputs; ++I)
+      ObservesUnknown |= unknownOperandBits(Op.Inputs[I]) != 0;
+    if (ObservesUnknown) {
+      // MIPS merge loads and pure scalar transports can overwrite or discard
+      // unknown bits. Their owners validate the shape and exact observed view.
+      if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+          Op.Inputs[0].isConst() &&
+          mips::isScalarIntrinsic(static_cast<Intrinsic>(Op.Inputs[0].Offset)))
+        return executeMIPSScalar(Op);
+      switch (Op.Opcode) {
+      case NdOp::COPY:
+      case NdOp::INT_ZEXT:
+      case NdOp::INT_SEXT:
+      case NdOp::SUBBYTES:
+      case NdOp::CONCAT:
+        return executeUncertainScalarCopy(Op);
+      default:
+        return false;
+      }
+    }
+  }
   if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs > 0 &&
       Op.Inputs[0].isConst()) {
     const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+    if (mips::isScalarIntrinsic(Id))
+      return executeMIPSScalar(Op);
     if (isAArch64WritebackMemoryIntrinsic(Id)) {
       if (Img.Arch != Arch::AArch64 ||
           !lowAArch64WritebackMemoryShapeIsValid(Op))
@@ -974,6 +1030,7 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following) {
     if (Op.Output.isReg() || Op.Output.isTemp()) {
       Registers.erase(Op.Output.Offset);
       WideRegisters.erase(Op.Output.Offset);
+      UnknownBits.erase(Op.Output.Offset);
     }
     // A skipped full-state import or export leaves no x87 context to trust.
     if (Op.NumInputs >= 1 && Op.Inputs[0].isConst() &&
@@ -1064,6 +1121,7 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following) {
       if (Op.Output.isReg() || Op.Output.isTemp()) {
         Registers.erase(Op.Output.Offset);
         WideRegisters.erase(Op.Output.Offset);
+        UnknownBits.erase(Op.Output.Offset);
       }
       return false;
     }

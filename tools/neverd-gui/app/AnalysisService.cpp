@@ -257,9 +257,12 @@ void AnalysisService::startReplica() {
     return;
   startingReplica_ = true;
   const auto serial = serial_;
+  // A replica that takes the change in place needs no write to have reached the
+  // disk: the owner's state comes with the snapshot (in_memory).
   snapshotRequest_ = owner_.subscribe(
-      {QStringLiteral("analysis_snapshot"), {}}, this,
-      [this, serial](const QJsonObject &response) {
+      {QStringLiteral("analysis_snapshot"),
+       refreshingNames_ ? QJsonObject{{"in_memory", true}} : QJsonObject{}},
+      this, [this, serial](const QJsonObject &response) {
         if (serial != serial_)
           return;
         snapshotRequest_ = 0;

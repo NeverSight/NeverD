@@ -83,6 +83,8 @@ public:
   /// Waits for the writes persistLater queued.  Throws what fails them, and the
   /// next call tries them again.
   void finishWrites();
+  /// Whether writes persistLater queued are still on their way to the files.
+  bool writesPending();
   /// As finishWrites, for a caller about to read what the files hold whatever
   /// that is: a write that fails is given up.
   void settleWrites() noexcept;

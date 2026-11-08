@@ -157,6 +157,18 @@ def run(executable):
         for _ in range(2):
             ok(owner, "undo")
         assert same_as_fresh("those undone") == noted
+        # A function's declaration reaches the documents that read it and no
+        # other: nothing calls the third function, and the others answer as they
+        # were.  Its own reads as a new reader's does.
+        reads = store_reads(owner)
+        ok(owner, "function_edit", {"address": hex(functions[2]),
+                                    "attributes": {"type": "long long declared_here(long long value)"}})
+        for address in (functions[0], functions[1], functions[3]):
+            assert view(owner, address) == noted[address], hex(address)
+        assert store_reads(owner) == reads, (store_reads(owner), reads)
+        compare(executable, owner, path, functions, "a declaration one view reads")
+        ok(owner, "undo")
+        assert same_as_fresh("declaration undone") == noted
         # Back, as it was.
         for _ in range(3):
             ok(owner, "undo")
@@ -204,6 +216,23 @@ def run(executable):
         assert ok(replica, "metadata")["listing_name_builds"] == builds
         names = [row["name"] for row in ok(replica, "functions", {"offset": 0, "limit": 10})["items"]]
         assert "replica_name" in names, names
+        with Client(executable) as restored:
+            ok(restored, "analysis_restore", ok(owner, "analysis_snapshot"))
+            for address, row in taken.items():
+                assert replica_view(restored, address) == row, hex(address)
+        # A snapshot given before the owner's write reached the disk: the
+        # replica takes a declaration and a name as the owner took them, reads
+        # a new type from the file once it is there, and reads as a replica
+        # restored once the files hold them.
+        ok(owner, "function_edit", {"address": hex(functions[2]),
+                                    "attributes": {"type": "long long replica_name(long long value)"}})
+        ok(owner, "rename", {"address": hex(functions[1]), "name": "in_memory_name"})
+        ok(owner, "local_types_declare", {"language": "c", "source": "struct IN_MEMORY { unsigned value; };"})
+        snapshot = ok(owner, "analysis_snapshot", {"in_memory": True})
+        snapshot["written"] = False
+        assert ok(replica, "analysis_update_names", snapshot)["updated"]
+        taken = {address: replica_view(replica, address) for address in functions}
+        assert "in_memory_name" in taken[functions[1]]["text"], taken[functions[1]]
         with Client(executable) as restored:
             ok(restored, "analysis_restore", ok(owner, "analysis_snapshot"))
             for address, row in taken.items():

@@ -899,6 +899,98 @@ bool clauseIsOnlyAComment(StringRef Source, size_t Open) {
 // Every termination handler of xcpt4, x64 and ARM, optimized or not, prints as
 // real statements in its `__finally`, and the unwinds that leave those clauses
 // are the jumps they make: its 90 tests hold every shape the corpus has.
+// clang-cl's x86 SEH: an outlined filter and `__finally`, a record in frame
+// slots and, at -O0, nothing between functions that says where they start.
+TEST(WindowsEHModesCorpus, ClangClX86SehProbePrintsItsTries) {
+  auto ExpectationsOrErr = loadExpectations();
+  ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
+      << toString(ExpectationsOrErr.takeError());
+  for (const StringRef Optimization : {StringRef("o0"), StringRef("o2")}) {
+    SCOPED_TRACE(Optimization.str());
+    const ArtifactSelector Selector{"seh_probe", "clang-cl", "x86",
+                                    "native",    true,       Optimization};
+    auto ExpectationOrErr = selectUnique(*ExpectationsOrErr, Selector);
+    ASSERT_TRUE(static_cast<bool>(ExpectationOrErr))
+        << toString(ExpectationOrErr.takeError());
+    auto OutputOrErr =
+        decompileToSource(std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
+                              (*ExpectationOrErr)->Path,
+                          /*TimeoutSeconds=*/600);
+    ASSERT_TRUE(static_cast<bool>(OutputOrErr))
+        << toString(OutputOrErr.takeError());
+    const StringRef Source(*OutputOrErr);
+    // Both functions of the probe, and the two of the startup code.
+    size_t Arms = 0;
+    for (size_t At = Source.find("} __except ("); At != StringRef::npos;
+         At = Source.find("} __except (", At + 1))
+      ++Arms;
+    EXPECT_EQ(Arms, 4u);
+    EXPECT_TRUE(Source.contains("} __finally {"));
+    EXPECT_TRUE(Source.contains("AbnormalTermination()"));
+    EXPECT_TRUE(Source.contains("RaiseException"));
+    EXPECT_FALSE(Source.contains("unstructured SEH"));
+    EXPECT_FALSE(Source.contains("* finally: action @"));
+    EXPECT_FALSE(Source.contains("* except: filter @"));
+  }
+}
+
+// The startup code's own frames, which /O2 builds with `__SEH_prolog4`: the
+// image entry beside them is no part of them.
+TEST(WindowsEHModesCorpus, X86StartupFramesPrintTheirTries) {
+  auto ExpectationsOrErr = loadExpectations();
+  ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
+      << toString(ExpectationsOrErr.takeError());
+  for (const bool Cookie : {true, false}) {
+    SCOPED_TRACE(Cookie);
+    const ArtifactSelector Selector{"seh_probe", "msvc", "x86",
+                                    "native",    Cookie, "o2"};
+    auto ExpectationOrErr = selectUnique(*ExpectationsOrErr, Selector);
+    ASSERT_TRUE(static_cast<bool>(ExpectationOrErr))
+        << toString(ExpectationOrErr.takeError());
+    auto OutputOrErr =
+        decompileToSource(std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
+                              (*ExpectationOrErr)->Path,
+                          /*TimeoutSeconds=*/600);
+    ASSERT_TRUE(static_cast<bool>(OutputOrErr))
+        << toString(OutputOrErr.takeError());
+    const StringRef Source(*OutputOrErr);
+    const StringRef Startup = "__except (_seh_filter_exe(GetExceptionCode(), "
+                              "GetExceptionInformation())) {";
+    const size_t Arm = Source.find(Startup);
+    ASSERT_NE(Arm, StringRef::npos);
+    // The arm runs from its handler: whether the app is managed, then
+    // `_c_exit()` or `_exit()`.
+    size_t End = Arm + Startup.size();
+    for (int Depth = 1; End < Source.size() && Depth; ++End)
+      Depth += Source[End] == '{' ? 1 : Source[End] == '}' ? -1 : 0;
+    const StringRef Body = Source.slice(Arm, End);
+    EXPECT_TRUE(Body.contains("_c_exit();")) << Body.str();
+    EXPECT_TRUE(Body.contains("_exit(")) << Body.str();
+    // `__scrt_is_nonwritable_in_current_image`'s filter.
+    EXPECT_TRUE(Source.contains("__except (GetExceptionCode() == 0xC0000005)"));
+    EXPECT_FALSE(Source.contains("unstructured SEH"));
+  }
+}
+
+// A Windows API routine pops its arguments, and a function without a frame
+// pointer reads its own through the stack pointer it leaves.
+TEST(WindowsEHModesCorpus, X86WinapiCallsPopWhatTheyTake) {
+  auto ExpectationsOrErr = loadExpectations();
+  ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
+      << toString(ExpectationsOrErr.takeError());
+  const ArtifactSelector Selector{"xcpt4", "msvc", "x86", "native", true, "o2"};
+  auto ExpectationOrErr = selectUnique(*ExpectationsOrErr, Selector);
+  ASSERT_TRUE(static_cast<bool>(ExpectationOrErr))
+      << toString(ExpectationOrErr.takeError());
+  auto OutputOrErr =
+      decompileToSource(std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
+                            (*ExpectationOrErr)->Path,
+                        /*TimeoutSeconds=*/600);
+  ASSERT_TRUE(static_cast<bool>(OutputOrErr))
+      << toString(OutputOrErr.takeError());
+  EXPECT_TRUE(StringRef(*OutputOrErr).contains("(0x7FFF0000, 0x10000, "));
+}
+
 TEST(WindowsEHModesCorpus, EveryFinallyClauseOfXcpt4HoldsItsHandlerAsCode) {
   auto ExpectationsOrErr = loadExpectations();
   ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
@@ -949,6 +1041,14 @@ TEST(WindowsEHModesCorpus, EveryFinallyClauseOfXcpt4HoldsItsHandlerAsCode) {
       EXPECT_TRUE(Source.contains("\"filter 1...\""));
       // The startup code's arm runs on past its first branch.
       EXPECT_TRUE(Source.contains("_c_exit()"));
+      // No filter is left as a call of its own code, and an arm that starts
+      // with a local unwind keeps it.
+      EXPECT_FALSE(Source.contains("__except (sub_402901("));
+      const StringRef Try = "__try {";
+      for (size_t At = Source.find(Try); At != StringRef::npos;
+           At = Source.find(Try, At + 1))
+        EXPECT_FALSE(Source.substr(At + Try.size()).ltrim().starts_with("}"))
+            << Source.substr(At, 80).str();
     }
     const StringRef Entry = "/* neverd.entry: ";
     for (size_t At = Source.find(Entry); At != StringRef::npos;) {

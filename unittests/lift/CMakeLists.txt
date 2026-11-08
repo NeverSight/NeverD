@@ -1,4 +1,5 @@
 add_neverd_unittest(NeverDMIPSPipelineTests
+  mips/MIPSMergeValueTests.cpp
   mips/MIPSPipelineTests.cpp
   LINK_COMPONENTS Pipeline BackendLLVM BackendC)
 
@@ -23,6 +24,7 @@ add_neverd_unittest(NeverDMIPSTests
 
 add_neverd_unittest(NeverDMIPSIntegerTests
   mips/MIPSIntegerTests.cpp
+  mips/MIPSScalarTests.cpp
   LINK_COMPONENTS IRLow Lift Decode)
 if(NEVERD_ENABLE_SEMANTIC_TESTS AND NOT TARGET unicorn)
   neverd_require_unicorn()

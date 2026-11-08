@@ -12,6 +12,7 @@
 #include "neverd/ir/intrinsics/IntrinsicValueEffects.h"
 #include "neverd/ir/low/BlockRegisterConstant.h"
 #include "neverd/ir/low/CallRegisterBody.h"
+#include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -303,7 +304,7 @@ bool visitScalarBlockValues(
       if (Select(Op))
         Observe(Op, ValueOf);
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
-          (Op.Opcode == NdOp::INTRINSIC &&
+          (Op.Opcode == NdOp::INTRINSIC && !mipsScalarLowShapeIsValid(Op) &&
            !(Op.NumInputs && Op.Inputs[0].isConst() &&
              Op.Inputs[0].Size == sizeof(Intrinsic) &&
              Op.Inputs[0].Offset < static_cast<uint64_t>(Intrinsic::_Count) &&

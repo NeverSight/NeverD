@@ -127,6 +127,107 @@ std::vector<uint8_t> linkedImage(const ChainWords &Chain) {
   return Bytes;
 }
 
+std::vector<uint8_t> multiStartImage(const ChainWords &Chain) {
+  auto Bytes = linkedImage(
+      {Chain.Format, Chain.First & ~kNextMask, Chain.Second & ~kNextMask});
+  auto *Starts = Bytes.data() + kChains + kSegmentStart;
+  constexpr auto StartOffset =
+      offsetof(dyld_chained_starts_in_segment, page_start);
+  writeLE<uint32_t>(Starts, StartOffset + kMultiStartCount * sizeof(uint16_t));
+  writeLE<uint16_t>(Starts + StartOffset,
+                    DYLD_CHAINED_PTR_START_MULTI | kOverflowIndex);
+  writeLE<uint16_t>(Starts + StartOffset + kOverflowIndex * sizeof(uint16_t),
+                    0);
+  writeLE<uint16_t>(Starts + StartOffset +
+                        kLastOverflowIndex * sizeof(uint16_t),
+                    DYLD_CHAINED_PTR_START_LAST | (kSecondSlot - kPage));
+  return Bytes;
+}
+
+TEST(MachOArm64eDependencies, PreservesMultipleAuthenticatedChainsOnOnePage) {
+  for (const auto &Chain : Chains) {
+    SCOPED_TRACE(Chain.Format);
+    const auto Original = multiStartImage(Chain);
+    auto Before = readMachODependencyState(Original);
+    ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
+    ASSERT_EQ(Before->Slots.size(), 2u);
+    auto Repacked = Original;
+    auto *Payload = Repacked.data() + kChains;
+    std::memmove(Payload + kStarts + kSlotBytes, Payload + kStarts,
+                 kRepackBytes + kSlotBytes);
+    writeLE<uint32_t>(Payload +
+                          offsetof(dyld_chained_fixups_header, starts_offset),
+                      kStarts + kSlotBytes);
+    auto After = readMachODependencyState(Repacked);
+    ASSERT_TRUE(bool(After)) << llvm::toString(After.takeError());
+    EXPECT_EQ(Before->Slots, After->Slots);
+    EXPECT_EQ(Before->Digest, After->Digest);
+    auto Error = preserveMachODependencyState(*Before, *After);
+    EXPECT_FALSE(bool(Error));
+    llvm::consumeError(std::move(Error));
+    auto Changed = Original;
+    writeLE<uint64_t>(Changed.data() + kSecondSlot,
+                      readLE<uint64_t>(Original.data() + kSecondSlot) ^
+                          uint64_t(1));
+    auto ChangedState = readMachODependencyState(Changed);
+    if (ChangedState) {
+      auto ChangedError = preserveMachODependencyState(*Before, *ChangedState);
+      EXPECT_TRUE(bool(ChangedError));
+      llvm::consumeError(std::move(ChangedError));
+    } else {
+      llvm::consumeError(ChangedState.takeError());
+    }
+  }
+}
+
+TEST(MachOArm64eDependencies, RejectsMalformedOrOverlappingOverflowChains) {
+  for (const auto &Chain : Chains) {
+    SCOPED_TRACE(Chain.Format);
+    const auto Original = multiStartImage(Chain);
+    constexpr auto StartOffset =
+        offsetof(dyld_chained_starts_in_segment, page_start);
+    const auto Check = [&](unsigned Index, uint16_t Value) {
+      auto Changed = Original;
+      writeLE<uint16_t>(Changed.data() + kChains + kSegmentStart + StartOffset +
+                            Index * sizeof(uint16_t),
+                        Value);
+      auto State = readMachODependencyState(Changed);
+      EXPECT_FALSE(bool(State));
+      if (!State)
+        llvm::consumeError(State.takeError());
+    };
+    Check(0, DYLD_CHAINED_PTR_START_MULTI);
+    Check(0, DYLD_CHAINED_PTR_START_MULTI | kOutsideOverflowIndex);
+    Check(kLastOverflowIndex, kSecondSlot - kPage);
+    Check(kOverflowIndex, kSecondSlot - kPage + kSlotBytes);
+    Check(kLastOverflowIndex, DYLD_CHAINED_PTR_START_LAST);
+    Check(kLastOverflowIndex, DYLD_CHAINED_PTR_START_LAST | kOverlappingStart);
+    Check(kLastOverflowIndex, DYLD_CHAINED_PTR_START_LAST | kPageEnd);
+  }
+}
+
+TEST(MachOArm64eDependencies, OrdinaryChainsShareMultiStartStorageChecks) {
+  for (unsigned Format : {DYLD_CHAINED_PTR_64, DYLD_CHAINED_PTR_64_OFFSET}) {
+    const auto Target =
+        kOrdinaryRebaseTarget + (Format == DYLD_CHAINED_PTR_64 ? kBase : 0);
+    auto Bytes = multiStartImage({Format, Target, kOrdinaryBind});
+    writeLE<uint32_t>(Bytes.data() + offsetof(mach_header_64, cpusubtype),
+                      CPU_SUBTYPE_ARM64_ALL);
+    auto State = readMachODependencyState(Bytes);
+    ASSERT_TRUE(bool(State)) << llvm::toString(State.takeError());
+    EXPECT_EQ(State->Slots.size(), 2u);
+    auto *Starts = Bytes.data() + kChains + kSegmentStart;
+    writeLE<uint16_t>(Starts +
+                          offsetof(dyld_chained_starts_in_segment, page_start) +
+                          kLastOverflowIndex * sizeof(uint16_t),
+                      DYLD_CHAINED_PTR_START_LAST);
+    auto Overlap = readMachODependencyState(Bytes);
+    EXPECT_FALSE(bool(Overlap));
+    if (!Overlap)
+      llvm::consumeError(Overlap.takeError());
+  }
+}
+
 TEST(MachOArm64eDependencies, RetainsSigningABIWhileRepackingChainMetadata) {
   for (const auto &Chain : Chains) {
     SCOPED_TRACE(Chain.Format);

@@ -11,9 +11,11 @@
 #include "gtest/gtest.h"
 
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedConstantPropagation.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/lift/MIPS/MIPSRegs.h"
 
 #include <algorithm>
 #include <initializer_list>
@@ -920,4 +922,124 @@ TEST(MedConstantPropagation, AnnihilatingMaskKeepsMemoryEffectsAndProvenance) {
                 }));
           }
 }
+TEST(MedConstantPropagation, ByteProjectionSelectsOnlyOneConcatPart) {
+  for (auto Architecture : {Arch::X64, Arch::AArch64, Arch::MIPS64}) {
+    const auto &TRI = getTargetRegInfo(Architecture);
+    const auto Args = TRI.integerArgumentLayout(BinaryFormat::ELF).Registers;
+    for (unsigned Offset : {0u, 2u, 4u, 6u}) {
+      for (unsigned Width : {2u, 4u}) {
+        if (Offset + Width > 8)
+          continue;
+        for (bool Redefine : {false, true}) {
+          SCOPED_TRACE(testing::Message()
+                       << unsigned(Architecture) << ':' << Offset << ':'
+                       << Width << ':' << Redefine);
+          LowFunc Low;
+          Low.Entry = 0x1000;
+          Low.Name = "project_concat";
+          Low.Blocks.resize(1);
+          auto &Block = Low.Blocks.front();
+          Block.Id = 0;
+          Block.StartAddr = Low.Entry;
+          Block.EndAddr = Low.Entry + 4;
+          const auto Add = [&](NdOp Code, NdVar Output,
+                               std::initializer_list<NdVar> Inputs) {
+            LowOp Op;
+            Op.Addr = Low.Entry;
+            Op.Opcode = Code;
+            Op.Output = Output;
+            for (const auto &Input : Inputs)
+              Op.addInput(Input);
+            Block.Ops.push_back(Op);
+          };
+          const auto High = NdVar::tmp(0, 4), LowPart = NdVar::tmp(1, 4);
+          const auto Joined = NdVar::tmp(2, 8), Copied = NdVar::tmp(3, 8);
+          Add(NdOp::SUBBYTES, High, {NdVar::reg(Args[0], 8), NdVar::cst(0, 4)});
+          Add(NdOp::SUBBYTES, LowPart,
+              {NdVar::reg(Args[1], 8), NdVar::cst(0, 4)});
+          Add(NdOp::CONCAT, Joined, {High, LowPart});
+          Add(NdOp::COPY, Copied, {Joined});
+          if (Redefine)
+            Add(NdOp::CONCAT, Joined, {LowPart, High});
+          const auto Projected = NdVar::tmp(4, Width);
+          Add(NdOp::SUBBYTES, Projected, {Copied, NdVar::cst(Offset, 4)});
+          Add(NdOp::INT_ZEXT, NdVar::reg(TRI.IntReturnReg, 8), {Projected});
+          Add(NdOp::RETURN, {}, {NdVar::reg(TRI.IntReturnReg, 8)});
+          const auto Med =
+              LowToMedConverter().convert(Low, Architecture, BinaryFormat::ELF);
+          ASSERT_TRUE(verifyMedFunc(Med, "concat-projection"));
+          unsigned CrossPartReads = 0;
+          for (const auto &B : Med.Blocks)
+            for (const auto &Op : B.Ops) {
+              if (Op.Opcode != NdOp::SUBBYTES || Op.Output.Size != Width ||
+                  Op.Inputs[0].Size != 8 || !Op.Inputs[1].isConst())
+                continue;
+              CrossPartReads += Op.Inputs[1].ConstVal == Offset &&
+                                Op.Inputs[0].Kind == MedVar::Temp;
+            }
+          // The 4-byte read at offset 2 straddles the boundary and must stay.
+          EXPECT_EQ(CrossPartReads, Offset == 2 && Width == 4 ? 1u : 0u);
+        }
+      }
+    }
+  }
+}
+
+TEST(MedConstantPropagation, MipsUpperWordProofDoesNotFreezeRelocatableBits) {
+  for (bool ProveAddress : {false, true})
+    for (auto Provenance : {ConstantAddressProvenance::Scalar,
+                            ConstantAddressProvenance::DataAddress,
+                            ConstantAddressProvenance::AddressFragment}) {
+      SCOPED_TRACE(testing::Message()
+                   << ProveAddress << ':' << unsigned(Provenance));
+      LowFunc Low;
+      Low.Entry = 0x1000;
+      Low.Name = "lwr_upper_provenance";
+      Low.Blocks.resize(1);
+      auto &Block = Low.Blocks.front();
+      Block.Id = 0;
+      Block.StartAddr = Low.Entry;
+      Block.EndAddr = Low.Entry + 4;
+      auto Address = NdVar::reg(mipsreg::A0, 8);
+      auto Old = NdVar::reg(mipsreg::A1, 8);
+      auto Constant = NdVar::cst(ProveAddress ? 0x400003 : 0x400000, 8);
+      Constant.Provenance = Provenance;
+      if (ProveAddress)
+        Address = Constant; // MIPS64 big-endian offset 3 is a full LWR.
+      else
+        Old = Constant;
+      LowOp Upper;
+      Upper.Addr = Low.Entry;
+      Upper.Opcode = NdOp::INTRINSIC;
+      Upper.Output = NdVar::tmp(0, 4);
+      Upper.addInput(
+          NdVar::cst(uint64_t(Intrinsic::MIPSLwrUpper), sizeof(Intrinsic)));
+      Upper.addInput(Address);
+      Upper.addInput(Old);
+      Upper.addInput(NdVar::cst(0x12345678, 4));
+      Block.Ops.push_back(Upper);
+      LowOp Widen;
+      Widen.Addr = Low.Entry;
+      Widen.Opcode = NdOp::INT_ZEXT;
+      Widen.Output = NdVar::reg(mipsreg::V0, 8);
+      Widen.addInput(Upper.Output);
+      Block.Ops.push_back(Widen);
+      LowOp Return;
+      Return.Addr = Low.Entry;
+      Return.Opcode = NdOp::RETURN;
+      Return.addInput(Widen.Output);
+      Block.Ops.push_back(Return);
+      const auto Med =
+          LowToMedConverter().convert(Low, Arch::MIPS64, BinaryFormat::ELF);
+      ASSERT_TRUE(verifyMedFunc(Med, "mips-upper-provenance"));
+      unsigned Choices = 0;
+      for (const auto &B : Med.Blocks)
+        for (const auto &Op : B.Ops)
+          Choices += Op.Opcode == NdOp::INTRINSIC && !Op.Dead &&
+                     Op.Inputs[0].ConstVal == uint64_t(Intrinsic::MIPSLwrUpper);
+      EXPECT_EQ(Choices,
+                Provenance == ConstantAddressProvenance::Scalar ? 0u : 1u);
+    }
+}
+
 } // namespace

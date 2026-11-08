@@ -283,16 +283,17 @@ ExecutionResult AndroidFramework::replaceParcel(Heap &heap, ParcelState &state,
                 "Android Binder reply object table is malformed"};
       minimum = offset + 24;
     }
-    if (!heap.resizeBytes(object, reply.bytes->size()))
+    if (!heap.reserveBytes(object, reply.bytes->size()))
       return {ExecutionStop::HeapLimit,
               0,
               {},
               "Android Binder reply storage budget exhausted"};
-    auto released = releaseParcelObjects(state);
+    auto released = releaseParcelObjects(state, object.Bytes);
     if (released.stop != ExecutionStop::Returned)
       return released;
     if (state.release)
       state.release();
+    heap.resizeBytes(object, reply.bytes->size());
     object.Bytes = std::move(*reply.bytes);
     state.position = 0;
     state.capacity = object.Bytes.size();
@@ -302,6 +303,9 @@ ExecutionResult AndroidFramework::replaceParcel(Heap &heap, ParcelState &state,
     state.write = std::move(reply.write);
     state.reallocate_objects = std::move(reply.reallocate_objects);
     state.objects = std::move(reply.objects);
+    state.owns_objects = false;
+    state.objects_sorted = false;
+    state.object_hint = 0;
     state.fd = reply.fd;
   }
   if (reply.status)

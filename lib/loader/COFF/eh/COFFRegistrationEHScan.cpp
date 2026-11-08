@@ -178,6 +178,64 @@ std::optional<va_t> directInstallEntry(const BinaryImage &Img,
   return Entry;
 }
 
+/// clang-cl builds the record in words of a frame its prologue has already set
+/// up, and pads between functions with no-ops, so only that prologue says where
+/// the function starts:
+///
+///     push  ebp
+///     mov   ebp, esp
+///     ...
+///     mov   dword ptr [ebp - 0x10], -1
+///     mov   dword ptr [ebp - 0x14], <table>
+///     lea   eax, [ebp - 0x1c]
+///     mov   dword ptr [ebp - 0x18], <handler>
+///     mov   ecx, fs:[0]
+///
+/// Everything from the nearest prologue on has to run straight to the chain
+/// read at \p Offset, and the words have to be the record's: the handler, the
+/// table above it and the try level above that.
+std::optional<va_t> slotRecordEntry(const BinaryImage &Img, const Segment &Seg,
+                                    size_t Offset, size_t &Work) {
+  const uint8_t *Data = Seg.Data.data();
+  const size_t Start =
+      Offset > ::neverd::limits::loader::kCOFFRegistrationEHScanMaxInstallWindow
+          ? Offset - ::neverd::limits::loader::
+                         kCOFFRegistrationEHScanMaxInstallWindow
+          : 0;
+  // Each of the three words is a `mov dword ptr [ebp + disp8], imm32`.
+  size_t Writes = 0;
+  for (size_t I = Start; I + 1 < Offset; ++I)
+    Writes += Data[I] == 0xC7 && Data[I + 1] == 0x45;
+  if (Writes < 3)
+    return std::nullopt;
+  for (size_t K = Offset; K-- > Start;) {
+    if (Data[K] != 0x55 || K + 3 > Offset ||
+        !((Data[K + 1] == 0x89 && Data[K + 2] == 0xE5) ||
+          (Data[K + 1] == 0x8B && Data[K + 2] == 0xEC)))
+      continue;
+    const auto Words = checkedRegistrationStraightPrologue(
+        Img, Seg.VA + K, Seg.VA + Offset, Work);
+    if (!Words)
+      continue;
+    auto At = [&](int64_t Slot) -> std::optional<uint32_t> {
+      for (const RegistrationFrameWord &Word : *Words)
+        if (Word.Slot == Slot)
+          return Word.Value;
+      return std::nullopt;
+    };
+    for (const RegistrationFrameWord &Handler : *Words) {
+      const auto Table = At(int64_t(Handler.Slot) + 4);
+      const auto Level = At(int64_t(Handler.Slot) + 8);
+      if (Table && Level && isExecutableAddress(Img, Handler.Value) &&
+          !isExecutableAddress(Img, *Table) && Img.readVA(*Table, 12) &&
+          (int32_t(*Level) == -1 || int32_t(*Level) == -2))
+        return Seg.VA + K;
+    }
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
 /// Observe the caller's exact `push allocation; push table; call helper`
 /// prefix. This supplies an entry candidate, not a registration layout.
 std::optional<va_t> helperCallerEntry(const Segment &Seg, size_t CallOffset,
@@ -255,8 +313,11 @@ resolvePrologueHelperCallers(const BinaryImage &Img,
         continue;
 
       std::optional<ExceptionAddressRange> Range = Functions.find(Img, CallVA);
-      if (!Range || Range->overlaps(Helper.Range))
+      if (!Range || (CallVA >= *Target && CallVA <= Helper.InstallVA))
         continue;
+      // Nothing may say where the helper starts: a caller just before it shares
+      // its tentative range, and needs its own entry proved.
+      const bool SharesHelperRange = Range->overlaps(Helper.Range);
       // Earlier callers may have proved a separate entry inside this same
       // tentative symbol range. Subsequent sites belong to that latest owner
       // until another closed body proves a new boundary.
@@ -280,17 +341,27 @@ resolvePrologueHelperCallers(const BinaryImage &Img,
       }
       if (Site.TableVA == 0)
         continue;
+      bool OwnEntry = false;
       if (const auto Entry = helperCallerEntry(Seg, I, Site.TableVA);
-          Entry && Site.Range.Begin < *Entry && Site.Range.contains(*Entry)) {
+          Entry && Site.Range.contains(*Entry)) {
+        OwnEntry = Site.Range.Begin == *Entry;
         // A prefix inside an instruction or reached by ordinary fallthrough
         // belongs to the current function. Only a completely decoded body
-        // that closes before it can separate an otherwise unnamed caller.
-        if (checkedRegistrationRangeEnd(Img, {Site.Range.Begin, *Entry},
-                                        {Site.Range.Begin}, BoundaryWork)) {
+        // that closes before it can separate an otherwise unnamed caller, as
+        // one that jumps away does: an image entry's `call; jmp` does.
+        if (!OwnEntry && checkedRegistrationBodyClosesBefore(
+                             Img, Site.Range.Begin, *Entry, BoundaryWork)) {
           Site.Range.Begin = *Entry;
           ObservedEntries.insert(*Entry);
+          OwnEntry = true;
         }
       }
+      if (SharesHelperRange && !OwnEntry)
+        continue;
+      // The helper is no part of the frame it builds, which a shared prologue
+      // proof rests on.
+      if (*Target > CallVA)
+        Site.Range.End = std::min(Site.Range.End, *Target);
       if (std::find(Covered.begin(), Covered.end(), Site.Range.Begin) !=
           Covered.end())
         continue;
@@ -318,6 +389,7 @@ std::vector<InstallSite> findInstallSites(const BinaryImage &Img,
                                           const SafeSEHTable &SafeSEH) {
   std::vector<InstallSite> Sites;
   std::vector<va_t> CoveredFunctions;
+  size_t PrologueWork = 0;
 
   for (const Segment &Seg : Img.Segments) {
     if (!Seg.isExecutable() || Seg.Data.size() < 8)
@@ -344,6 +416,9 @@ std::vector<InstallSite> findInstallSites(const BinaryImage &Img,
       // a handler on its own.
       std::optional<ExceptionAddressRange> Range =
           Functions.find(Img, Site.InstallVA);
+      const auto SlotEntry = slotRecordEntry(Img, Seg, I, PrologueWork);
+      if (SlotEntry)
+        Range = Functions.findFrom(Img, *SlotEntry, Site.InstallVA);
       if (!Range)
         continue;
 
@@ -354,19 +429,24 @@ std::vector<InstallSite> findInstallSites(const BinaryImage &Img,
         if (SafeSEH.isPresent() && !SafeSEH.contains(Candidate.Value))
           continue;
         HandlerIdentity Probe = identifyHandler(Img, Candidate.Value);
+        bool IsWrapper = false;
         if (Probe.Personality == ExceptionPersonality::Unknown ||
             Probe.Personality == ExceptionPersonality::None) {
           if (!decodeCxxHandlerThunk(Img, Candidate.Value, Probe) &&
               isExceptHandler4Wrapper(Img, Candidate.Value)) {
+            IsWrapper = true;
             Probe.Personality = ExceptionPersonality::ExceptHandler4;
             Probe.Name = getExceptionPersonalityName(
                 ExceptionPersonality::ExceptHandler4);
           }
         }
         // Compiler-created C++ handlers may be private to this tentative
-        // range. Their exact FuncInfo thunk proves the language identity;
-        // an in-range generic/Delphi target cannot inherit that exception.
-        if (Range->contains(Candidate.Value) && !Probe.CxxFuncInfoVA)
+        // range. Their exact FuncInfo thunk proves the language identity, as
+        // the wrapper's whole body does `_except_handler4`'s, which the CRT
+        // links next to the shared prologue. An in-range generic/Delphi target
+        // cannot inherit that exception.
+        if (Range->contains(Candidate.Value) && !Probe.CxxFuncInfoVA &&
+            !IsWrapper)
           continue;
         const bool Classified =
             Probe.Personality != ExceptionPersonality::Unknown &&
@@ -395,7 +475,7 @@ std::vector<InstallSite> findInstallSites(const BinaryImage &Img,
 
       // A second complete direct prologue owns a separate frame even when
       // entry discovery placed both installs in one tentative range.
-      auto Entry = directInstallEntry(Img, Site);
+      auto Entry = SlotEntry ? SlotEntry : directInstallEntry(Img, Site);
       if (!Entry)
         Entry = alignedCxxInstallEntry(Img, Site);
       if (!Entry) {

@@ -25,7 +25,16 @@ def main():
     parser.add_argument("--library", type=Path, required=True)
     parser.add_argument("--compiler", required=True)
     parser.add_argument("--artifacts", type=Path, required=True)
+    parser.add_argument(FIXTURES["cleanup"]["keep_option"], action="store_true",
+                        help=FIXTURES["cleanup"]["keep_help"])
+    parser.add_argument(FIXTURES["selection"]["case_option"],
+                        choices=[case["name"] for case in FIXTURES["cases"]],
+                        help=FIXTURES["selection"]["case_help"])
     args = parser.parse_args()
+    cases = [case for case in FIXTURES["cases"]
+             if args.case is None or case["name"] == args.case]
+    refused = (FIXTURES["refused"] if args.case is None or
+               args.case == FIXTURES["cases"][0]["name"] else [])
     args.artifacts.mkdir(parents=True, exist_ok=True)
     assembly = FIXTURES["assembly_prefix"]
     for case in FIXTURES["cases"]:
@@ -40,6 +49,7 @@ def main():
     assembly += FIXTURES["assembly_suffix"]
     original = args.artifacts / "calls.S"
     binary = args.artifacts / "calls.dylib"
+    products = [binary]
     original.write_text(assembly)
     subprocess.run(
         [args.compiler, "-target", FIXTURES["triple"], "-dynamiclib",
@@ -113,6 +123,7 @@ def main():
                 for command in commands:
                     result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT)
                     assert result.returncode == 0, (stem, result.returncode)
+            products.extend((obj, executable))
         summary.append({"name": case["name"], "route": route,
                         "native_unwind_executions": len(FIXTURES["optimizations"]),
                         "signed_unwind_qualified": False})
@@ -160,6 +171,7 @@ def main():
                                       stderr=subprocess.STDOUT, text=True)
             assert executed.returncode == 0, (stem, executed.returncode,
                                               executed.stdout)
+            products.append(executable)
         execute_unwind(case, source, route, prototype, parameter_types)
         return len(FIXTURES["optimizations"])
 
@@ -175,7 +187,7 @@ def main():
         for index in range(library.neverd_func_count(session)):
             name = take(library.neverd_func_name(session, index)).lstrip("_")
             symbols[name] = library.neverd_func_entry(session, index)
-        for case in FIXTURES["cases"]:
+        for case in cases:
             address = symbols[case["name"]]
             page = view(address, FIXTURES["routes"][0])
             assert "error" not in page, page
@@ -202,26 +214,28 @@ def main():
                 source = args.artifacts / (stem + ".c")
                 source.write_text(result["text"])
                 for optimization in FIXTURES["optimizations"]:
+                    obj = args.artifacts / (stem + optimization + ".o")
                     compiled = subprocess.run(
                         [args.compiler, "-target", FIXTURES["triple"],
                          *FIXTURES["compile_flags"], optimization, "-c",
-                         str(source), "-o", str(args.artifacts / (
-                             stem + optimization + ".o"))],
+                         str(source), "-o", str(obj)],
                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                         text=True,
                     )
                     (args.artifacts / (stem + optimization + ".log")).write_text(
                         compiled.stdout)
                     assert compiled.returncode == 0, (stem, compiled.stdout)
+                    products.append(obj)
                 summary.append({"name": case["name"], "route": route,
                                 "applied": True,
                                 "native_executions": execute_variadic(
                                     case, source, route),
                                 "source_sha256": hashlib.sha256(
                                     source.read_bytes()).hexdigest()})
-        address = symbols[FIXTURES["cases"][0]["name"]]
-        page = view(address, FIXTURES["routes"][0])
-        for declaration in FIXTURES["refused"]:
+        if refused:
+            address = symbols[FIXTURES["cases"][0]["name"]]
+            page = view(address, FIXTURES["routes"][0])
+        for declaration in refused:
             edit = ({"declaration": declaration} if isinstance(declaration, str)
                     else declaration)
             request = {"call_types": [{
@@ -241,10 +255,23 @@ def main():
         library.neverd_session_destroy(session)
         (args.artifacts / "summary.json").write_text(
             json.dumps(summary, indent=2) + "\n")
+    product_records = {
+        path.relative_to(args.artifacts).as_posix(): {
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "bytes": path.stat().st_size,
+        }
+        for path in products
+    }
+    (args.artifacts / FIXTURES["cleanup"]["manifest"]).write_text(
+        json.dumps({"retained": args.keep_products, "products": product_records},
+                   indent=2) + "\n")
+    if not args.keep_products:
+        for path in products:
+            path.unlink()
     print(json.dumps({"compiled_source_routes":
-                      len(FIXTURES["cases"]) * len(FIXTURES["routes"]),
+                      len(cases) * len(FIXTURES["routes"]),
                       "refused_routes":
-                      len(FIXTURES["refused"]) * len(FIXTURES["routes"])}))
+                      len(refused) * len(FIXTURES["routes"])}))
 
 
 if __name__ == "__main__":

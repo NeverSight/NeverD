@@ -126,6 +126,8 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
   };
   if (isPortableX87Intrinsic(IC))
     return emitPortableX87Intrinsic(Op, Builder);
+  if (mips::isScalarIntrinsic(IC))
+    return emitMIPSScalar(Op, IC, Builder);
 
   if (isX86DescriptorStateIntrinsic(IC))
     return emitX86DescriptorState(Op, IC, Builder);

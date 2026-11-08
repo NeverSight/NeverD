@@ -10,7 +10,6 @@
 #include "AndroidFramework.h"
 
 #include "neverd/dalvik/Limits.h"
-#include "neverd/support/SortedSearch.h"
 
 #include "llvm/Support/Endian.h"
 
@@ -156,7 +155,7 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
     auto &bytes = object->Bytes;
     auto &position = state.position;
     if (name == "recycle") {
-      auto released = releaseParcelObjects(state);
+      auto released = releaseParcelObjects(state, bytes);
       if (released.stop != ExecutionStop::Returned)
         return released;
       if (state.release)
@@ -168,6 +167,9 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
       state.capacity = 0;
       state.error = 0;
       state.objects.clear();
+      state.owns_objects = true;
+      state.objects_sorted = false;
+      state.object_hint = 0;
       state.fd.reset();
       heap.resizeBytes(*object, 0);
       position = 0;
@@ -193,6 +195,8 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
         return unsupported(
             "Android Parcel negative position requires native abort");
       position = next;
+      state.object_hint = 0;
+      state.objects_sorted = false;
       return returned();
     }
     auto capacity = [&](uint64_t desired) {
@@ -220,6 +224,8 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
         state.view = {};
         state.write = {};
         state.reallocate_objects = {};
+        state.object_hint = 0;
+        state.objects_sorted = false;
       }
       state.capacity = desired;
     };
@@ -252,11 +258,24 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
         return unsupported("Android Parcel Binder buffer size changed");
     }
     auto protectedRange = [&](uint64_t start, uint64_t size) {
-      const auto index = neverd::sorted::lowerBound64(
-          state.objects.data(), state.objects.size(),
-          start > 23 ? start - 23 : 0);
-      return index != state.objects.size() &&
-             state.objects[index] < start + size;
+      // validateReadData sorts the actual table lazily; transport and native
+      // release subsequently see that same order (including duplicate offsets).
+      if (!state.objects_sorted && state.objects.size() > 1) {
+        if (!std::is_sorted(state.objects.begin(), state.objects.end())) {
+          std::sort(state.objects.begin(), state.objects.end());
+          state.object_hint = 0;
+        }
+        state.objects_sorted = true;
+      }
+      auto next = state.object_hint;
+      while (next < state.objects.size() &&
+             state.objects[next] < start + size) {
+        if (start < state.objects[next] + 24)
+          return true;
+        ++next;
+      }
+      state.object_hint = next;
+      return false;
     };
     // No allocator bytes are invented for a cursor beyond initialized data.
     auto write = [&](std::span<const uint8_t> input, size_t zeros = 0) {
@@ -267,9 +286,8 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
       if (end > INT32_MAX)
         throw Stop{
             unsupported("Android Parcel data exceeds the native size range")};
-      if (protectedRange(position, input.size() + zeros))
-        throw Stop{unsupported("Android Parcel overwrites of Binder objects "
-                               "require native object-table mutation")};
+      // Native writes preserve offsets and the old strong acquisitions. A
+      // later release rereads whatever object bytes now occupy those slots.
       work(input.size() + zeros);
       if (end > state.capacity)
         capacity(((uint64_t(bytes.size()) + input.size() + zeros) * 3) / 2);
@@ -323,10 +341,20 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
       const auto type = llvm::support::endian::read32le(data);
       const auto pointer = llvm::support::endian::read64le(data + 8);
       const auto cookie = llvm::support::endian::read64le(data + 16);
-      if ((pointer || cookie) &&
-          !neverd::sorted::contains64(state.objects.data(),
-                                      state.objects.size(), start))
-        return returned(); // Bytes alone cannot confer Binder ownership.
+      if (pointer || cookie) {
+        // readObject searches in table order using its hint; unlike scalar
+        // reads, it does not sort a table produced by non-append writes.
+        if (state.objects.empty())
+          return returned();
+        auto index = std::min(state.object_hint, state.objects.size() - 1);
+        while (index + 1 < state.objects.size() && state.objects[index] < start)
+          ++index;
+        while (index && state.objects[index] > start)
+          --index;
+        if (state.objects[index] != start)
+          return returned();
+        state.object_hint = index + 1;
+      }
       if (type == 0x73622a85) {
         if (!cookie)
           return returned();
@@ -389,10 +417,9 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
         const auto allocation = ((state.objects.size() + 2) * 3 / 2) * 8;
         return state.reallocate_objects(allocation);
       }
-      if (pointer && !state.objects.empty() &&
-          position < state.objects.back() + 24)
+      if (!state.owns_objects && !state.release && !state.objects.empty())
         return unsupported(
-            "Android Parcel non-append Binder metadata is not modeled");
+            "Android Parcel object ownership service is not supplied");
       llvm::support::endian::write32le(encoded.data(), type);
       // API 28's cold IPCThreadState allows background scheduling: nice 19
       // and ACCEPTS_FDS. This is a policy word, not an object ownership flag.
@@ -401,19 +428,23 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
       llvm::support::endian::write64le(encoded.data() + 16, cookie);
       const auto offset = position;
       write(encoded);
-      if (pointer)
+      if (pointer) {
         state.objects.push_back(offset);
-      if (cookie) {
-        ++local_binders.find(cookie)->second.references;
-        state.references.push_back({cookie});
+        state.owns_objects = true;
       }
+      if (cookie)
+        ++local_binders.find(cookie)->second.references;
       if (fd) {
         state.fd = fd;
         if (pointer) {
           ++binder_parcel_handles[std::make_pair(*fd, uint32_t(pointer))];
-          state.references.push_back({0, uint32_t(pointer)});
         }
       }
+      return returned();
+    }
+    if (name == "writeNoException") {
+      // Supported StrictMode paths retain the initial null violation list.
+      integer(0, 4);
       return returned();
     }
     if (name == "writeInt" || name == "writeLong") {
@@ -485,7 +516,8 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
       const uint64_t padded = (uint64_t(length) + 3) & ~uint64_t(3);
       // JNI uses setDataSize, which preserves entries whose offsets remain
       // in range. Overwriting those records is not an ownership reset.
-      if (!state.objects.empty() && state.objects.front() < length)
+      if (std::any_of(state.objects.begin(), state.objects.end(),
+                      [&](uint64_t object) { return object < length; }))
         return unsupported("Android Parcel unmarshall overwrites retained "
                            "Binder object metadata");
       work(length);
@@ -503,7 +535,7 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
         return unsupported("Android Parcel data exceeds the native size range");
       if (!heap.reserveBytes(*object, nextCapacity))
         return storage();
-      auto released = releaseParcelObjects(state);
+      auto released = releaseParcelObjects(state, bytes, false);
       if (released.stop != ExecutionStop::Returned)
         return released;
       if (state.release)
@@ -514,6 +546,9 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
       state.reallocate_objects = {};
       state.error = 0;
       state.objects.clear();
+      state.owns_objects = true;
+      state.objects_sorted = false;
+      state.object_hint = 0;
       state.fd.reset();
       state.capacity = nextCapacity;
       if (!heap.resizeBytes(*object, padded))

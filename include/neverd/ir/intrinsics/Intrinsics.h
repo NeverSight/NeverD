@@ -338,6 +338,7 @@ constexpr bool isValidX86FPArithControl(uint16_t Control) {
 ///   x86/x64  :  1000 -  5999
 ///   AArch64  :  6000 - 10999
 ///   ARM32    : 11000 - 15999
+///   MIPS     : 16000 - 20999
 enum class Intrinsic : uint16_t {
   None = 0,
 
@@ -544,7 +545,11 @@ enum class Intrinsic : uint16_t {
   // Append-only: one ordinary native Win64 call publishes RAX and RCX.
   X64CallRCX,
 
-  _Count = 16000
+#define NEVERD_MIPS_MERGE_LOAD(Id, Value, ...) Id = Value,
+#define NEVERD_MIPS_SCALAR_INTRINSIC(Id, Value, ...) Id = Value,
+#include "neverd/ir/intrinsics/MIPS/MIPSScalar.def"
+
+  _Count = 21000
 };
 
 constexpr bool isPortableX87Intrinsic(Intrinsic Id) {

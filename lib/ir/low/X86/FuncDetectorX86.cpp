@@ -16,6 +16,7 @@
 #include "neverd/ir/low/FuncDetector.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/libc/NoReturnLoadedTarget.h"
+#include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/ProloguePatterns.h"
 #include "neverd/support/X86AddressReference.h"
@@ -528,6 +529,31 @@ void FuncDetector::scanX86UnsymbolizedEntries(const BinaryImage &Img,
   }
   std::sort(Occupied.begin(), Occupied.end());
 
+  // What a registration frame's flow runs through is its code, whatever a
+  // boundary guess makes of its bytes.  Only frames a guess falls in pay for
+  // it.
+  std::map<va_t, const ExceptionFunction *> Frames;
+  for (const ExceptionFunction &F : Img.ExceptionMetadata.Functions)
+    if (F.Registration && F.CodeRange.isValid())
+      Frames.emplace(F.CodeRange.Begin, &F);
+  std::map<const ExceptionFunction *, std::set<va_t>> FrameBodies;
+  auto InFrameBody = [&](va_t Addr) {
+    auto It = Frames.upper_bound(Addr);
+    if (It == Frames.begin())
+      return false;
+    --It;
+    if (Addr == It->first || !It->second->ownsCode(Addr))
+      return false;
+    auto Body = FrameBodies.find(It->second);
+    if (Body == FrameBodies.end())
+      Body = FrameBodies
+                 .emplace(It->second,
+                          coff_loader::getX86RegistrationBodyInstructions(
+                              Img, *It->second))
+                 .first;
+    return Body->second.count(Addr) != 0;
+  };
+
   const bool PrevDetail = Dec.detailEnabled();
   Dec.setDetail(false);
   for (const Section &Sec : Img.Sections) {
@@ -552,7 +578,7 @@ void FuncDetector::scanX86UnsymbolizedEntries(const BinaryImage &Img,
     va_t Aligned = (Sec.VA + 15u) & ~static_cast<va_t>(15u);
     for (; Aligned + 3 < SecEnd; Aligned += 16) {
       func_detect_detail::checkCancellation(Cancellation);
-      if (!isX86MsvcPrologue(At(Aligned)))
+      if (!isX86MsvcPrologue(At(Aligned)) || InFrameBody(Aligned))
         continue;
       considerX86Prologue(Img, Dec, *Seg, Aligned, Occupied, Out,
                           UnsymbolizedX86Entries);
@@ -576,7 +602,7 @@ void FuncDetector::scanX86UnsymbolizedEntries(const BinaryImage &Img,
       Cur = static_cast<const uint8_t *>(Hit) + 1;
       if ((Addr & 15u) == 0)
         continue;
-      if (!isX86EbpFrameSetup(At(Addr)))
+      if (!isX86EbpFrameSetup(At(Addr)) || InFrameBody(Addr))
         continue;
       considerX86Prologue(Img, Dec, *Seg, Addr, Occupied, Out,
                           UnsymbolizedX86Entries);
@@ -590,7 +616,7 @@ void FuncDetector::scanX86UnsymbolizedEntries(const BinaryImage &Img,
       const va_t Addr = Seg->VA + Off;
       if ((Addr & 15u) == 0)
         continue;
-      if (!isX86StackAdjustPrologue(At(Addr)))
+      if (!isX86StackAdjustPrologue(At(Addr)) || InFrameBody(Addr))
         continue;
       considerX86Prologue(Img, Dec, *Seg, Addr, Occupied, Out,
                           UnsymbolizedX86Entries);

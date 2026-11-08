@@ -62,6 +62,10 @@ struct CNameTable {
 #include "neverd/ir/intrinsics/ARM/intrinsics_arm_cnames.inc"
 #include "neverd/ir/intrinsics/X86/intrinsics_x86_cnames.inc"
 #include "neverd/ir/intrinsics/X86/intrinsics_x86_fp_state_cnames.inc"
+#define NEVERD_MIPS_MERGE_LOAD(Id, Value, Opcode, Bytes, Left, CName)          \
+  C(Intrinsic::Id, CName);
+#define NEVERD_MIPS_SCALAR_INTRINSIC(Id, Value, CName) C(Intrinsic::Id, CName);
+#include "neverd/ir/intrinsics/MIPS/MIPSScalar.def"
   }
 };
 
@@ -157,6 +161,11 @@ struct SideEffectTable {
 #include "neverd/ir/intrinsics/AArch64/intrinsics_aarch64_sideeffect.inc"
 #include "neverd/ir/intrinsics/ARM/intrinsics_arm_sideeffect.inc"
 #include "neverd/ir/intrinsics/X86/intrinsics_x86_sideeffect.inc"
+// Fresh unpredictable definitions must not be merged with one another.
+// Their dead outputs are removed by the validated MedIR DCE rule.
+#define NEVERD_MIPS_MERGE_LOAD(Id, ...) SIDEEFFECT(Intrinsic::Id);
+#define NEVERD_MIPS_SCALAR_INTRINSIC(Id, ...) SIDEEFFECT(Intrinsic::Id);
+#include "neverd/ir/intrinsics/MIPS/MIPSScalar.def"
   }
 };
 

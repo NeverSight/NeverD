@@ -442,6 +442,7 @@ bool functionNameMoved(Session &S, va_t Addr, const std::string *Name) {
         S.NameIndex->FirstNamed.try_emplace(F.Name, *Function);
     if (!Inserted && *Function < Named->second)
       Named->second = *Function;
+    S.NameIndex->Spelled[*Function] = Session::spelledFunction(F);
   }
   return true;
 }
@@ -465,10 +466,15 @@ void functionNamesMoved(Session &S) {
 /// Takes \p Renames as the session's names.
 void takeRenames(Session &S, std::map<va_t, std::string> Renames) {
   S.forgetEmittedSources();
+  // A list a rebuild would make reads the names taken as a rebuild would: a
+  // selection keeps it (Session::functionListCurrent).
+  const bool Current = S.functionListCurrent();
   auto Signatures = S.SigDB.buildNameMap();
   if (!namesAreDerived(S, Signatures)) {
     S.Renames = std::move(Renames);
     S.refreshFunctionNames(std::move(Signatures));
+    if (Current)
+      S.ListInputs->Renames = S.Renames;
     return;
   }
   bool FunctionNamed = false;
@@ -494,6 +500,8 @@ void takeRenames(Session &S, std::map<va_t, std::string> Renames) {
   if (FunctionNamed)
     functionNamesMoved(S);
   S.NamesDerivedFrom->Renames = Renames;
+  if (Current)
+    S.ListInputs->Renames = Renames;
   S.Renames = std::move(Renames);
 }
 } // namespace
@@ -513,6 +521,8 @@ int neverd_rename_take(neverd_session_t Sess, neverd_va_t Addr,
     return -1;
   S->clearError();
   S->forgetEmittedSources();
+  // A list a rebuild would make reads the name taken as a rebuild would.
+  const bool Current = S->functionListCurrent();
   auto Signatures = S->SigDB.buildNameMap();
   if (!namesAreDerived(*S, Signatures)) {
     if (Name)
@@ -520,16 +530,22 @@ int neverd_rename_take(neverd_session_t Sess, neverd_va_t Addr,
     else
       S->Renames.erase(Addr);
     S->refreshFunctionNames(std::move(Signatures));
+    if (Current)
+      S->ListInputs->Renames = S->Renames;
     return 0;
   }
   if (Name) {
     const std::string &Taken = S->Renames[Addr] = Name;
     S->NamesDerivedFrom->Renames[Addr] = Taken;
+    if (Current)
+      S->ListInputs->Renames[Addr] = Taken;
     if (functionNameMoved(*S, Addr, &Taken))
       functionNamesMoved(*S);
   } else {
     S->Renames.erase(Addr);
     S->NamesDerivedFrom->Renames.erase(Addr);
+    if (Current)
+      S->ListInputs->Renames.erase(Addr);
     if (functionNameMoved(*S, Addr, nullptr))
       functionNamesMoved(*S);
   }

@@ -33,6 +33,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/low/RegistrationABI.h"
+#include "neverd/libc/LibCNames.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/COFF/COFFSEH4Entry.h"
 #include "neverd/loader/ExceptionFunction.h"
@@ -117,6 +118,8 @@ void erase(LowOp &Op) {
 constexpr int64_t kRuntimeFrameAboveRecord = 16;
 /// Where `__SEH_prolog4` saves the stack pointer, from the frame pointer.
 constexpr int64_t kSavedStackSlot = -24;
+/// The most clang-cl's prologue pushes after setting EBP: EBX, EDI and ESI.
+constexpr int64_t kMaxRuntimeFrameBias = 12;
 
 /// What an instruction changes the try level to.  The instruction goes, so what
 /// it runs under does not matter: the level changes where it starts.
@@ -159,6 +162,7 @@ public:
     restoreStackPointers();
     const std::set<int> RanBefore = runByEntries();
     readFinallyBodies();
+    readOutlinedBodies();
     dropWhatRanOnlyPastACall(RanBefore);
     readLevelStores();
     readLocalUnwinds();
@@ -192,6 +196,8 @@ private:
   /// Where `__SEH_prolog4` left the stack pointer, from the frame pointer: what
   /// it saves in the frame for a handler to reload.
   std::optional<int64_t> SharedSave;
+  /// How far below the frame's EBP the runtime's is.
+  int64_t RuntimeBias = 0;
   /// The blocks that call `__SEH_epilog4`.
   std::set<int> Epilogues;
   /// What the frame's `__finally` scopes run.
@@ -240,6 +246,19 @@ private:
     return Reached;
   }
 
+  /// Whether lowering the call of the import at \p Slot pops its arguments, as
+  /// it does for every routine with a Windows API prototype.
+  bool popsByItsPrototype(va_t Slot) const {
+    for (const Import &Entry : Image->Imports)
+      if (Entry.IATAddr == Slot) {
+        const libc::LibCPrototype *Prototype =
+            libc::libcPrototype(Entry.Name, Image->abiFormat());
+        return Prototype && Prototype->Winapi && !Prototype->Variadic &&
+               Prototype->ParamCount;
+      }
+    return false;
+  }
+
   /// A stdcall import pops what the caller pushed, which the other way to the
   /// code after a `__try`, through its handler, knows from the saved stack
   /// pointer.  Without this the two disagree where the stack pointer is.
@@ -254,7 +273,7 @@ private:
           continue;
         const auto Pop = registration_abi::checkedRegistrationImportStackPop(
             *Image, Op.Inputs[0].Offset);
-        if (!Pop || !*Pop)
+        if (!Pop || !*Pop || popsByItsPrototype(Op.Inputs[0].Offset))
           continue;
         LowOp Adjust = Op;
         Adjust.Opcode = NdOp::INT_ADD;
@@ -404,8 +423,226 @@ private:
     const std::map<Location, int64_t> Prologue =
         walkPrologue(Saved, Builds, Installed, Record, Stack);
     const auto Frame = Prologue.find(locationOf(FP));
-    return Frame != Prologue.end() &&
-           Record == Frame->second - kRuntimeFrameAboveRecord;
+    if (Frame == Prologue.end() || !Record)
+      return false;
+    const int64_t Bias = Frame->second - kRuntimeFrameAboveRecord - *Record;
+    if (!Bias)
+      return true;
+    if (Bias < 0 || Bias > kMaxRuntimeFrameBias ||
+        Bias % int64_t(sizeof(uint32_t)) || !readOutlinedEntries(Bias))
+      return false;
+    RuntimeBias = Bias;
+    Facts.RecordFromFrame =
+        static_cast<int32_t>(-kRuntimeFrameAboveRecord - Bias);
+    return true;
+  }
+
+  /// What the handlers of a frame clang-cl compiled do about it:
+  ///
+  ///     mov  esp, [ebp - 0x18]        ; an `__except` arm
+  ///     add  ebp, 0xc
+  ///
+  ///     push ebp                      ; a `__finally` handler
+  ///     sub  esp, 0x10
+  ///     add  ebp, 0xc
+  ///     ...
+  ///     call <the body>
+  ///     add  esp, 0x10
+  ///     pop  ebp
+  ///     ret
+  ///
+  ///     push ebp                      ; a filter
+  ///     mov  ebp, esp
+  ///     mov  eax, [ebp]               ; what the runtime left in EBP
+  ///
+  /// With those instructions gone they run in the frame as MSVC's do.  A
+  /// handler of any other shape leaves the whole frame as it was.
+  bool readOutlinedEntries(int64_t Bias) {
+    std::vector<LowOp *> Erased;
+    std::vector<std::pair<LowOp *, LowOp>> Replaced;
+    for (const RegistrationScopeRecord &Scope : Chain.Scopes)
+      if (Scope.IsFinally
+              ? !readOutlinedFinally(Scope.HandlerVA, Bias, Erased)
+              : !readOutlinedArm(Scope.HandlerVA, Bias, Erased, Replaced) ||
+                    (Scope.FilterVA && !readOutlinedFilter(Scope.FilterVA, Bias,
+                                                           Erased, Replaced)))
+        return false;
+    for (auto &[Op, New] : Replaced)
+      *Op = New;
+    for (LowOp *Op : Erased)
+      erase(*Op);
+    return true;
+  }
+
+  /// The bytes at \p Address, when the image can say.
+  const uint8_t *codeAt(va_t Address, size_t Size) const {
+    return Image ? Image->readVA(Address, Size) : nullptr;
+  }
+
+  /// The address after `add ebp, Bias` at \p Address.
+  std::optional<va_t> afterFrameAdd(va_t Address, int64_t Bias) const {
+    const uint8_t *Code = codeAt(Address, 3);
+    if (!Code || Code[0] != 0x83 || Code[1] != 0xc5 || int64_t(Code[2]) != Bias)
+      return std::nullopt;
+    return Address + 3;
+  }
+
+  /// `push ebp` at \p Address: the store goes, and the stack stays as it was
+  /// for what the handler keeps on it.
+  bool erasePushOfFrame(LowBlock &Block, va_t Address,
+                        std::vector<LowOp *> &Erased) const {
+    const uint8_t *Code = codeAt(Address, 1);
+    if (!Code || Code[0] != 0x55)
+      return false;
+    bool Found = false;
+    for (LowOp &Op : Block.Ops)
+      if (Op.Addr == Address && Op.Opcode == NdOp::STORE) {
+        Erased.push_back(&Op);
+        Found = true;
+      }
+    return Found;
+  }
+
+  void eraseInstruction(LowBlock &Block, va_t Address,
+                        std::vector<LowOp *> &Erased) const {
+    for (LowOp &Op : Block.Ops)
+      if (Op.Addr == Address)
+        Erased.push_back(&Op);
+  }
+
+  bool readOutlinedArm(va_t Root, int64_t Bias, std::vector<LowOp *> &Erased,
+                       std::vector<std::pair<LowOp *, LowOp>> &Replaced) const {
+    const auto It = ByStart.find(Root);
+    const uint8_t *Code = codeAt(Root, 3);
+    if (It == ByStart.end() || !Code || Code[0] != 0x8b || Code[1] != 0x65)
+      return false;
+    const auto Add = afterFrameAdd(Root + 3, Bias);
+    if (!Add)
+      return false;
+    LowOp *Slot = nullptr;
+    for (LowOp &Op : It->second->Ops)
+      if (Op.Addr == Root && Op.Opcode == NdOp::INT_ADD && Op.NumInputs == 2 &&
+          Op.Inputs[1].isConst()) {
+        Slot = &Op;
+        break;
+      }
+    if (!Slot)
+      return false;
+    LowOp New = *Slot;
+    New.Inputs[1].Offset =
+        static_cast<uint64_t>(signedValue(Slot->Inputs[1]) - Bias);
+    Replaced.emplace_back(Slot, New);
+    eraseInstruction(*It->second, Root + 3, Erased);
+    return true;
+  }
+
+  /// The writes of the frame pointer past the handler's start: its `pop ebp`.
+  void erasePopsOfFrame(int First, std::vector<LowOp *> &Erased) const {
+    for (const int Id : reachedFrom(First))
+      for (LowOp &Op : ById.at(Id)->Ops)
+        if (Op.Output == FP)
+          Erased.push_back(&Op);
+  }
+
+  bool readOutlinedFinally(va_t Root, int64_t Bias,
+                           std::vector<LowOp *> &Erased) const {
+    const auto It = ByStart.find(Root);
+    if (It == ByStart.end() || !erasePushOfFrame(*It->second, Root, Erased))
+      return false;
+    va_t At = Root + 1;
+    if (const uint8_t *Code = codeAt(At, 2);
+        Code && Code[1] == 0xec && (Code[0] == 0x83 || Code[0] == 0x81))
+      At += Code[0] == 0x83 ? 3 : 6;
+    if (!afterFrameAdd(At, Bias))
+      return false;
+    const size_t Before = Erased.size();
+    erasePopsOfFrame(It->second->Id, Erased);
+    // The `add ebp` itself is one of those writes.
+    return Erased.size() > Before;
+  }
+
+  bool
+  readOutlinedFilter(va_t Root, int64_t Bias, std::vector<LowOp *> &Erased,
+                     std::vector<std::pair<LowOp *, LowOp>> &Replaced) const {
+    const auto It = ByStart.find(Root);
+    if (It == ByStart.end() || !erasePushOfFrame(*It->second, Root, Erased))
+      return false;
+    const uint8_t *Code = codeAt(Root + 1, 2);
+    if (!Code || !((Code[0] == 0x89 && Code[1] == 0xe5) ||
+                   (Code[0] == 0x8b && Code[1] == 0xec)))
+      return false;
+    const size_t Before = Replaced.size();
+    for (const int Id : reachedFrom(It->second->Id)) {
+      // Its own frame pointer: the word it points at is what the runtime left
+      // in EBP, and it keeps nothing else there.
+      std::map<Location, int64_t> Own{{locationOf(FP), 0}};
+      for (LowOp &Op : ById.at(Id)->Ops) {
+        if (Op.Output == FP) {
+          Erased.push_back(&Op);
+          continue;
+        }
+        if (Op.Opcode == NdOp::STORE && Op.NumInputs == 2) {
+          if (Own.count(locationOf(Op.Inputs[0])) ||
+              Own.count(locationOf(Op.Inputs[1])))
+            if (Op.Addr != Root)
+              return false;
+          continue;
+        }
+        if (Op.Opcode == NdOp::LOAD && Op.NumInputs == 1) {
+          const auto Word = Own.find(locationOf(Op.Inputs[0]));
+          if (Word == Own.end()) {
+            Own.erase(locationOf(Op.Output));
+            continue;
+          }
+          if (Word->second)
+            return false;
+          LowOp New = Op;
+          New.Opcode = NdOp::INT_ADD;
+          New.NumInputs = 0;
+          New.addInput(FP);
+          New.addInput(
+              NdVar::scalar(static_cast<uint64_t>(-Bias), sizeof(uint32_t)));
+          Replaced.emplace_back(&Op, New);
+          Own.erase(locationOf(Op.Output));
+          continue;
+        }
+        note(Op, Own);
+      }
+    }
+    return Replaced.size() > Before;
+  }
+
+  /// A handler of a frame clang-cl compiled calls the body with its frame, and
+  /// so does the normal path, whose call is what the clause then says.
+  void readOutlinedBodies() {
+    if (!RuntimeBias)
+      return;
+    for (FinallyBody &Body : Bodies) {
+      std::optional<va_t> Target;
+      bool Single = true;
+      for (const int Id : Body.Blocks)
+        for (const LowOp &Op : ById.at(Id)->Ops)
+          if (Op.Opcode == NdOp::CALL && Op.NumInputs == 1 &&
+              Op.Inputs[0].isConst()) {
+            Single &= !Target || *Target == Op.Inputs[0].Offset;
+            Target = Op.Inputs[0].Offset;
+            Facts.NoValueCalls.insert(Op.Addr);
+          }
+      if (!Target || !Single)
+        continue;
+      Facts.OutlinedBodies[Body.Root] = *Target;
+      for (LowBlock &Block : Func.Blocks) {
+        if (Body.Blocks.count(Block.Id))
+          continue;
+        for (const LowOp &Op : Block.Ops)
+          if (Op.Opcode == NdOp::CALL && Op.NumInputs == 1 &&
+              Op.Inputs[0].isConst() && Op.Inputs[0].Offset == *Target) {
+            Facts.NoValueCalls.insert(Op.Addr);
+            Facts.OutlinedCalls[Op.Addr] = Body.Root;
+            Body.Calls.push_back(&Block);
+          }
+      }
+    }
   }
 
   void restoreStackPointers() {
@@ -422,7 +659,8 @@ private:
     Facts.FrameFromEntry = static_cast<int32_t>(Frame->second);
     if (SharedSave)
       Saved[Frame->second + kSavedStackSlot] = Frame->second + *SharedSave;
-    if (const auto Stack = Saved.find(Frame->second + kSavedStackSlot);
+    if (const auto Stack =
+            Saved.find(Frame->second + kSavedStackSlot - RuntimeBias);
         Stack != Saved.end())
       Facts.StackFromEntry = static_cast<int32_t>(Stack->second);
     else if (InstalledStack)
@@ -485,10 +723,14 @@ private:
     for (auto &[Offset, Slot] : Slots) {
       const auto Value = Saved.find(Frame->second + Offset);
       // The function saves it again where a `setjmp` could come back, with its
-      // pushes popped: the same stack pointer.
+      // pushes popped: the same stack pointer.  The prologue can save it from a
+      // copy, as clang-cl -O0 does.
       if (Value == Saved.end() ||
           !llvm::all_of(Slot.Writes, [&](const LowOp *Write) {
-            return Write->Inputs[1] == SP;
+            return Write->Inputs[1] == SP ||
+                   llvm::any_of(Builds, [&](const PrologueStore &Store) {
+                     return Store.Op == Write;
+                   });
           }))
         continue;
       for (LowOp *Load : Slot.Reloads) {
@@ -514,7 +756,7 @@ private:
     // into FS:[0].
     if (!Installed)
       return;
-    const int64_t Link = Frame->second - kRuntimeFrameAboveRecord;
+    const int64_t Link = Frame->second - kRuntimeFrameAboveRecord - RuntimeBias;
     for (const PrologueStore &Store : Builds) {
       const auto Slot = Slots.find(Store.Slot - Frame->second);
       if (Store.SavesRegister || Store.Slot == Link || Slot == Slots.end() ||
@@ -879,12 +1121,29 @@ private:
     for (const RegistrationTryLevelStore &Store : Chain.TryLevelStores)
       Scanned.emplace(Store.StoreVA, &Store);
     const int64_t LevelSlot = Chain.TryLevelOffset.value_or(-4);
+    // The constants each block leaves in the registers a call does not change.
+    std::map<int, std::map<Location, int64_t>> Left;
     for (LowBlock &Block : Func.Blocks) {
       std::map<Location, int64_t> Frame{{locationOf(FP), 0}};
       std::map<Location, int64_t> Constants;
+      // One way in that has run says what the registers hold.
+      if (Block.Preds.size() == 1)
+        if (const auto Came = Left.find(Block.Preds.front());
+            Came != Left.end())
+          Constants = Came->second;
       for (LowOp &Op : Block.Ops) {
+        if (isCall(Op)) {
+          for (const uint64_t Scratch : {x86reg::RAX, x86reg::RCX, x86reg::RDX})
+            Constants.erase(locationOf(NdVar::reg(Scratch, sizeof(uint32_t))));
+          continue;
+        }
         if (Op.Opcode != NdOp::STORE || Op.NumInputs != 2) {
           note(Op, Frame);
+          // The prologue sets the frame pointer, and the level can change in
+          // the block it ends.
+          if (Op.Output == FP && Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+              Op.Inputs[0] == SP)
+            Frame[locationOf(FP)] = 0;
           if (Op.Output.Size && (Op.Output.isReg() || Op.Output.isTemp())) {
             // `and dword ptr [ebp - 4], 0`, `or dword ptr [ebp - 4], -1` and
             // `xor reg, reg` before a store of the register.
@@ -897,9 +1156,15 @@ private:
                 Value = It->second;
             } else if (Op.NumInputs == 2 && Op.Inputs[1].isConst()) {
               const int64_t Right = signedValue(Op.Inputs[1]);
+              const auto Before = Constants.find(locationOf(Op.Inputs[0]));
               if ((Op.Opcode == NdOp::INT_AND && Right == 0) ||
                   (Op.Opcode == NdOp::INT_OR && Right == -1))
                 Value = Right;
+              // `inc edi` after `xor edi, edi`.
+              else if (Before != Constants.end() && Op.Opcode == NdOp::INT_ADD)
+                Value = Before->second + Right;
+              else if (Before != Constants.end() && Op.Opcode == NdOp::INT_SUB)
+                Value = Before->second - Right;
             } else if (Op.Opcode == NdOp::INT_XOR && Op.NumInputs == 2 &&
                        Op.Inputs[0] == Op.Inputs[1]) {
               Value = 0;
@@ -933,6 +1198,7 @@ private:
         Changes[Op.Addr] = {static_cast<int32_t>(*Value), sizeof(int32_t)};
         erase(Op);
       }
+      Left.emplace(Block.Id, std::move(Constants));
     }
   }
 

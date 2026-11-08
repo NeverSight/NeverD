@@ -528,8 +528,13 @@ struct Session {
     std::unordered_map<va_t, size_t> FirstAt;
     /// The addresses the image exports under each name, in export order.
     std::unordered_map<std::string, std::vector<va_t>> Exported;
+    /// Each listed function's entry and name as the index read them, hashed:
+    /// a list that changed revision but reads the same keeps the index.
+    std::vector<uint64_t> Spelled;
   };
   std::optional<FunctionNameIndex> NameIndex;
+  /// A listed function's entry and name, hashed (FunctionNameIndex::Spelled).
+  static uint64_t spelledFunction(const FuncInfo &F);
   /// The function graph the direct references of the listed functions make
   /// (NeverDCAPICallPaths.cpp), read from the list at a revision.
   std::shared_ptr<const CallReferenceGraph> CallGraph;

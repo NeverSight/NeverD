@@ -117,6 +117,19 @@ struct LibCPrototype {
   bool Winapi = false;
 };
 
+/// Whether a value of the C type \p Type takes more than one word of an i386
+/// stack, as a 64-bit integer or a structure of two does.
+constexpr bool isWiderThanStackWord(std::string_view Type) {
+  for (const std::string_view Wide :
+       {"LONGLONG", "LONG64", "INT64", "UINT64", "DWORD64", "ULONG64",
+        "__int64", "long long", "LARGE_INTEGER", "FILETIME", "LUID", "POINT",
+        "SIZE", "int64_t", "uint64_t"})
+    if (Type.find(Wide) != std::string_view::npos &&
+        Type.find('*') == std::string_view::npos)
+      return true;
+  return false;
+}
+
 /// The prototype `Return Name(Params)`, whose types \p Header declares where
 /// C does not; a last parameter `...` makes it variadic.
 constexpr LibCPrototype

@@ -230,13 +230,9 @@ TEST_P(AndroidJNI, BinderLocalObjectsAndOwnedParcelWritesUseSharedTransport) {
   using Binding = mobile::dalvik::AndroidApplicationSnapshot::ServiceManager::
       BinderProxy::NativeBinding;
   state.binder_proxies = {{7, false, Binding{3, 0, true}}};
-  const char *diagnostics[] = {"",
-                               "",
-                               "storage must remain opaque",
-                               "original native holder",
-                               "",
-                               "non-append Binder metadata",
-                               "identity allocation was replaced"};
+  const char *diagnostics[] = {
+      "", "", "storage must remain opaque",      "original native holder",
+      "", "", "identity allocation was replaced"};
   for (unsigned mode = 0; mode != 7; ++mode)
     for (unsigned form = 0; form != 3; ++form) {
       SCOPED_TRACE(mode);
@@ -279,7 +275,7 @@ TEST_P(AndroidJNI, JavaBinderDispatchUsesPoolAndIncomingNativeContinuations) {
   using Binding = mobile::dalvik::AndroidApplicationSnapshot::ServiceManager::
       BinderProxy::NativeBinding;
   state.binder_proxies = {{7, false, Binding{3, 0, true}}};
-  for (unsigned mode = 0; mode != 6; ++mode)
+  for (unsigned mode = 0; mode != 7; ++mode)
     for (unsigned form = 0; form != 3; ++form) {
       SCOPED_TRACE(mode);
       SCOPED_TRACE(form);
@@ -292,7 +288,7 @@ TEST_P(AndroidJNI, JavaBinderDispatchUsesPoolAndIncomingNativeContinuations) {
       if (mode == 2 || mode == 3 || mode == 4) {
         EXPECT_EQ(result.Stop, ProcessStopReason::UnsupportedService)
             << result.Diagnostic;
-        const char *diagnostic = mode == 2   ? "exception serialization"
+        const char *diagnostic = mode == 2 ? "object translation is not modeled"
                                  : mode == 3 ? "BlockGuard"
                                              : "clock";
         EXPECT_NE(result.Diagnostic.find(diagnostic), std::string::npos)
@@ -313,13 +309,9 @@ TEST_P(AndroidJNI, JavaBinderDispatchUsesPoolAndIncomingNativeContinuations) {
       else {
         ASSERT_TRUE(calls);
         EXPECT_EQ(calls->start_milliseconds, 123000u);
-        if (mode == 2)
-          EXPECT_TRUE(calls->entries.empty());
-        else {
-          ASSERT_EQ(calls->entries.size(), 1u);
-          EXPECT_EQ(calls->entries[0].uid, 1000u);
-          EXPECT_EQ(calls->entries[0].count, mode == 3 ? 1u : 3u);
-        }
+        ASSERT_EQ(calls->entries.size(), 1u);
+        EXPECT_EQ(calls->entries[0].uid, 1000u);
+        EXPECT_EQ(calls->entries[0].count, mode == 2 || mode == 3 ? 1u : 3u);
       }
     }
 }

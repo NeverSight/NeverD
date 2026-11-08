@@ -17,6 +17,194 @@ mips_add:
 #endif
 .size mips_add,.-mips_add
 
+.globl mips_mul
+.type mips_mul,@function
+mips_mul:
+  jr $31
+  mul $2,$4,$5
+.size mips_mul,.-mips_mul
+
+/* Dead destinations still perform both original reads and their faults. */
+.globl mips_merge_discard
+.type mips_merge_discard,@function
+mips_merge_discard:
+  lwl $8,1($4)
+  lwr $8,1($4)
+  jr $31
+  addiu $2,$0,7
+.size mips_merge_discard,.-mips_merge_discard
+
+.globl mips_merge_zero
+.type mips_merge_zero,@function
+mips_merge_zero:
+  lwl $0,1($4)
+  lwr $0,1($4)
+  jr $31
+  addiu $2,$0,7
+.size mips_merge_zero,.-mips_merge_zero
+
+/* Explicit arbitrary old bits test preserved lanes without relying on an
+ * uninitialized C value. Both instruction orders must discard old high bits. */
+.globl mips_merge_word
+.type mips_merge_word,@function
+mips_merge_word:
+  or $2,$5,$0
+#ifdef __MIPSEL__
+  lwl $2,3($4)
+  lwr $2,0($4)
+#else
+  lwl $2,0($4)
+  lwr $2,3($4)
+#endif
+  jr $31
+  nop
+.size mips_merge_word,.-mips_merge_word
+
+.globl mips_merge_word_reverse
+.type mips_merge_word_reverse,@function
+mips_merge_word_reverse:
+  or $2,$5,$0
+#ifdef __MIPSEL__
+  lwr $2,0($4)
+  lwl $2,3($4)
+#else
+  lwr $2,3($4)
+  lwl $2,0($4)
+#endif
+  jr $31
+  nop
+.size mips_merge_word_reverse,.-mips_merge_word_reverse
+
+.globl mips_merge_full
+.type mips_merge_full,@function
+mips_merge_full:
+  or $2,$5,$0
+#ifdef WIDE
+#ifdef __MIPSEL__
+  ldl $2,7($4)
+  ldr $2,0($4)
+#else
+  ldl $2,0($4)
+  ldr $2,7($4)
+#endif
+#else
+#ifdef __MIPSEL__
+  lwl $2,3($4)
+  lwr $2,0($4)
+#else
+  lwl $2,0($4)
+  lwr $2,3($4)
+#endif
+#endif
+  jr $31
+  nop
+.size mips_merge_full,.-mips_merge_full
+
+/* These destinations deliberately have no incoming source argument. */
+.macro complete_merge name, wide, reverse
+.globl \name
+.type \name,@function
+\name:
+.if \wide
+.if \reverse
+#ifdef __MIPSEL__
+  ldr $2,0($4)
+  ldl $2,7($4)
+#else
+  ldr $2,7($4)
+  ldl $2,0($4)
+#endif
+.else
+#ifdef __MIPSEL__
+  ldl $2,7($4)
+  ldr $2,0($4)
+#else
+  ldl $2,0($4)
+  ldr $2,7($4)
+#endif
+.endif
+.else
+.if \reverse
+#ifdef __MIPSEL__
+  lwr $2,0($4)
+  lwl $2,3($4)
+#else
+  lwr $2,3($4)
+  lwl $2,0($4)
+#endif
+.else
+#ifdef __MIPSEL__
+  lwl $2,3($4)
+  lwr $2,0($4)
+#else
+  lwl $2,0($4)
+  lwr $2,3($4)
+#endif
+.endif
+.endif
+  jr $31
+  nop
+.size \name,.-\name
+.endm
+
+complete_merge mips_uninitialized_word,0,0
+complete_merge mips_uninitialized_word_reverse,0,1
+#ifdef WIDE
+complete_merge mips_uninitialized_full,1,0
+complete_merge mips_uninitialized_full_reverse,1,1
+#else
+complete_merge mips_uninitialized_full,0,0
+complete_merge mips_uninitialized_full_reverse,0,1
+#endif
+
+.globl mips_merge_ro_global
+.type mips_merge_ro_global,@function
+mips_merge_ro_global:
+  lui $4,%hi(merge_ro_bytes+1)
+  addiu $4,$4,%lo(merge_ro_bytes+1)
+  or $2,$0,$0
+#ifdef __MIPSEL__
+  lwl $2,3($4)
+  lwr $2,0($4)
+#else
+  lwl $2,0($4)
+  lwr $2,3($4)
+#endif
+  jr $31
+  nop
+.size mips_merge_ro_global,.-mips_merge_ro_global
+
+.globl mips_merge_rw_global
+.type mips_merge_rw_global,@function
+mips_merge_rw_global:
+  lui $4,%hi(merge_rw_bytes+1)
+  addiu $4,$4,%lo(merge_rw_bytes+1)
+  or $2,$0,$0
+#ifdef __MIPSEL__
+  lwl $2,3($4)
+  lwr $2,0($4)
+#else
+  lwl $2,0($4)
+  lwr $2,3($4)
+#endif
+  jr $31
+  nop
+.size mips_merge_rw_global,.-mips_merge_rw_global
+
+.section .rodata,"a",@progbits
+.p2align 3
+.type merge_ro_bytes,@object
+merge_ro_bytes:
+  .byte 0x83,0x91,0xa2,0xb3,0xc4,0x15,0x26,0x37
+.size merge_ro_bytes,.-merge_ro_bytes
+.data
+.p2align 3
+.type merge_rw_bytes,@object
+merge_rw_bytes:
+  .byte 0x83,0x91,0xa2,0xb3,0xc4,0x15,0x26,0x37
+.size merge_rw_bytes,.-merge_rw_bytes
+.text
+
 .globl mips_likely
 .type mips_likely,@function
 mips_likely:
@@ -28,6 +216,17 @@ mips_likely:
   jr $31
   or $2,$5,$0
 .size mips_likely,.-mips_likely
+
+.globl mips_likely_load
+.type mips_likely_load,@function
+mips_likely_load:
+  addiu $2,$0,3
+  beql $5,$0,1f
+  lw $2,0($4)
+1:
+  jr $31
+  nop
+.size mips_likely_load,.-mips_likely_load
 
 .globl mips_load
 .type mips_load,@function
@@ -222,6 +421,33 @@ mips_jalr_memory:
   addiu $29,$29,24
 #endif
 .size mips_jalr_memory,.-mips_jalr_memory
+
+/* The slot reads memory and overwrites t9 after JALR captured the callee.
+ * Register arguments prepared before this read must still reach mips_add. */
+.globl mips_jalr_merge_slot
+.type mips_jalr_merge_slot,@function
+mips_jalr_merge_slot:
+#ifdef WIDE
+  daddiu $29,$29,-32
+  sd $31,24($29)
+#else
+  addiu $29,$29,-24
+  sw $31,20($29)
+#endif
+  lui $25,%hi(mips_add)
+  ori $25,$25,%lo(mips_add)
+  jalr $31,$25
+  lwl $25,1($6)
+#ifdef WIDE
+  ld $31,24($29)
+  jr $31
+  daddiu $29,$29,32
+#else
+  lw $31,20($29)
+  jr $31
+  addiu $29,$29,24
+#endif
+.size mips_jalr_merge_slot,.-mips_jalr_merge_slot
 
 .globl mips_return13
 .type mips_return13,@function

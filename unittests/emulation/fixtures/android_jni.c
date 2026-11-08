@@ -5002,7 +5002,16 @@ int jni_binder_local(unsigned form, unsigned mode) {
   if (mode == 5) {
     parcel_write(e, form, data, seek, 1, 0);
     parcel_write(e, form, data, write, 0, local[0]);
-    return 1;
+    CHECK(!C(e, int, 228));
+    parcel_write(e, form, data, seek, 1, 0);
+    CHECK(same_ref(e, local[0], parcel_result(e, 34, form, data, read)));
+    C(e, void, 61, data, recycle);
+    data = parcel_result(e, 114, form, type, obtain);
+    parcel_write(e, form, data, write, 0, local[0]);
+    parcel_write(e, form, data, seek, 1, 0);
+    CHECK(same_ref(e, local[0], parcel_result(e, 34, form, data, read)));
+    C(e, void, 61, data, recycle);
+    return C(vm, int, 5);
   }
   parcel_write(e, form, data, write, 0, local[0]);
   CHECK(!C(e, int, 228));
@@ -5316,7 +5325,11 @@ static int jd_body(Handle e, Ref self, unsigned code, Ref data, Ref reply,
   CHECK(C(e, int, 129, binder, caller) == 1000);
   CHECK(parcel_result(e, 49, jd_form, data, position) == 4);
   parcel_write(e, jd_form, reply, write, 1, number + code + flags);
-  parcel_write(e, jd_form, reply, strong, 0, self);
+  if (jd_mode == 6) {
+    for (unsigned i = 0; i != 6; ++i)
+      parcel_write(e, jd_form, reply, write, 1, 0xa0 + i);
+  } else
+    parcel_write(e, jd_form, reply, strong, 0, self);
   CHECK(parcel_result(e, 49, jd_form, reply, position) == 28);
   if (jd_mode != 1) {
     if (jd_last_data) {
@@ -5327,7 +5340,7 @@ static int jd_body(Handle e, Ref self, unsigned code, Ref data, Ref reply,
     jd_last_reply = C(e, Ref, 21, reply);
   }
   ++jd_calls;
-  if (jd_mode == 2) {
+  if (jd_mode == 2 || jd_mode == 6) {
     Ref error = C(e, Ref, 6, "java/lang/IllegalArgumentException");
     CHECK(!C(e, int, 14, error, (const char *)0));
   }
@@ -5385,6 +5398,12 @@ static int jd_peer(int fd) {
     if (turn == 3) {
       CHECK(!tx.flags && tx.size == 4 && !tx.objects);
       CHECK(!*(unsigned *)tx.buffer && jd_calls == 3);
+    } else if (jd_mode == 6) {
+      CHECK(!tx.flags && tx.size == 28 && !tx.objects);
+      const unsigned *words = (const unsigned *)tx.buffer;
+      CHECK(words[0] == (unsigned)-3 && words[1] == (unsigned)-1 && !words[2]);
+      for (unsigned i = 3; i != 7; ++i)
+        CHECK(words[i] == 0xa0 + i - 1);
     } else if (jd_mode == 5) {
       CHECK(tx.flags == 8 && tx.size == 4 && !tx.objects);
       CHECK(*(unsigned *)tx.buffer == (unsigned)-74);

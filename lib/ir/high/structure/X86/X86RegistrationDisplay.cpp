@@ -6,6 +6,7 @@
 
 #include "X86RegistrationDisplay.h"
 
+#include "../../pass/HighFrameAddress.h"
 #include "../HighCFSimplifyDetail.h"
 #include "../SEHFinallyBodiesDetail.h"
 #include "X86RegistrationRegions.h"
@@ -51,12 +52,40 @@ bool callsNamed(const HighExpr *E, llvm::StringRef Name) {
   return E && E->Kind == ExprKind::Call && E->CallTarget == Name;
 }
 
+constexpr llvm::StringLiteral kAbnormalTermination = "AbnormalTermination";
+/// Where MSVC keeps the registration record, from the frame pointer.
+constexpr int32_t kMSVCRecordFromFrame = -16;
+/// How many times a function's statements are read for what its variables hold:
+/// statements come in the order structuring left, which can put a use first.
+constexpr unsigned kFrameAddressPasses = 2;
+
 ExprPtr callOfRuntime(llvm::StringRef Name, TypeRef Type) {
   ExprPtr Call = HighExpr::makeCall(Name.str(), 0, {});
   // A pointer in <excpt.h>, which casts to the word the machine holds it as
   // wherever that is what something reads.
   Call->Type = Name == kExceptionInformation ? NdType::makePtr() : Type;
   return Call;
+}
+
+/// \p E once a read under it became a call of another width, as a pointer the
+/// machine held in a word: only a conversion can say that.
+ExprPtr keepViewValid(ExprPtr E) {
+  if (E->Kind == ExprKind::BitCast && E->Type && E->Operands.size() == 1 &&
+      E->Operands[0] && E->Operands[0]->Type &&
+      E->Type->Size != E->Operands[0]->Type->Size) {
+    E->Kind = ExprKind::Cast;
+    E->CastTo = E->Type;
+  }
+  return E;
+}
+
+/// Whether \p E calls anything.
+bool hasCallIn(const ExprPtr &E) {
+  if (!E)
+    return false;
+  if (E->Kind == ExprKind::Call)
+    return true;
+  return llvm::any_of(E->Operands, hasCallIn);
 }
 
 /// The direct call that is all \p S does, past the views of its value.
@@ -238,9 +267,15 @@ std::optional<int64_t> frameDistance(const HighExpr *E,
       (E->Op != NdOp::INT_ADD && E->Op != NdOp::INT_SUB))
     return std::nullopt;
   const HighExpr *Step = peelViews(E->Operands[1].get());
+  const HighExpr *From = E->Operands[0].get();
+  // A sum can hold its constant first, as `[edx + eax - 0x18]` with EDX known.
+  if (E->Op == NdOp::INT_ADD && (!Step || Step->Kind != ExprKind::Const)) {
+    From = E->Operands[1].get();
+    Step = peelViews(E->Operands[0].get());
+  }
   if (!Step || Step->Kind != ExprKind::Const)
     return std::nullopt;
-  const auto Base = frameDistance(E->Operands[0].get(), Frames);
+  const auto Base = frameDistance(From, Frames);
   if (!Base)
     return std::nullopt;
   const int64_t Delta = llvm::SignExtend64<32>(Step->ConstVal);
@@ -327,7 +362,7 @@ public:
         Result = std::make_shared<HighExpr>(*E);
       Result->Operands[I] = std::move(Operand);
     }
-    return Result;
+    return Result == E ? Result : keepViewValid(std::move(Result));
   }
 
 private:
@@ -476,7 +511,7 @@ private:
         if (!(Operand = std::move(Value)))
           return nullptr;
       }
-      return readable(Reads.rewrite(Copy));
+      return readable(Reads.rewrite(keepViewValid(std::move(Copy))));
     }
     default:
       return nullptr;
@@ -661,13 +696,18 @@ private:
         if (isOutgoingStackAddress(S.StoreAddr.get()))
           continue;
         ExprPtr Address = substitute(S.StoreAddr);
-        ExprPtr Value = substitute(S.StoreVal);
-        if (!Address || !Value)
+        if (!Address)
           return nullptr;
-        forgetLoads();
         const auto Word = frameDistance(Address.get(), Frames);
+        // Below the frame is the stack the runtime calls the filter on, where
+        // it keeps a register or makes room with a `push`: what it holds is no
+        // business of the value.
         if (Word && StackFloor && *Word < *StackFloor)
           continue;
+        ExprPtr Value = substitute(S.StoreVal);
+        if (!Value)
+          return nullptr;
+        forgetLoads();
         if (Word)
           Words[*Word] = Value;
         if (Word && IsPrivate(*Word, *Value))
@@ -832,7 +872,6 @@ RegistrationDisplay::settleClause(HighStmt &Try,
   if (Try.Kind != StmtKind::SEHTry || !Try.EHIsReducible ||
       Try.EHClauses.size() != 1 || Try.EHClauseBodies.size() != 1 ||
       Try.EHClauses[0].Kind != HighEHClauseKind::SEHFinally ||
-      Try.EHClauseBodies[0].empty() ||
       Try.EHClauses[0].FinallyKind == HighEHClause::FinallyBody::WholeBody)
     return std::nullopt;
   HighEHClause &Clause = Try.EHClauses[0];
@@ -850,9 +889,54 @@ RegistrationDisplay::settleClause(HighStmt &Try,
   ExprPtr Returned = returnedValue(Body, Facts->FinallyReturns);
   if (!seh_finally::settleHandlerReturns(Body, &Leaving))
     return std::nullopt;
+  nameAbnormalTermination(Body, Clause.FilterOrActionVA);
   Clause.FinallyKind = HighEHClause::FinallyBody::WholeBody;
   BodyResults[Clause.FilterOrActionVA] = Returned;
   return SettledFinally{std::move(*Ranges), Returns, std::move(Returned)};
+}
+
+bool RegistrationDisplay::hasLeftScope(va_t Address, va_t Root) const {
+  const auto Scope = ScopeOfRoot.find(Root);
+  if (Scope == ScopeOfRoot.end())
+    return false;
+  const auto &Scopes = EH->Registration->Scopes;
+  const auto &All = Facts->Stretches;
+  auto After =
+      std::upper_bound(All.begin(), All.end(), Address,
+                       [](va_t A, const RegistrationDisplayFacts::Stretch &S) {
+                         return A < S.Range.Begin;
+                       });
+  if (After == All.begin() || !std::prev(After)->Range.contains(Address))
+    return false;
+  for (int32_t Level : std::prev(After)->Levels)
+    for (size_t Step = 0; Step <= Scopes.size() && Level >= 0 &&
+                          static_cast<size_t>(Level) < Scopes.size();
+         ++Step) {
+      if (static_cast<size_t>(Level) == Scope->second)
+        return false;
+      Level = Scopes[Level].EnclosingLevel;
+    }
+  return true;
+}
+
+void RegistrationDisplay::nameAbnormalTermination(std::vector<HighStmt> &Body,
+                                                  va_t Root) const {
+  const auto Outlined = Facts->OutlinedBodies.find(Root);
+  if (Outlined == Facts->OutlinedBodies.end())
+    return;
+  // The handler is the unwind's way in, and says 1 where the normal path's call
+  // says 0: the clause is both, as AbnormalTermination() is.
+  forEachList(Body, [&](std::vector<HighStmt> &List) {
+    for (HighStmt &S : List) {
+      HighExpr *Call = const_cast<HighExpr *>(wholeCall(S));
+      if (!Call || Call->CallAddr != Outlined->second || Call->Operands.empty())
+        continue;
+      const HighExpr *First = peelViews(Call->Operands[0].get());
+      if (First && First->Kind == ExprKind::Const && First->ConstVal == 1)
+        Call->Operands[0] =
+            callOfRuntime(kAbnormalTermination, Call->Operands[0]->Type);
+    }
+  });
 }
 
 void RegistrationDisplay::takeNormalPath(std::vector<HighStmt> &List,
@@ -996,7 +1080,8 @@ bool RegistrationDisplay::isFilterTemporary(int64_t Slot, va_t Root,
 
 int64_t RegistrationDisplay::exceptionPointersSlot() const {
   return int64_t(Facts->FrameFromEntry.value_or(-4)) +
-         EH->Registration->RegistrationOffset.value_or(-16) - 4;
+         EH->Registration->RegistrationOffset.value_or(Facts->RecordFromFrame) -
+         4;
 }
 
 void RegistrationDisplay::settleLists(std::vector<HighStmt> &List,
@@ -1052,7 +1137,17 @@ void RegistrationDisplay::dropBodyCalls(HighFunc &Func) const {
     for (size_t I = 0; I < List.size();) {
       HighStmt &S = List[I];
       const HighExpr *E = wholeCall(S);
-      const auto Root = E ? Holder(E->CallAddr) : std::nullopt;
+      auto Root = E ? Holder(E->CallAddr) : std::nullopt;
+      // The outlined body of a clause that is there, called from past its
+      // scope.
+      if (E && !Root) {
+        const va_t Site = E->CallSiteAddr ? E->CallSiteAddr : S.Addr;
+        if (const auto Outlined = Facts->OutlinedCalls.find(Site);
+            Outlined != Facts->OutlinedCalls.end() &&
+            Filled.count(Outlined->second) &&
+            hasLeftScope(Site, Outlined->second))
+          Root = Outlined->second;
+      }
       if (!Root) {
         ++I;
         continue;
@@ -1238,6 +1333,186 @@ void RegistrationDisplay::nameExceptionReads(HighFunc &Func) const {
           Reads.noteAssign(*S.Dst, *S.Val);
       }
     });
+}
+
+void dropUnreadRegistrationStackWrites(HighFunc &Func,
+                                       const RegistrationDisplayFacts &Facts,
+                                       Arch Architecture) {
+  if (!Facts.StackFromEntry || !Facts.FrameFromEntry)
+    return;
+  const int64_t Floor = *Facts.StackFromEntry;
+  const int64_t Frame = *Facts.FrameFromEntry;
+  size_t Budget = ::neverd::limits::ir::
+      kHighDeadStoreElimElimUnreadPrivateFrameStoresBudget;
+  // A variable defined once as a frame address is that address.  A long
+  // function chains thousands of pushes, so each takes what the one before it
+  // worked out.
+  std::map<VarKey, unsigned> Definitions;
+  walkStmts(Func.Body, [&](const HighStmt &S) {
+    if (S.Kind == StmtKind::Assign && S.Dst && S.Dst->Kind == ExprKind::Var)
+      ++Definitions[varKey(S.Dst->Var)];
+  });
+  std::map<VarKey, int64_t> Addresses;
+  const auto Known = [&](const MedVar &V, unsigned) -> std::optional<int64_t> {
+    const auto It = Addresses.find(varKey(V));
+    return It == Addresses.end() ? std::nullopt
+                                 : std::optional<int64_t>(It->second);
+  };
+  const auto AddressOf = [&](const ExprPtr &E) {
+    return high_detail::frameAddressOffsetFrom(E, Func, Architecture, Budget, 0,
+                                               Known);
+  };
+  // Blocks can come in any order; what a second look adds is a join's.
+  for (unsigned Pass = 0; Pass < kFrameAddressPasses; ++Pass)
+    walkStmts(Func.Body, [&](const HighStmt &S) {
+      if (S.Kind != StmtKind::Assign || !S.Dst ||
+          S.Dst->Kind != ExprKind::Var || !S.Val ||
+          Definitions[varKey(S.Dst->Var)] != 1)
+        return;
+      if (const auto Address = AddressOf(S.Val))
+        Addresses[varKey(S.Dst->Var)] = *Address;
+    });
+  // What the function reads of its stack, how low a pointer into it goes, and
+  // how many stack words a call takes.
+  std::vector<std::pair<int64_t, int64_t>> Read;
+  std::optional<int64_t> Lowest;
+  bool FrameEscapes = false;
+  size_t MostArguments = 0;
+  std::function<void(const ExprPtr &)> Visit = [&](const ExprPtr &E) {
+    if (!E)
+      return;
+    if (E->Kind == ExprKind::Call)
+      MostArguments = std::max(MostArguments, E->Operands.size());
+    if (E->Kind == ExprKind::Load && !E->Operands.empty()) {
+      if (const auto Word = AddressOf(E->Operands[0])) {
+        const int64_t Size = E->Type ? E->Type->Size : sizeof(int32_t);
+        Read.emplace_back(*Word, *Word + Size);
+        return;
+      }
+    } else if (E->Kind != ExprKind::Const) {
+      if (const auto Word = AddressOf(E)) {
+        // A pointer reaches up from where it points, and the frame's own
+        // reaches its locals as well, which an outlined body does.
+        FrameEscapes |= *Word >= Frame;
+        Lowest = Lowest ? std::min(*Lowest, *Word) : *Word;
+        return;
+      }
+    }
+    for (const ExprPtr &Operand : E->Operands)
+      Visit(Operand);
+  };
+  const auto Written = [&](const HighStmt &S) -> std::optional<int64_t> {
+    if (S.Kind != StmtKind::Store || !S.StoreAddr || !S.StoreVal ||
+        S.MemoryOrdering != NdMemoryOrdering::None ||
+        S.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+      return std::nullopt;
+    return AddressOf(S.StoreAddr);
+  };
+  walkStmts(Func.Body, [&](const HighStmt &S) {
+    // An address a variable holds is read where the variable is.
+    if (S.Kind == StmtKind::Assign && S.Dst && S.Dst->Kind == ExprKind::Var &&
+        Addresses.count(varKey(S.Dst->Var)))
+      return;
+    if (Written(S)) {
+      Visit(S.StoreVal);
+      return;
+    }
+    forEachExpr(S, [&](const ExprPtr &E) {
+      if (&E != &S.Dst || E->Kind != ExprKind::Var)
+        Visit(E);
+    });
+    for (const HighEHClause &Clause : S.EHClauses)
+      Visit(Clause.FilterValue);
+  });
+  if (!Budget)
+    return;
+  const auto IsUnread = [&](int64_t Begin, int64_t End) {
+    return llvm::none_of(Read, [&](const std::pair<int64_t, int64_t> &R) {
+      return Begin < R.second && R.first < End;
+    });
+  };
+  // clang-cl reserves the words its calls take at the bottom of the frame,
+  // below anything a pointer to a local reaches.
+  const int64_t Reserved =
+      Facts.RecordFromFrame != kMSVCRecordFromFrame
+          ? Floor + int64_t(MostArguments) * int64_t(sizeof(uint32_t))
+          : Floor;
+  const std::set<va_t> Targets = gotoTargets(Func.Body);
+  forEachList(Func.Body, [&](std::vector<HighStmt> &List) {
+    std::set<const HighStmt *> Dropped;
+    for (size_t I = 0; I < List.size(); ++I) {
+      const HighStmt &S = List[I];
+      const auto Word = Written(S);
+      if (!Word || hasCallIn(S.StoreVal) || !S.StoreVal->Type)
+        continue;
+      const int64_t Size = S.StoreVal->Type->Size;
+      if (!IsUnread(*Word, *Word + Size))
+        continue;
+      if (*Word + Size > Reserved) {
+        if (!FrameEscapes && (!Lowest || *Word + Size <= *Lowest))
+          Dropped.insert(&S);
+        continue;
+      }
+      // Below the frame's stack pointer nothing but a call reads, and its
+      // arguments say what, as long as it says this one: a word past those a
+      // callee's text takes is all that shows it takes more.
+      int64_t Called = *Word;
+      const HighExpr *Call = nullptr;
+      for (size_t J = I + 1; J < List.size() && !Call; ++J) {
+        const HighStmt &Next = List[J];
+        if (const auto Other = Written(Next))
+          Called = std::min(Called, *Other);
+        else if (Next.Kind == StmtKind::Assign || Next.Kind == StmtKind::Nop ||
+                 (Next.Kind == StmtKind::Block && Next.Body.empty()))
+          continue;
+        else if (!(Call = wholeCall(Next)))
+          break;
+      }
+      if (!Call || (*Word - Called) / int64_t(sizeof(uint32_t)) <
+                       int64_t(Call->Operands.size()))
+        Dropped.insert(&S);
+    }
+    if (!Dropped.empty())
+      eraseKeepingBranchEntries(
+          List, Targets, [&](const HighStmt &S) { return Dropped.count(&S); });
+  });
+}
+
+void finishRegistrationDisplay(HighFunc &Func, const MedFunc &Med,
+                               Arch Architecture) {
+  if (!Med.RegistrationStates || !Med.RegistrationStates->Display)
+    return;
+  // A phi's copy nothing reads stands between a jump and where it lands.
+  std::set<VarKey> Read;
+  std::function<void(const ExprPtr &)> Note = [&](const ExprPtr &E) {
+    if (!E)
+      return;
+    if (E->Kind == ExprKind::Var)
+      Read.insert(varKey(E->Var));
+    for (const ExprPtr &Operand : E->Operands)
+      Note(Operand);
+  };
+  walkStmts(Func.Body, [&](const HighStmt &S) {
+    forEachExpr(S, [&](const ExprPtr &E) {
+      if (&E != &S.Dst || E->Kind != ExprKind::Var)
+        Note(E);
+    });
+    for (const HighEHClause &Clause : S.EHClauses)
+      Note(Clause.FilterValue);
+  });
+  const std::set<va_t> Targets = gotoTargets(Func.Body);
+  forEachList(Func.Body, [&](std::vector<HighStmt> &List) {
+    eraseKeepingBranchEntries(List, Targets, [&](const HighStmt &S) {
+      return S.IsPhiCopy && S.Kind == StmtKind::Assign && S.Dst &&
+             S.Dst->Kind == ExprKind::Var && !Read.count(varKey(S.Dst->Var)) &&
+             !hasCallIn(S.Val);
+    });
+  });
+  threadJumps(Func.Body);
+  dropNaturalJumps(Func.Body);
+  dropUnreadRegistrationStackWrites(Func, *Med.RegistrationStates->Display,
+                                    Architecture);
+  keepRegistrationLabelsInReach(Func.Body);
 }
 
 } // namespace neverd

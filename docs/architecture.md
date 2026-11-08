@@ -1305,14 +1305,25 @@ authentication operations. Unproved LLVM operations remain explicit.
 temporary consumed by an indirect call in the same block. Only scalar copies
 may intervene; memory reads/writes, control flow, other calls, operand
 redefinitions, extra uses, dead calls and mutable non-SSA functions cannot
-absorb the authentication. LLVM attaches the original key/discriminator to
-the call's `ptrauth` operand bundle, preserving the signed input even when LR
-supplied an original operand. Both C projections use auth-and-resign to the
-compiler's default function-pointer schema. A resolved display name cannot
-replace that authenticated target, and exact LLVM call prototypes remain
+absorb the authentication. Ordinary LLVM calls attach the original
+key/discriminator to the `ptrauth` operand bundle, preserving the signed input even when LR
+supplied an original operand. Generic C calls use auth-and-resign to the
+compiler's default function-pointer schema. Explicit Darwin C call-site
+prototypes and complete recovered native fixed C value prototypes use the
+shared machine-call bridge described below, retaining the actual BLRAA/BLRAB
+and original result registers. Recovered bindings retain their native identity,
+effects and declaration checks before HighC selects that bridge. LLVM consumes
+their validated physical carriers without requiring analyst source authority.
+Scalar, 128-bit integer and direct record/HFA values share the same transport;
+indirect native copies and hidden results still require their separate storage
+proofs. Native 128-bit SIMD carriers are not integer pairs: authenticated
+calls using them reject until the packet layout can carry full vector registers.
+A resolved display name cannot replace that authenticated target,
+and exact LLVM call prototypes remain
 exact. Explicit source call-site prototypes and recovered native C prototypes
-reuse that same target rendering, including floating arguments/results and a
-variadic fixed prefix where declared. They cannot authenticate to a raw pointer
+retain the original target, including floating arguments/results. Explicit
+prototypes also support a declared variadic prefix; recovered native bindings
+in this profile require fixed prototypes. They cannot authenticate to a raw pointer
 and then acquire a second implicit C check, or replace a captured target with
 its display name. Authenticated special-language bindings without a complete
 call ABI reject explicitly.
@@ -1322,9 +1333,10 @@ The mobile source assembler admits that exact shared C prefix before
 declarations, including after the floating-point contraction policy, and
 preserves it during method assembly. Modified prefixes and arbitrary
 conditional or mutating directives remain unsupported.
-Clang O0 can retain an intermediate resign and produce a different invalid-PAC
-diagnostic from the original branch; this is not exact exception-syndrome
-equivalence. Model rejection evidence compares exception classes; complete ESR
+Generic calls without a complete recovered value ABI at Clang O0 can retain an
+intermediate resign and produce a different invalid-PAC diagnostic from the original branch;
+this is not exact exception-syndrome equivalence. Model rejection evidence
+compares exception classes; complete ESR
 and exact fault-PC equality remain unqualified. Whole-image arm64e rebuilding
 still requires the separate
 authenticated storage, relocation and signed-unwind ABI contract.
@@ -1367,6 +1379,22 @@ type uses the shared natural-record PCS classifier, including mixed records
 and the HFA size exception. It introduces no LLVM `sret`, `byval`, `noalias`,
 alignment or dereferenceability promise on the original storage. The existing
 native logical-result adapter still requires a reconstructible member layout.
+
+Explicit authenticated Darwin C calls with direct results reuse the same
+bridge. Each declared integer or floating return register is stored at its
+original width immediately after the branch returns. LLVM and both C routes
+reconstruct the logical scalar, 128-bit value, record or HFA from those pieces,
+using the shared validated ABI offsets. Record padding is not a result member.
+HighIR retains each complete logical argument. HighC evaluates it once and
+copies its declared pieces into the physical argument slots, using that same
+ABI mapping and excluding padding. Original-x8 calls retain their existing
+physical operands and exact storage address.
+Direct-result calls initialize only their target, modifier and actual argument
+pieces. They pass the outgoing stack size as a separate assembly operand;
+unused packet lanes and a nonexistent x8 result input need no initialization.
+This avoids an intermediate authentication or resign operation, including at
+O0; invalid signatures remain the responsibility of the original authenticated
+branch. Raw calls with direct results retain their existing typed C/LLVM path.
 
 The bridge preserves the compiler's stack in a callee-saved register, reserves
 the Darwin red zone plus aligned outgoing arguments, and forces a compiler
@@ -1885,8 +1913,14 @@ address, target or complete import identity, key, diversity and address-diversit
 flag, together with the image CPU type and ABI subtype. Repacking chain metadata
 may keep that identity; changing a signing recipe, import or slot may not.
 Per-format strides, import-addend overflow, segmented targets and page/storage
-bounds remain validated. This preservation contract does not synthesize signed
-storage, install new authenticated imports or authorize whole-image rebuilding.
+bounds remain validated. Multiple starts in one page retain the same slot and
+signing identities. Overflow lists must terminate within their owning table,
+use ascending starts and contain no duplicate or partially overlapping pointer
+storage across either bind or rebase phase. Unowned nonzero overflow entries
+and invalid padding reject before a dependency state is published. The start
+ordering follows [dyld's chain validation](https://github.com/apple-oss-distributions/dyld/blob/main/common/MachOAnalyzer.cpp).
+This preservation contract does not synthesize signed storage, install new
+authenticated imports or authorize whole-image rebuilding.
 
 This support covers static loading, lifting and C/LLVM inspection. Native
 rebuilding and source replacement of an arm64e image fail explicitly until
@@ -4653,25 +4687,35 @@ item over bytes no string or code holds where they are (`Listing::dataRenamed`,
 `Listing::dataItemsChanged`), the session a name without reading its table
 (`neverd_rename_take`), and a declaration of types no other names reads them against
 what it read of the library once (`Session::LocalTypeNames`), on the library itself
-(`TypeLibrary::Trial`, which undoes a refused declaration). The GUI opens with `write_behind`: the reply to such an edit goes before
+(`TypeLibrary::Trial`, which undoes a refused declaration). A function's declaration
+reads against the library without copying it, its prototype the parse's own; one that
+would define a type reads again on a copy (`parseFunctionDeclaration`). The GUI opens with `write_behind`: the reply to such an edit goes before
 its write, which runs the same journaled transaction in order on a thread of its own
 (`ProjectHistory::persistLater`), joined with what is queued behind one already
 writing. What may read the project's files waits for it first. A document of a view
 notes the addresses its render read and its decoration looked up, and reads what such
 an edit reached when it is next asked for, so the edit leaves the owner's other
-documents as they are (`Engine::keepNamedViewsThrough`, `Engine::readViewEdits`).
+documents as they are (`Engine::keepNamedViewsThrough`, `Engine::readViewEdits`). A
+function's declaration does so too while the stores' names stand, which they do unless
+it hides a prototype analysis read.
 Decoration asks for the image's names and comments by address, and the edit changes
 that one row (`CodeEdits::ImageFacts`), so a view costs the same among thousands.
 The GUI starts a replica on a function as its Set Type dialog opens
 (`AnalysisService::prepareRead`) and has it prepare the function and build its listing
 (`prepare_function`), so the render after the edit finds its analysis and its callees'
 ready. A replica takes a function's new name in its listing as the owner does, and the
-names that changed row by row (`Engine::takeNames`), so its name index stands. A page the
+names that changed row by row (`Engine::takeNames`), so its name index stands, and so
+does the function list the next selection reads (`Session::functionListCurrent`). A page the
 GUI keeps is named by the document and lines it came from; a later read names it
 (`if_none_match`), and while the document stands the worker says so instead of sending
 the page again (`QueryService::State::keptPages`).
 A replica takes those edits in place (`analysis_update_names`), since no analysis
-reads them: what it keeps of a view stays the view's. A note on a function and a data
+reads them: what it keeps of a view stays the view's. The owner's snapshot for it does
+not wait for the write (`analysis_snapshot` `in_memory`): the replica takes the names
+and function rows that changed as the owner took them, and waits for the write only
+for what it must read from the files (`Engine::awaitOwnerWrite`). Its name index
+stands while the list reads the same after names are derived again
+(`FunctionNameIndex::Spelled`). A note on a function and a data
 item, which nothing analyzed or rendered reads, leave the renders as they are, and a
 new name of data costs those that asked for it. A function's declaration reaches only
 what the decompiler reads, so the debug context takes it in place
@@ -15102,6 +15146,12 @@ semantics. A `DecodedExecutionUnit` captures a delayed transfer and its slot,
 while normal disassembly still consumes four bytes. LowIR records their byte
 ownership and execution order; MedIR expands predicated effects before SSA.
 
+`MedMIPSMergeValues` owns the source-only proof for adjacent complementary
+merge loads in a single ordinary leaf block. It runs after SSA/projection/DCE
+and before ABI recovery, binds physical LowIR occurrences to MedIR, and removes
+only a first load's unobserved old-value operand. Both reads remain ordered;
+calls, PHIs, exceptional flow and unproved uses retain their original inputs.
+
 The focused MIPS loader, integer, flow, SDK and pipeline suites cover these
 contracts. Owned kernels are recompiled from HighC and LLVMC for the original
 MIPS target and compared with their assembly originals in pinned Unicorn.
@@ -16300,8 +16350,25 @@ jump still enters, which C cannot say, prints as a block with its handler in a
 comment, and the others settle again without it. A clause starts at its handler
 whatever order its statements were found in, since nothing but the runtime enters
 it, and statements at one address stay together, since a jump to it lands on the
-first. A frame whose record is not where the runtime leaves EBP, as clang-cl's, is
-not read this way: its handlers' code keeps the block view. `lib/ir/high/structure/X86/X86RegistrationDisplay.cpp` runs this and takes the
+first. clang-cl keeps its record below what its prologue pushes after EBP, so the
+runtime enters each handler below the frame's EBP, and it outlines its filters and
+`__finally` bodies. `RegistrationDisplayFrame` takes the handlers' own frame code out
+of the way, so they read as MSVC's do, and the normal path's call of an outlined body
+goes the way a `call` of an inline one does, its flag being `AbnormalTermination()`.
+A handler of any other shape leaves the frame in the block view.
+
+The loader finds a frame's entry from its own bytes where no symbol or padding says:
+clang-cl pads with no-ops, so `slotRecordEntry` reads the prologue that writes the
+record's words, and a caller of `__SEH_prolog4` has its own `push; push; call` once the
+code before it ends, by a jump away too. The shared prologue is no part of the frame it
+builds. What a frame's flow runs through is its code, whatever a boundary guess makes of
+its bytes (`getX86RegistrationBodyInstructions`).
+
+At the end, `dropUnreadRegistrationStackWrites` removes writes of stack words nothing
+reads: the arguments a call's own text says, and frame words no pointer reaches. With
+the handlers' code in the function's statements a word's reads are all in sight, which
+is why this runs here and not in the generic cleanup, which leaves exception frames
+alone. `lib/ir/high/structure/X86/X86RegistrationDisplay.cpp` runs this and takes the
 normal path's `call` of each body away. Within one call-removal pass, each
 queried body's merged ranges are computed once from the unchanged display facts,
 including empty results. Bodies are still searched in root-address order, and
@@ -17612,7 +17679,7 @@ Enabled transaction tracing stops explicitly before native validation.
 Direct native calls skip the Java wrapper. Null data throws a catchable
 NullPointerException with a null message before inspecting the optional reply;
 non-null Parcels reuse the owned/recycled lifecycle checks without changing
-bytes or positions. Local Binder dispatch remains unsupported.
+bytes or positions. Local Binder uses the shared Java upcall path described below.
 
 Each supplied proxy may independently declare `native_binding` with a positive
 signed `fd`, a uint32 `handle`, and explicit `alive`. The native adapter resolves
@@ -17700,6 +17767,22 @@ identity substitutes for driver state. Semantics follow API 28
 [BinderCallsStats.java](https://android.googlesource.com/platform/frameworks/base/+/android-9.0.0_r1/core/java/com/android/internal/os/BinderCallsStats.java)
 and [IPCThreadState.cpp](https://android.googlesource.com/platform/frameworks/native/+/android-9.0.0_r1/libs/binder/IPCThreadState.cpp).
 
+`AndroidParcelException.cpp` owns the default API 28 `writeException` envelope.
+Seven common runtime-exception families use literal wire tags, virtual
+`Throwable.getMessage`, existing UTF-16 writes and the disabled-stack-trace
+header. Unknown runtime exceptions write a zero tag before rethrowing the same
+identity. `writeNoException` uses the initial null StrictMode violation list.
+Framework upcalls materialize thrown identities through Runtime's existing owner.
+Incoming Binder catches RuntimeException/RemoteException, rewinds without
+truncating the reply and invokes this same method; serialized exceptions count as
+handled calls and keep the normal reply-ack lifetime. Existing tail bytes remain
+observable. Overwrites retain Binder offsets; an invalid current object type
+reaches the shared Linux Binder translation boundary. Parcelable/class-loader
+payloads, ServiceSpecificException,
+Throwable-cause construction, debug stack-trace parceling and uncaught logging
+remain explicit boundaries; no error reply or log record is fabricated.
+See API 28 [Parcel.java](https://android.googlesource.com/platform/frameworks/base/+/android-9.0.0_r1/core/java/android/os/Parcel.java).
+
 `enforceInterface` still requires incoming flags and the Java StrictMode upcall.
 `AndroidParcel.cpp` owns native capacity separately from initialized data.
 Borrowed growth copies live bytes, acquires retained object references, and only
@@ -17708,12 +17791,26 @@ making spare bytes readable. In-capacity borrowed writes use the native memory
 owner and retain read-only faults. `AndroidBinderObjects.cpp` tracks native-only
 remote references across copied Parcels independently of Java proxy creation;
 final release uses the existing Linux strong/weak reference commands.
+Parcel writes retain existing object offsets and strong acquisitions, including
+duplicate or non-append strong writes. Owned release walks the current table
+backwards and decodes the current bytes at each offset. Unknown tags and null
+local pointers release nothing; overwriting a record can therefore leave its
+original reference alive. Scalar/String read validation lazily sorts the actual
+table, while object reads use the native forward/backward hint search without
+sorting. Reply replacement releases the old records before replacing their
+bytes. Unmarshalling refuses retained offsets even in an unsorted table; when
+all offsets are dropped, native truncation releases them forwards.
+Borrowed in-place writes keep IPC ownership; detachment acquires the
+current records before releasing the lease. Weak/FD lifecycle operations and
+release through an unknown or unowned native identity stop explicitly.
+These rules follow API 28
+[Parcel.cpp](https://android.googlesource.com/platform/frameworks/native/+/android-9.0.0_r1/libs/binder/Parcel.cpp).
 In-capacity strong writes preserve JNI Binder conversion order before attempting
 the received offset-table pointer's realloc. The native adapter and C import use
 one `Bionic::reallocate` implementation. Binder arena pointers fail its allocation
 ownership check before memory access, even with zero offsets. Incoming context
 association, uncached context ping, automatic pool-thread creation/starvation
-timing, exception serialization/logging, tracing, changed-policy Java BlockGuard
+timing, uncaught exception logging, tracing, changed-policy Java BlockGuard
 restoration, dump/shell/property callbacks, nested/one-way transactions and weak
 objects/FDs remain explicit boundaries. ServiceManager `lookup_results` remain a separate semantic input;
 this transport does not turn those entries into kernel peers or replies.

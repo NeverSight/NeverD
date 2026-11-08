@@ -2542,6 +2542,7 @@ bool NdOpEmulator::executeCopy(const LowOp &Op) {
       if (Op.Output.isReg() || Op.Output.isTemp()) {
         Registers.erase(Op.Output.Offset);
         WideRegisters.erase(Op.Output.Offset);
+        UnknownBits.erase(Op.Output.Offset);
       }
       return true;
     }

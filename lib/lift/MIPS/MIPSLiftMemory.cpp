@@ -11,12 +11,37 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
 
 namespace neverd {
 
 bool MIPSLifter::liftMemory(State &S, uint32_t Word) const {
   const unsigned Opcode = Word >> 26;
+  if (const auto Load = mips::mergeLoadOpcode(Opcode)) {
+    if (Load->Bytes > S.Width)
+      return false;
+    const unsigned Base = (Word >> 21) & 31;
+    const unsigned Register = (Word >> 16) & 31;
+    const auto Displacement = uint64_t(int64_t(int16_t(Word)));
+    const NdVar Address = S.binary(NdOp::INT_ADD, S.read(Base),
+                                   NdVar::cst(Displacement, S.Width));
+    const NdVar Old = S.read(Register);
+    NdVar Result = S.makeTemp(Load->Bytes);
+    S.emitIntrinsic(Load->Id, Result, {Address, S.resize(Old, Load->Bytes)});
+    if (Load->Id == Intrinsic::MIPSLwr && S.Width == 8 && Register) {
+      // r2 permits two high-word results for a partial LWR. Keep that value
+      // separate: a following LWL consumes only the exact low word and must
+      // not inherit an observable precondition on discarded high bits.
+      const NdVar High = S.makeTemp(4);
+      S.emitIntrinsic(Intrinsic::MIPSLwrUpper, High, {Address, Old, Result});
+      const NdVar Joined = S.makeTemp(8);
+      S.emit(NdOp::CONCAT, Joined, {High, Result});
+      Result = Joined;
+    }
+    S.write(Register, Result);
+    return true;
+  }
   unsigned Bytes = 0;
   bool Store = false;
   bool Signed = true;

@@ -1742,12 +1742,14 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
       OS << "} __finally {\n";
       // Keep the termination handler's address visible next to its body, or
       // in place of one that could not be projected.  A handler known to do
-      // nothing is an empty clause, as its source would be.
-      if (Clause.FinallyKind == HighEHClause::FinallyBody::OutOfLine ||
-          !stmtsEffectivelyEmpty(Stmt.EHClauseBodies.front())) {
+      // nothing says so with an empty statement, as its source can.
+      emitIndent(Indent + 1);
+      OS << "/* finally handler @ 0x"
+         << llvm::utohexstr(Clause.FilterOrActionVA) << " */\n";
+      if (Clause.FinallyKind != HighEHClause::FinallyBody::OutOfLine &&
+          stmtsEffectivelyEmpty(Stmt.EHClauseBodies.front())) {
         emitIndent(Indent + 1);
-        OS << "/* finally handler @ 0x"
-           << llvm::utohexstr(Clause.FilterOrActionVA) << " */\n";
+        OS << ";\n";
       }
       {
         const bool SavedHandler = InEHClauseBody;

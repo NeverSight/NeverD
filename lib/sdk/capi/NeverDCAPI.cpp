@@ -55,12 +55,14 @@
 #include "neverd/support/StackSizeMain.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/Sequence.h"
 #include "llvm/Object/Binary.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/xxhash.h"
 
 #include <algorithm>
 #include <atomic>
@@ -76,19 +78,38 @@ using namespace neverd::sdk;
 
 namespace neverd::sdk {
 
+uint64_t Session::spelledFunction(const FuncInfo &F) {
+  return llvm::xxh3_64bits(F.Name) ^ (F.Entry * 0x9E3779B97F4A7C15ULL);
+}
+
 std::optional<size_t> Session::functionIndexNamed(llvm::StringRef Name) {
   // The list an image's functions make is read once for every name looked up
-  // in it, rather than once for each.
+  // in it, rather than once for each.  Its names derived again, it may read the
+  // same: then the index stands.
+  if (NameIndex && NameIndex->Revision != FunctionListRevision &&
+      NameIndex->List == Functions.data() &&
+      NameIndex->Count == Functions.size() &&
+      llvm::all_of(llvm::seq<size_t>(0, Functions.size()), [&](size_t I) {
+        return NameIndex->Spelled[I] == spelledFunction(Functions[I]);
+      }))
+    NameIndex->Revision = FunctionListRevision;
   if (!NameIndex || NameIndex->Revision != FunctionListRevision ||
       NameIndex->List != Functions.data() ||
       NameIndex->Count != Functions.size()) {
-    FunctionNameIndex Index{
-        FunctionListRevision, Functions.data(), Functions.size(), {}, {}, {}};
+    FunctionNameIndex Index{FunctionListRevision,
+                            Functions.data(),
+                            Functions.size(),
+                            {},
+                            {},
+                            {},
+                            {}};
     Index.FirstNamed.reserve(Functions.size());
     Index.FirstAt.reserve(Functions.size());
+    Index.Spelled.reserve(Functions.size());
     for (size_t I = 0; I < Functions.size(); ++I) {
       Index.FirstNamed.try_emplace(Functions[I].Name, I);
       Index.FirstAt.try_emplace(Functions[I].Entry, I);
+      Index.Spelled.push_back(spelledFunction(Functions[I]));
     }
     for (const Export &Exp : Img.Exports)
       Index.Exported[Exp.Name].push_back(Exp.Addr);

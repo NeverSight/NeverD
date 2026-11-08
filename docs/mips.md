@@ -29,6 +29,19 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   multiplication and aligned integer loads/stores have explicit lifter rules.
   MIPS64 word results are sign extended where the ISA requires it. Writes to
   `$zero` discard the result without discarding required memory effects.
+- `LWL`/`LWR` and MIPS64 `LDL`/`LDR` retain the exact byte span of each
+  instruction, including a discarded destination. They do not combine a pair
+  into a wider speculative read. Source lowering retains guest alignment bits
+  when direct image data is rebound. Indexed merge reads into rebuilt image
+  storage still require an explicit address contract.
+- SPECIAL2 `MUL` computes the low word and explicitly invalidates both HI and
+  LO. Dead unpredictable results can be removed; an observed result cannot
+  become an old value or zero. MIPS64 word-input restrictions are checked.
+  A partial MIPS64 `LWR` separates its exact low word from its implementation
+  dependent upper word. A subsequent `LWL` can discard those upper bits;
+  source emission refuses an observed upper word unless it proves a result
+  shared by the ISA's permitted implementations.
+
 - o32 uses `$a0`–`$a3`, a 16-byte caller argument area and aligned register pairs
   for 64-bit integers. n64 uses registers 4–11 and eight-byte argument slots.
   Big-endian integer pairs put their high word first, and narrow stack scalars
@@ -38,10 +51,29 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   adapter still declines split o32 values, register-padding holes and narrow
   big-endian overflow slots; complete typed ABI reconstruction is not claimed.
 
+LowIR execution retains the common known bits of the two permitted partial
+MIPS64 `LWR` upper words. Scalar COPY, SUBBYTES, CONCAT and integer extensions
+transport that uncertainty, so a later complementary load can produce a fully
+known value. Public register reads refuse a view containing unknown bits;
+stores, arithmetic and control also refuse any unknown bits they observe.
+Narrow reads can still consume a defined low word. This does not select a CPU's
+implementation-dependent behavior or give uninitialized registers a zero value.
+
+Source recovery proves complete adjacent merge pairs in a single ordinary leaf
+block before inferring parameters. It checks the original instruction
+occurrences, the directed address relation for the target byte order, and every
+use of the first result. Only the first core's unobserved incoming destination
+may become zero; the second still consumes the first result. Both reads and
+their fault order remain. Calls, PHIs, exceptional edges, other control flow,
+observed partial results and unproved address relationships retain the original
+dependency. Multi-block and nonadjacent pairs remain outside this proof.
+Concrete LowIR transport and source parameter inference have separate validation
+boundaries; this source proof does not initialize absent machine registers.
+
 This is a strict subset. n32, historical MIPS I–V profiles, Release 6, MIPS16,
 microMIPS, floating point, DSP/MSA, privileged instructions, LL/SC reservations,
-unaligned merge accesses and trapping arithmetic/division are not admitted by
-the initial lifter. Unsupported instructions, missing slots and transfers in a
+unaligned merge stores and trapping arithmetic/division are not admitted by
+the current lifter. Unsupported instructions, missing slots and transfers in a
 delay slot produce errors, not replacement NOPs. Floating/aggregate source ABI
 classification, arbitrary PIC/gp recovery, raw-input target selection and
 native code rewriting are not claimed. Unicorn is a test reference, not a
@@ -54,7 +86,21 @@ The ELF tests construct bytes independently of the loader. Integer semantics
 have mathematical expectations and a pinned Unicorn differential reference.
 Control tests cover pre-slot operand capture, visible links, annulment and
 independently entered slots. Pipeline tests check C/LLVM generation and target
-data layouts for all four width/byte-order combinations.
+data layouts for all four width/byte-order combinations. Merge-load tests cover
+every offset, bounded memory, discarded results, base/destination aliasing and
+faults. MUL tests distinguish unread HI/LO clobbers, separately restored
+accumulators and invalid MIPS64 word inputs.
+Partial-value tests also cover both merge orders with arbitrary old upper
+words, common known-bit slices, sign extension of unknown sign bits, narrow
+versus wide stores, malformed transports, partial register writes, temporary
+reuse, explicit seeding, reset and preserved/volatile call state. MFHI/MFLO can
+transport an unpredictable result; querying or computing with that result
+still refuses it until the observed bits are overwritten.
+Complete-pair source fixtures also leave the destination uninitialized, exercise
+both orders at every offset with fixed and seeded random old machine values,
+and compare independently assembled expected bytes. Page-edge faults check
+whether the preceding merge read occurred. Branch-likely load fixtures check
+that an annulled invalid-memory slot returns normally and an executed slot faults.
 
 ```sh
 python3 scripts/build.py build-mips --target NeverDMIPSTests NeverDMIPSIntegerTests NeverDMIPSFlowTests NeverDMIPSSDKTests NeverDMIPSPipelineTests neverd --parallel 4
@@ -69,14 +115,67 @@ callees. See the
 [testing guide](testing.md#mips-elf-analysis-and-source-roundtrips) for setup.
 A registered test is not a claim that it has passed on every host.
 
-The initial qualification used macOS arm64 Release: 1,212 focused/shared
-CTest cases passed, including 133 MIPS cases. All 128 source roundtrip groups
-(16 kernels, four profiles, two backends) passed 312 input cases. The shared
-parameter-width proof also covers x86-64, ARM and AArch64, preserving real
-truncations and excluding unrelated values. Linux/Windows host builds and GUI
-operation were not exercised. Local receipts are
-`build-mips/ctest-mips-qualified.log`, `build-mips/roundtrip-final/results.json`
-and `build-mips/qualification.json`.
+The merge-load/MUL qualification used macOS arm64 Release, integrated with
+dev `e320fec5b`: 1,294 focused/shared CTest cases passed, including 169 MIPS
+cases. All 200 source roundtrip groups (25 kernels, four profiles, two backends)
+passed 992 normal inputs and 24 expected read-fault cases. The latter check
+discarded destinations and a JALR slot fault before callee entry. HighC image
+merge fixtures execute with the original image unmapped. Disposable roundtrip
+objects and executables are deleted after success; sources and hashes remain.
+
+The shared checks cover byte projection, liveness, return classification and
+call contracts on x86-64, i386, ARM and AArch64. CTest used four concurrent
+tests with `NEVERD_THREADS=1`; an earlier AAPCS64 source-compilation timeout
+passed both in isolation and in the final run. Linux/Windows host builds and
+GUI operation were not exercised. Local receipts are
+`build-mips/ctest-mips-merge-final.log`,
+`build-mips/roundtrip-merge-final/results.json` and
+`build-mips/qualification-merge.json`.
+
+After integrating dev `1d27c2d2b`, the Release CLI and MIPS targets rebuilt
+successfully, all 169 MIPS tests passed again, and the selected firmware views
+were regenerated. This follow-up covers the intervening SDK changes; the
+broader and source-roundtrip results above remain tied to their recorded build.
+
+The partial-value follow-up on dev `a72fcd510` passed 330 MIPS/shared cases.
+After adding the fully unknown-destination regression, all 64 MIPS integer
+cases and 691 jump-table cases passed. Six jump-table cases were skipped:
+two require a compiler-generated table shape this compiler did not produce,
+one requires an x86-64 Linux host, and three require unavailable QEMU user-mode
+executors. The selected firmware views still emit successfully. Receipts are
+`build-mips/ctest-partial-values-shared.log`,
+`build-mips/ctest-partial-values-jumptable.log` and
+`build-mips/partial-values/qualification.json`. The 200-group source result
+above belongs to the preceding merge-load increment, not a rerun of this one.
+The final integration with dev `9e7932d73` and Capstone `20a8dd5f` rebuilt the
+CLI/MIPS targets, passed all 189 MIPS cases and regenerated the selected
+firmware views. The broader jump-table qualification remains tied to its
+recorded earlier dependency snapshot.
+
+The complete-pair source follow-up on dev `537264cf` passed 240 roundtrip
+groups (30 kernels, four profiles, both C routes): 3,832 normal inputs and 96
+expected read faults. These include uninitialized destinations, both page-edge
+fault orders and annulled/executed invalid-memory likely slots. The selected
+Archer C7 views were regenerated successfully. The source receipt is
+`build-mips/roundtrip-source-pairs-final/results.json`; the wider qualification
+is recorded in `build-mips/source-merge-pairs/qualification.json`.
+All 221 MIPS cases passed across the broad run and the final 69-case
+pipeline/proof suite, including actual base/destination aliasing and reversed
+address relations. The broader 818-case selection initially passed 808 cases;
+nine timed-out generated-source matrices completed on isolated reruns (eight
+through CTest, one direct run in 33 seconds). One x64/AArch64 native-hint
+assertion also fails with unchanged dev production code and the MIPS proof
+absent from the binary. It is recorded as an existing failure, not a passing
+check. These shared results retain their original dependency snapshot.
+Integrations with dev `aac568578` and then `4c57243f`, using Capstone
+`8b81f225`, each passed all 221 MIPS cases and repeated all 240 source groups
+with identical generated source hashes. The final build also regenerated all
+selected firmware views with unchanged source hashes and verified call LLVM.
+Its current source receipt is
+`build-mips/roundtrip-source-pairs-shared-dev/results.json`; the integration
+commands and binary hashes are in
+`build-mips/source-merge-pairs/shared-dev-integration.json`. Earlier detailed
+reports are retained in verified local archives.
 
 ## TP-Link firmware workflow
 

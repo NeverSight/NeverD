@@ -1,0 +1,12 @@
+//===- SourceAggregateFixtures.def - Aggregate test storage -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// SOURCE_AGGREGATE_VALUE(Type, Name, Value) defines independent test inputs.
+//===----------------------------------------------------------------------===//
+
+SOURCE_AGGREGATE_VALUE(va_t, kSwiftMixedCarrierSink, 0x3000)
+
+#undef SOURCE_AGGREGATE_VALUE

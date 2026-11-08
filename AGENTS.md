@@ -61,6 +61,12 @@ Choose the actual target/filter from the testing guide. Run the smallest check
 that can disprove the change, fix failures caused by the work, and rerun affected
 checks. Broaden coverage for shared semantics, ISA/format changes, or PR review.
 Local builds and fixtures are disposable and have no production access.
+Before the next attempt and after each successful, failed or abandoned attempt,
+remove unused generated binaries, duplicate model installations and other
+reproducible temporary products after recording their results. Keep the active
+build, current baseline inputs and necessary diagnostics. Cold-archive superseded
+reports with a recovery index and verified decompressed hashes before removing
+originals; record cleanup in the task checkpoint.
 
 For implementation requests, continue through verification without asking after
 each step. Stop when the user requested diagnosis/review only, or when completion

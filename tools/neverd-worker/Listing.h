@@ -120,8 +120,10 @@ public:
   /// namesChanged.  A view of a function reads no data item (viewGeneration).
   bool dataItemsChanged();
   /// A declaration changed.  What the listing decoded shows what a function was
-  /// declared as, and reads it again; nothing else it has read changes.
-  void declarationsChanged();
+  /// declared as, and reads it again; nothing else it has read changes.  With
+  /// \p viewsReadIt a kept view of a function reads it by its reads, as a name
+  /// of data (viewGeneration).
+  void declarationsChanged(bool viewsReadIt = false);
   /// How many times names were read again over a built listing.
   std::uint64_t nameBuilds() const;
   /// Only functions' names changed.  The next query reads them again, and a
@@ -199,7 +201,7 @@ public:
   /// generation() but for what only functions' names change, which a function's
   /// engine pages do not spell: a view reads them as its decoration runs.  Data
   /// items reach no view at all, and a name of data only the pages of what read
-  /// it, by their reads.
+  /// it, by their reads, as a declaration does where the caller says so.
   std::uint64_t viewGeneration() const;
 
 private:
