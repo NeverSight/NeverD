@@ -20258,12 +20258,20 @@ Run `NeverDObjCSourceCallTests` (`SourceFrameAnalysis.*`) and `NeverDCSourcePres
 `CallRegisterEffects.ExitConstants*` in `NeverDFPParameterMaskTests` checks
 agreement at every return, block ordering, partial and unknown writes, calls,
 intrinsics, address provenance, independent/exceptional roots, exact/short
-work budgets and ordinary ABI result ownership. `CallExitRegisters.*` in
-`NeverDWin64CallContractTests` executes decoded x64 COFF/ELF/Mach-O callers
+work budgets and ordinary ABI result ownership. Unique-predecessor cases cover
+conditional arms, contiguous and inconsistent fallthroughs, joins, a long
+register-carry chain and instruction temporaries that must not cross blocks.
+`CallExitRegisters.*` in `NeverDWin64CallContractTests` executes decoded x64
+COFF/ELF/Mach-O callers
 through both C routes, with source optimization enabled and disabled, at C
 O0/O2 with UBSan. The oracle observes the non-return register's stored value
-and the ordinary call result. This qualifies bounded scalar constants, not
-dynamic machine-state returns or other architectures.
+and the ordinary call result. The constant-scratch case also executes the
+original public machine code on Linux x64, including a direct jump and both
+conditional return paths whose scratch definition precedes the branch. Other
+hosts execute the generated C against the fixture's scalar results without
+executing x64 bytes. This qualifies
+bounded scalar constants, not dynamic machine-state returns or other
+architectures.
 `CallExitRegisters.PureRegisterLeafKeepsDynamicExtraResults` independently
 executes recovered query results against native CPUID on x64 COFF/ELF/Mach-O
 inputs through both C routes at O0/O2 with UBSan. Source execution selects the

@@ -813,7 +813,7 @@ bool Session::takeUnreadTypes(const types::TypeLibrary &Library,
       return false;
   }
   if (LocalTypesDbg)
-    LocalTypesDbg->takeNewTypes(Library, Names);
+    LocalTypesDbg->takeNewTypes(Library, Names, OwnNames);
   if (!OwnNames) {
     // Read again when next asked for.
     LocalTypeNames.reset();

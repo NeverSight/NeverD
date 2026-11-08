@@ -926,6 +926,12 @@ observation, including CPUID scratch exchanges. Calls, exits, partial writes
 and exceptional edges keep their incoming evidence. A VM entry that stores
 registers into an escaping machine-state frame can still have genuine inputs
 unknown after earlier calls; never erase those inputs or replace them with zero.
+Scalar call-exit constants also survive unique predecessor blocks, conditional
+arms and contiguous fallthroughs. The bounded pass evaluates each block once,
+resets inherited facts at joins and the ordinary entry, and requires agreement
+at every return. Public x64 COFF/ELF/Mach-O cases compare both C routes with the
+original machine instructions. This does not recover conditional image
+addresses, dynamic callee registers or an escaping VM's entry state.
 Source stack preparation now also discards post-entry scalar spills proved
 overwritten before observation. Explicit x86 flags transfers remain emitted;
 their frame loads/stores are already separate operations. Unread scratch

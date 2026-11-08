@@ -765,6 +765,10 @@ struct Listing::Impl {
   /// Names change only in a build, which advances generation first, and in
   /// functionRenamed, which keeps them.
   std::unordered_map<std::string, const Function *> functionsByName;
+  /// The names more than one function was listed under when functionsByName
+  /// was read, and any a rename gave a second function since: a name outside
+  /// it is one function's.
+  std::unordered_set<std::string> sharedFunctionNames;
   std::uint64_t functionsByNameGeneration = 0;
   mutable std::size_t ownFunctionCount = 0;
   mutable std::uint64_t ownFunctionCountGeneration = 0;
@@ -1431,9 +1435,11 @@ struct Listing::Impl {
   const Function *namedFunction(const std::string &name) {
     if (functionsByNameGeneration != generation) {
       functionsByName.clear();
+      sharedFunctionNames.clear();
       functionsByName.reserve(functions.size());
       for (const auto &function : functions)
-        functionsByName.try_emplace(function.name, &function);
+        if (!functionsByName.try_emplace(function.name, &function).second)
+          sharedFunctionNames.insert(function.name);
       functionsByNameGeneration = generation;
     }
     const auto found = functionsByName.find(name);
@@ -5216,15 +5222,19 @@ bool Listing::functionRenamed(std::uint64_t address) {
   function->engineName = std::move(name);
   if (function->exported && d.exportRows.is_array())
     for (const auto &row : d.exportRows)
-      if (jsonAddress(row.value("addr", Json())) == address)
+      if (const auto at = row.find("addr");
+          (at != row.end() ? jsonAddress(*at) : 0) == address)
         if (auto exported = row.value("name", std::string());
             !exported.empty() && exported != function->name)
           d.exportAliases.emplace(std::move(exported), address);
   if (d.functionsByNameGeneration == previous) {
     d.functionsByName.erase(old);
-    if (const auto *same = d.functionNamed(old))
-      d.functionsByName.emplace(std::move(old), same);
-    d.functionsByName.try_emplace(function->name, function);
+    // Another function of the name given up keeps it.
+    if (d.sharedFunctionNames.contains(old))
+      if (const auto *same = d.functionNamed(old))
+        d.functionsByName.emplace(std::move(old), same);
+    if (!d.functionsByName.try_emplace(function->name, function).second)
+      d.sharedFunctionNames.insert(function->name);
     d.functionsByNameGeneration = d.generation;
   }
   if (d.ownFunctionCountGeneration == previous)

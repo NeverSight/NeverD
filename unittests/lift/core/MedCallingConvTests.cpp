@@ -8967,6 +8967,81 @@ TEST(CallRegisterEffects, ExitConstantsKeepUnknownAndAddressBoundaries) {
   }
 }
 
+TEST(CallRegisterEffects, ExitConstantsFollowUniquePredecessors) {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Format = BinaryFormat::COFF;
+  const auto RCX = NdVar::reg(x86reg::RCX, 8);
+  for (unsigned Case = 0; Case != 10; ++Case) {
+    SCOPED_TRACE(Case);
+    LowFunc Function = makeOneBlockLow(0x1000, "split_exits", [&](auto Push) {
+      Push(NdOp::COPY, RCX, {NdVar::cst(27, 8)});
+    });
+    LowBlock First;
+    First.Id = 1;
+    First.StartAddr = 0x1100;
+    First.EndAddr = 0x1101;
+    First.Preds = {0};
+    First.Ops = {Function.Blocks.front().Ops.back()};
+    LowBlock Second = First;
+    Second.Id = 2;
+    Second.StartAddr = 0x1200;
+    Second.EndAddr = 0x1201;
+    auto &Entry = Function.Blocks.front();
+    Entry.Succs = {1, 2};
+    auto &Branch = Entry.Ops.back();
+    Branch.Opcode = NdOp::COND_BR;
+    Branch.NumInputs = 0;
+    Branch.addInput(NdVar::cst(First.StartAddr, 8));
+    Branch.addInput(NdVar::reg(x86reg::ZF, 1));
+    if (Case == 1 || Case == 2) {
+      LowOp Write;
+      Write.Opcode = NdOp::COPY;
+      Write.Output = NdVar::reg(x86reg::RCX, Case == 1 ? 8 : 1);
+      Write.addInput(NdVar::cst(28, Write.Output.Size));
+      Second.Ops.insert(Second.Ops.begin(), Write);
+    }
+    if (Case == 3)
+      Second.ExceptionalPreds.push_back({-1, 0});
+    if (Case == 4)
+      Function.OrdinaryModuleAnalysisRoots.insert(First.StartAddr);
+    if (Case == 5)
+      Entry.Ops.front().Inputs[0].Provenance =
+          ConstantAddressProvenance::DataAddress;
+    if (Case == 6) {
+      // An ordinary fallthrough carries the same definition.
+      Entry.Ops.pop_back();
+      Entry.EndAddr = First.StartAddr;
+      Entry.Succs = {1};
+    }
+    if (Case == 7) {
+      // An inconsistent fallthrough is not a source-state proof.
+      Entry.Ops.pop_back();
+      Entry.EndAddr = First.StartAddr - 1;
+      Entry.Succs = {1};
+    }
+    Function.Blocks.push_back(First);
+    if (Case != 6 && Case != 7)
+      Function.Blocks.push_back(Second);
+    if (Case == 8)
+      std::swap(Function.Blocks[1], Function.Blocks[2]);
+    if (Case == 9) {
+      // A second predecessor makes the inherited value unavailable.
+      Function.Blocks[2].Succs = {1};
+      Function.Blocks[1].Preds.push_back(2);
+      auto &Jump = Function.Blocks[2].Ops.back();
+      Jump.Opcode = NdOp::BRANCH;
+      Jump.NumInputs = 0;
+      Jump.addInput(NdVar::cst(First.StartAddr, 8));
+    }
+    const GPRExitConstants Expected = Case == 0 || Case == 6 || Case == 8
+                                          ? GPRExitConstants{{x86reg::RCX, 27}}
+                                          : GPRExitConstants{};
+    const auto Effect = localRegisterEffect(Image, Function);
+    EXPECT_EQ(Effect.ExitConstants, Expected);
+  }
+}
+
 TEST(CallRegisterEffects, ExitConstantsUseScalarWidthsAndBoundedWork) {
   BinaryImage Image;
   Image.Arch = Arch::X64;
@@ -8986,6 +9061,63 @@ TEST(CallRegisterEffects, ExitConstantsUseScalarWidthsAndBoundedWork) {
   EXPECT_EQ(localRegisterEffect(Image, Function).ExitConstants, Expected);
   Ops.insert(Ops.begin(), Padding);
   EXPECT_TRUE(localRegisterEffect(Image, Function).ExitConstants.empty());
+}
+
+TEST(CallRegisterEffects, ExitConstantsCarryRegistersButNotInstructionTemps) {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  const auto RCX = NdVar::reg(x86reg::RCX, 8);
+  for (bool Temporary : {false, true}) {
+    SCOPED_TRACE(Temporary);
+    const auto Value = Temporary ? NdVar::tmp(0, 8) : RCX;
+    LowFunc Function = makeOneBlockLow(0x1000, "chain", [&](auto Push) {
+      Push(NdOp::COPY, Value, {NdVar::cst(27, 8)});
+    });
+    const LowOp Return = Function.Blocks.front().Ops.back();
+    constexpr size_t Blocks = 64;
+    for (size_t I = 0; I < Blocks; ++I) {
+      if (I) {
+        LowBlock Block;
+        Block.Id = I;
+        Block.StartAddr = Function.Entry + I * 16;
+        Block.Preds = {static_cast<int>(I - 1)};
+        LowOp Add;
+        Add.Opcode = NdOp::INT_ADD;
+        Add.Output = Value;
+        Add.addInput(Value);
+        Add.addInput(NdVar::cst(1, 8));
+        Block.Ops = {Add, Return};
+        Function.Blocks.push_back(std::move(Block));
+      }
+      auto &Block = Function.Blocks.back();
+      if (I + 1 < Blocks) {
+        Block.Succs = {static_cast<int>(I + 1)};
+        auto &Jump = Block.Ops.back();
+        Jump.Opcode = NdOp::BRANCH;
+        Jump.NumInputs = 0;
+        Jump.addInput(NdVar::cst(Function.Entry + (I + 1) * 16, 8));
+      } else if (Temporary) {
+        LowOp Copy;
+        Copy.Opcode = NdOp::COPY;
+        Copy.Output = RCX;
+        Copy.addInput(Value);
+        Block.Ops.insert(Block.Ops.end() - 1, Copy);
+      }
+    }
+    const GPRExitConstants Expected =
+        Temporary ? GPRExitConstants{}
+                  : GPRExitConstants{{x86reg::RCX, 27 + Blocks - 1}};
+    EXPECT_EQ(localRegisterEffect(Image, Function).ExitConstants, Expected);
+    if (!Temporary) {
+      auto &Ops = Function.Blocks.front().Ops;
+      const LowOp Padding = Ops.front();
+      Ops.insert(Ops.begin(), limits::kMaxCallExitConstantOps - Blocks * 2,
+                 Padding);
+      EXPECT_EQ(localRegisterEffect(Image, Function).ExitConstants, Expected);
+      Ops.insert(Ops.begin(), Padding);
+      EXPECT_TRUE(localRegisterEffect(Image, Function).ExitConstants.empty());
+    }
+  }
 }
 
 TEST(CallRegisterEffects, ExitConstantsDoNotReplaceABIResultCarriers) {
