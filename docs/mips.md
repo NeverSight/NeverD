@@ -108,6 +108,11 @@ GUI operation were not exercised. Local receipts are
 `build-mips/roundtrip-merge-final/results.json` and
 `build-mips/qualification-merge.json`.
 
+After integrating dev `1d27c2d2b`, the Release CLI and MIPS targets rebuilt
+successfully, all 169 MIPS tests passed again, and the selected firmware views
+were regenerated. This follow-up covers the intervening SDK changes; the
+broader and source-roundtrip results above remain tied to their recorded build.
+
 ## TP-Link firmware workflow
 
 Start with the actual extracted ELF profile instead of assuming a device is
