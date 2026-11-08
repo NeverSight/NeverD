@@ -576,13 +576,19 @@ existing four-alternative bound applies. A caller substitutes output fields
 and capture identities against its own entry before loading the returned tag.
 Its branch can then restore only fields common to all selected cases. Exact
 64-bit register copies retain the tag relation; redefinition, potentially
-aliasing tag writes, calls, copies and loop backedges discard it. Payload writes
-invalidate affected conditional fields through the existing typed-memory
+aliasing tag writes, calls, memory copies and loop backedges discard it. Payload
+writes invalidate affected conditional fields through the existing typed-memory
 owner. Unknown tag cases and other return shapes retain the ordinary
 conservative join. Conditional state and comparison workspace consume the
 existing retained-state budget. `output_tagged_cases` and
 `instantiated_tagged_output_cases` report these partitions and their call
 bindings; they do not establish whole-program closure or allocation freshness.
+Selecting tag cases also refines payloads loaded before the comparison, including
+their exact 64-bit register copies. The shared unchanged-load proof is limited
+to the same basic block and stops at stores or calls. Redefined carriers,
+changed load bases and narrow loads cannot acquire a full-word fact from later
+memory. A refined value rebuilds its origin instead of retaining payload
+alternatives from the unselected cases.
 Each tag case also retains its capture definition history, even when writes
 have made an object's fields unknown. Selecting a tag can remove a newly
 imported name from caller history only when no selected case introduced it.

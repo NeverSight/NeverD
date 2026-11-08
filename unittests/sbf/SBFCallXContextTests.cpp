@@ -10248,4 +10248,164 @@ TEST(SBFCallXContexts, DiscardedReturnOnlyCallsDoNotConsumeInputVariants) {
       }
 }
 
+TEST(SBFCallXContexts, TaggedPayloadLoadsKeepTheirEarlierMemoryEpoch) {
+  enum class Change { None, Copy, Clobber, Base, Store, Call, Narrow };
+  for (Change Mutation :
+       {Change::None, Change::Copy, Change::Clobber, Change::Base,
+        Change::Store, Change::Call, Change::Narrow})
+    for (unsigned Bytes : {1u, 8u})
+      for (bool ReverseEdges : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << unsigned(Mutation) << ", bytes=" << Bytes
+                     << ", reverse=" << ReverseEdges);
+        std::vector<test::EncodedInstruction> Text;
+        const auto Literal = [&](unsigned Register, uint64_t Value) {
+          const size_t Slot = Text.size();
+          const auto Words = test::loadImm64(Register, Value);
+          Text.insert(Text.end(), Words.begin(), Words.end());
+          return Slot;
+        };
+        struct CallbackLiteral {
+          size_t Slot;
+          unsigned Register;
+          bool First;
+        };
+        std::vector<CallbackLiteral> Callbacks;
+        const auto Callback = [&](unsigned Register, bool First) {
+          Callbacks.push_back({Literal(Register, 0), Register, First});
+        };
+        const Opcode LoadTag =
+            Bytes == 1 ? Opcode::LD_B_REG : Opcode::LD_DW_REG;
+        const Opcode StoreTag =
+            Bytes == 1 ? Opcode::ST_B_REG : Opcode::ST_DW_REG;
+        Callback(4, false);
+        Text.push_back(encode(Opcode::ST_DW_REG, 10, 4, -16));
+        Text.push_back(encode(Opcode::MOV64_REG, 1, 10));
+        Text.push_back(encode(Opcode::ADD64_IMM, 1, 0, 0, -32));
+        const size_t Call = Text.size();
+        Text.push_back({});
+        Text.push_back(encode(Opcode::MOV64_REG, 8, 10));
+        Text.push_back(encode(Opcode::ADD64_IMM, 8, 0, 0, -24));
+        Text.push_back(encode(Mutation == Change::Narrow ? Opcode::LD_W_REG
+                                                         : Opcode::LD_DW_REG,
+                              6, 8));
+        unsigned Carrier = 6;
+        std::optional<size_t> MutatorCall;
+        if (Mutation == Change::Copy) {
+          Text.push_back(encode(Opcode::MOV64_REG, 9, 6));
+          Carrier = 9;
+        } else if (Mutation == Change::Clobber) {
+          Literal(4, kInputStart);
+          Text.push_back(encode(Opcode::LD_DW_REG, 6, 4, 8));
+        } else if (Mutation == Change::Base) {
+          Text.push_back(encode(Opcode::ADD64_IMM, 8, 0, 0, 8));
+        } else if (Mutation == Change::Store) {
+          Callback(4, false);
+          Text.push_back(encode(Opcode::ST_DW_REG, 8, 4));
+        } else if (Mutation == Change::Call) {
+          Text.push_back(encode(Opcode::MOV64_REG, 1, 10));
+          Text.push_back(encode(Opcode::ADD64_IMM, 1, 0, 0, -32));
+          MutatorCall = Text.size();
+          Text.push_back({});
+        }
+        Text.push_back(encode(LoadTag, 7, 10, -32));
+        const size_t Branch = Text.size();
+        Text.push_back({});
+        Text.push_back(encode(Opcode::MOV64_REG, 2, Carrier));
+        if (Mutation == Change::Narrow) {
+          Literal(3, kBytecodeStart);
+          Text.push_back(encode(Opcode::ADD64_REG, 2, 3));
+        }
+        const size_t CallX = Text.size();
+        Text.push_back(encode(Opcode::CALL_REG, 2));
+        Text.push_back(encode(Opcode::EXIT));
+        const size_t Success = Text.size();
+        Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 5));
+        Text.push_back(encode(Opcode::EXIT));
+        const size_t Producer = Text.size();
+        Text.push_back(encode(Opcode::MOV64_REG, 6, 1));
+        Literal(3, kInputStart);
+        Text.push_back(encode(Opcode::LD_DW_REG, 2, 3));
+        const size_t Select = Text.size();
+        Text.push_back({});
+        Callback(2, false);
+        Text.push_back(encode(Opcode::ST_DW_REG, 6, 2, 8));
+        Text.push_back(encode(Opcode::MOV64_IMM, 1));
+        const size_t Join = Text.size();
+        Text.push_back({});
+        const size_t Error = Text.size();
+        Callback(2, true);
+        Text.push_back(encode(Opcode::ST_DW_REG, 6, 2, 8));
+        Text.push_back(encode(Opcode::MOV64_IMM, 1, 0, 0, 1));
+        const size_t Tail = Text.size();
+        Text.push_back(encode(StoreTag, 6, 1));
+        Text.push_back(encode(Opcode::EXIT));
+        const size_t Mutator = Text.size();
+        Text.push_back(encode(Bytes == 1 ? Opcode::ST_B_IMM : Opcode::ST_DW_IMM,
+                              1, 0, 0, 1));
+        Text.push_back(encode(Opcode::EXIT));
+        const size_t A = Text.size();
+        Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+        Text.push_back(encode(Opcode::EXIT));
+        const size_t B = Text.size();
+        Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 43));
+        Text.push_back(encode(Opcode::EXIT));
+        Text[Call] = encode(Opcode::CALL_IMM, 0, 1, 0, Producer - Call - 1);
+        Text[Branch] = encode(Opcode::JEQ64_IMM, 7, 0, Success - Branch - 1);
+        Text[Select] = encode(Opcode::JNE64_IMM, 2, 0, Error - Select - 1);
+        Text[Join] = encode(Opcode::JA, 0, 0, Tail - Join - 1);
+        if (MutatorCall)
+          Text[*MutatorCall] =
+              encode(Opcode::CALL_IMM, 0, 1, 0, Mutator - *MutatorCall - 1);
+        for (const auto &[Slot, Register, First] : Callbacks) {
+          const auto Words =
+              test::loadImm64(Register, kBytecodeStart + (First ? A : B) * 8);
+          std::copy(Words.begin(), Words.end(), Text.begin() + Slot);
+        }
+        auto Program = analyze(test::makeImage(Text, {}));
+        ASSERT_TRUE(static_cast<bool>(Program))
+            << llvm::toString(Program.takeError());
+        if (ReverseEdges)
+          std::reverse(Program->Low.Edges.begin(), Program->Low.Edges.end());
+        auto Report = recoverCallXContexts(*Program);
+        ASSERT_TRUE(static_cast<bool>(Report))
+            << llvm::toString(Report.takeError());
+        checkSummaryReferences(*Report);
+        EXPECT_FALSE(Report->SpecializationBudgetExhausted);
+        const auto Proven = [&](size_t Target) {
+          return llvm::any_of(Report->Contexts, [&](const auto &Site) {
+            return !Site.EntryPrefixOnly && Site.CallXSlot == CallX &&
+                   Site.TargetSlot == Target;
+          });
+        };
+        if (Mutation == Change::None || Mutation == Change::Copy)
+          EXPECT_TRUE(Proven(A));
+        if (Mutation == Change::Clobber || Mutation == Change::Call)
+          EXPECT_FALSE(Proven(A));
+        else
+          EXPECT_FALSE(Proven(B));
+        EXPECT_FALSE(llvm::any_of(Report->Contexts, [&](const auto &Site) {
+          return Site.CallXSlot == CallX &&
+                 Site.Result == CallXContextResult::InvalidTarget;
+        }));
+        for (uint64_t Flag : {0u, 1u}) {
+          ExecutionEnvironment Environment;
+          std::vector<uint8_t> Input(16);
+          llvm::support::endian::write64le(Input.data(), Flag);
+          llvm::support::endian::write64le(Input.data() + 8,
+                                           kBytecodeStart + B * 8);
+          Environment.Memory.push_back(
+              {kInputStart, Input, false, "tag input"});
+          auto Raw = executeRaw(*Program, std::move(Environment));
+          ASSERT_TRUE(static_cast<bool>(Raw))
+              << llvm::toString(Raw.takeError());
+          EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+          const bool TakesCall = Flag || Mutation == Change::Call;
+          const bool Other = Mutation == Change::Clobber ||
+                             (Mutation == Change::Call && !Flag);
+          EXPECT_EQ(Raw->ReturnValue, !TakesCall ? 5u : Other ? 43u : 42u);
+        }
+      }
+}
+
 } // namespace neverd::sbf

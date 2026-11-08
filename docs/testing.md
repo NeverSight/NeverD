@@ -16072,6 +16072,12 @@ from `EXIT`-only callees do not split wrapper summaries by incoming r0. It
 crosses two forwarding layers and reverses CFG edge order, while live returns,
 stores and branches retain their dependencies. Raw bytecode checks the return
 and stored value independently of the summary assertions.
+`TaggedPayloadLoadsKeepTheirEarlierMemoryEpoch` loads a payload before checking
+its returned tag, both directly and through a register copy. It checks byte and
+full-word tags and reversed CFG edge order. Register clobbers, changed bases,
+intervening stores/calls and narrow loads cannot reuse the earlier full-word
+field. Raw bytecode execution independently checks both branches and the
+different callback values after mutations.
 The pinned 72-file native-object scan described in [sbf-corpus.md](sbf-corpus.md)
 is separate from these synthetic execution tests and from official VM gates.
 

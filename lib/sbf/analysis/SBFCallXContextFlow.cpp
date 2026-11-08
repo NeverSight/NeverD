@@ -830,6 +830,9 @@ private:
   }
   llvm::Error refineLoadedEquality(const MedBlock &Block, size_t Successor,
                                    ContextState &State);
+  llvm::Expected<std::array<std::optional<RegisterValue>, kRegisterCount>>
+  unchangedLoadedCells(const MedBlock &Block, uint16_t Registers,
+                       const ContextState &State);
   ContextState genericInput() const;
   llvm::Expected<RegisterValue> captureAddress(size_t Owner, size_t Slot,
                                                uint64_t Source,
@@ -890,7 +893,7 @@ private:
   void transferValues(const MedInstruction &Instruction, ContextState &State);
   void transferTaggedMemory(const MedInstruction &Instruction,
                             ContextState &State);
-  llvm::Expected<bool> refineTaggedBranch(const MedInstruction *Last,
+  llvm::Expected<bool> refineTaggedBranch(const MedBlock &Block,
                                           size_t Successor,
                                           ContextState &State);
   void refineOrigins(const FunctionContext &Context, ContextState &State);
@@ -2623,9 +2626,10 @@ void ContextFlow::transferTaggedMemory(const MedInstruction &Instruction,
     Tagged.Registers |= registerBit(Instruction.Dst);
 }
 
-llvm::Expected<bool> ContextFlow::refineTaggedBranch(const MedInstruction *Last,
+llvm::Expected<bool> ContextFlow::refineTaggedBranch(const MedBlock &Block,
                                                      size_t Successor,
                                                      ContextState &State) {
+  const auto *Last = Index.find(Block.EndSlot - 1);
   if (!Last || !State.Tagged ||
       Last->Semantics.Terminator != TerminatorKind::ConditionalJump)
     return true;
@@ -2684,6 +2688,27 @@ llvm::Expected<bool> ContextFlow::refineTaggedBranch(const MedInstruction *Last,
     }
   }
   State.Postconditions.include(Facts.Postconditions, Identity, Program);
+  uint16_t LoadedRegisters = 0;
+  for (unsigned R = 0; R < kRegisterCount; ++R)
+    if (State.Registers[R].singleton().ValueKind ==
+        RegisterValue::Kind::Unknown)
+      LoadedRegisters |= registerBit(R);
+  if (LoadedRegisters) {
+    auto Cells = unchangedLoadedCells(Block, LoadedRegisters, State);
+    if (!Cells)
+      return Cells.takeError();
+    for (unsigned R = 0; R < kRegisterCount; ++R) {
+      if (!(*Cells)[R])
+        continue;
+      const auto &Value = State.Scratch.Values.readValues(*(*Cells)[R]);
+      if (!Value.unknown() && Value != State.Registers[R]) {
+        State.Registers[R] = Value;
+        // The old origin joined the unselected payloads as well. Rebuild its
+        // literal/capture or frame-relative origin from this selected value.
+        State.Origins[R] = {};
+      }
+    }
+  }
   if (Tagged.Cases.size() == 1)
     State.Tagged.reset();
   return true;
@@ -2913,6 +2938,51 @@ void ContextFlow::refineOrigins(const FunctionContext &Context,
   }
 }
 
+llvm::Expected<std::array<std::optional<RegisterValue>, kRegisterCount>>
+ContextFlow::unchangedLoadedCells(const MedBlock &Block, uint16_t Registers,
+                                  const ContextState &State) {
+  std::array<std::optional<RegisterValue>, kRegisterCount> Cells;
+  std::array<unsigned, kRegisterCount> Carriers;
+  for (unsigned R = 0; R < kRegisterCount; ++R)
+    Carriers[R] = R;
+  uint16_t Changed = 0;
+  // All carriers share one bounded walk. A store/call ends the memory epoch;
+  // a changed load base cannot use its current register value.
+  for (size_t Slot = Block.EndSlot - 1; Registers && Slot > Block.StartSlot;) {
+    const auto *Instruction = Index.find(--Slot);
+    if (!Instruction)
+      continue;
+    if (auto Error = visit())
+      return Error;
+    if (Instruction->Call != CallKind::None ||
+        Instruction->Op == Operation::Store)
+      break;
+    if (!Instruction->Semantics.WritesDestination)
+      continue;
+    for (unsigned R = 0; R < kRegisterCount; ++R) {
+      if (!(Registers & registerBit(R)) || Instruction->Dst != Carriers[R])
+        continue;
+      if (Instruction->Op == Operation::Mov &&
+          Instruction->Form == OperandForm::DstSrc &&
+          Instruction->Width == kDoubleWordBitWidth) {
+        Carriers[R] = Instruction->Src;
+      } else {
+        if (Instruction->Op == Operation::Load &&
+            Instruction->Semantics.MemoryWidth == kDoubleWordBitWidth &&
+            Instruction->Src != Instruction->Dst &&
+            !(Changed & registerBit(Instruction->Src))) {
+          Cells[R] =
+              memoryAddress(State.Registers[Instruction->Src].singleton(),
+                            Instruction->Offset);
+        }
+        Registers &= ~registerBit(R);
+      }
+    }
+    Changed |= registerBit(Instruction->Dst);
+  }
+  return Cells;
+}
+
 llvm::Error ContextFlow::refineLoadedEquality(const MedBlock &Block,
                                               size_t Successor,
                                               ContextState &State) {
@@ -2938,45 +3008,13 @@ llvm::Error ContextFlow::refineLoadedEquality(const MedBlock &Block,
   if (Equal.ValueKind != RegisterValue::Kind::Constant ||
       !State.Registers[Register].unknown())
     return llvm::Error::success();
-
-  // This edge proves the value of an unchanged cell, not a guest write.
-  // Find its full-width load in this block only. A store or call ends the
-  // memory epoch; a changed load base cannot use its current register value.
-  unsigned Carrier = Register;
-  uint16_t Changed = 0;
-  for (size_t Slot = Branch->Slot; Slot > Block.StartSlot;) {
-    const auto *Instruction = Index.find(--Slot);
-    if (!Instruction)
-      continue;
-    if (auto Error = visit())
-      return Error;
-    if (Instruction->Call != CallKind::None ||
-        Instruction->Op == Operation::Store)
-      break;
-    if (!Instruction->Semantics.WritesDestination)
-      continue;
-    if (Instruction->Dst == Carrier) {
-      if (Instruction->Op == Operation::Mov &&
-          Instruction->Form == OperandForm::DstSrc &&
-          Instruction->Width == kDoubleWordBitWidth) {
-        Carrier = Instruction->Src;
-      } else {
-        if (Instruction->Op == Operation::Load &&
-            Instruction->Semantics.MemoryWidth == kDoubleWordBitWidth &&
-            Instruction->Src != Instruction->Dst &&
-            !(Changed & registerBit(Instruction->Src))) {
-          const auto Address =
-              memoryAddress(State.Registers[Instruction->Src].singleton(),
-                            Instruction->Offset);
-          if (Address) {
-            State.Scratch.Values.writeValues(*Address, Equal);
-            State.Registers[Register] = Equal;
-          }
-        }
-        break;
-      }
-    }
-    Changed |= registerBit(Instruction->Dst);
+  auto Cells = unchangedLoadedCells(Block, registerBit(Register), State);
+  if (!Cells)
+    return Cells.takeError();
+  if (const auto &Address = (*Cells)[Register]) {
+    // This edge proves the value of an unchanged cell, not a guest write.
+    State.Scratch.Values.writeValues(*Address, Equal);
+    State.Registers[Register] = Equal;
   }
   return llvm::Error::success();
 }
@@ -5143,8 +5181,8 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
         }
         ContextState SuccessorState = State;
         const size_t NextSlot = Program.Med.Blocks[Successors[E]].StartSlot;
-        auto TaggedReachable = refineTaggedBranch(
-            Index.find(MedBlock.EndSlot - 1), NextSlot, SuccessorState);
+        auto TaggedReachable =
+            refineTaggedBranch(MedBlock, NextSlot, SuccessorState);
         if (!TaggedReachable)
           return TaggedReachable.takeError();
         if (!*TaggedReachable)
@@ -5212,8 +5250,7 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
       return Error;
     const auto Release = llvm::scope_exit([&] { RetainedBytes -= Temporary; });
     ContextState Path = State;
-    auto TaggedReachable =
-        refineTaggedBranch(Index.find(MedBlock.EndSlot - 1), TailSlot, Path);
+    auto TaggedReachable = refineTaggedBranch(MedBlock, TailSlot, Path);
     if (!TaggedReachable)
       return TaggedReachable.takeError();
     if (!*TaggedReachable)
