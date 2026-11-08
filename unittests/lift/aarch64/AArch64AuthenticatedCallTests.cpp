@@ -760,6 +760,28 @@ TEST(AArch64AuthenticatedCall, NativeTypesKeepTheOriginalIndirectTarget) {
         Variant.Raw ? llvm::ArrayRef<llvm::StringRef>()
                     : llvm::ArrayRef<llvm::StringRef>{kExceptionsOption,
                                                       kNoStackProtectorOption});
+    if (!Variant.Raw && !Variant.Zero) {
+      auto TypedCaller = High;
+      TypedCaller.Params[2].Type = NdType::makeFloat(kPointerBytes);
+      std::string TypedSource;
+      llvm::raw_string_ostream TypedOut(TypedSource);
+      ASSERT_TRUE(HighCEmitter().emit({TypedCaller}, TypedOut, Options));
+      const auto TypedCase =
+          llvm::formatv(kNativeTypedCallerDirectory, Variant.Key, Variant.Zero)
+              .str();
+      save(TypedCase, kHighSource, TypedSource);
+      compile(TypedSource,
+              [&](llvm::Module &Recompiled) {
+                checkMachineCall(Recompiled, Variant.Key);
+                for (const auto &Block : *Recompiled.getFunction(kFunction))
+                  for (const auto &Instruction : Block) {
+                    EXPECT_FALSE(llvm::isa<llvm::FPToSIInst>(Instruction));
+                    EXPECT_FALSE(llvm::isa<llvm::FPToUIInst>(Instruction));
+                  }
+              },
+              TypedCase, false, true,
+              {kExceptionsOption, kNoStackProtectorOption});
+    }
     if (!Variant.Raw) {
       const auto Emit = [&] {
         llvm::LLVMContext Context;

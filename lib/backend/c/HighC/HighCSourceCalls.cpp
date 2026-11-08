@@ -239,6 +239,12 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
                                                     : Hint.TargetName))
                    .str();
     }
+    const auto ArgumentCarrier = [&](const HighExpr &Argument) {
+      if (Argument.Kind == ExprKind::Var || Argument.Kind == ExprKind::Phi)
+        if (auto Declared = declaredParamType(Argument.Var))
+          return Declared;
+      return Argument.Type;
+    };
     std::vector<std::string> Arguments;
     for (const auto &Operand : E.Operands) {
       if (!Operand)
@@ -253,7 +259,8 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
     const auto ValueName = aarch64PAuthTemporary(kResultCallValue, Names);
     const auto Storage =
         RetainResultStorage
-            ? sourceValue(Arguments[Bindings.size()], E.Operands.back()->Type,
+            ? sourceValue(Arguments[Bindings.size()],
+                          ArgumentCarrier(*E.Operands.back()),
                           NdType::makeInt(kResultCallWordBytes, false))
             : std::optional<std::string>(std::to_string(0));
     if (!Storage)
@@ -270,7 +277,8 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       const auto Type = RetainResultStorage
                             ? Bindings[I].Type
                             : sourceCallParameterType(Signature.Parameters[I]);
-      const auto Value = sourceValue(Arguments[I], E.Operands[I]->Type, Type);
+      const auto Value =
+          sourceValue(Arguments[I], ArgumentCarrier(*E.Operands[I]), Type);
       if (!Value)
         throw std::invalid_argument(kResultCallError);
       if (RetainResultStorage || Signature.Parameters[I].Components.empty()) {
