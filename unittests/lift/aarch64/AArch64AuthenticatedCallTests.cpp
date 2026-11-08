@@ -247,6 +247,36 @@ void checkBundle(llvm::Module &Module, unsigned Key, bool Zero,
   EXPECT_EQ(Module.getFunction(kStandaloneAuthentication), nullptr);
 }
 
+void checkMachineCall(llvm::Module &Module, unsigned Key) {
+  ASSERT_FALSE(llvm::verifyModule(Module));
+  const auto *Function = Module.getFunction(kFunction);
+  ASSERT_NE(Function, nullptr);
+  EXPECT_FALSE(Function->hasFnAttribute(llvm::Attribute::NoUnwind));
+  unsigned Calls = 0;
+  for (const auto &Block : *Function)
+    for (const auto &Instruction : Block)
+      if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction)) {
+        EXPECT_NE(Call->getIntrinsicID(), llvm::Intrinsic::ptrauth_resign);
+        EXPECT_NE(Call->getIntrinsicID(), llvm::Intrinsic::ptrauth_auth);
+        EXPECT_NE(Call->getIntrinsicID(), llvm::Intrinsic::trap);
+        if (const auto *Assembly =
+                llvm::dyn_cast<llvm::InlineAsm>(Call->getCalledOperand());
+            Assembly && llvm::StringRef(Assembly->getAsmString())
+                            .starts_with(kResultCallMarker)) {
+          ++Calls;
+          EXPECT_TRUE(Assembly->canThrow());
+          EXPECT_TRUE(Assembly->hasSideEffects());
+          EXPECT_TRUE(Call->getType()->isVoidTy());
+          EXPECT_EQ(Call->arg_size(), 3U);
+          EXPECT_EQ(Assembly->getConstraintString(), kValueCallConstraints);
+          const char *Branch =
+              Key == kAArch64PAuthKeyIA ? kResultCallIA : kResultCallIB;
+          EXPECT_NE(Assembly->getAsmString().find(Branch), std::string::npos);
+        }
+      }
+  EXPECT_EQ(Calls, 1U);
+}
+
 void compile(const std::string &Source,
              const std::function<void(llvm::Module &)> &Inspect,
              llvm::StringRef Case, bool LLVMRoute, bool DarwinObject = false,
@@ -524,8 +554,11 @@ TEST_P(AArch64TypedAuthenticatedCall,
     ASSERT_TRUE(Module);
     optimize(*Module);
     const auto Inspect = [&](llvm::Module &Candidate) {
-      checkBundle(Candidate, Variant.Key, Variant.Zero, Shape.Parameters.size(),
-                  Variant.Raw);
+      if (Variant.Raw)
+        checkBundle(Candidate, Variant.Key, Variant.Zero,
+                    Shape.Parameters.size(), true);
+      else
+        checkMachineCall(Candidate, Variant.Key);
       for (const auto &Block : *Candidate.getFunction(kFunction))
         for (const auto &Instruction : Block) {
           if (const auto *Return =
@@ -593,11 +626,15 @@ TEST_P(AArch64TypedAuthenticatedCall,
         ASSERT_TRUE(HighCEmitter().emit(
             {MedToHighConverter().convert(Function, Arch::AArch64)}, Stream,
             Options));
-      EXPECT_NE(Source.find(Variant.Raw ? kRawCallMacro : kResignBuiltin),
-                std::string::npos)
+      EXPECT_TRUE(llvm::StringRef(Source).contains(
+          Variant.Raw ? llvm::StringRef(kRawCallMacro)
+                      : llvm::StringRef(kResultCallMarker).rtrim()))
           << Source;
       save(Case, LLVMRoute ? kLLVMSource : kHighSource, Source);
-      compile(Source, Inspect, Case, LLVMRoute, true);
+      llvm::SmallVector<llvm::StringRef, 2> Flags;
+      if (!Variant.Raw)
+        Flags = {kExceptionsOption, kNoStackProtectorOption};
+      compile(Source, Inspect, Case, LLVMRoute, true, Flags);
     }
     const auto Object =
         Codegen().compile(*Module, Arch::AArch64, BinaryFormat::MachO, kTriple);

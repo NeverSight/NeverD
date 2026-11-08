@@ -1,0 +1,680 @@
+{
+  "schema": "neverd-arm64e-authenticated-faults-v1",
+  "overall_arm64e_complete": false,
+  "scope": "Explicit Darwin AArch64 C call-site prototypes retain their authenticated branch and physical argument/result pieces, including logical 128-bit, direct aggregate/HFA and indirect argument values. This is a controlled-model qualification, not complete arm64e support.",
+  "initial_base_revision": "671ceba93664fb74051bc7508c255102003ff0f3",
+  "integrated_dev_revision": "0aa0b6c4a7d7cbac59742ecc939c1874185a4d42",
+  "model_producer_revision": "d65677a2acf36a6ee5826844b7919dc9fcd40ab3",
+  "environment_repository": "https://github.com/gmh5225/test_mac_intel",
+  "environment_revision": "1add94c9be6cadcf4cf1025fe882ed8d3cdaaae5",
+  "environment_pr": "https://github.com/gmh5225/test_mac_intel/pull/3",
+  "changes": [
+    "Reuse the original-storage machine-call bridge for authenticated explicit Darwin C value calls. Store each direct result register at its declared width and reconstruct logical values through shared ABI members.",
+    "Evaluate each logical HighIR argument once; copy its declared ABI pieces by offset without copying record padding. Preserve the original physical-operand convention for x8 hidden results.",
+    "Keep raw direct-result calls on their typed path, retain potentially unwinding assembly and the compiler frame, and reject missing carriers. Generic and recovered-native C calls retain their separately documented behavior.",
+    "Require the original exception class on every typed model route, including HighC/LLVMC O0; remove all intermediate-resign allowances from this profile.",
+    "Remove successful SDK products and owned model installations after recording results; retain active build state, canonical model inputs and required source/log diagnostics."
+  ],
+  "toolchain": {
+    "configuration": "Release",
+    "llvm_package": "neverd-llvm-v23.0.0-r6",
+    "llvm_source_patches_or_overlays": false,
+    "build_receipt_sha256": "2e889e2ac0111658d0b071ef380b5b1d347993b556e30f18750f8bdcb07cc5ef",
+    "source_compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+    "model_archive_sha256": "b6835fd07cb390c7a32f84fe1cead84bde992813b49679137b3a7a0a026e92de",
+    "model_binary_sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+    "container_image": "sha256:b60022df2f5f52d4461b273e3b44190abb85effff05cbb52e1ed25818f010023",
+    "freestanding_authenticated_C_flags": [
+      "-fexceptions",
+      "-fno-stack-protector"
+    ]
+  },
+  "validation": {
+    "selected_owner_instances": 440,
+    "passed": 419,
+    "skipped": 21,
+    "final_failures": 0,
+    "unresolved_timeouts": 0,
+    "by_owner": {
+      "NeverDSourceCallABITests": {
+        "COMPLETED": 26
+      },
+      "NeverDObjCSourceCallTests": {
+        "COMPLETED": 189
+      },
+      "NeverDLLVMCValueTests": {
+        "COMPLETED": 132,
+        "SKIPPED": 21
+      },
+      "NeverDAArch64AuthenticatedCallTests": {
+        "COMPLETED": 72
+      }
+    },
+    "skip_details": [
+      {
+        "test": "LLVMCValues.PrefetchKeepsComputedAndSegmentedMemoryOperands",
+        "reasons": [
+          "the prefetch instructions need an x86 host"
+        ]
+      },
+      {
+        "test": "LLVMCValues.NativeSHA256KeepsVectorInputsAndInstructionFeatures",
+        "reasons": [
+          "SHA-256 native oracle requires the host SHA feature"
+        ]
+      },
+      {
+        "test": "LLVMCValues.SHAFeaturesComposeWithNativeInstructionFallbacks",
+        "reasons": [
+          "the C retains x86 instructions; running it requires an x86 host"
+        ]
+      },
+      {
+        "test": "LLVMCValues.RtmFeaturesComposeWithShaAcrossNativeAndAssemblyCalls",
+        "reasons": [
+          "the C retains x86 instructions; running it requires an x86 host"
+        ]
+      },
+      {
+        "test": "LLVMCValues.NativeVirtualizationKeepsStatusAndFailedReadPrior",
+        "reasons": [
+          "requires the qualified native virtualization SDK"
+        ]
+      },
+      {
+        "test": "LLVMCValues.NativeDescriptorReadKeepsExplicitPrior",
+        "reasons": [
+          "requires native Linux x86-64 descriptor queries"
+        ]
+      },
+      {
+        "test": "LLVMCValues.NativeDescriptorAddressesKeepSegmentWidthAndPrior",
+        "reasons": [
+          "requires native Linux x86-64 descriptor queries"
+        ]
+      },
+      {
+        "test": "LLVMCValues.TargetIndexWidthKeepsNegativeFrameOffsets",
+        "reasons": [
+          "requires native Linux i386/x64 execution"
+        ]
+      },
+      {
+        "test": "LLVMCValues.X87MemoryViewsRetainBitsAndTenByteExtents",
+        "reasons": [
+          "requires native Linux i386/x64 binary80 execution"
+        ]
+      },
+      {
+        "test": "LLVMCValues.X87FiniteConstantsKeepExtendedPrecisionAndRange",
+        "reasons": [
+          "requires native Linux i386/x64 binary80 execution"
+        ]
+      },
+      {
+        "test": "LLVMCValues.X86NativeDivideKeepsBothResultsAndDeadResultFaults",
+        "reasons": [
+          "requires native Linux i386/x64 execution"
+        ]
+      },
+      {
+        "test": "LLVMCValues.X86BitStringIntrinsicsMatchOriginalMemoryAndFaults",
+        "reasons": [
+          "requires original Linux x64 bit-string instructions"
+        ]
+      },
+      {
+        "test": "LLVMCValues.X86DivideIntrinsicsMatchOriginalResultsAndFaults",
+        "reasons": [
+          "requires the original Linux x64 DIV/IDIV oracle"
+        ]
+      },
+      {
+        "test": "LLVMCValues.NativeAssemblyKeepsOperandSnapshotsAcrossBranches",
+        "reasons": [
+          "requires native Linux i386/x64 execution"
+        ]
+      },
+      {
+        "test": "LLVMCValues.I386WideCarriersRetainWrappingShiftsAndSignedComparison",
+        "reasons": [
+          "32-bit scalar C execution requires Linux i386 support"
+        ]
+      },
+      {
+        "test": "LLVMCValues.WideIntegerConstantsPreserveEveryWordAndStoreExtent",
+        "reasons": [
+          "this Clang lacks the _BitInt width the C spells"
+        ]
+      },
+      {
+        "test": "LLVMCValues.WideConstantsPreserveEveryStoredByte",
+        "reasons": [
+          "this Clang lacks the _BitInt width the C spells"
+        ]
+      },
+      {
+        "test": "LLVMCValues.AWeakImportIsDeclaredWeak",
+        "reasons": [
+          "requires native ELF undefined-weak linkage"
+        ]
+      },
+      {
+        "test": "LLVMCValues.SelectedFunctionKeeps32BitSynthesizedTableStorage",
+        "reasons": [
+          "32-bit scalar C execution requires Linux i386 support"
+        ]
+      },
+      {
+        "test": "LLVMCValues.VariadicCallSiteKeepsWindowsFloatingRegisterDuplicates",
+        "reasons": [
+          "Native Windows x64 ABI execution requires x64"
+        ]
+      },
+      {
+        "test": "LLVMCValues.AFixedCallSiteKeepsItsOwnCallingConvention",
+        "reasons": [
+          "Native Windows x64 ABI execution requires x64"
+        ]
+      }
+    ],
+    "formatting_base": "0aa0b6c4a7d7cbac59742ecc939c1874185a4d42",
+    "formatting_scope": "PR merge base; the shared origin/dev ref moved during other work, so its two-sided changed-file list also included unrelated incoming changes.",
+    "broader_owner_revision": "89b7f473d732e8499fdee90d55702019cd2319e8",
+    "final_authenticated_owner_revision": "d65677a2acf36a6ee5826844b7919dc9fcd40ab3",
+    "final_llvmc_owner_revision": "d65677a2acf36a6ee5826844b7919dc9fcd40ab3",
+    "timeout_policy": "Original per-case CTest limits, four parallel owner processes; serial retries use unchanged 120-second limits.",
+    "sdk": {
+      "revision": "0c16eb96d085f14300aea7d71db70a6f5ca456ce",
+      "runtime_implementation_equivalent_to": "d65677a2acf36a6ee5826844b7919dc9fcd40ab3",
+      "library_sha256": "4980f8c12629c9d6809fd3224c6f53f5ec954458b9b80cc9ed25e83b8c2ce031",
+      "ctest_cases": 41,
+      "ctest_passed": 41,
+      "source_projections": 82,
+      "native_arm64_executions": 180,
+      "ordinary_unwind_executions": 6,
+      "refusals": 14,
+      "removed_sdk_products": 397,
+      "removed_sdk_bytes": 7417200,
+      "sdk_timeout_seconds_per_case": 120,
+      "timeout_override": false,
+      "first_case_owns_all_refusals": true
+    },
+    "environment_unit_tests_passed": 46,
+    "commands": [
+      "python3 scripts/build.py build-arm64e --target NeverDAArch64AuthenticatedCallTests NeverDSourceCallABITests NeverDLLVMCValueTests NeverDObjCSourceCallTests neverd_shared --parallel 12",
+      "python3 scripts/build.py build-arm64e --target NeverDAArch64AuthenticatedCallTests neverd_shared --parallel 8",
+      "ctest --test-dir build-arm64e --build-config Release --show-only=json-v1 (select complete authenticated/source-ABI/LLVMC-value owners plus SourceABI, SourceAggregate, SourceFrameAnalysis and ImmutableNativeCalls)",
+      "ctest --test-dir build-arm64e --build-config Release -L ^NeverDArm64eSourceCallSDK$ --output-on-failure --parallel 4",
+      "python3 neverd-cpta/typed_calls.py --artifacts EXPORTED_OBJECTS --test-report TYPED_GTEST_JSON --neverd-revision PRODUCER --output OUTPUT (controlled linux/amd64 model container)",
+      "python3 -m unittest discover -s neverd-cpta -p test_*.py",
+      "python3 scripts/check_clang_format.py --base 0aa0b6c4a7d7cbac59742ecc939c1874185a4d42 --clang-format CLANG_FORMAT_22",
+      "python3 scripts/check_docs_i18n.py",
+      "python3 scripts/check_source_provenance.py --history-commits 16",
+      "git diff --check"
+    ],
+    "repository_checks": {
+      "docs-check-final.log": {
+        "passed": true,
+        "log_sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14"
+      },
+      "provenance-check-final.log": {
+        "passed": true,
+        "log_sha256": "88f7932726e7715f830d2681a3f537a1db51533410bb7f48db0a2993894460ff"
+      },
+      "format-check-final.log": {
+        "passed": true,
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    }
+  },
+  "retained_failures_and_retries": [
+    {
+      "revision": "89b7f473d732e8499fdee90d55702019cd2319e8",
+      "typed_failures": 65,
+      "cause": "An extra literal closing brace in the generated C statement expression.",
+      "fix_revision": "4d3ee7792",
+      "smallest_retest": "f64_one passed all variants and compilation routes."
+    },
+    {
+      "revision": "4d3ee7792",
+      "typed_failures": 43,
+      "cause": "HighC expected physical pieces where HighIR owns complete logical wide/aggregate arguments.",
+      "fix_revision": "d65677a2acf36a6ee5826844b7919dc9fcd40ab3",
+      "smallest_retest": "wide_one and hfa_f32_two passed, followed by all 72 authenticated cases."
+    },
+    {
+      "revision": "fd80d83841d1e36609092a2d706704484bd3d9d8",
+      "model_completed_guests": 6,
+      "model_completed_guests_passed": 6,
+      "failure": "Strict input admission rejected text relocations caused by unused packet zero-initialization and adjacent constant header stores; no machine text was modified.",
+      "fix_revision": "d65677a2acf36a6ee5826844b7919dc9fcd40ab3",
+      "evidence_sha256": "f2efe094578c1fb2837eb830324867bcb4a7296c07f1c2fc612de966a75e5bb7"
+    },
+    {
+      "test": "LLVMCValues.IntegerSlicesFollowWideProducersWithoutObservingUpperState",
+      "initial_status": "120-second parallel timeout",
+      "serial_status": "passed",
+      "timeout_override": false,
+      "serial_report_sha256": "90b01c0546663597f1304595fd1d85bb72bc4415e7f9e0a82bece0e9389ea124"
+    },
+    {
+      "test": "NeverDArm64eSourceCallSDK",
+      "initial_status": "120-second timeout with model validation running concurrently",
+      "serial_status": "also timed out after 120 seconds",
+      "timeout_override": false,
+      "fix": "Register all 41 SDK shapes separately, retaining the complete image, both routes/O0/O2, all 14 refusals on the first shape and the existing 120-second per-test limit.",
+      "final_status": "41 CTest cases passed; aggregate semantic counts unchanged",
+      "serial_log_sha256": "184d70bd7cdd93a59557947109bade9f61be6f1aa7976fabe523a0c2061d4297",
+      "initial_log_sha256": "2be75beb0f2552e6a45fb0a432c95ad8ad636ef16bdfde234403509119dd9448"
+    }
+  ],
+  "controlled_model": {
+    "model_only": true,
+    "shapes": 65,
+    "authentication_variants": 5,
+    "object_routes": [
+      "native",
+      "high-O0",
+      "high-O2",
+      "llvm-O0",
+      "llvm-O2"
+    ],
+    "unchanged_MachO_objects": 1625,
+    "guests": 30,
+    "passed_guests": 30,
+    "cpta_modes": [
+      "off",
+      "on",
+      "cpta0-only",
+      "both"
+    ],
+    "valid_original_projected_pairs": 39000,
+    "invalid_signature_pairs": 93600,
+    "exception_class_differences": 0,
+    "original_exception_class_qualified_guests": 30,
+    "alternate_syndrome_allowance": false,
+    "summary_sha256": "2bd014912c42e176d4ec59ad09a85de1c7383552e84d7ee2412a55d65ef109e7",
+    "provenance_sha256": "b500a2aabdc16f3ce28c8a52e7eacb8d1e6f21787fa1bfac03c2f5195f11fb8d",
+    "guest_results": [
+      {
+        "guest": "native-pac0-el1",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "4ac596faf8e162df0095d6dee72a9b5cd2bc8f6fadf619894ca6a839e701d844",
+        "transcript_sha256": "921412a0d4b593d873d381fd80286fd2c32680ed72884071368647ca05ef8daf",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "native-pac0-el0",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "69b166a38cd4e662ebc57e77d477c8b4e1a5a481060b57057e8f96cfd6b1725b",
+        "transcript_sha256": "568b36ccfd72da3d81e783e9f934e01d7debb474a50d01a9be033d61c7f71c06",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "native-pac2-el1",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "15227ad1ac8d0251cafda95e4bfd34b44f4b6302aedc31c80fae376c80708f91",
+        "transcript_sha256": "e3a881b8316b48edfb76cd5e64b6070426f33f18670b80b37df8e65d6275c543",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "native-pac2-el0",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "c3085e570f361991529c7e395d81c7417027d6845f49d32e230ec3ed9c0f2826",
+        "transcript_sha256": "16ecf223108925a96a23840c1e88a31c207228414246d9db5528d80643a00e28",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "native-pac3-el1",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "12a1a76dc5ef28744efe53aa2b56ee57ab6141e03db49ca1e6c3e5ce1383f891",
+        "transcript_sha256": "deae4dda1d485def3aff71ddd0b6d7a52da92f7600689af8bae538573f370169",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "native-pac3-el0",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "5d097f2bc4cb8cbad01acbf4fa5fb425147ee8abbbb33dad46c80b7f33c30121",
+        "transcript_sha256": "653a5dace0653fe3f1b7e538b3c9c924f57cdedbe4cad97baca0411ffca01ce4",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "high-O0-pac0-el1",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "ccc41c4479a4d8027378700c4be539beea9c6f03e5a2e939e4fcd4aeb82653eb",
+        "transcript_sha256": "3f63edae122a3cca2d53be811ee4756d90106f867fe9483cf8c785d97c173338",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "high-O0-pac0-el0",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "a39e18949f6ce07fc32986471d8af8ccf4641ad810926f5f306ee9f045774f3c",
+        "transcript_sha256": "949387f175bd7e36047158492a02e28d98937e4305916e0b18e424f79bf9acef",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "high-O0-pac2-el1",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "b76c7d4a57cd33f67bf1880b01a0087db2b8aee0d94b1ba76a883a050dcf12ff",
+        "transcript_sha256": "13b06076cacb9acbc5fca9132e22858e288fe0792b8ecc206b3fea338e7057c4",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "high-O0-pac2-el0",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "98956f698e288d17167e917d655d49db5bbc94c5df225271f4111d66b2ccf347",
+        "transcript_sha256": "d6f7bdae3d54dac361bcd3e5d92e323389156f68dae0e344a3b5d54ea20eb189",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "high-O0-pac3-el1",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "49fecfbe63171e0e808214d8d8d37fd25d642daf9c6e4b198db887450a792b3b",
+        "transcript_sha256": "967cff6c0cdc4563939fec9d52e17dbc769e01ad1583630e33d8b9e1ec429b30",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "high-O0-pac3-el0",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "48d016e256cdd0ec728b4533543fae29c73fdbfca97464fc5422e10c1541cdb8",
+        "transcript_sha256": "cbcbed8f90b16fe24279bf7013915c13ee80d8e68f39014b14aeacbf76cfcb51",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "high-O2-pac0-el1",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "114b5ecfbbb7b06833bfc8a8ebe0c3f8bd6396d118dc2aacfcaffb5e3d407dc2",
+        "transcript_sha256": "01a21a3cdd57be039c046ebd57c1904e941208934a74e6bddf0edd4823e3ac0e",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "high-O2-pac0-el0",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "015dfe94f08f70f6532f93b8eeed5fe735d6da95209d743df87ac04b8102c646",
+        "transcript_sha256": "b59cc2f2bc6120573343df11ec4da9c66e45ff2b1b65cd6e5abc9397a20e1f1c",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "high-O2-pac2-el1",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "e2f493d1c87f59736d95581a6df3bdf21baeb8594c37d2d13a573b72463f7e01",
+        "transcript_sha256": "1bb2887c7d816338485476be121dca8005be83c23079decdc2682c7a5480e42f",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "high-O2-pac2-el0",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "45ad9045c6fb71ac2a271dbd9a157387d26119f1ed470e41133e2d2f2a35656a",
+        "transcript_sha256": "ba3fa346497caf1ed82e3e4e47ff899914da4e154c47a1bfb607a5bf1394dc63",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "high-O2-pac3-el1",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "074b66c84e1fa4cf85f018340ca8f13e9b1bbb44f48c8ce6cbd68aa4a0ee3f00",
+        "transcript_sha256": "c9fe07413d00e397d6dc2e31df881a238e98a9b90955a166f7d2837f2cf11bbc",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "high-O2-pac3-el0",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "8c2b846818f35c89116cb3a57e34c240ea9ac2999d934f6363162fd34ba0ea3b",
+        "transcript_sha256": "0380a9ba5d30f6f7ef36e6c5d29b5346b0c81e56ff5869f92aaf834efe11583c",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O0-pac0-el1",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "248345317984a4700041042cc434825f05860d4839a617a682caaeb1bc468c59",
+        "transcript_sha256": "0428084ed67ec192f573e5094078a990a8d2eeb6d555ffb1b0b3018a405939c6",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O0-pac0-el0",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "ce02cafb9c9cb3f6fafd329eeca4f1109793c350d8c5f566462124e619cfe642",
+        "transcript_sha256": "5528fe89abbe0559e0e23aa715d4f6c1348205f7a047a1ebf733b8b04ca2b308",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O0-pac2-el1",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "5354889218183111af9cc3152d626061c981607e72b866e8f0ee787e2d54f038",
+        "transcript_sha256": "1768f21efda3695a4e01ca48ceb53307a28fc27027036118520f9fcd4fbb9a91",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O0-pac2-el0",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "bbde14526cb620256c152f0fdd53e020fe65652fa0e5687ce767e795e4e97440",
+        "transcript_sha256": "5232c1f5330cd8f183f2e6a2f43b46ecdeac178c2f034d806c403db03638977f",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O0-pac3-el1",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "d05e68fad4eb819308154e0f00783ad26bbfba3fadb4a232b80a9ed449cf94dd",
+        "transcript_sha256": "65d9714a15ce98224453179399e2d3a6c1db36021127453bfbfecc66fc85685b",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O0-pac3-el0",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "b7fb3462cc30017dc1cd547a29a74869cb938c2dc4f5c760f9650fff93614d91",
+        "transcript_sha256": "ceffb0c48c1737fad11fe4eb9d7ac1485eb5506e8d1bb77a5fe736dd2f093959",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O2-pac0-el1",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "ba80a7e0190612bb5782843b116ee74b34cd9b03a0ca5a8e99db1a3ff1720105",
+        "transcript_sha256": "f1b3a565351813e4e4411eb8b66e1349c186bcb992487f57afe290c07e07e17e",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O2-pac0-el0",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "331ce6ad43dc39568861589e99ca417250a16c6e8e92cea8050f000eb0c7b261",
+        "transcript_sha256": "6e5c2c08d9837bd101c269c54f087a57c4b212969a86cb5849fb529bc1accb92",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O2-pac2-el1",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "0ab819ad454e194fbe75fc14939178417628638cc17878d915216f5e6daed9d5",
+        "transcript_sha256": "4f509d7973d9c329e012af63950304f969c6fbfd2ac604051fc41b673d9ac8de",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O2-pac2-el0",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "f0f611bb0b828d6ffd3f8d7266b29b0dae54994892582a5079cd69b6b68334fa",
+        "transcript_sha256": "5a010eb571bc8667574d6313de08091dedd649b10ecb37cb47c5f66aef53c887",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O2-pac3-el1",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "d3818936cc97ef3d1d215fc6bdb37fcdb477b07ae502b1ffd4d6733d6a02f2c1",
+        "transcript_sha256": "54714862d29fea28233cdcd7031484fbfdf6bf8cdb0baa43c73cfcaabe3036b6",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      },
+      {
+        "guest": "llvm-O2-pac3-el0",
+        "passed": true,
+        "original_exception_class_qualified": true,
+        "guest_sha256": "0cbdcc01545ac9040c3b8a2a694b1438f80194aa39d7b1e3275f832629362db0",
+        "transcript_sha256": "b1e1e4e1a8f47414e65d98ce57516f2361de30e374ba4ad0c7dfd01bce08584b",
+        "valid_pairs": 1300,
+        "invalid_signature_pairs": 3120,
+        "exception_class_differences": 0
+      }
+    ],
+    "baseline_reassessment": {
+      "producer_revision": "99cc0c3d2775ad91206e455db6f878755ef07c1f",
+      "new_execution": false,
+      "retained_guests": 30,
+      "rejected_by_new_strict_gate": [
+        "high-O0-pac0-el1",
+        "high-O0-pac0-el0",
+        "high-O0-pac2-el1",
+        "high-O0-pac2-el0",
+        "llvm-O0-pac0-el1",
+        "llvm-O0-pac0-el0",
+        "llvm-O0-pac2-el1",
+        "llvm-O0-pac2-el0"
+      ],
+      "receipt_sha256": "87d7e14dd6a0091514c49e3c05fb6b1fe7fc60720a88f9a4e51ce0ab58d7bb6c"
+    }
+  },
+  "original_x8_regression": {
+    "objects": 25,
+    "identical": true,
+    "differences": [],
+    "new_model_execution": false,
+    "basis": "All 25 regenerated objects equal the retained inputs of the previously qualified 30-guest original-x8 model matrix.",
+    "previous_receipt": "arm64e-copy-result-abi-2026-11-07.json"
+  },
+  "object_manifest": {
+    "file": "arm64e-authenticated-faults-objects-2026-11-08.json",
+    "sha256": "5cb24f6157d418a928897fa5b9edf7f94f1eb384c5eeefb6e8e55b984bb8091d",
+    "objects": 1713
+  },
+  "cleanup": {
+    "previous_model_installations_removed": 83,
+    "previous_model_installation_bytes_removed": 21144365615,
+    "previous_cleanup_manifest_sha256": "cd8d73e952d6e412580b7c03818baf96aa060fa5d1b61d039afabcf969aa3e81",
+    "current_model_installation_removed": true,
+    "reused_model_tools_bytes_removed": 261732223,
+    "sdk_products_removed": 397,
+    "sdk_bytes_removed": 7417200,
+    "other_products_removed": 6853,
+    "other_bytes_removed": 51180440,
+    "product_cleanup_manifest_sha256": "22f03e4e35f6430fc080fdeee8a24cb053b50b52a66bae637230eaa08e04df99",
+    "retained": [
+      "active build",
+      "canonical model inputs",
+      "compact receipts and hashes",
+      "source and diagnostic logs"
+    ]
+  },
+  "raw_evidence_sha256": {
+    "owner-results.json": "bcacbc6207580ad0d1d2048eeaccf17cfcad9b7f17c8c464e8459e9edd34f144",
+    "auth-before-logical-arguments.json": "d0a17304607c22d711a23e48d2c0de54501042c8b520328cbfdfb8b62bb7630c",
+    "auth-retry-results.json": "ee61a2431af256f92f776be92e9326628cffe2a5d9c76c1ea613248134effc9b",
+    "sdk/summary.json": "9df86d68082139db18621e56a7c08135fa6026a16a36285b143381026154a8c8",
+    "sdk/products.json": "09599fe9e16185fc6ec2bf82c93ebfa3cc2fddbc296d8346744bdd439967dcd4",
+    "environment-tests.log": "61d735b70fc334f7896ea8d56114d5c10e69962e555931e17baa3aecdf52063c",
+    "build-final.log": "1bc358f654367dee4e41cf69e699256525980075ce82f0e692f0ea0828c2ef93",
+    "object-admission.json": "b0e7f19323ddd6c49e8c293552f8f7b6e96a66a893b050495cab2b887ebe82ba",
+    "llvmc-final-results.json": "231abe2119a01dd3c666978681853841f51aacb463aefe50a471b08b39402f69",
+    "build-live-packet.log": "6e8479c7970818b5c843e57e14ac9c9faccb953ec30692f3e3307bb971c3cb4e",
+    "sdk-case-results.json": "d2606bb7b574e619f89ac8022edae10f98ce5b0d407944ca3a6d23c06347e298",
+    "sdk-junit.xml": "30634945e01fedce9fb6075458c3931d496315e06db30cc283048a341ab4403c",
+    "sdk-ctest.log": "b76486814c1a0b551ca441c5995be7e02a9e68f701e734b1c5c7cf6a9cdad39a",
+    "build-sdk-cases.log": "5ac73035e3819c612fcdde9ebef6bf96034bf0b8855f32432f0850dfafb6e9b1",
+    "build-value-close.log": "c2842a47d35125c373ee225d2b553446f634d4e38126438833083a20dfb85d41",
+    "build-logical-arguments.log": "cfa5c777952fa094172db699d64c910de0290a45f6508cb3bde6d9de6d0dd330"
+  },
+  "remaining_boundaries": [
+    "Generic integer and recovered-native C O0 calls still use their existing auth-and-resign path; this typed-call qualification does not cover their known exception-class differences.",
+    "This profile requires supplied complete Darwin C prototypes. It does not establish automatic complete recovery, arbitrary aggregate layouts or authenticated special-language calling conventions.",
+    "Whole-image authenticated storage/import creation, relocation emission, native signed exception unwinding and dyld execution remain separate unqualified contracts.",
+    "Native Apple PAC/CPA2 execution, exact fault PC and full ESR equality are not qualified by the controlled model.",
+    "The original-x8 model evidence covers its existing aliased-storage fixture; broader SDK stack/FP/variadic x8 shapes have ordinary native transport evidence only."
+  ],
+  "remote_CI": {
+    "status": "unavailable",
+    "reason": "The selected GitHub connection changed or is unavailable. Reopen Code Review.",
+    "tool": "mcp__codex_app__read_pull_request_check_diagnostics",
+    "fallback_used": false
+  }
+}

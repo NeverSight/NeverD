@@ -4785,14 +4785,18 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
   auto *IA = llvm::dyn_cast<llvm::InlineAsm>(Call.getCalledOperand());
   if (!IA)
     return false;
-  if (Opts.TheArch == Arch::AArch64 && Call.arg_size() == 2 &&
+  const bool ResultCall = Call.arg_size() == kResultCallInputCount &&
+                          IA->getConstraintString() == kResultCallConstraints;
+  const bool ValueCall = Call.arg_size() == kValueCallInputCount &&
+                         IA->getConstraintString() == kValueCallConstraints;
+  if (Opts.TheArch == Arch::AArch64 && (ResultCall || ValueCall) &&
       Call.getType()->isVoidTy() && IA->hasSideEffects() && IA->canThrow() &&
-      IA->getConstraintString() == kResultCallConstraints &&
       llvm::StringRef(IA->getAsmString()).starts_with(kResultCallMarker)) {
     emitIndent(Indent);
-    OS << sourceResultCallAsmC(IA->getAsmString(),
-                               valueStr(Call.getArgOperand(0)),
-                               valueStr(Call.getArgOperand(1)))
+    OS << sourceResultCallAsmC(
+              IA->getAsmString(), valueStr(Call.getArgOperand(0)),
+              valueStr(Call.getArgOperand(1)),
+              ValueCall ? valueStr(Call.getArgOperand(2)) : std::string())
        << "\n";
     return true;
   }

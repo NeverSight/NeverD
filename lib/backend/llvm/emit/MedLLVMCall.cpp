@@ -912,6 +912,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
 #define LLVM_SOURCE_CALL_TEXT(Name, Text) constexpr char Name[] = Text;
 #include "MedLLVMSourceCall.def"
     const bool RetainResultStorage = sourceCallRetainsResultStorage(Hint);
+    const bool MachineCall =
+        sourceCallUsesMachineABI(Hint, TargetFormat, Authentication);
     std::string Diagnostic;
     auto Refuse = [&](llvm::StringRef Reason) {
       syncError() << "source call contract: " << Reason << "\n";
@@ -1025,10 +1027,9 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     }
     std::vector<llvm::Type *> Prefix(Types.begin(), Types.begin() + Fixed);
     auto *ReturnType =
-        RetainResultStorage
-            ? llvm::Type::getVoidTy(*Ctx)
-            : llvmSourceCallValueType(*Ctx, Hint.Signature.ReturnType,
-                                      /*Parameter=*/false);
+        MachineCall ? llvm::Type::getVoidTy(*Ctx)
+                    : llvmSourceCallValueType(*Ctx, Hint.Signature.ReturnType,
+                                              /*Parameter=*/false);
     const auto ReturnMembers =
         sourceAggregateMembers(Hint.Signature.ReturnType);
     auto *FT = llvm::FunctionType::get(ReturnType, Prefix,
@@ -1063,7 +1064,9 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     if (Callable->getType()->isIntegerTy())
       Callable = Builder.CreateIntToPtr(Callable, PtrTy);
     llvm::CallInst *Call;
-    if (RetainResultStorage) {
+    llvm::Value *MachineResult = nullptr;
+    if (MachineCall) {
+      const auto Results = sourceResultCallResults(Hint.Signature);
       auto *Function = Builder.GetInsertBlock()->getParent();
       Function->removeFnAttr(llvm::Attribute::NoUnwind);
       Function->setUWTableKind(llvm::UWTableKind::Async);
@@ -1071,7 +1074,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       llvm::IRBuilder<> Allocation(&Function->getEntryBlock(),
                                    Function->getEntryBlock().begin());
       auto *Packet = Allocation.CreateAlloca(
-          I64Ty, Allocation.getInt64(kResultCallHeaderWords + Carriers.size()));
+          I64Ty, Allocation.getInt64(kResultCallHeaderWords + Carriers.size() +
+                                     Results.size()));
       Packet->setAlignment(llvm::Align(kResultCallWordBytes));
       auto *Address = Builder.CreatePtrToInt(Callable, I64Ty);
       // A named symbol is a compiler code address. An original indirect
@@ -1088,10 +1092,16 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         Modifier = IntegerBits(getVar(Authentication->Inputs[3], Builder));
       }
       std::vector<llvm::Value *> PacketValues{
-          Address, Modifier, IntegerBits(Args.back()),
+          Address, Modifier,
+          RetainResultStorage ? IntegerBits(Args.back()) : Builder.getInt64(0),
           Builder.getInt64(sourceResultCallStackBytes(Bindings))};
       PacketValues.insert(PacketValues.end(), Carriers.begin(), Carriers.end());
       for (unsigned I = 0; I < PacketValues.size(); ++I) {
+        // Direct results have no x8 input. Pass the stack size as an assembly
+        // operand, avoiding unused packet stores and synthesized memset calls.
+        if (!RetainResultStorage && I >= kValueCallHeaderWords &&
+            I < kResultCallHeaderWords)
+          continue;
         auto *Slot = Builder.CreateGEP(I64Ty, Packet, Builder.getInt64(I));
         Builder.CreateStore(PacketValues[I], Slot);
       }
@@ -1099,25 +1109,46 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           Builder.CreateCall(llvm::Intrinsic::getOrInsertDeclaration(
                                  Mod, llvm::Intrinsic::frameaddress, {PtrTy}),
                              {Builder.getInt32(0)});
+      llvm::SmallVector<llvm::Value *, 3> AssemblyArgs{Packet, Frame};
+      llvm::SmallVector<llvm::Type *, 3> AssemblyTypes{PtrTy, PtrTy};
+      if (!RetainResultStorage) {
+        AssemblyArgs.push_back(
+            Builder.getInt64(sourceResultCallStackBytes(Bindings)));
+        AssemblyTypes.push_back(I64Ty);
+      }
       auto *AssemblyType =
-          llvm::FunctionType::get(Builder.getVoidTy(), {PtrTy, PtrTy}, false);
+          llvm::FunctionType::get(Builder.getVoidTy(), AssemblyTypes, false);
       auto *Assembly = llvm::InlineAsm::get(
-          AssemblyType, sourceResultCallAsm(Bindings, Key),
-          kResultCallConstraints, /*hasSideEffects=*/true,
+          AssemblyType,
+          sourceResultCallAsm(Bindings, Key, RetainResultStorage, Results),
+          RetainResultStorage ? kResultCallConstraints : kValueCallConstraints,
+          /*hasSideEffects=*/true,
           /*isAlignStack=*/false, llvm::InlineAsm::AD_ATT, /*canThrow=*/true);
-      Call = Builder.CreateCall(Assembly, {Packet, Frame});
+      Call = Builder.CreateCall(Assembly, AssemblyArgs);
+      if (!Results.empty()) {
+        llvm::SmallVector<llvm::Value *, 4> Parts;
+        llvm::SmallVector<SourceAggregateMember, 4> Members;
+        for (unsigned I = 0; I < Results.size(); ++I) {
+          auto *Slot = Builder.CreateGEP(
+              I64Ty, Packet,
+              Builder.getInt64(kResultCallHeaderWords + Carriers.size() + I));
+          Parts.push_back(Builder.CreateLoad(mapNdtype(Results[I].Type), Slot));
+          Members.push_back({Results[I].Type, Results[I].ByteOffset});
+        }
+        MachineResult = Pack(Parts, Members, Hint.Signature.ReturnType->Size);
+      }
     } else {
       Call = Builder.CreateCall(FT, Callable, Values, AuthenticationBundles);
     }
-    if (Hint.Signature.ReturnType->Kind == NdTypeKind::Int &&
+    if (!MachineCall && Hint.Signature.ReturnType->Kind == NdTypeKind::Int &&
         Hint.Signature.ReturnType->IsSigned)
       Call->addFnAttr(llvm::Attribute::get(*Ctx, LLVMSourceSignedResult));
-    if (Hint.Signature.ReturnLocation.ExtendTo32Bits)
+    if (!MachineCall && Hint.Signature.ReturnLocation.ExtendTo32Bits)
       Call->addRetAttr(Hint.Signature.ReturnType->IsSigned
                            ? llvm::Attribute::SExt
                            : llvm::Attribute::ZExt);
-    for (unsigned I = 0;
-         !RetainResultStorage && I < Hint.Signature.Parameters.size(); ++I) {
+    for (unsigned I = 0; !MachineCall && I < Hint.Signature.Parameters.size();
+         ++I) {
       const auto &Parameter = Hint.Signature.Parameters[I];
       if (Parameter.Type->Kind == NdTypeKind::Int && Parameter.Type->IsSigned)
         Call->addParamAttr(
@@ -1128,7 +1159,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         Call->addParamAttr(I, Parameter.Type->IsSigned ? llvm::Attribute::SExt
                                                        : llvm::Attribute::ZExt);
     }
-    if (!RetainResultStorage)
+    if (!MachineCall)
       Call->setMetadata(
           "neverd.source.analyst-call",
           llvm::MDNode::get(
@@ -1150,7 +1181,9 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       Builder.CreateUnreachable();
       return;
     }
-    if (Op.Output.Size && !Call->getType()->isVoidTy()) {
+    if (Op.Output.Size && MachineResult) {
+      setVar(Op.Output, MachineResult, Builder);
+    } else if (Op.Output.Size && !Call->getType()->isVoidTy()) {
       llvm::Value *Value = Call;
       if (!ReturnMembers.empty()) {
         std::vector<llvm::Value *> Parts;

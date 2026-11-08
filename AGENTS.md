@@ -61,6 +61,9 @@ Choose the actual target/filter from the testing guide. Run the smallest check
 that can disprove the change, fix failures caused by the work, and rerun affected
 checks. Broaden coverage for shared semantics, ISA/format changes, or PR review.
 Local builds and fixtures are disposable and have no production access.
+After recording test results, remove unused generated binaries, duplicate model
+installations and other reproducible temporary products. Keep the active build,
+compact qualification records and diagnostics still needed to investigate failures.
 
 For implementation requests, continue through verification without asking after
 each step. Stop when the user requested diagnosis/review only, or when completion

@@ -1675,8 +1675,11 @@ retaining all five authentication variants and both C routes at O0/O2 within
 the ordinary per-test timeout. Stable shape names identify failures and permit
 parallel scheduling. All 325 typed groups emit actual Mach-O objects on five
 routes. Narrow register arguments
-and results require the correct LLVM extension attribute; stack arguments
-retain their source width. The outer fixture explicitly writes the complete
+and results require the correct LLVM extension attribute on the raw typed
+route; authenticated routes require one potentially unwinding machine call
+with the original BLRAA/BLRAB and no separate auth, resign or trap operation.
+Their independent model callbacks check argument extensions, stack widths and
+every logical return piece. The outer fixture explicitly writes the complete
 X0 return carrier, and a constant result cannot stand in for the callback's
 value. Set `NEVERD_ARM64E_CALL_ABI_ARTIFACT_DIR` to retain the nine integer
 groups and 325 typed groups with all five object routes. Composite result
@@ -1701,7 +1704,8 @@ alignment or dereferenceability parameter attributes. Mixed and nested indirect
 records also exercise forward declarations for opaque pointer fields.
 Other hosts retain compilation
 and explicitly record that native execution is unavailable. Packed/union values,
-hidden results, and unpromoted scalar tails must refuse explicitly.
+hidden results without the original x8 carrier, and unpromoted scalar tails must
+refuse explicitly.
 Raw native execution does not qualify PAC behavior.
 `MachOArm64eDependencies` in `NeverDArm64eAnalysisTests` checks independently
 encoded linked images for all six arm64e chained-pointer formats. Chain metadata
@@ -1826,6 +1830,16 @@ Independent A/B signing controls in the ordinary arm64 host process leave the
 pointer unchanged, so its authenticated transport checks are not active PAC
 evidence. Native signed unwinding remains unqualified.
 
+Successful public SDK runs remove their generated dylib, objects and executable
+harnesses after recording hashes and sizes in `products.json`. Sources, logs
+and summaries remain available. Use `--keep-products` only when those binaries
+are still needed for inspection; failed runs preserve their products.
+CTest registers `NeverDArm64eSourceCallSDK.<shape>` for all 41 shapes under the
+`NeverDArm64eSourceCallSDK` label. Each retains the complete input image and
+both C routes at O0/O2; the first shape also owns all 14 declaration refusals.
+Every case keeps the 120-second limit. `--case NAME` selects the same unit for
+local diagnosis; omitting it still runs the complete SDK profile.
+
 `AArch64AuthenticatedCall.IndirectResultsKeepOriginalStorageAndPAC` exports
 five key/modifier variants for direct LLVM and HighC/LLVMC at O0/O2. The
 synthetic MedIR explicitly defines x0 before returning and rejects projected
@@ -1859,6 +1873,23 @@ affected call, frame, type and HighIR test instances, 1,308 pass and 26 explicit
 skip; none fail or time out. All 25 original-x8 and 1,625 earlier typed-call
 objects again match the recorded model inputs. The receipt retains this
 integration check separately from the earlier complete owner regression.
+
+The [authenticated-fault receipt](evidence/arm64e-authenticated-faults-2026-11-08.json)
+removes the intermediate-resign exception allowance for explicit Darwin C
+prototypes. All 1,625 current Mach-O objects pass unchanged-text admission;
+all 30 model guests pass with 39,000 valid original/projected pairs and
+93,600 invalid-signature pairs. Every route, including HighC and LLVMC O0,
+retains the original exception class: zero differences are permitted or observed.
+The strict assessor rejects eight old C O0 transcripts that the earlier profile
+accepted. That reassessment is separate from the new execution evidence.
+The 72 authenticated-call cases pass on the recorded producer; the complete
+selected regression contains 419 passes and 21 explicit host/toolchain skips.
+All 25 original-x8 objects still match their previously qualified model inputs.
+Generic and recovered-native C calls, complete image authentication, native
+Apple PAC/CPA2 execution, signed unwinding and exact fault PC/full ESR remain
+outside this qualification. Generated products are removed after their hashes
+and results are recorded; canonical model inputs and necessary diagnostics remain.
+
 `ImmutableNativeCalls.Generated*` checks ordinary and loop-frame image
 publication after dead private reads and their initializers disappear. The
 relocation validator still rejects unbound live image addresses.

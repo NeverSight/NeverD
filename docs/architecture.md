@@ -1305,13 +1305,16 @@ authentication operations. Unproved LLVM operations remain explicit.
 temporary consumed by an indirect call in the same block. Only scalar copies
 may intervene; memory reads/writes, control flow, other calls, operand
 redefinitions, extra uses, dead calls and mutable non-SSA functions cannot
-absorb the authentication. LLVM attaches the original key/discriminator to
-the call's `ptrauth` operand bundle, preserving the signed input even when LR
-supplied an original operand. Both C projections use auth-and-resign to the
-compiler's default function-pointer schema. A resolved display name cannot
-replace that authenticated target, and exact LLVM call prototypes remain
+absorb the authentication. Ordinary LLVM calls attach the original
+key/discriminator to the `ptrauth` operand bundle, preserving the signed input even when LR
+supplied an original operand. Generic and recovered native C calls use
+auth-and-resign to the compiler's default function-pointer schema in both C
+projections. Explicit Darwin C call-site prototypes use the shared machine-call
+bridge described below, retaining the actual BLRAA/BLRAB and original result
+registers. A resolved display name cannot replace that authenticated target,
+and exact LLVM call prototypes remain
 exact. Explicit source call-site prototypes and recovered native C prototypes
-reuse that same target rendering, including floating arguments/results and a
+retain the original target, including floating arguments/results and a
 variadic fixed prefix where declared. They cannot authenticate to a raw pointer
 and then acquire a second implicit C check, or replace a captured target with
 its display name. Authenticated special-language bindings without a complete
@@ -1322,9 +1325,10 @@ The mobile source assembler admits that exact shared C prefix before
 declarations, including after the floating-point contraction policy, and
 preserves it during method assembly. Modified prefixes and arbitrary
 conditional or mutating directives remain unsupported.
-Clang O0 can retain an intermediate resign and produce a different invalid-PAC
-diagnostic from the original branch; this is not exact exception-syndrome
-equivalence. Model rejection evidence compares exception classes; complete ESR
+Generic and recovered native calls at Clang O0 can retain an intermediate
+resign and produce a different invalid-PAC diagnostic from the original branch;
+this is not exact exception-syndrome equivalence. Model rejection evidence
+compares exception classes; complete ESR
 and exact fault-PC equality remain unqualified. Whole-image arm64e rebuilding
 still requires the separate
 authenticated storage, relocation and signed-unwind ABI contract.
@@ -1367,6 +1371,22 @@ type uses the shared natural-record PCS classifier, including mixed records
 and the HFA size exception. It introduces no LLVM `sret`, `byval`, `noalias`,
 alignment or dereferenceability promise on the original storage. The existing
 native logical-result adapter still requires a reconstructible member layout.
+
+Explicit authenticated Darwin C calls with direct results reuse the same
+bridge. Each declared integer or floating return register is stored at its
+original width immediately after the branch returns. LLVM and both C routes
+reconstruct the logical scalar, 128-bit value, record or HFA from those pieces,
+using the shared validated ABI offsets. Record padding is not a result member.
+HighIR retains each complete logical argument. HighC evaluates it once and
+copies its declared pieces into the physical argument slots, using that same
+ABI mapping and excluding padding. Original-x8 calls retain their existing
+physical operands and exact storage address.
+Direct-result calls initialize only their target, modifier and actual argument
+pieces. They pass the outgoing stack size as a separate assembly operand;
+unused packet lanes and a nonexistent x8 result input need no initialization.
+This avoids an intermediate authentication or resign operation, including at
+O0; invalid signatures remain the responsibility of the original authenticated
+branch. Raw calls with direct results retain their existing typed C/LLVM path.
 
 The bridge preserves the compiler's stack in a callee-saved register, reserves
 the Darwin red zone plus aligned outgoing arguments, and forces a compiler

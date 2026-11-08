@@ -199,13 +199,16 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
     }
     return Callee;
   };
-  if (sourceCallRetainsResultStorage(Hint)) {
+  const bool RetainResultStorage = sourceCallRetainsResultStorage(Hint);
+  if (sourceCallUsesMachineABI(Hint, Opts.Format, AuthenticatedTarget)) {
     std::string Diagnostic;
     const auto Bindings = sourceABIParameters(Signature);
+    const size_t ArgumentCount =
+        RetainResultStorage ? Bindings.size() : Signature.Parameters.size();
     if (!Hint.AnalystSite || Hint.AnalystSite->Instruction != E.CallSiteAddr ||
         Signature.Architecture != Opts.TheArch ||
         !validateSourceABI(Signature, Diagnostic) ||
-        E.Operands.size() != Bindings.size() + 1 ||
+        E.Operands.size() != ArgumentCount + unsigned(RetainResultStorage) ||
         (E.IsIndirectCall && !E.IndirectTarget))
       throw std::invalid_argument(kResultCallError);
     std::optional<unsigned> Key;
@@ -242,30 +245,71 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
     const auto Packet = aarch64PAuthTemporary(kResultCallPacket, Names);
     const auto ValueName = aarch64PAuthTemporary(kResultCallValue, Names);
     const auto Storage =
-        sourceValue(Arguments[Bindings.size()], E.Operands.back()->Type,
-                    NdType::makeInt(kResultCallWordBytes, false));
+        RetainResultStorage
+            ? sourceValue(Arguments[Bindings.size()], E.Operands.back()->Type,
+                          NdType::makeInt(kResultCallWordBytes, false))
+            : std::optional<std::string>(std::to_string(0));
     if (!Storage)
       throw std::invalid_argument(kResultCallError);
+    const auto Results = sourceResultCallResults(Signature);
     std::string Result =
-        llvm::formatv(kResultCallPacketC, Packet,
-                      kResultCallHeaderWords + Bindings.size(), Target,
-                      Modifier, *Storage, sourceResultCallStackBytes(Bindings))
+        llvm::formatv(
+            RetainResultStorage ? kResultCallPacketC : kValueCallPacketC,
+            Packet, kResultCallHeaderWords + Bindings.size() + Results.size(),
+            Target, Modifier, *Storage, sourceResultCallStackBytes(Bindings))
             .str();
-    for (unsigned I = 0; I < Bindings.size(); ++I) {
-      const auto Value =
-          sourceValue(Arguments[I], E.Operands[I]->Type, Bindings[I].Type);
+    unsigned At = 0;
+    for (unsigned I = 0; I < ArgumentCount; ++I) {
+      const auto Type = RetainResultStorage
+                            ? Bindings[I].Type
+                            : sourceCallParameterType(Signature.Parameters[I]);
+      const auto Value = sourceValue(Arguments[I], E.Operands[I]->Type, Type);
       if (!Value)
         throw std::invalid_argument(kResultCallError);
-      Result += llvm::formatv(kResultCallArgumentC,
-                              declarationToC(Bindings[I].Type, ValueName),
-                              *Value, Packet, kResultCallHeaderWords + I,
-                              ValueName, Bindings[I].Type->Size)
+      if (RetainResultStorage || Signature.Parameters[I].Components.empty()) {
+        Result +=
+            llvm::formatv(kResultCallArgumentC, declarationToC(Type, ValueName),
+                          *Value, Packet, kResultCallHeaderWords + At++,
+                          ValueName, Type->Size)
+                .str();
+        continue;
+      }
+      // HighIR owns one logical argument. Evaluate it once, then marshal only
+      // the declared pieces; record padding is not an ABI operand.
+      Result += llvm::formatv(kResultCallLogicalArgumentC,
+                              declarationToC(Type, ValueName), *Value)
                     .str();
+      while (At < Bindings.size() && Bindings[At].ParameterIndex == I) {
+        const auto &Piece = Bindings[At];
+        Result += llvm::formatv(kResultCallArgumentPieceC, Packet,
+                                kResultCallHeaderWords + At, ValueName,
+                                Piece.ByteOffset, Piece.Type->Size)
+                      .str();
+        ++At;
+      }
+      Result += kResultCallArgumentEndC;
     }
-    return Result +
-           sourceResultCallAsmC(sourceResultCallAsm(Bindings, Key), Packet,
-                                kResultCallFrameC) +
-           kResultCallEndC;
+    Result += sourceResultCallAsmC(
+        sourceResultCallAsm(Bindings, Key, RetainResultStorage, Results),
+        Packet, kResultCallFrameC,
+        RetainResultStorage
+            ? std::string()
+            : std::to_string(sourceResultCallStackBytes(Bindings)));
+    if (Results.empty())
+      return Result + kResultCallEndC;
+    Result += llvm::formatv(kResultCallResultDeclarationC,
+                            declarationToC(Signature.ReturnType, ValueName))
+                  .str();
+    for (unsigned I = 0; I < Results.size(); ++I)
+      Result += llvm::formatv(kResultCallResultCopyC, ValueName,
+                              Results[I].ByteOffset, Packet,
+                              kResultCallHeaderWords + Bindings.size() + I,
+                              Results[I].Type->Size)
+                    .str();
+    const auto Value = sourceValue(ValueName, Signature.ReturnType, E.Type);
+    if (!Value)
+      throw std::invalid_argument(kResultCallError);
+    return Result + llvm::formatv(kResultCallValueEndC, *Value).str();
   }
   if (Hint.CallKind == SourceCallTypeHint::Kind::Analyst) {
     std::string Diagnostic;
