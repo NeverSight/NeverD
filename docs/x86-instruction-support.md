@@ -4443,3 +4443,40 @@ separately. The source-global audit still has 90 baseline findings in 29
 unchanged NeverC files. Real/VM86/IA-32e transitions, task switching, remaining
 i386 state banks, software SMM/SGX and unbound asynchronous producers remain
 open; the final x86 completion and LLVM release gates are not closed.
+
+## Native i386 VMX and VMXOFF completion (2026-11-08)
+
+NeverC adds fourteen mode-specific VMCS/invalidation and explicit-address
+interfaces for i386. Microsoft VMREAD/VMWRITE now select i32 intrinsics for
+their i386 `size_t` arguments; management memory operands remain m64. The
+new `__builtin_ia32_vmxoff_status` and `llvm.x86.vmxoff.status` retain VMfail
+under dual-monitor SMM treatment. The older void interfaces retain their ABI.
+
+Both NeverD C routes select the native i386 spellings from the shared
+virtualization plan. Complete translation-unit tests caught and corrected
+the old x64-only prelude conditions. The LLVM renderer uses the status API
+when the SDK supplies it and exact assembly otherwise. Native-call admission
+requires the SDK's intrinsic ID; a reserved `llvm.` name alone is insufficient.
+The r6 test also checks this refusal because r6 lacks even the legacy void
+VMXOFF intrinsic. Explicit versioned context contracts remain separate.
+
+The [VMX width/status evidence](evidence/x86-vmx-widths-status-2026-11-08.json)
+records 27 source/SDK checks, 2,912 C compilation checks and 2,592 controlled
+comparisons of complete generated C against independent original bytes across
+the native and r6 SDKs. The native SDK emits 426 native modules with no
+assembly fallback. NeverC passes 182 x86 tests, 18,144 controlled VMX checks,
+1,792 actual x64 CPL3 fault boundaries and 12,582,912 native FLAGS regression
+comparisons. The full LLVM fork passes seven VMX lit tests and 292 direct
+controlled checks. The selected matrices have no failures or skips; receipts
+record exact source revisions, compiler hashes and negative controls.
+
+These checks qualify Linux i386 source generation through NeverC's full LLVM
+backend and x64 source generation across ELF/COFF/Mach-O. Controlled VMX
+completions do not establish successful hardware VM entry or a hardware VMCS.
+The complete-C witness uses flat segment bases; separate address witnesses
+cover nonzero bases and 16-bit truncation. Windows/Darwin i386 native source
+qualification, physical-address i386 SVM source APIs, full real/VM86/IA-32e
+transitions, task switching, remaining state banks, software SMM/SGX and
+unbound asynchronous producers remain open. The production SDK pin remains
+`neverd-llvm-v23.0.0-r6`; the LLVM gitlink records the published VMXOFF source
+change, and no final LLVM release is claimed.

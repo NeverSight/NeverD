@@ -6945,6 +6945,10 @@ the exact VMXOFF assembly and records those modules separately. The void API
 cannot carry VMfail under SMM dual-monitor treatment; observable flags always
 use the status API or the instruction's actual CF/ZF. The compatibility test
 `VmxoffRetainsFlagsAndTheLegacyVoidApi` also checks the old void C projection.
+When the SDK does not define that old intrinsic either, the test checks that
+the same-named unregistered declaration is refused; it never constructs an
+intrinsic declaration from ID zero. The recorded property distinguishes those
+two SDK capabilities without skipping the status-plan check.
 Set `NEVERD_TEST_NEVERC=/path/to/neverc` to exercise 888 C
 compilations from both source routes at O0/O2, checking native intrinsic calls
 and the absence of inline assembly. That C test also runs with the old SDK's
