@@ -5508,9 +5508,10 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
             Candidate->Return &&
             (!Generic.Return || Candidate->Return->Postconditions.size() >
                                     Generic.Return->Postconditions.size());
-        // Projected effects can preserve extra unrelated caller snapshots.
-        // Spend that precision only for a stronger scalar or field result.
-        if (!RefinesReturn && !AddsFields)
+        // Reuse can retain an internal CALLX proof even when the returned
+        // scalar and memory remain unknown. The same register and may-read
+        // guards below protect that evidence against changed inputs.
+        if (!RefinesReturn && !AddsFields && !Candidate->HasTargetEvidence)
           continue;
         if (DifferentMemory) {
           auto Matches = memoryInputsMatch(*Candidate, Input, CoveringInputs);
