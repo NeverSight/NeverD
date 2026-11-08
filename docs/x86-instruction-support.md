@@ -4382,6 +4382,11 @@ SDKs and qualified P/E cores. New MOV-CR coverage includes
 PDPTE registers. Generated C runs through Clang/NeverC O0/O2. NeverC passes
 87 frontend/code-generation checks and 5,016 controlled CR/DR completions
 across its full i386/x64 backend route and embedded x64 backend.
+After integrating the subsequent HighC frame/typed-pointer overflow fixes,
+both SDKs pass 306 additional generated-C checks. The paging and system-state
+executables remain byte-identical to their qualified baselines; their exact
+hashes and the unchanged MOV-CR implementation hashes are recorded in the
+same evidence.
 
 NeverC adds `__builtin_ia32_readcr32`, `writecr32`, `readdr32` and `writedr32`,
 with constant register indices and native LLVM intrinsics. Its i386 source
