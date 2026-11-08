@@ -485,8 +485,12 @@ void checkTypedShape(const TypedShape &Shape, bool Native) {
       Words += (Binding.Type->Size + kPointerBytes - 1) / kPointerBytes;
     auto Function = function(Variant.Key, false, Words, Variant.Raw);
     const bool VectorReturn = isSourceAArch64Vector128Type(ReturnType);
-    if (VectorReturn)
-      Function.ReturnType = NdType::makeInt(kSourceAArch64Vector128Bytes);
+    if (VectorReturn) {
+      Function.ReturnType = NdType::makeStruct(
+          {NdType::makeInt(kPointerBytes), NdType::makeInt(kPointerBytes)});
+      Function.MultiReturn = {{a64reg::X0, kPointerBytes, false},
+                              {a64reg::X1, kPointerBytes, false}};
+    }
     auto &Block = Function.Blocks.front();
     MedOp Call = Block.Ops[Variant.Raw ? 0 : 1];
     Hint->CallKind = Native ? SourceCallTypeHint::Kind::Native
@@ -562,6 +566,26 @@ void checkTypedShape(const TypedShape &Shape, bool Native) {
       Widen.addInput(Call.Output);
       Return.Inputs[0] = Widen.Output;
       Setup.push_back(std::move(Widen));
+    }
+    if (VectorReturn) {
+      // The outer ABI observes both words independently through X0/X1. A
+      // temporary alone is not an AArch64 physical return-register definition.
+      for (unsigned I = 0; I < Function.MultiReturn.size(); ++I) {
+        MedOp Extract;
+        Extract.Opcode = NdOp::SUBBYTES;
+        Extract.Output = Call.Output;
+        Extract.Output.Kind = MedVar::Reg;
+        Extract.Output.Id = kTypedTemporaryId + Bindings.size() + I;
+        Extract.Output.RegOff = Function.MultiReturn[I].RegOff;
+        Extract.Output.Size = kPointerBytes;
+        ++Extract.Output.SSAVer;
+        Extract.addInput(Call.Output);
+        Extract.addInput(
+            MedVar::makeConst(I * kPointerBytes, kPromotedIntegerBytes));
+        if (!I)
+          Return.Inputs[0] = Extract.Output;
+        Setup.push_back(std::move(Extract));
+      }
     }
     if (!VectorReturn && (ReturnType->Kind == NdTypeKind::Struct ||
                           ReturnType->Size > kPointerBytes)) {
