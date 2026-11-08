@@ -108,6 +108,32 @@ struct Token {
   std::size_t begin, end;
   std::string text;
 };
+/// Whether tokens(text) may hold a token that reads \p name, without making
+/// them: a character wherever it is, and an identifier where it ends a word
+/// and does not continue one.  A word inside a comment or a string counts too,
+/// which tokens() skips.
+bool mayHoldToken(const std::string &text, const std::string &name) {
+  const auto word = [](char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+  };
+  if (name.size() == 1)
+    return text.find(name[0]) != std::string::npos;
+  if (name.empty() ||
+      !(std::isalpha(static_cast<unsigned char>(name[0])) || name[0] == '_') ||
+      !std::all_of(name.begin(), name.end(), word))
+    return false;
+  for (auto at = text.find(name); at != std::string::npos;
+       at = text.find(name, at + 1)) {
+    const bool continues =
+        at > 0 && (std::isalpha(static_cast<unsigned char>(text[at - 1])) ||
+                   text[at - 1] == '_');
+    const auto end = at + name.size();
+    if (!continues && (end == text.size() || !word(text[end])))
+      return true;
+  }
+  return false;
+}
+
 std::vector<Token> tokens(const std::string &text) {
   std::vector<Token> result;
   for (std::size_t i = 0; i < text.size();) {
@@ -1516,11 +1542,8 @@ bool CodeEdits::takeFunctionNames(Json &view,
   // holds; a new name the text spells may link a word that linked nothing.
   for (const auto address : renamed) {
     const auto name = image.names.find(address);
-    if (name == image.names.end())
+    if (name == image.names.end() || mayHoldToken(decorated, name->second))
       return false;
-    for (const auto &token : tokens(decorated))
-      if (token.text == name->second)
-        return false;
   }
   std::vector<Replacement> replacements;
   for (const auto &name : *names) {

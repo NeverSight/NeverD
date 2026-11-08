@@ -552,6 +552,38 @@ int main() {
                         name.value("address", std::string()) == "0x10ab";
   check(definitionTarget, "A renamed definition has no edit target");
 
+  // A function's new name is written where the document links it, unless the
+  // text may already read it as a word of its own, which a link would then be
+  // ambiguous with: after a digit it is one, inside a longer name it is not.
+  const auto linked = [](const std::string &text) {
+    const auto begin = text.find("callee");
+    return Json{{"text", text},
+                {"code_names", Json::array({{{"kind", "address"},
+                                             {"address", "0x1100"},
+                                             {"begin_byte", begin},
+                                             {"end_byte", begin + 6}}})}};
+  };
+  CodeEdits::ImageFacts freshName;
+  freshName.renamed(0x1100, "callee", "fresh");
+  for (const auto &[text, written] :
+       {std::pair<const char *, bool>{"int f(void) { return callee(); }", true},
+        {"int f(void) { return callee() + 9fresh; }", false},
+        {"int f(void) { return callee() + refresh; }", true},
+        {"int f(void) { return callee() + fresh_one; }", true},
+        {"int f(void) { return callee() + fresh; }", false}}) {
+    Json view = linked(text);
+    const bool took = CodeEdits::takeFunctionNames(view, {0x1100}, freshName);
+    check(took == written, "A new name's word is read otherwise");
+    if (took)
+      check(
+          view.at("text").get<std::string>().find("return fresh()") !=
+                  std::string::npos &&
+              view.at("code_names")[0].at("end_byte") ==
+                  view.at("code_names")[0].at("begin_byte").get<std::size_t>() +
+                      5,
+          "A new name is not written where it is linked");
+  }
+
   std::cout << "Precise variable/image targets, literal isolation, UTF-8 spans "
                "and stale-edit checks passed\n";
 }
