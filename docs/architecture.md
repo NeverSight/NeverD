@@ -1307,15 +1307,23 @@ may intervene; memory reads/writes, control flow, other calls, operand
 redefinitions, extra uses, dead calls and mutable non-SSA functions cannot
 absorb the authentication. Ordinary LLVM calls attach the original
 key/discriminator to the `ptrauth` operand bundle, preserving the signed input even when LR
-supplied an original operand. Generic and recovered native C calls use
-auth-and-resign to the compiler's default function-pointer schema in both C
-projections. Explicit Darwin C call-site prototypes use the shared machine-call
-bridge described below, retaining the actual BLRAA/BLRAB and original result
-registers. A resolved display name cannot replace that authenticated target,
+supplied an original operand. Generic C calls use auth-and-resign to the
+compiler's default function-pointer schema. Explicit Darwin C call-site
+prototypes and complete recovered native fixed C value prototypes use the
+shared machine-call bridge described below, retaining the actual BLRAA/BLRAB
+and original result registers. Recovered bindings retain their native identity,
+effects and declaration checks before HighC selects that bridge. LLVM consumes
+their validated physical carriers without requiring analyst source authority.
+Scalar, 128-bit integer and direct record/HFA values share the same transport;
+indirect native copies and hidden results still require their separate storage
+proofs. Native 128-bit SIMD carriers are not integer pairs: authenticated
+calls using them reject until the packet layout can carry full vector registers.
+A resolved display name cannot replace that authenticated target,
 and exact LLVM call prototypes remain
 exact. Explicit source call-site prototypes and recovered native C prototypes
-retain the original target, including floating arguments/results and a
-variadic fixed prefix where declared. They cannot authenticate to a raw pointer
+retain the original target, including floating arguments/results. Explicit
+prototypes also support a declared variadic prefix; recovered native bindings
+in this profile require fixed prototypes. They cannot authenticate to a raw pointer
 and then acquire a second implicit C check, or replace a captured target with
 its display name. Authenticated special-language bindings without a complete
 call ABI reject explicitly.
@@ -1325,8 +1333,8 @@ The mobile source assembler admits that exact shared C prefix before
 declarations, including after the floating-point contraction policy, and
 preserves it during method assembly. Modified prefixes and arbitrary
 conditional or mutating directives remain unsupported.
-Generic and recovered native calls at Clang O0 can retain an intermediate
-resign and produce a different invalid-PAC diagnostic from the original branch;
+Generic calls without a complete recovered value ABI at Clang O0 can retain an
+intermediate resign and produce a different invalid-PAC diagnostic from the original branch;
 this is not exact exception-syndrome equivalence. Model rejection evidence
 compares exception classes; complete ESR
 and exact fault-PC equality remain unqualified. Whole-image arm64e rebuilding
@@ -1905,8 +1913,14 @@ address, target or complete import identity, key, diversity and address-diversit
 flag, together with the image CPU type and ABI subtype. Repacking chain metadata
 may keep that identity; changing a signing recipe, import or slot may not.
 Per-format strides, import-addend overflow, segmented targets and page/storage
-bounds remain validated. This preservation contract does not synthesize signed
-storage, install new authenticated imports or authorize whole-image rebuilding.
+bounds remain validated. Multiple starts in one page retain the same slot and
+signing identities. Overflow lists must terminate within their owning table,
+use ascending starts and contain no duplicate or partially overlapping pointer
+storage across either bind or rebase phase. Unowned nonzero overflow entries
+and invalid padding reject before a dependency state is published. The start
+ordering follows [dyld's chain validation](https://github.com/apple-oss-distributions/dyld/blob/main/common/MachOAnalyzer.cpp).
+This preservation contract does not synthesize signed storage, install new
+authenticated imports or authorize whole-image rebuilding.
 
 This support covers static loading, lifting and C/LLVM inspection. Native
 rebuilding and source replacement of an arm64e image fail explicitly until

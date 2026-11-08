@@ -69,7 +69,8 @@ bool neverd::sourceCallUsesMachineABI(const SourceCallTypeHint &Hint,
                                       BinaryFormat Format, bool Authenticated) {
   return sourceCallRetainsResultStorage(Hint) ||
          (Authenticated && Format == BinaryFormat::MachO &&
-          Hint.CallKind == SourceCallTypeHint::Kind::Analyst &&
+          (Hint.CallKind == SourceCallTypeHint::Kind::Analyst ||
+           Hint.CallKind == SourceCallTypeHint::Kind::Native) &&
           Hint.Signature.Architecture == Arch::AArch64 &&
           Hint.Signature.Convention ==
               SourceFunctionTypeHint::ConventionKind::C);
