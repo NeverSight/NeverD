@@ -10957,6 +10957,11 @@ unresolved.
 shape in all twelve optimized MSVC x64 `xcpt4` builds, where it is a `__finally`
 funclet reading its selector through the establisher frame: one six-case table
 inside the handler's unwind range, every case a decoded block.
+`COFFJoinedTwoLevel.*` checks an MSVC CRT two-level dispatch whose index byte
+arrives along two paths that bound it separately, one to 1..15 and one to
+exactly 20h: all 33 index coordinates publish, with the unused bytes'
+cases included. A path that leaves the byte unbounded, or a single-level
+table over the same domain with holes, stays unresolved.
 
 `ResolverBlockMemo.*` retains references through 20,000 recursive insertions,
 checks duplicate construction and exact destruction counts, and reuses cleared
