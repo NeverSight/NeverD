@@ -16331,6 +16331,13 @@ exhausted and mismatching explicit logs through ordinary/V/A calls; its native
 client interleaves a text write between two failed transactions on the same
 proxy. `AndroidLog.Text*` checks direct/dynamic calls, buffer/priority bytes,
 null tags, radio routing, signed results, errno and bounded payload admission.
+`AndroidLog.Formatted*` runs direct and dynamic print/vprint/buf_print calls
+at O0/O2 across relocation variants and available CPU backends. Independent
+transcripts check stacked scalar arguments, unchanged va_list bytes, 1022/1023/
+1024-byte and large-width clipping, embedded NUL, bounded precision at a page
+edge, signed results and errno. Unsupported conversions precede tag reads and
+log consumption; missing, exhausted and mismatching transcripts preserve the
+completed prefix. Fatal state and transport truncation remain explicit.
 `AndroidJNI.BinderTransportUsesGuestServiceAndRetainedReplyArenas`
 executes real guest services through all three JNI forms, including three-round
 buffer retention/reuse, a reply recycled and reused by another native thread,

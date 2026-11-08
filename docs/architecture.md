@@ -12985,7 +12985,8 @@ with their existing Linux and report inventories. Keep control flow in C++ and
 independent test expectations in fixtures; ordinary punctuation and empty strings
 do not need vocabulary entries.
 
-`AndroidFormatting` owns both ordinary and fortify string formatting. Its
+`AndroidFormatting` owns ordinary/fortify string formatting and the native
+print/vprint/buf_print liblog entry points. Its
 entrypoint classification supplies the fixed-argument layout and object-size
 checks to one formatter and the shared AAPCS64 `ArgumentReader`; it does not
 duplicate conversion rules for checked imports, dynamic providers, SDK or CLI.
