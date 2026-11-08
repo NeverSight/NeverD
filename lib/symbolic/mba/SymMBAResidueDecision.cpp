@@ -81,7 +81,7 @@ class LowWordDecisions {
   size_t &Storage;
   size_t MaxWork;
   bool *StorageLimited;
-  size_t Work = 0;
+  size_t RemainingWork;
   bool Failed = false;
   unsigned RootWidth = 0;
   bool PlainDecisionInputs = true;
@@ -149,21 +149,22 @@ class LowWordDecisions {
       return false;
     if (Bytes > Storage && StorageLimited)
       *StorageLimited = true;
-    if (Units > MaxWork - Work || Bytes > Storage) {
+    if (Units > RemainingWork || Bytes > Storage) {
       Failed = true;
       return false;
     }
-    Work += Units;
+    RemainingWork -= Units;
     Storage -= Bytes;
     return true;
   }
 
   // This owner alone spends its captured allowance. Commit the exact admitted
   // work before another budget consumer runs and on every exit, including a
-  // refused proof. Node operations need only update the local counter.
+  // refused proof. Node operations decrement the remaining allowance directly;
+  // only this handoff needs to calculate the total consumed work.
   void commitWork() {
-    Budget.consume(Work);
-    Work = 0;
+    Budget.consume(MaxWork - RemainingWork);
+    MaxWork = RemainingWork;
   }
 
   // These maps never erase individual keys. Prepay the complete bucket
@@ -2396,7 +2397,7 @@ public:
       : Ctx(Ctx), Budget(Budget), Storage(Storage),
         MaxWork(std::min(
             {MaxWork, limits::kMaxResidueDecisionWork, Budget.available()})),
-        StorageLimited(StorageLimited) {}
+        StorageLimited(StorageLimited), RemainingWork(this->MaxWork) {}
 
   ~LowWordDecisions() { commitWork(); }
 
@@ -2528,7 +2529,7 @@ public:
         // when even their minimum work cannot fit, preserving the allowance
         // for simpler expressions elsewhere in the same region.
         const size_t ScanUnit = ProjectFactors ? 2 : 2 * (1 + Split);
-        if (Nonconstant > (MaxWork - Work) / ScanUnit)
+        if (Nonconstant > RemainingWork / ScanUnit)
           return Root;
         if (!charge(1, 2 * (sizeof(Bits) + Split * sizeof(uint32_t))))
           return Root;
@@ -2945,7 +2946,7 @@ public:
                                     16 * sizeof(SymRef));
       if (Bytes > Storage && StorageLimited)
         *StorageLimited = true;
-      if (Units > MaxWork - Work || Bytes > Storage)
+      if (Units > RemainingWork || Bytes > Storage)
         return Fallback;
       if (!charge(Units, Bytes))
         return Fallback;

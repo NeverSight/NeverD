@@ -5401,6 +5401,10 @@ entering the allocation and recursive expansion helpers. Three-input carry and
 parity operations likewise keep terminal identities and cache hits outside
 the recursive expansion frame. Lookup, depth admission, charging and insertion
 keep their original order, including failure paths.
+The decision owner decrements its captured remaining work directly and commits
+the exact difference to the shared budget before another consumer runs or the
+owner exits. This preserves exact and one-short admission without repeatedly
+recomputing the remaining allowance in each Boolean operation.
 XOR and three-input parity reuse a completed low cofactor when every high
 cofactor has the same complete decision identity apart from its complement
 edge. Their complement flags combine exactly, avoiding a repeated recursive
