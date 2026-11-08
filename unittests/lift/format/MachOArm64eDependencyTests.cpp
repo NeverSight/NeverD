@@ -639,6 +639,33 @@ TEST(MachOArm64eInstallation, InstallsFinalNewSegmentAddressesTransactionally) {
     EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
     Error = verifyMachOAuthenticatedFixups(Bytes, {Fixup});
     EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    if (macho_loader::arm64e::chainFormat(Chain.Format)->Segmented) {
+      // A segment may appear after LINKEDIT in load-command order while
+      // occupying an earlier VM range. Insertion changes its target ordinal
+      // even when the chain's owning segment and storage VA stay fixed.
+      auto Reordered = Original;
+      auto *Header = reinterpret_cast<mach_header_64 *>(Reordered.data());
+      segment_command_64 Extra{};
+      Extra.cmd = LC_SEGMENT_64;
+      Extra.cmdsize = sizeof(Extra);
+      std::memcpy(Extra.segname, kExtraSegment, sizeof(kExtraSegment));
+      Extra.vmaddr = kBase - kLargePage;
+      Extra.vmsize = kLargePage;
+      Extra.initprot = Extra.maxprot = VM_PROT_READ;
+      std::memcpy(Reordered.data() + sizeof(*Header) + Header->sizeofcmds,
+                  &Extra, sizeof(Extra));
+      Header->sizeofcmds += sizeof(Extra);
+      ++Header->ncmds;
+      writeLE<uint64_t>(Reordered.data() + kLargePage + kSlotBytes,
+                        kExtraSegmentTarget);
+      auto OldState = readMachODependencyState(Reordered);
+      ASSERT_TRUE(bool(OldState)) << llvm::toString(OldState.takeError());
+      const auto Snapshot = Reordered;
+      Error = Patcher.appendReplacementImage(Reordered, Image, {Fixup});
+      EXPECT_TRUE(bool(Error));
+      llvm::consumeError(std::move(Error));
+      EXPECT_EQ(Reordered, Snapshot);
+    }
   }
 }
 

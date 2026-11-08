@@ -1,5 +1,4 @@
-//===- MachOAuthenticatedFixups.h - Install dyld signing recipes -*- C++
-//-*-===//
+//===- MachOAuthenticatedFixups.h - Dyld recipes -----------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
@@ -16,6 +15,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
 
+#include <cstdint>
 #include <vector>
 
 namespace neverd {

@@ -21353,13 +21353,15 @@ unwind qualification.
 installation in the six arm64e chain formats. It covers all keys and address
 diversity settings, local/import identities, special library ordinals,
 16/24-bit import indices, every import-table encoding, existing plain words,
-4/16 KiB pages, overflow starts, new RX/RW segments, signature extents and
-unchanged input on rejection. Independent literal words and the separate
+4/16 KiB pages, overflow starts, new RX/RW segments, signature extents,
+reordered segment-target ordinals and unchanged input on rejection.
+Independent literal words and the separate
 analysis loader check the installed representation.
 
 `AppleClang/MachOArm64eNativeInstallation.*` compiles actual arm64e dylibs at
-O0/O2, installs sixteen recipes including a new libSystem import, re-signs with
-the production signer, verifies the result strictly and asks Apple's
+O0/O2, installs sixteen recipes including a new libSystem import both in
+existing storage and in newly appended RX/RW segments, re-signs with the
+production signer, verifies the result strictly and asks Apple's
 `dyld_info` to decode every target, key and discriminator. Compiler-generated
 C++ compact frames retain their ranges, encodings, personality slots and LSDA
 addresses. A separate, explicit assembly input supplies signed DWARF CFI for

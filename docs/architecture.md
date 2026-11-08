@@ -1398,6 +1398,10 @@ every requested recipe and preserves every original fixup. A staged signature
 remains opaque and terminal in LINKEDIT so the existing publication signer can
 replace it; retaining those bytes does not validate its old hashes. An
 independent replay also checks recipes after final code signing.
+The complete transaction compares original dependencies from before segment
+insertion, including segmented pointers whose target ordinal would otherwise
+change when a new load command is inserted. Such a changed target is rejected
+without publishing any bytes.
 
 This installation phase does not enable whole-image arm64e publication. The
 compiler/native-object producer handoff, legacy threaded-stream installation,

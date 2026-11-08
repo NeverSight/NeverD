@@ -14,6 +14,7 @@
 #include "llvm/Support/Error.h"
 
 #include <array>
+#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>

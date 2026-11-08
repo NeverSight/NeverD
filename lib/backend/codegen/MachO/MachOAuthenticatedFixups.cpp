@@ -1,5 +1,4 @@
-//===- MachOAuthenticatedFixups.cpp - Install dyld signing recipes
-//----------===//
+//===- MachOAuthenticatedFixups.cpp - Install dyld recipes --------------===//
 //
 // NeverD Decompiler
 //

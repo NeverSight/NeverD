@@ -1,5 +1,4 @@
-//===- MachOAuthenticatedNativeTests.cpp - Apple dyld recipe oracle
-//--------===//
+//===- MachOAuthenticatedNativeTests.cpp - Apple dyld oracle -------------===//
 //
 // NeverD Decompiler
 //
@@ -12,11 +11,13 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/codegen/MachO/MachOAuthenticatedFixups.h"
+#include "neverd/backend/codegen/MachO/MachOPatch.h"
 #include "neverd/backend/codegen/MachO/MachOSignaturePolicy.h"
 #include "neverd/backend/codegen/MachO/MachOSigner.h"
 #include "neverd/loader/DWARF/AArch64ReturnAddressState.h"
 #include "neverd/loader/Loader.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
@@ -32,6 +33,7 @@
 #include <iterator>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -44,13 +46,15 @@ using namespace neverd;
 #include "MachOAuthenticatedNativeFixtures.def"
 
 class MachOArm64eNativeInstallation
-    : public ::testing::TestWithParam<const char *> {};
+    : public ::testing::TestWithParam<std::tuple<const char *, bool>> {};
 
 TEST_P(MachOArm64eNativeInstallation,
        AppleImageKeepsSignedFramesAndDyldRecipes) {
 #ifndef __APPLE__
   GTEST_SKIP() << kMissingHost;
 #else
+  const auto [Optimization, AppendSegments] = GetParam();
+  RecordProperty(kAppendProperty, AppendSegments);
   llvm::SmallString<kPathCapacity> Directory;
   const auto *Root = std::getenv(kArtifactEnvironment);
   if (Root) {
@@ -106,8 +110,8 @@ TEST_P(MachOArm64eNativeInstallation,
   };
   llvm::SmallVector<llvm::StringRef> Args{kCompiler};
   Args.append(std::begin(kCompileArgs), std::end(kCompileArgs));
-  Args.push_back(GetParam());
-  RecordProperty(kOptimizationProperty, GetParam());
+  Args.push_back(Optimization);
+  RecordProperty(kOptimizationProperty, Optimization);
   Args.push_back(Source);
   Args.push_back(DwarfSource);
   Args.append(std::begin(kOutputArgs), std::end(kOutputArgs));
@@ -128,8 +132,34 @@ TEST_P(MachOArm64eNativeInstallation,
         return Symbol.Addr;
     return InvalidVA;
   };
-  const auto Slots = SymbolVA(kSlotSymbol);
+  auto Slots = SymbolVA(kSlotSymbol);
   ASSERT_NE(Slots, InvalidVA);
+  MachOPatcher Patcher;
+  CompiledImage Replacement;
+  if (AppendSegments) {
+    using Kind = llvm::mc_rewrite::RewriteSectionKind;
+    Replacement.Success = true;
+    Replacement.InputKind = RewriteInputKind::ReplacementObject;
+    Replacement.Format = BinaryFormat::MachO;
+    Replacement.TargetArch = Arch::AArch64;
+    Replacement.BaseVA =
+        Patcher.plannedExecSegmentVA(Before->Raw, Replacement.TargetArch);
+    ASSERT_NE(Replacement.BaseVA, InvalidVA);
+    Replacement.Bytes.resize(kPageBytes + kSlotCount * kPointerBytes);
+    writeLE<uint32_t>(Replacement.Bytes.data(), kReturnInstruction);
+    CompiledSection Code, Data;
+    Code.Name = kNewCodeSection;
+    Code.VA = Replacement.BaseVA;
+    Code.Size = kInstructionBytes;
+    Code.Kind = Kind::Code;
+    Data.Name = kNewDataSegment;
+    Data.Offset = kPageBytes;
+    Data.VA = Replacement.BaseVA + Data.Offset;
+    Data.Size = kSlotCount * kPointerBytes;
+    Data.Kind = Kind::WritableData;
+    Replacement.Sections = {Code, Data};
+    Slots = Data.VA;
+  }
   std::vector<MachOAuthenticatedFixup> Fixups;
   for (const auto *Symbol : {kRebaseSymbol, kBindSymbol}) {
     const auto Found =
@@ -141,6 +171,8 @@ TEST_P(MachOArm64eNativeInstallation,
         Recipe.EncodedValue.reset();
         if (!Recipe.Symbol.empty())
           Recipe.Symbol = kInstalledImportSymbol;
+        else if (AppendSegments)
+          Recipe.Target = Replacement.BaseVA;
         Recipe.Key = Key;
         Recipe.AddressDiversity = AddressDiversity;
         Fixups.push_back({Slots + Fixups.size() * kPointerBytes, Recipe});
@@ -148,7 +180,9 @@ TEST_P(MachOArm64eNativeInstallation,
   }
   std::vector<uint8_t> Bytes((*Input)->getBufferStart(),
                              (*Input)->getBufferEnd());
-  auto Error = installMachOAuthenticatedFixups(Bytes, Fixups);
+  auto Error = AppendSegments
+                   ? Patcher.appendReplacementImage(Bytes, Replacement, Fixups)
+                   : installMachOAuthenticatedFixups(Bytes, Fixups);
   ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
   ASSERT_FALSE(Write(InstalledPath, llvm::toStringRef(llvm::ArrayRef(Bytes))));
   Error = macho_signing::adHocResign(InstalledPath,
@@ -172,9 +206,15 @@ TEST_P(MachOArm64eNativeInstallation,
     for (auto Line : Lines) {
       llvm::SmallVector<llvm::StringRef> Fields;
       Line.trim().split(Fields, ' ', -1, false);
-      if (Fields.size() != kInfoFieldCount ||
-          Fields[kInfoSegment] != kDataSegment ||
-          Fields[kInfoSection] != kDataSection)
+      // dyld_info leaves both name columns blank for sectionless segments.
+      if (!AppendSegments) {
+        if (Fields.size() != kInfoFieldCount + kInfoLocationFields ||
+            Fields[kInfoSegment] != kDataSegment ||
+            Fields[kInfoSection] != kDataSection)
+          continue;
+        Fields.erase(Fields.begin(), Fields.begin() + kInfoLocationFields);
+      }
+      if (Fields.size() != kInfoFieldCount)
         continue;
       uint64_t Address;
       if (Fields[kInfoAddress].getAsInteger(0, Address) ||
@@ -277,5 +317,6 @@ TEST_P(MachOArm64eNativeInstallation,
 #endif
 }
 INSTANTIATE_TEST_SUITE_P(AppleClang, MachOArm64eNativeInstallation,
-                         ::testing::Values(kO0, kO2));
+                         ::testing::Combine(::testing::Values(kO0, kO2),
+                                            ::testing::Bool()));
 } // namespace

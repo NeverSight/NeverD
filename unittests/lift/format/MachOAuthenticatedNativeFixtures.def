@@ -1,4 +1,5 @@
-//===- MachOAuthenticatedNativeFixtures.def - Apple producer checks --------===//
+//===- MachOAuthenticatedNativeFixtures.def - Apple producer checks
+//--------===//
 //
 // NeverD Decompiler
 //
@@ -21,16 +22,20 @@ MACHO_AUTH_NATIVE_VALUE(unsigned, kToolTimeout, 30)
 MACHO_AUTH_NATIVE_VALUE(unsigned, kInstructionBytes, 4)
 MACHO_AUTH_NATIVE_VALUE(unsigned, kPointerBytes, 8)
 MACHO_AUTH_NATIVE_VALUE(unsigned, kKeyCount, 4)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kPageBytes, 16384)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kSlotCount, 16)
+MACHO_AUTH_NATIVE_VALUE(uint32_t, kReturnInstruction, 0xd65f03c0)
 MACHO_AUTH_NATIVE_VALUE(unsigned, kPathCapacity, 128)
-MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoFieldCount, 8)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoFieldCount, 6)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoLocationFields, 2)
 MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoSegment, 0)
 MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoSection, 1)
-MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoAddress, 2)
-MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoKind, 3)
-MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoTarget, 4)
-MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoDiversity, 5)
-MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoAddressDiversity, 6)
-MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoKey, 7)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoAddress, 0)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoKind, 1)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoTarget, 2)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoDiversity, 3)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoAddressDiversity, 4)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kInfoKey, 5)
 MACHO_AUTH_NATIVE_TEXT(kCompiler, "/usr/bin/clang++")
 MACHO_AUTH_NATIVE_TEXT(kXcrun, "/usr/bin/xcrun")
 MACHO_AUTH_NATIVE_TEXT(kTemporaryPrefix, "neverd-dyld-install")
@@ -38,6 +43,7 @@ MACHO_AUTH_NATIVE_TEXT(kArtifactEnvironment, "NEVERD_ARM64E_DYLD_ARTIFACT_DIR")
 MACHO_AUTH_NATIVE_TEXT(kArtifactProperty, "arm64e_dyld_artifact_dir")
 MACHO_AUTH_NATIVE_TEXT(kSignedRowsProperty, "preserved_signed_cfi_rows")
 MACHO_AUTH_NATIVE_TEXT(kOptimizationProperty, "apple_clang_optimization")
+MACHO_AUTH_NATIVE_TEXT(kAppendProperty, "appended_segments")
 MACHO_AUTH_NATIVE_TEXT(kO0, "-O0")
 MACHO_AUTH_NATIVE_TEXT(kO2, "-O2")
 MACHO_AUTH_NATIVE_TEXT(kSourceFile, "fixture.cpp")
@@ -51,10 +57,13 @@ MACHO_AUTH_NATIVE_TEXT(kSlotSymbol, "_new_slots")
 MACHO_AUTH_NATIVE_TEXT(kRebaseSymbol, "_rebased")
 MACHO_AUTH_NATIVE_TEXT(kBindSymbol, "_bound")
 MACHO_AUTH_NATIVE_TEXT(kInstalledImportSymbol, "_getpid")
-MACHO_AUTH_NATIVE_TEXT(kMissingHost, "requires Apple Clang, ld, codesign and dyld_info")
+MACHO_AUTH_NATIVE_TEXT(kMissingHost,
+                       "requires Apple Clang, ld, codesign and dyld_info")
 MACHO_AUTH_NATIVE_TEXT(kFixupsHeading, "fixups:")
 MACHO_AUTH_NATIVE_TEXT(kDataSegment, "__DATA")
 MACHO_AUTH_NATIVE_TEXT(kDataSection, "__data")
+MACHO_AUTH_NATIVE_TEXT(kNewDataSegment, "__ND_DATA")
+MACHO_AUTH_NATIVE_TEXT(kNewCodeSection, "__text")
 MACHO_AUTH_NATIVE_TEXT(kAuthBind, "auth-bind")
 MACHO_AUTH_NATIVE_TEXT(kAuthRebase, "auth-rebase")
 MACHO_AUTH_NATIVE_TEXT(kDiversityPrefix, "(div=")
@@ -112,11 +121,12 @@ ret
 .subsections_via_symbols
 )asm")
 MACHO_AUTH_NATIVE_ARGS(kCompileArgs, "-arch", "arm64e", "-dynamiclib",
-                      "-std=c++20", "-fno-omit-frame-pointer",
-                      "-fno-optimize-sibling-calls", "-Wl,-fixup_chains",
-                      "-Wl,-headerpad,0x1000")
+                       "-std=c++20", "-fno-omit-frame-pointer",
+                       "-fno-optimize-sibling-calls", "-Wl,-fixup_chains",
+                       "-Wl,-headerpad,0x1000")
 MACHO_AUTH_NATIVE_ARGS(kOutputArgs, "-o")
-MACHO_AUTH_NATIVE_ARGS(kInfoArgs, "dyld_info", "-fixups", "-fixup_chain_details")
+MACHO_AUTH_NATIVE_ARGS(kInfoArgs, "dyld_info", "-fixups",
+                       "-fixup_chain_details")
 
 #undef MACHO_AUTH_NATIVE_TEXT
 #undef MACHO_AUTH_NATIVE_VALUE

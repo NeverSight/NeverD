@@ -13,6 +13,7 @@
 
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
 
+#include "MachODependencyState.h"
 #include "MachOStrictLayout.h"
 #include "MachOSymbolResolution.h"
 
@@ -1265,8 +1266,19 @@ llvm::Error MachOPatcher::appendReplacementImage(
   };
   if (AuthenticatedFixups.empty())
     return Install(Binary);
+  auto Before = readMachODependencyState(Binary);
+  if (!Before)
+    return Before.takeError();
   auto Candidate = Binary;
   if (auto Error = Install(Candidate))
+    return Error;
+  // Segment insertion itself can change ordinal-based rebase targets. The
+  // installer's internal comparison starts after insertion, so preserve the
+  // caller's original dependency identity across the complete transaction.
+  auto After = readMachODependencyState(Candidate);
+  if (!After)
+    return After.takeError();
+  if (auto Error = preserveMachODependencyState(*Before, *After))
     return Error;
   Binary.swap(Candidate);
   return llvm::Error::success();
