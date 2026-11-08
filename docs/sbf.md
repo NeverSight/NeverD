@@ -314,7 +314,11 @@ JSON exact-or-empty. Exhaustion returns `{"nodes":[],"edges":[]}` and sets
 ### Conditional CALLX caller evidence
 
 `recoverCallXContexts` analyzes complete recognized function CFGs with
-context-keyed function summaries. Keys project away entry registers that every
+context-keyed function summaries. The loader-entry root uses the shared initial
+ABI register facts, before unrelated CFG predecessors join the block. Its own
+solver still joins real loop backedges. Ordinary calls to that same slot keep
+their caller inputs; other recognized roots receive no loader-input assumption.
+Keys project away entry registers that every
 path overwrites before reading, using a conservative interprocedural dependency
 fixed point. Its continuation dependencies stop at matched nonreturning calls;
 callee dependencies still participate. Scratch inputs are omitted only when the

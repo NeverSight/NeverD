@@ -9873,4 +9873,126 @@ TEST(SBFCallXContexts, ProvenCopyReadsKeepDistinctSourcesAcrossCacheReuse) {
     }
 }
 
+TEST(SBFCallXContexts, LoaderEntryFactsDoNotInheritOtherRootPaths) {
+  for (bool CallsEntry : {false, true})
+    for (bool Loop : {false, true})
+      for (bool ReverseEdges : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << "calls-entry=" << CallsEntry << ", loop=" << Loop
+                     << ", reverse=" << ReverseEdges);
+        std::vector<test::EncodedInstruction> Text;
+        const auto Literal = [&](unsigned Register, uint64_t Value) {
+          const size_t Slot = Text.size();
+          const auto Encoded = test::loadImm64(Register, Value);
+          Text.insert(Text.end(), Encoded.begin(), Encoded.end());
+          return Slot;
+        };
+        const auto Stride = automaticFrameStride(Version::V3, SBFVMConfig{});
+        Text.push_back(encode(Opcode::MOV64_REG, 1, 10));
+        Text.push_back(
+            encode(Opcode::ADD64_IMM, 1, 0, 0,
+                   CallsEntry ? static_cast<int32_t>(Stride) - 8 : -8));
+        std::optional<size_t> EntryCall;
+        if (CallsEntry) {
+          EntryCall = Text.size();
+          Text.push_back({});
+          Text.push_back(encode(Opcode::EXIT));
+        }
+        const size_t Entry = Text.size();
+        Text.push_back(encode(Opcode::MOV64_REG, 6, 1));
+        Text.push_back(encode(Opcode::MOV64_REG, 1, 10));
+        Text.push_back(encode(Opcode::ADD64_IMM, 1, 0, 0, -8));
+        const size_t FirstLiteral = Literal(2, 0);
+        const size_t Initialize = Text.size();
+        Text.push_back({});
+        const size_t SecondLiteral = Literal(2, 0);
+        Text.push_back(encode(Opcode::ST_DW_REG, 6, 2));
+        std::optional<size_t> Done;
+        if (Loop) {
+          Done = Text.size();
+          Text.push_back({});
+          Text.push_back(encode(Opcode::MOV64_IMM, 7, 0, 0, 1));
+          Text.push_back(encode(Opcode::MOV64_REG, 1, 10));
+          Text.push_back(encode(Opcode::ADD64_IMM, 1, 0, 0, -8));
+          const size_t Back = Text.size();
+          Text.push_back(encode(Opcode::JA, 0, 0, Entry - Back - 1));
+        }
+        const size_t Finish = Text.size();
+        Text.push_back(encode(Opcode::LD_DW_REG, 5, 10, -8));
+        const size_t CallX = Text.size();
+        Text.push_back(encode(Opcode::CALL_REG, 5));
+        Text.push_back(encode(Opcode::EXIT));
+        const size_t Store = Text.size();
+        Text.push_back(encode(Opcode::ST_DW_REG, 1, 2));
+        Text.push_back(encode(Opcode::MOV64_IMM, 0));
+        Text.push_back(encode(Opcode::EXIT));
+        const size_t FirstTarget = Text.size();
+        Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+        Text.push_back(encode(Opcode::EXIT));
+        const size_t SecondTarget = Text.size();
+        Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 43));
+        Text.push_back(encode(Opcode::EXIT));
+        Text[Initialize] =
+            encode(Opcode::CALL_IMM, 0, 1, 0, Store - Initialize - 1);
+        if (EntryCall)
+          Text[*EntryCall] =
+              encode(Opcode::CALL_IMM, 0, 1, 0, Entry - *EntryCall - 1);
+        if (Done)
+          Text[*Done] = encode(Opcode::JNE64_IMM, 7, 0, Finish - *Done - 1);
+        for (const auto &[Slot, Target] :
+             {std::pair{FirstLiteral, FirstTarget},
+              std::pair{SecondLiteral, SecondTarget}}) {
+          const auto Encoded = test::loadImm64(2, kBytecodeStart + Target * 8);
+          std::copy(Encoded.begin(), Encoded.end(), Text.begin() + Slot);
+        }
+        auto Image = test::makeImage(Text, {});
+        Image.Entry = kBytecodeStart + Entry * kInstructionSize;
+        Image.addSymbol("alternate_entry", kBytecodeStart,
+                        Entry * kInstructionSize, true);
+        auto Program = analyze(Image);
+        ASSERT_TRUE(static_cast<bool>(Program))
+            << llvm::toString(Program.takeError());
+        if (ReverseEdges)
+          std::reverse(Program->Low.Edges.begin(), Program->Low.Edges.end());
+        auto Report = recoverCallXContexts(*Program);
+        ASSERT_TRUE(static_cast<bool>(Report))
+            << llvm::toString(Report.takeError());
+        checkSummaryReferences(*Report);
+        EXPECT_FALSE(Report->SpecializationBudgetExhausted);
+        EXPECT_EQ(llvm::any_of(Report->Contexts,
+                               [&](const auto &Site) {
+                                 return Site.CalleeEntrySlot == Entry &&
+                                        Site.IsRootContext &&
+                                        !Site.EntryPrefixOnly &&
+                                        Site.CallXSlot == CallX &&
+                                        Site.TargetSlot == FirstTarget;
+                               }),
+                  !Loop);
+        if (CallsEntry)
+          EXPECT_TRUE(llvm::any_of(Report->Contexts, [&](const auto &Site) {
+            return Site.CallerSlot == *EntryCall && !Site.EntryPrefixOnly &&
+                   Site.CallXSlot == CallX && Site.TargetSlot == SecondTarget;
+          }));
+        // Execute both the loader entry and the independently reachable path.
+        // The latter aliases the callback field; it must not acquire the
+        // loader's serialized-input fact when it calls or falls into Entry.
+        for (bool FromPrefix : {false, true}) {
+          auto Executable = Image;
+          if (FromPrefix)
+            Executable.Entry = kBytecodeStart;
+          auto Selected = analyze(Executable);
+          ASSERT_TRUE(static_cast<bool>(Selected))
+              << llvm::toString(Selected.takeError());
+          ExecutionEnvironment Environment;
+          Environment.Memory.push_back(
+              {kInputStart, std::vector<uint8_t>(8), true, "input"});
+          auto Raw = executeRaw(*Selected, std::move(Environment));
+          ASSERT_TRUE(static_cast<bool>(Raw))
+              << llvm::toString(Raw.takeError());
+          EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+          EXPECT_EQ(Raw->ReturnValue, Loop || FromPrefix ? 43u : 42u);
+        }
+      }
+}
+
 } // namespace neverd::sbf

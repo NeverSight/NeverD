@@ -14,6 +14,7 @@
 #include "neverd/sbf/analysis/SBFDataflow.h"
 
 #include "neverd/sbf/SBFConstants.h"
+#include "neverd/sbf/runtime/SBFVMConfig.h"
 
 #include "llvm/IR/ConstantRange.h"
 #include "llvm/Support/Endian.h"
@@ -29,6 +30,21 @@
 #include <vector>
 
 namespace neverd::sbf {
+
+RegisterState programEntryRegisterFacts(const SBFProgram &Program) {
+  RegisterState State{};
+  State[kFramePointerRegister] = {
+      RegisterValue::Kind::StackAddress,
+      initialFramePointer(Program.Low.TheVersion, Program.Config), 0};
+  State[kFirstArgumentRegister] = {RegisterValue::Kind::Constant, kInputStart,
+                                   0};
+  State[kInstructionDataRegister] =
+      hasFeature(Program.ActiveRuntimeFeatures,
+                 RuntimeFeature::InstructionDataPointer)
+          ? RegisterValue{RegisterValue::Kind::InstructionDataAddress, 0, 0}
+          : RegisterValue{RegisterValue::Kind::Constant, 0, 0};
+  return State;
+}
 
 std::optional<va_t> effectiveAddress(const RegisterValue &Base,
                                      int64_t Displacement) {

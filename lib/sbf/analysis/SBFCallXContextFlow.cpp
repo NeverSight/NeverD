@@ -5412,8 +5412,15 @@ llvm::Expected<CallXContextReport> ContextFlow::run() {
     }
     ++RootGeneration;
     ContextState Input;
+    // Whole-function replay starts at the loader's virtual predecessor. The
+    // global block fixed point may already have joined unrelated roots or
+    // backedges into this block. Our CFG solver joins real backedges itself;
+    // ordinary calls to this same slot retain their actual caller inputs.
+    const auto Boundary = Slot == Program.Low.EntrySlot
+                              ? programEntryRegisterFacts(Program)
+                              : Program.Med.Blocks[It->second].Inputs;
     for (unsigned R = 0; R < kRegisterCount; ++R)
-      Input.Registers[R] = Program.Med.Blocks[It->second].Inputs[R];
+      Input.Registers[R] = Boundary[R];
     auto Root = summarize(It->second, Input);
     if (!Root) {
       if (!SpecializationBudgetExhausted)
