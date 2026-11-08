@@ -496,6 +496,9 @@ inline constexpr int kEngineExecuteImplOperandFormatEnumNextTypeStringFieldMax =
 inline constexpr int kEngineExecuteImplDecompileRepresentationStringFieldMax =
     16;
 inline constexpr int kEngineExecuteImplDecompileOptionsDumpSizeLimit = 4096;
+/// A page's identity a client gives back (if_none_match): the worker's tag, a
+/// document and its lines.
+inline constexpr std::size_t kEngineMaxPageEtagBytes = 128;
 inline constexpr int kEngineExecuteImplDecompileLimitSizeFieldDefault = 512;
 inline constexpr int kEngineExecuteImplDecompileLimitSizeFieldMax = 2048;
 inline constexpr int kEngineExecuteImplCfgViewportLayoutRevisionStringFieldMax =

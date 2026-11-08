@@ -230,15 +230,20 @@ void AnalysisService::sendPreparedRead() {
   if (!preparedRead_)
     return;
   const auto address = *std::exchange(preparedRead_, std::nullopt);
+  const auto at = QStringLiteral("0x") + QString::number(address, 16);
   // It runs to its end as a read let go of does: a read sent meanwhile does not
-  // ask for the revision it leaves.
-  abandoned_ = client_.request(
-      QStringLiteral("decompile"),
-      {{"address", QStringLiteral("0x") + QString::number(address, 16)},
-       {"representation", QStringLiteral("source")},
-       {"source_options", QJsonObject{}},
-       {"offset", 0},
-       {"limit", 1}});
+  // ask for the revision it leaves.  A view would answer from what is kept, and
+  // prepare nothing.
+  abandoned_ =
+      preparesFunctions_
+          ? client_.request(QStringLiteral("prepare_function"),
+                            {{"address", at}})
+          : client_.request(QStringLiteral("decompile"),
+                            {{"address", at},
+                             {"representation", QStringLiteral("source")},
+                             {"source_options", QJsonObject{}},
+                             {"offset", 0},
+                             {"limit", 1}});
 }
 
 void AnalysisService::requestSnapshot() {
@@ -305,6 +310,9 @@ void AnalysisService::receive(const QJsonObject &message) {
     solvesSummaries_ = message.value("capabilities")
                            .toArray()
                            .contains(QStringLiteral("prepare_call_summaries"));
+    preparesFunctions_ = message.value("capabilities")
+                             .toArray()
+                             .contains(QStringLiteral("prepare_function"));
     if (!message.value("capabilities")
              .toArray()
              .contains(QStringLiteral("analysis_restore"))) {

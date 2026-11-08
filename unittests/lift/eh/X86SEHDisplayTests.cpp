@@ -66,6 +66,39 @@ public:
     bytes({0x83, 0xec, 0x10, 0x89, 0x65, 0xe8});
   }
 
+  /// clang-cl's frame, with its record in words below what it pushes after EBP:
+  /// `push ebp; mov ebp, esp; push ebx; push edi; push esi; sub esp, 0x10;
+  /// mov [ebp - 0x24], esp; mov dword [ebp - 0x10], -1;
+  /// mov dword [ebp - 0x14], table; lea eax, [ebp - 0x1c];
+  /// mov dword [ebp - 0x18], handler; mov ecx, fs:[0]; mov [ebp - 0x1c], ecx;
+  /// mov fs:[0], eax`
+  void slotPrologue() {
+    bytes({0x55, 0x89, 0xe5, 0x53, 0x57, 0x56, 0x83, 0xec, 0x10});
+    bytes({0x89, 0x65, 0xdc});
+    bytes({0xc7, 0x45, 0xf0, 0xff, 0xff, 0xff, 0xff});
+    bytes({0xc7, 0x45, 0xec});
+    emit32(Text, kRData);
+    bytes({0x8d, 0x45, 0xe4});
+    bytes({0xc7, 0x45, 0xe8});
+    emit32(Text, kPersonality);
+    bytes({0x64, 0x8b, 0x0d, 0, 0, 0, 0});
+    bytes({0x89, 0x4d, 0xe4});
+    bytes({0x64, 0xa3, 0, 0, 0, 0});
+  }
+
+  /// `mov ecx, [ebp - 0x1c]; mov fs:[0], ecx; add esp, 0x10; pop esi; pop edi;
+  /// pop ebx; pop ebp; ret`
+  void slotEpilogue() {
+    bytes({0x8b, 0x4d, 0xe4, 0x64, 0x89, 0x0d, 0, 0, 0, 0});
+    bytes({0x83, 0xc4, 0x10, 0x5e, 0x5f, 0x5b, 0x5d, 0xc3});
+  }
+
+  /// `mov dword ptr [ebp - 0x10], Level`
+  void slotLevel(int32_t Level) {
+    bytes({0xc7, 0x45, 0xf0});
+    emit32(Text, static_cast<uint32_t>(Level));
+  }
+
   /// `mov ecx, [ebp - 0x10]; mov fs:[0], ecx; mov esp, ebp; pop ebp; ret`
   void epilogue() {
     bytes({0x8b, 0x4d, 0xf0, 0x64, 0x89, 0x0d, 0, 0, 0, 0, 0x8b, 0xe5, 0x5d,
@@ -355,6 +388,147 @@ TEST(X86SEHDisplay, FilterThatWritesPrintsTheWriteBeforeItsValue) {
   EXPECT_TRUE(has(Filter, " + 8")) << Filter;
   EXPECT_TRUE(has(Filter, ", EXCEPTION_EXECUTE_HANDLER)")) << Filter;
   EXPECT_FALSE(has(Text, "sub_")) << Text;
+}
+
+// clang-cl's frame, whose handler comes back to its own EBP and whose filter is
+// a function reading what the runtime left in EBP:
+// __try { other(); } __except (other(GetExceptionInformation())) { *arg0 += 2;
+// }
+TEST(X86SEHDisplay, AFrameWithItsRecordInSlotsPrintsItsTry) {
+  Frame F;
+  F.slotPrologue();
+  F.slotLevel(0);
+  F.bytes({0x6a, 0x01}); // push 1
+  F.call(kOther);
+  F.bytes({0x83, 0xc4, 0x04}); // add esp, 4
+  F.slotLevel(-1);
+  const size_t Past = F.jumpForward();
+  const va_t Handler = F.here();
+  F.bytes(
+      {0x8b, 0x65, 0xe8, 0x83, 0xc5, 0x0c}); // mov esp, [ebp-0x18]; add ebp, 12
+  F.slotLevel(-1);
+  F.addToArgument(2);
+  F.landJump(Past);
+  F.slotEpilogue();
+  const va_t Filter = F.here();
+  // push ebp; mov ebp, esp; mov eax, [ebp]; mov eax, [eax - 0x14]; push eax;
+  // call other; add esp, 4; pop ebp; ret
+  F.bytes({0x55, 0x89, 0xe5, 0x8b, 0x45, 0x00, 0x8b, 0x40, 0xec, 0x50});
+  F.call(kOther);
+  F.bytes({0x83, 0xc4, 0x04, 0x5d, 0xc3});
+  F.scope(-1, Filter, Handler);
+  const std::string Text = decompileGuarded(F.build());
+  EXPECT_TRUE(has(Text, "__try {")) << Text;
+  EXPECT_TRUE(has(Text, "__except (other(")) << Text;
+  EXPECT_TRUE(has(Text, "GetExceptionInformation()")) << Text;
+  EXPECT_TRUE(has(Text, " + 2")) << Text;
+  // None of the frame's upkeep is left, and nothing of the runtime's stack.
+  EXPECT_FALSE(has(Text, "fs_i32")) << Text;
+  EXPECT_FALSE(has(Text, "__readfsdword")) << Text;
+  EXPECT_FALSE(has(Text, "unknown register")) << Text;
+  EXPECT_FALSE(has(Text, "unstructured")) << Text;
+  EXPECT_FALSE(has(Text, "sub_")) << Text;
+}
+
+// The body of a clang-cl `__finally` is a function of its own, which the
+// handler calls saying the unwind and the normal path calls saying not:
+// __try { other(); } __finally { other(AbnormalTermination(), frame); }
+TEST(X86SEHDisplay, AnOutlinedFinallyIsOneCallInItsClause) {
+  Frame F;
+  F.slotPrologue();
+  F.slotLevel(0);
+  F.bytes({0x6a, 0x01}); // push 1
+  F.call(kOther);
+  F.bytes({0x83, 0xc4, 0x04}); // add esp, 4
+  F.slotLevel(-1);
+  F.bytes({0x31, 0xc9, 0x89, 0xea}); // xor ecx, ecx; mov edx, ebp
+  const size_t Normal = F.callForward();
+  F.slotEpilogue();
+  const va_t Handler = F.here();
+  // push ebp; sub esp, 0x10; add ebp, 12; mov ecx, 1; mov edx, ebp; call body;
+  // add esp, 0x10; pop ebp; ret
+  F.bytes(
+      {0x55, 0x83, 0xec, 0x10, 0x83, 0xc5, 0x0c, 0xb9, 1, 0, 0, 0, 0x89, 0xea});
+  const size_t Unwind = F.callForward();
+  F.bytes({0x83, 0xc4, 0x10, 0x5d, 0xc3});
+  // add dword ptr [edx - 0x28], ecx; ret
+  F.landCall(Normal);
+  F.landCall(Unwind);
+  F.bytes({0x01, 0x4a, 0xd8, 0xc3});
+  F.scope(-1, 0, Handler);
+  const std::string Text = decompileGuarded(F.build());
+  EXPECT_TRUE(has(Text, "__try {")) << Text;
+  const std::string Clause = finallyClause(Text);
+  EXPECT_TRUE(has(Clause, "/* finally handler @ 0x")) << Text;
+  EXPECT_TRUE(has(Clause, "AbnormalTermination()")) << Text;
+  // The try's own call stays, and the normal path's is what the clause says.
+  EXPECT_EQ(count(Text, "other("), 1u) << Text;
+  EXPECT_EQ(count(Text, "AbnormalTermination()"), 1u) << Text;
+  EXPECT_EQ(count(Text, "sub_"), 1u) << Text;
+  EXPECT_FALSE(has(Text, "unknown register")) << Text;
+  EXPECT_FALSE(has(Clause, "return")) << Text;
+}
+
+// __try { other(); } __finally { }: the clause keeps its address, and says with
+// an empty statement that it does nothing.
+TEST(X86SEHDisplay, AFinallyThatDoesNothingKeepsItsAddress) {
+  Frame F;
+  F.prologue();
+  F.level(0);
+  F.bytes({0x6a, 0x01}); // push 1
+  F.call(kOther);
+  F.bytes({0x83, 0xc4, 0x04}); // add esp, 4
+  F.level(-1);
+  const size_t ToBody = F.callForward();
+  const size_t ToEnd = F.jumpForward();
+  const va_t Body = F.here();
+  F.landCall(ToBody);
+  F.bytes({0xc3});
+  F.landJump(ToEnd);
+  F.epilogue();
+  F.scope(-1, 0, Body);
+  const std::string Text = decompileGuarded(F.build());
+  const std::string Clause = finallyClause(Text);
+  EXPECT_TRUE(has(Clause, "/* finally handler @ 0x")) << Text;
+  EXPECT_TRUE(has(Clause, ";\n")) << Text;
+  // Its `call` went with it.
+  EXPECT_FALSE(has(Text, "sub_")) << Text;
+}
+
+// A `push ecx` that makes room for a local is no parameter, so a filter's call
+// of such a function passes what it pushes and nothing else.
+TEST(X86SEHDisplay, APushThatMakesRoomIsNoArgument) {
+  Frame F;
+  F.prologue();
+  F.level(0);
+  F.addToArgument(1);
+  F.level(-1);
+  const size_t Past = F.jumpForward();
+  // int callee(void *p) { int local = p != 0; return local; }
+  const va_t Callee = F.here();
+  // push ebp; mov ebp, esp; push ecx; xor eax, eax; cmp [ebp + 8], eax;
+  // setne al; mov [ebp - 4], eax; mov eax, [ebp - 4]; mov esp, ebp; pop ebp;
+  // ret
+  F.bytes({0x55, 0x8b, 0xec, 0x51, 0x33, 0xc0, 0x39, 0x45, 0x08, 0x0f, 0x95,
+           0xc0, 0x89, 0x45, 0xfc, 0x8b, 0x45, 0xfc, 0x8b, 0xe5, 0x5d, 0xc3});
+  const va_t Filter = F.here();
+  // The register is set before the call, as a caller's code leaves it:
+  // mov ecx, [ebp - 0x14]; push ecx; call callee; add esp, 4; ret
+  F.bytes({0x8b, 0x4d, 0xec, 0x51});
+  F.call(Callee);
+  F.bytes({0x83, 0xc4, 0x04, 0xc3});
+  const va_t Handler = F.here();
+  F.bytes({0x8b, 0x65, 0xe8});
+  F.level(-1);
+  F.landJump(Past);
+  F.epilogue();
+  F.scope(-1, Filter, Handler);
+  const std::string Text = decompileGuarded(F.build());
+  const size_t At = Text.find("__except (");
+  ASSERT_NE(At, std::string::npos) << Text;
+  const std::string Value = Text.substr(At, Text.find('\n', At) - At);
+  EXPECT_TRUE(has(Value, "(GetExceptionInformation()))")) << Text;
+  EXPECT_EQ(count(Value, "GetExceptionInformation()"), 1u) << Text;
 }
 
 // __except (other(1), EXCEPTION_CONTINUE_SEARCH)

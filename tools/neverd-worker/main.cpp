@@ -236,6 +236,7 @@ Json hello() {
                 "render_ahead",
                 "render_store",
                 "kept_renders",
+                "prepare_function",
                 "functions",
                 "disasm",
                 "bytes",

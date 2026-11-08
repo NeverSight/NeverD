@@ -99,6 +99,53 @@ class QueryServiceTests final : public QObject {
   }
 
 private slots:
+  void sourcePageKeptAcrossARevisionIsNamedAndTakenBack() {
+    Harness h;
+    establish(h);
+    QJsonObject first;
+    h.service.subscribe(text(), &h.owner,
+                        [&](const QJsonObject &response) { first = response; });
+    QTRY_COMPARE(h.sent.size(), 1);
+    // A first read names no page, and asks for the page's name.
+    QVERIFY(h.sent[0].payload.contains("if_none_match"));
+    QCOMPARE(h.sent[0].payload["if_none_match"].toString(), QString());
+    h.reply(0,
+            {{"text", "kept text"}, {"etag", "tag-7-0-3"}, {"revision", "1"}});
+    QTRY_COMPARE(first["payload"].toObject()["text"].toString(), "kept text");
+    // An edit moves the revision; the next read names the kept page, and the
+    // worker's word that it stands gives it back under the new revision.
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "x"}},
+                             &h.owner, {});
+    QTRY_COMPARE(h.sent.size(), 2);
+    h.reply(1, {}, "2");
+    QTRY_VERIFY(!h.service.hasPending());
+    QJsonObject second;
+    h.service.subscribe(text(), &h.owner, [&](const QJsonObject &response) {
+      second = response;
+    });
+    QTRY_COMPARE(h.sent.size(), 3);
+    QCOMPARE(h.sent[2].payload["if_none_match"].toString(), "tag-7-0-3");
+    h.reply(2, {{"unchanged", true}, {"etag", "tag-7-0-3"}, {"revision", "2"}},
+            "2");
+    QTRY_COMPARE(second["status"].toString(), "ok");
+    QCOMPARE(second["payload"].toObject()["text"].toString(), "kept text");
+    QCOMPARE(second["payload"].toObject()["revision"].toString(), "2");
+    QCOMPARE(second["revision"].toString(), "2");
+    // A word for a page this client does not keep is refused.
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "y"}},
+                             &h.owner, {});
+    QTRY_COMPARE(h.sent.size(), 4);
+    h.reply(3, {}, "3");
+    QTRY_VERIFY(!h.service.hasPending());
+    QJsonObject third;
+    h.service.subscribe(text(), &h.owner,
+                        [&](const QJsonObject &response) { third = response; });
+    QTRY_COMPARE(h.sent.size(), 5);
+    h.reply(4, {{"unchanged", true}, {"etag", "another"}, {"revision", "3"}},
+            "3");
+    QTRY_COMPARE(errorCode(third), "invalid_response");
+  }
+
   void sectionEditsInvalidateCachedCodeAndAnalysis() {
     Harness h;
     establish(h);

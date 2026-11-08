@@ -3816,6 +3816,16 @@ ImportPrototypeArguments importPrototypeArguments(
                                                 : sizeof(double));
         Result.Order.push_back(Result.Floats.back());
       }
+      // A Windows API routine pops what it takes, one word for each parameter
+      // where each fills one.  Without that the stack pointer after it is
+      // wrong, and what a frame without EBP reads through it.
+      if (!RegisterArguments && Prototype->Winapi && Result.Floats.empty() &&
+          llvm::none_of(
+              llvm::ArrayRef(Prototype->Params.data(), Prototype->ParamCount),
+              libc::isWiderThanStackWord)) {
+        Result.Slots = true;
+        Result.CalleePops = true;
+      }
       return Result;
     }
     // A PE import entry is the C name: MSVC's `_pipe(fds, size, mode)` is
