@@ -138,7 +138,7 @@ public:
   sourceConventionAttribute(SourceFunctionTypeHint::ConventionKind Convention);
   static std::string
   sourceParameterType(const SourceParameterTypeHint &Parameter,
-                      llvm::StringRef Name = {});
+                      llvm::StringRef Name = {}, bool DeclarationOnly = false);
   static std::optional<std::string> sourceValue(llvm::StringRef Text,
                                                 const TypeRef &Carrier,
                                                 const TypeRef &Source);

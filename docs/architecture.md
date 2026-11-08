@@ -1325,10 +1325,22 @@ shared machine-call bridge described below, retaining the actual BLRAA/BLRAB
 and original result registers. Recovered bindings retain their native identity,
 effects and declaration checks before HighC selects that bridge. LLVM consumes
 their validated physical carriers without requiring analyst source authority.
-Scalar, 128-bit integer and direct record/HFA values share the same transport;
-indirect native copies and hidden results still require their separate storage
-proofs. Native 128-bit SIMD carriers are not integer pairs: authenticated
-calls using them reject until the packet layout can carry full vector registers.
+Scalar, 128-bit integer and direct record/HFA values share the same transport.
+Complete recovered fixed C bindings also retain the original indirect record
+address and x8 result buffer. They authorize neither a new logical copy nor
+alignment, aliasing, lifetime or pointee-access promises. Full SIMD128 values
+use one Q register or an aligned 16-byte stack object, with Q0 for their result.
+The shared packet assigns two aligned words to each Q carrier; LLVM and both
+C routes use that same layout. Such raw calls also use the physical bridge,
+so an integer IR carrier cannot silently acquire the i128 general-register ABI.
+External C declarations retain the logical aggregate type without creating a
+copy; function-body projections still require their separate storage proof.
+This covers standalone full-width vector values. General vector-containing
+record ABIs, including homogeneous vector aggregates, still need their member
+and register-bank classification.
+Call-occurrence identity can describe 32-bit or 64-bit targets, while native
+frame and Boolean-result proofs require the complete target architecture
+pointer width before granting a source projection.
 A resolved display name cannot replace that authenticated target,
 and exact LLVM call prototypes remain
 exact. Explicit source call-site prototypes and recovered native C prototypes
@@ -1888,9 +1900,10 @@ automatic-lifting, nominal-frame and image regressions. Original-SP stack/call
 projection, fixed-image register post-index relocation and Apple native
 execution with CPTA enabled remain unqualified. Controlled Arm model execution
 qualifies the declared explicit-IR exports separately from an automatically
-lifted whole image. Native half and whole-vector C entry/return ABI and DWARF vector
-declarations remain separate, unqualified interfaces; integer bridges do not certify those native
-interfaces. Local scalable-vector interleaving uses the existing LLVM ELF
+lifted whole image. These CPA2 memory exports use integer bridges; they do not
+qualify native half/vector entry and return interfaces or DWARF vector
+declarations. Fixed-prototype SIMD128 call transport has its separate
+qualification above. Local scalable-vector interleaving uses the existing LLVM ELF
 profile, and does not qualify native Apple SVE or LLVMC scalable carriers.
 The owner follows the pinned
 [Arm 2025-09 AddressAdd and LDR specification](https://documentation-service.arm.com/documentation/ddi0602/2025-09?lang=en&rev=1).

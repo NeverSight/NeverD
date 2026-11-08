@@ -19,6 +19,9 @@
 #ifndef A64_CALL_TYPED_SHAPE
 #define A64_CALL_TYPED_SHAPE(Name, Parameters, ReturnKind, Fixed)
 #endif
+#ifndef A64_CALL_NATIVE_SHAPE
+#define A64_CALL_NATIVE_SHAPE(Name, Parameters, ReturnKind)
+#endif
 #ifndef A64_CALL_INTEGER_TYPE
 #define A64_CALL_INTEGER_TYPE(Kind, Bytes, Signed)
 #endif
@@ -35,14 +38,25 @@
 #define A64_CALL_TYPED_VARIANT(Key, Zero, Raw)
 #endif
 
+A64_CALL_TEXT(kLegacyPAuthIR, R"IR(
+@callback.ptrauth = private constant { ptr, i32, i64, i64 }
+  { ptr @callback, i32 0, i64 0, i64 0 }, section "llvm.ptrauth", align 8
+declare void @callback()
+define ptr @legacy_callback_address() {
+  ret ptr @callback.ptrauth
+}
+)IR")
 A64_CALL_TEXT(kUnknownTypedKind, "unknown authenticated call fixture type")
 A64_CALL_TEXT(kFunction, "authenticated_dispatch")
 A64_CALL_TEXT(kTypedArgument, "value")
 A64_CALL_TEXT(kTypedDirectory, "typed-{0}-{1}-{2}-{3}")
 A64_CALL_TEXT(kRecoveredTypedDirectory, "recovered-{0}-{1}-{2}-{3}")
+A64_CALL_TEXT(kRecoveredResultStorageDirectory,
+              "recovered-result-storage-{0}-{1}-{2}")
 A64_CALL_TEXT(kNativeTypedCallerDirectory, "native-typed-caller-{0}-{1}")
 A64_CALL_TEXT(kNativeTypedDirectory, "native-typed-{0}-{1}-{2}")
 A64_CALL_TEXT(kResolvedCallback, "resolved_callback")
+A64_CALL_TEXT(kLoweredNativeDirectory, "lowered-native-storage")
 A64_CALL_TEXT(kTemporaryPrefix, "neverd-authenticated-call")
 A64_CALL_TEXT(kSourceExtension, "c")
 A64_CALL_TEXT(kLLVMExtension, "ll")
@@ -62,6 +76,7 @@ A64_CALL_TEXT(kNoStackProtectorOption, "-fno-stack-protector")
 A64_CALL_TEXT(kResultStorageDirectory, "result-storage-{0}-{1}-{2}")
 A64_CALL_TEXT(kAsyncUnwindOption, "-fasynchronous-unwind-tables")
 A64_CALL_TEXT(kAssemblyOption, "-S")
+A64_CALL_TEXT(kCompileOption, "-c")
 A64_CALL_TEXT(kLLVMOption, "-emit-llvm")
 A64_CALL_TEXT(kOutputOption, "-o")
 A64_CALL_TEXT(kNoOptimize, "-O0")
@@ -90,10 +105,13 @@ A64_CALL_VALUE(unsigned, kFloatBytes, 4)
 A64_CALL_VALUE(char, kFloatKind, 'f')
 A64_CALL_VALUE(char, kDoubleKind, 'd')
 A64_CALL_VALUE(char, kPointerKind, 'p')
+A64_CALL_VALUE(char, kVectorKind, 'V')
 A64_CALL_VALUE(unsigned, kPromotedIntegerBytes, 4)
 A64_CALL_VALUE(unsigned, kBitsPerByte, 8)
 A64_CALL_VALUE(int, kTypedTemporaryId, 128)
 A64_CALL_VALUE(uint64_t, kEntryAddress, 0x1000U)
+A64_CALL_VALUE(uint64_t, kCalleeAddress, 0x2000U)
+A64_CALL_VALUE(unsigned, kInstructionBytes, 4)
 A64_CALL_VALUE(int, kAuthenticationTemporaryId, 64)
 A64_CALL_VALUE(int, kCallResultId, 65)
 A64_CALL_VALUE(unsigned, kManyArguments, 10)
@@ -210,6 +228,12 @@ A64_CALL_TYPED_SHAPE("indirect-nested", "K", 'i', -1)
 A64_CALL_TYPED_SHAPE("indirect-spill", "iiiiiiiijK", 'i', -1)
 A64_CALL_TYPED_SHAPE("variadic-indirect", "ijJkK", 'i', 1)
 A64_CALL_TYPED_SHAPE("variadic-indirect-prefix", "iiiiiiiijkK", 'i', 9)
+A64_CALL_NATIVE_SHAPE("vector-one", "V", 'V')
+A64_CALL_NATIVE_SHAPE("vector-ten", "VVVVVVVVVV", 'V')
+A64_CALL_NATIVE_SHAPE("vector-mixed", "iVdVqVfV", 'V')
+A64_CALL_NATIVE_SHAPE("vector-packed-spill", "iiiiiiiibVVVVVVVVVVb", 'V')
+A64_CALL_NATIVE_SHAPE("vector-hfa-exhausted", "dddddddxV", 'V')
+A64_CALL_NATIVE_SHAPE("vector-indirect", "JV", 'V')
 A64_CALL_TYPED_VARIANT(0, false, false)
 A64_CALL_TYPED_VARIANT(0, true, false)
 A64_CALL_TYPED_VARIANT(1, false, false)
@@ -236,3 +260,5 @@ A64_CALL_INDIRECT_FORBIDDEN_ATTRIBUTE(DereferenceableOrNull)
 #undef A64_CALL_RECORD_TYPE
 #undef A64_CALL_NAMED_POINTER_TYPE
 #undef A64_CALL_INDIRECT_FORBIDDEN_ATTRIBUTE
+
+#undef A64_CALL_NATIVE_SHAPE

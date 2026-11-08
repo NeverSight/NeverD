@@ -7,6 +7,7 @@
 #include "SourceParameterPlacementDetail.h"
 
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/SourceABI.h"
 
 #include <algorithm>
 #include <functional>
@@ -19,7 +20,9 @@ namespace {} // namespace
 bool source_placement::isIntegerScalar(const TypeRef &Type) {
   if (!Type || !Type->Size)
     return false;
-  return Type->Kind == NdTypeKind::Int || Type->Kind == NdTypeKind::Ptr ||
+  return (Type->Kind == NdTypeKind::Int &&
+          !isSourceAArch64Vector128Type(Type)) ||
+         Type->Kind == NdTypeKind::Ptr ||
          (Type->Kind == NdTypeKind::Struct && Type->IsEnum);
 }
 

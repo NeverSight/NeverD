@@ -1925,8 +1925,40 @@ CTest instances; the receipt preserves the original failure and its resolution.
 The environment's `recovered_calls.py` requires its own exact 36-test report
 and rejects an explicit-prototype report substituted for it. This qualifies
 transport of an established recovered ABI, not automatic recovery accuracy.
-The authenticated native bridge explicitly rejects full 128-bit SIMD carriers,
-indirect by-value parameters and hidden results until their transport is proved.
+That receipt predates standalone SIMD128 and original native storage transport;
+its remaining-work statements describe the recorded revision. The newer native
+wide-storage qualification below supersedes those transport exclusions.
+
+The [native wide-storage receipt](evidence/arm64e-native-wide-storage-2026-11-08.json)
+qualifies complete standalone SIMD128 arguments and results, and recovered
+indirect record addresses with original x8 storage. The 47 fixed-prototype
+layouts include full Q registers, register-bank exhaustion, packed/aligned
+stack spills, scalar/HFA mixtures and indirect records. The vector oracle
+observes both 64-bit result words independently through an explicit outer
+X0/X1 record ABI; a symmetric checksum is not sufficient. The separate native
+x8 profile compares aliasing and guarded memory effects against the original
+caller storage. Across the two profiles, 1,200 unchanged Mach-O objects pass
+60 controlled model guests: 28,800 valid original/projected pairs and 69,120
+invalid-signature pairs, with zero exception-class differences. The earlier
+1,625 explicit, 25 original-x8 and 900 recovered objects are byte-identical to
+their existing baselines. Supplied NativeAnalysis fixtures establish transport
+of an already recovered ABI, not general inference accuracy.
+After integrating the shared HighC frame-offset changes from `dev`, the
+affected owners and ABI selections pass 2,404 instances with 21 explicit
+platform/toolchain skips. All 1,200 current objects still match the
+model-qualified bytes. The
+receipt records the model producer and the later integration revision
+separately; the model guests were not rerun for identical objects.
+
+The LowIR integration case checks the actual source-call binder and all three
+emission routes, retaining original input and result addresses without new
+logical copies or `byval`/`sret` promises. Named-function C output is compiled
+by Apple Clang directly; Apple Clang's legacy `llvm.ptrauth` globals remain
+unsupported by r6 IR import. Ordinary and rewrite code-generation boundaries
+now reject that representation before the incompatible backend can abort.
+General vector-containing record ABIs (including HVAs), whole-image
+authentication installation and signed exception execution remain separate,
+incomplete work.
 
 `MachOArm64eDependencies` additionally verifies multi-start pages for all six
 supported arm64e chain formats and ordinary 64-bit chains. It checks complete
