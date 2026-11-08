@@ -158,6 +158,67 @@ TEST(LocalTypesDebugContext, NewTypesReadAsInAContextMadeOfThem) {
   }
 }
 
+TEST(LocalTypesDebugContext, NewTypesOfTheirOwnNamesKeepWhatSpellsTheLibrary) {
+  using namespace neverd;
+  auto Library = std::make_shared<types::TypeLibrary>(types::DataModel::LLP64);
+  // A name C spells otherwise, an enumeration and prototypes, as a program's
+  // debug information gives them.
+  types::LocalType Scoped;
+  Scoped.Name = "Scope::Item";
+  Scoped.Kind = types::TypeKind::Struct;
+  Scoped.Record = std::make_shared<types::RecordDef>();
+  Library->define(std::move(Scoped));
+  ASSERT_TRUE(
+      types::parseCTypes("struct Known { int Value; };\n"
+                         "enum Mode { ModeA, ModeB = 4 };\n"
+                         "int UseKnown(struct Known *Item);\n"
+                         "int UseMode(enum Mode How, struct Known *Item);\n",
+                         *Library)
+          .ok());
+  NamesOnlyDebugContext Names;
+  sdk::LocalTypesDebugContext Context(Names, Library);
+  const auto Known = NdType::makeNamedRecord("Known");
+  const auto Item = NdType::makeNamedRecord("Scope::Item");
+  const auto Mode = NdType::makeNamedRecord("Mode", 0, /*Enum=*/true);
+  // What spells and renders the library's names is made before they come.
+  EXPECT_FALSE(Context.definitions({Known, Item, Mode}).Text.empty());
+  ASSERT_TRUE(Context.resolvePrototype("UseKnown").has_value());
+
+  // New types spelled by their own names keep it, and read as in a context
+  // made of them.
+  auto Grown = std::make_shared<types::TypeLibrary>(*Library);
+  ASSERT_TRUE(types::parseCTypes(
+                  "struct Later { long long Value; struct Known *Next; };\n"
+                  "enum Phase { PhaseOne, PhaseTwo = 7 };\n",
+                  *Grown)
+                  .ok());
+  Context.takeNewTypes(*Grown, {"Later", "Phase"}, /*NamesHold=*/true);
+  EXPECT_EQ(Context.library().size(), Grown->size());
+  NamesOnlyDebugContext FreshNames;
+  sdk::LocalTypesDebugContext Fresh(FreshNames, Grown);
+  const auto Later = NdType::makeNamedRecord("Later");
+  const auto Phase = NdType::makeNamedRecord("Phase", 0, /*Enum=*/true);
+  for (const std::vector<TypeRef> &Unit :
+       {std::vector<TypeRef>{Known, Item, Mode}, std::vector<TypeRef>{Later},
+        std::vector<TypeRef>{Phase, Later, Item}}) {
+    const CRecordDefinitions Taken = Context.definitions(Unit);
+    const CRecordDefinitions Made = Fresh.definitions(Unit);
+    EXPECT_EQ(Taken.Text, Made.Text);
+    EXPECT_EQ(Taken.Records, Made.Records);
+    EXPECT_EQ(Taken.Tags, Made.Tags);
+    EXPECT_EQ(Taken.Identifiers, Made.Identifiers);
+    EXPECT_EQ(Taken.Enumerations, Made.Enumerations);
+  }
+  // A prototype read after them spells its types as such a context does.
+  const auto Taken = Context.resolvePrototype("UseMode");
+  const auto Made = Fresh.resolvePrototype("UseMode");
+  ASSERT_TRUE(Taken && Made);
+  EXPECT_EQ(Taken->PrototypeDeclaration, Made->PrototypeDeclaration);
+  EXPECT_EQ(Taken->PortablePrototypeDeclaration,
+            Made->PortablePrototypeDeclaration);
+  EXPECT_EQ(Taken->PortableParameterTypes, Made->PortableParameterTypes);
+}
+
 TEST(LocalTypesDebugContext, NoReturnQueryMatchesValidatedPrototype) {
   using namespace neverd;
   for (auto Model : {types::DataModel::ILP32, types::DataModel::LLP64,

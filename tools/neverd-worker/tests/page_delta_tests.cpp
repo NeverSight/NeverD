@@ -108,5 +108,59 @@ int main() {
   check(
       !applyPageDelta(plain, Json::array({Json::array({"unset", "missing"})})),
       "unset of a missing field applied");
+
+  // Pages read in place from their documents give the operations their page
+  // objects give: a text's span, the items of its lists on the page, values it
+  // holds and values of the page's own that replace them.
+  const auto window = [](const Json &document, std::size_t from,
+                         std::size_t to) {
+    PageSource source;
+    for (auto it = document.begin(); it != document.end(); ++it)
+      if (it.key() != "text" && it.key() != "rows" && it.key() != "code_names")
+        source.value(it.key(), *it);
+    const auto &text = document["text"].get_ref<const std::string &>();
+    std::size_t begin = 0, end = text.size(), line = 0;
+    for (std::size_t at = 0; at < text.size(); ++at)
+      if (text[at] == '\n') {
+        ++line;
+        if (line == from)
+          begin = at + 1;
+        if (line == to) {
+          end = at;
+          break;
+        }
+      }
+    source.text("text", std::string_view(text).substr(begin, end - begin));
+    std::vector<const Json *> rows, names;
+    for (const auto &row : document["rows"])
+      if (row["line"] >= from && row["line"] < to)
+        rows.push_back(&row);
+    for (const auto &name : document["code_names"])
+      if (name["begin_byte"] >= begin && name["end_byte"] <= end)
+        names.push_back(&name);
+    source.items("rows", std::move(rows));
+    source.items("code_names", std::move(names));
+    source.own("offset", from);
+    source.own("byte_offset", begin);
+    return source;
+  };
+  for (const auto &[name, later] :
+       {std::pair<const char *, const Json *>{"comment", &noted},
+        {"same", &plain},
+        {"rename", &renamed},
+        {"fields and lengths", &other}})
+    for (const auto &[from, to] :
+         {std::pair<std::size_t, std::size_t>{0, 200}, {0, 3}, {4, 120}}) {
+      const auto before = window(plain, from, to);
+      const auto after = window(*later, from, to);
+      const Json made = pageDelta(before, after);
+      const auto read = std::string(name) + " [" + std::to_string(from) + ", " +
+                        std::to_string(to) + ")";
+      check(made == *pageDelta(before.json(), after.json()),
+            read + ": in place gives other operations than the pages");
+      const auto applied = applyPageDelta(before.json(), made);
+      check(applied && *applied == after.json(),
+            read + ": applying the delta gives another page");
+    }
   return 0;
 }

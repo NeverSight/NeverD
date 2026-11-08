@@ -102,12 +102,14 @@ std::optional<size_t> Session::functionIndexNamed(llvm::StringRef Name) {
                             {},
                             {},
                             {},
+                            {},
                             {}};
     Index.FirstNamed.reserve(Functions.size());
     Index.FirstAt.reserve(Functions.size());
     Index.Spelled.reserve(Functions.size());
     for (size_t I = 0; I < Functions.size(); ++I) {
-      Index.FirstNamed.try_emplace(Functions[I].Name, I);
+      if (!Index.FirstNamed.try_emplace(Functions[I].Name, I).second)
+        Index.Shared.insert(Functions[I].Name);
       Index.FirstAt.try_emplace(Functions[I].Entry, I);
       Index.Spelled.push_back(spelledFunction(Functions[I]));
     }
