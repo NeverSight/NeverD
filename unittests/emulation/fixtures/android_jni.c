@@ -5364,7 +5364,8 @@ static int jd_read(int fd, unsigned command, struct JBinderTX *tx) {
     CHECK(!result || *__errno() == 11);
     for (unsigned i = 0; i < wr.read_consumed / 4; ++i) {
       if (output[i] == command) {
-        jb_copy(tx, output + i + 1, 64);
+        if (tx)
+          jb_copy(tx, output + i + 1, 64);
         return 0;
       }
       CHECK(output[i] == 0x720c || output[i] == 0x7206 || output[i] == 0x720d);
@@ -5393,6 +5394,13 @@ static int jd_peer(int fd) {
     tx = (struct JBinderTX){
         handle, 0, turn == 3 ? 0x5f504e47 : 7, 16, 0, 0, 4, 0, (U64)&number, 0};
     CHECK(!jb_send(fd, 0x40406300, &tx, 64));
+    if (jd_mode == 2 && turn != 3) {
+      /* Exception serialization overwrote the reply's Binder tag. The driver
+       * fails this reply, retires the call and lets the Java pool resume. */
+      CHECK(!jd_read(fd, 0x7211, 0));
+      CHECK(!jd_failure && jd_calls == turn + 1);
+      continue;
+    }
     CHECK(!jd_read(fd, 0x80407203, &tx));
     CHECK(!jd_failure);
     if (turn == 3) {

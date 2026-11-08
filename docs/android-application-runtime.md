@@ -780,8 +780,11 @@ backwards and decodes the current object bytes: changing a cookie or handle
 changes the released reference; invalid tags and null local pointers release
 nothing, so the original acquisition can remain alive. Scalar/String reads
 lazily sort the actual table and still protect object ranges. Strong-object reads
-use the native hint search without sorting. Invalid outgoing records remain an
-explicit shared Linux Binder translation boundary. Unknown/unowned native
+use the native hint search without sorting. Invalid outgoing records produce
+the shared Linux driver's BR_FAILED_REPLY. Failed replies complete the serving
+Java pool and retire the call while preserving the original request-buffer lease
+until its queued free. The caller's FAILED_TRANSACTION exception/logging dispatch
+remains explicit. Unknown/unowned native
 release identities and weak/FD lifecycle operations also stop explicitly.
 Borrowed reply capacity initially equals its data length. An in-capacity scalar
 or String write accesses the original mapping and preserves its permissions;

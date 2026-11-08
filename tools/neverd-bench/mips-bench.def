@@ -1,0 +1,23 @@
+//===- mips-bench.def - MIPS measurement profiles ------------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_MIPS_BENCH_PROFILE
+#define NEVERD_MIPS_BENCH_PROFILE(Name, Target)
+#endif
+#ifndef NEVERD_MIPS_BENCH_STAGE
+#define NEVERD_MIPS_BENCH_STAGE(Name, Spelling)
+#endif
+
+NEVERD_MIPS_BENCH_PROFILE(mips, MIPS32)
+NEVERD_MIPS_BENCH_PROFILE(mipsel, MIPS32EL)
+NEVERD_MIPS_BENCH_PROFILE(mips64, MIPS64)
+NEVERD_MIPS_BENCH_PROFILE(mips64el, MIPS64EL)
+NEVERD_MIPS_BENCH_STAGE(Capstone, "capstone")
+NEVERD_MIPS_BENCH_STAGE(Decode, "decode")
+NEVERD_MIPS_BENCH_STAGE(Lift, "lift")
+
+#undef NEVERD_MIPS_BENCH_PROFILE
+#undef NEVERD_MIPS_BENCH_STAGE
