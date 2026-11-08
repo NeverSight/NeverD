@@ -505,10 +505,10 @@
         "elapsed_seconds": 40.033665292023215,
         "timeout_override": false,
         "command": [
-          "/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/build-arm64e/bin/NeverDArm64eAnalysisTests",
+          "build-arm64e/bin/NeverDArm64eAnalysisTests",
           "--gtest_filter=AArch64AddressMemory.NarrowAliasedIndicesSurviveDecodedSSAAndBothSourceABIs",
           "--gtest_also_run_disabled_tests",
-          "--gtest_output=json:/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/build-arm64e/arm64e-native-call-faults-evidence/serial-retry.json"
+          "--gtest_output=json:build-arm64e/arm64e-native-call-faults-evidence/serial-retry.json"
         ]
       },
       "report_sha256": "784b4f934040160f7696d6541428ac1d6fde89a27b15f9f528df0eb1eb5b15f7"
@@ -541,7 +541,7 @@
               "testsuite": [
                 {
                   "name": "SwiftMixedCallAndReturnPreserveAllFourTypedFields",
-                  "file": "/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/unittests/lift/core/SourceAggregateTests.cpp",
+                  "file": "unittests/lift/core/SourceAggregateTests.cpp",
                   "line": 1322,
                   "status": "RUN",
                   "result": "COMPLETED",
@@ -550,7 +550,7 @@
                   "classname": "SourceAggregate",
                   "failures": [
                     {
-                      "failure": "/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/unittests/lift/core/SourceAggregateTests.cpp:1385\nExpected equality of these values:\n  Merges\n    Which is: 0\n  1U\n    Which is: 1\n",
+                      "failure": "unittests/lift/core/SourceAggregateTests.cpp:1385\nExpected equality of these values:\n  Merges\n    Which is: 0\n  1U\n    Which is: 1\n",
                       "type": ""
                     }
                   ]
@@ -998,5 +998,6 @@
     "historical_archive_sha256": "8df260f4a1ef6e3fadf822846cd68b85ab30f3c227bc5d1f26188f7e69bbafc0",
     "historical_recovery_index_sha256": "1f24824fd6637670c8b38944b56d0858227c35633f59e3e13b2bcfc7f11c45ab",
     "exclusive_reclaimed_total_bytes": null
-  }
+  },
+  "path_presentation": "Repository-relative paths in diagnostic excerpts; report hashes refer to the retained original files."
 }
