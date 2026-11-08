@@ -364,7 +364,9 @@ private:
   static Json functionRowsRead(const Json &rows, bool declarations);
   /// A function's or a type's declaration changed: the engine has let go of
   /// what read it, and every view reads anew over what the replica still holds.
-  void declarationsChanged();
+  /// With \p viewsReadIt the stores stand and the caller has noted the edit for
+  /// the views (keepNamedViewsThrough): a document that did not read it stays.
+  void declarationsChanged(bool viewsReadIt = false);
   /// Only functions' names changed, in a replica: what it keeps of a view stays
   /// the view's.  Taking a name away from one (\p unnamed) changes what the
   /// listing shows it as, and the others are read as a view is decorated.

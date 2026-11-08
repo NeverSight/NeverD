@@ -10259,6 +10259,16 @@ TEST_F(SessionCAPITest, SelectionsKeepTheFunctionListARebuildWouldMake) {
   EXPECT_EQ(takeString(neverd_func_name(
                 Session, neverd_func_find_by_addr(Session, Entry))),
             "renamed_by_address");
+  // A name taken in place, of a function, of an address or given up, leaves
+  // the list a rebuild makes: a selection keeps it.
+  ASSERT_EQ(neverd_rename_take(Session, Entry + 0x10, "taken_in_place"), 0);
+  ASSERT_EQ(neverd_rename_take(Session, Entry + 0x30, "taken_code"), 0);
+  ASSERT_EQ(neverd_rename_take(Session, Entry, nullptr), 0);
+  EXPECT_TRUE(SessionTestAccess::keepsFunctionList(State));
+  EXPECT_TRUE(SessionTestAccess::functionListIsRebuilt(State));
+  Select(Entry);
+  EXPECT_TRUE(SessionTestAccess::keepsFunctionList(State));
+  EXPECT_EQ(takeString(neverd_func_name(Session, Index)), "taken_in_place");
 
   // The detector's entries and the user's function edits.
   ASSERT_GT(neverd_session_discover_functions(Session), 0);

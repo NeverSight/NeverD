@@ -1064,10 +1064,11 @@ Json Engine::functionRowsRead(const Json &rows, bool declarations) {
   }
   return read;
 }
-void Engine::declarationsChanged() {
+void Engine::declarationsChanged(bool viewsReadIt) {
   analyzed_ = false;
   preparedFunction_.reset();
-  forgetNamedViews();
+  if (!viewsReadIt)
+    forgetNamedViews();
   graphs_.clear();
   textKey_.clear();
   textCache_.clear();
@@ -1075,7 +1076,7 @@ void Engine::declarationsChanged() {
   functionOrderKey_.clear();
   functionOrder_.clear();
   if (listing_)
-    listing_->declarationsChanged();
+    listing_->declarationsChanged(viewsReadIt);
 }
 void Engine::invalidate() {
   forgetNamedViews();
@@ -5830,6 +5831,22 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     }
     auto &store = history();
     settleNamedViews();
+    // A declaration reaches the views that read it where the stores stand.
+    // Renders that say their reads keep no declaration in what the stores are
+    // kept under, only what analysis reads of them (renderStoreIdentity's
+    // user_facts_analysis_reads), which one that hides a prototype changes.
+    const auto analysisReads = [this]() -> std::optional<Json> {
+      try {
+        return userFactsAnalysisReads();
+      } catch (const std::exception &) {
+        // Every view reads anew.
+      }
+      return std::nullopt;
+    };
+    const auto readBefore =
+        edit && p.at("attributes").contains("type") && rendersSayTheirReads()
+            ? analysisReads()
+            : std::nullopt;
     // The engine checks the edit; the rows it then holds are the new table.
     if ((edit     ? attributes.edit(session_, address, stated.c_str())
          : create ? edits.create(session_, address)
@@ -5866,12 +5883,18 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     };
     // A note on it reaches no view.
     const bool noted = edit && rowRead(before, true) == rowRead(after, true);
-    if (!edit || rowRead(before, false) != rowRead(after, false))
+    bool viewsReadIt = false;
+    if (!edit || rowRead(before, false) != rowRead(after, false)) {
       functionsChanged();
-    else if (!noted)
-      declarationsChanged();
+    } else if (!noted) {
+      const auto readAfter = readBefore ? analysisReads() : std::nullopt;
+      viewsReadIt = readAfter && *readAfter == *readBefore;
+      if (viewsReadIt)
+        keepNamedViewsThrough(address, {}, true);
+      declarationsChanged(viewsReadIt);
+    }
     ++revision_;
-    if (noted)
+    if (noted || viewsReadIt)
       namedViewsTakeRevision(true);
     Json result{{"address", hexAddress(address)}, {"saved", true}};
     if (edit)

@@ -6759,12 +6759,17 @@ private slots:
                                  !bench.session.queries().hasPending(),
                              OpenTimeoutMs);
     // Initial discovery and navigation may retire the first source replica,
-    // and the owner answers what is kept until the next is ready.  Establish
-    // the cache baseline after that setup, then require this same idle replica
-    // to survive both display-name commits.
+    // and the owner answers what is kept until the next is ready: completed
+    // discovery reconciles the loader's provisional functions, which a replica
+    // restored before it does not take in place.  Establish the cache baseline
+    // once discovery is complete and a replica is ready after it, then require
+    // this same idle replica to survive both display-name commits.
     first = {};
-    QTRY_VERIFY_WITH_TIMEOUT(bench.session.analysisReplicaReady(),
-                             OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        bench.session.background().value("discovery_complete").toBool() &&
+            bench.session.analysisReplicaReady() &&
+            !bench.session.queries().hasPending(),
+        OpenTimeoutMs);
     bench.session.read("decompile", payload, &reader,
                        [&](const QJsonObject &page) { first = page; });
     QTRY_VERIFY_WITH_TIMEOUT(!first.isEmpty(), OpenTimeoutMs);

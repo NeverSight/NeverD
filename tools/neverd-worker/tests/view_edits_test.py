@@ -157,6 +157,18 @@ def run(executable):
         for _ in range(2):
             ok(owner, "undo")
         assert same_as_fresh("those undone") == noted
+        # A function's declaration reaches the documents that read it and no
+        # other: nothing calls the third function, and the others answer as they
+        # were.  Its own reads as a new reader's does.
+        reads = store_reads(owner)
+        ok(owner, "function_edit", {"address": hex(functions[2]),
+                                    "attributes": {"type": "long long declared_here(long long value)"}})
+        for address in (functions[0], functions[1], functions[3]):
+            assert view(owner, address) == noted[address], hex(address)
+        assert store_reads(owner) == reads, (store_reads(owner), reads)
+        compare(executable, owner, path, functions, "a declaration one view reads")
+        ok(owner, "undo")
+        assert same_as_fresh("declaration undone") == noted
         # Back, as it was.
         for _ in range(3):
             ok(owner, "undo")
