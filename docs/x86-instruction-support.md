@@ -4406,3 +4406,36 @@ from successful intrinsic qualification. Full real/VM86/IA-32e mode transfers,
 task switching, other i386 banks, software SMM/SGX transitions and unbound
 asynchronous producers remain open. The final LLVM release and pin/gitlink
 update stay gated, and the production pin remains r6.
+
+## Native i386 FLAGS source interfaces (2026-11-08)
+
+NeverC now exposes `__builtin_ia32_readeflags_u32()` and
+`__builtin_ia32_writeeflags_u32(unsigned)`. The generic `__readeflags` and
+`__writeeflags` interfaces select u32/u64 from the code target and retain their
+source ABI types. The previous i386 path emitted an i64 read into an i32
+temporary and called the u64 write intrinsic with an i32 argument; the LLVM
+verifier rejected that write. Explicit dword APIs reject x64, and explicit
+qword APIs remain x64-only. Word APIs retain their two-byte stack operations.
+
+The [FLAGS width evidence](evidence/x86-flags-widths-2026-11-08.json) records
+native code generation, mode/argument refusal, unused snapshots, memory
+ordering and compiler stack guards. Both NeverD C routes now compile i386 ELF
+through NeverC's full LLVM backend, with `NEVERD_TEST_NEVERC_LLC` selecting the
+qualified tool. x64 ELF/COFF/Mach-O and stock Clang remain in the source matrix.
+The two SDKs pass 24 source checks and 1,280 C compile checks, with
+41,943,040 generated-C write comparisons. NeverC separately passes 179 x86
+checks, 5,016 controlled CR/DR completions and 19,922,944 native FLAGS
+comparisons. These selected matrices have no failures or skips.
+Original CPU witnesses compare all TF-clear low words and incoming/outgoing
+AC/ID combinations on P/E cores, restore host flags before returning to C, and
+reject wrong-width writes and fabricated snapshots. They qualify the selected
+Linux CPL3 compiler ABI; arithmetic flags across C calls, privileged execution,
+faults and asynchronous state have separate contracts.
+
+The full LLVM fork already supplies the native dword FLAGS instructions, so
+this change adds no LLVM fork patch or release. The r6 SDK pin remains. The
+LLVM gitlink inherited from the concurrent arm64e integration is recorded
+separately. The source-global audit still has 90 baseline findings in 29
+unchanged NeverC files. Real/VM86/IA-32e transitions, task switching, remaining
+i386 state banks, software SMM/SGX and unbound asynchronous producers remain
+open; the final x86 completion and LLVM release gates are not closed.
