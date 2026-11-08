@@ -381,10 +381,18 @@ with the native NeverC builtin and a stock Clang GNU fallback, separately from
 the original-state KVM matrix. LLVM frontend/code16 regressions and compiler
 stack/red-zone guards qualify their own interfaces.
 The same witness accepts `--bits 32` for full LLVM/Clang and unchanged i386 C
-exports. Its separate cdecl assembly capture preserves callee-saved registers
+exports. NeverC uses `--backend-llc LLC` for its supported Linux i386 target.
+Its separate cdecl assembly capture preserves callee-saved registers
 and restores host flags before returning to the multilib C driver. Run native
 LLVM objects from both SDK profiles as ELF32 too. This qualifies the selected
-compiler ABI paths; NeverC still refuses an i386 frontend request.
+compiler ABI paths. `--image-bits 32` also checks dword writes, including every
+old/new AC/ID combination; `--image-bits 64` selects native x64 images. Builtin
+probes compare returned snapshots too and reject a fabricated read result.
+`--spelling generic` checks NeverC's mode-dependent `__readeflags/__writeeflags`
+interfaces. Arithmetic flags across a function ABI remain outside this witness.
+`X86FlagsSource.NeverCCompilesBothNativeRoutesAndSupportedFormats` adds the i386
+ELF source matrix through `NEVERD_TEST_NEVERC_LLC`; it does not admit Windows or
+Darwin i386 frontend targets.
 
 `LegacyDecimal/*` uses the same fixture for AAA/AAS/DAA/DAS/AAM/AAD. It checks
 every AL with incoming AF/CF, AH carry/borrow boundaries, every immediate base,
