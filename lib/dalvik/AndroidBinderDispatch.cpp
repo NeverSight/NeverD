@@ -135,20 +135,10 @@ AndroidFramework::dispatchBinder(Heap &heap, const Program &program,
                 "Z"};
   result.external->arguments = {object, incoming.code, wrapped_data.value,
                                 wrapped_reply.value, incoming.flags};
-  result.external->complete = [this, &heap, &program, admit,
-                               incoming = std::move(incoming),
-                               policy = policy.value,
-                               source = wrapped_data.value,
-                               destination = wrapped_reply.value,
-                               respond = std::move(respond)](
-                                  ExecutionResult completed) {
-    if (completed.stop != ExecutionStop::Returned)
-      return ExecutionResult{ExecutionStop::Unsupported,
-                             0,
-                             {},
-                             "Android incoming Binder Java exception "
-                             "serialization/logging is not modeled: " +
-                                 completed.exception};
+  auto finish = [this, &heap, &program, admit, incoming = std::move(incoming),
+                 policy = policy.value, source = wrapped_data.value,
+                 destination = wrapped_reply.value,
+                 respond = std::move(respond)](ExecutionResult completed) {
     const auto *recycle =
         libraryMethod({"Landroid/os/Parcel;", "recycle", {}, "V"}, false);
     for (auto wrapper : {destination, source}) {
@@ -190,6 +180,50 @@ AndroidFramework::dispatchBinder(Heap &heap, const Program &program,
     if (released.stop != ExecutionStop::Returned)
       return released;
     return respond(completed.value ? 0 : -74);
+  };
+  result.external->complete = [this, &heap, &program, admit,
+                               destination = wrapped_reply.value,
+                               finish = std::move(finish)](
+                                  ExecutionResult completed) {
+    if (completed.stop == ExecutionStop::Returned)
+      return finish(std::move(completed));
+    auto uncaught = [](ExecutionResult error) {
+      return ExecutionResult{ExecutionStop::Unsupported,
+                             0,
+                             {},
+                             "Android JavaBBinder uncaught exception logging "
+                             "is not modeled: " +
+                                 error.exception};
+    };
+    const auto type = "L" + completed.exception + ";";
+    if (!program.assignable(type, "Ljava/lang/RuntimeException;") &&
+        !program.assignable(type, "Landroid/os/RemoteException;"))
+      return uncaught(std::move(completed));
+    // LOG_RUNTIME_EXCEPTION starts false; modifying it is not yet modeled.
+    // execTransact rewinds without truncating the partially written reply.
+    const auto *seek = libraryMethod(
+        {"Landroid/os/Parcel;", "setDataPosition", {"I"}, "V"}, false);
+    const uint64_t zero[] = {0};
+    auto rewound = executeLibrary(heap, *seek, destination, zero, admit, false,
+                                  &program, this);
+    if (rewound.stop != ExecutionStop::Returned)
+      return rewound;
+    ExecutionResult serialized{ExecutionStop::Suspended};
+    serialized.external.emplace();
+    serialized.external->kind = ExternalCall::JavaMethod;
+    serialized.external->java_method = MethodRef{"Landroid/os/Parcel;",
+                                                 "writeException",
+                                                 {"Ljava/lang/Exception;"},
+                                                 "V"};
+    serialized.external->arguments = {destination, completed.throwable};
+    serialized.external->complete = [finish,
+                                     uncaught](ExecutionResult written) {
+      if (written.stop != ExecutionStop::Returned)
+        return uncaught(std::move(written));
+      written.value = 1; // A serialized exception is a handled transaction.
+      return finish(std::move(written));
+    };
+    return serialized;
   };
   return result;
 }

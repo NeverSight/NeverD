@@ -171,6 +171,16 @@ private:
                            const std::vector<project_files::File> &unread);
   Json restoreAnalysis(const Json &snapshot);
   Json updateAnalysisNames(const Json &snapshot);
+  /// Whether the project's files hold \p snapshot's user state.
+  bool projectHolds(const std::string &path, const Json &snapshot);
+  /// Waits, at most the replica limit, for an owner's write \p snapshot was
+  /// given before.
+  void awaitOwnerWrite(const std::string &path, const Json &snapshot);
+  /// A replica takes the function rows that changed as the owner took them,
+  /// checked against the table, and false where it must read the project's
+  /// file.  Declarations of types it reads from the file: one that names a type
+  /// taken away and declared again reads otherwise taken in place.
+  bool takeFunctionRows(const Json &before, const Json &after);
   /// A replica takes the names that changed as the owner took them, row by row,
   /// and false where it must read the table again.
   bool takeNames(const std::map<std::uint64_t, std::string> &before,

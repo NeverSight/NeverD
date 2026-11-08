@@ -13,6 +13,7 @@
 
 #include "llvm/Support/Endian.h"
 
+#include <algorithm>
 #include <array>
 #include <map>
 
@@ -366,9 +367,18 @@ TEST(AndroidBinderDispatchTest,
   State throwing(stub(false, true), incomingServices());
   auto error =
       throwing.runtime.dispatchBinder(exportBinder(throwing), Admit, 65536, 11);
-  EXPECT_EQ(error.stop, ExecutionStop::Unsupported);
-  EXPECT_NE(error.diagnostic.find("exception serialization"),
-            std::string::npos);
+  ASSERT_EQ(error.stop, ExecutionStop::Suspended) << error.diagnostic;
+  ASSERT_EQ(error.external->kind, ExternalCall::BinderSendReply);
+  EXPECT_EQ(error.external->response->status, 0);
+  EXPECT_EQ(error.external->response->bytes,
+            (std::vector<uint8_t>{252, 255, 255, 255, 255, 255, 255, 255, 0, 0,
+                                  0, 0}));
+  auto calls = throwing.runtime.snapshot().framework.binder_calls;
+  ASSERT_TRUE(calls);
+  ASSERT_EQ(calls->entries.size(), 1u);
+  EXPECT_EQ(calls->entries[0].count, 1u);
+  EXPECT_EQ(throwing.runtime.resume(error.continuation, 11, {}).stop,
+            ExecutionStop::Returned);
   State limited(stub(), incomingServices());
   auto exhausted =
       limited.runtime.dispatchBinder(exportBinder(limited), Admit, 0, 11);
@@ -380,6 +390,149 @@ TEST(AndroidBinderDispatchTest,
       11);
   EXPECT_EQ(exhausted.stop, ExecutionStop::InstructionLimit);
 }
+TEST(AndroidParcelExceptionTest, LiteralHeadersKeepTailAndNullableMessages) {
+  const char *types[] = {"java/lang/SecurityException",
+                         "android/os/BadParcelableException",
+                         "java/lang/IllegalArgumentException",
+                         "java/lang/NullPointerException",
+                         "java/lang/IllegalStateException",
+                         "android/os/NetworkOnMainThreadException",
+                         "java/lang/UnsupportedOperationException"};
+  for (unsigned i = 0; i != 7; ++i)
+    for (bool message : {false, true}) {
+      SCOPED_TRACE(types[i]);
+      SCOPED_TRACE(message);
+      State s;
+      for (unsigned n = 0; n != 8; ++n)
+        s.write(s.reply, 0x11223344);
+      ASSERT_EQ(
+          s.call({Parcel, "setDataPosition", {"I"}, "V"}, s.reply, {4}).stop,
+          ExecutionStop::Returned);
+      auto error = s.heap->allocate(Object::Throwable, types[i], 0);
+      if (message) {
+        auto text = s.heap->allocate(Object::String, "java/lang/String", 2);
+        ASSERT_TRUE(s.heap->replaceBytes(*text, {0xe9, 0}));
+        error->Message = text->Identity;
+      }
+      auto result =
+          s.call({Parcel, "writeException", {"Ljava/lang/Exception;"}, "V"},
+                 s.reply, {error->Identity}, false, 0);
+      ASSERT_EQ(result.stop, ExecutionStop::Returned) << result.diagnostic;
+      std::vector<uint8_t> expected;
+      for (unsigned n = 0; n != 8; ++n)
+        expected.insert(expected.end(), {0x44, 0x33, 0x22, 0x11});
+      expected[4] = uint8_t(255 - i);
+      expected[5] = expected[6] = expected[7] = 255;
+      const std::vector<uint8_t> payload =
+          message ? std::vector<uint8_t>{1, 0, 0, 0, 0xe9, 0, 0, 0, 0, 0, 0, 0}
+                  : std::vector<uint8_t>{255, 255, 255, 255, 0, 0, 0, 0};
+      std::copy(payload.begin(), payload.end(), expected.begin() + 8);
+      EXPECT_EQ(s.heap->get(s.reply)->Bytes, expected);
+      EXPECT_EQ(s.position(s.reply), message ? 20u : 16u);
+      ASSERT_EQ(s.call({Parcel, "writeNoException", {}, "V"}, s.reply).stop,
+                ExecutionStop::Returned);
+      EXPECT_EQ(s.position(s.reply), message ? 24u : 20u);
+      EXPECT_EQ(llvm::support::endian::read32le(
+                    s.heap->get(s.reply)->Bytes.data() + (message ? 20 : 16)),
+                0u);
+    }
+}
+
+TEST(AndroidParcelExceptionTest, UnknownRuntimeRethrowsAfterZeroTag) {
+  for (const char *type :
+       {"java/lang/RuntimeException", "java/lang/ArithmeticException"}) {
+    State s;
+    auto error = s.heap->allocate(Object::Throwable, type, 0);
+    auto result =
+        s.call({Parcel, "writeException", {"Ljava/lang/Exception;"}, "V"},
+               s.reply, {error->Identity});
+    EXPECT_EQ(result.stop, ExecutionStop::Thrown);
+    EXPECT_EQ(result.throwable, error->Identity);
+    EXPECT_EQ(s.heap->get(s.reply)->Bytes, (std::vector<uint8_t>{0, 0, 0, 0}));
+  }
+  for (bool null : {false, true}) {
+    State s;
+    auto error =
+        s.heap->allocate(Object::Throwable, "android/os/RemoteException", 0);
+    auto result =
+        s.call({Parcel, "writeException", {"Ljava/lang/Exception;"}, "V"},
+               s.reply, {null ? 0 : error->Identity});
+    EXPECT_EQ(result.stop, ExecutionStop::Unsupported);
+    EXPECT_NE(result.diagnostic.find("Throwable-cause"), std::string::npos);
+    EXPECT_EQ(s.heap->get(s.reply)->Bytes, (std::vector<uint8_t>{0, 0, 0, 0}));
+  }
+}
+
+TEST(AndroidParcelExceptionTest,
+     VirtualMessageSuspendsAfterTagAndKeepsIdentity) {
+  for (bool throws : {false, true}) {
+    Class type;
+    type.name = "Lexception/Custom;";
+    type.superclass = "Ljava/lang/IllegalArgumentException;";
+    type.access = {"public"};
+    Method message;
+    message.reference = {type.name, "getMessage", {}, "Ljava/lang/String;"};
+    message.access = {"public", "native"};
+    type.methods.push_back(std::move(message));
+    Program program({std::move(type)}, std::map<std::string, std::string>{});
+    auto heap = std::make_shared<Heap>();
+    Runtime runtime(program, heap);
+    auto parcel =
+        runtime
+            .library(*libraryMethod({Parcel, "obtain", {}, Parcel}, true), 0,
+                     {}, Admit)
+            .value;
+    auto error = heap->allocate(Object::Throwable, "exception/Custom", 0);
+    const uint64_t args[] = {error->Identity};
+    auto pending = runtime.library(
+        *libraryMethod(
+            {Parcel, "writeException", {"Ljava/lang/Exception;"}, "V"}, false),
+        parcel, args, Admit, false, 17, 65536);
+    ASSERT_EQ(pending.stop, ExecutionStop::Suspended) << pending.diagnostic;
+    ASSERT_EQ(pending.external->kind, ExternalCall::Native);
+    EXPECT_EQ(pending.external->arguments,
+              (std::vector<uint64_t>{error->Identity}));
+    EXPECT_EQ(heap->get(parcel)->Bytes,
+              (std::vector<uint8_t>{253, 255, 255, 255}));
+    auto text = heap->allocate(Object::String, "java/lang/String", 2);
+    ASSERT_TRUE(heap->replaceBytes(*text, {'x', 0}));
+    auto completed = runtime.resume(
+        pending.continuation, 17,
+        throws ? ExecutionResult{ExecutionStop::Thrown, 0,
+                                 "java/lang/IllegalStateException"}
+               : ExecutionResult{ExecutionStop::Returned, text->Identity});
+    EXPECT_EQ(completed.stop,
+              throws ? ExecutionStop::Thrown : ExecutionStop::Returned);
+    if (throws) {
+      EXPECT_NE(completed.throwable, 0u);
+      EXPECT_EQ(heap->get(parcel)->Bytes.size(), 4u);
+    } else
+      EXPECT_EQ(heap->get(parcel)->Bytes,
+                (std::vector<uint8_t>{253, 255, 255, 255, 1, 0, 0, 0, 'x', 0, 0,
+                                      0, 0, 0, 0, 0}));
+    EXPECT_EQ(runtime.resume(pending.continuation, 17, {}).stop,
+              ExecutionStop::Invalid);
+  }
+}
+
+TEST(AndroidBinderDispatchTest, UncaughtExceptionsDoNotCompleteTheCall) {
+  for (const char *type :
+       {"java/lang/ArithmeticException", "java/lang/Error"}) {
+    State s(stub(true), incomingServices());
+    auto pending = s.runtime.dispatchBinder(exportBinder(s), Admit, 65536, 11);
+    ASSERT_EQ(pending.stop, ExecutionStop::Suspended) << pending.diagnostic;
+    ASSERT_EQ(pending.external->kind, ExternalCall::Native);
+    auto stopped = s.runtime.resume(pending.continuation, 11,
+                                    {ExecutionStop::Thrown, 0, type});
+    EXPECT_EQ(stopped.stop, ExecutionStop::Unsupported);
+    EXPECT_NE(stopped.diagnostic.find("uncaught exception logging"),
+              std::string::npos);
+    auto calls = s.runtime.snapshot().framework.binder_calls;
+    ASSERT_TRUE(calls);
+    EXPECT_TRUE(calls->entries.empty());
+  }
+}
+
 TEST(AndroidBinderDispatchTest, DeferredStrongReleaseChangesIncomingLiveness) {
   State s(stub(), incomingServices());
   auto incoming = exportBinder(s);

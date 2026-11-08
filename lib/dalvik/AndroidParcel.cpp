@@ -416,6 +416,11 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
       }
       return returned();
     }
+    if (name == "writeNoException") {
+      // Supported StrictMode paths retain the initial null violation list.
+      integer(0, 4);
+      return returned();
+    }
     if (name == "writeInt" || name == "writeLong") {
       integer(arguments[0], name == "writeInt" ? 4 : 8);
       return returned();

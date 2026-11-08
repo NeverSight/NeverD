@@ -6,6 +6,7 @@ add_neverd_component_library(NeverDDalvik
   AndroidBinderObjects.cpp
   AndroidEventLog.cpp
   AndroidParcel.cpp
+  AndroidParcelException.cpp
   AndroidServiceManager.cpp
   AndroidStatLogger.cpp
   AndroidProperties.cpp

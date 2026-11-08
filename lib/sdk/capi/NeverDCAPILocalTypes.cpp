@@ -675,6 +675,17 @@ std::string renderSource(const types::TypeLibrary &Library,
   return types::renderTypes(Library, Roots, Render);
 }
 
+/// Whether \p Text spells \p Name as a whole identifier.
+bool spellsIdentifier(llvm::StringRef Text, llvm::StringRef Name) {
+  const auto Part = [](char C) { return llvm::isAlnum(C) || C == '_'; };
+  for (size_t At = Text.find(Name); At != llvm::StringRef::npos;
+       At = Text.find(Name, At + 1))
+    if ((At == 0 || !Part(Text[At - 1])) &&
+        (At + Name.size() == Text.size() || !Part(Text[At + Name.size()])))
+      return true;
+  return false;
+}
+
 } // namespace
 
 bool Session::typesChanged(const types::TypeLibrary &Library,
@@ -707,10 +718,18 @@ bool Session::typesChanged(const types::TypeLibrary &Library,
                !Source.Options.CallTypes.empty() ||
                !Source.Options.StackFrame.empty();
       });
-  const bool Shows =
-      SourceAssertions || llvm::any_of(Changed, [&](const std::string &Name) {
-        return ShownTypes.contains(Name);
-      });
+  // A function's declaration that names a changed type: a source printed while
+  // that type was missing showed none of it.
+  const std::map<va_t, std::string> Declarations = functionDeclarations();
+  const auto Declared = llvm::any_of(Declarations, [&](const auto &Entry) {
+    return llvm::any_of(Changed, [&](const std::string &Name) {
+      return spellsIdentifier(Entry.second, Name);
+    });
+  });
+  const bool Shows = SourceAssertions || Declared ||
+                     llvm::any_of(Changed, [&](const std::string &Name) {
+                       return ShownTypes.contains(Name);
+                     });
   if (Shows) {
     FunctionSources.clear();
     ShownTypes.clear();

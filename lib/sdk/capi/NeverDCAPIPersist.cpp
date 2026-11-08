@@ -442,6 +442,7 @@ bool functionNameMoved(Session &S, va_t Addr, const std::string *Name) {
         S.NameIndex->FirstNamed.try_emplace(F.Name, *Function);
     if (!Inserted && *Function < Named->second)
       Named->second = *Function;
+    S.NameIndex->Spelled[*Function] = Session::spelledFunction(F);
   }
   return true;
 }

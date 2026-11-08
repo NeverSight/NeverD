@@ -5601,6 +5601,34 @@ TEST_F(SessionCAPITest, ReloadingRenamesRestoresNamesRemovedFromTheSidecar) {
   EXPECT_EQ(takeString(neverd_func_name(Session, 0)), "evm_entry");
 }
 
+TEST_F(SessionCAPITest, FindingByNameFollowsNamesReadAgain) {
+  const std::string Path = write("again.evm", "6001600055");
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  const auto Entry = neverd_func_entry(Session, 0);
+  ASSERT_EQ(neverd_rename_take(Session, Entry, "read_again"), 0);
+  const std::string Table = takeString(neverd_renames_json(Session));
+  ASSERT_EQ(neverd_rename_take(Session, Entry, nullptr), 0);
+  EXPECT_EQ(neverd_func_find_by_name(Session, "evm_entry"), 0);
+  // The table read again from its file names the function otherwise: what
+  // finds it by name reads the list as it is now.
+  write("again.evm.neverd/renames.json", Table);
+  ASSERT_EQ(neverd_renames_load(Session), 0);
+  EXPECT_EQ(neverd_func_find_by_name(Session, "read_again"), 0);
+  EXPECT_LT(neverd_func_find_by_name(Session, "evm_entry"), 0);
+  // Read again to the same names, it still finds them.
+  ASSERT_EQ(neverd_renames_load(Session), 0);
+  EXPECT_EQ(neverd_func_find_by_name(Session, "read_again"), 0);
+  write("again.evm.neverd/renames.json", "[]");
+  ASSERT_EQ(neverd_renames_load(Session), 0);
+  EXPECT_EQ(neverd_func_find_by_name(Session, "evm_entry"), 0);
+  EXPECT_LT(neverd_func_find_by_name(Session, "read_again"), 0);
+  // A name the list takes without telling what finds names: the next lookup
+  // reads the list again.
+  ASSERT_EQ(neverd_rename_func(Session, "evm_entry", "renamed_in_list"), 0);
+  EXPECT_EQ(neverd_func_find_by_name(Session, "renamed_in_list"), 0);
+  EXPECT_LT(neverd_func_find_by_name(Session, "evm_entry"), 0);
+}
+
 TEST_F(SessionCAPITest, TakingANameReadsAsLoadingItsTable) {
   const std::string Path = write("take.evm", "6001600055");
   ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);

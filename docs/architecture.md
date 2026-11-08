@@ -4671,7 +4671,12 @@ GUI keeps is named by the document and lines it came from; a later read names it
 (`if_none_match`), and while the document stands the worker says so instead of sending
 the page again (`QueryService::State::keptPages`).
 A replica takes those edits in place (`analysis_update_names`), since no analysis
-reads them: what it keeps of a view stays the view's. A note on a function and a data
+reads them: what it keeps of a view stays the view's. The owner's snapshot for it does
+not wait for the write (`analysis_snapshot` `in_memory`): the replica takes the names
+and function rows that changed as the owner took them, and waits for the write only
+for what it must read from the files (`Engine::awaitOwnerWrite`). Its name index
+stands while the list reads the same after names are derived again
+(`FunctionNameIndex::Spelled`). A note on a function and a data
 item, which nothing analyzed or rendered reads, leave the renders as they are, and a
 new name of data costs those that asked for it. A function's declaration reaches only
 what the decompiler reads, so the debug context takes it in place
@@ -17611,7 +17616,7 @@ Enabled transaction tracing stops explicitly before native validation.
 Direct native calls skip the Java wrapper. Null data throws a catchable
 NullPointerException with a null message before inspecting the optional reply;
 non-null Parcels reuse the owned/recycled lifecycle checks without changing
-bytes or positions. Local Binder dispatch remains unsupported.
+bytes or positions. Local Binder uses the shared Java upcall path described below.
 
 Each supplied proxy may independently declare `native_binding` with a positive
 signed `fd`, a uint32 `handle`, and explicit `alive`. The native adapter resolves
@@ -17699,6 +17704,21 @@ identity substitutes for driver state. Semantics follow API 28
 [BinderCallsStats.java](https://android.googlesource.com/platform/frameworks/base/+/android-9.0.0_r1/core/java/com/android/internal/os/BinderCallsStats.java)
 and [IPCThreadState.cpp](https://android.googlesource.com/platform/frameworks/native/+/android-9.0.0_r1/libs/binder/IPCThreadState.cpp).
 
+`AndroidParcelException.cpp` owns the default API 28 `writeException` envelope.
+Seven common runtime-exception families use literal wire tags, virtual
+`Throwable.getMessage`, existing UTF-16 writes and the disabled-stack-trace
+header. Unknown runtime exceptions write a zero tag before rethrowing the same
+identity. `writeNoException` uses the initial null StrictMode violation list.
+Framework upcalls materialize thrown identities through Runtime's existing owner.
+Incoming Binder catches RuntimeException/RemoteException, rewinds without
+truncating the reply and invokes this same method; serialized exceptions count as
+handled calls and keep the normal reply-ack lifetime. Existing tail bytes remain
+observable. Overlapping a retained Binder object still stops at Parcel's object
+metadata boundary. Parcelable/class-loader payloads, ServiceSpecificException,
+Throwable-cause construction, debug stack-trace parceling and uncaught logging
+remain explicit boundaries; no error reply or log record is fabricated.
+See API 28 [Parcel.java](https://android.googlesource.com/platform/frameworks/base/+/android-9.0.0_r1/core/java/android/os/Parcel.java).
+
 `enforceInterface` still requires incoming flags and the Java StrictMode upcall.
 `AndroidParcel.cpp` owns native capacity separately from initialized data.
 Borrowed growth copies live bytes, acquires retained object references, and only
@@ -17712,7 +17732,7 @@ the received offset-table pointer's realloc. The native adapter and C import use
 one `Bionic::reallocate` implementation. Binder arena pointers fail its allocation
 ownership check before memory access, even with zero offsets. Incoming context
 association, uncached context ping, automatic pool-thread creation/starvation
-timing, exception serialization/logging, tracing, changed-policy Java BlockGuard
+timing, uncaught exception logging, tracing, changed-policy Java BlockGuard
 restoration, dump/shell/property callbacks, nested/one-way transactions and weak
 objects/FDs remain explicit boundaries. ServiceManager `lookup_results` remain a separate semantic input;
 this transport does not turn those entries into kernel peers or replies.

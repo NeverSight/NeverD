@@ -16257,6 +16257,12 @@ buffers/cursors, owner retention and missing allocator services.
 interior, freed and unreadable foreign pointers with an unreadable owned allocation.
 `ProcessPublic.AndroidParcelBorrowedGrowthMatchesSDKAndCLI` compares 108 complete
 reports at O0/O2, including all explicit failure outcomes.
+`AndroidParcelExceptionTest` checks seven literal exception tags, nullable UTF-16
+messages, retained tail bytes, unknown-runtime identity rethrow, checked/null
+cause boundaries, and virtual native message suspension/failure. Incoming
+exception tests check native reply lifetime and default statistics. The native
+peer checks three exception replies followed by ping, including untouched scalar
+tails; object overlap remains an explicit metadata-mutation stop.
 `AndroidBinderDispatchTest` checks local and incoming Java dispatch, protected
 super calls and virtual descriptor overrides, exception cursor order, native
 continuation tokens, separate wrapper-pool reuse, reply-ack buffer lifetime,
@@ -16268,7 +16274,7 @@ transactions, reply object translation, native ping and UNKNOWN_TRANSACTION.
 Ordinary/V/A calls also check local transact, missing realtime, Java exceptions
 and changed StrictMode policy. The successful peer exits the process after its
 checks; a live Binder pool never invents a normal Java return.
-`ProcessPublic.AndroidJavaBinderDispatchMatchesSDKAndCLI` compares 36 complete
+`ProcessPublic.AndroidJavaBinderDispatchMatchesSDKAndCLI` compares 42 complete
 reports at O0/O2 with the original 200,000-instruction bound.
 `LinuxBinder.LooperReadinessMatchesActualProcessAndPrivateWork` submits raw
 transactions across four thread identities on x86-64 and AArch64, checking that

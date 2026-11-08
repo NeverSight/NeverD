@@ -371,6 +371,9 @@ static const LibraryMethod Methods[] = {
     {"android/os/Parcel", "dataAvail", "()I", ParcelData, false, true},
     {"android/os/Parcel", "setDataPosition", "(I)V", ParcelData, false, true},
     {"android/os/Parcel", "writeInt", "(I)V", ParcelData, false, true},
+    {"android/os/Parcel", "writeNoException", "()V", ParcelData, false, true},
+    {"android/os/Parcel", "writeException", "(Ljava/lang/Exception;)V",
+     ParcelException, false, true},
     {"android/os/Parcel", "readInt", "()I", ParcelData, false, true},
     {"android/os/Parcel", "writeLong", "(J)V", ParcelData, false, true},
     {"android/os/Parcel", "readLong", "()J", ParcelData, false, true},
@@ -543,11 +546,12 @@ ExecutionResult executeLibrary(Heap &heap, const LibraryMethod &M,
         M.Op == ServiceCheck || M.Op == ServiceInitCache ||
         M.Op == BinderAllowBlocking || M.Op == BinderQueryLocalInterface ||
         M.Op == ServiceAsBinder || M.Op == EventLogWrite ||
-        M.Op == ParcelData || M.Op == BinderGetStrictMode ||
-        M.Op == BinderSetStrictMode || M.Op == BinderTransact ||
-        M.Op == BinderTransactNative || M.Op == BinderTracing ||
-        M.Op == BinderOnTransact || M.Op == BinderInterface ||
-        M.Op == BinderJoin || M.Op == BinderCallingIdentity ||
+        M.Op == ParcelData || M.Op == ParcelException ||
+        M.Op == BinderGetStrictMode || M.Op == BinderSetStrictMode ||
+        M.Op == BinderTransact || M.Op == BinderTransactNative ||
+        M.Op == BinderTracing || M.Op == BinderOnTransact ||
+        M.Op == BinderInterface || M.Op == BinderJoin ||
+        M.Op == BinderCallingIdentity ||
         (M.Op == Construct &&
          (std::string_view(M.Class) == "android/os/Handler" ||
           std::string_view(M.Class) == "android/os/Binder" ||

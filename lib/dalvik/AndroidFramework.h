@@ -93,6 +93,9 @@ private:
                          const LibraryMethod &method, uint64_t receiver,
                          std::span<const uint64_t> arguments,
                          const AdmitInstruction &admit);
+  ExecutionResult parcelException(Heap &heap, const Program &program,
+                                  uint64_t receiver, uint64_t exception,
+                                  const AdmitInstruction &admit);
   struct ParcelState {
     // Non-owned Java wrappers have their own pool and refer to a native
     // Parcel whose lifetime spans reply acknowledgement, not Java recycle.
