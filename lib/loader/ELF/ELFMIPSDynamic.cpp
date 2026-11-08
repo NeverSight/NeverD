@@ -16,6 +16,7 @@
 
 #include <cstring>
 #include <map>
+#include <type_traits>
 
 namespace neverd::elf_loader::detail {
 
@@ -78,7 +79,8 @@ llvm::Error collectMIPSDynamicGOT(const llvm::object::ELFFile<ELFT> &ELF,
         const bool Import = Symbol.st_shndx == SHN_UNDEF;
         if ((Type == R_MIPS_JUMP_SLOT || Type == R_MIPS_GLOB_DAT) && Import &&
             (Symbol.getType() == STT_FUNC || Symbol.getType() == STT_NOTYPE)) {
-          if constexpr (requires { Entry.r_addend; })
+          if constexpr (std::is_same_v<std::remove_cvref_t<decltype(Entry)>,
+                                       typename ELFT::Rela>)
             if (Entry.r_addend != 0)
               return llvm::createStringError(
                   llvm::inconvertibleErrorCode(),

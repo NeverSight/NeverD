@@ -59,6 +59,7 @@
 #include "neverd/libc/LibCNames.h"
 #include "neverd/libc/LibCVariant.h"
 #include "neverd/libc/StackProbeIndex.h"
+#include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/MachO/SourceRegisterCopy.h"
@@ -788,15 +789,30 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
   const LowFunc &Low = Physical ? *Physical : SourceLow;
   const bool QualifyMIPSReturns =
       isMIPS(TheArch) &&
-      (Image ? (Image->Mode == InstructionMode::MixedMIPS ||
-                Image->Mode == InstructionMode::MicroMIPS)
-             : llvm::any_of(Low.Blocks, [](const auto &Block) {
-                 return llvm::any_of(
-                     Block.InstructionBoundaries, [](const auto &Boundary) {
-                       return Boundary.Mode == InstructionMode::MicroMIPS ||
-                              Boundary.Mode == InstructionMode::MIPSClassic;
-                     });
-               }));
+      (Image
+           ? (Image->Mode == InstructionMode::MixedMIPS ||
+              Image->Mode == InstructionMode::MicroMIPS ||
+              (Image->MIPS && Image->MIPS->HasDSP))
+           : llvm::any_of(Low.Blocks, [TheArch](const auto &Block) {
+               // Standalone IR cannot drop a changed return link merely
+               // because the original image's ASE record is unavailable.
+               // This also covers RDDSP ra,0, which is a plain zero copy.
+               if (!isMIPS64(TheArch) &&
+                   llvm::any_of(Block.Ops, [](const LowOp &Op) {
+                     return (Op.Output.isReg() &&
+                             Op.Output.Offset == mipsreg::RA) ||
+                            (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+                             Op.Inputs[0].isConst() &&
+                             mips::isDSPControlIntrinsic(
+                                 static_cast<Intrinsic>(Op.Inputs[0].Offset)));
+                   }))
+                 return true;
+               return llvm::any_of(
+                   Block.InstructionBoundaries, [](const auto &Boundary) {
+                     return Boundary.Mode == InstructionMode::MicroMIPS ||
+                            Boundary.Mode == InstructionMode::MIPSClassic;
+                   });
+             }));
   bool MIPSReturnsQualified = !QualifyMIPSReturns;
   bool HasMIPSScalarValues = false;
   for (const LowBlock &Block : Low.Blocks)

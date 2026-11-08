@@ -83,7 +83,8 @@ Concrete LowIR transport and source parameter inference have separate validation
 boundaries; this source proof does not initialize absent machine registers.
 
 This is a strict subset. n32, historical MIPS I–V profiles, Release 6, MIPS16,
-microMIPS64, floating point, DSP/MSA, privileged instructions, LL/SC reservations,
+microMIPS64, floating point, MSA, DSP forms beyond the slice below, privileged
+instructions, LL/SC reservations,
 unaligned merge stores and trapping arithmetic/division are not admitted by
 the current lifter. Unsupported instructions, missing slots and transfers in a
 delay slot produce errors, not replacement NOPs. Floating/aggregate source ABI
@@ -96,6 +97,49 @@ The SPECIAL3 and word-input rules follow the operation/restriction sections of
 The [Ghidra MIPS definitions at e45e5a62](https://github.com/NationalSecurityAgency/ghidra/tree/e45e5a62fd66c2e48514931f6e356aff33a79fcb/Ghidra/Processors/MIPS/data/languages)
 were a cross-check; the LowIR implementation and independent expectations are
 owned here. Decoder recognition alone does not qualify instruction semantics.
+
+## Classic MIPS32 DSP state and packed bytes
+
+The initial DSP slice admits classic MIPS32r2/o32 ELF in either byte order when
+`.MIPS.abiflags` declares the DSP ASE. It supports `RDDSP`, `WRDSP`, `ADDU.QB`
+and `ADDU_S.QB`. Decoder reuse consumes the current image's feature evidence;
+Capstone recognizing an encoding without that evidence does not authorize its
+lift. DSPR2, DSP64, microMIPS DSP, accumulators and other DSP instructions remain
+unsupported.
+
+The ten-bit control selector selects six field groups; its upper four bits are
+ignored. Partial writes preserve unselected fields, and packed byte additions
+set the sticky overflow flag even when the destination is `$zero`. Full writes
+can initialize an absent concrete DSPControl value; reads and partial updates
+never invent its initial state. Selector and encoding tables live in `.def`
+files and are shared by the owning semantics.
+
+DSPControl reads and writes remain effectful machine-state intrinsics through
+SSA and dead-code elimination. HighC, LLVM and LLVMC project them to explicit
+target state transfers. Their results remain visible to callers after return;
+no extra source parameter or zero-initialized C local substitutes for machine
+state. This source contract requires an enabled DSP execution environment and
+an original-target compiler. Disabled-DSP exception delivery is not modeled.
+Every generated function in a DSP image, including ordinary scalar functions
+and generated helpers, disables automatic DSP instruction selection with
+negative target features. Without an image, a batch containing DSP state
+transfers establishes the same contract for its siblings and source shards.
+Generated C requires Clang's scoped target attributes; both `-O0` and `-O2`
+are exercised with external `-mdsp` enabled.
+Explicit state transfers use local assembler directives. This prevents a
+compiler from replacing ordinary wide arithmetic with `ADDSC`/`ADDWC` and
+silently changing DSPControl. Source returns also require proof of the captured
+incoming link; a DSP result written to `$ra` cannot become an ordinary C return.
+Standalone MIPS32 LowIR with an explicit link write also requires this proof,
+including a zero-selector `RDDSP ra,0` reduced to a constant copy. Cross-call
+link spills remain outside the current source proof.
+
+The operation rules follow the
+[MIPS32 DSP ASE manual, revision 1.00](https://0x04.net/~mwk/doc/mips/MD00374-2B-MIPS32DSP-AFP-01.00.pdf).
+The pinned Unicorn model is checked with Status.MX enabled. Its zero-destination
+packed addition incorrectly omits the overflow update; independent manual
+expectations cover that case, and source roundtrip receipts record the oracle
+disagreement explicitly.
 
 ## microMIPS32 instruction and source boundaries
 
@@ -283,6 +327,19 @@ dynamically indexed reads; adjacent ordinary data and external parameter
 storage remain admitted. Compact receipts are in
 `build-mips/compressed-ase/checkpoint.json`; the roundtrip producers remove
 their generated sources, objects and ELFs after their readers finish.
+
+The initial DSP32 addition passed all 313 MIPS tests. Its shared regression
+selected 1,317 tests: 1,271 passed and the same 46 fixture/toolchain-dependent
+cases were skipped. All 344 classic and 20 micro source groups still passed.
+The nine DSP leaves passed 72 source groups at `-O0`/`-O2` and 1,080 scalar and
+post-return DSPControl observations. Receipts distinguish 24 original-model
+zero-destination flag disagreements from generated-code results, which all
+matched independent expectations. Standalone RA writes, module/shard target
+attributes and generated helper scope have dedicated regressions. Compiler
+probes separately execute guarded wide arithmetic and non-inlined helpers.
+Raw results and managed cleanup receipts remain under
+`build-mips/compressed-ase/` and `build-mips/roundtrip-dsp-final/`; this does not
+qualify the DSP/MSA families listed as unsupported above.
 
 ## TP-Link firmware workflow
 

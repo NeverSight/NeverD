@@ -2181,6 +2181,51 @@
       }
     },
     {
+      "id": "analysis.mips.dsp32-r2",
+      "kind": "analysis",
+      "status": "experimental",
+      "owner": "lift",
+      "targets": [
+        "mips",
+        "mipsel"
+      ],
+      "docs": [
+        "docs/mips.md"
+      ],
+      "limitations": [
+        "classic MIPS32r2/o32 linked ELF with DSP ASE evidence; initial RDDSP, WRDSP, ADDU.QB and ADDU_S.QB slice only",
+        "explicit DSPControl state requires an enabled DSP execution environment; no disabled-DSP exception delivery or invented initial state",
+        "DSPR2, DSP64, compressed DSP, accumulators, other DSP forms and MSA remain unsupported",
+        "original-target source preserves DSPControl after return; no portable-host execution or floating/vector ABI claim"
+      ],
+      "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSPipelineTests",
+          "source": "unittests/lift/mips/MIPSDSPPipelineTests.cpp",
+          "filter": "MIPSDSPPipeline.DiscardedPackedResultStillPublishesMachineState",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPSDSPTests.cpp",
+          "filter": "*/MIPSDSP.SelectorsPreserveUnselectedFieldsAndIgnoreHighBits/*",
+          "platforms": [
+            "darwin"
+          ]
+        }
+      ],
+      "public_surfaces": {
+        "c": [],
+        "python": [],
+        "cli": [],
+        "json": []
+      }
+    },
+    {
       "id": "analysis.ir-view.instruction-anchors",
       "kind": "analysis",
       "status": "experimental",

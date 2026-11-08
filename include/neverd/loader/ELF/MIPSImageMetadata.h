@@ -38,6 +38,8 @@ struct MIPSImageMetadata {
   uint8_t ISARevision = 2;
   /// The ELF admits both classic and microMIPS code, not a global micro mode.
   bool HasMicroMIPS = false;
+  /// Classic MIPS32 DSP ASE; the initial slice requires DSP execution enabled.
+  bool HasDSP = false;
   std::map<uint64_t, InstructionMode> CodeModeEntries;
   std::vector<MIPSCodeRegion> CodeRegions;
   bool HasABIFlags = false;

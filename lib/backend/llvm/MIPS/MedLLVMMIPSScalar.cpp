@@ -9,6 +9,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ArchSupport.h"
+#include "neverd/backend/MIPS/MIPSDSPSource.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
 
@@ -28,6 +29,27 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
     throw std::runtime_error(mips::kUnpredictableResult);
   if (Id == Intrinsic::MIPSLwrUpper)
     throw std::runtime_error(mips::kPartialLwrRequiresWord);
+  if (Id == Intrinsic::MIPSReadDSPControl ||
+      Id == Intrinsic::MIPSWriteDSPControl) {
+    mips::applyDSPSourceAttributes(*B.GetInsertBlock()->getParent());
+    const bool Write = Id == Intrinsic::MIPSWriteDSPControl;
+    llvm::SmallVector<llvm::Type *, 1> Parameters;
+    llvm::SmallVector<llvm::Value *, 1> Arguments;
+    if (Write) {
+      Parameters.push_back(B.getInt32Ty());
+      auto *Value = getVar(Op.Inputs[1], B);
+      Arguments.push_back(Value->getType()->isPointerTy()
+                              ? B.CreatePtrToInt(Value, B.getInt32Ty())
+                              : B.CreateZExtOrTrunc(Value, B.getInt32Ty()));
+    }
+    auto *Type = llvm::FunctionType::get(Write ? B.getVoidTy() : B.getInt32Ty(),
+                                         Parameters, false);
+    return B.CreateCall(
+        llvm::InlineAsm::get(
+            Type, Write ? mips::DSPWriteAsm : mips::DSPReadAsm,
+            Write ? mips::DSPWriteConstraints : mips::DSPReadConstraints, true),
+        Arguments);
+  }
   const auto Coerce = [&](llvm::Value *V, llvm::Type *T) {
     return V->getType()->isPointerTy() ? B.CreatePtrToInt(V, T)
                                        : B.CreateZExtOrTrunc(V, T);

@@ -182,6 +182,8 @@ bool Decoder::init(Arch TheArch, InstructionMode Mode) {
 
 void Decoder::configureFor(const BinaryImage &Img) {
   configureX86For(Img);
+  if (MIPS)
+    MIPS->setDSPEnabled(Img.MIPS && Img.MIPS->HasDSP);
   if (AArch64)
     AArch64->setPreserveImmediateMemory(
         Img.isArm64e() &&
@@ -222,7 +224,7 @@ bool Decoder::selectMode(const BinaryImage &Img, va_t Addr,
        (!isMIPS64(Img.Arch) && Addr > UINT32_MAX)))
     return false;
   if (Handle && TargetArch == Img.Arch && CurrentMode == *Mode) {
-    if (AArch64)
+    if (AArch64 || MIPS)
       configureFor(Img);
     return true;
   }
@@ -232,7 +234,7 @@ bool Decoder::selectMode(const BinaryImage &Img, va_t Addr,
     return false;
   setDetail(WasDetail);
   setText(WasText);
-  if (AArch64)
+  if (AArch64 || MIPS)
     configureFor(Img);
   return true;
 }

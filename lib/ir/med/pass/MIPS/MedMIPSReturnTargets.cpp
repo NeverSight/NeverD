@@ -12,6 +12,7 @@
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/med/MIPS/MIPSReturnTargets.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
@@ -62,10 +63,16 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
       return false;
     BlockIndices.emplace(&Block, I);
     for (const auto &Op : Block.Ops) {
+      const bool DSPStateTransfer =
+          Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+          Op.Inputs[0].isConst() &&
+          mips::isDSPControlIntrinsic(
+              static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) &&
+          mipsScalarMedShapeIsValid(Op, Target);
       if ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) && Op.NumInputs)
         MemoryAddresses.push_back(Op.Inputs[0]);
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
-          (Op.Opcode == NdOp::INTRINSIC &&
+          (Op.Opcode == NdOp::INTRINSIC && !DSPStateTransfer &&
            (Op.NumInputs != 3 || !Op.Inputs[0].isConst() ||
             Op.Inputs[0].ConstVal != uint64_t(Intrinsic::RequireAligned))) ||
           Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||

@@ -15232,6 +15232,14 @@ and before ABI recovery, binds physical LowIR occurrences to MedIR, and removes
 only a first load's unobserved old-value operand. Both reads remain ordered;
 calls, PHIs, exceptional flow and unproved uses retain their original inputs.
 
+The DSP32 scalar slice keeps feature admission in `ELFMIPSProfile` and carries
+it through decoder reuse. `MIPSDSP.def` owns control field groups and instruction
+encodings. `MIPSLiftDSP` emits ordinary lane arithmetic plus effectful
+DSPControl read/write intrinsics. The LowIR emulator requires supplied state;
+the source backends preserve original-machine transfers through
+`MIPSDSPSource`. These transfers remain observable independently of integer
+return values, including when packed arithmetic discards its GPR destination.
+
 The focused MIPS loader, integer, flow, SDK and pipeline suites cover these
 contracts. Owned kernels are recompiled from HighC and LLVMC for the original
 MIPS target and compared with their assembly originals in pinned Unicorn.
