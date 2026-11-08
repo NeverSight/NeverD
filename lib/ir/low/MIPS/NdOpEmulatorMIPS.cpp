@@ -9,8 +9,10 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
+#include "neverd/ir/intrinsics/MIPS/MIPSDSP.h"
 #include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/low/NdOpEmulator.h"
+#include "neverd/lift/MIPS/MIPSRegs.h"
 
 #include "llvm/Support/MathExtras.h"
 
@@ -20,6 +22,13 @@ bool NdOpEmulator::executeMIPSScalar(const LowOp &Op) {
   if (!mipsScalarLowShapeIsValid(Op, Img.Arch))
     return false;
   const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+  if (Id == Intrinsic::MIPSReadDSPControl) {
+    const auto State = NdVar::reg(mipsreg::DSPControl, 4);
+    if (!knownOperandBytes(State, 0, 4))
+      return false;
+    writeOutput(Op.Output, readOperand(State) & mips::DSPControlBits);
+    return true;
+  }
   if (Id == Intrinsic::MIPSUnpredictable) {
     writeOutput(Op.Output, 0,
                 llvm::maskTrailingOnes<uint64_t>(Op.Output.Size * 8));
@@ -28,6 +37,11 @@ bool NdOpEmulator::executeMIPSScalar(const LowOp &Op) {
   if (!knownOperandBytes(Op.Inputs[1], 0, Op.Inputs[1].Size))
     return false;
   const uint64_t First = readOperand(Op.Inputs[1]);
+  if (Id == Intrinsic::MIPSWriteDSPControl) {
+    writeOutput(NdVar::reg(mipsreg::DSPControl, 4),
+                First & mips::DSPControlBits);
+    return true;
+  }
   if (Id == Intrinsic::MIPSRequireWord)
     return First == mips::signExtendWord(First);
   if (Id == Intrinsic::MIPSLwrUpper) {

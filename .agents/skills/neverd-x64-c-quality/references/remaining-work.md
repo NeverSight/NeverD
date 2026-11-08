@@ -1680,3 +1680,10 @@ including whole-unit typed callers and stack arguments. Native linkage and
 service dispatch remain environment bindings; this is not portable ordinary
 C or an implementation of the service. General incoming-slot/borrow proofs
 and physical interrupt/system entry return ownership remain separate work.
+
+- C header macros no longer hide lexical errors or use failed integer
+  conversions when expanded. The declaration lexer retains the diagnostic and
+  reports the actual invocation before types are published, including through
+  another macro. Unused/redefined/removed replacements retain prior behavior.
+  This corrects accepted malformed declarations; it does not supply missing
+  Windows prototypes or infer unknown entry state.

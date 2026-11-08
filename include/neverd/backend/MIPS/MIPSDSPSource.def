@@ -1,0 +1,37 @@
+//===- MIPSDSPSource.def - Original-machine DSP state transfers ----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+#ifndef NEVERD_MIPS_DSP_SOURCE_TEXT
+#define NEVERD_MIPS_DSP_SOURCE_TEXT(Name, Text)
+#endif
+
+NEVERD_MIPS_DSP_SOURCE_TEXT(DSPReadAsm,
+                            ".set push\n.set dsp\nrddsp $0, 63\n.set pop")
+NEVERD_MIPS_DSP_SOURCE_TEXT(DSPWriteAsm,
+                            ".set push\n.set dsp\nwrdsp $0, 63\n.set pop")
+NEVERD_MIPS_DSP_SOURCE_TEXT(DSPReadConstraints, "=r,~{memory}")
+NEVERD_MIPS_DSP_SOURCE_TEXT(DSPWriteConstraints, "r,~{memory}")
+NEVERD_MIPS_DSP_SOURCE_TEXT(DSPSourceCAttribute,
+                            "__attribute__((target(\"no-dsp,no-dspr2\"))) ")
+NEVERD_MIPS_DSP_SOURCE_TEXT(DSPSourceMarker, "neverd.mips.dspcontrol")
+NEVERD_MIPS_DSP_SOURCE_TEXT(DSPSourceFeatures, "-dsp,-dspr2")
+NEVERD_MIPS_DSP_SOURCE_TEXT(DSPFeatureAttribute, "target-features")
+NEVERD_MIPS_DSP_SOURCE_TEXT(
+    DSPSourceCBegin,
+    "#if !defined(__clang__)\n"
+    "#error \"MIPS DSP source requires Clang target attributes\"\n"
+    "#endif\n"
+    "#pragma clang attribute push "
+    "(__attribute__((target(\"no-dsp,no-dspr2\"))), apply_to=function)\n\n")
+NEVERD_MIPS_DSP_SOURCE_TEXT(DSPSourceCEnd, "\n#pragma clang attribute pop\n")
+NEVERD_MIPS_DSP_SOURCE_TEXT(
+    DSPReadCAsm, "\".set push\\n.set dsp\\nrddsp %0, 63\\n.set pop\"")
+NEVERD_MIPS_DSP_SOURCE_TEXT(
+    DSPWriteCAsm, "\".set push\\n.set dsp\\nwrdsp %0, 63\\n.set pop\"")
+NEVERD_MIPS_DSP_SOURCE_TEXT(
+    MalformedDSPSource,
+    "invalid original-machine MIPS DSPControl source transfer")
+
+#undef NEVERD_MIPS_DSP_SOURCE_TEXT

@@ -91,6 +91,31 @@ TEST_P(MIPSLoader, RuntimeSymbolModesAreValidatedWithoutSectionHeaders) {
             std::string::npos);
 }
 
+TEST_P(MIPSLoader, DSPCapabilityRequiresClassic32BitProfileEvidence) {
+  for (uint32_t ASE : {1u, 2u, 3u, 0x200u, 0x801u}) {
+    ELFBytes File(GetParam());
+    File.abiFlags();
+    File.put(0xec, ASE, 4);
+    if (ASE & 0x800)
+      File.put(File.Is64 ? 48 : 36,
+               (File.Is64 ? 0x80000000u : 0x70001000u) | 0x02000000, 4);
+    ELFLoader Loader;
+    auto Image = Loader.loadBuffer(File.buffer());
+    const bool Admitted = ASE == 1 && !File.Is64;
+    ASSERT_EQ(bool(Image), Admitted);
+    if (Admitted) {
+      ASSERT_TRUE(Image->MIPS);
+      EXPECT_TRUE(Image->MIPS->HasDSP);
+    } else {
+      llvm::consumeError(Image.takeError());
+    }
+    std::vector<LoadCandidate> Candidates;
+    ELFLoader::identify(File.buffer(), Candidates);
+    ASSERT_EQ(Candidates.size(), 1u);
+    EXPECT_EQ(Candidates[0].Loadable, Admitted);
+  }
+}
+
 TEST_P(MIPSLoader, DynamicProgramTagsUseTheImageByteOrder) {
   ELFBytes File(GetParam());
   File.dynamicSymbols(0);

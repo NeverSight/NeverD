@@ -3352,6 +3352,12 @@ published types and diagnostics retain their existing ownership and positions.
 The parser's token streams and macro replacements use a non-inline
 `SmallVector`: their borrowed spellings permit trivial relocation during
 growth without changing token order or extending the parse's spelling arena.
+The lexer writes ordinary tokens into that sequence directly. Macro invocations
+are copied before their slot is removed and expansion can grow the sequence;
+empty replacements and invalid bytes leave no token behind. A lexically invalid
+macro replacement retains its diagnostic instead of partial tokens or a failed
+integer conversion's value. Expansion reports it at the invocation, including
+through another macro; unused, removed or redefined replacements do not fail.
 Token payloads precede their small metadata fields to avoid a leading alignment
 gap. Identifier runs use a local cursor within the input and update their stored
 position once: accepted identifier bytes cannot include a newline. Encoding prefixes still join only
@@ -15225,6 +15231,14 @@ merge loads in a single ordinary leaf block. It runs after SSA/projection/DCE
 and before ABI recovery, binds physical LowIR occurrences to MedIR, and removes
 only a first load's unobserved old-value operand. Both reads remain ordered;
 calls, PHIs, exceptional flow and unproved uses retain their original inputs.
+
+The DSP32 scalar slice keeps feature admission in `ELFMIPSProfile` and carries
+it through decoder reuse. `MIPSDSP.def` owns control field groups and instruction
+encodings. `MIPSLiftDSP` emits ordinary lane arithmetic plus effectful
+DSPControl read/write intrinsics. The LowIR emulator requires supplied state;
+the source backends preserve original-machine transfers through
+`MIPSDSPSource`. These transfers remain observable independently of integer
+return values, including when packed arithmetic discards its GPR destination.
 
 The focused MIPS loader, integer, flow, SDK and pipeline suites cover these
 contracts. Owned kernels are recompiled from HighC and LLVMC for the original

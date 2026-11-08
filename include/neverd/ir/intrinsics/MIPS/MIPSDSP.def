@@ -1,0 +1,30 @@
+//===- MIPSDSP.def - DSP selectors and admitted encodings ----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// MIPS32 DSP control fields and the initial classic r2 instruction subset.
+//===----------------------------------------------------------------------===//
+#ifndef NEVERD_MIPS_DSP_FIELD
+#define NEVERD_MIPS_DSP_FIELD(Name, Selector, Bits)
+#endif
+#ifndef NEVERD_MIPS_DSP_INSTRUCTION
+#define NEVERD_MIPS_DSP_INSTRUCTION(Name, Mask, Value)
+#endif
+
+NEVERD_MIPS_DSP_FIELD(Position, 0x01, 0x0000003f)
+NEVERD_MIPS_DSP_FIELD(ShiftCount, 0x02, 0x00001f80)
+NEVERD_MIPS_DSP_FIELD(Carry, 0x04, 0x00002000)
+NEVERD_MIPS_DSP_FIELD(Overflow, 0x08, 0x00ff0000)
+NEVERD_MIPS_DSP_FIELD(Condition, 0x10, 0x0f000000)
+NEVERD_MIPS_DSP_FIELD(ExtractFailure, 0x20, 0x00004000)
+
+// The ten-bit RDDSP/WRDSP selector ignores its upper four bits.
+NEVERD_MIPS_DSP_INSTRUCTION(ReadControl, 0xfc0007ff, 0x7c0004b8)
+NEVERD_MIPS_DSP_INSTRUCTION(WriteControl, 0xfc0007ff, 0x7c0004f8)
+NEVERD_MIPS_DSP_INSTRUCTION(AddUnsignedBytes, 0xfc0007ff, 0x7c000010)
+NEVERD_MIPS_DSP_INSTRUCTION(AddSaturatedUnsignedBytes, 0xfc0007ff, 0x7c000110)
+
+#undef NEVERD_MIPS_DSP_FIELD
+#undef NEVERD_MIPS_DSP_INSTRUCTION

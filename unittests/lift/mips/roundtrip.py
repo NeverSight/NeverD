@@ -103,14 +103,15 @@ def run_command(artifacts, args, log):
         raise RuntimeError(f"{args[0]} exited {process.returncode}: {log.read_text()[-8192:]}")
 
 
-def emulator(path, bits, little, function, original=None):
+def emulator(path, bits, little, function, original=None, cpu_model=None):
     elf = ELFFile(io.BytesIO(path.read_bytes()))
     uc = Uc(UC_ARCH_MIPS, (UC_MODE_MIPS64 if bits == 64 else UC_MODE_MIPS32)
             | (0 if little else UC_MODE_BIG_ENDIAN))
     micro = bool(elf["e_flags"] & 0x02000000)
-    uc.ctl_set_cpu_model(mips.UC_CPU_MIPS64_MIPS64R2_GENERIC if bits == 64
-                        else mips.UC_CPU_MIPS32_M14KC if micro
-                        else mips.UC_CPU_MIPS32_24KC)
+    uc.ctl_set_cpu_model(cpu_model if cpu_model is not None else
+                        mips.UC_CPU_MIPS64_MIPS64R2_GENERIC if bits == 64 else
+                        mips.UC_CPU_MIPS32_M14KC if micro else
+                        mips.UC_CPU_MIPS32_24KC)
     pages = set()
     images = [ELFFile(io.BytesIO(original.read_bytes())), elf] if original else [elf]
     for image in images:

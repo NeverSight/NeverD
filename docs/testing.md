@@ -7431,6 +7431,15 @@ invocation diagnostics when ordinary identifiers bypass recursive expansion.
 stream through hundreds of records and prototypes on all three data models.
 It checks macro redefinition, wide literals, declaration order and published
 names after overwriting the input and destroying the parse's token storage.
+`TypeParse.EmptyAndGrowingMacroReplacementsKeepDeclarations` checks large
+nested macro replacements, empty annotations and trailing empty expansions.
+It validates record members and literal sizes across all three data models,
+then checks that invalid bytes keep their positions and leave the library intact.
+`TypeParse.InvalidMacroReplacementsFailAtTheirInvocation` rejects lexical
+errors inside used macros, including malformed/overflowing numbers and unfinished
+literals or comments. Direct and nested uses retain the original diagnostic at
+the invocation. Single-function declarations, packing and transactional failure
+with `KeepGoing` are covered, as are unused, removed and redefined replacements.
 `TypeParse.PunctuationKeepsOperatorsDeclaratorsAndErrorPositions` checks
 longest-match operators, qualified names, callbacks, variadics, member access,
 constant expressions and transactional errors on ILP32, LP64 and LLP64. The
@@ -22546,6 +22555,22 @@ signed/unsigned loads, exact store bytes, failed writes and original-target
 execution. Source numeric callable/import values remain explicitly unqualified;
 the pipeline suite checks those refusals as well as ordinary leaf emission.
 
+`MIPSDSPTests` in the integer target covers every control selector, ignored
+selector bits, missing state, sticky flags, saturated lanes, destination/input
+aliases and discarded results. The pipeline target checks that DSPControl
+effects survive both source routes without invented source arguments. Return
+identity, standalone conversion, source shards and generated helper protection
+have separate regressions.
+`unittests/lift/mips/dsp-roundtrip.py` accepts the same explicit `--neverd`,
+`--clang`, `--ld` and `--output` arguments as the ordinary runner. Its nine
+owned `dsp.S` leaves check scalar results and DSPControl after returning, in
+both byte orders and both C routes at `-O0` and `-O2`, with external `-mdsp`
+enabled. It uses the pinned 74Kf model with
+Status.MX enabled. A known original-model zero-destination overflow defect is
+recorded separately; generated results must always satisfy the manual-derived
+expectation. The managed artifact lifecycle retires each generated object and
+executable after its comparisons.
+
 ### MIPS decode/lift and firmware performance
 
 `neverd-mips-bench` is an opt-in target, excluded from the default build:
@@ -22555,8 +22580,9 @@ python3 scripts/build.py build-mips --target neverd-mips-bench --parallel 4
 build-mips/bin/neverd-mips-bench mips64el lift /path/to/owned-code.bin 100000
 ```
 
-Profiles are `mips`, `mipsel`, `mips64`, `mips64el`, `micromips` and
-`micromipsel`. Stages are `capstone`
+Profiles are `mips`, `mipsel`, `mips64`, `mips64el`, `micromips`,
+`micromipsel`, `mipsdsp` and `mipsdspel`. The DSP profiles explicitly select
+the admitted classic32 DSP capability. Stages are `capstone`
 (direct physical decoding), `decode` (NeverD physical decoding) and `lift`
 (decoding plus LowIR, including delay slots). Both decode paths request the same
 selected r2 encoding profile, detail on and text off. The pinned Capstone fork suppresses
