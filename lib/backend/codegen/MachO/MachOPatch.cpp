@@ -56,7 +56,8 @@ using namespace llvm::MachO;
 
 namespace {
 
-constexpr llvm::StringLiteral kPatchDataSegment = "__ND_DATA";
+#define MACHO_PATCH_TEXT(Name, Text) constexpr llvm::StringLiteral Name = Text;
+#include "MachOPatch.def"
 
 struct MachOSectionIdentity {
   std::string Name;
@@ -1245,11 +1246,17 @@ bool MachOPatcher::validateExecSegmentInstall(
 llvm::Error MachOPatcher::appendReplacementImage(
     std::vector<uint8_t> &Binary, const CompiledImage &Image,
     llvm::ArrayRef<MachOAuthenticatedFixup> AuthenticatedFixups) {
-  if (Image.InputKind != RewriteInputKind::ReplacementObject ||
-      !Image.Success || Image.Format != BinaryFormat::MachO ||
+  if ((Image.InputKind != RewriteInputKind::ReplacementObject &&
+       Image.InputKind != RewriteInputKind::ReplacementIR) ||
+      !Image.Success || !Image.BaseVA || Image.Format != BinaryFormat::MachO ||
       Image.BaseVA != plannedExecSegmentVA(Binary, Image.TargetArch))
     return llvm::createStringError(llvm::errc::not_supported,
-                                   "native Mach-O placement identity changed");
+                                   kPlacementIdentity);
+  auto Recipes = collectMachOAuthenticatedFixups(Binary, Image);
+  if (!Recipes)
+    return Recipes.takeError();
+  Recipes->insert(Recipes->end(), AuthenticatedFixups.begin(),
+                  AuthenticatedFixups.end());
   auto Storage =
       validatePatchStorageLayout(Image, machoPageSize(Image.TargetArch));
   if (!Storage)
@@ -1259,12 +1266,11 @@ llvm::Error MachOPatcher::appendReplacementImage(
     if (appendExecSegmentImpl(Candidate, Image.Bytes, kDefaultNdTextSegment,
                               Image.TargetArch, &Receipt,
                               Storage->WritableOffset) != Image.BaseVA)
-      return llvm::createStringError(
-          llvm::errc::not_supported,
-          "native Mach-O segment installation failed");
-    return installMachOAuthenticatedFixups(Candidate, AuthenticatedFixups);
+      return llvm::createStringError(llvm::errc::not_supported,
+                                     kSegmentInstallation);
+    return installMachOAuthenticatedFixups(Candidate, *Recipes);
   };
-  if (AuthenticatedFixups.empty())
+  if (Recipes->empty())
     return Install(Binary);
   auto Before = readMachODependencyState(Binary);
   if (!Before)

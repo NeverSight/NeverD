@@ -171,6 +171,11 @@ struct AndroidNativeOptions {
   /// Same count/total budget as EventLogWrites; complete 3..4068-byte payloads.
   /// No host log, property filter, clock or successful transport is inferred.
   std::optional<std::vector<NativeTextLogWrite>> TextLogWrites;
+  /// API 28 libc's abort_msg_t** binding. Absent is unknown; zero explicitly
+  /// models early libc initialization. A nonzero guest slot contains the live
+  /// first-message pointer. Reads, mmap and publication use ordinary guest RAM;
+  /// no slot or initial message is synthesized, and access checks stay lazy.
+  std::optional<uint64_t> AbortMessageSlot;
   std::vector<NativeMemoryRegion> Memory;
   std::vector<NativeMemoryRead> ReadMemory;
   /// Constructors normally execute before the call, sharing its budget.

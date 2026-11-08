@@ -23,7 +23,8 @@ MACHO_AUTH_FIXUP_VALUE(unsigned, kCodeSignatureAlignment, 16)
 MACHO_AUTH_FIXUP_VALUE(uint16_t, kDefaultPointerFormat,
                        llvm::MachO::DYLD_CHAINED_PTR_ARM64E_USERLAND)
 MACHO_AUTH_FIXUP_TEXT(kErrorPrefix, "Mach-O authenticated fixup: ")
-MACHO_AUTH_FIXUP_TEXT(kImageABI, "requires a linked arm64e chained image")
+MACHO_AUTH_FIXUP_TEXT(kImageABI,
+                      "requires a linked arm64e chained or threaded image")
 MACHO_AUTH_FIXUP_TEXT(kPointerFormat, "unsupported authenticated chain format")
 MACHO_AUTH_FIXUP_TEXT(kRecipe, "incomplete or contradictory signing recipe")
 MACHO_AUTH_FIXUP_TEXT(kStorage, "storage is not aligned writable image data")
@@ -37,6 +38,14 @@ MACHO_AUTH_FIXUP_TEXT(kReplay,
                       "installed signing recipe differs from its request")
 MACHO_AUTH_FIXUP_TEXT(kSignature,
                       "code signature has no unique terminal LINKEDIT extent")
+
+MACHO_AUTH_FIXUP_TEXT(kThreadedSegment,
+                      "threaded segment ordinal exceeds its immediate field")
+
+MACHO_AUTH_FIXUP_TEXT(kProducer,
+                      "incomplete or inconsistent producer signing receipt")
+MACHO_AUTH_FIXUP_TEXT(kProducerImport,
+                      "producer symbol has no unique existing dyld provider")
 
 #undef MACHO_AUTH_FIXUP_VALUE
 #undef MACHO_AUTH_FIXUP_TEXT

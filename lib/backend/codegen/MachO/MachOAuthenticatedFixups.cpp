@@ -11,14 +11,21 @@
 
 #include "MachODependencyState.h"
 
+#include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
+#include "neverd/loader/MachO/MachOThreadedBind.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Errc.h"
+#include "llvm/Support/LEB128.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <climits>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -86,7 +93,8 @@ llvm::Error validateRecipe(const MachOAuthenticatedPointer &Recipe,
       llvm::StringRef(Recipe.Symbol).contains('\0'))
     return fail(kRecipe);
   const auto Ordinal = *Recipe.LibraryOrdinal;
-  if (Ordinal < kMinLibraryOrdinal || Ordinal > kMaxLibraryOrdinal ||
+  if (Ordinal < kMinLibraryOrdinal ||
+      (!Chains.Threaded && Ordinal > kMaxLibraryOrdinal) ||
       Ordinal > int64_t(Chains.Libraries.size()) ||
       (Ordinal > 0 ? Recipe.Module != Chains.Libraries[Ordinal - 1]
                    : !Recipe.Module.empty()))
@@ -172,7 +180,8 @@ llvm::Error replay(const MachOChainedFixups &Chains,
       const auto &Import = Chains.Imports[Word->Target];
       if (Import.Ordinal != *Recipe.LibraryOrdinal ||
           Import.Name != Recipe.Symbol || Import.Addend != Recipe.Addend ||
-          bool(Import.Flags) != Recipe.WeakImport)
+          bool(Import.Flags & BIND_SYMBOL_FLAGS_WEAK_IMPORT) !=
+              Recipe.WeakImport)
         return fail(kReplay);
     } else {
       const auto Base = Format->Segmented
@@ -185,6 +194,91 @@ llvm::Error replay(const MachOChainedFixups &Chains,
   return llvm::Error::success();
 }
 } // namespace
+
+llvm::Expected<std::vector<MachOAuthenticatedFixup>>
+neverd::collectMachOAuthenticatedFixups(llvm::ArrayRef<uint8_t> Original,
+                                        const CompiledImage &Image) {
+  std::vector<MachOAuthenticatedFixup> Result;
+  // Most images have no signing receipts. Do not parse dyld metadata unless
+  // there is work for this owner, and index the original imports only once.
+  bool Needed = false;
+  for (const auto &Section : Image.Sections)
+    for (const auto &Reference : Section.FixupReferences)
+      Needed |= Reference.PointerAuth.has_value();
+  if (!Needed)
+    return Result;
+  if (!Image.Success || Image.Format != BinaryFormat::MachO ||
+      Image.TargetArch != Arch::AArch64 ||
+      Image.PointerWidth != arm64e::kPointerBytes ||
+      Image.ByteOrder != llvm::endianness::little)
+    return fail(kProducer);
+  MachOChainedFixups Chains;
+  auto State = readMachODependencyState(Original, &Chains);
+  if (!State)
+    return State.takeError();
+  if (State->CPUType != CPU_TYPE_ARM64 ||
+      !arm64e::isSubtype(State->CPUSubtype) || !Chains.CommandOffset)
+    return fail(kImageABI);
+  using Provider = std::pair<int64_t, bool>;
+  std::map<llvm::StringRef, std::optional<Provider>> Providers;
+  for (const auto &Import : Chains.Imports) {
+    const Provider Identity{Import.Ordinal,
+                            bool(Import.Flags & BIND_SYMBOL_FLAGS_WEAK_IMPORT)};
+    auto [It, Added] = Providers.emplace(Import.Name, Identity);
+    if (!Added && It->second != Identity)
+      It->second.reset();
+  }
+  for (const auto &Section : Image.Sections) {
+    for (const auto &Reference : Section.FixupReferences) {
+      if (!Reference.PointerAuth)
+        continue;
+      if (!Section.IsAllocated || !Section.IsInImage ||
+          Section.Kind != llvm::mc_rewrite::RewriteSectionKind::WritableData ||
+          !rangeInBounds(Section.Offset, Section.Size, Image.Bytes.size()) ||
+          !rangeInBounds(Reference.Offset, arm64e::kPointerBytes,
+                         Section.Size) ||
+          Section.Offset > UINT64_MAX - Image.BaseVA ||
+          Section.VA != Image.BaseVA + Section.Offset ||
+          Reference.Offset > UINT64_MAX - Section.VA ||
+          Reference.BitWidth != arm64e::kPointerBytes * CHAR_BIT ||
+          !Reference.IsResolved || Reference.IsPCRel ||
+          Reference.Symbol.empty() || !Reference.SubtractSymbol.empty() ||
+          readLE<uint64_t>(Image.Bytes.data() + Section.Offset +
+                           Reference.Offset))
+        return fail(kProducer);
+      const auto &Auth = *Reference.PointerAuth;
+      MachOAuthenticatedFixup Fixup;
+      Fixup.Address = Section.VA + Reference.Offset;
+      Fixup.Recipe.Key = Auth.Key;
+      Fixup.Recipe.Diversity = Auth.Diversity;
+      Fixup.Recipe.AddressDiversity = Auth.AddressDiversity;
+      if (auto Target = Image.SymbolAddrs.find(Reference.Symbol);
+          Target != Image.SymbolAddrs.end()) {
+        constexpr unsigned WideBits = 2 * arm64e::kPointerBytes * CHAR_BIT;
+        const llvm::APInt Address =
+            llvm::APInt(WideBits, Target->second) +
+            llvm::APInt(WideBits, Reference.Addend, true);
+        if (!Address.isIntN(arm64e::kPointerBytes * CHAR_BIT) ||
+            Address.getZExtValue() != Reference.ResolvedValue)
+          return fail(kProducer);
+        Fixup.Recipe.Target = Reference.ResolvedValue;
+      } else {
+        auto Provider = Providers.find(Reference.Symbol);
+        if (Provider == Providers.end() || !Provider->second)
+          return fail(kProducerImport);
+        const auto [Ordinal, Weak] = *Provider->second;
+        Fixup.Recipe.Symbol = Reference.Symbol;
+        Fixup.Recipe.LibraryOrdinal = Ordinal;
+        if (Ordinal > 0)
+          Fixup.Recipe.Module = Chains.Libraries[Ordinal - 1];
+        Fixup.Recipe.WeakImport = Weak;
+        Fixup.Recipe.Addend = Reference.Addend;
+      }
+      Result.push_back(std::move(Fixup));
+    }
+  }
+  return Result;
+}
 
 llvm::Error neverd::installMachOAuthenticatedFixups(
     std::vector<uint8_t> &Binary,
@@ -224,7 +318,8 @@ llvm::Error neverd::installMachOAuthenticatedFixups(
       });
   if (BadSignature)
     return fail(kSignature);
-  uint16_t PointerFormat = kDefaultPointerFormat;
+  uint16_t PointerFormat =
+      Chains.Threaded ? DYLD_CHAINED_PTR_ARM64E : kDefaultPointerFormat;
   for (const auto &Segment : Chains.Segments)
     if (Segment.PointerFormat)
       PointerFormat = Segment.PointerFormat;
@@ -271,6 +366,7 @@ llvm::Error neverd::installMachOAuthenticatedFixups(
       offsetof(dyld_chained_starts_in_segment, page_start);
   const auto Next = Format->Segmented ? arm64e::kSegmentedNext : arm64e::kNext;
   const auto NextMask = maximum(Next) << Next.Low;
+  std::vector<macho_loader::threaded::Root> ThreadedRoots;
   std::vector<uint8_t> Starts(sizeof(uint32_t) * (Chains.Segments.size() + 1));
   if (Starts.size() > UINT32_MAX)
     return fail(kExtent);
@@ -283,9 +379,10 @@ llvm::Error neverd::installMachOAuthenticatedFixups(
       return Left.Offset < Right.Offset;
     });
     const auto PageCount = Segment.Slots.back().Offset / Segment.PageSize + 1;
-    if (PageCount > UINT16_MAX)
+    if (!Chains.Threaded && PageCount > UINT16_MAX)
       return fail(kExtent);
-    std::vector<uint16_t> PageStarts(PageCount, DYLD_CHAINED_PTR_START_NONE);
+    std::vector<uint16_t> PageStarts(Chains.Threaded ? 0 : PageCount,
+                                     DYLD_CHAINED_PTR_START_NONE);
     std::vector<uint16_t> Roots;
     for (size_t First = 0; First < Segment.Slots.size();) {
       const auto Page = Segment.Slots[First].Offset / Segment.PageSize;
@@ -296,8 +393,15 @@ llvm::Error neverd::installMachOAuthenticatedFixups(
              Segment.Slots[End].Offset / Segment.PageSize == Page;
            ++End) {
         auto &Slot = Segment.Slots[End];
-        if (ChainStart)
-          Roots.push_back(Slot.Offset % Segment.PageSize);
+        if (ChainStart) {
+          if (Chains.Threaded) {
+            if (I > BIND_IMMEDIATE_MASK)
+              return fail(kThreadedSegment);
+            ThreadedRoots.push_back({unsigned(I), Slot.Offset});
+          } else {
+            Roots.push_back(Slot.Offset % Segment.PageSize);
+          }
+        }
         uint64_t Delta = 0;
         if (End + 1 < Segment.Slots.size()) {
           const auto &Following = Segment.Slots[End + 1];
@@ -313,6 +417,10 @@ llvm::Error neverd::installMachOAuthenticatedFixups(
                           Slot.Raw);
         ChainStart = Delta == 0;
       }
+      if (Chains.Threaded) {
+        First = End;
+        continue;
+      }
       if (Roots.size() == 1) {
         PageStarts[Page] = Roots.front();
       } else {
@@ -325,6 +433,8 @@ llvm::Error neverd::installMachOAuthenticatedFixups(
       }
       First = End;
     }
+    if (Chains.Threaded)
+      continue;
     Starts.resize(llvm::alignTo(Starts.size(), arm64e::kPointerBytes), 0);
     const auto At = Starts.size();
     const auto Size =
@@ -345,46 +455,86 @@ llvm::Error neverd::installMachOAuthenticatedFixups(
       writeLE<uint16_t>(Starts.data() + At + StartHeader + P * sizeof(uint16_t),
                         PageStarts[P]);
   }
-  std::vector<uint8_t> Names, Table;
-  for (const auto &Import : Chains.Imports) {
-    if (Names.size() > UINT32_MAX ||
-        Import.Name.size() >= UINT32_MAX - Names.size())
+  std::vector<uint8_t> Metadata;
+  if (Chains.Threaded) {
+    if (Chains.Imports.size() > arm64e::kThreadedMaxOrdinalCount)
+      return fail(kImport);
+    llvm::SmallVector<char> Program;
+    llvm::raw_svector_ostream OS(Program);
+    const auto Opcode = [&](unsigned Value) { OS << char(Value); };
+    Opcode(arm64e::kThreadedOpcode | arm64e::kThreadedTableSize);
+    llvm::encodeULEB128(Chains.Imports.size(), OS);
+    for (const auto &Import : Chains.Imports) {
+      if (Import.Ordinal <= 0) {
+        Opcode(BIND_OPCODE_SET_DYLIB_SPECIAL_IMM |
+               (Import.Ordinal & BIND_IMMEDIATE_MASK));
+      } else {
+        Opcode(BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB);
+        llvm::encodeULEB128(Import.Ordinal, OS);
+      }
+      Opcode(BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM | Import.Flags);
+      OS << Import.Name;
+      Opcode(0);
+      Opcode(BIND_OPCODE_SET_TYPE_IMM | BIND_TYPE_POINTER);
+      Opcode(BIND_OPCODE_SET_ADDEND_SLEB);
+      llvm::encodeSLEB128(Import.Addend, OS);
+      Opcode(BIND_OPCODE_DO_BIND);
+    }
+    for (const auto &Root : ThreadedRoots) {
+      Opcode(BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB | Root.SegmentIndex);
+      llvm::encodeULEB128(Root.Offset, OS);
+      Opcode(arm64e::kThreadedOpcode | arm64e::kThreadedApply);
+    }
+    Opcode(BIND_OPCODE_DONE);
+    Metadata.assign(Program.begin(), Program.end());
+  } else {
+    std::vector<uint8_t> Names, Table;
+    for (const auto &Import : Chains.Imports) {
+      if (Names.size() > UINT32_MAX ||
+          Import.Name.size() >= UINT32_MAX - Names.size())
+        return fail(kExtent);
+      const auto At = Table.size();
+      Table.resize(At + sizeof(dyld_chained_import_addend64));
+      writeLE<uint64_t>(Table.data() + At,
+                        uint64_t(uint16_t(Import.Ordinal)) |
+                            uint64_t(Import.Flags) << kImportWeakBit |
+                            uint64_t(Names.size()) << kImportNameBit);
+      writeLE<uint64_t>(Table.data() + At + sizeof(uint64_t), Import.Addend);
+      Names.insert(Names.end(), Import.Name.begin(), Import.Name.end());
+      Names.push_back(0);
+    }
+    dyld_chained_fixups_header Header{};
+    Metadata.resize(llvm::alignTo(sizeof(Header), arm64e::kPointerBytes), 0);
+    Header.starts_offset = Metadata.size();
+    Metadata.insert(Metadata.end(), Starts.begin(), Starts.end());
+    Metadata.resize(llvm::alignTo(Metadata.size(), arm64e::kPointerBytes), 0);
+    if (Metadata.size() > UINT32_MAX ||
+        Table.size() > UINT32_MAX - Metadata.size() ||
+        Names.size() > UINT32_MAX - Metadata.size() - Table.size())
       return fail(kExtent);
-    const auto At = Table.size();
-    Table.resize(At + sizeof(dyld_chained_import_addend64));
-    writeLE<uint64_t>(Table.data() + At,
-                      uint64_t(uint16_t(Import.Ordinal)) |
-                          uint64_t(Import.Flags) << kImportWeakBit |
-                          uint64_t(Names.size()) << kImportNameBit);
-    writeLE<uint64_t>(Table.data() + At + sizeof(uint64_t), Import.Addend);
-    Names.insert(Names.end(), Import.Name.begin(), Import.Name.end());
-    Names.push_back(0);
+    Header.imports_offset = Metadata.size();
+    Metadata.insert(Metadata.end(), Table.begin(), Table.end());
+    Header.symbols_offset = Metadata.size();
+    Metadata.insert(Metadata.end(), Names.begin(), Names.end());
+    Header.imports_count = Chains.Imports.size();
+    Header.imports_format = DYLD_CHAINED_IMPORT_ADDEND64;
+    std::memcpy(Metadata.data(), &Header, sizeof(Header));
   }
-  dyld_chained_fixups_header Header{};
-  std::vector<uint8_t> Metadata(
-      llvm::alignTo(sizeof(Header), arm64e::kPointerBytes), 0);
-  Header.starts_offset = Metadata.size();
-  Metadata.insert(Metadata.end(), Starts.begin(), Starts.end());
-  Metadata.resize(llvm::alignTo(Metadata.size(), arm64e::kPointerBytes), 0);
-  if (Metadata.size() > UINT32_MAX ||
-      Table.size() > UINT32_MAX - Metadata.size() ||
-      Names.size() > UINT32_MAX - Metadata.size() - Table.size())
-    return fail(kExtent);
-  Header.imports_offset = Metadata.size();
-  Metadata.insert(Metadata.end(), Table.begin(), Table.end());
-  Header.symbols_offset = Metadata.size();
-  Metadata.insert(Metadata.end(), Names.begin(), Names.end());
-  Header.imports_count = Chains.Imports.size();
-  Header.imports_format = DYLD_CHAINED_IMPORT_ADDEND64;
-  std::memcpy(Metadata.data(), &Header, sizeof(Header));
   Candidate.resize(llvm::alignTo(Candidate.size(), arm64e::kPointerBytes), 0);
   if (Candidate.size() > UINT32_MAX ||
       Metadata.size() > UINT32_MAX - Candidate.size())
     return fail(kExtent);
-  auto *Command = reinterpret_cast<linkedit_data_command *>(
-      Candidate.data() + Chains.CommandOffset);
-  Command->dataoff = Candidate.size();
-  Command->datasize = Metadata.size();
+  if (Chains.Threaded) {
+    auto *Command = reinterpret_cast<dyld_info_command *>(Candidate.data() +
+                                                          Chains.CommandOffset);
+    Command->bind_off = Candidate.size();
+    Command->bind_size = Metadata.size();
+  } else {
+    auto *Command = reinterpret_cast<linkedit_data_command *>(
+        Candidate.data() + Chains.CommandOffset);
+    Command->dataoff = Candidate.size();
+    Command->datasize = Metadata.size();
+  }
   Candidate.insert(Candidate.end(), Metadata.begin(), Metadata.end());
   if (Signature) {
     // codesign requires the old signature to terminate the file. Retain its

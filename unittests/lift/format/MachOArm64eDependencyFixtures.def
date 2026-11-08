@@ -99,6 +99,59 @@ ARM64E_DEPENDENCY_IMPORT_MUTATION(0x20c0, 0x1ULL)
 ARM64E_DEPENDENCY_IMPORT_MUTATION(0x20c0, 0x10000ULL)
 ARM64E_DEPENDENCY_IMPORT_MUTATION(0x20c8, 0x1ULL)
 ARM64E_DEPENDENCY_IMPORT_MUTATION(0x20e0, 0x1ULL)
+// Legacy threaded table, one signed import and one root in DATA_CONST.
+ARM64E_DEPENDENCY_TEXT(kThreadedProgram,
+                       "\xd0\x01\x11\x40_target\0\x51\x60\x7c\x90\x71\0\xd1\0")
+ARM64E_DEPENDENCY_VALUE(unsigned, kThreadedSymbolFlagsOffset, 3)
+ARM64E_DEPENDENCY_VALUE(size_t, kThreadedLongSymbolBytes, 1u << 20)
+ARM64E_DEPENDENCY_VALUE(char, kThreadedLongSymbolByte, 's')
+ARM64E_DEPENDENCY_VALUE(unsigned, kThreadedSmallCopyCount, 12)
+ARM64E_DEPENDENCY_VALUE(unsigned, kThreadedLargeCopyCount, 16)
+ARM64E_DEPENDENCY_TEXT(kThreadedCopyDiagnostic,
+                       "threaded bind names exceed copied-byte budget")
+
+ARM64E_DEPENDENCY_TEXT(kProducerTriple, "arm64e-apple-macosx14.0.0")
+ARM64E_DEPENDENCY_TEXT(kProducerModule, "arm64e-producer")
+ARM64E_DEPENDENCY_TEXT(
+    kMissingProducer,
+    "configured LLVM predates authenticated MC recipe callbacks")
+ARM64E_DEPENDENCY_TEXT(kProducerAssembly, R"asm(
+.text
+.p2align 2
+.globl _installed
+_installed:
+ret
+.data
+.p2align 3
+.globl _slots
+_slots:
+.quad _installed@AUTH(ia,4660,addr)
+.quad (_target-4)@AUTH(db,4660)
+.subsections_via_symbols
+)asm")
+
+ARM64E_DEPENDENCY_TEXT(kProducerIR, R"ir(
+@target = external global i8
+@rebased = global ptr ptrauth (ptr @installed, i32 0, i64 4660, ptr @rebased), align 8
+@bound = global [1 x ptr] [ptr ptrauth (ptr getelementptr(i8, ptr @target, i64 -4), i32 3, i64 4660)], align 8
+define void @installed() {
+  ret void
+}
+)ir")
+
+ARM64E_DEPENDENCY_TEXT(kNestedProducerIR, R"ir(
+@target = external global i8
+@bound = global [1 x ptr] [ptr ptrauth (ptr getelementptr(i8, ptr @target, i64 -4), i32 3, i64 4660)], align 8
+define void @installed() {
+  ret void
+}
+)ir")
+
+ARM64E_DEPENDENCY_TEXT(
+    kWideThreadedProgram,
+    "\xd0\x01\x20\xf1\xff\x03\x40_target\0\x51\x60\x7c\x90\x71\0\xd1\0")
+ARM64E_DEPENDENCY_VALUE(int64_t, kWideThreadedLibraryOrdinal, 0xfff1)
+
 #undef ARM64E_DEPENDENCY_VALUE
 #undef ARM64E_DEPENDENCY_TEXT
 #undef ARM64E_DEPENDENCY_CHAIN

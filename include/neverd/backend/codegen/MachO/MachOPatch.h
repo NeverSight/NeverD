@@ -52,9 +52,9 @@ public:
                              llvm::ArrayRef<uint8_t> Code,
                              llvm::StringRef SegName, Arch TargetArch) override;
 
-  /// Install a separately authenticated native producer image. MC owner and
-  /// range identities remain absent; storage and segment receipts are shared.
-  /// Optional authenticated recipes use final image VAs. Segment placement and
+  /// Install a replacement IR or native object image. Producer fixup receipts
+  /// generate authenticated recipes automatically at final section VAs.
+  /// Optional explicit recipes use final image VAs. Segment placement and
   /// dyld installation commit together; this does not authorize publication
   /// without the caller's code-signature and call/unwind ABI checks.
   llvm::Error appendReplacementImage(

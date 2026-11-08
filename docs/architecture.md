@@ -1379,23 +1379,46 @@ diversity accompany the final storage address and resolved unsigned target.
 Authenticated storage requires a consuming installer. Its result is not
 overwritten by the object writer's authentication metadata encoding. This MC
 contract is the handoff for a dyld fixup installer, not an offline PAC signing
-operation. The r6 prebuilt does not yet expose this fork interface.
+operation. The r6 prebuilt does not yet expose this fork interface. Its rewrite
+entry refuses nested `ptrauth` global constants before emission; ordinary native
+object emission retains their authentication relocations.
 
-`MachOAuthenticatedFixups` installs explicit final-address signing recipes in
-linked arm64e chained images. It reuses the strict dependency reader's owned
-segments, imports and raw slots, preserves existing binding identities, and
-rebuilds single/multiple-start pages with each format's native stride and index
-width. Local targets retain their mapped image owner; imported targets retain
-the exact existing library ordinal, symbol, addend and weak flag. The six
+`CompiledImage` retains the fork's typed MC signing receipts through sizing
+and final layout compilation. Authenticated slots remain zero until installation;
+only arm64e Mach-O replacement IR has a signing owner. The final collector
+uses exact local symbol addresses and addends, or one unambiguous existing dyld
+provider for an external symbol. Missing/conflicting providers, unresolved or
+subtracted expressions, non-writable storage and stale placement fail before
+mutation. The r6 build cannot exercise this MC callback path; its integration
+test is explicitly skipped until a toolchain exposing the fork interface is used.
+
+`MachOAuthenticatedFixups` installs final-address signing recipes in linked
+arm64e chained and legacy threaded images. It reuses the strict dependency
+reader's owned segments, imports and raw slots, preserves existing binding
+identities, and rebuilds single/multiple-start pages with each format's native
+stride and index width. Local targets retain their mapped image owner; imported
+targets retain the exact existing library ordinal, symbol, addend and weak flag. The six
 arm64e chain formats share the same pointer-field authority. Segmented chains
 cannot express binds and reject them. Imports may extend the table but do not
 create dependency load commands or infer a provider.
 
-Installation is transactional, including the optional recipe handoff in
-`MachOPatcher::appendReplacementImage`. New RX/RW placement precedes dyld
-encoding so address diversity uses the final storage VA. Re-decoding compares
-every requested recipe and preserves every original fixup. A staged signature
-remains opaque and terminal in LINKEDIT so the existing publication signer can
+The original threaded format reuses the analysis reader's bytecode plan and
+the same arm64e word decoder as modern chains. Installation rebuilds the ordinal
+table and APPLY roots, preserving raw import flags, signed addends and special
+library ordinals. Missing DONE, nonzero trailing bytes, duplicate roots and
+conflicting slot ownership fail without publication. Auxiliary rebase/weak/lazy
+streams remain unsupported alongside threaded chains; their phase ordering is
+not inferred. The strict snapshot charges the existing threaded string-copy
+budget for the table, optional owned imports and each slot's symbol name.
+Repeated long imports therefore cannot create unbounded snapshot copies.
+
+Installation is transactional, including automatic producer receipts and the
+optional explicit recipe handoff in `MachOPatcher::appendReplacementImage`.
+Failed placement planning cannot authorize installation at the zero error
+sentinel. New RX/RW placement precedes dyld encoding so address diversity uses
+the final storage VA. Re-decoding compares every requested recipe and preserves
+every original fixup. A staged signature remains opaque and terminal in LINKEDIT
+so the existing publication signer can
 replace it; retaining those bytes does not validate its old hashes. An
 independent replay also checks recipes after final code signing.
 
@@ -1405,9 +1428,18 @@ change when a new load command is inserted. Such a changed target is rejected
 without publishing any bytes.
 
 This installation phase does not enable whole-image arm64e publication. The
-compiler/native-object producer handoff, legacy threaded-stream installation,
-new provider admission and native signed call/unwind execution remain separate
-contracts. The publication guard remains until those contracts are qualified.
+native-object producer handoff, qualification of the new MC interface with a
+post-r6 toolchain, new provider admission and native signed call/unwind execution
+remain separate contracts. Apple ld-classic fixtures use `-no_fixup_chains`;
+`otool -dyld_info` independently verifies legacy bind symbols, diversity and
+address diversity because the current `dyld_info` refuses that format. Apple's
+[legacy otool decoder](https://github.com/apple-oss-distributions/cctools/blob/main/otool/dyld_bind_info.c)
+masks the key with `2` instead of `3`, losing the IA/IB and DA/DB distinction.
+Tests check both raw key bits for all four keys and the decoded names for IA/DA;
+the latter tool cannot independently qualify IB/DB or legacy rebases. Rebase
+replay and per-PC signed CFI comparisons remain offline checks, not proof of
+runtime dyld/unwinder execution. The publication guard remains until those
+contracts are qualified.
 
 The shared AAPCS64 parameter placement owner describes Darwin fixed value
 spills with their natural size and alignment after either register bank is
@@ -16141,6 +16173,19 @@ priority, tag and message bytes. Radio-tag routing precedes the shared 4068-byte
 transport prefix; admission accepts missing string terminators only at that
 full limit. Native C-string reads complete before clipping. Negative results
 complete without inferred transport success or errno changes.
+
+API 28 fatal writes and `android_set_abort_message` share the Bionic abort
+owner. `abort_message_slot` explicitly binds libc's live guest pointer slot;
+absence is unknown, zero is early initialization, and an occupied slot skips
+the message read. Shared Linux mmap owns the permanent record's placement,
+page rounding, zero backing and memory budget; Bionic's existing kernel-result
+adapter owns allocation errno. The size/message/NUL copy precedes publication,
+and no malloc ownership or second host pointer cache is introduced. Native
+tag routing precedes publication; final tag/message reads and transcript
+matching follow it, preserving aliases and partial effects. Direct pointers
+stay lazy, while formatted/framework diagnostics reuse their existing bytes.
+The cooperative scheduler's atomic native calls serialize first publication
+across threads. Fatal logging itself does not exit the process.
 
 `AndroidProperties` builds one immutable guest property table from explicit
 inputs. Name lookup, stable `prop_info` identities, serials, legacy reads and

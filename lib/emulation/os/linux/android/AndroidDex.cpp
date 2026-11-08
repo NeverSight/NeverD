@@ -188,9 +188,13 @@ llvm::Error Bionic::initializeDex() {
                                      std::string_view Message) {
       using mobile::dalvik::ExecutionResult;
       using mobile::dalvik::ExecutionStop;
-      auto Written = textLogWrite(ID, Priority, Tag, Message);
-      return Written
-                 ? ExecutionResult{ExecutionStop::Returned, *Written}
+      auto Written = textLogWrite(ID, Priority, llvm::StringRef(Tag),
+                                  llvm::StringRef(Message));
+      if (!Written)
+        return ExecutionResult{
+            ExecutionStop::Invalid, 0, {}, llvm::toString(Written.takeError())};
+      return *Written
+                 ? ExecutionResult{ExecutionStop::Returned, **Written}
                  : ExecutionResult{
                        ExecutionStop::Unsupported, 0, {}, Result.Diagnostic};
     };

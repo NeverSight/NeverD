@@ -365,13 +365,12 @@ BionicResult Bionic::formatLogCall(const NativeCallEvent &Call) {
     return Formatter.resultError(Message.takeError());
   const auto &A = Call.Arguments;
   const unsigned Offset = Call.Name == symbol::TextLogBufferPrint ? 1 : 0;
-  // The native entry formats before __android_log[_buf]_write reads its tag.
-  auto Tag =
-      A[Offset + 1] ? string(A[Offset + 1]) : llvm::Expected<std::string>("");
-  if (!Tag)
-    return Tag.takeError();
+  // Formatting precedes the shared tag/abort-message/write sequence.
   auto Written = textLogWrite(Offset ? uint32_t(A[0]) : 0, int32_t(A[Offset]),
-                              *Tag, *Message);
-  return Written ? value(*Written) : BionicResult(std::optional<BionicValue>());
+                              A[Offset + 1], llvm::StringRef(*Message));
+  if (!Written)
+    return Written.takeError();
+  return *Written ? value(**Written)
+                  : BionicResult(std::optional<BionicValue>());
 }
 } // namespace neverd::emulation::android_model
