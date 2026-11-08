@@ -4831,8 +4831,16 @@ was decorated, they are written into a copy of it as decoration writes them: eac
 comment read again, its line's inline comment replaced and the spans after it moved
 (`CodeEdits::takeComments`). A function's new name, taken in place, is written the same
 way into each name the document links to it (`CodeEdits::takeFunctionNames`), unless the
-name is given up or the text spells it otherwise; anything else that drops documents'
-keys decorates them again (`Engine::decorateNamedViewsAgain`).
+name is given up or the text spells it otherwise. A data's new name changes the engine
+text decoration read, so a document of C on one engine page keeps that text and the
+record of what its render read: where the engine says of that record that the new name
+is a spelling alone (`neverd_user_reads_renamed_json`), the text is respelled as a kept
+page would be and the document takes what decoration writes from it, its locals'
+identity and its rows' anchors included (`CodeEdits::takeDataNames`). A number's base or
+a note anchored on a line it changes, or local names it would make stale, send the
+document back to what is kept, as does any later rebuild from the pages it no longer
+reads as; anything else that drops documents' keys decorates them again
+(`Engine::decorateNamedViewsAgain`).
 Decoration asks for the image's names and comments by address, and the edit changes
 that one row (`CodeEdits::ImageFacts`), so a view costs the same among thousands.
 The GUI starts a replica on a function as its Set Type dialog opens

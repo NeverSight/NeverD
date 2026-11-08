@@ -390,8 +390,10 @@ private:
   /// (readViewEdits).
   /// What decoration alone writes of an edit into a copy of a document it
   /// reached: a comment of the image's (CodeEdits::takeComments) or a
-  /// function's new name (CodeEdits::takeFunctionNames).
-  enum class ViewEditKind { Other, Comment, FunctionName };
+  /// function's new name (CodeEdits::takeFunctionNames); and a data's new
+  /// name, which its engine pages spell and respelling the engine text
+  /// decoration read writes too (CodeEdits::takeDataNames).
+  enum class ViewEditKind { Other, Comment, FunctionName, DataName };
   void keepNamedViewsThrough(std::uint64_t address,
                              std::vector<std::string> names, bool pagesStale,
                              ViewEditKind kind = ViewEditKind::Other);
@@ -514,7 +516,16 @@ private:
     /// functions renamed, which are written into a copy of it, or anything
     /// else.
     mutable bool commentsReached = false, othersReached = false;
-    mutable std::vector<std::uint64_t> renamedFunctions;
+    mutable std::vector<std::uint64_t> renamedFunctions, renamedData;
+    /// The engine text its decoration read, for an engine document of C on one
+    /// page: what a data's new name respells (CodeEdits::takeDataNames).
+    std::shared_ptr<const CodeEdits::EngineText> engineText;
+    /// What the render its engine pages came from read (neverd_user_reads),
+    /// which says whether a data's new name is a spelling alone.
+    std::string renderReads;
+    /// Its engine pages spell a name of data it has taken since: it never
+    /// builds again from them, but from what is kept.
+    bool pagesRenamed = false;
     /// Of the edits views have kept through, how many it has read.
     mutable std::uint64_t viewEditsRead = 0;
     /// Hashes of the identifiers its text spells, sorted, once an edit's names
@@ -594,9 +605,18 @@ private:
                                     const std::string *ifNoneMatch = nullptr,
                                     bool pageDelta = false);
   std::uint64_t namedViewIds_ = 0;
-  /// Documents written from another with its comments or functions' names
-  /// taken (takeComments, takeFunctionNames).
-  std::uint64_t commentPatches_ = 0, namePatches_ = 0;
+  /// Documents written from another with its comments, functions' names or
+  /// data's names taken (takeComments, takeFunctionNames, takeDataNames).
+  std::uint64_t commentPatches_ = 0, namePatches_ = 0, dataNamePatches_ = 0;
+  /// Takes the document at \p position out of the documents kept, as one for
+  /// the page deltas of what clients keep.
+  void dropNamedView(NamedViewPosition position);
+  /// What the session's current render read, as neverd_user_reads writes it.
+  std::string userReads();
+  /// The data a render that read \p reads spells by another name now, as
+  /// neverd_user_reads_renamed_json says it: rows of what each is called, or
+  /// null where more than a spelling moves.
+  Json userReadsRenamed(const std::string &reads);
   /// Something no edit a document notes changed what decoration reads: each
   /// document decorates again from its pages.
   void decorateNamedViewsAgain();

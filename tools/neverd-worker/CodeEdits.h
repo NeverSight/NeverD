@@ -5,6 +5,8 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace neverd::worker {
 /// Durable source edits. Names/comments are presentation; variable types are
@@ -44,6 +46,31 @@ public:
   /// False, with the page as it was, unless its text shows a spelling is all
   /// that moves.
   static bool respell(Json &page, const Json &renamed);
+  /// What decoration reads of an engine view of C that respelling reads again:
+  /// its text, where its body begins and the spans its source names cover, as
+  /// the engine wrote them, before decorate moves them.
+  struct EngineText {
+    std::string text;
+    std::size_t bodyStart = 0;
+    std::vector<std::pair<std::size_t, std::size_t>> sourceNames;
+  };
+  /// Of an engine view about to be decorated.
+  static EngineText engineText(const Json &view);
+  /// A view decorate wrote from \p engine for \p representation, under the code
+  /// edit row \p row, after the data in \p renamed, rows of what data is called
+  /// now, took those names: the view as decorate writes it from the engine
+  /// text respell gives (each name of that data shows its new name and the
+  /// spans after it move, a name the text spelled takes the new spelling, its
+  /// locals the identity of the new text, the rows of the lines it changed
+  /// their anchors, its variable the new name), and that engine text.  Nothing,
+  /// with the view as it was, where respell would refuse, or what decorate
+  /// reads besides would read otherwise: a number's base or a note anchored on
+  /// a changed line, local names that would go stale or come back, or a
+  /// variable or identifier symbol the new name may mean; the view is then read
+  /// again from what is kept.
+  static std::optional<EngineText>
+  takeDataNames(Json &view, const EngineText &engine, const Json &renamed,
+                const Json &row, const std::string &representation);
   /// \p definitionLine, where given, takes the line the function's definition
   /// begins on, which a function's own comment is written at.
   static void decorate(Json &view, const Json &row, std::uint64_t function,

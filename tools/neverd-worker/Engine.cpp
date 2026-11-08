@@ -1224,17 +1224,21 @@ void Engine::readViewEdits(const std::string &sourceKey) {
     return false;
   };
   // Behind what is remembered, it may read anything.  Decoration writes
-  // again what reaches it but for the pages; comments alone it writes into a
-  // copy (CodeEdits::takeComments).
+  // again what reaches it but for the pages; comments and names alone it
+  // writes into a copy (CodeEdits::takeComments, takeFunctionNames,
+  // takeDataNames).  A data's name its pages spell: one that builds again from
+  // them goes back to what is kept.
   bool stale = unread > viewEdits_.size(), decorated = false;
   if (!stale)
     for (auto edit = viewEdits_.end() - static_cast<std::ptrdiff_t>(unread);
          edit != viewEdits_.end() && !stale; ++edit) {
-      if (!edit->pagesStale && decorated && document.othersReached)
+      const bool dataName = edit->kind == ViewEditKind::DataName;
+      if (!edit->pagesStale && !dataName && decorated && document.othersReached)
         continue;
       if (!reaches(*edit))
         continue;
-      if (edit->pagesStale || readEnough) {
+      if (edit->pagesStale || readEnough ||
+          (dataName && document.othersReached)) {
         stale = true;
         continue;
       }
@@ -1243,15 +1247,13 @@ void Engine::readViewEdits(const std::string &sourceKey) {
         document.commentsReached = true;
       else if (edit->kind == ViewEditKind::FunctionName)
         document.renamedFunctions.push_back(edit->address);
+      else if (dataName)
+        document.renamedData.push_back(edit->address);
       else
         document.othersReached = true;
     }
   if (stale) {
-    unindexNamedView(position);
-    namedViewBytes_ -= document.bytes;
-    encodedPageBytes_ -= document.pageBytes;
-    keepPreviousView(std::move(*position));
-    namedViews_.erase(position);
+    dropNamedView(position);
     return;
   }
   if (decorated)
@@ -1259,6 +1261,14 @@ void Engine::readViewEdits(const std::string &sourceKey) {
         key != namedViewsByKey_.end())
       namedViewsByKey_.erase(key);
   document.viewEditsRead = viewEditCount_;
+}
+
+void Engine::dropNamedView(NamedViewPosition position) {
+  unindexNamedView(position);
+  namedViewBytes_ -= (*position)->bytes;
+  encodedPageBytes_ -= (*position)->pageBytes;
+  keepPreviousView(std::move(*position));
+  namedViews_.erase(position);
 }
 
 void Engine::namedViewsTakeRevision(bool storesStand) {
@@ -1493,18 +1503,48 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
     return namedViews_.front();
   }
   std::shared_ptr<const NamedView> reused;
-  if (const auto cached = namedViewsBySource_.find(sourceKey);
-      cached != namedViewsBySource_.end() &&
-      (!(*cached->second)->original.empty() ||
-       !(*cached->second)->enginePages.empty()))
-    reused = *cached->second;
-  // Comments and functions' names alone reached it since decoration: they
-  // are written into a copy of it as decoration writes them.
+  const auto bySource = namedViewsBySource_.find(sourceKey);
+  if (bySource != namedViewsBySource_.end() &&
+      (!(*bySource->second)->original.empty() ||
+       !(*bySource->second)->enginePages.empty()))
+    reused = *bySource->second;
+  // Comments and names alone reached it since decoration: they are written
+  // into a copy of it as decoration writes them, data's names first, as the
+  // engine text decoration reads spells them.
   if (reused && sourceView && !recovery && !reused->othersReached &&
-      (reused->commentsReached || !reused->renamedFunctions.empty())) {
+      (reused->commentsReached || !reused->renamedFunctions.empty() ||
+       !reused->renamedData.empty())) {
     Json full = reused->value;
     const bool named = !reused->renamedFunctions.empty();
-    if ((!named || CodeEdits::takeFunctionNames(full, reused->renamedFunctions,
+    std::optional<CodeEdits::EngineText> respelled;
+    bool tookData = true;
+    if (!reused->renamedData.empty()) {
+      tookData = false;
+      // What each is called now where that is a spelling alone, as the engine
+      // says it of the render the pages came from (renderedAheadPages); the
+      // rest its text spells already.
+      const auto renamedNow =
+          reused->engineText ? userReadsRenamed(reused->renderReads) : Json();
+      if (renamedNow.is_array()) {
+        auto renamedData = reused->renamedData;
+        std::sort(renamedData.begin(), renamedData.end());
+        renamedData.erase(std::unique(renamedData.begin(), renamedData.end()),
+                          renamedData.end());
+        Json rows = Json::array();
+        for (const auto &row : renamedNow)
+          if (std::binary_search(
+                  renamedData.begin(), renamedData.end(),
+                  parseAddress(row.at("addr").get<std::string>())))
+            rows.push_back(row);
+        if (rows.size() == renamedData.size())
+          respelled =
+              CodeEdits::takeDataNames(full, *reused->engineText, rows,
+                                       codeEditRow(address), representation);
+        tookData = respelled.has_value();
+      }
+    }
+    if (tookData &&
+        (!named || CodeEdits::takeFunctionNames(full, reused->renamedFunctions,
                                                 imageFacts())) &&
         (!reused->commentsReached ||
          CodeEdits::takeComments(full, address, reused->definitionLine,
@@ -1543,11 +1583,25 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
             document->spelled.end());
         document->spelledRead = true;
       }
+      document->engineText =
+          respelled ? std::make_shared<const CodeEdits::EngineText>(
+                          std::move(*respelled))
+                    : reused->engineText;
+      document->renderReads = reused->renderReads;
+      document->pagesRenamed =
+          reused->pagesRenamed || document->engineText != reused->engineText;
       commentPatches_ += reused->commentsReached;
       namePatches_ += named;
+      dataNamePatches_ += document->engineText != reused->engineText;
       return keepNamedView(std::move(document), std::move(full), lookupKey,
                            sourceKey, cacheKey() == lookupKey);
     }
+  }
+  // Its pages spell a data's name it has not taken: it builds again from what
+  // is kept, which respells it, or from the engine.
+  if (reused && (reused->pagesRenamed || !reused->renamedData.empty())) {
+    dropNamedView(bySource->second);
+    reused = nullptr;
   }
   Json original;
   if (reused && !reused->original.empty())
@@ -1709,6 +1763,10 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
         keepVisitedRender(address, representation, optionText, enginePages);
       document->enginePages = std::move(enginePages);
       document->engineRepresentation = backendRepresentation;
+      // What the render the pages came from read.
+      document->renderReads = replay == &renderedPages ? keptReads_
+                              : replay                 ? reused->renderReads
+                                                       : userReads();
     } else if (sourceView)
       document->original = full.dump();
     for (const auto &reason : staleVariableTypes)
@@ -1738,6 +1796,11 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
     } else if (replay) {
       noteRenderReads(*document);
     }
+    // What a data's new name respells, of an engine document of C on one
+    // page, as respell reads its kept page (renderedAheadPages).
+    if (sourceView && !recovery && document->enginePages.size() == 1)
+      document->engineText = std::make_shared<const CodeEdits::EngineText>(
+          CodeEdits::engineText(full));
     if (sourceView && !recovery)
       CodeEdits::decorate(
           full, codeEditRow(address), address, representation, imageFacts(),
@@ -1863,6 +1926,11 @@ Engine::keepNamedView(std::shared_ptr<NamedView> document, Json full,
         document->enginePages.capacity() * sizeof(std::string);
     for (const auto &page : document->enginePages)
       overhead += page.capacity() + 1;
+    if (const auto &engine = document->engineText)
+      overhead += sizeof(CodeEdits::EngineText) + engine->text.capacity() + 1 +
+                  engine->sourceNames.capacity() *
+                      sizeof(decltype(engine->sourceNames)::value_type);
+    overhead += document->renderReads.capacity() + 1;
     for (const auto *bounds :
          {&document->rowBounds, &document->referenceBounds,
           &document->sourceNameBounds, &document->codeNameBounds}) {
@@ -2274,9 +2342,24 @@ Json Engine::userFactsAnalysisReads() const {
 }
 
 std::string Engine::renderReads() {
+  const auto reads = userReads();
+  return reads.empty() ? std::string() : compressPage(reads);
+}
+
+std::string Engine::userReads() {
   static const auto reads =
       engineSymbol<SessionJsonFunction>("neverd_user_reads");
-  return reads ? compressPage(ownedString(reads(session_))) : std::string();
+  return reads ? ownedString(reads(session_)) : std::string();
+}
+
+Json Engine::userReadsRenamed(const std::string &reads) {
+  using Renamed = const char *(*)(neverd_session_t, const char *);
+  static const auto renamed =
+      engineSymbol<Renamed>("neverd_user_reads_renamed_json");
+  if (!renamed || reads.empty())
+    return nullptr;
+  const char *text = renamed(session_, reads.c_str());
+  return text ? backendJson(text) : Json();
 }
 
 bool Engine::renderReadsHold(const std::string &compact) {
@@ -2289,14 +2372,8 @@ bool Engine::renderReadsHold(const std::string &compact) {
 }
 
 Json Engine::renderReadsRenamed(const std::string &compact) {
-  using Renamed = const char *(*)(neverd_session_t, const char *);
-  static const auto renamed =
-      engineSymbol<Renamed>("neverd_user_reads_renamed_json");
-  const auto reads = renamed ? decompressPage(compact) : std::nullopt;
-  if (!reads)
-    return nullptr;
-  const char *text = renamed(session_, reads->c_str());
-  return text ? backendJson(text) : Json();
+  const auto reads = decompressPage(compact);
+  return reads ? userReadsRenamed(*reads) : Json();
 }
 
 void Engine::restartSummaries() {
@@ -2678,6 +2755,7 @@ Json Engine::metadata() const {
           {"listing_name_builds", listing_ ? listing_->nameBuilds() : 0},
           {"named_view_comment_patches", commentPatches_},
           {"named_view_name_patches", namePatches_},
+          {"named_view_data_name_patches", dataNamePatches_},
           {"dirty", dirty_},
           // How the file was read: for a binary file, its processor,
           // placement and platform, and whether detection chose the platform.
@@ -5974,10 +6052,11 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       keepNamedViewsThrough(address, spellings, false,
                             ViewEditKind::FunctionName);
     } else if (dataInPlace) {
-      // The pages of what read it spell a name of data.
+      // The pages of what read it spell a name of data, which the engine
+      // text its decoration read respells.
       imageFactsRevision_.reset();
       forgetGraphsAndText();
-      keepNamedViewsThrough(address, spellings, true);
+      keepNamedViewsThrough(address, spellings, false, ViewEditKind::DataName);
     } else
       namesChanged();
     ++revision_;
