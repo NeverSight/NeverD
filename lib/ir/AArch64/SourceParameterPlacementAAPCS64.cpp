@@ -18,6 +18,8 @@
 
 #include "../SourceParameterPlacementDetail.h"
 
+#include "neverd/ir/SourceABI.h"
+
 #include "llvm/Support/MathExtras.h"
 
 using namespace neverd;
@@ -129,10 +131,10 @@ std::optional<SourceParameterPlacement> source_placement::placeAAPCS64(
       Placement.Parameters.push_back(std::move(Pieces));
       continue;
     }
-    if (isIntegerScalar(Type) &&
+    if (isIntegerScalar(Type) && !isSourceAArch64Vector128Type(Type) &&
         Type->Size <= kIntegerPairRegisters * kRegisterBytes) {
       Pieces = Integers(Type->Size, Type->Size);
-    } else if (isFloatingScalar(Type)) {
+    } else if (isFloatingScalar(Type) || isSourceAArch64Vector128Type(Type)) {
       if (NextVector < Vector.size()) {
         Pieces.push_back(registerPiece(SourceABICarrierKind::FloatingRegister,
                                        Vector[NextVector++], 0, Type->Size));

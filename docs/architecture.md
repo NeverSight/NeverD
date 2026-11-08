@@ -1314,10 +1314,16 @@ shared machine-call bridge described below, retaining the actual BLRAA/BLRAB
 and original result registers. Recovered bindings retain their native identity,
 effects and declaration checks before HighC selects that bridge. LLVM consumes
 their validated physical carriers without requiring analyst source authority.
-Scalar, 128-bit integer and direct record/HFA values share the same transport;
-indirect native copies and hidden results still require their separate storage
-proofs. Native 128-bit SIMD carriers are not integer pairs: authenticated
-calls using them reject until the packet layout can carry full vector registers.
+Scalar, 128-bit integer and direct record/HFA values share the same transport.
+Complete recovered fixed C bindings also retain the original indirect record
+address and x8 result buffer. They authorize neither a new logical copy nor
+alignment, aliasing, lifetime or pointee-access promises. Full SIMD128 values
+use one Q register or an aligned 16-byte stack object, with Q0 for their result.
+The shared packet assigns two aligned words to each Q carrier; LLVM and both
+C routes use that same layout. Such raw calls also use the physical bridge,
+so an integer IR carrier cannot silently acquire the i128 general-register ABI.
+External C declarations retain the logical aggregate type without creating a
+copy; function-body projections still require their separate storage proof.
 A resolved display name cannot replace that authenticated target,
 and exact LLVM call prototypes remain
 exact. Explicit source call-site prototypes and recovered native C prototypes

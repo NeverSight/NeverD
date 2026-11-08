@@ -1,0 +1,17 @@
+//===- SourceABI.def - Source ABI type identities -------------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// SOURCE_ABI_TYPE_VALUE and SOURCE_ABI_TYPE_TEXT define source type
+/// identities.
+//===----------------------------------------------------------------------===//
+
+SOURCE_ABI_TYPE_VALUE(kSourceAArch64Vector128Bytes, 16)
+SOURCE_ABI_TYPE_TEXT(kSourceAArch64Vector128CType,
+                     "uint8_t __attribute__((vector_size(16)))")
+SOURCE_ABI_TYPE_TEXT(kSourceBooleanCType, "_Bool")
+
+#undef SOURCE_ABI_TYPE_VALUE
+#undef SOURCE_ABI_TYPE_TEXT

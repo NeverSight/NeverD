@@ -45,23 +45,34 @@ inline constexpr char kResultCallCClobbers[] =
 #include "AArch64SourceResultCall.def"
     ;
 
-/// Packet cells hold at most one machine word. Native short-vector carriers
-/// are wider than integer-pair pieces and need a different packet layout.
-inline bool
-sourceResultCallHasWordCarriers(const SourceFunctionTypeHint &Signature) {
-  if (Signature.ReturnLocation.ValueBytes > kResultCallWordBytes)
-    return false;
-  for (const auto &Location : Signature.ReturnComponents)
-    if (Location.ValueBytes > kResultCallWordBytes)
-      return false;
-  for (const auto &Parameter : Signature.Parameters) {
-    if (Parameter.Location.ValueBytes > kResultCallWordBytes)
-      return false;
-    for (const auto &Location : Parameter.Components)
-      if (Location.ValueBytes > kResultCallWordBytes)
-        return false;
-  }
-  return true;
+/// Narrow carriers retain their word slots. A complete Q carrier occupies
+/// two aligned slots, so neither half overlaps another argument or result.
+struct SourceResultCallPacketLayout {
+  llvm::SmallVector<unsigned, 8> Arguments;
+  llvm::SmallVector<unsigned, 4> Results;
+  unsigned Words = kResultCallHeaderWords;
+  unsigned Alignment = kResultCallWordBytes;
+};
+
+inline SourceResultCallPacketLayout
+sourceResultCallPacketLayout(llvm::ArrayRef<SourceABIParameter> Bindings,
+                             llvm::ArrayRef<SourceABIParameter> Results) {
+  SourceResultCallPacketLayout Layout;
+  Layout.Arguments.reserve(Bindings.size());
+  Layout.Results.reserve(Results.size());
+  const auto Append = [&](const SourceABIParameter &P, auto &Slots) {
+    const unsigned Words = (P.Location.ValueBytes + kResultCallWordBytes - 1) /
+                           kResultCallWordBytes;
+    Layout.Words = (Layout.Words + Words - 1) / Words * Words;
+    Slots.push_back(Layout.Words);
+    Layout.Words += Words;
+    Layout.Alignment = std::max(Layout.Alignment, Words * kResultCallWordBytes);
+  };
+  for (const auto &P : Bindings)
+    Append(P, Layout.Arguments);
+  for (const auto &P : Results)
+    Append(P, Layout.Results);
+  return Layout;
 }
 
 /// Result pieces of a validated Darwin signature. Indirect results retain
@@ -107,7 +118,8 @@ sourceResultCallAsm(llvm::ArrayRef<SourceABIParameter> Bindings,
   std::string Text =
       std::string(kResultCallMarker) +
       (RetainResultStorage ? kResultCallPrefix : kValueCallPrefix);
-  unsigned Slot = kResultCallHeaderWords;
+  const auto Layout = sourceResultCallPacketLayout(Bindings, Results);
+  unsigned Index = 0;
   for (const auto &P : Bindings) {
     const auto &L = P.Location;
     const bool FP = L.Kind == SourceABICarrierKind::FloatingRegister;
@@ -125,12 +137,13 @@ sourceResultCallAsm(llvm::ArrayRef<SourceABIParameter> Bindings,
             ? (Signed ? kResultCallLoadSignedHalf : kResultCallLoadHalf)
             : kResultCallLoadWord;
     const char *Reg =
-        FP ? (L.ValueBytes == kResultCallFloatBytes ? kResultCallS
-                                                    : kResultCallD)
-           : (L.ValueBytes <= kResultCallFloatBytes ? kResultCallW
-                                                    : kResultCallX);
+        L.ValueBytes == kSourceAArch64Vector128Bytes ? kResultCallQ
+        : FP ? (L.ValueBytes == kResultCallFloatBytes ? kResultCallS
+                                                      : kResultCallD)
+             : (L.ValueBytes <= kResultCallFloatBytes ? kResultCallW
+                                                      : kResultCallX);
     Text += llvm::formatv(kResultCallLoad, Load, Reg, Register,
-                          Slot++ * kResultCallWordBytes)
+                          Layout.Arguments[Index++] * kResultCallWordBytes)
                 .str();
     if (Stack)
       Text += llvm::formatv(
@@ -147,6 +160,7 @@ sourceResultCallAsm(llvm::ArrayRef<SourceABIParameter> Bindings,
                     : *Key == kAArch64PAuthKeyIA ? kResultCallIA
                                                  : kResultCallIB)
           .str();
+  Index = 0;
   for (const auto &Result : Results) {
     const auto &L = Result.Location;
     const bool FP = L.Kind == SourceABICarrierKind::FloatingRegister;
@@ -158,11 +172,12 @@ sourceResultCallAsm(llvm::ArrayRef<SourceABIParameter> Bindings,
                 L.ValueBytes == kResultCallByteBytes   ? kResultCallStoreByte
                 : L.ValueBytes == kResultCallHalfBytes ? kResultCallStoreHalf
                                                        : kResultCallStoreWord,
-                FP ? (L.ValueBytes == kResultCallFloatBytes ? kResultCallS
-                                                            : kResultCallD)
-                   : (L.ValueBytes <= kResultCallFloatBytes ? kResultCallW
-                                                            : kResultCallX),
-                Register, Slot++ * kResultCallWordBytes)
+                L.ValueBytes == kSourceAArch64Vector128Bytes ? kResultCallQ
+                : FP ? (L.ValueBytes == kResultCallFloatBytes ? kResultCallS
+                                                              : kResultCallD)
+                     : (L.ValueBytes <= kResultCallFloatBytes ? kResultCallW
+                                                              : kResultCallX),
+                Register, Layout.Results[Index++] * kResultCallWordBytes)
                 .str();
   }
   return Text;

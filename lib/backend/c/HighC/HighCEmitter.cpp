@@ -1401,7 +1401,9 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
               if (Count > Signature.Parameters.size())
                 return std::string{};
               for (size_t I = 0; I < Count; ++I)
-                Result += sourceParameterType(Signature.Parameters[I]) + ",";
+                Result += sourceParameterType(Signature.Parameters[I], {},
+                                              /*DeclarationOnly=*/true) +
+                          ",";
               if (D.VariadicFixedCount)
                 Result += "...";
               return Result + ")";
@@ -2529,7 +2531,8 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
       for (size_t I = 0; I < Count; ++I) {
         if (I)
           Declarator += ", ";
-        Declarator += sourceParameterType(Signature.Parameters[I]);
+        Declarator += sourceParameterType(Signature.Parameters[I], {},
+                                          /*DeclarationOnly=*/true);
       }
       if (Declaration.VariadicFixedCount)
         Declarator += ", ...";

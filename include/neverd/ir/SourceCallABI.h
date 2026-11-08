@@ -20,7 +20,10 @@ bool assignAnalystCallABI(SourceCallTypeHint &Hint, Arch Architecture,
 /// An indirect aggregate transports its existing address, without an extra
 /// load/copy, alignment promise, lifetime change or aliasing attribute.
 TypeRef sourceCallParameterType(const SourceParameterTypeHint &Parameter);
-/// A source-only declaration supplies an ABI, not permission to replace the
+/// A recovered fixed Darwin C declaration retains physical address operands.
+/// It supplies no copy, lifetime, alignment or aliasing guarantees.
+bool sourceCallRetainsNativeCarriers(const SourceCallTypeHint &Hint);
+/// A source declaration supplies an ABI, not permission to replace the
 /// original x8 storage with a temporary logical result.
 bool sourceCallRetainsResultStorage(const SourceCallTypeHint &Hint);
 /// Preserve the checked physical branch or hidden result storage instead of

@@ -9,12 +9,14 @@ namespace neverd {
 
 /// C vector spelling for an entire AArch64 q-register passed by value.
 /// Keep its 16 bytes distinct from a 128-bit integer's x-register ABI.
-inline constexpr char kSourceAArch64Vector128CType[] =
-    "uint8_t __attribute__((vector_size(16)))";
+#define SOURCE_ABI_TYPE_VALUE(Name, Value)                                     \
+  inline constexpr unsigned Name = Value;
+#define SOURCE_ABI_TYPE_TEXT(Name, Text) inline constexpr char Name[] = Text;
+#include "SourceABI.def"
+bool isSourceAArch64Vector128Type(const TypeRef &Type);
 
 /// A genuine C Boolean preserves swiftcc i1, unlike an unsigned byte. Its
 /// logical storage is one byte; physical definedness belongs to the carrier.
-inline constexpr char kSourceBooleanCType[] = "_Bool";
 bool isSourceBooleanType(const TypeRef &Type);
 
 /// Compare supported source types structurally, including fixed C callback

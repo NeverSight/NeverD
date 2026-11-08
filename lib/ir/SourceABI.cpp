@@ -20,6 +20,12 @@
 #include <utility>
 
 namespace neverd {
+bool isSourceAArch64Vector128Type(const TypeRef &Type) {
+  return Type && Type->Kind == NdTypeKind::Int &&
+         Type->Size == kSourceAArch64Vector128Bytes &&
+         Type->SourceName == kSourceAArch64Vector128CType;
+}
+
 bool isSourceBooleanType(const TypeRef &Type) {
   return Type && Type->Kind == NdTypeKind::Int && Type->Size == 1 &&
          !Type->IsSigned && Type->SourceName == kSourceBooleanCType;
@@ -641,10 +647,11 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
                            bool IsReturn) {
     const bool Vector128 =
         Hint.Origin == SourceFunctionTypeHint::OriginKind::NativeAnalysis &&
-        Hint.Architecture == Arch::AArch64 && !IsReturn && Type &&
-        Type->Kind == NdTypeKind::Int && Type->Size == 16 &&
-        Type->SourceName == kSourceAArch64Vector128CType &&
-        Location.Kind == SourceABICarrierKind::FloatingRegister;
+        Hint.Architecture == Arch::AArch64 &&
+        Hint.Convention == SourceFunctionTypeHint::ConventionKind::C &&
+        isSourceAArch64Vector128Type(Type) &&
+        (Location.Kind == SourceABICarrierKind::FloatingRegister ||
+         (!IsReturn && Location.Kind == SourceABICarrierKind::Stack));
     if ((!scalarType(Type) && !Vector128) ||
         Location.ValueBytes != Type->Size ||
         Type->SourceName == kSourceBooleanCType)
@@ -766,7 +773,9 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
       return fail(Diagnostic, "Unsupported source record return carriers");
   } else if (!Hint.ReturnComponents.empty()) {
     if (Hint.ReturnType->Kind != NdTypeKind::Int ||
-        Hint.ReturnType->Size != 16 || Hint.ReturnComponents.size() != 2 ||
+        Hint.ReturnType->Size != 16 ||
+        isSourceAArch64Vector128Type(Hint.ReturnType) ||
+        Hint.ReturnComponents.size() != 2 ||
         !EmptyLocation(Hint.ReturnLocation) || TRI.IntReturnRegs.size() < 2)
       return fail(Diagnostic, "Unsupported source return components");
     for (size_t I = 0; I != 2; ++I) {
@@ -849,9 +858,8 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
                                : Parameter.Components;
     HasNativeVector |=
         Hint.Origin == SourceFunctionTypeHint::OriginKind::NativeAnalysis &&
-        Hint.Architecture == Arch::AArch64 && Parameter.Type &&
-        Parameter.Type->Kind == NdTypeKind::Int && Parameter.Type->Size == 16 &&
-        Parameter.Type->SourceName == kSourceAArch64Vector128CType;
+        Hint.Architecture == Arch::AArch64 &&
+        isSourceAArch64Vector128Type(Parameter.Type);
     PhysicalCount += Locations.size();
     if (PhysicalCount > static_cast<size_t>(limits::kMaxBoundSourceCallArgs))
       return fail(Diagnostic, "Source parameter carrier budget exceeded");
@@ -939,7 +947,9 @@ bool assignDarwinSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,
           (!scalarType(Type) &&
            !(Type && Type->Kind == NdTypeKind::Int &&
              Type->Size == kDarwinWideBytes &&
-             Type->SourceName != kSourceAArch64Vector128CType) &&
+             (!isSourceAArch64Vector128Type(Type) ||
+              Hint.Origin ==
+                  SourceFunctionTypeHint::OriginKind::NativeAnalysis)) &&
            !(Records && (indirectDarwinRecord(Type) ||
                          !sourceAggregateMembers(Type).empty()))))
         return fail(Diagnostic, kUnsupportedDarwinValue);
@@ -1106,6 +1116,13 @@ bool assignDarwinSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,
                       : SourceABICarrierKind::IntegerRegister,
              Bank[I], 0, Members[I].Type->Size});
     }
+  } else if (isSourceAArch64Vector128Type(Hint.ReturnType)) {
+    if (Architecture != Arch::AArch64 ||
+        Convention != SourceFunctionTypeHint::ConventionKind::C ||
+        Hint.Origin != SourceFunctionTypeHint::OriginKind::NativeAnalysis)
+      return fail(Diagnostic, kUnsupportedDarwinValue);
+    Hint.ReturnLocation = {SourceABICarrierKind::FloatingRegister,
+                           TRI.FPReturnReg, 0, kSourceAArch64Vector128Bytes};
   } else if (Hint.ReturnType->Kind == NdTypeKind::Int &&
              Hint.ReturnType->Size == 16 && TRI.IntReturnRegs.size() >= 2) {
     for (size_t I = 0; I != 2; ++I)
