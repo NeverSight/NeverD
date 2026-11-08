@@ -880,6 +880,16 @@ its temporary dependency graph is released before context recovery. This does
 not prove that a particular host call terminates or that a reachable EXIT is
 feasible for every input.
 
+Caller-visible write effects can exclude a full-width store followed in the
+same basic block by an exact restoration of the saved entry word. The saved
+load and address must retain their input expressions with no intervening entry
+write guard. A changed address, overwritten saved carrier, other store, call,
+or narrow restoration rejects the proof. Ordinary transfers still process both
+writes and intervening reads; a loaded return cannot be evaluated against the
+old memory merely because the final bytes are restored. A completed generic
+preservation proof also covers specialized entry bindings. The bounded scan
+uses the existing instruction-visit budget and creates no extra specialization.
+
 The contextual value lane retains the zero-extension bound of an unknown
 8-, 16- or 32-bit load after exact memory and origin lookups fail. Unsigned
 comparisons can exclude impossible paths using that bound, including in a

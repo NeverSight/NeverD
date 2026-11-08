@@ -157,7 +157,7 @@ std::string renderInstruction(const X86VirtualizationAsm &Plan,
   const auto Native =
       x86VirtualizationNative(Plan.Id, Plan.TargetArch, Space,
                               C.PhysicalAddress ? Plan.InputBytes[0] : 0);
-  if (!Native || Native->Builtin.empty())
+  if (!Native)
     return Assembly;
   const bool Read = C.Result == X86VirtualizationResult::Read;
   const auto Body = nativeBody(*Native, Inputs, Read ? Outputs[0] : "",
@@ -295,8 +295,10 @@ renderX86VirtualizationCall(Arch TargetArch, const llvm::CallInst &Call,
     return {};
   const uint16_t Word = TargetArch == Arch::X64 ? 8 : 4;
   bool Known = false;
-  const auto Mnemonic =
-      llvm::StringRef(Asm->getAsmString()).split('\n').first.split(' ').first;
+  auto Instruction = llvm::StringRef(Asm->getAsmString());
+  if (!Instruction.consume_front("addr16 "))
+    Instruction.consume_front("addr32 ");
+  const auto Mnemonic = Instruction.split('\n').first.split(' ').first;
   const Intrinsic Inventory[] = {
 #define NEVERD_X86_VIRTUALIZATION(Id, ...) Intrinsic::Id,
 #include "neverd/ir/intrinsics/X86/X86Virtualization.def"
@@ -530,7 +532,7 @@ renderX86VirtualizationNativeCall(Arch TargetArch, const llvm::CallBase &Call,
     for (const auto Space :
          {NdMemoryAddressSpace::Default, NdMemoryAddressSpace::X86FS,
           NdMemoryAddressSpace::X86GS})
-      for (const uint16_t PhysicalBytes : {4, 8}) {
+      for (const uint16_t PhysicalBytes : {2, 4, 8}) {
         auto Plan = x86VirtualizationNative(
             Id, TargetArch, Space, C.PhysicalAddress ? PhysicalBytes : 0);
         // The compatibility API intentionally discards completion. Lifting
@@ -615,8 +617,6 @@ renderX86VirtualizationNativeCall(Arch TargetArch, const llvm::CallBase &Call,
         if (!StatusOutput.empty())
           Assembly += " " + StatusOutput + " = " +
                       flagsToStatus("__neverd_vmx_flags") + ";";
-        if (Plan->Builtin.empty())
-          return "{ " + Assembly + " }\n";
         std::string Text = "{ ";
         if (Read && !ResultLive)
           Text += unsignedType(Word) + " __neverd_vmx_discard; ";

@@ -955,8 +955,10 @@ TEST(WindowsEHModesCorpus, X86StartupFramesPrintTheirTries) {
     ASSERT_TRUE(static_cast<bool>(OutputOrErr))
         << toString(OutputOrErr.takeError());
     const StringRef Source(*OutputOrErr);
+    // The pointers convert through void * to the record the unit declares
+    // _seh_filter_exe's parameter as.
     const StringRef Startup = "__except (_seh_filter_exe(GetExceptionCode(), "
-                              "GetExceptionInformation())) {";
+                              "(void *)GetExceptionInformation())) {";
     const size_t Arm = Source.find(Startup);
     ASSERT_NE(Arm, StringRef::npos);
     // The arm runs from its handler: whether the app is managed, then
@@ -1141,6 +1143,41 @@ TEST(WindowsEHModesCorpus, RecoversTheMSVCX64TerminationHandlerSwitch) {
   }
   // Visual Studio 2019, 2022 and 2026 each built FH3/FH4 with and without /GS.
   EXPECT_EQ(Artifacts, 12u);
+}
+
+TEST(WindowsEHModesCorpus, Xcpt4FilterCallbacksAreTheirExceptExpressions) {
+  auto ExpectationsOrErr = loadExpectations();
+  ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
+      << toString(ExpectationsOrErr.takeError());
+  for (const StringRef Optimization : {"o0", "o2"}) {
+    SCOPED_TRACE(Optimization.str());
+    auto ExpectationOrErr = selectUnique(
+        *ExpectationsOrErr,
+        ArtifactSelector{"xcpt4", "msvc", "x86_64", "fh4", true, Optimization});
+    ASSERT_TRUE(static_cast<bool>(ExpectationOrErr))
+        << toString(ExpectationOrErr.takeError());
+    auto OutputOrErr =
+        decompileToSource(std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
+                              (*ExpectationOrErr)->Path,
+                          /*TimeoutSeconds=*/600);
+    ASSERT_TRUE(static_cast<bool>(OutputOrErr))
+        << toString(OutputOrErr.takeError());
+    const StringRef Source(*OutputOrErr);
+    if (Optimization == "o0") {
+      // Every /O0 filter callback reads only what its parent's code names, so
+      // none is left as a call of the callback with one of its two arguments.
+      EXPECT_FALSE(Source.contains("(GetExceptionInformation()))"));
+      continue;
+    }
+    // test58's filter in its termination handler reads the Counter the
+    // handler's frame homed: `__except (Counter)` in the source.
+    const size_t Handler = Source.find("void sub_140005521(");
+    ASSERT_NE(Handler, StringRef::npos);
+    const StringRef Function =
+        Source.slice(Handler, Source.find("\n}\n", Handler));
+    EXPECT_TRUE(Function.contains("__except (*(uint32_t *)(arg1 + 0x20))"))
+        << Function.str();
+  }
 }
 
 } // namespace

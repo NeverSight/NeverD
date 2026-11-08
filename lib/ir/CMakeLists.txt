@@ -10,6 +10,7 @@ add_neverd_component_library(NeverDIR
   RegisterFlow.cpp
   SourceABI.cpp
   SourceCallABI.cpp
+  SourceCallOccurrence.cpp
   SourceStackFrame.cpp
   SourceVariableFlow.cpp
   SourceParameterPlacement.cpp

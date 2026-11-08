@@ -118,7 +118,7 @@ bool liftVirtualization(X86Lifter &L, X86Lifter::LiftState &S,
   case X86_INS_VMLOAD:
   case X86_INS_VMSAVE:
   case X86_INS_INVLPGA:
-    if ((S.AddressSize != 4 && S.AddressSize != 8) ||
+    if (!x86SvmAddressSizeIsValid(TargetArch, S.AddressSize) ||
         X86.op_count > (Insn->id == X86_INS_INVLPGA ? 2 : 1))
       return false;
     Id = Insn->id == X86_INS_VMLOAD   ? Intrinsic::SvmLoad

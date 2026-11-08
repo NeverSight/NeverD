@@ -1071,9 +1071,11 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
 
   // ARM and AArch64 termination handlers are separate functions that read
   // this one's callee-saved registers, which the unwinder restores to their
-  // values where the exception struck. Track each full-width callee-saved
-  // register through the blocks of every finally scope; a handler that ends
-  // several scopes needs one value for all of them.
+  // values where the exception struck, and so are filter callbacks, for which
+  // `__C_specific_handler` restores them from the dispatcher's context. Track
+  // each full-width callee-saved register through the blocks of every finally
+  // and filter scope; a callback of several scopes needs one value for all of
+  // them.
   const bool ARMSEHFunclets =
       (TargetArch == Arch::ARM || TargetArch == Arch::AArch64) &&
       Low.ExceptionMetadata && Low.ExceptionMetadata->SEH;
@@ -1088,11 +1090,19 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
   if (ARMSEHFunclets) {
     const ExceptionFunction &EH = *Low.ExceptionMetadata;
     std::set<va_t> Refused;
+    std::map<va_t, SEHScopeKind> Roles;
     for (const SEHScopeRecord &Scope : EH.SEH->Scopes) {
-      if (Scope.Kind != SEHScopeKind::Finally || !Scope.FilterOrFinallyVA ||
-          EH.ownsCode(Scope.FilterOrFinallyVA))
+      if ((Scope.Kind != SEHScopeKind::Finally &&
+           Scope.Kind != SEHScopeKind::Filter) ||
+          !Scope.FilterOrFinallyVA || EH.ownsCode(Scope.FilterOrFinallyVA))
         continue;
       const va_t Funclet = Scope.FilterOrFinallyVA;
+      // One callback of both kinds is no contract the runtime keeps.
+      if (const auto [Role, New] = Roles.emplace(Funclet, Scope.Kind);
+          !New && Role->second != Scope.Kind) {
+        Refused.insert(Funclet);
+        continue;
+      }
       const auto Range = getSemanticSEHGuardedRange(Scope, TargetArch, EH);
       if (Scope.ParseStatus != ExceptionParseStatus::Complete || !Range) {
         Refused.insert(Funclet);

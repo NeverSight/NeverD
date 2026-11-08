@@ -240,6 +240,18 @@ inline constexpr unsigned kItaniumHandlersMaxPadStatements = 4096;
 inline constexpr size_t kX86RegistrationFilterRegistrationFilterValueBudget =
     256;
 
+// lib/ir/high/structure/SEHFilterValues.cpp
+/// The expression nodes folding one SEH filter's body into its `__except`
+/// expression may visit, x86 filter code and x64, ARM and AArch64 filter
+/// callbacks alike.  Exhaustion keeps the filter as it was.
+inline constexpr size_t kSEHFilterValueBudget = 256;
+
+// lib/ir/high/structure/SEHFinallyBodies.cpp
+/// Expression nodes visited while finding what of its frame a parent of SEH
+/// filter callbacks and those callbacks touch.  Exhaustion keeps every write a
+/// filter makes to its parent's frame.
+inline constexpr size_t kSEHFilterFrameScanWork = 1048576;
+
 // lib/ir/low/CFGBuilder.cpp
 // A disposable proof pays for direct-path decodes and trap lookahead alike.
 // The base charge includes instruction/LowIR storage and its destruction;

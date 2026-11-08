@@ -8497,7 +8497,12 @@ without treating depth exhaustion as a completed proof or skipping replay.
 When separate predecessor arms guard one selector, scalar comparison literals
 can propose a finite envelope even though no single guard dominates the load.
 The joined-domain query must prove every incoming value and a dense prefix;
-the proposal supplies no table capacity or range authority. Equal incoming
+the proposal supplies no table capacity or range authority. A PE two-level
+index table is the exception, as it is for a dominating guard: its unreached
+index bytes are unused, so a proven joined domain with holes is bounded by its
+last reaching value. MSVC's CRT reaches one such dispatch with a byte that one
+path's `and al, 0Fh; test al, al; je; cmp al, 20h; ja` left in 1..15 and that
+another path compared equal to 20h. Equal incoming
 values keep their real predecessor-join provenance after deduplication, only
 for that query mode. Predicate disjunctions and SELECTs cannot manufacture it.
 A guard operand reloaded from memory may nominate the nearest literal STORE
@@ -11092,10 +11097,13 @@ imply coverage of every newer SEV/SNP instruction.
 `backend/llvm/X86/X86VirtualizationNative.h` owns native LLVM names and
 available NeverC source spellings together. Mode-sized i386 VMCS and address
 APIs use the full fork's `32` names in both C renderers; management memory
-operands retain m64. An empty source spelling keeps the architecture's existing
-assembly projection where that source ABI is not yet implemented, such as
-physical-address i386 SVM operations. It does not change LLVM intrinsic
-availability or substitute an effect-free operation.
+operands retain m64. SVM default-address i386 APIs also use `32`; address-size
+overrides use `.addr16` on i386 and `.addr32` on x64. Their address inputs remain
+integer bits, with a separate full-width ECX ASID for INVLPGA.
+`x86SvmAddressSizeIsValid` owns the allowed implicit address widths for lifting,
+shape validation and assembly planning. Every native plan has a C spelling;
+the shared compiler capability dispatch retains the exact assembly fallback
+when those builtins are unavailable.
 Both C translation-unit collectors include the shared virtualization dispatch
 for i386 and x64. Ordinary native VMX/SVM calls require a registered SDK
 intrinsic ID; LLVM's `isIntrinsic()` alone only recognizes the reserved name
@@ -16580,6 +16588,36 @@ certified, or whose body is unavailable, keeps its address comment, which is the
 whole clause; the comment otherwise stays next to the code it names. The
 projection runs in the plain-C view as well as the C++ one, because SEH is C.
 
+A filter callback reads its parent the same way, with the exception pointers
+in place of the abnormal flag: x64 passes it the same EstablisherFrame, which
+the same proof certifies for the callback, and ARM and AArch64 restore the same
+callee-saved registers, which `buildSsa` tracks through filter scopes as through
+finally ones. `attachSEHFinallyBodies` spells its body in the parent, the
+pointers being `GetExceptionInformation()`, and folds it with the x86 filters'
+folder (`lib/ir/high/structure/SEHFilterValues.cpp`) into the clause's
+`__except` expression (`HighEHClause::FilterValue`), so the clause reads
+`__except (*Counter)` or `__except ((GetExceptionCode() == 0xC0000005) ?
+(EXCEPTION_EXECUTE_HANDLER) : (EXCEPTION_CONTINUE_SEARCH))` rather than a call
+of the callback with one of its two arguments. A write it makes to the
+parent's frame stays in the expression unless nothing else can read those
+bytes: no statement of the parent, no other filter and no handler still out of
+line touches them, and no address of the frame goes anywhere else, as with the
+temporaries MSVC's `/Od` keeps for a filter in its parent's frame. The
+expression must also print as C that evaluates as the callback did, or the
+callback keeps its call: an integer, reading no value of a function whose
+result the writer leaves out (`analyzeVoidReturn`), and reaching the frame only
+as the parent's own code does, each word it reads one the parent's statements
+read at that width and each address it takes one the parent takes. A word the
+parent only writes, as an argument clang-cl spills for its callbacks while the
+parent reads the register, may print as nothing. The single-function view
+gathers the callback as it gathers a termination handler. The writer treats the
+expression as part of the `__try`: it declares what the expression calls,
+names the frame words it reads and writes, keeps the stores and variables it
+reads (`forEachExprAndFilter` in `HighCDeadStoreAnalysis.cpp` and
+`HighCUsedVars.cpp`), and passes `GetExceptionInformation()` to a parameter
+declared as a record pointer of the unit's own through `void *`, as <excpt.h>
+types it after its own `EXCEPTION_POINTERS`.
+
 An x86 `_except_handler3` or `_except_handler4` frame prints the same clauses
 from its own code, in the decompile view only. That view defers the native
 registration proofs, so `lib/ir/low/X86/RegistrationDisplayFrame.cpp` reads what
@@ -16793,8 +16831,8 @@ An ARM or AArch64 termination handler takes only the abnormal flag. The
 unwinder restores the parent's callee-saved registers to their values where
 the exception struck before calling it, and the handler reads the parent's
 state through them (`ldr w8,[x27]`, `ldr r3,[r7,#12]`). `buildSsa`
-(`lib/ir/med/pass/MedSSA.cpp`) records, for every finally scope whose handler
-lies outside the function, the version of each full-width callee-saved or
+(`lib/ir/med/pass/MedSSA.cpp`) records, for every finally or filter scope whose
+callback lies outside the function, the version of each full-width callee-saved or
 frame-pointer register where each protected range starts, as it does for an
 `__except` root; only operations inside a range count as writes, and a handler
 root's seed writes nothing. A root whose range holds the register under several
@@ -18268,6 +18306,9 @@ execution contract.
 
 `SourceCallOccurrenceKey` owns original instruction/sequence/opcode/target
 identity; names and source anchors cannot bind a per-call policy.
+Its structural overload belongs to `IRLowValidation`; the architecture-qualified
+overload lives in `ir/SourceCallOccurrence.cpp` beside the register descriptions
+it uses. LowIR validation therefore has no backward link to aggregate IR.
 `SourceCallABI` uses the existing platform parameter/variadic placement owners
 and bounds outgoing stack-write and SSA-carrier proofs. `LowToMedSourceCalls`
 publishes these physical inputs before SSA and argument pruning, with discovery

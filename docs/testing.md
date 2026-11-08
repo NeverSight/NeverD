@@ -1017,6 +1017,17 @@ pair its own compile test and every LAR/LSL destination width its own completion
 test. The split preserves both C routes, LLVM output, O0/O2, and all register,
 memory, success/failure and optimized/unoptimized descriptor cases within the
 ordinary per-test timeout. NeverC variants still require `NEVERD_TEST_NEVERC`.
+The shared scalar MSR/port cases live in
+`unittests/lift/x86/X86ScalarSystemSourceTests.inc`. The Linux i386 native
+variant also requires `NEVERD_TEST_NEVERC_LLC` and compiles 168 complete C
+forms through the full LLVM driver. Retain its exports with
+`NEVERD_ISA_REGRESSION_ARTIFACT_DIR`, then run
+`scripts/check_x86_scalar_system_source.py --exports DIR --compiler COMPILER
+--backend-llc LLVM_LLC --output OUT`. Omit `--backend-llc` for stock Clang.
+The witness checks 8/16/32-bit ports, the complete MSR input, partial-register
+results, dead effects and callee-saved state against original instruction
+bytes; its selector/value/result corruptions must fail. It requires Capstone,
+LIEF and Unicorn and supplies controlled privileged completions.
 The AMX format-compilation and native completion/fault matrices likewise register
 each encoding separately, retaining all formats, both pipeline optimization
 settings and every source/native route. Parameter names retain the instruction
@@ -2822,6 +2833,18 @@ recorder before execution: eight ASan/UBSan caller-input observations retain
 an image-valued physical integer, and eight UBSan runs use a high-bit address
 to check ordinary DS loading and physical input together. Preprocessed source
 and caller bodies are checked to contain no launch before host execution.
+With `NEVERD_TEST_NEVERC` and `NEVERD_TEST_NEVERC_LLC` set,
+`NeverCI386EmitsNativeLaunchWithoutOldContinuation` also compiles the complete
+i386 ELF output through NeverC at O0/O2: 24 native C compilation checks retain
+raw i32 input and nonreturning IR, and reject an external helper or an old
+continuation in the emitted object. The dedicated SKINIT capability check works
+independently of long-mode-only system builtins.
+`scripts/check_x86_skinit_source.py` consumes that test's retained directory.
+With `--linker` pointing to `ld.lld`, it links the complete NeverC and Clang
+objects and compares original bytes against both C routes at the launch
+boundary. Nine input values cover low, image-valued and high-bit integers;
+separate EAX and image-store corruptions must be rejected. The script requires
+Capstone, LIEF and Unicorn and never executes SKINIT.
 Run the shared integer-width and pointer-address suites after changing this
 address/parameter boundary. The retained source snapshots, report hashes and
 independent LLVM/NeverC instruction-boundary checks are in the
@@ -7008,8 +7031,8 @@ EAX/ECX inputs, Windows subleaf spelling and ordered effects, including CLI/STI.
 The CPUID C execution check replaces only the intrinsic environment, verifies
 one query with leaf 7/subleaf 1, and stores four high-bit output words into
 64-bit cells at O0/O2 across all three formats and default/NoOpt.
-The qualified native LLVM SDK adds a 426-module virtualization matrix covering
-both word sizes, three formats, default/NoOpt, FS/GS and long-mode narrow SVM
+The qualified native LLVM SDK adds a 444-module virtualization matrix covering
+both word sizes, three formats, default/NoOpt, FS/GS and mode-specific narrow SVM
 addresses. Older SDKs explicitly skip that native-IR requirement while retaining
 the assembly route. A qualified SDK lacking `llvm.x86.vmxoff.status` retains
 the exact VMXOFF assembly and records those modules separately. The void API
@@ -7042,6 +7065,24 @@ success-only operation that defines VMX completion flags.
 Segment bases are flat in this witness; VM entry success, descriptor validation
 and hardware VMCS execution are outside it. NeverC's separate VMX address
 witness owns nonzero segment-base transport and 16-bit address truncation.
+
+`X86VirtualizationSource.NeverCI386SvmKeepsDefaultAndAddress16Forms` adds
+48 native C compilation checks for VMLOAD/VMSAVE/INVLPGA, both C routes and
+default/NoOpt. It retains complete translation units and independently encoded
+`.bin` inputs under the same artifact directory. Run
+`scripts/check_x86_svm_source.py --exports DIR --compiler NEVERC
+--backend-llc LLVM_LLC --output OUT`, and separately with stock Clang without
+the backend option. The witness compares stopped native AX/EAX address inputs,
+full ECX ASIDs, the live return and callee-saved registers; deliberate address,
+ASID and prefix mutations must be rejected. It does not execute privileged
+instructions or qualify VMCB state transfers. NeverC's separate CPL0 QEMU
+witness exercises MSR round trips in the selected TCG guest environment.
+
+`AddressOverridesRequireExactRegisterInputs` checks 48 valid/malformed SVM
+assembly contracts across i386 addr16 and x64 addr32. Wrong address/ASID
+widths, missing prefixes, wrong registers/code modes and lost memory or
+side-effect contracts must fail. The complete assembly compilation test
+assembles both override modes at O0/O2 through both C routes.
 
 `LLVMCValues.NativeVirtualizationKeepsStatusAndFailedReadPrior` supplies controlled
 VMX completion values to check C status conversion, exact operand evaluation
@@ -11020,6 +11061,11 @@ unresolved.
 shape in all twelve optimized MSVC x64 `xcpt4` builds, where it is a `__finally`
 funclet reading its selector through the establisher frame: one six-case table
 inside the handler's unwind range, every case a decoded block.
+`COFFJoinedTwoLevel.*` checks an MSVC CRT two-level dispatch whose index byte
+arrives along two paths that bound it separately, one to 1..15 and one to
+exactly 20h: all 33 index coordinates publish, with the unused bytes'
+cases included. A path that leaves the byte unbounded, or a single-level
+table over the same domain with holes, stays unresolved.
 
 `ResolverBlockMemo.*` retains references through 20,000 recursive insertions,
 checks duplicate construction and exact destruction counts, and reuses cleared
@@ -18976,6 +19022,12 @@ for a function whose unread proof covers R8.
 epilogue, and turns a `__finally` that local-unwinds there too into the `goto`
 it makes. `ABranchyHandlerFillsTheClause` folds the handler's own branch on the
 flag while unwinding.
+`SEHTerminationFrame.AFilterCallbackTakesTheSameEstablisher` certifies a filter
+callback's frame and the homes its parent saves for it, and `SEHFilterValue.*`
+prints each filter callback as its `__except` expression: the Counter read
+through the homed argument, `GetExceptionCode() == 0xC0000005`, a constant as
+`EXCEPTION_EXECUTE_HANDLER`, MSVC /O0's temporaries in the parent's frame gone
+when nothing else touches them, and the writes to a slot the parent reads kept.
 `ARM64SEHLocalUnwindTests.cpp` builds MSVC ARM64 /O0 parents that reach the
 import through a veneer: `ARM64SEHLocalUnwind.*` certifies the exit through
 an unrecorded veneer from the saved entry stack pointer, with the handler
@@ -19007,13 +19059,18 @@ and both of two nested finallys, fills through x1 whatever allocation the unwind
 codes give, prints a frame the parent cannot name that a handler forwards to a
 call as an unknown argument, keeps the comment for the unpublished registers, and
 `ARangeRunningPastTheEpilogueStillStructures` structures a `__try` whose range
-runs past the epilogue a branch around it skips to.
+runs past the epilogue a branch around it skips to. `ARMSEHFilterValue.*`
+publishes the frame pointer for a filter callback and prints the callback that
+reads the homed Counter through x1 as its `__except` expression.
 `WindowsEHModesCorpus.LocalUnwindReturnRunsTheFinallyOnceInTheClause` checks
 xcpt4's `eret` the same way on the original x64 FH4 binary: one increment in
 the `__except` arm, one in the filled clause and one in the normal-path copy,
 with no `_local_unwind`, target address or handler call left, and
 `LocalUnwindExitAgreesAloneAndInTheWholeUnit` prints the same function from a
-`--func` view as from the whole unit, and
+`--func` view as from the whole unit,
+`Xcpt4FilterCallbacksAreTheirExceptExpressions` prints every filter callback of
+xcpt4's x64 FH4 /O0 binary as its `__except` expression and the /O2 filter
+inside test58's termination handler as the Counter its frame homed, and
 `AArch64LocalUnwindExitAgreesAloneAndInTheWholeUnit` does so for the ARM64
 /O0 build's loop of two nested finallys, with no `_local_unwind` left.
 `EveryFinallyClauseOfXcpt4HoldsItsHandlerAsCode` decompiles the x64, ARM and

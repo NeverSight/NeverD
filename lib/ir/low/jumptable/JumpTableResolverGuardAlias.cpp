@@ -1761,10 +1761,14 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
           CandidateEvidenceBudget, 0, nullptr, &Masks, GuardValueDepth,
           CertifiedEdgeOverrides);
       // The ordinary table representation requires a dense zero-based
-      // prefix. Sparse domains keep their existing specialized owner.
+      // prefix. Sparse domains keep their existing specialized owner: a
+      // two-level index table, whose unreached index bytes are simply unused,
+      // is bounded by its last reaching value, as a dominating guard's proof
+      // bounds it below.  MSVC's CRT reaches one such dispatch with a value a
+      // `cmp al, 20h; ja` path left in 1..15 and another path's exact 20h.
       if (Results.size() == 1 && Complete.size() == 1 && Complete[0] &&
           Masks.size() == 1 && Results[0] && Masks[0] &&
-          (Masks[0] & (Masks[0] + 1)) == 0) {
+          ((Masks[0] & (Masks[0] + 1)) == 0 || AllowSparseDomain)) {
         const uint32_t Bound = std::bit_width(Masks[0]);
         // Relocations own the whole object, whose other slots may belong to
         // another dispatch of this function. Selecting a prefix bounds this

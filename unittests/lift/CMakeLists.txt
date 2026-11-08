@@ -1673,6 +1673,7 @@ add_neverd_unittest(NeverDJumpTableTests
   core/JumpTableAddressTests.cpp
   core/JumpTableCOFFBaseTests.cpp
   core/JumpTableCOFFNarrowGuardTests.cpp
+  core/JumpTableCOFFJoinedTwoLevelTests.cpp
   core/GuardExpressionTests.cpp
   core/AffineFrameStateTests.cpp
   core/ResolverBlockMemoTests.cpp

@@ -50,6 +50,7 @@ add_neverd_component_library(NeverDIRHigh
   structure/HighCFSimplifyIfElse.cpp
   structure/HighCommonContinuations.cpp
   structure/CxxObjectActions.cpp
+  structure/SEHFilterValues.cpp
   structure/SEHFinallyBodies.cpp
   structure/ARM/ARMSEHFinallyBodies.cpp
   structure/X86/X64SEHFinallyBodies.cpp

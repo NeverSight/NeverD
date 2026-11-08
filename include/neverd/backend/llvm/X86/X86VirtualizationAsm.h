@@ -49,9 +49,10 @@ x86VirtualizationAsm(Intrinsic Id, Arch TargetArch, NdMemoryAddressSpace Space,
     return std::nullopt;
   const uint16_t Word = TargetArch == Arch::X64 ? 8 : 4;
   if (C.PhysicalAddress &&
-      ((PhysicalAddressBytes != 4 && PhysicalAddressBytes != 8) ||
-       (TargetArch == Arch::X86 && PhysicalAddressBytes != 4)))
+      !x86SvmAddressSizeIsValid(TargetArch, PhysicalAddressBytes))
     return std::nullopt;
+  const bool AddressOverride =
+      C.PhysicalAddress && PhysicalAddressBytes != Word;
   X86VirtualizationAsm P;
   P.Id = Id;
   P.TargetArch = TargetArch;
@@ -99,17 +100,23 @@ x86VirtualizationAsm(Intrinsic Id, Arch TargetArch, NdMemoryAddressSpace Space,
   case Intrinsic::SvmLoad:
   case Intrinsic::SvmSave:
     P.InputConstraints = {"{ax}"};
-    P.Text += " " + Operand(0);
+    if (!AddressOverride)
+      P.Text += " " + Operand(0);
     break;
   case Intrinsic::SvmInvalidate:
     P.InputConstraints = {"{ax}", "{cx}"};
-    P.Text += " " + Operand(0) + ", " + Operand(1);
+    if (!AddressOverride)
+      P.Text += " " + Operand(0) + ", " + Operand(1);
     break;
   default:
     if (C.MemoryArgument == 0)
       P.Text += " " + Memory(0);
     break;
   }
+  // Assemblers spell narrow addressing with a prefix and implicit operands.
+  // Fixed-register constraints still transport AX/EAX and the full ECX ASID.
+  if (AddressOverride)
+    P.Text = "addr" + std::to_string(8 * PhysicalAddressBytes) + " " + P.Text;
   if (C.Result != X86VirtualizationResult::None)
     P.Text += "\n\tsetc %al\n\tsetz %ah";
   auto Constraint = [&](const std::string &Text) {

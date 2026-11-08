@@ -298,12 +298,14 @@ struct HighEHClause {
     WholeBody,
   };
   FinallyBody FinallyKind = FinallyBody::OutOfLine;
-  /// x86 registration EH: the value the filter thunk at \ref FilterOrActionVA
-  /// returns, an expression in the function's frame, when the thunk computes
-  /// nothing else.  In the decompile view it can also say what the filter does
-  /// first, as the left side of a comma (`BinOp NOP`), and choose by `BinOp
-  /// SELECT`.  The thunk runs inside the exception dispatch rather than at the
-  /// try, so no HighIR pass reads or rewrites this as code of the body.
+  /// SEH `__except`: the value the filter at \ref FilterOrActionVA decides, an
+  /// expression in the function's frame: x86 registration EH's filter thunk
+  /// when it computes nothing else, or an x64, ARM or AArch64 filter callback
+  /// spelled in its parent (attachSEHFinallyBodies).  In the decompile view it
+  /// can also say what the filter does first, as the left side of a comma
+  /// (`BinOp NOP`), and choose by `BinOp SELECT`.  The filter runs inside the
+  /// exception dispatch rather than at the try, so no HighIR pass reads or
+  /// rewrites this as code of the body.
   ExprPtr FilterValue;
 
   /// Itanium: position of this clause's action in the call-site action chain,

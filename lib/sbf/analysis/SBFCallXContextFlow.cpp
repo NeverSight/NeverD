@@ -899,6 +899,9 @@ private:
   llvm::Expected<std::array<std::optional<RegisterValue>, kRegisterCount>>
   unchangedLoadedCells(const MedBlock &Block, uint16_t Registers,
                        const ContextState &State);
+  llvm::Expected<std::optional<size_t>>
+  restoredEntryWord(const MedInstruction &Store, const MedBlock &Block,
+                    const ContextState &State);
   ContextState genericInput() const;
   llvm::Expected<RegisterValue> captureAddress(size_t Owner, size_t Slot,
                                                uint64_t Source,
@@ -5008,6 +5011,68 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
   return true;
 }
 
+llvm::Expected<std::optional<size_t>>
+ContextFlow::restoredEntryWord(const MedInstruction &Store,
+                               const MedBlock &Block,
+                               const ContextState &State) {
+  if (Store.Op != Operation::Store || Store.Width != kDoubleWordBitWidth ||
+      !State.InputExpressions[Store.Dst] || State.InputWrites.Unknown ||
+      State.InputWrites.WritesFrames || !State.InputWrites.Writes.empty())
+    return std::optional<size_t>{};
+  uint16_t Saved = 0;
+  for (unsigned R = 0; R < kRegisterCount; ++R) {
+    if (!State.InputExpressions[R])
+      continue;
+    const auto &Value = InputExpressions[*State.InputExpressions[R]];
+    if (Value.Kind != CallXInputExpressionKind::Instruction ||
+        Value.Input != State.InputExpressions[Store.Dst])
+      continue;
+    const auto *Load = Index.find(Value.InstructionSlot);
+    if (Load->Op != Operation::Load ||
+        Load->Semantics.MemoryWidth != kDoubleWordBitWidth ||
+        Load->Offset != Store.Offset)
+      continue;
+    if (Value.MemoryGuard) {
+      const auto &Guard = InputMemoryGuards[*Value.MemoryGuard];
+      if (Guard.Unknown || Guard.WritesFrames || !Guard.Writes.empty())
+        continue;
+    }
+    Saved |= registerBit(R);
+  }
+  if (!Saved)
+    return std::optional<size_t>{};
+  // The saved entry word and its address survive until the next store in this
+  // block. Calls, other stores, changed addresses and narrow restores cannot
+  // establish that the caller sees its original bytes again on return.
+  for (size_t Slot = Store.Slot + Store.SlotWidth; Slot < Block.EndSlot;
+       ++Slot) {
+    const auto *Instruction = Index.find(Slot);
+    if (!Instruction)
+      continue;
+    if (auto Error = visit())
+      return std::move(Error);
+    if (Instruction->Call != CallKind::None)
+      return std::optional<size_t>{};
+    if (Instruction->Op == Operation::Store) {
+      if (Instruction->Form == OperandForm::StoreReg &&
+          Instruction->Width == kDoubleWordBitWidth &&
+          Instruction->Dst == Store.Dst &&
+          Instruction->Offset == Store.Offset &&
+          (Saved & registerBit(Instruction->Src)))
+        return std::optional<size_t>{Slot};
+      return std::optional<size_t>{};
+    }
+    if (Instruction->Semantics.WritesDestination) {
+      if (Instruction->Dst == Store.Dst)
+        return std::optional<size_t>{};
+      Saved &= ~registerBit(Instruction->Dst);
+      if (!Saved)
+        return std::optional<size_t>{};
+    }
+  }
+  return std::optional<size_t>{};
+}
+
 llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
                                          size_t BlockID, ContextState &State,
                                          uint16_t &Defined, bool Collect) {
@@ -5022,6 +5087,7 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
   // the left shift loses no bits. Keep only this local transfer witness; an
   // alternate block entry or intervening instruction cannot inherit it.
   std::optional<ShiftedOrigin> PreviousShift;
+  std::optional<size_t> RestoringStore;
   MissingRegisters Missing;
   if (Collect)
     for (unsigned R = 0; R < kRegisterCount; ++R)
@@ -5149,9 +5215,23 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
         Context.HasInlineStores = true;
         Context.PreservesMemory = false;
       }
-      if (Collect && Instruction->Op == Operation::Store)
-        addMemoryAccessEffects(Context.Effects, *Instruction, State,
-                               Instruction->Dst);
+      if (Collect && Instruction->Op == Operation::Store) {
+        bool Restored = RestoringStore == Slot;
+        if (Restored) {
+          RestoringStore.reset();
+        } else if (Context.Generic) {
+          auto Restore = restoredEntryWord(*Instruction, Block, State);
+          if (!Restore)
+            return Restore.takeError();
+          RestoringStore = *Restore;
+          Restored = RestoringStore.has_value();
+        }
+        // These effects guard memory visible after a matched return. The
+        // ordinary transfer still sees both writes and every intervening read.
+        if (!Restored)
+          addMemoryAccessEffects(Context.Effects, *Instruction, State,
+                                 Instruction->Dst);
+      }
       if (Collect && Instruction->Op == Operation::Load) {
         addMemoryReadEffects(Context.ReadEffects, *Instruction, State);
       }
@@ -5883,6 +5963,14 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
     if (auto Error = retain(stateBytes(*Context.Return)))
       return std::move(Error);
     Context.RetainedBytes += stateBytes(*Context.Return);
+  }
+  if (!Context.Generic && Context.Return) {
+    const auto &Template = *GenericContexts.at(Entry);
+    // The completed generic proof covers every entry binding. A specialized
+    // replay can lose the saved input-load expression without losing that
+    // proof that the caller's bytes are unchanged on return.
+    if (Template.Complete && Template.Return && Template.PreservesMemory)
+      Context.Effects = {};
   }
   const uint64_t AccessBytes = (Context.Effects.Writes.capacity() +
                                 Context.ReadEffects.Writes.capacity()) *

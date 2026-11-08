@@ -27,10 +27,19 @@ namespace neverd {
 struct HighExpr;
 
 inline constexpr const char X86SystemStateCompilerDispatch[] =
+    "#ifndef NEVERD_X86_SKINIT\n"
+    "#if defined(__has_builtin)\n"
+    "#if __has_builtin(__builtin_ia32_skinit)\n"
+    "#define NEVERD_X86_SKINIT(native, ...) native\n"
+    "#endif\n"
+    "#endif\n"
+    "#ifndef NEVERD_X86_SKINIT\n"
+    "#define NEVERD_X86_SKINIT(native, ...) __VA_ARGS__\n"
+    "#endif\n"
+    "#endif\n\n"
     "#ifndef NEVERD_X86_SYSTEM_STATE\n"
     "#if defined(__has_builtin)\n"
     "#if __has_builtin(__builtin_ia32_clts) && "
-    "__has_builtin(__builtin_ia32_skinit) && "
     "__has_builtin(__builtin_ia32_wrmsrns) && "
     "__has_builtin(__builtin_ia32_rdmsrlist) && "
     "__has_builtin(__builtin_ia32_wrmsrlist) && "

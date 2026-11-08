@@ -205,6 +205,29 @@ public:
   std::optional<std::vector<HighStmt>>
   project(const HighFunc &Handler, const std::set<va_t> &UnwindTargets,
           const ExprPtr &Flag, FuncletNames &Names) override {
+    return projectBody(Handler, &UnwindTargets, Flag, Names);
+  }
+
+  std::optional<std::vector<HighStmt>>
+  projectFilter(const HighFunc &Filter, const ExprPtr &Pointers,
+                FuncletNames &Names) override {
+    return projectBody(Filter, nullptr, Pointers, Names);
+  }
+
+private:
+  HighFunc &Parent;
+  Arch TargetArch;
+  ParentView View;
+
+  /// The callback's body spelled in the parent, its first argument replaced by
+  /// \p First.  A termination handler's (\p UnwindTargets given) makes its
+  /// local unwinds jumps and its returns the end of the clause; a filter keeps
+  /// its returns, which say what it decides.  `__C_specific_handler` restores
+  /// the parent's callee-saved registers for a filter as the unwinder does for
+  /// a termination handler, and passes both the same frame.
+  std::optional<std::vector<HighStmt>>
+  projectBody(const HighFunc &Handler, const std::set<va_t> *UnwindTargets,
+              const ExprPtr &First, FuncletNames &Names) {
     static const RegisterValues NoRegisters;
     const auto Found = Parent.SEHFuncletRegisters.find(Handler.Entry);
     const RegisterValues &Registers =
@@ -214,7 +237,8 @@ public:
       return V.Kind == MedVar::Reg && !TRI.isStackPointer(V.RegOff) &&
              Registers.count(V.RegOff);
     };
-    // The flag arrives in the first argument register; an AArch64 handler also
+    // The flag, or a filter's exception pointers, arrives in the first argument
+    // register; an AArch64 handler also
     // takes the parent's frame pointer in the second, as the C-specific handler
     // passes it, whose value the parent's map holds where the protected ranges
     // leave it alone.  ARM's takes the EstablisherFrame there, the stack
@@ -242,10 +266,12 @@ public:
       if (Handler.Params[I].RegOff != Arguments.Registers[I])
         return std::nullopt;
     std::vector<HighStmt> Body = cloneStmts(Handler.Body);
-    jumpLocalUnwinds(Body, UnwindTargets, TargetArch);
-    if (!settleHandlerReturns(Body))
-      return std::nullopt;
-    dropUnreadValues(Body);
+    if (UnwindTargets) {
+      jumpLocalUnwinds(Body, *UnwindTargets, TargetArch);
+      if (!settleHandlerReturns(Body))
+        return std::nullopt;
+      dropUnreadValues(Body);
+    }
     unknownScratchArguments(Body, MaxParam);
     if (!localizeHandlerFrame(Body, TargetArch))
       return std::nullopt;
@@ -265,7 +291,7 @@ public:
         return Value ? Value : E;
       }
       if (E->Var.Kind == MedVar::Param) {
-        ExprPtr Value = cloneExpr(Flag);
+        ExprPtr Value = cloneExpr(First);
         if (E->Type)
           Value->Type = E->Type;
         return Value;
@@ -285,11 +311,6 @@ public:
     simplifyProjectedBody(Body);
     return Body;
   }
-
-private:
-  HighFunc &Parent;
-  Arch TargetArch;
-  ParentView View;
 };
 
 } // namespace
