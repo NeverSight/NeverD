@@ -22740,7 +22740,9 @@ The literal scalar reference runs on pinned Unicorn's 24Kf model.
 `mips16-roundtrip.py` recompiles seven scalar/control leaves through HighC and
 LLVMC, in both byte orders at O0/O2. It checks independent results, stack and
 callee-saved GPR preservation, both incoming return-mode tags, ELF mode
-flags and function tags under an adverse microMIPS compiler default. GNU MIPS
+flags and function tags under an adverse microMIPS compiler default.
+An instruction in the caller's selected ISA executes after each return, so
+checking only the canonical return address cannot hide a lost mode tag. GNU MIPS
 as and ld are required; LLVM's integrated assembler/linker do not qualify this
 MIPS16 route. Pass the executables explicitly:
 

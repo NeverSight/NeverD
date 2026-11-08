@@ -17,6 +17,7 @@ import sys
 
 from elftools.elf.elffile import ELFFile
 import roundtrip
+from unicorn import UC_HOOK_CODE
 from unicorn import mips_const as mips
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
@@ -70,9 +71,23 @@ def observe(path, little, function, inputs, return_tag):
     uc.reg_write(mips.UC_MIPS_REG_RA, roundtrip.STOP | return_tag)
     for index, value in enumerate(inputs):
         uc.reg_write(getattr(mips, f"UC_MIPS_REG_{4 + index}"), value)
-    uc.emu_start(entry, roundtrip.STOP, count=100000)
-    if uc.reg_read(mips.UC_MIPS_REG_PC) != roundtrip.STOP:
-        raise RuntimeError("MIPS16 scalar leaf did not return within the bound")
+    # Execute in the caller's ISA after the return. A canonical PC alone does
+    # not prove that the function retained the incoming ISA tag. These literal
+    # instructions write v1: MIPS16 LI v1,0x51 or classic ADDIU v1,zero,0x51.
+    sentinel = (0x6b51).to_bytes(2, "little" if little else "big") if return_tag else (
+        0x24030051).to_bytes(4, "little" if little else "big")
+    uc.mem_write(roundtrip.STOP, sentinel)
+    stop = roundtrip.STOP + len(sentinel)
+    returned = []
+    def observe_return(_uc, address, size, _):
+        if address == roundtrip.STOP:
+            returned.append(size)
+    uc.hook_add(UC_HOOK_CODE, observe_return)
+    uc.emu_start(entry, stop, count=100000)
+    # This model can retain the last instruction's PC after an until-stop.
+    # The executed instruction width and result qualify the actual return mode.
+    if returned != [len(sentinel)] or uc.reg_read(mips.UC_MIPS_REG_V1) != 0x51:
+        raise RuntimeError("MIPS16 scalar leaf did not return in the caller's ISA")
     if uc.reg_read(mips.UC_MIPS_REG_SP) != roundtrip.STACK:
         raise RuntimeError("MIPS16 scalar leaf changed the caller's stack pointer")
     for reg, value in saved.items():
@@ -129,7 +144,8 @@ def run(args, artifacts):
                         if value != wanted or after != wanted:
                             raise RuntimeError(f"{stem.name}: input={inputs}, original={value}, generated={after}, expected={wanted}")
                         observations.append({"inputs": inputs, "return_tag": tag, "expected": wanted,
-                                             "original": value, "generated": after, "stack_and_saved_gprs_preserved": True})
+                                             "original": value, "generated": after, "stack_and_saved_gprs_preserved": True,
+                                             "caller_isa_sentinel_executed": True})
                     report["passed"].append({"profile": profile, "function": function, "backend": backend,
                                              "optimization": optimization, "original_mode": original_mode,
                                              "rebuilt_mode": rebuilt_mode, "original_sha256": original_hash,
