@@ -203,10 +203,12 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
   if (sourceCallUsesMachineABI(Hint, Opts.Format, AuthenticatedTarget)) {
     std::string Diagnostic;
     const auto Bindings = sourceABIParameters(Signature);
+    const size_t ArgumentCount =
+        RetainResultStorage ? Bindings.size() : Signature.Parameters.size();
     if (!Hint.AnalystSite || Hint.AnalystSite->Instruction != E.CallSiteAddr ||
         Signature.Architecture != Opts.TheArch ||
         !validateSourceABI(Signature, Diagnostic) ||
-        E.Operands.size() != Bindings.size() + unsigned(RetainResultStorage) ||
+        E.Operands.size() != ArgumentCount + unsigned(RetainResultStorage) ||
         (E.IsIndirectCall && !E.IndirectTarget))
       throw std::invalid_argument(kResultCallError);
     std::optional<unsigned> Key;
@@ -256,16 +258,36 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
                       Target, Modifier, *Storage,
                       sourceResultCallStackBytes(Bindings))
             .str();
-    for (unsigned I = 0; I < Bindings.size(); ++I) {
-      const auto Value =
-          sourceValue(Arguments[I], E.Operands[I]->Type, Bindings[I].Type);
+    unsigned At = 0;
+    for (unsigned I = 0; I < ArgumentCount; ++I) {
+      const auto Type = RetainResultStorage
+                            ? Bindings[I].Type
+                            : sourceCallParameterType(Signature.Parameters[I]);
+      const auto Value = sourceValue(Arguments[I], E.Operands[I]->Type, Type);
       if (!Value)
         throw std::invalid_argument(kResultCallError);
-      Result += llvm::formatv(kResultCallArgumentC,
-                              declarationToC(Bindings[I].Type, ValueName),
-                              *Value, Packet, kResultCallHeaderWords + I,
-                              ValueName, Bindings[I].Type->Size)
+      if (RetainResultStorage || Signature.Parameters[I].Components.empty()) {
+        Result +=
+            llvm::formatv(kResultCallArgumentC, declarationToC(Type, ValueName),
+                          *Value, Packet, kResultCallHeaderWords + At++,
+                          ValueName, Type->Size)
+                .str();
+        continue;
+      }
+      // HighIR owns one logical argument. Evaluate it once, then marshal only
+      // the declared pieces; record padding is not an ABI operand.
+      Result += llvm::formatv(kResultCallLogicalArgumentC,
+                              declarationToC(Type, ValueName), *Value)
                     .str();
+      while (At < Bindings.size() && Bindings[At].ParameterIndex == I) {
+        const auto &Piece = Bindings[At];
+        Result += llvm::formatv(kResultCallArgumentPieceC, Packet,
+                                kResultCallHeaderWords + At, ValueName,
+                                Piece.ByteOffset, Piece.Type->Size)
+                      .str();
+        ++At;
+      }
+      Result += kResultCallArgumentEndC;
     }
     Result += sourceResultCallAsmC(sourceResultCallAsm(Bindings, Key, Results),
                                    Packet, kResultCallFrameC);

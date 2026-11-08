@@ -1377,6 +1377,10 @@ bridge. Each declared integer or floating return register is stored at its
 original width immediately after the branch returns. LLVM and both C routes
 reconstruct the logical scalar, 128-bit value, record or HFA from those pieces,
 using the shared validated ABI offsets. Record padding is not a result member.
+HighIR retains each complete logical argument. HighC evaluates it once and
+copies its declared pieces into the physical argument slots, using that same
+ABI mapping and excluding padding. Original-x8 calls retain their existing
+physical operands and exact storage address.
 This avoids an intermediate authentication or resign operation, including at
 O0; invalid signatures remain the responsibility of the original authenticated
 branch. Raw calls with direct results retain their existing typed C/LLVM path.
