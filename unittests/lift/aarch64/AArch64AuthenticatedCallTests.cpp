@@ -777,6 +777,8 @@ TEST(AArch64AuthenticatedCall, NativeTypesKeepTheOriginalIndirectTarget) {
                   for (const auto &Instruction : Block) {
                     EXPECT_FALSE(llvm::isa<llvm::FPToSIInst>(Instruction));
                     EXPECT_FALSE(llvm::isa<llvm::FPToUIInst>(Instruction));
+                    EXPECT_FALSE(llvm::isa<llvm::SIToFPInst>(Instruction));
+                    EXPECT_FALSE(llvm::isa<llvm::UIToFPInst>(Instruction));
                   }
               },
               TypedCase, false, true,
