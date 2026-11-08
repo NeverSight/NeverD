@@ -108,7 +108,10 @@ class LowWordDecisions {
   }
   llvm::DenseMap<uint64_t, std::pair<uint32_t, uint32_t>> Adders;
   llvm::DenseMap<uint64_t, uint32_t> Parities;
-  std::unordered_map<uint64_t, Bits> Words;
+  using WordPage = std::array<Bits, limits::kResidueWordPageEntries>;
+  llvm::DenseMap<uint64_t, uint32_t> Words;
+  std::vector<std::unique_ptr<WordPage>> WordPages;
+  uint32_t WordCount = 0;
   std::unordered_map<uint32_t, uint64_t> WideLiteralPrefixes;
   // Facts are copied out before recursion. Widening the node index keeps
   // every valid key separate from both dense-map sentinel values.
@@ -124,7 +127,7 @@ class LowWordDecisions {
     // can alias an admitted operation, including an eight-bit zero prefix.
     static WordOperation getEmptyKey() { return {{}, 0, SymOp::Add}; }
     static WordOperation getTombstoneKey() {
-      return {{}, UINT_MAX, SymOp::Add};
+      return {{}, std::numeric_limits<unsigned>::max(), SymOp::Add};
     }
     static unsigned getHashValue(const WordOperation &K) {
       return unsigned(llvm::hash_combine(K.Op, K.Count, K.Edges[0], K.Edges[1],
@@ -839,9 +842,14 @@ class LowWordDecisions {
            (uint64_t(Ctx.op(R)) << 16) | (Low << 8) | Count;
   }
 
-  // References into unordered_map elements survive recursive insertions.
-  // Cached words are immutable until the parity assumption changes; no view
-  // escapes that phase. Cache hits pay for lookup, without copying each bit.
+  const Bits &wordValue(uint32_t Index) const {
+    return (*WordPages[Index / limits::kResidueWordPageEntries])
+                     [Index % limits::kResidueWordPageEntries];
+  }
+
+  // Result pages remain stable while the dense index table grows. Cached
+  // words are immutable until the parity assumption changes; no view escapes
+  // that phase. Cache hits pay for lookup, without copying each bit.
   const Bits &word(SymRef R, unsigned Count, unsigned Depth = 0) {
     static const auto EmptyWords = [] {
       std::array<Bits, limits::kMaxAffineResidueTableBits + 1> Result;
@@ -873,7 +881,7 @@ class LowWordDecisions {
         return word(Ctx.operand(R, 0), Count, Depth + 1);
     }
     if (auto It = Words.find(Key); It != Words.end())
-      return It->second;
+      return wordValue(It->second);
     if (!charge(Count) || Depth >= limits::kMaxResidueDecisionDepth) {
       Failed = true;
       return Empty;
@@ -1058,10 +1066,28 @@ class LowWordDecisions {
                      (uint64_t(I) << 32) | R.index(),
                  0, 1);
     }
-    if (!charge(Count, sizeof(uint64_t) + sizeof(Bits) +
-                           2 * Count * sizeof(uint32_t) + 4 * sizeof(void *)))
+    if (!charge(Count) || !reserveEntry(Words))
       return Empty;
-    return Words.emplace(Key, std::move(Result)).first->second;
+    const size_t Page = WordCount / limits::kResidueWordPageEntries;
+    if (Page == WordPages.size()) {
+      // Pay for complete pages and pointer-array growth before allocation.
+      // Keeping the pages across the parity switch reuses already-paid
+      // storage; only the index and logical word count need to be reset.
+      if (WordPages.size() == WordPages.capacity()) {
+        const size_t Capacity = std::max(size_t(1), 2 * WordPages.capacity());
+        if (!charge(0, Capacity * sizeof(std::unique_ptr<WordPage>)))
+          return Empty;
+        WordPages.reserve(Capacity);
+      }
+      if (!charge(0, sizeof(WordPage)))
+        return Empty;
+      WordPages.push_back(std::make_unique<WordPage>());
+    }
+    auto &Stored =
+        (*WordPages[Page])[WordCount % limits::kResidueWordPageEntries];
+    Stored = std::move(Result);
+    Words.try_emplace(Key, WordCount++);
+    return Stored;
   }
 
   // Count equal and complementary bits before carry propagation. A pair of
@@ -1712,7 +1738,7 @@ class LowWordDecisions {
     }
     const uint64_t Key = (uint64_t(R.index()) << 8) | Count;
     if (auto It = Words.find(Key); It != Words.end())
-      return It->second.back();
+      return wordValue(It->second).back();
     if (Ctx.numOperands(R) == 2 && Ctx.isConst(Ctx.operand(R, 0))) {
       if (Ctx.op(R) == SymOp::And) {
         const auto Literal = literalLowWord(Ctx.operand(R, 0));
@@ -1993,7 +2019,7 @@ class LowWordDecisions {
           const auto It =
               Words.find((uint64_t(R.index()) << 8) | State.NarrowPrecision);
           if (It != Words.end())
-            Value = &It->second;
+            Value = &wordValue(It->second);
         }
         if (!Value) {
           Result = {internSignature(State, {UINT64_MAX, Count, R.index()}),
@@ -2526,6 +2552,7 @@ public:
           AssumptionCoversFactors = CoversAll;
           PriorityInput = uint32_t(D.Variable);
           Words.clear();
+          WordCount = 0;
           Arithmetic.clear();
           Applied.clear();
           Adders.clear();

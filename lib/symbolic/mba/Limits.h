@@ -79,6 +79,8 @@ inline constexpr unsigned kMaxAffineResidueDepth = 8;
 inline constexpr unsigned kMinAffineResidueScaledFactors = 1;
 inline constexpr std::size_t kMaxAffineResidueEdges = 64;
 inline constexpr unsigned kMaxAffineResidueTableBits = 8;
+/// Stable low-word results share small pages instead of per-word hash nodes.
+inline constexpr std::size_t kResidueWordPageEntries = 16;
 /// Keep optional multiple-residual recovery from starving the surrounding DAG.
 inline constexpr std::size_t kMaxMultipleResidueWork = 49152;
 /// Direct decision proofs still spend the caller's existing cumulative budget.

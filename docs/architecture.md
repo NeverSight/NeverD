@@ -5311,8 +5311,11 @@ single-bit query constructs only the carry into its requested position.
 Projected handles, known-zero facts and pairing signatures use exact-key
 dense tables, avoiding one heap allocation per cached fact. Their values are
 copied before recursion, and complete bucket growth is charged before insertion.
-Decision-word caches and interned signature keys retain stable references for
-callers that keep them across recursive insertions.
+Decision-word results live in stable small pages behind a dense index table.
+Complete page and pointer-array growth is charged before allocation; a parity
+change clears the index and reuses the already-paid pages. No word view escapes
+that phase. Interned signature keys also retain stable references for callers
+that keep them across recursive insertions.
 Arithmetic cache keys pack every complemented edge into a 16-bit lane, with
 precision and operation retained separately. Dense buckets own their inline
 results; callers copy those results before recursion. Bucket growth is prepaid
