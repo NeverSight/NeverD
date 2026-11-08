@@ -771,6 +771,11 @@ TEST(AArch64AuthenticatedCall, NativeTypesKeepTheOriginalIndirectTarget) {
         return bool(Module);
       };
       EXPECT_TRUE(Emit());
+      // A recovered display name is optional in LLVM and never supplies the
+      // callable address. HighIR above retains its own resolved display name.
+      Hint->TargetName.clear();
+      EXPECT_TRUE(Emit());
+      Hint->TargetName = kResolvedCallback;
       Hint->Signature.HasExplicitABI = false;
       EXPECT_FALSE(Emit());
       Hint->Signature.HasExplicitABI = true;

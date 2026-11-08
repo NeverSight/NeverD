@@ -937,7 +937,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         Analyst ? AnalystSourceProjection && Hint.AnalystSite &&
                       Hint.AnalystSite->Instruction == Op.Addr &&
                       Hint.AnalystSite->Sequence == Op.OriginSeq
-                : Target && !Hint.TargetName.empty() &&
+                : Target &&
                       Hint.Signature.Convention ==
                           SourceFunctionTypeHint::ConventionKind::C &&
                       Hint.AnalystFixedCount < 0 && !Hint.ByValueCopy &&
