@@ -84,6 +84,11 @@ a test binary. Its arrival source adds 7,680 message truth-table cases and
 960 complete two-slot lifetimes across every fixed vector, plus reserved-vector
 refusal and coalesced trigger-mode changes through EOI. These are constant
 expressions, not runtime tests or captured arrival traces.
+The priority source checks all 256 initial TPR bytes against every legal CR8
+write, all 60 reserved source bits, paired-state import mismatch and post-write
+priority admission. Same-value writes must clear subpriority; reads, imports
+and refused writes must preserve their corresponding banks. These compile-only
+checks do not qualify MOV-CR8 execution or automatic scheduler synchronization.
 For a real save, compile projected bank initializers at O0/O2,
 inspect constant bytes, and keep hypothetical register transitions distinct
 from captured observations. No guest, handler or device callback need run.
