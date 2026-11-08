@@ -1,3 +1,10 @@
+add_library(NeverDX86LocalApicProofs OBJECT x86/X86LocalApicProofs.cpp)
+target_compile_features(NeverDX86LocalApicProofs PRIVATE cxx_std_20)
+target_include_directories(NeverDX86LocalApicProofs PRIVATE
+  "${CMAKE_SOURCE_DIR}/include")
+set_target_properties(NeverDX86LocalApicProofs PROPERTIES FOLDER "NeverD/Tests")
+add_dependencies(NeverDUnitTests NeverDX86LocalApicProofs)
+
 add_neverd_unittest(NeverDX64PagedExecutionTests
   x86/X64PagedExecutionTests.cpp
   LINK_COMPONENTS Pipeline X64PagedEventDelivery
