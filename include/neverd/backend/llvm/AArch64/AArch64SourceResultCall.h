@@ -45,6 +45,25 @@ inline constexpr char kResultCallCClobbers[] =
 #include "AArch64SourceResultCall.def"
     ;
 
+/// Packet cells hold at most one machine word. Native short-vector carriers
+/// are wider than integer-pair pieces and need a different packet layout.
+inline bool
+sourceResultCallHasWordCarriers(const SourceFunctionTypeHint &Signature) {
+  if (Signature.ReturnLocation.ValueBytes > kResultCallWordBytes)
+    return false;
+  for (const auto &Location : Signature.ReturnComponents)
+    if (Location.ValueBytes > kResultCallWordBytes)
+      return false;
+  for (const auto &Parameter : Signature.Parameters) {
+    if (Parameter.Location.ValueBytes > kResultCallWordBytes)
+      return false;
+    for (const auto &Location : Parameter.Components)
+      if (Location.ValueBytes > kResultCallWordBytes)
+        return false;
+  }
+  return true;
+}
+
 /// Result pieces of a validated Darwin signature. Indirect results retain
 /// original storage instead of reconstructing a new logical value.
 inline llvm::SmallVector<SourceABIParameter, 4>

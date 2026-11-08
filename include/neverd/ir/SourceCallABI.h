@@ -24,7 +24,9 @@ TypeRef sourceCallParameterType(const SourceParameterTypeHint &Parameter);
 /// original x8 storage with a temporary logical result.
 bool sourceCallRetainsResultStorage(const SourceCallTypeHint &Hint);
 /// Preserve the checked physical branch or hidden result storage instead of
-/// introducing a compiler-default function-pointer invocation.
+/// introducing a compiler-default function-pointer invocation. Recovered
+/// native C bindings retain their declaration/effects checks at the emitter;
+/// this selection does not authorize missing ABI carriers or copy storage.
 bool sourceCallUsesMachineABI(const SourceCallTypeHint &Hint,
                               BinaryFormat Format, bool Authenticated);
 /// System V x64 variadic floating operands also need the original AL vector

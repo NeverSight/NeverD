@@ -25,5 +25,10 @@ MACHO_DEPENDENCY_TEXT(kInvalidArm64eSegment,
 MACHO_DEPENDENCY_TEXT(kArm64eTargetOverflow, "arm64e rebase target overflows")
 MACHO_DEPENDENCY_TEXT(kChangedCPUABI, "image CPU type or ABI subtype changed")
 
+MACHO_DEPENDENCY_TEXT(kInvalidChainOverflow,
+                      "invalid or unowned chained overflow starts")
+MACHO_DEPENDENCY_TEXT(kOverlappingChainSlots,
+                      "duplicate or overlapping chained pointer storage")
+
 #undef MACHO_DEPENDENCY_VALUE
 #undef MACHO_DEPENDENCY_TEXT

@@ -200,14 +200,21 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
     return Callee;
   };
   const bool RetainResultStorage = sourceCallRetainsResultStorage(Hint);
-  if (sourceCallUsesMachineABI(Hint, Opts.Format, AuthenticatedTarget)) {
+  const auto MachineCall = [&]() -> std::string {
     std::string Diagnostic;
     const auto Bindings = sourceABIParameters(Signature);
     const size_t ArgumentCount =
         RetainResultStorage ? Bindings.size() : Signature.Parameters.size();
-    if (!Hint.AnalystSite || Hint.AnalystSite->Instruction != E.CallSiteAddr ||
+    const bool Analyst = Hint.CallKind == SourceCallTypeHint::Kind::Analyst;
+    if ((Analyst && (!Hint.AnalystSite ||
+                     Hint.AnalystSite->Instruction != E.CallSiteAddr)) ||
+        (!Analyst && (Hint.AnalystFixedCount >= 0 ||
+                      hasIndirectSourceParameters(Signature) ||
+                      Signature.ReturnLocation.Kind ==
+                          SourceABICarrierKind::IndirectResultPointer)) ||
         Signature.Architecture != Opts.TheArch ||
         !validateSourceABI(Signature, Diagnostic) ||
+        !sourceResultCallHasWordCarriers(Signature) ||
         E.Operands.size() != ArgumentCount + unsigned(RetainResultStorage) ||
         (E.IsIndirectCall && !E.IndirectTarget))
       throw std::invalid_argument(kResultCallError);
@@ -310,8 +317,10 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
     if (!Value)
       throw std::invalid_argument(kResultCallError);
     return Result + llvm::formatv(kResultCallValueEndC, *Value).str();
-  }
+  };
   if (Hint.CallKind == SourceCallTypeHint::Kind::Analyst) {
+    if (sourceCallUsesMachineABI(Hint, Opts.Format, AuthenticatedTarget))
+      return MachineCall();
     std::string Diagnostic;
     if (!Hint.AnalystSite || Hint.AnalystSite->Instruction != E.CallSiteAddr ||
         Hint.Signature.Architecture != Opts.TheArch ||
@@ -1081,9 +1090,7 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
         !(Signature.HasExplicitABI &&
           Signature.Origin ==
               SourceFunctionTypeHint::OriginKind::NativeAnalysis &&
-          Parameter.Type && Parameter.Type->Kind == NdTypeKind::Int &&
-          Parameter.Type->Size == 16 &&
-          Parameter.Type->SourceName == kSourceAArch64Vector128CType &&
+          integerPair(Parameter.Type) &&
           validateSourceABI(Signature, ABIDiagnostic)))
       return bad("unsupported parameter type");
   const bool Block = Hint.CallKind == Kind::BlockInvoke;
@@ -1288,6 +1295,10 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
                                               : "objc_msgSend") +
            ")";
   }
+  // Native bindings must pass the same identity, effects and declaration
+  // checks as ordinary source calls before using their physical carriers.
+  if (sourceCallUsesMachineABI(Hint, Opts.Format, AuthenticatedTarget))
+    return MachineCall();
   if (E.IsIndirectCall && Hint.CallKind == Kind::Native &&
       Signature.Convention == SourceFunctionTypeHint::ConventionKind::C)
     Name = OriginalCallee(Signature.Parameters.size(), false);
