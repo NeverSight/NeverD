@@ -11,30 +11,38 @@
 
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
+#include <array>
+
 namespace neverd {
 namespace {
 
-constexpr const char *O32Names[] = {
-    "zero", "at", "v0", "v1", "a0", "a1", "a2", "a3", "t0", "t1", "t2", "t3",
-    "t4",   "t5", "t6", "t7", "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7",
-    "t8",   "t9", "k0", "k1", "gp", "sp", "fp", "ra", "hi", "lo", "pc"};
-constexpr const char *N64Names[] = {
-    "zero", "at", "v0", "v1", "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7",
-    "t0",   "t1", "t2", "t3", "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7",
-    "t8",   "t9", "k0", "k1", "gp", "sp", "fp", "ra", "hi", "lo", "pc"};
+struct RegisterNames {
+  const char *O32;
+  const char *N64;
+};
+
+constexpr auto Names = [] {
+  std::array<RegisterNames, mipsreg::PC / mipsreg::SlotBytes + 1> Result{};
+#define NEVERD_MIPS_REGISTER(Name, Index, O32, N64) Result[Index] = {O32, N64};
+#include "neverd/lift/MIPS/MIPSRegisters.def"
+  return Result;
+}();
+
+#define NEVERD_MIPS_REGISTER_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "neverd/lift/MIPS/MIPSRegisters.def"
 
 } // namespace
 
 const char *getMIPS32RegName(uint64_t Offset, uint16_t Size) {
-  return Offset % 8 == 0 && Offset <= mipsreg::PC && Size <= 4
-             ? O32Names[Offset / 8]
-             : "unknown_mips_register";
+  return Offset % mipsreg::SlotBytes == 0 && Offset <= mipsreg::PC && Size <= 4
+             ? Names[Offset / mipsreg::SlotBytes].O32
+             : UnknownRegister;
 }
 
 const char *getMIPS64RegName(uint64_t Offset, uint16_t Size) {
-  return Offset % 8 == 0 && Offset <= mipsreg::PC && Size <= 8
-             ? N64Names[Offset / 8]
-             : "unknown_mips_register";
+  return Offset % mipsreg::SlotBytes == 0 && Offset <= mipsreg::PC && Size <= 8
+             ? Names[Offset / mipsreg::SlotBytes].N64
+             : UnknownRegister;
 }
 
 } // namespace neverd

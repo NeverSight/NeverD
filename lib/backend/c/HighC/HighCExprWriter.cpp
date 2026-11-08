@@ -17,6 +17,7 @@
 #include "../LibraryPrototype.h"
 #include "../UnalignedMemory.h"
 #include "../VariadicImportStub.h"
+#include "../render/MIPS/MIPSScalar.h"
 #include "../render/X86/X64CallRCX.h"
 #include "../render/X86/X86APXAtomic.h"
 #include "../render/X86/X86AmxState.h"
@@ -2320,6 +2321,15 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   std::string Name = resolvedCallTarget(E);
 
   if (E.IntrinsicId != Intrinsic::None) {
+    if (mips::isScalarIntrinsic(E.IntrinsicId))
+      return renderMIPSScalar(
+          E, Opts.TheArch, MIPSScalarHelpers.at(E.IntrinsicId),
+          E.Operands.empty() ? std::nullopt : constAddress(*E.Operands[0]),
+          [this, &E](const HighExpr &V, unsigned Index) {
+            return Index == 0 && mips::mergeLoad(E.IntrinsicId)
+                       ? addrStr(V, 0, true)
+                       : exprStr(V);
+          });
     if (const auto Bits = x86SaturatingLaneBits(E)) {
       const auto Helper = SaturatingLaneHelpers.find({E.IntrinsicId, *Bits});
       if (Helper == SaturatingLaneHelpers.end())

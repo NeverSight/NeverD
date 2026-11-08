@@ -29,6 +29,7 @@
 #include "neverd/ir/low/LowArchitecturalValue.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/ir/low/LowRawEnvironment.h"
+#include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -116,6 +117,7 @@ predicatedInstructionEnd(llvm::ArrayRef<LowOp> Ops,
 } // namespace
 
 void NdOpEmulator::reset() {
+  UnpredictableValues.clear();
   Registers.clear();
   WideRegisters.clear();
   MemStore.clear();
@@ -130,6 +132,7 @@ void NdOpEmulator::reset() {
 }
 
 void NdOpEmulator::setRegister(uint64_t RegOff, uint64_t Value) {
+  UnpredictableValues.erase(RegOff);
   if (RegOff == x86reg::FPU_CW || RegOff == x86reg::FPU_SW ||
       (RegOff >= x86reg::ST0 && RegOff <= x86reg::ST7)) {
     X87ContextKnown = false;
@@ -148,6 +151,8 @@ std::optional<uint64_t> NdOpEmulator::getRegister(uint64_t RegOff) const {
 
 void NdOpEmulator::setRegisterBytes(uint64_t RegOff,
                                     llvm::ArrayRef<uint8_t> Value) {
+  if (Value.size() >= (isMIPS64(Img.Arch) ? 8u : 4u))
+    UnpredictableValues.erase(RegOff);
   if (RegOff == x86reg::FPU_CW || RegOff == x86reg::FPU_SW ||
       (RegOff >= x86reg::ST0 && RegOff <= x86reg::ST7)) {
     X87ContextKnown = false;
@@ -315,6 +320,9 @@ NdOpEmulator::resolveMemoryAddress(const LowOp &Op, uint64_t Offset) const {
 void NdOpEmulator::writeOutput(const NdVar &Output, uint64_t Value) {
   if (!Output.isReg() && !Output.isTemp())
     return;
+  if (!UnpredictableValues.empty() &&
+      Output.Size >= (isMIPS64(Img.Arch) ? 8u : 4u))
+    UnpredictableValues.erase(Output.Offset);
   uint64_t Mask = Output.Size < 8 ? (1ULL << (Output.Size * 8)) - 1 : ~0ULL;
   uint64_t Result = Value & Mask;
   if (Output.isReg() && Output.Size < 8) {
@@ -348,6 +356,9 @@ void NdOpEmulator::writeOutputBytes(const NdVar &Output,
                                     llvm::ArrayRef<uint8_t> Value) {
   if (!Output.isReg() && !Output.isTemp())
     return;
+  if (!UnpredictableValues.empty() &&
+      Output.Size >= (isMIPS64(Img.Arch) ? 8u : 4u))
+    UnpredictableValues.erase(Output.Offset);
   if (Output.isReg()) {
     auto Existing = WideRegisters.find(Output.Offset);
     if (Existing != WideRegisters.end() &&
@@ -511,6 +522,11 @@ void NdOpEmulator::clobberVolatileRegisters() {
 bool NdOpEmulator::step(const LowOp &Op) { return stepImpl(Op, {}); }
 
 bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following) {
+  if (!UnpredictableValues.empty())
+    for (unsigned I = 0; I < Op.NumInputs; ++I)
+      if ((Op.Inputs[I].isReg() || Op.Inputs[I].isTemp()) &&
+          UnpredictableValues.contains(Op.Inputs[I].Offset))
+        return false;
   if (isLowRawEnvironmentRequirement(Op) || isLowArchitecturalValue(Op))
     return false;
   if (X87ContextKnown && Op.Output.isReg() &&
@@ -527,6 +543,8 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following) {
   if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs > 0 &&
       Op.Inputs[0].isConst()) {
     const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+    if (mips::isScalarIntrinsic(Id))
+      return executeMIPSScalar(Op);
     if (isAArch64WritebackMemoryIntrinsic(Id)) {
       if (Img.Arch != Arch::AArch64 ||
           !lowAArch64WritebackMemoryShapeIsValid(Op))

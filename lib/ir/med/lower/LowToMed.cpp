@@ -38,6 +38,7 @@
 #include "neverd/ir/low/LowIntrinsicOutputs.h"
 #include "neverd/ir/low/LowRawEnvironment.h"
 #include "neverd/ir/low/LowScalarConstant.h"
+#include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/low/SEHFrameProof.h"
 #include "neverd/ir/low/X86/X86CompactShape.h"
@@ -782,6 +783,7 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
   if (SEHPhysical)
     Physical = std::move(SEHPhysical->Function);
   const LowFunc &Low = Physical ? *Physical : SourceLow;
+  bool HasMIPSScalarValues = false;
   for (const LowBlock &Block : Low.Blocks)
     for (const LowOp &Op : Block.Ops) {
       if (isLowRawEnvironmentRequirement(Op) ||
@@ -828,6 +830,10 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
         if (Op.NumInputs == 0 || !Op.Inputs[0].isConst())
           llvm::report_fatal_error("intrinsic has no constant intrinsic ID");
         const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+        if (mips::isScalarIntrinsic(Id) &&
+            !mipsScalarLowShapeIsValid(Op, TheArch))
+          throw LowToMedConversionError(mips::kMalformedScalar);
+        HasMIPSScalarValues |= mips::isScalarIntrinsic(Id);
         if ((Id == Intrinsic::Eret && TheArch != Arch::AArch64) ||
             !aarch64ExceptionReturnShapeIsValid(Id, Op.NumInputs,
                                                 Op.Output.Size))
@@ -1865,6 +1871,13 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       debugVerifyMedFunc(Func, "SGX conditional inputs");
     }
     x86_registration::discardUnusedSEHCallInputs(Func);
+    if (HasMIPSScalarValues) {
+      // Remove unobserved HI/LO definitions, partial-load upper words and
+      // dead merge values before ABI recovery invents input parameters.
+      propagate(Func);
+      runDce(Func);
+      debugVerifyMedFunc(Func, "MIPS scalar value projection");
+    }
     detectCc(Func, TheArch, Fmt);
     completeX86RegistrationEntryParameters(Func);
     debugVerifyMedFunc(Func, "detectCc");

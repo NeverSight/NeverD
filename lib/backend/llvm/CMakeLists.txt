@@ -128,6 +128,7 @@ add_neverd_component_library(NeverDBackendLLVM
   emit/MedLLVMFloatEmitter.cpp
   emit/MedLLVMFuncBody.cpp
   emit/MedLLVMIntrinsic.cpp
+  MIPS/MedLLVMMIPSScalar.cpp
   emit/MedLLVMOpEmitter.cpp
   X86/MedLLVMPortableX87.cpp
   emit/MedLLVMReturn.cpp

@@ -333,6 +333,8 @@ private:
   llvm::Value *widenToI128(llvm::Value *V, llvm::IRBuilder<> &Builder);
 
   llvm::Value *emitIntrinsic(const MedOp &Op, llvm::IRBuilder<> &Builder);
+  llvm::Value *emitMIPSScalar(const MedOp &Op, Intrinsic Id,
+                              llvm::IRBuilder<> &Builder);
   llvm::Value *emitX86AmxState(const MedOp &Op, llvm::IRBuilder<> &Builder);
   llvm::Value *emitX86CompressExpand(const MedOp &Op, Intrinsic Id,
                                      llvm::IRBuilder<> &Builder);

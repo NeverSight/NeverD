@@ -14,6 +14,7 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
 #include "llvm/Support/Endian.h"
@@ -266,7 +267,21 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
       return false;
     S.write(RT, S.binary(NdOp::INT_ADD, S.read(RS), NdVar::cst(Immediate, 8)));
     return true;
-  case 28: { // SPECIAL2: CLZ/CLO, DCLZ/DCLO
+  case 28: { // SPECIAL2: MUL, CLZ/CLO, DCLZ/DCLO
+    if (Function == 2 && !SA) {
+      if (Wide) {
+        S.emitIntrinsic(Intrinsic::MIPSRequireWord, {}, {S.read(RS)});
+        S.emitIntrinsic(Intrinsic::MIPSRequireWord, {}, {S.read(RT)});
+      }
+      S.write(RD, S.binary(NdOp::INT_MULT, S.read(RS, 4), S.read(RT, 4)));
+      // MUL leaves both accumulators unpredictable, even when rd is zero.
+      // Separate definitions let SSA discard either result independently.
+      S.emitIntrinsic(Intrinsic::MIPSUnpredictable,
+                      NdVar::reg(mipsreg::HI, S.Width), {});
+      S.emitIntrinsic(Intrinsic::MIPSUnpredictable,
+                      NdVar::reg(mipsreg::LO, S.Width), {});
+      return true;
+    }
     if (SA || RT != RD ||
         (Function != 32 && Function != 33 && Function != 36 &&
          Function != 37) ||

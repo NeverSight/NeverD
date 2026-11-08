@@ -387,7 +387,8 @@ void LowToMedConverter::runDce(MedFunc &Func) {
     for (size_t I = 0; I < Blk.Ops.size(); ++I) {
       bool IsCall = (Blk.Ops[I].Opcode == NdOp::CALL ||
                      Blk.Ops[I].Opcode == NdOp::INDIR_CALL ||
-                     Blk.Ops[I].Opcode == NdOp::INTRINSIC);
+                     (Blk.Ops[I].Opcode == NdOp::INTRINSIC &&
+                      !mipsScalarMedShapeIsValid(Blk.Ops[I], TargetArch)));
       bool IsTail = (Blk.Ops[I].Opcode == NdOp::INDIR_BR && Blk.Succs.empty());
       if (!IsCall && !IsTail)
         continue;
@@ -613,6 +614,11 @@ void LowToMedConverter::runDce(MedFunc &Func) {
   // Propagate liveness with a worklist over definitions: a live value makes
   // its defining operation (or PHI) live, which makes their inputs live.
   auto isEssential = [](const MedOp &Op) {
+    if (mipsScalarMedShapeIsValid(Op)) {
+      const auto Id = static_cast<Intrinsic>(Op.Inputs[0].ConstVal);
+      if (Id == Intrinsic::MIPSUnpredictable || Id == Intrinsic::MIPSLwrUpper)
+        return false;
+    }
     return Op.Opcode == NdOp::STORE || Op.Opcode == NdOp::ATOMIC_XCHG ||
            Op.Opcode == NdOp::ATOMIC_ADD || Op.Opcode == NdOp::ATOMIC_CMPXCHG ||
            Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
@@ -655,7 +661,15 @@ void LowToMedConverter::runDce(MedFunc &Func) {
   }
   std::vector<std::pair<int, int>> Worklist(LiveDefs.begin(), LiveDefs.end());
   auto markInputs = [&](const MedOp &Op) {
+    const bool UnusedMerge =
+        mipsScalarMedShapeIsValid(Op, TargetArch) &&
+        mips::mergeLoad(static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) &&
+        !LiveDefs.count({Op.Output.Id, Op.Output.SSAVer});
     for (uint8_t I = 0; I < Op.NumInputs; ++I) {
+      // The previous destination contributes only to the returned value;
+      // the effective address alone selects all reads and faults.
+      if (I == 2 && UnusedMerge)
+        continue;
       if (I == X86BoundedLeafFlagOperand)
         if (const auto *Flags = FlagResult(Op);
             Flags && !LiveDefs.count({Flags->Id, Flags->SSAVer}))
@@ -696,6 +710,10 @@ void LowToMedConverter::runDce(MedFunc &Func) {
             0, X86ArithmeticFlagsBytes, ConstantAddressProvenance::Scalar);
       const bool OutputLive =
           Op.Output.Id >= 0 && LiveDefs.count({Op.Output.Id, Op.Output.SSAVer});
+      if (!OutputLive && mipsScalarMedShapeIsValid(Op, TargetArch) &&
+          mips::mergeLoad(static_cast<Intrinsic>(Op.Inputs[0].ConstVal)))
+        Op.Inputs[2] = MedVar::makeConst(0, Op.Inputs[2].Size,
+                                         ConstantAddressProvenance::Scalar);
       // Multi-root SSA can number an entry copy after version zero. Copy
       // propagation then leaves readers of its incoming operand while the
       // copy's result is unused. Retain the live-in declaration: stack and

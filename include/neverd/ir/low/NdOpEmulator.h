@@ -28,6 +28,7 @@
 #include "neverd/symbolic/SymExplore.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseSet.h"
 
 #include <array>
 #include <cstdint>
@@ -245,6 +246,7 @@ private:
   const BinaryImage &Img;
   std::map<uint64_t, uint64_t> Registers;
   std::map<uint64_t, std::vector<uint8_t>> WideRegisters;
+  llvm::DenseSet<uint64_t> UnpredictableValues;
   /// Distinct store starting addresses retain the bounded write-entry
   /// accounting contract.  Bytes are kept separately so differently sized
   /// and overlapping stores compose exactly when a later load spans them.
@@ -278,6 +280,7 @@ private:
   std::vector<uint64_t> CallPreservedRegs;
 
   uint64_t readOperand(const NdVar &Operand) const;
+  bool executeMIPSScalar(const LowOp &Op);
   std::vector<uint8_t> readOperandBytes(const NdVar &Operand) const;
   bool knownOperandBytes(const NdVar &Operand, uint64_t Offset,
                          uint64_t Bytes) const;

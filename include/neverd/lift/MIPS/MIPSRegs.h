@@ -18,19 +18,11 @@
 namespace neverd {
 namespace mipsreg {
 
-inline constexpr uint64_t r(unsigned Index) { return Index * 8; }
-inline constexpr uint64_t Zero = r(0);
-inline constexpr uint64_t V0 = r(2);
-inline constexpr uint64_t V1 = r(3);
-inline constexpr uint64_t A0 = r(4);
-inline constexpr uint64_t T9 = r(25);
-inline constexpr uint64_t GP = r(28);
-inline constexpr uint64_t SP = r(29);
-inline constexpr uint64_t FP = r(30);
-inline constexpr uint64_t RA = r(31);
-inline constexpr uint64_t HI = r(32);
-inline constexpr uint64_t LO = r(33);
-inline constexpr uint64_t PC = r(34);
+inline constexpr uint64_t SlotBytes = 8;
+inline constexpr uint64_t r(unsigned Index) { return Index * SlotBytes; }
+#define NEVERD_MIPS_REGISTER(Name, Index, O32, N64)                            \
+  inline constexpr uint64_t Name = r(Index);
+#include "neverd/lift/MIPS/MIPSRegisters.def"
 
 } // namespace mipsreg
 

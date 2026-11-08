@@ -1,0 +1,60 @@
+//===- MIPSRegisters.def - Integer register identities and ABI names -----===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Shared storage slots and o32/n64 spellings. Include with
+/// NEVERD_MIPS_REGISTER(Name, Index, O32, N64) or
+/// NEVERD_MIPS_REGISTER_TEXT(Name, Text) defined.
+///
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_MIPS_REGISTER
+#define NEVERD_MIPS_REGISTER(Name, Index, O32, N64)
+#endif
+#ifndef NEVERD_MIPS_REGISTER_TEXT
+#define NEVERD_MIPS_REGISTER_TEXT(Name, Text)
+#endif
+
+NEVERD_MIPS_REGISTER(Zero, 0, "zero", "zero")
+NEVERD_MIPS_REGISTER(AT, 1, "at", "at")
+NEVERD_MIPS_REGISTER(V0, 2, "v0", "v0")
+NEVERD_MIPS_REGISTER(V1, 3, "v1", "v1")
+NEVERD_MIPS_REGISTER(A0, 4, "a0", "a0")
+NEVERD_MIPS_REGISTER(A1, 5, "a1", "a1")
+NEVERD_MIPS_REGISTER(A2, 6, "a2", "a2")
+NEVERD_MIPS_REGISTER(A3, 7, "a3", "a3")
+NEVERD_MIPS_REGISTER(R8, 8, "t0", "a4")
+NEVERD_MIPS_REGISTER(R9, 9, "t1", "a5")
+NEVERD_MIPS_REGISTER(R10, 10, "t2", "a6")
+NEVERD_MIPS_REGISTER(R11, 11, "t3", "a7")
+NEVERD_MIPS_REGISTER(R12, 12, "t4", "t0")
+NEVERD_MIPS_REGISTER(R13, 13, "t5", "t1")
+NEVERD_MIPS_REGISTER(R14, 14, "t6", "t2")
+NEVERD_MIPS_REGISTER(R15, 15, "t7", "t3")
+NEVERD_MIPS_REGISTER(S0, 16, "s0", "s0")
+NEVERD_MIPS_REGISTER(S1, 17, "s1", "s1")
+NEVERD_MIPS_REGISTER(S2, 18, "s2", "s2")
+NEVERD_MIPS_REGISTER(S3, 19, "s3", "s3")
+NEVERD_MIPS_REGISTER(S4, 20, "s4", "s4")
+NEVERD_MIPS_REGISTER(S5, 21, "s5", "s5")
+NEVERD_MIPS_REGISTER(S6, 22, "s6", "s6")
+NEVERD_MIPS_REGISTER(S7, 23, "s7", "s7")
+NEVERD_MIPS_REGISTER(T8, 24, "t8", "t8")
+NEVERD_MIPS_REGISTER(T9, 25, "t9", "t9")
+NEVERD_MIPS_REGISTER(K0, 26, "k0", "k0")
+NEVERD_MIPS_REGISTER(K1, 27, "k1", "k1")
+NEVERD_MIPS_REGISTER(GP, 28, "gp", "gp")
+NEVERD_MIPS_REGISTER(SP, 29, "sp", "sp")
+NEVERD_MIPS_REGISTER(FP, 30, "fp", "fp")
+NEVERD_MIPS_REGISTER(RA, 31, "ra", "ra")
+NEVERD_MIPS_REGISTER(HI, 32, "hi", "hi")
+NEVERD_MIPS_REGISTER(LO, 33, "lo", "lo")
+NEVERD_MIPS_REGISTER(PC, 34, "pc", "pc")
+
+NEVERD_MIPS_REGISTER_TEXT(UnknownRegister, "unknown_mips_register")
+
+#undef NEVERD_MIPS_REGISTER
+#undef NEVERD_MIPS_REGISTER_TEXT
