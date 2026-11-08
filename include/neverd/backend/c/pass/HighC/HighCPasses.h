@@ -31,6 +31,24 @@ inline bool isNamedValueExpr(const HighExpr &E) {
   return E.Kind == ExprKind::Var || E.Kind == ExprKind::Phi;
 }
 
+/// Each expression of \p S, then each value its clauses' filters decide
+/// (HighEHClause::FilterValue): C evaluates a filter's reads with the `__try`,
+/// so what they read is used there.
+template <typename F> void forEachExprAndFilter(const HighStmt &S, F &&Fn) {
+  forEachExpr(S, Fn);
+  for (const HighEHClause &Clause : S.EHClauses)
+    if (Clause.FilterValue)
+      Fn(Clause.FilterValue);
+}
+
+/// The right-hand expressions of \p S, then its clauses' filter values.
+template <typename F> void forEachRhsExprAndFilter(const HighStmt &S, F &&Fn) {
+  forEachRhsExpr(S, Fn);
+  for (const HighEHClause &Clause : S.EHClauses)
+    if (Clause.FilterValue)
+      Fn(Clause.FilterValue);
+}
+
 struct HighCAnalysisState {
   /// C shows the function as returning nothing (analyzeVoidReturn): a return
   /// reads only the call it hands back, which prints as a statement.

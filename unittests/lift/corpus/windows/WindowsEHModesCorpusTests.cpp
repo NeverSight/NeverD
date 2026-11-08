@@ -34,6 +34,7 @@
 #include <filesystem>
 #include <optional>
 #include <regex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -954,8 +955,10 @@ TEST(WindowsEHModesCorpus, X86StartupFramesPrintTheirTries) {
     ASSERT_TRUE(static_cast<bool>(OutputOrErr))
         << toString(OutputOrErr.takeError());
     const StringRef Source(*OutputOrErr);
+    // The pointers convert through void * to the record the unit declares
+    // _seh_filter_exe's parameter as.
     const StringRef Startup = "__except (_seh_filter_exe(GetExceptionCode(), "
-                              "GetExceptionInformation())) {";
+                              "(void *)GetExceptionInformation())) {";
     const size_t Arm = Source.find(Startup);
     ASSERT_NE(Arm, StringRef::npos);
     // The arm runs from its handler: whether the app is managed, then
@@ -1060,6 +1063,120 @@ TEST(WindowsEHModesCorpus, EveryFinallyClauseOfXcpt4HoldsItsHandlerAsCode) {
       }
       At = Next;
     }
+  }
+}
+
+// xcpt4's one switch sits in a __finally block. Optimized MSVC x64 emits that
+// termination handler as a funclet that reads the selector through its
+// establisher frame, sign-extends it before an unsigned 32-bit range check and
+// dispatches through an image-relative table its unwind range also covers:
+//
+//   mov rax, [rbp+40h]; movsxd rcx, dword ptr [rax]; cmp ecx, 5; ja default
+//   lea rdx, __ImageBase; mov ecx, [rdx+rcx*4+table]; add rcx, rdx; jmp rcx
+//
+// Every case is code the handler's recovered body must reach; a listing shows
+// unreached bytes as data and C would call the dispatch target instead.
+TEST(WindowsEHModesCorpus, RecoversTheMSVCX64TerminationHandlerSwitch) {
+  auto ExpectationsOrErr = loadExpectations();
+  ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
+      << toString(ExpectationsOrErr.takeError());
+  const std::filesystem::path CorpusRoot(NEVERD_BINARY_CORPUS_ROOT);
+  size_t Artifacts = 0;
+  for (const WindowsEHArtifactExpectation &Expectation : *ExpectationsOrErr) {
+    if (Expectation.Name != "xcpt4" || Expectation.Toolchain != "msvc" ||
+        Expectation.Architecture != "x86_64" ||
+        Expectation.Optimization != "o2")
+      continue;
+    ++Artifacts;
+    SCOPED_TRACE(Expectation.Path);
+    const std::filesystem::path ArtifactPath = CorpusRoot / Expectation.Path;
+    std::unique_ptr<Loader> ImageLoader = Loader::create(ArtifactPath);
+    ASSERT_NE(ImageLoader, nullptr);
+    auto ImageOrErr = ImageLoader->load(ArtifactPath);
+    ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+        << toString(ImageOrErr.takeError());
+    std::set<va_t> Handlers;
+    for (const ExceptionFunction &Function :
+         ImageOrErr->ExceptionMetadata.Functions)
+      if (Function.SEH)
+        for (const SEHScopeRecord &Scope : Function.SEH->Scopes)
+          if (Scope.Kind == SEHScopeKind::Finally && Scope.FilterOrFinallyVA)
+            Handlers.insert(Scope.FilterOrFinallyVA);
+    ASSERT_FALSE(Handlers.empty());
+    size_t Switches = 0;
+    for (va_t Handler : Handlers) {
+      const ExceptionFunction *Unwind =
+          ImageOrErr->ExceptionMetadata.findFunction(Handler);
+      if (!Unwind || Unwind->CodeRange.Begin != Handler)
+        continue;
+      Decoder Dec;
+      ASSERT_TRUE(Dec.init(Arch::X64));
+      CFGBuilder Builder;
+      const LowFunc Low =
+          Builder.build(*ImageOrErr, Dec, Handler,
+                        "corpus_x64_finally_" + llvm::utohexstr(Handler));
+      for (const JumpTable &Table : Low.JumpTables) {
+        if (Table.AnalysisOnly)
+          continue;
+        ++Switches;
+        SCOPED_TRACE("dispatch 0x" + llvm::utohexstr(Table.InsnAddr));
+        EXPECT_TRUE(Table.IsPEImageRelativeRVA);
+        ASSERT_EQ(Table.Targets.size(), 6u);
+        EXPECT_EQ(
+            std::set<va_t>(Table.Targets.begin(), Table.Targets.end()).size(),
+            6u);
+        for (va_t Target : Table.Targets) {
+          EXPECT_TRUE(Unwind->CodeRange.contains(Target))
+              << "0x" << llvm::utohexstr(Target);
+          EXPECT_TRUE(llvm::any_of(
+              Low.Blocks,
+              [&](const LowBlock &Block) { return Block.StartAddr == Target; }))
+              << "0x" << llvm::utohexstr(Target);
+        }
+        for (const JumpTableStorageRange &Storage : Table.StorageRanges)
+          EXPECT_TRUE(Unwind->CodeRange.contains(Storage.BaseAddr))
+              << "0x" << llvm::utohexstr(Storage.BaseAddr);
+      }
+      EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+    }
+    EXPECT_EQ(Switches, 1u);
+  }
+  // Visual Studio 2019, 2022 and 2026 each built FH3/FH4 with and without /GS.
+  EXPECT_EQ(Artifacts, 12u);
+}
+
+TEST(WindowsEHModesCorpus, Xcpt4FilterCallbacksAreTheirExceptExpressions) {
+  auto ExpectationsOrErr = loadExpectations();
+  ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
+      << toString(ExpectationsOrErr.takeError());
+  for (const StringRef Optimization : {"o0", "o2"}) {
+    SCOPED_TRACE(Optimization.str());
+    auto ExpectationOrErr = selectUnique(
+        *ExpectationsOrErr,
+        ArtifactSelector{"xcpt4", "msvc", "x86_64", "fh4", true, Optimization});
+    ASSERT_TRUE(static_cast<bool>(ExpectationOrErr))
+        << toString(ExpectationOrErr.takeError());
+    auto OutputOrErr =
+        decompileToSource(std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
+                              (*ExpectationOrErr)->Path,
+                          /*TimeoutSeconds=*/600);
+    ASSERT_TRUE(static_cast<bool>(OutputOrErr))
+        << toString(OutputOrErr.takeError());
+    const StringRef Source(*OutputOrErr);
+    if (Optimization == "o0") {
+      // Every /O0 filter callback reads only what its parent's code names, so
+      // none is left as a call of the callback with one of its two arguments.
+      EXPECT_FALSE(Source.contains("(GetExceptionInformation()))"));
+      continue;
+    }
+    // test58's filter in its termination handler reads the Counter the
+    // handler's frame homed: `__except (Counter)` in the source.
+    const size_t Handler = Source.find("void sub_140005521(");
+    ASSERT_NE(Handler, StringRef::npos);
+    const StringRef Function =
+        Source.slice(Handler, Source.find("\n}\n", Handler));
+    EXPECT_TRUE(Function.contains("__except (*(uint32_t *)(arg1 + 0x20))"))
+        << Function.str();
   }
 }
 

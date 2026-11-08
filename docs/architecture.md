@@ -1379,23 +1379,46 @@ diversity accompany the final storage address and resolved unsigned target.
 Authenticated storage requires a consuming installer. Its result is not
 overwritten by the object writer's authentication metadata encoding. This MC
 contract is the handoff for a dyld fixup installer, not an offline PAC signing
-operation. The r6 prebuilt does not yet expose this fork interface.
+operation. The r6 prebuilt does not yet expose this fork interface. Its rewrite
+entry refuses nested `ptrauth` global constants before emission; ordinary native
+object emission retains their authentication relocations.
 
-`MachOAuthenticatedFixups` installs explicit final-address signing recipes in
-linked arm64e chained images. It reuses the strict dependency reader's owned
-segments, imports and raw slots, preserves existing binding identities, and
-rebuilds single/multiple-start pages with each format's native stride and index
-width. Local targets retain their mapped image owner; imported targets retain
-the exact existing library ordinal, symbol, addend and weak flag. The six
+`CompiledImage` retains the fork's typed MC signing receipts through sizing
+and final layout compilation. Authenticated slots remain zero until installation;
+only arm64e Mach-O replacement IR has a signing owner. The final collector
+uses exact local symbol addresses and addends, or one unambiguous existing dyld
+provider for an external symbol. Missing/conflicting providers, unresolved or
+subtracted expressions, non-writable storage and stale placement fail before
+mutation. The r6 build cannot exercise this MC callback path; its integration
+test is explicitly skipped until a toolchain exposing the fork interface is used.
+
+`MachOAuthenticatedFixups` installs final-address signing recipes in linked
+arm64e chained and legacy threaded images. It reuses the strict dependency
+reader's owned segments, imports and raw slots, preserves existing binding
+identities, and rebuilds single/multiple-start pages with each format's native
+stride and index width. Local targets retain their mapped image owner; imported
+targets retain the exact existing library ordinal, symbol, addend and weak flag. The six
 arm64e chain formats share the same pointer-field authority. Segmented chains
 cannot express binds and reject them. Imports may extend the table but do not
 create dependency load commands or infer a provider.
 
-Installation is transactional, including the optional recipe handoff in
-`MachOPatcher::appendReplacementImage`. New RX/RW placement precedes dyld
-encoding so address diversity uses the final storage VA. Re-decoding compares
-every requested recipe and preserves every original fixup. A staged signature
-remains opaque and terminal in LINKEDIT so the existing publication signer can
+The original threaded format reuses the analysis reader's bytecode plan and
+the same arm64e word decoder as modern chains. Installation rebuilds the ordinal
+table and APPLY roots, preserving raw import flags, signed addends and special
+library ordinals. Missing DONE, nonzero trailing bytes, duplicate roots and
+conflicting slot ownership fail without publication. Auxiliary rebase/weak/lazy
+streams remain unsupported alongside threaded chains; their phase ordering is
+not inferred. The strict snapshot charges the existing threaded string-copy
+budget for the table, optional owned imports and each slot's symbol name.
+Repeated long imports therefore cannot create unbounded snapshot copies.
+
+Installation is transactional, including automatic producer receipts and the
+optional explicit recipe handoff in `MachOPatcher::appendReplacementImage`.
+Failed placement planning cannot authorize installation at the zero error
+sentinel. New RX/RW placement precedes dyld encoding so address diversity uses
+the final storage VA. Re-decoding compares every requested recipe and preserves
+every original fixup. A staged signature remains opaque and terminal in LINKEDIT
+so the existing publication signer can
 replace it; retaining those bytes does not validate its old hashes. An
 independent replay also checks recipes after final code signing.
 
@@ -1405,9 +1428,18 @@ change when a new load command is inserted. Such a changed target is rejected
 without publishing any bytes.
 
 This installation phase does not enable whole-image arm64e publication. The
-compiler/native-object producer handoff, legacy threaded-stream installation,
-new provider admission and native signed call/unwind execution remain separate
-contracts. The publication guard remains until those contracts are qualified.
+native-object producer handoff, qualification of the new MC interface with a
+post-r6 toolchain, new provider admission and native signed call/unwind execution
+remain separate contracts. Apple ld-classic fixtures use `-no_fixup_chains`;
+`otool -dyld_info` independently verifies legacy bind symbols, diversity and
+address diversity because the current `dyld_info` refuses that format. Apple's
+[legacy otool decoder](https://github.com/apple-oss-distributions/cctools/blob/main/otool/dyld_bind_info.c)
+masks the key with `2` instead of `3`, losing the IA/IB and DA/DB distinction.
+Tests check both raw key bits for all four keys and the decoded names for IA/DA;
+the latter tool cannot independently qualify IB/DB or legacy rebases. Rebase
+replay and per-PC signed CFI comparisons remain offline checks, not proof of
+runtime dyld/unwinder execution. The publication guard remains until those
+contracts are qualified.
 
 The shared AAPCS64 parameter placement owner describes Darwin fixed value
 spills with their natural size and alignment after either register bank is
@@ -2218,8 +2250,12 @@ Lost or incomplete proofs retain the original indirect transfer. The native func
 disassembly API publishes these same instruction boundaries and targets; raw
 disassembly remains linear. The worker uses recovered bodies for function
 listings and replaces their linear reference-scan results, so skipped bytes do
-not swallow real code targets. Analyst Undefine overrides presentation inside
-a function without deleting the function or changing the original bytes.
+not swallow real code targets. Bytes no recovered path reaches stay bytes; the
+listing never decodes past an unresolved indirect jump. A recovered switch's
+table inside its function's range, as an MSVC unwind record covers it, lists
+as that table from the engine's proven slots. Analyst Undefine overrides
+presentation inside a function without deleting the function or changing the
+original bytes.
 
 When a scalar target is not constant, the same expression builder can prove a
 bounded finite cover using shared operator evaluation and known bits. Every
@@ -8370,6 +8406,13 @@ definition and retains the lane's offset and width, so a comparison of AL or
 W0 need not expand the earlier EAX or X0 calculation. Both the comparison and
 the table index must reach that same lane through every incoming path. Partial
 writes, call clobbers, implicit extension rules and proof budgets still apply.
+A writer that copies an extended narrower value hides the extension: MSVC's
+`movsxd rcx, dword ptr [rax]` lifts as LOAD, INT_SEXT and a COPY into RCX, so an
+ECX guard's lane names an opaque RCX occurrence. When neither identity binds
+such a lane, both queries retry rooted at the narrower value the lane carries
+unchanged, found through whole-width copies and extensions in the guard's
+block. The resolver still proves both, the narrow-lane bound check keeps the
+domain below that value's sign bit, and a failed retry changes nothing.
 Exact guard-occurrence queries use the expanded CFG value-reconstruction depth
 limit. Guard syntax collection and materialization keep their separate, smaller
 expression limit. This lets a shallow guard cross a longer predecessor graph
@@ -8377,7 +8420,12 @@ without treating depth exhaustion as a completed proof or skipping replay.
 When separate predecessor arms guard one selector, scalar comparison literals
 can propose a finite envelope even though no single guard dominates the load.
 The joined-domain query must prove every incoming value and a dense prefix;
-the proposal supplies no table capacity or range authority. Equal incoming
+the proposal supplies no table capacity or range authority. A PE two-level
+index table is the exception, as it is for a dominating guard: its unreached
+index bytes are unused, so a proven joined domain with holes is bounded by its
+last reaching value. MSVC's CRT reaches one such dispatch with a byte that one
+path's `and al, 0Fh; test al, al; je; cmp al, 20h; ja` left in 1..15 and that
+another path compared equal to 20h. Equal incoming
 values keep their real predecessor-join provenance after deduplication, only
 for that query mode. Predicate disjunctions and SELECTs cannot manufacture it.
 A guard operand reloaded from memory may nominate the nearest literal STORE
@@ -10972,10 +11020,13 @@ imply coverage of every newer SEV/SNP instruction.
 `backend/llvm/X86/X86VirtualizationNative.h` owns native LLVM names and
 available NeverC source spellings together. Mode-sized i386 VMCS and address
 APIs use the full fork's `32` names in both C renderers; management memory
-operands retain m64. An empty source spelling keeps the architecture's existing
-assembly projection where that source ABI is not yet implemented, such as
-physical-address i386 SVM operations. It does not change LLVM intrinsic
-availability or substitute an effect-free operation.
+operands retain m64. SVM default-address i386 APIs also use `32`; address-size
+overrides use `.addr16` on i386 and `.addr32` on x64. Their address inputs remain
+integer bits, with a separate full-width ECX ASID for INVLPGA.
+`x86SvmAddressSizeIsValid` owns the allowed implicit address widths for lifting,
+shape validation and assembly planning. Every native plan has a C spelling;
+the shared compiler capability dispatch retains the exact assembly fallback
+when those builtins are unavailable.
 Both C translation-unit collectors include the shared virtualization dispatch
 for i386 and x64. Ordinary native VMX/SVM calls require a registered SDK
 intrinsic ID; LLVM's `isIntrinsic()` alone only recognizes the reserved name
@@ -16138,6 +16189,19 @@ transport prefix; admission accepts missing string terminators only at that
 full limit. Native C-string reads complete before clipping. Negative results
 complete without inferred transport success or errno changes.
 
+API 28 fatal writes and `android_set_abort_message` share the Bionic abort
+owner. `abort_message_slot` explicitly binds libc's live guest pointer slot;
+absence is unknown, zero is early initialization, and an occupied slot skips
+the message read. Shared Linux mmap owns the permanent record's placement,
+page rounding, zero backing and memory budget; Bionic's existing kernel-result
+adapter owns allocation errno. The size/message/NUL copy precedes publication,
+and no malloc ownership or second host pointer cache is introduced. Native
+tag routing precedes publication; final tag/message reads and transcript
+matching follow it, preserving aliases and partial effects. Direct pointers
+stay lazy, while formatted/framework diagnostics reuse their existing bytes.
+The cooperative scheduler's atomic native calls serialize first publication
+across threads. Fatal logging itself does not exit the process.
+
 `AndroidProperties` builds one immutable guest property table from explicit
 inputs. Name lookup, stable `prop_info` identities, serials, legacy reads and
 callback strings share those records; the device API-level query uses the same
@@ -16444,6 +16508,36 @@ certified, or whose body is unavailable, keeps its address comment, which is the
 whole clause; the comment otherwise stays next to the code it names. The
 projection runs in the plain-C view as well as the C++ one, because SEH is C.
 
+A filter callback reads its parent the same way, with the exception pointers
+in place of the abnormal flag: x64 passes it the same EstablisherFrame, which
+the same proof certifies for the callback, and ARM and AArch64 restore the same
+callee-saved registers, which `buildSsa` tracks through filter scopes as through
+finally ones. `attachSEHFinallyBodies` spells its body in the parent, the
+pointers being `GetExceptionInformation()`, and folds it with the x86 filters'
+folder (`lib/ir/high/structure/SEHFilterValues.cpp`) into the clause's
+`__except` expression (`HighEHClause::FilterValue`), so the clause reads
+`__except (*Counter)` or `__except ((GetExceptionCode() == 0xC0000005) ?
+(EXCEPTION_EXECUTE_HANDLER) : (EXCEPTION_CONTINUE_SEARCH))` rather than a call
+of the callback with one of its two arguments. A write it makes to the
+parent's frame stays in the expression unless nothing else can read those
+bytes: no statement of the parent, no other filter and no handler still out of
+line touches them, and no address of the frame goes anywhere else, as with the
+temporaries MSVC's `/Od` keeps for a filter in its parent's frame. The
+expression must also print as C that evaluates as the callback did, or the
+callback keeps its call: an integer, reading no value of a function whose
+result the writer leaves out (`analyzeVoidReturn`), and reaching the frame only
+as the parent's own code does, each word it reads one the parent's statements
+read at that width and each address it takes one the parent takes. A word the
+parent only writes, as an argument clang-cl spills for its callbacks while the
+parent reads the register, may print as nothing. The single-function view
+gathers the callback as it gathers a termination handler. The writer treats the
+expression as part of the `__try`: it declares what the expression calls,
+names the frame words it reads and writes, keeps the stores and variables it
+reads (`forEachExprAndFilter` in `HighCDeadStoreAnalysis.cpp` and
+`HighCUsedVars.cpp`), and passes `GetExceptionInformation()` to a parameter
+declared as a record pointer of the unit's own through `void *`, as <excpt.h>
+types it after its own `EXCEPTION_POINTERS`.
+
 An x86 `_except_handler3` or `_except_handler4` frame prints the same clauses
 from its own code, in the decompile view only. That view defers the native
 registration proofs, so `lib/ir/low/X86/RegistrationDisplayFrame.cpp` reads what
@@ -16657,8 +16751,8 @@ An ARM or AArch64 termination handler takes only the abnormal flag. The
 unwinder restores the parent's callee-saved registers to their values where
 the exception struck before calling it, and the handler reads the parent's
 state through them (`ldr w8,[x27]`, `ldr r3,[r7,#12]`). `buildSsa`
-(`lib/ir/med/pass/MedSSA.cpp`) records, for every finally scope whose handler
-lies outside the function, the version of each full-width callee-saved or
+(`lib/ir/med/pass/MedSSA.cpp`) records, for every finally or filter scope whose
+callback lies outside the function, the version of each full-width callee-saved or
 frame-pointer register where each protected range starts, as it does for an
 `__except` root; only operations inside a range count as writes, and a handler
 root's seed writes nothing. A root whose range holds the register under several
@@ -18132,6 +18226,9 @@ execution contract.
 
 `SourceCallOccurrenceKey` owns original instruction/sequence/opcode/target
 identity; names and source anchors cannot bind a per-call policy.
+Its structural overload belongs to `IRLowValidation`; the architecture-qualified
+overload lives in `ir/SourceCallOccurrence.cpp` beside the register descriptions
+it uses. LowIR validation therefore has no backward link to aggregate IR.
 `SourceCallABI` uses the existing platform parameter/variadic placement owners
 and bounds outgoing stack-write and SSA-carrier proofs. `LowToMedSourceCalls`
 publishes these physical inputs before SSA and argument pruning, with discovery

@@ -245,22 +245,22 @@ std::vector<uint8_t> function(Arch A, const std::vector<uint8_t> &Instruction,
   return Bytes;
 }
 
-std::vector<Encoding> nativeVirtualizationEncodings(Arch A) {
+std::vector<Encoding> nativeVirtualizationEncodings() {
   std::vector<Encoding> Result(std::begin(Encodings), std::end(Encodings));
-  if (A == Arch::X64)
-    for (const auto &E : Encodings)
-      if (x86VirtualizationContract(E.Id).PhysicalAddress) {
-        auto Narrow = E;
-        Narrow.Bytes.insert(Narrow.Bytes.begin(), 0x67);
-        Result.push_back(std::move(Narrow));
-      }
+  for (const auto &E : Encodings)
+    if (x86VirtualizationContract(E.Id).PhysicalAddress) {
+      auto Narrow = E;
+      Narrow.Bytes.insert(Narrow.Bytes.begin(), 0x67);
+      Result.push_back(std::move(Narrow));
+    }
   return Result;
 }
 
 uint16_t physicalAddressBytes(const Encoding &E, Arch A) {
   if (!x86VirtualizationContract(E.Id).PhysicalAddress)
     return 0;
-  return A == Arch::X86 || E.Bytes.front() == 0x67 ? 4 : 8;
+  const uint16_t Word = A == Arch::X86 ? 4 : 8;
+  return E.Bytes.front() == 0x67 ? Word / 2 : Word;
 }
 } // namespace
 
@@ -269,7 +269,7 @@ TEST(X86VirtualizationSource, EveryOwnedInstructionSurvivesBothSourceRoutes) {
     for (const auto Format :
          {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
       for (bool NoOpt : {false, true})
-        for (const auto &Encoding : Encodings) {
+        for (const auto &Encoding : nativeVirtualizationEncodings()) {
           const auto C = x86VirtualizationContract(Encoding.Id);
           SCOPED_TRACE(C.Mnemonic);
           SCOPED_TRACE(static_cast<unsigned>(A));
@@ -1212,7 +1212,7 @@ TEST(X86VectorEncodingSource, Mode32IgnoredExtensionsExecuteThroughEveryRoute) {
 TEST(X86VirtualizationSource,
      GeneratedAssemblyCompilesForBothWordSizesAtO0AndO2) {
   for (const auto A : {Arch::X86, Arch::X64})
-    for (const auto &E : Encodings) {
+    for (const auto &E : nativeVirtualizationEncodings()) {
       const auto C = x86VirtualizationContract(E.Id);
       SCOPED_TRACE(C.Mnemonic);
       size_t Offset;
@@ -1232,7 +1232,7 @@ TEST(X86VirtualizationSource, QualifiedSdkUsesNativeVirtualizationCalls) {
     for (const auto Format :
          {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
       for (bool NoOpt : {false, true})
-        for (const auto &E : nativeVirtualizationEncodings(A)) {
+        for (const auto &E : nativeVirtualizationEncodings()) {
           const auto C = x86VirtualizationContract(E.Id);
           for (const auto Space :
                {NdMemoryAddressSpace::Default, NdMemoryAddressSpace::X86FS,
@@ -2097,7 +2097,7 @@ TEST(X86VirtualizationSource, NeverCCompilesBothRoutesToNativeIntrinsics) {
   for (const auto Format :
        {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
     for (bool NoOpt : {false, true})
-      for (const auto &E : nativeVirtualizationEncodings(Arch::X64)) {
+      for (const auto &E : nativeVirtualizationEncodings()) {
         const auto C = x86VirtualizationContract(E.Id);
         for (const auto Space :
              {NdMemoryAddressSpace::Default, NdMemoryAddressSpace::X86FS,
@@ -5774,6 +5774,7 @@ void saveX86SourceArtifact(llvm::StringRef Name, llvm::StringRef Data) {
 #include "../x86/X86ArplSourceTests.inc"
 #include "../x86/X86BoundSourceTests.inc"
 #include "../x86/X86HresetSourceTests.inc"
+#include "../x86/X86SVMSourceTests.inc"
 #include "../x86/X86VMXSourceTests.inc"
 #include "X86FlagsSourceTests.inc"
 #include "X86SegmentMoveSourceTests.inc"

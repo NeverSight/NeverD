@@ -449,6 +449,11 @@ androidOptionsFromJSON(const llvm::json::Value &Value) {
       if (!S)
         return S.takeError();
       Out.EntrySymbol = std::move(*S);
+    } else if (Name == field::AbortMessageSlot) {
+      auto N = number(V, Name);
+      if (!N)
+        return N.takeError();
+      Out.AbortMessageSlot = *N;
     } else if (Name == field::EntryAddress || Name == field::LoadBias ||
                Name == field::TraceLimit || Name == field::ThreadLimit) {
       auto N = number(V, Name);

@@ -1469,6 +1469,11 @@ void HighCWriter::collectNamedFrameSlots(const HighFunc &Func) {
           Walk(*S.CallExpr, false);
         if (S.SwitchExpr)
           Walk(*S.SwitchExpr, false);
+        // What a filter's value reads and writes of the frame it names as the
+        // try's own code does (HighEHClause::FilterValue).
+        for (const HighEHClause &Clause : S.EHClauses)
+          if (Clause.FilterValue)
+            Walk(*Clause.FilterValue, false);
       }
       WalkNotes(S.Body, InHandler);
       WalkNotes(S.ElseBody, InHandler);

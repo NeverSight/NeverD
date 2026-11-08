@@ -1717,6 +1717,10 @@ void HighCWriter::collectCallTargets(const std::vector<HighStmt> &Stmts,
       if (Ex)
         collectCallTargetsExpr(*Ex, Targets);
     });
+    // A filter folded into its `__except` expression calls what it called.
+    for (const HighEHClause &Clause : S.EHClauses)
+      if (Clause.FilterValue)
+        collectCallTargetsExpr(*Clause.FilterValue, Targets);
     if (S.Kind == StmtKind::SEHTry && S.EHIsReducible &&
         S.EHClauses.size() == 1 && S.EHClauseBodies.size() == 1)
       if (const std::string Filter = sehFilterName(S.EHClauses.front());

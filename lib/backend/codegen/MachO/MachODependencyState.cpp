@@ -14,8 +14,10 @@
 
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/codegen/MachO/MachOLayoutGrowth.h"
+#include "neverd/loader/Limits.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
+#include "neverd/loader/MachO/MachOThreadedBind.h"
 
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/LEB128.h"
@@ -24,6 +26,7 @@
 
 #include <cstddef>
 #include <iterator>
+#include <optional>
 #include <set>
 
 namespace neverd {
@@ -50,6 +53,11 @@ void text(Bytes &B, llvm::StringRef V) {
   bytes(B, llvm::arrayRefFromStringRef(V));
 }
 struct Reader {
+  struct Import {
+    int64_t Ordinal, Addend;
+    unsigned Flags;
+    llvm::StringRef Name;
+  };
   llvm::ArrayRef<uint8_t> B;
   MachOHeaderInfo H;
   std::vector<MachOSegFields> Segments;
@@ -61,9 +69,20 @@ struct Reader {
   const dysymtab_command *Dyn = nullptr;
   MachODependencyState State;
   MachOChainedFixups *Chained = nullptr;
+  std::optional<size_t> ThreadedCopiedBytes;
   Bytes Digest;
   bool Bad = false;
   unsigned Pointer = 0;
+
+  llvm::Error chargeThreadedNames(size_t Size) {
+    if (!ThreadedCopiedBytes)
+      return llvm::Error::success();
+    if (Size >
+        limits::loader::kMachOThreadedMaxCopiedBytes - *ThreadedCopiedBytes)
+      return fail(kThreadedCopies);
+    *ThreadedCopiedBytes += Size;
+    return llvm::Error::success();
+  }
 
   llvm::Expected<llvm::ArrayRef<uint8_t>> payload(uint64_t O, uint64_t N) {
     if (!N)
@@ -81,7 +100,8 @@ struct Reader {
     if (S.VMAddr == LinkeditVA || !(S.InitProt & VM_PROT_WRITE) ||
         (S.InitProt & VM_PROT_EXECUTE) ||
         !rangeInBounds(Offset, Pointer, S.FileSize) ||
-        Offset % (Alignment ? Alignment : Pointer))
+        Offset % (Alignment ? Alignment : Pointer) ||
+        S.VMAddr % (Alignment ? Alignment : Pointer))
       return fail("fixup lacks a unique writable, aligned file-backed owner");
     return S.VMAddr + Offset;
   }
@@ -113,6 +133,8 @@ struct Reader {
     if (Ordinal > int64_t(State.Libraries.size()) || Ordinal < -3 ||
         Name.empty())
       return fail("invalid bind library or symbol");
+    if (auto Error = chargeThreadedNames(Name.size()))
+      return Error;
     Bytes Row;
     number(Row, Ordinal);
     text(Row, Name);
@@ -224,8 +246,9 @@ struct Reader {
       return fail("ambiguous, static or classic dyld metadata is not modeled");
     for (const auto &L : State.Libraries)
       bytes(Digest, L);
-    if (Chained && Chain) {
+    if (Chained)
       Chained->HeaderVA = HeaderVA;
+    if (Chained && Chain) {
       Chained->CommandOffset =
           reinterpret_cast<const uint8_t *>(Chain) - B.data();
     }
@@ -486,6 +509,115 @@ struct Reader {
     }
     return fail("dyld stream lacks DONE");
   }
+  llvm::Expected<unsigned>
+  recordArm64e(unsigned I, uint64_t Offset, uint64_t VA, uint64_t Raw,
+               const macho_loader::arm64e::ChainFormat &Format,
+               llvm::ArrayRef<Import> Imports) {
+    const auto Word = macho_loader::arm64e::decodePointerWord(Raw, Format);
+    if (!Word)
+      return fail(kInvalidArm64eWord);
+
+    if (Word->Bind) {
+      if (Word->Target >= Imports.size())
+        return fail(kInvalidArm64eImport);
+      const auto &Import = Imports[Word->Target];
+      int64_t Addend;
+      if (llvm::AddOverflow(Import.Addend, Word->Addend, Addend))
+        return fail(kArm64eAddendOverflow);
+      if (auto E = bind(I, Offset, Import.Ordinal, Import.Name, Addend,
+                        Import.Flags, kBindPhase, Raw, Format.Stride))
+        return E;
+    } else {
+      uint64_t Base = Word->Authenticated || Format.Offset ? HeaderVA : 0;
+      if (Format.Segmented) {
+        if (Word->SegmentIndex >= Segments.size() ||
+            Word->Target > Segments[Word->SegmentIndex].VMSize)
+          return fail(kInvalidArm64eSegment);
+        Base = Segments[Word->SegmentIndex].VMAddr;
+      }
+      if (Word->Target > UINT64_MAX - Base)
+        return fail(kArm64eTargetOverflow);
+      if (auto E = rebase(I, Offset, Base + Word->Target, Raw, Format.Stride))
+        return E;
+    }
+    if (Word->Authenticated) {
+      // Slot identity above also owns address diversity. Retaining
+      // only the target/import would silently admit a different key
+      // or discriminator after image layout edits.
+      auto &Row = State.Slots.at({VA, Word->Bind ? kBindPhase : kRebasePhase});
+      number(Row, Word->Key);
+      number(Row, Word->Diversity);
+      number(Row, Word->AddressDiversity);
+    }
+    return Word->Next * Format.Stride;
+  }
+
+  llvm::Error threaded(llvm::ArrayRef<uint8_t> Stream) {
+    namespace arm64e = macho_loader::arm64e;
+    if (!H.Is64 || State.CPUType != CPU_TYPE_ARM64 ||
+        !arm64e::isSubtype(State.CPUSubtype) || Dyld->rebase_size ||
+        Dyld->weak_bind_size || Dyld->lazy_bind_size)
+      return fail(kThreadedContract);
+    const auto Plan =
+        macho_loader::threaded::decode(Stream, State.Libraries.size());
+    if (!Plan)
+      return fail(kThreadedProgram);
+    ThreadedCopiedBytes = Plan->CopiedBytes;
+    bytes(Digest, Stream);
+    std::vector<Import> Imports;
+    Imports.reserve(Plan->Imports.size());
+    for (const auto &Entry : Plan->Imports) {
+      Imports.push_back({Entry.Ordinal, Entry.Addend, Entry.Flags, Entry.Name});
+      if (Chained) {
+        if (auto Error = chargeThreadedNames(Entry.Name.size()))
+          return Error;
+        Chained->Imports.push_back(
+            {Entry.Ordinal, Entry.Addend, Entry.Flags, Entry.Name});
+      }
+    }
+    if (Chained) {
+      Chained->Threaded = true;
+      Chained->CommandOffset =
+          reinterpret_cast<const uint8_t *>(Dyld) - B.data();
+    }
+    const auto Format = *arm64e::chainFormat(DYLD_CHAINED_PTR_ARM64E);
+    std::set<uint64_t> Slots;
+    for (const auto &Root : Plan->Roots) {
+      const unsigned I = Root.SegmentIndex;
+      if (I >= Segments.size())
+        return fail(kThreadedStorage);
+      for (unsigned J = 0; J <= I; ++J)
+        if (Segments[J].VMAddr == LinkeditVA)
+          return fail(kThreadedStorage);
+      uint64_t Offset = Root.Offset;
+      for (;;) {
+        auto VA = slot(I, Offset, Format.Stride);
+        if (!VA)
+          return VA.takeError();
+        if (!Slots.insert(*VA).second ||
+            Slots.size() > limits::loader::kMachODyldBindMaxBindSlots)
+          return fail(kOverlappingChainSlots);
+        const auto Raw =
+            readLE<uint64_t>(B.data() + Segments[I].FileOff + Offset);
+        auto Next = recordArm64e(I, Offset, *VA, Raw, Format, Imports);
+        if (!Next)
+          return Next.takeError();
+        if (Chained) {
+          auto &Segment = Chained->Segments[I];
+          Segment.PointerFormat = DYLD_CHAINED_PTR_ARM64E;
+          Segment.PageSize = arm64e::kLargePageBytes;
+          Segment.Slots.push_back({Offset, Raw});
+        }
+        if (!*Next)
+          break;
+        if (*Next > UINT64_MAX - Offset)
+          return fail(kThreadedStorage);
+        Offset += *Next;
+      }
+    }
+    return llvm::Error::success();
+  }
+
   llvm::Error chains() {
     auto Data = payload(Chain->dataoff, Chain->datasize);
     if (!Data)
@@ -512,11 +644,6 @@ struct Reader {
     // exact import bytes and every decoded/raw slot, not file-relative offsets.
     bytes(Digest, C.slice(F.imports_offset));
     number(Digest, F.imports_format);
-    struct Import {
-      int64_t Ordinal, Addend;
-      unsigned Flags;
-      llvm::StringRef Name;
-    };
     std::vector<Import> Imports;
     for (uint32_t I = 0; I < F.imports_count; ++I) {
       const auto *P = C.data() + F.imports_offset + uint64_t(I) * Width;
@@ -640,47 +767,10 @@ struct Reader {
               Chained->Segments[I].Slots.push_back({Offset, Raw});
             unsigned NextBytes = ((Raw >> 51) & 0xfff) * kOrdinaryChainStride;
             if (Arm64e) {
-              const auto Word =
-                  macho_loader::arm64e::decodePointerWord(Raw, *Arm64e);
-              if (!Word)
-                return fail(kInvalidArm64eWord);
-              NextBytes = Word->Next * Arm64e->Stride;
-              if (Word->Bind) {
-                if (Word->Target >= Imports.size())
-                  return fail(kInvalidArm64eImport);
-                const auto &Import = Imports[Word->Target];
-                int64_t Addend;
-                if (llvm::AddOverflow(Import.Addend, Word->Addend, Addend))
-                  return fail(kArm64eAddendOverflow);
-                if (auto E =
-                        bind(I, Offset, Import.Ordinal, Import.Name, Addend,
-                             Import.Flags, kBindPhase, Raw, Arm64e->Stride))
-                  return E;
-              } else {
-                uint64_t Base =
-                    Word->Authenticated || Arm64e->Offset ? HeaderVA : 0;
-                if (Arm64e->Segmented) {
-                  if (Word->SegmentIndex >= Segments.size() ||
-                      Word->Target > Segments[Word->SegmentIndex].VMSize)
-                    return fail(kInvalidArm64eSegment);
-                  Base = Segments[Word->SegmentIndex].VMAddr;
-                }
-                if (Word->Target > UINT64_MAX - Base)
-                  return fail(kArm64eTargetOverflow);
-                if (auto E = rebase(I, Offset, Base + Word->Target, Raw,
-                                    Arm64e->Stride))
-                  return E;
-              }
-              if (Word->Authenticated) {
-                // Slot identity above also owns address diversity. Retaining
-                // only the target/import would silently admit a different key
-                // or discriminator after image layout edits.
-                auto &Row = State.Slots.at(
-                    {*VA, Word->Bind ? kBindPhase : kRebasePhase});
-                number(Row, Word->Key);
-                number(Row, Word->Diversity);
-                number(Row, Word->AddressDiversity);
-              }
+              auto Next = recordArm64e(I, Offset, *VA, Raw, *Arm64e, Imports);
+              if (!Next)
+                return Next.takeError();
+              NextBytes = *Next;
             } else if (Raw >> 63) {
               const unsigned Ord = Raw & 0xffffff;
               if (Ord >= Imports.size() || ((Raw >> 32) & 0x7ffff))
@@ -755,7 +845,9 @@ readMachODependencyState(llvm::ArrayRef<uint8_t> B,
       auto V = R.payload(Streams[I].first, Streams[I].second);
       if (!V)
         return V.takeError();
-      if (auto E = R.opcodes(*V, I))
+      const auto Kind = I == kBindPhase ? macho_loader::threaded::classify(*V)
+                                        : macho_loader::threaded::StreamKind{};
+      if (auto E = Kind.Threaded ? R.threaded(*V) : R.opcodes(*V, I))
         return E;
     }
     auto V = R.payload(D.export_off, D.export_size);

@@ -608,6 +608,47 @@ TEST(ARMSEHFinallyRegisters, AThumbLeafHandlerIsAFunctionAndReadsTheFrame) {
   EXPECT_EQ(R4->second.Offset, -0xc);
 }
 
+/// bar1 at /O0 with its scope an `__except` whose filter callback reads the
+/// Counter the parent homed, through the frame in x1:
+/// `ldr x8,[x1,#0x18]; ldr w0,[x8]; ret`.  Its arm is the code after the call.
+BinaryImage makeFilterImage() {
+  BinaryImage Img = makeImage(Parent::EstablisherFrame, Handler::DoesNothing);
+  const uint32_t FilterCode[] = {0xf9400c28, 0xb9400100, Ret};
+  std::memcpy(Img.Segments.front().Data.data() + (Funclet - Entry), FilterCode,
+              sizeof(FilterCode));
+  SEHScopeRecord &Scope =
+      Img.ExceptionMetadata.Functions.front().SEH->Scopes.front();
+  Scope.Kind = SEHScopeKind::Filter;
+  Scope.HandlerVA = Entry + 0x10;
+  Scope.ContinuationVA = Entry + 0x10;
+  Img.ExceptionMetadata.rebuildIndex();
+  return Img;
+}
+
+TEST(ARMSEHFilterValue, AFilterCallbackSeesTheParentsFramePointer) {
+  // `__C_specific_handler` restores the parent's callee-saved registers for a
+  // filter and passes it the frame pointer: the parent's map holds both.
+  const MedFunc Med = convertParent(makeFilterImage());
+  const SEHFuncletRegisterValue *FP = registerValue(Med, a64reg::X29);
+  ASSERT_NE(FP, nullptr);
+  EXPECT_EQ(FP->ValueKind, SEHFuncletRegisterValue::Kind::EntryStackOffset);
+  EXPECT_EQ(FP->Offset, -0x20);
+}
+
+TEST(ARMSEHFilterValue, AFilterReadingTheFrameIsItsExpression) {
+  // The expression reads the homed pointer where the parent keeps it.
+  const std::string P = parentText(decompileHighC(makeFilterImage()));
+  const std::string Open = "} __except (";
+  const size_t At = P.find(Open);
+  ASSERT_NE(At, std::string::npos) << P;
+  const size_t To = P.find(") {\n", At);
+  ASSERT_NE(To, std::string::npos) << P;
+  const std::string E = P.substr(At + Open.size(), To - At - Open.size());
+  EXPECT_NE(E.find("var_m8"), std::string::npos) << P;
+  EXPECT_EQ(E.find("sub_"), std::string::npos) << P;
+  EXPECT_EQ(E.find("unknown"), std::string::npos) << P;
+}
+
 TEST(ARMSEHFinallyBody, AThumbHandlerFillsTheClause) {
   const std::string P =
       parentText(decompileHighC(makeThumbImage()), "sub_401000(");

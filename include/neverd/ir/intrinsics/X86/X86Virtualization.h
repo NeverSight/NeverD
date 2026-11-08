@@ -61,6 +61,19 @@ constexpr bool x86SnpControlIsValid(Intrinsic Id, uint64_t Control) {
   }
 }
 
+constexpr bool x86SvmAddressSizeIsValid(Arch TargetArch, uint16_t Bytes) {
+  switch (TargetArch) {
+  case Arch::X86:
+    return Bytes == 2 || Bytes == 4;
+  case Arch::X64:
+    return Bytes == 4 || Bytes == 8;
+  case Arch::Unknown:
+    return Bytes == 2 || Bytes == 4 || Bytes == 8;
+  default:
+    return false;
+  }
+}
+
 constexpr bool
 x86VirtualizationShapeIsValid(Intrinsic Id,
                               const X86VirtualizationShape &Shape) {
@@ -130,9 +143,7 @@ x86VirtualizationShapeIsValid(Intrinsic Id,
       return false;
     const uint16_t Size = Shape.InputSizes[I];
     if (C.PhysicalAddress && I == 0) {
-      if (Size != 4 && Size != 8)
-        return false;
-      if (Shape.TargetArch == Arch::X86 && Size != 4)
+      if (!x86SvmAddressSizeIsValid(Shape.TargetArch, Size))
         return false;
     } else if (Size !=
                (I == C.MemoryArgument ? 8

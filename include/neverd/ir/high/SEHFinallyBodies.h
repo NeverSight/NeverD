@@ -50,10 +50,21 @@ namespace neverd {
 /// jump out of the `__try`, which the machine leaves normally: such a jump to
 /// where the try falls through becomes `__leave`.  A handler whose frame or
 /// registers are not known or whose body is unavailable keeps its address
-/// comment.  \p Funcs is the whole translation unit so the handlers can be
-/// read.  Each funclet whose body is attached into a parent is added to
-/// \p Merged when given, so a single-function view need not also print it
-/// standalone.
+/// comment.
+///
+/// A filter callback reads the parent the same way and is spelled in it the
+/// same way, its exception pointers being `GetExceptionInformation()`; when
+/// one expression says what it does in its order, that expression becomes the
+/// clause's `__except` expression (HighEHClause::FilterValue) in place of a
+/// call of the callback.  A write it makes to the parent's frame stays in the
+/// expression unless nothing else can read those bytes: no statement of the
+/// parent, no other filter and no handler still out of line touches them, and
+/// the frame's address goes nowhere else, as with the temporaries a compiler
+/// keeps for a filter in its parent's frame.
+///
+/// \p Funcs is the whole translation unit so the callbacks can be read.  Each
+/// funclet whose body is attached into a parent is added to \p Merged when
+/// given, so a single-function view need not also print it standalone.
 void attachSEHFinallyBodies(std::vector<HighFunc> &Funcs, Arch TargetArch,
                             std::set<va_t> *Merged = nullptr);
 

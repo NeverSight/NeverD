@@ -46,6 +46,22 @@ namespace neverd {
 
 namespace {
 
+#define CODEGEN_PAUTH_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "CodeGenPointerAuth.def"
+
+bool supportedSigningOwner(const CompiledImage &Image) {
+  for (const auto &Section : Image.Sections)
+    for (const auto &Fixup : Section.FixupReferences)
+      if (Fixup.PointerAuth &&
+          (Image.Format != BinaryFormat::MachO ||
+           !llvm::Triple(Image.TargetTriple).isArm64e() ||
+           Image.InputKind != RewriteInputKind::ReplacementIR)) {
+        llvm::WithColor::error() << kPAuthInstallationOwner;
+        return false;
+      }
+  return true;
+}
+
 struct CapturedFixupReference {
   std::string SectionName;
   CompiledFixupReference Reference;
@@ -341,8 +357,12 @@ std::vector<WinEHSemanticEmissionShape> collectWinEHSemanticEmissionShape(
 void captureFixupReference(std::vector<CapturedFixupReference> &Captured,
                            const llvm::mc_rewrite::FixupCtx &Context,
                            Arch TargetArch, uint64_t Value) {
+  bool Authenticated = false;
+#if __has_include("llvm/MC/MCPointerAuthInfo.h")
+  Authenticated = Context.PointerAuth.has_value();
+#endif
   if (Context.SectionName.empty() ||
-      (Context.Sym.empty() && Context.SubSym.empty()))
+      (!Authenticated && Context.Sym.empty() && Context.SubSym.empty()))
     return;
 
   // The linker-input compact-unwind section contains three symbolic pointer
@@ -384,6 +404,13 @@ void captureFixupReference(std::vector<CapturedFixupReference> &Captured,
   Item.Reference.IsResolved = Context.IsResolved;
   Item.Reference.BitWidth = Context.BitWidth;
   Item.Reference.ResolvedValue = Value;
+#if __has_include("llvm/MC/MCPointerAuthInfo.h")
+  if (Context.PointerAuth) {
+    const auto &Auth = *Context.PointerAuth;
+    Item.Reference.PointerAuth = CompiledPointerAuthentication{
+        uint8_t(Auth.Key), Auth.Discriminator, Auth.HasAddressDiversity};
+  }
+#endif
 #ifdef LLVM_NEVERD_X86_CXX_HANDLER_RECEIPTS
   Item.Reference.KindName = Context.KindName.str();
 #endif
@@ -604,6 +631,11 @@ static CompiledImage compileImageForPatchImpl(
   Pass1.onFixup = [&](const llvm::mc_rewrite::FixupCtx &Context,
                       uint64_t Value) {
     captureFixupReference(Pass1Fixups, Context, TargetArch, Value);
+    // Authentication is installed only after final native placement.
+#if __has_include("llvm/MC/MCPointerAuthInfo.h")
+    if (Context.PointerAuth)
+      return uint64_t(0);
+#endif
     return Value;
   };
   Codegen CG1;
@@ -746,7 +778,8 @@ static CompiledImage compileImageForPatchImpl(
       return Out;
     }
     Out.Unresolved = std::move(Res1.Unresolved);
-    Out.Success = !PLTCheck || PLTCheck->validate(Out);
+    Out.Success =
+        supportedSigningOwner(Out) && (!PLTCheck || PLTCheck->validate(Out));
     LLVM_DEBUG(llvm::dbgs()
                << "compileImageForPatch: 1 section, " << Out.Bytes.size()
                << " bytes from VA 0x" << llvm::utohexstr(BaseVA) << "\n");
@@ -890,6 +923,11 @@ static CompiledImage compileImageForPatchImpl(
     PassN.onFixup = [&](const llvm::mc_rewrite::FixupCtx &Context,
                         uint64_t Value) {
       captureFixupReference(IterationFixups, Context, TargetArch, Value);
+      // Authentication is installed only after final native placement.
+#if __has_include("llvm/MC/MCPointerAuthInfo.h")
+      if (Context.PointerAuth)
+        return uint64_t(0);
+#endif
       return Value;
     };
     Codegen CGn;
@@ -1052,7 +1090,8 @@ static CompiledImage compileImageForPatchImpl(
         << Out.Unresolved.front() << "\n";
     return Out;
   }
-  Out.Success = !PLTCheck || PLTCheck->validate(Out);
+  Out.Success =
+      supportedSigningOwner(Out) && (!PLTCheck || PLTCheck->validate(Out));
   LLVM_DEBUG(llvm::dbgs() << "compileImageForPatch: " << SectionVA.size()
                           << " sections, " << TotalSize << " bytes from VA 0x"
                           << llvm::utohexstr(BaseVA) << "\n");

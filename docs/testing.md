@@ -3533,6 +3533,13 @@ unreachable E9. HighC and LLVMC execute against that result at O0/O2 with UBSan;
 144 independent input pairs include zero, all ones, sign and alternating bits.
 The native test is skipped on other hosts.
 
+`NeverDWorkerSwitchListing` lists one generated PE whose bytes after an
+indirect jump differ in kind. An SEH termination handler sign-extends its
+selector before an unsigned 32-bit check and dispatches through an RVA table its
+unwind range covers: every case lists as an instruction, the dispatch says
+`switch jump` and each table slot is an `rva` entry for its case. An obfuscated
+constant branch keeps its skipped junk byte as `db 0E9h` and its target as code.
+
 `NeverDWorkerConstantBranch` also checks cold expression resolution and literal
 GUI listing jumps into forward and backward fragments, both C routes, retained
 stack names, chunk headers/footers, bytecode ownership, and reference overlays
@@ -6937,8 +6944,8 @@ EAX/ECX inputs, Windows subleaf spelling and ordered effects, including CLI/STI.
 The CPUID C execution check replaces only the intrinsic environment, verifies
 one query with leaf 7/subleaf 1, and stores four high-bit output words into
 64-bit cells at O0/O2 across all three formats and default/NoOpt.
-The qualified native LLVM SDK adds a 426-module virtualization matrix covering
-both word sizes, three formats, default/NoOpt, FS/GS and long-mode narrow SVM
+The qualified native LLVM SDK adds a 444-module virtualization matrix covering
+both word sizes, three formats, default/NoOpt, FS/GS and mode-specific narrow SVM
 addresses. Older SDKs explicitly skip that native-IR requirement while retaining
 the assembly route. A qualified SDK lacking `llvm.x86.vmxoff.status` retains
 the exact VMXOFF assembly and records those modules separately. The void API
@@ -6971,6 +6978,24 @@ success-only operation that defines VMX completion flags.
 Segment bases are flat in this witness; VM entry success, descriptor validation
 and hardware VMCS execution are outside it. NeverC's separate VMX address
 witness owns nonzero segment-base transport and 16-bit address truncation.
+
+`X86VirtualizationSource.NeverCI386SvmKeepsDefaultAndAddress16Forms` adds
+48 native C compilation checks for VMLOAD/VMSAVE/INVLPGA, both C routes and
+default/NoOpt. It retains complete translation units and independently encoded
+`.bin` inputs under the same artifact directory. Run
+`scripts/check_x86_svm_source.py --exports DIR --compiler NEVERC
+--backend-llc LLVM_LLC --output OUT`, and separately with stock Clang without
+the backend option. The witness compares stopped native AX/EAX address inputs,
+full ECX ASIDs, the live return and callee-saved registers; deliberate address,
+ASID and prefix mutations must be rejected. It does not execute privileged
+instructions or qualify VMCB state transfers. NeverC's separate CPL0 QEMU
+witness exercises MSR round trips in the selected TCG guest environment.
+
+`AddressOverridesRequireExactRegisterInputs` checks 48 valid/malformed SVM
+assembly contracts across i386 addr16 and x64 addr32. Wrong address/ASID
+widths, missing prefixes, wrong registers/code modes and lost memory or
+side-effect contracts must fail. The complete assembly compilation test
+assembles both override modes at O0/O2 through both C routes.
 
 `LLVMCValues.NativeVirtualizationKeepsStatusAndFailedReadPrior` supplies controlled
 VMX completion values to check C status conversion, exact operand evaluation
@@ -10919,6 +10944,24 @@ cannot publish partial tables; a non-image-base relative table remains valid.
 and freshness after definition/provenance/root changes. `COFFTableBaseCLI.*`
 writes a minimal linked PE, verifies its decoded targets and invokes HighC and
 LLVM-to-C through the CLI, without depending on a platform linker.
+`COFFNarrowGuard.*` checks RVA tables whose selector is extended to 64 bits
+before a narrower unsigned check, as an MSVC SEH termination handler reads
+`movsxd rcx, dword ptr [rax]; cmp ecx, 5; ja`. Sign-extended 8-, 16- and
+32-bit loads and registers under a check of their own width, including a
+register a predecessor block wrote, zero-extended loads and full-width checks
+publish exactly the six cases, with the unwind range covering the table or
+ending before it. A check narrower than the extended source, a 32-bit check of
+a 64-bit load, signed checks and a selector redefined after its check stay
+unresolved.
+`WindowsEHModesCorpus.RecoversTheMSVCX64TerminationHandlerSwitch` checks that
+shape in all twelve optimized MSVC x64 `xcpt4` builds, where it is a `__finally`
+funclet reading its selector through the establisher frame: one six-case table
+inside the handler's unwind range, every case a decoded block.
+`COFFJoinedTwoLevel.*` checks an MSVC CRT two-level dispatch whose index byte
+arrives along two paths that bound it separately, one to 1..15 and one to
+exactly 20h: all 33 index coordinates publish, with the unused bytes'
+cases included. A path that leaves the byte unbounded, or a single-level
+table over the same domain with holes, stays unresolved.
 
 `ResolverBlockMemo.*` retains references through 20,000 recursive insertions,
 checks duplicate construction and exact destruction counts, and reuses cleared
@@ -16510,7 +16553,18 @@ transcripts check stacked scalar arguments, unchanged va_list bytes, 1022/1023/
 1024-byte and large-width clipping, embedded NUL, bounded precision at a page
 edge, signed results and errno. Unsupported conversions precede tag reads and
 log consumption; missing, exhausted and mismatching transcripts preserve the
-completed prefix. Fatal state remains explicit.
+completed prefix. Missing fatal state remains explicit.
+`AndroidLog.AbortMessage*` checks direct/dynamic setters, parent/child first
+publication, live slot replacement without old-record retirement, exact LP64
+records and zeroed page padding, unbound/occupied/malformed/read-only slots,
+and genuine shared mmap exhaustion followed by a successful retry. Complete
+guest snapshots check errno, bytes and guards. `AndroidLog.Fatal*` combines
+all raw/formatted routes with transport clipping, radio routing, integer versus
+wire priority, post-publication faults/refusals, and slot aliases in both wire
+strings. Failed-snapshot options explicitly retain copied records when slot
+publication fails. Strict JSON checks distinguish absent, zero and invalid
+bindings; `ProcessPublic.AndroidTextLogAbortMessageMatchesSDKAndCLI` compares
+complete SDK/CLI reports, including state refusals and runtime failures.
 `AndroidJNI.BinderTransportUsesGuestServiceAndRetainedReplyArenas`
 executes real guest services through all three JNI forms, including three-round
 buffer retention/reuse, a reply recycled and reused by another native thread,
@@ -18864,6 +18918,12 @@ for a function whose unread proof covers R8.
 epilogue, and turns a `__finally` that local-unwinds there too into the `goto`
 it makes. `ABranchyHandlerFillsTheClause` folds the handler's own branch on the
 flag while unwinding.
+`SEHTerminationFrame.AFilterCallbackTakesTheSameEstablisher` certifies a filter
+callback's frame and the homes its parent saves for it, and `SEHFilterValue.*`
+prints each filter callback as its `__except` expression: the Counter read
+through the homed argument, `GetExceptionCode() == 0xC0000005`, a constant as
+`EXCEPTION_EXECUTE_HANDLER`, MSVC /O0's temporaries in the parent's frame gone
+when nothing else touches them, and the writes to a slot the parent reads kept.
 `ARM64SEHLocalUnwindTests.cpp` builds MSVC ARM64 /O0 parents that reach the
 import through a veneer: `ARM64SEHLocalUnwind.*` certifies the exit through
 an unrecorded veneer from the saved entry stack pointer, with the handler
@@ -18895,13 +18955,18 @@ and both of two nested finallys, fills through x1 whatever allocation the unwind
 codes give, prints a frame the parent cannot name that a handler forwards to a
 call as an unknown argument, keeps the comment for the unpublished registers, and
 `ARangeRunningPastTheEpilogueStillStructures` structures a `__try` whose range
-runs past the epilogue a branch around it skips to.
+runs past the epilogue a branch around it skips to. `ARMSEHFilterValue.*`
+publishes the frame pointer for a filter callback and prints the callback that
+reads the homed Counter through x1 as its `__except` expression.
 `WindowsEHModesCorpus.LocalUnwindReturnRunsTheFinallyOnceInTheClause` checks
 xcpt4's `eret` the same way on the original x64 FH4 binary: one increment in
 the `__except` arm, one in the filled clause and one in the normal-path copy,
 with no `_local_unwind`, target address or handler call left, and
 `LocalUnwindExitAgreesAloneAndInTheWholeUnit` prints the same function from a
-`--func` view as from the whole unit, and
+`--func` view as from the whole unit,
+`Xcpt4FilterCallbacksAreTheirExceptExpressions` prints every filter callback of
+xcpt4's x64 FH4 /O0 binary as its `__except` expression and the /O2 filter
+inside test58's termination handler as the Counter its frame homed, and
 `AArch64LocalUnwindExitAgreesAloneAndInTheWholeUnit` does so for the ARM64
 /O0 build's loop of two nested finallys, with no `_local_unwind` left.
 `EveryFinallyClauseOfXcpt4HoldsItsHandlerAsCode` decompiles the x64, ARM and
@@ -21471,13 +21536,32 @@ diversity settings, local/import identities, special library ordinals,
 4/16 KiB pages, overflow starts, new RX/RW segments, signature extents,
 reordered segment-target ordinals and unchanged input on rejection.
 Independent literal words and the separate analysis loader check the installed
-representation.
+representation. The same suite covers legacy threaded ordinal-table/root
+installation, raw NON_WEAK_DEFINITION flags, signed addends, all special
+ordinals, complete-program rejection and automatic compiled receipt handoff
+into both formats. Provider ambiguity and failed placement planning are rejected
+without mutation. The actual
+MC compilation test requires the fork's `MCPointerAuthInfo` interface and
+explicitly skips with r6; authored receipts do not substitute for that producer
+qualification. The compiler boundary control first emits and loads a native
+object containing a nested `ptrauth` constant, then requires either a retained
+rewrite recipe on a capable fork or explicit refusal with r6.
+Long-name controls distinguish an admitted shared symbol from repeated copies
+that exhaust the threaded budget; both snapshot decoding and installation must
+reject the latter before changing the image.
 
 `AppleClang/MachOArm64eNativeInstallation.*` compiles actual arm64e dylibs at
 O0/O2, installs sixteen recipes including a new libSystem import both in
 existing storage and in newly appended RX/RW segments, re-signs with the
 production signer, verifies the result strictly and asks Apple's
-`dyld_info` to decode every target, key and discriminator. Compiler-generated
+`dyld_info` to decode every target, key and discriminator for modern chains.
+The legacy matrix uses `ld-classic -no_fixup_chains` and `otool -dyld_info` to
+independently decode bind diversity, address diversity and symbols. Current
+`dyld_info` refuses old arm64e bind opcodes, and `otool` does not list legacy
+rebases. Its legacy key decoder also drops the low key bit (`& 2`); tests check
+both raw key bits for all four keys and the decoded names for IA/DA. IB/DB do
+not have an independent decoded-name oracle on this toolchain. Legacy rebases
+are checked by strict replay and the separate analysis loader. Compiler-generated
 C++ compact frames retain their ranges, encodings, personality slots and LSDA
 addresses. A separate, explicit assembly input supplies signed DWARF CFI for
 instruction-by-instruction IB state replay; it is not compiler-generated
@@ -21485,8 +21569,10 @@ exception-unwind evidence. These tests inspect files and do not execute dyld,
 C++ cleanup or the native signed unwinder. Non-Apple hosts explicitly skip the
 Apple-tool cases. `NEVERD_ARM64E_DYLD_ARTIFACT_DIR` exports qualification inputs
 and diagnostics; ordinary runs remove their temporary directory.
-The [qualification record](evidence/arm64e-dyld-install-2026-11-08.json)
-records the native inputs, integration checks and remaining validation limits.
+The [producer/threaded qualification record](evidence/arm64e-producer-threaded-2026-11-09.json)
+records integration checks and the remaining producer/runtime limits. The
+[earlier chained-only record](evidence/arm64e-dyld-install-2026-11-08.json)
+retains its original native inputs and validation results.
 
 ### Arm64e verifier artifact ownership
 

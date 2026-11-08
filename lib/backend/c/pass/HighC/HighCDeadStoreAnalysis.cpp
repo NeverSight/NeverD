@@ -324,7 +324,7 @@ bool hasOnlyPrivateFrameMemory(const HighFunc &Func,
         return;
       }
     }
-    forEachRhsExpr(Stmt, [&](const ExprPtr &Expr) {
+    forEachRhsExprAndFilter(Stmt, [&](const ExprPtr &Expr) {
       if (Expr)
         Valid &= CheckValue(*Expr, 0);
     });
@@ -346,7 +346,7 @@ void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
     if (S.MemoryOrdering != NdMemoryOrdering::None ||
         S.MemoryAddressSpace != NdMemoryAddressSpace::Default)
       HasOrderedMemory = true;
-    forEachExpr(S, [&](const ExprPtr &E) {
+    forEachExprAndFilter(S, [&](const ExprPtr &E) {
       if (!E)
         return;
       walkExprNodes(*E, [&](const HighExpr &Node) {
@@ -374,7 +374,7 @@ void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
   walkStmts(Func.Body, [&](const HighStmt &S) {
     if (S.Kind == StmtKind::Store && S.StoreAddr)
       RecordAddress(*S.StoreAddr);
-    forEachExpr(S, [&](const ExprPtr &Expr) {
+    forEachExprAndFilter(S, [&](const ExprPtr &Expr) {
       if (!Expr)
         return;
       walkExprNodes(*Expr, [&](const HighExpr &Node) {
@@ -387,7 +387,7 @@ void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
 
   std::vector<ReducedAddr> ReducedLoads;
   walkStmts(Func.Body, [&](const HighStmt &S) {
-    forEachExpr(S, [&](const ExprPtr &E) {
+    forEachExprAndFilter(S, [&](const ExprPtr &E) {
       if (!E)
         return;
       walkExprNodes(*E, [&](const HighExpr &Expr) {
@@ -400,7 +400,7 @@ void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
 
   std::set<std::string> LoadVars;
   walkStmts(Func.Body, [&](const HighStmt &S) {
-    forEachExpr(S, [&](const ExprPtr &E) {
+    forEachExprAndFilter(S, [&](const ExprPtr &E) {
       if (E)
         collectLoadAddrVars(*E, LoadVars, VarFn);
     });
@@ -431,7 +431,7 @@ void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
   walkStmts(Func.Body, [&](const HighStmt &S) {
     if (State.DeadStmts.count(&S))
       return;
-    forEachExpr(S, [&](const ExprPtr &E) {
+    forEachExprAndFilter(S, [&](const ExprPtr &E) {
       if (E)
         walkExprNodes(*E, [&](const HighExpr &Expr) {
           if (Expr.Kind == ExprKind::Load && !Expr.Operands.empty())
@@ -464,7 +464,7 @@ void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
     walkStmts(Func.Body, [&](const HighStmt &S) {
       if (State.DeadStmts.count(&S))
         return;
-      forEachRhsExpr(S, [&](const ExprPtr &E) {
+      forEachRhsExprAndFilter(S, [&](const ExprPtr &E) {
         if (E)
           collectExprVars(*E, AliveVars, VarFn);
       });
@@ -531,7 +531,7 @@ void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
   walkStmts(Func.Body, [&](const HighStmt &S) {
     if (State.DeadStmts.count(&S))
       return;
-    forEachRhsExpr(S, [&](const ExprPtr &E) {
+    forEachRhsExprAndFilter(S, [&](const ExprPtr &E) {
       if (E)
         collectExprVars(*E, AliveRhs, VarFn);
     });

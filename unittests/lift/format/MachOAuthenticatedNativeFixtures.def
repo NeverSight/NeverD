@@ -123,11 +123,36 @@ ret
 )asm")
 MACHO_AUTH_NATIVE_ARGS(kCompileArgs, "-arch", "arm64e", "-dynamiclib",
                        "-std=c++20", "-fno-omit-frame-pointer",
-                       "-fno-optimize-sibling-calls", "-Wl,-fixup_chains",
-                       "-Wl,-headerpad,0x1000")
+                       "-fno-optimize-sibling-calls", "-Wl,-headerpad,0x1000")
 MACHO_AUTH_NATIVE_ARGS(kOutputArgs, "-o")
 MACHO_AUTH_NATIVE_ARGS(kInfoArgs, "dyld_info", "-fixups",
                        "-fixup_chain_details")
+
+MACHO_AUTH_NATIVE_TEXT(kClassicLinker, "ld-classic")
+MACHO_AUTH_NATIVE_TEXT(kFindTool, "--find")
+MACHO_AUTH_NATIVE_TEXT(kLinkerOption, "-fuse-ld=")
+MACHO_AUTH_NATIVE_TEXT(kClassicLinkerPath, "classic-linker.txt")
+MACHO_AUTH_NATIVE_TEXT(kClassicMissing, "Apple ld-classic is unavailable")
+MACHO_AUTH_NATIVE_TEXT(kLegacyDeployment, "-mmacosx-version-min=11.0")
+MACHO_AUTH_NATIVE_TEXT(kThreadedOption, "-Wl,-no_fixup_chains")
+MACHO_AUTH_NATIVE_TEXT(kChainedOption, "-Wl,-fixup_chains")
+MACHO_AUTH_NATIVE_TEXT(kThreadedProperty, "legacy_threaded")
+MACHO_AUTH_NATIVE_TEXT(kThreadedHeading, "dyld information:")
+MACHO_AUTH_NATIVE_TEXT(kTrue, "true")
+MACHO_AUTH_NATIVE_TEXT(kFalse, "false")
+MACHO_AUTH_NATIVE_ARGS(kThreadedInfoArgs, "otool", "-dyld_info")
+MACHO_AUTH_NATIVE_VALUE(unsigned, kThreadedInfoCount, 11)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kThreadedInfoAddress, 2)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kThreadedInfoPointer, 3)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kThreadedInfoDiversity, 5)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kThreadedInfoAddressDiversity, 6)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kThreadedInfoKey, 7)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kThreadedInfoSymbol, 10)
+// Apple's legacy otool decoder drops bit 49: dyld_bind_info.c uses & 2.
+// Keep an independent two-bit check of its printed pointer for all four keys.
+MACHO_AUTH_NATIVE_VALUE(unsigned, kThreadedPointerKeyShift, 49)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kThreadedPointerKeyMask, 3)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kThreadedToolMissingKeyBit, 1)
 
 #undef MACHO_AUTH_NATIVE_TEXT
 #undef MACHO_AUTH_NATIVE_VALUE
