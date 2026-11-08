@@ -1547,10 +1547,13 @@ bool CodeEdits::takeFunctionNames(Json &view,
   }
   std::vector<Replacement> replacements;
   for (const auto &name : *names) {
-    if (name.value("kind", std::string()) != "address" ||
-        !name.contains("address") || !name["address"].is_string())
+    const auto kind = name.find("kind");
+    const auto address = name.find("address");
+    if (kind == name.end() || !kind->is_string() ||
+        kind->get_ref<const std::string &>() != "address" ||
+        address == name.end() || !address->is_string())
       continue;
-    const auto at = parseAddress(name["address"].get<std::string>());
+    const auto at = parseAddress(address->get_ref<const std::string &>());
     if (std::find(renamed.begin(), renamed.end(), at) == renamed.end())
       continue;
     const auto begin = name.value("begin_byte", std::size_t{0});
@@ -1571,8 +1574,8 @@ bool CodeEdits::takeFunctionNames(Json &view,
   const ByteShifts shifted(replacements);
   for (auto &name : *names)
     for (const char *field : {"begin_byte", "end_byte"})
-      if (name.contains(field))
-        name[field] = shifted(name[field].get<std::size_t>());
+      if (const auto at = name.find(field); at != name.end())
+        *at = shifted(at->get<std::size_t>());
   remapPageSpans(view, shifted);
   view["text"] = replaced(decorated, replacements);
   return true;

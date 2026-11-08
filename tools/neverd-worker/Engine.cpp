@@ -1142,6 +1142,34 @@ void Engine::keepNamedViewsThrough(std::uint64_t address,
   ++viewEditCount_;
 }
 
+namespace {
+bool identifierByte(char c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+         (c >= '0' && c <= '9') || c == '_';
+}
+
+/// Adds to \p hashes those of the identifiers \p text spells in [begin, end),
+/// each read whole where it crosses either bound.
+void spellIdentifiers(std::string_view text, std::size_t begin, std::size_t end,
+                      std::vector<std::uint64_t> &hashes) {
+  while (begin > 0 && identifierByte(text[begin - 1]))
+    --begin;
+  while (end < text.size() && identifierByte(text[end]))
+    ++end;
+  for (std::size_t at = begin; at < end;) {
+    if (!identifierByte(text[at])) {
+      ++at;
+      continue;
+    }
+    const auto first = at;
+    while (at < end && identifierByte(text[at]))
+      ++at;
+    hashes.push_back(static_cast<std::uint64_t>(
+        std::hash<std::string_view>{}(text.substr(first, at - first))));
+  }
+}
+} // namespace
+
 void Engine::readViewEdits(const std::string &sourceKey) {
   const auto found = namedViewsBySource_.find(sourceKey);
   if (found == namedViewsBySource_.end())
@@ -1182,16 +1210,7 @@ void Engine::readViewEdits(const std::string &sourceKey) {
         continue;
       }
       if (!document.spelledRead) {
-        for (std::size_t at = 0; at < spelled.size();) {
-          if (!identifierChar(spelled[at])) {
-            ++at;
-            continue;
-          }
-          const auto begin = at;
-          while (at < spelled.size() && identifierChar(spelled[at]))
-            ++at;
-          document.spelled.push_back(hashOf(spelled.substr(begin, at - begin)));
-        }
+        spellIdentifiers(spelled, 0, spelled.size(), document.spelled);
         std::sort(document.spelled.begin(), document.spelled.end());
         document.spelled.erase(
             std::unique(document.spelled.begin(), document.spelled.end()),
@@ -1501,6 +1520,29 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
       document->reads = reused->reads;
       document->readsKnown = reused->readsKnown;
       document->definitionLine = reused->definitionLine;
+      // The identifiers its text spells: those of the text it is a copy of,
+      // and those of what the patch wrote, which the texts differ in alone.
+      if (reused->spelledRead) {
+        const std::string_view before =
+            reused->value.at("text").get_ref<const std::string &>();
+        const std::string_view after =
+            full.at("text").get_ref<const std::string &>();
+        const auto common = std::min(before.size(), after.size());
+        std::size_t prefix = 0, suffix = 0;
+        while (prefix < common && before[prefix] == after[prefix])
+          ++prefix;
+        while (suffix < common - prefix && before[before.size() - 1 - suffix] ==
+                                               after[after.size() - 1 - suffix])
+          ++suffix;
+        document->spelled = reused->spelled;
+        spellIdentifiers(after, prefix, after.size() - suffix,
+                         document->spelled);
+        std::sort(document->spelled.begin(), document->spelled.end());
+        document->spelled.erase(
+            std::unique(document->spelled.begin(), document->spelled.end()),
+            document->spelled.end());
+        document->spelledRead = true;
+      }
       commentPatches_ += reused->commentsReached;
       namePatches_ += named;
       return keepNamedView(std::move(document), std::move(full), lookupKey,
