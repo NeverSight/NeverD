@@ -128,6 +128,56 @@ TEST_F(NdOpEmulatorTest, PieceOp) {
   EXPECT_EQ(Emu.getRegister(16).value_or(0), 0xABCDu);
 }
 
+TEST_F(NdOpEmulatorTest, WideLogicalOperationsRequireCompleteInputs) {
+  for (uint16_t Bytes : {12, 16, 32, 64})
+    for (bool Strict : {false, true})
+      for (NdOp Opcode :
+           {NdOp::INT_AND, NdOp::INT_OR, NdOp::INT_XOR, NdOp::INT_NOT}) {
+        LowOp Op;
+        Op.Opcode = Opcode;
+        Op.Output = NdVar::reg(0x300, Bytes);
+        Op.addInput(NdVar::reg(0x100, Bytes));
+        if (Opcode != NdOp::INT_NOT)
+          Op.addInput(NdVar::reg(0x200, Bytes));
+        for (unsigned Missing = 0; Missing != Op.NumInputs; ++Missing)
+          for (unsigned Available : {0u, 8u}) {
+            SCOPED_TRACE(::testing::Message()
+                         << unsigned(Opcode) << ": " << Bytes << " bytes, "
+                         << Strict << " strict, input " << Missing << " has "
+                         << Available << " bytes");
+            NdOpEmulator Emu(Img);
+            Emu.setStrictMode(Strict);
+            for (unsigned I = 0; I != Op.NumInputs; ++I)
+              if (I != Missing)
+                Emu.setRegisterBytes(Op.Inputs[I].Offset,
+                                     std::vector<uint8_t>(Bytes, 0xff));
+              else if (Available)
+                Emu.setRegister(Op.Inputs[I].Offset, 0x123456789abcdef0);
+            const std::vector<uint8_t> Before(Bytes, 0x5a);
+            Emu.setRegisterBytes(Op.Output.Offset, Before);
+            EXPECT_FALSE(Emu.step(Op));
+            EXPECT_EQ(Emu.getRegisterBytes(Op.Output.Offset), Before);
+            EXPECT_FALSE(Emu.skips().any());
+          }
+        NdOpEmulator Emu(Img);
+        Emu.setStrictMode(Strict);
+        std::vector<uint8_t> A(Bytes), B(Bytes), Expected(Bytes);
+        for (unsigned I = 0; I != Bytes; ++I) {
+          A[I] = uint8_t(0x91 + I * 13);
+          B[I] = uint8_t(0xe5 - I * 7);
+          Expected[I] = Opcode == NdOp::INT_AND   ? A[I] & B[I]
+                        : Opcode == NdOp::INT_OR  ? A[I] | B[I]
+                        : Opcode == NdOp::INT_XOR ? A[I] ^ B[I]
+                                                  : uint8_t(~A[I]);
+        }
+        Emu.setRegisterBytes(0x100, A);
+        Emu.setRegisterBytes(0x200, B);
+        Op.Output = Op.Inputs[0];
+        ASSERT_TRUE(Emu.step(Op));
+        EXPECT_EQ(Emu.getRegisterBytes(Op.Output.Offset), Expected);
+      }
+}
+
 TEST_F(NdOpEmulatorTest, NegateAnd2Comp) {
   NdOpEmulator Emu(Img);
   Emu.setRegister(0, 0xFF);

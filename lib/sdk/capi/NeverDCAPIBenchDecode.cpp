@@ -42,7 +42,7 @@ const char *archShortName(Arch A) {
   case Arch::ARM:
     return "arm";
   default:
-    return "unknown";
+    return getArchName(A);
   }
 }
 
@@ -55,6 +55,12 @@ const char *neverd_bench_decode(neverd_session_t Sess) {
   S->clearError();
   if (!S->Loaded) {
     S->setError("no binary loaded");
+    return nullptr;
+  }
+
+  // These linear/chunk passes do not select per-occurrence mixed modes.
+  if (!isSingleInstructionMode(S->Img.Mode)) {
+    S->setError("mixed instruction modes are not supported by this benchmark");
     return nullptr;
   }
 
@@ -110,7 +116,7 @@ const char *neverd_bench_decode(neverd_session_t Sess) {
   };
 
   Decoder DFull;
-  if (!DFull.init(S->Img.Arch, S->Img.Mode)) {
+  if (!DFull.init(S->Img)) {
     S->setError("decoder init failed");
     return nullptr;
   }
@@ -137,7 +143,7 @@ const char *neverd_bench_decode(neverd_session_t Sess) {
   };
 
   Decoder DLight;
-  if (!DLight.init(S->Img.Arch, S->Img.Mode)) {
+  if (!DLight.init(S->Img)) {
     S->setError("decoder init failed");
     return nullptr;
   }
@@ -170,7 +176,7 @@ const char *neverd_bench_decode(neverd_session_t Sess) {
   // lift pipeline actually sees; on other targets decodeOneForLift == decodeOne
   // so this simply mirrors the full pass.
   Decoder DLift;
-  if (!DLift.init(S->Img.Arch, S->Img.Mode)) {
+  if (!DLift.init(S->Img)) {
     S->setError("decoder init failed");
     return nullptr;
   }
@@ -227,7 +233,7 @@ const char *neverd_bench_decode(neverd_session_t Sess) {
     std::atomic<uint64_t> Total{0};
     auto Worker = [&]() {
       Decoder LocalDec;
-      if (!LocalDec.init(S->Img.Arch, S->Img.Mode))
+      if (!LocalDec.init(S->Img))
         return;
       LocalDec.setDetail(true);
       uint64_t Local = 0;
@@ -267,7 +273,7 @@ const char *neverd_bench_decode(neverd_session_t Sess) {
     std::atomic<uint64_t> Total{0};
     auto Worker = [&]() {
       Decoder LocalDec;
-      if (!LocalDec.init(S->Img.Arch, S->Img.Mode))
+      if (!LocalDec.init(S->Img))
         return;
       LocalDec.setDetail(true);
       uint64_t Local = 0;

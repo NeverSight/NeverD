@@ -48,6 +48,7 @@
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MIPS/MIPSMergeValues.h"
 #include "neverd/ir/med/MIPS/MIPSReturnTargets.h"
+#include "neverd/ir/med/MIPS/MIPSSourceVectors.h"
 #include "neverd/ir/med/MedBoundCallStackArguments.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedCallTarget.h"
@@ -787,12 +788,14 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
   if (SEHPhysical)
     Physical = std::move(SEHPhysical->Function);
   const LowFunc &Low = Physical ? *Physical : SourceLow;
+  if (isMIPS(TheArch))
+    requireMIPSSourceVectors(Low, TheArch, Image);
   const bool QualifyMIPSReturns =
       isMIPS(TheArch) &&
       (Image
            ? (Image->Mode == InstructionMode::MixedMIPS ||
               Image->Mode == InstructionMode::MicroMIPS ||
-              (Image->MIPS && Image->MIPS->HasDSP))
+              (Image->MIPS && (Image->MIPS->HasDSP || Image->MIPS->HasMSA)))
            : llvm::any_of(Low.Blocks, [TheArch](const auto &Block) {
                // Standalone IR cannot drop a changed return link merely
                // because the original image's ASE record is unavailable.

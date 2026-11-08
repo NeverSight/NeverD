@@ -22585,6 +22585,29 @@ recorded separately; generated results must always satisfy the manual-derived
 expectation. The managed artifact lifecycle retires each generated object and
 executable after its comparisons.
 
+`MIPSMSATests` covers scalar word transfers across all vector registers,
+B/H/W/D carry and borrow boundaries, full-container logical operations and
+aliasing, independent byte-wise expectations, missing state, decoder reuse and
+P5600 reference execution. Loader cases check r5/MSA/CPR128/FP64 evidence;
+pipeline cases check both source routes and unchanged refusals with/without an
+Image. The owned MSA source runner recompiles eighteen scalar/memory leaves in both
+byte orders at O0/O2 through HighC and LLVMC. It checks each output byte and the
+preserved F20/F22/.../F30 low64 values, maps original/generated ELF separately,
+and retires scratch on success and failure:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=third_party/unicorn/bindings/python:scripts \
+  LIBUNICORN_PATH=build-mips/roundtrip \
+  python3 unittests/lift/mips/msa-roundtrip.py --neverd build-mips/bin/neverd \
+  --clang /path/to/clang --ld /path/to/ld.lld --output build-mips/roundtrip-msa
+```
+
+The same runner exports LLVMC's live 128-bit funnel-shift fixture from
+`NeverDMIPSPipelineTests` beside the CLI, recompiles it for both byte orders at
+O0/O2, and compares execution with an arbitrary-precision integer oracle.
+Storage-only 128-bit locals and address-taken external declarations receive
+separate target syntax checks; those four checks do not claim linked execution.
+
 ### MIPS decode/lift and firmware performance
 
 `neverd-mips-bench` is an opt-in target, excluded from the default build:
@@ -22595,11 +22618,13 @@ build-mips/bin/neverd-mips-bench mips64el lift /path/to/owned-code.bin 100000
 ```
 
 Profiles are `mips`, `mipsel`, `mips64`, `mips64el`, `micromips`,
-`micromipsel`, `mipsdsp` and `mipsdspel`. The DSP profiles explicitly select
-the admitted classic32 DSP capability. Stages are `capstone`
+`micromipsel`, `mipsdsp`, `mipsdspel`, `mipsmsa` and `mipsmsael`. The DSP
+profiles explicitly select the admitted classic32 DSP capability; MSA profiles
+select classic32 r5/o32 FP64 with the admitted integer vector instructions.
+Stages are `capstone`
 (direct physical decoding), `decode` (NeverD physical decoding) and `lift`
 (decoding plus LowIR, including delay slots). Both decode paths request the same
-selected r2 encoding profile, detail on and text off. The pinned Capstone fork suppresses
+selected encoding/revision profile, detail on and text off. The pinned Capstone fork suppresses
 rendered operand detail with text off; these physical decode measurements consume
 instruction sizes and IDs. The harness reuses decoder handles, counts physical
 instructions/LowOps and validates output fingerprints outside
