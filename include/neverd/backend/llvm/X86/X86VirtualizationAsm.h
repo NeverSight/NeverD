@@ -98,17 +98,23 @@ x86VirtualizationAsm(Intrinsic Id, Arch TargetArch, NdMemoryAddressSpace Space,
   case Intrinsic::SvmLoad:
   case Intrinsic::SvmSave:
     P.InputConstraints = {"{ax}"};
-    P.Text += " " + Operand(0);
+    if (PhysicalAddressBytes != 2)
+      P.Text += " " + Operand(0);
     break;
   case Intrinsic::SvmInvalidate:
     P.InputConstraints = {"{ax}", "{cx}"};
-    P.Text += " " + Operand(0) + ", " + Operand(1);
+    if (PhysicalAddressBytes != 2)
+      P.Text += " " + Operand(0) + ", " + Operand(1);
     break;
   default:
     if (C.MemoryArgument == 0)
       P.Text += " " + Memory(0);
     break;
   }
+  // Assemblers spell AX addressing with a prefix and implicit operands. The
+  // fixed-register constraints still transport AX and the full ECX ASID.
+  if (C.PhysicalAddress && PhysicalAddressBytes == 2)
+    P.Text = "addr16 " + P.Text;
   if (C.Result != X86VirtualizationResult::None)
     P.Text += "\n\tsetc %al\n\tsetz %ah";
   auto Constraint = [&](const std::string &Text) {
