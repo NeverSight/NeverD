@@ -728,6 +728,74 @@ TEST(SymMBAWidePairs, MaskedProductsObserveOnlyTheRequestedLiteralWindow) {
   }
 }
 
+TEST(SymMBAWidePairs, MaskedHighDegreeSignaturesKeepOnlyTheirVisibleBits) {
+  for (unsigned Width : {8u, 16u, 65u, 257u}) {
+    for (unsigned Degree : {32u, 64u}) {
+      for (unsigned Mode : {0u, 1u, 2u, 3u}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Width << " / " << Degree << " / " << Mode);
+        SymContext Ctx;
+        const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+        const auto Z = Ctx.mkVar("z", Width);
+        const auto Even = ~llvm::APInt(Width, 1);
+        const auto Mask =
+            llvm::APInt(Width, 1).shl(Width - 1) | (Mode == 3 ? 7 : 3);
+        const auto Base = Mode == 1 ? Ctx.mkXor(X, Ctx.mkOne(Width)) : X;
+        llvm::SmallVector<SymRef, 64> Factors;
+        for (unsigned I = 0; I < Degree; ++I) {
+          const auto Offset = 2 * I + unsigned(Mode == 2 && I == 0);
+          const auto A = Ctx.mkAdd(Base, Ctx.mkConst(Width, Offset));
+          const auto B =
+              Ctx.mkAnd(Ctx.mkAdd(Y, Ctx.mkConst(Width, I)), Ctx.mkConst(Even));
+          const auto C = Ctx.mkAnd(Ctx.mkAdd(Z, Ctx.mkConst(Width, 2 * I)),
+                                   Ctx.mkConst(Even));
+          Factors.push_back(
+              Ctx.mkAnd(Ctx.mkXor(A, Ctx.mkMul(B, C)), Ctx.mkConst(Mask)));
+        }
+        const auto Scale = llvm::APInt(Width, 3).shl(Width - 8);
+        const auto Root = Ctx.mkMul(Ctx.mkConst(Scale), Ctx.mkMul(Factors));
+        MBAOptions Options;
+        Options.MaxWork = 65536;
+        const auto Result = simplifyMBADeep(Ctx, Root, Options);
+        if (Width > 8) {
+          EXPECT_LT(Result.Work, Options.MaxWork);
+          EXPECT_LT(Result.SizeAfter, Result.SizeBefore);
+          // The unperturbed two-bit factors collapse to a parity selector.
+          // A changed factor or a retained third bit keeps additional data.
+          if (Mode < 2)
+            EXPECT_LE(Result.SizeAfter, 12u);
+        }
+        SymEvalPlan Plan(Ctx, Result.Expr);
+        std::mt19937_64 Random(0x4d41534b45444849);
+        for (unsigned Trial = 0; Trial < 128; ++Trial) {
+          std::array<llvm::APInt, 3> V;
+          for (unsigned I = 0; I < V.size(); ++I) {
+            V[I] = llvm::APInt(Width, Random());
+            for (unsigned Bit = 64; Bit < Width; Bit += 64)
+              V[I] |= llvm::APInt(Width, Random()).shl(Bit);
+            if (Trial < 8)
+              V[I] = (Trial >> I) & 1 ? llvm::APInt::getAllOnes(Width)
+                                      : llvm::APInt(Width, 0);
+          }
+          auto Expected = Scale;
+          const auto XV = Mode == 1 ? V[0] ^ llvm::APInt(Width, 1) : V[0];
+          for (unsigned I = 0; I < Degree; ++I)
+            Expected *= ((XV + 2 * I + unsigned(Mode == 2 && I == 0)) ^
+                         (((V[1] + I) & Even) * ((V[2] + 2 * I) & Even))) &
+                        Mask;
+          EXPECT_EQ(Plan.evalWith([&](uint32_t Id) -> const llvm::APInt * {
+            return Id == Ctx.varId(X)   ? &V[0]
+                   : Id == Ctx.varId(Y) ? &V[1]
+                   : Id == Ctx.varId(Z) ? &V[2]
+                                        : nullptr;
+          }),
+                    Expected);
+        }
+      }
+    }
+  }
+}
+
 TEST(SymMBAWidePairs, PreparedParityPrefixesKeepTheirProductAndContext) {
   auto Run = [](unsigned Width, bool Prepare) {
     SymContext Ctx;

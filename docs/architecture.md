@@ -5010,6 +5010,21 @@ Decision and carry caches pack their bounded input and edge fields into exact
 bucket and entry storage reflect the compact representation, with unchanged
 work and node limits. Carry-cache hits stay outside the recursive allocation
 frame; only missing identities construct new decision frontiers.
+The existing region traversal seeds only arithmetic-input demotions guaranteed
+by the first classification. If every bitwise operand has a decided role, one
+classification completes the region; ambiguous nested products still reach the
+same fixed point. The traversal also collects visible inputs and the product
+flag. Ordered coefficient insertion reuses its lookup bound. Exact input roles
+and placeholder reservations are unchanged.
+Masked pairing signatures whose masks exclude every correction bit intern the
+exact retained decision vector with zero extension. This avoids constructing
+discarded carries; visible high mask bits still use the complete signature.
+Low-word and pairing-signature cache hits return before entering recursive
+construction frames; only missing entries allocate their temporary frontiers.
+Lookup, depth admission, work charging and exact cache keys keep their order.
+The admission walk and decision emission use dense membership/result tables
+with prepaid bucket growth. The small admitted-input set stays inline; these
+containers never select traversal order or weaken the full-word proof.
 Recursive Boolean application specializes its fixed AND or XOR operation;
 OR enters the same AND frontier through complemented edges. The outer word
 reader selects the operation, while recursive calls retain the same exact
@@ -5370,10 +5385,9 @@ Native key construction reads inline constants without entering the wide
 literal reader.
 Decision identity hits and terminal two-input Boolean operations return before
 entering the allocation and recursive expansion helpers. Three-input carry and
-parity operations keep their cache lookup and recursive expansion in one
-function, avoiding another call frame on the frequent cache misses. Lookup,
-depth admission, charging and insertion keep their original order, including
-failure paths.
+parity operations likewise keep terminal identities and cache hits outside
+the recursive expansion frame. Lookup, depth admission, charging and insertion
+keep their original order, including failure paths.
 XOR and three-input parity reuse a completed low cofactor when every high
 cofactor has the same complete decision identity apart from its complement
 edge. Their complement flags combine exactly, avoiding a repeated recursive

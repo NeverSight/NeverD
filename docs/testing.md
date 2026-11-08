@@ -10038,6 +10038,16 @@ isolation.
 
 ## Modular MBA simplification
 
+Local MBA research can run disposable producers with
+`python3 tools/neverd-bench/mba_attempt.py --directory <owned-attempt-root> -- <command>`.
+The runner retains current and previous evidence, removes scratch after success,
+failure or normal interruption, and recovers abandoned scratch on the next start.
+An inherited POSIX lease prevents cleanup while the producer still runs. Reusable
+SDK/build directories, frozen corpora and promised historical recovery archives
+remain outside this owned root. `test_mba_attempt.py` exercises eight small rounds,
+normal interruption, killed-parent recovery, live-reader exclusion and preservation
+of unowned input and interrupted slot setup; it creates no real SDK copies.
+
 `SymMBAObservedWindow.Reciprocal*` and
 `QuotientProductsRecoverOnlyTheirOwnRemainder` (in
 `NeverDSymMBAObservedWindowTests`) check exact reciprocal division, its

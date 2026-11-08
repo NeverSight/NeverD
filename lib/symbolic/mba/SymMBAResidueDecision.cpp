@@ -18,6 +18,7 @@
 #include "neverd/symbolic/Limits.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Compiler.h"
@@ -426,6 +427,65 @@ class LowWordDecisions {
     return Result;
   }
 
+  // Cache hits and terminal identities need no recursive frontier. Keep the
+  // saved cofactors and allocation path out of those frequent calls.
+  LLVM_ATTRIBUTE_NOINLINE
+  std::pair<uint32_t, uint32_t> expandAdder(uint32_t A, uint32_t B, uint32_t C,
+                                            unsigned Depth, uint64_t Key,
+                                            uint32_t Complement) {
+    if (Depth >= limits::kMaxResidueDecisionDepth) {
+      Failed = true;
+      return {};
+    }
+    const auto DA = decision(A), DB = decision(B), DC = decision(C);
+    const auto V = std::min({DA.Variable, DB.Variable, DC.Variable});
+    const auto L =
+        fullAdder(DA.Variable == V ? DA.Low : A, DB.Variable == V ? DB.Low : B,
+                  DC.Variable == V ? DC.Low : C, Depth + 1);
+    const auto H = fullAdder(DA.Variable == V ? DA.High : A,
+                             DB.Variable == V ? DB.High : B,
+                             DC.Variable == V ? DC.High : C, Depth + 1);
+    const std::pair<uint32_t, uint32_t> R{node(V, L.first, H.first),
+                                          node(V, L.second, H.second)};
+    if (!charge(1, sizeof(Key) + sizeof(R) + 4 * sizeof(void *)) ||
+        !reserveEntry(Adders))
+      return {};
+    Adders.try_emplace(Key, R);
+    return {R.first ^ Complement, R.second ^ Complement};
+  }
+
+  LLVM_ATTRIBUTE_NOINLINE
+  uint32_t expandParity(uint32_t A, uint32_t B, uint32_t C, unsigned Depth,
+                        uint64_t Key, uint32_t Complement) {
+    if (Depth >= limits::kMaxResidueDecisionDepth) {
+      Failed = true;
+      return 0;
+    }
+    const auto DA = decision(A), DB = decision(B), DC = decision(C);
+    const auto V = std::min({DA.Variable, DB.Variable, DC.Variable});
+    const auto ALow = DA.Variable == V ? DA.Low : A;
+    const auto AHigh = DA.Variable == V ? DA.High : A;
+    const auto BLow = DB.Variable == V ? DB.Low : B;
+    const auto BHigh = DB.Variable == V ? DB.High : B;
+    const auto CLow = DC.Variable == V ? DC.Low : C;
+    const auto CHigh = DC.Variable == V ? DC.High : C;
+    const auto ChangeA = ALow ^ AHigh, ChangeB = BLow ^ BHigh,
+               ChangeC = CLow ^ CHigh;
+    const auto Change = ((ChangeA | ChangeB | ChangeC) & ~uint32_t(1)) |
+                        ((ChangeA ^ ChangeB ^ ChangeC) & 1);
+    const auto L = parity(ALow, BLow, CLow, Depth + 1);
+    // This is a relation between complete decision edges, not just their
+    // leading bits. Any changed node identity retains the general recursion.
+    const auto H =
+        Change <= 1 ? L ^ Change : parity(AHigh, BHigh, CHigh, Depth + 1);
+    const auto R = node(V, L, H);
+    if (!charge(1, sizeof(Key) + sizeof(uint32_t) + 4 * sizeof(void *)) ||
+        !reserveEntry(Parities))
+      return 0;
+    Parities.try_emplace(Key, R);
+    return R ^ Complement;
+  }
+
   // Recurse over the common decision frontier once for both output bits.
   // The sum and majority are both self-dual: complementing all three inputs
   // complements both results. One normalized cache entry therefore shares
@@ -461,25 +521,7 @@ class LowWordDecisions {
     const auto Key = carryKey(A, B, C);
     if (auto It = Adders.find(Key); It != Adders.end())
       return {It->second.first ^ Complement, It->second.second ^ Complement};
-    if (Depth >= limits::kMaxResidueDecisionDepth) {
-      Failed = true;
-      return {};
-    }
-    const auto DA = decision(A), DB = decision(B), DC = decision(C);
-    const auto V = std::min({DA.Variable, DB.Variable, DC.Variable});
-    const auto L =
-        fullAdder(DA.Variable == V ? DA.Low : A, DB.Variable == V ? DB.Low : B,
-                  DC.Variable == V ? DC.Low : C, Depth + 1);
-    const auto H = fullAdder(DA.Variable == V ? DA.High : A,
-                             DB.Variable == V ? DB.High : B,
-                             DC.Variable == V ? DC.High : C, Depth + 1);
-    const std::pair<uint32_t, uint32_t> R{node(V, L.first, H.first),
-                                          node(V, L.second, H.second)};
-    if (!charge(1, sizeof(Key) + sizeof(R) + 4 * sizeof(void *)) ||
-        !reserveEntry(Adders))
-      return {};
-    Adders.try_emplace(Key, R);
-    return {R.first ^ Complement, R.second ^ Complement};
+    return expandAdder(A, B, C, Depth, Key, Complement);
   }
 
   // A final column needs only parity. Normalize each input complement into
@@ -508,33 +550,7 @@ class LowWordDecisions {
     const auto Key = carryKey(A, B, C);
     if (auto It = Parities.find(Key); It != Parities.end())
       return It->second ^ Complement;
-    if (Depth >= limits::kMaxResidueDecisionDepth) {
-      Failed = true;
-      return 0;
-    }
-    const auto DA = decision(A), DB = decision(B), DC = decision(C);
-    const auto V = std::min({DA.Variable, DB.Variable, DC.Variable});
-    const auto ALow = DA.Variable == V ? DA.Low : A;
-    const auto AHigh = DA.Variable == V ? DA.High : A;
-    const auto BLow = DB.Variable == V ? DB.Low : B;
-    const auto BHigh = DB.Variable == V ? DB.High : B;
-    const auto CLow = DC.Variable == V ? DC.Low : C;
-    const auto CHigh = DC.Variable == V ? DC.High : C;
-    const auto ChangeA = ALow ^ AHigh, ChangeB = BLow ^ BHigh,
-               ChangeC = CLow ^ CHigh;
-    const auto Change = ((ChangeA | ChangeB | ChangeC) & ~uint32_t(1)) |
-                        ((ChangeA ^ ChangeB ^ ChangeC) & 1);
-    const auto L = parity(ALow, BLow, CLow, Depth + 1);
-    // This is a relation between complete decision edges, not just their
-    // leading bits. Any changed node identity retains the general recursion.
-    const auto H =
-        Change <= 1 ? L ^ Change : parity(AHigh, BHigh, CHigh, Depth + 1);
-    const auto R = node(V, L, H);
-    if (!charge(1, sizeof(Key) + sizeof(uint32_t) + 4 * sizeof(void *)) ||
-        !reserveEntry(Parities))
-      return 0;
-    Parities.try_emplace(Key, R);
-    return R ^ Complement;
+    return expandParity(A, B, C, Depth, Key, Complement);
   }
 
   Bits add(const Bits &A, const Bits &B) {
@@ -847,19 +863,24 @@ class LowWordDecisions {
         [Index % limits::kResidueWordPageEntries];
   }
 
-  // Result pages remain stable while the dense index table grows. Cached
-  // words are immutable until the parity assumption changes; no view escapes
-  // that phase. Cache hits pay for lookup, without copying each bit.
-  const Bits &word(SymRef R, unsigned Count, unsigned Depth = 0) {
+  // Shared zero words are needed only on an absorbing value or failed proof;
+  // keep their lazy-initialization guard out of ordinary cache hits.
+  static const Bits &emptyWord(unsigned Count) {
     static const auto EmptyWords = [] {
       std::array<Bits, limits::kMaxAffineResidueTableBits + 1> Result;
       for (unsigned I = 0; I < Result.size(); ++I)
         Result[I].resize(I, 0);
       return Result;
     }();
-    const auto &Empty = EmptyWords[Count];
+    return EmptyWords[Count];
+  }
+
+  // Result pages remain stable while the dense index table grows. Cached
+  // words are immutable until the parity assumption changes; no view escapes
+  // that phase. Cache hits pay for lookup, without copying each bit.
+  const Bits &word(SymRef R, unsigned Count, unsigned Depth = 0) {
     if (!charge())
-      return Empty;
+      return emptyWord(Count);
     // The complete low-word key preserves the source expression and avoids
     // reconstructing temporary nodes for every repeated offset or mask.
     const auto InitialOp = Ctx.op(R);
@@ -869,14 +890,14 @@ class LowWordDecisions {
         Ctx.numOperands(R) == 2 && Ctx.isConst(Ctx.operand(R, 0))) {
       Key = constantWordKey(R, Count);
       if (Failed)
-        return Empty;
+        return emptyWord(Count);
       const auto Low = (Key >> 8) & 255;
       const auto All = (uint64_t(1) << Count) - 1;
       if ((!Low && InitialOp != SymOp::And) ||
           (Low == All && InitialOp == SymOp::And))
         return word(Ctx.operand(R, 1), Count, Depth + 1);
       if (!Low && InitialOp == SymOp::And)
-        return Empty;
+        return emptyWord(Count);
       if (Low == All && InitialOp == SymOp::Or)
         return word(Ctx.operand(R, 0), Count, Depth + 1);
     }
@@ -884,14 +905,20 @@ class LowWordDecisions {
       return wordValue(It->second);
     if (!charge(Count) || Depth >= limits::kMaxResidueDecisionDepth) {
       Failed = true;
-      return Empty;
+      return emptyWord(Count);
     }
+    return expandWord(R, Count, Depth, Key);
+  }
+
+  LLVM_ATTRIBUTE_NOINLINE
+  const Bits &expandWord(SymRef R, unsigned Count, unsigned Depth,
+                         uint64_t Key) {
     const auto Op = Ctx.op(R);
     Bits Result(Count, 0);
     if (Ctx.isConst(R)) {
       const auto Value = literalLowWord(R);
       if (Failed)
-        return Empty;
+        return emptyWord(Count);
       for (unsigned I = 0; I < Count; ++I)
         Result[I] = (Value >> I) & 1;
     } else if (Op == SymOp::ZExt || Op == SymOp::SExt) {
@@ -912,7 +939,7 @@ class LowWordDecisions {
     } else if (Op == SymOp::Shl && Ctx.isConst(Ctx.operand(R, 1))) {
       const auto Value = literal(Ctx.operand(R, 1));
       if (!Value)
-        return Empty;
+        return emptyWord(Count);
       const auto Shift = Value->getLimitedValue(Count);
       if (Shift < Count) {
         const auto &Value = word(Ctx.operand(R, 0), Count - Shift, Depth + 1);
@@ -922,7 +949,7 @@ class LowWordDecisions {
       if (Ctx.isConst(Ctx.operand(R, 1))) {
         const auto Value = literal(Ctx.operand(R, 1));
         if (!Value)
-          return Empty;
+          return emptyWord(Count);
         const auto Shift = Value->getLimitedValue();
         if (Shift < Ctx.width(R)) {
           const unsigned Take = std::min<uint64_t>(Count, Ctx.width(R) - Shift);
@@ -932,15 +959,15 @@ class LowWordDecisions {
       } else {
         const auto Bounded = lookupWidth(R);
         if (!Bounded)
-          return Empty;
+          return emptyWord(Count);
         const unsigned IndexBits = *Bounded;
         const size_t Entries = size_t(1) << IndexBits;
         if (!charge(Count * Entries, Entries * sizeof(uint32_t)))
-          return Empty;
+          return emptyWord(Count);
         const auto &Index = word(Ctx.operand(R, 1), IndexBits, Depth + 1);
         const auto Pattern = literal(Ctx.operand(R, 0));
         if (!Pattern)
-          return Empty;
+          return emptyWord(Count);
         for (unsigned I = 0; I < Count && !Failed; ++I) {
           std::vector<uint32_t> Values(Entries);
           for (size_t J = 0; J < Entries; ++J)
@@ -1008,9 +1035,9 @@ class LowWordDecisions {
           TotalZeros = std::min(Count, TotalZeros + Z);
         }
         if (Failed)
-          return Empty;
+          return emptyWord(Count);
         if (TotalZeros == Count)
-          return Empty;
+          return emptyWord(Count);
       }
       if (TotalZeros) {
         Bits Narrow(Count - TotalZeros, 0);
@@ -1038,7 +1065,7 @@ class LowWordDecisions {
                                                   : Xor,
                                 Result[I], Value[I]);
           if (Failed)
-            return Empty;
+            return emptyWord(Count);
           if ((Op == SymOp::Mul || Op == SymOp::And) &&
               std::all_of(Result.begin(), Result.end(),
                           [](uint32_t Bit) { return Bit == 0; }))
@@ -1067,7 +1094,7 @@ class LowWordDecisions {
                  0, 1);
     }
     if (!charge(Count) || !reserveEntry(Words))
-      return Empty;
+      return emptyWord(Count);
     const size_t Page = WordCount / limits::kResidueWordPageEntries;
     if (Page == WordPages.size()) {
       // Pay for complete pages and pointer-array growth before allocation.
@@ -1076,11 +1103,11 @@ class LowWordDecisions {
       if (WordPages.size() == WordPages.capacity()) {
         const size_t Capacity = std::max(size_t(1), 2 * WordPages.capacity());
         if (!charge(0, Capacity * sizeof(std::unique_ptr<WordPage>)))
-          return Empty;
+          return emptyWord(Count);
         WordPages.reserve(Capacity);
       }
       if (!charge(0, sizeof(WordPage)))
-        return Empty;
+        return emptyWord(Count);
       WordPages.push_back(std::make_unique<WordPage>());
     }
     auto &Stored =
@@ -1564,6 +1591,28 @@ class LowWordDecisions {
     return true;
   }
 
+  // A mask below every correction bit has a complete zero-extended value.
+  // Read only its retained bits, and intern their exact decisions rather than
+  // constructing the child's discarded high arithmetic and carry frontiers.
+  template <typename SignatureState>
+  uint32_t maskedSignature(SignatureState &State, SymRef R, unsigned Count,
+                           unsigned CorrectionBits, uint64_t Mask) {
+    const auto &Value = word(R, std::bit_width(Mask));
+    if (Failed || !charge(Count, 2 * Count * sizeof(uint64_t)))
+      return 0;
+    SignatureKey Identity{UINT64_MAX - 1, Count};
+    uint64_t Literal = 0;
+    bool Constant = true;
+    for (unsigned I = 0; I < Count - CorrectionBits; ++I) {
+      const auto Bit = I < Value.size() ? Value[I] : 0;
+      Identity.push_back(Bit);
+      Constant &= Bit <= 1;
+      Literal |= uint64_t(Bit & 1) << I;
+    }
+    return Constant ? internSignature(State, {0, Count, Literal})
+                    : internSignature(State, std::move(Identity));
+  }
+
   // Recursive low-word construction can grow the context operand pool.
   // Reacquire operands by stable node/index instead of retaining its spans.
   ResidueSignature residueSignature(PairingState &State, SymRef R,
@@ -1582,6 +1631,14 @@ class LowWordDecisions {
     }
     if (auto It = State.Words.find(Key); It != State.Words.end())
       return It->second;
+    return expandResidueSignature(State, R, Count, Depth, Key);
+  }
+
+  LLVM_ATTRIBUTE_NOINLINE
+  ResidueSignature expandResidueSignature(PairingState &State, SymRef R,
+                                          unsigned Count, unsigned Depth,
+                                          uint64_t Key) {
+    const auto Op = Ctx.op(R);
     const uint64_t Top = uint64_t(1) << (Count - 1);
     ResidueSignature Result;
     if (Ctx.isConst(R)) {
@@ -1654,6 +1711,8 @@ class LowWordDecisions {
         return {};
       if (!Mask)
         Result = {internSignature(State, {0, Count, 0}), 0};
+      else if (Mask < Top)
+        Result = {maskedSignature(State, R, Count, 1, Mask), 0};
       else {
         const auto Child =
             residueSignature(State, Ctx.operand(R, 1), Count, Depth + 1);
@@ -1839,6 +1898,14 @@ class LowWordDecisions {
     if (auto It = State.Words.find(Key);
         It != State.Words.end() && (IdentityOnly || It->second.Complete))
       return It->second;
+    return expandWideSignature<IdentityOnly>(State, R, Count, Depth, Key);
+  }
+
+  template <bool IdentityOnly>
+  LLVM_ATTRIBUTE_NOINLINE WideSignature
+  expandWideSignature(WidePairingState &State, SymRef R, unsigned Count,
+                      unsigned Depth, uint64_t Key) {
+    const auto Op = Ctx.op(R);
     const uint64_t Unit = uint64_t(1) << (Count - 2);
     WideSignature Result;
     auto Delta = [](const WideSignature &S) {
@@ -1946,6 +2013,8 @@ class LowWordDecisions {
         return {};
       if (!Mask)
         Result = {internSignature(State, {0, Count, 0}), {0, 0}};
+      else if (Mask < Unit)
+        Result = {maskedSignature(State, R, Count, 2, Mask), {0, 0}};
       else {
         const auto Child = Ctx.operand(R, 1);
         auto S = wideSignature<IdentityOnly>(State, Child, Count, Depth + 1);
@@ -2358,7 +2427,11 @@ public:
     }
     // Refuse broad domains before constructing decisions. This is only a
     // search admission rule; opaque words still retain all their possible bits.
-    std::unordered_set<uint32_t> Seen, Inputs;
+    // Admission needs membership only. Widen source indices to keep both
+    // dense sentinels outside their domain, and keep the bounded input list
+    // inline. Neither container determines the traversal or emission order.
+    llvm::DenseSet<uint64_t> Seen;
+    llvm::SmallVector<uint32_t, limits::kMaxResidueDecisionInputs> Inputs;
     bool HasNonlinearFactor = false;
     llvm::SmallVector<SymRef, 16> Pending;
     if (NormalizeFactors)
@@ -2369,16 +2442,23 @@ public:
       const auto R = Pending.pop_back_val();
       if (!charge(1, sizeof(uint32_t) + 6 * sizeof(void *)))
         return Root;
-      if (!Seen.insert(R.index()).second || Ctx.isConst(R))
+      if (Seen.contains(R.index()))
+        continue;
+      if (!reserveEntry(Seen))
+        return Root;
+      Seen.insert(R.index());
+      if (Ctx.isConst(R))
         continue;
       HasNonlinearFactor |=
           R != Root && Ctx.op(R) == SymOp::Mul &&
           Ctx.numOperands(R) - unsigned(Ctx.isConst(Ctx.operand(R, 0))) > 1;
       const bool Transparent = transparent(R, std::min(Observed, Ctx.width(R)));
       if (!Transparent) {
-        if (Inputs.insert(R.index()).second &&
-            Inputs.size() > limits::kMaxResidueDecisionInputs)
-          return Root;
+        if (!llvm::is_contained(Inputs, R.index())) {
+          if (Inputs.size() == limits::kMaxResidueDecisionInputs)
+            return Root;
+          Inputs.push_back(R.index());
+        }
         continue;
       }
       if (!charge(Ctx.numOperands(R), Ctx.numOperands(R) * sizeof(SymRef)))
@@ -2755,7 +2835,7 @@ public:
           Scale.shl(I);
     }
     const size_t FirstEmitted = Ctx.numNodes();
-    std::unordered_map<uint32_t, SymRef> Emitted;
+    llvm::DenseMap<uint32_t, SymRef> Emitted;
     // Boolean operators commute with projection to bit zero. Build a
     // bitwise word using shifted inputs and all-ones Boolean constants, then
     // mask once at the root instead of masking every selector separately.
@@ -2800,7 +2880,9 @@ public:
         Result = Ctx.mkXor(Selector, Low);
       else
         Result = Ctx.mkXor(Low, Ctx.mkAnd(Selector, Ctx.mkXor(Low, High)));
-      Emitted.emplace(Id, Result);
+      if (!reserveEntry(Emitted))
+        return {};
+      Emitted.try_emplace(Id, Result);
       return Result;
     };
     auto Synthesize = [&](uint32_t RootId, SymRef Fallback) -> SymRef {

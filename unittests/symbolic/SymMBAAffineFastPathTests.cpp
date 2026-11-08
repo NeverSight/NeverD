@@ -9,8 +9,10 @@
 
 #include "neverd/symbolic/SymMBA.h"
 
+#include <array>
 #include <random>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace neverd::symbolic;
@@ -183,12 +185,18 @@ TEST(SymMBAAffineFastPath, WideFrontiersRetainIndependentProductInputs) {
       Terms.push_back(Ctx.mkConst(llvm::APInt(Width, 17, false, true)));
       const auto Root = Ctx.mkAdd({Ctx.mkXor(Ctx.mkAdd(Terms), Y),
                                    Ctx.mkAdd(Variables), Ctx.mkMul(Variables)});
-      for (size_t Limit :
-           {size_t(0), size_t(4096), MBAOptions::UnlimitedWork}) {
-        SCOPED_TRACE(::testing::Message()
-                     << Width << " / " << Count << " / " << Limit);
+      for (auto [Limit, Bytes] :
+           {std::pair{size_t(0), size_t(1 << 24)},
+            std::pair{size_t(4096), size_t(1 << 24)},
+            std::pair{MBAOptions::UnlimitedWork, size_t(0)},
+            std::pair{MBAOptions::UnlimitedWork, size_t(2047)},
+            std::pair{MBAOptions::UnlimitedWork, size_t(2048)},
+            std::pair{MBAOptions::UnlimitedWork, size_t(4096)},
+            std::pair{MBAOptions::UnlimitedWork, size_t(1 << 24)}}) {
+        SCOPED_TRACE(::testing::Message() << Width << " / " << Count << " / "
+                                          << Limit << " / " << Bytes);
         detail::WorkBudget Budget(Limit);
-        const auto A = detail::abstractToMBA(Ctx, Root, true, &Budget);
+        const auto A = detail::abstractToMBA(Ctx, Root, true, &Budget, Bytes);
         ASSERT_TRUE(A);
         SymEvalPlan Restored(Ctx, Ctx.substitute(A->Body, A->Hidden));
         std::vector<llvm::APInt> Values(Ctx.numVars(), llvm::APInt(Width, 0));
@@ -213,6 +221,51 @@ TEST(SymMBAAffineFastPath, WideFrontiersRetainIndependentProductInputs) {
           EXPECT_EQ(Restored.evalWith([&](uint32_t Id) { return &Values[Id]; }),
                     Expected);
         }
+      }
+    }
+  }
+}
+
+TEST(SymMBAAffineFastPath, SharedArithmeticAndComplementsKeepEveryInput) {
+  for (unsigned Width : {3u, 8u, 65u, 257u}) {
+    for (bool Products : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << Width << " / " << Products);
+      SymContext Ctx;
+      const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+      const auto Z = Ctx.mkVar("z", Width), W = Ctx.mkVar("w", Width);
+      const auto Sum = Ctx.mkAdd(X, Y);
+      const auto Product = Ctx.mkMul(Sum, Ctx.mkAnd(Y, Z));
+      const auto Complement = Ctx.mkNot(Product);
+      auto DisguisedAdd = [&](SymRef A, SymRef B) {
+        return Ctx.mkAdd(Ctx.mkXor(A, B),
+                         Ctx.mkMul(Ctx.mkConst(Width, 2), Ctx.mkAnd(A, B)));
+      };
+      const auto Root =
+          Ctx.mkAdd({DisguisedAdd(Product, W), DisguisedAdd(Complement, Y),
+                     DisguisedAdd(Sum, Z)});
+      detail::WorkBudget Budget(MBAOptions::UnlimitedWork);
+      const auto A = detail::abstractToMBA(Ctx, Root, Products, &Budget);
+      ASSERT_TRUE(A);
+      SymEvalPlan Restored(Ctx, Ctx.substitute(A->Body, A->Hidden));
+      std::mt19937_64 Random(0x534841524544524f);
+      const unsigned Trials = Width == 3 ? 4096 : 128;
+      for (unsigned Trial = 0; Trial < Trials; ++Trial) {
+        std::array<llvm::APInt, 4> V;
+        for (unsigned I = 0; I < V.size(); ++I) {
+          V[I] = llvm::APInt(Width,
+                             Width == 3 ? (Trial >> (3 * I)) & 7 : Random());
+          for (unsigned Bit = 64; Bit < Width; Bit += 64)
+            V[I] |= llvm::APInt(Width, Random()).shl(Bit);
+        }
+        const auto Expected = V[0] + 2 * V[1] + V[2] + V[3] - 1;
+        EXPECT_EQ(Restored.evalWith([&](uint32_t Id) -> const llvm::APInt * {
+          return Id == Ctx.varId(X)   ? &V[0]
+                 : Id == Ctx.varId(Y) ? &V[1]
+                 : Id == Ctx.varId(Z) ? &V[2]
+                 : Id == Ctx.varId(W) ? &V[3]
+                                      : nullptr;
+        }),
+                  Expected);
       }
     }
   }

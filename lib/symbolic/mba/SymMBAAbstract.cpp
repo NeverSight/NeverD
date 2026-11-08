@@ -31,6 +31,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace neverd::symbolic::detail {
@@ -93,6 +94,47 @@ bool isBitwiseOperand(Role R) {
 bool hasMultipleNonconstantFactors(const SymContext &Ctx, SymRef R) {
   return Ctx.op(R) == SymOp::Mul &&
          Ctx.numOperands(R) > 1u + unsigned(Ctx.isConst(Ctx.operand(R, 0)));
+}
+
+// These children are arithmetic in the first classification unless another
+// use has already demoted them. Seed that same demotion during the existing
+// reachability walk, avoiding a whole classification round for common mixed
+// regions. Ambiguous products and complements still use the fixed point.
+bool seedArithmeticInputs(const SymContext &Ctx, SymRef R, bool AllowProducts,
+                          NodeSet &ForcedAtoms) {
+  bool NeedsFixedPoint = false;
+  for (SymRef Child : Ctx.operands(R)) {
+    const auto Target =
+        Ctx.op(Child) == SymOp::Not ? Ctx.operand(Child, 0) : Child;
+    bool Arithmetic = Ctx.op(Target) == SymOp::Add;
+    if (Ctx.op(Target) == SymOp::Mul) {
+      const auto Ops = Ctx.operands(Target);
+      const auto Unknown = Ctx.isConst(Ops[0]) ? Ops.drop_front() : Ops;
+      Arithmetic = Unknown.size() == 1;
+      if (AllowProducts && !Arithmetic) {
+        Arithmetic = llvm::all_of(Unknown, [&](SymRef C) {
+          switch (Ctx.op(C)) {
+          case SymOp::Const:
+          case SymOp::Add:
+          case SymOp::Mul:
+          case SymOp::Not:
+            return false;
+          default:
+            // Bitwise operators are either Bitwise or Atom, and the other
+            // opaque operators are Atom. Both admit the same product.
+            return true;
+          }
+        });
+        NeedsFixedPoint |= !Arithmetic;
+      }
+    }
+    // A nested complement's role depends on its wrapped word. Ordinary
+    // construction contracts double complements; retain the general rule.
+    NeedsFixedPoint |= Ctx.op(Target) == SymOp::Not;
+    if (Arithmetic)
+      ForcedAtoms.insert(Target.index());
+  }
+  return NeedsFixedPoint;
 }
 
 void classify(const SymContext &Ctx, llvm::ArrayRef<uint32_t> Order,
@@ -331,14 +373,14 @@ public:
       return false;
     if (Coefficient.isZero())
       return true;
-    auto It = Map.find(Index);
-    if (It != Map.end()) {
+    auto It = Map.lower_bound(Index);
+    if (It != Map.end() && It->first == Index) {
       It->second += Coefficient;
       return true;
     }
     if (!charge(1, 128) || !array(Words, sizeof(uint64_t)))
       return false;
-    Map.emplace(Index, Coefficient);
+    Map.emplace_hint(It, Index, Coefficient);
     return true;
   }
 };
@@ -1176,18 +1218,29 @@ abstractToMBAImpl(SymContext &Ctx, SymRef Root, bool AllowProducts,
       hasMultipleNonconstantFactors(Ctx, Root))
     return std::nullopt;
   NodeOrder Order;
+  NodeSet ForcedAtoms;
+  llvm::SmallVector<SymRef, 8> VisibleInputs;
   // An unconditional opaque input ends this region's reading. Its interior
   // is still visited by the deep simplifier, but classifying and rewriting
   // that hidden interior cannot change this abstraction's independent word.
   bool HasOpaqueInterior = false;
+  bool HasProducts = false;
+  bool NeedsFixedPoint = CoarsenMaskedXors;
   collectReachableInOrder(Ctx, Root, Order, [&](SymRef R) {
+    const bool Product = hasMultipleNonconstantFactors(Ctx, R);
     const bool Opaque =
-        !canMeasureAtRoot(Ctx, R) ||
-        (!AllowProducts && hasMultipleNonconstantFactors(Ctx, R));
+        !canMeasureAtRoot(Ctx, R) || (!AllowProducts && Product);
     HasOpaqueInterior |= Opaque && Ctx.numOperands(R) != 0;
+    HasProducts |= Product;
+    const auto Op = Ctx.op(R);
+    if (Op == SymOp::Var)
+      VisibleInputs.push_back(R);
+    if (!CoarsenMaskedXors &&
+        (Op == SymOp::And || Op == SymOp::Or || Op == SymOp::Xor))
+      NeedsFixedPoint |=
+          seedArithmeticInputs(Ctx, R, AllowProducts, ForcedAtoms);
     return Opaque;
   });
-  NodeSet ForcedAtoms;
   NodeMap<Role> Roles;
   if (CoarsenMaskedXors) {
     for (uint32_t Index : Order) {
@@ -1201,13 +1254,17 @@ abstractToMBAImpl(SymContext &Ctx, SymRef Root, bool AllowProducts,
     if (ForcedAtoms.empty())
       return std::nullopt;
   }
-  demoteArithmeticUnderBitwise(Ctx, Order, AllowProducts, ForcedAtoms, Roles);
+  if (NeedsFixedPoint)
+    demoteArithmeticUnderBitwise(Ctx, Order, AllowProducts, ForcedAtoms, Roles);
+  else
+    classify(Ctx, Order, ForcedAtoms, AllowProducts, Roles);
 
   // Nothing to measure when the whole expression is one opaque thing.
   if (Roles.lookup(Root.index()) == Role::Atom)
     return std::nullopt;
 
   Abstraction Out;
+  Out.MayHaveProducts = HasProducts;
   NodeSet Reserved;
   // Caller inputs below opaque boundaries must still keep their identities,
   // even when their names coincide with a numbered placeholder declaration.
@@ -1216,14 +1273,9 @@ abstractToMBAImpl(SymContext &Ctx, SymRef Root, bool AllowProducts,
     Ctx.collectVars(Root, Variables);
     for (uint32_t Id : Variables)
       Reserved.insert(Ctx.varRef(Id).index());
-  }
-  for (uint32_t Index : Order) {
-    SymRef R(Index);
-    if (!HasOpaqueInterior && Ctx.isVar(R))
-      Reserved.insert(Index);
-    if (hasMultipleNonconstantFactors(Ctx, R))
-      Out.MayHaveProducts = true;
-  }
+  } else
+    for (const auto Input : VisibleInputs)
+      Reserved.insert(Input.index());
 
   Placeholders Pool(Ctx, Reserved, Budget);
   NodeMap<SymRef> Rewritten;
@@ -1383,7 +1435,7 @@ abstractToMBAImpl(SymContext &Ctx, SymRef Root, bool AllowProducts,
     bool Changed = false;
     for (SymRef &C : Ops) {
       const auto Original = C;
-      if (!IsBitwise || Roles.lookup(C.index()) != Role::Literal) {
+      if (!IsBitwise || !Ctx.isConst(C)) {
         C = Rewritten.lookup(C.index());
       } else {
         // Hiding a complementary mask can create NOT and grow Ctx's operand
