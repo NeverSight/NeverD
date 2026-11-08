@@ -448,6 +448,24 @@ void applyRegisterTransfer(const MedInstruction &Instruction,
             ? State[Instruction.Src]
             : RegisterValue{RegisterValue::Kind::Constant,
                             instructionImmediate(Instruction), 0};
+    if (Instruction.Op == Operation::And &&
+        Instruction.Width == kDoubleWordBitWidth &&
+        Left.ValueKind == RegisterValue::Kind::UnsignedRange &&
+        Right.ValueKind == RegisterValue::Kind::Constant &&
+        (Right.Value == 0 || std::has_single_bit(~Right.Value + 1))) {
+      const auto Bounds = *unsignedValueRange(Left);
+      if (Bounds.Lower <= Bounds.Upper) {
+        // Clearing a low-bit suffix is monotone on a nonwrapping unsigned
+        // interval. Other masks and symbolic identities use the ordinary
+        // conservative transfer below.
+        State[Instruction.Dst] = unsignedRangeValue(
+            {*evaluateScalarALU(Operation::And, Instruction.Width, Bounds.Lower,
+                                Right.Value),
+             *evaluateScalarALU(Operation::And, Instruction.Width, Bounds.Upper,
+                                Right.Value)});
+        return;
+      }
+    }
     // Symbolic addresses are affine expressions, never numeric ALU operands.
     const auto Value =
         Left.ValueKind == RegisterValue::Kind::Constant &&

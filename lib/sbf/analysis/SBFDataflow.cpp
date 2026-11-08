@@ -320,7 +320,7 @@ void ProvenValueSet::join(const ProvenValueSet &Other,
   llvm::SmallVector<RegisterValue, 2 * kCallXContextValueAlternatives> Joined(
       Values.begin(), Values.end());
   Joined.append(Other.Values.begin(), Other.Values.end());
-  // A literal or bounded capture covered by a numeric range adds no
+  // A literal, narrower range or bounded capture covered by a range adds no
   // alternative. Remove it before enforcing the disjunction limit or capturing
   // a returned address: otherwise one runtime pointer acquires redundant alias
   // carriers. Frame coordinates cannot be covered by numeric intervals. Once a
@@ -328,20 +328,24 @@ void ProvenValueSet::join(const ProvenValueSet &Other,
   // state.
   const auto CoveredNumericValue = [&](const RegisterValue &Value) {
     if (Value.ValueKind != RegisterValue::Kind::Constant &&
+        Value.ValueKind != RegisterValue::Kind::UnsignedRange &&
         Value.ValueKind != RegisterValue::Kind::SymbolicAddress)
       return false;
     const auto Candidate = unsignedValueRange(Value, Addresses);
     if (!Candidate)
       return false;
+    const auto CandidateRange =
+        llvm::ConstantRange::getNonEmpty(llvm::APInt(64, Candidate->Lower),
+                                         llvm::APInt(64, Candidate->Upper + 1));
     return std::any_of(Joined.begin(), Joined.end(), [&](const auto &Range) {
-      if (Range.ValueKind != RegisterValue::Kind::UnsignedRange)
+      // Equal ranges deduplicate below; neither may erase the other here.
+      if (Range.ValueKind != RegisterValue::Kind::UnsignedRange ||
+          Range == Value)
         return false;
       const auto Bounds = *unsignedValueRange(Range);
-      return Bounds.Lower <= Bounds.Upper
-                 ? Bounds.Lower <= Candidate->Lower &&
-                       Candidate->Upper <= Bounds.Upper
-                 : Bounds.Lower <= Candidate->Lower ||
-                       Candidate->Upper <= Bounds.Upper;
+      return llvm::ConstantRange::getNonEmpty(llvm::APInt(64, Bounds.Lower),
+                                              llvm::APInt(64, Bounds.Upper + 1))
+          .contains(CandidateRange);
     });
   };
   const auto RetainAlternatives = [&] {
@@ -355,7 +359,29 @@ void ProvenValueSet::join(const ProvenValueSet &Other,
       }
     return true;
   };
+  const auto RetainHeapBounds = [&] {
+    if (!std::all_of(Joined.begin(), Joined.end(), [](const auto &Value) {
+          return Value.ValueKind == RegisterValue::Kind::Constant &&
+                 Value.Value >= kHeapStart &&
+                 Value.Value < kHeapStart + kMemoryRegionSize;
+        }))
+      return false;
+    const auto [Lower, Upper] = std::minmax_element(
+        Joined.begin(), Joined.end(),
+        [](const auto &L, const auto &R) { return L.Value < R.Value; });
+    const auto Range = unsignedRangeValue({Lower->Value, Upper->Value});
+    Values.clear();
+    if (Range.ValueKind != RegisterValue::Kind::Unknown)
+      Values.push_back(Range);
+    return true;
+  };
   if (!RetainAlternatives()) {
+    // A complete set inside the heap address region can lose its disjunction
+    // while retaining numeric bounds. Match the contextual heap-bound domain;
+    // ordinary integers and code addresses still widen to unknown. Do not
+    // merge growing intervals or start another integer-range fixed point.
+    if (RetainHeapBounds())
+      return;
     if (!Addresses) {
       Values.clear();
       return;
@@ -373,7 +399,7 @@ void ProvenValueSet::join(const ProvenValueSet &Other,
         return;
       }
     }
-    if (!RetainAlternatives()) {
+    if (!RetainAlternatives() && !RetainHeapBounds()) {
       Values.clear();
       return;
     }
