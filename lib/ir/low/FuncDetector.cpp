@@ -1244,6 +1244,10 @@ bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
         case LowInstructionTargetMode::MicroMIPS:
           BranchMode = InstructionMode::MicroMIPS;
           break;
+        case LowInstructionTargetMode::MIPS16:
+          BranchMode = InstructionMode::MIPS16;
+          break;
+        case LowInstructionTargetMode::FromMIPS16TargetBit0:
         case LowInstructionTargetMode::FromTargetBit0:
           BranchMode.reset();
           break;

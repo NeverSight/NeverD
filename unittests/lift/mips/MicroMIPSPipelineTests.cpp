@@ -70,7 +70,8 @@ TEST_P(MicroMIPSPipeline, HalfwordAlignedALUReachesBothSourcesWithMode) {
       std::string Text;
       llvm::raw_string_ostream Output(Text);
       ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Output, Emit));
-      EXPECT_NE(Text.find("__attribute__((micromips))"), std::string::npos)
+      EXPECT_NE(Text.find("__attribute__((micromips,nomips16))"),
+                std::string::npos)
           << Text;
     }
   }

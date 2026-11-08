@@ -2,8 +2,8 @@
 
 The experimental MIPS analysis path targets linked ELF programs with classic
 MIPS32 Release 2/o32 or MIPS64 Release 2/n64 instructions, in either byte order,
-the bounded microMIPS32 Release 2/o32 subset, and the MIPS32 Release 5/o32
-integer MSA slice described below.
+the bounded microMIPS32 and MIPS16e32 Release 2/o32 subsets, and the MIPS32
+Release 5/o32 integer MSA slice described below.
 The selected ELF profile determines register width, byte order, stack layout
 and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
 
@@ -83,7 +83,7 @@ dependency. Multi-block and nonadjacent pairs remain outside this proof.
 Concrete LowIR transport and source parameter inference have separate validation
 boundaries; this source proof does not initialize absent machine registers.
 
-This is a strict subset. n32, historical MIPS I–V profiles, Release 6, MIPS16,
+This is a strict subset. n32, historical MIPS I–V profiles, Release 6,
 microMIPS64, floating point, MSA/DSP forms beyond the slices below, privileged
 instructions, LL/SC reservations,
 unaligned merge stores and trapping arithmetic/division are not admitted by
@@ -102,15 +102,17 @@ owned here. Decoder recognition alone does not qualify instruction semantics.
 ## Classic MIPS32 DSP state and packed bytes
 
 The initial DSP slice admits classic MIPS32r2/o32 ELF in either byte order when
-`.MIPS.abiflags` declares the DSP ASE. It supports `RDDSP`, `WRDSP`, `ADDU.QB`
-and `ADDU_S.QB`. Decoder reuse consumes the current image's feature evidence;
-Capstone recognizing an encoding without that evidence does not authorize its
-lift. DSPR2, DSP64, microMIPS DSP, accumulators and other DSP instructions remain
+`.MIPS.abiflags` declares the DSP ASE. It supports `RDDSP`, `WRDSP`, `ADDU.QB`,
+`ADDU_S.QB`, `SUBU.QB` and `SUBU_S.QB`. Decoder reuse consumes the current
+image's feature evidence; Capstone recognizing an encoding without that
+evidence does not authorize its lift. DSPR2, DSP64, microMIPS DSP, accumulators and other DSP instructions remain
 unsupported.
 
 The ten-bit control selector selects six field groups; its upper four bits are
 ignored. Partial writes preserve unselected fields, and packed byte additions
-set the sticky overflow flag even when the destination is `$zero`. Full writes
+and subtractions set the sticky overflow flag even when the destination is
+`$zero`. Saturated addition clamps each overflowing lane to 255; saturated
+subtraction clamps each underflowing lane to zero. Full writes
 can initialize an absent concrete DSPControl value; reads and partial updates
 never invent its initial state. Selector and encoding tables live in `.def`
 files and are shared by the owning semantics.
@@ -138,7 +140,7 @@ link spills remain outside the current source proof.
 The operation rules follow the
 [MIPS32 DSP ASE manual, revision 1.00](https://0x04.net/~mwk/doc/mips/MD00374-2B-MIPS32DSP-AFP-01.00.pdf).
 The pinned Unicorn model is checked with Status.MX enabled. Its zero-destination
-packed addition incorrectly omits the overflow update; independent manual
+packed arithmetic incorrectly omits the overflow update; independent manual
 expectations cover that case, and source roundtrip receipts record the oracle
 disagreement explicitly.
 
@@ -157,7 +159,7 @@ LI16, compact byte/halfword/word memory forms, SP/GP-relative word accesses,
 the 32-bit immediate/register forms listed in `MicroMIPSInteger.def`,
 BEQZ16/BNEZ16/B16, BEQ/BNE, J/JAL/JALS/JALX and the supported JR/JALR forms.
 Unlisted encodings are errors. This is not complete compressed-instruction
-coverage and does not admit MIPS16, other ISA revisions or DSP/MSA encodings.
+coverage and does not admit other ISA revisions or compressed DSP/MSA encodings.
 
 Physical instructions occupy two or four bytes, including four-byte heads at
 addresses congruent to two modulo four. The execution-unit record keeps the
@@ -167,9 +169,9 @@ caller's mode tag, while direct JALX destinations and serialized indirect
 targets have distinct validation rules. Defined function GOT cells use callable
 tags; data symbol addresses keep their original bits.
 
-Both source routes retain microMIPS/nomicromips function attributes. A source
-return must prove the captured incoming RA, including its mode bit, from the
-original instruction boundaries and SSA. Tail calls and unproved stack restores
+Both source routes retain explicit microMIPS/nomicromips and nomips16 function
+attributes. A source return must prove the captured incoming RA, including its
+mode bit, from the original instruction boundaries and SSA. Tail calls and unproved stack restores
 across calls remain outside this source proof. Source tests currently target
 bounded integer leaves, memory effects, o32 stack arguments and branch/slot
 capture.
@@ -188,6 +190,47 @@ The microMIPS operation and slot rules were checked against
 and the pinned [GNU simulator definitions](https://gnu.googlesource.com/binutils-gdb/+/d01e823438c7dc264d6885fbbfeace4d8955dcb7/sim/mips/micromips.igen).
 The lifter's admitted ISA remains r2; this reference does not admit later forms.
 
+## MIPS16e32 integer and control subset
+
+Linked MIPS32r2/o32 ELF can declare MIPS16 in the header and, when present,
+`.MIPS.abiflags`. Function symbols use `STO_MIPS_MIPS16`; its overlapping
+microMIPS bit does not change the ISA family. Conflicting flags, symbols,
+entry tags or mode ranges are errors. MIPS16 and microMIPS cannot coexist in
+one admitted image. Classic-to-MIPS16 JALX has an explicit destination mode;
+register transfers carry a separate MIPS16 target-bit contract even when the
+source instruction is classic MIPS. Serialized callables retain bit zero;
+ordinary data pointers do not acquire a code tag.
+
+The first scalar set is `LI`, `ADDIU`, `ADJSP`, `CMPI`, `SLTI`/`SLTIU`,
+`ADDU`/`SUBU`, `AND`/`OR`/`XOR`/`NOT`, and the full-GPR-destination,
+compact-source `MOVE` encoding. `EXTEND` and its suffix form one four-byte
+instruction, in either byte order, including at addresses two modulo four.
+Unsigned LI/CMPI and the instruction-specific short/extended signed immediates
+remain distinct. `MIPS16Integer.def` owns scalar opcode descriptions.
+
+`B`, `BEQZ`/`BNEZ`, `BTEQZ`/`BTNEZ`, and `JRC ra` have no delay slot.
+An unconditional B has one successor, so skipped data is not decoded as a
+fallthrough path. `JR ra` and `JR compact-GPR` require one two-byte,
+non-extended, non-control slot. An EXTEND suffix or a slot cannot silently
+change the image's locally established instruction mode. SDK listings still
+show physical instructions, separately from the delayed execution unit.
+
+HighC and LLVMC retain `mips16,nomicromips` attributes. Source returns require
+the same captured-entry-RA proof as microMIPS, with or without an image.
+Numeric compressed-code pointers remain unqualified. The source test uses
+Clang assembly output plus GNU MIPS as/ld, with adverse `-mmicromips` compiler
+defaults, and verifies ELF flags and symbol tags before executing the rebuilt
+function. The GNU assembler's [`.insn` directive](https://sourceware.org/binutils/docs-2.29/as/MIPS-insn.html)
+marks literal instruction fixtures so their symbols retain the code mode.
+
+Other MOVE forms, ordinary/PC-relative memory accesses, shifts, calls,
+SAVE/RESTORE, HI/LO operations, MIPS16e2 and MIPS16 on MIPS64 remain unsupported.
+Several of these still need Capstone decoder corrections before lift admission;
+no NeverD path treats a misdecoded operand or unknown instruction as valid
+semantics. The immediate, slot and register rules follow
+[MIPS16e Volume IV-a, revision 2.63](https://jnastarot.io/arch_index/pdf/MD00076-2B-MIPS1632-AFP-02.63.pdf)
+and were cross-checked against the pinned Ghidra definitions linked above.
+
 ## Classic MIPS32 MSA integer vectors
 
 The initial MSA slice requires classic MIPS32 Release 5/o32 ELF in either byte
@@ -197,10 +240,13 @@ feature evidence; architecture-only initialization remains Release 2 without
 MSA. Other revisions, MSA64, microMIPS/MSA and DSP/MSA combinations are refused.
 
 `FILL.W`, `INSERT.W`, `COPY_S.W`, all four B/H/W/D formats of `ADDV` and
-`SUBV`, and `AND.V`/`OR.V`/`NOR.V`/`XOR.V` use exact encoding descriptors in
+`SUBV`, `CEQ`, `CLT_S`/`CLT_U`, `CLE_S`/`CLE_U`, and
+`AND.V`/`OR.V`/`NOR.V`/`XOR.V` use exact encoding descriptors in
 `MIPSMSA.def`. The 32 W registers are 128-bit containers. Lane zero occupies
 the low bits in both byte orders; addition and subtraction wrap independently
-within each 8/16/32/64-bit lane. Logical operations consume all 128 bits.
+within each 8/16/32/64-bit lane. Integer comparisons set every bit of a true
+lane to one and every bit of a false lane to zero; signed and unsigned ordering
+have separate rules. Logical operations consume all 128 bits.
 Inputs are captured before an overlapping destination is written. F registers
 share the low 64 bits of their corresponding W register.
 Scalar floating instructions remain unsupported: their future implementation
@@ -222,8 +268,8 @@ work. Both C paths use Clang's bit-precise integer support for any surviving
 The execution contract requires MSA enabled with CU1/FR configured. It does not
 model disabled-MSA exceptions, MSA floating point/control state or arbitrary
 MSA guest execution. The operation and alias rules follow the MIPS32 MSA manual
-(MD00866, revision 1.12), sections ADDV, SUBV, AND/OR/NOR/XOR, COPY_S, FILL
-and INSERT. Owned execution
+(MD00866, revision 1.12), sections ADDV, SUBV, CEQ, CLT/CLE, AND/OR/NOR/XOR,
+COPY_S, FILL and INSERT. Owned execution
 fixtures validate scalar results, output bytes and the ABI-preserved low FPR
 views against an enabled P5600 reference; no unimplemented W-register API is
 used as an oracle.

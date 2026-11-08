@@ -2080,8 +2080,7 @@ std::optional<va_t> HighCWriter::importDataSlotRead(const HighExpr &Address,
 }
 
 void HighCWriter::requireBoundImportMemory(va_t Address, uint64_t Size) const {
-  if (!Size || (Opts.Image->Mode != InstructionMode::MixedMIPS &&
-                Opts.Image->Mode != InstructionMode::MicroMIPS))
+  if (!Size || (!hasCompressedMIPSCode(Opts.Image->Mode)))
     return;
   // ELF imports have no C slot-name prefix. Reading even one byte of the
   // runtime slot can observe its encoding tag, absent from the file bytes.
@@ -3204,8 +3203,7 @@ const HighExpr *HighCWriter::functionAddressArgument(const HighExpr &Arg) {
 
 std::optional<va_t>
 HighCWriter::functionAddressKey(const HighExpr &Const) const {
-  if (Opts.Image && (Opts.Image->Mode == InstructionMode::MixedMIPS ||
-                     Opts.Image->Mode == InstructionMode::MicroMIPS)) {
+  if (Opts.Image && (hasCompressedMIPSCode(Opts.Image->Mode))) {
     if (Const.ConstProvenance == ConstantAddressProvenance::DataAddress)
       return std::nullopt;
     const auto Entry = mips::serializedCodeTarget(*Opts.Image, Const.ConstVal);

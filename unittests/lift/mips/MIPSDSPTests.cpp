@@ -142,32 +142,36 @@ TEST_P(MIPSDSP, PackedArithmeticPreservesStickyFlagsIncludingZeroDestination) {
        {0, 0},
        {0x80808080, 0x80808080}}};
   for (const auto &Input : Inputs)
-    for (bool Saturate : {false, true})
-      for (unsigned Destination : {0u, 2u, 4u, 5u})
-        for (uint32_t Initial : {0u, 0x01100021u}) {
-          SCOPED_TRACE(Destination);
-          NdOpEmulator Emulator(Image);
-          Emulator.setStrictMode(true);
-          Emulator.setRegister(mipsreg::A0, Input[0]);
-          Emulator.setRegister(mipsreg::A1, Input[1]);
-          Emulator.setRegister(mipsreg::DSPControl, Initial);
-          uint32_t Result = 0, State = Initial;
-          for (unsigned Byte = 0; Byte != 4; ++Byte) {
-            const unsigned Sum = ((Input[0] >> (Byte * 8)) & 255) +
-                                 ((Input[1] >> (Byte * 8)) & 255);
-            State |= Sum > 255 ? 0x100000 : 0;
-            Result |= (Saturate ? std::min(Sum, 255u) : Sum % 256)
-                      << (Byte * 8);
+    for (bool Subtract : {false, true})
+      for (bool Saturate : {false, true})
+        for (unsigned Destination : {0u, 2u, 4u, 5u})
+          for (uint32_t Initial : {0u, 0x01100021u}) {
+            SCOPED_TRACE(Destination);
+            NdOpEmulator Emulator(Image);
+            Emulator.setStrictMode(true);
+            Emulator.setRegister(mipsreg::A0, Input[0]);
+            Emulator.setRegister(mipsreg::A1, Input[1]);
+            Emulator.setRegister(mipsreg::DSPControl, Initial);
+            uint32_t Result = 0, State = Initial;
+            for (unsigned Byte = 0; Byte != 4; ++Byte) {
+              const int A = (Input[0] >> (Byte * 8)) & 255;
+              const int B = (Input[1] >> (Byte * 8)) & 255;
+              const int Value = Subtract ? A - B : A + B;
+              State |= Value < 0 || Value > 255 ? 0x100000 : 0;
+              Result |=
+                  uint32_t(Saturate ? std::clamp(Value, 0, 255) : Value & 255)
+                  << (Byte * 8);
+            }
+            ASSERT_TRUE(executeDSP(Decode, GetParam(),
+                                   0x7c850010 | (Destination << 11) |
+                                       (Saturate ? 0x100 : 0) |
+                                       (Subtract ? 0x40 : 0),
+                                   Emulator));
+            EXPECT_EQ(Emulator.getRegister(mipsreg::DSPControl), State);
+            if (Destination)
+              EXPECT_EQ(Emulator.getRegister(mipsreg::r(Destination)), Result);
+            EXPECT_FALSE(Emulator.skips().any());
           }
-          ASSERT_TRUE(executeDSP(Decode, GetParam(),
-                                 0x7c850010 | (Destination << 11) |
-                                     (Saturate ? 0x100 : 0),
-                                 Emulator));
-          EXPECT_EQ(Emulator.getRegister(mipsreg::DSPControl), State);
-          if (Destination)
-            EXPECT_EQ(Emulator.getRegister(mipsreg::r(Destination)), Result);
-          EXPECT_FALSE(Emulator.skips().any());
-        }
 }
 
 TEST_P(MIPSDSP, DecoderReuseConsumesTheCurrentImagesFeatureEvidence) {
@@ -202,10 +206,10 @@ TEST_P(MIPSDSP, LiteralArithmeticAndStateMatchThePinnedEnabledCPU) {
   ASSERT_EQ(uc_ctl_set_cpu_model(Raw, UC_CPU_MIPS32_74KF), UC_ERR_OK);
   ASSERT_EQ(uc_mem_map(Raw, 0x10000, 0x1000, UC_PROT_ALL), UC_ERR_OK);
   // Enable Status.MX before executing the DSP sequence.
-  const auto Code =
-      encodeDSP({0x40086000, 0x3c090100, 0x01094025, 0x40886000, 0x000000c0,
-                 0x7c81fcf8, 0x7ca61010, 0x7ca61910, 0x7c3f3cb8},
-                GetParam());
+  const auto Code = encodeDSP({0x40086000, 0x3c090100, 0x01094025, 0x40886000,
+                               0x000000c0, 0x7c81fcf8, 0x7ca61010, 0x7ca61910,
+                               0x7ca64050, 0x7ca64950, 0x7c3f3cb8},
+                              GetParam());
   ASSERT_EQ(uc_mem_write(Raw, 0x10000, Code.data(), Code.size()), UC_ERR_OK);
   uint32_t State = 0x01000021, A = 0xff01807f, B = 0x02018081;
   ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_4, &State), UC_ERR_OK);
@@ -221,15 +225,18 @@ TEST_P(MIPSDSP, LiteralArithmeticAndStateMatchThePinnedEnabledCPU) {
   Emulator.setRegister(mipsreg::A0, State);
   Emulator.setRegister(mipsreg::A1, A);
   Emulator.setRegister(mipsreg::A2, B);
-  for (uint32_t Word : {0x7c81fcf8u, 0x7ca61010u, 0x7ca61910u, 0x7c3f3cb8u})
+  for (uint32_t Word : {0x7c81fcf8u, 0x7ca61010u, 0x7ca61910u, 0x7ca64050u,
+                        0x7ca64950u, 0x7c3f3cb8u})
     ASSERT_TRUE(executeDSP(Decode, GetParam(), Word, Emulator));
-  for (unsigned Register : {2u, 3u, 7u}) {
+  for (unsigned Register : {2u, 3u, 7u, 8u, 9u}) {
     uint32_t Value = 0;
     ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_0 + Register, &Value), UC_ERR_OK);
     EXPECT_EQ(Emulator.getRegister(mipsreg::r(Register)), Value);
   }
   EXPECT_EQ(Emulator.getRegister(mipsreg::V0), 0x01020000u);
   EXPECT_EQ(Emulator.getRegister(mipsreg::V1), 0xff02ffffu);
+  EXPECT_EQ(Emulator.getRegister(mipsreg::r(8)), 0xfd0000feu);
+  EXPECT_EQ(Emulator.getRegister(mipsreg::r(9)), 0xfd000000u);
   EXPECT_EQ(Emulator.getRegister(mipsreg::DSPControl), 0x01100021u);
   // Unicorn currently drops arithmetic with rd=zero before its OUFLAG write.
   // That case is qualified by the independent manual expectation above.

@@ -560,7 +560,8 @@ ControlTargetResolution resolveControlTarget(
       if (!Canonical) {
         llvm::consumeError(Canonical.takeError());
         const uint64_t ModeProbeAddress =
-            TargetMode == LowInstructionTargetMode::FromTargetBit0
+            (TargetMode == LowInstructionTargetMode::FromTargetBit0 ||
+             TargetMode == LowInstructionTargetMode::FromMIPS16TargetBit0)
                 ? Address->getZExtValue() & 1
                 : 0;
         llvm::Expected<LowControlTarget> ModeProbe =
@@ -596,7 +597,8 @@ ControlTargetResolution resolveControlTarget(
     Result.InvalidMetadata = true;
     return Result;
   }
-  if (TargetMode != LowInstructionTargetMode::FromTargetBit0)
+  if (TargetMode != LowInstructionTargetMode::FromTargetBit0 &&
+      TargetMode != LowInstructionTargetMode::FromMIPS16TargetBit0)
     Result.DestinationMode = ModeProbe->Mode;
   return Result;
 }
@@ -897,13 +899,15 @@ SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
       if (Result == StepResult::Return) {
         const LowInstructionBoundary *Boundary =
             instructionBoundaryForOp(*Block, TerminatorIndex);
-        // AArch32 LowIR makes the architectural return address explicit.  A
-        // legacy/default-mode RETURN operand may instead be the semantic value
-        // being returned, so only ARM/Thumb boundaries interpret it as a
-        // control target.
+        // AArch32 and MIPS LowIR make the architectural return address
+        // explicit. A legacy/default-mode RETURN operand may instead be the
+        // semantic value being returned, so only their explicit boundaries
+        // interpret it as a control target.
         const bool HasArchitecturalTarget =
             Boundary && (Boundary->Mode == InstructionMode::ARM ||
-                         Boundary->Mode == InstructionMode::Thumb);
+                         Boundary->Mode == InstructionMode::Thumb ||
+                         Boundary->Mode == InstructionMode::MIPSClassic ||
+                         isMIPSCompressedMode(Boundary->Mode));
         ControlTargetResolution Resolution = resolveControlTarget(
             Ctx, Index, *Block, TerminatorIndex,
             HasArchitecturalTarget ? Exec.branchTarget() : SymRef());

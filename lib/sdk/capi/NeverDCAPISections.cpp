@@ -154,8 +154,7 @@ void requireImage(const Session *S) {
   // decode every address in the one mode the image has.
   require(archLiftSupported(S->Img.Arch) &&
               archHasSingleInstructionMode(S->Img.Arch) &&
-              S->Img.Mode != InstructionMode::MixedMIPS &&
-              S->Img.Mode != InstructionMode::MicroMIPS,
+              !hasCompressedMIPSCode(S->Img.Mode),
           llvm::Twine("analysis sections do not support ") +
               getArchName(S->Img.Arch) + " images");
 }

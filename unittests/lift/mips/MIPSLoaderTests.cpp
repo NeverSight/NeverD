@@ -291,8 +291,8 @@ TEST_P(MIPSLoader, RejectsConflictingOrUnsupportedProfilesInBothEntrypoints) {
             {0x04000000, "MIPS16"},
             {0x00000100, "ABI"}}}) {
     ELFBytes File(GetParam());
-    if (Bits == 0x02000000 && !File.Is64)
-      continue; // microMIPS32 has separate admission/occurrence tests below.
+    if ((Bits == 0x02000000 || Bits == 0x04000000) && !File.Is64)
+      continue; // Compressed MIPS32 has separate admission/occurrence tests.
     File.put(File.Is64 ? 48 : 36, (File.Is64 ? 0x80000000 : 0x70001000) | Bits,
              4);
     Reject(File, Reason);
@@ -352,6 +352,78 @@ TEST(MicroMIPSLoader, MixedRuntimeSymbolsRetainExactModeAndBoundedRanges) {
     EXPECT_NE(llvm::toString(Conflict.takeError()).find("conflicting"),
               std::string::npos);
   }
+}
+
+TEST(MIPS16Loader, HeaderSymbolsAndABIFlagsRetainTheMIPS16Family) {
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL}) {
+    ELFBytes File(Target);
+    File.dynamicSymbols(
+        0xf0); // Includes the microMIPS bit, but denotes MIPS16.
+    File.put(36, 0x74001000, 4);
+    File.put(0x214, 0x10108, 4);
+    File.put(0x218, 6, 4);
+    File.put(0x21c, 0x12, 1);
+    File.put(0x21e, 1, 2);
+    ELFLoader Loader;
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    ASSERT_TRUE(Image->MIPS);
+    EXPECT_TRUE(Image->MIPS->HasMIPS16);
+    EXPECT_FALSE(Image->MIPS->HasMicroMIPS);
+    EXPECT_EQ(Image->instructionModeAt(0x10100), InstructionMode::MIPSClassic);
+    EXPECT_EQ(Image->instructionModeAt(0x10108), InstructionMode::MIPS16);
+    EXPECT_EQ(Image->instructionModeAt(0x1010c), InstructionMode::MIPS16);
+    EXPECT_FALSE(Image->instructionModeAt(0x1010e));
+    EXPECT_FALSE(Image->instructionModeAt(0x10108, InstructionMode::MicroMIPS));
+    File.put(24, 0x10109, 4);
+    auto Tagged = Loader.loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Tagged)) << llvm::toString(Tagged.takeError());
+    EXPECT_EQ(Tagged->Entry, 0x10108u);
+    for (uint32_t Flags : {0x70001000u, 0x72001000u, 0x76001000u}) {
+      File.put(36, Flags, 4);
+      auto Bad = Loader.loadBuffer(File.buffer());
+      ASSERT_FALSE(bool(Bad));
+      llvm::consumeError(Bad.takeError());
+    }
+    ELFBytes ABI(Target);
+    ABI.abiFlags();
+    ABI.put(36, 0x74001000, 4);
+    ABI.put(24, 0x10101, 4);
+    ABI.put(0xec, 0x400, 4); // AFL_ASE_MIPS16
+    auto Matched = Loader.loadBuffer(ABI.buffer());
+    ASSERT_TRUE(bool(Matched)) << llvm::toString(Matched.takeError());
+    for (uint32_t ASE : {0u, 0x800u, 0xc00u, 0x401u, 0x600u}) {
+      ABI.put(0xec, ASE, 4);
+      auto Bad = Loader.loadBuffer(ABI.buffer());
+      ASSERT_FALSE(bool(Bad));
+      llvm::consumeError(Bad.takeError());
+    }
+  }
+}
+
+TEST(MIPS16Loader, DefinedGOTFunctionsSerializeTagsWithoutTaggingData) {
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL})
+    for (bool Function : {false, true}) {
+      ELFBytes File(Target);
+      File.dynamicGOT();
+      File.put(36, 0x74001000, 4);
+      File.put(0x314, 0x10108, 4);
+      File.put(0x318, 4, 4);
+      File.put(0x31c, Function ? 0x12 : 0x11, 1);
+      File.put(0x31d, Function ? 0xf0 : 0, 1);
+      File.put(0x31e, 1, 2);
+      File.put(0x388, Function ? 0x10109 : 0x10108, 4);
+      ELFLoader Loader;
+      auto Image = Loader.loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      const auto Pointers = Image->readPtrArray(0x10388, 1);
+      ASSERT_EQ(Pointers.size(), 1u);
+      EXPECT_EQ(Pointers.front(), Function ? 0x10109u : 0x10108u);
+      File.put(0x388, Function ? 0x10108 : 0x10109, 4);
+      auto Bad = Loader.loadBuffer(File.buffer());
+      ASSERT_FALSE(bool(Bad));
+      llvm::consumeError(Bad.takeError());
+    }
 }
 
 TEST(MicroMIPSLoader, DefinedGOTFunctionsUseCallableTagsButDataDoesNot) {

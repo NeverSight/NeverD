@@ -105,7 +105,7 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
     if (!Profile)
       return Profile.takeError();
     Img.MIPS = *Profile;
-    if (Profile->HasMicroMIPS)
+    if (Profile->HasMicroMIPS || Profile->HasMIPS16)
       Img.Mode = InstructionMode::MixedMIPS;
   } else if constexpr (ELFT::Endianness == llvm::endianness::big) {
     return llvm::make_error<llvm::StringError>(

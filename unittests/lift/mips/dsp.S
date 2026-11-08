@@ -55,6 +55,36 @@ dsp_saturate:
 .end dsp_saturate
 .size dsp_saturate, .-dsp_saturate
 
+.globl dsp_sub
+.type dsp_sub,@function
+.ent dsp_sub
+dsp_sub:
+  subu.qb $v0, $a0, $a1
+  jr $ra
+  nop
+.end dsp_sub
+.size dsp_sub, .-dsp_sub
+
+.globl dsp_sub_saturate
+.type dsp_sub_saturate,@function
+.ent dsp_sub_saturate
+dsp_sub_saturate:
+  subu_s.qb $v0, $a0, $a1
+  jr $ra
+  nop
+.end dsp_sub_saturate
+.size dsp_sub_saturate, .-dsp_sub_saturate
+
+.globl dsp_sub_zero
+.type dsp_sub_zero,@function
+.ent dsp_sub_zero
+dsp_sub_zero:
+  subu.qb $zero, $a0, $a1
+  jr $ra
+  addiu $v0, $zero, 7
+.end dsp_sub_zero
+.size dsp_sub_zero, .-dsp_sub_zero
+
 .globl dsp_zero
 .type dsp_zero,@function
 .ent dsp_zero

@@ -22720,7 +22720,7 @@ effects survive both source routes without invented source arguments. Return
 identity, standalone conversion, source shards and generated helper protection
 have separate regressions.
 `unittests/lift/mips/dsp-roundtrip.py` accepts the same explicit `--neverd`,
-`--clang`, `--ld` and `--output` arguments as the ordinary runner. Its nine
+`--clang`, `--ld` and `--output` arguments as the ordinary runner. Its twelve
 owned `dsp.S` leaves check scalar results and DSPControl after returning, in
 both byte orders and both C routes at `-O0` and `-O2`, with external `-mdsp`
 enabled. It uses the pinned 74Kf model with
@@ -22730,13 +22730,14 @@ expectation. The managed artifact lifecycle retires each generated object and
 executable after its comparisons.
 
 `MIPSMSATests` covers scalar word transfers across all vector registers,
-B/H/W/D carry and borrow boundaries, full-container logical operations and
+B/H/W/D carry and borrow boundaries, equality and signed/unsigned comparison
+masks, full-container logical operations and
 aliasing, independent byte-wise expectations, missing state, decoder reuse and
 P5600 reference execution. Loader cases check r5/MSA/CPR128/FP64 evidence;
 pipeline cases check both source routes and unchanged refusals with/without an
-Image. The owned MSA source runner recompiles eighteen scalar/memory leaves in both
-byte orders at O0/O2 through HighC and LLVMC. It checks each output byte and the
-preserved F20/F22/.../F30 low64 values, maps original/generated ELF separately,
+Image. The owned MSA source runner recompiles thirty-eight scalar/memory leaves
+in both byte orders at O0/O2 through HighC and LLVMC. It checks each output byte
+and the preserved F20/F22/.../F30 low64 values, maps original/generated ELF separately,
 and retires scratch on success and failure:
 
 ```bash
@@ -22752,6 +22753,34 @@ O0/O2, and compares execution with an arbitrary-precision integer oracle.
 Storage-only 128-bit locals and address-taken external declarations receive
 separate target syntax checks; those four checks do not claim linked execution.
 
+### MIPS16 source qualification
+
+`MIPS16Integer`, `MIPS16Flow`, `MIPS16Loader`, `MIPS16SDK` and `MIPS16Pipeline`
+cover unsigned/signed immediate boundaries, EXTEND/truncation, compact register
+fields, strict unsupported forms, local ISA evidence, physical pagination,
+two-byte slots, direct/indirect target modes and image-free return proofs.
+The literal scalar reference runs on pinned Unicorn's 24Kf model.
+`mips16-roundtrip.py` recompiles seven scalar/control leaves through HighC and
+LLVMC, in both byte orders at O0/O2. It checks independent results, stack and
+callee-saved GPR preservation, both incoming return-mode tags, ELF mode
+flags and function tags under an adverse microMIPS compiler default.
+An instruction in the caller's selected ISA executes after each return, so
+checking only the canonical return address cannot hide a lost mode tag. GNU MIPS
+as and ld are required; LLVM's integrated assembler/linker do not qualify this
+MIPS16 route. Pass the executables explicitly:
+
+```sh
+LIBUNICORN_PATH=/path/to/repo-pinned-unicorn-library \
+  PYTHONPATH=third_party/unicorn/bindings/python \
+  python3 unittests/lift/mips/mips16-roundtrip.py --neverd build-mips/bin/neverd \
+  --clang /path/to/clang --assembler /path/to/mips-as --ld /path/to/mips-ld \
+  --output build-mips/roundtrip-mips16
+```
+
+The runner retires each generated source, assembly, object and ELF after its
+readers finish; commands, hashes, observations and bounded failure evidence
+remain. These leaves do not qualify omitted MIPS16 memory, calls or ABI forms.
+
 ### MIPS decode/lift and firmware performance
 
 `neverd-mips-bench` is an opt-in target, excluded from the default build:
@@ -22762,9 +22791,10 @@ build-mips/bin/neverd-mips-bench mips64el lift /path/to/owned-code.bin 100000
 ```
 
 Profiles are `mips`, `mipsel`, `mips64`, `mips64el`, `micromips`,
-`micromipsel`, `mipsdsp`, `mipsdspel`, `mipsmsa` and `mipsmsael`. The DSP
-profiles explicitly select the admitted classic32 DSP capability; MSA profiles
-select classic32 r5/o32 FP64 with the admitted integer vector instructions.
+`micromipsel`, `mips16`, `mips16el`, `mipsdsp`, `mipsdspel`, `mipsmsa` and
+`mipsmsael`. The DSP profiles explicitly select the admitted classic32 DSP
+capability; MSA profiles select classic32 r5/o32 FP64 with the admitted integer
+vector instructions.
 Stages are `capstone`
 (direct physical decoding), `decode` (NeverD physical decoding) and `lift`
 (decoding plus LowIR, including delay slots). Both decode paths request the same
@@ -22783,6 +22813,9 @@ from `neverd-dependency-inputs.json`, and JSON toolchain manifests with `compile
 `llvm`, `capstone` and `build` entries. Record exact versions/hashes, build flags
 and allocator selection in those manifests before each build; unequal inputs
 are refused. Run `--help` for explicit paths and repetition counts.
+The default measures the four classic profiles. Repeat `--profile` to select
+other profiles supported by both binaries, supplying the corresponding
+`PROFILE-unchanged.bin` files; unsupported baseline instructions are errors.
 
 Each baseline CLI must load its own matching SDK; the runner sets its library
 search path accordingly. It checks output identity for the selected `call`

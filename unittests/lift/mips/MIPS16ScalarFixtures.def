@@ -1,0 +1,28 @@
+//===- MIPS16ScalarFixtures.def - Independent MIPS16e32 literals ---------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Name, first/second halfword, physical bytes, destination GPR, expected bits.
+// Entry v0/a0=0x89abcdef, a1=0x12345678, sp=0x700000.
+MIPS16_SCALAR(li, 0x6a81, 0, 2, 2, 129)
+MIPS16_SCALAR(li_high, 0xf010, 0x6a00, 4, 2, 0x8000)
+MIPS16_SCALAR(li_full, 0xf7ff, 0x6a1f, 4, 2, 0xffff)
+MIPS16_SCALAR(addiu, 0x4aff, 0, 2, 2, 0x89abcdee)
+MIPS16_SCALAR(addiu_ext, 0xf7ff, 0x4a1f, 4, 2, 0x89abcdee)
+MIPS16_SCALAR(adjsp, 0x63ff, 0, 2, 29, 0x6ffff8)
+MIPS16_SCALAR(adjsp_ext, 0xf7ff, 0x631f, 4, 29, 0x6fffff)
+MIPS16_SCALAR(move, 0x6544, 0, 2, 2, 0x89abcdef)
+MIPS16_SCALAR(addu, 0xe4a9, 0, 2, 2, 0x9be02467)
+MIPS16_SCALAR(subu, 0xe4ab, 0, 2, 2, 0x77777777)
+MIPS16_SCALAR(and, 0xeaac, 0, 2, 2, 0x00204468)
+MIPS16_SCALAR(or, 0xeaad, 0, 2, 2, 0x9bbfdfff)
+MIPS16_SCALAR(xor, 0xeaae, 0, 2, 2, 0x9b9f9b97)
+MIPS16_SCALAR(not, 0xeaaf, 0, 2, 2, 0xedcba987)
+MIPS16_SCALAR(cmpi, 0x72ff, 0, 2, 24, 0x89abcd10)
+MIPS16_SCALAR(cmpi_ext, 0xf7ff, 0x721f, 4, 24, 0x89ab3210)
+MIPS16_SCALAR(slti, 0x54ff, 0, 2, 24, 1)
+MIPS16_SCALAR(slti_ext, 0xf7ff, 0x541f, 4, 24, 1)
+MIPS16_SCALAR(sltiu, 0x5cff, 0, 2, 24, 0)
+MIPS16_SCALAR(sltiu_ext, 0xf7ff, 0x5c1f, 4, 24, 1)
+#undef MIPS16_SCALAR

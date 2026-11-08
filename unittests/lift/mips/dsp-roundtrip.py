@@ -22,7 +22,8 @@ from mips_validation_artifacts import MIPSValidationArtifacts
 
 FUNCTIONS = ("dsp_read", "dsp_write", "dsp_partial", "dsp_add",
              "dsp_saturate", "dsp_zero", "dsp_read_then_write",
-             "dsp_return_slot", "dsp_plain_add")
+             "dsp_return_slot", "dsp_plain_add", "dsp_sub",
+             "dsp_sub_saturate", "dsp_sub_zero")
 INITIAL_STATES = (0, 0x01100021, 0x0fff7fbf)
 INPUTS = ((0, 0), (0xff01807f, 0x02018081), (0x11223344, 0x55667788),
           (0xffffffff, 1), (0x80808080, 0x80808080))
@@ -50,10 +51,11 @@ def expected(function, initial, arguments):
         return state, state
     value, state = 0, initial
     for lane in range(4):
-        total = ((a >> (lane * 8)) & 255) + ((b >> (lane * 8)) & 255)
-        state |= 0x100000 if total > 255 else 0
-        value |= (min(total, 255) if function == "dsp_saturate" else total % 256) << (lane * 8)
-    return (7 if function == "dsp_zero" else value), state
+        left, right = (a >> (lane * 8)) & 255, (b >> (lane * 8)) & 255
+        total = left - right if function.startswith("dsp_sub") else left + right
+        state |= 0x100000 if total < 0 or total > 255 else 0
+        value |= (max(0, min(total, 255)) if function.endswith("saturate") else total % 256) << (lane * 8)
+    return (7 if function.endswith("zero") else value), state
 
 
 def observe(path, little, function, initial, arguments):
@@ -121,7 +123,7 @@ def run(args, artifacts):
                             if after != wanted:
                                 raise RuntimeError(f"{stem.name}: state={initial:#x}, input={inputs}, generated={after}, expected={wanted}")
                             limitation = before != wanted
-                            if limitation and not (function == "dsp_zero" and before == (7, initial)
+                            if limitation and not (function in ("dsp_zero", "dsp_sub_zero") and before == (7, initial)
                                                    and wanted[1] == initial | 0x100000):
                                 raise RuntimeError(f"{stem.name}: original={before}, expected={wanted}")
                             observations.append({"initial_dspcontrol": initial, "inputs": inputs,

@@ -1,0 +1,24 @@
+//===- MIPS16Integer.def - MIPS16e32 scalar encoding forms ---------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// MIPS16 major opcode, classic scalar form, destination, source, signed imm8.
+// Extended immediates retain their full 16 bits; the scalar form owns
+// extension.
+#ifdef NEVERD_MIPS16_IMMEDIATE
+NEVERD_MIPS16_IMMEDIATE(0x09, 9, RX, RX, true)   // ADDIU
+NEVERD_MIPS16_IMMEDIATE(0x0a, 10, 24, RX, false) // SLTI
+NEVERD_MIPS16_IMMEDIATE(0x0b, 11, 24, RX, false) // SLTIU
+NEVERD_MIPS16_IMMEDIATE(0x0d, 13, RX, 0, false)  // LI
+NEVERD_MIPS16_IMMEDIATE(0x0e, 14, 24, RX, false) // CMPI
+#undef NEVERD_MIPS16_IMMEDIATE
+#endif
+
+// MIPS16 RR function, classic function. Both read rx/ry and write rx.
+#ifdef NEVERD_MIPS16_LOGICAL
+NEVERD_MIPS16_LOGICAL(0x0c, 36) // AND
+NEVERD_MIPS16_LOGICAL(0x0d, 37) // OR
+NEVERD_MIPS16_LOGICAL(0x0e, 38) // XOR
+#undef NEVERD_MIPS16_LOGICAL
+#endif

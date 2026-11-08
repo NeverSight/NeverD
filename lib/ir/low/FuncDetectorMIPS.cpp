@@ -19,8 +19,7 @@ namespace neverd::func_detect_detail {
 void scanSegmentCallsMIPS(const BinaryImage &Img, Decoder &Dec,
                           const Segment *Seg, va_t Start, va_t End,
                           std::set<va_t> &Out, const Cancellation *Control) {
-  const bool Mixed = Img.Mode == InstructionMode::MixedMIPS ||
-                     Img.Mode == InstructionMode::MicroMIPS;
+  const bool Mixed = hasCompressedMIPSCode(Img.Mode);
   const unsigned Align = Mixed ? 2 : 4;
   unsigned Step = Align;
   for (va_t At = (Start + Align - 1) & ~va_t(Align - 1);

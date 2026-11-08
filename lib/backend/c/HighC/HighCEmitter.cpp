@@ -4892,8 +4892,7 @@ std::optional<std::string> HighCWriter::relocatedSlotTarget(va_t Slot) const {
   const va_t Target =
       readPtr(Bytes, PointerBytes == 8, archLittleEndian(Opts.TheArch));
   if (Opts.Image->CodePtrRelocSlots.count(Slot)) {
-    if (Opts.Image->Mode == InstructionMode::MixedMIPS ||
-        Opts.Image->Mode == InstructionMode::MicroMIPS) {
+    if (hasCompressedMIPSCode(Opts.Image->Mode)) {
       const auto Entry = mips::serializedCodeTarget(*Opts.Image, Target);
       if (!Entry)
         throw std::invalid_argument(
