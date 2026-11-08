@@ -5295,6 +5295,11 @@ temporary expression nodes; wide literal prefixes are copied and charged once
 per search. Word, projected-representative and pairing-signature caches share
 this normalization without changing any source constant or wider reading.
 Neutral observed constants reuse the operand directly.
+When complete-domain projection exposes identical factor handles, single-bit
+pairing removes exact squares before constructing highest-bit signatures. Only
+odd multiplicities need those signatures; the smaller square product still
+receives its complete proof at the next precision. The multiplicity table and
+its bucket growth consume the same request and storage budgets.
 Literal decision bits and both pairing-signature readers reuse the same exact
 prefix. Constant bitwise operands use the residue already stored in their word
 key, including its active-bit bound, without rebuilding a full-width APInt.

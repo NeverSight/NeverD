@@ -594,66 +594,69 @@ TEST(SymMBAWidePairs, RepeatedProjectedOffsetsFinishWithinTheSharedBudget) {
 
 TEST(SymMBAWidePairs, SharedLiteralPrefixesFinishAComplementedDegree256) {
   for (unsigned Width : {8u, 16u, 32u, 64u, 65u, 128u, 257u}) {
-    SCOPED_TRACE(Width);
-    const auto Scale = llvm::APInt(Width, 3).shl(Width - 8);
-    llvm::SmallString<128> ScaleText;
-    Scale.toString(ScaleText, 10, false);
-    std::string Text = "(" + ScaleText.str().str();
-    for (unsigned I = 0; I < 256; ++I)
-      Text += "*(((x^1)+" + std::to_string(2 * I) + ")^(((y+" +
-              std::to_string(I) + ")&-2)*((z+" + std::to_string(2 * I) +
-              ")&-2)))";
-    Text += ")+(x^y)+2*(x&y)+(z|w)+(z&w)";
-    SymContext Ctx;
-    const auto Parsed = parseSymExpr(Ctx, Text, Width);
-    ASSERT_TRUE(Parsed.ok()) << Parsed.Error;
-    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
-    const auto Z = Ctx.mkVar("z", Width), W = Ctx.mkVar("w", Width);
-    const auto Original = Ctx.toString(Parsed.Root);
-    MBAOptions Options;
-    Options.MaxWork = 65536;
-    // Keep the normal verification samples: disabling them hides the budget
-    // regression of the complete parse/prove/render request at eight bits.
-    const auto Result = simplifyMBADeep(Ctx, Parsed.Root, Options);
-    EXPECT_LE(Result.Work, Options.MaxWork);
-    if (Width == 8) {
-      EXPECT_LE(Result.SizeAfter, 14u);
-      EXPECT_LT(Result.Work, Options.MaxWork);
-      EXPECT_EQ(Result.Evidence, MBAEvidence::Derivation);
-    }
-    EXPECT_EQ(Ctx.toString(Parsed.Root), Original);
-    const auto Reparsed = parseSymExpr(Ctx, Ctx.toString(Result.Expr), Width);
-    ASSERT_TRUE(Reparsed.ok()) << Reparsed.Error;
-    EXPECT_EQ(Reparsed.Root, Result.Expr);
-    SymEvalPlan Reduced(Ctx, Result.Expr);
-    std::mt19937_64 Random(0x4c49544552414c);
-    const auto Mask = ~llvm::APInt(Width, 1);
-    for (unsigned Trial = 0; Trial < 256; ++Trial) {
-      std::array<llvm::APInt, 4> Values;
-      for (auto &Value : Values) {
-        Value = llvm::APInt(Width, Random());
-        for (unsigned Bit = 64; Bit < Width; Bit += 64)
-          Value |= llvm::APInt(Width, Random()).shl(Bit);
-      }
-      if (Trial < 16)
-        for (unsigned I = 0; I < Values.size(); ++I)
-          Values[I] = (Trial >> I) & 1 ? llvm::APInt::getAllOnes(Width)
-                                       : llvm::APInt(Width, 0);
-      auto Expected = Scale;
-      const auto Flipped = Values[0] ^ llvm::APInt(Width, 1);
+    for (unsigned Perturb : {0u, 2u}) {
+      SCOPED_TRACE(Width);
+      SCOPED_TRACE(Perturb);
+      const auto Scale = llvm::APInt(Width, 3).shl(Width - 8);
+      llvm::SmallString<128> ScaleText;
+      Scale.toString(ScaleText, 10, false);
+      std::string Text = "(" + ScaleText.str().str();
       for (unsigned I = 0; I < 256; ++I)
-        Expected *= (Flipped + 2 * I) ^
-                    (((Values[1] + I) & Mask) * ((Values[2] + 2 * I) & Mask));
-      Expected += Values[0] + Values[1] + Values[2] + Values[3];
-      const auto Actual =
-          Reduced.evalWith([&](uint32_t Id) -> const llvm::APInt * {
-            return Id == Ctx.varId(X)   ? &Values[0]
-                   : Id == Ctx.varId(Y) ? &Values[1]
-                   : Id == Ctx.varId(Z) ? &Values[2]
-                   : Id == Ctx.varId(W) ? &Values[3]
-                                        : nullptr;
-          });
-      EXPECT_EQ(Actual, Expected);
+        Text += "*(((x^1)+" + std::to_string(2 * I + (I == 0 ? Perturb : 0)) +
+                ")^(((y+" + std::to_string(I) + ")&-2)*((z+" +
+                std::to_string(2 * I) + ")&-2)))";
+      Text += ")+(x^y)+2*(x&y)+(z|w)+(z&w)";
+      SymContext Ctx;
+      const auto Parsed = parseSymExpr(Ctx, Text, Width);
+      ASSERT_TRUE(Parsed.ok()) << Parsed.Error;
+      const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+      const auto Z = Ctx.mkVar("z", Width), W = Ctx.mkVar("w", Width);
+      const auto Original = Ctx.toString(Parsed.Root);
+      MBAOptions Options;
+      Options.MaxWork = 65536;
+      // Keep the normal verification samples: disabling them hides the budget
+      // regression of the complete parse/prove/render request at native widths.
+      const auto Result = simplifyMBADeep(Ctx, Parsed.Root, Options);
+      EXPECT_LE(Result.Work, Options.MaxWork);
+      if (Width <= 64 && !Perturb) {
+        EXPECT_LE(Result.SizeAfter, 14u);
+        EXPECT_LT(Result.Work, Options.MaxWork);
+        EXPECT_EQ(Result.Evidence, MBAEvidence::Derivation);
+      }
+      EXPECT_EQ(Ctx.toString(Parsed.Root), Original);
+      const auto Reparsed = parseSymExpr(Ctx, Ctx.toString(Result.Expr), Width);
+      ASSERT_TRUE(Reparsed.ok()) << Reparsed.Error;
+      EXPECT_EQ(Reparsed.Root, Result.Expr);
+      SymEvalPlan Reduced(Ctx, Result.Expr);
+      std::mt19937_64 Random(0x4c49544552414c);
+      const auto Mask = ~llvm::APInt(Width, 1);
+      for (unsigned Trial = 0; Trial < 256; ++Trial) {
+        std::array<llvm::APInt, 4> Values;
+        for (auto &Value : Values) {
+          Value = llvm::APInt(Width, Random());
+          for (unsigned Bit = 64; Bit < Width; Bit += 64)
+            Value |= llvm::APInt(Width, Random()).shl(Bit);
+        }
+        if (Trial < 16)
+          for (unsigned I = 0; I < Values.size(); ++I)
+            Values[I] = (Trial >> I) & 1 ? llvm::APInt::getAllOnes(Width)
+                                         : llvm::APInt(Width, 0);
+        auto Expected = Scale;
+        const auto Flipped = Values[0] ^ llvm::APInt(Width, 1);
+        for (unsigned I = 0; I < 256; ++I)
+          Expected *= (Flipped + 2 * I + (I == 0 ? Perturb : 0)) ^
+                      (((Values[1] + I) & Mask) * ((Values[2] + 2 * I) & Mask));
+        Expected += Values[0] + Values[1] + Values[2] + Values[3];
+        const auto Actual =
+            Reduced.evalWith([&](uint32_t Id) -> const llvm::APInt * {
+              return Id == Ctx.varId(X)   ? &Values[0]
+                     : Id == Ctx.varId(Y) ? &Values[1]
+                     : Id == Ctx.varId(Z) ? &Values[2]
+                     : Id == Ctx.varId(W) ? &Values[3]
+                                          : nullptr;
+            });
+        EXPECT_EQ(Actual, Expected);
+      }
     }
   }
 }

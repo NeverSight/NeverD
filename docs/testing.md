@@ -3779,9 +3779,11 @@ non-native cases must finish below 60,000 work units with output cost at most
 286, protecting dense reconstruction headroom without increasing its budget.
 `SharedLiteralPrefixesFinishAComplementedDegree256` keeps the default
 verification samples and the 65,536-unit request budget for a parsed degree-256
-product. Its eight-bit regression must finish with a short result; independent
-full-width products through 257 bits also check high limbs, carry boundaries and
-preservation of the source expression. The projected-complement worker fixture
+product. Its 8/16/32/64-bit regressions must finish with a short result;
+independent full-width products through 257 bits also check high limbs, carry
+boundaries and preservation of the source expression. A single even-offset
+perturbation leaves odd multiplicities and checks that unequal factors retain
+their exact residual contribution. The projected-complement worker fixture
 checks the common CLI and GUI source routes against the original machine-code
 product at both C optimization levels.
 `MaskedProductsObserveOnlyTheRequestedLiteralWindow` checks that discarded high

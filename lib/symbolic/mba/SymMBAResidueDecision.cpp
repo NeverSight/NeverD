@@ -2188,7 +2188,7 @@ class LowWordDecisions {
   // Pull all squares into one product and recurse at N-1 bits. No original
   // highest bit is needed for its square, and recursion strictly decreases N.
   Bits pairedProduct(PairingState &State, llvm::ArrayRef<SymRef> Factors,
-                     unsigned Count) {
+                     unsigned Count, bool PairIdentical = false) {
     if (Count <= 2 || Factors.size() < 2)
       return product(Factors, Count);
     if (!charge(Factors.size(), 2 * Factors.size() * sizeof(SymRef)))
@@ -2196,7 +2196,37 @@ class LowWordDecisions {
     std::unordered_map<uint32_t, std::pair<SymRef, uint32_t>> Unpaired;
     llvm::SmallVector<SymRef, 16> Pairs, Rest;
     uint32_t Correction = 0;
+    // Complete-domain projection can expose repeated words. Their squares
+    // need no highest-bit signature or correction; pair exact handles first
+    // and prove only odd multiplicities at this precision. Smaller recursive
+    // products retain the ordinary signature search.
+    llvm::DenseMap<uint32_t, bool> OddMultiplicity;
+    if (PairIdentical) {
+      for (auto Factor : Factors) {
+        if (!charge())
+          return {};
+        auto It = OddMultiplicity.find(Factor.index());
+        if (It == OddMultiplicity.end()) {
+          if (!charge(1, sizeof(uint32_t) + sizeof(bool)) ||
+              !reserveEntry(OddMultiplicity))
+            return {};
+          OddMultiplicity.try_emplace(Factor.index(), true);
+        } else {
+          It->second = !It->second;
+          if (!It->second)
+            Pairs.push_back(Factor);
+        }
+      }
+    }
     for (auto Factor : Factors) {
+      if (PairIdentical) {
+        if (!charge())
+          return {};
+        auto &Odd = OddMultiplicity.find(Factor.index())->second;
+        if (!Odd)
+          continue;
+        Odd = false;
+      }
       const auto Signature = residueSignature(State, Factor, Count);
       if (Failed || !charge())
         return {};
@@ -2632,7 +2662,8 @@ public:
                       : widePairedProduct<false>(State, Nonconstants, Observed,
                                                  Unpaired);
       } else {
-        Product = FullBlock ? pairedProduct(State, Nonconstants, Observed)
+        Product = FullBlock ? pairedProduct(State, Nonconstants, Observed,
+                                            NormalizeFactors)
                             : product(Factors, Observed);
       }
     } else {
