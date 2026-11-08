@@ -643,6 +643,7 @@ struct Writer {
   const X64ContinuationSourceOptions &Options;
   uint64_t Next = ScratchBase;
   detail::X64PagedMemoryRoles PagedRoles;
+  bool WritesCr8 = false;
 
   NdVar temporary(uint16_t Bytes = 8) {
     const NdVar V = NdVar::tmp(Next, Bytes);
@@ -1134,6 +1135,7 @@ struct Writer {
       if (Transition->Rejected) {
         rejectIf(*Transition->Rejected);
         store(offsetof(StateV2, CR8), Priority);
+        WritesCr8 = true;
       }
     } else if (x64::mxcsr::supportsScalarOperation(Op,
                                                    controlOptions(Options))) {
@@ -2031,6 +2033,7 @@ buildInstruction(SpecializationInstruction Instruction,
       W.pagedAccess(TakenBranch, 0, X64PagedAccess::BranchDecision, false);
     W.leave(Kind, NextPC);
   }
+  Result.WritesCr8 = W.WritesCr8;
   if (Function.Blocks.size() > Options.MaxOperations ||
       Result.Address >= InvalidVA - Function.Blocks.size())
     return invalid("continuation source block budget or address exhausted");
@@ -2060,6 +2063,11 @@ buildX64ContinuationSource(const BinaryImage &Image,
        Options.NativeSnpInstructions || Options.NativeHleSteps ||
        Options.NativeSevGuestExit || Options.SegmentBaseMSRAddressBits))
     return invalid("paged V6 requires its owned memory and fault environment");
+  if (Options.NotifyCr8Writes &&
+      (!Options.ScheduledEvents || !Options.EventDelivery ||
+       Options.PagedMemory))
+    return invalid("CR8 write notification requires the successful-RAM "
+                   "event scheduler");
   if (Options.ScheduledEvents && !Options.EventDelivery && !Options.PagedMemory)
     return invalid("scheduled events require event delivery or paged memory");
   if (Options.EventDelivery &&
