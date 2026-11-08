@@ -22585,11 +22585,13 @@ build-mips/bin/neverd-mips-bench mips64el lift /path/to/owned-code.bin 100000
 ```
 
 Profiles are `mips`, `mipsel`, `mips64`, `mips64el`, `micromips`,
-`micromipsel`, `mipsdsp` and `mipsdspel`. The DSP profiles explicitly select
-the admitted classic32 DSP capability. Stages are `capstone`
+`micromipsel`, `mipsdsp`, `mipsdspel`, `mipsmsa` and `mipsmsael`. The DSP
+profiles explicitly select the admitted classic32 DSP capability; MSA profiles
+select classic32 r5/o32 FP64 with the admitted integer vector instructions.
+Stages are `capstone`
 (direct physical decoding), `decode` (NeverD physical decoding) and `lift`
 (decoding plus LowIR, including delay slots). Both decode paths request the same
-selected r2 encoding profile, detail on and text off. The pinned Capstone fork suppresses
+selected encoding/revision profile, detail on and text off. The pinned Capstone fork suppresses
 rendered operand detail with text off; these physical decode measurements consume
 instruction sizes and IDs. The harness reuses decoder handles, counts physical
 instructions/LowOps and validates output fingerprints outside
