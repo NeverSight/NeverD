@@ -1,6 +1,7 @@
 #pragma once
 #include "CodeEdits.h"
 #include "DeferredRelease.h"
+#include "PageDelta.h"
 #include "Protocol.h"
 #include "RenderStore.h"
 #include "ResourceLimits.h"
@@ -613,12 +614,12 @@ private:
   std::size_t previousViewBytes_ = 0;
   void keepPreviousView(std::shared_ptr<const NamedView> document);
   /// The page lines [start, end) of \p document make, without what a reply
-  /// says of the project or its name.
-  Json namedViewLines(const NamedView &document, std::size_t start,
-                      std::size_t end, bool first) const;
+  /// says of the project or its name, read in place from \p document.
+  PageSource namedViewLines(const NamedView &document, std::size_t start,
+                            std::size_t end, bool first) const;
   /// The page a client names with \p etag, where this worker still has the
-  /// document it came from.
-  std::optional<Json> keptClientPage(const std::string &etag) const;
+  /// document it came from, read in place from that document.
+  std::optional<PageSource> keptClientPage(const std::string &etag) const;
   /// Function-list order (indices into Listing::functionRows) for the last
   /// filter, sort and listing generation.
   std::string functionOrderKey_;
