@@ -20,7 +20,9 @@
 #include "SymMBADetail.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Compiler.h"
 
 #include <algorithm>
 #include <array>
@@ -28,7 +30,6 @@
 #include <cassert>
 #include <map>
 #include <optional>
-#include <set>
 
 namespace neverd::symbolic::detail {
 
@@ -848,36 +849,14 @@ SymRef solveIndependentTerms(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
 // Enumerate the complete parity domain (up to six independent opaque inputs)
 // in parallel, then find whether every assignment supplies enough zeros.
 SymRef foldZeroProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
-                       size_t &Storage, bool Share = true) {
-  if (Ctx.op(Root) != SymOp::Mul || Ctx.numOperands(Root) < 8 ||
-      Ctx.numOperands(Root) >
-          ::neverd::symbolic::detail::limits::
-              kSymMBARegionFoldZeroProductCtxNumOperandsRootLimit ||
-      Budget.exhausted())
-    return Root;
-  if (Share && Budget.MemoOwner == &Ctx && Budget.Parities) {
-    auto Found = Budget.Parities->Products.find(Root.index());
-    if (Found != Budget.Parities->Products.end() && Budget.canConsume(1)) {
-      Budget.consume();
-      return Found->second;
-    }
-  }
-  auto Factors = Ctx.operands(Root);
-  unsigned Needed = Ctx.width(Root);
-  if (Ctx.isConst(Factors.front())) {
-    const size_t Words = (size_t(Needed) + 63) / 64;
-    if (Needed <= 64) {
-      Needed -= std::countr_zero(Ctx.node(Factors.front()).Aux);
-    } else {
-      if (Words > Storage / 8 || !Budget.consume(Words))
-        return Root;
-      Storage -= Words * 8;
-      Needed -= Ctx.constValue(Factors.front()).countr_zero();
-    }
-    Factors = Factors.drop_front();
-  }
-  if (Needed > 8 || Needed > Factors.size())
-    return Root;
+                       size_t &Storage, bool Share = true);
+
+// Admitted proofs own the traversal buffers. Keep them off the cheap refusal
+// and completed-product lookup paths.
+LLVM_ATTRIBUTE_NOINLINE
+SymRef proveProductParities(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
+                            size_t &Storage, bool Share, unsigned Needed,
+                            llvm::ArrayRef<SymRef> Factors) {
   auto Charge = [&](size_t Work, size_t Bytes = 0) {
     if (Bytes > Storage || !Budget.consume(Work))
       return false;
@@ -904,18 +883,23 @@ SymRef foldZeroProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
   if (!Charge(Top, Top * sizeof(SymRef)))
     return Root;
   std::copy(Factors.begin(), Factors.end(), Pending.begin());
-  std::set<uint32_t> Nodes;
+  // Membership needs no tree node per visit. Keep the eventual evaluation
+  // order explicit: source indices place every child before its parent.
+  // Wide keys leave both dense sentinels outside the source-index domain.
+  llvm::SmallDenseSet<uint64_t, limits::kProductParityInlineBuckets> Seen;
+  llvm::SmallVector<uint32_t, limits::kProductParityInlineEntries> Nodes;
   while (Top) {
     auto R = Pending[--Top];
     if (!Charge(1))
       return Root;
-    if (Nodes.contains(R.index()))
+    if (Seen.contains(R.index()))
       continue;
     if (Nodes.size() == ::neverd::symbolic::detail::limits::
                             kSymMBARegionFoldZeroProductNodesSizeLimit ||
         !Charge(1, 128))
       return Root;
-    Nodes.insert(R.index());
+    Seen.insert(R.index());
+    Nodes.push_back(R.index());
     if ((Cache && Cache->Values.contains(R.index())) || !Transparent(R))
       continue;
     auto Children = Ctx.operands(R);
@@ -924,10 +908,14 @@ SymRef foldZeroProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     for (auto Child : Children)
       Pending[Top++] = Child;
   }
+  llvm::sort(Nodes);
   constexpr std::array<uint64_t, 6> Variables{
       0xaaaaaaaaaaaaaaaaULL, 0xccccccccccccccccULL, 0xf0f0f0f0f0f0f0f0ULL,
       0xff00ff00ff00ff00ULL, 0xffff0000ffff0000ULL, 0xffffffff00000000ULL};
-  std::map<uint32_t, uint64_t> Values;
+  llvm::SmallDenseMap<uint64_t, uint64_t, limits::kProductParityInlineBuckets>
+      Values;
+  // The collected-node charge already covers both lookup tables.
+  Values.reserve(Nodes.size());
   unsigned Atoms = 0;
   for (auto Id : Nodes) {
     if (!Charge(1, 128))
@@ -967,13 +955,13 @@ SymRef foldZeroProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
         Value = Variables[Atoms++];
       }
     } else if (Op == SymOp::Not) {
-      Value = ~Values.at(Ctx.operand(R, 0).index());
+      Value = ~Values.find(Ctx.operand(R, 0).index())->second;
     } else {
       Value = (Op == SymOp::And || Op == SymOp::Mul) ? ~uint64_t(0) : 0;
       for (auto Child : Ctx.operands(R)) {
         if (!Charge(1))
           return Root;
-        auto V = Values.at(Child.index());
+        auto V = Values.find(Child.index())->second;
         if (Op == SymOp::And || Op == SymOp::Mul)
           Value &= V;
         else if (Op == SymOp::Or)
@@ -982,7 +970,7 @@ SymRef foldZeroProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
           Value ^= V; // Addition and XOR have identical parity.
       }
     }
-    Values.emplace(Id, Value);
+    Values.try_emplace(Id, Value);
     if (Cache && Cached == Cache->Values.end() &&
         Cache->Values.size() + Cache->Products.size() + Cache->Inputs.size() <
             Budget.MemoCapacity &&
@@ -1003,7 +991,7 @@ SymRef foldZeroProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     }
     if (!Charge(Multiplicity))
       return Root;
-    const uint64_t Even = ~Values.at(Factor.index());
+    const uint64_t Even = ~Values.find(Factor.index())->second;
     while (Multiplicity) {
       const unsigned Bit = std::countr_zero(Multiplicity);
       Multiplicity &= Multiplicity - 1;
@@ -1038,6 +1026,41 @@ SymRef foldZeroProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     Cache->Products.try_emplace(Root.index(), Result);
   }
   return Result;
+}
+
+SymRef foldZeroProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
+                       size_t &Storage, bool Share) {
+  if (Ctx.op(Root) != SymOp::Mul || Ctx.numOperands(Root) < 8 ||
+      Ctx.numOperands(Root) >
+          ::neverd::symbolic::detail::limits::
+              kSymMBARegionFoldZeroProductCtxNumOperandsRootLimit ||
+      Budget.exhausted())
+    return Root;
+  if (Share && Budget.MemoOwner == &Ctx && Budget.Parities) {
+    auto Found = Budget.Parities->Products.find(Root.index());
+    if (Found != Budget.Parities->Products.end() && Budget.canConsume(1)) {
+      Budget.consume();
+      return Found->second;
+    }
+  }
+  auto Factors = Ctx.operands(Root);
+  unsigned Needed = Ctx.width(Root);
+  if (Ctx.isConst(Factors.front())) {
+    const size_t Words = (size_t(Needed) + 63) / 64;
+    if (Needed <= 64) {
+      Needed -= std::countr_zero(Ctx.node(Factors.front()).Aux);
+    } else {
+      if (Words > Storage / 8 || !Budget.consume(Words))
+        return Root;
+      Storage -= Words * 8;
+      Needed -= Ctx.constValue(Factors.front()).countr_zero();
+    }
+    Factors = Factors.drop_front();
+  }
+  if (Needed > 8 || Needed > Factors.size())
+    return Root;
+  return proveProductParities(Ctx, Root, Budget, Storage, Share, Needed,
+                              Factors);
 }
 
 } // namespace

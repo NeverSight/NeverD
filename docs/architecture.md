@@ -5385,6 +5385,11 @@ counters preserve repeated-factor correlations across all assignments. A
 product is zero only when these guaranteed zeros and its literal coefficient
 cover the full word width. The proof admits at most 64 factors, 128 reachable
 nodes and eight observable low bits, under the existing work/storage budget.
+Its local membership and parity tables use compact exact keys, while a sorted
+node list preserves the original child-before-parent order and input numbering.
+The collected-node charge covers their storage; known table size is reserved
+once. Cheap refusals and completed-product hits stay outside the traversal
+buffers' call frame. Work, storage charges and shared memo behavior are unchanged.
 Early sum pruning requires every long product to vanish, preserving incomplete
 factor bases. Generated products and residuals can use the proof after their
 complete distribution is established. No additional CLI or GUI switch is

@@ -63,6 +63,10 @@ inline constexpr unsigned kMinProductCofactorDegree = 4;
 inline constexpr unsigned kMaxPartitionCubeAxes = 3;
 inline constexpr unsigned kMinCompressedCommonFactors = 3;
 inline constexpr std::size_t kMinParityMemoCapacity = 8;
+/// Small parity frontiers need no per-node allocation; keep spare hash buckets.
+inline constexpr unsigned kProductParityInlineEntries = 16;
+inline constexpr unsigned kProductParityInlineBuckets =
+    2 * kProductParityInlineEntries;
 inline constexpr unsigned kMinQuadraticCongruenceAtoms = 4;
 inline constexpr unsigned kMinPackedPolynomialAtoms = 4;
 inline constexpr unsigned kMinPackedPolynomialWidth = 8;
