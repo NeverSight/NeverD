@@ -445,7 +445,10 @@ TEST(SymMBALazyPolynomial, BooleanRecipesShareTheFinalBitProjection) {
     checkFullWidthOracle(Ctx, F, Result.Expr);
     if (solver::Z3Solver::available()) {
       solver::Z3SolverOptions VerifyOptions;
-      VerifyOptions.TimeoutMs = 30000;
+      // This independent full-word proof can use less than eleven CPU seconds
+      // while exceeding thirty wall seconds on a busy development machine.
+      // Keep its test deadline separate from the simplifier's work ceiling.
+      VerifyOptions.TimeoutMs = 120000;
       solver::Z3Solver Verifier(Ctx, VerifyOptions);
       // This fresh verifier serves one formula. Asserting the difference
       // permits Z3's one-shot preprocessing of the complete multiplication.
