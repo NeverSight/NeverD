@@ -6991,6 +6991,12 @@ ASID and prefix mutations must be rejected. It does not execute privileged
 instructions or qualify VMCB state transfers. NeverC's separate CPL0 QEMU
 witness exercises MSR round trips in the selected TCG guest environment.
 
+`AddressOverridesRequireExactRegisterInputs` checks 48 valid/malformed SVM
+assembly contracts across i386 addr16 and x64 addr32. Wrong address/ASID
+widths, missing prefixes, wrong registers/code modes and lost memory or
+side-effect contracts must fail. The complete assembly compilation test
+assembles both override modes at O0/O2 through both C routes.
+
 `LLVMCValues.NativeVirtualizationKeepsStatusAndFailedReadPrior` supplies controlled
 VMX completion values to check C status conversion, exact operand evaluation
 and failed-read preservation without executing privileged instructions.

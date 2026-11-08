@@ -4484,9 +4484,56 @@ These checks qualify Linux i386 source generation through NeverC's full LLVM
 backend and x64 source generation across ELF/COFF/Mach-O. Controlled VMX
 completions do not establish successful hardware VM entry or a hardware VMCS.
 The complete-C witness uses flat segment bases; separate address witnesses
-cover nonzero bases and 16-bit truncation. Windows/Darwin i386 native source
-qualification, physical-address i386 SVM source APIs, full real/VM86/IA-32e
+cover nonzero bases and 16-bit truncation. The following SVM qualification
+closes the i386 source-API gap. Windows/Darwin i386 native source qualification,
+full real/VM86/IA-32e
 transitions, task switching, remaining state banks, software SMM/SGX and
 unbound asynchronous producers remain open. The production SDK pin remains
 `neverd-llvm-v23.0.0-r6`; the LLVM gitlink records the published VMXOFF source
 change, and no final LLVM release is claimed.
+
+## Native i386 SVM address widths (2026-11-08)
+
+NeverC exposes six native VMLOAD/VMSAVE/INVLPGA interfaces: default i386
+32-bit addresses and explicit 16-bit address overrides. Microsoft SVM
+spellings select the source target's natural width. INVLPGA keeps the full
+32-bit ECX ASID independently of its linear address; VMLOAD/VMSAVE addresses
+refer to physical VMCBs. The full LLVM fork already owns these six intrinsic
+IDs, so this batch synchronizes NeverC's tables and frontend without adding
+another LLVM implementation or changing the production SDK pin.
+
+NeverD's shared SVM width contract now owns admission for the lifter,
+intrinsic shapes and native/assembly plans. Both C routes use the native
+NeverC interfaces. The old-SDK path emits explicit `addr16` on i386 and
+`addr32` on x64 with implicit operands and fixed AX/EAX plus ECX constraints.
+Stock Clang rejected the former explicit narrow-register assembly spellings;
+the complete assembly regression now covers both overrides. The C renderer
+accepts only the complete owned assembly contract, including its input widths,
+effects, fixed registers and code mode.
+
+The [SVM width evidence](evidence/x86-svm-widths-2026-11-08.json) records 79
+selected NeverD checks and 3,008 C compilation checks across the native and
+r6 SDKs. All 192 complete SVM C comparisons and 2,592 VMX regression
+comparisons pass against independent original bytes. Each SVM compiler/SDK
+profile rejects eleven operand/prefix negative controls; each SDK also checks
+48 valid/malformed assembly scenarios. The native SDK emits 444 modules with
+no assembly fallback. Thirty existing call-identity tests cover the ownership
+fix that keeps architecture-qualified identity above standalone LowIR
+validation, avoiding a static-library dependency cycle.
+
+NeverC passes 184 x86/i386 tests, 2,048 SVM checks, 152 real CPL3 fault
+boundaries and 136 operand negative controls. Its two returning VMRUN routes
+pass 196 contexts; compiling NeverD's complete VMRUN export adds another 196.
+VMX regressions pass 9,072 controlled checks and 896 CPL3 fault boundaries;
+FLAGS regressions pass 6,291,456 comparisons. The selected full-LLVM lit
+tests both pass. No selected test fails or skips. Compiler build, witness and
+audit revisions are recorded separately; the source-global audit retains its
+90 baseline findings in 29 unchanged files.
+
+Stopped native instructions qualify address/ASID transport and the C ABI.
+Separate CPL0 QEMU runs qualify VMCB/MSR round trips and continuation only
+within the selected TCG guest. They do not establish physical AMD TLB or
+hardware VM-entry behavior. Windows/Darwin i386 source ABIs, full machine-mode
+transitions and task switching, remaining state banks, software SMM/SGX and
+unbound asynchronous producers remain open. The final LLVM release remains
+gated; the production pin stays `neverd-llvm-v23.0.0-r6`.
