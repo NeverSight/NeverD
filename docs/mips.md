@@ -91,14 +91,22 @@ callees. See the
 [testing guide](testing.md#mips-elf-analysis-and-source-roundtrips) for setup.
 A registered test is not a claim that it has passed on every host.
 
-The initial qualification used macOS arm64 Release: 1,212 focused/shared
-CTest cases passed, including 133 MIPS cases. All 128 source roundtrip groups
-(16 kernels, four profiles, two backends) passed 312 input cases. The shared
-parameter-width proof also covers x86-64, ARM and AArch64, preserving real
-truncations and excluding unrelated values. Linux/Windows host builds and GUI
-operation were not exercised. Local receipts are
-`build-mips/ctest-mips-qualified.log`, `build-mips/roundtrip-final/results.json`
-and `build-mips/qualification.json`.
+The merge-load/MUL qualification used macOS arm64 Release, integrated with
+dev `e320fec5b`: 1,294 focused/shared CTest cases passed, including 169 MIPS
+cases. All 200 source roundtrip groups (25 kernels, four profiles, two backends)
+passed 992 normal inputs and 24 expected read-fault cases. The latter check
+discarded destinations and a JALR slot fault before callee entry. HighC image
+merge fixtures execute with the original image unmapped. Disposable roundtrip
+objects and executables are deleted after success; sources and hashes remain.
+
+The shared checks cover byte projection, liveness, return classification and
+call contracts on x86-64, i386, ARM and AArch64. CTest used four concurrent
+tests with `NEVERD_THREADS=1`; an earlier AAPCS64 source-compilation timeout
+passed both in isolation and in the final run. Linux/Windows host builds and
+GUI operation were not exercised. Local receipts are
+`build-mips/ctest-mips-merge-final.log`,
+`build-mips/roundtrip-merge-final/results.json` and
+`build-mips/qualification-merge.json`.
 
 ## TP-Link firmware workflow
 

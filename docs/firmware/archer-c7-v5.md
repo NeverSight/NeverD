@@ -105,12 +105,18 @@ callback `0x40114c`, null callback data and timeout multiplied by 1000 to
 relationships agree with the independently decoded instructions and PLT;
 external prototypes and complete structure types remain inferred.
 
+An independent Ghidra 12.1.3 analysis of the same hashed executable also
+recovers these argument checks, error returns, five callees, callback address
+and timeout scaling. The local `ubus-call-ghidra.c` and metadata receipt retain
+that comparison; the temporary imported Ghidra program was deleted afterward.
+Agreement between static views does not establish vendor runtime equivalence.
+
 Artifacts under the ignored `build-mips/firmware` directory include
 `ubus-{main,list,call,listen,send}-{highc,llvmc}.c`, per-invocation logs,
 `neverd-analysis-results.json`, the original disassembly/import inventory,
 and main/list/call LowIR, MedIR, HighIR and CFG JSON/DOT. `neverd-ir-results.json`
-records success, diagnostics and hashes per view. The list and call handlers also emit
-raw LLVM IR through the SDK's LLVM verifier. The raw LLVM
+records success, diagnostics and hashes per view. The list and call handlers
+also emit raw LLVM IR through the SDK's LLVM verifier. The raw LLVM
 inspection route has a stricter code-pointer identity contract than LLVMC's
 original-image source projection; main's dispatch table is not yet qualified
 for that route.
