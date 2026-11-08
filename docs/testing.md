@@ -6937,8 +6937,8 @@ EAX/ECX inputs, Windows subleaf spelling and ordered effects, including CLI/STI.
 The CPUID C execution check replaces only the intrinsic environment, verifies
 one query with leaf 7/subleaf 1, and stores four high-bit output words into
 64-bit cells at O0/O2 across all three formats and default/NoOpt.
-The qualified native LLVM SDK adds a 426-module virtualization matrix covering
-both word sizes, three formats, default/NoOpt, FS/GS and long-mode narrow SVM
+The qualified native LLVM SDK adds a 444-module virtualization matrix covering
+both word sizes, three formats, default/NoOpt, FS/GS and mode-specific narrow SVM
 addresses. Older SDKs explicitly skip that native-IR requirement while retaining
 the assembly route. A qualified SDK lacking `llvm.x86.vmxoff.status` retains
 the exact VMXOFF assembly and records those modules separately. The void API
@@ -6971,6 +6971,18 @@ success-only operation that defines VMX completion flags.
 Segment bases are flat in this witness; VM entry success, descriptor validation
 and hardware VMCS execution are outside it. NeverC's separate VMX address
 witness owns nonzero segment-base transport and 16-bit address truncation.
+
+`X86VirtualizationSource.NeverCI386SvmKeepsDefaultAndAddress16Forms` adds
+48 native C compilation checks for VMLOAD/VMSAVE/INVLPGA, both C routes and
+default/NoOpt. It retains complete translation units and independently encoded
+`.bin` inputs under the same artifact directory. Run
+`scripts/check_x86_svm_source.py --exports DIR --compiler NEVERC
+--backend-llc LLVM_LLC --output OUT`, and separately with stock Clang without
+the backend option. The witness compares stopped native AX/EAX address inputs,
+full ECX ASIDs, the live return and callee-saved registers; deliberate address,
+ASID and prefix mutations must be rejected. It does not execute privileged
+instructions or qualify VMCB state transfers. NeverC's separate CPL0 QEMU
+witness exercises MSR round trips in the selected TCG guest environment.
 
 `LLVMCValues.NativeVirtualizationKeepsStatusAndFailedReadPrior` supplies controlled
 VMX completion values to check C status conversion, exact operand evaluation

@@ -10972,10 +10972,13 @@ imply coverage of every newer SEV/SNP instruction.
 `backend/llvm/X86/X86VirtualizationNative.h` owns native LLVM names and
 available NeverC source spellings together. Mode-sized i386 VMCS and address
 APIs use the full fork's `32` names in both C renderers; management memory
-operands retain m64. An empty source spelling keeps the architecture's existing
-assembly projection where that source ABI is not yet implemented, such as
-physical-address i386 SVM operations. It does not change LLVM intrinsic
-availability or substitute an effect-free operation.
+operands retain m64. SVM default-address i386 APIs also use `32`; address-size
+overrides use `.addr16` on i386 and `.addr32` on x64. Their address inputs remain
+integer bits, with a separate full-width ECX ASID for INVLPGA.
+`x86SvmAddressSizeIsValid` owns the allowed implicit address widths for lifting,
+shape validation and assembly planning. Every native plan has a C spelling;
+the shared compiler capability dispatch retains the exact assembly fallback
+when those builtins are unavailable.
 Both C translation-unit collectors include the shared virtualization dispatch
 for i386 and x64. Ordinary native VMX/SVM calls require a registered SDK
 intrinsic ID; LLVM's `isIntrinsic()` alone only recognizes the reserved name

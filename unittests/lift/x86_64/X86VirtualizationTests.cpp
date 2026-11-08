@@ -168,10 +168,25 @@ TEST(X86Virtualization, AddressSizeAndSegmentsStayWithTheInstruction) {
                            [&](const auto &E) { return E.Id == Id; });
     auto Bytes = It->Bytes;
     Bytes.insert(Bytes.begin(), 0x67);
-    const auto Ops = lift(Arch::X64, Bytes);
-    const auto *Op = operation(Ops, Id);
-    ASSERT_NE(Op, nullptr);
-    EXPECT_EQ(Op->Inputs[1].Size, 4);
+    for (const auto A : {Arch::X86, Arch::X64}) {
+      SCOPED_TRACE(static_cast<unsigned>(A));
+      const auto Ops = lift(A, Bytes);
+      const auto *Op = operation(Ops, Id);
+      ASSERT_NE(Op, nullptr);
+      EXPECT_EQ(Op->Inputs[1].Size, A == Arch::X86 ? 2 : 4);
+      auto Shape = x86VirtualizationLowShape(*Op, A);
+      EXPECT_TRUE(x86VirtualizationShapeIsValid(Id, Shape));
+      if (Id == Intrinsic::SvmInvalidate) {
+        EXPECT_EQ(Op->Inputs[2].Size, 4);
+        Shape.InputSizes[1] = 2;
+        EXPECT_FALSE(x86VirtualizationShapeIsValid(Id, Shape));
+        Shape.InputSizes[1] = 4;
+      }
+      Shape.InputSizes[0] = A == Arch::X86 ? 8 : 2;
+      EXPECT_FALSE(x86VirtualizationShapeIsValid(Id, Shape));
+      Shape.TargetArch = Arch::Unknown;
+      EXPECT_TRUE(x86VirtualizationShapeIsValid(Id, Shape));
+    }
   }
   auto Bytes = Encodings[1].Bytes;
   Bytes.insert(Bytes.begin(), 0x65);

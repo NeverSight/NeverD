@@ -60,14 +60,16 @@ TEST(X86VirtualizationSource, NeverCI386CompilesBothRoutesWithoutAssembly) {
       [&] { (void)llvm::sys::fs::remove_directories(Directory); });
   unsigned Cases = 0;
   for (bool NoOpt : {false, true})
-    for (const auto &E : nativeVirtualizationEncodings(Arch::X86)) {
+    for (const auto &E : nativeVirtualizationEncodings()) {
       const auto C = x86VirtualizationContract(E.Id);
+      if (C.PhysicalAddress)
+        continue;
       for (const auto Space :
            {NdMemoryAddressSpace::Default, NdMemoryAddressSpace::X86FS,
             NdMemoryAddressSpace::X86GS}) {
         const auto Plan = x86VirtualizationNative(
             E.Id, Arch::X86, Space, physicalAddressBytes(E, Arch::X86));
-        if (!Plan || Plan->Builtin.empty())
+        if (!Plan)
           continue;
         SCOPED_TRACE(Plan->LLVMName);
         SCOPED_TRACE(NoOpt);

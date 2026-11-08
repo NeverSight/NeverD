@@ -49,8 +49,7 @@ x86VirtualizationAsm(Intrinsic Id, Arch TargetArch, NdMemoryAddressSpace Space,
     return std::nullopt;
   const uint16_t Word = TargetArch == Arch::X64 ? 8 : 4;
   if (C.PhysicalAddress &&
-      ((PhysicalAddressBytes != 4 && PhysicalAddressBytes != 8) ||
-       (TargetArch == Arch::X86 && PhysicalAddressBytes != 4)))
+      !x86SvmAddressSizeIsValid(TargetArch, PhysicalAddressBytes))
     return std::nullopt;
   X86VirtualizationAsm P;
   P.Id = Id;
