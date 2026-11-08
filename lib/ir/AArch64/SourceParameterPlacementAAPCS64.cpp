@@ -20,6 +20,7 @@
 
 #include "neverd/ir/SourceABI.h"
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/MathExtras.h"
 
 using namespace neverd;
@@ -63,8 +64,10 @@ std::optional<SourceParameterPlacement> source_placement::placeAAPCS64(
        ((ReturnType->Passing == NdRecordPassing::ByValue ||
          ReturnType->Passing == NdRecordPassing::Complex) &&
         ReturnType->Size > kMaxRegisterRecordBytes &&
-        (ReturnType->Size > kMaxAggregateBytes || scalarLeaves(ReturnType)) &&
-        !aapcs64FloatingAggregate(ReturnType))))
+        (ReturnType->Size > kMaxAggregateBytes || scalarLeaves(ReturnType) ||
+         equalSourceTypes(ReturnType, ReturnType)) &&
+        !aapcs64FloatingAggregate(ReturnType) &&
+        sourceAArch64VectorAggregateMembers(ReturnType).empty())))
     Placement.ResultPointer =
         registerPiece(SourceABICarrierKind::IntegerRegister,
                       TRI.indirectResultReg(), 0, TRI.PointerSize)
@@ -116,6 +119,20 @@ std::optional<SourceParameterPlacement> source_placement::placeAAPCS64(
                      /*Indirect=*/true)}
                : OnStack(TRI.PointerSize, kRegisterBytes, /*Indirect=*/true);
   };
+  auto Homogeneous = [&](const TypeRef &Type,
+                         llvm::ArrayRef<NdScalarLeaf> Members) {
+    if (NextVector + Members.size() > Vector.size()) {
+      NextVector = Vector.size();
+      return OnStack(Type->Size, Type->Alignment);
+    }
+    std::vector<SourceParameterPiece> Pieces;
+    Pieces.reserve(Members.size());
+    for (const NdScalarLeaf &Member : Members)
+      Pieces.push_back(registerPiece(SourceABICarrierKind::FloatingRegister,
+                                     Vector[NextVector++], Member.Offset,
+                                     Member.Size));
+    return Pieces;
+  };
 
   for (const TypeRef &Type : ParamTypes) {
     std::vector<SourceParameterPiece> Pieces;
@@ -134,7 +151,7 @@ std::optional<SourceParameterPlacement> source_placement::placeAAPCS64(
     if (isIntegerScalar(Type) &&
         Type->Size <= kIntegerPairRegisters * kRegisterBytes) {
       Pieces = Integers(Type->Size, Type->Size);
-    } else if (isFloatingScalar(Type) || isSourceAArch64Vector128Type(Type)) {
+    } else if (isFloatingScalar(Type) || isSourceAArch64VectorType(Type)) {
       if (NextVector < Vector.size()) {
         Pieces.push_back(registerPiece(SourceABICarrierKind::FloatingRegister,
                                        Vector[NextVector++], 0, Type->Size));
@@ -148,19 +165,18 @@ std::optional<SourceParameterPlacement> source_placement::placeAAPCS64(
                (Type->Passing == NdRecordPassing::ByValue ||
                 Type->Passing == NdRecordPassing::Complex)) {
       if (const auto Members = aapcs64FloatingAggregate(Type)) {
-        if (NextVector + Members->size() > Vector.size()) {
-          NextVector = Vector.size();
-          Pieces = OnStack(Type->Size, Type->Alignment);
-        } else {
-          for (const NdScalarLeaf &Member : *Members)
-            Pieces.push_back(registerPiece(
-                SourceABICarrierKind::FloatingRegister, Vector[NextVector++],
-                Member.Offset, Member.Size));
-        }
+        Pieces = Homogeneous(Type, *Members);
+      } else if (const auto Members = sourceAArch64VectorAggregateMembers(Type);
+                 !Members.empty()) {
+        llvm::SmallVector<NdScalarLeaf, kSourceAArch64MaxHVAMembers> Leaves;
+        for (const auto &Member : Members)
+          Leaves.push_back({Member.ByteOffset, Member.Type->Size, false});
+        Pieces = Homogeneous(Type, Leaves);
       } else if (Type->Size > kMaxRegisterRecordBytes) {
         // Without its scalars, a record that could be a homogeneous
         // aggregate has no certain place.
-        if (Type->Size <= kMaxAggregateBytes && !scalarLeaves(Type))
+        if (Type->Size <= kMaxAggregateBytes && !scalarLeaves(Type) &&
+            !equalSourceTypes(Type, Type))
           break;
         Pieces = Address();
       } else {

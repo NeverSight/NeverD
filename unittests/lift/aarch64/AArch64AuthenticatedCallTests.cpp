@@ -12,6 +12,7 @@
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
+#include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/backend/codegen/CodeGen.h"
 #include "neverd/backend/llvm/AArch64/AArch64SourceResultCall.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
@@ -75,11 +76,6 @@ constexpr TypedVariant TypedVariants[] = {
 };
 
 TypeRef typedParameter(char Kind) {
-  if (Kind == kVectorKind) {
-    auto Type = NdType::makeInt(kSourceAArch64Vector128Bytes);
-    Type->SourceName = kSourceAArch64Vector128CType;
-    return Type;
-  }
   if (Kind == kFloatKind)
     return NdType::makeFloat(kFloatBytes);
   if (Kind == kDoubleKind)
@@ -87,6 +83,17 @@ TypeRef typedParameter(char Kind) {
   if (Kind == kPointerKind)
     return NdType::makePtr(NdType::makeVoid());
   switch (Kind) {
+#define A64_CALL_VECTOR_TYPE(Kind, Bytes, Spelling)                            \
+  case Kind: {                                                                 \
+    auto Type = NdType::makeInt(Bytes);                                        \
+    Type->SourceName = Spelling;                                               \
+    return Type;                                                               \
+  }
+#define A64_CALL_ARRAY_TYPE(Kind, Element, Count)                              \
+  case Kind: {                                                                 \
+    auto Type = typedParameter(Element);                                       \
+    return NdType::makeArray(Type, Count, Count * Type->Size);                 \
+  }
 #define A64_CALL_NAMED_POINTER_TYPE(Kind, Name)                                \
   case Kind:                                                                   \
     return NdType::makePtr(NdType::makeNamedRecord(Name));
@@ -395,6 +402,66 @@ void compile(const std::string &Source,
   }
 }
 
+TEST(AArch64AuthenticatedCall, HVARecordNamesKeepVectorAndArrayIdentity) {
+  const auto Word = NdType::makeInt(kPointerBytes);
+  const auto Vector = typedParameter(kVectorKind);
+  auto SmallVector = NdType::makeInt(kSourceAArch64Vector64Bytes);
+  SmallVector->SourceName = kSourceAArch64Vector64CType;
+  EXPECT_NE(typeToC(NdType::makeStruct({Word})),
+            typeToC(NdType::makeStruct({SmallVector})));
+  EXPECT_NE(typeToC(NdType::makeStruct({SmallVector})),
+            typeToC(NdType::makeStruct({Vector})));
+  const auto SmallArray = NdType::makeStruct(
+      {NdType::makeArray(SmallVector, kHVAIndirectParameters,
+                         kHVAIndirectParameters * SmallVector->Size)});
+  const auto WideArray = NdType::makeStruct({NdType::makeArray(
+      Vector, kHVAIndirectParameters, kHVAIndirectParameters * Vector->Size)});
+  EXPECT_NE(typeToC(SmallArray), typeToC(WideArray));
+  const auto LongerArray = NdType::makeStruct(
+      {NdType::makeArray(SmallVector, kHVAIndirectParameters + 1,
+                         (kHVAIndirectParameters + 1) * SmallVector->Size)});
+  EXPECT_NE(typeToC(SmallArray), typeToC(LongerArray));
+}
+
+TEST(AArch64AuthenticatedCall, HVAClassificationAgreesWithClangDarwin) {
+  const auto Inspect = [](llvm::Module &Module) {
+    const auto Check = [&](llvm::StringRef Name, unsigned Bytes, unsigned Count,
+                           bool Indirect) {
+      SCOPED_TRACE(Name.str());
+      auto *Function = Module.getFunction(Name);
+      ASSERT_NE(Function, nullptr);
+      auto *Type = Function->getFunctionType();
+      if (Indirect) {
+        ASSERT_EQ(Type->getNumParams(), kHVAIndirectParameters);
+        EXPECT_TRUE(Type->getReturnType()->isVoidTy());
+        EXPECT_TRUE(Type->getParamType(0)->isPointerTy());
+        EXPECT_TRUE(Type->getParamType(1)->isPointerTy());
+        EXPECT_TRUE(Function->hasParamAttribute(0, llvm::Attribute::StructRet));
+      } else {
+        ASSERT_EQ(Type->getNumParams(), 1U);
+        auto *Array = llvm::dyn_cast<llvm::ArrayType>(Type->getParamType(0));
+        ASSERT_NE(Array, nullptr);
+        EXPECT_EQ(Array->getNumElements(), Count);
+        auto *Vector =
+            llvm::dyn_cast<llvm::FixedVectorType>(Array->getElementType());
+        ASSERT_NE(Vector, nullptr);
+        EXPECT_EQ(
+            Module.getDataLayout().getTypeStoreSize(Vector).getFixedValue(),
+            Bytes);
+        EXPECT_EQ(Module.getDataLayout()
+                      .getTypeStoreSize(Type->getReturnType())
+                      .getFixedValue(),
+                  Count * Bytes);
+      }
+    };
+#define A64_CALL_HVA_COMPILER(Name, Bytes, Count, Indirect)                    \
+  Check(Name, Bytes, Count, Indirect);
+#include "AArch64AuthenticatedCallFixtures.def"
+  };
+  save(kHVACompilerCase, kHighSource, kHVACompilerSource);
+  compile(kHVACompilerSource, Inspect, kHVACompilerCase, false, true);
+}
+
 TEST(AArch64AuthenticatedCall, BothKeysAndZeroModifiersRemainOnTheCall) {
   for (unsigned Key : {0u, 1u})
     for (bool Zero : {false, true})
@@ -483,7 +550,10 @@ void checkTypedShape(const TypedShape &Shape, bool Native) {
     unsigned Words = 0;
     for (const auto &Binding : Bindings)
       Words += (Binding.Type->Size + kPointerBytes - 1) / kPointerBytes;
-    auto Function = function(Variant.Key, false, Words, Variant.Raw);
+    const bool HVAReturn =
+        !sourceAArch64VectorAggregateMembers(ReturnType).empty();
+    auto Function =
+        function(Variant.Key, false, Words + unsigned(HVAReturn), Variant.Raw);
     const bool VectorReturn = isSourceAArch64Vector128Type(ReturnType);
     if (VectorReturn) {
       Function.ReturnType = NdType::makeStruct(
@@ -587,8 +657,49 @@ void checkTypedShape(const TypedShape &Shape, bool Native) {
         Setup.push_back(std::move(Extract));
       }
     }
-    if (!VectorReturn && (ReturnType->Kind == NdTypeKind::Struct ||
-                          ReturnType->Size > kPointerBytes)) {
+    if (HVAReturn) {
+      // Observe every word independently through caller-provided storage.
+      // Word slices also exercise the upper half of each 128-bit member.
+      int Id = kTypedTemporaryId + Bindings.size();
+      for (unsigned Offset = 0; Offset < ReturnType->Size;
+           Offset += kPointerBytes) {
+        MedOp Extract;
+        Extract.Opcode = NdOp::SUBBYTES;
+        Extract.Output.Kind = MedVar::Temp;
+        Extract.Output.Id = Id++;
+        Extract.Output.Size = kPointerBytes;
+        Extract.addInput(Call.Output);
+        Extract.addInput(MedVar::makeConst(Offset, kPromotedIntegerBytes));
+        Setup.push_back(Extract);
+        MedOp Address;
+        Address.Opcode = NdOp::INT_ADD;
+        Address.Output.Kind = MedVar::Temp;
+        Address.Output.Id = Id++;
+        Address.Output.Size = kPointerBytes;
+        Address.addInput(Function.Params.back());
+        Address.addInput(MedVar::makeConst(Offset, kPointerBytes));
+        Setup.push_back(Address);
+        MedOp Store;
+        Store.Opcode = NdOp::STORE;
+        Store.addInput(Address.Output);
+        Store.addInput(Extract.Output);
+        Setup.push_back(std::move(Store));
+      }
+      MedOp Result;
+      Result.Opcode = NdOp::COPY;
+      Result.Output.Kind = MedVar::Reg;
+      Result.Output.Id = Id;
+      Result.Output.TheArch = Arch::AArch64;
+      Result.Output.RegOff = a64reg::X0;
+      Result.Output.Size = kPointerBytes;
+      ++Result.Output.SSAVer;
+      Result.addInput(Function.Params.back());
+      Return.Inputs[0] = Result.Output;
+      Setup.push_back(std::move(Result));
+    }
+    if (!VectorReturn && !HVAReturn &&
+        (ReturnType->Kind == NdTypeKind::Struct ||
+         ReturnType->Size > kPointerBytes)) {
       MedVar Accumulator = MedVar::makeConst(0, kPointerBytes);
       int Id = kTypedTemporaryId + Bindings.size();
       unsigned Version = Call.Output.SSAVer;
@@ -1227,10 +1338,10 @@ TEST(AArch64AuthenticatedCall, NativeIndirectResultsKeepOriginalStorageAndPAC) {
   checkResultStorage(true);
 }
 
-TEST(AArch64AuthenticatedCall, LoweringRetainsNativeVectorAndOriginalX8) {
+void checkNativeVectorStorage(char Kind) {
   const auto Word = NdType::makeInt(kPointerBytes);
   const auto Pointer = NdType::makePtr(Word);
-  const auto Vector = typedParameter(kVectorKind);
+  const auto Vector = typedParameter(Kind);
   const auto Record = NdType::makeStruct({Word, Word, Word});
   SourceFunctionTypeHint Entry, Callee;
   Entry.Origin = Callee.Origin =
@@ -1285,7 +1396,7 @@ TEST(AArch64AuthenticatedCall, LoweringRetainsNativeVectorAndOriginalX8) {
   EXPECT_TRUE(sourceCallRetainsResultStorage(*Info.SourceCallHint));
   ASSERT_EQ(Info.Args.size(), sourceABIParameters(Callee).size() + 1);
   EXPECT_EQ(Info.Args.front().Size, kPointerBytes);
-  EXPECT_EQ(Info.Args[1].Size, kSourceAArch64Vector128Bytes);
+  EXPECT_EQ(Info.Args[1].Size, sourceABIParameters(Callee)[1].Type->Size);
   EXPECT_EQ(Info.Args.back().Size, kPointerBytes);
   EXPECT_EQ(Info.Args.front().Kind, MedVar::Reg);
   EXPECT_EQ(Info.Args.front().RegOff, a64reg::X0);
@@ -1324,10 +1435,23 @@ TEST(AArch64AuthenticatedCall, LoweringRetainsNativeVectorAndOriginalX8) {
       ASSERT_TRUE(HighCEmitter().emit(
           {HighConverter.convert(Med, Arch::AArch64)}, Out, Options));
     }
-    compile(Source, Inspect, kLoweredNativeDirectory, LLVMRoute, true,
+    const auto Case =
+        Kind == kVectorKind
+            ? std::string(kLoweredNativeDirectory)
+            : llvm::formatv(kLoweredNativeTypeDirectory, Kind).str();
+    compile(Source, Inspect, Case, LLVMRoute, true,
             {kExceptionsOption, kNoStackProtectorOption},
             /*CompilerObject=*/true);
   }
+}
+
+TEST(AArch64AuthenticatedCall, LoweringRetainsNativeVectorAndOriginalX8) {
+  checkNativeVectorStorage(kVectorKind);
+}
+
+TEST(AArch64AuthenticatedCall, LoweringRetainsHVAAndOriginalX8) {
+#define A64_CALL_HVA_STORAGE_KIND(Kind) checkNativeVectorStorage(Kind);
+#include "AArch64AuthenticatedCallFixtures.def"
 }
 
 TEST(AArch64AuthenticatedCall,

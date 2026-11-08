@@ -20,14 +20,14 @@ namespace {} // namespace
 bool source_placement::isIntegerScalar(const TypeRef &Type) {
   if (!Type || !Type->Size)
     return false;
-  return (Type->Kind == NdTypeKind::Int &&
-          !isSourceAArch64Vector128Type(Type)) ||
+  return (Type->Kind == NdTypeKind::Int && !sourceAArch64VectorBytes(Type)) ||
          Type->Kind == NdTypeKind::Ptr ||
          (Type->Kind == NdTypeKind::Struct && Type->IsEnum);
 }
 
 bool source_placement::isFloatingScalar(const TypeRef &Type) {
-  return Type && Type->Size && Type->Kind == NdTypeKind::Float;
+  return Type && Type->Size && Type->Kind == NdTypeKind::Float &&
+         !sourceAArch64VectorBytes(Type);
 }
 
 bool source_placement::isRecord(const TypeRef &Type) {

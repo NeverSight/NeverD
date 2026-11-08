@@ -82,10 +82,14 @@ bool neverd::sourceCallUsesMachineABI(const SourceCallTypeHint &Hint,
   const bool NativePhysical =
       sourceCallRetainsNativeCarriers(Hint) &&
       (hasIndirectSourceParameters(Hint.Signature) ||
-       isSourceAArch64Vector128Type(Hint.Signature.ReturnType) ||
+       isSourceAArch64VectorType(Hint.Signature.ReturnType) ||
+       !sourceAArch64VectorAggregateMembers(Hint.Signature.ReturnType)
+            .empty() ||
        std::any_of(Hint.Signature.Parameters.begin(),
                    Hint.Signature.Parameters.end(), [](const auto &Parameter) {
-                     return isSourceAArch64Vector128Type(Parameter.Type);
+                     return isSourceAArch64VectorType(Parameter.Type) ||
+                            !sourceAArch64VectorAggregateMembers(Parameter.Type)
+                                 .empty();
                    }));
   return sourceCallRetainsResultStorage(Hint) ||
          (Format == BinaryFormat::MachO && NativePhysical) ||

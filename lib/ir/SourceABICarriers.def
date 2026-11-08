@@ -30,4 +30,8 @@ SOURCE_ABI_CARRIER_TEXT(kUnpromotedVariadicValue,
                         "Variadic source arguments need default promotions")
 
 #undef SOURCE_ABI_CARRIER_VALUE
+SOURCE_ABI_CARRIER_TEXT(
+    kInvalidDarwinVectorPlacement,
+    "Native vector parameters disagree with Darwin PCS placement")
+
 #undef SOURCE_ABI_CARRIER_TEXT
