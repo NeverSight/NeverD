@@ -4700,12 +4700,16 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
         engineSymbol<SessionLoadFunction>("neverd_type_declarations_load");
     std::string reply;
     StoreNames storesBefore;
+    std::optional<Json> identityBefore;
     if (operation == "local_types_declare") {
       settleNamedViews();
       try {
-        storesBefore = storeNames();
+        identityBefore = storeIdentity();
+        if (identityBefore)
+          storesBefore = storeNames(*identityBefore);
       } catch (const std::exception &) {
         // Later sessions render again.
+        identityBefore.reset();
       }
       const auto source =
           stringField(p, "source", {},
@@ -4738,6 +4742,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     // The project keeps what the user declared at once, as a rename, and
     // undo takes it away again: the declaration after the last.  The
     // sidecar unchanged, so are the types.
+    Json declaredRows;
     if (result.value("problems", Json::array()).empty()) {
       auto &store = *history_;
       const auto checkpoint = store;
@@ -4750,6 +4755,8 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                      {"address", hexAddress(declared.size() - 1)},
                      {"before", nullptr},
                      {"after", declared.back()}});
+        if (identityBefore)
+          declaredRows = declared;
         state["types"] = std::move(declared);
         persistEdit(store, state);
       } catch (...) {
@@ -4766,7 +4773,14 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
         std::none_of(types.begin(), types.end(), [&](const Json &name) {
           return codeEdits.find(name.get<std::string>()) != std::string::npos;
         })) {
-      keepStoresFor(storesBefore);
+      // Of what the stores are kept under, only the declarations moved
+      // (analysisSnapshot's declared_types): the names after read the rest as
+      // the names before did.
+      if (identityBefore && declaredRows.is_array()) {
+        (*identityBefore)["declared_types"] = std::move(declaredRows);
+        keepStoresFor(storesBefore, storeNames(std::move(*identityBefore)));
+      } else
+        keepStoresFor(storesBefore);
       ++revision_;
       namedViewsTakeRevision(false);
       return result;

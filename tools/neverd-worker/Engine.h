@@ -322,6 +322,11 @@ private:
     std::string renders, facts;
   };
   StoreNames storeNames();
+  /// What the stores are kept under (renderStoreIdentity), or none where this
+  /// session keeps no stores.
+  std::optional<Json> storeIdentity();
+  /// The names of the stores kept under \p identity.
+  static StoreNames storeNames(Json identity);
   /// What the render just made read of what the user states, kept as the first
   /// page of its record, and whether what is kept under a record still reads
   /// the same.  Empty, and holding, for an engine that does not tell.
@@ -342,8 +347,10 @@ private:
   Json userFactsAnalysisReads() const;
   /// The job goes over a whole store for what the user changed.
   bool renderAheadVerifying_ = false;
-  /// Says that what the stores keep under \p before holds for the state now.
+  /// Says that what the stores keep under \p before holds for the state now,
+  /// whose stores are named \p after where the caller knows them.
   void keepStoresFor(const StoreNames &before);
+  void keepStoresFor(const StoreNames &before, const StoreNames &after);
   void openFactsStore(const std::string &name, bool writable);
   std::vector<std::string> keptListingFacts(const std::string &key);
   void keepListingFact(const std::string &key, std::string bytes);

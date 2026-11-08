@@ -760,12 +760,17 @@ bool LocalTypesDebugContext::takeDeclarations(
 }
 
 void LocalTypesDebugContext::takeNewTypes(const types::TypeLibrary &Library,
-                                          llvm::ArrayRef<std::string> Names) {
+                                          llvm::ArrayRef<std::string> Names,
+                                          bool NamesHold) {
   std::lock_guard<std::mutex> Guard(Mutex);
   for (const std::string &Name : Names)
     if (const types::LocalType *Type = Library.find(Name))
       Types->define(*Type);
-  // These read every name of the library they were made of.
+  // These read every name of the library they were made of.  A name their
+  // tables lack they spell as it is, as a library that gives it no other
+  // spelling does; what they rendered names none of the new types.
+  if (NamesHold)
+    return;
   Spellers.clear();
   PortablePrototypeSpeller.reset();
   Rendered.clear();
