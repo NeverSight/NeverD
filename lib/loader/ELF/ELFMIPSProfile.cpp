@@ -43,9 +43,13 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
     return profileError("n32 ABI is not supported");
   if (ELFT::Is64Bits && (Flags & EF_MIPS_MICROMIPS))
     return profileError("microMIPS64 encoding is not supported");
-  if (Flags & EF_MIPS_ARCH_ASE_M16)
-    return profileError("MIPS16 encoding is not supported");
-  if (Flags & ((EF_MIPS_ARCH_ASE & ~EF_MIPS_MICROMIPS) | EF_MIPS_MACH))
+  if (ELFT::Is64Bits && (Flags & EF_MIPS_ARCH_ASE_M16))
+    return profileError("MIPS16 64-bit encoding is not supported");
+  if ((Flags & EF_MIPS_MICROMIPS) && (Flags & EF_MIPS_ARCH_ASE_M16))
+    return profileError("conflicting microMIPS and MIPS16 capabilities");
+  if (Flags &
+      ((EF_MIPS_ARCH_ASE & ~(EF_MIPS_MICROMIPS | EF_MIPS_ARCH_ASE_M16)) |
+       EF_MIPS_MACH))
     return profileError("vendor/ASE profile is not supported");
   const uint32_t ISA = Flags & EF_MIPS_ARCH;
   if (ISA != (ELFT::Is64Bits ? EF_MIPS_ARCH_64R2 : EF_MIPS_ARCH_32R2))
@@ -53,9 +57,10 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
   if ((Flags & EF_MIPS_ABI) != (ELFT::Is64Bits ? 0u : EF_MIPS_ABI_O32) ||
       (Flags & EF_MIPS_32BITMODE))
     return profileError("requires ELF32/o32 or ELF64/n64 ABI");
-  constexpr uint32_t KnownFlags =
-      EF_MIPS_NOREORDER | EF_MIPS_PIC | EF_MIPS_CPIC | EF_MIPS_ABI |
-      EF_MIPS_FP64 | EF_MIPS_NAN2008 | EF_MIPS_ARCH | EF_MIPS_MICROMIPS;
+  constexpr uint32_t KnownFlags = EF_MIPS_NOREORDER | EF_MIPS_PIC |
+                                  EF_MIPS_CPIC | EF_MIPS_ABI | EF_MIPS_FP64 |
+                                  EF_MIPS_NAN2008 | EF_MIPS_ARCH |
+                                  EF_MIPS_MICROMIPS | EF_MIPS_ARCH_ASE_M16;
   if (Flags & ~KnownFlags)
     return profileError("unrecognized ELF flags");
 
@@ -63,6 +68,10 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
   Profile.ABI = ELFT::Is64Bits ? MIPSABI::N64 : MIPSABI::O32;
   Profile.ELFFlags = Flags;
   Profile.HasMicroMIPS = Flags & EF_MIPS_MICROMIPS;
+  Profile.HasMIPS16 = Flags & EF_MIPS_ARCH_ASE_M16;
+  const bool Compressed = Profile.HasMicroMIPS || Profile.HasMIPS16;
+  const auto CompressedMode =
+      Profile.HasMIPS16 ? InstructionMode::MIPS16 : InstructionMode::MicroMIPS;
   const auto AddEntry = [&](uint64_t Address,
                             InstructionMode Mode) -> llvm::Error {
     if (Address % instructionModeAlignment(Mode))
@@ -72,30 +81,31 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
       return profileError("conflicting instruction modes at code entry");
     return llvm::Error::success();
   };
-  if ((Header.e_entry & 1) && !Profile.HasMicroMIPS)
-    return profileError("tagged entry without microMIPS capability");
-  if (Header.e_entry && Profile.HasMicroMIPS) {
+  if ((Header.e_entry & 1) && !Compressed)
+    return profileError("tagged entry without compressed MIPS capability");
+  if (Header.e_entry && Compressed) {
     if (auto Error =
             AddEntry(Header.e_entry & ~uint64_t{1},
-                     (Header.e_entry & 1) ? InstructionMode::MicroMIPS
+                     (Header.e_entry & 1) ? CompressedMode
                                           : InstructionMode::MIPSClassic))
       return std::move(Error);
   }
   const auto ReadSymbol = [&](const typename ELFT::Sym &Symbol) -> llvm::Error {
-    if ((Symbol.st_other & 0xf0) == STO_MIPS_MIPS16)
-      return profileError("MIPS16 symbol encoding is not supported");
-    const bool Micro = Symbol.st_other & STO_MIPS_MICROMIPS;
+    const bool MIPS16 = (Symbol.st_other & 0xf0) == STO_MIPS_MIPS16;
+    const bool Micro = !MIPS16 && (Symbol.st_other & STO_MIPS_MICROMIPS);
+    if (MIPS16 && !Profile.HasMIPS16)
+      return profileError("MIPS16 symbol encoding without ELF capability");
     if (Micro && !Profile.HasMicroMIPS)
       return profileError("microMIPS symbol encoding without ELF capability");
-    if (!Profile.HasMicroMIPS)
+    if (!Compressed)
       return llvm::Error::success();
     if (Symbol.st_shndx == SHN_UNDEF ||
         (Symbol.getType() != STT_FUNC && Symbol.getType() != STT_GNU_IFUNC))
       return llvm::Error::success();
-    const uint64_t Start =
-        Micro ? Symbol.st_value & ~uint64_t{1} : uint64_t(Symbol.st_value);
+    const uint64_t Start = Micro || MIPS16 ? Symbol.st_value & ~uint64_t{1}
+                                           : uint64_t(Symbol.st_value);
     const auto Mode =
-        Micro ? InstructionMode::MicroMIPS : InstructionMode::MIPSClassic;
+        Micro || MIPS16 ? CompressedMode : InstructionMode::MIPSClassic;
     if (auto Error = AddEntry(Start, Mode))
       return Error;
     const uint64_t Limit = ELFT::Is64Bits ? InvalidVA : uint64_t{1} << 32;
@@ -207,9 +217,9 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
       return profileError("unsupported .MIPS.abiflags version");
     const uint32_t ASE = Read32(12);
     Profile.HasMSA = ASE & llvm::Mips::AFL_ASE_MSA;
-    if (Profile.HasMSA && (ELFT::Is64Bits || Profile.HasMicroMIPS ||
-                           (ASE & llvm::Mips::AFL_ASE_DSP) || Bytes[3] != 5 ||
-                           Bytes[5] != 3 || Bytes[7] != 6))
+    if (Profile.HasMSA &&
+        (ELFT::Is64Bits || Compressed || (ASE & llvm::Mips::AFL_ASE_DSP) ||
+         Bytes[3] != 5 || Bytes[5] != 3 || Bytes[7] != 6))
       return profileError("MSA requires classic MIPS32r5/o32 FP64 profile");
     if (Bytes[2] != (ELFT::Is64Bits ? 64 : 32) ||
         Bytes[3] != (Profile.HasMSA ? 5 : 2) ||
@@ -218,11 +228,13 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
     if (Bytes[5] > (Profile.HasMSA ? 3 : 2) || Bytes[6] != 0 || Bytes[7] > 7 ||
         Read32(8) != 0 ||
         (ASE & ~(llvm::Mips::AFL_ASE_DSP | llvm::Mips::AFL_ASE_MSA)) !=
-            (Profile.HasMicroMIPS ? llvm::Mips::AFL_ASE_MICROMIPS : 0u) ||
+            (Profile.HasMicroMIPS ? llvm::Mips::AFL_ASE_MICROMIPS
+             : Profile.HasMIPS16  ? llvm::Mips::AFL_ASE_MIPS16
+                                  : 0u) ||
         (Read32(16) & ~1u) != 0 || Read32(20) != 0)
       return profileError("unsupported ABI flags or instruction extensions");
     Profile.HasDSP = ASE & llvm::Mips::AFL_ASE_DSP;
-    if (Profile.HasDSP && (ELFT::Is64Bits || Profile.HasMicroMIPS))
+    if (Profile.HasDSP && (ELFT::Is64Bits || Compressed))
       return profileError("DSP currently requires classic MIPS32r2/o32");
     Profile.ISARevision = Bytes[3];
     Profile.HasABIFlags = true;

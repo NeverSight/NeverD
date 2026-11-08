@@ -1,0 +1,42 @@
+//===- MIPSMSAVectorFixtures.def - Independent literal vector cases -----===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Include with NEVERD_MIPS_MSA_VECTOR(Encoding, ElementBytes, Operation).
+/// Manual-derived words are deliberately independent of production selectors.
+//===----------------------------------------------------------------------===//
+NEVERD_MIPS_MSA_VECTOR(0x7800000e, 1, Add)
+NEVERD_MIPS_MSA_VECTOR(0x7820000e, 2, Add)
+NEVERD_MIPS_MSA_VECTOR(0x7840000e, 4, Add)
+NEVERD_MIPS_MSA_VECTOR(0x7860000e, 8, Add)
+NEVERD_MIPS_MSA_VECTOR(0x7880000e, 1, Sub)
+NEVERD_MIPS_MSA_VECTOR(0x78a0000e, 2, Sub)
+NEVERD_MIPS_MSA_VECTOR(0x78c0000e, 4, Sub)
+NEVERD_MIPS_MSA_VECTOR(0x78e0000e, 8, Sub)
+NEVERD_MIPS_MSA_VECTOR(0x7800001e, 1, And)
+NEVERD_MIPS_MSA_VECTOR(0x7820001e, 1, Or)
+NEVERD_MIPS_MSA_VECTOR(0x7840001e, 1, Nor)
+NEVERD_MIPS_MSA_VECTOR(0x7860001e, 1, Xor)
+NEVERD_MIPS_MSA_VECTOR(0x7800000f, 1, Equal)
+NEVERD_MIPS_MSA_VECTOR(0x7820000f, 2, Equal)
+NEVERD_MIPS_MSA_VECTOR(0x7840000f, 4, Equal)
+NEVERD_MIPS_MSA_VECTOR(0x7860000f, 8, Equal)
+NEVERD_MIPS_MSA_VECTOR(0x7900000f, 1, SignedLess)
+NEVERD_MIPS_MSA_VECTOR(0x7920000f, 2, SignedLess)
+NEVERD_MIPS_MSA_VECTOR(0x7940000f, 4, SignedLess)
+NEVERD_MIPS_MSA_VECTOR(0x7960000f, 8, SignedLess)
+NEVERD_MIPS_MSA_VECTOR(0x7980000f, 1, UnsignedLess)
+NEVERD_MIPS_MSA_VECTOR(0x79a0000f, 2, UnsignedLess)
+NEVERD_MIPS_MSA_VECTOR(0x79c0000f, 4, UnsignedLess)
+NEVERD_MIPS_MSA_VECTOR(0x79e0000f, 8, UnsignedLess)
+NEVERD_MIPS_MSA_VECTOR(0x7a00000f, 1, SignedLessEqual)
+NEVERD_MIPS_MSA_VECTOR(0x7a20000f, 2, SignedLessEqual)
+NEVERD_MIPS_MSA_VECTOR(0x7a40000f, 4, SignedLessEqual)
+NEVERD_MIPS_MSA_VECTOR(0x7a60000f, 8, SignedLessEqual)
+NEVERD_MIPS_MSA_VECTOR(0x7a80000f, 1, UnsignedLessEqual)
+NEVERD_MIPS_MSA_VECTOR(0x7aa0000f, 2, UnsignedLessEqual)
+NEVERD_MIPS_MSA_VECTOR(0x7ac0000f, 4, UnsignedLessEqual)
+NEVERD_MIPS_MSA_VECTOR(0x7ae0000f, 8, UnsignedLessEqual)
+#undef NEVERD_MIPS_MSA_VECTOR

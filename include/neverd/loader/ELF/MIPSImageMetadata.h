@@ -38,6 +38,8 @@ struct MIPSImageMetadata {
   uint8_t ISARevision = 2;
   /// The ELF admits both classic and microMIPS code, not a global micro mode.
   bool HasMicroMIPS = false;
+  /// MIPS16e32 code; mutually exclusive with the microMIPS ASE.
+  bool HasMIPS16 = false;
   /// Classic MIPS32 DSP ASE; the initial slice requires DSP execution enabled.
   bool HasDSP = false;
   /// Initial classic MIPS32r5/o32 integer MSA slice, with FP64 register mode.

@@ -751,6 +751,8 @@ enum class LowInstructionTargetMode : uint8_t {
   FromTargetBit0 = 3,
   MIPSClassic = 4,
   MicroMIPS = 5,
+  MIPS16 = 6,
+  FromMIPS16TargetBit0 = 7,
 };
 
 /// Canonical destination of one LowIR control transfer.
@@ -780,6 +782,7 @@ canonicalizeLowControlTarget(uint64_t RawTarget, InstructionMode SourceMode,
   case InstructionMode::Thumb:
   case InstructionMode::MIPSClassic:
   case InstructionMode::MicroMIPS:
+  case InstructionMode::MIPS16:
     break;
   default:
     return Invalid("control target has an unknown source instruction mode");
@@ -788,7 +791,7 @@ canonicalizeLowControlTarget(uint64_t RawTarget, InstructionMode SourceMode,
   const bool IsAArch32 = SourceMode == InstructionMode::ARM ||
                          SourceMode == InstructionMode::Thumb;
   const bool IsMIPSMode = SourceMode == InstructionMode::MIPSClassic ||
-                          SourceMode == InstructionMode::MicroMIPS;
+                          isMIPSCompressedMode(SourceMode);
   if (RawTarget == InvalidVA)
     return Invalid("control target uses the invalid address");
   if ((IsAArch32 || IsMIPSMode) &&
@@ -810,7 +813,7 @@ canonicalizeLowControlTarget(uint64_t RawTarget, InstructionMode SourceMode,
     Result.Mode = InstructionMode::Thumb;
     break;
   case LowInstructionTargetMode::FromTargetBit0:
-    if (!IsAArch32 && !IsMIPSMode)
+    if ((!IsAArch32 && !IsMIPSMode) || SourceMode == InstructionMode::MIPS16)
       return Invalid("target-bit mode exchange has no admitted source mode");
     Result.Mode = IsMIPSMode ? ((RawTarget & 1) ? InstructionMode::MicroMIPS
                                                 : InstructionMode::MIPSClassic)
@@ -818,11 +821,27 @@ canonicalizeLowControlTarget(uint64_t RawTarget, InstructionMode SourceMode,
                                                 : InstructionMode::ARM);
     Result.Address = RawTarget & ~uint64_t{1};
     break;
+  case LowInstructionTargetMode::FromMIPS16TargetBit0:
+    if (SourceMode != InstructionMode::MIPSClassic &&
+        SourceMode != InstructionMode::MIPS16)
+      return Invalid("MIPS16 target-bit exchange has no matching source mode");
+    Result.Mode = (RawTarget & 1) ? InstructionMode::MIPS16
+                                  : InstructionMode::MIPSClassic;
+    Result.Address = RawTarget & ~uint64_t{1};
+    break;
   case LowInstructionTargetMode::MIPSClassic:
   case LowInstructionTargetMode::MicroMIPS:
+  case LowInstructionTargetMode::MIPS16:
     if (!IsMIPSMode)
       return Invalid("fixed MIPS target has a non-MIPS source mode");
-    Result.Mode = TargetMode == LowInstructionTargetMode::MicroMIPS
+    if ((SourceMode == InstructionMode::MIPS16 &&
+         TargetMode == LowInstructionTargetMode::MicroMIPS) ||
+        (SourceMode == InstructionMode::MicroMIPS &&
+         TargetMode == LowInstructionTargetMode::MIPS16))
+      return Invalid("control target exchanges incompatible compressed ISAs");
+    Result.Mode = TargetMode == LowInstructionTargetMode::MIPS16
+                      ? InstructionMode::MIPS16
+                  : TargetMode == LowInstructionTargetMode::MicroMIPS
                       ? InstructionMode::MicroMIPS
                       : InstructionMode::MIPSClassic;
     break;

@@ -16,6 +16,14 @@
 #include <utility>
 
 namespace neverd {
+std::optional<SourceCallOccurrenceKey>
+sourceCallOccurrenceKey(const LowOp &Operation, Arch Architecture) {
+  if (Architecture == Arch::Unknown ||
+      Operation.Inputs[0].Size != getTargetRegInfo(Architecture).PointerSize)
+    return std::nullopt;
+  return sourceCallOccurrenceKey(Operation);
+}
+
 std::optional<NativeSourceCallKey> nativeSourceCallKey(const LowOp &Operation) {
   return sourceCallOccurrenceKey(Operation);
 }

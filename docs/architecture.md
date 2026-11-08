@@ -15277,6 +15277,16 @@ Capstone aliases as semantics. `MedMIPSReturnTargets` proves source returns
 against captured entry RA, and `MIPSInstructionModeSource` owns mode attributes
 and the numeric code-pointer source qualification boundary. Actual two/four-byte
 head and slot lengths remain in the shared LowIR instruction records.
+The MIPS16e32 subset shares these owners with an explicit MIPS16 family and
+target-bit contract, including register transfers originating in classic code.
+`MIPS16Integer.def` and `MIPSLiftMIPS16` normalize qualified scalar/control
+encodings; EXTEND pairs are one physical instruction and delayed JR accepts
+only one two-byte non-extended slot. B carries unconditional control semantics
+through normalization so CFG does not visit a nonexistent fallthrough.
+MIPS16 symbols are classified before their overlapping microMIPS flag bit.
+Both source routes emit the positive encoding attribute and explicitly exclude
+the other compressed family. GNU as/ld and original-target execution qualify
+the MIPS16 source path separately from LLVM's incomplete assembler support.
 The official Archer C7 V5 example qualifies selected static function views,
 not an entire firmware image. This is an analysis-only addition to the matrix
 above: no MIPS rewrite or guest-process execution backend is claimed. See

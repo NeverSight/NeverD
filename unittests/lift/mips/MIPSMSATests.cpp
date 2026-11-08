@@ -17,6 +17,8 @@
 #include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
+#include "llvm/Support/ErrorHandling.h"
+
 #ifdef NEVERD_MIPS_UNICORN_REFERENCE
 #include "unicorn/unicorn.h"
 #endif
@@ -69,25 +71,28 @@ bool msaExecute(Decoder &Decode, Arch Target, uint32_t Word,
   return true;
 }
 
-enum class VectorOperation { Add, Sub, And, Or, Nor, Xor };
+enum class VectorOperation {
+  Add,
+  Sub,
+  And,
+  Or,
+  Nor,
+  Xor,
+  Equal,
+  SignedLess,
+  UnsignedLess,
+  SignedLessEqual,
+  UnsignedLessEqual
+};
 struct VectorCase {
   uint32_t Encoding;
   unsigned ElementBytes;
   VectorOperation Operation;
 };
 constexpr VectorCase VectorCases[] = {
-    {0x7800000e, 1, VectorOperation::Add},
-    {0x7820000e, 2, VectorOperation::Add},
-    {0x7840000e, 4, VectorOperation::Add},
-    {0x7860000e, 8, VectorOperation::Add},
-    {0x7880000e, 1, VectorOperation::Sub},
-    {0x78a0000e, 2, VectorOperation::Sub},
-    {0x78c0000e, 4, VectorOperation::Sub},
-    {0x78e0000e, 8, VectorOperation::Sub},
-    {0x7800001e, 1, VectorOperation::And},
-    {0x7820001e, 1, VectorOperation::Or},
-    {0x7840001e, 1, VectorOperation::Nor},
-    {0x7860001e, 1, VectorOperation::Xor},
+#define NEVERD_MIPS_MSA_VECTOR(Encoding, Bytes, Operation)                     \
+  {Encoding, Bytes, VectorOperation::Operation},
+#include "MIPSMSAVectorFixtures.def"
 };
 constexpr std::array<uint32_t, 4> VectorInputs[][2] = {
     {{0xffffffff, 0xffffffff, 0, 0}, {1, 0, 1, 0}},
@@ -102,6 +107,28 @@ std::vector<uint8_t> vectorExpected(const VectorCase &Case,
                                     llvm::ArrayRef<uint8_t> B) {
   // Byte-wise carry/borrow is independent of the lifter's sized lane ops.
   std::vector<uint8_t> Result(16);
+  if (Case.Operation >= VectorOperation::Equal) {
+    const bool Signed = Case.Operation == VectorOperation::SignedLess ||
+                        Case.Operation == VectorOperation::SignedLessEqual;
+    const bool Inclusive = Case.Operation == VectorOperation::SignedLessEqual ||
+                           Case.Operation == VectorOperation::UnsignedLessEqual;
+    // Compare bytes from most significant to least significant. Biasing only
+    // the top byte handles signed 64-bit extremes without host signed overflow.
+    for (unsigned Base = 0; Base != 16; Base += Case.ElementBytes) {
+      int Order = 0;
+      for (unsigned J = Case.ElementBytes; J != 0 && !Order; --J) {
+        const unsigned Bias = Signed && J == Case.ElementBytes ? 128 : 0;
+        const unsigned X = A[Base + J - 1] ^ Bias;
+        const unsigned Y = B[Base + J - 1] ^ Bias;
+        Order = X < Y ? -1 : X > Y ? 1 : 0;
+      }
+      const bool True = Case.Operation == VectorOperation::Equal ? Order == 0
+                        : Inclusive                              ? Order <= 0
+                                                                 : Order < 0;
+      std::fill_n(Result.begin() + Base, Case.ElementBytes, True ? 255 : 0);
+    }
+    return Result;
+  }
   int Carry = 0;
   for (unsigned I = 0; I != 16; ++I) {
     if (I % Case.ElementBytes == 0)
@@ -131,6 +158,8 @@ std::vector<uint8_t> vectorExpected(const VectorCase &Case,
     case VectorOperation::Xor:
       Result[I] = A[I] ^ B[I];
       break;
+    default:
+      llvm_unreachable("comparison handled before byte arithmetic");
     }
   }
   return Result;

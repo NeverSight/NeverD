@@ -741,9 +741,7 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
     mips::applyDSPSourceAttributes(*LLVMFunc);
   if (Img && isMIPS(TargetArch))
     if (const auto Mode = Img->instructionModeAt(Func.Entry))
-      if (const char *Attribute = mips::instructionModeLLVMAttribute(*Mode);
-          *Attribute)
-        LLVMFunc->addFnAttr(Attribute);
+      mips::applyInstructionModeLLVMAttributes(*LLVMFunc, *Mode);
   // The physical source entry is independent of native EH admission. Assign
   // its checked stack convention before any earlier caller sees the symbol.
   if (TargetArch == Arch::X86 && TargetFormat == BinaryFormat::COFF &&

@@ -78,10 +78,13 @@ checkedInstructionOperations(const LowBlock &Block,
   const auto Ops = llvm::ArrayRef<LowOp>(Block.Ops).slice(Instruction.FirstOp,
                                                           Instruction.OpCount);
   if (const auto &Slot = Instruction.DelaySlot) {
-    const bool Lengths = Instruction.Mode == InstructionMode::MicroMIPS
-                             ? (Slot->Offset == 2 || Slot->Offset == 4) &&
-                                   (Slot->Size == 2 || Slot->Size == 4)
-                             : Slot->Offset == 4 && Slot->Size == 4;
+    const bool Lengths =
+        Instruction.Mode == InstructionMode::MIPS16
+            ? (Slot->Offset == 2 || Slot->Offset == 4) && Slot->Size == 2
+        : Instruction.Mode == InstructionMode::MicroMIPS
+            ? (Slot->Offset == 2 || Slot->Offset == 4) &&
+                  (Slot->Size == 2 || Slot->Size == 4)
+            : Slot->Offset == 4 && Slot->Size == 4;
     if (!Lengths || Instruction.Size != Slot->Offset + Slot->Size ||
         Slot->FirstOp > Ops.size() ||
         Slot->OpCount > Ops.size() - Slot->FirstOp)

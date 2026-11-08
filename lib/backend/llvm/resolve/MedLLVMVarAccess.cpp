@@ -1053,8 +1053,7 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
 
       if (isCodeAddressProvenance(V.Provenance)) {
         va_t Address = V.ConstVal;
-        if (Img && (Img->Mode == InstructionMode::MixedMIPS ||
-                    Img->Mode == InstructionMode::MicroMIPS)) {
+        if (Img && (hasCompressedMIPSCode(Img->Mode))) {
           const auto Entry = mips::serializedCodeTarget(*Img, Address);
           if (!Entry)
             throw std::invalid_argument(

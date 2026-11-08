@@ -19,8 +19,7 @@ namespace neverd {
 inline std::optional<va_t>
 qualifiedMIPSControlTarget(const BinaryImage &Image, InstructionMode Source,
                            LowInstructionTargetMode Contract, va_t RawTarget) {
-  if (Image.Mode != InstructionMode::MixedMIPS &&
-      Image.Mode != InstructionMode::MicroMIPS)
+  if (!hasCompressedMIPSCode(Image.Mode))
     return RawTarget;
   auto Target = canonicalizeLowControlTarget(RawTarget, Source, Contract);
   if (!Target) {
@@ -37,8 +36,7 @@ inline std::optional<va_t> qualifiedMIPSCallTarget(const BinaryImage &Image,
                                                    const LowBlock &Block,
                                                    size_t Operation,
                                                    va_t RawTarget) {
-  if (Image.Mode != InstructionMode::MixedMIPS &&
-      Image.Mode != InstructionMode::MicroMIPS)
+  if (!hasCompressedMIPSCode(Image.Mode))
     return RawTarget;
   const auto End = std::upper_bound(
       Block.InstructionBoundaries.begin(), Block.InstructionBoundaries.end(),

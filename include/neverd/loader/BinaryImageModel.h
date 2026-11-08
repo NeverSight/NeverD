@@ -777,9 +777,11 @@ struct BinaryImage {
   instructionModeAt(va_t Addr,
                     std::optional<InstructionMode> IncomingMode = {}) const {
     if (isMIPS(Arch) && Mode == InstructionMode::MixedMIPS) {
-      if (!MIPS || !MIPS->HasMicroMIPS || !isCodeAddress(Addr) ||
+      if (!MIPS || MIPS->HasMicroMIPS == MIPS->HasMIPS16 ||
+          !isCodeAddress(Addr) ||
           (IncomingMode && *IncomingMode != InstructionMode::MIPSClassic &&
-           *IncomingMode != InstructionMode::MicroMIPS))
+           *IncomingMode != (MIPS->HasMIPS16 ? InstructionMode::MIPS16
+                                             : InstructionMode::MicroMIPS)))
         return std::nullopt;
       std::optional<InstructionMode> Proven;
       const auto Region =
@@ -2040,8 +2042,7 @@ struct BinaryImage {
     if (isMIPS(Arch)) {
       const auto LocalMode = instructionModeAt(Normalized);
       return LocalMode &&
-             Normalized % (*LocalMode == InstructionMode::MicroMIPS ? 2 : 4) ==
-                 0;
+             Normalized % (isMIPSCompressedMode(*LocalMode) ? 2 : 4) == 0;
     }
     if (Arch == neverd::Arch::AArch64)
       return Normalized % 4 == 0;
