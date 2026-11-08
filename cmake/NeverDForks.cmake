@@ -86,10 +86,17 @@ function(neverd_populate_fork Name)
     set(_script "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../scripts/fork_dependencies.py")
     set(_snapshot "${CMAKE_BINARY_DIR}/.neverd-deps/snapshot.json")
     if(NOT EXISTS "${_snapshot}")
-      execute_process(COMMAND "${Python3_EXECUTABLE}" "${_script}" refresh "${CMAKE_BINARY_DIR}"
+      execute_process(COMMAND "${Python3_EXECUTABLE}" "${_script}" refresh "${CMAKE_BINARY_DIR}" --configure
         RESULT_VARIABLE _result)
       if(NOT _result EQUAL 0)
         message(FATAL_ERROR "Cannot resolve NeverSight fork default branches")
+      endif()
+    endif()
+    if(NOT TARGET neverd-check-fork-heads)
+      execute_process(COMMAND "${Python3_EXECUTABLE}" "${_script}" begin-configure "${CMAKE_BINARY_DIR}"
+        RESULT_VARIABLE _reader_result)
+      if(NOT _reader_result EQUAL 0)
+        message(FATAL_ERROR "Cannot record the fork sources consumed by this configuration")
       endif()
     endif()
     file(READ "${_snapshot}" _json)

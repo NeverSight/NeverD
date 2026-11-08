@@ -84,6 +84,11 @@ a test binary. Its arrival source adds 7,680 message truth-table cases and
 960 complete two-slot lifetimes across every fixed vector, plus reserved-vector
 refusal and coalesced trigger-mode changes through EOI. These are constant
 expressions, not runtime tests or captured arrival traces.
+The priority source checks all 256 initial TPR bytes against every legal CR8
+write, all 60 reserved source bits, paired-state import mismatch and post-write
+priority admission. Same-value writes must clear subpriority; reads, imports
+and refused writes must preserve their corresponding banks. These compile-only
+checks do not qualify MOV-CR8 execution or automatic scheduler synchronization.
 For a real save, compile projected bank initializers at O0/O2,
 inspect constant bytes, and keep hypothetical register transitions distinct
 from captured observations. No guest, handler or device callback need run.
@@ -4682,6 +4687,45 @@ benefit from a scheduler that improves parallel batches. Alternate backend
 order and retain paired measurements and CPU time alongside output hashes.
 The full build's `neverd-acceleration-bench` target reports wall and process CPU
 time separately; use both when the host has competing workloads.
+
+Shared fork exports are owned at `scripts/fork_dependencies.py::refresh` and
+the `scripts/build.py` configure/build boundary. On POSIX, a successful
+configuration retires newly managed commit directories that are no longer
+referenced by the current snapshot, configured graph or named frozen readers.
+The ownership journal is written before creation, and its matching marker is
+removed last during retirement. Retry journals occupy fixed files. Existing
+unmarked exports are not adopted or deleted; reusable `_deps` build caches,
+installed SDKs and other build directories remain caller-owned.
+
+A failed configuration retains both the previous graph and pending snapshot.
+The next supported build first completes that pending configuration before
+refreshing remote heads. Fix the reported configuration error and rerun
+`scripts/build.py`; repeated failures do not export more revisions. Initial
+plain CMake configuration records a pending reader too, which the build wrapper
+completes. Do not run plain CMake and the wrapper concurrently in one directory.
+The wrapper passes its POSIX lock to CMake: interrupting or killing the Python
+owner does not permit retirement while its surviving CMake process still runs.
+An interrupted wrapper may therefore leave CMake finishing its current work.
+Windows retains the previous no-retirement policy; orphaned CMake reader
+locking there is not qualified by the POSIX implementation.
+
+Before retaining fork source paths for a frozen benchmark or external reader,
+register them while they are still current:
+
+```bash
+python3 scripts/fork_dependencies.py retain BUILD_DIR --reader frozen-baseline
+# Release only when no reader needs those exported source paths.
+python3 scripts/fork_dependencies.py release BUILD_DIR --reader frozen-baseline
+```
+
+`retain --snapshot SNAPSHOT.json` accepts an earlier saved snapshot only while
+its archives still exist. Reader names do not expire automatically. Run
+`python3 -m unittest scripts.tests.test_fork_dependencies scripts.tests.test_fork_export_lifecycle -v`
+for tiny local Git/archive/CMake fixtures covering normal refresh and builds,
+repeated success and configure failure, frozen readers and protected caches,
+archive failures, SIGINT/SIGTERM/SIGKILL, surviving CMake child locks and
+interrupted ownership creation/retirement. Tests remove their own fixture trees.
+They neither refresh the real dependency submodules nor clean real build trees.
 
 Local Capstone experiment drivers use
 `scripts/capstone_perf_lifecycle.py::Experiment` around preparation, compilation,
@@ -21359,6 +21403,32 @@ complete backtraces and C++ exception destruction; signed controls terminate
 with an uncaught exception at both levels. They reproduce the boundary without
 handwritten frame CFI and are unavailable coverage, not passing NeverD signed
 unwind qualification.
+
+### Arm64e dyld installation
+
+`MachOArm64eInstallation.*` exercises transactional authenticated dyld
+installation in the six arm64e chain formats. It covers all keys and address
+diversity settings, local/import identities, special library ordinals,
+16/24-bit import indices, every import-table encoding, existing plain words,
+4/16 KiB pages, overflow starts, new RX/RW segments, signature extents,
+reordered segment-target ordinals and unchanged input on rejection.
+Independent literal words and the separate analysis loader check the installed
+representation.
+
+`AppleClang/MachOArm64eNativeInstallation.*` compiles actual arm64e dylibs at
+O0/O2, installs sixteen recipes including a new libSystem import both in
+existing storage and in newly appended RX/RW segments, re-signs with the
+production signer, verifies the result strictly and asks Apple's
+`dyld_info` to decode every target, key and discriminator. Compiler-generated
+C++ compact frames retain their ranges, encodings, personality slots and LSDA
+addresses. A separate, explicit assembly input supplies signed DWARF CFI for
+instruction-by-instruction IB state replay; it is not compiler-generated
+exception-unwind evidence. These tests inspect files and do not execute dyld,
+C++ cleanup or the native signed unwinder. Non-Apple hosts explicitly skip the
+Apple-tool cases. `NEVERD_ARM64E_DYLD_ARTIFACT_DIR` exports qualification inputs
+and diagnostics; ordinary runs remove their temporary directory.
+The [qualification record](evidence/arm64e-dyld-install-2026-11-08.json)
+records the native inputs, integration checks and remaining validation limits.
 
 ### Arm64e verifier artifact ownership
 

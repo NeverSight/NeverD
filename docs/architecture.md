@@ -1379,9 +1379,35 @@ diversity accompany the final storage address and resolved unsigned target.
 Authenticated storage requires a consuming installer. Its result is not
 overwritten by the object writer's authentication metadata encoding. This MC
 contract is the handoff for a dyld fixup installer, not an offline PAC signing
-operation. NeverD's arm64e whole-image publication guard remains until storage
-installation and signed-unwind validation are complete; the r6 prebuilt does
-not yet expose the new fork interface.
+operation. The r6 prebuilt does not yet expose this fork interface.
+
+`MachOAuthenticatedFixups` installs explicit final-address signing recipes in
+linked arm64e chained images. It reuses the strict dependency reader's owned
+segments, imports and raw slots, preserves existing binding identities, and
+rebuilds single/multiple-start pages with each format's native stride and index
+width. Local targets retain their mapped image owner; imported targets retain
+the exact existing library ordinal, symbol, addend and weak flag. The six
+arm64e chain formats share the same pointer-field authority. Segmented chains
+cannot express binds and reject them. Imports may extend the table but do not
+create dependency load commands or infer a provider.
+
+Installation is transactional, including the optional recipe handoff in
+`MachOPatcher::appendReplacementImage`. New RX/RW placement precedes dyld
+encoding so address diversity uses the final storage VA. Re-decoding compares
+every requested recipe and preserves every original fixup. A staged signature
+remains opaque and terminal in LINKEDIT so the existing publication signer can
+replace it; retaining those bytes does not validate its old hashes. An
+independent replay also checks recipes after final code signing.
+
+The complete transaction compares original dependencies from before segment
+insertion, including segmented pointers whose target ordinal would otherwise
+change when a new load command is inserted. Such a changed target is rejected
+without publishing any bytes.
+
+This installation phase does not enable whole-image arm64e publication. The
+compiler/native-object producer handoff, legacy threaded-stream installation,
+new provider admission and native signed call/unwind execution remain separate
+contracts. The publication guard remains until those contracts are qualified.
 
 The shared AAPCS64 parameter placement owner describes Darwin fixed value
 spills with their natural size and alignment after either register bank is
@@ -18484,6 +18510,12 @@ arrival routing/timing, global arbitration, TPR/CR8 synchronization and external
 EOI routing stay with the embedding. The offline QEMU bank adapter calls this type's
 constant initializer/validator instead of duplicating priority rules in Python.
 See the [local APIC contract](x86-local-apic.md).
+Its CR8 read/write methods and paired CPU/APIC import check preserve the
+distinction between restoration and an actual same-value write. The former
+retains TPR subpriority; the latter clears it. Privilege/fault handling and
+instruction/device completion wiring remain with the embedding. The fixed
+PPR tie policy retains TPR subpriority as QEMU/KVM do, rather than inferring a
+model-specific choice for arbitrary hardware.
 
 `X64FunctionCallHandlers` composes a producer-declared delivered handler context
 with a pending original CALL. The interface requires call-site pauses so that

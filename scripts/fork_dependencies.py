@@ -12,8 +12,9 @@ import os
 from pathlib import Path
 import re
 import subprocess
-import tempfile
 import time
+
+from fork_exports import Exports, write_json
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,20 +23,6 @@ REPOSITORIES = ROOT / "third_party/forks.json"
 
 def timestamp():
     return datetime.now(timezone.utc).isoformat()
-
-
-def write_json(path, data):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False,
-                                     encoding="utf-8") as stream:
-        temporary = Path(stream.name)
-        json.dump(data, stream, indent=2)
-        stream.write("\n")
-    try:
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def digest(path):
@@ -69,13 +56,11 @@ def build_lock(build):
             import fcntl
             fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
         try:
-            yield
+            yield stream.fileno()
         finally:
             if os.name == "nt":
                 stream.seek(0)
                 msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
 def resolve_head(repository):
@@ -150,35 +135,41 @@ def refresh(build, repositories=None):
     """Caller holds build_lock. Publish the snapshot only after every fetch succeeds."""
     build = Path(build).resolve()
     repositories = repositories or json.loads(REPOSITORIES.read_text())
+    exports = Exports(build)
+    exports.require_refreshable()
+    exports.collect()
     previous_path = build / ".neverd-deps/snapshot.json"
     previous = json.loads(previous_path.read_text()) if previous_path.exists() else {}
-    # Separate build directories share the checkout but compile immutable
-    # exports. Updating one submodule cannot modify another build's sources.
-    with build_lock(ROOT / "build-fork-cache"):
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            heads = dict(zip(repositories, executor.map(resolve_head, repositories.values())))
-        working_sources = update_submodules(heads)
-        for name, source in heads.items():
-            archive = build / "third_party" / library_name(name) / source["commit"] / "source.tar.gz"
-            archive.parent.mkdir(parents=True, exist_ok=True)
-            old = previous.get("sources", {}).get(name, {})
-            if archive.exists():
-                checksum = digest(archive)
-                if old.get("commit") == source["commit"] and checksum != old.get("sha256"):
-                    raise RuntimeError(f"Cached source archive changed: {archive}")
-            else:
-                temporary = archive.with_suffix(".download")
-                try:
-                    create_archive(working_sources[name], source["commit"], temporary)
-                    checksum = digest(temporary)
-                    os.replace(temporary, archive)
-                finally:
-                    temporary.unlink(missing_ok=True)
-            source.update(archive=archive.as_posix(), sha256=checksum)
-            print(f"{name}: {source['branch']} @ {source['commit']}", flush=True)
-    snapshot = {"schema": 1, "resolved_at": timestamp(), "sources": heads}
-    write_json(previous_path, snapshot)
-    return previous_path
+    try:
+        # Separate build directories share the checkout but compile immutable
+        # exports. Updating one submodule cannot modify another build's sources.
+        with build_lock(ROOT / "build-fork-cache"):
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                heads = dict(zip(repositories, executor.map(resolve_head, repositories.values())))
+            working_sources = update_submodules(heads)
+            for name, source in heads.items():
+                archive = build / "third_party" / library_name(name) / source["commit"] / "source.tar.gz"
+                exports.create(archive.parent)
+                old = previous.get("sources", {}).get(name, {})
+                if archive.exists():
+                    checksum = digest(archive)
+                    if old.get("commit") == source["commit"] and checksum != old.get("sha256"):
+                        raise RuntimeError(f"Cached source archive changed: {archive}")
+                else:
+                    temporary = archive.with_suffix(".download")
+                    try:
+                        create_archive(working_sources[name], source["commit"], temporary)
+                        checksum = digest(temporary)
+                        os.replace(temporary, archive)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+                source.update(archive=archive.as_posix(), sha256=checksum)
+                print(f"{name}: {source['branch']} @ {source['commit']}", flush=True)
+        snapshot = {"schema": 1, "resolved_at": timestamp(), "sources": heads}
+        write_json(previous_path, snapshot)
+        return previous_path
+    finally:
+        exports.collect()
 
 
 def check(build, expected=None):
@@ -218,14 +209,35 @@ def check_install(build, configuration):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("refresh", "check", "check-install"))
+    parser.add_argument("mode", choices=("refresh", "check", "check-install", "begin-configure", "retain", "release"))
     parser.add_argument("build", type=Path)
     parser.add_argument("--expected")
     parser.add_argument("--config", default="")
+    parser.add_argument("--reader")
+    parser.add_argument("--snapshot", type=Path)
+    parser.add_argument("--configure", action="store_true")
     args = parser.parse_args()
     if args.mode == "refresh":
         with build_lock(args.build):
             refresh(args.build)
+            if args.configure:
+                Exports(args.build).begin_configuration()
+    elif args.mode == "begin-configure":
+        # The supported wrapper already holds the inherited build lock.
+        snapshot = args.build / ".neverd-deps/snapshot.json"
+        if os.environ.get("NEVERD_DEPENDENCY_SNAPSHOT") == digest(snapshot):
+            Exports(args.build).begin_configuration()
+        else:
+            with build_lock(args.build):
+                Exports(args.build).begin_configuration()
+    elif args.mode in ("retain", "release"):
+        with build_lock(args.build):
+            exports = Exports(args.build)
+            if args.mode == "retain":
+                source = json.loads(args.snapshot.read_text()) if args.snapshot else exports.snapshot()
+                exports.retain(args.reader, source)
+            else:
+                exports.release(args.reader)
     elif args.mode == "check":
         check(args.build, args.expected)
     else:
