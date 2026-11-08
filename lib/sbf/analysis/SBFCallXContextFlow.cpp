@@ -316,9 +316,9 @@ struct ContextState {
                                   Other.Origins[R], Other.InputExpressions[R])
                 : std::nullopt;
     for (unsigned R = 0; R < kRegisterCount; ++R)
-      Registers[R].join(Other.Registers[R]);
+      Registers[R].join(Other.Registers[R], Coordinates->Addresses.get());
     for (unsigned R = 0; R < kRegisterCount; ++R)
-      Origins[R].join(Other.Origins[R]);
+      Origins[R].join(Other.Origins[R], Coordinates->Addresses.get());
     Scratch.Memory.meet(Other.Scratch.Memory);
     Scratch.Values.joinValues(Other.Scratch.Values);
     Scratch.Values.includeCells(ConditionalObjects,
@@ -2033,11 +2033,7 @@ void ContextFlow::addMemoryAccessEffects(MemoryEffects &Effects,
                    }))
     Origins = State.Registers[AddressRegister];
   for (const auto &Origin : possibleValues(Origins)) {
-    RegisterState Base{};
-    Base[0] = Origin;
-    Effects.addWrite(substituteOrigin({RegisterValue::Kind::StackAddress, 1,
-                                       Instruction.Offset},
-                                      Base, Program),
+    Effects.addWrite(offsetMemoryAccess(Origin, Instruction.Offset),
                      Instruction.Width / kBitsPerByte, Program,
                      CapturedAddresses.get());
   }

@@ -16090,6 +16090,20 @@ full-word tags and reversed CFG edge order. Register clobbers, changed bases,
 intervening stores/calls and narrow loads cannot reuse the earlier full-word
 field. Raw bytecode execution independently checks both branches and the
 different callback values after mutations.
+`OverflowingCapturesKeepOnlyProvenNumericBounds` exercises the five-alternative
+join through the typed-memory owner, including both input orders, unavailable
+or wrapping bounds, negative offsets and frame coordinates. Rejoining captures
+already covered by the widened range must leave the state unchanged.
+`OverflowingCapturedWritesPreserveDisjointStackFields` joins three returned
+captures with two sentinels in registers and a spilled field. Independent raw
+execution covers every branch, with reversed CFG edge order, bounded heap
+writes, overlapping stack writes, shifted addresses and unknown bounds. A
+selector skips invalid sentinel writes at runtime without refining the joined
+pointer. Possible aliases must still invalidate the saved callback.
+These writes run both inline and through a callee, with zero and positive
+memory offsets. `OffsetStoreRangesKeepModularFootprints` additionally checks
+positive and negative wrapped footprints through instruction transfer and
+summary binding, while ordinary scalar arithmetic remains conservative.
 The pinned 72-file native-object scan described in [sbf-corpus.md](sbf-corpus.md)
 is separate from these synthetic execution tests and from official VM gates.
 
