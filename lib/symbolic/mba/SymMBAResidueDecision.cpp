@@ -114,18 +114,27 @@ class LowWordDecisions {
   // every valid key separate from both dense-map sentinel values.
   llvm::DenseMap<uint64_t, unsigned> Zeros;
   struct WordOperation {
+    std::array<uint64_t, 4> Edges{};
+    unsigned Count = 0;
     SymOp Op;
-    Bits A, B;
     bool operator==(const WordOperation &) const = default;
   };
-  struct WordOperationHash {
-    size_t operator()(const WordOperation &K) const {
-      return size_t(llvm::hash_combine(
-          K.Op, llvm::hash_combine_range(K.A.begin(), K.A.end()),
-          llvm::hash_combine_range(K.B.begin(), K.B.end())));
+  struct WordOperationInfo {
+    // Arithmetic operands have nonempty observed words. Neither sentinel
+    // can alias an admitted operation, including an eight-bit zero prefix.
+    static WordOperation getEmptyKey() { return {{}, 0, SymOp::Add}; }
+    static WordOperation getTombstoneKey() {
+      return {{}, UINT_MAX, SymOp::Add};
+    }
+    static unsigned getHashValue(const WordOperation &K) {
+      return unsigned(llvm::hash_combine(K.Op, K.Count, K.Edges[0], K.Edges[1],
+                                         K.Edges[2], K.Edges[3]));
+    }
+    static bool isEqual(const WordOperation &A, const WordOperation &B) {
+      return A == B;
     }
   };
-  std::unordered_map<WordOperation, Bits, WordOperationHash> Arithmetic;
+  llvm::DenseMap<WordOperation, Bits, WordOperationInfo> Arithmetic;
 
   bool charge(size_t Units = 1, size_t Bytes = 0) {
     if (Failed)
@@ -363,8 +372,19 @@ class LowWordDecisions {
       if (One(B))
         return A;
     }
-    const WordOperation Key =
-        A < B ? WordOperation{Op, A, B} : WordOperation{Op, B, A};
+    // Every complemented edge fits in a 16-bit lane. Pack both complete
+    // ordered words, retaining their precision and operation separately.
+    // Dense buckets own the inline result; no reference escapes a lookup.
+    static_assert(2 * limits::kMaxResidueDecisionNodes <= (1u << 16));
+    static_assert(limits::kMaxAffineResidueTableBits <= 8);
+    const bool Ordered = A < B;
+    const auto &Left = Ordered ? A : B;
+    const auto &Right = Ordered ? B : A;
+    WordOperation Key{{}, unsigned(A.size()), Op};
+    for (size_t I = 0; I < A.size(); ++I) {
+      Key.Edges[I / 4] |= uint64_t(Left[I]) << (16 * (I % 4));
+      Key.Edges[2 + I / 4] |= uint64_t(Right[I]) << (16 * (I % 4));
+    }
     if (auto It = Arithmetic.find(Key); It != Arithmetic.end())
       return It->second;
     Bits Result;
@@ -395,9 +415,11 @@ class LowWordDecisions {
         Result = multiply(A, B);
       }
     }
-    if (!charge(1, sizeof(WordOperation) + sizeof(Bits) + 4 * sizeof(void *)))
+    // Both key and result fit inline; prepay each complete bucket growth
+    // before inserting, instead of allocating one hash node per operation.
+    if (!charge() || !reserveEntry(Arithmetic))
       return Bits(A.size(), 0);
-    Arithmetic.emplace(Key, Result);
+    Arithmetic.try_emplace(Key, Result);
     return Result;
   }
 

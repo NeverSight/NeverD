@@ -5313,6 +5313,11 @@ dense tables, avoiding one heap allocation per cached fact. Their values are
 copied before recursion, and complete bucket growth is charged before insertion.
 Decision-word caches and interned signature keys retain stable references for
 callers that keep them across recursive insertions.
+Arithmetic cache keys pack every complemented edge into a 16-bit lane, with
+precision and operation retained separately. Dense buckets own their inline
+results; callers copy those results before recursion. Bucket growth is prepaid
+against scratch storage, avoiding per-operation hash-node allocation without
+weakening exact identity or changing the work allowance.
 Native key construction reads inline constants without entering the wide
 literal reader.
 Decision identity hits and terminal two-input Boolean operations return before
