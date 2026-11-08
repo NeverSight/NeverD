@@ -1289,14 +1289,14 @@ authentication operations. Unproved LLVM operations remain explicit.
 temporary consumed by an indirect call in the same block. Only scalar copies
 may intervene; memory reads/writes, control flow, other calls, operand
 redefinitions, extra uses, dead calls and mutable non-SSA functions cannot
-absorb the authentication. LLVM attaches the original key/discriminator to
-the call's `ptrauth` operand bundle, preserving the signed input even when LR
+absorb the authentication. Ordinary LLVM calls attach the original
+key/discriminator to the `ptrauth` operand bundle, preserving the signed input even when LR
 supplied an original operand. Generic and recovered native C calls use
 auth-and-resign to the compiler's default function-pointer schema in both C
 projections. Explicit Darwin C call-site prototypes use the shared machine-call
 bridge described below, retaining the actual BLRAA/BLRAB and original result
-registers. A resolved display name cannot
-replace that authenticated target, and exact LLVM call prototypes remain
+registers. A resolved display name cannot replace that authenticated target,
+and exact LLVM call prototypes remain
 exact. Explicit source call-site prototypes and recovered native C prototypes
 retain the original target, including floating arguments/results and a
 variadic fixed prefix where declared. They cannot authenticate to a raw pointer
@@ -1311,8 +1311,8 @@ preserves it during method assembly. Modified prefixes and arbitrary
 conditional or mutating directives remain unsupported.
 Generic and recovered native calls at Clang O0 can retain an intermediate
 resign and produce a different invalid-PAC diagnostic from the original branch;
-this is not exact exception-syndrome
-equivalence. Model rejection evidence compares exception classes; complete ESR
+this is not exact exception-syndrome equivalence. Model rejection evidence
+compares exception classes; complete ESR
 and exact fault-PC equality remain unqualified. Whole-image arm64e rebuilding
 still requires the separate
 authenticated storage, relocation and signed-unwind ABI contract.
