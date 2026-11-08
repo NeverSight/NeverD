@@ -15095,7 +15095,7 @@ libraries supplied by the CMake helper.
 | `lib/loader` | Format detection, PE/COFF, ELF, and Mach-O loading; normalized `BinaryImage`; function discovery | LLVM Object APIs, `NeverDDigest` |
 | `lib/lift` | Hand-written x86/i386, AArch64, and ARM32 instruction semantics | IR data types, `NeverDIRLowValidation` |
 | `lib/decode` | Capstone/native decode and dispatch into the architecture lifters | `NeverDIR`, `NeverDLift` |
-| `lib/ir` | Common types plus LowIR, MedIR, HighIR, intrinsic definitions/transforms, and target register metadata | Its IR and register subcomponents |
+| `lib/ir` | Common types plus LowIR, MedIR, HighIR, and intrinsic definitions/transforms | Its four IR subcomponents |
 | `lib/pipeline` | Function detection and Low/Med/High/LLVM route orchestration | IR, decode, lift, LLVM backend, debug info, IR passes |
 | `lib/backend/c` | HighIR-to-C and LLVM-IR-to-C rendering, and HighC spelled in C++, Rust and Go | IR |
 | `lib/backend/llvm` | MedIR-to-LLVM lowering | IR |
@@ -15114,12 +15114,6 @@ libraries supplied by the CMake helper.
 | `lib/translate` | Versioned guest state/policy/exits, fixed runtime ABI, checked guest memory, generated-IR/object/LinkGraph audits, sealed native linking, and the experimental x86-64-to-AArch64 C++ dispatcher | IR, LLVM, LLVM Object, and JITLink contracts |
 
 `NeverDDigest` owns one-shot SHA-256 in `lib/support`, with no Loader or IR dependency. Runtime dispatch selects x86 SHA extensions or little-endian ARM64 SHA2 only when the host reports support, otherwise retaining LLVM's portable implementation. Linux ARM64 checks the kernel's `AT_HWCAP` SHA2/Advanced SIMD bits, including when `/proc` is unavailable; Windows uses LLVM's processor-feature mapping. Darwin ARM64 uses the documented `hw.optional.arm.FEAT_SHA256` sysctl because LLVM's host map is empty there. The decision is cached, unknown or failed queries fall back, and target-specific instructions stay inside the compression function. Both accelerated implementations share the `.def` constants, padding, digest encoding and bounded cancellation checkpoints. `loader/InputDigest.h` remains a forwarding header.
-
-`NeverDIRRegisters` owns target register metadata and the architecture register
-name/mapping implementations. LowIR validation, Lift and the aggregate IR library
-link it directly. Architecture-aware call validation can therefore query the
-same target widths without pulling the full lifting and IR pipeline into small
-symbolic test executables.
 
 `NeverDIRLowValidation` owns `lowUndefinedOperationDigest`; Lift links that owner explicitly. The v1 identity retains the same domain, little-endian words, all six stored input slots, provenance and source coordinates. Serialization uses at most 64 KiB for up to 199 operations; larger spans use the original incremental path. Both paths enumerate the same fields and preserve evidence checks.
 

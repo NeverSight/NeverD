@@ -17,8 +17,11 @@ add_subdirectory(debug)
 add_subdirectory(types)
 add_subdirectory(libc)
 
-# The MedIR ABI pass queries the libc catalog. Keep that archive dependency
-# explicit so one-pass static linkers rescan it after its consumers.
+# Target register metadata delegates architecture-specific names to the
+# lifters, while the MedIR ABI pass queries the libc catalog.  Keep those
+# archive dependencies explicit so one-pass static linkers rescan them after
+# their consumers.
+target_link_libraries(NeverDIR PUBLIC NeverDLift)
 target_link_libraries(NeverDIRMed PUBLIC NeverDLibC)
 
 add_subdirectory(support)

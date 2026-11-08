@@ -23,7 +23,6 @@ add_neverd_component_library(NeverDIRLowValidation
 
   LINK_COMPONENTS
   Digest
-  IRRegisters
 )
 
 add_neverd_component_library(NeverDIRRegistrationState
