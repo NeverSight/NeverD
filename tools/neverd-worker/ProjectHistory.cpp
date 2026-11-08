@@ -1164,6 +1164,8 @@ void ProjectHistory::persistPatches(PatchRows rows) {
 
 void ProjectHistory::finishWrites() { writes_->finish(); }
 
+bool ProjectHistory::writesPending() { return !writes_->idle(); }
+
 void ProjectHistory::settleWrites() noexcept {
   try {
     writes_->finish();

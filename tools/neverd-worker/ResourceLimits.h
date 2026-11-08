@@ -496,6 +496,11 @@ inline constexpr int kEngineExecuteImplOperandFormatEnumNextTypeStringFieldMax =
 inline constexpr int kEngineExecuteImplDecompileRepresentationStringFieldMax =
     16;
 inline constexpr int kEngineExecuteImplDecompileOptionsDumpSizeLimit = 4096;
+/// How long a replica waits for an owner's write it was told was on its way
+/// (analysis_snapshot in_memory), and how often it looks: the write's journal
+/// and files take a few milliseconds.
+inline constexpr std::int64_t kEngineReplicaAwaitWriteMilliseconds = 5000;
+inline constexpr std::int64_t kEngineReplicaAwaitWritePollMilliseconds = 2;
 /// A page's identity a client gives back (if_none_match): the worker's tag, a
 /// document and its lines.
 inline constexpr std::size_t kEngineMaxPageEtagBytes = 128;

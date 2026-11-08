@@ -4671,7 +4671,12 @@ GUI keeps is named by the document and lines it came from; a later read names it
 (`if_none_match`), and while the document stands the worker says so instead of sending
 the page again (`QueryService::State::keptPages`).
 A replica takes those edits in place (`analysis_update_names`), since no analysis
-reads them: what it keeps of a view stays the view's. A note on a function and a data
+reads them: what it keeps of a view stays the view's. The owner's snapshot for it does
+not wait for the write (`analysis_snapshot` `in_memory`): the replica takes the names
+and function rows that changed as the owner took them, and waits for the write only
+for what it must read from the files (`Engine::awaitOwnerWrite`). Its name index
+stands while the list reads the same after names are derived again
+(`FunctionNameIndex::Spelled`). A note on a function and a data
 item, which nothing analyzed or rendered reads, leave the renders as they are, and a
 new name of data costs those that asked for it. A function's declaration reaches only
 what the decompiler reads, so the debug context takes it in place

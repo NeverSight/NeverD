@@ -2756,6 +2756,10 @@ Json Engine::restoreAnalysis(const Json &snapshot) {
     throw Error("invalid_request",
                 "Analysis restore needs a fresh worker and a snapshot");
   auto options = snapshot.at("open");
+  // A replica opens the project's files: an owner's write still on its way
+  // gets there first.
+  if (!snapshot.value("written", true) && options.contains("path"))
+    awaitOwnerWrite(options.at("path").get<std::string>(), snapshot);
   options["read_only"] = true;
   options["analysis"] = false;
   // The owner left the PDB it declined unloaded; so does its replica.
@@ -2876,6 +2880,77 @@ Json Engine::restoreAnalysis(const Json &snapshot) {
 
 bool Engine::comparesBinaries() { return ComparisonService::supported(); }
 
+bool Engine::projectHolds(const std::string &path, const Json &snapshot) {
+  if (ProjectHistory::recoveryPending(utf8Path(path)))
+    return false;
+  auto committed = ProjectHistory::readState(utf8Path(path));
+  if (committed.at("code_edits").size() >
+      ::neverd::limits::worker::kEngineReadCodeEditsRowsSizeLimit)
+    throw Error("invalid_request", "Invalid code edit table");
+  auto expected = ProjectHistory::normalizedState(snapshot.at("state"));
+  // What the owner has declared.  Anything else on disk is a foreign edit.
+  expected["types"] = snapshot.value("declared_types", committed.at("types"));
+  for (auto *state : {&committed, &expected}) {
+    for (auto &rename : state->at("renames"))
+      rename.erase("original");
+    // The owner stages comments before it saves them, and takes a foreign one
+    // into its next snapshot.
+    state->erase("annotations");
+  }
+  return committed == expected;
+}
+
+void Engine::awaitOwnerWrite(const std::string &path, const Json &snapshot) {
+  namespace limits = ::neverd::limits::worker;
+  const auto deadline =
+      std::chrono::steady_clock::now() +
+      std::chrono::milliseconds(limits::kEngineReplicaAwaitWriteMilliseconds);
+  while (!projectHolds(path, snapshot)) {
+    if (std::chrono::steady_clock::now() >= deadline)
+      throw Error("stale_snapshot",
+                  "The owner's edits have not reached the project's files");
+    std::this_thread::sleep_for(std::chrono::milliseconds(
+        limits::kEngineReplicaAwaitWritePollMilliseconds));
+  }
+}
+
+bool Engine::takeFunctionRows(const Json &before, const Json &after) {
+  const auto &attributes = functionAttributes();
+  if (!attributes)
+    return false;
+  std::map<std::uint64_t, const Json *> was, now;
+  for (const auto &row : before)
+    was[parseAddress(row.at("addr").get<std::string>())] = &row;
+  for (const auto &row : after)
+    now[parseAddress(row.at("addr").get<std::string>())] = &row;
+  std::set<std::uint64_t> addresses;
+  for (const auto &[address, row] : was)
+    addresses.insert(address);
+  for (const auto &[address, row] : now)
+    addresses.insert(address);
+  static const Json none = Json::object();
+  for (const auto address : addresses) {
+    const auto &old = was.contains(address) ? *was.at(address) : none;
+    const auto &row = now.contains(address) ? *now.at(address) : none;
+    if (old == row)
+      continue;
+    // Whether a function starts there the edit of its statements leaves.
+    if (old.value("state", Json()) != row.value("state", Json()))
+      return false;
+    Json stated = Json::object();
+    for (const auto &[field, value] : row.items())
+      if (field != "addr" && field != "state")
+        stated[field] = value;
+    for (const auto &[field, value] : old.items())
+      if (field != "addr" && field != "state" && !stated.contains(field))
+        stated[field] = nullptr;
+    if (!stated.empty() &&
+        attributes.edit(session_, address, stated.dump().c_str()) != 0)
+      return false;
+  }
+  return functionEditRows() == after;
+}
+
 bool Engine::takeNames(const std::map<std::uint64_t, std::string> &before,
                        const std::map<std::uint64_t, std::string> &after) {
   using RenameTake = int (*)(neverd_session_t, neverd_va_t, const char *);
@@ -2927,6 +3002,7 @@ Json Engine::updateAnalysisNames(const Json &snapshot) {
       state.erase(table);
     state["functions"] = functionRowsRead(state.at("functions"), false);
     value->erase("declared_types");
+    value->erase("written");
   }
   if (before != after)
     throw Error("stale_snapshot", "Analysis changed; restore a fresh replica");
@@ -2942,25 +3018,31 @@ Json Engine::updateAnalysisNames(const Json &snapshot) {
   if (fs::file_size(utf8Path(path)) != loadedSize_ ||
       fs::last_write_time(utf8Path(path)) != loadedTime_)
     throw Error("input_changed", "The analysis input changed; reopen it");
-  if (ProjectHistory::recoveryPending(utf8Path(path)))
-    throw Error("stale_snapshot", "Project edits require transaction recovery");
-  auto committed = ProjectHistory::readState(utf8Path(path));
-  if (committed.at("code_edits").size() >
-      ::neverd::limits::worker::kEngineReadCodeEditsRowsSizeLimit)
-    throw Error("invalid_request", "Invalid code edit table");
-  auto expected = ProjectHistory::normalizedState(snapshot.at("state"));
-  // What the owner has declared.  Anything else on disk is a foreign edit.
-  expected["types"] = snapshot.value("declared_types", committed.at("types"));
-  for (auto *state : {&committed, &expected}) {
-    for (auto &rename : state->at("renames"))
-      rename.erase("original");
-    // The owner stages comments before it saves them, and takes a foreign one
-    // into its next snapshot.
-    state->erase("annotations");
+  // An owner that answered before its write reached the disk says so: the
+  // replica takes what changed as the owner did, and reads the disk only for
+  // what it cannot take so, once the write is there (awaitOwnerWrite).
+  const bool inMemory = !snapshot.value("written", true);
+  bool onDisk = false;
+  if (!inMemory) {
+    if (ProjectHistory::recoveryPending(utf8Path(path)))
+      throw Error("stale_snapshot",
+                  "Project edits require transaction recovery");
+    if (!projectHolds(path, snapshot))
+      throw Error("stale_snapshot",
+                  "Project edits changed while updating analysis");
+    onDisk = true;
   }
-  if (committed != expected || typeLibrariesChanged())
+  if (typeLibrariesChanged())
     throw Error("stale_snapshot",
                 "Project edits changed while updating analysis");
+  const auto readDisk = [&] {
+    if (!onDisk)
+      awaitOwnerWrite(path, snapshot);
+    onDisk = true;
+  };
+  const Json expectedTypes = snapshot.contains("declared_types")
+                                 ? snapshot.at("declared_types")
+                                 : typeDeclarationRows();
   const auto renamedNow = [](const Json &state) {
     std::map<std::uint64_t, std::string> names;
     for (const auto &row : state.value("renames", Json::array()))
@@ -2980,7 +3062,7 @@ Json Engine::updateAnalysisNames(const Json &snapshot) {
   const bool formatsChanged = previous.value("operands", Json::array()) !=
                               next.value("operands", Json::array());
   const bool typesChanged =
-      declaresLocalTypes() && typeDeclarationRows() != expected.at("types");
+      declaresLocalTypes() && typeDeclarationRows() != expectedTypes;
   const auto oldFunctions = previous.value("functions", Json::array());
   const auto newFunctions = next.value("functions", Json::array());
   const bool declared =
@@ -3018,18 +3100,34 @@ Json Engine::updateAnalysisNames(const Json &snapshot) {
   codeEdits_ = next.value("code_edits", Json::array());
   restoredSnapshot_ = snapshot;
   imageFactsRevision_.reset();
-  if (oldNames != newNames && !takeNames(oldNames, newNames) &&
-      neverd_renames_load(session_) != 0)
-    throw Error("stale_snapshot", "Cannot read the project's names again");
-  if (formatsChanged && !reloadOperandFormats())
-    throw Error("stale_snapshot", "Cannot read the project's formats again");
-  if (itemsChanged && dataItems() && dataItems().load(session_) != 0)
-    throw Error("stale_snapshot", "Cannot read the project's items again");
-  if (declared && functionEdits() && functionEdits().load(session_) != 0)
-    throw Error("stale_snapshot", "Cannot read the project's functions again");
-  if (typesChanged && engineSymbol<SessionLoadFunction>(
-                          "neverd_type_declarations_load")(session_) != 0)
-    throw Error("stale_snapshot", "Cannot read the project's types again");
+  if (oldNames != newNames && !takeNames(oldNames, newNames)) {
+    readDisk();
+    if (neverd_renames_load(session_) != 0)
+      throw Error("stale_snapshot", "Cannot read the project's names again");
+  }
+  if (formatsChanged) {
+    readDisk();
+    if (!reloadOperandFormats())
+      throw Error("stale_snapshot", "Cannot read the project's formats again");
+  }
+  if (itemsChanged && dataItems()) {
+    readDisk();
+    if (dataItems().load(session_) != 0)
+      throw Error("stale_snapshot", "Cannot read the project's items again");
+  }
+  if (declared && functionEdits() &&
+      !takeFunctionRows(oldFunctions, newFunctions)) {
+    readDisk();
+    if (functionEdits().load(session_) != 0)
+      throw Error("stale_snapshot",
+                  "Cannot read the project's functions again");
+  }
+  if (typesChanged) {
+    readDisk();
+    if (engineSymbol<SessionLoadFunction>("neverd_type_declarations_load")(
+            session_) != 0)
+      throw Error("stale_snapshot", "Cannot read the project's types again");
+  }
   if (commented) {
     for (const auto &row : oldComments)
       neverd_annotation_set(
@@ -3255,7 +3353,9 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
   if (encoded)
     encoded->reset();
   if (history_ && !readsNoProjectFile(operation) && operation != "reload" &&
-      operation != "open")
+      operation != "open" &&
+      !(operation == "analysis_snapshot" && p.is_object() &&
+        p.value("in_memory", false)))
     history_->finishWrites();
   if (operation == "x87_capabilities") {
     if (!p.is_object() || !p.empty())
@@ -3276,8 +3376,14 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       lineage_ = std::make_unique<LineageService>(atomicWriteControlled);
     return lineage_->execute(operation, p, loadProgress_, cancelled_);
   }
-  if (operation == "analysis_snapshot")
-    return analysisSnapshot();
+  if (operation == "analysis_snapshot") {
+    auto snapshot = analysisSnapshot();
+    // Asked for what it holds (in_memory), an owner whose writes are still on
+    // their way says so; a replica takes the state from here.
+    if (history_ && history_->writesPending())
+      snapshot["written"] = false;
+    return snapshot;
+  }
   if (operation == "analysis_restore")
     return restoreAnalysis(p);
   if (operation == "analysis_update_names")

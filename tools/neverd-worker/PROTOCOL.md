@@ -114,6 +114,9 @@ completes them; a clean exit, `save`, `analysis_snapshot` and any operation that
 may read the project's files wait for the write first.  A write that fails stays
 queued and fails the next edit or waiting operation with its error, and goes
 through once it can.  By default the reply follows the write.
+`analysis_snapshot` with `in_memory:true` does not wait: while a write is on its
+way the snapshot says `written:false`, for a replica that takes it in place
+(`analysis_update_names`).
 
 Stepped SDK discovery is opt-in through `open.step_discovery:true`; it defaults
 to false so older clients do not acquire an extra image snapshot. Only clients
@@ -918,6 +921,12 @@ tables apart from comments, which the owner can hold staged, and library choices
 before taking the new values. A pending recovery transaction also refuses reuse.
 The snapshot's `declared_types` lists the owner's declarations, so a change to them
 on disk that the owner did not make is refused.
+A snapshot that says `written:false` is taken before the owner's write reaches the
+files: names and function rows that changed are taken as the owner took them, and
+what the replica must read from the files (operand formats, data items, declared
+types, a name the engine does not take in place) waits for that write, at most five
+seconds, else `stale_snapshot`.  `analysis_restore` of such a snapshot waits the
+same way.
 Success returns `{updated:true}` and advances the replica's local revision. No
 analysis reads these, so nothing is analyzed again, and retained source is
 redecorated: local and function names and comments are read as a view is decorated,
