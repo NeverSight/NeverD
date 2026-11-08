@@ -134,11 +134,14 @@ def run(executable):
         named = same_as_fresh("function name")
         for address in functions:
             assert "renamed_function" in named[address]["text"], named[address]["text"]
-        # A comment shows at its address.
+        # A comment shows at its address, written into a copy of the document
+        # that read it rather than decorated again.
+        patches = ok(owner, "metadata")["named_view_comment_patches"]
         ok(owner, "annotation_set", {"address": hex(functions[2]), "text": "a note here"})
         ok(owner, "save")
         noted = same_as_fresh("comment")
         assert "a note here" in noted[functions[2]]["text"], noted[functions[2]]
+        assert ok(owner, "metadata")["named_view_comment_patches"] > patches
         assert noted[functions[1]] == named[functions[1]]
         # And on a line inside a function.
         inner = next(at for row in noted[functions[1]]["rows"] for at in row["addresses"]

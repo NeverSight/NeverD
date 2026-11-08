@@ -4697,7 +4697,11 @@ notes the addresses its render read and its decoration looked up, and reads what
 an edit reached when it is next asked for, so the edit leaves the owner's other
 documents as they are (`Engine::keepNamedViewsThrough`, `Engine::readViewEdits`). A
 function's declaration does so too while the stores' names stand, which they do unless
-it hides a prototype analysis read.
+it hides a prototype analysis read. Where comments alone reached a document since it
+was decorated, they are written into a copy of it as decoration writes them: each row's
+comment read again, its line's inline comment replaced and the spans after it moved
+(`CodeEdits::takeComments`); anything else that drops documents' keys decorates them
+again (`Engine::decorateNamedViewsAgain`).
 Decoration asks for the image's names and comments by address, and the edit changes
 that one row (`CodeEdits::ImageFacts`), so a view costs the same among thousands.
 The GUI starts a replica on a function as its Set Type dialog opens
