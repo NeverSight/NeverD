@@ -5002,7 +5002,16 @@ int jni_binder_local(unsigned form, unsigned mode) {
   if (mode == 5) {
     parcel_write(e, form, data, seek, 1, 0);
     parcel_write(e, form, data, write, 0, local[0]);
-    return 1;
+    CHECK(!C(e, int, 228));
+    parcel_write(e, form, data, seek, 1, 0);
+    CHECK(same_ref(e, local[0], parcel_result(e, 34, form, data, read)));
+    C(e, void, 61, data, recycle);
+    data = parcel_result(e, 114, form, type, obtain);
+    parcel_write(e, form, data, write, 0, local[0]);
+    parcel_write(e, form, data, seek, 1, 0);
+    CHECK(same_ref(e, local[0], parcel_result(e, 34, form, data, read)));
+    C(e, void, 61, data, recycle);
+    return C(vm, int, 5);
   }
   parcel_write(e, form, data, write, 0, local[0]);
   CHECK(!C(e, int, 228));

@@ -110,14 +110,16 @@ private:
     std::function<ExecutionResult(uint64_t, std::span<const uint8_t>)> write;
     std::function<ExecutionResult(uint64_t)> reallocate_objects;
     std::vector<uint64_t> objects;
-    struct Reference {
-      uint64_t cookie = 0; // Nonzero denotes a local native object.
-      uint32_t handle = 0;
-    };
-    std::vector<Reference> references;
+    // Owned native Parcels release the current records at these offsets, not
+    // the identities originally written there. Borrowed buffers belong to IPC.
+    bool owns_objects = true;
+    bool objects_sorted = false;
+    size_t object_hint = 0;
     std::optional<uint32_t> fd;
   };
-  ExecutionResult releaseParcelObjects(ParcelState &state);
+  ExecutionResult releaseParcelObjects(ParcelState &state,
+                                       std::span<const uint8_t> bytes,
+                                       bool reverse = true);
   ExecutionResult acquireParcelObjects(ParcelState &state,
                                        std::span<const uint8_t> bytes);
   ExecutionResult retainBinderHandle(uint32_t fd, uint32_t handle);

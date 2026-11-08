@@ -78,7 +78,7 @@ AndroidFramework::dispatchBinder(Heap &heap, const Program &program,
       if (completed.stop != ExecutionStop::Returned)
         return completed;
       for (const auto &parcel : {reply, data}) {
-        auto released = releaseParcelObjects(*parcel);
+        auto released = releaseParcelObjects(*parcel, parcel->storage->Bytes);
         if (released.stop != ExecutionStop::Returned)
           return released;
         if (parcel->release)
