@@ -4575,3 +4575,35 @@ launch, attestation, processor reset or physical faults. Windows/Darwin i386
 source ABIs, the remaining architectural state/event gates and the existing
 90-finding source-global audit remain open. The production LLVM pin remains
 `neverd-llvm-v23.0.0-r6`; this batch does not publish a new LLVM release.
+
+## Native i386 scalar MSR and port source interfaces (2026-11-08)
+
+NeverC now registers portable WRMSR and all six scalar IN/OUT builtins in
+the common x86 frontend. Their existing native LLVM lowering preserves
+ECX and the complete EDX:EAX MSR value, the 16-bit port selector, and the
+8/16/32-bit port value. The portable RDMSR interface was already shared.
+Linux i386 machine output uses the full LLVM driver. Both NeverD C routes
+now select these native interfaces with the existing capability check.
+The shared tests live under `unittests/lift/x86` instead of the x86_64 file.
+
+The [scalar-system evidence](evidence/x86-i386-scalar-system-2026-11-08.json)
+records 21 selected NeverD tests and 1,344 native C checks across the full
+fork and r6 decompilation SDKs, including 336 i386 object compilation checks.
+All selected checks pass without skips. Complete C from both writers, compiled
+by NeverC and Clang at O0/O2, passes 2,016 controlled comparisons against
+original bytes; all 1,344 selector/value/result corruption controls fail as
+expected. These comparisons check partial EAX results, dead reads, imm8/DX
+ports, the full MSR input, return values and callee-saved state.
+
+NeverC's standalone i386 witness passes 156 comparisons and 80 negative
+controls across 48 objects. All 185 x86/i386 tests and the SKINIT, VMX, SVM,
+VMRUN and FLAGS regressions pass. The full LLVM fork passes the three selected
+MSR/system codegen suites. No LLVM enum, lowering or production SDK pin changed.
+
+Nine further i386 portable source entry points remain unavailable: WRMSRNS,
+INT, CPUIDEX and the six string-port interfaces. Each rejection is reproduced
+alongside a passing x64 native-IR control. Windows/Darwin i386 source ABIs and
+the broader state/event release gates also remain open. Controlled completions
+do not qualify physical MSR/port success; the strict source-global audit still
+has its 90 baseline findings. A new LLVM release remains gated on the overall
+completion work.

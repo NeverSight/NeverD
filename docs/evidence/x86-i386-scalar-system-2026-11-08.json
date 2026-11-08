@@ -1,0 +1,352 @@
+{
+  "scope": "Native Linux i386 portable WRMSR and 8/16/32-bit scalar IN/OUT source interfaces",
+  "global_x86_complete": false,
+  "llvm_release_gate_passed": false,
+  "source_heads": {
+    "neverc_compiler": "b374ae74f1369f9f834e4fb909536d63037fe90d",
+    "neverc_publication": "9359d9e78c0b8bb5599f6ef74e10de0536d1ac31",
+    "neverd_test_refactor": "3d23c8113252ad78626839f2d32ddc36f6c04563",
+    "neverd_complete_source_witness": "3ce5f5eb126f6ae1cf2c1643d7bcdddc28b770df",
+    "llvm": "b726cb0425bc7e1f7e2753972a748ebcfa8b5741"
+  },
+  "production_llvm_pin": "neverd-llvm-v23.0.0-r6",
+  "llvm_ir_and_backend_changed": false,
+  "neverc_i386_machine_backend": "The same full LLVM fork supplies machine output for C exported with either NeverD SDK.",
+  "native_apis_added_to_i386": [
+    "__builtin_ia32_wrmsr",
+    "__builtin_ia32_inbyte",
+    "__builtin_ia32_inword",
+    "__builtin_ia32_indword",
+    "__builtin_ia32_outbyte",
+    "__builtin_ia32_outword",
+    "__builtin_ia32_outdword"
+  ],
+  "reference": {
+    "publisher": "AMD",
+    "document": "24594 Volume 3 revision 3.38, July 2026",
+    "url": "https://docs.amd.com/v/u/en-US/24594_3.38_APM_Vol3_PUB",
+    "sha256": "e18bd39ad0ca19d2eb9b9ea25c2635144c5ab368e5d6fbdc7a08345515ea1aee",
+    "printed_pages": [
+      188,
+      277,
+      438,
+      512
+    ],
+    "source": "Previously retrieved primary manual retained with the original SKINIT qualification",
+    "observations": [
+      "IN/OUT use AL, AX or EAX and an imm8 or DX port selector in either code mode.",
+      "RDMSR/WRMSR use ECX for the index and the complete EDX:EAX pair for the 64-bit value.",
+      "Privilege and capability faults belong to the architectural instruction; this qualification checks native transport and controlled completion only."
+    ]
+  },
+  "builds": {
+    "neverc-build-receipt.json": {
+      "source_head": "b374ae74f1369f9f834e4fb909536d63037fe90d",
+      "command": [
+        "cmake",
+        "--build",
+        "build-neverc",
+        "--target",
+        "neverc",
+        "neverc-tests",
+        "--parallel",
+        "4"
+      ],
+      "exit_code": 0,
+      "seconds": 49.646,
+      "log_sha256": "c06956b5024bfcf2c6627972c5e4ce137a5d2e365c5910ae7a365a9714679bff",
+      "outputs": {
+        "neverc": "5ae1de122affcc8e94eb480e1329be70b053f49aae888d252860f1a1960e6298",
+        "neverc-tests": "80d547efaac6de4769ec0a6122f1a3c4d5d3f0ed651176b6d1c264f8c6358197"
+      }
+    },
+    "scalar-native-build-receipt.json": {
+      "source_head": "3d23c8113252ad78626839f2d32ddc36f6c04563",
+      "source_status": "",
+      "command": [
+        "python3",
+        "scripts/build.py",
+        "build-x86-native",
+        "--target",
+        "NeverDX86VirtualizationSourceTests",
+        "--parallel",
+        "4"
+      ],
+      "exit_code": 0,
+      "seconds": 44.104,
+      "log_sha256": "0232f6594d413f0a0fb117da1dff7814fe96c13054a597d15a2ff3b965557a9f",
+      "outputs": {
+        "NeverDX86VirtualizationSourceTests": "cdbe742212a173327512ebe7ceb4a5050776c773d944bf6ea1ae96d881f4eb16"
+      }
+    },
+    "scalar-r6-build-receipt.json": {
+      "source_head": "3d23c8113252ad78626839f2d32ddc36f6c04563",
+      "source_status": "",
+      "command": [
+        "python3",
+        "scripts/build.py",
+        "build-x86",
+        "--target",
+        "NeverDX86VirtualizationSourceTests",
+        "--parallel",
+        "4"
+      ],
+      "exit_code": 0,
+      "seconds": 43.141,
+      "log_sha256": "1ef0d6a15f8e252de460bd10646851bfadc92d5fb9943c7ed2e3471a41d880c9",
+      "outputs": {
+        "NeverDX86VirtualizationSourceTests": "c729013dd3ebd5a7e9a62c50c470c6779cba2e011d436e7d96b9a8d58b34a68e"
+      }
+    }
+  },
+  "red_reproduction": {
+    "i386_rejected": 7,
+    "x64_native_controls": 7,
+    "receipt_sha256": "4845659319e6b4015c40f77b4410c6bc7ea36f4fa88968e926966988c2a0e5ee"
+  },
+  "unit_and_source_checks": {
+    "native-scalar": {
+      "name": "native-scalar",
+      "sdk": "native",
+      "core": "0",
+      "binary_sha256": "cdbe742212a173327512ebe7ceb4a5050776c773d944bf6ea1ae96d881f4eb16",
+      "source_head": "3d23c8113252ad78626839f2d32ddc36f6c04563",
+      "neverc_sha256": "5ae1de122affcc8e94eb480e1329be70b053f49aae888d252860f1a1960e6298",
+      "neverc_llc_sha256": "1d6f80fa2f4fb7e0fe0e2b5f3f1732c527a898274ecb9063a9d7830ab3b3ec5e",
+      "host_clang_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "source_tree": "b43aa8b824f276b40230d7acaf03bb9d37e46886",
+      "exit_code": 0,
+      "seconds": 22.874,
+      "log_sha256": "b4604572f119f379d1a05ab8cb8ac579e97566f3b206ca0b7d87d68a35267ccf",
+      "result_sha256": "3acd28158c06bdbde505f0fa277eeec4b6f6fdf57ce74e54a1cd14b722c836bb",
+      "tests": 1,
+      "c_compilations": 168,
+      "failed": 0,
+      "skipped": [],
+      "passed": 1,
+      "gtest_filter": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF"
+    },
+    "r6-scalar": {
+      "name": "r6-scalar",
+      "sdk": "r6",
+      "core": "12",
+      "binary_sha256": "c729013dd3ebd5a7e9a62c50c470c6779cba2e011d436e7d96b9a8d58b34a68e",
+      "source_head": "3d23c8113252ad78626839f2d32ddc36f6c04563",
+      "neverc_sha256": "5ae1de122affcc8e94eb480e1329be70b053f49aae888d252860f1a1960e6298",
+      "neverc_llc_sha256": "1d6f80fa2f4fb7e0fe0e2b5f3f1732c527a898274ecb9063a9d7830ab3b3ec5e",
+      "host_clang_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "source_tree": "b43aa8b824f276b40230d7acaf03bb9d37e46886",
+      "exit_code": 0,
+      "seconds": 31.061,
+      "log_sha256": "fcb21ca1edc1d0a4792ddeb79bbebcece8c2d18024af56666de4745692924cec",
+      "result_sha256": "af6c41e2eb5e2141013a996d900b344c901426b3c95708cdcbbfb71f14314dd5",
+      "tests": 1,
+      "c_compilations": 168,
+      "failed": 0,
+      "skipped": [],
+      "passed": 1,
+      "gtest_filter": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF"
+    },
+    "native-scalar-regression": {
+      "name": "native-scalar-regression",
+      "sdk": "native",
+      "core": "12",
+      "binary_sha256": "cdbe742212a173327512ebe7ceb4a5050776c773d944bf6ea1ae96d881f4eb16",
+      "source_head": "3d23c8113252ad78626839f2d32ddc36f6c04563",
+      "neverc_sha256": "5ae1de122affcc8e94eb480e1329be70b053f49aae888d252860f1a1960e6298",
+      "neverc_llc_sha256": "1d6f80fa2f4fb7e0fe0e2b5f3f1732c527a898274ecb9063a9d7830ab3b3ec5e",
+      "host_clang_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "source_tree": "b43aa8b824f276b40230d7acaf03bb9d37e46886",
+      "exit_code": 0,
+      "seconds": 377.809,
+      "log_sha256": "9c42a9d471f8eca23dc02377c42081329878a0abb5352a78edf0b9bf4161a301",
+      "result_sha256": "650832088b5297ef9ca62a6d76e995e981331da51a5f2a6a24275a5075c042e8",
+      "tests": 10,
+      "c_compilations": 504,
+      "failed": 0,
+      "skipped": [],
+      "passed": 10,
+      "gtest_filter": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X64*:NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortEffectsSurviveBothSourceRoutes/*:X86ScalarSystemSource.NativeCallsRequireExactTypesAndEffects"
+    },
+    "r6-scalar-regression": {
+      "name": "r6-scalar-regression",
+      "sdk": "r6",
+      "core": "12",
+      "binary_sha256": "c729013dd3ebd5a7e9a62c50c470c6779cba2e011d436e7d96b9a8d58b34a68e",
+      "source_head": "3ce5f5eb126f6ae1cf2c1643d7bcdddc28b770df",
+      "neverc_sha256": "5ae1de122affcc8e94eb480e1329be70b053f49aae888d252860f1a1960e6298",
+      "neverc_llc_sha256": "1d6f80fa2f4fb7e0fe0e2b5f3f1732c527a898274ecb9063a9d7830ab3b3ec5e",
+      "host_clang_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "source_tree": "34a4e7882c103375608be368434d921f5eabc3fa",
+      "exit_code": 0,
+      "seconds": 420.162,
+      "log_sha256": "1ffa5328fcd250278e7ff0e8f5327bcd2f509f5f15a771fcbea7e34b8bd43f04",
+      "result_sha256": "582deadc4fa77f998b03a4a11116831f5a33661b2943f0a1f549eb03c2ea5f7a",
+      "tests": 9,
+      "c_compilations": 504,
+      "failed": 0,
+      "skipped": [],
+      "passed": 9,
+      "gtest_filter": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X64*:NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortEffectsSurviveBothSourceRoutes/*"
+    },
+    "neverc-x86": {
+      "resource_headers_sha256": {
+        "intrin.h": "20ee46af91bfccc50de19bf7dfdaea040efbdc7cb5530f4b8f9ade6554a704a0",
+        "immintrin.h": "373a903f0365533b68e58c20862af204ea9f9af4bcef45c0fdb598cdb637b47a"
+      },
+      "name": "neverc-x86",
+      "core": "12",
+      "source_head": "b374ae74f1369f9f834e4fb909536d63037fe90d",
+      "compiler_sha256": "5ae1de122affcc8e94eb480e1329be70b053f49aae888d252860f1a1960e6298",
+      "test_binary_sha256": "80d547efaac6de4769ec0a6122f1a3c4d5d3f0ed651176b6d1c264f8c6358197",
+      "exit_code": 0,
+      "seconds": 51.183,
+      "log_sha256": "6047dfd250b776cf1afa368c5b9c6fd1b10ca81898a1092eda74eb7fed4a7343",
+      "tests": 185,
+      "failed": 0,
+      "skipped": 0,
+      "skipped_names": [],
+      "gtest_filter": "X86*:I386FrontendTest.*"
+    }
+  },
+  "standalone_i386": {
+    "objects": 48,
+    "controlled_original_byte_comparisons": 156,
+    "negative_controls": 80,
+    "source_head": "b374ae74f1369f9f834e4fb909536d63037fe90d",
+    "compiler_sha256": "5ae1de122affcc8e94eb480e1329be70b053f49aae888d252860f1a1960e6298",
+    "receipt_sha256": "b9aa1cd963958fc33f5031712a3fbf9a3eb1b40532cf2219276f1d3c3ae8f886",
+    "witness_sha256": "b5a8754f1ef4bd5041718f53d4384c6bdf450828e3840b265bda258251130db3",
+    "oracle_sha256": {
+      "verify-msr-completion": "b0800dc372ec6f2c17801927b53adb33432a98beb6bf55199ac23a63c32310b8",
+      "verify-system-completion": "c74da0d45b76f95af2791ee32ca5a4a87ca3ac8316f4997c77b712931438a292"
+    }
+  },
+  "complete_source": [
+    {
+      "profile": "native-complete-neverc",
+      "source_head": "3d23c8113252ad78626839f2d32ddc36f6c04563",
+      "objects": 168,
+      "comparisons": 504,
+      "negative_controls": 336,
+      "compiler_sha256": "5ae1de122affcc8e94eb480e1329be70b053f49aae888d252860f1a1960e6298",
+      "backend_sha256": "1d6f80fa2f4fb7e0fe0e2b5f3f1732c527a898274ecb9063a9d7830ab3b3ec5e",
+      "raw_receipt_sha256": "5c10c4c69e20c56019babdb1981b0fb9787687b79215a266a35185487e035910",
+      "results_sha256": "68b22daba3eb0b51ceabe47d33d172ba1ba50b4c1021551af9d33996f1603369",
+      "exit_code": 0
+    },
+    {
+      "profile": "native-complete-clang",
+      "source_head": "3d23c8113252ad78626839f2d32ddc36f6c04563",
+      "objects": 168,
+      "comparisons": 504,
+      "negative_controls": 336,
+      "compiler_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "backend_sha256": null,
+      "raw_receipt_sha256": "dbfec16dd500bfed7a322ad74f0c9fd1d36096617777511c40cada07b3da1f4b",
+      "results_sha256": "a93fe9e79c036b599807b22c84312a6a25081d886d5cc42fc48ece0d9528da7a",
+      "exit_code": 0
+    },
+    {
+      "profile": "r6-complete-neverc",
+      "source_head": "3d23c8113252ad78626839f2d32ddc36f6c04563",
+      "objects": 168,
+      "comparisons": 504,
+      "negative_controls": 336,
+      "compiler_sha256": "5ae1de122affcc8e94eb480e1329be70b053f49aae888d252860f1a1960e6298",
+      "backend_sha256": "1d6f80fa2f4fb7e0fe0e2b5f3f1732c527a898274ecb9063a9d7830ab3b3ec5e",
+      "raw_receipt_sha256": "e7ba6c7471f6ae3917670da0fcd884a7edffc3235e8b9346f90e40b9229f4a1f",
+      "results_sha256": "87196e2a5084193a2e7b79d375954496f8361fe7f8fb6dd0dda59899a7fa0044",
+      "exit_code": 0
+    },
+    {
+      "profile": "r6-complete-clang",
+      "source_head": "3d23c8113252ad78626839f2d32ddc36f6c04563",
+      "objects": 168,
+      "comparisons": 504,
+      "negative_controls": 336,
+      "compiler_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "backend_sha256": null,
+      "raw_receipt_sha256": "5f73d9ed86b148cd1b32c40c1ca508552725de588def8bee6951f719748cc408",
+      "results_sha256": "c59b3565f79a8f29a891ef8d77632a4766e069bf536bd2d62ea70453467d3231",
+      "exit_code": 0
+    }
+  ],
+  "export_manifests": {
+    "native": {
+      "files": 126,
+      "sha256": "82874be8d1cef9560278b23572faafbf36c8bbc33c892158637ed0d00c31ac18",
+      "complete_c_sources": 84,
+      "original_byte_inputs": 42
+    },
+    "r6": {
+      "files": 126,
+      "sha256": "eb1d9578c9cfff5d6defe926f568c762b0ac08cfd41391796dc88fadb5d8c13d",
+      "complete_c_sources": 84,
+      "original_byte_inputs": 42
+    }
+  },
+  "complete_source_witness_sha256": "3dc163cd8067b01c4b46d7557ecdd6ee7ad9a1cfd9c4d5a1b53ff915e57c5b1a",
+  "totals": {
+    "neverd_tests": 21,
+    "native_c_compilation_checks": 1344,
+    "i386_native_c_compilation_checks": 336,
+    "complete_c_objects": 672,
+    "complete_c_comparisons": 2016,
+    "complete_c_negative_controls": 1344,
+    "neverc_x86_tests": 185,
+    "standalone_i386_controlled_comparisons": 156,
+    "standalone_i386_negative_controls": 80
+  },
+  "regressions": {
+    "svm_checks": 2048,
+    "svm_faults": 152,
+    "svm_operand_negative_controls": 136,
+    "vmrun_contexts": 196,
+    "vmx_checks": 9072,
+    "vmx_faults": 896,
+    "flags_comparisons": 6291456,
+    "skinit_boundary_checks": 1440,
+    "skinit_negative_controls": 8,
+    "llvm_lit_tests": 3,
+    "llvm_lit_receipt_sha256": "324e71b4aff1e73045b3e5fb00b88f1eb85d34b2d332941e99097158d68c286b"
+  },
+  "raw_regression_sha256": {
+    "svm-matrix.json": "9600c4d1295dd8ecf6a469a06958eccadb0c01b14a81f3664f7bca179e124453",
+    "vmx-matrix.json": "beeeca7ebe078f9ad482d9407a5c1c4617cac6851825e3818a3f1a343c293de5",
+    "flags-regression-matrix.json": "eaccf8f9a113a89ae4d0bb446732606bf80b6befb7899d21814cf62cbf7766dc",
+    "neverc-boundary/receipt.json": "6dbb54843beaad2b4e25bab910adc70f73bb39a2af8cffa6885582f554c0415c",
+    "llvm-lit/receipt.json": "324e71b4aff1e73045b3e5fb00b88f1eb85d34b2d332941e99097158d68c286b"
+  },
+  "global_state_audit": {
+    "source_head": "b374ae74f1369f9f834e4fb909536d63037fe90d",
+    "exit_code": 1,
+    "findings": 90,
+    "unchanged_files": 29,
+    "report_identical_to_baseline": true,
+    "global_gate_passed": false,
+    "proof_sha256": "4b0612c9ab3d5b7268dfef664109a1a0fa6c1bda5679f1570c5c97f5cc304aaf"
+  },
+  "remaining_source_admission_gaps": {
+    "i386_rejections_with_x64_native_controls": 9,
+    "names": [
+      "cpuidex",
+      "inbytestring",
+      "indwordstring",
+      "int",
+      "inwordstring",
+      "outbytestring",
+      "outdwordstring",
+      "outwordstring",
+      "wrmsrns"
+    ],
+    "receipt_sha256": "99449b662e7460d8a61104cbbddec664cc51e1e2dcc35d139968fd112ced5bb7"
+  },
+  "limitations": [
+    "Controlled compiler-transport and continuation comparisons do not qualify successful physical MSR/port I/O or a complete hardware fault model.",
+    "Windows/Darwin i386 C source ABIs are not enabled. Stock Clang still supplies their compile-only fallback coverage.",
+    "The r6 SDK uses owned assembly contracts where its native intrinsic table lacks newer entries; NeverC source machine output uses the qualified full LLVM fork.",
+    "The native-declaration type/effect rejection test runs only with the full intrinsic SDK; r6 runs all source-format cases.",
+    "Full mode/task transitions, software SMM/SGX transfers, unbound asynchronous producers and the source-global audit remain open release gates."
+  ]
+}
