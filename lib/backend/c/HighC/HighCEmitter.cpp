@@ -4183,8 +4183,8 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
         const uint8_t *Bytes = Opts.Image->readVA(*Slot, PointerBytes);
         if (!Bytes)
           continue;
-        const va_t Target = PointerBytes == 8 ? readLE<uint64_t>(Bytes)
-                                              : readLE<uint32_t>(Bytes);
+        const va_t Target =
+            readPtr(Bytes, PointerBytes == 8, archLittleEndian(Opts.TheArch));
         // A slot holding a header address holds `__ImageBase`'s.
         const bool HeaderTarget = !Opts.Image->CodePtrRelocSlots.count(*Slot) &&
                                   Opts.Image->imageBaseOffset(Target);
@@ -4247,7 +4247,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
       if (!Slot)
         continue;
       const va_t Target =
-          PointerBytes == 8 ? readLE<uint64_t>(Slot) : readLE<uint32_t>(Slot);
+          readPtr(Slot, PointerBytes == 8, archLittleEndian(Opts.TheArch));
       const Segment *Seg = Opts.Image->getSegmentFor(Target);
       if (!Seg || Seg->isWritable())
         continue;
@@ -4269,6 +4269,31 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
   // occupies 10. Also, independently declared globals cannot represent two
   // image accesses whose guest address ranges overlap. Project each connected
   // alias range as one byte array and use exact-width memory helpers at uses.
+  // COPY storage has runtime contents, never a file-byte initializer. Until
+  // its interior aliases have an external backing contract, admit only exact
+  // whole-object accesses; otherwise the overlap grouping below could replace
+  // the external object with a zero-filled local array.
+  const auto CopiedObjects = collectCopiedDataObjects(*Opts.Image);
+  for (const auto &[Base, Name] : CopiedObjects) {
+    const uint64_t Bytes = Opts.Image->dataObjectSizeAt(Base);
+    for (const auto &[Addr, Obj] : ImageObjects) {
+      const uint64_t Access =
+          std::max<uint64_t>(Obj.IndexedBytes, Obj.Type ? Obj.Type->Size : 0);
+      if (!Bytes || Addr >= Base + Bytes ||
+          (Addr < Base && Access <= Base - Addr))
+        continue;
+      // A libc header already declares this external object in the source
+      // target's layout. Its generic pointer type need not carry that target's
+      // width internally; the machine access widths still must match.
+      if (Addr != Base || (Obj.Header.empty() && Access != Bytes) ||
+          Obj.IndexedBytes > Bytes ||
+          llvm::any_of(Obj.MemoryWidths,
+                       [&](uint64_t Width) { return Width != Bytes; }))
+        throw std::invalid_argument(
+            "HighC cannot project partial or overlapping runtime COPY object " +
+            Name);
+    }
+  }
   va_t GroupBase = 0, GroupEnd = 0;
   unsigned GroupCount = 0;
   bool NeedsBacking = false;
@@ -4343,6 +4368,13 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
       Backing.Align = 1;
       Backing.Pad = 0;
     }
+    if (!Backing.Header)
+      for (const auto &[Base, Name] : CopiedObjects)
+        if (Base < GroupEnd &&
+            GroupBase < Base + Opts.Image->dataObjectSizeAt(Base))
+          throw std::invalid_argument(
+              "HighC cannot create local backing for runtime COPY object " +
+              Name);
     ImageBackings.push_back(std::move(Backing));
   };
   for (const auto &[Addr, Obj] : ImageObjects) {
@@ -4501,10 +4533,22 @@ void HighCWriter::writeImageObjects() {
   // A pointer slot that names another object comes after the declarations
   // of everything it can name.
   std::vector<va_t> Deferred;
+  const auto CopiedObjects = collectCopiedDataObjects(*Opts.Image);
   for (auto &[Addr, Obj] : ImageObjects) {
     // An object a C library header declares is the header's.
     if (imageBackingAddress(Addr) || !Obj.Header.empty())
       continue;
+    if (const auto Copy = CopiedObjects.find(Addr);
+        Copy != CopiedObjects.end()) {
+      OS << "extern " << declarationToC(Obj.Type, Obj.Name);
+      if (Obj.Name != Copy->second) {
+        OS << " __asm__(\"";
+        OS.write_escaped(Copy->second);
+        OS << "\")";
+      }
+      OS << "; /* initialized by the dynamic loader */\n";
+      continue;
+    }
     const uint64_t ObjectBytes = std::max<uint64_t>(
         Obj.IndexedBytes,
         Obj.Type ? Obj.Type->Size : pointerBytes(Opts.TheArch));
@@ -4722,7 +4766,9 @@ void HighCWriter::writePointerBackings(const std::vector<va_t> &Deferred) {
       for (unsigned Byte = 0; Byte < PointerBytes; ++Byte)
         if (Slot + Byte >= Backing.Base && Slot + Byte < Backing.End)
           if (const uint8_t *Data = Opts.Image->readVA(Slot + Byte, 1))
-            Value |= uint64_t{*Data} << (8 * Byte);
+            Value |= uint64_t{*Data} << (8 * (archLittleEndian(Opts.TheArch)
+                                                  ? Byte
+                                                  : PointerBytes - Byte - 1));
       OS << (Value ? "0x" + llvm::utohexstr(Value) +
                          (PointerBytes == 8 ? "ull" : "u")
                    : std::string("0"));
@@ -4788,7 +4834,7 @@ std::optional<std::string> HighCWriter::relocatedSlotTarget(va_t Slot) const {
   if (!Bytes)
     return std::nullopt;
   const va_t Target =
-      PointerBytes == 8 ? readLE<uint64_t>(Bytes) : readLE<uint32_t>(Bytes);
+      readPtr(Bytes, PointerBytes == 8, archLittleEndian(Opts.TheArch));
   if (Opts.Image->CodePtrRelocSlots.count(Slot)) {
     // A Thumb function's address carries its mode in bit 0.
     for (const va_t Entry : {Target, Target & ~va_t{1}})
@@ -4820,7 +4866,7 @@ std::string HighCWriter::relocatedTargetNote(va_t Slot) const {
   if (!Bytes)
     return {};
   const va_t Target =
-      PointerBytes == 8 ? readLE<uint64_t>(Bytes) : readLE<uint32_t>(Bytes);
+      readPtr(Bytes, PointerBytes == 8, archLittleEndian(Opts.TheArch));
   const ImageSymbolName Named = imageSymbolName(Target);
   // The listing names it by its symbol as the image spells it: the
   // underscore of `_IO_stdin_used` stays, though its C identifier drops it.
@@ -4854,11 +4900,11 @@ HighCWriter::imageObjectInitializer(va_t Addr, const ImageObject &Obj) {
     const uint8_t *Bytes = Opts.Image->readVA(Addr, 16);
     if (!Bytes)
       return std::nullopt;
-    uint64_t Low = 0, High = 0;
-    for (unsigned I = 0; I < 8; ++I) {
-      Low |= static_cast<uint64_t>(Bytes[I]) << (8 * I);
-      High |= static_cast<uint64_t>(Bytes[8 + I]) << (8 * I);
-    }
+    const bool Little = archLittleEndian(Opts.TheArch);
+    const uint64_t Low =
+        readTargetEndian<uint64_t>(Bytes + (Little ? 0 : 8), Little);
+    const uint64_t High =
+        readTargetEndian<uint64_t>(Bytes + (Little ? 8 : 0), Little);
     if (!Low && !High)
       return std::nullopt;
     std::string Value = "0x" + llvm::utohexstr(Low) + "ull";
@@ -4886,9 +4932,9 @@ HighCWriter::imageObjectInitializer(va_t Addr, const ImageObject &Obj) {
         typeToC(NdType::makeInt(Type->Size, /*Signed=*/false));
     std::string Value;
     for (unsigned Piece = Type->Size / 8; Piece-- > 0;) {
-      uint64_t Bits = 0;
-      for (unsigned I = 0; I < 8; ++I)
-        Bits |= static_cast<uint64_t>(Bytes[Piece * 8 + I]) << (8 * I);
+      const bool Little = archLittleEndian(Opts.TheArch);
+      const unsigned Offset = Little ? Piece * 8 : Type->Size - (Piece + 1) * 8;
+      const uint64_t Bits = readTargetEndian<uint64_t>(Bytes + Offset, Little);
       if (!Bits)
         continue;
       std::string Term = "(" + Unsigned + ")0x" + llvm::utohexstr(Bits) + "ull";
@@ -4909,7 +4955,8 @@ HighCWriter::imageObjectInitializer(va_t Addr, const ImageObject &Obj) {
     return std::nullopt;
   uint64_t Value = 0;
   for (unsigned I = 0; I < Type->Size; ++I)
-    Value |= static_cast<uint64_t>(Bytes[I]) << (8 * I);
+    Value |= static_cast<uint64_t>(Bytes[I])
+             << (8 * (archLittleEndian(Opts.TheArch) ? I : Type->Size - I - 1));
   if (!Value)
     return std::nullopt;
   switch (Type->Kind) {

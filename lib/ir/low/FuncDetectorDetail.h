@@ -120,6 +120,10 @@ void scanSegmentCallsARM(const BinaryImage &Img, Decoder &Dec,
                          const Segment *Seg, va_t Start, va_t End,
                          std::set<va_t> &Out,
                          const Cancellation *Control = nullptr);
+void scanSegmentCallsMIPS(const BinaryImage &Img, Decoder &Dec,
+                          const Segment *Seg, va_t Start, va_t End,
+                          std::set<va_t> &Out,
+                          const Cancellation *Control = nullptr);
 /// Phase-local AArch64 entry evidence, merged before admitting markers.
 struct AArch64EntryScan {
   std::vector<va_t> ConditionalTargets;
@@ -143,6 +147,12 @@ inline void scanSegmentCalls(const BinaryImage &Img, Decoder &Dec,
     return;
   case Arch::ARM:
     scanSegmentCallsARM(Img, Dec, Seg, Start, End, Out, Control);
+    return;
+  case Arch::MIPS32:
+  case Arch::MIPS32EL:
+  case Arch::MIPS64:
+  case Arch::MIPS64EL:
+    scanSegmentCallsMIPS(Img, Dec, Seg, Start, End, Out, Control);
     return;
   case Arch::X86:
   case Arch::X64:

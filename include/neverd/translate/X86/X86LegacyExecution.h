@@ -145,6 +145,10 @@ enum class X86LegacyDescriptorProfile : uint8_t { TableImage };
 /// opaque; SLDT/STR dword register results zero-extend the selector.
 enum class X86LegacySystemSelectorProfile : uint8_t { ExclusiveTable };
 
+/// SMSW's architecturally undefined high word of a dword register result
+/// follows CR0[31:16]. Required only for that form, independently of host CPU.
+enum class X86LegacyMachineStatusProfile : uint8_t { FullCR0 };
+
 /// One ordinary-RAM element per step, with destination-first CMPS reads.
 /// Incomplete comparisons retain entry flags; completed elements retain their
 /// memory/register effects across faults and producer-selected IRQ/NMI entry.
@@ -285,6 +289,7 @@ struct X86LegacyExecutionOptions {
   /// Required for LAR/LSL/VERR/VERW, including invalid selectors.
   std::optional<X86LegacyDescriptorProfile> DescriptorQueries;
   std::optional<X86LegacySystemSelectorProfile> SystemSelectors;
+  std::optional<X86LegacyMachineStatusProfile> MachineStatus;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {

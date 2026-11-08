@@ -12,6 +12,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "neverd/ArchSupport.h"
 #include "neverd/loader/DWARF/EHFrame.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/DwarfEH.h"
@@ -119,8 +120,10 @@ bool readEncodedPointer(const uint8_t *Buf, size_t Size, size_t &Cursor,
       return false;
     if (!rangeInBounds(Cursor, PtrSize, Size))
       return false;
-    Raw = PtrSize == 4 ? uint64_t(readLE<uint32_t>(Buf + Cursor))
-                       : readLE<uint64_t>(Buf + Cursor);
+    Raw = PtrSize == 4 ? uint64_t(readTargetEndian<uint32_t>(
+                             Buf + Cursor, !Img || archLittleEndian(Img->Arch)))
+                       : readTargetEndian<uint64_t>(
+                             Buf + Cursor, !Img || archLittleEndian(Img->Arch));
     Cursor += PtrSize;
     break;
   }
@@ -140,7 +143,8 @@ bool readEncodedPointer(const uint8_t *Buf, size_t Size, size_t &Cursor,
   case Sdata2: {
     if (!rangeInBounds(Cursor, 2, Size))
       return false;
-    uint16_t Value = readLE<uint16_t>(Buf + Cursor);
+    uint16_t Value = readTargetEndian<uint16_t>(
+        Buf + Cursor, !Img || archLittleEndian(Img->Arch));
     Raw = Format == Sdata2
               ? static_cast<uint64_t>(static_cast<int64_t>(int16_t(Value)))
               : Value;
@@ -151,7 +155,8 @@ bool readEncodedPointer(const uint8_t *Buf, size_t Size, size_t &Cursor,
   case Sdata4: {
     if (!rangeInBounds(Cursor, 4, Size))
       return false;
-    uint32_t Value = readLE<uint32_t>(Buf + Cursor);
+    uint32_t Value = readTargetEndian<uint32_t>(
+        Buf + Cursor, !Img || archLittleEndian(Img->Arch));
     Raw = Format == Sdata4
               ? static_cast<uint64_t>(static_cast<int64_t>(int32_t(Value)))
               : Value;
@@ -162,7 +167,8 @@ bool readEncodedPointer(const uint8_t *Buf, size_t Size, size_t &Cursor,
   case Sdata8: {
     if (!rangeInBounds(Cursor, 8, Size))
       return false;
-    Raw = readLE<uint64_t>(Buf + Cursor);
+    Raw = readTargetEndian<uint64_t>(Buf + Cursor,
+                                     !Img || archLittleEndian(Img->Arch));
     Cursor += 8;
     break;
   }
@@ -226,8 +232,10 @@ bool readEncodedPointer(const uint8_t *Buf, size_t Size, size_t &Cursor,
     const uint8_t *Slot = Img->readVA(Resolved, PtrSize);
     if (!Slot)
       return false;
-    Resolved = PtrSize == 4 ? uint64_t(readLE<uint32_t>(Slot))
-                            : readLE<uint64_t>(Slot);
+    Resolved = PtrSize == 4 ? uint64_t(readTargetEndian<uint32_t>(
+                                  Slot, !Img || archLittleEndian(Img->Arch)))
+                            : readTargetEndian<uint64_t>(
+                                  Slot, !Img || archLittleEndian(Img->Arch));
   }
 
   Out = static_cast<va_t>(Resolved);

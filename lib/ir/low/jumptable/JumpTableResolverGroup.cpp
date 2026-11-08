@@ -1007,8 +1007,8 @@ bool CFGBuilder::recoverFiniteAbsoluteJumpTableGroup(
       const auto *P = Img.readVA(Slot, 8);
       if (!P || !Img.CodePtrRelocSlots.count(Slot))
         return false;
-      const va_t Target =
-          normalizeCodeAddress(readPtr(P, true), Img.Arch, Img.Mode);
+      const va_t Target = normalizeCodeAddress(
+          readPtr(P, true, archLittleEndian(Img.Arch)), Img.Arch, Img.Mode);
       if (!isOwnedInteriorTarget(Img, Target) || !Insns.count(Target))
         return false;
       Physical.push_back(Target);

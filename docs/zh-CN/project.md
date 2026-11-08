@@ -1,6 +1,6 @@
 **语言**: [English](../../README.md) | [简体中文](project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 063226dd86688a1fb9f6d9741898c67d850f4398e9c652507a75f3b01d47ab90 -->
+<!-- i18n-source: eba5aa249bd6a7b45bc98a51faf985724d6cdfbb4dc21091fce89d6f541d01b8 -->
 
 <div align="center">
 
@@ -61,6 +61,8 @@ CLI、集成方与 AI 智能体通过 **纯 C API** 使用同一个引擎 **`lib
 | **Mach-O**（macOS / iOS） | ✓ | ✓ | ✓ | ✓ |
 
 > 矩阵中的每个单元格都已实现，但集成测试深度不同。详见[架构覆盖矩阵](architecture.md#support-and-test-depth)。Mach-O i386 使用 `thin` 可重定位对象，因为现代 macOS 无法链接历史 i386 可执行文件。
+
+**MIPS ELF 分析为实验性支持：** MIPS32r2/o32 和 MIPS64r2/n64 均支持大小端，可对严格限定的整数指令子集进行反汇编、CFG 恢复以及 C 和 LLVM 输出。不支持原生代码重写。详见 [MIPS 覆盖范围与固件示例（英文）](../mips.md)。
 
 传统 EVM 字节码独立于原生 container：从 Frontier 到 Fusaka 的 150 个已分配
 opcode 全部进入专用 Low/Med/High IR、已验证 LLVM `i256`、C23 `_BitInt(256)`

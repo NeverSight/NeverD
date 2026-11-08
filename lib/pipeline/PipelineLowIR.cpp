@@ -3184,7 +3184,8 @@ collectModuleJumpTableArbitration(const BinaryImage &Img,
     const uint8_t *P = Img.readVA(PointerSlot, Img.getPointerSize());
     if (!P)
       return abandonAnalysis();
-    const va_t Target = static_cast<va_t>(readPtr(P, Img.is64Bit()));
+    const va_t Target = static_cast<va_t>(
+        readPtr(P, Img.is64Bit(), archLittleEndian(Img.Arch)));
     const auto Outside = outsideAllPhysicalStorage(Target);
     if (!Outside)
       return abandonAnalysis();

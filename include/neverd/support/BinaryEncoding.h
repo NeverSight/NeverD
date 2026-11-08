@@ -19,6 +19,8 @@
 
 #include "neverd/Common.h"
 
+#include "llvm/Support/Endian.h"
+
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -33,6 +35,12 @@ template <typename T> T readLE(const uint8_t *P) {
   T Val{};
   std::memcpy(&Val, P, sizeof(T));
   return Val;
+}
+
+/// Read a fixed-width integer in the byte order declared by its image.
+template <typename T> T readTargetEndian(const uint8_t *P, bool LittleEndian) {
+  return llvm::support::endian::read<T>(
+      P, LittleEndian ? llvm::endianness::little : llvm::endianness::big);
 }
 
 template <typename T> void writeLE(uint8_t *P, T Val) {
@@ -73,25 +81,22 @@ inline uint32_t getPointerSize(bool Is64) {
 }
 
 /// Read a pointer-sized value from \p P (4 or 8 bytes depending on \p Is64).
-inline uint64_t readPtr(const uint8_t *P, bool Is64) {
-  if (Is64) {
-    uint64_t V;
-    std::memcpy(&V, P, sizeof(V));
-    return V;
-  }
-  uint32_t V;
-  std::memcpy(&V, P, sizeof(V));
-  return V;
+inline uint64_t readPtr(const uint8_t *P, bool Is64, bool LittleEndian = true) {
+  const auto Order =
+      LittleEndian ? llvm::endianness::little : llvm::endianness::big;
+  return Is64 ? llvm::support::endian::read64(P, Order)
+              : llvm::support::endian::read32(P, Order);
 }
 
 /// Write a pointer-sized value to \p P (4 or 8 bytes depending on \p Is64).
-inline void writePtr(uint8_t *P, uint64_t Val, bool Is64) {
+inline void writePtr(uint8_t *P, uint64_t Val, bool Is64,
+                     bool LittleEndian = true) {
+  const auto Order =
+      LittleEndian ? llvm::endianness::little : llvm::endianness::big;
   if (Is64)
-    std::memcpy(P, &Val, sizeof(uint64_t));
-  else {
-    uint32_t V32 = static_cast<uint32_t>(Val);
-    std::memcpy(P, &V32, sizeof(uint32_t));
-  }
+    llvm::support::endian::write64(P, Val, Order);
+  else
+    llvm::support::endian::write32(P, static_cast<uint32_t>(Val), Order);
 }
 
 // ===--------------------------------------------------------------------===//

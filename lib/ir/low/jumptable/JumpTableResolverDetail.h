@@ -350,7 +350,8 @@ std::optional<va_t> decodeTableEntry(const uint8_t *P, uint16_t EntrySize,
                                      bool IsRelative, bool IsSigned,
                                      va_t BaseAddr, bool HasTargetBase = false,
                                      va_t TargetBase = 0, uint32_t Scale = 1,
-                                     uint16_t AddressBytes = 8);
+                                     uint16_t AddressBytes = 8,
+                                     bool LittleEndian = true);
 
 /// Canonicalize a serialized absolute code pointer for the image's uniform
 /// instruction mode.  ARM bit 0 is a mode tag, not part of the decode VA;

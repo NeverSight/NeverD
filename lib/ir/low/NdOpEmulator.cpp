@@ -15,6 +15,7 @@
 
 #include "neverd/ir/low/NdOpEmulator.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/X86/X87Constant.h"
 #include "neverd/ir/X86/X87Context.h"
@@ -88,8 +89,9 @@ predicatedInstructionEnd(llvm::ArrayRef<LowOp> Ops,
   if (!Boundaries.empty()) {
     const LowInstructionBoundary *Boundary =
         boundaryForOp(Ops, Boundaries, Guard);
-    if (!Boundary || (Boundary->Mode != InstructionMode::ARM &&
-                      Boundary->Mode != InstructionMode::Thumb))
+    if (!Boundary ||
+        (Boundary->Mode != InstructionMode::ARM &&
+         Boundary->Mode != InstructionMode::Thumb && !Boundary->DelaySlot))
       return 0;
     const bool IsTaggedGuard = hasLowInstructionControlFlag(
         Boundary->ControlFlags, LowInstructionControlFlag::InstructionGuard);
@@ -414,7 +416,9 @@ std::optional<uint64_t> NdOpEmulator::loadMemory(uint64_t Addr, uint16_t Size,
   if (!Bytes)
     return std::nullopt;
   uint64_t Val = 0;
-  std::memcpy(&Val, Bytes->data(), Size);
+  for (unsigned I = 0; I < Size; ++I)
+    Val |= uint64_t((*Bytes)[archLittleEndian(Img.Arch) ? I : Size - 1 - I])
+           << (I * 8);
   return Val;
 }
 
@@ -464,7 +468,9 @@ bool NdOpEmulator::storeMemory(uint64_t Addr, uint16_t Size, uint64_t Value,
   if (Size != 1 && Size != 2 && Size != 4 && Size != 8)
     return false;
   std::array<uint8_t, sizeof(Value)> Bytes{};
-  std::memcpy(Bytes.data(), &Value, Size);
+  for (unsigned I = 0; I < Size; ++I)
+    Bytes[archLittleEndian(Img.Arch) ? I : Size - 1 - I] =
+        uint8_t(Value >> (I * 8));
   return storeMemoryBytes(Addr, llvm::ArrayRef(Bytes).take_front(Size), Wrap32);
 }
 

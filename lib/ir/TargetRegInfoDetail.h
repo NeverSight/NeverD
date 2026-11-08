@@ -37,6 +37,8 @@ extern TargetRegInfo A64RegInfo;
 /// ARM32 register info (TargetRegInfoARM.cpp).
 extern TargetRegInfo ARMRegInfo;
 
+const TargetRegInfo &getMIPSRegInfo(Arch Target);
+
 // The table fields that cannot be set from the static initializer — the
 // sub-register tables, the return-register sequences and the limits.h
 // alignment constants — are filled in by these per-architecture functions.

@@ -27,6 +27,7 @@ protected:
   std::optional<uint32_t> BMIUndefinedFlags;
   std::optional<X86LegacyDescriptorProfile> DescriptorQueries;
   std::optional<X86LegacySystemSelectorProfile> SystemSelectors;
+  std::optional<X86LegacyMachineStatusProfile> MachineStatus;
   std::optional<X86LegacyAtomicProfile> Atomics;
   std::optional<uint32_t> MemoryHigh;
   std::optional<uint32_t> RepairPage;
@@ -284,6 +285,7 @@ protected:
     Options.BMIUndefinedFlags = BMIUndefinedFlags;
     Options.DescriptorQueries = DescriptorQueries;
     Options.SystemSelectors = SystemSelectors;
+    Options.MachineStatus = MachineStatus;
     Options.Atomics = Atomics;
     Options.Strings = Strings;
     Options.FarTransfers = FarTransfers;
@@ -433,6 +435,7 @@ protected:
     ASSERT_EQ(Run->exit_reason, unsigned(KVM_EXIT_DEBUG));
     ASSERT_EQ(ioctl(CPU, KVM_GET_REGS, &Registers), 0);
     ASSERT_EQ(ioctl(CPU, KVM_GET_SREGS, &Special), 0);
+    SCOPED_TRACE(testing::Message() << "native event=" << get(Record, 4));
     if (Expected->InstructionCompleted) {
       EXPECT_EQ(Registers.rip, State.EIP);
     } else {
@@ -449,6 +452,10 @@ protected:
     EXPECT_EQ(Registers.rflags & ~uint64_t{0x10000},
               State.EFlags & ~uint32_t{0x10000});
     EXPECT_EQ(Special.cr2, State.CR2);
+    EXPECT_EQ(Special.cr0, Memory->controls().CR0);
+    EXPECT_EQ(Special.cr3, Memory->controls().CR3);
+    EXPECT_EQ(Special.cr4, Memory->controls().CR4);
+    EXPECT_EQ(Special.efer, Memory->controls().EFER);
     for (unsigned I = 0; I != Segments.size(); ++I) {
       const auto Native = Cache(*Segments[I]);
       const auto &Model = State.Core.Segments[I];

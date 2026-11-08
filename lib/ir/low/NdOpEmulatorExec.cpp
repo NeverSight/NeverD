@@ -17,6 +17,7 @@
 #include "X86/X86ApproxReference.h"
 #include "X86/X86FPConvertRounding.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/NdOpEmulator.h"
@@ -530,12 +531,14 @@ bool NdOpEmulator::executeLoad(const LowOp &Op) {
     return false;
 
   if (Op.Output.Size == 16 || Op.Output.Size == 32 || Op.Output.Size == 64) {
-    const auto Bytes = loadMemoryBytes(*Addr, Op.Output.Size);
+    auto Bytes = loadMemoryBytes(*Addr, Op.Output.Size);
     if (!Bytes)
       return false;
     if (CollectLoads &&
         static_cast<int>(LoadLog.size()) < limits::kMaxLoadRecords)
       LoadLog.push_back({*Addr, Op.Output.Size});
+    if (!archLittleEndian(Img.Arch))
+      std::reverse(Bytes->begin(), Bytes->end());
     writeOutputBytes(Op.Output, *Bytes);
     return true;
   }
@@ -561,10 +564,13 @@ bool NdOpEmulator::executeStore(const LowOp &Op) {
   if (Size != 1 && Size != 2 && Size != 4 && Size != 8 && Size != 16 &&
       Size != 32 && Size != 64)
     return false;
-  const std::vector<uint8_t> Value = readOperandBytes(*Memory.StoredValue);
+  std::vector<uint8_t> Value = readOperandBytes(*Memory.StoredValue);
   if (Value.size() < Size)
     return false;
-  if (!storeMemoryBytes(*Addr, llvm::ArrayRef(Value).take_front(Size)))
+  Value.resize(Size);
+  if (!archLittleEndian(Img.Arch))
+    std::reverse(Value.begin(), Value.end());
+  if (!storeMemoryBytes(*Addr, Value))
     return !strictMode();
   return true;
 }

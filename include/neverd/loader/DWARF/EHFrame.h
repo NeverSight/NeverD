@@ -69,9 +69,9 @@ struct ParseResult {
 
 /// Decode every CIE and FDE in \p Sec.
 ///
-/// \p Img is consulted only to resolve `DW_EH_PE_indirect` pointers and to
-/// classify addresses; the section bytes themselves come from \p Sec so a
-/// caller can decode a section that is not mapped into a segment.
+/// \p Img supplies the target byte order, resolves `DW_EH_PE_indirect`
+/// pointers and classifies addresses; the section bytes themselves come from \p
+/// Sec so a caller can decode a section that is not mapped into a segment.
 ParseResult parseEHFrame(const BinaryImage &Img, const FrameSection &Sec,
                          const PointerBases &Bases,
                          const ParseLimits &Limits = {});

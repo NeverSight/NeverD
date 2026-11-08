@@ -4322,3 +4322,34 @@ records 32 O0/O2 profiles across P/E cores, including code16 and x32:
 value/stack corruption controls. The direct NeverC and NeverC-IR profiles
 both pass in i386 and x64. These counts qualify the source contract above;
 they do not close the separate original-image context and event domains.
+
+## Protected machine status and i386 system builtins (2026-11-07)
+
+Protected original-byte execution and generated C now support SMSW, LMSW,
+CLTS, CLAC and STAC. LMSW retains PE, reads a fixed word and changes only
+MP/EM/TS; CLTS clears TS. CR0 commits before post-instruction debug delivery
+and remains unchanged on operand faults or unavailable backing. Dword-register
+SMSW requires an explicit FullCR0 choice for its undefined high word.
+CLAC/STAC use the bound target SMAP capability, preserve unrelated flags and
+deliver #UD for a 66 prefix. The shared fetch owner retains fault priority.
+
+The [qualification evidence](evidence/x86-legacy-machine-status-2026-11-07.json)
+records 1,410 passing checks, no failures or skips, across both LLVM SDKs and
+qualified P/E cores. New original-instruction coverage comprises 20,880 state
+and 1,920 debug comparisons. Generated C runs through Clang/NeverC O0/O2.
+After integrating the subsequent HighIR frame-read changes, both SDKs pass
+368 additional P-core checks covering the complete generated-C suite, machine
+status and ordinary system state; the implementation code hashes are unchanged.
+The native LMSW debug case changes TS; the observed KVM interception limit for
+changing MP is retained with the failed diagnostic receipts and described in
+[the testing contract](testing.md). Fixed software and generated C separately
+check the broader CR0 update before data/TF traps and fault atomicity.
+
+NeverC now exposes CLTS, CLAC, STAC, HLT, VMXOFF, STGI and CLGI on i386 through
+the existing native LLVM intrinsics. Its harness passes 308 code-generation
+form checks and 10,560 native descriptor-query comparisons; these counts do
+not claim privileged user-mode execution. SWAPGS remains x64-only. No LLVM
+lowering change was needed. General MOV-CR/mode transitions, task switching,
+other i386 state banks, software SMM/SGX and unbound asynchronous producers
+remain open; the final LLVM release and pin/gitlink update stay gated, with
+the production pin at r6.

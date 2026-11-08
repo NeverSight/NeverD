@@ -15,6 +15,7 @@
 #ifndef NEVERD_LOADER_BINARYIMAGEMODEL_H
 #define NEVERD_LOADER_BINARYIMAGEMODEL_H
 
+#include "neverd/ArchSupport.h"
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/evm/EVMImageMetadata.h"
@@ -23,6 +24,7 @@
 #include "neverd/loader/BinaryImageSection.h"
 #include "neverd/loader/COFF/RichHeader.h"
 #include "neverd/loader/ELF/ELFImageMetadata.h"
+#include "neverd/loader/ELF/MIPSImageMetadata.h"
 #include "neverd/loader/ExceptionTable.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
@@ -320,6 +322,7 @@ struct BinaryImage {
   /// mutable context, false keeps typed binary80 values.
   std::optional<bool> X87ContextOverride;
   Bitness Bits = Bitness::Unknown;
+  std::optional<MIPSImageMetadata> MIPS;
   bool IsRelocatable = false;
   /// The image runs at its link-time addresses: no loader rebases it, so an
   /// absolute address its code or data holds stays valid without a
@@ -1044,7 +1047,7 @@ struct BinaryImage {
       size_t Off = static_cast<size_t>(Addr - Seg.VA);
       if (!rangeInBounds(Off, PtrSz, Seg.Data.size()))
         return false;
-      writePtr(Seg.Data.data() + Off, Value, is64Bit());
+      writePtr(Seg.Data.data() + Off, Value, is64Bit(), archLittleEndian(Arch));
       return true;
     }
     return false;
@@ -1343,7 +1346,8 @@ struct BinaryImage {
       P = readVA(Addr + I * PtrSz, PtrSz);
       if (!P)
         break;
-      Result.push_back(static_cast<va_t>(readPtr(P, is64Bit())));
+      Result.push_back(
+          static_cast<va_t>(readPtr(P, is64Bit(), archLittleEndian(Arch))));
     }
     return Result;
   }
@@ -1764,7 +1768,8 @@ struct BinaryImage {
   const Import *decodeImportThunkAt(va_t Addr) const;
   /// Whether decodeImportThunkAt reads veneers of this architecture.
   bool decodesImportThunks() const {
-    return Arch == neverd::Arch::X64 || Arch == neverd::Arch::X86;
+    return Arch == neverd::Arch::X64 || Arch == neverd::Arch::X86 ||
+           isMIPS(Arch);
   }
 
   /// Find the import owned by an exact executable veneer registration.  This
@@ -2009,7 +2014,7 @@ struct BinaryImage {
     if (DataInCode.count(Normalized) || isFunctionContinuationAt(Addr) ||
         !hasExecutableCodeOwnerAt(Normalized))
       return false;
-    if (Arch == neverd::Arch::AArch64)
+    if (Arch == neverd::Arch::AArch64 || isMIPS(Arch))
       return Normalized % 4 == 0;
     if (Arch == neverd::Arch::ARM) {
       const auto LocalMode = instructionModeAt(Normalized);

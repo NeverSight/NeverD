@@ -17,17 +17,16 @@
 
 namespace neverd {
 
-/// Four ISAs across loader / lift / MIR codegen / Mach-O patch (see
-/// docs/targets.md). CI and day-to-day dev on Apple Silicon often exercise only
-/// x86_64 + arm64 binaries; arm32 / i386 paths remain built and supported
-/// in-tree.
-
 inline bool archLiftSupported(Arch A) {
+  return A == Arch::X64 || A == Arch::AArch64 || A == Arch::X86 ||
+         A == Arch::ARM || isMIPS(A);
+}
+
+/// Native rewriting requires a target backend as well as analysis semantics.
+inline bool archCodegenSupported(Arch A) {
   return A == Arch::X64 || A == Arch::AArch64 || A == Arch::X86 ||
          A == Arch::ARM;
 }
-
-inline bool archCodegenSupported(Arch A) { return archLiftSupported(A); }
 
 /// Whether every instruction of an \p A image decodes in the one mode the
 /// image's bitness gives it.  AArch32 interworks ARM and Thumb code, whose
@@ -36,18 +35,18 @@ inline bool archCodegenSupported(Arch A) { return archLiftSupported(A); }
 constexpr bool archHasSingleInstructionMode(Arch A) { return A != Arch::ARM; }
 
 /// Whether \p A stores a multi-byte value least significant byte first.  The
-/// loaders take no big-endian image of the native ISAs; EVM memory is
-/// big-endian.
+/// MIPS admits both byte orders; EVM memory is big-endian.
 constexpr bool archLittleEndian(Arch A) {
   return A == Arch::X64 || A == Arch::AArch64 || A == Arch::X86 ||
-         A == Arch::ARM || A == Arch::SBF;
+         A == Arch::ARM || A == Arch::SBF || A == Arch::MIPS32EL ||
+         A == Arch::MIPS64EL;
 }
 
-inline bool archMachOPatchSupported(Arch A) { return archLiftSupported(A); }
+inline bool archMachOPatchSupported(Arch A) { return archCodegenSupported(A); }
 
-inline bool archCOFFPatchSupported(Arch A) { return archLiftSupported(A); }
+inline bool archCOFFPatchSupported(Arch A) { return archCodegenSupported(A); }
 
-inline bool archELFPatchSupported(Arch A) { return archLiftSupported(A); }
+inline bool archELFPatchSupported(Arch A) { return archCodegenSupported(A); }
 
 constexpr uint64_t kPageSize4K = 0x1000;
 constexpr uint64_t kPageSize16K = 0x4000;
@@ -83,8 +82,10 @@ syntheticEntryStackResidue(Arch A, BinaryFormat Fmt = BinaryFormat::Unknown,
 constexpr uint64_t
 guaranteedEntryStackAlignment(Arch A, BinaryFormat Fmt,
                               StackEntryKind Kind = StackEntryKind::Call) {
-  if (A == Arch::ARM)
+  if (A == Arch::ARM || A == Arch::MIPS32 || A == Arch::MIPS32EL)
     return 8;
+  if (isMIPS64(A))
+    return 16;
   if (A == Arch::AArch64 || A == Arch::X64)
     return 16;
   if (A == Arch::X86 &&
@@ -148,6 +149,14 @@ inline const char *getTriple(Arch A, BinaryFormat Fmt) {
     return "aarch64-unknown-linux-gnu";
   case Arch::ARM:
     return "arm-unknown-linux-gnueabihf";
+  case Arch::MIPS32:
+    return "mips-unknown-linux-gnu";
+  case Arch::MIPS32EL:
+    return "mipsel-unknown-linux-gnu";
+  case Arch::MIPS64:
+    return "mips64-unknown-linux-gnuabi64";
+  case Arch::MIPS64EL:
+    return "mips64el-unknown-linux-gnuabi64";
   default:
     return nullptr;
   }

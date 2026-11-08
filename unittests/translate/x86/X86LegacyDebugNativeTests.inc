@@ -45,6 +45,8 @@ protected:
     std::optional<uint32_t> BMIUndefinedFlags;
     std::optional<X86LegacyDescriptorProfile> DescriptorQueries;
     std::optional<X86LegacySystemSelectorProfile> SystemSelectors;
+    std::optional<X86LegacyMachineStatusProfile> MachineStatus;
+    std::optional<uint32_t> CR0, Operand;
     std::optional<uint64_t> SystemDescriptor;
   };
 
@@ -401,7 +403,10 @@ protected:
             if (Bytes.size() >= 2 && Bytes[1] == 0x07)
               Bytes.insert(Bytes.begin(), 0x67);
       }
-      put(0x8100, Watch->SystemSelectors ? 56 : 32 | CPL, 4);
+      put(0x8100,
+          Watch->Operand.value_or(Watch->SystemSelectors ? 56 : 32 | CPL), 4);
+      if (Watch->CR0)
+        Special.cr0 = *Watch->CR0;
       if (Watch->SystemDescriptor)
         put(GDT + 56, *Watch->SystemDescriptor);
     }
@@ -548,6 +553,7 @@ protected:
       Options.BMIUndefinedFlags = Watch->BMIUndefinedFlags;
       Options.DescriptorQueries = Watch->DescriptorQueries;
       Options.SystemSelectors = Watch->SystemSelectors;
+      Options.MachineStatus = Watch->MachineStatus;
     }
     if (Execute && Execute->Resume)
       Options.LogicalAuxiliaryCarry = false;
@@ -619,6 +625,10 @@ protected:
     EXPECT_EQ(Registers.rip - 1, State.EIP);
     EXPECT_EQ(Registers.rflags, State.EFlags);
     EXPECT_EQ(Special.cr2, State.CR2);
+    EXPECT_EQ(Special.cr0, Memory->controls().CR0);
+    EXPECT_EQ(Special.cr3, Memory->controls().CR3);
+    EXPECT_EQ(Special.cr4, Memory->controls().CR4);
+    EXPECT_EQ(Special.efer, Memory->controls().EFER);
     EXPECT_EQ(Debug.dr6, State.Debug->DR6);
     EXPECT_EQ(Debug.dr7, State.Debug->DR7);
     if (RegistersAccess || Watch)

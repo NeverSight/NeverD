@@ -526,6 +526,39 @@ instruction chains and busy-write fault repair through Clang/NeverC O0/O2.
 Run these with both SDKs and qualified P/E cores, plus shared scalar,
 segment/query and ordinary system-state regressions.
 
+`LegacyMachineStatus/*` qualifies original protected SMSW/LMSW/CLTS in legacy
+paging and PAE. It compares the complete control bank, registers, flags,
+exceptions and RAM across code/operand/address sizes, all GPRs, low CR0 bits,
+ignored source bits, preserved control fields, CPL/UMIP, segment/page/alignment
+faults and original handler repair/retry. `OriginalMachineStatusAccessesAndTraps`
+uses real guest debug handlers to check exact word accesses and post-instruction
+CR0 publication. Its LMSW case clears TS while retaining MP/EM: KVM lets the
+guest own TS, whereas changing MP can take an intercepted LMSW path. On the
+qualified host, the latter lost the data-breakpoint trap; unchanged-CR0 and
+TS-only controls retained it. This agrees with the
+[KVM VMX control-register handler](https://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux/+/05e96e96a315fa49faca4da2aedd1761a218b616/arch/x86/kvm/vmx/vmx.c#5505),
+but is not a trace of the running kernel's VM exit. Keep the failing diagnostic
+receipts; do not use that intercepted case as architectural debug evidence.
+Fixed software and generated-C cases separately check MP/EM/TS publication
+before data/TF traps and no publication on a faulting read.
+`X86LegacyMachineStatusTest.*` adds fixed expected values,
+backing resume, sticky PE and prefetch refusal of missing choices or malformed
+encodings. `X86LegacySourceTest.MachineStatus*` executes compiled state-producing
+and consuming chains, faults/retry and single-step traps with Clang and NeverC
+at O0/O2. Run both SDKs on the qualified P/E cores and the shared scalar,
+descriptor/selector and system-state regressions. FullCR0 is an explicit target
+choice, not a universal definition of SMSW's undefined high word. NeverC's
+descriptor-builtin harness also checks CLTS on i386 and x64; privileged native
+builtins have code-generation coverage there, while these protected CPU tests
+own the original instruction state/fault comparisons.
+The same native matrix qualifies CLAC/STAC flag preservation and #UD privilege
+checks in both code sizes, including #UD for the 66 prefix, and the guest debug
+tests cover their TF traps. Software tests check fetch-fault priority over that
+prefix's #UD; generated C checks the unchanged AC bit in the saved fault frame.
+Software tests also bind a target without SMAP. Generated C composes
+STAC → supervisor read of a user page → CLAC → denied read, checking the actual
+page-fault frame and preservation of the earlier loaded value.
+
 `NeverDLLVMCValueTests --gtest_filter=LLVMCValues.X86BitString*` rejects
 weakened native bit-string declarations and executes all twelve LLVM-to-C
 projections with live/dead results. The original-instruction oracle compares
@@ -22081,4 +22114,39 @@ SymConditionalControls and SymMBASelector Boolean-word tests use exhaustive smal
 
 SymMBARewriteCache regressions compare cold/hot work counts rather than wall-clock thresholds. Completed unchanged subtrees, opaque parent compositions, refused siblings, working-set eviction and option/context/work boundaries retain exact derivation semantics. SymMBASparseContext additionally checks placeholder declaration reuse without hiding caller inputs or carrying declarations across contexts.
 
-`HighControlFlowSemantics.UnusedValuesDropReadsOfTheirOwnFrame` keeps unused reads through pointers and past the frame while dropping reads of the private frame, across stack-adjustment chains longer than one address walk. `HighCPointerAddresses.UnusedFieldLoadIsNotARegistersEntryValue` keeps a register's entry value from taking a later unused field load's name. `SymState.AnUnreadRunOfAPartlyKnownWordIsOneInput`, `SymMBARewriteCache.RecoveredWordChoicesStayInTheEvictionOrder` and `SymMBAKnownFacts.ConstantsBesideSeveralTermsStillFold` cover unread byte runs, cache eviction of recovered word choices and masks beside several terms.
+`HighControlFlowSemantics.UnusedValuesDropReadsOfTheirOwnFrame` keeps unused reads through pointers and past the frame while dropping reads of the private frame, across stack-adjustment chains longer than one address walk. `HighCPointerAddresses.UnusedFieldLoadIsNotARegistersEntryValue` keeps a register's entry value from taking a later unused field load's name. `SymState.AnUnreadRunOfAPartlyKnownWordIsOneInput`, `SymMBARewriteCache.RecoveredWordChoicesStayInTheEvictionOrder` and `SymMBAKnownFacts.ConstantsBesideSeveralTermsStillFold` cover unread byte runs, cache eviction of recovered word choices and masks beside several terms. `HighControlFlowSemantics.UnusedOwnFrameReadsFollowEveryStackAdjustment` proves a read of the private frame through i386's sign-extended stack adjustment and in a function whose locals are all temporaries, so an unused reload no longer keeps its register's save. `HighCPointerAddresses.ImmutableSlotLoadsConvertTheirAddressOnce` converts a read-only GOT slot's address to an integer once.
+
+## MIPS ELF analysis and source roundtrips
+
+The experimental [MIPS analysis](mips.md) path has focused targets
+`NeverDMIPSTests` (ELF admission, endian data, GOT/PLT and unwind records),
+`NeverDMIPSIntegerTests` (integer semantics and pinned Unicorn),
+`NeverDMIPSFlowTests` (delay-slot ownership, capture and annulment),
+`NeverDMIPSSDKTests` (physical disassembly rows and flow) and
+`NeverDMIPSPipelineTests` (ABI recovery and both source paths).
+
+```sh
+python3 scripts/build.py build-mips --target NeverDMIPSTests NeverDMIPSIntegerTests NeverDMIPSFlowTests NeverDMIPSSDKTests NeverDMIPSPipelineTests neverd --parallel 4
+ctest --test-dir build-mips --build-config Release -L '^NeverDMIPS.*Tests$' --output-on-failure --parallel 4
+```
+
+`unittests/lift/mips/roundtrip.py` is an additional standalone differential
+runner. It needs clang and lld with MIPS targets, pyelftools, and the repository's
+pinned Unicorn native library/Python bindings. Pass the built CLI, compiler,
+linker and an ignored output directory explicitly:
+
+```sh
+LIBUNICORN_PATH=/path/to/repo-pinned-unicorn-library PYTHONPATH="$PWD/third_party/unicorn/bindings/python" python3 unittests/lift/mips/roundtrip.py --neverd build-mips/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld --output build-mips/roundtrip
+```
+
+The runner compiles the owned assembly and each generated C variant for all
+four width/byte-order profiles. It checks return values and memory effects,
+including taken/untaken likely branches, delayed calls, argument carriers,
+readonly/writable globals and image pointers. LLVMC's original-image storage
+and either route's omitted original callees are explicitly bound at their
+original addresses; this qualifies the regenerated caller against that
+dependency contract. It does
+not claim a standalone rebuilt firmware. `results.json` records each case and
+any failure; an unavailable compiler or oracle is a failure, not a skipped pass.
+Vendor firmware remains outside the committed fixtures. Its separate static
+receipt is [Archer C7 V5](firmware/archer-c7-v5.md).

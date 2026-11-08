@@ -8,6 +8,7 @@
 
 #include "EHFrameDetail.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/loader/DWARF/EHFrame.h"
 #include "neverd/loader/DWARF/LSDA.h"
 #include "neverd/loader/ELF/ELFImageMetadata.h"
@@ -66,8 +67,8 @@ bool findFrameTableFromProgramHeaders(const BinaryImage &Img,
       const uint8_t *Length = Img.readVA(End, kRecordLengthSize);
       if (!Length)
         break;
-      uint32_t Word;
-      std::memcpy(&Word, Length, sizeof(Word));
+      const uint32_t Word =
+          readTargetEndian<uint32_t>(Length, archLittleEndian(Img.Arch));
       if (Word == 0) {
         End += kRecordLengthSize;
         break;
@@ -78,8 +79,8 @@ bool findFrameTableFromProgramHeaders(const BinaryImage &Img,
             Img.readVA(End + kRecordLengthSize, kDwarf64LengthSize);
         if (!Long)
           break;
-        uint64_t LongLength;
-        std::memcpy(&LongLength, Long, sizeof(LongLength));
+        const uint64_t LongLength =
+            readTargetEndian<uint64_t>(Long, archLittleEndian(Img.Arch));
         RecordSize = kRecordLengthSize + kDwarf64LengthSize + LongLength;
       }
       if (RecordSize > std::numeric_limits<size_t>::max() ||
@@ -247,7 +248,8 @@ void appendIndexedELFFrames(const BinaryImage &Img, const FrameSection &Sec,
       Malformed("runtime DWARF index names an unreadable FDE");
       continue;
     }
-    const uint32_t Word = readLE<uint32_t>(Prefix);
+    const uint32_t Word =
+        readTargetEndian<uint32_t>(Prefix, archLittleEndian(Img.Arch));
     uint64_t Length = Word, IDOffset = 4, IDSize = 4;
     if (Word == UINT32_MAX) {
       Prefix = Img.readVA(FDEVA, 20);
@@ -255,12 +257,16 @@ void appendIndexedELFFrames(const BinaryImage &Img, const FrameSection &Sec,
         Malformed("runtime DWARF index names a truncated DWARF64 FDE");
         continue;
       }
-      Length = readLE<uint64_t>(Prefix + 4);
+      Length =
+          readTargetEndian<uint64_t>(Prefix + 4, archLittleEndian(Img.Arch));
       IDOffset = 12;
       IDSize = 8;
     }
-    const uint64_t Distance = IDSize == 8 ? readLE<uint64_t>(Prefix + IDOffset)
-                                          : readLE<uint32_t>(Prefix + IDOffset);
+    const uint64_t Distance =
+        IDSize == 8 ? readTargetEndian<uint64_t>(Prefix + IDOffset,
+                                                 archLittleEndian(Img.Arch))
+                    : readTargetEndian<uint32_t>(Prefix + IDOffset,
+                                                 archLittleEndian(Img.Arch));
     if (Length < IDSize || Length > Budget || FDEVA > UINT64_MAX - IDOffset ||
         !Distance || Distance > FDEVA + IDOffset ||
         FDEVA + IDOffset - Distance < Sec.VA) {
@@ -340,7 +346,8 @@ va_t functionEntry(const BinaryImage &Img, va_t FrameBegin,
   if (!Seg || !Seg->isExecutable() || Pad < Seg->VA ||
       FrameBegin - Seg->VA > Seg->Data.size())
     return FrameBegin;
-  const uint32_t Word = readLE<uint32_t>(Seg->Data.data() + (Pad - Seg->VA));
+  const uint32_t Word = readTargetEndian<uint32_t>(
+      Seg->Data.data() + (Pad - Seg->VA), archLittleEndian(Img.Arch));
   return Word == aarch64::kBTI_C || Word == aarch64::kBTI_JC ? Pad : FrameBegin;
 }
 

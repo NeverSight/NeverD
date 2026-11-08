@@ -128,6 +128,7 @@ add_neverd_component_library(NeverDIRLow
   CallRegisterUnread.cpp
   CircleRange.cpp
   FuncDetector.cpp
+  FuncDetectorMIPS.cpp
   X86/FuncDetectorX86.cpp
   ARM/FuncDetectorARM.cpp
   AArch64/FuncDetectorAArch64.cpp

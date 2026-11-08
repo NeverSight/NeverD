@@ -19,6 +19,7 @@
 
 #include "JumpTableResolverDetail.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -194,7 +195,7 @@ std::optional<va_t> decodeTableEntry(const uint8_t *P, uint16_t EntrySize,
                                      bool IsRelative, bool IsSigned,
                                      va_t BaseAddr, bool HasTargetBase,
                                      va_t TargetBase, uint32_t Scale,
-                                     uint16_t AddressBytes) {
+                                     uint16_t AddressBytes, bool LittleEndian) {
   if (!P ||
       (EntrySize != 1 && EntrySize != 2 && EntrySize != 4 && EntrySize != 8))
     return std::nullopt;
@@ -206,30 +207,11 @@ std::optional<va_t> decodeTableEntry(const uint8_t *P, uint16_t EntrySize,
                                    ? std::numeric_limits<uint64_t>::max()
                                    : (uint64_t(1) << AddressBits) - 1;
 
+  uint64_t Raw = 0;
+  for (unsigned I = 0; I < EntrySize; ++I)
+    Raw |= uint64_t(P[I]) << (8 * (LittleEndian ? I : EntrySize - 1 - I));
   auto readEntryBits = [&]() -> uint64_t {
-    uint64_t Value = 0;
-    switch (EntrySize) {
-    case 1:
-      Value = *P;
-      break;
-    case 2: {
-      uint16_t Raw = 0;
-      std::memcpy(&Raw, P, sizeof(Raw));
-      Value = Raw;
-      break;
-    }
-    case 4: {
-      uint32_t Raw = 0;
-      std::memcpy(&Raw, P, sizeof(Raw));
-      Value = Raw;
-      break;
-    }
-    case 8:
-      std::memcpy(&Value, P, sizeof(Value));
-      break;
-    default:
-      llvm_unreachable("entry width validated above");
-    }
+    uint64_t Value = Raw;
     const unsigned EntryBits = static_cast<unsigned>(EntrySize) * 8u;
     if (IsSigned && EntryBits < 64 &&
         (Value & (uint64_t(1) << (EntryBits - 1))) != 0)
@@ -244,30 +226,7 @@ std::optional<va_t> decodeTableEntry(const uint8_t *P, uint16_t EntrySize,
   if (IsRelative)
     return static_cast<va_t>(((BaseAddr & AddressMask) + Entry) & AddressMask);
 
-  va_t Target = 0;
-  switch (EntrySize) {
-  case 8:
-    std::memcpy(&Target, P, 8);
-    break;
-  case 4: {
-    uint32_t Val;
-    std::memcpy(&Val, P, 4);
-    Target = Val;
-    break;
-  }
-  case 2: {
-    uint16_t Val;
-    std::memcpy(&Val, P, 2);
-    Target = Val;
-    break;
-  }
-  case 1:
-    Target = *P;
-    break;
-  default:
-    break;
-  }
-  return Target & AddressMask;
+  return Raw & AddressMask;
 }
 
 std::optional<va_t> canonicalizeAbsoluteTableCodeTarget(const BinaryImage &Img,
@@ -373,10 +332,10 @@ CFGBuilder::readTableEntries(const BinaryImage &Img, const JumpTableInfo &Info,
       ++NullSlots;
       continue;
     }
-    auto TargetOpt =
-        decodeTableEntry(P, Info.EntrySize, Info.IsRelative, Info.IsSigned,
-                         Info.BaseAddr, Info.HasTargetBase, Info.TargetBase,
-                         Info.EntryScale, Img.getPointerSize());
+    auto TargetOpt = decodeTableEntry(
+        P, Info.EntrySize, Info.IsRelative, Info.IsSigned, Info.BaseAddr,
+        Info.HasTargetBase, Info.TargetBase, Info.EntryScale,
+        Img.getPointerSize(), archLittleEndian(Img.Arch));
     if (!TargetOpt)
       return {};
     va_t Target = *TargetOpt;

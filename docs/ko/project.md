@@ -1,6 +1,6 @@
 **언어**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 063226dd86688a1fb9f6d9741898c67d850f4398e9c652507a75f3b01d47ab90 -->
+<!-- i18n-source: eba5aa249bd6a7b45bc98a51faf985724d6cdfbb4dc21091fce89d6f541d01b8 -->
 
 <div align="center">
 
@@ -61,6 +61,8 @@ CLI, 통합, AI 에이전트는 **순수 C API**로 동일한 엔진 **`libnever
 | **Mach-O** (macOS / iOS) | ✓ | ✓ | ✓ | ✓ |
 
 > 표의 모든 셀은 구현되어 있지만 통합 테스트 깊이는 서로 다릅니다. 자세한 내용은 [아키텍처 범위 표](architecture.md#support-and-test-depth)를 참고하세요. 현대 macOS는 과거 i386 실행 파일을 링크할 수 없으므로 Mach-O i386에는 `thin` 재배치 가능 객체를 사용합니다.
+
+**MIPS ELF 분석은 실험적 지원입니다.** MIPS32r2/o32와 MIPS64r2/n64의 두 바이트 순서에서 엄격히 제한된 정수 명령어 집합의 디스어셈블, CFG 복원, C 및 LLVM 출력을 지원합니다. 네이티브 코드 재작성은 지원하지 않습니다. [MIPS 지원 범위와 펌웨어 예제(영문)](../mips.md)를 참고하세요.
 
 legacy EVM bytecode는 native container와 독립적으로 지원합니다. Frontier부터 Fusaka까지
 assigned opcode 150개가 전용 Low/Med/High IR, verified LLVM `i256`, C23

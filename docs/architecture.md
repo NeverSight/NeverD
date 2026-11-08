@@ -91,6 +91,22 @@ before explicit operand access and implements SLDT/STR through the common
 store boundary. The execution owner commits TR alongside the staged core,
 before debug/event entry. A shared table profile binds exclusive ordinary RAM;
 source export reuses it without duplicating cache or permission decisions.
+Protected SMSW/LMSW/CLTS use the scalar grammar and operand owner. Privilege
+and UMIP checks precede explicit memory access. LMSW reads one word, changes
+only MP/EM/TS and retains the already-set PE; CLTS clears only TS. Their staged
+CR0 value commits with the completed instruction through `X86PagedMemory`,
+before single-step or data-breakpoint delivery. Faults and backing stops keep
+the entry CR0. Dword-register SMSW requires `MachineStatus=FullCR0` to bind its
+architecturally undefined upper word to the target's CR0[31:16]; word register
+and memory forms need no undefined-result choice. Generated protected C calls
+this same boundary. These instructions do not enable real/VM86 transitions,
+task switching, general MOV-CR or virtual-machine interception semantics.
+CLAC/STAC use the existing target SMAP capability and raise #UD when it is
+absent, CPL is nonzero or an operand-size override is present. The recognized
+faulting encoding still authenticates the instruction fetch before #UD.
+Their AC update commits through the same flags bank
+that controls the following explicit supervisor access; CR4.SMAP need not be
+enabled to change AC. No host feature probe decides the modeled instruction.
 `X86InstructionDebugProfile::Watchpoints` composes the same rules with scoped
 `translate/X86/X86WatchpointObservation`. `X86PagedMemory` reports completed
 linear data reads and committed stores; physical page walks and fetches are
@@ -15066,11 +15082,28 @@ for linked Mach-O, and
 [`PatchFullSubstRTTests.cpp`](../unittests/semantic/probe/patchfull/PatchFullSubstRTTests.cpp)
 for the 12-cell backend grid. See the [testing guide](testing.md) for commands.
 
+### Experimental MIPS ELF analysis
+
+MIPS32r2/o32 and MIPS64r2/n64 have separate big- and little-endian target
+identities. Linked ELF admission is owned by `ELFMIPSProfile`; dynamic GOT and
+PLT interpretation belongs to the ELF loader. `lib/lift/MIPS` owns integer
+semantics. A `DecodedExecutionUnit` captures a delayed transfer and its slot,
+while normal disassembly still consumes four bytes. LowIR records their byte
+ownership and execution order; MedIR expands predicated effects before SSA.
+
+The focused MIPS loader, integer, flow, SDK and pipeline suites cover these
+contracts. Owned kernels are recompiled from HighC and LLVMC for the original
+MIPS target and compared with their assembly originals in pinned Unicorn.
+The official Archer C7 V5 example qualifies selected static function views,
+not an entire firmware image. This is an analysis-only addition to the matrix
+above: no MIPS rewrite or guest-process execution backend is claimed. See
+[MIPS support](mips.md) for rejected profiles, ABI limits and reproduction.
+
 ## Where to edit
 
 | Change | Start here | Minimum focused verification |
 |--------|------------|------------------------------|
-| Add or fix an instruction | Matching files in `lib/lift/X86`, `AArch64`, or `ARM`; public lifter header if dispatch changes | Architecture test in `unittests/lift`; semantic roundtrip in `unittests/semantic` |
+| Add or fix an instruction | Matching files in `lib/lift/X86`, `AArch64`, `ARM`, or `MIPS`; public lifter header if dispatch changes | Architecture test in `unittests/lift`; semantic roundtrip in `unittests/semantic` |
 | Add an `NdOp` | `include/neverd/ir/NdOps.h`, then audit Low-to-Med, emitters/renderers, verifier/emulator, and dumps | `NeverDLiftTests` + relevant `NeverDSemanticTests` cases |
 | Change CFG or function discovery | `lib/ir/low`, `lib/loader/FunctionDiscovery*.cpp`, `lib/pipeline/PipelineFuncDetect.cpp` | Lift CFG/jump-table tests and focused semantic transform suite |
 | Add a PE input relocation or unwind rule | `lib/loader/COFF` | `COFFARMFormatTests` or a new focused loader fixture |

@@ -432,7 +432,7 @@ private:
   /// controls before SSA construction.  The skip and effect edges then receive
   /// ordinary phi placement, so an untaken load/store/control neither performs
   /// the effect nor exposes an uninitialized post-instruction register value.
-  void materializePredicatedEffects(MedFunc &Func);
+  void materializePredicatedEffects(MedFunc &Func, const LowFunc &Low);
 
   int allocVarId() { return NextVarId++; }
   int allocTempId() { return NextTempId++; }

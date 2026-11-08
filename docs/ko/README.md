@@ -1,6 +1,6 @@
 **언어**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: e1b18ca385ee2c0da797d70ea8b6d1d166393d196100096863a20662b72d11db -->
+<!-- i18n-source: 064a675b88d7887beb6eb1c62907468231caafde8b4f397b3f3ad6cb75e9c8bd -->
 
 [← NeverD 프로젝트](project.md)
 
@@ -24,6 +24,7 @@
 | [ASAR 추출 프로필 (영문)](../web-asar-profile.md) | 내부·외부 파일 캡처 연결, 무결성 상태, 멤버 소비자 및 네이티브 Unicode 의존성 |
 | [Electron 증거 프로필 (영문)](../web-electron-profile.md) | 캡처한 진입 경로, 매니페스트·소스 범위, 창·브리지 증거 및 IPC 채널 후보 |
 | [HTML 소스 프로필 (영문)](../web-html-profile.md) | 유한 범위의 C++ 스크립트 목록, 캡처한 로컬 참조 및 원본 인라인 소스 앵커 |
+| [MIPS 분석(영문)](../mips.md) | MIPS32/64 ELF 프로필, 지연 슬롯, 정수 ABI, 검증 및 TP-Link 펌웨어 예제 |
 | [테스트](testing.md) | 테스트 스위트, 생성 fixture, Unicorn 왕복, 증분 명령 |
 | [데스크톱 워크벤치 (영문)](../gui.md) | 고전적인 디스어셈블러 레이아웃, 별도 작업 프로세스, 프로젝트 데이터베이스, 현지화와 MCP 연결 |
 | [분석 이미지 섹션 (영어)](../analysis-sections.md) | C ABI, 워커, CLI, 워크벤치로 구체화된 코드와 데이터 추가; 네이티브 뷰와 프로젝트 저장 |

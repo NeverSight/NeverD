@@ -332,10 +332,10 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           // `vmov rLo,rHi,dN` lowers the high register to SUBBYTES(d,4)) is a
           // genuine high half; only a sub-register narrowing at another
           // offset is rejected.
-          bool IsHighSubpiece = RIt->Opcode == NdOp::SUBBYTES &&
-                                RIt->NumInputs >= 2 &&
-                                RIt->Inputs[1].isConst() &&
-                                RIt->Inputs[1].ConstVal == TRI.PointerSize;
+          bool IsHighSubpiece =
+              RIt->Opcode == NdOp::SUBBYTES && RIt->NumInputs >= 2 &&
+              RIt->Inputs[1].isConst() &&
+              RIt->Inputs[1].ConstVal == TRI.integerReturnWordOffset(1);
           if ((RIt->Opcode != NdOp::SUBBYTES || IsHighSubpiece) &&
               (!HiVar || RIt->Output.Size > HiVar->Size))
             HiVar = &RIt->Output;
@@ -407,6 +407,8 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         };
         llvm::Value *Lo = toI64(RetVal);
         llvm::Value *Hi = toI64(GetReturnValue(*HiVar));
+        if (TRI.IntegerReturnPairHighFirst)
+          std::swap(Lo, Hi);
         RetVal = Builder.CreateOr(
             Builder.CreateShl(Hi, llvm::ConstantInt::get(I64, 32)), Lo,
             "ret64");

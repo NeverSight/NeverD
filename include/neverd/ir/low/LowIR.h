@@ -838,10 +838,24 @@ constexpr bool hasLowInstructionControlFlag(LowInstructionControlFlag Set,
   return (static_cast<uint16_t>(Set) & static_cast<uint16_t>(Flag)) != 0;
 }
 
-/// Exact provenance of one decoded guest instruction inside a LowBlock.
+/// The second physical instruction of a delayed-control execution unit.
+/// FirstOp is relative to the unit's operation slice, not the block. The
+/// head owns the operations before and after this contiguous slot slice.
+struct LowDelaySlot {
+  uint16_t Offset = 4;
+  uint16_t Size = 4;
+  uint32_t FirstOp = 0;
+  uint32_t OpCount = 0;
+  bool operator==(const LowDelaySlot &) const = default;
+};
+
+/// Exact provenance of one decoded execution unit inside a LowBlock.
 /// FirstOp and OpCount name a canonical, block-relative half-open slice in
 /// LowBlock::Ops.  OpCount may be zero: a decoded instruction remains visible
 /// even when lifting produces no LowOps.
+/// Usually a unit is one instruction. A delayed transfer explicitly retains
+/// its head and slot; Size is their combined physical extent, and Control is
+/// the head's transfer after executing the slot (or annulling it).
 struct LowInstructionBoundary {
   va_t Address = 0;
   uint16_t Size = 0;
@@ -859,6 +873,15 @@ struct LowInstructionBoundary {
   /// Direct branch/call target or an encoded return-pop immediate.  Absence is
   /// distinct from an explicitly encoded zero (for example `ret 0`).
   std::optional<uint64_t> Immediate;
+  std::optional<LowDelaySlot> DelaySlot;
+
+  /// Visit original physical instructions, independently of execution order.
+  template <typename Visitor>
+  void forEachPhysicalInstruction(Visitor Visit) const {
+    Visit(Address, DelaySlot ? DelaySlot->Offset : Size);
+    if (DelaySlot)
+      Visit(Address + DelaySlot->Offset, DelaySlot->Size);
+  }
 };
 
 struct LowBlock {

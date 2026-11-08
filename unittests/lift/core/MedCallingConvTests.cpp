@@ -1463,6 +1463,66 @@ TEST(MedCallingConvValueFlow, LoadAddressUsesPointerWidth) {
   EXPECT_EQ(findFirstUseSize(Func, ParamReg, TRI), TRI.PointerSize);
 }
 
+TEST(MedCallingConvValueFlow, RecoveredCallsConsumeTheEntryBytesTheyForward) {
+  for (Arch Target : {Arch::X64, Arch::ARM, Arch::AArch64, Arch::MIPS32,
+                      Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(Target));
+    const auto &TRI = getTargetRegInfo(Target);
+    const auto ParamReg = TRI.integerParamRegs(BinaryFormat::ELF).front();
+    const auto LiveIn = reg(1, 0, TRI.FullRegWidth, ParamReg, Target);
+    for (unsigned Kind = 0; Kind != 6; ++Kind) {
+      SCOPED_TRACE(Kind);
+      MedFunc Func;
+      Func.Blocks.resize(1);
+      auto &Block = Func.Blocks.front();
+      Block.Id = 0;
+      addLiveIn(Block, LiveIn);
+      auto Byte = LiveIn;
+      Byte.Size = 1;
+      MedOp Spill;
+      Spill.Opcode = NdOp::STORE;
+      Spill.addInput(MedVar::makeConst(0x8000, TRI.PointerSize));
+      Spill.addInput(Byte);
+      Block.Ops.push_back(Spill);
+      MedVar Argument = LiveIn;
+      unsigned Expected = TRI.FullRegWidth;
+      if (Kind == 1) {
+        Argument.Size = 2;
+        Expected = 2;
+      } else if (Kind == 2) {
+        const auto Low = temp(10, 0, 2, Target);
+        Argument = temp(11, 0, TRI.FullRegWidth, Target);
+        Block.Ops.push_back(binary(NdOp::SUBBYTES, Low, LiveIn,
+                                   MedVar::makeConst(0, TRI.PointerSize)));
+        Block.Ops.push_back(unary(NdOp::INT_SEXT, Argument, Low));
+        Expected = 2;
+      } else if (Kind == 3) {
+        Argument.SSAVer = 1;
+        Block.Ops.push_back(unary(NdOp::COPY, Argument,
+                                  MedVar::makeConst(7, TRI.FullRegWidth)));
+        Expected = 1;
+      } else if (Kind == 4) {
+        Argument = MedVar::makeUnspecified(TRI.FullRegWidth, Target);
+        Expected = 1;
+      } else if (Kind == 5) {
+        Expected = 2;
+      }
+      MedCallInfo Info;
+      Info.BlockId = Block.Id;
+      Info.OpIdx = static_cast<int>(Block.Ops.size());
+      Info.Args = {Argument};
+      if (Kind >= 4)
+        Info.ArgReadBytes = {2};
+      MedOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.addInput(MedVar::makeConst(0x2000, TRI.PointerSize));
+      Block.Ops.push_back(Call);
+      Func.CallInfos.push_back(Info);
+      EXPECT_EQ(findFirstUseSize(Func, ParamReg, TRI), Expected);
+    }
+  }
+}
+
 TEST(TargetRegInfo, AArch64PartiallyPreservesV8ThroughV15) {
   const TargetRegInfo &TRI = getTargetRegInfo(Arch::AArch64);
 

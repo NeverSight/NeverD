@@ -392,7 +392,11 @@ const char *neverd_function_disasm_json(neverd_session_t Sess,
     S->setError("no recovered native function at " + vaHex(Entry));
     return nullptr;
   }
-  std::map<va_t, const LowInstructionBoundary *> Boundaries;
+  struct PhysicalInstruction {
+    const LowInstructionBoundary *Owner;
+    uint16_t Size;
+  };
+  std::map<va_t, PhysicalInstruction> Boundaries;
   for (const LowBlock &Block : Function->Blocks)
     for (const LowInstructionBoundary &Boundary : Block.InstructionBoundaries) {
       // A tail call into another function's entry is modeled at that entry
@@ -405,30 +409,32 @@ const char *neverd_function_disasm_json(neverd_session_t Sess,
                       Block.Ops.begin() + Boundary.FirstOp + Boundary.OpCount,
                       [](const LowOp &Op) { return Op.Seq < 0; }))
         continue;
-      Boundaries.emplace(Boundary.Address, &Boundary);
+      Boundary.forEachPhysicalInstruction([&](va_t Address, uint16_t Size) {
+        Boundaries.emplace(Address, PhysicalInstruction{&Boundary, Size});
+      });
     }
   const size_t Limit = std::clamp(MaxInsns, 1, kMaxFunctionDisasmPage);
   llvm::json::Array Rows;
   InstructionFlowScratch Scratch;
   auto At = Boundaries.lower_bound(FirstAddress);
   for (; At != Boundaries.end() && Rows.size() < Limit; ++At) {
-    const auto &Boundary = *At->second;
-    const auto *Bytes = S->Img.readVA(Boundary.Address, Boundary.Size);
-    if (!Bytes || !Boundary.Size ||
-        !S->Dec.selectMode(S->Img, Boundary.Address, Boundary.Mode)) {
+    const auto &Boundary = *At->second.Owner;
+    const va_t Address = At->first;
+    const uint16_t Size = At->second.Size;
+    const auto *Bytes = S->Img.readVA(Address, Size);
+    if (!Bytes || !Size || !S->Dec.selectMode(S->Img, Address, Boundary.Mode)) {
       S->setError(
           "recovered instruction has no matching readable bytes or mode");
       return nullptr;
     }
     DecodedInsn Instruction;
-    if (S->Dec.decodeOne(Bytes, Boundary.Size, Boundary.Address, Instruction) !=
-        Boundary.Size) {
+    if (S->Dec.decodeOne(Bytes, Size, Address, Instruction) != Size) {
       S->setError("recovered instruction boundary disagrees with the decoder");
       return nullptr;
     }
-    auto Row = nativeInstructionRow(S, Instruction, Bytes, Boundary.Size,
-                                    Options, Scratch);
-    if ((Options & NEVERD_DISASM_FLOW) &&
+    auto Row =
+        nativeInstructionRow(S, Instruction, Bytes, Size, Options, Scratch);
+    if (Address == Boundary.Address && (Options & NEVERD_DISASM_FLOW) &&
         Boundary.Control == LowInstructionControl::Branch &&
         Boundary.Immediate &&
         !hasLowInstructionControlFlag(Boundary.ControlFlags,

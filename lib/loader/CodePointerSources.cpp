@@ -26,7 +26,9 @@ std::optional<va_t> normalizedRelocatedCodeTarget(const BinaryImage &Image,
   const auto *Bytes = Image.readVA(Slot, Width);
   if (!Bytes)
     return {};
-  return normalizeCodeAddress(readPtr(Bytes, Is64), Image.Arch, Image.Mode);
+  return normalizeCodeAddress(
+      readPtr(Bytes, Is64, archLittleEndian(Image.Arch)), Image.Arch,
+      Image.Mode);
 }
 
 } // namespace neverd

@@ -1,6 +1,6 @@
 **Idiomas**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 063226dd86688a1fb9f6d9741898c67d850f4398e9c652507a75f3b01d47ab90 -->
+<!-- i18n-source: eba5aa249bd6a7b45bc98a51faf985724d6cdfbb4dc21091fce89d6f541d01b8 -->
 
 <div align="center">
 
@@ -61,6 +61,8 @@ Consulta las guías de [EVM](evm.md), [Solana SBF](sbf.md), [recuperación de c�
 | **Mach-O** (macOS / iOS) | ✓ | ✓ | ✓ | ✓ |
 
 > Todas las celdas de la matriz están implementadas, pero la profundidad de las pruebas de integración varía. Consulte la [matriz de cobertura de arquitectura](architecture.md#support-and-test-depth). Mach-O i386 usa objetos reubicables `thin` porque macOS moderno no puede enlazar ejecutables i386 históricos.
+
+**El análisis ELF de MIPS es experimental:** MIPS32r2/o32 y MIPS64r2/n64, en ambos órdenes de bytes, admiten un subconjunto estricto de instrucciones enteras para desensamblado, recuperación del CFG y salida en C y LLVM. No se admite la reescritura de código nativo. Consulta [la cobertura de MIPS y el ejemplo de firmware (inglés)](../mips.md).
 
 El bytecode EVM legacy se soporta sin contenedor nativo: los 150 opcodes asignados
 de Frontier a Fusaka pasan por Low/Med/High IR, LLVM `i256` verificado, C23
