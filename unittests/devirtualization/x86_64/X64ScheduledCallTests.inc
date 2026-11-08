@@ -93,7 +93,8 @@ protected:
   void provePredicates(bool Paged, const std::string &Name,
                        llvm::StringRef Source, llvm::StringRef Probes,
                        unsigned Expected, uint64_t RAMBytes,
-                       unsigned BindingPasses = 1, bool CloseHelpers = false) {
+                       unsigned BindingPasses = 1, bool CloseHelpers = false,
+                       bool InlineEventControllers = false) {
     const auto File = tmpFile(Name + ".c");
     const auto InitialIR = tmpFile(Name + ".initial.ll");
     const auto IR = tmpFile(Name + ".ll");
@@ -136,7 +137,16 @@ protected:
           // Direct drivers deliberately suppress inlining in public output.
           // Expand them and the handler helper only for these predicates;
           // retain every body and effect. Unmodified C is compiled separately.
-          if (Function.hasFnAttribute(llvm::Attribute::NoInline) ||
+          // HighC IRET can push the scheduler and its wrappers over the
+          // ordinary inlining threshold. Expand the complete call chain only
+          // for a bounded event proof; preserve every instruction and guard.
+          const bool EventController =
+              InlineEventControllers &&
+              (Function.getName().starts_with("neverd_x64_continue_events_") ||
+               Function.getName().starts_with("neverd_x64_call_events_") ||
+               Function.getName().starts_with("neverd_x64_resume_events_"));
+          if (EventController ||
+              Function.hasFnAttribute(llvm::Attribute::NoInline) ||
               Function.getName().starts_with("neverd_x64_resume_handler_")) {
             Function.removeFnAttr(llvm::Attribute::NoInline);
             Function.addFnAttr(llvm::Attribute::AlwaysInline);

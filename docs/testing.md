@@ -20227,12 +20227,20 @@ Run `NeverDObjCSourceCallTests` (`SourceFrameAnalysis.*`) and `NeverDCSourcePres
 `CallRegisterEffects.ExitConstants*` in `NeverDFPParameterMaskTests` checks
 agreement at every return, block ordering, partial and unknown writes, calls,
 intrinsics, address provenance, independent/exceptional roots, exact/short
-work budgets and ordinary ABI result ownership. `CallExitRegisters.*` in
-`NeverDWin64CallContractTests` executes decoded x64 COFF/ELF/Mach-O callers
+work budgets and ordinary ABI result ownership. Unique-predecessor cases cover
+conditional arms, contiguous and inconsistent fallthroughs, joins, a long
+register-carry chain and instruction temporaries that must not cross blocks.
+`CallExitRegisters.*` in `NeverDWin64CallContractTests` executes decoded x64
+COFF/ELF/Mach-O callers
 through both C routes, with source optimization enabled and disabled, at C
 O0/O2 with UBSan. The oracle observes the non-return register's stored value
-and the ordinary call result. This qualifies bounded scalar constants, not
-dynamic machine-state returns or other architectures.
+and the ordinary call result. The constant-scratch case also executes the
+original public machine code on Linux x64, including a direct jump and both
+conditional return paths whose scratch definition precedes the branch. Other
+hosts execute the generated C against the fixture's scalar results without
+executing x64 bytes. This qualifies
+bounded scalar constants, not dynamic machine-state returns or other
+architectures.
 `CallExitRegisters.PureRegisterLeafKeepsDynamicExtraResults` independently
 executes recovered query results against native CPUID on x64 COFF/ELF/Mach-O
 inputs through both C routes at O0/O2 with UBSan. Source execution selects the
@@ -21625,6 +21633,25 @@ cases do not claim original post-shutdown processor state. Set
 compiler paths and uniquely named source/manifest pairs. Run the existing
 function/call/scheduled/handler export suites as compatibility regressions;
 their compile-time models remain distinct from these runtime comparisons.
+
+`X64Cr8WriteNotificationTest.*` compiles both C routes with switch/direct
+selection at O0/O2, checks default/disabled source and manifest identity, and
+rejects unsupported opt-in contracts atomically. Compile-only predicates retain
+the actual MOV-CR8/read/NOP/UD2/CALL/RET/IRETQ bodies and event scheduler. They cover
+symbolic legal and reserved-bit writes, same-value subpriority clearing, reads,
+notification-before-poll ordering, budgets, native stops, IRQ deferral and
+preemption, exception delivery, original IRETQ before the deferred write, and
+checked-entry/original-CALL resumption.
+An independent producer checks CPU/TPR coherence and counts notifications;
+no callback is executed. Plain descriptor/stack RAM operands are bound to a
+single declared object at `[0x10000, 0x14000)` by the existing bounded proof
+helper. The proof copy explicitly inlines the scheduler and call wrappers when
+HighC IRET exceeds the ordinary optimizer threshold; every body and guard is
+retained, and unmodified exports compile separately. LLVM must reduce every
+predicate to one block returning constant zero.
+`X64Cr8WriteNotification.MetadataComesFromModeledWrites` checks lowering-owned
+write metadata, including the unchanged paged native boundary. These checks do
+not qualify a live device environment or paged MOV-CR8 fault delivery.
 
 `X64ScheduledFunctionContextTest.*` checks scheduled activation admission,
 disabled source/manifest identity and O0/O2 compilation in both C routes.

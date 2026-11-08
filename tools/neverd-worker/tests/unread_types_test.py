@@ -111,6 +111,29 @@ def run(executable):
             reply = declare(owner, "struct CLASHING { unsigned long long inner; };")
             assert not reply["unread"], reply
             same_as_fresh("takes an enumerator's name")
+            # A new enumerator whose name is taken steps aside for it, and the type
+            # stays unread.  What renders a unit's records, made for one the code
+            # read before, spells it as a new context does once a declaration
+            # reads it.
+            def typed(declaration):
+                source(owner, "c")
+                declared = ok(owner, "function_type", {"address": hex(ENTRY),
+                                                       "parameter": 0, "type": declaration})
+                ok(owner, "function_edit", {"address": hex(ENTRY),
+                                            "attributes": {"type": declared["declaration"]}})
+            typed("struct FRESH *arg0")
+            assert "struct FRESH" in same_as_fresh("a record read")["c"]
+            reply = declare(owner, "enum SECOND { OTHER = 5, ANOTHER = 6 }; "
+                                   "struct HOLDS_SECOND { enum SECOND first; "
+                                   "unsigned value; unsigned long long rest[2]; };")
+            assert reply["unread"], reply
+            same_as_fresh("an enumerator that steps aside")
+            typed("struct HOLDS_SECOND *arg0")
+            views = same_as_fresh("enumerator read")
+            assert "SECOND_OTHER" in views["c"], views["c"]
+            assert source(owner, "c") == views["c"]
+            ok(owner, "function_edit", {"address": hex(ENTRY), "attributes": {"type": None}})
+            same_as_fresh("enumerator not read")
             # A prototype reaches analysis with the types it names.
             reply = declare(owner, "int prototyped(struct LATER *value);")
             assert not reply["unread"], reply
