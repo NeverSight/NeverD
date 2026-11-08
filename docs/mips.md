@@ -136,6 +136,10 @@ executors. The selected firmware views still emit successfully. Receipts are
 `build-mips/ctest-partial-values-jumptable.log` and
 `build-mips/partial-values/qualification.json`. The 200-group source result
 above belongs to the preceding merge-load increment, not a rerun of this one.
+The final integration with dev `9e7932d73` and Capstone `20a8dd5f` rebuilt the
+CLI/MIPS targets, passed all 189 MIPS cases and regenerated the selected
+firmware views. The broader jump-table qualification remains tied to its
+recorded earlier dependency snapshot.
 
 ## TP-Link firmware workflow
 
