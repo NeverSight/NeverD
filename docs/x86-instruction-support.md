@@ -4337,6 +4337,9 @@ The [qualification evidence](evidence/x86-legacy-machine-status-2026-11-07.json)
 records 1,410 passing checks, no failures or skips, across both LLVM SDKs and
 qualified P/E cores. New original-instruction coverage comprises 20,880 state
 and 1,920 debug comparisons. Generated C runs through Clang/NeverC O0/O2.
+After integrating the subsequent HighIR frame-read changes, both SDKs pass
+368 additional P-core checks covering the complete generated-C suite, machine
+status and ordinary system state; the implementation code hashes are unchanged.
 The native LMSW debug case changes TS; the observed KVM interception limit for
 changing MP is retained with the failed diagnostic receipts and described in
 [the testing contract](testing.md). Fixed software and generated C separately
