@@ -42,12 +42,14 @@ private:
         : LiftStateBase(Address, 4, Ops), Width(Width) {}
 
     NdVar read(unsigned Register, uint16_t Bytes = 0);
+    void requireWord(unsigned Register);
     NdVar resize(NdVar Value, uint16_t Bytes, bool SignExtend = false);
     void write(unsigned Register, NdVar Value, bool SignExtend = true);
     NdVar binary(NdOp Opcode, NdVar A, NdVar B, uint16_t Bytes = 0);
   };
 
   bool liftInteger(State &S, uint32_t Word) const;
+  bool liftBitfield(State &S, uint32_t Word) const;
   bool liftMemory(State &S, uint32_t Word) const;
   Arch Target;
 };
