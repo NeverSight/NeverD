@@ -18136,6 +18136,9 @@ execution contract.
 
 `SourceCallOccurrenceKey` owns original instruction/sequence/opcode/target
 identity; names and source anchors cannot bind a per-call policy.
+Its structural overload belongs to `IRLowValidation`; the architecture-qualified
+overload lives in `ir/SourceCallOccurrence.cpp` beside the register descriptions
+it uses. LowIR validation therefore has no backward link to aggregate IR.
 `SourceCallABI` uses the existing platform parameter/variadic placement owners
 and bounds outgoing stack-write and SSA-carrier proofs. `LowToMedSourceCalls`
 publishes these physical inputs before SSA and argument pruning, with discovery
