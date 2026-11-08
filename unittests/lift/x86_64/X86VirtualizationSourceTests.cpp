@@ -944,6 +944,15 @@ void _start(void) {
       if (!IR && !NativeCCompiler.empty())
         Arguments.insert(Arguments.end(),
                          {"-fno-lto", "-fno-builtin-mimalloc"});
+      std::string FullBackend;
+      if (!IR && !NativeCCompiler.empty() && Image.Arch == Arch::X86) {
+        const auto *LLC = std::getenv("NEVERD_TEST_NEVERC_LLC");
+        ASSERT_TRUE(LLC && *LLC)
+            << "NEVERD_TEST_NEVERC_LLC must select the full NeverSight LLVM "
+               "backend for NeverC i386 object generation";
+        FullBackend = std::string("-fllvm-backend=") + LLC;
+        Arguments.push_back(FullBackend);
+      }
       // Match Codegen's x86 SSE2 baseline. Clang's plain i386 target has no
       // XMM register class for the emitted floating-point assembly operands.
       if (Image.Arch == Arch::X86)
