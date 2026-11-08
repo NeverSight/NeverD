@@ -21399,6 +21399,32 @@ with an uncaught exception at both levels. They reproduce the boundary without
 handwritten frame CFI and are unavailable coverage, not passing NeverD signed
 unwind qualification.
 
+### Arm64e dyld installation
+
+`MachOArm64eInstallation.*` exercises transactional authenticated dyld
+installation in the six arm64e chain formats. It covers all keys and address
+diversity settings, local/import identities, special library ordinals,
+16/24-bit import indices, every import-table encoding, existing plain words,
+4/16 KiB pages, overflow starts, new RX/RW segments, signature extents,
+reordered segment-target ordinals and unchanged input on rejection.
+Independent literal words and the separate analysis loader check the installed
+representation.
+
+`AppleClang/MachOArm64eNativeInstallation.*` compiles actual arm64e dylibs at
+O0/O2, installs sixteen recipes including a new libSystem import both in
+existing storage and in newly appended RX/RW segments, re-signs with the
+production signer, verifies the result strictly and asks Apple's
+`dyld_info` to decode every target, key and discriminator. Compiler-generated
+C++ compact frames retain their ranges, encodings, personality slots and LSDA
+addresses. A separate, explicit assembly input supplies signed DWARF CFI for
+instruction-by-instruction IB state replay; it is not compiler-generated
+exception-unwind evidence. These tests inspect files and do not execute dyld,
+C++ cleanup or the native signed unwinder. Non-Apple hosts explicitly skip the
+Apple-tool cases. `NEVERD_ARM64E_DYLD_ARTIFACT_DIR` exports qualification inputs
+and diagnostics; ordinary runs remove their temporary directory.
+The [qualification record](evidence/arm64e-dyld-install-2026-11-08.json)
+records the native inputs, integration checks and remaining validation limits.
+
 ### Arm64e verifier artifact ownership
 
 The SDK call driver and `scripts/verify_arm64e_sp_memory.py` share
