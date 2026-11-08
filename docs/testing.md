@@ -10726,6 +10726,11 @@ and remaining budgets at every small-fixture budget boundary. Equal-size
 instruction, edge, root and ownership changes must replace the graph; rolled
 back and temporary override payloads cannot leave borrowed pointers behind.
 Resource failure and value-analysis incompleteness remain distinct.
+`ResolverGraphCache.KeepsTheTwoMostRecentlyUsedGraphs` alternates a
+candidate's own and trial targets: returning to either reuses its graph, the
+older graph matches a cold builder at every budget boundary, a scope's graph
+becomes the most recent, a third target set evicts the least recently used
+graph, and a changed instruction invalidates both.
 `ResolverPointLookup.*` checks exact instruction coordinates across cache
 collisions, missing points, high address bits and distinct operation sequences.
 A small colliding working set, including an absent point, must stop repeating

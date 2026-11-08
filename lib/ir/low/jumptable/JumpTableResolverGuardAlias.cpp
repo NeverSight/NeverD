@@ -428,6 +428,10 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     return false;
   }
 
+  // This proof is const, so the builder cannot change while it runs: its value
+  // queries validate the instruction snapshot once and share that graph.
+  ResolverQueryScope QueryScope(*this);
+
   // Literals propose a small finite query envelope; they do not prove any
   // index bound. The all-path value query must authenticate every coordinate.
   uint64_t ProposedJoinedBound = 0;
@@ -954,7 +958,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
         CandidateEvidenceBudget, /*LocalMatchEvidenceLimit=*/0,
         /*CandidateBranchesSharingTargets=*/nullptr,
         /*QueryUnsignedFeasibleMasks=*/nullptr, GuardValueDepth,
-        CertifiedEdgeOverrides);
+        CertifiedEdgeOverrides, /*UseGroupContext=*/true, &QueryScope);
     if (!AliasProofComplete || AliasResults.size() != AliasQueries.size()) {
       Info.IncompleteGuardDomain = true;
       return false;
@@ -1412,7 +1416,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
             CandidateEvidenceBudget, /*LocalMatchEvidenceLimit=*/0,
             /*CandidateBranchesSharingTargets=*/nullptr,
             /*QueryUnsignedFeasibleMasks=*/nullptr, GuardValueDepth,
-            CertifiedEdgeOverrides);
+            CertifiedEdgeOverrides, /*UseGroupContext=*/true, &QueryScope);
       };
   bool ProofComplete = false;
   std::vector<bool> ProofQueryComplete;
@@ -1759,7 +1763,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
       const auto Results = tableValuesMatchAtUses(
           {Joined}, nullptr, &Complete, InvalidVA, nullptr,
           CandidateEvidenceBudget, 0, nullptr, &Masks, GuardValueDepth,
-          CertifiedEdgeOverrides);
+          CertifiedEdgeOverrides, /*UseGroupContext=*/true, &QueryScope);
       // The ordinary table representation requires a dense zero-based
       // prefix. Sparse domains keep their existing specialized owner: a
       // two-level index table, whose unreached index bytes are simply unused,
@@ -1803,7 +1807,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
       const auto Results = tableValuesMatchAtUses(
           {Lookup}, nullptr, &Complete, InvalidVA, nullptr,
           CandidateEvidenceBudget, 0, nullptr, &Masks, GuardValueDepth,
-          CertifiedEdgeOverrides);
+          CertifiedEdgeOverrides, /*UseGroupContext=*/true, &QueryScope);
       if (Results.size() == 1 && Complete.size() == 1 && Complete[0] &&
           Masks.size() == 1 && Results[0] && Masks[0] &&
           (Masks[0] & (Masks[0] + 1)) == 0) {

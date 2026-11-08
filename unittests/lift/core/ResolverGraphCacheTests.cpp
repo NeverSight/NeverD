@@ -4534,6 +4534,89 @@ TEST(ResolverGraphCache, OverridePayloadAndRolledBackPayloadAreOwned) {
   EXPECT_EQ(Access::query(B), BeforeMutation);
 }
 
+// Mask and guard proofs alternate between a candidate's own targets and a
+// trial target set.  The builder keeps the two most recently used graphs:
+// returning to either reuses it, with its retained results, at the cold charge;
+// a scope's validated graph becomes the most recent one; a third target set
+// evicts the least recently used graph; a changed instruction invalidates both.
+TEST(ResolverGraphCache, KeepsTheTwoMostRecentlyUsedGraphs) {
+  static_assert(limits::ir::kJumpTableResolverSliceRetainedGraphs == 2);
+  const auto Image = image();
+  CFGBuilder B;
+  Access::seed(B, Image);
+  const std::vector<va_t> Own{0x101};
+  const std::vector<va_t> Trial{0x102};
+  const std::vector<va_t> Third{0x103};
+  const auto Run = [](CFGBuilder &Builder, const std::vector<va_t> &Targets,
+                      size_t Budget = 1000000) {
+    return Access::query(Builder, Budget, 3, 0, &Targets);
+  };
+  const auto Cold = [&](const std::vector<va_t> &Targets,
+                        size_t Budget = 1000000) {
+    CFGBuilder Fresh;
+    Access::seed(Fresh, Image);
+    return Run(Fresh, Targets, Budget);
+  };
+
+  const auto OwnAnswer = Run(B, Own);
+  ASSERT_TRUE(OwnAnswer.Complete);
+  const auto OwnGraph = Access::token(B);
+  const auto TrialAnswer = Run(B, Trial);
+  const auto TrialGraph = Access::token(B);
+  ASSERT_NE(TrialGraph, OwnGraph);
+  EXPECT_EQ(OwnAnswer, Cold(Own));
+  EXPECT_EQ(TrialAnswer, Cold(Trial));
+  for (int Round = 0; Round < 2; ++Round) {
+    EXPECT_EQ(Run(B, Own), OwnAnswer);
+    EXPECT_EQ(Access::token(B), OwnGraph);
+    EXPECT_EQ(Run(B, Trial), TrialAnswer);
+    EXPECT_EQ(Access::token(B), TrialGraph);
+  }
+
+  // The older graph replays every budget boundary as a cold builder does.
+  const size_t Work = 1000000 - OwnAnswer.Remaining;
+  ASSERT_LT(Work, 50000u);
+  for (size_t Budget = 0; Budget <= Work + 1; ++Budget) {
+    SCOPED_TRACE(Budget);
+    ASSERT_EQ(Run(B, Trial), TrialAnswer);
+    EXPECT_EQ(Run(B, Own, Budget), Cold(Own, Budget));
+  }
+
+  {
+    Access::Scope Scope(B);
+    const std::vector<Access::Query> Queries{Access::valueQuery()};
+    const auto Scoped =
+        Access::scopedBatch(B, &Scope, Queries, 1000000, 0, &Trial);
+    ASSERT_TRUE(Scoped.Complete);
+    EXPECT_EQ(Access::token(B), TrialGraph);
+    ASSERT_EQ(Run(B, Own), OwnAnswer);
+    EXPECT_EQ(Access::scopedBatch(B, &Scope, Queries, 1000000, 0, &Trial),
+              Scoped);
+    EXPECT_EQ(Access::token(B), TrialGraph);
+    EXPECT_EQ(Run(B, Own), OwnAnswer);
+    EXPECT_EQ(Access::token(B), OwnGraph);
+  }
+
+  ASSERT_EQ(Run(B, Trial), TrialAnswer);
+  EXPECT_EQ(Run(B, Third), Cold(Third));
+  EXPECT_EQ(Run(B, Trial), TrialAnswer);
+  EXPECT_EQ(Access::token(B), TrialGraph);
+  EXPECT_EQ(Run(B, Own), OwnAnswer);
+  EXPECT_NE(Access::token(B), OwnGraph);
+
+  CFGBuilder Changed;
+  Access::seed(Changed, Image);
+  Access::changeValue(Changed);
+  Access::changeValue(B);
+  EXPECT_EQ(Run(B, Trial), Run(Changed, Trial));
+  EXPECT_NE(Access::token(B), TrialGraph);
+  EXPECT_NE(Run(B, Own).Values, OwnAnswer.Values);
+  EXPECT_EQ(Run(B, Own), Run(Changed, Own));
+  Access::rollbackValue(B);
+  EXPECT_EQ(Run(B, Trial), TrialAnswer);
+  EXPECT_EQ(Run(B, Own), OwnAnswer);
+}
+
 TEST(ResolverGraphCache, ResourceFailureAndAnalysisIncompleteAreDistinct) {
   const auto Image = image();
   CFGBuilder B;

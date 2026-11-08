@@ -8872,13 +8872,21 @@ A fixed-size register lane cache checks the
 complete offset/width key and uses the query's immutable target metadata.
 These storage and lookup optimizations retain the original evidence charges;
 they do not reuse CFG or value proofs across changed snapshots. A builder may
-retain one successful graph with an owned instruction snapshot. Reuse requires
+retain its two most recently used successful graphs
+(`kJumpTableResolverSliceRetainedGraphs`), each with an owned instruction
+snapshot, while their payloads fit one builder's retention allowance together:
+mask and guard proofs alternate between a candidate's own targets and a trial
+target set, and a single graph would be rebuilt, losing its retained outcomes,
+on every switch. Graphs too large to share the allowance keep one slot, so the
+worst-case retained memory is unchanged. Reuse requires
 exact instruction facts, LowOps, effective edges, block starts, proof roots,
-conditional roots and storage-owner inputs. Hits pay the complete original
-graph-construction charge. The graph may also retain up to 64 query outcomes
+conditional roots and storage-owner inputs, compared in full for each retained
+graph a lookup tries. Hits pay the complete original
+graph-construction charge. Each graph may also retain up to 64 query outcomes
 under a separate 8 MiB retained-payload allowance. Within one read-only target
-role, load-address role, address-discovery or mask-domain invocation, a local
-scope can reuse its validated graph without recopying the instruction snapshot.
+role, load-address role, address-discovery, guard-domain or mask-domain
+invocation, a local scope can reuse its validated graph without recopying the
+instruction snapshot.
 It is bound to its builder and cannot cross instruction, block or storage-owner
 mutations.
 Each query still compares roots and owned effective edge overrides, including

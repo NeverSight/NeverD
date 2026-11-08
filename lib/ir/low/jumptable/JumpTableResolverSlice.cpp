@@ -2783,6 +2783,12 @@ struct CFGBuilder::ResolverGraphCache {
   std::vector<StorageOwner> Owners;
   size_t Work;
   ResolverFlowGraph Graph;
+  // The input payload retainedPayload accounted for.
+  size_t Payload;
+  // The next older graph the builder still retains.  Each retained graph is
+  // validated in full on lookup, so their order affects only which one a
+  // lookup compares first.
+  mutable std::shared_ptr<const ResolverGraphCache> Older;
 
   // Image bytes and loader metadata do not change within buildOnce; it resets
   // this cache before another build. C++ const alone does not establish that
@@ -3091,12 +3097,15 @@ struct CFGBuilder::ResolverGraphCache {
   }
 
   // Cap retained input payloads (kJumpTableResolverSliceCanRetainRemaining),
-  // and cap graph vertices separately. A single builder retains at most one
-  // graph; oversized inputs use the established uncached path. This bound also
-  // limits cache-comparison work.
-  static bool canRetain(const CFGBuilder &B,
-                        const std::vector<ResolverInsnSnapshot> &Input,
-                        const std::set<va_t> &ProofRoots) {
+  // and cap graph vertices separately. A builder retains at most
+  // kJumpTableResolverSliceRetainedGraphs graphs whose payloads fit that one
+  // allowance together; oversized inputs use the established uncached path.
+  // This bound also limits cache-comparison work. Returns the payload a
+  // retained graph accounts for.
+  static std::optional<size_t>
+  retainedPayload(const CFGBuilder &B,
+                  const std::vector<ResolverInsnSnapshot> &Input,
+                  const std::set<va_t> &ProofRoots) {
     if (Input.size() > ::neverd::limits::ir::
                            kJumpTableResolverSliceCanRetainInputSizeLimit ||
         B.BlockStarts.size() >
@@ -3105,7 +3114,7 @@ struct CFGBuilder::ResolverGraphCache {
         B.ResolvedTableInfo.size() >
             ::neverd::limits::ir::
                 kJumpTableResolverSliceCanRetainBResolvedTableInfoSizeLimit)
-      return false;
+      return std::nullopt;
     size_t Remaining =
         ::neverd::limits::ir::kJumpTableResolverSliceCanRetainRemaining;
     auto account = [&](size_t Count, size_t Size) {
@@ -3121,27 +3130,29 @@ struct CFGBuilder::ResolverGraphCache {
         !account(ProofRoots.size(), 4 * sizeof(va_t)) ||
         !account(B.DiscoveredCodeRefSources.size(), 8 * sizeof(va_t)) ||
         !account(B.ResolvedTableInfo.size(), sizeof(StorageOwner)))
-      return false;
+      return std::nullopt;
     for (const auto &I : Input)
       if (!account(I.Ops.size(), sizeof(LowOp)) ||
           !account(I.JumpTableTargets.size(), sizeof(va_t)))
-        return false;
+        return std::nullopt;
     for (const auto &[Root, Sources] : B.DiscoveredCodeRefSources)
       if (!account(Sources.size(), 4 * sizeof(va_t)))
-        return false;
+        return std::nullopt;
     for (const auto &[Branch, Info] : B.ResolvedTableInfo)
       if (!account(Info.StorageRanges.size(), sizeof(JumpTableStorageRange)))
-        return false;
-    return true;
+        return std::nullopt;
+    return ::neverd::limits::ir::kJumpTableResolverSliceCanRetainRemaining -
+           Remaining;
   }
 
   ResolverGraphCache(const CFGBuilder &B,
                      std::vector<ResolverInsnSnapshot> &&Input,
                      const std::set<va_t> &ProofRoots, size_t GraphWork,
-                     ResolverFlowGraph &&BuiltGraph)
+                     ResolverFlowGraph &&BuiltGraph, size_t RetainedPayload)
       : Snapshot(std::move(Input)), BlockStarts(B.BlockStarts),
         Roots(ProofRoots), ConditionalRoots(B.DiscoveredCodeRefSources),
-        Work(GraphWork), Graph(std::move(BuiltGraph)) {
+        Work(GraphWork), Graph(std::move(BuiltGraph)),
+        Payload(RetainedPayload) {
     // Moving the snapshot vector preserves the addresses held by LastInsn.
     // Freeze its borrowed payloads before any proposal can mutate or roll back
     // the originating instruction map or an override vector.
@@ -3206,7 +3217,7 @@ struct CFGBuilder::ResolverGraphCache {
 
   // The value and control projections must use exactly the same graph owner
   // and storage callback. A local lease keeps pointer-bearing snapshots alive
-  // even when a nested query replaces the builder's one retained graph.
+  // even when a nested query evicts the graph from the builder's retained set.
   struct Lease {
     std::shared_ptr<const ResolverGraphCache> Cached;
     std::optional<ResolverFlowGraph> Fresh;
@@ -3215,20 +3226,58 @@ struct CFGBuilder::ResolverGraphCache {
     }
   };
 
+  // Make Entry the most recently used retained graph. Older graphs stay only
+  // while at most kJumpTableResolverSliceRetainedGraphs of them, together with
+  // Entry, fit one builder's payload allowance.
+  static void promote(std::shared_ptr<const ResolverGraphCache> &Newest,
+                      const std::shared_ptr<const ResolverGraphCache> &Entry) {
+    if (Newest == Entry)
+      return;
+    for (const ResolverGraphCache *Node = Newest.get(); Node;
+         Node = Node->Older.get())
+      if (Node->Older == Entry) {
+        Node->Older = Entry->Older;
+        break;
+      }
+    Entry->Older = std::move(Newest);
+    Newest = Entry;
+    const ResolverGraphCache *Last = Newest.get();
+    size_t Kept = 1;
+    size_t Payload = Last->Payload;
+    while (const ResolverGraphCache *Next = Last->Older.get()) {
+      if (Kept == ::neverd::limits::ir::kJumpTableResolverSliceRetainedGraphs ||
+          Payload >
+              ::neverd::limits::ir::kJumpTableResolverSliceCanRetainRemaining ||
+          Next->Payload >
+              ::neverd::limits::ir::kJumpTableResolverSliceCanRetainRemaining -
+                  Payload)
+        break;
+      Payload += Next->Payload;
+      ++Kept;
+      Last = Next;
+    }
+    Last->Older.reset();
+  }
+
   static Lease acquire(const CFGBuilder &B,
                        std::vector<ResolverInsnSnapshot> &Snapshot,
                        const std::set<va_t> &ProofRoots, size_t *Budget,
                        bool &Complete) {
     Lease Result;
     Complete = false;
-    // An unmetered query keeps its own graph, whose charge it never records:
+    // An unmetered query keeps its own graphs, whose charge it never records:
     // a metered query reuses only a graph that pays its cold charge.
     std::shared_ptr<const ResolverGraphCache> &Retained =
         Budget ? B.CachedResolverGraph : B.CachedUnmeteredResolverGraph;
-    if (Retained && Retained->matches(B, Snapshot, ProofRoots)) {
-      Complete = consumeResolverGraphWork(Budget, Retained->Work);
-      if (Complete)
-        Result.Cached = Retained;
+    for (std::shared_ptr<const ResolverGraphCache> Entry = Retained; Entry;
+         Entry = Entry->Older) {
+      if (!Entry->matches(B, Snapshot, ProofRoots))
+        continue;
+      Complete = consumeResolverGraphWork(Budget, Entry->Work);
+      if (Complete) {
+        Result.Cached = Entry;
+        promote(Retained, Entry);
+      }
       return Result;
     }
     const size_t Before = Budget ? *Budget : 0;
@@ -3239,12 +3288,13 @@ struct CFGBuilder::ResolverGraphCache {
                                                        Budget);
         },
         Budget, &Complete));
-    if (Complete && canRetain(B, Snapshot, ProofRoots)) {
-      Result.Cached = std::make_shared<ResolverGraphCache>(
-          B, std::move(Snapshot), ProofRoots, Budget ? Before - *Budget : 0,
-          std::move(*Result.Fresh));
-      Retained = Result.Cached;
-    }
+    if (Complete)
+      if (const auto Payload = retainedPayload(B, Snapshot, ProofRoots)) {
+        Result.Cached = std::make_shared<ResolverGraphCache>(
+            B, std::move(Snapshot), ProofRoots, Budget ? Before - *Budget : 0,
+            std::move(*Result.Fresh), *Payload);
+        promote(Retained, Result.Cached);
+      }
     return Result;
   }
 };
@@ -5274,7 +5324,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       ResolverGraphCache::Lease Lease;
       if (GraphComplete) {
         Lease.Cached = Saved.Graph;
-        CachedResolverGraph = Saved.Graph;
+        ResolverGraphCache::promote(CachedResolverGraph, Saved.Graph);
       }
       return Lease;
     }
