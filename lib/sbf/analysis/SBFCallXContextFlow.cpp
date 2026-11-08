@@ -2033,11 +2033,7 @@ void ContextFlow::addMemoryAccessEffects(MemoryEffects &Effects,
                    }))
     Origins = State.Registers[AddressRegister];
   for (const auto &Origin : possibleValues(Origins)) {
-    RegisterState Base{};
-    Base[0] = Origin;
-    Effects.addWrite(substituteOrigin({RegisterValue::Kind::StackAddress, 1,
-                                       Instruction.Offset},
-                                      Base, Program),
+    Effects.addWrite(offsetMemoryAccess(Origin, Instruction.Offset),
                      Instruction.Width / kBitsPerByte, Program,
                      CapturedAddresses.get());
   }

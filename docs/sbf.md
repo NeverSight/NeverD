@@ -853,6 +853,11 @@ numeric alternative adds no new possibility, including on later arrivals at
 that join. Unknown or wrapping capture
 bounds cannot supply that widening; frame coordinates remain typed, and an
 overflowing literal-only disjunction still becomes unknown.
+Memory-access offsets use the shared modular address transfer, both for a
+local store and when collecting, binding or applying a callee's write summary.
+A heap interval shifted across address zero can still exclude a caller frame.
+The resulting footprint supplies no scalar value or cell identity; ordinary
+register arithmetic keeps its nonwrapping range rules.
 
 Generic byte-copy postconditions snapshot entry fields after invalidating all
 preceding may-writes. They retain complete typed cells, meet at joins and disappear

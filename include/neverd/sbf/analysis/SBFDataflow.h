@@ -142,6 +142,11 @@ addressValueRange(const RegisterValue &Value,
 std::optional<RegisterValue> memoryAddress(const RegisterValue &Base,
                                            int64_t Displacement = 0);
 
+/// Address operand for a possible memory access. Unlike scalar arithmetic,
+/// shifting a numeric interval may retain wrapped endpoints. Such a footprint
+/// supplies no address identity and must not become a scalar register fact.
+RegisterValue offsetMemoryAccess(RegisterValue Base, int64_t Displacement);
+
 /// Full-width stored values, retaining address provenance independently of the
 /// descriptor byte view. In particular, a frame-relative pointer is never a
 /// literal integer merely because its analysis coordinates were serialized.

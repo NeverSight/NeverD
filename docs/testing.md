@@ -16088,6 +16088,10 @@ execution covers every branch, with reversed CFG edge order, bounded heap
 writes, overlapping stack writes, shifted addresses and unknown bounds. A
 selector skips invalid sentinel writes at runtime without refining the joined
 pointer. Possible aliases must still invalidate the saved callback.
+These writes run both inline and through a callee, with zero and positive
+memory offsets. `OffsetStoreRangesKeepModularFootprints` additionally checks
+positive and negative wrapped footprints through instruction transfer and
+summary binding, while ordinary scalar arithmetic remains conservative.
 The pinned 72-file native-object scan described in [sbf-corpus.md](sbf-corpus.md)
 is separate from these synthetic execution tests and from official VM gates.
 
