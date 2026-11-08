@@ -4690,7 +4690,8 @@ The GUI starts a replica on a function as its Set Type dialog opens
 (`AnalysisService::prepareRead`) and has it prepare the function and build its listing
 (`prepare_function`), so the render after the edit finds its analysis and its callees'
 ready. A replica takes a function's new name in its listing as the owner does, and the
-names that changed row by row (`Engine::takeNames`), so its name index stands. A page the
+names that changed row by row (`Engine::takeNames`), so its name index stands, and so
+does the function list the next selection reads (`Session::functionListCurrent`). A page the
 GUI keeps is named by the document and lines it came from; a later read names it
 (`if_none_match`), and while the document stands the worker says so instead of sending
 the page again (`QueryService::State::keptPages`).
