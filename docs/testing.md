@@ -1890,6 +1890,36 @@ Apple PAC/CPA2 execution, signed unwinding and exact fault PC/full ESR remain
 outside this qualification. Generated products are removed after their hashes
 and results are recorded; canonical model inputs and necessary diagnostics remain.
 
+
+The [recovered-call receipt](evidence/arm64e-recovered-call-faults-2026-11-08.json)
+extends the strict exception-class check to 36 complete recovered fixed C
+prototypes: scalar, 128-bit integer, direct record and HFA values, including
+register-bank exhaustion and packed stack arguments. NativeAnalysis fixtures
+use no analyst call-site permission. Their 900 unchanged Mach-O objects pass
+30 controlled PAC guests across LLVM and HighC/LLVMC O0/O2, EL0/EL1 and all
+four CPTA control combinations: 21,600 valid pairs and 51,840 bad-signature
+pairs, with zero exception-class differences. The 1,625 explicit-prototype
+objects and 25 original-x8 objects remain byte-identical to their earlier
+qualified inputs; those profiles are not re-executed by this result.
+The selected Release owner regression records 861 passes and 26 explicit
+host/toolchain skips across 887 instances. One parallel timeout passes serially
+in the unchanged 120-second limit. The revised aggregate group adds 69 passing
+CTest instances; the receipt preserves the original failure and its resolution.
+The environment's `recovered_calls.py` requires its own exact 36-test report
+and rejects an explicit-prototype report substituted for it. This qualifies
+transport of an established recovered ABI, not automatic recovery accuracy.
+The authenticated native bridge explicitly rejects full 128-bit SIMD carriers,
+indirect by-value parameters and hidden results until their transport is proved.
+
+`MachOArm64eDependencies` additionally verifies multi-start pages for all six
+supported arm64e chain formats and ordinary 64-bit chains. It checks complete
+signing/import/slot identity, unterminated or reused overflow entries,
+duplicate and partially overlapping storage, malformed page bounds and
+unowned table data. This establishes dependency preservation, not new
+pointer signing or authenticated whole-image emission. The expanded Swift
+aggregate regression checks all logical return fields and separately observes
+full floating registers so their unknown upper lanes cannot become zeros.
+
 `ImmutableNativeCalls.Generated*` checks ordinary and loop-frame image
 publication after dead private reads and their initializers disappear. The
 relocation validator still rejects unbound live image addresses.

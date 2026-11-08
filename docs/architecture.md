@@ -1321,8 +1321,9 @@ calls using them reject until the packet layout can carry full vector registers.
 A resolved display name cannot replace that authenticated target,
 and exact LLVM call prototypes remain
 exact. Explicit source call-site prototypes and recovered native C prototypes
-retain the original target, including floating arguments/results and a
-variadic fixed prefix where declared. They cannot authenticate to a raw pointer
+retain the original target, including floating arguments/results. Explicit
+prototypes also support a declared variadic prefix; recovered native bindings
+in this profile require fixed prototypes. They cannot authenticate to a raw pointer
 and then acquire a second implicit C check, or replace a captured target with
 its display name. Authenticated special-language bindings without a complete
 call ABI reject explicitly.
@@ -1916,8 +1917,10 @@ bounds remain validated. Multiple starts in one page retain the same slot and
 signing identities. Overflow lists must terminate within their owning table,
 use ascending starts and contain no duplicate or partially overlapping pointer
 storage across either bind or rebase phase. Unowned nonzero overflow entries
-and invalid padding reject before a dependency state is published. This preservation contract does not synthesize signed
-storage, install new authenticated imports or authorize whole-image rebuilding.
+and invalid padding reject before a dependency state is published. The start
+ordering follows [dyld's chain validation](https://github.com/apple-oss-distributions/dyld/blob/main/common/MachOAnalyzer.cpp).
+This preservation contract does not synthesize signed storage, install new
+authenticated imports or authorize whole-image rebuilding.
 
 This support covers static loading, lifting and C/LLVM inspection. Native
 rebuilding and source replacement of an arm64e image fail explicitly until
