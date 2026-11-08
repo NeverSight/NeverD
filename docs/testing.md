@@ -16303,7 +16303,8 @@ unknown or truncated command. Repeated failed replies share the
 single unread caller-error slot. Valid unmodeled object kinds still stop before
 transaction effects. `FailedTransactionKeepsProxyAliveAtTheJNIExceptionBoundary`
 checks the next explicit JNI logging/exception boundary without marking the
-live proxy dead or discarding the old reply bytes/cursor.
+live proxy dead or discarding the old reply bytes; runtime execution remains
+terminal at that unsupported boundary.
 `AndroidJNI.BinderObjectsRetainProxyIdentityAndDriverOwnership` executes an original
 guest service through ordinary/V/A JNI at O0/O2 and all relocation/backend variants.
 It checks proxy reuse after recycle, forwarding a borrowed object table, null Binder
