@@ -4475,6 +4475,10 @@ initial qualification byte for byte, with unchanged compiler/backend hashes;
 the generated-C behavior evidence is reused on that explicit basis. The two
 additional value checks retain VMRUN guest outputs and failed-VMREAD prior
 values. Public evidence uses portable path variables.
+The later MIPS MSA integration at `22e680512e` passes the same 29 checks and
+2,912 compilation checks after rebuilding both SDK targets. Its 756 complete
+exports and compiler/backend hashes remain identical to the original VMX
+qualification; the separate integration receipt records that comparison.
 
 These checks qualify Linux i386 source generation through NeverC's full LLVM
 backend and x64 source generation across ELF/COFF/Mach-O. Controlled VMX
