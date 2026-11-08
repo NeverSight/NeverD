@@ -10919,6 +10919,19 @@ cannot publish partial tables; a non-image-base relative table remains valid.
 and freshness after definition/provenance/root changes. `COFFTableBaseCLI.*`
 writes a minimal linked PE, verifies its decoded targets and invokes HighC and
 LLVM-to-C through the CLI, without depending on a platform linker.
+`COFFNarrowGuard.*` checks RVA tables whose selector is extended to 64 bits
+before a narrower unsigned check, as an MSVC SEH termination handler reads
+`movsxd rcx, dword ptr [rax]; cmp ecx, 5; ja`. Sign-extended 8-, 16- and
+32-bit loads and registers under a check of their own width, including a
+register a predecessor block wrote, zero-extended loads and full-width checks
+publish exactly the six cases, with the unwind range covering the table or
+ending before it. A check narrower than the extended source, a 32-bit check of
+a 64-bit load, signed checks and a selector redefined after its check stay
+unresolved.
+`WindowsEHModesCorpus.RecoversTheMSVCX64TerminationHandlerSwitch` checks that
+shape in all twelve optimized MSVC x64 `xcpt4` builds, where it is a `__finally`
+funclet reading its selector through the establisher frame: one six-case table
+inside the handler's unwind range, every case a decoded block.
 
 `ResolverBlockMemo.*` retains references through 20,000 recursive insertions,
 checks duplicate construction and exact destruction counts, and reuses cleared
