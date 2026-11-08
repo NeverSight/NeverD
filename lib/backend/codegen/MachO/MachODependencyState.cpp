@@ -23,6 +23,7 @@
 #include "llvm/Support/SHA256.h"
 
 #include <cstddef>
+#include <iterator>
 #include <set>
 
 namespace neverd {
