@@ -3934,6 +3934,11 @@ overshifts and remainder by zero preserve the normalized scratch-slot invariant.
 `NativeLiteralOverloadsKeepEveryWidthAndWordBoundary` checks literal identity,
 constant-only plans and unchanged step counts at every width from 1 through
 257 bits. Constant plans must not request variable values.
+`WideLiteralsKeepEveryBitAndWidthAcrossPoolGrowthAndCopies` distinguishes zero,
+all-ones and every single-bit position at widths from 65 through 1,025 bits,
+including partial high limbs. Reusing the caller's value buffer, growing both
+intern tables, copying/moving contexts and destroying the original owner
+preserve every literal's complete identity.
 `SharedRootSubstitutionKeepsSimultaneousReplacements` covers shared descendants,
 repeated roots, and overlapping replacement keys at native and wide widths.
 Independent arithmetic checks that replacement values are not substituted again.
@@ -3980,6 +3985,39 @@ nonlinear neighbors through all six source routes at O0/O2.
 at 8/64/65/128 bits against independent complete-word multiplication. The
 non-native cases must finish below 60,000 work units with output cost at most
 286, protecting dense reconstruction headroom without increasing its budget.
+`SharedLiteralPrefixesFinishAComplementedDegree256` keeps the default
+verification samples and the 65,536-unit request budget for a parsed degree-256
+product. Its 8/16/32/64-bit regressions must finish with a short result;
+independent full-width products through 257 bits also check high limbs, carry
+boundaries and preservation of the source expression. A single even-offset
+perturbation leaves odd multiplicities and checks that unequal factors retain
+their exact residual contribution. The projected-complement worker fixture
+checks the common CLI and GUI source routes against the original machine-code
+product at both C optimization levels.
+`MaskedProductsObserveOnlyTheRequestedLiteralWindow` checks that discarded high
+mask bits do not force wider inner-product proofs. Six- through eight-bit windows
+must finish within the normal budget, while independent full-width products and
+an unscaled query in the same context retain every observable high bit. The
+masked-window worker fixture exercises the same boundary in emitted source.
+The `masked-product-window` benchmark family (`--count 36`) retains degree-16–64
+products, complemented inputs, one-factor parity changes and a third observed
+bit from the inner nonlinear product. Its eight-bit words also keep the high
+mask bit when the outer coefficient no longer discards it.
+`OddCoefficientRecoveryPreservesEveryWord` restores hidden affine inputs with
+odd coefficients, including one, minus one and high limbs, against independent
+full-width arithmetic at 1–257 bits. Native associative evaluation also covers
+long products and multiplication-chain boundaries against the APInt oracle.
+`WideFrontiersRetainIndependentProductInputs` checks affine recovery across
+33- and 65-input frontiers together with an unchanged nonlinear product.
+Independent full-word arithmetic covers 3–257 bits, odd and arbitrary factors,
+and exhausted, partial and complete work budgets.
+`TransferredTermsCombineWithSharedAffineTails` retains coefficient addition
+and cancellation when a cached shared tail and a transferred terminal reach
+the same base, including multiword values.
+`OpaqueInteriorsDoNotMintUnusedInputs` checks that a deep hidden word does not
+create unused abstract inputs, while preserving a caller variable whose name
+matches the placeholder pool. Its restoration is compared with independent
+3–257-bit arithmetic, including zero divisors.
 `PreparedParityPrefixesKeepTheirProductAndContext` checks that a completed
 prefix reduces the next reader's work at 8/64/257 bits, without changing its
 values. A different product, the same handle in another context, zero scratch
@@ -3993,10 +4031,19 @@ supports 65/128/257-bit words for SDK and CLI diagnostic runs.
 factor runs around power-of-two boundaries at 1–257 bits, both full and scaled
 products. Independent complete-word multiplication and high-bit near misses
 check equality and retained input models.
-`SymMBA.DenseCoversKeepEveryCornerAndWholeWord` exhausts four-, six- and
-eight-input cover tables, including mixed literal polarities and an isolated
-negative corner. Independent bit-plane evaluation checks random complete words
-through 257 bits; zero work must refuse without constructing a new node.
+`SymMBA.DenseCoversKeepEveryCornerAndWholeWord` exhausts four- through
+eight-input cover tables, including mixed literal polarities, an isolated
+negative corner and opposite missing corners. Independent bit-plane evaluation
+checks random complete words through 257 bits; zero work must refuse without
+constructing a new node.
+`SymMBAParity.PackedCoefficientsKeepEveryCornerAndBitPlane` exhausts every
+function through three inputs, then checks dense, sparse and random tables
+through seven inputs across the packed-storage boundary. Optimal recipes are
+disabled; independent truth-table lookups verify every corner and random
+64-bit planes under the original synthesis work allowance.
+`SymMBA.SingleMissingCornersKeepCompleteWordsAndWorkAdmission` checks every
+excluded corner through seven inputs, independent 8/64/257-bit words, the
+excluded assignment and its neighbor, and exact/one-short cover allowances.
 Paired-product regressions cover degree-64–128 mixed carry frontiers with
 independent 8–257-bit arithmetic oracles. A separate 32-factor fixture retains
 an input-dependent highest-bit correction, exhausts its three relevant low
@@ -4014,6 +4061,9 @@ also require independent full-width Z3 proofs. Fused sum/carry decisions must
 finish both degree-64 carry products at the same benchmark allowance, with
 lower output costs. Exhausting all 65,536 low-byte input pairs for each product
 checks the resulting carries independently of the decision implementation.
+`SymMBAResiduePolynomialCache.ColumnSumsKeepComplementedCarries` checks final-column
+parity and full-adder results with independent products through 257 bits,
+complemented factors, and exact/one-short work and storage allowances.
 Single- and two-group cofactor partitions also avoid redundant maps and sorts.
 A degree-24 fixture must finish within the shared work budget; exhaustive
 eight-bit supports and independent 8–257-bit arithmetic oracles retain
@@ -4112,6 +4162,20 @@ reconstruction, casts, shifted constant tables with overshifts and opaque
 division inputs. Zero words must preserve their original width. Attempt-cache
 tests cover context isolation, storage refusal and reuse under larger scratch
 allowances when storage did not limit the preceding search.
+`SymMBAResiduePolynomialCache.SingleBitArithmeticKeepsCompleteWords` exhausts
+the three input parities with independent 8/64/257-bit arithmetic, including
+mixed addition and multiplication, exact/one-short work and scratch storage.
+`ExactAndShortResourcesKeepCompleteWords` also checks shared decision-page
+views under exact/short scratch at 8/64/257 bits with independent arithmetic.
+`PartialPeriodsKeepUnpairedFullWords` checks sparse and dense
+partial periods at 8/64/257 bits, reverse construction, complements and
+single-factor perturbations against an independent APInt product. It requires
+rewrites at each width and forbids cost growth, including retained originals
+when a partial proof cannot produce a smaller expression.
+`NarrowReadsKeepDistinctOriginalInputs` covers distinct opaque shifts whose
+sources become visible at lower precision, with both ordinary and large
+original node indices. Independent 8/64/257-bit products check the complete
+word after narrowing exposes inputs outside the initial admission list.
 Generated-reading regressions require the deep walk to simplify an original
 opaque division's numerator and propagate it through the emitted proof.
 Mixed quartic and degree-24 residuals must also leave work for the surrounding
@@ -10269,6 +10333,16 @@ isolation.
 
 ## Modular MBA simplification
 
+Local MBA research can run disposable producers with
+`python3 tools/neverd-bench/mba_attempt.py --directory <owned-attempt-root> -- <command>`.
+The runner retains current and previous evidence, removes scratch after success,
+failure or normal interruption, and recovers abandoned scratch on the next start.
+An inherited POSIX lease prevents cleanup while the producer still runs. Reusable
+SDK/build directories, frozen corpora and promised historical recovery archives
+remain outside this owned root. `test_mba_attempt.py` exercises eight small rounds,
+normal interruption, killed-parent recovery, live-reader exclusion and preservation
+of unowned input and interrupted slot setup; it creates no real SDK copies.
+
 `SymMBAObservedWindow.Reciprocal*` and
 `QuotientProductsRecoverOnlyTheirOwnRemainder` (in
 `NeverDSymMBAObservedWindowTests`) check exact reciprocal division, its
@@ -10366,6 +10440,13 @@ all-ones and high-bit assignments against independent arithmetic.
 `EvaluationPlansKeepInterleavedConstantSlots` alternates native and wide
 evaluation over interleaved literal and input slots, checks missing inputs,
 and retains the original DAG node count used by budget consumers.
+`NativeResiduesKeepSharedFullWidthUses` compares scaled literal-wrapped factors
+against independent APInt arithmetic at 8/16/32/64 bits. Shared right shifts,
+comparisons and division (including zero divisors) retain complete values.
+Alternating native and AP evaluation checks the first-use/reuse transition,
+every input callback and the unchanged work count after preparation.
+`NativeArithmeticKeepsMixedWidthConsumersExact` checks native arithmetic and
+its wide zero-extended consumers at every native bit width.
 `BalancedCarryColumnsFinishRotatedProducts` checks degree-64 products whose
 rotated construction order previously exhausted the shared work budget.
 `InterruptedCarryColumnsRetainCompleteValues` checks six short allowances

@@ -113,6 +113,43 @@ TEST(SymExpr, InterningRetainsFullIdentityAcrossGrowthCopyAndMove) {
   EXPECT_FALSE(Assigned.hasVarName("after-copy"));
 }
 
+TEST(SymExpr, WideLiteralsKeepEveryBitAndWidthAcrossPoolGrowthAndCopies) {
+  SymContext Original;
+  std::vector<std::pair<llvm::APInt, SymRef>> Values;
+  auto Insert = [&](llvm::APInt Value) {
+    const auto Ref = Original.mkConst(Value);
+    Values.emplace_back(Value, Ref);
+    // Interning owns its value, even when the caller reuses its input buffer.
+    Value.flipAllBits();
+    EXPECT_EQ(Original.constValue(Ref), Values.back().first);
+  };
+  for (unsigned Width :
+       {65u, 66u, 127u, 128u, 129u, 255u, 256u, 257u, 513u, 1025u}) {
+    Insert(llvm::APInt::getZero(Width));
+    Insert(llvm::APInt::getAllOnes(Width));
+    for (unsigned Bit = 0; Bit < Width; ++Bit)
+      Insert(llvm::APInt::getOneBitSet(Width, Bit));
+  }
+  // Every entry has a different width or value, including words whose only
+  // difference is the last bit of a partial high limb.
+  ASSERT_EQ(Original.numNodes(), Values.size());
+  auto Copy = Original;
+  SymContext Assigned;
+  Assigned = Original;
+  Original = SymContext();
+  auto Moved = std::move(Copy);
+  for (auto *Ctx : {&Moved, &Assigned}) {
+    const auto Before = Ctx->numNodes();
+    for (auto It = Values.rbegin(); It != Values.rend(); ++It) {
+      EXPECT_EQ(Ctx->mkConst(It->first), It->second);
+      EXPECT_EQ(Ctx->constValue(It->second), It->first);
+    }
+    EXPECT_EQ(Ctx->numNodes(), Before);
+    const auto NewValue = llvm::APInt::getOneBitSet(2049, 2048);
+    EXPECT_EQ(Ctx->constValue(Ctx->mkConst(NewValue)), NewValue);
+  }
+}
+
 TEST(SymExpr, CollisionChainsSurviveIndependentCopiesAndOwnerDestruction) {
   // These different literal identities all have hash 0xfb58cd469c6a459e.
   constexpr std::array<std::pair<unsigned, uint64_t>, 5> Values{
@@ -1370,7 +1407,7 @@ TEST(SymExpr, EvaluationPlanReportsTheVariablesItReads) {
 TEST(SymExpr, NativeAssociativeEvaluationMatchesFullWidthArithmetic) {
   std::mt19937_64 Random(0x6e617279);
   for (unsigned Width = 1; Width <= 64; ++Width) {
-    for (unsigned Count : {2u, 3u, 8u, 33u}) {
+    for (unsigned Count : {2u, 3u, 5u, 6u, 7u, 8u, 33u, 257u}) {
       SCOPED_TRACE(::testing::Message()
                    << "width=" << Width << " operands=" << Count);
       SymContext Ctx;
@@ -1413,6 +1450,105 @@ TEST(SymExpr, NativeAssociativeEvaluationMatchesFullWidthArithmetic) {
           EXPECT_EQ(Plan.evalU64(Values), Expected.getZExtValue());
           EXPECT_EQ(Plan.eval(Wide), Expected);
         }
+      }
+    }
+  }
+}
+
+TEST(SymExpr, NativeArithmeticKeepsMixedWidthConsumersExact) {
+  std::mt19937_64 Random(0x6d6f64756c7573);
+  for (unsigned Width = 1; Width <= 64; ++Width) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const auto Root =
+        Ctx.mkNot(Ctx.mkAdd({Ctx.mkMul(X, Y), X, Ctx.mkConst(Width, 3)}));
+    const unsigned WideWidth = Width + 65;
+    const auto Scale = llvm::APInt(WideWidth, 3).shl(65);
+    const auto WideRoot =
+        Ctx.mkMul(Ctx.mkZExt(Root, WideWidth), Ctx.mkConst(Scale));
+    SymEvalPlan Native(Ctx, Root), Wide(Ctx, WideRoot);
+    ASSERT_TRUE(Native.fitsU64());
+    ASSERT_FALSE(Wide.fitsU64());
+    for (unsigned Trial = 0; Trial < 64; ++Trial) {
+      const std::array<uint64_t, 2> Raw{Trial == 0 ? UINT64_MAX : Random(),
+                                        Trial == 1 ? 0 : Random()};
+      const std::array Values{llvm::APInt(Width, Raw[0], false, true),
+                              llvm::APInt(Width, Raw[1], false, true)};
+      const auto Expected =
+          ~(Values[0] * Values[1] + Values[0] + llvm::APInt(Width, 3));
+      EXPECT_EQ(Native.evalU64(Raw), Expected.getZExtValue());
+      EXPECT_EQ(Native.eval(Values), Expected);
+      EXPECT_EQ(Wide.eval(Values), Expected.zext(WideWidth) * Scale);
+    }
+  }
+}
+
+TEST(SymExpr, NativeResiduesKeepSharedFullWidthUses) {
+  std::mt19937_64 Random(0x72657369647565);
+  for (unsigned Width : {8u, 16u, 32u, 64u}) {
+    SCOPED_TRACE(Width);
+    for (unsigned Observed : {1u, 3u, 6u}) {
+      SCOPED_TRACE(Observed);
+      SymContext Ctx;
+      const auto X = Ctx.mkVar("x", Width);
+      Ctx.mkVar("unused", Width);
+      const auto Y = Ctx.mkVar("y", Width), Z = Ctx.mkVar("z", Width);
+      const llvm::APInt One(Width, 1), Three(Width, 3);
+      const auto Offset = One.shl(Observed), Toggle = Three.shl(Observed);
+      const auto Mask = ~One.shl(Observed + 1);
+      const auto Scale = Three.shl(Width - Observed);
+      const auto Hidden = Ctx.mkMul(
+          Ctx.mkOr(Ctx.mkAnd(Ctx.mkXor(Ctx.mkAdd(X, Ctx.mkConst(Offset)),
+                                       Ctx.mkConst(Toggle)),
+                             Ctx.mkConst(Mask)),
+                   Ctx.mkConst(Offset)),
+          Ctx.mkConst(Offset + One));
+      const auto Product = Ctx.mkMul({Ctx.mkConst(Scale), Ctx.mkAdd(Hidden, Y),
+                                      Ctx.mkAdd(Z, Ctx.mkConst(Three))});
+      const std::array Roots{
+          Product,
+          Ctx.mkAdd(Product, Ctx.mkLShr(Hidden, Ctx.mkConst(Width, Observed))),
+          Ctx.mkAdd(Product, Ctx.mkZExt(Ctx.mkUlt(Hidden, Y), Width)),
+          Ctx.mkAdd(Product, Ctx.mkUDiv(Hidden, Y))};
+      for (size_t Kind = 0; Kind < Roots.size(); ++Kind) {
+        SCOPED_TRACE(Kind);
+        SymEvalPlan Plan(Ctx, Roots[Kind]);
+        ASSERT_TRUE(Plan.fitsU64());
+        EXPECT_EQ(Plan.numSteps(), Ctx.dagSize(Roots[Kind]));
+        for (unsigned Trial = 0; Trial < 128; ++Trial) {
+          const std::array Values{
+              llvm::APInt(Width, Trial == 0 ? UINT64_MAX : Random(), false,
+                          true),
+              One, llvm::APInt(Width, Trial == 1 ? 0 : Random(), false, true),
+              llvm::APInt(Width, Random(), false, true)};
+          const auto Full =
+              ((((Values[0] + Offset) ^ Toggle) & Mask) | Offset) *
+              (Offset + One);
+          auto Expected = Scale * (Full + Values[2]) * (Values[3] + Three);
+          if (Kind == 1)
+            Expected += Full.lshr(Observed);
+          else if (Kind == 2)
+            Expected += llvm::APInt(Width, Full.ult(Values[2]));
+          else if (Kind == 3)
+            Expected += Values[2].isZero() ? llvm::APInt::getAllOnes(Width)
+                                           : Full.udiv(Values[2]);
+          std::array<unsigned, 4> Calls{};
+          EXPECT_EQ(Plan.evalU64With([&](uint32_t Id) {
+            ++Calls.at(Id);
+            return Values.at(Id).getZExtValue();
+          }),
+                    Expected.getZExtValue());
+          EXPECT_EQ(Calls, (std::array<unsigned, 4>{1, 0, 1, 1}));
+          Calls.fill(0);
+          EXPECT_EQ(Plan.evalWith([&](uint32_t Id) {
+            ++Calls.at(Id);
+            return &Values.at(Id);
+          }),
+                    Expected);
+          EXPECT_EQ(Calls, (std::array<unsigned, 4>{1, 0, 1, 1}));
+        }
+        EXPECT_EQ(Plan.numSteps(), Ctx.dagSize(Roots[Kind]));
       }
     }
   }

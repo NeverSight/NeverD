@@ -5045,8 +5045,8 @@ TEST_F(SessionCAPITest, IdentifyListsWhatLoadingReads) {
   EXPECT_TRUE(loadable(Rows[1]));
   ASSERT_EQ(neverd_session_load(Session, NativePath.c_str()), 1);
   EXPECT_EQ(takeString(neverd_session_arch_name(Session)), "x86_64");
-  // A processor NeverD lacks and a big-endian file are named and refused,
-  // as loading refuses them.
+  // An inconsistent MIPS ISA profile and a big-endian x86 ELF are named and
+  // refused, as loading refuses them.
   std::string Mips = Native;
   llvm::support::endian::write16le(Mips.data() + llvm::ELF::EI_NIDENT + 2,
                                    llvm::ELF::EM_MIPS);
@@ -5056,7 +5056,7 @@ TEST_F(SessionCAPITest, IdentifyListsWhatLoadingReads) {
   EXPECT_EQ(text(Rows[0]), "ELF64 for MIPS (Executable)");
   EXPECT_FALSE(loadable(Rows[0]));
   EXPECT_EQ(Rows[0].getString("reason").value_or(""),
-            "NeverD has no MIPS processor");
+            "elf: MIPS requires matching ELF32/MIPS32r2 or ELF64/MIPS64r2");
   EXPECT_EQ(neverd_session_load(Session, MipsPath.c_str()), 0);
   std::string Big = Native;
   Big[llvm::ELF::EI_DATA] = llvm::ELF::ELFDATA2MSB;

@@ -505,6 +505,7 @@ private:
   void retainLowWordProjection(SymRef Source, uint32_t Width, SymRef Image);
 
   llvm::APInt maskToWidth(const llvm::APInt &V, uint32_t Width) const;
+  SymRef internWideConst(const llvm::APInt &Value);
   uint32_t minimumVariableId(SymRef R) const;
 
   std::vector<SymNode> Nodes;
@@ -584,7 +585,7 @@ private:
   /// once more than one width uses it.  Name-only lookup must never choose one
   /// of several width-specific variables by accident.
   std::unordered_map<std::string, uint32_t> VarByName;
-  std::unordered_map<std::string, uint32_t> WideConstByKey;
+  llvm::DenseMap<llvm::APInt, uint32_t> WideConstByValue;
 
   struct InputSpaceKey {
     SymInputKind Kind = SymInputKind::Register;
@@ -655,12 +656,17 @@ public:
   bool fitsU64() const { return FitsU64; }
 
   /// Lowered DAG nodes, including constants: the solver's conservative cost
-  /// model remains unchanged when immutable slots need no repeated work.
-  size_t numSteps() const { return Steps.size() + ConstantSlots.size(); }
+  /// model remains unchanged when constant or neutral slots need no work.
+  size_t numSteps() const {
+    return FitsU64 ? ScratchU64.size() : Steps.size() + ConstantSlots.size();
+  }
 
   SymRef root() const { return Root; }
 
 private:
+  enum class NativePreparation : uint8_t { FirstEvaluation, AwaitReuse, Done };
+  void prepareNativeReuse();
+
   /// One node lowered to its operator, width and operand slots.  Slots are
   /// positions in the scratch buffer. Operands precede the output slot;
   /// constants occupy slots but need no repeated evaluation step.
@@ -691,6 +697,7 @@ private:
   std::vector<llvm::APInt> ScratchAP;
   uint32_t RootSlot = 0;
   bool FitsU64 = true;
+  NativePreparation NativeState = NativePreparation::FirstEvaluation;
 };
 
 } // namespace neverd::symbolic

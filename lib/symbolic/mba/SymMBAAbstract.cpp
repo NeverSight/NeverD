@@ -26,10 +26,12 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
 
+#include <algorithm>
 #include <map>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace neverd::symbolic::detail {
@@ -87,6 +89,52 @@ bool isBitwiseOrAtom(Role R) { return R == Role::Bitwise || R == Role::Atom; }
 /// stronger than proving it only for the literal at hand.
 bool isBitwiseOperand(Role R) {
   return isBitwiseOrAtom(R) || R == Role::Literal;
+}
+
+bool hasMultipleNonconstantFactors(const SymContext &Ctx, SymRef R) {
+  return Ctx.op(R) == SymOp::Mul &&
+         Ctx.numOperands(R) > 1u + unsigned(Ctx.isConst(Ctx.operand(R, 0)));
+}
+
+// These children are arithmetic in the first classification unless another
+// use has already demoted them. Seed that same demotion during the existing
+// reachability walk, avoiding a whole classification round for common mixed
+// regions. Ambiguous products and complements still use the fixed point.
+bool seedArithmeticInputs(const SymContext &Ctx, SymRef R, bool AllowProducts,
+                          NodeSet &ForcedAtoms) {
+  bool NeedsFixedPoint = false;
+  for (SymRef Child : Ctx.operands(R)) {
+    const auto Target =
+        Ctx.op(Child) == SymOp::Not ? Ctx.operand(Child, 0) : Child;
+    bool Arithmetic = Ctx.op(Target) == SymOp::Add;
+    if (Ctx.op(Target) == SymOp::Mul) {
+      const auto Ops = Ctx.operands(Target);
+      const auto Unknown = Ctx.isConst(Ops[0]) ? Ops.drop_front() : Ops;
+      Arithmetic = Unknown.size() == 1;
+      if (AllowProducts && !Arithmetic) {
+        Arithmetic = llvm::all_of(Unknown, [&](SymRef C) {
+          switch (Ctx.op(C)) {
+          case SymOp::Const:
+          case SymOp::Add:
+          case SymOp::Mul:
+          case SymOp::Not:
+            return false;
+          default:
+            // Bitwise operators are either Bitwise or Atom, and the other
+            // opaque operators are Atom. Both admit the same product.
+            return true;
+          }
+        });
+        NeedsFixedPoint |= !Arithmetic;
+      }
+    }
+    // A nested complement's role depends on its wrapped word. Ordinary
+    // construction contracts double complements; retain the general rule.
+    NeedsFixedPoint |= Ctx.op(Target) == SymOp::Not;
+    if (Arithmetic)
+      ForcedAtoms.insert(Target.index());
+  }
+  return NeedsFixedPoint;
 }
 
 void classify(const SymContext &Ctx, llvm::ArrayRef<uint32_t> Order,
@@ -325,14 +373,14 @@ public:
       return false;
     if (Coefficient.isZero())
       return true;
-    auto It = Map.find(Index);
-    if (It != Map.end()) {
+    auto It = Map.lower_bound(Index);
+    if (It != Map.end() && It->first == Index) {
       It->second += Coefficient;
       return true;
     }
     if (!charge(1, 128) || !array(Words, sizeof(uint64_t)))
       return false;
-    Map.emplace(Index, Coefficient);
+    Map.emplace_hint(It, Index, Coefficient);
     return true;
   }
 };
@@ -363,12 +411,22 @@ std::optional<AffineInput> affineInput(const SymContext &Ctx, SymRef Root,
   while (!Pending.empty()) {
     if (!Resources.charge(1))
       return std::nullopt;
-    auto It = Pending.begin();
-    SymRef R(It->first);
-    llvm::APInt Coefficient = std::move(It->second);
-    Pending.erase(It);
+    auto Current = Pending.extract(Pending.begin());
+    SymRef R(Current.key());
+    const llvm::APInt &Coefficient = Current.mapped();
     if (Coefficient.isZero())
       continue;
+    // The pending map already paid for this node and its coefficient. Move
+    // an opaque terminal into the result instead of allocating and copying
+    // it again. Cached affine tails may already have contributed to its key.
+    auto Retain = [&] {
+      if (!Resources.charge(1 + Coefficient.getNumWords()))
+        return false;
+      auto Inserted = Out.Terms.insert(std::move(Current));
+      if (!Inserted.inserted)
+        Inserted.position->second += Inserted.node.mapped();
+      return true;
+    };
     if (Ctx.isConst(R)) {
       if (!Resources.product(Coefficient))
         return std::nullopt;
@@ -377,7 +435,7 @@ std::optional<AffineInput> affineInput(const SymContext &Ctx, SymRef Root,
     }
     if (R != Root && (ForcedAtoms.contains(R.index()) ||
                       Roles.lookup(R.index()) != Role::Linear)) {
-      if (!Resources.add(Out.Terms, R.index(), Coefficient))
+      if (!Retain())
         return std::nullopt;
       continue;
     }
@@ -410,7 +468,7 @@ std::optional<AffineInput> affineInput(const SymContext &Ctx, SymRef Root,
       if (!Resources.add(Pending, Ops[0].index(), -Coefficient))
         return std::nullopt;
     } else {
-      if (!Resources.add(Out.Terms, R.index(), Coefficient))
+      if (!Retain())
         return std::nullopt;
     }
   }
@@ -488,12 +546,15 @@ bool cacheSharedAffineInputs(const SymContext &Ctx,
 
 std::optional<llvm::APInt> inverseOdd(const llvm::APInt &Coefficient,
                                       AffineResources &Resources) {
-  // Newton iteration doubles the correct low bits each time.  All arithmetic
-  // remains modulo the original word width, including widths above 64 bits.
+  // Every odd coefficient is its own inverse modulo eight: its square is
+  // 1 + 4*k*(k+1). Newton iteration doubles those three correct low bits.
+  // All arithmetic retains the original width, including widths above 64.
   if (!Resources.array(Coefficient.getNumWords(), sizeof(uint64_t)))
     return std::nullopt;
-  llvm::APInt Inverse(Coefficient.getBitWidth(), 1);
-  for (uint64_t Bits = 1; Bits < Coefficient.getBitWidth(); Bits *= 2) {
+  llvm::APInt Inverse = Coefficient;
+  if (Coefficient.isOne() || Coefficient.isAllOnes())
+    return Inverse;
+  for (uint64_t Bits = 3; Bits < Coefficient.getBitWidth(); Bits *= 2) {
     if (!Resources.product(Coefficient) || !Resources.product(Coefficient))
       return std::nullopt;
     Inverse *= 2 - Coefficient * Inverse;
@@ -1063,6 +1124,9 @@ SymRef restoreAffineRelations(SymContext &Ctx, SymRef Body,
   // dependent relations cannot recursively expand aliases or create cycles.
   NodeMap<SymRef> Rewritten;
   NodeMap<SymRef> Arithmetic;
+  Rewritten.reserve(Order.size());
+  Arithmetic.reserve(Order.size());
+  llvm::SmallVector<SymRef, 8> Ops;
   for (uint32_t Index : Order) {
     if (!Resources.charge(1))
       return Body;
@@ -1070,13 +1134,23 @@ SymRef restoreAffineRelations(SymContext &Ctx, SymRef Body,
     const bool IsArithmetic = Roles.lookup(Index) == Role::Linear;
     if (!Resources.array(Ctx.numOperands(R), 2 * sizeof(SymRef)))
       return Body;
-    llvm::SmallVector<SymRef, 8> Ops;
-    for (SymRef C : Ctx.operands(R))
-      Ops.push_back(IsArithmetic ? Arithmetic.lookup(C.index())
-                                 : Rewritten.lookup(C.index()));
-    if (!Ops.empty() && !chargeAffineNode(Ctx, Ctx.op(R), Ops, Resources))
-      return Body;
-    SymRef Rebuilt = Ops.empty() ? R : Ctx.rebuild(R, Ops);
+    Ops.clear();
+    bool Changed = false;
+    for (SymRef C : Ctx.operands(R)) {
+      SymRef Replacement = IsArithmetic ? Arithmetic.lookup(C.index())
+                                        : Rewritten.lookup(C.index());
+      Changed |= Replacement != C;
+      Ops.push_back(Replacement);
+    }
+    // Canonical nodes whose inputs did not change need no constructor pass.
+    // Reuse the owned operand buffer across changed nodes, including long
+    // products, and charge construction only when it actually runs.
+    SymRef Rebuilt = R;
+    if (Changed) {
+      if (!chargeAffineNode(Ctx, Ctx.op(R), Ops, Resources))
+        return Body;
+      Rebuilt = Ctx.rebuild(R, Ops);
+    }
     Rewritten[Index] = Rebuilt;
     auto It = Aliases.find(Index);
     Arithmetic[Index] = It == Aliases.end() ? Rebuilt : It->second;
@@ -1092,9 +1166,9 @@ SymRef restoreAffineRelations(SymContext &Ctx, SymRef Body,
   return finish(Rewritten.lookup(Body.index()));
 }
 
-template <typename Container>
+template <typename Container, typename Predicate>
 void collectReachableInOrder(const SymContext &Ctx, SymRef Root,
-                             Container &Order) {
+                             Container &Order, Predicate IsOpaque) {
   NodeSet Seen;
   llvm::SmallVector<SymRef, 64> Work{Root};
   while (!Work.empty()) {
@@ -1102,6 +1176,8 @@ void collectReachableInOrder(const SymContext &Ctx, SymRef Root,
     if (!Seen.insert(R.index()).second)
       continue;
     Order.push_back(R.index());
+    if (IsOpaque(R))
+      continue;
     for (SymRef C : Ctx.operands(R))
       Work.push_back(C);
   }
@@ -1127,7 +1203,7 @@ bool canMeasureAtRoot(const SymContext &Ctx, SymRef R) {
 
 std::vector<uint32_t> reachableInOrder(const SymContext &Ctx, SymRef Root) {
   std::vector<uint32_t> Order;
-  collectReachableInOrder(Ctx, Root, Order);
+  collectReachableInOrder(Ctx, Root, Order, [](SymRef) { return false; });
   return Order;
 }
 
@@ -1137,13 +1213,34 @@ abstractToMBAImpl(SymContext &Ctx, SymRef Root, bool AllowProducts,
   // Without product measurement, a root with multiple nonconstant factors
   // is always opaque in classify(), regardless of its descendants. The
   // ordinary classification spends no work budget before that refusal.
-  // Keep the coarser reading's separately charged traversal unchanged.
-  if (!AllowProducts && !CoarsenMaskedXors && Ctx.op(Root) == SymOp::Mul &&
-      Ctx.numOperands(Root) > 1u + unsigned(Ctx.isConst(Ctx.operand(Root, 0))))
+  // The coarser reading still performs its separately charged boundary scan.
+  if (!AllowProducts && !CoarsenMaskedXors &&
+      hasMultipleNonconstantFactors(Ctx, Root))
     return std::nullopt;
   NodeOrder Order;
-  collectReachableInOrder(Ctx, Root, Order);
   NodeSet ForcedAtoms;
+  llvm::SmallVector<SymRef, 8> VisibleInputs;
+  // An unconditional opaque input ends this region's reading. Its interior
+  // is still visited by the deep simplifier, but classifying and rewriting
+  // that hidden interior cannot change this abstraction's independent word.
+  bool HasOpaqueInterior = false;
+  bool HasProducts = false;
+  bool NeedsFixedPoint = CoarsenMaskedXors;
+  collectReachableInOrder(Ctx, Root, Order, [&](SymRef R) {
+    const bool Product = hasMultipleNonconstantFactors(Ctx, R);
+    const bool Opaque =
+        !canMeasureAtRoot(Ctx, R) || (!AllowProducts && Product);
+    HasOpaqueInterior |= Opaque && Ctx.numOperands(R) != 0;
+    HasProducts |= Product;
+    const auto Op = Ctx.op(R);
+    if (Op == SymOp::Var)
+      VisibleInputs.push_back(R);
+    if (!CoarsenMaskedXors &&
+        (Op == SymOp::And || Op == SymOp::Or || Op == SymOp::Xor))
+      NeedsFixedPoint |=
+          seedArithmeticInputs(Ctx, R, AllowProducts, ForcedAtoms);
+    return Opaque;
+  });
   NodeMap<Role> Roles;
   if (CoarsenMaskedXors) {
     for (uint32_t Index : Order) {
@@ -1157,22 +1254,28 @@ abstractToMBAImpl(SymContext &Ctx, SymRef Root, bool AllowProducts,
     if (ForcedAtoms.empty())
       return std::nullopt;
   }
-  demoteArithmeticUnderBitwise(Ctx, Order, AllowProducts, ForcedAtoms, Roles);
+  if (NeedsFixedPoint)
+    demoteArithmeticUnderBitwise(Ctx, Order, AllowProducts, ForcedAtoms, Roles);
+  else
+    classify(Ctx, Order, ForcedAtoms, AllowProducts, Roles);
 
   // Nothing to measure when the whole expression is one opaque thing.
   if (Roles.lookup(Root.index()) == Role::Atom)
     return std::nullopt;
 
   Abstraction Out;
+  Out.MayHaveProducts = HasProducts;
   NodeSet Reserved;
-  for (uint32_t Index : Order) {
-    if (Ctx.isVar(SymRef(Index)))
-      Reserved.insert(Index);
-    SymRef R(Index);
-    if (Ctx.op(R) == SymOp::Mul &&
-        Ctx.numOperands(R) > 1u + unsigned(Ctx.isConst(Ctx.operand(R, 0))))
-      Out.MayHaveProducts = true;
-  }
+  // Caller inputs below opaque boundaries must still keep their identities,
+  // even when their names coincide with a numbered placeholder declaration.
+  if (HasOpaqueInterior) {
+    llvm::SmallVector<uint32_t, 8> Variables;
+    Ctx.collectVars(Root, Variables);
+    for (uint32_t Id : Variables)
+      Reserved.insert(Ctx.varRef(Id).index());
+  } else
+    for (const auto Input : VisibleInputs)
+      Reserved.insert(Input.index());
 
   Placeholders Pool(Ctx, Reserved, Budget);
   NodeMap<SymRef> Rewritten;
@@ -1332,7 +1435,7 @@ abstractToMBAImpl(SymContext &Ctx, SymRef Root, bool AllowProducts,
     bool Changed = false;
     for (SymRef &C : Ops) {
       const auto Original = C;
-      if (!IsBitwise || Roles.lookup(C.index()) != Role::Literal) {
+      if (!IsBitwise || !Ctx.isConst(C)) {
         C = Rewritten.lookup(C.index());
       } else {
         // Hiding a complementary mask can create NOT and grow Ctx's operand

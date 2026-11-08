@@ -289,7 +289,7 @@ TEST(SymMBA, StillPrefersAUnionOfCubesWhereThatIsShorter) {
 TEST(SymMBA, DenseCoversKeepEveryCornerAndWholeWord) {
   std::mt19937_64 Random(0x636f766572);
   for (unsigned Count : {4u, 5u, 6u, 7u, 8u}) {
-    for (unsigned Mode = 0; Mode != 3; ++Mode) {
+    for (unsigned Mode = 0; Mode != 4; ++Mode) {
       auto Table = TruthTable::zero(Count);
       for (size_t Pattern = 0; Pattern < Table.entries(); ++Pattern) {
         auto input = [&](unsigned I) {
@@ -300,6 +300,8 @@ TEST(SymMBA, DenseCoversKeepEveryCornerAndWholeWord) {
           Value |= input(I) && input((I + 1) % Count);
         if (Mode == 2 && Pattern + 1 == Table.entries())
           Value = !Value;
+        if (Mode == 3)
+          Value = Pattern != 0 && Pattern + 1 != Table.entries();
         Table.setValue(Pattern, Value);
       }
       for (unsigned Width : {1u, 8u, 64u, 257u}) {
@@ -345,6 +347,59 @@ TEST(SymMBA, DenseCoversKeepEveryCornerAndWholeWord) {
         const auto Before = Ctx.numNodes();
         EXPECT_FALSE(synthesizeBitwise(Ctx, Table, Atoms, Limits));
         EXPECT_EQ(Ctx.numNodes(), Before);
+      }
+    }
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// Single missing-corner covers
+//===----------------------------------------------------------------------===//
+
+TEST(SymMBA, SingleMissingCornersKeepCompleteWordsAndWorkAdmission) {
+  std::mt19937_64 Random(0x683ca1);
+  for (unsigned Count : {4u, 5u, 6u, 7u}) {
+    for (unsigned Corner = 0; Corner < (1u << Count); ++Corner) {
+      auto Table = TruthTable::ones(Count);
+      Table.setValue(Corner, false);
+      for (unsigned Width : {8u, 64u, 257u}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Count << ':' << Corner << ':' << Width);
+        SymContext Ctx;
+        llvm::SmallVector<SymRef, 8> Atoms;
+        for (unsigned I = 0; I < Count; ++I)
+          Atoms.push_back(Ctx.mkVar("v" + std::to_string(I), Width));
+        auto Result = synthesizeBitwise(Ctx, Table, Atoms);
+        ASSERT_TRUE(Result);
+        SymEvalPlan Plan(Ctx, *Result);
+        for (unsigned Trial = 0; Trial < 16; ++Trial) {
+          llvm::SmallVector<llvm::APInt, 8> Values;
+          auto Expected = llvm::APInt::getZero(Width);
+          for (unsigned I = 0; I < Count; ++I) {
+            llvm::SmallVector<uint64_t, 5> Words;
+            for (unsigned J = 0; J < (Width + 63) / 64; ++J)
+              Words.push_back(Random());
+            Values.emplace_back(Width, Words);
+            if (Trial < 2)
+              Values.back() = (Corner ^ Trial) & (1u << I)
+                                  ? llvm::APInt::getAllOnes(Width)
+                                  : llvm::APInt::getZero(Width);
+            Expected |= Corner & (1u << I) ? ~Values.back() : Values.back();
+          }
+          EXPECT_EQ(Plan.eval(Values), Expected);
+        }
+        if (Corner || Count == 7)
+          continue;
+        // Independent totals of the old merge rounds, cover sweeps and
+        // greedy selection. ANF exceeds this minimal OR's cost allowance.
+        const size_t Required = Count == 4 ? 1439 : Count == 5 ? 12618 : 111320;
+        BitwiseSynthesisLimits Limits;
+        Limits.MaxCost = 2 * Count - 1;
+        Limits.MaxOptimalAtoms = 0;
+        Limits.MaxWork = Required - 1;
+        EXPECT_FALSE(synthesizeBitwise(Ctx, Table, Atoms, Limits));
+        Limits.MaxWork = Required;
+        EXPECT_TRUE(synthesizeBitwise(Ctx, Table, Atoms, Limits));
       }
     }
   }
