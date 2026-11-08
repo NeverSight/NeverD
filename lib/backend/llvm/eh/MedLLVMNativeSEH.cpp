@@ -16,6 +16,7 @@
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/loader/ExceptionInfo.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -48,13 +49,41 @@ using med_llvm_eh::mdUInt;
 
 namespace {
 
+/// Whether \p Lifted, a callback lifted for printed C, takes a prefix of what
+/// the runtime passes as \p Expected names it: a callback lifts with the
+/// arguments it reads.  The abnormal-termination flag is an integer, the
+/// exception pointers and the establisher frame pointers or pointer-wide
+/// integers.  The dispositions a filter returns are integers.
+bool hasSourceSEHCallbackShape(const llvm::FunctionType &Lifted,
+                               const llvm::FunctionType &Expected,
+                               unsigned PointerBits) {
+  const bool Filter = Expected.getParamType(0)->isPointerTy();
+  if (Lifted.isVarArg() || Lifted.getNumParams() > 2 ||
+      (Filter && !Lifted.getReturnType()->isIntegerTy()))
+    return false;
+  for (unsigned I = 0; I < Lifted.getNumParams(); ++I) {
+    llvm::Type *Param = Lifted.getParamType(I);
+    if (Filter || I == 1
+            ? !Param->isPointerTy() && !Param->isIntegerTy(PointerBits)
+            : !Param->isIntegerTy() || Param->getIntegerBitWidth() > 64)
+      return false;
+  }
+  return true;
+}
+
 bool hasSupportedSEHCallbackABI(const llvm::Function &Callback,
                                 const llvm::FunctionType *ExpectedType,
-                                Arch TargetArch) {
-  if (TargetArch != Arch::X64)
+                                Arch TargetArch, bool SourceView) {
+  if (SourceView) {
+    if (!hasSourceSEHCallbackShape(*Callback.getFunctionType(), *ExpectedType,
+                                   getTargetRegInfo(TargetArch).PointerSize *
+                                       8))
+      return false;
+  } else if (TargetArch != Arch::X64 ||
+             Callback.getFunctionType() != ExpectedType) {
     return false;
-  if (Callback.getFunctionType() != ExpectedType ||
-      Callback.getCallingConv() != llvm::CallingConv::C)
+  }
+  if (Callback.getCallingConv() != llvm::CallingConv::C)
     return false;
 
   // Lifted image functions use ordinary external linkage.  Source-produced
@@ -84,15 +113,138 @@ bool canPreserveSEHCallbackAcrossOptimization(const llvm::Function &Callback) {
 
 } // namespace
 
+bool MedLLVMEmitter::sehCallbackReadsOnlyArguments(va_t Entry) {
+  const auto [Memo, Inserted] =
+      SEHCallbackReadsOnlyArguments.try_emplace(Entry, false);
+  if (!Inserted)
+    return Memo->second;
+  const auto Body = SEHCallbackBodies.find(Entry);
+  if (Body == SEHCallbackBodies.end() || Body->second->Blocks.empty())
+    return false;
+  const MedFunc &Callback = *Body->second;
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  std::set<uint64_t> Parameters;
+  for (const MedVar &Param : Callback.Params)
+    if ((Param.Kind == MedVar::Param || Param.Kind == MedVar::Reg) &&
+        Param.RegOff != kNoParamReg)
+      Parameters.insert(Param.RegOff);
+  // What the callback holds on entry besides its arguments, its stack and its
+  // return address is the parent's, restored by the runtime.  It reads that
+  // state only where a value derived from it reaches memory, a call, a branch
+  // or the return; a seed or a copy nothing uses reads nothing.  A prologue
+  // save only keeps a callee-saved register for its epilogue, and emission
+  // leaves it out (MedOp::PrologueSave).
+  using Key = std::pair<int, int>;
+  auto KeyOf = [](const MedVar &Value) { return Key{Value.Id, Value.SSAVer}; };
+  // A register at version 0 is an entry value only where the callback does
+  // not define it, as emission reads it (MedLLVMEmitter::getVar).  The
+  // identity copy that seeds an entry value defines nothing.
+  std::set<Key> Defined;
+  for (const MedBlock &Block : Callback.Blocks) {
+    for (const PhiNode &Phi : Block.Phis)
+      Defined.insert(KeyOf(Phi.Output));
+    for (const MedOp &Op : Block.Ops) {
+      if (Op.Dead || Op.Output.isConst() || !Op.Output.Size ||
+          (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+           Op.Inputs[0] == Op.Output))
+        continue;
+      Defined.insert(KeyOf(Op.Output));
+      for (const MedVar &Output : Op.IntrinsicOutputs)
+        Defined.insert(KeyOf(Output));
+    }
+  }
+  auto Parent = [&](const MedVar &Value) {
+    if (Value.Kind == MedVar::Unspecified)
+      return true;
+    if (Value.Kind != MedVar::Reg || Value.SSAVer != 0 ||
+        Defined.count(KeyOf(Value)) || Parameters.count(Value.RegOff) ||
+        TRI.isStackPointer(Value.RegOff))
+      return false;
+    return !TRI.isLinkRegister(Value.RegOff) || Value.Size != TRI.PointerSize;
+  };
+  auto Observes = [](NdOp Opcode) {
+    switch (Opcode) {
+    case NdOp::LOAD:
+    case NdOp::STORE:
+    case NdOp::ATOMIC_XCHG:
+    case NdOp::ATOMIC_ADD:
+    case NdOp::ATOMIC_CMPXCHG:
+    case NdOp::INTRINSIC:
+    case NdOp::BRANCH:
+    case NdOp::COND_BR:
+    case NdOp::INDIR_BR:
+    case NdOp::CALL:
+    case NdOp::INDIR_CALL:
+    case NdOp::RETURN:
+      return true;
+    default:
+      return false;
+    }
+  };
+  std::map<Key, std::vector<const MedOp *>> OpUsers;
+  std::map<Key, std::vector<const PhiNode *>> PhiUsers;
+  std::set<Key> Derived;
+  std::vector<Key> Work;
+  auto Note = [&](const MedVar &Value) {
+    if (!Value.isConst() && Parent(Value) &&
+        Derived.insert(KeyOf(Value)).second)
+      Work.push_back(KeyOf(Value));
+  };
+  for (const MedBlock &Block : Callback.Blocks) {
+    for (const PhiNode &Phi : Block.Phis)
+      for (const auto &Arm : Phi.Args)
+        if (!Arm.second.isConst()) {
+          PhiUsers[KeyOf(Arm.second)].push_back(&Phi);
+          Note(Arm.second);
+        }
+    for (const MedOp &Op : Block.Ops) {
+      if (Op.Dead)
+        continue;
+      for (uint8_t I = 0; I < Op.NumInputs; ++I)
+        if (!Op.Inputs[I].isConst()) {
+          OpUsers[KeyOf(Op.Inputs[I])].push_back(&Op);
+          Note(Op.Inputs[I]);
+        }
+    }
+  }
+  while (!Work.empty()) {
+    const Key Value = Work.back();
+    Work.pop_back();
+    for (const MedOp *Op : OpUsers[Value]) {
+      if (Observes(Op->Opcode)) {
+        if (Op->PrologueSave && !Callback.RegistrationStates)
+          continue;
+        return false;
+      }
+      if (!Op->Output.isConst() && Op->Output.Size &&
+          Derived.insert(KeyOf(Op->Output)).second)
+        Work.push_back(KeyOf(Op->Output));
+    }
+    for (const PhiNode *Phi : PhiUsers[Value])
+      if (Derived.insert(KeyOf(Phi->Output)).second)
+        Work.push_back(KeyOf(Phi->Output));
+  }
+  Memo->second = true;
+  return true;
+}
+
 bool MedLLVMEmitter::emitNativeSEH(
     const MedFunc &Func, llvm::Function &LLVMFunc,
     const std::map<int, llvm::BasicBlock *> &OriginalBlockMap) {
   if (!Func.ExceptionMetadata)
     return false;
   const ExceptionFunction &EH = *Func.ExceptionMetadata;
+  // Printed C calls a callback with the arguments it reads.  ARM and AArch64
+  // also hand a callback the parent's callee-saved registers, which a call
+  // cannot pass, so there a callback must read nothing else of the parent.
+  const bool SourceView = AnalysisRecoveryForSource;
+  const bool RestoresRegisters =
+      TargetArch == Arch::ARM || TargetArch == Arch::AArch64;
   const WindowsEHNativeSourceClassification Source =
-      classifyWindowsEHNativeSource(EH, TargetArch, TargetFormat,
-                                    WindowsEHNativeCapability::IRLowering);
+      classifyWindowsEHNativeSource(
+          EH, TargetArch, TargetFormat,
+          SourceView ? WindowsEHNativeCapability::SourceIRLowering
+                     : WindowsEHNativeCapability::IRLowering);
   if (!Source.canLowerNativeIR() ||
       Source.Model != WindowsEHNativeSourceModel::SEH)
     return false;
@@ -130,6 +282,12 @@ bool MedLLVMEmitter::emitNativeSEH(
 
   auto FunctionAt = [&](va_t Address) -> llvm::Function * {
     return resolveLiftedFunctionEntry(Address);
+  };
+  // C prints a filter whose lifted body returns no value as returning void
+  // (MedFunc::ReturnsNoValue), which leaves its __except no disposition.
+  auto FilterReturnsValue = [&](va_t Entry) {
+    const auto Body = SEHCallbackBodies.find(Entry);
+    return Body == SEHCallbackBodies.end() || !Body->second->ReturnsNoValue;
   };
   auto BlockAt = [&](va_t Address) -> llvm::BasicBlock * {
     for (const MedBlock &Block : Func.Blocks) {
@@ -169,8 +327,10 @@ bool MedLLVMEmitter::emitNativeSEH(
       R.Callback = FunctionAt(Scope.FilterOrFinallyVA);
       if (!R.Callback || R.Callback == &LLVMFunc ||
           !hasSupportedSEHCallbackABI(*R.Callback, FinallyCallbackTy,
-                                      TargetArch) ||
-          !canPreserveSEHCallbackAcrossOptimization(*R.Callback))
+                                      TargetArch, SourceView) ||
+          !canPreserveSEHCallbackAcrossOptimization(*R.Callback) ||
+          (SourceView && RestoresRegisters &&
+           !sehCallbackReadsOnlyArguments(Scope.FilterOrFinallyVA)))
         return false;
     } else {
       R.Handler = BlockAt(Scope.HandlerVA);
@@ -180,8 +340,11 @@ bool MedLLVMEmitter::emitNativeSEH(
         R.Callback = FunctionAt(Scope.FilterOrFinallyVA);
         if (!R.Callback || R.Callback == &LLVMFunc ||
             !hasSupportedSEHCallbackABI(*R.Callback, FilterCallbackTy,
-                                        TargetArch) ||
-            !canPreserveSEHCallbackAcrossOptimization(*R.Callback))
+                                        TargetArch, SourceView) ||
+            !canPreserveSEHCallbackAcrossOptimization(*R.Callback) ||
+            (SourceView && !FilterReturnsValue(Scope.FilterOrFinallyVA)) ||
+            (SourceView && RestoresRegisters &&
+             !sehCallbackReadsOnlyArguments(Scope.FilterOrFinallyVA)))
           return false;
       }
     }
@@ -205,7 +368,11 @@ bool MedLLVMEmitter::emitNativeSEH(
       HasBegin |= Block.StartAddr == R.SemanticRange.Begin;
       HasEnd |= Block.EndAddr == R.SemanticRange.End;
     }
-    if (R.Blocks.empty() || !HasBegin || !HasEnd)
+    // Native output rebuilds the table, so its bounds must be block bounds.
+    // Printed C protects the blocks: a bound in bytes no block holds (the
+    // byte clang-cl ends a range at, past its last call's return address)
+    // guards no code.
+    if (R.Blocks.empty() || (!SourceView && (!HasBegin || !HasEnd)))
       return false;
     Regions.push_back(std::move(R));
   }
@@ -224,12 +391,12 @@ bool MedLLVMEmitter::emitNativeSEH(
         return false;
     }
   }
-  std::stable_sort(
-      Regions.begin(), Regions.end(), [](const Region &A, const Region &B) {
-        if (A.SemanticRange.size() != B.SemanticRange.size())
-          return A.SemanticRange.size() > B.SemanticRange.size();
-        return A.SemanticRange.Begin < B.SemanticRange.Begin;
-      });
+  std::stable_sort(Regions.begin(), Regions.end(),
+                   [](const Region &A, const Region &B) {
+                     if (A.SemanticRange.size() != B.SemanticRange.size())
+                       return A.SemanticRange.size() > B.SemanticRange.size();
+                     return A.SemanticRange.Begin < B.SemanticRange.Begin;
+                   });
   for (size_t I = 0; I < Regions.size(); ++I) {
     uint64_t ParentSize = std::numeric_limits<uint64_t>::max();
     for (size_t J = 0; J < I; ++J) {
@@ -357,22 +524,31 @@ bool MedLLVMEmitter::emitNativeSEH(
           windows_eh_md::NativeProvenanceRole::RegionDispatch,
           EH.CodeRange.Begin, /*SourceVA=*/0, R.SourceIndex, /*Clause=*/0, Pad,
           R.Scope->FilterOrFinallyVA, static_cast<uint32_t>(R.Scope->Kind));
-      llvm::Function *LocalAddress = llvm::Intrinsic::getOrInsertDeclaration(
-          Mod, llvm::Intrinsic::localaddress);
-      llvm::Value *Frame = B.CreateCall(LocalAddress);
-      llvm::SmallVector<llvm::Value *, 2> Args{
-          llvm::ConstantInt::get(llvm::Type::getInt8Ty(*Ctx), 1), Frame};
+      // A callback lifted for printed C takes the flag and the frame it reads,
+      // at the widths it reads them; x64's has the runtime's own type.
+      llvm::FunctionType *CallbackTy = R.Callback->getFunctionType();
+      llvm::SmallVector<llvm::Value *, 2> Args;
+      if (CallbackTy->getNumParams() > 0)
+        Args.push_back(llvm::ConstantInt::get(CallbackTy->getParamType(0), 1));
+      if (CallbackTy->getNumParams() > 1) {
+        llvm::Function *LocalAddress = llvm::Intrinsic::getOrInsertDeclaration(
+            Mod, llvm::Intrinsic::localaddress);
+        llvm::Value *Frame = B.CreateCall(LocalAddress);
+        if (CallbackTy->getParamType(1)->isIntegerTy())
+          Frame = B.CreatePtrToInt(Frame, CallbackTy->getParamType(1));
+        Args.push_back(Frame);
+      }
       llvm::SmallVector<llvm::Value *, 1> BundleInputs{Pad};
       llvm::OperandBundleDef Funclet("funclet", BundleInputs);
       if (ParentDest) {
         auto *ContinueBB = llvm::BasicBlock::Create(
             *Ctx, "seh.finally.continue." + Suffix, &LLVMFunc);
-        B.CreateInvoke(FinallyCallbackTy, R.Callback, ContinueBB, ParentDest,
-                       Args, {Funclet});
+        B.CreateInvoke(CallbackTy, R.Callback, ContinueBB, ParentDest, Args,
+                       {Funclet});
         llvm::IRBuilder<> ContinueBuilder(ContinueBB);
         ContinueBuilder.CreateCleanupRet(Pad, ParentDest);
       } else {
-        B.CreateCall(FinallyCallbackTy, R.Callback, Args, {Funclet});
+        B.CreateCall(CallbackTy, R.Callback, Args, {Funclet});
         B.CreateCleanupRet(Pad, nullptr);
       }
       R.UnwindDest = PadBB;

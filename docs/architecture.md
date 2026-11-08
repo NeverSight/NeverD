@@ -1072,12 +1072,30 @@ their compact rendering. C also runs a `__finally` when its try falls through,
 where the source already holds the normal copy, so a compact finally runs the
 cleanup under `if (AbnormalTermination())`. C counts a return or a jump out of
 the try as abnormal too: a closed finally range that can leave before its end
-marker takes the block form, and a lexical one that still could is refused. A
+marker takes the block form, and a lexical one that still could is refused.
+C forbids a jump into a `__try`, so a range that code outside enters other
+than through its begin marker takes the block form too, as do two ranges the
+lexical form would nest otherwise than their blocks do or whose `__except`
+handler runs into the other range (a finally the handler runs), and the
+function prints no `__try` where that form fails. A
 try that wraps every block for lack of range markers sets its normal-exit flag
 before each return and at its end. The native lowering numbers a range's
 markers, their boundary provenance and the blocks it appends for returns in
 block layout order, never pointer order, so the C it prints is the same from
 run to run.
+In a private LLVM-to-C module (`WindowsEHNativeCapability::SourceIRLowering`)
+the native lowering calls a filter or termination callback with the arguments
+it was lifted with, a prefix of the runtime's flag or exception pointers and
+EstablisherFrame, and lowers ARM and AArch64 tables too. A filter whose lifted
+body returns no value, which C prints as returning void, stays out. ARM and
+AArch64 start a callback with the parent's callee-saved registers restored,
+which no call can pass, so there `sehCallbackReadsOnlyArguments` admits a
+callback only when its body reads nothing on entry but its arguments, its
+stack and its return address. The frame a filter takes is captured before the
+first clause, the block form's included. SEH this view cannot structure prints
+no `__try`: a catch-all around the whole body would claim the function
+swallows exceptions its scopes let pass, so the function says it is not
+lowered instead.
 HighIR adds this recovery for positional register/stack conventions. Independent
 register banks retain their source variadic and floating-return preparation.
 

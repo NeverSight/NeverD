@@ -4194,6 +4194,43 @@ TEST(COFFExceptionIR, LLVMCAnalysisOnlyCxxUsesUnwindCleanupWrap) {
   EXPECT_EQ(Source.find("catch ("), std::string::npos) << Source;
 }
 
+// SEH this view cannot lower prints no __try. A catch-all around the body
+// would claim the function swallows every exception its scopes let pass or
+// run a __finally for.
+TEST(COFFExceptionIR, LLVMCAnalysisOnlySEHInventsNoCatchAll) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-seh-not-lowered", Context);
+  Module.setTargetTriple(llvm::Triple("aarch64-pc-windows-msvc"));
+  llvm::FunctionType *VoidType =
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
+  llvm::FunctionType *PersonalityType = llvm::FunctionType::get(
+      llvm::Type::getInt32Ty(Context), /*isVarArg=*/true);
+  llvm::Function *Personality = llvm::Function::Create(
+      PersonalityType, llvm::GlobalValue::ExternalLinkage,
+      "__C_specific_handler", Module);
+  llvm::Function *Function = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "seh_not_lowered", Module);
+  Function->setPersonalityFn(Personality);
+  Function->setMetadata(
+      windows_eh_md::FunctionAttachment,
+      llvm::MDNode::get(Context, llvm::MDString::get(Context, "seh")));
+  llvm::IRBuilder<> Builder(
+      llvm::BasicBlock::Create(Context, "entry", Function));
+  llvm::Function *Helper = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "may_raise", Module);
+  Builder.CreateCall(Helper);
+  Builder.CreateRetVoid();
+
+  std::string Source = emitLLVMC(Module);
+  EXPECT_NE(Source.find("may_raise();"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__try {"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__except"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("EXCEPTION_EXECUTE_HANDLER"), std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("neverd.seh: not lowered"), std::string::npos)
+      << Source;
+}
+
 TEST(COFFExceptionIR,
      LLVMCProvenanceAliasesForwardersAndHostileNamesRemainFailClosed) {
   llvm::LLVMContext Context;

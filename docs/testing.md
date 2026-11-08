@@ -1201,6 +1201,14 @@ normal exit; `LLVMCFinallyReturnInsideTheTrySkipsTheCleanup` and
 `LLVMCFinallyRangeLaidOutPastItsEndUsesTheExitFlag` move a range that returns
 or leaves its layout to the block form, and
 `LLVMCFinallyJumpPastItsEndMarkerIsRefused` refuses a jump no form can render.
+`COFFExceptionIR.SourceViewCallsAnAArch64CallbackOfItsArguments` lowers an
+AArch64 filter and finally scope for LLVM C, calling the finally callback with
+the flag at the width it reads; `SourceViewKeepsAnAArch64CallbackOfTheParentsRegisters`
+leaves a parent whose callback reads the parent's x19 without pads, and
+`SourceViewCallsAnX64FilterOfOneArgument` calls a one-parameter x64 filter in
+that view only, and `SourceViewKeepsAFilterThatReturnsNoValue` keeps a filter
+whose lifted body returns no value out. `COFFExceptionIR.LLVMCAnalysisOnlySEHInventsNoCatchAll` checks
+that SEH no form lowers prints no `__try` and no catch-all.
 `COFFExceptionIR.NativeSEHRangeMarkersFollowTheBlockLayout` (in
 `NeverDLiftTests`) frees blocks in a shuffled order before it lowers a guarded
 range with four returns, so the block pointers stop following the layout; the

@@ -42,6 +42,12 @@ enum class WindowsEHNativeSourceModel : uint8_t {
 enum class WindowsEHNativeCapability : uint8_t {
   IRLowering,
   OutputPatch,
+  /// IR lowering for a private LLVM-to-C module, which is printed and never
+  /// compiled, patched or run.  ARM and AArch64 run a `__finally` or filter
+  /// callback with the parent's callee-saved registers restored, so native IR
+  /// cannot call one as a function.  Printed C can call a callback that reads
+  /// the parent only through its two arguments, which the emitter proves.
+  SourceIRLowering,
 };
 
 /// Stable reason for accepting or rejecting a native Windows language source.
@@ -108,7 +114,7 @@ struct WindowsEHNativeSourceClassification {
   }
 
   bool canLowerNativeIR() const {
-    return RequestedCapability == WindowsEHNativeCapability::IRLowering &&
+    return RequestedCapability != WindowsEHNativeCapability::OutputPatch &&
            isEligible();
   }
 

@@ -253,7 +253,11 @@ bool LLVMCWriter::isReferencedByProjection(const llvm::Function &Fn) const {
     if (llvm::isa<llvm::Instruction>(User))
       return true;
     if (const auto *Owner = llvm::dyn_cast<llvm::Function>(User)) {
-      if (!Owner->isDeclaration())
+      // A personality prints as the __try syntax of the function it serves,
+      // never by name: <excpt.h> declares the runtime's handler.
+      if (!Owner->isDeclaration() &&
+          !(Owner->hasPersonalityFn() &&
+            Owner->getPersonalityFn()->stripPointerCasts() == &Fn))
         return true;
       continue;
     }
@@ -1124,6 +1128,149 @@ bool sehRangeLeavesEarly(const llvm::Function &Fn,
       Work.emplace_back(Succ, !ToNormal && (Funclet || Succ->isEHPad()));
   }
   return false;
+}
+
+/// Whether \p BB ends in the begin (or end) marker of the SEH range that
+/// unwinds to \p PadBlock.
+bool isSEHRangeMarker(const llvm::BasicBlock &BB,
+                      const llvm::BasicBlock *PadBlock,
+                      llvm::Intrinsic::ID ID) {
+  const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(BB.getTerminator());
+  const llvm::Function *Callee = Invoke ? Invoke->getCalledFunction() : nullptr;
+  return Callee && Callee->getIntrinsicID() == ID &&
+         Invoke->getUnwindDest() == PadBlock;
+}
+
+/// The blocks of the SEH range that unwinds to \p PadBlock: what its begin
+/// markers reach along normal edges up to its end markers.
+llvm::SmallPtrSet<const llvm::BasicBlock *, 16>
+sehRangeBlocks(const llvm::Function &Fn, const llvm::BasicBlock *PadBlock) {
+  llvm::SmallPtrSet<const llvm::BasicBlock *, 16> Range;
+  llvm::SmallVector<const llvm::BasicBlock *, 16> Work;
+  for (const llvm::BasicBlock &BB : Fn)
+    if (isSEHRangeMarker(BB, PadBlock, llvm::Intrinsic::seh_try_begin))
+      Work.push_back(
+          llvm::cast<llvm::InvokeInst>(BB.getTerminator())->getNormalDest());
+  while (!Work.empty()) {
+    const llvm::BasicBlock *BB = Work.pop_back_val();
+    if (BB->isEHPad() || !Range.insert(BB).second ||
+        isSEHRangeMarker(*BB, PadBlock, llvm::Intrinsic::seh_try_end))
+      continue;
+    const llvm::Instruction *Term = BB->getTerminator();
+    if (const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Term)) {
+      Work.push_back(Invoke->getNormalDest());
+      continue;
+    }
+    for (const llvm::BasicBlock *Succ : llvm::successors(BB))
+      Work.push_back(Succ);
+  }
+  return Range;
+}
+
+/// The lexical span of the SEH range that unwinds to \p PadBlock: the blocks
+/// laid out after a begin marker up to and including the next end marker.
+llvm::SmallPtrSet<const llvm::BasicBlock *, 16>
+sehRangeSpan(const llvm::Function &Fn, const llvm::BasicBlock *PadBlock) {
+  llvm::SmallPtrSet<const llvm::BasicBlock *, 16> Span;
+  bool Inside = false;
+  for (const llvm::BasicBlock &BB : Fn) {
+    if (isSEHRangeMarker(BB, PadBlock, llvm::Intrinsic::seh_try_begin)) {
+      Inside = true;
+      continue;
+    }
+    if (Inside)
+      Span.insert(&BB);
+    if (isSEHRangeMarker(BB, PadBlock, llvm::Intrinsic::seh_try_end))
+      Inside = false;
+  }
+  return Span;
+}
+
+/// Whether the lexical span of the SEH range that unwinds to \p PadBlock, the
+/// blocks laid out from its begin marker to its end marker, holds a block of
+/// another range or of no range that code outside the span enters. The
+/// lexical form would print that block inside the __try, and C forbids a jump
+/// into a __try. A block of the range itself enters only through a begin
+/// marker; another entry breaks the marker protocol, which the lexical form
+/// refuses on its own.
+bool sehRangeEnteredFromOutside(const llvm::Function &Fn,
+                                const llvm::BasicBlock *PadBlock) {
+  const auto Span = sehRangeSpan(Fn, PadBlock);
+  const auto Range = sehRangeBlocks(Fn, PadBlock);
+  // Pads and the handler blocks the dispatcher enters print in their clauses,
+  // not the try, and an unwind edge enters only a pad.
+  for (const llvm::BasicBlock *BB : Span) {
+    if (BB->isEHPad() || Range.count(BB))
+      continue;
+    for (const llvm::BasicBlock *Pred : llvm::predecessors(BB)) {
+      const auto *Invoke =
+          llvm::dyn_cast<llvm::InvokeInst>(Pred->getTerminator());
+      if (!Span.count(Pred) && !Pred->isEHPad() &&
+          !(Invoke && Invoke->getUnwindDest() == BB))
+        return true;
+    }
+  }
+  return false;
+}
+
+/// Whether the handler of the __except whose dispatch is \p ExceptPad runs
+/// into the SEH range that unwinds to \p Other. The lexical form prints a
+/// handler as the code its clause collects, so that range would print twice,
+/// once unprotected.
+bool sehHandlerEntersRange(const llvm::Function &Fn,
+                           const llvm::BasicBlock *ExceptPad,
+                           const llvm::BasicBlock *Other) {
+  const auto *Switch =
+      llvm::dyn_cast<llvm::CatchSwitchInst>(ExceptPad->getTerminator());
+  const llvm::BasicBlock *Handler = Switch ? catchRetDest(*Switch) : nullptr;
+  if (!Handler)
+    return false;
+  const auto Range = sehRangeBlocks(Fn, Other);
+  llvm::SmallPtrSet<const llvm::BasicBlock *, 16> Seen;
+  llvm::SmallVector<const llvm::BasicBlock *, 16> Work{Handler};
+  while (!Work.empty()) {
+    const llvm::BasicBlock *BB = Work.pop_back_val();
+    if (BB->isEHPad() || !Seen.insert(BB).second)
+      continue;
+    if (Range.count(BB) ||
+        isSEHRangeMarker(*BB, Other, llvm::Intrinsic::seh_try_begin))
+      return true;
+    const llvm::Instruction *Term = BB->getTerminator();
+    if (const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Term)) {
+      Work.push_back(Invoke->getNormalDest());
+      continue;
+    }
+    for (const llvm::BasicBlock *Succ : llvm::successors(BB))
+      Work.push_back(Succ);
+  }
+  return false;
+}
+
+/// Whether the SEH ranges that unwind to \p First and \p Second nest as the
+/// lexical form prints them: each over the blocks laid out between its
+/// markers, each __except handler as the code its clause collects. Spans that
+/// overlap need ranges that nest, and no handler may run into the other
+/// range: a finally the except's handler runs is a range of its own.
+bool sehRangesNestAsLaidOut(const llvm::Function &Fn,
+                            const llvm::BasicBlock *First,
+                            const llvm::BasicBlock *Second) {
+  if (sehHandlerEntersRange(Fn, First, Second) ||
+      sehHandlerEntersRange(Fn, Second, First))
+    return false;
+  const auto FirstSpan = sehRangeSpan(Fn, First);
+  const auto SecondSpan = sehRangeSpan(Fn, Second);
+  if (llvm::none_of(FirstSpan, [&](const llvm::BasicBlock *BB) {
+        return SecondSpan.count(BB) != 0;
+      }))
+    return true;
+  const auto FirstRange = sehRangeBlocks(Fn, First);
+  const auto SecondRange = sehRangeBlocks(Fn, Second);
+  auto Within = [](const auto &Inner, const auto &Outer) {
+    return llvm::all_of(Inner, [&](const llvm::BasicBlock *BB) {
+      return Outer.count(BB) != 0;
+    });
+  };
+  return Within(FirstRange, SecondRange) || Within(SecondRange, FirstRange);
 }
 
 } // namespace
@@ -9887,20 +10034,26 @@ std::optional<SEHBlockScopes> planSEHBlockScopes(const llvm::Function &Fn) {
       llvm::any_of(Plan.Clauses, [&](const auto &Entry) {
         return Entry.second.Cleanup && sehRangeLeavesEarly(Fn, Entry.first);
       });
+  const bool EnteredMidway = llvm::any_of(Plan.Clauses, [&](const auto &Entry) {
+    return sehRangeEnteredFromOutside(Fn, Entry.first);
+  });
   if (Plan.Clauses.empty() || !Begins || !Ends ||
-      (Begins == 1 && Ends == 1 && !CleanupLeavesEarly))
+      (Begins == 1 && Ends == 1 && !CleanupLeavesEarly && !EnteredMidway))
     return std::nullopt;
   // The existing lexical renderer also owns one closed finally nested in
   // one closed except. Preserve that compact source form when each clause
   // has exactly one marker pair.
-  if (!CleanupLeavesEarly && Plan.Clauses.size() == 2 &&
+  if (!CleanupLeavesEarly && !EnteredMidway && Plan.Clauses.size() == 2 &&
       llvm::count_if(Plan.Clauses,
                      [](const auto &Entry) {
                        return Entry.second.Dispatch != nullptr;
                      }) == 1 &&
-      llvm::all_of(Plan.Clauses, [&](const auto &Entry) {
-        return Markers[Entry.first] == std::pair(1u, 1u);
-      }))
+      llvm::all_of(Plan.Clauses,
+                   [&](const auto &Entry) {
+                     return Markers[Entry.first] == std::pair(1u, 1u);
+                   }) &&
+      sehRangesNestAsLaidOut(Fn, Plan.Clauses.begin()->first,
+                             std::next(Plan.Clauses.begin())->first))
     return std::nullopt;
   for (auto &[Entry, Clause] : Plan.Clauses) {
     if (!Clause.Cleanup)
@@ -10315,10 +10468,46 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
   }
 
   std::vector<EHWrapClause> EHWraps;
-  if (functionHasWindowsEHPads(Fn))
+  // SEH this view cannot structure prints no __try at all. A catch-all around
+  // the whole body would claim the function swallows every exception, where
+  // its scopes let exceptions pass or run a __finally and continue unwinding.
+  bool SEHNotLowered = false;
+  auto IsSEHFallback = [](const std::vector<EHWrapClause> &Wraps) {
+    return Wraps.size() == 1 &&
+           Wraps.front().Kind == EHWrapClause::Kind::SEHExcept &&
+           !Wraps.front().Switch && !Wraps.front().Cleanup;
+  };
+  if (functionHasWindowsEHPads(Fn)) {
     EHWraps = collectWindowsEHWraps(Fn);
-  else if (GuardAnalysisOnlyFunctions && isAnalysisOnlyFunction(Fn) &&
-           functionNeedsAnalysisOnlyEHWrap(Fn)) {
+    // C forbids a jump into a __try, and the lexical form prints each range
+    // over the blocks laid out between its markers: a range code outside
+    // enters midway, or one laid out inside another it does not nest in, has
+    // no lexical form either.
+    std::vector<const llvm::BasicBlock *> SEHPads;
+    for (const EHWrapClause &Clause : EHWraps)
+      if (Clause.Kind == EHWrapClause::Kind::SEHExcept ||
+          Clause.Kind == EHWrapClause::Kind::SEHFinally)
+        if (const llvm::BasicBlock *Pad =
+                Clause.Switch    ? Clause.Switch->getParent()
+                : Clause.Cleanup ? Clause.Cleanup->getParent()
+                                 : nullptr)
+          SEHPads.push_back(Pad);
+    auto Unprintable = [&] {
+      for (size_t I = 0; I < SEHPads.size(); ++I) {
+        if (sehRangeEnteredFromOutside(Fn, SEHPads[I]))
+          return true;
+        for (size_t J = I + 1; J < SEHPads.size(); ++J)
+          if (!sehRangesNestAsLaidOut(Fn, SEHPads[I], SEHPads[J]))
+            return true;
+      }
+      return false;
+    };
+    if (!BlockScopes && (IsSEHFallback(EHWraps) || Unprintable())) {
+      EHWraps.clear();
+      SEHNotLowered = true;
+    }
+  } else if (GuardAnalysisOnlyFunctions && isAnalysisOnlyFunction(Fn) &&
+             functionNeedsAnalysisOnlyEHWrap(Fn)) {
     EHWrapClause Fallback;
     const bool Cxx = functionIsCxxEH(Fn) || [&Fn]() {
       const llvm::MDNode *Payload =
@@ -10333,23 +10522,39 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
         return Name->getString().contains("CxxFrame");
       return false;
     }();
-    if (Cxx)
+    if (Cxx) {
       Fallback.Kind = EHWrapClause::Kind::CxxCleanup;
-    else {
-      Fallback.Kind = EHWrapClause::Kind::SEHExcept;
-      Fallback.Clause = "EXCEPTION_EXECUTE_HANDLER";
+      EHWraps.push_back(std::move(Fallback));
+    } else {
+      SEHNotLowered = true;
     }
-    EHWraps.push_back(std::move(Fallback));
+  }
+  if (SEHNotLowered) {
+    emitIndent(1);
+    OS << "/* neverd.seh: not lowered: no __try here, so this C runs none of "
+          "the function's SEH handlers. */\n";
   }
   EHWrapIsCxx = functionIsCxxEH(Fn);
   EHTryDepth = 0;
 
-  if (SEHParentFrameName.empty() && !EHWraps.empty())
+  // A filter that takes the establisher frame reads the frame captured below
+  // wherever its clause prints, the block form's clauses too.
+  auto FilterTakesFrame = [](const llvm::Instruction &Inst) {
+    const auto *Pad = llvm::dyn_cast<llvm::CatchPadInst>(&Inst);
+    const auto *Filter = Pad && Pad->arg_size()
+                             ? llvm::dyn_cast<llvm::Function>(
+                                   Pad->getArgOperand(0)->stripPointerCasts())
+                             : nullptr;
+    return Filter && Filter->arg_size() == 2;
+  };
+  if (SEHParentFrameName.empty() && (!EHWraps.empty() || BlockScopes))
     for (const llvm::BasicBlock &BB : Fn)
       for (const llvm::Instruction &Inst : BB)
         if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Inst);
-            SEHParentFrameName.empty() && Call &&
-            Call->getIntrinsicID() == llvm::Intrinsic::localaddress) {
+            SEHParentFrameName.empty() &&
+            ((Call &&
+              Call->getIntrinsicID() == llvm::Intrinsic::localaddress) ||
+             FilterTakesFrame(Inst))) {
           SEHParentFrameName = freshVar("seh_parent_frame");
           break;
         }

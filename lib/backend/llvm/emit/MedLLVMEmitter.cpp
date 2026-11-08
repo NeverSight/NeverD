@@ -1518,6 +1518,11 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   for (const auto &[Entry, Declaration] : OmittedDeclarations)
     declareFunc(*Declaration);
   initializeCxxContinuationPlans(Funcs, BodyMask);
+  SEHCallbackBodies.clear();
+  SEHCallbackReadsOnlyArguments.clear();
+  if (AnalysisRecoveryForSource)
+    for (const MedFunc &Func : Funcs)
+      SEHCallbackBodies.emplace(Func.Entry, &Func);
 
   DirectCallArgumentCounts.clear();
   for (const auto &Func : Funcs)
@@ -1621,6 +1626,7 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   }
   ActiveCxxContinuationPlan.reset();
   finalizeCxxContinuationPlans();
+  SEHCallbackBodies.clear();
 
   // Personality bodies are renamed before body emission so an eligible native
   // lowering can reserve the canonical ABI declaration. Eligibility is only
