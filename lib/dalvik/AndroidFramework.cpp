@@ -1585,6 +1585,8 @@ ExecutionResult AndroidFramework::execute(Heap &heap, const Program &program,
                                           const AdmitInstruction &admit) {
   if (method.Op == ParcelData)
     return parcel(heap, program, method, receiver, arguments, admit);
+  if (method.Op == ParcelException)
+    return parcelException(heap, program, receiver, arguments[0], admit);
   if (method.Op == Construct &&
       std::string_view(method.Class) == "android/os/Binder")
     return constructBinder(heap, program, receiver, admit);

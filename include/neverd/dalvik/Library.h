@@ -98,6 +98,7 @@ enum LibraryOperation {
   StatLoggerRecord,
   EventLogWrite,
   ParcelData,
+  ParcelException,
   BinderGetStrictMode,
   BinderSetStrictMode,
   BinderTransact,

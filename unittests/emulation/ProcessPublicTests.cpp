@@ -4627,7 +4627,7 @@ TEST_F(ProcessPublic, AndroidJavaBinderDispatchMatchesSDKAndCLI) {
     Path = (std::filesystem::path(NEVERD_ANDROID_FIXTURE_DIR) /
             (std::string("jni-") + Variant + ".so"))
                .string();
-    for (unsigned Mode = 0; Mode != 6; ++Mode)
+    for (unsigned Mode = 0; Mode != 7; ++Mode)
       for (unsigned Form = 0; Form != 3; ++Form) {
         SCOPED_TRACE(Variant);
         SCOPED_TRACE(Mode);

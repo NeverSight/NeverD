@@ -279,7 +279,7 @@ TEST_P(AndroidJNI, JavaBinderDispatchUsesPoolAndIncomingNativeContinuations) {
   using Binding = mobile::dalvik::AndroidApplicationSnapshot::ServiceManager::
       BinderProxy::NativeBinding;
   state.binder_proxies = {{7, false, Binding{3, 0, true}}};
-  for (unsigned mode = 0; mode != 6; ++mode)
+  for (unsigned mode = 0; mode != 7; ++mode)
     for (unsigned form = 0; form != 3; ++form) {
       SCOPED_TRACE(mode);
       SCOPED_TRACE(form);
@@ -292,7 +292,7 @@ TEST_P(AndroidJNI, JavaBinderDispatchUsesPoolAndIncomingNativeContinuations) {
       if (mode == 2 || mode == 3 || mode == 4) {
         EXPECT_EQ(result.Stop, ProcessStopReason::UnsupportedService)
             << result.Diagnostic;
-        const char *diagnostic = mode == 2   ? "exception serialization"
+        const char *diagnostic = mode == 2   ? "overwrites of Binder objects"
                                  : mode == 3 ? "BlockGuard"
                                              : "clock";
         EXPECT_NE(result.Diagnostic.find(diagnostic), std::string::npos)

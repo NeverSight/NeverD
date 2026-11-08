@@ -604,6 +604,7 @@ struct Runtime::State::Engine {
       } catch (Halt &halt) {
         completed = std::move(halt.result);
       }
+      state.throwable(completed);
       if (completed.stop != ExecutionStop::Returned &&
           completed.stop != ExecutionStop::Thrown)
         throw Halt{std::move(completed)};
@@ -1771,7 +1772,7 @@ ExecutionResult Runtime::library(const LibraryMethod &method, uint64_t receiver,
                                  uint64_t execution_owner,
                                  uint64_t stack_bytes) {
   if (execution_owner || method.Op == BinderTransact ||
-      method.Op == BinderOnTransact)
+      method.Op == BinderOnTransact || method.Op == ParcelException)
     return state->start(
         [&method, receiver,
          values = std::vector<uint64_t>(args.begin(), args.end()),
