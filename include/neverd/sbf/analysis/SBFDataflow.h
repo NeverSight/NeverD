@@ -157,7 +157,11 @@ public:
   RegisterValue singleton() const;
   llvm::ArrayRef<RegisterValue> values() const { return Values; }
   bool unknown() const { return Values.empty(); }
-  void join(const ProvenValueSet &Other);
+  /// Keep identities within the disjunction limit. On overflow, available
+  /// capture bounds may preserve a numeric disjunction without those
+  /// identities.
+  void join(const ProvenValueSet &Other,
+            const SymbolicAddressSpace *Addresses = nullptr);
   void profile(llvm::FoldingSetNodeID &ID) const;
   uint64_t allocatedBytes() const;
   bool operator==(const ProvenValueSet &) const = default;

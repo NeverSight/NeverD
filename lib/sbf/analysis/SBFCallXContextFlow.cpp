@@ -316,9 +316,9 @@ struct ContextState {
                                   Other.Origins[R], Other.InputExpressions[R])
                 : std::nullopt;
     for (unsigned R = 0; R < kRegisterCount; ++R)
-      Registers[R].join(Other.Registers[R]);
+      Registers[R].join(Other.Registers[R], Coordinates->Addresses.get());
     for (unsigned R = 0; R < kRegisterCount; ++R)
-      Origins[R].join(Other.Origins[R]);
+      Origins[R].join(Other.Origins[R], Coordinates->Addresses.get());
     Scratch.Memory.meet(Other.Scratch.Memory);
     Scratch.Values.joinValues(Other.Scratch.Values);
     Scratch.Values.includeCells(ConditionalObjects,

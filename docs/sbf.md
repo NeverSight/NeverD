@@ -843,6 +843,17 @@ identifies these edges; an acyclic jump to a smaller instruction slot retains
 its capture. Coordinate configuration is shared
 across the analysis and charged at its owner.
 
+A forward join keeps captured identities while its complete disjunction fits
+the four-alternative limit. On overflow, register and stored-value joins can
+replace captures with their proven unsigned bounds and retry the same limit.
+For example, null, a small sentinel and three captures sharing one heap bound
+retain three numeric alternatives. This preserves disjoint-write information
+without equating objects or raising the limit. A capture already covered by a
+numeric alternative adds no new possibility, including on later arrivals at
+that join. Unknown or wrapping capture
+bounds cannot supply that widening; frame coordinates remain typed, and an
+overflowing literal-only disjunction still becomes unknown.
+
 Generic byte-copy postconditions snapshot entry fields after invalidating all
 preceding may-writes. They retain complete typed cells, meet at joins and disappear
 when a later destination write may overlap. Only generic summaries retain a
