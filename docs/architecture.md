@@ -4673,7 +4673,9 @@ item over bytes no string or code holds where they are (`Listing::dataRenamed`,
 `Listing::dataItemsChanged`), the session a name without reading its table
 (`neverd_rename_take`), and a declaration of types no other names reads them against
 what it read of the library once (`Session::LocalTypeNames`), on the library itself
-(`TypeLibrary::Trial`, which undoes a refused declaration). The GUI opens with `write_behind`: the reply to such an edit goes before
+(`TypeLibrary::Trial`, which undoes a refused declaration). A function's declaration
+reads against the library without copying it, its prototype the parse's own; one that
+would define a type reads again on a copy (`parseFunctionDeclaration`). The GUI opens with `write_behind`: the reply to such an edit goes before
 its write, which runs the same journaled transaction in order on a thread of its own
 (`ProjectHistory::persistLater`), joined with what is queued behind one already
 writing. What may read the project's files waits for it first. A document of a view
