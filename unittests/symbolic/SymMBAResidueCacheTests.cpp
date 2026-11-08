@@ -16,6 +16,8 @@
 #include "neverd/solver/SymSynthVerifier.h"
 #include "neverd/solver/Z3Solver.h"
 
+#include "llvm/ADT/SmallVector.h"
+
 #include <array>
 #include <utility>
 
@@ -210,6 +212,56 @@ TEST(SymMBAResiduePolynomialCache, SingleBitArithmeticKeepsCompleteWords) {
       }
     }
   }
+}
+
+TEST(SymMBAResiduePolynomialCache, NarrowReadsKeepDistinctOriginalInputs) {
+  for (unsigned Width : {8u, 64u, 257u})
+    for (bool LargeIndices : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << Width << ':' << LargeIndices);
+      SymContext Ctx;
+      if (LargeIndices)
+        for (unsigned I = 0; I < 4096; ++I)
+          Ctx.mkConst(128, 100000 + I);
+      const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+      const auto Z = Ctx.mkVar("z", Width);
+      auto C = [&](uint64_t V) { return Ctx.mkConst(Width, V); };
+      const auto A = Ctx.mkAdd(C(1), Ctx.mkMul(C(4), Ctx.mkLShr(X, C(2))));
+      const auto B = Ctx.mkAdd(C(1), Ctx.mkMul(C(4), Ctx.mkLShr(Y, C(2))));
+      const auto Scale = llvm::APInt(Width, 3).shl(Width - 8);
+      llvm::SmallVector<SymRef, 68> Factors{
+          Ctx.mkConst(Scale), Ctx.mkAdd(C(1), Ctx.mkMul(C(4), Z))};
+      for (unsigned I = 0; I < 32; ++I) {
+        Factors.push_back(A);
+        Factors.push_back(B);
+      }
+      const auto Root = Ctx.mkMul(Factors);
+      detail::WorkBudget Budget(65536);
+      size_t Storage = 1 << 24;
+      const auto Result =
+          detail::foldResidueDecisions(Ctx, Root, Budget, Storage);
+      ASSERT_NE(Result, Root);
+      EXPECT_LT(detail::readingCost(Ctx, Result),
+                detail::readingCost(Ctx, Root));
+      EXPECT_LT(Budget.used(), 65536u);
+      // At wide widths, the eight-bit admission sees two opaque shifts.
+      // Multiplication by four later requests six bits, exposing their two
+      // different source words. Neither may reuse the other's decision key.
+      SymEvalPlan Plan(Ctx, Result);
+      for (unsigned Trial = 0; Trial < 256; ++Trial) {
+        auto Values = polynomialCacheValues(Width, Trial);
+        for (unsigned I = 0; I < Values.size(); ++I)
+          Values[I] =
+              (Values[I] & ~llvm::APInt(Width, 255)) |
+              llvm::APInt(Width, ((Trial * 29 + I * 97) ^ (Trial >> I)) & 255);
+        const auto One = llvm::APInt(Width, 1), Four = llvm::APInt(Width, 4);
+        const auto Left = One + Four * Values[0].lshr(2);
+        const auto Right = One + Four * Values[1].lshr(2);
+        auto Expected = Scale * (One + Four * Values[2]);
+        for (unsigned I = 0; I < 32; ++I)
+          Expected *= Left * Right;
+        EXPECT_EQ(Plan.eval(Values), Expected) << Trial;
+      }
+    }
 }
 
 } // namespace

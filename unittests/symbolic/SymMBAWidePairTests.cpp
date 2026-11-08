@@ -1062,7 +1062,7 @@ TEST(SymMBAWidePairs, ExhaustsOddPartialBlockLowWords) {
       }
 }
 
-TEST(SymMBAWidePairs, DeferredPartialCorrectionsKeepUnpairedFullWords) {
+TEST(SymMBAWidePairs, PartialPeriodsKeepUnpairedFullWords) {
   std::mt19937_64 Random(0x4445464552524544);
   for (unsigned Width : {8u, 64u, 257u}) {
     unsigned Rewritten = 0;

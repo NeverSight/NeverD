@@ -5405,6 +5405,12 @@ The decision owner decrements its captured remaining work directly and commits
 the exact difference to the shared budget before another consumer runs or the
 owner exits. This preserves exact and one-short admission without repeatedly
 recomputing the remaining allowance in each Boolean operation.
+Decision identities pack each admitted input's rank, observed bit, priority
+and both complete complemented edges into a 32-bit key. Decisions retain the
+original source index and its ordering. When a narrower read exposes a source
+that admission treated as part of an opaque word, its complete identity uses
+the wide-key table. Both tables charge their actual bucket growth and share
+the original decision-node allowance.
 XOR and three-input parity reuse a completed low cofactor when every high
 cofactor has the same complete decision identity apart from its complement
 edge. Their complement flags combine exactly, avoiding a repeated recursive
@@ -5473,11 +5479,6 @@ correction. The original full factor count still proves the other parity
 branch zero; recursive squares retain all their own factors. Other even
 blocks and projected groups keep their joint reconstruction. Degree-block
 admission only orders this search; it never establishes a pair or oddness.
-Within a partial two-bit correction period, retained factors first request
-pairing identities. Only an actual pair completes its additive corrections;
-both completed identities must agree. Blocks spanning that period retain the
-streaming proof. An opaque cached identity continues to denote its original
-whole word when completed, even if later reads expose additional low bits.
 Pairing indexes are constructed only for an admitted search and are confined
 to its active odd assumption, avoiding setup in ordinary low-word searches.
 Pair lookup uses exact hashed identities. Only unmatched identities are sorted,
