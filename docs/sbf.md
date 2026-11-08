@@ -933,6 +933,25 @@ nested copy must still reach a matched return, and
 the wrapper's descriptor loads and stores still execute through the canonical
 memory owner. A zero argument alone does not establish preservation or erase
 an unknown branch or write.
+
+When all four specializations are occupied, a caller can also replay an acyclic
+scalar path that reads and writes fixed scratch cells. Every required input
+register and read cell must contain one literal value. The completed generic
+summary must bound every read and write to a fixed 1/2/4/8-byte cell; unknown or
+frame-relative footprints do not qualify. Nested direct calls share the same
+path proof, work budget, memory budget and call-depth limits. Unknown branches,
+syscalls, opaque calls and repeated blocks reject the proof. This adds no cached
+specialization and infers no initial heap contents or allocator contract.
+
+A successful exact heap-address return retains a captured identity with a
+singleton numeric bound. Its fields therefore remain conditional on that
+return when branches merge. The identity implies neither a fresh object nor
+separation from another pointer. The canonical typed-memory reader can read an
+unconditional absolute cell through its exact captured alias; it cannot expose
+a conditional captured field through an unrelated literal address. Width and
+overlapping-write rules remain unchanged. Successful scalar paths use the
+existing `instantiated_memory_path_instructions` and
+`instantiated_memory_path_stores` evidence fields.
 `captured_addresses`, bounded may-write
 intervals and `output_memory_copies` describe these additional facts separately
 from literal CALLX target proofs.

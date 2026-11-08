@@ -858,7 +858,7 @@ private:
   llvm::Expected<bool> call(FunctionContext &Context,
                             const MedInstruction &Instruction,
                             ContextState &State, bool Collect);
-  struct MemoryTransferInstantiation {
+  struct MemoryPathInstantiation {
     ContextState Output;
     MemoryEffects Effects;
     MemoryEffects Reads;
@@ -867,9 +867,9 @@ private:
     size_t Instructions = 0;
     size_t Stores = 0;
   };
-  llvm::Expected<std::optional<MemoryTransferInstantiation>>
-  instantiateMemoryTransferPath(const FunctionContext &Owner, size_t Entry,
-                                const ContextState &Input);
+  llvm::Expected<std::optional<MemoryPathInstantiation>>
+  instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
+                        const ContextState &Input, bool FixedMemory = false);
   llvm::Expected<bool> callTarget(FunctionContext &Context,
                                   const MedInstruction &Instruction,
                                   ContextState &State, bool Collect);
@@ -3543,31 +3543,30 @@ llvm::Expected<bool> ContextFlow::call(FunctionContext &Context,
   return true;
 }
 
-/// Replay a short memory-transfer path using actual caller values and the
-/// canonical load/store owner. This creates no cached specialization. Only
+/// Replay a caller-selected memory path using the canonical load/store owner.
+/// Fixed scalar-cell paths are acyclic and reject syscalls; transfer paths may
+/// complete counted copy loops. This creates no cached specialization. Only
 /// known branch successors and a matched return establish a postcondition;
 /// unknown branches, opaque calls and repeated register states do not.
-llvm::Expected<std::optional<ContextFlow::MemoryTransferInstantiation>>
-ContextFlow::instantiateMemoryTransferPath(const FunctionContext &Owner,
-                                           size_t Entry,
-                                           const ContextState &Input) {
+llvm::Expected<std::optional<ContextFlow::MemoryPathInstantiation>>
+ContextFlow::instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
+                                   const ContextState &Input,
+                                   bool FixedMemory) {
   const size_t EntrySlot = Program.Med.Blocks[Entry].StartSlot;
   if (ActiveEntries.contains(EntrySlot) ||
       ActiveEntries.size() >= Program.Config.MaxCallDepth - 1)
-    return std::optional<MemoryTransferInstantiation>{};
-  if (!maximumCopyLength(Input.Registers[3]))
-    return std::optional<MemoryTransferInstantiation>{};
-  if (Input.Registers[3].values().size() > 1) {
-    std::optional<MemoryTransferInstantiation> Joined;
+    return std::optional<MemoryPathInstantiation>{};
+  if (!FixedMemory && !maximumCopyLength(Input.Registers[3]))
+    return std::optional<MemoryPathInstantiation>{};
+  if (!FixedMemory && Input.Registers[3].values().size() > 1) {
+    std::optional<MemoryPathInstantiation> Joined;
     uint64_t JoinedBytes = 0;
-    const auto InstantiationBytes =
-        [](const MemoryTransferInstantiation &Path) {
-          return stateBytes(Path.Output) + sizeof(MemoryTransferInstantiation) -
-                 sizeof(ContextState) +
-                 (Path.Effects.Writes.capacity() +
-                  Path.Reads.Writes.capacity()) *
-                     sizeof(MemoryWrite);
-        };
+    const auto InstantiationBytes = [](const MemoryPathInstantiation &Path) {
+      return stateBytes(Path.Output) + sizeof(MemoryPathInstantiation) -
+             sizeof(ContextState) +
+             (Path.Effects.Writes.capacity() + Path.Reads.Writes.capacity()) *
+                 sizeof(MemoryWrite);
+    };
     const auto ReleaseJoined =
         llvm::scope_exit([&] { RetainedBytes -= JoinedBytes; });
     // Prove all members of the existing finite domain. Source/destination
@@ -3582,11 +3581,11 @@ ContextFlow::instantiateMemoryTransferPath(const FunctionContext &Owner,
       ContextState Alternative = Input;
       Alternative.Registers[3] = Length;
       Alternative.Origins[3] = Length;
-      auto Path = instantiateMemoryTransferPath(Owner, Entry, Alternative);
+      auto Path = instantiateMemoryPath(Owner, Entry, Alternative);
       if (!Path)
         return Path.takeError();
       if (!*Path)
-        return std::optional<MemoryTransferInstantiation>{};
+        return std::optional<MemoryPathInstantiation>{};
       // The completed child is still live while its result is joined. Charge
       // it until its storage is released or transferred to the joined result.
       uint64_t PathBytes = InstantiationBytes(**Path);
@@ -3599,7 +3598,7 @@ ContextFlow::instantiateMemoryTransferPath(const FunctionContext &Owner,
         // Do not invent one when the proven cases execute different syscalls.
         if (Joined->CopySlot != (**Path).CopySlot ||
             Joined->CopySize != (**Path).CopySize)
-          return std::optional<MemoryTransferInstantiation>{};
+          return std::optional<MemoryPathInstantiation>{};
         if (auto Error = joinStates(Joined->Output, (**Path).Output))
           return std::move(Error);
         Joined->Effects.include((**Path).Effects, symbolicInputs(), Program);
@@ -3623,7 +3622,7 @@ ContextFlow::instantiateMemoryTransferPath(const FunctionContext &Owner,
     return Joined;
   }
   const auto Requested = Input.Registers[3].singleton();
-  constexpr uint64_t ResultOverhead = sizeof(MemoryTransferInstantiation) -
+  constexpr uint64_t ResultOverhead = sizeof(MemoryPathInstantiation) -
                                       sizeof(ContextState) + sizeof(size_t) +
                                       4 * sizeof(void *);
   uint64_t StateBytes = stateBytes(Input) + ResultOverhead;
@@ -3634,7 +3633,7 @@ ContextFlow::instantiateMemoryTransferPath(const FunctionContext &Owner,
       llvm::scope_exit([&] { RetainedBytes -= StateBytes + SeenBytes; });
   ActiveEntries.insert(EntrySlot);
   const auto Leave = llvm::scope_exit([&] { ActiveEntries.erase(EntrySlot); });
-  MemoryTransferInstantiation Result;
+  MemoryPathInstantiation Result;
   Result.Output = Input;
   auto &State = Result.Output;
   const auto RetainState = [&]() -> llvm::Error {
@@ -3687,8 +3686,13 @@ ContextFlow::instantiateMemoryTransferPath(const FunctionContext &Owner,
     SeenBytes += NodeBytes;
     // Ignoring memory here can reject a progressing memory-driven loop, but
     // cannot manufacture a returning path. Counted loops change registers.
-    if (!Seen.insert({BlockID, State.Registers}).second)
-      return std::optional<MemoryTransferInstantiation>{};
+    // Fixed-cell scalar replay is acyclic, including counted loops. It does
+    // not consume extra specialization slots or start another loop solver.
+    if (!Seen.insert({BlockID,
+                      FixedMemory ? std::array<ProvenValueSet, kRegisterCount>{}
+                                  : State.Registers})
+             .second)
+      return std::optional<MemoryPathInstantiation>{};
     const auto &Block = Program.Med.Blocks[BlockID];
     const MedInstruction *Last = nullptr;
     for (size_t Slot = Block.StartSlot; Slot < Block.EndSlot; ++Slot) {
@@ -3705,8 +3709,9 @@ ContextFlow::instantiateMemoryTransferPath(const FunctionContext &Owner,
       if (Instruction->Op == Operation::Exit) {
         // An empty path is useful for a zero-length nested copy, but still
         // needs an actual matched return; a zero argument alone proves nothing.
-        if (!Result.CopySlot && !Result.Stores && Requested.Value != 0)
-          return std::optional<MemoryTransferInstantiation>{};
+        if (!FixedMemory && !Result.CopySlot && !Result.Stores &&
+            Requested.Value != 0)
+          return std::optional<MemoryPathInstantiation>{};
         for (unsigned R = kFirstCalleeSavedRegister; R < kRegisterCount; ++R) {
           State.Registers[R] = Input.Registers[R];
           State.Origins[R] = Input.Origins[R];
@@ -3714,27 +3719,27 @@ ContextFlow::instantiateMemoryTransferPath(const FunctionContext &Owner,
         }
         if (auto Error = RetainState())
           return std::move(Error);
-        return std::optional<MemoryTransferInstantiation>(std::move(Result));
+        return std::optional<MemoryPathInstantiation>(std::move(Result));
       }
       if (Instruction->Call == CallKind::Internal) {
         if (!Instruction->CallTarget ||
             hasRegisteredLegacyRuntime(*Instruction))
-          return std::optional<MemoryTransferInstantiation>{};
+          return std::optional<MemoryPathInstantiation>{};
         const auto ChildEntry = ByEntry.find(*Instruction->CallTarget);
         if (ChildEntry == ByEntry.end() ||
             !Index.find(*Instruction->CallTarget))
-          return std::optional<MemoryTransferInstantiation>{};
+          return std::optional<MemoryPathInstantiation>{};
         const auto Generic = GenericContexts.find(ChildEntry->second);
         if (Generic == GenericContexts.end() || !Generic->second->Complete ||
-            !Generic->second->HasMemoryTransfer)
-          return std::optional<MemoryTransferInstantiation>{};
-        auto Child =
-            instantiateMemoryTransferPath(Owner, ChildEntry->second, State);
+            (!FixedMemory && !Generic->second->HasMemoryTransfer))
+          return std::optional<MemoryPathInstantiation>{};
+        auto Child = instantiateMemoryPath(Owner, ChildEntry->second, State,
+                                           FixedMemory);
         if (!Child)
           return Child.takeError();
         if (!*Child ||
             ((**Child).CopySlot && (Result.CopySlot || Result.Stores)))
-          return std::optional<MemoryTransferInstantiation>{};
+          return std::optional<MemoryPathInstantiation>{};
         Result.Effects.include((**Child).Effects, symbolicInputs(), Program);
         Result.Reads.include((**Child).Reads, symbolicInputs(), Program);
         Result.Instructions += (**Child).Instructions;
@@ -3746,13 +3751,13 @@ ContextFlow::instantiateMemoryTransferPath(const FunctionContext &Owner,
         State = std::move((**Child).Output);
       } else if (Instruction->Call != CallKind::None) {
         const auto Length = State.Registers[3].singleton();
-        if (Result.CopySlot || Result.Stores ||
+        if (FixedMemory || Result.CopySlot || Result.Stores ||
             Instruction->Call != CallKind::Syscall || !Instruction->Syscall ||
             (Instruction->Syscall->ID != Syscall::Memcpy &&
              Instruction->Syscall->ID != Syscall::Memmove) ||
             Length.ValueKind != RegisterValue::Kind::Constant ||
             Length.Value > kMaxModeledScratchBytes)
-          return std::optional<MemoryTransferInstantiation>{};
+          return std::optional<MemoryPathInstantiation>{};
         const auto Source = State.Origins[2].singleton();
         const auto Destination = State.Origins[1].singleton();
         const uint64_t BeforeBytes =
@@ -3797,18 +3802,18 @@ ContextFlow::instantiateMemoryTransferPath(const FunctionContext &Owner,
     const auto Selected = knownBranchSuccessor(Last, State);
     if (!Selected && Last &&
         Last->Semantics.Terminator == TerminatorKind::ConditionalJump)
-      return std::optional<MemoryTransferInstantiation>{};
+      return std::optional<MemoryPathInstantiation>{};
     std::optional<size_t> Next;
     for (size_t E = Offsets[BlockID]; E < Offsets[BlockID + 1]; ++E) {
       const size_t Candidate = Successors[E];
       if (Selected && Program.Med.Blocks[Candidate].StartSlot != *Selected)
         continue;
       if (Next)
-        return std::optional<MemoryTransferInstantiation>{};
+        return std::optional<MemoryPathInstantiation>{};
       Next = Candidate;
     }
     if (!Next)
-      return std::optional<MemoryTransferInstantiation>{};
+      return std::optional<MemoryPathInstantiation>{};
     BlockID = *Next;
   }
 }
@@ -4077,19 +4082,74 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
                 });
       });
   }
-  if ((CopiesCapturedValue || CopiesKnownFrameRange ||
-       UpdatesKnownDescriptor) &&
+  // A full specialization cache need not erase a known global-cell input.
+  // Re-evaluate only an acyclic scalar path whose complete summary footprint
+  // names fixed scratch cells. The path still proves every load, store, nested
+  // return and branch using the actual caller state; no allocator identity,
+  // fresh heap or no-alias assumption is inferred from a function's address.
+  bool FixedMemory = false;
+  if (!Context.Generic && Callee && Callee->Generic &&
+      Edge.InputGeneralization ==
+          CallXInputGeneralization::SpecializationLimit &&
+      !Callee->HasMemoryTransfer && !Callee->ReadEffects.Unknown &&
+      !Callee->ReadEffects.WritesFrames && !Callee->Effects.Unknown &&
+      !Callee->Effects.WritesFrames && !Callee->ReadEffects.Writes.empty() &&
+      !Callee->Effects.Writes.empty()) {
+    const auto FixedCell = [](const MemoryWrite &Access) {
+      return Access.Address.ValueKind == RegisterValue::Kind::Constant &&
+             (Access.Size == 1 || Access.Size == 2 || Access.Size == 4 ||
+              Access.Size == sizeof(uint64_t)) &&
+             isScratchRange(Access.Address.Value, Access.Size);
+    };
+    FixedMemory =
+        llvm::all_of(Callee->Effects.Writes, FixedCell) &&
+        llvm::all_of(Callee->ReadEffects.Writes, [&](const MemoryWrite &Read) {
+          return FixedCell(Read) &&
+                 State.Scratch.Values
+                         .readValues(Read.Address,
+                                     static_cast<unsigned>(Read.Size))
+                         .singleton()
+                         .ValueKind == RegisterValue::Kind::Constant;
+        });
+    for (unsigned R = 0; R < kRegisterCount; ++R)
+      if ((InputRegisters[Callee->EntryBlock] & registerBit(R)) &&
+          State.Registers[R].singleton().ValueKind !=
+              RegisterValue::Kind::Constant)
+        FixedMemory = false;
+  }
+  if ((CopiesCapturedValue || CopiesKnownFrameRange || UpdatesKnownDescriptor ||
+       FixedMemory) &&
       !Edge.LegacyRuntime && !SpecializationBudgetExhausted) {
     auto Copy =
-        instantiateMemoryTransferPath(Context, Callee->EntryBlock, State);
+        instantiateMemoryPath(Context, Callee->EntryBlock, State, FixedMemory);
     if (!Copy)
       return Copy.takeError();
     if (*Copy) {
+      if (FixedMemory) {
+        auto &Output = (**Copy).Output;
+        const auto Value = Output.Registers[kReturnRegister].singleton();
+        if (Value.ValueKind == RegisterValue::Kind::Constant &&
+            Value.Value >= kHeapStart &&
+            Value.Value < kHeapStart + kMemoryRegionSize) {
+          // Keep the exact return's fields conditional on this call path,
+          // just like bounded symbolic returns. A literal key would lose its
+          // fields when joined with an allocation on another branch. The
+          // singleton bound preserves alias checks; it implies no freshness.
+          auto Captured =
+              captureAddress(Context.ID, Instruction.Slot, UINT64_MAX,
+                             {Value.Value, Value.Value});
+          if (!Captured)
+            return Captured.takeError();
+          Output.Registers[kReturnRegister] = *Captured;
+          Output.Origins[kReturnRegister] = *Captured;
+          Output.defineCapture(Captured->Value);
+        }
+      }
       Context.PreservesMemory = false;
       Edge.AppliedMemoryEffects = true;
       Edge.InstantiatedCopySlot = (**Copy).CopySlot;
       Edge.InstantiatedCopyBytes = (**Copy).CopySize;
-      if ((**Copy).Stores) {
+      if ((**Copy).Stores || FixedMemory) {
         Edge.InstantiatedMemoryPathInstructions = (**Copy).Instructions;
         Edge.InstantiatedMemoryPathStores = (**Copy).Stores;
       }
