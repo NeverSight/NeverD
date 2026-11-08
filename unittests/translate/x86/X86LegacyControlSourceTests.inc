@@ -97,7 +97,7 @@ TEST_P(X86LegacySourceTest, ControlRegisterCommitPrecedesDebugEntry) {
   put(0x13000, 0x14007, GuestScalarWidth::I32);
   for (unsigned I = 0; I != 32; ++I)
     put(0x14000 + I * 4, I * 4096 | 7, GuestScalarWidth::I32);
-  put(0x14018, 0x9007, GuestScalarWidth::I32);
+  put(0x14018, 0x40007, GuestScalarWidth::I32);
   put(0x9008, 0x3000 | (uint64_t{8} << 16) | (uint64_t{0x8e} << 40));
   S.Core.GPR[6] = 0x13000;
   S.EFlags = 0x302;
@@ -105,8 +105,14 @@ TEST_P(X86LegacySourceTest, ControlRegisterCommitPrecedesDebugEntry) {
   O.Debug = X86LegacyDebugProfile::InstructionStep;
   X86LegacySourceExecution Context(S, *M, O);
   uint64_t Budget = 1;
-  ASSERT_EQ(Run(&Context, &Budget), 1u) << Context.lastError().str();
+  ASSERT_EQ(Run(&Context, &Budget), 4u) << Context.lastError().str();
   EXPECT_TRUE(Context.lastResult().InstructionCompleted);
+  ASSERT_TRUE(S.PendingEvent);
+  EXPECT_EQ(S.EIP, 0x1003u);
+  EXPECT_EQ(Budget, 0u);
+  EXPECT_EQ(M->controls().CR3, 0x13000u);
+  put(0x14018, 0x9007, GuestScalarWidth::I32);
+  ASSERT_EQ(Context.resume(), 1u) << Context.lastError().str();
   EXPECT_EQ(Context.lastResult().DeliveredVector, 1);
   EXPECT_EQ(S.EIP, 0x3000u);
   EXPECT_EQ(get(S.Core.GPR[4]), 0x1003u);

@@ -260,25 +260,39 @@ TEST_F(X86LegacyControlTest, CR3CommitChangesNextInstructionFetch) {
 }
 
 TEST_F(X86LegacyControlTest, ControlsCommitBeforeDebugTrapOrDeliveryStop) {
-  for (unsigned CR : {0u, 2u, 3u, 4u}) {
-    reset();
-    S.EFlags = 0x302;
-    S.Debug.emplace();
-    O.Debug = X86LegacyDebugProfile::InstructionStep;
-    const uint32_t Value = CR == 0   ? 0x80000011
-                           : CR == 2 ? 0xabcdef01
-                           : CR == 3 ? 0x10018
-                                     : 0x88;
-    S.Core.GPR[6] = Value;
-    const auto R = run(test::legacyControlBytes(CR, true));
-    ASSERT_EQ(R.DeliveredVector, 1);
-    EXPECT_TRUE(R.InstructionCompleted);
-    EXPECT_EQ(get(S.Core.GPR[4]), 0x1003u);
-    EXPECT_EQ(M->controls().CR0, CR == 0 ? Value : 0x80010011u);
-    EXPECT_EQ(S.CR2, CR == 2 ? Value : 0x12345678u);
-    EXPECT_EQ(M->controls().CR3, CR == 3 ? Value : 0x10000u);
-    EXPECT_EQ(M->controls().CR4, CR == 4 ? Value : 0u);
-  }
+  for (bool Stop : {false, true})
+    for (unsigned CR : {0u, 2u, 3u, 4u}) {
+      reset();
+      S.EFlags = 0x302;
+      S.Debug.emplace();
+      O.Debug = X86LegacyDebugProfile::InstructionStep;
+      const uint32_t Value = CR == 0   ? 0x80000011
+                             : CR == 2 ? 0xabcdef01
+                             : CR == 3 ? 0x10018
+                                       : 0x88;
+      if (Stop)
+        put(0x11018, 0x40007, GuestScalarWidth::I32);
+      S.Core.GPR[6] = Value;
+      auto R = run(test::legacyControlBytes(CR, true));
+      EXPECT_TRUE(R.InstructionCompleted);
+      EXPECT_EQ(M->controls().CR0, CR == 0 ? Value : 0x80010011u);
+      EXPECT_EQ(S.CR2, CR == 2 ? Value : 0x12345678u);
+      EXPECT_EQ(M->controls().CR3, CR == 3 ? Value : 0x10000u);
+      EXPECT_EQ(M->controls().CR4, CR == 4 ? Value : 0u);
+      if (Stop) {
+        ASSERT_EQ(R.Status, X86LegacyExecutionStatus::BackingFault);
+        EXPECT_EQ(S.EIP, 0x1003u);
+        ASSERT_TRUE(S.PendingEvent);
+        put(0x11018, 0x6007, GuestScalarWidth::I32);
+        R = llvm::cantFail(resumeX86LegacyEvent(S, *M, O));
+      }
+      ASSERT_EQ(R.DeliveredVector, 1);
+      EXPECT_EQ(get(S.Core.GPR[4]), 0x1003u);
+      EXPECT_EQ(M->controls().CR0, CR == 0 ? Value : 0x80010011u);
+      EXPECT_EQ(S.CR2, CR == 2 ? Value : 0x12345678u);
+      EXPECT_EQ(M->controls().CR3, CR == 3 ? Value : 0x10000u);
+      EXPECT_EQ(M->controls().CR4, CR == 4 ? Value : 0u);
+    }
 }
 
 TEST_F(X86LegacyControlTest,
