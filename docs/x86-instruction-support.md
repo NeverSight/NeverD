@@ -4566,9 +4566,10 @@ NeverC witness passes 1,440 EAX boundary checks and eight negative controls,
 while the full LLVM witness passes 1,080 checks. All 185 x86/i386 frontend
 tests and the VMX, SVM, VMRUN and FLAGS regression matrices pass.
 
-All 25 integer-width tests and 854 runnable pointer-projection tests also
-pass. The broader pointer suite skips 25 unavailable binary-corpus fixtures;
-the SKINIT-specific checks have no skips. These are instruction-boundary and
+All 25 integer-width tests and all 879 pointer-projection tests also pass.
+The 25 initially missing-fixture cases were completed after restoring the
+unchanged pinned corpus into the isolated worktree. No SKINIT or pointer
+qualification skips remain. These are instruction-boundary and
 source-transport qualifications: they do not execute SKINIT or qualify secure
 launch, attestation, processor reset or physical faults. Windows/Darwin i386
 source ABIs, the remaining architectural state/event gates and the existing

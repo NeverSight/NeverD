@@ -1017,6 +1017,17 @@ pair its own compile test and every LAR/LSL destination width its own completion
 test. The split preserves both C routes, LLVM output, O0/O2, and all register,
 memory, success/failure and optimized/unoptimized descriptor cases within the
 ordinary per-test timeout. NeverC variants still require `NEVERD_TEST_NEVERC`.
+The shared scalar MSR/port cases live in
+`unittests/lift/x86/X86ScalarSystemSourceTests.inc`. The Linux i386 native
+variant also requires `NEVERD_TEST_NEVERC_LLC` and compiles 168 complete C
+forms through the full LLVM driver. Retain its exports with
+`NEVERD_ISA_REGRESSION_ARTIFACT_DIR`, then run
+`scripts/check_x86_scalar_system_source.py --exports DIR --compiler COMPILER
+--backend-llc LLVM_LLC --output OUT`. Omit `--backend-llc` for stock Clang.
+The witness checks 8/16/32-bit ports, the complete MSR input, partial-register
+results, dead effects and callee-saved state against original instruction
+bytes; its selector/value/result corruptions must fail. It requires Capstone,
+LIEF and Unicorn and supplies controlled privileged completions.
 The AMX format-compilation and native completion/fault matrices likewise register
 each encoding separately, retaining all formats, both pipeline optimization
 settings and every source/native route. Parameter names retain the instruction

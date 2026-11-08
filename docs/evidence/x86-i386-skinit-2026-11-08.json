@@ -4390,6 +4390,35 @@
       "debug_cpu_comparisons": 0,
       "debug_round_trips": 0,
       "failures": []
+    },
+    "pointer-corpus-completion": {
+      "name": "pointer-corpus-completion",
+      "sdk": "native",
+      "core": "0",
+      "binary_sha256": "1c917077739cafe345c40a7046863ac2a7d19c152fdf4c9ced159d1ed3af122e",
+      "source_head": "3ce5f5eb126f6ae1cf2c1643d7bcdddc28b770df",
+      "pointer_cli_sha256": "c17a74a27cf40268f7587453e7fab45aea2096d3e0b6fb7cfb0d77d5f955ee08",
+      "pointer_runtime_sha256": "c8c65497d863d13e4e8bf95f026204d964e473863285f3605ad271d1e08428f7",
+      "source_tree": "34a4e7882c103375608be368434d921f5eabc3fa",
+      "source_status": "",
+      "exit_code": 0,
+      "seconds": 2.672,
+      "log_sha256": "5ec2264b6158300eff1f9d2aa262aa358e398009d047e52e2e1a59dda620c24d",
+      "result_sha256": "4cfbf18bca83ae4a59de842997dfa0ebe847c509ca392d328b72c8584b032210",
+      "tests": 25,
+      "c_compilations": 0,
+      "failed": 0,
+      "skipped": [],
+      "passed": 25,
+      "original_comparisons": 0,
+      "cpu_program_comparisons": 0,
+      "cpu_comparisons": 0,
+      "branch_selection_comparisons": 0,
+      "transfer_comparisons": 0,
+      "watchpoint_comparisons": 0,
+      "debug_cpu_comparisons": 0,
+      "debug_round_trips": 0,
+      "failures": []
     }
   },
   "regressions": {
@@ -5610,8 +5639,8 @@
     "neverc_skinit_negative_controls": 8,
     "llvm_boundary_checks": 1080,
     "integer_width_tests": 25,
-    "pointer_projection_passed": 854,
-    "pointer_projection_skipped": 25,
+    "pointer_projection_passed": 879,
+    "pointer_projection_skipped": 0,
     "svm_checks": 2048,
     "svm_fault_boundaries": 152,
     "vmrun_contexts": 196,
@@ -5622,7 +5651,6 @@
   "limitations": [
     "No actual SKINIT, successful secure launch, attestation, processor reset or physical-fault execution is qualified.",
     "Windows/Darwin i386 source ABIs remain unavailable.",
-    "The broader pointer suite skips 25 unavailable binary-corpus fixtures; all 854 runnable tests pass. The SKINIT-specific matrices have zero skips.",
     "The strict source-global audit has 90 preexisting findings and is not a clean global gate.",
     "Full real/VM86/IA-32e/task transitions, software SMM/SGX state transfers and unbound asynchronous event producers remain open global gates."
   ],
@@ -5633,5 +5661,33 @@
     "vmx-matrix.json": "6efc86bf352e43b8b5bacbdb3b82117d73a282ad47cdad597cb125f8d5eec92e",
     "flags-regression-matrix.json": "25aa81459950e4bc01841afc9f39169818224b8323264b9aa4c455caf6e9a941"
   },
-  "source_witness_sha256": "2730123bef6707e709ec001b12992afd75151150285d5a6a36ad75a74d098137"
+  "source_witness_sha256": "2730123bef6707e709ec001b12992afd75151150285d5a6a36ad75a74d098137",
+  "corpus_completion": {
+    "commit": "071a867fc0ab620d6f01b1a4251807044f4d6cbd",
+    "source": "${PRIMARY_NEVERD}/unittests/corpus",
+    "target": "${NEVERD}/unittests/corpus",
+    "sparse_directories": [
+      "corpus/rust-eh/x86_64-unknown-linux-gnu/unwind/o0/bin",
+      "corpus/windows-eh/clang-cl/x86_64/fh3/gs/o0/abi-probe",
+      "corpus/windows-eh/msvc/vs2019/arm/native/gs/o2/windows-seh-tests",
+      "corpus/windows-eh/msvc/vs2019/x86/native/no-gs/o0/windows-seh-tests",
+      "corpus/windows-eh/msvc/x86/native/no-gs/o0/abi-probe",
+      "corpus/windows-eh/msvc/x86_64/fh4/gs/o0/abi-probe",
+      "corpus/windows-eh/msvc/x86_64/fh4/gs/o2/abi-probe",
+      "corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe"
+    ],
+    "binary_sha256": {
+      "/corpus/rust-eh/x86_64-unknown-linux-gnu/unwind/o0/bin/rust_eh_probe-x86_64-unknown-linux-gnu-unwind-o0": "cf304e30e9520d42dca5588c2f2ad18addbfe33c976151694e50824f197c75c0",
+      "/corpus/windows-eh/clang-cl/x86_64/fh3/gs/o0/abi-probe/cxx_eh_probe-clang-cl-x86_64-fh3-gs-o0.exe": "003acf846edc37c800c3dad1dc5decd209547de9d3a506ed884203866fffc959",
+      "/corpus/windows-eh/msvc/vs2019/arm/native/gs/o2/windows-seh-tests/xcpt4-msvc-arm-native-gs-o2.exe": "b304421fe65c0f60540d67a0dbb7cf439256c993fae1b9314969e36d678b74d9",
+      "/corpus/windows-eh/msvc/vs2019/x86/native/no-gs/o0/windows-seh-tests/xcpt4-msvc-x86-native-no-gs-o0.exe": "57edc0c2dff4ea80b4a2f0a85acbd31be23238d03219d3448fec5470915a4ada",
+      "/corpus/windows-eh/msvc/x86/native/no-gs/o0/abi-probe/seh_probe-msvc-x86-native-no-gs-o0.exe": "fe37e6466af0995e1fced90085d1b7082424e72f0513705dbc7a84c05b45dd9b",
+      "/corpus/windows-eh/msvc/x86_64/fh4/gs/o0/abi-probe/seh_probe-msvc-x86_64-fh4-gs-o0.exe": "5aea0e52a077d950e543b8b74823ecbd9e738b05e08586947d5e8746a1bdb4ec",
+      "/corpus/windows-eh/msvc/x86_64/fh4/gs/o2/abi-probe/seh_probe-msvc-x86_64-fh4-gs-o2.exe": "56509faf0daa15adbbc5a1e5eed50159cd33f1ec38d0ffaa93a1aa0d7ef91bcd",
+      "/corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/cxx_eh_probe-msvc-x86_64-fh4-no-gs-o0.exe": "a3b5b9c3e961472763516969416dca034abe05059a441192f50c2c781f6c6ed7",
+      "/corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/seh_probe-msvc-x86_64-fh4-no-gs-o0.exe": "3e685ec4d4cb0718f187bc94a87b4593d2986791d551e899d0d8cf7f2f4f2acc"
+    },
+    "primary_working_tree_modified": false
+  },
+  "pointer_corpus_note": "The initial 854 passes / 25 missing-fixture skips are retained in their original receipt. A local sparse checkout of the unchanged pinned corpus supplies all nine missing binaries and sidecars; the 25 skipped cases then pass with identical test/CLI/runtime binaries. The union covers all 879 pointer tests with zero outstanding skips."
 }
