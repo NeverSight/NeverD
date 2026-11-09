@@ -106,6 +106,7 @@ add_neverd_component_library(NeverDBackendLLVM
   X86/MedLLVMRegistrationSEHRuntimeCallback.cpp
   X86/MedLLVMRegistrationSEHFinally.cpp
   X86/MedLLVMRegistrationSourceSEH.cpp
+  X86/MedLLVMSourceSEHFilter.cpp
   X86/MedLLVMRegistrationSEHRegisters.cpp
   X86/MedLLVMRegistrationSEHState.cpp
   X86/MedLLVMRegistrationSEHStateDispatch.cpp

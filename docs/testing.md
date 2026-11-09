@@ -20990,6 +20990,14 @@ separate i386 Windows object compilation checks the actual SEH syntax. A large
 body with many callers must refuse expansion before changing the LLVM CFG.
 Fragmented cleanup fixtures cover branching PHIs, nonreturning tails and
 unique C labels.
+Filter fixtures retain all three SEH dispositions, capture incoming arguments
+through dominating storage, and retain an i32 filter result in 32-bit, 64-bit
+and void parents. Ambiguous scopes refuse outlining and discard temporary
+result markers. Selected C includes its captured filter helper; fragmented
+protected ranges compile for i386 Windows with the same capture list. An
+independent O0/O2 UBSan harness executes the emitted helper and verifies its
+signed result and exactly one write to parent storage. This checks the helper
+body, not native Windows dispatch or continuation of a faulting instruction.
 FS/GS store fixtures compile zero and variable offsets at scalar widths for
 i386 and x64, and reject atomic or unrepresented store widths.
 `NeverDLibCTests` checks the profile-specific `_longjmpex` declaration.

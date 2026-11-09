@@ -13,6 +13,7 @@
 #include "X86RegistrationRegions.h"
 
 #include "neverd/Limits.h"
+#include "neverd/ir/RegistrationDisplay.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/loader/ExceptionFunction.h"
@@ -521,9 +522,7 @@ bool RegistrationDisplay::isFilterTemporary(int64_t Slot, va_t Root,
 }
 
 int64_t RegistrationDisplay::exceptionPointersSlot() const {
-  return int64_t(Facts->FrameFromEntry.value_or(-4)) +
-         EH->Registration->RegistrationOffset.value_or(Facts->RecordFromFrame) -
-         4;
+  return registration_display::exceptionPointersSlot(*Facts, *EH->Registration);
 }
 
 void RegistrationDisplay::settleLists(std::vector<HighStmt> &List,
