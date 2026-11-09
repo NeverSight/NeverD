@@ -13,6 +13,8 @@
 
 #include "neverd/ir/med/MedTypePass.h"
 
+#include "../../../safety/StackSlotFlow.h"
+
 #include "neverd/ir/FloatingCallArguments.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceABI.h"
@@ -23,6 +25,10 @@
 #include "neverd/ir/med/MedSourceParameterUses.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/X86/X86NativeMemory.h"
+
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 
 #include <algorithm>
 #include <deque>
@@ -316,16 +322,172 @@ static uint16_t fpReturnFallbackElem(const MedOp &Op) {
   return 0;
 }
 
+/// Explicit writes that disprove the POP-shaped register-restore heuristic.
+/// Index memory accesses and their entry-stack offsets once; repeated views
+/// of one load share the same answer. Unknown aliases/calls end a path rather
+/// than supplying a guessed reaching value.
+class ReturnStackWrites {
+  struct Access {
+    const MedOp *Op;
+    size_t Position;
+    std::optional<int64_t> Offset;
+  };
+  struct LoadSite {
+    size_t Block;
+    Access Read;
+  };
+  const MedFunc &Func;
+  const TargetRegInfo &TRI;
+  const std::map<std::pair<int, int>, const MedOp *> &Defs;
+  std::vector<std::vector<Access>> Writes;
+  llvm::DenseMap<int, size_t> Blocks;
+  llvm::DenseMap<const MedOp *, LoadSite> Loads;
+  llvm::DenseMap<const MedOp *, bool> Computed;
+
+  std::optional<uint64_t> entryReturnOffset(MedVar Value) const {
+    uint64_t Offset = 0;
+    const auto Bytes = Value.Size;
+    for (int Depth = 0;
+         Depth < limits::ir::kMedTypePassIsReturnRegRestoreDepthLimit;
+         ++Depth) {
+      if (Offset > TRI.PointerSize || Offset > Value.Size ||
+          Bytes > Value.Size - Offset)
+        return std::nullopt;
+      if (Value.Kind == MedVar::Reg && Value.RegOff == TRI.IntReturnReg &&
+          Value.SSAVer == 0 && Value.Size == TRI.PointerSize)
+        return Offset;
+      const auto It = Defs.find({Value.Id, Value.SSAVer});
+      if (It == Defs.end())
+        return std::nullopt;
+      const auto &Op = *It->second;
+      if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1)
+        Value = Op.Inputs[0];
+      else if (Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
+               Op.Inputs[1].isConst() &&
+               Op.Inputs[1].ConstVal <= TRI.PointerSize - Offset) {
+        Offset += Op.Inputs[1].ConstVal;
+        Value = Op.Inputs[0];
+      } else
+        return std::nullopt;
+    }
+    return std::nullopt;
+  }
+
+public:
+  ReturnStackWrites(const MedFunc &Func, const TargetRegInfo &TRI,
+                    const std::map<std::pair<int, int>, const MedOp *> &Defs)
+      : Func(Func), TRI(TRI), Defs(Defs), Writes(Func.Blocks.size()) {
+    std::vector<MedVar> Addresses;
+    std::vector<std::pair<size_t, Access>> Accesses;
+    for (size_t B = 0; B < Func.Blocks.size(); ++B) {
+      const auto &Block = Func.Blocks[B];
+      Blocks.try_emplace(Block.Id, B);
+      for (size_t I = 0; I < Block.Ops.size(); ++I) {
+        const auto &Op = Block.Ops[I];
+        if (const auto *Address = safety::detail::memoryAddress(Op)) {
+          Addresses.push_back(*Address);
+          Accesses.push_back({B, {&Op, I, std::nullopt}});
+        } else if (endsCallArgumentSetup(Op) ||
+                   safety::detail::isStackMemoryWrite(Op.Opcode) ||
+                   (Op.Opcode == NdOp::INTRINSIC &&
+                    hasValidMedIntrinsicId(Op) &&
+                    isX86FPStateMemoryIntrinsic(
+                        static_cast<Intrinsic>(Op.Inputs[0].ConstVal)))) {
+          Writes[B].push_back({&Op, I, std::nullopt});
+        }
+      }
+    }
+    const auto Offsets = entryStackOffsets(
+        Func, Addresses, TRI.TheArch, BinaryFormat::Unknown, Func.EntryKind);
+    for (size_t I = 0; I < Accesses.size(); ++I) {
+      auto &[Block, Access] = Accesses[I];
+      Access.Offset = Offsets[I];
+      if (Access.Op->Opcode == NdOp::LOAD)
+        Loads.try_emplace(Access.Op, LoadSite{Block, Access});
+      else if (safety::detail::isStackMemoryWrite(Access.Op->Opcode))
+        Writes[Block].push_back(Access);
+    }
+    for (auto &Block : Writes)
+      std::sort(Block.begin(), Block.end(),
+                [](const Access &A, const Access &B) {
+                  return A.Position < B.Position;
+                });
+  }
+
+  bool computed(const MedOp &Load) {
+    if (const auto It = Computed.find(&Load); It != Computed.end())
+      return It->second;
+    auto Finish = [&](bool Result) {
+      Computed.try_emplace(&Load, Result);
+      return Result;
+    };
+    const auto Found = Loads.find(&Load);
+    if (Found == Loads.end() || !Found->second.Read.Offset)
+      return Finish(false);
+    const auto &Site = Found->second;
+    std::vector<std::pair<size_t, size_t>> Pending{
+        {Site.Block, Site.Read.Position}};
+    llvm::DenseSet<std::pair<size_t, size_t>> Seen;
+    while (!Pending.empty()) {
+      const auto [B, Before] = Pending.back();
+      Pending.pop_back();
+      if (!Seen.insert({B, Before}).second)
+        continue;
+      const auto &Stores = Writes[B];
+      auto At = std::lower_bound(Stores.begin(), Stores.end(), Before,
+                                 [](const Access &Access, size_t Position) {
+                                   return Access.Position < Position;
+                                 });
+      bool Stopped = false;
+      while (At != Stores.begin()) {
+        const auto &Write = *--At;
+        const auto &Op = *Write.Op;
+        if (!Write.Offset || Op.Opcode != NdOp::STORE ||
+            Op.MemoryOrdering != NdMemoryOrdering::None ||
+            Op.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
+          Stopped = true;
+          break;
+        }
+        const auto &Value = *safety::detail::storedValue(Op);
+        if (!safety::detail::stackRangesOverlap(
+                *Write.Offset, Value.Size, *Site.Read.Offset, Load.Output.Size))
+          continue;
+        const auto SavedOffset = entryReturnOffset(Value);
+        if (!SavedOffset || *Write.Offset < *Site.Read.Offset ||
+            static_cast<uint64_t>(*Write.Offset) -
+                    static_cast<uint64_t>(*Site.Read.Offset) !=
+                *SavedOffset)
+          return Finish(true);
+        // Even a partial rewrite of the same saved bytes does not establish
+        // a computed result. Leave the original heuristic when the rest of
+        // the load is not proved by this write.
+
+        Stopped = true;
+        break;
+      }
+      if (Stopped || !Func.Blocks[B].ExceptionalPreds.empty())
+        continue;
+      for (int Pred : Func.Blocks[B].Preds) {
+        const auto It = Blocks.find(Pred);
+        if (It != Blocks.end())
+          Pending.push_back({It->second, Func.Blocks[It->second].Ops.size()});
+      }
+    }
+    return Finish(false);
+  }
+};
+
 // True when \p Op writes the integer return register by restoring a value
 // loaded from the stack pointer — an epilogue `pop` (e.g. restoring a PIC-base
 // scratch register), not a computed return value.  Such a write must not mask a
-// genuine floating-point return left in the FP return register (clang's i386
-// internal convention returns a double in XMM0; a rodata-using callee restores
-// its PIC-base EAX with `pop eax` right before `ret`).
-static bool
-isReturnRegRestore(const std::map<std::pair<int, int>, const MedOp *> &Defs,
-                   const MedBlock &Block, const MedOp &Op,
-                   const TargetRegInfo &TRI) {
+// genuine floating-point return left in the FP return register. A reaching
+// computed stack write disproves this shape-based restore heuristic (clang's
+// i386 internal convention returns a double in XMM0; a rodata-using callee
+// restores its PIC-base EAX with `pop eax` right before `ret`).
+static bool isReturnRegRestore(
+    const std::map<std::pair<int, int>, const MedOp *> &Defs,
+    const MedBlock &Block, const MedOp &Op, const TargetRegInfo &TRI,
+    llvm::function_ref<bool(const MedOp &)> HasComputedStackWrite) {
   auto isStackPtr = [&](MedVar A) {
     for (int D = 0; D < ::neverd::limits::ir::kMedTypePassIsStackPtrDLimit;
          ++D) {
@@ -352,9 +514,12 @@ isReturnRegRestore(const std::map<std::pair<int, int>, const MedOp *> &Defs,
     if (Cur->Opcode == NdOp::LOAD) {
       if (Cur->NumInputs < 1)
         return false;
-      const MedVar Address = Cur->Inputs[0];
+      const auto *LoadAddress = safety::detail::memoryAddress(*Cur);
+      if (!LoadAddress || Cur->MemoryOrdering != NdMemoryOrdering::None)
+        return false;
+      const MedVar Address = *LoadAddress;
       if (isStackPtr(Address))
-        return true;
+        return !HasComputedStackWrite(*Cur);
 
       // LowIR models `pop eax` as LOAD from the current derived SP followed by
       // `new_sp = address + pointer_size`.  The address can be a cross-op temp
@@ -404,7 +569,7 @@ isReturnRegRestore(const std::map<std::pair<int, int>, const MedOp *> &Defs,
         if (After.Output.Kind == MedVar::Reg &&
             After.Output.RegOff == TRI.StackPointer &&
             isPopAdvance(After.Output))
-          return true;
+          return !HasComputedStackWrite(*Cur);
       }
       return false;
     }
@@ -816,10 +981,13 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
   const bool FilterRestore = (TheArch == Arch::X86 || TheArch == Arch::X64);
 
   std::map<std::pair<int, int>, const MedOp *> Defs;
+  bool HasStackStoreCandidate = false;
   for (const auto &Blk : Func.Blocks)
-    for (const auto &Op : Blk.Ops)
+    for (const auto &Op : Blk.Ops) {
+      HasStackStoreCandidate |= Op.Opcode == NdOp::STORE;
       if (Op.Output.Size > 0)
         Defs[{Op.Output.Id, Op.Output.SSAVer}] = &Op;
+    }
 
   std::map<std::pair<int, int>, const PhiNode *> PhiDefs;
   for (const auto &Blk : Func.Blocks)
@@ -1003,6 +1171,14 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
   auto TestedByBranch = [&](const MedOp *Write) {
     return Write && BranchTested.count(ViewRoot(Write->Output));
   };
+  std::optional<ReturnStackWrites> ReturnWrites;
+  const auto HasComputedStackWrite = [&](const MedOp &Load) {
+    if (!HasStackStoreCandidate)
+      return false;
+    if (!ReturnWrites)
+      ReturnWrites.emplace(Func, TRI, Defs);
+    return ReturnWrites->computed(Load);
+  };
   // The values an operation other than a merge or a return reads.  A result
   // the function computes is read by nothing else before it returns.
   std::set<std::pair<int, int>> ReadInBody;
@@ -1068,7 +1244,8 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
                                        Last.Inputs[0].ConstVal == Value.ConstVal
                                  : Last.Output == Value;
         if (!Arrives || TestedByBranch(&Last) ||
-            (FilterRestore && isReturnRegRestore(Defs, Source, Last, TRI)) ||
+            (FilterRestore && isReturnRegRestore(Defs, Source, Last, TRI,
+                                                 HasComputedStackWrite)) ||
             (FloatAt && *FloatAt > *IntAt)) {
           Later = false;
           break;
@@ -1137,8 +1314,8 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
         if (Rit2->Output.RegOff == TRI.IntReturnReg &&
             (Rit2->Opcode != NdOp::SUBBYTES ||
              Rit2->Output.Size == TRI.PointerSize) &&
-            !(FilterRestore &&
-              isReturnRegRestore(Defs, *ScanBlk, *Rit2, TRI))) {
+            !(FilterRestore && isReturnRegRestore(Defs, *ScanBlk, *Rit2, TRI,
+                                                  HasComputedStackWrite))) {
           if (IntDist < 0)
             IntDist = OpDist;
           if (ScanBlk != &Blk) {
