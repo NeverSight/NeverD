@@ -515,21 +515,24 @@ relocatedFrames(const std::vector<uint8_t> &Binary, const MachOEHFrameRegion &R,
 }
 } // namespace
 
-llvm::Expected<uint64_t> declareMachOTextMetadata(std::vector<uint8_t> &Binary,
-                                                  Arch A, llvm::StringRef Name,
-                                                  uint64_t Size) {
+namespace {
+llvm::Expected<uint64_t> declareMachOMetadata(std::vector<uint8_t> &Binary,
+                                              Arch A, llvm::StringRef Name,
+                                              uint64_t Size, bool Relro) {
   using namespace llvm::MachO;
   if (Name.empty() || Name.size() > 16 || !Size ||
       Size > ::neverd::limits::backend::
                  kMachOLayoutGrowthDeclareMachOTextMetadataSizeLimit)
     return fail("invalid metadata section request");
   auto B = Binary;
-  auto Header = reserveMachOHeaderStorage(B, A,
-                                          (A == Arch::X64 || A == Arch::AArch64)
-                                              ? kMetadataCommandReserve + Size
-                                              : kMetadataCommandReserve);
-  if (!Header)
-    return Header.takeError();
+  if (!Relro) {
+    auto Header = reserveMachOHeaderStorage(
+        B, A,
+        (A == Arch::X64 || A == Arch::AArch64) ? kMetadataCommandReserve + Size
+                                               : kMetadataCommandReserve);
+    if (!Header)
+      return Header.takeError();
+  }
   std::vector<macho_patch_detail::MachOFileRange> Segments, Sections;
   if (!macho_patch_detail::collectMachOFileRanges(B, Segments, Sections))
     return fail("invalid original file layout");
@@ -538,8 +541,9 @@ llvm::Expected<uint64_t> declareMachOTextMetadata(std::vector<uint8_t> &Binary,
   const unsigned SS = getMachOSectionSize(H.Is64);
   uint64_t First = B.size(), Text = UINT64_MAX, Insert = 0;
   uint64_t Last = 0, TextVA = 0, TextOff = 0, TextSize = 0;
-  uint32_t TextCS = 0, Ordinal = 0, NewOrdinal = 0;
+  uint32_t Ordinal = 0, NewOrdinal = 0;
   bool Invalid = false;
+  std::string SegmentName;
   forEachMachOLoadCommand(
       B.data(), B.size(),
       [&](const uint8_t *C, uint32_t Cmd, uint32_t CS, bool Is64) {
@@ -550,7 +554,12 @@ llvm::Expected<uint64_t> declareMachOTextMetadata(std::vector<uint8_t> &Binary,
         if (Cmd != getMachOSegmentCmdID(Is64))
           return;
         const auto F = readMachOSegment(C, Is64);
-        const bool IsText = readMachOName(F.SegName) == kMetadataTextSegment;
+        const auto Flags =
+            Is64 ? reinterpret_cast<const segment_command_64 *>(C)->flags
+                 : reinterpret_cast<const segment_command *>(C)->flags;
+        const bool IsText =
+            Relro ? (Flags & SG_READ_ONLY) != 0
+                  : readMachOName(F.SegName) == kMetadataTextSegment;
         if (CS != getMachOSegmentCmdSize(Is64) + uint64_t(F.NSects) * SS) {
           Invalid = true;
           return;
@@ -584,39 +593,54 @@ llvm::Expected<uint64_t> declareMachOTextMetadata(std::vector<uint8_t> &Binary,
         }
         if (!IsText)
           return;
-        if (Text != UINT64_MAX || F.InitProt != 5 || F.MaxProt != 5) {
+        const auto Protection = Relro ? VM_PROT_READ | VM_PROT_WRITE
+                                      : VM_PROT_READ | VM_PROT_EXECUTE;
+        if (Text != UINT64_MAX || F.InitProt != Protection ||
+            F.MaxProt != Protection) {
           Invalid = true;
           return;
         }
+        SegmentName = readMachOName(F.SegName);
         Text = C - B.data();
         Insert = Text + CS;
-        TextCS = CS;
         TextVA = F.VMAddr;
         TextOff = F.FileOff;
         TextSize = F.FileSize;
         NewOrdinal = Ordinal + 1;
       });
+  if (Relro) {
+    std::vector<macho_patch_detail::MachOFileRange> Payloads;
+    if (!macho_patch_detail::collectMachOPayloadRanges(B, Payloads))
+      return fail(kRelroOwnership);
+    for (const auto &Range : Payloads) {
+      First = std::min(First, Range.Begin);
+      if (Range.Begin < TextOff + TextSize && Range.End > TextOff)
+        Last = std::max(Last, Range.End);
+    }
+  }
   if (Invalid || Text == UINT64_MAX || Ordinal >= 255 || End + SS > First ||
       !rangeInBounds(End, SS, B.size()) ||
       llvm::any_of(llvm::ArrayRef<uint8_t>(B).slice(End, SS),
                    [](uint8_t V) { return V != 0; }))
-    return fail("new TEXT section needs authenticated header capacity and "
-                "section identities");
+    return fail(kMetadataCapacity);
   // reserveMachOHeaderStorage authenticates this entire prefix as unowned.
   const uint64_t Prefix = llvm::alignTo(End + kMetadataCommandReserve, 8);
   const bool PrefixFits =
-      Prefix <= First && Size <= First - Prefix &&
+      !Relro && Prefix <= First && Size <= First - Prefix &&
       rangeInBounds(Prefix, Size, B.size()) &&
       llvm::all_of(llvm::ArrayRef<uint8_t>(B).slice(Prefix, Size),
                    [](uint8_t V) { return !V; });
-  uint64_t Off =
-      PrefixFits ? Prefix : llvm::alignTo(std::max(Last, End + SS), 8);
+  uint64_t Off = PrefixFits
+                     ? Prefix
+                     : llvm::alignTo(std::max({Last, TextOff, End + SS}), 8);
   uint64_t VA = TextVA + Off - TextOff;
   if (Off < TextOff || !rangeInBounds(Off - TextOff, Size, TextSize) ||
       !rangeInBounds(Off, Size, B.size()) ||
       llvm::any_of(
           llvm::ArrayRef<uint8_t>(B).slice(Off, Size),
           [](uint8_t V) { return V != 0; })) {
+    if (Relro)
+      return fail(kRelroCapacity);
     MachOPatcher P;
     P.setInputKind(RewriteInputKind::ReplacementIR);
     std::vector<uint8_t> Zeros(llvm::alignTo(Size, 4096), 0);
@@ -671,7 +695,7 @@ llvm::Expected<uint64_t> declareMachOTextMetadata(std::vector<uint8_t> &Binary,
     ++G->nsects;
     auto *S = reinterpret_cast<section_64 *>(B.data() + Insert);
     std::memcpy(S->sectname, Name.data(), Name.size());
-    std::memcpy(S->segname, kMetadataTextSegment, 6);
+    std::memcpy(S->segname, SegmentName.data(), SegmentName.size());
     S->addr = VA;
     S->offset = Off;
     S->size = Size;
@@ -683,7 +707,7 @@ llvm::Expected<uint64_t> declareMachOTextMetadata(std::vector<uint8_t> &Binary,
     ++G->nsects;
     auto *S = reinterpret_cast<section *>(B.data() + Insert);
     std::memcpy(S->sectname, Name.data(), Name.size());
-    std::memcpy(S->segname, kMetadataTextSegment, 6);
+    std::memcpy(S->segname, SegmentName.data(), SegmentName.size());
     S->addr = VA;
     S->offset = Off;
     S->size = Size;
@@ -694,10 +718,25 @@ llvm::Expected<uint64_t> declareMachOTextMetadata(std::vector<uint8_t> &Binary,
   Sections.clear();
   if (!macho_patch_detail::collectMachOFileRanges(B, Segments, Sections))
     return fail("new section changed file ownership");
-  if (auto Error = orderTextSections(B))
-    return Error;
+  if (!Relro)
+    if (auto Error = orderTextSections(B))
+      return Error;
   Binary.swap(B);
   return VA;
+}
+
+} // namespace
+
+llvm::Expected<uint64_t> declareMachOTextMetadata(std::vector<uint8_t> &Binary,
+                                                  Arch A, llvm::StringRef Name,
+                                                  uint64_t Size) {
+  return declareMachOMetadata(Binary, A, Name, Size, false);
+}
+
+llvm::Expected<uint64_t> declareMachOReadOnlyData(std::vector<uint8_t> &Binary,
+                                                  Arch A, llvm::StringRef Name,
+                                                  uint64_t Size) {
+  return declareMachOMetadata(Binary, A, Name, Size, true);
 }
 
 llvm::Expected<bool> reserveMachOSourceUnwind(

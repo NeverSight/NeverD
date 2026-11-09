@@ -674,6 +674,55 @@ llvm::Error finalizeImports(NativeMachO &Object,
   return llvm::Error::success();
 }
 
+llvm::Error prepareMainRelro(NativeMachO &Object, std::vector<uint8_t> &Binary,
+                             const BinaryImage &Original) {
+  if (!Original.isArm64e() || Original.DynInfo.MachOFileType != MH_EXECUTE)
+    return llvm::Error::success();
+  unsigned ReadOnlySegments = 0;
+  forEachMachOLoadCommand(
+      Binary.data(), Binary.size(),
+      [&](const uint8_t *Command, uint32_t ID, uint32_t, bool) {
+        if (ID == LC_SEGMENT_64)
+          ReadOnlySegments +=
+              (reinterpret_cast<const segment_command_64 *>(Command)->flags &
+               SG_READ_ONLY) != 0;
+      });
+  if (!ReadOnlySegments)
+    return llvm::Error::success();
+  if (ReadOnlySegments != 1)
+    return fail(kMainRelro);
+  uint64_t Size = 0, Alignment = 1;
+  constexpr auto Limit = ::neverd::limits::backend::kMachOPatchObjectMaxStorage;
+  for (const auto &Section : Object.Image.Sections)
+    if (Section.ReadOnlyAfterFixups && Section.IsInImage) {
+      if (Section.Alignment > Limit)
+        return fail(kMainRelroExtent);
+      Alignment = std::max(Alignment, Section.Alignment);
+      Size = llvm::alignTo(Size, Section.Alignment);
+      if (Size > Limit || Section.Size > Limit - Size)
+        return fail(kMainRelroExtent);
+      Size += Section.Size;
+    }
+  if (!Size)
+    return llvm::Error::success();
+  if (Size > Limit - Alignment)
+    return fail(kMainRelroExtent);
+  auto Storage = declareMachOReadOnlyData(
+      Binary, Original.Arch, kNativeRelroSection, Size + Alignment);
+  if (!Storage)
+    return Storage.takeError();
+  uint64_t Cursor = *Storage;
+  for (auto &Section : Object.Image.Sections)
+    if (Section.ReadOnlyAfterFixups && Section.IsInImage) {
+      Cursor = llvm::alignTo(Cursor, Section.Alignment);
+      Section.VA = Cursor;
+      Section.Offset = 0;
+      Section.IsInImage = false;
+      Cursor += Section.Size;
+    }
+  return llvm::Error::success();
+}
+
 llvm::Error place(NativeMachO &Object, uint64_t Base,
                   const std::optional<MachOEHFrameRegion> &EH) {
   auto &Image = Object.Image;
@@ -836,7 +885,9 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
     if (A == Arch::AArch64 && R.Type == ARM64_RELOC_AUTHENTICATED_POINTER) {
       if (!Original.isArm64e() || R.Width != arm64e::kPointerBytes || R.PCRel ||
           R.Scattered || !R.External || R.SubtractVA || R.SubtractSymbol ||
-          !S.IsAllocated || !S.IsInImage || S.Kind != Kind::WritableData)
+          !S.IsAllocated ||
+          (!S.IsInImage && !isExternalMachORelro(Object.Image, S)) ||
+          S.Kind != Kind::WritableData)
         return fail(kAuthMetadata);
       const auto Word = arm64e::decodeObjectPointerWord(Raw);
       if (!Word)
@@ -896,7 +947,8 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
       continue;
     }
     if (Original.isArm64e() && R.Type == ARM64_RELOC_UNSIGNED &&
-        !R.SubtractSymbol && !R.SubtractVA && S.IsAllocated && S.IsInImage) {
+        !R.SubtractSymbol && !R.SubtractVA && S.IsAllocated &&
+        (S.IsInImage || isExternalMachORelro(Object.Image, S))) {
       if (R.PCRel || R.Scattered || R.Width != arm64e::kPointerBytes ||
           S.Kind != Kind::WritableData)
         return fail(kOrdinaryStorage);
@@ -928,8 +980,10 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
         const auto &Target =
             Object.Image.Sections[Object.Sections.at(R.SymbolIndex)];
         const auto Old = Object.OldSectionVAs.at(R.SymbolIndex);
-        if (!Target.IsAllocated || !Target.IsInImage || Raw < Old ||
-            Raw - Old > Target.Size)
+        if (!Target.IsAllocated ||
+            (!Target.IsInImage &&
+             !isExternalMachORelro(Object.Image, Target)) ||
+            Raw < Old || Raw - Old > Target.Size)
           return fail(kOrdinaryTarget);
         Reference.ResolvedValue = Target.VA + Raw - Old;
       }
@@ -1432,6 +1486,8 @@ appendMachOObjectImage(std::vector<uint8_t> &Binary, llvm::StringRef Bytes,
   scanImportThunks(*Layout);
   if (auto Error = prepareArm64eGOT(*Object, *Layout, Dependencies))
     return Error;
+  if (auto Error = prepareMainRelro(*Object, Candidate, *Layout))
+    return Error;
   if (auto Error = place(*Object, Base, EH))
     return Error;
   if (auto Error = relocate(*Object, *Layout, {}))
@@ -1536,6 +1592,8 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
   if (Original.isArm64e())
     if (auto E = prepareArm64eGOT(*Object, *LayoutImage, Dependencies))
       return E;
+  if (auto E = prepareMainRelro(*Object, LayoutBytes, *LayoutImage))
+    return E;
   if (auto E = place(*Object, Base, EH))
     return std::move(E);
   if (auto E = relocate(*Object, *LayoutImage, Bindings))

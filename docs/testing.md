@@ -21840,13 +21840,19 @@ arm64e host. These four runtime cases join the twelve installation cases in
 `scripts/verify_arm64e_native.py`; a missing or skipped publication case cannot
 satisfy the twenty-case gate, which also requires four
 `PublishedThreadedEntriesExecute` cases for migrated legacy publication.
-`PublishesMigratedThreadedObject` checks the same transaction offline. The native object API does not qualify the
-source/IR adapter or a complete lifted-image rebuild.
+`PublishesMigratedThreadedObject` checks the same transaction offline. The native
+object API does not qualify the source/IR adapter or a complete lifted-image rebuild.
 
 `PublishesSignedExecutable` adds O0/O2 compact/DWARF main-executable publication,
 with explicit metadata headroom for its larger startup harness,
 including the ABI0-object/ABI1-main contract and rejection of foreign platforms,
 dylib promotion, kernel tags and unknown ABI versions. `PublishedExecutableStarts`
+requires one `SG_READ_ONLY` segment: native read-only data uses the original
+segment's declared, unowned zero tail. Occupied bytes and `LC_NOTE` ownership
+reject installation without mutation; insufficient capacity remains unsupported.
+The main executable gate also checks retained signature page size and
+the unique read-only segment, since XNU rejects multiple such segments.
+`PublishedExecutableStarts`
 first launches the original executable, then launches the published executable
 through its retained `LC_MAIN` entry and checks authenticated calls, RELRO and
 signed language unwinding. These four runtime cases require `run-executable`

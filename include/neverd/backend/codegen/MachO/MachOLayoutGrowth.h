@@ -35,6 +35,13 @@ llvm::Expected<uint64_t> declareMachOTextMetadata(std::vector<uint8_t> &Binary,
                                                   llvm::StringRef Name,
                                                   uint64_t Size);
 
+/// Declare storage in the unowned zero tail of the sole SG_READ_ONLY segment.
+/// Preserve original addresses and adjust later symbol section ordinals.
+llvm::Expected<uint64_t> declareMachOReadOnlyData(std::vector<uint8_t> &Binary,
+                                                  Arch Architecture,
+                                                  llvm::StringRef Name,
+                                                  uint64_t Size);
+
 /// Logical work across every old/new AArch64 frame-state comparison in one
 /// metadata relocation. Budget exhaustion leaves the input image unchanged.
 struct MachOUnwindRelocationLimits {

@@ -964,6 +964,48 @@ void checkNativeObjectInstallation(
     };
     Reject([&](auto &Candidate, auto &) { ChangePlatform(Candidate); });
     Reject([&](auto &, auto &Native) { ChangePlatform(Native); });
+    uint64_t Tail = 0, End = 0;
+    forEachMachOLoadCommand(
+        Main.data(), Main.size(),
+        [&](const uint8_t *Command, uint32_t ID, uint32_t, bool) {
+          if (ID != llvm::MachO::LC_SEGMENT_64)
+            return;
+          const auto *Segment =
+              reinterpret_cast<const llvm::MachO::segment_command_64 *>(
+                  Command);
+          if (!(Segment->flags & llvm::MachO::SG_READ_ONLY))
+            return;
+          End = Segment->fileoff + Segment->filesize;
+          const auto *Sections =
+              reinterpret_cast<const llvm::MachO::section_64 *>(Segment + 1);
+          for (unsigned I = 0; I < Segment->nsects; ++I)
+            if (Sections[I].offset)
+              Tail = std::max(Tail, Sections[I].offset + Sections[I].size);
+        });
+    ASSERT_LT(Tail, End);
+    ASSERT_TRUE(llvm::all_of(llvm::ArrayRef(Main).slice(Tail, End - Tail),
+                             [](uint8_t Byte) { return Byte == 0; }));
+    Reject([&](auto &Candidate, auto &) {
+      std::fill(Candidate.begin() + Tail, Candidate.begin() + End,
+                kOccupiedMetadataPadding);
+    });
+    Reject([&](auto &Candidate, auto &) {
+      const auto Header = parseMachOHeader(Candidate.data(), Candidate.size());
+      const auto Offset = Header.HeaderSize + Header.SizeOfCmds;
+      ASSERT_LT(Offset + sizeof(llvm::MachO::note_command),
+                findFirstMachODataOffset(Candidate.data(), Candidate.size()));
+      auto *Note = reinterpret_cast<llvm::MachO::note_command *>(
+          Candidate.data() + Offset);
+      *Note = {};
+      Note->cmd = llvm::MachO::LC_NOTE;
+      Note->cmdsize = sizeof(*Note);
+      std::copy(std::begin(kPaddingNoteOwner), std::end(kPaddingNoteOwner),
+                Note->data_owner);
+      Note->offset = Tail;
+      Note->size = End - Tail;
+      setMachOHeaderCmds(Candidate.data(), true, Header.NCmds + 1,
+                         Header.SizeOfCmds + sizeof(*Note));
+    });
   }
   const auto BeforeInstallation = Bytes;
   std::vector<SourcePatchMapping> Mappings;
@@ -1081,7 +1123,7 @@ void checkNativeObjectInstallation(
       EXPECT_EQ(Fixup->Recipe.Addend, kObjectDataAddend);
     }
   }
-  unsigned ReadOnly = 0, Mutable = 0;
+  unsigned ReadOnly = 0, Mutable = 0, TotalReadOnly = 0;
   forEachMachOLoadCommand(
       Bytes.data(), Bytes.size(),
       [&](const uint8_t *C, uint32_t ID, uint32_t, bool) {
@@ -1090,6 +1132,7 @@ void checkNativeObjectInstallation(
         const auto *S =
             reinterpret_cast<const llvm::MachO::segment_command_64 *>(C);
         const auto Name = readMachOName(S->segname);
+        TotalReadOnly += (S->flags & llvm::MachO::SG_READ_ONLY) != 0;
         if (Name == kNewConstSegment) {
           ++ReadOnly;
           EXPECT_EQ(S->flags, kReadOnlySegmentFlag);
@@ -1103,7 +1146,9 @@ void checkNativeObjectInstallation(
           EXPECT_EQ(S->flags, 0u);
         }
       });
-  EXPECT_EQ(ReadOnly, 1u);
+  EXPECT_EQ(ReadOnly, Executable ? 0u : 1u);
+  if (Executable)
+    EXPECT_EQ(TotalReadOnly, 1u);
   EXPECT_EQ(Mutable, 1u);
   const bool Converted = Threaded && (ExecuteNative || ConvertLegacy);
   if (Converted) {
@@ -1186,7 +1231,7 @@ void checkNativeObjectInstallation(
         if (ID == llvm::MachO::LC_SEGMENT_64) {
           const auto *S =
               reinterpret_cast<const llvm::MachO::segment_command_64 *>(C);
-          if (readMachOName(S->segname) == kNewConstSegment)
+          if (S->flags & llvm::MachO::SG_READ_ONLY)
             writeLE<uint32_t>(
                 MissingProtection.data() + (C - MissingProtection.data()) +
                     offsetof(llvm::MachO::segment_command_64, flags),

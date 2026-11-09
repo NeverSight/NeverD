@@ -1304,9 +1304,54 @@ llvm::Error MachOPatcher::appendReplacementImage(
                               Storage->RelroSize) != Image.BaseVA)
       return llvm::createStringError(llvm::errc::not_supported,
                                      kSegmentInstallation);
+    for (const auto &Section : Image.Sections) {
+      if (!isExternalMachORelro(Image, Section))
+        continue;
+      std::optional<uint64_t> Offset;
+      forEachMachOLoadCommand(
+          Candidate.data(), Candidate.size(),
+          [&](const uint8_t *Command, uint32_t ID, uint32_t, bool Is64) {
+            if (ID != getMachOSegmentCmdID(Is64))
+              return;
+            const auto Segment = readMachOSegment(Command, Is64);
+            const auto Flags =
+                Is64
+                    ? reinterpret_cast<const segment_command_64 *>(Command)
+                          ->flags
+                    : reinterpret_cast<const segment_command *>(Command)->flags;
+            if (!(Flags & SG_READ_ONLY) ||
+                Segment.InitProt != (VM_PROT_READ | VM_PROT_WRITE) ||
+                Section.VA < Segment.VMAddr ||
+                !rangeInBounds(Section.VA - Segment.VMAddr, Section.Size,
+                               Segment.FileSize))
+              return;
+            const auto *Record = Command + getMachOSegmentCmdSize(Is64);
+            for (unsigned I = 0; I < Segment.NSects;
+                 ++I, Record += getMachOSectionSize(Is64)) {
+              const uint64_t VA =
+                  Is64 ? reinterpret_cast<const section_64 *>(Record)->addr
+                       : reinterpret_cast<const section *>(Record)->addr;
+              const uint64_t Size =
+                  Is64 ? reinterpret_cast<const section_64 *>(Record)->size
+                       : reinterpret_cast<const section *>(Record)->size;
+              if (Section.VA >= VA &&
+                  rangeInBounds(Section.VA - VA, Section.Size, Size))
+                Offset = Segment.FileOff + Section.VA - Segment.VMAddr;
+            }
+          });
+      if (!Offset || !rangeInBounds(*Offset, Section.Size, Candidate.size()) ||
+          llvm::any_of(llvm::ArrayRef(Candidate).slice(*Offset, Section.Size),
+                       [](uint8_t Byte) { return Byte != 0; }))
+        return llvm::createStringError(llvm::errc::not_supported,
+                                       kExternalRelroStorage);
+      llvm::copy(Section.ExternalBytes, Candidate.begin() + *Offset);
+    }
     return installMachOAuthenticatedFixups(Candidate, *Recipes);
   };
-  if (Recipes->empty())
+  if (Recipes->empty() &&
+      llvm::none_of(Image.Sections, [&](const auto &Section) {
+        return isExternalMachORelro(Image, Section);
+      }))
     return Install(Binary);
   auto Before = readMachODependencyState(Binary);
   if (!Before)
@@ -1354,9 +1399,17 @@ uint64_t MachOPatcher::appendExecSegmentImpl(std::vector<uint8_t> &Binary,
       (RelroSize && SegStr == kPatchConstSegment))
     return 0;
   bool SegmentNameConflict = false;
+  bool ExistingRelro = false;
   forEachMachOLoadCommand(
       Binary.data(), Binary.size(),
       [&](const uint8_t *Command, uint32_t ID, uint32_t, bool Is64) {
+        if (ID == getMachOSegmentCmdID(Is64)) {
+          const auto Flags =
+              Is64
+                  ? reinterpret_cast<const segment_command_64 *>(Command)->flags
+                  : reinterpret_cast<const segment_command *>(Command)->flags;
+          ExistingRelro |= (Flags & SG_READ_ONLY) != 0;
+        }
         if (ID == getMachOSegmentCmdID(Is64) &&
             (readMachOName(readMachOSegment(Command, Is64).SegName) == SegStr ||
              (WritableOffset &&
@@ -1368,6 +1421,10 @@ uint64_t MachOPatcher::appendExecSegmentImpl(std::vector<uint8_t> &Binary,
           SegmentNameConflict = true;
       });
 
+  if (RelroSize && ExistingRelro &&
+      reinterpret_cast<const mach_header *>(Binary.data())->filetype ==
+          MH_EXECUTE)
+    return 0;
   const bool Is64 = Layout.Is64;
   const uint32_t SegCmdID = getMachOSegmentCmdID(Is64);
   const uint32_t HdrSize = Layout.HeaderSize;

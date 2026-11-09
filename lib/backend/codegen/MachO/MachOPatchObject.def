@@ -76,5 +76,11 @@ MACHO_OBJECT_TEXT(kPublishedCompact,
 MACHO_OBJECT_TEXT(kPublishedRange,
                   "final native compact encoding or range is not registered")
 
+MACHO_OBJECT_TEXT(kNativeRelroSection, "__nd_const")
+MACHO_OBJECT_TEXT(kMainRelro, "main executable has multiple read-only segments")
+
+MACHO_OBJECT_TEXT(kMainRelroExtent,
+                  "native read-only data extent exceeds placement limits")
+
 #undef MACHO_OBJECT_VALUE
 #undef MACHO_OBJECT_TEXT

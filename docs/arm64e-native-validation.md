@@ -65,7 +65,7 @@ python3 scripts/verify_arm64e_native.py run \
 ```
 
 The runner requires the probe's exact current revision and source hashes. It
-checks the sixteen registered CTest commands before execution, records the owning
+checks the twenty registered CTest commands before execution, records the owning
 test binary hash and runs with the registered CTest deadlines. Every chained and
 threaded-input O0/O2 case must execute successfully: authenticated calls and signed
 compact unwind, native DWARF catches/cleanup, and relocated original signed
@@ -74,12 +74,13 @@ qualification even if CTest itself returns success. Temporary fixture storage
 is private to the invocation and is removed afterward.
 
 The matrix additionally requires four `PublishedEntriesExecute` cases at O0/O2
-with compact/DWARF language records. Four additional publication cases start with original threaded images and
-migrate them to chained metadata inside the publication transaction. These use the native publication API,
+with compact/DWARF language records. Four additional publication cases start
+with original threaded images and migrate them to chained metadata inside the
+publication transaction. These use the native publication API,
 check failed-receipt rollback and exclusive output creation, and enter the new
 authenticated call/catch/cleanup functions through the original addresses.
 `native_object_publication_qualified` names this additional native object
-contract. The matrix now requires sixteen cases with no failures or skips.
+contract. The matrix now requires twenty cases with no failures or skips.
 
 Publication passes the admitted input CodeDirectory page size explicitly to
 `codesign`. Host signing defaults can differ from the compiler linker's defaults;
