@@ -347,6 +347,23 @@ MACHO_AUTH_NATIVE_TEXT(kRuntimeControlResult, "native_control_result")
 MACHO_AUTH_NATIVE_ARGS(kRuntimeCompileArgs, "-arch", "arm64e", "-std=c++20",
                        "-fno-omit-frame-pointer", "-fno-optimize-sibling-calls")
 MACHO_AUTH_NATIVE_ARGS(kProviderCompileArgs, "-dynamiclib")
+MACHO_AUTH_NATIVE_TEXT(kRuntimeLoaderSource, R"cpp(
+#include <dlfcn.h>
+#include <stdio.h>
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *Image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!Image) {
+    fprintf(stderr, "%s\n", dlerror());
+    return 2;
+  }
+  auto Entry = (int (*)(int, char **))dlsym(Image, "main");
+  if (!Entry)
+    return 3;
+  return Entry(1, argv);
+}
+)cpp")
 MACHO_AUTH_NATIVE_TEXT(kRuntimeProviderSource, R"cpp(
 extern "C" {
 int neverd_should_throw = 0;

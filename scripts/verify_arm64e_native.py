@@ -138,6 +138,20 @@ def probe(output):
                        "stdout": run.stdout, "stderr": run.stderr}
                 report["controls"].append(row)
                 if run.returncode < 0:
+                    if contract["control_option"] in args:
+                        library = output / (label + POLICY["dlopen_library_suffix"])
+                        driver = output / (label + POLICY["dlopen_driver_suffix"])
+                        products.extend([library, driver])
+                        command(products, output, label + POLICY["dlopen_library_suffix"],
+                                [contract["compiler"], *contract["compile_args"],
+                                 POLICY["dynamic_library_option"], *map(str, args),
+                                 POLICY["output_flag"], str(library)], POLICY["tool_timeout"])
+                        command(products, output, label + POLICY["dlopen_driver_suffix"],
+                                [contract["compiler"], *contract["compile_args"],
+                                 str(sources["loader"]), POLICY["output_flag"], str(driver)],
+                                POLICY["tool_timeout"])
+                        command(products, output, label + POLICY["dlopen_suffix"],
+                                [str(driver), str(library)], POLICY["tool_timeout"])
                     command(products, output,
                             label + POLICY["dyld_diagnostic_suffix"], [str(binary)],
                             POLICY["tool_timeout"],

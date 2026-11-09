@@ -20,6 +20,10 @@
       "kind": "raw",
       "symbol": "kRuntimeCapabilitySource"
     },
+    "loader": {
+      "kind": "raw",
+      "symbol": "kRuntimeLoaderSource"
+    },
     "source": {
       "kind": "raw",
       "symbol": "kSource"
@@ -121,6 +125,7 @@
     ]
   },
   "source_names": {
+    "loader": "loader.cpp",
     "capability": "capability.cpp",
     "source": "original.cpp",
     "object": "object.cpp",
@@ -170,6 +175,10 @@
     "DYLD_PAGEIN_LINKING": "0"
   },
   "dyld_diagnostic_suffix": "-userspace-dyld",
+  "dlopen_library_suffix": "-library.dylib",
+  "dlopen_driver_suffix": "-loader.out",
+  "dlopen_suffix": "-dlopen",
+  "dynamic_library_option": "-dynamiclib",
   "header_format": "<III",
   "macho_magic": 4277009103,
   "cpu_type": 16777228,
