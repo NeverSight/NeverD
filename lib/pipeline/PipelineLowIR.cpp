@@ -512,6 +512,10 @@ struct ReturnedCodeEvidence {
   std::vector<bool> CompleteByFunction;
   std::vector<std::vector<LowCxxContinuationExitEvidence>>
       OccurrencesByFunction;
+  /// Whether OccurrencesByFunction names every RETURN of the function: one
+  /// no instruction owns (in the block CFG recovery adds for a conditional
+  /// tail call) has no identity an exit record could name.
+  std::vector<bool> ExitsCompleteByFunction;
 };
 
 struct LocalUnwindContinuationEvidence {
@@ -687,6 +691,7 @@ bool collectLowAddressUses(
     ReturnedCode->TargetsByFunction.assign(Funcs.size(), {});
     ReturnedCode->CompleteByFunction.assign(Funcs.size(), true);
     ReturnedCode->OccurrencesByFunction.assign(Funcs.size(), {});
+    ReturnedCode->ExitsCompleteByFunction.assign(Funcs.size(), true);
   }
   if (LocalUnwind) {
     LocalUnwind->TargetsByFunction.assign(Funcs.size(), {});
@@ -1580,7 +1585,15 @@ bool collectLowAddressUses(
                   return false;
               }
             }
-            if (RecordedUses && ReturnedCode) {
+            if (RecordedUses && ReturnedCode &&
+                (Op.Addr == InvalidVA || Op.Seq < 0)) {
+              // No exit record can name this RETURN, so neither what this
+              // function returns nor its exits are complete.  That is this
+              // function's evidence, not every other function's.
+              ReturnedCode->CompleteByFunction[FuncIndex] = false;
+              ReturnedCode->ExitsCompleteByFunction[FuncIndex] = false;
+              ReturnedCode->TargetsByFunction[FuncIndex].clear();
+            } else if (RecordedUses && ReturnedCode) {
               std::set<va_t> &Targets =
                   ReturnedCode->TargetsByFunction[FuncIndex];
               LowCxxContinuationExitEvidence Occurrence;
@@ -1588,9 +1601,6 @@ bool collectLowAddressUses(
               Occurrence.ReturnSeq = Op.Seq;
               Occurrence.Complete =
                   !Returned.Imprecise && !Returned.ExactValuesWidened;
-              if (Occurrence.ReturnAddr == InvalidVA ||
-                  Occurrence.ReturnSeq < 0)
-                return false;
               if (Occurrence.Complete && AdditionalExactRoots) {
                 for (const ModuleAddressAnchor &Exact : Returned.ExactValues) {
                   if (AdditionalExactRoots->count(Exact.Address) == 0) {
@@ -2394,19 +2404,25 @@ EHContinuationRootDiscovery collectWindowsEHContinuationRoots(
         Result.RootsByOwner[Owner->CodeRange.Begin].insert(Target);
     }
 
-  // FH3 separated funclets return continuation addresses only in the x64
-  // table ABI.  Other Windows targets either use registration records or
-  // carry explicit continuation metadata handled above.
+  // In the x64 table ABI a catch funclet returns the address its parent
+  // continues at: always in FH3, and in FH4 where the handler that names it
+  // records no continuation of its own.  Other Windows targets either use
+  // registration records or carry explicit continuation metadata handled
+  // above.
   if (Img.Arch != Arch::X64)
     return Result;
 
-  auto exactFH3Record = [&](va_t Entry) -> const ExceptionFunction * {
+  const auto ReturnsContinuation = [](const CxxExceptionInfo &Cxx) {
+    return Cxx.NativeEncoding == CxxExceptionInfo::Encoding::FH3 ||
+           Cxx.NativeEncoding == CxxExceptionInfo::Encoding::FH4;
+  };
+  auto exactCatchRecord = [&](va_t Entry) -> const ExceptionFunction * {
     const ExceptionFunction *Match = nullptr;
     for (const ExceptionFunction *F :
          exceptionRecordsStartingAt(Img.ExceptionMetadata, Entry)) {
       if (F->Kind != RuntimeFunctionKind::Primary ||
           F->ParseStatus != ExceptionParseStatus::Complete || !F->Cxx ||
-          F->Cxx->NativeEncoding != CxxExceptionInfo::Encoding::FH3)
+          !ReturnsContinuation(*F->Cxx))
         continue;
       if (Match)
         return nullptr;
@@ -2414,14 +2430,18 @@ EHContinuationRootDiscovery collectWindowsEHContinuationRoots(
     }
     return Match;
   };
-  std::vector<const ExceptionFunction *> FH3CatchSources(Funcs.size(), nullptr);
-  bool HasFH3CatchSource = false;
+  std::vector<const ExceptionFunction *> CatchSources(Funcs.size(), nullptr);
+  bool HasCatchSource = false;
   for (size_t FuncIndex = 0; FuncIndex < Funcs.size(); ++FuncIndex) {
-    const ExceptionFunction *Source = exactFH3Record(Funcs[FuncIndex].Entry);
-    if (!Source || !Source->Cxx->IsSeparated || !Source->Cxx->IsCatchFunclet)
+    const ExceptionFunction *Source = exactCatchRecord(Funcs[FuncIndex].Entry);
+    // An FH3 catch funclet is a function of its parent's separated FuncInfo
+    // group; an FH4 one's own FuncInfo says that it is one.
+    if (!Source || !Source->Cxx->IsCatchFunclet ||
+        (Source->Cxx->NativeEncoding == CxxExceptionInfo::Encoding::FH3 &&
+         !Source->Cxx->IsSeparated))
       continue;
-    FH3CatchSources[FuncIndex] = Source;
-    HasFH3CatchSource = true;
+    CatchSources[FuncIndex] = Source;
+    HasCatchSource = true;
   }
   std::set<va_t> CandidateTargets;
   for (const LowFunc &Func : Funcs)
@@ -2439,7 +2459,7 @@ EHContinuationRootDiscovery collectWindowsEHContinuationRoots(
   // even when the module has no separated FH3 catch contribution.  Conversely,
   // an FH3 catch with no address candidates must still publish a completed,
   // exact-empty occurrence snapshot rather than looking unanalysed.
-  if (CandidateTargets.empty() && !HasFH3CatchSource)
+  if (CandidateTargets.empty() && !HasCatchSource)
     return Result;
 
   ReturnedCodeEvidence Returned;
@@ -2452,7 +2472,7 @@ EHContinuationRootDiscovery collectWindowsEHContinuationRoots(
   // address inventory visits runtime activation roots from unknown state and
   // follows only ordinary edges; frame equality still comes from LowIR's
   // decoded-frame authority, never from this inventory or the runtime name.
-  if (HasFH3CatchSource) {
+  if (HasCatchSource) {
     std::vector<ModuleAddressUse> ReturnedUses;
     if (!collectLowAddressUses(Img, Funcs, NoTableOwners, ReturnedUses, Budget,
                                TestBudget, &CandidateTargets, &Returned,
@@ -2602,13 +2622,15 @@ EHContinuationRootDiscovery collectWindowsEHContinuationRoots(
     }
   }
 
-  auto uniqueFH3Owner = [&](va_t Target) -> const ExceptionFunction * {
+  auto uniqueCatchOwner =
+      [&](va_t Target,
+          CxxExceptionInfo::Encoding Encoding) -> const ExceptionFunction * {
     const ExceptionFunction *Match = nullptr;
     for (const ExceptionFunction &F : Img.ExceptionMetadata.Functions) {
       if (F.Kind != RuntimeFunctionKind::Primary ||
           F.ParseStatus != ExceptionParseStatus::Complete || !F.Cxx ||
-          F.Cxx->NativeEncoding != CxxExceptionInfo::Encoding::FH3 ||
-          Target <= F.CodeRange.Begin || Target >= F.CodeRange.End)
+          F.Cxx->NativeEncoding != Encoding || Target <= F.CodeRange.Begin ||
+          Target >= F.CodeRange.End)
         continue;
       if (Match)
         return nullptr;
@@ -2618,9 +2640,11 @@ EHContinuationRootDiscovery collectWindowsEHContinuationRoots(
   };
 
   for (size_t FuncIndex = 0; FuncIndex < Funcs.size(); ++FuncIndex) {
-    if (!FH3CatchSources[FuncIndex])
+    const ExceptionFunction *Source = CatchSources[FuncIndex];
+    if (!Source)
       continue;
-    Result.CxxContinuationExitAnalysisCompleteByFunction[FuncIndex] = true;
+    Result.CxxContinuationExitAnalysisCompleteByFunction[FuncIndex] =
+        Returned.ExitsCompleteByFunction[FuncIndex];
     Result.CxxContinuationExitsByFunction[FuncIndex] =
         Returned.OccurrencesByFunction[FuncIndex];
     if (FuncIndex >= Returned.CompleteByFunction.size() ||
@@ -2637,24 +2661,32 @@ EHContinuationRootDiscovery collectWindowsEHContinuationRoots(
       if (PublishedBySource.count(Target) == 0 || isFunctionEntry(Target) ||
           !Img.hasExecutableCodeOwnerAt(Target))
         continue;
-      const ExceptionFunction *Owner = uniqueFH3Owner(Target);
+      const ExceptionFunction *Owner =
+          uniqueCatchOwner(Target, Source->Cxx->NativeEncoding);
       if (!Owner || !isFunctionEntry(Owner->CodeRange.Begin))
         continue;
+      // The owner names this funclet as a handler that continues where it
+      // returns: one that records no continuation address.
       const bool DeclaresSource = std::any_of(
           Owner->Cxx->TryBlocks.begin(), Owner->Cxx->TryBlocks.end(),
           [&](const CxxTryBlock &Try) {
             return std::any_of(Try.Handlers.begin(), Try.Handlers.end(),
                                [&](const CxxCatchHandler &Handler) {
-                                 return normalizeCodeAddress(
+                                 return Handler.ContinuationVAs.empty() &&
+                                        normalizeCodeAddress(
                                             Handler.HandlerVA, Img.Arch,
                                             Img.Mode) == SourceLow.Entry;
                                });
           });
       if (DeclaresSource) {
         Result.RootsByOwner[Owner->CodeRange.Begin].insert(Target);
-        if (Owner->Cxx->NativeFuncInfoVA &&
-            Owner->Cxx->NativeFuncInfoVA ==
-                FH3CatchSources[FuncIndex]->Cxx->NativeFuncInfoVA)
+        // The continuation runs in its owner's frame, which the funclet
+        // was entered with: an FH3 funclet as a function of the owner's
+        // FuncInfo group, an FH4 one, with a FuncInfo of its own, as the
+        // handler the owner's FuncInfo names.
+        if (Source->Cxx->NativeEncoding == CxxExceptionInfo::Encoding::FH4 ||
+            (Owner->Cxx->NativeFuncInfoVA &&
+             Owner->Cxx->NativeFuncInfoVA == Source->Cxx->NativeFuncInfoVA))
           for (const auto &Exit : Returned.OccurrencesByFunction[FuncIndex])
             if (Exit.Complete && llvm::is_contained(Exit.Targets, Target))
               Result.EntriesByOwner[Owner->CodeRange.Begin].push_back(

@@ -1367,6 +1367,120 @@ TEST(CFGBuilderCoverage,
                    }));
 }
 
+TEST(CFGBuilderCoverage, ConditionalTailCallsKeepOtherCatchContinuations) {
+  // A conditional jump to another function's entry becomes a block CFG
+  // recovery adds, a call and a RETURN that no instruction owns, so no exit
+  // record can name it.  That leaves its own function's returned code
+  // incomplete, not the catch funclet's: the funclet's continuation stays a
+  // root of the parent.
+  constexpr va_t CatchVA = 0x140001000;
+  constexpr va_t OwnerVA = CatchVA + 0x100;
+  constexpr va_t TargetVA = OwnerVA + 0x20;
+  constexpr va_t TailVA = CatchVA + 0x40;
+  constexpr va_t CalleeVA = CatchVA + 0x60;
+  BinaryImage Img = continuationPipelineImage();
+  Segment &Text = Img.Segments.front();
+  const std::vector<uint8_t> Tail = {0x85, 0xc9,              // test ecx, ecx
+                                     0x0f, 0x84, 0x18,        // jz Callee
+                                     0x00, 0x00, 0x00, 0xc3}; // ret
+  std::copy(Tail.begin(), Tail.end(), Text.Data.begin() + (TailVA - Text.VA));
+  Text.Data[CalleeVA - Text.VA] = 0xc3; // ret
+  ASSERT_EQ(TailVA + 8 + 0x18, CalleeVA);
+  Img.KnownCodeRanges.emplace_back(TailVA, TailVA + Tail.size());
+  Img.KnownCodeRanges.emplace_back(CalleeVA, CalleeVA + 1);
+  Img.Symbols.push_back(Symbol::makeFunc(TailVA, Tail.size()));
+  Img.Symbols.push_back(Symbol::makeFunc(CalleeVA, 1));
+
+  llvm::LLVMContext Context;
+  PipelineOptions Options;
+  Options.DumpLow = true;
+  Options.EmitDumpOutput = false;
+  const PipelineResult Result = Pipeline().run(Img, Context, Options);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  const auto FindLow = [&](va_t Entry) {
+    return std::find_if(
+        Result.LowFuncs.begin(), Result.LowFuncs.end(),
+        [&](const LowFunc &Function) { return Function.Entry == Entry; });
+  };
+  const auto Jumping = FindLow(TailVA);
+  ASSERT_NE(Jumping, Result.LowFuncs.end());
+  // The conditional tail call's RETURN is the one no instruction owns.
+  EXPECT_TRUE(std::any_of(Jumping->Blocks.begin(), Jumping->Blocks.end(),
+                          [](const LowBlock &Block) {
+                            return std::any_of(
+                                Block.Ops.begin(), Block.Ops.end(),
+                                [](const LowOp &Op) {
+                                  return Op.Opcode == NdOp::RETURN &&
+                                         (Op.Addr == InvalidVA || Op.Seq < 0);
+                                });
+                          }));
+  const auto Catch = FindLow(CatchVA);
+  const auto Owner = FindLow(OwnerVA);
+  ASSERT_NE(Catch, Result.LowFuncs.end());
+  ASSERT_NE(Owner, Result.LowFuncs.end());
+  ASSERT_TRUE(Catch->CxxContinuationExitAnalysisComplete);
+  ASSERT_EQ(Catch->CxxContinuationExits.size(), 1u);
+  EXPECT_EQ(Catch->CxxContinuationExits.front().uniqueTarget(),
+            std::optional<va_t>(TargetVA));
+  EXPECT_TRUE(std::any_of(
+      Owner->Blocks.begin(), Owner->Blocks.end(),
+      [&](const LowBlock &Block) { return Block.StartAddr == TargetVA; }));
+}
+
+TEST(CFGBuilderCoverage, FH4CatchFuncletsWithoutContinuationsReturnOne) {
+  // An FH4 handler that records no continuation address continues where its
+  // catch funclet returns, as every FH3 handler does; one that records an
+  // address continues there, whatever the funclet returns.
+  constexpr va_t CatchVA = 0x140001000;
+  constexpr va_t OwnerVA = CatchVA + 0x100;
+  constexpr va_t TargetVA = OwnerVA + 0x20;
+  for (bool Recorded : {false, true}) {
+    SCOPED_TRACE(Recorded ? "recorded continuation" : "returned continuation");
+    BinaryImage Img = continuationPipelineImage();
+    for (ExceptionFunction &Function : Img.ExceptionMetadata.Functions) {
+      Function.Personality = ExceptionPersonality::CxxFrameHandler4;
+      Function.Cxx->NativeEncoding = CxxExceptionInfo::Encoding::FH4;
+      // FH4 gives a catch funclet a FuncInfo of its own, which says that
+      // it is one, and separates neither.
+      Function.Cxx->IsSeparated = false;
+    }
+    ExceptionFunction &Catch = Img.ExceptionMetadata.Functions.front();
+    ASSERT_EQ(Catch.CodeRange.Begin, CatchVA);
+    Catch.Cxx->NativeFuncInfoVA += 0x100;
+    ExceptionFunction &Owner = Img.ExceptionMetadata.Functions.back();
+    ASSERT_EQ(Owner.CodeRange.Begin, OwnerVA);
+    if (Recorded)
+      Owner.Cxx->TryBlocks.front().Handlers.front().ContinuationVAs = {OwnerVA +
+                                                                       0x30};
+
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.DumpLow = true;
+    Options.EmitDumpOutput = false;
+    const PipelineResult Result = Pipeline().run(Img, Context, Options);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    const auto Parent = std::find_if(
+        Result.LowFuncs.begin(), Result.LowFuncs.end(),
+        [&](const LowFunc &Function) { return Function.Entry == OwnerVA; });
+    ASSERT_NE(Parent, Result.LowFuncs.end());
+    EXPECT_EQ(std::any_of(Parent->Blocks.begin(), Parent->Blocks.end(),
+                          [&](const LowBlock &Block) {
+                            return Block.StartAddr == TargetVA;
+                          }),
+              !Recorded);
+    // The continuation enters its parent's frame from the funclet, which
+    // the frame proof binds; a root alone would read that frame as the
+    // parent's incoming arguments.
+    EXPECT_EQ(std::any_of(Parent->CxxContinuationEntries.begin(),
+                          Parent->CxxContinuationEntries.end(),
+                          [&](const LowCxxContinuationEntryEvidence &Entry) {
+                            return Entry.Target == TargetVA &&
+                                   Entry.SourceEntry == CatchVA;
+                          }),
+              !Recorded);
+  }
+}
+
 TEST(CFGBuilderCoverage, FH4ContinuationRootsAreReadOncePerImage) {
   // The catch continuation an FH4 handler names in another function of its
   // record is that function's root.  A selected run that shares the

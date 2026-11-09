@@ -11727,6 +11727,21 @@ HighC and LLVMC source output also refuse these calls until they have native
 adapters of their own. Deferred MedIR analysis remains available; resuming its
 HighIR projection enforces the same refusal.
 
+An x64 catch funclet returns the address its parent continues at: always in
+FH3, and in FH4 where the handler that names it records no continuation
+address (its continuation count is zero). Module discovery proves what each
+such funclet returns and makes every returned address a root of the parent
+whose handler names the funclet, so a catch's continuation is code of its
+parent in a full analysis and in a single function's. It also records the
+entry (`CxxContinuationEntries`): the continuation runs in the frame the
+funclet was entered with, the parent's, whose proof restores it there, so the
+parent's frame reads at the continuation are no incoming arguments. An FH3
+funclet is a function of its parent's FuncInfo group; an FH4 one has a
+FuncInfo of its own and is named by its parent's handler. A RETURN no
+instruction owns (in the block CFG recovery adds for a conditional jump to
+another function's entry, as MSVC's CRT jumps to its import thunks) leaves
+only its own function's returned code and exits incomplete; it does not
+withdraw every other function's continuations.
 FH3 catch-return evidence binds the source funclet, return instruction and
 owning continuation after module discovery converges. Shared SSA verifies the
 parent's unwind, decoded prologue and converted stack effects before restoring

@@ -14726,6 +14726,19 @@ handlers under EH3 and EH4: restored and unbalanced stacks, changed EBP,
 return-pop immediates, conditional returns, trailing effects and missing or
 mismatched instruction identities. The C++ catch-return suite applies the
 same unconditional-return rule before publishing a continuation.
+`CFGBuilderCoverage.ConditionalTailCallsKeepOtherCatchContinuations` adds a
+function whose conditional jump to another function's entry gives it a RETURN
+that no instruction owns, as MSVC's CRT jumps to its import thunks: the catch
+funclet's exits stay complete and its continuation stays a root of its
+parent, where before such a function withdrew every continuation of a
+whole-image analysis. `CFGBuilderCoverage.FH4CatchFuncletsWithoutContinuationsReturnOne`
+makes the address an FH4 catch funclet returns a root of its parent, with the
+continuation entry that binds the parent's frame, when the handler records no
+continuation address, and neither when it records one.
+`HighCPointerAddresses.CorpusFuncLoadCxxEhProbePrintsThrow` and
+`CorpusFuncLoadCxxEhProbeNestedCatchReturnsValues` decompile the MSVC FH4 O0
+probe alone: the catch of `ProbeError` stores its result and continues at its
+parent's continuation, which destroys the outer object before returning it.
 `SharedSEHCallbackTailsKeepEachInvocationStack` checks distinct EH3/EH4 filter
 and finally entries sharing an epilogue, with reversed discovery order. Each
 invocation owns its initialized spills and restored EBP/ESP. Uninitialized
