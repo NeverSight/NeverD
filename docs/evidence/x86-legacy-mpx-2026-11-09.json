@@ -4891,5 +4891,252 @@
       "original_manifest_files_reverified": 3201
     },
     "count_definition": "These 165 cases per SDK repeat the already counted source identities after integration; do not add them to the initial 955 selected identities per SDK."
+  },
+  "publish_validation": {
+    "source_head": "35d4988e8a403d71a52d4767e1e20b6188154e34",
+    "integrated_remote": "a2d4b2979eac337b2cf9872227c0fc4cbf633ad8",
+    "reason": "The final captured dev merge added x86 SEH C-output support; rebuilt and reran the complete legacy source/C API chain on both SDKs.",
+    "unchanged_execution_source": {
+      "baseline": "8570d77412118409abecf294c3d3882525e0333c",
+      "command": [
+        "git",
+        "diff",
+        "--exit-code",
+        "8570d77412118409abecf294c3d3882525e0333c",
+        "35d4988e8a403d71a52d4767e1e20b6188154e34",
+        "--",
+        "include/neverd/translate",
+        "include/neverd/ir/X86",
+        "include/neverd/lift/X86",
+        "lib/translate",
+        "lib/ir/low/X86",
+        "lib/lift/X86",
+        "lib/pipeline/X86LegacySourceExport.cpp",
+        "include/neverd/pipeline/X86LegacySourceExport.h",
+        "unittests/translate/x86",
+        "unittests/lift/x86",
+        "CMakeLists.txt",
+        "cmake",
+        "scripts/build.py",
+        "third_party"
+      ],
+      "exit_code": 0
+    },
+    "builds": {
+      "native": {
+        "source_head": "35d4988e8a403d71a52d4767e1e20b6188154e34",
+        "source_status": "",
+        "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "command": [
+          "python3",
+          "scripts/build.py",
+          "build-x86-native",
+          "--target",
+          "NeverDX86LegacySourceTests",
+          "--parallel",
+          "4"
+        ],
+        "exit_code": 0,
+        "seconds": 62.29680027498398,
+        "outputs": {
+          "NeverDX86LegacySourceTests": "589b42c5afc283174aebfd38abcb2ee0891984af9cfde8c31b97a320812778d7"
+        }
+      },
+      "r6": {
+        "source_head": "35d4988e8a403d71a52d4767e1e20b6188154e34",
+        "source_status": "",
+        "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "command": [
+          "python3",
+          "scripts/build.py",
+          "build-x86",
+          "--target",
+          "NeverDX86LegacySourceTests",
+          "--parallel",
+          "4"
+        ],
+        "exit_code": 0,
+        "seconds": 64.06452597200405,
+        "outputs": {
+          "NeverDX86LegacySourceTests": "5841c0e1228602aed514d033487eb159c7dbc6fb1726ec75c29bb31ec28d9395"
+        }
+      }
+    },
+    "tests": {
+      "native": {
+        "source_head": "35d4988e8a403d71a52d4767e1e20b6188154e34",
+        "binary": "NeverDX86LegacySourceTests",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-branch-debug-20261106/private_tmp.py",
+          "/mnt/data/neverd-legacy-mpx-20261109/publish-source-native/tmp",
+          "taskset",
+          "-c",
+          "4",
+          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86LegacySourceTests",
+          "--gtest_filter=*",
+          "--gtest_output=xml:/mnt/data/neverd-legacy-mpx-20261109/publish-source-native/result.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/neverd",
+          "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "NEVERD_TEST_NEVERC_LLC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-mpx-20261109/publish-source-native/exports"
+        },
+        "seconds": 8.552742023020983,
+        "exit_code": 0,
+        "binary_sha256": "589b42c5afc283174aebfd38abcb2ee0891984af9cfde8c31b97a320812778d7",
+        "cli_sha256": "a172d8ec65618244da897e5e3bee04d5f282e3027803a632850bbcf193f97fe9",
+        "shared_library": {
+          "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/libneverd.so",
+          "sha256": "7bb21748aafb372114c8570229c10ebc856f04030f8fbc72c9125d57c53c2bcf"
+        },
+        "backend_sha256": "e9b079493a2363e35288ca89ea7b8fe15d246b342c0ee66c6629c7df3c3ccefe",
+        "log_sha256": "eec14a28e2412612a8c53403c8c00efe3afde69fb3cd8a9c77504bfe4756cb4e",
+        "tests": {
+          "tests": "165",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "8.269",
+          "timestamp": "2026-11-09T05:31:44.454",
+          "name": "AllTests"
+        },
+        "report_sha256": "6fea6e057c6676d16d403dc932266b45f9cc0d83b11aaf29969c3644d2a36d81",
+        "skipped": []
+      },
+      "r6": {
+        "source_head": "35d4988e8a403d71a52d4767e1e20b6188154e34",
+        "binary": "NeverDX86LegacySourceTests",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-branch-debug-20261106/private_tmp.py",
+          "/mnt/data/neverd-legacy-mpx-20261109/publish-source-r6/tmp",
+          "taskset",
+          "-c",
+          "12",
+          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86LegacySourceTests",
+          "--gtest_filter=*",
+          "--gtest_output=xml:/mnt/data/neverd-legacy-mpx-20261109/publish-source-r6/result.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/neverd",
+          "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "NEVERD_TEST_NEVERC_LLC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-mpx-20261109/publish-source-r6/exports"
+        },
+        "seconds": 14.016319519956596,
+        "exit_code": 0,
+        "binary_sha256": "5841c0e1228602aed514d033487eb159c7dbc6fb1726ec75c29bb31ec28d9395",
+        "cli_sha256": "5dd91936b4d6b8721620cf377f22e478a7388bea678b56fbef4bbf2c2b9ad5f8",
+        "shared_library": {
+          "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/libneverd.so",
+          "sha256": "22c9e399c6864588ca1eca7f891eafbf6d8fa840fad1ab3a8beacb9da1d4af62"
+        },
+        "backend_sha256": "e9b079493a2363e35288ca89ea7b8fe15d246b342c0ee66c6629c7df3c3ccefe",
+        "log_sha256": "160b116881d5bb89fc168afd1c45efe2e416bdb30ac589f5b84992f23c5014db",
+        "tests": {
+          "tests": "165",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "13.724",
+          "timestamp": "2026-11-09T05:31:44.451",
+          "name": "AllTests"
+        },
+        "report_sha256": "50dc849dcb5f950a7d8eae980386c5bcba2aaa9d8dff314c7113e98d96a1c9b2",
+        "skipped": []
+      }
+    },
+    "unchanged_instruction_binaries": {
+      "native": {
+        "NeverDX86MpxContextTests": "6768f5ac0f0a0917afc3f6464517facbe38b3e5540dd7e6bd97496d69fed81bc",
+        "NeverDX86MpxEncodingTests": "c6f0f78bb32f911b4e94a096061021eff52d18e8a30733b44282b5073336bcb8",
+        "NeverDX86PagingTests": "fdf0576e4a597214bdb03338553109bbbd29f39cc1a89891919f4e5687ff241f"
+      },
+      "r6": {
+        "NeverDX86MpxContextTests": "8e687111ca1ffc529e319b835061150b8ada3baf4f71110cc361a4bfe0c6f8ff",
+        "NeverDX86MpxEncodingTests": "7f11d39947c80368b8feced35803e11199af7aea1bac3747bd8831f1b340e866",
+        "NeverDX86PagingTests": "147ce7f5858a31b18aaa2b1b2a496196e8469f1684709017412113008e6ebc14"
+      }
+    },
+    "source_exports": {
+      "native": {
+        "compiled_dispatchers": 256,
+        "all_sources_wrappers_and_manifests_identical_to_initial": true,
+        "bindings_sha256": "6fa54d64a4413c3fc302c0ee43f22536db5f8435339a1a100895355a63c30883",
+        "i386_routes": {
+          "i386-route-0.o": {
+            "object_sha256": "c2db14f1dc1921dd0d822df33e073649e9f40eeba73dc0d525ab79c23ffccfc2",
+            "source_sha256": "438dd7463600cf861f06a47402c2f0e431954bdf57781bdd51c722ed73b271be"
+          },
+          "i386-route-1.o": {
+            "object_sha256": "4855beb1afd78296991f2a5e6be81e2af1037e89e0738cd5050d5944c0668f00",
+            "source_sha256": "438dd7463600cf861f06a47402c2f0e431954bdf57781bdd51c722ed73b271be"
+          },
+          "i386-route-2.o": {
+            "object_sha256": "281ef9480cdf999ae9e822799ee208060f76e3c3652eb5ce62c681250857e26b",
+            "source_sha256": "438dd7463600cf861f06a47402c2f0e431954bdf57781bdd51c722ed73b271be"
+          },
+          "i386-route-3.o": {
+            "object_sha256": "b94a536981d3df2f89df0cc5efe53d118c972fb7445a16cb55ebac86d3be7684",
+            "source_sha256": "438dd7463600cf861f06a47402c2f0e431954bdf57781bdd51c722ed73b271be"
+          }
+        }
+      },
+      "r6": {
+        "compiled_dispatchers": 256,
+        "all_sources_wrappers_and_manifests_identical_to_initial": true,
+        "bindings_sha256": "6fa54d64a4413c3fc302c0ee43f22536db5f8435339a1a100895355a63c30883",
+        "i386_routes": {
+          "i386-route-0.o": {
+            "object_sha256": "c2db14f1dc1921dd0d822df33e073649e9f40eeba73dc0d525ab79c23ffccfc2",
+            "source_sha256": "438dd7463600cf861f06a47402c2f0e431954bdf57781bdd51c722ed73b271be"
+          },
+          "i386-route-1.o": {
+            "object_sha256": "4855beb1afd78296991f2a5e6be81e2af1037e89e0738cd5050d5944c0668f00",
+            "source_sha256": "438dd7463600cf861f06a47402c2f0e431954bdf57781bdd51c722ed73b271be"
+          },
+          "i386-route-2.o": {
+            "object_sha256": "281ef9480cdf999ae9e822799ee208060f76e3c3652eb5ce62c681250857e26b",
+            "source_sha256": "438dd7463600cf861f06a47402c2f0e431954bdf57781bdd51c722ed73b271be"
+          },
+          "i386-route-3.o": {
+            "object_sha256": "b94a536981d3df2f89df0cc5efe53d118c972fb7445a16cb55ebac86d3be7684",
+            "source_sha256": "438dd7463600cf861f06a47402c2f0e431954bdf57781bdd51c722ed73b271be"
+          }
+        }
+      }
+    },
+    "archives": {
+      "native": {
+        "files": 260,
+        "archive_sha256": "39b4762a8dbb028472a51a99ded611c3ceb391694227458f4ce4237278dfc3c3",
+        "index_sha256": "d0f376543944690f276e829c044b2aaf3211603448b3d225b4e53f410883ee12",
+        "decompressed_verified": true
+      },
+      "r6": {
+        "files": 260,
+        "archive_sha256": "868cf759e5f5f784d994ce1c8a3238b52d0faa9597b67909569a0d345971d9e5",
+        "index_sha256": "d88dd08f76f7b305a18138c6acb9a9d87169fad09c50b3c60b697bcd39e54917",
+        "decompressed_verified": true
+      }
+    },
+    "manifest": {
+      "files": 1568,
+      "sha256": "f07143079b2bf716f67fbaeca1cffb409a50256e2b514b4629d6ad90fc6d978d",
+      "original_manifest_files_reverified": 3201
+    },
+    "count_definition": "These 165 cases per SDK repeat the already counted source identities after integration; do not add them to the initial 955 selected identities per SDK."
   }
 }

@@ -4915,6 +4915,9 @@ were rebuilt at `f3a03c1f1e` and all 165 source cases per SDK passed again. The
 evidence additionally binds the loaded `libneverd.so` hashes. All 256 exported
 dispatchers per SDK remained identical, and the three original instruction-test
 binaries and their execution sources were unchanged.
+The final captured x86 SEH merge was rebuilt at `35d4988e8a`; both complete
+source matrices passed again with identical exported inputs and explicit shared
+library hashes. Repeated integration runs do not inflate the selected-test count.
 
 The profile does not qualify physical MPX, code16 MPX operands, 16-bit address
 forms, non-flat-DS bounds tables, transactional aborts, MMIO, shared-memory
