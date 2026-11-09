@@ -15,6 +15,7 @@
 #include "neverd/backend/c/CSourceMap.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
+#include "neverd/backend/c/render/HighC/HighCIntrinsicRender.h"
 #include "neverd/backend/llvm/LLVMSourceBody.h"
 #include "neverd/backend/llvm/LLVMSourceSEHFilter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
@@ -6946,6 +6947,34 @@ TEST(COFFExceptionIR, SourceX86SharedTailRefusesUnprovedEdgesWithoutMutation) {
       EXPECT_FALSE(Block.getName().contains(".seh.level."));
     }
   }
+}
+
+TEST(COFFExceptionIR, X87PrecisionHelpersAllowI386MinGWPadding) {
+  if (!hasHostFixtureCompiler())
+    GTEST_SKIP() << "a fixture C compiler is required";
+  std::string Source;
+  llvm::raw_string_ostream Output(Source);
+  writeX87CHelpers(Output, true,
+                   {X87CHelper::Extend32, X87CHelper::Extend64,
+                    X87CHelper::Narrow32, X87CHelper::Narrow64});
+  Output << R"(
+float narrow(double value) {
+  return neverd_x87_narrow32(neverd_x87_extend64(value));
+}
+double widen(float value) {
+  return neverd_x87_narrow64(neverd_x87_extend32(value));
+}
+)";
+  // This ABI gives long double and _BitInt(80) different padding. These
+  // conversions use the x87 value directly and never bit-cast its storage.
+  checkStandaloneSEHSource(Source, true, "--target=i686-w64-mingw32");
+  // MSVC's 64-bit long double still cannot carry an x87 extended value.
+  const auto Unsupported = runCCompiler(
+      Source, {"--target=i686-pc-windows-msvc", "-std=c11", "-fsyntax-only"});
+  EXPECT_NE(Unsupported.ExitCode, 0);
+  EXPECT_NE(Unsupported.Error.find("x87 values need the 80-bit extended"),
+            std::string::npos)
+      << Unsupported.Error;
 }
 
 TEST(COFFExceptionIR, LLVMCCRTIntegerArgumentsKeepTheRuntimeDeclaration) {

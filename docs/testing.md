@@ -21050,6 +21050,9 @@ survive source fallback, and the strict exception contract still validates.
 Runtime-call fixtures keep plain `int` parameters from the CRT prototype even
 when debug information names an enum, while ordinary user calls retain enum
 constants. This prevents optimized CRT calls from redeclaring header-owned enums.
+The x87 precision-helper fixture also compiles for i386 MinGW at O0/O2,
+where long double and `_BitInt(80)` have different padding; the MSVC target
+still rejects a long double that lacks x87 extended precision.
 Filter fixtures retain all three SEH dispositions, capture incoming arguments
 through dominating storage, and retain an i32 filter result in 32-bit, 64-bit
 and void parents. Ambiguous scopes refuse outlining and discard temporary

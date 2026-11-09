@@ -11737,9 +11737,12 @@ Actual x87 FLD/FST precision conversions remain numerical operations.
 HighIR cannot cancel its numerical round trip, and LLVM uses constrained
 extension/truncation with dynamic rounding. Both C routes use the same native
 FLD/FSTP helpers, so C optimization cannot erase signaling-NaN quieting or
-replace x87 store rounding with an ordinary cast. This covers the observable
-converted value; full x87 exception, stack-tag and status state still belongs
-to the existing context and explicit-state paths.
+replace x87 store rounding with an ordinary cast. These helpers require an
+x87 extended `long double`, but scalar conversions do not require its ABI
+padding to match `_BitInt(80)`. Actual `__builtin_bit_cast` expressions retain
+the compiler's storage-size check. This covers the observable converted value;
+full x87 exception, stack-tag and status state still belongs to the existing
+context and explicit-state paths.
 
 `MedTypePass` distinguishes a POP-shaped integer return from an unchanged
 entry-register save. A known reaching stack store of a computed value,
