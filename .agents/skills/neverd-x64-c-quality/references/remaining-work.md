@@ -1181,8 +1181,11 @@ exit words, proves the written ABI-preserved GPRs unchanged, and emits every
 query once with all outputs sharing that query. The original CALL-slot guard
 runs first; both C routes use the same projected SSA. Cached order, repeated
 calls, high-byte reads and independent native-query oracles cover x64 inputs
-across COFF/ELF/Mach-O. Runtime entry dependencies, memory/stack-using leaves,
-other hardware effects and general VM state still require a real call-state
+across COFF/ELF/Mach-O. Query inputs now bind to the actual scalar argument bytes
+published at each call. Byte/high-byte selectors and different arguments at
+repeated calls retain their own values; narrow, absent or vector arguments do
+not supply missing integer bytes. Other runtime entry dependencies, memory/stack
+operations, other hardware effects and general VM state still require a call-state
 contract. Native lifting keeps its original calls. An explicit unsupported
 expression does not certify those dynamic values or executable reconstruction.
 Complete header and explicit local FP/HFA declarations share the same checked
