@@ -138,6 +138,10 @@ def probe(output):
                        "stdout": run.stdout, "stderr": run.stderr}
                 report["controls"].append(row)
                 if run.returncode < 0:
+                    command(products, output,
+                            label + POLICY["dyld_diagnostic_suffix"], [str(binary)],
+                            POLICY["tool_timeout"],
+                            dict(os.environ, **POLICY["dyld_diagnostic_environment"]))
                     command(products, output, label + POLICY["debugger_suffix"],
                             [*POLICY["debugger_command"], str(binary)],
                             POLICY["tool_timeout"])

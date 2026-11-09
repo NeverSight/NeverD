@@ -166,6 +166,10 @@
     "-fixup_chain_details"
   ],
   "fixup_suffix": "-fixups",
+  "dyld_diagnostic_environment": {
+    "DYLD_PAGEIN_LINKING": "0"
+  },
+  "dyld_diagnostic_suffix": "-userspace-dyld",
   "header_format": "<III",
   "macho_magic": 4277009103,
   "cpu_type": 16777228,
