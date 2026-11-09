@@ -1386,4 +1386,71 @@ TEST(MachOArm64eInstallation, RetainsOpaqueTerminalSignatureForPublication) {
   }
 }
 
+TEST(MachOArm64eInstallation, InstallsOrdinaryPointersAlongsideSignedChains) {
+  for (bool Threaded : {false, true}) {
+    for (const auto &Chain : Chains) {
+      const auto Format = macho_loader::arm64e::chainFormat(Chain.Format);
+      if (Threaded && Chain.Format != DYLD_CHAINED_PTR_ARM64E)
+        continue;
+      for (bool Bind : {false, true}) {
+        for (int64_t Addend : {kImportAddend, int64_t(kNewImportAddend)}) {
+          auto Bytes = Threaded ? threadedImage() : multiStartImage(Chain);
+          const auto Before = Bytes;
+          auto Fixup = installedFixup(Bind);
+          Fixup.Authenticated = false;
+          Fixup.Recipe.Diversity = 0;
+          if (Bind)
+            Fixup.Recipe.Addend = Addend;
+          auto Error = installMachOAuthenticatedFixups(Bytes, {Fixup});
+          if (Bind && Format->Segmented) {
+            EXPECT_TRUE(bool(Error));
+            llvm::consumeError(std::move(Error));
+            EXPECT_EQ(Bytes, Before);
+            continue;
+          }
+          ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+          const uint64_t Target = Format->Offset || Format->Segmented
+                                      ? kInstalledTarget
+                                      : kBase + kInstalledTarget;
+          EXPECT_EQ(readLE<uint64_t>(Bytes.data() + kInstalledSlot),
+                    Bind ? kBindMask | 1 : Target);
+          Error = verifyMachOAuthenticatedFixups(Bytes, {Fixup});
+          ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+          auto Parsed =
+              Loader::create(BinaryFormat::MachO)
+                  ->loadBuffer(llvm::MemoryBufferRef(
+                      llvm::toStringRef(llvm::ArrayRef(Bytes)), kNewSymbol));
+          ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+          EXPECT_FALSE(
+              Parsed->MachOAuthenticatedPointers.contains(Fixup.Address));
+          if (Bind) {
+            auto Slot = Parsed->DyldBindSlots.find(Fixup.Address);
+            ASSERT_NE(Slot, Parsed->DyldBindSlots.end());
+            EXPECT_EQ(Slot->second.Name, kNewSymbol);
+            EXPECT_EQ(Slot->second.Addend, Addend);
+            EXPECT_EQ(Slot->second.Module, kLibrary);
+          } else {
+            auto Pointer = Parsed->readVA(Fixup.Address, kSlotBytes);
+            ASSERT_NE(Pointer, nullptr);
+            EXPECT_EQ(readLE<uint64_t>(Pointer), Fixup.Recipe.Target);
+          }
+          // Ordinary slots cannot satisfy a signing request or silently carry
+          // authentication discriminators left over from a different recipe.
+          Fixup.Authenticated = true;
+          Error = verifyMachOAuthenticatedFixups(Bytes, {Fixup});
+          EXPECT_TRUE(bool(Error));
+          llvm::consumeError(std::move(Error));
+          Fixup.Authenticated = false;
+          Fixup.Recipe.Diversity = kInstalledDiversity;
+          auto Corrupt = Before;
+          Error = installMachOAuthenticatedFixups(Corrupt, {Fixup});
+          EXPECT_TRUE(bool(Error));
+          llvm::consumeError(std::move(Error));
+          EXPECT_EQ(Corrupt, Before);
+        }
+      }
+    }
+  }
+}
+
 } // namespace

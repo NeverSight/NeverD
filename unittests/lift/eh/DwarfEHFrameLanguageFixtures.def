@@ -1,0 +1,31 @@
+//===- DwarfEHFrameLanguageFixtures.def - Language fields ----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef DWARF_LANGUAGE_BYTES
+#define DWARF_LANGUAGE_BYTES(Name, ...)
+#endif
+#ifndef DWARF_LANGUAGE_VALUE
+#define DWARF_LANGUAGE_VALUE(Type, Name, Value)
+#endif
+
+// DWARF32 zPLRB, indirect pcrel/sdata4 personality, pcrel/absptr LSDA and PC.
+DWARF_LANGUAGE_BYTES(kLanguageFrame, 24, 0, 0, 0, 0, 0, 0, 0, 1, 'z', 'P', 'L',
+                     'R', 'B', 0, 1, 0x78, 30, 7, 0x9b, 0xec, 2, 0, 0, 0x10,
+                     0x10, 0, 0, 32, 0, 0, 0, 32, 0, 0, 0, 0xdc, 0, 0, 0, 0, 0,
+                     0, 0, 0x20, 0, 0, 0, 0, 0, 0, 0, 8, 0xcb, 1, 0, 0, 0, 0, 0,
+                     0, 0x2d, 0, 0)
+DWARF_LANGUAGE_VALUE(uint64_t, kLanguageBase, 0x1000)
+DWARF_LANGUAGE_VALUE(uint64_t, kLanguageCode, 0x1100)
+DWARF_LANGUAGE_VALUE(uint64_t, kLanguageRange, 0x20)
+DWARF_LANGUAGE_VALUE(uint64_t, kLanguageLSDA, 0x1200)
+DWARF_LANGUAGE_VALUE(uint64_t, kLanguagePersonality, 0x1300)
+DWARF_LANGUAGE_VALUE(size_t, kPersonalityOffset, 20)
+DWARF_LANGUAGE_VALUE(size_t, kLSDAOffset, 53)
+DWARF_LANGUAGE_VALUE(uint8_t, kPersonalityEncoding, 0x9b)
+DWARF_LANGUAGE_VALUE(uint8_t, kLSDAEncoding, 0x10)
+
+#undef DWARF_LANGUAGE_BYTES
+#undef DWARF_LANGUAGE_VALUE

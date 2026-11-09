@@ -27,6 +27,8 @@ class Module;
 
 namespace neverd {
 
+struct NativeMachOCompactRange;
+
 struct CompiledImage;
 struct CompiledSection;
 struct MachOCompactUnwindRecords;
@@ -159,9 +161,11 @@ llvm::Error installMachOEHFrame(std::vector<uint8_t> &Binary,
 
 /// Register native producer bytes using decoded FDE ranges. This deliberately
 /// produces no rewrite-backend MC receipt or synthetic function identities.
-llvm::Error installNativeMachOEHFrame(std::vector<uint8_t> &Binary,
-                                      const MachOEHFrameRegion &Region,
-                                      const CompiledSection &Generated);
+llvm::Error
+installNativeMachOEHFrame(std::vector<uint8_t> &Binary,
+                          const MachOEHFrameRegion &Region,
+                          const CompiledSection &Generated,
+                          llvm::ArrayRef<NativeMachOCompactRange> Ranges = {});
 
 } // namespace neverd
 

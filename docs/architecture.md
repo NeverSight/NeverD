@@ -1425,7 +1425,7 @@ create dependency load commands or infer a provider.
 providers through the same library-command owner used by ordinary source
 dependencies. It validates request identity and header capacity, rejects weak
 library contracts for strong requests, and requires every declaration to serve
-an undefined authenticated reference. Library admission and fixup installation
+an undefined loader pointer reference. Library admission and fixup installation
 commit together; a failed or unused declaration leaves the input unchanged.
 
 `appendMachOObjectImage` connects the existing native Mach-O parser, placement,
@@ -1435,10 +1435,40 @@ analysis loader and installer share authenticated object-word decoding, retainin
 the signed 32-bit addend and both key bits. Native symbol names remain canonical
 inside the compiled image and acquire their Mach-O prefix only at the dyld
 provider boundary. This staging API neither redirects original entries nor
-signs the output. Native object LSDA/personality installation and ordinary
-absolute-pointer rebases remain outside its supported contract.
-Compact unwind reservation can reuse existing zero-filled `__TEXT` tail space
-without moving original code/data VAs. A shared payload inventory protects
+signs the output. Native eight-byte `ARM64_RELOC_UNSIGNED` data slots now
+retain ordinary rebase/bind receipts alongside authenticated ones; section
+relocations retain a complete local target, while external relocations preserve
+the signed addend and exact provider. Writable storage is required even when
+the final mapping is RELRO. An absolute constant (`N_ABS`) is not inferred to
+be a slid address.
+
+Native compact language records retain LSDA addresses and personality slots.
+The arm64e personality slot uses IA/address diversity with zero discriminator;
+RTTI slots remain ordinary pointers. Existing unambiguous personality slots
+can be reused, and explicit providers can allocate new slots. Native
+`ARM64_RELOC_POINTER_TO_GOT` uses the linker's addend-free PC-relative contract;
+GOT page/pageoff references use the same allocated slots. The shared chain
+installer handles both pointer kinds in modern and threaded images. Language
+name resolution consumes canonical ordinary bindings and authenticated recipes
+even when a new slot has no indirect-symbol-table entry; it does not reclassify
+an authenticated slot as ordinary import storage.
+
+For native DWARF, the framing decoder retains CIE personality and FDE LSDA
+field offsets, widths and encodings without dereferencing indirect pointers.
+Object-local section differences are resolved in a temporary logical address
+view before range decoding; raw producer bytes remain available for final
+placement. The native installer accepts indirect pcrel/sdata4 personality and
+fixed-width direct pcrel LSDA fields, cross-checks duplicated compact/DWARF
+language pointers, and reloads installed language records before committing.
+Private weak code helpers remain object-local; exported weak definitions and
+private weak data still require a coalescing contract. Other language pointer
+encodings, native TLS/initializers and public whole-image arm64e publication
+remain outside this staging contract. These file checks do not qualify real
+signed exception execution.
+Compact unwind and DWARF reservation reuse zero-filled `__TEXT` gaps outside
+sections and load-command payloads without moving original code/data VAs.
+DWARF capacity is sized to the actual records, and PC-relative fields are
+relocated for the selected storage address before installation. A shared payload inventory protects
 declared load-command data, including zero-filled `LC_NOTE` ranges, from reuse.
 Inline `LC_ID_DYLIB` metadata does not block otherwise available header space.
 

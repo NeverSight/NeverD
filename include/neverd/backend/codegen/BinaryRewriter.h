@@ -171,6 +171,10 @@ struct CompiledFixupReference {
   /// Requires format-owned installation after final placement. Raw image bytes
   /// contain zero at this slot until the dyld recipe is installed.
   std::optional<CompiledPointerAuthentication> PointerAuth;
+  /// Native absolute pointer requiring a loader rebase/bind without signing.
+  /// Mutually exclusive with PointerAuth. An empty Symbol denotes a section
+  /// relocation whose complete local target is retained in ResolvedValue.
+  bool OrdinaryPointer = false;
 };
 
 /// One native section produced for a CompiledImage.  Allocated in-image

@@ -765,6 +765,8 @@ applyMachOCompactUnwindInstall(std::vector<uint8_t> &Binary,
 struct NativeMachOCompactRange {
   uint64_t BeginVA = 0, EndVA = 0;
   uint32_t Encoding = 0;
+  std::optional<uint64_t> PersonalitySlotVA;
+  std::optional<uint64_t> LSDAVA;
 };
 llvm::Error
 installNativeMachOCompactUnwind(std::vector<uint8_t> &Binary, Arch Architecture,

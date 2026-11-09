@@ -19,6 +19,7 @@
 #include "neverd/backend/codegen/PatchObject.h"
 #include "neverd/backend/codegen/SourcePatchDependencies.h"
 #include "neverd/loader/DWARF/AArch64ReturnAddressState.h"
+#include "neverd/loader/LanguageRuntime.h"
 #include "neverd/loader/Loader.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/object/MachOLayout.h"
@@ -95,7 +96,8 @@ void checkAppleChainedRecipes(llvm::StringRef Info,
       llvm::SmallVector<llvm::StringRef> Fields;
       Line.trim().split(Fields, ' ', -1, false);
       uint64_t Address;
-      if (Fields.size() != kDetailFieldCount ||
+      if (Fields.size() != (Fixup.Authenticated ? kDetailFieldCount
+                                                : kPlainDetailFieldCount) ||
           !Number(Fields[kDetailAddress], kColon, Address) ||
           Address != FileOffset)
         continue;
@@ -103,24 +105,30 @@ void checkAppleChainedRecipes(llvm::StringRef Info,
       uint64_t Raw, Diversity, AddressDiversity, Target;
       ASSERT_FALSE(Fields[kDetailRaw].getAsInteger(0, Raw));
       EXPECT_EQ(Raw, readLE<uint64_t>(Binary.data() + FileOffset));
-      ASSERT_TRUE(Number(Fields[kDetailDiversity], kComma, Diversity));
-      ASSERT_TRUE(
-          Number(Fields[kDetailAddressDiversity], kComma, AddressDiversity));
-      ASSERT_TRUE(Number(Fields[kDetailTarget], kClosingParenthesis, Target));
-      ASSERT_TRUE(Fields[kDetailKey].consume_back(kComma));
+      const auto TargetField =
+          Fixup.Authenticated ? kDetailTarget : kPlainDetailTarget;
+      ASSERT_TRUE(Number(Fields[TargetField], kClosingParenthesis, Target));
       ASSERT_TRUE(Fields[kDetailKind].consume_back(kColon));
       const auto &Recipe = Fixup.Recipe;
-      EXPECT_EQ(Diversity, Recipe.Diversity);
-      EXPECT_EQ(AddressDiversity, unsigned(Recipe.AddressDiversity));
-      EXPECT_EQ(Fields[kDetailKey], kKeyNames[Recipe.Key]);
+      if (Fixup.Authenticated) {
+        ASSERT_TRUE(Number(Fields[kDetailDiversity], kComma, Diversity));
+        ASSERT_TRUE(
+            Number(Fields[kDetailAddressDiversity], kComma, AddressDiversity));
+        ASSERT_TRUE(Fields[kDetailKey].consume_back(kComma));
+        EXPECT_EQ(Diversity, Recipe.Diversity);
+        EXPECT_EQ(AddressDiversity, unsigned(Recipe.AddressDiversity));
+        EXPECT_EQ(Fields[kDetailKey], kKeyNames[Recipe.Key]);
+      }
       EXPECT_EQ(Fields[kDetailKind],
-                Recipe.Symbol.empty() ? kAuthRebase : kAuthBind);
+                Recipe.Symbol.empty()
+                    ? (Fixup.Authenticated ? kAuthRebase : kPlainRebase)
+                    : (Fixup.Authenticated ? kAuthBind : kPlainBind));
       if (Recipe.Symbol.empty()) {
-        EXPECT_EQ(Fields[kDetailTargetLabel], kTargetLabel);
+        EXPECT_EQ(Fields[TargetField - 1], kTargetLabel);
         EXPECT_EQ(Target, Recipe.Target - PreferredAddress);
         continue;
       }
-      EXPECT_EQ(Fields[kDetailTargetLabel], kImportLabel);
+      EXPECT_EQ(Fields[TargetField - 1], kImportLabel);
       unsigned Imports = 0;
       for (auto ImportLine : Lines) {
         llvm::SmallVector<llvm::StringRef> Import;
@@ -175,8 +183,15 @@ void checkPreservedSignedUnwind(const BinaryImage &Before,
   ASSERT_TRUE(CleanupFrame->HasLSDA);
   ASSERT_NE(CleanupFrame->NativeEncoding & macho_unwind::kPersonalityMask, 0u);
   ASSERT_GE(NewCompact.Entries.size(), OldCompact.Entries.size());
-  EXPECT_EQ(OldCompact.Personalities, NewCompact.Personalities);
-  EXPECT_EQ(OldCompact.PersonalitySlots, NewCompact.PersonalitySlots);
+  ASSERT_LE(OldCompact.Personalities.size(), NewCompact.Personalities.size());
+  ASSERT_LE(OldCompact.PersonalitySlots.size(),
+            NewCompact.PersonalitySlots.size());
+  EXPECT_TRUE(std::equal(OldCompact.Personalities.begin(),
+                         OldCompact.Personalities.end(),
+                         NewCompact.Personalities.begin()));
+  EXPECT_TRUE(std::equal(OldCompact.PersonalitySlots.begin(),
+                         OldCompact.PersonalitySlots.end(),
+                         NewCompact.PersonalitySlots.begin()));
   for (const auto &Old : OldCompact.Entries) {
     const auto Found =
         llvm::find_if(NewCompact.Entries, [&](const auto &Entry) {
@@ -469,7 +484,9 @@ class MachOArm64eNativeObjectInstallation
     : public ::testing::TestWithParam<std::tuple<const char *, bool>> {};
 
 void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
-                                   bool ExecuteNative) {
+                                   bool ExecuteNative,
+                                   bool DwarfLanguage = false,
+                                   bool FreshPersonality = false) {
 #ifndef __APPLE__
   GTEST_SKIP() << kMissingHost;
 #else
@@ -542,6 +559,8 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
     ASSERT_FALSE(Write(ProviderSource, kRuntimeProviderSource));
     ASSERT_FALSE(Write(RuntimeSource, kRuntimeHarness));
     Args.append(std::begin(kRuntimeCompileArgs), std::end(kRuntimeCompileArgs));
+    if (DwarfLanguage)
+      Args.push_back(kDwarfLanguageOption);
     Args.append({Optimization, kRuntimeControlOption, ObjectSource,
                  ProviderSource, RuntimeSource});
     Args.append(std::begin(kOutputArgs), std::end(kOutputArgs));
@@ -597,6 +616,8 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
   ASSERT_EQ(Run(kCompiler, Args), 0);
   Args.assign({kCompiler});
   Args.append(std::begin(kObjectCompileArgs), std::end(kObjectCompileArgs));
+  if (DwarfLanguage)
+    Args.push_back(kDwarfLanguageOption);
   Args.append({Optimization, ObjectSource});
   Args.append(std::begin(kOutputArgs), std::end(kOutputArgs));
   Args.push_back(ObjectPath);
@@ -623,10 +644,13 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
   ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
   auto Signature = macho_signature::inspect(Bytes);
   ASSERT_TRUE(bool(Signature)) << llvm::toString(Signature.takeError());
-  const SourcePatchDependency Dependencies[] = {
+  std::vector<SourcePatchDependency> Dependencies = {
       {kProviderLibrary, kProviderFunction,
        SourcePatchDependencyKind::Function},
       {kProviderLibrary, kProviderData, SourcePatchDependencyKind::Data}};
+  if (FreshPersonality)
+    Dependencies.push_back(
+        {kCxxLibrary, kCxxPersonality, SourcePatchDependencyKind::Function});
   if (!Threaded && llvm::StringRef(Optimization) == kO0) {
     uint64_t Tail = 0, TextEnd = 0;
     forEachMachOLoadCommand(
@@ -678,25 +702,57 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
                        Header.SizeOfCmds + sizeof(*Note));
     RejectReservation(std::move(Noted));
     std::optional<std::pair<uint64_t, uint64_t>> AuthField;
+    std::optional<uint64_t> PlainRelocation, ExceptionTable;
+    std::optional<uint64_t> PrivateWeakSymbol;
     auto ObjectBytes = llvm::arrayRefFromStringRef((*Object)->getBuffer());
     forEachMachOLoadCommand(
         ObjectBytes.data(), ObjectBytes.size(),
         [&](const uint8_t *C, uint32_t ID, uint32_t, bool) {
+          if (ID == llvm::MachO::LC_SYMTAB) {
+            const auto *Symbols =
+                reinterpret_cast<const llvm::MachO::symtab_command *>(C);
+            for (unsigned I = 0; I < Symbols->nsyms; ++I) {
+              const auto Offset =
+                  Symbols->symoff + I * sizeof(llvm::MachO::nlist_64);
+              const auto *Symbol =
+                  reinterpret_cast<const llvm::MachO::nlist_64 *>(
+                      ObjectBytes.data() + Offset);
+              if ((Symbol->n_desc & llvm::MachO::N_WEAK_DEF) &&
+                  (Symbol->n_type & llvm::MachO::N_PEXT))
+                PrivateWeakSymbol = Offset;
+            }
+          }
           if (ID != llvm::MachO::LC_SEGMENT_64)
             return;
           const auto *Segment =
               reinterpret_cast<const llvm::MachO::segment_command_64 *>(C);
           const auto *Sections =
               reinterpret_cast<const llvm::MachO::section_64 *>(Segment + 1);
-          for (unsigned I = 0; I < Segment->nsects; ++I)
+          for (unsigned I = 0; I < Segment->nsects; ++I) {
+            if (readMachOName(Sections[I].sectname) == kExceptionSection)
+              ExceptionTable = Sections[I].offset;
+            for (unsigned J = 0; J < Sections[I].nreloc; ++J) {
+              const uint64_t Offset =
+                  Sections[I].reloff +
+                  J * sizeof(llvm::MachO::any_relocation_info) +
+                  sizeof(uint32_t);
+              const auto Info = readLE<uint32_t>(ObjectBytes.data() + Offset);
+              if (readMachOName(Sections[I].segname) == kObjectDataSegment &&
+                  (Info >> kObjectRelocTypeShift) ==
+                      llvm::MachO::ARM64_RELOC_UNSIGNED)
+                PlainRelocation = Offset;
+            }
             if (readMachOName(Sections[I].segname) == kObjectConstSegment &&
                 Sections[I].nreloc)
               AuthField = {
                   Sections[I].offset +
                       readLE<uint32_t>(ObjectBytes.data() + Sections[I].reloff),
                   Sections[I].reloff};
+          }
         });
     ASSERT_TRUE(AuthField);
+    ASSERT_TRUE(PlainRelocation);
+    ASSERT_TRUE(ExceptionTable);
     const auto Check = [&](auto Change) {
       auto Corrupt = (*Object)->getBuffer().str();
       Change(reinterpret_cast<uint8_t *>(Corrupt.data()));
@@ -729,6 +785,19 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
       reinterpret_cast<llvm::MachO::mach_header_64 *>(Data)->cpusubtype ^=
           kObjectABIVersionBit;
     });
+    Check([&](uint8_t *Data) {
+      writeLE<uint32_t>(Data + *PlainRelocation,
+                        readLE<uint32_t>(Data + *PlainRelocation) |
+                            kObjectPCRelativeBit);
+    });
+    Check([&](uint8_t *Data) {
+      Data[*ExceptionTable] = kUnsupportedLSDAEncoding;
+    });
+    ASSERT_TRUE(PrivateWeakSymbol);
+    Check([&](uint8_t *Data) {
+      reinterpret_cast<llvm::MachO::nlist_64 *>(Data + *PrivateWeakSymbol)
+          ->n_type &= ~llvm::MachO::N_PEXT;
+    });
   }
   auto Image =
       appendMachOObjectImage(Bytes, (*Object)->getBuffer(), Dependencies);
@@ -737,7 +806,11 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
   EXPECT_EQ(Image->InputKind, RewriteInputKind::ReplacementObject);
   auto Recipes = collectMachOAuthenticatedFixups(Bytes, *Image, Dependencies);
   ASSERT_TRUE(bool(Recipes)) << llvm::toString(Recipes.takeError());
-  ASSERT_EQ(Recipes->size(), kKeyCount);
+  EXPECT_EQ(
+      llvm::count_if(*Recipes, [](const auto &R) { return R.Authenticated; }),
+      kKeyCount + unsigned(FreshPersonality));
+  EXPECT_EQ(Recipes->size(),
+            kKeyCount + kOrdinaryPointerCount + unsigned(FreshPersonality));
   const char *Slots[] = {kObjectLocalCode, kObjectExternalCode,
                          kObjectLocalData, kObjectExternalData};
   for (unsigned Key = 0; Key != kKeyCount; ++Key) {
@@ -759,6 +832,20 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
       EXPECT_EQ(Fixup->Recipe.Symbol,
                 Key == 1 ? kProviderNativeFunction : kProviderNativeData);
       EXPECT_EQ(Fixup->Recipe.Addend, Key == 1 ? 0 : kObjectDataAddend);
+    }
+  }
+  for (const auto *Name : {kPlainLocal, kPlainExternal}) {
+    const auto Address = Image->SymbolAddrs.at(Name);
+    auto Fixup = llvm::find_if(
+        *Recipes, [&](const auto &R) { return R.Address == Address; });
+    ASSERT_NE(Fixup, Recipes->end());
+    EXPECT_FALSE(Fixup->Authenticated);
+    if (llvm::StringRef(Name) == kPlainLocal)
+      EXPECT_EQ(Fixup->Recipe.Target,
+                Image->SymbolAddrs.at(kObjectData) + kObjectDataAddend);
+    else {
+      EXPECT_EQ(Fixup->Recipe.Symbol, kProviderNativeData);
+      EXPECT_EQ(Fixup->Recipe.Addend, kObjectDataAddend);
     }
   }
   unsigned ReadOnly = 0, Mutable = 0;
@@ -829,6 +916,15 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
   auto Parsed = Loader->loadBuffer((*Input)->getMemBufferRef());
   ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
   checkPreservedSignedUnwind(*Before, *Parsed);
+  for (const auto &Recipe : *Recipes) {
+    if (Recipe.Recipe.Symbol.empty() || Recipe.Recipe.Addend)
+      continue;
+    EXPECT_EQ(resolveRoutineName(*Parsed, 0, Recipe.Address),
+              Recipe.Recipe.Symbol);
+    EXPECT_FALSE(Parsed->ImportPtrSlots.contains(Recipe.Address));
+    if (Recipe.Authenticated)
+      EXPECT_FALSE(Parsed->ImportStorageSlots.contains(Recipe.Address));
+  }
   for (const auto &Section : Image->Sections) {
     if (Section.Kind != llvm::mc_rewrite::RewriteSectionKind::Code)
       continue;
@@ -848,6 +944,55 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
     return Entry.CodeRange.Begin == Image->SymbolAddrs.at(kObjectDispatch) &&
            Entry.SemanticStatus == CompactUnwindSemanticStatus::Complete;
   }));
+  std::string DwarfInfo;
+  if (DwarfLanguage) {
+    const auto DwarfInfoPath = Path(kDwarfInfoFile);
+    Args.assign({kXcrun});
+    Args.append(std::begin(kDwarfInfoArgs), std::end(kDwarfInfoArgs));
+    Args.push_back(InstalledPath);
+    ASSERT_EQ(Run(kXcrun, Args, DwarfInfoPath), 0);
+    auto Dump = llvm::MemoryBuffer::getFile(DwarfInfoPath);
+    ASSERT_TRUE(bool(Dump));
+    DwarfInfo = (*Dump)->getBuffer().str();
+    EXPECT_TRUE(
+        llvm::StringRef(DwarfInfo).contains(kDwarfLanguageAugmentation));
+  }
+  for (const auto *Name : {kObjectCatch, kObjectCleanup}) {
+    const auto *Function =
+        Parsed->ExceptionMetadata.findFunction(Image->SymbolAddrs.at(Name));
+    ASSERT_NE(Function, nullptr);
+    EXPECT_EQ(Function->ParseStatus, ExceptionParseStatus::Complete);
+    EXPECT_EQ(Function->Personality, ExceptionPersonality::GxxPersonalityV0);
+    ASSERT_TRUE(Function->Itanium);
+    EXPECT_FALSE(Function->Itanium->CallSites.empty());
+    ASSERT_TRUE(Function->Compact);
+    EXPECT_TRUE(Function->Compact->HasLSDA);
+    EXPECT_EQ(Function->Dwarf.has_value(), DwarfLanguage);
+    if (Function->Dwarf) {
+      const auto *CIE =
+          Parsed->ExceptionMetadata.findCIE(Function->Dwarf->CIESectionOffset);
+      ASSERT_NE(CIE, nullptr);
+      EXPECT_TRUE(CIE->UsesArm64eReturnAddressABI);
+      EXPECT_NE(CIE->PersonalitySlotVA, 0u);
+      EXPECT_EQ(Function->Dwarf->LSDAVA, Function->HandlerDataVA);
+      const auto Address = [](uint64_t VA, unsigned Width) {
+        auto Text = llvm::utohexstr(VA, true);
+        return std::string(Width > Text.size() ? Width - Text.size() : 0, '0') +
+               Text;
+      };
+      EXPECT_TRUE(llvm::StringRef(DwarfInfo).contains(
+          kDwarfPCPrefix + Address(Function->CodeRange.Begin, kDwarfPCDigits) +
+          kDwarfRangeSeparator +
+          Address(Function->CodeRange.End, kDwarfPCDigits)));
+      EXPECT_TRUE(llvm::StringRef(DwarfInfo).contains(
+          kDwarfLSDAPrefix +
+          Address(Function->HandlerDataVA, kDwarfAddressDigits)));
+    }
+    if (llvm::StringRef(Name) == kObjectCatch)
+      EXPECT_TRUE(llvm::any_of(Function->Itanium->TypeTable, [](const auto &T) {
+        return T.TypeName == kTypeInfo;
+      }));
+  }
   if (ExecuteNative) {
     auto Anchor = llvm::find_if(Parsed->Symbols, [&](const auto &Symbol) {
       return Symbol.Name == kSlotSymbol;
@@ -858,7 +1003,10 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
         std::to_string(Image->SymbolAddrs.at(kObjectLocalData) - Anchor->Addr),
         std::to_string(Image->SymbolAddrs.at(kObjectExternalData) -
                        Anchor->Addr),
-        std::to_string(Image->SymbolAddrs.at(kObjectLocalCode) - Anchor->Addr)};
+        std::to_string(Image->SymbolAddrs.at(kObjectLocalCode) - Anchor->Addr),
+        std::to_string(Image->SymbolAddrs.at(kObjectCatch) - Anchor->Addr),
+        std::to_string(Image->SymbolAddrs.at(kObjectCleanup) - Anchor->Addr),
+        std::to_string(Image->SymbolAddrs.at(kObjectCleanups) - Anchor->Addr)};
     Args.assign({DriverPath, InstalledPath});
     Args.append(std::begin(Offsets), std::end(Offsets));
     ASSERT_EQ(Run(DriverPath, Args, RuntimeOutput), 0);
@@ -879,6 +1027,24 @@ TEST_P(MachOArm64eNativeObjectInstallation,
        AuthenticatedCallsAndSignedUnwindExecute) {
   const auto [Optimization, Threaded] = GetParam();
   checkNativeObjectInstallation(Optimization, Threaded, true);
+}
+
+TEST_P(MachOArm64eNativeObjectInstallation,
+       NativeDwarfLanguageAndOrdinaryPointers) {
+  const auto [Optimization, Threaded] = GetParam();
+  checkNativeObjectInstallation(Optimization, Threaded, false, true);
+}
+
+TEST_P(MachOArm64eNativeObjectInstallation,
+       NativeDwarfLanguageCallsAndCleanup) {
+  const auto [Optimization, Threaded] = GetParam();
+  checkNativeObjectInstallation(Optimization, Threaded, true, true);
+}
+
+TEST_P(MachOArm64eNativeObjectInstallation,
+       InstallsNewAuthenticatedPersonalitySlot) {
+  const auto [Optimization, Threaded] = GetParam();
+  checkNativeObjectInstallation(Optimization, Threaded, false, true, true);
 }
 
 INSTANTIATE_TEST_SUITE_P(AppleClang, MachOArm64eNativeObjectInstallation,

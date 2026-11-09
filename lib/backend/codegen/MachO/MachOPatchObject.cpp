@@ -18,8 +18,10 @@
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
 #include "neverd/object/MachOLayout.h"
+#include "neverd/support/DwarfEH.h"
 #include "neverd/support/TargetCodegenInfo.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/MathExtras.h"
@@ -33,6 +35,7 @@ namespace {
 using Kind = llvm::mc_rewrite::RewriteSectionKind;
 using namespace llvm::MachO;
 namespace arm64e = macho_loader::arm64e;
+#define MACHO_OBJECT_VALUE(Type, Name, Value) constexpr Type Name = Value;
 #define MACHO_OBJECT_TEXT(Name, Text) constexpr char Name[] = Text;
 #include "MachOPatchObject.def"
 llvm::Error fail(const llvm::Twine &Message) {
@@ -78,7 +81,116 @@ struct NativeMachO {
     uint64_t Slot, FrameOffset, FrameSize;
   };
   std::map<unsigned, Thunk> Thunks;
+  struct GOTSlot {
+    std::optional<size_t> Section;
+    uint64_t Address = 0;
+  };
+  std::map<std::pair<unsigned, bool>, GOTSlot> GOT;
 };
+
+bool isCompactPersonality(const NativeMachO &Object, const Relocation &R) {
+  const unsigned Ptr = Object.Image.PointerWidth;
+  return Object.CompactSection == R.Section &&
+         R.Offset % (Ptr * kCompactPointers + kCompactFixedBytes) ==
+             Ptr + kCompactFixedBytes;
+}
+
+// The arm64e unwind personality ABI uses an IA/address-diversified GOT slot;
+// LSDA type information uses an ordinary data pointer. Keep these identities
+// distinct even when a symbol appears in both roles.
+llvm::Error
+prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
+                 llvm::ArrayRef<SourcePatchDependency> Dependencies) {
+  std::set<std::string> Declared;
+  for (const auto &D : Dependencies)
+    Declared.insert(D.Symbol);
+  std::map<std::string, uint64_t> Personalities;
+  std::set<std::string> Conflicts;
+  for (const auto &[Address, P] : Original.MachOAuthenticatedPointers) {
+    if (P.Symbol.empty() || P.Addend || P.Key != kPersonalityKey ||
+        P.Diversity != kPersonalityDiversity ||
+        P.AddressDiversity != kPersonalityAddressDiversity)
+      continue;
+    const auto Name = canonical(P.Symbol);
+    auto [It, Added] = Personalities.emplace(Name, Address);
+    if (!Added) {
+      const auto &Previous = Original.MachOAuthenticatedPointers.at(It->second);
+      if (Previous.Module != P.Module ||
+          Previous.LibraryOrdinal != P.LibraryOrdinal ||
+          Previous.WeakImport != P.WeakImport)
+        Conflicts.insert(Name);
+    }
+  }
+  // A second slot with a different provider makes an undeclared symbol
+  // ambiguous even if only one slot has the unwind signing schema.
+  const auto CheckProvider = [&](const auto &Binding, llvm::StringRef Name) {
+    const auto Canonical = canonical(Name);
+    if (auto It = Personalities.find(Canonical); It != Personalities.end()) {
+      const auto &Selected = Original.MachOAuthenticatedPointers.at(It->second);
+      if (Selected.Module != Binding.Module ||
+          Selected.LibraryOrdinal != Binding.LibraryOrdinal ||
+          Selected.WeakImport != Binding.WeakImport)
+        Conflicts.insert(Canonical);
+    }
+  };
+  for (const auto &[Address, Binding] : Original.MachOAuthenticatedPointers)
+    CheckProvider(Binding, Binding.Symbol);
+  for (const auto &[Address, Binding] : Original.DyldBindSlots)
+    CheckProvider(Binding, Binding.Name);
+  llvm::DenseMap<uint64_t, uint8_t> PersonalityFields;
+  for (const auto &F : Object.OldFDEs)
+    if (F.Personality)
+      PersonalityFields.try_emplace(F.Personality->Offset,
+                                    F.Personality->Width);
+  for (const auto &R : Object.Relocations) {
+    const bool Personality =
+        isCompactPersonality(Object, R) ||
+        (Object.EH == R.Section && R.Type == ARM64_RELOC_POINTER_TO_GOT);
+    if (Personality && Object.EH == R.Section &&
+        PersonalityFields.lookup(R.Offset) != R.Width)
+      return fail(kLanguagePointer);
+    if (!Personality && R.Type != ARM64_RELOC_POINTER_TO_GOT &&
+        R.Type != ARM64_RELOC_GOT_LOAD_PAGE21 &&
+        R.Type != ARM64_RELOC_GOT_LOAD_PAGEOFF12)
+      continue;
+    if (!R.External || R.Scattered || R.SubtractVA || R.SubtractSymbol ||
+        !Object.Symbols.contains(R.SymbolIndex))
+      return fail(kGOTRelocation);
+    const auto Key = std::pair{R.SymbolIndex, Personality};
+    if (Object.GOT.contains(Key))
+      continue;
+    const auto &Symbol = Object.Symbols.at(R.SymbolIndex);
+    if (Symbol.Name.empty())
+      return fail(kGOTRelocation);
+    if (Personality && !Symbol.Section && !Declared.contains(Symbol.Name) &&
+        !Conflicts.contains(Symbol.Name)) {
+      if (auto It = Personalities.find(Symbol.Name);
+          It != Personalities.end()) {
+        Object.GOT.emplace(Key, NativeMachO::GOTSlot{std::nullopt, It->second});
+        continue;
+      }
+    }
+    CompiledSection Slot;
+    Slot.Name = kNativeGOT;
+    Slot.Kind = Kind::WritableData;
+    Slot.Alignment = Slot.Size = arm64e::kPointerBytes;
+    Slot.ExternalBytes.resize(Slot.Size);
+    Slot.ReadOnlyAfterFixups = true;
+    CompiledFixupReference Reference;
+    Reference.BitWidth = arm64e::kPointerBytes * CHAR_BIT;
+    Reference.Symbol = Symbol.Name;
+    Reference.IsResolved = true;
+    if (Personality)
+      Reference.PointerAuth = CompiledPointerAuthentication{
+          kPersonalityKey, kPersonalityDiversity, kPersonalityAddressDiversity};
+    else
+      Reference.OrdinaryPointer = true;
+    Slot.FixupReferences.push_back(std::move(Reference));
+    Object.GOT.emplace(Key, NativeMachO::GOTSlot{Object.Image.Sections.size()});
+    Object.Image.Sections.push_back(std::move(Slot));
+  }
+  return llvm::Error::success();
+}
 
 llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
                                        const BinaryImage &Original,
@@ -218,11 +330,6 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
       if (Result.EH)
         return fail("duplicate native eh_frame");
       Result.EH = Index;
-      auto Records = decodeDwarfEHFrameRecords(
-          Item.ExternalBytes, S.getAddress(), Image.PointerWidth == 8);
-      if (!Records)
-        return Records.takeError();
-      Result.OldFDEs = std::move(*Records);
     }
     if (Compact) {
       if (Result.CompactSection)
@@ -327,7 +434,9 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
       continue;
     if ((Type & N_TYPE) != N_SECT && (Type & N_TYPE) != N_UNDF)
       continue;
-    if ((Desc & (N_WEAK_REF | N_WEAK_DEF)) ||
+    const bool PrivateWeak = Original.isArm64e() && (Type & N_TYPE) == N_SECT &&
+                             (Type & N_PEXT) && (Desc & N_WEAK_DEF);
+    if (((Desc & (N_WEAK_REF | N_WEAK_DEF)) && !PrivateWeak) ||
         ((Type & N_TYPE) == N_UNDF && Value))
       return fail("weak/common native definitions are unsupported");
     Symbol Item{
@@ -341,11 +450,59 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
         return fail("symbol exceeds native section");
       Item.Offset = Value - Result.OldSectionVAs.at(Number);
       Item.Function = Section.Kind == Kind::Code && Name->starts_with("_");
+      // Hidden compiler helpers (e.g. terminate landing pads) bind within this
+      // object. Staging adds no exported weak definition or coalescing promise.
+      if ((Desc & N_WEAK_DEF) && !Item.Function)
+        return fail(kPrivateWeak);
     } else
       Item.Section = 0;
     if (!Name->empty() && !Result.Names.emplace(Item.Name, Index).second)
       return fail("duplicate native symbol");
     Result.Symbols.emplace(Index, Item);
+  }
+  if (Result.EH) {
+    const auto &EH = Image.Sections[*Result.EH];
+    auto Logical = EH.ExternalBytes;
+    // Native assemblers can leave FDE/LSDA section differences unresolved.
+    // Decode a logical object-address view, preserving raw bytes for the final
+    // placement relocation. Otherwise two placeholder FDEs look overlapping.
+    for (const auto &R : Result.Relocations) {
+      if (R.Section != *Result.EH || !R.SubtractSymbol)
+        continue;
+      if (!rangeInBounds(R.Offset, R.Width, Logical.size()) ||
+          !Result.Symbols.contains(R.SymbolIndex) ||
+          !Result.Symbols.contains(*R.SubtractSymbol))
+        return fail(kLanguagePointer);
+      const auto &Target = Result.Symbols.at(R.SymbolIndex);
+      const auto &Subtract = Result.Symbols.at(*R.SubtractSymbol);
+      if (!Target.Section || !Subtract.Section)
+        return fail(kLanguagePointer);
+      auto *Field = Logical.data() + R.Offset;
+      const uint64_t Raw = R.Width == sizeof(uint64_t)
+                               ? readLE<uint64_t>(Field)
+                               : readLE<uint32_t>(Field);
+      const auto Value =
+          llvm::APInt(kRelocationBits,
+                      Result.OldSectionVAs.at(Target.Section) + Target.Offset) -
+          llvm::APInt(kRelocationBits,
+                      Result.OldSectionVAs.at(Subtract.Section) +
+                          Subtract.Offset) +
+          llvm::APInt(R.Width * CHAR_BIT, Raw).sext(kRelocationBits);
+      if (!Value.isSignedIntN(R.Width * CHAR_BIT))
+        return fail(kLanguagePointer);
+      if (R.Width == sizeof(uint64_t))
+        writeLE<uint64_t>(Field, Value.getLoBits(64).getZExtValue());
+      else
+        writeLE<uint32_t>(Field, Value.getLoBits(32).getZExtValue());
+    }
+    const auto Number = llvm::find_if(Result.Sections, [&](const auto &S) {
+                          return S.second == *Result.EH;
+                        })->first;
+    auto Records = decodeDwarfEHFrameRecords(
+        Logical, Result.OldSectionVAs.at(Number), Image.PointerWidth == 8);
+    if (!Records)
+      return Records.takeError();
+    Result.OldFDEs = std::move(*Records);
   }
   return Result;
 }
@@ -533,6 +690,16 @@ llvm::Error place(NativeMachO &Object, uint64_t Base,
     if (S.Section && Object.Sections.contains(S.Section))
       Image.SymbolAddrs[S.Name] =
           Image.Sections[Object.Sections.at(S.Section)].VA + S.Offset;
+  for (auto &[Key, Slot] : Object.GOT) {
+    if (!Slot.Section)
+      continue;
+    auto &S = Image.Sections[*Slot.Section];
+    Slot.Address = S.VA;
+    auto &Reference = S.FixupReferences.front();
+    if (auto It = Image.SymbolAddrs.find(Reference.Symbol);
+        It != Image.SymbolAddrs.end())
+      Reference.ResolvedValue = It->second;
+  }
   Image.Success = true;
   return llvm::Error::success();
 }
@@ -665,18 +832,91 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
       writeLE<uint64_t>(Out, 0);
       continue;
     }
+    const bool CompactPersonality = isCompactPersonality(Object, R);
+    const bool PointerToGOT =
+        A == Arch::AArch64 && R.Type == ARM64_RELOC_POINTER_TO_GOT;
+    if (Original.isArm64e() && (CompactPersonality || PointerToGOT)) {
+      const bool Personality = CompactPersonality || Object.EH == R.Section;
+      auto Slot = Object.GOT.find({R.SymbolIndex, Personality});
+      if (Slot == Object.GOT.end() ||
+          (CompactPersonality &&
+           (R.Type != ARM64_RELOC_UNSIGNED ||
+            R.Width != arm64e::kPointerBytes || R.PCRel || Raw)) ||
+          (PointerToGOT && (!R.PCRel || R.Width != sizeof(uint32_t))))
+        return fail(kGOTRelocation);
+      if (CompactPersonality)
+        writeLE<uint64_t>(Out, Slot->second.Address);
+      else {
+        // Mach-O PTR_TO_GOT carries no addend. The assembler's in-place
+        // section offset is discarded, as by Apple's native linker.
+        const auto Delta = llvm::APInt(kRelocationBits, Slot->second.Address) -
+                           llvm::APInt(kRelocationBits, P);
+        if (!Delta.isSignedIntN(sizeof(uint32_t) * CHAR_BIT))
+          return fail(kGOTRange);
+        writeLE<uint32_t>(Out, Delta.getLoBits(32).getZExtValue());
+      }
+      continue;
+    }
+    if (Original.isArm64e() && R.Type == ARM64_RELOC_UNSIGNED &&
+        !R.SubtractSymbol && !R.SubtractVA && S.IsAllocated && S.IsInImage) {
+      if (R.PCRel || R.Scattered || R.Width != arm64e::kPointerBytes ||
+          S.Kind != Kind::WritableData)
+        return fail(kOrdinaryStorage);
+      CompiledFixupReference Reference;
+      Reference.Offset = R.Offset;
+      Reference.Kind = R.Type;
+      Reference.BitWidth = R.Width * CHAR_BIT;
+      Reference.IsResolved = Reference.OrdinaryPointer = true;
+      if (R.External) {
+        auto Symbol = Object.Symbols.find(R.SymbolIndex);
+        if (Symbol == Object.Symbols.end() || Symbol->second.Name.empty() ||
+            Bindings.contains(Symbol->second.Name))
+          return fail(kOrdinarySymbol);
+        Reference.Symbol = Symbol->second.Name;
+        Reference.Addend = int64_t(Raw);
+        if (Symbol->second.Section) {
+          auto Target = resolve(Object, R.SymbolIndex, Original, Bindings);
+          if (!Target)
+            return Target.takeError();
+          auto Value = llvm::APInt(kRelocationBits, *Target) +
+                       llvm::APInt(kRelocationBits, Raw, true);
+          if (!Value.isIntN(R.Width * CHAR_BIT))
+            return fail(kOrdinaryTarget);
+          Reference.ResolvedValue = Value.getZExtValue();
+        }
+      } else {
+        if (!Object.Sections.contains(R.SymbolIndex))
+          return fail(kOrdinarySymbol);
+        const auto &Target =
+            Object.Image.Sections[Object.Sections.at(R.SymbolIndex)];
+        const auto Old = Object.OldSectionVAs.at(R.SymbolIndex);
+        if (!Target.IsAllocated || !Target.IsInImage || Raw < Old ||
+            Raw - Old > Target.Size)
+          return fail(kOrdinaryTarget);
+        Reference.ResolvedValue = Target.VA + Raw - Old;
+      }
+      Object.Image.Sections[R.Section].FixupReferences.push_back(
+          std::move(Reference));
+      writeLE<uint64_t>(Out, 0);
+      continue;
+    }
     const auto Number = llvm::find_if(Object.Sections, [&](const auto &X) {
                           return X.second == R.Section;
                         })->first;
     const uint64_t OldP = Object.OldSectionVAs.at(Number) + R.Offset;
     const bool GOT =
-        R.External && Object.Imports.contains(R.SymbolIndex) &&
+        R.External &&
+        (Object.Imports.contains(R.SymbolIndex) ||
+         Object.GOT.contains({R.SymbolIndex, false})) &&
         ((A == Arch::X64 &&
           (R.Type == X86_64_RELOC_GOT || R.Type == X86_64_RELOC_GOT_LOAD)) ||
          (A == Arch::AArch64 && (R.Type == ARM64_RELOC_GOT_LOAD_PAGE21 ||
                                  R.Type == ARM64_RELOC_GOT_LOAD_PAGEOFF12)));
     llvm::Expected<uint64_t> Target =
-        GOT ? llvm::Expected<uint64_t>(Object.Imports.at(R.SymbolIndex).SlotVA)
+        GOT           ? llvm::Expected<uint64_t>(
+                            Object.GOT.contains({R.SymbolIndex, false})
+                                ? Object.GOT.at({R.SymbolIndex, false}).Address
+                                : Object.Imports.at(R.SymbolIndex).SlotVA)
         : R.Scattered ? mapOldVA(Object, R.ScatteredVA)
         : R.External  ? resolve(Object, R.SymbolIndex, Original, Bindings)
         : Object.Sections.contains(R.SymbolIndex)
@@ -881,18 +1121,46 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
   }
   if (Object.EH && Object.CompactOnly)
     for (const auto &Record : Object.OldFDEs)
-      if (Record.HasLanguageAugmentation)
+      if (Record.HasLanguageAugmentation && !Original.isArm64e())
         return fail(
             "native DWARF language metadata requires a separate contract");
   if (Object.EH && !Object.CompactOnly) {
     auto &EH = Object.Image.Sections[*Object.EH];
     for (const auto &R : Object.OldFDEs) {
-      if (R.HasLanguageAugmentation ||
+      if ((R.HasLanguageAugmentation && !Original.isArm64e()) ||
           ((R.InitialLocationEncoding & 0x70) != 0x10) ||
           (R.InitialLocationEncoding & 0x80) ||
           (R.InitialLocationWidth != 4 && R.InitialLocationWidth != 8))
         return fail("native DWARF language or address encoding requires a "
                     "separate contract");
+      if (R.Personality) {
+        const auto &P = *R.Personality;
+        auto Writer = Written.find({*Object.EH, P.Offset});
+        if (P.Encoding != (dweh::Indirect | dweh::PCRel | dweh::Sdata4) ||
+            Writer == Written.end() || Writer->second != P.Width)
+          return fail(kLanguagePointer);
+      }
+      if (R.LSDA && R.LSDA->Value) {
+        const auto &L = *R.LSDA;
+        if (dweh::getApplication(L.Encoding) != dweh::PCRel ||
+            (L.Encoding & dweh::Indirect) ||
+            (L.Width != sizeof(uint32_t) && L.Width != sizeof(uint64_t)))
+          return fail(kLanguagePointer);
+        if (!Written.contains({*Object.EH, L.Offset})) {
+          auto Address = mapOldVA(Object, L.Value);
+          if (!Address)
+            return Address.takeError();
+          const auto Delta = llvm::APInt(kRelocationBits, *Address) -
+                             llvm::APInt(kRelocationBits, EH.VA + L.Offset);
+          if (!Delta.isSignedIntN(L.Width * CHAR_BIT))
+            return fail(kLanguagePointer);
+          auto *Field = EH.ExternalBytes.data() + L.Offset;
+          if (L.Width == sizeof(uint64_t))
+            writeLE<uint64_t>(Field, Delta.getLoBits(64).getZExtValue());
+          else
+            writeLE<uint32_t>(Field, Delta.getLoBits(32).getZExtValue());
+        }
+      }
       auto New = mapOldVA(Object, R.BeginVA);
       if (!New)
         return New.takeError();
@@ -911,7 +1179,8 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
   if (Object.CompactSection) {
     const auto &Data =
         Object.Image.Sections[*Object.CompactSection].ExternalBytes;
-    const unsigned Ptr = Object.Image.PointerWidth, Stride = Ptr * 3 + 8;
+    const unsigned Ptr = Object.Image.PointerWidth,
+                   Stride = Ptr * kCompactPointers + kCompactFixedBytes;
     if (Data.size() % Stride)
       return fail("truncated native compact records");
     for (size_t O = 0; O < Data.size(); O += Stride) {
@@ -925,10 +1194,24 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
       const uint64_t LSDA =
           Ptr == 8 ? readLE<uint64_t>(Data.data() + O + 2 * Ptr + 8)
                    : readLE<uint32_t>(Data.data() + O + 2 * Ptr + 8);
-      if (!Length || Personality || LSDA ||
+      const auto HasPointerWriter = [&](uint64_t Offset) {
+        auto It = Written.find({*Object.CompactSection, Offset});
+        return It != Written.end() && It->second == Ptr;
+      };
+      if (!Length || Begin > UINT64_MAX - Length ||
+          ((Personality || LSDA) && !Original.isArm64e()) ||
+          (Personality && !HasPointerWriter(O + Ptr + 8)) ||
+          (LSDA && !HasPointerWriter(O + 2 * Ptr + 8)) ||
+          (Encoding & macho_unwind::kPersonalityMask) ||
+          bool(LSDA) != bool(Encoding & macho_unwind::kHasLSDA) ||
+          (LSDA && !Personality) ||
           !Extents.emplace(Begin, Begin + Length).second)
-        return fail("native compact language/range contract is unsupported");
+        return fail(kCompactLanguage);
       NativeMachOCompactRange Range{Begin, Begin + Length, Encoding};
+      if (Personality)
+        Range.PersonalitySlotVA = Personality;
+      if (LSDA)
+        Range.LSDAVA = LSDA;
       const uint32_t Mode = Encoding & macho_unwind::kModeMask;
       const bool Dwarf =
           (A == Arch::AArch64 ? Mode == macho_unwind::kARM64ModeDwarf
@@ -936,8 +1219,7 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
       if (Dwarf && Object.CompactOnly)
         return fail(
             "native DWARF requires a registered original eh_frame section");
-      if (!Dwarf)
-        Object.Compact.push_back(Range);
+      Object.Compact.push_back(Range);
     }
   }
   if (Object.EH && !Object.CompactOnly) {
@@ -963,17 +1245,39 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
     if (!Region)
       return fail("producer FDEs need a registered frame section");
     for (const auto &R : *Records) {
-      if (llvm::any_of(Object.Compact,
-                       [&](const auto &C) { return C.BeginVA == R.BeginVA; }))
+      auto Compact = llvm::find_if(Object.Compact, [&](const auto &C) {
+        return C.BeginVA == R.BeginVA;
+      });
+      if (Compact != Object.Compact.end() &&
+          (Compact->Encoding & macho_unwind::kModeMask) !=
+              (A == Arch::AArch64 ? macho_unwind::kARM64ModeDwarf
+                                  : macho_unwind::kX86ModeDwarf))
         continue;
       if (R.RecordVA < Region->SectionVA ||
           R.RecordVA - Region->SectionVA > 0xffffff)
         return fail("producer FDE exceeds compact encoding");
-      Object.Compact.push_back(
-          {R.BeginVA, R.EndVA,
-           (A == Arch::AArch64 ? macho_unwind::kARM64ModeDwarf
-                               : macho_unwind::kX86ModeDwarf) |
-               uint32_t(R.RecordVA - Region->SectionVA)});
+      NativeMachOCompactRange Range{
+          R.BeginVA, R.EndVA,
+          (A == Arch::AArch64 ? macho_unwind::kARM64ModeDwarf
+                              : macho_unwind::kX86ModeDwarf) |
+              uint32_t(R.RecordVA - Region->SectionVA)};
+      if (R.Personality && R.Personality->Value)
+        Range.PersonalitySlotVA = R.Personality->Value;
+      if (R.LSDA && R.LSDA->Value) {
+        Range.LSDAVA = R.LSDA->Value;
+        Range.Encoding |= macho_unwind::kHasLSDA;
+      }
+      if (Compact == Object.Compact.end())
+        Object.Compact.push_back(Range);
+      else {
+        // Native DWARF fallback rows may omit language fields entirely;
+        // their CIE/FDE owns those pointers. Any duplicated field must agree.
+        if ((Compact->PersonalitySlotVA &&
+             Compact->PersonalitySlotVA != Range.PersonalitySlotVA) ||
+            (Compact->LSDAVA && Compact->LSDAVA != Range.LSDAVA))
+          return fail(kLanguagePointer);
+        *Compact = Range;
+      }
     }
   }
   std::map<uint64_t, Symbol *> Functions;
@@ -1043,17 +1347,20 @@ appendMachOObjectImage(std::vector<uint8_t> &Binary, llvm::StringRef Bytes,
   if (!Base)
     return fail(kNativePlacement);
   const auto EH = findMachOEHFrameRegion(Candidate);
-  if (auto Error = place(*Object, Base, EH))
-    return Error;
   auto Layout = Load(Candidate);
   if (!Layout)
     return Layout.takeError();
   scanImportThunks(*Layout);
+  if (auto Error = prepareArm64eGOT(*Object, *Layout, Dependencies))
+    return Error;
+  if (auto Error = place(*Object, Base, EH))
+    return Error;
   if (auto Error = relocate(*Object, *Layout, {}))
     return Error;
   if (Object->EH && !Object->CompactOnly)
     if (auto Error = installNativeMachOEHFrame(
-            Candidate, *EH, Object->Image.Sections[*Object->EH]))
+            Candidate, *EH, Object->Image.Sections[*Object->EH],
+            Object->Compact))
       return Error;
   if (auto Error = installNativeMachOCompactUnwind(Candidate, Original->Arch,
                                                    Object->Compact))
@@ -1066,6 +1373,25 @@ appendMachOObjectImage(std::vector<uint8_t> &Binary, llvm::StringRef Bytes,
     return After.takeError();
   if (auto Error = preserveMachODependencyState(*Before, *After))
     return Error;
+  if (llvm::any_of(Object->Compact, [](const auto &R) {
+        return R.PersonalitySlotVA || R.LSDAVA;
+      })) {
+    auto Installed = Load(Candidate);
+    if (!Installed)
+      return Installed.takeError();
+    for (const auto &Range : Object->Compact) {
+      if (!Range.PersonalitySlotVA && !Range.LSDAVA)
+        continue;
+      const auto *Function =
+          Installed->ExceptionMetadata.findFunction(Range.BeginVA);
+      if (!Function || Function->CodeRange.Begin != Range.BeginVA ||
+          Function->CodeRange.End != Range.EndVA ||
+          Function->ParseStatus != ExceptionParseStatus::Complete ||
+          (Range.LSDAVA &&
+           (Function->HandlerDataVA != *Range.LSDAVA || !Function->Itanium)))
+        return fail(kLanguageReplay);
+    }
+  }
   Binary.swap(Candidate);
   return std::move(Object->Image);
 }

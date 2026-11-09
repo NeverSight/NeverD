@@ -1,0 +1,14 @@
+//===- DwarfEHFrame.def - Native language fields --------------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef DWARF_EH_FRAME_TEXT
+#define DWARF_EH_FRAME_TEXT(Name, Text)
+#endif
+
+DWARF_EH_FRAME_TEXT(kInvalidLanguagePointer,
+                    "invalid FDE language pointer extent")
+
+#undef DWARF_EH_FRAME_TEXT
