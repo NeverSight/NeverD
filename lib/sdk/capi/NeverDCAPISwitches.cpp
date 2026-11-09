@@ -14,9 +14,11 @@
 #include "JSONText.h"
 #include "SessionImpl.h"
 
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/sdk/Limits.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -157,8 +159,110 @@ std::optional<TwoLevelLayout> twoLevelLayout(const BinaryImage &Img,
   return Layout;
 }
 
-llvm::json::Value switchJson(const BinaryImage &Img, va_t Function,
+/// The closest instruction before the branch at \p BranchIndex in \p Block
+/// that writes every flag the branch tests (`cmp ecx, 5` before `ja`), when
+/// the branch tests flags alone and one instruction writes them all.
+std::optional<va_t> flagsCompare(const TargetRegInfo &TRI,
+                                 const LowBlock &Block, size_t BranchIndex) {
+  const auto opsOf = [&](const LowInstructionBoundary &Boundary) {
+    const size_t First = std::min<uint64_t>(Boundary.FirstOp, Block.Ops.size());
+    return llvm::ArrayRef<LowOp>(Block.Ops).slice(
+        First, std::min<uint64_t>(Boundary.OpCount, Block.Ops.size() - First));
+  };
+  std::vector<std::pair<uint64_t, uint16_t>> Flags;
+  for (const LowOp &Op : opsOf(Block.InstructionBoundaries[BranchIndex]))
+    for (unsigned K = 0; K < Op.NumInputs; ++K)
+      if (const NdVar &In = Op.Inputs[K]; In.isReg()) {
+        if (!TRI.isFlag(In.Offset, In.Size))
+          return std::nullopt;
+        Flags.emplace_back(In.Offset, In.Size);
+      }
+  llvm::sort(Flags);
+  Flags.erase(std::unique(Flags.begin(), Flags.end()), Flags.end());
+  if (Flags.empty())
+    return std::nullopt;
+  for (size_t B = BranchIndex; B-- > 0;) {
+    std::vector<std::pair<uint64_t, uint16_t>> Written;
+    for (const LowOp &Op : opsOf(Block.InstructionBoundaries[B]))
+      if (Op.Output.isReg() &&
+          std::binary_search(Flags.begin(), Flags.end(),
+                             std::pair{Op.Output.Offset, Op.Output.Size}))
+        Written.emplace_back(Op.Output.Offset, Op.Output.Size);
+    if (Written.empty())
+      continue;
+    llvm::sort(Written);
+    Written.erase(std::unique(Written.begin(), Written.end()), Written.end());
+    if (Written != Flags)
+      return std::nullopt;
+    return Block.InstructionBoundaries[B].Address;
+  }
+  return std::nullopt;
+}
+
+/// The bounds check before a switch's dispatch, as the C route's switch
+/// recovery reads its default: a conditional branch ending a block that
+/// enters the dispatch block, whose other edge is the default.  Its compare
+/// is that of the guard falling into the dispatch, else of the only guard.
+struct SwitchGuard {
+  va_t Default = 0;
+  std::optional<va_t> Compare;
+};
+
+std::optional<SwitchGuard> switchGuard(const TargetRegInfo &TRI,
+                                       const LowFunc &Function,
+                                       const JumpTable &Table) {
+  const auto Dispatch = llvm::find_if(Function.Blocks, [&](const LowBlock &B) {
+    return B.StartAddr <= Table.InsnAddr && Table.InsnAddr < B.EndAddr;
+  });
+  if (Dispatch == Function.Blocks.end())
+    return std::nullopt;
+  std::optional<SwitchGuard> Guard;
+  unsigned Guards = 0, Falling = 0;
+  std::optional<va_t> FallingCompare, OnlyCompare;
+  for (const int Pred : Dispatch->Preds) {
+    if (Pred < 0 || static_cast<size_t>(Pred) >= Function.Blocks.size())
+      continue;
+    const LowBlock &Block = Function.Blocks[Pred];
+    if (Block.InstructionBoundaries.empty())
+      continue;
+    const LowInstructionBoundary &Branch = Block.InstructionBoundaries.back();
+    if (Branch.Control != LowInstructionControl::Branch || !Branch.Immediate ||
+        !hasLowInstructionControlFlag(Branch.ControlFlags,
+                                      LowInstructionControlFlag::Conditional) ||
+        hasLowInstructionControlFlag(Branch.ControlFlags,
+                                     LowInstructionControlFlag::Indirect))
+      continue;
+    const va_t Taken = *Branch.Immediate;
+    const va_t Next = Branch.Address + Branch.Size;
+    std::optional<va_t> Other;
+    if (Next == Dispatch->StartAddr && Taken != Dispatch->StartAddr)
+      Other = Taken;
+    else if (Taken == Dispatch->StartAddr && Next != Dispatch->StartAddr)
+      Other = Next;
+    if (!Other)
+      continue;
+    if (Guard && Guard->Default != *Other)
+      return std::nullopt;
+    Guard = SwitchGuard{*Other, std::nullopt};
+    const auto Compare =
+        flagsCompare(TRI, Block, Block.InstructionBoundaries.size() - 1);
+    ++Guards;
+    OnlyCompare = Compare;
+    if (Next == Dispatch->StartAddr) {
+      ++Falling;
+      FallingCompare = Compare;
+    }
+  }
+  if (Guard)
+    Guard->Compare = Falling == 1                  ? FallingCompare
+                     : Falling == 0 && Guards == 1 ? OnlyCompare
+                                                   : std::nullopt;
+  return Guard;
+}
+
+llvm::json::Value switchJson(const BinaryImage &Img, const LowFunc &Owner,
                              const JumpTable &Table) {
+  const va_t Function = Owner.Entry;
   const auto address = [](bool Known, va_t Address) -> llvm::json::Value {
     return Known ? llvm::json::Value(vaHex(Address)) : nullptr;
   };
@@ -200,6 +304,24 @@ llvm::json::Value switchJson(const BinaryImage &Img, va_t Function,
         : Slots  ? llvm::json::Value(static_cast<int64_t>(Table.SlotIndices[K]))
                  : nullptr});
   Object["targets"] = std::move(Targets);
+  // The instructions that read the table's entries, and a two-level table's
+  // index entries, with the bytes each reads.
+  std::vector<std::pair<va_t, uint16_t>> Loads;
+  for (const JumpTableOpOccurrence &Load : Table.AuthenticatedTableLoads)
+    Loads.emplace_back(Load.Addr, Load.Size);
+  std::sort(Loads.begin(), Loads.end());
+  Loads.erase(std::unique(Loads.begin(), Loads.end()), Loads.end());
+  llvm::json::Array LoadRows;
+  for (const auto &[Address, Width] : Loads)
+    LoadRows.push_back(
+        llvm::json::Array{vaHex(Address), static_cast<int64_t>(Width)});
+  Object["loads"] = std::move(LoadRows);
+  const auto Guard = switchGuard(getTargetRegInfo(Img.Arch), Owner, Table);
+  Object["default"] =
+      Guard ? llvm::json::Value(vaHex(Guard->Default)) : nullptr;
+  Object["guard"] = Guard && Guard->Compare
+                        ? llvm::json::Value(vaHex(*Guard->Compare))
+                        : nullptr;
   return llvm::json::Value(std::move(Object));
 }
 
@@ -234,7 +356,7 @@ const char *neverd_switches_json(neverd_session_t Sess, neverd_va_t FirstEntry,
   llvm::json::Array Switches;
   for (size_t I = 0; I < std::min(Limit, Functions.size()); ++I)
     for (const JumpTable &Table : Functions[I]->JumpTables)
-      Switches.push_back(switchJson(S->Img, Functions[I]->Entry, Table));
+      Switches.push_back(switchJson(S->Img, *Functions[I], Table));
   llvm::json::Object Result;
   Result["switches"] = std::move(Switches);
   Result["next_entry"] = Functions.size() > Limit

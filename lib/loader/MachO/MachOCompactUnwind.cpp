@@ -143,6 +143,13 @@ llvm::Error addRawRange(std::vector<RawByteRange> &Ranges, uint64_t Offset,
 
 } // namespace
 
+bool isValidLSDAIndex(Arch TargetArch, uint32_t Encoding, bool HasEntry) {
+  if (bool(Encoding & kHasLSDA) == HasEntry)
+    return true;
+  return HasEntry && TargetArch == Arch::AArch64 &&
+         (Encoding & kModeMask) == kARM64ModeDwarf;
+}
+
 llvm::Expected<CompactUnwindRawSection>
 parseCompactUnwindRaw(llvm::ArrayRef<uint8_t> SectionBytes,
                       CompactUnwindRawParseOptions Options) {
@@ -437,10 +444,9 @@ parseCompactUnwindRaw(llvm::ArrayRef<uint8_t> SectionBytes,
     if (PersonalityIndex > Result.PersonalitySlotOffsets.size())
       return rawParseError(
           "encoding personality index leaves the personality array");
-    const bool EncodingHasLSDA = (Encoding & kHasLSDA) != 0;
     const bool TableHasLSDA = LSDAByFunction.count(FunctionOffset) != 0;
-    if (EncodingHasLSDA != TableHasLSDA)
-      return rawParseError("encoding and LSDA index disagree for a function");
+    if (!isValidLSDAIndex(Options.TargetArch, Encoding, TableHasLSDA))
+      return rawParseError(kLSDAIndexMismatch);
   }
   for (const auto &[FunctionOffset, LSDAOffset] : LSDAByFunction) {
     (void)LSDAOffset;
@@ -756,13 +762,14 @@ ParseResult parseCompactUnwind(const BinaryImage &Img) {
         partial("__unwind_info entry names a missing personality");
     }
 
-    if (Raw[I].Encoding & kHasLSDA) {
+    const auto LSDA = LSDAByFunction.find(Begin);
+    Entry.HasLSDA = (Raw[I].Encoding & kHasLSDA) != 0;
+    if (!isValidLSDAIndex(Img.Arch, Raw[I].Encoding,
+                          LSDA != LSDAByFunction.end()))
+      partial(kLSDAIndexMismatch);
+    else if (LSDA != LSDAByFunction.end()) {
       Entry.HasLSDA = true;
-      auto It = LSDAByFunction.find(Begin);
-      if (It != LSDAByFunction.end())
-        Entry.LSDAVA = ImageBase + It->second;
-      else
-        partial("__unwind_info entry declares an LSDA the index does not hold");
+      Entry.LSDAVA = ImageBase + LSDA->second;
     }
     Result.Entries.push_back(std::move(Entry));
   }

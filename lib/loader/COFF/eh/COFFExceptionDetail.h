@@ -25,6 +25,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -86,6 +87,15 @@ using PrimaryFunctionByBegin =
     std::unordered_map<va_t, const ExceptionFunction *>;
 
 CxxFuncInfoGroups buildCxxFuncInfoGroups(const BinaryImage &Img);
+/// The FuncInfo3 RVA the C++ handler data at \p HandlerDataVA names, when
+/// the record there carries an FH3 magic number.
+std::optional<uint32_t> fh3FuncInfoRVA(const BinaryImage &Img,
+                                       va_t HandlerDataVA);
+/// Where the code of each x64 pdata record starts whose primary unwind
+/// information installs a handler with data naming one of \p FuncInfoRVAs:
+/// the functions of those FuncInfo groups, materialized or not.
+std::vector<va_t> fh3GroupRecordBegins(const BinaryImage &Img,
+                                       const std::set<uint32_t> &FuncInfoRVAs);
 PrimaryFunctionByBegin indexPrimaryFunctionsByBegin(const BinaryImage &Img);
 bool parseFH3(ExceptionFunction &F, const BinaryImage &Img,
               const CxxFuncInfoGroups *Groups = nullptr);

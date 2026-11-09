@@ -439,6 +439,12 @@ struct SwitchTable {
   /// The slots, and each target with the table indexes that select it.
   std::size_t entries = 0;
   std::map<std::uint64_t, std::vector<std::int64_t>> targets;
+  /// The instructions that read the table's entries, and a two-level
+  /// table's index entries, with the bytes each reads.
+  std::vector<std::pair<std::uint64_t, unsigned>> loads;
+  /// Where the bounds check sends a value the table does not cover, and the
+  /// instruction that sets the flags it tests.
+  std::optional<std::uint64_t> defaultTarget, guard;
 };
 /// A jump table slot whose form is known, and the target it holds.
 struct SwitchSlot {
@@ -878,6 +884,16 @@ struct Listing::Impl {
   std::vector<SwitchSlot> switchSlots;
   std::vector<SwitchIndexRun> switchIndexRuns;
   std::vector<std::uint64_t> switchBoundaries;
+  /// The switch whose cases reach each address, whose bounds check sends
+  /// values its table does not cover to each address, and whose bounds check
+  /// each compare is; and the image-relative table each load reads.
+  std::unordered_map<std::uint64_t, std::size_t> switchCases, switchDefaults,
+      switchGuards;
+  std::unordered_map<std::uint64_t, OperandFacts::ImageRelative>
+      switchLoadOperands;
+  /// Each switch table read, by the load and the table it reads: switch
+  /// recovery's, which a function body's own references do not supersede.
+  std::set<std::pair<std::uint64_t, std::uint64_t>> switchReads;
   std::unordered_map<std::uint64_t, std::size_t> switchTables, switchLoads,
       switchJumps;
   std::vector<Reference> switchReferences;
@@ -2929,6 +2945,9 @@ struct Listing::Impl {
           if (reference.kind == RefKind::IndirectJump &&
               switchJumps.contains(reference.from))
             return false;
+          if (reference.kind == RefKind::Read &&
+              switchReads.contains({reference.from, reference.to}))
+            return false;
           if (reference.kind == RefKind::Offset) {
             if (switchTables.contains(reference.from))
               return false;
@@ -2943,21 +2962,23 @@ struct Listing::Impl {
         auto rows = overlay.rows;
         std::sort(rows.begin(), rows.end(), ReferenceIndex::before);
         for (const auto &row : rows)
-          referenceIndex.insert(row);
+          if (row.kind != RefKind::Read ||
+              !switchReads.contains({row.from, row.to}))
+            referenceIndex.insert(row);
       }
     }
     for (const auto &instruction : body.instructions)
       if (instruction.target && isBranch(instruction.flow) &&
           *instruction.target != function.entry)
         body.labels.insert(*instruction.target);
-    // Branches from other functions into this body need labels too.
+    // So does any instruction other code refers to, as a classic listing
+    // names every location something refers to: a branch from another
+    // function, or an address taken, as a catch funclet returns its
+    // parent's continuation (`lea rax, loc_1400012AA`).
     if (indexState == IndexState::Ready)
       referenceIndex.forTargets(function.entry + 1, body.end,
                                 [&](const Reference &reference) {
-                                  if (reference.kind == RefKind::Jump ||
-                                      reference.kind == RefKind::CondJump ||
-                                      reference.kind == RefKind::IndirectJump)
-                                    body.labels.insert(reference.to);
+                                  body.labels.insert(reference.to);
                                 });
     if (!forwarding && dialect == OperandDialect::X86 &&
         !buildSemanticFrame(body, ownerOf(index).entry) && !function.chunkOf)
@@ -3618,6 +3639,12 @@ struct Listing::Impl {
     if (region < 0)
       return {};
     if (regions[region].exec) {
+      // Where a switch's bounds check sends what its table does not cover.
+      if (const auto fallback = switchDefaults.find(address);
+          fallback != switchDefaults.end())
+        return {std::string(SwitchDefaultPrefix) +
+                    upperHex(switches[fallback->second].jump),
+                ListingRole::DummyCodeName, address};
       const int f = functionIndex(address);
       if (use == NameUse::Transfer || f >= 0)
         return {(f < 0                   ? std::string(UnknownNamePrefix)
@@ -4048,6 +4075,9 @@ struct Listing::Impl {
     }
     for (const auto &[to, kind] : instruction.refs)
       facts.references.push_back(to);
+    if (const auto table = switchLoadOperands.find(instruction.address);
+        table != switchLoadOperands.end())
+      facts.imageRelative = table->second;
     if (!classic.operands.empty()) {
       text.padTo(base + ::neverd::limits::worker_config::kListingMnemonicWidth);
       text.append(formatOperands(
@@ -4255,22 +4285,37 @@ struct Listing::Impl {
     appendComment(text, comment, ListingRole::Comment,
                   base -
                       ::neverd::limits::worker_config::kListingNameColumnWidth);
-    // Without a comment of its own, an instruction marks a switch's table
-    // load or dispatch, or quotes the string it refers to.
+    // Without a comment of its own, an instruction marks a switch's bounds
+    // check, table load or dispatch, or quotes the string it refers to.
     const auto switchComment = [&]() -> std::string {
+      const auto cases = [&](const SwitchTable &table) {
+        return std::string(SwitchCasesLead) + std::to_string(table.entries) +
+               std::string(SwitchCasesTail);
+      };
+      // The cases go on the compare of the bounds check, else where the
+      // table is read: with no load of its own, at the dispatch.
+      if (const auto guard = switchGuards.find(instruction.address);
+          guard != switchGuards.end())
+        return cases(switches[guard->second]);
       const auto load = switchLoads.find(instruction.address);
       const auto jump = switchJumps.find(instruction.address);
-      // The cases go where the table is read: with no load of its own, at
-      // the dispatch.
       if (load != switchLoads.end() || jump != switchJumps.end()) {
         const auto &table =
             switches[load != switchLoads.end() ? load->second : jump->second];
-        if (load != switchLoads.end() || !table.load ||
-            *table.load == table.jump)
-          return std::string(SwitchCasesLead) + std::to_string(table.entries) +
-                 std::string(SwitchCasesTail);
-        return std::string(SwitchJumpComment);
+        const bool separateLoad = table.load && *table.load != table.jump;
+        if (jump != switchJumps.end() && (table.guard || separateLoad))
+          return std::string(SwitchJumpComment);
+        if (!table.guard)
+          return cases(table);
       }
+      // A case's code names its switch and the cases it serves, and a
+      // branch to it repeats that, as a classic listing repeats a location's
+      // comment where code refers to it.
+      if (auto mark = switchTargetComment(instruction.address); !mark.empty())
+        return mark;
+      if (instruction.target && (instruction.flow == Flow::Jump ||
+                                 instruction.flow == Flow::CondJump))
+        return switchTargetComment(*instruction.target);
       return {};
     };
     // What an instruction transfers to or refers to first, read demangled
@@ -4934,6 +4979,11 @@ struct Listing::Impl {
     switchSlots.clear();
     switchIndexRuns.clear();
     switchBoundaries.clear();
+    switchCases.clear();
+    switchDefaults.clear();
+    switchGuards.clear();
+    switchLoadOperands.clear();
+    switchReads.clear();
     switchTables.clear();
     switchLoads.clear();
     switchJumps.clear();
@@ -4993,7 +5043,44 @@ struct Listing::Impl {
         switchReferences.push_back({target, table.jump, RefKind::IndirectJump});
         if (table.table)
           switchReferences.push_back({target, *table.table, RefKind::Offset});
+        switchCases.emplace(target,
+                            static_cast<std::size_t>(&table - switches.data()));
       }
+    for (std::size_t t = 0; t < switches.size(); ++t) {
+      if (switches[t].defaultTarget)
+        switchDefaults.emplace(*switches[t].defaultTarget, t);
+      if (switches[t].guard)
+        switchGuards.emplace(*switches[t].guard, t);
+    }
+    // Each load reads the table its width says: a two-level table's index
+    // table or its jump table, which no load names when both are as wide.
+    // An image-relative table's load adds its relative address to the image
+    // base, which its operand names.
+    const std::uint64_t imageBase = neverd_session_base_addr(session);
+    for (std::size_t t = 0; t < switches.size(); ++t) {
+      const SwitchTable &table = switches[t];
+      const auto run = std::find_if(
+          switchIndexRuns.begin(), switchIndexRuns.end(),
+          [&](const SwitchIndexRun &run) { return run.table == t; });
+      if (run != switchIndexRuns.end() && run->entrySize == table.entrySize)
+        continue;
+      for (const auto &[load, bytes] : table.loads) {
+        std::optional<std::uint64_t> read;
+        if (run != switchIndexRuns.end() && bytes == run->entrySize)
+          read = run->address;
+        else if (table.table && !table.form.empty() && bytes == table.entrySize)
+          read = *table.table;
+        if (!read)
+          continue;
+        switchReferences.push_back({*read, load, RefKind::Read});
+        switchReads.emplace(load, *read);
+        if (table.form == "image_relative" && *read >= imageBase)
+          switchLoadOperands.emplace(
+              load, OperandFacts::ImageRelative{
+                        static_cast<std::int64_t>(*read - imageBase), imageBase,
+                        *read});
+      }
+    }
     if (indexState == IndexState::Ready) {
       references = referenceIndex.flattened();
       references.insert(references.end(), switchReferences.begin(),
@@ -5043,6 +5130,16 @@ struct Listing::Impl {
       }
     if (!table.jump || table.targets.empty())
       return;
+    if (const auto fallback = row.value("default", Json());
+        fallback.is_string())
+      table.defaultTarget = jsonAddress(fallback);
+    if (const auto guard = row.value("guard", Json()); guard.is_string())
+      table.guard = jsonAddress(guard);
+    if (const auto loads = row.value("loads", Json()); loads.is_array())
+      for (const auto &load : loads)
+        if (load.is_array() && load.size() == 2 && load[0].is_string())
+          table.loads.emplace_back(jsonAddress(load[0]),
+                                   static_cast<unsigned>(jsonCount(load[1])));
     // A two-level table's index table lists with its slots, an entry for
     // each target.
     if (const auto run = row.value("index", Json());
@@ -5196,6 +5293,48 @@ struct Listing::Impl {
                .first;
     }
     return it->second;
+  }
+
+  /// "jumptable 000000014000609A cases 0,3,32", as a classic listing marks
+  /// the code at \p address that a switch's cases or default reach: the
+  /// dispatch, "default case" for the default, then each case value it
+  /// serves, a run of three or more as a range.  Empty for other code.
+  std::string switchTargetComment(std::uint64_t address) const {
+    const auto fallback = switchDefaults.find(address);
+    const auto served = switchCases.find(address);
+    if (fallback == switchDefaults.end() && served == switchCases.end())
+      return {};
+    const SwitchTable &table =
+        switches[fallback != switchDefaults.end() ? fallback->second
+                                                  : served->second];
+    std::string text =
+        std::string(SwitchCaseLead) + upperHex(table.jump, addressDigits);
+    if (fallback != switchDefaults.end())
+      text += std::string(SwitchDefaultCase);
+    const auto cases = table.targets.find(address);
+    if (cases == table.targets.end())
+      return text;
+    std::vector<std::int64_t> values = cases->second;
+    std::sort(values.begin(), values.end());
+    values.erase(std::unique(values.begin(), values.end()), values.end());
+    if (fallback != switchDefaults.end())
+      text += ',';
+    text += std::string(values.size() == 1 ? SwitchCaseOne : SwitchCaseMany);
+    for (std::size_t i = 0; i < values.size();) {
+      std::size_t last = i;
+      while (last + 1 < values.size() && values[last + 1] == values[last] + 1)
+        ++last;
+      if (i)
+        text += ',';
+      if (last - i >= 2) {
+        text += std::to_string(values[i]) + '-' + std::to_string(values[last]);
+        i = last + 1;
+      } else {
+        text += std::to_string(values[i]);
+        ++i;
+      }
+    }
+    return text;
   }
 
   /// The name of the jump table at \p address: its prefix and dispatch.

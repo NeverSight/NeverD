@@ -2,10 +2,12 @@
 
 #include "../Config.h"
 #include "Icons.h"
+#include "Theme.h"
 
 #include <QAbstractButton>
 #include <QAbstractItemView>
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFileDialog>
@@ -17,11 +19,16 @@
 #include <QLabel>
 #include <QMenu>
 #include <QMenuBar>
+#include <QPainter>
+#include <QPushButton>
+#include <QRadioButton>
 #include <QScreen>
 #include <QStyleFactory>
+#include <QStyleOption>
 #include <QStyledItemDelegate>
 #include <QTabBar>
 #include <QTimer>
+#include <QToolButton>
 #include <QTreeView>
 #include <algorithm>
 
@@ -81,6 +88,40 @@ void openWithRoom(QDialog &dialog) {
   dialog.resize(size);
 }
 
+/// Where keyboard focus frames a control: a button's whole face, a check
+/// box's or radio button's box with its label, a tab; the rectangle Qt gives
+/// hugs only the label.
+QRectF focusFrame(const QStyleOption &option, const QWidget *widget) {
+  QRect frame = option.rect;
+  if (qobject_cast<const QPushButton *>(widget) ||
+      qobject_cast<const QToolButton *>(widget)) {
+    frame = widget->rect();
+  } else if (qobject_cast<const QCheckBox *>(widget) ||
+             qobject_cast<const QRadioButton *>(widget)) {
+    const auto *box = static_cast<const QAbstractButton *>(widget);
+    QStyleOptionButton button;
+    button.initFrom(box);
+    button.text = box->text();
+    button.icon = box->icon();
+    button.iconSize = box->iconSize();
+    const QRect indicator =
+        widget->style()->subElementRect(qobject_cast<const QRadioButton *>(box)
+                                            ? QStyle::SE_RadioButtonIndicator
+                                            : QStyle::SE_CheckBoxIndicator,
+                                        &button, widget);
+    const int margin =
+        ::neverd::limits::gui_config::kWorkbenchStyleFocusFrameMargin;
+    frame = frame.united(indicator).adjusted(-margin, -margin, margin, margin) &
+            widget->rect();
+  } else if (const auto *tabs = qobject_cast<const QTabBar *>(widget)) {
+    if (const int tab = tabs->tabAt(option.rect.center()); tab >= 0)
+      frame = tabs->tabRect(tab);
+  }
+  const qreal inset =
+      ::neverd::limits::gui_config::kWorkbenchStyleFocusFrameWidth / 2;
+  return QRectF(frame).adjusted(inset, inset, -inset, -inset);
+}
+
 bool drawsMnemonics(const QWidget *widget) {
   return qobject_cast<const QMenuBar *>(widget) ||
          qobject_cast<const QMenu *>(widget) ||
@@ -99,6 +140,45 @@ int WorkbenchStyle::pixelMetric(PixelMetric metric, const QStyleOption *option,
   if (metric == PM_ToolBarIconSize)
     return ::neverd::limits::gui_config::kWorkbenchStyleSmallIconSize;
   return QProxyStyle::pixelMetric(metric, option, widget);
+}
+
+void WorkbenchStyle::drawPrimitive(PrimitiveElement element,
+                                   const QStyleOption *option,
+                                   QPainter *painter,
+                                   const QWidget *widget) const {
+  // Keyboard focus frames the control with a thin line of the focus color, as
+  // Visual Studio Code draws its focus border, in place of Fusion's tinted box
+  // behind the label.  The fields' focus border is the same color.  As in
+  // Fusion, focus that the pointer gave draws none.
+  if (element == PE_FrameFocusRect && option) {
+    if (!(option->state & State_KeyboardFocusChange))
+      return;
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing);
+    QPen pen(Theme::instance().chrome(QStringLiteral("Focus")));
+    pen.setWidthF(::neverd::limits::gui_config::kWorkbenchStyleFocusFrameWidth);
+    painter->setPen(pen);
+    painter->setBrush(Qt::NoBrush);
+    const QRectF frame = focusFrame(*option, widget);
+    const qreal radius =
+        ::neverd::limits::gui_config::kWorkbenchStyleFocusFrameRadius;
+    painter->drawRoundedRect(frame, radius, radius);
+    // A push button keeps a line of the surface between the frame and its
+    // face, as Visual Studio Code sets its focus border off a button, so the
+    // frame shows on a primary button's accent too.
+    if (qobject_cast<const QPushButton *>(widget)) {
+      const qreal gap =
+          ::neverd::limits::gui_config::kWorkbenchStyleFocusFrameGap;
+      pen.setColor(Theme::instance().chrome(QStringLiteral("Window")));
+      painter->setPen(pen);
+      painter->drawRoundedRect(frame.adjusted(gap, gap, -gap, -gap),
+                               std::max<qreal>(0, radius - gap),
+                               std::max<qreal>(0, radius - gap));
+    }
+    painter->restore();
+    return;
+  }
+  QProxyStyle::drawPrimitive(element, option, painter, widget);
 }
 
 int WorkbenchStyle::styleHint(StyleHint hint, const QStyleOption *option,
@@ -268,6 +348,10 @@ void WorkbenchStyle::polish(QWidget *widget) {
   if (auto *combo = qobject_cast<QComboBox *>(widget);
       combo && !qobject_cast<QStyledItemDelegate *>(combo->itemDelegate()))
     combo->setItemDelegate(new QStyledItemDelegate(combo));
+  // A heading too long for its column ends in an ellipsis; Qt's header
+  // otherwise centers it and cuts off both of its ends.
+  if (auto *header = qobject_cast<QHeaderView *>(widget))
+    header->setTextElideMode(Qt::ElideRight);
   // Qt's own file dialog lists folders and files with the icon theme's
   // icons unless it is given others.
   if (auto *files = qobject_cast<QFileDialog *>(widget);

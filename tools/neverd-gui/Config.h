@@ -286,6 +286,16 @@ inline constexpr QSize kWorkbenchStyleFontDialogSize{600, 460};
 /// The widest a file dialog's size, type or date column fits its contents,
 /// so that one long type cannot crowd out the names.
 inline constexpr int kWorkbenchStyleFileColumnMaximumWidth = 200;
+/// Keyboard focus frames a control with a line of the focus color this wide
+/// and corners of this radius, as Visual Studio Code draws its focus border.
+inline constexpr qreal kWorkbenchStyleFocusFrameWidth = 1.0;
+inline constexpr qreal kWorkbenchStyleFocusFrameRadius = 2.0;
+/// The line of the surface a push button's focus frame keeps from the
+/// button's face, as Visual Studio Code sets its focus border off a button.
+inline constexpr qreal kWorkbenchStyleFocusFrameGap = 1.0;
+/// The room a check box's or radio button's focus frame leaves around its
+/// box and label.
+inline constexpr int kWorkbenchStyleFocusFrameMargin = 2;
 
 inline constexpr QSize kQuickStartDialogSize{900, 560};
 inline constexpr QSize kQuickStartMinimumDialogSize{720, 460};

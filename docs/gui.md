@@ -263,6 +263,9 @@ prologues and recovered chunks. It names slots through either proven base
 (`var_s10`, `[rsp+48h+var_30]`); overwritten or conflicting frame aliases stay
 unformatted. Each slot is as wide as its widest observed access. Older engines
 and 32-bit code retain the existing bounded listing interpretation.
+An instruction that other code refers to, whether a branch reaches it or an
+address is taken (as a C++ catch funclet returns the address its parent
+continues at), lists under its `loc_` label with those references.
 A named object is as large as its symbol says (`stderr dq ?`), and data the
 code reads or writes is laid out as wide as those accesses, under the name its
 operands and the pseudocode use (`qword_A410 dq ?`, or `unk_` where the widths
@@ -1527,14 +1530,21 @@ it finishes, and an explicit cross-reference request completes it at once.
 wanted, and the listing then shows the switch jump tables it recovered as a
 classic disassembler does: the table under its `jpt_` name with one slot per
 line (`dd offset loc_164C0 - 27444h`, or `dq offset`/`dd rva` for absolute and
-image-relative tables), `switch 54 cases` on the instruction that loads it,
-`switch jump` on the dispatch, and on each target a code reference from the
-dispatch and a data reference from the table. A two-level switch, which reads a
-compact index table first (MSVC's sparse switches), also shows that index table
-four entries a line under its `byte_` name, `indirect table for switch
-statement` (`db 0, 1, 2, 0`). A table is laid out only when the engine has
-checked that every slot holds its target, and an index table only when every
-entry selects the slot holding its case's target. Cancel removes
+image-relative tables), `switch 54 cases` on the compare of the bounds check (on
+the instruction that loads the table when no bounds check guards it), `switch
+jump` on the dispatch, and on each target a code reference from the dispatch and
+a data reference from the table. The table reads with a read reference from each
+instruction that loads it, and an image-relative table is named in that load as
+`ds:(jpt_14000609A - 140000000h)[rdx+rcx*4]`. The code of each case says which
+values reach it, `jumptable 000000014000609A cases 0,3,32` (three or more
+consecutive values as a range, `cases 11-31`), and so does each branch to it;
+where the bounds check sends the values the table does not cover is named
+`def_14000609A` and says `jumptable 000000014000609A default case`. A two-level
+switch, which reads a compact index table first (MSVC's sparse switches), also
+shows that index table four entries a line under its `byte_` name, `indirect
+table for switch statement` (`db 0, 1, 2, 0`). A table is laid out only when the
+engine has checked that every slot holds its target, and an index table only
+when every entry selects the slot holding its case's target. Cancel removes
 queued work; a running engine call finishes unless the worker is restarted.
 
 With idle-time analysis on, the first analysis worker also renders pseudocode

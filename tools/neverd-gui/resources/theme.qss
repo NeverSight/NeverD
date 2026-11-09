@@ -113,7 +113,7 @@ QComboBox QAbstractItemView::item { min-height: 22px; padding: 0 12px 0 8px; bor
 QComboBox QAbstractItemView::item:hover, QComboBox QAbstractItemView::item:selected { background: ${MenuSelection}; color: ${HighlightedText}; }
 QComboBox QAbstractItemView::item:disabled { color: ${DisabledText}; }
 QPushButton { background: ${Button}; color: ${ButtonText}; border: 1px solid ${Border}; border-radius: 2px; padding: 4px 14px; }
-QPushButton:hover { background: ${ToolBarHover}; }
+QPushButton:hover { background: ${ButtonHover}; }
 QPushButton:default { background: ${ButtonPrimary}; color: ${ButtonPrimaryText}; border: 1px solid ${ButtonPrimary}; }
 QPushButton:default:hover { background: ${ButtonPrimaryHover}; }
 /* A button that cannot act gives up its fill but keeps its outline and a

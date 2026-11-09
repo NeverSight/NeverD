@@ -227,7 +227,15 @@ struct CompactUnwindRawParseOptions {
   llvm::endianness ByteOrder = llvm::endianness::little;
   uint64_t MaxEntries = std::numeric_limits<uint64_t>::max();
   uint64_t MaxPages = std::numeric_limits<uint64_t>::max();
+  /// Required to admit ld-classic's ARM64 DWARF fallback LSDA indexes without
+  /// UNWIND_HAS_LSDA. Unknown retains the architecture-independent strict rule.
+  Arch TargetArch = Arch::Unknown;
 };
+
+/// Match a compact recipe's LSDA flag and side-table presence. Legacy ARM64
+/// DWARF fallback can retain a side-table entry without the redundant flag;
+/// the actual language pointer belongs to the FDE in that mode.
+bool isValidLSDAIndex(Arch TargetArch, uint32_t Encoding, bool HasEntry);
 
 /// Strictly decode linker structure for rewrite.  Any ambiguity that a reader
 /// could tolerate but a writer could not reproduce safely is an error: tables

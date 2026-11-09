@@ -186,6 +186,17 @@ looked unfinished to the user once pointed out.
   like buttons, as Windows 11 draws a disabled text box, and dim their
   chevrons; labels, group titles, tool buttons, tabs and lists take
   `DisabledText`.
+- Frame keyboard focus around the whole control in the `Focus` color, as
+  Visual Studio Code draws its focus border (`WorkbenchStyle` draws
+  `PE_FrameFocusRect`): a button's face, a check box's box with its label, a
+  tab. A push button keeps a line of the surface between the frame and its
+  face, so the frame shows on the primary accent too. Fusion's rectangle
+  tinted a box behind the label, which read as selected text in the light
+  theme and vanished in the dark one. Focus the pointer gives draws none.
+- Make a button's hover visible: `ToolBarHover` sat within two levels of the
+  dark `Button`, so buttons seemed not to respond; `ButtonHover` is Visual
+  Studio Code's `secondaryHoverBackground`. A heading too long for its column
+  ends in an ellipsis instead of losing both ends.
 - Recolor what a theme change cannot reach. Content that stores colors, such
   as the output log's text formats, keeps each part's level or role and colors
   it again on `Theme::changed`; the dark theme's gray log lines all but

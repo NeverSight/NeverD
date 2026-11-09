@@ -3628,7 +3628,15 @@ MSVC's CRT character classifier, a two-level switch whose 33-byte index table
 selects slots of an RVA table, lists its padding as `align 4`, its slots as
 `jpt_` `rva` entries and its index table under `byte_` four entries a line,
 `indirect table for switch statement`; the two tables tile with those lines
-and no byte of them lists alone.
+and no byte of them lists alone. Both switches carry a classic listing's
+annotations: `switch 6 cases`/`switch 33 cases` on the bounds check's compare,
+`def_` on the default and `jumptable <dispatch> default case` on it and on the
+branch to it, `jumptable <dispatch> case 0` (or `cases 0,3,32`, `default case,
+cases 11-31`) on each case's code, the tables named in their loads as
+`ds:(jpt_... - 140000000h)[...]` and `ds:(byte_... - 140000000h)[...]`, and a
+read reference from those loads on each table. A third function's instruction
+whose address a `lea` takes, as a catch funclet returns its parent's
+continuation, lists under its `loc_` label with that reference.
 `SessionCAPITest.TwoLevelSwitchesPublishTheirIndexTable` checks that
 `neverd_switches_json` gives that dispatch the RVA table's `image_relative`
 form, the index table's address, width and 33 entries, and for every character
@@ -7513,6 +7521,14 @@ format string's 32-bit absolute address, zero-extended, is its whole address
 in both routes.
 `NeverDWorkerCallSiteTypes` compiles and executes both C routes, including all
 five Win64 variadic integer arguments, and retains partial-stack-write refusal.
+`SessionCAPITest.Win64VariadicFunctionsTakeTheirHomedArguments` decompiles a
+PE whose MSVC-style variadic function homes RDX, R8 and R9 and passes their
+first slot on as a va_list that a helper walks into the caller's two stack
+arguments: both C routes take the homed registers as parameters, contain no
+trap, pass all five values and return the machine's result at -O0 and -O2.
+`CallExitRegisters.OverwrittenEntrySpillsAreNotValueReads` keeps a function
+whose R9 spill is overwritten before its slot escapes at three parameters: a
+dead spill publishes no variadic position.
 The engine's C is Clang's dialect (`__builtin_bit_cast`, calls through casts
 to a call site's own ABI, which GCC folds into the declared one), so a host
 without Clang skips it after the analysis checks, naming the routes it did not
@@ -11156,6 +11172,10 @@ unresolved.
 shape in all twelve optimized MSVC x64 `xcpt4` builds, where it is a `__finally`
 funclet reading its selector through the establisher frame: one six-case table
 inside the handler's unwind range, every case a decoded block.
+`WindowsEHCorpus.FocusedLoadsDecodeTheirWholeFH3FunctionGroup` loads every
+x64 FH3 function of the MSVC and clang-cl corpus alone and requires the same
+complete C++ tables a whole-image load decodes; before, the focused load's
+IP-to-state map left its function group and the tables read as malformed.
 `COFFJoinedTwoLevel.*` checks an MSVC CRT two-level dispatch whose index byte
 arrives along two paths that bound it separately, one to 1..15 and one to
 exactly 20h: all 33 index coordinates publish, with the unused bytes'
@@ -14706,6 +14726,19 @@ handlers under EH3 and EH4: restored and unbalanced stacks, changed EBP,
 return-pop immediates, conditional returns, trailing effects and missing or
 mismatched instruction identities. The C++ catch-return suite applies the
 same unconditional-return rule before publishing a continuation.
+`CFGBuilderCoverage.ConditionalTailCallsKeepOtherCatchContinuations` adds a
+function whose conditional jump to another function's entry gives it a RETURN
+that no instruction owns, as MSVC's CRT jumps to its import thunks: the catch
+funclet's exits stay complete and its continuation stays a root of its
+parent, where before such a function withdrew every continuation of a
+whole-image analysis. `CFGBuilderCoverage.FH4CatchFuncletsWithoutContinuationsReturnOne`
+makes the address an FH4 catch funclet returns a root of its parent, with the
+continuation entry that binds the parent's frame, when the handler records no
+continuation address, and neither when it records one.
+`HighCPointerAddresses.CorpusFuncLoadCxxEhProbePrintsThrow` and
+`CorpusFuncLoadCxxEhProbeNestedCatchReturnsValues` decompile the MSVC FH4 O0
+probe alone: the catch of `ProbeError` stores its result and continues at its
+parent's continuation, which destroys the outer object before returning it.
 `SharedSEHCallbackTailsKeepEachInvocationStack` checks distinct EH3/EH4 filter
 and finally entries sharing an epilogue, with reversed discovery order. Each
 invocation owns its initialized spills and restored EBP/ESP. Uninitialized
@@ -21879,8 +21912,16 @@ bits and a mismatched ABI
 reject transactionally; removing `SG_READ_ONLY` fails final recipe replay.
 The matrix exercises both header and tail placement of compact unwind metadata;
 nonzero tail bytes and zero-filled ranges owned by `LC_NOTE` prevent reuse.
-The separate `AuthenticatedCallsAndSignedUnwindExecute` cases first compile and
-run an original call/throw control, then load the installed image and check
+The separate `AuthenticatedCallsAndSignedUnwindExecute` cases first compile an
+arm64e capability control. Each of IA/IB/DA/DB must produce a nontrivial
+signature, authenticate it successfully, and fault in a child process after a
+bit changed by signing is flipped. Core dumps are disabled for these expected
+faults. Only unavailable launch before the probe's flushed entry marker or
+disabled authentication can skip this gate. A crash after entry and any
+unexpected key-check failure are failures, including when another key reports
+disabled authentication. Once the gate passes, a failed compiler-original
+call/throw control is also a test failure.
+The tests then load the installed image and check
 authenticated functions/data, exception propagation through its signed frame,
 and the actual read-only mapping. The language runtime controls also check a
 typed catch's result and exact cleanup counts after both caught and propagated
@@ -21890,8 +21931,27 @@ truncated augmentation payloads and address overflow. Ordinary-chain tests
 exercise all supported formats, threaded imports, negative/large addends,
 separate loader replay and refusal to treat unsigned slots as signed ones.
 DWARF reservation also exercises reuse of the bounded gaps between original
-sections and the enlarged compact registry. A control that cannot execute causes an
-explicit skip. File-level validation does not qualify these runtime contracts.
+sections and the enlarged compact registry.
+`RelocatesOriginalSignedLanguageFrames` forces the original compiler-generated
+catch/cleanup DWARF section to move before installing the new object. O0/O2
+and chained/threaded cases retain original code and LSDA addresses, personality
+slot identity, compact fallback offsets and every instruction's signed-return
+state. The legacy inputs also exercise `ld-classic`'s DWARF LSDA indexes without
+the compact LSDA flag. `LegacyARM64DwarfLSDAsNeedExplicitArchitecture` checks
+strict and semantic loading of this form and refuses the same flag/index
+disagreement for other architectures and non-DWARF ARM64 modes.
+Apple `dwarfdump`, fixup inspection and strict code-signature verification
+check the final file. `RelocatedSignedLanguageFramesExecute` adds the original
+catch and propagated cleanup paths to the capability-gated execution matrix.
+The installed runtime driver also checks original functions in the other cases.
+File-level validation does not qualify these runtime contracts.
+The [signed language relocation qualification](evidence/arm64e-signed-language-relocation-2026-11-09.json)
+records 1,184 integration cases (1,160 passed, 24 skipped), the final native
+capability gate checks, and a fresh 30-guest CPTA/PAC replay of 1,825 generated
+call objects. The model compares 43,800 valid original/projected calls and
+105,120 invalid-signature pairs at EL0/EL1 with all four CPTA/CPTA0 settings.
+It does not execute Apple's dyld or signed language unwinder; real arm64e
+execution and general whole-image publication remain unqualified.
 The [native language qualification](evidence/arm64e-native-language-2026-11-09.json)
 records tested source identities, regression results, independent checks and
 the remaining runtime and publication boundaries.

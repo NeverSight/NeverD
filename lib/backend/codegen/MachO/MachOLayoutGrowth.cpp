@@ -19,12 +19,16 @@
 #include "neverd/loader/DWARF/EHFrame.h"
 #include "neverd/loader/Loader.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
+#include "neverd/support/DwarfEH.h"
 
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Support/Errc.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/MathExtras.h"
 
+#include <climits>
 #include <map>
 #include <set>
 #include <tuple>
@@ -165,11 +169,18 @@ bool hasRelocatableAugmentation(const DwarfCIE &CIE, Arch Architecture) {
   if (Augmentation.empty() || Augmentation.front() != kAugmentationLength)
     return false;
   bool Encoding = false, BKey = false, NonHint = false;
+  bool Personality = false, LSDA = false;
   for (char Character : Augmentation.drop_front()) {
     bool *Seen = nullptr;
     switch (Character) {
     case kAugmentationEncoding:
       Seen = &Encoding;
+      break;
+    case kAugmentationPersonality:
+      Seen = &Personality;
+      break;
+    case kAugmentationLSDA:
+      Seen = &LSDA;
       break;
     case dwarf_eh::aarch64::kBKeyAugmentation:
       Seen = &BKey;
@@ -324,6 +335,39 @@ relocatedFrames(const std::vector<uint8_t> &Binary, const MachOEHFrameRegion &R,
     if (S.Addr >= R.SectionVA && S.Addr - R.SectionVA < Raw.size())
       return fail("named EH storage needs symbol/reference relocation");
   std::vector<uint8_t> Result(Raw.begin(), Raw.end());
+  // Only the EH section moves. Code, LSDA storage and authenticated
+  // personality slots keep their addresses, including address diversity.
+  const auto RelocatePointer = [&](const DwarfEHFramePointer &Pointer,
+                                   bool Nullable) -> llvm::Error {
+    const auto Format = dweh::getFormat(Pointer.Encoding);
+    if (dweh::getApplication(Pointer.Encoding) != dweh::PCRel ||
+        (Format != dweh::Absptr && Format != dweh::Sdata4 &&
+         Format != dweh::Sdata8) ||
+        (Pointer.Width != sizeof(uint32_t) &&
+         Pointer.Width != sizeof(uint64_t)) ||
+        !rangeInBounds(Pointer.Offset, Pointer.Width, Result.size()) ||
+        Pointer.Offset > UINT64_MAX - VA ||
+        (Pointer.Value >= R.SectionVA &&
+         Pointer.Value - R.SectionVA < Raw.size()))
+      return fail(kFramePointerContract);
+    if (Nullable && !Pointer.Value)
+      return llvm::Error::success();
+    const auto Delta =
+        llvm::APInt(kFramePointerArithmeticBits, Pointer.Value) -
+        llvm::APInt(kFramePointerArithmeticBits, VA + Pointer.Offset);
+    // Zero is an omitted augmentation pointer, not a self-relative address.
+    if (!Delta.isSignedIntN(Pointer.Width * CHAR_BIT) ||
+        (Nullable && Delta.isZero()))
+      return fail(kFramePointerReach);
+    auto *Field = Result.data() + Pointer.Offset;
+    if (Pointer.Width == sizeof(uint32_t))
+      writeLE<uint32_t>(
+          Field, Delta.trunc(sizeof(uint32_t) * CHAR_BIT).getZExtValue());
+    else
+      writeLE<uint64_t>(
+          Field, Delta.trunc(sizeof(uint64_t) * CHAR_BIT).getZExtValue());
+    return llvm::Error::success();
+  };
   for (const auto &Record : *Records) {
     const auto *F = Image->ExceptionMetadata.findFunction(Record.BeginVA);
     const auto *C =
@@ -334,42 +378,39 @@ relocatedFrames(const std::vector<uint8_t> &Binary, const MachOEHFrameRegion &R,
         F->Dwarf->InitialLocation != Record.BeginVA ||
         F->Dwarf->AddressRange != Record.EndVA - Record.BeginVA ||
         !hasRelocatableAugmentation(*C, Image->Arch) || C->IsSignalFrame ||
-        C->HasMTETaggedFrame || C->PersonalityVA || C->PersonalitySlotVA ||
-        F->Dwarf->LSDAVA || !StableRules(C->InitialInstructions) ||
+        C->HasMTETaggedFrame || !StableRules(C->InitialInstructions) ||
         !StableRules(F->Dwarf->Instructions) ||
-        Record.HasLanguageAugmentation ||
-        (Record.InitialLocationEncoding != 0x10 &&
-         Record.InitialLocationEncoding != 0x1b &&
-         Record.InitialLocationEncoding != 0x1c) ||
-        !rangeInBounds(Record.InitialLocationOffset,
-                       Record.InitialLocationWidth, Result.size()))
+        (Record.HasLanguageAugmentation && !Image->isArm64e()) ||
+        (Record.InitialLocationEncoding & dweh::Indirect))
       return fail(
-          "EH growth needs an address-stable, non-language DWARF contract: "
-          "VA=" +
-          llvm::utohexstr(Record.BeginVA) + ", CIE=" +
-          (C ? C->Augmentation : std::string("absent")) + ", encoding=" +
-          llvm::Twine(unsigned(Record.InitialLocationEncoding)) +
-          ", status=" + llvm::Twine(F ? unsigned(F->ParseStatus) : 255));
-    const int64_t Delta =
-        int64_t(Record.BeginVA) - int64_t(VA + Record.InitialLocationOffset);
-    if (Record.InitialLocationWidth == 4 && llvm::isInt<32>(Delta))
-      writeLE<uint32_t>(Result.data() + Record.InitialLocationOffset,
-                        uint32_t(Delta));
-    else if (Record.InitialLocationWidth == 8)
-      writeLE<uint64_t>(Result.data() + Record.InitialLocationOffset,
-                        uint64_t(Delta));
-    else
-      return fail("relocated FDE exceeds its encoded reach");
+          llvm::formatv(kFramePointerContext, kFramePointerContract,
+                        llvm::utohexstr(Record.BeginVA),
+                        C ? C->Augmentation : kFrameMissingCIE,
+                        unsigned(Record.InitialLocationEncoding),
+                        F ? unsigned(F->ParseStatus) : kFrameMissingStatus));
+    if (auto Error = RelocatePointer(
+            {Record.InitialLocationOffset, Record.BeginVA,
+             Record.InitialLocationEncoding, Record.InitialLocationWidth},
+            false))
+      return Error;
+    for (const auto &Pointer : {Record.Personality, Record.LSDA})
+      if (Pointer)
+        if (auto Error = RelocatePointer(*Pointer, true))
+          return Error;
   }
   auto Replay = decodeDwarfEHFrameRecords(Result, VA, R.Is64);
   if (!Replay)
     return Replay.takeError();
   if (Replay->size() != Records->size())
     return fail("relocated FDE count changed");
-  for (size_t I = 0; I < Replay->size(); ++I)
+  for (size_t I = 0; I < Replay->size(); ++I) {
     if ((*Replay)[I].BeginVA != (*Records)[I].BeginVA ||
         (*Replay)[I].EndVA != (*Records)[I].EndVA)
       return fail("relocated FDE changed its original code range");
+    if ((*Replay)[I].Personality != (*Records)[I].Personality ||
+        (*Replay)[I].LSDA != (*Records)[I].LSDA)
+      return fail(kFrameLanguageChanged);
+  }
   const auto RelocatedFrames =
       dwarf_eh::parseEHFrame(*Image, {Result.data(), Result.size(), VA}, {});
   if (auto Error = compareFrameStates(OriginalFrames, RelocatedFrames,
@@ -636,7 +677,8 @@ llvm::Expected<bool> reserveMachOSourceUnwind(
     const auto R = **Compact;
     auto Raw = macho_unwind::parseCompactUnwindRaw(
         llvm::ArrayRef<uint8_t>(Candidate).slice(R.SectionFileOff,
-                                                 R.SectionSize));
+                                                 R.SectionSize),
+        {.TargetArch = A});
     if (!Raw)
       return Raw.takeError();
     uint64_t Count = 0;
@@ -666,7 +708,8 @@ llvm::Expected<bool> reserveMachOSourceUnwind(
             return fail("header growth lost the compact registry");
           Raw = macho_unwind::parseCompactUnwindRaw(
               llvm::ArrayRef<uint8_t>(Candidate).slice(
-                  (**Updated).SectionFileOff, (**Updated).SectionSize));
+                  (**Updated).SectionFileOff, (**Updated).SectionSize),
+              {.TargetArch = A});
           if (!Raw)
             return Raw.takeError();
         }

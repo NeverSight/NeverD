@@ -10,11 +10,13 @@
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/Win64EH.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <set>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
@@ -45,6 +47,55 @@ CxxFuncInfoGroups buildCxxFuncInfoGroups(const BinaryImage &Img) {
       Groups[*CandidateFuncInfoRVA].push_back(Candidate.CodeRange);
   }
   return Groups;
+}
+
+std::optional<uint32_t> fh3FuncInfoRVA(const BinaryImage &Img,
+                                       va_t HandlerDataVA) {
+  const auto RVA = readScalar<uint32_t>(Img, HandlerDataVA);
+  va_t FuncInfoVA = 0;
+  if (!RVA || *RVA == 0 || !addRVA(Img.Base, *RVA, FuncInfoVA))
+    return std::nullopt;
+  const auto MagicWord = readScalar<uint32_t>(Img, FuncInfoVA);
+  if (!MagicWord)
+    return std::nullopt;
+  switch (*MagicWord & 0x1FFFFFFFu) {
+  case 0x19930520:
+  case 0x19930521:
+  case 0x19930522:
+    return RVA;
+  }
+  return std::nullopt;
+}
+
+std::vector<va_t> fh3GroupRecordBegins(const BinaryImage &Img,
+                                       const std::set<uint32_t> &FuncInfoRVAs) {
+  std::vector<va_t> Begins;
+  if (Img.Arch != Arch::X64 || FuncInfoRVAs.empty())
+    return Begins;
+  for (const BinaryImage::COFFPDataRecord &Record : Img.COFFPDataRecords) {
+    va_t Unwind = 0, Begin = 0;
+    if (!addRVA(Img.Base, Record.UnwindInfoRVA, Unwind) ||
+        !addRVA(Img.Base, Record.BeginRVA, Begin))
+      continue;
+    const uint8_t *Header = Img.readVA(Unwind, 4);
+    if (!Header)
+      continue;
+    // The handler and its data follow the unwind codes, padded to an even
+    // count, of a primary record that installs one.
+    const uint8_t Flags = Header[0] >> 3;
+    if ((Flags & llvm::Win64EH::UNW_ChainInfo) ||
+        !(Flags & (llvm::Win64EH::UNW_ExceptionHandler |
+                   llvm::Win64EH::UNW_TerminateHandler)))
+      continue;
+    const uint64_t Codes = (uint64_t(Header[2]) + 1) & ~uint64_t{1};
+    const uint64_t HandlerData = 4 + 2 * Codes + 4;
+    if (Unwind > InvalidVA - HandlerData)
+      continue;
+    const auto RVA = readScalar<uint32_t>(Img, Unwind + HandlerData);
+    if (RVA && FuncInfoRVAs.count(*RVA))
+      Begins.push_back(Begin);
+  }
+  return Begins;
 }
 
 bool parseFH3(ExceptionFunction &F, const BinaryImage &Img,

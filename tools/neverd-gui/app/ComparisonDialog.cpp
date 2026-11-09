@@ -174,6 +174,16 @@ QTableView *table(QWidget *Parent, ComparisonModel *Model, const char *Name) {
   T->horizontalHeader()->setStretchLastSection(true);
   return T;
 }
+/// Widens each shown column of \p T to its heading, so the widths a table
+/// starts with cut off none of its headings.
+void keepHeadingsWhole(QTableView *T) {
+  auto *Columns = T->horizontalHeader();
+  for (int Column = 0; Column < T->model()->columnCount(); ++Column)
+    if (!Columns->isSectionHidden(Column))
+      Columns->resizeSection(Column,
+                             std::max(Columns->sectionSize(Column),
+                                      Columns->sectionSizeHint(Column)));
+}
 QString changeList(const QJsonArray &Rows) {
   QStringList Text;
   for (const auto &V : Rows)
@@ -489,12 +499,8 @@ ComparisonDialog::ComparisonDialog(const QString &Worker,
   FunctionTable->setColumnWidth(3, 85);
   FunctionTable->setColumnWidth(4, 85);
   FunctionTable->setColumnWidth(5, 95);
+  keepHeadingsWhole(FunctionTable);
   auto *Columns = FunctionTable->horizontalHeader();
-  for (int Column = 0; Column < Functions->columnCount(); ++Column)
-    if (!Columns->isSectionHidden(Column))
-      Columns->resizeSection(Column,
-                             std::max(Columns->sectionSize(Column),
-                                      Columns->sectionSizeHint(Column)));
   Columns->setContextMenuPolicy(Qt::CustomContextMenu);
   connect(Columns, &QHeaderView::customContextMenuRequested, this,
           [this, Columns](const QPoint &Position) {
@@ -617,6 +623,7 @@ ComparisonDialog::ComparisonDialog(const QString &Worker,
   InstructionTable->setColumnWidth(3, 85);
   InstructionTable->setColumnWidth(4, 175);
   InstructionTable->setColumnWidth(5, 75);
+  keepHeadingsWhole(InstructionTable);
   Tabs->addTab(InstructionTable, tr("Disassembly"));
   auto *Graphs = new QWidget(Tabs);
   auto *GraphLayout = new QVBoxLayout(Graphs);

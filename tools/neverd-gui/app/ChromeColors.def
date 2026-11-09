@@ -110,6 +110,9 @@ NEVERD_CHROME_COLOR(ScrollbarSlider, "#C1C1C1", "#424242")
 NEVERD_CHROME_COLOR(ScrollbarSliderHover, "#9A9A9A", "#4F4F4F")
 NEVERD_CHROME_COLOR(ScrollbarSliderActive, "#787878", "#6A6A6A")
 NEVERD_CHROME_COLOR(Separator, "#E5E5E5", "#3C3C3C")
+// A button under the pointer, after Visual Studio Code's secondary buttons:
+// the Light Modern and Dark+ secondaryHoverBackground.
+NEVERD_CHROME_COLOR(ButtonHover, "#CCCCCC", "#45494E")
 NEVERD_CHROME_COLOR(ButtonPrimary, "#007ACC", "#0E639C")
 NEVERD_CHROME_COLOR(ButtonPrimaryHover, "#0062A3", "#1177BB")
 NEVERD_CHROME_COLOR(ButtonPrimaryText, "#FFFFFF", "#FFFFFF")

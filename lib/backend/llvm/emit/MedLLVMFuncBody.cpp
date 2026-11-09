@@ -523,8 +523,15 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
       // variadic walk still reads the caller's native entry-stack area. Putting
       // generic positive stack slots in local headroom would shadow that area
       // with uninitialised storage.  Explicitly seeded homes below remain safe.
+      // A convention that reserves a home slot for each register argument
+      // (Win64) is the exception: its variadic prologue spills the registers
+      // there itself and the walk reads them back, so the headroom must hold
+      // them.
+      const bool RegisterHomes =
+          TRI.integerArgumentLayout(TargetFormat).CallStackBase > 0;
       uint64_t MaxHomeEnd = 0;
-      if (!(Func.IsVariadic && Func.VariadicOverflowCount == 0) &&
+      if (!(Func.IsVariadic && Func.VariadicOverflowCount == 0 &&
+            !RegisterHomes) &&
           Func.FrameHeadroom > 0)
         MaxHomeEnd = static_cast<uint64_t>(Func.FrameHeadroom);
       if (Func.IsVariadic && Func.VariadicOverflowCount > 0) {

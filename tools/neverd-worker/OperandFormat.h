@@ -154,6 +154,14 @@ struct OperandFacts {
   using EnumNamer = std::function<std::optional<std::string>(
       std::string_view, std::uint64_t, unsigned, bool)>;
   const EnumNamer *enums = nullptr;
+  /// A memory operand's displacement that is the image-relative address of
+  /// \c location, added to a register that holds the image base, as a switch
+  /// reads its table: `ds:(jpt_14000609A - 140000000h)[rdx+rcx*4]`.
+  struct ImageRelative {
+    std::int64_t displacement = 0;
+    std::uint64_t imageBase = 0, location = 0;
+  };
+  std::optional<ImageRelative> imageRelative;
 };
 
 /// A memory operand relative to a frame register.

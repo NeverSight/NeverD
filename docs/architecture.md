@@ -1468,7 +1468,24 @@ signed exception execution.
 Compact unwind and DWARF reservation reuse zero-filled `__TEXT` gaps outside
 sections and load-command payloads without moving original code/data VAs.
 DWARF capacity is sized to the actual records, and PC-relative fields are
-relocated for the selected storage address before installation. A shared payload inventory protects
+relocated for the selected storage address before installation. Original
+arm64e language-bearing frames may also move: their code ranges, LSDA storage
+and personality slots stay at the same addresses, while the initial-location,
+personality and LSDA fields receive checked signed PC-relative displacements.
+Null augmentation pointers remain null. Moving the EH section does not move
+or re-sign an address-diversified personality slot. Replay compares language
+pointer identity, normalized CFI and every statically known return-address
+signing state. Unsupported encodings, pointers into the moved EH storage,
+dynamic CFI and out-of-range displacements reject transactionally.
+Strict compact parsing, semantic loading and rewriting share the ARM64 DWARF
+fallback LSDA rule. `ld-classic` can retain an LSDA index without setting the
+redundant compact LSDA flag; the writer preserves both the original encoding
+and the index. Strict parsing requires an explicit AArch64 target for this
+form. Unknown architectures, non-DWARF encodings and a set flag with a missing
+index retain their rejection behavior. The DWARF record remains the language
+metadata authority, consistent with
+[Apple's libunwind fallback](https://github.com/apple-oss-distributions/libunwind/blob/main/libunwind/src/UnwindCursor.hpp).
+A shared payload inventory protects
 declared load-command data, including zero-filled `LC_NOTE` ranges, from reuse.
 Inline `LC_ID_DYLIB` metadata does not block otherwise available header space.
 
@@ -7825,6 +7842,12 @@ the five-byte jump retires the MOV's complete HIGHLOW operand. Preparation
 authenticates that exact handler field and its original bytes before removing
 the relocation, including the operand bytes outside the jump. Other partially
 overwritten relocation fields still refuse.
+An FH3 FuncInfo serves its function and each funclet the compiler emitted
+apart, every one a pdata record whose handler data names it, and its
+IP-to-state map covers them all. A focused x64 load (one function decompiled
+alone) first materializes the records that share a wanted FuncInfo, so the
+group check sees the same group a full load does and the tables decode
+complete instead of malformed.
 The same bounded COFF FuncInfo decoder exposes complete normalized wire graphs,
 record extents and callback-pointer fields without inventing a physical frame.
 Valid record aliases remain inspectable; distinct ownership is a separate
@@ -10084,6 +10107,22 @@ flag retains its separate ordinary ABI clear-state rule. See the
 [Windows x64 convention](https://learn.microsoft.com/en-us/cpp/build/x64-software-conventions)
 and [AAPCS64 status register contract](https://github.com/ARM-software/abi-aa/blob/main/aapcs64/aapcs64.rst).
 
+A Win64 variadic function spills its first variadic argument register and
+every later one whole to their home slots and passes the first slot's address
+on as its va_list; its summary names that position (`CallVariadicFrom`) and
+lists only the named registers, which every caller passes. Its own definition
+takes the spilled registers as parameters too, as an AAPCS variadic function
+takes its register save area's, so neither C route reads them as unknown
+registers. The summary publishes that position only while the slots still
+hold the spilled registers where the function could first observe them (a
+load of a slot, a call, or a pointer to the incoming area escaping): a spill
+the entry block overwrites whole before that is dead, `MedPrologueSaves`
+drops it, and its register is no parameter. The function is variadic from the
+first stack argument on: each call passes what it sets,
+`finalizeVariadicCallees` adds a trailing parameter for every stack argument a
+call passes and pads the others, and both C routes keep the home area and that
+overflow contiguous in their frame headroom.
+
 Win64 home-spill input elision accepts ordinary stores of an incoming
 register's low bytes only when their home slot is unread and does not escape.
 FS/GS and ordered stores keep their register observations. Returning an
@@ -11688,6 +11727,21 @@ HighC and LLVMC source output also refuse these calls until they have native
 adapters of their own. Deferred MedIR analysis remains available; resuming its
 HighIR projection enforces the same refusal.
 
+An x64 catch funclet returns the address its parent continues at: always in
+FH3, and in FH4 where the handler that names it records no continuation
+address (its continuation count is zero). Module discovery proves what each
+such funclet returns and makes every returned address a root of the parent
+whose handler names the funclet, so a catch's continuation is code of its
+parent in a full analysis and in a single function's. It also records the
+entry (`CxxContinuationEntries`): the continuation runs in the frame the
+funclet was entered with, the parent's, whose proof restores it there, so the
+parent's frame reads at the continuation are no incoming arguments. An FH3
+funclet is a function of its parent's FuncInfo group; an FH4 one has a
+FuncInfo of its own and is named by its parent's handler. A RETURN no
+instruction owns (in the block CFG recovery adds for a conditional jump to
+another function's entry, as MSVC's CRT jumps to its import thunks) leaves
+only its own function's returned code and exits incomplete; it does not
+withdraw every other function's continuations.
 FH3 catch-return evidence binds the source funclet, return instruction and
 owning continuation after module discovery converges. Shared SSA verifies the
 parent's unwind, decoded prologue and converted stack effects before restoring
