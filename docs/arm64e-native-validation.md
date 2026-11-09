@@ -70,13 +70,33 @@ B-key chained fixups unresolved on those runners and fails before unwinding;
 this profile does not qualify startup loading or hide that failure behind a
 retry. See the [native runner experiment](https://github.com/gmh5225/test_mac_intel/actions/runs/42626899000).
 
-The [separate linker comparison](https://github.com/gmh5225/test_mac_intel/actions/runs/42629838855)
-ran the O0 compiler-original dylib with the current linker and with `ld-classic`
-at both its default and macOS 11 deployment targets. All three call/unwind
-controls passed on both runners. Objects and libraries retained subtype
-`0x80000002`; their executable loaders used `0x81000002`. No subtype bytes were
-rewritten. This compiler-original evidence is separate from NeverD installation
-qualification.
+A supplemental linker diagnostic did not stop when `ld-classic` lookup failed
+and therefore does not establish legacy threaded execution. Xcode 27 no longer
+ships that linker. Produce the four original legacy inputs on a host with a real
+`ld-classic`, then transfer the output directory to the execution host:
+
+```sh
+python3 scripts/verify_arm64e_native.py legacy --output legacy-fixtures
+python3 scripts/verify_arm64e_native.py run \
+  --build-dir build-release --probe-report native-evidence/probe/report.json \
+  --legacy-fixtures legacy-fixtures --output native-evidence/installation
+```
+
+The producer fails on an unsuccessful linker lookup and records its hash, the
+compiler version, exact command lines, signatures and image hashes. The consumer
+requires the same source revision, source hashes and four exact arm64e binaries.
+It passes only those explicit inputs through `NEVERD_ARM64E_LEGACY_FIXTURES`;
+without that argument the tests continue to invoke the host linker. Replacement
+objects and execution controls are always compiled by the execution host. No
+Apple tool binaries are redistributed.
+
+The full run also exposed two installer problems: moving unwind metadata left
+section descriptors out of address order, and a Clang personality `POINTER_TO_GOT`
+placeholder was decoded before relocation. Metadata placement now sorts section
+descriptors while retaining symbol section identity. Object ingestion normalizes
+the unresolved personality field only in its logical decoding view; final
+relocation still requires the exact CIE field and installs the authenticated GOT
+slot. Native qualification requires successful execution after these repairs.
 
 The local `NeverDArm64eAnalysisTests` owner also exercises CPA2 source emission.
 Its eighteen narrow aliased-index words run as separate CTest cases, each keeping

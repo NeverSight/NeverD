@@ -644,20 +644,33 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
   if (RelocateOriginalLanguage)
     Args.push_back(kDwarfLanguageOption);
   std::string LinkerOption;
-  if (Threaded) {
-    const auto LinkerFile = Path(kClassicLinkerPath);
-    ASSERT_EQ(Run(kXcrun, {kXcrun, kFindTool, kClassicLinker}, LinkerFile), 0);
-    auto Linker = llvm::MemoryBuffer::getFile(LinkerFile);
-    ASSERT_TRUE(bool(Linker));
-    LinkerOption =
-        std::string(kLinkerOption) + (*Linker)->getBuffer().trim().str();
-    Args.append({LinkerOption, kLegacyDeployment, kThreadedOption});
-  } else
-    Args.push_back(kChainedOption);
-  Args.append({Optimization, Source, Dwarf});
-  Args.append(std::begin(kOutputArgs), std::end(kOutputArgs));
-  Args.push_back(OriginalPath);
-  ASSERT_EQ(Run(kCompiler, Args), 0);
+  const auto *LegacyRoot = std::getenv(kLegacyFixtureEnvironment);
+  if (Threaded && LegacyRoot) {
+    llvm::SmallString<kPathCapacity> LegacyPath(LegacyRoot);
+    llvm::sys::path::append(LegacyPath, std::string(Optimization) +
+                                            (RelocateOriginalLanguage
+                                                 ? kLegacyDwarfSuffix
+                                                 : kLegacyCompactSuffix));
+    ASSERT_FALSE(llvm::sys::fs::copy_file(LegacyPath, OriginalPath));
+    ::testing::Test::RecordProperty(kLegacyFixtureProperty,
+                                    LegacyPath.str().str());
+  } else {
+    if (Threaded) {
+      const auto LinkerFile = Path(kClassicLinkerPath);
+      ASSERT_EQ(Run(kXcrun, {kXcrun, kFindTool, kClassicLinker}, LinkerFile),
+                0);
+      auto Linker = llvm::MemoryBuffer::getFile(LinkerFile);
+      ASSERT_TRUE(bool(Linker));
+      LinkerOption =
+          std::string(kLinkerOption) + (*Linker)->getBuffer().trim().str();
+      Args.append({LinkerOption, kLegacyDeployment, kThreadedOption});
+    } else
+      Args.push_back(kChainedOption);
+    Args.append({Optimization, Source, Dwarf});
+    Args.append(std::begin(kOutputArgs), std::end(kOutputArgs));
+    Args.push_back(OriginalPath);
+    ASSERT_EQ(Run(kCompiler, Args), 0);
+  }
   Args.assign({kCompiler});
   Args.append(std::begin(kObjectCompileArgs), std::end(kObjectCompileArgs));
   if (DwarfLanguage)
@@ -860,10 +873,66 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
           ->n_type &= ~llvm::MachO::N_PEXT;
     });
   }
+  const auto BeforeInstallation = Bytes;
   auto Image =
       appendMachOObjectImage(Bytes, (*Object)->getBuffer(), Dependencies);
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
   ASSERT_TRUE(Image->Success);
+  if (DwarfLanguage && !ExecuteNative) {
+    // PTR_TO_GOT has no addend. Changing only its unresolved assembler word
+    // must produce the same placed bytes, even when that word underflows the
+    // object's logical address before linking.
+    auto Variant = (*Object)->getBuffer().str();
+    auto *Data = reinterpret_cast<uint8_t *>(Variant.data());
+    unsigned Changed = 0;
+    forEachMachOLoadCommand(
+        Data, Variant.size(),
+        [&](const uint8_t *C, uint32_t ID, uint32_t, bool) {
+          if (ID != llvm::MachO::LC_SEGMENT_64)
+            return;
+          const auto *Segment =
+              reinterpret_cast<const llvm::MachO::segment_command_64 *>(C);
+          const auto *Sections =
+              reinterpret_cast<const llvm::MachO::section_64 *>(Segment + 1);
+          for (unsigned I = 0; I < Segment->nsects; ++I) {
+            const auto &Section = Sections[I];
+            if (readMachOName(Section.sectname) != kEHFrameSection)
+              continue;
+            for (unsigned J = 0; J < Section.nreloc; ++J) {
+              const auto *Relocation =
+                  Data + Section.reloff +
+                  J * sizeof(llvm::MachO::any_relocation_info);
+              if ((readLE<uint32_t>(Relocation + sizeof(uint32_t)) >>
+                   kObjectRelocTypeShift) !=
+                  llvm::MachO::ARM64_RELOC_POINTER_TO_GOT)
+                continue;
+              writeLE<uint32_t>(Data + Section.offset +
+                                    readLE<uint32_t>(Relocation),
+                                kPersonalityPlaceholder);
+              ++Changed;
+            }
+          }
+        });
+    ASSERT_GT(Changed, 0u);
+    auto Candidate = BeforeInstallation;
+    auto Placed = appendMachOObjectImage(Candidate, Variant, Dependencies);
+    ASSERT_TRUE(bool(Placed)) << llvm::toString(Placed.takeError());
+    EXPECT_EQ(Candidate, Bytes);
+    EXPECT_EQ(Placed->SymbolAddrs, Image->SymbolAddrs);
+  }
+  forEachMachOLoadCommand(
+      Bytes.data(), Bytes.size(),
+      [&](const uint8_t *C, uint32_t ID, uint32_t, bool) {
+        if (ID != llvm::MachO::LC_SEGMENT_64)
+          return;
+        const auto *Segment =
+            reinterpret_cast<const llvm::MachO::segment_command_64 *>(C);
+        const auto *Sections =
+            reinterpret_cast<const llvm::MachO::section_64 *>(Segment + 1);
+        for (unsigned I = 1; I < Segment->nsects; ++I)
+          EXPECT_LE(Sections[I - 1].addr + Sections[I - 1].size,
+                    Sections[I].addr);
+      });
   EXPECT_EQ(Image->InputKind, RewriteInputKind::ReplacementObject);
   auto Recipes = collectMachOAuthenticatedFixups(Bytes, *Image, Dependencies);
   ASSERT_TRUE(bool(Recipes)) << llvm::toString(Recipes.takeError());

@@ -14,6 +14,8 @@
 MACHO_LAYOUT_TEXT(kMetadataTextSegment, "__TEXT")
 MACHO_LAYOUT_TEXT(kCompactSection, "__unwind_info")
 MACHO_LAYOUT_VALUE(uint64_t, kMetadataCommandReserve, 512)
+MACHO_LAYOUT_TEXT(kSectionOrderReferences,
+                  "TEXT section ordering has unmodeled section references")
 
 #undef MACHO_LAYOUT_TEXT
 #undef MACHO_LAYOUT_VALUE

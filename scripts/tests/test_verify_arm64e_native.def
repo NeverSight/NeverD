@@ -129,5 +129,13 @@
         "fixture": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
       }
     }
-  ]
+  ],
+  "legacy_header_format": "<III",
+  "legacy_header": [
+    4277009103,
+    16777228,
+    2147483650
+  ],
+  "legacy_trailing_bytes": "changed",
+  "legacy_lookup_failure": 72
 }

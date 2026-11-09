@@ -67,6 +67,54 @@
     "library_args": {
       "kind": "args",
       "symbol": "kProviderCompileArgs"
+    },
+    "legacy_args": {
+      "kind": "args",
+      "symbol": "kCompileArgs"
+    },
+    "legacy_assembly": {
+      "kind": "asm",
+      "symbol": "kDwarfSource"
+    },
+    "legacy_environment": {
+      "kind": "text",
+      "symbol": "kLegacyFixtureEnvironment"
+    },
+    "legacy_compact_suffix": {
+      "kind": "text",
+      "symbol": "kLegacyCompactSuffix"
+    },
+    "legacy_dwarf_suffix": {
+      "kind": "text",
+      "symbol": "kLegacyDwarfSuffix"
+    },
+    "xcrun": {
+      "kind": "text",
+      "symbol": "kXcrun"
+    },
+    "find_tool": {
+      "kind": "text",
+      "symbol": "kFindTool"
+    },
+    "classic_linker": {
+      "kind": "text",
+      "symbol": "kClassicLinker"
+    },
+    "linker_option": {
+      "kind": "text",
+      "symbol": "kLinkerOption"
+    },
+    "legacy_deployment": {
+      "kind": "text",
+      "symbol": "kLegacyDeployment"
+    },
+    "threaded_option": {
+      "kind": "text",
+      "symbol": "kThreadedOption"
+    },
+    "threaded_info_args": {
+      "kind": "args",
+      "symbol": "kThreadedInfoArgs"
     }
   },
   "symbol_placeholder": "{symbol}",
@@ -74,7 +122,8 @@
     "raw": "MACHO_AUTH_NATIVE_TEXT\\(\\s*{symbol}\\s*,\\s*R\"cpp\\((.*?)\\)cpp\"\\s*\\)",
     "text": "MACHO_AUTH_NATIVE_TEXT\\(\\s*{symbol}\\s*,\\s*(\"(?:\\\\.|[^\"\\\\])*\")\\s*\\)",
     "number": "MACHO_AUTH_NATIVE_VALUE\\(\\s*int\\s*,\\s*{symbol}\\s*,\\s*([0-9]+)\\s*\\)",
-    "args": "MACHO_AUTH_NATIVE_ARGS\\(\\s*{symbol}\\s*,(.*?)\\)"
+    "args": "MACHO_AUTH_NATIVE_ARGS\\(\\s*{symbol}\\s*,(.*?)\\)",
+    "asm": "MACHO_AUTH_NATIVE_TEXT\\(\\s*{symbol}\\s*,\\s*R\"asm\\((.*?)\\)asm\"\\s*\\)"
   },
   "host_os": "Darwin",
   "host_arches": [
@@ -235,7 +284,8 @@
   "mode_argument": "mode",
   "modes": [
     "probe",
-    "run"
+    "run",
+    "legacy"
   ],
   "probe_mode": "probe",
   "output_argument": "--output",
@@ -251,9 +301,21 @@
     "probe": "Current-source PAC and compiler-original call/unwind preflight must pass before installation qualification",
     "discovery": "Registered CTest native runtime commands are unavailable or invalid",
     "ctest": "Native runtime CTest invocation failed",
-    "arguments": "run requires --build-dir and --probe-report"
+    "arguments": "run requires --build-dir and --probe-report",
+    "legacy": "Legacy fixtures are missing, stale, or do not match their recorded arm64e binaries",
+    "legacy_linker": "A successful lookup of a real ld-classic is required"
   },
   "library_suffix": ".dylib",
   "loader_suffix": "-loader",
-  "control_loading": "dlopen"
+  "control_loading": "dlopen",
+  "legacy_mode": "legacy",
+  "legacy_argument": "--legacy-fixtures",
+  "legacy_source": "original.cpp",
+  "legacy_assembly": "signed-frame.S",
+  "legacy_compiler_label": "legacy-compiler",
+  "legacy_linker_label": "legacy-linker",
+  "legacy_version_args": [
+    "--version"
+  ],
+  "legacy_info_suffix": "-dyld-info"
 }

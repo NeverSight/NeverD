@@ -33,7 +33,7 @@ def definition(text, kind, name):
     if len(matches) != 1:
         raise ValueError(POLICY["errors"]["definition"].format(name=name))
     value = matches[0]
-    if kind == "raw":
+    if kind in ("raw", "asm"):
         return value
     if kind == "args":
         return json.loads("[" + value + "]")
@@ -85,6 +85,77 @@ def check_binary(binary):
         raise ValueError(POLICY["errors"]["binary"])
     return {"sha256": digest(binary), "bytes": len(raw),
             "cpu_subtype": fields[2]}
+
+
+def legacy_cases(contract):
+    return [{"optimization": optimization, "dwarf": dwarf,
+             "name": optimization + contract[
+                 "legacy_dwarf_suffix" if dwarf else "legacy_compact_suffix"]}
+            for optimization in POLICY["optimizations"] for dwarf in POLICY["dwarf_modes"]]
+
+
+def build_legacy_fixtures(output):
+    """Produce owned legacy images without executing arm64e on the build host."""
+    report = {**provenance(), "status": POLICY["failed"], "images": []}
+    try:
+        contract = fixture_contract()
+        with OwnedProducts(output, True) as products:
+            lookup = command(products, output, POLICY["legacy_linker_label"],
+                             [contract["xcrun"], contract["find_tool"],
+                              contract["classic_linker"]], POLICY["tool_timeout"])
+            linker = Path(lookup.stdout.strip())
+            if lookup.returncode or not lookup.stdout.strip() or not linker.is_file():
+                raise RuntimeError(POLICY["errors"]["legacy_linker"])
+            report["linker_sha256"] = digest(linker)
+            version = command(products, output, POLICY["legacy_compiler_label"],
+                              [contract["compiler"], *POLICY["legacy_version_args"]],
+                              POLICY["tool_timeout"])
+            version.check_returncode()
+            report["compiler"] = version.stdout
+            source, assembly = output / POLICY["legacy_source"], output / POLICY["legacy_assembly"]
+            source.write_text(contract["source"])
+            assembly.write_text(contract["legacy_assembly"])
+            for case in legacy_cases(contract):
+                binary = output / case["name"]
+                products.append(binary)
+                argv = [contract["compiler"], *contract["legacy_args"],
+                        contract["linker_option"] + str(linker),
+                        contract["legacy_deployment"], contract["threaded_option"],
+                        case["optimization"]]
+                if case["dwarf"]:
+                    argv.append(contract["dwarf_option"])
+                argv.extend([str(source), str(assembly), POLICY["output_flag"], str(binary)])
+                result = command(products, output, case["name"] + POLICY["compile_suffix"],
+                                 argv, POLICY["tool_timeout"])
+                result.check_returncode()
+                signed = command(products, output, case["name"] + POLICY["signature_suffix"],
+                                 [*POLICY["signature_command"], str(binary)], POLICY["tool_timeout"])
+                signed.check_returncode()
+                info = command(products, output, case["name"] + POLICY["legacy_info_suffix"],
+                               [contract["xcrun"], *contract["threaded_info_args"], str(binary)],
+                               POLICY["tool_timeout"])
+                info.check_returncode()
+                report["images"].append({**case, **check_binary(binary)})
+            report["status"] = POLICY["passed"]
+        return report
+    finally:
+        save(output / POLICY["report_name"], report)
+
+
+def verify_legacy_fixtures(directory):
+    report = json.loads((directory / POLICY["report_name"]).read_text())
+    expected = provenance()
+    if (report.get("status") != POLICY["passed"] or
+            any(report.get(key) != expected[key] for key in POLICY["provenance_keys"])):
+        raise ValueError(POLICY["errors"]["legacy"])
+    cases = legacy_cases(fixture_contract())
+    images = report.get("images", [])
+    if len(images) != len(cases):
+        raise ValueError(POLICY["errors"]["legacy"])
+    for case, image in zip(cases, images):
+        if image != {**case, **check_binary(directory / case["name"])}:
+            raise ValueError(POLICY["errors"]["legacy"])
+    return report
 
 
 def probe(output):
@@ -198,7 +269,7 @@ def check_runtime_report(xml):
     return names
 
 
-def run_installation(output, build, probe_report):
+def run_installation(output, build, probe_report, legacy_fixtures=None):
     report = {**provenance(), "status": POLICY["failed"],
               "native_installer_call_unwind_qualified": False,
               "whole_image_publication_qualified": False}
@@ -210,6 +281,8 @@ def run_installation(output, build, probe_report):
                 any(control.get(key) != report[key] for key in POLICY["provenance_keys"])):
             raise ValueError(POLICY["errors"]["probe"])
         report["probe_report_sha256"] = digest(probe_report)
+        if legacy_fixtures is not None:
+            report["legacy_fixtures"] = verify_legacy_fixtures(legacy_fixtures)
         argv = [*POLICY["ctest_command"], POLICY["build_dir_flag"], str(build),
                 POLICY["test_regex_flag"], POLICY["test_regex"]]
         with OwnedProducts(output, False) as products:
@@ -234,6 +307,10 @@ def run_installation(output, build, probe_report):
             with tempfile.TemporaryDirectory(prefix=POLICY["temporary_prefix"], dir=output) as temporary:
                 env = dict(os.environ, **POLICY["test_environment"])
                 env.pop(POLICY["artifact_environment"], None)
+                legacy_environment = fixture_contract()["legacy_environment"]
+                env.pop(legacy_environment, None)
+                if legacy_fixtures is not None:
+                    env[legacy_environment] = str(legacy_fixtures.resolve())
                 env[POLICY["temporary_environment"]] = temporary
                 result = command(products, output, POLICY["runtime_label_name"],
                                  [*argv, *POLICY["ctest_run_flags"], str(xml)],
@@ -255,16 +332,20 @@ def main():
     parser.add_argument(POLICY["output_argument"], type=Path, required=True)
     parser.add_argument(POLICY["build_argument"], type=Path)
     parser.add_argument(POLICY["probe_argument"], type=Path)
+    parser.add_argument(POLICY["legacy_argument"], type=Path)
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     try:
         if args.mode == POLICY["probe_mode"]:
             report = probe(output)
+        elif args.mode == POLICY["legacy_mode"]:
+            report = build_legacy_fixtures(output)
         else:
             if not args.build_dir or not args.probe_report:
                 raise ValueError(POLICY["errors"]["arguments"])
-            report = run_installation(output, args.build_dir.resolve(), args.probe_report.resolve())
+            report = run_installation(output, args.build_dir.resolve(), args.probe_report.resolve(),
+                                      args.legacy_fixtures)
         print(json.dumps({"status": report["status"], "report": str(output / POLICY["report_name"])}))
         return POLICY["exit_codes"][report["status"]]
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
