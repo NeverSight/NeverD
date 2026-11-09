@@ -884,6 +884,11 @@ frame facts are forgotten. Instantiated expression witnesses use the caller's
 coordinates after its frame push. Reports name these namespaces and count
 `canonicalized_frame_inputs`, including cache lookups, rather than treating
 each normalization as a distinct context or recovered target.
+When a register holds a finite set of actual frame addresses, origin recovery
+translates every alternative against the owning entry r10. It retains the set
+only if all bases agree and every displacement is representable. Read and write
+footprints then include every alternative; an incompatible member cannot be
+silently dropped or treated as a formal register number.
 
 Typed stores and complete copies use the same range owner for these relative
 coordinates. A representable word below the numeric stack region can still

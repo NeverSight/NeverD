@@ -3506,18 +3506,35 @@ void ContextFlow::refineOrigins(const FunctionContext &Context,
                                 ContextState &State) {
   const auto Frame = Context.Input.Registers[kFramePointerRegister].singleton();
   for (unsigned R = 0; R < kRegisterCount; ++R) {
+    std::optional<ProvenValueSet> FrameOrigins;
+    if (Frame.ValueKind == RegisterValue::Kind::StackAddress)
+      for (const auto &Value : State.Registers[R].values()) {
+        int64_t Offset;
+        // Translate every actual frame alternative to the owning entry frame.
+        // A different base or overflowing displacement must not leave a
+        // partial set of origins that omits a possible memory access.
+        if (Value.ValueKind != RegisterValue::Kind::StackAddress ||
+            Value.Value != Frame.Value ||
+            llvm::SubOverflow(Value.Offset, Frame.Offset, Offset)) {
+          FrameOrigins.reset();
+          break;
+        }
+        const RegisterValue Origin{RegisterValue::Kind::StackAddress,
+                                   kRegisterCount, Offset};
+        if (FrameOrigins)
+          FrameOrigins->join(Origin);
+        else
+          FrameOrigins = Origin;
+      }
+    if (FrameOrigins) {
+      State.Origins[R] = *FrameOrigins;
+      continue;
+    }
     const auto Value = State.Registers[R].singleton();
-    if (Value.ValueKind == RegisterValue::Kind::StackAddress &&
-        Frame.ValueKind == RegisterValue::Kind::StackAddress &&
-        Value.Value == Frame.Value) {
-      int64_t Offset;
-      if (!llvm::SubOverflow(Value.Offset, Frame.Offset, Offset))
-        State.Origins[R] = RegisterValue{RegisterValue::Kind::StackAddress,
-                                         kRegisterCount, Offset};
-    } else if (State.Origins[R].unknown() &&
-               (Value.ValueKind == RegisterValue::Kind::Constant ||
-                Value.ValueKind == RegisterValue::Kind::UnsignedRange ||
-                Value.ValueKind == RegisterValue::Kind::SymbolicAddress)) {
+    if (State.Origins[R].unknown() &&
+        (Value.ValueKind == RegisterValue::Kind::Constant ||
+         Value.ValueKind == RegisterValue::Kind::UnsignedRange ||
+         Value.ValueKind == RegisterValue::Kind::SymbolicAddress)) {
       State.Origins[R] = Value;
     } else if (State.Registers[R].unknown()) {
       const auto Origin =
