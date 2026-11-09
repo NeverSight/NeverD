@@ -16905,14 +16905,28 @@ and no bounded proof of where the frame is follows them.
 
 For LLVM-to-C, `MedLLVMRegistrationSourceSEH.cpp` consumes these display facts
 in the private source module. It preflights distinct, closed finally bodies,
-their normal calls, local-unwind ancestors and pure constant execute-handler
-filters before changing any blocks. Unsupported ownership, ambiguous levels,
-shared cleanup bodies and expression filters retain the unlowered source CFG.
+their normal calls, local-unwind ancestors and owned filter CFGs before
+changing any blocks. Unsupported ownership, ambiguous levels, shared cleanup
+bodies and unrepresentable callback dependencies retain the unlowered source CFG.
 Normal calls receive a copy of their finally body; a local unwind receives the
 exited bodies in inner-to-outer order, each under its enclosing scope. The
 exceptional copy lives in a cleanup pad. Clone work is bounded per function by
 the backend limits owner. Native registration admission still requires its
 independent frame and rewrite proofs.
+
+`MedLLVMSourceSEHFilter.cpp` reuses the callback closure planner for source
+filters. A marked source helper takes the exception pointers and explicit
+parent storage. Incoming scalar arguments receive homes before any protected
+instruction; private SSA temporaries stay private to each filter invocation.
+The helper initializes the recovered exception-pointer cell and preserves the
+filter's memory writes and signed i32 disposition. A parent's void or wider
+return type does not erase or widen that disposition: a source-only result
+bundle retains it until outlining. Both C routes use `RegistrationDisplay.h`
+for the exception-pointer cell's frame coordinate. The catchpad carries the
+helper and capture allocas, which LLVMC
+prints as a call inside `__except`. Selected-source emission includes these
+helper definitions. The marker grants no Windows native callback ABI, and
+native outlining keeps its independent personality and frame checks.
 
 LLVMC can print a closed, branching cleanup CFG in each fragmented `__finally`.
 Each printed copy has private C labels and explicit PHI edge assignments. The

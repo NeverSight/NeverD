@@ -31,6 +31,10 @@ public:
       for (const auto &Instruction : llvm::instructions(Selected[I])) {
         const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction);
         const auto *Callee = Call ? Call->getCalledFunction() : nullptr;
+        if (const auto *Pad = llvm::dyn_cast<llvm::CatchPadInst>(&Instruction);
+            Pad && Pad->arg_size())
+          Callee = llvm::dyn_cast<llvm::Function>(
+              Pad->getArgOperand(0)->stripPointerCasts());
         if (Callee && !Callee->isDeclaration() &&
             Callee->hasFnAttribute(LLVMSourceBody) &&
             Members.insert(Callee).second)

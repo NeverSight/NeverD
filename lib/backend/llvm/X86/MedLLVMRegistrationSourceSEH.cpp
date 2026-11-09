@@ -18,8 +18,8 @@
 ///   it while unwinding and each normal-path `call` runs it.  Its cleanup pad
 ///   holds the body, and each `call` becomes a copy of it, which C's
 ///   `__finally` prints apart from the pad as the normal termination.
-/// - An `__except` filter that only returns EXCEPTION_EXECUTE_HANDLER catches
-///   with no filter.
+/// - An `__except` filter becomes a source helper with explicit captures and
+///   exception pointers; a constant EXCEPTION_EXECUTE_HANDLER needs no helper.
 /// - `_local_unwind2` and `_local_unwind4` become the exited scopes' cleanup
 ///   bodies, in unwind order, under each body's enclosing scope.
 ///
@@ -28,12 +28,16 @@
 //===----------------------------------------------------------------------===//
 
 #include "../eh/MedLLVMEHHelpers.h"
+#include "MedLLVMSourceSEHFilter.h"
 
 #include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/llvm/LLVMSourceBody.h"
+#include "neverd/backend/llvm/LLVMSourceSEHFilter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
+#include "neverd/ir/RegistrationDisplay.h"
 #include "neverd/ir/RegistrationState.h"
 #include "neverd/loader/ExceptionInfo.h"
 
@@ -411,6 +415,7 @@ bool MedLLVMEmitter::emitSourceX86RegistrationSEH(
     /// `__except`: the handler, and the filter's blocks that go.
     llvm::BasicBlock *Handler = nullptr;
     std::vector<llvm::BasicBlock *> FilterBlocks;
+    va_t FilterRoot = 0;
     llvm::BasicBlock *UnwindDest = nullptr;
     std::set<llvm::BasicBlock *> Blocks;
   };
@@ -418,6 +423,15 @@ bool MedLLVMEmitter::emitSourceX86RegistrationSEH(
   std::set<llvm::BasicBlock *> Funclets;
   std::set<llvm::BasicBlock *> Removed;
   std::set<va_t> ClaimedBodies;
+  struct FilterPlan {
+    X86RegistrationCallbackRequest Request;
+    std::optional<x86_registration::SourceFilterPlan> Outline;
+    std::optional<uint32_t> Constant;
+    llvm::Function *Function = nullptr;
+    std::vector<llvm::Value *> Captures;
+  };
+  std::map<va_t, FilterPlan> Filters;
+  size_t FilterWork = 0;
   for (size_t K = 0; K < Scopes.size(); ++K) {
     const RegistrationScopeRecord &Scope = Scopes[K];
     Region &R = Regions[K];
@@ -510,22 +524,68 @@ bool MedLLVMEmitter::emitSourceX86RegistrationSEH(
     const auto Filter = ByStart.find(Scope.FilterVA);
     if (Filter == ByStart.end() || !Mapped.count(Filter->second->Id))
       return false;
+    std::set<int> Body;
     for (const auto &[Id, Plan] : Plans)
-      if (Plan.Owner == Scope.FilterVA && Id != Filter->second->Id)
-        return false;
-    const auto Value = constantFilterValue(*Filter->second);
-    if (!Value)
+      if (Plan.Owner == Scope.FilterVA) {
+        if (Plan.Special)
+          return false;
+        Body.insert(Id);
+      }
+    if (!Body.count(Filter->second->Id))
       return false;
-    if (*Value != 1)
-      return false;
-    R.FilterBlocks = LLVMBlocksOf({Filter->second->Id});
+    R.FilterBlocks = LLVMBlocksOf(Body);
     if (!keepsItsValues(R.FilterBlocks))
       return false;
-    const std::set<llvm::BasicBlock *> Within(R.FilterBlocks.begin(),
-                                              R.FilterBlocks.end());
-    for (llvm::BasicBlock *Block : R.FilterBlocks)
-      for (llvm::BasicBlock *Pred : llvm::predecessors(Block))
-        if (!Within.count(Pred))
+    const auto Value =
+        Body.size() == 1 ? constantFilterValue(*Filter->second) : std::nullopt;
+    if (Value) {
+      const std::set<llvm::BasicBlock *> Within(R.FilterBlocks.begin(),
+                                                R.FilterBlocks.end());
+      for (llvm::BasicBlock *Block : R.FilterBlocks)
+        for (llvm::BasicBlock *Pred : llvm::predecessors(Block))
+          if (!Within.count(Pred))
+            return false;
+    }
+    if (!Value || *Value != 1) {
+      R.FilterRoot = Scope.FilterVA;
+      auto [It, Inserted] = Filters.try_emplace(Scope.FilterVA);
+      if (Inserted) {
+        auto &Request = It->second.Request;
+        Request.Entry = Mapped.at(Filter->second->Id);
+        Request.Blocks = R.FilterBlocks;
+        Request.Name = Parent.getName().str() + ".seh_filter." +
+                       std::to_string(Scope.FilterVA);
+        if (Value) {
+          It->second.Constant = static_cast<uint32_t>(*Value);
+        } else {
+          if (FrameAlloca) {
+            const int64_t Cell =
+                int64_t(FrameEntrySPOffset) +
+                registration_display::exceptionPointersSlot(Facts, Chain);
+            if (Cell < 0)
+              return false;
+            Request.Frame.SyntheticFrame = FrameAlloca;
+            Request.Frame.ExceptionPointersOffset = static_cast<uint64_t>(Cell);
+          }
+          auto Prepared = x86_registration::prepareSourceFilter(Parent, Request,
+                                                                FilterWork);
+          if (!Prepared) {
+            llvm::consumeError(Prepared.takeError());
+            return false;
+          }
+          It->second.Outline = std::move(*Prepared);
+        }
+      }
+    }
+    // A callback invoked by ordinary code still needs its original entry.
+    for (const auto &Block : Func.Blocks)
+      for (const auto &Op : Block.Ops)
+        if (Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst() &&
+            llvm::any_of(Body, [&](int Id) {
+              const auto &Part = *ById.at(Id);
+              return Op.Inputs[0].ConstVal >= Part.StartAddr &&
+                     Op.Inputs[0].ConstVal < Part.EndAddr;
+            }))
           return false;
     Removed.insert(R.FilterBlocks.begin(), R.FilterBlocks.end());
   }
@@ -560,11 +620,59 @@ bool MedLLVMEmitter::emitSourceX86RegistrationSEH(
       if (Regions[K].Scope->IsFinally && !Charge(K))
         return false;
 
+  for (const auto &[Root, Filter] : Filters) {
+    if (Filter.Constant)
+      continue;
+    const auto &Plan = *Filter.Outline;
+    size_t Cost =
+        Plan.Callback.Recipes.size() + Plan.Callback.PrivateSlots.size() +
+        2 * Plan.Initializers.size() + 3 * Plan.Callback.Arguments.size();
+    for (const auto *Block : Filter.Request.Blocks)
+      Cost += Block->size();
+    if (Cost > Remaining)
+      return false;
+    Remaining -= Cost;
+  }
+
   // Commit.  Nothing below refuses.
+  // A function without synthetic storage can begin directly in its protected
+  // block. New capture homes must be initialized before a try-begin invoke,
+  // whose exceptional edge already uses them. Keep static allocas in entry.
+  if (HomeOf.count(&Parent.getEntryBlock()) &&
+      llvm::any_of(Filters, [](const auto &Entry) {
+        return Entry.second.Outline && !Entry.second.Outline->Captures.empty();
+      })) {
+    auto *OldEntry = &Parent.getEntryBlock();
+    auto *Setup = llvm::BasicBlock::Create(*Ctx, "seh.filter.captures", &Parent,
+                                           OldEntry);
+    auto *Branch = llvm::UncondBrInst::Create(OldEntry, Setup);
+    for (auto &Instruction : llvm::make_early_inc_range(*OldEntry))
+      if (llvm::isa<llvm::AllocaInst>(Instruction))
+        Instruction.moveBefore(Branch->getIterator());
+  }
   llvm::FunctionCallee Personality = Mod->getOrInsertFunction(
       PersonalityName,
       llvm::FunctionType::get(llvm::Type::getInt32Ty(*Ctx), {}, true));
   Parent.setPersonalityFn(llvm::cast<llvm::Constant>(Personality.getCallee()));
+  for (auto &[Root, Filter] : Filters) {
+    if (!Filter.Constant) {
+      auto Outlined =
+          x86_registration::commitSourceFilter(Parent, *Filter.Outline);
+      Filter.Function = Outlined.Function;
+      Filter.Captures = std::move(Outlined.Captures);
+      continue;
+    }
+    llvm::IRBuilder<> Builder(*Ctx);
+    Filter.Function = llvm::Function::Create(
+        llvm::FunctionType::get(Builder.getInt32Ty(), {Builder.getPtrTy()},
+                                false),
+        llvm::GlobalValue::InternalLinkage, Filter.Request.Name, Mod);
+    Filter.Function->addFnAttr(LLVMSourceBody);
+    Filter.Function->addFnAttr(LLVMSourceSEHFilter);
+    Builder.SetInsertPoint(
+        llvm::BasicBlock::Create(*Ctx, "entry", Filter.Function));
+    Builder.CreateRet(Builder.getInt32(*Filter.Constant));
+  }
 
   const std::set<llvm::BasicBlock *> RemovedSet(Removed.begin(), Removed.end());
   std::map<llvm::BasicBlock *, int32_t> LevelOfBlock;
@@ -634,8 +742,12 @@ bool MedLLVMEmitter::emitSourceX86RegistrationSEH(
     ReplaceCall(*Call, Next);
   }
 
-  for (llvm::BasicBlock *Block : Removed)
+  for (llvm::BasicBlock *Block : Removed) {
+    for (auto &Instruction : *Block)
+      if (auto *Call = llvm::dyn_cast<llvm::CallInst>(&Instruction))
+        CallSiteAddrs.erase(Call);
     Block->dropAllReferences();
+  }
   for (llvm::BasicBlock *Block : Removed) {
     LevelOfBlock.erase(Block);
     Block->eraseFromParent();
@@ -724,8 +836,16 @@ bool MedLLVMEmitter::emitSourceX86RegistrationSEH(
         llvm::BasicBlock::Create(*Ctx, "seh.catch.pad." + Suffix, &Parent);
     Switch->addHandler(PadBB);
     llvm::IRBuilder<> PB(PadBB);
-    llvm::CatchPadInst *Pad = PB.CreateCatchPad(
-        Switch, {llvm::ConstantPointerNull::get(PtrTy)}, "seh.catch.pad.token");
+    llvm::SmallVector<llvm::Value *, 4> Arguments;
+    if (R.FilterRoot) {
+      const auto &Filter = Filters.at(R.FilterRoot);
+      Arguments.push_back(Filter.Function);
+      Arguments.append(Filter.Captures.begin(), Filter.Captures.end());
+    } else {
+      Arguments.push_back(llvm::ConstantPointerNull::get(PtrTy));
+    }
+    llvm::CatchPadInst *Pad =
+        PB.CreateCatchPad(Switch, Arguments, "seh.catch.pad.token");
     PB.CreateCatchRet(Pad, R.Handler);
     R.UnwindDest = Dispatch;
   }
