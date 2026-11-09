@@ -261,7 +261,7 @@ TEST(X86VmfuncSource, CompletePipelineRetainsLeafIndexAndNativeObjects) {
                         std::string::npos);
             auto Copy = llvm::CloneModule(*M);
             const auto Object = Codegen().compile(*Copy, A, Format);
-            ASSERT_TRUE(Object.Success) << Object.Error;
+            ASSERT_TRUE(Object.Success);
             ASSERT_FALSE(Object.ObjectData.empty());
             if (Directory) {
               const auto Stem = std::string(Directory) + "/vmfunc-" +
@@ -287,6 +287,64 @@ TEST(X86VmfuncSource, CompletePipelineRetainsLeafIndexAndNativeObjects) {
           }
   EXPECT_EQ(Cases, 210u);
   RecordProperty("complete_vmfunc_pipeline_profiles", Cases);
+}
+
+TEST(X86VmfuncSource, EffectfulIndexAndPostSwitchMemoryRemainOrdered) {
+  const char *Directory = std::getenv("NEVERD_ISA_REGRESSION_ARTIFACT_DIR");
+  for (auto A : {Arch::X86, Arch::X64}) {
+    auto E = HighExpr::makeCall(
+        "vmfunc", 0, {HighExpr::makeConst(0, 4), HighExpr::makeConst(0, 4)});
+    E->IntrinsicId = Intrinsic::VmxFunction;
+    E->Type = NdType::makeVoid();
+    const auto High =
+        std::string("#include <stdint.h>\n") +
+        X86VirtualizationCompilerDispatch +
+        "uint32_t vmfunc_effects(void) {\n"
+        "uint32_t *memory = (uint32_t *)(uintptr_t)0x40000;\n" +
+        renderX86VirtualizationExpression(A, *E, {"0", "(*memory)++"}) +
+        ";\nreturn *memory;\n}\n";
+    llvm::LLVMContext Context;
+    llvm::Module M("vmfunc-effects", Context);
+    M.setDataLayout(A == Arch::X64 ? "e-p:64:64" : "e-p:32:32");
+    llvm::IRBuilder<> B(Context);
+    auto *Owner = llvm::Function::Create(
+        llvm::FunctionType::get(B.getInt32Ty(), {}, false),
+        llvm::GlobalValue::ExternalLinkage, "vmfunc_effects", M);
+    B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Owner));
+    auto *Pointer = B.CreateIntToPtr(
+        B.getIntN(A == Arch::X64 ? 64 : 32, 0x40000), B.getPtrTy());
+    auto *Index = B.CreateLoad(B.getInt32Ty(), Pointer);
+    B.CreateStore(B.CreateAdd(Index, B.getInt32(1)), Pointer);
+    auto Callee = M.getOrInsertFunction(
+        "llvm.x86.vmfunc.eptp.switch",
+        llvm::FunctionType::get(B.getVoidTy(), {B.getInt32Ty()}, false));
+    llvm::cast<llvm::Function>(Callee.getCallee())
+        ->addFnAttr(llvm::Attribute::NoUnwind);
+    B.CreateCall(Callee, {Index});
+    B.CreateRet(B.CreateLoad(B.getInt32Ty(), Pointer));
+    ASSERT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+    std::string LLVM;
+    llvm::raw_string_ostream LLVMOS(LLVM);
+    CEmitterOptions Options;
+    Options.TheArch = A;
+    Options.Format = BinaryFormat::ELF;
+    ASSERT_TRUE(LLVMCEmitter().emit(M, LLVMOS, Options));
+    EXPECT_NE(LLVM.find("__builtin_ia32_vmfunc_eptp_switch(("),
+              std::string::npos);
+    if (Directory) {
+      const auto Stem =
+          std::string(Directory) + "/effects-" + (A == Arch::X64 ? "64" : "32");
+      write(Stem + "-high.c", High);
+      write(Stem + "-llvm.c", LLVM);
+      // mov edx,0x40000; mov ecx,[edx]; add dword [edx],1; xor eax,eax;
+      // vmfunc; mov eax,[edx]; ret. Address stays identical in both code modes.
+      const char Raw[] = {char(0xba), 0,          0,          4,    0,
+                          char(0x8b), 0x0a,       char(0x83), 0x02, 1,
+                          0x31,       char(0xc0), 0x0f,       1,    char(0xd4),
+                          char(0x8b), 0x02,       char(0xc3)};
+      write(Stem + ".bin", llvm::StringRef(Raw, sizeof Raw));
+    }
+  }
 }
 
 } // namespace
