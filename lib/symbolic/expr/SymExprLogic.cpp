@@ -28,6 +28,66 @@
 namespace neverd::symbolic {
 namespace {
 
+SymRef joinPackedByteSlices(SymContext &C, llvm::ArrayRef<SymRef> Terms,
+                            const llvm::APInt &Constant) {
+  if (Terms.size() < 2)
+    return {};
+  struct Part {
+    SymRef Value;
+    unsigned Low, Width;
+  };
+  const unsigned Width = Constant.getBitWidth();
+  llvm::SmallVector<Part, 8> Parts;
+  llvm::APInt Occupied(Width, 0);
+  for (auto Term : Terms) {
+    unsigned Low = 0;
+    if (C.op(Term) == SymOp::Shl && C.isConst(C.operand(Term, 1))) {
+      const auto &Shift = C.constValue(C.operand(Term, 1));
+      if (Shift.uge(Width))
+        return {};
+      Low = Shift.getZExtValue();
+      Term = C.operand(Term, 0);
+    } else if (C.op(Term) == SymOp::Mul && C.numOperands(Term) == 2 &&
+               C.isConst(C.operand(Term, 0)) &&
+               C.constValue(C.operand(Term, 0)).isPowerOf2()) {
+      Low = C.constValue(C.operand(Term, 0)).logBase2();
+      Term = C.operand(Term, 1);
+    }
+    if (C.op(Term) != SymOp::ZExt || Low % 8)
+      return {};
+    const auto Value = C.operand(Term, 0);
+    const unsigned Bits = C.width(Value);
+    if (Bits % 8 || Bits > Width - Low)
+      return {};
+    const auto Mask = llvm::APInt::getBitsSet(Width, Low, Low + Bits);
+    if (!(Occupied & Mask).isZero())
+      return {};
+    Occupied |= Mask;
+    Parts.push_back({Value, Low, Bits});
+  }
+  if (!(Constant & Occupied).isZero())
+    return {};
+  std::sort(Parts.begin(), Parts.end(),
+            [](const Part &A, const Part &B) { return A.Low > B.Low; });
+  llvm::SmallVector<SymRef, 8> Slices;
+  unsigned End = Width;
+  for (auto P : Parts) {
+    if (End > P.Low + P.Width)
+      Slices.push_back(C.mkConst(
+          Constant.extractBits(End - P.Low - P.Width, P.Low + P.Width)));
+    Slices.push_back(P.Value);
+    End = P.Low;
+  }
+  if (End)
+    Slices.push_back(C.mkConst(Constant.extractBits(End, 0)));
+  const auto Joined = C.mkConcat(Slices);
+  auto Body = C.op(Joined) == SymOp::ZExt ? C.operand(Joined, 0) : Joined;
+  const auto Remaining = C.op(Body) == SymOp::Concat ? C.numOperands(Body) : 1;
+  // Merely spelling an arbitrary OR as a concatenation is no improvement.
+  // At least two original data parts must have collapsed into one value.
+  return Remaining < Parts.size() ? Joined : SymRef{};
+}
+
 // Keep the zero-filled high bits outside the bitwise operation. Only AND may
 // discard high constant bits; OR and XOR must retain every set constant bit.
 SymRef contractZeroExtensions(SymContext &C, SymOp Op,
@@ -428,6 +488,9 @@ SymRef SymContext::mkOr(llvm::ArrayRef<SymRef> Ops) {
 
   if (Rest.empty())
     return mkConst(Acc);
+
+  if (auto Joined = joinPackedByteSlices(*this, Rest, Acc))
+    return Joined;
 
   if (auto Narrow = contractZeroExtensions(*this, SymOp::Or, Rest, Acc))
     return Narrow;
