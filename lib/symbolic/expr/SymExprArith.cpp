@@ -13,6 +13,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "SymExprCompare.h"
 #include "SymExprMask.h"
 
 #include "neverd/symbolic/SymExpr.h"
@@ -294,40 +295,10 @@ SymRef SymContext::mkSub(SymRef A, SymRef B) {
     if (ContainsA)
       return mkAnd(A, mkNot(Mask.size() == 1 ? Mask.front() : mkAnd(Mask)));
   }
-  if (op(A) == SymOp::Add || op(B) == SymOp::Add) {
-    // Cancel complete additive terms before constructing a negated sum.
-    // Operands are owned copies because any builder may relocate the pool.
-    llvm::SmallVector<SymRef, 8> Left, Right;
-    if (op(A) == SymOp::Add)
-      Left.append(operands(A).begin(), operands(A).end());
-    else
-      Left.push_back(A);
-    if (op(B) == SymOp::Add)
-      Right.append(operands(B).begin(), operands(B).end());
-    else
-      Right.push_back(B);
-    std::sort(Left.begin(), Left.end());
-    std::sort(Right.begin(), Right.end());
-    llvm::SmallVector<SymRef, 8> KeptLeft, KeptRight;
-    size_t L = 0, R = 0;
-    bool Cancelled = false;
-    while (L != Left.size() && R != Right.size()) {
-      if (Left[L] == Right[R]) {
-        ++L;
-        ++R;
-        Cancelled = true;
-      } else if (Left[L] < Right[R])
-        KeptLeft.push_back(Left[L++]);
-      else
-        KeptRight.push_back(Right[R++]);
-    }
-    if (Cancelled) {
-      KeptLeft.append(Left.begin() + L, Left.end());
-      KeptRight.append(Right.begin() + R, Right.end());
-      for (SymRef Term : KeptRight)
-        KeptLeft.push_back(mkNeg(Term));
-      return KeptLeft.empty() ? mkZero(width(A)) : mkAdd(KeptLeft);
-    }
+  if (auto Terms = detail::cancelCommonOperands(*this, A, B, SymOp::Add)) {
+    for (SymRef Term : Terms->Right)
+      Terms->Left.push_back(mkNeg(Term));
+    return Terms->Left.empty() ? mkZero(width(A)) : mkAdd(Terms->Left);
   }
   return mkAdd(A, mkNeg(B));
 }

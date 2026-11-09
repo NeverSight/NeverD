@@ -277,6 +277,42 @@ SymRef observedWord(const SymContext &Ctx, SymRef R) {
 
 } // namespace
 
+std::optional<CancelledOperands>
+cancelCommonOperands(const SymContext &Ctx, SymRef A, SymRef B, SymOp Op) {
+  if (Ctx.op(A) != Op && Ctx.op(B) != Op)
+    return std::nullopt;
+  llvm::SmallVector<SymRef, 8> Left, Right;
+  if (Ctx.op(A) == Op)
+    Left.append(Ctx.operands(A).begin(), Ctx.operands(A).end());
+  else
+    Left.push_back(A);
+  if (Ctx.op(B) == Op)
+    Right.append(Ctx.operands(B).begin(), Ctx.operands(B).end());
+  else
+    Right.push_back(B);
+  std::sort(Left.begin(), Left.end());
+  std::sort(Right.begin(), Right.end());
+  CancelledOperands Result;
+  size_t L = 0, R = 0;
+  bool Cancelled = false;
+  while (L != Left.size() && R != Right.size()) {
+    if (Left[L] == Right[R]) {
+      ++L;
+      ++R;
+      Cancelled = true;
+    } else if (Left[L] < Right[R]) {
+      Result.Left.push_back(Left[L++]);
+    } else {
+      Result.Right.push_back(Right[R++]);
+    }
+  }
+  if (!Cancelled)
+    return std::nullopt;
+  Result.Left.append(Left.begin() + L, Left.end());
+  Result.Right.append(Right.begin() + R, Right.end());
+  return Result;
+}
+
 SymRef recoverPackedEquality(SymContext &Ctx, SymRef Word, SymRef Literal) {
   if (!Ctx.isConst(Literal))
     return {};
