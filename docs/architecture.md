@@ -1465,7 +1465,9 @@ already chained inputs are unchanged. It prepares authenticated GOT slots before
 installs compact/DWARF language records, and redirects each selected original
 entry with a single relative branch. The new function owns its signing prologue;
 the branch does not change LR. Explicit pointer providers are admitted by the
-existing dependency owner. After signing, recipe replay verifies every pointer
+existing dependency owner. The shared signing transaction passes the input
+CodeDirectory page size explicitly to codesign and retains exact page-size
+validation after reloading. After signing, recipe replay verifies every pointer
 slot and its RELRO contract, while the remaining section bytes must match the
 relocated object exactly. Both staging and publication use the same final
 unwind validator, including exact personality slot and LSDA identities.
@@ -1593,8 +1595,11 @@ Tests check both raw key bits for all four keys and the decoded names for IA/DA;
 the latter tool cannot independently qualify IB/DB or legacy rebases. Rebase
 replay and per-PC signed CFI comparisons retain their independent offline
 checks. Native execution qualifies the observed call/exception paths, not every
-possible frame state. Whole-image rebuilding and startup executable loading
-remain unqualified; the publication guard stays in place.
+possible frame state. General lifted-image rebuilding and publication of startup
+executables remain unqualified. Compiler-original startup controls have a
+separate [explicit userspace-fixup profile](arm64e-native-validation.md); default
+system startup retains its observed B-key page-in fixup failure. Passing those
+controls does not authorize a rebuilt main executable.
 
 The shared AAPCS64 parameter placement owner describes Darwin fixed value
 spills with their natural size and alignment after either register bank is

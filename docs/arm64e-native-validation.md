@@ -188,6 +188,13 @@ missing, skipped or failed cases. The result is separately named
 `native_executable_publication_qualified`; system-default startup and general
 lifted-image publication retain their own unqualified boundaries.
 
+LLVM's [arm64e linker subtype regression](https://github.com/llvm/llvm-project/blob/b1dc6f680e37cbb19b2ee5ee4195635229c4f6c3/lld/test/MachO/arm64e-cpu-subtype.s)
+independently documents this output distinction: macOS and Mac Catalyst main
+executables receive ABI1; dylibs, bundles and iOS executables retain ABI0.
+Executable admission therefore needs a platform/file-kind contract and native
+published-entry tests under the declared startup profile. Masking every ABI
+version bit or forcing ABI1 on the compiler object would not establish it.
+
 A supplemental linker diagnostic did not stop when `ld-classic` lookup failed
 and therefore does not establish legacy threaded execution. Xcode 27 no longer
 ships that linker. Produce the four original legacy inputs on a host with a real
