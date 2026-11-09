@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 import struct
 import subprocess
+from types import SimpleNamespace
 
 import capstone
 import lief
@@ -33,9 +34,22 @@ def digest(path):
 def execute(code, entry, completion, corrupt=None):
     decoder = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
     decoder.detail = True
-    decoded = list(decoder.disasm(code, CODE))
-    assert sum(i.size for i in decoded) == len(code), 'incomplete instruction decode'
-    accesses = [i for i in decoded if i.mnemonic in OPERATIONS]
+    # Capstone 5 may predate WRMSRNS. Validate its exact bytes at a decoded
+    # boundary and independently decode the complete surrounding function.
+    marker = bytes.fromhex('0f 01 c6')
+    offset = code.find(marker)
+    if offset >= 0:
+        assert code.find(marker, offset + 1) < 0, 'multiple WRMSRNS candidates'
+        before = list(decoder.disasm(code[:offset], CODE))
+        after = list(decoder.disasm(code[offset + len(marker):], CODE + offset + len(marker)))
+        assert sum(i.size for i in before) == offset, 'WRMSRNS is not at an instruction boundary'
+        assert sum(i.size for i in after) == len(code) - offset - len(marker)
+        assert not any(i.mnemonic in OPERATIONS for i in before + after)
+        accesses = [SimpleNamespace(mnemonic='wrmsrns', address=CODE + offset, size=len(marker))]
+    else:
+        decoded = list(decoder.disasm(code, CODE))
+        assert sum(i.size for i in decoded) == len(code), 'incomplete instruction decode'
+        accesses = [i for i in decoded if i.mnemonic in OPERATIONS]
     assert len(accesses) == 1, 'expected exactly one scalar system instruction'
     instruction = accesses[0]
     machine = unicorn.Uc(unicorn.UC_ARCH_X86, unicorn.UC_MODE_32)
@@ -54,7 +68,7 @@ def execute(code, entry, completion, corrupt=None):
     machine.emu_start(CODE + entry, instruction.address, count=INSTRUCTION_BUDGET)
     assert machine.reg_read(regs.UC_X86_REG_EIP) == instruction.address
     port = instruction.mnemonic in ('in', 'out')
-    writing = instruction.mnemonic in ('wrmsr', 'out')
+    writing = instruction.mnemonic in ('wrmsr', 'wrmsrns', 'out')
     if corrupt == 'write_value':
         assert writing
         machine.reg_write(regs.UC_X86_REG_EAX, machine.reg_read(regs.UC_X86_REG_EAX) ^ 1)
@@ -106,10 +120,12 @@ def main():
     parser.add_argument('--compiler', type=Path, required=True)
     parser.add_argument('--backend-llc', type=Path)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--family', choices=('scalar', 'wrmsrns'), default='scalar')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    sources = sorted(args.exports.glob('scalar32_*.c'))
-    assert len(sources) == 84, 'expected 42 i386 profiles and both complete C routes'
+    sources = sorted(args.exports.glob(args.family + '32_*.c'))
+    expected_sources = 84 if args.family == 'scalar' else 12
+    assert len(sources) == expected_sources, 'missing complete i386 C profiles'
     records, controls = [], []
     for source in sources:
         stem, route = source.stem.rsplit('.', 1)

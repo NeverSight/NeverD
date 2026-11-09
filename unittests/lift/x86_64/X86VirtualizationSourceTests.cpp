@@ -5598,6 +5598,7 @@ void saveX86SourceArtifact(llvm::StringRef Name, llvm::StringRef Data) {
 #include "../x86/X86ArplSourceTests.inc"
 #include "../x86/X86BoundSourceTests.inc"
 #include "../x86/X86HresetSourceTests.inc"
+#include "../x86/X86PortableSystemSourceTests.inc"
 #include "../x86/X86ScalarSystemSourceTests.inc"
 #include "../x86/X86SVMSourceTests.inc"
 #include "../x86/X86VMXSourceTests.inc"
