@@ -6971,6 +6971,13 @@ std::string LLVMCWriter::callArgStr(const llvm::Value *Arg,
         return valueStr(Inner);
     }
   }
+  // A runtime declaration's plain int parameter is already the source
+  // contract. Importing a debug enum here can define the CRT's own enum a
+  // second time beside stdlib.h when optimization exposes its constant.
+  if (const LibraryCallee Runtime = libraryCallee(Call);
+      Runtime.Prototype && ArgIdx < Runtime.Prototype->ParamCount &&
+      Runtime.Prototype->Params[ArgIdx] == "int")
+    return valueStr(Arg, PointerSpelling);
   if (const auto *CI =
           llvm::dyn_cast<llvm::ConstantInt>(peelIntegerView(Arg))) {
     if (const auto FS = debugCallee(Call))

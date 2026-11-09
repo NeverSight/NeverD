@@ -18,6 +18,7 @@
 #include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
@@ -832,6 +833,69 @@ TEST(ExceptionRewriteContract,
   EXPECT_NE(moduleIR(*Blocked), BlockedBefore);
   EXPECT_EQ(moduleIR(*Blocked).find("alloca"), std::string::npos);
   EXPECT_FALSE(llvm::verifyModule(*Blocked));
+}
+
+TEST(ExceptionRewriteContract,
+     COutputPromotesTheInputWhenOptimizationChangesProtectedCalls) {
+  llvm::LLVMContext Context;
+  auto Module = makeVoidModule(Context);
+  auto *Function = Module->getFunction("f");
+  auto &Entry = Function->getEntryBlock();
+  Entry.getTerminator()->eraseFromParent();
+  auto *Left = llvm::BasicBlock::Create(Context, "left", Function);
+  auto *Right = llvm::BasicBlock::Create(Context, "right", Function);
+  auto *Done = llvm::BasicBlock::Create(Context, "done", Function);
+  auto *Unwind = llvm::BasicBlock::Create(Context, "unwind", Function);
+  llvm::IRBuilder<> Builder(&Entry);
+  auto Personality = Module->getOrInsertFunction(
+      "__gxx_personality_v0",
+      llvm::FunctionType::get(Builder.getInt32Ty(), {}, true));
+  Function->setPersonalityFn(
+      llvm::cast<llvm::Constant>(Personality.getCallee()));
+  auto Callee = Module->getOrInsertFunction("may_throw", Builder.getVoidTy(),
+                                            Builder.getInt32Ty());
+  auto *Slot = Builder.CreateAlloca(Builder.getInt32Ty());
+  Builder.CreateStore(Builder.getInt32(7), Slot);
+  Builder.CreateCondBr(Builder.getTrue(), Left, Right);
+  for (auto *Block : {Left, Right}) {
+    Builder.SetInsertPoint(Block);
+    auto *Value = Builder.CreateLoad(Builder.getInt32Ty(), Slot);
+    Builder.CreateInvoke(Callee, Done, Unwind, {Value});
+  }
+  Builder.SetInsertPoint(Done);
+  Builder.CreateRetVoid();
+  Builder.SetInsertPoint(Unwind);
+  auto *Pad = Builder.CreateLandingPad(
+      llvm::StructType::get(Builder.getPtrTy(), Builder.getInt32Ty()), 0);
+  Pad->setCleanup(true);
+  Builder.CreateResume(Pad);
+  exception_rewrite::setContract(
+      *Function, exception_rewrite::SourceState::Complete,
+      exception_rewrite::LoweringState::Complete, 2, 2);
+  ASSERT_FALSE(llvm::verifyModule(*Module));
+  const std::string Before = moduleIR(*Module);
+
+  // Eliminating the constant-dead invoke changes the strict native counter.
+  // The failed optimizer transaction must leave its input intact.
+  const auto Native =
+      Pipeline::optimizeModule(*Module, Pipeline::OptimizationOptions{});
+  ASSERT_EQ(Native.Stop, OptimizationStopReason::VerificationFailed);
+  EXPECT_EQ(moduleIR(*Module), Before);
+  const auto Source = Pipeline::optimizeOrPromoteModule(*Module);
+  EXPECT_EQ(Source.Stop, OptimizationStopReason::Stable);
+  EXPECT_TRUE(Source.Changed);
+  EXPECT_NE(Source.Diagnostic.find("source optimization rejected"),
+            std::string::npos);
+  ASSERT_FALSE(llvm::verifyModule(*Module));
+  auto Contract = exception_rewrite::validateExceptionRewriteContracts(*Module);
+  ASSERT_TRUE(static_cast<bool>(Contract))
+      << llvm::toString(Contract.takeError());
+  const std::string After = moduleIR(*Module);
+  EXPECT_EQ(After.find("alloca"), std::string::npos);
+  unsigned Invokes = 0;
+  for (const auto &Block : *Module->getFunction("f"))
+    Invokes += llvm::isa<llvm::InvokeInst>(Block.getTerminator());
+  EXPECT_EQ(Invokes, 2u);
 }
 
 TEST(MachOExceptionRewriteContract,

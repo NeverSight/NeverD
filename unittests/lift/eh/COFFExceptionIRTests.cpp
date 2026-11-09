@@ -22,6 +22,7 @@
 #include "neverd/backend/llvm/WindowsEHMetadataEncoder.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
+#include "neverd/debug/DebugContext.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/CxxObjectActions.h"
@@ -33,6 +34,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Intrinsics.h"
@@ -48,6 +50,7 @@
 #include <algorithm>
 #include <optional>
 #include <regex>
+#include <set>
 #include <stdexcept>
 #include <tuple>
 
@@ -6741,6 +6744,262 @@ TEST(COFFExceptionIR, SourceX86ConstantFilterPreservesAllDispositions) {
                                    Source,
                                true, "--target=i686-pc-windows-msvc");
   }
+}
+
+MedFunc sourceRegistrationSharedTail(bool Loop, bool QuietExit) {
+  constexpr va_t F = 0x401000;
+  auto Func = sourceRegistrationFinally(false);
+  Func.Name = "source_shared_tail";
+  Func.Blocks.clear();
+  Func.ExceptionMetadata->CodeRange.End = F + 0x70;
+  Func.ExceptionMetadata->Registration->Scopes = {
+      {-1, F + 0x60, F + 0x50, false}};
+  auto &Facts = *Func.RegistrationStates->Display;
+  Facts = {};
+  MedVar Input;
+  Input.Kind = MedVar::Param;
+  Input.Size = 4;
+  Input.TheArch = Arch::X86;
+  Func.Params.push_back(Input);
+  MedVar Result = Input;
+  Result.Kind = MedVar::Reg;
+  Result.Id = 100;
+  Result.SSAVer = 1;
+  for (int Id = 0; Id != 7; ++Id) {
+    MedBlock Block;
+    Block.Id = Id;
+    Block.StartAddr = F + Id * 0x10;
+    Block.EndAddr = Block.StartAddr + 0x10;
+    const std::vector<int32_t> Levels =
+        Id == 2 || (Id == 1 && QuietExit) ? std::vector<int32_t>{0}
+        : Id == 3 || Id == 4              ? std::vector<int32_t>{-2, -1, 0}
+                                          : std::vector<int32_t>{-1};
+    Facts.Stretches.push_back({{Block.StartAddr, Block.EndAddr},
+                               Levels,
+                               Id >= 5 ? Block.StartAddr : 0,
+                               Id == 0});
+    if (Id >= 1 && Id <= 5) {
+      MedOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.Addr = Block.StartAddr;
+      Call.addInput(MedVar::makeConst(0x409000 + Id * 0x10, 4));
+      if (Id == 3 && Loop)
+        Call.Output = Result;
+      Block.Ops.push_back(Call);
+    }
+    if (Id == 0 || (Id == 3 && Loop)) {
+      MedOp Branch;
+      Branch.Opcode = NdOp::COND_BR;
+      Branch.Addr = Block.StartAddr + 4;
+      Branch.addInput(MedVar::makeConst(F + (Id == 0 ? 0x20 : 0x30), 4));
+      Branch.addInput(Id == 0 ? Input : Result);
+      Block.Ops.push_back(Branch);
+      Block.Succs = Id == 0 ? std::vector<int>{1, 2} : std::vector<int>{4, 3};
+    } else if (Id >= 4) {
+      MedOp Return;
+      Return.Opcode = NdOp::RETURN;
+      Return.Addr = Block.StartAddr + 4;
+      if (Id == 6)
+        Return.addInput(MedVar::makeConst(1, 4));
+      Block.Ops.push_back(Return);
+    } else {
+      Block.Succs = {Id == 3 ? 4 : 3};
+    }
+    Func.Blocks.push_back(Block);
+  }
+  for (const auto &Block : Func.Blocks)
+    for (int Succ : Block.Succs)
+      Func.Blocks[Succ].Preds.push_back(Block.Id);
+  if (QuietExit) {
+    Facts.Stretches[1].Range.End = F + 0x18;
+    Facts.Stretches.insert(Facts.Stretches.begin() + 2,
+                           {{F + 0x18, F + 0x20}, {-2}, 0, true});
+  }
+  return Func;
+}
+
+TEST(COFFExceptionIR, SourceX86SharedTailPreservesEachIncomingScope) {
+  for (bool Loop : {false, true})
+    for (bool QuietExit : {false, true}) {
+      SCOPED_TRACE(Loop);
+      SCOPED_TRACE(QuietExit);
+      auto Func = sourceRegistrationSharedTail(Loop, QuietExit);
+      llvm::LLVMContext Context;
+      MedLLVMEmitter Emitter;
+      Emitter.setAnalysisRecoveryForSource(true);
+      Emitter.setPreserveUnknownSourceValues(true);
+      auto Module = Emitter.emit({Func}, Context, "shared_tail", Arch::X86,
+                                 {{0x409010, "outside_effect"},
+                                  {0x409020, "inside_effect"},
+                                  {0x409030, "shared_effect"},
+                                  {0x409040, "tail_effect"},
+                                  {0x409050, "catch_effect"}},
+                                 nullptr, BinaryFormat::COFF);
+      ASSERT_NE(Module, nullptr);
+      ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+      auto *Parent = Module->getFunction(Func.Name);
+      ASSERT_NE(Parent, nullptr);
+      ASSERT_TRUE(Parent->hasPersonalityFn());
+      // Follow normal edges from each arm. Its first shared call must keep
+      // precisely that arm's exception routing, even after a quiet reset.
+      for (unsigned Arm : {1u, 2u}) {
+        llvm::BasicBlock *Start = nullptr;
+        for (auto &Block : *Parent)
+          if (Block.getName() == "bb_" + std::to_string(Arm))
+            Start = &Block;
+        ASSERT_NE(Start, nullptr);
+        std::set<llvm::BasicBlock *> Seen;
+        std::vector<llvm::BasicBlock *> Work{Start};
+        unsigned Found = 0;
+        while (!Work.empty()) {
+          auto *Block = Work.back();
+          Work.pop_back();
+          if (!Seen.insert(Block).second)
+            continue;
+          bool Shared = false;
+          for (auto &Inst : *Block)
+            if (auto *Call = llvm::dyn_cast<llvm::CallBase>(&Inst);
+                Call && Call->getCalledFunction() &&
+                Call->getCalledFunction()->getName() == "shared_effect") {
+              EXPECT_EQ(llvm::isa<llvm::InvokeInst>(Call), Arm == 2);
+              Shared = true;
+              ++Found;
+            }
+          if (Shared)
+            continue;
+          if (auto *Invoke =
+                  llvm::dyn_cast<llvm::InvokeInst>(Block->getTerminator()))
+            Work.push_back(Invoke->getNormalDest());
+          else
+            for (auto *Succ : llvm::successors(Block))
+              Work.push_back(Succ);
+        }
+        EXPECT_EQ(Found, 1u);
+      }
+      // Use the source pipeline's SSA promotion before printing. The two
+      // path copies write the same logical register, so its entry seed is
+      // eliminated by promotion rather than the single-definition shortcut.
+      Pipeline::optimizeModule(*Module, /*Conservative=*/true);
+      ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+      const std::string Source = emitLLVMC(*Module);
+      EXPECT_EQ(Source.find("neverd.seh: not lowered"), std::string::npos);
+      if (hasHostFixtureCompiler())
+        checkStandaloneSEHSource("#include <stdint.h>\n#include <excpt.h>\n" +
+                                     Source,
+                                 true, "--target=i686-pc-windows-msvc");
+      const std::string Harness = R"(
+#include <stdint.h>
+#define __try if (1)
+#define __except(x) else
+static unsigned sequence, remaining;
+uint32_t outside_effect(void) { sequence = sequence * 10 + 1; return 0; }
+uint32_t inside_effect(void) { sequence = sequence * 10 + 2; return 0; }
+uint32_t shared_effect(void) { sequence = sequence * 10 + 3; return --remaining; }
+uint32_t tail_effect(void) { sequence = sequence * 10 + 4; return 0; }
+uint32_t catch_effect(void) { sequence = sequence * 10 + 9; return 0; }
+)";
+      const std::string Main =
+          Loop ? "int main(void) { remaining=2; source_shared_tail(0); "
+                 "if(sequence!=1334)return 1; sequence=0; remaining=2; "
+                 "source_shared_tail(1); return sequence!=2334; }\n"
+               : "int main(void) { remaining=1; source_shared_tail(0); "
+                 "if(sequence!=134)return 1; sequence=0; remaining=1; "
+                 "source_shared_tail(1); return sequence!=234; }\n";
+      for (llvm::StringRef Level : {"-O0", "-O2"})
+        source_call_execution_test::compileAndRun(
+            Harness + Source + Main,
+            {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+    }
+}
+
+TEST(COFFExceptionIR, SourceX86SharedTailRefusesUnprovedEdgesWithoutMutation) {
+  for (unsigned Case : {0u, 1u, 2u}) {
+    SCOPED_TRACE(Case);
+    auto Func = sourceRegistrationSharedTail(false, false);
+    auto &Stretches = Func.RegistrationStates->Display->Stretches;
+    if (Case == 0) {
+      // An edge from an unclassified predecessor cannot choose a copy.
+      Stretches.erase(Stretches.begin() + 1);
+    } else if (Case == 1) {
+      // A quiet predecessor can itself merge levels; no unique exit proof.
+      Stretches[1].Levels = {-1, 0};
+      Stretches[1].Quiet = true;
+    } else {
+      // Different stretches are different states, not a uniform shared tail.
+      Stretches[3].Range.End -= 8;
+      Stretches.insert(Stretches.begin() + 4,
+                       {{0x401038, 0x401040}, {0}, 0, false});
+    }
+    llvm::LLVMContext Context;
+    MedLLVMEmitter Emitter;
+    Emitter.setAnalysisRecoveryForSource(true);
+    Emitter.setPreserveUnknownSourceValues(true);
+    auto Module = Emitter.emit({Func}, Context, "shared_tail_refusal",
+                               Arch::X86, {}, nullptr, BinaryFormat::COFF);
+    ASSERT_NE(Module, nullptr);
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    auto *Parent = Module->getFunction(Func.Name);
+    ASSERT_NE(Parent, nullptr);
+    EXPECT_FALSE(Parent->hasPersonalityFn());
+    for (const auto &Block : *Parent) {
+      EXPECT_FALSE(Block.isEHPad());
+      EXPECT_FALSE(Block.getName().contains(".seh.level."));
+    }
+  }
+}
+
+TEST(COFFExceptionIR, LLVMCCRTIntegerArgumentsKeepTheRuntimeDeclaration) {
+  class EnumDebug final : public NullDebugContext {
+  public:
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      if (Address < 0x402000 || Address > 0x402020)
+        return std::nullopt;
+      auto Type = NdType::makeNamedRecord("_crt_app_type", 4, true);
+      Type->FieldDisplayNames = {"_crt_console_app"};
+      Type->FieldDisplayOffsets = {1};
+      FunctionSym Function;
+      Function.Addr = Address;
+      Function.Name = Address == 0x402000   ? "_set_app_type"
+                      : Address == 0x402010 ? "_configure_narrow_argv"
+                                            : "user_enum";
+      Function.ReturnType = NdType::makeVoid();
+      Function.Params.emplace_back("kind", Type);
+      return Function;
+    }
+    bool hasInfo() const override { return true; }
+  } Debug;
+  llvm::LLVMContext Context;
+  llvm::Module Module("crt-enum-argument", Context);
+  llvm::IRBuilder<> Builder(Context);
+  auto *Caller = llvm::Function::Create(
+      llvm::FunctionType::get(Builder.getVoidTy(), false),
+      llvm::GlobalValue::ExternalLinkage, "caller", Module);
+  Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Caller));
+  va_t Address = 0x402000;
+  // i386 COFF adds one decoration underscore to each C symbol.
+  for (const char *Name :
+       {"__set_app_type", "__configure_narrow_argv", "_user_enum"}) {
+    auto Callee = Module.getOrInsertFunction(Name, Builder.getVoidTy(),
+                                             Builder.getInt32Ty());
+    rewrite_source::setOriginalVA(
+        *llvm::cast<llvm::Function>(Callee.getCallee()), Address);
+    Builder.CreateCall(Callee, {Builder.getInt32(1)});
+    Address += 0x10;
+  }
+  Builder.CreateRetVoid();
+  ASSERT_FALSE(llvm::verifyModule(Module));
+  CEmitterOptions Options;
+  Options.EmitIncludes = false;
+  Options.TheArch = Arch::X86;
+  Options.Format = BinaryFormat::COFF;
+  std::string Source;
+  llvm::raw_string_ostream Output(Source);
+  ASSERT_TRUE(LLVMCEmitter().emit(Module, Output, Options, &Debug));
+  EXPECT_NE(Source.find("_set_app_type(1);"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("_configure_narrow_argv(1);"), std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("user_enum(_crt_console_app);"), std::string::npos)
+      << Source;
 }
 
 TEST(COFFExceptionIR, SourceX86FilterCapturesAnIncomingArgumentThroughStorage) {
