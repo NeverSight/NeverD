@@ -163,8 +163,7 @@
   "fixup_command": [
     "/usr/bin/xcrun",
     "dyld_info",
-    "-fixup_chain_details",
-    "-symbols"
+    "-fixup_chain_details"
   ],
   "fixup_suffix": "-fixups",
   "header_format": "<III",
