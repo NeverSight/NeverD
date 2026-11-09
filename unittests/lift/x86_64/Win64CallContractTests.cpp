@@ -12,6 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/pipeline/PipelineRegisterCalls.h"
 #include "../core/SourceCallExecution.h"
 #include "../core/WindowsMixedScalarFixture.h"
 #include "../core/WindowsQualifiedFixture.h"
@@ -7058,6 +7059,8 @@ BinaryImage registerQueryImage(unsigned Mutation = 0) {
     Leaf.erase(Leaf.begin() + 12, Leaf.begin() + 15); // RBX is not restored
   else if (Mutation == 14 || Mutation == 15)
     Leaf.insert(Leaf.begin(), Mutation == 14 ? 0xFD : 0xFC); // std / cld
+  else if (Mutation == 16)
+    Leaf.insert(Leaf.begin() + 7, {0x44, 0x89, 0xD1}); // mov ecx,r10d
   put(Code, Producer, Leaf);
   auto Image = makeImage(
       Code, {{Text, "observe_cpu_words"}, {Producer, "cpu_words"}}, {});
@@ -7071,6 +7074,229 @@ BinaryImage registerQueryImage(unsigned Mutation = 0) {
     Image.ExceptionMetadata.rebuildIndex();
   }
   return Image;
+}
+
+TEST(CallExitRegisters, RegisterQueryBindsTheCallsActualArgumentBytes) {
+#if !defined(__x86_64__) && !defined(_M_X64)
+  GTEST_SKIP() << "native CPUID execution requires an x64 host";
+#endif
+  constexpr va_t Producer = Text + 0x80;
+  for (BinaryFormat Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (unsigned Shape = 0; Shape != 4; ++Shape) {
+      const bool Windows = Format == BinaryFormat::COFF;
+      auto Image = registerQueryImage();
+      Image.Format = Format;
+      // Both query inputs come from this call's ABI arguments. Only the
+      // bytes actually consumed by the leaf may become its incoming state.
+      std::vector<uint8_t> Leaf{0x89,
+                                static_cast<uint8_t>(Windows ? 0xD0 : 0xF0)};
+      if (Shape == 1) {
+        if (!Windows)
+          Leaf.push_back(0x40); // movzx ecx,cl / dil
+        Leaf.insert(Leaf.end(),
+                    {0x0F, 0xB6, static_cast<uint8_t>(Windows ? 0xC9 : 0xCF)});
+      } else if (Shape == 2) {
+        if (!Windows)
+          Leaf.insert(Leaf.end(), {0x66, 0x89, 0xF9}); // mov cx,di
+        Leaf.insert(Leaf.end(), {0x0F, 0xB6, 0xCD});   // movzx ecx,ch
+      } else if (!Windows)
+        Leaf.insert(Leaf.end(), {0x89, 0xF9}); // mov ecx,edi
+      Leaf.insert(Leaf.end(),
+                  {0x45, 0x31, 0xC0,                         // xor r8d,r8d
+                   0x49, 0x87, 0xD8,                         // xchg rbx,r8
+                   0x0F, 0xA2,                               // cpuid
+                   0x49, 0x87, 0xD8,                         // xchg rbx,r8
+                   0x41, 0x81, 0xF0, 0x67, 0x45, 0x23, 0x01, // xor r8d,1234567h
+                   0x81, 0xF1, 0x98, 0xBA, 0xDC, 0xFE,   // xor ecx,0FEDCBA98h
+                   0xB8, 1,    0,    0,    0,    0xC3}); // mov eax,1; ret
+      put(Image.Segments.front().Data, Producer, Leaf);
+      if (Shape == 3) {
+        // A second occurrence supplies different actual arguments. It must
+        // retain a distinct query even with a prepared callee/source cache.
+        const auto &Code = Image.Segments.front().Data;
+        std::vector<uint8_t> Caller(Code.begin(), Code.begin() + 15);
+        Caller.insert(Caller.end(),
+                      {0x49, 0x89, 0xC1, // mov r9,rax
+                       static_cast<uint8_t>(Windows ? 0xB9 : 0xBF), 1, 0, 0, 0,
+                       static_cast<uint8_t>(Windows ? 0xBA : 0xBE), 7, 0, 0, 0,
+                       0xE8});
+        const auto Displacement = rel32(Text + Caller.size() + 4, Producer);
+        Caller.insert(Caller.end(), Displacement.begin(), Displacement.end());
+        Caller.insert(Caller.end(), {0x4C, 0x31, 0xC0, // xor rax,r8
+                                     0x48, 0x31, 0xC8, // xor rax,rcx
+                                     0x4C, 0x31, 0xC8, // xor rax,r9
+                                     0x48, 0x83, 0xC4, 0x28, 0xC3});
+        put(Image.Segments.front().Data, Text, Caller);
+      }
+      PipelineAnalysisCache Cache;
+      for (bool LLVM : {true, false})
+        for (bool NoOpt : {false, true}) {
+          SCOPED_TRACE(static_cast<unsigned>(Format));
+          SCOPED_TRACE(Shape);
+          SCOPED_TRACE(LLVM);
+          SCOPED_TRACE(NoOpt);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Text};
+          Options.LiftMode = LLVM;
+          Options.SourceProjection = true;
+          Options.AnalysisCache = &Cache;
+          Options.NoOpt = NoOpt;
+          auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          CEmitterOptions COptions;
+          COptions.TheArch = Image.Arch;
+          COptions.Format = BinaryFormat::ELF;
+          COptions.Image = &Image;
+          if (LLVM) {
+            ASSERT_TRUE(Result.LlvmModule);
+            ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+            ASSERT_TRUE(
+                LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions));
+          } else
+            ASSERT_TRUE(
+                HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+          ASSERT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+          unsigned Queries = 0, Calls = 0;
+          for (const auto &Function : Result.MedFuncs)
+            for (const auto &Block : Function.Blocks)
+              for (const auto &Op : Block.Ops) {
+                Calls += Op.Opcode == NdOp::CALL;
+                Queries += Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+                           Op.Inputs[0].isConst() &&
+                           Op.Inputs[0].ConstVal == unsigned(Intrinsic::Cpuid);
+              }
+          EXPECT_EQ(Calls, 0u);
+          EXPECT_EQ(Queries, Shape == 3 ? 2u : 1u);
+          std::string Oracle;
+          llvm::raw_string_ostream Check(Oracle);
+          Check << "\n#include <string.h>\n"
+                   "#if defined(__linux__) && defined(__x86_64__)\n"
+                   "#include <sys/mman.h>\n#endif\nint main(void) {\n"
+                   "#if defined(__linux__) && defined(__x86_64__)\n"
+                   "  const uint8_t original[] = {";
+          for (uint8_t Byte : Image.Segments.front().Data)
+            Check << unsigned(Byte) << ',';
+          Check << "};\n  void *native = mmap(0, sizeof(original), "
+                   "PROT_READ | PROT_WRITE | PROT_EXEC, "
+                   "MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);\n"
+                   "  if (native == MAP_FAILED) return 10;\n"
+                   "  memcpy(native, original, sizeof(original));\n"
+                   "  typedef uint64_t ("
+                << (Windows ? "__attribute__((ms_abi)) " : "")
+                << "*fn)(uint64_t, uint64_t);\n#endif\n"
+                   "  const uint64_t inputs[][2] = {{0,0}, {1,0}, {0,7}, "
+                   "{1,7}, {255,7}, {256,7}, {0x123401,7}, "
+                   "{0,0x80000000}, {0xFFFF000000000001ull,7}};\n"
+                   "  for (unsigned i = 0; i != 9; ++i) {\n"
+                   "    uint64_t subleaf = inputs[i][0], leaf = inputs[i][1];\n"
+                   "    unsigned a = leaf, b, c = "
+                << (Shape == 1   ? "(uint8_t)subleaf"
+                    : Shape == 2 ? "(uint8_t)(subleaf >> 8)"
+                                 : "subleaf")
+                << ", d;\n"
+                   "    __asm__ volatile(\"cpuid\" : \"+a\"(a), \"=b\"(b), "
+                   "\"+c\"(c), \"=d\"(d));\n"
+                   "    uint64_t expected = UINT64_C(1) ^ "
+                   "(b ^ UINT32_C(0x01234567)) ^ (c ^ UINT32_C(0xFEDCBA98));\n";
+          if (Shape == 3)
+            Check << "    a = 7; c = 1;\n"
+                     "    __asm__ volatile(\"cpuid\" : \"+a\"(a), \"=b\"(b), "
+                     "\"+c\"(c), \"=d\"(d));\n"
+                     "    expected ^= UINT64_C(1) ^ "
+                     "(b ^ UINT32_C(0x01234567)) ^ "
+                     "(c ^ UINT32_C(0xFEDCBA98));\n";
+          Check
+              << "    if ((uint64_t)observe_cpu_words(subleaf, leaf) != "
+                 "expected) return 11;\n"
+                 "#if defined(__linux__) && defined(__x86_64__)\n"
+                 "    if (((fn)native)(subleaf, leaf) != expected) return 12;\n"
+                 "#endif\n  }\n"
+                 "#if defined(__linux__) && defined(__x86_64__)\n"
+                 "  return munmap(native, sizeof(original)) != 0;\n"
+                 "#else\n  return 0;\n#endif\n}\n";
+          for (llvm::StringRef Level : {"-O0", "-O2"})
+            source_call_execution_test::compileAndRun(
+                "#define _GNU_SOURCE\n" + Source + Oracle,
+                {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+        }
+    }
+}
+
+TEST(CallExitRegisters, RegisterQueryRequiresEveryIncomingByteAtTheCall) {
+  constexpr va_t Producer = Text + 0x80;
+  auto Image = registerQueryImage(2);
+  llvm::LLVMContext Context;
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  Options.OnlyFunctionEntries = {Producer};
+  auto Result = Pipeline().run(Image, Context, Options);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  ASSERT_TRUE(Result.CallRegisterLeaves.count(Producer));
+  for (unsigned Variant = 0; Variant != 10; ++Variant) {
+    SCOPED_TRACE(Variant);
+    MedFunc Function;
+    Function.Entry = Text;
+    Function.Name = "bound_query";
+    Function.Blocks.resize(1);
+    auto &Block = Function.Blocks.front();
+    Block.Id = 0;
+    Block.StartAddr = Text;
+    MedVar Output;
+    Output.Kind = MedVar::Reg;
+    Output.Id = 1;
+    Output.SSAVer = 1;
+    Output.RegOff = x86reg::RAX;
+    Output.Size = 8;
+    Output.TheArch = Arch::X64;
+    auto Clobber = Output;
+    Clobber.Id = 2;
+    Clobber.RegOff = x86reg::RCX;
+    Function.CallClobbers.push_back({Clobber, 1});
+    MedVar Actual;
+    Actual.Kind = MedVar::Temp;
+    Actual.Id = 3;
+    Actual.Size = Variant == 1 ? 8 : Variant == 2 ? 2 : Variant == 8 ? 16 : 4;
+    Actual.TheArch = Arch::X64;
+    Function.Params.push_back(Actual);
+    if (Variant == 9)
+      Actual = MedVar::makeConst(UINT64_C(0x100000001), 8,
+                                 ConstantAddressProvenance::Scalar);
+    MedOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.Addr = Text;
+    Call.CallSiteId = 1;
+    Call.Output = Output;
+    Call.CalleeRegisterArgs = Variant == 3 ? -1 : Variant == 4 ? 0 : 1;
+    Call.CalleeVectorSlots = Variant == 5 ? 1 : 0;
+    Call.addInput(MedVar::makeConst(Producer, 8));
+    if (Variant != 6)
+      Call.addInput(Actual);
+    if (Variant == 7)
+      Call.SourceCallHint = std::make_shared<SourceCallTypeHint>();
+    Block.Ops.push_back(Call);
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.Addr = Text + 5;
+    Return.addInput(Output);
+    Block.Ops.push_back(Return);
+    expandSourceRegisterCalls(Function, Image, Result.CallRegisterLeaves);
+    unsigned Calls = 0, Queries = 0;
+    for (const auto &Op : Block.Ops) {
+      Calls += Op.Opcode == NdOp::CALL;
+      Queries += Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+                 Op.Inputs[0].isConst() &&
+                 Op.Inputs[0].ConstVal == unsigned(Intrinsic::Cpuid);
+    }
+    const bool Bound = Variant == 0 || Variant == 1 || Variant == 9;
+    EXPECT_EQ(Calls, Bound ? 0u : 1u);
+    EXPECT_EQ(Queries, Bound ? 1u : 0u);
+    EXPECT_EQ(Function.CallClobbers.empty(), Bound);
+  }
 }
 
 TEST(CallExitRegisters, PureRegisterLeafKeepsDynamicExtraResults) {
@@ -7157,7 +7383,7 @@ int main(void) {
 
 TEST(CallExitRegisters, RegisterQueryKeepsUnprovedBoundaries) {
   constexpr va_t Producer = Text + 0x80;
-  for (unsigned Mutation : {1u, 2u, 3u, 4u, 5u, 6u, 8u, 12u, 13u, 14u, 15u})
+  for (unsigned Mutation : {1u, 3u, 4u, 5u, 6u, 8u, 12u, 13u, 14u, 15u, 16u})
     for (bool LLVM : {false, true})
       for (bool NoOpt : {false, true}) {
         SCOPED_TRACE(Mutation);
