@@ -22456,6 +22456,8 @@ The repeated-image regression also covers unrelated function-pointer relocations
 
 ## Constant covers in OR/XOR expressions
 
+`SymExpr.DisjointFields*` checks constant equality of proved-disjoint fields, unreachable target bits, operand exchange, overlapping and unknown lanes, and constructor-work refusal. Independent exhaustive APInt evaluations cover small values and 8/32/64/128-bit carriers.
+
 `SymExprMask.ConstantCover*` checks exhaustive four-bit masks and inputs, 8–257-bit words, live high bits, shared deep sources, and word/term budget refusal. `FrameOffsets.ConstantCoveredBitsExposeOffsetsWithoutSolverQueries` checks a constant displacement with zero solver queries and rejects an input-dependent neighbor. Run `NeverDSymbolicTests` and `NeverDInterpreterSpecializationTests`.
 
 `SymExprMask.Reassembled*` and `FieldReassembly*` cover zero-extended fields

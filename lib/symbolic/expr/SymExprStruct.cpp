@@ -731,6 +731,8 @@ SymRef SymContext::mkEq(SymRef A, SymRef B) {
     const auto Word = Terms.size() == 1 ? Terms.front() : mkOr(Terms);
     return mkEq(mkAnd(Word, mkConst(~Forced)), mkConst(Target & ~Forced));
   }
+  if (auto Predicate = detail::recoverDisjointFieldEquality(*this, A, B))
+    return Predicate;
   // Equality is commutative, so order the operands for canonicity.
   if (B < A)
     std::swap(A, B);

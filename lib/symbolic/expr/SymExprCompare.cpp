@@ -7,6 +7,7 @@
 #include "SymExprCompare.h"
 
 #include "neverd/symbolic/Limits.h"
+#include "neverd/symbolic/SymKnownBits.h"
 
 #include <algorithm>
 #include <array>
@@ -327,6 +328,66 @@ SymRef recoverPackedEquality(SymContext &Ctx, SymRef Word, SymRef Literal) {
   for (const auto &L : Lanes)
     Conditions.push_back((Target & L.Bit).isZero() ? Ctx.mkNot(L.Predicate)
                                                    : L.Predicate);
+  return Conditions.empty() ? Ctx.mkTrue() : Ctx.mkAnd(Conditions);
+}
+
+SymRef recoverDisjointFieldEquality(SymContext &Ctx, SymRef Word,
+                                    SymRef Literal) {
+  if (!Ctx.isConst(Literal) || Ctx.op(Word) != SymOp::Or ||
+      Ctx.numOperands(Word) < 2 ||
+      Ctx.numOperands(Word) >
+          ::neverd::limits::symbolic::kSymExprCompareMaxTerms ||
+      Ctx.width(Word) > SymKnownBits::MaxWidth)
+    return {};
+  // Most equalities observe opaque words. Inspect only roots that can give a
+  // cheap field mask; do not query the potentially large arithmetic behind an
+  // unqualified operand just to discover it has no known zero bits.
+  auto HasFieldShape = [&](SymRef Value) {
+    const auto Op = Ctx.op(Value);
+    return Op == SymOp::ZExt ||
+           (Op == SymOp::And && Ctx.isConst(Ctx.operand(Value, 0))) ||
+           (Op == SymOp::Ite && (Ctx.isConst(Ctx.operand(Value, 1)) ||
+                                 Ctx.isConst(Ctx.operand(Value, 2)))) ||
+           (Op == SymOp::Mul && Ctx.numOperands(Value) == 2 &&
+            Ctx.isConst(Ctx.operand(Value, 0)) &&
+            Ctx.constValue(Ctx.operand(Value, 0)).isPowerOf2()) ||
+           (Op == SymOp::Shl && Ctx.isConst(Ctx.operand(Value, 1)));
+  };
+  if (std::none_of(Ctx.operands(Word).begin(), Ctx.operands(Word).end(),
+                   HasFieldShape))
+    return {};
+  struct Field {
+    SymRef Value;
+    llvm::APInt Possible;
+  };
+  llvm::SmallVector<Field, 8> Fields;
+  const auto Width = Ctx.width(Word);
+  llvm::APInt Used(Width, 0);
+  SymKnownBits Facts(Ctx);
+  unsigned Work = SymKnownBits::MaxQueryWork;
+  // Hold owned roots/masks only: materializing a predicate below can grow the
+  // context arena and invalidate its operand views.
+  for (const auto Value : Ctx.operands(Word)) {
+    auto Possible = llvm::APInt::getAllOnes(Width);
+    if (Ctx.isConst(Value))
+      Possible = Ctx.constValue(Value);
+    else if (HasFieldShape(Value)) {
+      if (auto Known = Facts.query(Value, Work))
+        Possible = ~Known->Zero;
+    }
+    if (!(Used & Possible).isZero())
+      return {};
+    Used |= Possible;
+    Fields.push_back({Value, std::move(Possible)});
+  }
+  const llvm::APInt Target = Ctx.constValue(Literal);
+  if (!(Target & ~Used).isZero())
+    return Ctx.mkFalse();
+  llvm::SmallVector<SymRef, 8> Conditions;
+  for (const auto &Field : Fields)
+    if (!Field.Possible.isZero())
+      Conditions.push_back(
+          Ctx.mkEq(Field.Value, Ctx.mkConst(Target & Field.Possible)));
   return Conditions.empty() ? Ctx.mkTrue() : Ctx.mkAnd(Conditions);
 }
 
