@@ -235,17 +235,21 @@ rules below do, not from taste.
 - Frame keyboard focus around the whole control in the `Focus` color, the
   color of the fields' focus border, as Visual Studio Code draws its
   `focusBorder`. `WorkbenchStyle` draws `PE_FrameFocusRect` as that frame: a
-  button's face, a check box's or radio button's box with its label, a tab. A
-  push button keeps a line of the surface between the frame and its face, as
-  Visual Studio Code sets its focus border off a button, so the frame shows on
-  the primary accent too. Fusion's rectangle tinted a box behind the label,
-  which read as selected text in the light theme and vanished in the dark
-  one. Focus the pointer gives draws none, as in Fusion
-  (`State_KeyboardFocusChange`). Qt paints a tool button whose style sheet
-  gives it a border without calling `PE_FrameFocusRect` (`CC_ToolButton` in
-  `qstylesheetstyle.cpp`); a tool button takes focus only from the keyboard
-  (`Qt::TabFocus`), so `QToolButton:focus` draws the frame as its border. Quick
-  start's rows draw the same frame themselves.
+  button's face, a check box's or radio button's box with its label, a tab,
+  a dock's tab. A push button keeps a line of the surface it stands on between
+  the frame and its face, as Visual Studio Code sets its focus border off a
+  button, so the frame shows on the primary accent too. That line takes the
+  color of the nearest ancestor that paints an opaque background (a style
+  sheet's `background` reaches that widget's palette), not the window's: on a
+  `Base` panel a window-colored line read as a second, wrong outline.
+  Fusion's rectangle tinted a box behind the label, which read as selected
+  text in the light theme and vanished in the dark one. Focus the pointer
+  gives draws none, as in Fusion (`State_KeyboardFocusChange`). Qt paints a
+  tool button whose style sheet gives it a border without calling
+  `PE_FrameFocusRect` (`CC_ToolButton` in `qstylesheetstyle.cpp`); a tool
+  button takes focus only from the keyboard (`Qt::TabFocus`), so
+  `QToolButton:focus` draws the frame as its border. Quick start's rows draw
+  the same frame themselves.
 - Size a dialog's buttons as a row of equals: at least 75 pixels, the
   standard Windows command button (Fluent 2's buttons start at 64 and 96).
   `QDialogButtonBox QPushButton { min-width: 45px; }` is that width less the
@@ -263,10 +267,19 @@ rules below do, not from taste.
 - A button that opens a list shows the chevron a combo box draws, inside its
   own padding (`QPushButton::menu-indicator`), not Fusion's corner triangle,
   which Edit function's Color and Binary comparison's Regions showed.
-- Known limit: Visual Studio Code dims a menu item's shortcut to 70%, but a
-  menu the style sheet paints draws its label and shortcut with one pen
-  (`QStyleSheetStyle`, `CE_MenuItem`), so matching it needs the menu painted by
-  other means.
+- Dim a menu item's shortcut and submenu chevron to 70% until the item is
+  highlighted, as Visual Studio Code's `menu.ts` dims a keybinding; a disabled
+  item's shortcut is already `DisabledText`. A menu the style sheet paints
+  draws label and shortcut with one pen (`CE_MenuItem` in
+  `qstylesheetstyle.cpp`), so `WorkbenchStyle` paints the items: the `QMenu`
+  rule carries `-qt-style-features: background-color`, which lets the base
+  style paint over the style sheet's background, and keeps no `QMenu::item`,
+  `::icon`, `::indicator` or `::right-arrow` rule, any of which hands the items
+  back to the style sheet. The geometry is the style sheet's that came before:
+  padding 8, 24 and 4 pixels, an 18 pixel icon box 3 pixels in (the style
+  sheet counts a sub-control's border in its size), a 16 pixel check mark 4
+  pixels in and a 10 pixel chevron. Right to left, the chevron points left;
+  the style sheet had fallen back to Fusion's triangle there.
 
 ## Hierarchy and proportion
 
@@ -457,7 +470,9 @@ diff does not establish the appearance of a Qt widget.
    (`QTest::mouseMove`), pressed, with keyboard focus
    (`Qt::WA_KeyboardFocusChange` on the window, then
    `setFocus(Qt::TabFocusReason)`), checked and disabled, in both themes.
-   The headless shell never paints `:hover`, and a `QDialog` keeps a single
+   The headless shell never paints `:hover`; a private `Xvfb` display does,
+   under a real pointer (`QT_QPA_PLATFORM=xcb`, `xdotool mousemove`, `xwd
+   -root`), and never touches the user's desktop. A `QDialog` keeps a single
    `:default` button, so host the controls in a plain `QWidget`. Measure
    contrast from the rendered pixels, and compare before and after from the
    same gallery. The offscreen screen is 800 by 600, which narrows a
