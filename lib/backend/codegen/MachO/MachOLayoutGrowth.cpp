@@ -9,6 +9,7 @@
 
 #include "neverd/backend/codegen/MachO/MachOLayoutGrowth.h"
 
+#include "MachODependencyState.h"
 #include "MachOStrictLayout.h"
 
 #include "neverd/backend/Limits.h"
@@ -616,6 +617,17 @@ llvm::Expected<uint64_t> declareMachOMetadata(std::vector<uint8_t> &Binary,
       First = std::min(First, Range.Begin);
       if (Range.Begin < TextOff + TextSize && Range.End > TextOff)
         Last = std::max(Last, Range.End);
+    }
+    auto Dependencies = readMachODependencyState(B);
+    if (!Dependencies)
+      return Dependencies.takeError();
+    // A zero chain word may rebase to the image header. Its loader-owned
+    // storage remains occupied even beyond the declared sections.
+    const auto PointerSize = H.Is64 ? sizeof(uint64_t) : sizeof(uint32_t);
+    for (const auto &[Key, Value] : Dependencies->Slots) {
+      const auto VA = Key.first;
+      if (VA >= TextVA && VA - TextVA < TextSize)
+        Last = std::max(Last, TextOff + (VA - TextVA) + PointerSize);
     }
   }
   if (Invalid || Text == UINT64_MAX || Ordinal >= 255 || End + SS > First ||
