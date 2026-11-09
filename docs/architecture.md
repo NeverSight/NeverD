@@ -16903,6 +16903,26 @@ gives each PHI of the stack or frame pointer that every way in agrees on that on
 distance from the entry stack pointer: these joins chain through a whole function,
 and no bounded proof of where the frame is follows them.
 
+For LLVM-to-C, `MedLLVMRegistrationSourceSEH.cpp` consumes these display facts
+in the private source module. It preflights distinct, closed finally bodies,
+their normal calls, local-unwind ancestors and pure constant execute-handler
+filters before changing any blocks. Unsupported ownership, ambiguous levels,
+shared cleanup bodies and expression filters retain the unlowered source CFG.
+Normal calls receive a copy of their finally body; a local unwind receives the
+exited bodies in inner-to-outer order, each under its enclosing scope. The
+exceptional copy lives in a cleanup pad. Clone work is bounded per function by
+the backend limits owner. Native registration admission still requires its
+independent frame and rewrite proofs.
+
+LLVMC can print a closed, branching cleanup CFG in each fragmented `__finally`.
+Each printed copy has private C labels and explicit PHI edge assignments. The
+normal-exit flag skips the exceptional copy on ordinary exits, so an explicit
+local unwind cannot simply become a C jump that relies on implicit cleanup.
+FS/GS stores that remain in unlowered functions retain the segment and complete
+address width through assembly; unsupported widths or atomic forms fail
+explicitly. The shared Windows CRT prototype owns `_longjmpex`'s two arguments
+for both source routes.
+
 Control-flow structuring knows nothing of scopes, and /O2 lays a scope's code out
 around its handlers. `lib/ir/high/structure/X86/X86RegistrationRegions.cpp` puts
 every statement where its try level says, each scope being one `__try` in the list

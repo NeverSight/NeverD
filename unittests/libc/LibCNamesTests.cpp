@@ -740,6 +740,20 @@ TEST(LibCPrototype, WindowsRuntimeNamesStayInPE) {
   EXPECT_FALSE(libcArityForSymbol("terminate", LibCVariant::GNU).has_value());
 }
 
+TEST(LibCPrototype, WindowsLongJumpHasTwoParametersAndNoResult) {
+  const auto *Prototype = libcPrototype("_longjmpex", BinaryFormat::COFF);
+  ASSERT_NE(Prototype, nullptr);
+  EXPECT_EQ(Prototype->Return, "void");
+  EXPECT_EQ(Prototype->ParamCount, 2u);
+  EXPECT_EQ(Prototype->Params[0], "void *");
+  EXPECT_EQ(Prototype->Params[1], "int");
+  EXPECT_FALSE(Prototype->Variadic);
+  EXPECT_FALSE(Prototype->Winapi);
+  EXPECT_EQ(libcResult("_longjmpex", LibCVariant::Windows), LibCResult::Void);
+  EXPECT_EQ(libcPrototype("_longjmpex", BinaryFormat::ELF), nullptr);
+  EXPECT_EQ(libcPrototype("_longjmpex", BinaryFormat::MachO), nullptr);
+}
+
 TEST(LibCPrototype, WindowsDriverCRTUsesExactFixedParameters) {
   for (const auto &[Name, Count] : {std::pair{"wcscat_s", 3u},
                                     {"wcscpy_s", 3u},

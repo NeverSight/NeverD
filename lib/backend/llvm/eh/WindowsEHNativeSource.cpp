@@ -541,11 +541,18 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
       (EH.Personality == ExceptionPersonality::ExceptHandler3 ||
        EH.Personality == ExceptionPersonality::ExceptHandler4)) {
     const auto Model = WindowsEHNativeSourceModel::X86RegistrationSEH;
+    // Printed C reads the frame from its own code (RegistrationDisplayFacts),
+    // which also says how far its blocks run, and restates the record, its
+    // try-level slot and the chain's installation as `__try`.  Only native
+    // output rebuilds them from the loader's reading.
+    const bool SourceView =
+        Capability == WindowsEHNativeCapability::SourceIRLowering;
     if (EH.Kind != RuntimeFunctionKind::Primary)
       return reject(Model,
                     WindowsEHNativeSourceReason::NonPrimaryRuntimeFunction,
                     Capability);
-    if (!hasValidRegistrationCodeRanges(EH))
+    if (SourceView ? !EH.CodeRange.isValid()
+                   : !hasValidRegistrationCodeRanges(EH))
       return reject(Model, WindowsEHNativeSourceReason::InvalidCodeRange,
                     Capability);
     if (EH.ParseStatus != ExceptionParseStatus::Complete)
@@ -569,12 +576,16 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
                     WindowsEHNativeSourceReason::IncompleteRegistrationFrame,
                     Capability);
     const int32_t Sentinel = EH4 ? -2 : -1;
-    if (!EH.PersonalityVA || Chain.HandlerVA != EH.PersonalityVA ||
-        !Chain.ScopeTableVA || Chain.ScopeTableVA != EH.HandlerDataVA ||
-        Chain.RegistrationOffset != -16 || Chain.TryLevelOffset != -4 ||
-        Chain.SeededTryLevel != Sentinel ||
-        !EH.CodeRange.contains(Chain.ChainInstallVA) ||
-        Chain.HasSecurityCookies != (EH4 && Chain.GSCookieOffset != -2))
+    if (SourceView ? Chain.SeededTryLevel && Chain.SeededTryLevel != Sentinel
+                   : !EH.PersonalityVA || Chain.HandlerVA != EH.PersonalityVA ||
+                         !Chain.ScopeTableVA ||
+                         Chain.ScopeTableVA != EH.HandlerDataVA ||
+                         Chain.RegistrationOffset != -16 ||
+                         Chain.TryLevelOffset != -4 ||
+                         Chain.SeededTryLevel != Sentinel ||
+                         !EH.CodeRange.contains(Chain.ChainInstallVA) ||
+                         Chain.HasSecurityCookies !=
+                             (EH4 && Chain.GSCookieOffset != -2))
       return reject(Model,
                     WindowsEHNativeSourceReason::IncompleteRegistrationFrame,
                     Capability);

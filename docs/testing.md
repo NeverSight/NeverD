@@ -20998,6 +20998,19 @@ constants, address occurrences and wider operands remain unproved.
 The corpus SEH source checks execute both normal and exception paths at O0/O2
 with UBSan and separately compile the emitted Windows protected scopes.
 
+`NeverDCOFFExceptionIRTests` also checks source-only x86 registration lowering:
+ordinary finally calls, explicit local unwinds, constant-handler clauses and
+refusal of ambiguous levels or shared cleanup bodies. The nested local-unwind
+fixture executes generated C at O0/O2 with UBSan and observes one inner cleanup
+followed by one outer cleanup. Its portable harness models ordinary exits;
+separate i386 Windows object compilation checks the actual SEH syntax. A large
+body with many callers must refuse expansion before changing the LLVM CFG.
+Fragmented cleanup fixtures cover branching PHIs, nonreturning tails and
+unique C labels.
+FS/GS store fixtures compile zero and variable offsets at scalar widths for
+i386 and x64, and reject atomic or unrepresented store widths.
+`NeverDLibCTests` checks the profile-specific `_longjmpex` declaration.
+
 ### X86 assembly flag effects
 
 `NeverDX86AsmFlagsTests` keeps an ordinary comparison live across VERR, VERW,

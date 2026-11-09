@@ -18,6 +18,8 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/backend/llvm/WindowsEHMetadataEncoder.h"
+#include "neverd/backend/llvm/WindowsEHNativeSource.h"
+#include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/CxxObjectActions.h"
@@ -44,6 +46,7 @@
 #include <algorithm>
 #include <optional>
 #include <regex>
+#include <stdexcept>
 #include <tuple>
 
 #ifndef NEVERD_RUNTIME_FIXTURE_COMPILER
@@ -150,8 +153,9 @@ CompilerResult runCCompiler(llvm::StringRef Source,
   return Result;
 }
 
-void checkStandaloneSEHSource(llvm::StringRef Source,
-                              bool CompileObject = false) {
+void checkStandaloneSEHSource(
+    llvm::StringRef Source, bool CompileObject = false,
+    llvm::StringRef Target = "--target=x86_64-pc-windows-msvc") {
   ASSERT_TRUE(hasHostFixtureCompiler());
   // Supply the small platform-header interface independently of the emitter.
   // The compiler still checks the real SEH intrinsic scopes, and the source
@@ -177,9 +181,9 @@ void checkStandaloneSEHSource(llvm::StringRef Source,
               "int _abnormal_termination(void);\n"
               "#define AbnormalTermination _abnormal_termination\n";
   }
-  const auto Result = runCCompiler(
-      Source, {"--target=x86_64-pc-windows-msvc", "-fms-extensions", "-std=c11",
-               "-fsyntax-only", "-isystem", Directory});
+  const auto Result =
+      runCCompiler(Source, {Target, "-fms-extensions", "-std=c11",
+                            "-fsyntax-only", "-isystem", Directory});
   EXPECT_EQ(Result.ExitCode, 0) << Result.Error << "\n" << Source.str();
   if (CompileObject) {
     const std::string ObjectPath = Directory.str().str() + "/seh.obj";
@@ -189,9 +193,8 @@ void checkStandaloneSEHSource(llvm::StringRef Source,
       // In particular, a trap in a nested protected region must keep the
       // parent's unwind registration and escaped filter locals at O0.
       const auto Object = runCCompiler(
-          Source, {"--target=x86_64-pc-windows-msvc", "-fms-extensions",
-                   "-fasync-exceptions", "-std=c11", Level, "-c", "-o",
-                   ObjectPath, "-isystem", Directory});
+          Source, {Target, "-fms-extensions", "-fasync-exceptions", "-std=c11",
+                   Level, "-c", "-o", ObjectPath, "-isystem", Directory});
       EXPECT_EQ(Object.ExitCode, 0) << Object.Error << "\n" << Source.str();
     }
   }
@@ -3139,6 +3142,88 @@ int main(void) {
         EXPECT_THROW((void)emitLLVMC(Module), std::runtime_error);
       }
     }
+  }
+}
+
+TEST(COFFExceptionIR, LLVMCFragmentedFinallyKeepsItsCleanupCFG) {
+  for (bool NonReturning : {false, true}) {
+    SCOPED_TRACE(NonReturning);
+    llvm::LLVMContext Context;
+    llvm::Module Module("fragmented-cleanup", Context);
+    Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+    llvm::IRBuilder<> B(Context);
+    auto *Void = B.getVoidTy();
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(Void, {B.getInt1Ty()}, false),
+        llvm::GlobalValue::ExternalLinkage, "fragmented_cleanup", Module);
+    auto *Personality = llvm::Function::Create(
+        llvm::FunctionType::get(B.getInt32Ty(), true),
+        llvm::GlobalValue::ExternalLinkage, "__C_specific_handler", Module);
+    Function->setPersonalityFn(Personality);
+    auto Block = [&](const char *Name) {
+      return llvm::BasicBlock::Create(Context, Name, Function);
+    };
+    auto *Entry = Block("entry");
+    auto *First = Block("first");
+    auto *Second = Block("second");
+    auto *FirstEnd = Block("first_end");
+    auto *SecondEnd = Block("second_end");
+    auto *Done = Block("done");
+    auto *Cleanup = Block("cleanup");
+    auto *Left = Block("cleanup_left");
+    auto *Right = Block("cleanup_right");
+    auto *Join = Block("cleanup_join");
+    auto *Begin = llvm::Intrinsic::getOrInsertDeclaration(
+        &Module, llvm::Intrinsic::seh_try_begin);
+    auto *End = llvm::Intrinsic::getOrInsertDeclaration(
+        &Module, llvm::Intrinsic::seh_try_end);
+    auto *Effect = llvm::Function::Create(
+        llvm::FunctionType::get(Void, {B.getInt32Ty()}, false),
+        llvm::GlobalValue::ExternalLinkage, "cleanup_effect", Module);
+    B.SetInsertPoint(Entry);
+    B.CreateCondBr(Function->getArg(0), First, Second);
+    B.SetInsertPoint(First);
+    B.CreateInvoke(Begin, FirstEnd, Cleanup);
+    B.SetInsertPoint(Second);
+    B.CreateInvoke(Begin, SecondEnd, Cleanup);
+    B.SetInsertPoint(FirstEnd);
+    B.CreateInvoke(End, Done, Cleanup);
+    B.SetInsertPoint(SecondEnd);
+    B.CreateInvoke(End, Done, Cleanup);
+    B.SetInsertPoint(Done);
+    B.CreateRetVoid();
+    B.SetInsertPoint(Cleanup);
+    auto *Pad = B.CreateCleanupPad(llvm::ConstantTokenNone::get(Context), {});
+    B.CreateCondBr(Function->getArg(0), Left, Right);
+    B.SetInsertPoint(Left);
+    B.CreateBr(Join);
+    B.SetInsertPoint(Right);
+    B.CreateBr(Join);
+    B.SetInsertPoint(Join);
+    auto *Value = B.CreatePHI(B.getInt32Ty(), 2, "cleanup_value");
+    Value->addIncoming(B.getInt32(17), Left);
+    Value->addIncoming(B.getInt32(29), Right);
+    B.CreateCall(Effect, {Value}, {llvm::OperandBundleDef("funclet", Pad)});
+    if (NonReturning) {
+      Effect->addFnAttr(llvm::Attribute::NoReturn);
+      B.CreateUnreachable();
+    } else {
+      B.CreateCleanupRet(Pad, nullptr);
+    }
+    ASSERT_FALSE(llvm::verifyFunction(*Function, &llvm::errs()));
+    const std::string Source = emitLLVMC(Module);
+    EXPECT_EQ(Source.find("neverd.seh: not lowered"), std::string::npos)
+        << Source;
+    ASSERT_NE(Source.find("} __finally {"), std::string::npos) << Source;
+    // Both independent incoming values must reach every duplicated clause;
+    // the compiler also checks that none of their labels collide.
+    const auto Clause = Source.find("} __finally {");
+    EXPECT_NE(Source.find(" = 0x11;", Clause), std::string::npos) << Source;
+    EXPECT_NE(Source.find(" = 0x1D;", Clause), std::string::npos) << Source;
+    EXPECT_NE(Source.find("cleanup_effect(", Clause), std::string::npos)
+        << Source;
+    if (hasHostFixtureCompiler())
+      checkStandaloneSEHSource("#include <stdint.h>\n" + Source, true);
   }
 }
 
@@ -6351,6 +6436,374 @@ TEST(COFFExceptionIR, StructuresSingleBlockSEHFinallyBody) {
   ASSERT_NE(Finally, std::string::npos);
   EXPECT_NE(Source.find("sub_14000E000();", Finally), std::string::npos);
   EXPECT_EQ(Source.find("native finally funclet @"), std::string::npos);
+}
+
+// The source view owns its cleanup bodies independently of native frame
+// reconstruction. An ordinary body call and a local unwind must each run one
+// normal copy; the pad is reserved for exceptional execution.
+MedFunc sourceRegistrationFinally(bool LocalUnwind) {
+  constexpr va_t F = 0x401000;
+  constexpr va_t Handler = F + 0x20;
+  MedFunc Func =
+      makeWindowsHandlerFixture("source_registration", 0x409000, 1, F);
+  Func.AnalysisOnly = true;
+  auto &EH = Func.ExceptionMetadata.emplace();
+  EH.CodeRange = {F, F + 0x40};
+  EH.ParseStatus = ExceptionParseStatus::Complete;
+  EH.Personality = ExceptionPersonality::ExceptHandler3;
+  EH.Encoding = ExceptionEncoding::X86ScopeTableEH3;
+  auto &Chain = EH.Registration.emplace();
+  Chain.SeededTryLevel = -1;
+  Chain.Scopes.push_back({-1, 0, Handler, true});
+  auto &Facts = Func.RegistrationStates.emplace().Display.emplace();
+  Facts.Stretches = {{{F, F + (LocalUnwind ? 12 : 8)}, {0}, 0, false},
+                     {{F + (LocalUnwind ? 12 : 8), F + 0x10}, {-1}, 0, true},
+                     {{Handler, F + 0x30}, {-1}, Handler, false},
+                     {{F + 0x30, F + 0x40}, {-1}, 0, true}};
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = F + 8;
+  Call.addInput(MedVar::makeConst(LocalUnwind ? 0x40a000 : Handler, 4));
+  Func.Blocks[0].Ops.push_back(Call);
+  Facts.NoValueCalls.insert(Call.Addr);
+  if (LocalUnwind)
+    Facts.LocalUnwinds.insert(Call.Addr);
+  MedOp Quiet;
+  Quiet.Opcode = NdOp::NOP;
+  Quiet.Addr = F + 12;
+  Func.Blocks[0].Ops.push_back(Quiet);
+  Func.Blocks[0].Succs = {2};
+  Func.Blocks[2].Preds = {0};
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = Handler + 4;
+  Func.Blocks[1].Ops.push_back(Return);
+  Facts.FinallyReturns.insert(Return.Addr);
+  return Func;
+}
+
+TEST(COFFExceptionIR, SourceX86FinallyAndLocalUnwindKeepOneNormalCopy) {
+  for (bool LocalUnwind : {false, true}) {
+    SCOPED_TRACE(LocalUnwind);
+    const auto Func = sourceRegistrationFinally(LocalUnwind);
+    EXPECT_FALSE(classifyWindowsEHNativeSource(*Func.ExceptionMetadata,
+                                               Arch::X86, BinaryFormat::COFF)
+                     .canLowerNativeIR());
+    EXPECT_TRUE(classifyWindowsEHNativeSource(
+                    *Func.ExceptionMetadata, Arch::X86, BinaryFormat::COFF,
+                    WindowsEHNativeCapability::SourceIRLowering)
+                    .canLowerNativeIR());
+    llvm::LLVMContext Context;
+    MedLLVMEmitter Emitter;
+    Emitter.setAnalysisRecoveryForSource(true);
+    Emitter.setPreserveUnknownSourceValues(true);
+    auto Module =
+        Emitter.emit({Func}, Context, "source_registration", Arch::X86,
+                     {{0x408000, "protected_effect"},
+                      {0x409000, "cleanup_effect"},
+                      {0x40a000, "local_unwind"}},
+                     nullptr, BinaryFormat::COFF);
+    ASSERT_NE(Module, nullptr);
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    llvm::Function *Parent = Module->getFunction("source_registration");
+    ASSERT_NE(Parent, nullptr);
+    ASSERT_TRUE(Parent->hasPersonalityFn());
+    unsigned CleanupCalls = 0, UnwindCalls = 0;
+    for (const auto &BB : *Parent)
+      for (const auto &Inst : BB)
+        if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Inst))
+          if (const auto *Callee = Call->getCalledFunction()) {
+            CleanupCalls += Callee->getName() == "cleanup_effect";
+            UnwindCalls += Callee->getName() == "local_unwind";
+          }
+    EXPECT_EQ(CleanupCalls, 2u);
+    EXPECT_EQ(UnwindCalls, 0u);
+    const std::string Source = emitLLVMC(*Module);
+    EXPECT_EQ(Source.find("neverd.seh: not lowered"), std::string::npos)
+        << Source;
+    EXPECT_NE(Source.find("} __finally {"), std::string::npos) << Source;
+    if (hasHostFixtureCompiler())
+      checkStandaloneSEHSource("#include <stdint.h>\n#include <excpt.h>\n" +
+                                   Source,
+                               true, "--target=i686-pc-windows-msvc");
+  }
+}
+
+TEST(COFFExceptionIR, SourceX86LocalUnwindExecutesInnerThenOuterExactlyOnce) {
+  auto Func = sourceRegistrationFinally(true);
+  Func.ExceptionMetadata->CodeRange.End = 0x401060;
+  Func.ExceptionMetadata->Registration->Scopes.push_back(
+      {0, 0, 0x401050, true});
+  auto &Facts = *Func.RegistrationStates->Display;
+  Facts.Stretches.front().Levels = {1};
+  Facts.Stretches.push_back({{0x401050, 0x401060}, {0}, 0x401050, false});
+  Facts.FinallyReturns.insert(0x401054);
+  auto Inner = Func.Blocks[1];
+  Inner.Id = 3;
+  Inner.StartAddr = 0x401050;
+  Inner.EndAddr = 0x401060;
+  Inner.Ops[0].Addr = 0x401050;
+  Inner.Ops[0].Inputs[0] = MedVar::makeConst(0x409100, 4);
+  Inner.Ops[1].Addr = 0x401054;
+  Func.Blocks.push_back(Inner);
+  llvm::LLVMContext Context;
+  MedLLVMEmitter Emitter;
+  Emitter.setAnalysisRecoveryForSource(true);
+  Emitter.setPreserveUnknownSourceValues(true);
+  auto Module = Emitter.emit({Func}, Context, "source_unwind_order", Arch::X86,
+                             {{0x408000, "protected_effect"},
+                              {0x409000, "outer_effect"},
+                              {0x409100, "inner_effect"},
+                              {0x40a000, "local_unwind"}},
+                             nullptr, BinaryFormat::COFF);
+  ASSERT_NE(Module, nullptr);
+  ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+  const std::string Source = emitLLVMC(*Module);
+  ASSERT_EQ(Source.find("neverd.seh: not lowered"), std::string::npos)
+      << Source;
+  if (hasHostFixtureCompiler())
+    checkStandaloneSEHSource("#include <stdint.h>\n#include <excpt.h>\n" +
+                                 Source,
+                             true, "--target=i686-pc-windows-msvc");
+  // Model only normal exits here. Windows compilation above checks the real
+  // EH constructs; this executable check proves the explicit unwind's order
+  // and effect multiplicity, without claiming host Windows unwinding.
+  const std::string Harness = R"(
+#include <stdint.h>
+#define __try if (1)
+#define __finally else
+#define AbnormalTermination() 0
+static unsigned sequence;
+uint32_t protected_effect(void) { sequence = sequence * 10 + 3; return 0; }
+uint32_t inner_effect(void) { sequence = sequence * 10 + 2; return 0; }
+uint32_t outer_effect(void) { sequence = sequence * 10 + 1; return 0; }
+)";
+  for (llvm::StringRef Level : {"-O0", "-O2"})
+    source_call_execution_test::compileAndRun(
+        Harness + Source +
+            "int main(void) { source_registration(); return sequence != 321; "
+            "}\n",
+        {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+}
+
+TEST(COFFExceptionIR, LLVMCStoresKeepFSAndGSOffsets) {
+  for (Arch Target : {Arch::X86, Arch::X64}) {
+    SCOPED_TRACE(Target == Arch::X86 ? "x86" : "x64");
+    llvm::LLVMContext Context;
+    llvm::Module Module("segmented-stores", Context);
+    const bool X64 = Target == Arch::X64;
+    Module.setTargetTriple(
+        llvm::Triple(X64 ? "x86_64-pc-windows-msvc" : "i686-pc-windows-msvc"));
+    llvm::IRBuilder<> B(Context);
+    auto *Word = B.getIntNTy(X64 ? 64 : 32);
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(B.getVoidTy(), {Word, Word}, false),
+        llvm::GlobalValue::ExternalLinkage, "segmented_stores", Module);
+    B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Function));
+    for (unsigned AS : {kLLVMX86FSAddressSpace, kLLVMX86GSAddressSpace}) {
+      auto *Pointer = llvm::PointerType::get(Context, AS);
+      B.CreateStore(B.getInt32(37), llvm::ConstantPointerNull::get(Pointer));
+      auto *Address = B.CreateIntToPtr(Function->getArg(0), Pointer);
+      for (unsigned Bits : {8u, 16u, 32u, 64u}) {
+        if (Bits == 64 && !X64)
+          continue;
+        auto *Value =
+            B.CreateZExtOrTrunc(Function->getArg(1), B.getIntNTy(Bits));
+        B.CreateStore(Value, Address)->setVolatile(true);
+      }
+    }
+    B.CreateRetVoid();
+    ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+    CEmitterOptions Options;
+    Options.TheArch = Target;
+    Options.Format = BinaryFormat::COFF;
+    Options.EmitIncludes = false;
+    std::string Source;
+    llvm::raw_string_ostream Stream(Source);
+    ASSERT_TRUE(LLVMCEmitter().emit(Module, Stream, Options));
+    EXPECT_NE(Source.find("%%fs:(%1)"), std::string::npos) << Source;
+    EXPECT_NE(Source.find("%%gs:(%1)"), std::string::npos) << Source;
+    EXPECT_EQ(Source.find("*(uint32_t*)((void*)0)"), std::string::npos)
+        << Source;
+    if (hasHostFixtureCompiler()) {
+      const auto Compiled =
+          runCCompiler("#include <stdint.h>\n" + Source,
+                       {X64 ? "--target=x86_64-pc-windows-msvc"
+                            : "--target=i686-pc-windows-msvc",
+                        "-std=c11", "-Werror", "-S", "-o", "/dev/null"});
+      EXPECT_EQ(Compiled.ExitCode, 0) << Compiled.Error << "\n" << Source;
+    }
+  }
+}
+
+TEST(COFFExceptionIR, LLVMCRefusesUnrepresentedSegmentedStores) {
+  for (bool Atomic : {false, true}) {
+    llvm::LLVMContext Context;
+    llvm::Module Module("unsupported-segmented-store", Context);
+    Module.setTargetTriple(llvm::Triple("i686-pc-windows-msvc"));
+    llvm::IRBuilder<> B(Context);
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(B.getVoidTy(), false),
+        llvm::GlobalValue::ExternalLinkage, "unsupported_store", Module);
+    B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Function));
+    auto *Pointer = llvm::PointerType::get(Context, kLLVMX86FSAddressSpace);
+    auto *Store = B.CreateStore(Atomic ? B.getInt32(3) : B.getInt64(3),
+                                llvm::ConstantPointerNull::get(Pointer));
+    if (Atomic)
+      Store->setAtomic(llvm::AtomicOrdering::Monotonic);
+    B.CreateRetVoid();
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X86;
+    Options.EmitIncludes = false;
+    std::string Source;
+    llvm::raw_string_ostream Stream(Source);
+    EXPECT_THROW(LLVMCEmitter().emit(Module, Stream, Options),
+                 std::runtime_error);
+  }
+}
+
+TEST(COFFExceptionIR, SourceX86RefusesUnknownOrSharedCleanupWithoutMutation) {
+  for (unsigned Case : {0u, 1u, 2u}) {
+    SCOPED_TRACE(Case);
+    auto Func = sourceRegistrationFinally(false);
+    if (Case == 1)
+      Func.ExceptionMetadata->Registration->Scopes.push_back(
+          {-1, 0, 0x401020, true});
+    else if (Case == 2)
+      Func.RegistrationStates->Display->NoValueCalls.clear();
+    else
+      Func.RegistrationStates->Display->Stretches.front().Levels = {0, -1};
+    llvm::LLVMContext Context;
+    MedLLVMEmitter Emitter;
+    Emitter.setAnalysisRecoveryForSource(true);
+    Emitter.setPreserveUnknownSourceValues(true);
+    auto Module = Emitter.emit({Func}, Context, "source_refusal", Arch::X86, {},
+                               nullptr, BinaryFormat::COFF);
+    ASSERT_NE(Module, nullptr);
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    auto *Parent = Module->getFunction("source_registration");
+    ASSERT_NE(Parent, nullptr);
+    EXPECT_FALSE(Parent->hasPersonalityFn());
+    for (const auto &BB : *Parent)
+      EXPECT_FALSE(BB.isEHPad());
+  }
+}
+
+TEST(COFFExceptionIR, SourceX86ConstantFilterKeepsOnlyExecuteHandler) {
+  for (uint32_t Value : {0u, 1u, UINT32_MAX}) {
+    SCOPED_TRACE(Value);
+    auto Func = sourceRegistrationFinally(false);
+    Func.ExceptionMetadata->CodeRange.End = 0x401060;
+    auto &Scope = Func.ExceptionMetadata->Registration->Scopes.front();
+    Scope.IsFinally = false;
+    Scope.FilterVA = 0x401050;
+    Func.Blocks.front().Ops.erase(Func.Blocks.front().Ops.begin() + 1);
+    auto &Facts = *Func.RegistrationStates->Display;
+    Facts.NoValueCalls.clear();
+    Facts.FinallyReturns.clear();
+    MedBlock Filter;
+    Filter.Id = 3;
+    Filter.StartAddr = Scope.FilterVA;
+    Filter.EndAddr = 0x401060;
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.Addr = Filter.StartAddr;
+    Return.addInput(MedVar::makeConst(Value, 4));
+    Filter.Ops.push_back(Return);
+    Func.Blocks.push_back(Filter);
+    Facts.Stretches.push_back(
+        {{Filter.StartAddr, Filter.EndAddr}, {-1}, Filter.StartAddr, true});
+    llvm::LLVMContext Context;
+    MedLLVMEmitter Emitter;
+    Emitter.setAnalysisRecoveryForSource(true);
+    Emitter.setPreserveUnknownSourceValues(true);
+    auto Module = Emitter.emit({Func}, Context, "constant_filter", Arch::X86,
+                               {}, nullptr, BinaryFormat::COFF);
+    ASSERT_NE(Module, nullptr);
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    const auto *Parent = Module->getFunction("source_registration");
+    ASSERT_NE(Parent, nullptr);
+    EXPECT_EQ(Parent->hasPersonalityFn(), Value == 1);
+    if (Value != 1)
+      continue;
+    const std::string Source = emitLLVMC(*Module);
+    EXPECT_EQ(Source.find("neverd.seh: not lowered"), std::string::npos)
+        << Source;
+    EXPECT_NE(Source.find("__except (EXCEPTION_EXECUTE_HANDLER)"),
+              std::string::npos)
+        << Source;
+    if (hasHostFixtureCompiler())
+      checkStandaloneSEHSource("#include <stdint.h>\n#include <excpt.h>\n" +
+                                   Source,
+                               true, "--target=i686-pc-windows-msvc");
+  }
+}
+
+TEST(COFFExceptionIR, SourceX86RefusesExcessiveCleanupExpansionBeforeMutation) {
+  for (bool Excessive : {false, true}) {
+    SCOPED_TRACE(Excessive);
+    auto Func = sourceRegistrationFinally(false);
+    auto &Facts = *Func.RegistrationStates->Display;
+    auto &Body = Func.Blocks[1];
+    Body.StartAddr = 0x500000;
+    Body.EndAddr = 0x501010;
+    Func.ExceptionMetadata->CodeRange.End = Body.EndAddr;
+    Func.ExceptionMetadata->Registration->Scopes.front().HandlerVA =
+        Body.StartAddr;
+    const auto Effect = Body.Ops.front();
+    Body.Ops.clear();
+    // Independently force more than 65,536 copied instructions: 65 normal calls
+    // of a body with 1,024 observable calls, before accounting for other IR.
+    for (unsigned I = 0; I < (Excessive ? 1024u : 1u); ++I) {
+      auto Call = Effect;
+      Call.Addr = Body.StartAddr + I * 4;
+      Body.Ops.push_back(Call);
+    }
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.Addr = 0x501000;
+    Body.Ops.push_back(Return);
+    Facts.FinallyReturns = {Return.Addr};
+    Facts.Stretches[2] = {
+        {Body.StartAddr, Body.EndAddr}, {-1}, Body.StartAddr, false};
+    Func.Blocks[0].Ops[1].Inputs[0] = MedVar::makeConst(Body.StartAddr, 4);
+    Func.Blocks[0].Succs = {3};
+    const auto Template = Func.Blocks[0];
+    for (int I = 0; I < 64; ++I) {
+      auto Site = Template;
+      Site.Id = I + 3;
+      Site.StartAddr = 0x410000 + static_cast<va_t>(I) * 16;
+      Site.EndAddr = Site.StartAddr + 16;
+      for (auto &Op : Site.Ops)
+        Op.Addr += Site.StartAddr - Template.StartAddr;
+      Site.Preds = {I ? Site.Id - 1 : 0};
+      Site.Succs = {I == 63 ? 2 : Site.Id + 1};
+      Facts.NoValueCalls.insert(Site.Ops[1].Addr);
+      Facts.Stretches.push_back(
+          {{Site.StartAddr, Site.StartAddr + 8}, {0}, 0, false});
+      Facts.Stretches.push_back(
+          {{Site.StartAddr + 8, Site.EndAddr}, {-1}, 0, true});
+      Func.Blocks.push_back(Site);
+    }
+    Func.Blocks[2].Preds = {66};
+    llvm::sort(Facts.Stretches, [](const auto &A, const auto &B) {
+      return A.Range.Begin < B.Range.Begin;
+    });
+    llvm::LLVMContext Context;
+    MedLLVMEmitter Emitter;
+    Emitter.setAnalysisRecoveryForSource(true);
+    Emitter.setPreserveUnknownSourceValues(true);
+    auto Module = Emitter.emit({Func}, Context, "bounded_cleanup", Arch::X86,
+                               {}, nullptr, BinaryFormat::COFF);
+    ASSERT_NE(Module, nullptr);
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    const auto *Parent = Module->getFunction("source_registration");
+    ASSERT_NE(Parent, nullptr);
+    EXPECT_EQ(Parent->hasPersonalityFn(), !Excessive);
+    if (Excessive)
+      for (const auto &BB : *Parent)
+        EXPECT_FALSE(BB.isEHPad());
+  }
 }
 
 TEST(COFFExceptionIR, StructuresX86RegistrationFinallyAtItsActualBody) {

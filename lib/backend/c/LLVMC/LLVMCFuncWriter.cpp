@@ -9973,6 +9973,7 @@ struct SEHBlockClause {
   const llvm::BasicBlock *Handler = nullptr;
   const llvm::CleanupPadInst *Cleanup = nullptr;
   llvm::SmallVector<const llvm::BasicBlock *, 4> CleanupBody;
+  bool LinearCleanup = true;
   const llvm::BasicBlock *Unwind = nullptr;
 };
 
@@ -10058,33 +10059,63 @@ std::optional<SEHBlockScopes> planSEHBlockScopes(const llvm::Function &Fn) {
   for (auto &[Entry, Clause] : Plan.Clauses) {
     if (!Clause.Cleanup)
       continue;
-    // The normal cleanup counterpart already lives in the normal CFG. A
-    // per-block finally executes this linear body only while unwinding.
-    llvm::SmallPtrSet<const llvm::BasicBlock *, 4> Seen;
-    const auto *BB = Entry;
-    while (Seen.insert(BB).second) {
+    // A cleanup may branch, loop or end in a nonreturning call. Collect its
+    // closed normal CFG; every returning edge must name this pad and the same
+    // outer unwind destination. Each printed copy gets private labels below.
+    llvm::SmallPtrSet<const llvm::BasicBlock *, 16> Seen;
+    llvm::SmallVector<const llvm::BasicBlock *, 8> Work{Entry};
+    bool HasUnwind = false;
+    auto SetUnwind = [&](const llvm::BasicBlock *Destination) {
+      if (HasUnwind && Clause.Unwind != Destination)
+        return false;
+      HasUnwind = true;
+      Clause.Unwind = Destination;
+      return true;
+    };
+    while (!Work.empty()) {
+      const auto *BB = Work.pop_back_val();
+      if (!Seen.insert(BB).second)
+        continue;
+      if (BB != Entry && BB->isEHPad())
+        return std::nullopt;
       Clause.CleanupBody.push_back(BB);
       const auto *Term = BB->getTerminator();
       if (const auto *Ret = llvm::dyn_cast<llvm::CleanupReturnInst>(Term)) {
-        if (Ret->getCleanupPad() != Clause.Cleanup)
+        if (Ret->getCleanupPad() != Clause.Cleanup ||
+            !SetUnwind(Ret->getUnwindDest()))
           return std::nullopt;
-        Clause.Unwind = Ret->getUnwindDest();
-        break;
+        continue;
       }
+      if (llvm::isa<llvm::UnreachableInst>(Term))
+        continue;
+      if (const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Term)) {
+        if (!SetUnwind(Invoke->getUnwindDest()))
+          return std::nullopt;
+        Work.push_back(Invoke->getNormalDest());
+      } else if (llvm::isa<llvm::UncondBrInst, llvm::CondBrInst,
+                           llvm::SwitchInst>(Term)) {
+        for (const auto *Next : llvm::reverse(llvm::successors(BB)))
+          Work.push_back(Next);
+      } else {
+        return std::nullopt;
+      }
+    }
+    for (const auto *BB : Clause.CleanupBody) {
+      if (BB != Entry)
+        for (const auto *Pred : llvm::predecessors(BB))
+          if (!Seen.contains(Pred))
+            return std::nullopt;
+      const auto *Term = BB->getTerminator();
       const llvm::BasicBlock *Next = nullptr;
       if (const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Term))
         Next = Invoke->getNormalDest();
       else if (const auto *Branch = llvm::dyn_cast<llvm::UncondBrInst>(Term))
         Next = Branch->getSuccessor(0);
-      if (!Next || Next->getSinglePredecessor() != BB || Seen.count(Next))
-        return std::nullopt;
-      BB = Next;
+      else if (!llvm::isa<llvm::CleanupReturnInst, llvm::UnreachableInst>(Term))
+        Clause.LinearCleanup = false;
+      if (Next && (Next == Entry || Next->getSinglePredecessor() != BB))
+        Clause.LinearCleanup = false;
     }
-    for (const auto *Body : Clause.CleanupBody)
-      if (const auto *Invoke =
-              llvm::dyn_cast<llvm::InvokeInst>(Body->getTerminator()))
-        if (Invoke->getUnwindDest() != Clause.Unwind)
-          return std::nullopt;
   }
   std::map<const llvm::BasicBlock *, SEHBlockScopes::Scope> Chains;
   for (const auto &[Entry, Clause] : Plan.Clauses) {
@@ -11174,26 +11205,106 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
           OS << "} __finally {\n";
           emitIndent(Indent + 1);
           OS << "if (!" << NormalExit << ") {\n";
-          for (const auto *CleanupBB : Clause.CleanupBody) {
-            for (const auto &Inst : *CleanupBB)
-              if (!Inst.isTerminator() &&
-                  !llvm::isa<llvm::CleanupPadInst, llvm::AllocaInst>(Inst))
-                writeInstruction(const_cast<llvm::Instruction &>(Inst),
-                                 Indent + 2);
-            const auto *CleanupTerm = CleanupBB->getTerminator();
-            const llvm::BasicBlock *Next = nullptr;
-            if (const auto *Invoke =
-                    llvm::dyn_cast<llvm::InvokeInst>(CleanupTerm)) {
-              writeCallLike(*const_cast<llvm::InvokeInst *>(Invoke),
-                            Invoke->getType()->isVoidTy() ? ""
-                                                          : getName(Invoke),
-                            Indent + 2);
-              Next = Invoke->getNormalDest();
-            } else if (const auto *Branch =
-                           llvm::dyn_cast<llvm::UncondBrInst>(CleanupTerm))
-              Next = Branch->getSuccessor(0);
-            if (Next && !AfterCxxThrow)
-              writePhiCopies(CleanupBB, Next, Indent + 2);
+          if (!Clause.LinearCleanup) {
+            // C labels have function scope, even inside distinct finally
+            // clauses. Every copy needs its own names and explicit PHI edges.
+            std::map<const llvm::BasicBlock *, std::string> Labels;
+            for (const auto *Body : Clause.CleanupBody) {
+              Labels.emplace(Body, freshVar("seh_cleanup"));
+              EHMovedContinuationBlocks.insert(Body);
+              for (const auto &Inst : *Body)
+                if (llvm::isa<llvm::PHINode>(Inst))
+                  Analysis.Inlinable.erase(&Inst);
+            }
+            const std::string Done = freshVar("seh_cleanup_done");
+            auto CleanupEdge = [&](const llvm::BasicBlock *From,
+                                   const llvm::BasicBlock *To, int Depth) {
+              writePhiCopies(From, To, Depth);
+              KnownImmediates.clear();
+              emitIndent(Depth);
+              OS << "goto " << Labels.at(To) << ";\n";
+            };
+            for (const auto *Body : Clause.CleanupBody) {
+              KnownImmediates.clear();
+              AllocaImmediates.clear();
+              AllocaLastValues.clear();
+              AfterCxxThrow = false;
+              OS << Labels.at(Body) << ":\n";
+              for (const auto &Inst : *Body)
+                if (!Inst.isTerminator() &&
+                    !llvm::isa<llvm::CleanupPadInst, llvm::AllocaInst>(Inst))
+                  writeInstruction(const_cast<llvm::Instruction &>(Inst),
+                                   Indent + 2);
+              const auto *Term = Body->getTerminator();
+              if (const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Term)) {
+                writeCallLike(*const_cast<llvm::InvokeInst *>(Invoke),
+                              Invoke->getType()->isVoidTy() ? ""
+                                                            : getName(Invoke),
+                              Indent + 2);
+                if (!AfterCxxThrow)
+                  CleanupEdge(Body, Invoke->getNormalDest(), Indent + 2);
+              } else if (const auto *Branch =
+                             llvm::dyn_cast<llvm::UncondBrInst>(Term)) {
+                CleanupEdge(Body, Branch->getSuccessor(0), Indent + 2);
+              } else if (const auto *Branch =
+                             llvm::dyn_cast<llvm::CondBrInst>(Term)) {
+                emitIndent(Indent + 2);
+                OS << "if (" << valueStr(Branch->getCondition()) << ") {\n";
+                CleanupEdge(Body, Branch->getSuccessor(0), Indent + 3);
+                emitIndent(Indent + 2);
+                OS << "} else {\n";
+                CleanupEdge(Body, Branch->getSuccessor(1), Indent + 3);
+                emitIndent(Indent + 2);
+                OS << "}\n";
+              } else if (const auto *Switch =
+                             llvm::dyn_cast<llvm::SwitchInst>(Term)) {
+                emitIndent(Indent + 2);
+                OS << "switch (" << valueStr(Switch->getCondition()) << ") {\n";
+                for (const auto &Case : Switch->cases()) {
+                  emitIndent(Indent + 2);
+                  OS << "case " << valueStr(Case.getCaseValue()) << ":\n";
+                  CleanupEdge(Body, Case.getCaseSuccessor(), Indent + 3);
+                }
+                emitIndent(Indent + 2);
+                OS << "default:\n";
+                CleanupEdge(Body, Switch->getDefaultDest(), Indent + 3);
+                emitIndent(Indent + 2);
+                OS << "}\n";
+              } else if (llvm::isa<llvm::CleanupReturnInst>(Term)) {
+                emitIndent(Indent + 2);
+                OS << "goto " << Done << ";\n";
+              } else {
+                emitIndent(Indent + 2);
+                OS << "__builtin_unreachable();\n";
+              }
+            }
+            OS << Done << ":;\n";
+          } else {
+            for (const auto *CleanupBB : Clause.CleanupBody) {
+              for (const auto &Inst : *CleanupBB)
+                if (!Inst.isTerminator() &&
+                    !llvm::isa<llvm::CleanupPadInst, llvm::AllocaInst>(Inst))
+                  writeInstruction(const_cast<llvm::Instruction &>(Inst),
+                                   Indent + 2);
+              const auto *CleanupTerm = CleanupBB->getTerminator();
+              const llvm::BasicBlock *Next = nullptr;
+              if (const auto *Invoke =
+                      llvm::dyn_cast<llvm::InvokeInst>(CleanupTerm)) {
+                writeCallLike(*const_cast<llvm::InvokeInst *>(Invoke),
+                              Invoke->getType()->isVoidTy() ? ""
+                                                            : getName(Invoke),
+                              Indent + 2);
+                Next = Invoke->getNormalDest();
+              } else if (const auto *Branch =
+                             llvm::dyn_cast<llvm::UncondBrInst>(CleanupTerm))
+                Next = Branch->getSuccessor(0);
+              if (llvm::isa<llvm::UnreachableInst>(CleanupTerm)) {
+                emitIndent(Indent + 2);
+                OS << "__builtin_unreachable();\n";
+              }
+              if (Next && !AfterCxxThrow)
+                writePhiCopies(CleanupBB, Next, Indent + 2);
+            }
           }
           emitIndent(Indent + 1);
           OS << "}\n";
