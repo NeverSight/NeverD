@@ -146,9 +146,11 @@ ret
 MACHO_AUTH_NATIVE_ARGS(kCompileArgs, "-arch", "arm64e", "-dynamiclib",
                        "-std=c++20", "-fno-omit-frame-pointer",
                        "-fno-optimize-sibling-calls", "-Wl,-headerpad,0x1000")
+// Reserve explicit metadata space for the larger main/loader fixture. Tight
+// layouts retain the existing refusal tests; their relocation is not implied.
 MACHO_AUTH_NATIVE_ARGS(kExecutableCompileArgs, "-arch", "arm64e", "-std=c++20",
                        "-fno-omit-frame-pointer", "-fno-optimize-sibling-calls",
-                       "-Wl,-headerpad,0x1000", "-Wl,-export_dynamic",
+                       "-Wl,-headerpad,0x4000", "-Wl,-export_dynamic",
                        "-DNEVERD_AUTH_EXECUTABLE")
 MACHO_AUTH_NATIVE_TEXT(kExecutableEnvironment,
                        "NEVERD_ARM64E_EXECUTABLE_PROFILE")

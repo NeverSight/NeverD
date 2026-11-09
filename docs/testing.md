@@ -21842,6 +21842,7 @@ satisfy the sixteen-case gate. The native object API does not qualify the
 source/IR adapter or a complete lifted-image rebuild.
 
 `PublishesSignedExecutable` adds O0/O2 compact/DWARF main-executable publication,
+with explicit metadata headroom for its larger startup harness,
 including the ABI0-object/ABI1-main contract and rejection of foreign platforms,
 dylib promotion, kernel tags and unknown ABI versions. `PublishedExecutableStarts`
 first launches the original executable, then launches the published executable

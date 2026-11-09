@@ -764,7 +764,7 @@ void checkNativeObjectInstallation(
   if (FreshPersonality)
     Dependencies.push_back(
         {kCxxLibrary, kCxxPersonality, SourcePatchDependencyKind::Function});
-  if (!RelocateOriginalLanguage && !Threaded &&
+  if (!Executable && !RelocateOriginalLanguage && !Threaded &&
       llvm::StringRef(Optimization) == kO0) {
     uint64_t Tail = 0, TextEnd = 0;
     forEachMachOLoadCommand(
@@ -896,10 +896,8 @@ void checkNativeObjectInstallation(
           llvm::MachO::CPU_SUBTYPE_ARM64_ALL;
     });
     Check([&](uint8_t *Data) {
-      auto &Subtype =
-          reinterpret_cast<llvm::MachO::mach_header_64 *>(Data)->cpusubtype;
-      Subtype = Executable ? kUnsupportedObjectSubtype
-                           : Subtype ^ kObjectABIVersionBit;
+      reinterpret_cast<llvm::MachO::mach_header_64 *>(Data)->cpusubtype ^=
+          kObjectABIVersionBit;
     });
     Check([&](uint8_t *Data) {
       writeLE<uint32_t>(Data + *PlainRelocation,
@@ -945,6 +943,10 @@ void checkNativeObjectInstallation(
         reinterpret_cast<llvm::MachO::mach_header_64 *>(Candidate.data())
             ->cpusubtype = Subtype;
       });
+    Reject([](auto &, auto &Native) {
+      reinterpret_cast<llvm::MachO::mach_header_64 *>(Native.data())
+          ->cpusubtype = kUnsupportedObjectSubtype;
+    });
     const auto ChangePlatform = [](auto &Data) {
       unsigned Changed = 0;
       forEachMachOLoadCommand(
