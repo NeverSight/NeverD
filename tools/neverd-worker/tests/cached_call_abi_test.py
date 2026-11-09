@@ -90,18 +90,21 @@ def check_cached_helpers(worker, directory):
     assert path.read_bytes() == binary
 
 
-def check_split_exit_constants(worker, directory):
+def check_split_exit_constants(worker, directory, joined=False):
     binary, _ = image()
     data = bytearray(binary)
     code = bytearray.fromhex("53 4889cb 4883ec20 e8")
     code.extend(struct.pack("<i", 0x100 - len(code) - 4))
     code.extend(bytes.fromhex("48890b 4883c420 5b c3"))
     data[0x200:0x200 + len(code)] = code
-    # Both returns inherit ECX=27 from before the branch; EDX selects the
-    # ordinary return value. The caller observes RCX after the omitted callee.
-    body = bytes.fromhex("b91b000000 85d2 7406 b802000000 c3 b801000000 c3")
+    # Both exits inherit ECX=27 from before the branch; EDX selects the
+    # ordinary result. They either return separately or rejoin before RET.
+    # The caller observes RCX after the omitted callee.
+    body = bytes.fromhex("b91b000000 85d2 " +
+                         ("7407 b802000000 eb05" if joined else
+                          "7406 b802000000 c3") + " b801000000 c3")
     data[0x300:0x300 + len(body)] = body
-    path = Path(directory) / "split-exit.exe"
+    path = Path(directory) / ("joined-exit.exe" if joined else "split-exit.exe")
     path.write_bytes(data)
     for prepared in (False, True):
         with Client(worker) as client:
@@ -171,6 +174,7 @@ def run(worker, compiler=None):
     with tempfile.TemporaryDirectory(prefix="neverd-cached-abi-") as directory:
         check_cached_helpers(worker, directory)
         check_split_exit_constants(worker, directory)
+        check_split_exit_constants(worker, directory, joined=True)
         for cached in (False, True):
             path = Path(directory) / ("cached.sys" if cached else "direct.sys")
             binary = fixture(cached)

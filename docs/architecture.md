@@ -10040,10 +10040,13 @@ Count-only and unsummarized calls still use ordinary argument recovery.
 The same owner proves scalar exit constants for bounded, complete x64 bodies
 without calls, intrinsics, unresolved control flow or exceptional/independent
 entries. It uses the existing LowIR scalar evaluator within each block
-and carries register facts through unique predecessors, including conditional
-arms and contiguous fallthroughs. Joins and the ordinary entry begin without
-inherited facts; unreachable cycles keep only local facts. Temporaries never
-cross a block boundary. Full-register constants must agree at every return.
+and carries register facts through predecessors, including conditional arms
+and contiguous fallthroughs. Acyclic joins intersect exact register widths and
+values from every predecessor. The ordinary entry begins unknown; pending
+backedges discard inherited facts at joins before the existing local proof
+continues through unique successors. Unreachable cycles keep only local facts.
+Temporaries never cross a block boundary. Full-register constants must agree
+at every return.
 It does not read image memory or turn an address identity into an integer fact.
 The operation budget lives in `Limits.h`, and each admitted block is evaluated
 once without a symbolic fixed point. Local argument-read summaries continue
@@ -10052,8 +10055,8 @@ definitions after the call, before SSA, for
 both C routes. Ordinary ABI result registers keep their existing return
 contract. Deferred source views, native session recovery and omitted-callee
 memo keys retain the same facts, including their memory accounting. Dynamic
-callee outputs, conditional address values and facts requiring agreement at
-joins remain separate machine-state recovery work.
+callee outputs, conditional address values and loop-carried facts remain
+separate machine-state recovery work.
 
 C source emission preserves a wholly unrecovered call-clobber or MedIR
 `Unspecified` value with an analysis-only LLVM call, rather than `freeze undef`
