@@ -26,8 +26,12 @@ public:
   void setSnapshotBlocked(bool blocked);
   /// The user is making an edit a replica will render: it starts now, if it has
   /// not, and reads \p address, so that the read after the edit finds what this
-  /// one left.  Nothing waits for this read, and nobody hears its answer.
-  void prepareRead(quint64 address);
+  /// one left.  Given the \p declaration the user would state, it renders the
+  /// function under that one, which the view after the user states it reads
+  /// (prepare_function with "declaration").  Nothing waits for this read, and
+  /// nobody hears its answer.  One runs at a time: a later one waits for it,
+  /// in place of any that waits already.
+  void prepareRead(quint64 address, const QString &declaration = {});
   /// Asks the replica to render functions ahead in idle time.
   void setRendersAhead(bool renders) { rendersAhead_ = renders; }
   /// The owner can answer a read from what earlier sessions kept, so that a
@@ -65,6 +69,7 @@ private:
   QueryService &owner_;
   EngineClient client_;
   std::optional<quint64> preparedRead_;
+  QString preparedDeclaration_;
   bool preparesFunctions_ = false;
   QueryService queries_;
   QString workerPath_, active_, operation_, wire_, restore_, workerRevision_;
@@ -127,8 +132,8 @@ public:
     return lanes_.front().service->renderAheadState();
   }
   /// AnalysisService::prepareRead, in the replica that takes reads first.
-  void prepareRead(quint64 address) {
-    lanes_.front().service->prepareRead(address);
+  void prepareRead(quint64 address, const QString &declaration = {}) {
+    lanes_.front().service->prepareRead(address, declaration);
   }
   /// Prepare one native entry in the same replica later source reads use.
   /// This is speculative read-only work; context changes cancel it normally.

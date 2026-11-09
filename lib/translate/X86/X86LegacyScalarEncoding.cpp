@@ -10,6 +10,7 @@
 #include "X86LegacyScalar.h"
 
 #include "neverd/ir/X86/X86StackFrameRules.h"
+#include "neverd/lift/X86/X86MpxEncoding.h"
 
 #include <cstdint>
 #include <optional>
@@ -21,8 +22,6 @@ std::optional<X86LegacyScalarInstruction>
 decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
   using Op = X86LegacyScalarOperation;
   X86LegacyEncoding R(Bytes, Code32);
-  if (R.Group1Prefix == 0xf2)
-    return std::nullopt;
   X86LegacyScalarInstruction F;
   F.Bytes = F.SourceBytes = R.OperandBytes;
   const uint8_t B = R.byte();
@@ -357,7 +356,10 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
   }
   if (!R.done())
     return std::nullopt;
-  if (R.Group1Prefix == 0xf3 && !F.bitCounting() &&
+  const bool Branch = x86MpxBranchEffect(Bytes, Arch::X86).has_value();
+  if (R.Group1Prefix == 0xf2 && !Branch)
+    return std::nullopt;
+  if (R.Group1Prefix == 0xf3 && !Branch && !F.bitCounting() &&
       F.Operation != Op::CarryChainOF)
     return std::nullopt;
   if (R.Group1Prefix == 0xf0 && !F.lockable())

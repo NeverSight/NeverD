@@ -15,6 +15,8 @@
 #include "neverd/backend/c/CSourceMap.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
+#include "neverd/backend/llvm/LLVMSourceBody.h"
+#include "neverd/backend/llvm/LLVMSourceSEHFilter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/backend/llvm/WindowsEHMetadataEncoder.h"
@@ -6689,7 +6691,7 @@ TEST(COFFExceptionIR, SourceX86RefusesUnknownOrSharedCleanupWithoutMutation) {
   }
 }
 
-TEST(COFFExceptionIR, SourceX86ConstantFilterKeepsOnlyExecuteHandler) {
+TEST(COFFExceptionIR, SourceX86ConstantFilterPreservesAllDispositions) {
   for (uint32_t Value : {0u, 1u, UINT32_MAX}) {
     SCOPED_TRACE(Value);
     auto Func = sourceRegistrationFinally(false);
@@ -6723,20 +6725,224 @@ TEST(COFFExceptionIR, SourceX86ConstantFilterKeepsOnlyExecuteHandler) {
     ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
     const auto *Parent = Module->getFunction("source_registration");
     ASSERT_NE(Parent, nullptr);
-    EXPECT_EQ(Parent->hasPersonalityFn(), Value == 1);
-    if (Value != 1)
-      continue;
+    ASSERT_TRUE(Parent->hasPersonalityFn());
     const std::string Source = emitLLVMC(*Module);
     EXPECT_EQ(Source.find("neverd.seh: not lowered"), std::string::npos)
         << Source;
-    EXPECT_NE(Source.find("__except (EXCEPTION_EXECUTE_HANDLER)"),
-              std::string::npos)
-        << Source;
+    if (Value == 1)
+      EXPECT_NE(Source.find("__except (EXCEPTION_EXECUTE_HANDLER)"),
+                std::string::npos)
+          << Source;
+    else
+      EXPECT_NE(Source.find("__except ((int32_t)"), std::string::npos)
+          << Source;
     if (hasHostFixtureCompiler())
       checkStandaloneSEHSource("#include <stdint.h>\n#include <excpt.h>\n" +
                                    Source,
                                true, "--target=i686-pc-windows-msvc");
   }
+}
+
+TEST(COFFExceptionIR, SourceX86FilterCapturesAnIncomingArgumentThroughStorage) {
+  for (bool AmbiguousScope : {false, true}) {
+    SCOPED_TRACE(AmbiguousScope);
+    for (unsigned ParentBytes : {0u, 4u, 8u}) {
+      SCOPED_TRACE(ParentBytes);
+      auto Func = sourceRegistrationFinally(false);
+      Func.ReturnType =
+          ParentBytes ? NdType::makeInt(ParentBytes) : NdType::makeVoid();
+      Func.ExceptionMetadata->CodeRange.End = 0x401060;
+      auto &Scope = Func.ExceptionMetadata->Registration->Scopes.front();
+      Scope.IsFinally = false;
+      Scope.FilterVA = 0x401050;
+      Func.Blocks.front().Ops.erase(Func.Blocks.front().Ops.begin() + 1);
+      for (auto &Block : Func.Blocks)
+        for (auto &Op : Block.Ops)
+          if (Op.Opcode == NdOp::RETURN)
+            Op.addInput(MedVar::makeConst(0, 4));
+      MedVar Input;
+      Input.Kind = MedVar::Param;
+      Input.TheArch = Arch::X86;
+      Input.Size = 4;
+      Func.Params.push_back(Input);
+      auto &Facts = *Func.RegistrationStates->Display;
+      Facts.NoValueCalls.clear();
+      Facts.FinallyReturns.clear();
+      MedBlock Filter;
+      Filter.Id = 3;
+      Filter.StartAddr = Scope.FilterVA;
+      Filter.EndAddr = 0x401060;
+      MedOp Return;
+      Return.Opcode = NdOp::RETURN;
+      Return.Addr = Filter.StartAddr;
+      Return.addInput(Input);
+      Filter.Ops.push_back(Return);
+      Func.Blocks.push_back(Filter);
+      Facts.Stretches.push_back(
+          {{Filter.StartAddr, Filter.EndAddr}, {-1}, Filter.StartAddr, true});
+      if (AmbiguousScope)
+        Facts.Stretches.front().Levels = {-1, 0};
+      llvm::LLVMContext Context;
+      MedLLVMEmitter Emitter;
+      Emitter.setAnalysisRecoveryForSource(true);
+      Emitter.setPreserveUnknownSourceValues(true);
+      auto Module = Emitter.emit({Func}, Context, "argument_filter", Arch::X86,
+                                 {}, nullptr, BinaryFormat::COFF);
+      ASSERT_NE(Module, nullptr);
+      ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+      const auto *Parent = Module->getFunction("source_registration");
+      ASSERT_NE(Parent, nullptr);
+      for (const auto &Block : *Parent)
+        if (const auto *Return =
+                llvm::dyn_cast<llvm::ReturnInst>(Block.getTerminator()))
+          EXPECT_EQ(sourceSEHFilterResult(*Return), nullptr);
+      if (AmbiguousScope) {
+        EXPECT_FALSE(Parent->hasPersonalityFn());
+        for (const auto &Function : *Module)
+          EXPECT_FALSE(Function.hasFnAttribute(LLVMSourceSEHFilter));
+        continue;
+      }
+      ASSERT_TRUE(Parent->hasPersonalityFn());
+      unsigned Captures = 0;
+      for (const auto &Block : *Parent)
+        for (const auto &Instruction : Block)
+          if (const auto *Pad =
+                  llvm::dyn_cast<llvm::CatchPadInst>(&Instruction)) {
+            ASSERT_EQ(Pad->arg_size(), 2u);
+            EXPECT_TRUE(llvm::isa<llvm::AllocaInst>(Pad->getArgOperand(1)));
+            ++Captures;
+          }
+      EXPECT_EQ(Captures, 1u);
+      const std::string Source = emitLLVMC(*Module);
+      EXPECT_NE(Source.find("__except ((int32_t)"), std::string::npos)
+          << Source;
+      if (hasHostFixtureCompiler())
+        checkStandaloneSEHSource("#include <stdint.h>\n#include <excpt.h>\n" +
+                                     Source,
+                                 true, "--target=i686-pc-windows-msvc");
+    }
+  }
+}
+
+TEST(COFFExceptionIR, LLVMCCapturedFilterKeepsItsBodyAndParentWrites) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("captured-filter", Context);
+  Module.setTargetTriple(llvm::Triple("i686-pc-windows-msvc"));
+  Module.setDataLayout("e-p:32:32");
+  llvm::IRBuilder<> B(Context);
+  auto *Pointer = B.getPtrTy();
+  auto *Filter = llvm::Function::Create(
+      llvm::FunctionType::get(B.getInt32Ty(), {Pointer, Pointer}, false),
+      llvm::GlobalValue::InternalLinkage, "source_filter", Module);
+  Filter->addFnAttr(LLVMSourceBody);
+  Filter->addFnAttr(LLVMSourceSEHFilter);
+  B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Filter));
+  auto *Result = B.CreateLoad(B.getInt32Ty(), Filter->getArg(0));
+  auto *Value = B.CreateLoad(B.getInt32Ty(), Filter->getArg(1));
+  B.CreateStore(B.CreateAdd(Value, B.getInt32(1)), Filter->getArg(1));
+  B.CreateRet(Result);
+  auto *Parent = llvm::Function::Create(
+      llvm::FunctionType::get(B.getInt32Ty(), false),
+      llvm::GlobalValue::ExternalLinkage, "captured_parent", Module);
+  Parent->setPersonalityFn(llvm::cast<llvm::Constant>(
+      Module
+          .getOrInsertFunction(
+              "_except_handler3",
+              llvm::FunctionType::get(B.getInt32Ty(), {}, true))
+          .getCallee()));
+  auto *Entry = llvm::BasicBlock::Create(Context, "entry", Parent);
+  auto *Protected = llvm::BasicBlock::Create(Context, "protected", Parent);
+  auto *Normal = llvm::BasicBlock::Create(Context, "normal", Parent);
+  auto *Between = llvm::BasicBlock::Create(Context, "between", Parent);
+  auto *Second = llvm::BasicBlock::Create(Context, "second", Parent);
+  auto *End = llvm::BasicBlock::Create(Context, "end", Parent);
+  auto *Dispatch = llvm::BasicBlock::Create(Context, "dispatch", Parent);
+  auto *PadBlock = llvm::BasicBlock::Create(Context, "pad", Parent);
+  auto *Handler = llvm::BasicBlock::Create(Context, "handler", Parent);
+  auto *After = llvm::BasicBlock::Create(Context, "after", Parent);
+  B.SetInsertPoint(Entry);
+  auto *Counter = B.CreateAlloca(B.getInt32Ty(), nullptr, "counter");
+  B.CreateStore(B.getInt32(7), Counter);
+  auto Effect = Module.getOrInsertFunction(
+      "protected_effect", llvm::FunctionType::get(B.getVoidTy(), false));
+  auto *BeginTry = llvm::Intrinsic::getOrInsertDeclaration(
+      &Module, llvm::Intrinsic::seh_try_begin);
+  auto *EndTry = llvm::Intrinsic::getOrInsertDeclaration(
+      &Module, llvm::Intrinsic::seh_try_end);
+  B.CreateInvoke(BeginTry, Protected, Dispatch);
+  B.SetInsertPoint(Protected);
+  B.CreateInvoke(Effect, Normal, Dispatch);
+  B.SetInsertPoint(Normal);
+  B.CreateInvoke(EndTry, Between, Dispatch);
+  B.SetInsertPoint(Between);
+  auto Gap = Module.getOrInsertFunction(
+      "gap_effect", llvm::FunctionType::get(B.getVoidTy(), false));
+  B.CreateCall(Gap);
+  B.CreateInvoke(BeginTry, Second, Dispatch);
+  B.SetInsertPoint(Second);
+  B.CreateInvoke(Effect, End, Dispatch);
+  B.SetInsertPoint(End);
+  B.CreateInvoke(EndTry, After, Dispatch);
+  B.SetInsertPoint(Dispatch);
+  auto *Switch =
+      B.CreateCatchSwitch(llvm::ConstantTokenNone::get(Context), nullptr, 1);
+  Switch->addHandler(PadBlock);
+  B.SetInsertPoint(PadBlock);
+  auto *Pad = B.CreateCatchPad(Switch, {Filter, Counter});
+  B.CreateCatchRet(Pad, Handler);
+  B.SetInsertPoint(Handler);
+  B.CreateStore(
+      B.CreateAdd(B.CreateLoad(B.getInt32Ty(), Counter), B.getInt32(100)),
+      Counter);
+  B.CreateBr(After);
+  B.SetInsertPoint(After);
+  B.CreateRet(B.CreateLoad(B.getInt32Ty(), Counter));
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X86;
+  Options.Format = BinaryFormat::COFF;
+  Options.EmitIncludes = false;
+  std::string Source;
+  llvm::raw_string_ostream Stream(Source);
+  ASSERT_TRUE(
+      LLVMCEmitter().emit(Module, Stream, Options, nullptr, nullptr, Parent));
+  EXPECT_NE(Source.find("source_filter("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("__except ((int32_t)source_filter("), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("llvm.localaddress"), std::string::npos) << Source;
+  const auto FirstExcept = Source.find("__except (");
+  const auto GapCall = Source.find("gap_effect();", FirstExcept);
+  ASSERT_NE(GapCall, std::string::npos) << Source;
+  EXPECT_NE(Source.find("__try {", GapCall), std::string::npos) << Source;
+  if (hasHostFixtureCompiler())
+    checkStandaloneSEHSource("#include <stdint.h>\n#include <excpt.h>\n" +
+                                 Source,
+                             true, "--target=i686-pc-windows-msvc");
+  // Execute the actual emitted helper with independent parent storage. The
+  // Windows compilation above checks the call in __except; this harness does
+  // not implement OS dispatch or resume a faulting instruction.
+  const std::string Harness = R"(
+#include <stdint.h>
+static int32_t disposition;
+#define GetExceptionInformation() (&disposition)
+#define __try if (1)
+#define __except(value) else if ((value) > 0)
+void protected_effect(void) {}
+void gap_effect(void) {}
+)";
+  for (llvm::StringRef Level : {"-O0", "-O2"})
+    source_call_execution_test::compileAndRun(
+        Harness + Source + R"(
+int main(void) {
+  for (disposition = -1; disposition <= 1; ++disposition) {
+    uint32_t value = 7;
+    if ((int32_t)source_filter(&disposition, &value) != disposition) return 1;
+    if (value != 8) return 2;
+  }
+  return 0;
+}
+)",
+        {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
 }
 
 TEST(COFFExceptionIR, SourceX86RefusesExcessiveCleanupExpansionBeforeMutation) {

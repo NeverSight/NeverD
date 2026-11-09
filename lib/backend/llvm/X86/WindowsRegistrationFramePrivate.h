@@ -39,7 +39,8 @@ struct CallbackPlan {
 };
 
 llvm::Error reject(llvm::StringRef Detail);
-llvm::Value *filterResult(const llvm::ReturnInst &Return);
+llvm::Value *filterResult(const llvm::ReturnInst &Return,
+                          bool SourceProjection = false);
 bool isStaticEntryAlloca(const llvm::AllocaInst &Slot,
                          const llvm::Function &Parent);
 bool isPrivateSlotInitializer(const llvm::User *User,
@@ -66,8 +67,8 @@ llvm::Error checkPrivateStack(
     std::set<const llvm::StoreInst *> *PrivateStores = nullptr);
 llvm::Expected<CallbackPlan>
 prepareCallback(llvm::Function &Parent,
-                const X86RegistrationCallbackRequest &Request,
-                size_t &WorkUsed);
+                const X86RegistrationCallbackRequest &Request, size_t &WorkUsed,
+                bool SourceProjection = false);
 
 } // namespace neverd::x86_registration
 

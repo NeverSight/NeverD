@@ -251,18 +251,19 @@ TEST(X86MpxMemory, TableReadFaultForgetsOnlyItsDestinationAfterEveryReadOrder) {
 
 TEST(X86MpxMemory, UnavailableTableAccessIsNotAnArchitecturalFault) {
   for (Mode M : {Mode::Bits32, Mode::Bits64})
-    for (bool Store : {false, true}) {
-      auto C = context();
-      const auto Before = bank(C);
-      Memory Mem;
-      Mem.Replies = {{Outcome::Completed, {directoryEntry(M), 0, 0}}, {}};
-      EXPECT_EQ(Store ? C.storeTable(M, 2, PointerAddress, PointerValue, Mem)
-                      : C.loadTable(M, 2, PointerAddress, PointerValue, Mem),
-                Result::UnknownMemory);
-      EXPECT_EQ(Mem.Requests.size(), 2u);
-      EXPECT_EQ(bank(C), Before);
-      EXPECT_EQ(C.status(), Status);
-    }
+    for (Outcome Stop : {Outcome::Unavailable, Outcome::Suspended})
+      for (bool Store : {false, true}) {
+        auto C = context();
+        const auto Before = bank(C);
+        Memory Mem;
+        Mem.Replies = {{Outcome::Completed, {directoryEntry(M), 0, 0}}, {Stop}};
+        EXPECT_EQ(Store ? C.storeTable(M, 2, PointerAddress, PointerValue, Mem)
+                        : C.loadTable(M, 2, PointerAddress, PointerValue, Mem),
+                  Result::UnknownMemory);
+        EXPECT_EQ(Mem.Requests.size(), 2u);
+        EXPECT_EQ(bank(C), Before);
+        EXPECT_EQ(C.status(), Status);
+      }
 }
 
 TEST(X86MpxMemory, TableStoresKeepEveryProviderPartialWriteAndTheFourthField) {

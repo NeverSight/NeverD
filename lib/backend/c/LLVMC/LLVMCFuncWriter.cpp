@@ -36,6 +36,7 @@
 #include "neverd/backend/llvm/AArch64/LLVMAArch64ReturnProtection.h"
 #include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMFloatingCall.h"
+#include "neverd/backend/llvm/LLVMSourceSEHFilter.h"
 #include "neverd/backend/llvm/LLVMSourceTypeHints.h"
 #include "neverd/backend/llvm/SourceFrameBytes.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
@@ -10000,8 +10001,14 @@ std::optional<SEHBlockScopes> planSEHBlockScopes(const llvm::Function &Fn) {
       auto &Clause = Plan.Clauses[&BB];
       Clause.Dispatch = Switch;
       Clause.Pad = firstCatchPad(*Switch);
-      if (!Clause.Pad || Clause.Pad->arg_size() != 1)
+      if (!Clause.Pad || Clause.Pad->arg_size() == 0)
         return std::nullopt;
+      if (Clause.Pad->arg_size() != 1) {
+        const auto *Filter = llvm::dyn_cast<llvm::Function>(
+            Clause.Pad->getArgOperand(0)->stripPointerCasts());
+        if (!Filter || !Filter->hasFnAttribute(LLVMSourceSEHFilter))
+          return std::nullopt;
+      }
       const auto *Ret = llvm::dyn_cast<llvm::CatchReturnInst>(
           Clause.Pad->getParent()->getTerminator());
       if (!Ret)
@@ -10577,7 +10584,8 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
                              ? llvm::dyn_cast<llvm::Function>(
                                    Pad->getArgOperand(0)->stripPointerCasts())
                              : nullptr;
-    return Filter && Filter->arg_size() == 2;
+    return Filter && !Filter->hasFnAttribute(LLVMSourceSEHFilter) &&
+           Filter->arg_size() == 2;
   };
   if (SEHParentFrameName.empty() && (!EHWraps.empty() || BlockScopes))
     for (const llvm::BasicBlock &BB : Fn)

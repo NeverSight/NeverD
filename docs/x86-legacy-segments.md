@@ -1106,8 +1106,9 @@ An explicitly active transaction is also refused before fetch, even when MPX
 is disabled: the dispatcher has no transaction checkpoint/abort continuation.
 On #BR, the existing MPX owner clears enabled BNDSTATUS before IDT delivery.
 This effect survives a delivery fault or shutdown. Bounds, disabled status,
-successful checks and operand faults leave that status unchanged. This binding
-does not extend the scalar dispatcher to other MPX instructions or transactions.
+successful checks and operand faults leave that status unchanged. The MPX
+instruction integration below reuses this binding; transactions still require
+their own checkpoint and abort continuation.
 
 The full LLVM fork provides `llvm.x86.bound16`/`bound32` with index and pointer
 inputs, and `.address32` forms with index, 32-bit offset, constant address width
@@ -1136,12 +1137,65 @@ hashes and deliberate wrong-input/return controls. See the
 [BOUND qualification](evidence/x86-legacy-bound-2026-11-04.json) for actual
 profiles, counts, failures repaired during development and exclusions.
 
-These interfaces do not create a NeverC i386 frontend or general original-state
-execution for arbitrary generated C. MPX status has software-owner tests on
+These BOUND interfaces alone do not create general original-state execution
+for arbitrary generated C. NeverC's later i386 platform frontend is documented
+in the [platform qualification](evidence/x86-i386-platforms-2026-11-09.json).
+MPX status has software-owner tests on
 this host; physical MPX hardware is unavailable. Global instruction/transfer
 completion and the final LLVM release/pin remain separate unfinished work.
 The architectural reference is Intel SDM revision 093, Volume 2A BOUND,
 from the [Intel manual page](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
+
+## Protected MPX instructions and branch effects
+
+Protected code32 execution admits BNDCL, BNDCU, BNDCN, BNDMK, BNDMOV,
+BNDLDX and BNDSTX through the shared original-byte MPX reader and context.
+Checks and BNDMK consume unsigned effective values without reading memory or
+adding a segment base. BNDMOV retains the selected segment and default SS;
+32-bit writes qualify only the low 32 bits of each bounds field. Register NOP
+encodings have their architectural no-op behavior. Unknown enablement or
+required bound values never become a fabricated successful check.
+
+Memory forms require `MpxMemory=WholeOperandRAM` when MPX is enabled. This
+binds one CPU with exclusive ordinary RAM, eight-byte BNDMOV operands,
+four-byte BDE reads and twelve-byte BTE accesses. BNDMOV alignment checking
+uses eight-byte alignment and the existing explicit #AC/#PF priority. Table
+accesses use linear addresses with a flat DS base, applying DS validity,
+permissions and limits to BTE operands. The MIB's original segment affects
+pointer translation only; its index is an unscaled comparison value and its
+scale is ignored. The fourth BTE field is untouched. LOCK BNDMOV stores use
+one prepared whole-operand store, without a host inter-thread atomic claim.
+
+Page-table A/D changes survive faults. Stores publish no operand bytes until
+the complete access succeeds. A BNDMOV load fault keeps the bank; a BDE fault
+also keeps it. Invalid BDE raises #BR with its address in BNDSTATUS. A BNDLDX
+BTE fault forgets only the destination bounds because hardware may partially
+update them in an implementation-dependent order. Status and knownness are
+published before IDT entry and survive failed delivery.
+
+`PendingMpx` distinguishes a host backing stop from a guest exception. It
+retains fetched bytes, original inputs, an already-read BDE and data-breakpoint
+matches. Repair only backing while retaining CPU/profile state and RAM, then
+retry the same instruction. Re-reading a BDE is incorrect when the BTE page
+walk has changed its aliased PTE storage. A resumed step consumes no second
+instruction-attempt budget; new external events cannot interrupt this host
+pause. Architectural faults clear the continuation before event delivery.
+
+Near CALL/RET/JMP and both short/near Jcc use the original byte-owned BNDINIT
+rule after successful completion, including an untaken Jcc. F2 preserves the
+bank; F3 does not supply that preservation. BNDPRESERVE and disabled MPX also
+preserve it. Short JMP, LOOP and far transfers retain their separate preserve
+rules. Failed target/stack accesses do not initialize bounds; a post-step #DB
+observes the completed bank.
+
+The `protected-legacy-v1` C dispatcher uses this same stateful executor.
+Its C callbacks retain guest state and faults; they are distinct from native
+MPX intrinsic emission into the ambient host bank. Existing LLVM and NeverC
+native APIs remain independent. This profile does not admit code16 MPX
+operands, non-flat-DS table accesses, 16-bit address forms, RTM/HLE aborts,
+MMIO or physical MPX hardware. Unsupported forms fail explicitly. The
+architectural reference is Intel SDM Volume 1 Appendix E and Volume 2A BND*,
+available from the [Intel manual page](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 
 ## Protected far transfers
 

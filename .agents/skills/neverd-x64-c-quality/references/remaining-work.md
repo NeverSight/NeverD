@@ -821,6 +821,17 @@ effects remain explicit; generated code does not replace the instruction with
 an eager fixed-size clear. Native cache-line writes on CLZERO-capable hardware
 remain a separate qualification from fault and register-transport checks.
 
+x86 COFF LLVM C now reconstructs proved EH3/EH4 cleanup and filter scopes.
+Filter expressions use source-only helpers with explicit captured storage and
+the signed 32-bit disposition, independently of the parent's return ABI.
+Shared filter writes and exception-pointer setup survive outlining; disjoint
+protected ranges keep intervening code outside `__try`. Normal cleanup calls
+and local unwinds retain their cleanup order. The 84 public x86 corpus images
+export 383 structured SEH functions; the remaining 339 retain explicit refusal
+notes for conflicting scope state, ambiguous ownership, unowned cleanup calls
+or non-closed cleanup paths. Source helper execution and Windows object
+compilation do not qualify native Windows exception dispatch or resumption.
+
 Large LLVM source functions no longer retain redundant entry stores on private
 SSA temporaries whose single later definition dominates every read. The proof
 runs after exception edges are installed; bypasses, loop-first reads, ordering
@@ -1281,7 +1292,7 @@ The public constant-branch and worker chunk regressions cover these boundaries.
 
 | Gap | Next check |
 |---|---|
-| LLVMC Windows EH remains goto form | Keep recovered filters, nested cleanup order, and both normal and unwind edges visible. Compare the public `seh_probe` and C++ EH corpus output with HighC. |
+| Some LLVMC Windows EH regions remain unlowered | Proved x86 filters and cleanup scopes now print structured SEH. Conflicting scope states, ambiguous ownership and non-closed cleanup paths still need independent proof; preserve both normal and unwind edges when closing them. |
 | LLVMC output may retain avoidable frame references or control flow | Reproduce each issue with a public synthetic LLVM fixture. Keep a negative test for any value or edge that must remain printed. |
 | Source types and member calls remain partially recovered | Use authenticated PDB/TPI type and method metadata; do not infer a virtual method name from a vtable offset alone. |
 | Release performance varies by function and debug input | Time paired fresh `--func` calls and separate load from decompile cost. Profile before changing shared analysis. Preserve byte-identical C and EH semantics. |
@@ -1644,6 +1655,17 @@ conditional memory, invocation lifetime and both C routes remain open.
   changed import slot; native ARM64 execution remains separate coverage.
 
 ## Established rules
+
+- Inverse HighIR scalar bit views use representation equality rather than
+  source-call ABI admission. Binary16/binary80 adapters can cancel without
+  expanding the supported source signatures. Declared i386 scalar call
+  returns consequently avoid redundant 80-bit storage; both C routes retain
+  native 32-bit result-bit and call-count checks across FP edge values.
+  Real numeric precision reductions and reserved Boolean/vector roles remain.
+  Actual x87 precision conversions retain constrained LLVM operations and
+  shared native C helpers. Raw memory-output oracles cover signaling-NaN
+  quieting and all four rounding modes; a floating return alone cannot prove
+  these bits because the return transport may quiet the NaN itself.
 
 - HighC frame-address projection now checks the known root and signed offset
   in one bounded walk. Zero alignment masks and overflowing offset/rebase

@@ -76,12 +76,19 @@ enum class X87CHelper : uint8_t {
   ControlWord, ///< fnstcw, the unit's control word
   Fprem,       ///< fprem and fprem1
   Status,      ///< status sampled by the preceding x87 value instruction
+  Extend32,    ///< FLD m32fp into the binary80 carrier
+  Extend64,    ///< FLD m64fp into the binary80 carrier
+  Narrow32,    ///< FSTP m32fp using the x87 rounding mode
+  Narrow64,    ///< FSTP m64fp using the x87 rounding mode
 #define NEVERD_X87_VALUE_HELPER(Intrinsic, Name, Asm, Operands, PopsST1,       \
                                 SamplesStatus)                                 \
   Intrinsic,
 #include "neverd/ir/intrinsics/X86/X87ValueInstructions.def"
 };
 const char *x87CHelperName(X87CHelper Helper);
+std::optional<X87CHelper> x87PrecisionConversionHelper(Arch Target,
+                                                       uint16_t InputBytes,
+                                                       uint16_t OutputBytes);
 /// The helper that runs the x87 value intrinsic \p Id, if it is one.
 std::optional<X87CHelper> x87ValueHelper(Intrinsic Id);
 /// Write what the x87 values of a unit need: when \p UsesExtended, the

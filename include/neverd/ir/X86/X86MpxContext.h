@@ -57,6 +57,7 @@ struct X86MpxConfiguration {
   /// state evaluator cannot commit MPX changes into an unauthenticated RTM/HLE
   /// execution. enabled() itself is independent of transaction state.
   std::optional<bool> InTransaction;
+  bool operator==(const X86MpxConfiguration &) const = default;
 };
 
 struct X86MpxValue {
@@ -90,6 +91,7 @@ class X86MpxMemoryProvider;
 
 class X86MpxContext {
 public:
+  bool operator==(const X86MpxContext &) const = default;
   /// Validate a supplied snapshot without changing the existing configuration
   /// on failure. Configuration changes do not implicitly reset BNDREGS/status.
   bool configure(const X86MpxConfiguration &C);

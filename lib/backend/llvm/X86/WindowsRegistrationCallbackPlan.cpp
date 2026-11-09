@@ -8,6 +8,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/llvm/LLVMSourceSEHFilter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 
 #include "llvm/IR/CFG.h"
@@ -31,7 +32,11 @@ llvm::Error reject(llvm::StringRef Detail) {
                                  Detail.str().c_str());
 }
 
-llvm::Value *filterResult(const llvm::ReturnInst &Return) {
+llvm::Value *filterResult(const llvm::ReturnInst &Return,
+                          bool SourceProjection) {
+  if (SourceProjection)
+    if (auto *Value = sourceSEHFilterResult(Return))
+      return Value;
   llvm::Value *Value = Return.getReturnValue();
   if (Value && Value->getType()->isIntegerTy(32))
     return Value;
@@ -99,8 +104,8 @@ bool isEntryAddressRecipe(const llvm::Instruction &Instruction,
 
 llvm::Expected<CallbackPlan>
 prepareCallback(llvm::Function &Parent,
-                const X86RegistrationCallbackRequest &Request,
-                size_t &WorkUsed) {
+                const X86RegistrationCallbackRequest &Request, size_t &WorkUsed,
+                bool SourceProjection) {
   if (!Request.Entry)
     return reject("callback has no entry");
   llvm::BasicBlock &Entry = *Request.Entry;
@@ -109,6 +114,8 @@ prepareCallback(llvm::Function &Parent,
   if (Kind != X86RegistrationCallbackKind::Filter &&
       Kind != X86RegistrationCallbackKind::Finally)
     return reject("unknown callback kind");
+  if (SourceProjection && Kind != X86RegistrationCallbackKind::Filter)
+    return reject("source callback is not a filter");
   llvm::StringRef Name = Request.Name;
   X86RegistrationCallbackFrame Frame = Request.Frame;
   llvm::Module *Module = Parent.getParent();
@@ -128,13 +135,14 @@ prepareCallback(llvm::Function &Parent,
           ? llvm::dyn_cast<llvm::Function>(
                 Parent.getPersonalityFn()->stripPointerCasts())
           : nullptr;
-  if (!Personality ||
-      (Personality->getName() != "_except_handler3" &&
-       Personality->getName() != "_except_handler4") ||
-      !Personality->isDeclaration() || !Personality->hasExternalLinkage() ||
-      Personality->getCallingConv() != llvm::CallingConv::C ||
-      !Personality->getReturnType()->isIntegerTy(32) ||
-      !Personality->isVarArg() || Personality->arg_size() != 0)
+  if (!SourceProjection &&
+      (!Personality ||
+       (Personality->getName() != "_except_handler3" &&
+        Personality->getName() != "_except_handler4") ||
+       !Personality->isDeclaration() || !Personality->hasExternalLinkage() ||
+       Personality->getCallingConv() != llvm::CallingConv::C ||
+       !Personality->getReturnType()->isIntegerTy(32) ||
+       !Personality->isVarArg() || Personality->arg_size() != 0))
     return reject("parent has no authenticated EH3/EH4 personality");
   if (Blocks.empty() || Blocks.size() > limits::kMaxRegistrationEHStateWork)
     return reject("callback block set is empty or exceeds the work budget");
@@ -359,12 +367,18 @@ prepareCallback(llvm::Function &Parent,
           llvm::isa<llvm::ResumeInst>(Instruction) ||
           llvm::isa<llvm::AllocaInst>(Instruction))
         return reject("callback contains an unsupported entry or control form");
-      if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction))
+      if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction)) {
+        const auto *Return =
+            llvm::dyn_cast_or_null<llvm::ReturnInst>(Call->getNextNode());
+        const bool SourceResult =
+            SourceProjection && Return && sourceSEHFilterResult(*Return);
         if ((llvm::isa<llvm::CallInst>(Call) &&
              llvm::cast<llvm::CallInst>(Call)->isMustTailCall()) ||
-            Call->isInlineAsm() || Call->hasOperandBundles() ||
+            Call->isInlineAsm() ||
+            (Call->hasOperandBundles() && !SourceResult) ||
             Call->hasFnAttr(llvm::Attribute::ReturnsTwice))
           return reject("callback call depends on its original ABI context");
+      }
       if (const auto *Intrinsic =
               llvm::dyn_cast<llvm::IntrinsicInst>(&Instruction))
         switch (Intrinsic->getIntrinsicID()) {
@@ -387,7 +401,7 @@ prepareCallback(llvm::Function &Parent,
       if (auto *Return = llvm::dyn_cast<llvm::ReturnInst>(&Instruction)) {
         HasExit = true;
         if (Kind == X86RegistrationCallbackKind::Filter &&
-            !filterResult(*Return))
+            !filterResult(*Return, SourceProjection))
           return reject("filter does not return an exact i32 result");
       }
       for (llvm::Use &Operand : Instruction.operands()) {

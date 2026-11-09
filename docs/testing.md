@@ -845,6 +845,26 @@ X8 without shifting ordinary parameters, while small HFAs and unknown record
 layouts keep their own rules. Return-field fixtures cover shared epilogues,
 loops, call clobbers, partial writes and transitively unspecified inputs.
 
+The `SourceABI.BitCast*` cases distinguish machine scalar representation from
+source-call type admission. Binary16/binary80 inverse bit views cancel, while
+numeric precision reductions, signedness changes and reserved Boolean/vector
+roles remain. `I386CallContract.HeaderFloatingImportsDefineTheNormalizedX87Result`
+checks readable direct float/double returns and real FSTP/FLD transports in
+both C routes. On Linux x86 it also compares emitted C with the original
+32-bit instruction bytes at O0/O2 under UBSan: signed zeros, subnormals,
+finite extrema, infinities and quiet/signaling NaNs retain their result bits
+and exactly one provider call. This checks result transport under the native
+default FP environment, not arbitrary x87 exception or control-word state.
+
+`I386CallContract.X87MemoryConversionsKeepNaNsAndRounding` observes raw stored
+bytes across every binary32/binary64 load/store pair. Both C routes at
+default/NoOpt and C O0/O2 execute against original 32-bit instructions, with
+all four x87 rounding modes, signed signaling/quiet NaNs, finite boundary
+values, subnormals, infinities and surrounding destination bytes. This does
+not use a floating C return as the oracle, because that return can itself
+quiet a signaling NaN. Unmasked exception delivery and arbitrary stack-tag
+state are separate coverage.
+
 `NeverDLocalTypesDebugContextTests` also checks recursive callback borrows and
 portable parameter qualifiers. Its recursive-record case checks that both
 self references and mutual references release their ownership, including
@@ -2684,6 +2704,25 @@ unavailable-provider refusal. Every permutation and partial prefix of BTE
 loads/stores checks destination knownness, retained provider effects and the
 untouched fourth field. Unknown stored bounds, invalid banks/modes/segments
 and missing operands cannot start an access.
+
+`X86LegacyMpxTest.*` in `NeverDX86PagingTests` integrates those owners with
+original protected code32 bytes, segmented RAM, BDE/BTE paging and IDT entry.
+It checks all four banks, unsigned check boundaries, MIB scale/index/base rules,
+the untouched fourth BTE field, whole-operand fault publication, LOCK and
+alignment priority. Branch tests include taken/untaken Jcc, F2/F3, near
+CALL/RET/JMP, short JMP/LOOP, BNDPRESERVE, failed transfers and post-step #DB.
+The backing-stop witness aliases a BDE with the PTE modified by the BTE walk;
+resuming must use the retained directory value and fetched bytes. Separate
+watchpoint tests retain the completed BDE match until instruction completion.
+`X86LegacySourceTest.Mpx*` in `NeverDX86LegacySourceTests` compiles the actual
+protected dispatcher with Clang and NeverC at O0/O2, checking all seven MPX
+families, bounds-fault handler/IRET retry and resumed attempt budgets. Set
+`NEVERD_TEST_NEVERC` to the built compiler and `NEVERD_TEST_NEVERC_LLC` to
+the full NeverSight LLVM backend's `llc`: the complete legacy source target
+also compiles i386 objects in its SDK/CLI export cases. Run the full paging,
+MPX context/encoding and legacy source targets after this shared-state
+boundary changes. These tests qualify the explicit software profile, not
+physical MPX hardware or ordinary function-ABI state transport.
 
 `NeverDX86MpxEncodingTests` checks the shared byte reader and full/for-lift/light
 decode routes: 504 memory combinations, 1,152 register combinations, 9,216
@@ -20990,6 +21029,14 @@ separate i386 Windows object compilation checks the actual SEH syntax. A large
 body with many callers must refuse expansion before changing the LLVM CFG.
 Fragmented cleanup fixtures cover branching PHIs, nonreturning tails and
 unique C labels.
+Filter fixtures retain all three SEH dispositions, capture incoming arguments
+through dominating storage, and retain an i32 filter result in 32-bit, 64-bit
+and void parents. Ambiguous scopes refuse outlining and discard temporary
+result markers. Selected C includes its captured filter helper; fragmented
+protected ranges compile for i386 Windows with the same capture list. An
+independent O0/O2 UBSan harness executes the emitted helper and verifies its
+signed result and exactly one write to parent storage. This checks the helper
+body, not native Windows dispatch or continuation of a faulting instruction.
 FS/GS store fixtures compile zero and variable offsets at scalar widths for
 i386 and x64, and reject atomic or unrepresented store widths.
 `NeverDLibCTests` checks the profile-specific `_longjmpex` declaration.

@@ -146,7 +146,10 @@ NEVERD_API const char *neverd_func_attributes_json(neverd_session_t Sess,
 /// user's ("type", neverd_func_edit), else the signature the decompiler
 /// prints for it, read against the local types:
 /// {"entry","stated","declaration","name","return","variadic",
-///  "parameters":[{"name","type","location"}],"problems"}.  "declaration"
+///  "parameters":[{"name","type","location"}],"problems","hides_prototype"}.
+/// "hides_prototype" says whether a declaration stated for it hides the
+/// prototype its name binds, which analysis reads
+/// (neverd_user_facts_analysis_reads_json).  "declaration"
 /// is the text as it reads; each parameter's "location" is the register
 /// ("rcx") or entry stack slot ("stack+0x28") its calling convention passes
 /// it in, absent where NeverD has no rules; "problems" ([{"line","column",

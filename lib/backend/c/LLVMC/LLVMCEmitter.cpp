@@ -47,6 +47,7 @@
 #include "LLVMCStorage.h"
 #include "LLVMCVariableEdits.h"
 #include "LLVMCWriter.h"
+#include "LLVMCX87Precision.h"
 
 #include "neverd/Common.h"
 #include "neverd/DataAccessWidths.h"
@@ -881,6 +882,7 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
   bool NeedsX86SystemStateDispatch = false;
   bool HasFloatingArithmetic = false;
   bool HasWin64Call = false;
+  std::set<X87CHelper> X87PrecisionHelpers;
   const bool NeedsMIPSWideCarrier =
       Opts.TheArch == Arch::MIPS32 || Opts.TheArch == Arch::MIPS32EL;
   bool HasWideInteger = false;
@@ -958,6 +960,9 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
                                  Inst.getOpcode() == llvm::Instruction::FMul ||
                                  Inst.getOpcode() == llvm::Instruction::FDiv;
         if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Inst)) {
+          if (const auto Helper =
+                  llvmX87PrecisionConversion(*Call, Opts.TheArch))
+            X87PrecisionHelpers.insert(*Helper);
           if (const auto *Assembly =
                   llvm::dyn_cast<llvm::InlineAsm>(Call->getCalledOperand()))
             NeedsAArch64ResultStorageCall |=
@@ -1360,6 +1365,8 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     }
   if (HasFloatingArithmetic)
     c_float::writeContractionPolicy(OS.stream());
+  if (!X87PrecisionHelpers.empty())
+    writeX87CHelpers(OS.stream(), true, X87PrecisionHelpers);
   if (Opts.TheArch == Arch::AArch64 && NeedsAArch64RawCall)
     OS << kAArch64PAuthCRawCallHeader;
   if (NeedsAArch64ResultStorageCall)
