@@ -2780,12 +2780,22 @@ bool NdOpEmulator::executeBool(const LowOp &Op) {
 bool NdOpEmulator::executeMisc(const LowOp &Op) {
   switch (Op.Opcode) {
   case NdOp::SELECT: {
-    if (Op.NumInputs < 3)
+    if (Op.NumInputs != 3 || !Op.Output.Size ||
+        (!Op.Output.isReg() && !Op.Output.isTemp()) || !Op.Inputs[0].Size ||
+        Op.Inputs[0].Size > sizeof(uint64_t) ||
+        Op.Inputs[1].Size != Op.Output.Size ||
+        Op.Inputs[2].Size != Op.Output.Size ||
+        !knownOperandBytes(Op.Inputs[0], 0, Op.Inputs[0].Size))
       return false;
-    uint64_t Cond = readOperand(Op.Inputs[0]);
-    uint64_t TrueVal = readOperand(Op.Inputs[1]);
-    uint64_t FalseVal = readOperand(Op.Inputs[2]);
-    writeOutput(Op.Output, Cond ? TrueVal : FalseVal);
+    const auto &Selected = Op.Inputs[readOperand(Op.Inputs[0]) ? 1 : 2];
+    // SELECT observes only the chosen arm. Missing or unknown bytes in that
+    // arm cannot become zero, and a wide result must retain its upper bytes.
+    if (!knownOperandBytes(Selected, 0, Selected.Size))
+      return false;
+    if (Op.Output.Size > sizeof(uint64_t))
+      writeOutputBytes(Op.Output, readOperandBytes(Selected));
+    else
+      writeOutput(Op.Output, readOperand(Selected));
     return true;
   }
   case NdOp::INT_NOT: {

@@ -717,8 +717,8 @@ SymRef foldFiniteSelectionAndGuard(SymContext &Ctx, SymRef Root,
 // were absent from the input postorder; another whole MBA search would repeat
 // completed work. This single postorder only projects observed windows and
 // folds facts/Boolean controls, under the same remaining resources.
-SymRef finishLocalReadings(SymContext &Ctx, SymRef Root, const MBAOptions &Opts,
-                           WorkBudget &Budget, size_t &Storage) {
+SymRef finishLocalReadings(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
+                           size_t &Storage) {
   llvm::SmallVector<SymRef, 16> Pending{Root};
   llvm::DenseSet<uint32_t> Seen;
   llvm::SmallVector<uint32_t, 16> Order;
@@ -748,9 +748,53 @@ SymRef finishLocalReadings(SymContext &Ctx, SymRef Root, const MBAOptions &Opts,
     Value = foldQuotientRemainder(Ctx, Value, Budget, Storage);
     Value = foldObservedWindow(Ctx, Value, Budget, Storage);
     Value = foldKnownBits(Ctx, Value, Known, Budget, Storage);
-    Value = foldFiniteSelectionAndGuard(Ctx, Value, Opts, Known, Budget,
-                                        Storage, R);
     Done[Index] = foldConditionalControls(Ctx, Value, Budget, Storage);
+  }
+  return Done.lookup(Root.index());
+}
+
+// Read complete literal tables as fields or shifted bits only after every
+// enclosing region was measured with their exact value sets. A nested table
+// read first hides its values from its parents: `1 == 3 ^ (p ? 15 : 127) + T`
+// is false for T over {16, 64, 128}, which the shifted-bit reading of T no
+// longer shows. This single postorder rebuilds each parent over the shorter
+// readings; the root may also be read from its original form.
+SymRef finishFiniteSelections(SymContext &Ctx, SymRef Root, SymRef Original,
+                              const MBAOptions &Opts, SymKnownBits &Known,
+                              WorkBudget &Budget, size_t &Storage) {
+  llvm::SmallVector<SymRef, 16> Pending{Root};
+  llvm::DenseSet<uint32_t> Seen;
+  llvm::SmallVector<uint32_t, 16> Order;
+  bool AnySelection = Ctx.op(Original) == SymOp::Ite;
+  while (!Pending.empty()) {
+    auto R = Pending.pop_back_val();
+    if (Seen.contains(R.index()))
+      continue;
+    auto Inputs = Ctx.operands(R);
+    const size_t Bytes = 128 + 2 * sizeof(SymRef) * Inputs.size();
+    if (Storage < Bytes || !Budget.consume(1 + Inputs.size()))
+      return Root;
+    Storage -= Bytes;
+    Seen.insert(R.index());
+    Order.push_back(R.index());
+    AnySelection |= Ctx.op(R) == SymOp::Ite;
+    Pending.append(Inputs.begin(), Inputs.end());
+  }
+  if (!AnySelection)
+    return Root;
+  llvm::sort(Order);
+  llvm::DenseMap<uint32_t, SymRef> Done;
+  for (auto Index : Order) {
+    auto R = SymRef(Index);
+    llvm::SmallVector<SymRef, 8> Inputs;
+    for (auto Child : Ctx.operands(R))
+      Inputs.push_back(Done.lookup(Child.index()));
+    auto Value = Inputs.empty() ? R : Ctx.rebuild(R, Inputs);
+    const auto From = R == Root ? Original : R;
+    if (Ctx.op(Value) == SymOp::Ite || Ctx.op(From) == SymOp::Ite)
+      Value = foldFiniteSelectionAndGuard(Ctx, Value, Opts, Known, Budget,
+                                          Storage, From);
+    Done[Index] = Value;
   }
   return Done.lookup(Root.index());
 }
@@ -2198,8 +2242,6 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
     Rebuilt = foldQuotientRemainder(Ctx, Rebuilt, Budget, RefinementStorage);
     Rebuilt = foldObservedWindow(Ctx, Rebuilt, Budget, RefinementStorage);
     Rebuilt = foldKnownBits(Ctx, Rebuilt, Known, Budget, RefinementStorage);
-    Rebuilt = foldFiniteSelectionAndGuard(Ctx, Rebuilt, Opts, Known, Budget,
-                                          RefinementStorage, R);
     Rebuilt = foldConditionalControls(Ctx, Rebuilt, Budget, RefinementStorage);
     PreservedChildren &= Rebuilt == RebuiltInput;
     if (!canMeasureAtRoot(Ctx, Rebuilt)) {
@@ -2342,8 +2384,7 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
     // The local pass re-projects every node without measuring it again. A
     // longer reading would stay in the answer or fail the final size gate
     // and discard the shortened words found by the walk.
-    SymRef Finished =
-        finishLocalReadings(Ctx, Out, Opts, Budget, RefinementStorage);
+    SymRef Finished = finishLocalReadings(Ctx, Out, Budget, RefinementStorage);
     if (doesNotGrow(Ctx, Finished, Out))
       Out = Finished;
   }
@@ -2356,6 +2397,14 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
                                               readingScore(Ctx, Out);
   if (KeptWhole)
     Out = WholeAlternative;
+  // Table readings compete with the finished answer and only spend what its
+  // measurement left over.
+  if (!Budget.exhausted()) {
+    const auto Finite = finishFiniteSelections(Ctx, Out, WalkRoot, Opts, Known,
+                                               Budget, RefinementStorage);
+    if (readingScore(Ctx, Finite) < readingScore(Ctx, Out))
+      Out = Finite;
+  }
 
   // Every layer refused to grow and every layer was checked on its own, but
   // what the caller receives is the composition of all of them, and that is

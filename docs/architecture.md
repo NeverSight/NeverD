@@ -5051,7 +5051,13 @@ Within one LowIR build, module jump-table arbitration is reused while its
 function bodies remain unchanged. Any body rebuild retires that result before
 parallel builders run. Continuation discovery still runs normally, and image
 publication follows both fixed points; budget refusals and proof requirements
-remain the same.
+remain the same. A function asked to rebuild under the protected relocation
+slots, unsafe branches, branch preservation, continuation roots and published
+branch history of its previous rebuild keeps that body: a build is a function
+of those inputs and the image. The slot, branch and history sets only grow
+within the build, so their sizes identify them; continuation roots are kept
+whole. When arbitration stays incomplete after the fallback rebuild, the
+continuation closure's second identical rebuild therefore lifts nothing again.
 
 PE32 returning-stack queries also share a run-local memo across ordinary
 callers and independent jump-table queries. Each answer retains its import
@@ -15674,8 +15680,17 @@ MIPS64 word-input contract; source backends do not reinterpret instruction bits.
 `MedMIPSMergeValues` owns the source-only proof for adjacent complementary
 merge loads in a single ordinary leaf block. It runs after SSA/projection/DCE
 and before ABI recovery, binds physical LowIR occurrences to MedIR, and removes
-only a first load's unobserved old-value operand. Both reads remain ordered;
+only a first load's unobserved old-value operand. Four-byte MIPS16e2
+occurrences use the same address/use proof as classic instructions. Both reads remain ordered;
 calls, PHIs, exceptional flow and unproved uses retain their original inputs.
+
+`MIPSScalar.def`/`MIPSScalar.h` own merge load/store IDs, shapes and exact byte
+spans. Partial stores observe only selected register bytes and never read
+neighboring memory. LowIR commits a validated full span; HighC and LLVM retain
+byte writes and original-image backing qualification. This differs from a
+general source memory-fault equivalence guarantee. ABI memory recovery stops
+at partial stores, while queries confined to registers retain their existing
+values across these memory effects.
 
 The DSP32 scalar slice keeps feature admission in `ELFMIPSProfile` and carries
 it through decoder reuse. `MIPSDSP.def` owns control field groups and instruction
@@ -15720,6 +15735,11 @@ address, and delegate accesses to `MIPSLiftMemory`. CFG and function discovery
 validate the entire unit against local mode evidence. B carries unconditional control semantics
 through normalization so CFG does not visit a nonexistent fallthrough.
 MIPS16 symbols are classified before their overlapping microMIPS flag bit.
+MIPS16e2 is an explicit ABI-record feature on that same instruction mode;
+`ELFMIPSProfile` owns the GNU e2 ASE bit and `Decoder::configureFor` refreshes it.
+Its integer/memory EXTEND forms reuse the classic semantic owners. The pinned
+Unicorn does not implement e2; GNU bytes, independent LowIR checks and execution
+of regenerated old-MIPS16 source remain distinct evidence.
 Both source routes emit the positive encoding attribute and explicitly exclude
 the other compressed family. GNU as/ld and original-target execution qualify
 the MIPS16 source path separately from LLVM's incomplete assembler support.

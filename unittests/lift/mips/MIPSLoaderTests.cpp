@@ -401,6 +401,38 @@ TEST(MIPS16Loader, HeaderSymbolsAndABIFlagsRetainTheMIPS16Family) {
   }
 }
 
+TEST(MIPS16Loader, E2RequiresMatchingExplicitABIRecords) {
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL}) {
+    ELFBytes F(Target);
+    F.abiFlags();
+    F.put(36, 0x74001000, 4);
+    F.put(24, 0x10101, 4);
+    ELFLoader L;
+    for (uint32_t ASE : {0x400u, 0x4400u, 0x4000u, 0x4800u, 0x4401u}) {
+      F.put(0xec, ASE, 4);
+      auto I = L.loadBuffer(F.buffer());
+      const bool Valid = ASE == 0x400 || ASE == 0x4400;
+      ASSERT_EQ(bool(I), Valid);
+      if (I)
+        EXPECT_EQ(I->MIPS->HasMIPS16E2, ASE == 0x4400);
+      else
+        llvm::consumeError(I.takeError());
+    }
+    F.put(0xec, 0x4400, 4);
+    // Add a second program record with conflicting e2 evidence.
+    F.put(44, 3, 2);
+    F.put(116, 0x70000003, 4);
+    F.put(120, 0xc0, 4);
+    F.put(132, 24, 4);
+    std::copy_n(F.Bytes.begin() + 0xe0, 24, F.Bytes.begin() + 0xc0);
+    F.put(0xcc, 0x400, 4);
+    auto Bad = L.loadBuffer(F.buffer());
+    ASSERT_FALSE(bool(Bad));
+    EXPECT_NE(llvm::toString(Bad.takeError()).find("conflicting"),
+              std::string::npos);
+  }
+}
+
 TEST(MIPS16Loader, DefinedGOTFunctionsSerializeTagsWithoutTaggingData) {
   for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL})
     for (bool Function : {false, true}) {

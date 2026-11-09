@@ -1390,13 +1390,25 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       break;
 
     case sym::SymOp::Extract: {
-      ExprPtr Operand = get(Ctx.operand(Item.Ref, 0));
+      const auto Source = Ctx.operand(Item.Ref, 0);
+      ExprPtr Operand = get(Source);
       const uint64_t Low = Ctx.node(Item.Ref).Aux;
-      if (!Operand || Low % 8 != 0)
+      if (!Operand)
         break;
+      // Builders keep the source coordinates of a narrowed constant shift, so
+      // (uint32_t)(x >> 14) arrives as a window at bit 14. Read it as that
+      // shift and truncation again; the source width is a whole byte count.
+      if (Low % 8 != 0) {
+        if (Ctx.width(Source) % 8 != 0)
+          break;
+        Operand = HighExpr::makeBinop(
+            NdOp::INT_RIGHT, Operand,
+            HighExpr::makeConst(Low, Ctx.width(Source) / 8,
+                                ConstantAddressProvenance::Scalar));
+      }
       Result = std::make_shared<HighExpr>();
       Result->Type = NdType::makeInt(ByteSize, false);
-      if (Low == 0) {
+      if (Low == 0 || Low % 8 != 0) {
         Result->Kind = ExprKind::Cast;
         Result->CastTo = Result->Type;
         Result->Operands = {Operand};

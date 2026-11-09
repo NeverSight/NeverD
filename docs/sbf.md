@@ -357,6 +357,12 @@ proven summary outputs are applied. Callee-saved registers survive a return;
 automatic frames advance by the VM stride. The same call-register rule drives
 ordinary block transfer, contextual values, origins, input expressions,
 input dependencies and missing-fact attribution.
+Parameterized fields, saved expressions and deferred copies also survive a
+callee-frame write when their complete destination extent precedes that frame
+under the same formal base. They use the ordinary memory-effect frame boundary;
+different formal bases, unknown frames and overlapping writes still invalidate
+the facts. This preserves older-frame fields without assuming that independent
+parameters cannot alias.
 Resolved syscalls depend on their five exposed host-ABI argument carriers;
 unexposed return, callee-saved and frame registers do not create new summary
 variants unless the function itself reads them. Unknown calls still depend on
@@ -572,6 +578,11 @@ When a completed root has exactly the generic entry's register and scratch
 facts, a literal scalar return can refine that generic summary's unknown
 return. Its conservative memory effects and target evidence remain unchanged;
 results from bound caller arguments do not establish this all-input fact.
+A completed generic literal without a return-input expression also refines an
+unknown specialized return when nested calls lose precision at their own
+variant limit. Expression-backed results retain their existing instantiation
+and specialization demand; flattening them can displace later caller proofs.
+This reuses an all-input proof without changing the specialized memory result.
 A completed older root whose inputs match the generic entry can also release
 its specialization when the generic result preserves its opaque return and
 every target proof remains independently published or survives in a transferred

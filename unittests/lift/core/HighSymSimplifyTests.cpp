@@ -31,6 +31,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <functional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -805,6 +806,52 @@ TEST(HighSymSimplify, PreservesSupportedAndRefusedSubByteProjections) {
           EXPECT_EQ(integerValue(After, A, B), Expected);
         }
       }
+}
+
+// capstone's printer assembles an operand word from three tables and reads a
+// seven-bit field of it: `(uint32_t)(Bits >> 14) & 0x7F` with
+// `Bits = op0 | (uint64_t)op1 << 32 | (uint64_t)op2 << 48`. Builders keep the
+// source coordinates of a narrowed constant shift, a window at bit 14. The
+// bridge must spell that window again, or the unobserved words stay live.
+TEST(HighSymSimplify, BitWindowsOfAssembledWordsDropUnobservedWords) {
+  auto Op0 = HighExpr::makeVar(tempOfSize(1, 8));
+  auto Op1 = HighExpr::makeVar(tempOfSize(2, 2));
+  auto Op2 = HighExpr::makeVar(tempOfSize(3, 1));
+  auto Placed = [](const ExprPtr &V, unsigned Amount) {
+    return HighExpr::makeBinop(NdOp::INT_LEFT, extendInteger(V, 8),
+                               HighExpr::makeConst(Amount, 8));
+  };
+  auto Bits = HighExpr::makeBinop(
+      NdOp::INT_OR, HighExpr::makeBinop(NdOp::INT_OR, Op0, Placed(Op1, 32)),
+      Placed(Op2, 48));
+  auto Before = HighExpr::makeBinop(
+      NdOp::INT_AND,
+      integerCast(HighExpr::makeBinop(NdOp::INT_RIGHT, Bits,
+                                      HighExpr::makeConst(14, 8)),
+                  4),
+      HighExpr::makeConst(0x7F, 4));
+  auto After = simplified(Before);
+  std::function<bool(const ExprPtr &, int)> Reads = [&](const ExprPtr &E,
+                                                        int Id) {
+    if (E->Kind == ExprKind::Var && E->Var.Id == Id)
+      return true;
+    for (const auto &Operand : E->Operands)
+      if (Operand && Reads(Operand, Id))
+        return true;
+    return false;
+  };
+  EXPECT_TRUE(Reads(After, 1));
+  EXPECT_FALSE(Reads(After, 2));
+  EXPECT_FALSE(Reads(After, 3));
+  for (uint64_t A : {0x0ull, 0x1FC000ull, ~0ull, 0x123456789ABCDEFull})
+    for (uint64_t B : {0x0ull, 0xFFFFull, 0x5A5Aull}) {
+      const std::unordered_map<int, uint64_t> Values{
+          {1, A}, {2, B}, {3, B & 0xFF}};
+      EXPECT_EQ(integerValue(After, 0, 0, &Values).getZExtValue(),
+                (A >> 14) & 0x7F);
+      EXPECT_EQ(integerValue(Before, 0, 0, &Values).getZExtValue(),
+                (A >> 14) & 0x7F);
+    }
 }
 
 TEST(HighSymSimplify, SourceToggleReachesProvedAffineSynthesis) {

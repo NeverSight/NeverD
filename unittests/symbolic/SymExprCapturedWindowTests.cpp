@@ -71,7 +71,7 @@ TEST(SymExpr, ConstantShiftSlicesUseTheSourceBitCoordinates) {
   for (unsigned Width : {8u, 32u, 64u, 128u}) {
     SymContext C;
     auto X = C.mkVar("x", Width);
-    for (unsigned Amount : {0u, 1u, 7u, Width - 1, Width, Width + 1})
+    for (unsigned Amount : {0u, 1u, 7u, 8u, Width - 1, Width, Width + 1})
       for (unsigned Low : {0u, Width / 2, Width - 1})
         for (unsigned Bits : {1u, Width - Low}) {
           const auto Shift = C.mkConst(Width, Amount);
@@ -83,8 +83,13 @@ TEST(SymExpr, ConstantShiftSlicesUseTheSourceBitCoordinates) {
                            : Op == SymOp::LShr ? C.mkLShr(X, Shift)
                                                : C.mkAShr(X, Shift);
             const auto Slice = C.mkExtract(Shifted, Low, Bits);
+            // Byte windows of byte shifts read the source directly. Other
+            // narrowed shifts keep their count for the consumers that read it.
+            const bool ByteWindow =
+                Amount % 8 == 0 && Low % 8 == 0 && Bits % 8 == 0;
             if (Op != SymOp::Shl && Low + Amount + Bits <= Width)
-              EXPECT_EQ(Slice, C.mkExtract(X, Low + Amount, Bits));
+              EXPECT_EQ(Slice == C.mkExtract(X, Low + Amount, Bits),
+                        ByteWindow || Amount == 0);
             for (uint64_t V : {0u, 1u, 0x53u, 0x80u, 0xffu}) {
               std::vector<llvm::APInt> Values{llvm::APInt::getSignMask(Width) |
                                               V};

@@ -78,7 +78,9 @@ std::optional<LiteralTable> ordinalTable(SymContext &Ctx, SymRef Root,
     Arms.push_back({unsigned(Key), Ctx.operand(Tail, 1)});
     Tail = Ctx.operand(Tail, 2);
   }
-  if (Arms.size() < 2 || Largest + 1 != Arms.size() || !Ctx.isConst(Tail))
+  // Two cases leave one selector bit beside the range guard. That reading is
+  // a negated or shifted bit and never shorter than the two tests.
+  if (Arms.size() < 3 || Largest + 1 != Arms.size() || !Ctx.isConst(Tail))
     return {};
   const unsigned Bits = std::bit_width(Largest);
   if (Bits > limits::kMaxResidualSynthesisAtoms ||
@@ -128,6 +130,10 @@ std::optional<LiteralTable> predicateTable(SymContext &Ctx, SymRef Root,
     Pending.push_back(Ctx.operand(Value, 1));
     Pending.push_back(Ctx.operand(Value, 2));
   }
+  // `c ? 0xFF : 0` is already the shortest source spelling of a one-condition
+  // table; reading it as fields prints `(uint8_t)(0 - (uint32_t)c)`.
+  if (Table.Atoms.size() < 2)
+    return {};
   const size_t Rows = size_t{1} << Table.Atoms.size();
   if (!chargeValues(Ctx.width(Root), Rows, Budget, Storage))
     return {};

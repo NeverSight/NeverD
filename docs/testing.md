@@ -4307,6 +4307,10 @@ CLI whole/function requests, GUI worker requests and toggle/cache isolation.
 `HighSymSimplify.PreservesSupportedAndRefusedSubByteProjections` checks 1/3/7-bit
 fragments at low and high offsets in 8/16/32/64-bit words against independent
 modular arithmetic, including closed refusal of unsupported narrow arithmetic.
+`HighSymSimplify.BitWindowsOfAssembledWordsDropUnobservedWords` reads a 7-bit
+field at bit 14 of a word assembled from three inputs; builders keep that
+window at its source bit, and the published result must read only the input
+that supplies the field.
 `HighSymSimplify.ReusesLiveAffineWordInNonzeroResidueLookups` requires compact
 lookup output through live definitions and widened carriers at the same four
 widths. Existing
@@ -6803,6 +6807,12 @@ Each source, IR and CFG route must prepare one pipeline invocation, without
 first analyzing neighboring owners. This counts actual work instead of imposing
 a timing threshold; the same suite retains x64/AArch64 navigation and mapping
 checks under both discovery orders.
+
+`PipelineOutcome.ArbitrationRebuildsUnderUnchangedInputsKeepTheirBodies`
+exhausts the module jump-table evidence budget, so the fallback rebuilds every
+function once and the continuation closure asks again under the same inputs.
+It counts rebuilt functions through `RebuiltFunctionsForTesting`: one rebuild
+each, and none when complete arbitration protects nothing.
 
 `PipelineOutcome.AnalysisCache*` compares cold and retained call chains in
 one- and four-thread runs, including physical floating returns and integer
@@ -22435,7 +22445,7 @@ The repeated-image regression also covers unrelated function-pointer relocations
 
 `SymExprMask.ConstantCover*` checks exhaustive four-bit masks and inputs, 8–257-bit words, live high bits, shared deep sources, and word/term budget refusal. `FrameOffsets.ConstantCoveredBitsExposeOffsetsWithoutSolverQueries` checks a constant displacement with zero solver queries and rejects an input-dependent neighbor. Run `NeverDSymbolicTests` and `NeverDInterpreterSpecializationTests`.
 
-The captured-word slice regressions in `SymExprTests.cpp` reconstruct selected byte lanes and modular arithmetic prefixes, normalize constant-shift windows, and restore only zero-padded quotient slices. Independent APInt checks retain reversed lanes, padding and signed shifts.
+The captured-word slice regressions in `SymExprTests.cpp` reconstruct selected byte lanes and modular arithmetic prefixes, normalize constant-shift windows, and restore only zero-padded quotient slices. Independent APInt checks retain reversed lanes, padding and signed shifts. Only byte windows of byte shifts read the source directly; other narrowed shifts keep their count, which control-bit discovery and LLVM scalar decisions read.
 
 `SymExprMask.Reassembled*` and `FieldReassembly*` cover zero-extended fields
 restored to their original bit positions, compound AND sources, high lanes of
@@ -23042,7 +23052,7 @@ Common-word equality cancellation is covered by independent APInt evaluations at
 
 SymExprCancellation captured-mask tests use independent exhaustive small-word and multiword APInt evaluation. Negative controls retain overlapping carries and uncovered fields; bounded known-bit queries leave unresolved inputs intact. Existing complemented-offset MBA tests qualify the equivalent normalized constructor forms.
 
-`SymMBAFiniteSelection` checks exact small ordinal tables and shared Boolean selection trees through the ordinary `simplifyMBADeep` entry. APInt oracles and independent bitvector UNSAT checks cover 8--128 bits, wide out-of-range selectors, unknown defaults, duplicate priorities, complete shifted-bit trees and caller work/storage refusals. No sample-only candidate is published.
+`SymMBAFiniteSelection` checks exact small ordinal tables and shared Boolean selection trees through the ordinary `simplifyMBADeep` entry. APInt oracles and independent bitvector UNSAT checks cover 8--128 bits, wide out-of-range selectors, unknown defaults, duplicate priorities, complete shifted-bit trees and caller work/storage refusals. No sample-only candidate is published. Tables are read in one final pass that competes with the finished answer and uses only the work it left: a nested table keeps the value set its enclosing equality proves false, and a root whose measurement removes repeated tests keeps the shorter selection. One-condition selections and two-case ordinal chains keep their selection spelling.
 
 SymConditionalControls and SymMBASelector Boolean-word tests use exhaustive small input tables and an independent solver check through 257 bits. Partial-mask and nonfitting-constant controls retain their data semantics; a large opaque predicate must not consume the budget before a complete root choice is recognized.
 
@@ -23233,6 +23243,45 @@ ordinary RAM accesses; ordinary dead-load fault delivery remains unqualified
 as documented in [MIPS support](mips.md#ordinary-memory-source-qualification).
 These functions do not qualify omitted MIPS16 instructions or general ABI forms.
 
+### MIPS16e2 and additional DSP/MSA arithmetic
+
+`MIPS16E2` checks all 28 admitted encoding forms in both byte orders, compact
+register aliases, bitfield limits, zero sources, GP memory widths, partial merge
+footprints and reused-decoder feature evidence. `MIPS16E2Pipeline` checks exact
+physical delay-slot widths and writable image-store bindings. Shared scalar
+store tests exercise every alignment, narrow writable spans, absent inputs and
+failure without partial writes. `MIPSCallMemory` checks that a partial overwrite
+invalidates a spilled callee or stack argument while preserving already
+captured registers. SELECT tests distinguish missing/unknown chosen
+values from unobserved arms and retain all 128 result bits.
+
+`mips16e2-roundtrip.py` recompiles the e2 fixture through both source backends
+at O0/O2 with adverse microMIPS defaults. It uses the same explicit tool arguments
+as `mips16-roundtrip.py`, with an output such as `build-mips/roundtrip-mips16e2`.
+The input is assembled with GNU `-mmips16e2` and its ABI flag checked. Generated
+old-MIPS16 code executes against manual-derived results, output memory, saved
+registers and both caller ISA tags. The pinned Unicorn cannot execute original
+e2 correctly; the report explicitly excludes that oracle and records no
+original-e2 equivalence claim.
+
+DSP word/carry tests cover sticky overflow, carry replacement versus
+preservation, condition-bit replacement, byte/halfword PICK, zero destinations,
+register aliases and missing state. MSA adds all four widths of absolute add,
+saturating add/subtract and signed/unsigned average/rounded average. Independent
+widened APInt expectations cover MIN+MIN, unsigned carries, negative ties and
+aliased complete vectors. The DSP/MSA source runners compare originals and both
+regenerated C routes under the pinned enabled 74Kf/P5600 models, including
+DSPControl and saved low FPR views. The pinned reference fixes MSA signed-limit
+construction and absolute `INT64_MIN` magnitudes, with QEMU's required wrapping
+arithmetic enabled in CMake builds. All regenerated execution and the newly
+added original-instruction fixtures must match independent results. The
+existing DSP zero-destination reference defect remains explicitly recorded;
+see the [DSP reference boundary](mips.md#classic-mips32-dsp-state-and-packed-arithmetic).
+Reports identify the source revision and actual loaded native-library hash.
+Ordinary pair padding, predecessor memory barriers,
+single-sided barriers at joins, depth/work exhaustion and non-entry analysis
+roots or exceptional/disconnected paths have separate call-recovery regressions.
+
 ### MIPS decode/lift and firmware performance
 
 `neverd-mips-bench` is an opt-in target, excluded from the default build:
@@ -23243,8 +23292,9 @@ build-mips/bin/neverd-mips-bench mips64el lift /path/to/owned-code.bin 100000
 ```
 
 Profiles are `mips`, `mipsel`, `mips64`, `mips64el`, `micromips`,
-`micromipsel`, `mips16`, `mips16el`, `mipsdsp`, `mipsdspel`, `mipsmsa` and
-`mipsmsael`. The DSP profiles explicitly select the admitted classic32 DSP
+`micromipsel`, `mips16`, `mips16el`, `mips16e2`, `mips16e2el`, `mipsdsp`,
+`mipsdspel`, `mipsmsa` and `mipsmsael`. The e2 profiles add explicit MIPS16e2
+feature evidence to MIPS16 encoding. The DSP profiles explicitly select the admitted classic32 DSP
 capability; MSA profiles select classic32 r5/o32 FP64 with the admitted integer
 vector instructions.
 Stages are `capstone`

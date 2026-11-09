@@ -105,11 +105,12 @@ public:
              const std::vector<va_t> &Entries,
              PipelineAnalysisCache *Cache = nullptr,
              std::optional<size_t> JumpTableEvidenceBudget = std::nullopt,
-             bool LiftMode = false) {
+             bool LiftMode = false, size_t *RebuiltFunctions = nullptr) {
     PipelineOptions Options;
     Options.AnalysisCache = Cache;
     Options.JumpTableEvidenceBudgetForTesting = JumpTableEvidenceBudget;
     Options.LiftMode = LiftMode;
+    Options.RebuiltFunctionsForTesting = RebuiltFunctions;
     Options.OnlyFunctionEntries.insert(Entries.begin(), Entries.end());
     std::vector<std::pair<va_t, std::string>> Candidates;
     for (va_t Entry : Entries)
@@ -490,6 +491,37 @@ TEST(PipelineOutcome, JumpTableRebuildsKeepTheImageX87Graphs) {
   Run(Again, 0x401060, &Cache);
   Run(Cold, 0x401060, nullptr);
   expectSameSelection(Again, Cold);
+}
+
+TEST(PipelineOutcome, ArbitrationRebuildsUnderUnchangedInputsKeepTheirBodies) {
+  // An exhausted evidence budget protects every relocation slot and rebuilds
+  // each function once.  The continuation closure then finds arbitration
+  // still incomplete and asks for the same rebuild under the same protected
+  // slots, branches and published history: those bodies are the ones the
+  // first rebuild made, so no function is lifted a third time.
+  const BinaryImage Image = switchCallingFloatingLeafImage();
+  const std::vector<va_t> Entries = {0x401000, 0x401040, 0x401050, 0x401060};
+  PipelineResult Exhausted, Ample;
+  size_t Rebuilt = 0;
+  PipelineTestPeer::buildLowIR(Image, Exhausted, Entries, nullptr,
+                               /*JumpTableEvidenceBudget=*/0,
+                               /*LiftMode=*/true, &Rebuilt);
+  EXPECT_EQ(Rebuilt, Entries.size());
+  ASSERT_EQ(Exhausted.LowFuncs.size(), Entries.size());
+  // The rebuilt switch keeps its exact table under protected slots.
+  const auto Switch =
+      std::find_if(Exhausted.LowFuncs.begin(), Exhausted.LowFuncs.end(),
+                   [](const LowFunc &F) { return F.Entry == 0x401000; });
+  ASSERT_NE(Switch, Exhausted.LowFuncs.end());
+  ASSERT_EQ(Switch->JumpTables.size(), 1u);
+  EXPECT_EQ(Switch->JumpTables.front().Targets,
+            (std::vector<va_t>{0x401012, 0x401019, 0x401020}));
+
+  // Complete arbitration protects nothing here, so nothing is rebuilt.
+  size_t NotRebuilt = 0;
+  PipelineTestPeer::buildLowIR(Image, Ample, Entries, nullptr, std::nullopt,
+                               /*LiftMode=*/true, &NotRebuilt);
+  EXPECT_EQ(NotRebuilt, 0u);
 }
 
 BinaryImage aarch64SelectionCacheImage() {

@@ -140,7 +140,7 @@ bool MedLLVMEmitter::constUsedAsPointerImpl(uint64_t Val) const {
       for (const auto &Op : Blk.Ops) {
         const bool MergeLoad =
             mipsScalarMedShapeIsValid(Op) &&
-            mips::mergeLoad(static_cast<Intrinsic>(Op.Inputs[0].ConstVal))
+            mips::mergeMemory(static_cast<Intrinsic>(Op.Inputs[0].ConstVal))
                 .has_value();
         if ((Op.Opcode != NdOp::LOAD && Op.Opcode != NdOp::STORE &&
              !MergeLoad) ||
