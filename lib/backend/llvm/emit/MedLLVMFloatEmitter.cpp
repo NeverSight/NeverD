@@ -12,6 +12,7 @@
 
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/MedLLVMFloatConvertLowering.h"
+#include "neverd/ir/FloatConversion.h"
 
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -328,6 +329,17 @@ llvm::Value *MedLLVMEmitter::emitFloatOp(const MedOp &Op,
     llvm::Type *DstFTy = scalarFPTypeForSize(*Ctx, Op.Output.Size);
     if (SrcFTy == DstFTy)
       return FV;
+    if (isX87PrecisionConversion(TargetArch, Op.Inputs[0].Size,
+                                 Op.Output.Size)) {
+      const bool Narrow = Op.Inputs[0].Size > Op.Output.Size;
+      auto *Result = Builder.CreateConstrainedFPCast(
+          Narrow ? llvm::Intrinsic::experimental_constrained_fptrunc
+                 : llvm::Intrinsic::experimental_constrained_fpext,
+          FV, DstFTy, {}, Narrow ? "x87.narrow" : "x87.extend", nullptr,
+          llvm::RoundingMode::Dynamic, llvm::fp::ExceptionBehavior::ebStrict);
+      Builder.setConstrainedFPFunctionAttr();
+      return Result;
+    }
     if (SrcFTy->getPrimitiveSizeInBits() > DstFTy->getPrimitiveSizeInBits())
       return Builder.CreateFPTrunc(FV, DstFTy, "fptrunc");
     return Builder.CreateFPExt(FV, DstFTy, "fpext");

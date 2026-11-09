@@ -11698,6 +11698,24 @@ transport, not complete x87 control-word or exception semantics. Shared import
 target tracing also rejects partial pointer writes, opaque call barriers and
 instruction temporaries borrowed from another instruction.
 
+HighIR cancels inverse scalar bit reinterpretations by their representation,
+including binary16 and binary80, independently of source-call ABI admission.
+The original scalar width, signedness and reserved Boolean/vector role must
+remain intact. Numeric conversions between the bit views remain observable;
+this cleanup does not remove a real precision reduction or admit additional
+types to a source calling convention. A declared i386 float/double call result
+can consequently return at its original precision without materializing an
+80-bit integer temporary in HighC.
+
+Actual x87 FLD/FST precision conversions remain numerical operations.
+`isX87PrecisionConversion` owns the binary32/binary64-to-binary80 boundary:
+HighIR cannot cancel its numerical round trip, and LLVM uses constrained
+extension/truncation with dynamic rounding. Both C routes use the same native
+FLD/FSTP helpers, so C optimization cannot erase signaling-NaN quieting or
+replace x87 store rounding with an ordinary cast. This covers the observable
+converted value; full x87 exception, stack-tag and status state still belongs
+to the existing context and explicit-state paths.
+
 An internal i386 helper may instead consume one incoming logical ST0 and
 return an integer. The same machine graph proves that every return consumes
 that value, that no path reads or changes the caller's lower stack entries,
