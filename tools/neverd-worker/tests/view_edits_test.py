@@ -64,6 +64,9 @@ def apply_delta(page, delta):
             for line, text in operation[3]:
                 lines[line] = text
             page[field] = "\n".join(lines)
+        elif kind == "each":
+            for item in page[field]:
+                item.update({key: value for key, value in operation[2].items() if key in item})
         else:
             assert kind == "items", operation
             old, items, used = page[field], [], 0
@@ -316,10 +319,20 @@ def run(executable):
         assert not [row for row in before.values() if isinstance(row, str)], before
         reader = [address for address, row in before.items() if "401000" in row["text"]]
         assert reader, before
+        patches = ok(owner, "metadata")["named_view_data_name_patches"]
         ok(owner, "rename", {"address": hex(GLOBAL), "name": "renamed_global"})
         after = compare(executable, owner, path, functions, "data name")
         for address in reader:
             assert "renamed_global" in after[address]["text"], after[address]["text"]
+        # The document that read it takes the name as respelling the engine text
+        # its decoration read gives it, and again from the text that gave.
+        assert ok(owner, "metadata")["named_view_data_name_patches"] > patches
+        patches = ok(owner, "metadata")["named_view_data_name_patches"]
+        ok(owner, "rename", {"address": hex(GLOBAL), "name": "renamed_twice"})
+        after = compare(executable, owner, path, functions, "data name twice")
+        for address in reader:
+            assert "renamed_twice" in after[address]["text"], after[address]["text"]
+        assert ok(owner, "metadata")["named_view_data_name_patches"] > patches
         ok(owner, "rename", {"address": hex(GLOBAL), "name": "renamed_again"})
         ok(owner, "item_define", {"address": hex(GLOBAL + 0x10), "action": "data", "size": 4})
         after = compare(executable, owner, path, functions, "data name then item")

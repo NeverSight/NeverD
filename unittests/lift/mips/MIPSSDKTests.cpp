@@ -259,6 +259,58 @@ TEST_P(MicroMIPSSDK, CachedFlowDecoderSwitchesModesWithoutReplacingTheListing) {
 INSTANTIATE_TEST_SUITE_P(ByteOrders, MicroMIPSSDK,
                          ::testing::Values(Arch::MIPS32, Arch::MIPS32EL));
 
+class MIPS16SDK : public MIPSSDK {};
+
+TEST_P(MIPS16SDK, PhysicalPagesKeepExtendPairsAndTwoByteDelaySlots) {
+  mips_test::ELFBytes File(GetParam());
+  File.put(36, 0x74001000, 4);
+  File.put(24, 0x10101, 4);
+  File.put(0x100, 0xf010, 2); // li v0,0x8000, one four-byte instruction
+  File.put(0x102, 0x6a00, 2);
+  File.put(0x104, 0xe820, 2); // jr ra
+  File.put(0x106, 0x6301, 2); // addiu sp,8, one two-byte slot
+  const auto Path =
+      (std::filesystem::path(Directory.str().str()) / "mips16-slot.elf")
+          .string();
+  std::error_code Error;
+  llvm::raw_fd_ostream Output(Path, Error);
+  ASSERT_FALSE(Error);
+  Output.write(reinterpret_cast<const char *>(File.Bytes.data()),
+               File.Bytes.size());
+  Output.close();
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1)
+      << take(neverd_last_error(Session));
+  for (unsigned Offset : {0u, 4u, 6u}) {
+    const auto Text = take(
+        neverd_function_disasm_json(Session, 0x10100, 0x10100 + Offset, 1,
+                                    NEVERD_DISASM_FLOW | NEVERD_DISASM_STACK));
+    auto Page = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(Page)) << Text << take(neverd_last_error(Session));
+    const auto *Object = Page->getAsObject();
+    ASSERT_NE(Object, nullptr);
+    const auto *Rows = Object->getArray("instructions");
+    ASSERT_NE(Rows, nullptr);
+    ASSERT_EQ(Rows->size(), 1u);
+    const auto *Row = Rows->front().getAsObject();
+    ASSERT_NE(Row, nullptr);
+    EXPECT_EQ(Row->getInteger("size"), Offset ? 2 : 4);
+    EXPECT_EQ(Row->getInteger("sp"), Offset == 6 ? 8 : 0);
+    EXPECT_EQ(Row->getString("addr"), Offset == 0   ? "0x10100"
+                                      : Offset == 4 ? "0x10104"
+                                                    : "0x10106");
+    if (Offset != 6)
+      EXPECT_EQ(Object->getString("next_address"),
+                Offset ? "0x10106" : "0x10104");
+    else {
+      ASSERT_NE(Object->get("next_address"), nullptr);
+      EXPECT_TRUE(Object->get("next_address")->getAsNull().has_value());
+    }
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(ByteOrders, MIPS16SDK,
+                         ::testing::Values(Arch::MIPS32, Arch::MIPS32EL));
+
 INSTANTIATE_TEST_SUITE_P(Profiles, MIPSSDK,
                          ::testing::Values(Arch::MIPS32, Arch::MIPS32EL,
                                            Arch::MIPS64, Arch::MIPS64EL));

@@ -16,7 +16,7 @@
 namespace neverd {
 
 bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
-  if (!HasMSA || S.Width != 4 || Mode == InstructionMode::MicroMIPS)
+  if (!HasMSA || S.Width != 4 || isMIPSCompressedMode(Mode))
     return false;
   enum class Instruction {
 #define NEVERD_MIPS_MSA(Name, Mask, Value) Name,
@@ -63,17 +63,43 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
     S.emit(NdOp::COPY, NdVar::reg(mipsreg::w(WD), 16), {Result});
     return true;
   }
+  std::optional<NdOp> Comparison;
+  switch (*Kind) {
+  case Instruction::EqualVector:
+    Comparison = NdOp::INT_EQUAL;
+    break;
+  case Instruction::SignedLessVector:
+    Comparison = NdOp::INT_SLESS;
+    break;
+  case Instruction::UnsignedLessVector:
+    Comparison = NdOp::INT_LESS;
+    break;
+  case Instruction::SignedLessEqualVector:
+    Comparison = NdOp::INT_SLESSEQUAL;
+    break;
+  case Instruction::UnsignedLessEqualVector:
+    Comparison = NdOp::INT_LESSEQUAL;
+    break;
+  default:
+    break;
+  }
   const uint16_t Bytes =
-      *Kind == Instruction::AddVector || *Kind == Instruction::SubVector
-          ? 1u << ((Word >> 21) & 3)
-          : 4;
+      *Kind == Instruction::FillWord || *Kind == Instruction::InsertWord
+          ? 4
+          : 1u << ((Word >> 21) & 3);
   std::array<NdVar, 16> Values;
   for (unsigned I = 0; I != 16u / Bytes; ++I) {
     if (*Kind == Instruction::FillWord)
       Values[I] = S.read(WS);
     else if (*Kind == Instruction::InsertWord)
       Values[I] = I == Index ? S.read(WS) : Lane(WD, I);
-    else
+    else if (Comparison) {
+      const auto Condition =
+          S.binary(*Comparison, Lane(WS, I, Bytes), Lane(WT, I, Bytes), 1);
+      // Comparisons replicate their predicate across every bit of the lane.
+      Values[I] = S.binary(NdOp::INT_SUB, NdVar::cst(0, Bytes),
+                           S.resize(Condition, Bytes));
+    } else
       Values[I] = S.binary(*Kind == Instruction::SubVector ? NdOp::INT_SUB
                                                            : NdOp::INT_ADD,
                            Lane(WS, I, Bytes), Lane(WT, I, Bytes));

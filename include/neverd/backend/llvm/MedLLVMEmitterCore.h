@@ -275,6 +275,10 @@ private:
   void emitExceptionMetadata(const MedFunc &Func, llvm::Function &LLVMFunc);
   bool emitNativeSEH(const MedFunc &Func, llvm::Function &LLVMFunc,
                      const std::map<int, llvm::BasicBlock *> &OriginalBlockMap);
+  /// Whether the unit's function at \p Entry, an ARM or AArch64 SEH callback,
+  /// reads nothing of the parent the runtime restores for it: only its two
+  /// arguments, its own stack and its return address.
+  bool sehCallbackReadsOnlyArguments(va_t Entry);
   bool emitNativeX86RegistrationSEH(
       const MedFunc &Func, llvm::Function &LLVMFunc,
       const std::map<int, llvm::BasicBlock *> &OriginalBlockMap,
@@ -2584,6 +2588,11 @@ private:
   /// Handler entry address -> the slot its native SEH catch pad stores the
   /// exception code in for the __except handler to read.
   std::map<uint64_t, llvm::AllocaInst *> SEHExceptionCodeSlots;
+  /// Source views: the unit's functions by entry, for the SEH callbacks
+  /// emitNativeSEH calls.  Valid only while emit() runs.
+  std::map<va_t, const MedFunc *> SEHCallbackBodies;
+  /// sehCallbackReadsOnlyArguments's answers by callback entry.
+  std::map<va_t, bool> SEHCallbackReadsOnlyArguments;
   llvm::AllocaInst *EHSelectorAlloca = nullptr;
 
   // Dynamic (VLA / alloca) allocation bases of the current function, keyed by

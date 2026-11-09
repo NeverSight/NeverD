@@ -15,10 +15,14 @@
 
 #include "neverd/solver/SymSynthVerifier.h"
 #include "neverd/solver/Z3Solver.h"
+#include "neverd/symbolic/SymParse.h"
+
+#include "llvm/ADT/SmallString.h"
 
 #include <array>
 #include <limits>
 #include <random>
+#include <string>
 #include <tuple>
 #include <utility>
 
@@ -588,6 +592,210 @@ TEST(SymMBAWidePairs, RepeatedProjectedOffsetsFinishWithinTheSharedBudget) {
   }
 }
 
+TEST(SymMBAWidePairs, SharedLiteralPrefixesFinishAComplementedDegree256) {
+  for (unsigned Width : {8u, 16u, 32u, 64u, 65u, 128u, 257u}) {
+    for (unsigned Perturb : {0u, 2u}) {
+      SCOPED_TRACE(Width);
+      SCOPED_TRACE(Perturb);
+      const auto Scale = llvm::APInt(Width, 3).shl(Width - 8);
+      llvm::SmallString<128> ScaleText;
+      Scale.toString(ScaleText, 10, false);
+      std::string Text = "(" + ScaleText.str().str();
+      for (unsigned I = 0; I < 256; ++I)
+        Text += "*(((x^1)+" + std::to_string(2 * I + (I == 0 ? Perturb : 0)) +
+                ")^(((y+" + std::to_string(I) + ")&-2)*((z+" +
+                std::to_string(2 * I) + ")&-2)))";
+      Text += ")+(x^y)+2*(x&y)+(z|w)+(z&w)";
+      SymContext Ctx;
+      const auto Parsed = parseSymExpr(Ctx, Text, Width);
+      ASSERT_TRUE(Parsed.ok()) << Parsed.Error;
+      const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+      const auto Z = Ctx.mkVar("z", Width), W = Ctx.mkVar("w", Width);
+      const auto Original = Ctx.toString(Parsed.Root);
+      MBAOptions Options;
+      Options.MaxWork = 65536;
+      // Keep the normal verification samples: disabling them hides the budget
+      // regression of the complete parse/prove/render request at native widths.
+      const auto Result = simplifyMBADeep(Ctx, Parsed.Root, Options);
+      EXPECT_LE(Result.Work, Options.MaxWork);
+      if (Width <= 64 && !Perturb) {
+        EXPECT_LE(Result.SizeAfter, 14u);
+        EXPECT_LT(Result.Work, Options.MaxWork);
+        EXPECT_EQ(Result.Evidence, MBAEvidence::Derivation);
+      }
+      EXPECT_EQ(Ctx.toString(Parsed.Root), Original);
+      const auto Reparsed = parseSymExpr(Ctx, Ctx.toString(Result.Expr), Width);
+      ASSERT_TRUE(Reparsed.ok()) << Reparsed.Error;
+      EXPECT_EQ(Reparsed.Root, Result.Expr);
+      SymEvalPlan Reduced(Ctx, Result.Expr);
+      std::mt19937_64 Random(0x4c49544552414c);
+      const auto Mask = ~llvm::APInt(Width, 1);
+      for (unsigned Trial = 0; Trial < 256; ++Trial) {
+        std::array<llvm::APInt, 4> Values;
+        for (auto &Value : Values) {
+          Value = llvm::APInt(Width, Random());
+          for (unsigned Bit = 64; Bit < Width; Bit += 64)
+            Value |= llvm::APInt(Width, Random()).shl(Bit);
+        }
+        if (Trial < 16)
+          for (unsigned I = 0; I < Values.size(); ++I)
+            Values[I] = (Trial >> I) & 1 ? llvm::APInt::getAllOnes(Width)
+                                         : llvm::APInt(Width, 0);
+        auto Expected = Scale;
+        const auto Flipped = Values[0] ^ llvm::APInt(Width, 1);
+        for (unsigned I = 0; I < 256; ++I)
+          Expected *= (Flipped + 2 * I + (I == 0 ? Perturb : 0)) ^
+                      (((Values[1] + I) & Mask) * ((Values[2] + 2 * I) & Mask));
+        Expected += Values[0] + Values[1] + Values[2] + Values[3];
+        const auto Actual =
+            Reduced.evalWith([&](uint32_t Id) -> const llvm::APInt * {
+              return Id == Ctx.varId(X)   ? &Values[0]
+                     : Id == Ctx.varId(Y) ? &Values[1]
+                     : Id == Ctx.varId(Z) ? &Values[2]
+                     : Id == Ctx.varId(W) ? &Values[3]
+                                          : nullptr;
+            });
+        EXPECT_EQ(Actual, Expected);
+      }
+    }
+  }
+}
+
+TEST(SymMBAWidePairs, MaskedProductsObserveOnlyTheRequestedLiteralWindow) {
+  for (unsigned Width : {16u, 32u, 64u, 65u, 128u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const auto Z = Ctx.mkVar("z", Width);
+    const auto Even = ~llvm::APInt(Width, 1);
+    const auto Mask = llvm::APInt(Width, 1).shl(Width - 1) | 3;
+    llvm::SmallVector<SymRef, 16> Factors;
+    for (unsigned I = 0; I < 16; ++I) {
+      const auto A = Ctx.mkAdd(X, Ctx.mkConst(Width, 2 * I));
+      const auto B =
+          Ctx.mkAnd(Ctx.mkAdd(Y, Ctx.mkConst(Width, I)), Ctx.mkConst(Even));
+      const auto D =
+          Ctx.mkAnd(Ctx.mkAdd(Z, Ctx.mkConst(Width, 2 * I)), Ctx.mkConst(Even));
+      Factors.push_back(
+          Ctx.mkAnd(Ctx.mkXor(A, Ctx.mkMul(B, D)), Ctx.mkConst(Mask)));
+    }
+    const auto Product = Ctx.mkMul(Factors);
+    const auto Original = Ctx.toString(Product);
+    auto Check = [&](SymRef Result, const llvm::APInt &Scale) {
+      SymEvalPlan Plan(Ctx, Result);
+      std::mt19937_64 Random(0x57494e444f57);
+      for (unsigned Trial = 0; Trial < 128; ++Trial) {
+        std::array<llvm::APInt, 3> V;
+        for (unsigned I = 0; I < V.size(); ++I) {
+          V[I] = llvm::APInt(Width, Random());
+          for (unsigned Bit = 64; Bit < Width; Bit += 64)
+            V[I] |= llvm::APInt(Width, Random()).shl(Bit);
+          if (Trial < 8)
+            V[I] = (Trial >> I) & 1 ? llvm::APInt::getAllOnes(Width)
+                                    : llvm::APInt(Width, 0);
+          if (Trial == 8)
+            V[I] = llvm::APInt(Width, I == 0);
+        }
+        auto Expected = Scale;
+        for (unsigned I = 0; I < 16; ++I)
+          Expected *= ((V[0] + 2 * I) ^
+                       (((V[1] + I) & Even) * ((V[2] + 2 * I) & Even))) &
+                      Mask;
+        EXPECT_EQ(Plan.eval(V), Expected);
+        if (Trial == 8 && Scale == 3)
+          EXPECT_EQ(Expected, llvm::APInt(Width, 19683));
+      }
+    };
+    MBAOptions Options;
+    Options.MaxWork = 65536;
+    for (unsigned Observed : {6u, 7u, 8u}) {
+      SCOPED_TRACE(Observed);
+      const auto Scale = llvm::APInt(Width, 3).shl(Width - Observed);
+      const auto Input = Ctx.mkMul(Ctx.mkConst(Scale), Product);
+      const auto Result = simplifyMBADeep(Ctx, Input, Options);
+      EXPECT_LT(Result.Work, Options.MaxWork);
+      EXPECT_LE(Result.SizeAfter, 8u);
+      EXPECT_EQ(Result.Evidence, MBAEvidence::Derivation);
+      Check(Result.Expr, Scale);
+    }
+    // The same source words still have observable higher bits without the
+    // outer scale. A cached low view must never replace this complete product.
+    const auto Full = Ctx.mkMul(Ctx.mkConst(Width, 3), Product);
+    const auto Result = simplifyMBADeep(Ctx, Full, Options);
+    EXPECT_LE(Result.Work, Options.MaxWork);
+    Check(Result.Expr, llvm::APInt(Width, 3));
+    EXPECT_EQ(Ctx.toString(Product), Original);
+  }
+}
+
+TEST(SymMBAWidePairs, MaskedHighDegreeSignaturesKeepOnlyTheirVisibleBits) {
+  for (unsigned Width : {8u, 16u, 65u, 257u}) {
+    for (unsigned Degree : {32u, 64u}) {
+      for (unsigned Mode : {0u, 1u, 2u, 3u}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Width << " / " << Degree << " / " << Mode);
+        SymContext Ctx;
+        const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+        const auto Z = Ctx.mkVar("z", Width);
+        const auto Even = ~llvm::APInt(Width, 1);
+        const auto Mask =
+            llvm::APInt(Width, 1).shl(Width - 1) | (Mode == 3 ? 7 : 3);
+        const auto Base = Mode == 1 ? Ctx.mkXor(X, Ctx.mkOne(Width)) : X;
+        llvm::SmallVector<SymRef, 64> Factors;
+        for (unsigned I = 0; I < Degree; ++I) {
+          const auto Offset = 2 * I + unsigned(Mode == 2 && I == 0);
+          const auto A = Ctx.mkAdd(Base, Ctx.mkConst(Width, Offset));
+          const auto B =
+              Ctx.mkAnd(Ctx.mkAdd(Y, Ctx.mkConst(Width, I)), Ctx.mkConst(Even));
+          const auto C = Ctx.mkAnd(Ctx.mkAdd(Z, Ctx.mkConst(Width, 2 * I)),
+                                   Ctx.mkConst(Even));
+          Factors.push_back(
+              Ctx.mkAnd(Ctx.mkXor(A, Ctx.mkMul(B, C)), Ctx.mkConst(Mask)));
+        }
+        const auto Scale = llvm::APInt(Width, 3).shl(Width - 8);
+        const auto Root = Ctx.mkMul(Ctx.mkConst(Scale), Ctx.mkMul(Factors));
+        MBAOptions Options;
+        Options.MaxWork = 65536;
+        const auto Result = simplifyMBADeep(Ctx, Root, Options);
+        if (Width > 8) {
+          EXPECT_LT(Result.Work, Options.MaxWork);
+          EXPECT_LT(Result.SizeAfter, Result.SizeBefore);
+          // The unperturbed two-bit factors collapse to a parity selector.
+          // A changed factor or a retained third bit keeps additional data.
+          if (Mode < 2)
+            EXPECT_LE(Result.SizeAfter, 12u);
+        }
+        SymEvalPlan Plan(Ctx, Result.Expr);
+        std::mt19937_64 Random(0x4d41534b45444849);
+        for (unsigned Trial = 0; Trial < 128; ++Trial) {
+          std::array<llvm::APInt, 3> V;
+          for (unsigned I = 0; I < V.size(); ++I) {
+            V[I] = llvm::APInt(Width, Random());
+            for (unsigned Bit = 64; Bit < Width; Bit += 64)
+              V[I] |= llvm::APInt(Width, Random()).shl(Bit);
+            if (Trial < 8)
+              V[I] = (Trial >> I) & 1 ? llvm::APInt::getAllOnes(Width)
+                                      : llvm::APInt(Width, 0);
+          }
+          auto Expected = Scale;
+          const auto XV = Mode == 1 ? V[0] ^ llvm::APInt(Width, 1) : V[0];
+          for (unsigned I = 0; I < Degree; ++I)
+            Expected *= ((XV + 2 * I + unsigned(Mode == 2 && I == 0)) ^
+                         (((V[1] + I) & Even) * ((V[2] + 2 * I) & Even))) &
+                        Mask;
+          EXPECT_EQ(Plan.evalWith([&](uint32_t Id) -> const llvm::APInt * {
+            return Id == Ctx.varId(X)   ? &V[0]
+                   : Id == Ctx.varId(Y) ? &V[1]
+                   : Id == Ctx.varId(Z) ? &V[2]
+                                        : nullptr;
+          }),
+                    Expected);
+        }
+      }
+    }
+  }
+}
+
 TEST(SymMBAWidePairs, PreparedParityPrefixesKeepTheirProductAndContext) {
   auto Run = [](unsigned Width, bool Prepare) {
     SymContext Ctx;
@@ -852,6 +1060,54 @@ TEST(SymMBAWidePairs, ExhaustsOddPartialBlockLowWords) {
         ASSERT_EQ(Reduced.evalU64({X, Y, Z}), Expected & 255)
             << X << ':' << Y << ':' << Z;
       }
+}
+
+TEST(SymMBAWidePairs, PartialPeriodsKeepUnpairedFullWords) {
+  std::mt19937_64 Random(0x4445464552524544);
+  for (unsigned Width : {8u, 64u, 257u}) {
+    unsigned Rewritten = 0;
+    for (unsigned Observed : {6u, 7u, 8u})
+      for (bool Dense : {false, true})
+        for (unsigned Complement : {0u, 1u})
+          for (bool Neighbor : {false, true}) {
+            const unsigned Period = 1u << (Observed - 2);
+            const unsigned Degree = Dense ? Period - 1 : Period / 2 + 1;
+            SCOPED_TRACE(::testing::Message() << Width << ':' << Degree << ':'
+                                              << Complement << ':' << Neighbor);
+            SymContext Ctx;
+            const auto F =
+                partialFixture(Ctx, Width, Degree, Neighbor, Observed,
+                               Observed - 3, Complement, Complement != 0);
+            detail::WorkBudget Budget(65536);
+            size_t Storage = 1 << 24;
+            const auto Result =
+                detail::foldResidueDecisions(Ctx, F.Input, Budget, Storage);
+            if (Result != F.Input) {
+              ++Rewritten;
+              EXPECT_LT(detail::readingCost(Ctx, Result),
+                        detail::readingCost(Ctx, F.Input));
+            }
+            // A lone pair may cost more to reconstruct than it saves. Such a
+            // partial proof must retain the original complete expression.
+            EXPECT_LE(detail::readingCost(Ctx, Result),
+                      detail::readingCost(Ctx, F.Input));
+            EXPECT_LE(Budget.used(), 65536u);
+            SymEvalPlan Reduced(Ctx, Result);
+            for (unsigned Trial = 0; Trial < 256; ++Trial) {
+              std::array<llvm::APInt, 3> Values;
+              for (auto &V : Values) {
+                V = llvm::APInt(Width, 0);
+                for (unsigned Bit = 0; Bit < Width; Bit += 64)
+                  V |= llvm::APInt(Width, Random()).shl(Bit);
+                if (Trial < 3)
+                  V = Trial == 2 ? llvm::APInt::getAllOnes(Width)
+                                 : llvm::APInt(Width, Trial);
+              }
+              ASSERT_EQ(Reduced.eval(Values), F.oracle(Values));
+            }
+          }
+    EXPECT_GT(Rewritten, 0u) << Width;
+  }
 }
 
 TEST(SymMBAWidePairs, PartialBlockRefusalsKeepOriginalFactors) {

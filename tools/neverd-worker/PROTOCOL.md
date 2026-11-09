@@ -1029,7 +1029,10 @@ revision}`.  `base` is the page named; the client applies `delta`'s operations t
 order and takes `etag`, `project_id` and `revision` from the reply.  `["set", field,
 value]` and `["unset", field]` set or take away a field.  `["lines", field, count,
 [[line, text], ...]]` splits the field's text at line feeds into `count` lines and
-replaces those listed.  `["items", field, runs]` makes a list from the old one read once
+replaces those listed.  `["each", field, {key: value}]` sets each key to its value in
+every element of the field's list that has the key, and in no other; a document's
+identity, which each of its locals carries, changes so with its engine text.
+`["items", field, runs]` makes a list from the old one read once
 in order: `["same", n]` keeps the next n elements, `["shift", n, {key: amount}]` keeps
 them with those integer fields moved by amount, `["put", [values]]` replaces the next
 elements, `["skip", n]` drops n and `["new", [values]]` adds values.  An edit that moves
@@ -1052,10 +1055,11 @@ hits, misses}`. A look the store does not answer asks the engine. The owner keep
 what its reference scan found there too, and `background.scan_kept` says this
 session's index was finished from that.
 `metadata.listing_name_builds` counts how many times the listing has read its names
-again; a function's new name usually does not.  `metadata.named_view_comment_patches`
-and `metadata.named_view_name_patches` count the documents written from the one a view
-had with the image's comments, or functions' new names, taken into it, where those alone
-reached it since it was decorated.
+again; a function's new name usually does not.  `metadata.named_view_comment_patches`,
+`metadata.named_view_name_patches` and `metadata.named_view_data_name_patches` count the
+documents written from the one a view had with the image's comments, functions' new
+names, or data's new names, taken into it, where those alone reached it since it was
+decorated.
 
 Source pages with edit metadata carry `code_names`, half-open UTF-8 spans in
 the complete displayed document. An address target has `kind:"address"`,

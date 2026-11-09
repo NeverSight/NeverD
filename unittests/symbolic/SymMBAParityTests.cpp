@@ -9,6 +9,8 @@
 
 #include "neverd/symbolic/SymBitwise.h"
 
+#include <random>
+
 namespace {
 using namespace neverd::symbolic;
 
@@ -101,6 +103,58 @@ TEST(SymMBAParity, ExhaustsEverySmallKernelAndNearbyCoupledArm) {
           Values[I] = (K >> I) & 1;
         EXPECT_EQ(Plan.evalU64(Values), Table.at(K))
             << Packed << ": " << Coupled << ": " << K;
+      }
+    }
+  }
+}
+
+TEST(SymMBAParity, PackedCoefficientsKeepEveryCornerAndBitPlane) {
+  std::mt19937_64 Random(0x7c31aa);
+  for (unsigned Count : {1u, 2u, 3u, 4u, 5u, 6u, 7u}) {
+    const unsigned Entries = 1u << Count;
+    const unsigned Trials = Count <= 3 ? 1u << Entries : 64;
+    for (unsigned Trial = 0; Trial < Trials; ++Trial) {
+      SCOPED_TRACE(::testing::Message() << Count << ':' << Trial);
+      TruthTable Table = TruthTable::zero(Count);
+      for (unsigned K = 0; K < Entries; ++K) {
+        const bool Value = Count <= 3  ? (Trial >> K) & 1
+                           : Trial < 2 ? (K == Entries - 1) ^ bool(Trial)
+                                       : Random() & 1;
+        Table.setValue(K, Value);
+      }
+      uint32_t Support = 0;
+      for (unsigned J = 0; J < Count; ++J)
+        for (unsigned K = 0; K < Entries; ++K)
+          if (Table.at(K) != Table.at(K ^ (1u << J)))
+            Support |= 1u << J;
+      EXPECT_EQ(truthTableSupport(Table), Support);
+      SymContext Ctx;
+      auto Atoms = variables(Ctx, Count, 64);
+      BitwiseSynthesisLimits Limits;
+      Limits.MaxOptimalAtoms = 0;
+      Limits.MaxWork = Entries * Count;
+      auto Result = synthesizeBitwise(Ctx, Table, Atoms, Limits);
+      ASSERT_TRUE(Result);
+      SymEvalPlan Plan(Ctx, *Result);
+      for (unsigned K = 0; K < Entries; ++K)
+        EXPECT_EQ(Plan.evalU64With([&](uint32_t I) {
+          return K & (1u << I) ? UINT64_MAX : uint64_t(0);
+        }),
+                  Table.at(K) ? UINT64_MAX : uint64_t(0));
+      // Reconstruct each bit plane directly from the original table, rather
+      // than comparing with another expression produced by the same solver.
+      for (unsigned Sample = 0; Sample < 8; ++Sample) {
+        llvm::SmallVector<uint64_t, 8> Values;
+        for (unsigned I = 0; I < Count; ++I)
+          Values.push_back(Random());
+        uint64_t Expected = 0;
+        for (unsigned Bit = 0; Bit < 64; ++Bit) {
+          unsigned Pattern = 0;
+          for (unsigned I = 0; I < Count; ++I)
+            Pattern |= unsigned((Values[I] >> Bit) & 1) << I;
+          Expected |= uint64_t(Table.at(Pattern)) << Bit;
+        }
+        EXPECT_EQ(Plan.evalU64(Values), Expected);
       }
     }
   }

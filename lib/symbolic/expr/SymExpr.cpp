@@ -44,19 +44,6 @@ inline uint64_t mixHash(uint64_t H, uint64_t V) {
   return H;
 }
 
-/// Key an arbitrary-width literal by width and raw words so equal literals
-/// share one pool slot.
-std::string wideConstKey(const llvm::APInt &V) {
-  std::string Key;
-  Key.reserve(16 + V.getNumWords() * 20);
-  Key += std::to_string(V.getBitWidth());
-  for (unsigned I = 0, E = V.getNumWords(); I < E; ++I) {
-    Key += ':';
-    Key += std::to_string(V.getRawData()[I]);
-  }
-  return Key;
-}
-
 } // namespace
 
 const char *symOpName(SymOp Op) {
@@ -226,18 +213,24 @@ SymRef SymContext::mkConst(const llvm::APInt &Val) {
   uint32_t W = Val.getBitWidth();
   if (W <= 64)
     return intern(SymOp::Const, W, {}, Val.getZExtValue());
+  return internWideConst(Val);
+}
 
-  std::string Key = wideConstKey(Val);
-  auto It = WideConstByKey.find(Key);
+// Keep the arbitrary-width lookup and insertion frame off native literals.
+LLVM_ATTRIBUTE_NOINLINE
+SymRef SymContext::internWideConst(const llvm::APInt &Val) {
+  // APInt's key compares the width and every word. Lookups borrow the value;
+  // only a new literal needs owned storage, with no decimal serialization.
+  auto It = WideConstByValue.find(Val);
   uint32_t Slot;
-  if (It != WideConstByKey.end()) {
+  if (It != WideConstByValue.end()) {
     Slot = It->second;
   } else {
     Slot = static_cast<uint32_t>(WideConsts.size());
     WideConsts.push_back(Val);
-    WideConstByKey.emplace(std::move(Key), Slot);
+    WideConstByValue.try_emplace(Val, Slot);
   }
-  return intern(SymOp::Const, W, {}, Slot);
+  return intern(SymOp::Const, Val.getBitWidth(), {}, Slot);
 }
 
 SymRef SymContext::mkConst(uint32_t Width, uint64_t Val) {

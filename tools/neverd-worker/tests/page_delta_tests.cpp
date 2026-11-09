@@ -81,6 +81,44 @@ int main() {
         names[i][field] = names[i][field].get<std::size_t>() + 7;
   }
   roundTrip(plain, renamed, "rename", plain.dump().size() / 20);
+  // A value every element that has its key takes, as a document's identity in
+  // each of its locals, is set once, and the runs read the rest.
+  const auto identified = [](Json view, const std::string &identity) {
+    auto &names = view["code_names"];
+    for (std::size_t i = 0; i < names.size(); i += 2) {
+      names[i]["kind"] = "local";
+      names[i]["identity"] = identity;
+    }
+    return view;
+  };
+  const Json local = identified(plain, "0xaaa");
+  const Json respelled = identified(renamed, "0xbbb");
+  roundTrip(local, respelled, "identity", local.dump().size() / 20);
+  {
+    const auto delta = *pageDelta(local, respelled);
+    bool each = false;
+    for (const auto &operation : delta)
+      each |= operation[0] == "each" && operation[1] == "code_names" &&
+              operation[2] == Json({{"identity", "0xbbb"}});
+    check(each, "identity: a value every local takes is not set once");
+  }
+  // A value only some of the elements that have its key take is no such value.
+  {
+    Json some = respelled;
+    some["code_names"][4]["identity"] = "0xaaa";
+    roundTrip(local, some, "identity of some");
+    const auto delta = *pageDelta(local, some);
+    for (const auto &operation : delta)
+      check(operation[0] != "each", "identity of some: set in every element");
+  }
+  check(*applyPageDelta(
+            local, Json::array({Json::array(
+                       {"each", "code_names", {{"identity", "0xccc"}}})})) ==
+            identified(plain, "0xccc"),
+        "each: a value set where the key is not, or not set where it is");
+  check(!applyPageDelta(plain, Json::array({Json::array(
+                                   {"each", "text", {{"identity", "0x1"}}})})),
+        "each applied to a text");
   // Fields added and taken away, lists grown and cut, a different line count.
   Json other = plain;
   other["revision_note"] = "new";
@@ -162,5 +200,16 @@ int main() {
       check(applied && *applied == after.json(),
             read + ": applying the delta gives another page");
     }
+  for (const auto &[from, to] :
+       {std::pair<std::size_t, std::size_t>{0, 200}, {0, 3}, {4, 120}}) {
+    const auto before = window(local, from, to);
+    const auto after = window(respelled, from, to);
+    const Json made = pageDelta(before, after);
+    check(made == *pageDelta(before.json(), after.json()),
+          "identity: in place gives other operations than the pages");
+    const auto applied = applyPageDelta(before.json(), made);
+    check(applied && *applied == after.json(),
+          "identity: applying the delta gives another page");
+  }
   return 0;
 }

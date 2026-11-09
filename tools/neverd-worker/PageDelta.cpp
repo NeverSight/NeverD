@@ -14,6 +14,8 @@
 
 #include "PageDelta.h"
 
+#include "ResourceLimits.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <limits>
@@ -67,11 +69,38 @@ std::optional<std::int64_t> integer(const Json &value) {
   return std::nullopt;
 }
 
+/// What an "each" operation sets in every element of a list that has the key,
+/// before the list's runs are read: none where it sets nothing.
+const Json *eachValue(const Json *each, const std::string &key) {
+  if (!each)
+    return nullptr;
+  const auto value = each->find(key);
+  return value != each->end() ? &*value : nullptr;
+}
+
+/// Whether \p after is \p before with \p each's values set where it has their
+/// keys.
+bool sameAs(const Json &before, const Json &after, const Json *each) {
+  if (!each)
+    return before == after;
+  if (!before.is_object() || !after.is_object() ||
+      before.size() != after.size())
+    return before == after;
+  for (auto it = before.begin(); it != before.end(); ++it) {
+    const auto other = after.find(it.key());
+    const Json *set = eachValue(each, it.key());
+    if (other == after.end() || *other != (set ? *set : *it))
+      return false;
+  }
+  return true;
+}
+
 /// What \p after adds to each integer of \p before, by key in the objects'
-/// order, objects that differ in nothing else; empty where they do, or are the
-/// same.  The keys are \p before's.
+/// order, objects that differ in nothing else once \p each's values are set;
+/// empty where they do, or are the same.  The keys are \p before's.
 using Shift = std::vector<std::pair<std::string_view, std::int64_t>>;
-bool shiftOf(const Json &before, const Json &after, Shift &by) {
+bool shiftOf(const Json &before, const Json &after, Shift &by,
+             const Json *each = nullptr) {
   by.clear();
   if (!before.is_object() || !after.is_object() ||
       before.size() != after.size())
@@ -80,8 +109,11 @@ bool shiftOf(const Json &before, const Json &after, Shift &by) {
     const auto other = after.find(it.key());
     if (other == after.end())
       return false;
-    if (*other == *it)
+    const Json *set = eachValue(each, it.key());
+    if (*other == (set ? *set : *it))
       continue;
+    if (set)
+      return false;
     const auto from = integer(*it), to = integer(*other);
     if (!from || !to)
       return false;
@@ -99,9 +131,62 @@ Json shiftJson(const Shift &by) {
 
 using Items = std::vector<const Json *>;
 
+/// The text values an "each" operation sets in the list \p before to read as
+/// \p after, as many elements as it: each key that some element's text changes
+/// at, where every element that has the key has one value for it in \p after
+/// and none gains or loses it.  Nothing where no key is so.
+std::optional<Json> eachOf(const Items &before, const Items &after) {
+  if (before.size() != after.size())
+    return std::nullopt;
+  Json each = Json::object();
+  std::vector<std::string> refused;
+  const auto isRefused = [&](const std::string &key) {
+    return std::find(refused.begin(), refused.end(), key) != refused.end();
+  };
+  for (std::size_t at = 0; at < before.size(); ++at) {
+    const Json &old = *before[at], &now = *after[at];
+    if (!old.is_object() || !now.is_object() || old == now)
+      continue;
+    for (auto it = old.begin(); it != old.end(); ++it) {
+      const auto other = now.find(it.key());
+      if (other == now.end() || *other == *it || !it->is_string() ||
+          !other->is_string() || isRefused(it.key()))
+        continue;
+      if (const auto held = each.find(it.key()); held == each.end())
+        each[it.key()] = *other;
+      else if (*held != *other) {
+        each.erase(held);
+        refused.push_back(it.key());
+      }
+    }
+  }
+  if (each.empty())
+    return std::nullopt;
+  // Every element that has a key it sets reads that value after, and the
+  // others gain none.
+  for (std::size_t at = 0; at < before.size() && !each.empty(); ++at) {
+    const Json &old = *before[at], &now = *after[at];
+    for (auto it = each.begin(); it != each.end();) {
+      const bool had = old.is_object() && old.contains(it.key());
+      const auto other =
+          now.is_object() ? now.find(it.key()) : Json::const_iterator();
+      const bool has = now.is_object() && other != now.end();
+      if (had != has || (has && *other != *it))
+        it = each.erase(it);
+      else
+        ++it;
+    }
+  }
+  if (each.empty())
+    return std::nullopt;
+  return each;
+}
+
 /// The runs that make the list \p after from \p before, element by element,
-/// where fewer than half of \p after's elements are sent again.
-std::optional<Json> itemRuns(const Items &before, const Items &after) {
+/// once \p each's values are set where its elements have their keys, where
+/// fewer than half of \p after's elements are sent again.
+std::optional<Json> itemRuns(const Items &before, const Items &after,
+                             const Json *each = nullptr) {
   enum class Run { None, Same, Shift, Put };
   Json runs = Json::array();
   Run kind = Run::None;
@@ -123,13 +208,13 @@ std::optional<Json> itemRuns(const Items &before, const Items &after) {
   std::size_t at = 0;
   for (; at < before.size() && at < after.size(); ++at) {
     const auto &old = *before[at], &now = *after[at];
-    if (old == now) {
+    if (sameAs(old, now, each)) {
       if (kind != Run::Same) {
         flush();
         kind = Run::Same;
       }
       ++count;
-    } else if (shiftOf(old, now, next)) {
+    } else if (shiftOf(old, now, next, each)) {
       if (kind != Run::Shift || by != next) {
         flush();
         kind = Run::Shift;
@@ -157,6 +242,15 @@ std::optional<Json> itemRuns(const Items &before, const Items &after) {
   if (sent * 2 > after.size())
     return std::nullopt;
   return runs;
+}
+
+/// How many elements \p runs send again.
+std::size_t putCount(const Json &runs) {
+  std::size_t sent = 0;
+  for (const auto &run : runs)
+    if (run[0] == "put" || run[0] == "new")
+      sent += run[1].size();
+  return sent;
 }
 
 using Field = PageSource::Field;
@@ -311,12 +405,29 @@ Json pageDelta(const PageSource &before, const PageSource &after) {
         }
     if (old)
       if (const auto oldItems = itemsOf(*old), newItems = itemsOf(now);
-          oldItems && newItems)
-        if (auto runs = itemRuns(*oldItems, *newItems)) {
+          oldItems && newItems) {
+        auto runs = itemRuns(*oldItems, *newItems);
+        // Where the runs send many elements again, a value every element
+        // that has its key takes, as a document's identity in each of its
+        // locals, is set once and the runs read the rest.
+        if (!runs ||
+            putCount(*runs) >
+                ::neverd::limits::worker::kEnginePageDeltaPutsWithoutEach)
+          if (const auto each = eachOf(*oldItems, *newItems))
+            if (auto eachRuns = itemRuns(*oldItems, *newItems, &*each);
+                eachRuns && (!runs || putCount(*eachRuns) < putCount(*runs))) {
+              operations.push_back(Json::array({"each", now.name, *each}));
+              if (!(eachRuns->size() == 1 && (*eachRuns)[0][0] == "same"))
+                operations.push_back(
+                    Json::array({"items", now.name, std::move(*eachRuns)}));
+              continue;
+            }
+        if (runs) {
           operations.push_back(
               Json::array({"items", now.name, std::move(*runs)}));
           continue;
         }
+      }
     operations.push_back(Json::array({"set", now.name, materialized(now)}));
   }
   for (const auto &old : before.fields())
@@ -346,6 +457,18 @@ std::optional<Json> applyPageDelta(Json page, const Json &delta) {
     const auto at = page.find(field);
     if (at == page.end())
       return std::nullopt;
+    if (kind == "each" && operation.size() == 3 && at->is_array() &&
+        operation[2].is_object()) {
+      for (auto &item : *at) {
+        if (!item.is_object())
+          return std::nullopt;
+        for (auto value = operation[2].begin(); value != operation[2].end();
+             ++value)
+          if (const auto held = item.find(value.key()); held != item.end())
+            *held = *value;
+      }
+      continue;
+    }
     if (kind == "lines" && operation.size() == 4 && at->is_string() &&
         operation[2].is_number_unsigned() && operation[3].is_array()) {
       const auto old = splitLines(at->get_ref<const std::string &>());

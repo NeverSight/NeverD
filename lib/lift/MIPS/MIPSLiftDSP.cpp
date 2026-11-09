@@ -14,7 +14,7 @@
 namespace neverd {
 
 bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
-  if (!HasDSP || S.Width != 4 || Mode == InstructionMode::MicroMIPS)
+  if (!HasDSP || S.Width != 4 || isMIPSCompressedMode(Mode))
     return false;
   const auto Kind = mips::dspInstruction(Word);
   if (!Kind)
@@ -60,6 +60,12 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
 
   const auto Left = S.read(RS);
   const auto Right = S.read(RT);
+  const bool Subtract =
+      *Kind == mips::DSPInstruction::SubUnsignedBytes ||
+      *Kind == mips::DSPInstruction::SubSaturatedUnsignedBytes;
+  const bool Saturate =
+      *Kind == mips::DSPInstruction::AddSaturatedUnsignedBytes ||
+      *Kind == mips::DSPInstruction::SubSaturatedUnsignedBytes;
   NdVar Result = NdVar::cst(0, 4);
   NdVar Overflow = NdVar::cst(0, 1);
   for (unsigned Lane = 0; Lane != 4; ++Lane) {
@@ -68,15 +74,20 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
         Value = S.binary(NdOp::INT_RIGHT, Value, NdVar::cst(Lane * 8, 4));
       return S.binary(NdOp::INT_AND, Value, NdVar::cst(255, 4));
     };
-    const auto Sum = S.binary(NdOp::INT_ADD, Byte(Left), Byte(Right));
-    const auto Carry = S.binary(NdOp::INT_LESS, NdVar::cst(255, 4), Sum, 1);
-    Overflow = S.binary(NdOp::BOOL_OR, Overflow, Carry, 1);
+    const auto A = Byte(Left), B = Byte(Right);
+    const auto Arithmetic =
+        S.binary(Subtract ? NdOp::INT_SUB : NdOp::INT_ADD, A, B);
+    const auto Overflowed =
+        Subtract ? S.binary(NdOp::INT_LESS, A, B, 1)
+                 : S.binary(NdOp::INT_LESS, NdVar::cst(255, 4), Arithmetic, 1);
+    Overflow = S.binary(NdOp::BOOL_OR, Overflow, Overflowed, 1);
     if (!RD)
       continue;
-    auto Value = S.binary(NdOp::INT_AND, Sum, NdVar::cst(255, 4));
-    if (*Kind == mips::DSPInstruction::AddSaturatedUnsignedBytes) {
+    auto Value = S.binary(NdOp::INT_AND, Arithmetic, NdVar::cst(255, 4));
+    if (Saturate) {
       const auto Saturated = S.makeTemp(4);
-      S.emit(NdOp::SELECT, Saturated, {Carry, NdVar::cst(255, 4), Value});
+      S.emit(NdOp::SELECT, Saturated,
+             {Overflowed, NdVar::cst(Subtract ? 0 : 255, 4), Value});
       Value = Saturated;
     }
     if (Lane)

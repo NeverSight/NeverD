@@ -42,6 +42,7 @@ public:
   va_t directCallTarget(const cs_insn &Instruction) const;
   void setDSPEnabled(bool Enabled) { HasDSP = Enabled; }
   void setMSAEnabled(bool Enabled) { HasMSA = Enabled; }
+  void setMIPS16Enabled(bool Enabled) { HasMIPS16 = Enabled; }
 
 private:
   struct State : LiftStateBase {
@@ -65,15 +66,18 @@ private:
   struct Encoding {
     uint32_t Word;
     unsigned SlotBytes = 0;
+    bool Unconditional = false;
   };
   std::optional<Encoding> encoding(const cs_insn &Instruction) const;
   std::optional<Encoding> microEncoding(const cs_insn &Instruction) const;
+  std::optional<Encoding> mips16Encoding(const cs_insn &Instruction) const;
   LowDelaySlot liftControl(const cs_insn &Head, const cs_insn *Slot,
                            Encoding Code, std::vector<LowOp> &Ops) const;
   Arch Target;
   InstructionMode Mode;
   bool HasDSP = false;
   bool HasMSA = false;
+  bool HasMIPS16 = false;
 };
 
 } // namespace neverd

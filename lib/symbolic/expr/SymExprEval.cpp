@@ -20,8 +20,10 @@
 #include "llvm/Support/ErrorHandling.h"
 
 #include <algorithm>
+#include <bit>
 #include <cassert>
 #include <cstddef>
+#include <limits>
 #include <utility>
 
 namespace neverd::symbolic {
@@ -33,6 +35,75 @@ bool preservesLowBits(SymOp Op) {
          Op == SymOp::Or || Op == SymOp::Xor || Op == SymOp::Not;
 }
 
+// All prefix consumers share this demand propagation. An operation outside
+// the modular prefix algebra retains every bit of its original operands.
+template <typename Step, typename Visitor>
+llvm::SmallVector<unsigned, 64>
+visitRequiredPrefixes(const SymContext &Ctx, SymRef Root, uint32_t RootSlot,
+                      size_t NumSlots, llvm::MutableArrayRef<Step> Steps,
+                      llvm::ArrayRef<uint32_t> Args, Visitor Visit) {
+  llvm::SmallVector<unsigned, 64> Needed(NumSlots, 1);
+  Needed[RootSlot] = Ctx.width(Root);
+  for (auto &St : llvm::reverse(Steps)) {
+    const auto Demand = Needed[St.OutputSlot];
+    const auto Operands = Ctx.operands(St.Node);
+    unsigned Zeros = 0;
+    if (St.Op == SymOp::Mul && Ctx.isConst(Operands.front()))
+      Zeros = Ctx.constValue(Operands.front()).countr_zero();
+    Visit(St, Demand, Zeros);
+    for (size_t I = 0; I < Operands.size(); ++I) {
+      unsigned Bits = Ctx.width(Operands[I]);
+      if (preservesLowBits(St.Op)) {
+        Bits = Demand;
+        if (Zeros && !Ctx.isConst(Operands[I]))
+          Bits -= std::min(Bits - 1, Zeros);
+      }
+      auto &Required = Needed[Args[St.FirstArg + I]];
+      Required = std::max(Required, Bits);
+    }
+  }
+  return Needed;
+}
+
+// A scaled product can discard constant offsets in its factors. Account for
+// every use before replacing a neutral residue by its operand slot. Retain
+// all variable steps and scratch slots: callbacks and the public work count
+// still describe the original reachable DAG.
+template <typename Step>
+LLVM_ATTRIBUTE_NOINLINE size_t prepareNativeResidues(
+    const SymContext &Ctx, SymRef Root, uint32_t &RootSlot, size_t NumSlots,
+    llvm::MutableArrayRef<Step> Steps, llvm::MutableArrayRef<uint32_t> Args) {
+  const auto Needed =
+      visitRequiredPrefixes(Ctx, Root, RootSlot, NumSlots, Steps, Args,
+                            [](const Step &, unsigned, unsigned) {});
+  llvm::SmallVector<uint32_t, 64> Aliases;
+  Aliases.reserve(NumSlots);
+  for (size_t I = 0; I < NumSlots; ++I)
+    Aliases.push_back(I);
+  size_t Out = 0;
+  for (const auto &St : Steps) {
+    for (size_t I = 0; I < St.NumArgs; ++I)
+      Args[St.FirstArg + I] = Aliases[Args[St.FirstArg + I]];
+    if (St.NumArgs == 2 &&
+        (St.Op == SymOp::Add || St.Op == SymOp::Mul || St.Op == SymOp::And ||
+         St.Op == SymOp::Or || St.Op == SymOp::Xor) &&
+        Ctx.isConst(Ctx.operand(St.Node, 0))) {
+      const auto Mask = ~uint64_t(0) >> (64 - Needed[St.OutputSlot]);
+      const auto Low = Ctx.node(Ctx.operand(St.Node, 0)).Aux & Mask;
+      const bool Neutral = St.Op == SymOp::Mul   ? Low == 1
+                           : St.Op == SymOp::And ? Low == Mask
+                                                 : Low == 0;
+      if (Neutral) {
+        Aliases[St.OutputSlot] = Args[St.FirstArg + 1];
+        continue;
+      }
+    }
+    Steps[Out++] = St;
+  }
+  RootSlot = Aliases[RootSlot];
+  return Out;
+}
+
 // Run only for wide plans, after lowering has resolved every operand slot.
 // Keeping this pass out of the constructor also keeps its scratch storage and
 // register saves out of native plans. Step is SymEvalPlan's private step type.
@@ -41,33 +112,17 @@ LLVM_ATTRIBUTE_NOINLINE void
 prepareWidePrefixes(const SymContext &Ctx, SymRef Root, uint32_t RootSlot,
                     size_t NumSlots, llvm::MutableArrayRef<Step> Steps,
                     llvm::ArrayRef<uint32_t> ArgSlots) {
-  llvm::SmallVector<unsigned, 64> Needed(NumSlots, 1);
-  Needed[RootSlot] = Ctx.width(Root);
-  for (auto &St : llvm::reverse(Steps)) {
-    const auto Demand = Needed[St.OutputSlot];
-    const bool Prefix = preservesLowBits(St.Op);
-    if (Prefix && Demand <= 64)
-      St.Width = Demand;
-    const auto Operands = Ctx.operands(St.Node);
-    unsigned Zeros = 0;
-    if (St.Op == SymOp::Mul && Ctx.isConst(Operands.front()))
-      Zeros = Ctx.constValue(Operands.front()).countr_zero();
-    if (Zeros && Demand > 64) {
-      const unsigned FactorBits = Demand - std::min(Demand - 1, Zeros);
-      if (FactorBits <= 64)
-        St.Aux = ~uint64_t(0) >> (64 - FactorBits);
-    }
-    for (size_t I = 0; I < Operands.size(); ++I) {
-      unsigned Bits = Ctx.width(Operands[I]);
-      if (Prefix) {
-        Bits = Demand;
-        if (Zeros && !Ctx.isConst(Operands[I]))
-          Bits -= std::min(Bits - 1, Zeros);
-      }
-      auto &Required = Needed[ArgSlots[St.FirstArg + I]];
-      Required = std::max(Required, Bits);
-    }
-  }
+  visitRequiredPrefixes(Ctx, Root, RootSlot, NumSlots, Steps, ArgSlots,
+                        [](Step &St, unsigned Demand, unsigned Zeros) {
+                          if (preservesLowBits(St.Op) && Demand <= 64)
+                            St.Width = Demand;
+                          if (Zeros && Demand > 64) {
+                            const unsigned FactorBits =
+                                Demand - std::min(Demand - 1, Zeros);
+                            if (FactorBits <= 64)
+                              St.Aux = ~uint64_t(0) >> (64 - FactorBits);
+                          }
+                        });
 }
 
 } // namespace
@@ -185,11 +240,50 @@ SymEvalPlan::SymEvalPlan(const SymContext &Ctx, SymRef Root)
     for (const auto &[Slot, Node] : ConstantSlots)
       ScratchU64[Slot] = Ctx.node(Node).Aux;
   } else {
+    NativeState = NativePreparation::Done;
     // A scaled wide product observes only a prefix of each remaining factor.
     // Other operators retain complete operands: a high bit can affect even
     // the lowest result bit of a comparison, division or right shift.
     prepareWidePrefixes(Ctx, Root, RootSlot, NextSlot,
                         llvm::MutableArrayRef<Step>(Steps), ArgSlots);
+  }
+}
+
+LLVM_ATTRIBUTE_NOINLINE void SymEvalPlan::prepareNativeReuse() {
+  // One-shot callers need no extra DAG scan. Prepare residue aliases only
+  // once reuse has been observed, before either evaluator reads its inputs.
+  if (NativeState == NativePreparation::FirstEvaluation) {
+    NativeState = NativePreparation::AwaitReuse;
+    return;
+  }
+  NativeState = NativePreparation::Done;
+  constexpr unsigned NativeBits = std::numeric_limits<uint64_t>::digits;
+  unsigned AvailableZeros = 0, NeededZeros = NativeBits + 1;
+  for (const auto &St : llvm::ArrayRef<Step>(Steps).drop_front(Vars.size())) {
+    if (St.NumArgs < 2 || !Ctx.isConst(Ctx.operand(St.Node, 0)))
+      continue;
+    const auto Literal = Ctx.node(Ctx.operand(St.Node, 0)).Aux;
+    if (St.Op == SymOp::Mul)
+      AvailableZeros = std::min(
+          NativeBits, AvailableZeros + unsigned(std::countr_zero(Literal)));
+    if (St.NumArgs == 2 && preservesLowBits(St.Op)) {
+      const auto Difference = St.Op == SymOp::Mul   ? Literal - 1
+                              : St.Op == SymOp::And ? ~Literal
+                                                    : Literal;
+      const auto NeutralBits =
+          std::min(St.Width, unsigned(std::countr_zero(Difference)));
+      if (NeutralBits)
+        NeededZeros = std::min(NeededZeros, St.Width - NeutralBits);
+    }
+    // Even the sum of every scale's trailing zeros is only an upper bound
+    // on any one path. If it cannot hide a literal, no alias is possible.
+    // A possible alias still needs the complete, shared-use demand analysis.
+    if (AvailableZeros >= NeededZeros) {
+      Steps.resize(prepareNativeResidues(Ctx, Root, RootSlot, ScratchU64.size(),
+                                         llvm::MutableArrayRef<Step>(Steps),
+                                         ArgSlots));
+      return;
+    }
   }
 }
 
@@ -216,6 +310,8 @@ uint64_t evalU64ViaAP(const SymContext &Ctx, SymRef Node,
 uint64_t
 SymEvalPlan::evalU64With(llvm::function_ref<uint64_t(uint32_t)> Lookup) {
   assert(FitsU64 && "evalU64 requires every node to fit in 64 bits");
+  if (NativeState != NativePreparation::Done)
+    prepareNativeReuse();
 
   auto mask = [](uint64_t V, uint32_t W) -> uint64_t {
     // fitsU64 already establishes 1..64 bits. Shifting ones right also
@@ -254,7 +350,21 @@ SymEvalPlan::evalU64With(llvm::function_ref<uint64_t(uint32_t)> Lookup) {
         // All operand steps, including input lookups, have already run.
         if (!(Res & St.Aux))
           break;
-        for (uint32_t K = 2; K < St.NumArgs; ++K)
+        uint32_t K = 2;
+        if (St.NumArgs - K >= 4) {
+          // Independent chains avoid serial multiplication latency on long
+          // products. Unsigned wraparound preserves every low result bit.
+          uint64_t B = 1, C = 1, D = 1;
+          do {
+            Res *= S[A[K]];
+            B *= S[A[K + 1]];
+            C *= S[A[K + 2]];
+            D *= S[A[K + 3]];
+            K += 4;
+          } while (St.NumArgs - K >= 4);
+          Res *= (B * C) * D;
+        }
+        for (; K < St.NumArgs; ++K)
           Res *= S[A[K]];
       }
       break;
@@ -504,6 +614,8 @@ void evalNodeAPImpl(const SymContext &Ctx, SymRef R, size_t NumArgs,
 
 llvm::APInt SymEvalPlan::evalWith(
     llvm::function_ref<const llvm::APInt *(uint32_t)> Lookup) {
+  if (NativeState != NativePreparation::Done)
+    prepareNativeReuse();
   // Native-width measurements never use APInt scratch. Allocate it only
   // when this entry point is called, retaining it for subsequent evaluations.
   if (ScratchAP.empty()) {

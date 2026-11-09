@@ -741,9 +741,7 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
     mips::applyDSPSourceAttributes(*LLVMFunc);
   if (Img && isMIPS(TargetArch))
     if (const auto Mode = Img->instructionModeAt(Func.Entry))
-      if (const char *Attribute = mips::instructionModeLLVMAttribute(*Mode);
-          *Attribute)
-        LLVMFunc->addFnAttr(Attribute);
+      mips::applyInstructionModeLLVMAttributes(*LLVMFunc, *Mode);
   // The physical source entry is independent of native EH admission. Assign
   // its checked stack convention before any earlier caller sees the symbol.
   if (TargetArch == Arch::X86 && TargetFormat == BinaryFormat::COFF &&
@@ -1520,6 +1518,11 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   for (const auto &[Entry, Declaration] : OmittedDeclarations)
     declareFunc(*Declaration);
   initializeCxxContinuationPlans(Funcs, BodyMask);
+  SEHCallbackBodies.clear();
+  SEHCallbackReadsOnlyArguments.clear();
+  if (AnalysisRecoveryForSource)
+    for (const MedFunc &Func : Funcs)
+      SEHCallbackBodies.emplace(Func.Entry, &Func);
 
   DirectCallArgumentCounts.clear();
   for (const auto &Func : Funcs)
@@ -1623,6 +1626,7 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   }
   ActiveCxxContinuationPlan.reset();
   finalizeCxxContinuationPlans();
+  SEHCallbackBodies.clear();
 
   // Personality bodies are renamed before body emission so an eligible native
   // lowering can reserve the canonical ABI declaration. Eligibility is only

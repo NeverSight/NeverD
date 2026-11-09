@@ -767,11 +767,18 @@ inline constexpr int
         256;
 
 // lib/ir/low/jumptable/JumpTableResolverSlice.cpp
-// A builder keeps its last complete resolver graph, one metered and one
-// unmetered, for later queries on the same CFG.  A reused graph pays its whole
-// cold charge, so these bounds trade only memory and comparison time.  A
+// A builder keeps its most recent complete resolver graphs, metered and
+// unmetered apart, for later queries on the same CFG.  A reused graph pays its
+// whole cold charge, so these bounds trade only memory and comparison time.  A
 // function beyond them rebuilds its graph for every query; capstone's largest
-// decoder functions retain 17,888 instructions in 43 MB.
+// decoder functions retain 17,888 instructions in 43 MB.  Mask and guard proofs
+// alternate between a candidate's own targets and a trial target set; a second
+// graph keeps the other one, and its value results, instead of rebuilding it.
+// The retained graphs share one kJumpTableResolverSliceCanRetainRemaining
+// allowance, so a builder's worst case is unchanged and two graphs too large
+// to fit it together keep one slot (capstone whole-image CPU -4.4%, peak RSS
+// unchanged).
+inline constexpr size_t kJumpTableResolverSliceRetainedGraphs = 2;
 inline constexpr int kJumpTableResolverSliceCanRetainInputSizeLimit = 32768;
 inline constexpr int kJumpTableResolverSliceCanRetainBBlockStartsSizeLimit =
     8192;

@@ -350,6 +350,172 @@ void numberFormats() {
     }
   }
 }
+
+// A data's new name written into a view decorate wrote reads as decorate
+// writes it from the engine text respell gives, or is refused with the view as
+// it was: the text, its names and spans, its locals' identity, its rows'
+// anchors and the data's variable.
+const std::string DataBody = "int target(int value) {\n"
+                             "  int local = value + counter;\n"
+                             "  counter = local * 3 + 0x10;\n"
+                             "  pair.counter = 1;\n"
+                             "  return local + 24;\n"
+                             "}\n";
+Json dataPage(const std::string &body = DataBody) {
+  const std::string prelude = "/* neverd.image: 0x2000 */\nint counter;\n";
+  auto view = page(prelude + body);
+  view["prelude"]["end_byte"] = prelude.size();
+  view["rows"][4]["addresses"] = Json::array({"0x1010"});
+  return view;
+}
+CodeEdits::ImageFacts dataFacts(const std::string &name) {
+  CodeEdits::ImageFacts image;
+  image.read(name.empty() ? Json::array()
+                          : Json::array({{{"addr", "0x2000"},
+                                          {"original", "counter"},
+                                          {"renamed", name}}}),
+             Json::array({{{"addr", "0x1010"}, {"text", "kept note"}}}));
+  return image;
+}
+void decorateData(Json &view, const Json &row, const std::string &name) {
+  CodeEdits::decorate(view, row, 0x1000, "c", dataFacts(name), {}, resolve);
+}
+Json dataRenamed(const std::string &name) {
+  return Json::array({{{"addr", "0x2000"}, {"name", name}}});
+}
+/// \p engine decorated under \p row with the data called \p before, then
+/// called \p after: whether its new name was taken.
+bool takesDataName(const Json &engine, const Json &row,
+                   const std::string &before, const std::string &after) {
+  auto view = engine;
+  decorateData(view, row, before);
+  auto patched = view;
+  const auto taken = CodeEdits::takeDataNames(
+      patched, CodeEdits::engineText(engine), dataRenamed(after), row, "c");
+  if (!taken) {
+    check(patched == view, "A refused data name changed the view");
+    return false;
+  }
+  auto respelled = engine;
+  check(CodeEdits::respell(respelled, dataRenamed(after)),
+        "A data name was taken where respell refuses it");
+  check(taken->text == respelled.at("text").get_ref<const std::string &>() &&
+            taken->bodyStart ==
+                respelled.at("prelude").at("end_byte").get<std::size_t>(),
+        "A data name taken gives another engine text than respell");
+  auto expected = respelled;
+  decorateData(expected, row, after);
+  check(patched == expected,
+        "A data name taken reads otherwise than decorated afresh");
+  return true;
+}
+void dataNames() {
+  const auto engine = dataPage();
+  check(takesDataName(engine, nullptr, "", "total"),
+        "A data's new name was not taken");
+  {
+    auto view = engine;
+    decorateData(view, nullptr, "");
+    CodeEdits::takeDataNames(view, CodeEdits::engineText(engine),
+                             dataRenamed("total"), nullptr, "c");
+    const auto &text = view.at("text").get_ref<const std::string &>();
+    check(text.find("int total;") != std::string::npos &&
+              text.find("value + total;") != std::string::npos &&
+              text.find("pair.counter = 1;") != std::string::npos,
+          "A data's new name is not spelled where the data is read, or a "
+          "member took it");
+  }
+  // A local's name stays while the same locals are declared in the same
+  // order, and goes stale where the identity alone kept it.
+  auto decorated = engine;
+  decorateData(decorated, nullptr, "");
+  Json rename = {{"address", "0x1000"},
+                 {"representation", "c"},
+                 {"kind", "name"},
+                 {"original", "local"},
+                 {"name", "result"},
+                 {"identity", target(decorated, "local").at("identity")},
+                 {"shape", decorated.at("code_shape")}};
+  const auto shaped = CodeEdits::change(nullptr, rename);
+  check(takesDataName(engine, shaped, "", "total"),
+        "A data's new name was not taken beside a local's name");
+  rename.erase("shape");
+  check(!takesDataName(engine, CodeEdits::change(nullptr, rename), "", "total"),
+        "A data's new name was taken where the locals' names go stale");
+  // A number's base or a note anchored on a line the name changes reads it
+  // otherwise; on another line it stays.
+  const auto anchored = [&](const char *kind, std::size_t line) {
+    const auto &text = engine.at("text").get_ref<const std::string &>();
+    std::size_t begin = 0;
+    for (std::size_t at = 0; at < line; ++at)
+      begin = text.find('\n', begin) + 1;
+    Json edit = {
+        {"address", "0x1000"},
+        {"representation", "c"},
+        {"kind", kind},
+        {"line", line},
+        {"anchor", text.substr(begin, text.find('\n', begin) - begin)}};
+    if (std::string_view(kind) == "number") {
+      edit["index"] = 0;
+      edit["radix"] = "hex";
+    } else
+      edit["text"] = "a note";
+    return CodeEdits::change(nullptr, edit);
+  };
+  check(takesDataName(engine, anchored("number", 6), "", "total") &&
+            takesDataName(engine, anchored("comment", 6), "", "total"),
+        "A data's new name was not taken beside an edit of another line");
+  check(!takesDataName(engine, anchored("number", 4), "", "total") &&
+            !takesDataName(engine, anchored("comment", 3), "", "total"),
+        "A data's new name was taken over an edit anchored on its line");
+  // A name the text spells already, one another variable has, and one an
+  // identifier symbol spells, may each mean something else.
+  check(!takesDataName(engine, nullptr, "", "value"),
+        "A data took a name the text spells");
+  auto bound = engine;
+  bound["source_variables"] = Json::array({{{"name", "counter"},
+                                            {"address", "0x2000"},
+                                            {"id", "global:8192"},
+                                            {"ambiguous", false},
+                                            {"parameter", false}}});
+  check(takesDataName(bound, nullptr, "", "total"),
+        "A data's new name was not taken by its variable");
+  auto shared = bound;
+  shared["source_variables"].push_back({{"name", "total"},
+                                        {"address", "0x3000"},
+                                        {"id", "global:12288"},
+                                        {"ambiguous", false},
+                                        {"parameter", false}});
+  check(!takesDataName(shared, nullptr, "", "total"),
+        "A data took a name another variable has");
+  auto symbol = engine;
+  symbol["identifier_symbols"] = Json::array(
+      {{{"identifier", "total"}, {"symbol", "_total"}, {"address", "0x3000"}}});
+  check(!takesDataName(symbol, nullptr, "", "total"),
+        "A data took a name an identifier symbol spells");
+  // Its name again, from the engine text the first gave.
+  {
+    auto view = engine;
+    decorateData(view, nullptr, "");
+    const auto first =
+        CodeEdits::takeDataNames(view, CodeEdits::engineText(engine),
+                                 dataRenamed("total"), nullptr, "c");
+    check(first.has_value(), "A data's new name was not taken");
+    const auto second = CodeEdits::takeDataNames(
+        view, *first, dataRenamed("sum"), nullptr, "c");
+    auto respelled = engine;
+    check(CodeEdits::respell(respelled, dataRenamed("total")) &&
+              CodeEdits::respell(respelled, dataRenamed("sum")),
+          "Respell refused a data's names");
+    auto expected = respelled;
+    decorateData(expected, nullptr, "sum");
+    check(second &&
+              second->text ==
+                  respelled.at("text").get_ref<const std::string &>() &&
+              view == expected,
+          "A data's second name reads otherwise than decorated afresh");
+  }
+}
 } // namespace
 
 int main() {
@@ -357,6 +523,7 @@ int main() {
   manySourceNames();
   integerLiterals();
   numberFormats();
+  dataNames();
   const std::string source =
       "extern int32_t global_data; /* 0x2000 */\n"
       "int32_t callee(int32_t);\n"

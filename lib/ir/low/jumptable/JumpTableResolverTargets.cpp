@@ -24,6 +24,7 @@
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/loader/ELF/MIPSCodeMode.h"
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -47,8 +48,7 @@ namespace neverd {
 uint32_t CFGBuilder::getInsnAlignment() const {
   if (!CurrentImg)
     return 1;
-  if (CurrentImg->Mode == InstructionMode::MixedMIPS ||
-      CurrentImg->Mode == InstructionMode::MicroMIPS)
+  if (hasCompressedMIPSCode(CurrentImg->Mode))
     return 2;
   uint32_t Align = getTargetRegInfo(CurrentImg->Arch).MinInsnAlign;
   return Align ? Align : 1;
@@ -237,20 +237,10 @@ std::optional<va_t> decodeTableEntry(const uint8_t *P, uint16_t EntrySize,
 
 std::optional<va_t> canonicalizeAbsoluteTableCodeTarget(const BinaryImage &Img,
                                                         va_t RawTarget) {
-  if (Img.Mode == InstructionMode::MixedMIPS ||
-      Img.Mode == InstructionMode::MicroMIPS) {
-    auto Target =
-        canonicalizeLowControlTarget(RawTarget, InstructionMode::MicroMIPS,
-                                     LowInstructionTargetMode::FromTargetBit0);
-    if (!Target) {
-      llvm::consumeError(Target.takeError());
-      return std::nullopt;
-    }
+  if (hasCompressedMIPSCode(Img.Mode)) {
     // This VA-only table result has no incoming-mode carrier. Require local
     // evidence rather than dropping the raw pointer's selected mode.
-    if (Img.instructionModeAt(Target->Address) != Target->Mode)
-      return std::nullopt;
-    return Target->Address;
+    return mips::serializedCodeTarget(Img, RawTarget);
   }
   if (Img.Arch != Arch::ARM)
     return RawTarget;

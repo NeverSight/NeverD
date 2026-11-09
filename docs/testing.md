@@ -1218,6 +1218,14 @@ normal exit; `LLVMCFinallyReturnInsideTheTrySkipsTheCleanup` and
 `LLVMCFinallyRangeLaidOutPastItsEndUsesTheExitFlag` move a range that returns
 or leaves its layout to the block form, and
 `LLVMCFinallyJumpPastItsEndMarkerIsRefused` refuses a jump no form can render.
+`COFFExceptionIR.SourceViewCallsAnAArch64CallbackOfItsArguments` lowers an
+AArch64 filter and finally scope for LLVM C, calling the finally callback with
+the flag at the width it reads; `SourceViewKeepsAnAArch64CallbackOfTheParentsRegisters`
+leaves a parent whose callback reads the parent's x19 without pads, and
+`SourceViewCallsAnX64FilterOfOneArgument` calls a one-parameter x64 filter in
+that view only, and `SourceViewKeepsAFilterThatReturnsNoValue` keeps a filter
+whose lifted body returns no value out. `COFFExceptionIR.LLVMCAnalysisOnlySEHInventsNoCatchAll` checks
+that SEH no form lowers prints no `__try` and no catch-all.
 `COFFExceptionIR.NativeSEHRangeMarkersFollowTheBlockLayout` (in
 `NeverDLiftTests`) frees blocks in a shuffled order before it lowers a guarded
 range with four returns, so the block pointers stop following the layout; the
@@ -3951,6 +3959,11 @@ overshifts and remainder by zero preserve the normalized scratch-slot invariant.
 `NativeLiteralOverloadsKeepEveryWidthAndWordBoundary` checks literal identity,
 constant-only plans and unchanged step counts at every width from 1 through
 257 bits. Constant plans must not request variable values.
+`WideLiteralsKeepEveryBitAndWidthAcrossPoolGrowthAndCopies` distinguishes zero,
+all-ones and every single-bit position at widths from 65 through 1,025 bits,
+including partial high limbs. Reusing the caller's value buffer, growing both
+intern tables, copying/moving contexts and destroying the original owner
+preserve every literal's complete identity.
 `SharedRootSubstitutionKeepsSimultaneousReplacements` covers shared descendants,
 repeated roots, and overlapping replacement keys at native and wide widths.
 Independent arithmetic checks that replacement values are not substituted again.
@@ -3997,6 +4010,39 @@ nonlinear neighbors through all six source routes at O0/O2.
 at 8/64/65/128 bits against independent complete-word multiplication. The
 non-native cases must finish below 60,000 work units with output cost at most
 286, protecting dense reconstruction headroom without increasing its budget.
+`SharedLiteralPrefixesFinishAComplementedDegree256` keeps the default
+verification samples and the 65,536-unit request budget for a parsed degree-256
+product. Its 8/16/32/64-bit regressions must finish with a short result;
+independent full-width products through 257 bits also check high limbs, carry
+boundaries and preservation of the source expression. A single even-offset
+perturbation leaves odd multiplicities and checks that unequal factors retain
+their exact residual contribution. The projected-complement worker fixture
+checks the common CLI and GUI source routes against the original machine-code
+product at both C optimization levels.
+`MaskedProductsObserveOnlyTheRequestedLiteralWindow` checks that discarded high
+mask bits do not force wider inner-product proofs. Six- through eight-bit windows
+must finish within the normal budget, while independent full-width products and
+an unscaled query in the same context retain every observable high bit. The
+masked-window worker fixture exercises the same boundary in emitted source.
+The `masked-product-window` benchmark family (`--count 36`) retains degree-16–64
+products, complemented inputs, one-factor parity changes and a third observed
+bit from the inner nonlinear product. Its eight-bit words also keep the high
+mask bit when the outer coefficient no longer discards it.
+`OddCoefficientRecoveryPreservesEveryWord` restores hidden affine inputs with
+odd coefficients, including one, minus one and high limbs, against independent
+full-width arithmetic at 1–257 bits. Native associative evaluation also covers
+long products and multiplication-chain boundaries against the APInt oracle.
+`WideFrontiersRetainIndependentProductInputs` checks affine recovery across
+33- and 65-input frontiers together with an unchanged nonlinear product.
+Independent full-word arithmetic covers 3–257 bits, odd and arbitrary factors,
+and exhausted, partial and complete work budgets.
+`TransferredTermsCombineWithSharedAffineTails` retains coefficient addition
+and cancellation when a cached shared tail and a transferred terminal reach
+the same base, including multiword values.
+`OpaqueInteriorsDoNotMintUnusedInputs` checks that a deep hidden word does not
+create unused abstract inputs, while preserving a caller variable whose name
+matches the placeholder pool. Its restoration is compared with independent
+3–257-bit arithmetic, including zero divisors.
 `PreparedParityPrefixesKeepTheirProductAndContext` checks that a completed
 prefix reduces the next reader's work at 8/64/257 bits, without changing its
 values. A different product, the same handle in another context, zero scratch
@@ -4010,10 +4056,19 @@ supports 65/128/257-bit words for SDK and CLI diagnostic runs.
 factor runs around power-of-two boundaries at 1–257 bits, both full and scaled
 products. Independent complete-word multiplication and high-bit near misses
 check equality and retained input models.
-`SymMBA.DenseCoversKeepEveryCornerAndWholeWord` exhausts four-, six- and
-eight-input cover tables, including mixed literal polarities and an isolated
-negative corner. Independent bit-plane evaluation checks random complete words
-through 257 bits; zero work must refuse without constructing a new node.
+`SymMBA.DenseCoversKeepEveryCornerAndWholeWord` exhausts four- through
+eight-input cover tables, including mixed literal polarities, an isolated
+negative corner and opposite missing corners. Independent bit-plane evaluation
+checks random complete words through 257 bits; zero work must refuse without
+constructing a new node.
+`SymMBAParity.PackedCoefficientsKeepEveryCornerAndBitPlane` exhausts every
+function through three inputs, then checks dense, sparse and random tables
+through seven inputs across the packed-storage boundary. Optimal recipes are
+disabled; independent truth-table lookups verify every corner and random
+64-bit planes under the original synthesis work allowance.
+`SymMBA.SingleMissingCornersKeepCompleteWordsAndWorkAdmission` checks every
+excluded corner through seven inputs, independent 8/64/257-bit words, the
+excluded assignment and its neighbor, and exact/one-short cover allowances.
 Paired-product regressions cover degree-64–128 mixed carry frontiers with
 independent 8–257-bit arithmetic oracles. A separate 32-factor fixture retains
 an input-dependent highest-bit correction, exhausts its three relevant low
@@ -4031,6 +4086,9 @@ also require independent full-width Z3 proofs. Fused sum/carry decisions must
 finish both degree-64 carry products at the same benchmark allowance, with
 lower output costs. Exhausting all 65,536 low-byte input pairs for each product
 checks the resulting carries independently of the decision implementation.
+`SymMBAResiduePolynomialCache.ColumnSumsKeepComplementedCarries` checks final-column
+parity and full-adder results with independent products through 257 bits,
+complemented factors, and exact/one-short work and storage allowances.
 Single- and two-group cofactor partitions also avoid redundant maps and sorts.
 A degree-24 fixture must finish within the shared work budget; exhaustive
 eight-bit supports and independent 8–257-bit arithmetic oracles retain
@@ -4129,6 +4187,20 @@ reconstruction, casts, shifted constant tables with overshifts and opaque
 division inputs. Zero words must preserve their original width. Attempt-cache
 tests cover context isolation, storage refusal and reuse under larger scratch
 allowances when storage did not limit the preceding search.
+`SymMBAResiduePolynomialCache.SingleBitArithmeticKeepsCompleteWords` exhausts
+the three input parities with independent 8/64/257-bit arithmetic, including
+mixed addition and multiplication, exact/one-short work and scratch storage.
+`ExactAndShortResourcesKeepCompleteWords` also checks shared decision-page
+views under exact/short scratch at 8/64/257 bits with independent arithmetic.
+`PartialPeriodsKeepUnpairedFullWords` checks sparse and dense
+partial periods at 8/64/257 bits, reverse construction, complements and
+single-factor perturbations against an independent APInt product. It requires
+rewrites at each width and forbids cost growth, including retained originals
+when a partial proof cannot produce a smaller expression.
+`NarrowReadsKeepDistinctOriginalInputs` covers distinct opaque shifts whose
+sources become visible at lower precision, with both ordinary and large
+original node indices. Independent 8/64/257-bit products check the complete
+word after narrowing exposes inputs outside the initial admission list.
 Generated-reading regressions require the deep walk to simplify an original
 opaque division's numerator and propagate it through the emitted proof.
 Mixed quartic and degree-24 residuals must also leave work for the surrounding
@@ -10286,6 +10358,16 @@ isolation.
 
 ## Modular MBA simplification
 
+Local MBA research can run disposable producers with
+`python3 tools/neverd-bench/mba_attempt.py --directory <owned-attempt-root> -- <command>`.
+The runner retains current and previous evidence, removes scratch after success,
+failure or normal interruption, and recovers abandoned scratch on the next start.
+An inherited POSIX lease prevents cleanup while the producer still runs. Reusable
+SDK/build directories, frozen corpora and promised historical recovery archives
+remain outside this owned root. `test_mba_attempt.py` exercises eight small rounds,
+normal interruption, killed-parent recovery, live-reader exclusion and preservation
+of unowned input and interrupted slot setup; it creates no real SDK copies.
+
 `SymMBAObservedWindow.Reciprocal*` and
 `QuotientProductsRecoverOnlyTheirOwnRemainder` (in
 `NeverDSymMBAObservedWindowTests`) check exact reciprocal division, its
@@ -10383,6 +10465,13 @@ all-ones and high-bit assignments against independent arithmetic.
 `EvaluationPlansKeepInterleavedConstantSlots` alternates native and wide
 evaluation over interleaved literal and input slots, checks missing inputs,
 and retains the original DAG node count used by budget consumers.
+`NativeResiduesKeepSharedFullWidthUses` compares scaled literal-wrapped factors
+against independent APInt arithmetic at 8/16/32/64 bits. Shared right shifts,
+comparisons and division (including zero divisors) retain complete values.
+Alternating native and AP evaluation checks the first-use/reuse transition,
+every input callback and the unchanged work count after preparation.
+`NativeArithmeticKeepsMixedWidthConsumersExact` checks native arithmetic and
+its wide zero-extended consumers at every native bit width.
 `BalancedCarryColumnsFinishRotatedProducts` checks degree-64 products whose
 rotated construction order previously exhausted the shared work budget.
 `InterruptedCarryColumnsRetainCompleteValues` checks six short allowances
@@ -10743,6 +10832,11 @@ and remaining budgets at every small-fixture budget boundary. Equal-size
 instruction, edge, root and ownership changes must replace the graph; rolled
 back and temporary override payloads cannot leave borrowed pointers behind.
 Resource failure and value-analysis incompleteness remain distinct.
+`ResolverGraphCache.KeepsTheTwoMostRecentlyUsedGraphs` alternates a
+candidate's own and trial targets: returning to either reuses its graph, the
+older graph matches a cold builder at every budget boundary, a scope's graph
+becomes the most recent, a third target set evicts the least recently used
+graph, and a changed instruction invalidates both.
 `ResolverPointLookup.*` checks exact instruction coordinates across cache
 collisions, missing points, high address bits and distinct operation sequences.
 A small colliding working set, including an absent point, must stop repeating
@@ -22737,7 +22831,7 @@ effects survive both source routes without invented source arguments. Return
 identity, standalone conversion, source shards and generated helper protection
 have separate regressions.
 `unittests/lift/mips/dsp-roundtrip.py` accepts the same explicit `--neverd`,
-`--clang`, `--ld` and `--output` arguments as the ordinary runner. Its nine
+`--clang`, `--ld` and `--output` arguments as the ordinary runner. Its twelve
 owned `dsp.S` leaves check scalar results and DSPControl after returning, in
 both byte orders and both C routes at `-O0` and `-O2`, with external `-mdsp`
 enabled. It uses the pinned 74Kf model with
@@ -22747,13 +22841,14 @@ expectation. The managed artifact lifecycle retires each generated object and
 executable after its comparisons.
 
 `MIPSMSATests` covers scalar word transfers across all vector registers,
-B/H/W/D carry and borrow boundaries, full-container logical operations and
+B/H/W/D carry and borrow boundaries, equality and signed/unsigned comparison
+masks, full-container logical operations and
 aliasing, independent byte-wise expectations, missing state, decoder reuse and
 P5600 reference execution. Loader cases check r5/MSA/CPR128/FP64 evidence;
 pipeline cases check both source routes and unchanged refusals with/without an
-Image. The owned MSA source runner recompiles eighteen scalar/memory leaves in both
-byte orders at O0/O2 through HighC and LLVMC. It checks each output byte and the
-preserved F20/F22/.../F30 low64 values, maps original/generated ELF separately,
+Image. The owned MSA source runner recompiles thirty-eight scalar/memory leaves
+in both byte orders at O0/O2 through HighC and LLVMC. It checks each output byte
+and the preserved F20/F22/.../F30 low64 values, maps original/generated ELF separately,
 and retires scratch on success and failure:
 
 ```bash
@@ -22769,6 +22864,34 @@ O0/O2, and compares execution with an arbitrary-precision integer oracle.
 Storage-only 128-bit locals and address-taken external declarations receive
 separate target syntax checks; those four checks do not claim linked execution.
 
+### MIPS16 source qualification
+
+`MIPS16Integer`, `MIPS16Flow`, `MIPS16Loader`, `MIPS16SDK` and `MIPS16Pipeline`
+cover unsigned/signed immediate boundaries, EXTEND/truncation, compact register
+fields, strict unsupported forms, local ISA evidence, physical pagination,
+two-byte slots, direct/indirect target modes and image-free return proofs.
+The literal scalar reference runs on pinned Unicorn's 24Kf model.
+`mips16-roundtrip.py` recompiles seven scalar/control leaves through HighC and
+LLVMC, in both byte orders at O0/O2. It checks independent results, stack and
+callee-saved GPR preservation, both incoming return-mode tags, ELF mode
+flags and function tags under an adverse microMIPS compiler default.
+An instruction in the caller's selected ISA executes after each return, so
+checking only the canonical return address cannot hide a lost mode tag. GNU MIPS
+as and ld are required; LLVM's integrated assembler/linker do not qualify this
+MIPS16 route. Pass the executables explicitly:
+
+```sh
+LIBUNICORN_PATH=/path/to/repo-pinned-unicorn-library \
+  PYTHONPATH=third_party/unicorn/bindings/python \
+  python3 unittests/lift/mips/mips16-roundtrip.py --neverd build-mips/bin/neverd \
+  --clang /path/to/clang --assembler /path/to/mips-as --ld /path/to/mips-ld \
+  --output build-mips/roundtrip-mips16
+```
+
+The runner retires each generated source, assembly, object and ELF after its
+readers finish; commands, hashes, observations and bounded failure evidence
+remain. These leaves do not qualify omitted MIPS16 memory, calls or ABI forms.
+
 ### MIPS decode/lift and firmware performance
 
 `neverd-mips-bench` is an opt-in target, excluded from the default build:
@@ -22779,9 +22902,10 @@ build-mips/bin/neverd-mips-bench mips64el lift /path/to/owned-code.bin 100000
 ```
 
 Profiles are `mips`, `mipsel`, `mips64`, `mips64el`, `micromips`,
-`micromipsel`, `mipsdsp`, `mipsdspel`, `mipsmsa` and `mipsmsael`. The DSP
-profiles explicitly select the admitted classic32 DSP capability; MSA profiles
-select classic32 r5/o32 FP64 with the admitted integer vector instructions.
+`micromipsel`, `mips16`, `mips16el`, `mipsdsp`, `mipsdspel`, `mipsmsa` and
+`mipsmsael`. The DSP profiles explicitly select the admitted classic32 DSP
+capability; MSA profiles select classic32 r5/o32 FP64 with the admitted integer
+vector instructions.
 Stages are `capstone`
 (direct physical decoding), `decode` (NeverD physical decoding) and `lift`
 (decoding plus LowIR, including delay slots). Both decode paths request the same
@@ -22800,6 +22924,9 @@ from `neverd-dependency-inputs.json`, and JSON toolchain manifests with `compile
 `llvm`, `capstone` and `build` entries. Record exact versions/hashes, build flags
 and allocator selection in those manifests before each build; unequal inputs
 are refused. Run `--help` for explicit paths and repetition counts.
+The default measures the four classic profiles. Repeat `--profile` to select
+other profiles supported by both binaries, supplying the corresponding
+`PROFILE-unchanged.bin` files; unsupported baseline instructions are errors.
 
 Each baseline CLI must load its own matching SDK; the runner sets its library
 search path accordingly. It checks output identity for the selected `call`

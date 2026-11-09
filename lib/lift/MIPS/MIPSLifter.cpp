@@ -46,6 +46,8 @@ LLVM_ATTRIBUTE_ALWAYS_INLINE std::optional<MIPSLifter::Encoding>
 MIPSLifter::encoding(const cs_insn &Instruction) const {
   if (Mode == InstructionMode::MicroMIPS)
     return microEncoding(Instruction);
+  if (Mode == InstructionMode::MIPS16)
+    return mips16Encoding(Instruction);
   const uint32_t Word = word(Instruction);
   if (Word >> 26 == 29) {
     if (Mode != InstructionMode::MIPSClassic)
@@ -66,12 +68,14 @@ MIPSLifter::controlTargetMode(const cs_insn &Instruction) const {
   if (!Code || Mode == InstructionMode::Default)
     return LowInstructionTargetMode::Preserve;
   if (Code->Word >> 26 == 29)
-    return Mode == InstructionMode::MicroMIPS
-               ? LowInstructionTargetMode::MIPSClassic
-               : LowInstructionTargetMode::MicroMIPS;
+    return isMIPSCompressedMode(Mode) ? LowInstructionTargetMode::MIPSClassic
+           : HasMIPS16                ? LowInstructionTargetMode::MIPS16
+                                      : LowInstructionTargetMode::MicroMIPS;
   if (Code->Word >> 26 == 0 &&
       ((Code->Word & 63) == 8 || (Code->Word & 63) == 9))
-    return LowInstructionTargetMode::FromTargetBit0;
+    return HasMIPS16 || Mode == InstructionMode::MIPS16
+               ? LowInstructionTargetMode::FromMIPS16TargetBit0
+               : LowInstructionTargetMode::FromTargetBit0;
   return LowInstructionTargetMode::Preserve;
 }
 
@@ -91,7 +95,8 @@ bool MIPSLifter::isFunctionTerminator(const cs_insn &Instruction) const {
   if (!Code)
     return false;
   const uint32_t Word = Code->Word;
-  return Word >> 26 == 2 || (Word & 0xfc1fffff) == 8; // J / JR
+  return Code->Unconditional || Word >> 26 == 2 ||
+         (Word & 0xfc1fffff) == 8; // B / J / JR
 }
 
 va_t MIPSLifter::directCallTarget(const cs_insn &Instruction) const {
@@ -457,12 +462,15 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
                            (uint64_t(Word & 0x03ffffff) << Shift)),
                    S.Width);
   } else {
-    Conditional = true;
+    Conditional = !Code.Unconditional;
     Destination = NdVar::cst(
         Address(Next + uint64_t(int64_t(int16_t(Word)) *
-                                (Mode == InstructionMode::MicroMIPS ? 2 : 4))),
+                                (isMIPSCompressedMode(Mode) ? 2 : 4))),
         S.Width);
-    if (Opcode == 1) {
+    if (Code.Unconditional) {
+      // Compact B shares the normalized BEQ displacement, but has no
+      // predicate or fallthrough edge.
+    } else if (Opcode == 1) {
       Link = RT >= 16 ? 31 : 0;
       if (Link && RS == 31)
         throw UnliftedInstruction(Head.address, Head.mnemonic,
@@ -495,8 +503,7 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
   }
   if (Link)
     S.write(Link,
-            NdVar::cst(Resume | (Mode == InstructionMode::MicroMIPS ? 1 : 0),
-                       S.Width));
+            NdVar::cst(Resume | (isMIPSCompressedMode(Mode) ? 1 : 0), S.Width));
   const auto GuardFalsePath = [&] {
     NdVar Inverted = S.makeTemp(1);
     S.emit(NdOp::BOOL_NOT, Inverted, {Condition});

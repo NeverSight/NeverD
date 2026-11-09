@@ -616,6 +616,13 @@ payload when the caller selects that tag. The existing four-alternative limit
 still applies: if another split exceeds it, the incoming bounds are retained
 without that refinement. Unknown ordinary scalars and 32-bit comparisons gain
 no full-width exclusion from this rule.
+If the same block stores the compared register as a full 64-bit word immediately
+before the comparison, the selected edge also narrows that stored value. The
+typed scratch value, its formal origin and the returned memory postcondition
+share this fact, so a later reload or caller does not lose an established range
+check. An alternate entry at the comparison, an intervening instruction, a
+changed base, or a truncated store does not supply this witness. This adds no
+alias or heap-initialization assumption and uses the existing value limit.
 Exact 64-bit register copies retain the tag relation; redefinition, potentially
 aliasing tag writes, calls, memory copies and loop backedges discard it. Payload
 writes invalidate affected conditional fields through the existing typed-memory
@@ -685,8 +692,11 @@ when the read footprint is unknown. A changed or missing old cell cannot use
 this extension rule. Returned memory is reconstructed from the actual caller,
 may-write effects and must-write postconditions, preserving new facts only
 where the callee cannot overwrite them. The cached summary must improve the
-generic return or output fields. Its wider result remains conservative for the
-new caller. These edges use `reused_covering_specialized_inputs` and the separate
+generic return or output fields, or retain a proven CALLX target in its body or
+callees. Target evidence can therefore survive reuse even when the return and
+memory effects remain unknown; changed target-bearing cells must still pass the
+same input-read guards. Its wider result remains conservative for the new
+caller. These edges use `reused_covering_specialized_inputs` and the separate
 `covering_specialized_summary_reuses` counter; they are not equal-input reuses.
 
 Generic summaries can retain a CALLX carrier as an expression of entry
@@ -991,8 +1001,8 @@ an unknown branch or write.
 
 When all four specializations are occupied, a caller can also replay an acyclic
 scalar graph that reads and writes fixed scratch cells. Every required input
-register and read cell must contain complete literal or nonwrapping unsigned
-range alternatives. The replay partitions these inputs independently and proves
+register and read cell must contain complete literal, nonwrapping unsigned
+range, or bounded captured-value alternatives. The replay partitions these inputs independently and proves
 every combination; a failed case rejects the complete joined result. Literal
 inputs keep the existing path with known branch successors. Range inputs use
 the canonical branch refinements, join forward CFG edges, and join every
@@ -1007,10 +1017,32 @@ calls and unproven cycles reject the proof. Pending states and joined returns
 consume the existing retained-state budget. This adds no cached
 specialization and infers no initial heap contents or allocator contract.
 
+For a branch on one exact captured value, this replay retains both its affine
+identity and the narrower interval proved on that path. The typed-memory owner
+uses these sparse local bounds for alias checks, without modifying the shared
+capture enclosure. Joins keep the hull of constraints present on both incoming
+paths; memory overlays do not import another path's constraints. Summary inputs
+discard local bounds, so they cannot silently specialize a cached summary.
+Constraints and their temporary copies consume the existing retained-state
+budget. A null/non-null return can carry the successful value's displacement,
+conditional stores and bound together. Testing that exact return restores those
+facts only on the non-null branch. This preserves a decreasing heap cursor
+across repeated allocations, while a cursor reset can still prove actual
+overlap. Alignment masks that clear a low-bit suffix project a known,
+nonwrapping numeric enclosure, including path-local bounds. The result is a
+numeric range, not the original pointer identity.
+
 A complete set of successful heap-derived numeric returns names the one actual
 returned value with a captured identity and enclosing numeric bounds. Ordinary
 summaries, stored return carriers, and scalar replay share the heap lower-bound
-eligibility rule. An upper endpoint outside the heap region does not erase the
+eligibility rule. A full-width stored return carrier is named before the
+canonical store in both ordinary summaries and acyclic fixed-cell replay.
+Replayed definitions are rebound through every nested call site, so repeated
+calls do not equate their independently computed results. The store and its
+actual returned value retain one identity, including conditional stores selected
+by a non-null check. Subsequent writes and register definitions invalidate these
+conditions through the ordinary transfer owner. An upper endpoint outside the
+heap region does not erase the
 value's identity or prove that every possible value is a mapped pointer. Its
 fields therefore remain conditional on that return when branches merge. A null
 alternative retains the existing conditional-definition rule: choosing the null
@@ -1025,6 +1057,16 @@ existing `instantiated_memory_path_instructions` and
 `captured_addresses`, bounded may-write
 intervals and `output_memory_copies` describe these additional facts separately
 from literal CALLX target proofs.
+
+Full-width equality comparisons preserve the identity shared by two offsets of
+one captured value, including modular addition. Unsigned ordering additionally
+requires both displaced numeric intervals to stay within the 64-bit address
+space. Different captures, signed comparisons and truncated values do not
+inherit that ordering. A 64-bit AND with an all-ones immediate or register mask
+also preserves the value's identity. A mask that clears a low-bit suffix uses
+the known numeric enclosure described above; other masks remain conservative.
+These proofs share the normal branch and register-transfer owners and introduce
+no allocator freshness or initial-memory assumption.
 
 Every result remains conditional on recognized CFG/function entries and its
 recorded caller facts. Unaligned targets and continuation slots use raw VM rules;
@@ -1063,8 +1105,11 @@ Within one invocation, CFG joins retain a captured object's fields when its
 capture was introduced on only one incoming path. The pointer and its fields
 remain conditional on that path. A capture already introduced on both paths
 still loses a field if either path forgets it. Possible-alias writes
-continue to invalidate every overlapping capture, and backedges still widen
-capture identities. This is not an allocation freshness or non-aliasing proof.
+continue to invalidate every overlapping capture. Backedges widen identities
+created by the current invocation; incoming captures name fixed values for that
+invocation and keep fields that survived ordinary write invalidation. The caller
+still widens its own captures when its loop invokes the callee again. This is
+not an allocation freshness or non-aliasing proof.
 The local definition history is charged to retained state and is reset at a
 summary entry; incoming captures keep the ordinary must-fact join there.
 A newly captured scalar return of exactly `null` or one nonzero captured value

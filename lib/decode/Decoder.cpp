@@ -86,8 +86,7 @@ bool Decoder::init(Arch TheArch, InstructionMode Mode) {
 
 bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
                                    uint8_t Revision) {
-  if ((Mode == InstructionMode::MIPSClassic ||
-       Mode == InstructionMode::MicroMIPS) &&
+  if ((Mode == InstructionMode::MIPSClassic || isMIPSCompressedMode(Mode)) &&
       !isMIPS(TheArch)) {
     syncError() << "MIPS instruction mode requires a MIPS target\n";
     return false;
@@ -130,12 +129,10 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
   case Arch::MIPS64:
   case Arch::MIPS64EL:
     if ((Mode != InstructionMode::Default &&
-         Mode != InstructionMode::MIPSClassic &&
-         Mode != InstructionMode::MicroMIPS) ||
+         Mode != InstructionMode::MIPSClassic && !isMIPSCompressedMode(Mode)) ||
         (isMIPS64(TheArch) && Mode != InstructionMode::Default) ||
         (Revision != 2 && Revision != 5) ||
-        (Revision == 5 &&
-         (isMIPS64(TheArch) || Mode == InstructionMode::MicroMIPS))) {
+        (Revision == 5 && (isMIPS64(TheArch) || isMIPSCompressedMode(Mode)))) {
       syncError() << "unsupported MIPS instruction mode\n";
       return false;
     }
@@ -145,6 +142,7 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
          : Revision == 5   ? CS_MODE_MIPS32R5
                            : CS_MODE_MIPS32R2) |
         (Mode == InstructionMode::MicroMIPS ? CS_MODE_MICRO : 0) |
+        (Mode == InstructionMode::MIPS16 ? CS_MODE_MIPS16 : 0) |
         (archLittleEndian(TheArch) ? CS_MODE_LITTLE_ENDIAN
                                    : CS_MODE_BIG_ENDIAN));
     NewMIPS = std::make_unique<MIPSLifter>(TheArch, Mode);
@@ -194,6 +192,7 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
 void Decoder::configureFor(const BinaryImage &Img) {
   configureX86For(Img);
   if (MIPS) {
+    MIPS->setMIPS16Enabled(Img.MIPS && Img.MIPS->HasMIPS16);
     MIPS->setDSPEnabled(Img.MIPS && Img.MIPS->HasDSP);
     MIPS->setMSAEnabled(Img.MIPS && Img.MIPS->HasMSA && MIPSISARevision == 5);
   }
@@ -206,7 +205,8 @@ void Decoder::configureFor(const BinaryImage &Img) {
 
 bool Decoder::init(const BinaryImage &Img) {
   if (Img.Mode == InstructionMode::MixedMIPS) {
-    if (!isMIPS(Img.Arch) || !Img.MIPS || !Img.MIPS->HasMicroMIPS)
+    if (!isMIPS(Img.Arch) || !Img.MIPS ||
+        Img.MIPS->HasMicroMIPS == Img.MIPS->HasMIPS16)
       return false;
     if (Img.instructionModeAt(Img.Entry))
       return selectMode(Img, Img.Entry);
@@ -233,9 +233,8 @@ bool Decoder::selectMode(const BinaryImage &Img, va_t Addr,
   if (Img.Arch == Arch::ARM &&
       !decoder_detail::isARMInstructionAligned(Addr, *Mode))
     return false;
-  if (isMIPS(Img.Arch) &&
-      (Addr % (*Mode == InstructionMode::MicroMIPS ? 2 : 4) ||
-       (!isMIPS64(Img.Arch) && Addr > UINT32_MAX)))
+  if (isMIPS(Img.Arch) && (Addr % (isMIPSCompressedMode(*Mode) ? 2 : 4) ||
+                           (!isMIPS64(Img.Arch) && Addr > UINT32_MAX)))
     return false;
   const uint8_t Revision = Img.MIPS ? Img.MIPS->ISARevision : 2;
   if (Handle && TargetArch == Img.Arch && CurrentMode == *Mode &&
@@ -275,7 +274,7 @@ int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
                        DecodedInsn &Out) {
   if (!beginDecode(Out) || !Handle || !InsnBuf)
     return 0;
-  if (MIPS && ((Addr % (CurrentMode == InstructionMode::MicroMIPS ? 2 : 4)) ||
+  if (MIPS && ((Addr % (isMIPSCompressedMode(CurrentMode) ? 2 : 4)) ||
                (!isMIPS64(TargetArch) && Addr > UINT32_MAX)))
     return 0;
   const uint8_t *Code = Bytes;
@@ -319,7 +318,7 @@ int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
                             DecodedInsn &Out) {
   if (!beginDecode(Out) || !Handle || !InsnBuf)
     return 0;
-  if (MIPS && ((Addr % (CurrentMode == InstructionMode::MicroMIPS ? 2 : 4)) ||
+  if (MIPS && ((Addr % (isMIPSCompressedMode(CurrentMode) ? 2 : 4)) ||
                (!isMIPS64(TargetArch) && Addr > UINT32_MAX)))
     return 0;
   const uint8_t *Code = Bytes;

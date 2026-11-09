@@ -11,6 +11,7 @@
 #include <regex>
 #include <set>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 
@@ -51,7 +52,7 @@ commentStates(std::string_view text, LiteralSyntax syntax,
   }
   return states;
 }
-bool identifier(const std::string &name) {
+bool identifier(std::string_view name) {
   if (name.empty() ||
       name.size() >
           ::neverd::limits::worker::kCodeEditsIdentifierNameSizeLimit ||
@@ -134,8 +135,9 @@ bool mayHoldToken(const std::string &text, const std::string &name) {
   return false;
 }
 
-std::vector<Token> tokens(const std::string &text) {
-  std::vector<Token> result;
+/// Calls \p emit with the begin and end of each token of \p text, as tokens()
+/// reads them.
+template <class Emit> void eachToken(const std::string &text, Emit &&emit) {
   for (std::size_t i = 0; i < text.size();) {
     if (std::isspace(static_cast<unsigned char>(text[i]))) {
       ++i;
@@ -205,8 +207,30 @@ std::vector<Token> tokens(const std::string &text) {
           i < text.size() &&
           (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_'))
         ++i;
-    result.push_back({begin, i, text.substr(begin, i - begin)});
+    emit(begin, i);
   }
+}
+
+std::vector<Token> tokens(const std::string &text) {
+  std::vector<Token> result;
+  eachToken(text, [&](std::size_t begin, std::size_t end) {
+    result.push_back({begin, end, text.substr(begin, end - begin)});
+  });
+  return result;
+}
+
+/// A token read in place.
+struct TokenView {
+  std::size_t begin, end;
+  std::string_view text;
+};
+/// tokens(), read in place.
+std::vector<TokenView> tokenViews(const std::string &text) {
+  std::vector<TokenView> result;
+  eachToken(text, [&](std::size_t begin, std::size_t end) {
+    result.push_back(
+        {begin, end, std::string_view(text).substr(begin, end - begin)});
+  });
   return result;
 }
 
@@ -271,7 +295,7 @@ bool aliasIdentifier(const std::string &name) {
       "nullptr"};
   return identifier(name) && !type(name) && !keywords.contains(name);
 }
-bool member(const std::vector<Token> &ts, std::size_t i) {
+template <class Tokens> bool member(const Tokens &ts, std::size_t i) {
   return i && (ts[i - 1].text == "." ||
                (i > 1 && ts[i - 2].text == "-" && ts[i - 1].text == ">") ||
                (i > 1 && ts[i - 2].text == ":" && ts[i - 1].text == ":"));
@@ -944,27 +968,44 @@ void CodeEdits::spellIdentifierSymbols(Json &view) {
   });
 }
 
-bool CodeEdits::respell(Json &page, const Json &renamed) {
-  const auto found = page.find("text");
-  const auto prelude = page.find("prelude");
-  if (found == page.end() || !found->is_string() || prelude == page.end() ||
-      page.value("dialect", std::string("c")) != "c")
-    return false;
-  const auto &text = found->get_ref<const std::string &>();
-  const std::size_t bodyStart = prelude->value("end_byte", std::size_t{0});
-  const auto ts = tokens(text);
-  std::set<std::string> identifiers;
+namespace {
+/// What respelling a text of C makes of it: the spellings it replaces, the
+/// name each address then shows, and each data's name before and after.
+struct Respelling {
+  std::vector<Replacement> replacements;
+  std::unordered_map<std::uint64_t, std::string> shown;
+  std::vector<std::tuple<std::uint64_t, std::string, std::string>> moved;
+};
+/// Respelling \p text, its body from \p bodyStart, its source names covering
+/// \p sourceNames and its variables \p sourceVariables, under \p renamed, rows
+/// of what data is called now: nothing unless the text shows a spelling is all
+/// that moves (CodeEdits::respell).
+std::optional<Respelling>
+respelling(const std::string &text, std::size_t bodyStart,
+           const std::vector<std::pair<std::size_t, std::size_t>> &sourceNames,
+           const Json &sourceVariables, const Json &renamed) {
+  const auto ts = tokenViews(text);
+  // The identifiers it spells, sorted as a set of them would be.
+  std::vector<std::string_view> identifiers;
+  identifiers.reserve(ts.size());
   for (const auto &token : ts)
     if (identifier(token.text))
-      identifiers.insert(token.text);
+      identifiers.push_back(token.text);
+  std::sort(identifiers.begin(), identifiers.end());
+  identifiers.erase(std::unique(identifiers.begin(), identifiers.end()),
+                    identifiers.end());
+  const auto spells = [&](std::string_view name) {
+    return std::binary_search(identifiers.begin(), identifiers.end(), name);
+  };
   // A name another is numbered after: the allocator steps around it, so a
   // render under other names numbers it otherwise.
   const auto numberedAfter = [&](const std::string &name) {
     const auto prefix = name + "_";
-    for (auto at = identifiers.lower_bound(prefix);
+    for (auto at = std::lower_bound(identifiers.begin(), identifiers.end(),
+                                    std::string_view(prefix));
          at != identifiers.end() && at->starts_with(prefix); ++at)
       if (at->find_first_not_of("0123456789", prefix.size()) ==
-          std::string::npos)
+          std::string_view::npos)
         return true;
     return false;
   };
@@ -973,21 +1014,52 @@ bool CodeEdits::respell(Json &page, const Json &renamed) {
     return mark != std::string::npos && mark + 1 < name.size() &&
            name.find_first_not_of("0123456789", mark + 1) ==
                std::string::npos &&
-           identifiers.contains(name.substr(0, mark));
+           spells(std::string_view(name).substr(0, mark));
   };
   // What the C reads as a name of the function and not this global, which only
   // a render tells apart.
   std::set<std::string> others;
-  for (const auto &variable : page.value("source_variables", Json::array()))
+  for (const auto &variable : sourceVariables)
     if (!variable.contains("address"))
       others.insert(variable.value("name", std::string()));
   const auto globals = declaredGlobals(text);
-  std::string folded = text;
-  std::transform(folded.begin(), folded.end(), folded.begin(), [](char c) {
-    return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  });
-  std::unordered_map<std::string, std::string> spellings;
+  // How often the text spells \p spelled, an address as hexAddress writes it
+  // ("0x" and lower case digits), in either case and not followed by another
+  // hexadecimal digit.
+  const auto spelledNumbers = [&](const std::string &spelled) {
+    const auto at = [&](std::size_t from) {
+      for (from = text.find(spelled[0], from);
+           from != std::string::npos && from + spelled.size() <= text.size();
+           from = text.find(spelled[0], from + 1)) {
+        std::size_t k = 1;
+        while (k < spelled.size() &&
+               std::tolower(static_cast<unsigned char>(text[from + k])) ==
+                   static_cast<unsigned char>(spelled[k]))
+          ++k;
+        if (k == spelled.size())
+          return from;
+      }
+      return std::string::npos;
+    };
+    std::size_t numbers = 0;
+    for (auto found = at(0); found != std::string::npos;
+         found = at(found + spelled.size()))
+      if (found + spelled.size() == text.size() ||
+          !std::isxdigit(
+              static_cast<unsigned char>(text[found + spelled.size()])))
+        ++numbers;
+    return numbers;
+  };
+  // Each name of data that moves and its new spelling, the first of each.
+  std::vector<std::pair<std::string, std::string>> spellings;
+  const auto spellingOf = [&](std::string_view name) {
+    return std::find_if(spellings.begin(), spellings.end(),
+                        [&](const auto &spelling) {
+                          return std::string_view(spelling.first) == name;
+                        });
+  };
   std::unordered_map<std::uint64_t, std::string> shown;
+  std::vector<std::tuple<std::uint64_t, std::string, std::string>> movedNames;
   std::set<std::string> taken;
   for (const auto &row : renamed) {
     const auto address = parseAddress(row.at("addr").get<std::string>());
@@ -999,92 +1071,92 @@ bool CodeEdits::respell(Json &page, const Json &renamed) {
     if (global == globals.end() || !global->plain ||
         std::count_if(globals.begin(), globals.end(), isIt) != 1 ||
         others.contains(global->name) || numberedAfter(global->name) ||
-        numbered(global->name) || !identifier(name) ||
-        identifiers.contains(name) || others.contains(name) ||
-        numberedAfter(name) || !taken.insert(name).second)
-      return false;
+        numbered(global->name) || !identifier(name) || spells(name) ||
+        others.contains(name) || numberedAfter(name) ||
+        !taken.insert(name).second)
+      return std::nullopt;
     // A constant of the address that printed as a number is one a name would
     // have the code spell as the object.
-    const auto spelled = hexAddress(address);
-    std::size_t numbers = 0;
-    for (auto at = folded.find(spelled); at != std::string::npos;
-         at = folded.find(spelled, at + spelled.size()))
-      if (at + spelled.size() == folded.size() ||
-          !std::isxdigit(
-              static_cast<unsigned char>(folded[at + spelled.size()])))
-        ++numbers;
-    if (numbers != 1)
-      return false;
-    spellings.emplace(global->name, name);
+    if (spelledNumbers(hexAddress(address)) != 1)
+      return std::nullopt;
+    if (spellingOf(global->name) == spellings.end())
+      spellings.emplace_back(global->name, name);
     shown.emplace(address, name);
+    movedNames.emplace_back(address, global->name, name);
   }
   std::vector<Replacement> replacements;
-  std::unordered_map<std::string, std::size_t> seen, inPrelude;
+  // By spelling: its tokens, and those of them in the prelude.
+  std::vector<std::size_t> seen(spellings.size()), inPrelude(spellings.size());
   std::unordered_map<std::string, std::size_t> addressed;
   for (std::size_t i = 0; i < ts.size() && ts[i].begin < bodyStart; ++i)
     if (ts[i].text == "&" && i + 1 < ts.size() && identifier(ts[i + 1].text) &&
         (!i || ts[i - 1].text != "&"))
-      addressed.emplace(ts[i + 1].text, 0);
+      addressed.emplace(std::string(ts[i + 1].text), 0);
   if (!addressed.empty()) {
     for (std::size_t i = 0; i < ts.size() && ts[i].begin < bodyStart; ++i)
-      if (const auto name = addressed.find(ts[i].text); name != addressed.end())
+      if (const auto name = addressed.find(std::string(ts[i].text));
+          name != addressed.end())
         ++name->second;
     // An initializer may take the address of an object by a symbol the page
     // declares nothing by, which a user's name of it replaces.
     for (const auto &[name, count] : addressed)
       if (count < 2)
-        return false;
+        return std::nullopt;
   }
   for (std::size_t i = 0; i < ts.size(); ++i) {
     const auto &token = ts[i];
-    const auto to = spellings.find(token.text);
+    const auto to = spellingOf(token.text);
     if (to == spellings.end())
       continue;
-    ++seen[token.text];
+    const auto index = static_cast<std::size_t>(to - spellings.begin());
+    ++seen[index];
     if (member(ts, i))
       continue;
     if (token.begin < bodyStart)
-      ++inPrelude[token.text];
+      ++inPrelude[index];
     else if (i) {
       // A label, or a declaration of the body's.
-      const auto &before = ts[i - 1].text;
+      const auto before = ts[i - 1].text;
       if ((identifier(before) && before != "return" && before != "sizeof" &&
            before != "else" && before != "do" && before != "case") ||
           (i + 1 < ts.size() && ts[i + 1].text == ":"))
-        return false;
+        return std::nullopt;
     }
     replacements.push_back({token.begin, token.end, to->second});
   }
   const auto word = [](char c) {
     return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
   };
-  for (const auto &[from, to] : spellings) {
+  for (std::size_t index = 0; index < spellings.size(); ++index) {
+    const auto &from = spellings[index].first;
     // The declaration alone, and no comment or string that spells it.
-    if (inPrelude[from] != 1)
-      return false;
+    if (inPrelude[index] != 1)
+      return std::nullopt;
     std::size_t spelled = 0;
     for (auto at = text.find(from); at != std::string::npos;
          at = text.find(from, at + from.size()))
       if ((at == 0 || !word(text[at - 1])) &&
           (at + from.size() == text.size() || !word(text[at + from.size()])))
         ++spelled;
-    if (spelled != seen[from])
-      return false;
+    if (spelled != seen[index])
+      return std::nullopt;
   }
   std::vector<std::pair<std::size_t, std::size_t>> moved;
   moved.reserve(replacements.size());
   for (const auto &replacement : replacements)
     moved.emplace_back(replacement.begin, replacement.end);
   const SourceSpanIndex covered(moved.begin(), moved.end());
-  for (const auto &name : page.value("source_names", Json::array()))
-    if (covered.overlaps(name.value("begin_byte", std::size_t{0}),
-                         name.value("end_byte", std::size_t{0})))
-      return false;
-  auto spelled = replaced(text, replacements);
-  remapPageSpans(page, ByteShifts(replacements));
-  page["text"] = std::move(spelled);
-  if (auto variables = page.find("source_variables");
-      variables != page.end() && variables->is_array())
+  for (const auto &[begin, end] : sourceNames)
+    if (covered.overlaps(begin, end))
+      return std::nullopt;
+  return Respelling{std::move(replacements), std::move(shown),
+                    std::move(movedNames)};
+}
+/// \p view's variables at an address \p shown names, called so.
+void renameVariables(
+    Json &view, const std::unordered_map<std::uint64_t, std::string> &shown) {
+  if (auto variables = view.find("source_variables");
+      variables != view.end() && variables->is_array())
     for (auto &variable : *variables)
       if (const auto address = variable.find("address");
           address != variable.end() && address->is_string())
@@ -1092,7 +1164,50 @@ bool CodeEdits::respell(Json &page, const Json &renamed) {
                 shown.find(parseAddress(address->get<std::string>()));
             name != shown.end())
           variable["name"] = name->second;
+}
+/// A list of \p view's, or none where it holds no list there.
+const Json &listed(const Json &view, const char *field) {
+  static const Json none = Json::array();
+  const auto list = view.find(field);
+  return list != view.end() && list->is_array() ? *list : none;
+}
+} // namespace
+
+bool CodeEdits::respell(Json &page, const Json &renamed) {
+  const auto found = page.find("text");
+  const auto prelude = page.find("prelude");
+  if (found == page.end() || !found->is_string() || prelude == page.end() ||
+      page.value("dialect", std::string("c")) != "c")
+    return false;
+  const auto &text = found->get_ref<const std::string &>();
+  const std::size_t bodyStart = prelude->value("end_byte", std::size_t{0});
+  std::vector<std::pair<std::size_t, std::size_t>> spans;
+  for (const auto &name : listed(page, "source_names"))
+    spans.emplace_back(name.value("begin_byte", std::size_t{0}),
+                       name.value("end_byte", std::size_t{0}));
+  const auto respelled = respelling(text, bodyStart, spans,
+                                    listed(page, "source_variables"), renamed);
+  if (!respelled)
+    return false;
+  auto spelled = replaced(text, respelled->replacements);
+  remapPageSpans(page, ByteShifts(respelled->replacements));
+  page["text"] = std::move(spelled);
+  renameVariables(page, respelled->shown);
   return true;
+}
+
+CodeEdits::EngineText CodeEdits::engineText(const Json &view) {
+  EngineText engine;
+  if (const auto text = view.find("text");
+      text != view.end() && text->is_string())
+    engine.text = text->get<std::string>();
+  if (const auto prelude = view.find("prelude");
+      prelude != view.end() && prelude->is_object())
+    engine.bodyStart = prelude->value("end_byte", std::size_t{0});
+  for (const auto &name : listed(view, "source_names"))
+    engine.sourceNames.emplace_back(name.value("begin_byte", std::size_t{0}),
+                                    name.value("end_byte", std::size_t{0}));
+  return engine;
 }
 
 void CodeEdits::ImageFacts::read(const Json &renames, const Json &annotations) {
@@ -1660,5 +1775,165 @@ bool CodeEdits::takeComments(Json &view, std::uint64_t function,
   remapPageSpans(view, shifted);
   view["text"] = replaced(decorated, replacements);
   return true;
+}
+
+std::optional<CodeEdits::EngineText>
+CodeEdits::takeDataNames(Json &view, const EngineText &engine,
+                         const Json &renamed, const Json &row,
+                         const std::string &representation) {
+  const auto text = view.find("text");
+  const auto names = view.find("code_names");
+  const auto rows = view.find("rows");
+  if (!source(representation) || text == view.end() || !text->is_string() ||
+      names == view.end() || !names->is_array() || rows == view.end() ||
+      !rows->is_array() || !view.contains("prelude") ||
+      view.value("dialect", std::string("c")) != "c")
+    return std::nullopt;
+  // An identifier symbol of a new name makes a source name of it where the
+  // text spells it (spellIdentifierSymbols).
+  std::set<std::string> newNames;
+  for (const auto &rename : renamed)
+    newNames.insert(rename.at("name").get<std::string>());
+  for (const auto &symbol : listed(view, "identifier_symbols"))
+    if (symbol.is_object() && symbol.contains("identifier") &&
+        symbol["identifier"].is_string() &&
+        newNames.contains(symbol["identifier"].get<std::string>()))
+      return std::nullopt;
+  const auto &variables = listed(view, "source_variables");
+  const auto respelled = respelling(engine.text, engine.bodyStart,
+                                    engine.sourceNames, variables, renamed);
+  if (!respelled)
+    return std::nullopt;
+  // Each data's names before and after, by its address.
+  std::unordered_map<std::uint64_t, std::pair<std::string, std::string>> moves;
+  for (const auto &[address, from, to] : respelled->moved)
+    moves.emplace(address, std::pair{from, to});
+  // Decoration binds a name to the variable of that name alone: the data's
+  // own must be called as the text declares it, and no other so.
+  for (const auto &variable : variables) {
+    const auto name = variable.value("name", std::string());
+    const auto address = variable.find("address");
+    const auto move =
+        address != variable.end() && address->is_string()
+            ? moves.find(parseAddress(address->get_ref<const std::string &>()))
+            : moves.end();
+    if (move != moves.end()) {
+      if (name != move->second.first)
+        return std::nullopt;
+      continue;
+    }
+    for (const auto &[at, spelled] : moves)
+      if (name == spelled.first || name == spelled.second)
+        return std::nullopt;
+  }
+  auto spelled = replaced(engine.text, respelled->replacements);
+  // Local names stay or go as the text's identity reads (decorate).
+  Json edits = Json::object();
+  if (!row.is_null())
+    edits = row.at("views").value(representation, Json::object());
+  const auto identity = sourceIdentity(spelled);
+  const auto shape = view.value("code_shape", std::string());
+  const bool stale =
+      !edits.value("names", Json::object()).empty() &&
+      edits.value("identity", std::string()) != identity &&
+      (shape.empty() || edits.value("shape", std::string()) != shape);
+  if (stale != view.value("code_edits_stale", false))
+    return std::nullopt;
+  // The lines the spellings change, whose rows anchor on what they read: a
+  // number's base or a note anchored on one reads it otherwise.
+  std::vector<std::size_t> starts{0};
+  for (std::size_t i = 0; i + 1 < engine.text.size(); ++i)
+    if (engine.text[i] == '\n')
+      starts.push_back(i + 1);
+  std::set<std::size_t> changed;
+  std::unordered_map<std::string, std::size_t> spellings;
+  for (const auto &replacement : respelled->replacements) {
+    changed.insert(static_cast<std::size_t>(
+        std::upper_bound(starts.begin(), starts.end(), replacement.begin) -
+        starts.begin() - 1));
+    ++spellings[engine.text.substr(replacement.begin,
+                                   replacement.end - replacement.begin)];
+  }
+  const auto numbers = edits.value("numbers", Json::object());
+  const auto notes = edits.value("comments", Json::object());
+  for (const auto line : changed)
+    if (numbers.contains(std::to_string(line)) ||
+        notes.contains(std::to_string(line)))
+      return std::nullopt;
+  const ByteShifts engineShifts(respelled->replacements);
+  std::unordered_map<std::size_t, std::string> anchors;
+  for (const auto line : changed) {
+    const auto start = engineShifts(starts[line]);
+    auto end = spelled.find('\n', start);
+    if (end == std::string::npos)
+      end = spelled.size();
+    anchors.emplace(line, spelled.substr(start, end - start));
+  }
+  // Every name of the data shows its new name; one the text spelled takes the
+  // new spelling, and they are as many as respell replaces.
+  const auto &decorated = text->get_ref<const std::string &>();
+  std::vector<Replacement> replacements;
+  std::vector<std::pair<Json *, const std::string *>> respelledNames;
+  std::unordered_map<std::uint64_t, std::size_t> respelledCount;
+  for (auto &name : *names) {
+    const auto kind = name.find("kind");
+    const auto address = name.find("address");
+    if (kind == name.end() || !kind->is_string() ||
+        kind->get_ref<const std::string &>() != "address" ||
+        address == name.end() || !address->is_string())
+      continue;
+    const auto move =
+        moves.find(parseAddress(address->get_ref<const std::string &>()));
+    if (move == moves.end())
+      continue;
+    const auto begin = name.value("begin_byte", std::size_t{0});
+    const auto end = name.value("end_byte", std::size_t{0});
+    if (end < begin || end > decorated.size())
+      return std::nullopt;
+    const auto &[from, to] = move->second;
+    if (decorated.compare(begin, end - begin, to) != 0)
+      replacements.push_back({begin, end, to});
+    if (name.value("original", std::string()) == from) {
+      respelledNames.emplace_back(&name, &to);
+      ++respelledCount[move->first];
+    }
+  }
+  for (const auto &[address, spelling] : moves)
+    if (respelledCount[address] != spellings[spelling.first])
+      return std::nullopt;
+  std::sort(replacements.begin(), replacements.end(),
+            [](const auto &a, const auto &b) { return a.begin < b.begin; });
+  for (std::size_t i = 1; i < replacements.size(); ++i)
+    if (replacements[i].begin < replacements[i - 1].end)
+      return std::nullopt;
+  std::vector<Json *> anchored;
+  for (auto &mapping : *rows)
+    if (anchors.contains(mapping.value("line", std::size_t{0})))
+      anchored.push_back(&mapping);
+  // Nothing below refuses: the view takes it all.
+  const ByteShifts shifted(replacements);
+  for (const auto &[name, to] : respelledNames)
+    (*name)["original"] = *to;
+  for (auto &name : *names) {
+    for (const char *field : {"begin_byte", "end_byte"})
+      if (const auto at = name.find(field); at != name.end())
+        *at = shifted(at->get<std::size_t>());
+    if (const auto kind = name.find("kind");
+        kind != name.end() && kind->is_string() &&
+        kind->get_ref<const std::string &>() == "local" &&
+        name.contains("identity"))
+      name["identity"] = identity;
+  }
+  for (auto *mapping : anchored)
+    (*mapping)["code_anchor"] =
+        anchors.at(mapping->value("line", std::size_t{0}));
+  remapPageSpans(view, shifted);
+  renameVariables(view, respelled->shown);
+  view["text"] = replaced(decorated, replacements);
+  EngineText taken{std::move(spelled), engineShifts(engine.bodyStart), {}};
+  taken.sourceNames.reserve(engine.sourceNames.size());
+  for (const auto &[begin, end] : engine.sourceNames)
+    taken.sourceNames.emplace_back(engineShifts(begin), engineShifts(end));
+  return taken;
 }
 } // namespace neverd::worker

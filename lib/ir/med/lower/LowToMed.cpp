@@ -793,8 +793,7 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
   const bool QualifyMIPSReturns =
       isMIPS(TheArch) &&
       (Image
-           ? (Image->Mode == InstructionMode::MixedMIPS ||
-              Image->Mode == InstructionMode::MicroMIPS ||
+           ? (hasCompressedMIPSCode(Image->Mode) ||
               (Image->MIPS && (Image->MIPS->HasDSP || Image->MIPS->HasMSA)))
            : llvm::any_of(Low.Blocks, [TheArch](const auto &Block) {
                // Standalone IR cannot drop a changed return link merely
@@ -812,7 +811,7 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
                  return true;
                return llvm::any_of(
                    Block.InstructionBoundaries, [](const auto &Boundary) {
-                     return Boundary.Mode == InstructionMode::MicroMIPS ||
+                     return isMIPSCompressedMode(Boundary.Mode) ||
                             Boundary.Mode == InstructionMode::MIPSClassic;
                    });
              }));

@@ -1072,12 +1072,30 @@ their compact rendering. C also runs a `__finally` when its try falls through,
 where the source already holds the normal copy, so a compact finally runs the
 cleanup under `if (AbnormalTermination())`. C counts a return or a jump out of
 the try as abnormal too: a closed finally range that can leave before its end
-marker takes the block form, and a lexical one that still could is refused. A
+marker takes the block form, and a lexical one that still could is refused.
+C forbids a jump into a `__try`, so a range that code outside enters other
+than through its begin marker takes the block form too, as do two ranges the
+lexical form would nest otherwise than their blocks do or whose `__except`
+handler runs into the other range (a finally the handler runs), and the
+function prints no `__try` where that form fails. A
 try that wraps every block for lack of range markers sets its normal-exit flag
 before each return and at its end. The native lowering numbers a range's
 markers, their boundary provenance and the blocks it appends for returns in
 block layout order, never pointer order, so the C it prints is the same from
 run to run.
+In a private LLVM-to-C module (`WindowsEHNativeCapability::SourceIRLowering`)
+the native lowering calls a filter or termination callback with the arguments
+it was lifted with, a prefix of the runtime's flag or exception pointers and
+EstablisherFrame, and lowers ARM and AArch64 tables too. A filter whose lifted
+body returns no value, which C prints as returning void, stays out. ARM and
+AArch64 start a callback with the parent's callee-saved registers restored,
+which no call can pass, so there `sehCallbackReadsOnlyArguments` admits a
+callback only when its body reads nothing on entry but its arguments, its
+stack and its return address. The frame a filter takes is captured before the
+first clause, the block form's included. SEH this view cannot structure prints
+no `__try`: a catch-all around the whole body would claim the function
+swallows exceptions its scopes let pass, so the function says it is not
+lowered instead.
 HighIR adds this recovery for positional register/stack conventions. Independent
 register banks retain their source variadic and floating-return preparation.
 
@@ -4813,8 +4831,16 @@ was decorated, they are written into a copy of it as decoration writes them: eac
 comment read again, its line's inline comment replaced and the spans after it moved
 (`CodeEdits::takeComments`). A function's new name, taken in place, is written the same
 way into each name the document links to it (`CodeEdits::takeFunctionNames`), unless the
-name is given up or the text spells it otherwise; anything else that drops documents'
-keys decorates them again (`Engine::decorateNamedViewsAgain`).
+name is given up or the text spells it otherwise. A data's new name changes the engine
+text decoration read, so a document of C on one engine page keeps that text and the
+record of what its render read: where the engine says of that record that the new name
+is a spelling alone (`neverd_user_reads_renamed_json`), the text is respelled as a kept
+page would be and the document takes what decoration writes from it, its locals'
+identity and its rows' anchors included (`CodeEdits::takeDataNames`). A number's base or
+a note anchored on a line it changes, or local names it would make stale, send the
+document back to what is kept, as does any later rebuild from the pages it no longer
+reads as; anything else that drops documents' keys decorates them again
+(`Engine::decorateNamedViewsAgain`).
 Decoration asks for the image's names and comments by address, and the edit changes
 that one row (`CodeEdits::ImageFacts`), so a view costs the same among thousands.
 The GUI starts a replica on a function as its Set Type dialog opens
@@ -5122,6 +5148,9 @@ Long operand sequences use the existing LLVM block hash for lookup instead of
 a serial combine per handle, retaining complete ordered-operand comparison.
 That external hash call stays outside the short lookup's stack frame.
 Native literal construction normalizes its inline value before interning.
+Wide literals use owned APInt keys that compare the width and every stored
+word. A repeated lookup borrows its input instead of allocating and formatting
+a decimal string; pool indices and context copy/move ownership remain stable.
 Low-word decision proofs capture the smaller of their local and remaining
 request allowances. Each operation admits and counts the same work locally;
 every exit commits that count, including refusals. The completed-reading memo
@@ -5131,6 +5160,21 @@ Decision and carry caches pack their bounded input and edge fields into exact
 bucket and entry storage reflect the compact representation, with unchanged
 work and node limits. Carry-cache hits stay outside the recursive allocation
 frame; only missing identities construct new decision frontiers.
+The existing region traversal seeds only arithmetic-input demotions guaranteed
+by the first classification. If every bitwise operand has a decided role, one
+classification completes the region; ambiguous nested products still reach the
+same fixed point. The traversal also collects visible inputs and the product
+flag. Ordered coefficient insertion reuses its lookup bound. Exact input roles
+and placeholder reservations are unchanged.
+Masked pairing signatures whose masks exclude every correction bit intern the
+exact retained decision vector with zero extension. This avoids constructing
+discarded carries; visible high mask bits still use the complete signature.
+Low-word and pairing-signature cache hits return before entering recursive
+construction frames; only missing entries allocate their temporary frontiers.
+Lookup, depth admission, work charging and exact cache keys keep their order.
+The admission walk and decision emission use dense membership/result tables
+with prepaid bucket growth. The small admitted-input set stays inline; these
+containers never select traversal order or weaken the full-word proof.
 Recursive Boolean application specializes its fixed AND or XOR operation;
 OR enters the same AND frontier through complemented edges. The outer word
 reader selects the operation, while recursive calls retain the same exact
@@ -5178,7 +5222,8 @@ constructor's stack footprint. This analysis changes only evaluation and keeps
 all input lookups. Validation keeps its original full-width input assignments,
 sample count and work charges.
 Native long products stop when the initial operand pair is zero modulo the
-declared width, retaining the tight fold for other inputs. Their prepared steps
+declared width. Other long folds use four independent multiplication chains,
+then combine them in the same unsigned modular ring. Their prepared steps
 keep the width mask in the unused product payload, without enlarging a step
 or skipping input evaluation.
 Batch substitution uses one table for scheduled nodes and completed results.
@@ -5210,9 +5255,9 @@ fewer probes than a complete pair scan. Neighbors retain the original index
 order before merging, preserving prime discovery and greedy-cover tie order.
 The existing quadratic work admission remains unchanged; merge storage stays
 outside the small-recipe synthesis path. Terms remain ordered by value after
-each merge round, so only zero-to-one neighbor flips need lookup; the reverse
-pair was already visited. Prepared Boolean recipes keep their reconstruction
-memo inline, with ordinary growth for optional larger recipes.
+each merge round, so the general index only looks up zero-to-one neighbor
+flips; the reverse pair was already visited. Prepared Boolean recipes keep their
+reconstruction memo inline, with ordinary growth for optional larger recipes.
 Small implicant rounds keep their temporary terms, prime results and merge flags
 inline; larger rounds grow normally. The two frontiers alternate without copying
 their inline elements. Merge flags and exact lookup tables reuse their storage
@@ -5223,6 +5268,19 @@ For up to six inputs, a packed care/value pair indexes an exact membership
 bit in at most 4096 bits. Only that used prefix is cleared each round; larger
 covers initialize the general hash set instead. This retains the same grown
 terms and greedy tie order without a hash lookup for every small-cover merge.
+Indexed small rounds also place their current terms in that same bitmap.
+Current and grown terms have different numbers of cared bits, so their exact
+keys cannot overlap. Both endpoints mark themselves merged; ascending bit flips
+emit each pair once in the original order. Neighbor lookup needs no separate
+index, additional storage or sorting, and the existing work admission is kept.
+For truth tables that fit in one machine word, subset inversion derives all
+exclusive-or coefficients with masked shifts across disjoint bit blocks.
+Set-bit enumeration preserves monomial order; larger tables retain scalar
+inversion. Synthesis admission, cover ranking and exact output are unchanged.
+The same packed columns compare both cofactors to recover exact input support.
+A packed table excluding only one corner has one essential literal per input;
+its cover retains the original frontier order and computes each merge round's
+admission from its exact cube count before bypassing those expansions.
 The shared exact MBA layer also recombines weighted literal AND/OR/XOR/NOT
 views of one opaque word. It constructs per-bit coefficients and a constant,
 then independently checks the pointwise grammar, constant difference and every
@@ -5353,6 +5411,11 @@ counters preserve repeated-factor correlations across all assignments. A
 product is zero only when these guaranteed zeros and its literal coefficient
 cover the full word width. The proof admits at most 64 factors, 128 reachable
 nodes and eight observable low bits, under the existing work/storage budget.
+Its local membership and parity tables use compact exact keys, while a sorted
+node list preserves the original child-before-parent order and input numbering.
+The collected-node charge covers their storage; known table size is reserved
+once. Cheap refusals and completed-product hits stay outside the traversal
+buffers' call frame. Work, storage charges and shared memo behavior are unchanged.
 Early sum pruning requires every long product to vanish, preserving incomplete
 factor bases. Generated products and residuals can use the proof after their
 complete distribution is established. No additional CLI or GUI switch is
@@ -5460,22 +5523,57 @@ temporary expression nodes; wide literal prefixes are copied and charged once
 per search. Word, projected-representative and pairing-signature caches share
 this normalization without changing any source constant or wider reading.
 Neutral observed constants reuse the operand directly.
+When complete-domain projection exposes identical factor handles, single-bit
+pairing removes exact squares before constructing highest-bit signatures. Only
+odd multiplicities need those signatures; the smaller square product still
+receives its complete proof at the next precision. The multiplicity table and
+its bucket growth consume the same request and storage budgets.
+Literal decision bits and both pairing-signature readers reuse the same exact
+prefix. Constant bitwise operands use the residue already stored in their word
+key, including its active-bit bound, without rebuilding a full-width APInt.
+Full-value predicates, shift counts and emitted source constants retain their
+complete-width interpretation.
 Constant additions reuse the literal residue already present in the word key.
 Bits below its first set bit remain unchanged and cannot start a carry; a
 single-bit query constructs only the carry into its requested position.
 Projected handles, known-zero facts and pairing signatures use exact-key
 dense tables, avoiding one heap allocation per cached fact. Their values are
 copied before recursion, and complete bucket growth is charged before insertion.
-Decision-word caches and interned signature keys retain stable references for
-callers that keep them across recursive insertions.
+Decision-word results live in stable small pages behind a dense index table.
+Each published word stores only its bounded edge array; the exact lookup key
+owns its precision. Arithmetic readers borrow immutable views rather than
+growable containers.
+Complete page and pointer-array growth is charged before allocation; a parity
+change clears the index and reuses the already-paid pages. No word view escapes
+that phase. Interned signature keys also retain stable references for callers
+that keep them across recursive insertions.
+Arithmetic cache keys pack every complemented edge into a 16-bit lane, with
+precision and operation retained separately. Dense buckets own their inline
+results; callers copy those results before recursion. Bucket growth is prepaid
+against scratch storage, avoiding per-operation hash-node allocation without
+weakening exact identity or changing the work allowance.
+Single-bit addition and multiplication reuse the complete XOR/AND application
+cache: their word-step admission already pays for that bit's lookup, and any
+recursive frontier retains its own charges. Wider arithmetic finds each
+operand's first nonzero edge once, using the same scan for zero-word identities
+and trailing-zero projection.
 Native key construction reads inline constants without entering the wide
 literal reader.
 Decision identity hits and terminal two-input Boolean operations return before
 entering the allocation and recursive expansion helpers. Three-input carry and
-parity operations keep their cache lookup and recursive expansion in one
-function, avoiding another call frame on the frequent cache misses. Lookup,
-depth admission, charging and insertion keep their original order, including
-failure paths.
+parity operations likewise keep terminal identities and cache hits outside
+the recursive expansion frame. Lookup, depth admission, charging and insertion
+keep their original order, including failure paths.
+The decision owner decrements its captured remaining work directly and commits
+the exact difference to the shared budget before another consumer runs or the
+owner exits. This preserves exact and one-short admission without repeatedly
+recomputing the remaining allowance in each Boolean operation.
+Decision identities pack each admitted input's rank, observed bit, priority
+and both complete complemented edges into a 32-bit key. Decisions retain the
+original source index and its ordering. When a narrower read exposes a source
+that admission treated as part of an opaque word, its complete identity uses
+the wide-key table. Both tables charge their actual bucket growth and share
+the original decision-node allowance.
 XOR and three-input parity reuse a completed low cofactor when every high
 cofactor has the same complete decision identity apart from its complement
 edge. Their complement flags combine exactly, avoiding a repeated recursive
@@ -5647,6 +5745,16 @@ Immutable constant slots are initialized once and excluded from the repeated
 evaluation stream. Explicit output slots preserve the original DAG's operand
 order. The public node count still includes constants, retaining the solver's
 existing conservative work charges.
+Reused native evaluation plans propagate the required low bits across all
+consumers before aliasing modularly neutral literal operations to their input
+slots. A shared comparison, division or right shift still requires complete
+operands. This preparation starts only after the first evaluation, keeping
+one-shot calls free of the extra traversal. Input callbacks, original scratch
+slots and the public work count remain unchanged; native and AP evaluation
+share the prepared plan. Wide prefix evaluation uses the same demand rules.
+An upper bound from all literal scales rejects preparation when even that
+many discarded bits cannot hide a literal; possible aliases still require
+the complete shared-use analysis.
 Arbitrary-width plans read prior operand slots directly through the shared
 operator evaluator, avoiding temporary copies of wide integers at every step.
 They initialize immutable constant slots before any external input callback,
@@ -8872,13 +8980,21 @@ A fixed-size register lane cache checks the
 complete offset/width key and uses the query's immutable target metadata.
 These storage and lookup optimizations retain the original evidence charges;
 they do not reuse CFG or value proofs across changed snapshots. A builder may
-retain one successful graph with an owned instruction snapshot. Reuse requires
+retain its two most recently used successful graphs
+(`kJumpTableResolverSliceRetainedGraphs`), each with an owned instruction
+snapshot, while their payloads fit one builder's retention allowance together:
+mask and guard proofs alternate between a candidate's own targets and a trial
+target set, and a single graph would be rebuilt, losing its retained outcomes,
+on every switch. Graphs too large to share the allowance keep one slot, so the
+worst-case retained memory is unchanged. Reuse requires
 exact instruction facts, LowOps, effective edges, block starts, proof roots,
-conditional roots and storage-owner inputs. Hits pay the complete original
-graph-construction charge. The graph may also retain up to 64 query outcomes
+conditional roots and storage-owner inputs, compared in full for each retained
+graph a lookup tries. Hits pay the complete original
+graph-construction charge. Each graph may also retain up to 64 query outcomes
 under a separate 8 MiB retained-payload allowance. Within one read-only target
-role, load-address role, address-discovery or mask-domain invocation, a local
-scope can reuse its validated graph without recopying the instruction snapshot.
+role, load-address role, address-discovery, guard-domain or mask-domain
+invocation, a local scope can reuse its validated graph without recopying the
+instruction snapshot.
 It is bound to its builder and cannot cross instruction, block or storage-owner
 mutations.
 Each query still compares roots and owned effective edge overrides, including
@@ -14796,7 +14912,10 @@ strict cost decrease, and remaining work and storage allowances still apply;
 an incomplete optional attempt retains the previously established expression.
 
 Hidden affine inputs may supply exact inverse relations when a coefficient
-is odd. An even-scaled hidden input `P = k*T` can replace an arithmetic
+is odd. The coefficient itself supplies the first three inverse bits, since
+every odd square is one modulo eight; Newton refinement doubles that precision
+at the original width. One and minus one already have their complete inverse.
+An even-scaled hidden input `P = k*T` can replace an arithmetic
 multiple `d*T` with `q*P` only after checking `k*q = d` modulo the original
 word width; it never recovers `T` by dividing an even coefficient. Those
 substitutions apply only in arithmetic positions, preserving the independent
@@ -14804,6 +14923,16 @@ bitwise inputs required by the coefficient proof. Shared linear tails reuse
 coefficient summaries; optional relation recovery spends the same work
 budget and also bounds its temporary storage. An incomplete recovery leaves
 the original abstraction intact.
+An opaque terminal moves its already-paid coefficient node from the pending
+map into the result, combining any earlier contribution from a shared tail.
+The descending traversal still visits every parent before its children. Affine
+restoration reuses its operand buffer and retains canonical nodes whose inputs
+did not change, spending construction work only on actual rebuilds.
+Region abstraction stops at operators that are unconditionally opaque for its
+linear or polynomial reading. The deep walk still simplifies their interiors
+independently. All original variables below those boundaries remain reserved,
+including names shared with placeholder declarations; fully visible regions
+reuse their existing node order instead of collecting variables again.
 
 Complete hidden affine inputs may also be identified as bitwise complements
 after their offsets and every coefficient establish `F+G=-1` at the original
@@ -15328,6 +15457,16 @@ Capstone aliases as semantics. `MedMIPSReturnTargets` proves source returns
 against captured entry RA, and `MIPSInstructionModeSource` owns mode attributes
 and the numeric code-pointer source qualification boundary. Actual two/four-byte
 head and slot lengths remain in the shared LowIR instruction records.
+The MIPS16e32 subset shares these owners with an explicit MIPS16 family and
+target-bit contract, including register transfers originating in classic code.
+`MIPS16Integer.def` and `MIPSLiftMIPS16` normalize qualified scalar/control
+encodings; EXTEND pairs are one physical instruction and delayed JR accepts
+only one two-byte non-extended slot. B carries unconditional control semantics
+through normalization so CFG does not visit a nonexistent fallthrough.
+MIPS16 symbols are classified before their overlapping microMIPS flag bit.
+Both source routes emit the positive encoding attribute and explicitly exclude
+the other compressed family. GNU as/ld and original-target execution qualify
+the MIPS16 source path separately from LLVM's incomplete assembler support.
 The official Archer C7 V5 example qualifies selected static function views,
 not an entire firmware image. This is an analysis-only addition to the matrix
 above: no MIPS rewrite or guest-process execution backend is claimed. See

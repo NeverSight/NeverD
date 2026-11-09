@@ -273,9 +273,7 @@ MedLLVMEmitter::materializeImageFunctionDeclaration(va_t Entry,
     mips::applyDSPSourceAttributes(*Function);
   if (Img)
     if (const auto Mode = Img->instructionModeAt(Entry))
-      if (const char *Attribute = mips::instructionModeLLVMAttribute(*Mode);
-          *Attribute)
-        Function->addFnAttr(Attribute);
+      mips::applyInstructionModeLLVMAttributes(*Function, *Mode);
   return Function;
 }
 

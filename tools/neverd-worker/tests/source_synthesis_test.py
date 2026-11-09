@@ -273,7 +273,8 @@ def multiple_residual_elf(degree, neighbor=False):
 
 
 def carry_product_elf(degree, product=True, needed=7, high_bits=None, additive=False,
-                      *, interleaved=False, complemented=False, neighbor=False):
+                      *, interleaved=False, complemented=False, neighbor=False,
+                      factor_mask=None):
     # Retain the requested low bits, including observable residual cross terms.
     high_bits = high_bits or (3 if product else 2)
     mask = (0xffffffff << (high_bits - int(product))) & 0xffffffff
@@ -299,11 +300,15 @@ def carry_product_elf(degree, product=True, needed=7, high_bits=None, additive=F
             code += bytes.fromhex("4183e0") + bytes([mask & 0xff])
             high = f"((y+{i}U)&{mask}U)"
         code += bytes.fromhex("4401c1" if additive else "4431c1")
+        if factor_mask is not None:
+            code += bytes.fromhex("81e1") + struct.pack("<I", factor_mask)
         code += bytes.fromhex("0fafc1")
         # Keep the independent C oracle in natural order even when the
         # original machine instructions construct the factors differently.
         base = "(x^1U)" if complemented else "x"
         factors[i] = f"(({base}+{offset}U){'+' if additive else '^'}{high})"
+        if factor_mask is not None:
+            factors[i] = f"({factors[i]}&{factor_mask}U)"
     code += bytes.fromhex("01f8 01f0 01d0 c3")
     return elf(code), f"x+y+z+{scale}U*" + "*".join(factors)
 
@@ -573,6 +578,8 @@ if __name__ == "__main__":
             ("carry-product-partial-neighbor-47", *carry_product_elf(47, True, 7, 4, neighbor=True)),
             ("carry-product-partial-complement-neighbor-95", *carry_product_elf(95, True, 8, 5, complemented=True, neighbor=True)),
             ("carry-product-partial-projected-neighbor-256", *carry_product_elf(256, True, 7, 2, complemented=True, neighbor=True)),
+            ("carry-cofactor-projected-complement-256", *carry_product_elf(256, True, 8, 2, complemented=True)),
+            ("carry-cofactor-masked-window-16", *carry_product_elf(16, True, 8, 2, factor_mask=0x80000003)),
             ("carry-product-64", *carry_product_elf(64, False)),
             ("carry-cofactor-8", *carry_product_elf(8, True, 5, 2)),
             ("carry-cofactor-projection-24", *carry_product_elf(24, True, 5, 2)),

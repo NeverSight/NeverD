@@ -459,21 +459,29 @@ void applyRegisterTransfer(const MedInstruction &Instruction,
             ? State[Instruction.Src]
             : RegisterValue{RegisterValue::Kind::Constant,
                             instructionImmediate(Instruction), 0};
+    // A full-width identity mask preserves the exact value, including an
+    // affine address. Truncated masks still use the numeric/conservative
+    // transfer below; their result need not identify the original pointer.
     if (Instruction.Op == Operation::And &&
         Instruction.Width == kDoubleWordBitWidth &&
-        Left.ValueKind == RegisterValue::Kind::UnsignedRange &&
+        Right.ValueKind == RegisterValue::Kind::Constant &&
+        Right.Value == UINT64_MAX)
+      return;
+    if (Instruction.Op == Operation::And &&
+        Instruction.Width == kDoubleWordBitWidth &&
         Right.ValueKind == RegisterValue::Kind::Constant &&
         (Right.Value == 0 || std::has_single_bit(~Right.Value + 1))) {
-      const auto Bounds = *unsignedValueRange(Left);
-      if (Bounds.Lower <= Bounds.Upper) {
+      const auto Bounds =
+          Scratch ? Scratch->valueRange(Left) : unsignedValueRange(Left);
+      if (Bounds && Bounds->Lower <= Bounds->Upper) {
         // Clearing a low-bit suffix is monotone on a nonwrapping unsigned
-        // interval. Other masks and symbolic identities use the ordinary
-        // conservative transfer below.
+        // enclosure, including a capture's path-local bound. Project its
+        // numeric bounds, never its private ID or its pointer identity.
         State[Instruction.Dst] = unsignedRangeValue(
-            {*evaluateScalarALU(Operation::And, Instruction.Width, Bounds.Lower,
-                                Right.Value),
-             *evaluateScalarALU(Operation::And, Instruction.Width, Bounds.Upper,
-                                Right.Value)});
+            {*evaluateScalarALU(Operation::And, Instruction.Width,
+                                Bounds->Lower, Right.Value),
+             *evaluateScalarALU(Operation::And, Instruction.Width,
+                                Bounds->Upper, Right.Value)});
         return;
       }
     }

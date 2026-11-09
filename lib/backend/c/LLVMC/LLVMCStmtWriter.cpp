@@ -8370,15 +8370,26 @@ std::string LLVMCWriter::windowsEHFilterExpr(const llvm::CatchSwitchInst &CS) {
   if (llvm::isa<llvm::ConstantPointerNull>(Filter))
     return "EXCEPTION_EXECUTE_HANDLER";
   if (const auto *Fn = llvm::dyn_cast<llvm::Function>(Filter)) {
-    std::string Args = "GetExceptionInformation()";
-    if (Fn->arg_size() == 2 && Fn->getArg(0)->getType()->isPointerTy() &&
-        Fn->getArg(1)->getType()->isPointerTy()) {
-      if (SEHParentFrameName.empty())
-        SEHParentFrameName = freshVar("seh_parent_frame");
-      Args += ", " + SEHParentFrameName;
-    } else if (Fn->arg_size() != 1 ||
-               !Fn->getArg(0)->getType()->isPointerTy()) {
+    // A filter takes the arguments it reads: none, the exception pointers,
+    // or those and the establisher frame, each a pointer or, as lifted, a
+    // pointer-wide integer.
+    if (Fn->arg_size() > 2)
       throw std::runtime_error("unsupported Windows SEH filter source ABI");
+    std::string Args;
+    for (const llvm::Argument &Arg : Fn->args()) {
+      std::string Value = "GetExceptionInformation()";
+      if (Arg.getArgNo() == 1) {
+        if (SEHParentFrameName.empty())
+          SEHParentFrameName = freshVar("seh_parent_frame");
+        Value = SEHParentFrameName;
+      }
+      llvm::Type *Type = Arg.getType();
+      if (Type->isIntegerTy(
+              Fn->getParent()->getDataLayout().getPointerSizeInBits()))
+        Value = "(" + typeToCLLVM(Type) + ")" + Value;
+      else if (!Type->isPointerTy())
+        throw std::runtime_error("unsupported Windows SEH filter source ABI");
+      Args += (Arg.getArgNo() ? ", " : "") + Value;
     }
     return functionIdentifier(*Fn) + "(" + Args + ")";
   }

@@ -17,8 +17,7 @@ namespace neverd::mips {
 /// Check every local mode crossed by a unit, including zero-sized symbols.
 inline bool codeModeRangeMatches(const BinaryImage &Image, va_t Start,
                                  uint64_t Size, InstructionMode Mode) {
-  if (Image.Mode != InstructionMode::MixedMIPS &&
-      Image.Mode != InstructionMode::MicroMIPS)
+  if (!hasCompressedMIPSCode(Image.Mode))
     return true;
   if (!Size || Size > InvalidVA - Start ||
       Image.instructionModeAt(Start, Mode) != Mode ||
@@ -47,8 +46,7 @@ inline bool codeModeRangeMatches(const BinaryImage &Image, va_t Start,
 /// code-byte addresses are different roles and must not use this conversion.
 inline std::optional<va_t> serializedCodeTarget(const BinaryImage &Image,
                                                 va_t Raw) {
-  if (Image.Mode != InstructionMode::MixedMIPS &&
-      Image.Mode != InstructionMode::MicroMIPS)
+  if (!hasCompressedMIPSCode(Image.Mode))
     return normalizeCodeAddress(Raw, Image.Arch, Image.Mode);
   if (Raw > UINT32_MAX)
     return std::nullopt;

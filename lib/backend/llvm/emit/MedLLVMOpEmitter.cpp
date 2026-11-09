@@ -290,8 +290,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     // BlockAddress versus numeric layout semantics.
     const MedVar &Input = Op.Inputs[0];
     llvm::Function *KnownFunction = nullptr;
-    const bool MixedMIPS = Img && (Img->Mode == InstructionMode::MixedMIPS ||
-                                   Img->Mode == InstructionMode::MicroMIPS);
+    const bool MixedMIPS = Img && (hasCompressedMIPSCode(Img->Mode));
     if (Input.isConst() && isExactAddressProvenance(Input.Provenance) &&
         !(MixedMIPS &&
           Input.Provenance == ConstantAddressProvenance::DataAddress)) {

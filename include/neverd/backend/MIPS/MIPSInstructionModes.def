@@ -3,8 +3,13 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
-// Preserve callable pointer tags when original-target source is rebuilt.
-MIPS_SOURCE_MODE(MIPSClassic, "nomicromips", "__attribute__((nomicromips)) ")
-MIPS_SOURCE_MODE(MicroMIPS, "micromips", "__attribute__((micromips)) ")
+// Mode, LLVM feature, excluded alternative, C spelling. Positive modes precede
+// classic mode when recognizing older LLVM IR carrying only one attribute.
+MIPS_SOURCE_MODE(MIPS16, "mips16", "nomicromips",
+                 "__attribute__((mips16,nomicromips)) ")
+MIPS_SOURCE_MODE(MicroMIPS, "micromips", "nomips16",
+                 "__attribute__((micromips,nomips16)) ")
+MIPS_SOURCE_MODE(MIPSClassic, "nomicromips", "nomips16",
+                 "__attribute__((nomicromips,nomips16)) ")
 
 #undef MIPS_SOURCE_MODE

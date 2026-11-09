@@ -2613,8 +2613,11 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       return InstructionMode::MIPSClassic;
     case LowInstructionTargetMode::MicroMIPS:
       return InstructionMode::MicroMIPS;
+    case LowInstructionTargetMode::MIPS16:
+      return InstructionMode::MIPS16;
     case LowInstructionTargetMode::Preserve:
       return Source.Mode;
+    case LowInstructionTargetMode::FromMIPS16TargetBit0:
     case LowInstructionTargetMode::FromTargetBit0:
       return std::nullopt;
     }
@@ -2864,8 +2867,7 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
                                                             Rec.Size, Rec.Ops);
       rewriteI386PLTJump(Img, Rec);
       bool InvalidCallMode = false;
-      if (Img.Mode == InstructionMode::MixedMIPS ||
-          Img.Mode == InstructionMode::MicroMIPS)
+      if (hasCompressedMIPSCode(Img.Mode))
         for (const auto &Op : Rec.Ops)
           if (Op.Opcode == NdOp::CALL && Op.NumInputs &&
               Op.Inputs[0].isConst() &&

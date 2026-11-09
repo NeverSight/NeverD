@@ -364,6 +364,14 @@ inline bool isSingleInstructionMode(InstructionMode Mode) {
   return false;
 }
 
+inline bool isMIPSCompressedMode(InstructionMode Mode) {
+  return Mode == InstructionMode::MicroMIPS || Mode == InstructionMode::MIPS16;
+}
+
+inline bool hasCompressedMIPSCode(InstructionMode Mode) {
+  return Mode == InstructionMode::MixedMIPS || isMIPSCompressedMode(Mode);
+}
+
 inline unsigned instructionModeAlignment(InstructionMode Mode) {
   switch (Mode) {
 #define NEVERD_INSTRUCTION_MODE(Name, Spelling, Concrete, Alignment)           \

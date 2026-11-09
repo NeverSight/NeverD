@@ -190,10 +190,21 @@ struct StoredMemoryCoordinates {
 class StoredRegisterMemory {
 public:
   void setCoordinates(std::shared_ptr<const StoredMemoryCoordinates> Context) {
+    if (!Coordinates || !Context ||
+        Coordinates->Addresses != Context->Addresses)
+      CapturedRanges.clear();
     Coordinates = std::move(Context);
   }
   void setSymbolicAddresses(std::shared_ptr<const SymbolicAddressSpace> Space);
   const std::shared_ptr<const SymbolicAddressSpace> &symbolicAddresses() const;
+  /// Path-local bounds of immutable captured values. Refinement keeps the
+  /// capture's equality identity; it never changes the shared address space.
+  /// Only a guard on this exact value may supply a narrower interval.
+  void refineCapturedRange(const RegisterValue &Value,
+                           UnsignedValueRange Range);
+  std::optional<UnsignedValueRange> valueRange(const RegisterValue &Value,
+                                               bool AllowWrap = false) const;
+  void discardCapturedRanges() { CapturedRanges.clear(); }
   std::optional<uint64_t> frameTranslationBound() const;
   /// Whether this window can hold typed facts in a scratch region. Frame
   /// coordinates may need translation; this proves neither validity nor
@@ -241,8 +252,11 @@ public:
   /// Translate typed frame keys and values without shifting literal VM bits.
   /// Leave the complete memory unchanged if any translation is unrepresentable.
   bool translateFrameCoordinates(int64_t Delta);
-  void clear() { Values.clear(); }
-  bool empty() const { return Values.empty(); }
+  void clear() {
+    Values.clear();
+    CapturedRanges.clear();
+  }
+  bool empty() const { return Values.empty() && CapturedRanges.empty(); }
   uint64_t retainedByteEstimate() const;
   RegisterValue
   read(va_t Address,
@@ -270,7 +284,11 @@ private:
   // The second word is a numeric coordinate or a signed capture displacement;
   // the third is the exact byte width of the typed cell.
   std::map<std::tuple<uint64_t, uint64_t, unsigned>, ProvenValueSet> Values;
+  // Bounds of the undisplaced capture on every path reaching this state.
+  // Missing entries use the immutable enclosure in Coordinates.
+  std::map<uint64_t, UnsignedValueRange> CapturedRanges;
   std::shared_ptr<const StoredMemoryCoordinates> Coordinates;
+  void joinCapturedRanges(const StoredRegisterMemory &Other);
 };
 
 /// What the register fixed point does not carry: the scratch bytes a program

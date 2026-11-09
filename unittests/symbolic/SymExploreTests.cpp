@@ -1467,6 +1467,113 @@ TEST(SymExplore, InterworkingDoesNotEnterABlockDecodedInTheWrongMode) {
   EXPECT_EQ(*Paths.front().DestinationMode, InstructionMode::Thumb);
 }
 
+TEST(SymExplore, MIPS16InterworkingRetainsItsFamilyAcrossClassicBlocks) {
+  for (InstructionMode CalleeMode :
+       {InstructionMode::MIPS16, InstructionMode::MicroMIPS}) {
+    SymContext Ctx;
+    FunctionBuilder B;
+    B.instruction(
+        {op(NdOp::INDIR_BR, NdVar{}, {NdVar::cst(kBase + kBlockSize + 1, 4)})},
+        {1}, InstructionMode::MIPSClassic, LowInstructionControl::Branch,
+        LowInstructionControlFlag::Branch | LowInstructionControlFlag::Indirect,
+        LowInstructionTargetMode::FromMIPS16TargetBit0);
+    B.instruction({op(NdOp::RETURN, NdVar{}, {NdVar::cst(0x7001, 4)})}, {},
+                  CalleeMode, LowInstructionControl::Return,
+                  LowInstructionControlFlag::Return,
+                  CalleeMode == InstructionMode::MIPS16
+                      ? LowInstructionTargetMode::FromMIPS16TargetBit0
+                      : LowInstructionTargetMode::FromTargetBit0);
+    const auto Exploration = explorePathsDetailed(Ctx, B.function());
+    ASSERT_EQ(Exploration.Paths.size(), 1u);
+    const auto &Path = Exploration.Paths.front();
+    EXPECT_EQ(Path.DestinationMode, InstructionMode::MIPS16);
+    if (CalleeMode == InstructionMode::MIPS16) {
+      EXPECT_EQ(Path.Outcome, PathOutcome::Returned);
+      EXPECT_EQ(Path.Blocks, (std::vector<int>{0, 1}));
+      EXPECT_EQ(Path.SourceMode, InstructionMode::MIPS16);
+      ASSERT_TRUE(Path.Target.isValid());
+      ASSERT_TRUE(Ctx.isConst(Path.Target));
+      EXPECT_EQ(Ctx.constValue(Path.Target).getZExtValue(), 0x7000u);
+      EXPECT_TRUE(Exploration.Complete);
+    } else {
+      EXPECT_EQ(Path.Outcome, PathOutcome::InvalidControlTarget);
+      EXPECT_EQ(Path.Blocks, (std::vector<int>{0}));
+      EXPECT_FALSE(Exploration.Complete);
+    }
+  }
+}
+
+TEST(SymExplore, MIPSReturnsValidateTheirArchitecturalTarget) {
+  for (InstructionMode Source :
+       {InstructionMode::MIPSClassic, InstructionMode::MicroMIPS,
+        InstructionMode::MIPS16}) {
+    for (uint64_t RawTarget : {0x7000u, 0x7001u, 0x7002u}) {
+      SCOPED_TRACE(static_cast<unsigned>(Source));
+      SCOPED_TRACE(RawTarget);
+      SymContext Ctx;
+      FunctionBuilder B;
+      B.instruction({op(NdOp::RETURN, NdVar{}, {NdVar::cst(RawTarget, 4)})}, {},
+                    Source, LowInstructionControl::Return,
+                    LowInstructionControlFlag::Return,
+                    Source == InstructionMode::MIPS16
+                        ? LowInstructionTargetMode::FromMIPS16TargetBit0
+                        : LowInstructionTargetMode::FromTargetBit0);
+      const auto Exploration = explorePathsDetailed(Ctx, B.function());
+      ASSERT_EQ(Exploration.Paths.size(), 1u);
+      const auto &Path = Exploration.Paths.front();
+      EXPECT_EQ(Path.SourceMode, Source);
+      EXPECT_EQ(Path.DestinationMode, RawTarget == 0x7001
+                                          ? (Source == InstructionMode::MIPS16
+                                                 ? InstructionMode::MIPS16
+                                                 : InstructionMode::MicroMIPS)
+                                          : InstructionMode::MIPSClassic);
+      EXPECT_EQ(Path.Outcome, RawTarget == 0x7002
+                                  ? PathOutcome::InvalidControlTarget
+                                  : PathOutcome::Returned);
+      EXPECT_EQ(Exploration.Complete, RawTarget != 0x7002);
+      ASSERT_TRUE(Path.Target.isValid());
+      ASSERT_TRUE(Ctx.isConst(Path.Target));
+      EXPECT_EQ(Ctx.constValue(Path.Target).getZExtValue(),
+                RawTarget == 0x7002 ? RawTarget : 0x7000u);
+    }
+  }
+}
+
+TEST(SymExplore, LegacyReturnOperandsRemainSemanticValues) {
+  for (bool HasBoundary : {false, true}) {
+    SymContext Ctx;
+    FunctionBuilder B;
+    auto Return = op(NdOp::RETURN, NdVar{}, {NdVar::cst(0x7002, 4)});
+    if (HasBoundary)
+      B.instruction({Return}, {}, InstructionMode::Default,
+                    LowInstructionControl::Return,
+                    LowInstructionControlFlag::Return);
+    else
+      B.block({Return}, {});
+    const auto Exploration = explorePathsDetailed(Ctx, B.function());
+    ASSERT_EQ(Exploration.Paths.size(), 1u);
+    EXPECT_EQ(Exploration.Paths.front().Outcome, PathOutcome::Returned);
+    EXPECT_FALSE(Exploration.Paths.front().Target.isValid());
+    EXPECT_TRUE(Exploration.Complete);
+  }
+}
+
+TEST(SymExplore, MIPS16UnknownTargetsDoNotInventAClassicDestinationMode) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  B.instruction({op(NdOp::INDIR_BR, NdVar{}, {NdVar::reg(kRax, 4)})}, {},
+                InstructionMode::MIPS16, LowInstructionControl::Branch,
+                LowInstructionControlFlag::Branch |
+                    LowInstructionControlFlag::Indirect,
+                LowInstructionTargetMode::FromMIPS16TargetBit0);
+  const auto Exploration = explorePathsDetailed(Ctx, B.function());
+  ASSERT_EQ(Exploration.Paths.size(), 1u);
+  const auto &Path = Exploration.Paths.front();
+  EXPECT_EQ(Path.SourceMode, InstructionMode::MIPS16);
+  EXPECT_FALSE(Path.DestinationMode);
+  EXPECT_FALSE(Exploration.Complete);
+}
+
 TEST(SymExplore, ReportsCanonicalModeForAnExternalOddTarget) {
   SymContext Ctx;
   FunctionBuilder B;

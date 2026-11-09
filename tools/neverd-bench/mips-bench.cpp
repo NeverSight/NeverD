@@ -73,6 +73,12 @@ int main(int Argc, char **Argv) try {
     Encoding = InstructionMode::MicroMIPS;                                     \
   }
 #include "mips-bench.def"
+#define NEVERD_MIPS16_BENCH_PROFILE(Name, Value)                               \
+  if (std::string_view(Argv[1]) == #Name) {                                    \
+    Target = Arch::Value;                                                      \
+    Encoding = InstructionMode::MIPS16;                                        \
+  }
+#include "mips-bench.def"
 #define NEVERD_MIPS_DSP_BENCH_PROFILE(Name, Value)                             \
   if (std::string_view(Argv[1]) == #Name) {                                    \
     Target = Arch::Value;                                                      \
@@ -105,8 +111,7 @@ int main(int Argc, char **Argv) try {
   if (!Input)
     throw std::runtime_error(Input.getError().message());
   const auto Bytes = (*Input)->getBuffer();
-  if (Bytes.empty() ||
-      Bytes.size() % (Encoding == InstructionMode::MicroMIPS ? 2 : 4))
+  if (Bytes.empty() || Bytes.size() % (isMIPSCompressedMode(Encoding) ? 2 : 4))
     throw std::invalid_argument("expected a nonempty aligned MIPS code span");
   Decoder Decode;
   BinaryImage Profile;
@@ -118,6 +123,7 @@ int main(int Argc, char **Argv) try {
   Profile.MIPS->HasMSA = MSA;
   Profile.MIPS->ISARevision = MSA ? 5 : 2;
   Profile.MIPS->HasMicroMIPS = Encoding == InstructionMode::MicroMIPS;
+  Profile.MIPS->HasMIPS16 = Encoding == InstructionMode::MIPS16;
   if (!Decode.init(Profile))
     throw std::runtime_error("decoder initialization failed");
   Decode.setDetail(true);
@@ -127,7 +133,9 @@ int main(int Argc, char **Argv) try {
       (isMIPS64(Target) ? CS_MODE_MIPS64R2
        : MSA            ? CS_MODE_MIPS32R5
                         : CS_MODE_MIPS32R2) |
-      (Encoding == InstructionMode::MicroMIPS ? CS_MODE_MICRO : 0) |
+      (Encoding == InstructionMode::MicroMIPS ? CS_MODE_MICRO
+       : Encoding == InstructionMode::MIPS16  ? CS_MODE_MIPS16
+                                              : 0) |
       (archLittleEndian(Target) ? CS_MODE_LITTLE_ENDIAN : CS_MODE_BIG_ENDIAN));
   if (cs_open(CS_ARCH_MIPS, Mode, &Reference.Handle) != CS_ERR_OK ||
       cs_option(Reference.Handle, CS_OPT_DETAIL, CS_OPT_ON) != CS_ERR_OK ||

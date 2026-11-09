@@ -113,9 +113,7 @@ inline uint64_t normalizeCodeAddress(uint64_t Addr, Arch TargetArch,
   const bool TaggedARM =
       TargetArch == Arch::ARM && (Mode == InstructionMode::Thumb ||
                                   Mode == InstructionMode::MixedARMThumb);
-  const bool TaggedMIPS =
-      isMIPS(TargetArch) && (Mode == InstructionMode::MicroMIPS ||
-                             Mode == InstructionMode::MixedMIPS);
+  const bool TaggedMIPS = isMIPS(TargetArch) && hasCompressedMIPSCode(Mode);
   return TaggedARM || TaggedMIPS ? Addr & ~uint64_t(1) : Addr;
 }
 
@@ -124,7 +122,7 @@ inline uint64_t serializeCodePointer(uint64_t Addr, Arch TargetArch,
   if (!isSingleInstructionMode(Mode))
     return InvalidVA;
   return (TargetArch == Arch::ARM && Mode == InstructionMode::Thumb) ||
-                 (isMIPS(TargetArch) && Mode == InstructionMode::MicroMIPS)
+                 (isMIPS(TargetArch) && isMIPSCompressedMode(Mode))
              ? (Addr & ~uint64_t(1)) | uint64_t(1)
              : Addr;
 }

@@ -3947,6 +3947,239 @@ TEST(COFFExceptionIR, RejectsRealLiftedAArch64FilterWithWidenedReturnABI) {
             WindowsEHNativeSourceReason::UnsupportedSEHCallbackABI);
 }
 
+/// A parent whose one call runs in a filter or finally scope, with the lifted
+/// callback.  The callback reads its parent's frame through its second
+/// argument or, when \p ReadsParentRegister, through the parent's x19 that
+/// the AArch64 runtime restores for it.  \p Params is how many of the
+/// runtime's two arguments the callback reads.
+std::vector<MedFunc> sourceCallbackUnit(SEHScopeKind Kind,
+                                        bool ReadsParentRegister,
+                                        Arch Target = Arch::AArch64,
+                                        unsigned Params = 2) {
+  constexpr va_t ParentVA = 0x140001000;
+  constexpr va_t CallbackVA = 0x140002000;
+  constexpr va_t MayThrowVA = 0x140003000;
+  constexpr va_t PersonalityVA = 0x140004000;
+
+  MedFunc Parent;
+  Parent.Entry = ParentVA;
+  Parent.Name = "seh_callback_parent";
+  Parent.ReturnType = NdType::makeVoid();
+  MedBlock Protected;
+  Protected.Id = 0;
+  Protected.StartAddr = ParentVA;
+  Protected.EndAddr = ParentVA + 0x10;
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = ParentVA + 4;
+  Call.addInput(MedVar::makeConst(MayThrowVA, 8));
+  Protected.Ops.push_back(std::move(Call));
+  MedOp ProtectedReturn;
+  ProtectedReturn.Opcode = NdOp::RETURN;
+  ProtectedReturn.Addr = ParentVA + 8;
+  Protected.Ops.push_back(std::move(ProtectedReturn));
+  MedBlock Handler;
+  Handler.Id = 1;
+  Handler.StartAddr = ParentVA + 0x20;
+  Handler.EndAddr = ParentVA + 0x30;
+  MedOp HandlerReturn;
+  HandlerReturn.Opcode = NdOp::RETURN;
+  HandlerReturn.Addr = ParentVA + 0x28;
+  Handler.Ops.push_back(std::move(HandlerReturn));
+  Parent.Blocks.push_back(std::move(Protected));
+  Parent.Blocks.push_back(std::move(Handler));
+
+  ExceptionFunction EH;
+  EH.CodeRange = {ParentVA, ParentVA + 0x40};
+  EH.Encoding = Target == Arch::X64 ? ExceptionEncoding::X64UnwindV1
+                                    : ExceptionEncoding::ARM64Unpacked;
+  EH.ParseStatus = ExceptionParseStatus::Complete;
+  EH.Personality = ExceptionPersonality::CSpecificHandler;
+  EH.PersonalityVA = PersonalityVA;
+  EH.SEH.emplace();
+  SEHScopeRecord Scope;
+  Scope.ParseStatus = ExceptionParseStatus::Complete;
+  Scope.GuardedRange = {ParentVA, ParentVA + 0x10};
+  Scope.Kind = Kind;
+  Scope.FilterOrFinallyVA = CallbackVA;
+  Scope.HandlerVA =
+      Kind == SEHScopeKind::Finally ? CallbackVA : ParentVA + 0x20;
+  Scope.ContinuationVA = Kind == SEHScopeKind::Finally ? 0 : Scope.HandlerVA;
+  EH.SEH->Scopes.push_back(Scope);
+  Parent.ExceptionMetadata = EH;
+
+  MedFunc Callback;
+  Callback.Entry = CallbackVA;
+  Callback.Name = "lifted_seh_callback";
+  const bool Filter = Kind == SEHScopeKind::Filter;
+  Callback.ReturnType =
+      Filter ? NdType::makeInt(4, /*Signed=*/true) : NdType::makeVoid();
+  for (unsigned I = 0; I < Params; ++I) {
+    MedVar Param;
+    Param.Kind = MedVar::Param;
+    Param.TheArch = Target;
+    Param.Id = static_cast<int>(I);
+    Param.Size = I == 0 && !Filter ? 4 : 8;
+    Param.RegOff = Target == Arch::X64 ? (I == 0 ? x86reg::RCX : x86reg::RDX)
+                                       : (I == 0 ? a64reg::X0 : a64reg::X1);
+    Callback.Params.push_back(Param);
+    Callback.TypedParams.push_back(
+        {I == 0 ? (Filter ? "exception_pointers" : "abnormal_termination")
+                : "establisher_frame",
+         I == 0 && !Filter ? NdType::makeInt(4, false) : NdType::makePtr()});
+  }
+  MedVar Base = Callback.Params.back();
+  if (ReadsParentRegister) {
+    Base = MedVar();
+    Base.Kind = MedVar::Reg;
+    Base.TheArch = Arch::AArch64;
+    Base.Id = 19;
+    Base.Size = 8;
+    Base.RegOff = a64reg::X19;
+  }
+  MedBlock Body;
+  Body.Id = 0;
+  Body.StartAddr = CallbackVA;
+  Body.EndAddr = CallbackVA + 8;
+  MedVar Counter;
+  Counter.Kind = MedVar::Temp;
+  Counter.TheArch = Target;
+  Counter.Id = 40;
+  Counter.SSAVer = 1;
+  Counter.Size = 4;
+  MedOp Load;
+  Load.Opcode = NdOp::LOAD;
+  Load.Addr = CallbackVA;
+  Load.addInput(Base);
+  Load.Output = Counter;
+  Body.Ops.push_back(std::move(Load));
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = CallbackVA + 4;
+  if (Filter) {
+    Return.addInput(Counter);
+  } else {
+    MedOp Store;
+    Store.Opcode = NdOp::STORE;
+    Store.Addr = CallbackVA;
+    Store.addInput(Base);
+    Store.addInput(MedVar::makeConst(1, 4));
+    Body.Ops.push_back(std::move(Store));
+  }
+  Body.Ops.push_back(std::move(Return));
+  Callback.Blocks.push_back(std::move(Body));
+
+  return {
+      Parent, Callback,
+      makeAddressBackedPersonality(PersonalityVA, "\01__C_specific_handler")};
+}
+
+std::unique_ptr<llvm::Module> emitSourceView(const std::vector<MedFunc> &Unit,
+                                             llvm::LLVMContext &Context,
+                                             Arch Target = Arch::AArch64,
+                                             bool Source = true) {
+  MedLLVMEmitter Emitter;
+  Emitter.setPreserveUnknownSourceValues(Source);
+  Emitter.setAnalysisRecoveryForSource(Source);
+  return Emitter.emit(Unit, Context, "source_callbacks", Target,
+                      {{0x140003000, "may_throw"}}, nullptr,
+                      BinaryFormat::COFF);
+}
+
+// Printed C runs an AArch64 callback by calling it, as x64's runtime does:
+// the callback reads its parent only through the two arguments it is given.
+TEST(COFFExceptionIR, SourceViewCallsAnAArch64CallbackOfItsArguments) {
+  for (SEHScopeKind Kind : {SEHScopeKind::Filter, SEHScopeKind::Finally}) {
+    SCOPED_TRACE(Kind == SEHScopeKind::Filter ? "filter" : "finally");
+    const std::vector<MedFunc> Unit = sourceCallbackUnit(Kind, false);
+    const WindowsEHNativeSourceClassification Source =
+        classifyWindowsEHNativeSource(
+            *Unit.front().ExceptionMetadata, Arch::AArch64, BinaryFormat::COFF,
+            WindowsEHNativeCapability::SourceIRLowering);
+    EXPECT_TRUE(Source.canLowerNativeIR());
+    EXPECT_FALSE(Source.canPatchOutput());
+
+    llvm::LLVMContext Context;
+    auto Module = emitSourceView(Unit, Context);
+    ASSERT_NE(Module, nullptr);
+    expectVerifierClean(*Module);
+    llvm::Function *Parent = Module->getFunction("seh_callback_parent");
+    llvm::Function *Callback = Module->getFunction("lifted_seh_callback");
+    ASSERT_NE(Parent, nullptr);
+    ASSERT_NE(Callback, nullptr);
+    EXPECT_TRUE(Parent->hasPersonalityFn());
+    bool Calls = false;
+    for (const llvm::BasicBlock &Block : *Parent)
+      for (const llvm::Instruction &Inst : Block) {
+        if (const auto *Pad = llvm::dyn_cast<llvm::CatchPadInst>(&Inst))
+          Calls |= Pad->getArgOperand(0)->stripPointerCasts() == Callback;
+        const auto *Run = llvm::dyn_cast<llvm::CallBase>(&Inst);
+        if (!Run || Run->getCalledFunction() != Callback)
+          continue;
+        // The flag at the width the callback reads it, and the frame.
+        const auto *Flag =
+            llvm::dyn_cast<llvm::ConstantInt>(Run->getArgOperand(0));
+        ASSERT_NE(Flag, nullptr);
+        EXPECT_TRUE(Flag->getType()->isIntegerTy(32));
+        EXPECT_EQ(Flag->getZExtValue(), 1u);
+        EXPECT_TRUE(Run->getArgOperand(1)->getType()->isPointerTy());
+        Calls = true;
+      }
+    EXPECT_TRUE(Calls);
+  }
+}
+
+// An x64 filter that reads only the exception pointers lifts with that one
+// parameter.  Printed C calls it so; native IR keeps the runtime's own type.
+TEST(COFFExceptionIR, SourceViewCallsAnX64FilterOfOneArgument) {
+  const std::vector<MedFunc> Unit = sourceCallbackUnit(
+      SEHScopeKind::Filter, /*ReadsParentRegister=*/false, Arch::X64,
+      /*Params=*/1);
+  for (bool Source : {false, true}) {
+    SCOPED_TRACE(Source ? "source" : "native");
+    llvm::LLVMContext Context;
+    auto Module = emitSourceView(Unit, Context, Arch::X64, Source);
+    ASSERT_NE(Module, nullptr);
+    expectVerifierClean(*Module);
+    llvm::Function *Parent = Module->getFunction("seh_callback_parent");
+    llvm::Function *Callback = Module->getFunction("lifted_seh_callback");
+    ASSERT_NE(Parent, nullptr);
+    ASSERT_NE(Callback, nullptr);
+    EXPECT_EQ(Callback->arg_size(), 1u);
+    EXPECT_EQ(Parent->hasPersonalityFn(), Source);
+  }
+}
+
+// C prints a filter whose lifted body returns no value as returning void, so
+// its __except would have no disposition: the parent stays without a __try.
+TEST(COFFExceptionIR, SourceViewKeepsAFilterThatReturnsNoValue) {
+  std::vector<MedFunc> Unit = sourceCallbackUnit(
+      SEHScopeKind::Filter, /*ReadsParentRegister=*/false, Arch::X64);
+  Unit[1].ReturnsNoValue = true;
+  llvm::LLVMContext Context;
+  auto Module = emitSourceView(Unit, Context, Arch::X64);
+  ASSERT_NE(Module, nullptr);
+  expectVerifierClean(*Module);
+  llvm::Function *Parent = Module->getFunction("seh_callback_parent");
+  ASSERT_NE(Parent, nullptr);
+  EXPECT_FALSE(Parent->hasPersonalityFn());
+}
+
+// A callback that reads a callee-saved register the runtime restores for it
+// cannot be called with two arguments: the parent stays without a __try.
+TEST(COFFExceptionIR, SourceViewKeepsAnAArch64CallbackOfTheParentsRegisters) {
+  for (SEHScopeKind Kind : {SEHScopeKind::Filter, SEHScopeKind::Finally}) {
+    SCOPED_TRACE(Kind == SEHScopeKind::Filter ? "filter" : "finally");
+    llvm::LLVMContext Context;
+    auto Module = emitSourceView(sourceCallbackUnit(Kind, true), Context);
+    ASSERT_NE(Module, nullptr);
+    expectVerifierClean(*Module);
+    llvm::Function *Parent = Module->getFunction("seh_callback_parent");
+    ASSERT_NE(Parent, nullptr);
+    EXPECT_FALSE(Parent->hasPersonalityFn());
+  }
+}
+
 TEST(COFFExceptionIR, PreservesNativeFilterCallbackThroughO3AndCodegen) {
   constexpr va_t ParentVA = 0x140091000;
   constexpr va_t HandlerVA = ParentVA + 0x20;

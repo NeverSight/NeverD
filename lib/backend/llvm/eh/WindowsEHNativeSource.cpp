@@ -607,7 +607,7 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
 #ifdef LLVM_NEVERD_X86_REGISTRATION_GS
     OutputAvailable |= EH4;
 #endif
-    if (Capability == WindowsEHNativeCapability::IRLowering || OutputAvailable)
+    if (Capability != WindowsEHNativeCapability::OutputPatch || OutputAvailable)
       return {Model, WindowsEHNativeSourceReason::Eligible, Capability};
     return reject(Model,
                   WindowsEHNativeSourceReason::OutputReconstructionUnavailable,
@@ -655,7 +655,7 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
     // complete table/handler receipts; the PE transaction independently
     // replays edited IR, source helpers, physical frame and final image.
 #ifdef LLVM_NEVERD_X86_CXX_CATCH_SUBFIELDS
-    if (Capability == WindowsEHNativeCapability::IRLowering)
+    if (Capability != WindowsEHNativeCapability::OutputPatch)
       return {Model, WindowsEHNativeSourceReason::Eligible, Capability};
 #endif
 #if defined(LLVM_NEVERD_X86_CXX_CATCH_SUBFIELDS) &&                            \
@@ -759,7 +759,7 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
   // catch whose funclet is outside the function when every continuation is
   // inside the function, or when that catch names no continuation at all.
   // Two or more continuations are resumed from the funclet's pointer result.
-  if (Capability == WindowsEHNativeCapability::IRLowering &&
+  if (Capability != WindowsEHNativeCapability::OutputPatch &&
       (Model == WindowsEHNativeSourceModel::CxxFH3 ||
        Model == WindowsEHNativeSourceModel::CxxFH4) &&
       ((Reason == WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction &&
@@ -790,6 +790,8 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
                       }))
         return reject(Model, WindowsEHNativeSourceReason::InvalidSEHScope,
                       Capability);
+      if (Capability == WindowsEHNativeCapability::SourceIRLowering)
+        return {Model, Reason, Capability};
       if (EH.SEH->Scopes.size() != 1)
         return reject(Model,
                       WindowsEHNativeSourceReason::UnsupportedSEHScopeGraph,
@@ -818,10 +820,11 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
                     Capability);
     if ((Capability == WindowsEHNativeCapability::OutputPatch &&
          HasNormalizedFilter) ||
-        std::any_of(EH.SEH->Scopes.begin(), EH.SEH->Scopes.end(),
-                    [](const SEHScopeRecord &Scope) {
-                      return Scope.Kind != SEHScopeKind::CatchAll;
-                    }))
+        (Capability != WindowsEHNativeCapability::SourceIRLowering &&
+         std::any_of(EH.SEH->Scopes.begin(), EH.SEH->Scopes.end(),
+                     [](const SEHScopeRecord &Scope) {
+                       return Scope.Kind != SEHScopeKind::CatchAll;
+                     })))
       return reject(Model,
                     WindowsEHNativeSourceReason::UnsupportedSEHCallbackABI,
                     Capability);

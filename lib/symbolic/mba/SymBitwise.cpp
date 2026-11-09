@@ -65,6 +65,11 @@ namespace {
 
 constexpr size_t kCostCeiling = std::numeric_limits<size_t>::max();
 
+// Input columns repeat these exact patterns within each storage word.
+constexpr std::array<uint64_t, 6> WordColumns{
+    0xaaaaaaaaaaaaaaaaULL, 0xccccccccccccccccULL, 0xf0f0f0f0f0f0f0f0ULL,
+    0xff00ff00ff00ff00ULL, 0xffff0000ffff0000ULL, 0xffffffff00000000ULL};
+
 /// Saturating arithmetic, so an estimate that overflows reads as "more than
 /// any budget" rather than wrapping into an affordable-looking number.  Every
 /// affordability test in this file is a comparison against a budget, and a
@@ -338,6 +343,35 @@ llvm::SmallVector<Implicant, 16> primeImplicants(const TruthTable &Table,
                                                  unsigned NumVars, size_t &Work,
                                                  size_t Budget) {
   const auto Full = static_cast<uint32_t>((size_t(1) << NumVars) - 1);
+  if (Table.entries() <= std::numeric_limits<uint64_t>::digits) {
+    const auto Missing =
+        ~Table.packed() & (~uint64_t(0) >> (64 - Table.entries()));
+    if (std::has_single_bit(Missing)) {
+      // Excluding one corner leaves precisely one essential literal per
+      // input. A round with C cared inputs contains choose(N,C)*(2^C-1)
+      // cubes. Preserve every old round's admission before emitting those
+      // primes directly; even a short allowance keeps its original answer.
+      size_t Masks = 1;
+      for (unsigned Care = NumVars; Care; --Care) {
+        const size_t Count = Masks * ((size_t(1) << Care) - 1);
+        Work = saturatingAdd(Work, saturatingMul(Count, Count));
+        if (Work > Budget)
+          return {};
+        Masks = Masks * Care / (NumVars - Care + 1);
+      }
+      const auto Corner = uint32_t(std::countr_zero(Missing));
+      llvm::SmallVector<Implicant, 16> Primes;
+      // The ordinary frontier discovers zero-valued cubes by descending
+      // remaining care bit, then positive literals in ascending value order.
+      for (unsigned J = NumVars; J-- > 0;)
+        if (Corner & (1u << J))
+          Primes.push_back({0, 1u << J});
+      for (unsigned J = 0; J < NumVars; ++J)
+        if (!(Corner & (1u << J)))
+          Primes.push_back({1u << J, 1u << J});
+      return Primes;
+    }
+  }
   llvm::SmallVector<Implicant, 16> Frontiers[2];
   for (size_t K = 0, E = Table.entries(); K < E; ++K)
     if (Table.at(K))
@@ -374,9 +408,8 @@ llvm::SmallVector<Implicant, 16> primeImplicants(const TruthTable &Table,
       std::fill_n(DirectSeen.begin(), SeenWords, uint64_t(0));
     else
       Seen->clear();
-    auto grow = [&](size_t I, size_t J, uint32_t Diff) {
-      Merged[I] = Merged[J] = 1;
-      Implicant Grown{Current[I].Value & ~Diff, Current[I].Care & ~Diff};
+    auto grow = [&](Implicant P, uint32_t Diff) {
+      Implicant Grown{P.Value & ~Diff, P.Care & ~Diff};
       bool New;
       if (SeenWords) {
         // Both fields fit in NumVars bits. This is an exact membership bit,
@@ -397,7 +430,35 @@ llvm::SmallVector<Implicant, 16> primeImplicants(const TruthTable &Table,
     // complete pair scan, visit only those exact neighbors. The original
     // quadratic work admission stays in force.
     const auto CareBits = std::popcount(Current.front().Care);
-    if (Current.size() - 1 > 2 * size_t(CareBits + 1)) {
+    const bool IndexNeighbors = Current.size() - 1 > 2 * size_t(CareBits + 1);
+    if (IndexNeighbors && SeenWords) {
+      // Current terms have one more cared bit than every grown term. Their
+      // complete care/value keys therefore occupy disjoint bits in the same
+      // table: exact neighbor membership and next-round deduplication can
+      // share it without another index, allocation or clearing pass.
+      for (Implicant P : Current) {
+        const auto Key = (P.Care << NumVars) | P.Value;
+        DirectSeen[Key / 64] |= uint64_t(1) << (Key % 64);
+      }
+      // Values stay ascending between rounds. Ascending zero-to-one bits
+      // visit later neighbors in the original (I, J) discovery order,
+      // retaining every greedy cover tie without sorting neighbor indices.
+      for (size_t I = 0; I < Current.size(); ++I) {
+        const auto P = Current[I];
+        const auto Key = (P.Care << NumVars) | P.Value;
+        for (uint32_t Rest = P.Care; Rest; Rest &= Rest - 1) {
+          const uint32_t Bit = Rest & -Rest;
+          const auto Neighbor = Key ^ Bit;
+          if (!(DirectSeen[Neighbor / 64] & (uint64_t(1) << (Neighbor % 64))))
+            continue;
+          // Each endpoint independently finds the other, including a term
+          // with only earlier neighbors. Emit only from the smaller value.
+          Merged[I] = 1;
+          if (!(P.Value & Bit))
+            grow(P, Bit);
+        }
+      }
+    } else if (IndexNeighbors) {
       auto key = [](uint32_t Value, uint32_t Care) {
         return (uint64_t(Care) << 32) | Value;
       };
@@ -427,8 +488,10 @@ llvm::SmallVector<Implicant, 16> primeImplicants(const TruthTable &Table,
         // Preserve the old (I, J) discovery order: greedy cover ties must not
         // change merely because the lookup table uses a different traversal.
         std::sort(Neighbors.begin(), Neighbors.end());
-        for (size_t J : Neighbors)
-          grow(I, J, Current[I].Value ^ Current[J].Value);
+        for (size_t J : Neighbors) {
+          Merged[I] = Merged[J] = 1;
+          grow(Current[I], Current[I].Value ^ Current[J].Value);
+        }
       }
     } else {
       for (size_t I = 0; I < Current.size(); ++I) {
@@ -439,7 +502,8 @@ llvm::SmallVector<Implicant, 16> primeImplicants(const TruthTable &Table,
               (Current[I].Value ^ Current[J].Value) & Current[I].Care;
           if (Diff == 0 || (Diff & (Diff - 1)) != 0)
             continue;
-          grow(I, J, Diff);
+          Merged[I] = Merged[J] = 1;
+          grow(Current[I], Diff);
         }
       }
     }
@@ -578,6 +642,22 @@ SymRef buildCover(SymContext &Ctx, const Cover &C, llvm::ArrayRef<SymRef> Atoms,
 llvm::SmallVector<uint32_t, 16> exclusiveOrTerms(const TruthTable &Table) {
   const unsigned NumVars = Table.numVars();
   const size_t Entries = Table.entries();
+  if (Entries <= std::numeric_limits<uint64_t>::digits) {
+    // Bit K is the coefficient of monomial K. Each subset-inversion step
+    // XORs the lower half of every block into its upper half. Execute all
+    // disjoint blocks of a machine word together, preserving their exact
+    // coefficient order and the caller's existing work admission.
+    uint64_t Coefficients = Table.packed();
+    for (unsigned J = 0; J < NumVars; ++J)
+      Coefficients ^= (Coefficients << (1u << J)) & WordColumns[J];
+    Coefficients &= ~uint64_t(0) >> (64 - Entries);
+    llvm::SmallVector<uint32_t, 16> Terms;
+    while (Coefficients) {
+      Terms.push_back(std::countr_zero(Coefficients));
+      Coefficients &= Coefficients - 1;
+    }
+    return Terms;
+  }
   TruthTable Coefficients = Table;
   for (unsigned J = 0; J < NumVars; ++J) {
     const size_t Bit = size_t(1) << J;
@@ -812,15 +892,12 @@ TruthTable atomTruthTable(unsigned Index, unsigned NumVars) {
   // The first six input columns repeat within each 64-bit storage word.
   // Higher columns alternate whole runs of words. Construct those exact
   // patterns without visiting and setting every individual truth-table bit.
-  static constexpr std::array<uint64_t, 6> Patterns{
-      0xaaaaaaaaaaaaaaaaULL, 0xccccccccccccccccULL, 0xf0f0f0f0f0f0f0f0ULL,
-      0xff00ff00ff00ff00ULL, 0xffff0000ffff0000ULL, 0xffffffff00000000ULL};
   constexpr unsigned WordBits = std::numeric_limits<uint64_t>::digits;
-  if (Index < Patterns.size()) {
+  if (Index < WordColumns.size()) {
     if (Entries <= WordBits)
-      return TruthTable(llvm::APInt(Entries, Patterns[Index]));
-    return TruthTable(
-        llvm::APInt::getSplat(Entries, llvm::APInt(WordBits, Patterns[Index])));
+      return TruthTable(llvm::APInt(Entries, WordColumns[Index]));
+    return TruthTable(llvm::APInt::getSplat(
+        Entries, llvm::APInt(WordBits, WordColumns[Index])));
   }
   auto Bits = llvm::APInt::getZero(Entries);
   const unsigned Run = 1u << Index;
@@ -833,6 +910,14 @@ uint32_t truthTableSupport(const TruthTable &Table) {
   const unsigned NumVars = Table.numVars();
   const size_t Entries = Table.entries();
   uint32_t Support = 0;
+  if (Entries <= std::numeric_limits<uint64_t>::digits) {
+    const auto Bits = Table.packed();
+    const auto Mask = ~uint64_t(0) >> (64 - Entries);
+    for (unsigned J = 0; J < NumVars; ++J)
+      if ((Bits ^ (Bits >> (1u << J))) & ~WordColumns[J] & Mask)
+        Support |= 1u << J;
+    return Support;
+  }
   for (unsigned J = 0; J < NumVars; ++J) {
     const size_t Bit = size_t(1) << J;
     for (size_t K = 0; K < Entries; ++K) {
