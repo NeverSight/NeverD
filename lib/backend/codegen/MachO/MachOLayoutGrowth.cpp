@@ -32,6 +32,7 @@
 namespace neverd {
 namespace {
 #define MACHO_LAYOUT_TEXT(Name, Text) constexpr char Name[] = Text;
+#define MACHO_LAYOUT_VALUE(Type, Name, Value) constexpr Type Name = Value;
 #include "MachOLayoutGrowth.def"
 #define NEVERD_MACHO_FRAME_VALUE(Type, Name, Value) constexpr Type Name = Value;
 #define NEVERD_MACHO_FRAME_TEXT(Name, Text) constexpr char Name[] = Text;
@@ -41,6 +42,56 @@ llvm::Error fail(const llvm::Twine &S) {
   return llvm::createStringError(llvm::errc::not_supported,
                                  "Mach-O layout: " + S);
 }
+struct TextMetadataStorage {
+  uint64_t VA;
+  uint64_t FileOffset;
+};
+
+std::optional<TextMetadataStorage>
+findTextMetadataStorage(llvm::ArrayRef<uint8_t> Binary, uint64_t Capacity) {
+  std::vector<macho_patch_detail::MachOFileRange> Segments, Occupied, Payloads;
+  if (!macho_patch_detail::collectMachOFileRanges(Binary, Segments, Occupied) ||
+      !macho_patch_detail::collectMachOPayloadRanges(Binary, Payloads))
+    return std::nullopt;
+  const auto H = parseMachOHeader(Binary.data(), Binary.size());
+  Occupied.insert(Occupied.end(), Payloads.begin(), Payloads.end());
+  llvm::sort(Occupied, [](const auto &L, const auto &R) {
+    return std::tie(L.Begin, L.End) < std::tie(R.Begin, R.End);
+  });
+  // Zero bytes may still belong to sections or loader payloads. Only reuse
+  // gaps outside the complete ownership inventory, retaining command room.
+  for (const auto &Segment : Segments) {
+    const auto Fields =
+        readMachOSegment(Binary.data() + Segment.HeaderOff, H.Is64);
+    if (readMachOName(Fields.SegName) != kMetadataTextSegment)
+      continue;
+    uint64_t Cursor =
+        std::max(Segment.Begin, uint64_t(H.HeaderSize) + H.SizeOfCmds +
+                                    kMetadataCommandReserve);
+    const auto Available = [&](uint64_t End) {
+      return macho_patch_detail::checkedAlignUp(Cursor, alignof(uint64_t),
+                                                Cursor) &&
+             Cursor <= End && Capacity <= End - Cursor &&
+             llvm::all_of(Binary.slice(Cursor, Capacity),
+                          [](uint8_t Byte) { return Byte == 0; });
+    };
+    for (const auto &Range : Occupied) {
+      if (Range.End <= Cursor)
+        continue;
+      if (Range.Begin >= Segment.End)
+        break;
+      if (Available(Range.Begin))
+        return TextMetadataStorage{Fields.VMAddr + Cursor - Segment.Begin,
+                                   Cursor};
+      Cursor = std::max(Cursor, Range.End);
+    }
+    if (Available(Segment.End))
+      return TextMetadataStorage{Fields.VMAddr + Cursor - Segment.Begin,
+                                 Cursor};
+  }
+  return std::nullopt;
+}
+
 llvm::Expected<uint64_t> moveTextSection(std::vector<uint8_t> &Binary, Arch A,
                                          llvm::StringRef Name,
                                          llvm::ArrayRef<uint8_t> Content,
@@ -51,73 +102,18 @@ llvm::Expected<uint64_t> moveTextSection(std::vector<uint8_t> &Binary, Arch A,
                      kMachOLayoutGrowthMoveTextSectionCapacityLimit ||
       Content.size() > Capacity)
     return fail("metadata capacity exceeds its checked limit");
-  // Newly mapped header-prefix capacity can host metadata without moving
-  // code/data VAs or extending TEXT across an intervening DATA segment.
-  const auto H = parseMachOHeader(Binary.data(), Binary.size());
-  const uint64_t Off =
-      llvm::alignTo(uint64_t(H.HeaderSize) + H.SizeOfCmds + 512, 8);
-  uint64_t First = findFirstMachODataOffset(Binary.data(), Binary.size());
   uint64_t VA = 0;
-  auto Probe = Binary;
-  auto Prefix = reserveMachOHeaderStorage(Probe, A, 512 + Capacity);
-  const bool OwnedPrefix = Prefix && !*Prefix;
-  if (!Prefix)
-    llvm::consumeError(Prefix.takeError());
-  if (OwnedPrefix && Off <= First && Capacity <= First - Off &&
-      rangeInBounds(Off, Capacity, Binary.size()) &&
-      llvm::all_of(llvm::ArrayRef<uint8_t>(Binary).slice(Off, Capacity),
-                   [](uint8_t V) { return !V; })) {
-    forEachMachOLoadCommand(
-        Binary.data(), Binary.size(),
-        [&](const uint8_t *C, uint32_t Cmd, uint32_t, bool Is64) {
-          if (Cmd != getMachOSegmentCmdID(Is64))
-            return;
-          const auto G = readMachOSegment(C, Is64);
-          if (readMachOName(G.SegName) == "__TEXT" && !G.FileOff &&
-              rangeInBounds(Off, Capacity, G.FileSize))
-            VA = G.VMAddr + Off;
-        });
-    if (VA)
-      std::copy(Content.begin(), Content.end(), Binary.begin() + Off);
-  }
-  // Compact tables use section/image-relative references, so moving them into
-  // an existing TEXT tail does not change their payload. EH frames are already
-  // encoded for a planned address and must retain that separate contract.
-  if (!VA && Name == kCompactSection) {
-    std::vector<macho_patch_detail::MachOFileRange> Segments, Sections,
-        Payloads;
-    if (macho_patch_detail::collectMachOFileRanges(Binary, Segments,
-                                                   Sections) &&
-        macho_patch_detail::collectMachOPayloadRanges(Binary, Payloads)) {
-      for (const auto &Segment : Segments) {
-        const auto Fields =
-            readMachOSegment(Binary.data() + Segment.HeaderOff, H.Is64);
-        if (readMachOName(Fields.SegName) != kMetadataTextSegment)
-          continue;
-        uint64_t Tail =
-            std::max(Segment.Begin, uint64_t(H.HeaderSize) + H.SizeOfCmds);
-        for (const auto *Ranges : {&Sections, &Payloads})
-          for (const auto &Range : *Ranges)
-            if (Range.Begin < Segment.End && Segment.Begin < Range.End)
-              Tail = std::max(Tail, Range.End);
-        if (!macho_patch_detail::checkedAlignUp(Tail, alignof(uint64_t),
-                                                Tail) ||
-            Tail > Segment.End || Capacity > Segment.End - Tail ||
-            !llvm::all_of(llvm::ArrayRef<uint8_t>(Binary).slice(Tail, Capacity),
-                          [](uint8_t Byte) { return Byte == 0; }))
-          continue;
-        VA = Fields.VMAddr + (Tail - Segment.Begin);
-        std::copy(Content.begin(), Content.end(), Binary.begin() + Tail);
-        break;
-      }
-    }
+  if (auto Storage = findTextMetadataStorage(Binary, Capacity)) {
+    VA = Storage->VA;
+    std::copy(Content.begin(), Content.end(),
+              Binary.begin() + Storage->FileOffset);
   }
   if (!VA) {
     MachOPatcher P;
     P.setInputKind(RewriteInputKind::ReplacementIR);
     std::vector<uint8_t> Storage(Capacity, 0);
     std::copy(Content.begin(), Content.end(), Storage.begin());
-    VA = P.appendExecSegment(Binary, Storage, "__TEXT", A);
+    VA = P.appendExecSegment(Binary, Storage, kMetadataTextSegment, A);
   }
   if (!VA)
     return fail("metadata growth requires authenticated TEXT capacity");
@@ -128,7 +124,7 @@ llvm::Expected<uint64_t> moveTextSection(std::vector<uint8_t> &Binary, Arch A,
         if (Cmd != getMachOSegmentCmdID(Is64))
           return;
         const auto F = readMachOSegment(C, Is64);
-        if (readMachOName(F.SegName) != "__TEXT" || VA < F.VMAddr ||
+        if (readMachOName(F.SegName) != kMetadataTextSegment || VA < F.VMAddr ||
             !rangeInBounds(VA - F.VMAddr, Capacity, F.FileSize))
           return;
         auto *Out =
@@ -392,8 +388,10 @@ llvm::Expected<uint64_t> declareMachOTextMetadata(std::vector<uint8_t> &Binary,
                  kMachOLayoutGrowthDeclareMachOTextMetadataSizeLimit)
     return fail("invalid metadata section request");
   auto B = Binary;
-  auto Header = reserveMachOHeaderStorage(
-      B, A, (A == Arch::X64 || A == Arch::AArch64) ? 512 + Size : 512);
+  auto Header = reserveMachOHeaderStorage(B, A,
+                                          (A == Arch::X64 || A == Arch::AArch64)
+                                              ? kMetadataCommandReserve + Size
+                                              : kMetadataCommandReserve);
   if (!Header)
     return Header.takeError();
   std::vector<macho_patch_detail::MachOFileRange> Segments, Sections;
@@ -416,7 +414,7 @@ llvm::Expected<uint64_t> declareMachOTextMetadata(std::vector<uint8_t> &Binary,
         if (Cmd != getMachOSegmentCmdID(Is64))
           return;
         const auto F = readMachOSegment(C, Is64);
-        const bool IsText = readMachOName(F.SegName) == "__TEXT";
+        const bool IsText = readMachOName(F.SegName) == kMetadataTextSegment;
         if (CS != getMachOSegmentCmdSize(Is64) + uint64_t(F.NSects) * SS) {
           Invalid = true;
           return;
@@ -469,7 +467,7 @@ llvm::Expected<uint64_t> declareMachOTextMetadata(std::vector<uint8_t> &Binary,
     return fail("new TEXT section needs authenticated header capacity and "
                 "section identities");
   // reserveMachOHeaderStorage authenticates this entire prefix as unowned.
-  const uint64_t Prefix = llvm::alignTo(End + 512, 8);
+  const uint64_t Prefix = llvm::alignTo(End + kMetadataCommandReserve, 8);
   const bool PrefixFits =
       Prefix <= First && Size <= First - Prefix &&
       rangeInBounds(Prefix, Size, B.size()) &&
@@ -486,7 +484,7 @@ llvm::Expected<uint64_t> declareMachOTextMetadata(std::vector<uint8_t> &Binary,
     MachOPatcher P;
     P.setInputKind(RewriteInputKind::ReplacementIR);
     std::vector<uint8_t> Zeros(llvm::alignTo(Size, 4096), 0);
-    VA = P.appendExecSegment(B, Zeros, "__TEXT", A);
+    VA = P.appendExecSegment(B, Zeros, kMetadataTextSegment, A);
     if (!VA || VA < TextVA)
       return fail("new metadata cannot extend the original TEXT segment");
     Off = TextOff + VA - TextVA;
@@ -537,7 +535,7 @@ llvm::Expected<uint64_t> declareMachOTextMetadata(std::vector<uint8_t> &Binary,
     ++G->nsects;
     auto *S = reinterpret_cast<section_64 *>(B.data() + Insert);
     std::memcpy(S->sectname, Name.data(), Name.size());
-    std::memcpy(S->segname, "__TEXT", 6);
+    std::memcpy(S->segname, kMetadataTextSegment, 6);
     S->addr = VA;
     S->offset = Off;
     S->size = Size;
@@ -549,7 +547,7 @@ llvm::Expected<uint64_t> declareMachOTextMetadata(std::vector<uint8_t> &Binary,
     ++G->nsects;
     auto *S = reinterpret_cast<section *>(B.data() + Insert);
     std::memcpy(S->sectname, Name.data(), Name.size());
-    std::memcpy(S->segname, "__TEXT", 6);
+    std::memcpy(S->segname, kMetadataTextSegment, 6);
     S->addr = VA;
     S->offset = Off;
     S->size = Size;
@@ -656,7 +654,8 @@ llvm::Expected<bool> reserveMachOSourceUnwind(
         // Adopt checked prefix growth before placing the compact registry.
         // The growth owner rebases its TEXT-relative records, so refresh the
         // payload instead of copying the pre-growth offsets into the new map.
-        auto Header = reserveMachOHeaderStorage(Candidate, A, 512 + Capacity);
+        auto Header = reserveMachOHeaderStorage(
+            Candidate, A, kMetadataCommandReserve + Capacity);
         if (!Header)
           llvm::consumeError(Header.takeError());
         else if (*Header) {
@@ -671,7 +670,7 @@ llvm::Expected<bool> reserveMachOSourceUnwind(
           if (!Raw)
             return Raw.takeError();
         }
-        auto Moved = moveTextSection(Candidate, A, "__unwind_info",
+        auto Moved = moveTextSection(Candidate, A, kCompactSection,
                                      Raw->OriginalBytes, Capacity);
         if (!Moved)
           return Moved.takeError();
@@ -698,15 +697,20 @@ llvm::Expected<bool> reserveMachOSourceUnwind(
     if (!HasCapacity) {
       MachOPatcher P;
       P.setInputKind(RewriteInputKind::ReplacementIR);
-      const uint64_t VA = P.plannedExecSegmentVA(Candidate, A);
+      const uint64_t Capacity =
+          llvm::alignTo(R->AppendFileOff - R->SectionFileOff +
+                            AdditionalEHBytes + sizeof(uint32_t),
+                        alignof(uint64_t));
+      const auto Storage = findTextMetadataStorage(Candidate, Capacity);
+      const uint64_t VA =
+          Storage ? Storage->VA : P.plannedExecSegmentVA(Candidate, A);
       if (!VA)
         return fail("cannot plan relocated frame storage");
       auto Frames = relocatedFrames(Candidate, *R, VA, Limits);
       if (!Frames)
         return Frames.takeError();
-      auto Moved = moveTextSection(
-          Candidate, A, "__eh_frame", *Frames,
-          llvm::alignTo(Frames->size() + AdditionalEHBytes + 4, 4096));
+      auto Moved =
+          moveTextSection(Candidate, A, "__eh_frame", *Frames, Capacity);
       if (!Moved)
         return Moved.takeError();
       if (*Moved != VA)

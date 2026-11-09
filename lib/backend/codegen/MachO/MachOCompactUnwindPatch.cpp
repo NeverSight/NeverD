@@ -2832,6 +2832,10 @@ llvm::Expected<uint64_t> nativeCompactHeaderVA(llvm::ArrayRef<uint8_t> Binary) {
 
 } // namespace
 
+#define MACHO_NATIVE_UNWIND_TEXT(Name, Text)                                   \
+  static constexpr char Name[] = Text;
+#include "MachOCompactUnwindNative.def"
+
 llvm::Error installNativeMachOCompactUnwind(
     std::vector<uint8_t> &Binary, Arch Architecture,
     llvm::ArrayRef<NativeMachOCompactRange> Ranges) {
@@ -2869,8 +2873,10 @@ llvm::Error installNativeMachOCompactUnwind(
         !macho_unwind::isValidEncodingRange(Architecture, Range.Encoding,
                                             {Range.BeginVA, Range.EndVA}) ||
         Range.EndVA - *HeaderVA > UINT32_MAX ||
-        (Range.Encoding &
-         (macho_unwind::kPersonalityMask | macho_unwind::kHasLSDA)))
+        (Range.Encoding & macho_unwind::kPersonalityMask) ||
+        bool(Range.Encoding & macho_unwind::kHasLSDA) !=
+            Range.LSDAVA.has_value() ||
+        (Range.LSDAVA && !Range.PersonalitySlotVA))
       return llvm::createStringError(
           llvm::errc::not_supported,
           "invalid native compact range or language contract");
@@ -2878,6 +2884,34 @@ llvm::Error installNativeMachOCompactUnwind(
     R.FunctionRVA = Range.BeginVA - *HeaderVA;
     R.FunctionEndRVA = Range.EndVA - *HeaderVA;
     R.Encoding = Range.Encoding;
+    const auto RVA = [&](uint64_t VA) -> llvm::Expected<uint32_t> {
+      if (VA < *HeaderVA || VA - *HeaderVA > UINT32_MAX)
+        return llvm::createStringError(llvm::errc::not_supported,
+                                       kNativeLanguage);
+      return uint32_t(VA - *HeaderVA);
+    };
+    if (Range.PersonalitySlotVA) {
+      auto Slot = RVA(*Range.PersonalitySlotVA);
+      if (!Slot)
+        return Slot.takeError();
+      auto It = llvm::find(Merged.PersonalitySlotRVAs, *Slot);
+      const auto Index = It - Merged.PersonalitySlotRVAs.begin();
+      if (It == Merged.PersonalitySlotRVAs.end()) {
+        if (Merged.PersonalitySlotRVAs.size() ==
+            (macho_unwind::kPersonalityMask >> macho_unwind::kPersonalityShift))
+          return llvm::createStringError(llvm::errc::not_supported,
+                                         kNativeLanguage);
+        Merged.PersonalitySlotRVAs.push_back(*Slot);
+      }
+      R.PersonalitySlotRVA = *Slot;
+      R.Encoding |= (uint32_t(Index) + 1) << macho_unwind::kPersonalityShift;
+    }
+    if (Range.LSDAVA) {
+      auto LSDA = RVA(*Range.LSDAVA);
+      if (!LSDA)
+        return LSDA.takeError();
+      R.LSDARVA = *LSDA;
+    }
     R.Origin = MachOCompactUnwindRecordOrigin::NativeObject;
     Merged.Records.push_back(R);
   }

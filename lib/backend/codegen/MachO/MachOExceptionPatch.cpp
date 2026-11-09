@@ -75,8 +75,15 @@ bool sameRegionIdentity(const MachOEHFrameRegion &Left,
 }
 
 bool sameFDE(const DwarfEHFrameRecord &Left, const DwarfEHFrameRecord &Right) {
+  const auto SamePointer = [](const auto &A, const auto &B) {
+    return bool(A) == bool(B) &&
+           (!A || (A->Value == B->Value && A->Encoding == B->Encoding &&
+                   A->Width == B->Width));
+  };
   return Left.BeginVA == Right.BeginVA && Left.EndVA == Right.EndVA &&
-         Left.RecordVA == Right.RecordVA;
+         Left.RecordVA == Right.RecordVA &&
+         SamePointer(Left.Personality, Right.Personality) &&
+         SamePointer(Left.LSDA, Right.LSDA);
 }
 
 bool sameFDEs(llvm::ArrayRef<DwarfEHFrameRecord> Left,
@@ -733,9 +740,11 @@ llvm::Error installMachOEHFrame(std::vector<uint8_t> &Binary,
   return llvm::Error::success();
 }
 
-llvm::Error installNativeMachOEHFrame(std::vector<uint8_t> &Binary,
-                                      const MachOEHFrameRegion &Region,
-                                      const CompiledSection &Generated) {
+llvm::Error
+installNativeMachOEHFrame(std::vector<uint8_t> &Binary,
+                          const MachOEHFrameRegion &Region,
+                          const CompiledSection &Generated,
+                          llvm::ArrayRef<NativeMachOCompactRange> Ranges) {
   const auto Current = findMachOEHFrameRegion(Binary);
   if (!Current || !sameRegion(*Current, Region) || Generated.IsInImage ||
       Generated.Size != Generated.ExternalBytes.size() ||
@@ -746,8 +755,31 @@ llvm::Error installNativeMachOEHFrame(std::vector<uint8_t> &Binary,
                                            Generated.VA, Region.Is64);
   if (!Records)
     return Records.takeError();
-  if (Records->empty() || llvm::any_of(*Records, [](const auto &R) {
-        return R.HasLanguageAugmentation;
+  std::vector<const NativeMachOCompactRange *> LanguageRanges;
+  LanguageRanges.reserve(Ranges.size());
+  for (const auto &R : Ranges)
+    LanguageRanges.push_back(&R);
+  llvm::sort(LanguageRanges, [](const auto *A, const auto *B) {
+    return A->BeginVA < B->BeginVA;
+  });
+  if (Records->empty() || llvm::any_of(*Records, [&](const auto &R) {
+        if (!R.HasLanguageAugmentation)
+          return false;
+        const auto Range = std::lower_bound(
+            LanguageRanges.begin(), LanguageRanges.end(), R.BeginVA,
+            [](const auto *C, uint64_t VA) { return C->BeginVA < VA; });
+        if (Range == LanguageRanges.end() || (*Range)->BeginVA != R.BeginVA ||
+            (*Range)->EndVA != R.EndVA)
+          return true;
+        const std::optional<uint64_t> Personality =
+            R.Personality && R.Personality->Value
+                ? std::optional(R.Personality->Value)
+                : std::nullopt;
+        const std::optional<uint64_t> LSDA = R.LSDA && R.LSDA->Value
+                                                 ? std::optional(R.LSDA->Value)
+                                                 : std::nullopt;
+        return (*Range)->PersonalitySlotVA != Personality ||
+               (*Range)->LSDAVA != LSDA;
       }))
     return patchError(
         "native FDEs require a verified language-augmentation contract");

@@ -1,0 +1,14 @@
+//===- MachOCompactUnwindNative.def - Native language records ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef MACHO_NATIVE_UNWIND_TEXT
+#define MACHO_NATIVE_UNWIND_TEXT(Name, Text)
+#endif
+
+MACHO_NATIVE_UNWIND_TEXT(
+    kNativeLanguage, "native compact personality or LSDA cannot be represented")
+
+#undef MACHO_NATIVE_UNWIND_TEXT

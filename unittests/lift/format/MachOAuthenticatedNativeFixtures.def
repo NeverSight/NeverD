@@ -82,6 +82,7 @@ MACHO_AUTH_NATIVE_TEXT(kAddendSeparator, "+")
 MACHO_AUTH_NATIVE_TEXT(kLibraryVersionSeparator, ".")
 MACHO_AUTH_NATIVE_ARGS(kKeyNames, "IA", "IB", "DA", "DB")
 MACHO_AUTH_NATIVE_TEXT(kSource, R"cpp(
+#include <exception>
 #include <ptrauth.h>
 extern "C" int puts(const char *);
 using Function = int (*)(const char *);
@@ -97,6 +98,10 @@ __attribute__((noinline)) int cleanup_frame(int value) {
   struct Guard { ~Guard() { ++cleanups; } } guard;
   if (value) throw value;
   return puts("signed frame");
+}
+__attribute__((noinline)) int original_catch(int value) {
+  try { return cleanup_frame(value); }
+  catch (int result) { if (result < 0) std::terminate(); return result; }
 }
 }
 )cpp")
@@ -286,6 +291,9 @@ using DataB = int * __ptrauth(3, 1, 4660);
 #ifdef NEVERD_AUTH_CONTROL
 extern "C" {
 int native_dispatch();
+int native_catch();
+int native_cleanup();
+extern int native_cleanups;
 extern int neverd_should_throw;
 extern DataA const native_local_data;
 extern DataB const native_external_data;
@@ -294,6 +302,9 @@ extern DataB const native_external_data;
 int main(int argc, char **argv) {
 #ifdef NEVERD_AUTH_CONTROL
   Function call = &native_dispatch;
+  Function catching = &native_catch;
+  Function cleanup = &native_cleanup;
+  int *cleanups = &native_cleanups;
   int *throwFlag = &neverd_should_throw;
   if (*native_local_data != 9 || *native_external_data != 13) return 2;
   volatile int *mutableData = native_local_data;
@@ -301,7 +312,7 @@ int main(int argc, char **argv) {
   if (*mutableData != 19) return 7;
   *mutableData = 9;
 #else
-  if (argc != 6) return 10;
+  if (argc != 9) return 10;
   void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
   if (!image) { fprintf(stderr, "%s\n", dlerror()); return 11; }
   const uintptr_t anchor = (uintptr_t)dlsym(image, "new_slots");
@@ -309,6 +320,11 @@ int main(int argc, char **argv) {
   if (!anchor || !throwFlag) return 12;
   Function call = (Function)ptrauth_sign_unauthenticated(
       (void *)(anchor + strtoull(argv[2], nullptr, 0)), ptrauth_key_function_pointer, 0);
+  Function catching = (Function)ptrauth_sign_unauthenticated(
+      (void *)(anchor + strtoull(argv[6], nullptr, 0)), ptrauth_key_function_pointer, 0);
+  Function cleanup = (Function)ptrauth_sign_unauthenticated(
+      (void *)(anchor + strtoull(argv[7], nullptr, 0)), ptrauth_key_function_pointer, 0);
+  int *cleanups = (int *)(anchor + strtoull(argv[8], nullptr, 0));
   auto *local = (DataA const *)(anchor + strtoull(argv[3], nullptr, 0));
   auto *external = (DataB const *)(anchor + strtoull(argv[4], nullptr, 0));
   if (**local != 9 || **external != 13) return 13;
@@ -332,8 +348,12 @@ int main(int argc, char **argv) {
   *throwFlag = 1;
   try { (void)call(); return 4; }
   catch (int value) { if (value != 71) return 5; }
+  *cleanups = 0;
+  if (catching() != 93 || *cleanups != 1) return 16;
+  try { (void)cleanup(); return 17; }
+  catch (int value) { if (value != 71 || *cleanups != 2) return 18; }
   *throwFlag = 0;
-  if (call() != 49) return 6;
+  if (call() != 49 || catching() != 49 || *cleanups != 3) return 6;
   puts("native-auth-call-unwind-ok");
   return 0;
 }
@@ -358,8 +378,64 @@ extern int * __ptrauth(3, 1, 4660) const native_external_data
 __attribute__((noinline)) int native_dispatch() {
   return native_local_code() + native_external_code();
 }
+extern int *const volatile native_plain_local = &native_values[1];
+extern int *const volatile native_plain_external = &neverd_provider_data[1];
+int native_cleanups = 0;
+}
+struct NativeGuard { ~NativeGuard(); };
+NativeGuard::~NativeGuard() {
+  (void)native_local_code();
+  ++native_cleanups;
+}
+extern "C" __attribute__((noinline)) int native_catch() {
+#ifdef NEVERD_DWARF_LANGUAGE
+  asm volatile(".cfi_escape 0x2e, 0");
+#endif
+  NativeGuard guard;
+  try { return native_dispatch(); }
+  catch (int value) {
+    return value + *native_plain_local + *native_plain_external;
+  }
+}
+extern "C" __attribute__((noinline)) int native_cleanup() {
+#ifdef NEVERD_DWARF_LANGUAGE
+  asm volatile(".cfi_escape 0x2e, 0");
+#endif
+  NativeGuard guard;
+  return native_dispatch();
 }
 )cpp")
+
+MACHO_AUTH_NATIVE_TEXT(kObjectCatch, "native_catch")
+MACHO_AUTH_NATIVE_TEXT(kObjectCleanup, "native_cleanup")
+MACHO_AUTH_NATIVE_TEXT(kObjectCleanups, "native_cleanups")
+MACHO_AUTH_NATIVE_TEXT(kPlainLocal, "native_plain_local")
+MACHO_AUTH_NATIVE_TEXT(kPlainExternal, "native_plain_external")
+MACHO_AUTH_NATIVE_TEXT(kDwarfLanguageOption, "-DNEVERD_DWARF_LANGUAGE")
+MACHO_AUTH_NATIVE_VALUE(unsigned, kPlainDetailFieldCount, 8)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kPlainDetailTarget, 7)
+MACHO_AUTH_NATIVE_TEXT(kPlainRebase, "rebase")
+MACHO_AUTH_NATIVE_TEXT(kPlainBind, "bind")
+MACHO_AUTH_NATIVE_TEXT(kTypeInfo, "__ZTIi")
+
+MACHO_AUTH_NATIVE_TEXT(kObjectDataSegment, "__DATA")
+MACHO_AUTH_NATIVE_TEXT(kExceptionSection, "__gcc_except_tab")
+MACHO_AUTH_NATIVE_VALUE(unsigned, kObjectRelocTypeShift, 28)
+MACHO_AUTH_NATIVE_VALUE(uint32_t, kObjectPCRelativeBit, 0x01000000u)
+MACHO_AUTH_NATIVE_VALUE(uint8_t, kUnsupportedLSDAEncoding, 0x7f)
+
+MACHO_AUTH_NATIVE_TEXT(kCxxLibrary, "/usr/lib/libc++.1.dylib")
+MACHO_AUTH_NATIVE_TEXT(kCxxPersonality, "__gxx_personality_v0")
+MACHO_AUTH_NATIVE_VALUE(unsigned, kOrdinaryPointerCount, 3)
+
+MACHO_AUTH_NATIVE_ARGS(kDwarfInfoArgs, "dwarfdump", "--eh-frame")
+MACHO_AUTH_NATIVE_TEXT(kDwarfInfoFile, "native-dwarf.txt")
+MACHO_AUTH_NATIVE_TEXT(kDwarfLanguageAugmentation, "zPLR")
+MACHO_AUTH_NATIVE_VALUE(unsigned, kDwarfAddressDigits, 16)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kDwarfPCDigits, 8)
+MACHO_AUTH_NATIVE_TEXT(kDwarfPCPrefix, "pc=")
+MACHO_AUTH_NATIVE_TEXT(kDwarfRangeSeparator, "...")
+MACHO_AUTH_NATIVE_TEXT(kDwarfLSDAPrefix, "LSDA Address: ")
 
 #undef MACHO_AUTH_NATIVE_TEXT
 #undef MACHO_AUTH_NATIVE_VALUE

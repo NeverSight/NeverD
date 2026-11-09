@@ -312,7 +312,7 @@ TEST(AArch64DwarfReturnAddress, QueryValidatesWholeProgramsAndResourceBounds) {
 
 TEST(AArch64DwarfReturnAddress,
      OtherArchitecturesDoNotAcquireAArch64Semantics) {
-  for (Arch Architecture : {Arch::X64, Arch::ARM, Arch::Unknown}) {
+  for (Arch Architecture : {Arch::X64, Arch::ARM}) {
     for (llvm::ArrayRef<uint8_t> Program :
          {llvm::ArrayRef<uint8_t>(kWindowSave),
           llvm::ArrayRef<uint8_t>(kWindowSaveWithPC),
@@ -335,6 +335,17 @@ TEST(AArch64DwarfReturnAddress,
     EXPECT_FALSE(Augmented.CIEs.front().HasPointerAuth);
     EXPECT_FALSE(Augmented.CIEs.front().UsesNonHintPAuthLR);
   }
+  // Unknown has no little-endian decoding contract. Check the query's
+  // architecture refusal against valid records independently of byte parsing.
+  const auto Known = decode(frame(kWindowSave));
+  ASSERT_EQ(Known.FDEs.size(), 1u);
+  EXPECT_EQ(evaluateAArch64ReturnAddressState(Arch::Unknown, Known.CIEs.front(),
+                                              Known.FDEs.front(), kText)
+                .Status,
+            AArch64RAQueryStatus::Unsupported);
+  const auto Unknown = decode(frame(kWindowSave), Arch::Unknown);
+  EXPECT_EQ(Unknown.ParseStatus, ExceptionParseStatus::Malformed);
+  EXPECT_TRUE(Unknown.FDEs.empty());
 }
 
 } // namespace

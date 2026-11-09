@@ -80,8 +80,12 @@ std::optional<unsigned> segmentFor(const MachOChainedFixups &Chains,
   return I;
 }
 
-llvm::Error validateRecipe(const MachOAuthenticatedPointer &Recipe,
+llvm::Error validateRecipe(const MachOAuthenticatedFixup &Fixup,
                            const MachOChainedFixups &Chains) {
+  const auto &Recipe = Fixup.Recipe;
+  if (!Fixup.Authenticated &&
+      (Recipe.Key || Recipe.Diversity || Recipe.AddressDiversity))
+    return fail(kRecipe);
   if (Recipe.Key > maximum(arm64e::kKey) || Recipe.EncodedValue)
     return fail(kRecipe);
   if (Recipe.Symbol.empty()) {
@@ -108,14 +112,15 @@ ImportIdentity identity(const MachOChainedImport &Import) {
   return {Import.Ordinal, Import.Addend, Import.Flags, Import.Name};
 }
 
-llvm::Expected<uint64_t> encode(const MachOAuthenticatedPointer &Recipe,
+llvm::Expected<uint64_t> encode(const MachOAuthenticatedFixup &Fixup,
                                 MachOChainedFixups &Chains,
                                 const SegmentIndex &Index,
                                 const arm64e::ChainFormat &Format,
                                 std::map<ImportIdentity, uint64_t> &Imports) {
-  if (auto Error = validateRecipe(Recipe, Chains))
+  if (auto Error = validateRecipe(Fixup, Chains))
     return Error;
-  uint64_t Word = uint64_t(1) << arm64e::kAuthentication.Low |
+  const auto &Recipe = Fixup.Recipe;
+  uint64_t Word = uint64_t(Fixup.Authenticated) << arm64e::kAuthentication.Low |
                   uint64_t(Recipe.Key) << arm64e::kKey.Low |
                   uint64_t(Recipe.Diversity) << arm64e::kDiversity.Low |
                   uint64_t(Recipe.AddressDiversity)
@@ -143,6 +148,16 @@ llvm::Expected<uint64_t> encode(const MachOAuthenticatedPointer &Recipe,
     return Word | Offset |
            uint64_t(*Target) << arm64e::kSegmentedTargetIndex.Low;
   }
+  if (!Fixup.Authenticated) {
+    const uint64_t Value =
+        Format.Offset ? Recipe.Target - Chains.HeaderVA : Recipe.Target;
+    const uint64_t Low = Value & maximum(arm64e::kTarget);
+    const uint64_t High = Value >> arm64e::kHigh8Shift;
+    if ((Format.Offset && Recipe.Target < Chains.HeaderVA) ||
+        (Low | (High << arm64e::kHigh8Shift)) != Value)
+      return fail(kTarget);
+    return Low | (High << arm64e::kHigh8.Low);
+  }
   if (Recipe.Target < Chains.HeaderVA ||
       Recipe.Target - Chains.HeaderVA > maximum(arm64e::kAuthenticatedTarget))
     return fail(kTarget);
@@ -159,7 +174,7 @@ llvm::Error replay(const MachOChainedFixups &Chains,
       Slots.push_back({Chains.Segments[I].VMAddr + Slot.Offset, {I, Slot.Raw}});
   llvm::sort(Slots);
   for (const auto &Fixup : Fixups) {
-    if (auto Error = validateRecipe(Fixup.Recipe, Chains))
+    if (auto Error = validateRecipe(Fixup, Chains))
       return Error;
     auto It = std::lower_bound(
         Slots.begin(), Slots.end(), Fixup.Address,
@@ -175,8 +190,8 @@ llvm::Error replay(const MachOChainedFixups &Chains,
       return fail(kPointerFormat);
     const auto Word = arm64e::decodePointerWord(It->second.second, *Format);
     const auto &Recipe = Fixup.Recipe;
-    if (!Word || !Word->Authenticated || Word->Key != Recipe.Key ||
-        Word->Diversity != Recipe.Diversity ||
+    if (!Word || Word->Authenticated != Fixup.Authenticated ||
+        Word->Key != Recipe.Key || Word->Diversity != Recipe.Diversity ||
         Word->AddressDiversity != Recipe.AddressDiversity ||
         Word->Bind != !Recipe.Symbol.empty())
       return fail(kReplay);
@@ -184,13 +199,15 @@ llvm::Error replay(const MachOChainedFixups &Chains,
       const auto &Import = Chains.Imports[Word->Target];
       if (Import.Ordinal != *Recipe.LibraryOrdinal ||
           Import.Name != Recipe.Symbol || Import.Addend != Recipe.Addend ||
+          Word->Addend ||
           bool(Import.Flags & BIND_SYMBOL_FLAGS_WEAK_IMPORT) !=
               Recipe.WeakImport)
         return fail(kReplay);
     } else {
-      const auto Base = Format->Segmented
-                            ? Chains.Segments[Word->SegmentIndex].VMAddr
-                            : Chains.HeaderVA;
+      const auto Base =
+          Format->Segmented
+              ? Chains.Segments[Word->SegmentIndex].VMAddr
+              : (Fixup.Authenticated || Format->Offset ? Chains.HeaderVA : 0);
       if (Base + Word->Target != Recipe.Target)
         return fail(kReplay);
     }
@@ -209,7 +226,7 @@ neverd::collectMachOAuthenticatedFixups(
   bool Needed = false;
   for (const auto &Section : Image.Sections)
     for (const auto &Reference : Section.FixupReferences)
-      Needed |= Reference.PointerAuth.has_value();
+      Needed |= Reference.PointerAuth.has_value() || Reference.OrdinaryPointer;
   if (!Needed && !Dependencies.empty())
     return fail(kDeclaredProvider);
   if (!Needed)
@@ -251,7 +268,7 @@ neverd::collectMachOAuthenticatedFixups(
   }
   for (const auto &Section : Image.Sections) {
     for (const auto &Reference : Section.FixupReferences) {
-      if (!Reference.PointerAuth)
+      if (!Reference.PointerAuth && !Reference.OrdinaryPointer)
         continue;
       if (!Section.IsAllocated || !Section.IsInImage ||
           Section.Kind != llvm::mc_rewrite::RewriteSectionKind::WritableData ||
@@ -263,17 +280,31 @@ neverd::collectMachOAuthenticatedFixups(
           Reference.Offset > UINT64_MAX - Section.VA ||
           Reference.BitWidth != arm64e::kPointerBytes * CHAR_BIT ||
           !Reference.IsResolved || Reference.IsPCRel ||
-          Reference.Symbol.empty() || !Reference.SubtractSymbol.empty() ||
+          (Reference.PointerAuth &&
+           (Reference.OrdinaryPointer || Reference.Symbol.empty())) ||
+          (Reference.OrdinaryPointer &&
+           Image.InputKind != RewriteInputKind::ReplacementObject) ||
+          !Reference.SubtractSymbol.empty() ||
           readLE<uint64_t>(Image.Bytes.data() + Section.Offset +
                            Reference.Offset))
         return fail(kProducer);
-      const auto &Auth = *Reference.PointerAuth;
       MachOAuthenticatedFixup Fixup;
       Fixup.Address = Section.VA + Reference.Offset;
       Fixup.ReadOnlyAfterFixups = Section.ReadOnlyAfterFixups;
-      Fixup.Recipe.Key = Auth.Key;
-      Fixup.Recipe.Diversity = Auth.Diversity;
-      Fixup.Recipe.AddressDiversity = Auth.AddressDiversity;
+      Fixup.Authenticated = Reference.PointerAuth.has_value();
+      if (Reference.PointerAuth) {
+        const auto &Auth = *Reference.PointerAuth;
+        Fixup.Recipe.Key = Auth.Key;
+        Fixup.Recipe.Diversity = Auth.Diversity;
+        Fixup.Recipe.AddressDiversity = Auth.AddressDiversity;
+      }
+      if (Reference.Symbol.empty()) {
+        if (Reference.Addend)
+          return fail(kProducer);
+        Fixup.Recipe.Target = Reference.ResolvedValue;
+        Result.push_back(std::move(Fixup));
+        continue;
+      }
       if (auto Target = Image.SymbolAddrs.find(Reference.Symbol);
           Target != Image.SymbolAddrs.end()) {
         constexpr unsigned WideBits = 2 * arm64e::kPointerBytes * CHAR_BIT;
@@ -382,7 +413,7 @@ llvm::Error neverd::installMachOAuthenticatedFixups(
         !rangeInBounds(Offset, arm64e::kPointerBytes, Segment.FileSize) ||
         !rangeInBounds(Offset % Page, arm64e::kPointerBytes, Page))
       return fail(kStorage);
-    auto Word = encode(Fixup->Recipe, Chains, Index, *Format, Imports);
+    auto Word = encode(*Fixup, Chains, Index, *Format, Imports);
     if (!Word)
       return Word.takeError();
     Segment.PointerFormat = PointerFormat;

@@ -1,0 +1,369 @@
+{
+  "schema": "neverd-arm64e-native-language-v1",
+  "overall_arm64e_complete": false,
+  "base_revision": "8b436041776e4ff67e4d2b5abebe0475e5d0b3e8",
+  "feature_commit": "a9b9e8baf6f0fc3d96494e862b8e3d5d476d87ac",
+  "implementation_revision": "0a2d11737113fa8a13b9fa6cf07a55af805a27bf",
+  "source_sha256": {
+    "include/neverd/backend/codegen/BinaryRewriter.h": "b28596a005bc074f02468b25e07df7e676c4d34abba09f1e55f9bae791a868f7",
+    "include/neverd/backend/codegen/DwarfEHFrame.h": "a73e3052ed44faa2c278a8bedaf53b3a6abca604cda6a48618cfd89c6cd56c4f",
+    "include/neverd/backend/codegen/MachO/MachOAuthenticatedFixups.h": "df6fd4278bd5c4e43e50d1c33b78f151426b63e8afeafb1023921157f1a98505",
+    "include/neverd/backend/codegen/MachO/MachOCompactUnwindPatch.h": "ce7ed1b7dc5e07f71ba9bda02cfebcc413bc33b5b1f72e75dc4062de626a5475",
+    "include/neverd/backend/codegen/MachO/MachOExceptionPatch.h": "82f18340b2bee69c92311167f260b983ac3d7e73822b8ac18d02f830f14d3f5e",
+    "lib/backend/codegen/DwarfEHFrame.cpp": "6ddb531fab320a21b4fb2b7236484b7f9ac06bfb9a0c6c285e8df1c13169b7bd",
+    "lib/backend/codegen/DwarfEHFrame.def": "f7934278d5bd1c9415ad61f522d1f68bd3d0a0fa7634b974b65f336def485940",
+    "lib/backend/codegen/MachO/MachOAuthenticatedFixups.cpp": "19823e8bdae657c23fd344bbac8519e39493ba691cd6829c3bb7798f67f15ba9",
+    "lib/backend/codegen/MachO/MachOCompactUnwindNative.def": "e91c85685f2b81834bf132007c82232eacca90b2d2015d469dcaf24f87376cac",
+    "lib/backend/codegen/MachO/MachOCompactUnwindPatch.cpp": "7748e541f7503a11638276d5da0389a168ec501099e434a99c83382b5fd862c9",
+    "lib/backend/codegen/MachO/MachOExceptionPatch.cpp": "c34428a7f8404414eae6908e89cebd1e3f8631f4fbf79b4f976fc0f4f3d14028",
+    "lib/backend/codegen/MachO/MachOLayoutGrowth.cpp": "5fbf9e70f768878b7bea24da623ee1972b785980e6d8cacbbee275395fc41595",
+    "lib/backend/codegen/MachO/MachOLayoutGrowth.def": "ea17235decf460342aaf6c569b5ee34abe98f69693363e6fb5c5ae0cc3b2ce9d",
+    "lib/backend/codegen/MachO/MachOPatchObject.cpp": "8f7530600019555fe108153fc9b9c799c1cfe0af3c62783c300e0e153773c602",
+    "lib/backend/codegen/MachO/MachOPatchObject.def": "9bfc724a92198532a06ff051501c8c3479bde80bea5c20735ad87c501d1cbdfe",
+    "lib/loader/language/LanguagePersonality.cpp": "d68272f626ac19f7ae7d69efd955927cc5d1ecf7bfd866b8966bd2c479f92b48",
+    "unittests/lift/eh/DwarfEHFrameLanguageFixtures.def": "cdabe800212a45d3e29d4e6337d4d4729f9d0e4af42039b6a2e1d291c3738033",
+    "unittests/lift/eh/DwarfEHFrameTests.cpp": "4d95ff449d9331b05fc2bf16b282cedeb34c8b78eda96a40834dba4dd8022dfe",
+    "unittests/lift/format/MachOArm64eDependencyTests.cpp": "311c1fab7d802a4766698d9bf3b88107b5392e800e697e433c5da132fbb89d28",
+    "unittests/lift/format/MachOAuthenticatedNativeFixtures.def": "123f182c36b83370996b2941fb93b91ff681b4e9313075069ad5425ef95316ea",
+    "unittests/lift/format/MachOAuthenticatedNativeTests.cpp": "dfe4f6d56c6886b64b1e9532cc4250be80f834d860715d6a5bf3ef5d0aae5111",
+    "unittests/lift/language/AArch64DwarfReturnAddressTests.cpp": "5cade22939f8fb7aa694d41cd123e82e52912de8e832d1a6fc86fbf59f1922db"
+  },
+  "changes": [
+    "Stage native compact and DWARF LSDA/personality metadata, ordinary local/imported data pointers, RTTI GOT slots and authenticated personality slots in modern and threaded arm64e images.",
+    "Retain CIE/FDE language pointer offsets and encodings; resolve assembler-local differences before logical decoding, then relocate against final storage addresses.",
+    "Reuse or allocate IA/address-diversified personality slots, retaining exact provider and ordinary versus authenticated pointer identity through independent reload.",
+    "Place compact/DWARF metadata in proven unowned TEXT gaps; size EH storage to actual bytes and preserve existing signed CFI states.",
+    "Recognize object-local private weak code helpers, including the optimized auto-hide flag combination; refuse exported weak definitions.",
+    "Resolve language names from canonical ordinary bindings and authenticated recipes without inventing ordinary import-storage evidence for signed slots."
+  ],
+  "toolchain": {
+    "profile": "Release",
+    "llvm_package": "neverd-llvm-v23.0.0-r6",
+    "llvm_source_patches_or_overlays": false,
+    "compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+    "macos_sdk": "15.5",
+    "clang_format": "22.1.2",
+    "working_dependencies": {
+      "signatures": "20b9036f4367e1308a3d2f0b214e06859090a7af",
+      "third_party/capstone": "b8c22e0c16b1769dfa712547d4a5c5d49560ae46"
+    }
+  },
+  "validation": {
+    "focused": {
+      "tests": 78,
+      "passed": 69,
+      "skipped": 9,
+      "xml_sha256": "cc378cb972f11e92dda969c7976cadd491bbb6d2869d6976faeb6414a093ee68"
+    },
+    "regressions": {
+      "totals": {
+        "passed": 1508,
+        "skipped": 25
+      },
+      "tests": 1533,
+      "by_executable": {
+        "NeverDSourcePatchLayoutTests": {
+          "passed": 14
+        },
+        "NeverDSourcePatchMatrixTests": {
+          "passed": 111,
+          "skipped": 10
+        },
+        "NeverDArm64eAnalysisTests": {
+          "passed": 449,
+          "skipped": 14
+        },
+        "NeverDNativeExceptionRewriteContractTests": {
+          "passed": 288
+        },
+        "NeverDMachOPointerRelocationBoundaryTests": {
+          "passed": 335
+        },
+        "NeverDLanguageEHTests": {
+          "passed": 311,
+          "skipped": 1
+        }
+      },
+      "inputs": {
+        "regression-bulk": {
+          "xml_sha256": "e970e3311a327c4c33ac92daf6142c02e09a909294b2e76be1bd781d014855e8",
+          "selection_sha256": "0b128bb13bbbc93fcaf6c6188326f869e1e662c6e42e171b948a4c3f85933594"
+        },
+        "regression-serial": {
+          "xml_sha256": "0536bbec01863abcc47d1f551cdf09ef75ee369fe5db3bbbb912994a0bb3c0cc",
+          "selection_sha256": "b840f8985fb37a0ce16d802308332b0de80ebb5f7984a2688df658f529ccbb40"
+        },
+        "integration": {
+          "xml_sha256": "01fe0b83e614921e30bc343e1d9465fffe4695cb9014eaab016a4216b5788ce2",
+          "selection_sha256": "6680ad6f5eacecbffd5714ee10701b748a1607966768f22f141e5715617b97cf"
+        }
+      },
+      "binary_sha256": {
+        "NeverDSourcePatchLayoutTests": "aace71c59c2a64971d73cd75dc93ff305166e4ddd975584c01c3d302064c2db3",
+        "NeverDSourcePatchMatrixTests": "7d9c148b4f010e85462388f7cd4ddd6e6b70b53d36cd41f0b1df9646d8ca52cd",
+        "NeverDArm64eAnalysisTests": "40ff81ac86e66e7e9ad382b92996267bdf7dad0037376ef731bd0463697cf680",
+        "NeverDNativeExceptionRewriteContractTests": "dfad128c71862a568e4dfb16de50624887687e4a5a8783458547ddf252982062",
+        "NeverDMachOPointerRelocationBoundaryTests": "8866f108610c16aa21a81ad9f8fa2d21734b6cf95b71d94b4758de8a85b12be3",
+        "NeverDLanguageEHTests": "a3d5ff6ffd8c8f96d8c32da62e1d7dfdb1933d205496c26dd9058718b3a8efff",
+        "libneverd.dylib": "43df6a74502b20bbf38515ada36b60291a91cd40b4191d8ca4b39cdaffb04285"
+      },
+      "parallel_failures": [
+        {
+          "name": "AArch64DwarfReturnAddress.OtherArchitecturesDoNotAcquireAArch64Semantics",
+          "executable": "NeverDLanguageEHTests",
+          "status": "failed",
+          "seconds": 0.0122883,
+          "diagnostic": "Failed"
+        }
+      ],
+      "serial_results": [
+        {
+          "name": "AArch64AddressMemory.NarrowAliasedIndicesSurviveDecodedSSAAndBothSourceABIs",
+          "executable": "NeverDArm64eAnalysisTests",
+          "status": "passed",
+          "seconds": 36.8324
+        },
+        {
+          "name": "AArch64ImmediateMemory.ImageContextPreservesEveryRuntimeParameterAccess",
+          "executable": "NeverDArm64eAnalysisTests",
+          "status": "passed",
+          "seconds": 30.3146
+        },
+        {
+          "name": "AArch64PairMemory.OwnedImagesValidateBothAccessesAndReturnedBases",
+          "executable": "NeverDArm64eAnalysisTests",
+          "status": "passed",
+          "seconds": 33.5908
+        },
+        {
+          "name": "AArch64DwarfReturnAddress.OtherArchitecturesDoNotAcquireAArch64Semantics",
+          "executable": "NeverDLanguageEHTests",
+          "status": "failed",
+          "seconds": 0.0160768,
+          "diagnostic": "Failed"
+        }
+      ],
+      "scheduling": "Three previously measured expensive memory-image cases ran separately. Any observed bulk failures were retained and repeated sequentially after the bulk run, with unchanged registered commands and timeout limits. The integrated dev build repeats all metadata, exception, layout and Mach-O source matrix cases plus targeted arm64e installation cases. Final totals count each selected executable/test pair once using the latest result; initial failures remain recorded separately.",
+      "integration_cases": 1112
+    },
+    "skipped": [
+      {
+        "executable": "NeverDSourcePatchMatrixTests",
+        "name": "NeverCProfiles/NeverCSourcePatchMatrix.CIRPreservesTargetLayout/MachO_X64",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDSourcePatchMatrixTests",
+        "name": "NeverCProfiles/NeverCSourcePatchMatrix.CIRPreservesTargetLayout/MachO_ARM64",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDSourcePatchMatrixTests",
+        "name": "NeverCProfiles/NeverCSourcePatchMatrix.CObjectPreservesTargetLayout/MachO_X64",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDSourcePatchMatrixTests",
+        "name": "NeverCProfiles/NeverCSourcePatchMatrix.CObjectPreservesTargetLayout/MachO_ARM64",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDSourcePatchMatrixTests",
+        "name": "NeverCProfiles/NeverCSourcePatchMatrix.HostedCUsesExactPayloadLayout/MachO_X64",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDSourcePatchMatrixTests",
+        "name": "NeverCProfiles/NeverCSourcePatchMatrix.HostedCUsesExactPayloadLayout/MachO_ARM64",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDSourcePatchMatrixTests",
+        "name": "NeverCProfiles/NeverCSourcePatchMatrix.HostedCHelpersAndRecursionKeepExactPayloadLayout/MachO_X64",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDSourcePatchMatrixTests",
+        "name": "NeverCProfiles/NeverCSourcePatchMatrix.HostedCHelpersAndRecursionKeepExactPayloadLayout/MachO_ARM64",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDSourcePatchMatrixTests",
+        "name": "NeverCProfiles/NeverCSourcePatchMatrix.CppSourceCannotPublishWithNeverC/MachO_X64",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDSourcePatchMatrixTests",
+        "name": "NeverCProfiles/NeverCSourcePatchMatrix.CppSourceCannotPublishWithNeverC/MachO_ARM64",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDArm64eAnalysisTests",
+        "name": "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDArm64eAnalysisTests",
+        "name": "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDArm64eAnalysisTests",
+        "name": "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDArm64eAnalysisTests",
+        "name": "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDArm64eAnalysisTests",
+        "name": "A64FastClassifyParity.OptionalRealBinaryWalk",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDArm64eAnalysisTests",
+        "name": "MachOArm64eInstallation.MCProducerCapturesRecipesThroughFinalPlacement",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDArm64eAnalysisTests",
+        "name": "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/0",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDArm64eAnalysisTests",
+        "name": "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/1",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDArm64eAnalysisTests",
+        "name": "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/2",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDArm64eAnalysisTests",
+        "name": "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/3",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDArm64eAnalysisTests",
+        "name": "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/0",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDArm64eAnalysisTests",
+        "name": "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/1",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDArm64eAnalysisTests",
+        "name": "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/2",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDArm64eAnalysisTests",
+        "name": "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/3",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      },
+      {
+        "executable": "NeverDLanguageEHTests",
+        "name": "Scratch.DumpRealBinary",
+        "diagnostic": "SKIP_REGULAR_EXPRESSION_MATCHED"
+      }
+    ],
+    "native_file_matrix": "12 successful O0/O2 x chained/threaded cases: compact language metadata, DWARF fallback, and fresh authenticated personality slots. Apple dyld_info/otool, dwarfdump and strict codesign verification cross-check installed data.",
+    "runtime": "Eight new/current native call/catch/cleanup execution cases are skipped after a compiler-original arm64e control cannot execute on this M4 Max host. These are not successful authentication or signed-unwind execution results.",
+    "integrated": {
+      "tests": 1112,
+      "passed": 1092,
+      "skipped": 20,
+      "xml_sha256": "01fe0b83e614921e30bc343e1d9465fffe4695cb9014eaab016a4216b5788ce2"
+    },
+    "baseline_binary_sha256": [
+      {
+        "name": "NeverDArm64eAnalysisTests",
+        "sha256": "3c75bdaa8952eeb3e355a7f36f8fbc4841a03a7b53c8a639f65683dc5cd5a870"
+      },
+      {
+        "name": "NeverDNativeExceptionRewriteContractTests",
+        "sha256": "3bed93b8ed72266d354e8f744160c5f2db47caabb61d2d27af52749b66d871f4"
+      },
+      {
+        "name": "NeverDMachOPointerRelocationBoundaryTests",
+        "sha256": "ad2536ab667482cb593ad81bd9ebfd6f3d8f6d8829a2679178db765159fddd3c"
+      },
+      {
+        "name": "NeverDSourcePatchLayoutTests",
+        "sha256": "aace71c59c2a64971d73cd75dc93ff305166e4ddd975584c01c3d302064c2db3"
+      },
+      {
+        "name": "NeverDSourcePatchMatrixTests",
+        "sha256": "7d9c148b4f010e85462388f7cd4ddd6e6b70b53d36cd41f0b1df9646d8ca52cd"
+      },
+      {
+        "name": "NeverDLanguageEHTests",
+        "sha256": "be2f0cc4fbf202b5f184548eb4244e75f01632690cfdd033b60d75d9c26a5c3f"
+      },
+      {
+        "name": "libneverd.dylib",
+        "sha256": "84d61daa6f9558f6c69baf4ee4ede69932acb6ac83aa44c7bad61de7cfc05c43"
+      }
+    ],
+    "red_green_history": {
+      "focused-initial.xml": {
+        "tests": 70,
+        "passed": 49,
+        "skipped": 9,
+        "failed": 12,
+        "xml_sha256": "98457466c6a0ff619396df234e8a4e953fd4eb5ec4f79a14d4ab9d1922d9fbb1"
+      },
+      "focused-before-name-fix.xml": {
+        "tests": 70,
+        "passed": 49,
+        "skipped": 9,
+        "failed": 12,
+        "xml_sha256": "7f1b638dffcfd19ed3c3688cd7df4e48261a96d5c13a4b987c74c91715915cc0"
+      }
+    },
+    "resolved_failures": [
+      "The older cross-architecture CFI fixture assumed Unknown would decode little-endian bytes; it now separately checks malformed parsing and unsupported RA semantics.",
+      "O2 private weak code uses N_WEAK_DEF | N_WEAK_REF.",
+      "EH placement previously ignored usable TEXT gaps and over-reserved page-sized capacity.",
+      "Language name recovery omitted canonical bind slots and authenticated recipes without indirect-symbol entries."
+    ],
+    "harness_notes": "Interrupted runs from index-path mistakes and the generated CTest discovery collision are excluded. The final integration runner verified the exact command/name selection before launching. Test identity uses the executable and gtest filter, excluding relocated pointer values in CTest display names.",
+    "format_and_whitespace": "clang-format 22.1.2 check and git diff --check passed.",
+    "local_evidence_directory": "build-arm64e/arm64e-native-eh-evidence"
+  },
+  "cleanup": {
+    "removed_fixture_and_probe_bytes": 16423120,
+    "manifests": [
+      {
+        "path": "focused-artifacts-cleanup.json",
+        "sha256": "379374fd5cf9b890e124412a1960c6550e1faf885e418e8944e29f9518318a3d"
+      },
+      {
+        "path": "regression-artifacts-cleanup.json",
+        "sha256": "f91323615e8c1665927645d72047070018d995e7c1afbbc55a04f00ce821748b"
+      },
+      {
+        "path": "language-probe-cleanup.json",
+        "sha256": "030ebe01f6c39b747854f110e5e4b7c0f90ffdd56d38845c7f3f0a4136d11f6e"
+      },
+      {
+        "path": "integration-artifacts-cleanup.json",
+        "sha256": "53076954dbf9bf88bd92ae7ba85badb4b167056623faec07a7f8ed6aa339d0af"
+      }
+    ],
+    "retained": "Active incremental Release build, fixture source, independent-tool output, logs and XML/hash evidence."
+  },
+  "remaining_boundaries": [
+    "Real dyld authenticated calls, typed catches and signed cleanup/unwinding require a host that passes the original arm64e execution control.",
+    "Other native language-pointer encodings, TLS/initializers, public weak coalescing and general whole-image arm64e publication are not qualified by this staging change.",
+    "Moving original language-bearing DWARF frames still requires its own relocation contract; existing non-language signed CFI and original compact language records are preserved.",
+    "CPA2/CPTA-on hardware execution and arm64e.x1 remain unqualified here.",
+    "r6 does not provide every LLVM producer callback covered by gated tests. LLVM modifications belong directly in NeverSight/llvm-project; this change adds no fork patches or overlays."
+  ]
+}

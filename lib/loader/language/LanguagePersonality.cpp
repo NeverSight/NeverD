@@ -283,6 +283,18 @@ struct RoutineSlotBinding {
 RoutineSlotBinding routineSlotBinding(const BinaryImage &Img, va_t SlotVA) {
   if (!SlotVA)
     return {};
+  // Chained slots need not have an indirect-symbol-table entry. The loader's
+  // exact binding owns their name; authentication remains a separate recipe
+  // and never becomes ordinary import-storage evidence.
+  if (auto It = Img.MachOAuthenticatedPointers.find(SlotVA);
+      It != Img.MachOAuthenticatedPointers.end()) {
+    if (!It->second.Symbol.empty() && !It->second.Addend)
+      return {It->second.Symbol, true};
+    return {std::nullopt, true};
+  }
+  if (auto It = Img.ImportStorageSlots.find(SlotVA);
+      It != Img.ImportStorageSlots.end() && !It->second.Addend)
+    return {It->second.Name, true};
   if (auto It = Img.ImportPtrSlots.find(SlotVA); It != Img.ImportPtrSlots.end())
     return {It->second, false};
   for (const Import &Imp : Img.Imports)
