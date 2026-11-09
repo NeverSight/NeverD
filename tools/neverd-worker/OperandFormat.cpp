@@ -603,6 +603,31 @@ void formatX86Operand(StyledText &out, const OperandTokens &tokens,
         appendX86Token(out, compact[index + 2]);
       }
     };
+    // An image-relative displacement added to the image base names its
+    // location as a classic listing does a switch table's:
+    // `ds:(jpt_14000609A - 140000000h)[rdx+rcx*4]`.
+    if (facts.imageRelative && segment.empty() && parsed.base &&
+        parsed.displaced &&
+        parsed.displacement == facts.imageRelative->displacement)
+      if (const LocationName name =
+              namer(facts.imageRelative->location, NameUse::Data, sizeKeyword);
+          !name.text.empty()) {
+        appendPrefix(sizeStated);
+        out.append("ds", ListingRole::Register);
+        out.append(":(", ListingRole::Punctuation);
+        out.append(name.text, name.role, name.address);
+        out.append(" - ", ListingRole::Punctuation);
+        out.append(x86Number(facts.imageRelative->imageBase),
+                   ListingRole::Number);
+        out.append(")[", ListingRole::Punctuation);
+        appendX86Token(out, compact[*parsed.base]);
+        if (parsed.index) {
+          out.append("+", ListingRole::Punctuation);
+          appendIndex();
+        }
+        appendSuffix();
+        return;
+      }
     // A structure offset the user gives a register's displacement:
     // `[rcx+_KTHREAD.Process]`, `[rdx+rax*8+(_FOO.Items+8)]`.  The access
     // reads as many bytes as its size keyword or register says, and `lea`

@@ -3628,7 +3628,15 @@ MSVC's CRT character classifier, a two-level switch whose 33-byte index table
 selects slots of an RVA table, lists its padding as `align 4`, its slots as
 `jpt_` `rva` entries and its index table under `byte_` four entries a line,
 `indirect table for switch statement`; the two tables tile with those lines
-and no byte of them lists alone.
+and no byte of them lists alone. Both switches carry a classic listing's
+annotations: `switch 6 cases`/`switch 33 cases` on the bounds check's compare,
+`def_` on the default and `jumptable <dispatch> default case` on it and on the
+branch to it, `jumptable <dispatch> case 0` (or `cases 0,3,32`, `default case,
+cases 11-31`) on each case's code, the tables named in their loads as
+`ds:(jpt_... - 140000000h)[...]` and `ds:(byte_... - 140000000h)[...]`, and a
+read reference from those loads on each table. A third function's instruction
+whose address a `lea` takes, as a catch funclet returns its parent's
+continuation, lists under its `loc_` label with that reference.
 `SessionCAPITest.TwoLevelSwitchesPublishTheirIndexTable` checks that
 `neverd_switches_json` gives that dispatch the RVA table's `image_relative`
 form, the index table's address, width and 33 entries, and for every character

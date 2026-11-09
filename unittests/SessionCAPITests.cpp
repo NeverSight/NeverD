@@ -3102,6 +3102,16 @@ TEST_F(SessionCAPITest, SwitchTablesComeFromWholeProgramAnalysis) {
     EXPECT_EQ(Target[1].getAsInteger(), Case) << Text;
     EXPECT_EQ(Target[2].getAsInteger(), Case) << Text;
   }
+  // `movsxd` reads the table; `cmp edi, 3` is the bounds check's compare and
+  // `ja` sends what the table does not cover to the default.
+  const auto *Loads = Switch.getArray("loads");
+  ASSERT_TRUE(Loads && Loads->size() == 1) << Text;
+  EXPECT_EQ((*Loads)[0].getAsArray()->front().getAsString(),
+            hex(DataELFEntry + 14))
+      << Text;
+  EXPECT_EQ((*Loads)[0].getAsArray()->back().getAsInteger(), 4) << Text;
+  EXPECT_EQ(Switch.getString("guard"), hex(DataELFEntry)) << Text;
+  EXPECT_EQ(Switch.getString("default"), hex(Cases + 6 * 4)) << Text;
 }
 
 TEST_F(SessionCAPITest, TwoLevelSwitchesPublishTheirIndexTable) {
@@ -3190,6 +3200,18 @@ TEST_F(SessionCAPITest, TwoLevelSwitchesPublishTheirIndexTable) {
     EXPECT_EQ(Case[1].getAsInteger(), static_cast<int64_t>(K)) << Text;
     EXPECT_EQ(Case[2].getAsInteger(), Slots[K]) << K << Text;
   }
+  // The two instructions that read the tables, each with its width; where
+  // the bounds check sends a character past the index table; and the compare
+  // that check tests.
+  const auto *Loads = Switch.getArray("loads");
+  ASSERT_TRUE(Loads && Loads->size() == 2) << Text;
+  EXPECT_EQ((*Loads)[0].getAsArray()->front().getAsString(), hex(Load)) << Text;
+  EXPECT_EQ((*Loads)[0].getAsArray()->back().getAsInteger(), 1) << Text;
+  EXPECT_EQ((*Loads)[1].getAsArray()->front().getAsString(), hex(Load + 8))
+      << Text;
+  EXPECT_EQ((*Loads)[1].getAsArray()->back().getAsInteger(), 4) << Text;
+  EXPECT_EQ(Switch.getString("default"), hex(Targets.back())) << Text;
+  EXPECT_EQ(Switch.getString("guard"), hex(Entry + 4)) << Text;
 }
 
 TEST_F(SessionCAPITest, Win64VariadicFunctionsTakeTheirHomedArguments) {
