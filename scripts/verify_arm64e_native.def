@@ -235,7 +235,8 @@
     "AuthenticatedCallsAndSignedUnwindExecute",
     "NativeDwarfLanguageCallsAndCleanup",
     "RelocatedSignedLanguageFramesExecute",
-    "PublishedEntriesExecute"
+    "PublishedEntriesExecute",
+    "PublishedThreadedEntriesExecute"
   ],
   "indices": [
     0,
@@ -258,7 +259,7 @@
   ],
   "build_dir_flag": "--test-dir",
   "test_regex_flag": "-R",
-  "test_regex": "^AppleClang/MachOArm64eNativeObjectInstallation[.](AuthenticatedCallsAndSignedUnwindExecute|NativeDwarfLanguageCallsAndCleanup|RelocatedSignedLanguageFramesExecute|PublishedEntriesExecute)/",
+  "test_regex": "^AppleClang/MachOArm64eNativeObjectInstallation[.](AuthenticatedCallsAndSignedUnwindExecute|NativeDwarfLanguageCallsAndCleanup|RelocatedSignedLanguageFramesExecute|PublishedEntriesExecute|PublishedThreadedEntriesExecute)/",
   "selection_label": "ctest-selection",
   "discovery_flag": "--show-only=json-v1",
   "test_binary": "NeverDArm64eAnalysisTests",

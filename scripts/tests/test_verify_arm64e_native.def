@@ -20,7 +20,11 @@
     "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/0",
     "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/1",
     "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/2",
-    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/3"
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/3",
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/0",
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/1",
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/2",
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/3"
   ],
   "failure_tags": [
     "failure",

@@ -74,7 +74,8 @@ qualification even if CTest itself returns success. Temporary fixture storage
 is private to the invocation and is removed afterward.
 
 The matrix additionally requires four `PublishedEntriesExecute` cases at O0/O2
-with compact/DWARF language records. These use the native publication API,
+with compact/DWARF language records. Four additional publication cases start with original threaded images and
+migrate them to chained metadata inside the publication transaction. These use the native publication API,
 check failed-receipt rollback and exclusive output creation, and enter the new
 authenticated call/catch/cleanup functions through the original addresses.
 `native_object_publication_qualified` names this additional native object

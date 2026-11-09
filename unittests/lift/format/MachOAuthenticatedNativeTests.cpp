@@ -1412,6 +1412,18 @@ TEST_P(MachOArm64eNativeObjectInstallation, PublishedEntriesExecute) {
                                 false, false, NativeObjectOperation::Publish);
 }
 
+TEST_P(MachOArm64eNativeObjectInstallation, PublishesMigratedThreadedObject) {
+  const auto [Optimization, DwarfLanguage] = GetParam();
+  checkNativeObjectInstallation(Optimization, true, false, DwarfLanguage, false,
+                                false, true, NativeObjectOperation::Publish);
+}
+
+TEST_P(MachOArm64eNativeObjectInstallation, PublishedThreadedEntriesExecute) {
+  const auto [Optimization, DwarfLanguage] = GetParam();
+  checkNativeObjectInstallation(Optimization, true, true, DwarfLanguage, false,
+                                false, true, NativeObjectOperation::Publish);
+}
+
 TEST_P(MachOArm64eNativeObjectInstallation, PublishesSignedExecutable) {
   const auto [Optimization, DwarfLanguage] = GetParam();
   checkNativeObjectInstallation(Optimization, false, false, DwarfLanguage,

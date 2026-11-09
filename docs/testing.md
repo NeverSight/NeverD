@@ -21838,7 +21838,9 @@ existing destination. `PublishedEntriesExecute` uses those original addresses
 for authenticated calls, integer catches and destructor cleanup on a qualified
 arm64e host. These four runtime cases join the twelve installation cases in
 `scripts/verify_arm64e_native.py`; a missing or skipped publication case cannot
-satisfy the sixteen-case gate. The native object API does not qualify the
+satisfy the twenty-case gate, which also requires four
+`PublishedThreadedEntriesExecute` cases for migrated legacy publication.
+`PublishesMigratedThreadedObject` checks the same transaction offline. The native object API does not qualify the
 source/IR adapter or a complete lifted-image rebuild.
 
 `PublishesSignedExecutable` adds O0/O2 compact/DWARF main-executable publication,
@@ -21851,7 +21853,7 @@ signed language unwinding. These four runtime cases require `run-executable`
 and a same-source successful userspace startup probe. The verifier derives the
 sandbox launcher again from the current SDK and rejects a different profile;
 its separate `native_executable_publication_qualified` result cannot satisfy
-the sixteen-case dylib gate or general lifted-image publication.
+the twenty-case dylib gate or general lifted-image publication.
 
 `MachOArm64eInstallation.*` exercises transactional authenticated dyld
 installation in the six arm64e chain formats. It covers all keys and address

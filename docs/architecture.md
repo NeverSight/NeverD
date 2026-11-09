@@ -1459,7 +1459,9 @@ the final mapping is RELRO. An absolute constant (`N_ABS`) is not inferred to
 be a slid address.
 
 `installMachOObjectPatch` also connects this native object profile to the shared
-publication transaction. It prepares authenticated GOT slots before placement,
+publication transaction. Before final signing, native arm64e publication
+migrates threaded inputs through the existing checked chained-fixup converter;
+already chained inputs are unchanged. It prepares authenticated GOT slots before placement,
 installs compact/DWARF language records, and redirects each selected original
 entry with a single relative branch. The new function owns its signing prologue;
 the branch does not change LR. Explicit pointer providers are admitted by the
