@@ -170,13 +170,15 @@ struct TaggedMemory {
 };
 
 struct NullableCapture {
-  uint64_t Capture;
+  RegisterValue Value;
   uint16_t Registers;
   bool ConditionalDefinition = true;
   // Full-width stores of this exact value on every non-null path. Numeric
   // ranges and independent expression alternatives do not establish identity.
   StoredRegisterMemory Values;
   MemoryPostconditions Postconditions;
+  // Numeric constraint valid only when this exact affine value is returned.
+  std::optional<UnsignedValueRange> Bounds;
 
   uint64_t retainedByteEstimate() const {
     return Values.retainedByteEstimate() +
@@ -248,13 +250,14 @@ struct ContextState {
       if (State.Nullable && (State.Nullable->Registers & registerBit(0)))
         return State.Nullable;
       const auto Value = State.Registers[0].singleton();
-      const auto Bounds =
-          unsignedValueRange(Value, Coordinates->Addresses.get());
-      if (Value.ValueKind != RegisterValue::Kind::SymbolicAddress ||
-          Value.Offset || !Bounds || !Bounds->Lower)
+      const auto Bounds = State.Scratch.Values.valueRange(Value);
+      if (Value.ValueKind != RegisterValue::Kind::SymbolicAddress || !Bounds ||
+          !Bounds->Lower)
         return std::nullopt;
-      NullableCapture Facts{Value.Value, registerBit(0), true, {}, {}};
+      NullableCapture Facts{Value, registerBit(0), true, {}, {}};
+      Facts.Bounds = Bounds;
       Facts.Values.setCoordinates(Coordinates);
+      Facts.Values.refineCapturedRange(Value, *Bounds);
       Facts.Values.includeCells(State.Scratch.Values, [&](const auto &Address) {
         return State.Scratch.Values.readValues(Address).singleton() == Value;
       });
@@ -266,11 +269,19 @@ struct ContextState {
       return Facts;
     };
     if (Nullable && Other.Nullable &&
-        Nullable->Capture == Other.Nullable->Capture) {
+        Nullable->Value == Other.Nullable->Value) {
       Nullable->Registers &= Other.Nullable->Registers;
       Nullable->ConditionalDefinition &= Other.Nullable->ConditionalDefinition;
       Nullable->Values.joinValues(Other.Nullable->Values);
       Nullable->Postconditions.meet(Other.Nullable->Postconditions);
+      if (Nullable->Bounds && Other.Nullable->Bounds) {
+        Nullable->Bounds->Lower =
+            std::min(Nullable->Bounds->Lower, Other.Nullable->Bounds->Lower);
+        Nullable->Bounds->Upper =
+            std::max(Nullable->Bounds->Upper, Other.Nullable->Bounds->Upper);
+      } else {
+        Nullable->Bounds.reset();
+      }
       if (!Nullable->Registers)
         Nullable.reset();
     } else if (IsNull(*this) || IsNull(Other)) {
@@ -278,17 +289,26 @@ struct ContextState {
       auto Facts = ReturnFacts(IsNull(*this) ? Other : *this);
       if (Facts) {
         Facts->Registers = registerBit(0);
-        Facts->ConditionalDefinition &= !Zero.definesCapture(Facts->Capture);
+        Facts->ConditionalDefinition &=
+            !Zero.definesCapture(Facts->Value.Value);
       }
       Nullable = std::move(Facts);
     } else if (Nullable || Other.Nullable) {
       auto Left = ReturnFacts(*this);
       auto Right = ReturnFacts(Other);
-      if (Left && Right && Left->Capture == Right->Capture) {
+      if (Left && Right && Left->Value == Right->Value) {
         Left->Registers = registerBit(0);
         Left->ConditionalDefinition &= Right->ConditionalDefinition;
         Left->Values.joinValues(Right->Values);
         Left->Postconditions.meet(Right->Postconditions);
+        if (Left->Bounds && Right->Bounds) {
+          Left->Bounds->Lower =
+              std::min(Left->Bounds->Lower, Right->Bounds->Lower);
+          Left->Bounds->Upper =
+              std::max(Left->Bounds->Upper, Right->Bounds->Upper);
+        } else {
+          Left->Bounds.reset();
+        }
         Nullable = std::move(Left);
       } else {
         Nullable.reset();
@@ -465,7 +485,8 @@ bool refineAddressBranch(const MedBlock &Block,
                          const MedInstructionIndex &Index, size_t Successor,
                          ContextState &State, const SBFProgram &Program,
                          const SymbolicAddressSpace &Addresses,
-                         uint16_t ReturnCarriers) {
+                         uint16_t ReturnCarriers,
+                         bool PreserveCapturedIdentity = false) {
   const auto *Last = Index.find(Block.EndSlot - 1);
   if (!Last || Last->Width != kDoubleWordBitWidth ||
       Last->Semantics.Terminator != TerminatorKind::ConditionalJump)
@@ -511,7 +532,7 @@ bool refineAddressBranch(const MedBlock &Block,
   std::optional<ProvenValueSet> Refined;
   bool Reachable = false;
   for (const auto &Value : possibleValues(State.Registers[Register])) {
-    auto Bounds = unsignedValueRange(Value, &Addresses);
+    auto Bounds = State.Scratch.Values.valueRange(Value);
     if (!Bounds && Value.ValueKind != RegisterValue::Kind::Unknown)
       return true;
     const auto Before = Bounds.value_or(UnsignedValueRange{});
@@ -568,11 +589,18 @@ bool refineAddressBranch(const MedBlock &Block,
     if (!Possible)
       continue;
     Reachable = true;
-    // An unchanged captured value retains its equality identity. A narrowed
-    // identity becomes a range rather than mutating globally shared bounds.
+    // A guard on one exact capture constrains all its affine aliases on this
+    // path. A disjunction cannot constrain its unrelated alternatives, and a
+    // split interval cannot be represented by the single local enclosure.
     const auto Include = [&](UnsignedValueRange Part) {
+      const bool KeepIdentity =
+          PreserveCapturedIdentity &&
+          Value.ValueKind == RegisterValue::Kind::SymbolicAddress &&
+          State.Registers[Register].values().size() == 1 && !LowerPart;
+      if (KeepIdentity)
+        State.Scratch.Values.refineCapturedRange(Value, Part);
       RegisterValue Narrowed =
-          Part == Before ? Value : unsignedRangeValue(Part);
+          Part == Before || KeepIdentity ? Value : unsignedRangeValue(Part);
       if (Value.ValueKind == RegisterValue::Kind::Unknown &&
           Part.Lower < kHeapStart)
         Narrowed = {};
@@ -599,7 +627,7 @@ bool refineAddressBranch(const MedBlock &Block,
       if (Value.ValueKind == RegisterValue::Kind::Constant &&
           Value.Value == 0) {
         if (State.Nullable->ConditionalDefinition)
-          std::erase(State.DefinedCaptures, State.Nullable->Capture);
+          std::erase(State.DefinedCaptures, State.Nullable->Value.Value);
         State.Nullable.reset();
       } else if (llvm::all_of(Refined->values(), [&](const auto &Alternative) {
                    const auto Bounds =
@@ -607,6 +635,9 @@ bool refineAddressBranch(const MedBlock &Block,
                    return Bounds && Bounds->Lower != 0 &&
                           Bounds->Lower <= Bounds->Upper;
                  })) {
+        if (State.Nullable->Bounds)
+          State.Scratch.Values.refineCapturedRange(State.Nullable->Value,
+                                                   *State.Nullable->Bounds);
         State.Scratch.Values.includeCells(State.Nullable->Values,
                                           [](const auto &) { return true; });
         std::array<ProvenValueSet, kRegisterCount> Identity;
@@ -702,15 +733,14 @@ std::optional<size_t> knownBranchSuccessor(const MedInstruction *Last,
         return evaluateBranchCondition(Last->Op, Last->Width,
                                        static_cast<uint64_t>(Left.Offset),
                                        static_cast<uint64_t>(RHS.Offset));
-      const auto *Addresses = State.Scratch.Values.symbolicAddresses().get();
-      const auto L = unsignedValueRange(Left, Addresses);
-      const auto R = unsignedValueRange(RHS, Addresses);
+      const auto L = State.Scratch.Values.valueRange(Left);
+      const auto R = State.Scratch.Values.valueRange(RHS);
       if (L && R)
         return evaluateBranchCondition(Last->Op, Last->Width, L->Lower,
                                        R->Lower);
     }
-    auto L = unsignedValueRange(Left);
-    auto R = unsignedValueRange(RHS);
+    auto L = State.Scratch.Values.valueRange(Left);
+    auto R = State.Scratch.Values.valueRange(RHS);
     if (!L || !R || L->Lower > L->Upper || R->Lower > R->Upper)
       return std::nullopt;
     if (Last->Width == kWordBitWidth) {
@@ -3858,7 +3888,8 @@ ContextFlow::instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
   }
   const auto HasRange = [](const ProvenValueSet &Values) {
     return llvm::any_of(Values.values(), [](const RegisterValue &Value) {
-      return Value.ValueKind == RegisterValue::Kind::UnsignedRange;
+      return Value.ValueKind == RegisterValue::Kind::UnsignedRange ||
+             Value.ValueKind == RegisterValue::Kind::SymbolicAddress;
     });
   };
   bool MergeScalarBranches = false;
@@ -4105,7 +4136,8 @@ ContextFlow::instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
           if (auto Error = refineLoadedEquality(Block, NextSlot, Successor))
             return std::move(Error);
           if (!refineAddressBranch(Block, Index, NextSlot, Successor, Program,
-                                   *CapturedAddresses, ReturnCarriers[Next]))
+                                   *CapturedAddresses, ReturnCarriers[Next],
+                                   FixedMemory))
             continue;
           // Every CFG cycle crosses a reverse-postorder backedge. Reject it
           // rather than starting a second loop solver at the summary limit.
@@ -4465,10 +4497,11 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
               Access.Size == sizeof(uint64_t)) &&
              isScratchRange(Access.Address.Value, Access.Size);
     };
-    const auto NumericInputs = [](const ProvenValueSet &Values) {
+    const auto NumericInputs = [&](const ProvenValueSet &Values) {
       return !Values.unknown() &&
-             llvm::all_of(Values.values(), [](const RegisterValue &Value) {
-               const auto Bounds = unsignedValueRange(Value);
+             llvm::all_of(Values.values(), [&](const RegisterValue &Value) {
+               const auto Bounds =
+                   unsignedValueRange(Value, CapturedAddresses.get());
                return Bounds && Bounds->Lower <= Bounds->Upper;
              });
     };
@@ -4533,7 +4566,7 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
             Output.Registers[kReturnRegister].join(
                 RegisterValue{RegisterValue::Kind::Constant, 0, 0});
             Output.Nullable = NullableCapture{
-                Captured->Value, registerBit(kReturnRegister), New, {}, {}};
+                *Captured, registerBit(kReturnRegister), New, {}, {}};
           }
           Output.Origins[kReturnRegister] = Output.Registers[kReturnRegister];
           Output.defineCapture(Captured->Value);
@@ -4609,7 +4642,7 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
     }
     ImportedCaptures.insert(Bound->Value);
     if (Callee->Return && Callee->Return->Nullable &&
-        Value.Value == Callee->Return->Nullable->Capture && !NullableWasNew)
+        Value.Value == Callee->Return->Nullable->Value.Value && !NullableWasNew)
       NullableWasNew = !State.definesCapture(Bound->Value);
     if (Callee->TaggedReturn && !State.definesCapture(Bound->Value)) {
       constexpr uint64_t Bytes =
@@ -4645,8 +4678,7 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
       (Callee->Return->Nullable->Registers & registerBit(0)) &&
       !Edge.LegacyRuntime) {
     const auto &Template = *Callee->Return->Nullable;
-    const auto Capture = BindCapture(
-        {RegisterValue::Kind::SymbolicAddress, Template.Capture, 0});
+    const auto Capture = BindCapture(Template.Value);
     if (CaptureError)
       return std::move(CaptureError);
     MemoryPostconditions Fields = Template.Postconditions;
@@ -4666,12 +4698,13 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
     if (CaptureError)
       return std::move(CaptureError);
     Values.Values.includeCells(Objects, [](const auto &) { return true; });
-    ReturnedNullable = NullableCapture{Capture.Value,
+    ReturnedNullable = NullableCapture{Capture,
                                        registerBit(0),
                                        Template.ConditionalDefinition &&
                                            NullableWasNew.value_or(false),
                                        std::move(Values.Values),
                                        {}};
+    ReturnedNullable->Bounds = Template.Bounds;
     ReturnedNullable->Postconditions.include(Fields, OriginEntry, Program);
     ReturnedNullableBytes = ReturnedNullable->retainedByteEstimate() +
                             Fields.retainedByteEstimate() +
@@ -4988,20 +5021,21 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
     }
     if (CapturedReturn && !Edge.LegacyRuntime)
       State.Registers[0] = *CapturedReturn;
-    const auto IsNullableReturn = [&](uint64_t Capture) {
+    const auto IsNullableReturn = [&](const RegisterValue &Capture) {
       return State.Registers[0].values().size() == 2 &&
              llvm::all_of(State.Registers[0].values(), [&](const auto &Value) {
                return (Value.ValueKind == RegisterValue::Kind::Constant &&
                        Value.Value == 0) ||
-                      (Value.ValueKind ==
-                           RegisterValue::Kind::SymbolicAddress &&
-                       Value.Value == Capture && Value.Offset == 0);
+                      Value == Capture;
              });
     };
-    if (NewCapture && !Edge.LegacyRuntime && IsNullableReturn(*NewCapture))
-      State.Nullable =
-          NullableCapture{*NewCapture, registerBit(0), true, {}, {}};
-    if (ReturnedNullable && IsNullableReturn(ReturnedNullable->Capture))
+    if (NewCapture && !Edge.LegacyRuntime) {
+      const RegisterValue Value{RegisterValue::Kind::SymbolicAddress,
+                                *NewCapture, 0};
+      if (IsNullableReturn(Value))
+        State.Nullable = NullableCapture{Value, registerBit(0), true, {}, {}};
+    }
+    if (ReturnedNullable && IsNullableReturn(ReturnedNullable->Value))
       State.Nullable = std::move(ReturnedNullable);
     if (CaptureError)
       return std::move(CaptureError);
@@ -5397,6 +5431,9 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
   // Their fields still use the ordinary must-fact join within this summary.
   Input.DefinedCaptures = std::vector<uint64_t>{};
   Input.Nullable.reset();
+  // Summary keys use the immutable capture enclosure. Narrow caller bounds
+  // stay with its local state and the uncached fixed-cell replay only.
+  Input.Scratch.Values.discardCapturedRanges();
   Input.InputExpressions = {};
   Input.InputSpills.clear();
   Input.InputWrites = {};

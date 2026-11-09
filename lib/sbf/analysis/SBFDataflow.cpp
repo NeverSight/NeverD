@@ -490,6 +490,49 @@ StoredRegisterMemory::symbolicAddresses() const {
   return Coordinates ? Coordinates->Addresses : Empty;
 }
 
+std::optional<UnsignedValueRange>
+StoredRegisterMemory::valueRange(const RegisterValue &Value,
+                                 bool AllowWrap) const {
+  if (Value.ValueKind != RegisterValue::Kind::SymbolicAddress)
+    return unsignedValueRange(Value);
+  const auto It = CapturedRanges.find(Value.Value);
+  if (It == CapturedRanges.end())
+    return AllowWrap ? addressValueRange(Value, symbolicAddresses().get())
+                     : unsignedValueRange(Value, symbolicAddresses().get());
+  const auto Delta = static_cast<uint64_t>(Value.Offset);
+  const auto &Range = It->second;
+  if (AllowWrap || (Value.Offset >= 0 && Delta <= UINT64_MAX - Range.Upper) ||
+      (Value.Offset < 0 && uint64_t{0} - Delta <= Range.Lower))
+    return UnsignedValueRange{Range.Lower + Delta, Range.Upper + Delta};
+  return std::nullopt;
+}
+
+void StoredRegisterMemory::refineCapturedRange(const RegisterValue &Value,
+                                               UnsignedValueRange Range) {
+  if (Value.ValueKind != RegisterValue::Kind::SymbolicAddress)
+    return;
+  const auto Before = valueRange(Value);
+  if (!Before || Range.Lower > Range.Upper || Range.Lower < Before->Lower ||
+      Range.Upper > Before->Upper || Range == *Before)
+    return;
+  const auto Delta = static_cast<uint64_t>(Value.Offset);
+  CapturedRanges[Value.Value] = {Range.Lower - Delta, Range.Upper - Delta};
+}
+
+void StoredRegisterMemory::joinCapturedRanges(
+    const StoredRegisterMemory &Other) {
+  for (auto It = CapturedRanges.begin(); It != CapturedRanges.end();) {
+    const auto Found = Other.CapturedRanges.find(It->first);
+    if (Found == Other.CapturedRanges.end()) {
+      It = CapturedRanges.erase(It);
+    } else {
+      It->second.Lower = std::min(It->second.Lower, Found->second.Lower);
+      It->second.Upper = std::max(It->second.Upper, Found->second.Upper);
+      ++It;
+    }
+  }
+}
+
 void StoredRegisterMemory::setFrameTranslationLimit(
     std::optional<uint64_t> Limit) {
   if (Limit == frameTranslationBound())
@@ -502,12 +545,13 @@ void StoredRegisterMemory::setSymbolicAddresses(
     std::shared_ptr<const SymbolicAddressSpace> Space) {
   if (Space == symbolicAddresses())
     return;
+  CapturedRanges.clear();
   Coordinates = std::make_shared<StoredMemoryCoordinates>(
       StoredMemoryCoordinates{frameTranslationBound(), std::move(Space)});
 }
 
 bool StoredRegisterMemory::operator==(const StoredRegisterMemory &Other) const {
-  return Values == Other.Values &&
+  return Values == Other.Values && CapturedRanges == Other.CapturedRanges &&
          frameTranslationBound() == Other.frameTranslationBound() &&
          symbolicAddresses() == Other.symbolicAddresses();
 }
@@ -562,7 +606,7 @@ void StoredRegisterMemory::invalidate(const RegisterValue &Address,
   const auto Footprint =
       [&](const RegisterValue &Start,
           uint64_t Bytes) -> std::optional<llvm::ConstantRange> {
-    auto Range = addressValueRange(Start, symbolicAddresses().get());
+    auto Range = valueRange(Start, true);
     if (Start.ValueKind == RegisterValue::Kind::StackAddress) {
       const auto Translation = frameTranslationBound();
       if (!Translation)
@@ -708,11 +752,13 @@ uint64_t StoredRegisterMemory::retainedByteEstimate() const {
   uint64_t Allocated = 0;
   for (const auto &[Key, Value] : Values)
     Allocated += Value.allocatedBytes();
-  return Values.empty()
-             ? 0
-             : sizeof(*this) + Allocated +
-                   Values.size() *
-                       (sizeof(decltype(Values)::value_type) + NodeOverhead);
+  return empty() ? 0
+                 : sizeof(*this) + Allocated +
+                       CapturedRanges.size() *
+                           (sizeof(decltype(CapturedRanges)::value_type) +
+                            NodeOverhead) +
+                       Values.size() * (sizeof(decltype(Values)::value_type) +
+                                        NodeOverhead);
 }
 
 RegisterValue StoredRegisterMemory::read(va_t Address,
@@ -737,7 +783,7 @@ StoredRegisterMemory::readValues(const RegisterValue &Address,
   if (It != Values.end())
     return It->second;
   if (Key->ValueKind == RegisterValue::Kind::SymbolicAddress) {
-    const auto Bounds = addressValueRange(*Key, symbolicAddresses().get());
+    const auto Bounds = valueRange(*Key, true);
     if (Bounds && Bounds->Lower == Bounds->Upper) {
       // Absolute cells hold unconditional facts. An exact captured alias can
       // read them, but the reverse would expose a conditional object's fields
@@ -753,6 +799,7 @@ StoredRegisterMemory::readValues(const RegisterValue &Address,
 }
 
 void StoredRegisterMemory::meet(const StoredRegisterMemory &Other) {
+  joinCapturedRanges(Other);
   const auto Bound = frameTranslationBound();
   const auto OtherBound = Other.frameTranslationBound();
   setFrameTranslationLimit(Bound && OtherBound
@@ -765,6 +812,7 @@ void StoredRegisterMemory::meet(const StoredRegisterMemory &Other) {
 }
 
 void StoredRegisterMemory::joinValues(const StoredRegisterMemory &Other) {
+  joinCapturedRanges(Other);
   const auto Bound = frameTranslationBound();
   const auto OtherBound = Other.frameTranslationBound();
   setFrameTranslationLimit(Bound && OtherBound
@@ -795,6 +843,12 @@ void StoredRegisterMemory::profile(llvm::FoldingSetNodeID &ID) const {
   ID.AddBoolean(Bound.has_value());
   if (Bound)
     ID.AddInteger(*Bound);
+  ID.AddInteger(CapturedRanges.size());
+  for (const auto &[Capture, Range] : CapturedRanges) {
+    ID.AddInteger(Capture);
+    ID.AddInteger(Range.Lower);
+    ID.AddInteger(Range.Upper);
+  }
   ID.AddInteger(Values.size());
   for (const auto &[Key, Value] : Values) {
     ID.AddInteger(std::get<0>(Key));
@@ -848,6 +902,9 @@ void StoredRegisterMemory::copyFrom(const StoredRegisterMemory &Source,
 
 void StoredRegisterMemory::transformSymbols(
     llvm::function_ref<RegisterValue(RegisterValue)> Map) {
+  // A mapping can widen a name or change its displacement. The transformed
+  // cells remain facts, but need a fresh proof before retaining local bounds.
+  CapturedRanges.clear();
   decltype(Values) Transformed;
   for (const auto &[Key, Value] : Values) {
     auto Address = cellAddress(Key);

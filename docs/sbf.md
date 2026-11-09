@@ -1001,8 +1001,8 @@ an unknown branch or write.
 
 When all four specializations are occupied, a caller can also replay an acyclic
 scalar graph that reads and writes fixed scratch cells. Every required input
-register and read cell must contain complete literal or nonwrapping unsigned
-range alternatives. The replay partitions these inputs independently and proves
+register and read cell must contain complete literal, nonwrapping unsigned
+range, or bounded captured-value alternatives. The replay partitions these inputs independently and proves
 every combination; a failed case rejects the complete joined result. Literal
 inputs keep the existing path with known branch successors. Range inputs use
 the canonical branch refinements, join forward CFG edges, and join every
@@ -1016,6 +1016,19 @@ path proof, work budget, memory budget and call-depth limits. Syscalls, opaque
 calls and unproven cycles reject the proof. Pending states and joined returns
 consume the existing retained-state budget. This adds no cached
 specialization and infers no initial heap contents or allocator contract.
+
+For a branch on one exact captured value, this replay retains both its affine
+identity and the narrower interval proved on that path. The typed-memory owner
+uses these sparse local bounds for alias checks, without modifying the shared
+capture enclosure. Joins keep the hull of constraints present on both incoming
+paths; memory overlays do not import another path's constraints. Summary inputs
+discard local bounds, so they cannot silently specialize a cached summary.
+Constraints and their temporary copies consume the existing retained-state
+budget. A null/non-null return can carry the successful value's displacement,
+conditional stores and bound together. Testing that exact return restores those
+facts only on the non-null branch. This preserves a decreasing heap cursor
+across repeated allocations, while a cursor reset can still prove actual
+overlap. Non-identity alignment masks retain their existing conservative result.
 
 A complete set of successful heap-derived numeric returns names the one actual
 returned value with a captured identity and enclosing numeric bounds. Ordinary
