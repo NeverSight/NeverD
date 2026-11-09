@@ -21,6 +21,8 @@
 #include "neverd/symbolic/SymExpr.h"
 #include "neverd/symbolic/SymKnownBits.h"
 
+#include "llvm/ADT/STLFunctionalExtras.h"
+
 #include <algorithm>
 #include <cassert>
 #include <limits>
@@ -53,6 +55,36 @@ SymRef contractZeroExtensions(SymContext &C, SymOp Op,
   else
     Value = C.mkXor(Narrow);
   return C.mkZExt(Value, Constant.getBitWidth());
+}
+
+SymRef foldSelectedLiterals(
+    SymContext &C, SymRef Value,
+    llvm::function_ref<llvm::APInt(const llvm::APInt &)> Fold) {
+  const auto Op = C.op(Value);
+  const auto Selection =
+      Op == SymOp::SExt || Op == SymOp::ZExt ? C.operand(Value, 0) : Value;
+  if (C.op(Selection) != SymOp::Ite || !C.isConst(C.operand(Selection, 1)) ||
+      !C.isConst(C.operand(Selection, 2)))
+    return {};
+  const auto Condition = C.operand(Selection, 0);
+  const unsigned Width = C.width(Value), Narrow = C.width(Selection);
+  auto Apply = [&](unsigned Arm) {
+    const auto &Literal = C.constValue(C.operand(Selection, Arm));
+    return Fold(Op == SymOp::SExt ? Literal.sext(Width) : Literal.zext(Width));
+  };
+  const llvm::APInt Yes = Apply(1), No = Apply(2);
+  // Keep narrow carriers visible to cheap range/known-bit queries. Folding
+  // literals must not replace a zero extension with a wide opaque selection.
+  if (Narrow < Width && Yes.getActiveBits() <= Narrow &&
+      No.getActiveBits() <= Narrow)
+    return C.mkZExt(C.mkIte(Condition, C.mkConst(Yes.trunc(Narrow)),
+                            C.mkConst(No.trunc(Narrow))),
+                    Width);
+  if (Narrow < Width && Yes.isSignedIntN(Narrow) && No.isSignedIntN(Narrow))
+    return C.mkSExt(C.mkIte(Condition, C.mkConst(Yes.trunc(Narrow)),
+                            C.mkConst(No.trunc(Narrow))),
+                    Width);
+  return C.mkIte(Condition, C.mkConst(Yes), C.mkConst(No));
 }
 
 // A logical right shift observes only [Amount, Width). Remove bitwise terms
@@ -257,6 +289,11 @@ SymRef SymContext::mkAnd(llvm::ArrayRef<SymRef> Ops) {
     return intern(SymOp::And, W, Rest, 0);
   }
 
+  if (Rest.size() == 1)
+    if (auto Folded = foldSelectedLiterals(
+            *this, Rest[0], [&](const llvm::APInt &V) { return V & Acc; }))
+      return Folded;
+
   llvm::SmallVector<SymRef, 8> Final;
   Final.push_back(mkConst(Acc));
   Final.append(Rest.begin(), Rest.end());
@@ -443,6 +480,11 @@ SymRef SymContext::mkOr(llvm::ArrayRef<SymRef> Ops) {
     return intern(SymOp::Or, W, Rest, 0);
   }
 
+  if (Rest.size() == 1)
+    if (auto Folded = foldSelectedLiterals(
+            *this, Rest[0], [&](const llvm::APInt &V) { return V | Acc; }))
+      return Folded;
+
   llvm::SmallVector<SymRef, 8> Final;
   Final.push_back(mkConst(Acc));
   Final.append(Rest.begin(), Rest.end());
@@ -616,6 +658,11 @@ SymRef SymContext::mkXor(llvm::ArrayRef<SymRef> Ops) {
     return intern(SymOp::Xor, W, Rest, 0);
   }
 
+  if (Rest.size() == 1)
+    if (auto Folded = foldSelectedLiterals(
+            *this, Rest[0], [&](const llvm::APInt &V) { return V ^ Acc; }))
+      return Folded;
+
   llvm::SmallVector<SymRef, 8> Final;
   Final.push_back(mkConst(Acc));
   Final.append(Rest.begin(), Rest.end());
@@ -628,6 +675,9 @@ SymRef SymContext::mkNot(SymRef A) {
     return mkConst(~constValue(A));
   if (op(A) == SymOp::Not)
     return operand(A, 0);
+  if (auto Folded = foldSelectedLiterals(
+          *this, A, [](const llvm::APInt &V) { return ~V; }))
+    return Folded;
   // ~(k | ~x) == ~k & x, and its AND/OR dual. Keep the captured word
   // intact while exposing the constant observation mask before deep work.
   if ((op(A) == SymOp::Or || op(A) == SymOp::And) && numOperands(A) == 2 &&

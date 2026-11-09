@@ -23040,6 +23040,8 @@ recorded baseline; this change adds none and does not weaken the audit.
 
 `SymExpr.PlainVariableIndexKeepsLeafIdentityAcrossGrowthAndCopies` checks complete name/width identity, embedded NULs, growth, copies and repeated declarations without creating new nodes.
 
+`SymExpr.LiteralSelections*` checks exact constant bitwise folding through selected literal carriers at 2--128 bits, with independent APInt evaluation and nonliteral-arm refusal controls. The builders retain narrow extension carriers and do not distribute data-valued arms.
+
 `SymExpr` variable-membership checks compare structural membership with full variable collection, including context copies and missing IDs. Substitution checks retain unrelated shared payloads, exact root order, non-variable keys and simultaneous replacement semantics.
 
 `SymState` memory-view regressions check whole-word overwrite node counts, independent byte-store equivalence, endian order, partial overwrites, modular relative coordinates and non-allocating materialized reads. Scalar snapshot and restore tests check that memory operations do not fork or replace unrelated scalar state.

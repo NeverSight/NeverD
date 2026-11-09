@@ -24,6 +24,7 @@ add_neverd_unittest(NeverDSymbolicTests
   SymExprCompareTests.cpp
   SymExprConditionalEqualityTests.cpp
   SymExprComplementTests.cpp
+  SymExprLiteralCarrierTests.cpp
   SymExprExtensionTests.cpp
   SymExprExtensionEqualityTests.cpp
   SymExprMaskTests.cpp
