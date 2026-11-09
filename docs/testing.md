@@ -6804,6 +6804,12 @@ first analyzing neighboring owners. This counts actual work instead of imposing
 a timing threshold; the same suite retains x64/AArch64 navigation and mapping
 checks under both discovery orders.
 
+`PipelineOutcome.ArbitrationRebuildsUnderUnchangedInputsKeepTheirBodies`
+exhausts the module jump-table evidence budget, so the fallback rebuilds every
+function once and the continuation closure asks again under the same inputs.
+It counts rebuilt functions through `RebuiltFunctionsForTesting`: one rebuild
+each, and none when complete arbitration protects nothing.
+
 `PipelineOutcome.AnalysisCache*` compares cold and retained call chains in
 one- and four-thread runs, including physical floating returns and integer
 argument/register summaries. It checks exact boundary/verified-entry changes,

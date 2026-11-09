@@ -5648,7 +5648,46 @@ void Pipeline::buildLowIR(
   // in a cache of their own: the facts' cache keeps one context, and theirs
   // would replace every graph and answer the image's later runs read.
   std::shared_ptr<X87CallGraphCache> RebuildGraphs;
+  // What each function's last rebuild read besides the image and the run's
+  // fixed indexes.  A build is a function of these (its memos replay the
+  // work they record), so a function asked to rebuild under the inputs of
+  // its last rebuild already holds the body that build would make.  The
+  // slot, branch and history sets only grow during the run, so equal sizes
+  // are equal sets; continuation roots can be withdrawn, so they are kept
+  // whole.  The initial lift reads none of these sets and never matches.
+  struct RebuildInputs {
+    size_t ProtectedSlots;
+    size_t UnsafeBranches;
+    bool PreservePotentialBranches;
+    std::optional<std::set<va_t>> ContinuationRoots;
+    size_t PublishedHistory;
+    bool operator==(const RebuildInputs &) const = default;
+  };
+  std::vector<std::optional<RebuildInputs>> LastRebuildInputs(Total);
   auto rebuildFunctions = [&](const std::vector<bool> &Rebuild) {
+    std::vector<std::optional<RebuildInputs>> Stale(Total);
+    size_t StaleCount = 0;
+    for (size_t I = 0; I < Total; ++I) {
+      if (!Rebuild[I])
+        continue;
+      const auto Continuations =
+          ContinuationRootsByOwner.find(Candidates[I].first);
+      RebuildInputs Next{
+          ProtectedRelocationSlots.size(), UnsafeJumpTableBranches.size(),
+          PreservePotentialJumpTableBranches,
+          Continuations == ContinuationRootsByOwner.end()
+              ? std::nullopt
+              : std::optional<std::set<va_t>>(Continuations->second),
+          EverPublishedJumpTableBranchHistory[I].size()};
+      if (LastRebuildInputs[I] == Next)
+        continue;
+      Stale[I] = std::move(Next);
+      ++StaleCount;
+    }
+    if (Opts.RebuiltFunctionsForTesting)
+      *Opts.RebuiltFunctionsForTesting += StaleCount;
+    if (!StaleCount)
+      return;
     CachedArbitration.reset();
     if (!RebuildGraphs)
       RebuildGraphs = Facts.createGraphCache(/*RetainBodies=*/false);
@@ -5673,7 +5712,7 @@ void Pipeline::buildLowIR(
       LocalCFG.setPreservePotentialJumpTableBranches(
           PreservePotentialJumpTableBranches);
       for (size_t I; (I = Claim()) < N;) {
-        if (!Rebuild[I])
+        if (!Stale[I])
           continue;
         auto Continuations = ContinuationRootsByOwner.find(Candidates[I].first);
         LocalCFG.setCrossFunctionContinuationRoots(
@@ -5690,6 +5729,7 @@ void Pipeline::buildLowIR(
             AllLow[I].EverPublishedJumpTableBranchAddresses.begin(),
             AllLow[I].EverPublishedJumpTableBranchAddresses.end());
         trimFuncStorage(AllLow[I]);
+        LastRebuildInputs[I] = std::move(Stale[I]);
       }
     });
   };

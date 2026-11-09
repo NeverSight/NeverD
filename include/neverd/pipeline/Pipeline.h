@@ -240,6 +240,10 @@ struct PipelineOptions {
   /// used to recover Windows catch-funclet continuation roots.  Production
   /// callers always use the compiled safety limit.
   std::optional<size_t> EHContinuationEvidenceBudgetForTesting;
+  /// Unit-test-only: when set, a run adds the number of functions its module
+  /// jump-table and continuation rebuilds lift again.  Production callers
+  /// leave it null; it never changes what a run lifts.
+  size_t *RebuiltFunctionsForTesting = nullptr;
   /// Borrowed for this run only. See PipelineAnalysisCache's lifetime and
   /// invalidation contract; nullptr preserves independent analysis.
   PipelineAnalysisCache *AnalysisCache = nullptr;

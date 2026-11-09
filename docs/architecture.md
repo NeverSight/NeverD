@@ -5031,7 +5031,13 @@ Within one LowIR build, module jump-table arbitration is reused while its
 function bodies remain unchanged. Any body rebuild retires that result before
 parallel builders run. Continuation discovery still runs normally, and image
 publication follows both fixed points; budget refusals and proof requirements
-remain the same.
+remain the same. A function asked to rebuild under the protected relocation
+slots, unsafe branches, branch preservation, continuation roots and published
+branch history of its previous rebuild keeps that body: a build is a function
+of those inputs and the image. The slot, branch and history sets only grow
+within the build, so their sizes identify them; continuation roots are kept
+whole. When arbitration stays incomplete after the fallback rebuild, the
+continuation closure's second identical rebuild therefore lifts nothing again.
 
 PE32 returning-stack queries also share a run-local memo across ordinary
 callers and independent jump-table queries. Each answer retains its import
