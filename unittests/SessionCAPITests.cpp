@@ -3192,6 +3192,107 @@ TEST_F(SessionCAPITest, TwoLevelSwitchesPublishTheirIndexTable) {
   }
 }
 
+TEST_F(SessionCAPITest, Win64VariadicFunctionsTakeTheirHomedArguments) {
+#if defined(_WIN32)
+  GTEST_SKIP() << "runs the decompiled C with a GNU-style host compiler";
+#else
+  if (llvm::StringRef(NEVERD_RUNTIME_FIXTURE_COMPILER).empty())
+    GTEST_SKIP() << "needs a GNU-style host C compiler";
+  // An MSVC-style variadic function spills its variadic argument registers
+  // to their home slots and passes a pointer to the first of them on as its
+  // va_list, which a helper walks on into the caller's stack arguments:
+  //   caller(n):  return variadic(n, 1, 2, 3, 4, 5);   // 4 and 5 on the stack
+  //   variadic(n, ...):
+  //     mov [rsp+10h], rdx; mov [rsp+18h], r8; mov [rsp+20h], r9
+  //     sub rsp, 28h; lea rdx, [rsp+38h]; call walk; add rsp, 28h; retn
+  //   walk(n, va): return n + va[0] + 2*va[1] + 3*va[2] + 4*va[3] + 5*va[4];
+  constexpr uint64_t Base = 0x140000000, Text = Base + 0x1000;
+  std::string Code;
+  const auto bytes = [&](llvm::StringRef Hex) { Code += llvm::fromHex(Hex); };
+  const auto align = [&] {
+    while (Code.size() % 16)
+      Code.push_back('\xcc');
+  };
+  bytes("4883ec38");           // sub rsp, 38h
+  bytes("48c744242805000000"); // mov qword ptr [rsp+28h], 5
+  bytes("48c744242004000000"); // mov qword ptr [rsp+20h], 4
+  bytes("41b903000000");       // mov r9d, 3
+  bytes("41b802000000");       // mov r8d, 2
+  bytes("ba01000000");         // mov edx, 1
+  const size_t CallVariadic = Code.size();
+  bytes("e800000000"); // call variadic
+  bytes("4883c438c3"); // add rsp, 38h; retn
+  align();
+  const size_t Variadic = Code.size();
+  bytes("4889542410"); // mov [rsp+10h], rdx
+  bytes("4c89442418"); // mov [rsp+18h], r8
+  bytes("4c894c2420"); // mov [rsp+20h], r9
+  bytes("4883ec28");   // sub rsp, 28h
+  bytes("488d542438"); // lea rdx, [rsp+38h]
+  const size_t CallWalk = Code.size();
+  bytes("e800000000"); // call walk
+  bytes("4883c428c3"); // add rsp, 28h; retn
+  align();
+  const size_t Walk = Code.size();
+  bytes("4889c8");   // mov rax, rcx
+  bytes("480302");   // add rax, [rdx]
+  bytes("4c8b4208"); // mov r8, [rdx+8]
+  bytes("4a8d0440"); // lea rax, [rax+r8*2]
+  bytes("4c8b4210"); // mov r8, [rdx+10h]
+  bytes("4f8d0440"); // lea r8, [r8+r8*2]
+  bytes("4c01c0");   // add rax, r8
+  bytes("4c8b4218"); // mov r8, [rdx+18h]
+  bytes("4a8d0480"); // lea rax, [rax+r8*4]
+  bytes("4c8b4220"); // mov r8, [rdx+20h]
+  bytes("4f8d0480"); // lea r8, [r8+r8*4]
+  bytes("4c01c0");   // add rax, r8
+  bytes("c3");       // retn
+  const auto patchCall = [&](size_t Call, size_t Target) {
+    const auto Displacement = static_cast<uint32_t>(
+        static_cast<int64_t>(Target) - static_cast<int64_t>(Call + 5));
+    for (unsigned I = 0; I < 4; ++I)
+      Code[Call + 1 + I] = static_cast<char>(Displacement >> (8 * I));
+  };
+  patchCall(CallVariadic, Variadic);
+  patchCall(CallWalk, Walk);
+  const auto Input = write("variadic.exe", makePE64(Code));
+  const std::string Caller = "sub_" + llvm::utohexstr(Text);
+  for (int Llvm : {0, 1}) {
+    SCOPED_TRACE(Llvm ? "LLVM C" : "HighC");
+    ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1)
+        << takeString(neverd_last_error(Session));
+    const std::string Unit = takeString(neverd_decompile_all(
+        Session, Input.c_str(), /*UseLlvmRoute=*/Llvm, 0, 0));
+    ASSERT_FALSE(Unit.empty()) << takeString(neverd_last_error(Session));
+    // The variadic function takes the registers it homes: no read of one is
+    // an unknown register, and the call passes all five variadic values.
+    EXPECT_EQ(Unit.find("__builtin_trap"), std::string::npos) << Unit;
+    EXPECT_NE(Unit.find("(arg0, 1, 2, 3, 4, 5)"), std::string::npos) << Unit;
+    const std::string Program = write("variadic-" + std::to_string(Llvm) + ".c",
+                                      Unit + "\nint main(void) { return " +
+                                          Caller + "(100) != 155; }\n");
+    for (llvm::StringRef Level : {"-O0", "-O2"}) {
+      SCOPED_TRACE(Level.str());
+      const std::string Binary =
+          (Directory / ("variadic-" + std::to_string(Llvm) + Level.str()))
+              .string();
+      std::string Message;
+      ASSERT_EQ(llvm::sys::ExecuteAndWait(NEVERD_RUNTIME_FIXTURE_COMPILER,
+                                          {NEVERD_RUNTIME_FIXTURE_COMPILER,
+                                           Level, "-fno-strict-aliasing", "-w",
+                                           Program, "-o", Binary},
+                                          std::nullopt, {}, 60, 0, &Message),
+                0)
+          << Message << Unit;
+      EXPECT_EQ(llvm::sys::ExecuteAndWait(Binary, {Binary}, std::nullopt, {},
+                                          60, 0, &Message),
+                0)
+          << Message << Unit;
+    }
+  }
+#endif
+}
+
 TEST(SessionNames, DemanglesAsIdentitiesDo) {
   EXPECT_EQ(takeString(neverd_demangle("_ZN8QDomNodeC1Ev")),
             "QDomNode::QDomNode()");

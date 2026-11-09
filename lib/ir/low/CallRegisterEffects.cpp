@@ -603,6 +603,18 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
   std::vector<bool> HomeLoaded(NumArgRegs);
   // The lowest incoming-area offset a pointer that escapes addresses.
   std::optional<int64_t> LowestEscape;
+  // While the entry block first runs, the bytes of each spill that no store
+  // has overwritten yet, until something could observe its slot: a load of
+  // it, a call, or a pointer to the incoming area escaping.  A spill that
+  // loses every byte first is dead (MedPrologueSaves drops it from the
+  // definition), so its slot cannot carry a variadic argument.
+  std::vector<uint64_t> SpillBytes(NumArgRegs);
+  std::vector<bool> SpillDead(NumArgRegs);
+  bool EntryRun = false, EntryDone = false;
+  auto ObserveSpills = [&] {
+    if (EntryRun)
+      std::fill(SpillBytes.begin(), SpillBytes.end(), 0);
+  };
   // A pointer at or above the home area can reach the incoming arguments.
   auto Escapes = [&](const StackValue &V) {
     const bool Reaches = V.K == StackValue::Unknown ||
@@ -610,6 +622,8 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
                           V.Hi >= static_cast<int64_t>(TRI.PointerSize));
     if (Reaches && V.K == StackValue::Range)
       LowestEscape = LowestEscape ? std::min(*LowestEscape, V.Lo) : V.Lo;
+    if (Reaches)
+      ObserveSpills();
     return Reaches;
   };
   // Argument registers the entry block writes before each of its operations;
@@ -633,6 +647,7 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
   std::optional<CallStackOffsets> ScalarOffsets;
   auto ReadRange = [&](const StackValue &A, unsigned Bytes) {
     if (A.K == StackValue::Unknown) {
+      ObserveSpills();
       Unknown = true;
       return;
     }
@@ -640,13 +655,17 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
       return;
     int64_t Last;
     if (llvm::AddOverflow(A.Hi, int64_t(std::max(Bytes, 1u)) - 1, Last)) {
+      ObserveSpills();
       Unknown = true;
       return;
     }
     for (size_t K = 0; K < NumArgRegs; ++K)
       if (A.Lo < HomeSlot(K) + static_cast<int64_t>(Layout.SlotBytes) &&
-          HomeSlot(K) <= Last)
+          HomeSlot(K) <= Last) {
         HomeLoaded[K] = true;
+        if (EntryRun)
+          SpillBytes[K] = 0;
+      }
     if (Last >= Layout.EntryStackBase) {
       const int64_t Count = static_cast<int64_t>(Layout.Registers.size()) +
                             (Last - Layout.EntryStackBase) / Layout.SlotBytes +
@@ -658,6 +677,8 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
     }
   };
   auto Run = [&](const LowBlock &Block, StackState &S) {
+    EntryRun = !EntryDone && &Block == &F.Blocks.front();
+    EntryDone |= EntryRun;
     auto ControlOf = [&](size_t OpIndex) {
       for (const LowInstructionBoundary &Boundary : Block.InstructionBoundaries)
         if (OpIndex >= Boundary.FirstOp &&
@@ -768,6 +789,19 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
         // other code read them.
         Unknown |= Escapes(In(1));
         const StackValue A = In(0);
+        // An exact plain store kills the bytes of a pending spill it covers.
+        if (EntryRun && A.K == StackValue::Range && A.Lo == A.Hi &&
+            Op.NumInputs == 2 &&
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+            Op.MemoryOrdering == NdMemoryOrdering::None)
+          for (size_t K = 0; K < NumArgRegs; ++K)
+            for (unsigned Byte = 0; SpillBytes[K] && Byte < 64; ++Byte)
+              if ((SpillBytes[K] >> Byte) & 1) {
+                const int64_t At = HomeSlot(K) + Byte;
+                if (At >= A.Lo && At - A.Lo < Op.Inputs[1].Size &&
+                    !(SpillBytes[K] &= ~(uint64_t{1} << Byte)))
+                  SpillDead[K] = true;
+              }
         if (HomeSlots && &Block == &F.Blocks.front() &&
             Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
             Op.MemoryOrdering == NdMemoryOrdering::None &&
@@ -777,8 +811,13 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
           for (size_t K = 0; K < NumArgRegs; ++K)
             if (A.Lo == HomeSlot(K) &&
                 Op.Inputs[1].Offset == Layout.Registers[K] &&
-                !((EntryWrittenBefore[I] >> K) & 1))
+                !((EntryWrittenBefore[I] >> K) & 1)) {
               HomeSpill[K] = I;
+              if (EntryRun) {
+                SpillBytes[K] = (uint64_t{2} << (Op.Inputs[1].Size - 1)) - 1;
+                SpillDead[K] = false;
+              }
+            }
         continue;
       }
       case NdOp::RETURN:
@@ -842,6 +881,8 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
           libc::stackProbeEffect(Img, Op.Inputs[0].Offset, StackProbes) ==
               libc::StackProbeEffect::Probe)
         continue;
+      // A handler its exception enters can read this frame's home slots.
+      ObserveSpills();
       Unknown |= ArgumentsEscape();
       if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
           !TailCall) {
@@ -946,6 +987,10 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
     if (Spilled)
       VariadicFrom = static_cast<int>(First);
   }
+  bool SaveArea = VariadicFrom >= 0;
+  for (size_t K = std::max(VariadicFrom, 0); SaveArea && K < NumArgRegs; ++K)
+    SaveArea = !SpillDead[K];
+  Effect.VariadicSaveArea = SaveArea;
   for (size_t K = 0; K < NumArgRegs; ++K) {
     if (!HomeSpill[K])
       continue;
@@ -2079,7 +2124,7 @@ CallRegisterSummaries solveCallRegisterEffects(
     }
   }
   for (const auto &[Entry, Effect] : Funcs)
-    if (Effect->VariadicFrom >= 0)
+    if (Effect->VariadicFrom >= 0 && Effect->VariadicSaveArea)
       Result.VariadicFrom[Entry] = Effect->VariadicFrom;
   std::map<va_t, int> &StackArgs = Result.EntryStackArgs;
   for (const auto &[Entry, Effect] : Funcs)

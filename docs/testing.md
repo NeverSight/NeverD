@@ -7513,6 +7513,14 @@ format string's 32-bit absolute address, zero-extended, is its whole address
 in both routes.
 `NeverDWorkerCallSiteTypes` compiles and executes both C routes, including all
 five Win64 variadic integer arguments, and retains partial-stack-write refusal.
+`SessionCAPITest.Win64VariadicFunctionsTakeTheirHomedArguments` decompiles a
+PE whose MSVC-style variadic function homes RDX, R8 and R9 and passes their
+first slot on as a va_list that a helper walks into the caller's two stack
+arguments: both C routes take the homed registers as parameters, contain no
+trap, pass all five values and return the machine's result at -O0 and -O2.
+`CallExitRegisters.OverwrittenEntrySpillsAreNotValueReads` keeps a function
+whose R9 spill is overwritten before its slot escapes at three parameters: a
+dead spill publishes no variadic position.
 The engine's C is Clang's dialect (`__builtin_bit_cast`, calls through casts
 to a call site's own ABI, which GCC folds into the declared one), so a host
 without Clang skips it after the analysis checks, naming the routes it did not

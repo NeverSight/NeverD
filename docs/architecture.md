@@ -10101,6 +10101,22 @@ flag retains its separate ordinary ABI clear-state rule. See the
 [Windows x64 convention](https://learn.microsoft.com/en-us/cpp/build/x64-software-conventions)
 and [AAPCS64 status register contract](https://github.com/ARM-software/abi-aa/blob/main/aapcs64/aapcs64.rst).
 
+A Win64 variadic function spills its first variadic argument register and
+every later one whole to their home slots and passes the first slot's address
+on as its va_list; its summary names that position (`CallVariadicFrom`) and
+lists only the named registers, which every caller passes. Its own definition
+takes the spilled registers as parameters too, as an AAPCS variadic function
+takes its register save area's, so neither C route reads them as unknown
+registers. The summary publishes that position only while the slots still
+hold the spilled registers where the function could first observe them (a
+load of a slot, a call, or a pointer to the incoming area escaping): a spill
+the entry block overwrites whole before that is dead, `MedPrologueSaves`
+drops it, and its register is no parameter. The function is variadic from the
+first stack argument on: each call passes what it sets,
+`finalizeVariadicCallees` adds a trailing parameter for every stack argument a
+call passes and pads the others, and both C routes keep the home area and that
+overflow contiguous in their frame headroom.
+
 Win64 home-spill input elision accepts ordinary stores of an incoming
 register's low bytes only when their home slot is unread and does not escape.
 FS/GS and ordered stores keep their register observations. Returning an

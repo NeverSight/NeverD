@@ -203,6 +203,13 @@ struct LocalRegisterEffect {
   /// the first of those slots on as the va_list.  Those spills are not
   /// argument reads: a caller passes exactly the variadic arguments it sets.
   int VariadicFrom = -1;
+  /// Whether those slots still hold the spilled registers where this
+  /// function could first observe them: a load of a slot, a call, or a
+  /// pointer to the incoming area escaping.  A spill the entry block
+  /// overwrites whole before that is dead (MedPrologueSaves drops it), so its
+  /// slot carries no variadic argument and the summary does not publish
+  /// VariadicFrom (CallRegisterSummary::VariadicFrom).
+  bool VariadicSaveArea = false;
   /// A System V variadic function whose prologue tests AL and, where it is
   /// not zero, saves the vector argument registers to its register save
   /// area (findRegisterSaveAreaSpills).  Those spills are not argument reads
@@ -265,7 +272,10 @@ struct CallRegisterSummaries {
   /// stack reads are bounded, and for the imports whose counts are fixed.
   std::map<va_t, int> EntryStackArgs;
   /// Register position of the first variadic argument of each variadic
-  /// function (LocalRegisterEffect::VariadicFrom).
+  /// function whose save area reaches its va_list intact
+  /// (LocalRegisterEffect::VariadicFrom and VariadicSaveArea).  Its callers
+  /// pass the variadic arguments they set, and its definition takes the
+  /// registers it spills.
   std::map<va_t, int> VariadicFrom;
 };
 

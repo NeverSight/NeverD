@@ -1456,6 +1456,9 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
   }
 
   // --- Detect register-passed parameters ---
+  // The position of the first variadic argument register of a function whose
+  // call summary names it (VariadicFromSummary), or -1.
+  int SummaryVariadicFrom = -1;
   if (!Func.Blocks.empty()) {
     const auto &Entry = Func.Blocks[0];
     auto UsedRegs = findLiveInParamRegs(Entry, ParamRegs);
@@ -1465,6 +1468,30 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
       if (auto It = CallEntryReadGPRs->find(Func.Entry);
           It != CallEntryReadGPRs->end())
         Summary = &It->second;
+    // A variadic function's summary (Win64's home-slot spills) lists only the
+    // named registers, which every caller passes.  Its definition reads each
+    // later argument register too: the prologue spills it whole to its home
+    // slot, where va_arg reads what a caller put there.  It takes them as
+    // parameters, as an AAPCS variadic function takes its register save
+    // area's, and each call passes what it sets and zero for the rest
+    // (finalizeVariadicCallees).
+    GPRReadWidths VariadicReads{};
+    if (Summary && Convention->VariadicFromSummary && CallVariadicFrom)
+      if (const auto It = CallVariadicFrom->find(Func.Entry);
+          It != CallVariadicFrom->end() && It->second > 0 &&
+          static_cast<size_t>(It->second) < IntegerRegs.size() &&
+          std::all_of(IntegerRegs.begin() + It->second, IntegerRegs.end(),
+                      [&](uint64_t Register) {
+                        return UsedRegs.count(Register) != 0;
+                      })) {
+        VariadicReads = *Summary;
+        for (size_t K = static_cast<size_t>(It->second); K < IntegerRegs.size();
+             ++K)
+          VariadicReads[IntegerRegs[K] / 8] =
+              static_cast<uint8_t>(TRI.FullRegWidth);
+        Summary = &VariadicReads;
+        SummaryVariadicFrom = It->second;
+      }
     detectRegisterParams(Func, TRI, ParamRegs, IntegerRegs, UsedRegs,
                          TargetArch, Convention, Summary);
 
@@ -1508,6 +1535,15 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
         bindX64VariadicVectorCount(Func, TRI,
                                    static_cast<uint8_t>(VectorRegs.size()));
     }
+  }
+
+  // Past its spilled argument registers, a variadic function whose summary
+  // names its first variadic one reads every incoming stack argument through
+  // va_arg: the overflow its callers pass starts at the first stack argument.
+  if (SummaryVariadicFrom >= 0 && !Func.IsVariadic) {
+    Func.IsVariadic = true;
+    Func.VariadicFirstRegister = SummaryVariadicFrom;
+    Func.VariadicOverflowBase = TRI.integerArgumentLayout(Fmt).EntryStackBase;
   }
 
   // Recover stack-passed arguments beyond the parameter registers (where they
