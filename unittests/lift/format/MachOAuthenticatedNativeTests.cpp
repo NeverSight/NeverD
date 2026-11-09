@@ -33,6 +33,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
@@ -964,7 +965,7 @@ void checkNativeObjectInstallation(
     };
     Reject([&](auto &Candidate, auto &) { ChangePlatform(Candidate); });
     Reject([&](auto &, auto &Native) { ChangePlatform(Native); });
-    uint64_t Tail = 0, End = 0;
+    uint64_t Tail = 0, End = 0, TailVA = 0;
     forEachMachOLoadCommand(
         Main.data(), Main.size(),
         [&](const uint8_t *Command, uint32_t ID, uint32_t, bool) {
@@ -981,10 +982,32 @@ void checkNativeObjectInstallation(
           for (unsigned I = 0; I < Segment->nsects; ++I)
             if (Sections[I].offset)
               Tail = std::max(Tail, Sections[I].offset + Sections[I].size);
+          Tail = llvm::alignTo(Tail, kPointerBytes);
+          TailVA = Segment->vmaddr + Tail - Segment->fileoff;
         });
     ASSERT_LT(Tail, End);
     ASSERT_TRUE(llvm::all_of(llvm::ArrayRef(Main).slice(Tail, End - Tail),
                              [](uint8_t Byte) { return Byte == 0; }));
+    // A zero chain word rebasing to the image base still owns its storage,
+    // even when it lies after the original section inventory.
+    MachOAuthenticatedFixup Existing;
+    Existing.Address = TailVA;
+    Existing.Recipe.Target = Before->Base;
+    Existing.ReadOnlyAfterFixups = true;
+    Existing.Authenticated = false;
+    auto OwnedZero = Main;
+    auto Error = installMachOAuthenticatedFixups(OwnedZero, {Existing});
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    ASSERT_EQ(readLE<uint64_t>(OwnedZero.data() + Tail), 0u);
+    auto WithOwnedZero =
+        appendMachOObjectImage(OwnedZero, (*Object)->getBuffer(), Dependencies);
+    ASSERT_TRUE(bool(WithOwnedZero))
+        << llvm::toString(WithOwnedZero.takeError());
+    for (const auto &Section : WithOwnedZero->Sections)
+      if (Section.ReadOnlyAfterFixups && Section.Size)
+        EXPECT_GE(Section.VA, TailVA + kPointerBytes);
+    Error = verifyMachOAuthenticatedFixups(OwnedZero, {Existing});
+    EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
     Reject([&](auto &Candidate, auto &) {
       std::fill(Candidate.begin() + Tail, Candidate.begin() + End,
                 kOccupiedMetadataPadding);
