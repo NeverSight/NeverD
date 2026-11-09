@@ -5714,8 +5714,9 @@ identity checks, cumulative allowances and decision-node ceiling.
 Expression restoration skips nodes older than every substitution key: immutable
 children precede their parents, and simultaneous replacement bodies remain
 unchanged. Rendering appends fragments directly into their parent's text and
-stores completed fragments in one dense table. No fragment reference survives
-insertion of its parent; emitted text and precedence remain unchanged.
+stores them in contiguous slots indexed by the same dense table used for
+discovery. Slots are sized from the reachable count before rendering, so
+completed child references remain stable. Text and precedence stay unchanged.
 Rendering gathers children before parents with an iterative postorder instead
 of sorting node IDs; a leaf root renders directly. MBA abstraction reuses the
 original DAG when its existing classification requires no hidden inputs,

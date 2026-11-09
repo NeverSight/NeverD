@@ -18,7 +18,6 @@
 #include "neverd/symbolic/SymExpr.h"
 
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
@@ -76,14 +75,6 @@ void appendDigits(std::string &Out, const llvm::APInt &V) {
   Out.append(S.begin(), S.end());
 }
 
-// Node handles use only 32 bits. Keep wide sentinels, but use LLVM's
-// native index hash rather than mixing nonexistent upper identity bits.
-struct NodeKeyInfo : llvm::DenseMapInfo<uint64_t> {
-  static unsigned getHashValue(uint64_t Key) {
-    return llvm::DenseMapInfo<uint32_t>::getHashValue(uint32_t(Key));
-  }
-};
-
 class Printer {
 public:
   Printer(const SymContext &Ctx, uint32_t Ambient)
@@ -92,7 +83,9 @@ public:
   std::string run(SymRef Root);
 
 private:
-  const Fragment &frag(SymRef R) const { return Memo.find(R.index())->second; }
+  const Fragment &frag(SymRef R) const {
+    return Fragments[Memo.find(R.index())->second];
+  }
   /// A child in a comma-separated argument list, which never needs brackets.
   const std::string &arg(SymRef R) const { return frag(R).Text; }
   std::string sub(SymRef R, int Need) const { return wrap(frag(R), Need); }
@@ -131,13 +124,14 @@ private:
 
   const SymContext &Ctx;
   uint32_t Ambient;
-  // Completed fragments are consumed before inserting their parent. No
-  // reference survives growth, so one dense table owns all fragment strings.
-  // Widen node IDs to keep every valid handle distinct from the sentinels.
-  llvm::SmallDenseMap<uint64_t, Fragment,
-                      limits::symbolic::kSymExprTraversalInlineBuckets,
-                      NodeKeyInfo>
+  // The discovery table also indexes fragment slots. Keeping strings out of
+  // empty buckets reduces the table's footprint. Slots are sized once before
+  // postorder rendering; completed child references remain stable.
+  // Wide keys keep every valid node handle distinct from the sentinels.
+  llvm::SmallDenseMap<uint64_t, uint32_t,
+                      limits::symbolic::kSymExprTraversalInlineBuckets>
       Memo;
+  llvm::SmallVector<Fragment, 32> Fragments;
 };
 
 std::string Printer::join(llvm::ArrayRef<SymRef> Ops, const char *Sep,
@@ -360,9 +354,6 @@ std::string Printer::run(SymRef Root) {
   // Iterative postorder avoids both recursion on deep expressions and sorting
   // the reachable set, while rendering each shared node only once.
   llvm::SmallVector<uint32_t, 64> Order;
-  llvm::SmallDenseSet<
-      uint64_t, limits::symbolic::kSymExprTraversalInlineBuckets, NodeKeyInfo>
-      Seen;
   struct Frame {
     SymRef Ref;
     bool Expanded;
@@ -374,17 +365,18 @@ std::string Printer::run(SymRef Root) {
       Order.push_back(R.index());
       continue;
     }
-    if (!Seen.insert(R.index()).second)
+    if (!Memo.try_emplace(R.index(), uint32_t(Memo.size())).second)
       continue;
     Work.push_back({R, true});
     for (SymRef C : Ctx.operands(R))
       Work.push_back({C, false});
   }
 
-  Memo.reserve(Order.size());
+  Fragments.resize(Order.size());
   for (uint32_t I : Order)
-    Memo.try_emplace(I, render(SymRef(I)));
-  return std::move(Memo.find(Root.index())->second.Text);
+    Fragments[Memo.find(I)->second] = render(SymRef(I));
+  // The root is discovered first and completed last.
+  return std::move(Fragments.front().Text);
 }
 
 } // namespace

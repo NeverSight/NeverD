@@ -10426,7 +10426,8 @@ isolation.
 `SymExpr.LateSubstitutionKeysPreserveEarlierRootsAndReplacementBodies` covers
 simultaneous interior replacements and late placeholders through 257 bits.
 `SymParse.LargeSharedFragmentsKeepPrecedenceAfterTableGrowth` checks exact text
-and parser roundtrips past the inline table capacity.
+and parser roundtrips past the inline table capacity, including sparse source
+handles separated by unreachable nodes.
 `SymMBA.CornerAgreementDoesNotProveMaskedOrNonlinearIdentities` retains
 nonuniform-mask and nonlinear-product refusals even when zero/all-ones
 corners agree, and checks arithmetic complements through 257 bits.
