@@ -1270,6 +1270,8 @@ La CLI et l’interface graphique partagent la même implémentation MBA. La mul
 
 Le rendu suit un parcours postfixe itératif, sans tri des nœuds, et traite directement les feuilles. Lorsque la classification existante ne demande ni entrée cachée, ni entrée représentant un masque littéral, ni réécriture d’un complément arithmétique, l’abstraction MBA réutilise le DAG original. La vérification indépendante des identités et la comptabilisation du travail restent inchangées.
 
+Les décalages et facteurs littéraux d’une base affine déjà opaque construisent directement le résultat des coefficients, sans arbre temporaire. Les enfants linéaires conservent le parcours général ; le stockage du résultat et les opérations sur mots sont comptabilisés avant la publication d’une relation complète.
+
 ## Mode ARM32 et propagation de pile entre architectures
 
 Le mode de code ARM32 d’un ELF est établi à partir des symboles de fonctions exécutables définis, des symboles de correspondance ARM/Thumb et d’un point d’entrée exécutable, avant la normalisation des marques d’adresse Thumb. BinaryImage n’a pour l’instant qu’un mode pour toute l’image ; les images homogènes ARM ou Thumb sont prises en charge. Des régions de modes différents produisent des métadonnées explicites de mode mixte tout en conservant l’accès aux symboles et aux relocalisations ; des preuves contradictoires à une même adresse sont rejetées. Décodage, lifting et réécriture exigent un seul mode pris en charge. Le chargement de métadonnées mixtes dans une session SDK existante efface son ancien décodeur. Les symboles de données et les noms sans rapport ne choisissent pas le mode. L’interworking exige un contrat de mode par adresse dans la découverte, le décodage et la réécriture.

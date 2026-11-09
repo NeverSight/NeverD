@@ -5721,6 +5721,10 @@ of sorting node IDs; a leaf root renders directly. MBA abstraction reuses the
 original DAG when its existing classification requires no hidden inputs,
 literal-mask carriers or arithmetic-complement rewrite. Independent identity
 verification and work accounting remain unchanged.
+Literal offsets and scales of an already opaque affine base are read directly
+into the coefficient result, avoiding a temporary pending tree. Linear
+children retain the general traversal; result storage and word operations
+remain charged before a complete relation is published.
 Boolean polynomial reconstruction can factor shared cofactors across groups
 with disjoint remaining variables. Exact symmetric differences retain every
 unmatched term. Larger decision graphs try this construction before expanding

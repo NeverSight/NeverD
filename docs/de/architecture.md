@@ -1264,6 +1264,8 @@ CLI und GUI verwenden dieselbe MBA-Implementierung. Die Multiplikation niedriger
 
 Die Ausgabe verwendet eine iterative Nachordnung ohne Knotensortierung und gibt Blätter direkt aus. Verlangt die bestehende Klassifikation weder verborgene Eingaben noch Träger für literale Masken oder eine Umschreibung arithmetischer Komplemente, verwendet die MBA-Abstraktion den ursprünglichen DAG wieder. Unabhängige Identitätsprüfung und Arbeitsabrechnung bleiben unverändert.
 
+Literale Offsets und Faktoren einer bereits opaken affinen Basis erzeugen das Koeffizientenergebnis direkt, ohne temporären Arbeitsbaum. Lineare Kinder behalten den allgemeinen Durchlauf; Ergebnisspeicher und Wortoperationen werden vor Veröffentlichung einer vollständigen Relation berechnet.
+
 ## ARM32-Codemodus und architekturübergreifende Frame-Weitergabe
 
 Der ARM32-Codemodus in ELF wird aus definierten ausführbaren Funktionssymbolen, ARM/Thumb-Mapping-Symbolen und einem ausführbaren Einstiegspunkt bestimmt, bevor Thumb-Adressmarkierungen normalisiert werden. BinaryImage besitzt derzeit einen Modus für das gesamte Abbild; einheitliche ARM- oder Thumb-Abbilder werden unterstützt. Unterschiedliche Bereiche erzeugen ausdrücklich Metadaten für gemischten Modus, während Symbole und Relokationen zugänglich bleiben; widersprüchliche Belege an derselben Adresse werden verworfen. Dekodierung, Lifting und Umschreiben verlangen einen einzigen unterstützten Modus. Das Laden gemischter Metadaten in eine vorhandene SDK-Sitzung entfernt deren alten Decoder. Datensymbole und irrelevante Namen wählen keinen Modus. Interworking erfordert künftig einen Modusvertrag pro Adresse in Discovery, Dekodierung und Umschreiben.

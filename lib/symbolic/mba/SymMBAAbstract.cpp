@@ -403,6 +403,27 @@ std::optional<AffineInput> affineInput(const SymContext &Ctx, SymRef Root,
   if (!Resources.array((size_t(Width) + 63) / 64, sizeof(uint64_t)))
     return std::nullopt;
   AffineInput Out{{}, llvm::APInt(Width, 0)};
+  // A literal offset or scale of one opaque base has its complete affine
+  // description already. Do not allocate pending tree nodes just to move the
+  // same base into the result. The boundary is the one the general walk uses;
+  // a linear child still needs that walk to recover its nested relation.
+  const auto RootOp = Ctx.op(Root);
+  const auto RootOps = Ctx.operands(Root);
+  if ((RootOp == SymOp::Add || RootOp == SymOp::Mul) && RootOps.size() == 2 &&
+      Ctx.isConst(RootOps[0]) &&
+      (ForcedAtoms.contains(RootOps[1].index()) ||
+       Roles.lookup(RootOps[1].index()) != Role::Linear)) {
+    const auto &Literal = Ctx.constValue(RootOps[0]);
+    if (RootOp == SymOp::Add) {
+      if (!Resources.charge(Literal.getNumWords()) ||
+          !Resources.add(Out.Terms, RootOps[1].index(), llvm::APInt(Width, 1)))
+        return std::nullopt;
+      Out.Offset = Literal;
+    } else if (!Resources.add(Out.Terms, RootOps[1].index(), Literal)) {
+      return std::nullopt;
+    }
+    return Out;
+  }
   // Parents have larger indices than children.  Combining all incoming
   // coefficients before visiting a child avoids expanding shared DAG paths.
   std::map<uint32_t, llvm::APInt, std::greater<uint32_t>> Pending;

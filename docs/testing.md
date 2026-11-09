@@ -10430,6 +10430,11 @@ and parser roundtrips past the inline table capacity.
 `SymMBA.CornerAgreementDoesNotProveMaskedOrNonlinearIdentities` retains
 nonuniform-mask and nonlinear-product refusals even when zero/all-ones
 corners agree, and checks arithmetic complements through 257 bits.
+`SymMBAAffineFastPath.DirectAffineLeavesKeepOpaqueAndNestedBoundaries`
+exhausts every three-bit input tuple and checks independent APInt arithmetic
+through 257 bits for direct offsets/scales over variable, bitwise, product and
+nested linear bases. Existing refusal tests cover every smaller work budget
+and constrained storage during affine recovery.
 `SymMBAWidePairs.SparseCorrectionsLeaveRoomForTheIndependentTail` independently
 evaluates a nonlinear 33-factor product and its linear tail within the shared
 65,536-unit allowance. These tests exercise the shared expression and MBA

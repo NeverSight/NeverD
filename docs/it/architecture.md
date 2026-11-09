@@ -1260,6 +1260,8 @@ CLI e GUI condividono la stessa implementazione MBA. La moltiplicazione delle pa
 
 Il rendering usa una visita iterativa in postordine, senza ordinare i nodi, e stampa direttamente le foglie. Se la classificazione esistente non richiede ingressi nascosti, ingressi per maschere letterali o riscritture di complementi aritmetici, l’astrazione MBA riutilizza il DAG originale. La verifica indipendente delle identità e il conteggio del lavoro restano invariati.
 
+Gli offset e i fattori letterali di una base affine già opaca costruiscono direttamente i coefficienti, evitando un albero temporaneo. I figli lineari mantengono la visita generale; memoria del risultato e operazioni sulle parole sono conteggiate prima di pubblicare una relazione completa.
+
 ## Modalità ARM32 e propagazione del frame tra architetture
 
 La modalità ARM32 del codice ELF deriva da simboli definiti di funzioni eseguibili, simboli di mappatura ARM/Thumb e un punto di ingresso eseguibile, prima di normalizzare i tag degli indirizzi Thumb. BinaryImage ha attualmente una sola modalità per l’intera immagine; sono supportate immagini omogenee ARM o Thumb. Regioni distinte producono metadati espliciti di modalità mista, mantenendo accessibili simboli e rilocazioni; prove contraddittorie allo stesso indirizzo vengono rifiutate. Decodifica, lifting e riscrittura richiedono una sola modalità supportata. Caricare metadati misti in una sessione SDK esistente elimina il vecchio decoder. Simboli dati e nomi non pertinenti non scelgono la modalità. L’interworking richiede un contratto di modalità per indirizzo nella scoperta, decodifica e riscrittura.

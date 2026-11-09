@@ -1263,6 +1263,8 @@ La CLI y la GUI comparten la misma implementación MBA. La multiplicación de pa
 
 El texto se genera mediante un recorrido iterativo en postorden, sin ordenar nodos, y las hojas se imprimen directamente. Si la clasificación existente no requiere entradas ocultas, entradas para máscaras literales ni reescritura de complementos aritméticos, la abstracción MBA reutiliza el DAG original. La verificación independiente de identidades y la contabilidad del trabajo permanecen intactas.
 
+Los desplazamientos y factores literales de una base afín ya opaca construyen directamente los coeficientes, sin un árbol temporal de trabajo. Los hijos lineales mantienen el recorrido general; el almacenamiento y las operaciones de palabra se contabilizan antes de publicar una relación completa.
+
 ## Modo ARM32 y reenvío de marco entre arquitecturas
 
 El modo de código ARM32 de ELF se determina a partir de símbolos de funciones ejecutables definidos, símbolos de mapeo ARM/Thumb y un punto de entrada ejecutable, antes de normalizar las marcas de dirección Thumb. BinaryImage tiene por ahora un solo modo para toda la imagen; se admiten imágenes homogéneas ARM o Thumb. Las regiones distintas producen metadatos explícitos de modo mixto sin perder símbolos ni reubicaciones, y se rechaza la evidencia contradictoria en una misma dirección. La decodificación, el levantamiento y la reescritura exigen un único modo compatible. Cargar metadatos mixtos en una sesión SDK existente descarta el decodificador anterior. Los símbolos de datos y los nombres ajenos no eligen modo. La ejecución interworking requiere un contrato de modo por dirección en descubrimiento, decodificación y reescritura.
