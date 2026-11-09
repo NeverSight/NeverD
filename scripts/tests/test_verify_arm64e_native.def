@@ -103,7 +103,8 @@
     "status": "passed",
     "native_pac_qualified": true,
     "compiler_original_call_unwind_qualified": true,
-    "control_loading": "dlopen"
+    "control_loading": "dlopen",
+    "fixup_loader": "system"
   },
   "provenance": {
     "source_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -135,6 +136,12 @@
     },
     {
       "control_loading": null
+    },
+    {
+      "fixup_loader": "userspace"
+    },
+    {
+      "fixup_loader": null
     }
   ],
   "legacy_header_format": "<III",
@@ -154,5 +161,26 @@
     "bytes": 32,
     "cpu_subtype": 2147483650
   },
-  "startup_failure": -11
+  "startup_failure": -11,
+  "syscall_macros": "#define SYS_map_with_linking_np 550\n",
+  "invalid_syscall_macros": [
+    "",
+    "#define SYS_map_with_linking_np unknown\n",
+    "#define SYS_map_with_linking_np 550\n#define SYS_map_with_linking_np 551\n"
+  ],
+  "syscall_failure": 1,
+  "probe_profiles": [
+    {
+      "startup": false,
+      "userspace_fixups": false
+    },
+    {
+      "startup": true,
+      "userspace_fixups": false
+    },
+    {
+      "startup": true,
+      "userspace_fixups": true
+    }
+  ]
 }
