@@ -2249,7 +2249,7 @@ TEST(SymExpr, WideScaledProductsObserveEveryDemandedPrefixAndSharedUse) {
 }
 
 TEST(SymExpr, IncrementalProductsKeepCanonicalCoefficientsAndRepeatedFactors) {
-  for (unsigned Width : {1u, 3u, 8u, 32u, 64u, 128u, 257u})
+  for (unsigned Width : {1u, 3u, 8u, 32u, 64u, 65u, 128u, 257u})
     for (uint64_t Coefficient : {0u, 1u, 6u, 37u}) {
       SCOPED_TRACE(Width);
       SCOPED_TRACE(Coefficient);
@@ -2281,6 +2281,42 @@ TEST(SymExpr, IncrementalProductsKeepCanonicalCoefficientsAndRepeatedFactors) {
       EXPECT_EQ(C.mkMul(Left, Extra), C.mkMul(Factors));
       EXPECT_EQ(C.mkMul(Left, C.mkMul(X, Z)), C.mkMul({Left, X, Z}));
     }
+}
+
+TEST(SymExpr, BinaryProductsPreserveOpaqueOperandsAndModularOverflow) {
+  std::mt19937_64 Random(0x61746f6d70616972ULL);
+  for (unsigned Width : {1u, 3u, 8u, 64u, 65u, 128u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext C;
+    const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    const auto Left = C.mkAnd(X, C.mkConst(~llvm::APInt(Width, 1)));
+    const auto Right = C.mkNot(Y);
+    const auto Product = C.mkMul(Left, Right);
+    const auto Square = C.mkMul(Right, Right);
+    const auto Coefficient = llvm::APInt::getSignMask(Width) | 1;
+    const auto Scaled = C.mkMul(Right, C.mkConst(Coefficient));
+    EXPECT_EQ(Product, C.mkMul(Right, Left));
+    EXPECT_EQ(Square, C.mkMul({Right, C.mkConst(Width, 1), Right}));
+    EXPECT_EQ(C.mkMul(C.mkZero(Width), Right), C.mkZero(Width));
+    EXPECT_EQ(C.mkMul(Right, C.mkConst(Width, 1)), Right);
+    for (unsigned I = 0; I != 64; ++I) {
+      llvm::SmallVector<uint64_t, 8> XWords((Width + 63) / 64);
+      llvm::SmallVector<uint64_t, 8> YWords(XWords.size());
+      for (auto &Word : XWords)
+        Word = Random();
+      for (auto &Word : YWords)
+        Word = Random();
+      llvm::APInt A(Width, XWords), B(Width, YWords);
+      if (I == 0)
+        A = llvm::APInt::getSignMask(Width);
+      if (I == 1)
+        B = llvm::APInt::getAllOnes(Width);
+      const llvm::APInt Inputs[] = {A, B};
+      EXPECT_EQ(C.eval(Product, Inputs), (A & ~llvm::APInt(Width, 1)) * ~B);
+      EXPECT_EQ(C.eval(Square, Inputs), ~B * ~B);
+      EXPECT_EQ(C.eval(Scaled, Inputs), Coefficient * ~B);
+    }
+  }
 }
 
 } // namespace

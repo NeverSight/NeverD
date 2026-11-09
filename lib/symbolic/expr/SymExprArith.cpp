@@ -349,6 +349,34 @@ SymRef SymContext::mkMul(llvm::ArrayRef<SymRef> Ops) {
     SymRef Product = Ops[0], Atom = Ops[1];
     if (op(Product) != SymOp::Mul)
       std::swap(Product, Atom);
+    // Two nonproduct inputs need no flattening. Retain a lone coefficient
+    // instead of multiplying it by a newly allocated wide one and interning
+    // the same literal again. Shifts still use the matching-power fold below.
+    if (op(Product) != SymOp::Mul) {
+      assert(width(Atom) == W && width(Product) == W &&
+             "mkMul operands must share a width");
+      const bool ProductConstant = isConst(Product),
+                 AtomConstant = isConst(Atom);
+      if (!ProductConstant && !AtomConstant) {
+        if (Atom < Product)
+          std::swap(Product, Atom);
+        const SymRef Factors[] = {Product, Atom};
+        return intern(SymOp::Mul, W, Factors, 0);
+      }
+      if (ProductConstant != AtomConstant) {
+        if (AtomConstant)
+          std::swap(Product, Atom);
+        if (op(Atom) != SymOp::LShr) {
+          const auto Coefficient = constValue(Product);
+          if (Coefficient.isZero())
+            return Product;
+          if (Coefficient.isOne())
+            return Atom;
+          const SymRef Factors[] = {Product, Atom};
+          return intern(SymOp::Mul, W, Factors, 0);
+        }
+      }
+    }
     if (op(Product) == SymOp::Mul && op(Atom) != SymOp::Mul && !isConst(Atom)) {
       assert(width(Atom) == W && width(Product) == W &&
              "mkMul operands must share a width");
