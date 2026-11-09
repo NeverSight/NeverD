@@ -39,4 +39,15 @@ NEVERD_MIPS_MSA(MultiplySubVector, 0xff80003f, 0x79000012)
 NEVERD_MIPS_MSA(AbsoluteMaximumVector, 0xff80003f, 0x7b00000e)
 NEVERD_MIPS_MSA(AbsoluteMinimumVector, 0xff80003f, 0x7b80000e)
 
+NEVERD_MIPS_MSA(AddAbsoluteVector, 0xff80003f, 0x78000010)
+NEVERD_MIPS_MSA(AddSaturatedAbsoluteVector, 0xff80003f, 0x78800010)
+NEVERD_MIPS_MSA(AddSaturatedSignedVector, 0xff80003f, 0x79000010)
+NEVERD_MIPS_MSA(AddSaturatedUnsignedVector, 0xff80003f, 0x79800010)
+NEVERD_MIPS_MSA(SubSaturatedSignedVector, 0xff80003f, 0x78000011)
+NEVERD_MIPS_MSA(SubSaturatedUnsignedVector, 0xff80003f, 0x78800011)
+NEVERD_MIPS_MSA(AverageSignedVector, 0xff80003f, 0x7a000010)
+NEVERD_MIPS_MSA(AverageUnsignedVector, 0xff80003f, 0x7a800010)
+NEVERD_MIPS_MSA(RoundAverageSignedVector, 0xff80003f, 0x7b000010)
+NEVERD_MIPS_MSA(RoundAverageUnsignedVector, 0xff80003f, 0x7b800010)
+
 #undef NEVERD_MIPS_MSA

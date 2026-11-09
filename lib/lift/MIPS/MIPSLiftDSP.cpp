@@ -60,6 +60,119 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
     return true;
   }
 
+  const bool Compare = *Kind == mips::DSPInstruction::CompareEqualBytes ||
+                       *Kind == mips::DSPInstruction::CompareLessBytes ||
+                       *Kind == mips::DSPInstruction::CompareLessEqualBytes;
+  const bool Pick = *Kind == mips::DSPInstruction::PickBytes ||
+                    *Kind == mips::DSPInstruction::PickHalfwords;
+  if (Compare || Pick || *Kind == mips::DSPInstruction::ModularSubtract) {
+    if (!Compare && !RD) {
+      S.emit(NdOp::NOP, {}, {});
+      return true;
+    }
+    const auto A = S.read(RS), B = S.read(RT);
+    if (*Kind == mips::DSPInstruction::ModularSubtract) {
+      const auto Last = S.binary(NdOp::INT_AND,
+                                 S.binary(NdOp::INT_RIGHT, B, NdVar::cst(8, 4)),
+                                 NdVar::cst(0xffff, 4));
+      const auto Difference = S.binary(
+          NdOp::INT_SUB, A, S.binary(NdOp::INT_AND, B, NdVar::cst(255, 4)));
+      const auto Result = S.makeTemp(4);
+      S.emit(NdOp::SELECT, Result,
+             {S.binary(NdOp::INT_EQUAL, A, NdVar::cst(0, 4), 1), Last,
+              Difference});
+      S.write(RD, Result);
+      return true;
+    }
+    const auto Control = ReadControl();
+    const uint16_t Bytes = *Kind == mips::DSPInstruction::PickHalfwords ? 2 : 1;
+    NdVar Result = NdVar::cst(0, 4);
+    for (unsigned I = 0; I != 4u / Bytes; ++I) {
+      const auto Lane = [&](NdVar Value) {
+        const auto Part = S.makeTemp(Bytes);
+        S.emit(NdOp::SUBBYTES, Part, {Value, NdVar::cst(I * Bytes, 4)});
+        return Part;
+      };
+      NdVar Value;
+      if (Compare) {
+        const NdOp Opcode = *Kind == mips::DSPInstruction::CompareEqualBytes
+                                ? NdOp::INT_EQUAL
+                            : *Kind == mips::DSPInstruction::CompareLessBytes
+                                ? NdOp::INT_LESS
+                                : NdOp::INT_LESSEQUAL;
+        Value = S.resize(S.binary(Opcode, Lane(A), Lane(B), 1), 4);
+      } else {
+        const auto Condition =
+            S.binary(NdOp::INT_AND,
+                     S.binary(NdOp::INT_RIGHT, Control, NdVar::cst(24 + I, 4)),
+                     NdVar::cst(1, 4));
+        const auto Selected = S.makeTemp(Bytes);
+        S.emit(NdOp::SELECT, Selected, {Condition, Lane(A), Lane(B)});
+        Value = S.resize(Selected, 4);
+      }
+      Result =
+          S.binary(NdOp::INT_OR, Result,
+                   S.binary(NdOp::INT_LEFT, Value,
+                            NdVar::cst(Compare ? 24 + I : I * Bytes * 8, 4)));
+    }
+    if (Compare)
+      WriteControl(S.binary(
+          NdOp::INT_OR,
+          S.binary(NdOp::INT_AND, Control, NdVar::cst(~0x0f000000u, 4)),
+          Result));
+    else
+      S.write(RD, Result);
+    return true;
+  }
+
+  const bool SetCarry = *Kind == mips::DSPInstruction::AddSetCarry;
+  const bool WithCarry = *Kind == mips::DSPInstruction::AddWithCarry;
+  const bool WordSaturate =
+      *Kind == mips::DSPInstruction::AddSaturatedSignedWord ||
+      *Kind == mips::DSPInstruction::SubSaturatedSignedWord;
+  if (SetCarry || WithCarry || WordSaturate) {
+    const auto A = S.resize(S.read(RS), 8, !SetCarry);
+    const auto B = S.resize(S.read(RT), 8, !SetCarry);
+    const auto Control = ReadControl();
+    auto Sum = S.binary(*Kind == mips::DSPInstruction::SubSaturatedSignedWord
+                            ? NdOp::INT_SUB
+                            : NdOp::INT_ADD,
+                        A, B);
+    if (WithCarry) {
+      const auto Carry = S.binary(
+          NdOp::INT_AND, S.binary(NdOp::INT_RIGHT, Control, NdVar::cst(13, 4)),
+          NdVar::cst(1, 4));
+      Sum = S.binary(NdOp::INT_ADD, Sum, S.resize(Carry, 8));
+    }
+    if (SetCarry) {
+      const auto Carry = S.binary(
+          NdOp::INT_LEFT,
+          S.resize(S.binary(NdOp::INT_RIGHT, Sum, NdVar::cst(32, 8)), 4),
+          NdVar::cst(13, 4));
+      WriteControl(S.binary(
+          NdOp::INT_OR,
+          S.binary(NdOp::INT_AND, Control, NdVar::cst(~0x2000u, 4)), Carry));
+    } else {
+      const auto Low = S.binary(NdOp::INT_SLESS, Sum,
+                                NdVar::cst(UINT64_C(0xffffffff80000000), 8), 1);
+      const auto High =
+          S.binary(NdOp::INT_SLESS, NdVar::cst(0x7fffffff, 8), Sum, 1);
+      const auto Overflow = S.binary(NdOp::BOOL_OR, Low, High, 1);
+      WriteControl(S.binary(
+          NdOp::INT_OR, Control,
+          S.binary(NdOp::INT_LEFT, S.resize(Overflow, 4), NdVar::cst(20, 4))));
+      if (WordSaturate) {
+        const auto Bound = S.makeTemp(4), Result = S.makeTemp(4);
+        S.emit(NdOp::SELECT, Bound,
+               {Low, NdVar::cst(0x80000000, 4), NdVar::cst(0x7fffffff, 4)});
+        S.emit(NdOp::SELECT, Result, {Overflow, Bound, S.resize(Sum, 4)});
+        Sum = Result;
+      }
+    }
+    S.write(RD, S.resize(Sum, 4));
+    return true;
+  }
+
   struct Expansion {
     uint16_t Bytes, First, Step, Shift, OutBytes;
   };
