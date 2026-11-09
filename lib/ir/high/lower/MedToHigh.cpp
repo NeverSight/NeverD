@@ -20,6 +20,7 @@
 
 #include "../../../loader/Swift/SwiftErrorSourceProjection.h"
 #include "../pass/HighDCEDetail.h"
+#include "../pass/HighSemanticSimplifier.h"
 #include "../structure/X86/X86RegistrationDisplay.h"
 #include "../structure/X86/X86RegistrationRegions.h"
 #include "AnalysisCall.h"
@@ -1549,7 +1550,8 @@ void MedToHighConverter::anchorDispatcherEntries(HighFunc &Func) const {
   }
 }
 
-void MedToHighConverter::reduceLateGotos(HighFunc &Func) {
+void MedToHighConverter::reduceLateGotos(
+    HighFunc &Func, detail::HighSemanticSimplifier &Semantics) {
   if (Func.Body.size() > limits::kMaxLateGotoReductionStmts)
     return;
   // The join-default sink models Win64 register joins (structureIfElse).
@@ -1574,7 +1576,7 @@ void MedToHighConverter::reduceLateGotos(HighFunc &Func) {
     // Dead copies left by earlier rewrites can sit between a jump and
     // its label; clear them before the next phase looks.
     if (Phase != 0 && Dirty) {
-      eliminateDeadStmts(Func);
+      eliminateDeadStmts(Func, Semantics);
       Dirty = false;
     }
     if (Phase >= 2) {
@@ -1622,7 +1624,7 @@ void MedToHighConverter::reduceLateGotos(HighFunc &Func) {
     }
   }
   if (Dirty)
-    eliminateDeadStmts(Func);
+    eliminateDeadStmts(Func, Semantics);
 }
 
 void MedToHighConverter::validateCallContracts(const MedFunc &Med) {
@@ -1711,6 +1713,7 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
 }
 
 HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
+  detail::HighSemanticSimplifier Semantics;
   HighConversionTrace Trace(Med, TheArch);
   Trace.med();
   auto TStart = std::chrono::steady_clock::now();
@@ -1958,12 +1961,12 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
     simplifyAllExprs(Func.Body);
     eliminateUnusedValues(Func);
     if (SymbolicSimplification) {
-      simplifyExprSemantics(Func.Body, SemanticThreadLimit);
+      Semantics.simplify(Func.Body, SemanticThreadLimit);
       zeroUndemandedUnknownBytes(Func, TargetArch);
       simplifyAllExprs(Func.Body);
       eliminateUnusedValues(Func);
     }
-    reduceLateGotos(Func);
+    reduceLateGotos(Func, Semantics);
     nameRepeatedValues(Func);
     anchorDispatcherEntries(Func);
     finishRegistrationDisplay(Func, Med, TheArch);
@@ -2006,7 +2009,7 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
     structureExceptionRegions(Func, Med);
   attachSEHHandlerEntryCopies(Func, Med);
   auto TEh = std::chrono::steady_clock::now();
-  eliminateDeadStmts(Func);
+  eliminateDeadStmts(Func, Semantics);
   auto TDead = std::chrono::steady_clock::now();
   invertSkipGotos(Func);
   Trace.high(Func, "after-dce");
@@ -2014,7 +2017,7 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
   foldStructuredContinuations(Func, &Med);
   coalesceBranchEntryStatements(Func);
   eliminateHighDeadPhiCopies(Func);
-  reduceLateGotos(Func);
+  reduceLateGotos(Func, Semantics);
   // The last skip-goto inversion runs here rather than in the C emitter, so
   // that the flow check below sees the body that is printed.
   invertSkipGotos(Func);
