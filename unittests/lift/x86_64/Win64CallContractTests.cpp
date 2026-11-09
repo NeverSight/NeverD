@@ -7076,6 +7076,288 @@ BinaryImage registerQueryImage(unsigned Mutation = 0) {
   return Image;
 }
 
+BinaryImage scalarRegisterImage(BinaryFormat Format, unsigned Shape = 0) {
+  constexpr va_t Producer = Text + 0x80;
+  auto Image = registerQueryImage();
+  Image.Format = Format;
+  Image.Symbols.front().Name = "observe_scalar_words";
+  const bool Windows = Format == BinaryFormat::COFF;
+  std::vector<uint8_t> Leaf{
+      0x48, 0x89, static_cast<uint8_t>(Windows ? 0xD0 : 0xF0), // rax = arg1
+      0x49, 0x89, static_cast<uint8_t>(Windows ? 0xC8 : 0xF8), // r8 = arg0
+      0x49, 0x01, 0xC0,                                        // add r8,rax
+      0x49, 0x81, 0xF0,
+      0x67, 0x45, 0x23,
+      0x01,              // xor r8,1234567h
+      0x48, 0x89, 0xC1}; // mov rcx,rax
+  if (Shape == 1)
+    Leaf.insert(Leaf.end(), {0x48, 0x85, 0xC0,           // test rax,rax
+                             0x4C, 0x0F, 0x44, 0xC1});   // cmovz r8,rcx
+  Leaf.insert(Leaf.end(), {0x48, 0xC1, 0xE0, 13, 0xC3}); // shl rax,13; ret
+  std::fill(Image.Segments.front().Data.begin() + 0x80,
+            Image.Segments.front().Data.end(), 0xCC);
+  put(Image.Segments.front().Data, Producer, Leaf);
+  if (Shape == 2) {
+    const auto &Code = Image.Segments.front().Data;
+    std::vector<uint8_t> Caller(Code.begin(), Code.begin() + 15);
+    Caller.insert(Caller.end(),
+                  {0x49, 0x89, 0xC1, // save first observation in r9
+                   static_cast<uint8_t>(Windows ? 0xB9 : 0xBF), 19, 0, 0, 0,
+                   static_cast<uint8_t>(Windows ? 0xBA : 0xBE), 23, 0, 0, 0,
+                   0xE8});
+    const auto Displacement = rel32(Text + Caller.size() + 4, Producer);
+    Caller.insert(Caller.end(), Displacement.begin(), Displacement.end());
+    Caller.insert(Caller.end(), {0x4C, 0x31, 0xC0, // xor rax,r8
+                                 0x48, 0x31, 0xC8, // xor rax,rcx
+                                 0x4C, 0x31, 0xC8, // xor rax,r9
+                                 0x48, 0x83, 0xC4, 0x28, 0xC3});
+    put(Image.Segments.front().Data, Text, Caller);
+  }
+  return Image;
+}
+
+TEST(CallExitRegisters, ScalarLeavesRetainDynamicExtraResults) {
+  for (BinaryFormat Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (unsigned Shape = 0; Shape != 3; ++Shape) {
+      auto Image = scalarRegisterImage(Format, Shape);
+      PipelineAnalysisCache Cache;
+      for (bool LLVM : {true, false})
+        for (bool NoOpt : {false, true}) {
+          SCOPED_TRACE(static_cast<unsigned>(Format));
+          SCOPED_TRACE(Shape);
+          SCOPED_TRACE(LLVM);
+          SCOPED_TRACE(NoOpt);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Text};
+          Options.LiftMode = LLVM;
+          Options.SourceProjection = true;
+          Options.AnalysisCache = &Cache;
+          Options.NoOpt = NoOpt;
+          auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          CEmitterOptions COptions;
+          COptions.TheArch = Image.Arch;
+          COptions.Format = Format;
+          COptions.Image = &Image;
+          if (LLVM) {
+            ASSERT_TRUE(Result.LlvmModule);
+            ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+            ASSERT_TRUE(
+                LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions));
+          } else
+            ASSERT_TRUE(
+                HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+          ASSERT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+          for (const auto &Function : Result.MedFuncs)
+            for (const auto &Block : Function.Blocks)
+              for (const auto &Op : Block.Ops)
+                EXPECT_NE(Op.Opcode, NdOp::CALL);
+          std::string Oracle;
+          llvm::raw_string_ostream Check(Oracle);
+          Check << "\n#include <string.h>\n"
+                   "#if defined(__linux__) && defined(__x86_64__)\n"
+                   "#include <sys/mman.h>\n#endif\nint main(void) {\n"
+                   "#if defined(__linux__) && defined(__x86_64__)\n"
+                   "  const uint8_t original[] = {";
+          for (uint8_t Byte : Image.Segments.front().Data)
+            Check << unsigned(Byte) << ',';
+          Check << "};\n  void *native = mmap(0, sizeof(original), "
+                   "PROT_READ | PROT_WRITE | PROT_EXEC, "
+                   "MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);\n"
+                   "  if (native == MAP_FAILED) return 10;\n"
+                   "  memcpy(native, original, sizeof(original));\n"
+                   "  typedef uint64_t ("
+                << (Format == BinaryFormat::COFF ? "__attribute__((ms_abi)) "
+                                                 : "")
+                << "*fn)(uint64_t, uint64_t);\n#endif\n"
+                   "  const uint64_t inputs[][2] = {{0,0}, {1,0}, {0,7}, "
+                   "{19,23}, {255,7}, {256,7}, {UINT64_MAX,1}, "
+                   "{1,UINT64_MAX}, {0x8000000000000000ull,7}};\n"
+                   "  for (unsigned i = 0; i != 9; ++i) {\n"
+                   "    uint64_t a = inputs[i][0], b = inputs[i][1];\n"
+                   "    uint64_t extra = (a + b) ^ UINT64_C(0x1234567);\n";
+          if (Shape == 1)
+            Check << "    if (!b) extra = b;\n";
+          Check << "    uint64_t expected = (b << 13) ^ extra ^ b;\n";
+          if (Shape == 2)
+            Check << "    expected ^= (UINT64_C(23) << 13) ^ "
+                     "(UINT64_C(42) ^ UINT64_C(0x1234567)) ^ UINT64_C(23);\n";
+          Check << "    if ((uint64_t)observe_scalar_words(a, b) != expected) "
+                   "return 11;\n"
+                   "#if defined(__linux__) && defined(__x86_64__)\n"
+                   "    if (((fn)native)(a, b) != expected) return 12;\n"
+                   "#endif\n  }\n"
+                   "#if defined(__linux__) && defined(__x86_64__)\n"
+                   "  return munmap(native, sizeof(original)) != 0;\n"
+                   "#else\n  return 0;\n#endif\n}\n";
+          for (llvm::StringRef Level : {"-O0", "-O2"})
+            source_call_execution_test::compileAndRun(
+                "#define _GNU_SOURCE\n" + Source + Oracle,
+                {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+        }
+    }
+}
+
+TEST(CallExitRegisters, ScalarLeavesKeepUnprovedEffectsAndNativeCalls) {
+  constexpr va_t Producer = Text + 0x80;
+  for (auto Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (unsigned Mutation = 0; Mutation != 9; ++Mutation)
+      for (bool LLVM : {false, true})
+        for (bool NoOpt : {false, true}) {
+          SCOPED_TRACE(static_cast<unsigned>(Format));
+          SCOPED_TRACE(Mutation);
+          SCOPED_TRACE(LLVM);
+          SCOPED_TRACE(NoOpt);
+          auto Image = scalarRegisterImage(Format);
+          auto &Bytes = Image.Segments.front().Data;
+          const auto Begin = Bytes.begin() + 0x80;
+          std::vector<uint8_t> Leaf(Begin,
+                                    std::find(Begin, Bytes.end(), 0xC3) + 1);
+          switch (Mutation) {
+          case 0: // Native LLVM must keep the physical call.
+            break;
+          case 1:
+            Leaf.insert(Leaf.begin(), {0x48, 0x8B, 0x01}); // memory may fault
+            break;
+          case 2:
+            Leaf.insert(Leaf.begin(), {0x48, 0xF7, 0xF1}); // DIV may fault
+            break;
+          case 3:
+            Leaf.insert(Leaf.begin(), 0xFD); // control state: STD
+            break;
+          case 4:
+            Leaf[0] = 0x4C; // mov rax,r10: not an ordinary incoming argument
+            Leaf[2] = 0xD0;
+            break;
+          case 5:
+            Leaf.insert(Leaf.end() - 1, {0x31, 0xDB}); // unpreserved RBX
+            break;
+          case 6:
+            Leaf.insert(Leaf.end() - 1,
+                        {0x49, 0xB8, 0, 0x10, 0, 0x40, 1, 0, 0, 0});
+            break; // an image address needs its relocation identity
+          case 7:
+            Leaf.insert(Leaf.begin(), {0x85, 0xD2, 0x74, 2, 0x31, 0xC0});
+            break; // a branch is outside the straight-line proof
+          case 8: {
+            // A caller observing CF needs an additional flag-state contract.
+            std::vector<uint8_t> Caller(Bytes.begin(), Bytes.begin() + 20);
+            Caller.insert(Caller.begin() + 9, {0x48, 0x83, 0xD0, 0});
+            put(Bytes, Text, Caller); // adc rax,0 after CALL
+            break;
+          }
+          }
+          put(Bytes, Producer, Leaf);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Text};
+          Options.SourceProjection = Mutation != 0;
+          Options.LiftMode = LLVM || Mutation == 0;
+          Options.NoOpt = NoOpt;
+          auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          bool CallsOriginal = false;
+          for (const auto &Function : Result.MedFuncs)
+            for (const auto &Block : Function.Blocks)
+              for (const auto &Op : Block.Ops)
+                CallsOriginal |= Op.Opcode == NdOp::CALL && Op.NumInputs &&
+                                 Op.Inputs[0].isConst() &&
+                                 Op.Inputs[0].ConstVal == Producer;
+          EXPECT_TRUE(CallsOriginal);
+        }
+}
+
+TEST(CallExitRegisters, CallStatusFlagsCannotReuseTheCallersOldValue) {
+  constexpr va_t Producer = Text + 0x80;
+  for (auto Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (bool Overwrite : {false, true}) {
+      std::vector<uint8_t> Bytes(0xA0, 0xCC);
+      std::vector<uint8_t> Caller{0x48, 0x83, 0xEC, 0x28, 0xF8, 0xE8};
+      const auto Displacement = rel32(Text + Caller.size() + 4, Producer);
+      Caller.insert(Caller.end(), Displacement.begin(), Displacement.end());
+      if (Overwrite)
+        Caller.push_back(0xF8); // clc after the call supplies a new known flag
+      Caller.insert(Caller.end(), {0x48, 0x83, 0xD0, 0, // adc rax,0
+                                   0x48, 0x83, 0xC4, 0x28, 0xC3});
+      put(Bytes, Text, Caller);
+      put(Bytes, Producer, {0xB8, 7, 0, 0, 0, 0xF9, 0xC3}); // mov eax,7; stc
+      auto Image = makeImage(
+          Bytes, {{Text, "observe_flags"}, {Producer, "produce_flags"}}, {});
+      Image.Format = Format;
+      for (bool LLVM : {false, true})
+        for (bool NoOpt : {false, true}) {
+          SCOPED_TRACE(static_cast<unsigned>(Format));
+          SCOPED_TRACE(Overwrite);
+          SCOPED_TRACE(LLVM);
+          SCOPED_TRACE(NoOpt);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Text};
+          Options.LiftMode = LLVM;
+          Options.SourceProjection = true;
+          Options.NoOpt = NoOpt;
+          auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          CEmitterOptions COptions;
+          COptions.TheArch = Image.Arch;
+          COptions.Format = Format;
+          COptions.Image = &Image;
+          ASSERT_TRUE(
+              LLVM ? LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions)
+                   : HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+          ASSERT_EQ(Source.find("__builtin_trap") == std::string::npos,
+                    Overwrite)
+              << Source;
+          std::string Oracle;
+          llvm::raw_string_ostream Check(Oracle);
+          Check << "\nint64_t produce_flags(void) { ++calls; return 7; }\n"
+                   "int main(void) {\n"
+                   "#if defined(__linux__) && defined(__x86_64__)\n"
+                   "  const uint8_t bytes[] = {";
+          for (auto Byte : Bytes)
+            Check << unsigned(Byte) << ',';
+          Check << "};\n  void *native = mmap(0, sizeof(bytes), "
+                   "PROT_READ | PROT_WRITE | PROT_EXEC, "
+                   "MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);\n"
+                   "  if (native == MAP_FAILED) return 10;\n"
+                   "  memcpy(native, bytes, sizeof(bytes));\n"
+                   "  typedef uint64_t ("
+                << (Format == BinaryFormat::COFF ? "__attribute__((ms_abi)) "
+                                                 : "")
+                << "*fn)(void);\n  uint64_t expected = ((fn)native)();\n"
+                   "  if (munmap(native, sizeof(bytes)) || expected != "
+                << (Overwrite ? 7 : 8) << ") return 11;\n#endif\n";
+          if (Overwrite)
+            Check << "  return observe_flags() != 7 || calls != 1;\n}\n";
+          else
+            Check << "  (void)observe_flags(); return 12;\n}\n";
+          const std::string Guard =
+              "#define _GNU_SOURCE\n#include <stdint.h>\n#include <stdlib.h>\n"
+              "#include <string.h>\n"
+              "#if defined(__linux__) && defined(__x86_64__)\n"
+              "#include <sys/mman.h>\n#endif\nstatic unsigned calls;\n"
+              "static void missing_state(void) { _Exit(calls == 1 ? 0 : 13); "
+              "}\n"
+              "#define __builtin_trap() missing_state()\n";
+          for (llvm::StringRef Level : {"-O0", "-O2"})
+            source_call_execution_test::compileAndRun(
+                Guard + Source + Oracle,
+                {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+        }
+    }
+}
+
 TEST(CallExitRegisters, RegisterQueryBindsTheCallsActualArgumentBytes) {
 #if !defined(__x86_64__) && !defined(_M_X64)
   GTEST_SKIP() << "native CPUID execution requires an x64 host";

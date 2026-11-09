@@ -1188,6 +1188,19 @@ not supply missing integer bytes. Other runtime entry dependencies, memory/stack
 operations, other hardware effects and general VM state still require a call-state
 contract. Native lifting keeps its original calls. An explicit unsupported
 expression does not certify those dynamic values or executable reconstruction.
+The same bounded source proof now admits pure scalar arithmetic/select leaves
+without CPUID. Independent native/source comparisons cover wrapping values,
+conditional results and different actual arguments on repeated calls across
+x64 COFF/ELF/Mach-O. Return-only and constant-result scalar bodies keep their
+smaller existing summaries. Memory/faulting operations, conditional control
+flow, unknown entry state and typed address results remain outside this proof;
+this does not recover the remaining physical VM entry or memory-loop outputs.
+Ordinary calls now also invalidate explicitly read condition flags in SSA.
+Earlier code could incorrectly reuse a pre-call carry; independent native
+controls expose the different result. Both C routes now retain an unavailable
+flag observation unless a later instruction supplies it, and GPR-only expansion
+refuses an observed flag result. The existing x86 DF rule remains separate.
+This fixes stale flag transport, not recovery of a callee's dynamic flag results.
 Complete header and explicit local FP/HFA declarations share the same checked
 carrier adapter. ARM64 cached imports retain the original loaded callable
 through bounded private-frame proofs. Selected LLVMC output includes the

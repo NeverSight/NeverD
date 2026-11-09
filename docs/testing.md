@@ -20583,7 +20583,22 @@ inputs through both C routes at O0/O2 with UBSan. Source execution selects the
 host's GNU intrinsic spelling while retaining the input image's recovered ABI.
 Cached emitter order, repeated calls and high-byte observations check shared
 result identity. IR checks retain exactly one query per expanded call. The
-`RegisterQueryBindsTheCallsActualArgumentBytes` cases bind dynamic query inputs
+`ScalarLeavesRetainDynamicExtraResults` cases compare pure arithmetic, wrapping
+inputs, conditional selects and repeated calls with an independent scalar
+oracle and original public machine code on Linux x64. Both C routes cover the three x64
+formats with source optimization on/off and O0/O2 with UBSan. Scalar-only
+boundary controls retain memory accesses, possible division faults, DF writes,
+unbound registers, unpreserved RBX, image addresses, branches, flag results and native calls.
+The register-effect tests require return-only and constant-result bodies to use
+their existing summaries without retaining a body. The worker cached-ABI test
+also checks the scalar case in both emitter/prepared-callee orders.
+`CallStatusFlagsCannotReuseTheCallersOldValue` compares native carry results
+with guarded source observations and later known flag writes. Both C routes
+execute at O0/O2 with UBSan; the guard also checks that the original call runs
+exactly once before the unavailable flag is read. Direct/indirect LowIR
+controls cover x86, x64, ARM and AArch64 across the three formats. Worker cold
+and prepared views retain the same distinction.
+The `RegisterQueryBindsTheCallsActualArgumentBytes` cases bind dynamic query inputs
 from each call's actual scalar arguments, including byte/high-byte reads and
 two calls with different selectors. Both C routes execute at O0/O2 with UBSan
 against independent CPUID observations across x64 COFF/ELF/Mach-O models; Linux
