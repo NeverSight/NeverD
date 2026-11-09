@@ -332,7 +332,7 @@ TEST_P(MIPS16Flow, ClassicRegisterTransfersKeepTheImageCompressedFamily) {
     EXPECT_EQ(Target->Address, 0x1000u);
     EXPECT_EQ(Target->Mode, InstructionMode::MIPS16);
   }
-  for (uint64_t Raw : {0x1002ULL, 0x100000001ULL, InvalidVA}) {
+  for (uint64_t Raw : {va_t{0x1002}, va_t{0x100000001}, InvalidVA}) {
     auto Target = canonicalizeLowControlTarget(
         Raw, InstructionMode::MIPS16,
         LowInstructionTargetMode::FromMIPS16TargetBit0);

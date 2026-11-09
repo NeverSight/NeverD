@@ -5,7 +5,7 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Preserve dynamic extra registers from bounded, register-only query leaves.
+/// Preserve dynamic extra registers from bounded, register-only scalar leaves.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -261,8 +261,14 @@ void expandSourceRegisterCalls(
   if (!HasCandidate)
     return;
   int NextId = 0;
+  std::set<Key> FlagUses;
   auto Note = [&](const MedVar &Value) {
     NextId = std::max(NextId, Value.Id + 1);
+  };
+  auto NoteUse = [&](const MedVar &Value) {
+    Note(Value);
+    if (Value.Kind == MedVar::Flag)
+      FlagUses.insert(key(Value));
   };
   for (const auto &Block : Function.Blocks) {
     if (!Block.ExceptionalPreds.empty() || !Block.ExceptionalSuccs.empty())
@@ -270,12 +276,12 @@ void expandSourceRegisterCalls(
     for (const auto &Phi : Block.Phis) {
       Note(Phi.Output);
       for (const auto &Arg : Phi.Args)
-        Note(Arg.second);
+        NoteUse(Arg.second);
     }
     for (const auto &Op : Block.Ops) {
       Note(Op.Output);
       for (unsigned I = 0; I < Op.NumInputs; ++I)
-        Note(Op.Inputs[I]);
+        NoteUse(Op.Inputs[I]);
       for (const auto &Value : Op.IntrinsicOutputs)
         Note(Value);
     }
@@ -287,6 +293,11 @@ void expandSourceRegisterCalls(
   std::map<uint32_t, std::vector<const MedCallClobber *>> Clobbers;
   for (const auto &Clobber : Function.CallClobbers) {
     Note(Clobber.Value);
+    // Unread flag definitions need no source result. An observed flag still
+    // rejects expansion: the capture contract below contains only GPRs.
+    if (Clobber.Value.Kind == MedVar::Flag &&
+        !FlagUses.count(key(Clobber.Value)))
+      continue;
     Clobbers[Clobber.CallSiteId].push_back(&Clobber);
   }
   size_t Remaining = limits::ir::kSourceRegisterCallOps;

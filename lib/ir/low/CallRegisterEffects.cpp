@@ -1110,11 +1110,13 @@ bool canSummarizeExitConstants(const BinaryImage &Img, CallRegisterBodyView F,
   return Returns && WritesExtraRegister;
 }
 
-// Keep only self-contained scalar query bodies. CPUID is ordered and must run
-// exactly once; source expansion will clone its multi-result definition rather
-// than independently recompute any of its returned words.
+// Keep only self-contained scalar bodies with an extra register result. CPUID
+// is ordered and must run exactly once; source expansion clones its
+// multi-result definition rather than independently recomputing any of its
+// returned words.
 std::shared_ptr<const std::vector<LowOp>>
-registerLeaf(const BinaryImage &Image, CallRegisterBodyView Body) {
+registerLeaf(const BinaryImage &Image, CallRegisterBodyView Body,
+             const GPRExitConstants &Constants) {
   if (Image.Arch != Arch::X64 || !Body.Complete ||
       Body.UnsafeIndirectBranches || Body.HasIndependentRoots ||
       Body.Blocks.size() != 1)
@@ -1154,6 +1156,7 @@ registerLeaf(const BinaryImage &Image, CallRegisterBodyView Body) {
                               Registers.isFlag(Value.Offset, Value.Size)));
   };
   bool HasQuery = false;
+  bool HasScalarResult = false;
   for (size_t I = 0; I + 1 < Block.Ops.size(); ++I) {
     const auto &Op = Block.Ops[I];
     // CLD/STD change control state outside the projected GPR results, even
@@ -1167,6 +1170,19 @@ registerLeaf(const BinaryImage &Image, CallRegisterBodyView Body) {
     for (unsigned K = 0; K < Op.NumInputs; ++K)
       if (!Scalar(Op.Inputs[K]))
         return {};
+    if (!HasQuery && !HasScalarResult && Op.Output.isReg())
+      if (const auto Family = gprFamilyOf(Image.Arch, Op.Output.Offset)) {
+        const uint64_t Register = *Family * sizeof(uint64_t);
+        // Ordinary return-only leaves need no retained body. Scalar constants
+        // already have the smaller shared exit summary; keep a body only for
+        // another volatile result which that summary cannot represent.
+        HasScalarResult = Register != Registers.IntReturnReg &&
+                          !Registers.isCallPreserved(Register, sizeof(uint64_t),
+                                                     Image.abiFormat()) &&
+                          llvm::none_of(Constants, [&](const auto &Constant) {
+                            return Constant.first == Register;
+                          });
+      }
     switch (Op.Opcode) {
     case NdOp::COPY:
     case NdOp::INT_ADD:
@@ -1210,8 +1226,9 @@ registerLeaf(const BinaryImage &Image, CallRegisterBodyView Body) {
       return {};
     }
   }
-  return HasQuery ? std::make_shared<const std::vector<LowOp>>(Block.Ops)
-                  : nullptr;
+  return HasQuery || HasScalarResult
+             ? std::make_shared<const std::vector<LowOp>>(Block.Ops)
+             : nullptr;
 }
 
 GPRExitConstants scalarExitConstants(const BinaryImage &Img,
@@ -1438,10 +1455,10 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
     IndexOfId[F.Blocks[I].Id] = I;
     BlockStarts.insert(F.Blocks[I].StartAddr);
   }
-  Effect.RegisterLeaf = registerLeaf(Img, F);
   Effect.Blocks.resize(F.Blocks.size());
   if (canSummarizeExitConstants(Img, F, IndexOfId))
     Effect.ExitConstants = scalarExitConstants(Img, F, IndexOfId);
+  Effect.RegisterLeaf = registerLeaf(Img, F, Effect.ExitConstants);
   const uint64_t FPReturn = getTargetRegInfo(Img.Arch).FPReturnReg;
   auto WritesFPReturn = [&](const NdVar &Out) {
     return FPReturn != 0 && Out.isReg() && Out.Size != 0 &&

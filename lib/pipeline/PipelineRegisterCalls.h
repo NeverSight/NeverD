@@ -5,7 +5,7 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Expand authenticated scalar query leaves at source call boundaries.
+/// Expand authenticated scalar leaves at source call boundaries.
 ///
 //===----------------------------------------------------------------------===//
 

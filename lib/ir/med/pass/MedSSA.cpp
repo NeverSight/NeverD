@@ -304,12 +304,15 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
   for (const MedBlock &Blk : Func.Blocks) {
     for (const MedOp &Op : Blk.Ops) {
       auto AddReg = [&](const MedVar &V) {
-        if (V.Kind != MedVar::Reg || V.Id < 0)
+        if ((V.Kind != MedVar::Reg && V.Kind != MedVar::Flag) || V.Id < 0)
           return;
         RegOffToIds[V.RegOff].insert(V.Id);
         RegVarOfId.emplace(V.Id, V);
       };
-      AddReg(Op.Output);
+      // Flags have no implicit source-call argument role. Retain only views
+      // with an explicit reader, so dead arithmetic flags add no call work.
+      if (Op.Output.Kind != MedVar::Flag)
+        AddReg(Op.Output);
       for (uint8_t I = 0; I < Op.NumInputs; ++I)
         AddReg(Op.Inputs[I]);
     }
