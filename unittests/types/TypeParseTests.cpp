@@ -1764,6 +1764,34 @@ TEST(TypeParse, ARoutineTakesItsPrototypeUnderItsAssemblerName) {
   }
   TypeLibrary Expression(DataModel::ILP32);
   EXPECT_FALSE(parseCTypes("__typeof__(1 + 2) three;", Expression).ok());
+  // The long a Windows header declares, as the renderer keeps its name only
+  // where the target gives it its width, reads back as that long there and
+  // as the exact-width type elsewhere.
+  for (const DataModel Model : {DataModel::LLP64, DataModel::LP64}) {
+    TypeLibrary Chosen(Model);
+    ASSERT_TRUE(parseCTypes("void tag(__typeof__(__builtin_choose_expr("
+                            "sizeof(unsigned long) == 4, (unsigned long)0, "
+                            "(uint32_t)0)) Tag);",
+                            Chosen)
+                    .ok());
+    const FunctionDef *Tag = Chosen.findPrototype("tag");
+    ASSERT_NE(Tag, nullptr);
+    ASSERT_EQ(Tag->Params.size(), 1u);
+    const TypeExprRef &Type = Tag->Params[0].Type;
+    ASSERT_NE(Type, nullptr);
+    EXPECT_EQ(Chosen.sizeOf(*Type), 4u);
+    EXPECT_EQ(Type->Kind == TypeExprKind::Builtin &&
+                  Type->TheBuiltin == Builtin::ULong,
+              Model == DataModel::LLP64);
+  }
+  // It chooses between casts alone.
+  EXPECT_FALSE(
+      parseCTypes("__typeof__(__builtin_choose_expr(1, 2, 3)) x;", Expression)
+          .ok());
+  EXPECT_FALSE(parseCTypes("__typeof__(__builtin_choose_expr(sizeof(int) == "
+                           "4, (int)0)) x;",
+                           Expression)
+                   .ok());
 
   // An x64 macOS program imports stat as stat$INODE64, which no C name
   // spells: the rendering gives it to stat as its assembler name, and the

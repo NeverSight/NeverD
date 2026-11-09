@@ -1407,6 +1407,18 @@ private:
         const Token At = take();
         if (!expect("(", "after " + W.str()))
           return false;
+        if (isWord("__builtin_choose_expr")) {
+          // The type of the cast a constant chooses, as a header's long is
+          // printed to keep its name only where the target gives it its width
+          // (CTypeRender): sizeof(long) == 4, (long)0, (int32_t)0.
+          TypeExprRef Chosen = chosenCast();
+          if (!Chosen)
+            return false;
+          Spec.Type = std::move(Chosen);
+          if (!expect(")", "after " + W.str() + "'s operand"))
+            return false;
+          continue;
+        }
         const Token Of = take();
         const FunctionDef *Routine =
             Of.Kind == TokenKind::Word ? prototypeNamed(Of.Text) : nullptr;
@@ -2465,6 +2477,39 @@ private:
                  ? "'" + At.Text + "' is no constant this knows"
                  : "expected a constant");
     return std::nullopt;
+  }
+
+  /// __builtin_choose_expr(Constant, (Type)Constant, (Type)Constant): the
+  /// type of the cast the first constant chooses, the first where it is
+  /// nonzero.  Null, failed, for any other operands.
+  TypeExprRef chosenCast() {
+    const Token At = take();
+    const std::string Name = At.Text.str();
+    if (!expect("(", "after " + Name))
+      return nullptr;
+    const std::optional<int64_t> Chosen = binary(0);
+    if (!Chosen || !expect(",", "after " + Name + "'s condition"))
+      return nullptr;
+    TypeExprRef Casts[2];
+    for (TypeExprRef &Cast : Casts) {
+      if (!isPunct("(") || !startsType(1)) {
+        fail(peek(), Name + " chooses between casts of constants here");
+        return nullptr;
+      }
+      take();
+      Specifiers Spec;
+      if (!specifiers(Spec))
+        return nullptr;
+      std::string Ignored;
+      Token NameToken = peek();
+      Cast = declarator(Spec.Type, Ignored, NameToken, true);
+      const bool First = &Cast == &Casts[0];
+      if (Failed || !Cast || !expect(")", "after a cast's type") || !unary() ||
+          !expect(First ? "," : ")",
+                  (First ? "between " : "after ") + Name + "'s operands"))
+        return nullptr;
+    }
+    return *Chosen ? Casts[0] : Casts[1];
   }
 
   TypeExprRef typeInParentheses() {
