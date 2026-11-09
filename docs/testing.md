@@ -1056,6 +1056,21 @@ original CPL3 fault/sigreturn comparisons in
 `X86SystemExtensionsSource.FaultsInputsAndFlagResultsMatchEveryRoute`.
 See [the recorded scope and limitations](evidence/x86-translation-controls-2026-11-08.json).
 
+`NeverDX86RepStateTests`, owned by `unittests/lift/x86/X86RepStateTests.cpp`,
+exports complete REP C/IR/object fixtures with `NEVERD_REP_EXPORT_DIR`.
+Run `scripts/verify_x86_rep_state.py --exports DIR --oracle
+NEVERC/tests/verify-rep-state.py --compiler COMPILER --route high --bits 32
+--keep OUT --report RESULT` and repeat with `--route llvm` for both SDKs.
+For NeverC, add `--neverc --backend-llc LLVM_LLC`; the witness checks native
+`.state32` calls before compiling actual C through the i386 driver. It
+compares all seven families, 16/32-bit addresses, input and output state,
+flags, memory, stack and callee-saved registers against independent bytes.
+Negative controls must fail; emulated port completion is not physical I/O.
+`--route pipeline` additionally recompiles complete functions for each object
+format; NeverC i386 currently requires `--formats elf`. Rerun x64 HighC and
+LLVM-to-C witnesses when changing shared REP rendering or generated intrinsic
+IDs. Those native witnesses include protected-page fault/restart checks.
+
 NeverC's `tests/verify-i386-portable-system.py --compiler NEVERC
 --backend-llc LLVM_LLC --keep OUT` covers the other portable i386 interfaces
 and REP dynamic frames. `tests/verify-i386-cpuid-header.py --compiler NEVERC

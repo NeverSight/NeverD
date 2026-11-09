@@ -2122,9 +2122,11 @@ integer/floating arithmetic, row conversion, shape checks and partial progress.
 
 The full LLVM fork adds `llvm.x86.rep.{movs,stos,lods,cmps,scas,ins,outs}.state`
 and corresponding `.state32` interfaces. NeverC exposes seven x64
-`__builtin_ia32_rep_<family>_state` builtins and the
-`__NEVERC_X86_REP_STATE__=1` capability macro. The macro selects an API; it does
-not enable a CPU feature. Long-mode comparison completion requires `sahf`.
+`__builtin_ia32_rep_<family>_state` builtins and seven i386 `_state32`
+builtins, advertised by `__NEVERC_X86_REP_STATE__=1` and
+`__NEVERC_X86_REP_STATE32__=1` respectively. A macro selects an API; it does
+not enable a CPU feature. Long-mode comparison completion requires `sahf`;
+i386 comparison completion does not.
 The older MOVS/STOS and port-string APIs retain their existing contracts.
 
 The separate [paged REP memory-string binding](x86-paged-execution.md#restartable-rep-memory-strings)
@@ -2172,7 +2174,8 @@ port I/O. Emulation does not qualify hardware fault restart.
 
 `NeverDX86RepStateTests` checks decoded controls, natural-width inputs,
 auxiliary outputs, malformed interfaces, pipeline source/object routes and
-combined feature requirements. Its optional `NEVERD_REP_EXPORT_DIR` exports
+combined feature requirements. The shared suite lives in
+`unittests/lift/x86/X86RepStateTests.cpp`. Its optional `NEVERD_REP_EXPORT_DIR` exports
 both C routes, LLVM IR and production codegen objects for all 296 long-mode
 and 234 i386 forms, plus complete pipeline C fixtures. The pinned SDK uses the
 owned assembly path; the fork SDK uses native intrinsics. Each x64 C or IR
@@ -2189,15 +2192,36 @@ Run
 <NeverC>/tests/verify-rep-state.py --route high --compiler <compiler>`
 (and `--route llvm`, `--route ir --llc <llc>`, or `--route object`) to compare
 those exports with the independent raw-byte and sequential oracles. Add
-`--neverc` for NeverC compilation, or `--bits 32` for i386 emulation.
+`--neverc` for NeverC compilation, or `--bits 32` for i386 emulation. For
+NeverC i386 compilation also pass `--backend-llc <llc>`; this invokes the
+actual C frontend and external-backend driver. Both C writers select native
+32-bit state arrays and calls when the capability is present, while retaining
+the shared assembly fallback for other compilers. Wider direction conditions
+are normalized before conversion to the builtin's byte argument.
 `--route pipeline` compiles complete HighC and LLVM-to-C functions for ELF,
 COFF and Mach-O at O0/O2, with both pipeline optimization settings, and checks
 that the REP family and address width survive. It needs no target CRT and
 does not execute the fixtures. Both SDK profiles passed all 1,008 pipeline
 object compilations across Clang (32/64-bit) and NeverC (64-bit).
+The additional NeverC i386 pipeline route requires `--formats elf`; Windows
+and Darwin i386 source ABIs remain unqualified. Use `--keep DIR --report FILE`
+to retain complete source, objects, command provenance and result hashes.
 The script requires Capstone, LIEF and, for
 i386 execution, Unicorn. The LLVM release and production pin remain gated on
 completion of the remaining instruction work above.
+
+The [2026-11-08 i386 REP source evidence](evidence/x86-i386-rep-2026-11-08.json)
+records 27 selected NeverD checks and 193 NeverC x86/i386 tests, with zero
+failures or skips. Across both SDKs, both C writers and Clang/NeverC, the eight
+i386 source profiles pass 71,424 memory and 18,432 controlled port comparisons,
+plus 101,088 wider-direction cases and 2,080 rejected corruption controls.
+The eight x64 regression profiles pass 361,216 memory/flags comparisons,
+896 real page-fault restarts and 1,536 controlled port completions. All 1,120
+complete pipeline C objects compile, including the new NeverC i386 ELF route.
+The compiler's independent i386 pointer witness separately checks full-width
+counts, overlapping memory, dynamically realigned frames and ABI completion.
+Emulated i386 state, x64 hardware restart and format-only compilation retain
+their separate qualification limits in the evidence record.
 
 ## Bounded ENCLU/GETSEC arithmetic-flag transport
 

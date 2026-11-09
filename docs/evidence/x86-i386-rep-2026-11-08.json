@@ -1,0 +1,957 @@
+{
+  "schema": 1,
+  "date": "2026-11-08",
+  "scope": "Native i386 REP pointer and complete-state interfaces, shared HighC/LLVM-to-C rendering and x64 regression qualification.",
+  "sources": {
+    "neverd": "5a66b08e53b1163f7ed07e3f7d613138877b72dd",
+    "neverc": "9a4e7628c52d435ee2e42ee89c775a3bbab14846",
+    "llvm": "a32cd957841c664570df90bc41902913f1f16226"
+  },
+  "before": {
+    "compiler_source": "f0f12ccc465ac5083c81500e649b1467301d8cf6",
+    "compiler_sha256": "9d13b22fc974bbcb76b128f13e2093ea8371f9514cc26349bf7ee04288624eff",
+    "invalid_i386_microsoft_ir": 6,
+    "undeclared_explicit_i386_apis": 13,
+    "valid_x64_microsoft_probes": 6,
+    "i386_receipt_sha256": "c0c0bc9ac146eba267d6772b3146f973db8acc84610ee0a1b005742c249bf8a8",
+    "x64_receipt_sha256": "15bba9648c94cb21f94576019ff3aadd1715da6c019e24b0909965572f4bc432"
+  },
+  "builds": {
+    "neverc-build-receipt.json": {
+      "source_head": "a183e5f8a7a61216bc1fd01b829c27eff7ae9cda",
+      "command": [
+        "cmake",
+        "--build",
+        "build-neverc",
+        "--target",
+        "neverc",
+        "neverc-tests",
+        "--parallel",
+        "4"
+      ],
+      "exit_code": 0,
+      "seconds": 947.32,
+      "log_sha256": "b2cf19fd5af55218026e4c5f47f0549b72ba5d46805bd967e36e016cb72b2b26",
+      "outputs": {
+        "neverc": "b5cfb5b4557662e9a203069c700a1b46e9d54e4aa47462695ed5cdd374d345f4",
+        "neverc-tests": "c5308e1a8fe8401bd49b5d7791fc49623b9876a33d1625b6cde061b7bd26bc80"
+      }
+    },
+    "neverc-tests-fix-build-receipt.json": {
+      "source_head": "9a4e7628c52d435ee2e42ee89c775a3bbab14846",
+      "command": [
+        "cmake",
+        "--build",
+        "build-neverc",
+        "--target",
+        "neverc-tests",
+        "--parallel",
+        "4"
+      ],
+      "compiler_before": "b5cfb5b4557662e9a203069c700a1b46e9d54e4aa47462695ed5cdd374d345f4",
+      "exit_code": 0,
+      "seconds": 37.651,
+      "compiler_after": "b5cfb5b4557662e9a203069c700a1b46e9d54e4aa47462695ed5cdd374d345f4",
+      "test_binary_sha256": "284fb443d6d3d524ea3f1d77c7add2e28b60ef99dabd90ff51552dd8c32d7a9e",
+      "log_sha256": "5e6c18a327612e63612d58f4af071c7fb741bf45b72c4f310e8871e62dd21ef2"
+    },
+    "rep-native-build-receipt.json": {
+      "source_head": "9acc6817fffb4ba6d0e7ee2c7c18104f742d9d1c",
+      "source_status": "",
+      "command": [
+        "python3",
+        "scripts/build.py",
+        "build-x86-native",
+        "--target",
+        "NeverDX86RepStateTests",
+        "--parallel",
+        "4"
+      ],
+      "exit_code": 0,
+      "seconds": 26.778,
+      "log_sha256": "34f558a3ceb7d186a6925a9d4bd3a2b0a48624eb8719b7868d1e10acd1d411a1",
+      "outputs": {
+        "NeverDX86RepStateTests": "2ad8b41d3a5bf5e3d80bade883ad61b963e5022070fe92f7a9a26d7e3e53c96d"
+      }
+    },
+    "rep-r6-build-receipt.json": {
+      "source_head": "5a66b08e53b1163f7ed07e3f7d613138877b72dd",
+      "source_status": "",
+      "command": [
+        "python3",
+        "scripts/build.py",
+        "build-x86",
+        "--target",
+        "NeverDX86RepStateTests",
+        "--parallel",
+        "4"
+      ],
+      "exit_code": 0,
+      "seconds": 25.981,
+      "log_sha256": "599bbac9633b27c40203d034440c7f8df42384faa3c622bc942e56efea2d9bde",
+      "outputs": {
+        "NeverDX86RepStateTests": "3f92081947dcf26285d603bca3ea39ae5bd2cff45a9c92ccb1df3167c8bd6fa1"
+      }
+    }
+  },
+  "focused_checks": {
+    "neverc-unit-final": {
+      "source_head": "9a4e7628c52d435ee2e42ee89c775a3bbab14846",
+      "source_status": "",
+      "compiler_sha256": "b5cfb5b4557662e9a203069c700a1b46e9d54e4aa47462695ed5cdd374d345f4",
+      "test_binary_sha256": "284fb443d6d3d524ea3f1d77c7add2e28b60ef99dabd90ff51552dd8c32d7a9e",
+      "tests": 193,
+      "failed": 0,
+      "skipped": 0,
+      "skipped_names": [],
+      "exit_code": 0,
+      "log_sha256": "9882caf9084952dba5cebfde322726f1b7ce72713026e55a87d9e95e4296ff1d"
+    },
+    "native-rep": {
+      "source_head": "5a66b08e53b1163f7ed07e3f7d613138877b72dd",
+      "source_status": "",
+      "source_tree": "c8e3f5c32cb3403be33a31a3474f354e63162f89",
+      "binary_sha256": "2ad8b41d3a5bf5e3d80bade883ad61b963e5022070fe92f7a9a26d7e3e53c96d",
+      "tests": 13,
+      "failed": 0,
+      "skipped": [],
+      "exit_code": 0,
+      "log_sha256": "f7ebb2215f78d6597245efe923efdc80dda8c87a61ffa9d9bec098f6e5a02d0a",
+      "result_sha256": "0d82e3543b14dcc2e1aa81d1b551356bf4f580e61b9eca36026fe5c63511e76f"
+    },
+    "r6-rep": {
+      "source_head": "5a66b08e53b1163f7ed07e3f7d613138877b72dd",
+      "source_status": "",
+      "source_tree": "c8e3f5c32cb3403be33a31a3474f354e63162f89",
+      "binary_sha256": "3f92081947dcf26285d603bca3ea39ae5bd2cff45a9c92ccb1df3167c8bd6fa1",
+      "tests": 12,
+      "failed": 0,
+      "skipped": [],
+      "exit_code": 0,
+      "log_sha256": "36285b871e324098d58706fffdfedb946f87ea86b17c205a930e59b5166e6746",
+      "result_sha256": "1a7e00a8549ad5626e7f5805376760921e684c1b32784644e087dd6c876d1a79"
+    },
+    "native-rep-image": {
+      "source_head": "5a66b08e53b1163f7ed07e3f7d613138877b72dd",
+      "source_status": " M docs/testing.md\n M docs/x86-instruction-support.md\n",
+      "source_tree": "c8e3f5c32cb3403be33a31a3474f354e63162f89",
+      "binary_sha256": "2ad8b41d3a5bf5e3d80bade883ad61b963e5022070fe92f7a9a26d7e3e53c96d",
+      "neverc_sha256": "b5cfb5b4557662e9a203069c700a1b46e9d54e4aa47462695ed5cdd374d345f4",
+      "neverc_llc_sha256": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+      "host_clang_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "tests": 1,
+      "failed": 0,
+      "skipped": [],
+      "exit_code": 0,
+      "log_sha256": "adb4e1349f97280323e93b86879bb73c1e52e22d16d93a9011460ac4bee2d63b",
+      "result_sha256": "509464348fc98baf666d1400ad88a9490e123a431aa15721b4e6eb2c8998cd41"
+    },
+    "r6-rep-image": {
+      "source_head": "5a66b08e53b1163f7ed07e3f7d613138877b72dd",
+      "source_status": " M docs/testing.md\n M docs/x86-instruction-support.md\n",
+      "source_tree": "c8e3f5c32cb3403be33a31a3474f354e63162f89",
+      "binary_sha256": "3f92081947dcf26285d603bca3ea39ae5bd2cff45a9c92ccb1df3167c8bd6fa1",
+      "neverc_sha256": "b5cfb5b4557662e9a203069c700a1b46e9d54e4aa47462695ed5cdd374d345f4",
+      "neverc_llc_sha256": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+      "host_clang_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "tests": 1,
+      "failed": 0,
+      "skipped": [],
+      "exit_code": 0,
+      "log_sha256": "831f01206aa6c3eb0890648936fe6abb3edd2d7ebb4e47b2545270b56e08e9e2",
+      "result_sha256": "cd65a2615caaf593f32bd1f8f8bcbd263b05c7ed50c848306741b8985703a167"
+    },
+    "source_consistency": "The compiler binary remained unchanged during the test-only header-configuration rebuild. NeverD runtime checks ran with only the documented Markdown edits pending. The r6 selection excludes the full-fork native-contract test explicitly; no selected test skipped."
+  },
+  "compiler_witnesses": {
+    "llvm-rep32": {
+      "profiles": [
+        {
+          "optimization": "O0",
+          "bits": 32,
+          "forms": 234,
+          "counts": [
+            4464,
+            1152
+          ],
+          "negative_controls": 130,
+          "object_route": "llvm"
+        },
+        {
+          "optimization": "O2",
+          "bits": 32,
+          "forms": 234,
+          "counts": [
+            4464,
+            1152
+          ],
+          "negative_controls": 130,
+          "object_route": "llvm"
+        }
+      ],
+      "receipt_sha256": "fb37ecad3a0f25584cc88e3db501eca77b184ac384476dce4e6fd893ea575881",
+      "results_sha256": "389ad4aa3ff2252b83e9261f1c0b3d9253df675e33c6b6b3eead837ab2636ff8",
+      "hardware_restart": false,
+      "physical_port_io": false
+    },
+    "neverc-state32": {
+      "profiles": [
+        {
+          "optimization": "O0",
+          "bits": 32,
+          "forms": 234,
+          "counts": [
+            4464,
+            1152
+          ],
+          "negative_controls": 130,
+          "object_route": "neverc-driver"
+        },
+        {
+          "optimization": "O2",
+          "bits": 32,
+          "forms": 234,
+          "counts": [
+            4464,
+            1152
+          ],
+          "negative_controls": 130,
+          "object_route": "neverc-driver"
+        }
+      ],
+      "receipt_sha256": "1892e33973ea17821bd2f97a14f94bdb0574058fc2c4cd69b21eaaa4c28a8bed",
+      "results_sha256": "ebaf04a6dc078adaad93aced9a90bdcca1d854dc4cd58e6e9a3b2d461b3fff97",
+      "hardware_restart": false,
+      "physical_port_io": false
+    },
+    "neverc-state64": {
+      "profiles": [
+        {
+          "optimization": "O0",
+          "bits": 64,
+          "forms": 296,
+          "counts": [
+            22576,
+            56,
+            96
+          ],
+          "object_route": "neverc-driver"
+        },
+        {
+          "optimization": "O2",
+          "bits": 64,
+          "forms": 296,
+          "counts": [
+            22576,
+            56,
+            96
+          ],
+          "object_route": "neverc-driver"
+        }
+      ],
+      "receipt_sha256": "5d991fc6f39e644f94096027a5fe8edfe68faf9dc22081df5aecb8525ded6800",
+      "results_sha256": "7481cda7e80d9dbce1642c6fba1fcd655b984a315887b402bc085a981aa9221f",
+      "hardware_restart": true,
+      "physical_port_io": false
+    },
+    "neverc-state64-full": {
+      "profiles": [
+        {
+          "optimization": "O0",
+          "bits": 64,
+          "forms": 296,
+          "counts": [
+            22576,
+            56,
+            96
+          ],
+          "object_route": "neverc-ir-to-llvm"
+        },
+        {
+          "optimization": "O2",
+          "bits": 64,
+          "forms": 296,
+          "counts": [
+            22576,
+            56,
+            96
+          ],
+          "object_route": "neverc-ir-to-llvm"
+        }
+      ],
+      "receipt_sha256": "ba11ef1c9cc4d752a143ec024c5386b9650207eedb21ed5459336c69a0e21538",
+      "results_sha256": "ad5d22cfb283e3c93f389f46e145bd652568adf57fdf8d58ed8292b2b93c2476",
+      "hardware_restart": true,
+      "physical_port_io": false
+    },
+    "neverc-pointers32": {
+      "completions": 3456,
+      "boundaries": 2304,
+      "negative_controls": 384,
+      "compiler_sha256": "b5cfb5b4557662e9a203069c700a1b46e9d54e4aa47462695ed5cdd374d345f4",
+      "llc_sha256": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+      "hardware_execution": false,
+      "objects": 48,
+      "receipt_sha256": "b85541ccd94447193f83f765f186da46f60b9c0716145ba549bcf74f81ab10bd",
+      "results_sha256": "6acb304a10477498b019ac001b88a66fb3cd37bb6d6f5426d97d506975d68d89"
+    },
+    "bounded_regression": {
+      "checks": 552,
+      "negative_controls": 20,
+      "receipt_sha256": "9f476e8a40190445fd547685f3b2e0fea40efb125d553bcb972e9633d4b34eb1",
+      "results_sha256": "d071886fa8dfdfb663af26758a092d6051c09bb09efc8ecdd9def24327d7a313"
+    }
+  },
+  "complete_source": [
+    {
+      "profile": "source-native-32-high-neverc",
+      "receipt_sha256": "747c0be826b6980acc2336838d193c1f7f83fc75bca0c21e8ce9e90a3f21e948",
+      "results_sha256": "e9e4dac6da6582cc96b79220ae486a77b0417b6347b77e3e1f21ffd39acc7a24",
+      "tools_sha256": {
+        "NEVERC_ROOT/build-neverc/bin/neverc": "b5cfb5b4557662e9a203069c700a1b46e9d54e4aa47462695ed5cdd374d345f4",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6",
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "LLVM_ROOT/build-intrinsics/bin/llc": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41"
+      },
+      "route": "high",
+      "bits": 32,
+      "forms": 234,
+      "totals": [
+        8928,
+        2304
+      ],
+      "hardware_restart": false,
+      "physical_port_io": false,
+      "wide_direction_cases": 16848,
+      "objects": 2,
+      "negative_controls": 260,
+      "source_sha256": "5a257473675e9912a40f4ccb2b4fab3f7783a1f2bf1aee8fc43679e6b9096d1e",
+      "object_route": "neverc-driver"
+    },
+    {
+      "profile": "source-native-32-llvm-neverc",
+      "receipt_sha256": "9d4503bdb8aaae530c2a82c34049a37f20b980c4f6e9f6f44c82ca1d6b312c7c",
+      "results_sha256": "f28044fcb855aa2cdad94c2ffe2d6be3e23aef8e87185cf062a15f22af9b5696",
+      "tools_sha256": {
+        "NEVERC_ROOT/build-neverc/bin/neverc": "b5cfb5b4557662e9a203069c700a1b46e9d54e4aa47462695ed5cdd374d345f4",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6",
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "LLVM_ROOT/build-intrinsics/bin/llc": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41"
+      },
+      "route": "llvm",
+      "bits": 32,
+      "forms": 234,
+      "totals": [
+        8928,
+        2304
+      ],
+      "hardware_restart": false,
+      "physical_port_io": false,
+      "wide_direction_cases": 0,
+      "objects": 2,
+      "negative_controls": 260,
+      "source_sha256": "5d4f503d6b20930b78a02336ba960329159c64004bbcbc65374c579019146f8f",
+      "object_route": "neverc-driver"
+    },
+    {
+      "profile": "source-native-32-high-clang",
+      "receipt_sha256": "604c49d7b7d2bb9b8ea225daf3237f9b525c912ac520befaf3ce2c3ff5566d27",
+      "results_sha256": "fc07461a54c6470ece830a63bc7c9d29bf04213dc8863e9b1c1da4fa3aea36e7",
+      "tools_sha256": {
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6"
+      },
+      "route": "high",
+      "bits": 32,
+      "forms": 234,
+      "totals": [
+        8928,
+        2304
+      ],
+      "hardware_restart": false,
+      "physical_port_io": false,
+      "wide_direction_cases": 16848,
+      "objects": 2,
+      "negative_controls": 260,
+      "source_sha256": "5a257473675e9912a40f4ccb2b4fab3f7783a1f2bf1aee8fc43679e6b9096d1e",
+      "object_route": "compiler-driver"
+    },
+    {
+      "profile": "source-native-32-llvm-clang",
+      "receipt_sha256": "f386e6461214655d46fc7705ea690d483e1f0aaef662d6dd5e8f44afff55a79f",
+      "results_sha256": "58edfdc90722c0427ca81df93d9622d73d3a16f78680d5115fd08d70b52d4e9c",
+      "tools_sha256": {
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6"
+      },
+      "route": "llvm",
+      "bits": 32,
+      "forms": 234,
+      "totals": [
+        8928,
+        2304
+      ],
+      "hardware_restart": false,
+      "physical_port_io": false,
+      "wide_direction_cases": 0,
+      "objects": 2,
+      "negative_controls": 260,
+      "source_sha256": "5d4f503d6b20930b78a02336ba960329159c64004bbcbc65374c579019146f8f",
+      "object_route": "compiler-driver"
+    },
+    {
+      "profile": "source-native-64-high-neverc",
+      "receipt_sha256": "b80dc94993cdcd4deceaf8c28015ce171b5f295b9e9bd439b88e0233485cd86c",
+      "results_sha256": "561018485aadfd9bbe8001c913dab3b4ae9b55c3695aa314fcb0c6fb01fef6bd",
+      "tools_sha256": {
+        "NEVERC_ROOT/build-neverc/bin/neverc": "b5cfb5b4557662e9a203069c700a1b46e9d54e4aa47462695ed5cdd374d345f4",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6",
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "ARTIFACT_ROOT/Inputs/X86/RepStateHost.c": "f34a30173070b8acd6bfc962fc139b66f78fcf30f267b3ab98fa757ae6f79e60"
+      },
+      "route": "high",
+      "bits": 64,
+      "forms": 296,
+      "totals": [
+        45152,
+        112,
+        192
+      ],
+      "hardware_restart": true,
+      "physical_port_io": false,
+      "wide_direction_cases": 448,
+      "objects": 2,
+      "negative_controls": 0,
+      "source_sha256": "06779ffcd2ed2e3a1730fc70cfb2b57123ab9ff6ae0f26e03c9f95b2a82a8623",
+      "object_route": "neverc-driver"
+    },
+    {
+      "profile": "source-native-64-llvm-neverc",
+      "receipt_sha256": "3fcaf48db9d4a125532f747fa6650cd310b2f7935a93bfdf77f0e4d6f926bcf2",
+      "results_sha256": "4f4b6069979b8aa6d86c489edb92fce60f3906a305d9a135b152e370e331300f",
+      "tools_sha256": {
+        "NEVERC_ROOT/build-neverc/bin/neverc": "b5cfb5b4557662e9a203069c700a1b46e9d54e4aa47462695ed5cdd374d345f4",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6",
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "ARTIFACT_ROOT/Inputs/X86/RepStateHost.c": "f34a30173070b8acd6bfc962fc139b66f78fcf30f267b3ab98fa757ae6f79e60"
+      },
+      "route": "llvm",
+      "bits": 64,
+      "forms": 296,
+      "totals": [
+        45152,
+        112,
+        192
+      ],
+      "hardware_restart": true,
+      "physical_port_io": false,
+      "wide_direction_cases": 0,
+      "objects": 2,
+      "negative_controls": 0,
+      "source_sha256": "36ceb2ec00e192e8e76d937503b4ec6deca65c10bef4f2ab33275b411714fcbf",
+      "object_route": "neverc-driver"
+    },
+    {
+      "profile": "source-native-64-high-clang",
+      "receipt_sha256": "7fc3fca5cd6f4deabe70efdb9248aafb150a2c1c70212619bf3a417a9fcb5b3c",
+      "results_sha256": "0eeb1cd370a20dd37352a40e2fe0e34d9df728bb3218e86022bb96121e5b6b0e",
+      "tools_sha256": {
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6",
+        "ARTIFACT_ROOT/Inputs/X86/RepStateHost.c": "f34a30173070b8acd6bfc962fc139b66f78fcf30f267b3ab98fa757ae6f79e60"
+      },
+      "route": "high",
+      "bits": 64,
+      "forms": 296,
+      "totals": [
+        45152,
+        112,
+        192
+      ],
+      "hardware_restart": true,
+      "physical_port_io": false,
+      "wide_direction_cases": 448,
+      "objects": 2,
+      "negative_controls": 0,
+      "source_sha256": "06779ffcd2ed2e3a1730fc70cfb2b57123ab9ff6ae0f26e03c9f95b2a82a8623",
+      "object_route": "compiler-driver"
+    },
+    {
+      "profile": "source-native-64-llvm-clang",
+      "receipt_sha256": "d09b95474ebb3110c814775ce7a5e9f8830ee6a5bce50a4180867f26ade3afb6",
+      "results_sha256": "e3c323c7d66933b5e7866c2f9f341fbf6b33ee241d3193678d999161e90dd282",
+      "tools_sha256": {
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6",
+        "ARTIFACT_ROOT/Inputs/X86/RepStateHost.c": "f34a30173070b8acd6bfc962fc139b66f78fcf30f267b3ab98fa757ae6f79e60"
+      },
+      "route": "llvm",
+      "bits": 64,
+      "forms": 296,
+      "totals": [
+        45152,
+        112,
+        192
+      ],
+      "hardware_restart": true,
+      "physical_port_io": false,
+      "wide_direction_cases": 0,
+      "objects": 2,
+      "negative_controls": 0,
+      "source_sha256": "36ceb2ec00e192e8e76d937503b4ec6deca65c10bef4f2ab33275b411714fcbf",
+      "object_route": "compiler-driver"
+    },
+    {
+      "profile": "source-r6-32-high-neverc",
+      "receipt_sha256": "504b0b4e3cae36d8c1db821ad3c9597ed9afd1f66de99c0d240e4ebf55351f55",
+      "results_sha256": "31d3c0d15ef01a4b7cabcea04bbaed02b4471b409eb9d81abc54683ae908bcd5",
+      "tools_sha256": {
+        "NEVERC_ROOT/build-neverc/bin/neverc": "b5cfb5b4557662e9a203069c700a1b46e9d54e4aa47462695ed5cdd374d345f4",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6",
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "LLVM_ROOT/build-intrinsics/bin/llc": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41"
+      },
+      "route": "high",
+      "bits": 32,
+      "forms": 234,
+      "totals": [
+        8928,
+        2304
+      ],
+      "hardware_restart": false,
+      "physical_port_io": false,
+      "wide_direction_cases": 16848,
+      "objects": 2,
+      "negative_controls": 260,
+      "source_sha256": "5a257473675e9912a40f4ccb2b4fab3f7783a1f2bf1aee8fc43679e6b9096d1e",
+      "object_route": "neverc-driver"
+    },
+    {
+      "profile": "source-r6-32-llvm-neverc",
+      "receipt_sha256": "8aa74cea6aa9bc42822dd577353b398a3760d31a2890ec659651e3f55dc2702e",
+      "results_sha256": "2483f40a221615d8744d64a5398484d4ea255e03eb9a6033e5600e0832436889",
+      "tools_sha256": {
+        "NEVERC_ROOT/build-neverc/bin/neverc": "b5cfb5b4557662e9a203069c700a1b46e9d54e4aa47462695ed5cdd374d345f4",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6",
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "LLVM_ROOT/build-intrinsics/bin/llc": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41"
+      },
+      "route": "llvm",
+      "bits": 32,
+      "forms": 234,
+      "totals": [
+        8928,
+        2304
+      ],
+      "hardware_restart": false,
+      "physical_port_io": false,
+      "wide_direction_cases": 16848,
+      "objects": 2,
+      "negative_controls": 260,
+      "source_sha256": "72c0f79aa63f823758d548c4c9cdee9979c0bfe002c7f948275393cd6052ea66",
+      "object_route": "neverc-driver"
+    },
+    {
+      "profile": "source-r6-32-high-clang",
+      "receipt_sha256": "4bfa764ccbf92be66c062d6baec8d4d7b476804fd9a60f3493e245c933ce6863",
+      "results_sha256": "fc07461a54c6470ece830a63bc7c9d29bf04213dc8863e9b1c1da4fa3aea36e7",
+      "tools_sha256": {
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6"
+      },
+      "route": "high",
+      "bits": 32,
+      "forms": 234,
+      "totals": [
+        8928,
+        2304
+      ],
+      "hardware_restart": false,
+      "physical_port_io": false,
+      "wide_direction_cases": 16848,
+      "objects": 2,
+      "negative_controls": 260,
+      "source_sha256": "5a257473675e9912a40f4ccb2b4fab3f7783a1f2bf1aee8fc43679e6b9096d1e",
+      "object_route": "compiler-driver"
+    },
+    {
+      "profile": "source-r6-32-llvm-clang",
+      "receipt_sha256": "e5c05cf7d2df69b825641faf6e2d3c6b399deec35267a745b11bd026b7e2b94d",
+      "results_sha256": "6ac2649305e38e33203ec566fc8d3dd0ae7cc362339aa9abde38b3ecf69bfeff",
+      "tools_sha256": {
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6"
+      },
+      "route": "llvm",
+      "bits": 32,
+      "forms": 234,
+      "totals": [
+        8928,
+        2304
+      ],
+      "hardware_restart": false,
+      "physical_port_io": false,
+      "wide_direction_cases": 16848,
+      "objects": 2,
+      "negative_controls": 260,
+      "source_sha256": "72c0f79aa63f823758d548c4c9cdee9979c0bfe002c7f948275393cd6052ea66",
+      "object_route": "compiler-driver"
+    },
+    {
+      "profile": "source-r6-64-high-neverc",
+      "receipt_sha256": "156ad66d3742af4591c2a69807a6cb72bac6c58c28fd8265d8060cfed6371e2d",
+      "results_sha256": "561018485aadfd9bbe8001c913dab3b4ae9b55c3695aa314fcb0c6fb01fef6bd",
+      "tools_sha256": {
+        "NEVERC_ROOT/build-neverc/bin/neverc": "b5cfb5b4557662e9a203069c700a1b46e9d54e4aa47462695ed5cdd374d345f4",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6",
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "ARTIFACT_ROOT/Inputs/X86/RepStateHost.c": "f34a30173070b8acd6bfc962fc139b66f78fcf30f267b3ab98fa757ae6f79e60"
+      },
+      "route": "high",
+      "bits": 64,
+      "forms": 296,
+      "totals": [
+        45152,
+        112,
+        192
+      ],
+      "hardware_restart": true,
+      "physical_port_io": false,
+      "wide_direction_cases": 448,
+      "objects": 2,
+      "negative_controls": 0,
+      "source_sha256": "06779ffcd2ed2e3a1730fc70cfb2b57123ab9ff6ae0f26e03c9f95b2a82a8623",
+      "object_route": "neverc-driver"
+    },
+    {
+      "profile": "source-r6-64-llvm-neverc",
+      "receipt_sha256": "548fcd15412626f9db05b5018c663bfd82c610d36bcce5f602a37e0ffb414fe4",
+      "results_sha256": "d370d4a949411bebebbb0461d719ffed5d54627925e99e1c1beef28505d56292",
+      "tools_sha256": {
+        "NEVERC_ROOT/build-neverc/bin/neverc": "b5cfb5b4557662e9a203069c700a1b46e9d54e4aa47462695ed5cdd374d345f4",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6",
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "ARTIFACT_ROOT/Inputs/X86/RepStateHost.c": "f34a30173070b8acd6bfc962fc139b66f78fcf30f267b3ab98fa757ae6f79e60"
+      },
+      "route": "llvm",
+      "bits": 64,
+      "forms": 296,
+      "totals": [
+        45152,
+        112,
+        192
+      ],
+      "hardware_restart": true,
+      "physical_port_io": false,
+      "wide_direction_cases": 448,
+      "objects": 2,
+      "negative_controls": 0,
+      "source_sha256": "fe85db94a76717a1c301390660aa1c9f0bfdbd1aad257d1f5822dc889e6eae52",
+      "object_route": "neverc-driver"
+    },
+    {
+      "profile": "source-r6-64-high-clang",
+      "receipt_sha256": "402204013acc70b54ad4f1040df0e777a346e4d1d084350864db8b2c1382c8a0",
+      "results_sha256": "0eeb1cd370a20dd37352a40e2fe0e34d9df728bb3218e86022bb96121e5b6b0e",
+      "tools_sha256": {
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6",
+        "ARTIFACT_ROOT/Inputs/X86/RepStateHost.c": "f34a30173070b8acd6bfc962fc139b66f78fcf30f267b3ab98fa757ae6f79e60"
+      },
+      "route": "high",
+      "bits": 64,
+      "forms": 296,
+      "totals": [
+        45152,
+        112,
+        192
+      ],
+      "hardware_restart": true,
+      "physical_port_io": false,
+      "wide_direction_cases": 448,
+      "objects": 2,
+      "negative_controls": 0,
+      "source_sha256": "06779ffcd2ed2e3a1730fc70cfb2b57123ab9ff6ae0f26e03c9f95b2a82a8623",
+      "object_route": "compiler-driver"
+    },
+    {
+      "profile": "source-r6-64-llvm-clang",
+      "receipt_sha256": "50e1b4bbdcc9e6bdae957c84ffe29fe7fa784ded6a5335e528076b99153b36ad",
+      "results_sha256": "3f0825bbbadbd7c275252c603e40ed6312b1de3d1a46a89100f616602068104b",
+      "tools_sha256": {
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6",
+        "ARTIFACT_ROOT/Inputs/X86/RepStateHost.c": "f34a30173070b8acd6bfc962fc139b66f78fcf30f267b3ab98fa757ae6f79e60"
+      },
+      "route": "llvm",
+      "bits": 64,
+      "forms": 296,
+      "totals": [
+        45152,
+        112,
+        192
+      ],
+      "hardware_restart": true,
+      "physical_port_io": false,
+      "wide_direction_cases": 448,
+      "objects": 2,
+      "negative_controls": 0,
+      "source_sha256": "fe85db94a76717a1c301390660aa1c9f0bfdbd1aad257d1f5822dc889e6eae52",
+      "object_route": "compiler-driver"
+    }
+  ],
+  "pipeline_source": [
+    {
+      "profile": "source-native-32-pipeline-neverc",
+      "receipt_sha256": "02b7dfce1670113b949d84bcba698a4b325c91649e65e7d018ae848e19d70ad8",
+      "results_sha256": "591eb991fe17af42682638a3ebb0d2b3a261f784313fb001d1db0a167d92b2a7",
+      "tools_sha256": {
+        "NEVERC_ROOT/build-neverc/bin/neverc": "b5cfb5b4557662e9a203069c700a1b46e9d54e4aa47462695ed5cdd374d345f4",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6",
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "LLVM_ROOT/build-intrinsics/bin/llc": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41"
+      },
+      "route": "pipeline",
+      "bits": 32,
+      "compiled_objects": 56,
+      "formats": [
+        "elf"
+      ],
+      "executed": false,
+      "object_route": "neverc-driver"
+    },
+    {
+      "profile": "source-native-32-pipeline-clang",
+      "receipt_sha256": "0fdf99c81103a6ea79ace6716457fe225b0c2ccb22b75e401ac9c1ac2d509097",
+      "results_sha256": "1bccc9b4fc09d3b19938007c49bbe2d6022dd820ed5dfae1f4f85f8efcd6353b",
+      "tools_sha256": {
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6"
+      },
+      "route": "pipeline",
+      "bits": 32,
+      "compiled_objects": 168,
+      "formats": [
+        "elf",
+        "coff",
+        "macho"
+      ],
+      "executed": false,
+      "object_route": "compiler-driver"
+    },
+    {
+      "profile": "source-native-64-pipeline-neverc",
+      "receipt_sha256": "53afb888da6fd7b62e2369902394f394ac2947d9af56c79b688470615c0ace02",
+      "results_sha256": "8609b2ff7d64a8c8843861009f6365d29d0797600511c94bd7f67e14a164b738",
+      "tools_sha256": {
+        "NEVERC_ROOT/build-neverc/bin/neverc": "b5cfb5b4557662e9a203069c700a1b46e9d54e4aa47462695ed5cdd374d345f4",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6",
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+      },
+      "route": "pipeline",
+      "bits": 64,
+      "compiled_objects": 168,
+      "formats": [
+        "elf",
+        "coff",
+        "macho"
+      ],
+      "executed": false,
+      "object_route": "neverc-driver"
+    },
+    {
+      "profile": "source-native-64-pipeline-clang",
+      "receipt_sha256": "c9c1e388fc437e8b1ecb84088552e93937b5ddc5e31d2f3f6f18a512457b748e",
+      "results_sha256": "6587553fee7f97995e18eb4ff072acd6daab3ff68817e06cb011ac99a48fbcf5",
+      "tools_sha256": {
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6"
+      },
+      "route": "pipeline",
+      "bits": 64,
+      "compiled_objects": 168,
+      "formats": [
+        "elf",
+        "coff",
+        "macho"
+      ],
+      "executed": false,
+      "object_route": "compiler-driver"
+    },
+    {
+      "profile": "source-r6-32-pipeline-neverc",
+      "receipt_sha256": "e662532925fd4f230ae282eef192854132f97ecd61bd4bb34dc7939e302d5a0e",
+      "results_sha256": "ab5f6c0b6084daa2557259fa1efa620dad08fd728926dbf101c983b20fa4490f",
+      "tools_sha256": {
+        "NEVERC_ROOT/build-neverc/bin/neverc": "b5cfb5b4557662e9a203069c700a1b46e9d54e4aa47462695ed5cdd374d345f4",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6",
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "LLVM_ROOT/build-intrinsics/bin/llc": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41"
+      },
+      "route": "pipeline",
+      "bits": 32,
+      "compiled_objects": 56,
+      "formats": [
+        "elf"
+      ],
+      "executed": false,
+      "object_route": "neverc-driver"
+    },
+    {
+      "profile": "source-r6-32-pipeline-clang",
+      "receipt_sha256": "fe8e5c1fbdc15b07495a1da4de53701f2b1bfd9d216744762b7c609599b78e46",
+      "results_sha256": "61217cd72c10094572f610a8c6d3767a13c56a5f726325ddba4d5b88ce995132",
+      "tools_sha256": {
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6"
+      },
+      "route": "pipeline",
+      "bits": 32,
+      "compiled_objects": 168,
+      "formats": [
+        "elf",
+        "coff",
+        "macho"
+      ],
+      "executed": false,
+      "object_route": "compiler-driver"
+    },
+    {
+      "profile": "source-r6-64-pipeline-neverc",
+      "receipt_sha256": "ab2d3db9d8c8a355917360f4adec67689c9608c792070ac152e02fd68ad2c9c3",
+      "results_sha256": "12268090e5e2a5ea0c42e5d3557dde1f3bb8b885e0dc008b6d387008978e3cd7",
+      "tools_sha256": {
+        "NEVERC_ROOT/build-neverc/bin/neverc": "b5cfb5b4557662e9a203069c700a1b46e9d54e4aa47462695ed5cdd374d345f4",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6",
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+      },
+      "route": "pipeline",
+      "bits": 64,
+      "compiled_objects": 168,
+      "formats": [
+        "elf",
+        "coff",
+        "macho"
+      ],
+      "executed": false,
+      "object_route": "neverc-driver"
+    },
+    {
+      "profile": "source-r6-64-pipeline-clang",
+      "receipt_sha256": "a312dcc022539361b470c76b2cb6356624e7165c41df4793e4556fb6851a5f1b",
+      "results_sha256": "90f3c00fda76192c40985129d2c4ac6fa92be31805ed17144ad525ab6276e064",
+      "tools_sha256": {
+        "HOST_TOOLS/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "NEVERD_ROOT/scripts/verify_x86_rep_state.py": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+        "ARTIFACT_ROOT/verify-rep-state.py": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6"
+      },
+      "route": "pipeline",
+      "bits": 64,
+      "compiled_objects": 168,
+      "formats": [
+        "elf",
+        "coff",
+        "macho"
+      ],
+      "executed": false,
+      "object_route": "compiler-driver"
+    }
+  ],
+  "global_state": {
+    "artifact_report": {
+      "forbidden": [],
+      "heuristic": [],
+      "headers": [],
+      "source_globals": [],
+      "binary": [],
+      "unscannable": [],
+      "failed": false
+    },
+    "receipt_sha256": "20de126fd0c44e9cd111a1eb95ea810d72c1e4162dcdfa7311835aa268b555c8",
+    "immutable_metadata_review": {
+      "old_definition": "static constexpr IntrinsicTargetInfo TargetInfos[] = { {llvm::StringLiteral(\"\"), 0, 370}, {llvm::StringLiteral(\"aarch64\"), 370, 1432}, {llvm::StringLiteral(\"x86\"), 1802, 1824}, }",
+      "new_definition": "static constexpr IntrinsicTargetInfo TargetInfos[] = { {llvm::StringLiteral(\"\"), 0, 370}, {llvm::StringLiteral(\"aarch64\"), 370, 1432}, {llvm::StringLiteral(\"x86\"), 1802, 1830}, }",
+      "old_definition_sha256": "b83e18472fbe84fd31f6d854cad06cc358ec62ac1f30f0166c6f1024aa7b3f3c",
+      "new_definition_sha256": "b8e61bfc3bdef035e87755e1a990d39025519d0a8216f7f18407a7ac80f567a6",
+      "review": "Only x86 intrinsic count changes from 1824 to 1830 for six fixed pointer32 signatures; element type, base IDs, immutable strings and exact matching rules are unchanged."
+    }
+  },
+  "generated_table_checks": {
+    "intrinsic_generator_tests": 12,
+    "sorter_tests": 7,
+    "generator_log_sha256": "0e984f55e94e80d41958b719dccc59ca618a09d7008192376b3d153304acda01",
+    "sorter_log_sha256": "bc8b820b8a750d8bd7d7362d063d82ee8bdcedc560e9514f822b5f6e04a9486c"
+  },
+  "retained_failed_attempt": {
+    "name": "neverc-unit",
+    "passed": 192,
+    "failed": 1,
+    "reason": "The Linux Microsoft-header test omitted -D_MSC_VER=1930 and entered intrin.h include_next. The test configuration was fixed; the compiler binary did not change.",
+    "receipt_sha256": "427382c9db32a700bba827664e5c43d07bb5ad1dfe5a831c57f704d872fedd30",
+    "results_sha256": "d9732b832cf8c2bdb3e6828b4e4595f67718e03e266f0fb3dd79d2e6ce9d0bcb"
+  },
+  "witness_sha256": {
+    "state_oracle": "dcab321c726e54ad9a089dc981407cfbdbed5ad8eee68a3c4f6499f119b8fdb6",
+    "pointer_oracle": "785b02c7a0adcf2cafed79fea7e195b66f6e13a12565be86f35975b00d3d894e",
+    "complete_source": "632793e05d92c160c6e0544006d0af63e3780ac2f54db743ce763a88bd81cdbf",
+    "native_host": "f34a30173070b8acd6bfc962fc139b66f78fcf30f267b3ab98fa757ae6f79e60",
+    "no_core_helper": "bd4916ad8693e7189a3be4433787a640071ebce360eea3d42efe2e637293b0ba",
+    "private_tmp_runner": "bb37523e352b56e8a66e70660146eb73901e72462aabdfb48612d1acfb0c4000"
+  },
+  "qualification_limits": [
+    "i386 state/pointer execution uses Unicorn. Large pointer counts stop at the instruction boundary; they are not completed memory copies.",
+    "The pointer DF=1 entry is a raw lowering probe, not a valid platform C ABI entry claim.",
+    "Controlled port completion does not perform physical port I/O. Real protected-page restart qualification belongs only to the x64 native memory witnesses.",
+    "NeverC i386 object generation uses its Linux ELF external-backend driver. Windows/Darwin i386 source ABIs remain unqualified.",
+    "Pipeline format checks compile complete C but do not execute those format fixtures.",
+    "Generic lifted VMFUNC leaf/state proof, remaining RTM/MPX source candidates, full mode/task transitions, software SMM/SGX and unbound asynchronous producers remain outside this batch."
+  ],
+  "release": {
+    "published": false,
+    "production_sdk_pin": "neverd-llvm-v23.0.0-r6",
+    "llvm_gitlink": "b726cb0425bc7e1f7e2753972a748ebcfa8b5741"
+  },
+  "artifact_recovery": {
+    "archive": "qualified-rep-products.tar.xz",
+    "archive_sha256": "a3ed526bf9de85563b280594775ffb995bf927fe8ef0c095dfe2c26abc91f1d3",
+    "recovery_index_sha256": "2fafa9bee3704cb2ef8443f5ad73b76301f6de93f1c16498323562bbeb360efc",
+    "generated_products": 1458,
+    "all_decompressed_hashes_verified": true,
+    "pre_archive_manifest_files_verified": 2022,
+    "retained": "Source files, independently encoded original bytes, logs, receipts, result manifests and active build trees remain available."
+  },
+  "neverc_publication": {
+    "commit": "a1c792a44f3c00ebee58d0c1d1033fde23674900",
+    "remote": "https://github.com/NeverSight/NeverC.git",
+    "verified_heads": [
+      "dev",
+      "codex/x86-native-intrinsics"
+    ],
+    "verification": "Atomic push followed by git ls-remote returning the exact commit for both refs.",
+    "push_log_sha256": "209eae25c0908e71bfcc024c3633e81eed29955b6586527233a04db4f60ef911",
+    "release_published": false
+  }
+}
