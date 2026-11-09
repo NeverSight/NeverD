@@ -108,6 +108,17 @@ public:
   /// Drops what reads the program's declarations, which change without the
   /// image or its debug information changing.
   void forgetDeclarations() { ImportCounts.reset(); }
+  /// Drops what reads the prototypes the debug context binds to functions'
+  /// names, which a declaration hides or gives back while the context stays:
+  /// what the facts of the image and of a selection hold (call summaries,
+  /// callee facts, call graphs) and the import counts, as another context
+  /// would.  The symbol inventory stays, and so does the callee memo, which
+  /// takes a body only where what it read reads the same.
+  void forgetPrototypes() {
+    Facts.reset();
+    SelectionFacts.reset();
+    ImportCounts.reset();
+  }
 
 private:
   friend class Pipeline;

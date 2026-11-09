@@ -95,17 +95,18 @@ TEST(LocalTypesDebugContext, TakesDeclarationsAndNewTypesInPlace) {
   }
   EXPECT_EQ(Reads.addresses(), (std::vector<va_t>{Entry, Other}));
 
-  EXPECT_TRUE(Context.takeDeclarations(
+  // No name binds a prototype here: nothing analysis read changes.
+  EXPECT_FALSE(Context.takeDeclarations(
       {{Entry, "long long Entry(void)"}, {Other, "char Other(void)"}}));
   EXPECT_EQ(ReturnBytes(Entry), 8u);
   EXPECT_EQ(ReturnBytes(Other), 1u);
-  EXPECT_TRUE(Context.takeDeclarations({{Other, "short Other(void)"}}));
+  EXPECT_FALSE(Context.takeDeclarations({{Other, "short Other(void)"}}));
   EXPECT_EQ(ReturnBytes(Entry), 0u);
   EXPECT_EQ(ReturnBytes(Other), 2u);
 
   // A declaration that names a type the context has yet to take does not read;
   // one read after it takes the type does, as in a context made of them all.
-  EXPECT_TRUE(Context.takeDeclarations({{Entry, "struct Later Entry(void)"}}));
+  EXPECT_FALSE(Context.takeDeclarations({{Entry, "struct Later Entry(void)"}}));
   EXPECT_EQ(ReturnBytes(Entry), 0u);
   types::TypeLibrary Grown(*Library);
   ASSERT_TRUE(types::parseCTypes("struct Later { long long First; long long "
@@ -114,11 +115,82 @@ TEST(LocalTypesDebugContext, TakesDeclarationsAndNewTypesInPlace) {
                   .ok());
   Context.takeNewTypes(Grown, {"Later"});
   EXPECT_EQ(Context.library().size(), Grown.size());
-  EXPECT_TRUE(Context.takeDeclarations({{Entry, "struct Later *Entry(void)"}}));
+  EXPECT_FALSE(
+      Context.takeDeclarations({{Entry, "struct Later *Entry(void)"}}));
   EXPECT_EQ(ReturnBytes(Entry), 8u);
   // A second take of what it holds adds nothing.
   Context.takeNewTypes(Grown, {"Later"});
   EXPECT_EQ(Context.library().size(), Grown.size());
+}
+
+TEST(LocalTypesDebugContext, TakesADeclarationThatHidesAPrototypeInPlace) {
+  using namespace neverd;
+  const types::TypeLibrary *Kernel =
+      types::headerLibrary(types::HeaderLibrary::WindowsKernelX64);
+  ASSERT_NE(Kernel, nullptr);
+  auto Library = std::make_shared<types::TypeLibrary>(Kernel->dataModel());
+  types::mergeHeaderTypes(*Library, *Kernel);
+  BinaryImage Image;
+  const va_t Owner = 0x1000, Plain = 0x2000;
+  Image.Exports = {{"IoThreadToProcess", 1, Owner}, {"Unprototyped", 2, Plain}};
+  NamesOnlyDebugContext Names;
+  const std::vector<types::HeaderLibrary> Headers{
+      types::HeaderLibrary::WindowsKernelX64};
+  sdk::LocalTypesDebugContext Context(Names, Library, {}, &Image, Headers);
+  // What a context made of the same declarations reads of each function.
+  const auto reads = [&](const sdk::LocalTypesDebugContext &From, va_t At) {
+    const std::optional<FunctionSym> Function = From.resolveFunction(At);
+    if (!Function)
+      return std::string("none");
+    std::string Text = Function->PrototypeLibrary + "|" +
+                       Function->PrototypeDeclaration + "|" +
+                       std::to_string(Function->Params.size());
+    for (const auto &[Name, Type] : Function->Params)
+      Text += "|" + Name + ":" + std::to_string(Type ? Type->Size : 0);
+    return Text + "|" +
+           std::to_string(Function->ReturnType ? Function->ReturnType->Size
+                                               : 0);
+  };
+  const auto agrees = [&](const std::map<va_t, std::string> &Declarations) {
+    sdk::LocalTypesDebugContext Made(Names, Library, Declarations, &Image,
+                                     Headers);
+    for (const va_t At : {Owner, Plain})
+      EXPECT_EQ(reads(Context, At), reads(Made, At)) << std::hex << At;
+  };
+  EXPECT_TRUE(Context.hidesPrototype(Owner));
+  EXPECT_FALSE(Context.hidesPrototype(Plain));
+  EXPECT_EQ(Context.resolveFunction(Owner)->PrototypeLibrary,
+            "windows-kernel-x64");
+
+  // A declaration of a function whose name binds no prototype: nothing
+  // analysis read changes.
+  const std::map<va_t, std::string> PlainOnly{
+      {Plain, "int Unprototyped(int Value, int Other)"}};
+  EXPECT_FALSE(Context.takeDeclarations(PlainOnly));
+  agrees(PlainOnly);
+  // One that hides the header's prototype: the context takes it as well,
+  // and says that analysis read what it changes.
+  std::map<va_t, std::string> Hiding = PlainOnly;
+  Hiding[Owner] = "void *IoThreadToProcess(void *Thread, int Extra)";
+  EXPECT_TRUE(Context.takeDeclarations(Hiding));
+  ASSERT_TRUE(Context.resolveFunction(Owner).has_value());
+  EXPECT_EQ(Context.resolveFunction(Owner)->Params.size(), 2u);
+  EXPECT_TRUE(Context.resolveFunction(Owner)->PrototypeLibrary.empty());
+  agrees(Hiding);
+  // Whether a declaration hides one reads the function's name alone.
+  EXPECT_TRUE(Context.hidesPrototype(Owner));
+  // Another declaration of it hides the prototype still.
+  Hiding[Owner] = "void *IoThreadToProcess(void *Thread)";
+  EXPECT_TRUE(Context.takeDeclarations(Hiding));
+  EXPECT_EQ(Context.resolveFunction(Owner)->Params.size(), 1u);
+  agrees(Hiding);
+  // Given back, the function reads the header's prototype again.
+  EXPECT_TRUE(Context.takeDeclarations(PlainOnly));
+  EXPECT_EQ(Context.resolveFunction(Owner)->PrototypeDeclaration,
+            "PEPROCESS IoThreadToProcess(PETHREAD Thread)");
+  agrees(PlainOnly);
+  // The same declarations again change nothing.
+  EXPECT_FALSE(Context.takeDeclarations(PlainOnly));
 }
 
 TEST(LocalTypesDebugContext, NewTypesReadAsInAContextMadeOfThem) {
