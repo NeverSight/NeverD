@@ -66,7 +66,8 @@ public:
   /// owner. False classifies all-finished or a wait cycle in Result.
   llvm::Expected<bool> schedule(Bionic &LibC);
   /// Complete an interrupted libc wrapper only after its handler returns.
-  llvm::Error resumeSignal(Bionic &LibC);
+  llvm::Expected<bool> resumeSignal(Bionic &LibC);
+  llvm::Error suspendAbort(const ServiceRequest &Request, size_t Event);
   void report();
   std::vector<NativeThreadCPUState> observeCPUStates() const;
   std::vector<linux_model::ProcTask> procTasks() const;
@@ -101,9 +102,11 @@ private:
     std::optional<SleepContinuation> Sleep = std::nullopt;
   };
   struct SignalReturn {
+    enum Kind { Wrapper, AbortUnblocked, AbortSignaled };
     ServiceRequest Request;
     size_t Event, Depth;
     std::optional<SleepContinuation> Sleep;
+    Kind Continuation = Wrapper;
   };
   struct Thread {
     NativeThreadSnapshot Report;

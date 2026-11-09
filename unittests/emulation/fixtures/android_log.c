@@ -34,6 +34,18 @@ extern void android_set_abort_message(const char *);
 extern void *mmap(void *, U64, int, int, int, long);
 extern int pthread_create(U64 *, const void *, void *(*)(void *), void *);
 extern int pthread_join(U64, void **);
+extern void __android_log_assert(const char *, const char *, const char *, ...);
+extern void abort(void);
+extern void _exit(int);
+extern void _Exit(int);
+extern int gettid(void);
+extern int getpid(void);
+extern int kill(int, int);
+extern int close(int);
+extern int dup2(int, int);
+extern int open(const char *, int, ...);
+extern int sigaction64(int, const void *, void *);
+extern int sigprocmask64(int, const U64 *, U64 *);
 
 extern int __android_log_print(int, const char *, const char *, ...);
 extern int __android_log_buf_print(int, int, const char *, const char *, ...);
@@ -139,6 +151,130 @@ struct AbortCall {
   const char *Message;
   U64 Error;
 };
+
+struct AssertAction {
+  int Flags;
+  void (*Handler)(int, void *, void *);
+  U64 Mask;
+  void (*Restorer)(void);
+};
+struct AssertCall {
+  U64 *Out, *Slot;
+  U64 Form, Mode;
+  const char *Condition, *Tag, *Format, *Message;
+};
+static struct AssertCall *ActiveAssert;
+
+static void assert_handler(int Signal, void *Info, void *Context) {
+  struct AssertCall *Call = ActiveAssert;
+  U64 *Out = Call->Out;
+  ++Out[0];
+  Out[1] = Signal;
+  Out[2] = (long)((int *)Info)[2];
+  Out[17 + Out[0]] = Out[2];
+  Out[3] = ((unsigned *)Info)[4];
+  Out[4] = ((unsigned *)Info)[5];
+  Out[5] = *__errno();
+  sigprocmask64(0, (void *)0, Out + 6);
+  Out[7] = *Call->Slot;
+  Out[8] = gettid();
+  if (Out[7])
+    memcpy((char *)Out + 24000, (void *)Out[7], 4096);
+  const U64 Handling = (Call->Mode >> 8) & 255;
+  if (Handling == 3)
+    _exit(23);
+  if (Handling == 7)
+    _Exit(23);
+  if (Handling == 4) {
+    // Deliberately bypass the modeled import's return boundary via ucontext.
+    U64 *Registers = (void *)((char *)Context + 184);
+    *(U64 *)((char *)Context + 440) = Registers[30];
+  }
+  if (Handling == 5 && Out[0] == 1)
+    abort();
+  if (Handling == 6) {
+    struct AssertAction Ignore = {0, (void *)1, 0, 0};
+    sigaction64(6, &Ignore, (void *)0);
+  }
+  *__errno() = 77;
+  Out[9] = 1;
+}
+
+static void *assert_body(void *Arg) {
+  struct AssertCall *Call = Arg;
+  const U64 Handling = (Call->Mode >> 8) & 255;
+  if (Handling) {
+    struct AssertAction Action = {4, Handling == 1 ? (void *)1 : assert_handler,
+                                  0, 0};
+    if (sigaction64(6, &Action, (void *)0))
+      return (void *)91;
+  }
+  const U64 Descriptor = (Call->Mode >> 16) & 255;
+  if (Descriptor == 1 && close(2))
+    return (void *)92;
+  if ((Descriptor == 2 || Descriptor == 3) &&
+      dup2(Descriptor == 2 ? 1 : 0, 2) != 2)
+    return (void *)93;
+  if (Descriptor == 4) {
+    int FD = open("/assert-output", 2, 0);
+    if (FD < 0 || dup2(FD, 2) != 2)
+      return (void *)94;
+  }
+  void *Library = Call->Form & 1
+                      ? dlopen(Call->Form == 1 ? "liblog.so" : "libc.so", 2)
+                      : (void *)0;
+  void (*Assert)(const char *, const char *, const char *, ...) =
+      Call->Form == 1 ? (void *)dlsym(Library, "__android_log_assert")
+                      : (void *)0;
+  void (*Abort)(void) =
+      Call->Form == 3 ? (void *)dlsym(Library, "abort") : (void *)0;
+  if ((Call->Form == 1 && !Assert) || (Call->Form == 3 && !Abort))
+    return (void *)95;
+  Call->Out[12] = (U64)__errno();
+  Call->Out[13] = gettid();
+  if ((Call->Mode & (1UL << 25)) && kill(getpid(), 6))
+    return (void *)97;
+  *__errno() = 55;
+#define ASSERT_LOG(...)                                                        \
+  (Call->Form == 1                                                             \
+       ? Assert(Call->Condition, Call->Tag, Call->Format, __VA_ARGS__)         \
+       : __android_log_assert(Call->Condition, Call->Tag, Call->Format,        \
+                              __VA_ARGS__))
+  if (Call->Form >= 2) {
+    if (Call->Form == 3)
+      Abort();
+    else
+      abort();
+  } else if ((Call->Mode & 255) == 1) {
+    ASSERT_LOG(-123, 0xfedcba9876543210UL, Call->Message, 7, 8, 9, 10, 11, 12);
+  } else if ((Call->Mode & 255) == 2) {
+    ASSERT_LOG(0, Call->Message);
+  } else {
+    ASSERT_LOG(Call->Message);
+  }
+#undef ASSERT_LOG
+  Call->Out[17] = 99;
+  return (void *)99;
+}
+
+U64 log_assertion(U64 *Out, U64 *Slot, U64 Form, U64 Mode,
+                  const char *Condition, const char *Tag, const char *Format,
+                  const char *Message) {
+  for (unsigned I = 0; I != 32; ++I)
+    Out[I] = 0;
+  struct AssertCall Call = {Out,       Slot, Form,   Mode,
+                            Condition, Tag,  Format, Message};
+  ActiveAssert = &Call;
+  if (Mode & (1UL << 24)) {
+    U64 Thread;
+    void *Value;
+    if (pthread_create(&Thread, (void *)0, assert_body, &Call) ||
+        pthread_join(Thread, &Value))
+      return 96;
+    return (U64)Value;
+  }
+  return (U64)assert_body(&Call);
+}
 static void *abort_in_thread(void *Arg) {
   struct AbortCall *Call = Arg;
   *__errno() = 73;

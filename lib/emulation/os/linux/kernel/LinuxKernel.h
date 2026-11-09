@@ -9,6 +9,8 @@
 #include "neverd/emulation/CPU.h"
 #include "neverd/emulation/ProcessSession.h"
 
+#include "llvm/ADT/StringRef.h"
+
 namespace neverd::emulation::linux_model {
 #define NEVERD_LINUX_VALUE(Name, Value) inline constexpr uint64_t Name = Value;
 #define NEVERD_LINUX_DIAGNOSTIC(Name, Text) inline constexpr char Name[] = Text;
@@ -83,6 +85,13 @@ writeOutput(ExecutionBackend &CPU, ServiceKind Kind,
             const ProcessServiceEvent &Event, const MemoryLayout &Layout,
             const ProcessOptions &Options, ProcessResult &Result,
             std::optional<uint64_t> AfterVectorImportError = std::nullopt);
+/// Captured output from already materialized model bytes. Uses the same
+/// whole-write budget and sinks as guest-backed write/writev.
+llvm::Expected<std::optional<uint64_t>>
+writeOutputBuffers(ExecutionBackend &CPU, uint32_t FD,
+                   llvm::ArrayRef<llvm::StringRef> Buffers,
+                   const MemoryLayout &Layout, const ProcessOptions &Options,
+                   ProcessResult &Result);
 llvm::Expected<ProcessServiceEvent> readService(ExecutionBackend &CPU,
                                                 const ServiceRequest &Request);
 llvm::Error returnService(ExecutionBackend &CPU, const ServiceRequest &Request,

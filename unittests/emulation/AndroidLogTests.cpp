@@ -107,6 +107,38 @@ protected:
     Options.Android->MallocFillByte = 0x5a;
     Options.Android->Libraries["libc.so"] = {"android_set_abort_message"};
   }
+  void prepareAssertion(unsigned Form, uint64_t Mode, llvm::StringRef Message) {
+    bindAbortSlot();
+    Options.Android->Libraries["libc.so"].push_back("abort");
+    Options.Android->Libraries["liblog.so"] = {"__android_log_assert"};
+    Options.Android->EntrySymbol = "log_assertion";
+    Options.Android->ObserveMemoryAtStop = true;
+    Options.Android->ReadMemory = {{Output, 32768}};
+    Options.Android->ThreadLimit = Mode & (1u << 24) ? 3 : 1;
+    Options.LinuxSignals.emplace();
+    Options.LinuxSignals->InitialMask = uint64_t(1) << 5;
+    Options.LinuxSignals->AlternateStackDisabled = true;
+    Options.LinuxSignals->Actions[6] = {};
+    put(4096, "condition%text");
+    put(10000, "tag");
+    put(16000, "%s");
+    put(18000, Message);
+    Options.Android->Arguments = {Output,         Output + 2048, Form,
+                                  Mode,           Output + 4096, Output + 10000,
+                                  Output + 16000, Output + 18000};
+    std::vector<uint8_t> Payload{7, 't', 'a', 'g', 0};
+    Payload.insert(Payload.end(), Message.bytes_begin(), Message.bytes_end());
+    Payload.push_back(0);
+    Options.Android->TextLogWrites = {{{0, Payload, -11}}};
+  }
+  std::vector<uint8_t> assertionExpected(const ProcessResult &Result) {
+    auto Expected = Options.Android->Memory[0].Bytes;
+    std::fill_n(Expected.begin(), 256, 0);
+    // TLS allocation belongs to the process, not this assertion fixture.
+    integer(Expected, 12 * 8, word(Result.MemorySnapshots[0].Bytes, 12 * 8), 8);
+    integer(Expected, 13 * 8, 1000, 8);
+    return Expected;
+  }
   void prepareFormatted(unsigned Form, unsigned Mode, llvm::StringRef Format,
                         llvm::StringRef Message) {
     Options.Android->EntrySymbol = "log_formatted";
@@ -759,6 +791,296 @@ TEST_P(AndroidLog, FatalPublicationPrecedesWireReadsAndTranscriptAdmission) {
       EXPECT_FALSE(Result->MemorySnapshots[1].Diagnostic.empty());
     }
   }
+}
+
+TEST_P(AndroidLog,
+       AssertFormatsFallbacksAndOverflowArgumentsBeforeTermination) {
+  for (unsigned Form : {0u, 1u})
+    for (unsigned Mode = 0; Mode != 9; ++Mode) {
+      SCOPED_TRACE(Form);
+      SCOPED_TRACE(Mode);
+      std::string Message = Mode == 5 ? std::string(5000, 'm') : "message";
+      prepareAssertion(Form, Mode == 4 ? 1 : Mode == 6 ? 2 : 0, Message);
+      std::string ExpectedMessage = Message;
+      if (Mode == 0)
+        Options.Android->Arguments[4] = 1; // Unused when format is non-null.
+      if (Mode >= 1 && Mode <= 3) {
+        Options.Android->Arguments[6] = 0;
+        if (Mode == 1)
+          ExpectedMessage = "Assertion failed: condition%text";
+        if (Mode == 2) {
+          Options.Android->Arguments[4] = 0;
+          ExpectedMessage = "Unspecified assertion failed";
+        }
+        if (Mode == 3) {
+          put(4096, std::string(5000, 'c'));
+          ExpectedMessage = "Assertion failed: " + std::string(1005, 'c');
+        }
+      }
+      if (Mode == 4) {
+        put(16000, "%d %llx %s %d %d %d %d %d %d");
+        ExpectedMessage = "-123 fedcba9876543210 message 7 8 9 10 11 12";
+      }
+      if (Mode == 5)
+        ExpectedMessage.resize(1023);
+      if (Mode == 6) {
+        put(16000, "before%cafter%s");
+        ExpectedMessage = "before";
+      }
+      if (Mode == 7) {
+        put(16000, "");
+        ExpectedMessage = "";
+      }
+      if (Mode == 8) {
+        Options.Android->Arguments[6] = 0;
+        put(4096, "");
+        ExpectedMessage = "Assertion failed: ";
+      }
+      std::vector<uint8_t> Payload{7, 't', 'a', 'g', 0};
+      Payload.insert(Payload.end(), ExpectedMessage.begin(),
+                     ExpectedMessage.end());
+      Payload.push_back(0);
+      Options.Android->TextLogWrites = {{{0, Payload, -11}}};
+      Options.Android->ReadMemory.push_back({0x100000000, 4096, false});
+      auto R =
+          emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+      ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+      ASSERT_EQ(R->Stop, ProcessStopReason::Signaled) << R->Diagnostic;
+      EXPECT_EQ(R->TerminationSignal, 6u);
+      EXPECT_FALSE(R->ReturnValue);
+      EXPECT_FALSE(R->ExitStatus);
+      EXPECT_EQ(R->StandardError, ExpectedMessage + "\n");
+      EXPECT_TRUE(R->StandardOutput.empty());
+      EXPECT_EQ(R->TextLogWritesConsumed, 1u);
+      ASSERT_EQ(R->MemorySnapshots.size(), 2u);
+      auto Expected = assertionExpected(*R);
+      integer(Expected, 2048, 0x100000000, 8);
+      EXPECT_EQ(R->MemorySnapshots[0].Bytes, Expected);
+      EXPECT_EQ(R->MemorySnapshots[1].Bytes, abortRecord(ExpectedMessage));
+      ASSERT_FALSE(R->NativeCalls.empty());
+      EXPECT_EQ(R->NativeCalls.back().Name, "__android_log_assert");
+      EXPECT_FALSE(R->NativeCalls.back().Result);
+    }
+}
+
+TEST_P(AndroidLog, AssertKeepsStderrBeforeFatalRoutingAndTransportClipping) {
+  for (unsigned Mode = 0; Mode != 3; ++Mode) {
+    SCOPED_TRACE(Mode);
+    prepareAssertion(Mode & 1, 0, "message");
+    const std::string Tag = Mode == 0   ? "RIL"
+                            : Mode == 1 ? std::string(5000, 't')
+                                        : "";
+    put(10000, Tag);
+    if (Mode == 2)
+      Options.Android->Arguments[5] = 0;
+    const std::string WireTag = Mode == 0 ? "use-Rlog/RLOG-RIL" : Tag;
+    std::vector<uint8_t> Payload{7};
+    Payload.insert(Payload.end(), WireTag.begin(), WireTag.end());
+    Payload.push_back(0);
+    for (auto C : std::string("message\0", 8))
+      Payload.push_back(C);
+    if (Payload.size() > 4068)
+      Payload.resize(4068);
+    Options.Android->TextLogWrites = {{{Mode == 0 ? 1u : 0u, Payload, 0}}};
+    Options.Android->ReadMemory.push_back({0x100000000, 4096, false});
+    auto R =
+        emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    ASSERT_EQ(R->Stop, ProcessStopReason::Signaled) << R->Diagnostic;
+    EXPECT_EQ(R->TerminationSignal, 6u);
+    EXPECT_EQ(R->StandardError, "message\n");
+    EXPECT_EQ(R->TextLogWritesConsumed, 1u);
+    ASSERT_EQ(R->MemorySnapshots.size(), 2u);
+    EXPECT_EQ(R->MemorySnapshots[1].Bytes, abortRecord("message"));
+  }
+}
+
+TEST_P(AndroidLog, AssertStopsAtTheFirstIncompleteEffect) {
+  for (unsigned Mode = 0; Mode != 9; ++Mode) {
+    SCOPED_TRACE(Mode);
+    prepareAssertion(0, 0, "message");
+    Options.OutputLimit = Mode == 0 ? 7 : 65536;
+    if (Mode == 1)
+      put(16000, "%n");
+    if (Mode == 2)
+      Options.Android->Arguments[6] = 1;
+    if (Mode == 3)
+      Options.Android->Arguments[5] = 1;
+    if (Mode == 4)
+      Options.Android->AbortMessageSlot.reset();
+    if (Mode == 5)
+      Options.Android->TextLogWrites.reset();
+    if (Mode == 6)
+      (*Options.Android->TextLogWrites)[0].Payload[1] = 'x';
+    if (Mode == 7)
+      Options.LinuxSignals.reset();
+    if (Mode == 8) {
+      auto &Bytes = Options.Android->Memory[0].Bytes;
+      std::fill(Bytes.end() - 2048, Bytes.end(), 'x');
+      Options.Android->Arguments[4] = Output + Bytes.size() - 2048;
+      Options.Android->Arguments[6] = 0;
+    }
+    if (Mode == 0)
+      Options.Android->ReadMemory.clear();
+    else
+      Options.Android->ReadMemory.push_back({0x100000000, 4096, false});
+    auto R =
+        emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    const bool Fault = Mode == 2 || Mode == 3 || Mode == 8;
+    EXPECT_EQ(R->Stop, Mode == 0 ? ProcessStopReason::OutputLimit
+                       : Fault   ? ProcessStopReason::RuntimeFailure
+                                 : ProcessStopReason::UnsupportedService)
+        << R->Diagnostic;
+    EXPECT_FALSE(R->TerminationSignal);
+    EXPECT_EQ(R->StandardError, Mode >= 3 && Mode != 8 ? "message\n" : "");
+    if (Mode == 5)
+      EXPECT_FALSE(R->TextLogWritesConsumed);
+    else
+      EXPECT_EQ(R->TextLogWritesConsumed, Mode == 7 ? 1u : 0u);
+    if (Mode == 0) {
+      EXPECT_TRUE(R->MemorySnapshots.empty());
+      continue;
+    }
+    ASSERT_EQ(R->MemorySnapshots.size(), 2u);
+    auto Expected = assertionExpected(*R);
+    if (Mode >= 5 && Mode <= 7) {
+      integer(Expected, 2048, 0x100000000, 8);
+      EXPECT_EQ(R->MemorySnapshots[1].Bytes, abortRecord("message"));
+    } else {
+      EXPECT_TRUE(R->MemorySnapshots[1].Bytes.empty());
+      EXPECT_FALSE(R->MemorySnapshots[1].Diagnostic.empty());
+    }
+    EXPECT_EQ(R->MemorySnapshots[0].Bytes, Expected);
+  }
+}
+
+TEST_P(AndroidLog, AssertUsesLiveStderrDescriptorsAndSharedOutputLimits) {
+  for (unsigned Mode = 0; Mode != 5; ++Mode) {
+    SCOPED_TRACE(Mode);
+    prepareAssertion(Mode & 1, (Mode << 16) | (2u << 8), "message");
+    Options.LinuxFiles.emplace();
+    Options.LinuxFiles->Files["/assert-output"] = {};
+    Options.LinuxFiles->WriteLimits["/assert-output"] = 4096;
+    auto R =
+        emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    ASSERT_EQ(R->Stop, Mode == 4 ? ProcessStopReason::UnsupportedService
+                                 : ProcessStopReason::Signaled)
+        << R->Diagnostic;
+    EXPECT_EQ(R->StandardError, Mode == 0 ? "message\n" : "");
+    EXPECT_EQ(R->StandardOutput, Mode == 2 ? "message\n" : "");
+    EXPECT_EQ(R->TextLogWritesConsumed, Mode == 4 ? 0u : 1u);
+    ASSERT_EQ(R->MemorySnapshots.size(), 1u);
+    const auto &Bytes = R->MemorySnapshots[0].Bytes;
+    EXPECT_EQ(word(Bytes, 0), Mode == 4 ? 0u : 1u);
+    if (Mode != 4) {
+      EXPECT_EQ(R->TerminationSignal, 6u);
+      EXPECT_EQ(word(Bytes, 5 * 8), Mode == 1 || Mode == 3 ? 9u : 55u);
+      auto Record = abortRecord("message");
+      EXPECT_TRUE(
+          std::equal(Record.begin(), Record.end(), Bytes.begin() + 24000));
+    } else {
+      EXPECT_FALSE(R->TerminationSignal);
+      EXPECT_EQ(word(Bytes, 2048), 0u);
+      EXPECT_NE(R->Diagnostic.find("vectored mutable-file"), std::string::npos);
+    }
+    EXPECT_EQ(word(Bytes, 17 * 8), 0u);
+  }
+}
+
+TEST_P(AndroidLog, AbortRunsTheCurrentThreadsHandlerBeforeForcingDefault) {
+  for (unsigned Form : {0u, 1u, 2u, 3u})
+    for (unsigned Handling : {0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u})
+      for (bool Child : {false, true}) {
+        SCOPED_TRACE(Form);
+        SCOPED_TRACE(Handling);
+        SCOPED_TRACE(Child);
+        prepareAssertion(Form, (Handling << 8) | (Child ? 1u << 24 : 0),
+                         "message");
+        if (Form >= 2) {
+          Options.Android->AbortMessageSlot.reset();
+          Options.Android->TextLogWrites.reset();
+        }
+        if (!Child)
+          Options.LinuxSignals->InitialMask.reset(); // abort establishes it.
+        auto R =
+            emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+        ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+        ASSERT_EQ(R->Stop, Handling == 3 || Handling == 7
+                               ? ProcessStopReason::Exited
+                           : Handling == 4 ? ProcessStopReason::Returned
+                                           : ProcessStopReason::Signaled)
+            << R->Diagnostic;
+        if (Handling == 3 || Handling == 7)
+          EXPECT_EQ(R->ExitStatus, 23u);
+        else if (Handling == 4)
+          EXPECT_EQ(R->ReturnValue, 99u);
+        else {
+          EXPECT_EQ(R->TerminationSignal, 6u);
+          EXPECT_FALSE(R->ReturnValue);
+          EXPECT_FALSE(R->ExitStatus);
+          if (Child) {
+            ASSERT_EQ(R->NativeThreads.size(), 2u);
+            for (const auto &T : R->NativeThreads) {
+              EXPECT_EQ(T.TerminationSignal, 6u);
+              EXPECT_FALSE(T.Finished);
+            }
+          }
+        }
+        EXPECT_EQ(R->StandardError, Form < 2 ? "message\n" : "");
+        ASSERT_EQ(R->MemorySnapshots.size(), 1u);
+        const auto &Bytes = R->MemorySnapshots[0].Bytes;
+        const uint64_t Count = Handling < 2 ? 0 : Handling == 5 ? 2 : 1;
+        EXPECT_EQ(word(Bytes, 0), Count);
+        EXPECT_EQ(word(Bytes, 17 * 8), Handling == 4 ? 99u : 0u);
+        if (Count) {
+          EXPECT_EQ(word(Bytes, 8), 6u);
+          EXPECT_EQ(word(Bytes, 2 * 8), uint64_t(-6)); // SI_TKILL.
+          EXPECT_EQ(word(Bytes, 3 * 8), 1000u);
+          EXPECT_EQ(word(Bytes, 4 * 8), 1000u);
+          EXPECT_EQ(word(Bytes, 5 * 8), 55u);
+          EXPECT_EQ(
+              word(Bytes, 6 * 8),
+              ~(uint64_t(0xf) << 31 | uint64_t(1) << 8 | uint64_t(1) << 18));
+          EXPECT_EQ(word(Bytes, 8 * 8), Child ? 1001u : 1000u);
+        }
+        for (const auto &Call : R->NativeCalls)
+          if (Call.Name == "abort" || Call.Name == "__android_log_assert")
+            EXPECT_FALSE(Call.Result);
+      }
+}
+
+TEST_P(AndroidLog, AbortDeliversUnblockedPendingSignalBeforePrivateSend) {
+  for (unsigned Form : {0u, 1u, 2u, 3u})
+    for (unsigned Handling : {2u, 3u, 4u, 6u}) {
+      SCOPED_TRACE(Form);
+      SCOPED_TRACE(Handling);
+      prepareAssertion(Form, (Handling << 8) | (1u << 25), "message");
+      auto R =
+          emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+      ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+      ASSERT_EQ(R->Stop, Handling == 3   ? ProcessStopReason::Exited
+                         : Handling == 4 ? ProcessStopReason::Returned
+                                         : ProcessStopReason::Signaled)
+          << R->Diagnostic;
+      ASSERT_EQ(R->MemorySnapshots.size(), 1u);
+      const auto &Bytes = R->MemorySnapshots[0].Bytes;
+      EXPECT_EQ(word(Bytes, 0), Handling == 2 ? 2u : 1u);
+      EXPECT_EQ(word(Bytes, 18 * 8), 0u); // Previously pending kill: SI_USER.
+      if (Handling == 2)
+        EXPECT_EQ(word(Bytes, 19 * 8), uint64_t(-6)); // Later tgkill: SI_TKILL.
+      EXPECT_EQ(R->StandardError, Form < 2 ? "message\n" : "");
+      if (Handling == 3)
+        EXPECT_EQ(R->ExitStatus, 23u);
+      else if (Handling == 4)
+        EXPECT_EQ(R->ReturnValue, 99u);
+      else
+        EXPECT_EQ(R->TerminationSignal, 6u);
+      for (const auto &Call : R->NativeCalls)
+        if (Call.Name == "abort" || Call.Name == "__android_log_assert")
+          EXPECT_FALSE(Call.Result);
+    }
 }
 
 TEST_P(AndroidLog, TextTransportClipsTagAndMessageWithoutRepairingTerminators) {
