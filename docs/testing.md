@@ -22475,6 +22475,24 @@ the generated source and extends only its harness with exact EAX and CPUID
 expectations. Its report separates successful abort publication from refusal;
 see the [dated evidence](evidence/x86-rtm-abort-pair-2026-11-01.json).
 
+The compiler fixture additionally accepts `--mode 32 --backend-llc LLVM_LLC`
+for actual Linux i386 C compilation. Use the Intel SDE kit's `sde` launcher
+for that mode and retain host i386 libc development support for the independent
+runner. Each mode checks all 256 immediates at O0/O2 and deliberately damages
+status, live integer/FP results, memory snapshots and a canary; those controls
+must fail. This extends the compiler source ABI qualification, not the x64
+continuation provider's guest-mode admission.
+
+NeverC's `tests/verify-mpx-encoding.py --mode 32 --compiler NEVERC
+--backend-llc LLVM_LLC --formats elf --objdump LLVM_OBJDUMP --keep OUT`
+checks native MPX operands and complete caller-frame restoration through the
+actual i386 C driver. Repeat with `--frame` for dynamically realigned frames.
+The independent encoding/operand oracle uses zero, high-bit and all-ones
+inputs and corruption controls. MPX instructions are intercepted; successful
+bounds-table algorithms and #BR delivery remain separate processor-model
+qualifications. Full LLVM IR baselines can also cover COFF/Mach-O, while
+NeverC's i386 source ABI here is explicitly ELF-only.
+
 `X64ContinuationExportTest.RtmRegions*` exercises the complete selected RTM
 provider, its source-semantic admission, both XBEGIN exits and XEND resumption,
 and refusal when every XABORT immediate is occupied. Its 48 exports cover 12

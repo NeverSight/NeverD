@@ -3459,8 +3459,9 @@ above are unchanged; no LLVM release or pin update is claimed.
 
 `llvm.x86.rtm.abort.pair(i32 immarg)` now owns one uninterrupted XBEGIN / XABORT
 sequence and returns its actual EAX status. The LLVM fork supports 32/64-bit
-code generation; NeverC exposes the x64 builtin and `__rtm_abort_pair` header
-interface. It also provides a generic native CPUID query. CPUID arguments are
+code generation; NeverC exposes the builtin and `__rtm_abort_pair` header
+interface in both modes. Linux i386 uses the full LLVM external-backend driver.
+It also provides a generic native CPUID query. CPUID arguments are
 evaluated once, including the existing Microsoft spellings.
 
 The explicit `kernel-events-v6` provider admits canonical rel16 and rel32
@@ -4738,3 +4739,38 @@ the observed fault boundary and accumulator input. These are separate from
 physical TLB/IOMMU invalidation and VMX EPTP switching success.
 The production LLVM r6 pin remains unchanged. Remaining source/mode and
 full-machine execution gates must close before the final release and pin update.
+
+## Native i386 MPX and RTM C interfaces (2026-11-08)
+
+NeverC now exposes the twelve natural-word MPX `32` interfaces alongside
+shared `bnd_branch` and `bndmov_reg` interfaces in both code modes. The RTM
+immediate-abort pair and its public header spelling are also available in
+i386. These operations already had native implementations in the full LLVM
+fork; the missing frontend interfaces now lower directly to those intrinsics.
+Linux i386 uses NeverC's external-backend driver. MPX bank/control validation
+reuses the shared LLVM owner and rejects 16-bit address controls, wrong code
+modes and the long-mode-only stack-address control.
+
+All 196 selected NeverC x86/i386 tests pass with no skips. Native i386 MPX C
+passes 3,216 operand/ABI comparisons and 298 corruption controls, including
+zero, high-bit and all-ones inputs and dynamically realigned frames. Across
+the i386 and x64 compiler profiles, 17,136 comparisons and 2,302 controls pass.
+Independent full-LLVM baselines retain ELF/COFF/Mach-O coverage and exact
+assembly roundtrips. These MPX witnesses intercept the instructions; existing
+processor-model and physical bounds-state limitations remain separate.
+
+The i386 RTM driver passes 81,920 comparisons with independently encoded
+XBEGIN/XABORT pairs under Intel SDE, including exact early-abort statuses.
+Three x64 regression routes bring the total to 327,680 comparisons and 280
+rejected corruptions of status, integer/FP values, memory snapshots and
+canaries. REP state and bounded-system regression witnesses also pass after
+intrinsic-ID synchronization. Strict linked-artifact global-state auditing
+reports no findings or unscannable inputs.
+
+The [i386 MPX/RTM evidence](evidence/x86-i386-mpx-rtm-2026-11-08.json) retains
+the original missing-interface probes, exact compiler/witness revisions,
+tool and result hashes, failed SDE launcher admission and verified archive
+index. The compiler change does not extend the x64 continuation provider's
+guest modes or qualify Windows/Darwin i386 source ABIs, physical MPX/RTM,
+general transactional rollback or the remaining full-machine execution gates.
+LLVM release and production pin updates remain gated on that wider work.

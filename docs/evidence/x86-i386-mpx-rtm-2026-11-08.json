@@ -1,0 +1,1757 @@
+{
+  "schema": 1,
+  "date": "2026-11-08",
+  "scope": "Native i386 C interfaces for twelve MPX word operations, shared BND branch/bank effects and the RTM immediate-abort pair.",
+  "sources": {
+    "compiler": "9f2aed08ceeb21788e6c2fc76714eaa3cf4f11f3",
+    "qualified_witnesses": "73c4991bf6636b9c054cb2f12f2576f9c0f7fd6d",
+    "llvm": "a32cd957841c664570df90bc41902913f1f16226"
+  },
+  "before": {
+    "missing_i386_interfaces": 15,
+    "compiler_source": "a1c792a44f3c00ebee58d0c1d1033fde23674900",
+    "compiler_sha256": "b5cfb5b4557662e9a203069c700a1b46e9d54e4aa47462695ed5cdd374d345f4",
+    "receipt_sha256": "2a0cc38f4bfdcc7e6350b94a3cc7353c1bbb5ae3a30b428c153af8d4e51c6b5b"
+  },
+  "build": {
+    "source_head": "9f2aed08ceeb21788e6c2fc76714eaa3cf4f11f3",
+    "command": [
+      "cmake",
+      "--build",
+      "build-neverc",
+      "--target",
+      "neverc",
+      "neverc-tests",
+      "--parallel",
+      "4"
+    ],
+    "exit_code": 0,
+    "seconds": 1550.9,
+    "log_sha256": "4a01082808cbadee76f228c0dc2c793f41c349c40e27fb57df7b0e7ff967b965",
+    "outputs": {
+      "neverc": "49b8f48b37426d46a78f1e5af440223ba9979ce0cdefddc57eeab50672af80ae",
+      "neverc-tests": "f2a15501c4e49f7ddf1c0b38432be771c9e91317888829908943f8c9fe5f9a78"
+    }
+  },
+  "frontend_checks": {
+    "source_head": "73c4991bf6636b9c054cb2f12f2576f9c0f7fd6d",
+    "source_status": "",
+    "compiler_sha256": "49b8f48b37426d46a78f1e5af440223ba9979ce0cdefddc57eeab50672af80ae",
+    "test_binary_sha256": "f2a15501c4e49f7ddf1c0b38432be771c9e91317888829908943f8c9fe5f9a78",
+    "tests": 196,
+    "failed": 0,
+    "skipped": 0,
+    "skipped_names": [],
+    "exit_code": 0,
+    "log_sha256": "1c795bda286e4af81b8f3083d8ad35b557ed2cf4d0d107a9b003d2ec5bd7f955"
+  },
+  "mpx_encoding_and_abi": [
+    {
+      "profile": "llvm-mpx32-plain",
+      "mode": 32,
+      "dynamic_frame": false,
+      "stack_memory": false,
+      "comparisons": 4824,
+      "negative_controls": 408,
+      "mpx_semantics_executed": false,
+      "objects": [
+        {
+          "triple": "i386-unknown-linux-gnu",
+          "optimization": "-O0",
+          "encodings": 268,
+          "comparisons": 804,
+          "object_sha256": "0578665b6e9169606ab8ffdf173d8a5a7881b2eaffa87e76cc65205c132a9e8d",
+          "object_route": "llvm"
+        },
+        {
+          "triple": "i386-unknown-linux-gnu",
+          "optimization": "-O2",
+          "encodings": 268,
+          "comparisons": 804,
+          "object_sha256": "43937e163e3d6d195104f4d977519af56f9ce470aa07b2ef235bf5e673b4ce24",
+          "object_route": "llvm"
+        },
+        {
+          "triple": "i386-pc-windows-msvc",
+          "optimization": "-O0",
+          "encodings": 268,
+          "comparisons": 804,
+          "object_sha256": "22d1410d624bec59659733dcb3e6278f05d074225ffbbdf46f8daf0e817efd90",
+          "object_route": "llvm"
+        },
+        {
+          "triple": "i386-pc-windows-msvc",
+          "optimization": "-O2",
+          "encodings": 268,
+          "comparisons": 804,
+          "object_sha256": "9396a4ba1bcb8e32a767ed43a7fcb15726844927a7ee801683802859278d9c7c",
+          "object_route": "llvm"
+        },
+        {
+          "triple": "i386-apple-darwin",
+          "optimization": "-O0",
+          "encodings": 268,
+          "comparisons": 804,
+          "object_sha256": "dcdb87ccba9063be2a2df409b87020bace3069a90e48ef22f8c6ccd1ecca8eac",
+          "object_route": "llvm"
+        },
+        {
+          "triple": "i386-apple-darwin",
+          "optimization": "-O2",
+          "encodings": 268,
+          "comparisons": 804,
+          "object_sha256": "0a84664381b73401e181c8ed63e378a42ca491ebeec9fb62fc1f279a572521e1",
+          "object_route": "llvm"
+        }
+      ],
+      "tools_sha256": {
+        "NEVERC_ROOT/tests/verify-mpx-encoding.py": "d5f25a1299bd6078858758d9b6075dbe20ee3d26ad82c883d4c25df7aea07af6",
+        "NEVERC_ROOT/tests/verify-mpx-state.py": "30b85c455c4c65370d45f46feadcb81e31e1219c62c96421fb0134db21a88c4f",
+        "LLVM_BUILD/bin/llc": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+        "LLVM_BUILD/bin/llvm-objdump": "0c2bb9d9cc3ab123ff92ae8f79edc6e05b73fb2ea10f96a5cfbae5136564931a",
+        "LLVM_BUILD/bin/llvm-mc": "52a2080052818b01208158b76a02eeaf46866e4976b3dd1663390097feb67de9",
+        "LLVM_BUILD/bin/opt": "6722b904bbba3a270076ad01147f3d1356d0f437d020dd8b803dec6861e092e5"
+      },
+      "receipt_sha256": "a041979d4d3a9d2f21d9161f3e0c7473577f6c6b7277eaae01543b01dd3b50ed",
+      "results_sha256": "11c5337946a1bbae9586a2ecc0f3808e231606cbbf3900355b28fc04d7d2c6e8"
+    },
+    {
+      "profile": "llvm-mpx32-frame",
+      "mode": 32,
+      "dynamic_frame": true,
+      "stack_memory": false,
+      "comparisons": 4824,
+      "negative_controls": 486,
+      "mpx_semantics_executed": false,
+      "objects": [
+        {
+          "triple": "i386-unknown-linux-gnu",
+          "optimization": "-O0",
+          "encodings": 268,
+          "comparisons": 804,
+          "object_sha256": "f142fc1aeaabf5943df646d24bc61be508f7a1c5c163af57059bce2afe7f2a69",
+          "object_route": "llvm"
+        },
+        {
+          "triple": "i386-unknown-linux-gnu",
+          "optimization": "-O2",
+          "encodings": 268,
+          "comparisons": 804,
+          "object_sha256": "15405eb1a8d422e205b0f0051532d575b68397a69b5b7f110fabb97b07254e44",
+          "object_route": "llvm"
+        },
+        {
+          "triple": "i386-pc-windows-msvc",
+          "optimization": "-O0",
+          "encodings": 268,
+          "comparisons": 804,
+          "object_sha256": "11f20206e45483d1a084d7b74e2f3bfc6073ee4af50c7f4250b2b679f1abbd9e",
+          "object_route": "llvm"
+        },
+        {
+          "triple": "i386-pc-windows-msvc",
+          "optimization": "-O2",
+          "encodings": 268,
+          "comparisons": 804,
+          "object_sha256": "49d31a5f47c97875f083895218366b9e69235045f30b5740ed9f4ddf554e2322",
+          "object_route": "llvm"
+        },
+        {
+          "triple": "i386-apple-darwin",
+          "optimization": "-O0",
+          "encodings": 268,
+          "comparisons": 804,
+          "object_sha256": "6c879d807957364175d4d3a282424aca58e44d7ce0106b0beea2c95327e42808",
+          "object_route": "llvm"
+        },
+        {
+          "triple": "i386-apple-darwin",
+          "optimization": "-O2",
+          "encodings": 268,
+          "comparisons": 804,
+          "object_sha256": "02abc2d698535ad6c8e08a4d7dab6180412b59a1ef4ccf8f7ddef5d5ed1403c2",
+          "object_route": "llvm"
+        }
+      ],
+      "tools_sha256": {
+        "NEVERC_ROOT/tests/verify-mpx-encoding.py": "d5f25a1299bd6078858758d9b6075dbe20ee3d26ad82c883d4c25df7aea07af6",
+        "NEVERC_ROOT/tests/verify-mpx-state.py": "30b85c455c4c65370d45f46feadcb81e31e1219c62c96421fb0134db21a88c4f",
+        "LLVM_BUILD/bin/llc": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+        "LLVM_BUILD/bin/llvm-objdump": "0c2bb9d9cc3ab123ff92ae8f79edc6e05b73fb2ea10f96a5cfbae5136564931a",
+        "LLVM_BUILD/bin/llvm-mc": "52a2080052818b01208158b76a02eeaf46866e4976b3dd1663390097feb67de9",
+        "LLVM_BUILD/bin/opt": "6722b904bbba3a270076ad01147f3d1356d0f437d020dd8b803dec6861e092e5"
+      },
+      "receipt_sha256": "23758566ac250a13cd3caa8b0df0506c4642401c97705c3f1675bfd94c6b2351",
+      "results_sha256": "3a37d9ea1150e6f65a232f136949f5361aa5ab180aa0a42ee9e8cada91f93534"
+    },
+    {
+      "profile": "llvm-mpx64-plain",
+      "mode": 64,
+      "dynamic_frame": false,
+      "stack_memory": false,
+      "comparisons": 3120,
+      "negative_controls": 408,
+      "mpx_semantics_executed": false,
+      "objects": [
+        {
+          "triple": "x86_64-unknown-linux-gnu",
+          "optimization": "-O0",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "ec072a8070e3a58306c83128febc99c8cfa093c8f363188764c35af9eebc9b12",
+          "object_route": "llvm"
+        },
+        {
+          "triple": "x86_64-unknown-linux-gnu",
+          "optimization": "-O2",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "5112da291b88f00d6f7c534a4a715d593aee19a17664410abc8fee4c3da36c68",
+          "object_route": "llvm"
+        },
+        {
+          "triple": "x86_64-pc-windows-msvc",
+          "optimization": "-O0",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "d155dddae9118c0f134cebaed669f8036664773fdd6a2130d2edae48fed2e323",
+          "object_route": "llvm"
+        },
+        {
+          "triple": "x86_64-pc-windows-msvc",
+          "optimization": "-O2",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "01208845f25189ae08f03d6fe15c13c452702e5b92b661b0a7a6d645593cc798",
+          "object_route": "llvm"
+        },
+        {
+          "triple": "x86_64-apple-darwin",
+          "optimization": "-O0",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "db200f9a18067eaf1772569128f99ae31ad9ffeb82a74d67dfd00d20f7a493b1",
+          "object_route": "llvm"
+        },
+        {
+          "triple": "x86_64-apple-darwin",
+          "optimization": "-O2",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "f4e053539b6b69d7a3c61e022d5d3c3d29d97716cb17e8a4427497de2c6bdfda",
+          "object_route": "llvm"
+        }
+      ],
+      "tools_sha256": {
+        "NEVERC_ROOT/tests/verify-mpx-encoding.py": "d5f25a1299bd6078858758d9b6075dbe20ee3d26ad82c883d4c25df7aea07af6",
+        "NEVERC_ROOT/tests/verify-mpx-state.py": "30b85c455c4c65370d45f46feadcb81e31e1219c62c96421fb0134db21a88c4f",
+        "LLVM_BUILD/bin/llc": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+        "LLVM_BUILD/bin/llvm-objdump": "0c2bb9d9cc3ab123ff92ae8f79edc6e05b73fb2ea10f96a5cfbae5136564931a",
+        "LLVM_BUILD/bin/llvm-mc": "52a2080052818b01208158b76a02eeaf46866e4976b3dd1663390097feb67de9",
+        "LLVM_BUILD/bin/opt": "6722b904bbba3a270076ad01147f3d1356d0f437d020dd8b803dec6861e092e5"
+      },
+      "receipt_sha256": "0ba39c3a57f8dd1651d47f9356a040e9f7d13e9f4446685d5b180fb1658495a5",
+      "results_sha256": "ad03493ba33b07ebc55b869c4be78f678f1622269986b8674290ed12af1aef92"
+    },
+    {
+      "profile": "llvm-mpx64-frame",
+      "mode": 64,
+      "dynamic_frame": true,
+      "stack_memory": false,
+      "comparisons": 3120,
+      "negative_controls": 486,
+      "mpx_semantics_executed": false,
+      "objects": [
+        {
+          "triple": "x86_64-unknown-linux-gnu",
+          "optimization": "-O0",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "48f15e7f882382d3a1482bae6a44999c3eb0f1f94e9731c6814464b3b3180db9",
+          "object_route": "llvm"
+        },
+        {
+          "triple": "x86_64-unknown-linux-gnu",
+          "optimization": "-O2",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "c187f19e7d7946a87caf597621c38ecabc3c8505b60d49722f8e9d108ed776fa",
+          "object_route": "llvm"
+        },
+        {
+          "triple": "x86_64-pc-windows-msvc",
+          "optimization": "-O0",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "9e2d4e2a2cda834bf56abc3bb5fe808a243ef32f4886525d21269e6eb9907f8e",
+          "object_route": "llvm"
+        },
+        {
+          "triple": "x86_64-pc-windows-msvc",
+          "optimization": "-O2",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "5a083d7319043e6b3e51f1e94a0a825bfce1599ee62141bce8f2c7c3fd091097",
+          "object_route": "llvm"
+        },
+        {
+          "triple": "x86_64-apple-darwin",
+          "optimization": "-O0",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "c7bf2b699f3069633e4e5516e64ec3ffb32a80393c25e524c7ba111114e7b008",
+          "object_route": "llvm"
+        },
+        {
+          "triple": "x86_64-apple-darwin",
+          "optimization": "-O2",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "dac02ebae4cbd407020ec3a5c6b2a3aa8190cae29fdfa55884a3a47f614f5a55",
+          "object_route": "llvm"
+        }
+      ],
+      "tools_sha256": {
+        "NEVERC_ROOT/tests/verify-mpx-encoding.py": "d5f25a1299bd6078858758d9b6075dbe20ee3d26ad82c883d4c25df7aea07af6",
+        "NEVERC_ROOT/tests/verify-mpx-state.py": "30b85c455c4c65370d45f46feadcb81e31e1219c62c96421fb0134db21a88c4f",
+        "LLVM_BUILD/bin/llc": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+        "LLVM_BUILD/bin/llvm-objdump": "0c2bb9d9cc3ab123ff92ae8f79edc6e05b73fb2ea10f96a5cfbae5136564931a",
+        "LLVM_BUILD/bin/llvm-mc": "52a2080052818b01208158b76a02eeaf46866e4976b3dd1663390097feb67de9",
+        "LLVM_BUILD/bin/opt": "6722b904bbba3a270076ad01147f3d1356d0f437d020dd8b803dec6861e092e5"
+      },
+      "receipt_sha256": "9954b9048c8c356d90fd166a0a891dfa0712ae83f2a433afbc7aeaee0269806a",
+      "results_sha256": "812afa22e5183dfbc0ad7aaf8be9d207c0c5e4a1d4813001a8d3c5921a2a8639"
+    },
+    {
+      "profile": "neverc-mpx32-full-plain",
+      "mode": 32,
+      "dynamic_frame": false,
+      "stack_memory": false,
+      "comparisons": 1608,
+      "negative_controls": 136,
+      "mpx_semantics_executed": false,
+      "objects": [
+        {
+          "triple": "i386-unknown-linux-gnu",
+          "optimization": "-O0",
+          "encodings": 268,
+          "comparisons": 804,
+          "object_sha256": "e599d7126250fe24736e01806aac51f2304b7ae1f0001f45d7f858345cf59052",
+          "object_route": "neverc-driver"
+        },
+        {
+          "triple": "i386-unknown-linux-gnu",
+          "optimization": "-O2",
+          "encodings": 268,
+          "comparisons": 804,
+          "object_sha256": "ee87828c16de8ea2d9f66037cf64e8b4a91b6eebeddf2f4f6d48b8de27fae84f",
+          "object_route": "neverc-driver"
+        }
+      ],
+      "tools_sha256": {
+        "NEVERC_ROOT/tests/verify-mpx-encoding.py": "d5f25a1299bd6078858758d9b6075dbe20ee3d26ad82c883d4c25df7aea07af6",
+        "NEVERC_ROOT/tests/verify-mpx-state.py": "30b85c455c4c65370d45f46feadcb81e31e1219c62c96421fb0134db21a88c4f",
+        "LLVM_BUILD/bin/llc": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+        "LLVM_BUILD/bin/llvm-objdump": "0c2bb9d9cc3ab123ff92ae8f79edc6e05b73fb2ea10f96a5cfbae5136564931a",
+        "LLVM_BUILD/bin/llvm-mc": "52a2080052818b01208158b76a02eeaf46866e4976b3dd1663390097feb67de9",
+        "LLVM_BUILD/bin/opt": "6722b904bbba3a270076ad01147f3d1356d0f437d020dd8b803dec6861e092e5",
+        "NEVERC_BUILD/bin/neverc": "49b8f48b37426d46a78f1e5af440223ba9979ce0cdefddc57eeab50672af80ae"
+      },
+      "receipt_sha256": "de406a6fe950afdb9b5baa71b4268bcb36006e801c9da00853bec5cf5273401b",
+      "results_sha256": "6fd2899a8aacc5eaa54d840cccc19cbb43c7d59f4b48acd8167496a15c293efd"
+    },
+    {
+      "profile": "neverc-mpx32-full-frame",
+      "mode": 32,
+      "dynamic_frame": true,
+      "stack_memory": false,
+      "comparisons": 1608,
+      "negative_controls": 162,
+      "mpx_semantics_executed": false,
+      "objects": [
+        {
+          "triple": "i386-unknown-linux-gnu",
+          "optimization": "-O0",
+          "encodings": 268,
+          "comparisons": 804,
+          "object_sha256": "0904a03c72f7cc79f736313bce48bea0a48d6f10af54c66b522c841c9089eb01",
+          "object_route": "neverc-driver"
+        },
+        {
+          "triple": "i386-unknown-linux-gnu",
+          "optimization": "-O2",
+          "encodings": 268,
+          "comparisons": 804,
+          "object_sha256": "1a41fd833d0bb9d7e15a4a901e2ced9be0fa7900ec76f313d8b4c893cfb8487f",
+          "object_route": "neverc-driver"
+        }
+      ],
+      "tools_sha256": {
+        "NEVERC_ROOT/tests/verify-mpx-encoding.py": "d5f25a1299bd6078858758d9b6075dbe20ee3d26ad82c883d4c25df7aea07af6",
+        "NEVERC_ROOT/tests/verify-mpx-state.py": "30b85c455c4c65370d45f46feadcb81e31e1219c62c96421fb0134db21a88c4f",
+        "LLVM_BUILD/bin/llc": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+        "LLVM_BUILD/bin/llvm-objdump": "0c2bb9d9cc3ab123ff92ae8f79edc6e05b73fb2ea10f96a5cfbae5136564931a",
+        "LLVM_BUILD/bin/llvm-mc": "52a2080052818b01208158b76a02eeaf46866e4976b3dd1663390097feb67de9",
+        "LLVM_BUILD/bin/opt": "6722b904bbba3a270076ad01147f3d1356d0f437d020dd8b803dec6861e092e5",
+        "NEVERC_BUILD/bin/neverc": "49b8f48b37426d46a78f1e5af440223ba9979ce0cdefddc57eeab50672af80ae"
+      },
+      "receipt_sha256": "6f4db21d3d0a8d0e04d1e8c1074db63dcee8e73c1add89bb0885373a24e0d46b",
+      "results_sha256": "e53107e5cbc6f0258b98b887bd03a4a287d6d8d28eb3be70af5beb61bee70be3"
+    },
+    {
+      "profile": "neverc-mpx64-embedded-plain",
+      "mode": 64,
+      "dynamic_frame": false,
+      "stack_memory": false,
+      "comparisons": 3120,
+      "negative_controls": 408,
+      "mpx_semantics_executed": false,
+      "objects": [
+        {
+          "triple": "x86_64-unknown-linux-gnu",
+          "optimization": "-O0",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "9bea11746294d3b22450a9b98aa44620f484fc9333efb1edd3fe5720f74cfaf6",
+          "object_route": "neverc-driver"
+        },
+        {
+          "triple": "x86_64-unknown-linux-gnu",
+          "optimization": "-O2",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "14a9534f174b7e48b59560ee8041bb73b4c39d797b77d7b688b35803e03f9ae6",
+          "object_route": "neverc-driver"
+        },
+        {
+          "triple": "x86_64-pc-windows-msvc",
+          "optimization": "-O0",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "f1a9da4a478172ad5bd88725268997253a593d5b43dcab8d9d78982177c00e53",
+          "object_route": "neverc-driver"
+        },
+        {
+          "triple": "x86_64-pc-windows-msvc",
+          "optimization": "-O2",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "e3d4ac5ef0f0f62e4f07d7c86da253367c4dcd4cf72d09d6ae81b90e7ec47873",
+          "object_route": "neverc-driver"
+        },
+        {
+          "triple": "x86_64-apple-darwin",
+          "optimization": "-O0",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "47f38910694d30aeaaa5a728f5bb6d697edc8175ac679344437ee0c73d45c0ff",
+          "object_route": "neverc-driver"
+        },
+        {
+          "triple": "x86_64-apple-darwin",
+          "optimization": "-O2",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "96b8c20d06015be0a7b6052c170694829e40fc2dd4ecd6b14ecedbb3ed00bca6",
+          "object_route": "neverc-driver"
+        }
+      ],
+      "tools_sha256": {
+        "NEVERC_ROOT/tests/verify-mpx-encoding.py": "d5f25a1299bd6078858758d9b6075dbe20ee3d26ad82c883d4c25df7aea07af6",
+        "NEVERC_ROOT/tests/verify-mpx-state.py": "30b85c455c4c65370d45f46feadcb81e31e1219c62c96421fb0134db21a88c4f",
+        "LLVM_BUILD/bin/llc": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+        "LLVM_BUILD/bin/llvm-objdump": "0c2bb9d9cc3ab123ff92ae8f79edc6e05b73fb2ea10f96a5cfbae5136564931a",
+        "LLVM_BUILD/bin/llvm-mc": "52a2080052818b01208158b76a02eeaf46866e4976b3dd1663390097feb67de9",
+        "LLVM_BUILD/bin/opt": "6722b904bbba3a270076ad01147f3d1356d0f437d020dd8b803dec6861e092e5",
+        "NEVERC_BUILD/bin/neverc": "49b8f48b37426d46a78f1e5af440223ba9979ce0cdefddc57eeab50672af80ae"
+      },
+      "receipt_sha256": "6d2b5cdc4053b32f2453a4f68a64690135a39f647727adfac00219ee65ec226e",
+      "results_sha256": "17d68b8e07fbd232cb6e106eaec4fb7268b874f25f37539e330faca60099024a"
+    },
+    {
+      "profile": "neverc-mpx64-embedded-frame",
+      "mode": 64,
+      "dynamic_frame": true,
+      "stack_memory": false,
+      "comparisons": 3120,
+      "negative_controls": 486,
+      "mpx_semantics_executed": false,
+      "objects": [
+        {
+          "triple": "x86_64-unknown-linux-gnu",
+          "optimization": "-O0",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "b1accf46689b605e6f87a0563ae3bb827fdda2ace6aa68ef7044191c51fc6c76",
+          "object_route": "neverc-driver"
+        },
+        {
+          "triple": "x86_64-unknown-linux-gnu",
+          "optimization": "-O2",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "9d6f024c9cb67a0ad500e355b9a0b2f5a3657ba5b8ba5018105cfe63db5a7268",
+          "object_route": "neverc-driver"
+        },
+        {
+          "triple": "x86_64-pc-windows-msvc",
+          "optimization": "-O0",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "0177e257e282906bc05c1d1758ae84c754a5e9585158c27191fe04236e3d583f",
+          "object_route": "neverc-driver"
+        },
+        {
+          "triple": "x86_64-pc-windows-msvc",
+          "optimization": "-O2",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "7e640423ad28b6a485d55d95c263c61d9ad9baacef0a581ead653621ff560de2",
+          "object_route": "neverc-driver"
+        },
+        {
+          "triple": "x86_64-apple-darwin",
+          "optimization": "-O0",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "343f255f16f7c2ff75c75b46500dc51fe35f9ee23402f25ac837264e69e5b069",
+          "object_route": "neverc-driver"
+        },
+        {
+          "triple": "x86_64-apple-darwin",
+          "optimization": "-O2",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "358d2e2d8ebbf3e1a0ca8977de6c6c938c35af0cfdd95227a55bccfc3bbe07ba",
+          "object_route": "neverc-driver"
+        }
+      ],
+      "tools_sha256": {
+        "NEVERC_ROOT/tests/verify-mpx-encoding.py": "d5f25a1299bd6078858758d9b6075dbe20ee3d26ad82c883d4c25df7aea07af6",
+        "NEVERC_ROOT/tests/verify-mpx-state.py": "30b85c455c4c65370d45f46feadcb81e31e1219c62c96421fb0134db21a88c4f",
+        "LLVM_BUILD/bin/llc": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+        "LLVM_BUILD/bin/llvm-objdump": "0c2bb9d9cc3ab123ff92ae8f79edc6e05b73fb2ea10f96a5cfbae5136564931a",
+        "LLVM_BUILD/bin/llvm-mc": "52a2080052818b01208158b76a02eeaf46866e4976b3dd1663390097feb67de9",
+        "LLVM_BUILD/bin/opt": "6722b904bbba3a270076ad01147f3d1356d0f437d020dd8b803dec6861e092e5",
+        "NEVERC_BUILD/bin/neverc": "49b8f48b37426d46a78f1e5af440223ba9979ce0cdefddc57eeab50672af80ae"
+      },
+      "receipt_sha256": "112a30c84dd1268e9169ad57e866e6e82c8cd3e6d4842a5965e6a0943a302db3",
+      "results_sha256": "78eb34ba52a770257a35df7da6006dda1ccea9326da1521f5edd3b8c35491cad"
+    },
+    {
+      "profile": "neverc-mpx64-full-plain",
+      "mode": 64,
+      "dynamic_frame": false,
+      "stack_memory": false,
+      "comparisons": 3120,
+      "negative_controls": 408,
+      "mpx_semantics_executed": false,
+      "objects": [
+        {
+          "triple": "x86_64-unknown-linux-gnu",
+          "optimization": "-O0",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "1f79b087502419faa8dedc9494bc61b2672c9e4a5a0ad27b610947f2e600a341",
+          "object_route": "neverc-ir-to-llvm"
+        },
+        {
+          "triple": "x86_64-unknown-linux-gnu",
+          "optimization": "-O2",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "b8b1b8796bb8193bfd9f0a42951884fae5524dd3534917dee573da05df837217",
+          "object_route": "neverc-ir-to-llvm"
+        },
+        {
+          "triple": "x86_64-pc-windows-msvc",
+          "optimization": "-O0",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "3f0057c3d551067ab9df038c0e66dc2b897cd15ed8409a06bd62c120ca732058",
+          "object_route": "neverc-ir-to-llvm"
+        },
+        {
+          "triple": "x86_64-pc-windows-msvc",
+          "optimization": "-O2",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "6dc8f46abcfccbbb64724e0ff060c4d5438b0cfdd8496992fb9a4597075a3d2c",
+          "object_route": "neverc-ir-to-llvm"
+        },
+        {
+          "triple": "x86_64-apple-darwin",
+          "optimization": "-O0",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "2cda9f575affef8733af62297b181014fc2b8df4fd6e6bbf3fe61e3a99337071",
+          "object_route": "neverc-ir-to-llvm"
+        },
+        {
+          "triple": "x86_64-apple-darwin",
+          "optimization": "-O2",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "b2e93a5f1fc5bcdc7f3d98902700a66f37e901c17ca9a3cc36a39aa29c6c3be5",
+          "object_route": "neverc-ir-to-llvm"
+        }
+      ],
+      "tools_sha256": {
+        "NEVERC_ROOT/tests/verify-mpx-encoding.py": "d5f25a1299bd6078858758d9b6075dbe20ee3d26ad82c883d4c25df7aea07af6",
+        "NEVERC_ROOT/tests/verify-mpx-state.py": "30b85c455c4c65370d45f46feadcb81e31e1219c62c96421fb0134db21a88c4f",
+        "LLVM_BUILD/bin/llc": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+        "LLVM_BUILD/bin/llvm-objdump": "0c2bb9d9cc3ab123ff92ae8f79edc6e05b73fb2ea10f96a5cfbae5136564931a",
+        "LLVM_BUILD/bin/llvm-mc": "52a2080052818b01208158b76a02eeaf46866e4976b3dd1663390097feb67de9",
+        "LLVM_BUILD/bin/opt": "6722b904bbba3a270076ad01147f3d1356d0f437d020dd8b803dec6861e092e5",
+        "NEVERC_BUILD/bin/neverc": "49b8f48b37426d46a78f1e5af440223ba9979ce0cdefddc57eeab50672af80ae"
+      },
+      "receipt_sha256": "c7d577afe79c0f5f9fc517de0bdeaa176b5a3b8982b920bc15e6d451c0b1f0b8",
+      "results_sha256": "ed30b5682a07d8799fff6b6437cf6f4db1857f0dbce6aacd65e51e1d3e58479a"
+    },
+    {
+      "profile": "neverc-mpx64-full-frame",
+      "mode": 64,
+      "dynamic_frame": true,
+      "stack_memory": false,
+      "comparisons": 3120,
+      "negative_controls": 486,
+      "mpx_semantics_executed": false,
+      "objects": [
+        {
+          "triple": "x86_64-unknown-linux-gnu",
+          "optimization": "-O0",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "892885618babe4d4d7b14cf5c4d7c4a101ad19dc499cd591d91fe78e30c52d74",
+          "object_route": "neverc-ir-to-llvm"
+        },
+        {
+          "triple": "x86_64-unknown-linux-gnu",
+          "optimization": "-O2",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "da2928310a6e78ee0607caaa103349549494b6a7f6551c1cade8b0e56a888817",
+          "object_route": "neverc-ir-to-llvm"
+        },
+        {
+          "triple": "x86_64-pc-windows-msvc",
+          "optimization": "-O0",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "3a5ec52bf8f951be382778117f9ca27dd71dde6dce7fe62d4395bacfd6e90dbf",
+          "object_route": "neverc-ir-to-llvm"
+        },
+        {
+          "triple": "x86_64-pc-windows-msvc",
+          "optimization": "-O2",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "72f896aa59fe997be88e955c921f90e78fbed8712dc917dfa8519b720edd3e1c",
+          "object_route": "neverc-ir-to-llvm"
+        },
+        {
+          "triple": "x86_64-apple-darwin",
+          "optimization": "-O0",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "7baf6d0720f72410e3cc7341f7e60b9287a7a6e1a054c78ebb5d1c9311dc671a",
+          "object_route": "neverc-ir-to-llvm"
+        },
+        {
+          "triple": "x86_64-apple-darwin",
+          "optimization": "-O2",
+          "encodings": 520,
+          "comparisons": 520,
+          "object_sha256": "e790e397f77cdcc29c25cae1bedf72523f727d63383681c3e1f55f8454a550c4",
+          "object_route": "neverc-ir-to-llvm"
+        }
+      ],
+      "tools_sha256": {
+        "NEVERC_ROOT/tests/verify-mpx-encoding.py": "d5f25a1299bd6078858758d9b6075dbe20ee3d26ad82c883d4c25df7aea07af6",
+        "NEVERC_ROOT/tests/verify-mpx-state.py": "30b85c455c4c65370d45f46feadcb81e31e1219c62c96421fb0134db21a88c4f",
+        "LLVM_BUILD/bin/llc": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+        "LLVM_BUILD/bin/llvm-objdump": "0c2bb9d9cc3ab123ff92ae8f79edc6e05b73fb2ea10f96a5cfbae5136564931a",
+        "LLVM_BUILD/bin/llvm-mc": "52a2080052818b01208158b76a02eeaf46866e4976b3dd1663390097feb67de9",
+        "LLVM_BUILD/bin/opt": "6722b904bbba3a270076ad01147f3d1356d0f437d020dd8b803dec6861e092e5",
+        "NEVERC_BUILD/bin/neverc": "49b8f48b37426d46a78f1e5af440223ba9979ce0cdefddc57eeab50672af80ae"
+      },
+      "receipt_sha256": "913b835577c70b3083601ed405dc8eaead5639985da26029d4552ea8b9b78102",
+      "results_sha256": "82a6f7296f8d8e2c0c921dc1054a3eb4c27afa5bc32307ca8c8a6d365d977e3c"
+    },
+    {
+      "profile": "neverc-mpx64-embedded-stack-frame",
+      "mode": 64,
+      "dynamic_frame": true,
+      "stack_memory": true,
+      "comparisons": 720,
+      "negative_controls": 108,
+      "mpx_semantics_executed": false,
+      "objects": [
+        {
+          "triple": "x86_64-unknown-linux-gnu",
+          "optimization": "-O0",
+          "encodings": 120,
+          "comparisons": 120,
+          "object_sha256": "ea866c67cdb59dc47a10ca501f46772ae9e471912759765ac3d19a894f5d3f21",
+          "object_route": "neverc-driver"
+        },
+        {
+          "triple": "x86_64-unknown-linux-gnu",
+          "optimization": "-O2",
+          "encodings": 120,
+          "comparisons": 120,
+          "object_sha256": "c7269b9bb1f7bcf7471e9caf7d714de768c36c7f19cbcf5299d9e7be851c2817",
+          "object_route": "neverc-driver"
+        },
+        {
+          "triple": "x86_64-pc-windows-msvc",
+          "optimization": "-O0",
+          "encodings": 120,
+          "comparisons": 120,
+          "object_sha256": "f72e50f5fc72f764439ad28ecf8402e3b32f99f645fccc73548eef186c9ced1e",
+          "object_route": "neverc-driver"
+        },
+        {
+          "triple": "x86_64-pc-windows-msvc",
+          "optimization": "-O2",
+          "encodings": 120,
+          "comparisons": 120,
+          "object_sha256": "be84d3708e8f1b8d8e9fbd0a7de5b3a8874c3cee20dd68888cdc82770989fd01",
+          "object_route": "neverc-driver"
+        },
+        {
+          "triple": "x86_64-apple-darwin",
+          "optimization": "-O0",
+          "encodings": 120,
+          "comparisons": 120,
+          "object_sha256": "16fddb36dacec919980f76571c836b4d5fbc6ed8f7fe0eb7b39996aee77c5afe",
+          "object_route": "neverc-driver"
+        },
+        {
+          "triple": "x86_64-apple-darwin",
+          "optimization": "-O2",
+          "encodings": 120,
+          "comparisons": 120,
+          "object_sha256": "e2501d27f9f0e1710bcd6b0eaf762fa8529635561d3873b315c49f7b6d6617f4",
+          "object_route": "neverc-driver"
+        }
+      ],
+      "tools_sha256": {
+        "NEVERC_ROOT/tests/verify-mpx-encoding.py": "d5f25a1299bd6078858758d9b6075dbe20ee3d26ad82c883d4c25df7aea07af6",
+        "NEVERC_ROOT/tests/verify-mpx-state.py": "30b85c455c4c65370d45f46feadcb81e31e1219c62c96421fb0134db21a88c4f",
+        "LLVM_BUILD/bin/llc": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+        "LLVM_BUILD/bin/llvm-objdump": "0c2bb9d9cc3ab123ff92ae8f79edc6e05b73fb2ea10f96a5cfbae5136564931a",
+        "LLVM_BUILD/bin/llvm-mc": "52a2080052818b01208158b76a02eeaf46866e4976b3dd1663390097feb67de9",
+        "LLVM_BUILD/bin/opt": "6722b904bbba3a270076ad01147f3d1356d0f437d020dd8b803dec6861e092e5",
+        "NEVERC_BUILD/bin/neverc": "49b8f48b37426d46a78f1e5af440223ba9979ce0cdefddc57eeab50672af80ae"
+      },
+      "receipt_sha256": "7eb1ea3e4d2001d6553d7ff734cba9ebdf86926cc56668db9c5b153e79c02e57",
+      "results_sha256": "145775cf357019c7c64ead622e6e04365373d580fa496f578d8081add704e612"
+    },
+    {
+      "profile": "neverc-mpx64-full-stack-frame",
+      "mode": 64,
+      "dynamic_frame": true,
+      "stack_memory": true,
+      "comparisons": 720,
+      "negative_controls": 108,
+      "mpx_semantics_executed": false,
+      "objects": [
+        {
+          "triple": "x86_64-unknown-linux-gnu",
+          "optimization": "-O0",
+          "encodings": 120,
+          "comparisons": 120,
+          "object_sha256": "205deabd56c4dcd0e7cdb06b257a591da9a47ee9940a6171f7261ae699eead4a",
+          "object_route": "neverc-ir-to-llvm"
+        },
+        {
+          "triple": "x86_64-unknown-linux-gnu",
+          "optimization": "-O2",
+          "encodings": 120,
+          "comparisons": 120,
+          "object_sha256": "b91d92b2a05b90591d2dff93d26732931fb07246db3ceccad33c760dcb2a34b4",
+          "object_route": "neverc-ir-to-llvm"
+        },
+        {
+          "triple": "x86_64-pc-windows-msvc",
+          "optimization": "-O0",
+          "encodings": 120,
+          "comparisons": 120,
+          "object_sha256": "f24af69fd9b0996077edde2b9d29f56c96c047460e5d93c9f4d4287a1cb2a5b4",
+          "object_route": "neverc-ir-to-llvm"
+        },
+        {
+          "triple": "x86_64-pc-windows-msvc",
+          "optimization": "-O2",
+          "encodings": 120,
+          "comparisons": 120,
+          "object_sha256": "b6ca120a564cc30bc6387621be63a2df0c399a0b56a76ab609172e447538ab02",
+          "object_route": "neverc-ir-to-llvm"
+        },
+        {
+          "triple": "x86_64-apple-darwin",
+          "optimization": "-O0",
+          "encodings": 120,
+          "comparisons": 120,
+          "object_sha256": "b51a1b2d27aa2d96014a98e1411c1b669202d3f3bc390cfddd73dd6953b0e78a",
+          "object_route": "neverc-ir-to-llvm"
+        },
+        {
+          "triple": "x86_64-apple-darwin",
+          "optimization": "-O2",
+          "encodings": 120,
+          "comparisons": 120,
+          "object_sha256": "2036a4fec07bdcfa81fad946172c6e4a6a459a8aa6e80eb5f9b05b30f578eecf",
+          "object_route": "neverc-ir-to-llvm"
+        }
+      ],
+      "tools_sha256": {
+        "NEVERC_ROOT/tests/verify-mpx-encoding.py": "d5f25a1299bd6078858758d9b6075dbe20ee3d26ad82c883d4c25df7aea07af6",
+        "NEVERC_ROOT/tests/verify-mpx-state.py": "30b85c455c4c65370d45f46feadcb81e31e1219c62c96421fb0134db21a88c4f",
+        "LLVM_BUILD/bin/llc": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+        "LLVM_BUILD/bin/llvm-objdump": "0c2bb9d9cc3ab123ff92ae8f79edc6e05b73fb2ea10f96a5cfbae5136564931a",
+        "LLVM_BUILD/bin/llvm-mc": "52a2080052818b01208158b76a02eeaf46866e4976b3dd1663390097feb67de9",
+        "LLVM_BUILD/bin/opt": "6722b904bbba3a270076ad01147f3d1356d0f437d020dd8b803dec6861e092e5",
+        "NEVERC_BUILD/bin/neverc": "49b8f48b37426d46a78f1e5af440223ba9979ce0cdefddc57eeab50672af80ae"
+      },
+      "receipt_sha256": "2a4cb3c1cadf5e58a8f42e96e02ccdd86865d4e11da859aa97482261fd996756",
+      "results_sha256": "f764fbf6ce26f4006e75eef5a04ad5ed123267c985daac7c58dedded5c539510"
+    }
+  ],
+  "rtm_sde": [
+    {
+      "profile": "neverc-rtm32-full",
+      "mode": 32,
+      "object_route": "neverc-driver",
+      "new_pass_manager": false,
+      "pairs": 81920,
+      "negative_controls": 70,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "engine": "Intel SDE",
+          "mode": "full",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": true,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O0",
+          "engine": "Intel SDE",
+          "mode": "0",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O0",
+          "engine": "Intel SDE",
+          "mode": "2",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O0",
+          "engine": "Intel SDE",
+          "mode": "6",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O0",
+          "engine": "Intel SDE",
+          "mode": "8",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O2",
+          "engine": "Intel SDE",
+          "mode": "full",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": true,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O2",
+          "engine": "Intel SDE",
+          "mode": "0",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O2",
+          "engine": "Intel SDE",
+          "mode": "2",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O2",
+          "engine": "Intel SDE",
+          "mode": "6",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O2",
+          "engine": "Intel SDE",
+          "mode": "8",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        }
+      ],
+      "physical_rtm_qualified": false,
+      "tools": {
+        "compiler": {
+          "path": "NEVERC_BUILD/bin/neverc",
+          "sha256": "49b8f48b37426d46a78f1e5af440223ba9979ce0cdefddc57eeab50672af80ae"
+        },
+        "sde": {
+          "path": "SDE_ROOT/sde",
+          "sha256": "ba2292c89b40205278ba7bc97eb35357072e745575a239754ecced77cd36ba38"
+        },
+        "host": {
+          "path": "HOST_TOOLS/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "llc": {
+          "path": "LLVM_BUILD/bin/llc",
+          "sha256": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41"
+        }
+      },
+      "fixture_sha256": {
+        "generate.py": "c39922bf9d79223ab8d9130b9858e0d84d928f2093e2a97233a7d4da97d2f49c",
+        "runner.c": "727ea899a4cc08c8ec4669f74416ec6c553185ae4db7691aff13d8bf6f37f7aa"
+      },
+      "receipt_sha256": "ea5f4238755c9454468b35a5fd87f578c6ee2fdfb7d37e1177a20060d150a126",
+      "results_sha256": "49e57b14f7ec8046fd136a067c764bf7d8227708eb649cb33cc324eb720489d3"
+    },
+    {
+      "profile": "neverc-rtm64-embedded",
+      "mode": 64,
+      "object_route": "neverc-driver",
+      "new_pass_manager": false,
+      "pairs": 81920,
+      "negative_controls": 70,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "engine": "Intel SDE",
+          "mode": "full",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": true,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O0",
+          "engine": "Intel SDE",
+          "mode": "0",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O0",
+          "engine": "Intel SDE",
+          "mode": "2",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O0",
+          "engine": "Intel SDE",
+          "mode": "6",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O0",
+          "engine": "Intel SDE",
+          "mode": "8",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O2",
+          "engine": "Intel SDE",
+          "mode": "full",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": true,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O2",
+          "engine": "Intel SDE",
+          "mode": "0",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O2",
+          "engine": "Intel SDE",
+          "mode": "2",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O2",
+          "engine": "Intel SDE",
+          "mode": "6",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O2",
+          "engine": "Intel SDE",
+          "mode": "8",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        }
+      ],
+      "physical_rtm_qualified": false,
+      "tools": {
+        "compiler": {
+          "path": "NEVERC_BUILD/bin/neverc",
+          "sha256": "49b8f48b37426d46a78f1e5af440223ba9979ce0cdefddc57eeab50672af80ae"
+        },
+        "sde": {
+          "path": "SDE_ROOT/sde64",
+          "sha256": "257872adf7e5cb0855c6774539590587238302bdcd90ddfccca074e9c4c4a3f5"
+        },
+        "host": {
+          "path": "HOST_TOOLS/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        }
+      },
+      "fixture_sha256": {
+        "generate.py": "c39922bf9d79223ab8d9130b9858e0d84d928f2093e2a97233a7d4da97d2f49c",
+        "runner.c": "727ea899a4cc08c8ec4669f74416ec6c553185ae4db7691aff13d8bf6f37f7aa"
+      },
+      "receipt_sha256": "9a73eeacc6568673448986da289d89bcd82a19f813d7cf7c0378089d7ab8a830",
+      "results_sha256": "ed185390a2c471fa63d305e7d7595b0c41911614def067c27b32ebf641ebca37"
+    },
+    {
+      "profile": "neverc-rtm64-full",
+      "mode": 64,
+      "object_route": "neverc-ir-to-llvm",
+      "new_pass_manager": false,
+      "pairs": 81920,
+      "negative_controls": 70,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "engine": "Intel SDE",
+          "mode": "full",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": true,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O0",
+          "engine": "Intel SDE",
+          "mode": "0",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O0",
+          "engine": "Intel SDE",
+          "mode": "2",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O0",
+          "engine": "Intel SDE",
+          "mode": "6",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O0",
+          "engine": "Intel SDE",
+          "mode": "8",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O2",
+          "engine": "Intel SDE",
+          "mode": "full",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": true,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O2",
+          "engine": "Intel SDE",
+          "mode": "0",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O2",
+          "engine": "Intel SDE",
+          "mode": "2",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O2",
+          "engine": "Intel SDE",
+          "mode": "6",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O2",
+          "engine": "Intel SDE",
+          "mode": "8",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        }
+      ],
+      "physical_rtm_qualified": false,
+      "tools": {
+        "compiler": {
+          "path": "NEVERC_BUILD/bin/neverc",
+          "sha256": "49b8f48b37426d46a78f1e5af440223ba9979ce0cdefddc57eeab50672af80ae"
+        },
+        "sde": {
+          "path": "SDE_ROOT/sde64",
+          "sha256": "257872adf7e5cb0855c6774539590587238302bdcd90ddfccca074e9c4c4a3f5"
+        },
+        "host": {
+          "path": "HOST_TOOLS/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "llc": {
+          "path": "LLVM_BUILD/bin/llc",
+          "sha256": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41"
+        }
+      },
+      "fixture_sha256": {
+        "generate.py": "c39922bf9d79223ab8d9130b9858e0d84d928f2093e2a97233a7d4da97d2f49c",
+        "runner.c": "727ea899a4cc08c8ec4669f74416ec6c553185ae4db7691aff13d8bf6f37f7aa"
+      },
+      "receipt_sha256": "8447dff608713b4e443da360c5f74c144cefc1b164ee26f2b7d73964857880e7",
+      "results_sha256": "179796ed93face03dc0f17b160ed026e4da5fafc9a7a13ba35deb593e99ed858"
+    },
+    {
+      "profile": "neverc-rtm64-new",
+      "mode": 64,
+      "object_route": "neverc-ir-to-llvm",
+      "new_pass_manager": true,
+      "pairs": 81920,
+      "negative_controls": 70,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "engine": "Intel SDE",
+          "mode": "full",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": true,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O0",
+          "engine": "Intel SDE",
+          "mode": "0",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O0",
+          "engine": "Intel SDE",
+          "mode": "2",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O0",
+          "engine": "Intel SDE",
+          "mode": "6",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O0",
+          "engine": "Intel SDE",
+          "mode": "8",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O2",
+          "engine": "Intel SDE",
+          "mode": "full",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": true,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O2",
+          "engine": "Intel SDE",
+          "mode": "0",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O2",
+          "engine": "Intel SDE",
+          "mode": "2",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O2",
+          "engine": "Intel SDE",
+          "mode": "6",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        },
+        {
+          "optimization": "O2",
+          "engine": "Intel SDE",
+          "mode": "8",
+          "negative_controls": [
+            "status",
+            "status-high",
+            "integer",
+            "previous-memory",
+            "completed-memory",
+            "floating",
+            "canary"
+          ],
+          "rtm_advertised": false,
+          "pairs": 8192
+        }
+      ],
+      "physical_rtm_qualified": false,
+      "tools": {
+        "compiler": {
+          "path": "NEVERC_BUILD/bin/neverc",
+          "sha256": "49b8f48b37426d46a78f1e5af440223ba9979ce0cdefddc57eeab50672af80ae"
+        },
+        "sde": {
+          "path": "SDE_ROOT/sde64",
+          "sha256": "257872adf7e5cb0855c6774539590587238302bdcd90ddfccca074e9c4c4a3f5"
+        },
+        "host": {
+          "path": "HOST_TOOLS/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "llc": {
+          "path": "LLVM_BUILD/bin/llc",
+          "sha256": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41"
+        }
+      },
+      "fixture_sha256": {
+        "generate.py": "c39922bf9d79223ab8d9130b9858e0d84d928f2093e2a97233a7d4da97d2f49c",
+        "runner.c": "727ea899a4cc08c8ec4669f74416ec6c553185ae4db7691aff13d8bf6f37f7aa"
+      },
+      "receipt_sha256": "755a02dc8ea0ff9025d8d92fbcaa1143125e46bbeda01b8f9ce788cdad16ad03",
+      "results_sha256": "f328fd20a3b572665c50ee284dd3cc349fd0d31c69bf6aad7aa829866667cf90"
+    }
+  ],
+  "regressions": {
+    "neverc-state32": {
+      "receipt_sha256": "0004f9c2d6a9bcb817b6fb9cce95861b71091bdf15de948d67f94b93fc0bce8c",
+      "results_sha256": "2fc13c69c689a0abe1aad3ac785b78afcdf744c274c3ee0bf29cc19166cac94b",
+      "profiles": [
+        {
+          "optimization": "O0",
+          "bits": 32,
+          "forms": 234,
+          "counts": [
+            4464,
+            1152
+          ],
+          "negative_controls": 130,
+          "object_route": "neverc-driver"
+        },
+        {
+          "optimization": "O2",
+          "bits": 32,
+          "forms": 234,
+          "counts": [
+            4464,
+            1152
+          ],
+          "negative_controls": 130,
+          "object_route": "neverc-driver"
+        }
+      ]
+    },
+    "neverc-state64": {
+      "receipt_sha256": "b329f3f880f55336d09c5a78afe0f150bb6f3ee490d1adea7e5701216d37c3f9",
+      "results_sha256": "ec6b8cbba4270738dae1ee850496208fb212442fcf01709337d92cee794045f4",
+      "profiles": [
+        {
+          "optimization": "O0",
+          "bits": 64,
+          "forms": 296,
+          "counts": [
+            22576,
+            56,
+            96
+          ],
+          "object_route": "neverc-driver"
+        },
+        {
+          "optimization": "O2",
+          "bits": 64,
+          "forms": 296,
+          "counts": [
+            22576,
+            56,
+            96
+          ],
+          "object_route": "neverc-driver"
+        }
+      ]
+    },
+    "neverc-state64-full": {
+      "receipt_sha256": "3c681323259f5f02b45db8b91ada25cb4d6775db3ddaf55664eaeef5a8ec2be9",
+      "results_sha256": "95abbd3e0d6055f6a4ed15d29cb72ad050326d9ec4af40c9164039e4ef750a4f",
+      "profiles": [
+        {
+          "optimization": "O0",
+          "bits": 64,
+          "forms": 296,
+          "counts": [
+            22576,
+            56,
+            96
+          ],
+          "object_route": "neverc-ir-to-llvm"
+        },
+        {
+          "optimization": "O2",
+          "bits": 64,
+          "forms": 296,
+          "counts": [
+            22576,
+            56,
+            96
+          ],
+          "object_route": "neverc-ir-to-llvm"
+        }
+      ]
+    },
+    "neverc-bounded": {
+      "receipt_sha256": "544d685399f025841cf0ba9dd80b26a331c7eb9310af250e1ea188e6c5ab0cd1",
+      "results_sha256": "d071886fa8dfdfb663af26758a092d6051c09bb09efc8ecdd9def24327d7a313",
+      "checks": 552,
+      "negative_controls": 20
+    }
+  },
+  "global_state": {
+    "artifact_report": {
+      "forbidden": [],
+      "heuristic": [],
+      "headers": [],
+      "source_globals": [],
+      "binary": [],
+      "unscannable": [],
+      "failed": false
+    },
+    "receipt_sha256": "1f95894598c6f1f7a6d3a7510368a52490c080e08540e82615f7a2b1978b5588",
+    "immutable_metadata_review": {
+      "old_definition": "static constexpr IntrinsicTargetInfo TargetInfos[] = { {llvm::StringLiteral(\"\"), 0, 370}, {llvm::StringLiteral(\"aarch64\"), 370, 1432}, {llvm::StringLiteral(\"x86\"), 1802, 1830}, }",
+      "new_definition": "static constexpr IntrinsicTargetInfo TargetInfos[] = { {llvm::StringLiteral(\"\"), 0, 370}, {llvm::StringLiteral(\"aarch64\"), 370, 1432}, {llvm::StringLiteral(\"x86\"), 1802, 1842}, }",
+      "old_definition_sha256": "b8e61bfc3bdef035e87755e1a990d39025519d0a8216f7f18407a7ac80f567a6",
+      "new_definition_sha256": "4e38a75657b6bc949402f4ef0ee7f797e23791ce9917c526293c09e39b5e2629",
+      "review": "Only x86 count 1830 to 1842 for twelve fixed MPX32 signatures; declaration/type/base IDs/immutable strings/exact matching rules unchanged."
+    }
+  },
+  "generator_tests": {
+    "native_intrinsics": 12,
+    "sorter": 7,
+    "native_log_sha256": "c835409abf0866b25420fd6c7eda704438e46ff78d2e4e1283cb017629492bf5",
+    "sorter_log_sha256": "2b8a5c7e7bfdde85bf100dde94d4f0d07df6f886aca0c69849d08d8bb7a0973a"
+  },
+  "host_i386_admission": {
+    "description": "Five SDE modes tested with two wrappers around the same independent raw-reference assembly; excluded from NeverC qualification totals.",
+    "receipt_sha256": "d5b987ec258576f57384bf80e991f169d6e55814a844a05dd6659828071d629d",
+    "retained_failed_launcher_receipt_sha256": "cc9c364c54f484861f07c53bb35942a1d1100e74dab0395700f09fe211435109",
+    "launcher_resolution": "The sde64 launcher failed to start the i386 Pin runtime. The same kit sde launcher passed all five modes without changing system policy or the kit."
+  },
+  "qualification_limits": [
+    "MPX encoding and ABI witnesses intercept native MPX instructions; they do not execute bounds algorithms, BNDINIT or #BR delivery.",
+    "Existing QEMU MPX processor-model limitations and physical MPX qualification are unchanged.",
+    "RTM comparisons execute actual candidate and raw-reference pairs under Intel SDE; they do not establish physical RTM behavior.",
+    "The immediate-abort pair still requires an RTM-capable environment outside RTM/HLE. General transactional bodies and external checkpoints retain separate ownership.",
+    "NeverC i386 source objects use the Linux ELF external-backend driver. LLVM IR COFF/Mach-O baselines do not qualify NeverC Windows/Darwin i386 source ABIs.",
+    "The x64 NeverD continuation provider does not acquire additional guest modes from this compiler change.",
+    "Generic lifted VMFUNC leaf/state proof, full mode/task transitions, software SMM/SGX and unbound asynchronous producers remain outside this batch."
+  ],
+  "release": {
+    "published": false,
+    "production_sdk_pin": "neverd-llvm-v23.0.0-r6",
+    "llvm_gitlink": "b726cb0425bc7e1f7e2753972a748ebcfa8b5741"
+  },
+  "neverc_publication": {
+    "commit": "a506bd14b5c08f5e77105aa6f4784d019f063399",
+    "remote": "https://github.com/NeverSight/NeverC.git",
+    "verified_heads": [
+      "dev",
+      "codex/x86-native-intrinsics"
+    ],
+    "verification": "Atomic push followed by git ls-remote returning the exact commit for both refs.",
+    "push_log_sha256": "89a7af413036e0d68196f13771e367f9e3eb8b3834d9fb92d35968653af5a563",
+    "release_published": false
+  },
+  "artifact_recovery": {
+    "archive": "qualified-native-products.tar.xz",
+    "archive_sha256": "0ce515741a7dcce72f5471603f7fdd4a9061653dd56e0ceb72eed2b9cf2db8ba",
+    "recovery_index_sha256": "3754baf272eacc5c8452b866e5bdd7f7f1cfdbb6c5980474f0e6a7ac262be3f3",
+    "generated_products": 437,
+    "pre_archive_manifest_files_verified": 1072,
+    "all_decompressed_hashes_verified": true,
+    "retained": "Sources, independent instruction bytes, logs, receipts, result manifests and active build trees."
+  }
+}
