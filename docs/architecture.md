@@ -11296,7 +11296,9 @@ support. See [the KVM domain](x86-kvm-hypercalls.md). This inventory does not
 imply coverage of every newer SEV/SNP instruction.
 
 `backend/llvm/X86/X86VirtualizationNative.h` owns native LLVM names and
-available NeverC source spellings together. Mode-sized i386 VMCS and address
+compiler source spellings together. NeverC's x86 source targets are x64;
+legacy builtins remain available through the full fork or assembly fallback.
+Mode-sized i386 VMCS and address
 APIs use the full fork's `32` names in both C renderers; management memory
 operands retain m64. SVM default-address i386 APIs also use `32`; address-size
 overrides use `.addr16` on i386 and `.addr32` on x64. Their address inputs remain

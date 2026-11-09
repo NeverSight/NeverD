@@ -4,7 +4,8 @@
 First run NeverDX86RepStateTests with NEVERD_REP_EXPORT_DIR set. Supply the
 qualified NeverC checkout's tests/verify-rep-state.py as --oracle. Native x64
 checks use original instruction bytes, a sequential memory/flags model and
-real page-fault restart. i386 checks use Unicorn; port completion is controlled
+real page-fault restart. The local legacy witness checks Clang/LLVM i386
+exports with Unicorn; port completion is controlled
 and never performs host port I/O. Requires capstone, lief and (for i386) unicorn.
 The pipeline route cross-compiles complete decompiled functions in all three
 object formats; it checks encoding without executing their fixtures.
@@ -26,6 +27,8 @@ from types import SimpleNamespace
 
 import capstone
 import lief
+
+from isa.x86 import rep_legacy_oracle as legacy
 
 
 def load_oracle(path):
@@ -129,15 +132,7 @@ def check_pipeline(args, oracle):
                                        '-Werror=implicit-function-declaration', '-c', local, '-o', obj]
                             if args.neverc:
                                 command += ['-fno-builtin-mimalloc']
-                                command += ['-fllvm-backend=' + str(args.backend_llc)] if args.bits == 32 else ['-mllvm', '-verify-machineinstrs']
-                            if args.neverc and args.bits == 32:
-                                ir = obj.with_suffix('.ll')
-                                ir_command = [str(v) for v in command if not str(v).startswith('-fllvm-backend=')]
-                                ir_command[ir_command.index('-c')] = '-S'
-                                ir_command[ir_command.index('-o') + 1] = str(ir)
-                                oracle.run(ir_command + ['-emit-llvm'])
-                                text = ir.read_text()
-                                assert ' asm ' not in text and f'@llvm.x86.rep.{family}.state32(' in text
+                                command += ['-mllvm', '-verify-machineinstrs']
                             oracle.run(command)
                             binary = lief.parse(str(obj))
                             section_name = '__text' if fmt == 'macho' else '.text'
@@ -169,7 +164,6 @@ def main():
     parser.add_argument('--compiler', default='clang')
     parser.add_argument('--neverc', action='store_true')
     parser.add_argument('--llc', type=Path)
-    parser.add_argument('--backend-llc', type=Path, help='NeverC Linux i386 external backend')
     parser.add_argument('--formats', nargs='+', choices=('elf','coff','macho'), default=['elf','coff','macho'])
     parser.add_argument('--keep', type=Path, help='retain generated artifacts and hashes')
     parser.add_argument('--bits', type=int, choices=(32, 64), default=64)
@@ -178,11 +172,8 @@ def main():
     args = parser.parse_args()
     if args.route == 'ir' and not args.llc:
         parser.error('--route ir requires --llc')
-    if args.neverc and args.bits == 32:
-        if not args.backend_llc:
-            parser.error('NeverC i386 requires --backend-llc')
-        if args.route == 'pipeline' and args.formats != ['elf']:
-            parser.error('NeverC i386 pipeline requires --formats elf')
+    if args.neverc and args.bits != 64:
+        parser.error('NeverC accepts only x64 source targets; use Clang for i386')
     if args.keep:
         args.keep.mkdir(parents=True)
     if args.route != 'pipeline' and args.bits == 64 and (platform.system() != 'Linux' or
@@ -198,7 +189,7 @@ def main():
             args.report.write_text(json.dumps(result, indent=2) + '\n')
         print('PASS:', json.dumps(result), flush=True)
         return
-    matrix = list(oracle.forms(args.bits))
+    matrix = list(legacy.forms(oracle) if args.bits == 32 else oracle.forms(64))
     stem = args.exports.resolve() / f'rep-{args.bits}'
     source = Path(f'{stem}.ll' if args.route == 'ir' else
                   f'{stem}-object.o' if args.route == 'object' else f'{stem}-{args.route}.c')
@@ -236,25 +227,16 @@ def main():
                            '-c', source, '-o', obj]
                 if args.neverc:
                     command += ['-fno-builtin-mimalloc']
-                    command += ['-fllvm-backend=' + str(args.backend_llc)] if args.bits == 32 else ['-mllvm', '-verify-machineinstrs']
+                    command += ['-mllvm', '-verify-machineinstrs']
             if command is not None:
-                if args.neverc and args.bits == 32 and args.route in ('high', 'llvm'):
-                    ir = obj.with_suffix('.ll')
-                    ir_command = [str(v) for v in command if not str(v).startswith('-fllvm-backend=')]
-                    ir_command[ir_command.index('-c')] = '-S'
-                    ir_command[ir_command.index('-o') + 1] = str(ir)
-                    oracle.run(ir_command + ['-emit-llvm'])
-                    text = ir.read_text()
-                    assert ' asm ' not in text
-                    assert all(f'@llvm.x86.rep.{op}.state32(' in text for op in oracle.OPS)
                 oracle.run(command)
             objects.append({'optimization': opt, 'sha256': hashlib.sha256(obj.read_bytes()).hexdigest()})
             code = inspect_object(obj, matrix, args.bits)
             if args.bits == 32:
-                observed = oracle.emulated32_suite(matrix, code)
-                controls.extend({'optimization': opt, **r} for r in oracle.emulated32_negative_controls(matrix, code))
+                observed = legacy.emulated32_suite(oracle, matrix, code)
+                controls.extend({'optimization': opt, **r} for r in legacy.emulated32_negative_controls(oracle, matrix, code))
                 if wide_direction:
-                    wide_direction_cases += sum(oracle.emulated32_suite(matrix, code,
+                    wide_direction_cases += sum(legacy.emulated32_suite(oracle, matrix, code,
                         directions=(256,0x80000000,0xffffffff)))
                 print(f'{opt}: {observed[0]} emulated memory cases, '
                       f'{observed[1]} controlled port cases', flush=True)

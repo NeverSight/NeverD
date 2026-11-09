@@ -76,10 +76,8 @@ TEST_P(X86SystemRegisterAccess,
 
 TEST_P(X86SystemRegisterAccess, ScalarMsrAndPortsUseNeverCNativeIntrinsics) {
   const auto A = GetParam().TheArch;
-  if (A == Arch::X86 && GetParam().Format != BinaryFormat::ELF)
-    GTEST_SKIP() << "NeverC i386 source ABI currently covers Linux ELF";
-  if (A == Arch::X86 && !std::getenv("NEVERD_TEST_NEVERC_LLC"))
-    GTEST_SKIP() << "set NEVERD_TEST_NEVERC_LLC to the full i386 LLVM backend";
+  if (A != Arch::X64)
+    GTEST_SKIP() << "NeverC source targets are 64-bit";
   const char *Compiler = std::getenv("NEVERD_TEST_NEVERC");
   if (!Compiler || !llvm::sys::fs::exists(Compiler))
     GTEST_SKIP() << "set NEVERD_TEST_NEVERC to the qualified NeverC compiler";
@@ -113,8 +111,8 @@ TEST_P(X86SystemRegisterAccess, ScalarMsrAndPortsUseNeverCNativeIntrinsics) {
                     std::string::npos)
               << Native;
       }
-      if (A == Arch::X86) {
-        const std::string Stem = "scalar32_" + std::to_string(ExportIndex++);
+      if (GetParam().Format == BinaryFormat::ELF) {
+        const std::string Stem = "scalar64_" + std::to_string(ExportIndex++);
         saveX86SourceArtifact(
             Stem + ".bin",
             {reinterpret_cast<const char *>(E.Bytes.data()), E.Bytes.size()});
@@ -130,7 +128,7 @@ TEST_P(X86SystemRegisterAccess, ScalarMsrAndPortsUseNeverCNativeIntrinsics) {
                        E.Plan.Port
                            ? std::optional<uint16_t>(E.Immediate ? 52 : 4660)
                            : std::nullopt,
-                       A == Arch::X86, true, A);
+                       true);
         if (::testing::Test::HasFailure())
           return;
       }
