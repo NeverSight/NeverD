@@ -1215,7 +1215,9 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
       emitNativeX86RegistrationSEH(Func, *LLVMFunc, BBMap, PHICopyEdges) ||
       emitNativeX86RegistrationCxx(Func, *LLVMFunc, BBMap, PHICopyEdges,
                                    FinalRegistrationFrameProof);
-  if (!NativeRegistration && !emitNativeSEH(Func, *LLVMFunc, BBMap) &&
+  if (!NativeRegistration &&
+      !emitSourceX86RegistrationSEH(Func, *LLVMFunc, BBMap, PHICopyEdges) &&
+      !emitNativeSEH(Func, *LLVMFunc, BBMap) &&
       !emitNativeCxxEH(Func, *LLVMFunc, BBMap))
     emitNativeItaniumEH(Func, *LLVMFunc, BBMap);
 

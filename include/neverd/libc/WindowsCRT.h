@@ -78,6 +78,8 @@ inline constexpr auto kWindowsCRTPrototypes = std::to_array<LibCPrototype>({
     windowsCRTPrototype("??_U@YAPAXI@Z", "void *", {"uint32_t"}),
     windowsCRTPrototype("??3@YAXPAX@Z", "void", {"void *"}),
     windowsCRTPrototype("??_V@YAXPAX@Z", "void", {"void *"}),
+    // The SEH-aware longjmp entry retains the buffer/value cdecl signature.
+    windowsCRTPrototype("_longjmpex", "void", {"void *", "int"}),
     // msvcrt.dll start-up and exit.
     windowsCRTPrototype("__getmainargs", "int",
                         {"int *", "char ***", "char ***", "int", "void *"}),
