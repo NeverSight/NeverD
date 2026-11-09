@@ -587,3 +587,41 @@ code_pointer:
   .word mips_add
 #endif
 .size code_pointer,.-code_pointer
+
+/* Physical word divisions shared by MIPS32 and MIPS64. */
+.text
+.p2align 2
+.macro division_word name,encoding,result
+.globl \name
+.type \name,@function
+\name:
+  .word \encoding
+  jr $31
+  \result $2
+.size \name,.-\name
+.endm
+division_word mips_div_lo,0x0085001a,mflo
+division_word mips_div_hi,0x0085001a,mfhi
+division_word mips_divu_lo,0x0085001b,mflo
+division_word mips_divu_hi,0x0085001b,mfhi
+
+.globl mips_div_dead
+.type mips_div_dead,@function
+mips_div_dead:
+  .word 0x0085001a
+  jr $31
+  addiu $2,$0,7
+.size mips_div_dead,.-mips_div_dead
+
+/* Only the low byte/halfword of the incoming value is consumed. */
+.macro narrow_store name,store,load
+.globl \name
+.type \name,@function
+\name:
+  \store $5,0($4)
+  jr $31
+  \load $2,0($4)
+.size \name,.-\name
+.endm
+narrow_store mips_store_byte,sb,lbu
+narrow_store mips_store_half,sh,lhu

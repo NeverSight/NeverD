@@ -702,6 +702,8 @@ void detectRegisterParams(MedFunc &Func, const TargetRegInfo &TRI,
 
     uint16_t FirstUse = FirstUses.of(PR);
     uint16_t BestSize = FirstUse > 0 ? FirstUse : TRI.FullRegWidth;
+    if (Convention && Convention->IntegerParametersUseFullRegisters)
+      BestSize = std::max(BestSize, TRI.FullRegWidth);
 
     const MedVar *Marker = nullptr;
     for (const MedOp &Op : Func.Blocks.front().Ops) {

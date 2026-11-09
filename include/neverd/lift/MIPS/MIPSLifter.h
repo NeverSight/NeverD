@@ -63,6 +63,7 @@ private:
   bool liftMemory(State &S, uint32_t Word,
                   std::optional<NdVar> BaseOverride = std::nullopt) const;
   bool liftPCRelative(State &S, uint32_t Word, va_t BasePC) const;
+  void liftMIPS16Frame(State &S, uint32_t Word) const;
   bool liftDSP(State &S, uint32_t Word) const;
   bool liftMSA(State &S, uint32_t Word) const;
   struct Encoding {
@@ -70,7 +71,9 @@ private:
     unsigned SlotBytes = 0;
     bool Unconditional = false;
     bool PCRelative = false;
+    bool Frame = false;
   };
+  bool liftNonControl(State &S, Encoding Code, va_t BasePC) const;
   std::optional<Encoding> encoding(const cs_insn &Instruction) const;
   std::optional<Encoding> microEncoding(const cs_insn &Instruction) const;
   std::optional<Encoding> mips16Encoding(const cs_insn &Instruction) const;

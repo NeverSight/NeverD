@@ -23108,7 +23108,8 @@ the pipeline suite checks those refusals as well as ordinary leaf emission.
 
 `MIPSDSPTests` in the integer target covers every control selector, ignored
 selector bits, missing state, sticky flags, saturated byte and signed-halfword lanes,
-rounded/non-rounded shifts, packing, destination/input aliases and discarded
+rounded/non-rounded shifts, packing, expansion, replication, BITREV/RADDU,
+destination/input aliases and discarded
 results. Shift tests enumerate immediate and variable count boundaries against
 independent expectations, including pure operations with absent DSPControl.
 The pipeline target checks that DSPControl
@@ -23116,7 +23117,7 @@ effects survive both source routes without invented source arguments. Return
 identity, standalone conversion, source shards and generated helper protection
 have separate regressions.
 `unittests/lift/mips/dsp-roundtrip.py` accepts the same explicit `--neverd`,
-`--clang`, `--ld` and `--output` arguments as the ordinary runner. Its twenty-six
+`--clang`, `--ld` and `--output` arguments as the ordinary runner. Its forty-two
 owned `dsp.S` leaves check scalar results and DSPControl after returning, in
 both byte orders and both C routes at `-O0` and `-O2`, with external `-mdsp`
 enabled. It uses the pinned 74Kf model with
@@ -23137,13 +23138,14 @@ compiler-introduced DSPControl writes.
 `MIPSMSATests` covers scalar word transfers across all vector registers,
 B/H/W/D carry and borrow boundaries, equality and signed/unsigned comparison
 masks and signed/unsigned min/max lane selection, per-lane shifts, bit edits,
-truncated multiplication, full-container logical operations and
+truncated multiplication/accumulation, absolute-magnitude min/max (ties select WT),
+full-container logical operations and
 aliasing, independent byte-wise expectations, missing state, decoder reuse and
 P5600 reference execution. Loader cases check r5/MSA/CPR128/FP64 evidence;
 pipeline cases check both source routes and unchanged refusals with/without an
 Image. Shift counts cover zero, width-1, width, width+1 and high bits; the
 independent oracle shifts individual bits and multiplies bytes. The owned MSA
-source runner recompiles eighty-two scalar/memory leaves
+source runner recompiles ninety-eight scalar/memory leaves
 in both byte orders at O0/O2 through HighC and LLVMC. It checks each output byte
 and the preserved F20/F22/.../F30 low64 values, maps original/generated ELF separately,
 and retires scratch on success and failure:
@@ -23163,11 +23165,27 @@ separate target syntax checks; those four checks do not claim linked execution.
 
 ### MIPS16 source qualification
 
-`MIPS16Integer`, `MIPS16Memory`, `MIPS16Flow`, `MIPS16Loader`, `MIPS16SDK` and `MIPS16Pipeline`
+`MIPS16Integer`, `MIPS16Memory`, `MIPS16Frame`, `MIPS16Flow`, `MIPS16Loader`,
+`MIPS16SDK` and `MIPS16Pipeline`
 cover unsigned/signed immediate boundaries, EXTEND/truncation, compact register
 fields, immediate/variable shifts, comparisons, negation, both HI/LO multiply
-halves, strict unsupported forms, local ISA evidence, physical pagination,
+halves, word quotient/remainder, short/extended frames, strict unsupported forms,
+local ISA evidence, physical pagination,
 two-byte slots, direct/indirect target modes and image-free return proofs.
+Frame tests enumerate argument/static mappings, extended saved-register counts,
+zero/max sizes, every partial-fault position, exact memory order, alignment and
+32-bit wrap. Control tests cover return-target capture and call-link stores in
+slots, frame-entry discovery, and leaf stack-return proofs through division.
+Multiple register spills are distinguished from actual overlapping or unresolved
+writes to the return slot. Source parameter tests retain the full o32/n64
+carrier for low-byte/halfword reads, and DSP replication execution supplies
+nonzero upper input bits so optimized source cannot assume caller extension.
+DIV/DIVU cover MIN32/-1, all sign combinations, zero-result uncertainty, strict
+word inputs on MIPS64, dead-result removal, and the explicit narrower nonzero
+source domain. A guest zero check after DIV returns 42, while regenerated source
+rejects that input; those executions are recorded separately as qualification
+refusals, never equivalence successes. The classic runner also recompiles word quotient/remainder leaves
+for both word sizes and byte orders.
 Shared pipeline cases reject incoming or call-clobbered HI/LO in classic
 MIPS32/64 and MIPS16 before either source route can erase an unknown return.
 They distinguish fully defined joins and post-call overwrites, with and without
@@ -23182,7 +23200,7 @@ PC alignment before displacement, transfer-head PC bases in slots, exact output
 bytes, and LowIR fault order even for dead results. Call tests check physical
 widths, tagged links, target capture, conflicting mode evidence in discovery
 and rejection of unproved cross-call return identities.
-`mips16-roundtrip.py` recompiles twenty-six scalar/control/memory/call functions through HighC and
+`mips16-roundtrip.py` recompiles thirty-nine scalar/control/memory/call functions through HighC and
 LLVMC, in both byte orders at O0/O2. It checks independent results, stack and
 callee-saved GPR preservation, both incoming return-mode tags, ELF mode
 flags and function tags under an adverse microMIPS compiler default.

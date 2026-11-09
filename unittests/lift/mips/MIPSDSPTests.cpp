@@ -80,6 +80,127 @@ uint32_t selectedFields(unsigned Selector) {
 
 class MIPSDSP : public ::testing::TestWithParam<Arch> {};
 
+struct PureCase {
+  const char *Name;
+  uint32_t Word, Result;
+  unsigned Source;
+};
+constexpr PureCase PureCases[] = {
+#define MIPS_DSP_PURE(Name, Word, Result, Source) {#Name, Word, Result, Source},
+#include "MIPSDSPExpandFixtures.def"
+};
+TEST_P(MIPSDSP, ExpansionReplicationAndReductionHaveNoControlDependency) {
+  auto Image = dspImage(GetParam());
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(Image));
+  for (const auto &C : PureCases)
+    for (unsigned Destination : {0u, 2u, 4u, 31u}) {
+      SCOPED_TRACE(C.Name);
+      const auto Word = (C.Word & ~0xf800u) | (Destination << 11);
+      for (bool Seed : {false, true}) {
+        NdOpEmulator E(Image);
+        E.setStrictMode(true);
+        if (Seed)
+          E.setRegister(mipsreg::DSPControl, 0x05ab51a5);
+        if (Destination && C.Source)
+          E.setRegister(mipsreg::r(C.Source), 0x89abcdef);
+        ASSERT_TRUE(executeDSP(Decode, GetParam(), Word, E));
+        if (Destination)
+          EXPECT_EQ(E.getRegister(mipsreg::r(Destination)), C.Result);
+        if (Seed)
+          EXPECT_EQ(E.getRegister(mipsreg::DSPControl), 0x05ab51a5u);
+        else
+          EXPECT_FALSE(E.getRegister(mipsreg::DSPControl));
+      }
+      if (Destination && C.Source) {
+        NdOpEmulator Missing(Image);
+        Missing.setStrictMode(true);
+        if (Destination != C.Source)
+          Missing.setRegister(mipsreg::r(Destination), 99);
+        EXPECT_FALSE(executeDSP(Decode, GetParam(), Word, Missing));
+        if (Destination != C.Source)
+          EXPECT_EQ(Missing.getRegister(mipsreg::r(Destination)), 99u);
+      }
+    }
+  for (unsigned I = 0; I < 1024; ++I) {
+    NdOpEmulator E(Image);
+    E.setStrictMode(true);
+    ASSERT_TRUE(executeDSP(Decode, GetParam(), 0x7c001292 | (I << 16), E));
+    const uint32_t V = uint16_t(I < 512 ? int(I) : int(I) - 1024);
+    EXPECT_EQ(E.getRegister(mipsreg::V0), V | (V << 16));
+  }
+  NdOpEmulator E(Image);
+  E.setStrictMode(true);
+  E.setRegister(mipsreg::A0, 0xffffffff);
+  ASSERT_TRUE(executeDSP(Decode, GetParam(), 0x7c801510, E));
+  EXPECT_EQ(E.getRegister(mipsreg::V0), 1020u);
+}
+TEST_P(MIPSDSP, ExpansionReservedFieldsAndFeatureEvidenceAreRequired) {
+  MIPSLifter Lift(GetParam());
+  Lift.setDSPEnabled(true);
+  for (uint32_t Word : {0x7c241312u, 0x7c811510u, 0x7da51092u, 0x7c2410d2u}) {
+    cs_insn I{};
+    I.size = 4;
+    I.address = 0x10000;
+    auto B = encodeDSP({Word}, GetParam());
+    std::copy(B.begin(), B.end(), I.bytes);
+    std::vector<LowOp> Ops;
+    EXPECT_THROW(Lift.lift(I, Ops), UnliftedInstruction);
+    EXPECT_TRUE(Ops.empty());
+  }
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(GetParam()));
+  for (const auto &C : PureCases)
+    EXPECT_THROW(liftDSP(Decode, GetParam(), C.Word), UnliftedInstruction);
+}
+TEST_P(MIPSDSP, ExpansionLiteralsMatchPinnedTargetAndPreserveControl) {
+#ifndef NEVERD_MIPS_UNICORN_REFERENCE
+  GTEST_SKIP() << "The pinned Unicorn reference was not built";
+#else
+  uc_engine *Raw = nullptr;
+  ASSERT_EQ(uc_open(UC_ARCH_MIPS,
+                    static_cast<uc_mode>(UC_MODE_MIPS32 |
+                                         (archLittleEndian(GetParam())
+                                              ? UC_MODE_LITTLE_ENDIAN
+                                              : UC_MODE_BIG_ENDIAN)),
+                    &Raw),
+            UC_ERR_OK);
+  std::unique_ptr<uc_engine, decltype(&uc_close)> E(Raw, uc_close);
+  ASSERT_EQ(uc_ctl_set_cpu_model(Raw, UC_CPU_MIPS32_74KF), UC_ERR_OK);
+  ASSERT_EQ(uc_mem_map(Raw, 0x10000, 0x2000, UC_PROT_ALL), UC_ERR_OK);
+  auto Setup = encodeDSP(
+      {0x40086000, 0x3c090100, 0x01094025, 0x40886000, 0xc0, 0x7c81fcf8},
+      GetParam());
+  uint32_t Control = 0x05ab51a5;
+  ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_A0, &Control), UC_ERR_OK);
+  ASSERT_EQ(uc_mem_write(Raw, 0x10000, Setup.data(), Setup.size()), UC_ERR_OK);
+  ASSERT_EQ(
+      uc_emu_start(Raw, 0x10000, 0x10000 + Setup.size(), 0, Setup.size() / 4),
+      UC_ERR_OK);
+  unsigned Index = 0;
+  for (const auto &C : PureCases)
+    for (unsigned Destination : {0u, 2u, 4u, 31u}) {
+      SCOPED_TRACE(C.Name);
+      uint32_t Input = 0x89abcdef;
+      ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_A0, &Input), UC_ERR_OK);
+      auto Code =
+          encodeDSP({(C.Word & ~0xf800u) | (Destination << 11), 0x7c3f4cb8},
+                    GetParam()); // rddsp t1,63
+      uint64_t PC = 0x10100 + 8 * Index++;
+      ASSERT_EQ(uc_mem_write(Raw, PC, Code.data(), Code.size()), UC_ERR_OK);
+      ASSERT_EQ(uc_emu_start(Raw, PC, PC + Code.size(), 0, 2), UC_ERR_OK);
+      uint32_t Value = 0;
+      if (Destination) {
+        ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_0 + Destination, &Value),
+                  UC_ERR_OK);
+        EXPECT_EQ(Value, C.Result);
+      }
+      ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_T1, &Value), UC_ERR_OK);
+      EXPECT_EQ(Value, Control);
+    }
+#endif
+}
+
 TEST_P(MIPSDSP, SelectorsPreserveUnselectedFieldsAndIgnoreHighBits) {
   auto Image = dspImage(GetParam());
   Decoder Decode;

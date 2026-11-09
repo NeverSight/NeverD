@@ -28,6 +28,9 @@ NEVERD_MIPS_SCALAR_INTRINSIC(MIPSReadDSPControl, 16007,
                              "neverd_mips_read_dspcontrol")
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSWriteDSPControl, 16008,
                              "neverd_mips_write_dspcontrol")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSDivWord, 16009, "neverd_mips_div_word")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSDivUnsignedWord, 16010,
+                             "neverd_mips_div_unsigned_word")
 
 NEVERD_MIPS_SCALAR_TEXT(kMalformedScalar,
                         "invalid MIPS scalar intrinsic operand/output contract")

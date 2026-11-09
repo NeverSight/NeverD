@@ -18,7 +18,7 @@ import sys
 
 from elftools.elf.elffile import ELFFile
 import roundtrip
-from unicorn import UC_HOOK_CODE
+from unicorn import UC_HOOK_CODE, UC_ERR_EXCEPTION, UcError
 from unicorn import mips_const as mips
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
@@ -29,10 +29,12 @@ FUNCTIONS = ("m16_add", "m16_unsigned", "m16_logic", "m16_branch",
              "m16_stack", "m16_call", "m16_callx", "m16_pc_load",
              "m16_sllv", "m16_srlv", "m16_srav", "m16_shift_imm", "m16_cmp",
              "m16_slt", "m16_sltu", "m16_neg", "m16_mult", "m16_multu",
-             "m16_mult_hi", "m16_mult_lo", "m16_multu_hi", "m16_multu_lo")
+             "m16_mult_hi", "m16_mult_lo", "m16_multu_hi", "m16_multu_lo", "m16_save", "m16_savex", "m16_save_args", "m16_save_call",
+             "m16_div", "m16_divu", "m16_div_hi", "m16_div_lo", "m16_divu_hi", "m16_divu_lo",
+             "m16_div_dead", "m16_div_checked", "m16_div_after_checked")
 INPUTS = [(0, 0), (1, 0xffffffff), (0xffffffff, 1),
           (0x7fffffff, 0x80000000), (0x80000000, 0x80000000),
-          (0xffff, 0x12345678), (0x12345678, 0x89abcdef)]
+          (0x80000000, 0xffffffff), (0xfffffff6, 3), (10, 0xfffffffd), (0xffff, 0x12345678), (0x12345678, 0x89abcdef)]
 rng = random.Random(0x4d3136)
 INPUTS += [(rng.getrandbits(32), rng.getrandbits(32)) for _ in range(17)]
 
@@ -60,6 +62,19 @@ def mode_evidence(path, function):
 def expected(function, inputs, little):
     a, b = inputs
     signed = lambda x: x - (1 << 32) if x & 0x80000000 else x
+    if function == "m16_div_dead":
+        return 7
+    if function.startswith("m16_div"):
+        if function in ("m16_div_checked", "m16_div_after_checked") and not b:
+            return 42
+        x, y = (a, b) if function.startswith("m16_divu") else (signed(a), signed(b))
+        q = abs(x) // abs(y)
+        if (x < 0) != (y < 0):
+            q = -q
+        r = x - q * y
+        return (r if function.endswith("_hi") else q if function.endswith(("_lo", "_checked")) else q ^ r) & 0xffffffff
+    if function in ("m16_save", "m16_savex", "m16_save_args", "m16_save_call"):
+        return (a + b + (function == "m16_save_call")) & 0xffffffff
     if function.startswith("m16_mult"):
         value = a * b if function.startswith("m16_multu") else signed(a) * signed(b)
         if function.endswith("_hi"):
@@ -90,7 +105,7 @@ def observe(path, little, function, inputs, return_tag, original=None):
     uc, entry = roundtrip.emulator(path, 32, little, function,
                                   original=original, cpu_model=mips.UC_CPU_MIPS32_24KF)
     called = []
-    callee = {"m16_call": "m16_add", "m16_callx": "m16_classic_add"}.get(function)
+    callee = {"m16_call": "m16_add", "m16_callx": "m16_classic_add", "m16_save_call": "m16_add"}.get(function)
     if callee:
         elf = ELFFile(io.BytesIO(path.read_bytes()))
         address = elf.get_section_by_name(".symtab").get_symbol_by_name(callee)[0]["st_value"] & ~1
@@ -137,7 +152,7 @@ def observe(path, little, function, inputs, return_tag, original=None):
 
 def run(args, artifacts):
     fixture = Path(__file__).with_name("mips16.S")
-    report = {"complete": False, "passed": [], "failures": [],
+    report = {"complete": False, "passed": [], "failures": [], "qualification_refusals": [],
               "fixture_sha256": digest(fixture), "neverd_sha256": digest(args.neverd)}
     artifacts.write("results.json", report)
     resource = subprocess.check_output([str(args.clang), "-print-resource-dir"], text=True).strip()
@@ -157,7 +172,10 @@ def run(args, artifacts):
         artifacts.discard(obj, log)
         for function in FUNCTIONS:
             original_mode = mode_evidence(original, function)
-            cases = list(product(INPUTS, (0, 1)))
+            # Source division is qualified on every retained executed divisor.
+            inputs = [v for v in INPUTS if v[1] or not function.startswith("m16_div")
+                      or function in ("m16_div_dead", "m16_div_checked")]
+            cases = list(product(inputs, (0, 1)))
             before = [observe(original, little, function, inputs, tag) for inputs, tag in cases]
             for backend, optimization in product(("highc", "llvmc"), ("-O0", "-O2")):
                 stem = artifacts.work / f"{profile}-{function}-{backend}-{optimization[1:]}"
@@ -201,7 +219,24 @@ def run(args, artifacts):
                             raise RuntimeError(f"{stem.name}: input={inputs}, original={value}, generated={after}, expected={wanted}")
                         observations.append({"inputs": inputs, "return_tag": tag, "expected": wanted,
                                              "original": value, "generated": after, "stack_and_saved_gprs_preserved": True,
-                                             "caller_isa_sentinel_executed": True, "linked_callee_executed": function in ("m16_call", "m16_callx")})
+                                             "caller_isa_sentinel_executed": True, "linked_callee_executed": function in ("m16_call", "m16_callx", "m16_save_call")})
+                    if function == "m16_div_after_checked":
+                        for tag in (0, 1):
+                            original_result = observe(original, little, function, (7, 0), tag)
+                            if original_result != 42:
+                                raise RuntimeError("guest zero path no longer returns its defined value")
+                            try:
+                                observe(rebuilt, little, function, (7, 0), tag)
+                            except UcError as error:
+                                if error.errno != UC_ERR_EXCEPTION:
+                                    raise
+                                report["qualification_refusals"].append({
+                                    "profile": profile, "function": function, "backend": backend,
+                                    "optimization": optimization, "return_tag": tag, "input": [7, 0],
+                                    "original": original_result, "generated_domain_refusal": error.errno,
+                                    "equivalence_claimed": False})
+                            else:
+                                raise RuntimeError("retained zero division bypassed the source domain check")
                     report["passed"].append({"profile": profile, "function": function, "backend": backend,
                                              "optimization": optimization, "original_mode": original_mode,
                                              "rebuilt_mode": rebuilt_mode, "original_sha256": original_hash,

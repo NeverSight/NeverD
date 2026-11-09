@@ -63,16 +63,18 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
       return false;
     BlockIndices.emplace(&Block, I);
     for (const auto &Op : Block.Ops) {
-      const bool DSPStateTransfer =
+      const bool NoMemoryEffect =
           Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
           Op.Inputs[0].isConst() &&
-          mips::isDSPControlIntrinsic(
-              static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) &&
+          (mips::isDSPControlIntrinsic(
+               static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) ||
+           mips::isPureScalarValue(
+               static_cast<Intrinsic>(Op.Inputs[0].ConstVal))) &&
           mipsScalarMedShapeIsValid(Op, Target);
       if ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) && Op.NumInputs)
         MemoryAddresses.push_back(Op.Inputs[0]);
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
-          (Op.Opcode == NdOp::INTRINSIC && !DSPStateTransfer &&
+          (Op.Opcode == NdOp::INTRINSIC && !NoMemoryEffect &&
            (Op.NumInputs != 3 || !Op.Inputs[0].isConst() ||
             Op.Inputs[0].ConstVal != uint64_t(Intrinsic::RequireAligned))) ||
           Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
@@ -137,7 +139,10 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
               Function, Definition.Block->Id,
               int(&Op - Definition.Block->Ops.data()), *At, 4, Offset,
               [](const MedVar &V) { return !V.isConst(); },
-              [](const MedVar &) { return true; });
+              [](const MedVar &) { return true; }, true, false);
+          // LeafMemory excludes calls and hidden memory effects. Merely
+          // saving another register cannot modify this slot through its
+          // value; overlapping or unresolved writes still invalidate it.
           Valid = Reaching.Complete && Reaching.Reachable &&
                   !Reaching.MayBeUninitialized && !Reaching.HasUnknownWrites &&
                   !Reaching.Values.empty() &&

@@ -21,22 +21,26 @@ const CallArgumentConvention MIPSO32CallArguments = {
     .TheArch = Arch::MIPS32,
     .ImportArgumentsFromPrototype = true,
     .PairAlignedWideArguments = true,
+    .IntegerParametersUseFullRegisters = true,
     .ArgumentsFromCallSetup = true,
 };
 const CallArgumentConvention MIPSELO32CallArguments = {
     .TheArch = Arch::MIPS32EL,
     .ImportArgumentsFromPrototype = true,
     .PairAlignedWideArguments = true,
+    .IntegerParametersUseFullRegisters = true,
     .ArgumentsFromCallSetup = true,
 };
 const CallArgumentConvention MIPSN64CallArguments = {
     .TheArch = Arch::MIPS64,
     .ImportArgumentsFromPrototype = true,
+    .IntegerParametersUseFullRegisters = true,
     .ArgumentsFromCallSetup = true,
 };
 const CallArgumentConvention MIPSELN64CallArguments = {
     .TheArch = Arch::MIPS64EL,
     .ImportArgumentsFromPrototype = true,
+    .IntegerParametersUseFullRegisters = true,
     .ArgumentsFromCallSetup = true,
 };
 

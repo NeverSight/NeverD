@@ -54,6 +54,8 @@ FUNCTIONS = ["mips_add", "mips_likely", "mips_load", "mips_store", "mips_stack",
              "mips_uninitialized_full", "mips_uninitialized_full_reverse"]
 
 
+FUNCTIONS += ["mips_div_lo", "mips_div_hi", "mips_divu_lo", "mips_divu_hi", "mips_div_dead"]
+FUNCTIONS += ["mips_store_byte", "mips_store_half"]
 FUNCTIONS += list(FIELDS) + list(SHUFFLES) + ["mips_word_likely", "mips_word_zero"]
 
 
@@ -63,6 +65,16 @@ def word_value(value):
 
 
 def independent_result(function, inputs):
+    if function in ("mips_store_byte", "mips_store_half"):
+        return inputs[1] & (0xff if function.endswith("_byte") else 0xffff)
+    if function == "mips_div_dead":
+        return 7
+    if function.startswith("mips_div"):
+        x, y = [v & 0xffffffff for v in inputs] if function.startswith("mips_divu") else inputs
+        q = abs(x) // abs(y)
+        if (x < 0) != (y < 0):
+            q = -q
+        return word_value(x - q * y if function.endswith("_hi") else q)
     if function in FIELDS:
         width, insert, pos, size = FIELDS[function]
         source, old = inputs[0], inputs[1] if insert else 0
@@ -160,6 +172,11 @@ def invoke(uc, entry, bits, little, arguments, old_destination=0, initial_regist
 
 
 def cases(function, bits):
+    if function == "mips_div_dead":
+        return [[0, 0], [7, 0], [-1, 0]]
+    if function.startswith("mips_div"):
+        return [[10, 3], [-10, 3], [10, -3], [-10, -3], [-2147483648, -1],
+                [-2147483648, 3], [-1, -2147483648], [0, 7], [-1, 1]]
     if function in FIELDS or function in SHUFFLES:
         width = (FIELDS.get(function) or SHUFFLES[function])[0]
         values = [0, -1, 0x00800000, 0x80000000, 0x0123456789abcdef,
@@ -202,6 +219,9 @@ def cases(function, bits):
         return [[DATA]]
     if function == "mips_store":
         return [[DATA, 0x55667788], [DATA, -1]]
+    if function in ("mips_store_byte", "mips_store_half"):
+        return [[DATA, value] for value in (0, -1, 0xff01807f, 0x1122334455667788,
+                                            0xfedcba987654ffff)]
     if function == "mips_likely_store":
         return [[DATA, 0, 0x55667788], [DATA, 1, 0x55667788]]
     if function == "mips_stack":

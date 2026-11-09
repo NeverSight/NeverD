@@ -31,6 +31,7 @@ add_neverd_unittest(NeverDMIPSTests
 add_neverd_unittest(NeverDMIPSIntegerTests
   mips/MIPS16IntegerTests.cpp
   mips/MIPS16MemoryTests.cpp
+  mips/MIPS16FrameTests.cpp
   mips/MIPSDSPTests.cpp
   mips/MIPSMSATests.cpp
   mips/MicroMIPSIntegerTests.cpp

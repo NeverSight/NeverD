@@ -1,0 +1,23 @@
+//===- MIPSDSPExpandFixtures.def - Independent DSP scalar literals ------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Results for a0=0x89abcdef. Source zero denotes an immediate-only instruction.
+MIPS_DSP_PURE(preceq_phl, 0x7c041312, 0x89ab0000, 4)
+MIPS_DSP_PURE(preceq_phr, 0x7c041352, 0xcdef0000, 4)
+MIPS_DSP_PURE(precequ_qbl, 0x7c041112, 0x44805580, 4)
+MIPS_DSP_PURE(precequ_qbr, 0x7c041152, 0x66807780, 4)
+MIPS_DSP_PURE(precequ_qbla, 0x7c041192, 0x44806680, 4)
+MIPS_DSP_PURE(precequ_qbra, 0x7c0411d2, 0x55807780, 4)
+MIPS_DSP_PURE(preceu_qbl, 0x7c041712, 0x008900ab, 4)
+MIPS_DSP_PURE(preceu_qbr, 0x7c041752, 0x00cd00ef, 4)
+MIPS_DSP_PURE(preceu_qbla, 0x7c041792, 0x008900cd, 4)
+MIPS_DSP_PURE(preceu_qbra, 0x7c0417d2, 0x00ab00ef, 4)
+MIPS_DSP_PURE(bitrev, 0x7c0416d2, 0x0000f7b3, 4)
+MIPS_DSP_PURE(raddu, 0x7c801510, 0x000002f0, 4)
+MIPS_DSP_PURE(repl_qb, 0x7ca51092, 0xa5a5a5a5, 0)
+MIPS_DSP_PURE(repl_ph, 0x7e001292, 0xfe00fe00, 0)
+MIPS_DSP_PURE(replv_qb, 0x7c0410d2, 0xefefefef, 4)
+MIPS_DSP_PURE(replv_ph, 0x7c0412d2, 0xcdefcdef, 4)
+#undef MIPS_DSP_PURE
