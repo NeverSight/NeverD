@@ -11672,6 +11672,11 @@ banks, guest effects and statuses at O0/O2 while varying the gateway's otherwise
 unspecified captured bits. It exercises both the native void arm and failed
 arity fallback. Native Python tests verify static/callback parity, the legacy
 zero policy, proof failure and strict void-policy schema admission.
+The void-argument result oracle compares 4096 complete unaligned banks per
+optimization level, including pointer and narrow native operands, pre-call
+argument clobbers, all four result widths, guest effects and failed-arity
+statuses. Both byte orders pass structural admission; native Python checks
+static/callback parity and rejects invalid indices and conflicting policies.
 Scalar-selector cases cover both byte orders, partial slices, multiple bank
 transports, unlisted candidates and unknown writers. The compiled oracle checks
 4096 full-bank cases at O0/O2 with undefined-behavior traps, changing the selector

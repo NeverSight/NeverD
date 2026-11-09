@@ -961,6 +961,11 @@ prepareStateSourceRecovery(llvm::Module &M, const StateSourceContract &C) {
       unsigned Required = I.Parameters.size() - I.Defaults.size();
       if (Required > G.Arguments.size())
         return invalid("required argument has no bank slot");
+      if (I.VoidResultArgument &&
+          (I.Result != StateSourceType::Void ||
+           I.VoidResult != StateSourceVoidResult::Zero ||
+           *I.VoidResultArgument >= Required))
+        return invalid("invalid void result argument");
       if (I.TargetArgument &&
           (G.FunctionPointer || I.PointerSource || I.VariadicFixedParameters ||
            *I.TargetArgument >= Required ||
@@ -1503,7 +1508,9 @@ llvm::Error finishStateSourceRecovery(llvm::Module &M, StateSourceRecovery &R) {
                                    LLVMSourceByValueStringParameter));
         Native->setMetadata(llvm::LLVMContext::MD_noalias, Scope);
         llvm::Value *Result = B.getInt64(0);
-        if (Native->getType()->isPointerTy())
+        if (Import->VoidResultArgument)
+          Result = Call->getArgOperand(N + 4 + *Import->VoidResultArgument);
+        else if (Native->getType()->isPointerTy())
           Result = B.CreatePtrToInt(Native, B.getInt64Ty());
         else if (!Native->getType()->isVoidTy())
           Result = B.CreateIntCast(Native, B.getInt64Ty(),

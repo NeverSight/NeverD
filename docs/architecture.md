@@ -8454,7 +8454,9 @@ bank addressing, attaches scoped alias facts without relocating the bank, and
 passes explicit gateway operands through temporary probes to the shared LLVM
 optimizer. Proven site operands or explicit runtime target checks, together
 with caller-declared signatures, authorize a direct call and exact-width result
-write. Unknown arity gets a runtime guard
+write. A void gateway can explicitly select a required captured argument as
+its result, independent of native return registers. This uses the same operand
+snapshot as the native call, before fixed writes and parameter conversions. Unknown arity gets a runtime guard
 and original-call fallback. Unknown targets retain the original
 gateway and status. The bytecode JSON adapter owns schema parsing; observers
 remain conditional evidence and cannot supply these assertions implicitly.
