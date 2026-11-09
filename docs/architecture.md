@@ -5716,6 +5716,11 @@ children precede their parents, and simultaneous replacement bodies remain
 unchanged. Rendering appends fragments directly into their parent's text and
 stores completed fragments in one dense table. No fragment reference survives
 insertion of its parent; emitted text and precedence remain unchanged.
+Rendering gathers children before parents with an iterative postorder instead
+of sorting node IDs; a leaf root renders directly. MBA abstraction reuses the
+original DAG when its existing classification requires no hidden inputs,
+literal-mask carriers or arithmetic-complement rewrite. Independent identity
+verification and work accounting remain unchanged.
 Boolean polynomial reconstruction can factor shared cofactors across groups
 with disjoint remaining variables. Exact symmetric differences retain every
 unmatched term. Larger decision graphs try this construction before expanding

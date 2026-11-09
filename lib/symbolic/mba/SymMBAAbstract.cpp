@@ -1265,6 +1265,27 @@ abstractToMBAImpl(SymContext &Ctx, SymRef Root, bool AllowProducts,
 
   Abstraction Out;
   Out.MayHaveProducts = HasProducts;
+  // Classification already establishes the measurement domain. If every
+  // opaque input is an original variable and no mask or arithmetic complement
+  // needs rewriting, the independent body is the original DAG. In particular,
+  // identity proofs need no second placeholder pool or reconstruction tables.
+  const bool NeedsRewriting = llvm::any_of(Order, [&](uint32_t Index) {
+    const SymRef R(Index);
+    const auto Op = Ctx.op(R);
+    const auto Role = Roles.lookup(Index);
+    if (Role == Role::Atom)
+      return !Ctx.isVar(R);
+    if (Op == SymOp::Not)
+      return Role == Role::Linear;
+    return (Op == SymOp::And || Op == SymOp::Or || Op == SymOp::Xor) &&
+           llvm::any_of(Ctx.operands(R),
+                        [&](SymRef C) { return Ctx.isConst(C); });
+  });
+  if (!NeedsRewriting) {
+    Out.Body = Root;
+    Out.IndependentBody = Root;
+    return Out;
+  }
   NodeSet Reserved;
   // Caller inputs below opaque boundaries must still keep their identities,
   // even when their names coincide with a numbered placeholder declaration.

@@ -10427,6 +10427,9 @@ isolation.
 simultaneous interior replacements and late placeholders through 257 bits.
 `SymParse.LargeSharedFragmentsKeepPrecedenceAfterTableGrowth` checks exact text
 and parser roundtrips past the inline table capacity.
+`SymMBA.CornerAgreementDoesNotProveMaskedOrNonlinearIdentities` retains
+nonuniform-mask and nonlinear-product refusals even when zero/all-ones
+corners agree, and checks arithmetic complements through 257 bits.
 `SymMBAWidePairs.SparseCorrectionsLeaveRoomForTheIndependentTail` independently
 evaluates a nonlinear 33-factor product and its linear tail within the shared
 65,536-unit allowance. These tests exercise the shared expression and MBA

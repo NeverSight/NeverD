@@ -343,25 +343,34 @@ Fragment Printer::render(SymRef R) const {
 }
 
 std::string Printer::run(SymRef Root) {
-  // Interning appends a node only once its operands exist, so ascending index
-  // order over the reachable set reaches every child before its parent.  The
-  // walk is iterative and the memo is keyed per node, so a DAG that an
-  // obfuscator made deep or wide costs stack proportional to nothing and time
-  // proportional to its node count rather than its tree size.
+  if (Ctx.operands(Root).empty())
+    return render(Root).Text;
+
+  // Visit operands before completing their parent. Interned nodes form a DAG,
+  // so an already visited operand is complete, never an active ancestor.
+  // Iterative postorder avoids both recursion on deep expressions and sorting
+  // the reachable set, while rendering each shared node only once.
   llvm::SmallVector<uint32_t, 64> Order;
   llvm::SmallDenseSet<uint64_t,
                       limits::symbolic::kSymExprTraversalInlineBuckets>
       Seen;
-  llvm::SmallVector<SymRef, 64> Work{Root};
+  struct Frame {
+    SymRef Ref;
+    bool Expanded;
+  };
+  llvm::SmallVector<Frame, 64> Work{{Root, false}};
   while (!Work.empty()) {
-    SymRef R = Work.pop_back_val();
+    auto [R, Expanded] = Work.pop_back_val();
+    if (Expanded) {
+      Order.push_back(R.index());
+      continue;
+    }
     if (!Seen.insert(R.index()).second)
       continue;
-    Order.push_back(R.index());
+    Work.push_back({R, true});
     for (SymRef C : Ctx.operands(R))
-      Work.push_back(C);
+      Work.push_back({C, false});
   }
-  llvm::sort(Order);
 
   Memo.reserve(Order.size());
   for (uint32_t I : Order)
