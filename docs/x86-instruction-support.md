@@ -4657,3 +4657,60 @@ artifact. Windows/Darwin i386 source ABIs, complete mode/task transitions,
 software SMM/SGX transfers, unbound asynchronous producers and hardware
 qualification remain open. LLVM source and the production r6 pin are unchanged;
 no new LLVM release is declared.
+
+## Native translation controls in both x86 code modes (2026-11-08)
+
+TLBSYNC now carries its full rAX input from the original instruction through
+LowIR, native LLVM and both C writers. AMD APM volume 3 revision 3.38, page 496
+specifies an IOMMU-completion control in bit 0 when EnhancedTlbi is enabled;
+reserved bits keep their native fault behavior. Treating TLBSYNC as an
+operand-free lifted operation lost this state. Independent pre-fix probes
+confirmed that the old LLVM interface left an arbitrary incoming rAX value
+at the instruction. The new `llvm.x86.tlbsync.control32/64` and NeverC
+`__builtin_ia32_tlbsync_control32/64` interfaces retain every input bit and
+reject a code-mode mismatch. The legacy operand-free API explicitly selects
+CPU-only synchronization with rAX=0. It is not used to represent a lifted
+instruction whose original register value is observable.
+
+NeverC also exposes `__builtin_ia32_invlpgb32` and the EPTP-switch VMFUNC API
+in i386. INVLPGB retains the complete address/control word, EDX IDs and ECX
+count. Its long-mode address-size override stays distinct. VMFUNC's named
+EPTP-switch API binds EAX=0 and transports all 32 ECX bits; it does not mask
+an invalid selector into range. A generic lifted VMFUNC still requires its
+own leaf/state proof before it can use that specialized native interface.
+
+Capstone now reports the implicit accumulator read at the code-mode width,
+including redundant operand/address prefixes. The strict lifter rejects
+missing or incorrectly narrowed register detail before any LowIR effect.
+The independent decoder regression covers 16/32/64-bit decode modes; native
+source qualification here remains code32/code64.
+
+HighC and LLVM-to-C share the same width and compiler-capability decisions.
+Native TLBSYNC and INVLPGB calls reject narrowed memory effects and speculative
+or mismatched calling-convention contracts. Legacy TLBSYNC rendering has
+separate zero-control and malformed-call regressions. Complete generated C
+is recompiled through NeverC and stock Clang and compared with independently
+encoded originals. Corruptions of control, IDs, count and returned values
+must fail those comparisons. The scalar MSR/port and WRMSRNS families are
+rerun because their complete-source witness shares the instruction decoder.
+
+All 26 selected NeverD tests pass across the full fork and r6 SDKs, with no
+skips and 2,840 recorded native C compilations. The 1,440 complete-source
+objects pass 4,320 original-byte comparisons and reject 3,456 corruption
+controls. TLBSYNC/INVLPGB accounts for 672 objects, 2,016 comparisons and 1,920
+controls. Capstone passes 103 selected decoder/native-detail tests. NeverC
+passes 190 x86/i386 tests; its embedded and full-backend witnesses pass
+552/752 checks respectively. The full LLVM witness passes 772 checks and five
+codegen suites. Strict linked-compiler global-state auditing reports no
+findings or unscannable inputs; all 481 checker self-tests pass.
+
+The [translation-control evidence](evidence/x86-translation-controls-2026-11-08.json)
+records exact compiler/build revisions, object/result hashes and successful
+checks. The complete-source comparisons intercept privileged instructions
+while executing surrounding code. They qualify register transport, retained
+effects and ABI completion. Separate instruction-retention and memory-order
+checks qualify compiler ordering; original CPL3 fault/sigreturn cases check
+the observed fault boundary and accumulator input. These are separate from
+physical TLB/IOMMU invalidation and VMX EPTP switching success.
+The production LLVM r6 pin remains unchanged. Remaining source/mode and
+full-machine execution gates must close before the final release and pin update.

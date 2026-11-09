@@ -1,0 +1,826 @@
+{
+  "schema": 1,
+  "date": "2026-11-08",
+  "scope": "Full TLBSYNC controls, native INVLPGB32 and portable VMFUNC EPTP source; decoder, lifter, both C routes and native compiler transport.",
+  "sources": {
+    "neverd": "8da1f1129f81bf1d2eb8cea91086e3eeac586c40",
+    "neverc": "f0f12ccc465ac5083c81500e649b1467301d8cf6",
+    "llvm": "a32cd957841c664570df90bc41902913f1f16226",
+    "capstone": "c0eb1be18918bebe6e6b1f46a17122ad9a5b6d36"
+  },
+  "reference": {
+    "title": "AMD64 APM volume 3, revision 3.38, July 2026",
+    "pages": [
+      397,
+      398,
+      399,
+      496
+    ],
+    "sha256": "e18bd39ad0ca19d2eb9b9ea25c2635144c5ab368e5d6fbdc7a08345515ea1aee",
+    "local_reference": "amd-vol3-3.38.pdf",
+    "online_limitation": "The original revision-specific URL no longer resolved during this run; the archived primary PDF is identified by SHA-256."
+  },
+  "before": {
+    "admission_receipt_sha256": "2b6561c561068edc495a66d9faba9e7a52e6e51d4c88d17d0132a6628123baed",
+    "unbound_tlbsync_receipt": {
+      "llc_sha256": "1d6f80fa2f4fb7e0fe0e2b5f3f1732c527a898274ecb9063a9d7830ab3b3ec5e",
+      "source_build_head": "b726cb0425bc7e1f7e2753972a748ebcfa8b5741",
+      "records": [
+        {
+          "mode": 32,
+          "object_sha256": "80b62a5804554cb1d2f3f916e141e25beecfbf3689a46140ae2ef3b7ba4a83fa",
+          "text_hex": "0f01ffc3",
+          "initial_control": 2147483649,
+          "observed_control": 2147483649,
+          "compatibility_zero_control_passed": false
+        },
+        {
+          "mode": 64,
+          "object_sha256": "087a0d6d1b9ffad72365328fd9888160c3066f217c63dfad8b972ec36cd3b7bb",
+          "text_hex": "0f01ffc3",
+          "initial_control": 9223372036854775809,
+          "observed_control": 9223372036854775809,
+          "compatibility_zero_control_passed": false
+        }
+      ],
+      "privileged_execution": false
+    }
+  },
+  "builds": {
+    "llvm-build-receipt.json": {
+      "source_head": "a32cd957841c664570df90bc41902913f1f16226",
+      "command": [
+        "cmake",
+        "--build",
+        "build-intrinsics",
+        "--target",
+        "llc",
+        "opt",
+        "llvm-as",
+        "llvm-dis",
+        "llvm-mc",
+        "llvm-objdump",
+        "--parallel",
+        "4"
+      ],
+      "exit_code": 0,
+      "collector_exit_code": 1,
+      "collector_error": "The original collector included --parallel in its output-name slice after the successful build. This receipt recovers the six tool hashes; no recompilation was performed.",
+      "log_sha256": "7f567b8c9b765c6aa19afe191ba8e2c2d99384c5a2cfa18ff61286d8a14bcb4e",
+      "outputs": {
+        "llc": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+        "opt": "6722b904bbba3a270076ad01147f3d1356d0f437d020dd8b803dec6861e092e5",
+        "llvm-as": "2297fe41ec413731f836659d6e5f3156e0f9ea4f45fd7328df3940bdc942e4d1",
+        "llvm-dis": "efae2b4de3aa7562cf4af31e561bf4fb51c273f845b0cc0f98acb9c8c96e6320",
+        "llvm-mc": "52a2080052818b01208158b76a02eeaf46866e4976b3dd1663390097feb67de9",
+        "llvm-objdump": "0c2bb9d9cc3ab123ff92ae8f79edc6e05b73fb2ea10f96a5cfbae5136564931a"
+      }
+    },
+    "neverc-integrated-build-receipt.json": {
+      "source_head": "f0f12ccc465ac5083c81500e649b1467301d8cf6",
+      "command": [
+        "cmake",
+        "--build",
+        "build-neverc",
+        "--target",
+        "neverc",
+        "neverc-tests",
+        "--parallel",
+        "4"
+      ],
+      "exit_code": 0,
+      "seconds": 242.523,
+      "log_sha256": "7290de4789d1f2c401165e47006aee724e3bbfeebd62ca6bd7d35be40766053c",
+      "outputs": {
+        "neverc": "9d13b22fc974bbcb76b128f13e2093ea8371f9514cc26349bf7ee04288624eff",
+        "neverc-tests": "c94ee2b7ba1dd231aa0ee09b0ed862910ffa686ab3f0ae97af672eca55730bca"
+      }
+    },
+    "integrated-native-build-receipt.json": {
+      "source_head": "8da1f1129f81bf1d2eb8cea91086e3eeac586c40",
+      "source_status": "",
+      "command": [
+        "python3",
+        "scripts/build.py",
+        "build-x86-native",
+        "--target",
+        "NeverDX86VirtualizationSourceTests",
+        "NeverDX86SystemStateTests",
+        "--parallel",
+        "4"
+      ],
+      "exit_code": 0,
+      "seconds": 16.633,
+      "log_sha256": "40cad052d9a3c8a46d1440b37cff11a3333856018f502b65d34e0534cbb984db",
+      "outputs": {
+        "NeverDX86VirtualizationSourceTests": "66b9c2011f28978d42ae2a895aa28acff1bd3502d9d3b20cb2962a0fb34c4902",
+        "NeverDX86SystemStateTests": "ba1f9055cd81ba22cc04719000c250401129aa85fe369e4e6d040a90da202fc7"
+      }
+    },
+    "integrated-r6-build-receipt.json": {
+      "source_head": "8da1f1129f81bf1d2eb8cea91086e3eeac586c40",
+      "source_status": "",
+      "command": [
+        "python3",
+        "scripts/build.py",
+        "build-x86",
+        "--target",
+        "NeverDX86VirtualizationSourceTests",
+        "NeverDX86SystemStateTests",
+        "--parallel",
+        "4"
+      ],
+      "exit_code": 0,
+      "seconds": 16.98,
+      "log_sha256": "5bf44aa736e01617c06803dc0cde589f837f10229b1c5eec54bd3a024e954d06",
+      "outputs": {
+        "NeverDX86VirtualizationSourceTests": "8c82a279144e24875f2b8b9546cf1594e0efa48168eb50ff6c8a8c47fcbae16b",
+        "NeverDX86SystemStateTests": "fca521754b0116dbb32870f0fdc3cc1369490bbf0524ecee09f1f1e1676e2bb1"
+      }
+    }
+  },
+  "focused_checks": {
+    "neverc-integrated": {
+      "source_head": "f0f12ccc465ac5083c81500e649b1467301d8cf6",
+      "source_status": "",
+      "compiler_sha256": "9d13b22fc974bbcb76b128f13e2093ea8371f9514cc26349bf7ee04288624eff",
+      "test_binary_sha256": "c94ee2b7ba1dd231aa0ee09b0ed862910ffa686ab3f0ae97af672eca55730bca",
+      "tests": 190,
+      "failed": 0,
+      "skipped": 0,
+      "skipped_names": [],
+      "exit_code": 0,
+      "log_sha256": "6495038e3e8e0ea2368243f372d03efb538a3b049fec37785dbd4c39bb4e1852"
+    },
+    "native-details": {
+      "source_head": "8da1f1129f81bf1d2eb8cea91086e3eeac586c40",
+      "source_status": "",
+      "source_tree": "3e3203d71995d31e96fd21d96444aebb89395d60",
+      "binary_sha256": "ba1f9055cd81ba22cc04719000c250401129aa85fe369e4e6d040a90da202fc7",
+      "tests": 4,
+      "c_compilations": 0,
+      "passed": 4,
+      "failed": 0,
+      "skipped": [],
+      "exit_code": 0,
+      "log_sha256": "2d782d7815df107d279c3997f56a561a7cda063dc9b42ea793cee77808e7932d",
+      "result_sha256": "13c2d2ac2c2b2afbfa47822b4dd96c727253cfcc8fc070c37e79969d2e8b1952"
+    },
+    "r6-details": {
+      "source_head": "8da1f1129f81bf1d2eb8cea91086e3eeac586c40",
+      "source_status": "",
+      "source_tree": "3e3203d71995d31e96fd21d96444aebb89395d60",
+      "binary_sha256": "fca521754b0116dbb32870f0fdc3cc1369490bbf0524ecee09f1f1e1676e2bb1",
+      "tests": 4,
+      "c_compilations": 0,
+      "passed": 4,
+      "failed": 0,
+      "skipped": [],
+      "exit_code": 0,
+      "log_sha256": "59c953708b93616ea437ec7cfbab120c7647e25eacd5d37ee4c62e94200aad21",
+      "result_sha256": "0247dfd72365b70ee3f5c57e18aa50935b53d41eb7a79ae4c4473931f5bcc280"
+    },
+    "native-qualified": {
+      "source_head": "8da1f1129f81bf1d2eb8cea91086e3eeac586c40",
+      "source_status": "",
+      "source_tree": "3e3203d71995d31e96fd21d96444aebb89395d60",
+      "binary_sha256": "66b9c2011f28978d42ae2a895aa28acff1bd3502d9d3b20cb2962a0fb34c4902",
+      "neverc_sha256": "9d13b22fc974bbcb76b128f13e2093ea8371f9514cc26349bf7ee04288624eff",
+      "neverc_llc_sha256": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+      "host_clang_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "tests": 10,
+      "c_compilations": 1420,
+      "passed": 10,
+      "failed": 0,
+      "skipped": [],
+      "exit_code": 0,
+      "log_sha256": "ae80aa61abc801524c644c3887e2e670da16cd004c1df180fb53aa8a62a74e59",
+      "result_sha256": "79a0eb63eebc3ea552d3c433a0c420e8abefa7ff7daae17fd74ecf077d240d86"
+    },
+    "r6-qualified": {
+      "source_head": "8da1f1129f81bf1d2eb8cea91086e3eeac586c40",
+      "source_status": "",
+      "source_tree": "3e3203d71995d31e96fd21d96444aebb89395d60",
+      "binary_sha256": "8c82a279144e24875f2b8b9546cf1594e0efa48168eb50ff6c8a8c47fcbae16b",
+      "neverc_sha256": "9d13b22fc974bbcb76b128f13e2093ea8371f9514cc26349bf7ee04288624eff",
+      "neverc_llc_sha256": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+      "host_clang_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "tests": 8,
+      "c_compilations": 1420,
+      "passed": 8,
+      "failed": 0,
+      "skipped": [],
+      "exit_code": 0,
+      "log_sha256": "e6fc42c8d20af831877509a0d5b20594114cec77a5b219910ea700991529e555",
+      "result_sha256": "12fac43aa4dfb1640ad144dc21a3d1988e631fc8877601fa060a9fea5b5c51e4"
+    }
+  },
+  "bounded_compiler_witnesses": {
+    "llvm-witness": {
+      "primary_profiles": 104,
+      "encoding_and_completion_checks": 772,
+      "negative_controls": 34,
+      "receipt_sha256": "ec88961a5d189a75db6b12a20f89c9603a05787047830064bd9aa7d51e55e704",
+      "results_sha256": "b54364fd8dc4239e750a6931c78b6d8c025043c9137865302d0abb7c6070d4a7",
+      "object_routes": [
+        "llvm"
+      ],
+      "privileged_hardware_execution": false
+    },
+    "neverc-integrated-embedded": {
+      "primary_profiles": 64,
+      "encoding_and_completion_checks": 552,
+      "negative_controls": 20,
+      "receipt_sha256": "9430939a749db2fa9cc1cce3ff161c6c3df1b055ebc6f8e5d2b713eb7d9b7809",
+      "results_sha256": "d071886fa8dfdfb663af26758a092d6051c09bb09efc8ecdd9def24327d7a313",
+      "object_routes": [
+        "neverc-driver"
+      ],
+      "privileged_hardware_execution": false
+    },
+    "neverc-integrated-full": {
+      "primary_profiles": 104,
+      "encoding_and_completion_checks": 752,
+      "negative_controls": 34,
+      "receipt_sha256": "25fc0402c4b629f5ca423cf97d5fdceade6f0bcaef2f4371c17f2c2375e4d690",
+      "results_sha256": "88452ba770b70358ecf0dedaffbb1ec4643f84b28c4520bd3b4fa97b14d2fa9b",
+      "object_routes": [
+        "neverc-driver",
+        "neverc-ir-to-llvm"
+      ],
+      "privileged_hardware_execution": false
+    }
+  },
+  "complete_source": [
+    {
+      "profile": "native-tlb-neverc",
+      "family": "tlb",
+      "objects": 168,
+      "comparisons": 504,
+      "negative_controls": 480,
+      "compiler_sha256": "9d13b22fc974bbcb76b128f13e2093ea8371f9514cc26349bf7ee04288624eff",
+      "backend_sha256": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+      "receipt_sha256": "51feac3e20d10a38b8d1664652a57863c4e1d4be95d9772a3f6d36d1e6488e0d",
+      "results_sha256": "6ba50dea6f186657fa04fe9ca1b92c16b4b5f35f856189f1f83ff10a78266368",
+      "object_routes": [
+        "neverc-driver",
+        "neverc-ir-to-llvm"
+      ]
+    },
+    {
+      "profile": "native-tlb-clang",
+      "family": "tlb",
+      "objects": 168,
+      "comparisons": 504,
+      "negative_controls": 480,
+      "compiler_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "backend_sha256": null,
+      "receipt_sha256": "ad5a4aa136fdd51c1090514c13a8285a9faa62e8cf6e79c0bbc55b78f1eaba52",
+      "results_sha256": "861f775c1a6892a8b3a92efff70f34d7470fab0f336e05451893c1bf2cf385e3",
+      "object_routes": [
+        "compiler-driver"
+      ]
+    },
+    {
+      "profile": "native-scalar-neverc",
+      "family": "scalar",
+      "objects": 168,
+      "comparisons": 504,
+      "negative_controls": 336,
+      "compiler_sha256": "9d13b22fc974bbcb76b128f13e2093ea8371f9514cc26349bf7ee04288624eff",
+      "backend_sha256": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+      "receipt_sha256": "8dd6def540854a8c59888f2b5064196b9067aff0925b856a72fa5d2463de2c18",
+      "results_sha256": "985797c61f3faf05de756e7f7802e095a6d8c9e10e04116cc1bc2502a2d9ba81",
+      "object_routes": [
+        "neverc-driver"
+      ]
+    },
+    {
+      "profile": "native-scalar-clang",
+      "family": "scalar",
+      "objects": 168,
+      "comparisons": 504,
+      "negative_controls": 336,
+      "compiler_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "backend_sha256": null,
+      "receipt_sha256": "bb23e4ee3fe418c36f6af836d0c682ec544bc031fa47718118f2b6c08340a3ca",
+      "results_sha256": "874a8f9def5a1e1e325a77d10e07ef6ad1ad38d9cf49901e2c87e3db590a21b7",
+      "object_routes": [
+        "compiler-driver"
+      ]
+    },
+    {
+      "profile": "native-wrmsrns-neverc",
+      "family": "wrmsrns",
+      "objects": 24,
+      "comparisons": 72,
+      "negative_controls": 48,
+      "compiler_sha256": "9d13b22fc974bbcb76b128f13e2093ea8371f9514cc26349bf7ee04288624eff",
+      "backend_sha256": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+      "receipt_sha256": "8a6064c4d516c10ea524a0f3e0b2fe3430993eeadd5f51a62d1316bfbec00613",
+      "results_sha256": "387da80e2873a925b8f11f73050ee99a1f926754f2da78a056e5b94696ac60bf",
+      "object_routes": [
+        "neverc-driver"
+      ]
+    },
+    {
+      "profile": "native-wrmsrns-clang",
+      "family": "wrmsrns",
+      "objects": 24,
+      "comparisons": 72,
+      "negative_controls": 48,
+      "compiler_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "backend_sha256": null,
+      "receipt_sha256": "c39557de41c7b5c895c1287418f2a8ccf26e501fa5fd292b8ecedd0004d53c14",
+      "results_sha256": "eab1e6d6d1896fbfc39ae6f358ef5d022a2f1ecc33c05b35a33d923ca1fca761",
+      "object_routes": [
+        "compiler-driver"
+      ]
+    },
+    {
+      "profile": "r6-tlb-neverc",
+      "family": "tlb",
+      "objects": 168,
+      "comparisons": 504,
+      "negative_controls": 480,
+      "compiler_sha256": "9d13b22fc974bbcb76b128f13e2093ea8371f9514cc26349bf7ee04288624eff",
+      "backend_sha256": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+      "receipt_sha256": "ea02a5fa37a23ee7da80967b1fa6604acd4333f8835f4bbcd174173e2f10bc78",
+      "results_sha256": "ee68f808fae62e6a78b75b1e134df976c71b3bc9b14cf48b837208960cb3ef53",
+      "object_routes": [
+        "neverc-driver",
+        "neverc-ir-to-llvm"
+      ]
+    },
+    {
+      "profile": "r6-tlb-clang",
+      "family": "tlb",
+      "objects": 168,
+      "comparisons": 504,
+      "negative_controls": 480,
+      "compiler_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "backend_sha256": null,
+      "receipt_sha256": "231668050cae6c272156acf1d847c8239ca89c389d0fab21d77c1149f1aa2476",
+      "results_sha256": "42d3a0eeab5edb541cab55826cef194fad43e3b7cf7cc1cfbe8c5b2e04f5b43e",
+      "object_routes": [
+        "compiler-driver"
+      ]
+    },
+    {
+      "profile": "r6-scalar-neverc",
+      "family": "scalar",
+      "objects": 168,
+      "comparisons": 504,
+      "negative_controls": 336,
+      "compiler_sha256": "9d13b22fc974bbcb76b128f13e2093ea8371f9514cc26349bf7ee04288624eff",
+      "backend_sha256": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+      "receipt_sha256": "1308e84de17a1a0aa5f4e0bfa8f1d0c73ec38380c2ac6eaa7d7a9552c25723d1",
+      "results_sha256": "9137472a24b80c6c7ebcc58cff4dbe95c6d2ccaba5ea9e00f030f10568a0074e",
+      "object_routes": [
+        "neverc-driver"
+      ]
+    },
+    {
+      "profile": "r6-scalar-clang",
+      "family": "scalar",
+      "objects": 168,
+      "comparisons": 504,
+      "negative_controls": 336,
+      "compiler_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "backend_sha256": null,
+      "receipt_sha256": "aea49d056c0a753564646bf3856f7b0cb62951ca2f305a405b9c253b62e82c75",
+      "results_sha256": "3bf440ac432665d37eecab3f6317bc20cfbe0843002b457ff02942090f14b68f",
+      "object_routes": [
+        "compiler-driver"
+      ]
+    },
+    {
+      "profile": "r6-wrmsrns-neverc",
+      "family": "wrmsrns",
+      "objects": 24,
+      "comparisons": 72,
+      "negative_controls": 48,
+      "compiler_sha256": "9d13b22fc974bbcb76b128f13e2093ea8371f9514cc26349bf7ee04288624eff",
+      "backend_sha256": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+      "receipt_sha256": "6411e3ba15791a1d819f937d6221d5364ac16503c9360f8dc87533cf5cac61bd",
+      "results_sha256": "ae644d70d864554479116fccaab3258a96cf6e3f3f493c97751d4a89320cf9dc",
+      "object_routes": [
+        "neverc-driver"
+      ]
+    },
+    {
+      "profile": "r6-wrmsrns-clang",
+      "family": "wrmsrns",
+      "objects": 24,
+      "comparisons": 72,
+      "negative_controls": 48,
+      "compiler_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "backend_sha256": null,
+      "receipt_sha256": "3bb617c8483f44eeb85bd91bd96846e212dce247069525c8eec7e4a9ed96bc6a",
+      "results_sha256": "82ec718feb07df6655eb6a7c1d0ef49a783e1bf1d1199ebf218819743daf21ed",
+      "object_routes": [
+        "compiler-driver"
+      ]
+    }
+  ],
+  "llvm_codegen": {
+    "name": "llvm-lit",
+    "command": [
+      "unshare",
+      "--user",
+      "--map-root-user",
+      "--mount",
+      "python3",
+      "PRIVATE_TMP_RUNNER",
+      "ARTIFACT_ROOT/llvm-lit/tmp",
+      "taskset",
+      "-c",
+      "0",
+      "LLVM_ROOT/build-intrinsics/bin/llvm-lit",
+      "-j",
+      "1",
+      "-v",
+      "-o",
+      "ARTIFACT_ROOT/llvm-lit/result.json",
+      "LLVM_ROOT/llvm/test/CodeGen/X86/tlbsync-control.ll",
+      "LLVM_ROOT/llvm/test/CodeGen/X86/bounded-system-intrinsics.ll",
+      "LLVM_ROOT/llvm/test/CodeGen/X86/bounded-virtualization-intrinsics.ll",
+      "LLVM_ROOT/llvm/test/CodeGen/X86/msr-intrinsics.ll",
+      "LLVM_ROOT/llvm/test/CodeGen/X86/system-native-intrinsics.ll"
+    ],
+    "source_head": "a32cd957841c664570df90bc41902913f1f16226",
+    "llc_sha256": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+    "witness_sha256": "bc00517f2fb694e0b2da79faafbfad1ea5feb1d4c949a8b59e3a021aac216045",
+    "exit_code": 0,
+    "seconds": 0.862,
+    "log_sha256": "3ed42ee5f8a9099cfb7ae482cebb8f91bf9a9c9bea6c108428b912d263ce4777"
+  },
+  "capstone": {
+    "steps": [
+      {
+        "name": "red-compile",
+        "command": [
+          "HOST_TOOLS/clang",
+          "-O2",
+          "-I",
+          "CAPSTONE_ROOT/include",
+          "CAPSTONE_ROOT/tests/unit/x86_system_extensions.c",
+          "NEVERD_ROOT/build-x86/third_party/capstone/libcapstone.a",
+          "-o",
+          "ARTIFACT_ROOT/capstone-qualified/red"
+        ],
+        "exit_code": 0,
+        "expected": 0,
+        "seconds": 0.208,
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "red",
+        "command": [
+          "taskset",
+          "-c",
+          "12",
+          "ARTIFACT_ROOT/capstone-qualified/red"
+        ],
+        "exit_code": 1,
+        "expected": 1,
+        "seconds": 0.004,
+        "log_sha256": "796cbb7c60e142c24616444547ac97f7406ac575ddc130a4b6900eb4343cc83c"
+      },
+      {
+        "name": "fix",
+        "command": [
+          "python3",
+          "ARTIFACT_ROOT/fix_capstone.py"
+        ],
+        "exit_code": 0,
+        "expected": 0,
+        "seconds": 0.02,
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "diff-check",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit_code": 0,
+        "expected": 0,
+        "seconds": 0.013,
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "configure",
+        "command": [
+          "cmake",
+          "-S",
+          "CAPSTONE_ROOT",
+          "-B",
+          "ARTIFACT_ROOT/capstone-build",
+          "-G",
+          "Ninja",
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DCMAKE_C_COMPILER=HOST_TOOLS/clang",
+          "-DCAPSTONE_ARCHITECTURE_DEFAULT=OFF",
+          "-DCAPSTONE_X86_SUPPORT=ON",
+          "-DCAPSTONE_BUILD_CSTOOL=OFF",
+          "-DCAPSTONE_BUILD_CSTEST=OFF",
+          "-DCAPSTONE_BUILD_LEGACY_TESTS=ON"
+        ],
+        "exit_code": 0,
+        "expected": 0,
+        "seconds": 0.842,
+        "log_sha256": "ebcb122f8db2718cd603b0d2b5b0d2079e36e8d0cae43e3878c3482982bf2ea5"
+      },
+      {
+        "name": "build",
+        "command": [
+          "cmake",
+          "--build",
+          "ARTIFACT_ROOT/capstone-build",
+          "--parallel",
+          "4"
+        ],
+        "exit_code": 0,
+        "expected": 0,
+        "seconds": 11.53,
+        "log_sha256": "4cd0bb1de6e23bd270b8ab3e786ac16a4744919764313e24613d5f6cfa6ece87"
+      },
+      {
+        "name": "tests",
+        "command": [
+          "taskset",
+          "-c",
+          "12",
+          "ctest",
+          "--test-dir",
+          "ARTIFACT_ROOT/capstone-build",
+          "-R",
+          "^unit_(x86_|feature_mode|detail_option|text_option|instruction_bytes)",
+          "--output-on-failure",
+          "--parallel",
+          "1",
+          "--output-junit",
+          "ARTIFACT_ROOT/capstone-qualified/result.xml"
+        ],
+        "exit_code": 0,
+        "expected": 0,
+        "seconds": 0.017,
+        "log_sha256": "10712c142d01de676604dea779ef65be5bce380ed4680913a1dfda8ba58affca",
+        "qualification_status": "rejected: CTest selected zero tests"
+      },
+      {
+        "name": "configure-units",
+        "command": [
+          "cmake",
+          "-S",
+          "CAPSTONE_ROOT",
+          "-B",
+          "ARTIFACT_ROOT/capstone-build",
+          "-DCAPSTONE_BUILD_CSTEST=ON"
+        ],
+        "exit_code": 0,
+        "seconds": 0.469,
+        "log_sha256": "2e3b224addcabb73f6d76c169795180d71baf3bd06f7257e8189bd7300e3bb35"
+      },
+      {
+        "name": "build-units",
+        "command": [
+          "cmake",
+          "--build",
+          "ARTIFACT_ROOT/capstone-build",
+          "--target",
+          "x86_amx_avx512",
+          "x86_amx_compute",
+          "x86_amx_fp8_tf32",
+          "x86_amx_tile_contract",
+          "x86_amx_tile_state",
+          "x86_amx_tilezero",
+          "x86_apx_cmov",
+          "x86_apx_evex_adx",
+          "x86_apx_evex_alu",
+          "x86_apx_evex_arithmetic",
+          "x86_apx_evex_bextr",
+          "x86_apx_evex_bls",
+          "x86_apx_evex_bmi_shift",
+          "x86_apx_evex_bmi_ternary",
+          "x86_apx_evex_ccmp",
+          "x86_apx_evex_cmpccxadd",
+          "x86_apx_evex_convert",
+          "x86_apx_evex_count",
+          "x86_apx_evex_ctest",
+          "x86_apx_evex_direct_store",
+          "x86_apx_evex_double_shift",
+          "x86_apx_evex_duplicate_prefix",
+          "x86_apx_evex_enqueue",
+          "x86_apx_evex_existing_gpr",
+          "x86_apx_evex_imul",
+          "x86_apx_evex_invalidate",
+          "x86_apx_evex_kmov",
+          "x86_apx_evex_movrs",
+          "x86_apx_evex_msr",
+          "x86_apx_evex_mul_div",
+          "x86_apx_evex_mulx",
+          "x86_apx_evex_pdep_pext",
+          "x86_apx_evex_rao",
+          "x86_apx_evex_rorx",
+          "x86_apx_evex_shift_rotate",
+          "x86_apx_evex_unary",
+          "x86_apx_evex_vector_gpr",
+          "x86_apx_jmpabs",
+          "x86_apx_push2_pop2",
+          "x86_apx_rex2",
+          "x86_apx_rex2_alu",
+          "x86_apx_rex2_generated",
+          "x86_apx_rex2_push_pop",
+          "x86_apx_setcc",
+          "x86_avx512_14_evex_legality",
+          "x86_avx512_4fmaps_scalar_llig",
+          "x86_avx512er_evex_legality",
+          "x86_bound_access",
+          "x86_buffer_bounds",
+          "x86_call_target",
+          "x86_diet_feature_details",
+          "x86_displacement_size",
+          "x86_encoding_accuracy",
+          "x86_evex_convert_mask_size",
+          "x86_evex_detail",
+          "x86_evex_dot_product_mask_size",
+          "x86_evex_f16c_mask_size",
+          "x86_evex_mask_conversion_access",
+          "x86_evex_narrow_memory_mask_size",
+          "x86_evex_normalization_boundary",
+          "x86_evex_reserved_fields",
+          "x86_evex_scalar_broadcast_mask_size",
+          "x86_evex_vpcmp_id",
+          "x86_evex_vpcmp_mask_size",
+          "x86_evex_vpunpck_mask_size",
+          "x86_exchange_access",
+          "x86_far_immediate_encoding",
+          "x86_gfni_broadcast_detail",
+          "x86_immediate_size",
+          "x86_kmask_access",
+          "x86_kmask_width",
+          "x86_legacy_address_size",
+          "x86_legacy_atomic",
+          "x86_legacy_cet_store",
+          "x86_legacy_enqueue",
+          "x86_mapping_counts",
+          "x86_memory_scale",
+          "x86_reg_access",
+          "x86_relative_jump",
+          "x86_scan_batch",
+          "x86_sha512",
+          "x86_stream_store_access",
+          "x86_system_extensions",
+          "x86_vex_legacy_prefix",
+          "x86_vfpclass_memory_mask_detail",
+          "x86_vfpclass_scalar_llig",
+          "x86_vpbroadcast_mask_source_size",
+          "x86_x87_environment",
+          "x86_x87_environment_hardware",
+          "feature_mode",
+          "detail_option",
+          "text_option",
+          "instruction_bytes",
+          "--parallel",
+          "4"
+        ],
+        "exit_code": 0,
+        "seconds": 3.229,
+        "log_sha256": "2eccbcb1b2b51f49c415f873d78213984608d1d73924ca661fedd0b6b54ed438"
+      },
+      {
+        "name": "tests-qualified",
+        "command": [
+          "taskset",
+          "-c",
+          "12",
+          "ctest",
+          "--test-dir",
+          "ARTIFACT_ROOT/capstone-build",
+          "-R",
+          "^unit_(x86_|feature_mode|detail_option|text_option|instruction_bytes)",
+          "--no-tests=error",
+          "--output-on-failure",
+          "--parallel",
+          "1",
+          "--output-junit",
+          "ARTIFACT_ROOT/capstone-qualified/result.xml"
+        ],
+        "exit_code": 8,
+        "seconds": 166.358,
+        "log_sha256": "264ba92bc9680ec608ec82670f683828c8a79c27d0af6a4d3536808eec9ed569"
+      },
+      {
+        "name": "tests-with-core-suppression",
+        "command": [
+          "taskset",
+          "-c",
+          "12",
+          "ctest",
+          "--test-dir",
+          "ARTIFACT_ROOT/capstone-build",
+          "-R",
+          "^unit_(x86_|feature_mode|detail_option|text_option|instruction_bytes)",
+          "--no-tests=error",
+          "--output-on-failure",
+          "--parallel",
+          "1",
+          "--output-junit",
+          "ARTIFACT_ROOT/capstone-qualified/result.xml"
+        ],
+        "helper_sha256": "bd4916ad8693e7189a3be4433787a640071ebce360eea3d42efe2e637293b0ba",
+        "environment": {
+          "LD_PRELOAD": "NO_CORE_HELPER"
+        },
+        "exit_code": 0,
+        "seconds": 43.404,
+        "log_sha256": "d3b895abb5d1bade055ee36a064df79edc502f0e319dd1173e2d9db4231f98b3"
+      }
+    ],
+    "unit_results": {
+      "name": "(empty)",
+      "tests": "103",
+      "failures": "0",
+      "disabled": "0",
+      "skipped": "0",
+      "hostname": "",
+      "time": "43",
+      "timestamp": "2026-11-08T22:14:23"
+    },
+    "results_sha256": "f9f8780ca4c67ab956997d4ab43b10c05badd09814383489c9aea003b3f71751",
+    "publication": {
+      "commit": "c0eb1be18918bebe6e6b1f46a17122ad9a5b6d36",
+      "remote": "https://github.com/NeverSight/capstone.git",
+      "verified_heads": [
+        "next",
+        "codex/x86-tlbsync-controls"
+      ],
+      "verification": "git ls-remote returned the exact commit for both refs after atomic push",
+      "unit_tests": 103,
+      "failed": 0,
+      "skipped": 0,
+      "old_implementation_red_profiles": 6
+    }
+  },
+  "global_state": {
+    "artifact_report": {
+      "forbidden": [],
+      "heuristic": [],
+      "headers": [],
+      "source_globals": [],
+      "binary": [],
+      "unscannable": [],
+      "failed": false
+    },
+    "receipt_sha256": "80ad5456d87f9f37b2c529e3c157a348151f9e98656b87097b07a8b408ecff9f",
+    "immutable_metadata_review": {
+      "old_definition": "static constexpr IntrinsicTargetInfo TargetInfos[] = { {llvm::StringLiteral(\"\"), 0, 370}, {llvm::StringLiteral(\"aarch64\"), 370, 1432}, {llvm::StringLiteral(\"x86\"), 1802, 1821}, };",
+      "new_definition": "static constexpr IntrinsicTargetInfo TargetInfos[] = { {llvm::StringLiteral(\"\"), 0, 370}, {llvm::StringLiteral(\"aarch64\"), 370, 1432}, {llvm::StringLiteral(\"x86\"), 1802, 1824}, };",
+      "old_definition_sha256": "85e7593785364cf00f438ef5ffd9c57707b3c5fb6680ea746d6cef57164aca58",
+      "new_definition_sha256": "b83e18472fbe84fd31f6d854cad06cc358ec62ac1f30f0166c6f1024aa7b3f3c",
+      "review": "Only x86 intrinsic count changed from 1821 to 1824; element type, declaration, string storage, offset, and exact matching rules unchanged."
+    },
+    "checker_self_tests": 481,
+    "checker_self_test_log_sha256": "e1c71cf1c375d139140f316fab763d19967b238e301982cf6ee9efe835de37c4"
+  },
+  "witness_sha256": {
+    "no_core_helper": "bd4916ad8693e7189a3be4433787a640071ebce360eea3d42efe2e637293b0ba",
+    "private_tmp_runner": "bb37523e352b56e8a66e70660146eb73901e72462aabdfb48612d1acfb0c4000",
+    "complete_source": "b064b17bb8d575f98672b299b009cf3cf99614993116ae051d3f25bd048b97ba",
+    "bounded_compiler": "104ead604963eed3fb503da0b0ea7c362653a1de4a63065f628c556f50019275"
+  },
+  "qualification_limits": [
+    "Privileged instruction interception qualifies transport, not physical TLB/IOMMU invalidation or VMX EPTP switch success.",
+    "Original CPL3 fault and controlled sigreturn checks are distinct from successful privileged hardware execution.",
+    "32-bit NeverC object generation uses its Linux i386 external-backend driver; x64 full-backend witnesses compile actual NeverC IR through llc.",
+    "Generic lifted VMFUNC remains conservative without a proved supported leaf and register ABI.",
+    "Windows/Darwin i386 source ABI, remaining REP/RTM/MPX source candidates, full mode/task transitions, software SMM/SGX and unbound asynchronous producers remain outside this batch."
+  ],
+  "release": {
+    "published": false,
+    "production_sdk_pin": "neverd-llvm-v23.0.0-r6",
+    "llvm_gitlink": "b726cb0425bc7e1f7e2753972a748ebcfa8b5741",
+    "llvm_publication": {
+      "commit": "a32cd957841c664570df90bc41902913f1f16226",
+      "remote": "https://github.com/NeverSight/llvm-project.git",
+      "verified_heads": [
+        "main",
+        "codex/x86-skinit-native"
+      ],
+      "verification": "git ls-remote returned this exact commit for both refs after atomic push",
+      "release_published": false
+    },
+    "neverc_publication": {
+      "commit": "f0f12ccc465ac5083c81500e649b1467301d8cf6",
+      "remote": "https://github.com/NeverSight/NeverC.git",
+      "verified_heads": [
+        "dev",
+        "codex/x86-native-intrinsics"
+      ],
+      "verification": "git ls-remote returned this exact commit for both refs after atomic push"
+    }
+  }
+}

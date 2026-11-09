@@ -1036,6 +1036,26 @@ and twelve complete C sources. Run the same complete-source witness with
 `--family wrmsrns` to compare both compilers' C with the originals, including
 full-width MSR values, selectors, return state and rejected corruptions.
 
+`X86PortableSystemSource.TlbControlsRetainEveryImplicitInput` checks the
+complete TLBSYNC accumulator and INVLPGB address/control, IDs and count in
+both code modes. It includes TLBSYNC's address prefix without narrowing its
+control input, and INVLPGB's distinct long-mode address override. The 360 C
+compilations per SDK retain 42 independent original inputs and 84 complete
+ELF C sources. Run `scripts/check_x86_scalar_system_source.py --family tlb`
+with both compilers after the export producer finishes. With `--backend-llc`,
+the witness records the actual NeverC i386 external-driver path and the x64
+NeverC-IR-to-llc path separately. Rerun scalar and WRMSRNS families when
+changing their shared instruction-boundary decoder.
+`LegacyTlbSyncSelectsCpuOnlyControl` checks old void LLVM calls through the
+renderer, LLVM-to-C and NeverC; malformed mode, signature, effect and calling
+convention contracts must be rejected. `X86SystemExtensions.*` in
+`NeverDX86SystemStateTests` checks exact decoder inputs and refuses missing,
+narrowed or wrong-register TLBSYNC metadata before producing LowIR effects.
+These tests supplement complete-source controlled completions with the
+original CPL3 fault/sigreturn comparisons in
+`X86SystemExtensionsSource.FaultsInputsAndFlagResultsMatchEveryRoute`.
+See [the recorded scope and limitations](evidence/x86-translation-controls-2026-11-08.json).
+
 NeverC's `tests/verify-i386-portable-system.py --compiler NEVERC
 --backend-llc LLVM_LLC --keep OUT` covers the other portable i386 interfaces
 and REP dynamic frames. `tests/verify-i386-cpuid-header.py --compiler NEVERC
