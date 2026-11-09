@@ -753,6 +753,24 @@ SymRef SymContext::mkEq(SymRef A, SymRef B) {
       return mkNot(operand(Selected, 0));
     return mkFalse();
   }
+  // A captured status word need not be expanded when comparing it with an
+  // XOR-adjusted copy. Only the terms that differ can affect equality.
+  if (auto Terms = detail::cancelCommonOperands(*this, A, B, SymOp::Xor)) {
+    const uint32_t W = width(A);
+    A = Terms->Left.empty() ? mkZero(W) : mkXor(Terms->Left);
+    B = Terms->Right.empty() ? mkZero(W) : mkXor(Terms->Right);
+    return mkEq(A, B);
+  }
+  // Adding the same word to both sides preserves equality modulo 2^Width.
+  // Cancel before bitwise expansion can hide that shared word. In particular,
+  // a packed state compared with itself plus an offset observes only the
+  // offset.
+  if (auto Terms = detail::cancelCommonOperands(*this, A, B, SymOp::Add)) {
+    const uint32_t W = width(A);
+    A = Terms->Left.empty() ? mkZero(W) : mkAdd(Terms->Left);
+    B = Terms->Right.empty() ? mkZero(W) : mkAdd(Terms->Right);
+    return mkEq(A, B);
+  }
   if (isConst(A))
     std::swap(A, B);
   // Complement and modular negation are bijections at the operand width.
