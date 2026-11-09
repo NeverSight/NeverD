@@ -1229,11 +1229,11 @@ GPRExitConstants scalarExitConstants(const BinaryImage &Img,
   return Constants;
 }
 
-/// A unique predecessor carries its register facts into either branch arm.
-/// Joins and the ordinary entry start with no facts; unreachable cycles retain
-/// only local facts. Each admitted block is evaluated once, under the body's
-/// existing operation bound. No path predicates or symbolic fixed point are
-/// needed, and temporaries never cross an instruction or block boundary.
+/// Intersect exact register facts after every predecessor has completed. The
+/// ordinary entry starts unknown. Cyclic regions retain the existing local
+/// proof: their joins start unknown and only unique successors inherit facts.
+/// Each block is evaluated once under the existing operation bound, without a
+/// symbolic fixed point. Instruction temporaries never cross block boundaries.
 GPRExitConstants scalarExitConstants(const BinaryImage &Img,
                                      CallRegisterBodyView F,
                                      const std::map<int, size_t> &IndexOfId) {
@@ -1241,24 +1241,20 @@ GPRExitConstants scalarExitConstants(const BinaryImage &Img,
     return scalarExitConstants(Img,
                                blockScalarFacts(Img, F.Blocks.front(), true));
   const size_t Count = F.Blocks.size();
-  std::vector<size_t> Parent(Count, Count), IncomingEdges(Count);
+  std::vector<size_t> IncomingEdges(Count);
+  std::vector<llvm::SmallVector<size_t, 2>> Children(Count);
   for (size_t I = 0; I < Count; ++I)
     for (int Succ : F.Blocks[I].Succs) {
       const size_t Next = IndexOfId.at(Succ);
-      Parent[Next] = ++IncomingEdges[Next] == 1 ? I : Count;
+      ++IncomingEdges[Next];
+      Children[I].push_back(Next);
     }
-  Parent.front() = Count; // A backedge cannot define the ordinary entry state.
-  std::vector<llvm::SmallVector<size_t, 2>> Children(Count);
-  struct Pending {
-    size_t Block;
-    BlockScalarFacts::RegisterFacts Registers;
-  };
-  std::vector<Pending> Work;
+  std::vector<size_t> Remaining = IncomingEdges;
+  std::vector<BlockScalarFacts::RegisterFacts> Incoming(Count);
+  std::vector<size_t> Work;
   for (size_t I = 0; I < Count; ++I)
-    if (Parent[I] == Count)
-      Work.push_back({I, {}});
-    else
-      Children[Parent[I]].push_back(I);
+    if (I == 0 || !IncomingEdges[I])
+      Work.push_back(I);
 
   GPRExitConstants Constants;
   bool FirstReturn = true;
@@ -1273,17 +1269,45 @@ GPRExitConstants scalarExitConstants(const BinaryImage &Img,
       });
   };
   std::vector<bool> Visited(Count);
-  while (!Work.empty()) {
-    auto [I, Incoming] = std::move(Work.back());
-    Work.pop_back();
-    Visited[I] = true;
-    auto Facts = blockScalarFacts(Img, F.Blocks[I], true, std::move(Incoming));
-    if (F.Blocks[I].Ops.back().Opcode == NdOp::RETURN)
-      ObserveReturn(Facts);
-    for (size_t K = 0; K < Children[I].size(); ++K)
-      Work.push_back({Children[I][K], K + 1 == Children[I].size()
-                                          ? std::move(Facts.Registers)
-                                          : Facts.Registers});
+  size_t Completed = 0;
+  for (bool JoinPredecessors : {true, false}) {
+    if (!JoinPredecessors)
+      for (size_t I = 0; I < Count; ++I)
+        if (!Visited[I] && IncomingEdges[I] != 1) {
+          // A pending backedge cannot prove the join's state. Discard even
+          // agreeing values from predecessors that have already completed.
+          Incoming[I].clear();
+          Work.push_back(I);
+        }
+    while (!Work.empty()) {
+      const size_t I = Work.back();
+      Work.pop_back();
+      Visited[I] = true;
+      ++Completed;
+      auto Facts =
+          blockScalarFacts(Img, F.Blocks[I], true, std::move(Incoming[I]));
+      if (F.Blocks[I].Ops.back().Opcode == NdOp::RETURN)
+        ObserveReturn(Facts);
+      for (size_t K = 0; K < Children[I].size(); ++K) {
+        const size_t Next = Children[I][K];
+        if (Next == 0 || Visited[Next] ||
+            (!JoinPredecessors && IncomingEdges[Next] != 1))
+          continue;
+        auto &Into = Incoming[Next];
+        if (Remaining[Next] == IncomingEdges[Next])
+          Into = K + 1 == Children[I].size() ? std::move(Facts.Registers)
+                                             : Facts.Registers;
+        else
+          std::erase_if(Into, [&](const auto &Value) {
+            const auto At = Facts.Registers.find(Value.first);
+            return At == Facts.Registers.end() || At->second != Value.second;
+          });
+        if (--Remaining[Next] == 0)
+          Work.push_back(Next);
+      }
+    }
+    if (Completed == Count)
+      return Constants;
   }
   for (size_t I = 0; I < Count; ++I)
     if (!Visited[I] && F.Blocks[I].Ops.back().Opcode == NdOp::RETURN)
