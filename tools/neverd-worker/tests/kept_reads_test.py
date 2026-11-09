@@ -210,6 +210,19 @@ def run(executable):
         for address, shown in before.items():
             assert page(replica, address)["text"] == shown["text"], hex(address)
         assert store_folders(typed) == folders
+        # A type nothing reads: the owner says which store its views are kept
+        # under as it takes it, and the next view it reads from that store
+        # does not read that again, and reads as a fresh replica does.
+        listed = ok(owner, "functions", {"offset": 0, "limit": 100})["items"]
+        other = next(int(item["address"], 16) for item in listed
+                     if int(item["address"], 16) not in (target, caller))
+        reads = ok(owner, "metadata")["view_store_name_reads"]
+        assert ok(owner, "local_types_declare",
+                  {"language": "c", "source": "struct KEPT_STORE { int value; };"})["unread"]
+        reply = kept(owner, other)
+        assert reply["status"] == "ok", reply
+        assert ok(owner, "metadata")["view_store_name_reads"] == reads
+        assert content(reply) == fresh_page(executable, owner, other)
     print("a kept render answers while what it read of the user's facts reads the same")
 
 

@@ -2783,6 +2783,7 @@ Json Engine::metadata() const {
           {"named_view_name_patches", namePatches_},
           {"named_view_data_name_patches", dataNamePatches_},
           {"named_view_renders", namedViewRenders_},
+          {"view_store_name_reads", viewStoreNameReads_},
           {"local_type_names_prepared", localTypeNamesPrepared_},
           {"dirty", dirty_},
           // How the file was read: for a binary file, its processor,
