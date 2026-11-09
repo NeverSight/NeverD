@@ -21,6 +21,7 @@ add_neverd_unittest(NeverDSymbolicTests
   SymExprBooleanEqualityTests.cpp
   SymExprCancellationTests.cpp
   SymLowWordProjectionTests.cpp
+  SymExprCapturedWindowTests.cpp
   SymExprCompareTests.cpp
   SymExprConditionalEqualityTests.cpp
   SymExprComplementTests.cpp

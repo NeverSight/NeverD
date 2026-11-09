@@ -310,6 +310,31 @@ SymRef SymContext::mkExtract(SymRef A, uint32_t Low, uint32_t Width) {
   if (op(A) == SymOp::Extract)
     return mkExtract(operand(A, 0), static_cast<uint32_t>(node(A).Aux) + Low,
                      Width);
+  // A narrowed constant shift reads a contiguous source slice, with zero or
+  // sign padding where the window crosses the source. Keep those coordinates
+  // explicit so byte-wise transports can reconstruct the captured word.
+  if ((op(A) == SymOp::Shl || op(A) == SymOp::LShr || op(A) == SymOp::AShr) &&
+      isConst(operand(A, 1))) {
+    const auto Source = operand(A, 0);
+    const unsigned Have = width(Source);
+    const unsigned Shift = constValue(operand(A, 1)).getLimitedValue(Have);
+    if (op(A) == SymOp::Shl) {
+      if (Low + Width <= Shift)
+        return mkZero(Width);
+      if (Low >= Shift)
+        return mkExtract(Source, Low - Shift, Width);
+      const unsigned Padding = Shift - Low;
+      return mkConcat(mkExtract(Source, 0, Width - Padding), mkZero(Padding));
+    }
+    const unsigned Begin = std::min(Have, Low + Shift);
+    if (Begin == Have)
+      return op(A) == SymOp::AShr
+                 ? mkSExt(mkExtract(Source, Have - 1, 1), Width)
+                 : mkZero(Width);
+    const auto Slice = mkExtract(Source, Begin, std::min(Width, Have - Begin));
+    return op(A) == SymOp::AShr ? mkSExt(Slice, Width) : mkZExt(Slice, Width);
+  }
+
   // Taking the low bits of a widening cast reaches straight through to the
   // original value when the window stays inside it.
   if ((op(A) == SymOp::ZExt || op(A) == SymOp::SExt) && Low == 0 &&
@@ -465,6 +490,21 @@ SymRef SymContext::mkConcat(llvm::ArrayRef<SymRef> Ops) {
     if (!Merged.empty()) {
       SymRef Prev = Merged.back();
 
+      // A word merged byte by byte still makes one captured choice. Join
+      // adjacent selected slices only when both arms themselves collapse;
+      // unrelated data-valued lanes keep their original concatenation.
+      if (op(Prev) == SymOp::Ite && op(R) == SymOp::Ite &&
+          operand(Prev, 0) == operand(R, 0)) {
+        const auto Condition = operand(Prev, 0);
+        const SymRef Yes[]{operand(Prev, 1), operand(R, 1)};
+        const SymRef No[]{operand(Prev, 2), operand(R, 2)};
+        const auto Upper = mkConcat(Yes), Lower = mkConcat(No);
+        if (op(Upper) != SymOp::Concat && op(Lower) != SymOp::Concat) {
+          Merged.back() = mkIte(Condition, Upper, Lower);
+          continue;
+        }
+      }
+
       // Fold runs of adjacent literals, which is how a byte-wise memory
       // model's reads of a known region collapse back into one word.
       if (isConst(Prev) && isConst(R)) {
@@ -516,14 +556,23 @@ SymRef SymContext::mkConcat(llvm::ArrayRef<SymRef> Ops) {
           LowerBase = UpperBase;
         else if (UpperLow == LowerBits && LowerBits < width(UpperBase) &&
                  R == mkExtract(UpperBase, 0, LowerBits)) {
-          // A low slice can canonicalize through an extension, concatenation,
-          // or modular operation. Recognize its projected form as the missing
-          // prefix so a byte-wise register write/read still restores the
-          // complete computed word, not a concatenation that hides its value.
+          // A whole low prefix can fold to a literal or change its base.
+          // Retain that identity as well as projected nonzero windows.
           LowerBase = UpperBase;
           LowerLow = 0;
+        } else if (UpperLow == LowerLow + LowerBits &&
+                   width(LowerBase) < width(UpperBase) &&
+                   LowerBase == mkExtract(UpperBase, 0, width(LowerBase))) {
+          // A modular low-word projection can change the base of any later
+          // byte slice, not just the least significant one. Recognize its
+          // complete prefix before joining the still-adjacent windows.
+          LowerBase = UpperBase;
         } else if (isWideningOf(LowerBase, UpperBase) &&
                    UpperLow + UpperBits <= width(UpperBase))
+          UpperBase = LowerBase;
+        else if (UpperLow == LowerLow + LowerBits &&
+                 width(UpperBase) < width(LowerBase) &&
+                 UpperBase == mkExtract(LowerBase, 0, width(UpperBase)))
           UpperBase = LowerBase;
       }
 
@@ -559,6 +608,19 @@ SymRef SymContext::mkZExt(SymRef A, uint32_t Width) {
     return mkConst(constValue(A).zext(Width));
   if (op(A) == SymOp::ZExt)
     return mkZExt(operand(A, 0), Width);
+  if (op(A) == SymOp::Extract && node(A).Aux == 0) {
+    const auto Source = operand(A, 0);
+    if (op(Source) == SymOp::UDiv && isConst(operand(Source, 1)) &&
+        !constValue(operand(Source, 1)).isZero()) {
+      // A reciprocal-product window may have lost only a quotient's known
+      // zero high bits. Restore the same unsigned division after widening.
+      const auto Maximum = llvm::APInt::getAllOnes(width(Source))
+                               .udiv(constValue(operand(Source, 1)));
+      if (Maximum.getActiveBits() <= width(A))
+        return Width < width(Source) ? mkExtract(Source, 0, Width)
+                                     : mkZExt(Source, Width);
+    }
+  }
   return intern(SymOp::ZExt, Width, {A}, 0);
 }
 
