@@ -21741,6 +21741,13 @@ loads an ordinary arm64 image with the same RELRO installer, reads the constant,
 writes adjacent mutable storage and queries the actual mapping permissions.
 That control qualifies the shared protection mechanism on Apple Silicon hosts
 that cannot launch arm64e; it does not qualify authenticated calls or unwinding.
+The [native object/RELRO qualification record](evidence/arm64e-native-relro-2026-11-09.json)
+records 1,206 selected cases: 1,186 passed and 20 explicitly skipped. Two parallel
+120-second timeouts passed serially without extending their limits. A separate
+Apple `dyld_info` crash prompted the oracle change above; its 17 affected native
+cases then yielded 13 passes and four arm64e execution-control skips. Production
+sources remained unchanged during this oracle correction. Native runtime,
+r6 MC callback, NeverC and optional input limits remain recorded separately.
 The [producer/threaded qualification record](evidence/arm64e-producer-threaded-2026-11-09.json)
 records integration checks and the remaining producer/runtime limits. The
 [earlier chained-only record](evidence/arm64e-dyld-install-2026-11-08.json)

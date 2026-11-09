@@ -1,0 +1,651 @@
+{
+  "schema": "neverd-arm64e-native-relro-v1",
+  "overall_arm64e_complete": false,
+  "base_revision": "2b92634bef1b0ac4b15a5cf4810b12973c6b748a",
+  "implementation_revision": "995e729065f2b376df6f1f9f0c7d3663585b1054",
+  "feature_commit": "16d12a35cd278ed2cc2f08915d6c1ee20efa4440",
+  "source_sha256": {
+    "include/neverd/backend/codegen/BinaryRewriter.h": "bcb7a2d7ed2fe57fceb733b1436711d885a6219678995764a3581f4616a535a0",
+    "include/neverd/backend/codegen/MachO/MachOAuthenticatedFixups.h": "e2ee01aad6315fa22c1642083ee6e54a3d37ef18b508237f16f063b3afa02b97",
+    "include/neverd/backend/codegen/MachO/MachOLayoutGrowth.h": "bff1a77247b03e9b76e4a39f98bd635814be8721b2d594c650cadd8ae9dc3bb7",
+    "include/neverd/backend/codegen/MachO/MachOPatch.h": "f1a37481f20a4fbb87b7358246fe61cfe99f0b034278eddf2c692951855553fa",
+    "include/neverd/backend/codegen/PatchObject.h": "b6a04ec665e088a331324646139db3b203ff900e9a62b90599d917b50425af2b",
+    "include/neverd/backend/codegen/PatchStorage.h": "7509223839df46e2ff1b2ee46a0f74858c293aae9ed7ee81390bd600dfe6aa9b",
+    "include/neverd/backend/codegen/SourcePatchDependencies.h": "fd462f8db05d58be02428b0af80a6e15058f03193a44e0849756427762d92a55",
+    "include/neverd/loader/MachO/MachOArm64e.h": "75967c6e211a8a38074b4e9f8cd388b94a0b8dce5f3479911a7e1ea177d9514f",
+    "lib/backend/codegen/MachO/MachOAuthenticatedFixups.cpp": "ecbb68d1f0518176a507774a727972bc54d1492fa50b0b8f7ae9a7b69a10ce9f",
+    "lib/backend/codegen/MachO/MachOAuthenticatedFixups.def": "a698d02b970b9cf6bf7a475c23e828acf311496da1c7e1eab01ad4082959aa89",
+    "lib/backend/codegen/MachO/MachODependencyState.cpp": "2f9a063e102d54a20d0bb64437f89191b5a7c0ff6d1fc9fe8c50afe4d1c4471d",
+    "lib/backend/codegen/MachO/MachODependencyState.h": "bf7d3011a093823b295e4829ecba99ac32fca6dac32118260afb8f7ad17286ec",
+    "lib/backend/codegen/MachO/MachOHeaderGrowth.cpp": "800f8d961e0de5c2e4559ebb29c271a1277df866514b83da52095bb0d51e76f3",
+    "lib/backend/codegen/MachO/MachOLayoutGrowth.cpp": "e2ed599b8a3fae77f9cc3c3dc748bca5f03d6f6e832f75223a573827324729b4",
+    "lib/backend/codegen/MachO/MachOLayoutGrowth.def": "db8b1efb5ab9827f870433ba3d9ed5e21bb8bac7851de80d3528fbb507076d2c",
+    "lib/backend/codegen/MachO/MachOPatch.cpp": "2e4cdb3f595a1a7623fb8fbe21893ea5c5aab3baa7672151f95a4a8543b48799",
+    "lib/backend/codegen/MachO/MachOPatch.def": "48b462fe713bdb2c66c1067120ca8eb620a3143238280f34f9486c3101ea7970",
+    "lib/backend/codegen/MachO/MachOPatchObject.cpp": "d671004361d73507b4abeca958f87845947a08306c6fa871d83c6498703eab79",
+    "lib/backend/codegen/MachO/MachOPatchObject.def": "e03b34ab46c499591a02c3d18b3028a322aa712934cfff1b718afce3ea5486fd",
+    "lib/backend/codegen/MachO/MachOSourceDependencies.cpp": "de826ee532c942c75cd0fc07f3a4353ea6cf2bdb57a37735e4ce7eef5d4d0b6e",
+    "lib/backend/codegen/MachO/MachOSourceDependencies.def": "c73fd9027d2640d2dc3a38bd7436f72b4f6073047ddb96648957c5fe4b412736",
+    "lib/backend/codegen/MachO/MachOSourceDependencies.h": "6a967ce80458a2a3e54ba47a6d7fdb1521fc25881c0c5cc497f2971a2d56e5ad",
+    "lib/backend/codegen/MachO/MachOStrictLayout.h": "3031c1742e6857351c7a6d7b7214a0c99ecf8bb775632b2bd41084259e64df65",
+    "lib/backend/codegen/PatchStorage.cpp": "b592ffbf7142f67293a6ae97e8506a4ee7b2ac79a4cd3000a7ccce4f17870306",
+    "lib/backend/codegen/PatchStorage.def": "faba29e6bd930063a509a8e297634508421140a88e92f5e113f22e27c72b7b9d",
+    "lib/backend/codegen/SourcePatchDependencies.cpp": "0c94181d785234bd15f6d8715624d0bea475d2dafd21d079bee3b5ba0c411d82",
+    "lib/backend/codegen/SourcePatchDependencies.def": "19953a9ec7e99cbdb1cf1b17fa47b8483c80f369367ce3666064814868040dc8",
+    "lib/loader/MachO/MachOArm64eFixups.cpp": "2312dfe154dc21b1b907d2aff081bdd96fa89e0f25f1d5e1b28a37d84b478a23",
+    "lib/loader/MachO/MachORelocations.cpp": "2d6d37dbed47e8a579e2c1aff0fb8a80f8c4e6442149142f343e8b482e58923f",
+    "unittests/lift/format/MachOArm64eDependencyFixtures.def": "41b0a55ba9dabfea286575b2d130be599d18f32249b063126f81071d16b113f0",
+    "unittests/lift/format/MachOArm64eDependencyTests.cpp": "a62dda364d99c5f0e1edde94e57fe8c2856c6c08f043488d07f6c4dc18b049b7",
+    "unittests/lift/format/MachOAuthenticatedNativeFixtures.def": "d0be0824b787e203d17ca3bbbf5f5626b7eb01d32df010beedf193bfc57fd384",
+    "unittests/lift/format/MachOAuthenticatedNativeTests.cpp": "7bb749d6a9e930c3b8901ea6416117cc0d76a6cb6731b0c4d27622f48bbac35d"
+  },
+  "changes": [
+    "Stage native arm64e objects through the existing parser, relocation and supported native unwind owners, with exact CPU subtype matching.",
+    "Share authenticated object-word decoding with analysis and retain all keys, signed addends, final local targets and exact external providers.",
+    "Admit explicitly declared dylibs in the same transaction as native signing recipes; reject unused/invalid declarations before publication.",
+    "Install page-isolated SG_READ_ONLY storage for explicit constant segments and default __DATA,__const, retaining ordinary mutable pages.",
+    "Share load-command payload ownership between header and compact-unwind placement; recognize inline LC_ID_DYLIB and reuse checked TEXT tails without moving code/data VAs.",
+    "Reject malformed native relocations, mismatched ABI capability bits, occupied metadata capacity and post-install removal of RELRO protection."
+  ],
+  "toolchain": {
+    "profile": "Release",
+    "llvm_package": "neverd-llvm-v23.0.0-r6",
+    "llvm_source_patches_or_overlays": false,
+    "compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+    "macos_sdk": "15.5",
+    "clang_format": "22.1.2",
+    "working_dependencies": {
+      "signatures": "20b9036f4367e1308a3d2f0b214e06859090a7af",
+      "third_party/capstone": "b8c22e0c16b1769dfa712547d4a5c5d49560ae46"
+    }
+  },
+  "validation": {
+    "focused": {
+      "tests": 45,
+      "passed": 40,
+      "skipped": 5,
+      "failed": 0,
+      "xml_sha256": "add9611fc97fe9e79401bcfbc428887eb0781e873365809f25fdddb24c74855e"
+    },
+    "native_object_matrix": [
+      {
+        "optimization": "-O0",
+        "legacy_threaded": false,
+        "preserved_compact_frames": 4,
+        "preserved_signed_cfi_rows": 5
+      },
+      {
+        "optimization": "-O0",
+        "legacy_threaded": true,
+        "preserved_compact_frames": 4,
+        "preserved_signed_cfi_rows": 5
+      },
+      {
+        "optimization": "-O2",
+        "legacy_threaded": false,
+        "preserved_compact_frames": 2,
+        "preserved_signed_cfi_rows": 5
+      },
+      {
+        "optimization": "-O2",
+        "legacy_threaded": true,
+        "preserved_compact_frames": 2,
+        "preserved_signed_cfi_rows": 5
+      }
+    ],
+    "native_runtime_controls": [
+      {
+        "optimization": "-O0",
+        "legacy_threaded": false,
+        "llvm_process_status": -2
+      },
+      {
+        "optimization": "-O0",
+        "legacy_threaded": true,
+        "llvm_process_status": -2
+      },
+      {
+        "optimization": "-O2",
+        "legacy_threaded": false,
+        "llvm_process_status": -2
+      },
+      {
+        "optimization": "-O2",
+        "legacy_threaded": true,
+        "llvm_process_status": -2
+      }
+    ],
+    "minimal_launch_controls": [
+      {
+        "arch": "arm64",
+        "compile": 0,
+        "compile_diagnostic": "",
+        "sha256": "460774b5b938e03f858be0a3208f3c0933c8e2577cd13eac3a150d5f1e2f9fec",
+        "bytes": 16840,
+        "signature_verify": 0,
+        "signature_diagnostic": "",
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "arch": "arm64e",
+        "compile": 0,
+        "compile_diagnostic": "",
+        "sha256": "41b6ed581f748112669e60eefb8e5acf95ca17c2bcdf1b5146676bf9d64c7633",
+        "bytes": 16840,
+        "signature_verify": 0,
+        "signature_diagnostic": "",
+        "returncode": -9,
+        "stdout": "",
+        "stderr": ""
+      }
+    ],
+    "direct_call_control_statuses": [
+      -9,
+      -9,
+      -9,
+      -9
+    ],
+    "process_status_limit": "LLVM ExecuteAndWait reports -2 with a segmentation-fault diagnostic; independent direct launches of the same original controls report SIGKILL (-9). Neither is recorded as successful native execution.",
+    "arm64_relro_runtime": "MachONativeRelro.DyldProtectsConstantsAndKeepsMutablePagesWritable verifies real dyld mapping permissions and writes to adjacent mutable storage on ordinary arm64; it does not qualify arm64e authentication.",
+    "regressions": {
+      "totals": {
+        "passed": 1186,
+        "skipped": 20
+      },
+      "tests": 1206,
+      "by_executable": {
+        "NeverDSourcePatchLayoutTests": {
+          "passed": 14
+        },
+        "NeverDSourcePatchMatrixTests": {
+          "passed": 111,
+          "skipped": 10
+        },
+        "NeverDArm64eAnalysisTests": {
+          "passed": 440,
+          "skipped": 10
+        },
+        "NeverDNativeExceptionRewriteContractTests": {
+          "passed": 286
+        },
+        "NeverDMachOPointerRelocationBoundaryTests": {
+          "passed": 335
+        }
+      },
+      "skips": [
+        {
+          "name": "NeverCProfiles/NeverCSourcePatchMatrix.CIRPreservesTargetLayout/MachO_X64  # GetParam() = 32-byte object <00-02 00-00 00-00 00-00 71-38 D5-02 01-00 00-00 7B-38 D5-02 01-00 00-00 00-00 00-00 00-00 00-00>",
+          "executable": "NeverDSourcePatchMatrixTests",
+          "status": "skipped",
+          "seconds": 0.0321338,
+          "diagnostic": "explicit NeverC producer required for its optional matrix"
+        },
+        {
+          "name": "NeverCProfiles/NeverCSourcePatchMatrix.CIRPreservesTargetLayout/MachO_ARM64  # GetParam() = 32-byte object <01-02 00-00 00-00 00-00 9E-38 D5-02 01-00 00-00 AA-38 D5-02 01-00 00-00 00-00 00-00 00-00 00-00>",
+          "executable": "NeverDSourcePatchMatrixTests",
+          "status": "skipped",
+          "seconds": 0.030956,
+          "diagnostic": "explicit NeverC producer required for its optional matrix"
+        },
+        {
+          "name": "NeverCProfiles/NeverCSourcePatchMatrix.CObjectPreservesTargetLayout/MachO_X64  # GetParam() = 32-byte object <00-02 00-00 00-00 00-00 71-38 D5-02 01-00 00-00 7B-38 D5-02 01-00 00-00 00-00 00-00 00-00 00-00>",
+          "executable": "NeverDSourcePatchMatrixTests",
+          "status": "skipped",
+          "seconds": 0.0276795,
+          "diagnostic": "explicit NeverC producer required for its optional matrix"
+        },
+        {
+          "name": "NeverCProfiles/NeverCSourcePatchMatrix.CObjectPreservesTargetLayout/MachO_ARM64  # GetParam() = 32-byte object <01-02 00-00 00-00 00-00 9E-38 D5-02 01-00 00-00 AA-38 D5-02 01-00 00-00 00-00 00-00 00-00 00-00>",
+          "executable": "NeverDSourcePatchMatrixTests",
+          "status": "skipped",
+          "seconds": 0.0332917,
+          "diagnostic": "explicit NeverC producer required for its optional matrix"
+        },
+        {
+          "name": "NeverCProfiles/NeverCSourcePatchMatrix.HostedCUsesExactPayloadLayout/MachO_X64  # GetParam() = 32-byte object <00-02 00-00 00-00 00-00 71-38 D5-02 01-00 00-00 7B-38 D5-02 01-00 00-00 00-00 00-00 00-00 00-00>",
+          "executable": "NeverDSourcePatchMatrixTests",
+          "status": "skipped",
+          "seconds": 0.0399237,
+          "diagnostic": "explicit NeverC producer required for its optional matrix"
+        },
+        {
+          "name": "NeverCProfiles/NeverCSourcePatchMatrix.HostedCUsesExactPayloadLayout/MachO_ARM64  # GetParam() = 32-byte object <01-02 00-00 00-00 00-00 9E-38 D5-02 01-00 00-00 AA-38 D5-02 01-00 00-00 00-00 00-00 00-00 00-00>",
+          "executable": "NeverDSourcePatchMatrixTests",
+          "status": "skipped",
+          "seconds": 0.0310795,
+          "diagnostic": "explicit NeverC producer required for its optional matrix"
+        },
+        {
+          "name": "NeverCProfiles/NeverCSourcePatchMatrix.HostedCHelpersAndRecursionKeepExactPayloadLayout/MachO_X64  # GetParam() = 32-byte object <00-02 00-00 00-00 00-00 71-38 D5-02 01-00 00-00 7B-38 D5-02 01-00 00-00 00-00 00-00 00-00 00-00>",
+          "executable": "NeverDSourcePatchMatrixTests",
+          "status": "skipped",
+          "seconds": 0.0315629,
+          "diagnostic": "explicit NeverC producer required for its optional matrix"
+        },
+        {
+          "name": "NeverCProfiles/NeverCSourcePatchMatrix.HostedCHelpersAndRecursionKeepExactPayloadLayout/MachO_ARM64  # GetParam() = 32-byte object <01-02 00-00 00-00 00-00 9E-38 D5-02 01-00 00-00 AA-38 D5-02 01-00 00-00 00-00 00-00 00-00 00-00>",
+          "executable": "NeverDSourcePatchMatrixTests",
+          "status": "skipped",
+          "seconds": 0.0365154,
+          "diagnostic": "explicit NeverC producer required for its optional matrix"
+        },
+        {
+          "name": "NeverCProfiles/NeverCSourcePatchMatrix.CppSourceCannotPublishWithNeverC/MachO_X64  # GetParam() = 32-byte object <00-02 00-00 00-00 00-00 71-38 D5-02 01-00 00-00 7B-38 D5-02 01-00 00-00 00-00 00-00 00-00 00-00>",
+          "executable": "NeverDSourcePatchMatrixTests",
+          "status": "skipped",
+          "seconds": 0.0300638,
+          "diagnostic": "explicit NeverC producer required for its optional matrix"
+        },
+        {
+          "name": "NeverCProfiles/NeverCSourcePatchMatrix.CppSourceCannotPublishWithNeverC/MachO_ARM64  # GetParam() = 32-byte object <01-02 00-00 00-00 00-00 9E-38 D5-02 01-00 00-00 AA-38 D5-02 01-00 00-00 00-00 00-00 00-00 00-00>",
+          "executable": "NeverDSourcePatchMatrixTests",
+          "status": "skipped",
+          "seconds": 0.0302703,
+          "diagnostic": "explicit NeverC producer required for its optional matrix"
+        },
+        {
+          "name": "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+          "executable": "NeverDArm64eAnalysisTests",
+          "status": "skipped",
+          "seconds": 0.0183879,
+          "diagnostic": "The execution host does not report the required ordered-memory feature"
+        },
+        {
+          "name": "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+          "executable": "NeverDArm64eAnalysisTests",
+          "status": "skipped",
+          "seconds": 4.77307,
+          "diagnostic": "this host cannot execute arm64e with all four active pointer signing keys and generic signatures"
+        },
+        {
+          "name": "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+          "executable": "NeverDArm64eAnalysisTests",
+          "status": "skipped",
+          "seconds": 5.18713,
+          "diagnostic": "this host cannot execute arm64e PAuth_LR with active keys"
+        },
+        {
+          "name": "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+          "executable": "NeverDArm64eAnalysisTests",
+          "status": "skipped",
+          "seconds": 5.6095,
+          "diagnostic": "this host cannot execute PACM with active IA/IB keys and a second diversifier"
+        },
+        {
+          "name": "A64FastClassifyParity.OptionalRealBinaryWalk",
+          "executable": "NeverDArm64eAnalysisTests",
+          "status": "skipped",
+          "seconds": 0.0152993,
+          "diagnostic": "set NEVERD_PARITY_BIN to a raw arm64 code file to enable"
+        },
+        {
+          "name": "MachOArm64eInstallation.MCProducerCapturesRecipesThroughFinalPlacement",
+          "executable": "NeverDArm64eAnalysisTests",
+          "status": "skipped",
+          "seconds": 0.0156394,
+          "diagnostic": "configured LLVM predates authenticated MC recipe callbacks"
+        },
+        {
+          "name": "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/0",
+          "executable": "NeverDArm64eAnalysisTests",
+          "status": "skipped",
+          "seconds": 5.26895,
+          "diagnostic": "compiler-original arm64e call/unwind control could not execute: -2\nSegmentation fault: 11"
+        },
+        {
+          "name": "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/1",
+          "executable": "NeverDArm64eAnalysisTests",
+          "status": "skipped",
+          "seconds": 5.80076,
+          "diagnostic": "compiler-original arm64e call/unwind control could not execute: -2\nSegmentation fault: 11"
+        },
+        {
+          "name": "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/2",
+          "executable": "NeverDArm64eAnalysisTests",
+          "status": "skipped",
+          "seconds": 6.01637,
+          "diagnostic": "compiler-original arm64e call/unwind control could not execute: -2\nSegmentation fault: 11"
+        },
+        {
+          "name": "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/3",
+          "executable": "NeverDArm64eAnalysisTests",
+          "status": "skipped",
+          "seconds": 5.50029,
+          "diagnostic": "compiler-original arm64e call/unwind control could not execute: -2\nSegmentation fault: 11"
+        }
+      ],
+      "inputs": {
+        "regression-bulk": {
+          "xml_sha256": "b772239e855fa887a59656d2d7d91d8cc690f7767092c3bb6ac7552b55d0d06d",
+          "selection_sha256": "1b75249614ed316c45e3101a7a6743991d612f88e5b0af62cb5c79c9dbdfb826"
+        },
+        "regression-serial": {
+          "xml_sha256": "f44857024c97dc0c19098b0f6d90467acc22b6d18167fda19cc8db7fc425451d",
+          "selection_sha256": "199e207ec707a195e358ee1304a91547a64625a91899ef843e7b8f64ebec3f82"
+        }
+      },
+      "binary_sha256": {
+        "NeverDSourcePatchLayoutTests": "6194dafc0a68f15bfca3ebe0e573b354e870da995f408516c7ca290d71fd9982",
+        "NeverDSourcePatchMatrixTests": "2651a59bf473ade7ac00e6353fbfdf417443c5bba7cb8e2243efb3cc920397fd",
+        "NeverDArm64eAnalysisTests": "aef4bc187a8755a900012eb387643e563389966118038d97ed2d50948b9b0b44",
+        "NeverDNativeExceptionRewriteContractTests": "b9aa12676faf716067add582a31bdef9969f0dcd0d30916ba6a53837cd65af6a",
+        "NeverDMachOPointerRelocationBoundaryTests": "140ef8046798f5ad6dcb711493aec3120e387bb858e98688cbcd28a26312c4fd",
+        "libneverd.dylib": "aa4540be057240d7de98c102001eafc4abb617e2c4392be8ddaf05d457976dae"
+      },
+      "parallel_failures": [
+        {
+          "name": "AArch64ImmediateMemory.ImageContextPreservesEveryRuntimeParameterAccess",
+          "executable": "NeverDArm64eAnalysisTests",
+          "status": "failed",
+          "seconds": 120.13,
+          "diagnostic": "Timeout"
+        },
+        {
+          "name": "AArch64PairMemory.OwnedImagesValidateBothAccessesAndReturnedBases",
+          "executable": "NeverDArm64eAnalysisTests",
+          "status": "failed",
+          "seconds": 120.332,
+          "diagnostic": "Timeout"
+        },
+        {
+          "name": "AppleClang/MachOArm64eNativeInstallation.AppleImageKeepsSignedFramesAndDyldRecipes/6",
+          "executable": "NeverDArm64eAnalysisTests",
+          "status": "failed",
+          "seconds": 0.217628,
+          "diagnostic": "Failed"
+        }
+      ],
+      "serial_results": [
+        {
+          "name": "AArch64AddressMemory.NarrowAliasedIndicesSurviveDecodedSSAAndBothSourceABIs",
+          "executable": "NeverDArm64eAnalysisTests",
+          "status": "passed",
+          "seconds": 112.987
+        },
+        {
+          "name": "AArch64ImmediateMemory.ImageContextPreservesEveryRuntimeParameterAccess",
+          "executable": "NeverDArm64eAnalysisTests",
+          "status": "passed",
+          "seconds": 37.7036
+        },
+        {
+          "name": "AArch64PairMemory.OwnedImagesValidateBothAccessesAndReturnedBases",
+          "executable": "NeverDArm64eAnalysisTests",
+          "status": "passed",
+          "seconds": 24.5899
+        },
+        {
+          "name": "AppleClang/MachOArm64eNativeInstallation.AppleImageKeepsSignedFramesAndDyldRecipes/6",
+          "executable": "NeverDArm64eAnalysisTests",
+          "status": "passed",
+          "seconds": 0.159649
+        }
+      ],
+      "scheduling": "Known narrow-alias case ran serially. Two observed parallel timeouts and one Apple dyld_info process crash were retained, then rerun sequentially with unchanged test commands and 120-second limits. Serial temporary files were isolated under the evidence directory. Final totals count each executable/test pair once."
+    },
+    "regression_source_sha256": {
+      "include/neverd/backend/codegen/BinaryRewriter.h": "bcb7a2d7ed2fe57fceb733b1436711d885a6219678995764a3581f4616a535a0",
+      "include/neverd/backend/codegen/MachO/MachOAuthenticatedFixups.h": "e2ee01aad6315fa22c1642083ee6e54a3d37ef18b508237f16f063b3afa02b97",
+      "include/neverd/backend/codegen/MachO/MachOLayoutGrowth.h": "bff1a77247b03e9b76e4a39f98bd635814be8721b2d594c650cadd8ae9dc3bb7",
+      "include/neverd/backend/codegen/MachO/MachOPatch.h": "f1a37481f20a4fbb87b7358246fe61cfe99f0b034278eddf2c692951855553fa",
+      "include/neverd/backend/codegen/PatchObject.h": "b6a04ec665e088a331324646139db3b203ff900e9a62b90599d917b50425af2b",
+      "include/neverd/backend/codegen/PatchStorage.h": "7509223839df46e2ff1b2ee46a0f74858c293aae9ed7ee81390bd600dfe6aa9b",
+      "include/neverd/backend/codegen/SourcePatchDependencies.h": "fd462f8db05d58be02428b0af80a6e15058f03193a44e0849756427762d92a55",
+      "include/neverd/loader/MachO/MachOArm64e.h": "75967c6e211a8a38074b4e9f8cd388b94a0b8dce5f3479911a7e1ea177d9514f",
+      "lib/backend/codegen/MachO/MachOAuthenticatedFixups.cpp": "ecbb68d1f0518176a507774a727972bc54d1492fa50b0b8f7ae9a7b69a10ce9f",
+      "lib/backend/codegen/MachO/MachOAuthenticatedFixups.def": "a698d02b970b9cf6bf7a475c23e828acf311496da1c7e1eab01ad4082959aa89",
+      "lib/backend/codegen/MachO/MachODependencyState.cpp": "2f9a063e102d54a20d0bb64437f89191b5a7c0ff6d1fc9fe8c50afe4d1c4471d",
+      "lib/backend/codegen/MachO/MachODependencyState.h": "bf7d3011a093823b295e4829ecba99ac32fca6dac32118260afb8f7ad17286ec",
+      "lib/backend/codegen/MachO/MachOHeaderGrowth.cpp": "800f8d961e0de5c2e4559ebb29c271a1277df866514b83da52095bb0d51e76f3",
+      "lib/backend/codegen/MachO/MachOLayoutGrowth.cpp": "e2ed599b8a3fae77f9cc3c3dc748bca5f03d6f6e832f75223a573827324729b4",
+      "lib/backend/codegen/MachO/MachOLayoutGrowth.def": "db8b1efb5ab9827f870433ba3d9ed5e21bb8bac7851de80d3528fbb507076d2c",
+      "lib/backend/codegen/MachO/MachOPatch.cpp": "2e4cdb3f595a1a7623fb8fbe21893ea5c5aab3baa7672151f95a4a8543b48799",
+      "lib/backend/codegen/MachO/MachOPatch.def": "48b462fe713bdb2c66c1067120ca8eb620a3143238280f34f9486c3101ea7970",
+      "lib/backend/codegen/MachO/MachOPatchObject.cpp": "d671004361d73507b4abeca958f87845947a08306c6fa871d83c6498703eab79",
+      "lib/backend/codegen/MachO/MachOPatchObject.def": "e03b34ab46c499591a02c3d18b3028a322aa712934cfff1b718afce3ea5486fd",
+      "lib/backend/codegen/MachO/MachOSourceDependencies.cpp": "de826ee532c942c75cd0fc07f3a4353ea6cf2bdb57a37735e4ce7eef5d4d0b6e",
+      "lib/backend/codegen/MachO/MachOSourceDependencies.def": "c73fd9027d2640d2dc3a38bd7436f72b4f6073047ddb96648957c5fe4b412736",
+      "lib/backend/codegen/MachO/MachOSourceDependencies.h": "6a967ce80458a2a3e54ba47a6d7fdb1521fc25881c0c5cc497f2971a2d56e5ad",
+      "lib/backend/codegen/MachO/MachOStrictLayout.h": "3031c1742e6857351c7a6d7b7214a0c99ecf8bb775632b2bd41084259e64df65",
+      "lib/backend/codegen/PatchStorage.cpp": "b592ffbf7142f67293a6ae97e8506a4ee7b2ac79a4cd3000a7ccce4f17870306",
+      "lib/backend/codegen/PatchStorage.def": "faba29e6bd930063a509a8e297634508421140a88e92f5e113f22e27c72b7b9d",
+      "lib/backend/codegen/SourcePatchDependencies.cpp": "0c94181d785234bd15f6d8715624d0bea475d2dafd21d079bee3b5ba0c411d82",
+      "lib/backend/codegen/SourcePatchDependencies.def": "19953a9ec7e99cbdb1cf1b17fa47b8483c80f369367ce3666064814868040dc8",
+      "lib/loader/MachO/MachOArm64eFixups.cpp": "2312dfe154dc21b1b907d2aff081bdd96fa89e0f25f1d5e1b28a37d84b478a23",
+      "lib/loader/MachO/MachORelocations.cpp": "2d6d37dbed47e8a579e2c1aff0fb8a80f8c4e6442149142f343e8b482e58923f",
+      "unittests/lift/format/MachOArm64eDependencyFixtures.def": "41b0a55ba9dabfea286575b2d130be599d18f32249b063126f81071d16b113f0",
+      "unittests/lift/format/MachOArm64eDependencyTests.cpp": "a62dda364d99c5f0e1edde94e57fe8c2856c6c08f043488d07f6c4dc18b049b7",
+      "unittests/lift/format/MachOAuthenticatedNativeFixtures.def": "8b5fb300078f5913508ef8965349c2999734a4c6857bec2b026672b0dfab2374",
+      "unittests/lift/format/MachOAuthenticatedNativeTests.cpp": "4a706b30b45e2050a3e4c1f247637f690eb7be13108f9276693c4f1c2fb48f99"
+    },
+    "oracle_update": {
+      "reason": "One Apple dyld_info symbolicated printer crashed on sectionless fixup storage. Public Apple code assigns an index beyond the section inventory in this case and then indexes that inventory for names. The direct chain-details/imports path retains independent decoded targets, signing parameters, import symbols and addends without that lookup.",
+      "baseline_qualified_revision": "bddc9464b127f8eb20d912c2392d26628ef9130a",
+      "production_source_unchanged": true,
+      "changed_test_sources": [
+        "unittests/lift/format/MachOAuthenticatedNativeFixtures.def",
+        "unittests/lift/format/MachOAuthenticatedNativeTests.cpp"
+      ],
+      "tests": 17,
+      "passed": 13,
+      "skipped": 4,
+      "failed": 0,
+      "xml_sha256": "9ecc1de9dbaa83568ec5fa56a8f1b7d68bc266a410700b8bf22e07138a28b6e6",
+      "build_log_sha256": "d1e8ffb5e02f1b05bec528d5741cb0fbf52f3c953d2ead552537af307f1e0e33",
+      "analysis_binary_sha256": "2c21b0635e9bc4b8362bf8b921ab0601c55a1e196da9de189b82eeb0db85792e",
+      "crash": {
+        "process": "/Library/Developer/CommandLineTools/usr/bin/dyld_info",
+        "os_version": "macOS 15.6.1 (24G90)",
+        "exception": {
+          "codes": "0x0000000000000001, 0x1876852b1a795120",
+          "rawCodes": [
+            1,
+            1762742724336374048
+          ],
+          "type": "EXC_BAD_ACCESS",
+          "signal": "SIGSEGV",
+          "subtype": "KERN_INVALID_ADDRESS at 0x1876852b1a795120 -> 0x0000052b1a795120 (possible pointer authentication failure)"
+        },
+        "termination": {
+          "flags": 0,
+          "code": 11,
+          "namespace": "SIGNAL",
+          "indicator": "Segmentation fault: 11",
+          "byProc": "exc handler",
+          "byPid": 84265
+        },
+        "frames": [
+          {
+            "symbol": "_platform_strlen",
+            "symbolLocation": 4,
+            "imageOffset": 2628,
+            "image": "libsystem_platform.dylib"
+          },
+          {
+            "symbol": "__vfprintf",
+            "symbolLocation": 3408,
+            "imageOffset": 10168,
+            "image": "libsystem_c.dylib"
+          },
+          {
+            "symbol": "vfprintf_l",
+            "symbolLocation": 156,
+            "imageOffset": 72284,
+            "image": "libsystem_c.dylib"
+          },
+          {
+            "symbol": "printf",
+            "symbolLocation": 80,
+            "imageOffset": 183160,
+            "image": "libsystem_c.dylib"
+          },
+          {
+            "symbol": "__main_block_invoke.47",
+            "symbolLocation": 2640,
+            "imageOffset": 7844,
+            "image": "dyld_info"
+          },
+          {
+            "symbol": "other_tools::withReadOnlyMappedFile(char const*, void (std::__1::span<unsigned char const, 18446744073709551615ul>) block_pointer)",
+            "symbolLocation": 140,
+            "imageOffset": 55276,
+            "image": "dyld_info"
+          },
+          {
+            "symbol": "other_tools::forSelectedSliceInPaths(std::__1::span<char const*, 18446744073709551615ul>, std::__1::span<char const*, 18446744073709551615ul>, DyldSharedCache const*, void (char const*, mach_o::Header const*, unsigned long) block_pointer)",
+            "symbolLocation": 148,
+            "imageOffset": 55468,
+            "image": "dyld_info"
+          },
+          {
+            "symbol": "main",
+            "symbolLocation": 2076,
+            "imageOffset": 3652,
+            "image": "dyld_info"
+          },
+          {
+            "symbol": "start",
+            "symbolLocation": 6076,
+            "imageOffset": 27544,
+            "image": "dyld"
+          }
+        ],
+        "failed_test": "AppleClang/MachOArm64eNativeInstallation.AppleImageKeepsSignedFramesAndDyldRecipes/6",
+        "parameters": {
+          "optimization": "O2",
+          "append_segments": true,
+          "legacy_threaded": false
+        }
+      },
+      "direct_comparison": {
+        "input_sha256": "46d3ad8e197549d6d0b0cb361011a33924e96c1e624d8860a73d8a651cac7e8f",
+        "results": [
+          {
+            "oracle": "symbolicated",
+            "attempt": 0,
+            "status": 0,
+            "output_sha256": "ec1f13447ae47367db7d83e2e3b8c95c1fbb1e2144bce807f1244d935bd8f7fb"
+          },
+          {
+            "oracle": "chains_and_imports",
+            "attempt": 0,
+            "status": 0,
+            "output_sha256": "f9a5572eef38765185a07ceb978db8f4ada22f0ac9c06eb24709b65d67909143"
+          },
+          {
+            "oracle": "symbolicated",
+            "attempt": 1,
+            "status": 0,
+            "output_sha256": "ec1f13447ae47367db7d83e2e3b8c95c1fbb1e2144bce807f1244d935bd8f7fb"
+          },
+          {
+            "oracle": "chains_and_imports",
+            "attempt": 1,
+            "status": 0,
+            "output_sha256": "f9a5572eef38765185a07ceb978db8f4ada22f0ac9c06eb24709b65d67909143"
+          },
+          {
+            "oracle": "symbolicated",
+            "attempt": 2,
+            "status": 0,
+            "output_sha256": "ec1f13447ae47367db7d83e2e3b8c95c1fbb1e2144bce807f1244d935bd8f7fb"
+          },
+          {
+            "oracle": "chains_and_imports",
+            "attempt": 2,
+            "status": 0,
+            "output_sha256": "f9a5572eef38765185a07ceb978db8f4ada22f0ac9c06eb24709b65d67909143"
+          },
+          {
+            "oracle": "symbolicated",
+            "attempt": 3,
+            "status": 0,
+            "output_sha256": "ec1f13447ae47367db7d83e2e3b8c95c1fbb1e2144bce807f1244d935bd8f7fb"
+          },
+          {
+            "oracle": "chains_and_imports",
+            "attempt": 3,
+            "status": 0,
+            "output_sha256": "f9a5572eef38765185a07ceb978db8f4ada22f0ac9c06eb24709b65d67909143"
+          },
+          {
+            "oracle": "symbolicated",
+            "attempt": 4,
+            "status": 0,
+            "output_sha256": "ec1f13447ae47367db7d83e2e3b8c95c1fbb1e2144bce807f1244d935bd8f7fb"
+          },
+          {
+            "oracle": "chains_and_imports",
+            "attempt": 4,
+            "status": 0,
+            "output_sha256": "f9a5572eef38765185a07ceb978db8f4ada22f0ac9c06eb24709b65d67909143"
+          }
+        ]
+      }
+    },
+    "final_build_log_sha256": "22785a1ea589193c9e32d7400d7c5f5c51d00635cd35855d4345bbe39badf654",
+    "ordinary_relro_xml_sha256": "9633017d44135d4730b2eb650b2e8ad1682f546c6b51252deb675c7ab63b63da",
+    "environment": {
+      "NEVERD_THREADS": "1",
+      "parallel_ctest_cases": 4
+    },
+    "red_green": {
+      "initial": "Four native object cases failed because inline dylib identity prevented header-capacity admission.",
+      "after_header_fix": "Both threaded cases passed; modern cases exposed unclaimed TEXT-tail capacity that the compact-unwind allocator did not use.",
+      "final": "All four cases passed after shared payload ownership and checked tail placement; nonzero and LC_NOTE-owned zero-filled tails reject without mutation.",
+      "initial_xml_sha256": "d2e8167846269b27023da97c25f694cf520d63d0da656d69842118eaf6969cc7",
+      "header_fix_xml_sha256": "ce4161cb52054e2227f5f2f7564b4214556a411465ee52e3e79ca5beece7c135"
+    },
+    "style": "clang-format 22.1.2 and git diff --check passed.",
+    "documentation": "Localized documentation validation passed (309 Markdown files, 10 locales)."
+  },
+  "sources": {
+    "linker_constant_section": "https://github.com/apple-oss-distributions/ld64/blob/main/src/ld/Options.cpp",
+    "dyld_read_only_flag": "https://github.com/apple-oss-distributions/dyld/blob/main/mach_o/UnsafeHeader.h",
+    "dyld_protection_application": "https://github.com/apple-oss-distributions/dyld/blob/main/dyld/Loader.cpp",
+    "dyld_sectionless_fixup_lookup": "https://github.com/apple-oss-distributions/dyld/blob/main/other-tools/SymbolicatedImage.cpp",
+    "dyld_section_name_accessors": "https://github.com/apple-oss-distributions/dyld/blob/main/other-tools/SymbolicatedImage.h"
+  },
+  "remaining_boundaries": [
+    "r6 lacks authenticated MC callback qualification; automatic MC constant-section RELRO classification remains separate.",
+    "The native staging API does not redirect original entries or authorize whole-image arm64e source publication.",
+    "New native object LSDA/personality installation and ordinary absolute-pointer rebases remain unsupported.",
+    "Actual installed arm64e IA/IB calls, DA/DB loads and signed exception propagation remain unqualified because compiler-original controls cannot execute on this host.",
+    "No complete arm64e, CPA2/CPTA or exact ESR/fault-PC execution claim; the existing external environment remains unreadable through the connected CI diagnostic interface."
+  ],
+  "cleanup": {
+    "native_fixture_files_removed": 156,
+    "native_fixture_bytes_removed": 8970160,
+    "manifests": [
+      "native-initial-cleanup.json",
+      "native-header-fixed-cleanup.json",
+      "native-tail-fixed-cleanup.json",
+      "native-serial-cleanup.json",
+      "native-oracle-cleanup.json"
+    ],
+    "bulk_timeout_products": [
+      {
+        "name": "neverd-original-memory-fc8d44.out",
+        "bytes": 16960,
+        "sha256": "784b2a3b41de55b3ca8b4a1ca6bd286daa0805ac7ef648d401f7a3c38165ed64",
+        "action": "unused generated binary removed"
+      },
+      {
+        "name": "neverd-original-memory-a1ef54.out",
+        "bytes": 33472,
+        "sha256": "f331375642232b3c0f6736b217a6ad0e363d8bafcd03123dd6a8cd63d92be613",
+        "action": "unused generated binary removed"
+      }
+    ],
+    "other_probes": "Syntax, ABI and launch-control probe executables/objects were hashed then removed; ordinary test runs delete their own temporary directories.",
+    "retained": "Active incremental build, fixture sources, XML, logs and hash/oracle evidence."
+  },
+  "external_ci_access": {
+    "verified": false,
+    "pull_request": "https://github.com/gmh5225/test_mac_intel/pull/3",
+    "diagnostic": "The selected GitHub connection changed or is unavailable. Reopen Code Review.",
+    "fallback_used": false
+  }
+}
