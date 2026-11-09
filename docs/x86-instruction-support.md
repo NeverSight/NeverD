@@ -4910,6 +4910,12 @@ archived with verified decompressed hashes, retaining source, inputs and failed
 diagnostics. These counts do not treat identical cross-SDK inputs as separate
 semantic cases.
 
+After integrating the concurrent SDK function-type update, both source targets
+were rebuilt at `f3a03c1f1e` and all 165 source cases per SDK passed again. The
+evidence additionally binds the loaded `libneverd.so` hashes. All 256 exported
+dispatchers per SDK remained identical, and the three original instruction-test
+binaries and their execution sources were unchanged.
+
 The profile does not qualify physical MPX, code16 MPX operands, 16-bit address
 forms, non-flat-DS bounds tables, transactional aborts, MMIO, shared-memory
 synchronization or ordinary function-ABI bounds transport. Whole-operand
