@@ -3124,6 +3124,68 @@ TEST(SBFStoredRegisterMemory, ScalarALUDoesNotEvaluateSymbolicAddresses) {
   EXPECT_EQ(State[0].Value, 3u);
 }
 
+TEST(SBFStoredRegisterMemory, AlignmentMasksProjectKnownCaptureBounds) {
+  auto Program = analyze(test::makeImage({encode(Opcode::EXIT)}, {}));
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  auto Addresses = std::make_shared<SymbolicAddressSpace>();
+  Addresses->push_back({kHeapStart + 8, UINT64_MAX});
+  const RegisterValue Capture{RegisterValue::Kind::SymbolicAddress, 0, 0};
+  for (bool Local : {false, true})
+    for (bool WithMemory : {false, true})
+      for (bool Immediate : {false, true})
+        for (int64_t Offset : {-24, 0, 24})
+          for (uint64_t Mask :
+               {uint64_t{0}, UINT64_MAX - 7, UINT64_MAX - 15, UINT64_MAX - 127,
+                UINT64_MAX, uint64_t{0xf0f0}}) {
+            SCOPED_TRACE(::testing::Message()
+                         << Local << ", memory=" << WithMemory
+                         << ", immediate=" << Immediate << ", offset=" << Offset
+                         << ", mask=" << Mask);
+            StoredRegisterMemory Memory;
+            Memory.setSymbolicAddresses(Addresses);
+            if (Local)
+              Memory.refineCapturedRange(Capture,
+                                         {kHeapStart + 8, kHeapStart + 4096});
+            RegisterState State{};
+            State[0] = Capture;
+            State[0].Offset = Offset;
+            const auto Input = State[0];
+            State[1] = {RegisterValue::Kind::Constant, Mask, 0};
+            const auto &Info = *getOpcodeInfo(Immediate ? Opcode::AND64_IMM
+                                                        : Opcode::AND64_REG);
+            MedInstruction I;
+            I.Op = Info.Op;
+            I.Form = Info.Form;
+            I.Width = Info.Width;
+            I.Src = 1;
+            I.Immediate = Mask;
+            I.Semantics = semanticTraits(Info, Version::V0);
+            I.Semantics.Immediate = ImmediateExtension::Full64;
+            const auto Bounds = Memory.valueRange(Input);
+            applyRegisterTransfer(I, State, Program->ExecutableImage,
+                                  WithMemory ? &Memory : nullptr);
+            if (Mask == UINT64_MAX) {
+              EXPECT_EQ(State[0], Input);
+            } else if (WithMemory && Bounds && Mask != 0xf0f0) {
+              EXPECT_EQ(State[0], unsignedRangeValue({Bounds->Lower & Mask,
+                                                      Bounds->Upper & Mask}));
+              // Check concrete bit operations independently of the abstract
+              // transfer, including both endpoints and an interior value.
+              for (uint64_t Value :
+                   {Bounds->Lower, Bounds->Upper,
+                    Bounds->Lower + (Bounds->Upper - Bounds->Lower) / 2}) {
+                const auto Result = unsignedValueRange(State[0]);
+                ASSERT_TRUE(Result);
+                EXPECT_LE(Result->Lower, Value & Mask);
+                EXPECT_GE(Result->Upper, Value & Mask);
+              }
+            } else {
+              EXPECT_EQ(State[0].ValueKind, RegisterValue::Kind::Unknown);
+            }
+          }
+}
+
 TEST(SBFCallXContexts, FollowsLengthArithmeticIntoWordCopyOrMemcpy) {
   // The length calculation mirrors a compiler-emitted copy dispatcher. Both
   // its shifted/multiplied length and its register-indexed word addresses

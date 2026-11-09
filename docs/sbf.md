@@ -1028,7 +1028,9 @@ budget. A null/non-null return can carry the successful value's displacement,
 conditional stores and bound together. Testing that exact return restores those
 facts only on the non-null branch. This preserves a decreasing heap cursor
 across repeated allocations, while a cursor reset can still prove actual
-overlap. Non-identity alignment masks retain their existing conservative result.
+overlap. Alignment masks that clear a low-bit suffix project a known,
+nonwrapping numeric enclosure, including path-local bounds. The result is a
+numeric range, not the original pointer identity.
 
 A complete set of successful heap-derived numeric returns names the one actual
 returned value with a captured identity and enclosing numeric bounds. Ordinary
@@ -1061,7 +1063,8 @@ one captured value, including modular addition. Unsigned ordering additionally
 requires both displaced numeric intervals to stay within the 64-bit address
 space. Different captures, signed comparisons and truncated values do not
 inherit that ordering. A 64-bit AND with an all-ones immediate or register mask
-also preserves the value's identity; other masks retain their existing transfer.
+also preserves the value's identity. A mask that clears a low-bit suffix uses
+the known numeric enclosure described above; other masks remain conservative.
 These proofs share the normal branch and register-transfer owners and introduce
 no allocator freshness or initial-memory assumption.
 
