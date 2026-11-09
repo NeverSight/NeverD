@@ -12,6 +12,7 @@
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
 #include <array>
+#include <optional>
 
 namespace neverd {
 
@@ -83,6 +84,29 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
   default:
     break;
   }
+  std::optional<NdOp> Shift, Bit;
+  switch (*Kind) {
+  case Instruction::ShiftLeftVector:
+    Shift = NdOp::INT_LEFT;
+    break;
+  case Instruction::ShiftRightVector:
+    Shift = NdOp::INT_RIGHT;
+    break;
+  case Instruction::ShiftRightSignedVector:
+    Shift = NdOp::INT_ASHR;
+    break;
+  case Instruction::ClearBitVector:
+    Bit = NdOp::INT_AND;
+    break;
+  case Instruction::SetBitVector:
+    Bit = NdOp::INT_OR;
+    break;
+  case Instruction::NegateBitVector:
+    Bit = NdOp::INT_XOR;
+    break;
+  default:
+    break;
+  }
   const bool Minimum = *Kind == Instruction::SignedMinimumVector ||
                        *Kind == Instruction::UnsignedMinimumVector;
   const bool Maximum = *Kind == Instruction::SignedMaximumVector ||
@@ -99,6 +123,24 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
       Values[I] = S.read(WS);
     else if (*Kind == Instruction::InsertWord)
       Values[I] = I == Index ? S.read(WS) : Lane(WD, I);
+    else if (Shift || Bit) {
+      const auto A = Lane(WS, I, Bytes);
+      const auto Count = S.binary(NdOp::INT_AND, Lane(WT, I, Bytes),
+                                  NdVar::cst(Bytes * 8 - 1, Bytes));
+      if (Shift)
+        Values[I] = S.binary(*Shift, A, Count);
+      else {
+        auto Mask = S.binary(NdOp::INT_LEFT, NdVar::cst(1, Bytes), Count);
+        if (*Kind == Instruction::ClearBitVector) {
+          const auto Inverted = S.makeTemp(Bytes);
+          S.emit(NdOp::INT_NOT, Inverted, {Mask});
+          Mask = Inverted;
+        }
+        Values[I] = S.binary(*Bit, A, Mask);
+      }
+    } else if (*Kind == Instruction::MultiplyVector)
+      Values[I] =
+          S.binary(NdOp::INT_MULT, Lane(WS, I, Bytes), Lane(WT, I, Bytes));
     else if (Minimum || Maximum) {
       const auto A = Lane(WS, I, Bytes), B = Lane(WT, I, Bytes);
       const auto Condition =

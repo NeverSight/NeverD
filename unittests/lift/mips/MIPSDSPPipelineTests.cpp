@@ -11,6 +11,7 @@
 #include "MIPSFixtures.h"
 #include "gtest/gtest.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/backend/MIPS/MIPSDSPSource.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
@@ -24,9 +25,13 @@
 #include "neverd/loader/ELF/ELFLoader.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/ADT/SmallString.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <cstdlib>
 #include <vector>
 
 using namespace neverd;
@@ -309,6 +314,190 @@ TEST(MIPSDSPPipeline, DynamicStackHelperIsInsideTheDSPCompilerContract) {
     EXPECT_GT(Text.find(mips::DSPSourceCEnd), Helper) << Text;
     EXPECT_NE(Text.find("return size + 16"), std::string::npos) << Text;
   }
+}
+
+TEST(MIPSDSPPipeline,
+     PureStandaloneSourceKeepsDSPControlWithoutStateIntrinsics) {
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL}) {
+    mips_test::ELFBytes File(Target);
+    File.abiFlags();
+    File.put(0xec, 1, 4);
+    const uint32_t Words[] = {0x7ca415d3, 0x03e00008, 0}; // shrav_r.w v0,a0,a1
+    for (unsigned I = 0; I != 3; ++I)
+      File.put(0x100 + I * 4, Words[I], 4);
+    ELFLoader Loader;
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    auto FunctionSymbol = Symbol::makeFunc(Image->Entry, sizeof(Words));
+    FunctionSymbol.Name = "dsp_pure_round";
+    Image->Symbols.push_back(std::move(FunctionSymbol));
+    llvm::LLVMContext Context;
+    PipelineOptions PipelineOpts;
+    PipelineOpts.OnlyFunctionEntries = {Image->Entry};
+    PipelineOpts.EmitDumpOutput = false;
+    auto Result = Pipeline().run(*Image, Context, PipelineOpts);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    ASSERT_EQ(Result.MedFuncs.size(), 1u);
+    for (const auto &Block : Result.MedFuncs[0].Blocks)
+      for (const auto &Op : Block.Ops)
+        EXPECT_NE(Op.Opcode, NdOp::INTRINSIC);
+    CEmitterOptions Options;
+    Options.TheArch = Target;
+    Options.Format = BinaryFormat::ELF;
+    for (bool LLVM : {false, true}) {
+      std::string Text;
+      llvm::raw_string_ostream Stream(Text);
+      if (LLVM) {
+        MedLLVMEmitter Emitter;
+        auto Module =
+            Emitter.emit(Result.MedFuncs, Context, "pure_dsp", Target);
+        ASSERT_NE(Module, nullptr);
+        EXPECT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+        EXPECT_EQ(Module->getFunction("dsp_pure_round")
+                      ->getFnAttribute("target-features")
+                      .getValueAsString(),
+                  "-dsp,-dspr2");
+        ASSERT_TRUE(LLVMCEmitter().emit(*Module, Stream, Options));
+      } else
+        ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Stream, Options));
+      EXPECT_NE(Text.find(mips::DSPSourceCBegin), std::string::npos) << Text;
+      EXPECT_EQ(Text.find("rddsp"), std::string::npos);
+      EXPECT_EQ(Text.find("wrdsp"), std::string::npos);
+      if (const char *Directory =
+              std::getenv("NEVERD_MIPS_DSP_SOURCE_OUTPUT")) {
+        llvm::SmallString<256> Path(Directory);
+        llvm::sys::path::append(
+            Path, std::string(archLittleEndian(Target) ? "mipsel" : "mips") +
+                      (LLVM ? "-llvmc-pure.c" : "-highc-pure.c"));
+        std::error_code Error;
+        llvm::raw_fd_ostream Output(Path, Error);
+        ASSERT_FALSE(Error);
+        Output << Text;
+      }
+    }
+  }
+}
+
+TEST(MIPSDSPPipeline, ExplicitImageArgumentDeterminesTheLLVMSourceProfile) {
+  for (bool DSP : {false, true}) {
+    BinaryImage Image;
+    Image.Arch = Arch::MIPS32;
+    Image.MIPS.emplace();
+    Image.MIPS->HasDSP = DSP;
+    llvm::LLVMContext Context;
+    llvm::Module Module("image_profile", Context);
+    auto *Type =
+        llvm::FunctionType::get(llvm::Type::getInt32Ty(Context), false);
+    auto *Function = llvm::Function::Create(
+        Type, llvm::GlobalValue::ExternalLinkage, "ordinary_leaf", Module);
+    llvm::IRBuilder<> Builder(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    Builder.CreateRet(Builder.getInt32(7));
+    CEmitterOptions Options;
+    Options.TheArch = Arch::MIPS32;
+    Options.Format = BinaryFormat::ELF;
+    std::string Text;
+    llvm::raw_string_ostream Stream(Text);
+    ASSERT_TRUE(LLVMCEmitter().emit(Module, Stream, Options, nullptr, &Image));
+    EXPECT_EQ(Text.find(mips::DSPSourceCBegin) != std::string::npos, DSP)
+        << Text;
+    EXPECT_EQ(Text.find(mips::DSPSourceCAttribute) != std::string::npos, DSP)
+        << Text;
+  }
+}
+
+TEST(MIPSDSPPipeline, StandaloneWideHelpersHaveTheSameCompilerContract) {
+  EXPECT_FALSE(mips::sourcePreservesDSPControl(Arch::X64, nullptr));
+  EXPECT_FALSE(mips::sourcePreservesDSPControl(Arch::MIPS64, nullptr));
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL})
+    for (bool LLVM : {false, true}) {
+      CEmitterOptions Options;
+      Options.TheArch = Target;
+      Options.Format = BinaryFormat::ELF;
+      std::string Text;
+      llvm::raw_string_ostream Stream(Text);
+      if (LLVM) {
+        llvm::LLVMContext Context;
+        llvm::Module Module("standalone_wide", Context);
+        auto *I32 = llvm::Type::getInt32Ty(Context),
+             *I64 = llvm::Type::getInt64Ty(Context);
+        auto *Type = llvm::FunctionType::get(I64, {I32, I32}, false);
+        auto *Helper =
+            llvm::Function::Create(Type, llvm::GlobalValue::ExternalLinkage,
+                                   "dsp_wide_helper", Module);
+        llvm::IRBuilder<> Builder(
+            llvm::BasicBlock::Create(Context, "entry", Helper));
+        auto *X = Builder.CreateOr(
+            Builder.CreateShl(Builder.CreateZExt(Helper->getArg(0), I64), 32),
+            Builder.CreateZExt(Helper->getArg(1), I64));
+        Builder.CreateRet(
+            Builder.CreateAdd(X, llvm::ConstantInt::get(I64, 0xffffffff)));
+        auto *Caller =
+            llvm::Function::Create(Type, llvm::GlobalValue::ExternalLinkage,
+                                   "dsp_standalone_wide", Module);
+        Builder.SetInsertPoint(
+            llvm::BasicBlock::Create(Context, "entry", Caller));
+        Builder.CreateRet(
+            Builder.CreateCall(Helper, {Caller->getArg(0), Caller->getArg(1)}));
+        EXPECT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+        ASSERT_TRUE(LLVMCEmitter().emit(Module, Stream, Options));
+      } else {
+        const auto U32 = NdType::makeInt(4, false),
+                   U64 = NdType::makeInt(8, false);
+        const auto Param = [&](unsigned Index) {
+          MedVar V;
+          V.Kind = MedVar::Param;
+          V.Id = Index;
+          V.Size = 4;
+          V.TheArch = Target;
+          return HighExpr::makeVar(V, U32);
+        };
+        HighFunc Helper;
+        Helper.Name = "dsp_wide_helper";
+        Helper.Entry = 0x1000;
+        Helper.ReturnType = U64;
+        Helper.Params = {{"a", U32}, {"b", U32}};
+        auto A = HighExpr::makeUnary(NdOp::INT_ZEXT, Param(0));
+        A->Type = U64;
+        auto B = HighExpr::makeUnary(NdOp::INT_ZEXT, Param(1));
+        B->Type = U64;
+        auto Left =
+            HighExpr::makeBinop(NdOp::INT_LEFT, A, HighExpr::makeConst(32, 4));
+        Left->Type = U64;
+        auto X = HighExpr::makeBinop(NdOp::INT_OR, Left, B);
+        X->Type = U64;
+        auto Sum = HighExpr::makeBinop(NdOp::INT_ADD, X,
+                                       HighExpr::makeConst(0xffffffff, 8));
+        Sum->Type = U64;
+        HighStmt Return;
+        Return.Kind = StmtKind::Return;
+        Return.RetVal = Sum;
+        Helper.Body.push_back(Return);
+        HighFunc Caller;
+        Caller.Name = "dsp_standalone_wide";
+        Caller.Entry = 0x1100;
+        Caller.ReturnType = U64;
+        Caller.Params = Helper.Params;
+        Return.RetVal =
+            HighExpr::makeCall(Helper.Name, Helper.Entry, {Param(0), Param(1)});
+        Return.RetVal->Type = U64;
+        Caller.Body.push_back(Return);
+        ASSERT_TRUE(HighCEmitter().emit({Helper, Caller}, Stream, Options));
+      }
+      EXPECT_NE(Text.find(mips::DSPSourceCBegin), std::string::npos) << Text;
+      EXPECT_NE(Text.find(mips::DSPSourceCEnd), std::string::npos) << Text;
+      if (const char *Directory =
+              std::getenv("NEVERD_MIPS_DSP_SOURCE_OUTPUT")) {
+        llvm::SmallString<256> Path(Directory);
+        llvm::sys::path::append(
+            Path, std::string(archLittleEndian(Target) ? "mipsel" : "mips") +
+                      (LLVM ? "-llvmc-wide.c" : "-highc-wide.c"));
+        std::error_code Error;
+        llvm::raw_fd_ostream Output(Path, Error);
+        ASSERT_FALSE(Error);
+        Output << Text;
+      }
+    }
 }
 
 } // namespace

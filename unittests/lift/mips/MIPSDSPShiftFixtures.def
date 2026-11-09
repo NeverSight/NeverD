@@ -1,0 +1,15 @@
+//===- MIPSDSPShiftFixtures.def - Independent DSP right-shift literals ---===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Literal encoding, lane bytes, variable count, rounding.
+MIPS_DSP_SHIFT(0x7c000053, 1, false, false)
+MIPS_DSP_SHIFT(0x7c0000d3, 1, true, false)
+MIPS_DSP_SHIFT(0x7c000253, 2, false, false)
+MIPS_DSP_SHIFT(0x7c0002d3, 2, true, false)
+MIPS_DSP_SHIFT(0x7c000353, 2, false, true)
+MIPS_DSP_SHIFT(0x7c0003d3, 2, true, true)
+MIPS_DSP_SHIFT(0x7c000553, 4, false, true)
+MIPS_DSP_SHIFT(0x7c0005d3, 4, true, true)
+#undef MIPS_DSP_SHIFT

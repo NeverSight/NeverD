@@ -12,6 +12,7 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/NdOpEmulator.h"
+#include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
 #ifdef NEVERD_MIPS_UNICORN_REFERENCE
@@ -21,6 +22,7 @@
 #include <algorithm>
 #include <array>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -215,6 +217,103 @@ TEST_P(MIPSDSP, SignedHalfwordsSaturateIndependentlyAndPreserveStickyState) {
                           Result);
               EXPECT_FALSE(Emulator.skips().any());
             }
+}
+
+TEST_P(MIPSDSP, RightShiftAndPackingLeaveControlUntouched) {
+  auto Image = dspImage(GetParam());
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(Image));
+  struct Case {
+    uint32_t Word;
+    unsigned Bytes;
+    bool Variable, Rounded;
+  };
+  constexpr Case Cases[] = {
+#define MIPS_DSP_SHIFT(Word, Bytes, Variable, Rounded)                         \
+  {Word, Bytes, Variable, Rounded},
+#include "MIPSDSPShiftFixtures.def"
+  };
+  for (const auto &C : Cases)
+    for (uint32_t Input : {0u, 0x7fff7fffu, 0x80008000u, 0xffffffffu,
+                           0xfffffffdu, 0x7fffffffu, 0x80000000u, 0x1234abcdu})
+      for (unsigned Count = 0; Count != (C.Variable ? 64 : C.Bytes * 8);
+           ++Count)
+        for (unsigned Destination : {0u, 2u, 4u, 5u})
+          for (bool KnownControl : {false, true}) {
+            NdOpEmulator E(Image);
+            E.setStrictMode(true);
+            if (KnownControl)
+              E.setRegister(mipsreg::DSPControl, 0x0a555fa5);
+            if (Destination) {
+              E.setRegister(mipsreg::A0, 0x80000000u | Count);
+              E.setRegister(mipsreg::A1, Input);
+            }
+            uint32_t Expected = 0;
+            const unsigned Bits = C.Bytes * 8, Amount = Count & (Bits - 1);
+            for (unsigned I = 0; I != 32 / Bits; ++I) {
+              const uint32_t Raw = Input >> (I * Bits);
+              int64_t Value = Bits == 8    ? int64_t(uint8_t(Raw))
+                              : Bits == 16 ? int64_t(int16_t(Raw))
+                                           : int64_t(int32_t(Raw));
+              if (C.Rounded && Amount)
+                Value += int64_t(1) << (Amount - 1);
+              const uint32_t Mask = Bits == 32 ? 0xffffffff : (1u << Bits) - 1;
+              Expected |= (uint32_t(Value >> Amount) & Mask) << (I * Bits);
+            }
+            const uint32_t Word = C.Word | ((C.Variable ? 4 : Count) << 21) |
+                                  (5 << 16) | (Destination << 11);
+            SCOPED_TRACE(::testing::Message() << Word << ": " << Input);
+            ASSERT_TRUE(executeDSP(Decode, GetParam(), Word, E));
+            if (Destination)
+              EXPECT_EQ(E.getRegister(mipsreg::r(Destination)), Expected);
+            EXPECT_EQ(E.getRegister(mipsreg::DSPControl),
+                      KnownControl ? std::optional<uint64_t>(0x0a555fa5)
+                                   : std::nullopt);
+          }
+  for (bool Halfwords : {false, true})
+    for (unsigned Destination : {0u, 2u, 4u, 5u}) {
+      NdOpEmulator E(Image);
+      E.setStrictMode(true);
+      if (Destination) {
+        E.setRegister(mipsreg::A0, 0x11223344);
+        E.setRegister(mipsreg::A1, 0xaabbccdd);
+      }
+      ASSERT_TRUE(executeDSP(
+          Decode, GetParam(),
+          (Halfwords ? 0x7c850511 : 0x7c850311) | (Destination << 11), E));
+      if (Destination)
+        EXPECT_EQ(E.getRegister(mipsreg::r(Destination)),
+                  Halfwords ? 0x1122aabbu : 0x1133aaccu);
+      EXPECT_FALSE(E.getRegister(mipsreg::DSPControl));
+    }
+}
+
+TEST_P(MIPSDSP, PureFormatsStillValidateFeatureFieldsAndInputState) {
+  MIPSLifter Lifter(GetParam());
+  Lifter.setDSPEnabled(true);
+  for (uint32_t Word : {0x7d000053u, 0x7e000053u, 0x7e000253u, 0x7e000353u}) {
+    const auto Bytes = encodeDSP({Word}, GetParam());
+    cs_insn Insn{};
+    Insn.address = 0x10000;
+    Insn.size = 4;
+    std::copy(Bytes.begin(), Bytes.end(), Insn.bytes);
+    std::vector<LowOp> Ops(1);
+    EXPECT_THROW(Lifter.lift(Insn, Ops), UnliftedInstruction);
+    EXPECT_EQ(Ops.size(), 1u);
+  }
+  auto Image = dspImage(GetParam());
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(Image));
+  for (uint32_t Word : {0x7c8510d3u, 0x7c8515d3u, 0x7c851311u, 0x7c851511u}) {
+    NdOpEmulator E(Image);
+    E.setStrictMode(true);
+    E.setRegister(mipsreg::V0, 7);
+    EXPECT_FALSE(executeDSP(Decode, GetParam(), Word, E));
+    EXPECT_EQ(E.getRegister(mipsreg::V0), 7u);
+    ASSERT_TRUE(Decode.init(GetParam()));
+    EXPECT_THROW(liftDSP(Decode, GetParam(), Word), UnliftedInstruction);
+    ASSERT_TRUE(Decode.init(Image));
+  }
 }
 
 TEST_P(MIPSDSP, DecoderReuseConsumesTheCurrentImagesFeatureEvidence) {

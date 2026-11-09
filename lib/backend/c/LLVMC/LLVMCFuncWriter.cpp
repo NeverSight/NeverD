@@ -10369,7 +10369,8 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
       SignatureOS << "static ";
     if (isMIPS(Opts.TheArch)) {
       SignatureOS << mips::dspSourceCAttribute(
-          Opts.Image, Fn.hasFnAttribute(mips::DSPSourceMarker));
+          Opts.TheArch, Img ? Img : Opts.Image,
+          Fn.hasFnAttribute(mips::DSPSourceMarker));
       SignatureOS << mips::instructionModeCAttribute(
           mips::instructionModeFromLLVM(Fn));
     }

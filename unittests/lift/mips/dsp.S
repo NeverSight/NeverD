@@ -165,3 +165,103 @@ dsp_half_sub_saturate:
   nop
 .end dsp_half_sub_saturate
 .size dsp_half_sub_saturate, .-dsp_half_sub_saturate
+
+.globl dsp_shrl
+.type dsp_shrl,@function
+.ent dsp_shrl
+dsp_shrl:
+  shrl.qb $v0,$a0,7
+  jr $ra
+  nop
+.end dsp_shrl
+.size dsp_shrl, .-dsp_shrl
+
+.globl dsp_shrlv
+.type dsp_shrlv,@function
+.ent dsp_shrlv
+dsp_shrlv:
+  shrlv.qb $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_shrlv
+.size dsp_shrlv, .-dsp_shrlv
+
+.globl dsp_shra
+.type dsp_shra,@function
+.ent dsp_shra
+dsp_shra:
+  shra.ph $v0,$a0,15
+  jr $ra
+  nop
+.end dsp_shra
+.size dsp_shra, .-dsp_shra
+
+.globl dsp_shrav
+.type dsp_shrav,@function
+.ent dsp_shrav
+dsp_shrav:
+  shrav.ph $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_shrav
+.size dsp_shrav, .-dsp_shrav
+
+.globl dsp_shra_r
+.type dsp_shra_r,@function
+.ent dsp_shra_r
+dsp_shra_r:
+  shra_r.ph $v0,$a0,1
+  jr $ra
+  nop
+.end dsp_shra_r
+.size dsp_shra_r, .-dsp_shra_r
+
+.globl dsp_shrav_r
+.type dsp_shrav_r,@function
+.ent dsp_shrav_r
+dsp_shrav_r:
+  shrav_r.ph $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_shrav_r
+.size dsp_shrav_r, .-dsp_shrav_r
+
+.globl dsp_shra_rw
+.type dsp_shra_rw,@function
+.ent dsp_shra_rw
+dsp_shra_rw:
+  shra_r.w $v0,$a0,1
+  jr $ra
+  nop
+.end dsp_shra_rw
+.size dsp_shra_rw, .-dsp_shra_rw
+
+.globl dsp_shrav_rw
+.type dsp_shrav_rw,@function
+.ent dsp_shrav_rw
+dsp_shrav_rw:
+  shrav_r.w $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_shrav_rw
+.size dsp_shrav_rw, .-dsp_shrav_rw
+
+.globl dsp_pack_h
+.type dsp_pack_h,@function
+.ent dsp_pack_h
+dsp_pack_h:
+  precrq.ph.w $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_pack_h
+.size dsp_pack_h, .-dsp_pack_h
+
+.globl dsp_pack_b
+.type dsp_pack_b,@function
+.ent dsp_pack_b
+dsp_pack_b:
+  precrq.qb.ph $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_pack_b
+.size dsp_pack_b, .-dsp_pack_b

@@ -856,7 +856,7 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   // named (RefusedBodies), and the rest are checked before the first refusal
   // is thrown, so that a unit that leaves such bodies out can emit again
   // without them. A malformed operation fails at once.
-  bool PreserveDSPControl = mips::imagePreservesDSPControl(Img_);
+  bool PreserveDSPControl = mips::sourcePreservesDSPControl(TheArch, Img_);
   for (size_t Index = 0; Index != Funcs.size(); ++Index) {
     const MedFunc &Func = Funcs[Index];
     const bool WritesBody = !BodyMask || (*BodyMask)[Index];

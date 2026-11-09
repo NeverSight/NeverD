@@ -136,11 +136,13 @@ def emulator(path, bits, little, function, original=None, cpu_model=None):
     return uc, entry
 
 
-def invoke(uc, entry, bits, little, arguments, old_destination=0):
+def invoke(uc, entry, bits, little, arguments, old_destination=0, initial_registers=None):
     width, registers = bits // 8, (8 if bits == 64 else 4)
     mask = (1 << bits) - 1
     for reg in range(1, 32):
         uc.reg_write(getattr(mips, f"UC_MIPS_REG_{reg}"), 0)
+    for reg, value in (initial_registers or {}).items():
+        uc.reg_write(getattr(mips, f"UC_MIPS_REG_{reg}"), value & mask)
     uc.reg_write(mips.UC_MIPS_REG_SP, STACK)
     uc.reg_write(mips.UC_MIPS_REG_RA, STOP)
     uc.reg_write(mips.UC_MIPS_REG_V0, old_destination & mask)

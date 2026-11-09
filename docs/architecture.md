@@ -15536,6 +15536,13 @@ storage and low F views without assigning a floating ABI to ordinary integers.
 and multi-block source before optimization. It does not narrow LowIR register
 coverage or invent initial machine state.
 
+`MedMIPSSourceAccumulators` checks HI/LO inputs immediately after SSA and before
+propagation or return inference. It follows read PHIs and the shared call-clobber
+identities, refusing entry or call-clobbered state without a C ABI carrier.
+Classic and compressed forms share this owner; unknown HI/LO cannot disappear
+through a void-return inference. Defined multiply and explicit accumulator
+writes continue through the existing scalar pipeline.
+
 The focused MIPS loader, integer, flow, SDK and pipeline suites cover these
 contracts. Owned kernels are recompiled from HighC and LLVMC for the original
 MIPS target and compared with their assembly originals in pinned Unicorn.
