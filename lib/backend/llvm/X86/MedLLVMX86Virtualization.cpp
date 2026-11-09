@@ -192,9 +192,15 @@ llvm::Value *MedLLVMEmitter::emitX86Virtualization(const MedOp &Op,
   }
   llvm::Value *Value = nullptr;
   llvm::Value *Flags = nullptr;
-  const auto Native =
-      x86VirtualizationNative(Id, TargetArch, Op.MemoryAddressSpace,
-                              C.PhysicalAddress ? Op.Inputs[1].Size : 0);
+  const auto *FunctionLeaf =
+      Id == Intrinsic::VmxFunction
+          ? llvm::dyn_cast<llvm::ConstantInt>(Arguments.front())
+          : nullptr;
+  const auto Native = x86VirtualizationNative(
+      Id, TargetArch, Op.MemoryAddressSpace,
+      C.PhysicalAddress ? Op.Inputs[1].Size : 0,
+      FunctionLeaf ? std::optional<uint64_t>(FunctionLeaf->getZExtValue())
+                   : std::nullopt);
   // The production SDK remains pinned until the complete instruction release.
   // The marker identifies the fork's qualified effects. Check the individual
   // API as well: older SDKs lack VMXOFF status and must retain its real flags.
@@ -203,6 +209,8 @@ llvm::Value *MedLLVMEmitter::emitX86Virtualization(const MedOp &Op,
           ? llvm::Intrinsic::lookupIntrinsicID(Native->LLVMName)
           : llvm::Intrinsic::not_intrinsic;
   if (IID) {
+    Arguments.erase(Arguments.begin(),
+                    Arguments.begin() + Native->FirstArgument);
     if (Native->Result == X86VirtualizationResult::Read)
       Arguments.push_back(llvm::ConstantInt::get(sizeToType(Word), 0));
     if (Native->AddressControls) {

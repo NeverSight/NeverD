@@ -929,6 +929,10 @@ add_neverd_unittest(NeverDX86KvmSourceTests
   x86/X86KvmSourceTests.cpp
   LINK_COMPONENTS BackendC CodeGen)
 
+add_neverd_unittest(NeverDX86VmfuncSourceTests
+  x86/X86VmfuncSourceTests.cpp
+  LINK_COMPONENTS Pipeline BackendC CodeGen)
+
 add_neverd_unittest(NeverDX86SnpSourceTests
   x86/X86SnpSourceTests.cpp
   LINK_COMPONENTS BackendC CodeGen)

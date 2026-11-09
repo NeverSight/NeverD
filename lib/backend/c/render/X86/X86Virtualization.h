@@ -53,6 +53,16 @@ inline constexpr const char X86VirtualizationCompilerDispatch[] =
     "#ifndef NEVERD_X86_VIRTUALIZATION\n"
     "#define NEVERD_X86_VIRTUALIZATION(native, ...) __VA_ARGS__\n"
     "#endif\n"
+    "#endif\n\n"
+    "#ifndef NEVERD_X86_VMFUNC\n"
+    "#if defined(__has_builtin)\n"
+    "#if __has_builtin(__builtin_ia32_vmfunc_eptp_switch)\n"
+    "#define NEVERD_X86_VMFUNC(native, ...) native\n"
+    "#endif\n"
+    "#endif\n"
+    "#ifndef NEVERD_X86_VMFUNC\n"
+    "#define NEVERD_X86_VMFUNC(native, ...) __VA_ARGS__\n"
+    "#endif\n"
     "#endif\n\n";
 
 bool isX86VirtualizationNativeName(llvm::StringRef Name);
