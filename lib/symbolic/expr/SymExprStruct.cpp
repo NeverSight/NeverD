@@ -678,14 +678,55 @@ SymRef SymContext::mkEq(SymRef A, SymRef B) {
     const auto Selected = I ? B : A, Literal = I ? A : B;
     if (op(Selected) != SymOp::Ite || !isConst(Literal))
       continue;
-    const auto T = operand(Selected, 1), E = operand(Selected, 2);
-    if (!isConst(T) || !isConst(E))
+    // Preserve the existing allocation-free two-tag case, even when the
+    // condition is an arbitrarily large opaque expression.
+    const auto Yes = operand(Selected, 1), No = operand(Selected, 2);
+    if (isConst(Yes) && isConst(No)) {
+      if (Literal == Yes)
+        return operand(Selected, 0);
+      if (Literal == No)
+        return mkNot(operand(Selected, 0));
+      return mkFalse();
+    }
+    struct Arm {
+      SymRef Condition;
+      bool ConstantThen, Matches;
+    };
+    llvm::SmallVector<Arm, 8> Arms;
+    auto Tail = Selected;
+    while (op(Tail) == SymOp::Ite &&
+           Arms.size() !=
+               ::neverd::limits::symbolic::kSymExprSelectionEqualityMaxSteps) {
+      const auto T = operand(Tail, 1), E = operand(Tail, 2);
+      const bool ConstantThen = isConst(T);
+      if (!ConstantThen && !isConst(E))
+        break;
+      Arms.push_back(
+          {operand(Tail, 0), ConstantThen, Literal == (ConstantThen ? T : E)});
+      Tail = ConstantThen ? E : T;
+    }
+    if (Arms.empty())
       continue;
-    if (Literal == T)
-      return operand(Selected, 0);
-    if (Literal == E)
-      return mkNot(operand(Selected, 0));
-    return mkFalse();
+    auto Match = [&] {
+      if (isConst(Tail))
+        return Tail == Literal ? mkTrue() : mkFalse();
+      // A retained selection tail has already consumed this query's work.
+      // Do not recursively restart the same optional constructor rewrite.
+      if (op(Tail) == SymOp::Ite) {
+        auto Left = Tail, Right = Literal;
+        if (Right < Left)
+          std::swap(Left, Right);
+        return intern(SymOp::Eq, 1, {Left, Right}, 0);
+      }
+      return mkEq(Tail, Literal);
+    }();
+    for (auto Arm = Arms.rbegin(); Arm != Arms.rend(); ++Arm) {
+      const auto TakesLiteral =
+          Arm->ConstantThen ? Arm->Condition : mkNot(Arm->Condition);
+      Match = Arm->Matches ? mkOr(TakesLiteral, Match)
+                           : mkAnd(mkNot(TakesLiteral), Match);
+    }
+    return Match;
   }
   if (isConst(A))
     std::swap(A, B);

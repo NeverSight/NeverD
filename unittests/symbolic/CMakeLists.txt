@@ -23,6 +23,7 @@ add_neverd_unittest(NeverDSymbolicTests
   SymLowWordProjectionTests.cpp
   SymExprCompareTests.cpp
   SymExprConditionalEqualityTests.cpp
+  SymExprNestedTagEqualityTests.cpp
   SymExprComplementTests.cpp
   SymExprExtensionTests.cpp
   SymExprExtensionEqualityTests.cpp
