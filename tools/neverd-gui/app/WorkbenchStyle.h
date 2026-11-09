@@ -22,6 +22,9 @@ public:
                 QStyleHintReturn *returnData = nullptr) const override;
   int pixelMetric(PixelMetric metric, const QStyleOption *option = nullptr,
                   const QWidget *widget = nullptr) const override;
+  void drawPrimitive(PrimitiveElement element, const QStyleOption *option,
+                     QPainter *painter,
+                     const QWidget *widget = nullptr) const override;
   QIcon standardIcon(StandardPixmap pixmap,
                      const QStyleOption *option = nullptr,
                      const QWidget *widget = nullptr) const override;
