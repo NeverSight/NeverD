@@ -488,7 +488,8 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
                                    bool ExecuteNative,
                                    bool DwarfLanguage = false,
                                    bool FreshPersonality = false,
-                                   bool RelocateOriginalLanguage = false) {
+                                   bool RelocateOriginalLanguage = false,
+                                   bool ConvertLegacy = false) {
 #ifndef __APPLE__
   GTEST_SKIP() << kMissingHost;
 #else
@@ -533,6 +534,11 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
   const auto Run =
       [&](llvm::StringRef Tool, llvm::ArrayRef<llvm::StringRef> Args,
           llvm::StringRef Output = {}) {
+        // ExecuteAndWait redirects without truncating existing files on this
+        // host. A marker from the previous child must not satisfy this run.
+        if (!Output.empty())
+          EXPECT_FALSE(Write(Output, {}));
+        EXPECT_FALSE(Write(Log, {}));
         const std::optional<llvm::StringRef> Redirects[] = {
             std::nullopt, Output.empty() ? std::nullopt : std::optional(Output),
             Log};
@@ -609,6 +615,8 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
     const std::optional<llvm::StringRef> Redirects[] = {std::nullopt,
                                                         RuntimeOutput, Log};
     std::string Diagnostic;
+    ASSERT_FALSE(Write(RuntimeOutput, {}));
+    ASSERT_FALSE(Write(Log, {}));
     const int Capability = llvm::sys::ExecuteAndWait(
         CapabilityBinary, {CapabilityBinary}, std::nullopt, Redirects,
         kToolTimeout, 0, &Diagnostic);
@@ -630,6 +638,8 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
         (*CapabilityOutput)->getBuffer().contains(kRuntimeCapabilityMarker));
     // Once launch and PAC enforcement work, a broken compiler-original
     // call/catch/cleanup is a failure, never an environmental skip.
+    ASSERT_FALSE(Write(RuntimeOutput, {}));
+    ASSERT_FALSE(Write(Log, {}));
     const int Status = llvm::sys::ExecuteAndWait(
         LoaderPath, {LoaderPath, ControlPath}, std::nullopt, Redirects,
         kToolTimeout, 0, &Diagnostic);
@@ -1002,6 +1012,12 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
       });
   EXPECT_EQ(ReadOnly, 1u);
   EXPECT_EQ(Mutable, 1u);
+  const bool Converted = Threaded && (ExecuteNative || ConvertLegacy);
+  if (Converted) {
+    auto Error = convertMachOThreadedFixupsToChains(Bytes);
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+  }
+  ::testing::Test::RecordProperty(kConvertedThreadedProperty, Converted);
   ASSERT_FALSE(Write(InstalledPath, llvm::toStringRef(llvm::ArrayRef(Bytes))));
   auto Error = macho_signing::adHocResign(InstalledPath,
                                           Signature->Slices.front().Identifier);
@@ -1009,7 +1025,7 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
   Error = macho_signing::verifyStrict(InstalledPath);
   ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
   Args.assign({kXcrun});
-  if (Threaded)
+  if (Threaded && !Converted)
     Args.append(std::begin(kThreadedInfoArgs), std::end(kThreadedInfoArgs));
   else
     Args.append(std::begin(kInfoArgs), std::end(kInfoArgs));
@@ -1019,7 +1035,7 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
   ASSERT_TRUE(bool(Info));
   EXPECT_TRUE((*Info)->getBuffer().contains(kProviderNativeFunction));
   EXPECT_TRUE((*Info)->getBuffer().contains(kProviderNativeData));
-  if (!Threaded)
+  if (!Threaded || Converted)
     checkAppleChainedRecipes((*Info)->getBuffer(), Bytes, *Recipes);
   Input = llvm::MemoryBuffer::getFile(InstalledPath);
   ASSERT_TRUE(bool(Input));
@@ -1215,6 +1231,13 @@ TEST_P(MachOArm64eNativeObjectInstallation,
   const auto [Optimization, Threaded] = GetParam();
   checkNativeObjectInstallation(Optimization, Threaded, false, true, false,
                                 true);
+}
+
+TEST_P(MachOArm64eNativeObjectInstallation,
+       ConvertsThreadedImagesAndRetainsSignedLanguageFrames) {
+  const auto [Optimization, Threaded] = GetParam();
+  checkNativeObjectInstallation(Optimization, Threaded, false, true, false,
+                                true, true);
 }
 
 TEST_P(MachOArm64eNativeObjectInstallation,

@@ -901,6 +901,42 @@ TEST(MachOArm64eInstallation,
   }
 }
 
+TEST(MachOArm64eInstallation, ConvertsThreadedWithoutChangingSlotIdentity) {
+  for (bool UnsupportedFlag : {false, true}) {
+    auto Bytes = threadedImage();
+    if (UnsupportedFlag)
+      Bytes[kChains + kThreadedSymbolFlagsOffset] |=
+          BIND_SYMBOL_FLAGS_NON_WEAK_DEFINITION;
+    auto Import = installedFixup(true);
+    auto Error = installMachOAuthenticatedFixups(Bytes, {Import});
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    const auto Original = Bytes;
+    auto Before = readMachODependencyState(Bytes);
+    ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
+    Error = convertMachOThreadedFixupsToChains(Bytes);
+    if (UnsupportedFlag) {
+      EXPECT_TRUE(bool(Error));
+      llvm::consumeError(std::move(Error));
+      EXPECT_EQ(Bytes, Original);
+      continue;
+    }
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    MachOChainedFixups Facts;
+    auto After = readMachODependencyState(Bytes, &Facts);
+    ASSERT_TRUE(bool(After)) << llvm::toString(After.takeError());
+    EXPECT_FALSE(Facts.Threaded);
+    EXPECT_EQ(After->Slots.size(), Before->Slots.size());
+    Error = preserveMachODependencyState(*Before, *After);
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    Error = verifyMachOAuthenticatedFixups(Bytes, {Import});
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    const auto Converted = Bytes;
+    Error = convertMachOThreadedFixupsToChains(Bytes);
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    EXPECT_EQ(Bytes, Converted);
+  }
+}
+
 TEST(MachOArm64eInstallation,
      RejectsIncompleteThreadedProgramsTransactionally) {
   const auto Check = [&](auto Change) {

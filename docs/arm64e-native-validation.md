@@ -51,7 +51,7 @@ python3 scripts/verify_arm64e_native.py run \
 The runner requires the probe's exact current revision and source hashes. It
 checks the twelve registered CTest commands before execution, records the owning
 test binary hash and runs with the registered CTest deadlines. Every chained and
-threaded O0/O2 case must execute successfully: authenticated calls and signed
+threaded-input O0/O2 case must execute successfully: authenticated calls and signed
 compact unwind, native DWARF catches/cleanup, and relocated original signed
 language frames. Missing, duplicate, foreign, failed or skipped cases fail the
 qualification even if CTest itself returns success. Temporary fixture storage
@@ -103,3 +103,24 @@ Its eighteen narrow aliased-index words run as separate CTest cases, each keepin
 both C routes and O0/O2 execution. This avoids charging 72 compiler invocations
 to one 120-second test deadline and identifies an individual failing word without
 raising the deadline or reducing coverage.
+
+The Xcode 27 runner in the [independent legacy comparison](https://github.com/gmh5225/test_mac_intel/actions/runs/42639296315)
+binds an authenticated `data + 1` to `data` even in an unmodified library produced
+by Apple's `ld-classic`. The same original and installed images retain the addend
+on macOS 26. Native installation qualification therefore explicitly migrates
+legacy inputs with `convertMachOThreadedFixupsToChains` before signing. This
+qualifies legacy input migration, not unchanged threaded output on Xcode 27.
+Offline cases retain and inspect the original threaded encoding.
+
+The converter retains the ARM64E pointer-word format and every target, addend,
+signing recipe, symbol and export. It replaces the old dyld-info command with
+chained-fixup and, when needed, export-trie commands inside the existing header
+space. Existing section VAs and file data remain fixed. Legacy non-weak-definition
+import flags cannot be expressed by the modern import table and fail without
+mutation. Already chained images are unchanged. Final code signing belongs to
+the caller; conversion does not authorize general whole-image rebuilding.
+
+Each native child now receives freshly truncated diagnostic output, preventing
+an earlier child's success marker from satisfying a later run. Pair owned-image
+checks also run as 215 individual words, retaining all range/provenance checks
+and both source routes at O0/O2 for the original execution subset.

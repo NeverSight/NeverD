@@ -52,6 +52,12 @@ llvm::Error
 installMachOAuthenticatedFixups(std::vector<uint8_t> &Binary,
                                 llvm::ArrayRef<MachOAuthenticatedFixup> Fixups);
 
+/// Explicitly migrate a legacy threaded image to LC_DYLD_CHAINED_FIXUPS,
+/// retaining exact slot, library, symbol and export identities. Already
+/// chained images are unchanged. Unsupported import flags reject without
+/// mutation. The caller must replace the code signature after conversion.
+llvm::Error convertMachOThreadedFixupsToChains(std::vector<uint8_t> &Binary);
+
 /// Replay installed recipes after subsequent image edits, retaining exact
 /// storage addresses, import identities, signing discriminators and requested
 /// post-fixup read-only protection.
