@@ -342,6 +342,7 @@ Apply section 4 constraints first if the target is embedded.
 - [ ] Keyboard: is every interactive element reachable and operable by keyboard alone?
 - [ ] Colour: are all colours token-based or semantically named? Is colour paired with a second cue for all state changes?
 - [ ] Crispness: at 100% scale, do straight icon strokes and 1 px lines cover whole pixels, so thin elements show their real colour?
+- [ ] States: does every control read differently at rest, under the pointer, pressed, with keyboard focus, checked and disabled, in every theme, and does a disabled control stay legible rather than vanish or look enabled?
 - [ ] Localisation: do all user-visible strings use locale-aware formatting? Are containers able to expand 30–40% for translated text?
 - [ ] AI features: are latency patterns, uncertainty, and consent handled per section 3?
 ---

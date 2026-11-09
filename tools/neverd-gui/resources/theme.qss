@@ -55,6 +55,9 @@ QToolButton[glyphToggle="true"]:hover { background: ${ToolBarHover}; }
 QToolButton:disabled, QToolButton[glyphToggle="true"]:disabled { color: ${DisabledText}; }
 QToolButton:checked:disabled { background: transparent; border-color: ${Border}; }
 QToolButton[glyphToggle="true"]:checked:disabled { border-color: transparent; }
+/* A tool button takes focus only from the keyboard, so its focus border is
+   the keyboard focus frame the other controls draw. */
+QToolButton:focus { border-color: ${Focus}; }
 QStatusBar { background: ${StatusBar}; color: ${StatusBarText}; min-height: 22px; border-top: 1px solid ${StatusBarBorder}; }
 QStatusBar QLabel { color: ${StatusBarText}; padding: 0 8px; }
 QStatusBar::item { border: none; }
@@ -124,6 +127,10 @@ QPushButton:disabled { background: transparent; color: ${DisabledText}; }
    default action stays recognizable, and its label stays legible on it. */
 QPushButton:default:disabled { background: ${ButtonPrimaryDisabled}; border: 1px solid transparent; color: ${ButtonPrimaryDisabledText}; }
 QDialogButtonBox { dialogbuttonbox-buttons-have-icons: 0; }
+/* A dialog's buttons are at least as wide as a standard Windows command
+   button, 75 pixels with their padding and border, so OK and Cancel, or Yes
+   and No, line up as a row of equals. */
+QDialogButtonBox QPushButton { min-width: 45px; }
 QCheckBox, QRadioButton, QLabel, QGroupBox { color: ${WindowText}; }
 QLabel[placeholder="true"] { color: ${PlaceholderText}; background: ${Base}; }
 QLabel[statusLine="true"] { color: ${SecondaryText}; }
