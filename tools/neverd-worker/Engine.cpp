@@ -2378,7 +2378,10 @@ Json Engine::renderReadsRenamed(const std::string &compact) {
 
 void Engine::restartSummaries() {
   // The engine may have dropped them with the analysis a change drops; a
-  // run of the job finds kept ones at once.
+  // run of the job finds kept ones at once.  What renders read moves only
+  // where it held them: a job still under way had given them nothing.
+  if (summaryState_ == SummaryState::Ready)
+    ++summariesEpoch_;
   summaryState_ = summaryJob_ ? SummaryState::Pending : SummaryState::Off;
   summaryCursor_ = 0;
   summaryDiscovered_ = false;
@@ -2525,6 +2528,7 @@ Json Engine::prepareCallSummaries() {
   auto result = backendJson(prepare(session_), true);
   if (result.value("ready", false)) {
     summaryState_ = SummaryState::Ready;
+    ++summariesEpoch_;
     forgetDecompiledViews();
     // The replica's own job reads ahead the callees its decompiles read; an
     // explicit request only solves.
@@ -3151,6 +3155,7 @@ Json Engine::restoreAnalysis(const Json &snapshot) {
   // call summaries in idle time.  That is this client's request, not the
   // owner's state, which later name updates compare.
   restoredSnapshot_ = snapshot;
+  declaredRender_.reset();
   restoredSnapshot_.erase("call_summaries");
   restoredSnapshot_.erase("render_ahead");
   restoredSnapshot_.erase("render_store");
@@ -3469,7 +3474,126 @@ Json Engine::updateAnalysisNames(const Json &snapshot) {
     // As the owner's listing takes a function's new name.
     functionNamesChanged(!namesInPlace());
   localNamesChanged();
+  // A render made under a declaration answers while the store's inputs read
+  // as they did then; what it read itself it says (DeclaredRender).
+  if (declaredRender_ && renderInputsDigest() != declaredRender_->inputs)
+    declaredRender_.reset();
   return {{"updated", true}};
+}
+
+bool Engine::callSummariesHeld() {
+  using HeldFunction = int (*)(neverd_session_t);
+  static const auto held =
+      engineSymbol<HeldFunction>("neverd_call_summaries_held");
+  return held && held(session_) != 0;
+}
+
+Json Engine::prepareUnderDeclaration(std::uint64_t entry,
+                                     const std::string &declaration) {
+  namespace limits = ::neverd::limits::worker;
+  Json result{
+      {"address", hexAddress(entry)}, {"prepared", false}, {"rendered", false}};
+  const auto declined = [&](const std::string &why) {
+    result["reason"] = why;
+    return result;
+  };
+  // An owner states what the user gives; a replica renders what it would read
+  // like, and reads as the owner does again at its next update.
+  if (!readOnly_ || restoredSnapshot_.is_null())
+    return declined(
+        "only an analysis replica renders a declaration not stated");
+  using Declaration =
+      const char *(*)(neverd_session_t, neverd_va_t, const char *);
+  static const auto check = engineSymbol<Declaration>("neverd_func_type_json");
+  const auto &attributes = functionAttributes();
+  if (!check || !attributes || !functionEdits() || !rendersSayTheirReads())
+    return declined("this engine renders no declaration ahead of its edit");
+  // It reads, and hides no prototype analysis reads: stating one lets go of
+  // the call summaries, which giving the declaration back cannot restore.
+  const Json reply = parsedBackendText(ownedString(check(
+      session_, entry, Json{{"declaration", declaration}}.dump().c_str())));
+  if (!reply.is_object() || reply.contains("problems"))
+    return declined("the declaration does not read");
+  if (reply.value("hides_prototype", true))
+    return declined("the declaration hides a prototype analysis reads");
+  // The declaration the user gave the function, if any, to give back.
+  Json before = nullptr;
+  for (const auto &row : functionEditRows())
+    if (parseAddress(row.at("addr").get<std::string>()) == entry)
+      before = row.value("type", Json());
+  if (before.is_string() &&
+      before.get_ref<const std::string &>() == declaration)
+    return declined("the function has that declaration already");
+  Json stale = Json::array();
+  const auto engineOptions = namedViewEngineOptions(
+      entry, "source", Json::object(), nullptr, nullptr, nullptr, stale);
+  const auto optionText = engineOptions.dump();
+  const auto analysisBefore = userFactsAnalysisReads();
+  const bool heldBefore = callSummariesHeld();
+  if (attributes.edit(session_, entry,
+                      Json{{"type", declaration}}.dump().c_str()) != 0)
+    return declined("the engine does not take the declaration: " + error());
+  std::vector<std::string> pages;
+  try {
+    prepareFunction(entry, "source");
+    std::size_t textBytes = 0;
+    for (std::size_t next = 0;;) {
+      auto text = engineViewPage(entry, "source", next, true, engineOptions,
+                                 optionText);
+      const auto page = parsedBackendText(text);
+      if (!page.is_object() || !page.contains("text") ||
+          !page["text"].is_string() || !page.contains("rows") ||
+          !page["rows"].is_array() ||
+          page.value("offset", std::size_t{0}) != next) {
+        pages.clear();
+        break;
+      }
+      textBytes += page["text"].get_ref<const std::string &>().size();
+      pages.push_back(compressPage(text));
+      if (page.value("complete", false))
+        break;
+      const Json following = page.value("next_offset", Json());
+      if (!following.is_number_unsigned() ||
+          following.get<std::size_t>() <= next ||
+          textBytes > limits::kEngineMaxNamedViewBytes) {
+        pages.clear();
+        break;
+      }
+      next = following.get<std::size_t>();
+    }
+    // What the render read, before giving the declaration back forgets it.
+    if (!pages.empty())
+      pages.insert(pages.begin(), renderReads());
+  } catch (const std::exception &) {
+    // The view after the edit renders it.
+    pages.clear();
+  }
+  // The function's declaration back as it was: the replica reads as its owner
+  // until the user states this one.
+  if (attributes.edit(session_, entry, Json{{"type", before}}.dump().c_str()) !=
+      0) {
+    // A replica that cannot read as its owner does is restored afresh.
+    restoredSnapshot_ = nullptr;
+    declaredRender_.reset();
+    throw Error("stale_snapshot", "Cannot give the function's declaration "
+                                  "back; restore a fresh replica");
+  }
+  declarationsChanged(true);
+  if (userFactsAnalysisReads() != analysisBefore ||
+      callSummariesHeld() != heldBefore) {
+    // What analysis read moved after all: it starts over, as after an update.
+    restartSummaries();
+    declaredRender_.reset();
+    return declined("the declaration moved what analysis reads");
+  }
+  result["prepared"] = true;
+  if (pages.empty())
+    return result;
+  declaredRender_ = DeclaredRender{
+      entry,           "source",   optionText,      renderInputsDigest(),
+      summariesEpoch_, heldBefore, std::move(pages)};
+  result["rendered"] = true;
+  return result;
 }
 
 void Engine::loadAnalysisSections(neverd_session_t session,
@@ -4090,6 +4214,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     ++revision_;
     projectId_ = "project-" + std::to_string(revision_);
     restoredSnapshot_ = nullptr;
+    declaredRender_.reset();
     restoredDebugInputs_ = Json::array();
     Json warnings = Json::array();
     if (ProjectHistory::recoveryPending(path)) {
@@ -6630,6 +6755,15 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     // A view's decoration reads the listing's names of functions, which a
     // replica builds at its first view.
     (void)listing().functionAliases();
+    // The declaration the user is typing, as the dialog last read it: the
+    // view after the user states it reads that render (DeclaredRender).
+    if (p.is_object() && p.contains("declaration"))
+      return prepareUnderDeclaration(
+          entry,
+          stringField(
+              p, "declaration", {},
+              ::neverd::limits::worker::
+                  kEngineExecuteImplFunctionTypeOptionsDeclarationStringFieldMax));
     prepareFunction(entry, "source");
     try {
       (void)engineViewPage(entry, "source", 0, true, Json::object(),

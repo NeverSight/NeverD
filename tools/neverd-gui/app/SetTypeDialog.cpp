@@ -261,6 +261,14 @@ void SetTypeDialog::checked(quint64 serial, const QString &text,
                   .value(variable_.isEmpty() ? QStringLiteral("declaration")
                                              : QStringLiteral("type"))
                   .toString();
+  // What the user would state, the replica renders now, so that the view after
+  // the user states it reads that render.  A declaration that hides the
+  // prototype its function's name binds moves what every render reads, and is
+  // not rendered ahead.
+  if (variable_.isEmpty() &&
+      !reply.value(QStringLiteral("hides_prototype")).toBool(true))
+    session_.prepareFunctionRead(function_,
+                                 parameter_ ? proposal_ : checkedText_);
   const QJsonArray parameters =
       reply.value(QStringLiteral("parameters")).toArray();
   showParameters(parameters);

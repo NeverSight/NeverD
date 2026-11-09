@@ -169,34 +169,6 @@ looked unfinished to the user once pointed out.
   (`chooserFilter`) keeps 4 pixels below the list: the horizontal scroll bar's
   slider (`ScrollbarSlider`) and the field (`Input`) otherwise merged into one
   gray block. The field's edge lines up with the status line's text below.
-- Let a primary button that cannot act fade, as Visual Studio Code's does, to
-  40% (`ButtonPrimaryDisabled`, `ButtonPrimaryDisabledText`). The full accent
-  behind gray text read as an enabled button that had broken. In the light
-  theme the faded white label all but vanished into the pale fill (1.3:1), so
-  there the fill is the accent at 18% and the label the window text at 55%.
-- Let any other button that cannot act give up its fill and keep its `Border`
-  outline and a `DisabledText` label, as Windows 11 draws a disabled button
-  and as a disabled check box indicator is drawn. The full `Button` fill
-  behind gray text turned a dialog whose actions wait for input, such as
-  Binary comparison, into a wall of dead gray blocks.
-- Give every control the style sheet colors a `:disabled` rule. An explicit
-  `color` or `background` hides the palette's disabled colors, so a disabled
-  combo box, such as Binary comparison's SSA representation, looked exactly
-  like an enabled one. Fields, combo boxes and spin boxes give up their fill
-  like buttons, as Windows 11 draws a disabled text box, and dim their
-  chevrons; labels, group titles, tool buttons, tabs and lists take
-  `DisabledText`.
-- Frame keyboard focus around the whole control in the `Focus` color, as
-  Visual Studio Code draws its focus border (`WorkbenchStyle` draws
-  `PE_FrameFocusRect`): a button's face, a check box's box with its label, a
-  tab. A push button keeps a line of the surface between the frame and its
-  face, so the frame shows on the primary accent too. Fusion's rectangle
-  tinted a box behind the label, which read as selected text in the light
-  theme and vanished in the dark one. Focus the pointer gives draws none.
-- Make a button's hover visible: `ToolBarHover` sat within two levels of the
-  dark `Button`, so buttons seemed not to respond; `ButtonHover` is Visual
-  Studio Code's `secondaryHoverBackground`. A heading too long for its column
-  ends in an ellipsis instead of losing both ends.
 - Recolor what a theme change cannot reach. Content that stores colors, such
   as the output log's text formats, keeps each part's level or role and colors
   it again on `Theme::changed`; the dark theme's gray log lines all but
@@ -219,6 +191,74 @@ looked unfinished to the user once pointed out.
 The user kept two choices that a review may question: the load dialog centers
 OK and Cancel as IDA does, and the Functions list keeps its horizontal scroll
 bar for the columns beyond its pane.
+
+## Control states
+
+A review on 2026-11-09 rendered every common control at rest, under the
+pointer, pressed, with keyboard focus, checked and disabled, in both themes.
+Each state must read differently from the others, and from both themes at
+once: the user called the disabled buttons "lifeless", and found a disabled
+combo box that looked enabled. Take each value from a primary source, as the
+rules below do, not from taste.
+
+- Disabled controls give up their fill, keep their outline and dim their
+  label, as Windows 11 draws a disabled button, text box and combo box (WinUI
+  `ControlFillColorDisabled`, `ControlStrokeColorDefault`,
+  `TextFillColorDisabled`): `background: transparent` over the `Border`
+  hairline and `DisabledText`, which composite to almost exactly WinUI's
+  values in both themes. A full `Button` fill behind gray text turned
+  Binary comparison, whose actions wait for input, into a wall of dead gray
+  blocks. Combo box and spin box chevrons dim with the field
+  (`chevron_*_disabled-<mode>.svg`), and a disabled partly checked box
+  matches a disabled checked one.
+- Give every control the style sheet colors a `:disabled` rule. An explicit
+  `color` or `background` hides the palette's disabled colors, so a disabled
+  combo box, such as Binary comparison's SSA representation, looked exactly
+  like an enabled one, and labels, group titles, tool buttons, tabs and lists
+  kept full-strength text.
+- A primary button that cannot act keeps a faint accent, so a dialog's
+  default action stays recognizable. The dark theme draws the button at 40%,
+  as Visual Studio Code's `.monaco-button.disabled` does
+  (`ButtonPrimaryDisabled`, `ButtonPrimaryDisabledText`); in the light theme
+  white at 40% vanished into the pale fill (1.3:1), so there the fill is the
+  accent at 18% and the label the window text at 55% (2.7:1). The full accent
+  behind gray text read as an enabled button that had broken.
+- A checked tool button that cannot act keeps an outline in place of its
+  fill; a toggle whose glyph shows its state keeps neither.
+- A spin box's arrow dims where its range ends. Qt marks that arrow `:off`,
+  from `stepEnabled`, not `:disabled`.
+- Make hover visible. `ToolBarHover` sat within two levels of the dark
+  `Button`, so buttons seemed not to respond; `ButtonHover` is Visual Studio
+  Code's `secondaryHoverBackground` (`#45494E` Dark+, `#CCCCCC` Light Modern).
+  A disabled control never shows hover: Qt's style sheet sets `:hover` only
+  for enabled widgets, and the `:disabled` rules follow the `:hover` ones.
+- Frame keyboard focus around the whole control in the `Focus` color, the
+  color of the fields' focus border, as Visual Studio Code draws its
+  `focusBorder`. `WorkbenchStyle` draws `PE_FrameFocusRect` as that frame: a
+  button's face, a check box's or radio button's box with its label, a tab. A
+  push button keeps a line of the surface between the frame and its face, as
+  Visual Studio Code sets its focus border off a button, so the frame shows on
+  the primary accent too. Fusion's rectangle tinted a box behind the label,
+  which read as selected text in the light theme and vanished in the dark
+  one. Focus the pointer gives draws none, as in Fusion
+  (`State_KeyboardFocusChange`). Qt paints a tool button whose style sheet
+  gives it a border without calling `PE_FrameFocusRect` (`CC_ToolButton` in
+  `qstylesheetstyle.cpp`); a tool button takes focus only from the keyboard
+  (`Qt::TabFocus`), so `QToolButton:focus` draws the frame as its border. Quick
+  start's rows draw the same frame themselves.
+- Size a dialog's buttons as a row of equals: at least 75 pixels, the
+  standard Windows command button (Fluent 2's buttons start at 64 and 96).
+  `QDialogButtonBox QPushButton { min-width: 45px; }` is that width less the
+  padding and border. OK was 48 pixels beside a 68 pixel Cancel.
+- End a heading too long for its column in an ellipsis. Qt's header defaults
+  to `Qt::ElideNone`, so a centered heading lost both ends ("imary addre");
+  `WorkbenchStyle` sets `Qt::ElideRight` on every header, and a table whose
+  starting widths cut a heading widens those columns to their headings
+  (`keepHeadingsWhole` in Binary comparison), scrolling sideways beyond.
+- Known limit: Visual Studio Code dims a menu item's shortcut to 70%, but a
+  menu the style sheet paints draws its label and shortcut with one pen
+  (`QStyleSheetStyle`, `CE_MenuItem`), so matching it needs the menu painted by
+  other means.
 
 ## Hierarchy and proportion
 
@@ -362,6 +402,18 @@ diff does not establish the appearance of a Qt widget.
    Clutter virtual devices from `org.gnome.Shell.Eval`. Measure a suspected
    shift in pixels, such as the first column of a hovered row's text against
    its neighbors', instead of judging it by eye.
+8. Check control states in a state gallery: a throwaway `main` linked against
+   the build's `libneverd_gui_app.a` that calls `Theme::instance().apply()`
+   and grabs each control offscreen at rest, under the pointer
+   (`QTest::mouseMove`), pressed, with keyboard focus
+   (`Qt::WA_KeyboardFocusChange` on the window, then
+   `setFocus(Qt::TabFocusReason)`), checked and disabled, in both themes.
+   The headless shell never paints `:hover`, and a `QDialog` keeps a single
+   `:default` button, so host the controls in a plain `QWidget`. Measure
+   contrast from the rendered pixels, and compare before and after from the
+   same gallery. The offscreen screen is 800 by 600, which narrows a
+   `QMessageBox` (its width limit is the screen's width less 480 pixels);
+   judge message boxes in the real session.
 
 When reporting an audit, connect each finding to its consequence and proposed
 change: for example, a timestamp beside the filename hides a build suffix, so
@@ -382,6 +434,27 @@ perfect aesthetics or using decorative effects as a substitute for hierarchy.
 - [Qt: QDialog resize grip](https://doc.qt.io/qt-6/qdialog.html#sizeGripEnabled-prop).
 - [Visual Studio Code: theme color reference](https://code.visualstudio.com/api/references/theme-color)
   — the roles behind its surfaces, borders, and state colors.
+- Visual Studio Code's own sources for its states:
+  [button.css](https://github.com/microsoft/vscode/blob/main/src/vs/base/browser/ui/button/button.css)
+  (a disabled button at 40%),
+  [menu.ts](https://github.com/microsoft/vscode/blob/main/src/vs/base/browser/ui/menu/menu.ts)
+  (shortcuts at 70%), and the
+  [Dark Modern](https://github.com/microsoft/vscode/blob/main/extensions/theme-defaults/themes/dark_modern.json)
+  and [Light Modern](https://github.com/microsoft/vscode/blob/main/extensions/theme-defaults/themes/light_modern.json)
+  button colors.
+- [WinUI theme resources](https://github.com/microsoft/microsoft-ui-xaml/tree/main/controls/dev/CommonStyles)
+  — `Common_themeresources_any.xaml` and the Button, TextBox, ComboBox,
+  CheckBox and ToggleButton resources give Windows 11's disabled fill,
+  stroke and text for each control.
+- [Fluent 2 button styles](https://github.com/microsoft/fluentui/blob/master/packages/react-components/react-button/library/src/components/Button/useButtonStyles.styles.ts)
+  — sizes, minimum widths and state tokens.
+- Qt 6.8 behavior the rules above rely on, in `qstylesheetstyle.cpp`
+  (`pseudoClass()` sets `:hover` only for enabled widgets; `CE_MenuItem`
+  draws a shortcut with its label's pen; `CC_ToolButton` paints a bordered
+  tool button without a focus rectangle), `qmessagebox.cpp` (a message box
+  is at most the screen's width less 480 pixels), `qheaderview.cpp`
+  (headers default to `Qt::ElideNone`) and `qfusionstyle.cpp`
+  (`PE_FrameFocusRect` draws only with `State_KeyboardFocusChange`).
 - [CSS Color 4: OKLab and OKLCH](https://www.w3.org/TR/css-color-4/#ok-lab)
   — a perceptual space for related categorical colors.
 - Local examples: [QuickStartDialog.cpp](../../../../tools/neverd-gui/app/QuickStartDialog.cpp),

@@ -1,0 +1,235 @@
+{
+  "fixture": "unittests/lift/format/MachOAuthenticatedNativeFixtures.def",
+  "source_files": [
+    "scripts/verify_arm64e_native.py",
+    "scripts/verify_arm64e_native.def",
+    "scripts/arm64e_artifacts.py",
+    "scripts/arm64e_artifacts.def",
+    "unittests/lift/format/MachOAuthenticatedNativeFixtures.def"
+  ],
+  "definitions": {
+    "compiler": {
+      "kind": "text",
+      "symbol": "kCompiler"
+    },
+    "compile_args": {
+      "kind": "args",
+      "symbol": "kRuntimeCompileArgs"
+    },
+    "capability": {
+      "kind": "raw",
+      "symbol": "kRuntimeCapabilitySource"
+    },
+    "source": {
+      "kind": "raw",
+      "symbol": "kSource"
+    },
+    "object": {
+      "kind": "raw",
+      "symbol": "kObjectSource"
+    },
+    "provider": {
+      "kind": "raw",
+      "symbol": "kRuntimeProviderSource"
+    },
+    "harness": {
+      "kind": "raw",
+      "symbol": "kRuntimeHarness"
+    },
+    "started": {
+      "kind": "text",
+      "symbol": "kRuntimeCapabilityStartedMarker"
+    },
+    "completed": {
+      "kind": "text",
+      "symbol": "kRuntimeCapabilityMarker"
+    },
+    "unavailable_code": {
+      "kind": "number",
+      "symbol": "kRuntimePACUnavailable"
+    },
+    "runtime_completed": {
+      "kind": "text",
+      "symbol": "kRuntimeMarker"
+    },
+    "control_option": {
+      "kind": "text",
+      "symbol": "kRuntimeControlOption"
+    },
+    "dwarf_option": {
+      "kind": "text",
+      "symbol": "kDwarfLanguageOption"
+    }
+  },
+  "symbol_placeholder": "{symbol}",
+  "patterns": {
+    "raw": "MACHO_AUTH_NATIVE_TEXT\\(\\s*{symbol}\\s*,\\s*R\"cpp\\((.*?)\\)cpp\"\\s*\\)",
+    "text": "MACHO_AUTH_NATIVE_TEXT\\(\\s*{symbol}\\s*,\\s*(\"(?:\\\\.|[^\"\\\\])*\")\\s*\\)",
+    "number": "MACHO_AUTH_NATIVE_VALUE\\(\\s*int\\s*,\\s*{symbol}\\s*,\\s*([0-9]+)\\s*\\)",
+    "args": "MACHO_AUTH_NATIVE_ARGS\\(\\s*{symbol}\\s*,(.*?)\\)"
+  },
+  "host_os": "Darwin",
+  "host_arches": [
+    "arm64",
+    "arm64e"
+  ],
+  "passed": "passed",
+  "failed": "failed",
+  "unavailable": "unavailable",
+  "exit_codes": {
+    "passed": 0,
+    "failed": 1,
+    "unavailable": 2
+  },
+  "revision_command": [
+    "git",
+    "rev-parse",
+    "HEAD"
+  ],
+  "tool_timeout": 30,
+  "discovery_timeout": 180,
+  "suite_timeout": 1800,
+  "environment_commands": {
+    "kernel": [
+      "/usr/sbin/sysctl",
+      "-n",
+      "kern.version"
+    ],
+    "model": [
+      "/usr/sbin/sysctl",
+      "-n",
+      "hw.model"
+    ],
+    "effective-boot-args": [
+      "/usr/sbin/sysctl",
+      "-n",
+      "kern.bootargs"
+    ],
+    "sip": [
+      "/usr/bin/csrutil",
+      "status"
+    ],
+    "compiler": [
+      "/usr/bin/clang++",
+      "--version"
+    ],
+    "sdk": [
+      "/usr/bin/xcrun",
+      "--sdk",
+      "macosx",
+      "--show-sdk-version"
+    ]
+  },
+  "source_names": {
+    "capability": "capability.cpp",
+    "source": "original.cpp",
+    "object": "object.cpp",
+    "provider": "provider.cpp",
+    "harness": "harness.cpp"
+  },
+  "command_suffix": "-command.json",
+  "binary_suffix": ".out",
+  "compile_suffix": "-compile",
+  "signature_suffix": "-signature",
+  "output_flag": "-o",
+  "signature_command": [
+    "/usr/bin/codesign",
+    "--verify",
+    "--strict"
+  ],
+  "header_format": "<III",
+  "macho_magic": 4277009103,
+  "cpu_type": 16777228,
+  "subtype_mask": 16777215,
+  "cpu_subtype": 2,
+  "optimizations": [
+    "-O0",
+    "-O2"
+  ],
+  "dwarf_modes": [
+    false,
+    true
+  ],
+  "capability_label": "pac{optimization}",
+  "runtime_label": "original{optimization}-dwarf-{dwarf}",
+  "runtime_sources": [
+    "source",
+    "object",
+    "provider",
+    "harness"
+  ],
+  "report_name": "report.json",
+  "error_name": "error.json",
+  "case_format": "AppleClang/MachOArm64eNativeObjectInstallation.{family}/{index}",
+  "families": [
+    "AuthenticatedCallsAndSignedUnwindExecute",
+    "NativeDwarfLanguageCallsAndCleanup",
+    "RelocatedSignedLanguageFramesExecute"
+  ],
+  "indices": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "testcase_tag": "testcase",
+  "parameter_separator": " # GetParam() =",
+  "run_status": "run",
+  "failure_tags": [
+    "failure",
+    "error",
+    "skipped"
+  ],
+  "ctest_command": [
+    "ctest",
+    "--build-config",
+    "Release"
+  ],
+  "build_dir_flag": "--test-dir",
+  "test_regex_flag": "-R",
+  "test_regex": "^AppleClang/MachOArm64eNativeObjectInstallation[.](AuthenticatedCallsAndSignedUnwindExecute|NativeDwarfLanguageCallsAndCleanup|RelocatedSignedLanguageFramesExecute)/",
+  "selection_label": "ctest-selection",
+  "discovery_flag": "--show-only=json-v1",
+  "test_binary": "NeverDArm64eAnalysisTests",
+  "gtest_prefix": "--gtest_filter=",
+  "xml_name": "native-runtime.xml",
+  "temporary_prefix": "native-runtime-",
+  "temporary_environment": "TMPDIR",
+  "artifact_environment": "NEVERD_ARM64E_DYLD_ARTIFACT_DIR",
+  "runtime_label_name": "ctest-runtime",
+  "ctest_run_flags": [
+    "--output-on-failure",
+    "--parallel",
+    "1",
+    "--output-junit"
+  ],
+  "test_environment": {
+    "NEVERD_THREADS": "1",
+    "NEVERD_SIGNATURE_CACHE": "off"
+  },
+  "provenance_keys": [
+    "source_revision",
+    "source_sha256"
+  ],
+  "mode_argument": "mode",
+  "modes": [
+    "probe",
+    "run"
+  ],
+  "probe_mode": "probe",
+  "output_argument": "--output",
+  "build_argument": "--build-dir",
+  "probe_argument": "--probe-report",
+  "errors": {
+    "definition": "Missing or ambiguous fixture definition: {name}",
+    "binary": "Compiler output is not a thin arm64e Mach-O binary",
+    "compile": "Compiler-original control failed to build: {label}",
+    "signature": "Compiler-original signature verification failed: {label}",
+    "cases": "Native runtime selection is not the exact twelve-case signed language matrix",
+    "runtime": "Native runtime case failed, skipped or did not run: {name}",
+    "probe": "Current-source PAC and compiler-original call/unwind preflight must pass before installation qualification",
+    "discovery": "Registered CTest native runtime commands are unavailable or invalid",
+    "ctest": "Native runtime CTest invocation failed",
+    "arguments": "run requires --build-dir and --probe-report"
+  }
+}

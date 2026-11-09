@@ -21953,6 +21953,10 @@ check the final file. `RelocatedSignedLanguageFramesExecute` adds the original
 catch and propagated cleanup paths to the capability-gated execution matrix.
 The installed runtime driver also checks original functions in the other cases.
 File-level validation does not qualify these runtime contracts.
+The [native arm64e environment gate](arm64e-native-validation.md) runs the shared
+compiler-original PAC/call/unwind controls before building NeverD and rejects
+any skipped case in the twelve-case native installation matrix. Its separate
+qualification report binds the probe, source revision and executed test binary.
 The [signed language relocation qualification](evidence/arm64e-signed-language-relocation-2026-11-09.json)
 records 1,184 integration cases (1,160 passed, 24 skipped), the final native
 capability gate checks, and a fresh 30-guest CPTA/PAC replay of 1,825 generated
