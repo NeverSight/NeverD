@@ -29,6 +29,11 @@ cancelCommonOperands(const SymContext &Ctx, SymRef A, SymRef B, SymOp Op);
 /// predicates into individual bits. Unsupported or overlapping lanes stay.
 SymRef recoverPackedEquality(SymContext &Ctx, SymRef Word, SymRef Literal);
 
+/// Split literal equality only after bounded known-bit facts prove
+/// that all potentially set field bits are disjoint.
+SymRef recoverDisjointFieldEquality(SymContext &Ctx, SymRef Word,
+                                    SymRef Literal);
+
 /// Recover a predicate for the highest bit of a word. A failed match does not
 /// intern nodes; the original full-width word always retains its meaning.
 SymRef recoverSignComparison(SymContext &Ctx, SymRef Word);

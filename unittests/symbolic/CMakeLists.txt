@@ -24,6 +24,7 @@ add_neverd_unittest(NeverDSymbolicTests
   SymLowWordProjectionTests.cpp
   SymExprCapturedWindowTests.cpp
   SymExprCompareTests.cpp
+  SymExprDisjointFieldTests.cpp
   SymExprConditionalEqualityTests.cpp
   SymExprNestedTagEqualityTests.cpp
   SymExprComplementTests.cpp
