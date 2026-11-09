@@ -26,7 +26,10 @@ from mips_validation_artifacts import MIPSValidationArtifacts
 
 FUNCTIONS = ("m16_add", "m16_unsigned", "m16_logic", "m16_branch",
              "m16_test", "m16_slot", "m16_skip_data", "m16_memory",
-             "m16_stack", "m16_call", "m16_callx", "m16_pc_load")
+             "m16_stack", "m16_call", "m16_callx", "m16_pc_load",
+             "m16_sllv", "m16_srlv", "m16_srav", "m16_shift_imm", "m16_cmp",
+             "m16_slt", "m16_sltu", "m16_neg", "m16_mult", "m16_multu",
+             "m16_mult_hi", "m16_mult_lo", "m16_multu_hi", "m16_multu_lo")
 INPUTS = [(0, 0), (1, 0xffffffff), (0xffffffff, 1),
           (0x7fffffff, 0x80000000), (0x80000000, 0x80000000),
           (0xffff, 0x12345678), (0x12345678, 0x89abcdef)]
@@ -56,6 +59,21 @@ def mode_evidence(path, function):
 
 def expected(function, inputs, little):
     a, b = inputs
+    signed = lambda x: x - (1 << 32) if x & 0x80000000 else x
+    if function.startswith("m16_mult"):
+        value = a * b if function.startswith("m16_multu") else signed(a) * signed(b)
+        if function.endswith("_hi"):
+            return (value >> 32) & 0xffffffff
+        if function.endswith("_lo"):
+            return value & 0xffffffff
+        return ((value >> 32) ^ value) & 0xffffffff
+    if function == "m16_shift_imm":
+        return (signed(((a << 8) ^ (b >> 31)) & 0xffffffff) >> 7) & 0xffffffff
+    if function in ("m16_sllv", "m16_srlv", "m16_srav", "m16_cmp", "m16_slt", "m16_sltu", "m16_neg"):
+        return {"m16_sllv": a << (b & 31), "m16_srlv": a >> (b & 31),
+                "m16_srav": signed(a) >> (b & 31), "m16_cmp": a ^ b,
+                "m16_slt": int(signed(a) < signed(b)), "m16_sltu": int(a < b),
+                "m16_neg": -a}[function] & 0xffffffff
     if function == "m16_memory":
         data = b.to_bytes(4, "little" if little else "big")
         byte = data[1] - 256 if data[1] >= 128 else data[1]

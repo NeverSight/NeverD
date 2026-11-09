@@ -6392,7 +6392,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   if (EmitFunctionWrapper) {
     if (isMIPS(Opts.TheArch))
       OS << mips::dspSourceCAttribute(
-          Opts.Image,
+          Opts.TheArch, Opts.Image,
           MIPSScalarHelpers.count(Intrinsic::MIPSReadDSPControl) ||
               MIPSScalarHelpers.count(Intrinsic::MIPSWriteDSPControl));
     if (Opts.Image && isMIPS(Opts.TheArch))

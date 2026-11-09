@@ -85,6 +85,20 @@ MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
     return Encoding{immediateForm(Classic, Destination, Source,                \
                                   Signed ? SignedImmediate : Immediate)};
 #include "neverd/lift/MIPS/MIPS16Integer.def"
+  case 0x06: { // SHFT
+    if (Extended && ((First & 0x3f) || (Half & 0x1c)))
+      return std::nullopt;
+    const unsigned Count = Extended ? (First >> 6) & 31 : (Half >> 2) & 7;
+    const unsigned Amount = Extended || Count ? Count : 8;
+    switch (Half & 3) {
+#define NEVERD_MIPS16_SHIFT(Minor, Classic)                                    \
+  case Minor:                                                                  \
+    return Encoding{registerForm(Classic, RX, 0, RY) | (Amount << 6)};
+#include "neverd/lift/MIPS/MIPS16Integer.def"
+    default:
+      return std::nullopt;
+    }
+  }
   case 0x02: { // B
     if (Extended && (Half & 0x7e0))
       return std::nullopt;
@@ -135,10 +149,15 @@ MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
                       Kind < 2 ? 2u : 0u};
     }
     switch (Half & 31) {
-#define NEVERD_MIPS16_LOGICAL(Minor, Classic)                                  \
+#define NEVERD_MIPS16_REGISTER(Minor, Classic, Destination, Left, Right)       \
   case Minor:                                                                  \
-    return Encoding{registerForm(Classic, RX, RX, RY)};
+    return Encoding{registerForm(Classic, Destination, Left, Right)};
 #include "neverd/lift/MIPS/MIPS16Integer.def"
+    case 0x10: // MFHI
+    case 0x12: // MFLO
+      if (Half & 0xe0)
+        return std::nullopt;
+      return Encoding{registerForm(Half & 31, RX, 0)};
     case 0x0f: // NOT
       return Encoding{registerForm(39, RX, RY)};
     default:

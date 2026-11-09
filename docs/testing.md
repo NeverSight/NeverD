@@ -22959,13 +22959,16 @@ execution. Source numeric callable/import values remain explicitly unqualified;
 the pipeline suite checks those refusals as well as ordinary leaf emission.
 
 `MIPSDSPTests` in the integer target covers every control selector, ignored
-selector bits, missing state, sticky flags, saturated byte and signed-halfword lanes, destination/input
-aliases and discarded results. The pipeline target checks that DSPControl
+selector bits, missing state, sticky flags, saturated byte and signed-halfword lanes,
+rounded/non-rounded shifts, packing, destination/input aliases and discarded
+results. Shift tests enumerate immediate and variable count boundaries against
+independent expectations, including pure operations with absent DSPControl.
+The pipeline target checks that DSPControl
 effects survive both source routes without invented source arguments. Return
 identity, standalone conversion, source shards and generated helper protection
 have separate regressions.
 `unittests/lift/mips/dsp-roundtrip.py` accepts the same explicit `--neverd`,
-`--clang`, `--ld` and `--output` arguments as the ordinary runner. Its sixteen
+`--clang`, `--ld` and `--output` arguments as the ordinary runner. Its twenty-six
 owned `dsp.S` leaves check scalar results and DSPControl after returning, in
 both byte orders and both C routes at `-O0` and `-O2`, with external `-mdsp`
 enabled. It uses the pinned 74Kf model with
@@ -22974,13 +22977,25 @@ recorded separately; generated results must always satisfy the manual-derived
 expectation. The managed artifact lifecycle retires each generated object and
 executable after its comparisons.
 
+The same runner exports standalone pure-shift and non-inlined wide-helper C
+from `NeverDMIPSPipelineTests` beside the CLI, using
+`NEVERD_MIPS_DSP_SOURCE_OUTPUT`. The sixteen additional source groups cover
+both byte orders, both C routes and O0/O2 under external `-mdsp`. They observe
+the complete o32 64-bit result, saved GPRs, stack, memory and post-return
+DSPControl, and require actual helper entry. The standalone pure fixture has
+no state-transfer intrinsic; negative target features must still prevent
+compiler-introduced DSPControl writes.
+
 `MIPSMSATests` covers scalar word transfers across all vector registers,
 B/H/W/D carry and borrow boundaries, equality and signed/unsigned comparison
-masks and signed/unsigned min/max lane selection, full-container logical operations and
+masks and signed/unsigned min/max lane selection, per-lane shifts, bit edits,
+truncated multiplication, full-container logical operations and
 aliasing, independent byte-wise expectations, missing state, decoder reuse and
 P5600 reference execution. Loader cases check r5/MSA/CPR128/FP64 evidence;
 pipeline cases check both source routes and unchanged refusals with/without an
-Image. The owned MSA source runner recompiles fifty-four scalar/memory leaves
+Image. Shift counts cover zero, width-1, width, width+1 and high bits; the
+independent oracle shifts individual bits and multiplies bytes. The owned MSA
+source runner recompiles eighty-two scalar/memory leaves
 in both byte orders at O0/O2 through HighC and LLVMC. It checks each output byte
 and the preserved F20/F22/.../F30 low64 values, maps original/generated ELF separately,
 and retires scratch on success and failure:
@@ -23002,15 +23017,24 @@ separate target syntax checks; those four checks do not claim linked execution.
 
 `MIPS16Integer`, `MIPS16Memory`, `MIPS16Flow`, `MIPS16Loader`, `MIPS16SDK` and `MIPS16Pipeline`
 cover unsigned/signed immediate boundaries, EXTEND/truncation, compact register
-fields, strict unsupported forms, local ISA evidence, physical pagination,
+fields, immediate/variable shifts, comparisons, negation, both HI/LO multiply
+halves, strict unsupported forms, local ISA evidence, physical pagination,
 two-byte slots, direct/indirect target modes and image-free return proofs.
+Shared pipeline cases reject incoming or call-clobbered HI/LO in classic
+MIPS32/64 and MIPS16 before either source route can erase an unknown return.
+They distinguish fully defined joins and post-call overwrites, with and without
+an image. Source multiply leaves observe HI and LO separately as well as together.
+Image-free MIPS32 calls still require the separately documented target-mode
+evidence; that refusal is checked separately from accumulator state. The shared
+`NeverDNdOpEmulatorTests` checks that strict arithmetic and comparisons reject absent or partial
+register/temporary operands before writing, including 128-bit operations.
 The literal scalar/memory reference runs on pinned Unicorn's 24Kf model.
 Memory tests cover all compact register fields, short/extended offsets,
 PC alignment before displacement, transfer-head PC bases in slots, exact output
 bytes, and LowIR fault order even for dead results. Call tests check physical
 widths, tagged links, target capture, conflicting mode evidence in discovery
 and rejection of unproved cross-call return identities.
-`mips16-roundtrip.py` recompiles twelve scalar/control/memory/call functions through HighC and
+`mips16-roundtrip.py` recompiles twenty-six scalar/control/memory/call functions through HighC and
 LLVMC, in both byte orders at O0/O2. It checks independent results, stack and
 callee-saved GPR preservation, both incoming return-mode tags, ELF mode
 flags and function tags under an adverse microMIPS compiler default.

@@ -516,7 +516,8 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
   }
   writeRecordDefinitions(Rest);
   OS << Rest;
-  if (isMIPS(Opts.TheArch) && mips::modulePreservesDSPControl(Mod, Opts.Image))
+  if (isMIPS(Opts.TheArch) && mips::modulePreservesDSPControl(
+                                  Mod, Img ? Img : Opts.Image, Opts.TheArch))
     OS << mips::DSPSourceCEnd;
 }
 
@@ -1278,7 +1279,8 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     OS << "\n";
     IncludedHeaders.insert(Headers.begin(), Headers.end());
   }
-  if (isMIPS(Opts.TheArch) && mips::modulePreservesDSPControl(Mod, Opts.Image))
+  if (isMIPS(Opts.TheArch) && mips::modulePreservesDSPControl(
+                                  Mod, Img ? Img : Opts.Image, Opts.TheArch))
     OS << mips::DSPSourceCBegin;
   if (NeedsX86SystemRegisterDispatch)
     OS << X86SystemRegisterCompilerDispatch;
@@ -2585,7 +2587,7 @@ void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
     // takes (printedCallArgLimit), which the declaration takes too.
     const std::optional<unsigned> Params = prototypedParamCount(Fn);
     if (isMIPS(Opts.TheArch)) {
-      OS << mips::dspSourceCAttribute(Opts.Image,
+      OS << mips::dspSourceCAttribute(Opts.TheArch, Img ? Img : Opts.Image,
                                       Fn.hasFnAttribute(mips::DSPSourceMarker));
       OS << mips::instructionModeCAttribute(mips::instructionModeFromLLVM(Fn));
     }
