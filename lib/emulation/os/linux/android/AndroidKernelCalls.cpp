@@ -60,9 +60,10 @@ Bionic::kernelResult(std::optional<uint64_t> Returned,
 BionicResult Bionic::checkedRead(const NativeCallEvent &Call) {
   const auto &A = Call.Arguments;
   if (A[2] > linux_model::MaxSignedIOSize)
-    return failure(diagnostic::FortifiedReadCount);
+    return fortifyFatal(Call,
+                        "read: count " + llvm::Twine(A[2]) + " > SSIZE_MAX");
   if (A[2] > A[3])
-    return failure(diagnostic::FortifiedReadBounds);
+    return fortifyBufferFailure(Call, "read", A[2], A[3]);
   // The supplied object bound is checked before descriptor lookup or user
   // access. The ordinary read owner retains cursors, waits and libc errno.
   return kernelCall(linux_model::ServiceKind::Read, Call);

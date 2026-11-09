@@ -156,8 +156,9 @@ Bionic memory owner after checking the supplied destination extent. An exceeded
 extent fails before pointer access; overlap remains unsupported for memcpy and
 supported for memmove. Zero-length calls touch no memory, and the compiler's
 unknown-extent sentinel does not require the whole sentinel-sized region to be
-mapped. Fortify failure is reported as a runtime failure, without fabricating
-a libc return or claiming to deliver SIGABRT. This follows the API 28
+mapped. Fortify failure uses the shared [Bionic fatal diagnostic and SIGABRT
+sequence](android-log-reader.md), requiring explicit logging and signal state.
+This follows the API 28
 [AArch64 checked-copy entry](https://github.com/aosp-mirror/platform_bionic/blob/android-9.0.0_r1/libc/arch-arm64/generic/bionic/__memcpy_chk.S)
 and [fortify contracts](https://github.com/aosp-mirror/platform_bionic/blob/android-9.0.0_r1/libc/bionic/fortify.cpp).
 

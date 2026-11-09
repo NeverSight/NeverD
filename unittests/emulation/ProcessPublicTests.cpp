@@ -2833,13 +2833,18 @@ TEST_F(ProcessPublic, AndroidFortifyFormattingReportsMatchSDKAndCLI) {
         EXPECT_EQ(*Call->get(field::Result), llvm::json::Value(nullptr));
         ASSERT_TRUE(Report->getString(field::Diagnostic));
         EXPECT_NE(Report->getString(field::Diagnostic)
-                      ->find("fortify buffer-size failure"),
+                      ->find("async-safe text log write contract"),
                   llvm::StringRef::npos);
       } else {
         EXPECT_EQ(Report->getString(field::ReturnValue), "12");
         EXPECT_EQ(Call->getString(field::Result), "12");
         const char Bytes[] = "symbol=0x10000000a";
         std::copy_n(Bytes, sizeof(Bytes), Expected.begin());
+      }
+      if (Fails && Mode >= 2) {
+        const std::string Prefix = "symbol=0x10000000a";
+        std::copy_n(Prefix.begin(), 16, Expected.begin());
+        Expected[16] = 0;
       }
       const auto *Memory = Android->getArray(field::Memory);
       ASSERT_NE(Memory, nullptr);
@@ -2900,8 +2905,9 @@ TEST_F(ProcessPublic, AndroidFortifyLengthReportsMatchSDKAndCLI) {
     const auto Parsed = llvm::cantFail(llvm::json::parse(Text));
     const auto *Report = Parsed.getAsObject();
     ASSERT_NE(Report, nullptr);
-    EXPECT_EQ(Report->getString(field::Stop),
-              Case ? "runtime_failure" : "returned");
+    EXPECT_EQ(Report->getString(field::Stop), Case == 1 ? "unsupported_service"
+                                              : Case    ? "runtime_failure"
+                                                        : "returned");
     const auto *Android = Report->getObject(field::Android);
     ASSERT_NE(Android, nullptr);
     const auto *Calls = Android->getArray(field::NativeCalls);
@@ -2926,9 +2932,17 @@ TEST_F(ProcessPublic, AndroidFortifyLengthReportsMatchSDKAndCLI) {
       EXPECT_EQ(*Call->get(field::Result), llvm::json::Value(nullptr));
       ASSERT_TRUE(Report->getString(field::Diagnostic));
       EXPECT_NE(Report->getString(field::Diagnostic)
-                    ->find(Case == 1 ? "FORTIFY" : "invalid guest pointer"),
+                    ->find(Case == 1 ? "async-safe text log write contract"
+                                     : "invalid guest pointer"),
                 llvm::StringRef::npos);
-      EXPECT_TRUE(Memory->empty());
+      if (Case == 1) {
+        ASSERT_EQ(Memory->size(), 1u);
+        EXPECT_EQ(Memory->front().getAsObject()->getString(field::Bytes),
+                  llvm::toHex(Expected, true));
+        EXPECT_TRUE(Report->getString(field::Stderr)
+                        ->starts_with("464f52544946593a20"));
+      } else
+        EXPECT_TRUE(Memory->empty());
     } else {
       EXPECT_EQ(Report->getString(field::ReturnValue), "3");
       EXPECT_EQ(Call->getString(field::Result), "3");
@@ -2992,7 +3006,7 @@ TEST_F(ProcessPublic, AndroidFortifyCopyReportsMatchSDKAndCLI) {
       const auto *Report = Parsed.getAsObject();
       ASSERT_NE(Report, nullptr);
       EXPECT_EQ(Report->getString(field::Stop),
-                Fails ? "runtime_failure" : "returned");
+                Fails ? "unsupported_service" : "returned");
       const auto *Android = Report->getObject(field::Android);
       ASSERT_NE(Android, nullptr);
       const auto *Calls = Android->getArray(field::NativeCalls);
@@ -3016,11 +3030,16 @@ TEST_F(ProcessPublic, AndroidFortifyCopyReportsMatchSDKAndCLI) {
         EXPECT_EQ(*Report->get(field::ReturnValue), llvm::json::Value(nullptr));
         EXPECT_EQ(*Call->get(field::Result), llvm::json::Value(nullptr));
         ASSERT_TRUE(Report->getString(field::Diagnostic));
-        EXPECT_NE(
-            Report->getString(field::Diagnostic)
-                ->find(Case == 1 ? "FORTIFY destination" : "FORTIFY read"),
-            llvm::StringRef::npos);
-        EXPECT_TRUE(Memory->empty());
+        EXPECT_NE(Report->getString(field::Diagnostic)
+                      ->find("async-safe text log write contract"),
+                  llvm::StringRef::npos);
+        if (Case == 2) {
+          std::copy_n(Expected.begin() + 64, 4, Expected.begin());
+          std::fill(Expected.begin() + 4, Expected.begin() + 7, 0);
+        }
+        ASSERT_EQ(Memory->size(), 1u);
+        EXPECT_EQ(Memory->front().getAsObject()->getString(field::Bytes),
+                  llvm::toHex(Expected, true));
       } else {
         EXPECT_EQ(Report->getString(field::ReturnValue), "20000000");
         EXPECT_EQ(Call->getString(field::Result), "20000000");
@@ -3090,8 +3109,10 @@ TEST_F(ProcessPublic, AndroidCheckedAppendReportsMatchSDKAndCLI) {
       const auto Parsed = llvm::cantFail(llvm::json::parse(Text));
       const auto *Report = Parsed.getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString(field::Stop),
-                Fails ? "runtime_failure" : "returned");
+      EXPECT_EQ(Report->getString(field::Stop), Case == 1 || Case == 2
+                                                    ? "unsupported_service"
+                                                : Fails ? "runtime_failure"
+                                                        : "returned");
       const auto *Android = Report->getObject(field::Android);
       ASSERT_NE(Android, nullptr);
       const auto *Calls = Android->getArray(field::NativeCalls);
@@ -3115,12 +3136,19 @@ TEST_F(ProcessPublic, AndroidCheckedAppendReportsMatchSDKAndCLI) {
         EXPECT_EQ(*Report->get(field::ReturnValue), llvm::json::Value(nullptr));
         EXPECT_EQ(*Call->get(field::Result), llvm::json::Value(nullptr));
         ASSERT_TRUE(Report->getString(field::Diagnostic));
-        const char *Error = Case == 1   ? "FORTIFY destination"
-                            : Case == 2 ? "FORTIFY read"
-                                        : "invalid guest pointer";
+        const char *Error = Case == 1 || Case == 2
+                                ? "async-safe text log write contract"
+                                : "invalid guest pointer";
         EXPECT_NE(Report->getString(field::Diagnostic)->find(Error),
                   llvm::StringRef::npos);
-        EXPECT_TRUE(Memory->empty());
+        if (Case == 1 || Case == 2) {
+          if (Case == 1)
+            std::copy_n(Expected.begin() + 64, 3, Expected.begin() + 1);
+          ASSERT_EQ(Memory->size(), 1u);
+          EXPECT_EQ(Memory->front().getAsObject()->getString(field::Bytes),
+                    llvm::toHex(Expected, true));
+        } else
+          EXPECT_TRUE(Memory->empty());
       } else {
         const char *Returned = Case ? "ffffffffffffffff" : "20000000";
         EXPECT_EQ(Report->getString(field::ReturnValue), Returned);
@@ -3189,8 +3217,10 @@ TEST_F(ProcessPublic, AndroidTerminatedCopyReportsMatchSDKAndCLI) {
       const auto Parsed = llvm::cantFail(llvm::json::parse(Text));
       const auto *Report = Parsed.getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString(field::Stop),
-                Case ? "runtime_failure" : "returned");
+      EXPECT_EQ(Report->getString(field::Stop), Case == 1 && Mode
+                                                    ? "unsupported_service"
+                                                : Case ? "runtime_failure"
+                                                       : "returned");
       const auto *Android = Report->getObject(field::Android);
       ASSERT_NE(Android, nullptr);
       const auto *Calls = Android->getArray(field::NativeCalls);
@@ -3215,10 +3245,18 @@ TEST_F(ProcessPublic, AndroidTerminatedCopyReportsMatchSDKAndCLI) {
         EXPECT_EQ(*Call->get(field::Result), llvm::json::Value(nullptr));
         ASSERT_TRUE(Report->getString(field::Diagnostic));
         EXPECT_NE(Report->getString(field::Diagnostic)
-                      ->find(Case == 1 && Mode ? "FORTIFY destination"
-                                               : "invalid guest pointer"),
+                      ->find(Case == 1 && Mode
+                                 ? "async-safe text log write contract"
+                                 : "invalid guest pointer"),
                   llvm::StringRef::npos);
-        EXPECT_TRUE(Memory->empty());
+        if (Case == 1 && Mode) {
+          ASSERT_EQ(Memory->size(), 1u);
+          EXPECT_EQ(Memory->front().getAsObject()->getString(field::Bytes),
+                    llvm::toHex(Expected, true));
+          EXPECT_TRUE(Report->getString(field::Stderr)
+                          ->starts_with("464f52544946593a20"));
+        } else
+          EXPECT_TRUE(Memory->empty());
       } else {
         EXPECT_EQ(Report->getString(field::ReturnValue), "20000000");
         EXPECT_EQ(Call->getString(field::Result), "20000000");
@@ -3282,8 +3320,9 @@ TEST_F(ProcessPublic, AndroidFortifySizedCopyReportsMatchSDKAndCLI) {
     const auto Parsed = llvm::cantFail(llvm::json::parse(Text));
     const auto *Report = Parsed.getAsObject();
     ASSERT_NE(Report, nullptr);
-    EXPECT_EQ(Report->getString(field::Stop),
-              Case ? "runtime_failure" : "returned");
+    EXPECT_EQ(Report->getString(field::Stop), Case == 1 ? "unsupported_service"
+                                              : Case    ? "runtime_failure"
+                                                        : "returned");
     const auto *Android = Report->getObject(field::Android);
     ASSERT_NE(Android, nullptr);
     const auto *Calls = Android->getArray(field::NativeCalls);
@@ -3308,10 +3347,17 @@ TEST_F(ProcessPublic, AndroidFortifySizedCopyReportsMatchSDKAndCLI) {
       EXPECT_EQ(*Call->get(field::Result), llvm::json::Value(nullptr));
       ASSERT_TRUE(Report->getString(field::Diagnostic));
       EXPECT_NE(Report->getString(field::Diagnostic)
-                    ->find(Case == 1 ? "FORTIFY destination"
+                    ->find(Case == 1 ? "async-safe text log write contract"
                                      : "invalid guest pointer"),
                 llvm::StringRef::npos);
-      EXPECT_TRUE(Memory->empty());
+      if (Case == 1) {
+        ASSERT_EQ(Memory->size(), 1u);
+        EXPECT_EQ(Memory->front().getAsObject()->getString(field::Bytes),
+                  llvm::toHex(Expected, true));
+        EXPECT_TRUE(Report->getString(field::Stderr)
+                        ->starts_with("464f52544946593a20"));
+      } else
+        EXPECT_TRUE(Memory->empty());
     } else {
       EXPECT_EQ(Report->getString(field::ReturnValue), "3");
       EXPECT_EQ(Call->getString(field::Result), "3");
@@ -3755,8 +3801,9 @@ TEST_F(ProcessPublic, AndroidMemorySearchReportsMatchSDKAndCLI) {
       const auto Parsed = llvm::cantFail(llvm::json::parse(Text));
       const auto *Report = Parsed.getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString(field::Stop),
-                Fails ? "runtime_failure" : "returned");
+      EXPECT_EQ(Report->getString(field::Stop), Case == 2 ? "runtime_failure"
+                                                : Fails ? "unsupported_service"
+                                                        : "returned");
       const auto *Android = Report->getObject(field::Android);
       ASSERT_NE(Android, nullptr);
       const auto *Calls = Android->getArray(field::NativeCalls);
@@ -3780,11 +3827,21 @@ TEST_F(ProcessPublic, AndroidMemorySearchReportsMatchSDKAndCLI) {
         EXPECT_EQ(*Report->get(field::ReturnValue), llvm::json::Value(nullptr));
         EXPECT_EQ(*Call->get(field::Result), llvm::json::Value(nullptr));
         ASSERT_TRUE(Report->getString(field::Diagnostic));
-        EXPECT_NE(
-            Report->getString(field::Diagnostic)
-                ->find(Case == 2 ? "invalid guest pointer" : "FORTIFY read"),
-            llvm::StringRef::npos);
-        EXPECT_TRUE(Memory->empty());
+        EXPECT_NE(Report->getString(field::Diagnostic)
+                      ->find(Case == 2 ? "invalid guest pointer"
+                                       : "async-safe text log write contract"),
+                  llvm::StringRef::npos);
+        if (Case == 2) {
+          EXPECT_TRUE(Memory->empty());
+        } else {
+          EXPECT_EQ(Report->getString(field::Stderr),
+                    llvm::toHex("FORTIFY: memchr: prevented 5-byte read from "
+                                "4-byte buffer\n",
+                                true));
+          ASSERT_EQ(Memory->size(), 1u);
+          EXPECT_EQ(Memory->front().getAsObject()->getString(field::Bytes),
+                    llvm::toHex(Expected, true));
+        }
       } else {
         const char *Returned = Case == 0   ? "20000043"
                                : Case == 1 ? "0"
@@ -3941,15 +3998,20 @@ TEST_F(ProcessPublic, AndroidFortifiedSearchReportsMatchSDKAndCLI) {
     const auto *Report = Parsed.getAsObject();
     ASSERT_NE(Report, nullptr);
     ASSERT_EQ(Report->getString(field::Stop),
-              Fails ? "runtime_failure" : "returned");
+              Fails ? "unsupported_service" : "returned");
     const auto *Android = Report->getObject(field::Android);
     ASSERT_NE(Android, nullptr);
     const auto *Calls = Android->getArray(field::NativeCalls);
     ASSERT_NE(Calls, nullptr);
     ASSERT_FALSE(Calls->empty());
     if (Fails) {
-      EXPECT_NE(Report->getString(field::Diagnostic)->find("FORTIFY"),
+      EXPECT_NE(Report->getString(field::Diagnostic)
+                    ->find("async-safe text log write contract"),
                 llvm::StringRef::npos);
+      EXPECT_EQ(Report->getString(field::Stderr),
+                llvm::toHex("FORTIFY: strchr: prevented read past end of "
+                            "buffer\n",
+                            true));
       const auto *Last = Calls->back().getAsObject();
       EXPECT_EQ(Last->getString(field::Name), "__strchr_chk");
       EXPECT_EQ(*Last->get(field::Result), llvm::json::Value(nullptr));
@@ -4265,6 +4327,7 @@ TEST_F(ProcessPublic, AndroidLibcCompatibilityMatchesSDKAndCLI) {
   std::copy_n("abc", 4, Bytes.begin() + 4096);
   struct Case {
     const char *Fixture, *Entry, *Arguments, *Stop, *Value;
+    const char *FortifyMessage = nullptr;
   };
   const Case Cases[] = {
       {"copy", "copy_sized", "[536870928,536875008,7,0,536872960]", "returned",
@@ -4276,11 +4339,13 @@ TEST_F(ProcessPublic, AndroidLibcCompatibilityMatchesSDKAndCLI) {
        nullptr},
       {"files", "files_read_chk_sequence", "[0]", "returned", "0"},
       {"files", "files_read_chk_sequence", "[1]", "returned", "0"},
-      {"files", "files_read_chk_bounds", "[536870912,1,0]", "runtime_failure",
-       nullptr},
+      {"files", "files_read_chk_bounds", "[536870912,1,0]",
+       "unsupported_service", nullptr,
+       "FORTIFY: read: prevented 1-byte write into 0-byte buffer\n"},
       {"files", "files_read_chk_bounds",
        "[1,\"9223372036854775808\",\"18446744073709551615\"]",
-       "runtime_failure", nullptr},
+       "unsupported_service", nullptr,
+       "FORTIFY: read: count 9223372036854775808 > SSIZE_MAX\n"},
       {"files", "files_path_status_call", "[0,536871424,536871936,536870912,0]",
        "returned", "0"},
       {"files", "files_path_status_call", "[1,536871424,536871936,536870912,1]",
@@ -4330,6 +4395,17 @@ TEST_F(ProcessPublic, AndroidLibcCompatibilityMatchesSDKAndCLI) {
       ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
       auto Report = llvm::cantFail(llvm::json::parse(Text));
       EXPECT_EQ(Report.getAsObject()->getString(field::Stop), C.Stop) << Text;
+      if (C.FortifyMessage) {
+        EXPECT_EQ(Report.getAsObject()->getString(field::Stderr),
+                  llvm::toHex(C.FortifyMessage, true));
+        const auto *Memory = Report.getAsObject()
+                                 ->getObject(field::Android)
+                                 ->getArray(field::Memory);
+        ASSERT_NE(Memory, nullptr);
+        ASSERT_EQ(Memory->size(), 1u);
+        EXPECT_EQ(Memory->front().getAsObject()->getString(field::Bytes),
+                  llvm::toHex(Bytes, true));
+      }
       if (C.Value)
         EXPECT_EQ(Report.getAsObject()->getString(field::ReturnValue), C.Value);
       EXPECT_EQ(runCLIRequest(Path, AndroidNativeAArch64, Options, Output),
@@ -4529,6 +4605,89 @@ TEST_F(ProcessPublic, AndroidTextLogAssertMatchesSDKAndCLI) {
                 Mode == 1   ? process_cli::GuestFailure
                 : Mode == 2 ? process_cli::Success
                             : process_cli::Incomplete);
+      ASSERT_NO_FATAL_FAILURE(expectCLIReport(Output, Parsed));
+    }
+  }
+#endif
+}
+
+TEST_F(ProcessPublic, AndroidFortifyFailureMatchesSDKAndCLI) {
+#ifndef NEVERD_ANDROID_FIXTURE_DIR
+  GTEST_SKIP() << "Android shared library fixtures unavailable";
+#else
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(Prefix, Directory));
+  const std::filesystem::path Root(Directory.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Output = (Root / OutputFile).string();
+  constexpr uint64_t Base = 0x22000000, Slot = Base + 2048;
+  const std::string Message =
+      "FORTIFY: memcpy: prevented 4-byte write into 3-byte buffer";
+  std::string Payload("\7libc\0", 6);
+  Payload += Message;
+  Payload.push_back(0);
+  for (const char *Variant : {"O0-none", "O2-relr"}) {
+    Path = (std::filesystem::path(NEVERD_ANDROID_FIXTURE_DIR) /
+            (std::string("log-") + Variant + ".so"))
+               .string();
+    for (unsigned Mode = 0; Mode != 6; ++Mode) {
+      SCOPED_TRACE(Variant);
+      SCOPED_TRACE(Mode);
+      std::vector<uint8_t> Memory(28672, 0);
+      for (unsigned I = 0; I != 4; ++I)
+        llvm::support::endian::write64le(Memory.data() + 4096 + I * 8, I < 2 ? 1
+                                                                       : I == 2
+                                                                           ? 4
+                                                                           : 3);
+      auto Request = llvm::cantFail(llvm::json::parse(R"({
+        "backend":"unicorn","instruction_limit":200000,"instruction_quantum":17,
+        "linux_signals":{"actions":[{"signal":6,"handler":0,"flags":0,"restorer":0,"mask":0}],
+          "initial_mask":32,"alternate_stack_disabled":true},
+        "android":{"initialize":false,"entry_symbol":"log_fortify",
+          "observe_memory_on_failure":true,"libraries":{"libc.so":["__memcpy_chk"]},
+          "read_memory":[{"address":"0x22000000","size":28672}]}
+      })"));
+      auto &Object = *Request.getAsObject();
+      auto &Android = *Object.getObject(field::Android);
+      Android[field::Memory] = llvm::json::Array{
+          llvm::json::Object{{field::Address, Base},
+                             {field::Size, 28672},
+                             {field::Bytes, llvm::toHex(Memory)}}};
+      Android[field::AbortMessageSlot] = Slot;
+      Android[field::Arguments] = llvm::json::Array{
+          Base, Slot, 0, 1 | (Mode == 4 ? 0 : 2 << 8), Base + 4096};
+      llvm::json::Object Log{
+          {field::LogID, 4},
+          {field::LogPayload, llvm::toHex(Payload)},
+          {field::Result, Mode == 1 ? int(Message.size() + 7) : -11},
+          {field::AsyncSafe, true}};
+      if (Mode == 1)
+        Log[field::OpenErrno] = 2;
+      Android[field::TextLogWrites] = llvm::json::Array{std::move(Log)};
+      if (Mode == 2)
+        Android.erase(field::TextLogWrites);
+      if (Mode == 3)
+        Android.erase(field::AbortMessageSlot);
+      if (Mode == 4)
+        Object.erase("linux_signals");
+      if (Mode == 5)
+        Android[field::AbortMessageSlot] = 0;
+      const auto Options = jsonText(std::move(Object));
+      auto Text = takeString(neverd_emulate_process_json(
+          Session, Path.c_str(), AndroidNativeAArch64, Options.c_str()));
+      ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
+      auto Parsed = llvm::cantFail(llvm::json::parse(Text));
+      const auto *Report = Parsed.getAsObject();
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getString(field::Stop),
+                Mode >= 2 && Mode <= 4 ? "unsupported_service" : "signaled")
+          << Text;
+      EXPECT_EQ(Report->getString(field::Stderr),
+                llvm::toHex(Message + "\n" +
+                                (Mode == 1 ? "libc: " + Message + "\n" : ""),
+                            true));
+      EXPECT_EQ(runCLIRequest(Path, AndroidNativeAArch64, Options, Output),
+                process_cli::Incomplete);
       ASSERT_NO_FATAL_FAILURE(expectCLIReport(Output, Parsed));
     }
   }

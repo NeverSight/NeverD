@@ -270,11 +270,14 @@ struct Session {
   UserFactReads UserReads;
   /// After the user's declarations change: the decompiler reads them anew,
   /// and only what it made of them goes.  Analysis reads them only through
-  /// what the context turns down.
+  /// the prototypes they hide or give back; what it read of prototypes then
+  /// goes too.  The context stays, with what it read of the library and the
+  /// image, which no declaration changes.
   void declarationsChanged() {
-    if (!LocalTypesDbg ||
-        !LocalTypesDbg->takeDeclarations(functionDeclarations()))
+    if (!LocalTypesDbg)
       dropLocalTypesDebug();
+    else if (LocalTypesDbg->takeDeclarations(functionDeclarations()))
+      AnalysisCache.forgetPrototypes();
     clearPipelineResult();
   }
   /// The program's local types, read when first asked for; null with the

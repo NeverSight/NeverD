@@ -231,10 +231,11 @@ public:
   llvm::StringSet<> readTypes() const;
 
   /// Reads \p Next as the user's declarations from now on, as a context made
-  /// for them does, and what analysis read through this context stays.  False,
-  /// and another context takes them, where analysis read what they change: the
-  /// prototype a function's name binds, which a declaration hides
-  /// (importPrototypeArguments).
+  /// for them does.  What it read of the library and the image stays.  True
+  /// where analysis read what they change: the prototype a function's name
+  /// binds, which a declaration hides or gives back (importPrototypeArguments).
+  /// What analysis read of the prototypes then goes, as it would with another
+  /// context (Session::declarationsChanged).
   bool takeDeclarations(std::map<va_t, std::string> Next);
   /// Defines the types \p Names of \p Library, as a context made of \p Library
   /// does, and what was read through this context stays.  Those types are new,

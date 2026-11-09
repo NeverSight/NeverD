@@ -4548,6 +4548,97 @@ TEST_F(SessionCAPITest, AViewAfterAnEditRunsItsOwnFunctionAlone) {
   EXPECT_EQ(State.OnlyFunctionEntries, (std::set<neverd::va_t>{Entry}));
 }
 
+TEST_F(SessionCAPITest, ADeclarationThatHidesAPrototypeKeepsTheContext) {
+  // A caller and the image's own CloseHandle, which the Windows headers
+  // declare.
+  constexpr unsigned Stride = 0x20;
+  std::string Code(2 * Stride, '\xcc');
+  // sub rsp,0x28; mov ecx,1; call CloseHandle; add rsp,0x28; ret
+  static constexpr char Caller[] = "\x48\x83\xec\x28\xb9\x01\x00\x00\x00\xe8"
+                                   "\x12\x00\x00\x00\x48\x83\xc4\x28\xc3";
+  Code.replace(0, sizeof(Caller) - 1, Caller, sizeof(Caller) - 1);
+  // mov eax,ecx; ret
+  Code.replace(Stride, 3, "\x89\xc8\xc3", 3);
+  const auto Path = write("hiding.exe", makePE64(Code));
+  neverd_va_t Entry = 0;
+  const auto Load = [&](neverd_session_t Into) {
+    ASSERT_EQ(neverd_session_load(Into, Path.c_str()), 1);
+    auto &Loaded = *neverd::sdk::toSession(Into);
+    Entry = neverd_session_entry_addr(Into);
+    Loaded.Img.Symbols.push_back(neverd::Symbol::makeFunc(Entry, Stride));
+    auto Hidden = neverd::Symbol::makeFunc(Entry + Stride, Stride);
+    Hidden.Name = "CloseHandle";
+    Hidden.Origin = neverd::NameOrigin::Stated;
+    Loaded.Img.Symbols.push_back(Hidden);
+    neverd::sdk::SessionTestAccess::resetFunctions(Loaded);
+  };
+  const auto hiding = [](neverd_session_t From) {
+    auto Reads = llvm::json::parse(
+        takeString(neverd_user_facts_analysis_reads_json(From)));
+    EXPECT_TRUE(bool(Reads)) << llvm::toString(Reads.takeError());
+    const auto *Object = Reads ? Reads->getAsObject() : nullptr;
+    const auto *Hiding =
+        Object ? Object->getArray("hiding_prototypes") : nullptr;
+    std::vector<std::string> Entries;
+    if (Hiding)
+      for (const auto &Value : *Hiding)
+        Entries.push_back(Value.getAsString().value_or("?").str());
+    return Entries;
+  };
+  // What a session prints of both functions once it holds the summaries.
+  const auto printed = [&](neverd_session_t From) {
+    EXPECT_FALSE(takeString(neverd_prepare_call_summaries_json(From)).empty());
+    return takeString(neverd_decompile(From, Entry)) + "\n" +
+           takeString(neverd_decompile(From, Entry + Stride));
+  };
+  const auto freshly = [&](const char *Edit) {
+    neverd_session_t Fresh = neverd_session_create();
+    const auto Destroy =
+        llvm::make_scope_exit([&] { neverd_session_destroy(Fresh); });
+    Load(Fresh);
+    if (Edit)
+      EXPECT_EQ(neverd_func_edit(Fresh, Entry + Stride, Edit), 0)
+          << neverd_last_error(Fresh);
+    return printed(Fresh);
+  };
+  Load(Session);
+  auto &State = *neverd::sdk::toSession(Session);
+  const std::string Undeclared = printed(Session);
+  ASSERT_EQ(neverd_call_summaries_held(Session), 1);
+  const auto *Context = State.LocalTypesDbg.get();
+  ASSERT_NE(Context, nullptr);
+  EXPECT_TRUE(hiding(Session).empty());
+  const auto Facts =
+      neverd::PipelineTestPeer::analysisFacts(State.AnalysisCache);
+  ASSERT_NE(Facts, nullptr);
+
+  // The context takes the declaration in place; what analysis read of the
+  // prototype it hides goes, and what it read of the bodies stays.
+  constexpr char Declaration[] =
+      R"J({"type":"int CloseHandle(int First, int Second)"})J";
+  ASSERT_EQ(neverd_func_edit(Session, Entry + Stride, Declaration), 0)
+      << neverd_last_error(Session);
+  EXPECT_EQ(State.LocalTypesDbg.get(), Context);
+  EXPECT_EQ(neverd_call_summaries_held(Session), 0);
+  EXPECT_EQ(neverd::PipelineTestPeer::analysisFacts(State.AnalysisCache),
+            Facts);
+  EXPECT_EQ(hiding(Session),
+            std::vector<std::string>{neverd::sdk::vaHex(Entry + Stride)});
+  const std::string Declared = printed(Session);
+  EXPECT_NE(Declared, Undeclared);
+  // A session given the declaration before it reads anything prints the same.
+  EXPECT_EQ(Declared, freshly(Declaration));
+
+  // Given back, the function reads the header's prototype again.
+  ASSERT_EQ(neverd_func_edit(Session, Entry + Stride, R"J({"type":null})J"), 0)
+      << neverd_last_error(Session);
+  EXPECT_EQ(State.LocalTypesDbg.get(), Context);
+  EXPECT_EQ(neverd_call_summaries_held(Session), 0);
+  EXPECT_TRUE(hiding(Session).empty());
+  EXPECT_EQ(printed(Session), Undeclared);
+  EXPECT_EQ(Undeclared, freshly(nullptr));
+}
+
 TEST_F(SessionCAPITest, PrefilledSourceStacksLeaveEachAnalysisAsItWas) {
   // A chain of x64 COFF functions that each spill their first argument to its
   // home slot, save RBX, read the argument back and pass it to the next:

@@ -750,13 +750,15 @@ bool LocalTypesDebugContext::takeDeclarations(
   for (const auto &[Entry, Text] : Next)
     if (!Declarations.count(Entry))
       Changed.push_back(Entry);
-  if (llvm::any_of(Changed, [&](va_t Entry) { return hidesPrototype(Entry); }))
-    return false;
+  // Whether a function's name binds a prototype reads the library and the
+  // image alone, never the declarations.
+  const bool Hides =
+      llvm::any_of(Changed, [&](va_t Entry) { return hidesPrototype(Entry); });
   std::lock_guard<std::mutex> Guard(Mutex);
   Declarations = std::move(Next);
   for (const va_t Entry : Changed)
     DeclaredSignatures.erase(Entry);
-  return true;
+  return Hides;
 }
 
 void LocalTypesDebugContext::takeNewTypes(const types::TypeLibrary &Library,

@@ -271,9 +271,11 @@ TEST_P(AndroidFiles, ReadChkRejectsExtentsBeforeDescriptorMemoryAndErrno) {
     SCOPED_TRACE(Count);
     for (uint64_t Address : {Buffer, uint64_t(1)}) {
       auto R = run("files_read_chk_bounds", {Address, Count, Capacity});
-      EXPECT_EQ(R.Stop, ProcessStopReason::RuntimeFailure);
-      EXPECT_NE(R.Diagnostic.find(Count > Limit ? "signed byte-count"
-                                                : "destination bounds"),
+      EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService);
+      EXPECT_NE(R.Diagnostic.find("async-safe text log write contract"),
+                std::string::npos);
+      EXPECT_NE(R.StandardError.find(Count > Limit ? " > SSIZE_MAX"
+                                                   : "-byte write into "),
                 std::string::npos);
       ASSERT_FALSE(R.NativeCalls.empty());
       EXPECT_EQ(R.NativeCalls.back().Name, "__read_chk");
@@ -323,11 +325,10 @@ TEST_P(AndroidFiles, ReadChkRejectsExtentsBeforeDescriptorMemoryAndErrno) {
       Call.Name = "__read_chk";
       Call.Arguments = {99, Address, Count, Capacity};
       auto Value = Model.invoke(Call);
-      ASSERT_FALSE(bool(Value));
-      EXPECT_NE(
-          llvm::toString(Value.takeError())
-              .find(Count > Limit ? "signed byte-count" : "destination bounds"),
-          std::string::npos);
+      ASSERT_TRUE(bool(Value)) << llvm::toString(Value.takeError());
+      EXPECT_FALSE(*Value);
+      EXPECT_EQ(Result.Stop, ProcessStopReason::UnsupportedService);
+      EXPECT_NE(Result.StandardError.find("FORTIFY: read:"), std::string::npos);
       std::vector<uint8_t> After(Page);
       llvm::cantFail(Space.snapshotBacking(Buffer, After));
       EXPECT_EQ(After, Bytes);
