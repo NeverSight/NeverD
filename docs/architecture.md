@@ -1479,8 +1479,9 @@ language pointers, and reloads installed language records before committing.
 Private weak code helpers remain object-local; exported weak definitions and
 private weak data still require a coalescing contract. Other language pointer
 encodings, native TLS/initializers and public whole-image arm64e publication
-remain outside this staging contract. These file checks do not qualify real
-signed exception execution.
+remain outside this staging contract. File checks alone do not qualify real
+signed exception execution; the separate native execution matrix below
+qualifies the supported installation cases.
 Compact unwind and DWARF reservation reuse zero-filled `__TEXT` gaps outside
 sections and load-command payloads without moving original code/data VAs.
 DWARF capacity is sized to the actual records, and PC-relative fields are
@@ -1552,8 +1553,14 @@ change when a new load command is inserted. Such a changed target is rejected
 without publishing any bytes.
 
 This installation phase does not enable whole-image arm64e publication. The
-qualification of the new MC interface with a post-r6 toolchain and native signed
-call/unwind execution remain separate contracts. A runtime fixture exercises
+new MC interface still requires qualification with a post-r6 toolchain and
+the complete publication pipeline. The
+[native installation record](evidence/arm64e-native-installation-2026-11-09.json)
+qualifies twelve installed-dylib cases on each of macOS 26 and Xcode 27, with
+zero failures or skips. It covers O0/O2 authenticated calls, compact/DWARF
+language unwinding and relocated original signed language frames. Legacy
+inputs use the explicit threaded-to-chained migration described above. The
+runtime fixture exercises
 IA/IB calls, DA/DB data, an exception crossing the installed signed frame and
 actual RELRO mapping permissions only after its compiler-original execution
 control succeeds. An unavailable control is an explicit skip, never evidence
@@ -1564,9 +1571,10 @@ address diversity because the current `dyld_info` refuses that format. Apple's
 masks the key with `2` instead of `3`, losing the IA/IB and DA/DB distinction.
 Tests check both raw key bits for all four keys and the decoded names for IA/DA;
 the latter tool cannot independently qualify IB/DB or legacy rebases. Rebase
-replay and per-PC signed CFI comparisons remain offline checks, not proof of
-runtime dyld/unwinder execution. The publication guard remains until those
-contracts are qualified.
+replay and per-PC signed CFI comparisons retain their independent offline
+checks. Native execution qualifies the observed call/exception paths, not every
+possible frame state. Whole-image rebuilding and startup executable loading
+remain unqualified; the publication guard stays in place.
 
 The shared AAPCS64 parameter placement owner describes Darwin fixed value
 spills with their natural size and alignment after either register bank is
@@ -2150,12 +2158,13 @@ ordering follows [dyld's chain validation](https://github.com/apple-oss-distribu
 This preservation contract does not synthesize signed storage, install new
 authenticated imports or authorize whole-image rebuilding.
 
-This support covers static loading, lifting and C/LLVM inspection. Native
-rebuilding and source replacement of an arm64e image fail explicitly until
-ABI-aware signing and fixup emission are implemented; the emitted module
-retains that requirement. Checked emulation's existing disabled-key profile
-does not become an arm64e execution environment. Separate Apple Silicon tests
-compare both C projections with native PACGA. The full PAC/AUT/XPAC oracle
+This support covers static loading, lifting and C/LLVM inspection, together
+with the separately qualified native object installation contract above.
+General rebuilding and source replacement of an arm64e image fail explicitly
+until their complete signing, fixup and publication pipeline is qualified;
+the emitted module retains that requirement. Checked emulation's existing
+disabled-key profile does not become an arm64e execution environment. Separate
+Apple Silicon tests compare both C projections with native PACGA. The full PAC/AUT/XPAC oracle
 requires an executable arm64e process and checks that each signing key changes
 pointer bits. Hosts that refuse arm64e execution explicitly skip that check;
 ordinary arm64 can leave PAC/AUT disabled despite advertising CPU support.

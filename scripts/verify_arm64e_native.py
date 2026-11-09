@@ -158,11 +158,12 @@ def verify_legacy_fixtures(directory):
     return report
 
 
-def probe(output):
+def probe(output, *, startup=False):
     report = {**provenance(), "status": POLICY["failed"],
               "native_pac_qualified": False,
               "compiler_original_call_unwind_qualified": False,
-              "control_loading": POLICY["control_loading"],
+              "control_loading": POLICY["startup_loading"] if startup else POLICY["control_loading"],
+              POLICY["startup_qualification_key"]: False,
               "whole_image_publication_qualified": False,
               "platform": platform.platform(), "machine": platform.machine(),
               "controls": []}
@@ -234,17 +235,21 @@ def probe(output):
             for optimization in POLICY["optimizations"]:
                 for dwarf in POLICY["dwarf_modes"]:
                     label = POLICY["runtime_label"].format(optimization=optimization, dwarf=dwarf)
-                    args = [optimization, *contract["library_args"], contract["control_option"]]
+                    args = [optimization]
+                    if not startup:
+                        args.extend(contract["library_args"])
+                    args.append(contract["control_option"])
                     if dwarf:
                         args.append(contract["dwarf_option"])
                     args.extend(sources[name] for name in POLICY["runtime_sources"])
-                    run, row = compile_control(label, args, library=True)
+                    run, row = compile_control(label, args, library=not startup)
                     row["status"] = POLICY["passed"] if (
                         run.returncode == 0 and contract["runtime_completed"] in run.stdout.splitlines()
                     ) else POLICY["failed"]
                     if row["status"] != POLICY["passed"]:
                         return report
             report["compiler_original_call_unwind_qualified"] = True
+            report[POLICY["startup_qualification_key"]] = startup
             report["status"] = POLICY["passed"]
         return report
     finally:
@@ -276,6 +281,7 @@ def run_installation(output, build, probe_report, legacy_fixtures=None):
     try:
         control = json.loads(probe_report.read_text())
         if (control.get("status") != POLICY["passed"] or
+                control.get("control_loading") != POLICY["control_loading"] or
                 not control.get("native_pac_qualified") or
                 not control.get("compiler_original_call_unwind_qualified") or
                 any(control.get(key) != report[key] for key in POLICY["provenance_keys"])):
@@ -339,6 +345,8 @@ def main():
     try:
         if args.mode == POLICY["probe_mode"]:
             report = probe(output)
+        elif args.mode == POLICY["startup_mode"]:
+            report = probe(output, startup=True)
         elif args.mode == POLICY["legacy_mode"]:
             report = build_legacy_fixtures(output)
         else:

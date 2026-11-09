@@ -1,5 +1,21 @@
 # Native arm64e validation
 
+The [2026-11-09 native execution record](evidence/arm64e-native-installation-2026-11-09.json)
+records twelve successful installed-image cases on each of the macOS 26 and
+Xcode 27 runners, with zero failures or skips. It identifies the locally built
+Release test host, exact source revision, binary/fixture hashes and each
+case's PAC, compiler-original, migration and unwind properties. The execution
+hosts compile their own replacement objects and controls. This qualifies the
+documented dylib installation matrix; whole-image rebuilding, startup loading
+and the post-r6 LLVM MC interface remain separate publication requirements.
+
+The same record includes independent Release/r6
+[cold source builds on both runners](https://github.com/gmh5225/test_mac_intel/actions/runs/42641592355).
+Each built NeverD with its own Apple compiler and passed all twelve native
+installation cases without skips. Probe, build, runtime XML and test-binary
+identities are recorded separately from the delivered test-host run. Both
+controllers removed their owned build directories after saving diagnostics.
+
 Run the compiler-original environment gate before building NeverD:
 
 ```sh
@@ -69,6 +85,27 @@ when loaded through `dlopen`. Its equivalent startup executable leaves static
 B-key chained fixups unresolved on those runners and fails before unwinding;
 this profile does not qualify startup loading or hide that failure behind a
 retry. See the [native runner experiment](https://github.com/gmh5225/test_mac_intel/actions/runs/42626899000).
+
+Run the separate startup prerequisite with the same compiler-original sources:
+
+```sh
+python3 scripts/verify_arm64e_native.py probe-startup --output startup-evidence
+```
+
+This command first requires the O0/O2 four-key PAC controls, then executes the
+O0/O2 compact/DWARF controls as main executables. It records `control_loading`
+as `exec` and sets `compiler_original_startup_qualified` only when all controls
+pass. A failing executable never retries through `dlopen`. The installed-dylib
+runner requires its matching `dlopen` probe, so a startup report cannot substitute
+for it. Neither probe grants whole-image publication qualification; that also
+requires the post-r6 MC producer and complete rebuild/signing transaction.
+
+The [separate startup run](https://github.com/gmh5225/test_mac_intel/actions/runs/42646758724)
+passed both PAC controls and all four `dlopen` controls on each native host.
+Both startup probes failed with `SIGTRAP` at the first O0 compact
+compiler-original executable. Those are failed startup prerequisites; neither
+job reports success. The report and product manifests retain the failure and
+confirm removal of the owned executables.
 
 A supplemental linker diagnostic did not stop when `ld-classic` lookup failed
 and therefore does not establish legacy threaded execution. Xcode 27 no longer
