@@ -827,10 +827,15 @@ the signed 32-bit disposition, independently of the parent's return ABI.
 Shared filter writes and exception-pointer setup survive outlining; disjoint
 protected ranges keep intervening code outside `__try`. Normal cleanup calls
 and local unwinds retain their cleanup order. The 84 public x86 corpus images
-export 383 structured SEH functions; the remaining 339 retain explicit refusal
-notes for conflicting scope state, ambiguous ownership, unowned cleanup calls
+export 463 structured SEH functions. Uniform shared tails now have one CFG copy
+per proven incoming scope, including cycles and quiet scope resets; this closes
+80 additional functions. The remaining 259 retain explicit refusal notes for
+unproved scope state, ambiguous ownership, unowned cleanup calls
 or non-closed cleanup paths. Source helper execution and Windows object
 compilation do not qualify native Windows exception dispatch or resumption.
+Some newly complete modules can now enter LLVM optimization. If its candidate
+violates the strict exception contract, the source route promotes the retained
+input and preserves the rejection diagnostic without relaxing native validation.
 
 Large LLVM source functions no longer retain redundant entry stores on private
 SSA temporaries whose single later definition dominates every read. The proof

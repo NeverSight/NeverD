@@ -20958,6 +20958,21 @@ separate i386 Windows object compilation checks the actual SEH syntax. A large
 body with many callers must refuse expansion before changing the LLVM CFG.
 Fragmented cleanup fixtures cover branching PHIs, nonreturning tails and
 unique C labels.
+Shared-tail fixtures follow each normal entry's LLVM edges and check the exact
+call/invoke distinction after specialization, including cycles and quiet scope
+resets. Their generated C compiles for i386 Windows and executes both normal
+paths at O0/O2 with UBSan. Missing predecessor facts, ambiguous quiet entries
+and changing stretch states refuse without creating copies or EH pads.
+`NeverDNativeExceptionRewriteContractTests` also checks that a source view can
+promote its retained input after optimization changes the protected-call count:
+the rejected native transaction stays byte-identical, both original invokes
+survive source fallback, and the strict exception contract still validates.
+Runtime-call fixtures keep plain `int` parameters from the CRT prototype even
+when debug information names an enum, while ordinary user calls retain enum
+constants. This prevents optimized CRT calls from redeclaring header-owned enums.
+The x87 precision-helper fixture also compiles for i386 MinGW at O0/O2,
+where long double and `_BitInt(80)` have different padding; the MSVC target
+still rejects a long double that lacks x87 extended precision.
 Filter fixtures retain all three SEH dispositions, capture incoming arguments
 through dominating storage, and retain an i32 filter result in 32-bit, 64-bit
 and void parents. Ambiguous scopes refuse outlining and discard temporary
