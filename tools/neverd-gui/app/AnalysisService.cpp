@@ -71,6 +71,7 @@ void AnalysisService::reset() {
                       queries_.projectId() == owner_.projectId();
   active_.clear();
   preparedRead_.reset();
+  preparedDeclaration_.clear();
   forgetKeptRequests();
   if (retain) {
     ++serial_;
@@ -218,8 +219,9 @@ void AnalysisService::setSnapshotBlocked(bool blocked) {
     requestSnapshot();
 }
 
-void AnalysisService::prepareRead(quint64 address) {
+void AnalysisService::prepareRead(quint64 address, const QString &declaration) {
   preparedRead_ = address;
+  preparedDeclaration_ = declaration;
   if (ready_)
     sendPreparedRead();
   else
@@ -227,17 +229,26 @@ void AnalysisService::prepareRead(quint64 address) {
 }
 
 void AnalysisService::sendPreparedRead() {
-  if (!preparedRead_)
+  // One read the worker runs for nobody at a time: a declaration the dialog
+  // reads while the last one renders waits for it, and a later one takes its
+  // place, so the view after the edit waits for one render at most.
+  if (!preparedRead_ || !abandoned_.isEmpty())
     return;
   const auto address = *std::exchange(preparedRead_, std::nullopt);
+  const auto declaration = std::exchange(preparedDeclaration_, {});
   const auto at = QStringLiteral("0x") + QString::number(address, 16);
+  // A worker that prepares no function renders no declaration ahead either.
+  if (!declaration.isEmpty() && !preparesFunctions_)
+    return;
+  QJsonObject prepare{{"address", at}};
+  if (!declaration.isEmpty())
+    prepare.insert(QStringLiteral("declaration"), declaration);
   // It runs to its end as a read let go of does: a read sent meanwhile does not
   // ask for the revision it leaves.  A view would answer from what is kept, and
   // prepare nothing.
   abandoned_ =
       preparesFunctions_
-          ? client_.request(QStringLiteral("prepare_function"),
-                            {{"address", at}})
+          ? client_.request(QStringLiteral("prepare_function"), prepare)
           : client_.request(QStringLiteral("decompile"),
                             {{"address", at},
                              {"representation", QStringLiteral("source")},
@@ -387,6 +398,9 @@ void AnalysisService::receive(const QJsonObject &message) {
   } else if (!abandoned_.isEmpty() && id == abandoned_) {
     abandoned_.clear();
     workerRevision_ = message.value("revision").toString();
+    // A prepared read waited for this one.
+    if (ready_)
+      sendPreparedRead();
   }
 }
 
