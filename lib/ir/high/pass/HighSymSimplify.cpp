@@ -24,6 +24,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "HighSemanticSimplifier.h"
+
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/high/HighSourceFlow.h"
 #include "neverd/ir/high/MedToHigh.h"
@@ -34,23 +36,103 @@
 #include "neverd/symbolic/SymWideArithmetic.h"
 
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace neverd {
 
 namespace {
 
 namespace sym = neverd::symbolic;
+
+// Synthesis has no ambient assumptions: every translated input is free. Reuse
+// only an identical unsuccessful attempt, with exact widths, literals, operand
+// order and input aliasing. The key owns data, never context-local SymRefs or
+// pointers. Alpha-renaming preserves the input order used by the search. This
+// is a memo of work already tried with the fixed source-view policy during
+// this conversion, not evidence that the expression has no shorter equivalent.
+class SynthesisAttempts {
+  using Key = std::vector<uint64_t>;
+  struct Hash {
+    size_t operator()(const Key &K) const {
+      return llvm::hash_combine_range(K.begin(), K.end());
+    }
+  };
+  std::mutex Mutex;
+  std::unordered_set<Key, Hash> Unchanged;
+  size_t Words = 0;
+
+public:
+  static std::optional<Key> key(sym::SymContext &C, sym::SymRef Root) {
+    std::vector<std::pair<sym::SymRef, bool>> Pending{{Root, false}};
+    std::unordered_map<uint32_t, uint64_t> Nodes;
+    llvm::SmallVector<uint32_t> Variables;
+    C.collectVars(Root, Variables);
+    Key Result;
+    while (!Pending.empty()) {
+      const auto [V, Ready] = Pending.back();
+      Pending.pop_back();
+      if (Nodes.contains(V.index()))
+        continue;
+      if (Nodes.size() >= limits::ir::kHighSymSimplifySynthesisMemoQueryNodes)
+        return {};
+      if (!Ready) {
+        Pending.emplace_back(V, true);
+        const auto Children = C.operands(V);
+        for (auto I = Children.rbegin(); I != Children.rend(); ++I)
+          if (!Nodes.contains(I->index()))
+            Pending.emplace_back(*I, false);
+        continue;
+      }
+      const auto &N = C.node(V);
+      Result.push_back(uint64_t(N.Op));
+      Result.push_back(C.width(V));
+      if (C.isConst(V)) {
+        const auto Value = C.constValue(V);
+        Result.push_back(Value.getNumWords());
+        Result.insert(Result.end(), Value.getRawData(),
+                      Value.getRawData() + Value.getNumWords());
+      } else if (C.isVar(V)) {
+        Result.push_back(
+            std::lower_bound(Variables.begin(), Variables.end(), C.varId(V)) -
+            Variables.begin());
+      } else {
+        Result.push_back(N.Aux);
+      }
+      Result.push_back(C.operands(V).size());
+      for (const auto Child : C.operands(V))
+        Result.push_back(Nodes.at(Child.index()));
+      Nodes.emplace(V.index(), Nodes.size());
+    }
+    return Result;
+  }
+
+  bool contains(const Key &K) {
+    const std::lock_guard Lock(Mutex);
+    return Unchanged.contains(K);
+  }
+  void remember(Key K) {
+    const std::lock_guard Lock(Mutex);
+    if (K.size() > limits::ir::kHighSymSimplifySynthesisMemoWords - Words)
+      return;
+    const auto Size = K.size();
+    if (Unchanged.insert(std::move(K)).second)
+      Words += Size;
+  }
+};
 
 /// The width a HighIR size stands for, or zero when it is not one to measure.
 uint32_t widthFromBytes(uint16_t Bytes) {
@@ -1308,13 +1390,25 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       break;
 
     case sym::SymOp::Extract: {
-      ExprPtr Operand = get(Ctx.operand(Item.Ref, 0));
+      const auto Source = Ctx.operand(Item.Ref, 0);
+      ExprPtr Operand = get(Source);
       const uint64_t Low = Ctx.node(Item.Ref).Aux;
-      if (!Operand || Low % 8 != 0)
+      if (!Operand)
         break;
+      // Builders keep the source coordinates of a narrowed constant shift, so
+      // (uint32_t)(x >> 14) arrives as a window at bit 14. Read it as that
+      // shift and truncation again; the source width is a whole byte count.
+      if (Low % 8 != 0) {
+        if (Ctx.width(Source) % 8 != 0)
+          break;
+        Operand = HighExpr::makeBinop(
+            NdOp::INT_RIGHT, Operand,
+            HighExpr::makeConst(Low, Ctx.width(Source) / 8,
+                                ConstantAddressProvenance::Scalar));
+      }
       Result = std::make_shared<HighExpr>();
       Result->Type = NdType::makeInt(ByteSize, false);
-      if (Low == 0) {
+      if (Low == 0 || Low % 8 != 0) {
         Result->Kind = ExprKind::Cast;
         Result->CastTo = Result->Type;
         Result->Operands = {Operand};
@@ -1449,7 +1543,8 @@ bool hasOnlyScalarLiteralInputs(const ExprPtr &Root,
 }
 
 /// Simplify one expression, in place, if there is anything to gain.
-void simplifyOne(ExprPtr &E, const AvailableDefinitions &Definitions) {
+void simplifyOne(ExprPtr &E, const AvailableDefinitions &Definitions,
+                 SynthesisAttempts &Attempts) {
   const uint32_t Width = bitWidthOf(E);
   if (Width == 0)
     return;
@@ -1532,15 +1627,20 @@ void simplifyOne(ExprPtr &E, const AvailableDefinitions &Definitions) {
   };
   // The source toggle also opts into semantic synthesis. Both renderers use
   // the same finite search/proof policies; samples alone never reach HighIR.
-  solver::SymSynthVerifier Verifier(solver::SolverOptions::sourceView());
-  const sym::SynthResult Synth =
-      sym::synthesize(Ctx, Result.Expr, sym::SynthOptions::sourceView(),
-                      [&](sym::SymContext &Context, sym::SymRef A,
-                          sym::SymRef B) { return Verifier(Context, A, B); });
-  if (Synth.Changed && Synth.Evidence == sym::SynthEvidence::Verifier &&
-      Synth.Verification == sym::SynthVerification::Equivalent &&
-      Publish(Synth.Expr))
-    return;
+  auto Key = SynthesisAttempts::key(Ctx, Result.Expr);
+  if (!Key || !Attempts.contains(*Key)) {
+    solver::SymSynthVerifier Verifier(solver::SolverOptions::sourceView());
+    const sym::SynthResult Synth =
+        sym::synthesize(Ctx, Result.Expr, sym::SynthOptions::sourceView(),
+                        [&](sym::SymContext &Context, sym::SymRef A,
+                            sym::SymRef B) { return Verifier(Context, A, B); });
+    if (Synth.Changed && Synth.Evidence == sym::SynthEvidence::Verifier &&
+        Synth.Verification == sym::SynthVerification::Equivalent &&
+        Publish(Synth.Expr))
+      return;
+    if (Key && !Synth.Changed)
+      Attempts.remember(std::move(*Key));
+  }
   // A deeper sub-byte form may have no source spelling. Builder
   // normalization remains an independent exact candidate.
   if (!Publish(Result.Expr))
@@ -1553,7 +1653,8 @@ void simplifyOne(ExprPtr &E, const AvailableDefinitions &Definitions) {
 /// evaluation position. A width change starts an inner region too: a wrapped
 /// narrow sum need not be affine at the wider width of its extension. Simplify
 /// the inner expression at its actual width before considering the outer one.
-void simplifyRegions(ExprPtr &Root, const AvailableDefinitions &Definitions) {
+void simplifyRegions(ExprPtr &Root, const AvailableDefinitions &Definitions,
+                     SynthesisAttempts &Attempts) {
   struct Item {
     ExprPtr Expr;
     bool ChildrenReady = false;
@@ -1628,7 +1729,7 @@ void simplifyRegions(ExprPtr &Root, const AvailableDefinitions &Definitions) {
         Result->IndirectTarget = Rebuilt.at(Result->IndirectTarget.get());
     }
     if (Safe.at(E.get()) && Regions.count(E.get()) && Numeric.count(E.get()))
-      simplifyOne(Result, Definitions);
+      simplifyOne(Result, Definitions, Attempts);
     Rebuilt.emplace(E.get(), std::move(Result));
   }
   Root = Rebuilt.at(Root.get());
@@ -1672,8 +1773,8 @@ definitionInputs(const ExprPtr &Value, const AvailableDefinitions &Definitions,
   return Inputs;
 }
 
-void simplifyStatementRegions(std::vector<HighStmt> &Stmts,
-                              unsigned MaxThreads) {
+void simplifyStatementRegions(std::vector<HighStmt> &Stmts, unsigned MaxThreads,
+                              SynthesisAttempts &Attempts) {
   std::set<LocalIdentity> Escaped;
   std::set<LocalIdentity> ExternallyMutable, ExplicitOutputs;
   std::map<LocalIdentity, std::pair<int64_t, uint16_t>> StackViews;
@@ -1865,7 +1966,8 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts,
     };
     if (Properties.MutableBoundary && !Properties.ReadsBeforeMutation)
       RetireMutable();
-    forEachRhsExpr(S, [&](ExprPtr &E) { simplifyRegions(E, Definitions); });
+    forEachRhsExpr(
+        S, [&](ExprPtr &E) { simplifyRegions(E, Definitions, Attempts); });
     if (Properties.MutableBoundary && Properties.ReadsBeforeMutation)
       RetireMutable();
     if (Properties.ResetAfter) {
@@ -2041,12 +2143,29 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts,
 
 } // namespace
 
+struct detail::HighSemanticSimplifier::State {
+  SynthesisAttempts Attempts;
+};
+
+detail::HighSemanticSimplifier::HighSemanticSimplifier() = default;
+detail::HighSemanticSimplifier::~HighSemanticSimplifier() = default;
+
+void detail::HighSemanticSimplifier::simplify(std::vector<HighStmt> &Stmts,
+                                              unsigned MaxThreads) {
+  if (!Work)
+    Work = std::make_unique<State>();
+  // Recompute every reaching definition and translate the current expressions.
+  // Only a complete, identical symbolic query can reuse an unsuccessful search.
+  simplifyStatementRegions(Stmts, MaxThreads, Work->Attempts);
+}
+
 void simplifyExprSemantics(std::vector<HighStmt> &Stmts) {
-  simplifyStatementRegions(Stmts, 1);
+  simplifyExprSemantics(Stmts, 1);
 }
 
 void simplifyExprSemantics(std::vector<HighStmt> &Stmts, unsigned MaxThreads) {
-  simplifyStatementRegions(Stmts, MaxThreads);
+  detail::HighSemanticSimplifier Semantics;
+  Semantics.simplify(Stmts, MaxThreads);
 }
 
 } // namespace neverd

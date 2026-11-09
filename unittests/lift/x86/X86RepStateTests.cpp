@@ -590,7 +590,7 @@ TEST(X86RepState, PipelinePreservesAllFamiliesAcrossModesAndFormats) {
           for (const auto *Source : {&High, &LLVM}) {
             EXPECT_NE(Source->find(Builtin), std::string::npos) << *Source;
             if (A == Arch::X86) {
-              EXPECT_NE(Source->find("__NEVERC_X86_REP_STATE32__"),
+              EXPECT_EQ(Source->find("__NEVERC_X86_REP_STATE32__"),
                         std::string::npos)
                   << *Source;
               EXPECT_EQ(Source->find("target(\"sahf\")"), std::string::npos)

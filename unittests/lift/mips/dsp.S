@@ -425,3 +425,106 @@ dsp_preceu_qbra:
   nop
 .end dsp_preceu_qbra
 .size dsp_preceu_qbra, .-dsp_preceu_qbra
+
+.globl dsp_addq_w
+.type dsp_addq_w,@function
+.ent dsp_addq_w
+dsp_addq_w:
+  addq_s.w $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_addq_w
+.size dsp_addq_w, .-dsp_addq_w
+
+.globl dsp_subq_w
+.type dsp_subq_w,@function
+.ent dsp_subq_w
+dsp_subq_w:
+  subq_s.w $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_subq_w
+.size dsp_subq_w, .-dsp_subq_w
+
+.globl dsp_addsc
+.type dsp_addsc,@function
+.ent dsp_addsc
+dsp_addsc:
+  addsc $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_addsc
+.size dsp_addsc, .-dsp_addsc
+
+.globl dsp_addwc
+.type dsp_addwc,@function
+.ent dsp_addwc
+dsp_addwc:
+  addwc $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_addwc
+.size dsp_addwc, .-dsp_addwc
+
+.globl dsp_modsub
+.type dsp_modsub,@function
+.ent dsp_modsub
+dsp_modsub:
+  modsub $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_modsub
+.size dsp_modsub, .-dsp_modsub
+
+.globl dsp_cmpeq
+.type dsp_cmpeq,@function
+.ent dsp_cmpeq
+dsp_cmpeq:
+  cmpu.eq.qb $a0,$a1
+  rddsp $v0,63
+  jr $ra
+  nop
+.end dsp_cmpeq
+.size dsp_cmpeq, .-dsp_cmpeq
+
+.globl dsp_cmplt
+.type dsp_cmplt,@function
+.ent dsp_cmplt
+dsp_cmplt:
+  cmpu.lt.qb $a0,$a1
+  rddsp $v0,63
+  jr $ra
+  nop
+.end dsp_cmplt
+.size dsp_cmplt, .-dsp_cmplt
+
+.globl dsp_cmple
+.type dsp_cmple,@function
+.ent dsp_cmple
+dsp_cmple:
+  cmpu.le.qb $a0,$a1
+  rddsp $v0,63
+  jr $ra
+  nop
+.end dsp_cmple
+.size dsp_cmple, .-dsp_cmple
+
+.globl dsp_pick_b
+.type dsp_pick_b,@function
+.ent dsp_pick_b
+dsp_pick_b:
+  pick.qb $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_pick_b
+.size dsp_pick_b, .-dsp_pick_b
+
+.globl dsp_pick_h
+.type dsp_pick_h,@function
+.ent dsp_pick_h
+dsp_pick_h:
+  pick.ph $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_pick_h
+.size dsp_pick_h, .-dsp_pick_h

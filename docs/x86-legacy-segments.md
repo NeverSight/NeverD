@@ -347,10 +347,10 @@ executables and libraries; its updated ABI and export checks pass. A later
 C type lexer merge changes both shared SDKs while retaining those executables.
 Both updated SDKs pass another 41 source and four Python ABI cases. Additional
 parser checks each pass 56 cases and skip one optional Windows kernel PDB
-round-trip because `NEVERD_TYPES_NTKRNLMP` is unset. The initial
-two NeverC i386 failures came from omitting its existing explicit full LLVM
-backend option; the corrected invocation passes and the failed run remains a
-diagnostic, outside qualification counts. Embedded Python plugin-host tests
+round-trip because `NEVERD_TYPES_NTKRNLMP` is unset. Historical
+compiler-route failures and their corrected reruns remain in the
+dated evidence. Current NeverC source qualification uses the x64 host ABI.
+Embedded Python plugin-host tests
 are unavailable in these build profiles. i386 object generation does not
 qualify execution of a 32-bit host runtime bridge. LLVM and NeverC need no
 implementation change for this source route; the r6 pin and LLVM gitlink
@@ -1131,17 +1131,13 @@ must likewise preserve a declared x64 RAX return.
 16-bit and 32-bit address wrap, and original handler retry under both legacy
 paging and PAE. `X86BoundSource.*` exports 168 image/configuration combinations
 through both C routes, LLVM IR and object code, and rejects malformed contracts.
-The NeverC repository's `verify_bound.py`, `verify_bound_source.py` and
-`verify_protected_bound.py` retain independent byte witnesses, compiler/tool
-hashes and deliberate wrong-input/return controls. See the
-[BOUND qualification](evidence/x86-legacy-bound-2026-11-04.json) for actual
+See the [BOUND qualification](evidence/x86-legacy-bound-2026-11-04.json) for actual
 profiles, counts, failures repaired during development and exclusions.
 
 These BOUND interfaces alone do not create general original-state execution
-for arbitrary generated C. NeverC's later i386 platform frontend is documented
-in the [platform qualification](evidence/x86-i386-platforms-2026-11-09.json).
-MPX status has software-owner tests on
-this host; physical MPX hardware is unavailable. Global instruction/transfer
+for arbitrary generated C. NeverC source targets remain x64/AArch64 and do not
+include legacy BOUND builtins. MPX status has software-owner tests on this
+host; physical MPX hardware is unavailable. Global instruction/transfer
 completion and the final LLVM release/pin remain separate unfinished work.
 The architectural reference is Intel SDM revision 093, Volume 2A BOUND,
 from the [Intel manual page](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
@@ -1512,8 +1508,8 @@ newly loaded LDT through LSL and read back both system selectors.
 
 The references are SLDT, STR, LLDT and LTR in
 [Intel SDM Volume 2](https://cdrdv2-public.intel.com/789581/325383-sdm-vol-2abcd.pdf).
-The existing LLVM intrinsic lowering and NeverC's common i386/x64 registry
-already emit these native forms. This owned protected-state work does not
+The full LLVM fork emits these native forms in both code modes; NeverC's
+source interface covers x64. This owned protected-state work does not
 advance the LLVM release or r6 pin. Other state banks, task switching,
 real/VM86/general compatibility execution, software SMM/SGX transitions and
 unowned external-event producers remain outside the completed contract.

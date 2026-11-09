@@ -887,6 +887,18 @@ uint64_t stateBytes(const ContextState &State) {
   return Bytes;
 }
 
+// The caller establishes that Proof covers every input represented by Result.
+// Keep memory and target evidence unchanged; one literal fits inline storage.
+void refineLiteralReturn(ContextState &Result, const ContextState &Proof) {
+  const auto Value = Proof.Registers[kReturnRegister].singleton();
+  if (Value.ValueKind != RegisterValue::Kind::Constant ||
+      !Result.Registers[kReturnRegister].unknown())
+    return;
+  Result.Registers[kReturnRegister] = Value;
+  Result.Origins[kReturnRegister] = Value;
+  Result.InputExpressions[kReturnRegister].reset();
+}
+
 std::optional<uint64_t> maximumCopyLength(const ProvenValueSet &Lengths) {
   if (Lengths.unknown())
     return std::nullopt;
@@ -1079,9 +1091,10 @@ private:
   llvm::Expected<std::optional<CallXCompletedResultBinding>>
   completedObjectBinding(const FunctionContext &Original,
                          const FunctionContext &Replacement);
-  llvm::Expected<bool> generalizeRedundantContext(
-      size_t Entry, const ContextState &Input,
-      std::optional<RecursionRetry> Retry = std::nullopt);
+  llvm::Expected<bool>
+  generalizeRedundantContext(size_t Entry, const ContextState &Input,
+                             std::optional<RecursionRetry> Retry = std::nullopt,
+                             bool RootRequest = false);
   llvm::Expected<bool> replay(FunctionContext &Context, size_t BlockID,
                               ContextState &State, uint16_t &Defined,
                               bool Collect);
@@ -1425,15 +1438,9 @@ void ContextFlow::publishRoot(FunctionContext &Context) {
   // inline register/origin value storage.
   if (!Context.Generic && Context.Return) {
     auto &Generic = *GenericContexts.at(Context.EntryBlock);
-    const auto Value = Context.Return->Registers[kReturnRegister].singleton();
-    if (Value.ValueKind == RegisterValue::Kind::Constant && Generic.Return &&
-        Generic.Return->Registers[kReturnRegister].unknown() &&
-        Context.Input.Registers == Generic.Input.Registers &&
-        Context.Input.Scratch == Generic.Input.Scratch) {
-      Generic.Return->Registers[kReturnRegister] = Value;
-      Generic.Return->Origins[kReturnRegister] = Value;
-      Generic.Return->InputExpressions[kReturnRegister].reset();
-    }
+    if (Generic.Return && Context.Input.Registers == Generic.Input.Registers &&
+        Context.Input.Scratch == Generic.Input.Scratch)
+      refineLiteralReturn(*Generic.Return, *Context.Return);
   }
   if (Context.Published)
     return;
@@ -1623,7 +1630,8 @@ ContextFlow::completedObjectBinding(const FunctionContext &Original,
 
 llvm::Expected<bool>
 ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
-                                        std::optional<RecursionRetry> Retry) {
+                                        std::optional<RecursionRetry> Retry,
+                                        bool RootRequest) {
   if (ActiveEntries.contains(Program.Med.Blocks[Entry].StartSlot))
     return false;
   // Favor a changed image argument when the retained variants repeat one.
@@ -1644,6 +1652,12 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
   };
   const bool RootDemand = llvm::any_of(
       Variants, [&](const auto *Candidate) { return UnknownRoot(*Candidate); });
+  // A standalone unknown-input root still follows locally known call inputs,
+  // unlike generic mode. It can demand its one ordinary exploration by
+  // coalescing equal completed callers under the same preservation checks.
+  const bool NewUnknownRoot = RootRequest &&
+                              Input.Registers == Generic.Input.Registers &&
+                              Input.Scratch == Generic.Input.Scratch;
   bool NewImageArgument = false;
   bool UnrepresentedImageBinding = false;
   uint16_t NewImageRegisters = 0;
@@ -1726,7 +1740,7 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
       !NewCapturedRegisters && !NewFrameRegisters;
   const bool OnlyRootDemand = OnlyPreciseSiblingResult &&
                               !UnrepresentedImageBinding && !NewScalarRegisters;
-  if (OnlyRootDemand && !RootDemand)
+  if (OnlyRootDemand && !RootDemand && !NewUnknownRoot)
     return false;
   // Replacing an old incoming edge must leave the caller transfer unchanged.
   // Start with the opaque-memory case: no returned cells or affine return
@@ -1738,7 +1752,8 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
         Context.Return->Postconditions.copyCount())
       return false;
     for (const auto &Origin : Context.Return->Origins[0].values())
-      if (Origin.ValueKind != RegisterValue::Kind::Constant)
+      if (Origin.ValueKind != RegisterValue::Kind::Constant &&
+          Origin.ValueKind != RegisterValue::Kind::UnsignedRange)
         return false;
     return std::none_of(Context.Return->Registers[0].values().begin(),
                         Context.Return->Registers[0].values().end(),
@@ -1943,14 +1958,15 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
     if ((Retry && Candidate != Retry->Summary) ||
         (!Retry && (!Candidate->Published ||
                     Candidate->RootGeneration == RootGeneration)) ||
-        (Candidate->IsRoot && !ReplaceRoot) || (OnlyRootDemand && !ReplaceRoot))
+        (Candidate->IsRoot && !ReplaceRoot) ||
+        (OnlyRootDemand && !ReplaceRoot && !NewUnknownRoot))
       continue;
     const bool ObjectResult =
         NewScalarRegisters && hasCompletedObjectResult(*Candidate);
     const bool OpaqueResult = GenericOpaque && OpaqueReturn(*Candidate);
-    if (!ObjectResult &&
-        (!OpaqueResult || (OnlyPreciseSiblingResult &&
-                           !UnrepresentedImageBinding && !ReplaceRoot)))
+    if (!ObjectResult && (!OpaqueResult || (OnlyPreciseSiblingResult &&
+                                            !UnrepresentedImageBinding &&
+                                            !ReplaceRoot && !NewUnknownRoot)))
       continue;
     const bool GenericKeepsResult =
         OpaqueResult &&
@@ -1959,7 +1975,8 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
     // Further image inputs can use redundant, more precise completed results.
     // Repeated opaque results keep the original once-per-register demand.
     if ((Retry && !GenericKeepsResult) ||
-        (OnlyPreciseSiblingResult && GenericKeepsResult && !ReplaceRoot))
+        (OnlyPreciseSiblingResult && GenericKeepsResult && !ReplaceRoot &&
+         !NewUnknownRoot))
       continue;
     // A generic replacement must preserve the node's own caller proofs.
     // Otherwise only an already computed, independently published sibling
@@ -2054,7 +2071,17 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
         return CoveredElsewhere.takeError();
       Redundant = *CoveredElsewhere;
     }
-    if (!Redundant)
+    // An unknown-input forwarding root can hand its completed outgoing
+    // proof graph to the generic root with exactly the same entry facts.
+    // Keep both sets of edges and the conservative generic memory result.
+    // Own sites and instantiated input proofs retain their original owner.
+    const bool TransferRootCalls =
+        !Redundant && ReplaceRoot && GenericEquivalent &&
+        Candidate->Sites.empty() && Generic.Sites.empty() &&
+        llvm::all_of(Candidate->Calls, [](const auto &Edge) {
+          return Edge.InputExpressionTargets.empty();
+        });
+    if (!Redundant && !TransferRootCalls)
       continue;
     // Do not rewrite an edge in a graph whose fixed point is still being
     // computed. Completed old callers receive the same ABI facts above.
@@ -2081,6 +2108,19 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
       if (auto Error = retain(Bytes))
         return std::move(Error);
       RetriedUnblockedCalls.emplace(Entry, Retry->CalleeEntry);
+    }
+    if (TransferRootCalls) {
+      const uint64_t CallBytes = Candidate->Calls.size() * sizeof(ContextCall);
+      if (auto Error = retain(CallBytes))
+        return std::move(Error);
+      Generic.RetainedBytes += CallBytes;
+      for (auto &Edge : Candidate->Calls) {
+        Edge.CallerSummaryID = Generic.ID;
+        Generic.Calls.push_back(std::move(Edge));
+      }
+      // Ownership moves; each child's incoming reference remains live.
+      Candidate->Calls.clear();
+      Generic.HasTargetEvidence |= Candidate->HasTargetEvidence;
     }
     const bool WasPublished = Candidate->Published;
     for (const auto &Context : Contexts)
@@ -2116,7 +2156,7 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
     // The generic root already retains this entry's unknown-input coverage.
     // A precise root is redundant only after the same output and complete
     // proof-graph obligations as any completed incoming edge have passed.
-    // Independently published siblings keep all of its concrete targets.
+    // Independent roots or the transferred graph keep its concrete targets.
     Candidate->IsRoot = false;
     Candidate->Published = false;
     Pending.clear();
@@ -6052,7 +6092,8 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
       if (Victim)
         reclaimContext(*Victim);
       else {
-        auto Reclaimed = generalizeRedundantContext(Entry, Input);
+        auto Reclaimed = generalizeRedundantContext(Entry, Input, std::nullopt,
+                                                    !Generalization);
         if (!Reclaimed)
           return Reclaimed.takeError();
         if (!*Reclaimed)
@@ -6495,18 +6536,26 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
         !Edge.InputExpressionTargets.empty() ||
         (Edge.CalleeSummaryID &&
          Contexts[*Edge.CalleeSummaryID]->HasTargetEvidence);
-  if (Context.Return) {
-    if (auto Error = retain(stateBytes(*Context.Return)))
-      return std::move(Error);
-    Context.RetainedBytes += stateBytes(*Context.Return);
-  }
   if (!Context.Generic && Context.Return) {
     const auto &Template = *GenericContexts.at(Entry);
     // The completed generic proof covers every entry binding. A specialized
     // replay can lose the saved input-load expression without losing that
     // proof that the caller's bytes are unchanged on return.
-    if (Template.Complete && Template.Return && Template.PreservesMemory)
-      Context.Effects = {};
+    if (Template.Complete && Template.Return) {
+      if (Template.PreservesMemory)
+        Context.Effects = {};
+      // Nested calls can exhaust their variants even when this caller still
+      // specializes. Reuse an explicit all-input literal proof. Expression-
+      // backed results keep their existing instantiation and variant demand;
+      // flattening those results here can displace later caller proofs.
+      if (!Template.Return->InputExpressions[kReturnRegister])
+        refineLiteralReturn(*Context.Return, *Template.Return);
+    }
+  }
+  if (Context.Return) {
+    if (auto Error = retain(stateBytes(*Context.Return)))
+      return std::move(Error);
+    Context.RetainedBytes += stateBytes(*Context.Return);
   }
   const uint64_t AccessBytes = (Context.Effects.Writes.capacity() +
                                 Context.ReadEffects.Writes.capacity()) *

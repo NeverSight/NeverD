@@ -183,16 +183,13 @@ void writeX87CHelpers(llvm::raw_ostream &OS, bool UsesExtended,
                       const std::set<X87CHelper> &Used) {
   // An x87 register holds 80 bits; C computes with them as `long double`
   // only where that is the x87 extended format, which the unit requires.
-  // The bits travel in an `unsigned _BitInt(80)` of the same size, so one
-  // __builtin_bit_cast turns either into the other.
+  // Native precision helpers use long double directly. Its ABI padding need
+  // not match _BitInt(80), as on i386 MinGW. Actual __builtin_bit_cast uses
+  // enforce their own storage-size requirement at the cast.
   if (UsesExtended)
     OS << "_Static_assert(__LDBL_MANT_DIG__ == 64,\n"
           "               \"x87 values need the 80-bit extended long "
-          "double\");\n"
-          "_Static_assert(sizeof(long double) == sizeof(unsigned "
-          "_BitInt(80)),\n"
-          "               \"x87 bits travel in a long double's "
-          "storage\");\n\n";
+          "double\");\n\n";
   // A C cast round trip can erase NaN quieting and the store's rounding.
   // Keep the actual FLD/FSTP operations in both C projections.
   for (const auto Helper : {X87CHelper::Extend32, X87CHelper::Extend64,

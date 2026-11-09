@@ -312,9 +312,14 @@ SymRef SymContext::mkExtract(SymRef A, uint32_t Low, uint32_t Width) {
                      Width);
   // A narrowed constant shift reads a contiguous source slice, with zero or
   // sign padding where the window crosses the source. Keep those coordinates
-  // explicit so byte-wise transports can reconstruct the captured word.
+  // explicit for byte windows of byte shifts, so byte-wise transports can
+  // reconstruct the captured word. Other narrowed shifts keep their count:
+  // control-bit discovery and LLVM scalar decisions read it, and
+  // trunc(lshr(x & m, 6)) must stay a shift for an exact loop decision.
   if ((op(A) == SymOp::Shl || op(A) == SymOp::LShr || op(A) == SymOp::AShr) &&
-      isConst(operand(A, 1))) {
+      isConst(operand(A, 1)) && Width % 8 == 0 && width(A) % 8 == 0 &&
+      constValue(operand(A, 1)).getLimitedValue(width(A)) % 8 == 0 &&
+      Low % 8 == 0) {
     const auto Source = operand(A, 0);
     const unsigned Have = width(Source);
     const unsigned Shift = constValue(operand(A, 1)).getLimitedValue(Have);

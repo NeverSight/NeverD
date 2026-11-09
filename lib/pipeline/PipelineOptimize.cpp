@@ -690,6 +690,20 @@ Pipeline::optimizeOrPromoteModule(llvm::Module &Mod, LLVMSourceMap *Sources,
     break;
   }
   OptimizationResult Result = optimizeModule(Mod, Options);
+  if (Result.Stop == OptimizationStopReason::VerificationFailed) {
+    // A source view can still print the verified input of a rejected
+    // transaction. Promote that input through the conservative pipeline,
+    // retaining its exception contract and the rejection diagnostic. Native
+    // optimization callers keep the original failure; no counter is relaxed.
+    Options.Conservative = true;
+    OptimizationResult Promoted = optimizeModule(Mod, Options);
+    if (Promoted.Stop != OptimizationStopReason::InputInvalid &&
+        Promoted.Stop != OptimizationStopReason::VerificationFailed)
+      Promoted.Diagnostic = "source optimization rejected; retained verified "
+                            "input with storage promotion: " +
+                            Result.Diagnostic;
+    return Promoted;
+  }
   if (Result.Stop != OptimizationStopReason::InputInvalid ||
       llvm::verifyModule(Mod))
     return Result;

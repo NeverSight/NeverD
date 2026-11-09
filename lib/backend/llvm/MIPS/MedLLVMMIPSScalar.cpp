@@ -96,7 +96,8 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
                       B.CreateZExt(Q, B.getInt64Ty()));
   }
 
-  const auto Load = *mips::mergeLoad(Id);
+  const auto Load = *mips::mergeMemory(Id);
+  const bool Store = mips::mergeStore(Id).has_value();
   const bool Little = archLittleEndian(TargetArch);
   const auto &AddressValue = Op.Inputs[1];
   auto VA = AddressValue.isConst()
@@ -110,7 +111,7 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
          : Coerce(getVar(AddressValue, B), sizeToType(AddressValue.Size));
   auto *AddressTy = First->getType();
   auto *ValueTy = sizeToType(Load.Bytes);
-  auto *OutputTy = sizeToType(Op.Output.Size);
+  auto *OutputTy = Store ? ValueTy : sizeToType(Op.Output.Size);
   auto *Old = Coerce(getVar(Op.Inputs[2], B), OutputTy);
   const auto C = [&](uint64_t V) {
     return llvm::ConstantInt::get(AddressTy, V);
@@ -124,6 +125,11 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
   llvm::Value *Memory = nullptr;
   if (VA) {
     const auto Access = mips::mergeAccess(Load, *VA, Little);
+    if (Store && Img) {
+      if (const auto *Segment = Img->getSegmentFor(Access.First);
+          Segment && !Segment->isWritable())
+        throw std::runtime_error(kMIPSMergeImageAddress);
+    }
     auto Begin = MedVar::makeConst(Access.First, AddressValue.Size);
     Begin.Provenance = AddressValue.Provenance;
     Begin.AddressOwnerVA = AddressValue.AddressOwnerVA;
@@ -152,28 +158,38 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
   B.CreateBr(Loop);
   B.SetInsertPoint(Loop);
   auto *Index = B.CreatePHI(AddressTy, 2, "mips.merge.index");
-  auto *Result = B.CreatePHI(ValueTy, 2, "mips.merge.value");
+  auto *Result = Store ? nullptr : B.CreatePHI(ValueTy, 2, "mips.merge.value");
   Index->addIncoming(C(0), Entry);
-  Result->addIncoming(Initial, Entry);
+  if (Result)
+    Result->addIncoming(Initial, Entry);
   auto *Pointer = B.CreateGEP(B.getInt8Ty(), Memory, Index);
-  auto *Byte = B.CreateLoad(B.getInt8Ty(), Pointer);
-  // A discarded destination must still perform its original reads/faults.
-  Byte->setVolatile(true);
-  Byte->setAlignment(llvm::Align(1));
   auto *Lane = Little ? static_cast<llvm::Value *>(Index)
                       : B.CreateSub(B.CreateSub(Count, C(1)), Index);
   auto *Shift = B.CreateZExtOrTrunc(
       B.CreateShl(B.CreateAdd(DestinationByte, Lane), C(3)), ValueTy);
-  auto *Mask = B.CreateShl(llvm::ConstantInt::get(ValueTy, 255), Shift);
-  auto *Next = B.CreateOr(B.CreateAnd(Result, B.CreateNot(Mask)),
-                          B.CreateShl(B.CreateZExt(Byte, ValueTy), Shift));
+  llvm::Value *Next = nullptr;
+  if (Store) {
+    auto *Byte = B.CreateTrunc(B.CreateLShr(Initial, Shift), B.getInt8Ty());
+    auto *Write = B.CreateStore(Byte, Pointer);
+    Write->setVolatile(true);
+    Write->setAlignment(llvm::Align(1));
+  } else {
+    auto *Byte = B.CreateLoad(B.getInt8Ty(), Pointer);
+    // A discarded destination must still perform its original reads/faults.
+    Byte->setVolatile(true);
+    Byte->setAlignment(llvm::Align(1));
+    auto *Mask = B.CreateShl(llvm::ConstantInt::get(ValueTy, 255), Shift);
+    Next = B.CreateOr(B.CreateAnd(Result, B.CreateNot(Mask)),
+                      B.CreateShl(B.CreateZExt(Byte, ValueTy), Shift));
+  }
   auto *NextIndex = B.CreateAdd(Index, C(1));
   auto *Backedge = B.GetInsertBlock();
   B.CreateCondBr(B.CreateICmpULT(NextIndex, Count), Loop, Done);
   Index->addIncoming(NextIndex, Backedge);
-  Result->addIncoming(Next, Backedge);
+  if (Result)
+    Result->addIncoming(Next, Backedge);
   B.SetInsertPoint(Done);
-  return B.CreateSExtOrTrunc(Next, OutputTy);
+  return Store ? nullptr : B.CreateSExtOrTrunc(Next, OutputTy);
 }
 
 } // namespace neverd

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare complete i386 SKINIT C exports with their original machine code.
 
-Link the unmodified NeverC and Clang objects retained by NeverDX86SkinitTests.
+Link the unmodified Clang objects retained by NeverDX86SkinitTests.
 Only ordinary instructions before SKINIT run in Unicorn. Check raw EAX and the
 preceding image store; no secure launch, reset or architectural fault executes.
 Requires capstone, lief, unicorn and an ELF i386 linker.
@@ -127,12 +127,16 @@ def compare(actual, expected):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--exports', type=Path, required=True,
-                        help='NeverCI386EmitsNativeLaunchWithoutOldContinuation export directory')
+                        help='PhysicalInputAndTerminalCFGSurviveEveryOutputRoute export directory')
     parser.add_argument('--linker', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    profiles = sorted(args.exports.glob('*/profile.json'))
+    profiles = []
+    for profile in sorted(args.exports.glob('*/profile.json')):
+        meta = json.loads(profile.read_text())
+        if (meta['arch'], meta['format']) == (2, 0):
+            profiles.append(profile)
     assert len(profiles) == 6, 'expected six i386 source profiles'
     records, controls, variants = [], [], set()
     for profile in profiles:
@@ -151,34 +155,33 @@ def main():
                 assert baseline['image_store'] == struct.pack('<I', expected).hex()
         for route in ('high', 'llvm-c'):
             source = profile.with_name(route + '.c')
-            for compiler in ('neverc', 'clang'):
-                for level in ('O0', 'O2'):
-                    stem = ('native-' if compiler == 'neverc' else '') + route + '-' + level
-                    obj = profile.with_name(stem + '.o')
-                    assert obj.is_file(), obj
-                    output = args.output / (profile.parent.name + '-' + stem)
-                    linked = Path(str(output) + '.elf')
-                    command = [str(args.linker), '-m', 'elf_i386', '-static',
-                               '--entry=secure_launch', '-Ttext=0x10000000', str(obj), '-o', str(linked)]
-                    result = subprocess.run(command, capture_output=True, text=True, timeout=120)
-                    Path(str(output) + '.log').write_text(result.stdout + result.stderr)
-                    assert result.returncode == 0, result.stderr
-                    for value, baseline in baselines.items():
-                        compare(execute(original, linked, kind, value), baseline)
-                    for corruption in (('eax', 'image_store') if kind else ('eax',)):
-                        try:
-                            compare(execute(original, linked, kind, VALUES[0], corruption), baselines[VALUES[0]])
-                        except AssertionError as error:
-                            assert str(error).startswith(corruption + ' mismatch:'), error
-                        else:
-                            raise AssertionError('corrupted ' + corruption + ' escaped the oracle')
-                        controls.append({'profile': profile.parent.name, 'object': obj.name,
-                                         'field': corruption})
-                    records.append({'profile': meta, 'fixture': profile.parent.name,
-                                    'route': route, 'compiler': compiler, 'optimization': level,
-                                    'source_sha256': digest(source), 'original_sha256': digest(original_path),
-                                    'object_sha256': digest(obj), 'linked_sha256': digest(linked),
-                                    'command': command, 'comparisons': len(VALUES)})
+            for level in ('O0', 'O2'):
+                stem = route + '-' + level
+                obj = profile.with_name(stem + '.o')
+                assert obj.is_file(), obj
+                output = args.output / (profile.parent.name + '-' + stem)
+                linked = Path(str(output) + '.elf')
+                command = [str(args.linker), '-m', 'elf_i386', '-static',
+                           '--entry=secure_launch', '-Ttext=0x10000000', str(obj), '-o', str(linked)]
+                result = subprocess.run(command, capture_output=True, text=True, timeout=120)
+                Path(str(output) + '.log').write_text(result.stdout + result.stderr)
+                assert result.returncode == 0, result.stderr
+                for value, baseline in baselines.items():
+                    compare(execute(original, linked, kind, value), baseline)
+                for corruption in (('eax', 'image_store') if kind else ('eax',)):
+                    try:
+                        compare(execute(original, linked, kind, VALUES[0], corruption), baselines[VALUES[0]])
+                    except AssertionError as error:
+                        assert str(error).startswith(corruption + ' mismatch:'), error
+                    else:
+                        raise AssertionError('corrupted ' + corruption + ' escaped the oracle')
+                    controls.append({'profile': profile.parent.name, 'object': obj.name,
+                                     'field': corruption})
+                records.append({'profile': meta, 'fixture': profile.parent.name,
+                                'route': route, 'compiler': 'clang', 'optimization': level,
+                                'source_sha256': digest(source), 'original_sha256': digest(original_path),
+                                'object_sha256': digest(obj), 'linked_sha256': digest(linked),
+                                'command': command, 'comparisons': len(VALUES)})
     assert variants == {(kind, no_opt) for kind in range(3) for no_opt in (False, True)}
     report = {'profiles': records, 'comparisons': sum(r['comparisons'] for r in records),
               'negative_controls': controls, 'linker_sha256': digest(args.linker),

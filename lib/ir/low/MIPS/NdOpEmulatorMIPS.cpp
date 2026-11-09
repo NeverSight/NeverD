@@ -98,6 +98,23 @@ bool NdOpEmulator::executeMIPSScalar(const LowOp &Op) {
     writeOutput(Op.Output, High, Unknown);
     return true;
   }
+  if (const auto Store = mips::mergeStore(Id)) {
+    const bool Little = archLittleEndian(Img.Arch);
+    const auto Access = mips::mergeAccess(*Store, First, Little);
+    if (!knownOperandBytes(Op.Inputs[2], Access.RegisterByte, Access.Count))
+      return false;
+    const uint64_t Value = readOperand(Op.Inputs[2]);
+    std::array<uint8_t, 8> Bytes{};
+    for (unsigned I = 0; I != Access.Count; ++I) {
+      const unsigned Lane =
+          Access.RegisterByte + (Little ? I : Access.Count - 1 - I);
+      Bytes[I] = uint8_t(Value >> (Lane * 8));
+    }
+    // Validate the complete span before committing any byte. In particular a
+    // three-byte partial store must not become a whole-word read/modify/write.
+    return storeMemoryBytes(Access.First,
+                            llvm::ArrayRef(Bytes).take_front(Access.Count));
+  }
   const auto Load = *mips::mergeLoad(Id);
   const bool Little = archLittleEndian(Img.Arch);
   const auto Access = mips::mergeAccess(Load, First, Little);
@@ -114,7 +131,7 @@ bool NdOpEmulator::executeMIPSScalar(const LowOp &Op) {
     if (CollectLoads && int(LoadLog.size()) < limits::kMaxLoadRecords)
       LoadLog.push_back({Access.First + I, 1});
     const unsigned Lane =
-        Access.DestinationByte + (Little ? I : Access.Count - 1 - I);
+        Access.RegisterByte + (Little ? I : Access.Count - 1 - I);
     const unsigned Shift = Lane * 8;
     Result = (Result & ~(UINT64_C(0xff) << Shift)) | (*Byte << Shift);
     Unknown &= ~(UINT64_C(0xff) << Shift);

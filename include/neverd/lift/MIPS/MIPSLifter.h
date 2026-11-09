@@ -43,6 +43,7 @@ public:
   void setDSPEnabled(bool Enabled) { HasDSP = Enabled; }
   void setMSAEnabled(bool Enabled) { HasMSA = Enabled; }
   void setMIPS16Enabled(bool Enabled) { HasMIPS16 = Enabled; }
+  void setMIPS16E2Enabled(bool Enabled) { HasMIPS16E2 = Enabled; }
 
 private:
   struct State : LiftStateBase {
@@ -84,6 +85,7 @@ private:
   bool HasDSP = false;
   bool HasMSA = false;
   bool HasMIPS16 = false;
+  bool HasMIPS16E2 = false;
 };
 
 } // namespace neverd

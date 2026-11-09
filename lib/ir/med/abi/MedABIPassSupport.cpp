@@ -76,7 +76,7 @@ bool incomingArgumentReachesCall(const AbiCallContext &C, int ArgIndex) {
       if (!Remaining--)
         return false;
       const auto &Op = B->Ops[I];
-      if (isAbiRecoveryBarrier(Op))
+      if (endsCallArgumentSetup(Op, /*RegistersOnly=*/true))
         return false;
       if (Op.Output.Kind == MedVar::Reg && Op.Output.Size &&
           C.Layout.registerIndex(Op.Output.RegOff) == ArgIndex &&
@@ -102,14 +102,23 @@ bool incomingArgumentReachesCall(const AbiCallContext &C, int ArgIndex) {
 
 std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C,
                                                CallSetupStackJoins *Joins,
-                                               size_t *SharedWork) {
+                                               size_t *SharedWork,
+                                               bool *Incomplete) {
   using Stores = std::map<int64_t, CallSetupStackValue>;
   if (Joins)
     *Joins = {};
+  if (Incomplete)
+    *Incomplete = false;
+  const auto markIncomplete = [&] {
+    if (Incomplete)
+      *Incomplete = true;
+  };
   const int64_t Word = C.Layout.SlotBytes;
   const int64_t Base = C.Layout.CallStackBase;
-  if (Word <= 0 || C.MaxArgs <= 0 || Base < 0)
+  if (Word <= 0 || C.MaxArgs <= 0 || Base < 0) {
+    markIncomplete();
     return {};
+  }
   const int64_t Limit = Base + Word * C.MaxArgs;
   // A per-call bound also limits path duplication in diamonds. Exhaustion
   // publishes no partial predecessor proof.
@@ -124,8 +133,10 @@ std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C,
   std::optional<MedBlockIdIndex> OwnBlocks;
   const MedBlockIdIndex &Blocks =
       C.Blocks ? *C.Blocks : OwnBlocks.emplace(C.Func);
-  if (!Blocks.unique())
+  if (!Blocks.unique()) {
+    markIncomplete();
     return {};
+  }
   std::set<int> Active;
   const auto bytes = [&](const CallSetupStackValue &Value) {
     if (const auto *Scalar = std::get_if<MedVar>(&Value))
@@ -150,18 +161,23 @@ std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C,
     const bool Independent = Root != C.Func.ModuleAnalysisRoots.end() &&
                              (*Root == B.StartAddr || *Root < B.EndAddr);
     // A root inside an unsplit block could bypass any earlier local store.
-    if (Independent && *Root != B.StartAddr)
+    if (Independent && *Root != B.StartAddr) {
+      markIncomplete();
       return {};
+    }
     if (!Remaining || End > B.Ops.size() ||
         Depth >= limits::kCallArgStoreAddressDepth ||
-        !Active.insert(B.Id).second)
+        !Active.insert(B.Id).second) {
+      markIncomplete();
       return {};
+    }
     --Remaining;
     Stores Local;
     std::set<int64_t> Overwritten;
     bool Inherit = true;
     for (size_t I = End; I > 0; --I) {
       if (!Remaining) {
+        markIncomplete();
         Inherit = false;
         break;
       }
@@ -170,6 +186,7 @@ std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C,
       if (isAbiRecoveryBarrier(Op) || Op.Opcode == NdOp::ATOMIC_XCHG ||
           Op.Opcode == NdOp::ATOMIC_ADD || Op.Opcode == NdOp::ATOMIC_CMPXCHG ||
           Op.MemoryOrdering != NdMemoryOrdering::None) {
+        markIncomplete();
         Inherit = false;
         break;
       }
@@ -180,6 +197,7 @@ std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C,
       if (!Offset || !Op.Inputs[1].Size ||
           Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
           *Offset > INT64_MAX - Op.Inputs[1].Size) {
+        markIncomplete();
         Inherit = false; // A may-alias write hides all earlier stores.
         break;
       }
@@ -195,12 +213,29 @@ std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C,
             (Op.Inputs[1].Size & (Op.Inputs[1].Size - 1)) == 0 &&
             !isIncomingRegisterSave(C.TRI, Op.Inputs[1], &C.Func))
           Local.emplace(Slot, Op.Inputs[1]);
+        // A partial scalar write cannot prove an entire required carrier.
+        // Preserve the existing local multi-slot wide-store path only for
+        // complete aligned words; it is separately certified by that scan.
+        if (Incomplete) {
+          const bool WholeWideStore = *Offset % Word == 0 &&
+                                      Op.Inputs[1].Size > Word &&
+                                      Op.Inputs[1].Size % Word == 0;
+          if ((!Local.count(Slot) || Op.Inputs[1].Size < Word) &&
+              !WholeWideStore)
+            markIncomplete();
+        }
       }
     }
     Stores Common;
     std::map<int64_t, std::vector<std::pair<int, CallSetupStackValue>>>
         IncomingJoins;
     const bool JoinHere = Joins && B.Preds.size() > 1;
+    if (Incomplete && Inherit &&
+        ((B.StartAddr != C.Func.Entry &&
+          (Independent || !B.ExceptionalPreds.empty() || B.Preds.empty())) ||
+         (B.StartAddr == C.Func.Entry &&
+          (!B.Preds.empty() || !B.ExceptionalPreds.empty()))))
+      markIncomplete();
     if (Inherit && !Independent && B.ExceptionalPreds.empty() &&
         !B.Preds.empty() && B.StartAddr != C.Func.Entry) {
       bool First = true;
@@ -209,6 +244,7 @@ std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C,
         const MedBlock *P = Blocks.first(Id);
         if (!Remaining || !Preds.insert(Id).second || !P ||
             std::count(P->Succs.begin(), P->Succs.end(), B.Id) != 1) {
+          markIncomplete();
           Common.clear();
           IncomingJoins.clear();
           break;
@@ -218,21 +254,32 @@ std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C,
         if (First) {
           if (JoinHere)
             for (const auto &[Offset, Value] : Incoming) {
-              if (!Remaining)
+              if (!Remaining) {
+                markIncomplete();
                 return {};
+              }
               --Remaining;
               IncomingJoins[Offset].emplace_back(Id, Value);
             }
           Common = std::move(Incoming);
           First = false;
         } else {
+          if (Incomplete && (Common.size() != Incoming.size() ||
+                             llvm::any_of(Common, [&](const auto &Item) {
+                               const auto Other = Incoming.find(Item.first);
+                               return Other == Incoming.end() ||
+                                      !same(Item.second, Other->second);
+                             })))
+            markIncomplete();
           std::erase_if(Common, [&](const auto &Item) {
             const auto Other = Incoming.find(Item.first);
             return Other == Incoming.end() || !same(Item.second, Other->second);
           });
           for (auto It = IncomingJoins.begin(); It != IncomingJoins.end();) {
-            if (!Remaining)
+            if (!Remaining) {
+              markIncomplete();
               return {};
+            }
             --Remaining;
             const auto Other = Incoming.find(It->first);
             const auto &FirstValue = It->second.front().second;
@@ -245,7 +292,8 @@ std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C,
             }
           }
         }
-        if (Common.empty() && IncomingJoins.empty())
+        if (Common.empty() && IncomingJoins.empty() &&
+            (!Incomplete || *Incomplete))
           break;
       }
     }
@@ -258,8 +306,10 @@ std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C,
       for (const auto &[Offset, Value] : Common)
         IncomingJoins.erase(Offset);
       for (auto &[Offset, Args] : IncomingJoins) {
-        if (!Remaining)
+        if (!Remaining) {
+          markIncomplete();
           return {};
+        }
         --Remaining;
         const size_t Index = Joins->Nodes.size();
         const uint16_t Bytes = bytes(Args.front().second);
@@ -272,6 +322,7 @@ std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C,
   };
   const Stores Reaching = Visit(C.Blk, C.CallIdx, 0);
   if (!Remaining) {
+    markIncomplete();
     if (Joins)
       *Joins = {};
     return {};
@@ -643,7 +694,8 @@ bool PreSSAMedCallTargets::version(const MedOp &Original,
   for (unsigned I = 0; I < Op.NumInputs; ++I)
     Op.Inputs[I] = read(Op.Inputs[I]);
   if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
-      (Op.Opcode == NdOp::INTRINSIC && endsCallArgumentSetup(Op)))
+      (Op.Opcode == NdOp::INTRINSIC &&
+       endsCallArgumentSetup(Op, /*RegistersOnly=*/true)))
     for (auto &[K, Version] : Versions) {
       if (!consumeCallTargetWork(WorkRemaining))
         return false;
@@ -1683,7 +1735,8 @@ findReachingArgReg(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
           Left = true;
           return Value;
         }
-      if (CallBlock && Op.Opcode == NdOp::INTRINSIC && isAbiRecoveryBarrier(Op))
+      if (CallBlock && Op.Opcode == NdOp::INTRINSIC &&
+          endsCallArgumentSetup(Op, /*RegistersOnly=*/true))
         return std::nullopt;
     }
     return std::nullopt;

@@ -1,5 +1,7 @@
 add_neverd_unittest(NeverDMIPSPipelineTests
   mips/MIPS16PipelineTests.cpp
+  mips/MIPS16E2PipelineTests.cpp
+  mips/MIPSCallMemoryTests.cpp
   mips/MIPSDSPPipelineTests.cpp
   mips/MIPSMSAPipelineTests.cpp
   mips/MicroMIPSPipelineTests.cpp
@@ -32,6 +34,7 @@ add_neverd_unittest(NeverDMIPSIntegerTests
   mips/MIPS16IntegerTests.cpp
   mips/MIPS16MemoryTests.cpp
   mips/MIPS16FrameTests.cpp
+  mips/MIPS16E2Tests.cpp
   mips/MIPSDSPTests.cpp
   mips/MIPSMSATests.cpp
   mips/MicroMIPSIntegerTests.cpp
@@ -1973,6 +1976,10 @@ add_neverd_unittest(NeverDMachOSignerTests
 
   LINK_COMPONENTS
   CodeGen
+)
+
+target_compile_definitions(NeverDMachOSignerTests PRIVATE
+  NEVERD_MACHO_SIGNATURE_FIXTURE="${CMAKE_SOURCE_DIR}/unittests/safety/fixtures/binaries/safety_cases_macho_arm64"
 )
 
 target_include_directories(NeverDMachOSignerTests PRIVATE

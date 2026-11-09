@@ -40,6 +40,8 @@ struct MIPSImageMetadata {
   bool HasMicroMIPS = false;
   /// MIPS16e32 code; mutually exclusive with the microMIPS ASE.
   bool HasMIPS16 = false;
+  /// MIPS16e2 requires its own .MIPS.abiflags ASE evidence.
+  bool HasMIPS16E2 = false;
   /// Classic MIPS32 DSP ASE; the initial slice requires DSP execution enabled.
   bool HasDSP = false;
   /// Initial classic MIPS32r5/o32 integer MSA slice, with FP64 register mode.

@@ -70,17 +70,10 @@ TEST(X86VirtualizationSource, AddressOverridesRequireExactRegisterInputs) {
       }
 }
 
-TEST(X86VirtualizationSource, NeverCI386SvmKeepsDefaultAndAddress16Forms) {
-  const char *Compiler = std::getenv("NEVERD_TEST_NEVERC");
-  const char *Backend = std::getenv("NEVERD_TEST_NEVERC_LLC");
-  if (!Compiler || !llvm::sys::fs::exists(Compiler) || !Backend ||
-      !llvm::sys::fs::exists(Backend))
-    GTEST_SKIP() << "set NEVERD_TEST_NEVERC and NEVERD_TEST_NEVERC_LLC";
-  llvm::SmallString<128> Directory;
-  ASSERT_FALSE(
-      llvm::sys::fs::createUniqueDirectory("neverd-native-svm32-c", Directory));
-  const auto Cleanup = llvm::scope_exit(
-      [&] { (void)llvm::sys::fs::remove_directories(Directory); });
+TEST(X86VirtualizationSource, ClangI386SvmKeepsDefaultAndAddress16Forms) {
+  const std::string Compiler = NEVERD_TEST_CLANG;
+  if (Compiler.empty() || !llvm::sys::fs::exists(Compiler))
+    GTEST_SKIP() << "Clang is unavailable";
   unsigned Cases = 0;
   for (bool NoOpt : {false, true})
     for (const auto &E : nativeVirtualizationEncodings()) {
@@ -115,13 +108,12 @@ TEST(X86VirtualizationSource, NeverCI386SvmKeepsDefaultAndAddress16Forms) {
       for (const auto &Source : {High, LLVM}) {
         EXPECT_NE(Source.find(Plan->Builtin + "("), std::string::npos)
             << Source;
-        compileNativeC(Compiler, Directory, BinaryFormat::ELF, Source,
-                       Plan->LLVMName, Cases, std::nullopt, true, true,
-                       Arch::X86);
-        if (::testing::Test::HasFailure())
-          return;
       }
+      compileRoutes(Image, NoOpt, Entry + Offset, C.Mnemonic);
+      if (::testing::Test::HasFailure() || ::testing::Test::IsSkipped())
+        return;
+      Cases += 4;
     }
   EXPECT_EQ(Cases, 48u);
-  RecordProperty("native_c_compilations", Cases);
+  RecordProperty("clang_c_compilations", Cases);
 }

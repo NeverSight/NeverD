@@ -18,6 +18,7 @@
 
 #include "HighDCEDetail.h"
 #include "HighFrameAddress.h"
+#include "HighSemanticSimplifier.h"
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/high/MedToHigh.h"
@@ -857,7 +858,8 @@ static void iterativeDCE(HighFunc &Func,
 // eliminateDeadStmts -- the main multi-phase DCE entry point
 //===----------------------------------------------------------------------===//
 
-void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
+void MedToHighConverter::eliminateDeadStmts(
+    HighFunc &Func, detail::HighSemanticSimplifier &Semantics) {
   const char *Detail = std::getenv("NEVERD_HIGHIR_DETAIL");
   const bool WantDetail = Detail && Detail[0] == '1' && Detail[1] == '\0';
   using Clock = std::chrono::steady_clock;
@@ -1010,7 +1012,7 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
                            /*AcrossJoins=*/ForwardedAcrossJoins);
   const bool Simplified = simplifyAllExprs(Func.Body);
   if (SymbolicSimplification)
-    simplifyExprSemantics(Func.Body, SemanticThreadLimit);
+    Semantics.simplify(Func.Body, SemanticThreadLimit);
   const bool CyclesBroken = breakStmtCycles(Func.Body);
   // Symbolic word arithmetic may publish a negated sum for a difference.
   // Restore source comparisons without substituting any local definitions

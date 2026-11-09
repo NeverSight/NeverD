@@ -515,9 +515,34 @@ void MemoryPostconditions::meet(const MemoryPostconditions &Other,
 void MemoryPostconditions::invalidate(const MemoryEffects &Effects,
                                       const RegisterState &Entry,
                                       const SBFProgram &Program) {
-  if (Effects.Unknown || Effects.WritesFrames) {
+  if (Effects.Unknown) {
     clear();
     return;
+  }
+  if (Effects.WritesFrames) {
+    const auto &Frame = Entry[kFramePointerRegister];
+    const auto BeforeFrame = [&](const RegisterValue &Address, uint64_t Size) {
+      if (Frame.ValueKind != RegisterValue::Kind::StackAddress ||
+          Address.ValueKind != Frame.ValueKind || Address.Value != Frame.Value)
+        return false;
+      // Stored fields and input copies already have checked, nonempty extents.
+      // Compare their last byte in the callee's own frame coordinates, using
+      // the same frame boundary as the ordinary memory-effect owner.
+      const int64_t Last = Address.Offset + static_cast<int64_t>(Size - 1);
+      int64_t Relative;
+      if (llvm::SubOverflow(Last, Frame.Offset, Relative))
+        return false;
+      return !isOwnOrChildFrame(
+          {RegisterValue::Kind::StackAddress, kRegisterCount, Relative},
+          Program);
+    };
+    llvm::erase_if(Copies, [&](const InputCopy &Copy) {
+      return !BeforeFrame(Copy.Destination, Copy.Size);
+    });
+    std::erase_if(Values, [&](const auto &Cell) {
+      const auto &[Kind, Base, Offset, Width] = Cell.first;
+      return !BeforeFrame({Kind, Base, Offset}, Width);
+    });
   }
   for (const auto &Write : Effects.Writes)
     invalidate(substituteMemoryAddress(Write.Address, Entry, Program),

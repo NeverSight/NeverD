@@ -63,6 +63,10 @@ llvm::Expected<PatchResult> installCOFFObjectPatch(
     const DynCodePatchEvidence *DynCode = nullptr,
     const SourcePatchPreparation *Preparation = nullptr);
 
+/// Native arm64e input retains its exact CPU subtype/ABI, authenticated GOT,
+/// dyld pointer recipes and signed language frames. Explicit dependencies
+/// select providers for undefined pointer references. Final signing, recipe
+/// replay and original-entry redirection precede atomic publication.
 llvm::Expected<PatchResult> installMachOObjectPatch(
     llvm::StringRef Object, const BinaryImage &Original,
     llvm::ArrayRef<SourcePatchMapping> Mappings,
@@ -70,7 +74,8 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
     const std::filesystem::path &Output,
     llvm::function_ref<llvm::Error(const PatchResult &)> PrepareReceipt,
     const DynCodePatchEvidence *DynCode = nullptr,
-    const SourcePatchPreparation *Preparation = nullptr);
+    const SourcePatchPreparation *Preparation = nullptr,
+    llvm::ArrayRef<SourcePatchDependency> Dependencies = {});
 
 } // namespace neverd
 

@@ -1458,6 +1458,19 @@ the signed addend and exact provider. Writable storage is required even when
 the final mapping is RELRO. An absolute constant (`N_ABS`) is not inferred to
 be a slid address.
 
+`installMachOObjectPatch` also connects this native object profile to the shared
+publication transaction. It prepares authenticated GOT slots before placement,
+installs compact/DWARF language records, and redirects each selected original
+entry with a single relative branch. The new function owns its signing prologue;
+the branch does not change LR. Explicit pointer providers are admitted by the
+existing dependency owner. After signing, recipe replay verifies every pointer
+slot and its RELRO contract, while the remaining section bytes must match the
+relocated object exactly. Both staging and publication use the same final
+unwind validator, including exact personality slot and LSDA identities.
+Failed receipts and pre-existing output paths do not publish or overwrite a
+file. This native C++ API does not enable the source/IR or lifted-image rebuild
+routes, nor the SDK compiler adapter's separate arm64e admission.
+
 Native compact language records retain LSDA addresses and personality slots.
 The arm64e personality slot uses IA/address diversity with zero discriminator;
 RTTI slots remain ordinary pointers. Existing unambiguous personality slots
@@ -5031,7 +5044,13 @@ Within one LowIR build, module jump-table arbitration is reused while its
 function bodies remain unchanged. Any body rebuild retires that result before
 parallel builders run. Continuation discovery still runs normally, and image
 publication follows both fixed points; budget refusals and proof requirements
-remain the same.
+remain the same. A function asked to rebuild under the protected relocation
+slots, unsafe branches, branch preservation, continuation roots and published
+branch history of its previous rebuild keeps that body: a build is a function
+of those inputs and the image. The slot, branch and history sets only grow
+within the build, so their sizes identify them; continuation roots are kept
+whole. When arbitration stays incomplete after the fallback rebuild, the
+continuation closure's second identical rebuild therefore lifts nothing again.
 
 PE32 returning-stack queries also share a run-local memo across ordinary
 callers and independent jump-table queries. Each answer retains its import
@@ -11341,7 +11360,9 @@ support. See [the KVM domain](x86-kvm-hypercalls.md). This inventory does not
 imply coverage of every newer SEV/SNP instruction.
 
 `backend/llvm/X86/X86VirtualizationNative.h` owns native LLVM names and
-available NeverC source spellings together. Mode-sized i386 VMCS and address
+compiler source spellings together. NeverC's x86 source targets are x64;
+legacy builtins remain available through the full fork or assembly fallback.
+Mode-sized i386 VMCS and address
 APIs use the full fork's `32` names in both C renderers; management memory
 operands retain m64. SVM default-address i386 APIs also use `32`; address-size
 overrides use `.addr16` on i386 and `.addr32` on x64. Their address inputs remain
@@ -11782,9 +11803,12 @@ Actual x87 FLD/FST precision conversions remain numerical operations.
 HighIR cannot cancel its numerical round trip, and LLVM uses constrained
 extension/truncation with dynamic rounding. Both C routes use the same native
 FLD/FSTP helpers, so C optimization cannot erase signaling-NaN quieting or
-replace x87 store rounding with an ordinary cast. This covers the observable
-converted value; full x87 exception, stack-tag and status state still belongs
-to the existing context and explicit-state paths.
+replace x87 store rounding with an ordinary cast. These helpers require an
+x87 extended `long double`, but scalar conversions do not require its ABI
+padding to match `_BitInt(80)`. Actual `__builtin_bit_cast` expressions retain
+the compiler's storage-size check. This covers the observable converted value;
+full x87 exception, stack-tag and status state still belongs to the existing
+context and explicit-state paths.
 
 `MedTypePass` distinguishes a POP-shaped integer return from an unchanged
 entry-register save. A known reaching stack store of a computed value,
@@ -15692,8 +15716,17 @@ MIPS64 word-input contract; source backends do not reinterpret instruction bits.
 `MedMIPSMergeValues` owns the source-only proof for adjacent complementary
 merge loads in a single ordinary leaf block. It runs after SSA/projection/DCE
 and before ABI recovery, binds physical LowIR occurrences to MedIR, and removes
-only a first load's unobserved old-value operand. Both reads remain ordered;
+only a first load's unobserved old-value operand. Four-byte MIPS16e2
+occurrences use the same address/use proof as classic instructions. Both reads remain ordered;
 calls, PHIs, exceptional flow and unproved uses retain their original inputs.
+
+`MIPSScalar.def`/`MIPSScalar.h` own merge load/store IDs, shapes and exact byte
+spans. Partial stores observe only selected register bytes and never read
+neighboring memory. LowIR commits a validated full span; HighC and LLVM retain
+byte writes and original-image backing qualification. This differs from a
+general source memory-fault equivalence guarantee. ABI memory recovery stops
+at partial stores, while queries confined to registers retain their existing
+values across these memory effects.
 
 The DSP32 scalar slice keeps feature admission in `ELFMIPSProfile` and carries
 it through decoder reuse. `MIPSDSP.def` owns control field groups and instruction
@@ -15738,6 +15771,11 @@ address, and delegate accesses to `MIPSLiftMemory`. CFG and function discovery
 validate the entire unit against local mode evidence. B carries unconditional control semantics
 through normalization so CFG does not visit a nonexistent fallthrough.
 MIPS16 symbols are classified before their overlapping microMIPS flag bit.
+MIPS16e2 is an explicit ABI-record feature on that same instruction mode;
+`ELFMIPSProfile` owns the GNU e2 ASE bit and `Decoder::configureFor` refreshes it.
+Its integer/memory EXTEND forms reuse the classic semantic owners. The pinned
+Unicorn does not implement e2; GNU bytes, independent LowIR checks and execution
+of regenerated old-MIPS16 source remain distinct evidence.
 Both source routes emit the positive encoding attribute and explicitly exclude
 the other compressed family. GNU as/ld and original-target execution qualify
 the MIPS16 source path separately from LLVM's incomplete assembler support.
@@ -17003,8 +17041,14 @@ and no bounded proof of where the frame is follows them.
 For LLVM-to-C, `MedLLVMRegistrationSourceSEH.cpp` consumes these display facts
 in the private source module. It preflights distinct, closed finally bodies,
 their normal calls, local-unwind ancestors and owned filter CFGs before
-changing any blocks. Unsupported ownership, ambiguous levels, shared cleanup
+changing any blocks. Unsupported ownership, unproved levels, shared cleanup
 bodies and unrepresentable callback dependencies retain the unlowered source CFG.
+Ordinary shared tails whose stretches retain the same set of possible levels
+receive one CFG copy per active scope. Every incoming edge must establish its
+level, including quiet trailing state changes. Shared cycles redirect to the
+same level's copy; captured parent storage remains shared. Address-taken blocks,
+escaping SSA values, unsupported PHIs and unproved entries refuse the complete
+transformation before mutation. These copies share the cleanup expansion budget.
 Normal calls receive a copy of their finally body; a local unwind receives the
 exited bodies in inner-to-outer order, each under its enclosing scope. The
 exceptional copy lives in a cleanup pad. Clone work is bounded per function by
@@ -17024,6 +17068,12 @@ helper and capture allocas, which LLVMC
 prints as a call inside `__except`. Selected-source emission includes these
 helper definitions. The marker grants no Windows native callback ABI, and
 native outlining keeps its independent personality and frame checks.
+
+Source optimization remains transactional. If the optimized candidate fails
+verification, the source view conservatively promotes the retained input and
+checks its exception contract again. The result retains the rejection diagnostic;
+native optimization still reports the failed transaction. In particular, source
+fallback does not relax protected-call counters after LLVM removes an invoke.
 
 LLVMC can print a closed, branching cleanup CFG in each fragmented `__finally`.
 Each printed copy has private C labels and explicit PHI edge assignments. The

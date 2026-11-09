@@ -357,6 +357,12 @@ proven summary outputs are applied. Callee-saved registers survive a return;
 automatic frames advance by the VM stride. The same call-register rule drives
 ordinary block transfer, contextual values, origins, input expressions,
 input dependencies and missing-fact attribution.
+Parameterized fields, saved expressions and deferred copies also survive a
+callee-frame write when their complete destination extent precedes that frame
+under the same formal base. They use the ordinary memory-effect frame boundary;
+different formal bases, unknown frames and overlapping writes still invalidate
+the facts. This preserves older-frame fields without assuming that independent
+parameters cannot alias.
 Resolved syscalls depend on their five exposed host-ABI argument carriers;
 unexposed return, callee-saved and frame registers do not create new summary
 variants unless the function itself reads them. Unknown calls still depend on
@@ -512,7 +518,9 @@ not select this extra work. An old published dependency may be generalized only
 if its caller-visible return and memory transfer agree
 exactly with the completed generic summary. This currently requires unknown
 memory effects, no returned scratch/postcondition cells, the same scalar return
-alternatives and the same constant or unknown return origin. Any target facts
+alternatives and the same constant, unsigned-range or unknown return origin.
+Equal numeric ranges carry no affine pointer identity, so they do not prevent
+reclaiming an otherwise equivalent result. Any target facts
 in the dependency graph must also remain under the same caller entry and call
 instruction, through an independently published sibling or through the original
 edge's independently retained caller. Keeping only its callee is insufficient.
@@ -532,6 +540,11 @@ is unknown; different finite sets cannot be merged just because neither has a
 singleton return value. Descendant proof coverage is still required. This
 coalesces results already computed for those callers; it does
 not broaden the sibling's input cache key or authorize reuse for new inputs.
+A standalone root with the generic unknown entry facts can also demand its
+ordinary exploration by coalescing such equal published results. Its locally
+known nested call inputs are not analyzed in generic mode. This preserves the
+same four-variant limit and all completed-result and proof-graph checks; it does
+not retry unrelated caller inputs or grant another root traversal.
 Those edges record `coalesced_proven_equivalent_summary_results`. A first
 captured input binding absent from all retained variants can demand one such
 exploration per entry register, without supplying target or nonalias facts.
@@ -572,11 +585,21 @@ When a completed root has exactly the generic entry's register and scratch
 facts, a literal scalar return can refine that generic summary's unknown
 return. Its conservative memory effects and target evidence remain unchanged;
 results from bound caller arguments do not establish this all-input fact.
+A completed generic literal without a return-input expression also refines an
+unknown specialized return when nested calls lose precision at their own
+variant limit. Expression-backed results retain their existing instantiation
+and specialization demand; flattening them can displace later caller proofs.
+This reuses an all-input proof without changing the specialized memory result.
 A completed older root whose inputs match the generic entry can also release
 its specialization when the generic result preserves its opaque return and
-every target proof remains independently published. Return differences and
-finite alternatives still prevent this replacement. Independent publication
-excludes the retiring root from both traversal seeds and incoming edges; its
+every target proof remains independently published or survives in a transferred
+outgoing graph. A forwarding root with no own CALLX sites or instantiated
+input-expression proofs on its outgoing edges can transfer those edges to the
+generic root. The generic root keeps its existing edges and conservative memory
+result; descendant witnesses retain their owners and incoming references.
+Return differences and finite target-set proofs still prevent this replacement.
+Independent publication excludes the retiring root from both traversal seeds
+and incoming edges; its
 own descendants cannot serve as witnesses that they survive its removal.
 When same-entry siblings do not cover the evidence, a bounded traversal of
 other completed published roots can establish that the exact retained
@@ -953,8 +976,11 @@ inside the heap region. Growing interval disjunctions still use the existing
 alternative limit; there is no additional integer-range fixed point.
 The canonical 64-bit AND transfer retains the endpoint enclosure when a constant
 mask clears a low-bit suffix of a nonwrapping unsigned interval. Other masks and
-wrapping intervals cannot use that monotonicity rule. Symbolic identities are
-not folded as numeric operands.
+wrapping intervals use the sound zero-to-mask enclosure, which also bounds an
+unknown input without retaining pointer identity. A known unsigned interval
+survives a constant 64-bit left shift when every input avoids overflow; the
+scalar semantic owner supplies the effective shift count. These numeric bounds
+can delimit a table-read footprint without proving any table bytes or target.
 Memory-access offsets use the shared modular address transfer, both for a
 local store and when collecting, binding or applying a callee's write summary.
 A heap interval shifted across address zero can still exclude a caller frame.

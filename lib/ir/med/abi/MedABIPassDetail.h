@@ -180,10 +180,13 @@ struct CallSetupStackJoins {
 /// The caller materializes only the nodes a required argument reaches.
 /// SharedWork, when supplied by an enclosing proof, also charges every visited
 /// operation and edge to that proof. The per-call limit still applies.
+/// Incomplete records memory barriers and bounded walks that could not finish.
+/// Missing required inputs then remain unknown, rather than pair-alignment
+/// padding.
 std::map<int64_t, MedVar>
 callSetupStackStores(const AbiCallContext &C,
                      CallSetupStackJoins *Joins = nullptr,
-                     size_t *SharedWork = nullptr);
+                     size_t *SharedWork = nullptr, bool *Incomplete = nullptr);
 
 /// Every reaching path leaves this incoming argument register untouched.
 bool incomingArgumentReachesCall(const AbiCallContext &C, int ArgIndex);

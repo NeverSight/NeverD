@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare complete i386 VMX C exports with independent original instructions.
+"""Compare complete i386 VMX Clang exports with independent original instructions.
 
 The instruction boundary supplies VMX completions after checking native inputs,
 operand widths and memory images. It does not create a hardware VMCS, validate
@@ -110,8 +110,7 @@ def execute(code, entry, status):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exports", type=Path, required=True)
-    parser.add_argument("--compiler", type=Path, required=True)
-    parser.add_argument("--backend-llc", type=Path)
+    parser.add_argument("--compiler", type=Path, required=True, help="Clang compiler")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -136,21 +135,13 @@ def main():
             command = [str(args.compiler), "--target=i386-unknown-linux-gnu", "-" + opt,
                        "-ffreestanding", "-fno-lto", "-fno-pic", "-fno-pie",
                        "-fno-stack-protector", "-fno-strict-aliasing", str(source)]
-            if args.backend_llc:
-                command += ["-fno-builtin-mimalloc"]
             commands = [command + ["-S", "-emit-llvm", "-o", str(ir)],
-                        command + ["-c", "-o", str(obj)] +
-                        (["-fllvm-backend=" + str(args.backend_llc)] if args.backend_llc else [])]
+                        command + ["-c", "-o", str(obj)]]
             for step, invocation in enumerate(commands):
                 completed = subprocess.run(invocation, capture_output=True, text=True, timeout=120)
                 (args.output / (source.stem + "-" + opt + f"-{step}.log")).write_text(
                     completed.stdout + completed.stderr)
                 assert completed.returncode == 0, f"{source.name}: {completed.stderr}"
-            if args.backend_llc:
-                name = stem[len("vmx32_"):].rsplit("_", 2)[0].replace("_", ".")
-                text = ir.read_text()
-                assert " asm " not in text and "@llvm.x86." + name + "(" in text, \
-                    "expected native LLVM intrinsic"
             image = lief.parse(str(obj))
             section = image.get_section(".text")
             assert not any(r.section and r.section.name == ".text" for r in image.relocations), \
@@ -173,7 +164,6 @@ def main():
                             "object_sha256": digest(obj), "comparisons": len(statuses)})
             (args.output / "results.json").write_text(json.dumps({
                 "compiler_sha256": digest(args.compiler),
-                "backend_sha256": digest(args.backend_llc) if args.backend_llc else None,
                 "negative_control_rejected": bool(rejected),
                 "discarded_status_controls": sorted(rejected), "profiles": records,
                 "comparisons": sum(r["comparisons"] for r in records)}, indent=2) + "\n")

@@ -201,6 +201,110 @@ TEST_P(MIPSDSP, ExpansionLiteralsMatchPinnedTargetAndPreserveControl) {
 #endif
 }
 
+enum class WordOperation {
+#define MIPS_DSP_WORD(Name, Word) Name,
+#include "MIPSDSPWordFixtures.def"
+};
+TEST_P(MIPSDSP, WordCarrySaturationPredicatesAndPicksPreserveOtherState) {
+  const struct {
+    WordOperation Kind;
+    uint32_t Word;
+  } Cases[] = {
+#define MIPS_DSP_WORD(Name, Word) {WordOperation::Name, Word},
+#include "MIPSDSPWordFixtures.def"
+  };
+  auto I = dspImage(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(I));
+  const auto Signed = [](uint32_t V) -> int64_t {
+    return V & 0x80000000 ? int64_t(V) - (INT64_C(1) << 32) : V;
+  };
+  for (const auto &C : Cases)
+    for (unsigned RD : {0u, 2u, 4u, 5u, 31u})
+      for (uint32_t A :
+           {0u, 1u, 0x7fffffffu, 0x80000000u, 0xffffffffu, 0x01234567u})
+        for (uint32_t B :
+             {0u, 1u, 0x7fffffffu, 0x80000000u, 0xffffffffu, 0x89abcdefu})
+          for (uint32_t Control : {0u, 0x0fff7fbfu, 0x05ab51a5u, 0x0a002000u}) {
+            const bool Compare = C.Kind >= WordOperation::Equal &&
+                                 C.Kind <= WordOperation::LessEqual;
+            const bool Pure = C.Kind == WordOperation::ModSub ||
+                              C.Kind >= WordOperation::PickBytes;
+            uint32_t Expected = 0, State = Control;
+            if (C.Kind == WordOperation::AddCarry) {
+              uint64_t Sum = uint64_t(A) + B;
+              Expected = Sum;
+              State = (State & ~0x2000u) | ((Sum >> 32) << 13);
+            } else if (C.Kind <= WordOperation::UseCarry) {
+              int64_t Sum = C.Kind == WordOperation::SubSat
+                                ? Signed(A) - Signed(B)
+                                : Signed(A) + Signed(B);
+              if (C.Kind == WordOperation::UseCarry)
+                Sum += (Control >> 13) & 1;
+              if (Sum < INT32_MIN || Sum > INT32_MAX)
+                State |= 0x100000;
+              Expected = C.Kind == WordOperation::UseCarry
+                             ? uint32_t(Sum)
+                             : uint32_t(std::clamp<int64_t>(Sum, INT32_MIN,
+                                                            INT32_MAX));
+            } else if (C.Kind == WordOperation::ModSub) {
+              Expected = A ? A - (B & 255) : (B >> 8) & 65535;
+            } else {
+              const unsigned Bits =
+                  C.Kind == WordOperation::PickHalves ? 16 : 8;
+              if (Compare)
+                State &= ~0x0f000000u;
+              for (unsigned Lane = 0; Lane < 32 / Bits; ++Lane) {
+                const unsigned Mask = (1u << Bits) - 1;
+                const auto X = (A >> (Lane * Bits)) & Mask,
+                           Y = (B >> (Lane * Bits)) & Mask;
+                if (Compare) {
+                  const bool Test = C.Kind == WordOperation::Equal  ? X == Y
+                                    : C.Kind == WordOperation::Less ? X < Y
+                                                                    : X <= Y;
+                  State |= uint32_t(Test) << (24 + Lane);
+                } else
+                  Expected |= ((Control >> (24 + Lane)) & 1 ? X : Y)
+                              << (Lane * Bits);
+              }
+            }
+            NdOpEmulator E(I);
+            E.setStrictMode(true);
+            E.setRegister(mipsreg::A0, A);
+            E.setRegister(mipsreg::A1, B);
+            E.setRegister(mipsreg::DSPControl, Control);
+            ASSERT_TRUE(executeDSP(D, GetParam(),
+                                   C.Word | (Compare ? 0 : RD << 11), E));
+            if (!Compare && RD)
+              EXPECT_EQ(E.getRegister(mipsreg::r(RD)), Expected);
+            EXPECT_EQ(E.getRegister(mipsreg::DSPControl),
+                      Pure ? Control : State);
+          }
+  for (const auto &C : Cases) {
+    const bool Compare =
+        C.Kind >= WordOperation::Equal && C.Kind <= WordOperation::LessEqual;
+    const auto Word = C.Word | (Compare ? 0 : 2 << 11);
+    for (unsigned Missing : {mipsreg::A0, mipsreg::A1, mipsreg::DSPControl}) {
+      NdOpEmulator E(I);
+      E.setStrictMode(true);
+      E.setRegister(mipsreg::V0, 99);
+      if (Missing != mipsreg::A0)
+        E.setRegister(mipsreg::A0, 7);
+      if (Missing != mipsreg::A1)
+        E.setRegister(mipsreg::A1, 3);
+      if (Missing != mipsreg::DSPControl)
+        E.setRegister(mipsreg::DSPControl, 0x05ab51a5);
+      const bool NoControlNeeded =
+          C.Kind == WordOperation::ModSub && Missing == mipsreg::DSPControl;
+      EXPECT_EQ(executeDSP(D, GetParam(), Word, E), NoControlNeeded);
+      if (!NoControlNeeded)
+        EXPECT_EQ(E.getRegister(mipsreg::V0), 99u);
+      if (Missing != mipsreg::DSPControl)
+        EXPECT_EQ(E.getRegister(mipsreg::DSPControl), 0x05ab51a5u);
+    }
+  }
+}
+
 TEST_P(MIPSDSP, SelectorsPreserveUnselectedFieldsAndIgnoreHighBits) {
   auto Image = dspImage(GetParam());
   Decoder Decode;

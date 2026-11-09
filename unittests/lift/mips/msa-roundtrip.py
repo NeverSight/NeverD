@@ -17,6 +17,7 @@ import sys
 
 import roundtrip
 from unicorn import mips_const as mips
+from unicorn.unicorn_py3.unicorn import uclib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 from mips_validation_artifacts import MIPSValidationArtifacts
@@ -25,14 +26,17 @@ VECTOR_FUNCTIONS = ("msa_add_b", "msa_add_h", "msa_add_d", "msa_sub_b", "msa_sub
                     "msa_sub_w", "msa_sub_d", "msa_and", "msa_or", "msa_nor", "msa_xor") + tuple(
     f"msa_{operation}_{width}" for operation in (
         "ceq", "clt_s", "clt_u", "cle_s", "cle_u", "max_s", "max_u", "min_s", "min_u",
-        "sll", "sra", "srl", "bclr", "bset", "bneg", "mul", "madd", "msub", "max_a", "min_a")
+        "sll", "sra", "srl", "bclr", "bset", "bneg", "mul", "madd", "msub", "max_a", "min_a",
+        "add_a", "adds_a", "adds_s", "adds_u", "subs_s", "subs_u", "ave_s", "ave_u", "aver_s", "aver_u")
     for width in ("b", "h", "w", "d"))
+VECTOR_FUNCTIONS += tuple(f"msa_{op}_same_{w}" for op in ("add_a", "adds_a") for w in ("b", "h", "w", "d"))
 FUNCTIONS = tuple(f"msa_lane{i}" for i in range(4)) + ("msa_mix", "msa_store", "msa_return_slot") + VECTOR_FUNCTIONS
 INPUTS = [(0, 0, 0, 0), (0xffffffff, 0x7fffffff, 0x80000000, 1),
           (0x11223344, 0x55667788, 0x99aabbcc, 0xddeeff00), (1, 2, 3, 4), (0, 1, 0xffffffff, 0), (0, 0x80000000, 0, 0x80000000)]
 # The first D count is d | (b << 32); the first input has sign bit c[31].
 INPUTS += [(0, 0xffffffff, 0x80000000, count)
            for count in (0, 63, 64, 65, 127)]
+INPUTS += [(0, 0, 0x80000000, 0), (0, 0x80808080, 0x80008000, 0x80000000)]
 rng = random.Random(0x4d5341)
 INPUTS += [tuple(rng.getrandbits(32) for _ in range(4)) for _ in range(12)]
 SAVED = {index: (0x1234000000000000 | (index << 32) | (0x87654300 + index))
@@ -50,7 +54,29 @@ def expected(function, arguments, little):
         left = sum(v << (32 * i) for i, v in enumerate((b, c, d, b ^ d)))
         right = sum(v << (32 * i) for i, v in enumerate((d, b, c, c ^ d)))
         operation = function.removeprefix("msa_")
-        if operation.startswith(("sll_", "sra_", "srl_", "bclr_", "bset_", "bneg_", "mul_", "madd_", "msub_")):
+        if "_same_" in operation:
+            right = left
+            operation = operation.replace("_same_", "_")
+        if operation.startswith(("add_a_", "adds_", "subs_", "ave_", "aver_")):
+            bits = {"b": 8, "h": 16, "w": 32, "d": 64}[operation[-1]]
+            mask, value = (1 << bits) - 1, 0
+            minimum, maximum = -(1 << (bits - 1)), (1 << (bits - 1)) - 1
+            for shift in range(0, 128, bits):
+                x, y = (left >> shift) & mask, (right >> shift) & mask
+                sx = x - (1 << bits) if x > maximum else x
+                sy = y - (1 << bits) if y > maximum else y
+                op = operation[:-2]
+                if op in ("add_a", "adds_a"):
+                    lane = abs(sx) + abs(sy)
+                    if op == "adds_a": lane = min(maximum, lane)
+                elif op in ("adds_s", "subs_s"):
+                    lane = max(minimum, min(maximum, sx + sy if op == "adds_s" else sx - sy))
+                elif op in ("adds_u", "subs_u"):
+                    lane = max(0, min(mask, x + y if op == "adds_u" else x - y))
+                else:
+                    lane = ((sx + sy if op.endswith("_s") else x + y) + int(op.startswith("aver"))) // 2
+                value |= (lane & mask) << shift
+        elif operation.startswith(("sll_", "sra_", "srl_", "bclr_", "bset_", "bneg_", "mul_", "madd_", "msub_")):
             bits = {"b": 8, "h": 16, "w": 32, "d": 64}[operation[-1]]
             mask, value = (1 << bits) - 1, 0
             for shift in range(0, 128, bits):
@@ -129,7 +155,9 @@ def observe(path, function, arguments, little):
 def run(args, artifacts):
     fixture = Path(__file__).with_name("msa.S")
     report = {"complete": False, "passed": [], "failures": [],
-              "fixture_sha256": digest(fixture), "neverd_sha256": digest(args.neverd)}
+              "fixture_sha256": digest(fixture), "neverd_sha256": digest(args.neverd),
+              "reference_source_revision": subprocess.check_output(["git", "-C", str(Path(__file__).resolve().parents[3] / "third_party/unicorn"), "rev-parse", "HEAD"], text=True).strip(),
+              "reference_library_sha256": digest(Path(uclib._name))}
     artifacts.write("results.json", report)
     resource = subprocess.check_output([str(args.clang), "-print-resource-dir"], text=True).strip()
     headers = artifacts.work / "includes"

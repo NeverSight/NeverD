@@ -182,6 +182,82 @@ TEST(SymMBAFiniteSelection, CompletePredicateTreesRecoverAShiftedBit) {
       }
 }
 
+TEST(SymMBAFiniteSelection, NestedTablesKeepTheirValueSetForEnclosingProofs) {
+  // (p ? 15 : 127) + T is one of 31, 79, 143, 191 or 255 for T over
+  // {16, 64, 128}, so its XOR with 3 is never 1. Reading T as shifted bits
+  // first hides that value set from the enclosing equality.
+  SymContext C;
+  const auto Index = C.mkVar("index", 8), P = C.mkVar("p", 1);
+  constexpr uint64_t Keys[] = {3, 1, 5, 4, 0, 2},
+                     Values[] = {16, 16, 128, 64, 64, 64};
+  auto Table = C.mkConst(8, 128);
+  for (unsigned I = 6; I-- > 0;)
+    Table = C.mkIte(C.mkEq(Index, C.mkConst(8, Keys[I])),
+                    C.mkConst(8, Values[I]), Table);
+  const auto Sum =
+      C.mkAdd(C.mkIte(P, C.mkConst(8, 15), C.mkConst(8, 127)), Table);
+  const auto Original = C.mkEq(C.mkConst(8, 1), C.mkXor(C.mkConst(8, 3), Sum));
+  for (const auto &Options : {options(), MBAOptions{}}) {
+    const auto R = simplifyMBADeep(C, Original, Options);
+    EXPECT_EQ(R.Expr, C.mkFalse()) << C.toString(R.Expr);
+  }
+}
+
+TEST(SymMBAFiniteSelection, RootTableReadingCompetesWithTheMeasuredRoot) {
+  // Measuring this root removes its repeated tests and keeps two selections.
+  // The literal-field reading of the same tree is longer and must not
+  // replace that result.
+  SymContext C;
+  const auto P = C.mkVar("p", 1), Q = C.mkVar("q", 1);
+  const auto Test =
+      C.mkEq(C.mkMul(C.mkConst(8, 64), C.mkZExt(Q, 8)), C.mkZExt(P, 8));
+  auto Lit = [&](int64_t V) { return C.mkConst(8, uint64_t(V)); };
+  const auto Original = C.mkIte(
+      Test, C.mkIte(Test, Lit(9), C.mkIte(Test, Lit(33), Lit(-127))),
+      C.mkIte(Test, C.mkIte(Test, Lit(3), Lit(1)), C.mkIte(P, Lit(1), Lit(5))));
+  const auto Measured = C.mkIte(Test, Lit(9), C.mkIte(P, Lit(1), Lit(5)));
+  const auto R = simplifyMBADeep(C, Original, options());
+  EXPECT_LE(C.readability(R.Expr), C.readability(Measured))
+      << C.toString(R.Expr);
+  neverd::solver::BitVectorSolver Proof(C);
+  EXPECT_EQ(Proof.check(C.mkNe(Original, R.Expr)),
+            neverd::solver::SatResult::Unsat);
+}
+
+TEST(SymMBAFiniteSelection, RepeatedTestsNeedNoTableReading) {
+  // Measuring `p ? (p ? -19 : 2) : 96` drops the repeated test. Reading the
+  // tree as fields first would spend most of a small budget on the longer
+  // `96 | -115 * zext(p)`.
+  SymContext C;
+  const auto P = C.mkVar("p", 1);
+  auto Lit = [&](int64_t V) { return C.mkConst(8, uint64_t(V)); };
+  const auto Original = C.mkIte(P, C.mkIte(P, Lit(-19), Lit(2)), Lit(96));
+  for (unsigned Work : {256u, 65536u}) {
+    SCOPED_TRACE(Work);
+    auto O = options();
+    O.MaxWork = Work;
+    const auto R = simplifyMBADeep(C, Original, O);
+    EXPECT_EQ(R.Expr, C.mkIte(P, Lit(-19), Lit(96))) << C.toString(R.Expr);
+    EXPECT_LT(R.Work, 64u);
+  }
+}
+
+TEST(SymMBAFiniteSelection, OneConditionSelectionsKeepTheirSpelling) {
+  // A SIMD lane mask `c ? 0xFF : 0` and a two-case ordinal chain are already
+  // their shortest source spellings. Read as fields, the lane mask prints as
+  // `(uint8_t)(0 - (uint32_t)c)`.
+  SymContext C;
+  const auto X = C.mkVar("x", 8), Y = C.mkVar("y", 8);
+  const auto Lane = C.mkIte(C.mkSlt(X, Y), C.mkConst(8, 0xFF), C.mkConst(8, 0));
+  const auto Chain = C.mkIte(C.mkEq(X, C.mkConst(8, 0)), C.mkConst(32, 7),
+                             C.mkIte(C.mkEq(X, C.mkConst(8, 1)),
+                                     C.mkConst(32, 11), C.mkConst(32, 99)));
+  for (const auto Original : {Lane, Chain}) {
+    const auto R = simplifyMBADeep(C, Original, options());
+    EXPECT_EQ(R.Expr, Original) << C.toString(R.Expr);
+  }
+}
+
 TEST(SymMBAFiniteSelection, FullOrdinalPrefixStillRetainsItsOutsideDefault) {
   SymContext C;
   const auto Index = C.mkVar("index", 8);

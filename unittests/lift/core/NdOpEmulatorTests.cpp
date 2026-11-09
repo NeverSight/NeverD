@@ -20,6 +20,35 @@ namespace {
 using namespace neverd;
 using namespace neverd::ndop_emulator_test;
 
+TEST(NdOpEmulator, SelectRejectsUnwritableOutputAndMismatchedArms) {
+  BinaryImage Image;
+  Image.Arch = Arch::MIPS32EL;
+  Image.Bits = Bitness::Bits32;
+  for (unsigned Case = 0; Case < 5; ++Case) {
+    NdOpEmulator E(Image);
+    E.setStrictMode(true);
+    E.setRegister(0x9000, 99);
+    LowOp Op;
+    Op.Opcode = NdOp::SELECT;
+    Op.Output = NdVar::tmp(0x9000, 4);
+    Op.addInput(NdVar::cst(1, 1));
+    Op.addInput(NdVar::cst(7, 4));
+    Op.addInput(NdVar::cst(8, 4));
+    if (Case == 0)
+      Op.Output = NdVar::cst(0x9000, 4);
+    if (Case == 1)
+      Op.Output.Size = 0;
+    if (Case == 2)
+      Op.Inputs[1].Size = 8;
+    if (Case == 3)
+      Op.Inputs[2].Size = 1;
+    if (Case == 4)
+      Op.NumInputs = 2;
+    EXPECT_FALSE(E.step(Op));
+    EXPECT_EQ(E.getRegister(0x9000), 99u);
+  }
+}
+
 TEST_F(NdOpEmulatorTest, BasicArithmetic) {
   NdOpEmulator Emu(Img);
   Emu.setRegister(0, 10);
@@ -93,6 +122,68 @@ TEST_F(NdOpEmulatorTest,
             EXPECT_EQ(Emu.getRegister(Op.Output.Offset), Expected);
         }
     }
+}
+
+TEST_F(NdOpEmulatorTest, SelectRequiresOnlyConditionAndChosenCompleteValue) {
+  for (uint16_t Width : {1, 2, 4, 8, 16})
+    for (unsigned Chosen : {1u, 2u})
+      for (unsigned Missing : {0u, Chosen})
+        for (unsigned Available : {0u, unsigned(Width - 1)}) {
+          NdOpEmulator E(Img);
+          E.setStrictMode(true);
+          LowOp Op;
+          Op.Opcode = NdOp::SELECT;
+          Op.Output = NdVar::reg(0x90, Width);
+          Op.addInput(NdVar::reg(0x60, 4));
+          Op.addInput(NdVar::reg(0x70, Width));
+          Op.addInput(NdVar::tmp(0x80, Width));
+          std::vector<uint8_t> Before(Width, 0xa5), Value(Width);
+          for (unsigned I = 0; I != Width; ++I)
+            Value[I] = 11 + I * 7;
+          E.setRegisterBytes(Op.Output.Offset, Before);
+          if (Missing != 0)
+            E.setRegister(0x60, Chosen == 1);
+          if (Missing != Chosen)
+            E.setRegisterBytes(Op.Inputs[Chosen].Offset, Value);
+          else if (Available)
+            E.setRegisterBytes(Op.Inputs[Chosen].Offset,
+                               llvm::ArrayRef(Value).take_front(Available));
+          EXPECT_FALSE(E.step(Op));
+          EXPECT_EQ(E.getRegisterBytes(Op.Output.Offset), Before);
+          E.setRegister(0x60, Chosen == 1);
+          E.setRegisterBytes(Op.Inputs[Chosen].Offset, Value);
+          ASSERT_TRUE(E.step(Op)); // unchosen arm was never supplied
+          auto Got = E.getRegisterBytes(Op.Output.Offset);
+          ASSERT_TRUE(Got);
+          EXPECT_TRUE(std::equal(Value.begin(), Value.end(), Got->begin()));
+        }
+}
+
+TEST_F(NdOpEmulatorTest, SelectDoesNotObserveUnknownUnchosenArm) {
+  Img.Arch = Arch::MIPS32;
+  Img.Bits = Bitness::Bits32;
+  NdOpEmulator E(Img);
+  E.setStrictMode(true);
+  LowOp Unknown;
+  Unknown.Opcode = NdOp::INTRINSIC;
+  Unknown.Output = NdVar::reg(0x70, 4);
+  Unknown.addInput(
+      NdVar::cst(uint64_t(Intrinsic::MIPSUnpredictable), sizeof(Intrinsic)));
+  ASSERT_TRUE(E.step(Unknown));
+  LowOp Op;
+  Op.Opcode = NdOp::SELECT;
+  Op.Output = NdVar::reg(0x90, 4);
+  Op.addInput(NdVar::cst(0, 1));
+  Op.addInput(Unknown.Output);
+  Op.addInput(NdVar::cst(123, 4));
+  ASSERT_TRUE(E.step(Op));
+  EXPECT_EQ(E.getRegister(0x90), 123u);
+  Op.Inputs[0] = NdVar::cst(1, 1);
+  EXPECT_FALSE(E.step(Op));
+  EXPECT_EQ(E.getRegister(0x90), 123u);
+  Op.Inputs[0] = Unknown.Output;
+  EXPECT_FALSE(E.step(Op));
+  EXPECT_EQ(E.getRegister(0x90), 123u);
 }
 
 TEST_F(NdOpEmulatorTest, SubAndShift) {

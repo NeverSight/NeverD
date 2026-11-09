@@ -65,13 +65,26 @@ python3 scripts/verify_arm64e_native.py run \
 ```
 
 The runner requires the probe's exact current revision and source hashes. It
-checks the twelve registered CTest commands before execution, records the owning
+checks the sixteen registered CTest commands before execution, records the owning
 test binary hash and runs with the registered CTest deadlines. Every chained and
 threaded-input O0/O2 case must execute successfully: authenticated calls and signed
 compact unwind, native DWARF catches/cleanup, and relocated original signed
 language frames. Missing, duplicate, foreign, failed or skipped cases fail the
 qualification even if CTest itself returns success. Temporary fixture storage
 is private to the invocation and is removed afterward.
+
+The matrix additionally requires four `PublishedEntriesExecute` cases at O0/O2
+with compact/DWARF language records. These use the native publication API,
+check failed-receipt rollback and exclusive output creation, and enter the new
+authenticated call/catch/cleanup functions through the original addresses.
+`native_object_publication_qualified` names this additional native object
+contract. The matrix now requires sixteen cases with no failures or skips.
+
+Publication passes the admitted input CodeDirectory page size explicitly to
+`codesign`. Host signing defaults can differ from the compiler linker's defaults;
+the transaction keeps its exact page-size postcondition. The signer regression
+uses real `codesign` to check both 4 KiB and 16 KiB signatures without executing
+the fixture.
 
 `native_installer_call_unwind_qualified` covers this native installation matrix.
 General whole-image publication keeps its separate false qualification field;
@@ -131,9 +144,28 @@ checks that denial, and its
 selects userspace fixups. Every PAC and language control runs under the declared
 launcher. The report records `fixup_loader`, the SDK syscall number, profile and
 launcher; an unsuccessful or ambiguous SDK query fails before execution.
+The [maintained verifier run](https://github.com/gmh5225/test_mac_intel/actions/runs/42659921245)
+passed all six controls in each of the system/dlopen and userspace/exec profiles
+on both hosts, with exact source/report identities in the page-in evidence.
 The default `system` profile retains its observed failure. The installer still
 requires its matching system/dlopen probe, and neither profile qualifies a
 rebuilt image or the missing post-r6 MC publication path.
+
+The [compiler ABI comparison](evidence/arm64e-compiler-abi-2026-11-10.json)
+records nine compiler-only observations on each current native host. Both Apple
+Clang 21 toolchains produce the following headers from the same source:
+
+| Compiler profile | Object subtype | Dylib subtype | Executable subtype |
+| --- | --- | --- | --- |
+| Default or explicit ABI0 | `0x80000002` | `0x80000002` | `0x81000002` |
+| Explicit ABI1 | `0x81000002` | `0x80000002`, entry discarded | Link failure |
+
+In the explicit ABI1 linked cases, the linker reports that it ignored the
+object. A successful dylib link therefore does not establish retained code or
+ABI compatibility. Reports bind the compiler, command traces, disassembly and
+product hashes; all produced objects and images were removed. No product was
+executed. Native executable publication still needs a qualified ABI handoff;
+the installer's exact object/image subtype check remains in place.
 
 A supplemental linker diagnostic did not stop when `ld-classic` lookup failed
 and therefore does not establish legacy threaded execution. Xcode 27 no longer

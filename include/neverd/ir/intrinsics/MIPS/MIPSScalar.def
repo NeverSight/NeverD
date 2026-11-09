@@ -15,6 +15,10 @@
 #ifndef NEVERD_MIPS_SCALAR_TEXT
 #define NEVERD_MIPS_SCALAR_TEXT(Name, Text)
 #endif
+#ifndef NEVERD_MIPS_MERGE_STORE
+#define NEVERD_MIPS_MERGE_STORE(Id, Value, Opcode, Bytes, Left, CName)         \
+  NEVERD_MIPS_SCALAR_INTRINSIC(Id, Value, CName)
+#endif
 
 NEVERD_MIPS_MERGE_LOAD(MIPSLwl, 16000, 0x22, 4, true, "neverd_mips_lwl")
 NEVERD_MIPS_MERGE_LOAD(MIPSLwr, 16001, 0x26, 4, false, "neverd_mips_lwr")
@@ -31,6 +35,8 @@ NEVERD_MIPS_SCALAR_INTRINSIC(MIPSWriteDSPControl, 16008,
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSDivWord, 16009, "neverd_mips_div_word")
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSDivUnsignedWord, 16010,
                              "neverd_mips_div_unsigned_word")
+NEVERD_MIPS_MERGE_STORE(MIPSSwl, 16011, 0x2a, 4, true, "neverd_mips_swl")
+NEVERD_MIPS_MERGE_STORE(MIPSSwr, 16012, 0x2e, 4, false, "neverd_mips_swr")
 
 NEVERD_MIPS_SCALAR_TEXT(kMalformedScalar,
                         "invalid MIPS scalar intrinsic operand/output contract")
@@ -42,5 +48,6 @@ NEVERD_MIPS_SCALAR_TEXT(kPartialLwrRequiresWord,
                         "an explicit CPU policy")
 
 #undef NEVERD_MIPS_MERGE_LOAD
+#undef NEVERD_MIPS_MERGE_STORE
 #undef NEVERD_MIPS_SCALAR_INTRINSIC
 #undef NEVERD_MIPS_SCALAR_TEXT
