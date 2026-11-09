@@ -1033,7 +1033,14 @@ overlap. Non-identity alignment masks retain their existing conservative result.
 A complete set of successful heap-derived numeric returns names the one actual
 returned value with a captured identity and enclosing numeric bounds. Ordinary
 summaries, stored return carriers, and scalar replay share the heap lower-bound
-eligibility rule. An upper endpoint outside the heap region does not erase the
+eligibility rule. A full-width stored return carrier is named before the
+canonical store in both ordinary summaries and acyclic fixed-cell replay.
+Replayed definitions are rebound through every nested call site, so repeated
+calls do not equate their independently computed results. The store and its
+actual returned value retain one identity, including conditional stores selected
+by a non-null check. Subsequent writes and register definitions invalidate these
+conditions through the ordinary transfer owner. An upper endpoint outside the
+heap region does not erase the
 value's identity or prove that every possible value is a mapped pointer. Its
 fields therefore remain conditional on that return when branches merge. A null
 alternative retains the existing conditional-definition rule: choosing the null

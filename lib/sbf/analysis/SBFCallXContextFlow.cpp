@@ -955,6 +955,9 @@ public:
   llvm::Expected<CallXContextReport> run();
 
 private:
+  using CaptureBinding =
+      llvm::function_ref<llvm::Expected<RegisterValue>(RegisterValue)>;
+
   llvm::Expected<FunctionContext *>
   summarize(size_t Entry, const ContextState &Input, bool Generic = false,
             CallXInputGeneralization *Generalization = nullptr,
@@ -985,6 +988,10 @@ private:
   llvm::Expected<RegisterValue> captureAddress(size_t Owner, size_t Slot,
                                                uint64_t Source,
                                                UnsignedValueRange Bounds);
+  llvm::Error captureStoredReturn(const FunctionContext &Owner,
+                                  const MedInstruction &Instruction,
+                                  ContextState &State,
+                                  CaptureBinding Bind = nullptr);
   llvm::Error collectEntryPrefixes(CallXContextReport &Report);
   void reclaimContext(FunctionContext &Context,
                       std::vector<size_t> *Unreferenced = nullptr,
@@ -1017,7 +1024,8 @@ private:
   };
   llvm::Expected<std::optional<MemoryPathInstantiation>>
   instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
-                        const ContextState &Input, bool FixedMemory = false);
+                        const ContextState &Input, bool FixedMemory,
+                        CaptureBinding Bind);
   llvm::Expected<bool> callTarget(FunctionContext &Context,
                                   const MedInstruction &Instruction,
                                   ContextState &State, bool Collect);
@@ -1987,6 +1995,40 @@ ContextFlow::captureAddress(size_t Owner, size_t Slot, uint64_t Source,
   CapturedAddresses->push_back(Bounds);
   CaptureOwners.push_back(Owner);
   return RegisterValue{RegisterValue::Kind::SymbolicAddress, ID, 0};
+}
+
+llvm::Error ContextFlow::captureStoredReturn(const FunctionContext &Owner,
+                                             const MedInstruction &Instruction,
+                                             ContextState &State,
+                                             CaptureBinding Bind) {
+  if (!StoredReturnValues[Instruction.Slot])
+    return llvm::Error::success();
+  const unsigned Source = Instruction.Src;
+  const auto Value = State.Registers[Source].singleton();
+  if (Value.ValueKind != RegisterValue::Kind::UnsignedRange ||
+      !hasHeapAddressLowerBound(Value.Value))
+    return llvm::Error::success();
+  // Name the stored value before transfer so the cell and later return share
+  // one identity. Replayed paths bind that definition through each call site;
+  // two invocations of the same store must not name the same runtime value.
+  auto Capture = captureAddress(Owner.ID, Instruction.Slot, Source,
+                                *unsignedValueRange(Value));
+  if (!Capture)
+    return Capture.takeError();
+  if (Bind) {
+    Capture = Bind(*Capture);
+    if (!Capture)
+      return Capture.takeError();
+  }
+  const auto Origin = State.Origins[Source].singleton();
+  for (unsigned R = 0; R < kRegisterCount; ++R)
+    if (R == Source ||
+        (hasValueIdentity(Origin) && State.Origins[R].singleton() == Origin)) {
+      State.Registers[R] = *Capture;
+      State.Origins[R] = *Capture;
+    }
+  State.defineCapture(Capture->Value);
+  return llvm::Error::success();
 }
 
 llvm::Error ContextFlow::computeInputDependencies() {
@@ -3784,8 +3826,8 @@ llvm::Expected<bool> ContextFlow::call(FunctionContext &Context,
 /// known successors. Opaque calls and unproven cycles establish no result.
 llvm::Expected<std::optional<ContextFlow::MemoryPathInstantiation>>
 ContextFlow::instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
-                                   const ContextState &Input,
-                                   bool FixedMemory) {
+                                   const ContextState &Input, bool FixedMemory,
+                                   CaptureBinding Bind) {
   const size_t EntrySlot = Program.Med.Blocks[Entry].StartSlot;
   if (ActiveEntries.contains(EntrySlot) ||
       ActiveEntries.size() >= Program.Config.MaxCallDepth - 1)
@@ -3846,7 +3888,8 @@ ContextFlow::instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
             AlternativeCell->Address, Value,
             static_cast<unsigned>(AlternativeCell->Size));
       }
-      auto Path = instantiateMemoryPath(Owner, Entry, Alternative, FixedMemory);
+      auto Path =
+          instantiateMemoryPath(Owner, Entry, Alternative, FixedMemory, Bind);
       if (!Path)
         return Path.takeError();
       if (!*Path)
@@ -3935,6 +3978,10 @@ ContextFlow::instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
     return llvm::Error::success();
   };
   State.InputExpressions = {};
+  if (FixedMemory) {
+    State.Nullable.reset();
+    State.Tagged.reset();
+  }
   pushAbstractFrame(State, Program);
   pushAbstractFrame(State.Origins, Program);
   struct PathState {
@@ -4046,8 +4093,17 @@ ContextFlow::instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
         if (Generic == GenericContexts.end() || !Generic->second->Complete ||
             (!FixedMemory && !Generic->second->HasMemoryTransfer))
           return std::optional<MemoryPathInstantiation>{};
+        const auto BindChild =
+            [&](RegisterValue Value) -> llvm::Expected<RegisterValue> {
+          auto Local =
+              captureAddress(GenericContexts.at(Entry)->ID, Instruction->Slot,
+                             Value.Value, (*CapturedAddresses)[Value.Value]);
+          if (!Local)
+            return Local.takeError();
+          return Bind(*Local);
+        };
         auto Child = instantiateMemoryPath(Owner, ChildEntry->second, State,
-                                           FixedMemory);
+                                           FixedMemory, BindChild);
         if (!Child)
           return Child.takeError();
         if (!*Child ||
@@ -4107,7 +4163,14 @@ ContextFlow::instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
           State.InputSpills.clear();
           ++Result.Stores;
         }
-        transferValues(*Instruction, State);
+        if (FixedMemory) {
+          if (auto Error = captureStoredReturn(*GenericContexts.at(Entry),
+                                               *Instruction, State, Bind))
+            return std::move(Error);
+          transfer(*Instruction, State, nullptr);
+        } else {
+          transferValues(*Instruction, State);
+        }
       }
       if (auto Error = RetainState())
         return std::move(Error);
@@ -4520,8 +4583,12 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
   if ((CopiesCapturedValue || CopiesKnownFrameRange || UpdatesKnownDescriptor ||
        FixedMemory) &&
       !Edge.LegacyRuntime && !SpecializationBudgetExhausted) {
-    auto Copy =
-        instantiateMemoryPath(Context, Callee->EntryBlock, State, FixedMemory);
+    const auto Bind = [&](RegisterValue Value) {
+      return captureAddress(Context.ID, Instruction.Slot, Value.Value,
+                            (*CapturedAddresses)[Value.Value]);
+    };
+    auto Copy = instantiateMemoryPath(Context, Callee->EntryBlock, State,
+                                      FixedMemory, Bind);
     if (!Copy)
       return Copy.takeError();
     if (*Copy) {
@@ -5318,28 +5385,8 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
       if (Collect && Instruction->Op == Operation::Load) {
         addMemoryReadEffects(Context.ReadEffects, *Instruction, State);
       }
-      if (StoredReturnValues[Slot]) {
-        const unsigned Source = Instruction->Src;
-        const auto Value = State.Registers[Source].singleton();
-        if (Value.ValueKind == RegisterValue::Kind::UnsignedRange &&
-            hasHeapAddressLowerBound(Value.Value)) {
-          // Name the stored value after predecessor ranges have joined. The
-          // store and later return then share one identity, even when several
-          // bounds checks or a covered literal reach this instruction.
-          auto Capture = captureAddress(Context.ID, Slot, Source,
-                                        *unsignedValueRange(Value));
-          if (!Capture)
-            return Capture.takeError();
-          const auto Origin = State.Origins[Source].singleton();
-          for (unsigned R = 0; R < kRegisterCount; ++R)
-            if (R == Source || (hasValueIdentity(Origin) &&
-                                State.Origins[R].singleton() == Origin)) {
-              State.Registers[R] = *Capture;
-              State.Origins[R] = *Capture;
-            }
-          State.defineCapture(Capture->Value);
-        }
-      }
+      if (auto Error = captureStoredReturn(Context, *Instruction, State))
+        return std::move(Error);
       if (Context.Generic)
         if (auto Error = transferInputExpression(*Instruction, State))
           return std::move(Error);
