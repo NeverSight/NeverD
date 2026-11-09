@@ -250,11 +250,19 @@ rules below do, not from taste.
   standard Windows command button (Fluent 2's buttons start at 64 and 96).
   `QDialogButtonBox QPushButton { min-width: 45px; }` is that width less the
   padding and border. OK was 48 pixels beside a 68 pixel Cancel.
-- End a heading too long for its column in an ellipsis. Qt's header defaults
-  to `Qt::ElideNone`, so a centered heading lost both ends ("imary addre");
-  `WorkbenchStyle` sets `Qt::ElideRight` on every header, and a table whose
-  starting widths cut a heading widens those columns to their headings
-  (`keepHeadingsWhole` in Binary comparison), scrolling sideways beyond.
+- Start every column a person can resize at least as wide as its heading,
+  and end a heading that later runs out of room in an ellipsis. Qt's header
+  defaults to `Qt::ElideNone`, so a centered heading lost both ends ("imary
+  addre"). `WorkbenchStyle` sets `Qt::ElideRight` on every header and gives
+  each horizontal one a `HeadingFitter`, which widens an interactive column
+  to its `sectionSizeHint` when the header first shows, when its columns or
+  headings change and when the language changes; a person can still narrow
+  it. Starting widths written for English cut "Architectural state" in x87
+  support and "Analyst disposition" in Offline package review, and a live
+  switch to Japanese cut the Functions list's "Segment".
+- A button that opens a list shows the chevron a combo box draws, inside its
+  own padding (`QPushButton::menu-indicator`), not Fusion's corner triangle,
+  which Edit function's Color and Binary comparison's Regions showed.
 - Known limit: Visual Studio Code dims a menu item's shortcut to 70%, but a
   menu the style sheet paints draws its label and shortcut with one pen
   (`QStyleSheetStyle`, `CE_MenuItem`), so matching it needs the menu painted by
@@ -344,6 +352,47 @@ navigation band's cursor.
   with its reason. To judge a single glyph, compare the share of its drawn
   pixels at full coverage in a capture before and after a change.
 
+## Languages and direction
+
+The workbench speaks eleven languages, Arabic right to left, and switches
+between them while it runs. A review on 2026-11-09 opened every dialog command
+in every language and compared every text of the main window across them.
+
+- Lay out geometry you place by hand left to right, then mirror it with
+  `QStyle::visualRect(layoutDirection(), rect(), r)`. The title bar draws its
+  own controls, so in Arabic it stayed left to right until `TitleBar::arrange`
+  mirrored it: the window controls lead on the left, the icon and the menus
+  on the right. In a painter on a right-to-left widget `Qt::AlignLeft` means
+  the right edge unless it is combined with `Qt::AlignAbsolute`; that pushed
+  the command center's file name out of its box.
+- Wrap a path that stands in right-to-left text in `leftToRight()`
+  (`BidiText.h`, a left-to-right isolate): a Unix path starts with a neutral
+  slash, which otherwise takes the paragraph's direction and moves to the
+  path's end, as Quick start's recent folder read "mnt/data/" in Arabic.
+- Measure a `QMenuBar` from its items, not from its `sizeHint()`. Right to
+  left, it mirrors its items within its current width before measuring them
+  (`QMenuBarPrivate::calcActionRects` in Qt 6.8), so a bar sized from its own
+  hint got two pixels and hid every menu (`menusWidth` in `TitleBar.cpp`).
+- Set again, when the language changes, every text a view writes while it is
+  built: labels, tooltips, placeholders, headings, combo box items, tab and
+  menu titles. Use `keepTranslated(owner, apply)`, which runs `apply` now and
+  on each `QEvent::LanguageChange`, or the view's own `changeEvent`. Without
+  it a live switch left the Pathfinder, Local types, Type libraries, Analysis
+  queries, MCP connections and plugin panes, and the Plugins menu, in the
+  language they started in. A widget another library builds needs the same:
+  the docking title bar's buttons and `QTabBar`'s close buttons word their
+  tooltips only as they are built.
+- Put every translatable string in every catalog, the strings of `.def`
+  tables and of libraries that ship no catalog included. The unwind dialog's
+  21 strings, kept in `UnwindInfo.def`, were in no catalog, so the dialog was
+  English in every language; the docking library's tooltips translate under
+  its own contexts, `KDDockWidgets::QtWidgets::TitleBar` and
+  `KDDockWidgets::Core::TitleBar`. Qt's own dialogs and key names use the
+  `qtbase_<language>.qm` Qt ships. `LanguageSwitchTests` checks a few
+  strings of each such source.
+- Known limit: messages the analysis engine sends, such as why an operand has
+  no structure offset, are English in every language.
+
 ## Resizing is part of the design
 
 Content-heavy dialogs should support ordinary desktop resizing unless the task
@@ -414,6 +463,18 @@ diff does not establish the appearance of a Qt widget.
    same gallery. The offscreen screen is 800 by 600, which narrows a
    `QMessageBox` (its width limit is the screen's width less 480 pixels);
    judge message boxes in the real session.
+9. Survey languages with a throwaway replacement for
+   `tests/WidgetsProbe.cpp`, linked into a private copy of `neverd-gui` and
+   started with `--widgets-test` offscreen on a full-size screen
+   (`QT_QPA_PLATFORM=offscreen:configfile=<json>` with a `screens` entry of
+   1920 by 1080). For each language, call `applyLanguage`, trigger every
+   dialog command, and for each window flag a label narrower than its
+   `minimumSizeHint`, a button narrower than its `sizeHint`, a heading
+   narrower than its `sectionSizeHint`, and a visible menu bar or toolbar
+   extension button; save a capture. Log every text as well, the main
+   window's hidden panes and menus included: a text equal to English in every
+   other language is either missing from the catalogs or written once and
+   never set again, and the catalogs tell which.
 
 When reporting an audit, connect each finding to its consequence and proposed
 change: for example, a timestamp beside the filename hides a build suffix, so
@@ -453,8 +514,12 @@ perfect aesthetics or using decorative effects as a substitute for hierarchy.
   draws a shortcut with its label's pen; `CC_ToolButton` paints a bordered
   tool button without a focus rectangle), `qmessagebox.cpp` (a message box
   is at most the screen's width less 480 pixels), `qheaderview.cpp`
-  (headers default to `Qt::ElideNone`) and `qfusionstyle.cpp`
-  (`PE_FrameFocusRect` draws only with `State_KeyboardFocusChange`).
+  (headers default to `Qt::ElideNone`), `qfusionstyle.cpp`
+  (`PE_FrameFocusRect` draws only with `State_KeyboardFocusChange`),
+  `qmenubar.cpp` (`calcActionRects` mirrors each item within the bar's
+  current width, which `sizeHint()` then measures) and
+  `qoffscreenintegration.cpp` (the `configfile` platform option and its
+  `screens` array).
 - [CSS Color 4: OKLab and OKLCH](https://www.w3.org/TR/css-color-4/#ok-lab)
   — a perceptual space for related categorical colors.
 - Local examples: [QuickStartDialog.cpp](../../../../tools/neverd-gui/app/QuickStartDialog.cpp),

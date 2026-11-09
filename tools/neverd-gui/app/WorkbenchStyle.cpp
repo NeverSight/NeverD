@@ -20,6 +20,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QPainter>
+#include <QPointer>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QScreen>
@@ -40,6 +41,8 @@ constexpr char FileDialogPlaces[] = "sidebar";
 constexpr char FileDialogDetails[] = "treeView";
 /// Marks a detail view whose columns already follow its folders.
 constexpr char FittedColumns[] = "neverdFittedColumns";
+/// Marks a header whose columns keep their headings whole.
+constexpr char FittedHeadings[] = "neverdFittedHeadings";
 
 /// Lets a file dialog's names take the width its size, type and date leave.
 /// Qt sizes those three from samples narrower than what it shows ("128.88
@@ -121,6 +124,84 @@ QRectF focusFrame(const QStyleOption &option, const QWidget *widget) {
       ::neverd::limits::gui_config::kWorkbenchStyleFocusFrameWidth / 2;
   return QRectF(frame).adjusted(inset, inset, -inset, -inset);
 }
+
+/// Keeps each column a person can resize at least as wide as its heading:
+/// when the header first shows, when its columns or headings change and when
+/// the language changes.  A person can still narrow a column afterwards.
+class HeadingFitter final : public QObject {
+public:
+  explicit HeadingFitter(QHeaderView *header)
+      : QObject(header), header_(header) {
+    header->installEventFilter(this);
+    connect(header, &QHeaderView::sectionCountChanged, this,
+            &HeadingFitter::schedule);
+    schedule();
+  }
+
+  bool eventFilter(QObject *, QEvent *event) override {
+    switch (event->type()) {
+    case QEvent::Show:
+      if (!shown_) {
+        shown_ = true;
+        schedule();
+      }
+      break;
+    case QEvent::LanguageChange:
+    case QEvent::FontChange:
+    case QEvent::StyleChange:
+      schedule();
+      break;
+    default:
+      break;
+    }
+    return false;
+  }
+
+private:
+  void schedule() {
+    if (pending_)
+      return;
+    pending_ = true;
+    // After the models answer in the new language and the style sheet sets
+    // the headings' font and padding.
+    QTimer::singleShot(0, this, [this] {
+      pending_ = false;
+      fit();
+    });
+  }
+
+  void fit() {
+    if (model_ != header_->model()) {
+      if (model_)
+        disconnect(model_, nullptr, this, nullptr);
+      model_ = header_->model();
+      if (model_) {
+        connect(model_, &QAbstractItemModel::headerDataChanged, this,
+                &HeadingFitter::schedule);
+        connect(model_, &QAbstractItemModel::modelReset, this,
+                &HeadingFitter::schedule);
+      }
+    }
+    if (!model_)
+      return;
+    for (int logical = 0; logical < header_->count(); ++logical) {
+      if (header_->isSectionHidden(logical) ||
+          header_->sectionResizeMode(logical) != QHeaderView::Interactive)
+        continue;
+      // A last column that stretches takes the size it is given as the least
+      // it shrinks to, so it keeps its heading too, and a table narrower than
+      // its headings scrolls sideways.
+      if (const int heading = header_->sectionSizeHint(logical);
+          header_->sectionSize(logical) < heading)
+        header_->resizeSection(logical, heading);
+    }
+  }
+
+  QHeaderView *header_;
+  QPointer<QAbstractItemModel> model_;
+  bool shown_ = false;
+  bool pending_ = false;
+};
 
 bool drawsMnemonics(const QWidget *widget) {
   return qobject_cast<const QMenuBar *>(widget) ||
@@ -349,9 +430,16 @@ void WorkbenchStyle::polish(QWidget *widget) {
       combo && !qobject_cast<QStyledItemDelegate *>(combo->itemDelegate()))
     combo->setItemDelegate(new QStyledItemDelegate(combo));
   // A heading too long for its column ends in an ellipsis; Qt's header
-  // otherwise centers it and cuts off both of its ends.
-  if (auto *header = qobject_cast<QHeaderView *>(widget))
+  // otherwise centers it and cuts off both of its ends.  A column across a
+  // table starts as wide as its heading, in every language.
+  if (auto *header = qobject_cast<QHeaderView *>(widget)) {
     header->setTextElideMode(Qt::ElideRight);
+    if (header->orientation() == Qt::Horizontal &&
+        !header->property(FittedHeadings).toBool()) {
+      header->setProperty(FittedHeadings, true);
+      new HeadingFitter(header);
+    }
+  }
   // Qt's own file dialog lists folders and files with the icon theme's
   // icons unless it is given others.
   if (auto *files = qobject_cast<QFileDialog *>(widget);
@@ -419,6 +507,16 @@ bool WorkbenchStyle::eventFilter(QObject *watched, QEvent *event) {
                                 : nullptr)
         fitFileColumns(*files, *details);
     }
+    break;
+  case QEvent::LanguageChange:
+    // Qt words a tab's close button only as it builds it.
+    if (auto *tabs = qobject_cast<QTabBar *>(watched))
+      for (int tab = 0; tab < tabs->count(); ++tab)
+        for (const auto side : {QTabBar::LeftSide, QTabBar::RightSide})
+          if (QWidget *button = tabs->tabButton(tab, side);
+              button && button->inherits("CloseButton"))
+            button->setToolTip(
+                QCoreApplication::translate("CloseButton", "Close Tab"));
     break;
   case QEvent::ApplicationStateChange:
     if (QGuiApplication::applicationState() != Qt::ApplicationActive) {

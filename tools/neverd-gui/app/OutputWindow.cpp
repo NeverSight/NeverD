@@ -2,6 +2,7 @@
 
 #include "../ResourceLimits.h"
 #include "Icons.h"
+#include "KeepTranslated.h"
 #include "Resolve.h"
 #include "Session.h"
 #include "Theme.h"
@@ -73,12 +74,14 @@ OutputWindow::OutputWindow(Session &session, QWidget *parent)
   row->setContentsMargins(0, 0, 0, 0);
   row->setSpacing(0);
   language_->setText(QStringLiteral("NeverD"));
-  language_->setToolTip(tr("Command line language: NeverD expressions and "
-                           "commands. Type help for a list."));
   language_->setAutoRaise(true);
   row->addWidget(language_);
-  command_->setPlaceholderText(tr("Expression or command (help)"));
   command_->installEventFilter(this);
+  keepTranslated(*this, [this] {
+    language_->setToolTip(tr("Command line language: NeverD expressions and "
+                             "commands. Type help for a list."));
+    command_->setPlaceholderText(tr("Expression or command (help)"));
+  });
   row->addWidget(command_, 1);
   layout->addLayout(row);
   history_ = QSettings().value(HistoryKey).toStringList();

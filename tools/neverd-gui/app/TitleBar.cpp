@@ -51,6 +51,22 @@ int leftReserve(const QWidget &window, bool withIcon) {
   return withIcon ? ::neverd::limits::gui_config::kTitleBarIconSlot : 0;
 }
 
+/// The width the menus need, in either direction.  QMenuBar mirrors its items
+/// within its current width before measuring them, so a right-to-left bar
+/// narrower than its items reports almost no width and never grows.
+int menusWidth(const QMenuBar &menus) {
+  const QStyle *style = menus.style();
+  int width =
+      2 * (style->pixelMetric(QStyle::PM_MenuBarPanelWidth, nullptr, &menus) +
+           style->pixelMetric(QStyle::PM_MenuBarHMargin, nullptr, &menus));
+  const int spacing =
+      style->pixelMetric(QStyle::PM_MenuBarItemSpacing, nullptr, &menus);
+  for (QAction *action : menus.actions())
+    if (action->isVisible())
+      width += spacing + menus.actionGeometry(action).width();
+  return width;
+}
+
 QColor chrome(const char *name) {
   return Theme::instance().chrome(QLatin1String(name));
 }
@@ -131,7 +147,14 @@ protected:
     const int content = ::neverd::limits::gui_config::kTitleBarLensSize +
                         ::neverd::limits::gui_config::kTitleBarLensGap +
                         metrics.horizontalAdvance(name);
-    const double left = std::round((width() - content) / 2.0);
+    const bool reversed = isRightToLeft();
+    const double start = std::round((width() - content) / 2.0);
+    // The magnifier leads the name: on its left, or on its right in a
+    // right-to-left language.
+    const double left =
+        reversed
+            ? width() - start - ::neverd::limits::gui_config::kTitleBarLensSize
+            : start;
     const double middle = height() / 2.0;
     const QColor ink = titleText(window_);
     painter.setBrush(Qt::NoBrush);
@@ -143,11 +166,15 @@ protected:
         QPointF(left + ::neverd::limits::gui_config::kTitleBarLensSize - 0.5,
                 middle + 5.5));
     painter.setPen(ink);
-    painter.drawText(
-        QRectF(left + ::neverd::limits::gui_config::kTitleBarLensSize +
-                   ::neverd::limits::gui_config::kTitleBarLensGap,
-               0, width(), height()),
-        Qt::AlignLeft | Qt::AlignVCenter, name);
+    const int nameWidth = metrics.horizontalAdvance(name);
+    const double nameLeft =
+        reversed
+            ? left - ::neverd::limits::gui_config::kTitleBarLensGap - nameWidth
+            : left + ::neverd::limits::gui_config::kTitleBarLensSize +
+                  ::neverd::limits::gui_config::kTitleBarLensGap;
+    painter.drawText(QRectF(nameLeft, 0, nameWidth, height()),
+                     Qt::AlignAbsolute | Qt::AlignLeft | Qt::AlignVCenter,
+                     name);
   }
 };
 } // namespace
@@ -275,7 +302,7 @@ QSize TitleBar::sizeHint() const {
                 fontMetrics().horizontalAdvance(window_.windowTitle()) +
                 buttons,
             height};
-  return {leftReserve(window_, true) + menuBar_->sizeHint().width() +
+  return {leftReserve(window_, true) + menusWidth(*menuBar_) +
               2 * ::neverd::limits::gui_config::kTitleBarGap +
               ::neverd::limits::gui_config::kTitleBarCenterMaxWidth + buttons,
           height};
@@ -289,8 +316,10 @@ QSize TitleBar::minimumSizeHint() const {
 }
 
 bool TitleBar::event(QEvent *event) {
-  // The menus' width changes with their language and the window's menus.
-  if (event->type() == QEvent::LayoutRequest)
+  // The menus' width changes with their language and the window's menus, and
+  // the bar mirrors with the language's direction.
+  if (event->type() == QEvent::LayoutRequest ||
+      event->type() == QEvent::LayoutDirectionChange)
     arrange();
   return QWidget::event(event);
 }
@@ -369,8 +398,10 @@ void TitleBar::paintEvent(QPaintEvent *) {
                      ::neverd::limits::gui_config::kTitleBarTitlePadding -
                      titleWidth));
     painter.setPen(titleText(window_));
-    painter.drawText(QRect(x, 0, titleWidth, height()),
-                     Qt::AlignLeft | Qt::AlignVCenter, title);
+    painter.drawText(QStyle::visualRect(layoutDirection(), rect(),
+                                        QRect(x, 0, titleWidth, height())),
+                     Qt::AlignAbsolute | Qt::AlignLeft | Qt::AlignVCenter,
+                     title);
     return;
   }
   if (window_.isFullScreen())
@@ -379,12 +410,15 @@ void TitleBar::paintEvent(QPaintEvent *) {
     painter.setOpacity(InactiveOpacity);
   window_.windowIcon().paint(
       &painter,
-      QRect((::neverd::limits::gui_config::kTitleBarIconSlot -
-             ::neverd::limits::gui_config::kTitleBarIconSize) /
-                2,
-            (height() - ::neverd::limits::gui_config::kTitleBarIconSize) / 2,
-            ::neverd::limits::gui_config::kTitleBarIconSize,
-            ::neverd::limits::gui_config::kTitleBarIconSize));
+      QStyle::visualRect(
+          layoutDirection(), rect(),
+          QRect((::neverd::limits::gui_config::kTitleBarIconSlot -
+                 ::neverd::limits::gui_config::kTitleBarIconSize) /
+                    2,
+                (height() - ::neverd::limits::gui_config::kTitleBarIconSize) /
+                    2,
+                ::neverd::limits::gui_config::kTitleBarIconSize,
+                ::neverd::limits::gui_config::kTitleBarIconSize)));
 }
 
 void TitleBar::resizeEvent(QResizeEvent *event) {
@@ -393,24 +427,32 @@ void TitleBar::resizeEvent(QResizeEvent *event) {
 }
 
 void TitleBar::arrange() {
+  // Lay the bar out left to right, then mirror it for a right-to-left
+  // language: the window controls lead on the left, the icon and the menus on
+  // the right.
+  const auto place = [this](QWidget *child, const QRect &leftToRight) {
+    child->setGeometry(
+        QStyle::visualRect(layoutDirection(), rect(), leftToRight));
+  };
   int right = width();
   for (QAbstractButton *button : {close_, maximize_, minimize_}) {
     if (button->isHidden())
       continue;
     right -= ::neverd::limits::gui_config::kTitleBarButtonWidth;
-    button->setGeometry(
-        right, 0, ::neverd::limits::gui_config::kTitleBarButtonWidth, height());
+    place(button,
+          QRect(right, 0, ::neverd::limits::gui_config::kTitleBarButtonWidth,
+                height()));
   }
   buttonsLeft_ = right;
   if (!menuBar_)
     return;
   const int left = leftReserve(window_, true);
-  const QSize menus = menuBar_->sizeHint();
+  const int menusHeight = menuBar_->sizeHint().height();
   const int menuWidth = std::clamp(
-      menus.width(), 0,
+      menusWidth(*menuBar_), 0,
       std::max(0, right - left - ::neverd::limits::gui_config::kTitleBarGap));
-  menuBar_->setGeometry(left, (height() - menus.height()) / 2, menuWidth,
-                        menus.height());
+  place(menuBar_,
+        QRect(left, (height() - menusHeight) / 2, menuWidth, menusHeight));
   const int start =
       left + menuWidth + ::neverd::limits::gui_config::kTitleBarGap;
   const int end = right - ::neverd::limits::gui_config::kTitleBarGap;
@@ -425,9 +467,12 @@ void TitleBar::arrange() {
   }
   const int x =
       std::clamp((width() - centerWidth) / 2, start, end - centerWidth);
-  commandCenter_->setGeometry(
-      x, (height() - ::neverd::limits::gui_config::kTitleBarCenterHeight) / 2,
-      centerWidth, ::neverd::limits::gui_config::kTitleBarCenterHeight);
+  place(commandCenter_,
+        QRect(x,
+              (height() - ::neverd::limits::gui_config::kTitleBarCenterHeight) /
+                  2,
+              centerWidth,
+              ::neverd::limits::gui_config::kTitleBarCenterHeight));
   commandCenter_->show();
 }
 

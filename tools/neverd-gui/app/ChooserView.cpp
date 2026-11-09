@@ -4,6 +4,7 @@
 #include "AddressSpace.h"
 #include "Icons.h"
 #include "ItemViewActivation.h"
+#include "KeepTranslated.h"
 #include "Session.h"
 #include "ShrinkableRow.h"
 #include "Theme.h"
@@ -758,7 +759,6 @@ ChooserView::ChooserView(Session &session, const AddressSpace &space,
   table_->installEventFilter(this);
   layout->addWidget(table_, 1);
   filter_->setObjectName(QStringLiteral("chooserFilter"));
-  filter_->setPlaceholderText(tr("Quick filter"));
   filter_->setClearButtonEnabled(true);
   filter_->setVisible(false);
   filter_->installEventFilter(this);
@@ -809,7 +809,10 @@ ChooserView::ChooserView(Session &session, const AddressSpace &space,
                     columnChars(format) *
                         (codeFormat(format) ? codeDigit : textDigit)));
   }
-  updateStatus();
+  keepTranslated(*this, [this] {
+    filter_->setPlaceholderText(tr("Quick filter"));
+    updateStatus();
+  });
 }
 
 std::optional<Address> ChooserView::currentAddress() const {

@@ -430,6 +430,23 @@ protected:
     TitleBar::focusInEvent(event);
   }
 
+  void changeEvent(QEvent *event) override {
+    // The docking library words its buttons as it builds them and as their
+    // states change; word them again in a new language.
+    if (event->type() == QEvent::LanguageChange) {
+      if (m_minimizeButton)
+        m_minimizeButton->setToolTip(QCoreApplication::translate(
+            "KDDockWidgets::QtWidgets::TitleBar", "Minimize"));
+      if (m_closeButton)
+        m_closeButton->setToolTip(QCoreApplication::translate(
+            "KDDockWidgets::QtWidgets::TitleBar", "Close"));
+      titleBar()->updateButtons();
+      updateLock();
+      updateMaximize();
+    }
+    TitleBar::changeEvent(event);
+  }
+
   void init() override {
     TitleBar::init();
     if (!titleBar()->floatingWindow())

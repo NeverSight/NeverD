@@ -11,6 +11,7 @@
 #include "ChooserView.h"
 #include "Icons.h"
 #include "ItemViewActivation.h"
+#include "KeepTranslated.h"
 #include "ModelessDialog.h"
 #include "Session.h"
 #include "ShortcutHint.h"
@@ -120,32 +121,20 @@ PathfinderView::PathfinderView(Session &session, const AddressSpace &space,
   auto *commands = new QWidget(this);
   auto *commandLayout = new QHBoxLayout(commands);
   commandLayout->setContentsMargins(0, 0, 0, 0);
-  const auto commandButton = [&](const char *iconName, const QString &text,
-                                 const QKeySequence &key, const char *name) {
+  const auto commandButton = [&](const char *iconName, const char *name) {
     auto *button = new QToolButton(commands);
     button->setObjectName(QString::fromLatin1(name));
     button->setIcon(icon(QString::fromLatin1(iconName)));
-    button->setToolTip(key.isEmpty()
-                           ? text
-                           : QStringLiteral("%1 (%2)").arg(
-                                 text, key.toString(QKeySequence::NativeText)));
-    setShortcutHint(*button, key);
     button->setAutoRaise(true);
     commandLayout->addWidget(button);
     return button;
   };
-  add_ = commandButton("function_create", tr("Add a waypoint"),
-                       listKey(ListKey::Add), "pathfinderAdd");
-  exclude_ = commandButton("pathfinder_exclude", tr("Exclude a function"),
-                           listKey(ListKey::Add), "pathfinderExclude");
-  remove_ = commandButton("function_delete", tr("Remove"),
-                          listKey(ListKey::Remove), "pathfinderRemove");
-  up_ = commandButton("up", tr("Move the waypoint up"), listKey(ListKey::Up),
-                      "pathfinderUp");
-  down_ = commandButton("down", tr("Move the waypoint down"),
-                        listKey(ListKey::Down), "pathfinderDown");
-  clear_ = commandButton("output_clear", tr("Clear the waypoints"),
-                         QKeySequence(), "pathfinderClear");
+  add_ = commandButton("function_create", "pathfinderAdd");
+  exclude_ = commandButton("pathfinder_exclude", "pathfinderExclude");
+  remove_ = commandButton("function_delete", "pathfinderRemove");
+  up_ = commandButton("up", "pathfinderUp");
+  down_ = commandButton("down", "pathfinderDown");
+  clear_ = commandButton("output_clear", "pathfinderClear");
   commandLayout->addStretch(1);
   makeRowShrinkable(*commands);
   layout->addWidget(commands);
@@ -153,8 +142,6 @@ PathfinderView::PathfinderView(Session &session, const AddressSpace &space,
   waypointList_ = new QTreeWidget(this);
   waypointList_->setObjectName(QStringLiteral("pathfinderWaypoints"));
   waypointList_->setColumnCount(Columns);
-  waypointList_->setHeaderLabels(
-      {tr("Function"), tr("Address"), tr("Reference")});
   waypointList_->setUniformRowHeights(true);
   waypointList_->setAllColumnsShowFocus(true);
   waypointList_->setSelectionMode(QAbstractItemView::ExtendedSelection);
@@ -166,10 +153,9 @@ PathfinderView::PathfinderView(Session &session, const AddressSpace &space,
   layout->addWidget(waypointList_, 1);
 
   // Two panels a click on their label opens and closes, as IDA's.
-  const auto panelToggle = [&](const QString &text, const char *name) {
+  const auto panelToggle = [&](const char *name) {
     auto *toggle = new QToolButton(this);
     toggle->setObjectName(QString::fromLatin1(name));
-    toggle->setText(text);
     toggle->setCheckable(true);
     toggle->setProperty("glyphToggle", true);
     toggle->setAutoRaise(true);
@@ -178,15 +164,13 @@ PathfinderView::PathfinderView(Session &session, const AddressSpace &space,
     layout->addWidget(toggle);
     return toggle;
   };
-  exclusionsToggle_ =
-      panelToggle(tr("Exclusions"), "pathfinderExclusionsShown");
+  exclusionsToggle_ = panelToggle("pathfinderExclusionsShown");
   exclusionsPanel_ = new QWidget(this);
   auto *exclusionsLayout = new QVBoxLayout(exclusionsPanel_);
   exclusionsLayout->setContentsMargins(0, 0, 0, 0);
   exclusionList_ = new QTreeWidget(exclusionsPanel_);
   exclusionList_->setObjectName(QStringLiteral("pathfinderExclusions"));
   exclusionList_->setColumnCount(2);
-  exclusionList_->setHeaderLabels({tr("Function"), tr("Address")});
   exclusionList_->setRootIsDecorated(false);
   exclusionList_->setUniformRowHeights(true);
   exclusionList_->setAllColumnsShowFocus(true);
@@ -197,18 +181,18 @@ PathfinderView::PathfinderView(Session &session, const AddressSpace &space,
   exclusionsPanel_->hide();
   layout->addWidget(exclusionsPanel_);
 
-  optionsToggle_ = panelToggle(tr("Options"), "pathfinderOptionsShown");
+  optionsToggle_ = panelToggle("pathfinderOptionsShown");
   optionsPanel_ = new QWidget(this);
   auto *optionsLayout = new QHBoxLayout(optionsPanel_);
   optionsLayout->setContentsMargins(0, 0, 0, 0);
   QSettings settings;
-  dataRefs_ = new QCheckBox(tr("Include data references"), optionsPanel_);
+  dataRefs_ = new QCheckBox(optionsPanel_);
   dataRefs_->setObjectName(QStringLiteral("pathfinderDataRefs"));
   dataRefs_->setChecked(settings.value(DataRefsKey, false).toBool());
-  shortestOnly_ = new QCheckBox(tr("Shortest paths only"), optionsPanel_);
+  shortestOnly_ = new QCheckBox(optionsPanel_);
   shortestOnly_->setObjectName(QStringLiteral("pathfinderShortestOnly"));
   shortestOnly_->setChecked(settings.value(ShortestOnlyKey, false).toBool());
-  auto *depthLabel = new QLabel(tr("Maximum depth:"), optionsPanel_);
+  auto *depthLabel = new QLabel(optionsPanel_);
   maxDepth_ = new QSpinBox(optionsPanel_);
   maxDepth_->setObjectName(QStringLiteral("pathfinderMaxDepth"));
   maxDepth_->setRange(1, ::neverd::limits::gui::kMaxPathfinderDepth);
@@ -323,8 +307,31 @@ PathfinderView::PathfinderView(Session &session, const AddressSpace &space,
           &PathfinderView::scheduleSearch);
   connect(&session_, &Session::unloaded, this, &PathfinderView::unload);
   showWaypoints();
-  showExclusions();
-  showStatus();
+  keepTranslated(*this, [this, depthLabel] {
+    const auto command = [](QToolButton *button, const QString &text,
+                            const QKeySequence &key) {
+      button->setToolTip(
+          key.isEmpty() ? text
+                        : QStringLiteral("%1 (%2)").arg(
+                              text, key.toString(QKeySequence::NativeText)));
+      setShortcutHint(*button, key);
+    };
+    command(add_, tr("Add a waypoint"), listKey(ListKey::Add));
+    command(exclude_, tr("Exclude a function"), listKey(ListKey::Add));
+    command(remove_, tr("Remove"), listKey(ListKey::Remove));
+    command(up_, tr("Move the waypoint up"), listKey(ListKey::Up));
+    command(down_, tr("Move the waypoint down"), listKey(ListKey::Down));
+    command(clear_, tr("Clear the waypoints"), QKeySequence());
+    waypointList_->setHeaderLabels(
+        {tr("Function"), tr("Address"), tr("Reference")});
+    exclusionList_->setHeaderLabels({tr("Function"), tr("Address")});
+    optionsToggle_->setText(tr("Options"));
+    dataRefs_->setText(tr("Include data references"));
+    shortestOnly_->setText(tr("Shortest paths only"));
+    depthLabel->setText(tr("Maximum depth:"));
+    showExclusions();
+    showStatus();
+  });
 }
 
 void PathfinderView::startPath(Address address) {

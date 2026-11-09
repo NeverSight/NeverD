@@ -1,6 +1,7 @@
 #include "ConnectionsDialog.h"
 
 #include "Icons.h"
+#include "KeepTranslated.h"
 #include "ModelessDialog.h"
 #include "Session.h"
 #include "Theme.h"
@@ -51,16 +52,16 @@ ConnectionsDialog::ConnectionsDialog(Session &session,
                                      GuiSessionBroker &broker, QWidget *parent)
     : QDialog(parent), session_(session), client_(client), broker_(broker) {
   setObjectName(QStringLiteral("connectionsDialog"));
-  setWindowTitle(tr("MCP connections"));
   setWindowIcon(icon(QStringLiteral("mcp")));
   resize(1000, 700);
   auto *layout = new QVBoxLayout(this);
 
   // Session sharing.
   auto *shareRow = new QHBoxLayout;
-  shareRow->addWidget(new QLabel(tr("This NeverD session"), this), 1);
+  auto *sessionLabel = new QLabel(this);
+  shareRow->addWidget(sessionLabel, 1);
   sharing_ = new QPushButton(this);
-  copyCredential_ = new QPushButton(tr("Copy credential path"), this);
+  copyCredential_ = new QPushButton(this);
   shareRow->addWidget(sharing_);
   shareRow->addWidget(copyCredential_);
   layout->addLayout(shareRow);
@@ -82,7 +83,6 @@ ConnectionsDialog::ConnectionsDialog(Session &session,
   transport_ = new QComboBox(this);
   transport_->addItems(
       {QStringLiteral("stdio"), QStringLiteral("Streamable HTTP")});
-  transport_->setAccessibleName(tr("Transport"));
   endpoint_ = new QLineEdit(this);
   connect_ = new QPushButton(this);
   serverRow->addWidget(transport_);
@@ -90,18 +90,12 @@ ConnectionsDialog::ConnectionsDialog(Session &session,
   serverRow->addWidget(connect_);
   layout->addLayout(serverRow);
   arguments_ = new QLineEdit(QStringLiteral("[]"), this);
-  arguments_->setPlaceholderText(
-      tr("Arguments as JSON, for example [\"--help\"]"));
   arguments_->setFont(Theme::instance().codeFont());
   layout->addWidget(arguments_);
   auto *httpRow = new QHBoxLayout;
   token_ = new QLineEdit(this);
   token_->setEchoMode(QLineEdit::Password);
-  token_->setPlaceholderText(tr("Bearer token (optional)"));
-  token_->setAccessibleName(tr("Bearer token"));
   caFile_ = new QLineEdit(this);
-  caFile_->setPlaceholderText(tr("CA certificate path (optional)"));
-  caFile_->setAccessibleName(tr("CA certificate path"));
   httpRow->addWidget(token_, 1);
   httpRow->addWidget(caFile_, 1);
   layout->addLayout(httpRow);
@@ -119,9 +113,8 @@ ConnectionsDialog::ConnectionsDialog(Session &session,
   auto *leftLayout = new QVBoxLayout(left);
   leftLayout->setContentsMargins(0, 0, 0, 0);
   tabs_ = new QTabBar(left);
-  tabs_->addTab(tr("Tools"));
-  tabs_->addTab(tr("Resources"));
-  tabs_->addTab(tr("History"));
+  for (int tab = ToolsTab; tab <= HistoryTab; ++tab)
+    tabs_->addTab(QString());
   catalog_ = new QListWidget(left);
   leftLayout->addWidget(tabs_);
   leftLayout->addWidget(catalog_, 1);
@@ -129,10 +122,10 @@ ConnectionsDialog::ConnectionsDialog(Session &session,
   auto *rightLayout = new QVBoxLayout(right);
   rightLayout->setContentsMargins(0, 0, 0, 0);
   auto *titleRow = new QHBoxLayout;
-  selectedTitle_ = new QLabel(tr("Result"), right);
-  schema_ = new QPushButton(tr("Schema"), right);
-  call_ = new QPushButton(tr("Call tool"), right);
-  cancelCall_ = new QPushButton(tr("Cancel call"), right);
+  selectedTitle_ = new QLabel(right);
+  schema_ = new QPushButton(right);
+  call_ = new QPushButton(right);
+  cancelCall_ = new QPushButton(right);
   titleRow->addWidget(selectedTitle_, 1);
   titleRow->addWidget(schema_);
   titleRow->addWidget(call_);
@@ -148,8 +141,6 @@ ConnectionsDialog::ConnectionsDialog(Session &session,
   result_ = new QPlainTextEdit(right);
   result_->setReadOnly(true);
   result_->setFont(Theme::instance().codeFont());
-  result_->setPlaceholderText(
-      tr("Select a resource or call a tool to inspect its response."));
   rightLayout->addWidget(result_, 1);
   splitter->setStretchFactor(1, 1);
   splitter->setSizes({300, 680});
@@ -185,8 +176,28 @@ ConnectionsDialog::ConnectionsDialog(Session &session,
           &ConnectionsDialog::refresh);
   connect(&session_, &Session::stateChanged, this, &ConnectionsDialog::refresh);
   connect(this, &QDialog::finished, token_, &QLineEdit::clear);
-  refreshCatalog();
-  refresh();
+  keepTranslated(*this, [this, sessionLabel] {
+    setWindowTitle(tr("MCP connections"));
+    sessionLabel->setText(tr("This NeverD session"));
+    copyCredential_->setText(tr("Copy credential path"));
+    transport_->setAccessibleName(tr("Transport"));
+    arguments_->setPlaceholderText(
+        tr("Arguments as JSON, for example [\"--help\"]"));
+    token_->setPlaceholderText(tr("Bearer token (optional)"));
+    token_->setAccessibleName(tr("Bearer token"));
+    caFile_->setPlaceholderText(tr("CA certificate path (optional)"));
+    caFile_->setAccessibleName(tr("CA certificate path"));
+    tabs_->setTabText(ToolsTab, tr("Tools"));
+    tabs_->setTabText(ResourcesTab, tr("Resources"));
+    tabs_->setTabText(HistoryTab, tr("History"));
+    schema_->setText(tr("Schema"));
+    call_->setText(tr("Call tool"));
+    cancelCall_->setText(tr("Cancel call"));
+    result_->setPlaceholderText(
+        tr("Select a resource or call a tool to inspect its response."));
+    refreshCatalog();
+    refresh();
+  });
 }
 
 void ConnectionsDialog::refresh() {

@@ -10744,4 +10744,129 @@ Il grafo precedente è ancora disponibile.</translation>
         <translation>Grafo dei risultati del plugin</translation>
     </message>
 </context>
+<context>
+    <name>UnwindInfoDialog</name>
+    <message>
+        <source>Unwind information at %1</source>
+        <translation>Informazioni di unwinding a %1</translation>
+    </message>
+    <message>
+        <source>DWARF state at the selected PC</source>
+        <translation>Stato DWARF al PC selezionato</translation>
+    </message>
+    <message>
+        <source>Compact unwind: completed-prologue recipe</source>
+        <translation>Unwind compatto: ricetta del prologo completato</translation>
+    </message>
+    <message>
+        <source>The compact recipe describes the completed prologue; it does not establish the return-address state at the selected PC.</source>
+        <translation>La ricetta compatta descrive il prologo completato; non stabilisce lo stato dell’indirizzo di ritorno al PC selezionato.</translation>
+    </message>
+    <message>
+        <source>Refresh</source>
+        <translation>Aggiorna</translation>
+    </message>
+    <message>
+        <source>Loading unwind information…</source>
+        <translation>Caricamento delle informazioni di unwinding…</translation>
+    </message>
+    <message>
+        <source>The analysis worker is disconnected.</source>
+        <translation>Il processo di analisi è disconnesso.</translation>
+    </message>
+    <message>
+        <source>This engine does not provide unwind information.</source>
+        <translation>Questo motore non fornisce informazioni di unwinding.</translation>
+    </message>
+    <message>
+        <source>The program changed. Open unwind information again at the desired address.</source>
+        <translation>Il programma è cambiato. Riapri le informazioni di unwinding all’indirizzo desiderato.</translation>
+    </message>
+    <message>
+        <source>No unwind frame contains this address.</source>
+        <translation>Nessun frame di unwinding contiene questo indirizzo.</translation>
+    </message>
+    <message>
+        <source>This frame has no return-address signing report.</source>
+        <translation>Questo frame non ha un rapporto sulla firma dell’indirizzo di ritorno.</translation>
+    </message>
+    <message>
+        <source>No metadata from this source.</source>
+        <translation>Nessun metadato da questa origine.</translation>
+    </message>
+    <message>
+        <source>The engine returned an incompatible unwind report.</source>
+        <translation>Il motore ha restituito un rapporto di unwinding incompatibile.</translation>
+    </message>
+    <message>
+        <source>Could not load unwind information: %1</source>
+        <translation>Impossibile caricare le informazioni di unwinding: %1</translation>
+    </message>
+    <message>
+        <source>Frame: [%1, %2)</source>
+        <translation>Frame: [%1, %2)</translation>
+    </message>
+    <message>
+        <source>Status: %1</source>
+        <translation>Stato: %1</translation>
+    </message>
+    <message>
+        <source>Signing kind: %1</source>
+        <translation>Tipo di firma: %1</translation>
+    </message>
+    <message>
+        <source>Key: %1</source>
+        <translation>Chiave: %1</translation>
+    </message>
+    <message>
+        <source>Recipe: %1</source>
+        <translation>Ricetta: %1</translation>
+    </message>
+    <message>
+        <source>Signing PC: %1</source>
+        <translation>PC di firma: %1</translation>
+    </message>
+    <message>
+        <source>Diagnostic: %1</source>
+        <translation>Diagnostica: %1</translation>
+    </message>
+</context>
+<context>
+    <name>KDDockWidgets::QtWidgets::TitleBar</name>
+    <message>
+        <source>Minimize</source>
+        <translation>Riduci a icona</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>Chiudi</translation>
+    </message>
+    <message>
+        <source>Maximize</source>
+        <translation>Ingrandisci</translation>
+    </message>
+    <message>
+        <source>Restore</source>
+        <translation>Ripristina</translation>
+    </message>
+    <message>
+        <source>Auto-hide</source>
+        <translation>Nascondi automaticamente</translation>
+    </message>
+    <message>
+        <source>Disable auto-hide</source>
+        <translation>Disattiva l’occultamento automatico</translation>
+    </message>
+</context>
+<context>
+    <name>KDDockWidgets::Core::TitleBar</name>
+    <message>
+        <source>Dock window</source>
+        <translation>Ancora finestra</translation>
+    </message>
+    <message>
+        <source>Undock window</source>
+        <translation>Sgancia finestra</translation>
+    </message>
+</context>
 </TS>

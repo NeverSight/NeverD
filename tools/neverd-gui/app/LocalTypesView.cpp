@@ -5,6 +5,7 @@
 #include "FlowLayout.h"
 #include "Icons.h"
 #include "ItemViewActivation.h"
+#include "KeepTranslated.h"
 #include "Session.h"
 #include "ShortcutHint.h"
 #include "ShrinkableRow.h"
@@ -279,7 +280,6 @@ LocalTypesView::LocalTypesView(Session &session, QWidget *parent)
   leftLayout->setContentsMargins(4, 4, 4, 4);
   filter_ = new QLineEdit(left);
   filter_->setObjectName(QStringLiteral("localTypesFilter"));
-  filter_->setPlaceholderText(tr("Filter types by name"));
   filter_->setClearButtonEnabled(true);
   filter_->installEventFilter(this);
   leftLayout->addWidget(filter_);
@@ -288,38 +288,28 @@ LocalTypesView::LocalTypesView(Session &session, QWidget *parent)
   filterLayout->setContentsMargins(0, 0, 0, 0);
   origin_ = new QComboBox(filterRow);
   origin_->setObjectName(QStringLiteral("localTypesOrigin"));
-  origin_->setToolTip(tr("Show the types of one origin"));
   for (const auto &entry : Origins)
     origin_->addItem(tr(entry.title), QString::fromLatin1(entry.id));
   filterLayout->addWidget(origin_);
   filterLayout->addStretch(1);
-  const auto commandButton = [&](TypesCommand command, const char *iconName,
-                                 const QString &text) {
+  const auto commandButton = [&](TypesCommand command, const char *iconName) {
     auto *button = new QToolButton(filterRow);
     button->setIcon(icon(QString::fromLatin1(iconName)));
-    button->setToolTip(QStringLiteral("%1 (%2)").arg(
-        text, commandKey(command).toString(QKeySequence::NativeText)));
-    setShortcutHint(*button, commandKey(command));
     button->setAutoRaise(true);
     connect(button, &QToolButton::clicked, this,
             [this, command] { run(command); });
     filterLayout->addWidget(button);
     return button;
   };
-  add_ = commandButton(TypesCommand::Add, "local_types_add",
-                       tr("Add types from a declaration"));
+  add_ = commandButton(TypesCommand::Add, "local_types_add");
   add_->setObjectName(QStringLiteral("localTypesAdd"));
-  edit_ = commandButton(TypesCommand::Edit, "local_types_edit",
-                        tr("Edit the type's declaration"));
+  edit_ = commandButton(TypesCommand::Edit, "local_types_edit");
   edit_->setObjectName(QStringLiteral("localTypesEdit"));
-  delete_ = commandButton(TypesCommand::Delete, "local_types_delete",
-                          tr("Delete the selected types"));
+  delete_ = commandButton(TypesCommand::Delete, "local_types_delete");
   delete_->setObjectName(QStringLiteral("localTypesDelete"));
   makeRowShrinkable(*filterRow);
   leftLayout->addWidget(filterRow);
   model_ = new QStandardItemModel(0, ListColumns, this);
-  model_->setHorizontalHeaderLabels(
-      {tr("#"), tr("Name"), tr("Kind"), tr("Size"), tr("Members")});
   proxy_ = new QSortFilterProxyModel(this);
   proxy_->setSourceModel(model_);
   proxy_->setFilterKeyColumn(NameColumn);
@@ -382,8 +372,6 @@ LocalTypesView::LocalTypesView(Session &session, QWidget *parent)
   back_ = new QToolButton(headingRow);
   back_->setObjectName(QStringLiteral("localTypesBack"));
   back_->setIcon(icon(QStringLiteral("back")));
-  back_->setToolTip(tr("Back to the type shown before (Esc)"));
-  back_->setAccessibleName(back_->toolTip());
   back_->setAutoRaise(true);
   heading_ = new QLabel(headingRow);
   heading_->setObjectName(QStringLiteral("localTypesHeading"));
@@ -408,22 +396,20 @@ LocalTypesView::LocalTypesView(Session &session, QWidget *parent)
   tabs_->setObjectName(QStringLiteral("localTypesTabs"));
   tabs_->setDrawBase(false);
   tabs_->setExpanding(false);
-  tabs_->addTab(tr("Layout"));
+  tabs_->addTab(QString());
   for (const auto &language : Languages)
     tabs_->addTab(QString::fromLatin1(language.title));
   copy_ = new QToolButton(tabRow);
   copy_->setIcon(icon(QStringLiteral("copy")));
-  copy_->setToolTip(tr("Copy the layout or the source"));
   copy_->setAutoRaise(true);
   export_ = new QToolButton(tabRow);
   export_->setIcon(icon(QStringLiteral("file_produce")));
-  export_->setToolTip(tr("Export types as source"));
   export_->setAutoRaise(true);
   export_->setPopupMode(QToolButton::InstantPopup);
   auto *exportMenu = new QMenu(export_);
-  auto *exportOne = exportMenu->addAction(tr("Export this type…"));
-  auto *exportSelected = exportMenu->addAction(tr("Export selected types…"));
-  auto *exportAll = exportMenu->addAction(tr("Export all types…"));
+  auto *exportOne = exportMenu->addAction(QString());
+  auto *exportSelected = exportMenu->addAction(QString());
+  auto *exportAll = exportMenu->addAction(QString());
   export_->setMenu(exportMenu);
   tabLayout->addWidget(tabs_);
   tabLayout->addStretch(1);
@@ -439,21 +425,9 @@ LocalTypesView::LocalTypesView(Session &session, QWidget *parent)
   auto *optionLayout = new FlowLayout(optionRow);
   spelling_ = new QComboBox(optionRow);
   spelling_->setObjectName(QStringLiteral("localTypesSpelling"));
-  spelling_->setToolTip(tr("How the source names builtin types"));
-  // As wide as the widest choice of any language, so that switching tabs
-  // neither moves the row nor cuts a choice short.
-  for (const SpellingChoice &choice : SpellingChoices)
-    for (const auto &entry : choice.spellings)
-      spelling_->addItem(tr(entry.title));
-  spelling_->setMinimumWidth(spelling_->sizeHint().width());
-  spelling_->clear();
-  hex_ = new QCheckBox(tr("Hex offsets"), optionRow);
-  dependencies_ = new QCheckBox(tr("With dependencies"), optionRow);
-  dependencies_->setToolTip(
-      tr("Also declare every type this one needs, so the source compiles"));
-  asserts_ = new QCheckBox(tr("Layout checks"), optionRow);
-  asserts_->setToolTip(tr("Follow each type with checks of its size and "
-                          "offsets that the compiler verifies"));
+  hex_ = new QCheckBox(optionRow);
+  dependencies_ = new QCheckBox(optionRow);
+  asserts_ = new QCheckBox(optionRow);
   optionLayout->addWidget(spelling_);
   optionLayout->addWidget(hex_);
   optionLayout->addWidget(dependencies_);
@@ -465,8 +439,6 @@ LocalTypesView::LocalTypesView(Session &session, QWidget *parent)
   layout_ = new QTreeWidget(pages_);
   layout_->setObjectName(QStringLiteral("localTypesLayout"));
   layout_->setColumnCount(LayoutColumns);
-  layout_->setHeaderLabels(
-      {tr("Offset"), tr("Size"), tr("Member"), tr("Type")});
   layout_->setTreePosition(MemberColumn);
   layout_->setUniformRowHeights(true);
   layout_->setAllColumnsShowFocus(true);
@@ -657,9 +629,61 @@ LocalTypesView::LocalTypesView(Session &session, QWidget *parent)
     highlightSourceLine();
     showPath();
   });
-  // The options the restored tab shows, before any type is read.
-  updateActions();
-  reload();
+  // The options the restored tab shows, before any type is read.  The types
+  // are read again in a new language, so their kinds and the heading follow.
+  keepTranslated(*this, [this, exportOne, exportSelected, exportAll] {
+    filter_->setPlaceholderText(tr("Filter types by name"));
+    origin_->setToolTip(tr("Show the types of one origin"));
+    for (int index = 0;
+         index < origin_->count() && index < int(std::size(Origins)); ++index)
+      origin_->setItemText(index, tr(Origins[index].title));
+    const auto command = [this](QToolButton *button, TypesCommand which,
+                                const QString &text) {
+      button->setToolTip(QStringLiteral("%1 (%2)").arg(
+          text, commandKey(which).toString(QKeySequence::NativeText)));
+      setShortcutHint(*button, commandKey(which));
+    };
+    command(add_, TypesCommand::Add, tr("Add types from a declaration"));
+    command(edit_, TypesCommand::Edit, tr("Edit the type's declaration"));
+    command(delete_, TypesCommand::Delete, tr("Delete the selected types"));
+    model_->setHorizontalHeaderLabels(
+        {tr("#"), tr("Name"), tr("Kind"), tr("Size"), tr("Members")});
+    back_->setToolTip(tr("Back to the type shown before (Esc)"));
+    back_->setAccessibleName(back_->toolTip());
+    tabs_->setTabText(0, tr("Layout"));
+    copy_->setToolTip(tr("Copy the layout or the source"));
+    export_->setToolTip(tr("Export types as source"));
+    exportOne->setText(tr("Export this type…"));
+    exportSelected->setText(tr("Export selected types…"));
+    exportAll->setText(tr("Export all types…"));
+    spelling_->setToolTip(tr("How the source names builtin types"));
+    // As wide as the widest choice of any language, so that switching tabs
+    // neither moves the row nor cuts a choice short.
+    {
+      const QSignalBlocker blocker(spelling_);
+      const auto policy = spelling_->sizeAdjustPolicy();
+      // A shown combo box keeps the size hint of its first contents.
+      spelling_->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+      spelling_->clear();
+      for (const SpellingChoice &choice : SpellingChoices)
+        for (const auto &entry : choice.spellings)
+          spelling_->addItem(tr(entry.title));
+      spelling_->setMinimumWidth(spelling_->sizeHint().width());
+      spelling_->setSizeAdjustPolicy(policy);
+    }
+    showSpellings();
+    hex_->setText(tr("Hex offsets"));
+    dependencies_->setText(tr("With dependencies"));
+    dependencies_->setToolTip(
+        tr("Also declare every type this one needs, so the source compiles"));
+    asserts_->setText(tr("Layout checks"));
+    asserts_->setToolTip(tr("Follow each type with checks of its size and "
+                            "offsets that the compiler verifies"));
+    layout_->setHeaderLabels(
+        {tr("Offset"), tr("Size"), tr("Member"), tr("Type")});
+    updateActions();
+    reload();
+  });
 }
 
 void LocalTypesView::focusFilter() {

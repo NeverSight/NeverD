@@ -126,6 +126,10 @@ QPushButton:disabled { background: transparent; color: ${DisabledText}; }
 /* A primary button that cannot act keeps a faint accent, so a dialog's
    default action stays recognizable, and its label stays legible on it. */
 QPushButton:default:disabled { background: ${ButtonPrimaryDisabled}; border: 1px solid transparent; color: ${ButtonPrimaryDisabledText}; }
+/* A button that opens a list points to it with the chevron a combo box draws,
+   inside its own padding, in place of Fusion's corner triangle. */
+QPushButton::menu-indicator { image: url(:/neverd/icons/chevron_down-${Mode}.svg); subcontrol-origin: padding; subcontrol-position: center right; right: 4px; width: 10px; height: 10px; }
+QPushButton::menu-indicator:disabled { image: url(:/neverd/icons/chevron_down_disabled-${Mode}.svg); }
 QDialogButtonBox { dialogbuttonbox-buttons-have-icons: 0; }
 /* A dialog's buttons are at least as wide as a standard Windows command
    button, 75 pixels with their padding and border, so OK and Cancel, or Yes

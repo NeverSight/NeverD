@@ -10888,4 +10888,129 @@ Your previous graph is still available.</source>
         <translation>رسم نتائج الإضافة</translation>
     </message>
 </context>
+<context>
+    <name>UnwindInfoDialog</name>
+    <message>
+        <source>Unwind information at %1</source>
+        <translation>معلومات فك المكدس عند %1</translation>
+    </message>
+    <message>
+        <source>DWARF state at the selected PC</source>
+        <translation>حالة DWARF عند PC المحدد</translation>
+    </message>
+    <message>
+        <source>Compact unwind: completed-prologue recipe</source>
+        <translation>فك المكدس المضغوط: وصفة المقدمة المكتملة</translation>
+    </message>
+    <message>
+        <source>The compact recipe describes the completed prologue; it does not establish the return-address state at the selected PC.</source>
+        <translation>تصف الوصفة المضغوطة المقدمة المكتملة، ولا تحدد حالة عنوان الإرجاع عند PC المحدد.</translation>
+    </message>
+    <message>
+        <source>Refresh</source>
+        <translation>تحديث</translation>
+    </message>
+    <message>
+        <source>Loading unwind information…</source>
+        <translation>جارٍ تحميل معلومات فك المكدس…</translation>
+    </message>
+    <message>
+        <source>The analysis worker is disconnected.</source>
+        <translation>عامل التحليل غير متصل.</translation>
+    </message>
+    <message>
+        <source>This engine does not provide unwind information.</source>
+        <translation>لا يوفر هذا المحرك معلومات فك المكدس.</translation>
+    </message>
+    <message>
+        <source>The program changed. Open unwind information again at the desired address.</source>
+        <translation>تغيّر البرنامج. افتح معلومات فك المكدس مرة أخرى عند العنوان المطلوب.</translation>
+    </message>
+    <message>
+        <source>No unwind frame contains this address.</source>
+        <translation>لا يوجد إطار فك مكدس يحتوي على هذا العنوان.</translation>
+    </message>
+    <message>
+        <source>This frame has no return-address signing report.</source>
+        <translation>لا يوجد لهذا الإطار تقرير عن توقيع عنوان الإرجاع.</translation>
+    </message>
+    <message>
+        <source>No metadata from this source.</source>
+        <translation>لا توجد بيانات وصفية من هذا المصدر.</translation>
+    </message>
+    <message>
+        <source>The engine returned an incompatible unwind report.</source>
+        <translation>أعاد المحرك تقرير فك مكدس غير متوافق.</translation>
+    </message>
+    <message>
+        <source>Could not load unwind information: %1</source>
+        <translation>تعذّر تحميل معلومات فك المكدس: %1</translation>
+    </message>
+    <message>
+        <source>Frame: [%1, %2)</source>
+        <translation>الإطار: [%1, %2)</translation>
+    </message>
+    <message>
+        <source>Status: %1</source>
+        <translation>الحالة: %1</translation>
+    </message>
+    <message>
+        <source>Signing kind: %1</source>
+        <translation>نوع التوقيع: %1</translation>
+    </message>
+    <message>
+        <source>Key: %1</source>
+        <translation>المفتاح: %1</translation>
+    </message>
+    <message>
+        <source>Recipe: %1</source>
+        <translation>الوصفة: %1</translation>
+    </message>
+    <message>
+        <source>Signing PC: %1</source>
+        <translation>PC التوقيع: %1</translation>
+    </message>
+    <message>
+        <source>Diagnostic: %1</source>
+        <translation>التشخيص: %1</translation>
+    </message>
+</context>
+<context>
+    <name>KDDockWidgets::QtWidgets::TitleBar</name>
+    <message>
+        <source>Minimize</source>
+        <translation>تصغير</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>إغلاق</translation>
+    </message>
+    <message>
+        <source>Maximize</source>
+        <translation>تكبير</translation>
+    </message>
+    <message>
+        <source>Restore</source>
+        <translation>استعادة</translation>
+    </message>
+    <message>
+        <source>Auto-hide</source>
+        <translation>إخفاء تلقائي</translation>
+    </message>
+    <message>
+        <source>Disable auto-hide</source>
+        <translation>إيقاف الإخفاء التلقائي</translation>
+    </message>
+</context>
+<context>
+    <name>KDDockWidgets::Core::TitleBar</name>
+    <message>
+        <source>Dock window</source>
+        <translation>إرساء النافذة</translation>
+    </message>
+    <message>
+        <source>Undock window</source>
+        <translation>فصل النافذة</translation>
+    </message>
+</context>
 </TS>

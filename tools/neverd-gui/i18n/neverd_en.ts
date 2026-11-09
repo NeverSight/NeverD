@@ -10744,4 +10744,129 @@ Your previous graph is still available.</translation>
         <translation>Plugin result graph</translation>
     </message>
 </context>
+<context>
+    <name>UnwindInfoDialog</name>
+    <message>
+        <source>Unwind information at %1</source>
+        <translation>Unwind information at %1</translation>
+    </message>
+    <message>
+        <source>DWARF state at the selected PC</source>
+        <translation>DWARF state at the selected PC</translation>
+    </message>
+    <message>
+        <source>Compact unwind: completed-prologue recipe</source>
+        <translation>Compact unwind: completed-prologue recipe</translation>
+    </message>
+    <message>
+        <source>The compact recipe describes the completed prologue; it does not establish the return-address state at the selected PC.</source>
+        <translation>The compact recipe describes the completed prologue; it does not establish the return-address state at the selected PC.</translation>
+    </message>
+    <message>
+        <source>Refresh</source>
+        <translation>Refresh</translation>
+    </message>
+    <message>
+        <source>Loading unwind information…</source>
+        <translation>Loading unwind information…</translation>
+    </message>
+    <message>
+        <source>The analysis worker is disconnected.</source>
+        <translation>The analysis worker is disconnected.</translation>
+    </message>
+    <message>
+        <source>This engine does not provide unwind information.</source>
+        <translation>This engine does not provide unwind information.</translation>
+    </message>
+    <message>
+        <source>The program changed. Open unwind information again at the desired address.</source>
+        <translation>The program changed. Open unwind information again at the desired address.</translation>
+    </message>
+    <message>
+        <source>No unwind frame contains this address.</source>
+        <translation>No unwind frame contains this address.</translation>
+    </message>
+    <message>
+        <source>This frame has no return-address signing report.</source>
+        <translation>This frame has no return-address signing report.</translation>
+    </message>
+    <message>
+        <source>No metadata from this source.</source>
+        <translation>No metadata from this source.</translation>
+    </message>
+    <message>
+        <source>The engine returned an incompatible unwind report.</source>
+        <translation>The engine returned an incompatible unwind report.</translation>
+    </message>
+    <message>
+        <source>Could not load unwind information: %1</source>
+        <translation>Could not load unwind information: %1</translation>
+    </message>
+    <message>
+        <source>Frame: [%1, %2)</source>
+        <translation>Frame: [%1, %2)</translation>
+    </message>
+    <message>
+        <source>Status: %1</source>
+        <translation>Status: %1</translation>
+    </message>
+    <message>
+        <source>Signing kind: %1</source>
+        <translation>Signing kind: %1</translation>
+    </message>
+    <message>
+        <source>Key: %1</source>
+        <translation>Key: %1</translation>
+    </message>
+    <message>
+        <source>Recipe: %1</source>
+        <translation>Recipe: %1</translation>
+    </message>
+    <message>
+        <source>Signing PC: %1</source>
+        <translation>Signing PC: %1</translation>
+    </message>
+    <message>
+        <source>Diagnostic: %1</source>
+        <translation>Diagnostic: %1</translation>
+    </message>
+</context>
+<context>
+    <name>KDDockWidgets::QtWidgets::TitleBar</name>
+    <message>
+        <source>Minimize</source>
+        <translation>Minimize</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>Close</translation>
+    </message>
+    <message>
+        <source>Maximize</source>
+        <translation>Maximize</translation>
+    </message>
+    <message>
+        <source>Restore</source>
+        <translation>Restore</translation>
+    </message>
+    <message>
+        <source>Auto-hide</source>
+        <translation>Auto-hide</translation>
+    </message>
+    <message>
+        <source>Disable auto-hide</source>
+        <translation>Disable auto-hide</translation>
+    </message>
+</context>
+<context>
+    <name>KDDockWidgets::Core::TitleBar</name>
+    <message>
+        <source>Dock window</source>
+        <translation>Dock window</translation>
+    </message>
+    <message>
+        <source>Undock window</source>
+        <translation>Undock window</translation>
+    </message>
+</context>
 </TS>
