@@ -459,6 +459,14 @@ void applyRegisterTransfer(const MedInstruction &Instruction,
             ? State[Instruction.Src]
             : RegisterValue{RegisterValue::Kind::Constant,
                             instructionImmediate(Instruction), 0};
+    // A full-width identity mask preserves the exact value, including an
+    // affine address. Truncated masks still use the numeric/conservative
+    // transfer below; their result need not identify the original pointer.
+    if (Instruction.Op == Operation::And &&
+        Instruction.Width == kDoubleWordBitWidth &&
+        Right.ValueKind == RegisterValue::Kind::Constant &&
+        Right.Value == UINT64_MAX)
+      return;
     if (Instruction.Op == Operation::And &&
         Instruction.Width == kDoubleWordBitWidth &&
         Left.ValueKind == RegisterValue::Kind::UnsignedRange &&

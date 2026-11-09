@@ -690,6 +690,25 @@ std::optional<size_t> knownBranchSuccessor(const MedInstruction *Last,
       // bit-test. The exact scalar transfer above still handles those.
       return std::nullopt;
     }
+    if (Last->Width == kDoubleWordBitWidth &&
+        Left.ValueKind == RegisterValue::Kind::SymbolicAddress &&
+        RHS.ValueKind == RegisterValue::Kind::SymbolicAddress &&
+        Left.Value == RHS.Value) {
+      // Both operands name the same actual value. Equality is unchanged by
+      // modular addition. Ordering also needs each translated bound to avoid
+      // wrap; distinct capture names and signed/truncated comparisons cannot
+      // inherit this relation.
+      if (Last->Op == Operation::Eq || Last->Op == Operation::Ne)
+        return evaluateBranchCondition(Last->Op, Last->Width,
+                                       static_cast<uint64_t>(Left.Offset),
+                                       static_cast<uint64_t>(RHS.Offset));
+      const auto *Addresses = State.Scratch.Values.symbolicAddresses().get();
+      const auto L = unsignedValueRange(Left, Addresses);
+      const auto R = unsignedValueRange(RHS, Addresses);
+      if (L && R)
+        return evaluateBranchCondition(Last->Op, Last->Width, L->Lower,
+                                       R->Lower);
+    }
     auto L = unsignedValueRange(Left);
     auto R = unsignedValueRange(RHS);
     if (!L || !R || L->Lower > L->Upper || R->Lower > R->Upper)
