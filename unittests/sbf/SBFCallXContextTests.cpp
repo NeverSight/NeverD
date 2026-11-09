@@ -14800,4 +14800,103 @@ TEST(SBFCallXContexts, RootReclamationUsesOnlyIndependentPublishedProofs) {
   RecordProperty("raw_executions", static_cast<int>(RawExecutions));
 }
 
+TEST(SBFCallXContexts, UnknownInputRootsCanRefineGenericScalarReturns) {
+  unsigned RawExecutions = 0;
+  for (bool BoundArgument : {false, true}) {
+    SCOPED_TRACE(::testing::Message() << "bound=" << BoundArgument);
+    std::vector<test::EncodedInstruction> Text{encode(Opcode::EXIT)};
+    const auto Literal = [&](unsigned Register, uint64_t Value) {
+      const size_t Slot = Text.size();
+      const auto Words = test::loadImm64(Register, Value);
+      Text.insert(Text.end(), Words.begin(), Words.end());
+      return Slot;
+    };
+    const size_t Wrapper = Text.size();
+    std::optional<size_t> FixedTarget;
+    if (BoundArgument)
+      Text.push_back(encode(Opcode::MOV64_REG, 1, 2));
+    else
+      FixedTarget = Literal(1, 0);
+    const size_t DispatchCall = Text.size();
+    Text.push_back({});
+    // The unknown write prevents a memory-preserving leaf shortcut, while
+    // leaving the independently computed scalar return in r0 unchanged.
+    Literal(3, kInputStart);
+    Text.push_back(encode(Opcode::LD_DW_REG, 3, 3));
+    Text.push_back(encode(Opcode::ST_DW_IMM, 3));
+    Text.push_back(encode(Opcode::EXIT));
+    const size_t Caller = Text.size();
+    const size_t CallerTarget = Literal(2, 0);
+    const size_t WrapperCall = Text.size();
+    Text.push_back({});
+    Text.push_back(encode(Opcode::EXIT));
+    const size_t Dispatch = Text.size();
+    Text.push_back(encode(Opcode::CALL_REG, 1));
+    Text.push_back(encode(Opcode::EXIT));
+    const size_t Target = Text.size();
+    Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+    Text.push_back(encode(Opcode::EXIT));
+    Text[DispatchCall] =
+        encode(Opcode::CALL_IMM, 0, 1, 0, Dispatch - DispatchCall - 1);
+    Text[WrapperCall] =
+        encode(Opcode::CALL_IMM, 0, 1, 0, Wrapper - WrapperCall - 1);
+    const auto SetTarget = [&](size_t Slot, unsigned Register) {
+      const auto Words = test::loadImm64(Register, kBytecodeStart + Target * 8);
+      std::copy(Words.begin(), Words.end(), Text.begin() + Slot);
+    };
+    SetTarget(CallerTarget, 2);
+    if (FixedTarget)
+      SetTarget(*FixedTarget, 1);
+    auto Image = test::makeImage(Text, {});
+    for (size_t Entry : {Wrapper, Caller}) {
+      Symbol Function;
+      Function.Name = "caller_" + std::to_string(Entry);
+      Function.Addr = kBytecodeStart + Entry * kInstructionSize;
+      Function.IsFunc = true;
+      Image.Symbols.push_back(std::move(Function));
+    }
+    auto Program = analyze(Image);
+    ASSERT_TRUE(static_cast<bool>(Program))
+        << llvm::toString(Program.takeError());
+    auto Report = recoverCallXContexts(*Program);
+    ASSERT_TRUE(static_cast<bool>(Report))
+        << llvm::toString(Report.takeError());
+    checkSummaryReferences(*Report);
+    const auto Generic = llvm::find_if(Report->Summaries, [&](const auto &S) {
+      return S.EntrySlot == Wrapper && S.GeneralizedInputs;
+    });
+    ASSERT_NE(Generic, Report->Summaries.end());
+    EXPECT_EQ(Generic->ReturnValue.ValueKind,
+              BoundArgument ? RegisterValue::Kind::Unknown
+                            : RegisterValue::Kind::Constant);
+    if (!BoundArgument) {
+      EXPECT_EQ(Generic->ReturnValue.Value, 42u);
+      EXPECT_FALSE(Generic->ReturnValueExpression);
+    }
+    const auto Concrete = llvm::find_if(Report->Summaries, [&](const auto &S) {
+      return S.EntrySlot == Caller && !S.GeneralizedInputs;
+    });
+    ASSERT_NE(Concrete, Report->Summaries.end());
+    EXPECT_EQ(Concrete->ReturnValue.ValueKind, RegisterValue::Kind::Constant);
+    EXPECT_EQ(Concrete->ReturnValue.Value, 42u);
+    Image.Entry = kBytecodeStart + Caller * kInstructionSize;
+    auto Selected = analyze(Image);
+    ASSERT_TRUE(static_cast<bool>(Selected))
+        << llvm::toString(Selected.takeError());
+    ExecutionEnvironment Environment;
+    std::vector<uint8_t> Input(8);
+    llvm::support::endian::write64le(Input.data(), kHeapStart);
+    Environment.Memory.push_back({kInputStart, Input, false, "pointer"});
+    Environment.Memory.push_back(
+        {kHeapStart, std::vector<uint8_t>(8), true, "output"});
+    auto Raw = executeRaw(*Selected, std::move(Environment));
+    ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
+    ASSERT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+    EXPECT_EQ(Raw->ReturnValue, 42u);
+    ++RawExecutions;
+  }
+  EXPECT_EQ(RawExecutions, 2u);
+  RecordProperty("raw_executions", static_cast<int>(RawExecutions));
+}
+
 } // namespace neverd::sbf
