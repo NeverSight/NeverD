@@ -3800,7 +3800,10 @@ TEST_P(OverwrittenCallClobberSpills, AreNotValueReads) {
       const std::vector<uint8_t> Save = {0x4C, 0x89, Operand, 0x24, 0x20};
       Code.insert(Code.end(), Save.begin(), Save.end());
       if (Variant == 1 || Variant == 2)
-        Code.insert(Code.end(), {0x9C, 0x9D}); // pushfq; popfq
+        // The spill test needs source-visible flags. An opaque call's status
+        // flags are unavailable; CMP supplies them without touching R11 or
+        // the scratch slot whose overwrite this fixture exercises.
+        Code.insert(Code.end(), {0x39, 0xC0, 0x9C, 0x9D});
       if (Variant == 2 || LocalCallee)
         Code.insert(Code.end(), {0x4C, 0x8B, Operand, 0x24, 0x20}); // restore
       const std::vector<uint8_t> Body = {
