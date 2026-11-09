@@ -152,99 +152,15 @@ llvm::Expected<bool> reserveMachOHeaderStorage(Bytes &Binary, Arch A,
     First = std::min(First, R.Begin);
   // Zero bytes can still be live loader metadata. Authenticate all external
   // payload owners before treating a header gap as disposable command space.
-  bool Unmodeled = false, Overlap = false;
-  auto Owner = [&](uint64_t Off, uint64_t Size) {
-    if (!Size)
-      return;
-    if (!rangeInBounds(Off, Size, Binary.size())) {
-      Unmodeled = true;
-      return;
-    }
-    First = std::min(First, Off);
-    Overlap |= Off < End && End < Off + Size;
-  };
-  forEachMachOLoadCommand(
-      Binary.data(), Binary.size(),
-      [&](const uint8_t *C, uint32_t ID, uint32_t, bool Is64) {
-        if (ID == getMachOSegmentCmdID(Is64)) {
-          auto G = readMachOSegment(C, Is64);
-          auto *P = C + getMachOSegmentCmdSize(Is64);
-          for (unsigned I = 0; I < G.NSects;
-               ++I, P += getMachOSectionSize(Is64)) {
-            if (Is64) {
-              const auto *S = reinterpret_cast<const section_64 *>(P);
-              Owner(S->reloff, uint64_t(S->nreloc) * 8);
-            } else {
-              const auto *S = reinterpret_cast<const section *>(P);
-              Owner(S->reloff, uint64_t(S->nreloc) * 8);
-            }
-          }
-          return;
-        }
-        switch (ID) {
-        case LC_SYMTAB: {
-          const auto *T = reinterpret_cast<const symtab_command *>(C);
-          Owner(T->symoff,
-                uint64_t(T->nsyms) * (Is64 ? sizeof(nlist_64) : sizeof(nlist)));
-          Owner(T->stroff, T->strsize);
-          break;
-        }
-        case LC_DYSYMTAB: {
-          const auto *D = reinterpret_cast<const dysymtab_command *>(C);
-          Owner(D->tocoff, uint64_t(D->ntoc) * 8);
-          Owner(D->modtaboff, uint64_t(D->nmodtab) * (Is64 ? 56 : 52));
-          Owner(D->extrefsymoff, uint64_t(D->nextrefsyms) * 4);
-          Owner(D->indirectsymoff, uint64_t(D->nindirectsyms) * 4);
-          Owner(D->extreloff, uint64_t(D->nextrel) * 8);
-          Owner(D->locreloff, uint64_t(D->nlocrel) * 8);
-          break;
-        }
-        case LC_DYLD_INFO:
-        case LC_DYLD_INFO_ONLY: {
-          const auto *D = reinterpret_cast<const dyld_info_command *>(C);
-          Owner(D->rebase_off, D->rebase_size);
-          Owner(D->bind_off, D->bind_size);
-          Owner(D->weak_bind_off, D->weak_bind_size);
-          Owner(D->lazy_bind_off, D->lazy_bind_size);
-          Owner(D->export_off, D->export_size);
-          break;
-        }
-        case LC_DYLD_CHAINED_FIXUPS:
-        case LC_DYLD_EXPORTS_TRIE:
-        case LC_FUNCTION_STARTS:
-        case LC_DATA_IN_CODE:
-        case LC_CODE_SIGNATURE: {
-          const auto *D = reinterpret_cast<const linkedit_data_command *>(C);
-          Owner(D->dataoff, D->datasize);
-          break;
-        }
-        case LC_NOTE: {
-          const auto *N = reinterpret_cast<const note_command *>(C);
-          Owner(N->offset, N->size);
-          break;
-        }
-        case LC_MAIN:
-        case LC_UNIXTHREAD:
-        case LC_UUID:
-        case LC_BUILD_VERSION:
-        case LC_VERSION_MIN_MACOSX:
-        case LC_VERSION_MIN_IPHONEOS:
-        case LC_VERSION_MIN_TVOS:
-        case LC_VERSION_MIN_WATCHOS:
-        case LC_LOAD_DYLINKER:
-        case LC_LOAD_DYLIB:
-        case LC_LOAD_WEAK_DYLIB:
-        case LC_REEXPORT_DYLIB:
-        case LC_LOAD_UPWARD_DYLIB:
-        case LC_RPATH:
-        case LC_SOURCE_VERSION:
-          break;
-        default:
-          Unmodeled = true;
-          break;
-        }
-      });
-  if (Unmodeled || Overlap)
+  std::vector<macho_patch_detail::MachOFileRange> Payloads;
+  const bool ValidPayloads =
+      macho_patch_detail::collectMachOPayloadRanges(Binary, Payloads);
+  bool Overlap = false;
+  for (const auto &Range : Payloads) {
+    First = std::min(First, Range.Begin);
+    Overlap |= Range.Begin < End && End < Range.End;
+  }
+  if (!ValidPayloads || Overlap)
     return fail("unmodeled or overlapping load-command payload");
   if (End + Extra <= First &&
       llvm::all_of(llvm::ArrayRef<uint8_t>(Binary).slice(End, Extra),
@@ -632,6 +548,7 @@ llvm::Expected<bool> reserveMachOHeaderStorage(Bytes &Binary, Arch A,
     case LC_VERSION_MIN_TVOS:
     case LC_VERSION_MIN_WATCHOS:
     case LC_LOAD_DYLINKER:
+    case LC_ID_DYLIB:
     case LC_LOAD_DYLIB:
     case LC_LOAD_WEAK_DYLIB:
     case LC_REEXPORT_DYLIB:

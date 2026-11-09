@@ -154,6 +154,205 @@ MACHO_AUTH_NATIVE_VALUE(unsigned, kThreadedPointerKeyShift, 49)
 MACHO_AUTH_NATIVE_VALUE(unsigned, kThreadedPointerKeyMask, 3)
 MACHO_AUTH_NATIVE_VALUE(unsigned, kThreadedToolMissingKeyBit, 1)
 
+MACHO_AUTH_NATIVE_TEXT(kObjectSourceFile, "native-object.cpp")
+MACHO_AUTH_NATIVE_TEXT(kObjectFile, "native-object.o")
+MACHO_AUTH_NATIVE_TEXT(kObjectArtifactPrefix, "neverd-auth-object")
+MACHO_AUTH_NATIVE_TEXT(kProviderLibrary, "@rpath/libneverd_provider.dylib")
+MACHO_AUTH_NATIVE_TEXT(kProviderFunction, "neverd_provider")
+MACHO_AUTH_NATIVE_TEXT(kProviderData, "neverd_provider_data")
+MACHO_AUTH_NATIVE_TEXT(kProviderNativeFunction, "_neverd_provider")
+MACHO_AUTH_NATIVE_TEXT(kProviderNativeData, "_neverd_provider_data")
+MACHO_AUTH_NATIVE_TEXT(kObjectFunction, "native_target")
+MACHO_AUTH_NATIVE_TEXT(kObjectDispatch, "native_dispatch")
+MACHO_AUTH_NATIVE_TEXT(kObjectDisassembly, "native-object-assembly.txt")
+MACHO_AUTH_NATIVE_TEXT(kNativeCallA, "blraa")
+MACHO_AUTH_NATIVE_TEXT(kNativeCallB, "blrab")
+MACHO_AUTH_NATIVE_TEXT(kNativeReturn, "retab")
+MACHO_AUTH_NATIVE_ARGS(kObjectDisassemblyArgs, "otool", "-tvV")
+MACHO_AUTH_NATIVE_TEXT(kObjectData, "native_values")
+MACHO_AUTH_NATIVE_TEXT(kObjectLocalCode, "native_local_code")
+MACHO_AUTH_NATIVE_TEXT(kObjectExternalCode, "native_external_code")
+MACHO_AUTH_NATIVE_TEXT(kObjectLocalData, "native_local_data")
+MACHO_AUTH_NATIVE_TEXT(kObjectExternalData, "native_external_data")
+MACHO_AUTH_NATIVE_TEXT(kNewConstSegment, "__ND_CONST")
+MACHO_AUTH_NATIVE_TEXT(kOriginalTextSegment, "__TEXT")
+MACHO_AUTH_NATIVE_TEXT(kPaddingNoteOwner, "neverd")
+MACHO_AUTH_NATIVE_TEXT(kObjectConstSegment, "__AUTH_CONST")
+MACHO_AUTH_NATIVE_VALUE(unsigned, kObjectFunctionCount, 2)
+MACHO_AUTH_NATIVE_VALUE(uint8_t, kOccupiedMetadataPadding, 0xa5)
+MACHO_AUTH_NATIVE_VALUE(uint16_t, kObjectDiversity, 4660)
+MACHO_AUTH_NATIVE_VALUE(int64_t, kObjectDataAddend, 4)
+MACHO_AUTH_NATIVE_VALUE(uint32_t, kReadOnlySegmentFlag, 0x10)
+MACHO_AUTH_NATIVE_VALUE(uint64_t, kObjectAuthenticationBit,
+                        0x8000000000000000ULL)
+MACHO_AUTH_NATIVE_VALUE(uint64_t, kObjectReservedBit, 0x0008000000000000ULL)
+MACHO_AUTH_NATIVE_VALUE(uint32_t, kObjectExternalRelocationBit, 0x08000000u)
+MACHO_AUTH_NATIVE_VALUE(uint32_t, kObjectABIVersionBit, 0x01000000u)
+MACHO_AUTH_NATIVE_ARGS(kObjectCompileArgs, "-arch", "arm64e", "-c",
+                       "-std=c++20", "-fno-omit-frame-pointer",
+                       "-funwind-tables")
+MACHO_AUTH_NATIVE_TEXT(kRuntimeProviderSourceFile, "provider.cpp")
+MACHO_AUTH_NATIVE_TEXT(kRuntimeHarnessFile, "native-runtime.cpp")
+MACHO_AUTH_NATIVE_TEXT(kRuntimeControlFile, "native-control.out")
+MACHO_AUTH_NATIVE_TEXT(kRuntimeDriverFile, "native-driver.out")
+MACHO_AUTH_NATIVE_TEXT(kRuntimeProviderFile, "libneverd_provider.dylib")
+MACHO_AUTH_NATIVE_TEXT(kRuntimeOutputFile, "native-runtime.txt")
+MACHO_AUTH_NATIVE_TEXT(kRuntimeControlOption, "-DNEVERD_AUTH_CONTROL")
+MACHO_AUTH_NATIVE_TEXT(kRuntimeInstallName,
+                       "-Wl,-install_name,@rpath/libneverd_provider.dylib")
+MACHO_AUTH_NATIVE_TEXT(kRuntimeRpathPrefix, "-Wl,-rpath,")
+MACHO_AUTH_NATIVE_TEXT(
+    kRuntimeControlUnavailable,
+    "compiler-original arm64e call/unwind control could not execute: ")
+MACHO_AUTH_NATIVE_TEXT(kRuntimeMarker, "native-auth-call-unwind-ok")
+MACHO_AUTH_NATIVE_TEXT(kRelroRuntimeMarker, "native-relro-permissions-ok")
+MACHO_AUTH_NATIVE_TEXT(
+    kRelroNativeHost, "requires native Apple Silicon, Clang, codesign and dyld")
+MACHO_AUTH_NATIVE_VALUE(uint64_t, kRelroRuntimeValue, 73)
+MACHO_AUTH_NATIVE_ARGS(kRelroCompileArgs, "-arch", "arm64", "-std=c++20")
+MACHO_AUTH_NATIVE_TEXT(kRelroHeaderOption, "-Wl,-headerpad,0x1000")
+MACHO_AUTH_NATIVE_TEXT(kRelroOriginalSource, R"cpp(
+extern "C" {
+unsigned long long new_slots[1] = {1};
+int base_function() { return 7; }
+}
+)cpp")
+MACHO_AUTH_NATIVE_TEXT(kRelroRuntimeSource, R"cpp(
+#include <dlfcn.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+int main(int argc, char **argv) {
+  if (argc != 4) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) { fprintf(stderr, "%s\n", dlerror()); return 2; }
+  uintptr_t anchor = (uintptr_t)dlsym(image, "new_slots");
+  if (!anchor) return 3;
+  auto *constant = (volatile uint64_t *)(anchor + strtoull(argv[2], nullptr, 0));
+  auto *mutableData = (volatile uint64_t *)(anchor + strtoull(argv[3], nullptr, 0));
+  if (*constant != 73 || *mutableData != 0) return 4;
+  *mutableData = 19;
+  if (*mutableData != 19) return 5;
+  mach_vm_address_t address = (uintptr_t)constant;
+  mach_vm_size_t size = 0;
+  vm_region_basic_info_data_64_t info{};
+  mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+  mach_port_t owner = MACH_PORT_NULL;
+  auto status = mach_vm_region(mach_task_self(), &address, &size,
+      VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info, &count, &owner);
+  if (owner) mach_port_deallocate(mach_task_self(), owner);
+  if (status || address > (uintptr_t)constant ||
+      (uintptr_t)constant - address >= size ||
+      !(info.protection & VM_PROT_READ) || (info.protection & VM_PROT_WRITE)) return 6;
+  puts("native-relro-permissions-ok");
+  return 0;
+}
+)cpp")
+MACHO_AUTH_NATIVE_TEXT(kRuntimeControlResult, "native_control_result")
+MACHO_AUTH_NATIVE_ARGS(kRuntimeCompileArgs, "-arch", "arm64e", "-std=c++20",
+                       "-fno-omit-frame-pointer", "-fno-optimize-sibling-calls")
+MACHO_AUTH_NATIVE_ARGS(kProviderCompileArgs, "-dynamiclib")
+MACHO_AUTH_NATIVE_TEXT(kRuntimeProviderSource, R"cpp(
+extern "C" {
+int neverd_should_throw = 0;
+int neverd_provider_data[2] = {11, 13};
+__attribute__((noinline)) int neverd_provider() {
+  if (neverd_should_throw) throw 71;
+  return 7;
+}
+}
+)cpp")
+MACHO_AUTH_NATIVE_TEXT(kRuntimeHarness, R"cpp(
+#include <ptrauth.h>
+#include <dlfcn.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+using Function = int (*)();
+using DataA = int * __ptrauth(2, 1, 4660);
+using DataB = int * __ptrauth(3, 1, 4660);
+#ifdef NEVERD_AUTH_CONTROL
+extern "C" {
+int native_dispatch();
+extern int neverd_should_throw;
+extern DataA const native_local_data;
+extern DataB const native_external_data;
+}
+#endif
+int main(int argc, char **argv) {
+#ifdef NEVERD_AUTH_CONTROL
+  Function call = &native_dispatch;
+  int *throwFlag = &neverd_should_throw;
+  if (*native_local_data != 9 || *native_external_data != 13) return 2;
+  volatile int *mutableData = native_local_data;
+  *mutableData = 19;
+  if (*mutableData != 19) return 7;
+  *mutableData = 9;
+#else
+  if (argc != 6) return 10;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) { fprintf(stderr, "%s\n", dlerror()); return 11; }
+  const uintptr_t anchor = (uintptr_t)dlsym(image, "new_slots");
+  int *throwFlag = (int *)dlsym(image, "neverd_should_throw");
+  if (!anchor || !throwFlag) return 12;
+  Function call = (Function)ptrauth_sign_unauthenticated(
+      (void *)(anchor + strtoull(argv[2], nullptr, 0)), ptrauth_key_function_pointer, 0);
+  auto *local = (DataA const *)(anchor + strtoull(argv[3], nullptr, 0));
+  auto *external = (DataB const *)(anchor + strtoull(argv[4], nullptr, 0));
+  if (**local != 9 || **external != 13) return 13;
+  volatile int *mutableData = *local;
+  *mutableData = 19;
+  if (*mutableData != 19) return 15;
+  *mutableData = 9;
+  const auto slot = anchor + strtoull(argv[5], nullptr, 0);
+  mach_vm_address_t address = slot;
+  mach_vm_size_t size = 0;
+  vm_region_basic_info_data_64_t info{};
+  mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+  mach_port_t owner = MACH_PORT_NULL;
+  auto status = mach_vm_region(mach_task_self(), &address, &size,
+      VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info, &count, &owner);
+  if (owner) mach_port_deallocate(mach_task_self(), owner);
+  if (status || address > slot || slot - address >= size ||
+      (info.protection & VM_PROT_WRITE)) return 14;
+#endif
+  if (call() != 49) return 3;
+  *throwFlag = 1;
+  try { (void)call(); return 4; }
+  catch (int value) { if (value != 71) return 5; }
+  *throwFlag = 0;
+  if (call() != 49) return 6;
+  puts("native-auth-call-unwind-ok");
+  return 0;
+}
+)cpp")
+
+MACHO_AUTH_NATIVE_TEXT(kObjectSource, R"cpp(
+#include <ptrauth.h>
+extern "C" {
+int neverd_provider();
+extern int neverd_provider_data[2];
+__attribute__((noinline)) int native_target() { return 42; }
+int native_values[2] = {7, 9};
+using Function = int (*)();
+extern Function __ptrauth(0, 1, 4660) const volatile native_local_code
+  __attribute__((section("__AUTH_CONST,__const"))) = &native_target;
+extern Function __ptrauth(1, 1, 4660) const volatile native_external_code
+  __attribute__((section("__AUTH_CONST,__const"))) = &neverd_provider;
+extern int * __ptrauth(2, 1, 4660) const native_local_data
+  __attribute__((section("__DATA_CONST,__const"))) = &native_values[1];
+extern int * __ptrauth(3, 1, 4660) const native_external_data
+  = &neverd_provider_data[1];
+__attribute__((noinline)) int native_dispatch() {
+  return native_local_code() + native_external_code();
+}
+}
+)cpp")
+
 #undef MACHO_AUTH_NATIVE_TEXT
 #undef MACHO_AUTH_NATIVE_VALUE
 #undef MACHO_AUTH_NATIVE_ARGS

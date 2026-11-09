@@ -13,6 +13,7 @@
 
 #include "neverd/backend/codegen/MachO/MachOAuthenticatedFixups.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
+#include "neverd/backend/codegen/SourcePatchDependencies.h"
 #include "neverd/loader/Loader.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
 #include "neverd/loader/MachO/MachOThreadedBind.h"
@@ -517,6 +518,140 @@ TEST(MachOArm64eInstallation, RejectsIncompleteProducerReceiptsBeforeMutation) {
   Check([](auto &I, auto &) { I.Bytes.back() = 1; });
   Check([](auto &I, auto &) { I.SymbolAddrs.clear(); });
   Check([](auto &I, auto &) {
+    I.Sections.back().Kind = llvm::mc_rewrite::RewriteSectionKind::ReadOnlyData;
+  });
+}
+
+TEST(MachOArm64eDependencies,
+     ObjectSigningWordsKeepSignedAddendsAndAllKeyBits) {
+  const auto Word =
+      macho_loader::arm64e::decodeObjectPointerWord(kObjectSigningWord);
+  ASSERT_TRUE(Word);
+  EXPECT_EQ(Word->Addend, kObjectSignedAddend);
+  EXPECT_EQ(Word->Diversity, kInstalledDiversity);
+  EXPECT_EQ(Word->Key, 3u);
+  EXPECT_TRUE(Word->AddressDiversity);
+  EXPECT_FALSE(
+      macho_loader::arm64e::decodeObjectPointerWord(kObjectReservedWord));
+  EXPECT_FALSE(macho_loader::arm64e::decodeObjectPointerWord(0));
+}
+
+TEST(MachOArm64eInstallation, DeclaredProvidersAndRelroInstallTogether) {
+  for (bool Threaded : {false, true})
+    for (const uint64_t MutableOffset :
+         {uint64_t{0}, 2 * kLargePage, kAlignedMutableOffset}) {
+      const bool Mutable = MutableOffset != 0;
+      auto Bytes =
+          largePageImage(Threaded ? threadedImage() : linkedImage(Chains[0]));
+      const auto Before = Bytes;
+      auto Image = producerImage(Bytes);
+      Image.Sections.back().ReadOnlyAfterFixups = true;
+      Image.Sections.back().FixupReferences.back().Symbol =
+          kAdditionalNativeSymbol;
+      if (Mutable) {
+        CompiledSection Data;
+        Data.Name = kMutableSegment;
+        Data.Kind = llvm::mc_rewrite::RewriteSectionKind::WritableData;
+        Data.Offset = MutableOffset;
+        Data.VA = Image.BaseVA + Data.Offset;
+        Data.Size = kSlotBytes;
+        Image.Bytes.resize(Data.Offset + Data.Size);
+        Image.Sections.push_back(Data);
+      }
+      const SourcePatchDependency Dependency{kAdditionalLibrary,
+                                             kAdditionalSymbol};
+      auto Error =
+          MachOPatcher().appendReplacementImage(Bytes, Image, {}, {Dependency});
+      ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+      auto Recipes =
+          collectMachOAuthenticatedFixups(Bytes, Image, {Dependency});
+      ASSERT_TRUE(bool(Recipes)) << llvm::toString(Recipes.takeError());
+      ASSERT_EQ(Recipes->size(), 2u);
+      EXPECT_EQ(Recipes->back().Recipe.LibraryOrdinal, 2);
+      EXPECT_EQ(Recipes->back().Recipe.Module, kAdditionalLibrary);
+      EXPECT_EQ(Recipes->back().Recipe.Addend, kImportAddend);
+      Error = verifyMachOAuthenticatedFixups(Bytes, *Recipes);
+      ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+      unsigned Relro = 0, Writable = 0;
+      forEachMachOLoadCommand(
+          Bytes.data(), Bytes.size(),
+          [&](const uint8_t *Command, uint32_t ID, uint32_t, bool Is64) {
+            if (ID != LC_SEGMENT_64)
+              return;
+            const auto *Segment =
+                reinterpret_cast<const segment_command_64 *>(Command);
+            const auto Name = readMachOName(Segment->segname);
+            if (Name == kRelroSegment) {
+              ++Relro;
+              EXPECT_EQ(Segment->vmaddr, Image.BaseVA + kLargePage);
+              const auto Size =
+                  Mutable ? MutableOffset - kLargePage : kLargePage;
+              EXPECT_EQ(Segment->vmsize, Size);
+              EXPECT_EQ(Segment->filesize, Size);
+              EXPECT_EQ(Segment->flags, kReadOnlySegmentFlag);
+              EXPECT_EQ(Segment->initprot, VM_PROT_READ | VM_PROT_WRITE);
+              EXPECT_EQ(Segment->maxprot, VM_PROT_READ | VM_PROT_WRITE);
+            }
+            if (Name == kMutableSegment) {
+              ++Writable;
+              EXPECT_EQ(Segment->vmaddr, Image.BaseVA + MutableOffset);
+              EXPECT_EQ(Segment->flags, 0u);
+            }
+          });
+      EXPECT_EQ(Relro, 1u);
+      EXPECT_EQ(Writable, unsigned(Mutable));
+      auto OldState = readMachODependencyState(Before);
+      auto NewState = readMachODependencyState(Bytes);
+      ASSERT_TRUE(bool(OldState));
+      ASSERT_TRUE(bool(NewState));
+      Error = preserveMachODependencyState(*OldState, *NewState);
+      ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    }
+}
+
+TEST(MachOArm64eInstallation, InvalidProviderAndRelroRequestsRollBackTogether) {
+  const auto Original = largePageImage(threadedImage());
+  const auto Check = [&](auto Change) {
+    auto Bytes = Original;
+    auto Image = producerImage(Bytes);
+    Image.Sections.back().ReadOnlyAfterFixups = true;
+    Image.Sections.back().FixupReferences.back().Symbol =
+        kAdditionalNativeSymbol;
+    std::vector<SourcePatchDependency> Requests{
+        {kAdditionalLibrary, kAdditionalSymbol}};
+    Change(Bytes, Image, Requests);
+    const auto Before = Bytes;
+    auto Error =
+        MachOPatcher().appendReplacementImage(Bytes, Image, {}, Requests);
+    EXPECT_TRUE(bool(Error));
+    llvm::consumeError(std::move(Error));
+    EXPECT_EQ(Bytes, Before);
+  };
+  Check([](auto &, auto &, auto &D) { D.front().Symbol = kUnusedDependency; });
+  Check([](auto &, auto &, auto &D) { D.push_back(D.front()); });
+  Check([](auto &, auto &, auto &D) { D.front().Library.push_back('\0'); });
+  Check([](auto &B, auto &, auto &) {
+    const auto H = parseMachOHeader(B.data(), B.size());
+    B[H.HeaderSize + H.SizeOfCmds] = kOccupiedHeader;
+  });
+  Check([](auto &B, auto &, auto &D) {
+    D.front().Library = kLibrary;
+    forEachMachOLoadCommand(
+        B.data(), B.size(), [&](const uint8_t *C, uint32_t ID, uint32_t, bool) {
+          if (ID == LC_LOAD_DYLIB)
+            writeLE<uint32_t>(B.data() + (C - B.data()), LC_LOAD_WEAK_DYLIB);
+        });
+  });
+  Check([](auto &, auto &I, auto &) {
+    auto Mutable = I.Sections.back();
+    Mutable.ReadOnlyAfterFixups = false;
+    Mutable.FixupReferences.clear();
+    Mutable.Offset += Mutable.Size;
+    Mutable.VA += Mutable.Size;
+    I.Bytes.resize(Mutable.Offset + Mutable.Size);
+    I.Sections.push_back(Mutable);
+  });
+  Check([](auto &, auto &I, auto &) {
     I.Sections.back().Kind = llvm::mc_rewrite::RewriteSectionKind::ReadOnlyData;
   });
 }

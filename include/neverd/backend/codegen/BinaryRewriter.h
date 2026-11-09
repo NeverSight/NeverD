@@ -194,6 +194,9 @@ struct CompiledSection {
   /// image: either non-allocated linker metadata or an allocated section with
   /// a format-owned external placement.
   std::vector<uint8_t> ExternalBytes;
+  /// Writable only while the native loader applies fixups. Mach-O installs
+  /// these sections on separate SG_READ_ONLY pages before ordinary RW data.
+  bool ReadOnlyAfterFixups = false;
 };
 
 using CompiledFunctionRange = llvm::mc_rewrite::RewriteFunctionRange;

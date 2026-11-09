@@ -27,6 +27,8 @@
 
 namespace neverd {
 namespace {
+#define SOURCE_DEPENDENCY_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "SourcePatchDependencies.def"
 llvm::Error fail(const llvm::Twine &Message) {
   return llvm::createStringError(llvm::errc::not_supported,
                                  "source dependency: " + Message);
@@ -175,15 +177,13 @@ appendCOFFImports(const BinaryImage &Original,
 }
 } // namespace
 
-llvm::Expected<SourcePatchDependencies>
-prepareSourcePatchDependencies(const BinaryImage &Original,
-                               llvm::ArrayRef<SourcePatchDependency> Requests) {
+llvm::Error validateSourcePatchDependencyRequests(
+    llvm::ArrayRef<SourcePatchDependency> Requests) {
   if (Requests.empty() ||
       Requests.size() >
           ::neverd::limits::backend::
               kSourcePatchDependenciesPrepareSourcePatchDependenciesRequestsSizeLimit)
-    return fail("expected between 1 and 4096 explicit imports");
-  SourcePatchDependencies Result;
+    return fail(kRequestCount);
   std::set<std::string> Names;
   for (const auto &Request : Requests) {
     if (Request.Library.empty() ||
@@ -199,7 +199,18 @@ prepareSourcePatchDependencies(const BinaryImage &Original,
         (Request.Kind != SourcePatchDependencyKind::Function &&
          Request.Kind != SourcePatchDependencyKind::Data) ||
         !Names.insert(Request.Symbol).second)
-      return fail("empty, duplicate or invalid dependency request");
+      return fail(kRequestShape);
+  }
+  return llvm::Error::success();
+}
+
+llvm::Expected<SourcePatchDependencies>
+prepareSourcePatchDependencies(const BinaryImage &Original,
+                               llvm::ArrayRef<SourcePatchDependency> Requests) {
+  if (auto Error = validateSourcePatchDependencyRequests(Requests))
+    return Error;
+  SourcePatchDependencies Result;
+  for (const auto &Request : Requests) {
     for (const auto &Import : Original.Imports)
       if (Import.Name == Request.Symbol ||
           (Original.Format == BinaryFormat::MachO &&

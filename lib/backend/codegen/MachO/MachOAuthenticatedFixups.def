@@ -46,6 +46,11 @@ MACHO_AUTH_FIXUP_TEXT(kProducer,
                       "incomplete or inconsistent producer signing receipt")
 MACHO_AUTH_FIXUP_TEXT(kProducerImport,
                       "producer symbol has no unique existing dyld provider")
+MACHO_AUTH_FIXUP_TEXT(kDeclaredProvider,
+                      "explicit provider is absent, ambiguous or unused")
+MACHO_AUTH_FIXUP_TEXT(kNativeSymbolPrefix, "_")
+MACHO_AUTH_FIXUP_TEXT(
+    kRelro, "authenticated storage lost its dyld read-only protection")
 
 #undef MACHO_AUTH_FIXUP_VALUE
 #undef MACHO_AUTH_FIXUP_TEXT

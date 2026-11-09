@@ -12,6 +12,7 @@
 #include "MachODependencyState.h"
 
 #include "neverd/backend/codegen/BinaryRewriter.h"
+#include "neverd/backend/codegen/SourcePatchDependencies.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
 #include "neverd/loader/MachO/MachOThreadedBind.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -165,6 +166,9 @@ llvm::Error replay(const MachOChainedFixups &Chains,
         [](const auto &Slot, uint64_t VA) { return Slot.first < VA; });
     if (It == Slots.end() || It->first != Fixup.Address)
       return fail(kReplay);
+    if (Fixup.ReadOnlyAfterFixups &&
+        !(Chains.Segments[It->second.first].Flags & SG_READ_ONLY))
+      return fail(kRelro);
     const auto Format =
         arm64e::chainFormat(Chains.Segments[It->second.first].PointerFormat);
     if (!Format)
@@ -196,8 +200,9 @@ llvm::Error replay(const MachOChainedFixups &Chains,
 } // namespace
 
 llvm::Expected<std::vector<MachOAuthenticatedFixup>>
-neverd::collectMachOAuthenticatedFixups(llvm::ArrayRef<uint8_t> Original,
-                                        const CompiledImage &Image) {
+neverd::collectMachOAuthenticatedFixups(
+    llvm::ArrayRef<uint8_t> Original, const CompiledImage &Image,
+    llvm::ArrayRef<SourcePatchDependency> Dependencies) {
   std::vector<MachOAuthenticatedFixup> Result;
   // Most images have no signing receipts. Do not parse dyld metadata unless
   // there is work for this owner, and index the original imports only once.
@@ -205,6 +210,8 @@ neverd::collectMachOAuthenticatedFixups(llvm::ArrayRef<uint8_t> Original,
   for (const auto &Section : Image.Sections)
     for (const auto &Reference : Section.FixupReferences)
       Needed |= Reference.PointerAuth.has_value();
+  if (!Needed && !Dependencies.empty())
+    return fail(kDeclaredProvider);
   if (!Needed)
     return Result;
   if (!Image.Success || Image.Format != BinaryFormat::MachO ||
@@ -220,13 +227,27 @@ neverd::collectMachOAuthenticatedFixups(llvm::ArrayRef<uint8_t> Original,
       !arm64e::isSubtype(State->CPUSubtype) || !Chains.CommandOffset)
     return fail(kImageABI);
   using Provider = std::pair<int64_t, bool>;
-  std::map<llvm::StringRef, std::optional<Provider>> Providers;
+  std::map<std::string, std::optional<Provider>> Providers;
   for (const auto &Import : Chains.Imports) {
     const Provider Identity{Import.Ordinal,
                             bool(Import.Flags & BIND_SYMBOL_FLAGS_WEAK_IMPORT)};
     auto [It, Added] = Providers.emplace(Import.Name, Identity);
     if (!Added && It->second != Identity)
       It->second.reset();
+  }
+  std::map<llvm::StringRef, unsigned> LibraryOrdinals;
+  if (!Dependencies.empty())
+    for (unsigned I = 0; I < Chains.Libraries.size(); ++I)
+      if (!LibraryOrdinals.emplace(Chains.Libraries[I], I + 1).second)
+        return fail(kDeclaredProvider);
+  std::map<std::string, bool> Declared;
+  for (const auto &Dependency : Dependencies) {
+    auto Library = LibraryOrdinals.find(Dependency.Library);
+    const auto Name = kNativeSymbolPrefix + Dependency.Symbol;
+    if (Library == LibraryOrdinals.end() ||
+        !Declared.emplace(Name, false).second)
+      return fail(kDeclaredProvider);
+    Providers[Name] = Provider{Library->second, false};
   }
   for (const auto &Section : Image.Sections) {
     for (const auto &Reference : Section.FixupReferences) {
@@ -249,6 +270,7 @@ neverd::collectMachOAuthenticatedFixups(llvm::ArrayRef<uint8_t> Original,
       const auto &Auth = *Reference.PointerAuth;
       MachOAuthenticatedFixup Fixup;
       Fixup.Address = Section.VA + Reference.Offset;
+      Fixup.ReadOnlyAfterFixups = Section.ReadOnlyAfterFixups;
       Fixup.Recipe.Key = Auth.Key;
       Fixup.Recipe.Diversity = Auth.Diversity;
       Fixup.Recipe.AddressDiversity = Auth.AddressDiversity;
@@ -263,11 +285,16 @@ neverd::collectMachOAuthenticatedFixups(llvm::ArrayRef<uint8_t> Original,
           return fail(kProducer);
         Fixup.Recipe.Target = Reference.ResolvedValue;
       } else {
-        auto Provider = Providers.find(Reference.Symbol);
+        const auto Name = Image.InputKind == RewriteInputKind::ReplacementObject
+                              ? kNativeSymbolPrefix + Reference.Symbol
+                              : Reference.Symbol;
+        auto Provider = Providers.find(Name);
         if (Provider == Providers.end() || !Provider->second)
           return fail(kProducerImport);
         const auto [Ordinal, Weak] = *Provider->second;
-        Fixup.Recipe.Symbol = Reference.Symbol;
+        Fixup.Recipe.Symbol = Name;
+        if (auto Entry = Declared.find(Name); Entry != Declared.end())
+          Entry->second = true;
         Fixup.Recipe.LibraryOrdinal = Ordinal;
         if (Ordinal > 0)
           Fixup.Recipe.Module = Chains.Libraries[Ordinal - 1];
@@ -277,6 +304,8 @@ neverd::collectMachOAuthenticatedFixups(llvm::ArrayRef<uint8_t> Original,
       Result.push_back(std::move(Fixup));
     }
   }
+  if (llvm::any_of(Declared, [](const auto &Entry) { return !Entry.second; }))
+    return fail(kDeclaredProvider);
   return Result;
 }
 

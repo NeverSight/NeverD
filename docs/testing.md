@@ -21667,6 +21667,12 @@ Long-name controls distinguish an admitted shared symbol from repeated copies
 that exhaust the threaded budget; both snapshot decoding and installation must
 reject the latter before changing the image.
 
+The installation suite also covers explicit provider admission and page-isolated
+RELRO in both chain formats, with and without ordinary mutable storage. Invalid,
+unused, duplicate and weak-library requests, occupied header padding and mixed
+RELRO/mutable pages must reject without changing the input. Independent literal
+object words check signed addends and the full two-bit authentication key.
+
 `AppleClang/MachOArm64eNativeInstallation.*` compiles actual arm64e dylibs at
 O0/O2, installs sixteen recipes including a new libSystem import both in
 existing storage and in newly appended RX/RW segments, re-signs with the
@@ -21686,6 +21692,28 @@ exception-unwind evidence. These tests inspect files and do not execute dyld,
 C++ cleanup or the native signed unwinder. Non-Apple hosts explicitly skip the
 Apple-tool cases. `NEVERD_ARM64E_DYLD_ARTIFACT_DIR` exports qualification inputs
 and diagnostics; ordinary runs remove their temporary directory.
+
+`AppleClang/MachOArm64eNativeObjectInstallation.*` compiles O0/O2 native objects
+with four authenticated relocations using IA/IB/DA/DB, local and newly declared
+external providers, and a nonzero data addend. Inputs include explicit
+`__AUTH_CONST`/`__DATA_CONST` sections and the compiler's default `__DATA,__const`.
+Both modern chained and legacy threaded installations retain generated
+`BLRAA`, `BLRAB` and `RETAB` instructions, add native compact unwind entries,
+preserve original C++ LSDA/personality and signed DWARF state, and pass strict
+code-signature verification. Malformed relocation bits and a mismatched ABI
+reject transactionally; removing `SG_READ_ONLY` fails final recipe replay.
+The matrix exercises both header and tail placement of compact unwind metadata;
+nonzero tail bytes and zero-filled ranges owned by `LC_NOTE` prevent reuse.
+The separate `AuthenticatedCallsAndSignedUnwindExecute` cases first compile and
+run an original call/throw control, then load the installed image and check
+authenticated functions/data, exception propagation through its signed frame,
+and the actual read-only mapping. A control that cannot execute causes an
+explicit skip. File-level validation does not qualify these runtime contracts.
+`MachONativeRelro.DyldProtectsConstantsAndKeepsMutablePagesWritable` separately
+loads an ordinary arm64 image with the same RELRO installer, reads the constant,
+writes adjacent mutable storage and queries the actual mapping permissions.
+That control qualifies the shared protection mechanism on Apple Silicon hosts
+that cannot launch arm64e; it does not qualify authenticated calls or unwinding.
 The [producer/threaded qualification record](evidence/arm64e-producer-threaded-2026-11-09.json)
 records integration checks and the remaining producer/runtime limits. The
 [earlier chained-only record](evidence/arm64e-dyld-install-2026-11-08.json)

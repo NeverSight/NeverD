@@ -1,0 +1,14 @@
+//===- MachOLayoutGrowth.def - Native metadata placement -------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef MACHO_LAYOUT_TEXT
+#define MACHO_LAYOUT_TEXT(Name, Text)
+#endif
+
+MACHO_LAYOUT_TEXT(kMetadataTextSegment, "__TEXT")
+MACHO_LAYOUT_TEXT(kCompactSection, "__unwind_info")
+
+#undef MACHO_LAYOUT_TEXT

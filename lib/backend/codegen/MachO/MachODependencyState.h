@@ -32,6 +32,7 @@ struct MachOChainedSegment {
   uint32_t CommandOffset = 0, Protections = 0;
   uint16_t PointerFormat = 0, PageSize = 0;
   std::vector<MachOChainedSlot> Slots;
+  uint32_t Flags = 0;
 };
 /// Owned facts from the strict reader, captured only for an installing caller.
 struct MachOChainedFixups {

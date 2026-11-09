@@ -59,7 +59,8 @@ public:
   /// without the caller's code-signature and call/unwind ABI checks.
   llvm::Error appendReplacementImage(
       std::vector<uint8_t> &Binary, const CompiledImage &Image,
-      llvm::ArrayRef<MachOAuthenticatedFixup> AuthenticatedFixups = {});
+      llvm::ArrayRef<MachOAuthenticatedFixup> AuthenticatedFixups = {},
+      llvm::ArrayRef<SourcePatchDependency> Dependencies = {});
 
 private:
   struct PatchLayout : PatchLayoutBase {
@@ -94,6 +95,7 @@ private:
     uint64_t SegmentFileSize = 0;
     uint32_t SegmentNSects = 0;
     uint64_t WritableSize = 0;
+    uint64_t RelroSize = 0;
     uint64_t LinkeditVA = 0;
     uint64_t LinkeditVMSize = 0;
     uint64_t LinkeditFileOff = 0;
@@ -109,7 +111,8 @@ private:
                                  llvm::ArrayRef<uint8_t> Code,
                                  llvm::StringRef SegName, Arch TargetArch,
                                  ExecSegmentInstallReceipt *Receipt,
-                                 uint64_t WritableOffset = 0);
+                                 uint64_t WritableOffset = 0,
+                                 uint64_t RelroSize = 0);
   bool validateExecSegmentInstall(const std::vector<uint8_t> &Binary,
                                   Arch TargetArch,
                                   const ExecSegmentInstallReceipt &Receipt);

@@ -1,0 +1,32 @@
+//===- MachOPatchObject.def - Native authenticated objects -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef MACHO_OBJECT_TEXT
+#define MACHO_OBJECT_TEXT(Name, Text)
+#endif
+
+MACHO_OBJECT_TEXT(kArm64eTriple, "arm64e-apple-macosx")
+MACHO_OBJECT_TEXT(
+    kSubtype,
+    "native object pointer-authentication ABI does not match the image")
+MACHO_OBJECT_TEXT(
+    kAuthMetadata,
+    "authenticated relocation lacks a native writable symbolic slot")
+MACHO_OBJECT_TEXT(kAuthSymbol,
+                  "authenticated relocation names an unavailable native symbol")
+MACHO_OBJECT_TEXT(kAuthTarget, "authenticated relocation target overflows")
+MACHO_OBJECT_TEXT(kDataSegment, "__DATA")
+MACHO_OBJECT_TEXT(kAuthSegment, "__AUTH")
+MACHO_OBJECT_TEXT(kDataConstSegment, "__DATA_CONST")
+MACHO_OBJECT_TEXT(kAuthConstSegment, "__AUTH_CONST")
+MACHO_OBJECT_TEXT(kConstSection, "__const")
+MACHO_OBJECT_TEXT(kNativeImage, "native-object-image")
+MACHO_OBJECT_TEXT(kNativeStorage,
+                  "native authenticated object requires a linked arm64e image")
+MACHO_OBJECT_TEXT(kNativePlacement,
+                  "native authenticated object has no safe placement")
+
+#undef MACHO_OBJECT_TEXT
