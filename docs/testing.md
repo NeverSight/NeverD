@@ -1028,6 +1028,23 @@ The witness checks 8/16/32-bit ports, the complete MSR input, partial-register
 results, dead effects and callee-saved state against original instruction
 bytes; its selector/value/result corruptions must fail. It requires Capstone,
 LIEF and Unicorn and supplies controlled privileged completions.
+`X86PortableSystemSource.WrmsrnsUsesNativeCallsInBothCodeModes` checks the
+independent WRMSRNS capability dispatch through both C routes, O0/O2 and all
+supported native source formats. The i386 source ABI uses Linux ELF and the
+full NeverC backend. Its artifact directory retains six original byte inputs
+and twelve complete C sources. Run the same complete-source witness with
+`--family wrmsrns` to compare both compilers' C with the originals, including
+full-width MSR values, selectors, return state and rejected corruptions.
+
+NeverC's `tests/verify-i386-portable-system.py --compiler NEVERC
+--backend-llc LLVM_LLC --keep OUT` covers the other portable i386 interfaces
+and REP dynamic frames. `tests/verify-i386-cpuid-header.py --compiler NEVERC
+--backend-llc LLVM_LLC --clang CLANG --linker LD_LLD --keep OUT` checks ID
+availability/restoration, signature pointers, PIC, both dialects and the forced
+header fallback. It links PIC objects before replay so GOT relocations remain
+part of the tested program. Its simulated fixed ID bit acts at POPFD, avoiding
+Unicorn arithmetic-flag mutation at unrelated conditional branches.
+
 The AMX format-compilation and native completion/fault matrices likewise register
 each encoding separately, retaining all formats, both pipeline optimization
 settings and every source/native route. Parameter names retain the instruction

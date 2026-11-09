@@ -1,0 +1,327 @@
+{
+  "scope": "Portable i386 system interfaces, CPUID headers and native WRMSRNS C rendering",
+  "global_x86_complete": false,
+  "llvm_release_gate_passed": false,
+  "production_llvm_pin": "neverd-llvm-v23.0.0-r6",
+  "llvm_backend_changed": false,
+  "source_heads": {
+    "neverc_compiler": "5ede0bcf27db9c852b9156bcb93e6743d3fbb93d",
+    "neverc_header_and_test_build": "66985175f702515f21f46eb74878c9f1c8068e8c",
+    "neverc_publication": "82b64e2faa501188f96f7298ff126b7c1093eab8",
+    "neverd_implementation_and_tests": "2513c8762861698328aa840ef6f27d004e8abd69",
+    "llvm": "b726cb0425bc7e1f7e2753972a748ebcfa8b5741"
+  },
+  "i386_portable_admission_closed": [
+    "__builtin_ia32_wrmsrns",
+    "__builtin_ia32_int",
+    "__builtin_ia32_cpuidex",
+    "__builtin_ia32_inbytestring",
+    "__builtin_ia32_inwordstring",
+    "__builtin_ia32_indwordstring",
+    "__builtin_ia32_outbytestring",
+    "__builtin_ia32_outwordstring",
+    "__builtin_ia32_outdwordstring"
+  ],
+  "additional_header_gap_closed": "cpuid.h x64-only guard; native i386 ID availability/restoration and PIC/dialect compatibility fallback",
+  "qualified_resource_headers_sha256": {
+    "cpuid.h": "d92a9f4d029edeea085257bb94a1e067b23ddaa71dc7fa6758024c4f786453d4",
+    "intrin.h": "20ee46af91bfccc50de19bf7dfdaea040efbdc7cb5530f4b8f9ade6554a704a0",
+    "immintrin.h": "373a903f0365533b68e58c20862af204ea9f9af4bcef45c0fdb598cdb637b47a"
+  },
+  "references": {
+    "amd": {
+      "url": "https://docs.amd.com/v/u/en-US/24594_3.38_APM_Vol3_PUB",
+      "sha256": "e18bd39ad0ca19d2eb9b9ea25c2635144c5ab368e5d6fbdc7a08345515ea1aee",
+      "revision": "3.38 (July 2026)",
+      "pages": {
+        "cpuid": 171,
+        "ins": 192,
+        "int": 194,
+        "outs": 278
+      }
+    },
+    "intel": {
+      "url": "https://cdrdv2-public.intel.com/929356/334569-093-sdm-vol-2d.pdf",
+      "revision": "093 (September 2026)",
+      "pages": "6-12 to 6-14",
+      "wrmsrns": "Implicit 0F 01 C6 is valid in 32-bit and 64-bit code, index ECX, value EDX:EAX; the distinct immediate form is long-mode only."
+    },
+    "microsoft": {
+      "url": "https://learn.microsoft.com/en-us/cpp/intrinsics/inbytestring?view=msvc-170",
+      "architectures": [
+        "x86",
+        "x64"
+      ]
+    },
+    "bounded_contracts": [
+      "REP port width is 1/2/4 bytes; i386 uses ES:EDI or DS:ESI and ECX element count. DF remains implicit. Native instruction owns privilege, segment/page faults and restart.",
+      "INT raw API preserves continuation and unknown memory effects; test handlers preserve register state. An arbitrary register-changing interrupt ABI needs a distinct state carrier."
+    ]
+  },
+  "admission": {
+    "before": {
+      "i386_rejected": 9,
+      "x64_native_controls": 9,
+      "receipt_sha256": "99449b662e7460d8a61104cbbddec664cc51e1e2dcc35d139968fd112ced5bb7"
+    },
+    "after": {
+      "i386_native": 9,
+      "x64_native_controls": 9,
+      "receipt_sha256": "1e7c3e10741cd4cc0df55e7568315c76f9dc5e84168e5832047cb796ab03886c"
+    }
+  },
+  "builds": {
+    "neverc-build-receipt.json": {
+      "source_head": "5ede0bcf27db9c852b9156bcb93e6743d3fbb93d",
+      "command": [
+        "cmake",
+        "--build",
+        "build-neverc",
+        "--target",
+        "neverc",
+        "neverc-tests",
+        "--parallel",
+        "4"
+      ],
+      "exit_code": 0,
+      "seconds": 61.83228879800299,
+      "outputs": {
+        "neverc": "bb118eff364f5c02340b9ec37bf213a939d95fe1bfe59f4c4c3d049f667bf3d7",
+        "neverc-tests": "92ad1fb9e9324f1cd34b569fbfe954772459653a50950cf0867199c949ce1e08"
+      }
+    },
+    "neverc-header-build-receipt.json": {
+      "source_head": "66985175f702515f21f46eb74878c9f1c8068e8c",
+      "command": [
+        "cmake",
+        "--build",
+        "build-neverc",
+        "--target",
+        "neverc",
+        "neverc-tests",
+        "--parallel",
+        "4"
+      ],
+      "exit_code": 0,
+      "seconds": 41.79653429304017,
+      "outputs": {
+        "neverc": "bb118eff364f5c02340b9ec37bf213a939d95fe1bfe59f4c4c3d049f667bf3d7",
+        "neverc-tests": "51b81c7ae60fbc61910f8d3a4d6dcf8ad1f367a442a59fc632cf0df3883f3fa6"
+      }
+    },
+    "qualified-native-build-receipt.json": {
+      "source_head": "2513c8762861698328aa840ef6f27d004e8abd69",
+      "source_status": "",
+      "command": [
+        "python3",
+        "scripts/build.py",
+        "build-x86-native",
+        "--target",
+        "NeverDX86VirtualizationSourceTests",
+        "--parallel",
+        "4"
+      ],
+      "exit_code": 0,
+      "seconds": 40.277,
+      "log_sha256": "adf8ab0704d03b075fae1e26e0dd44dfb4ea9b946aa18198db74a6bae1fa8cdb",
+      "outputs": {
+        "NeverDX86VirtualizationSourceTests": "53f69a8c0f0eada21d5e07c42d32a9a66af39cb84b3709d00980507e10c3a6a4"
+      }
+    },
+    "qualified-r6-build-receipt.json": {
+      "source_head": "2513c8762861698328aa840ef6f27d004e8abd69",
+      "source_status": "",
+      "command": [
+        "python3",
+        "scripts/build.py",
+        "build-x86",
+        "--target",
+        "NeverDX86VirtualizationSourceTests",
+        "--parallel",
+        "4"
+      ],
+      "exit_code": 0,
+      "seconds": 73.926,
+      "log_sha256": "ffadde0509a37e2a920afa970f79e383d56b17e7acb9b6818fe764bb4aaf8575",
+      "outputs": {
+        "NeverDX86VirtualizationSourceTests": "c2862a6117b357c70cbc817a751963e95172ed4e6cad6ec29c9bd7177d9e3fa5"
+      }
+    }
+  },
+  "focused_checks": {
+    "native-qualified": {
+      "binary_sha256": "53f69a8c0f0eada21d5e07c42d32a9a66af39cb84b3709d00980507e10c3a6a4",
+      "source_head": "2513c8762861698328aa840ef6f27d004e8abd69",
+      "neverc_sha256": "bb118eff364f5c02340b9ec37bf213a939d95fe1bfe59f4c4c3d049f667bf3d7",
+      "neverc_llc_sha256": "1d6f80fa2f4fb7e0fe0e2b5f3f1732c527a898274ecb9063a9d7830ab3b3ec5e",
+      "source_tree": "598ab2daa7b568be6cd9237537922722f0e017e4",
+      "exit_code": 0,
+      "seconds": 2.984,
+      "log_sha256": "d688e3c25b3bade935a0920608cd59f10fc5f8f2c81942b9b3ac804cf34a0f82",
+      "result_sha256": "7d98d6b54599471c4302bfe7aa6bdafa81f6da4ff3dfcc8404c3d61b15f3545a",
+      "tests": 2,
+      "c_compilations": 96,
+      "failed": 0,
+      "skipped": [],
+      "passed": 2
+    },
+    "r6-qualified": {
+      "binary_sha256": "c2862a6117b357c70cbc817a751963e95172ed4e6cad6ec29c9bd7177d9e3fa5",
+      "source_head": "2513c8762861698328aa840ef6f27d004e8abd69",
+      "neverc_sha256": "bb118eff364f5c02340b9ec37bf213a939d95fe1bfe59f4c4c3d049f667bf3d7",
+      "neverc_llc_sha256": "1d6f80fa2f4fb7e0fe0e2b5f3f1732c527a898274ecb9063a9d7830ab3b3ec5e",
+      "source_tree": "598ab2daa7b568be6cd9237537922722f0e017e4",
+      "exit_code": 0,
+      "seconds": 4.163,
+      "log_sha256": "ddf07458f10b17d0b3fbf18dc8aad500578dfe8845c5cf9acd815f6a02e8c0aa",
+      "result_sha256": "d5b65c75ed86bc9239144aa5b1c2af8c93fcfa73eb586f31a4d1cbf5c42fcfc4",
+      "tests": 1,
+      "c_compilations": 96,
+      "failed": 0,
+      "skipped": [],
+      "passed": 1
+    },
+    "neverc-qualified": {
+      "source_head": "916c1e0ae0e308ad65e1595c02d2f8064eb18729",
+      "compiler_sha256": "bb118eff364f5c02340b9ec37bf213a939d95fe1bfe59f4c4c3d049f667bf3d7",
+      "test_binary_sha256": "51b81c7ae60fbc61910f8d3a4d6dcf8ad1f367a442a59fc632cf0df3883f3fa6",
+      "exit_code": 0,
+      "seconds": 50.567,
+      "log_sha256": "909c09c067aff9045200759497967a1bd2b76d18a5d1da7d92da1ac82e8c7b1b",
+      "tests": 188,
+      "failed": 0,
+      "skipped": 0,
+      "skipped_names": []
+    }
+  },
+  "portable_source": {
+    "objects": 58,
+    "controlled_completions": 1190,
+    "large_count_boundaries": 768,
+    "negative_controls": 210,
+    "witness_sha256": "00dba829f132ea263243cdf9d70ac4c908c9ec6b3c19bbed65373d6bf416846b",
+    "result_sha256": "62c27dd96f40ab1bb5b9acb4713c5c281978096887485d7866a0df3dd7fce60e",
+    "oracle_sha256": {
+      "verify-system-completion.py": "c74da0d45b76f95af2791ee32ca5a4a87ca3ac8316f4997c77b712931438a292",
+      "verify-msr-completion.py": "b0800dc372ec6f2c17801927b53adb33432a98beb6bf55199ac23a63c32310b8",
+      "verify-interrupt-completion.py": "3845e9be6ab0ce83d57006585c337ae0fec165b70022a585ce621ff628bc80a7"
+    }
+  },
+  "cpuid_header": {
+    "linked_objects": 24,
+    "availability_abi_comparisons": 384,
+    "id_restoration_negative_controls": 24,
+    "source_sha256": "9058c3651d7a21bce33822cae24ea5b46e52022e603e9fca5a7ec6d6daadf6e2",
+    "witness_sha256": "f7a41258b4bc8d20c7b5d9e2531ad0b9d6fb3000d93c7c93ef956e54b5032571",
+    "result_sha256": "fc9071fcfc9298fbab5b5c27c03bfaf012d8e643899ef5963198b9b6aa71143d",
+    "linker_sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+    "clang_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+  },
+  "complete_wrmsrns_source": [
+    {
+      "profile": "native-complete-neverc",
+      "objects": 24,
+      "comparisons": 72,
+      "negative_controls": 48,
+      "compiler_sha256": "bb118eff364f5c02340b9ec37bf213a939d95fe1bfe59f4c4c3d049f667bf3d7",
+      "backend_sha256": "1d6f80fa2f4fb7e0fe0e2b5f3f1732c527a898274ecb9063a9d7830ab3b3ec5e",
+      "receipt_sha256": "9f350179a8456e738e2a4fe63c4d693df9681a97886d758c3863989471d262f6",
+      "results_sha256": "29f85ab355d0cb39e103264c1a465b5c1953cf4dafa8edde249770d084465dec",
+      "exit_code": 0
+    },
+    {
+      "profile": "native-complete-clang",
+      "objects": 24,
+      "comparisons": 72,
+      "negative_controls": 48,
+      "compiler_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "backend_sha256": null,
+      "receipt_sha256": "7c595d229768eb222ea7d10b69a006339613c762c28a2b05fad58699137366e9",
+      "results_sha256": "6c58a1c1f4422335a7a7b9fc35c10c5e5f3308370574a7dc8cdf76b1899cce86",
+      "exit_code": 0
+    },
+    {
+      "profile": "r6-complete-neverc",
+      "objects": 24,
+      "comparisons": 72,
+      "negative_controls": 48,
+      "compiler_sha256": "bb118eff364f5c02340b9ec37bf213a939d95fe1bfe59f4c4c3d049f667bf3d7",
+      "backend_sha256": "1d6f80fa2f4fb7e0fe0e2b5f3f1732c527a898274ecb9063a9d7830ab3b3ec5e",
+      "receipt_sha256": "d600b12eddc611c92194caf5366ce1d15bc76637968177547035da3f0e89a535",
+      "results_sha256": "6fabbec4c3bcf7e2951491e66e3caa703498694dbf091e493c40a6f780136aed",
+      "exit_code": 0
+    },
+    {
+      "profile": "r6-complete-clang",
+      "objects": 24,
+      "comparisons": 72,
+      "negative_controls": 48,
+      "compiler_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "backend_sha256": null,
+      "receipt_sha256": "7e8da6f98b219ee5039ca23cf0dd6f4f8dc2ac67c51622f24cfbd24620235158",
+      "results_sha256": "e897be3e5fb0c89ae52fc801f02e134fe4e10c9fced50425fe6b61076e13918e",
+      "exit_code": 0
+    }
+  ],
+  "complete_source_witness_sha256": "7a8844a8a91225bb7c18dead6c5a6d6d244080e05f8c728a522bb900e4884d96",
+  "scalar_regression": {
+    "objects": 168,
+    "comparisons": 504,
+    "negative_controls": 336,
+    "result_sha256": "27d625fad2a698a9480be00e5d113f6284a20f1114eb0488f6e240aace940687"
+  },
+  "llvm_regression": {
+    "tests": 6,
+    "source_head": "b726cb0425bc7e1f7e2753972a748ebcfa8b5741",
+    "result_sha256": "9fcee56e500915a8de2ac5084a209e390427cdc4f1bc218cfbabfa181a6568d0",
+    "receipt_sha256": "7cd18e2d73369f6399a13ef7b345c316143a212b41e118a0d7cc6ab411c7ed7c",
+    "exit_code": 0
+  },
+  "global_state_audit": {
+    "artifact_gate_passed": true,
+    "source_preflight_passed": false,
+    "source_preflight_findings": 90,
+    "artifact_findings": 0,
+    "unscannable_inputs": 0,
+    "command": "python3 utils/plugin-api/check-global-state.py --build-dir build-neverc --strict --json",
+    "artifact_report_sha256": "971a67243437e9a0d0d851ee285b372b1413947eb087cdc13cf37c28fe989de2",
+    "artifact_receipt": {
+      "source_head": "1d626878205ea6a6e0b69edbddcf051d1f297e93",
+      "command": [
+        "python3",
+        "utils/plugin-api/check-global-state.py",
+        "--strict",
+        "--json",
+        "--build-dir",
+        "build-neverc"
+      ],
+      "exit_code": 0,
+      "seconds": 16.518295468005817,
+      "compiler_sha256": "bb118eff364f5c02340b9ec37bf213a939d95fe1bfe59f4c4c3d049f667bf3d7",
+      "report_sha256": "971a67243437e9a0d0d851ee285b372b1413947eb087cdc13cf37c28fe989de2",
+      "verified_current_head": "02d30ebe4e080e1ac913435af893afffec945b29",
+      "post_audit_changed_paths": [
+        "neverc/lib/Headers/cpuid.h",
+        "tests/neverc/X86/PortableSystemFrontendTests.cpp",
+        "tests/verify-i386-cpuid-header.py"
+      ],
+      "same_compiler": true
+    },
+    "source_report_sha256": "026d5e02373fc4fe54f82c9297a5c4a0675edd8d91ddce5d5383a4eaa48539ee",
+    "allowlist_or_rule_changes": false,
+    "interpretation": "Source-only lexical findings are not an independent release failure once the qualified artifact supplies the required symbol ownership proof. This result covers the local ELF compiler only."
+  },
+  "limitations": [
+    "No privileged instruction or port I/O executes in these controlled witnesses; successful physical device/MSR/gate transitions and REP fault/restart are not qualified.",
+    "Raw INT completion assumes a register-preserving returning handler; it does not introduce an arbitrary interrupt register ABI.",
+    "DF=1 checks raw REP lowering, not ABI-compliant C function entry. Large counts stop at the native instruction boundary.",
+    "Windows/Darwin i386 source ABIs, complete mode/task transitions, software SMM/SGX, unbound asynchronous producers and hardware qualification remain open overall release gates.",
+    "No LLVM release, LLVM submodule revision change or production pin change is made by this batch."
+  ],
+  "reproduce": {
+    "portable": "python3 tests/verify-i386-portable-system.py --compiler NEVERC --backend-llc LLVM_LLC --keep OUT",
+    "cpuid_header": "python3 tests/verify-i386-cpuid-header.py --compiler NEVERC --backend-llc LLVM_LLC --clang CLANG --linker LD_LLD --keep OUT",
+    "neverd": "NEVERD_TEST_NEVERC=NEVERC NEVERD_TEST_NEVERC_LLC=LLVM_LLC NEVERD_ISA_REGRESSION_ARTIFACT_DIR=EXPORTS NeverDX86VirtualizationSourceTests --gtest_filter=X86PortableSystemSource.*",
+    "complete_c": "python3 scripts/check_x86_scalar_system_source.py --family wrmsrns --exports EXPORTS --compiler COMPILER --backend-llc LLVM_LLC --output OUT; omit backend option for Clang"
+  }
+}

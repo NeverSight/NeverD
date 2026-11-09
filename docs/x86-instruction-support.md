@@ -4600,10 +4600,55 @@ controls across 48 objects. All 185 x86/i386 tests and the SKINIT, VMX, SVM,
 VMRUN and FLAGS regressions pass. The full LLVM fork passes the three selected
 MSR/system codegen suites. No LLVM enum, lowering or production SDK pin changed.
 
-Nine further i386 portable source entry points remain unavailable: WRMSRNS,
-INT, CPUIDEX and the six string-port interfaces. Each rejection is reproduced
-alongside a passing x64 native-IR control. Windows/Darwin i386 source ABIs and
-the broader state/event release gates also remain open. Controlled completions
-do not qualify physical MSR/port success; the strict source-global audit still
-has its 90 baseline findings. A new LLVM release remains gated on the overall
-completion work.
+The nine additional portable entry points identified by this checkpoint are
+qualified below. Windows/Darwin i386 source ABIs and the broader state/event
+release gates remain open. Controlled completions do not qualify physical
+MSR/port success. A new LLVM release remains gated on the overall completion
+work; the source-only and artifact global-state audits are distinguished below.
+
+## Portable i386 system interfaces and CPUID headers (2026-11-08)
+
+The nine reproduced portable source admission gaps are closed: WRMSRNS, INT,
+CPUIDEX and byte/word/dword input/output strings. Their existing LLVM operations
+already have code32 lowering; NeverC now registers these interfaces in the
+shared x86 owner. WRMSRNS retains ECX and the complete EDX:EAX input. NeverD's
+HighC and LLVM-to-C writers select its native builtin using an independent
+capability macro, so long-mode-only members of the system family no longer
+prevent i386 native output. New shared source tests live under `lift/x86/`.
+
+REP port interfaces retain unsigned 32-bit element counts in both modes. Native
+INS/OUTS owns DF, DS/ES access, permissions and restart. INT retains its existing
+resumable interface; the controlled completion witness uses register-preserving
+handlers and does not define an arbitrary interrupt register ABI. The implicit
+WRMSRNS form is valid in both modes; its separate immediate form remains
+long-mode-only, as specified in [Intel SDM 093, volume 2D, pages 6-12–6-14](https://cdrdv2-public.intel.com/929356/334569-093-sdm-vol-2d.pdf).
+
+The integration witness also exposed an independent `cpuid.h` x64-only guard.
+The header now admits i386, uses native CPUID and FLAGS builtins, and restores
+EFLAGS.ID after checking whether a legacy CPU supports CPUID. The unavailable
+branch returns zero without querying CPUID or touching the signature pointer.
+The i386 compatibility fallback supports PIC and both assembly dialects.
+
+The [portable-system evidence](evidence/x86-i386-portable-system-2026-11-08.json)
+records 188 passing NeverC tests, six LLVM codegen suites, 192 native C compilation
+checks across both SDKs, and 96 complete WRMSRNS C objects with 288 original-byte
+comparisons and 192 rejected corruptions. The actual i386 frontend produces 58
+portable/Microsoft/GNU-header objects with 1,190 controlled completions, 768
+large-count boundary checks and 210 negative controls. Its REP cases include
+realigned dynamic frames, unaligned pointers and both directions. DF=1 is a raw
+lowering probe, not an ABI-compliant C entry. A separate CPUID availability
+witness links 24 native/fallback/PIC/dialect objects and passes 384 comparisons
+plus 24 rejected ID-restoration corruptions. The existing scalar complete-source
+witness also passes 504 comparisons and 336 negative controls with the new
+compiler. These checks do not execute privileged instructions or port I/O.
+
+The strict global-state audit **with the linked compiler** passes with zero
+findings and zero unscannable inputs. The same source-only preflight retains
+90 lexical findings; that conservative mode deliberately lacks the symbol-table
+proof that discharges them. Earlier references to those 90 findings as a release
+blocker were too broad. No audit rule or allowlist was weakened. This establishes
+the global-state gate for the qualified local ELF compiler, not every release
+artifact. Windows/Darwin i386 source ABIs, complete mode/task transitions,
+software SMM/SGX transfers, unbound asynchronous producers and hardware
+qualification remain open. LLVM source and the production r6 pin are unchanged;
+no new LLVM release is declared.
