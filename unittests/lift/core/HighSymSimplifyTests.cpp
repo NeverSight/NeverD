@@ -17,6 +17,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/ir/high/pass/HighSemanticSimplifier.h"
 #include "SourceCallExecution.h"
 #include "gtest/gtest.h"
 
@@ -4247,5 +4248,126 @@ int main(void) {
 )C";
     source_call_execution_test::compileAndRun(Program, {"-O0"});
     source_call_execution_test::compileAndRun(Program, {"-O2"});
+  }
+}
+
+TEST(HighSymSimplify, RepeatedQueriesRecomputeDefinitionsWidthsAndAliases) {
+  // The same source expression is first read with an unhelpful shift, then
+  // with the shift that cancels its residue. Reusing search work must not
+  // reuse the old reaching definition, a different width, or input aliasing.
+  for (unsigned Threads : {1u, 4u}) {
+    for (uint16_t Bytes : {1, 4, 8, 16})
+      for (bool Alias : {false, true}) {
+        SCOPED_TRACE(Threads);
+        SCOPED_TRACE(Bytes);
+        SCOPED_TRACE(Alias);
+        auto X = HighExpr::makeVar(tempOfSize(1, Bytes));
+        auto Y = Alias ? X : HighExpr::makeVar(tempOfSize(2, Bytes));
+        auto ShiftCount = HighExpr::makeVar(tempOfSize(3, Bytes));
+        auto C = [&](uint64_t V) { return HighExpr::makeConst(V, Bytes); };
+        auto Expected = HighExpr::makeBinop(
+            NdOp::INT_ADD,
+            HighExpr::makeBinop(NdOp::INT_ADD,
+                                HighExpr::makeBinop(NdOp::INT_MULT, C(182), X),
+                                HighExpr::makeBinop(NdOp::INT_MULT, C(73), Y)),
+            C(37));
+        auto Source = HighExpr::makeBinop(
+            NdOp::INT_ADD, Expected,
+            HighExpr::makeBinop(
+                NdOp::INT_SUB,
+                HighExpr::makeBinop(NdOp::INT_RIGHT, X, ShiftCount),
+                HighExpr::makeBinop(
+                    NdOp::INT_RIGHT,
+                    HighExpr::makeBinop(NdOp::INT_RIGHT, X, C(2)), C(2))));
+        const auto Original = Source->str();
+        for (uint64_t Shift : {3, 4, 3, 4}) {
+          SCOPED_TRACE(Shift);
+          HighStmt Definition;
+          Definition.Kind = StmtKind::Assign;
+          Definition.Dst = ShiftCount;
+          Definition.Val = C(Shift);
+          HighStmt Return;
+          Return.Kind = StmtKind::Return;
+          Return.RetVal = Source;
+          std::vector<HighStmt> Body{Definition, Return};
+          auto Fresh = Body;
+          simplifyExprSemantics(Body, Threads);
+          simplifyExprSemantics(Fresh, Threads);
+          const auto &After = Body.back().RetVal;
+          EXPECT_EQ(After->str(), Fresh.back().RetVal->str());
+          EXPECT_EQ(Source->str(), Original);
+          if (Shift == 4)
+            EXPECT_EQ(After->str().find(">>"), std::string::npos)
+                << After->str();
+          for (uint64_t A : {0ull, 1ull, 127ull, 128ull, 255ull, ~0ull})
+            for (uint64_t B : {0ull, 1ull, 128ull, 255ull, ~0ull}) {
+              const std::unordered_map<int, uint64_t> Bindings{
+                  {1, A}, {2, B}, {3, Shift}};
+              EXPECT_EQ(integerValue(After, A, B, &Bindings),
+                        integerValue(Source, A, B, &Bindings));
+            }
+        }
+      }
+  }
+}
+
+TEST(HighSymSimplify, ScopedSearchRecomputesDefinitionsWidthsAndAliases) {
+  // The same source expression is first read with an unhelpful shift, then
+  // with the shift that cancels its residue. Reusing search work must not
+  // reuse the old reaching definition, a different width, or input aliasing.
+  for (unsigned Threads : {1u, 4u}) {
+    detail::HighSemanticSimplifier Semantics;
+    for (uint16_t Bytes : {1, 4, 8, 16})
+      for (bool Alias : {false, true}) {
+        SCOPED_TRACE(Threads);
+        SCOPED_TRACE(Bytes);
+        SCOPED_TRACE(Alias);
+        auto X = HighExpr::makeVar(tempOfSize(1, Bytes));
+        auto Y = Alias ? X : HighExpr::makeVar(tempOfSize(2, Bytes));
+        auto ShiftCount = HighExpr::makeVar(tempOfSize(3, Bytes));
+        auto C = [&](uint64_t V) { return HighExpr::makeConst(V, Bytes); };
+        auto Expected = HighExpr::makeBinop(
+            NdOp::INT_ADD,
+            HighExpr::makeBinop(NdOp::INT_ADD,
+                                HighExpr::makeBinop(NdOp::INT_MULT, C(182), X),
+                                HighExpr::makeBinop(NdOp::INT_MULT, C(73), Y)),
+            C(37));
+        auto Source = HighExpr::makeBinop(
+            NdOp::INT_ADD, Expected,
+            HighExpr::makeBinop(
+                NdOp::INT_SUB,
+                HighExpr::makeBinop(NdOp::INT_RIGHT, X, ShiftCount),
+                HighExpr::makeBinop(
+                    NdOp::INT_RIGHT,
+                    HighExpr::makeBinop(NdOp::INT_RIGHT, X, C(2)), C(2))));
+        const auto Original = Source->str();
+        for (uint64_t Shift : {3, 4, 3, 4}) {
+          SCOPED_TRACE(Shift);
+          HighStmt Definition;
+          Definition.Kind = StmtKind::Assign;
+          Definition.Dst = ShiftCount;
+          Definition.Val = C(Shift);
+          HighStmt Return;
+          Return.Kind = StmtKind::Return;
+          Return.RetVal = Source;
+          std::vector<HighStmt> Body{Definition, Return};
+          auto Fresh = Body;
+          Semantics.simplify(Body, Threads);
+          simplifyExprSemantics(Fresh, Threads);
+          const auto &After = Body.back().RetVal;
+          EXPECT_EQ(After->str(), Fresh.back().RetVal->str());
+          EXPECT_EQ(Source->str(), Original);
+          if (Shift == 4)
+            EXPECT_EQ(After->str().find(">>"), std::string::npos)
+                << After->str();
+          for (uint64_t A : {0ull, 1ull, 127ull, 128ull, 255ull, ~0ull})
+            for (uint64_t B : {0ull, 1ull, 128ull, 255ull, ~0ull}) {
+              const std::unordered_map<int, uint64_t> Bindings{
+                  {1, A}, {2, B}, {3, Shift}};
+              EXPECT_EQ(integerValue(After, A, B, &Bindings),
+                        integerValue(Source, A, B, &Bindings));
+            }
+        }
+      }
   }
 }

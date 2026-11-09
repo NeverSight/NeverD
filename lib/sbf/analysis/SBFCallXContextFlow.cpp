@@ -2054,7 +2054,17 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
         return CoveredElsewhere.takeError();
       Redundant = *CoveredElsewhere;
     }
-    if (!Redundant)
+    // An unknown-input forwarding root can hand its completed outgoing
+    // proof graph to the generic root with exactly the same entry facts.
+    // Keep both sets of edges and the conservative generic memory result.
+    // Own sites and instantiated input proofs retain their original owner.
+    const bool TransferRootCalls =
+        !Redundant && ReplaceRoot && GenericEquivalent &&
+        Candidate->Sites.empty() && Generic.Sites.empty() &&
+        llvm::all_of(Candidate->Calls, [](const auto &Edge) {
+          return Edge.InputExpressionTargets.empty();
+        });
+    if (!Redundant && !TransferRootCalls)
       continue;
     // Do not rewrite an edge in a graph whose fixed point is still being
     // computed. Completed old callers receive the same ABI facts above.
@@ -2081,6 +2091,19 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
       if (auto Error = retain(Bytes))
         return std::move(Error);
       RetriedUnblockedCalls.emplace(Entry, Retry->CalleeEntry);
+    }
+    if (TransferRootCalls) {
+      const uint64_t CallBytes = Candidate->Calls.size() * sizeof(ContextCall);
+      if (auto Error = retain(CallBytes))
+        return std::move(Error);
+      Generic.RetainedBytes += CallBytes;
+      for (auto &Edge : Candidate->Calls) {
+        Edge.CallerSummaryID = Generic.ID;
+        Generic.Calls.push_back(std::move(Edge));
+      }
+      // Ownership moves; each child's incoming reference remains live.
+      Candidate->Calls.clear();
+      Generic.HasTargetEvidence |= Candidate->HasTargetEvidence;
     }
     const bool WasPublished = Candidate->Published;
     for (const auto &Context : Contexts)
@@ -2116,7 +2139,7 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
     // The generic root already retains this entry's unknown-input coverage.
     // A precise root is redundant only after the same output and complete
     // proof-graph obligations as any completed incoming edge have passed.
-    // Independently published siblings keep all of its concrete targets.
+    // Independent roots or the transferred graph keep its concrete targets.
     Candidate->IsRoot = false;
     Candidate->Published = false;
     Pending.clear();

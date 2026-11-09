@@ -31,17 +31,16 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def execute(code, entry, completion, corrupt=None, mode=32):
+def execute(code, entry, completion, corrupt=None):
     decoder = capstone.Cs(capstone.CS_ARCH_X86,
-                          capstone.CS_MODE_64 if mode == 64 else capstone.CS_MODE_32)
+                          capstone.CS_MODE_64)
     decoder.detail = True
     # Decode boundaries first; newer opcodes may be absent in Capstone 5.
-    markers = [(bytes.fromhex('0f01c6'), 'wrmsrns', mode),
-               (bytes.fromhex('0f01ff'), 'tlbsync', mode),
-               (bytes.fromhex('670f01ff'), 'tlbsync', mode),
-               (bytes.fromhex('0f01fe'), 'invlpgb', mode)]
-    if mode == 64:
-        markers.insert(0, (bytes.fromhex('670f01fe'), 'invlpgb', 32))
+    markers = [(bytes.fromhex('0f01c6'), 'wrmsrns', 64),
+               (bytes.fromhex('0f01ff'), 'tlbsync', 64),
+               (bytes.fromhex('670f01ff'), 'tlbsync', 64),
+               (bytes.fromhex('0f01fe'), 'invlpgb', 64)]
+    markers.insert(0, (bytes.fromhex('670f01fe'), 'invlpgb', 32))
     accesses, offset = [], 0
     while offset < len(code):
         for marker, mnemonic, address_bits in markers:
@@ -57,18 +56,17 @@ def execute(code, entry, completion, corrupt=None, mode=32):
         offset += instruction.size
     assert len(accesses) == 1, 'expected exactly one scalar system instruction'
     instruction = accesses[0]
-    wide = mode == 64
-    machine = unicorn.Uc(unicorn.UC_ARCH_X86, unicorn.UC_MODE_64 if wide else unicorn.UC_MODE_32)
-    reg = lambda name: getattr(regs, 'UC_X86_REG_' + ('R' if wide else 'E') + name)
-    word = mode // 8
+    machine = unicorn.Uc(unicorn.UC_ARCH_X86, unicorn.UC_MODE_64)
+    reg = lambda name: getattr(regs, 'UC_X86_REG_' + 'R' + name)
+    word = 8
     machine.mem_map(CODE, 16 * PAGE)
     machine.mem_write(CODE, code)
     machine.mem_map(STACK, 8 * PAGE)
     sp = STACK + 7 * PAGE - word
     machine.reg_write(reg('SP'), sp)
-    machine.mem_write(sp, struct.pack('<Q' if wide else '<I', STOP))
+    machine.mem_write(sp, struct.pack('<Q', STOP))
     machine.reg_write(regs.UC_X86_REG_EFLAGS, 2)
-    saved_names = ('BX', 'BP', '12', '13', '14', '15') if wide else ('BX', 'SI', 'DI', 'BP')
+    saved_names = ('BX', 'BP', '12', '13', '14', '15')
     saved = {reg(name): (0x19283740 + i) ^ (completion & 0xFFFFFFFF)
              for i, name in enumerate(saved_names)}
     for register, value in saved.items():
@@ -101,7 +99,7 @@ def execute(code, entry, completion, corrupt=None, mode=32):
                 if selector_operand.type == capstone.x86.X86_OP_IMM:
                     mutated = bytearray(code)
                     mutated[instruction.address - CODE + instruction.size - 1] ^= 1
-                    return execute(bytes(mutated), entry, completion, mode=mode)
+                    return execute(bytes(mutated), entry, completion)
                 machine.reg_write(regs.UC_X86_REG_DX, machine.reg_read(regs.UC_X86_REG_DX) ^ 1)
             selector = selector_operand.imm if selector_operand.type == capstone.x86.X86_OP_IMM \
                 else machine.reg_read(regs.UC_X86_REG_DX)
@@ -143,43 +141,39 @@ def main():
     parser.add_argument('--exports', type=Path, required=True)
     parser.add_argument('--compiler', type=Path, required=True)
     parser.add_argument('--backend-llc', type=Path,
-                        help='NeverC: i386 external driver, x64 emitted IR through llc')
+                        help='lower NeverC x64 emitted IR through the full LLVM backend')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--family', choices=('scalar', 'wrmsrns', 'tlb'), default='scalar')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    sources = sorted(args.exports.glob(args.family + '*_*.c'))
-    expected_sources = {'scalar': 84, 'wrmsrns': 12, 'tlb': 84}[args.family]
+    sources = sorted(args.exports.glob(args.family + '64_*.c'))
+    expected_sources = {'scalar': 84, 'wrmsrns': 12, 'tlb': 48}[args.family]
     assert len(sources) == expected_sources, 'missing complete C profiles'
     records, controls = [], []
     for source in sources:
         stem, route = source.stem.rsplit('.', 1)
         original = source.with_name(stem + '.bin')
-        mode = 64 if stem.startswith('tlb64_') else 32
-        baselines = {v: execute(original.read_bytes(), 0, v, mode=mode) for v in COMPLETIONS}
+        baselines = {v: execute(original.read_bytes(), 0, v) for v in COMPLETIONS}
         for level in ('O0', 'O2'):
             output = args.output / (source.stem + '-' + level)
             ir, obj = Path(str(output) + '.ll'), Path(str(output) + '.o')
-            triple = ('x86_64' if mode == 64 else 'i386') + '-unknown-linux-gnu'
+            triple = 'x86_64-unknown-linux-gnu'
             common = [str(args.compiler), '--target=' + triple, '-' + level,
                       '-std=gnu23', '-ffreestanding', '-fno-lto', '-fno-pic', '-fno-pie',
                       '-fno-stack-protector', '-fno-strict-aliasing', str(source)]
             if args.backend_llc:
                 common += ['-fno-builtin-mimalloc']
             commands = [common + ['-S', '-emit-llvm', '-o', str(ir)]]
-            if args.backend_llc and mode == 64:
-                # NeverC's external driver owns Linux i386. For code64, pass
-                # its actual IR to the qualified full backend explicitly.
+            if args.backend_llc:
+                # Pass the actual x64 IR to the qualified backend explicitly.
                 commands.append([str(args.backend_llc), '-mtriple=' + triple,
                                  '-' + level, '-verify-machineinstrs',
                                  '-relocation-model=static', '-filetype=obj',
                                  str(ir), '-o', str(obj)])
                 object_route = 'neverc-ir-to-llvm'
             else:
-                commands.append(common + ['-c', '-o', str(obj)] +
-                                (['-fllvm-backend=' + str(args.backend_llc)]
-                                 if args.backend_llc else []))
-                object_route = 'neverc-driver' if args.backend_llc else 'compiler-driver'
+                commands.append(common + ['-c', '-o', str(obj)])
+                object_route = 'compiler-driver'
             for step, command in enumerate(commands):
                 result = subprocess.run(command, capture_output=True, text=True, timeout=120)
                 Path(str(output) + f'-{step}.log').write_text(result.stdout + result.stderr)
@@ -193,21 +187,21 @@ def main():
             code = bytes(image.get_section('.text').content)
             entry = image.get_symbol('virtualization_test').value
             for value, expected in baselines.items():
-                compare(execute(code, entry, value, mode=mode), expected)
+                compare(execute(code, entry, value), expected)
             expected = baselines[COMPLETIONS[1]]
             fields = ('control', 'result') if expected['operation'] == 'tlbsync' else \
                 ('control', 'ids', 'count', 'result') if expected['operation'] == 'invlpgb' else \
                 ('selector', 'write_value' if expected['write_value'] is not None else 'result')
             for corruption in fields:
                 try:
-                    compare(execute(code, entry, COMPLETIONS[1], corruption, mode), expected)
+                    compare(execute(code, entry, COMPLETIONS[1], corruption), expected)
                 except AssertionError as error:
                     assert str(error).startswith(corruption + ' mismatch:'), error
                 else:
                     raise AssertionError(corruption + ' corruption escaped the oracle')
                 controls.append({'source': source.name, 'optimization': level, 'field': corruption})
             records.append({'source': source.name, 'route': route, 'optimization': level,
-                            'code_mode': mode, 'object_route': object_route,
+                            'code_mode': 64, 'object_route': object_route,
                             'source_sha256': digest(source), 'original_sha256': digest(original),
                             'object_sha256': digest(obj), 'commands': commands,
                             'observations': baselines, 'comparisons': len(COMPLETIONS)})

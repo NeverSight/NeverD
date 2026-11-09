@@ -202,6 +202,10 @@ inline constexpr size_t kHighSymSimplifyMinInterestingNodes = 4;
 /// improvement prevents canonical-form churn without hiding compact identities
 /// such as `~x + 1`.
 inline constexpr size_t kHighSymSimplifyMinGain = 1;
+/// Bound exact query keys and retained failed searches per conversion.
+inline constexpr size_t kHighSymSimplifySynthesisMemoQueryNodes = 4096;
+inline constexpr size_t kHighSymSimplifySynthesisMemoWords = size_t(1) << 20;
+
 /// Widest expression this pass hands the engine, in bits.
 ///
 /// The engine itself has no width ceiling — its literals are arbitrary

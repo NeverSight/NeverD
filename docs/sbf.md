@@ -574,9 +574,14 @@ return. Its conservative memory effects and target evidence remain unchanged;
 results from bound caller arguments do not establish this all-input fact.
 A completed older root whose inputs match the generic entry can also release
 its specialization when the generic result preserves its opaque return and
-every target proof remains independently published. Return differences and
-finite alternatives still prevent this replacement. Independent publication
-excludes the retiring root from both traversal seeds and incoming edges; its
+every target proof remains independently published or survives in a transferred
+outgoing graph. A forwarding root with no own CALLX sites or instantiated
+input-expression proofs on its outgoing edges can transfer those edges to the
+generic root. The generic root keeps its existing edges and conservative memory
+result; descendant witnesses retain their owners and incoming references.
+Return differences and finite target-set proofs still prevent this replacement.
+Independent publication excludes the retiring root from both traversal seeds
+and incoming edges; its
 own descendants cannot serve as witnesses that they survive its removal.
 When same-entry siblings do not cover the evidence, a bounded traversal of
 other completed published roots can establish that the exact retained

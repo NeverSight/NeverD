@@ -43,6 +43,7 @@
 #include <optional>
 #include <set>
 #include <tuple>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -4994,6 +4995,49 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
     }
     return std::nullopt;
   };
+  const auto groupStart = [](const std::vector<HighStmt> &L, size_t I) {
+    return L[I].Addr != 0 && L[I].Addr != InvalidVA &&
+           (I == 0 || L[I - 1].Addr != L[I].Addr);
+  };
+
+  // Keep the existing incremental site/parent remapping. When an ambiguous
+  // edge requires rebuilding those tables, unchanged lists still need only
+  // their address groups, transfers and containers, not every scalar.
+  // Reallocation must move statements so nested buffers retain their identity.
+  static_assert(std::is_nothrow_move_constructible_v<HighStmt>);
+  bool IndexPositions = false;
+  std::unordered_map<const HighStmt *, std::vector<size_t>> SitePositions;
+  auto HasSiteOrChildren = [&](const std::vector<HighStmt> &L, size_t I) {
+    const HighStmt &S = L[I];
+    return groupStart(L, I) || S.Kind == StmtKind::Goto || !S.Body.empty() ||
+           !S.ElseBody.empty() || !S.Cases.empty() || !S.DefaultBody.empty() ||
+           !S.EHClauseBodies.empty();
+  };
+  std::function<void(const std::vector<HighStmt> &)> ForgetPositions =
+      [&](const std::vector<HighStmt> &L) {
+        if (L.empty())
+          return;
+        SitePositions.erase(L.data());
+        for (const HighStmt &S : L) {
+          ForgetPositions(S.Body);
+          ForgetPositions(S.ElseBody);
+          for (const auto &C : S.Cases)
+            ForgetPositions(C.Body);
+          ForgetPositions(S.DefaultBody);
+          for (const auto &Clause : S.EHClauseBodies)
+            ForgetPositions(Clause);
+        }
+      };
+  auto ForgetChildren = [&](const HighStmt &S) {
+    ForgetPositions(S.Body);
+    ForgetPositions(S.ElseBody);
+    for (const auto &C : S.Cases)
+      ForgetPositions(C.Body);
+    ForgetPositions(S.DefaultBody);
+    for (const auto &Clause : S.EHClauseBodies)
+      ForgetPositions(Clause);
+  };
+
   std::unordered_map<va_t, Site> Labels;
   std::vector<std::pair<Site, va_t>> Gotos;
   // Retain ancestors only when a label or goto needs them. Sites share
@@ -5018,10 +5062,9 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
   std::function<void(std::vector<HighStmt> &, const void *, ParentScope *, Arm)>
       Collect = [&](std::vector<HighStmt> &L, const void *Try,
                     ParentScope *Parent, Arm In) {
-        for (size_t I = 0; I < L.size(); ++I) {
+        auto CollectOne = [&](size_t I) {
           HighStmt &S = L[I];
-          if (S.Addr != 0 && S.Addr != InvalidVA &&
-              (I == 0 || L[I - 1].Addr != S.Addr))
+          if (groupStart(L, I))
             ++Starts[S.Addr];
           if (labelStart(L, I) && S.Kind != StmtKind::Nop) {
             ++LabelStarts[S.Addr];
@@ -5051,6 +5094,23 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
           for (uint32_t C = 0; C < S.EHClauseBodies.size(); ++C)
             CollectChild(S.EHClauseBodies[C], &S.EHClauseBodies[C],
                          {ArmKind::Clause, C});
+        };
+        if (!IndexPositions) {
+          for (size_t I = 0; I < L.size(); ++I)
+            CollectOne(I);
+          return;
+        }
+        auto [It, Added] = SitePositions.try_emplace(L.data());
+        auto &Positions = It->second;
+        if (Added) {
+          for (size_t I = 0; I < L.size(); ++I)
+            if (HasSiteOrChildren(L, I)) {
+              Positions.push_back(I);
+              CollectOne(I);
+            }
+        } else {
+          for (size_t I : Positions)
+            CollectOne(I);
         }
       };
   const auto collectTables = [&] {
@@ -5060,6 +5120,9 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
     Starts.clear();
     LabelStarts.clear();
     Collect(Body, nullptr, nullptr, Arm{});
+    // Build sparse positions only if incremental remapping actually needs a
+    // rebuild.
+    IndexPositions = true;
   };
   // What runs after the list holding \p At falls off its end: the next
   // statement after the if/else, block or switch around it, when exactly
@@ -5084,10 +5147,7 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
     }
     return 0;
   };
-  const auto groupStart = [](const std::vector<HighStmt> &L, size_t I) {
-    return L[I].Addr != 0 && L[I].Addr != InvalidVA &&
-           (I == 0 || L[I - 1].Addr != L[I].Addr);
-  };
+
   const auto labelStatement = [&](const std::vector<HighStmt> &L, size_t I) {
     return labelStart(L, I) && L[I].Kind != StmtKind::Nop;
   };
@@ -5337,6 +5397,10 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
       if (GotoSite.Index + 1 < GL.size() &&
           !(SameList && GotoSite.Index + 1 == K))
         Record.AfterGoto = edgeAt(GL, GotoSite.Index + 1);
+      // Retire the destination buffer before insertion can reallocate it.
+      // Nested lists moved with their owner keep their buffers and positions.
+      SitePositions.erase(GL.data());
+      ForgetChildren(GL[GotoSite.Index]);
       std::vector<HighStmt> Moved(std::make_move_iterator(LL.begin() + K),
                                   std::make_move_iterator(LL.begin() + M + 1));
       if (FallTarget) {
@@ -5350,6 +5414,18 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
         HighStmt Removed;
         Removed.Kind = StmtKind::Nop;
         LL[J] = std::move(Removed);
+      }
+
+      // Source placeholders retain indices. Only their range and the next
+      // address group changed; every other candidate position remains valid.
+      if (auto It = SitePositions.find(LL.data()); It != SitePositions.end()) {
+        auto &Positions = It->second;
+        const auto First =
+            std::lower_bound(Positions.begin(), Positions.end(), K);
+        const auto Last = std::upper_bound(First, Positions.end(), M + 1);
+        const auto Next = Positions.erase(First, Last);
+        if (M + 1 < LL.size() && HasSiteOrChildren(LL, M + 1))
+          Positions.insert(Next, M + 1);
       }
       // A goto carrying an entered label keeps it as an empty block.
       HighStmt &G = GL[GotoSite.Index];

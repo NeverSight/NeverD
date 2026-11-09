@@ -38,7 +38,8 @@ struct BinaryImage;
 struct CompareTreeSwitch;
 namespace detail {
 class HighEntryStackOffsets;
-}
+class HighSemanticSimplifier;
+} // namespace detail
 
 Intrinsic intrinsicId(const MedOp &Op);
 std::string intrinsicName(const MedOp &Op);
@@ -421,7 +422,8 @@ private:
   void inferTypes(HighFunc &Func);
   void simplifyControlFlow(HighFunc &Func, const MedFunc &Med);
   void inlineGotoReturns(HighFunc &Func, const MedFunc &Med);
-  void eliminateDeadStmts(HighFunc &Func);
+  void eliminateDeadStmts(HighFunc &Func,
+                          detail::HighSemanticSimplifier &Semantics);
   void stripPrologueEpilogue(HighFunc &Func);
   void ensureTrailingReturn(HighFunc &Func, const MedFunc &Med);
 
@@ -626,7 +628,8 @@ private:
   /// call.
   /// Late goto reduction on the finished statement tree (tail duplication,
   /// splices, if/else joins, loop recovery), bounded by statement count.
-  void reduceLateGotos(HighFunc &Func);
+  void reduceLateGotos(HighFunc &Func,
+                       detail::HighSemanticSimplifier &Semantics);
   /// The start of each CurMed block that the exception dispatcher enters:
   /// a landing pad, a handler or a cleanup.  No jump in the body names one.
   std::set<va_t> dispatcherEntries() const;

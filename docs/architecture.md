@@ -11311,7 +11311,9 @@ support. See [the KVM domain](x86-kvm-hypercalls.md). This inventory does not
 imply coverage of every newer SEV/SNP instruction.
 
 `backend/llvm/X86/X86VirtualizationNative.h` owns native LLVM names and
-available NeverC source spellings together. Mode-sized i386 VMCS and address
+compiler source spellings together. NeverC's x86 source targets are x64;
+legacy builtins remain available through the full fork or assembly fallback.
+Mode-sized i386 VMCS and address
 APIs use the full fork's `32` names in both C renderers; management memory
 operands retain m64. SVM default-address i386 APIs also use `32`; address-size
 overrides use `.addr16` on i386 and `.addr32` on x64. Their address inputs remain
@@ -11752,9 +11754,12 @@ Actual x87 FLD/FST precision conversions remain numerical operations.
 HighIR cannot cancel its numerical round trip, and LLVM uses constrained
 extension/truncation with dynamic rounding. Both C routes use the same native
 FLD/FSTP helpers, so C optimization cannot erase signaling-NaN quieting or
-replace x87 store rounding with an ordinary cast. This covers the observable
-converted value; full x87 exception, stack-tag and status state still belongs
-to the existing context and explicit-state paths.
+replace x87 store rounding with an ordinary cast. These helpers require an
+x87 extended `long double`, but scalar conversions do not require its ABI
+padding to match `_BitInt(80)`. Actual `__builtin_bit_cast` expressions retain
+the compiler's storage-size check. This covers the observable converted value;
+full x87 exception, stack-tag and status state still belongs to the existing
+context and explicit-state paths.
 
 `MedTypePass` distinguishes a POP-shaped integer return from an unchanged
 entry-register save. A known reaching stack store of a computed value,
@@ -16973,8 +16978,14 @@ and no bounded proof of where the frame is follows them.
 For LLVM-to-C, `MedLLVMRegistrationSourceSEH.cpp` consumes these display facts
 in the private source module. It preflights distinct, closed finally bodies,
 their normal calls, local-unwind ancestors and owned filter CFGs before
-changing any blocks. Unsupported ownership, ambiguous levels, shared cleanup
+changing any blocks. Unsupported ownership, unproved levels, shared cleanup
 bodies and unrepresentable callback dependencies retain the unlowered source CFG.
+Ordinary shared tails whose stretches retain the same set of possible levels
+receive one CFG copy per active scope. Every incoming edge must establish its
+level, including quiet trailing state changes. Shared cycles redirect to the
+same level's copy; captured parent storage remains shared. Address-taken blocks,
+escaping SSA values, unsupported PHIs and unproved entries refuse the complete
+transformation before mutation. These copies share the cleanup expansion budget.
 Normal calls receive a copy of their finally body; a local unwind receives the
 exited bodies in inner-to-outer order, each under its enclosing scope. The
 exceptional copy lives in a cleanup pad. Clone work is bounded per function by
@@ -16994,6 +17005,12 @@ helper and capture allocas, which LLVMC
 prints as a call inside `__except`. Selected-source emission includes these
 helper definitions. The marker grants no Windows native callback ABI, and
 native outlining keeps its independent personality and frame checks.
+
+Source optimization remains transactional. If the optimized candidate fails
+verification, the source view conservatively promotes the retained input and
+checks its exception contract again. The result retains the rejection diagnostic;
+native optimization still reports the failed transaction. In particular, source
+fallback does not relax protected-call counters after LLVM removes an invoke.
 
 LLVMC can print a closed, branching cleanup CFG in each fragmented `__finally`.
 Each printed copy has private C labels and explicit PHI edge assignments. The
