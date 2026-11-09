@@ -4905,7 +4905,10 @@ item, which nothing analyzed or rendered reads, leave the renders as they are, a
 new name of data costs those that asked for it. A function's declaration reaches only
 what the decompiler reads, so the debug context takes it in place
 (`LocalTypesDebugContext::takeDeclarations`) and the analysis, the summaries and what
-was read ahead under them stand, unless it hides a prototype analysis read. Types new
+was read ahead under them stand. One that hides a prototype analysis read, or gives
+one back, lets go of the image's call summaries alone
+(`PipelineAnalysisCache::forgetPrototypes`): only their solve reads an export's
+prototype, while callee effects, no-return proofs and call graphs read bodies. Types new
 to the library that nothing names do the same (`Session::takeUnreadTypes`). Other
 types let go of what read them, and the summaries, the job and the store start over,
 while the process and its image stand. The owner keeps its listing and reference index
