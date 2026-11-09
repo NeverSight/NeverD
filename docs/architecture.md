@@ -18655,8 +18655,9 @@ contract. A wider actual is sliced; absent positions, vector slots and missing
 high bytes cannot supply an input. Required results must have no other entry
 dependencies, and every written ABI-preserved GPR must equal its incoming value.
 Observed call-clobbered flags refuse the GPR-only source expansion; unread
-flag definitions require no result. Each original query is then expanded once, in order, with fresh SSA values
-shared by all outputs. Native lifting retains the original CALL.
+flag definitions require no result. Each original body is expanded once, in
+order, with fresh SSA values shared by all outputs. Native lifting retains the
+original CALL.
 The cache accounts for retained leaf bodies, and per-body/per-function work
 bounds, including argument slices, prevent unbounded expansion. Unbound-entry,
 memory-using and other hardware leaves retain the ordinary unavailable-state
