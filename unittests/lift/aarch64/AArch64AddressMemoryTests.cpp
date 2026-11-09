@@ -1653,54 +1653,62 @@ TEST(AArch64AddressMemory, StoreShapesCannotInventOutputsOrUnusedHighBits) {
   }
 }
 
-TEST(AArch64AddressMemory,
-     NarrowAliasedIndicesSurviveDecodedSSAAndBothSourceABIs) {
-  for (const auto &Case : ABICases) {
-    SCOPED_TRACE(Case.Word);
-    BinaryImage Image;
-    Image.Arch = Arch::AArch64;
-    Image.Format = BinaryFormat::MachO;
-    Image.Bits = Bitness::Bits64;
-    Segment Text;
-    Text.VA = kEntry;
-    Text.Size = Text.FileSz = 3 * kWordBytes;
-    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
-    Text.Data.resize(Text.Size);
-    writeLE<uint32_t>(Text.Data.data(), Case.Word);
-    writeLE<uint32_t>(Text.Data.data() + kWordBytes, kMoveAliasToReturn);
-    writeLE<uint32_t>(Text.Data.data() + 2 * kWordBytes, kReturn);
-    Image.Segments.push_back(Text);
-    Decoder Dec;
-    ASSERT_TRUE(Dec.init(Image));
-    Dec.setStrict(true);
-    const auto Low = CFGBuilder().build(Image, Dec, kEntry, kName);
-    LowToMedConverter Converter;
-    Converter.setBinaryImage(&Image);
-    const auto Function =
-        Converter.convert(Low, Arch::AArch64, BinaryFormat::MachO);
-    ASSERT_TRUE(verifyMedFunc(Function, kName));
-    ASSERT_EQ(Function.Params.size(), 2);
-    EXPECT_EQ(Function.Params[1].Size, kWordBytes);
-    llvm::LLVMContext Context;
-    auto Module =
-        MedLLVMEmitter().emit({Function}, Context, kName, Arch::AArch64);
-    ASSERT_TRUE(Module);
-    optimizeMemory(*Module);
-    ASSERT_FALSE(llvm::verifyModule(*Module));
-    for (bool LLVMRoute : {false, true}) {
-      std::string Source = memorySource(Function, *Module, LLVMRoute);
+class AArch64AliasedMemorySource
+    : public ::testing::TestWithParam<MemoryABICase> {};
+
+TEST_P(AArch64AliasedMemorySource,
+       NarrowIndicesSurviveDecodedSSAAndBothSourceABIs) {
+  const auto &Case = GetParam();
+  SCOPED_TRACE(Case.Word);
+  BinaryImage Image;
+  Image.Arch = Arch::AArch64;
+  Image.Format = BinaryFormat::MachO;
+  Image.Bits = Bitness::Bits64;
+  Segment Text;
+  Text.VA = kEntry;
+  Text.Size = Text.FileSz = 3 * kWordBytes;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(Text.Size);
+  writeLE<uint32_t>(Text.Data.data(), Case.Word);
+  writeLE<uint32_t>(Text.Data.data() + kWordBytes, kMoveAliasToReturn);
+  writeLE<uint32_t>(Text.Data.data() + 2 * kWordBytes, kReturn);
+  Image.Segments.push_back(Text);
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Image));
+  Dec.setStrict(true);
+  const auto Low = CFGBuilder().build(Image, Dec, kEntry, kName);
+  LowToMedConverter Converter;
+  Converter.setBinaryImage(&Image);
+  const auto Function =
+      Converter.convert(Low, Arch::AArch64, BinaryFormat::MachO);
+  ASSERT_TRUE(verifyMedFunc(Function, kName));
+  ASSERT_EQ(Function.Params.size(), 2);
+  EXPECT_EQ(Function.Params[1].Size, kWordBytes);
+  llvm::LLVMContext Context;
+  auto Module =
+      MedLLVMEmitter().emit({Function}, Context, kName, Arch::AArch64);
+  ASSERT_TRUE(Module);
+  optimizeMemory(*Module);
+  ASSERT_FALSE(llvm::verifyModule(*Module));
+  for (bool LLVMRoute : {false, true}) {
+    std::string Source = memorySource(Function, *Module, LLVMRoute);
 #if defined(__APPLE__) && defined(__aarch64__)
-      Source +=
-          llvm::formatv(kFamilyNativeHarness, kName, Case.Scratch, 1,
-                        unsigned(Case.SignedIndex), 1, kEmptyNativeArgument, 1)
-              .str();
-      compileMemoryC(Source, true);
+    Source +=
+        llvm::formatv(kFamilyNativeHarness, kName, Case.Scratch, 1,
+                      unsigned(Case.SignedIndex), 1, kEmptyNativeArgument, 1)
+            .str();
+    compileMemoryC(Source, true);
 #else
-      compileMemoryC(Source, false);
+    compileMemoryC(Source, false);
 #endif
-    }
   }
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    AliasedIndices, AArch64AliasedMemorySource, ::testing::ValuesIn(ABICases),
+    [](const ::testing::TestParamInfo<MemoryABICase> &Info) {
+      return kABIWordPrefix + std::to_string(Info.param.Word);
+    });
 
 TEST(AArch64AddressMemory,
      ScalarFamiliesPreserveZeroStackAndAliasedRegisterFields) {

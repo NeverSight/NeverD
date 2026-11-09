@@ -69,3 +69,17 @@ when loaded through `dlopen`. Its equivalent startup executable leaves static
 B-key chained fixups unresolved on those runners and fails before unwinding;
 this profile does not qualify startup loading or hide that failure behind a
 retry. See the [native runner experiment](https://github.com/gmh5225/test_mac_intel/actions/runs/42626899000).
+
+The [separate linker comparison](https://github.com/gmh5225/test_mac_intel/actions/runs/42629838855)
+ran the O0 compiler-original dylib with the current linker and with `ld-classic`
+at both its default and macOS 11 deployment targets. All three call/unwind
+controls passed on both runners. Objects and libraries retained subtype
+`0x80000002`; their executable loaders used `0x81000002`. No subtype bytes were
+rewritten. This compiler-original evidence is separate from NeverD installation
+qualification.
+
+The local `NeverDArm64eAnalysisTests` owner also exercises CPA2 source emission.
+Its eighteen narrow aliased-index words run as separate CTest cases, each keeping
+both C routes and O0/O2 execution. This avoids charging 72 compiler invocations
+to one 120-second test deadline and identifies an individual failing word without
+raising the deadline or reducing coverage.
