@@ -5022,6 +5022,18 @@ Pipeline::x87CallGraphsForTesting(const PipelineAnalysisCache &Cache) {
   return Cache.Facts ? Cache.Facts->Graphs : nullptr;
 }
 
+void PipelineAnalysisCache::forgetPrototypes() {
+  // Only the solve reads a debug context's prototypes (importPrototypeArguments
+  // binds an export's).  The image inputs read its names and its library's
+  // prototypes by name, which no declaration changes; callee effects
+  // (summarizeRecoveredCallRegisters), no-return proofs and call graphs read
+  // the bodies with those.
+  for (const std::shared_ptr<Impl> &Kept : {Facts, SelectionFacts})
+    if (Kept)
+      Kept->CallSummaries.reset();
+  ImportCounts.reset();
+}
+
 std::map<va_t, std::string> *
 Pipeline::importAddressNames(const BinaryImage &Img,
                              PipelineAnalysisCache *Cache,

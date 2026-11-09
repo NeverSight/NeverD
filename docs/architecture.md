@@ -11214,8 +11214,18 @@ integer bits, with a separate full-width ECX ASID for INVLPGA.
 shape validation and assembly planning. Every native plan has a C spelling;
 the shared compiler capability dispatch retains the exact assembly fallback
 when those builtins are unavailable.
+The same native-plan owner admits VMFUNC's EPTP-switch API only with an
+explicit constant EAX=0 proof. LLVM and HighC extract that proof from their
+typed constant operands; the plan drops only the proven leaf argument and
+retains all 32 ECX bits. Unknown/nonzero leaves retain the original two-register
+assembly contract. The shared VMFUNC capability dispatch is independent of
+unrelated VMCS/SVM builtin availability. LLVM C admits the exact named EPTP
+interface with one i32 index, void result, C calling convention and unknown
+memory effects; narrowed, speculative or nonreturning declarations refuse.
+The old SDK can transport that checked declaration into C without native
+codegen support. LLVM lowering itself still requires the registered intrinsic.
 Both C translation-unit collectors include the shared virtualization dispatch
-for i386 and x64. Ordinary native VMX/SVM calls require a registered SDK
+for i386 and x64. Native LLVM VMX/SVM lowering requires a registered SDK
 intrinsic ID; LLVM's `isIntrinsic()` alone only recognizes the reserved name
 prefix. The separately versioned context handlers retain their explicit
 contracts when read through an older SDK.
@@ -13298,8 +13308,9 @@ print/vprint/buf_print/assert liblog entry points. Its
 entrypoint classification supplies the fixed-argument layout and object-size
 checks to one formatter and the shared AAPCS64 `ArgumentReader`; it does not
 duplicate conversion rules for checked imports, dynamic providers, SDK or CLI.
-Fortify failure diagnostics and dispatch remain unmodeled and stop before
-publishing output; standalone `abort` support does not complete those paths.
+Fortify violations enter the shared Bionic fatal-diagnostic owner. Checked
+`sprintf` publishes its truncated result before its post-format check; a
+failed `snprintf` capacity guard precedes input reads and destination writes.
 Existing memory, deadline and representable-result limits still apply.
 
 `AndroidStrings` owns bounded copies, including `strlcpy` source scanning,
@@ -13312,7 +13323,8 @@ NUL without padding and return the destination. API 28 ARM64 uses the C
 `__strcpy_chk` implementation: it scans the source before comparing its
 NUL-inclusive length to the destination object size. Scan faults and budgets
 precede that fortify check; the destination and overlap checks follow it.
-Undefined overlap and unsupported abort paths refuse without partial writes.
+Undefined overlap refuses without partial writes; a failed object check enters
+the shared fatal-diagnostic owner.
 `memchr` and `__memchr_chk` share the character-search loop, unsigned-byte
 comparison and guest read owner. Memory searches pass embedded NUL bytes and
 return null only after exhausting the requested count; scan-budget exhaustion
@@ -13336,8 +13348,10 @@ bytes. API 28's zero-count `__strncat_chk` returns before any pointer access.
 Otherwise source reads and destination write checks precede each fortify
 capacity check; exhausting the terminator slot fails before another source
 read or the bounded-count exit. Only the appended tail requires write
-permission. Refusals preserve guest bytes, including on source, permission,
-overlap, memory-limit and deadline failures.
+permission. A fortify capacity failure retains the copied tail without an
+added NUL. Source, permission, overlap, memory-limit and deadline refusals keep
+the existing atomic model boundary. `__strncpy_chk2` publishes the complete
+copy and padding before checking its NUL-inclusive source consumption.
 `__read_chk` owns only the Bionic extent checks;
 descriptor state and suspended reads stay in the shared Linux read owner.
 Pathname-only `stat` and `lstat` aliases adapt arguments into the existing
@@ -16422,6 +16436,17 @@ signal-frame depth; a returning handler resumes the second abort phase, while
 a redirected ucontext retains its new continuation. Default SIGABRT uses the
 same typed whole-process termination as other terminating signals, without
 host signals or core-file production.
+
+`AndroidLog::fortifyFatal` owns API 28's `FORTIFY: ` diagnostics: shared stderr
+writev, an explicitly declared async-safe crash-log attempt, abort-message
+publication, then shared Bionic abort. `text_log_writes` distinguishes
+`async_safe` records from liblog records while sharing payload validation,
+matching and the consumption cursor. An explicit `open_errno` selects the
+shared stderr fallback; omitted transport records remain unknown. Raw logd
+socket allocation and clock metadata are outside this finite transcript.
+Negative transport outcomes update caller errno; EINTR consumes another exact
+write outcome without repeating the initial diagnostic. No guest scratch
+allocation, host logging, host signals or private signal policy is introduced.
 
 `AndroidProperties` builds one immutable guest property table from explicit
 inputs. Name lookup, stable `prop_info` identities, serials, legacy reads and

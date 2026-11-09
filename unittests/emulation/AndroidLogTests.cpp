@@ -11,10 +11,12 @@
 #include "neverd/emulation/ProcessReport.h"
 #include "neverd/emulation/ProcessSession.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Endian.h"
 
 #include <algorithm>
+#include <iterator>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -65,6 +67,13 @@ void expected(std::vector<uint8_t> &Out, unsigned Slot,
   std::copy(Record->Payload.begin(), Record->Payload.end(),
             Out.begin() + Base + 28);
 }
+constexpr const char *FortifySymbols[] = {
+    "__memcpy_chk",    "__memmove_chk", "__memset_chk",   "__memchr_chk",
+    "__FD_SET_chk",    "__FD_CLR_chk",  "__FD_ISSET_chk", "__strlen_chk",
+    "__strcpy_chk",    "__strncpy_chk", "__strncpy_chk2", "__strlcpy_chk",
+    "__strcat_chk",    "__strncat_chk", "__strchr_chk",   "__strrchr_chk",
+    "__read_chk",      "__fgets_chk",   "__fread_chk",    "__snprintf_chk",
+    "__vsnprintf_chk", "__sprintf_chk", "__vsprintf_chk"};
 class AndroidLog : public testing::TestWithParam<
                        std::tuple<const char *, ExecutionBackendKind>> {
 protected:
@@ -130,6 +139,29 @@ protected:
     Payload.insert(Payload.end(), Message.bytes_begin(), Message.bytes_end());
     Payload.push_back(0);
     Options.Android->TextLogWrites = {{{0, Payload, -11}}};
+  }
+  std::string prepareFortify(unsigned Function, uint64_t Mode,
+                             llvm::ArrayRef<uint64_t> Arguments,
+                             llvm::StringRef Detail) {
+    const std::string Message = ("FORTIFY: " + Detail).str();
+    prepareAssertion(4 + (Mode & 1), Mode, Message);
+    Options.Android->EntrySymbol = "log_fortify";
+    Options.Android->Libraries["libc.so"].assign(std::begin(FortifySymbols),
+                                                 std::end(FortifySymbols));
+    Options.OutputLimit = 65536;
+    Options.LinuxFiles.emplace();
+    put(8192, "abc");
+    put(12000, "x");
+    put(16000, "%s");
+    for (size_t I = 0; I < Arguments.size(); ++I)
+      integer(Options.Android->Memory[0].Bytes, 4096 + 8 * I, Arguments[I], 8);
+    Options.Android->Arguments = {Output, Output + 2048, Function, Mode,
+                                  Output + 4096};
+    std::vector<uint8_t> Payload{7, 'l', 'i', 'b', 'c', 0};
+    Payload.insert(Payload.end(), Message.begin(), Message.end());
+    Payload.push_back(0);
+    Options.Android->TextLogWrites = {{{4, Payload, 1, true, 0}}};
+    return Message;
   }
   std::vector<uint8_t> assertionExpected(const ProcessResult &Result) {
     auto Expected = Options.Android->Memory[0].Bytes;
@@ -1314,6 +1346,266 @@ TEST_P(AndroidLog, EventWriteUnknownExhaustedAndMismatchDoNotConsume) {
   }
 }
 
+TEST_P(AndroidLog, FortifyDiagnosticsAndRetainedWritesMatchAPI28) {
+  constexpr uint64_t D = Output + 12000, S = Output + 8192, F = Output + 16000;
+  struct Case {
+    unsigned Function;
+    std::vector<uint64_t> Arguments;
+    const char *Detail;
+    std::vector<uint8_t> Prefix;
+  };
+  const Case Cases[] = {
+      {0,
+       {1, 1, 4, 3},
+       "memcpy: prevented 4-byte write into 3-byte buffer",
+       {}},
+      {0,
+       {1, 1, UINT64_MAX, 3},
+       "memcpy: count 18446744073709551615 > SSIZE_MAX",
+       {}},
+      {1,
+       {1, 1, 4, 3},
+       "memmove: prevented 4-byte write into 3-byte buffer",
+       {}},
+      {2,
+       {1, 65, 4, 3},
+       "memset: prevented 4-byte write into 3-byte buffer",
+       {}},
+      {2,
+       {1, 65, UINT64_MAX, 3},
+       "memset: count 18446744073709551615 > SSIZE_MAX",
+       {}},
+      {3,
+       {1, 65, 4, 3},
+       "memchr: prevented 4-byte read from 3-byte buffer",
+       {}},
+      {4, {UINT64_MAX, 1, 0}, "FD_SET: file descriptor -1 < 0", {}},
+      {5, {1024, 1, 0}, "FD_CLR: file descriptor 1024 >= FD_SETSIZE 0", {}},
+      {6,
+       {0, 1, 127},
+       "FD_ISSET: set size 127 is too small to be an fd_set",
+       {}},
+      {7, {S, 3}, "strlen: detected read past end of buffer", {}},
+      {8, {1, S, 3}, "strcpy: prevented 4-byte write into 3-byte buffer", {}},
+      {9,
+       {1, 1, 4, 3},
+       "strncpy: prevented 4-byte write into 3-byte buffer",
+       {}},
+      {10,
+       {D, S, 8, 8, 3},
+       "strncpy: detected read past end of 3-byte buffer",
+       {'a', 'b', 'c', 0, 0, 0, 0, 0}},
+      {11,
+       {1, 1, 4, 3},
+       "strlcpy: prevented 4-byte write into 3-byte buffer",
+       {}},
+      {12,
+       {D, S, 4},
+       "strcat: prevented write past end of 0-byte buffer",
+       {'x', 'a', 'b', 'c'}},
+      {13,
+       {D, S, 3, 4},
+       "strncat: prevented write past end of buffer",
+       {'x', 'a', 'b', 'c'}},
+      {14, {S, 'z', 3}, "strchr: prevented read past end of buffer", {}},
+      {15, {S, 'a', 3}, "strrchr: prevented read past end of buffer", {}},
+      {16,
+       {UINT64_MAX, 1, UINT64_MAX, 0},
+       "read: count 18446744073709551615 > SSIZE_MAX",
+       {}},
+      {16,
+       {UINT64_MAX, 1, 4, 3},
+       "read: prevented 4-byte write into 3-byte buffer",
+       {}},
+      {17, {1, UINT64_MAX, 1, 0}, "fgets: buffer size -1 < 0", {}},
+      {17,
+       {1, 4, 1, 3},
+       "fgets: prevented 4-byte write into 3-byte buffer",
+       {}},
+      {18,
+       {1, 2, 2, 1, 3},
+       "fread: prevented 4-byte write into 3-byte buffer",
+       {}},
+      {19,
+       {1, 1, 4, 3},
+       "vsnprintf: prevented 4-byte write into 3-byte buffer",
+       {}},
+      {20,
+       {1, 1, 4, 3},
+       "vsnprintf: prevented 4-byte write into 3-byte buffer",
+       {}},
+      {21,
+       {D, F, 0, 3, S},
+       "vsprintf: prevented 4-byte write into 3-byte buffer",
+       {'a', 'b', 0}},
+      {22,
+       {D, F, 0, 3, S},
+       "vsprintf: prevented 4-byte write into 3-byte buffer",
+       {'a', 'b', 0}}};
+  for (const auto &C : Cases)
+    for (unsigned Dynamic : {0u, 1u}) {
+      SCOPED_TRACE(C.Detail);
+      SCOPED_TRACE(Dynamic);
+      const auto Message = prepareFortify(C.Function, (2u << 8) | Dynamic,
+                                          C.Arguments, C.Detail);
+      auto R =
+          emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+      ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+      ASSERT_EQ(R->Stop, ProcessStopReason::Signaled) << R->Diagnostic;
+      EXPECT_EQ(R->TerminationSignal, 6u);
+      EXPECT_FALSE(R->ReturnValue);
+      EXPECT_EQ(R->StandardError, Message + "\n");
+      EXPECT_EQ(R->TextLogWritesConsumed, 1u);
+      ASSERT_EQ(R->MemorySnapshots.size(), 1u);
+      const auto &Bytes = R->MemorySnapshots[0].Bytes;
+      EXPECT_EQ(word(Bytes, 0), 1u);
+      EXPECT_EQ(word(Bytes, 2 * 8), uint64_t(-6));
+      EXPECT_EQ(word(Bytes, 5 * 8), 55u);
+      EXPECT_EQ(word(Bytes, 17 * 8), 0u);
+      EXPECT_EQ(
+          std::vector<uint8_t>(Bytes.begin() + 24000, Bytes.begin() + 28096),
+          abortRecord(Message));
+      auto Expected = Options.Android->Memory[0].Bytes;
+      std::copy(C.Prefix.begin(), C.Prefix.end(), Expected.begin() + 12000);
+      EXPECT_EQ(
+          std::vector<uint8_t>(Bytes.begin() + 12000, Bytes.begin() + 12016),
+          std::vector<uint8_t>(Expected.begin() + 12000,
+                               Expected.begin() + 12016));
+      unsigned Calls = 0;
+      for (const auto &Call : R->NativeCalls)
+        if (Call.Name == FortifySymbols[C.Function]) {
+          ++Calls;
+          EXPECT_FALSE(Call.Result);
+          EXPECT_EQ(Call.Library, Dynamic ? "libc.so" : "");
+        }
+      EXPECT_EQ(Calls, 1u);
+    }
+}
+
+TEST_P(AndroidLog, FortifyTransportFallbackErrnoAndSharedAbortHandlers) {
+  for (unsigned Mode = 0; Mode != 7; ++Mode)
+    for (unsigned Handling : {0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u}) {
+      SCOPED_TRACE(Mode);
+      SCOPED_TRACE(Handling);
+      const bool Child = (Mode & 1) != 0;
+      const unsigned Descriptor = Mode == 4 || Mode == 6 ? 1
+                                  : Mode == 5            ? 2
+                                                         : 0;
+      const auto Message = prepareFortify(
+          9, 1 | (Handling << 8) | (Descriptor << 16) | (Child ? 1u << 24 : 0),
+          {1, 1, 4, 3}, "strncpy: prevented 4-byte write into 3-byte buffer");
+      auto &Writes = *Options.Android->TextLogWrites;
+      if (Mode == 1)
+        Writes[0].Result = -11;
+      if (Mode == 2) {
+        auto Last = Writes[0];
+        Writes[0].Result = -4;
+        Writes.push_back(Last);
+      }
+      if (Mode == 3 || Mode == 6) {
+        Writes[0].OpenErrno = 2;
+        Writes[0].Result = Mode == 6 ? -1 : Message.size() + 7;
+      }
+      auto R =
+          emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+      ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+      EXPECT_EQ(R->Stop, Handling == 3 || Handling == 7
+                             ? ProcessStopReason::Exited
+                         : Handling == 4 ? ProcessStopReason::Returned
+                                         : ProcessStopReason::Signaled)
+          << R->Diagnostic;
+      EXPECT_EQ(R->TextLogWritesConsumed, Mode == 2 ? 2u : 1u);
+      const std::string Error =
+          Descriptor
+              ? ""
+              : Message + "\n" + (Mode == 3 ? "libc: " + Message + "\n" : "");
+      EXPECT_EQ(R->StandardError, Error);
+      EXPECT_EQ(R->StandardOutput, Mode == 5 ? Message + "\n" : "");
+      ASSERT_EQ(R->MemorySnapshots.size(), 1u);
+      const auto &Bytes = R->MemorySnapshots[0].Bytes;
+      EXPECT_EQ(word(Bytes, 17 * 8), Handling == 4 ? 99u : 0u);
+      if (Handling >= 2) {
+        EXPECT_EQ(word(Bytes, 8 * 8), Child ? 1001u : 1000u);
+        const uint64_t ErrorNumber = Mode == 1                ? 11
+                                     : Mode == 2              ? 4
+                                     : Mode == 3              ? 2
+                                     : Mode == 4 || Mode == 6 ? 9
+                                                              : 55;
+        EXPECT_EQ(word(Bytes, 5 * 8), ErrorNumber);
+      }
+    }
+}
+
+TEST_P(AndroidLog, AsyncSafeRecordsDoNotCompleteLiblogWrites) {
+  prepareAssertion(0, 0, "message");
+  auto &Entry = Options.Android->TextLogWrites->front();
+  Entry.AsyncSafe = true;
+  Entry.Result = 1;
+  auto R = emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+  ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+  EXPECT_EQ(R->Stop, ProcessStopReason::UnsupportedService) << R->Diagnostic;
+  EXPECT_EQ(R->StandardError, "message\n");
+  EXPECT_EQ(R->TextLogWritesConsumed, 0u);
+  ASSERT_EQ(R->MemorySnapshots.size(), 1u);
+  EXPECT_NE(word(R->MemorySnapshots[0].Bytes, 2048), 0u);
+  EXPECT_FALSE(R->TerminationSignal);
+}
+
+TEST_P(AndroidLog, FortifyStopsBeforeEveryUndeclaredOrFaultingEffect) {
+  for (unsigned Mode = 0; Mode != 9; ++Mode) {
+    SCOPED_TRACE(Mode);
+    const auto Message =
+        prepareFortify(0, 0, {1, 1, 4, 3},
+                       "memcpy: prevented 4-byte write into 3-byte buffer");
+    auto &Writes = *Options.Android->TextLogWrites;
+    if (Mode == 0)
+      Options.Android->TextLogWrites.reset();
+    if (Mode == 1)
+      Writes.clear();
+    if (Mode == 2)
+      Writes[0].AsyncSafe = false;
+    if (Mode == 3)
+      Writes[0].Payload.back() = 'x';
+    if (Mode == 4)
+      Options.Android->AbortMessageSlot.reset();
+    if (Mode == 5)
+      Options.LinuxSignals.reset();
+    if (Mode == 6)
+      Options.Android->AbortMessageSlot = Output + 32768;
+    if (Mode == 7) {
+      Options.OutputLimit = 1;
+      Options.Android->ReadMemory.clear();
+    }
+    if (Mode == 8) {
+      Writes[0].OpenErrno = 2;
+      Writes[0].Result = 0;
+    }
+    // Keep a well-formed but mismatching payload for the admission case.
+    if (Mode == 3) {
+      Writes[0].Payload[6] = 'X';
+      Writes[0].Payload.back() = 0;
+    }
+    auto R =
+        emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    EXPECT_EQ(R->Stop, Mode == 6   ? ProcessStopReason::RuntimeFailure
+                       : Mode == 7 ? ProcessStopReason::OutputLimit
+                                   : ProcessStopReason::UnsupportedService)
+        << R->Diagnostic;
+    EXPECT_EQ(R->StandardError,
+              Mode == 7 ? ""
+                        : Message + "\n" +
+                              (Mode == 8 ? "libc: " + Message + "\n" : ""));
+    EXPECT_FALSE(R->TerminationSignal);
+    if (Mode != 0)
+      EXPECT_EQ(R->TextLogWritesConsumed, Mode >= 4 && Mode <= 6 ? 1u : 0u);
+    if (Mode != 7) {
+      ASSERT_EQ(R->MemorySnapshots.size(), 1u);
+      EXPECT_EQ(word(R->MemorySnapshots[0].Bytes, 2048) != 0, Mode == 5);
+    }
+  }
+}
+
 TEST_P(AndroidLog, EventWritePayloadLimitsAndFaultsAreExplicit) {
   Options.Android->EntrySymbol = "log_event_write";
   for (uint64_t Size :
@@ -1423,6 +1715,33 @@ TEST(AndroidLogOptions, AbortMessageSlotPreservesAbsenceNullAndGuestBits) {
     EXPECT_FALSE(bool(Result)) << Value;
     if (!Result)
       llvm::consumeError(Result.takeError());
+  }
+}
+
+TEST(AndroidLogOptions, AsyncSafeTransportRequiresExplicitTypedOutcomes) {
+  for (const char *Extra :
+       {",\"async_safe\":true", ",\"async_safe\":true,\"open_errno\":2",
+        ",\"async_safe\":false"}) {
+    auto R = processOptionsFromJSON(
+        std::string("{\"android\":{\"text_log_writes\":[{\"log_id\":4,"
+                    "\"payload\":\"076c696263007800\",\"result\":1") +
+        Extra + "}]}}");
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    EXPECT_EQ(R->Android->TextLogWrites->front().AsyncSafe,
+              llvm::StringRef(Extra).contains("true"));
+  }
+  for (const char *Extra : {",\"async_safe\":1", ",\"open_errno\":2",
+                            ",\"async_safe\":true,\"open_errno\":4",
+                            ",\"async_safe\":true,\"open_errno\":4096",
+                            ",\"async_safe\":true,\"open_errno\":-1",
+                            ",\"async_safe\":true,\"unknown\":0"}) {
+    auto R = processOptionsFromJSON(
+        std::string("{\"android\":{\"text_log_writes\":[{\"log_id\":4,"
+                    "\"payload\":\"076c696263007800\",\"result\":1") +
+        Extra + "}]}}");
+    EXPECT_FALSE(bool(R)) << Extra;
+    if (!R)
+      llvm::consumeError(R.takeError());
   }
 }
 

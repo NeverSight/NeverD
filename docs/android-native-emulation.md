@@ -192,9 +192,9 @@ The supported Bionic subset is:
   limit or an expired deadline can stop the call before the fortify check.
   Large extents, including `SIZE_MAX`, do not require a whole-object read and
   do not relax the process scan limit. Success preserves guest bytes and errno.
-  A failed extent check uses the existing string-fortify `runtime_failure`
-  boundary without a returned value; abort-triggered signal delivery and
-  logging are not modeled. This independently implemented ordering follows the
+  A failed extent check enters the shared [FORTIFY diagnostic and abort
+  sequence](android-log-reader.md), without inventing a returned value. This
+  independently implemented ordering follows the
   pinned [API 28 implementation](https://github.com/aosp-mirror/platform_bionic/blob/android-9.0.0_r1/libc/bionic/fortify.cpp).
 - `strncpy` copies at most the requested count through the first NUL, then pads
   the destination to exactly that count with zeros. Truncated copies need not
@@ -220,15 +220,16 @@ The supported Bionic subset is:
   the source-extent check, even when that extent is zero. A truncated copy needs
   only its count of source bytes, without a terminator. Zero count touches
   neither pointer; large object extents do not relax the process memory limit.
-  Fortify violations use a non-returning `runtime_failure`. The shared model
-  stages all writes and rejects atomically, so native pre-abort writes, logging
-  and abort-triggered signal delivery are not simulated. The checks follow the
+  Fortify violations use the shared [fatal sequence](android-log-reader.md).
+  A destination-extent failure precedes copying; a source-extent failure in
+  `__strncpy_chk2` retains all copied and padded bytes before diagnostics and
+  abort. The checks follow the
   pinned [API 28 implementation](https://github.com/aosp-mirror/platform_bionic/blob/android-9.0.0_r1/libc/bionic/fortify.cpp).
 - `__FD_SET_chk`, `__FD_CLR_chk`, `__FD_ISSET_chk`, using the Bionic LP64
   1024-bit descriptor bitmap. The signed low 32-bit descriptor must be 0..1023,
   then the full-width object extent must be at least 128 bytes. Invalid values
-  stop with a non-returning FORTIFY `runtime_failure` before touching the bitmap;
-  FORTIFY-triggered signal delivery is not modeled. Valid calls access only the selected eight-byte
+  enter the shared FORTIFY diagnostic/abort sequence before touching the bitmap.
+  Valid calls access only the selected eight-byte
   word, preserve other bits and errno, and do not require an open descriptor.
   Queries return 0 or 1 and accept read-only memory; mutations require read/write
   access. Guest-pointer and wrapping-address failures remain explicit. These
@@ -260,8 +261,7 @@ The supported Bionic subset is:
   conversion, NUL matches, full-width object extents and unchanged errno. The
   first search can return before reaching a terminator; reverse search must
   reach NUL. Fortified calls check the remaining extent before each read.
-  Exhaustion produces a non-returning `runtime_failure` with a Fortify diagnostic,
-  consistent with the model's abort boundary; abort-triggered signal delivery is not modeled.
+  Exhaustion enters the shared FORTIFY diagnostic/abort sequence.
   Invalid pointers and memory/deadline limits remain distinct failures. Only
   visited guest bytes are read, including a match at a readable page's last byte.
   These rules follow the pinned [API 28 implementation](https://github.com/aosp-mirror/platform_bionic/blob/android-9.0.0_r1/libc/bionic/fortify.cpp).
@@ -622,8 +622,12 @@ range. `__sprintf_chk` and `__vsprintf_chk` use the object size as their capacit
 and require the complete result plus its final NUL to fit. Even an empty result
 requires one byte. API 28 ignores the flags argument in all four forms.
 
-Fortify violations stop as `unsupported_service` without publishing a result or
-partial output; Bionic's abort, logging and pre-abort writes are not simulated.
+Fortify violations enter the shared [diagnostic and abort sequence](android-log-reader.md).
+The checked `sprintf` forms retain the formatted prefix and NUL before the
+post-format check. A failed `snprintf` capacity guard precedes every input read
+and output write. Neither failure invents a normal call result.
+An exact `INT_MAX` result in checked `sprintf` stops explicitly after output:
+the following signed terminator-count addition is outside the modeled range.
 The checked `sprintf` forms retain the existing INT_MAX capacity admission
 boundary, including explicit refusal of an unknown SIZE_MAX object size. API 28
 maps that unknown size to SSIZE_MAX, whose version-specific formatting behavior
@@ -632,7 +636,7 @@ is outside this model. No smaller capacity or successful result is guessed.
 Floating-point, wide text, positional arguments, `%n`, unknown conversions,
 `snprintf` capacities above INT_MAX, and lengths exceeding INT_MAX stop as
 `unsupported_service` before publishing output. This boundary does not simulate
-Bionic's version-specific overflow or fortify error side effects. Invalid guest
+Bionic's version-specific arithmetic-overflow side effects. Invalid guest
 memory or malformed GP `va_list` state fails explicitly. Guest strings are never
 passed to host printf functions. Resolving these names with `dlsym` uses the
 same implementation and provider lifetime checks as direct imports.
@@ -685,8 +689,8 @@ stream even when closing its FD fails. Buffered and direct `fread`, `fgets`,
 The libc continuation retains the original arguments, partial element/line
 progress and refill phase, and completes the original import exactly once.
 `__fread_chk` and `__fgets_chk` apply their compiler-supplied bounds before
-entering the same continuation. Violations stop explicitly without simulating
-the libc abort sequence; fread multiplication overflow keeps its normal error
+entering the same continuation. Violations use the shared FORTIFY diagnostic
+and abort sequence; fread multiplication overflow keeps its normal error
 path, following [Bionic fortify](https://github.com/aosp-mirror/platform_bionic/blob/android-9.0.0_r1/libc/bionic/fortify.cpp).
 Every nested read keeps its own entry-time socket timeout; errno is set in the
 resumed thread. Other guest threads run before idle time advances. A missing

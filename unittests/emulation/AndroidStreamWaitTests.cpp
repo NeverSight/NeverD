@@ -158,8 +158,10 @@ TEST_P(AndroidStreamWait,
     Options.Android->Arguments = {Buffer, Route};
     auto R = llvm::cantFail(
         emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options));
-    EXPECT_EQ(R.Stop, ProcessStopReason::RuntimeFailure);
-    EXPECT_NE(R.Diagnostic.find("fortified"), std::string::npos);
+    EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_NE(R.Diagnostic.find("async-safe text log write contract"),
+              std::string::npos);
+    EXPECT_TRUE(llvm::StringRef(R.StandardError).starts_with("FORTIFY: f"));
     ASSERT_EQ(R.NativeCalls.size(), 1u);
     EXPECT_FALSE(R.NativeCalls[0].Result);
   }

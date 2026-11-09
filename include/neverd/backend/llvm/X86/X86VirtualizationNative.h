@@ -14,6 +14,7 @@
 
 #include "neverd/backend/llvm/X86/X86VirtualizationAsm.h"
 
+#include <cstdint>
 #include <optional>
 #include <string>
 
@@ -24,6 +25,7 @@ struct X86VirtualizationNative {
   std::string LLVMName;
   std::string Builtin;
   X86VirtualizationResult Result = X86VirtualizationResult::None;
+  unsigned FirstArgument = 0;
   bool AddressControls = false;
   unsigned SegmentPrefix = 0;
 };
@@ -31,16 +33,25 @@ struct X86VirtualizationNative {
 inline std::optional<X86VirtualizationNative>
 x86VirtualizationNative(Intrinsic Id, Arch TargetArch,
                         NdMemoryAddressSpace Space,
-                        uint16_t PhysicalAddressBytes = 0) {
+                        uint16_t PhysicalAddressBytes = 0,
+                        std::optional<uint64_t> FunctionLeaf = std::nullopt) {
   const auto Assembly =
       x86VirtualizationAsm(Id, TargetArch, Space, PhysicalAddressBytes);
-  // VMFUNC's native API owns only EPTP switching with EAX proved zero. The
-  // existing two-register contract cannot establish that leaf by itself.
-  if (!Assembly || Id == Intrinsic::VmxFunction)
+  if (!Assembly)
     return std::nullopt;
   const auto C = x86VirtualizationContract(Id);
   X86VirtualizationNative Plan;
   Plan.Assembly = *Assembly;
+  if (Id == Intrinsic::VmxFunction) {
+    // Only proven EAX=0 can discard the generic leaf operand. ECX remains
+    // complete: an invalid EPTP-list index must reach the native VM exit.
+    if (FunctionLeaf != 0)
+      return std::nullopt;
+    Plan.LLVMName = "llvm.x86.vmfunc.eptp.switch";
+    Plan.Builtin = "__builtin_ia32_vmfunc_eptp_switch";
+    Plan.FirstArgument = 1;
+    return Plan;
+  }
   Plan.Result =
       Id == Intrinsic::VmxPtrStore ? X86VirtualizationResult::None : C.Result;
   std::string Name = Id == Intrinsic::VmxRead          ? "vmread.reg"

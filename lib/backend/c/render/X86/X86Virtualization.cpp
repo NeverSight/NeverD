@@ -110,7 +110,7 @@ std::string nativeBody(const X86VirtualizationNative &Plan,
       Call += ", ";
     Call += Text;
   };
-  for (size_t I = 0; I < Arguments.size(); ++I) {
+  for (size_t I = Plan.FirstArgument; I < Arguments.size(); ++I) {
     std::string Type = unsignedType(Plan.Assembly.InputBytes[I]);
     if (I == C.MemoryArgument && !Plan.AddressControls)
       Type =
@@ -148,22 +148,25 @@ std::string nativeBody(const X86VirtualizationNative &Plan,
   return Text;
 }
 
-std::string renderInstruction(const X86VirtualizationAsm &Plan,
-                              NdMemoryAddressSpace Space,
-                              const std::vector<std::string> &Outputs,
-                              const std::vector<std::string> &Inputs) {
+std::string
+renderInstruction(const X86VirtualizationAsm &Plan, NdMemoryAddressSpace Space,
+                  const std::vector<std::string> &Outputs,
+                  const std::vector<std::string> &Inputs,
+                  std::optional<uint64_t> FunctionLeaf = std::nullopt) {
   const auto Assembly = renderAsm(Plan, Outputs, Inputs);
   const auto C = x86VirtualizationContract(Plan.Id);
-  const auto Native =
-      x86VirtualizationNative(Plan.Id, Plan.TargetArch, Space,
-                              C.PhysicalAddress ? Plan.InputBytes[0] : 0);
+  const auto Native = x86VirtualizationNative(
+      Plan.Id, Plan.TargetArch, Space,
+      C.PhysicalAddress ? Plan.InputBytes[0] : 0, FunctionLeaf);
   if (!Native)
     return Assembly;
   const bool Read = C.Result == X86VirtualizationResult::Read;
   const auto Body = nativeBody(*Native, Inputs, Read ? Outputs[0] : "",
                                Outputs.empty() ? "" : Outputs[Read ? 1 : 0]);
-  return "NEVERD_X86_VIRTUALIZATION(({ " + Body + "}), ({ " + Assembly +
-         " }));";
+  const std::string Dispatch = Plan.Id == Intrinsic::VmxFunction
+                                   ? "NEVERD_X86_VMFUNC"
+                                   : "NEVERD_X86_VIRTUALIZATION";
+  return Dispatch + "(({ " + Body + "}), ({ " + Assembly + " }));";
 }
 
 bool resultMatches(const llvm::CallInst &Call, Intrinsic Id, uint16_t Word) {
@@ -261,9 +264,14 @@ renderX86VirtualizationExpression(Arch TargetArch, const HighExpr &Expression,
   if (!Plan)
     throw std::invalid_argument(
         "unsupported x86 virtualization assembly contract");
+  std::optional<uint64_t> FunctionLeaf;
+  if (Id == Intrinsic::VmxFunction &&
+      Expression.Operands.front()->Kind == ExprKind::Const)
+    FunctionLeaf = Expression.Operands.front()->ConstVal;
   if (C.Result == X86VirtualizationResult::None)
     return "({ " +
-           renderInstruction(*Plan, Shape.MemoryAddressSpace, {}, Arguments) +
+           renderInstruction(*Plan, Shape.MemoryAddressSpace, {}, Arguments,
+                             FunctionLeaf) +
            " })";
   const bool Read = C.Result == X86VirtualizationResult::Read;
   const uint16_t Word = TargetArch == Arch::X64 ? 8 : 4;
@@ -323,6 +331,13 @@ renderX86VirtualizationCall(Arch TargetArch, const llvm::CallInst &Call,
           !Asm->hasSideEffects() || Asm->isAlignStack() || Asm->canThrow() ||
           Asm->getDialect() != llvm::InlineAsm::AD_ATT ||
           Call.getNumOperandBundles() || Call.doesNotAccessMemory() ||
+          (Id == Intrinsic::VmxFunction &&
+           (Call.getCallingConv() != llvm::CallingConv::C ||
+            Call.getMemoryEffects() != llvm::MemoryEffects::unknown() ||
+            Call.doesNotReturn() ||
+            Call.hasFnAttr(llvm::Attribute::WillReturn) ||
+            Call.hasFnAttr(llvm::Attribute::Speculatable) ||
+            Call.hasFnAttr(llvm::Attribute::NoSync))) ||
           Call.arg_size() != P->InputBytes.size() ||
           Arguments.size() != Call.arg_size() || !resultMatches(Call, Id, Word))
         continue;
@@ -336,8 +351,17 @@ renderX86VirtualizationCall(Arch TargetArch, const llvm::CallInst &Call,
       }
       if (!Types)
         continue;
+      const auto *FunctionLeaf =
+          Id == Intrinsic::VmxFunction
+              ? llvm::dyn_cast<llvm::ConstantInt>(Call.getArgOperand(0))
+              : nullptr;
       if (C.Result == X86VirtualizationResult::None)
-        return renderInstruction(*P, Space, {}, Arguments) + '\n';
+        return renderInstruction(
+                   *P, Space, {}, Arguments,
+                   FunctionLeaf
+                       ? std::optional<uint64_t>(FunctionLeaf->getZExtValue())
+                       : std::nullopt) +
+               '\n';
       const bool Read = C.Result == X86VirtualizationResult::Read;
       if (ResultLive && Result.empty())
         throw std::invalid_argument(
@@ -375,6 +399,8 @@ bool isX86KvmHypercallNativeName(llvm::StringRef Name) {
 }
 
 bool isX86VirtualizationNativeName(llvm::StringRef Name) {
+  if (Name.starts_with("llvm.x86.vmfunc."))
+    return true;
   if (isX86KvmHypercallNativeName(Name) || isX86SnpNativeName(Name))
     return true;
   if (Name == "llvm.x86.rsm.context" ||
@@ -406,6 +432,28 @@ renderX86VirtualizationNativeCall(Arch TargetArch, const llvm::CallBase &Call,
       (TargetArch != Arch::X86 && TargetArch != Arch::X64))
     return {};
   const auto Name = Callee->getName();
+  if (Name.starts_with("llvm.x86.vmfunc.")) {
+    const bool Valid =
+        Name == "llvm.x86.vmfunc.eptp.switch" && Callee->isDeclaration() &&
+        !Callee->isVarArg() && Call.getCallingConv() == llvm::CallingConv::C &&
+        Callee->getCallingConv() == llvm::CallingConv::C &&
+        !Call.getNumOperandBundles() && Call.getType()->isVoidTy() &&
+        !ResultLive && Call.arg_size() == 1 && Arguments.size() == 1 &&
+        Call.getArgOperand(0)->getType()->isIntegerTy(32) &&
+        Call.getMemoryEffects() == llvm::MemoryEffects::unknown() &&
+        Call.hasFnAttr(llvm::Attribute::NoUnwind) && !Call.doesNotReturn() &&
+        !Call.hasFnAttr(llvm::Attribute::WillReturn) &&
+        !Call.hasFnAttr(llvm::Attribute::Speculatable) &&
+        !Call.hasFnAttr(llvm::Attribute::NoSync);
+    if (!Valid)
+      throw std::invalid_argument("invalid native VMFUNC EPTP-switch contract");
+    const auto Plan =
+        x86VirtualizationNative(Intrinsic::VmxFunction, TargetArch,
+                                NdMemoryAddressSpace::Default, 0, 0);
+    return renderInstruction(Plan->Assembly, NdMemoryAddressSpace::Default, {},
+                             {"0", Arguments[0]}, 0) +
+           '\n';
+  }
   if (isX86SnpNativeName(Name))
     return renderX86SnpNativeCall(TargetArch, Call, ResultLive, Arguments);
   if (Name == "llvm.x86.hyperv.call") {

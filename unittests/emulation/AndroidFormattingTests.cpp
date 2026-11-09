@@ -10,6 +10,7 @@
 #include "neverd/emulation/ExecutionConfiguration.h"
 #include "neverd/emulation/ProcessSession.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Endian.h"
 
 #include <algorithm>
@@ -85,17 +86,24 @@ protected:
     EXPECT_EQ(Bytes[Offset + Text.size() + 1], 0xa5);
   }
   void unsupported(const ProcessResult &R, unsigned Mode,
-                   llvm::StringRef Diagnostic) {
+                   llvm::StringRef Diagnostic,
+                   llvm::ArrayRef<uint8_t> Written = {}) {
     ASSERT_EQ(R.Stop, ProcessStopReason::UnsupportedService) << R.Diagnostic;
-    EXPECT_NE(R.Diagnostic.find(Diagnostic.str()), std::string::npos);
+    const bool Fortify = Diagnostic == "fortify buffer-size failure";
+    EXPECT_NE(R.Diagnostic.find(Fortify ? "async-safe text log write contract"
+                                        : Diagnostic.str()),
+              std::string::npos);
+    if (Fortify)
+      EXPECT_TRUE(llvm::StringRef(R.StandardError).starts_with("FORTIFY: vs"));
     EXPECT_FALSE(R.ReturnValue);
     ASSERT_FALSE(R.NativeCalls.empty());
     EXPECT_EQ(R.NativeCalls.back().Name, FortifyNames[Mode]);
     EXPECT_FALSE(R.NativeCalls.back().Result);
     ASSERT_EQ(R.MemorySnapshots.size(), 1u);
     const auto &Bytes = Options.Android->Memory[0].Bytes;
-    EXPECT_EQ(R.MemorySnapshots[0].Bytes,
-              std::vector<uint8_t>(Bytes.begin(), Bytes.begin() + 1024));
+    std::vector<uint8_t> Expected(Bytes.begin(), Bytes.begin() + 1024);
+    std::copy(Written.begin(), Written.end(), Expected.begin());
+    EXPECT_EQ(R.MemorySnapshots[0].Bytes, Expected);
   }
 };
 
@@ -312,7 +320,11 @@ TEST_P(AndroidFormatting, FortifySprintfRequiresSpaceForTheFinalNul) {
           run("format_fortify_supplied",
               {Buffer, Mode, 0, Capacity, Buffer + 512, 0, Buffer + 600, 0});
       if (Capacity < Full.size()) {
-        unsupported(R, Mode, "fortify buffer-size failure");
+        auto Prefix =
+            std::vector<uint8_t>(Full.begin(), Full.begin() + Capacity);
+        if (!Prefix.empty())
+          Prefix.back() = 0;
+        unsupported(R, Mode, "fortify buffer-size failure", Prefix);
       } else {
         ASSERT_NO_FATAL_FAILURE(returned(R, Full.size() - 1));
         const auto &Bytes = Options.Android->Memory[0].Bytes;
@@ -372,7 +384,7 @@ TEST_P(AndroidFormatting, FortifyKeepsFullWidthBoundsAndExistingCapacityLimit) {
   }
 }
 
-TEST_P(AndroidFormatting, FortifyReusesConversionsAndRejectsWithoutWrites) {
+TEST_P(AndroidFormatting, FortifyRetainsOutputBeforePostFormatFailure) {
   for (unsigned Mode = 0; Mode < FortifyNames.size(); ++Mode) {
     SCOPED_TRACE(Mode);
     put(512, "%2147483647d");
@@ -382,7 +394,8 @@ TEST_P(AndroidFormatting, FortifyReusesConversionsAndRejectsWithoutWrites) {
       ASSERT_NO_FATAL_FAILURE(returned(R, 2147483647));
       output(R, "   ");
     } else {
-      unsupported(R, Mode, "fortify buffer-size failure");
+      unsupported(R, Mode, "checked sprintf terminator count overflows int",
+                  {' ', ' ', ' ', 0});
     }
     for (const char *Format : {"prefix:%f", "prefix:%ls", "prefix:%n",
                                "prefix:%2$d", "prefix:%2147483648d"}) {
@@ -482,7 +495,11 @@ TEST_P(AndroidFormatting,
     R = run("format_fortify_dynamic", {Buffer, Mode, 1, 64});
     unsupported(R, Mode, "inactive dynamic library");
     R = run("format_fortify_dynamic", {Buffer, Mode, 0, 17});
-    unsupported(R, Mode, "fortify buffer-size failure");
+    const std::string Text = "symbol=0x10000000a";
+    auto Prefix = std::vector<uint8_t>(Text.begin(), Text.begin() + 16);
+    Prefix.push_back(0);
+    unsupported(R, Mode, "fortify buffer-size failure",
+                Mode >= 2 ? llvm::ArrayRef(Prefix) : llvm::ArrayRef<uint8_t>());
   }
 }
 

@@ -110,15 +110,12 @@ public:
   void forgetDeclarations() { ImportCounts.reset(); }
   /// Drops what reads the prototypes the debug context binds to functions'
   /// names, which a declaration hides or gives back while the context stays:
-  /// what the facts of the image and of a selection hold (call summaries,
-  /// callee facts, call graphs) and the import counts, as another context
-  /// would.  The symbol inventory stays, and so does the callee memo, which
-  /// takes a body only where what it read reads the same.
-  void forgetPrototypes() {
-    Facts.reset();
-    SelectionFacts.reset();
-    ImportCounts.reset();
-  }
+  /// the image's call summaries, whose solve reads the prototypes of the
+  /// routines the image exports, and the import counts.  What the facts hold
+  /// of bodies, names and the image stays: callee effects, no-return proofs
+  /// and call graphs read no prototype, nor does the callee memo take a body
+  /// whose reads changed.
+  void forgetPrototypes();
 
 private:
   friend class Pipeline;

@@ -77,13 +77,21 @@ protected:
 
   void rejected(const ProcessResult &R, const char *Name,
                 llvm::StringRef Diagnostic) {
-    ASSERT_EQ(R.Stop, ProcessStopReason::RuntimeFailure) << R.Diagnostic;
-    EXPECT_NE(R.Diagnostic.find(Diagnostic.str()), std::string::npos);
+    const bool Fortify = Diagnostic.starts_with("FORTIFY");
+    ASSERT_EQ(R.Stop, Fortify ? ProcessStopReason::UnsupportedService
+                              : ProcessStopReason::RuntimeFailure)
+        << R.Diagnostic;
+    EXPECT_NE(R.Diagnostic.find(Fortify ? "async-safe text log write contract"
+                                        : Diagnostic.str()),
+              std::string::npos);
+    if (Fortify)
+      EXPECT_TRUE(llvm::StringRef(R.StandardError).starts_with("FORTIFY: "));
     ASSERT_FALSE(R.NativeCalls.empty());
     EXPECT_EQ(R.NativeCalls.back().Name, Name);
     EXPECT_FALSE(R.NativeCalls.back().Result);
     EXPECT_FALSE(R.ReturnValue);
-    EXPECT_TRUE(R.MemorySnapshots.empty());
+    if (!Fortify)
+      EXPECT_TRUE(R.MemorySnapshots.empty());
   }
 };
 
@@ -310,7 +318,12 @@ TEST(AndroidStringLengthMemory, ScanLimitAndDeadlinePrecedeFortify) {
     Call.Name = LengthNames[C.Mode];
     Call.Arguments = {C.Address, C.Bound};
     auto Value = Model.invoke(Call);
-    if (C.Error) {
+    if (C.Error && llvm::StringRef(C.Error).starts_with("FORTIFY")) {
+      ASSERT_TRUE(bool(Value)) << llvm::toString(Value.takeError());
+      EXPECT_FALSE(*Value);
+      EXPECT_EQ(Result.Stop, ProcessStopReason::UnsupportedService);
+      EXPECT_NE(Result.StandardError.find("FORTIFY: "), std::string::npos);
+    } else if (C.Error) {
       ASSERT_FALSE(bool(Value));
       EXPECT_NE(llvm::toString(Value.takeError()).find(C.Error),
                 std::string::npos);

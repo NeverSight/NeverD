@@ -4548,6 +4548,56 @@ TEST_F(SessionCAPITest, AViewAfterAnEditRunsItsOwnFunctionAlone) {
   EXPECT_EQ(State.OnlyFunctionEntries, (std::set<neverd::va_t>{Entry}));
 }
 
+TEST_F(SessionCAPITest, ThePrintedSignatureOfAHeadersLongReadsBack) {
+  // The image's own DbgBreakPointWithStatus, whose Windows declaration takes
+  // a ULONG: the decompiler prints the header's unsigned long as it keeps its
+  // name on its target, and a parameter's new type reads that signature back.
+  std::string Code(0x20, '\xcc');
+  // mov eax,ecx; ret
+  Code.replace(0, 3, "\x89\xc8\xc3", 3);
+  const auto Path = write("status.exe", makePE64(Code));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  auto &State = *neverd::sdk::toSession(Session);
+  const auto Entry = neverd_session_entry_addr(Session);
+  auto Status = neverd::Symbol::makeFunc(Entry, 0x20);
+  Status.Name = "DbgBreakPointWithStatus";
+  Status.Origin = neverd::NameOrigin::Stated;
+  State.Img.Symbols.push_back(Status);
+  neverd::sdk::SessionTestAccess::resetFunctions(State);
+  const std::string Text = takeString(neverd_decompile(Session, Entry));
+  ASSERT_NE(Text.find("__builtin_choose_expr(sizeof(unsigned long) == 4"),
+            std::string::npos)
+      << Text;
+  // The signature reads as printed.
+  auto Printed = llvm::json::parse(
+      takeString(neverd_func_type_json(Session, Entry, nullptr)));
+  ASSERT_TRUE(bool(Printed)) << llvm::toString(Printed.takeError());
+  ASSERT_NE(Printed->getAsObject(), nullptr)
+      << takeString(neverd_last_error(Session));
+  EXPECT_EQ(Printed->getAsObject()->getArray("problems"), nullptr)
+      << Printed->getAsObject()->getString("declaration").value_or("").str();
+  const llvm::json::Array *Parameters =
+      Printed->getAsObject()->getArray("parameters");
+  ASSERT_NE(Parameters, nullptr);
+  EXPECT_EQ(Parameters->size(), 1u);
+  auto Reply = llvm::json::parse(takeString(neverd_func_type_json(
+      Session, Entry, R"({"parameter":0,"type":"int Count"})")));
+  ASSERT_TRUE(bool(Reply)) << llvm::toString(Reply.takeError());
+  ASSERT_NE(Reply->getAsObject(), nullptr)
+      << takeString(neverd_last_error(Session));
+  const std::string Declaration =
+      Reply->getAsObject()->getString("declaration").value_or("").str();
+  EXPECT_NE(Declaration.find("DbgBreakPointWithStatus(int32_t Count)"),
+            std::string::npos)
+      << Declaration;
+  const std::string Edit =
+      llvm::formatv(
+          "{0}", llvm::json::Value(llvm::json::Object{{"type", Declaration}}))
+          .str();
+  EXPECT_EQ(neverd_func_edit(Session, Entry, Edit.c_str()), 0)
+      << takeString(neverd_last_error(Session));
+}
+
 TEST_F(SessionCAPITest, ADeclarationThatHidesAPrototypeKeepsTheContext) {
   // A caller and the image's own CloseHandle, which the Windows headers
   // declare.
@@ -4608,15 +4658,20 @@ TEST_F(SessionCAPITest, ADeclarationThatHidesAPrototypeKeepsTheContext) {
   const auto *Context = State.LocalTypesDbg.get();
   ASSERT_NE(Context, nullptr);
   EXPECT_TRUE(hiding(Session).empty());
+  const auto Facts =
+      neverd::PipelineTestPeer::analysisFacts(State.AnalysisCache);
+  ASSERT_NE(Facts, nullptr);
 
   // The context takes the declaration in place; what analysis read of the
-  // prototype it hides goes.
+  // prototype it hides goes, and what it read of the bodies stays.
   constexpr char Declaration[] =
       R"J({"type":"int CloseHandle(int First, int Second)"})J";
   ASSERT_EQ(neverd_func_edit(Session, Entry + Stride, Declaration), 0)
       << neverd_last_error(Session);
   EXPECT_EQ(State.LocalTypesDbg.get(), Context);
   EXPECT_EQ(neverd_call_summaries_held(Session), 0);
+  EXPECT_EQ(neverd::PipelineTestPeer::analysisFacts(State.AnalysisCache),
+            Facts);
   EXPECT_EQ(hiding(Session),
             std::vector<std::string>{neverd::sdk::vaHex(Entry + Stride)});
   const std::string Declared = printed(Session);

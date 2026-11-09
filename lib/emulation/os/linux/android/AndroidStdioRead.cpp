@@ -234,13 +234,17 @@ private:
 
 BionicResult Bionic::readStream(const NativeCallEvent &Call) {
   const auto &A = Call.Arguments;
-  if (Call.Name == symbol::FgetsChk &&
-      (int32_t(A[1]) < 0 || uint32_t(A[1]) > A[3]))
-    return failure("fortified fgets extent exceeds destination bounds");
+  if (Call.Name == symbol::FgetsChk) {
+    if (int32_t(A[1]) < 0)
+      return fortifyFatal(Call, "fgets: buffer size " +
+                                    llvm::Twine(int32_t(A[1])) + " < 0");
+    if (uint32_t(A[1]) > A[3])
+      return fortifyBufferFailure(Call, "fgets", uint32_t(A[1]), A[3]);
+  }
   // Overflow deliberately takes fread's ordinary EOVERFLOW path in API 28.
   if (Call.Name == symbol::FreadChk && (!A[1] || A[2] <= UINT64_MAX / A[1]) &&
       A[1] * A[2] > A[4])
-    return failure("fortified fread extent exceeds destination bounds");
+    return fortifyBufferFailure(Call, "fread", A[1] * A[2], A[4]);
   auto Pending = std::make_unique<StreamReadWait>(Call);
   auto R = Pending->resume(*this);
   if (R && *R && std::holds_alternative<GuestThreadWait>(**R))

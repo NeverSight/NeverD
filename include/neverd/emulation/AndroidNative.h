@@ -122,6 +122,11 @@ struct NativeTextLogWrite {
   uint32_t ID = 0;
   std::vector<uint8_t> Payload;
   int32_t Result = 0;
+  /// async_safe uses a separate transport from liblog. A nonzero OpenErrno
+  /// declares socket/connect failure and its stderr fallback; Result is the
+  /// expected fallback write result. Zero declares an opened log transport.
+  bool AsyncSafe = false;
+  uint32_t OpenErrno = 0;
 };
 
 /// One explicit successful LP64 dladdr observation. Address matches exactly;
