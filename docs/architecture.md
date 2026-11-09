@@ -5817,6 +5817,24 @@ Literal offsets and scales of an already opaque affine base are read directly
 into the coefficient result, avoiding a temporary pending tree. Linear
 children retain the general traversal; result storage and word operations
 remain charged before a complete relation is published.
+
+Successful full-width linear identities are retained within one deep request,
+keyed by their immutable difference in the owning context. Reuse still admits
+the input count, work and storage; incomplete or refused proofs grant no
+equality. Candidate synthesis for identical opaque abstractions reuses its
+ordered forms only under the same term budget and resolved synthesis limits.
+Each caller still passes the independent equality verifier and restores its
+own hidden inputs. Both memos use shares of the existing bounded request
+storage.
+
+Entries also retain requested measurement weights; the last admitted proof
+query avoids reconstructing its difference. For a free variable X at widths of
+at least three, C + (X ^ 1) already meets its five-node MBA reading bound when
+C is even, nonzero and different from the highest bit. This skips candidate
+construction without changing the expression. Highest-bit offsets instead
+merge into the XOR mask under the existing resource allowances; opaque inputs
+and other offsets keep their search.
+
 Boolean polynomial reconstruction can factor shared cofactors across groups
 with disjoint remaining variables. Exact symmetric differences retain every
 unmatched term. Larger decision graphs try this construction before expanding

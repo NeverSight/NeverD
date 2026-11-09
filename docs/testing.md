@@ -10487,6 +10487,19 @@ isolation.
 
 ## Modular MBA simplification
 
+`SymMBALinearProofMemo` checks successful full-width proof reuse, alternating
+queries with the same difference, context isolation, incomplete proofs and
+input/work/storage limits through 257 bits. `SymMBALinearCandidateMemo` keeps
+ordered candidates and requested weights tied to the same opaque body and
+resolved synthesis limits; each source retains its own substitutions and
+independent equality verification.
+`SymMBAMinimalLeaf` exhausts smaller affine, per-bit and negated-XOR candidates
+at three and four bits, checks parent rewrites through 257 bits, and retains
+opaque, narrow and resource-constrained cases. Highest-bit offsets combine
+with literal XOR masks; neighboring offsets keep their arithmetic search.
+`SymMBAWidePairs.FiveAndSixBitUnits*` independently exhausts low-word product
+values and checks wide inputs, nearby nonidentities and resource refusal.
+
 `SymExpr.LateSubstitutionKeysPreserveEarlierRootsAndReplacementBodies` covers
 simultaneous interior replacements and late placeholders through 257 bits.
 `SymParse.LargeSharedFragmentsKeepPrecedenceAfterTableGrowth` checks exact text

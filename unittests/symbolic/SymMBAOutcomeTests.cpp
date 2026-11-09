@@ -27,6 +27,141 @@ using test::simplified;
 using test::simplifiesTo;
 using test::W32;
 
+TEST(SymMBAMinimalLeaf, EvenOffsetsOfToggledInputsMeetTheirReadingBound) {
+  // Independently exhaust smaller affine, per-bit and negated XOR bijections.
+  // The other smaller one-variable MBA products, x*x and x*~x (with unary
+  // complements/negations), are nonbijective, unlike this input.
+  for (unsigned Width : {3u, 4u}) {
+    const unsigned Limit = 1u << Width, Mask = Limit - 1;
+    for (unsigned Offset = 2; Offset < Limit; Offset += 2) {
+      if (Offset == Limit / 2)
+        continue;
+      SCOPED_TRACE(::testing::Message() << Width << ':' << Offset);
+      auto Expected = [&](unsigned X) { return (Offset + (X ^ 1)) & Mask; };
+      for (unsigned A = 0; A < Limit; ++A)
+        for (unsigned B = 0; B < Limit; ++B) {
+          bool Different = false;
+          for (unsigned X = 0; X < Limit; ++X)
+            Different |= Expected(X) != ((A * X + B) & Mask);
+          ASSERT_TRUE(Different) << A << ':' << B;
+        }
+      for (unsigned Bits = 0; Bits < Limit; ++Bits) {
+        bool Different = false, NegatedInputDiffers = false,
+             NegatedResultDiffers = false;
+        for (unsigned X = 0; X < Limit; ++X) {
+          Different |= Expected(X) != (X ^ Bits);
+          NegatedInputDiffers |= Expected(X) != (((-X) & Mask) ^ Bits);
+          NegatedResultDiffers |= Expected(X) != (-(X ^ Bits) & Mask);
+        }
+        ASSERT_TRUE(Different) << Bits;
+        ASSERT_TRUE(NegatedInputDiffers) << Bits;
+        ASSERT_TRUE(NegatedResultDiffers) << Bits;
+      }
+      SymContext Ctx;
+      const auto X = Ctx.mkVar("x", Width);
+      const auto Input =
+          Ctx.mkAdd(Ctx.mkConst(Width, Offset), Ctx.mkXor(X, Ctx.mkOne(Width)));
+      MBAOptions Options;
+      Options.VerifySamples = 0;
+      Options.MaxWork = 32;
+      for (bool Deep : {false, true}) {
+        const auto Result = Deep ? simplifyMBADeep(Ctx, Input, Options)
+                                 : simplifyMBA(Ctx, Input, Options);
+        EXPECT_EQ(Result.Expr, Input);
+        EXPECT_EQ(Result.Outcome, MBAOutcome::AlreadyShortest);
+        EXPECT_LT(Result.Work, Options.MaxWork);
+      }
+    }
+  }
+}
+
+TEST(SymMBAMinimalLeaf, WideMinimumLeavesBudgetForAParentRewrite) {
+  for (unsigned Width : {8u, 32u, 64u, 65u, 257u}) {
+    SCOPED_TRACE(Width);
+    for (const auto &Offset : {llvm::APInt(Width, 2), llvm::APInt(Width, 94),
+                               -llvm::APInt(Width, 2)}) {
+      SymContext Ctx;
+      const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+      const auto Input =
+          Ctx.mkAdd(Ctx.mkConst(Offset), Ctx.mkXor(X, Ctx.mkOne(Width)));
+      MBAOptions Options;
+      Options.VerifySamples = 0;
+      Options.MaxWork = 65536;
+      const auto Minimal = simplifyMBADeep(Ctx, Input, Options);
+      EXPECT_EQ(Minimal.Expr, Input);
+      EXPECT_EQ(Minimal.Outcome, MBAOutcome::AlreadyShortest);
+      EXPECT_LT(Minimal.Work, 32u);
+      const auto Parent =
+          Ctx.mkAdd(Ctx.mkXor(Input, Y),
+                    Ctx.mkMul(Ctx.mkConst(Width, 2), Ctx.mkAnd(Input, Y)));
+      const auto Result = simplifyMBADeep(Ctx, Parent, Options);
+      EXPECT_EQ(Result.Expr, Ctx.mkAdd(Input, Y));
+      EXPECT_EQ(Result.Outcome, MBAOutcome::Rewritten);
+      EXPECT_EQ(Result.Evidence, MBAEvidence::Derivation);
+      std::vector<llvm::APInt> Values(Ctx.numVars(), llvm::APInt(Width, 0));
+      for (unsigned I = 0; I < 64; ++I) {
+        Values[Ctx.varId(X)] = ~llvm::APInt(Width, I);
+        Values[Ctx.varId(Y)] = llvm::APInt::getOneBitSet(Width, Width - 1) |
+                               llvm::APInt(Width, I * 17);
+        EXPECT_EQ(Ctx.eval(Result.Expr, Values),
+                  Offset + (Values[Ctx.varId(X)] ^ llvm::APInt(Width, 1)) +
+                      Values[Ctx.varId(Y)]);
+      }
+    }
+  }
+}
+
+TEST(SymMBAMinimalLeaf, ReducibleNeighborsAndOpaqueInputsKeepTheirSearch) {
+  for (unsigned Width : {3u, 8u, 65u, 257u}) {
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const auto One = Ctx.mkOne(Width), Two = Ctx.mkConst(Width, 2);
+    MBAOptions Options;
+    const auto Sign = Ctx.mkConst(llvm::APInt::getSignMask(Width));
+    const auto Reducible = Ctx.mkAdd(Sign, Ctx.mkXor(X, One));
+    EXPECT_FALSE(detail::isMinimalLeafExpression(Ctx, Reducible, Options));
+    const auto Reduced = simplifyMBADeep(Ctx, Reducible, Options);
+    EXPECT_LT(detail::readingCost(Ctx, Reduced.Expr),
+              detail::readingCost(Ctx, Reducible));
+    EXPECT_EQ(Reduced.Expr, Ctx.mkXor(X, Ctx.mkAdd(Sign, One)));
+    std::vector<llvm::APInt> Values(Ctx.numVars(), llvm::APInt(Width, 0));
+    for (unsigned I = 0; I < 256; ++I) {
+      Values[Ctx.varId(X)] = ~llvm::APInt(Width, I);
+      EXPECT_EQ(Ctx.eval(Reduced.Expr, Values),
+                llvm::APInt::getSignMask(Width) +
+                    (Values[Ctx.varId(X)] ^ llvm::APInt(Width, 1)));
+    }
+    for (bool NoStorage : {false, true}) {
+      auto Restricted = Options;
+      Restricted.MaxWork = NoStorage ? 65536 : 0;
+      Restricted.MaxTableBytes = NoStorage ? 0 : Options.MaxTableBytes;
+      detail::WorkBudget Budget(Restricted.MaxWork);
+      detail::SolveReport Report;
+      EXPECT_EQ(
+          detail::solveArithmetic(Ctx, Reducible, Restricted, Budget, Report),
+          Reducible);
+      EXPECT_TRUE(Report.BudgetExhausted);
+    }
+    EXPECT_FALSE(detail::isMinimalLeafExpression(
+        Ctx, Ctx.mkAdd(One, Ctx.mkXor(X, One)), Options));
+    EXPECT_FALSE(detail::isMinimalLeafExpression(
+        Ctx, Ctx.mkAdd(Two, Ctx.mkXor(X, Two)), Options));
+    EXPECT_FALSE(detail::isMinimalLeafExpression(
+        Ctx, Ctx.mkAdd(Two, Ctx.mkXor(Ctx.mkAdd(X, Y), One)), Options));
+    const auto Input = Ctx.mkAdd(Two, Ctx.mkXor(X, One));
+    Options.MaxAtoms = 0;
+    EXPECT_FALSE(detail::isMinimalLeafExpression(Ctx, Input, Options));
+    Options.MaxAtoms = MBAOptions::Unlimited;
+    Options.MaxTableBytes = 0;
+    EXPECT_FALSE(detail::isMinimalLeafExpression(Ctx, Input, Options));
+  }
+  SymContext Ctx;
+  const auto X = Ctx.mkVar("x", 2);
+  const auto Narrow = Ctx.mkAdd(Ctx.mkConst(2, 2), Ctx.mkXor(X, Ctx.mkOne(2)));
+  EXPECT_FALSE(detail::isMinimalLeafExpression(Ctx, Narrow, {}));
+  EXPECT_EQ(simplifyMBADeep(Ctx, Narrow).Expr, Ctx.mkNot(X));
+}
+
 //===----------------------------------------------------------------------===//
 // What the solver reports about what it did
 //===----------------------------------------------------------------------===//
@@ -248,6 +383,259 @@ TEST(SymMBA, CornerAgreementDoesNotProveMaskedOrNonlinearIdentities) {
         Ctx, Complement,
         Ctx.mkSub(Ctx.mkNeg(Ctx.mkAdd(X, Y)), Ctx.mkOne(Width)), 2, Budget));
   }
+}
+
+TEST(SymMBALinearProofMemo, CompletedEqualityKeepsItsWidthAndAdmissionLimits) {
+  for (unsigned Width : {3u, 8u, 64u, 65u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width);
+    const auto Y = Ctx.mkVar("y", Width);
+    const auto Before = Ctx.mkAdd(
+        Ctx.mkXor(X, Y), Ctx.mkMul(Ctx.mkConst(Width, 2), Ctx.mkAnd(X, Y)));
+    const auto After = Ctx.mkAdd(X, Y);
+    detail::WorkBudget Budget(65536);
+    Budget.MemoOwner = &Ctx;
+    Budget.MemoCapacity = 1;
+    ASSERT_TRUE(detail::proveLinearIdentity(Ctx, Before, After, 2, Budget));
+    ASSERT_GT(Budget.used(), 1u);
+    const auto Nodes = Ctx.numNodes();
+    const auto Vars = Ctx.numVars();
+    for (unsigned Repeat = 0; Repeat != 64; ++Repeat) {
+      const auto Used = Budget.used();
+      EXPECT_TRUE(detail::proveLinearIdentity(Ctx, Before, After, 2, Budget));
+      EXPECT_EQ(Budget.used() - Used, 1u);
+    }
+    EXPECT_EQ(Ctx.numNodes(), Nodes);
+    EXPECT_EQ(Ctx.numVars(), Vars);
+    EXPECT_FALSE(detail::proveLinearIdentity(Ctx, Before, After, 1, Budget));
+
+    detail::WorkBudget Empty(0);
+    Empty.MemoOwner = &Ctx;
+    Empty.MemoCapacity = 1;
+    Empty.LinearProofs = Budget.LinearProofs;
+    EXPECT_FALSE(detail::proveLinearIdentity(Ctx, Before, After, 2, Empty));
+    EXPECT_EQ(Empty.used(), 0u);
+    EXPECT_TRUE(Empty.exhausted());
+
+    // A uniform proof needs no abstraction table, but may not use the memo
+    // when the caller cannot admit its storage.
+    const auto Used = Budget.used();
+    EXPECT_TRUE(detail::proveLinearIdentity(Ctx, Before, After, 2, Budget, 0));
+    EXPECT_GT(Budget.used() - Used, 1u);
+    EXPECT_FALSE(Budget.exhausted());
+  }
+}
+
+TEST(SymMBALinearProofMemo,
+     DifferentQueriesStillReuseTheirCompletedDifference) {
+  for (unsigned Width : {3u, 8u, 65u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const auto Before = Ctx.mkAdd(
+        Ctx.mkXor(X, Y), Ctx.mkMul(Ctx.mkConst(Width, 2), Ctx.mkAnd(X, Y)));
+    const auto After = Ctx.mkAdd(X, Y);
+    const auto Delta = Ctx.mkSub(Before, After), Zero = Ctx.mkZero(Width);
+    detail::WorkBudget Budget(65536);
+    Budget.MemoOwner = &Ctx;
+    Budget.MemoCapacity = 1;
+    ASSERT_TRUE(detail::proveLinearIdentity(Ctx, Before, After, 2, Budget));
+    for (unsigned Repeat = 0; Repeat != 4; ++Repeat) {
+      const auto Used = Budget.used();
+      EXPECT_TRUE(detail::proveLinearIdentity(Ctx, Delta, Zero, 2, Budget));
+      EXPECT_TRUE(detail::proveLinearIdentity(Ctx, Before, After, 2, Budget));
+      EXPECT_EQ(Budget.used() - Used, 2u);
+    }
+    EXPECT_FALSE(
+        detail::proveLinearIdentity(Ctx, Delta, Ctx.mkOne(Width), 2, Budget));
+    detail::WorkBudget Empty(0);
+    EXPECT_TRUE(detail::proveLinearIdentity(Ctx, Before, Before, 0, Empty, 0));
+    EXPECT_EQ(Empty.used(), 0u);
+  }
+}
+
+TEST(SymMBALinearProofMemo, AFullMemoLeavesOtherEqualitiesUncached) {
+  SymContext Ctx;
+  const auto X = Ctx.mkVar("x", 32);
+  const auto Y = Ctx.mkVar("y", 32);
+  const auto Z = Ctx.mkVar("z", 32);
+  auto Before = [&](SymRef V) {
+    return Ctx.mkAdd(Ctx.mkXor(X, V),
+                     Ctx.mkMul(Ctx.mkConst(32, 2), Ctx.mkAnd(X, V)));
+  };
+  detail::WorkBudget Budget(65536);
+  Budget.MemoOwner = &Ctx;
+  Budget.MemoCapacity = 1;
+  ASSERT_TRUE(
+      detail::proveLinearIdentity(Ctx, Before(Y), Ctx.mkAdd(X, Y), 2, Budget));
+  for (unsigned Repeat = 0; Repeat != 3; ++Repeat) {
+    const auto Used = Budget.used();
+    EXPECT_TRUE(detail::proveLinearIdentity(Ctx, Before(Z), Ctx.mkAdd(X, Z), 2,
+                                            Budget));
+    EXPECT_GT(Budget.used() - Used, 1u);
+  }
+  const auto Used = Budget.used();
+  EXPECT_TRUE(
+      detail::proveLinearIdentity(Ctx, Before(Y), Ctx.mkAdd(X, Y), 2, Budget));
+  EXPECT_EQ(Budget.used() - Used, 1u);
+}
+
+TEST(SymMBALinearProofMemo, RefusalsAndForeignContextsNeverSupplyEquality) {
+  for (unsigned Width : {3u, 8u, 65u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx, Other;
+    auto Delta = [&](SymContext &C, unsigned Coefficient) {
+      const auto X = C.mkVar("x", Width);
+      const auto Y = C.mkVar("y", Width);
+      return C.mkSub(
+          C.mkAdd(C.mkXor(X, Y),
+                  C.mkMul(C.mkConst(Width, Coefficient), C.mkAnd(X, Y))),
+          C.mkAdd(X, Y));
+    };
+    const auto Good = Delta(Ctx, 2);
+    const auto Bad = Delta(Other, 3);
+    ASSERT_EQ(Good.index(), Bad.index());
+    const std::vector<llvm::APInt> Values(2, llvm::APInt(Width, 1));
+    EXPECT_TRUE(Ctx.eval(Good, Values).isZero());
+    EXPECT_FALSE(Other.eval(Bad, Values).isZero());
+
+    detail::WorkBudget Short(3);
+    Short.MemoOwner = &Ctx;
+    Short.MemoCapacity = 1;
+    EXPECT_FALSE(
+        detail::proveLinearIdentity(Ctx, Good, Ctx.mkZero(Width), 2, Short));
+    EXPECT_TRUE(Short.exhausted());
+    EXPECT_FALSE(Short.LinearProofs);
+    detail::WorkBudget Budget(65536);
+    Budget.MemoOwner = &Ctx;
+    Budget.MemoCapacity = 1;
+    ASSERT_TRUE(
+        detail::proveLinearIdentity(Ctx, Good, Ctx.mkZero(Width), 2, Budget));
+    for (unsigned Repeat = 0; Repeat != 3; ++Repeat)
+      EXPECT_FALSE(detail::proveLinearIdentity(Other, Bad, Other.mkZero(Width),
+                                               2, Budget));
+    detail::WorkBudget Wrong(65536);
+    Wrong.MemoOwner = &Other;
+    Wrong.MemoCapacity = 1;
+    for (unsigned Repeat = 0; Repeat != 3; ++Repeat)
+      EXPECT_FALSE(detail::proveLinearIdentity(Other, Bad, Other.mkZero(Width),
+                                               2, Wrong));
+    EXPECT_FALSE(Wrong.LinearProofs);
+  }
+}
+
+TEST(SymMBALinearCandidateMemo, OpaqueSourcesKeepTheirOwnInstantiation) {
+  for (unsigned Width : {8u, 65u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width);
+    const auto Y = Ctx.mkVar("y", Width);
+    MBAOptions Options;
+    Options.VerifySamples = 0;
+    detail::WorkBudget Budget(65536);
+    Budget.MemoOwner = &Ctx;
+    Budget.MemoCapacity = 8;
+    for (unsigned Shift : {1u, 2u, 3u, 4u}) {
+      SCOPED_TRACE(Shift);
+      const auto Input = Ctx.mkXor(X, Ctx.mkLShr(Y, Ctx.mkConst(Width, Shift)));
+      detail::SolveReport HotReport, ColdReport;
+      const auto Hot =
+          detail::solveOneRegion(Ctx, Input, Options, Budget, HotReport);
+      ASSERT_TRUE(Budget.LinearCandidates);
+      detail::WorkBudget ColdBudget(65536);
+      const auto Cold =
+          detail::solveOneRegion(Ctx, Input, Options, ColdBudget, ColdReport);
+      EXPECT_EQ(Hot, Cold);
+      EXPECT_EQ(HotReport.Outcome, ColdReport.Outcome);
+      EXPECT_EQ(HotReport.Evidence, ColdReport.Evidence);
+      EXPECT_EQ(HotReport.NumAtoms, ColdReport.NumAtoms);
+      EXPECT_FALSE(HotReport.BudgetExhausted);
+      std::vector<llvm::APInt> Values(Ctx.numVars(), llvm::APInt(Width, 0));
+      for (unsigned I = 0; I != 256; ++I) {
+        Values[Ctx.varId(X)] =
+            llvm::APInt(Width, I) | llvm::APInt::getOneBitSet(Width, Width - 1);
+        Values[Ctx.varId(Y)] = ~llvm::APInt(Width, I * 17);
+        EXPECT_EQ(Ctx.eval(Hot, Values),
+                  Values[Ctx.varId(X)] ^ Values[Ctx.varId(Y)].lshr(Shift));
+      }
+    }
+  }
+}
+
+TEST(SymMBALinearCandidateMemo, ReuseRetainsWorkStorageAndSynthesisLimits) {
+  SymContext Ctx;
+  const auto Input = parseSymExpr(Ctx, "x ^ (y >> 1)", 65);
+  ASSERT_TRUE(Input.ok());
+  MBAOptions Options;
+  Options.VerifySamples = 0;
+  detail::WorkBudget Seed(65536);
+  Seed.MemoOwner = &Ctx;
+  Seed.MemoCapacity = 8;
+  detail::SolveReport SeedReport;
+  detail::solveOneRegion(Ctx, Input.Root, Options, Seed, SeedReport);
+  ASSERT_TRUE(Seed.LinearCandidates);
+  for (unsigned Kind = 0; Kind != 7; ++Kind) {
+    SCOPED_TRACE(Kind);
+    auto Restricted = Options;
+    if (Kind == 0)
+      Restricted.MaxSynthesisAtoms = 0;
+    if (Kind == 1)
+      Restricted.MaxOptimalSynthesisAtoms = 0;
+    if (Kind == 2)
+      Restricted.MaxTableBytes = 0;
+    if (Kind == 3)
+      Restricted.MaxTableBytes = 256;
+    if (Kind == 4)
+      Restricted.MaxAtoms = 1;
+    if (Kind == 5)
+      Restricted.MaxWork = 0;
+    if (Kind == 6)
+      Restricted.AllowGrowth = true;
+    detail::WorkBudget HotBudget(Restricted.MaxWork),
+        ColdBudget(Restricted.MaxWork);
+    HotBudget.MemoOwner = &Ctx;
+    HotBudget.MemoCapacity = 8;
+    HotBudget.LinearCandidates = Seed.LinearCandidates;
+    detail::SolveReport HotReport, ColdReport;
+    const auto Hot = detail::solveOneRegion(Ctx, Input.Root, Restricted,
+                                            HotBudget, HotReport);
+    const auto Cold = detail::solveOneRegion(Ctx, Input.Root, Restricted,
+                                             ColdBudget, ColdReport);
+    EXPECT_EQ(Hot, Cold);
+    EXPECT_EQ(HotReport.Outcome, ColdReport.Outcome);
+    EXPECT_EQ(HotReport.Evidence, ColdReport.Evidence);
+    EXPECT_EQ(HotReport.NumAtoms, ColdReport.NumAtoms);
+    EXPECT_EQ(HotReport.BudgetExhausted, ColdReport.BudgetExhausted);
+    EXPECT_EQ(HotReport.TooWide, ColdReport.TooWide);
+  }
+  // One 256-byte retention slot cannot hold the entry and its forms.
+  detail::WorkBudget Small(65536);
+  Small.MemoOwner = &Ctx;
+  Small.MemoCapacity = 1;
+  detail::SolveReport SmallReport;
+  detail::solveOneRegion(Ctx, Input.Root, Options, Small, SmallReport);
+  EXPECT_FALSE(Small.LinearCandidates);
+
+  SymContext Other;
+  const auto ForeignInput = parseSymExpr(Other, "x | (y >> 1)", 65);
+  ASSERT_TRUE(ForeignInput.ok());
+  ASSERT_EQ(Input.Root.index(), ForeignInput.Root.index());
+  detail::WorkBudget ForeignBudget(65536), ColdBudget(65536);
+  ForeignBudget.MemoOwner = &Ctx;
+  ForeignBudget.MemoCapacity = 8;
+  ForeignBudget.LinearCandidates = Seed.LinearCandidates;
+  detail::SolveReport ForeignReport, ColdReport;
+  const auto Foreign = detail::solveOneRegion(Other, ForeignInput.Root, Options,
+                                              ForeignBudget, ForeignReport);
+  const auto Cold = detail::solveOneRegion(Other, ForeignInput.Root, Options,
+                                           ColdBudget, ColdReport);
+  EXPECT_EQ(Foreign, Cold);
+  EXPECT_EQ(ForeignReport.Outcome, ColdReport.Outcome);
+  std::vector<llvm::APInt> Values(Other.numVars(), llvm::APInt(65, 0));
+  Values[0] = llvm::APInt(65, 1);
+  Values[1] = llvm::APInt(65, 2);
+  EXPECT_EQ(Other.eval(Foreign, Values), llvm::APInt(65, 1));
 }
 
 TEST(SymMBA, ProofInstantiationRespectsRefusalAndIndependentInputs) {

@@ -1669,6 +1669,37 @@ bool proveArithmeticIdentity(SymContext &Ctx, SymRef Before, SymRef After,
 static SymRef solveArithmeticImpl(SymContext &Ctx, SymRef E,
                                   const MBAOptions &Opts, WorkBudget &Budget,
                                   SolveReport &Rep, bool ExpandComplements) {
+  // Addition by the highest bit is XOR at the complete word width: its carry
+  // leaves the word. Merge it with a literal XOR mask before treating that
+  // mask as an independent input. Other offsets can carry through retained
+  // bits and keep the complete arithmetic/region search.
+  if (Ctx.op(E) == SymOp::Add && Ctx.numOperands(E) == 2 &&
+      Ctx.isConst(Ctx.operand(E, 0))) {
+    const auto Offset = Ctx.operand(E, 0), Input = Ctx.operand(E, 1);
+    if (Ctx.op(Input) == SymOp::Xor && Ctx.numOperands(Input) == 2 &&
+        Ctx.isConst(Ctx.operand(Input, 0)) &&
+        Ctx.constValue(Offset).isMinSignedValue()) {
+      const size_t Words = (size_t(Ctx.width(E)) - 1) / 64 + 1;
+      ArithmeticResources Resources(Budget, Opts.MaxTableBytes);
+      if (!Resources.charge(
+              2 + 3 * Words,
+              3 * sizeof(SymNode) + 4 * sizeof(SymRef) +
+                  3 * (sizeof(llvm::APInt) + Words * sizeof(uint64_t)))) {
+        Rep.BudgetExhausted = true;
+        Rep.Outcome = MBAOutcome::BudgetExhausted;
+        return E;
+      }
+      const auto Candidate = Ctx.mkXor(Offset, Input);
+      if (readingScore(Ctx, Candidate) < readingScore(Ctx, E) &&
+          agreeOnSamples(Ctx, E, Candidate, Opts.VerifySamples)) {
+        Rep.NumAtoms = 1;
+        Rep.Outcome = MBAOutcome::Rewritten;
+        Rep.Evidence = MBAEvidence::Derivation;
+        return Candidate;
+      }
+      return E;
+    }
+  }
   // A literal plus a complemented atom is already a complete affine reading:
   // C + ~X = (C - 1) - X at the full word width. Avoid building polynomial
   // tables for each such leaf after a large product proof. Compound arithmetic

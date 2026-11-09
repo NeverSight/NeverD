@@ -987,7 +987,7 @@ SymRef tryFastComplementarySum(SymContext &Ctx, SymRef E,
 /// a masked one into mask-uniform columns.
 SymRef solveRegionOrSplitImpl(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
                               WorkBudget &Budget, SolveReport &Rep) {
-  if (!Budget.exhausted() && isMinimalBinaryLeafExpression(Ctx, E, Opts)) {
+  if (!Budget.exhausted() && isMinimalLeafExpression(Ctx, E, Opts)) {
     Rep.Outcome = MBAOutcome::AlreadyShortest;
     return E;
   }
@@ -2222,9 +2222,9 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
     // is meant to stop paying for at every remaining node.
     bool Complete = false;
     if (!Budget.exhausted() && Budget.consume(Ctx.dagSize(Rebuilt))) {
-      if (isMinimalBinaryLeafExpression(Ctx, Rebuilt, Opts)) {
-        // The children are leaves and no later factoring or original-region
-        // retry can beat this bound. Preserve the budget for larger parents.
+      if (isMinimalLeafExpression(Ctx, Rebuilt, Opts)) {
+        // No later factoring or original-region retry can beat this bound
+        // over the admitted leaves. Preserve the budget for larger parents.
         if (Result.Outcome == MBAOutcome::NotApplicable)
           Result.Outcome = MBAOutcome::AlreadyShortest;
         if (CurrentReport.Outcome == MBAOutcome::NotApplicable)

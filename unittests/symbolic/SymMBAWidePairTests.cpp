@@ -510,6 +510,71 @@ TEST(SymMBAWidePairs, ExhaustsNarrowProductSignaturesAndCorrections) {
       }
 }
 
+TEST(SymMBAWidePairs, FiveAndSixBitUnitsPreserveEveryLowWord) {
+  for (unsigned Observed : {5u, 6u}) {
+    SCOPED_TRACE(Observed);
+    const unsigned Degree = (1u << (Observed - 2)) + 1;
+    SymContext Ctx;
+    const auto F = partialFixture(Ctx, 8, Degree, false, Observed, 2, 1);
+    detail::WorkBudget Budget(65536);
+    size_t Storage = 1 << 24;
+    const auto Result =
+        detail::foldResidueDecisions(Ctx, F.Input, Budget, Storage);
+    ASSERT_NE(Result, F.Input);
+    EXPECT_LT(Budget.used(), 65536u);
+    SymEvalPlan Reduced(Ctx, Result);
+    const uint64_t Limit = uint64_t(1) << Observed;
+    for (uint64_t X = 0; X < Limit; ++X)
+      for (uint64_t Y = 0; Y < Limit; ++Y)
+        for (uint64_t Z = 0; Z < Limit; ++Z) {
+          uint64_t Expected = uint64_t(3) << (8 - Observed);
+          for (unsigned I = 0; I < Degree; ++I)
+            Expected *= ((X ^ 1) + 2 * I) ^ (((Y + I) & ~uint64_t(1)) *
+                                             ((Z + 2 * I) & ~uint64_t(1)));
+          ASSERT_EQ(Reduced.evalU64({X, Y, Z}), Expected & 255)
+              << X << ':' << Y << ':' << Z;
+        }
+  }
+}
+
+TEST(SymMBAWidePairs, FiveAndSixBitUnitsKeepWideInputsAndRefusals) {
+  std::mt19937_64 Random(0x4f44444649564536);
+  for (unsigned Width : {8u, 32u, 64u, 65u, 257u})
+    for (unsigned Observed : {5u, 6u})
+      for (bool Neighbor : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Width << ':' << Observed << ':' << Neighbor);
+        SymContext Ctx;
+        const auto F = partialFixture(Ctx, Width, 31, Neighbor, Observed, 2, 2);
+        for (size_t Allowance : {size_t(0), size_t(64), size_t(65536)}) {
+          detail::WorkBudget Budget(Allowance);
+          size_t Storage = Allowance ? 1 << 24 : 0;
+          const auto Result =
+              detail::foldResidueDecisions(Ctx, F.Input, Budget, Storage);
+          EXPECT_LE(Budget.used(), Allowance);
+          if (!Allowance)
+            EXPECT_EQ(Result, F.Input);
+          SymEvalPlan Reduced(Ctx, Result);
+          for (unsigned Trial = 0; Trial < 128; ++Trial) {
+            std::array<llvm::APInt, 3> Values;
+            for (auto &Value : Values) {
+              Value = llvm::APInt(Width, 0);
+              for (unsigned Bit = 0; Bit < Width; Bit += 64)
+                Value |= llvm::APInt(Width, Random()).shl(Bit);
+            }
+            EXPECT_EQ(Reduced.eval(Values), F.oracle(Values));
+          }
+          if (Width == 8 && Allowance == 65536 &&
+              solver::proofBackendAvailable(solver::ProofBackend::Z3)) {
+            solver::SymSynthVerifier Verifier({}, solver::ProofBackend::Z3,
+                                              10000);
+            EXPECT_EQ(Verifier(Ctx, F.Input, Result),
+                      SynthVerification::Equivalent);
+          }
+        }
+      }
+}
+
 TEST(SymMBAWidePairs, NarrowParityNeighborsFinishWithCompleteResidualWords) {
   std::mt19937_64 Random(0x4e45494748424f52);
   for (unsigned Width : {8u, 16u, 32u, 64u, 65u, 128u, 257u})

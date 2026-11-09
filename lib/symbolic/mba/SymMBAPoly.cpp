@@ -26,6 +26,7 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -62,6 +63,16 @@
 // the monomials changes, not the reasoning.
 
 namespace neverd::symbolic::detail {
+
+struct LinearProofMemo {
+  // A delta's node identity includes its width and every operand. Widen keys
+  // so all valid node handles remain distinct from the hash sentinels.
+  llvm::SmallDenseMap<uint64_t, unsigned, 4> Entries;
+  // The most recently used entry also keeps its query. Consecutive proofs of
+  // the same abstract candidate need not construct their difference again.
+  SymRef LastBefore, LastAfter;
+  unsigned LastAtoms = 0;
+};
 
 namespace {
 
@@ -828,9 +839,49 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
 bool proveLinearIdentity(SymContext &Ctx, SymRef Before, SymRef After,
                          unsigned MaxAtoms, WorkBudget &Budget,
                          size_t MaxBytes) {
+  if (Before == After)
+    return true;
+  const bool Cacheable = Budget.MemoOwner == &Ctx && Budget.MemoCapacity &&
+                         MaxBytes >= limits::kCompletedMemoEntryBytes;
+  if (Cacheable && Budget.LinearProofs &&
+      Budget.LinearProofs->LastBefore == Before &&
+      Budget.LinearProofs->LastAfter == After &&
+      Budget.LinearProofs->LastAtoms <= MaxAtoms && Budget.canConsume(1)) {
+    Budget.consume();
+    return true;
+  }
   SymRef Delta = Ctx.mkSub(Before, After);
   if (Ctx.isConstZero(Delta))
     return true;
+
+  auto RememberQuery = [&](unsigned Atoms) {
+    Budget.LinearProofs->LastBefore = Before;
+    Budget.LinearProofs->LastAfter = After;
+    Budget.LinearProofs->LastAtoms = Atoms;
+  };
+  if (Cacheable && Budget.LinearProofs) {
+    const auto Found = Budget.LinearProofs->Entries.find(Delta.index());
+    if (Found != Budget.LinearProofs->Entries.end() &&
+        Found->second <= MaxAtoms && Budget.canConsume(1)) {
+      Budget.consume();
+      RememberQuery(Found->second);
+      return true;
+    }
+  }
+  auto Remember = [&](unsigned Atoms) {
+    // Retain only a completed equality. The existing per-request memo share
+    // bounds storage, and reuse still admits the original proof's input count.
+    if (Cacheable && !Budget.exhausted() && Budget.canConsume(1) &&
+        (!Budget.LinearProofs ||
+         Budget.LinearProofs->Entries.size() < Budget.MemoCapacity)) {
+      Budget.consume();
+      if (!Budget.LinearProofs)
+        Budget.LinearProofs = std::make_shared<LinearProofMemo>();
+      Budget.LinearProofs->Entries.try_emplace(Delta.index(), Atoms);
+      RememberQuery(Atoms);
+    }
+    return true;
+  };
 
   std::optional<Abstraction> Abstract =
       abstractToMBA(Ctx, Delta, /*AllowProducts=*/false, &Budget, MaxBytes);
@@ -840,7 +891,7 @@ bool proveLinearIdentity(SymContext &Ctx, SymRef Before, SymRef After,
   llvm::SmallVector<uint32_t, 16> AtomIds;
   Ctx.collectVars(Abstract->Body, AtomIds);
   if (AtomIds.empty())
-    return Ctx.isConstZero(Abstract->Body);
+    return Ctx.isConstZero(Abstract->Body) && Remember(0);
   if (AtomIds.size() > MaxAtoms)
     return false;
   std::optional<size_t> Corners = cornerCount(AtomIds.size());
@@ -849,7 +900,8 @@ bool proveLinearIdentity(SymContext &Ctx, SymRef Before, SymRef After,
 
   std::vector<llvm::APInt> Coefficients = measure(Ctx, Abstract->Body, AtomIds);
   return llvm::all_of(Coefficients,
-                      [](const llvm::APInt &C) { return C.isZero(); });
+                      [](const llvm::APInt &C) { return C.isZero(); }) &&
+         Remember(AtomIds.size());
 }
 
 bool provePolynomialIdentity(SymContext &Ctx, SymRef Before, SymRef After,
