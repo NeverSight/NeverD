@@ -475,6 +475,16 @@ private:
   void currentNamesInView(Json &view) const;
   /// When the last request was answered.
   std::chrono::steady_clock::time_point lastRequest_{};
+  /// Whether idle time reads, for a later declaration of local types, the
+  /// names it checks its own against (neverd_local_types_prepare); set after
+  /// each request and each other idle step, which may have read the types
+  /// (as discovery does) or changed them.
+  bool localTypeNamesPending_ = false;
+  /// The times idle time found those names read for the local types as they
+  /// were (metadata.local_type_names_prepared).
+  std::uint64_t localTypeNamesPrepared_ = 0;
+  /// Reads those names once the session has read its local types.
+  void prepareLocalTypeNames();
   /// The function a request last prepared and how long that took.
   std::optional<std::uint64_t> requestPrepared_;
   std::chrono::steady_clock::duration requestPrepareTime_{};

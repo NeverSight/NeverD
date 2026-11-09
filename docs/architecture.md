@@ -4985,7 +4985,10 @@ was read ahead under them stand. One that hides a prototype analysis read, or gi
 one back, lets go of the image's call summaries alone
 (`PipelineAnalysisCache::forgetPrototypes`): only their solve reads an export's
 prototype, while callee effects, no-return proofs and call graphs read bodies. Types new
-to the library that nothing names do the same (`Session::takeUnreadTypes`). Other
+to the library that nothing names do the same (`Session::takeUnreadTypes`); what
+that checks their names against, the names the library spells and those its types
+and prototypes mention, a worker reads while it idles once the session has read its
+types (`neverd_local_types_prepare`), and a declaration keeps it as it adds types. Other
 types let go of what read them, and the summaries, the job and the store start over,
 while the process and its image stand. The owner keeps its listing and reference index
 for those, and reads what a function was declared as when it next decodes it.

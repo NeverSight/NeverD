@@ -2298,7 +2298,8 @@ Listing &Engine::listing() {
   return *listing_;
 }
 bool Engine::hasIdleWork() const {
-  if ((summaryWorkPending() || prefillPending() || renderAheadPending()) &&
+  if ((summaryWorkPending() || prefillPending() || renderAheadPending() ||
+       localTypeNamesPending_) &&
       neverd_session_is_loaded(session_))
     return true;
   if (!listing_ || !neverd_session_is_loaded(session_))
@@ -2315,6 +2316,15 @@ bool Engine::idleStep() {
     listing_->flushCacheOne();
     return true;
   }
+  // Once after a request or another step, either of which may have read the
+  // local types or changed them; it costs nothing while the names hold or the
+  // session has not read its types.
+  if (localTypeNamesPending_) {
+    localTypeNamesPending_ = false;
+    prepareLocalTypeNames();
+    return true;
+  }
+  localTypeNamesPending_ = true;
   // The listing and its reference index come first; preparing functions
   // only shortens later decompiles.
   if (listing_ && backgroundAnalysis_) {
@@ -2326,6 +2336,13 @@ bool Engine::idleStep() {
     }
   }
   return summaryStep();
+}
+void Engine::prepareLocalTypeNames() {
+  using Prepare = int (*)(neverd_session_t);
+  static const auto prepare =
+      engineSymbol<Prepare>("neverd_local_types_prepare");
+  if (prepare && neverd_session_is_loaded(session_) && prepare(session_))
+    ++localTypeNamesPrepared_;
 }
 bool Engine::summaryWorkPending() const {
   return summaryState_ == SummaryState::Pending ||
@@ -2766,6 +2783,7 @@ Json Engine::metadata() const {
           {"named_view_name_patches", namePatches_},
           {"named_view_data_name_patches", dataNamePatches_},
           {"named_view_renders", namedViewRenders_},
+          {"local_type_names_prepared", localTypeNamesPrepared_},
           {"dirty", dirty_},
           // How the file was read: for a binary file, its processor,
           // placement and platform, and whether detection chose the platform.
@@ -3736,6 +3754,7 @@ Engine::Reply Engine::executeResponse(const std::string &operation,
     std::uint64_t before;
     ~RestartOnChange() {
       engine.lastRequest_ = std::chrono::steady_clock::now();
+      engine.localTypeNamesPending_ = true;
       if (engine.revision_ - engine.localNameRevisions_ != before) {
         engine.restartWarming();
         engine.restartSummaries();
