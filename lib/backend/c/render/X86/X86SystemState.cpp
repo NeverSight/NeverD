@@ -586,7 +586,9 @@ renderX86SystemStateNativeCall(Arch TargetArch, const llvm::CallBase &Call,
       const auto Count = P->InputBytes.size();
       if (!Callee->isIntrinsic() || Call.getNumOperandBundles() ||
           Call.onlyReadsMemory() || Call.onlyWritesMemory() ||
-          ((P->AdjustRpl || Id == Intrinsic::X86HistoryReset) &&
+          ((P->AdjustRpl || Id == Intrinsic::X86HistoryReset ||
+            Id == Intrinsic::X86TlbSync ||
+            Id == Intrinsic::X86InvalidateBroadcast) &&
            (!hasOrderedSystemEffects(Call) ||
             Call.getCallingConv() != llvm::CallingConv::C)) ||
           (x86SystemStateContract(Id).Kind == X86SystemStateKind::SecureLaunch

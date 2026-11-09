@@ -2858,6 +2858,8 @@ TEST(X86SystemStateSource, NativeCallsCannotLoseModeResultsOrEffects) {
                            "llvm.x86.invlpgb32",
                            "llvm.x86.invlpgb.addr32",
                            "llvm.x86.tlbsync",
+                           "llvm.x86.tlbsync.control32",
+                           "llvm.x86.tlbsync.control64",
                            "llvm.x86.lar.reg16",
                            "llvm.x86.lar.reg32",
                            "llvm.x86.lar.reg64",
@@ -2896,10 +2898,12 @@ TEST(X86SystemStateSource, NativeCallsCannotLoseModeResultsOrEffects) {
     for (auto &Argument : Function->args())
       Inputs.push_back(&Argument);
     const bool Address = llvm::StringRef(Name).contains(".address");
-    const Arch A = llvm::StringRef(Name) == "llvm.x86.invlpgb32" ||
-                           llvm::StringRef(Name).ends_with(".address32")
-                       ? Arch::X86
-                       : Arch::X64;
+    const Arch A =
+        llvm::StringRef(Name) == "llvm.x86.invlpgb32" ||
+                llvm::StringRef(Name) == "llvm.x86.tlbsync.control32" ||
+                llvm::StringRef(Name).ends_with(".address32")
+            ? Arch::X86
+            : Arch::X64;
     if (Address) {
       Inputs[1] = Builder.getInt32(A == Arch::X64 ? 32 : 16);
       Inputs[2] = Builder.getInt32(0x65);
@@ -2956,6 +2960,31 @@ TEST(X86SystemStateSource, NativeCallsCannotLoseModeResultsOrEffects) {
                                                         Live, Arguments),
                    std::invalid_argument);
     }
+    const bool Translation =
+        llvm::StringRef(Name).starts_with("llvm.x86.tlbsync") ||
+        llvm::StringRef(Name).starts_with("llvm.x86.invlpgb");
+    if (Translation) {
+      for (const auto Effects :
+           {llvm::MemoryEffects::argMemOnly(),
+            llvm::MemoryEffects::inaccessibleMemOnly(),
+            llvm::MemoryEffects::inaccessibleOrArgMemOnly()}) {
+        Call->setMemoryEffects(Effects);
+        EXPECT_THROW((void)renderX86SystemStateNativeCall(A, *Call, "result",
+                                                          Live, Arguments),
+                     std::invalid_argument);
+      }
+      Call->setMemoryEffects(llvm::MemoryEffects::unknown());
+      Call->addFnAttr(llvm::Attribute::Speculatable);
+      EXPECT_THROW((void)renderX86SystemStateNativeCall(A, *Call, "result",
+                                                        Live, Arguments),
+                   std::invalid_argument);
+      Call->removeFnAttr(llvm::Attribute::Speculatable);
+      Call->setCallingConv(llvm::CallingConv::Fast);
+      EXPECT_THROW((void)renderX86SystemStateNativeCall(A, *Call, "result",
+                                                        Live, Arguments),
+                   std::invalid_argument);
+      Call->setCallingConv(llvm::CallingConv::C);
+    }
     Call->setMemoryEffects(llvm::MemoryEffects::unknown());
     Call->setDoesNotReturn();
     EXPECT_THROW((void)renderX86SystemStateNativeCall(A, *Call, "result", Live,
@@ -2966,7 +2995,8 @@ TEST(X86SystemStateSource, NativeCallsCannotLoseModeResultsOrEffects) {
       EXPECT_THROW(
           (void)renderX86SystemStateNativeCall(A, *Call, "", true, Arguments),
           std::invalid_argument);
-    if (Address || llvm::StringRef(Name).starts_with("llvm.x86.invlpgb"))
+    if (Address || llvm::StringRef(Name).starts_with("llvm.x86.invlpgb") ||
+        llvm::StringRef(Name).starts_with("llvm.x86.tlbsync.control"))
       EXPECT_THROW((void)renderX86SystemStateNativeCall(
                        A == Arch::X86 ? Arch::X64 : Arch::X86, *Call, "result",
                        Live, Arguments),

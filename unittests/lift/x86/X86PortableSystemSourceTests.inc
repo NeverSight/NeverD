@@ -158,3 +158,87 @@ TEST(X86PortableSystemSource, TlbSyncRejectsMissingAndNarrowedControls) {
     }
   }
 }
+
+TEST(X86PortableSystemSource, LegacyTlbSyncSelectsCpuOnlyControl) {
+  const char *Compiler = std::getenv("NEVERD_TEST_NEVERC");
+  if (!Compiler || !llvm::sys::fs::exists(Compiler) ||
+      !std::getenv("NEVERD_TEST_NEVERC_LLC"))
+    GTEST_SKIP() << "requires NeverC and its full i386 LLVM backend";
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(
+      llvm::sys::fs::createUniqueDirectory("neverd-tlbsync-legacy", Directory));
+  const auto Cleanup = llvm::scope_exit(
+      [&] { (void)llvm::sys::fs::remove_directories(Directory); });
+  unsigned Cases = 0;
+  for (const auto A : {Arch::X86, Arch::X64}) {
+    llvm::LLVMContext Context;
+    llvm::Module Module("legacy-tlbsync", Context);
+    llvm::IRBuilder<> Builder(Context);
+    auto *Signature = llvm::FunctionType::get(Builder.getVoidTy(), false);
+    auto *Callee =
+        llvm::Function::Create(Signature, llvm::GlobalValue::ExternalLinkage,
+                               "llvm.x86.tlbsync", Module);
+    auto *Function =
+        llvm::Function::Create(Signature, llvm::GlobalValue::ExternalLinkage,
+                               "legacy_tlbsync", Module);
+    Builder.SetInsertPoint(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    auto *Call = Builder.CreateCall(Callee);
+    Builder.CreateRetVoid();
+    ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+    auto Render = [&]() {
+      return renderX86SystemStateNativeCall(A, *Call, "", false, {});
+    };
+    const auto Text = Render();
+    ASSERT_TRUE(Text);
+    const std::string Bits = A == Arch::X64 ? "64" : "32";
+    EXPECT_NE(Text->find("__builtin_ia32_tlbsync_control" + Bits + "((uint" +
+                         Bits + "_t)(0))"),
+              std::string::npos)
+        << *Text;
+    EXPECT_NE(Text->find("\"a\""), std::string::npos) << *Text;
+    CEmitterOptions Options;
+    Options.TheArch = A;
+    Options.Format = BinaryFormat::ELF;
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
+    compileNativeC(Compiler, Directory, BinaryFormat::ELF, Source,
+                   "llvm.x86.tlbsync.control" + Bits, Cases, std::nullopt, true,
+                   true, A);
+    if (::testing::Test::HasFailure())
+      return;
+    EXPECT_THROW((void)renderX86SystemStateNativeCall(A, *Call, "", true, {}),
+                 std::invalid_argument);
+    EXPECT_THROW(
+        (void)renderX86SystemStateNativeCall(A, *Call, "", false, {"0"}),
+        std::invalid_argument);
+    EXPECT_THROW((void)renderX86SystemStateNativeCall(Arch::AArch64, *Call, "",
+                                                      false, {}),
+                 std::invalid_argument);
+    for (const auto Effects :
+         {llvm::MemoryEffects::none(), llvm::MemoryEffects::readOnly(),
+          llvm::MemoryEffects::writeOnly(), llvm::MemoryEffects::argMemOnly(),
+          llvm::MemoryEffects::inaccessibleMemOnly(),
+          llvm::MemoryEffects::inaccessibleOrArgMemOnly()}) {
+      Call->setMemoryEffects(Effects);
+      EXPECT_THROW(Render(), std::invalid_argument);
+    }
+    Call->setMemoryEffects(llvm::MemoryEffects::unknown());
+    Call->addFnAttr(llvm::Attribute::Speculatable);
+    EXPECT_THROW(Render(), std::invalid_argument);
+    Call->removeFnAttr(llvm::Attribute::Speculatable);
+    Call->setDoesNotReturn();
+    EXPECT_THROW(Render(), std::invalid_argument);
+    Call->removeFnAttr(llvm::Attribute::NoReturn);
+    Call->setCallingConv(llvm::CallingConv::Fast);
+    EXPECT_THROW(Render(), std::invalid_argument);
+    Call->setCallingConv(llvm::CallingConv::C);
+    llvm::IRBuilder<> Definition(
+        llvm::BasicBlock::Create(Context, "entry", Callee));
+    Definition.CreateRetVoid();
+    EXPECT_THROW(Render(), std::invalid_argument);
+  }
+  EXPECT_EQ(Cases, 4u);
+  RecordProperty("native_c_compilations", Cases);
+}
