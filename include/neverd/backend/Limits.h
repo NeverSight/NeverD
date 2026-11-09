@@ -180,6 +180,11 @@ inline constexpr size_t
 // Frame offsets are small; reject any range whose bounds would not fit.
 inline constexpr int64_t kMedLLVMSpillPredicateCoverageLimit = int64_t{1} << 40;
 
+// lib/backend/llvm/X86/MedLLVMRegistrationSourceSEH.cpp
+/// Total LLVM instructions copied for normal finally calls and local unwinds
+/// in one source function. Exhaustion preserves the unlowered source CFG.
+inline constexpr size_t kMaxSourceX86SEHClonedInstructions = 65536;
+
 // lib/backend/llvm/data/MedLLVMSymbolizedPtr.cpp
 inline constexpr int
     kMedLLVMSymbolizedPtrMedLLVMEmitterReloadsSymbolizedWritablePtrBudget = 256;

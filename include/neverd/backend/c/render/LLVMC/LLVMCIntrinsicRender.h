@@ -10,7 +10,7 @@
 /// Implementation split across:
 ///   LLVMCIntrinsicRender.cpp      — arch-dispatching: renderInlineAsm,
 ///                                   renderFence, renderDebugBreak
-///   LLVMCIntrinsicRenderX86.cpp   — x86 inline-asm, `__fastfail`, GS/FS loads
+///   LLVMCIntrinsicRenderX86.cpp   — x86 asm, `__fastfail`, FS/GS memory
 ///   LLVMCIntrinsicRenderARM.cpp   — ARM/AArch64 inline-asm rendering & table
 ///
 //===----------------------------------------------------------------------===//
@@ -29,6 +29,7 @@
 
 namespace llvm {
 class LoadInst;
+class StoreInst;
 class CallBase;
 class CallInst;
 class Value;
@@ -114,6 +115,9 @@ const char *renderX86DebugBreak(BinaryFormat Format);
 bool isX86FastFailName(llvm::StringRef Name);
 std::string renderX86SegmentedLoad(
     Arch TheArch, const llvm::LoadInst &LI,
+    const std::function<std::string(const llvm::Value *)> &ValueStr);
+std::string renderX86SegmentedStore(
+    Arch TheArch, const llvm::StoreInst &Store,
     const std::function<std::string(const llvm::Value *)> &ValueStr);
 
 //--- Arch-specific (LLVMCIntrinsicRenderARM.cpp) ---

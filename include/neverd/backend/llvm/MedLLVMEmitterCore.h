@@ -283,6 +283,13 @@ private:
       const MedFunc &Func, llvm::Function &LLVMFunc,
       const std::map<int, llvm::BasicBlock *> &OriginalBlockMap,
       const std::map<llvm::BasicBlock *, std::pair<int, int>> &PHICopyEdges);
+  /// Printed C's view of an x86 `_except_handler3` or `_except_handler4`
+  /// frame: each scope as WinEH pads, from the decompile view's frame facts
+  /// (RegistrationDisplayFacts).
+  bool emitSourceX86RegistrationSEH(
+      const MedFunc &Func, llvm::Function &LLVMFunc,
+      const std::map<int, llvm::BasicBlock *> &OriginalBlockMap,
+      const std::map<llvm::BasicBlock *, std::pair<int, int>> &PHICopyEdges);
   bool emitNativeX86RegistrationCxx(
       const MedFunc &Func, llvm::Function &LLVMFunc,
       const std::map<int, llvm::BasicBlock *> &OriginalBlockMap,

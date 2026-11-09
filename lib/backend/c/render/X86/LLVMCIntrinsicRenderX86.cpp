@@ -817,6 +817,31 @@ bool isX86FastFailName(llvm::StringRef Name) {
   return stripLeadingUnderscores(Name) == "fastfail";
 }
 
+namespace {
+
+const llvm::Value *segmentedMemoryOffset(const llvm::Value *Offset) {
+  for (unsigned Depth = 0;
+       Offset && Depth < ::neverd::limits::backend::
+                             kLLVMCIntrinsicRenderX86SegmentedLoadDepthLimit;
+       ++Depth) {
+    Offset = Offset->stripPointerCasts();
+    if (const auto *CE = llvm::dyn_cast<llvm::ConstantExpr>(Offset)) {
+      if (CE->getOpcode() == llvm::Instruction::IntToPtr) {
+        Offset = CE->getOperand(0);
+        continue;
+      }
+    }
+    if (const auto *I2P = llvm::dyn_cast<llvm::IntToPtrInst>(Offset)) {
+      Offset = I2P->getOperand(0);
+      continue;
+    }
+    break;
+  }
+  return Offset;
+}
+
+} // namespace
+
 std::string renderX86SegmentedLoad(
     Arch TheArch, const llvm::LoadInst &LI,
     const std::function<std::string(const llvm::Value *)> &ValueStr) {
@@ -837,27 +862,43 @@ std::string renderX86SegmentedLoad(
   if (!Intrinsic)
     return {};
 
-  const llvm::Value *Offset = LI.getPointerOperand();
-  for (unsigned Depth = 0;
-       Offset && Depth < ::neverd::limits::backend::
-                             kLLVMCIntrinsicRenderX86SegmentedLoadDepthLimit;
-       ++Depth) {
-    Offset = Offset->stripPointerCasts();
-    if (const auto *CE = llvm::dyn_cast<llvm::ConstantExpr>(Offset)) {
-      if (CE->getOpcode() == llvm::Instruction::IntToPtr) {
-        Offset = CE->getOperand(0);
-        continue;
-      }
-    }
-    if (const auto *I2P = llvm::dyn_cast<llvm::IntToPtrInst>(Offset)) {
-      Offset = I2P->getOperand(0);
-      continue;
-    }
-    break;
-  }
+  const llvm::Value *Offset = segmentedMemoryOffset(LI.getPointerOperand());
   if (!Offset)
     return {};
   return std::string(Intrinsic) + "(" + ValueStr(Offset) + ")";
+}
+
+std::string renderX86SegmentedStore(
+    Arch TheArch, const llvm::StoreInst &Store,
+    const std::function<std::string(const llvm::Value *)> &ValueStr) {
+  const unsigned AS = Store.getPointerAddressSpace();
+  if (!isLLVMX86SegmentedAddressSpace(AS))
+    return {};
+  if ((TheArch != Arch::X86 && TheArch != Arch::X64) || Store.isAtomic())
+    throw std::runtime_error("unsupported atomic or non-x86 segmented C store");
+  const llvm::Type *Type = Store.getValueOperand()->getType();
+  const unsigned Bits = Type->isPointerTy()   ? (TheArch == Arch::X86 ? 32 : 64)
+                        : Type->isIntegerTy() ? Type->getIntegerBitWidth()
+                                              : 0;
+  const char *Opcode = Bits == 8    ? "movb"
+                       : Bits == 16 ? "movw"
+                       : Bits == 32 ? "movl"
+                       : Bits == 64 ? "movq"
+                                    : nullptr;
+  if (!Opcode || (Bits == 64 && TheArch == Arch::X86))
+    throw std::runtime_error("unsupported segmented C store width");
+  const auto *Offset = segmentedMemoryOffset(Store.getPointerOperand());
+  if (!Offset)
+    throw std::runtime_error("unsupported segmented C store offset");
+  const std::string Value = ValueStr(Store.getValueOperand());
+  const std::string Cast = "uint" + std::to_string(Bits) + "_t";
+  // Keep the full address-register width: the MS __writefs/__writegs offset
+  // parameters are only 32 bits, even when an LLVM segmented pointer is 64.
+  return std::string("__asm__ volatile(\"") + Opcode + " %0, %%" +
+         (isLLVMX86GSAddressSpace(AS) ? "gs" : "fs") + ":(%1)\" : : \"" +
+         (Bits == 8 ? "q" : "r") + "\"((" + Cast + ")" +
+         (Type->isPointerTy() ? "(uintptr_t)" : "") + "(" + Value +
+         ")), \"r\"((uintptr_t)(" + ValueStr(Offset) + ")) : \"memory\");";
 }
 
 } // namespace neverd

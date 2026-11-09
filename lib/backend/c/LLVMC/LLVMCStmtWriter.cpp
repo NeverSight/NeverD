@@ -2131,6 +2131,14 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
   }
 
   if (auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst)) {
+    if (const std::string Segment = renderX86SegmentedStore(
+            Opts.TheArch, *SI,
+            [this](const llvm::Value *Value) { return valueStr(Value); });
+        !Segment.empty()) {
+      emitIndent(Indent);
+      OS << Segment << "\n";
+      return;
+    }
     if (const llvm::AllocaInst *Slot =
             asAllocaPointer(SI->getPointerOperand())) {
       const llvm::Value *Stored = SI->getValueOperand();
