@@ -319,5 +319,102 @@
     "capstone_gitlink": "e0d74bb3fb6b4b7bcf711e5203ff79c4dc20688e",
     "scope": "Upstream shared pipeline and frontend changes are retained; integration checks use the final merged compiler and both rebuilt NeverD SDK profiles."
   },
-  "complete_source_abi_inputs": "Each completion word also varies callee-saved register sentinels; repeated write-only cases exercise distinct ABI inputs."
+  "complete_source_abi_inputs": "Each completion word also varies callee-saved register sentinels; repeated write-only cases exercise distinct ABI inputs.",
+  "publication_integration": {
+    "upstream_dev": "e75ece60b39de0ffd08d2626f8b132db3027ad18",
+    "compiled_head": "0d5f6ef3897c30769924a0c6b95f1eccdb9aaa51",
+    "upstream_change": "Call-exit constant propagation at CFG joins",
+    "builds": {
+      "native": {
+        "source_head": "0d5f6ef3897c30769924a0c6b95f1eccdb9aaa51",
+        "source_status": "",
+        "command": [
+          "python3",
+          "scripts/build.py",
+          "build-x86-native",
+          "--target",
+          "NeverDX86VirtualizationSourceTests",
+          "--parallel",
+          "4"
+        ],
+        "exit_code": 0,
+        "seconds": 21.755,
+        "log_sha256": "797b4e51745721f058ddc76b0be7bfe5476c75036638e4187e530a63177bfc2b",
+        "outputs": {
+          "NeverDX86VirtualizationSourceTests": "beb9706cb940e917f73c15c73d0141861334952a11594bec56b7af4a3a199839"
+        }
+      },
+      "r6": {
+        "source_head": "0d5f6ef3897c30769924a0c6b95f1eccdb9aaa51",
+        "source_status": "",
+        "command": [
+          "python3",
+          "scripts/build.py",
+          "build-x86",
+          "--target",
+          "NeverDX86VirtualizationSourceTests",
+          "--parallel",
+          "4"
+        ],
+        "exit_code": 0,
+        "seconds": 22.167,
+        "log_sha256": "bf3104dc55ec6bc7c17b076a7a08c37124554cbafdfee93326d22315bb6365a5",
+        "outputs": {
+          "NeverDX86VirtualizationSourceTests": "a2a486d95ca8aaa595d86282442d0946b8bb01bba06fdc8cefb5e7e28cc148b0"
+        }
+      }
+    },
+    "checks": {
+      "native": {
+        "binary_sha256": "beb9706cb940e917f73c15c73d0141861334952a11594bec56b7af4a3a199839",
+        "source_head": "0d5f6ef3897c30769924a0c6b95f1eccdb9aaa51",
+        "neverc_sha256": "b679854fce986d9fabb375af1456cddde212b879ab36b99d5a29520faf85ad76",
+        "neverc_llc_sha256": "1d6f80fa2f4fb7e0fe0e2b5f3f1732c527a898274ecb9063a9d7830ab3b3ec5e",
+        "source_tree": "f79b0d26cf10fca64a44ea6202670fba1f8cf9d7",
+        "source_status": "",
+        "exit_code": 0,
+        "seconds": 80.915,
+        "log_sha256": "dd72ba99dd614a19d7a4091733003572e2005d9197097e1fdc16a5558e810a96",
+        "result_sha256": "a0e0a1372dfbd0be2da8db072c685b78591f39291968d3739b473955dfe28048",
+        "tests": 5,
+        "c_compilations": 1056,
+        "failed": 0,
+        "skipped": [],
+        "passed": 5
+      },
+      "r6": {
+        "binary_sha256": "a2a486d95ca8aaa595d86282442d0946b8bb01bba06fdc8cefb5e7e28cc148b0",
+        "source_head": "0d5f6ef3897c30769924a0c6b95f1eccdb9aaa51",
+        "neverc_sha256": "b679854fce986d9fabb375af1456cddde212b879ab36b99d5a29520faf85ad76",
+        "neverc_llc_sha256": "1d6f80fa2f4fb7e0fe0e2b5f3f1732c527a898274ecb9063a9d7830ab3b3ec5e",
+        "source_tree": "f79b0d26cf10fca64a44ea6202670fba1f8cf9d7",
+        "source_status": "",
+        "exit_code": 0,
+        "seconds": 48.725,
+        "log_sha256": "5d47ec97482bb821589d65f143f3f3e19445586e98b61e339bc8e3517312fe05",
+        "result_sha256": "f071cefb7c6f7dac5117037f7385edf5f274c04c32312a18b1e39bd6516ba9af",
+        "tests": 3,
+        "c_compilations": 1056,
+        "failed": 0,
+        "skipped": [],
+        "passed": 3
+      }
+    },
+    "export_equivalence": [
+      {
+        "sdk": "native",
+        "files": 144,
+        "identical": true,
+        "changed": []
+      },
+      {
+        "sdk": "r6",
+        "files": 144,
+        "identical": true,
+        "changed": []
+      }
+    ],
+    "export_equivalence_sha256": "0d8cbf98157e78c2d4c739f09772af66aa369bce580ae8bcbb4de96a8447a1cf",
+    "machine_witness_applicability": "All 144 exported original inputs and complete C files per SDK are byte-identical to the qualified integration exports. The same compiler, backend and source-witness hashes therefore apply."
+  }
 }
