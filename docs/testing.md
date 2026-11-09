@@ -21899,6 +21899,13 @@ check the final file. `RelocatedSignedLanguageFramesExecute` adds the original
 catch and propagated cleanup paths to the capability-gated execution matrix.
 The installed runtime driver also checks original functions in the other cases.
 File-level validation does not qualify these runtime contracts.
+The [signed language relocation qualification](evidence/arm64e-signed-language-relocation-2026-11-09.json)
+records 1,184 integration cases (1,160 passed, 24 skipped), the final native
+capability gate checks, and a fresh 30-guest CPTA/PAC replay of 1,825 generated
+call objects. The model compares 43,800 valid original/projected calls and
+105,120 invalid-signature pairs at EL0/EL1 with all four CPTA/CPTA0 settings.
+It does not execute Apple's dyld or signed language unwinder; real arm64e
+execution and general whole-image publication remain unqualified.
 The [native language qualification](evidence/arm64e-native-language-2026-11-09.json)
 records tested source identities, regression results, independent checks and
 the remaining runtime and publication boundaries.
