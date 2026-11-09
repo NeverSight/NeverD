@@ -469,19 +469,19 @@ void applyRegisterTransfer(const MedInstruction &Instruction,
       return;
     if (Instruction.Op == Operation::And &&
         Instruction.Width == kDoubleWordBitWidth &&
-        Left.ValueKind == RegisterValue::Kind::UnsignedRange &&
         Right.ValueKind == RegisterValue::Kind::Constant &&
         (Right.Value == 0 || std::has_single_bit(~Right.Value + 1))) {
-      const auto Bounds = *unsignedValueRange(Left);
-      if (Bounds.Lower <= Bounds.Upper) {
+      const auto Bounds =
+          Scratch ? Scratch->valueRange(Left) : unsignedValueRange(Left);
+      if (Bounds && Bounds->Lower <= Bounds->Upper) {
         // Clearing a low-bit suffix is monotone on a nonwrapping unsigned
-        // interval. Other masks and symbolic identities use the ordinary
-        // conservative transfer below.
+        // enclosure, including a capture's path-local bound. Project its
+        // numeric bounds, never its private ID or its pointer identity.
         State[Instruction.Dst] = unsignedRangeValue(
-            {*evaluateScalarALU(Operation::And, Instruction.Width, Bounds.Lower,
-                                Right.Value),
-             *evaluateScalarALU(Operation::And, Instruction.Width, Bounds.Upper,
-                                Right.Value)});
+            {*evaluateScalarALU(Operation::And, Instruction.Width,
+                                Bounds->Lower, Right.Value),
+             *evaluateScalarALU(Operation::And, Instruction.Width,
+                                Bounds->Upper, Right.Value)});
         return;
       }
     }

@@ -1028,12 +1028,21 @@ budget. A null/non-null return can carry the successful value's displacement,
 conditional stores and bound together. Testing that exact return restores those
 facts only on the non-null branch. This preserves a decreasing heap cursor
 across repeated allocations, while a cursor reset can still prove actual
-overlap. Non-identity alignment masks retain their existing conservative result.
+overlap. Alignment masks that clear a low-bit suffix project a known,
+nonwrapping numeric enclosure, including path-local bounds. The result is a
+numeric range, not the original pointer identity.
 
 A complete set of successful heap-derived numeric returns names the one actual
 returned value with a captured identity and enclosing numeric bounds. Ordinary
 summaries, stored return carriers, and scalar replay share the heap lower-bound
-eligibility rule. An upper endpoint outside the heap region does not erase the
+eligibility rule. A full-width stored return carrier is named before the
+canonical store in both ordinary summaries and acyclic fixed-cell replay.
+Replayed definitions are rebound through every nested call site, so repeated
+calls do not equate their independently computed results. The store and its
+actual returned value retain one identity, including conditional stores selected
+by a non-null check. Subsequent writes and register definitions invalidate these
+conditions through the ordinary transfer owner. An upper endpoint outside the
+heap region does not erase the
 value's identity or prove that every possible value is a mapped pointer. Its
 fields therefore remain conditional on that return when branches merge. A null
 alternative retains the existing conditional-definition rule: choosing the null
@@ -1054,7 +1063,8 @@ one captured value, including modular addition. Unsigned ordering additionally
 requires both displaced numeric intervals to stay within the 64-bit address
 space. Different captures, signed comparisons and truncated values do not
 inherit that ordering. A 64-bit AND with an all-ones immediate or register mask
-also preserves the value's identity; other masks retain their existing transfer.
+also preserves the value's identity. A mask that clears a low-bit suffix uses
+the known numeric enclosure described above; other masks remain conservative.
 These proofs share the normal branch and register-transfer owners and introduce
 no allocator freshness or initial-memory assumption.
 
