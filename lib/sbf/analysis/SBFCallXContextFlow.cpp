@@ -1619,6 +1619,14 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
   // after all retained variants used literal, frame or unknown values.
   const auto &Variants = Specializations.at(Entry);
   auto &Generic = *GenericContexts.at(Entry);
+  const auto UnknownRoot = [&](const FunctionContext &Candidate) {
+    return !Retry && Candidate.IsRoot && Candidate.Complete &&
+           Candidate.Published && Candidate.RootGeneration < RootGeneration &&
+           Candidate.Input.Registers == Generic.Input.Registers &&
+           Candidate.Input.Scratch == Generic.Input.Scratch;
+  };
+  const bool RootDemand = llvm::any_of(
+      Variants, [&](const auto *Candidate) { return UnknownRoot(*Candidate); });
   bool NewImageArgument = false;
   bool UnrepresentedImageBinding = false;
   uint16_t NewImageRegisters = 0;
@@ -1699,8 +1707,9 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
   const bool OnlyPreciseSiblingResult =
       !Retry && !NewImageArgument && !NewImageRegisters &&
       !NewCapturedRegisters && !NewFrameRegisters;
-  if (OnlyPreciseSiblingResult && !UnrepresentedImageBinding &&
-      !NewScalarRegisters)
+  const bool OnlyRootDemand = OnlyPreciseSiblingResult &&
+                              !UnrepresentedImageBinding && !NewScalarRegisters;
+  if (OnlyRootDemand && !RootDemand)
     return false;
   // Replacing an old incoming edge must leave the caller transfer unchanged.
   // Start with the opaque-memory case: no returned cells or affine return
@@ -1782,45 +1791,57 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
   std::vector<bool> Seen(Contexts.size());
   std::vector<size_t> Pending;
   Pending.reserve(Contexts.size());
+  const auto AddSites = [&](const FunctionContext &Context, auto &Targets,
+                            const ContextCall *Edge = nullptr,
+                            bool SharedRequired =
+                                false) -> llvm::Expected<bool> {
+    size_t Instantiated = 0;
+    for (const auto &Template : Context.Sites) {
+      const auto &Site =
+          Edge && Instantiated < Edge->InputExpressionTargets.size() &&
+                  Edge->InputExpressionTargets[Instantiated].CallXSlot ==
+                      Template.CallXSlot
+              ? Edge->InputExpressionTargets[Instantiated++]
+              : Template;
+      // A union is a different proof from separate singleton contexts. An
+      // unrelated union cannot cover a required singleton in the root scan.
+      if (Site.TargetValueAlternatives.values().size() > 1) {
+        if (SharedRequired)
+          continue;
+        return false;
+      }
+      if (!Site.TargetAddress)
+        continue;
+      const auto &Caller = Edge ? *Contexts[Edge->CallerSummaryID] : Context;
+      const size_t CallerEntry =
+          Program.Med.Blocks[Caller.EntryBlock].StartSlot;
+      const size_t CallerSlot = Edge ? Edge->CallerSlot : CallerEntry;
+      TargetKey Key{TargetCoordinates{CallerEntry, CallerSlot, Site.CallXSlot,
+                                      *Site.TargetAddress},
+                    &Site};
+      if (SharedRequired) {
+        const auto Needed = Required.find(Key);
+        // The exact retained witness must survive through another root.
+        // Equal addresses from differently constrained summaries do not
+        // establish that the retiring root's evidence remains available.
+        if (Needed == Required.end() || Needed->second != &Site)
+          continue;
+      }
+      if (Targets.insert(Key).second) {
+        if (auto Error = retain(TargetBytes))
+          return std::move(Error);
+        TemporaryBytes += TargetBytes;
+      }
+    }
+    return true;
+  };
   const auto CollectTargets = [&](const FunctionContext &Start, size_t Excluded,
                                   auto &Targets) -> llvm::Expected<bool> {
     std::fill(Seen.begin(), Seen.end(), false);
     Pending.clear();
     Pending.push_back(Start.ID);
     Seen[Start.ID] = true;
-    const auto AddSites = [&](const FunctionContext &Context,
-                              const ContextCall *Edge =
-                                  nullptr) -> llvm::Expected<bool> {
-      size_t Instantiated = 0;
-      for (const auto &Template : Context.Sites) {
-        const auto &Site =
-            Edge && Instantiated < Edge->InputExpressionTargets.size() &&
-                    Edge->InputExpressionTargets[Instantiated].CallXSlot ==
-                        Template.CallXSlot
-                ? Edge->InputExpressionTargets[Instantiated++]
-                : Template;
-        // A union of target alternatives is a different proof from separate
-        // singleton contexts; do not discard that distinction here.
-        if (Site.TargetValueAlternatives.values().size() > 1)
-          return false;
-        const auto &Caller = Edge ? *Contexts[Edge->CallerSummaryID] : Context;
-        const size_t CallerEntry =
-            Program.Med.Blocks[Caller.EntryBlock].StartSlot;
-        const size_t CallerSlot = Edge ? Edge->CallerSlot : CallerEntry;
-        if (Site.TargetAddress &&
-            Targets
-                .emplace(TargetCoordinates{CallerEntry, CallerSlot,
-                                           Site.CallXSlot, *Site.TargetAddress},
-                         &Site)
-                .second) {
-          if (auto Error = this->retain(TargetBytes))
-            return std::move(Error);
-          TemporaryBytes += TargetBytes;
-        }
-      }
-      return true;
-    };
-    auto Added = AddSites(Start);
+    auto Added = AddSites(Start, Targets);
     if (!Added || !*Added)
       return Added;
     for (size_t I = 0; I < Pending.size(); ++I)
@@ -1833,7 +1854,7 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
         // Legacy dispatch suppresses the immediate child's target evidence;
         // its subsequent summary edges are still traversed by the report.
         if (!Edge.LegacyRuntime) {
-          auto Added = AddSites(Child, &Edge);
+          auto Added = AddSites(Child, Targets, &Edge);
           if (!Added || !*Added)
             return Added;
         }
@@ -1844,6 +1865,38 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
       }
     return true;
   };
+  const auto SharedRootProofsSurvive =
+      [&](size_t Excluded) -> llvm::Expected<bool> {
+    ClearTargets(Covered);
+    std::fill(Seen.begin(), Seen.end(), false);
+    Pending.clear();
+    for (const auto &Context : Contexts)
+      if (Context && Context->IsRoot && Context->Complete &&
+          Context->Published && Context->ID != Excluded) {
+        auto Added = AddSites(*Context, Covered, nullptr, true);
+        if (!Added)
+          return Added.takeError();
+        Seen[Context->ID] = true;
+        Pending.push_back(Context->ID);
+      }
+    for (size_t I = 0; I < Pending.size() && Covered.size() != Required.size();
+         ++I)
+      for (const auto &Edge : Contexts[Pending[I]]->Calls) {
+        if (!Edge.CalleeSummaryID || *Edge.CalleeSummaryID == Excluded)
+          continue;
+        const auto &Child = *Contexts[*Edge.CalleeSummaryID];
+        if (!Edge.LegacyRuntime) {
+          auto Added = AddSites(Child, Covered, &Edge, true);
+          if (!Added)
+            return Added.takeError();
+        }
+        if (!Seen[Child.ID]) {
+          Seen[Child.ID] = true;
+          Pending.push_back(Child.ID);
+        }
+      }
+    return Covered.size() == Required.size();
+  };
   const auto IndependentlyPublished = [&](const FunctionContext &Sibling,
                                           size_t Excluded) {
     if (Sibling.IsRoot)
@@ -1851,7 +1904,7 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
     std::fill(Seen.begin(), Seen.end(), false);
     Pending.clear();
     for (const auto &Context : Contexts)
-      if (Context && Context->IsRoot) {
+      if (Context && Context->IsRoot && Context->ID != Excluded) {
         Seen[Context->ID] = true;
         Pending.push_back(Context->ID);
       }
@@ -1869,16 +1922,18 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
   };
 
   for (auto *Candidate : Specializations.at(Entry)) {
+    const bool ReplaceRoot = UnknownRoot(*Candidate);
     if ((Retry && Candidate != Retry->Summary) ||
         (!Retry && (!Candidate->Published ||
                     Candidate->RootGeneration == RootGeneration)) ||
-        Candidate->IsRoot)
+        (Candidate->IsRoot && !ReplaceRoot) || (OnlyRootDemand && !ReplaceRoot))
       continue;
     const bool ObjectResult =
         NewScalarRegisters && hasCompletedObjectResult(*Candidate);
     const bool OpaqueResult = GenericOpaque && OpaqueReturn(*Candidate);
-    if (!ObjectResult && (!OpaqueResult || (OnlyPreciseSiblingResult &&
-                                            !UnrepresentedImageBinding)))
+    if (!ObjectResult &&
+        (!OpaqueResult || (OnlyPreciseSiblingResult &&
+                           !UnrepresentedImageBinding && !ReplaceRoot)))
       continue;
     const bool GenericKeepsResult =
         OpaqueResult &&
@@ -1887,7 +1942,7 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
     // Further image inputs can use redundant, more precise completed results.
     // Repeated opaque results keep the original once-per-register demand.
     if ((Retry && !GenericKeepsResult) ||
-        (OnlyPreciseSiblingResult && GenericKeepsResult))
+        (OnlyPreciseSiblingResult && GenericKeepsResult && !ReplaceRoot))
       continue;
     // A generic replacement must preserve the node's own caller proofs.
     // Otherwise only an already computed, independently published sibling
@@ -1905,7 +1960,7 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
                      });
         });
     const bool GenericEquivalent = GenericKeepsResult && GenericKeepsSites;
-    if (!GenericEquivalent && Retry)
+    if (!GenericEquivalent && (Retry || ReplaceRoot))
       continue;
     const auto SameSites = [&](const FunctionContext &Sibling) {
       if (Candidate->Sites.size() != Sibling.Sites.size())
@@ -1976,6 +2031,12 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
       if (!GenericEquivalent)
         Replacement = Sibling;
     }
+    if (!Redundant && ReplaceRoot) {
+      auto CoveredElsewhere = SharedRootProofsSurvive(Candidate->ID);
+      if (!CoveredElsewhere)
+        return CoveredElsewhere.takeError();
+      Redundant = *CoveredElsewhere;
+    }
     if (!Redundant)
       continue;
     // Do not rewrite an edge in a graph whose fixed point is still being
@@ -2035,6 +2096,11 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
             ++Replacement->IncomingReferences;
             --Candidate->IncomingReferences;
           }
+    // The generic root already retains this entry's unknown-input coverage.
+    // A precise root is redundant only after the same output and complete
+    // proof-graph obligations as any completed incoming edge have passed.
+    // Independently published siblings keep all of its concrete targets.
+    Candidate->IsRoot = false;
     Candidate->Published = false;
     Pending.clear();
     Pending.push_back(Candidate->ID);
