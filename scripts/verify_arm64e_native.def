@@ -285,7 +285,8 @@
   "modes": [
     "probe",
     "run",
-    "legacy"
+    "legacy",
+    "probe-startup"
   ],
   "probe_mode": "probe",
   "output_argument": "--output",
@@ -317,5 +318,8 @@
   "legacy_version_args": [
     "--version"
   ],
-  "legacy_info_suffix": "-dyld-info"
+  "legacy_info_suffix": "-dyld-info",
+  "startup_mode": "probe-startup",
+  "startup_loading": "exec",
+  "startup_qualification_key": "compiler_original_startup_qualified"
 }

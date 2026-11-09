@@ -25,6 +25,65 @@ def runtime_xml():
 
 
 class Arm64eNativeQualificationTests(unittest.TestCase):
+    def test_probe_keeps_startup_and_dlopen_contracts_distinct(self):
+        contract = native.fixture_contract()
+        markers = "\n".join(contract[name] for name in
+                            ("started", "completed", "runtime_completed"))
+        for startup in (False, True):
+            with self.subTest(startup=startup), tempfile.TemporaryDirectory() as temporary, \
+                    mock.patch.object(native.platform, "system", return_value=CASES["probe_host"]["system"]), \
+                    mock.patch.object(native.platform, "machine", return_value=CASES["probe_host"]["machine"]), \
+                    mock.patch.object(native, "provenance", return_value=CASES["provenance"]), \
+                    mock.patch.object(native, "check_binary", side_effect=lambda _: dict(CASES["probe_identity"])), \
+                    mock.patch.object(native, "command", return_value=subprocess.CompletedProcess(
+                        [], 0, markers, "")) as command:
+                report = native.probe(Path(temporary), startup=startup)
+                self.assertEqual(report["status"], native.POLICY["passed"])
+                self.assertEqual(report["control_loading"], native.POLICY[
+                    "startup_loading" if startup else "control_loading"])
+                self.assertEqual(report[native.POLICY["startup_qualification_key"]], startup)
+                self.assertFalse(report["whole_image_publication_qualified"])
+                runtime_labels = {native.POLICY["runtime_label"].format(
+                    optimization=optimization, dwarf=dwarf)
+                    for optimization in native.POLICY["optimizations"]
+                    for dwarf in native.POLICY["dwarf_modes"]}
+                invocations = {call.args[2]: call.args[3] for call in command.call_args_list}
+                for label in runtime_labels:
+                    compile = invocations[label + native.POLICY["compile_suffix"]]
+                    self.assertEqual(all(arg in compile for arg in contract["library_args"]),
+                                     not startup)
+                    self.assertEqual(len(invocations[label]), 1 if startup else 2)
+                    self.assertEqual("loader" in next(row for row in report["controls"]
+                                                     if row["label"] == label), not startup)
+
+    def test_failed_startup_does_not_retry_as_dlopen(self):
+        contract = native.fixture_contract()
+        markers = "\n".join(contract[name] for name in
+                            ("started", "completed", "runtime_completed"))
+        first_runtime = native.POLICY["runtime_label"].format(
+            optimization=native.POLICY["optimizations"][0], dwarf=native.POLICY["dwarf_modes"][0])
+
+        def run(products, output, label, argv, timeout):
+            code = CASES["startup_failure"] if label == first_runtime else 0
+            return subprocess.CompletedProcess(argv, code, markers, "")
+
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(native.platform, "system", return_value=CASES["probe_host"]["system"]), \
+                mock.patch.object(native.platform, "machine", return_value=CASES["probe_host"]["machine"]), \
+                mock.patch.object(native, "provenance", return_value=CASES["provenance"]), \
+                mock.patch.object(native, "check_binary", side_effect=lambda _: dict(CASES["probe_identity"])), \
+                mock.patch.object(native, "command", side_effect=run) as command:
+            report = native.probe(Path(temporary), startup=True)
+            self.assertEqual(report["status"], native.POLICY["failed"])
+            self.assertTrue(report["native_pac_qualified"])
+            self.assertFalse(report["compiler_original_call_unwind_qualified"])
+            self.assertFalse(report[native.POLICY["startup_qualification_key"]])
+            self.assertFalse(report["whole_image_publication_qualified"])
+            self.assertEqual(report["controls"][-1]["returncode"], CASES["startup_failure"])
+            self.assertEqual(len(report["controls"]), len(native.POLICY["optimizations"]) + 1)
+            for call in command.call_args_list:
+                self.assertFalse(any(arg in call.args[3] for arg in contract["library_args"]))
+
     def test_failed_legacy_linker_lookup_stops_before_compiling(self):
         failure = subprocess.CompletedProcess([], CASES["legacy_lookup_failure"], "", "")
         with tempfile.TemporaryDirectory() as temporary, \
