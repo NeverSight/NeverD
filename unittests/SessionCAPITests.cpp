@@ -3091,6 +3091,9 @@ TEST_F(SessionCAPITest, SwitchTablesComeFromWholeProgramAnalysis) {
   EXPECT_EQ(Switch.getString("table"), hex(DataELFData)) << Text;
   EXPECT_EQ(Switch.getString("form"), "table_relative") << Text;
   EXPECT_EQ(Switch.getInteger("entry_size"), 4) << Text;
+  // A table the dispatch indexes directly has no index table.
+  ASSERT_NE(Switch.get("index"), nullptr) << Text;
+  EXPECT_TRUE(Switch.get("index")->getAsNull()) << Text;
   const auto *Targets = Switch.getArray("targets");
   ASSERT_TRUE(Targets && Targets->size() == 4) << Text;
   for (unsigned Case = 0; Case < 4; ++Case) {
@@ -3098,6 +3101,94 @@ TEST_F(SessionCAPITest, SwitchTablesComeFromWholeProgramAnalysis) {
     EXPECT_EQ(Target[0].getAsString(), hex(Cases + 6 * Case)) << Text;
     EXPECT_EQ(Target[1].getAsInteger(), Case) << Text;
     EXPECT_EQ(Target[2].getAsInteger(), Case) << Text;
+  }
+}
+
+TEST_F(SessionCAPITest, TwoLevelSwitchesPublishTheirIndexTable) {
+  // MSVC's CRT classifies a character through a byte index table into an
+  // RVA table of four cases and the default, both after the code:
+  //   sub rsp, 28h; cmp cl, 20h; ja default; movzx eax, cl
+  //   lea rdx, [rip + __ImageBase]
+  //   movzx eax, byte ptr [rdx+rax+index]; mov ecx, [rdx+rax*4+table]
+  //   add rcx, rdx; jmp rcx
+  //   mov al, 1/2/3/5; add rsp, 28h; retn       (the cases)
+  //   xor al, al; add rsp, 28h; retn            (the default)
+  constexpr uint64_t Base = 0x140000000, Entry = Base + 0x1000;
+  constexpr uint64_t Load = Entry + 0x13, Jump = Entry + 0x25,
+                     Table = Entry + 0x4c, Index = Entry + 0x60;
+  // The table slot each character selects: cases for 0..10 and 32, the
+  // default for the rest.
+  std::vector<uint8_t> Slots = {0, 1, 2, 0, 3, 1, 2, 3, 3, 1, 2};
+  Slots.resize(32, 4);
+  Slots.push_back(0);
+  std::string Code;
+  const auto bytes = [&](std::initializer_list<uint8_t> Bytes) {
+    for (uint8_t Byte : Bytes)
+      Code.push_back(static_cast<char>(Byte));
+  };
+  const auto le32 = [&](uint64_t Value) {
+    for (unsigned I = 0; I < 4; ++I)
+      Code.push_back(static_cast<char>(Value >> (8 * I)));
+  };
+  bytes({0x48, 0x83, 0xec, 0x28, 0x80, 0xf9, 0x20, 0x77, 0x3a, 0x0f, 0xb6, 0xc1,
+         0x48, 0x8d, 0x15});
+  le32(Base - Load);
+  bytes({0x0f, 0xb6, 0x84, 0x02});
+  le32(Index - Base);
+  bytes({0x8b, 0x8c, 0x82});
+  le32(Table - Base);
+  bytes({0x48, 0x03, 0xca});
+  ASSERT_EQ(Entry + Code.size(), Jump);
+  bytes({0xff, 0xe1});
+  std::vector<uint64_t> Targets;
+  for (uint8_t Value : {1, 2, 3, 5}) {
+    Targets.push_back(Entry + Code.size());
+    bytes({0xb0, Value, 0x48, 0x83, 0xc4, 0x28, 0xc3});
+  }
+  Targets.push_back(Entry + Code.size());
+  bytes({0x32, 0xc0, 0x48, 0x83, 0xc4, 0x28, 0xc3, 0xcc, 0xcc});
+  ASSERT_EQ(Entry + Code.size(), Table);
+  for (uint64_t Target : Targets)
+    le32(Target - Base);
+  ASSERT_EQ(Entry + Code.size(), Index);
+  for (uint8_t Slot : Slots)
+    Code.push_back(static_cast<char>(Slot));
+  const auto Input = write("two-level.exe", makePE64(Code));
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1)
+      << takeString(neverd_last_error(Session));
+  ASSERT_EQ(neverd_session_analyze(Session), 1)
+      << takeString(neverd_last_error(Session));
+  const auto Text = takeString(neverd_switches_json(Session, 0, 16));
+  auto Parsed = llvm::json::parse(Text);
+  ASSERT_TRUE(static_cast<bool>(Parsed)) << Text;
+  const auto *Switches = Parsed->getAsObject()->getArray("switches");
+  ASSERT_TRUE(Switches && Switches->size() == 1) << Text;
+  const auto &Switch = *(*Switches)[0].getAsObject();
+  const auto hex = [](uint64_t Value) { return "0x" + llvm::utohexstr(Value); };
+  EXPECT_EQ(Switch.getString("jump"), hex(Jump)) << Text;
+  EXPECT_EQ(Switch.getString("load"), hex(Load)) << Text;
+  // The table the index selects a slot of stores image-relative targets.
+  EXPECT_EQ(Switch.getString("table"), hex(Table)) << Text;
+  EXPECT_EQ(Switch.getString("form"), "image_relative") << Text;
+  EXPECT_EQ(Switch.getInteger("entry_size"), 4) << Text;
+  EXPECT_EQ(Switch.getInteger("stride"), 4) << Text;
+  const auto *IndexTable = Switch.getObject("index");
+  ASSERT_TRUE(IndexTable) << Text;
+  EXPECT_EQ(IndexTable->getString("table"), hex(Index)) << Text;
+  EXPECT_EQ(IndexTable->getInteger("entry_size"), 1) << Text;
+  EXPECT_EQ(IndexTable->getInteger("stride"), 1) << Text;
+  EXPECT_EQ(IndexTable->getInteger("entries"),
+            static_cast<int64_t>(Slots.size()))
+      << Text;
+  // Every character's target, the character, and the slot its index entry
+  // holds, so slots repeat.
+  const auto *Cases = Switch.getArray("targets");
+  ASSERT_TRUE(Cases && Cases->size() == Slots.size()) << Text;
+  for (size_t K = 0; K < Slots.size(); ++K) {
+    const auto &Case = *(*Cases)[K].getAsArray();
+    EXPECT_EQ(Case[0].getAsString(), hex(Targets[Slots[K]])) << K << Text;
+    EXPECT_EQ(Case[1].getAsInteger(), static_cast<int64_t>(K)) << Text;
+    EXPECT_EQ(Case[2].getAsInteger(), Slots[K]) << K << Text;
   }
 }
 

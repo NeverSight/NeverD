@@ -1348,6 +1348,10 @@ struct JumpTable {
   /// than tracing the branch target back (which would find the intermediate
   /// index).
   bool TwoLevelIndex = false;
+  /// The compact index run a two-level dispatch reads with the switch
+  /// variable, one of StorageRanges; set with TwoLevelIndex.  Its entries
+  /// need not select Targets directly: a clamped dispatch replaces some.
+  std::optional<JumpTableStorageRange> TwoLevelIndexRange;
 
   /// Set for a stack-materialised computed-goto table (a non-`static` label
   /// array clang copies onto the stack) whose entries are *written again* after
