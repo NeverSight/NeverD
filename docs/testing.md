@@ -22414,7 +22414,7 @@ The repeated-image regression also covers unrelated function-pointer relocations
 
 `SymExprMask.ConstantCover*` checks exhaustive four-bit masks and inputs, 8–257-bit words, live high bits, shared deep sources, and word/term budget refusal. `FrameOffsets.ConstantCoveredBitsExposeOffsetsWithoutSolverQueries` checks a constant displacement with zero solver queries and rejects an input-dependent neighbor. Run `NeverDSymbolicTests` and `NeverDInterpreterSpecializationTests`.
 
-The captured-word slice regressions in `SymExprTests.cpp` reconstruct selected byte lanes and modular arithmetic prefixes, normalize constant-shift windows, and restore only zero-padded quotient slices. Independent APInt checks retain reversed lanes, padding and signed shifts.
+The captured-word slice regressions in `SymExprTests.cpp` reconstruct selected byte lanes and modular arithmetic prefixes, normalize constant-shift windows, and restore only zero-padded quotient slices. Independent APInt checks retain reversed lanes, padding and signed shifts. Only byte windows of byte shifts read the source directly; other narrowed shifts keep their count, which control-bit discovery and LLVM scalar decisions read.
 
 `SymExprMask.Reassembled*` and `FieldReassembly*` cover zero-extended fields
 restored to their original bit positions, compound AND sources, high lanes of
