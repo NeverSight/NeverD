@@ -13223,12 +13223,13 @@ independent test expectations in fixtures; ordinary punctuation and empty string
 do not need vocabulary entries.
 
 `AndroidFormatting` owns ordinary/fortify string formatting and the native
-print/vprint/buf_print liblog entry points. Its
+print/vprint/buf_print/assert liblog entry points. Its
 entrypoint classification supplies the fixed-argument layout and object-size
 checks to one formatter and the shared AAPCS64 `ArgumentReader`; it does not
 duplicate conversion rules for checked imports, dynamic providers, SDK or CLI.
-Fortify paths requiring unmodeled process-abort effects stop before publishing
-output. Existing memory, deadline and representable-result limits still apply.
+Fortify failure diagnostics and dispatch remain unmodeled and stop before
+publishing output; standalone `abort` support does not complete those paths.
+Existing memory, deadline and representable-result limits still apply.
 
 `AndroidStrings` owns bounded copies, including `strlcpy` source scanning,
 termination and atomic refusal. `__strlcpy_chk` checks the supplied capacity
@@ -13556,7 +13557,7 @@ copy fault does not undo the installation. The same owner handles `kill` for
 self existence probes and uncatchable SIGKILL termination. It returns a typed
 `signaled` outcome without resuming the pending service; Android stops all live
 guest threads and records their termination separately from completed returns.
-`LinuxSignals` also owns per-thread masks, process-pending standard signals and
+`LinuxSignals` also owns per-thread masks, process/thread pending signals and
 live AArch64 signal-frame records. Thread creation inherits the creator's mask;
 retirement drops that thread's records. Both runners call the shared delivery
 owner before guest execution. `LinuxSignalFrame` materializes the Linux wire
@@ -13570,7 +13571,7 @@ No SDK or host signal mechanism participates.
 `KernelWait` owns each suspended operation's signal interruption contract.
 Relative sleeps retain copied deadlines and remaining-time output addresses in
 `LinuxSleep`; no second sleep state lives in the Android scheduler. Scheduling
-considers eligible process-pending signals before advancing idle time. The
+considers eligible pending signals before advancing idle time. The
 shared signal owner discards ignored signals and classifies default termination
 before a waiter can report EINTR. Poll, select and epoll owners perform their
 distinct interrupted copy-out rules. The receive owner alone decides whether
@@ -16330,6 +16331,18 @@ matching follow it, preserving aliases and partial effects. Direct pointers
 stay lazy, while formatted/framework diagnostics reuse their existing bytes.
 The cooperative scheduler's atomic native calls serialize first publication
 across threads. Fatal logging itself does not exit the process.
+
+`__android_log_assert` composes that formatter and text-write owner with shared
+Linux stderr output and Bionic `abort`, in that order. Materialized libc buffers
+and guest iovecs share descriptor resolution and the output-budget/publishing
+owner; no guest scratch allocation or private stderr copy is introduced.
+`LinuxSignals` owns separate process and thread pending sets and SI_USER versus
+SI_TKILL frame data. Bionic supplies only API 28's abort mask and two-phase
+disposition policy. `GuestThreads` retains the incomplete import at the current
+signal-frame depth; a returning handler resumes the second abort phase, while
+a redirected ucontext retains its new continuation. Default SIGABRT uses the
+same typed whole-process termination as other terminating signals, without
+host signals or core-file production.
 
 `AndroidProperties` builds one immutable guest property table from explicit
 inputs. Name lookup, stable `prop_info` identities, serials, legacy reads and

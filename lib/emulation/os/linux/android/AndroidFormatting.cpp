@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 #include "AndroidArguments.h"
 #include "AndroidLog.h"
+#include "AndroidThreads.h"
 
 #include <algorithm>
 #include <limits>
@@ -332,8 +333,24 @@ llvm::Error Bionic::StringFormatter::renderArguments() {
 
 llvm::Expected<std::string> Bionic::StringFormatter::logMessage() {
   Capacity = LogFormattedBufferBytes;
-  if (auto E = renderArguments())
+  if (Call.Name == symbol::TextLogAssert && !Call.Arguments[2]) {
+    if (Call.Arguments[0]) {
+      constexpr llvm::StringLiteral Prefix = "Assertion failed: ";
+      if (auto E = emit(Prefix.size(), Prefix))
+        return std::move(E);
+      auto Condition = text(Call.Arguments[0], UINT64_MAX);
+      if (!Condition)
+        return Condition.takeError();
+      if (auto E = emit(Condition->size(), *Condition))
+        return std::move(E);
+    } else {
+      constexpr llvm::StringLiteral Message = "Unspecified assertion failed";
+      if (auto E = emit(Message.size(), Message))
+        return std::move(E);
+    }
+  } else if (auto E = renderArguments()) {
     return std::move(E);
+  }
   // vsnprintf retains at most LOG_BUF_SIZE-1 bytes. The following liblog
   // write observes the first NUL, but all formatting still occurs before it.
   return llvm::StringRef(reinterpret_cast<const char *>(Output.data()),
@@ -372,5 +389,34 @@ BionicResult Bionic::formatLogCall(const NativeCallEvent &Call) {
     return Written.takeError();
   return *Written ? value(**Written)
                   : BionicResult(std::optional<BionicValue>());
+}
+
+BionicResult Bionic::assertLogCall(const NativeCallEvent &Call) {
+  StringFormatter Formatter(*this, Call, true);
+  auto Message = Formatter.logMessage();
+  if (!Message)
+    return Formatter.resultError(Message.takeError());
+  const llvm::StringRef Buffers[] = {*Message, "\n"};
+  for (;;) {
+    auto Written = Kernel.writeBuffers(linux_model::StandardError, Buffers,
+                                       Threads ? Threads->kernel() : nullptr);
+    if (!Written)
+      return Written.takeError();
+    auto Adapted = kernelResult(*Written);
+    if (!Adapted || !*Adapted)
+      return Adapted;
+    // TEMP_FAILURE_RETRY repeats only EINTR, never a short write or EBADF.
+    if (**Written != uint64_t(0) - linux_model::InterruptedCall)
+      break;
+    if (auto E = access(0, 0, 0))
+      return std::move(E);
+  }
+  auto Logged =
+      textLogWrite(0, 7, Call.Arguments[1], llvm::StringRef(*Message));
+  if (!Logged)
+    return Logged.takeError();
+  if (!*Logged)
+    return std::optional<BionicValue>();
+  return abortCall(Call);
 }
 } // namespace neverd::emulation::android_model

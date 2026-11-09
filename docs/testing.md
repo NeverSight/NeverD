@@ -16682,6 +16682,19 @@ strings. Failed-snapshot options explicitly retain copied records when slot
 publication fails. Strict JSON checks distinguish absent, zero and invalid
 bindings; `ProcessPublic.AndroidTextLogAbortMessageMatchesSDKAndCLI` compares
 complete SDK/CLI reports, including state refusals and runtime failures.
+`AndroidLog.Assert*` checks direct/dynamic formatting, literal null-format
+fallbacks, stack arguments, embedded NUL, 1023-byte clipping, stderr-before-log
+ordering, descriptor close/dup/access errors, shared output budgets and the
+first incomplete effect. `AbortRunsTheCurrentThreadsHandlerBeforeForcingDefault`
+executes assert and abort in the main and child threads with default, ignored,
+returning, `_exit`/`_Exit`, nested and mutable-ucontext handlers; it checks SI_TKILL,
+identity/mask/errno, retained abort bytes, whole-process termination and absent
+normal import results. `AbortDeliversUnblockedPendingSignalBeforePrivateSend`
+checks the boundary between unblocking an old SI_USER signal and sending the
+new SI_TKILL signal. `ProcessPublic.AndroidTextLogAssertMatchesSDKAndCLI`
+compares complete public reports at O0/O2. Run these with Linux process,
+Android signal/wait/output and native log/formatting suites because the signal
+continuation and output owners are shared. No test sends a host signal.
 `AndroidJNI.BinderTransportUsesGuestServiceAndRetainedReplyArenas`
 executes real guest services through all three JNI forms, including three-round
 buffer retention/reuse, a reply recycled and reused by another native thread,

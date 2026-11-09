@@ -10,11 +10,13 @@
 
 #include <algorithm>
 #include <cassert>
+#include <variant>
 
 namespace neverd::emulation::linux_model {
 namespace {
 struct OutputBuffer {
-  uint64_t Address, Size;
+  std::variant<uint64_t, llvm::StringRef> Source;
+  uint64_t Size;
 };
 
 bool userRange(const MemoryLayout &Layout, uint64_t Address, uint64_t Size) {
@@ -39,9 +41,18 @@ publishOutput(ExecutionBackend &CPU, uint64_t FD,
   }
   uint64_t Written = 0;
   for (const auto &Buffer : Buffers) {
+    auto &Output =
+        FD == StandardOutput ? Result.StandardOutput : Result.StandardError;
+    if (auto *Bytes = std::get_if<llvm::StringRef>(&Buffer.Source)) {
+      if (!Bytes->empty())
+        Output.append(Bytes->data(), Bytes->size());
+      Written += Bytes->size();
+      continue;
+    }
+    const uint64_t Address = std::get<uint64_t>(Buffer.Source);
     uint64_t Readable = 0;
     while (Readable < Buffer.Size) {
-      const uint64_t Start = Buffer.Address + Readable;
+      const uint64_t Start = Address + Readable;
       const uint64_t Size = std::min(Buffer.Size - Readable,
                                      Layout.PageSize - Start % Layout.PageSize);
       auto Access = CPU.canAccess(Start, Size, Read | UserAccessible);
@@ -53,13 +64,12 @@ publishOutput(ExecutionBackend &CPU, uint64_t FD,
     }
     if (Readable) {
       std::string Bytes(Readable, '\0');
-      if (auto E = CPU.read(
-              Buffer.Address,
-              llvm::MutableArrayRef<uint8_t>(
-                  reinterpret_cast<uint8_t *>(Bytes.data()), Bytes.size())))
+      if (auto E =
+              CPU.read(Address, llvm::MutableArrayRef<uint8_t>(
+                                    reinterpret_cast<uint8_t *>(Bytes.data()),
+                                    Bytes.size())))
         return std::move(E);
-      (FD == StandardOutput ? Result.StandardOutput : Result.StandardError)
-          .append(Bytes);
+      Output.append(Bytes);
       Written += Readable;
     }
     // These descriptors are virtual byte sinks. A later data fault retains
@@ -71,6 +81,19 @@ publishOutput(ExecutionBackend &CPU, uint64_t FD,
   return std::optional<uint64_t>(Written);
 }
 } // namespace
+
+llvm::Expected<std::optional<uint64_t>>
+writeOutputBuffers(ExecutionBackend &CPU, uint32_t FD,
+                   llvm::ArrayRef<llvm::StringRef> Bytes,
+                   const MemoryLayout &Layout, const ProcessOptions &Options,
+                   ProcessResult &Result) {
+  if (FD != StandardOutput && FD != StandardError)
+    return std::optional<uint64_t>(uint64_t(0) - BadDescriptor);
+  llvm::SmallVector<OutputBuffer> Buffers;
+  for (auto Text : Bytes)
+    Buffers.push_back({Text, Text.size()});
+  return publishOutput(CPU, FD, Buffers, Layout, Options, Result);
+}
 
 llvm::Expected<std::optional<uint64_t>>
 writeOutput(ExecutionBackend &CPU, ServiceKind Kind,
@@ -149,7 +172,7 @@ writeOutput(ExecutionBackend &CPU, ServiceKind Kind,
     // cumulative cap is exhausted. Payload mappings are not probed here.
     if (Import == IOVectorImportKind::SingleBuffer && Entries == 1)
       Buffer.Size = std::min(Buffer.Size, Maximum);
-    if (!userRange(Layout, Buffer.Address, Buffer.Size))
+    if (!userRange(Layout, std::get<uint64_t>(Buffer.Source), Buffer.Size))
       return std::optional<uint64_t>(uint64_t(0) - BadAddress);
     Buffer.Size = std::min(Buffer.Size, Maximum - Total);
     Total += Buffer.Size;

@@ -29,6 +29,7 @@ bool defaultIgnored(int32_t Signal) {
 }
 bool defaultTerminates(int32_t Signal) {
   switch (Signal) {
+  case SignalAbort:
   case 1:
   case 2:
   case 10:
@@ -102,8 +103,11 @@ LinuxSignals::action(int32_t Signal, const LinuxSignalAction *NewAction,
     State.Actions[Signal] = Stored;
     // Installing an ignored disposition discards already-pending instances,
     // even in threads which currently block this signal.
-    if (Stored.Handler == 1 || (!Stored.Handler && defaultIgnored(Signal)))
+    if (Stored.Handler == 1 || (!Stored.Handler && defaultIgnored(Signal))) {
       Pending &= ~bit(Signal);
+      for (auto &[TID, Thread] : Threads)
+        Thread.Pending &= ~bit(Signal);
+    }
   }
   return Reply;
 }
@@ -119,6 +123,19 @@ std::optional<uint64_t> LinuxSignals::send(int32_t PID, int32_t Signal,
     unsupported(Result, llvm::formatv(SignalTargetUnsupported, PID).str());
     return std::nullopt;
   }
+  return queue(Signal, TID, false, Result);
+}
+
+std::optional<uint64_t> LinuxSignals::sendThread(int32_t Signal, uint64_t TID,
+                                                 ProcessResult &Result) {
+  if (Signal < 0 || uint32_t(Signal) > SignalCount)
+    return uint64_t(0) - InvalidArgument;
+  return queue(Signal, TID, true, Result);
+}
+
+std::optional<uint64_t> LinuxSignals::queue(int32_t Signal, uint64_t TID,
+                                            bool ThreadDirected,
+                                            ProcessResult &Result) {
   if (!Signal)
     return 0;
   // SIGKILL cannot be caught, blocked or ignored; it does not need a supplied
@@ -129,7 +146,7 @@ std::optional<uint64_t> LinuxSignals::send(int32_t PID, int32_t Signal,
     Result.ExitStatus.reset();
     return std::nullopt;
   }
-  // Job control, core dumps, real-time queues and synchronous CPU faults are
+  // Job control, real-time queues and synchronous CPU faults are
   // separate contracts. Do not reinterpret them as standard user signals.
   if (Signal >= 32 || Signal == 18 || Signal == 19 ||
       (Signal >= 20 && Signal <= 22)) {
@@ -141,7 +158,7 @@ std::optional<uint64_t> LinuxSignals::send(int32_t PID, int32_t Signal,
     unsupported(Result, SignalMaskMissing);
     return std::nullopt;
   }
-  if ((*I->second.Mask & bit(Signal)) && Tasks) {
+  if (!ThreadDirected && (*I->second.Mask & bit(Signal)) && Tasks) {
     for (const auto &Task : Tasks()) {
       if (Task.State == 'Z')
         continue;
@@ -152,7 +169,8 @@ std::optional<uint64_t> LinuxSignals::send(int32_t PID, int32_t Signal,
       }
     }
   }
-  Pending |= bit(Signal); // Standard signals coalesce, including while blocked.
+  // Standard signals coalesce separately in process and thread queues.
+  (ThreadDirected ? I->second.Pending : Pending) |= bit(Signal);
   return 0;
 }
 
@@ -184,7 +202,7 @@ std::optional<uint64_t> LinuxSignals::pending(uint64_t TID,
     unsupported(Result, SignalMaskMissing);
     return std::nullopt;
   }
-  return Pending & *I->second.Mask;
+  return (Pending | I->second.Pending) & *I->second.Mask;
 }
 
 llvm::Expected<std::optional<uint64_t>>
@@ -245,19 +263,24 @@ LinuxSignals::maskService(ExecutionBackend &CPU, const MemoryLayout &Layout,
 
 bool LinuxSignals::ready(uint64_t TID) const {
   auto I = Threads.find(TID);
-  return I != Threads.end() && I->second.Mask && (Pending & ~*I->second.Mask);
+  return I != Threads.end() && I->second.Mask &&
+         ((Pending | I->second.Pending) & ~*I->second.Mask);
 }
 
 std::optional<LinuxSignals::Delivery>
 LinuxSignals::prepare(uint64_t TID, ProcessResult &Result) {
-  if (!Pending)
-    return Delivery{};
   auto I = Threads.find(TID);
+  if (!Pending && (I == Threads.end() || !I->second.Pending))
+    return Delivery{};
   if (I == Threads.end() || !I->second.Mask) {
     unsupported(Result, SignalMaskMissing);
     return std::nullopt;
   }
-  while (const uint64_t Ready = Pending & ~*I->second.Mask) {
+  while (ready(TID)) {
+    // Linux dequeues a private pending signal before a process-wide one.
+    const bool ThreadDirected = I->second.Pending & ~*I->second.Mask;
+    auto &Queue = ThreadDirected ? I->second.Pending : Pending;
+    const uint64_t Ready = Queue & ~*I->second.Mask;
     const int32_t Signal = llvm::countr_zero(Ready) + 1;
     auto A = State.Actions.find(Signal);
     if (A == State.Actions.end()) {
@@ -266,7 +289,7 @@ LinuxSignals::prepare(uint64_t TID, ProcessResult &Result) {
     }
     const auto Action = A->second;
     if (Action.Handler == 1 || (!Action.Handler && defaultIgnored(Signal))) {
-      Pending &= ~bit(Signal);
+      Queue &= ~bit(Signal);
       continue;
     }
     if (!Action.Handler) {
@@ -275,13 +298,13 @@ LinuxSignals::prepare(uint64_t TID, ProcessResult &Result) {
                     llvm::formatv(SignalDeliveryUnsupported, Signal).str());
         return std::nullopt;
       }
-      Pending &= ~bit(Signal);
+      Queue &= ~bit(Signal);
       Result.Stop = ProcessStopReason::Signaled;
       Result.TerminationSignal = Signal;
       Result.ExitStatus.reset();
       return std::nullopt;
     }
-    return Delivery{Signal, Action};
+    return Delivery{Signal, Action, ThreadDirected};
   }
   return Delivery{};
 }
@@ -295,11 +318,12 @@ llvm::Expected<bool> LinuxSignals::deliver(ExecutionBackend &CPU,
     return false;
   if (!Next->Signal)
     return true;
-  const auto &[Signal, Action] = *Next;
-  auto Entered = enter(CPU, Layout, Memory, TID, Signal, Action, Result);
+  const auto &[Signal, Action, ThreadDirected] = *Next;
+  auto Entered =
+      enter(CPU, Layout, Memory, TID, Signal, Action, ThreadDirected, Result);
   if (!Entered || !*Entered)
     return Entered;
-  Pending &= ~bit(Signal);
+  (ThreadDirected ? Threads.at(TID).Pending : Pending) &= ~bit(Signal);
   if (uint32_t(Action.Flags) & 0x80000000u)
     State.Actions.at(Signal).Handler = 0; // SA_RESETHAND, before guest code.
   auto &Mask = *Threads.at(TID).Mask;
