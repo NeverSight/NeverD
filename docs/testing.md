@@ -10505,6 +10505,10 @@ exhausts every three-bit input tuple and checks independent APInt arithmetic
 through 257 bits for direct offsets/scales over variable, bitwise, product and
 nested linear bases. Existing refusal tests cover every smaller work budget
 and constrained storage during affine recovery.
+`SymMBAAffineFastPath.BitwiseFrontiersKeepArithmeticRecoveryAtItsUses` checks
+that purely bitwise bodies fit bounded work after complements are excluded,
+while added arithmetic uses retain their exact hidden-input relations. It
+exhausts three-bit triples and checks independent APInt values through 257 bits.
 `SymMBAWidePairs.SparseCorrectionsLeaveRoomForTheIndependentTail` independently
 evaluates a nonlinear 33-factor product and its linear tail within the shared
 65,536-unit allowance. These tests exercise the shared expression and MBA

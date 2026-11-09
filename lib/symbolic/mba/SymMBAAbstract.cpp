@@ -1016,6 +1016,13 @@ SymRef restoreAffineRelations(SymContext &Ctx, SymRef Body,
       mayHaveComplements(Ctx, Roots, ForcedAtoms, OriginalRoles, Resources);
   if (!Resources.complete())
     return Body;
+  // A bitwise root is rebuilt entirely from bitwise nodes and hidden inputs.
+  // With complements excluded, it has no arithmetic consumer of a recovered
+  // affine alias. Do not construct inverses and templates that cannot be read.
+  // Arithmetic roots retain the complete relation search below.
+  if (!MayComplement &&
+      OriginalRoles.lookup(OriginalOrder.back()) == Role::Bitwise)
+    return Body;
   AffineCache Cache;
   if (!cacheSharedAffineInputs(Ctx, Roots, ForcedAtoms, OriginalRoles, Cache,
                                Resources))
