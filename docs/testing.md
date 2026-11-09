@@ -21858,8 +21858,10 @@ with explicit metadata headroom for its larger startup harness,
 including the ABI0-object/ABI1-main contract and rejection of foreign platforms,
 dylib promotion, kernel tags and unknown ABI versions. Main publication
 requires one `SG_READ_ONLY` segment: native read-only data uses the original
-segment's declared, unowned zero tail. Occupied bytes and `LC_NOTE` ownership
-reject installation without mutation; insufficient capacity remains unsupported.
+segment's declared, unowned zero tail. A zero-valued dyld rebase beyond the
+section inventory retains its original slot and moves the new allocation past
+that storage. Occupied bytes and `LC_NOTE` ownership reject installation without
+mutation; insufficient capacity remains unsupported.
 The main executable gate also checks retained signature page size and
 the unique read-only segment, since XNU rejects multiple such segments.
 `PublishedExecutableStarts`

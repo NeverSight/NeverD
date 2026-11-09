@@ -193,8 +193,10 @@ python3 scripts/verify_arm64e_native.py run-executable \
 Main executable publication retains one `SG_READ_ONLY` segment. The native
 installer declares new authenticated/ordinary pointer storage in its unowned,
 zero-filled tail, preserving existing addresses and adjusting symbol section
-ordinals. Insufficient capacity, occupied bytes and `LC_NOTE` owners reject the
-transaction. [XNU rejects a second read-only segment](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/mach_loader.c#L2499)
+ordinals. Existing dyld slots remain occupied even when their encoded words are
+zero and their storage lies beyond the original sections. Insufficient capacity,
+occupied bytes and `LC_NOTE` owners reject the transaction.
+[XNU rejects a second read-only segment](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/mach_loader.c#L2499)
 for main executables; the installer preserves RELRO rather than removing flags.
 
 The verifier independently derives the SDK syscall restriction and compares it
@@ -202,6 +204,26 @@ to that report before launching CTest inside the declared profile. It rejects
 missing, skipped or failed cases. The result is separately named
 `native_executable_publication_qualified`; system-default startup and general
 lifted-image publication retain their own unqualified boundaries.
+
+The [main-executable cold-build record](evidence/arm64e-native-executable-publication-2026-11-10.json)
+binds source `3e5fb93c816902d4b9893c1a54ffb353e3e3f117` and the environment revision
+to independent Release/r6 builds on macOS 26 and Xcode 27. Each host passed 33
+signature/signer tests, all twenty dylib cases and all four executable cases,
+without failures or skips. Both prerequisite profiles passed all six controls.
+The reports verify source hashes, prerequisite-report hashes and test-binary
+identity, and confirm removal of each owned build. This qualifies the native
+object transaction under its declared profiles; system-default startup and
+the post-r6 lifted-image producer remain separate requirements.
+
+The same record separately identifies the later loader-slot fix at
+`6eb5e0af5333e7419f402fa3704a6c2f523dcec9`. A legal zero-valued rebase beyond the
+section inventory reproduced overlapping allocation before the fix; all four
+offline executable cases pass afterward. Its 143-case local Mach-O regression
+has 118 passes, 25 explicit environment/optional-interface skips and no failures.
+The [delivered-host replay](https://github.com/gmh5225/test_mac_intel/actions/runs/42704012121)
+passes all twenty dylib and four main cases, plus both prerequisite profiles,
+on each native host without skips. Its separate source, binary and report hashes
+retain the distinction from the earlier cold source build.
 
 A supplemental linker diagnostic did not stop when `ld-classic` lookup failed
 and therefore does not establish legacy threaded execution. Xcode 27 no longer
