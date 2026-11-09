@@ -1529,8 +1529,12 @@ classic disassembler does: the table under its `jpt_` name with one slot per
 line (`dd offset loc_164C0 - 27444h`, or `dq offset`/`dd rva` for absolute and
 image-relative tables), `switch 54 cases` on the instruction that loads it,
 `switch jump` on the dispatch, and on each target a code reference from the
-dispatch and a data reference from the table. A table is laid out only when
-the engine has checked that every slot holds its target. Cancel removes
+dispatch and a data reference from the table. A two-level switch, which reads a
+compact index table first (MSVC's sparse switches), also shows that index table
+four entries a line under its `byte_` name, `indirect table for switch
+statement` (`db 0, 1, 2, 0`). A table is laid out only when the engine has
+checked that every slot holds its target, and an index table only when every
+entry selects the slot holding its case's target. Cancel removes
 queued work; a running engine call finishes unless the worker is restarted.
 
 With idle-time analysis on, the first analysis worker also renders pseudocode

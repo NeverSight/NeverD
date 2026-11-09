@@ -392,8 +392,9 @@ NEVERD_MARKED_UNWIND_ENCODING("dwarf-fde")
 
 // NEVERD_SWITCH_TEXT(Id, Spelling): how a classic listing marks a switch: the
 // prefix of its jump table's name (followed by the dispatch's address), the
-// comments on the instruction that loads the table, on the dispatch and on
-// the table, and the keyword of an entry the image base is added to.
+// comments on the instruction that loads the table, on the dispatch, on the
+// table and on a two-level table's index table, and the keyword of an entry
+// the image base is added to.
 #ifndef NEVERD_SWITCH_TEXT
 #define NEVERD_SWITCH_TEXT(Id, Spelling)
 #endif
@@ -402,6 +403,7 @@ NEVERD_SWITCH_TEXT(SwitchCasesLead, "switch ")
 NEVERD_SWITCH_TEXT(SwitchCasesTail, " cases")
 NEVERD_SWITCH_TEXT(SwitchJumpComment, "switch jump")
 NEVERD_SWITCH_TEXT(SwitchTableComment, "jump table for switch statement")
+NEVERD_SWITCH_TEXT(SwitchIndexComment, "indirect table for switch statement")
 NEVERD_SWITCH_TEXT(ImageRelativeKeyword, "rva ")
 #undef NEVERD_SWITCH_TEXT
 

@@ -2431,6 +2431,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   }
   Info.IndexReg = SwitchSrc;
   Info.TwoLevelIndex = true;
+  Info.TwoLevelIndexRange = FinalStorageRanges.front();
   Info.IndexDomainAuthenticated = true;
   Info.ExplicitTargets = std::move(Targets);
   Info.StorageRanges = std::move(FinalStorageRanges);

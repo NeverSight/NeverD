@@ -31,6 +31,9 @@ inline constexpr std::size_t kListingCommentColumn = 40;
 inline constexpr std::size_t kListingStringNameLength = 15;
 // A string a comment quotes shows this many escaped characters.
 inline constexpr std::size_t kListingCommentStringLength = 39;
+// A two-level switch's index table lists this many entries a line, as a
+// conventional interactive disassembler groups them.
+inline constexpr std::size_t kListingSwitchIndexEntriesPerLine = 4;
 
 } // namespace neverd::limits::worker_config
 
