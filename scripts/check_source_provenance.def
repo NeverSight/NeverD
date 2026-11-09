@@ -11,5 +11,83 @@
     "line_sha256": [
       "9f2463284ee759353271a78bc7610cbd87a0811d1471250e92c04bcf8a85e38e"
     ]
+  },
+  {
+    "path": "docs/evidence/x86-i386-platforms-2026-11-09.json",
+    "rule": "private-path",
+    "commits": [
+      "df7f2b64972a325c0c9d71a6846867958dc37282"
+    ],
+    "line": "",
+    "reason": "Reviewed normalization of host paths in inherited x86 qualification records. Test outcomes, compiler identities, artifact hashes and command order are unchanged. Only these exact historical line digests in the listed publication and cleanup commits are covered; current files, new commits, changed lines and external policy rules remain findings.",
+    "line_sha256": [
+      "0ea62b71d20a48aa7c01db59b431ee865d6cc9a54b9ebaaf894a17a484de36f9",
+      "1d91a20c76ea377d8a842bc1f13b9ff38f4f7b4b21e6edfa7a91abaf199e9a8f",
+      "23e7f13343122463601d6e357f4878177b9190d22dcfeeb3d3281e813321e7e5",
+      "27c94991f86895b811c9db00f16821e7e14957af1a3dfbc6957dde6864ede687",
+      "2e0399a4d442e53637c0de59dae053b545e9737fe201d45d2935441144fe098e",
+      "4679563efe9a243e2cd65118ec0042a124f3c2337f9b3b09221504982b9d852c",
+      "559bc08438510f3bc0c4f8c0096fa2d65e754a6d69025893bf90d270719f62d1",
+      "76de04329ecfdeb58ecf0daa8da7c9c6fa61665a722eaab85023194a83ed8101",
+      "a6799902b7587baecfb8eb0e174d4490e0b570eb2f878ccaed70cd89af19dd43",
+      "ab79334b683c070ad5490a042f385d672f686d87c275fd669b08e50d5a36336d",
+      "bfa7df2f4449cd692cc039d09d826700d8b62baa4cc416de8ec4e3dcc66cbff7",
+      "c684d17d8805426339512b528068aba3acd5b8695865dfab462c18146eec5abe",
+      "d10c3085ba9c28cea5008af365f3a968ec4a1811e8e7fa316fcc48dc1bb23674",
+      "d322fb06e69831f586062f4ae453c75f2b62fa816bd15b78e8e4660616d771f5",
+      "da8e3c62bc433240248a116e672d3da087366d9cb9062029b9caf7dd2d439e52",
+      "ff5fdc8362fa9ca971d7626527c01c5ccf1d2231e2e974713846d8b571209b23"
+    ]
+  },
+  {
+    "path": "docs/evidence/x86-legacy-mpx-2026-11-09.json",
+    "rule": "private-path",
+    "commits": [
+      "df7f2b64972a325c0c9d71a6846867958dc37282",
+      "b6b895a846a16befb9753ef6c4fe7ae5ae12197b",
+      "8d81500c9e42b655b4815ef6c9db80ce60533104",
+      "7c355f8433baa6a9f64e9a2b52a19b1daf4fda9a"
+    ],
+    "line": "",
+    "reason": "Reviewed normalization of host paths in inherited x86 qualification records. Test outcomes, compiler identities, artifact hashes and command order are unchanged. Only these exact historical line digests in the listed publication and cleanup commits are covered; current files, new commits, changed lines and external policy rules remain findings.",
+    "line_sha256": [
+      "046ce6593a8ac20556f4692ba9f1d1abfb16dccd1c62698a5ef895ad680b48c2",
+      "0ea62b71d20a48aa7c01db59b431ee865d6cc9a54b9ebaaf894a17a484de36f9",
+      "11c4527bcc0610fc44ce4457e54c42f56aaaa2f7b2e07bfbe4b58ae2a46ed94b",
+      "1292667e1ed012c3397f252d1718e72541e54a7b074620b3d23cae335ffec1a3",
+      "172720d528af7951d04edd456c3cfff6ee7998316a8b89347f06aaece5988414",
+      "1de9ca5c3044961425b18b5e6619d49f7d4c3c262f1a96f8058f99bdf28befab",
+      "1eb199b473d03205939d59740151d90d596efdca2d483a5fb35cadd5cb5f0cc9",
+      "23e7f13343122463601d6e357f4878177b9190d22dcfeeb3d3281e813321e7e5",
+      "2c39a1db84d8237d9e914317f3eb6ce1c6223e499b8de0455eb8c2355c58b026",
+      "2d6cc5d74aac9d5c853ad88d69b0cc2fdb64776109757d521fc58033dc85e294",
+      "2fc0b032ff9832099bf4be9d74f7dd48b14ddba3eda1cc974508efb102f29994",
+      "405ff98cd90e18265f8508476da8a20dce48e3968477dcc876f43fa15fbb73b4",
+      "406ea76bc2795b7b4e86b959534abab31c0022e175ceb83e9efff0ae125b28ba",
+      "40e06f10635630ceb48cfcc8a3ac734ca7e496274b0a6a6b56c40c4f395e257f",
+      "592b5c1814af561afab0e9cbc7e56b18aaf233238eb7150eefe524998bada98f",
+      "5ab24e4dd8c46a647c418fe787e246aae320e18a5cf2a210437fa9efc1596c7b",
+      "6d01ee017f80dc692496ecaade8d0d6ef5571a950ae20d92ff5a41f6ddc97496",
+      "6d0800d528b7ee7e072c45bd450ef440fa08c08afe2ceb9d515f361e3c2d86d5",
+      "7929b2d2c56eb33b127ed81533cb58f55a784f7f0a86de0faa2b7593714c0f86",
+      "8ae3fcd00718fe7833497aeeea540c5076cdb1ac6cf5be4a6975d1ce3225185b",
+      "8da46b84045d6a27071e099fe8ff59616cf677505e0c3e9ef7eafa5628c62a8d",
+      "9bb73e7252db99ba5d2a64a0aaf475af1d42f5485d2767a0fa9fc8bb6fc3c78e",
+      "9beaf328ab422cfa1dad85475f1e8bc5afae95514808a47659db0f6a326643c9",
+      "a9bfa2506c2f94175205ddb02f522a1095b0d526859b52c41219e1bb327a1880",
+      "b55af61e507469829d7a7717c4a128f5fbbab585e4422148dbd3ad101582548e",
+      "bf182466a2d96c84823b8815d047b5de61445c131854484c02d133fabaade845",
+      "bfa7df2f4449cd692cc039d09d826700d8b62baa4cc416de8ec4e3dcc66cbff7",
+      "c00e1d353df71bcf4e83ecca269520cbbb5e557215a52a2043439d0fccd1c43d",
+      "c3bbd6370d799d25dfd27a9e392fb4cdadb8134f25dd64b3a0e74ab618ef4e9e",
+      "ce2bb57985277428287fba9dc951d82b7debb59678e891d3f011a26c52f5c2f8",
+      "d290806f1d66f0a35c920d4fb7c19d48d02482ed51fc871f2bcf916b1a6ec080",
+      "d64dc56abbf5a00ffa271ff492ff6a16e3d868f85bd34c8791532ebd8cd6dd48",
+      "e56cadb86968be2bc0bcd0c77c301be65f7c2b4c979fa831c0fdd964f7835504",
+      "e79730dffdf11edc728977b86a6051f434e6d2210005b4048d15185a39b46357",
+      "f16dabc274e1e5c02261d311a061c2c83c3d250e68e4314982d987aa7648cc36",
+      "f2d259f476474a9b3e7506d229a18180800cf922644b3216b5024edadf2db880",
+      "f747cdd7279b903b77037c432db19eeff39bb9ae9f1cf17a761a172446bec630"
+    ]
   }
 ]

@@ -8467,7 +8467,9 @@ bank addressing, attaches scoped alias facts without relocating the bank, and
 passes explicit gateway operands through temporary probes to the shared LLVM
 optimizer. Proven site operands or explicit runtime target checks, together
 with caller-declared signatures, authorize a direct call and exact-width result
-write. Unknown arity gets a runtime guard
+write. A void gateway can explicitly select a required captured argument as
+its result, independent of native return registers. This uses the same operand
+snapshot as the native call, before fixed writes and parameter conversions. Unknown arity gets a runtime guard
 and original-call fallback. Unknown targets retain the original
 gateway and status. The bytecode JSON adapter owns schema parsing; observers
 remain conditional evidence and cannot supply these assertions implicitly.
@@ -11753,6 +11755,15 @@ FLD/FSTP helpers, so C optimization cannot erase signaling-NaN quieting or
 replace x87 store rounding with an ordinary cast. This covers the observable
 converted value; full x87 exception, stack-tag and status state still belongs
 to the existing context and explicit-state paths.
+
+`MedTypePass` distinguishes a POP-shaped integer return from an unchanged
+entry-register save. A known reaching stack store of a computed value,
+including a partial overwrite, prevents the load from being ignored as an
+epilogue restore. Both the ordinary return scan and merged-epilogue scan use
+this decision. Entry-stack offsets and ordered memory accesses are indexed
+lazily once per function, and repeated views reuse the load result. Unknown
+aliases, calls and exceptional predecessors end that path without inventing
+a stored value; this does not establish arbitrary function ABI contracts.
 
 An internal i386 helper may instead consume one incoming logical ST0 and
 return an integer. The same machine graph proves that every return consumes

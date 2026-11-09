@@ -314,6 +314,15 @@ This policy does not permit replacing observed bits with zero. The explicit
 `"zero"` policy retains the default behavior. `void_result` is invalid on a
 non-void import.
 
+A void import may instead declare `"void_result_argument": 0` when its gateway
+copies a required argument into the result channel. The zero-based index names
+the captured bank operand, before fixed writes, native type narrowing or string
+normalization. Its raw bits are zero-extended or truncated to the result width;
+the native void call and its guest effects still execute. The operand must be
+required, with an existing bank slot. This assertion cannot be combined with
+`void_result` or a non-void result. It does not infer a return value from the
+native function name or its physical return register.
+
 An import may provide `defaults`, an array of unsigned integer bit patterns for
 a suffix of `parameters`. For example, `parameters: ["u32"]` and
 `defaults: [0]` accept either zero operands (passing zero) or one supplied

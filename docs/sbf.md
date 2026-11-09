@@ -568,6 +568,21 @@ live. When a later root needs a specialization,
 unused earlier parents and their unreferenced children can be reclaimed
 together. Other published dependencies and the current root stay live; reusable
 completed inputs remain cached while no specialization needs their space.
+When a completed root has exactly the generic entry's register and scratch
+facts, a literal scalar return can refine that generic summary's unknown
+return. Its conservative memory effects and target evidence remain unchanged;
+results from bound caller arguments do not establish this all-input fact.
+A completed older root whose inputs match the generic entry can also release
+its specialization when the generic result preserves its opaque return and
+every target proof remains independently published. Return differences and
+finite alternatives still prevent this replacement. Independent publication
+excludes the retiring root from both traversal seeds and incoming edges; its
+own descendants cannot serve as witnesses that they survive its removal.
+When same-entry siblings do not cover the evidence, a bounded traversal of
+other completed published roots can establish that the exact retained
+witnesses remain reachable. This requires the same evidence objects and proof
+keys, rather than equal target addresses from different input constraints.
+Only required witnesses are retained in the existing charged target index.
 Function-call-free generic
 summaries with identical projected inputs are reused without losing input facts.
 A completed specialized summary can also serve another caller when every input
@@ -1067,6 +1082,28 @@ also preserves the value's identity. A mask that clears a low-bit suffix uses
 the known numeric enclosure described above; other masks remain conservative.
 These proofs share the normal branch and register-transfer owners and introduce
 no allocator freshness or initial-memory assumption.
+In an uncached fixed-cell path, an aligned captured value also retains its
+proven modular difference from the original value. Typed stores use these differences to preserve disjoint fields;
+a missing relation, a possibly overlapping range or an incompatible join remains
+conservative. Call and tagged-return bindings preserve only constraints on the
+same immutable values. These relations consume the existing retained-state
+budget and do not change specialization limits. Exact proven aliases can
+read the same typed field in either direction. A nullable returned identity
+publishes its equality and stored fields only after the non-null selection;
+existing return identities and distinct captured alternatives stay intact.
+Proven numeric bounds follow the same bindings, including locally defined
+returned objects when the summary preserves or projects caller memory. A shared
+numeric enclosure alone supplies no equality or disjointness proof.
+
+A block with one predecessor uses that predecessor's latest complete result,
+without joining superseded solver snapshots as extra paths. Function entries
+and blocks with multiple incoming edges retain their ordinary joins. At a real
+join, mutually exclusive locally defined object identities can be renamed to a
+shared result identity when both paths prove the same live carrier. Coexisting
+objects, incoming identities and incompatible offsets cannot use this rule.
+Common fields survive the rename; possible writes still invalidate aliases.
+Joined identities and their source sets are charged to the existing state budget,
+and distinct target values still obey the existing four-value limit.
 
 Every result remains conditional on recognized CFG/function entries and its
 recorded caller facts. Unaligned targets and continuation slots use raw VM rules;
@@ -1101,8 +1138,18 @@ untyped descriptor byte buffer also remains projected out. Consuming caller
 narrow fields inside another function needs read-dependent input summaries and
 remains an explicit precision gap; this round does not claim that capability.
 
-Within one invocation, CFG joins retain a captured object's fields when its
-capture was introduced on only one incoming path. The pointer and its fields
+A specialized tagged return also retains absolute cells proven on each return
+path. Its actual output pointer may be disjoint from such a cell even when a
+formal output postcondition cannot prove that separation. Selecting a tag can
+restore these facts after the ordinary alias checks. This snapshot requires an
+exact memory binding: reuse with changed unread inputs applies rebound
+postconditions and captured object fields, without restoring old absolute
+cells. Subsequent writes invalidate the conditional facts through the same
+typed-memory rules.
+
+Within one invocation, ordinary CFG joins and equal-tag return joins retain a
+captured object's fields when its capture was introduced on only one incoming
+path. The pointer and its fields
 remain conditional on that path. A capture already introduced on both paths
 still loses a field if either path forgets it. Possible-alias writes
 continue to invalidate every overlapping capture. Backedges widen identities
