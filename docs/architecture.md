@@ -1524,6 +1524,18 @@ not inferred. The strict snapshot charges the existing threaded string-copy
 budget for the table, optional owned imports and each slot's symbol name.
 Repeated long imports therefore cannot create unbounded snapshot copies.
 
+`convertMachOThreadedFixupsToChains` explicitly migrates an existing threaded
+image to modern chained metadata without moving its storage or changing its
+ARM64E word format. Exact slot bindings, addends, authentication parameters,
+symbols and export identities are replayed before mutation. The dyld-info
+command becomes chained-fixup and optional export-trie commands within its old
+header extent. Unrepresentable legacy import flags reject transactionally;
+empty export streams and absent export commands share an empty identity.
+The caller owns subsequent signing. Native execution tests use this migration
+for legacy inputs because the Xcode 27 runner also drops authenticated bind
+addends in a compiler-original threaded control; original-format installation
+and inspection remain separate offline coverage.
+
 Installation is transactional, including automatic producer receipts and the
 optional explicit recipe handoff in `MachOPatcher::appendReplacementImage`.
 Failed placement planning cannot authorize installation at the zero error

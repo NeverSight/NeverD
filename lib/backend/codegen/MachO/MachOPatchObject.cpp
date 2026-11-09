@@ -467,7 +467,21 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
     // Decode a logical object-address view, preserving raw bytes for the final
     // placement relocation. Otherwise two placeholder FDEs look overlapping.
     for (const auto &R : Result.Relocations) {
-      if (R.Section != *Result.EH || !R.SubtractSymbol)
+      if (R.Section != *Result.EH)
+        continue;
+      // PTR_TO_GOT has no addend. Its assembler placeholder is not a linked
+      // personality address and may underflow the logical object address.
+      // Decode the field shape now; prepareArm64eGOT and relocate require the
+      // exact personality field and install its final authenticated GOT slot.
+      if (Original.isArm64e() && R.Type == ARM64_RELOC_POINTER_TO_GOT) {
+        if (!R.External || !R.PCRel || R.Scattered || R.SubtractSymbol ||
+            R.SubtractVA || R.Width != sizeof(uint32_t) ||
+            !rangeInBounds(R.Offset, R.Width, Logical.size()))
+          return fail(kLanguagePointer);
+        writeLE<uint32_t>(Logical.data() + R.Offset, 0);
+        continue;
+      }
+      if (!R.SubtractSymbol)
         continue;
       if (!rangeInBounds(R.Offset, R.Width, Logical.size()) ||
           !Result.Symbols.contains(R.SymbolIndex) ||

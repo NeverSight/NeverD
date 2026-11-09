@@ -15,6 +15,7 @@
 #include "neverd/backend/codegen/MachO/MachOLayoutGrowth.h"
 #include "neverd/backend/codegen/SourcePatchCallback.h"
 #include "neverd/loader/DWARF/EHFrame.h"
+#include "neverd/object/MachOLayout.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/MachO.h"
@@ -246,6 +247,62 @@ TEST(AArch64DwarfRewrite,
   Location.u8(kSetLocation);
   Location.u64(kMachOBase + kMachOTextOffset + kCodeAlign);
   Reject(Location.data(), kOrdinary, kLayoutRefusal);
+}
+
+TEST(AArch64DwarfRewrite, MetadataInsertionPreservesSymbolSectionIdentity) {
+  using namespace llvm::MachO;
+  auto Binary = machOFrame({});
+  auto *Header = reinterpret_cast<mach_header_64 *>(Binary.data());
+  auto *Table = reinterpret_cast<symtab_command *>(
+      Binary.data() + sizeof(*Header) + Header->sizeofcmds);
+  *Table = {};
+  Table->cmd = LC_SYMTAB;
+  Table->cmdsize = sizeof(*Table);
+  Table->symoff = kMachOPageSize;
+  Table->nsyms = 2;
+  Table->stroff = Table->symoff + Table->nsyms * sizeof(nlist_64);
+  Table->strsize = 1;
+  ++Header->ncmds;
+  Header->sizeofcmds += sizeof(*Table);
+  auto *Symbols = reinterpret_cast<nlist_64 *>(Binary.data() + Table->symoff);
+  Symbols[0].n_type = Symbols[1].n_type = N_SECT;
+  Symbols[0].n_sect = 1;
+  Symbols[0].n_value = kMachOBase + kMachOTextOffset;
+  Symbols[1].n_sect = 2;
+  Symbols[1].n_value = kMachOBase + kMachOFrameOffset;
+  auto Added = declareMachOTextMetadata(Binary, Arch::AArch64,
+                                        kMachOMetadataSection, kRange);
+  ASSERT_TRUE(bool(Added)) << llvm::toString(Added.takeError());
+  ASSERT_LT(*Added, kMachOBase + kMachOTextOffset);
+  std::vector<std::pair<std::string, uint64_t>> Sections;
+  std::vector<std::pair<unsigned, uint64_t>> Values;
+  forEachMachOLoadCommand(
+      Binary.data(), Binary.size(),
+      [&](const uint8_t *C, uint32_t Cmd, uint32_t, bool) {
+        if (Cmd == LC_SEGMENT_64) {
+          const auto *Segment = reinterpret_cast<const segment_command_64 *>(C);
+          const auto *Entries =
+              reinterpret_cast<const section_64 *>(Segment + 1);
+          for (unsigned I = 0; I < Segment->nsects; ++I)
+            Sections.emplace_back(readMachOName(Entries[I].sectname),
+                                  Entries[I].addr);
+        } else if (Cmd == LC_SYMTAB) {
+          const auto *T = reinterpret_cast<const symtab_command *>(C);
+          const auto *Entries =
+              reinterpret_cast<const nlist_64 *>(Binary.data() + T->symoff);
+          for (unsigned I = 0; I < T->nsyms; ++I)
+            Values.emplace_back(Entries[I].n_sect, Entries[I].n_value);
+        }
+      });
+  ASSERT_EQ(Sections.size(), 3u);
+  EXPECT_EQ(Sections[0].first, kMachOMetadataSection);
+  EXPECT_EQ(Sections[1].first, kMachOTextSection);
+  EXPECT_EQ(Sections[2].first, kMachOFrameSection);
+  ASSERT_EQ(Values.size(), 2u);
+  for (unsigned I = 0; I < Values.size(); ++I) {
+    EXPECT_EQ(Values[I].first, I + 2);
+    EXPECT_EQ(Values[I].second, Sections[I + 1].second);
+  }
 }
 
 TEST(AArch64DwarfRewrite, MachOStateComparisonBudgetIsCumulativeAndExact) {

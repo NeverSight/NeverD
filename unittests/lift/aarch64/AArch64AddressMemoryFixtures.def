@@ -251,6 +251,7 @@ MEMORY_FAMILY_CASE(0xf822e820, 0xf82fea11, false, 8, 0, false, 8, 0,
 MEMORY_FAMILY_CASE(0xf822f820, 0xf82ffa11, false, 8, 0, false, 8, 3,
                    0x123456789abcdef0ULL)
 
+MEMORY_TEXT(kABIWordPrefix, "Word")
 MEMORY_ABI_CASE(0x38615801, 0x386f5a11, 1, false)
 MEMORY_ABI_CASE(0x3861d801, 0x386fda11, 1, true)
 MEMORY_ABI_CASE(0x38e15801, 0x38ef5a11, 1, false)

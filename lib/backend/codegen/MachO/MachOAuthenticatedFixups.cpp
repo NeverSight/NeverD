@@ -340,10 +340,10 @@ neverd::collectMachOAuthenticatedFixups(
   return Result;
 }
 
-llvm::Error neverd::installMachOAuthenticatedFixups(
-    std::vector<uint8_t> &Binary,
-    llvm::ArrayRef<MachOAuthenticatedFixup> Fixups) {
-  if (Fixups.empty())
+static llvm::Error installFixups(std::vector<uint8_t> &Binary,
+                                 llvm::ArrayRef<MachOAuthenticatedFixup> Fixups,
+                                 bool ConvertThreaded) {
+  if (Fixups.empty() && !ConvertThreaded)
     return llvm::Error::success();
   if (Binary.size() > UINT32_MAX)
     return fail(kExtent);
@@ -354,6 +354,21 @@ llvm::Error neverd::installMachOAuthenticatedFixups(
   if (Before->CPUType != CPU_TYPE_ARM64 ||
       !arm64e::isSubtype(Before->CPUSubtype) || !Chains.CommandOffset)
     return fail(kImageABI);
+  if (ConvertThreaded && !Chains.Threaded)
+    return llvm::Error::success();
+  const bool ThreadedOutput = Chains.Threaded && !ConvertThreaded;
+  std::optional<dyld_info_command> Legacy;
+  if (ConvertThreaded) {
+    Legacy = *reinterpret_cast<const dyld_info_command *>(Binary.data() +
+                                                          Chains.CommandOffset);
+    // Modern import tables represent weak imports, but not the legacy
+    // NON_WEAK_DEFINITION contract. Never discard that distinction.
+    for (const auto &Import : Chains.Imports)
+      if (Import.Ordinal < kMinLibraryOrdinal ||
+          Import.Ordinal > kMaxLibraryOrdinal ||
+          (Import.Flags & ~BIND_SYMBOL_FLAGS_WEAK_IMPORT))
+        return fail(kImport);
+  }
   // A staged image may already have invalidated signature hashes/code limits.
   // Only own the opaque extent here; the publication owner validates the
   // original signing policy and replaces the signature after all mutations.
@@ -439,9 +454,9 @@ llvm::Error neverd::installMachOAuthenticatedFixups(
       return Left.Offset < Right.Offset;
     });
     const auto PageCount = Segment.Slots.back().Offset / Segment.PageSize + 1;
-    if (!Chains.Threaded && PageCount > UINT16_MAX)
+    if (!ThreadedOutput && PageCount > UINT16_MAX)
       return fail(kExtent);
-    std::vector<uint16_t> PageStarts(Chains.Threaded ? 0 : PageCount,
+    std::vector<uint16_t> PageStarts(ThreadedOutput ? 0 : PageCount,
                                      DYLD_CHAINED_PTR_START_NONE);
     std::vector<uint16_t> Roots;
     for (size_t First = 0; First < Segment.Slots.size();) {
@@ -454,7 +469,7 @@ llvm::Error neverd::installMachOAuthenticatedFixups(
            ++End) {
         auto &Slot = Segment.Slots[End];
         if (ChainStart) {
-          if (Chains.Threaded) {
+          if (ThreadedOutput) {
             if (I > BIND_IMMEDIATE_MASK)
               return fail(kThreadedSegment);
             ThreadedRoots.push_back({unsigned(I), Slot.Offset});
@@ -477,7 +492,7 @@ llvm::Error neverd::installMachOAuthenticatedFixups(
                           Slot.Raw);
         ChainStart = Delta == 0;
       }
-      if (Chains.Threaded) {
+      if (ThreadedOutput) {
         First = End;
         continue;
       }
@@ -493,7 +508,7 @@ llvm::Error neverd::installMachOAuthenticatedFixups(
       }
       First = End;
     }
-    if (Chains.Threaded)
+    if (ThreadedOutput)
       continue;
     Starts.resize(llvm::alignTo(Starts.size(), arm64e::kPointerBytes), 0);
     const auto At = Starts.size();
@@ -516,7 +531,7 @@ llvm::Error neverd::installMachOAuthenticatedFixups(
                         PageStarts[P]);
   }
   std::vector<uint8_t> Metadata;
-  if (Chains.Threaded) {
+  if (ThreadedOutput) {
     if (Chains.Imports.size() > arm64e::kThreadedMaxOrdinalCount)
       return fail(kImport);
     llvm::SmallVector<char> Program;
@@ -584,12 +599,13 @@ llvm::Error neverd::installMachOAuthenticatedFixups(
   if (Candidate.size() > UINT32_MAX ||
       Metadata.size() > UINT32_MAX - Candidate.size())
     return fail(kExtent);
-  if (Chains.Threaded) {
+  const uint32_t MetadataOffset = Candidate.size();
+  if (ThreadedOutput) {
     auto *Command = reinterpret_cast<dyld_info_command *>(Candidate.data() +
                                                           Chains.CommandOffset);
     Command->bind_off = Candidate.size();
     Command->bind_size = Metadata.size();
-  } else {
+  } else if (!Legacy) {
     auto *Command = reinterpret_cast<linkedit_data_command *>(
         Candidate.data() + Chains.CommandOffset);
     Command->dataoff = Candidate.size();
@@ -617,6 +633,41 @@ llvm::Error neverd::installMachOAuthenticatedFixups(
   Segment.VMSize = std::max(
       Segment.VMSize, llvm::alignTo(Segment.FileSize, arm64e::kLargePageBytes));
   writeMachOSegment(Candidate.data() + Linkedit.CommandOffset, true, Segment);
+  if (Legacy) {
+    // Replace the old 48-byte dyld-info command with one or two 16-byte
+    // commands in its existing header storage. File data and every VA stay
+    // fixed; update command positions only after all offset-based edits.
+    bool DuplicateExports = false;
+    forEachMachOLoadCommand(Candidate.data(), Candidate.size(),
+                            [&](const uint8_t *, uint32_t ID, uint32_t, bool) {
+                              DuplicateExports |= ID == LC_DYLD_EXPORTS_TRIE &&
+                                                  Legacy->export_size;
+                            });
+    if (DuplicateExports)
+      return fail(kExportCommands);
+    const auto Header = parseMachOHeader(Candidate.data(), Candidate.size());
+    const uint64_t End = uint64_t(Header.HeaderSize) + Header.SizeOfCmds;
+    const unsigned Count = 1 + unsigned(Legacy->export_size != 0);
+    const unsigned Size = Count * sizeof(linkedit_data_command);
+    const unsigned Removed = sizeof(dyld_info_command) - Size;
+    auto *At = Candidate.data() + Chains.CommandOffset;
+    std::memmove(At + Size, At + sizeof(dyld_info_command),
+                 End - Chains.CommandOffset - sizeof(dyld_info_command));
+    std::fill(Candidate.begin() + End - Removed, Candidate.begin() + End, 0);
+    const linkedit_data_command FixupCommand{
+        LC_DYLD_CHAINED_FIXUPS, sizeof(linkedit_data_command), MetadataOffset,
+        uint32_t(Metadata.size())};
+    std::memcpy(At, &FixupCommand, sizeof(FixupCommand));
+    if (Legacy->export_size) {
+      const linkedit_data_command ExportCommand{
+          LC_DYLD_EXPORTS_TRIE, sizeof(linkedit_data_command),
+          Legacy->export_off, Legacy->export_size};
+      std::memcpy(At + sizeof(FixupCommand), &ExportCommand,
+                  sizeof(ExportCommand));
+    }
+    setMachOHeaderCmds(Candidate.data(), true, Header.NCmds + Count - 1,
+                       Header.SizeOfCmds - Removed);
+  }
   MachOChainedFixups Installed;
   auto After = readMachODependencyState(Candidate, &Installed);
   if (!After)
@@ -627,6 +678,17 @@ llvm::Error neverd::installMachOAuthenticatedFixups(
     return Error;
   Binary.swap(Candidate);
   return llvm::Error::success();
+}
+
+llvm::Error neverd::installMachOAuthenticatedFixups(
+    std::vector<uint8_t> &Binary,
+    llvm::ArrayRef<MachOAuthenticatedFixup> Fixups) {
+  return installFixups(Binary, Fixups, false);
+}
+
+llvm::Error
+neverd::convertMachOThreadedFixupsToChains(std::vector<uint8_t> &Binary) {
+  return installFixups(Binary, {}, true);
 }
 
 llvm::Error neverd::verifyMachOAuthenticatedFixups(

@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 import subprocess
+import struct
 import sys
 import tempfile
 import unittest
@@ -24,6 +25,40 @@ def runtime_xml():
 
 
 class Arm64eNativeQualificationTests(unittest.TestCase):
+    def test_failed_legacy_linker_lookup_stops_before_compiling(self):
+        failure = subprocess.CompletedProcess([], CASES["legacy_lookup_failure"], "", "")
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(native, "command", return_value=failure) as command:
+            with self.assertRaises(RuntimeError):
+                native.build_legacy_fixtures(Path(temporary))
+            command.assert_called_once()
+
+    def test_legacy_bundle_requires_current_sources_and_exact_image_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(native, "provenance", return_value=CASES["provenance"]):
+            root = Path(temporary)
+            report = {**CASES["provenance"], "status": native.POLICY["passed"], "images": []}
+            for case in native.legacy_cases(native.fixture_contract()):
+                path = root / case["name"]
+                path.write_bytes(struct.pack(CASES["legacy_header_format"], *CASES["legacy_header"]))
+                report["images"].append({**case, **native.check_binary(path)})
+            manifest = root / native.POLICY["report_name"]
+            native.save(manifest, report)
+            self.assertEqual(native.verify_legacy_fixtures(root), report)
+            for mutation in CASES["probe_mutations"]:
+                if not any(key in mutation for key in native.POLICY["provenance_keys"]):
+                    continue
+                native.save(manifest, dict(report, **mutation))
+                with self.assertRaises(ValueError):
+                    native.verify_legacy_fixtures(root)
+            native.save(manifest, report)
+            path.write_bytes(path.read_bytes() + CASES["legacy_trailing_bytes"].encode())
+            with self.assertRaises(ValueError):
+                native.verify_legacy_fixtures(root)
+            path.unlink()
+            with self.assertRaises(OSError):
+                native.verify_legacy_fixtures(root)
+
     def test_pac_requires_entry_completion_and_successful_exit(self):
         contract = native.fixture_contract()
         for case in CASES["capability_cases"]:
