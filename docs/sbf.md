@@ -692,8 +692,11 @@ when the read footprint is unknown. A changed or missing old cell cannot use
 this extension rule. Returned memory is reconstructed from the actual caller,
 may-write effects and must-write postconditions, preserving new facts only
 where the callee cannot overwrite them. The cached summary must improve the
-generic return or output fields. Its wider result remains conservative for the
-new caller. These edges use `reused_covering_specialized_inputs` and the separate
+generic return or output fields, or retain a proven CALLX target in its body or
+callees. Target evidence can therefore survive reuse even when the return and
+memory effects remain unknown; changed target-bearing cells must still pass the
+same input-read guards. Its wider result remains conservative for the new
+caller. These edges use `reused_covering_specialized_inputs` and the separate
 `covering_specialized_summary_reuses` counter; they are not equal-input reuses.
 
 Generic summaries can retain a CALLX carrier as an expression of entry
