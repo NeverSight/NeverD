@@ -29,32 +29,66 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
         contract = native.fixture_contract()
         markers = "\n".join(contract[name] for name in
                             ("started", "completed", "runtime_completed"))
-        for startup in (False, True):
-            with self.subTest(startup=startup), tempfile.TemporaryDirectory() as temporary, \
+        def run(products, output, label, argv, timeout, env=None):
+            stdout = CASES["syscall_macros"] if label == native.POLICY["syscall_label"] else markers
+            return subprocess.CompletedProcess(argv, 0, stdout, "")
+
+        for profile in CASES["probe_profiles"]:
+            startup, userspace = profile["startup"], profile["userspace_fixups"]
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as temporary, \
                     mock.patch.object(native.platform, "system", return_value=CASES["probe_host"]["system"]), \
                     mock.patch.object(native.platform, "machine", return_value=CASES["probe_host"]["machine"]), \
                     mock.patch.object(native, "provenance", return_value=CASES["provenance"]), \
                     mock.patch.object(native, "check_binary", side_effect=lambda _: dict(CASES["probe_identity"])), \
-                    mock.patch.object(native, "command", return_value=subprocess.CompletedProcess(
-                        [], 0, markers, "")) as command:
-                report = native.probe(Path(temporary), startup=startup)
+                    mock.patch.object(native, "command", side_effect=run) as command:
+                report = native.probe(Path(temporary), **profile)
                 self.assertEqual(report["status"], native.POLICY["passed"])
                 self.assertEqual(report["control_loading"], native.POLICY[
                     "startup_loading" if startup else "control_loading"])
                 self.assertEqual(report[native.POLICY["startup_qualification_key"]], startup)
+                self.assertEqual(report[native.POLICY["fixup_loader_key"]], native.POLICY[
+                    "userspace_fixup_loader" if userspace else "system_fixup_loader"])
                 self.assertFalse(report["whole_image_publication_qualified"])
                 runtime_labels = {native.POLICY["runtime_label"].format(
                     optimization=optimization, dwarf=dwarf)
                     for optimization in native.POLICY["optimizations"]
                     for dwarf in native.POLICY["dwarf_modes"]}
                 invocations = {call.args[2]: call.args[3] for call in command.call_args_list}
+                prefix = []
+                if userspace:
+                    prefix = report[native.POLICY["startup_profile_key"]]["launcher"]
+                    for optimization in native.POLICY["optimizations"]:
+                        label = native.POLICY["capability_label"].format(optimization=optimization)
+                        self.assertEqual(invocations[label][:-1], prefix)
+                self.assertEqual(native.POLICY["syscall_label"] in invocations, userspace)
                 for label in runtime_labels:
                     compile = invocations[label + native.POLICY["compile_suffix"]]
                     self.assertEqual(all(arg in compile for arg in contract["library_args"]),
                                      not startup)
-                    self.assertEqual(len(invocations[label]), 1 if startup else 2)
+                    self.assertEqual(len(invocations[label]), len(prefix) + (1 if startup else 2))
+                    self.assertEqual(invocations[label][:len(prefix)], prefix)
                     self.assertEqual("loader" in next(row for row in report["controls"]
                                                      if row["label"] == label), not startup)
+
+    def test_userspace_startup_requires_an_exact_successful_sdk_syscall_definition(self):
+        for code, stdout in [(0, text) for text in CASES["invalid_syscall_macros"]] + [
+                (CASES["syscall_failure"], CASES["syscall_macros"])]:
+            def run(products, output, label, argv, timeout, env=None):
+                if label == native.POLICY["syscall_label"]:
+                    return subprocess.CompletedProcess(argv, code, stdout, "")
+                return subprocess.CompletedProcess(argv, 0, "", "")
+
+            with self.subTest(code=code, stdout=stdout), tempfile.TemporaryDirectory() as temporary, \
+                    mock.patch.object(native.platform, "system", return_value=CASES["probe_host"]["system"]), \
+                    mock.patch.object(native.platform, "machine", return_value=CASES["probe_host"]["machine"]), \
+                    mock.patch.object(native, "provenance", return_value=CASES["provenance"]), \
+                    mock.patch.object(native, "command", side_effect=run) as command:
+                with self.assertRaises((ValueError, subprocess.CalledProcessError)):
+                    native.probe(Path(temporary), startup=True, userspace_fixups=True)
+                self.assertEqual(command.call_args.args[2], native.POLICY["syscall_label"])
+                report = json.loads((Path(temporary) / native.POLICY["report_name"]).read_text())
+                self.assertFalse(report["native_pac_qualified"])
+                self.assertFalse(report[native.POLICY["startup_qualification_key"]])
 
     def test_failed_startup_does_not_retry_as_dlopen(self):
         contract = native.fixture_contract()
