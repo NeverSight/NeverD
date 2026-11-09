@@ -1,0 +1,133 @@
+{
+  "suite_tag": "testsuite",
+  "case_tag": "testcase",
+  "name_key": "name",
+  "status_key": "status",
+  "run_status": "run",
+  "expected_tests": [
+    "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/0",
+    "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/1",
+    "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/2",
+    "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/3",
+    "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/0",
+    "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/1",
+    "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/2",
+    "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/3",
+    "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/0",
+    "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/1",
+    "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/2",
+    "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/3"
+  ],
+  "failure_tags": [
+    "failure",
+    "error",
+    "skipped"
+  ],
+  "unrun_statuses": [
+    "notrun",
+    "disabled",
+    ""
+  ],
+  "foreign_test": "AppleClang/MachOArm64eNativeObjectInstallation.NativeRelocationsAdmitProvidersAndRelro/0",
+  "annotation": "  # GetParam() = (-O0, false)",
+  "capability_cases": [
+    {
+      "name": "success",
+      "returncode": 0,
+      "markers": [
+        "started",
+        "completed"
+      ],
+      "status": "passed"
+    },
+    {
+      "name": "entry-absent",
+      "returncode": 0,
+      "markers": [
+        "completed"
+      ],
+      "status": "failed"
+    },
+    {
+      "name": "completion-absent",
+      "returncode": 0,
+      "markers": [
+        "started"
+      ],
+      "status": "failed"
+    },
+    {
+      "name": "startup-killed",
+      "returncode": -9,
+      "markers": [],
+      "status": "unavailable"
+    },
+    {
+      "name": "running-crash",
+      "returncode": -11,
+      "markers": [
+        "started"
+      ],
+      "status": "failed"
+    },
+    {
+      "name": "disabled-pac",
+      "returncode": 77,
+      "markers": [
+        "started"
+      ],
+      "status": "unavailable"
+    },
+    {
+      "name": "disabled-without-entry",
+      "returncode": 77,
+      "markers": [],
+      "status": "failed"
+    },
+    {
+      "name": "failure-with-markers",
+      "returncode": 1,
+      "markers": [
+        "started",
+        "completed"
+      ],
+      "status": "failed"
+    }
+  ],
+  "probe_file": "probe.json",
+  "passed_probe": {
+    "source_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "source_sha256": {
+      "fixture": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "status": "passed",
+    "native_pac_qualified": true,
+    "compiler_original_call_unwind_qualified": true
+  },
+  "provenance": {
+    "source_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "source_sha256": {
+      "fixture": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  "qualification_key": "native_installer_call_unwind_qualified",
+  "probe_mutations": [
+    {
+      "status": "unavailable"
+    },
+    {
+      "native_pac_qualified": false
+    },
+    {
+      "compiler_original_call_unwind_qualified": false
+    },
+    {
+      "source_revision": "cccccccccccccccccccccccccccccccccccccccc"
+    },
+    {
+      "source_sha256": {
+        "fixture": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      }
+    }
+  ]
+}

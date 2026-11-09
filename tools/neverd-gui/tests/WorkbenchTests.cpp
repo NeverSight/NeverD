@@ -7467,6 +7467,43 @@ private slots:
     QTRY_COMPARE_WITH_TIMEOUT(pages, 2, OpenTimeoutMs);
   }
 
+  void preparedReadsRunOneAtATime() {
+    // The pages the engine writes count the functions it prepared.
+    QTemporaryDir directory;
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    session.open(writeFixture(
+        directory,
+        QStringLiteral("summaries-ready-render-store-source-cache.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    session.prepareFunctionRead(Base);
+    QTRY_VERIFY_WITH_TIMEOUT(session.analysisReplicaReady(), OpenTimeoutMs);
+    QObject owner;
+    const auto prepared = [&](quint64 address) {
+      qint64 count = -1;
+      const QJsonObject function{{"address", hexAddress(address)},
+                                 {"representation", "c"}};
+      session.analysisQueries(function, &owner)
+          .subscribe({"decompile", function}, &owner,
+                     [&](const QJsonObject &response) {
+                       count = response.value("payload")
+                                   .toObject()
+                                   .value("fixture_prepares")
+                                   .toInteger(-1);
+                     });
+      return QTest::qWaitFor([&] { return count >= 0; }, OpenTimeoutMs) ? count
+                                                                        : -1;
+    };
+    const auto before = prepared(Base + 0x40);
+    QVERIFY(before > 0);
+    // Reads asked one after another, as a dialog asks them while the user
+    // types: the replica runs the first and, once that is done, only the last.
+    session.prepareFunctionRead(Base + 0x50);
+    session.prepareFunctionRead(Base + 0x60);
+    session.prepareFunctionRead(Base + 0x70);
+    QTest::qWait(1000);
+    QCOMPARE(prepared(Base + 0x80), before + 3);
+  }
+
   void analysisReplicaRendersNothingAheadForViewsOpeningUnderOptions() {
     // Such views read none of the job's renders.
     const auto forget = qScopeGuard(
