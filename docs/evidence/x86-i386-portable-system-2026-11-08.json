@@ -5,10 +5,11 @@
   "production_llvm_pin": "neverd-llvm-v23.0.0-r6",
   "llvm_backend_changed": false,
   "source_heads": {
-    "neverc_compiler": "5ede0bcf27db9c852b9156bcb93e6743d3fbb93d",
-    "neverc_header_and_test_build": "66985175f702515f21f46eb74878c9f1c8068e8c",
-    "neverc_publication": "82b64e2faa501188f96f7298ff126b7c1093eab8",
-    "neverd_implementation_and_tests": "2513c8762861698328aa840ef6f27d004e8abd69",
+    "neverc_compiler_and_test_build": "25febf81a3e5ce928497c358eb3cc2c291d4bb33",
+    "neverc_header_and_witnesses": "a3cb91433d78d8594b592d59b30034c25c6d58c7",
+    "neverc_publication": "a741c86adcad827a000c59cefaf35f8aa0ac008c",
+    "neverd_implementation_and_test_build": "5b94e6e31a328be2e96416eeaae9f45bf2efcadb",
+    "neverd_complete_source_witness": "b2e35b8a5a5ac241f48c92d8541c4773a6226792",
     "llvm": "b726cb0425bc7e1f7e2753972a748ebcfa8b5741"
   },
   "i386_portable_admission_closed": [
@@ -68,11 +69,12 @@
       "i386_native": 9,
       "x64_native_controls": 9,
       "receipt_sha256": "1e7c3e10741cd4cc0df55e7568315c76f9dc5e84168e5832047cb796ab03886c"
-    }
+    },
+    "scope": "The before/after admission receipts retain the original pre-integration compiler identities; final merged-compiler qualification is recorded below."
   },
   "builds": {
-    "neverc-build-receipt.json": {
-      "source_head": "5ede0bcf27db9c852b9156bcb93e6743d3fbb93d",
+    "neverc-integrated-build-receipt.json": {
+      "source_head": "25febf81a3e5ce928497c358eb3cc2c291d4bb33",
       "command": [
         "cmake",
         "--build",
@@ -84,33 +86,14 @@
         "4"
       ],
       "exit_code": 0,
-      "seconds": 61.83228879800299,
+      "seconds": 230.5586381739704,
       "outputs": {
-        "neverc": "bb118eff364f5c02340b9ec37bf213a939d95fe1bfe59f4c4c3d049f667bf3d7",
-        "neverc-tests": "92ad1fb9e9324f1cd34b569fbfe954772459653a50950cf0867199c949ce1e08"
-      }
-    },
-    "neverc-header-build-receipt.json": {
-      "source_head": "66985175f702515f21f46eb74878c9f1c8068e8c",
-      "command": [
-        "cmake",
-        "--build",
-        "build-neverc",
-        "--target",
-        "neverc",
-        "neverc-tests",
-        "--parallel",
-        "4"
-      ],
-      "exit_code": 0,
-      "seconds": 41.79653429304017,
-      "outputs": {
-        "neverc": "bb118eff364f5c02340b9ec37bf213a939d95fe1bfe59f4c4c3d049f667bf3d7",
+        "neverc": "b679854fce986d9fabb375af1456cddde212b879ab36b99d5a29520faf85ad76",
         "neverc-tests": "51b81c7ae60fbc61910f8d3a4d6dcf8ad1f367a442a59fc632cf0df3883f3fa6"
       }
     },
-    "qualified-native-build-receipt.json": {
-      "source_head": "2513c8762861698328aa840ef6f27d004e8abd69",
+    "integrated-native-build-receipt.json": {
+      "source_head": "5b94e6e31a328be2e96416eeaae9f45bf2efcadb",
       "source_status": "",
       "command": [
         "python3",
@@ -122,14 +105,14 @@
         "4"
       ],
       "exit_code": 0,
-      "seconds": 40.277,
-      "log_sha256": "adf8ab0704d03b075fae1e26e0dd44dfb4ea9b946aa18198db74a6bae1fa8cdb",
+      "seconds": 1384.242,
+      "log_sha256": "13ba48e2063cbda97de68d4c396a26b7b3765bab007122c82a4cf0922fa6090c",
       "outputs": {
-        "NeverDX86VirtualizationSourceTests": "53f69a8c0f0eada21d5e07c42d32a9a66af39cb84b3709d00980507e10c3a6a4"
+        "NeverDX86VirtualizationSourceTests": "c39503cc8e41b4128dca6b5077a081cfd88b039f3d28f28618304a5887bb862a"
       }
     },
-    "qualified-r6-build-receipt.json": {
-      "source_head": "2513c8762861698328aa840ef6f27d004e8abd69",
+    "integrated-r6-build-receipt.json": {
+      "source_head": "5b94e6e31a328be2e96416eeaae9f45bf2efcadb",
       "source_status": "",
       "command": [
         "python3",
@@ -141,53 +124,56 @@
         "4"
       ],
       "exit_code": 0,
-      "seconds": 73.926,
-      "log_sha256": "ffadde0509a37e2a920afa970f79e383d56b17e7acb9b6818fe764bb4aaf8575",
+      "seconds": 1248.063,
+      "log_sha256": "f0fff34a370836aee67bd8490080b36c8b5b7348080e19d4ace82eaaab6f22cf",
       "outputs": {
-        "NeverDX86VirtualizationSourceTests": "c2862a6117b357c70cbc817a751963e95172ed4e6cad6ec29c9bd7177d9e3fa5"
+        "NeverDX86VirtualizationSourceTests": "d38397f9f44eb0a40cbcfee16ffc4ad2c83f055e122bddcd8c3b2f47543a2d5a"
       }
     }
   },
   "focused_checks": {
-    "native-qualified": {
-      "binary_sha256": "53f69a8c0f0eada21d5e07c42d32a9a66af39cb84b3709d00980507e10c3a6a4",
-      "source_head": "2513c8762861698328aa840ef6f27d004e8abd69",
-      "neverc_sha256": "bb118eff364f5c02340b9ec37bf213a939d95fe1bfe59f4c4c3d049f667bf3d7",
+    "native-integrated": {
+      "binary_sha256": "c39503cc8e41b4128dca6b5077a081cfd88b039f3d28f28618304a5887bb862a",
+      "source_head": "5b94e6e31a328be2e96416eeaae9f45bf2efcadb",
+      "neverc_sha256": "b679854fce986d9fabb375af1456cddde212b879ab36b99d5a29520faf85ad76",
       "neverc_llc_sha256": "1d6f80fa2f4fb7e0fe0e2b5f3f1732c527a898274ecb9063a9d7830ab3b3ec5e",
-      "source_tree": "598ab2daa7b568be6cd9237537922722f0e017e4",
+      "source_tree": "97f54f9d9ae06667d414a44872ca4971613135c7",
+      "source_status": "",
       "exit_code": 0,
-      "seconds": 2.984,
-      "log_sha256": "d688e3c25b3bade935a0920608cd59f10fc5f8f2c81942b9b3ac804cf34a0f82",
-      "result_sha256": "7d98d6b54599471c4302bfe7aa6bdafa81f6da4ff3dfcc8404c3d61b15f3545a",
-      "tests": 2,
-      "c_compilations": 96,
+      "seconds": 47.444,
+      "log_sha256": "11477e1a4bfa2439c0ca6ce0f75e2dcc4c640b46e2fda648255d519d1d7c5e2b",
+      "result_sha256": "96f190e3f184f4ec6fb513933f90c3f299b54a2030c0ed9091f523c8c4622769",
+      "tests": 5,
+      "c_compilations": 1056,
       "failed": 0,
       "skipped": [],
-      "passed": 2
+      "passed": 5
     },
-    "r6-qualified": {
-      "binary_sha256": "c2862a6117b357c70cbc817a751963e95172ed4e6cad6ec29c9bd7177d9e3fa5",
-      "source_head": "2513c8762861698328aa840ef6f27d004e8abd69",
-      "neverc_sha256": "bb118eff364f5c02340b9ec37bf213a939d95fe1bfe59f4c4c3d049f667bf3d7",
+    "r6-integrated": {
+      "binary_sha256": "d38397f9f44eb0a40cbcfee16ffc4ad2c83f055e122bddcd8c3b2f47543a2d5a",
+      "source_head": "5b94e6e31a328be2e96416eeaae9f45bf2efcadb",
+      "neverc_sha256": "b679854fce986d9fabb375af1456cddde212b879ab36b99d5a29520faf85ad76",
       "neverc_llc_sha256": "1d6f80fa2f4fb7e0fe0e2b5f3f1732c527a898274ecb9063a9d7830ab3b3ec5e",
-      "source_tree": "598ab2daa7b568be6cd9237537922722f0e017e4",
+      "source_tree": "97f54f9d9ae06667d414a44872ca4971613135c7",
+      "source_status": "",
       "exit_code": 0,
-      "seconds": 4.163,
-      "log_sha256": "ddf07458f10b17d0b3fbf18dc8aad500578dfe8845c5cf9acd815f6a02e8c0aa",
-      "result_sha256": "d5b65c75ed86bc9239144aa5b1c2af8c93fcfa73eb586f31a4d1cbf5c42fcfc4",
-      "tests": 1,
-      "c_compilations": 96,
+      "seconds": 57.495,
+      "log_sha256": "54450597c60621e62258119b2f5f3348bb240b31633a896bdcbca9057f1aa6b2",
+      "result_sha256": "f483ad79ef961670b2ea75c342814c57b3c374d4ed36706301caf3ce02752f6c",
+      "tests": 3,
+      "c_compilations": 1056,
       "failed": 0,
       "skipped": [],
-      "passed": 1
+      "passed": 3
     },
-    "neverc-qualified": {
-      "source_head": "916c1e0ae0e308ad65e1595c02d2f8064eb18729",
-      "compiler_sha256": "bb118eff364f5c02340b9ec37bf213a939d95fe1bfe59f4c4c3d049f667bf3d7",
+    "neverc-integrated": {
+      "source_head": "a3cb91433d78d8594b592d59b30034c25c6d58c7",
+      "compiler_sha256": "b679854fce986d9fabb375af1456cddde212b879ab36b99d5a29520faf85ad76",
       "test_binary_sha256": "51b81c7ae60fbc61910f8d3a4d6dcf8ad1f367a442a59fc632cf0df3883f3fa6",
+      "source_status": "",
       "exit_code": 0,
-      "seconds": 50.567,
-      "log_sha256": "909c09c067aff9045200759497967a1bd2b76d18a5d1da7d92da1ac82e8c7b1b",
+      "seconds": 55.203,
+      "log_sha256": "f2952b51aec7de3f2ec3199563f779cba8cf907e9fa6cba6d374e0c6aa805d9d",
       "tests": 188,
       "failed": 0,
       "skipped": 0,
@@ -200,75 +186,84 @@
     "large_count_boundaries": 768,
     "negative_controls": 210,
     "witness_sha256": "00dba829f132ea263243cdf9d70ac4c908c9ec6b3c19bbed65373d6bf416846b",
-    "result_sha256": "62c27dd96f40ab1bb5b9acb4713c5c281978096887485d7866a0df3dd7fce60e",
+    "result_sha256": "acd038dbf5cbf061b2d399cf2686701306256b4bbe7bab5b9fc73631807c6ccc",
     "oracle_sha256": {
       "verify-system-completion.py": "c74da0d45b76f95af2791ee32ca5a4a87ca3ac8316f4997c77b712931438a292",
       "verify-msr-completion.py": "b0800dc372ec6f2c17801927b53adb33432a98beb6bf55199ac23a63c32310b8",
       "verify-interrupt-completion.py": "3845e9be6ab0ce83d57006585c337ae0fec165b70022a585ce621ff628bc80a7"
-    }
+    },
+    "compiler_sha256": "b679854fce986d9fabb375af1456cddde212b879ab36b99d5a29520faf85ad76",
+    "backend_sha256": "1d6f80fa2f4fb7e0fe0e2b5f3f1732c527a898274ecb9063a9d7830ab3b3ec5e",
+    "receipt_sha256": "c09cbe2aeddfb3342a3829506dc8fc57706bbd5e40d9ccc7cf5e98301b114fbe"
   },
   "cpuid_header": {
-    "linked_objects": 24,
-    "availability_abi_comparisons": 384,
-    "id_restoration_negative_controls": 24,
+    "linked_objects": 32,
+    "availability_abi_comparisons": 512,
+    "id_restoration_negative_controls": 32,
     "source_sha256": "9058c3651d7a21bce33822cae24ea5b46e52022e603e9fca5a7ec6d6daadf6e2",
-    "witness_sha256": "f7a41258b4bc8d20c7b5d9e2531ad0b9d6fb3000d93c7c93ef956e54b5032571",
-    "result_sha256": "fc9071fcfc9298fbab5b5c27c03bfaf012d8e643899ef5963198b9b6aa71143d",
+    "witness_sha256": "c66e3066d5a56948d3ec13420200580712372bbc9aca0cb3aa4f6f986cf06d94",
+    "result_sha256": "b0665b88f7e0e15f892828e2aef5fdba55fb2ddbca06000dd8d1b5b3813a36b9",
     "linker_sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
-    "clang_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+    "clang_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+    "receipt_sha256": "4c2128dd3ee9cde7bc937622bc58a2fe7931a5a1a458289e60261ad2c2ee0758",
+    "compiler_sha256": "b679854fce986d9fabb375af1456cddde212b879ab36b99d5a29520faf85ad76",
+    "routes": "Automatic and forced fallback, NeverC and stock Clang; O0/O2, PIC/no PIC, AT&T/Intel"
   },
   "complete_wrmsrns_source": [
     {
-      "profile": "native-complete-neverc",
+      "profile": "native-integrated-complete-neverc",
       "objects": 24,
       "comparisons": 72,
       "negative_controls": 48,
-      "compiler_sha256": "bb118eff364f5c02340b9ec37bf213a939d95fe1bfe59f4c4c3d049f667bf3d7",
+      "compiler_sha256": "b679854fce986d9fabb375af1456cddde212b879ab36b99d5a29520faf85ad76",
       "backend_sha256": "1d6f80fa2f4fb7e0fe0e2b5f3f1732c527a898274ecb9063a9d7830ab3b3ec5e",
-      "receipt_sha256": "9f350179a8456e738e2a4fe63c4d693df9681a97886d758c3863989471d262f6",
-      "results_sha256": "29f85ab355d0cb39e103264c1a465b5c1953cf4dafa8edde249770d084465dec",
+      "receipt_sha256": "d178f9b317e21b3a76b91affa7b04159112e153256bf2aa19e809e699ab6fcd8",
+      "results_sha256": "9b0de0598411a09bf7c32807108952f65ef1ba67762ff4e93aeb009906ef214e",
       "exit_code": 0
     },
     {
-      "profile": "native-complete-clang",
+      "profile": "native-integrated-complete-clang",
       "objects": 24,
       "comparisons": 72,
       "negative_controls": 48,
       "compiler_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
       "backend_sha256": null,
-      "receipt_sha256": "7c595d229768eb222ea7d10b69a006339613c762c28a2b05fad58699137366e9",
-      "results_sha256": "6c58a1c1f4422335a7a7b9fc35c10c5e5f3308370574a7dc8cdf76b1899cce86",
+      "receipt_sha256": "03f333094ef55f86282d970229f5675c08090b060ace5e9009b4a3dc2af7a15d",
+      "results_sha256": "8a3ca725b37c800a3b42731639a2bbb0c8ec06f58725b3ae31e96ebc3319fd92",
       "exit_code": 0
     },
     {
-      "profile": "r6-complete-neverc",
+      "profile": "r6-integrated-complete-neverc",
       "objects": 24,
       "comparisons": 72,
       "negative_controls": 48,
-      "compiler_sha256": "bb118eff364f5c02340b9ec37bf213a939d95fe1bfe59f4c4c3d049f667bf3d7",
+      "compiler_sha256": "b679854fce986d9fabb375af1456cddde212b879ab36b99d5a29520faf85ad76",
       "backend_sha256": "1d6f80fa2f4fb7e0fe0e2b5f3f1732c527a898274ecb9063a9d7830ab3b3ec5e",
-      "receipt_sha256": "d600b12eddc611c92194caf5366ce1d15bc76637968177547035da3f0e89a535",
-      "results_sha256": "6fabbec4c3bcf7e2951491e66e3caa703498694dbf091e493c40a6f780136aed",
+      "receipt_sha256": "16f0b3a2e619705e8b35ff604fe15cf07d702f54ffb7589056b6e7219df79481",
+      "results_sha256": "62e4e5a79279c7af0ab8c0c71611744cefcaa1b58ff00c70ef55c0500adbfc81",
       "exit_code": 0
     },
     {
-      "profile": "r6-complete-clang",
+      "profile": "r6-integrated-complete-clang",
       "objects": 24,
       "comparisons": 72,
       "negative_controls": 48,
       "compiler_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
       "backend_sha256": null,
-      "receipt_sha256": "7e8da6f98b219ee5039ca23cf0dd6f4f8dc2ac67c51622f24cfbd24620235158",
-      "results_sha256": "e897be3e5fb0c89ae52fc801f02e134fe4e10c9fced50425fe6b61076e13918e",
+      "receipt_sha256": "500eefc6d104c13988e9fd889d60b48143784e0f65b30e00e03eb6f09cae6493",
+      "results_sha256": "ab9a5ab4cd35f661fd279f1c09613a1e0948f4a1551274d1c5aad171766df984",
       "exit_code": 0
     }
   ],
-  "complete_source_witness_sha256": "7a8844a8a91225bb7c18dead6c5a6d6d244080e05f8c728a522bb900e4884d96",
+  "complete_source_witness_sha256": "544d43644d3e7902a62eb253430b37547a3ce711326ad3c5f41ebc95ac480031",
   "scalar_regression": {
     "objects": 168,
     "comparisons": 504,
     "negative_controls": 336,
-    "result_sha256": "27d625fad2a698a9480be00e5d113f6284a20f1114eb0488f6e240aace940687"
+    "compiler_sha256": "b679854fce986d9fabb375af1456cddde212b879ab36b99d5a29520faf85ad76",
+    "backend_sha256": "1d6f80fa2f4fb7e0fe0e2b5f3f1732c527a898274ecb9063a9d7830ab3b3ec5e",
+    "result_sha256": "a5269dbb260cd2c3f07f447407f114529b6837aeddd30850e91c7c064b3cc9bd",
+    "receipt_sha256": "ae902e5bd032f97a60105f781003b27209a6de1b04a72e51fb944f4458ec9efd"
   },
   "llvm_regression": {
     "tests": 6,
@@ -286,7 +281,7 @@
     "command": "python3 utils/plugin-api/check-global-state.py --build-dir build-neverc --strict --json",
     "artifact_report_sha256": "971a67243437e9a0d0d851ee285b372b1413947eb087cdc13cf37c28fe989de2",
     "artifact_receipt": {
-      "source_head": "1d626878205ea6a6e0b69edbddcf051d1f297e93",
+      "source_head": "a3cb91433d78d8594b592d59b30034c25c6d58c7",
       "command": [
         "python3",
         "utils/plugin-api/check-global-state.py",
@@ -296,16 +291,9 @@
         "build-neverc"
       ],
       "exit_code": 0,
-      "seconds": 16.518295468005817,
-      "compiler_sha256": "bb118eff364f5c02340b9ec37bf213a939d95fe1bfe59f4c4c3d049f667bf3d7",
-      "report_sha256": "971a67243437e9a0d0d851ee285b372b1413947eb087cdc13cf37c28fe989de2",
-      "verified_current_head": "02d30ebe4e080e1ac913435af893afffec945b29",
-      "post_audit_changed_paths": [
-        "neverc/lib/Headers/cpuid.h",
-        "tests/neverc/X86/PortableSystemFrontendTests.cpp",
-        "tests/verify-i386-cpuid-header.py"
-      ],
-      "same_compiler": true
+      "seconds": 20.811721184989437,
+      "compiler_sha256": "b679854fce986d9fabb375af1456cddde212b879ab36b99d5a29520faf85ad76",
+      "report_sha256": "971a67243437e9a0d0d851ee285b372b1413947eb087cdc13cf37c28fe989de2"
     },
     "source_report_sha256": "026d5e02373fc4fe54f82c9297a5c4a0675edd8d91ddce5d5383a4eaa48539ee",
     "allowlist_or_rule_changes": false,
@@ -323,5 +311,13 @@
     "cpuid_header": "python3 tests/verify-i386-cpuid-header.py --compiler NEVERC --backend-llc LLVM_LLC --clang CLANG --linker LD_LLD --keep OUT",
     "neverd": "NEVERD_TEST_NEVERC=NEVERC NEVERD_TEST_NEVERC_LLC=LLVM_LLC NEVERD_ISA_REGRESSION_ARTIFACT_DIR=EXPORTS NeverDX86VirtualizationSourceTests --gtest_filter=X86PortableSystemSource.*",
     "complete_c": "python3 scripts/check_x86_scalar_system_source.py --family wrmsrns --exports EXPORTS --compiler COMPILER --backend-llc LLVM_LLC --output OUT; omit backend option for Clang"
-  }
+  },
+  "initial_qualification_commit": "5e463012ced96edd1065fdb3cfa6e79c58a51d5d",
+  "integration": {
+    "neverd_upstream_dev": "56d245f1eb0c7a1eac6d2527a79492c9392c1760",
+    "neverc_upstream_dev": "c2920368d29e10434ad26896c4aabb4ed3aa0752",
+    "capstone_gitlink": "e0d74bb3fb6b4b7bcf711e5203ff79c4dc20688e",
+    "scope": "Upstream shared pipeline and frontend changes are retained; integration checks use the final merged compiler and both rebuilt NeverD SDK profiles."
+  },
+  "complete_source_abi_inputs": "Each completion word also varies callee-saved register sentinels; repeated write-only cases exercise distinct ABI inputs."
 }

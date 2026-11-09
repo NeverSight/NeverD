@@ -4630,17 +4630,22 @@ branch returns zero without querying CPUID or touching the signature pointer.
 The i386 compatibility fallback supports PIC and both assembly dialects.
 
 The [portable-system evidence](evidence/x86-i386-portable-system-2026-11-08.json)
-records 188 passing NeverC tests, six LLVM codegen suites, 192 native C compilation
-checks across both SDKs, and 96 complete WRMSRNS C objects with 288 original-byte
+records 188 passing NeverC tests, six LLVM codegen suites, and eight integrated
+NeverD tests with 2,112 native C compilation checks across both SDKs. These
+include 192 WRMSRNS checks, 1,584 existing system checks and 336 scalar MSR/port
+checks after merging the current dev pipeline changes. The final merged
+compiler produces 96 complete WRMSRNS C objects with 288 original-byte
 comparisons and 192 rejected corruptions. The actual i386 frontend produces 58
 portable/Microsoft/GNU-header objects with 1,190 controlled completions, 768
 large-count boundary checks and 210 negative controls. Its REP cases include
 realigned dynamic frames, unaligned pointers and both directions. DF=1 is a raw
 lowering probe, not an ABI-compliant C entry. A separate CPUID availability
-witness links 24 native/fallback/PIC/dialect objects and passes 384 comparisons
-plus 24 rejected ID-restoration corruptions. The existing scalar complete-source
+witness links 32 native/fallback/PIC/dialect objects from both NeverC and stock
+Clang and passes 512 comparisons plus 32 rejected ID-restoration corruptions. The existing scalar complete-source
 witness also passes 504 comparisons and 336 negative controls with the new
-compiler. These checks do not execute privileged instructions or port I/O.
+compiler. Completion inputs also vary the callee-saved register sentinels,
+including write-only cases. These checks do not execute privileged instructions
+or port I/O.
 
 The strict global-state audit **with the linked compiler** passes with zero
 findings and zero unscannable inputs. The same source-only preflight retains

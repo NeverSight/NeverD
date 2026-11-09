@@ -1040,8 +1040,8 @@ NeverC's `tests/verify-i386-portable-system.py --compiler NEVERC
 --backend-llc LLVM_LLC --keep OUT` covers the other portable i386 interfaces
 and REP dynamic frames. `tests/verify-i386-cpuid-header.py --compiler NEVERC
 --backend-llc LLVM_LLC --clang CLANG --linker LD_LLD --keep OUT` checks ID
-availability/restoration, signature pointers, PIC, both dialects and the forced
-header fallback. It links PIC objects before replay so GOT relocations remain
+availability/restoration, signature pointers, PIC, both dialects and automatic
+or forced header fallback with NeverC and stock Clang. It links PIC objects before replay so GOT relocations remain
 part of the tested program. Its simulated fixed ID bit acts at POPFD, avoiding
 Unicorn arithmetic-flag mutation at unrelated conditional branches.
 
