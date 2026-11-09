@@ -76,6 +76,14 @@ void appendDigits(std::string &Out, const llvm::APInt &V) {
   Out.append(S.begin(), S.end());
 }
 
+// Node handles use only 32 bits. Keep wide sentinels, but use LLVM's
+// native index hash rather than mixing nonexistent upper identity bits.
+struct NodeKeyInfo : llvm::DenseMapInfo<uint64_t> {
+  static unsigned getHashValue(uint64_t Key) {
+    return llvm::DenseMapInfo<uint32_t>::getHashValue(uint32_t(Key));
+  }
+};
+
 class Printer {
 public:
   Printer(const SymContext &Ctx, uint32_t Ambient)
@@ -127,7 +135,8 @@ private:
   // reference survives growth, so one dense table owns all fragment strings.
   // Widen node IDs to keep every valid handle distinct from the sentinels.
   llvm::SmallDenseMap<uint64_t, Fragment,
-                      limits::symbolic::kSymExprTraversalInlineBuckets>
+                      limits::symbolic::kSymExprTraversalInlineBuckets,
+                      NodeKeyInfo>
       Memo;
 };
 
@@ -351,8 +360,8 @@ std::string Printer::run(SymRef Root) {
   // Iterative postorder avoids both recursion on deep expressions and sorting
   // the reachable set, while rendering each shared node only once.
   llvm::SmallVector<uint32_t, 64> Order;
-  llvm::SmallDenseSet<uint64_t,
-                      limits::symbolic::kSymExprTraversalInlineBuckets>
+  llvm::SmallDenseSet<
+      uint64_t, limits::symbolic::kSymExprTraversalInlineBuckets, NodeKeyInfo>
       Seen;
   struct Frame {
     SymRef Ref;
