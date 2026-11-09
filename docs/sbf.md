@@ -518,7 +518,9 @@ not select this extra work. An old published dependency may be generalized only
 if its caller-visible return and memory transfer agree
 exactly with the completed generic summary. This currently requires unknown
 memory effects, no returned scratch/postcondition cells, the same scalar return
-alternatives and the same constant or unknown return origin. Any target facts
+alternatives and the same constant, unsigned-range or unknown return origin.
+Equal numeric ranges carry no affine pointer identity, so they do not prevent
+reclaiming an otherwise equivalent result. Any target facts
 in the dependency graph must also remain under the same caller entry and call
 instruction, through an independently published sibling or through the original
 edge's independently retained caller. Keeping only its callee is insufficient.
@@ -538,6 +540,11 @@ is unknown; different finite sets cannot be merged just because neither has a
 singleton return value. Descendant proof coverage is still required. This
 coalesces results already computed for those callers; it does
 not broaden the sibling's input cache key or authorize reuse for new inputs.
+A standalone root with the generic unknown entry facts can also demand its
+ordinary exploration by coalescing such equal published results. Its locally
+known nested call inputs are not analyzed in generic mode. This preserves the
+same four-variant limit and all completed-result and proof-graph checks; it does
+not retry unrelated caller inputs or grant another root traversal.
 Those edges record `coalesced_proven_equivalent_summary_results`. A first
 captured input binding absent from all retained variants can demand one such
 exploration per entry register, without supplying target or nonalias facts.
@@ -969,8 +976,11 @@ inside the heap region. Growing interval disjunctions still use the existing
 alternative limit; there is no additional integer-range fixed point.
 The canonical 64-bit AND transfer retains the endpoint enclosure when a constant
 mask clears a low-bit suffix of a nonwrapping unsigned interval. Other masks and
-wrapping intervals cannot use that monotonicity rule. Symbolic identities are
-not folded as numeric operands.
+wrapping intervals use the sound zero-to-mask enclosure, which also bounds an
+unknown input without retaining pointer identity. A known unsigned interval
+survives a constant 64-bit left shift when every input avoids overflow; the
+scalar semantic owner supplies the effective shift count. These numeric bounds
+can delimit a table-read footprint without proving any table bytes or target.
 Memory-access offsets use the shared modular address transfer, both for a
 local store and when collecting, binding or applying a callee's write summary.
 A heap interval shifted across address zero can still exclude a caller frame.

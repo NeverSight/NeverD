@@ -494,8 +494,27 @@ void applyRegisterTransfer(const MedInstruction &Instruction,
                                 Right.Value, Instruction.Semantics.SwapOperands)
             : std::nullopt;
     State[Instruction.Dst] = {};
-    if (Value)
+    if (Value) {
       SetConstant(normalizeResult(Instruction, *Value));
+    } else if (Instruction.Width == kDoubleWordBitWidth &&
+               Right.ValueKind == RegisterValue::Kind::Constant) {
+      if (Instruction.Op == Operation::And) {
+        // Every masked scalar lies between zero and the mask, even when
+        // the input is unknown or the mask has holes. This numeric enclosure
+        // carries no affine address or captured-object identity.
+        State[Instruction.Dst] = unsignedRangeValue({0, Right.Value});
+      } else if (Instruction.Op == Operation::LSh &&
+                 Left.ValueKind == RegisterValue::Kind::UnsignedRange) {
+        const auto Bounds = *unsignedValueRange(Left);
+        // Use the scalar owner for the effective shift count. Multiplication
+        // by its power of two is monotone only while no input can wrap.
+        const uint64_t Scale = *evaluateScalarALU(
+            Operation::LSh, Instruction.Width, 1, Right.Value);
+        if (Bounds.Lower <= Bounds.Upper && Bounds.Upper <= UINT64_MAX / Scale)
+          State[Instruction.Dst] =
+              unsignedRangeValue({Bounds.Lower * Scale, Bounds.Upper * Scale});
+      }
+    }
   }
 
   if (Instruction.Call != CallKind::None)

@@ -1091,9 +1091,10 @@ private:
   llvm::Expected<std::optional<CallXCompletedResultBinding>>
   completedObjectBinding(const FunctionContext &Original,
                          const FunctionContext &Replacement);
-  llvm::Expected<bool> generalizeRedundantContext(
-      size_t Entry, const ContextState &Input,
-      std::optional<RecursionRetry> Retry = std::nullopt);
+  llvm::Expected<bool>
+  generalizeRedundantContext(size_t Entry, const ContextState &Input,
+                             std::optional<RecursionRetry> Retry = std::nullopt,
+                             bool RootRequest = false);
   llvm::Expected<bool> replay(FunctionContext &Context, size_t BlockID,
                               ContextState &State, uint16_t &Defined,
                               bool Collect);
@@ -1629,7 +1630,8 @@ ContextFlow::completedObjectBinding(const FunctionContext &Original,
 
 llvm::Expected<bool>
 ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
-                                        std::optional<RecursionRetry> Retry) {
+                                        std::optional<RecursionRetry> Retry,
+                                        bool RootRequest) {
   if (ActiveEntries.contains(Program.Med.Blocks[Entry].StartSlot))
     return false;
   // Favor a changed image argument when the retained variants repeat one.
@@ -1650,6 +1652,12 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
   };
   const bool RootDemand = llvm::any_of(
       Variants, [&](const auto *Candidate) { return UnknownRoot(*Candidate); });
+  // A standalone unknown-input root still follows locally known call inputs,
+  // unlike generic mode. It can demand its one ordinary exploration by
+  // coalescing equal completed callers under the same preservation checks.
+  const bool NewUnknownRoot = RootRequest &&
+                              Input.Registers == Generic.Input.Registers &&
+                              Input.Scratch == Generic.Input.Scratch;
   bool NewImageArgument = false;
   bool UnrepresentedImageBinding = false;
   uint16_t NewImageRegisters = 0;
@@ -1732,7 +1740,7 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
       !NewCapturedRegisters && !NewFrameRegisters;
   const bool OnlyRootDemand = OnlyPreciseSiblingResult &&
                               !UnrepresentedImageBinding && !NewScalarRegisters;
-  if (OnlyRootDemand && !RootDemand)
+  if (OnlyRootDemand && !RootDemand && !NewUnknownRoot)
     return false;
   // Replacing an old incoming edge must leave the caller transfer unchanged.
   // Start with the opaque-memory case: no returned cells or affine return
@@ -1744,7 +1752,8 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
         Context.Return->Postconditions.copyCount())
       return false;
     for (const auto &Origin : Context.Return->Origins[0].values())
-      if (Origin.ValueKind != RegisterValue::Kind::Constant)
+      if (Origin.ValueKind != RegisterValue::Kind::Constant &&
+          Origin.ValueKind != RegisterValue::Kind::UnsignedRange)
         return false;
     return std::none_of(Context.Return->Registers[0].values().begin(),
                         Context.Return->Registers[0].values().end(),
@@ -1949,14 +1958,15 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
     if ((Retry && Candidate != Retry->Summary) ||
         (!Retry && (!Candidate->Published ||
                     Candidate->RootGeneration == RootGeneration)) ||
-        (Candidate->IsRoot && !ReplaceRoot) || (OnlyRootDemand && !ReplaceRoot))
+        (Candidate->IsRoot && !ReplaceRoot) ||
+        (OnlyRootDemand && !ReplaceRoot && !NewUnknownRoot))
       continue;
     const bool ObjectResult =
         NewScalarRegisters && hasCompletedObjectResult(*Candidate);
     const bool OpaqueResult = GenericOpaque && OpaqueReturn(*Candidate);
-    if (!ObjectResult &&
-        (!OpaqueResult || (OnlyPreciseSiblingResult &&
-                           !UnrepresentedImageBinding && !ReplaceRoot)))
+    if (!ObjectResult && (!OpaqueResult || (OnlyPreciseSiblingResult &&
+                                            !UnrepresentedImageBinding &&
+                                            !ReplaceRoot && !NewUnknownRoot)))
       continue;
     const bool GenericKeepsResult =
         OpaqueResult &&
@@ -1965,7 +1975,8 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
     // Further image inputs can use redundant, more precise completed results.
     // Repeated opaque results keep the original once-per-register demand.
     if ((Retry && !GenericKeepsResult) ||
-        (OnlyPreciseSiblingResult && GenericKeepsResult && !ReplaceRoot))
+        (OnlyPreciseSiblingResult && GenericKeepsResult && !ReplaceRoot &&
+         !NewUnknownRoot))
       continue;
     // A generic replacement must preserve the node's own caller proofs.
     // Otherwise only an already computed, independently published sibling
@@ -6081,7 +6092,8 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
       if (Victim)
         reclaimContext(*Victim);
       else {
-        auto Reclaimed = generalizeRedundantContext(Entry, Input);
+        auto Reclaimed = generalizeRedundantContext(Entry, Input, std::nullopt,
+                                                    !Generalization);
         if (!Reclaimed)
           return Reclaimed.takeError();
         if (!*Reclaimed)
