@@ -570,6 +570,10 @@ SymRef SymContext::mkSExt(SymRef A, uint32_t Width) {
     return mkConst(constValue(A).sext(Width));
   if (op(A) == SymOp::SExt)
     return mkSExt(operand(A, 0), Width);
+  if (op(A) == SymOp::Ite && isConst(operand(A, 1)) && isConst(operand(A, 2)) &&
+      !constValue(operand(A, 1)).isNegative() &&
+      !constValue(operand(A, 2)).isNegative())
+    return mkZExt(A, Width);
   return intern(SymOp::SExt, Width, {A}, 0);
 }
 
