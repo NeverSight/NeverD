@@ -91,6 +91,11 @@ struct SolverLimits {
   }
 };
 
+/// Recover exact finite literal tables using the caller's remaining
+/// work and storage; ordinal tables retain their outside default.
+SymRef foldFiniteSelection(SymContext &, SymRef, const MBAOptions &,
+                           WorkBudget &, size_t &Storage);
+
 SolverLimits resolveLimits(const MBAOptions &Opts);
 
 /// Work bound for the complete small recipe lookup, or the larger runtime

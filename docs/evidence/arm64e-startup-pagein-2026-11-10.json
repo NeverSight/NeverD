@@ -1,0 +1,242 @@
+{
+  "date": "2026-11-10",
+  "timezone": "Asia/Singapore",
+  "source_revision": "f2b0fb920eef5fc81f320bcb12dd433f00caa331",
+  "environment_revision": "3296dd4f77008b7043c51a456c31800630b94b0b",
+  "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42657711249",
+  "comparison": "The same signed executable runs with default loading, explicit userspace dyld fixups, then default loading again. Its SHA256 is checked after every execution.",
+  "observed_failure": "The DB authenticated native_external_data access stops at AUTDB followed by BRK #0xc473 while the pointer retains encoded chain bits.",
+  "system_startup_qualified": false,
+  "userspace_original_startup_qualified": true,
+  "whole_image_publication_qualified": false,
+  "runners": {
+    "macos-26": {
+      "report_sha256": "ef45108f84192e46bd33bd17d0d96247933cdd104398942934862e7822824ad3",
+      "profile": "(version 1) (allow default) (deny syscall-unix (syscall-number 550))",
+      "controls": [
+        {
+          "label": "pac-O0",
+          "sha256": "d820e62c5a870cd302296bc29cca17421e159d3e1890b41f4833f9160e118af1",
+          "cpu_subtype": 2164260866,
+          "runs": [
+            {
+              "mode": "default",
+              "returncode": 0
+            },
+            {
+              "mode": "userspace",
+              "returncode": 0
+            }
+          ]
+        },
+        {
+          "label": "pac-O2",
+          "sha256": "8cf43736431e0138f78c09a13b5d03352a9c304e3a610bc66eb6e472e3878a29",
+          "cpu_subtype": 2164260866,
+          "runs": [
+            {
+              "mode": "default",
+              "returncode": 0
+            },
+            {
+              "mode": "userspace",
+              "returncode": 0
+            }
+          ]
+        },
+        {
+          "label": "startup-O0-dwarf-False",
+          "sha256": "9146b5c46c409da1efaceb0056c0f13ef1dfdce9d82b24021f310e8913cd9b05",
+          "cpu_subtype": 2164260866,
+          "runs": [
+            {
+              "mode": "default",
+              "returncode": -5
+            },
+            {
+              "mode": "userspace",
+              "returncode": 0
+            },
+            {
+              "mode": "default-after",
+              "returncode": -5
+            }
+          ]
+        },
+        {
+          "label": "startup-O0-dwarf-True",
+          "sha256": "e632c0f52b790d2cdb9855e3eaf8bae5cb266a55939a633726242d0fb3fce20a",
+          "cpu_subtype": 2164260866,
+          "runs": [
+            {
+              "mode": "default",
+              "returncode": -5
+            },
+            {
+              "mode": "userspace",
+              "returncode": 0
+            },
+            {
+              "mode": "default-after",
+              "returncode": -5
+            }
+          ]
+        },
+        {
+          "label": "startup-O2-dwarf-False",
+          "sha256": "f8af197d6ad1f3d3165d5abfb173b10b8ebfe30e01766f95b7940fe251d4f932",
+          "cpu_subtype": 2164260866,
+          "runs": [
+            {
+              "mode": "default",
+              "returncode": -5
+            },
+            {
+              "mode": "userspace",
+              "returncode": 0
+            },
+            {
+              "mode": "default-after",
+              "returncode": -5
+            }
+          ]
+        },
+        {
+          "label": "startup-O2-dwarf-True",
+          "sha256": "2467d715152e0268023e09c962be219b9ca7b8e0a85a4aad193f77b0b5173dbc",
+          "cpu_subtype": 2164260866,
+          "runs": [
+            {
+              "mode": "default",
+              "returncode": -5
+            },
+            {
+              "mode": "userspace",
+              "returncode": 0
+            },
+            {
+              "mode": "default-after",
+              "returncode": -5
+            }
+          ]
+        }
+      ],
+      "debugger_sha256": "a624a95f6c22508cc7b9537af9072436931fd1eace52bcf3584f8f901574692a",
+      "owned_executables_removed": true
+    },
+    "xcode-27": {
+      "report_sha256": "8708022b1dd03af79cd87ced58431c9021e159473ae56a75981eb5ae2abfec7e",
+      "profile": "(version 1) (allow default) (deny syscall-unix (syscall-number 550))",
+      "controls": [
+        {
+          "label": "pac-O0",
+          "sha256": "c596fa943ee901cdee26409a62b2dec2144eee6f466d8ca0782c217ddf7a4bab",
+          "cpu_subtype": 2164260866,
+          "runs": [
+            {
+              "mode": "default",
+              "returncode": 0
+            },
+            {
+              "mode": "userspace",
+              "returncode": 0
+            }
+          ]
+        },
+        {
+          "label": "pac-O2",
+          "sha256": "2050cef2ef3d500acd89b37f751fd76b7a634853ff6232b38dd010903e4687c4",
+          "cpu_subtype": 2164260866,
+          "runs": [
+            {
+              "mode": "default",
+              "returncode": 0
+            },
+            {
+              "mode": "userspace",
+              "returncode": 0
+            }
+          ]
+        },
+        {
+          "label": "startup-O0-dwarf-False",
+          "sha256": "1733440e8e605f08bed5b01736231c3a2cd723c8eaeeb1e5676424e7dd5daf2e",
+          "cpu_subtype": 2164260866,
+          "runs": [
+            {
+              "mode": "default",
+              "returncode": -5
+            },
+            {
+              "mode": "userspace",
+              "returncode": 0
+            },
+            {
+              "mode": "default-after",
+              "returncode": -5
+            }
+          ]
+        },
+        {
+          "label": "startup-O0-dwarf-True",
+          "sha256": "e435cac5a2d06e2eadb475c9706a0d98550622adf3bfe3354f7d8b452f3868c5",
+          "cpu_subtype": 2164260866,
+          "runs": [
+            {
+              "mode": "default",
+              "returncode": -5
+            },
+            {
+              "mode": "userspace",
+              "returncode": 0
+            },
+            {
+              "mode": "default-after",
+              "returncode": -5
+            }
+          ]
+        },
+        {
+          "label": "startup-O2-dwarf-False",
+          "sha256": "fb9acec504b4a49c5814c97553dac1111ee2f788b3f014502ee068eb5294539e",
+          "cpu_subtype": 2164260866,
+          "runs": [
+            {
+              "mode": "default",
+              "returncode": -5
+            },
+            {
+              "mode": "userspace",
+              "returncode": 0
+            },
+            {
+              "mode": "default-after",
+              "returncode": -5
+            }
+          ]
+        },
+        {
+          "label": "startup-O2-dwarf-True",
+          "sha256": "622596676423d1a60a9faa719fa6f352e90a0086dd28a2ba512c690044ead293",
+          "cpu_subtype": 2164260866,
+          "runs": [
+            {
+              "mode": "default",
+              "returncode": -5
+            },
+            {
+              "mode": "userspace",
+              "returncode": 0
+            },
+            {
+              "mode": "default-after",
+              "returncode": -5
+            }
+          ]
+        }
+      ],
+      "debugger_sha256": "97b69c537faf6f75cf7ef03ee866d8704e0a1665618f3367216a7c5c2a507844",
+      "owned_executables_removed": true
+    }
+  }
+}

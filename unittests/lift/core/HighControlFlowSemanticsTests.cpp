@@ -12670,3 +12670,142 @@ TEST(HighControlFlowSemantics, UnusedOwnFrameReadsFollowEveryStackAdjustment) {
   // names the target.
   EXPECT_EQ(Remaining(Arch::AArch64, 8, UINT64_C(0xFFFFFFFFFFFFFFF0)), 1u);
 }
+
+TEST(HighControlFlowSemantics, RepeatedSplicesKeepMovedNestedEntriesCurrent) {
+  // Each case first moves a container, then the block reached from inside
+  // that container. These edits grow destination vectors, leave holes in the
+  // source, and destroy the original nested lists. The next collection must
+  // find the moved jump in its new parent and retain every pinned entry.
+  for (StmtKind Kind : {StmtKind::Block, StmtKind::IfElse, StmtKind::Switch})
+    for (bool PinEntries : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(Kind));
+      SCOPED_TRACE(PinEntries);
+      HighStmt Dispatch;
+      Dispatch.Kind = StmtKind::Switch;
+      Dispatch.Addr = 0x1000;
+      Dispatch.SwitchExpr = local(0);
+      HighFunc F;
+      std::set<va_t> Pinned;
+      for (unsigned I = 0; I != 32; ++I) {
+        const va_t Entry = 0x2000 + 0x100 * I;
+        const va_t Target = Entry + 0x40;
+        SwitchCase Case;
+        Case.Value = I;
+        Case.Body = {assign(0, 1, 9), jump(0, Entry)};
+        Dispatch.Cases.push_back(std::move(Case));
+
+        HighStmt Container;
+        Container.Kind = Kind;
+        Container.Addr = Entry;
+        std::vector<HighStmt> Body;
+        for (unsigned J = 0; J != 12; ++J)
+          Body.push_back(assign(0, 2, J));
+        Body.push_back(jump(0, Target));
+        if (Kind == StmtKind::Switch) {
+          Container.SwitchExpr = HighExpr::makeConst(0, 8);
+          SwitchCase Inner;
+          Inner.Value = 0;
+          Inner.Body = std::move(Body);
+          Container.Cases.push_back(std::move(Inner));
+          Container.DefaultBody = {result(0, HighExpr::makeConst(9998, 8))};
+        } else {
+          Container.Body = std::move(Body);
+          if (Kind == StmtKind::IfElse) {
+            Container.Cond = HighExpr::makeConst(1, 8);
+            Container.ElseBody = {result(0, HighExpr::makeConst(9999, 8))};
+          }
+        }
+        F.Body.push_back(std::move(Container));
+        F.Body.push_back(result(Entry + 4, HighExpr::makeConst(9996, 8)));
+        F.Body.push_back(
+            storeSlot(Target, HighExpr::makeConst(1000 + 7 * I, 8)));
+        F.Body.push_back(result(Target + 4, loadSlot()));
+        if (PinEntries && I % 8 == 0)
+          Pinned.insert(Target);
+      }
+      F.Body.insert(F.Body.begin(),
+                    result(0x1004, HighExpr::makeConst(9997, 8)));
+      F.Body.insert(F.Body.begin(), std::move(Dispatch));
+      auto CheckResults = [&] {
+        for (uint64_t I = 0; I != 33; ++I)
+          EXPECT_EQ(execute(F, I, true), I < 32 ? 1000 + 7 * I : 9997);
+      };
+      CheckResults();
+      for (unsigned Round = 0; Round != 3; ++Round) {
+        SCOPED_TRACE(Round);
+        reduceSingleUseGotos(F.Body, /*SpliceRegions=*/true, Pinned);
+        CheckResults();
+      }
+      EXPECT_EQ(countKind(F, StmtKind::Store), 32u);
+      EXPECT_EQ(countKind(F, StmtKind::Goto), Pinned.size());
+    }
+}
+
+TEST(HighControlFlowSemantics,
+     SpliceRebuildsKeepNewFallthroughEntriesAndUnchangedLists) {
+  HighFunc F;
+  F.Entry = 0x1000;
+  HighStmt Dispatch;
+  Dispatch.Kind = StmtKind::Switch;
+  Dispatch.Addr = F.Entry;
+  Dispatch.SwitchExpr = local(0);
+  HighStmt Unchanged;
+  Unchanged.Kind = StmtKind::Block;
+  Unchanged.Addr = 0x1800;
+  for (unsigned I = 0; I != 96; ++I)
+    Unchanged.Body.push_back(assign(0, 2, I));
+  Unchanged.Body.push_back(result(0, HighExpr::makeConst(9997, 8)));
+  F.Body.push_back(std::move(Unchanged));
+  for (unsigned I = 0; I != 8; ++I) {
+    const va_t Entry = 0x3000 + 0x100 * I;
+    SwitchCase Case;
+    Case.Value = I;
+    Case.Body = {jump(0, Entry)};
+    Dispatch.Cases.push_back(std::move(Case));
+    HighStmt Source;
+    Source.Kind = StmtKind::Block;
+    Source.Addr = Entry - 8;
+    Source.Body.push_back(result(0, HighExpr::makeConst(9996, 8)));
+    Source.Body.push_back(assign(Entry, 2, 0));
+    for (unsigned J = 0; J != 12; ++J)
+      Source.Body.push_back(assign(0, 2, J));
+    Source.Body.push_back(storeSlot(0, HighExpr::makeConst(1000 + 7 * I, 8)));
+    F.Body.push_back(std::move(Source));
+    F.Body.push_back(result(Entry + 0x80, loadSlot()));
+  }
+  F.Body.insert(F.Body.begin(), std::move(Dispatch));
+  auto Check = [&] {
+    // The independent executor resolves top-level labels. Linearize only
+    // these unconditional fixture blocks, retaining their entry addresses.
+    auto Linear = F;
+    Linear.Body.clear();
+    std::function<void(const std::vector<HighStmt> &)> Append =
+        [&](const std::vector<HighStmt> &Body) {
+          for (const auto &S : Body) {
+            if (S.Kind == StmtKind::Block) {
+              HighStmt Anchor;
+              Anchor.Kind = StmtKind::Nop;
+              Anchor.Addr = S.Addr;
+              Linear.Body.push_back(std::move(Anchor));
+              Append(S.Body);
+            } else {
+              Linear.Body.push_back(S);
+            }
+          }
+        };
+    Append(F.Body);
+    for (uint64_t I = 0; I != 10; ++I)
+      EXPECT_EQ(execute(Linear, I, true), I < 8 ? 1000 + 7 * I : 9997);
+  };
+  Check();
+  for (unsigned Round = 0; Round != 3; ++Round) {
+    reduceSingleUseGotos(F.Body, true, {});
+    Check();
+    ASSERT_EQ(F.Body.front().Kind, StmtKind::Switch);
+    for (const auto &Case : F.Body.front().Cases)
+      EXPECT_TRUE(std::any_of(
+          Case.Body.begin(), Case.Body.end(),
+          [](const HighStmt &S) { return S.Kind == StmtKind::Store; }));
+    EXPECT_EQ(countKind(F, StmtKind::Store), 8u);
+  }
+}

@@ -236,52 +236,8 @@ TEST(X86Skinit, CProjectionRequiresTheCompleteNonreturningMemoryContract) {
 class X86SkinitSource : public X86FPStateFixture {
 protected:
   unsigned RawParameterExecutions = 0;
-  unsigned NativeI386Compilations = 0;
 
-  void checkOutputRoutes(bool NativeI386);
-
-  void checkNativeI386Source(const std::string &Input,
-                             const std::string &Stem) {
-    const char *NeverC = std::getenv("NEVERD_TEST_NEVERC");
-    if (!NeverC)
-      return;
-    const char *Backend = std::getenv("NEVERD_TEST_NEVERC_LLC");
-    ASSERT_NE(Backend, nullptr);
-    ASSERT_TRUE(llvm::sys::fs::exists(NeverC));
-    ASSERT_TRUE(llvm::sys::fs::exists(Backend));
-    for (const auto *Opt : {"-O0", "-O2"}) {
-      const std::string Name = "native-" + Stem + Opt;
-      const auto IRPath = file(Name + ".ll");
-      const auto ObjectPath = file(Name + ".o");
-      const std::vector<std::string> Common = {
-          "--target=i386-unknown-linux-gnu",
-          "-std=c23",
-          "-ffreestanding",
-          "-fno-builtin-mimalloc",
-          "-fno-lto",
-          Opt,
-          Input};
-      auto IRArguments = Common;
-      IRArguments.insert(IRArguments.end(), {"-S", "-emit-llvm", "-o", IRPath});
-      const auto Emitted = command(NeverC, IRArguments);
-      ASSERT_EQ(Emitted.Status, 0) << Emitted.Error << contents(Input);
-      const auto IR = contents(IRPath);
-      EXPECT_NE(IR.find("call void @llvm.x86.skinit(i32"), std::string::npos)
-          << IR;
-      EXPECT_EQ(IR.find(" asm "), std::string::npos) << IR;
-      EXPECT_NE(IR.find("unreachable"), std::string::npos) << IR;
-      retainFile(Name + ".ll", IRPath);
-      auto ObjectArguments = Common;
-      ObjectArguments.insert(
-          ObjectArguments.end(),
-          {"-fllvm-backend=" + std::string(Backend), "-c", "-o", ObjectPath});
-      const auto Built = command(NeverC, ObjectArguments);
-      ASSERT_EQ(Built.Status, 0) << Built.Error << contents(Input);
-      checkObject(contents(ObjectPath), Arch::X86);
-      retainFile(Name + ".o", ObjectPath);
-      ++NativeI386Compilations;
-    }
-  }
+  void checkOutputRoutes();
 
   void checkRawParameterExecution(const std::string &Source, bool High) {
     if (!nativeX64() || hostFormat() != BinaryFormat::ELF)
@@ -370,15 +326,13 @@ protected:
   }
 };
 
-void X86SkinitSource::checkOutputRoutes(bool NativeI386) {
+void X86SkinitSource::checkOutputRoutes() {
   unsigned Objects = 0;
   for (Arch A : {Arch::X86, Arch::X64})
     for (auto Format :
          {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
       for (bool NoOpt : {false, true})
         for (unsigned Kind = 0; Kind < 3; ++Kind) {
-          if (NativeI386 && (A != Arch::X86 || Format != BinaryFormat::ELF))
-            continue;
           SCOPED_TRACE(testing::Message()
                        << unsigned(A) << " " << unsigned(Format) << " " << NoOpt
                        << " " << Kind);
@@ -495,11 +449,6 @@ void X86SkinitSource::checkOutputRoutes(bool NativeI386) {
             const auto Input = file(std::string(Stem) + ".c");
             write(Input, Source);
             retain(std::string(Stem) + ".c", Source);
-            if (NativeI386) {
-              checkNativeI386Source(Input, Stem);
-              if (::testing::Test::HasFailure())
-                return;
-            }
             if (A == Arch::X64 && Format == BinaryFormat::ELF && Kind == 2)
               checkRawParameterExecution(Source, Route == 1);
             const std::string Triple =
@@ -520,23 +469,15 @@ void X86SkinitSource::checkOutputRoutes(bool NativeI386) {
           }
           ++ProbeNumber;
         }
-  EXPECT_EQ(Objects, NativeI386 ? 30u : 180u);
+  EXPECT_EQ(Objects, 180u);
   RecordProperty("native_objects", Objects);
   if (nativeX64() && hostFormat() == BinaryFormat::ELF)
-    EXPECT_EQ(RawParameterExecutions, NativeI386 ? 0u : 8u);
+    EXPECT_EQ(RawParameterExecutions, 8u);
   RecordProperty("raw_parameter_ubsan_executions", RawParameterExecutions);
-  EXPECT_EQ(NativeI386Compilations, NativeI386 ? 24u : 0u);
-  RecordProperty("native_c_compilations", NativeI386Compilations);
 }
 
 TEST_F(X86SkinitSource, PhysicalInputAndTerminalCFGSurviveEveryOutputRoute) {
-  checkOutputRoutes(false);
+  checkOutputRoutes();
 }
 
-TEST_F(X86SkinitSource, NeverCI386EmitsNativeLaunchWithoutOldContinuation) {
-  if (!std::getenv("NEVERD_TEST_NEVERC") ||
-      !std::getenv("NEVERD_TEST_NEVERC_LLC"))
-    GTEST_SKIP() << "set NEVERD_TEST_NEVERC and NEVERD_TEST_NEVERC_LLC";
-  checkOutputRoutes(true);
-}
 } // namespace

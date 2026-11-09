@@ -131,11 +131,15 @@ def main():
     parser.add_argument('--exports', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--compiler', type=Path)
-    parser.add_argument('--backend-llc', type=Path)
+    parser.add_argument('--neverc', action='store_true',
+                        help='qualify only the supported NeverC x64 source targets')
+    parser.add_argument('--backend-llc', type=Path,
+                        help='lower NeverC x64 IR through the full LLVM backend')
     parser.add_argument('--objects-from', type=Path,
                         help='replay unchanged objects from an earlier result manifest')
     args = parser.parse_args()
-    assert not args.backend_llc or args.compiler
+    assert not (args.backend_llc or args.neverc) or args.compiler
+    args.neverc = args.neverc or bool(args.backend_llc)
     args.output.mkdir(parents=True, exist_ok=False)
     sources = sorted(args.exports.glob('vmfunc-*-high.c')) + sorted(args.exports.glob('vmfunc-*-llvm.c'))
     sources += sorted(args.exports.glob('effects-*.c'))
@@ -152,6 +156,8 @@ def main():
         effects = stem.startswith('effects-')
         fields = stem.split('-')
         mode = int(fields[1])
+        if args.neverc and mode != 64:
+            continue
         format_id = 0 if effects else int(fields[2])
         if not args.compiler and (effects or route == 'llvm'):
             continue
@@ -175,17 +181,15 @@ def main():
                 common = [str(args.compiler), '--target=' + triple, '-' + level,
                           '-std=gnu23', '-ffreestanding', '-fno-lto', '-fno-pic', '-fno-pie',
                           '-fno-stack-protector', '-fno-strict-aliasing', str(source)]
-                if args.backend_llc:
+                if args.neverc:
                     common += ['-fno-builtin-mimalloc']
                 commands.append(common + ['-S', '-emit-llvm', '-o', str(ir)])
-                if args.backend_llc and mode == 64:
+                if args.backend_llc:
                     commands.append([str(args.backend_llc), '-mtriple=' + triple, '-' + level,
                                      '-verify-machineinstrs', '-relocation-model=static',
                                      '-filetype=obj', str(ir), '-o', str(obj)])
                 else:
-                    commands.append(common + ['-c', '-o', str(obj)] +
-                                    (['-fllvm-backend=' + str(args.backend_llc)]
-                                     if args.backend_llc else []))
+                    commands.append(common + ['-c', '-o', str(obj)])
                 if args.objects_from:
                     prior = previous[(source.name, level)]
                     ir = args.objects_from / (source.stem + '-' + level + '.ll')
@@ -195,7 +199,7 @@ def main():
                     result = subprocess.run(command, capture_output=True, text=True, timeout=COMPILER_TIMEOUT_SECONDS)
                     Path(str(output) + f'-{step}.log').write_text(result.stdout + result.stderr)
                     assert result.returncode == 0, result.stderr
-                if args.backend_llc:
+                if args.neverc:
                     native_expected = effects or fields[-1] in ('0', '3')
                     text = ir.read_text()
                     assert ('call void @llvm.x86.vmfunc.eptp.switch(' in text) == native_expected, text

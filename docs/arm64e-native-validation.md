@@ -107,6 +107,34 @@ compiler-original executable. Those are failed startup prerequisites; neither
 job reports success. The report and product manifests retain the failure and
 confirm removal of the owned executables.
 
+The [page-in linking comparison](evidence/arm64e-startup-pagein-2026-11-10.json)
+localizes this failure to the system startup fixup path. Both hosts stop at the
+DB-authenticated `native_external_data` access, where `AUTDB` is followed by
+Clang's `BRK #0xc473` and the pointer retains chain encoding. Each exact signed
+executable fails under default loading, passes with userspace dyld fixups, then
+fails under default loading again. All four O0/O2 compact/DWARF controls pass
+under that explicit profile, and the four-key valid/corrupt PAC controls pass
+under both profiles. Binary hashes are checked after every invocation.
+
+Use the qualified userspace startup profile explicitly:
+
+```sh
+python3 scripts/verify_arm64e_native.py probe-startup \
+  --startup-fixups userspace --output startup-userspace-evidence
+```
+
+This profile derives `SYS_map_with_linking_np` from the execution host's SDK and
+uses a process sandbox denying only that syscall. Apple's
+[dyld syscall delegate](https://github.com/apple-oss-distributions/dyld/blob/fd8d0c4d52320ebf64db34f3cb280310d905c5ae/dyld/DyldDelegates.cpp)
+checks that denial, and its
+[process configuration](https://github.com/apple-oss-distributions/dyld/blob/fd8d0c4d52320ebf64db34f3cb280310d905c5ae/dyld/DyldProcessConfig.cpp)
+selects userspace fixups. Every PAC and language control runs under the declared
+launcher. The report records `fixup_loader`, the SDK syscall number, profile and
+launcher; an unsuccessful or ambiguous SDK query fails before execution.
+The default `system` profile retains its observed failure. The installer still
+requires its matching system/dlopen probe, and neither profile qualifies a
+rebuilt image or the missing post-r6 MC publication path.
+
 A supplemental linker diagnostic did not stop when `ld-classic` lookup failed
 and therefore does not establish legacy threaded execution. Xcode 27 no longer
 ships that linker. Produce the four original legacy inputs on a host with a real

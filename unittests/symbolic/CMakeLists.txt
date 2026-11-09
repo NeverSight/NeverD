@@ -20,10 +20,15 @@ add_neverd_unittest(NeverDSymbolicTests
   SymExprTests.cpp
   SymExprBooleanEqualityTests.cpp
   SymExprCancellationTests.cpp
+  SymExprCommonWordEqualityTests.cpp
   SymLowWordProjectionTests.cpp
+  SymExprCapturedWindowTests.cpp
   SymExprCompareTests.cpp
+  SymExprDisjointFieldTests.cpp
   SymExprConditionalEqualityTests.cpp
+  SymExprNestedTagEqualityTests.cpp
   SymExprComplementTests.cpp
+  SymExprLiteralCarrierTests.cpp
   SymExprExtensionTests.cpp
   SymExprExtensionEqualityTests.cpp
   SymExprMaskTests.cpp
@@ -65,6 +70,7 @@ add_neverd_unittest(NeverDSymbolicTests
   SymMBARestoredTests.cpp
   SymMBASampleTests.cpp
   SymMBASelectorTests.cpp
+  SymMBAFiniteSelectionTests.cpp
   SymMBAStressTests.cpp
   SymMBAFactorCostTests.cpp
   SymMBAExtensionTests.cpp

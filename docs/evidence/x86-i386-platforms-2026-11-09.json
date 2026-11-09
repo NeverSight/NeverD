@@ -143,17 +143,17 @@
   ],
   "tools": {
     "neverc": {
-      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+      "path": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
       "resolved_path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
       "sha256": "3d3e283491882d0c745e9ec9c574138abc5f836958cce15bf9eba11bab387786"
     },
     "neverc-tests": {
-      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc-tests",
+      "path": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc-tests",
       "resolved_path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc-tests",
       "sha256": "f8cedae64b85b15b349462aac3345fbde66f7cd71b108f004f77f8768bed070d"
     },
     "neverc-plugin-target-mc-tests": {
-      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc-plugin-target-mc-tests",
+      "path": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc-plugin-target-mc-tests",
       "resolved_path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc-plugin-target-mc-tests",
       "sha256": "dc63d90caf992bd06fb8b9ffb3c414dedb22ef85cdb81c7c1d6d95969ca88dc6"
     },
@@ -163,67 +163,67 @@
       "sha256": "43df92bb8a2021b52beb9c5eb7e552ec613963114ab230eb15f45b1d570c9a07"
     },
     "host-clang": {
-      "path": "/home/ad/.local/bin/clang",
+      "path": "<host>/.local/bin/clang",
       "resolved_path": "/usr/lib/llvm-23/bin/clang",
       "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
     },
     "llc": {
-      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+      "path": "<host>/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
       "resolved_path": "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llc",
       "sha256": "e9b079493a2363e35288ca89ea7b8fe15d246b342c0ee66c6629c7df3c3ccefe"
     },
     "opt": {
-      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/opt",
+      "path": "<host>/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/opt",
       "resolved_path": "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/opt",
       "sha256": "6722b904bbba3a270076ad01147f3d1356d0f437d020dd8b803dec6861e092e5"
     },
     "llvm-mc": {
-      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llvm-mc",
+      "path": "<host>/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llvm-mc",
       "resolved_path": "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llvm-mc",
       "sha256": "52a2080052818b01208158b76a02eeaf46866e4976b3dd1663390097feb67de9"
     },
     "llvm-readobj": {
-      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llvm-readobj",
+      "path": "<host>/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llvm-readobj",
       "resolved_path": "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llvm-readobj",
       "sha256": "05727d589aaa1bdb96990599aa90c94fbf592d82faa66fcec13e0dd45ef08f4b"
     },
     "llvm-readelf": {
-      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llvm-readelf",
+      "path": "<host>/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llvm-readelf",
       "resolved_path": "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llvm-readobj",
       "sha256": "05727d589aaa1bdb96990599aa90c94fbf592d82faa66fcec13e0dd45ef08f4b"
     },
     "llvm-objdump": {
-      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llvm-objdump",
+      "path": "<host>/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llvm-objdump",
       "resolved_path": "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llvm-objdump",
       "sha256": "0c2bb9d9cc3ab123ff92ae8f79edc6e05b73fb2ea10f96a5cfbae5136564931a"
     },
     "native-NeverDX86VmfuncSourceTests": {
-      "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86VmfuncSourceTests",
+      "path": "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86VmfuncSourceTests",
       "resolved_path": "/mnt/data/neverd-mpx-source-20261031/build-x86-native/bin/NeverDX86VmfuncSourceTests",
       "sha256": "bb1a4d27ad9bbd3d3ac73910f3aeb7df37a4c210c0119838e3a2ceb17bd2f6d4"
     },
     "native-NeverDX86VirtualizationTests": {
-      "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86VirtualizationTests",
+      "path": "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86VirtualizationTests",
       "resolved_path": "/mnt/data/neverd-mpx-source-20261031/build-x86-native/bin/NeverDX86VirtualizationTests",
       "sha256": "044b366d7b6e3e928d118e6392f1dec724ea4474dfb70c0d2b1419657e494653"
     },
     "native-NeverDX86VirtualizationSourceTests": {
-      "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86VirtualizationSourceTests",
+      "path": "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86VirtualizationSourceTests",
       "resolved_path": "/mnt/data/neverd-mpx-source-20261031/build-x86-native/bin/NeverDX86VirtualizationSourceTests",
       "sha256": "b0b453e59c535a9480358f0dda69bfc9fa3f556ab99e441212742f4ae25b3dbc"
     },
     "r6-NeverDX86VmfuncSourceTests": {
-      "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86VmfuncSourceTests",
+      "path": "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86VmfuncSourceTests",
       "resolved_path": "/mnt/data/neverd-sgx-transfer-20261101/build-x86/bin/NeverDX86VmfuncSourceTests",
       "sha256": "de7630f60eee23d8c12f95c15ae8bbded5fa9dfeffd207211fd4ac766734ff9a"
     },
     "r6-NeverDX86VirtualizationTests": {
-      "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86VirtualizationTests",
+      "path": "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86VirtualizationTests",
       "resolved_path": "/mnt/data/neverd-sgx-transfer-20261101/build-x86/bin/NeverDX86VirtualizationTests",
       "sha256": "f7265795655b99a01cf3be4d9ccad86d9ba2632c55a4700f98881d54d99dff9a"
     },
     "r6-NeverDX86VirtualizationSourceTests": {
-      "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86VirtualizationSourceTests",
+      "path": "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86VirtualizationSourceTests",
       "resolved_path": "/mnt/data/neverd-sgx-transfer-20261101/build-x86/bin/NeverDX86VirtualizationSourceTests",
       "sha256": "2a78504e13007233db0c1dd40357afa5b78fb794665146050bdac916fffb23f3"
     }

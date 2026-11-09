@@ -96,7 +96,7 @@ TEST(StateSource, RejectsMissingAssertionsAndConflictingImportsBeforeMutation) {
   auto M = cell_test::parse(C, program());
   ASSERT_TRUE(M);
   auto Before = cell_test::print(*M);
-  for (unsigned Case = 0; Case != 15; ++Case) {
+  for (unsigned Case = 0; Case != 19; ++Case) {
     auto Contract = contract();
     if (Case == 0)
       Contract.IsolatedBank = false;
@@ -147,6 +147,18 @@ TEST(StateSource, RejectsMissingAssertionsAndConflictingImportsBeforeMutation) {
     if (Case == 14) {
       Contract.Gateways[0].FallbackWrites = StateSourceFallbackWrites{};
       Contract.Gateways[0].FallbackWrites->ResultBytes = 3;
+    }
+    if (Case >= 15) {
+      auto &I = Contract.Gateways[0].Imports[0];
+      I.VoidResultArgument = 0;
+      if (Case != 15)
+        I.Result = StateSourceType::Void;
+      if (Case == 16)
+        I.VoidResult = StateSourceVoidResult::Unspecified;
+      if (Case == 17)
+        I.VoidResultArgument = 1;
+      if (Case == 18)
+        I.Defaults = {0};
     }
     auto R = prepareStateSourceRecovery(*M, Contract);
     EXPECT_FALSE(bool(R));
@@ -2043,6 +2055,136 @@ int main(void) {
                       {"-std=c11", Level, "-fsanitize=undefined",
                        "-fsanitize-trap=all", Original.string(), After.string(),
                        Harness.string(), "-o", Executable.string()});
+    ASSERT_TRUE(Built.ok()) << Built.err;
+    auto Ran = exec(Executable.string(), {});
+    EXPECT_TRUE(Ran.ok()) << Ran.exitCode << " " << Ran.err;
+  }
+}
+
+TEST_F(StateSourceCompiled,
+       VoidArgumentResultKeepsCapturedBitsAndNativeEffects) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "Configured Clang is unavailable";
+  std::string Text, Harness;
+  llvm::raw_string_ostream H(Harness);
+  H << "#include <stdint.h>\n#include <string.h>\n";
+  auto Contract = voidResultContract();
+  auto &G = Contract.Gateways[0];
+  G.Arguments.push_back({24, 8});
+  G.Writes.insert(G.Writes.end(), {{{8, 8}, 0}, {{24, 8}, 0}});
+  G.Imports[0].Parameters = {StateSourceType::I8, StateSourceType::Pointer};
+  G.Imports[0].VoidResult = StateSourceVoidResult::Zero;
+  G.Imports[0].VoidResultArgument = 0;
+  auto Second = G.Imports[0];
+  Second.Selector = 8;
+  Second.VoidResultArgument = 1;
+  G.Imports.push_back(Second);
+  unsigned Index = 0;
+  for (unsigned Argument : {0u, 1u})
+    for (unsigned Bytes : {1u, 2u, 4u, 8u}) {
+      auto F = voidResultProgram(
+          "%value = load i64, ptr %r, align 1\nret i64 %value");
+      cell_test::replace(F, "store i64 1, ptr %count, align 1", "");
+      cell_test::replace(F, "store i64 7, ptr %sel",
+                         "store i64 " + std::to_string(7 + Argument) +
+                             ", ptr %sel");
+      cell_test::replace(F, "store i64 4, ptr %width",
+                         "store i64 " + std::to_string(Bytes) + ", ptr %width");
+      // Both byte orders admit the same explicitly captured operand contract.
+      for (const char *Layout : {"e-p:64:64", "E-p:64:64"}) {
+        llvm::LLVMContext C;
+        auto M = cell_test::parse(C, F);
+        ASSERT_TRUE(M);
+        M->setDataLayout(Layout);
+        auto R = prepareStateSourceRecovery(*M, Contract);
+        ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+        optimize(*M);
+        auto E = finishStateSourceRecovery(*M, *R);
+        ASSERT_FALSE(E) << llvm::toString(std::move(E));
+        EXPECT_EQ(R->RewrittenCalls, 1u);
+        EXPECT_EQ(R->GuardedCalls, 1u);
+        EXPECT_FALSE(llvm::verifyModule(*M, &llvm::errs()));
+      }
+      if (Index)
+        F.erase(0, F.find("define i64"));
+      cell_test::replace(F, "@work(", "@before" + std::to_string(Index) + "(");
+      Text += F;
+      H << "extern uint64_t before" << Index << "(void*,void*), after" << Index
+        << "(void*,void*);\n";
+      ++Index;
+    }
+  llvm::LLVMContext C;
+  auto M = cell_test::parse(C, Text);
+  ASSERT_TRUE(M);
+  auto Original = tmpFile("void-argument-before.ll");
+  std::ofstream(Original) << test::printHostCompilerFixture(*M);
+  for (unsigned I = 0; I < Index; ++I)
+    M->getFunction("before" + std::to_string(I))
+        ->setName("after" + std::to_string(I));
+  auto R = prepareStateSourceRecovery(*M, Contract);
+  ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+  optimize(*M);
+  auto E = finishStateSourceRecovery(*M, *R);
+  ASSERT_FALSE(E) << llvm::toString(std::move(E));
+  ASSERT_EQ(R->RewrittenCalls, Index);
+  ASSERT_EQ(R->GuardedCalls, Index);
+  optimize(*M);
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.PreserveLLVMFunctionTypes = true;
+  Options.UseUnalignedPointers = true;
+  Options.ScalarPointers = CEmitterOptions::ScalarPointerSpelling::AliasTypes;
+  ASSERT_TRUE(LLVMCEmitter().emit(*M, OS, Options));
+  auto After = tmpFile("void-argument-after.c");
+  std::ofstream(After) << Source;
+  H << R"(
+static uint64_t get(const void *s,unsigned o) { uint64_t v;memcpy(&v,(const char*)s+o,8);return v; }
+static void put(void *s,unsigned o,uint64_t v,unsigned n) { memcpy((char*)s+o,&v,n); }
+static unsigned calls,gateways,token;
+static uint64_t trace;
+static uint32_t *guest;
+void example_release(int8_t x,void *p) { ++calls;trace=(uint64_t)(int64_t)x ^ (uintptr_t)p;*guest+=(uint32_t)trace; }
+uint64_t gateway(void *s,void *ctx) {
+ (void)ctx;++gateways;
+ uint64_t x=get(s,8),p=get(s,24),off=get(s,40),width=get(s,48),which=get(s,32);
+ if(get(s,56)!=2) { put(s,(unsigned)off,UINT64_C(0x97115243eabcd821),(unsigned)width);*guest+=731;return UINT64_C(0x8000000070000019); }
+ put(s,56,0,8);put(s,8,0,8);put(s,24,0,8);
+ example_release((int8_t)x,(void*)(uintptr_t)p);
+ put(s,(unsigned)off,which==7 ? x:p,(unsigned)width);return 0;
+}
+typedef uint64_t (*run)(void*,void*);
+)";
+  for (const char *Prefix : {"before", "after"}) {
+    H << "static run " << Prefix << "_functions[]={";
+    for (unsigned I = 0; I < Index; ++I)
+      H << (I ? "," : "") << Prefix << I;
+    H << "};\n";
+  }
+  H << R"(
+int main(void) {
+ unsigned fast=0,slow=0;
+ for(unsigned f=0;f<8;f++) for(unsigned k=0;k<512;k++) {
+  unsigned char a[80],b[80];for(unsigned j=0;j<80;j++) a[j]=(unsigned char)(k*7+j*13);
+  unsigned off=k&15;put(a+off,0,UINT64_MAX-(uint64_t)k*0x192ad76f,8);
+  put(a+off,24,(uintptr_t)&token,8);put(a+off,56,(k/16)%4,8);memcpy(b,a,sizeof(a));
+  uint32_t ga=k,gb=k;guest=&ga;calls=gateways=0;trace=0;
+  uint64_t ra=before_functions[f](a+off,&ga),ta=trace;unsigned ca=calls;
+  guest=&gb;calls=gateways=0;trace=0;uint64_t rb=after_functions[f](b+off,&gb);
+  if(ra!=rb || ta!=trace || ca!=calls || ga!=gb || memcmp(a,b,sizeof(a))) return 1;
+  if(gateways) ++slow;else ++fast;
+ }
+ return !(fast && slow);
+})";
+  auto Oracle = tmpFile("void-argument-oracle.c");
+  std::ofstream(Oracle) << Harness;
+  for (const char *Level : {"-O0", "-O2"}) {
+    auto Executable = tmpFile(std::string("void-argument-oracle") + Level +
+                              test::executableSuffix());
+    auto Built = exec(NEVERD_TEST_CLANG,
+                      {"-std=c11", Level, "-fsanitize=undefined",
+                       "-fsanitize-trap=all", Original.string(), After.string(),
+                       Oracle.string(), "-o", Executable.string()});
     ASSERT_TRUE(Built.ok()) << Built.err;
     auto Ran = exec(Executable.string(), {});
     EXPECT_TRUE(Ran.ok()) << Ran.exitCode << " " << Ran.err;

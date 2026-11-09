@@ -21,12 +21,74 @@
 #include "neverd/symbolic/SymExpr.h"
 #include "neverd/symbolic/SymKnownBits.h"
 
+#include "llvm/ADT/STLFunctionalExtras.h"
+
 #include <algorithm>
 #include <cassert>
 #include <limits>
 
 namespace neverd::symbolic {
 namespace {
+
+SymRef joinPackedByteSlices(SymContext &C, llvm::ArrayRef<SymRef> Terms,
+                            const llvm::APInt &Constant) {
+  if (Terms.size() < 2)
+    return {};
+  struct Part {
+    SymRef Value;
+    unsigned Low, Width;
+  };
+  const unsigned Width = Constant.getBitWidth();
+  llvm::SmallVector<Part, 8> Parts;
+  llvm::APInt Occupied(Width, 0);
+  for (auto Term : Terms) {
+    unsigned Low = 0;
+    if (C.op(Term) == SymOp::Shl && C.isConst(C.operand(Term, 1))) {
+      const auto &Shift = C.constValue(C.operand(Term, 1));
+      if (Shift.uge(Width))
+        return {};
+      Low = Shift.getZExtValue();
+      Term = C.operand(Term, 0);
+    } else if (C.op(Term) == SymOp::Mul && C.numOperands(Term) == 2 &&
+               C.isConst(C.operand(Term, 0)) &&
+               C.constValue(C.operand(Term, 0)).isPowerOf2()) {
+      Low = C.constValue(C.operand(Term, 0)).logBase2();
+      Term = C.operand(Term, 1);
+    }
+    if (C.op(Term) != SymOp::ZExt || Low % 8)
+      return {};
+    const auto Value = C.operand(Term, 0);
+    const unsigned Bits = C.width(Value);
+    if (Bits % 8 || Bits > Width - Low)
+      return {};
+    const auto Mask = llvm::APInt::getBitsSet(Width, Low, Low + Bits);
+    if (!(Occupied & Mask).isZero())
+      return {};
+    Occupied |= Mask;
+    Parts.push_back({Value, Low, Bits});
+  }
+  if (!(Constant & Occupied).isZero())
+    return {};
+  std::sort(Parts.begin(), Parts.end(),
+            [](const Part &A, const Part &B) { return A.Low > B.Low; });
+  llvm::SmallVector<SymRef, 8> Slices;
+  unsigned End = Width;
+  for (auto P : Parts) {
+    if (End > P.Low + P.Width)
+      Slices.push_back(C.mkConst(
+          Constant.extractBits(End - P.Low - P.Width, P.Low + P.Width)));
+    Slices.push_back(P.Value);
+    End = P.Low;
+  }
+  if (End)
+    Slices.push_back(C.mkConst(Constant.extractBits(End, 0)));
+  const auto Joined = C.mkConcat(Slices);
+  auto Body = C.op(Joined) == SymOp::ZExt ? C.operand(Joined, 0) : Joined;
+  const auto Remaining = C.op(Body) == SymOp::Concat ? C.numOperands(Body) : 1;
+  // Merely spelling an arbitrary OR as a concatenation is no improvement.
+  // At least two original data parts must have collapsed into one value.
+  return Remaining < Parts.size() ? Joined : SymRef{};
+}
 
 // Keep the zero-filled high bits outside the bitwise operation. Only AND may
 // discard high constant bits; OR and XOR must retain every set constant bit.
@@ -53,6 +115,36 @@ SymRef contractZeroExtensions(SymContext &C, SymOp Op,
   else
     Value = C.mkXor(Narrow);
   return C.mkZExt(Value, Constant.getBitWidth());
+}
+
+SymRef foldSelectedLiterals(
+    SymContext &C, SymRef Value,
+    llvm::function_ref<llvm::APInt(const llvm::APInt &)> Fold) {
+  const auto Op = C.op(Value);
+  const auto Selection =
+      Op == SymOp::SExt || Op == SymOp::ZExt ? C.operand(Value, 0) : Value;
+  if (C.op(Selection) != SymOp::Ite || !C.isConst(C.operand(Selection, 1)) ||
+      !C.isConst(C.operand(Selection, 2)))
+    return {};
+  const auto Condition = C.operand(Selection, 0);
+  const unsigned Width = C.width(Value), Narrow = C.width(Selection);
+  auto Apply = [&](unsigned Arm) {
+    const auto &Literal = C.constValue(C.operand(Selection, Arm));
+    return Fold(Op == SymOp::SExt ? Literal.sext(Width) : Literal.zext(Width));
+  };
+  const llvm::APInt Yes = Apply(1), No = Apply(2);
+  // Keep narrow carriers visible to cheap range/known-bit queries. Folding
+  // literals must not replace a zero extension with a wide opaque selection.
+  if (Narrow < Width && Yes.getActiveBits() <= Narrow &&
+      No.getActiveBits() <= Narrow)
+    return C.mkZExt(C.mkIte(Condition, C.mkConst(Yes.trunc(Narrow)),
+                            C.mkConst(No.trunc(Narrow))),
+                    Width);
+  if (Narrow < Width && Yes.isSignedIntN(Narrow) && No.isSignedIntN(Narrow))
+    return C.mkSExt(C.mkIte(Condition, C.mkConst(Yes.trunc(Narrow)),
+                            C.mkConst(No.trunc(Narrow))),
+                    Width);
+  return C.mkIte(Condition, C.mkConst(Yes), C.mkConst(No));
 }
 
 // A logical right shift observes only [Amount, Width). Remove bitwise terms
@@ -257,6 +349,11 @@ SymRef SymContext::mkAnd(llvm::ArrayRef<SymRef> Ops) {
     return intern(SymOp::And, W, Rest, 0);
   }
 
+  if (Rest.size() == 1)
+    if (auto Folded = foldSelectedLiterals(
+            *this, Rest[0], [&](const llvm::APInt &V) { return V & Acc; }))
+      return Folded;
+
   llvm::SmallVector<SymRef, 8> Final;
   Final.push_back(mkConst(Acc));
   Final.append(Rest.begin(), Rest.end());
@@ -429,6 +526,9 @@ SymRef SymContext::mkOr(llvm::ArrayRef<SymRef> Ops) {
   if (Rest.empty())
     return mkConst(Acc);
 
+  if (auto Joined = joinPackedByteSlices(*this, Rest, Acc))
+    return Joined;
+
   if (auto Narrow = contractZeroExtensions(*this, SymOp::Or, Rest, Acc))
     return Narrow;
 
@@ -442,6 +542,11 @@ SymRef SymContext::mkOr(llvm::ArrayRef<SymRef> Ops) {
       return Rest[0];
     return intern(SymOp::Or, W, Rest, 0);
   }
+
+  if (Rest.size() == 1)
+    if (auto Folded = foldSelectedLiterals(
+            *this, Rest[0], [&](const llvm::APInt &V) { return V | Acc; }))
+      return Folded;
 
   llvm::SmallVector<SymRef, 8> Final;
   Final.push_back(mkConst(Acc));
@@ -616,6 +721,11 @@ SymRef SymContext::mkXor(llvm::ArrayRef<SymRef> Ops) {
     return intern(SymOp::Xor, W, Rest, 0);
   }
 
+  if (Rest.size() == 1)
+    if (auto Folded = foldSelectedLiterals(
+            *this, Rest[0], [&](const llvm::APInt &V) { return V ^ Acc; }))
+      return Folded;
+
   llvm::SmallVector<SymRef, 8> Final;
   Final.push_back(mkConst(Acc));
   Final.append(Rest.begin(), Rest.end());
@@ -628,6 +738,9 @@ SymRef SymContext::mkNot(SymRef A) {
     return mkConst(~constValue(A));
   if (op(A) == SymOp::Not)
     return operand(A, 0);
+  if (auto Folded = foldSelectedLiterals(
+          *this, A, [](const llvm::APInt &V) { return ~V; }))
+    return Folded;
   // ~(k | ~x) == ~k & x, and its AND/OR dual. Keep the captured word
   // intact while exposing the constant observation mask before deep work.
   if ((op(A) == SymOp::Or || op(A) == SymOp::And) && numOperands(A) == 2 &&

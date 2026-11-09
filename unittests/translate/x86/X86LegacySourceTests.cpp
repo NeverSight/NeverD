@@ -1221,43 +1221,40 @@ TEST_P(X86LegacySourceTest,
   EXPECT_EQ(Source, Expected.Source);
   ASSERT_NE(Manifest, nullptr);
   EXPECT_EQ(Manifest, Expected.Manifest);
-  const auto CrossSource = tmpFile("i386.c"), CrossObject = tmpFile("i386.o");
-  std::ofstream(CrossSource) << Expected.Source;
-  std::vector<std::string> CrossArgs{"--target=i386-unknown-linux-gnu",
-                                     "-ffreestanding",
-                                     "-std=c11",
-                                     GetParam() & 1 ? "-O2" : "-O0",
-                                     "-Wall",
-                                     "-Wextra",
-                                     "-Werror",
-                                     "-c",
-                                     CrossSource.string(),
-                                     "-o",
-                                     CrossObject.string()};
-  if (GetParam() & 2) {
-    const auto *LLC = std::getenv("NEVERD_TEST_NEVERC_LLC");
-    ASSERT_TRUE(LLC && *LLC) << "NEVERD_TEST_NEVERC_LLC must select the full "
-                                "NeverSight LLVM backend "
-                                "for NeverC i386 object generation";
-    CrossArgs.push_back(std::string("-fllvm-backend=") + LLC);
-  }
-  const auto Cross = exec(Compiler, CrossArgs);
-  ASSERT_TRUE(Cross.ok()) << Cross.err;
-  const auto Object = readSourceArtifact(CrossObject);
-  ASSERT_GE(Object.size(), 20u);
-  EXPECT_EQ(Object.substr(0, 4), std::string("\x7f"
-                                             "ELF",
-                                             4));
-  EXPECT_EQ(Object[4], 1);  // ELFCLASS32.
-  EXPECT_EQ(Object[18], 3); // EM_386, not the executing host's x64 ABI.
-  if (const auto *Artifacts =
-          std::getenv("NEVERD_ISA_REGRESSION_ARTIFACT_DIR")) {
-    fs::create_directories(Artifacts);
-    const auto Name = "i386-route-" + std::to_string(GetParam());
-    fs::copy_file(CrossSource, fs::path(Artifacts) / (Name + ".c"),
-                  fs::copy_options::overwrite_existing);
-    fs::copy_file(CrossObject, fs::path(Artifacts) / (Name + ".o"),
-                  fs::copy_options::overwrite_existing);
+  // Clang separately qualifies the legacy object ABI. NeverC compiles the
+  // portable dispatcher for the supported 64-bit host below.
+  if (!(GetParam() & 2)) {
+    const auto CrossSource = tmpFile("i386.c"), CrossObject = tmpFile("i386.o");
+    std::ofstream(CrossSource) << Expected.Source;
+    std::vector<std::string> CrossArgs{"--target=i386-unknown-linux-gnu",
+                                       "-ffreestanding",
+                                       "-std=c11",
+                                       GetParam() & 1 ? "-O2" : "-O0",
+                                       "-Wall",
+                                       "-Wextra",
+                                       "-Werror",
+                                       "-c",
+                                       CrossSource.string(),
+                                       "-o",
+                                       CrossObject.string()};
+    const auto Cross = exec(Compiler, CrossArgs);
+    ASSERT_TRUE(Cross.ok()) << Cross.err;
+    const auto Object = readSourceArtifact(CrossObject);
+    ASSERT_GE(Object.size(), 20u);
+    EXPECT_EQ(Object.substr(0, 4), std::string("\x7f"
+                                               "ELF",
+                                               4));
+    EXPECT_EQ(Object[4], 1);  // ELFCLASS32.
+    EXPECT_EQ(Object[18], 3); // EM_386, not the executing host's x64 ABI.
+    if (const auto *Artifacts =
+            std::getenv("NEVERD_ISA_REGRESSION_ARTIFACT_DIR")) {
+      fs::create_directories(Artifacts);
+      const auto Name = "i386-route-" + std::to_string(GetParam());
+      fs::copy_file(CrossSource, fs::path(Artifacts) / (Name + ".c"),
+                    fs::copy_options::overwrite_existing);
+      fs::copy_file(CrossObject, fs::path(Artifacts) / (Name + ".o"),
+                    fs::copy_options::overwrite_existing);
+    }
   }
   std::vector<std::string> Args{"decompile", Input.string(),
                                 "--x86-legacy-source=" + Settings.string(),
