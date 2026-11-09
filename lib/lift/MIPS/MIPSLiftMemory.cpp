@@ -16,7 +16,8 @@
 
 namespace neverd {
 
-bool MIPSLifter::liftMemory(State &S, uint32_t Word) const {
+bool MIPSLifter::liftMemory(State &S, uint32_t Word,
+                            std::optional<NdVar> BaseOverride) const {
   const unsigned Opcode = Word >> 26;
   if (const auto Load = mips::mergeLoadOpcode(Opcode)) {
     if (Load->Bytes > S.Width)
@@ -24,8 +25,9 @@ bool MIPSLifter::liftMemory(State &S, uint32_t Word) const {
     const unsigned Base = (Word >> 21) & 31;
     const unsigned Register = (Word >> 16) & 31;
     const auto Displacement = uint64_t(int64_t(int16_t(Word)));
-    const NdVar Address = S.binary(NdOp::INT_ADD, S.read(Base),
-                                   NdVar::cst(Displacement, S.Width));
+    const NdVar Address =
+        S.binary(NdOp::INT_ADD, BaseOverride ? *BaseOverride : S.read(Base),
+                 NdVar::cst(Displacement, S.Width));
     const NdVar Old = S.read(Register);
     NdVar Result = S.makeTemp(Load->Bytes);
     S.emitIntrinsic(Load->Id, Result, {Address, S.resize(Old, Load->Bytes)});
@@ -95,7 +97,8 @@ bool MIPSLifter::liftMemory(State &S, uint32_t Word) const {
   const unsigned Register = (Word >> 16) & 31;
   const auto Displacement = uint64_t(int64_t(int16_t(Word)));
   const NdVar Address =
-      S.binary(NdOp::INT_ADD, S.read(Base), NdVar::cst(Displacement, S.Width));
+      S.binary(NdOp::INT_ADD, BaseOverride ? *BaseOverride : S.read(Base),
+               NdVar::cst(Displacement, S.Width));
   if (Bytes > 1)
     S.emitIntrinsic(Intrinsic::RequireAligned, {},
                     {S.resize(Address, 8), NdVar::scalar(Bytes, 8)});

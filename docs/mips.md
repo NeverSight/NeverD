@@ -99,11 +99,12 @@ The [Ghidra MIPS definitions at e45e5a62](https://github.com/NationalSecurityAge
 were a cross-check; the LowIR implementation and independent expectations are
 owned here. Decoder recognition alone does not qualify instruction semantics.
 
-## Classic MIPS32 DSP state and packed bytes
+## Classic MIPS32 DSP state and packed arithmetic
 
 The initial DSP slice admits classic MIPS32r2/o32 ELF in either byte order when
 `.MIPS.abiflags` declares the DSP ASE. It supports `RDDSP`, `WRDSP`, `ADDU.QB`,
-`ADDU_S.QB`, `SUBU.QB` and `SUBU_S.QB`. Decoder reuse consumes the current
+`ADDU_S.QB`, `SUBU.QB`, `SUBU_S.QB`, `ADDQ.PH`, `ADDQ_S.PH`,
+`SUBQ.PH` and `SUBQ_S.PH`. Decoder reuse consumes the current
 image's feature evidence; Capstone recognizing an encoding without that
 evidence does not authorize its lift. DSPR2, DSP64, microMIPS DSP, accumulators and other DSP instructions remain
 unsupported.
@@ -112,7 +113,11 @@ The ten-bit control selector selects six field groups; its upper four bits are
 ignored. Partial writes preserve unselected fields, and packed byte additions
 and subtractions set the sticky overflow flag even when the destination is
 `$zero`. Saturated addition clamps each overflowing lane to 255; saturated
-subtraction clamps each underflowing lane to zero. Full writes
+subtraction clamps each underflowing lane to zero. Signed halfword operations
+use two independent Q15 lanes: ordinary results wrap to 16 bits, and saturated
+results clamp to [-32768, 32767]. Any lane overflow sets DSPControl bit 20
+without clearing an existing flag, including when the destination is `$zero`.
+Full writes
 can initialize an absent concrete DSPControl value; reads and partial updates
 never invent its initial state. Selector and encoding tables live in `.def`
 files and are shared by the owning semantics.
@@ -201,33 +206,44 @@ register transfers carry a separate MIPS16 target-bit contract even when the
 source instruction is classic MIPS. Serialized callables retain bit zero;
 ordinary data pointers do not acquire a code tag.
 
-The first scalar set is `LI`, `ADDIU`, `ADJSP`, `CMPI`, `SLTI`/`SLTIU`,
-`ADDU`/`SUBU`, `AND`/`OR`/`XOR`/`NOT`, and the full-GPR-destination,
-compact-source `MOVE` encoding. `EXTEND` and its suffix form one four-byte
-instruction, in either byte order, including at addresses two modulo four.
-Unsigned LI/CMPI and the instruction-specific short/extended signed immediates
-remain distinct. `MIPS16Integer.def` owns scalar opcode descriptions.
+The scalar set is `LI`, `ADDIU`, `ADJSP`, `CMPI`, `SLTI`/`SLTIU`,
+`ADDU`/`SUBU`, `AND`/`OR`/`XOR`/`NOT`, and both compact/full-GPR `MOVE`
+directions. Ordinary `LB`/`LBU`/`LH`/`LHU`/`LW` and `SB`/`SH`/`SW`,
+SP-relative word loads/stores, and the RA stack store reuse the classic memory
+semantics. Short memory offsets are unsigned and scaled by access width;
+extended offsets are signed, unscaled 16-bit values. `EXTEND` and its suffix
+form one four-byte instruction, including at addresses two modulo four.
+`MIPS16Integer.def` owns the scalar and memory encoding descriptions.
 
-`B`, `BEQZ`/`BNEZ`, `BTEQZ`/`BTNEZ`, and `JRC ra` have no delay slot.
-An unconditional B has one successor, so skipped data is not decoded as a
-fallthrough path. `JR ra` and `JR compact-GPR` require one two-byte,
-non-extended, non-control slot. An EXTEND suffix or a slot cannot silently
-change the image's locally established instruction mode. SDK listings still
-show physical instructions, separately from the delayed execution unit.
+PC/SP-relative `ADDIU` and PC-relative `LW` are supported. PC-relative operations
+clear the base PC's low two bits before adding the offset; they never align the
+sum. In a delay slot the base is the transfer head's first halfword, while the
+LowIR operation keeps the slot's own address. Memory checks, sign extension and
+base/destination overlap remain owned by the shared MIPS memory lifter.
+
+`B`, `BEQZ`/`BNEZ`, `BTEQZ`/`BTNEZ`, `JRC` and `JALRC` have no delay slot.
+An unconditional B has one successor. `JR` and `JALR` require one two-byte,
+non-extended, non-control slot. `JAL`/`JALX` have a four-byte head and the same
+two-byte slot; their link is the tagged head address plus six. JALR/JALRC links
+advance by four/two, respectively. Indirect targets are captured before link
+and slot writes. JALX selects classic MIPS at its destination. Local mode
+evidence must agree across the whole head/slot unit, including during function
+discovery. SDK listings continue to show physical instructions separately.
 
 HighC and LLVMC retain `mips16,nomicromips` attributes. Source returns require
-the same captured-entry-RA proof as microMIPS, with or without an image.
-Numeric compressed-code pointers remain unqualified. The source test uses
-Clang assembly output plus GNU MIPS as/ld, with adverse `-mmicromips` compiler
-defaults, and verifies ELF flags and symbol tags before executing the rebuilt
-function. The GNU assembler's [`.insn` directive](https://sourceware.org/binutils/docs-2.29/as/MIPS-insn.html)
+the captured-entry-RA proof shared with microMIPS. A call may preserve the entry
+link in a callee-saved GPR and restore it before return; a caller-saved register,
+an overwritten save or an unproved stack restore across a call is refused.
+Direct calls also require image evidence for the destination mode. Numeric
+compressed-code pointers remain unqualified. Source tests use Clang assembly
+output plus GNU MIPS as/ld, with adverse `-mmicromips` compiler defaults, and
+verify ELF flags, symbol tags, memory, saved registers and actual callee entry.
+The GNU assembler's [`.insn` directive](https://sourceware.org/binutils/docs-2.29/as/MIPS-insn.html)
 marks literal instruction fixtures so their symbols retain the code mode.
 
-Other MOVE forms, ordinary/PC-relative memory accesses, shifts, calls,
-SAVE/RESTORE, HI/LO operations, MIPS16e2 and MIPS16 on MIPS64 remain unsupported.
-Several of these still need Capstone decoder corrections before lift admission;
-no NeverD path treats a misdecoded operand or unknown instruction as valid
-semantics. The immediate, slot and register rules follow
+Shifts, SAVE/RESTORE, HI/LO operations, MIPS16e2 and MIPS16 on MIPS64 remain
+unsupported. No path treats a misdecoded operand or unknown instruction as
+valid semantics. The immediate, memory, call and slot rules follow
 [MIPS16e Volume IV-a, revision 2.63](https://jnastarot.io/arch_index/pdf/MD00076-2B-MIPS1632-AFP-02.63.pdf)
 and were cross-checked against the pinned Ghidra definitions linked above.
 
@@ -240,13 +256,16 @@ feature evidence; architecture-only initialization remains Release 2 without
 MSA. Other revisions, MSA64, microMIPS/MSA and DSP/MSA combinations are refused.
 
 `FILL.W`, `INSERT.W`, `COPY_S.W`, all four B/H/W/D formats of `ADDV` and
-`SUBV`, `CEQ`, `CLT_S`/`CLT_U`, `CLE_S`/`CLE_U`, and
+`SUBV`, `CEQ`, `CLT_S`/`CLT_U`, `CLE_S`/`CLE_U`, `MIN_S`/`MIN_U`,
+`MAX_S`/`MAX_U`, and
 `AND.V`/`OR.V`/`NOR.V`/`XOR.V` use exact encoding descriptors in
 `MIPSMSA.def`. The 32 W registers are 128-bit containers. Lane zero occupies
 the low bits in both byte orders; addition and subtraction wrap independently
 within each 8/16/32/64-bit lane. Integer comparisons set every bit of a true
 lane to one and every bit of a false lane to zero; signed and unsigned ordering
-have separate rules. Logical operations consume all 128 bits.
+have separate rules. Min/max selects the complete winning lane using the same
+signed/unsigned ordering, including 64-bit extrema. Logical operations consume
+all 128 bits.
 Inputs are captured before an overlapping destination is written. F registers
 share the low 64 bits of their corresponding W register.
 Scalar floating instructions remain unsupported: their future implementation
@@ -268,11 +287,24 @@ work. Both C paths use Clang's bit-precise integer support for any surviving
 The execution contract requires MSA enabled with CU1/FR configured. It does not
 model disabled-MSA exceptions, MSA floating point/control state or arbitrary
 MSA guest execution. The operation and alias rules follow the MIPS32 MSA manual
-(MD00866, revision 1.12), sections ADDV, SUBV, CEQ, CLT/CLE, AND/OR/NOR/XOR,
+(MD00866, revision 1.12), sections ADDV, SUBV, CEQ, CLT/CLE, MIN/MAX, AND/OR/NOR/XOR,
 COPY_S, FILL and INSERT. Owned execution
 fixtures validate scalar results, output bytes and the ABI-preserved low FPR
 views against an enabled P5600 reference; no unimplemented W-register API is
 used as an oracle.
+
+## Ordinary memory source qualification
+
+LowIR preserves ordinary load/store checks and fault order, including dead load
+results and loads in delay slots. HighC/LLVM/LLVMC equivalence for ordinary RAM
+accesses is qualified only when every original access is valid, within accessible
+storage, and aligned as required by the target. This does not cover MMIO or
+architectural memory-fault delivery. Ordinary C dereferences and existing
+MedIR/compiler dead-code elimination can remove an unused load: an unmapped
+`LBU v0,0(a0); LI v0,1; JRC ra` faults in the original and LowIR, while generated
+C may return 1. The same limitation applies to classic MIPS. This is an open
+source-effect contract limitation, not a passing fault-equivalence case; the
+explicit merge-load intrinsics have their separately tested effect contract.
 
 ## Tests
 

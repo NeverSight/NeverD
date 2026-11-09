@@ -83,6 +83,12 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
   default:
     break;
   }
+  const bool Minimum = *Kind == Instruction::SignedMinimumVector ||
+                       *Kind == Instruction::UnsignedMinimumVector;
+  const bool Maximum = *Kind == Instruction::SignedMaximumVector ||
+                       *Kind == Instruction::UnsignedMaximumVector;
+  const bool SignedExtremum = *Kind == Instruction::SignedMinimumVector ||
+                              *Kind == Instruction::SignedMaximumVector;
   const uint16_t Bytes =
       *Kind == Instruction::FillWord || *Kind == Instruction::InsertWord
           ? 4
@@ -93,7 +99,14 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
       Values[I] = S.read(WS);
     else if (*Kind == Instruction::InsertWord)
       Values[I] = I == Index ? S.read(WS) : Lane(WD, I);
-    else if (Comparison) {
+    else if (Minimum || Maximum) {
+      const auto A = Lane(WS, I, Bytes), B = Lane(WT, I, Bytes);
+      const auto Condition =
+          S.binary(SignedExtremum ? NdOp::INT_SLESS : NdOp::INT_LESS, A, B, 1);
+      Values[I] = S.makeTemp(Bytes);
+      S.emit(NdOp::SELECT, Values[I],
+             {Condition, Minimum ? A : B, Minimum ? B : A});
+    } else if (Comparison) {
       const auto Condition =
           S.binary(*Comparison, Lane(WS, I, Bytes), Lane(WT, I, Bytes), 1);
       // Comparisons replicate their predicate across every bit of the lane.

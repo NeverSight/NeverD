@@ -150,19 +150,31 @@ TEST_P(MIPS16Integer,
     }
 }
 
-TEST_P(MIPS16Integer, DecoderAcceptanceDoesNotAdmitUnqualifiedSemantics) {
+TEST_P(MIPS16Integer, FullSourceMoveCoversAllRegistersAndTheZeroInput) {
   Decoder Decode;
   ASSERT_TRUE(Decode.init(GetParam(), InstructionMode::MIPS16));
-  // PC-relative LW and the other MOVE form need separate decoder/PC contracts.
-  for (uint16_t Half : {0xb200, 0x6744}) {
-    const auto Code = bytes(Half, 0, 2, GetParam());
-    DecodedInsn Insn;
-    ASSERT_EQ(Decode.decodeOneForLift(Code.data(), Code.size(), 0x1000, Insn),
-              2);
-    std::vector<LowOp> Ops;
-    EXPECT_THROW(Decode.liftToLow(Insn, Ops), UnliftedInstruction);
-    EXPECT_TRUE(Ops.empty());
-  }
+  BinaryImage Image;
+  Image.Arch = GetParam();
+  Image.Bits = Bitness::Bits32;
+  for (unsigned Source = 0; Source != 32; ++Source)
+    for (unsigned Destination = 0; Destination != 8; ++Destination) {
+      const auto Code =
+          bytes(0x6700 | (Destination << 5) | Source, 0, 2, GetParam());
+      DecodedInsn Insn;
+      ASSERT_EQ(Decode.decodeOneForLift(Code.data(), Code.size(), 0x1000, Insn),
+                2);
+      std::vector<LowOp> Ops;
+      Decode.liftToLow(Insn, Ops);
+      NdOpEmulator Emulator(Image);
+      Emulator.setStrictMode(true);
+      if (Source)
+        Emulator.setRegister(mipsreg::r(Source), 0xa5000000 + Source);
+      for (const auto &Op : Ops)
+        ASSERT_TRUE(Emulator.step(Op));
+      EXPECT_EQ(Emulator.getRegister(mipsreg::r(
+                    Destination < 2 ? Destination + 16 : Destination)),
+                Source ? 0xa5000000 + Source : 0u);
+    }
 }
 
 TEST_P(MIPS16Integer, ScalarsMatchPinned24KfExecution) {
