@@ -380,5 +380,285 @@
         }
       ]
     }
+  },
+  "startup_comparison": {
+    "source_revision": "3611d5122f8c7544723bcb6e50def0fbcfb8c52f",
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42646758724",
+    "interpretation": "Both four-key PAC probes and all dlopen compact/DWARF O0/O2 compiler-original controls passed. Both startup probes stopped at the first compiler-original O0 compact control with SIGTRAP. This is a failed startup prerequisite, not a NeverD-rewritten executable.",
+    "runners": {
+      "macos-26": {
+        "dlopen": {
+          "status": "passed",
+          "control_loading": "dlopen",
+          "native_pac_qualified": true,
+          "compiler_original_call_unwind_qualified": true,
+          "compiler_original_startup_qualified": false,
+          "whole_image_publication_qualified": false,
+          "report_sha256": "44086a3c31d702f4df2d6b0ca0e5502e093df7c7cc580f74d4ab3eee71048a91",
+          "owned_executables_removed": true,
+          "controls": [
+            {
+              "label": "pac-O0",
+              "sha256": "3bdd49f65aeb252e1e774dac0d03120ca2f89e92f2f3f36d270121d5cc6f92c0",
+              "cpu_subtype": 2164260866,
+              "returncode": 0,
+              "status": "passed"
+            },
+            {
+              "label": "pac-O2",
+              "sha256": "fadcb5cd555a02592c40e6bc06f45256eb0ac4394279003b4570a83458bd70d2",
+              "cpu_subtype": 2164260866,
+              "returncode": 0,
+              "status": "passed"
+            },
+            {
+              "label": "original-O0-dwarf-False",
+              "sha256": "a8c125cc966faa537c0cf7307fc8a9729e2dd7cd72fff5a89847be5f47da5327",
+              "cpu_subtype": 2147483650,
+              "returncode": 0,
+              "status": "passed"
+            },
+            {
+              "label": "original-O0-dwarf-True",
+              "sha256": "9e37a4c68c2ec3839511769e70049171f0cd4e23b794f7fcad0268be56967ca2",
+              "cpu_subtype": 2147483650,
+              "returncode": 0,
+              "status": "passed"
+            },
+            {
+              "label": "original-O2-dwarf-False",
+              "sha256": "f767ae4bfdb1fe62be6ee4a3308214d97f9066b2aa355034edf5e04cd4ac9aad",
+              "cpu_subtype": 2147483650,
+              "returncode": 0,
+              "status": "passed"
+            },
+            {
+              "label": "original-O2-dwarf-True",
+              "sha256": "594801b56cf88555bab42f2f811a4d553f459e682094f38a32331e7b74783f0f",
+              "cpu_subtype": 2147483650,
+              "returncode": 0,
+              "status": "passed"
+            }
+          ]
+        },
+        "startup": {
+          "status": "failed",
+          "control_loading": "exec",
+          "native_pac_qualified": true,
+          "compiler_original_call_unwind_qualified": false,
+          "compiler_original_startup_qualified": false,
+          "whole_image_publication_qualified": false,
+          "report_sha256": "0ef0e1c03adb65ccd0e2f9653eec821eec6a6e7ee68442b8ecd5cd11d0ab80ab",
+          "owned_executables_removed": true,
+          "controls": [
+            {
+              "label": "pac-O0",
+              "sha256": "305bc51c6ac62d276c72003da9dc4f803b0d8f7c52b954e3860f5d15cdbfe13b",
+              "cpu_subtype": 2164260866,
+              "returncode": 0,
+              "status": "passed"
+            },
+            {
+              "label": "pac-O2",
+              "sha256": "fadcb5cd555a02592c40e6bc06f45256eb0ac4394279003b4570a83458bd70d2",
+              "cpu_subtype": 2164260866,
+              "returncode": 0,
+              "status": "passed"
+            },
+            {
+              "label": "original-O0-dwarf-False",
+              "sha256": "5c212f1243a78048fa2e0812dc4924b027be9e74ed029171e58455ad7e9bc207",
+              "cpu_subtype": 2164260866,
+              "returncode": -5,
+              "status": "failed"
+            }
+          ]
+        }
+      },
+      "xcode-27": {
+        "dlopen": {
+          "status": "passed",
+          "control_loading": "dlopen",
+          "native_pac_qualified": true,
+          "compiler_original_call_unwind_qualified": true,
+          "compiler_original_startup_qualified": false,
+          "whole_image_publication_qualified": false,
+          "report_sha256": "02e36347dd8f9ac3d53d9172d182b1c11a7aa878f09f9fbf52d1f9d543d9d3e7",
+          "owned_executables_removed": true,
+          "controls": [
+            {
+              "label": "pac-O0",
+              "sha256": "88836bc0cf364293396ab4ea93b363c82164df412c2e7e181d7f0fb8c77a65b9",
+              "cpu_subtype": 2164260866,
+              "returncode": 0,
+              "status": "passed"
+            },
+            {
+              "label": "pac-O2",
+              "sha256": "3321f489a402151af5987296f7fab0f63e12fa31c7aa51224801a22b973b790e",
+              "cpu_subtype": 2164260866,
+              "returncode": 0,
+              "status": "passed"
+            },
+            {
+              "label": "original-O0-dwarf-False",
+              "sha256": "684735346060a3aa57448b8c704cbce844db90f38a8563c0b106a43e12563c51",
+              "cpu_subtype": 2147483650,
+              "returncode": 0,
+              "status": "passed"
+            },
+            {
+              "label": "original-O0-dwarf-True",
+              "sha256": "b256f96ed0ddd7c43032cbdb103ef82ad94fe2abc94346c78961d266eac77644",
+              "cpu_subtype": 2147483650,
+              "returncode": 0,
+              "status": "passed"
+            },
+            {
+              "label": "original-O2-dwarf-False",
+              "sha256": "e22fb90180bfc186335aded9e5d7d5a86beef5983abb8fd61b1f3c6c3bded9be",
+              "cpu_subtype": 2147483650,
+              "returncode": 0,
+              "status": "passed"
+            },
+            {
+              "label": "original-O2-dwarf-True",
+              "sha256": "01c1c658b77c5480594ecde36ea13d3f4a302e293970883a1e14ef75e7c1f8a6",
+              "cpu_subtype": 2147483650,
+              "returncode": 0,
+              "status": "passed"
+            }
+          ]
+        },
+        "startup": {
+          "status": "failed",
+          "control_loading": "exec",
+          "native_pac_qualified": true,
+          "compiler_original_call_unwind_qualified": false,
+          "compiler_original_startup_qualified": false,
+          "whole_image_publication_qualified": false,
+          "report_sha256": "a486d4efde7e9d4b165a216f7d56c0e70fcd06a3bd6b8451eb9027171cec61d2",
+          "owned_executables_removed": true,
+          "controls": [
+            {
+              "label": "pac-O0",
+              "sha256": "369876c451457bd01ee973e45462e23002dd299226561679e4ce4a59a37b1849",
+              "cpu_subtype": 2164260866,
+              "returncode": 0,
+              "status": "passed"
+            },
+            {
+              "label": "pac-O2",
+              "sha256": "3321f489a402151af5987296f7fab0f63e12fa31c7aa51224801a22b973b790e",
+              "cpu_subtype": 2164260866,
+              "returncode": 0,
+              "status": "passed"
+            },
+            {
+              "label": "original-O0-dwarf-False",
+              "sha256": "3753248835368e1d388bb41da35f81dfd5b62d3daeea75db8ed09c2fd1a606cb",
+              "cpu_subtype": 2164260866,
+              "returncode": -5,
+              "status": "failed"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "cold_source_build_qualification": {
+    "source_revision": "1effda391527a2235e2f4fe907ea1bd67ad7f053",
+    "environment_revision": "6e3a306c5954ee1fdf96b76386bd9c3f412848de",
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42641592355",
+    "build_type": "Release",
+    "llvm_package": "neverd-llvm-v23.0.0-r6",
+    "runners": {
+      "macos-26": {
+        "build_compiler": "AppleClang 21.0.0.21000101",
+        "passed": 12,
+        "failed": 0,
+        "skipped": 0,
+        "owned_build_removed": true,
+        "test_binary_sha256": "70fde357ef7891bb34ae9ac3fb2a78ea353ac2a8f1ea88730628db7fd81c3a7d",
+        "report_sha256": {
+          "environment": "fefc85519de79e201eb2d26f99696f88d5dc250937aaf9e76e1d37f848ca965e",
+          "probe": "9e2905ac682c4e047432ce1c59be978f4a7182c9ddbf0fe2ba83e9d4d388c728",
+          "installation": "46aa8c3f24234e32c924e0735fbb77c288000aa692457c1d70f01fdb63f010cd",
+          "runtime_xml": "e9aa779358bd5a4f713e2945b3c41870943b6a36bbd4daf4242ad87a6ecdea1e",
+          "cmake_cache": "6e53f056a0ae3599b848c219d285792e17507185a38a12cba19bb02b7396dc86",
+          "build_log": "41350e990e3f58e7a07e912d4e2f3754debe0b617cf50f72ba52ac5969c2b259"
+        },
+        "stages": [
+          {
+            "name": "preflight",
+            "returncode": 0
+          },
+          {
+            "name": "build-tools",
+            "returncode": 0
+          },
+          {
+            "name": "dependencies",
+            "returncode": 0
+          },
+          {
+            "name": "configure",
+            "returncode": 0
+          },
+          {
+            "name": "build",
+            "returncode": 0
+          },
+          {
+            "name": "installation",
+            "returncode": 0
+          }
+        ]
+      },
+      "xcode-27": {
+        "build_compiler": "AppleClang 21.0.0.21000334",
+        "passed": 12,
+        "failed": 0,
+        "skipped": 0,
+        "owned_build_removed": true,
+        "test_binary_sha256": "5ebde11d8b38e9568a5b01c5fb2377af307318871f07293bdc9bf44a76841be6",
+        "report_sha256": {
+          "environment": "61524c88a9ac354d0b3fdd908ee6f533a368772e8350fc00809e86a49e7e7a4a",
+          "probe": "079f33b1c78cf80cd8895560dbccd9f5b6ebf26221cda110be5400acc2b89049",
+          "installation": "991f34ed1a71b45b76b931f5720482638d5f08b5650c930efc6613b214c62cfa",
+          "runtime_xml": "f5735ecbd07e0463353a5019d92fa076204ce6164d2807148487a1bca8b2a834",
+          "cmake_cache": "4335ac818c442a79d8b5f4e7b3a7a0803d89a85b9a2c8a13991806272a6667cc",
+          "build_log": "d03cf46bac0ae2bd6cd764d0f1f37e275068b73a174b3c64e6849e5610170e0e"
+        },
+        "stages": [
+          {
+            "name": "preflight",
+            "returncode": 0
+          },
+          {
+            "name": "build-tools",
+            "returncode": 0
+          },
+          {
+            "name": "dependencies",
+            "returncode": 0
+          },
+          {
+            "name": "configure",
+            "returncode": 0
+          },
+          {
+            "name": "build",
+            "returncode": 0
+          },
+          {
+            "name": "installation",
+            "returncode": 0
+          }
+        ]
+      }
+    },
+    "environment_pr": "https://github.com/gmh5225/test_mac_intel/pull/5",
+    "environment_merge_revision": "69c0b250cb70aec6af314a1b31273a6f8790c4d4"
   }
 }
