@@ -23232,9 +23232,12 @@ aliased complete vectors. The DSP/MSA source runners compare originals and both
 regenerated C routes under the pinned enabled 74Kf/P5600 models, including
 DSPControl and saved low FPR views. The pinned reference fixes MSA signed-limit
 construction and absolute `INT64_MIN` magnitudes, with QEMU's required wrapping
-arithmetic enabled in CMake builds. Original and regenerated execution must
-match all independent results; reports identify the source revision and actual
-loaded native-library hash. Ordinary pair padding, predecessor memory barriers,
+arithmetic enabled in CMake builds. All regenerated execution and the newly
+added original-instruction fixtures must match independent results. The
+existing DSP zero-destination reference defect remains explicitly recorded;
+see the [DSP reference boundary](mips.md#classic-mips32-dsp-state-and-packed-arithmetic).
+Reports identify the source revision and actual loaded native-library hash.
+Ordinary pair padding, predecessor memory barriers,
 single-sided barriers at joins, depth/work exhaustion and non-entry analysis
 roots or exceptional/disconnected paths have separate call-recovery regressions.
 
