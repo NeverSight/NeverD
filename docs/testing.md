@@ -865,6 +865,15 @@ not use a floating C return as the oracle, because that return can itself
 quiet a signaling NaN. Unmasked exception delivery and arbitrary stack-tag
 state are separate coverage.
 
+`MedTypePass.StackTopResultsAreNotRegisterRestores` distinguishes computed,
+partial and disjoint stack writes from unchanged saves on i386/x64, within a
+block and across predecessors. `I386CallContract.X87StoredBitsReturnThroughTheIntegerRegister`
+and `Win64CallContract.StackTransportedIntegerWinsOverAScratchFloat` cover
+COFF/ELF/Mach-O, HighC/LLVMC and default/NoOpt. On Linux x86 they compare both
+C routes at O0/O2 under UBSan with original i386/x64 instructions. Results
+are observed through integer registers, including raw x87-converted NaN bits;
+an unused floating temporary must not determine the source return type.
+
 `NeverDLocalTypesDebugContextTests` also checks recursive callback borrows and
 portable parameter qualifiers. Its recursive-record case checks that both
 self references and mutual references release their ownership, including

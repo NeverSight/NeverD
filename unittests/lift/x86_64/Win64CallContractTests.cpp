@@ -1171,6 +1171,92 @@ PipelineResult run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   return Result;
 }
 
+TEST(Win64CallContract, StackTransportedIntegerWinsOverAScratchFloat) {
+  for (BinaryFormat Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+    const bool Windows = Format == BinaryFormat::COFF;
+    // Save the integer argument, compute an unused double in XMM0, then
+    // return the saved integer through RAX. POP is not a register restore.
+    const std::vector<uint8_t> Code = {
+        uint8_t(Windows ? 0x51 : 0x57), 0xf2, 0x48, 0x0f, 0x2a,
+        uint8_t(Windows ? 0xc1 : 0xc7), 0x58, 0xc3};
+    auto Image = makeImage(Code, {{Text, "wrap"}}, {});
+    Image.Format = Format;
+    for (bool LLVM : {false, true})
+      for (bool NoOpt : {false, true}) {
+        SCOPED_TRACE(testing::Message()
+                     << unsigned(Format) << ':' << LLVM << ':' << NoOpt);
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.EmitDumpOutput = false;
+        Options.OnlyFunctionEntries = {Text};
+        Options.SourceProjection = true;
+        Options.LiftMode = LLVM;
+        Options.NoOpt = NoOpt;
+        auto Result = Pipeline().run(Image, Context, Options);
+        ASSERT_TRUE(Result.Success) << Result.Error;
+        ASSERT_EQ(Result.MedFuncs.size(), 1u);
+        ASSERT_TRUE(Result.MedFuncs.front().ReturnType);
+        ASSERT_EQ(Result.MedFuncs.front().ReturnType->Kind, NdTypeKind::Int);
+        EXPECT_EQ(Result.MedFuncs.front().ReturnType->Size, 8u);
+        CEmitterOptions COptions;
+        COptions.TheArch = Image.Arch;
+        COptions.Format = Format;
+        COptions.Image = &Image;
+        std::string Source;
+        llvm::raw_string_ostream Out(Source);
+        if (LLVM) {
+          ASSERT_TRUE(Result.LlvmModule);
+          ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+          ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Out, COptions));
+        } else
+          ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, COptions));
+        EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+#if defined(__linux__) && defined(__x86_64__)
+        std::string Oracle;
+        llvm::raw_string_ostream Native(Oracle);
+        Native << R"(
+#include <string.h>
+#include <sys/mman.h>
+int main(void) {
+  static const int64_t inputs[] = {
+    0, 1, -1, INT32_MIN, INT32_MAX, INT64_MIN, INT64_MAX,
+    0x123456789abcdef, -0x123456789abcdef
+  };
+  static const uint8_t original[] = {)";
+        for (uint8_t Byte : Code)
+          Native << unsigned(Byte) << ',';
+        Native << R"(};
+  uint8_t *mapping = mmap(0, sizeof(original) + 16,
+                          PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mapping == MAP_FAILED) return 1;
+  uint8_t *code = mapping + 16;
+  memcpy(code, original, sizeof(original));
+  int failed = 0;
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(*inputs); ++i) {
+    int64_t expected = ((int64_t ()";
+        if (Windows)
+          Native << "__attribute__((ms_abi)) ";
+        Native << R"(*)(int64_t))code)(inputs[i]);
+    int64_t actual = wrap(inputs[i]);
+    failed |= actual != expected;
+  }
+  return munmap(mapping, sizeof(original) + 16) != 0 || failed;
+}
+)";
+        for (llvm::StringRef Level : {"-O0", "-O2"})
+          source_call_execution_test::compileAndRun(
+              "#define _GNU_SOURCE\n" + Source + Oracle,
+              {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+#else
+        RecordProperty("native_x64_integer_return_execution",
+                       "requires Linux x86-64");
+#endif
+      }
+  }
+}
+
 TEST(Win64CallContract, ImmutableNoReturnSlotsEndBothSourcePaths) {
   constexpr va_t Target = Text + 0x80;
   for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
