@@ -1923,6 +1923,10 @@ private:
     /// table (jmptab).  The emitter dispatches on IndexReg (the real switch
     /// variable that indexes idxtab), not on the intermediate table index.
     bool TwoLevelIndex = false;
+    /// The index run (idxtab) of a two-level dispatch, set with TwoLevelIndex.
+    /// Proof-state comparison need not compare it: the outer load role's base
+    /// and width and the ExplicitTargets count determine it.
+    std::optional<JumpTableStorageRange> TwoLevelIndexRange;
     /// Byte distance between the two merged tables (entries(lo) * EntrySize).
     uint32_t TwoTableOffset = 0;
     /// Whether the higher table is selected by the positive (M / SELECT-true)

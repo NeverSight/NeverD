@@ -3587,6 +3587,16 @@ selector before an unsigned 32-bit check and dispatches through an RVA table its
 unwind range covers: every case lists as an instruction, the dispatch says
 `switch jump` and each table slot is an `rva` entry for its case. An obfuscated
 constant branch keeps its skipped junk byte as `db 0E9h` and its target as code.
+MSVC's CRT character classifier, a two-level switch whose 33-byte index table
+selects slots of an RVA table, lists its padding as `align 4`, its slots as
+`jpt_` `rva` entries and its index table under `byte_` four entries a line,
+`indirect table for switch statement`; the two tables tile with those lines
+and no byte of them lists alone.
+`SessionCAPITest.TwoLevelSwitchesPublishTheirIndexTable` checks that
+`neverd_switches_json` gives that dispatch the RVA table's `image_relative`
+form, the index table's address, width and 33 entries, and for every character
+its case and the slot its index entry holds; a table the dispatch indexes
+directly has a null `index`.
 
 `NeverDWorkerConstantBranch` also checks cold expression resolution and literal
 GUI listing jumps into forward and backward fragments, both C routes, retained

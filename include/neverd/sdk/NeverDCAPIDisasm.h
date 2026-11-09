@@ -198,7 +198,8 @@ NEVERD_API const char *neverd_code_refs_json(neverd_session_t Sess,
 /// \p MaxFunctions analyzed functions from \p FirstEntry in entry order.
 /// Returns {"switches":[{"function","jump","load","table","entry_size",
 /// "stride","storage":[["0x...",entry_size,stride,slots],...],"form",
-/// "targets":[["target",index,slot],...]},...],"next_entry":"0x..."|null}:
+/// "index","targets":[["target",index,slot],...]},...],
+/// "next_entry":"0x..."|null}:
 /// "jump" is the dispatch, "load" the instruction that reads the table,
 /// "table" the address of its slot 0 and "storage" the runs of slots it owns.
 /// Each target carries the index that selects it, the value the dispatch
@@ -208,9 +209,14 @@ NEVERD_API const char *neverd_code_refs_json(neverd_session_t Sess,
 /// "form" says how every such slot stores its target: "absolute",
 /// "table_relative" (the table's address plus the entry) or "image_relative"
 /// (the image base plus the entry); it is null for a table laid out
-/// otherwise.  Unknown addresses are null.  MaxFunctions is clamped to
-/// 1..4096.  NULL with an error until neverd_session_analyze has analyzed the
-/// whole image.
+/// otherwise.  A two-level table, which the dispatch reaches through an index
+/// table first, has "index":{"table","entry_size","stride","entries"}: the
+/// index table's entry K, at its "table" plus K times its "stride", holds the
+/// slot of target K, so slots repeat; "index" is null for any other table,
+/// and for a two-level one whose entries do not all select their targets
+/// (then "form" and the slots are null too).  Unknown addresses are null.
+/// MaxFunctions is clamped to 1..4096.  NULL with an error until
+/// neverd_session_analyze has analyzed the whole image.
 NEVERD_API const char *neverd_switches_json(neverd_session_t Sess,
                                             neverd_va_t FirstEntry,
                                             int MaxFunctions);

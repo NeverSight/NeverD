@@ -833,6 +833,7 @@ void CFGBuilder::extractJumpTables(LowFunc &Func) {
       JT.TwoTableOffset = Info.TwoTableOffset;
       JT.TwoTableHiPositive = Info.TwoTableHiPositive;
       JT.TwoLevelIndex = Info.TwoLevelIndex;
+      JT.TwoLevelIndexRange = Info.TwoLevelIndexRange;
       JT.MutatedUnsafe = Info.MutatedUnsafe;
       if (!Info.UseSharedDispatchSelector && Info.IndexReg != InvalidVA)
         JT.IndexRegOff = static_cast<int>(Info.IndexReg);

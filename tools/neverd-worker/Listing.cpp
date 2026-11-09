@@ -445,6 +445,15 @@ struct SwitchSlot {
   std::uint64_t address = 0, target = 0;
   std::size_t table = 0;
 };
+/// The index table a two-level switch reads first (neverd_switches_json
+/// "index"): its entry K holds the table slot of the switch's K-th target.
+struct SwitchIndexRun {
+  std::uint64_t address = 0, entries = 0;
+  unsigned entrySize = 0;
+  std::size_t table = 0;
+  /// The largest slot an entry holds, whose spelling every entry pads to.
+  std::uint64_t widest = 0;
+};
 /// The data directive of an item \p bytes wide; empty for other widths.
 std::string_view dataDirective(unsigned bytes) {
   switch (bytes) {
@@ -471,6 +480,8 @@ enum class ItemKind : std::uint8_t {
   Pointer,
   /// A slot of a switch's jump table.
   SwitchEntry,
+  /// A line of entries of a two-level switch's index table.
+  SwitchIndex,
   /// A value of one to eight bytes the user defined.
   Data,
   /// A loader-decoded data structure, including its typed RVA fields.
@@ -859,11 +870,14 @@ struct Listing::Impl {
   std::size_t indexDone = 0, indexTotal = 0;
   std::string indexError;
 
-  /// The jump tables whole-program analysis recovered, their slots in
-  /// address order, the switch of each table, load and dispatch, and the
+  /// The jump tables whole-program analysis recovered, their slots and
+  /// index tables in address order, where each slot and index table starts
+  /// and ends, the switch of each table, load and dispatch, and the
   /// references the tables add to the index.
   std::vector<SwitchTable> switches;
   std::vector<SwitchSlot> switchSlots;
+  std::vector<SwitchIndexRun> switchIndexRuns;
+  std::vector<std::uint64_t> switchBoundaries;
   std::unordered_map<std::uint64_t, std::size_t> switchTables, switchLoads,
       switchJumps;
   std::vector<Reference> switchReferences;
@@ -1260,6 +1274,8 @@ struct Listing::Impl {
          std::upper_bound(metadataBoundaries.begin(), metadataBoundaries.end(),
                           address));
     clip(dataBoundaries, dataBoundaries.upper_bound(address));
+    clip(switchBoundaries, std::upper_bound(switchBoundaries.begin(),
+                                            switchBoundaries.end(), address));
     if (indexState == IndexState::Ready) {
       if (const auto next = referenceIndex.targetAfter(address))
         end = std::min(end, *next);
@@ -3376,26 +3392,25 @@ struct Listing::Impl {
         // A recovered switch's table that its function's range also covers,
         // as MSVC's unwind record covers the table after the code, lists as
         // that table, and the padding up to it aligns it, as between
-        // functions.  Only slots the engine proved qualify.
-        if (asSwitchEntry(item, region, address))
+        // functions.  Only slots and index tables the engine proved qualify.
+        if (asSwitchStorage(item, region, address))
           return item;
-        if (const SwitchSlot *table = switchSlotFrom(address);
-            table && table->address < functions[f].end &&
-            (next == body.instructions.end() ||
-             next->address >= table->address)) {
-          const std::uint64_t start =
+        if (const auto table = switchStorageFrom(address);
+            table && *table < functions[f].end &&
+            (next == body.instructions.end() || next->address >= *table)) {
+          std::uint64_t start =
               next == body.instructions.begin()
                   ? functions[f].entry
                   : std::prev(next)->address + std::prev(next)->size;
-          if (start <= address)
-            if (const auto alignment =
-                    paddingAlignment(start, table->address)) {
-              item.kind = ItemKind::Align;
-              item.start = start;
-              item.size = table->address - start;
-              item.alignment = alignment;
-              return item;
-            }
+          // Padding between two tables aligns the second.
+          if (const auto boundary = std::upper_bound(
+                  switchBoundaries.begin(), switchBoundaries.end(), address);
+              boundary != switchBoundaries.begin() &&
+              *std::prev(boundary) > start)
+            start = *std::prev(boundary);
+          if (start <= address &&
+              tablePaddingItem(item, start, *table, address))
+            return item;
         }
         if (dialect == OperandDialect::AArch64) {
           const std::uint64_t word = address & ~std::uint64_t{3};
@@ -3423,7 +3438,7 @@ struct Listing::Impl {
         return item; // An undecoded byte inside a function.
       }
       // A table between functions, as MSVC places one after its function.
-      if (asSwitchEntry(item, region, address))
+      if (asSwitchStorage(item, region, address))
         return item;
       std::uint64_t gapStart = previousCodeEnd(address, region);
       std::uint64_t gapEnd =
@@ -3465,6 +3480,10 @@ struct Listing::Impl {
           item.start = gapStart;
           item.size = gapEnd - gapStart;
           item.alignment = alignment;
+        } else if (const auto table = switchStorageFrom(gapEnd);
+                   table && *table == gapEnd &&
+                   tablePaddingItem(item, gapStart, gapEnd, address)) {
+          // Padding up to a switch table, or a trap byte before it.
         } else if (const std::uint64_t codeEnd =
                        betweenFunctions ? looseGapCodeEnd(gapStart, gapEnd)
                                         : gapStart;
@@ -3483,7 +3502,7 @@ struct Listing::Impl {
       }
       return item;
     }
-    if (asSwitchEntry(item, region, address))
+    if (asSwitchStorage(item, region, address))
       return item;
     for (std::uint64_t back = 0; back < pointerSize && back <= address; ++back)
       if (slots.contains(address - back) && address - back >= region.start) {
@@ -3582,6 +3601,13 @@ struct Listing::Impl {
     if (auto table = switchTables.find(address); table != switchTables.end())
       return {switchTableName(table->second), ListingRole::DummyDataName,
               address};
+    // An index table is named by the width of its entries.
+    if (const auto *run = switchIndexAt(address);
+        run && run->address == address)
+      if (const auto sized = dataNamePrefix(sizeKeywordOf(run->entrySize));
+          !sized.empty())
+        return {std::string(sized) + upperHex(address),
+                ListingRole::DummyDataName, address};
     if (const auto *string = stringAt(address);
         string && string->address == address)
       return {string->name, ListingRole::DummyDataName, address};
@@ -3728,6 +3754,7 @@ struct Listing::Impl {
     case ItemKind::Uninitialized:
     case ItemKind::Pointer:
     case ItemKind::SwitchEntry:
+    case ItemKind::SwitchIndex:
     case ItemKind::Data:
     case ItemKind::Metadata:
       return AddressClass::Data;
@@ -4488,6 +4515,43 @@ struct Listing::Impl {
         comment = SwitchTableComment;
       break;
     }
+    case ItemKind::SwitchIndex: {
+      // db 0, 1, 2, 0: the table slots the cases select, as many a line as
+      // a conventional listing groups, aligned on the widest.
+      const SwitchIndexRun &run = switchIndexRuns[item.index];
+      if (item.start == run.address) {
+        const auto name = nameOf(item.start, NameUse::Data, {});
+        head.append(name.text, name.role, item.start);
+        comment = SwitchIndexComment;
+      } else {
+        named(ListingRole::Plain);
+      }
+      head.padTo(base);
+      head.append(dataDirective(run.entrySize), ListingRole::Directive);
+      head.padTo(base + 3);
+      const auto number = [&](std::uint64_t value) {
+        return dialect == OperandDialect::X86 ? x86Number(value)
+                                              : hexAddress(value);
+      };
+      std::vector<unsigned char> bytes(item.size);
+      const bool mapped = neverd_read_bytes(session, item.start, bytes.data(),
+                                            static_cast<int>(bytes.size())) ==
+                          static_cast<int>(bytes.size());
+      const std::size_t width = number(run.widest).size();
+      for (std::uint64_t at = 0; at < item.size; at += run.entrySize) {
+        std::uint64_t value = 0;
+        for (unsigned i = 0; mapped && i < run.entrySize; ++i)
+          value |= std::uint64_t{bytes[at + i]} << (8 * i);
+        const auto text = mapped ? number(value) : std::string("?");
+        if (at)
+          head.append(", ", ListingRole::Punctuation);
+        if (text.size() < width)
+          head.append(std::string(width - text.size(), ' '),
+                      ListingRole::Plain);
+        head.append(text, ListingRole::Number);
+      }
+      break;
+    }
     case ItemKind::Data: {
       const auto *array = userItemOverlapping(item.start, 1);
       if (array && array->second.kind == "array") {
@@ -4868,6 +4932,8 @@ struct Listing::Impl {
   void loadSwitches() {
     switches.clear();
     switchSlots.clear();
+    switchIndexRuns.clear();
+    switchBoundaries.clear();
     switchTables.clear();
     switchLoads.clear();
     switchJumps.clear();
@@ -4889,10 +4955,39 @@ struct Listing::Impl {
       if (const auto next = page.value("next_entry", Json()); next.is_string())
         cursor = jsonAddress(next);
     }
-    std::sort(switchSlots.begin(), switchSlots.end(),
-              [](const SwitchSlot &a, const SwitchSlot &b) {
-                return a.address < b.address;
-              });
+    // A slot or index table two switches share, or two cases of a
+    // two-level table select, lists as the first switch's.
+    std::stable_sort(switchSlots.begin(), switchSlots.end(),
+                     [](const SwitchSlot &a, const SwitchSlot &b) {
+                       return a.address < b.address;
+                     });
+    switchSlots.erase(std::unique(switchSlots.begin(), switchSlots.end(),
+                                  [](const SwitchSlot &a, const SwitchSlot &b) {
+                                    return a.address == b.address;
+                                  }),
+                      switchSlots.end());
+    std::stable_sort(switchIndexRuns.begin(), switchIndexRuns.end(),
+                     [](const SwitchIndexRun &a, const SwitchIndexRun &b) {
+                       return a.address < b.address;
+                     });
+    switchIndexRuns.erase(
+        std::unique(switchIndexRuns.begin(), switchIndexRuns.end(),
+                    [](const SwitchIndexRun &a, const SwitchIndexRun &b) {
+                      return a.address == b.address;
+                    }),
+        switchIndexRuns.end());
+    for (const auto &slot : switchSlots) {
+      switchBoundaries.push_back(slot.address);
+      switchBoundaries.push_back(slot.address + switches[slot.table].entrySize);
+    }
+    for (const auto &run : switchIndexRuns) {
+      switchBoundaries.push_back(run.address);
+      switchBoundaries.push_back(run.address + run.entries * run.entrySize);
+    }
+    std::sort(switchBoundaries.begin(), switchBoundaries.end());
+    switchBoundaries.erase(
+        std::unique(switchBoundaries.begin(), switchBoundaries.end()),
+        switchBoundaries.end());
     for (const auto &table : switches)
       for (const auto &[target, indexes] : table.targets) {
         switchReferences.push_back({target, table.jump, RefKind::IndirectJump});
@@ -4930,6 +5025,7 @@ struct Listing::Impl {
                          !dataDirective(table.entrySize).empty() &&
                          table.stride >= table.entrySize;
     std::vector<SwitchSlot> slots;
+    std::uint64_t widest = 0;
     if (const auto targets = row.value("targets", Json()); targets.is_array())
       for (const auto &target : targets) {
         if (!target.is_array() || target.size() != 3 ||
@@ -4938,13 +5034,28 @@ struct Listing::Impl {
         const auto address = jsonAddress(target[0]);
         table.targets[address].push_back(target[1].get<std::int64_t>());
         ++table.entries;
-        if (laidOut && target[2].is_number_unsigned())
+        if (laidOut && target[2].is_number_unsigned()) {
+          const auto slot = target[2].get<std::uint64_t>();
+          widest = std::max(widest, slot);
           slots.push_back(
-              {*table.table + target[2].get<std::uint64_t>() * table.stride,
-               address, switches.size()});
+              {*table.table + slot * table.stride, address, switches.size()});
+        }
       }
     if (!table.jump || table.targets.empty())
       return;
+    // A two-level table's index table lists with its slots, an entry for
+    // each target.
+    if (const auto run = row.value("index", Json());
+        laidOut && run.is_object() && run.value("table", Json()).is_string()) {
+      const auto size = jsonCount(run.value("entry_size", Json()));
+      const auto entries = jsonCount(run.value("entries", Json()));
+      if (!dataDirective(static_cast<unsigned>(size)).empty() &&
+          jsonCount(run.value("stride", Json())) == size &&
+          entries == table.entries)
+        switchIndexRuns.push_back({jsonAddress(run.value("table", Json())),
+                                   entries, static_cast<unsigned>(size),
+                                   switches.size(), widest});
+    }
     const std::size_t index = switches.size();
     switchJumps.emplace(table.jump, index);
     if (table.load)
@@ -4990,6 +5101,87 @@ struct Listing::Impl {
     item.size = switches[slot->table].entrySize;
     item.index = static_cast<std::size_t>(slot - switchSlots.data());
     return true;
+  }
+
+  /// The index table holding \p address, if one does.
+  const SwitchIndexRun *switchIndexAt(std::uint64_t address) const {
+    auto it = std::upper_bound(
+        switchIndexRuns.begin(), switchIndexRuns.end(), address,
+        [](std::uint64_t value, const SwitchIndexRun &run) {
+          return value < run.address;
+        });
+    if (it == switchIndexRuns.begin())
+      return nullptr;
+    --it;
+    return address - it->address < it->entries * it->entrySize ? &*it : nullptr;
+  }
+
+  /// Makes \p item the line of index table entries holding \p address, when
+  /// an index table within \p region holds it.
+  bool asSwitchIndex(Item &item, const Region &region, std::uint64_t address) {
+    const SwitchIndexRun *run = switchIndexAt(address);
+    if (!run || run->address < region.start ||
+        run->entries * run->entrySize > region.end - run->address)
+      return false;
+    const std::uint64_t line =
+        ::neverd::limits::worker_config::kListingSwitchIndexEntriesPerLine *
+        run->entrySize;
+    item.kind = ItemKind::SwitchIndex;
+    item.start = run->address + (address - run->address) / line * line;
+    item.size = std::min(line, run->address + run->entries * run->entrySize -
+                                   item.start);
+    item.index = static_cast<std::size_t>(run - switchIndexRuns.data());
+    return true;
+  }
+
+  /// Makes \p item the jump table slot or index table line holding
+  /// \p address within \p region.
+  bool asSwitchStorage(Item &item, const Region &region,
+                       std::uint64_t address) {
+    return asSwitchEntry(item, region, address) ||
+           asSwitchIndex(item, region, address);
+  }
+
+  /// Makes \p item the padding of [\p start, \p end) up to a switch table at
+  /// \p end that holds \p address: all of it aligns the table, or, after a
+  /// trap byte such as the int3 MSVC leaves after a call that does not
+  /// return, the rest does and the trap stays a byte.  False when the bytes
+  /// do not pad.
+  bool tablePaddingItem(Item &item, std::uint64_t start, std::uint64_t end,
+                        std::uint64_t address) {
+    std::uint64_t from = start;
+    std::uint64_t alignment = paddingAlignment(start, end);
+    unsigned char trap = 0;
+    if (!alignment && dialect == OperandDialect::X86 && end - start > 1 &&
+        neverd_read_bytes(session, start, &trap, 1) == 1 && trap == 0xcc) {
+      from = start + 1;
+      alignment = paddingAlignment(from, end);
+    }
+    if (!alignment)
+      return false;
+    if (address >= from) {
+      item.kind = ItemKind::Align;
+      item.start = from;
+      item.size = end - from;
+      item.alignment = alignment;
+    }
+    return true;
+  }
+
+  /// Where the first jump table slot or index table at or after \p address
+  /// starts, if one does.
+  std::optional<std::uint64_t> switchStorageFrom(std::uint64_t address) const {
+    std::optional<std::uint64_t> first;
+    if (const SwitchSlot *slot = switchSlotFrom(address))
+      first = slot->address;
+    const auto run = std::lower_bound(
+        switchIndexRuns.begin(), switchIndexRuns.end(), address,
+        [](const SwitchIndexRun &run, std::uint64_t value) {
+          return run.address < value;
+        });
+    if (run != switchIndexRuns.end() && (!first || run->address < *first))
+      first = run->address;
+    return first;
   }
 
   /// \p name as the engine demangles it, or empty when it is not mangled.
@@ -6265,6 +6457,8 @@ std::string_view itemKindName(ItemKind kind) {
     return "pointer";
   case ItemKind::SwitchEntry:
     return "switch_entry";
+  case ItemKind::SwitchIndex:
+    return "switch_index";
   case ItemKind::Data:
     return "data";
   case ItemKind::Metadata:

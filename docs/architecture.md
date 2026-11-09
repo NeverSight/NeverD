@@ -2271,7 +2271,11 @@ listings and replaces their linear reference-scan results, so skipped bytes do
 not swallow real code targets. Bytes no recovered path reaches stay bytes; the
 listing never decodes past an unresolved indirect jump. A recovered switch's
 table inside its function's range, as an MSVC unwind record covers it, lists
-as that table from the engine's proven slots. Analyst Undefine overrides
+as that table from the engine's proven slots. A two-level switch also lists
+its index table, which `neverd_switches_json` publishes only when every index
+entry selects the slot that holds its case's target
+(`JumpTable::TwoLevelIndexRange` names the run the resolver proved). Analyst
+Undefine overrides
 presentation inside a function without deleting the function or changing the
 original bytes.
 
