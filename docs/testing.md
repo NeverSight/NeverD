@@ -7092,6 +7092,24 @@ pinned SDK skips only the new native-declaration check; generated C still
 selects the current NeverC APIs. The separate PUSHF fixture snapshot retains
 its own LLVM implementation and is not an SGX assembly fallback.
 
+`NeverDX86VmfuncSourceTests` checks proven EAX=0 selection, partial-AX and
+nonzero/dynamic refusal of that specialization, full ECX width and malformed
+native/assembly effects. It builds 210 complete pipeline profiles across i386,
+x64, ELF/COFF/Mach-O and default/NoOpt, plus two effectful-index fixtures.
+Set `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` to retain complete HighC/LLVM C,
+native IR/objects and independent original bytes. Run
+`scripts/check_x86_vmfunc_source.py --exports DIR --output OUT` for native
+objects; add `--compiler CLANG`, or `--compiler NEVERC --backend-llc LLVM_LLC`
+for C compilation and replay at O0/O2. NeverC's qualified i386 source driver
+is Linux ELF only. The witness intercepts VMFUNC, checks the complete EAX/ECX,
+index side effects, post-instruction memory reload, return and saved stack/GPRs,
+and rejects deliberate leaf/index/memory/result/ABI corruptions. It does not
+execute EPT switching or simulate VM-exit/fault continuations. Identical
+complete exports across SDKs can reuse a replay only after exact file-hash
+comparison; report the comparison count once. `--objects-from PRIOR_OUT`
+replays existing products only after matching the prior source, original, object
+and compiler hashes. It does not repeat compilation.
+
 `NeverDX86VirtualizationTests` checks 32/64-bit VMX/SVM operand shapes,
 VMREAD success/failure merges, instruction-owned memory, segmented addresses and
 strict scalar-emulator refusal. `NeverDX86VirtualizationSourceTests` covers both

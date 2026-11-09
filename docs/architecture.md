@@ -11184,8 +11184,18 @@ integer bits, with a separate full-width ECX ASID for INVLPGA.
 shape validation and assembly planning. Every native plan has a C spelling;
 the shared compiler capability dispatch retains the exact assembly fallback
 when those builtins are unavailable.
+The same native-plan owner admits VMFUNC's EPTP-switch API only with an
+explicit constant EAX=0 proof. LLVM and HighC extract that proof from their
+typed constant operands; the plan drops only the proven leaf argument and
+retains all 32 ECX bits. Unknown/nonzero leaves retain the original two-register
+assembly contract. The shared VMFUNC capability dispatch is independent of
+unrelated VMCS/SVM builtin availability. LLVM C admits the exact named EPTP
+interface with one i32 index, void result, C calling convention and unknown
+memory effects; narrowed, speculative or nonreturning declarations refuse.
+The old SDK can transport that checked declaration into C without native
+codegen support. LLVM lowering itself still requires the registered intrinsic.
 Both C translation-unit collectors include the shared virtualization dispatch
-for i386 and x64. Ordinary native VMX/SVM calls require a registered SDK
+for i386 and x64. Native LLVM VMX/SVM lowering requires a registered SDK
 intrinsic ID; LLVM's `isIntrinsic()` alone only recognizes the reserved name
 prefix. The separately versioned context handlers retain their explicit
 contracts when read through an older SDK.

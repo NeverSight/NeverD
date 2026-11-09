@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-09",
+  "scope": "Proven EAX=0 VMFUNC native lowering and complete C transport in both x86 code modes",
+  "integrated_dev_commit": "1d4405d4e53cb2dae096acc636c6eb904d9aa951",
+  "references": [
+    {
+      "url": "https://cdrdv2-public.intel.com/774497/326019-sdm-vol-3c.pdf",
+      "section": "26.5.6.3 EPTP Switching",
+      "pages": "26-18 to 26-19"
+    }
+  ],
+  "builds": {
+    "native": {
+      "source_commit": "fd21f9a2da6f50abf1f15ab98152d42b23efac1b",
+      "binaries_sha256": {
+        "NeverDX86VmfuncSourceTests": "ed68abfe90e26c198a90e87d05c29abd9b7865c674b16ea5e84812ccd4214909",
+        "NeverDX86VirtualizationTests": "ddb7edc4f3244a453fdc55e5f436c12fe3fbb9e977af9ce49081140392aad2fa",
+        "NeverDX86VirtualizationSourceTests": "44e62d4c4db2baa2ac2fb14031ee728df9b6fd8d23111e3f377f2020a2453a3f"
+      },
+      "receipt_sha256": "49ea01414f7e4ceb3af95da9ddf5b25730cbe42164477d282431bebc706dcb4e"
+    },
+    "r6": {
+      "source_commit": "fd21f9a2da6f50abf1f15ab98152d42b23efac1b",
+      "binaries_sha256": {
+        "NeverDX86VmfuncSourceTests": "a1177f1a2c685bd8bd309479890857260d9adb3e3b706c4a9e23c966726acda6",
+        "NeverDX86VirtualizationTests": "1e39814b0a18932354a5eaac0c0b2c1ac8e3bbb828ba17e5e4937a1412a22f9d",
+        "NeverDX86VirtualizationSourceTests": "a999e4a3b5ddea1fab790d92f644b1f6ebbef8290f0bf394503ebb46828f60db"
+      },
+      "receipt_sha256": "8f27a77f7050e4152e85bddb00c5d578e081ee65e83ec8f781fc220b1238ce9a"
+    }
+  },
+  "tests": {
+    "native": [
+      {
+        "report": "result.xml",
+        "tests": 5,
+        "failures": 0,
+        "skips": 0,
+        "report_sha256": "483bd55a7ae2e8778dea5a3d32d5d40e53180ec660b341c4c6e9bbc5800eca93",
+        "properties": {
+          "complete_vmfunc_pipeline_profiles": "210"
+        }
+      },
+      {
+        "report": "NeverDX86VirtualizationSourceTests.xml",
+        "tests": 5,
+        "failures": 0,
+        "skips": 0,
+        "report_sha256": "e30628ff513237f99fca1a664efad1b13364d56d97b1a468e5a28073a288a326",
+        "properties": {
+          "native_modules": "444",
+          "assembly_modules": "0",
+          "native_c_compilations": "888"
+        }
+      },
+      {
+        "report": "NeverDX86VirtualizationTests.xml",
+        "tests": 8,
+        "failures": 0,
+        "skips": 0,
+        "report_sha256": "7b491e68adb5ea7ffe7898250b5b387b66812d184c8085f56a0f9e3b1fc2d63a",
+        "properties": {}
+      }
+    ],
+    "r6": [
+      {
+        "report": "result.xml",
+        "tests": 5,
+        "failures": 0,
+        "skips": 0,
+        "report_sha256": "3d35a9af49fbb227fb0a92b8256496318b4f0232dae88c9285c46e9f3351687f",
+        "properties": {
+          "complete_vmfunc_pipeline_profiles": "210"
+        }
+      },
+      {
+        "report": "NeverDX86VirtualizationSourceTests.xml",
+        "tests": 4,
+        "failures": 0,
+        "skips": 0,
+        "report_sha256": "196823fa5b930aa789acfccfab9385fd9422ac775de54f1467db5fec2cf24766",
+        "properties": {
+          "native_c_compilations": "888"
+        }
+      },
+      {
+        "report": "NeverDX86VirtualizationTests.xml",
+        "tests": 8,
+        "failures": 0,
+        "skips": 0,
+        "report_sha256": "efea73862bf5830760b39e89b12d0eda3554cdcd8d4416477885ed15436f0a57",
+        "properties": {}
+      }
+    ]
+  },
+  "replays": {
+    "native-objects": {
+      "objects": 210,
+      "comparisons": 630,
+      "rejected_corruptions": 1170,
+      "result_sha256": "c35c362d0d6b4189ab03b76e043faf77911f8d7c9a329072f19589d086f182ea",
+      "receipt_sha256": "de200f795cc4b1144cb14d85784f97e4fd38aeb399bcc8c0151e26686ea7a649",
+      "reused_object_manifest_sha256": "d42c60826f4f786f5cd1ab395b7876231bf511169147a725e36bff8f1f5ff3f2",
+      "physical_vmfunc_execution": false
+    },
+    "neverc": {
+      "objects": 608,
+      "comparisons": 1824,
+      "rejected_corruptions": 3528,
+      "result_sha256": "ed3b4e1c3912abbefacf6383d69ca6307871ad7aa85ad133211df3496f723671",
+      "receipt_sha256": "e26fee7f6b6ee39519110665ed2aad528be8740af9038815dd39449c775c2054",
+      "reused_object_manifest_sha256": "c5187291c9588d667acc479f6d331de2a22570b92743968cab127420d90177ed",
+      "physical_vmfunc_execution": false
+    },
+    "clang": {
+      "objects": 848,
+      "comparisons": 2544,
+      "rejected_corruptions": 4728,
+      "result_sha256": "1d6ac1533b959febe0338c22306495fbc5a25d9a07e5a8983e5571ae65da670f",
+      "receipt_sha256": "82b3f44217b012b6e75904bfcc0a31ce01eb3b450b986ea3f6af9b45d6e384a1",
+      "reused_object_manifest_sha256": "b00df30ea9bc7c10f24e96c4b33406dece5f04de081e374d6602bb21990d5e46",
+      "physical_vmfunc_execution": false
+    }
+  },
+  "tools": {
+    "neverc": {
+      "source_commit": "a506bd14b5c08f5e77105aa6f4784d019f063399",
+      "binary_sha256": "49b8f48b37426d46a78f1e5af440223ba9979ce0cdefddc57eeab50672af80ae",
+      "source_changed": false
+    },
+    "llvm": {
+      "source_commit": "a32cd957841c664570df90bc41902913f1f16226",
+      "binary_sha256": "4a51c42cd9a5bd19400b3d15a1ab7c81618fdeb041766aaf8bc480e77304fb41",
+      "source_changed": false
+    },
+    "clang": {
+      "binary_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+    },
+    "replay_script_sha256": "a8bc88fdb280dc8169415065f7ae5376ccecb2761c03470d98ec59991898969c"
+  },
+  "totals": {
+    "selected_tests": 35,
+    "unique_objects": 1666,
+    "comparisons": 4998,
+    "rejected_corruptions": 9426,
+    "existing_vmx_svm_c_compilations": 1776
+  },
+  "export_identity": {
+    "final_integration_unchanged_files_per_sdk": 1056,
+    "complete_c_files_identical_across_sdks": 424,
+    "native_objects_identical_across_sdks": 210,
+    "originals_identical_across_sdks": 212,
+    "native_and_assembly_ir_profiles_differ": 90,
+    "final_integration_manifest_sha256": "9fe650c7958b4be05bb1981042d07321afe42c1a0da19c5dc4bc2035e9906a16",
+    "cross_sdk_manifest_sha256": "2cafaa0f4f33e24fcb394e1a7bc0cd5c298e5a8bed23aa9cd0969b20ea6194d4",
+    "counting": "Identical C and object files share one replay matrix and are counted once."
+  },
+  "contract": [
+    "Only exact typed EAX=0 selects the one-index native API.",
+    "ECX keeps all 32 bits; 511/512, high bits and all-ones are transported without masking.",
+    "Partial AX clearing and nonzero/dynamic leaves do not select the specialized API.",
+    "Unknown memory effects retain index evaluation and post-instruction memory reload.",
+    "Source/native contracts reject altered types, calling convention, effects, return assumptions and unowned names.",
+    "Both legacy SDK assembly and qualified LLVM native IR reach the shared C dispatch."
+  ],
+  "limitations": [
+    "VMFUNC is intercepted; no successful physical EPT switch or VM-exit/fault continuation is claimed.",
+    "Controlled continuation for nonzero leaves tests transport only, not architectural fallthrough.",
+    "NeverC i386 complete-source driver qualification is Linux ELF only.",
+    "Other machine modes/task transitions, software SMM/SGX and unbound asynchronous providers remain outside this integration."
+  ],
+  "release": {
+    "published": false,
+    "production_sdk": "neverd-llvm-v23.0.0-r6",
+    "llvm_gitlink": "b726cb0425bc7e1f7e2753972a748ebcfa8b5741",
+    "global_gate_complete": false
+  },
+  "build_source_commit": "fd21f9a2da6f50abf1f15ab98152d42b23efac1b",
+  "replay_source_commit": "085b0df1a2cff002ad9350edae4754fadb2a10d1",
+  "artifact_preservation": {
+    "archive": "qualified-vmfunc-products.tar.xz",
+    "archive_sha256": "dff871a659014949f7acbe69bf2d41f137b36412bdc54111a9e09f87b930ced9",
+    "files": 2296,
+    "decompressed_hashes_verified": true,
+    "recovery_index_sha256": "88dde5518f52598499de58c7165c6b80106db2ec0391ba337102a6f22289786f",
+    "manifest_matched_files": 5680,
+    "source_original_bytes_logs_receipts_retained": true
+  }
+}
