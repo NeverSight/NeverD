@@ -7842,6 +7842,12 @@ the five-byte jump retires the MOV's complete HIGHLOW operand. Preparation
 authenticates that exact handler field and its original bytes before removing
 the relocation, including the operand bytes outside the jump. Other partially
 overwritten relocation fields still refuse.
+An FH3 FuncInfo serves its function and each funclet the compiler emitted
+apart, every one a pdata record whose handler data names it, and its
+IP-to-state map covers them all. A focused x64 load (one function decompiled
+alone) first materializes the records that share a wanted FuncInfo, so the
+group check sees the same group a full load does and the tables decode
+complete instead of malformed.
 The same bounded COFF FuncInfo decoder exposes complete normalized wire graphs,
 record extents and callback-pointer fields without inventing a physical frame.
 Valid record aliases remain inspectable; distinct ownership is a separate

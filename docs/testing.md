@@ -11164,6 +11164,10 @@ unresolved.
 shape in all twelve optimized MSVC x64 `xcpt4` builds, where it is a `__finally`
 funclet reading its selector through the establisher frame: one six-case table
 inside the handler's unwind range, every case a decoded block.
+`WindowsEHCorpus.FocusedLoadsDecodeTheirWholeFH3FunctionGroup` loads every
+x64 FH3 function of the MSVC and clang-cl corpus alone and requires the same
+complete C++ tables a whole-image load decodes; before, the focused load's
+IP-to-state map left its function group and the tables read as malformed.
 `COFFJoinedTwoLevel.*` checks an MSVC CRT two-level dispatch whose index byte
 arrives along two paths that bound it separately, one to 1..15 and one to
 exactly 20h: all 33 index coordinates publish, with the unused bytes'

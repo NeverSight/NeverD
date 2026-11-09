@@ -100,13 +100,12 @@ TEST(WindowsEHCorpus, DeclaresCompleteMultiToolchainMatrix) {
   EXPECT_EQ(Toolchains, (std::set<std::string>{"msvc", "clang-cl"}));
   EXPECT_EQ(Architectures,
             (std::set<Arch>{Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}));
-  EXPECT_EQ(ArtifactsByToolset,
-            (std::map<std::pair<std::string, int>, size_t>{
-                {{"clang-cl", 2022}, 48},
-                {{"msvc", 2019}, 120},
-                {{"msvc", 2022}, 120},
-                {{"msvc", 2026}, 96},
-            }));
+  EXPECT_EQ(ArtifactsByToolset, (std::map<std::pair<std::string, int>, size_t>{
+                                    {{"clang-cl", 2022}, 48},
+                                    {{"msvc", 2019}, 120},
+                                    {{"msvc", 2022}, 120},
+                                    {{"msvc", 2026}, 96},
+                                }));
 }
 
 TEST(WindowsEHCorpus, RecordsLoadConfigRuntimeCallableSlots) {
@@ -385,6 +384,58 @@ TEST(WindowsEHCorpus, PreservesSharedFH3NativeFunctionGroupIdentity) {
   }
   EXPECT_TRUE(SawParentAndCatchGroup)
       << "focused FH3 image exposed no complete parent/catch function group";
+}
+
+TEST(WindowsEHCorpus, FocusedLoadsDecodeTheirWholeFH3FunctionGroup) {
+  // An FH3 FuncInfo serves its function and each funclet the compiler
+  // emitted apart, and its IP-to-state map covers them all.  Decompiling one
+  // of them alone loads only its own pdata record, yet must decode the same
+  // C++ tables as the whole image does, not a map that leaves its group.
+  auto ExpectationsOrErr = loadExpectations();
+  ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
+      << toString(ExpectationsOrErr.takeError());
+  size_t Functions = 0, Separated = 0;
+  std::set<std::string> Toolchains;
+  for (const WindowsEHArtifactExpectation &Expectation : *ExpectationsOrErr) {
+    if (Expectation.Architecture != "x86_64" || Expectation.CxxFormat != "fh3")
+      continue;
+    SCOPED_TRACE(Expectation.Path);
+    const std::filesystem::path Input =
+        std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) / Expectation.Path;
+    std::unique_ptr<Loader> WholeLoader = Loader::create(Input);
+    ASSERT_NE(WholeLoader, nullptr);
+    auto WholeOrErr = WholeLoader->load(Input);
+    ASSERT_TRUE(static_cast<bool>(WholeOrErr))
+        << toString(WholeOrErr.takeError());
+    for (const ExceptionFunction &Whole :
+         WholeOrErr->ExceptionMetadata.Functions) {
+      if (Whole.Kind != RuntimeFunctionKind::Primary || !Whole.Cxx ||
+          Whole.Cxx->NativeEncoding != CxxExceptionInfo::Encoding::FH3 ||
+          Whole.ParseStatus != ExceptionParseStatus::Complete)
+        continue;
+      const va_t Entry = Whole.CodeRange.Begin;
+      SCOPED_TRACE("0x" + llvm::utohexstr(Entry));
+      std::unique_ptr<Loader> FocusedLoader = Loader::create(Input);
+      ASSERT_NE(FocusedLoader, nullptr);
+      FocusedLoader->restrictFunctions({Entry});
+      auto FocusedOrErr = FocusedLoader->load(Input);
+      ASSERT_TRUE(static_cast<bool>(FocusedOrErr))
+          << toString(FocusedOrErr.takeError());
+      const ExceptionFunction *Focused =
+          FocusedOrErr->ExceptionMetadata.findFunction(Entry);
+      ASSERT_NE(Focused, nullptr);
+      EXPECT_EQ(Focused->ParseStatus, ExceptionParseStatus::Complete);
+      ASSERT_TRUE(Focused->Cxx);
+      EXPECT_TRUE(*Focused->Cxx == *Whole.Cxx);
+      ++Functions;
+      Separated += Whole.Cxx->IsSeparated;
+      Toolchains.insert(Expectation.Toolchain);
+    }
+  }
+  // Both compilers' parents and separated catch funclets.
+  EXPECT_GE(Functions, 100u);
+  EXPECT_GE(Separated, 100u);
+  EXPECT_EQ(Toolchains, (std::set<std::string>{"clang-cl", "msvc"}));
 }
 
 TEST(WindowsEHCorpus, LiftsFocusedClangCLX64FH3Probe) {

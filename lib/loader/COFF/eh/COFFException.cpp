@@ -169,6 +169,20 @@ void ensureExceptionHandlers(BinaryImage &Img, const std::set<va_t> &Entries) {
         HandlerEntries.insert(F.PersonalityVA);
     for (va_t Addr : HandlerEntries)
       ensureX64RuntimeFunction(Img, Addr);
+    // A C++ FuncInfo3 serves a group of functions: the one it belongs to and
+    // each funclet the compiler emitted apart, every one with a pdata record
+    // whose handler data names it, and its IP-to-state map covers them all.
+    // A focused load holds only the wanted records, so parseFH3 would find
+    // that code outside the group; materialize the records sharing a wanted
+    // FuncInfo3 first, as a full load holds them.
+    std::set<uint32_t> FuncInfos;
+    for (const ExceptionFunction &F : Img.ExceptionMetadata.Functions)
+      if (F.PersonalityVA != 0 && F.HandlerDataVA != 0 &&
+          !F.LanguageTablesResolved && functionOverlapsWanted(F, Wanted))
+        if (const auto FuncInfo = detail::fh3FuncInfoRVA(Img, F.HandlerDataVA))
+          FuncInfos.insert(*FuncInfo);
+    for (va_t Begin : detail::fh3GroupRecordBegins(Img, FuncInfos))
+      ensureX64RuntimeFunction(Img, Begin);
   }
 
   std::unordered_map<va_t, std::pair<va_t, std::string>> PersonalityCache;
