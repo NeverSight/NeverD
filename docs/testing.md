@@ -20470,17 +20470,24 @@ intrinsics, address provenance, independent/exceptional roots, exact/short
 work budgets and ordinary ABI result ownership. Unique-predecessor cases cover
 conditional arms, contiguous and inconsistent fallthroughs, joins, a long
 register-carry chain and instruction temporaries that must not cross blocks.
+Joined cases check equal, conflicting, missing, partial and address-valued
+definitions, duplicate edges, unknown extra predecessors and backedges. Block
+and successor order do not choose the result. A 64-diamond chain checks repeated
+joins and the exact operation budget, including one operation beyond it.
 `CallExitRegisters.*` in `NeverDWin64CallContractTests` executes decoded x64
 COFF/ELF/Mach-O callers
 through both C routes, with source optimization enabled and disabled, at C
 O0/O2 with UBSan. The oracle observes the non-return register's stored value
 and the ordinary call result. The constant-scratch case also executes the
 original public machine code on Linux x64, including a direct jump and both
-conditional return paths whose scratch definition precedes the branch. Other
+conditional return paths whose scratch definition precedes the branch, shared
+returns and a separate agreeing definition on one predecessor. Other
 hosts execute the generated C against the fixture's scalar results without
 executing x64 bytes. This qualifies
 bounded scalar constants, not dynamic machine-state returns or other
 architectures.
+`NeverDWorkerCachedCallABI` checks the same shared return through an omitted
+callee with cold and prepared source caches in both C emission orders.
 `CallExitRegisters.PureRegisterLeafKeepsDynamicExtraResults` independently
 executes recovered query results against native CPUID on x64 COFF/ELF/Mach-O
 inputs through both C routes at O0/O2 with UBSan. Source execution selects the
