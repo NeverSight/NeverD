@@ -137,6 +137,12 @@
     "--verify",
     "--strict"
   ],
+  "disassembly_command": [
+    "/usr/bin/xcrun",
+    "otool",
+    "-tvV"
+  ],
+  "disassembly_suffix": "-disassembly",
   "header_format": "<III",
   "macho_magic": 4277009103,
   "cpu_type": 16777228,

@@ -127,6 +127,9 @@ def probe(output):
                                  POLICY["tool_timeout"])
                 if signed.returncode:
                     raise RuntimeError(POLICY["errors"]["signature"].format(label=label))
+                command(products, output, label + POLICY["disassembly_suffix"],
+                        [*POLICY["disassembly_command"], str(binary)],
+                        POLICY["tool_timeout"])
                 run = command(products, output, label, [str(binary)], POLICY["tool_timeout"])
                 row = {"label": label, **identity, "returncode": run.returncode,
                        "stdout": run.stdout, "stderr": run.stderr}

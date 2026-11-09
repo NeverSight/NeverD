@@ -263,6 +263,9 @@ template <int Key> int checkKey() {
   int Status = 0;
   if (waitpid(Child, &Status, 0) != Child || !WIFSIGNALED(Status)) return 6;
   const int Signal = WTERMSIG(Status);
+  printf("native-pac-key=%d child-status=%d child-signal=%d\n", Key, Status,
+         Signal);
+  fflush(stdout);
   return Signal == SIGSEGV || Signal == SIGBUS || Signal == SIGILL ? 0 : 7;
 }
 int main() {
