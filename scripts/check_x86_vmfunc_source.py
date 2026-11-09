@@ -21,6 +21,7 @@ import unicorn.x86_const as regs
 
 CODE, STOP, STACK, DATA, PAGE = 0x10000, 0x1ffff, 0x80000, 0x40000, 0x1000
 INSTRUCTION_BUDGET = 10000
+COMPILER_TIMEOUT_SECONDS = 120
 SEEDS = (0, 511, 0xffffffff)
 TRIPLES = {0: 'unknown-linux-gnu', 1: 'pc-windows-msvc', 2: 'apple-darwin'}
 
@@ -82,7 +83,9 @@ def execute(code, entry, mode, seed, effects, corrupt=None):
     # Include Win64's extra preserved registers. No fixture has arguments.
     saved_names = ('BX', 'SI', 'DI', 'BP', '12', '13', '14', '15') if mode == 64 \
         else ('BX', 'SI', 'DI', 'BP')
-    saved = {reg(name): (0x19283740 + i) ^ seed for i, name in enumerate(saved_names)}
+    saved = {reg(name): ((0xd012345600000000 if mode == 64 else 0) |
+                         ((0x19283740 + i) ^ seed))
+             for i, name in enumerate(saved_names)}
     for register, value in saved.items():
         machine.reg_write(register, value)
     machine.emu_start(CODE + entry, site.address, count=INSTRUCTION_BUDGET)
@@ -108,7 +111,10 @@ def execute(code, entry, mode, seed, effects, corrupt=None):
         machine.reg_write(regs.UC_X86_REG_EAX, machine.reg_read(regs.UC_X86_REG_EAX) ^ 1)
     observation['stack'] = machine.reg_read(reg('SP')) - sp
     observation['callee_saved'] = [machine.reg_read(r) for r in saved]
-    observation['result'] = machine.reg_read(regs.UC_X86_REG_EAX)
+    if corrupt == 'result-high':
+        machine.reg_write(reg('AX'), machine.reg_read(reg('AX')) ^ (1 << 32))
+    observation['result'] = machine.reg_read(
+        reg('AX') if not effects else regs.UC_X86_REG_EAX)
     if effects:
         observation['final_memory'] = struct.unpack('<I', machine.mem_read(DATA, 4))[0]
     return observation
@@ -126,6 +132,8 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--compiler', type=Path)
     parser.add_argument('--backend-llc', type=Path)
+    parser.add_argument('--objects-from', type=Path,
+                        help='replay unchanged objects from an earlier result manifest')
     args = parser.parse_args()
     assert not args.backend_llc or args.compiler
     args.output.mkdir(parents=True, exist_ok=False)
@@ -133,6 +141,12 @@ def main():
     sources += sorted(args.exports.glob('effects-*.c'))
     assert len(sources) == 424, f'missing complete C exports: {len(sources)}'
     records, controls = [], []
+    previous = {}
+    if args.objects_from:
+        prior_report = json.loads((args.objects_from / 'results.json').read_text())
+        previous = {(r['source'], r['optimization']): r for r in prior_report['profiles']}
+        assert prior_report['compiler_sha256'] == (digest(args.compiler) if args.compiler else None)
+        assert prior_report['backend_sha256'] == (digest(args.backend_llc) if args.backend_llc else None)
     for source in sources:
         stem, route = source.stem.rsplit('-', 1)
         effects = stem.startswith('effects-')
@@ -175,8 +189,13 @@ def main():
                     commands.append(common + ['-c', '-o', str(obj)] +
                                     (['-fllvm-backend=' + str(args.backend_llc)]
                                      if args.backend_llc else []))
-                for step, command in enumerate(commands):
-                    result = subprocess.run(command, capture_output=True, text=True, timeout=120)
+                if args.objects_from:
+                    prior = previous[(source.name, level)]
+                    ir = args.objects_from / (source.stem + '-' + level + '.ll')
+                    obj = args.objects_from / (source.stem + '-' + level + '.o')
+                    commands = prior['commands']
+                for step, command in enumerate([] if args.objects_from else commands):
+                    result = subprocess.run(command, capture_output=True, text=True, timeout=COMPILER_TIMEOUT_SECONDS)
                     Path(str(output) + f'-{step}.log').write_text(result.stdout + result.stderr)
                     assert result.returncode == 0, result.stderr
                 if args.backend_llc:
@@ -186,6 +205,11 @@ def main():
                     assert (' asm ' not in text) == native_expected, text
             else:
                 obj = source.with_name(stem + '.o')
+            if args.objects_from:
+                prior = previous[(source.name, level)]
+                assert prior['source_sha256'] == digest(source)
+                assert prior['original_sha256'] == digest(original)
+                assert prior['object_sha256'] == digest(obj)
             code, entry = object_code(obj)
             for seed, expected in baselines.items():
                 compare(execute(code, entry, mode, seed, effects), expected)
@@ -193,11 +217,13 @@ def main():
             negatives = ['leaf', 'index', 'result', 'stack', 'callee_saved']
             if effects:
                 negatives += ['prior_memory']
+            elif mode == 64:
+                negatives += ['result-high']
             for corruption in negatives:
                 try:
                     compare(execute(code, entry, mode, SEEDS[1], effects, corruption), expected)
                 except AssertionError as error:
-                    assert str(error).startswith(corruption + ' mismatch:'), error
+                    assert str(error).startswith(corruption.split('-')[0] + ' mismatch:'), error
                 else:
                     raise AssertionError(corruption + ' escaped the oracle')
                 controls.append({'source': source.name, 'optimization': level, 'field': corruption})
@@ -210,7 +236,9 @@ def main():
               'negative_controls': controls,
               'compiler_sha256': digest(args.compiler) if args.compiler else None,
               'backend_sha256': digest(args.backend_llc) if args.backend_llc else None,
-              'privileged_hardware_execution': False}
+              'privileged_hardware_execution': False,
+              'replayed_manifest_sha256': digest(args.objects_from / 'results.json')
+              if args.objects_from else None}
     (args.output / 'results.json').write_text(json.dumps(report, indent=2) + '\n')
     print(f'PASS: {len(records)} objects, {report["comparisons"]} comparisons, '
           f'{len(controls)} rejected corruption controls')
