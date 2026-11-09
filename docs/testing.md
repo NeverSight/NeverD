@@ -21854,6 +21854,9 @@ separate loader replay and refusal to treat unsigned slots as signed ones.
 DWARF reservation also exercises reuse of the bounded gaps between original
 sections and the enlarged compact registry. A control that cannot execute causes an
 explicit skip. File-level validation does not qualify these runtime contracts.
+The [native language qualification](evidence/arm64e-native-language-2026-11-09.json)
+records tested source identities, regression results, independent checks and
+the remaining runtime and publication boundaries.
 `MachONativeRelro.DyldProtectsConstantsAndKeepsMutablePagesWritable` separately
 loads an ordinary arm64 image with the same RELRO installer, reads the constant,
 writes adjacent mutable storage and queries the actual mapping permissions.
