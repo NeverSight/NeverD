@@ -965,7 +965,7 @@ void checkNativeObjectInstallation(
     };
     Reject([&](auto &Candidate, auto &) { ChangePlatform(Candidate); });
     Reject([&](auto &, auto &Native) { ChangePlatform(Native); });
-    uint64_t Tail = 0, End = 0, TailVA = 0;
+    uint64_t Tail = 0, End = 0, TailVA = 0, HeaderVA = 0;
     forEachMachOLoadCommand(
         Main.data(), Main.size(),
         [&](const uint8_t *Command, uint32_t ID, uint32_t, bool) {
@@ -974,6 +974,8 @@ void checkNativeObjectInstallation(
           const auto *Segment =
               reinterpret_cast<const llvm::MachO::segment_command_64 *>(
                   Command);
+          if (!Segment->fileoff && Segment->filesize)
+            HeaderVA = Segment->vmaddr;
           if (!(Segment->flags & llvm::MachO::SG_READ_ONLY))
             return;
           End = Segment->fileoff + Segment->filesize;
@@ -992,7 +994,7 @@ void checkNativeObjectInstallation(
     // even when it lies after the original section inventory.
     MachOAuthenticatedFixup Existing;
     Existing.Address = TailVA;
-    Existing.Recipe.Target = Before->Base;
+    Existing.Recipe.Target = HeaderVA;
     Existing.ReadOnlyAfterFixups = true;
     Existing.Authenticated = false;
     auto OwnedZero = Main;
