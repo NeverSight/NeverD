@@ -119,6 +119,9 @@ x86SystemStateAsm(Intrinsic Id, Arch TargetArch, uint16_t Width,
     P.InputConstraints = {"{ax}"};
     P.ChangesFlags = true;
     break;
+  case K::TlbSync:
+    P.InputConstraints = {"{ax}"};
+    break;
   case K::InvalidateBroadcast:
     P.InputConstraints = {"{ax}", "{dx}", "{cx}"};
     // LLVM's mnemonic chooses the default address size. Preserve addr32

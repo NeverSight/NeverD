@@ -33,7 +33,7 @@ NEVERD_X86_SYSTEM_STATE(X86LoadKernelGsMemory, "lkgs", LoadKernelGs, 0)
 NEVERD_X86_SYSTEM_STATE(X86HistoryReset, "hreset", HistoryReset, -1)
 NEVERD_X86_SYSTEM_STATE(X86InvalidateBroadcast, "invlpgb", InvalidateBroadcast,
                         -1)
-NEVERD_X86_SYSTEM_STATE(X86TlbSync, "tlbsync", Void, -1)
+NEVERD_X86_SYSTEM_STATE(X86TlbSync, "tlbsync", TlbSync, -1)
 
 // These IDs are allocated outside this inventory. Consumers opt in without
 // renumbering their serialized IDs or duplicating their name tables.

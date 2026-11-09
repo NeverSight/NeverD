@@ -590,7 +590,8 @@ enum class X86SystemStateKind : uint8_t {
   SecureLaunch,
   LockedLogic,
   LockedBit,
-  StreamStore128
+  StreamStore128,
+  TlbSync
 };
 
 struct X86SystemStateContract {

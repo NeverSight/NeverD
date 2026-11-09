@@ -101,6 +101,13 @@ x86SystemStateLayout(Intrinsic Id, Arch TargetArch, uint16_t Width,
     // EAX is a physical SLB address in every code mode. Native admission
     // precedes the processor's alignment and reset; preserve all 32 bits.
     return X86SystemStateLayout{0, 1, {4}};
+  case K::TlbSync:
+    if ((Width != 4 && Width != 8) || (TargetArch == Arch::X86 && Width != 4) ||
+        (TargetArch == Arch::X64 && Width != 8))
+      return std::nullopt;
+    // EnhancedTlbi consumes rAX, including reserved bits that can cause #GP.
+    // This input is code-mode sized, independent of address-size prefixes.
+    return X86SystemStateLayout{0, 1, {Width}};
   case K::InvalidateBroadcast:
     if ((Width != 4 && Width != 8) || (TargetArch == Arch::X86 && Width != 4))
       return std::nullopt;
@@ -182,6 +189,7 @@ inline uint16_t x86SystemStateWidth(Intrinsic Id,
     return Shape.InputSizes[1];
   case X86SystemStateKind::WriteBase:
   case X86SystemStateKind::InvalidateBroadcast:
+  case X86SystemStateKind::TlbSync:
     return Shape.InputSizes[0];
   case X86SystemStateKind::AccessRights:
     return Shape.OutputSize / 2;

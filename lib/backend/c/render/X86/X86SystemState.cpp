@@ -30,6 +30,11 @@ const char *compilerDispatch(const X86SystemStateNative &Plan,
     return "NEVERD_X86_SKINIT";
   if (Plan.Assembly.Id == Intrinsic::X86WriteMsrNonSerializing)
     return "NEVERD_X86_WRMSRNS";
+  if (Plan.Assembly.Id == Intrinsic::X86TlbSync)
+    return "NEVERD_X86_TLBSYNC";
+  if (Plan.Assembly.Id == Intrinsic::X86InvalidateBroadcast &&
+      TargetArch == Arch::X86)
+    return "NEVERD_X86_INVLPGB32";
   if (Plan.AdjustRpl)
     return "NEVERD_X86_ARPL";
   if (Plan.Assembly.Id == Intrinsic::X86HistoryReset)
@@ -535,6 +540,23 @@ renderX86SystemStateNativeCall(Arch TargetArch, const llvm::CallBase &Call,
   const auto *Callee = Call.getCalledFunction();
   if (!Callee || !isX86SystemStateNativeName(Callee->getName()))
     return {};
+  if (Callee->getName() == "llvm.x86.tlbsync") {
+    // The compatibility API explicitly selects CPU-only synchronization.
+    // A lifted TLBSYNC instead carries its original rAX through control32/64.
+    if ((TargetArch != Arch::X86 && TargetArch != Arch::X64) ||
+        !Callee->isDeclaration() || Callee->isVarArg() ||
+        Call.getCallingConv() != llvm::CallingConv::C ||
+        Call.getNumOperandBundles() || !Call.getType()->isVoidTy() ||
+        Call.arg_size() || !Arguments.empty() || ResultLive ||
+        Call.doesNotReturn() || !hasOrderedSystemEffects(Call))
+      throw std::invalid_argument("invalid native TLBSYNC compatibility call");
+    const uint16_t Width = TargetArch == Arch::X64 ? 8 : 4;
+    const auto Plan = x86SystemStateAsm(Intrinsic::X86TlbSync, TargetArch,
+                                        Width, NdMemoryAddressSpace::Default);
+    return renderInstruction(*Plan, TargetArch, Width,
+                             NdMemoryAddressSpace::Default, {}, {"0"}) +
+           '\n';
+  }
   std::optional<X86SystemStateNativeAddress> Address;
   const unsigned ControlIndex =
       Callee->getName() == "llvm.x86.arpl.mem.address32" ? 2 : 1;

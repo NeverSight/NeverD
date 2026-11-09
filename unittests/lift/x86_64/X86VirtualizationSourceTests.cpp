@@ -2270,7 +2270,8 @@ std::string nativeSystemName(const SystemEncoding &E, Arch A) {
            : E.Bytes.front() == 0x67 ? "llvm.x86.invlpgb.addr32"
                                      : "llvm.x86.invlpgb";
   case Intrinsic::X86TlbSync:
-    return "llvm.x86.tlbsync";
+    return A == Arch::X86 ? "llvm.x86.tlbsync.control32"
+                          : "llvm.x86.tlbsync.control64";
   default:
     return {};
   }
@@ -4394,7 +4395,8 @@ TEST(X86SystemExtensionsSource, MalformedOwnedAssemblyCannotLoseItsEffects) {
       SCOPED_TRACE(static_cast<unsigned>(Id));
       SCOPED_TRACE(Mutation);
       const auto P =
-          x86SystemStateAsm(Id, Arch::X64, 4, NdMemoryAddressSpace::Default);
+          x86SystemStateAsm(Id, Arch::X64, Id == Intrinsic::X86TlbSync ? 8 : 4,
+                            NdMemoryAddressSpace::Default);
       ASSERT_TRUE(P);
       llvm::LLVMContext Context;
       llvm::Module Module("bounded-system-contract", Context);

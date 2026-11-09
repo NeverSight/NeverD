@@ -137,12 +137,15 @@ inline std::optional<X86SystemStateNative> x86SystemStateNative(
   else if (Id == Intrinsic::X86InvalidateBroadcast && TargetArch == Arch::X64 &&
            Width == 4)
     Name += ".addr32";
+  else if (Id == Intrinsic::X86InvalidateBroadcast && TargetArch == Arch::X86)
+    Name += "32";
+  else if (Id == Intrinsic::X86TlbSync)
+    Name += ".control" + std::to_string(WordBits);
   Plan.Builtin = "__builtin_ia32_" + Name;
   for (char &Character : Plan.Builtin)
     if (Character == '.')
       Character = '_';
-  if ((Id == Intrinsic::X86InvalidateBroadcast || Plan.AddressBits) &&
-      TargetArch == Arch::X86 && !Plan.AdjustRpl)
+  if (Plan.AddressBits && TargetArch == Arch::X86 && !Plan.AdjustRpl)
     Name += "32";
   Plan.LLVMName = "llvm.x86." + Name;
   return Plan;

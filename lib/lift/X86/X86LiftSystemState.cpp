@@ -271,7 +271,6 @@ bool liftSystemState(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_CLUI:
   case X86_INS_STUI:
   case X86_INS_TESTUI:
-  case X86_INS_TLBSYNC:
     if (!systemExtensionEncoding(Insn, X86, Mode64) || X86.op_count)
       return false;
     if (Insn->id == X86_INS_TESTUI) {
@@ -281,12 +280,16 @@ bool liftSystemState(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
            {x86reg::PF, x86reg::AF, x86reg::ZF, x86reg::SF, x86reg::OF})
         S.emit(NdOp::COPY, NdVar::reg(Flag, 1), {NdVar::scalar(0, 1)});
     } else {
-      S.emitIntrinsic(
-          Insn->id == X86_INS_CLUI   ? Intrinsic::X86ClearUserInterrupt
-          : Insn->id == X86_INS_STUI ? Intrinsic::X86SetUserInterrupt
-                                     : Intrinsic::X86TlbSync,
-          {});
+      S.emitIntrinsic(Insn->id == X86_INS_CLUI
+                          ? Intrinsic::X86ClearUserInterrupt
+                          : Intrinsic::X86SetUserInterrupt,
+                      {});
     }
+    return true;
+  case X86_INS_TLBSYNC:
+    if (!systemExtensionEncoding(Insn, X86, Mode64) || X86.op_count)
+      return false;
+    S.emitIntrinsic(Intrinsic::X86TlbSync, {}, {NdVar::reg(x86reg::RAX, Word)});
     return true;
   case X86_INS_SENDUIPI:
     if (!systemExtensionEncoding(Insn, X86, Mode64) || X86.op_count != 1 ||
