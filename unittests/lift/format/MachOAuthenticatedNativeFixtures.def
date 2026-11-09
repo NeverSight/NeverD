@@ -152,10 +152,16 @@ MACHO_AUTH_NATIVE_TEXT(kFindTool, "--find")
 MACHO_AUTH_NATIVE_TEXT(kLinkerOption, "-fuse-ld=")
 MACHO_AUTH_NATIVE_TEXT(kClassicLinkerPath, "classic-linker.txt")
 MACHO_AUTH_NATIVE_TEXT(kClassicMissing, "Apple ld-classic is unavailable")
+MACHO_AUTH_NATIVE_TEXT(kLegacyFixtureEnvironment,
+                       "NEVERD_ARM64E_LEGACY_FIXTURES")
+MACHO_AUTH_NATIVE_TEXT(kLegacyCompactSuffix, "-compact.dylib")
+MACHO_AUTH_NATIVE_TEXT(kLegacyDwarfSuffix, "-dwarf.dylib")
+MACHO_AUTH_NATIVE_TEXT(kLegacyFixtureProperty, "legacy_fixture_input")
 MACHO_AUTH_NATIVE_TEXT(kLegacyDeployment, "-mmacosx-version-min=11.0")
 MACHO_AUTH_NATIVE_TEXT(kThreadedOption, "-Wl,-no_fixup_chains")
 MACHO_AUTH_NATIVE_TEXT(kChainedOption, "-Wl,-fixup_chains")
 MACHO_AUTH_NATIVE_TEXT(kThreadedProperty, "legacy_threaded")
+MACHO_AUTH_NATIVE_TEXT(kConvertedThreadedProperty, "converted_threaded_fixups")
 MACHO_AUTH_NATIVE_TEXT(kThreadedHeading, "dyld information:")
 MACHO_AUTH_NATIVE_TEXT(kTrue, "true")
 MACHO_AUTH_NATIVE_TEXT(kFalse, "false")
@@ -195,6 +201,9 @@ MACHO_AUTH_NATIVE_TEXT(kObjectLocalData, "native_local_data")
 MACHO_AUTH_NATIVE_TEXT(kObjectExternalData, "native_external_data")
 MACHO_AUTH_NATIVE_TEXT(kNewConstSegment, "__ND_CONST")
 MACHO_AUTH_NATIVE_TEXT(kOriginalTextSegment, "__TEXT")
+MACHO_AUTH_NATIVE_TEXT(kEHFrameSection, "__eh_frame")
+// Apple Clang 21 leaves this unresolved POINTER_TO_GOT personality word.
+MACHO_AUTH_NATIVE_VALUE(uint32_t, kPersonalityPlaceholder, 0xbfffffed)
 MACHO_AUTH_NATIVE_TEXT(kPaddingNoteOwner, "neverd")
 MACHO_AUTH_NATIVE_TEXT(kObjectConstSegment, "__AUTH_CONST")
 MACHO_AUTH_NATIVE_VALUE(unsigned, kObjectFunctionCount, 2)
@@ -220,7 +229,9 @@ MACHO_AUTH_NATIVE_VALUE(int, kRuntimePACUnavailable, 77)
 MACHO_AUTH_NATIVE_TEXT(kRuntimeCapabilityStartedMarker,
                        "native-pac-enforcement-started")
 MACHO_AUTH_NATIVE_TEXT(kRuntimeCapabilityMarker, "native-pac-enforcement-ok")
-MACHO_AUTH_NATIVE_TEXT(kRuntimeControlFile, "native-control.out")
+MACHO_AUTH_NATIVE_TEXT(kRuntimeControlFile, "native-control.dylib")
+MACHO_AUTH_NATIVE_TEXT(kRuntimeLoaderFile, "native-loader.cpp")
+MACHO_AUTH_NATIVE_TEXT(kRuntimeLoaderBinary, "native-loader.out")
 MACHO_AUTH_NATIVE_TEXT(kRuntimeDriverFile, "native-driver.out")
 MACHO_AUTH_NATIVE_TEXT(kRuntimeProviderFile, "libneverd_provider.dylib")
 MACHO_AUTH_NATIVE_TEXT(kRuntimeOutputFile, "native-runtime.txt")
@@ -253,17 +264,35 @@ template <int Key> int checkKey() {
   // Flip a bit that signing changed; do not guess the host's PAC bit layout.
   const uintptr_t Corrupt = Signed ^ (Difference & -Difference);
   if (__builtin_ptrauth_strip((void *)Corrupt, Key) != Raw) return 2;
-  const pid_t Child = fork();
-  if (Child < 0) return 3;
-  if (!Child) {
-    auto *Pointer = (volatile int *)__builtin_ptrauth_auth(
-        (void *)Corrupt, Key, Discriminator);
-    _exit(*Pointer == 42 ? 4 : 5);
+  for (unsigned Attempt = 0; Attempt != 2; ++Attempt) {
+    const bool Invalid = Attempt != 0;
+    const uintptr_t Candidate = Invalid ? Corrupt : Signed;
+    const pid_t Child = fork();
+    if (Child < 0)
+      return 3;
+    if (!Child) {
+      auto *Pointer = (volatile int *)__builtin_ptrauth_auth(
+          (void *)Candidate, Key, Discriminator);
+      _exit(*Pointer == 42 ? 0 : 5);
+    }
+    int Status = 0;
+    if (waitpid(Child, &Status, 0) != Child)
+      return 6;
+    const int Signal = WIFSIGNALED(Status) ? WTERMSIG(Status) : 0;
+    printf("native-pac-key=%d invalid=%d child-status=%d child-signal=%d\n",
+           Key, Invalid, Status, Signal);
+    fflush(stdout);
+    if (!Invalid) {
+      if (!WIFEXITED(Status) || WEXITSTATUS(Status))
+        return 9;
+      continue;
+    }
+    // Clang's checked AUT/XPAC comparison traps with BRK 0xc470 + Key.
+    if (Signal != SIGSEGV && Signal != SIGBUS && Signal != SIGILL &&
+        Signal != SIGTRAP)
+      return 7;
   }
-  int Status = 0;
-  if (waitpid(Child, &Status, 0) != Child || !WIFSIGNALED(Status)) return 6;
-  const int Signal = WTERMSIG(Status);
-  return Signal == SIGSEGV || Signal == SIGBUS || Signal == SIGILL ? 0 : 7;
+  return 0;
 }
 int main() {
   puts("native-pac-enforcement-started");
@@ -329,6 +358,23 @@ MACHO_AUTH_NATIVE_TEXT(kRuntimeControlResult, "native_control_result")
 MACHO_AUTH_NATIVE_ARGS(kRuntimeCompileArgs, "-arch", "arm64e", "-std=c++20",
                        "-fno-omit-frame-pointer", "-fno-optimize-sibling-calls")
 MACHO_AUTH_NATIVE_ARGS(kProviderCompileArgs, "-dynamiclib")
+MACHO_AUTH_NATIVE_TEXT(kRuntimeLoaderSource, R"cpp(
+#include <dlfcn.h>
+#include <stdio.h>
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *Image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!Image) {
+    fprintf(stderr, "%s\n", dlerror());
+    return 2;
+  }
+  auto Entry = (int (*)(int, char **))dlsym(Image, "main");
+  if (!Entry)
+    return 3;
+  return Entry(1, argv);
+}
+)cpp")
 MACHO_AUTH_NATIVE_TEXT(kRuntimeProviderSource, R"cpp(
 extern "C" {
 int neverd_should_throw = 0;

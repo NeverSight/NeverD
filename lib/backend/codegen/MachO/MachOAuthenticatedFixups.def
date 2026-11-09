@@ -41,6 +41,8 @@ MACHO_AUTH_FIXUP_TEXT(kSignature,
 
 MACHO_AUTH_FIXUP_TEXT(kThreadedSegment,
                       "threaded segment ordinal exceeds its immediate field")
+MACHO_AUTH_FIXUP_TEXT(kExportCommands,
+                      "legacy and chained export commands conflict")
 
 MACHO_AUTH_FIXUP_TEXT(kProducer,
                       "incomplete or inconsistent producer signing receipt")

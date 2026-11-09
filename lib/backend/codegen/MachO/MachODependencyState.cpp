@@ -859,7 +859,10 @@ readMachODependencyState(llvm::ArrayRef<uint8_t> B,
     auto Facts = machOExportIdentities(*V, R.HeaderVA);
     if (!Facts)
       return Facts.takeError();
-    bytes(R.State.Exports, *Facts);
+    // An empty export stream and an absent export command describe the same
+    // exported symbol set, including when threaded fixups become chains.
+    if (!Facts->empty())
+      bytes(R.State.Exports, *Facts);
     bytes(R.Digest, *V);
   }
   if (R.Export) {
@@ -869,7 +872,8 @@ readMachODependencyState(llvm::ArrayRef<uint8_t> B,
     auto Facts = machOExportIdentities(*V, R.HeaderVA);
     if (!Facts)
       return Facts.takeError();
-    bytes(R.State.Exports, *Facts);
+    if (!Facts->empty())
+      bytes(R.State.Exports, *Facts);
     bytes(R.Digest, *V);
   }
   bytes(R.Digest, R.State.Exports);

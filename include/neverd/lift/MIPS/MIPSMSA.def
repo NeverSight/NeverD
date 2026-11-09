@@ -34,5 +34,9 @@ NEVERD_MIPS_MSA(ClearBitVector, 0xff80003f, 0x7980000d)
 NEVERD_MIPS_MSA(SetBitVector, 0xff80003f, 0x7a00000d)
 NEVERD_MIPS_MSA(NegateBitVector, 0xff80003f, 0x7a80000d)
 NEVERD_MIPS_MSA(MultiplyVector, 0xff80003f, 0x78000012)
+NEVERD_MIPS_MSA(MultiplyAddVector, 0xff80003f, 0x78800012)
+NEVERD_MIPS_MSA(MultiplySubVector, 0xff80003f, 0x79000012)
+NEVERD_MIPS_MSA(AbsoluteMaximumVector, 0xff80003f, 0x7b00000e)
+NEVERD_MIPS_MSA(AbsoluteMinimumVector, 0xff80003f, 0x7b80000e)
 
 #undef NEVERD_MIPS_MSA

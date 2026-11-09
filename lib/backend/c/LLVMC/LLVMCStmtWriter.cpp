@@ -40,6 +40,7 @@
 #include "LLVMCSourceStrings.h"
 #include "LLVMCStackAllocation.h"
 #include "LLVMCWriter.h"
+#include "LLVMCX87Precision.h"
 
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
@@ -4538,6 +4539,14 @@ bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
        << valueStr(Call.getArgOperand(0)) << ", "
        << valueStr(Call.getArgOperand(1)) << ", "
        << valueStr(Call.getArgOperand(2)) << ");\n";
+    return true;
+  }
+  if (const auto Helper = llvmX87PrecisionConversion(Call, Opts.TheArch)) {
+    emitIndent(Indent);
+    if (!Call.use_empty())
+      OS << getName(&Call) << " = ";
+    OS << x87CHelperName(*Helper) << "(" << valueStr(Call.getArgOperand(0))
+       << ");\n";
     return true;
   }
   if (IID == llvm::Intrinsic::experimental_constrained_sitofp &&

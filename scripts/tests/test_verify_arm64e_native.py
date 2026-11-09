@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 import subprocess
+import struct
 import sys
 import tempfile
 import unittest
@@ -24,6 +25,99 @@ def runtime_xml():
 
 
 class Arm64eNativeQualificationTests(unittest.TestCase):
+    def test_probe_keeps_startup_and_dlopen_contracts_distinct(self):
+        contract = native.fixture_contract()
+        markers = "\n".join(contract[name] for name in
+                            ("started", "completed", "runtime_completed"))
+        for startup in (False, True):
+            with self.subTest(startup=startup), tempfile.TemporaryDirectory() as temporary, \
+                    mock.patch.object(native.platform, "system", return_value=CASES["probe_host"]["system"]), \
+                    mock.patch.object(native.platform, "machine", return_value=CASES["probe_host"]["machine"]), \
+                    mock.patch.object(native, "provenance", return_value=CASES["provenance"]), \
+                    mock.patch.object(native, "check_binary", side_effect=lambda _: dict(CASES["probe_identity"])), \
+                    mock.patch.object(native, "command", return_value=subprocess.CompletedProcess(
+                        [], 0, markers, "")) as command:
+                report = native.probe(Path(temporary), startup=startup)
+                self.assertEqual(report["status"], native.POLICY["passed"])
+                self.assertEqual(report["control_loading"], native.POLICY[
+                    "startup_loading" if startup else "control_loading"])
+                self.assertEqual(report[native.POLICY["startup_qualification_key"]], startup)
+                self.assertFalse(report["whole_image_publication_qualified"])
+                runtime_labels = {native.POLICY["runtime_label"].format(
+                    optimization=optimization, dwarf=dwarf)
+                    for optimization in native.POLICY["optimizations"]
+                    for dwarf in native.POLICY["dwarf_modes"]}
+                invocations = {call.args[2]: call.args[3] for call in command.call_args_list}
+                for label in runtime_labels:
+                    compile = invocations[label + native.POLICY["compile_suffix"]]
+                    self.assertEqual(all(arg in compile for arg in contract["library_args"]),
+                                     not startup)
+                    self.assertEqual(len(invocations[label]), 1 if startup else 2)
+                    self.assertEqual("loader" in next(row for row in report["controls"]
+                                                     if row["label"] == label), not startup)
+
+    def test_failed_startup_does_not_retry_as_dlopen(self):
+        contract = native.fixture_contract()
+        markers = "\n".join(contract[name] for name in
+                            ("started", "completed", "runtime_completed"))
+        first_runtime = native.POLICY["runtime_label"].format(
+            optimization=native.POLICY["optimizations"][0], dwarf=native.POLICY["dwarf_modes"][0])
+
+        def run(products, output, label, argv, timeout):
+            code = CASES["startup_failure"] if label == first_runtime else 0
+            return subprocess.CompletedProcess(argv, code, markers, "")
+
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(native.platform, "system", return_value=CASES["probe_host"]["system"]), \
+                mock.patch.object(native.platform, "machine", return_value=CASES["probe_host"]["machine"]), \
+                mock.patch.object(native, "provenance", return_value=CASES["provenance"]), \
+                mock.patch.object(native, "check_binary", side_effect=lambda _: dict(CASES["probe_identity"])), \
+                mock.patch.object(native, "command", side_effect=run) as command:
+            report = native.probe(Path(temporary), startup=True)
+            self.assertEqual(report["status"], native.POLICY["failed"])
+            self.assertTrue(report["native_pac_qualified"])
+            self.assertFalse(report["compiler_original_call_unwind_qualified"])
+            self.assertFalse(report[native.POLICY["startup_qualification_key"]])
+            self.assertFalse(report["whole_image_publication_qualified"])
+            self.assertEqual(report["controls"][-1]["returncode"], CASES["startup_failure"])
+            self.assertEqual(len(report["controls"]), len(native.POLICY["optimizations"]) + 1)
+            for call in command.call_args_list:
+                self.assertFalse(any(arg in call.args[3] for arg in contract["library_args"]))
+
+    def test_failed_legacy_linker_lookup_stops_before_compiling(self):
+        failure = subprocess.CompletedProcess([], CASES["legacy_lookup_failure"], "", "")
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(native, "command", return_value=failure) as command:
+            with self.assertRaises(RuntimeError):
+                native.build_legacy_fixtures(Path(temporary))
+            command.assert_called_once()
+
+    def test_legacy_bundle_requires_current_sources_and_exact_image_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(native, "provenance", return_value=CASES["provenance"]):
+            root = Path(temporary)
+            report = {**CASES["provenance"], "status": native.POLICY["passed"], "images": []}
+            for case in native.legacy_cases(native.fixture_contract()):
+                path = root / case["name"]
+                path.write_bytes(struct.pack(CASES["legacy_header_format"], *CASES["legacy_header"]))
+                report["images"].append({**case, **native.check_binary(path)})
+            manifest = root / native.POLICY["report_name"]
+            native.save(manifest, report)
+            self.assertEqual(native.verify_legacy_fixtures(root), report)
+            for mutation in CASES["probe_mutations"]:
+                if not any(key in mutation for key in native.POLICY["provenance_keys"]):
+                    continue
+                native.save(manifest, dict(report, **mutation))
+                with self.assertRaises(ValueError):
+                    native.verify_legacy_fixtures(root)
+            native.save(manifest, report)
+            path.write_bytes(path.read_bytes() + CASES["legacy_trailing_bytes"].encode())
+            with self.assertRaises(ValueError):
+                native.verify_legacy_fixtures(root)
+            path.unlink()
+            with self.assertRaises(OSError):
+                native.verify_legacy_fixtures(root)
+
     def test_pac_requires_entry_completion_and_successful_exit(self):
         contract = native.fixture_contract()
         for case in CASES["capability_cases"]:

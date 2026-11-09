@@ -85,6 +85,8 @@ enum class VectorOperation {
   SetBit,
   NegateBit,
   Multiply,
+  MultiplyAdd,
+  MultiplySub,
   Equal,
   SignedLess,
   UnsignedLess,
@@ -93,7 +95,9 @@ enum class VectorOperation {
   SignedMaximum,
   UnsignedMaximum,
   SignedMinimum,
-  UnsignedMinimum
+  UnsignedMinimum,
+  AbsoluteMaximum,
+  AbsoluteMinimum
 };
 struct VectorCase {
   uint32_t Encoding;
@@ -106,6 +110,10 @@ constexpr VectorCase VectorCases[] = {
 #include "MIPSMSAVectorFixtures.def"
 };
 constexpr std::array<uint32_t, 4> VectorInputs[][2] = {
+    {{0x80017fff, 0x80000000, 1, 0},
+     {0x80ff7f01, 0x7fffffff, 0xffffffff, 0xffffffff}},
+    {{0x80000000, 0, 0, 0x80000000},
+     {0x80000000, 0xffffffff, 0xffffffff, 0x7fffffff}},
     {{0xffffffff, 0x7fffffff, 1, 0x80000000}, {63, 0xffffffff, 64, 0x80000000}},
     {{0x80000000, 0x80000000, 0xffffffff, 0x7fffffff},
      {65, 0x12345678, 127, 0xffffffff}},
@@ -120,9 +128,40 @@ constexpr std::array<uint32_t, 4> VectorInputs[][2] = {
 
 std::vector<uint8_t> vectorExpected(const VectorCase &Case,
                                     llvm::ArrayRef<uint8_t> A,
-                                    llvm::ArrayRef<uint8_t> B) {
+                                    llvm::ArrayRef<uint8_t> B,
+                                    llvm::ArrayRef<uint8_t> D) {
   // Byte-wise carry/borrow is independent of the lifter's sized lane ops.
   std::vector<uint8_t> Result(16);
+  if (Case.Operation == VectorOperation::AbsoluteMaximum ||
+      Case.Operation == VectorOperation::AbsoluteMinimum) {
+    for (unsigned Base = 0; Base != 16; Base += Case.ElementBytes) {
+      const auto Magnitude = [&](llvm::ArrayRef<uint8_t> V) {
+        std::vector<uint8_t> M(V.begin() + Base,
+                               V.begin() + Base + Case.ElementBytes);
+        if (M.back() & 128) {
+          unsigned Carry = 1;
+          for (auto &Byte : M) {
+            unsigned N = unsigned(uint8_t(~Byte)) + Carry;
+            Byte = N;
+            Carry = N >> 8;
+          }
+        }
+        return M;
+      };
+      auto X = Magnitude(A), Y = Magnitude(B);
+      int Order = 0;
+      for (unsigned I = Case.ElementBytes; I && !Order; --I)
+        Order = X[I - 1] < Y[I - 1] ? -1 : X[I - 1] > Y[I - 1] ? 1 : 0;
+      const auto Source =
+          (Case.Operation == VectorOperation::AbsoluteMaximum ? Order > 0
+                                                              : Order < 0)
+              ? A
+              : B;
+      std::copy_n(Source.begin() + Base, Case.ElementBytes,
+                  Result.begin() + Base);
+    }
+    return Result;
+  }
   if (Case.Operation >= VectorOperation::Equal) {
     const bool Signed = Case.Operation == VectorOperation::SignedLess ||
                         Case.Operation == VectorOperation::SignedLessEqual ||
@@ -156,11 +195,13 @@ std::vector<uint8_t> vectorExpected(const VectorCase &Case,
     return Result;
   }
   if (Case.Operation >= VectorOperation::ShiftLeft &&
-      Case.Operation <= VectorOperation::Multiply) {
+      Case.Operation <= VectorOperation::MultiplySub) {
     const unsigned Bits = Case.ElementBytes * 8;
     for (unsigned Base = 0; Base != 16; Base += Case.ElementBytes) {
       const unsigned Count = B[Base] & (Bits - 1);
-      if (Case.Operation == VectorOperation::Multiply) {
+      if (Case.Operation == VectorOperation::Multiply ||
+          Case.Operation == VectorOperation::MultiplyAdd ||
+          Case.Operation == VectorOperation::MultiplySub) {
         unsigned Carry = 0;
         for (unsigned Byte = 0; Byte != Case.ElementBytes; ++Byte) {
           unsigned Sum = Carry;
@@ -168,6 +209,17 @@ std::vector<uint8_t> vectorExpected(const VectorCase &Case,
             Sum += unsigned(A[Base + J]) * B[Base + Byte - J];
           Result[Base + Byte] = uint8_t(Sum);
           Carry = Sum >> 8;
+        }
+        if (Case.Operation != VectorOperation::Multiply) {
+          int Carry = 0;
+          for (unsigned I = 0; I < Case.ElementBytes; ++I) {
+            const int N = Case.Operation == VectorOperation::MultiplyAdd
+                              ? D[Base + I] + Result[Base + I] + Carry
+                              : D[Base + I] - Result[Base + I] - Carry;
+            Result[Base + I] = uint8_t(N);
+            Carry =
+                Case.Operation == VectorOperation::MultiplyAdd ? N >> 8 : N < 0;
+          }
         }
         continue;
       }
@@ -302,11 +354,18 @@ TEST_P(MIPSMSA, IntegerFormatsPreserveLaneBoundariesAndAliasedInputs) {
           Emulator.setStrictMode(true);
           Emulator.setRegisterBytes(mipsreg::w(0), A);
           Emulator.setRegisterBytes(mipsreg::w(1), B);
+          if (Destination > 1)
+            Emulator.setRegisterBytes(mipsreg::w(Destination),
+                                      std::vector<uint8_t>(16, 0x5a));
           const uint32_t Word =
               Case.Encoding | (Destination << 6) | (SameSource ? 0 : (1 << 16));
           ASSERT_TRUE(msaExecute(Decode, GetParam(), Word, Emulator));
           EXPECT_EQ(Emulator.getRegisterBytes(mipsreg::w(Destination)),
-                    vectorExpected(Case, A, SameSource ? A : B));
+                    vectorExpected(Case, A, SameSource ? A : B,
+                                   Destination == 0 ? A
+                                   : Destination == 1
+                                       ? B
+                                       : std::vector<uint8_t>(16, 0x5a)));
           if (Destination != 0)
             EXPECT_EQ(Emulator.getRegisterBytes(mipsreg::w(0)), A);
           if (Destination != 1)
@@ -336,6 +395,26 @@ TEST_P(MIPSMSA, IntegerFormatsRefuseMissingWholeOrUpperVectorState) {
           EXPECT_EQ(Emulator.getRegisterBytes(mipsreg::w(2)), Before);
           EXPECT_FALSE(Emulator.skips().any());
         }
+}
+
+TEST_P(MIPSMSA, MultiplyAccumulateRequiresEveryByteOfTheOldDestination) {
+  auto Image = msaImage(GetParam());
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(Image));
+  for (uint32_t Word : {0x78810092u, 0x79010092u})
+    for (unsigned Available : {0u, 8u}) {
+      NdOpEmulator E(Image);
+      E.setStrictMode(true);
+      E.setRegisterBytes(mipsreg::w(0), std::vector<uint8_t>(16, 1));
+      E.setRegisterBytes(mipsreg::w(1), std::vector<uint8_t>(16, 2));
+      if (Available)
+        E.setRegister(mipsreg::w(2), 0x123456789abcdef0);
+      const auto Before = E.getRegisterBytes(mipsreg::w(2));
+      EXPECT_FALSE(msaExecute(Decode, GetParam(), Word, E));
+      EXPECT_EQ(E.getRegisterBytes(mipsreg::w(2)), Before);
+      if (Available)
+        EXPECT_EQ(E.getRegister(mipsreg::w(2)), UINT64_C(0x123456789abcdef0));
+    }
 }
 
 TEST_P(MIPSMSA, ZeroGPRAndMissingVectorStateStayDistinct) {
@@ -388,7 +467,7 @@ TEST_P(MIPSMSA, ReusedDecoderConsumesRevisionAndFeatureEvidence) {
 TEST_P(MIPSMSA, UnadmittedFormatsRefuseBeforeEmittingEffects) {
   MIPSLifter Lifter(GetParam());
   Lifter.setMSAEnabled(true);
-  for (uint32_t Word : {0x7b03201eu, 0x79342819u, 0x78f00099u, 0x78800012u}) {
+  for (uint32_t Word : {0x7b03201eu, 0x79342819u, 0x78f00099u, 0x7a800012u}) {
     cs_insn Instruction{};
     Instruction.address = 0x10000;
     Instruction.size = 4;
@@ -495,6 +574,11 @@ TEST_P(MIPSMSA, IntegerFormatsMatchEnabledP5600AcrossAllOutputBytes) {
                         UC_ERR_OK);
             }
           }
+          if (Destination > 1) {
+            uint64_t Initial = 0x5a5a5a5a;
+            ASSERT_EQ(uc_reg_write(CPU, UC_MIPS_REG_T2, &Initial), UC_ERR_OK);
+            Program.push_back(0x7b02501e | (Destination << 6));
+          }
           Program.push_back(Case.Encoding | (Destination << 6) |
                             (SameSource ? 0 : (1 << 16)));
           for (unsigned Lane = 0; Lane != 4; ++Lane)
@@ -516,7 +600,12 @@ TEST_P(MIPSMSA, IntegerFormatsMatchEnabledP5600AcrossAllOutputBytes) {
             for (unsigned I = 0; I != 4; ++I)
               Actual.push_back(uint8_t(Value >> (I * 8)));
           }
-          EXPECT_EQ(Actual, vectorExpected(Case, A, SameSource ? A : B));
+          EXPECT_EQ(Actual,
+                    vectorExpected(Case, A, SameSource ? A : B,
+                                   Destination == 0 ? A
+                                   : Destination == 1
+                                       ? B
+                                       : std::vector<uint8_t>(16, 0x5a)));
         }
 #endif
 }

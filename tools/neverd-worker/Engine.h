@@ -442,10 +442,10 @@ private:
   void forgetGraphsAndText();
   /// What the render a view replays read, in the form neverd_user_reads wrote.
   std::string keptReads_;
-  /// A document replaying pages reads what the render they came from read, and
-  /// what its decoration looked up.
+  /// A document reads what the render its pages came from read, one a store
+  /// kept or the engine's own, and what its decoration looked up.
   struct NamedView;
-  void noteRenderReads(NamedView &document) const;
+  void noteRenderReads(NamedView &document, std::string_view record) const;
   void noteDecorationReads(NamedView &document, const Json &view,
                            std::uint64_t function) const;
   /// Starts at one so that documents never hold a key from before a forget.
@@ -475,6 +475,16 @@ private:
   void currentNamesInView(Json &view) const;
   /// When the last request was answered.
   std::chrono::steady_clock::time_point lastRequest_{};
+  /// Whether idle time reads, for a later declaration of local types, the
+  /// names it checks its own against (neverd_local_types_prepare); set after
+  /// each request and each other idle step, which may have read the types
+  /// (as discovery does) or changed them.
+  bool localTypeNamesPending_ = false;
+  /// The times idle time found those names read for the local types as they
+  /// were (metadata.local_type_names_prepared).
+  std::uint64_t localTypeNamesPrepared_ = 0;
+  /// Reads those names once the session has read its local types.
+  void prepareLocalTypeNames();
   /// The function a request last prepared and how long that took.
   std::optional<std::uint64_t> requestPrepared_;
   std::chrono::steady_clock::duration requestPrepareTime_{};
@@ -636,6 +646,8 @@ private:
   /// Documents written from another with its comments, functions' names or
   /// data's names taken (takeComments, takeFunctionNames, takeDataNames).
   std::uint64_t commentPatches_ = 0, namePatches_ = 0, dataNamePatches_ = 0;
+  /// Documents the engine rendered for, rather than built from kept pages.
+  std::uint64_t namedViewRenders_ = 0;
   /// Takes the document at \p position out of the documents kept, as one for
   /// the page deltas of what clients keep.
   void dropNamedView(NamedViewPosition position);

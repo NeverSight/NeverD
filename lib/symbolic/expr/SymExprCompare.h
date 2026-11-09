@@ -8,7 +8,22 @@
 
 #include "neverd/symbolic/SymExpr.h"
 
+#include "llvm/ADT/SmallVector.h"
+
+#include <optional>
+
 namespace neverd::symbolic::detail {
+
+struct CancelledOperands {
+  llvm::SmallVector<SymRef, 8> Left;
+  llvm::SmallVector<SymRef, 8> Right;
+};
+
+/// Remove identical complete operands from two sums or XORs, without interning.
+/// The remaining terms are owned copies, safe across later builder calls.
+/// Equality shares both group laws; subtraction uses only addition.
+std::optional<CancelledOperands>
+cancelCommonOperands(const SymContext &Ctx, SymRef A, SymRef B, SymOp Op);
 
 /// Decode equality with a literal when an OR packs disjoint zero-extended
 /// predicates into individual bits. Unsupported or overlapping lanes stay.

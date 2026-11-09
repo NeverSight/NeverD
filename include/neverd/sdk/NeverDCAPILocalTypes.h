@@ -125,6 +125,15 @@ NEVERD_API const char *neverd_local_types_source(neverd_session_t Sess,
 NEVERD_API const char *neverd_local_types_declare(neverd_session_t Sess,
                                                   const char *Source,
                                                   const char *OptionsJson);
+/// Reads, while nothing waits, what neverd_local_types_declare checks the
+/// names it adds against: the names the program's local types spell and those
+/// their types and prototypes mention.  A declaration reads them itself where
+/// they do not hold for the local types as they are, and keeps them as it adds
+/// types, so no reply changes.  Returns 1 once they hold, 0 when no binary is
+/// loaded or the session has not read its local types yet (a declaration or
+/// the first decompile reads those, which this leaves to them).  Leaves
+/// neverd_last_error() as it was.
+NEVERD_API int neverd_local_types_prepare(neverd_session_t Sess);
 /// Removes the types the JSON array \p NamesJson names from the program's
 /// local types, the program's own as well as the user's.  Returns
 /// {"removed":[name,...],"usedBy":[name,...]}: the types that still name a

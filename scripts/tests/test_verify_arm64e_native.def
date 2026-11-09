@@ -102,7 +102,8 @@
     },
     "status": "passed",
     "native_pac_qualified": true,
-    "compiler_original_call_unwind_qualified": true
+    "compiler_original_call_unwind_qualified": true,
+    "control_loading": "dlopen"
   },
   "provenance": {
     "source_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -128,6 +129,30 @@
       "source_sha256": {
         "fixture": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
       }
+    },
+    {
+      "control_loading": "exec"
+    },
+    {
+      "control_loading": null
     }
-  ]
+  ],
+  "legacy_header_format": "<III",
+  "legacy_header": [
+    4277009103,
+    16777228,
+    2147483650
+  ],
+  "legacy_trailing_bytes": "changed",
+  "legacy_lookup_failure": 72,
+  "probe_host": {
+    "system": "Darwin",
+    "machine": "arm64"
+  },
+  "probe_identity": {
+    "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "bytes": 32,
+    "cpu_subtype": 2147483650
+  },
+  "startup_failure": -11
 }

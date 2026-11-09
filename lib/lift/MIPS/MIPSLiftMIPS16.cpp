@@ -113,6 +113,12 @@ MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
     return Encoding{immediateForm(Major, 0, RX, SignedImmediate)};
   case 0x0c: {
     const unsigned Minor = (Half >> 8) & 7;
+    if (Minor == 4) { // SVRS has its own EXTEND layout, not an immediate form.
+      if (Extended && (First & 15) == 15)
+        return std::nullopt;
+      return Encoding{(Extended ? uint32_t(First) << 16 : 0) | Half, 0, false,
+                      false, true};
+    }
     if (Extended && (Half & 0xe0))
       return std::nullopt;
     if (Minor <= 1) // BTEQZ / BTNEZ use GPR24 as T.
@@ -166,6 +172,48 @@ MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
   default:
     return std::nullopt;
   }
+}
+
+void MIPSLifter::liftMIPS16Frame(State &S, uint32_t Word) const {
+  const unsigned Prefix = Word >> 16;
+  const bool Save = Word & 0x80;
+  const unsigned Frame = ((Word & 15) | (Prefix & 0xf0)) * 8;
+  const unsigned Bytes = !Prefix && !Frame ? 128 : Frame;
+  const unsigned Aregs = Prefix & 15;
+  const unsigned Arguments = Aregs == 14 ? 4 : Aregs == 11 ? 0 : Aregs >> 2;
+  const unsigned Statics = Aregs == 11 ? 4 : Aregs == 14 ? 0 : Aregs & 3;
+  const unsigned Extended = (Prefix >> 8) & 7;
+  const auto OldSP = S.makeTemp(4);
+  S.emit(NdOp::COPY, OldSP, {S.read(29)});
+  const auto Top =
+      Save ? OldSP : S.binary(NdOp::INT_ADD, OldSP, NdVar::cst(Bytes, 4));
+  const auto Access = [&](unsigned Register, int Offset) {
+    // Reuse ordinary word memory semantics, including alignment and faults.
+    liftMemory(S, immediateForm(Save ? 43 : 35, Register, 29, uint16_t(Offset)),
+               Top);
+  };
+  if (Save)
+    for (unsigned I = 0; I != Arguments; ++I)
+      Access(4 + I, I * 4);
+  int Offset = 0;
+  const auto Static = [&](unsigned Register) {
+    Offset -= 4;
+    Access(Register, Offset);
+  };
+  if (Word & 0x40)
+    Static(31);
+  for (unsigned I = Extended; I != 0; --I)
+    Static(I == 7 ? 30 : 17 + I);
+  if (Word & 0x10)
+    Static(17);
+  if (Word & 0x20)
+    Static(16);
+  for (unsigned I = 0; I != Statics; ++I)
+    Static(7 - I);
+  // Earlier accesses remain visible if a later one faults; SP changes only
+  // after the complete sequence. A frame with no accesses need not be aligned.
+  S.write(29,
+          Save ? S.binary(NdOp::INT_SUB, OldSP, NdVar::cst(Bytes, 4)) : Top);
 }
 
 bool MIPSLifter::liftPCRelative(State &S, uint32_t Word, va_t BasePC) const {

@@ -60,6 +60,88 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
     return true;
   }
 
+  struct Expansion {
+    uint16_t Bytes, First, Step, Shift, OutBytes;
+  };
+  std::optional<Expansion> Expand;
+  switch (*Kind) {
+#define NEVERD_MIPS_DSP_EXPAND(Name, Value, Bytes, First, Step, Shift,         \
+                               OutBytes)                                       \
+  case mips::DSPInstruction::Name:                                             \
+    Expand = Expansion{Bytes, First, Step, Shift, OutBytes};                   \
+    break;
+#include "neverd/ir/intrinsics/MIPS/MIPSDSP.def"
+  default:
+    break;
+  }
+  const bool Reverse = *Kind == mips::DSPInstruction::ReverseHalfwordBits;
+  const bool Reduce = *Kind == mips::DSPInstruction::ReduceAddBytes;
+  const bool Replicate =
+      *Kind == mips::DSPInstruction::ReplicateBytes ||
+      *Kind == mips::DSPInstruction::ReplicateHalfwords ||
+      *Kind == mips::DSPInstruction::ReplicateVariableBytes ||
+      *Kind == mips::DSPInstruction::ReplicateVariableHalfwords;
+  if (Expand || Reverse || Reduce || Replicate) {
+    if (!RD) {
+      S.emit(NdOp::NOP, {}, {});
+      return true;
+    }
+    NdVar Result = NdVar::cst(0, 4);
+    if (Expand) {
+      const auto Input = S.read(RT);
+      for (unsigned I = 0; I != 4u / Expand->OutBytes; ++I) {
+        const auto Part = S.makeTemp(Expand->Bytes);
+        S.emit(NdOp::SUBBYTES, Part,
+               {Input, NdVar::cst(Expand->First + I * Expand->Step, 4)});
+        auto Value = S.resize(Part, 4);
+        const unsigned Shift = Expand->Shift + I * Expand->OutBytes * 8;
+        if (Shift)
+          Value = S.binary(NdOp::INT_LEFT, Value, NdVar::cst(Shift, 4));
+        Result = S.binary(NdOp::INT_OR, Result, Value);
+      }
+    } else if (Reverse) {
+      Result = S.binary(NdOp::INT_AND, S.read(RT), NdVar::cst(0xffff, 4));
+      for (unsigned Shift = 1; Shift <= 8; Shift *= 2) {
+        const auto Mask = NdVar::cst(0xffffu / ((1u << Shift) + 1), 4);
+        Result = S.binary(
+            NdOp::INT_OR,
+            S.binary(NdOp::INT_AND,
+                     S.binary(NdOp::INT_RIGHT, Result, NdVar::cst(Shift, 4)),
+                     Mask),
+            S.binary(NdOp::INT_LEFT, S.binary(NdOp::INT_AND, Result, Mask),
+                     NdVar::cst(Shift, 4)));
+      }
+    } else if (Reduce) {
+      const auto Input = S.read(RS);
+      for (unsigned I = 0; I != 4; ++I) {
+        const auto Byte = S.makeTemp(1);
+        S.emit(NdOp::SUBBYTES, Byte, {Input, NdVar::cst(I, 4)});
+        Result = S.binary(NdOp::INT_ADD, Result, S.resize(Byte, 4));
+      }
+    } else {
+      const bool Half =
+          *Kind == mips::DSPInstruction::ReplicateHalfwords ||
+          *Kind == mips::DSPInstruction::ReplicateVariableHalfwords;
+      const bool Variable =
+          *Kind == mips::DSPInstruction::ReplicateVariableBytes ||
+          *Kind == mips::DSPInstruction::ReplicateVariableHalfwords;
+      const uint16_t Bytes = Half ? 2 : 1;
+      const unsigned Immediate = (Word >> 16) & (Half ? 1023 : 255);
+      const auto Value =
+          Variable
+              ? S.resize(S.read(RT, Bytes), 4)
+              : NdVar::cst(Half ? uint16_t((Immediate ^ 512) - 512) : Immediate,
+                           4);
+      for (unsigned I = 0; I != 4u / Bytes; ++I)
+        Result = S.binary(
+            NdOp::INT_OR, Result,
+            I ? S.binary(NdOp::INT_LEFT, Value, NdVar::cst(I * Bytes * 8, 4))
+              : Value);
+    }
+    S.write(RD, Result);
+    return true;
+  }
+
   struct ShiftForm {
     uint16_t Bytes;
     bool Variable, Rounded;

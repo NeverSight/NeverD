@@ -616,7 +616,7 @@ void LowToMedConverter::runDce(MedFunc &Func) {
   auto isEssential = [](const MedOp &Op) {
     if (mipsScalarMedShapeIsValid(Op)) {
       const auto Id = static_cast<Intrinsic>(Op.Inputs[0].ConstVal);
-      if (Id == Intrinsic::MIPSUnpredictable || Id == Intrinsic::MIPSLwrUpper)
+      if (mips::isPureScalarValue(Id))
         return false;
     }
     return Op.Opcode == NdOp::STORE || Op.Opcode == NdOp::ATOMIC_XCHG ||

@@ -18,6 +18,7 @@ from kept_reads_test import fresh_page, page, sessions
 from pe_listing_facts_test import fixture as functions_fixture
 from render_ahead_test import done, render_ahead
 from source_variable_types_test import ok
+from transport_test import Client
 
 TARGET, CALLER = 0x140001040, 0x140001100
 
@@ -103,6 +104,22 @@ def run(executable):
         assert not reply["prepared"] and not reply["rendered"], reply
         # The function the caller calls reads as a fresh replica's throughout.
         assert page(replica, TARGET) == fresh_page(executable, owner, TARGET)
+
+        # A replica that takes a declaration keeps the views that did not read
+        # it, as the owner does: with no store to read them from, the callee's
+        # view builds again from its pages, and only the caller's is rendered.
+        bare = clients.enter_context(Client(executable))
+        ok(bare, "analysis_restore", ok(owner, "analysis_snapshot"))
+        page(bare, TARGET)
+        page(bare, CALLER)
+        renders = ok(bare, "metadata")["named_view_renders"]
+        state(owner, bare, "kept_argument")
+        assert page(bare, TARGET) == fresh_page(executable, owner, TARGET)
+        assert ok(bare, "metadata")["named_view_renders"] == renders
+        shown = page(bare, CALLER)
+        assert "kept_argument" in shown["text"], shown["text"]
+        assert ok(bare, "metadata")["named_view_renders"] == renders + 1
+        assert shown == fresh_page(executable, owner, CALLER)
 
 
 if __name__ == "__main__":

@@ -1351,6 +1351,7 @@ _declare(
     ["neverd_session_t", "const char *"],
     ownership=Ownership.OWNED_STRING,
 )
+_declare("neverd_local_types_prepare", "int", ["neverd_session_t"])
 _declare(
     "neverd_type_libraries_json",
     "const char *",

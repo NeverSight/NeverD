@@ -55,6 +55,51 @@ constexpr Scalar Scalars[] = {
 
 class MIPS16Integer : public ::testing::TestWithParam<Arch> {};
 
+TEST_P(MIPS16Integer, DivisionCapturesEveryCompactRegisterPair) {
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(GetParam(), InstructionMode::MIPS16));
+  BinaryImage Image;
+  Image.Arch = GetParam();
+  Image.Bits = Bitness::Bits32;
+  for (bool Signed : {false, true})
+    for (unsigned X = 0; X < 8; ++X)
+      for (unsigned Y = 0; Y < 8; ++Y)
+        for (uint32_t A : {0u, 10u, 0xfffffff6u, 0x80000000u})
+          for (uint32_t B : {0u, 3u, 0xfffffffdu, 0xffffffffu}) {
+            const unsigned RX = X < 2 ? X + 16 : X, RY = Y < 2 ? Y + 16 : Y;
+            uint32_t Left = X == Y ? B : A;
+            const auto Code =
+                bytes(0xe800 | (X << 8) | (Y << 5) | (Signed ? 26 : 27), 0, 2,
+                      GetParam());
+            DecodedInsn I;
+            ASSERT_EQ(Decode.decodeOneForLift(Code.data(), 2, 0x1000, I), 2);
+            std::vector<LowOp> Ops;
+            Decode.liftToLow(I, Ops);
+            NdOpEmulator E(Image);
+            E.setStrictMode(true);
+            E.setRegister(mipsreg::r(RX), A);
+            E.setRegister(mipsreg::r(RY), B);
+            E.setRegister(mipsreg::HI, 111);
+            E.setRegister(mipsreg::LO, 222);
+            for (auto &Op : Ops)
+              ASSERT_TRUE(E.step(Op));
+            if (!B) {
+              EXPECT_FALSE(E.getRegister(mipsreg::HI));
+              EXPECT_FALSE(E.getRegister(mipsreg::LO));
+              continue;
+            }
+            auto SignedWord = [](uint32_t V) -> int64_t {
+              return V & 0x80000000 ? int64_t(V) - (INT64_C(1) << 32) : V;
+            };
+            EXPECT_EQ(E.getRegister(mipsreg::LO),
+                      Signed ? uint32_t(SignedWord(Left) / SignedWord(B))
+                             : Left / B);
+            EXPECT_EQ(E.getRegister(mipsreg::HI),
+                      Signed ? uint32_t(SignedWord(Left) % SignedWord(B))
+                             : Left % B);
+          }
+}
+
 TEST_P(MIPS16Integer, LiteralFieldsAndTruncationsHaveIndependentExpectations) {
   Decoder Decode;
   ASSERT_TRUE(Decode.init(GetParam(), InstructionMode::MIPS16));

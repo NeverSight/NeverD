@@ -488,7 +488,8 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
                                    bool ExecuteNative,
                                    bool DwarfLanguage = false,
                                    bool FreshPersonality = false,
-                                   bool RelocateOriginalLanguage = false) {
+                                   bool RelocateOriginalLanguage = false,
+                                   bool ConvertLegacy = false) {
 #ifndef __APPLE__
   GTEST_SKIP() << kMissingHost;
 #else
@@ -533,6 +534,11 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
   const auto Run =
       [&](llvm::StringRef Tool, llvm::ArrayRef<llvm::StringRef> Args,
           llvm::StringRef Output = {}) {
+        // ExecuteAndWait redirects without truncating existing files on this
+        // host. A marker from the previous child must not satisfy this run.
+        if (!Output.empty())
+          EXPECT_FALSE(Write(Output, {}));
+        EXPECT_FALSE(Write(Log, {}));
         const std::optional<llvm::StringRef> Redirects[] = {
             std::nullopt, Output.empty() ? std::nullopt : std::optional(Output),
             Log};
@@ -552,6 +558,8 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
   const auto ProviderSource = Path(kRuntimeProviderSourceFile),
              RuntimeSource = Path(kRuntimeHarnessFile),
              ControlPath = Path(kRuntimeControlFile),
+             LoaderSource = Path(kRuntimeLoaderFile),
+             LoaderPath = Path(kRuntimeLoaderBinary),
              DriverPath = Path(kRuntimeDriverFile),
              ProviderPath = Path(kRuntimeProviderFile),
              RuntimeOutput = Path(kRuntimeOutputFile);
@@ -560,13 +568,22 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
   if (ExecuteNative) {
     ASSERT_FALSE(Write(ProviderSource, kRuntimeProviderSource));
     ASSERT_FALSE(Write(RuntimeSource, kRuntimeHarness));
+    ASSERT_FALSE(Write(LoaderSource, kRuntimeLoaderSource));
     Args.append(std::begin(kRuntimeCompileArgs), std::end(kRuntimeCompileArgs));
+    Args.append(std::begin(kProviderCompileArgs),
+                std::end(kProviderCompileArgs));
     if (DwarfLanguage)
       Args.push_back(kDwarfLanguageOption);
     Args.append({Optimization, kRuntimeControlOption, Source, ObjectSource,
                  ProviderSource, RuntimeSource});
     Args.append(std::begin(kOutputArgs), std::end(kOutputArgs));
     Args.push_back(ControlPath);
+    ASSERT_EQ(Run(kCompiler, Args), 0);
+    Args.assign({kCompiler});
+    Args.append(std::begin(kRuntimeCompileArgs), std::end(kRuntimeCompileArgs));
+    Args.append({Optimization, LoaderSource});
+    Args.append(std::begin(kOutputArgs), std::end(kOutputArgs));
+    Args.push_back(LoaderPath);
     ASSERT_EQ(Run(kCompiler, Args), 0);
     Args.assign({kCompiler});
     Args.append(std::begin(kRuntimeCompileArgs), std::end(kRuntimeCompileArgs));
@@ -584,6 +601,8 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
     ASSERT_EQ(Run(kCompiler, Args), 0);
     auto Signed = macho_signing::verifyStrict(ControlPath);
     ASSERT_FALSE(bool(Signed)) << llvm::toString(std::move(Signed));
+    Signed = macho_signing::verifyStrict(LoaderPath);
+    ASSERT_FALSE(bool(Signed)) << llvm::toString(std::move(Signed));
     const auto CapabilitySource = Path(kRuntimeCapabilityFile);
     const auto CapabilityBinary = Path(kRuntimeCapabilityBinary);
     ASSERT_FALSE(Write(CapabilitySource, kRuntimeCapabilitySource));
@@ -596,6 +615,8 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
     const std::optional<llvm::StringRef> Redirects[] = {std::nullopt,
                                                         RuntimeOutput, Log};
     std::string Diagnostic;
+    ASSERT_FALSE(Write(RuntimeOutput, {}));
+    ASSERT_FALSE(Write(Log, {}));
     const int Capability = llvm::sys::ExecuteAndWait(
         CapabilityBinary, {CapabilityBinary}, std::nullopt, Redirects,
         kToolTimeout, 0, &Diagnostic);
@@ -617,9 +638,11 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
         (*CapabilityOutput)->getBuffer().contains(kRuntimeCapabilityMarker));
     // Once launch and PAC enforcement work, a broken compiler-original
     // call/catch/cleanup is a failure, never an environmental skip.
-    const int Status =
-        llvm::sys::ExecuteAndWait(ControlPath, {ControlPath}, std::nullopt,
-                                  Redirects, kToolTimeout, 0, &Diagnostic);
+    ASSERT_FALSE(Write(RuntimeOutput, {}));
+    ASSERT_FALSE(Write(Log, {}));
+    const int Status = llvm::sys::ExecuteAndWait(
+        LoaderPath, {LoaderPath, ControlPath}, std::nullopt, Redirects,
+        kToolTimeout, 0, &Diagnostic);
     ::testing::Test::RecordProperty(kRuntimeControlResult, Status);
     ASSERT_EQ(Status, 0) << Diagnostic;
     auto Output = llvm::MemoryBuffer::getFile(RuntimeOutput);
@@ -631,20 +654,33 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
   if (RelocateOriginalLanguage)
     Args.push_back(kDwarfLanguageOption);
   std::string LinkerOption;
-  if (Threaded) {
-    const auto LinkerFile = Path(kClassicLinkerPath);
-    ASSERT_EQ(Run(kXcrun, {kXcrun, kFindTool, kClassicLinker}, LinkerFile), 0);
-    auto Linker = llvm::MemoryBuffer::getFile(LinkerFile);
-    ASSERT_TRUE(bool(Linker));
-    LinkerOption =
-        std::string(kLinkerOption) + (*Linker)->getBuffer().trim().str();
-    Args.append({LinkerOption, kLegacyDeployment, kThreadedOption});
-  } else
-    Args.push_back(kChainedOption);
-  Args.append({Optimization, Source, Dwarf});
-  Args.append(std::begin(kOutputArgs), std::end(kOutputArgs));
-  Args.push_back(OriginalPath);
-  ASSERT_EQ(Run(kCompiler, Args), 0);
+  const auto *LegacyRoot = std::getenv(kLegacyFixtureEnvironment);
+  if (Threaded && LegacyRoot) {
+    llvm::SmallString<kPathCapacity> LegacyPath(LegacyRoot);
+    llvm::sys::path::append(LegacyPath, std::string(Optimization) +
+                                            (RelocateOriginalLanguage
+                                                 ? kLegacyDwarfSuffix
+                                                 : kLegacyCompactSuffix));
+    ASSERT_FALSE(llvm::sys::fs::copy_file(LegacyPath, OriginalPath));
+    ::testing::Test::RecordProperty(kLegacyFixtureProperty,
+                                    LegacyPath.str().str());
+  } else {
+    if (Threaded) {
+      const auto LinkerFile = Path(kClassicLinkerPath);
+      ASSERT_EQ(Run(kXcrun, {kXcrun, kFindTool, kClassicLinker}, LinkerFile),
+                0);
+      auto Linker = llvm::MemoryBuffer::getFile(LinkerFile);
+      ASSERT_TRUE(bool(Linker));
+      LinkerOption =
+          std::string(kLinkerOption) + (*Linker)->getBuffer().trim().str();
+      Args.append({LinkerOption, kLegacyDeployment, kThreadedOption});
+    } else
+      Args.push_back(kChainedOption);
+    Args.append({Optimization, Source, Dwarf});
+    Args.append(std::begin(kOutputArgs), std::end(kOutputArgs));
+    Args.push_back(OriginalPath);
+    ASSERT_EQ(Run(kCompiler, Args), 0);
+  }
   Args.assign({kCompiler});
   Args.append(std::begin(kObjectCompileArgs), std::end(kObjectCompileArgs));
   if (DwarfLanguage)
@@ -847,10 +883,66 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
           ->n_type &= ~llvm::MachO::N_PEXT;
     });
   }
+  const auto BeforeInstallation = Bytes;
   auto Image =
       appendMachOObjectImage(Bytes, (*Object)->getBuffer(), Dependencies);
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
   ASSERT_TRUE(Image->Success);
+  if (DwarfLanguage && !ExecuteNative) {
+    // PTR_TO_GOT has no addend. Changing only its unresolved assembler word
+    // must produce the same placed bytes, even when that word underflows the
+    // object's logical address before linking.
+    auto Variant = (*Object)->getBuffer().str();
+    auto *Data = reinterpret_cast<uint8_t *>(Variant.data());
+    unsigned Changed = 0;
+    forEachMachOLoadCommand(
+        Data, Variant.size(),
+        [&](const uint8_t *C, uint32_t ID, uint32_t, bool) {
+          if (ID != llvm::MachO::LC_SEGMENT_64)
+            return;
+          const auto *Segment =
+              reinterpret_cast<const llvm::MachO::segment_command_64 *>(C);
+          const auto *Sections =
+              reinterpret_cast<const llvm::MachO::section_64 *>(Segment + 1);
+          for (unsigned I = 0; I < Segment->nsects; ++I) {
+            const auto &Section = Sections[I];
+            if (readMachOName(Section.sectname) != kEHFrameSection)
+              continue;
+            for (unsigned J = 0; J < Section.nreloc; ++J) {
+              const auto *Relocation =
+                  Data + Section.reloff +
+                  J * sizeof(llvm::MachO::any_relocation_info);
+              if ((readLE<uint32_t>(Relocation + sizeof(uint32_t)) >>
+                   kObjectRelocTypeShift) !=
+                  llvm::MachO::ARM64_RELOC_POINTER_TO_GOT)
+                continue;
+              writeLE<uint32_t>(Data + Section.offset +
+                                    readLE<uint32_t>(Relocation),
+                                kPersonalityPlaceholder);
+              ++Changed;
+            }
+          }
+        });
+    ASSERT_GT(Changed, 0u);
+    auto Candidate = BeforeInstallation;
+    auto Placed = appendMachOObjectImage(Candidate, Variant, Dependencies);
+    ASSERT_TRUE(bool(Placed)) << llvm::toString(Placed.takeError());
+    EXPECT_EQ(Candidate, Bytes);
+    EXPECT_EQ(Placed->SymbolAddrs, Image->SymbolAddrs);
+  }
+  forEachMachOLoadCommand(
+      Bytes.data(), Bytes.size(),
+      [&](const uint8_t *C, uint32_t ID, uint32_t, bool) {
+        if (ID != llvm::MachO::LC_SEGMENT_64)
+          return;
+        const auto *Segment =
+            reinterpret_cast<const llvm::MachO::segment_command_64 *>(C);
+        const auto *Sections =
+            reinterpret_cast<const llvm::MachO::section_64 *>(Segment + 1);
+        for (unsigned I = 1; I < Segment->nsects; ++I)
+          EXPECT_LE(Sections[I - 1].addr + Sections[I - 1].size,
+                    Sections[I].addr);
+      });
   EXPECT_EQ(Image->InputKind, RewriteInputKind::ReplacementObject);
   auto Recipes = collectMachOAuthenticatedFixups(Bytes, *Image, Dependencies);
   ASSERT_TRUE(bool(Recipes)) << llvm::toString(Recipes.takeError());
@@ -920,6 +1012,12 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
       });
   EXPECT_EQ(ReadOnly, 1u);
   EXPECT_EQ(Mutable, 1u);
+  const bool Converted = Threaded && (ExecuteNative || ConvertLegacy);
+  if (Converted) {
+    auto Error = convertMachOThreadedFixupsToChains(Bytes);
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+  }
+  ::testing::Test::RecordProperty(kConvertedThreadedProperty, Converted);
   ASSERT_FALSE(Write(InstalledPath, llvm::toStringRef(llvm::ArrayRef(Bytes))));
   auto Error = macho_signing::adHocResign(InstalledPath,
                                           Signature->Slices.front().Identifier);
@@ -927,7 +1025,7 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
   Error = macho_signing::verifyStrict(InstalledPath);
   ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
   Args.assign({kXcrun});
-  if (Threaded)
+  if (Threaded && !Converted)
     Args.append(std::begin(kThreadedInfoArgs), std::end(kThreadedInfoArgs));
   else
     Args.append(std::begin(kInfoArgs), std::end(kInfoArgs));
@@ -937,7 +1035,7 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
   ASSERT_TRUE(bool(Info));
   EXPECT_TRUE((*Info)->getBuffer().contains(kProviderNativeFunction));
   EXPECT_TRUE((*Info)->getBuffer().contains(kProviderNativeData));
-  if (!Threaded)
+  if (!Threaded || Converted)
     checkAppleChainedRecipes((*Info)->getBuffer(), Bytes, *Recipes);
   Input = llvm::MemoryBuffer::getFile(InstalledPath);
   ASSERT_TRUE(bool(Input));
@@ -1133,6 +1231,13 @@ TEST_P(MachOArm64eNativeObjectInstallation,
   const auto [Optimization, Threaded] = GetParam();
   checkNativeObjectInstallation(Optimization, Threaded, false, true, false,
                                 true);
+}
+
+TEST_P(MachOArm64eNativeObjectInstallation,
+       ConvertsThreadedImagesAndRetainsSignedLanguageFrames) {
+  const auto [Optimization, Threaded] = GetParam();
+  checkNativeObjectInstallation(Optimization, Threaded, false, true, false,
+                                true, true);
 }
 
 TEST_P(MachOArm64eNativeObjectInstallation,

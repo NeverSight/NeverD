@@ -84,6 +84,110 @@ LowFunc build(const BinaryImage &Image) {
 
 class MIPS16Flow : public ::testing::TestWithParam<Arch> {};
 
+TEST_P(MIPS16Flow, FrameSlotsCaptureTargetsAndObserveNewCallLinks) {
+  for (bool Call : {false, true}) {
+    auto Image =
+        image(GetParam(), Call ? std::vector<uint16_t>{0x1800, 0x0800, 0x64c4}
+                               : std::vector<uint16_t>{0xe820, 0x6444});
+    Segment Data;
+    Data.VA = 0x2ffc;
+    Data.Size = Data.FileSz = 4;
+    Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    for (unsigned I = 0; I < 4; ++I)
+      Data.Data.push_back(0x34567u >>
+                          (8 * (archLittleEndian(GetParam()) ? I : 3 - I)));
+    Image.Segments.push_back(std::move(Data));
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(Image));
+    const auto &Bytes = Image.Segments.front().Data;
+    DecodedExecutionUnit Unit;
+    ASSERT_EQ(
+        Decode.decodeUnitForLift(Bytes.data(), Bytes.size(), 0x1000, Unit),
+        int(Bytes.size()));
+    std::vector<LowOp> Ops;
+    ASSERT_TRUE(Decode.liftUnitToLow(Unit, Ops));
+    NdOpEmulator E(Image);
+    E.setStrictMode(true);
+    E.setRegister(mipsreg::RA, 0x20001);
+    E.setRegister(mipsreg::SP, Call ? 0x3000 : 0x2fe0);
+    for (const auto &Op : Ops) {
+      if (Op.Opcode == NdOp::RETURN)
+        EXPECT_EQ(E.getRegister(Op.Inputs[0].Offset), 0x20001u);
+      else if (Op.Opcode != NdOp::CALL)
+        ASSERT_TRUE(E.step(Op));
+    }
+    EXPECT_EQ(E.getRegister(mipsreg::RA), Call ? 0x1007u : 0x34567u);
+    EXPECT_EQ(E.getRegister(mipsreg::SP), Call ? 0x2fe0u : 0x3000u);
+    if (Call) {
+      LowOp Read;
+      Read.Opcode = NdOp::LOAD;
+      Read.Output = NdVar::reg(mipsreg::V0, 4);
+      Read.addInput(NdVar::cst(0x2ffc, 4));
+      ASSERT_TRUE(E.step(Read));
+      EXPECT_EQ(E.getRegister(mipsreg::V0), 0x1007u);
+    }
+  }
+  auto Image = image(GetParam(), {0xe820, 0xf000, 0x6444});
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(Image));
+  DecodedExecutionUnit Unit;
+  const auto &Bytes = Image.Segments.front().Data;
+  EXPECT_EQ(Decode.decodeUnitForLift(Bytes.data(), Bytes.size(), 0x1000, Unit),
+            0);
+}
+
+TEST_P(MIPS16Flow, FrameEntryDiscoveryAndDivisionPreserveLeafReturnProof) {
+  auto Image =
+      image(GetParam(), {0x1800, 0x0403, 0x6500, 0xe8a0, 0x6500, 0x6500, 0x64c4,
+                         0xecba, 0xea12, 0x6444, 0xe8a0});
+  Image.Symbols.clear();
+  Image.MIPS->CodeRegions.push_back({0x1000, 0x1016, InstructionMode::MIPS16});
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(Image));
+  FuncDetector Detector;
+  Detector.detect(Image, Decode);
+  EXPECT_EQ(Image.VerifiedFunctionEntries.count(0x100c), 1u);
+  for (bool Division : {false, true}) {
+    auto Leaf = image(GetParam(), {0x64c4, uint16_t(Division ? 0xecba : 0xecb8),
+                                   0xea12, 0x6444, 0xe8a0});
+    auto Low = build(Leaf);
+    ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+    for (bool WithImage : {false, true}) {
+      LowToMedConverter Convert;
+      if (WithImage)
+        Convert.setBinaryImage(&Leaf);
+      EXPECT_NO_THROW(Convert.convert(Low, GetParam(), BinaryFormat::ELF));
+    }
+  }
+}
+
+TEST_P(MIPS16Flow, OtherSavedRegistersDoNotInvalidateTheLeafReturnSlot) {
+  const std::vector<std::pair<bool, std::vector<uint16_t>>> Cases = {
+      {true, {0x64f8, 0x6809, 0x690b, 0x6a07, 0x6478, 0xe8a0}},
+      {true, {0xf7f3, 0x64ff, 0x6a07, 0xf7f3, 0x647f, 0xe8a0}},
+      {true, {0xf00e, 0x64f8, 0x6a07, 0xf00e, 0x6478, 0xe8a0}},
+      // A saved value does not alias the return slot merely by being stored.
+      // Actual overlapping or unresolved writes still destroy its proof.
+      {false, {0x64f8, 0x6809, 0xd00f, 0x6a07, 0x6478, 0xe8a0}},
+      {false, {0x64f8, 0xdca0, 0x6a07, 0x6478, 0xe8a0}},
+  };
+  for (const auto &[Admitted, Words] : Cases) {
+    const auto Image = image(GetParam(), Words);
+    const auto Low = build(Image);
+    ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+    for (bool WithImage : {false, true}) {
+      LowToMedConverter Convert;
+      if (WithImage)
+        Convert.setBinaryImage(&Image);
+      if (Admitted)
+        EXPECT_NO_THROW(Convert.convert(Low, GetParam(), BinaryFormat::ELF));
+      else
+        EXPECT_THROW(Convert.convert(Low, GetParam(), BinaryFormat::ELF),
+                     LowToMedConversionError);
+    }
+  }
+}
+
 TEST_P(MIPS16Flow, CompactBranchesHaveNoSlotAndUsePhysicalInstructionEnd) {
   for (bool Extended : {false, true}) {
     const auto Image = image(

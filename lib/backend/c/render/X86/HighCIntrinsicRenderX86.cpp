@@ -25,6 +25,7 @@
 #include "neverd/backend/c/render/X86/X86SegmentAsm.h"
 #include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
 #include "neverd/backend/llvm/X86/LLVMX86X87StateAsm.h"
+#include "neverd/ir/FloatConversion.h"
 #include "neverd/ir/X86/X87Stack.h"
 #include "neverd/ir/high/X86/X86FPStateShape.h"
 #include "neverd/ir/intrinsics/X86/X86Interrupts.h"
@@ -126,6 +127,14 @@ const char *x87CHelperName(X87CHelper Helper) {
     return "neverd_x87_fprem";
   case X87CHelper::Status:
     return "neverd_x87_read_status";
+  case X87CHelper::Extend32:
+    return "neverd_x87_extend32";
+  case X87CHelper::Extend64:
+    return "neverd_x87_extend64";
+  case X87CHelper::Narrow32:
+    return "neverd_x87_narrow32";
+  case X87CHelper::Narrow64:
+    return "neverd_x87_narrow64";
 #define NEVERD_X87_VALUE_HELPER(ID, Name, Asm, Operands, PopsST1,              \
                                 SamplesStatus)                                 \
   case X87CHelper::ID:                                                         \
@@ -133,6 +142,16 @@ const char *x87CHelperName(X87CHelper Helper) {
 #include "neverd/ir/intrinsics/X86/X87ValueInstructions.def"
   }
   llvm_unreachable("unknown x87 C helper");
+}
+
+std::optional<X87CHelper> x87PrecisionConversionHelper(Arch Target,
+                                                       uint16_t InputBytes,
+                                                       uint16_t OutputBytes) {
+  if (!isX87PrecisionConversion(Target, InputBytes, OutputBytes))
+    return std::nullopt;
+  if (OutputBytes == 10)
+    return InputBytes == 4 ? X87CHelper::Extend32 : X87CHelper::Extend64;
+  return OutputBytes == 4 ? X87CHelper::Narrow32 : X87CHelper::Narrow64;
 }
 
 /// The operands the x87 value instruction of \p Helper reads.
@@ -174,6 +193,29 @@ void writeX87CHelpers(llvm::raw_ostream &OS, bool UsesExtended,
           "_BitInt(80)),\n"
           "               \"x87 bits travel in a long double's "
           "storage\");\n\n";
+  // A C cast round trip can erase NaN quieting and the store's rounding.
+  // Keep the actual FLD/FSTP operations in both C projections.
+  for (const auto Helper : {X87CHelper::Extend32, X87CHelper::Extend64,
+                            X87CHelper::Narrow32, X87CHelper::Narrow64}) {
+    if (!Used.count(Helper))
+      continue;
+    const bool Extend =
+        Helper == X87CHelper::Extend32 || Helper == X87CHelper::Extend64;
+    const bool Single =
+        Helper == X87CHelper::Extend32 || Helper == X87CHelper::Narrow32;
+    const char *IEEEType = Single ? "float" : "double";
+    OS << "static inline " << (Extend ? "long double" : IEEEType) << " "
+       << x87CHelperName(Helper) << "(" << (Extend ? IEEEType : "long double")
+       << " value) {\n"
+       << "    " << (Extend ? "long double" : IEEEType) << " result;\n";
+    if (Extend)
+      OS << "    __asm__ volatile(\"fld" << (Single ? "s" : "l")
+         << " %1\" : \"=t\"(result) : \"m\"(value));\n";
+    else
+      OS << "    __asm__ volatile(\"fstp" << (Single ? "s" : "l")
+         << " %0\" : \"=m\"(result) : \"t\"(value) : \"st\");\n";
+    OS << "    return result;\n}\n\n";
+  }
   bool UsesStatus =
       Used.count(X87CHelper::Fprem) || Used.count(X87CHelper::Status);
 #define NEVERD_X87_VALUE_HELPER(ID, Name, Asm, Operands, PopsST1,              \

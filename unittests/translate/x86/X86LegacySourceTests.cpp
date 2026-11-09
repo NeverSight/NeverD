@@ -246,6 +246,8 @@ uint32_t neverd_x86_legacy_attempted_v1(void *context) {
   }
 };
 
+#include "X86LegacyMpxSourceTests.inc"
+
 TEST_P(X86LegacySourceTest, ModesAliasesAndBudgetsUseLiveCaches) {
   Driver Run = nullptr;
   ASSERT_NO_FATAL_FAILURE(

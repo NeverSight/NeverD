@@ -13,6 +13,7 @@
 #include "X86LegacyExecutionInternal.h"
 #include "X86LegacyFarTransfer.h"
 #include "X86LegacyFastSystem.h"
+#include "X86LegacyMpx.h"
 #include "X86LegacyPortIO.h"
 #include "X86LegacyScalar.h"
 #include "X86LegacySegmentEncoding.h"
@@ -45,6 +46,7 @@ struct LegacyInstruction {
   std::optional<detail::X86LegacyStringInstruction> String;
   std::optional<detail::X86LegacyPortInstruction> Port;
   std::optional<detail::X86LegacyFarTransfer> Far;
+  std::optional<X86MpxEncoding> Mpx;
   llvm::ArrayRef<uint8_t> Body;
   unsigned Width;
   bool IRET, RETF, INT, UD2;
@@ -66,12 +68,15 @@ decodeInstruction(llvm::ArrayRef<uint8_t> Instruction, bool Code32) {
       detail::decodeLegacyString(Instruction, Code32),
       detail::decodeLegacyPortIO(Instruction, Code32),
       detail::decodeLegacyFarTransfer(Instruction, Code32),
+      Code32 ? decodeX86MpxEncoding(Instruction, Arch::X86) : std::nullopt,
       Instruction,
       Code32 ? 4u : 2u,
       false,
       false,
       false,
       false};
+  if (I.Mpx && I.Mpx->Size != Instruction.size())
+    return invalid("MPX binding contains trailing bytes");
   if (I.Body.front() == 0x66) {
     I.Width = 6 - I.Width;
     I.Body = I.Body.drop_front();
@@ -88,7 +93,7 @@ decodeInstruction(llvm::ArrayRef<uint8_t> Instruction, bool Code32) {
            (I.Body.size() == 3 && I.Body[0] == 0xca);
   if (!I.Segment && !I.Scalar && !I.FastSystem && !I.String && !I.Port &&
       !I.Far && !Single && !I.INT && !I.UD2 && !I.IRET && !I.RETF &&
-      !I.DebugRegister && !I.ControlRegister)
+      !I.DebugRegister && !I.ControlRegister && !I.Mpx)
     return invalid("unsupported or malformed legacy step instruction");
   return I;
 }
@@ -148,13 +153,17 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
         "resume the pending legacy event before another instruction");
   if (auto Error = detail::validateLegacyStackContinuation(State, Instruction))
     return std::move(Error);
+  if (auto Error =
+          detail::validateLegacyMpxContinuation(State, Memory, Instruction))
+    return std::move(Error);
   const bool ResumingStack = State.PendingStack.has_value();
+  const bool Resuming = ResumingStack || State.PendingMpx.has_value();
   const bool Code32 = State.Core.Segments[1].Attributes & 0x4000;
   auto Decoded = decodeInstruction(Instruction, Code32);
   if (!Decoded)
     return Decoded.takeError();
   auto &[DebugRegister, ControlRegister, Segment, Scalar, FastSystem, String,
-         Port, Far, Body, Width, IRET, RETF, INT, UD2] = *Decoded;
+         Port, Far, Mpx, Body, Width, IRET, RETF, INT, UD2] = *Decoded;
   if (ControlRegister) {
     if (!Options.ControlRegisters)
       return invalid("MOV-CR requires a bound Intel control-register profile");
@@ -268,19 +277,23 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       Options.Calls != X86LegacyCallProfile::StoreBeforeTargetLimit &&
       Options.Calls != X86LegacyCallProfile::CheckBeforeTargetLimit)
     return invalid("legacy CALL requires a bound stack publication profile");
-  std::optional<X86MpxContext> BoundMpx;
-  if (Scalar && Scalar->Operation == detail::X86LegacyScalarOperation::Bound) {
-    BoundMpx = State.Mpx.value_or(X86MpxContext{});
-    auto Configuration = BoundMpx->configuration();
-    if (Configuration.InTransaction == true)
-      return invalid("BOUND in a transaction requires an abort continuation");
-    Configuration.OSXSAVE = bool(Memory.controls().CR4 & (uint64_t{1} << 18));
-    Configuration.PrivilegeLevel = State.Core.CPL;
-    if (!BoundMpx->configure(Configuration))
-      return invalid("BOUND requires a valid MPX configuration");
-    const auto Status = BoundMpx->operationStatus(X86MpxMode::Bits32, 0);
-    if (Status != X86MpxResult::Completed && Status != X86MpxResult::Disabled)
-      return invalid("BOUND requires known nontransactional MPX enable state");
+  const auto Branch = x86MpxBranchEffect(Instruction, Arch::X86);
+  std::optional<X86MpxContext> NextMpx;
+  if ((Scalar &&
+       Scalar->Operation == detail::X86LegacyScalarOperation::Bound) ||
+      (Mpx && Mpx->Id != X86_INS_NOP) || Branch == X86MpxBranch::Initialize) {
+    auto Bound = detail::bindLegacyMpx(State, Memory);
+    if (!Bound)
+      return Bound.takeError();
+    NextMpx = std::move(*Bound);
+    if (Mpx)
+      if (auto Error = detail::admitLegacyMpxMemory(*Mpx, *NextMpx, State,
+                                                    Memory, Options))
+        return std::move(Error);
+    // Only staged state changes here. Publish BNDINIT after successful branch
+    // completion, including an untaken Jcc, and before its debug trap.
+    if (Branch)
+      NextMpx->completeBranch(*Branch);
   }
   const bool SingleStep = State.EFlags & 0x100;
   const uint64_t DebugCTL = State.Debug ? State.Debug->DebugCTL : 0;
@@ -317,6 +330,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       Options.Debug.value_or(X86InstructionDebugProfile::InstructionStep));
   if (ResumingStack)
     Observation.Matches = State.PendingStack->DataBreakpoints;
+  if (State.PendingMpx)
+    Observation.Matches = State.PendingMpx->DataBreakpoints;
   const auto Accept = [&](const X86MemoryAccessResult &Got) {
     R.SelfModifications.insert(R.SelfModifications.end(),
                                Got.SelfModifications.begin(),
@@ -336,7 +351,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       return Delivered.takeError();
     Delivered->DeviceTransferCompleted = R.DeviceTransferCompleted;
     Delivered->PortInputBytesWritten = R.PortInputBytesWritten;
-    Delivered->InstructionAttempted = !ResumingStack;
+    Delivered->InstructionAttempted = !Resuming;
     Delivered->InstructionCompleted =
         Completed && (Event.Kind == X86LegacyEventKind::Trap ||
                       Delivered->SoftwareCompleted);
@@ -365,11 +380,10 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     State.SSBlocked = State.STIBlocked = false;
     return Enter({State.EIP, 0, 0, 1, X86LegacyEventKind::Trap}, Completed);
   };
-  if (!ResumingStack &&
-      x86PendingVirtualInterrupt(State.Core.CPL, Memory.controls().CR4,
-                                 State.EFlags))
+  if (!Resuming && x86PendingVirtualInterrupt(
+                       State.Core.CPL, Memory.controls().CR4, State.EFlags))
     R.Exception = X86MemoryException{13, 0, {}};
-  if (State.Debug && !R.Exception && !ResumingStack) {
+  if (State.Debug && !R.Exception && !Resuming) {
     const auto Matches = x86ExecutionBreakpoints(
         State.Debug->DR, State.Debug->DR7,
         uint32_t(State.Core.Segments[1].Base + State.EIP), State.EFlags,
@@ -381,8 +395,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
           false);
     }
   }
-  for (unsigned I = 0;
-       !ResumingStack && !R.Exception && I != Instruction.size(); ++I) {
+  for (unsigned I = 0; !Resuming && !R.Exception && I != Instruction.size();
+       ++I) {
     uint8_t Byte = 0;
     auto Got =
         Memory.loadSegment({X86SegmentRegister::CS, State.Core.Segments[1],
@@ -482,6 +496,18 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     else
       R.Exception = X86MemoryException{
           uint8_t(Result == Status::UndefinedOpcode ? 6 : 13), 0, {}};
+  } else if (!R.Exception && Mpx && Mpx->Id != X86_INS_NOP) {
+    auto Got =
+        detail::executeLegacyMpx(State, Memory, Instruction, *NextMpx, Options);
+    if (State.PendingMpx)
+      State.PendingMpx->DataBreakpoints = Observation.Matches;
+    if (!Got)
+      return Got.takeError();
+    Accept(*Got);
+    // #BR status and BNDLDX's unknown destination belong to the instruction,
+    // before IDT delivery. Host backing suspension publishes neither effect.
+    if (State.Mpx && Got->Exception)
+      State.Mpx = *NextMpx;
   } else if (!R.Exception && FastSystem) {
     R.Exception = detail::executeLegacyFastSystem(Next, Flags, NextIP,
                                                   State.Sysenter, *FastSystem);
@@ -560,12 +586,12 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       NextTR = Staged.TR;
       if (Got->CR0)
         NextControls.CR0 = *Got->CR0;
-    } else if (BoundMpx && Got->Exception && Got->Exception->Vector == 5) {
+    } else if (NextMpx && Got->Exception && Got->Exception->Vector == 5) {
       // This is an architectural effect of #BR, before attempting IDT entry.
       // Unlike GPR/EIP/FLAGS staging, it survives delivery faults and #DF.
-      BoundMpx->completeLegacyBoundsFault();
+      NextMpx->completeLegacyBoundsFault();
       if (State.Mpx)
-        State.Mpx = std::move(BoundMpx);
+        State.Mpx = *NextMpx;
     }
   } else if (!R.Exception) {
     const auto Opcode = Body.front();
@@ -605,7 +631,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       R.Exception = X86MemoryException{6, 0, {}};
     }
   }
-  R.InstructionAttempted = !ResumingStack;
+  R.InstructionAttempted = !Resuming;
   if (R.Exception)
     return Enter({State.EIP, R.Exception->ErrorCode,
                   uint32_t(R.Exception->CR2.value_or(0)), R.Exception->Vector,
@@ -621,6 +647,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   State.CR2 = NextCR2;
   State.EIP = NextIP;
   State.EFlags = NextControls.RFlags;
+  if (State.Mpx && NextMpx)
+    State.Mpx = std::move(NextMpx);
   State.SSBlocked = SS;
   State.STIBlocked = STI;
   R.InstructionCompleted = !RepeatContinue;

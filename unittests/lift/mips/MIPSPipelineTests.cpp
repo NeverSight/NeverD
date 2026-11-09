@@ -41,6 +41,44 @@ namespace {
 
 class MIPSPipeline : public ::testing::TestWithParam<Arch> {};
 
+TEST_P(MIPSPipeline, NarrowReadsRetainTheIncomingIntegerCarrier) {
+  // SEB/SEH on n64 also require a sign-extended word. SB/SH read only the
+  // narrow value and impose no input extension, so they exercise raw carriers.
+  for (uint32_t Word : {0x7c041420u, 0x7c041620u, 0xa0a40000u, 0xa4a40000u}) {
+    const bool Store = Word >> 26 >= 40;
+    mips_test::ELFBytes File(GetParam());
+    File.put(0x100, Word, 4);
+    File.put(0x104, 0x03e00008, 4);
+    File.put(0x108, 0, 4);
+    ELFLoader Loader;
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    auto Symbol = Symbol::makeFunc(Image->Entry, 12);
+    Symbol.Name = "mips_narrow_read";
+    Image->Symbols.push_back(std::move(Symbol));
+    for (bool LLVM : {false, true}) {
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.OnlyFunctionEntries = {Image->Entry};
+      Options.LiftMode = LLVM;
+      Options.EmitDumpOutput = false;
+      auto Result = Pipeline().run(*Image, Context, Options);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      ASSERT_EQ(Result.MedFuncs.size(), 1u);
+      ASSERT_EQ(Result.MedFuncs.front().Params.size(), Store ? 2u : 1u);
+      const unsigned Bytes = isMIPS64(GetParam()) ? 8 : 4;
+      EXPECT_EQ(Result.MedFuncs.front().Params.front().Size, Bytes);
+      if (LLVM) {
+        ASSERT_TRUE(Result.LlvmModule);
+        const auto *Body = Result.LlvmModule->getFunction("mips_narrow_read");
+        ASSERT_NE(Body, nullptr);
+        ASSERT_EQ(Body->arg_size(), Store ? 2u : 1u);
+        EXPECT_TRUE(Body->getArg(0)->getType()->isIntegerTy(Bytes * 8));
+      }
+    }
+  }
+}
+
 TEST_P(MIPSPipeline, AccumulatorSourceRequiresDefinedInputsAcrossEncodings) {
   for (bool Compressed : {false, true}) {
     if (Compressed && isMIPS64(GetParam()))
@@ -365,7 +403,9 @@ TEST_P(MIPSPipeline, CapturedIndirectCalleeRetainsItsIncomingArguments) {
       ASSERT_TRUE(Result.Success) << Result.Error;
       ASSERT_EQ(Result.MedFuncs.size(), 1u);
       ASSERT_EQ(Result.MedFuncs[0].Params.size(), 2u);
-      EXPECT_EQ(Result.MedFuncs[0].Params[0].Size, WordWrite ? 4u : Width);
+      // The truncating write is part of the body, not an incoming extension
+      // promise: inferred source parameters keep their complete carriers.
+      EXPECT_EQ(Result.MedFuncs[0].Params[0].Size, Width);
       EXPECT_EQ(Result.MedFuncs[0].Params[1].Size, Width);
       ASSERT_EQ(Result.MedFuncs[0].CallInfos.size(), 1u);
       EXPECT_EQ(Result.MedFuncs[0].CallInfos[0].TargetAddr, 0x10140u);
@@ -377,8 +417,7 @@ TEST_P(MIPSPipeline, CapturedIndirectCalleeRetainsItsIncomingArguments) {
         const auto *Body = Result.LlvmModule->getFunction("captured_call");
         ASSERT_NE(Body, nullptr);
         EXPECT_EQ(Body->arg_size(), 2u);
-        EXPECT_TRUE(Body->getArg(0)->getType()->isIntegerTy(
-            WordWrite ? 32 : Width * 8));
+        EXPECT_TRUE(Body->getArg(0)->getType()->isIntegerTy(Width * 8));
       }
     }
   }

@@ -54,10 +54,12 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
     return V->getType()->isPointerTy() ? B.CreatePtrToInt(V, T)
                                        : B.CreateZExtOrTrunc(V, T);
   };
-  const auto Require = [&](llvm::Value *Valid) {
+  const auto Require = [&](llvm::Value *Valid, const char *Domain) {
     auto *Function = B.GetInsertBlock()->getParent();
-    auto *Trap = llvm::BasicBlock::Create(*Ctx, "mips.word.trap", Function);
-    auto *Continue = llvm::BasicBlock::Create(*Ctx, "mips.word.ok", Function);
+    auto *Trap =
+        llvm::BasicBlock::Create(*Ctx, llvm::Twine(Domain) + ".trap", Function);
+    auto *Continue =
+        llvm::BasicBlock::Create(*Ctx, llvm::Twine(Domain) + ".ok", Function);
     B.CreateCondBr(Valid, Continue, Trap);
     B.SetInsertPoint(Trap);
     B.CreateCall(
@@ -70,8 +72,28 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
         Coerce(getVar(Op.Inputs[1], B), sizeToType(Op.Inputs[1].Size));
     auto *Word =
         B.CreateSExt(B.CreateTrunc(First, B.getInt32Ty()), First->getType());
-    Require(B.CreateICmpEQ(First, Word));
+    Require(B.CreateICmpEQ(First, Word), "mips.word");
     return nullptr;
+  }
+  if (mips::isWordDivision(Id)) {
+    auto *A = Coerce(getVar(Op.Inputs[1], B), B.getInt32Ty());
+    auto *D = Coerce(getVar(Op.Inputs[2], B), B.getInt32Ty());
+    // This qualifies the source domain, not an architectural divide exception.
+    Require(B.CreateICmpNE(D, B.getInt32(0)), "mips.divisor.domain");
+    llvm::Value *X = A, *Y = D;
+    auto *NegativeA = B.CreateICmpSLT(A, B.getInt32(0));
+    auto *NegativeD = B.CreateICmpSLT(D, B.getInt32(0));
+    if (Id == Intrinsic::MIPSDivWord) {
+      X = B.CreateSelect(NegativeA, B.CreateNeg(A), A);
+      Y = B.CreateSelect(NegativeD, B.CreateNeg(D), D);
+    }
+    llvm::Value *Q = B.CreateUDiv(X, Y), *R = B.CreateURem(X, Y);
+    if (Id == Intrinsic::MIPSDivWord) {
+      Q = B.CreateSelect(B.CreateXor(NegativeA, NegativeD), B.CreateNeg(Q), Q);
+      R = B.CreateSelect(NegativeA, B.CreateNeg(R), R);
+    }
+    return B.CreateOr(B.CreateShl(B.CreateZExt(R, B.getInt64Ty()), 32),
+                      B.CreateZExt(Q, B.getInt64Ty()));
   }
 
   const auto Load = *mips::mergeLoad(Id);

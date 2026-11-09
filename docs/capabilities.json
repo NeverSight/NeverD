@@ -93,6 +93,7 @@
           "neverd_local_types_fit_json",
           "neverd_local_types_forget",
           "neverd_local_types_json",
+          "neverd_local_types_prepare",
           "neverd_local_types_source",
           "neverd_map_reference_json",
           "neverd_metadata_items_json",

@@ -70,7 +70,15 @@ struct X86MpxMemoryAccess {
   }
 };
 
-enum class X86MpxMemoryOutcome : uint8_t { Completed, Fault, Unavailable };
+enum class X86MpxMemoryOutcome : uint8_t {
+  Completed,
+  Fault,
+  Unavailable,
+  /// Host backing stop, without operand publication or a CPU exception.
+  /// Translation effects may already exist. The provider retains completed
+  /// requests and resumes them without replay, including an earlier BDE read.
+  Suspended
+};
 
 struct X86MpxMemoryCompletion {
   X86MpxMemoryOutcome Outcome = X86MpxMemoryOutcome::Unavailable;

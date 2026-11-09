@@ -1623,8 +1623,10 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
     throw Error("not_kept", "No session has kept this view");
   // A hit answers from its finished document without pretending the mutable
   // Session still holds this function. Graph/IR requests prepare it normally.
-  if (original.is_null() && !replay && !recovery)
+  if (original.is_null() && !replay && !recovery) {
+    ++namedViewRenders_;
     prepareFunction(address, representation);
+  }
   // Whole-program VM preparation can analyze(), invalidating the listing and
   // advancing the revision. Rebuild aliases and stamp the prepared context;
   // never keep an alias reference across that invalidation.
@@ -1793,8 +1795,11 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
     if (reused && reused->readsKnown) {
       document->reads = reused->reads;
       document->readsKnown = true;
-    } else if (replay) {
-      noteRenderReads(*document);
+    } else if (sourceView && !recovery) {
+      // What the render its pages came from read, kept or this one: every
+      // address whose name or declaration the session's results asked since
+      // they were last let go of, which holds this function's.
+      noteRenderReads(*document, document->renderReads);
     }
     // What a data's new name respells, of an engine document of C on one
     // page, as respell reads its kept page (renderedAheadPages).
@@ -2293,7 +2298,8 @@ Listing &Engine::listing() {
   return *listing_;
 }
 bool Engine::hasIdleWork() const {
-  if ((summaryWorkPending() || prefillPending() || renderAheadPending()) &&
+  if ((summaryWorkPending() || prefillPending() || renderAheadPending() ||
+       localTypeNamesPending_) &&
       neverd_session_is_loaded(session_))
     return true;
   if (!listing_ || !neverd_session_is_loaded(session_))
@@ -2310,6 +2316,15 @@ bool Engine::idleStep() {
     listing_->flushCacheOne();
     return true;
   }
+  // Once after a request or another step, either of which may have read the
+  // local types or changed them; it costs nothing while the names hold or the
+  // session has not read its types.
+  if (localTypeNamesPending_) {
+    localTypeNamesPending_ = false;
+    prepareLocalTypeNames();
+    return true;
+  }
+  localTypeNamesPending_ = true;
   // The listing and its reference index come first; preparing functions
   // only shortens later decompiles.
   if (listing_ && backgroundAnalysis_) {
@@ -2321,6 +2336,13 @@ bool Engine::idleStep() {
     }
   }
   return summaryStep();
+}
+void Engine::prepareLocalTypeNames() {
+  using Prepare = int (*)(neverd_session_t);
+  static const auto prepare =
+      engineSymbol<Prepare>("neverd_local_types_prepare");
+  if (prepare && neverd_session_is_loaded(session_) && prepare(session_))
+    ++localTypeNamesPrepared_;
 }
 bool Engine::summaryWorkPending() const {
   return summaryState_ == SummaryState::Pending ||
@@ -2760,6 +2782,8 @@ Json Engine::metadata() const {
           {"named_view_comment_patches", commentPatches_},
           {"named_view_name_patches", namePatches_},
           {"named_view_data_name_patches", dataNamePatches_},
+          {"named_view_renders", namedViewRenders_},
+          {"local_type_names_prepared", localTypeNamesPrepared_},
           {"dirty", dirty_},
           // How the file was read: for a binary file, its processor,
           // placement and platform, and whether detection chose the platform.
@@ -3387,6 +3411,12 @@ Json Engine::updateAnalysisNames(const Json &snapshot) {
     }
     return true;
   };
+  // What analysis reads of the declarations, before this update states them:
+  // where it reads the same after, the declarations reach only the views that
+  // read them, as an owner's edit does (keepNamedViewsThrough).
+  std::optional<Json> analysisBefore;
+  if (declared && !typesChanged && rendersSayTheirReads())
+    analysisBefore = userFactsAnalysisReads();
   codeEdits_ = next.value("code_edits", Json::array());
   restoredSnapshot_ = snapshot;
   imageFactsRevision_.reset();
@@ -3456,8 +3486,33 @@ Json Engine::updateAnalysisNames(const Json &snapshot) {
     }
     if (!summariesHeld && !summariesDeferred_ && (declared || deferred))
       restartSummaries();
-    if (declared)
-      declarationsChanged();
+    if (declared) {
+      const bool viewsReadIt =
+          analysisBefore && userFactsAnalysisReads() == *analysisBefore;
+      if (viewsReadIt) {
+        // Each function whose declaration changed, as its row reads.
+        std::map<std::uint64_t, Json> was, now;
+        for (const auto &row : functionRowsRead(oldFunctions, true))
+          was[parseAddress(row.at("addr").get<std::string>())] = row;
+        for (const auto &row : functionRowsRead(newFunctions, true))
+          now[parseAddress(row.at("addr").get<std::string>())] = row;
+        std::set<std::uint64_t> changed;
+        for (const auto *rows : {&was, &now})
+          for (const auto &[address, row] : *rows) {
+            const auto &other = rows == &was ? now : was;
+            const auto same = other.find(address);
+            if (same == other.end() || same->second != row)
+              changed.insert(address);
+          }
+        for (const auto address : changed)
+          keepNamedViewsThrough(address, {}, true);
+      }
+      declarationsChanged(viewsReadIt);
+      // The job renders again what no longer reads as it rendered it, as it
+      // does once every view went.
+      if (viewsReadIt)
+        restartRenderAhead();
+    }
     if (dataRenamed || itemsChanged) {
       // Names and data items, each as the listing can take it.
       const bool inPlace =
@@ -3699,6 +3754,7 @@ Engine::Reply Engine::executeResponse(const std::string &operation,
     std::uint64_t before;
     ~RestartOnChange() {
       engine.lastRequest_ = std::chrono::steady_clock::now();
+      engine.localTypeNamesPending_ = true;
       if (engine.revision_ - engine.localNameRevisions_ != before) {
         engine.restartWarming();
         engine.restartSummaries();

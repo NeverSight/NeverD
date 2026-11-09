@@ -212,3 +212,98 @@ multu $4,$5
 mflo $2
 jrc $31
 end m16_multu_lo
+
+# Physical SVRS and DIV encodings avoid assembler macros and hidden checks.
+begin m16_save
+.insn
+.half 0x64f8 # save ra,s1,s0; frame=64
+li $16,9
+li $17,11
+addu $2,$4,$5
+.half 0x6478
+jrc $31
+end m16_save
+
+begin m16_savex
+.insn
+.half 0xf7f3,0x64ff # all saved GPRs and a1-a3 as statics, frame=2040
+li $2,7
+.half 0x6552,0x6572,0x6592,0x65b2,0x65d2,0x65f2,0x65da # s2-s7/fp clobbers
+li $16,9
+li $17,11
+addu $2,$4,$5
+.half 0xf7f3,0x647f
+jrc $31
+end m16_savex
+
+begin m16_save_args
+.insn
+.half 0xf00e,0x64f8 # a0-a3 incoming homes; frame=64
+addu $2,$4,$5
+.half 0xf00e,0x6478
+jrc $31
+end m16_save_args
+
+begin m16_save_call
+.insn
+.half 0x64a3 # save s0,24
+move $16,$31
+jal m16_add
+addiu $4,1
+move $31,$16
+.half 0x6423
+jrc $31
+end m16_save_call
+
+.macro division_leaf name,word,result
+begin \name
+.insn
+.half 0x64c4 # save ra,32
+.half \word
+mflo $2
+mfhi $3
+.if \result == 0
+xor $2,$3
+.elseif \result == 1
+move $2,$3
+.endif
+.half 0x6444
+jrc $31
+end \name
+.endm
+division_leaf m16_div,0xecba,0
+division_leaf m16_divu,0xecbb,0
+division_leaf m16_div_hi,0xecba,1
+division_leaf m16_div_lo,0xecba,2
+division_leaf m16_divu_hi,0xecbb,1
+division_leaf m16_divu_lo,0xecbb,2
+
+begin m16_div_dead
+.insn
+.half 0xecba
+li $2,7
+jrc $31
+end m16_div_dead
+
+begin m16_div_checked
+beqz $5,1f
+.insn
+.half 0xecba
+mflo $2
+jrc $31
+1:
+li $2,42
+jrc $31
+end m16_div_checked
+
+# A defined zero path in the guest lies outside the retained-division source domain.
+begin m16_div_after_checked
+.insn
+.half 0xecba
+beqz $5,1f
+mflo $2
+jrc $31
+1:
+li $2,42
+jrc $31
+end m16_div_after_checked

@@ -29,6 +29,7 @@
 #include "llvm/Support/MathExtras.h"
 
 #include <climits>
+#include <limits>
 #include <map>
 #include <set>
 #include <tuple>
@@ -50,6 +51,98 @@ struct TextMetadataStorage {
   uint64_t VA;
   uint64_t FileOffset;
 };
+
+// dyld requires section descriptors in address order. Moving metadata can
+// change that order even though every byte range remains disjoint. Preserve
+// symbol section identity when arranging the descriptors for the new layout.
+llvm::Error orderTextSections(std::vector<uint8_t> &Binary) {
+  using namespace llvm::MachO;
+  struct Section {
+    uint64_t Address;
+    unsigned Ordinal;
+    std::vector<uint8_t> Bytes;
+  };
+  std::vector<Section> Text;
+  uint64_t TextOffset = 0;
+  unsigned Ordinal = 0, FirstOrdinal = 0;
+  bool Unmodeled = false;
+  const auto Header = parseMachOHeader(Binary.data(), Binary.size());
+  const unsigned SectionSize = getMachOSectionSize(Header.Is64);
+  forEachMachOLoadCommand(
+      Binary.data(), Binary.size(),
+      [&](const uint8_t *C, uint32_t Cmd, uint32_t, bool Is64) {
+        if (Cmd == LC_DYSYMTAB) {
+          const auto *D = reinterpret_cast<const dysymtab_command *>(C);
+          Unmodeled |= D->nextrel || D->nlocrel;
+        }
+        if (Cmd != getMachOSegmentCmdID(Is64))
+          return;
+        const auto Segment = readMachOSegment(C, Is64);
+        const bool IsText =
+            readMachOName(Segment.SegName) == kMetadataTextSegment;
+        auto *P = C + getMachOSegmentCmdSize(Is64);
+        if (IsText) {
+          if (!Text.empty())
+            Unmodeled = true;
+          TextOffset = P - Binary.data();
+          FirstOrdinal = Ordinal + 1;
+        }
+        for (unsigned I = 0; I < Segment.NSects; ++I, P += SectionSize) {
+          ++Ordinal;
+          const uint64_t Address =
+              Is64 ? reinterpret_cast<const section_64 *>(P)->addr
+                   : reinterpret_cast<const section *>(P)->addr;
+          Unmodeled |= Is64 ? reinterpret_cast<const section_64 *>(P)->nreloc
+                            : reinterpret_cast<const section *>(P)->nreloc;
+          if (IsText)
+            Text.push_back({Address, Ordinal, {P, P + SectionSize}});
+        }
+      });
+  const auto ByAddress = [](const Section &L, const Section &R) {
+    return L.Address < R.Address;
+  };
+  if (llvm::is_sorted(Text, ByAddress))
+    return llvm::Error::success();
+  if (Unmodeled || Ordinal > std::numeric_limits<uint8_t>::max())
+    return fail(kSectionOrderReferences);
+  llvm::stable_sort(Text, ByAddress);
+  std::vector<uint8_t> Remap(Ordinal + 1);
+  for (unsigned I = 0; I <= Ordinal; ++I)
+    Remap[I] = I;
+  for (unsigned I = 0; I < Text.size(); ++I)
+    Remap[Text[I].Ordinal] = FirstOrdinal + I;
+  bool Invalid = false;
+  forEachMachOLoadCommand(
+      Binary.data(), Binary.size(),
+      [&](const uint8_t *C, uint32_t Cmd, uint32_t, bool Is64) {
+        if (Cmd != LC_SYMTAB)
+          return;
+        const auto *Table = reinterpret_cast<const symtab_command *>(C);
+        const unsigned Size = Is64 ? sizeof(nlist_64) : sizeof(nlist);
+        if (!rangeInBounds(Table->symoff, uint64_t(Table->nsyms) * Size,
+                           Binary.size())) {
+          Invalid = true;
+          return;
+        }
+        for (unsigned I = 0; I < Table->nsyms; ++I) {
+          auto *Entry = Binary.data() + Table->symoff + uint64_t(I) * Size;
+          const auto Type = Is64 ? reinterpret_cast<nlist_64 *>(Entry)->n_type
+                                 : reinterpret_cast<nlist *>(Entry)->n_type;
+          auto &Number = Is64 ? reinterpret_cast<nlist_64 *>(Entry)->n_sect
+                              : reinterpret_cast<nlist *>(Entry)->n_sect;
+          if (Number > Ordinal || ((Type & N_STAB) && Number)) {
+            Invalid = true;
+            return;
+          }
+          Number = Remap[Number];
+        }
+      });
+  if (Invalid)
+    return fail(kSectionOrderReferences);
+  for (unsigned I = 0; I < Text.size(); ++I)
+    llvm::copy(Text[I].Bytes, Binary.begin() + TextOffset + I * SectionSize);
+  return llvm::Error::success();
+}
 
 std::optional<TextMetadataStorage>
 findTextMetadataStorage(llvm::ArrayRef<uint8_t> Binary, uint64_t Capacity) {
@@ -159,6 +252,8 @@ llvm::Expected<uint64_t> moveTextSection(std::vector<uint8_t> &Binary, Arch A,
   if (Count != 1 ||
       !macho_patch_detail::collectMachOFileRanges(Binary, Segments, Sections))
     return fail("moved metadata lost its unique TEXT mapping");
+  if (auto Error = orderTextSections(Binary))
+    return Error;
   return VA;
 }
 
@@ -599,6 +694,8 @@ llvm::Expected<uint64_t> declareMachOTextMetadata(std::vector<uint8_t> &Binary,
   Sections.clear();
   if (!macho_patch_detail::collectMachOFileRanges(B, Segments, Sections))
     return fail("new section changed file ownership");
+  if (auto Error = orderTextSections(B))
+    return Error;
   Binary.swap(B);
   return VA;
 }

@@ -1661,6 +1661,17 @@ conditional memory, invocation lifetime and both C routes remain open.
 
 ## Established rules
 
+- Inverse HighIR scalar bit views use representation equality rather than
+  source-call ABI admission. Binary16/binary80 adapters can cancel without
+  expanding the supported source signatures. Declared i386 scalar call
+  returns consequently avoid redundant 80-bit storage; both C routes retain
+  native 32-bit result-bit and call-count checks across FP edge values.
+  Real numeric precision reductions and reserved Boolean/vector roles remain.
+  Actual x87 precision conversions retain constrained LLVM operations and
+  shared native C helpers. Raw memory-output oracles cover signaling-NaN
+  quieting and all four rounding modes; a floating return alone cannot prove
+  these bits because the return transport may quiet the NaN itself.
+
 - HighC frame-address projection now checks the known root and signed offset
   in one bounded walk. Zero alignment masks and overflowing offset/rebase
   arithmetic cannot manufacture frame members or crash rendering. Both C

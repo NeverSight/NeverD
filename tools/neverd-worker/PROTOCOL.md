@@ -1071,7 +1071,13 @@ again; a function's new name usually does not.  `metadata.named_view_comment_pat
 `metadata.named_view_name_patches` and `metadata.named_view_data_name_patches` count the
 documents written from the one a view had with the image's comments, functions' new
 names, or data's new names, taken into it, where those alone reached it since it was
-decorated.
+decorated.  `metadata.named_view_renders` counts the documents the engine rendered a
+function for, rather than built from pages kept.  `metadata.local_type_names_prepared`
+counts the idle steps that found read what a declaration of local types checks its
+names against (`neverd_local_types_prepare`), which the step after each request and
+after each other idle step reads once the session has read its local types.  A replica that takes a function's
+declaration hiding no prototype keeps the documents that did not read it, as the
+owner does.
 
 Source pages with edit metadata carry `code_names`, half-open UTF-8 spans in
 the complete displayed document. An address target has `kind:"address"`,

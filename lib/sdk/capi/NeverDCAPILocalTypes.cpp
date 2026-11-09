@@ -1201,6 +1201,16 @@ const char *neverd_local_types_declare(neverd_session_t Sess,
                          {"unread", Unread}})));
 }
 
+int neverd_local_types_prepare(neverd_session_t Sess) {
+  auto *S = toSession(Sess);
+  // Reading the types themselves, which may fail as a PDB's may, is the first
+  // declaration's or decompile's (localTypes, Session::decompileDebug).
+  if (!S || !S->Loaded || !S->LocalTypes)
+    return 0;
+  S->readLocalTypeNames(*S->LocalTypes);
+  return 1;
+}
+
 const char *neverd_local_types_forget(neverd_session_t Sess,
                                       const char *NamesJson) {
   auto *S = toSession(Sess);

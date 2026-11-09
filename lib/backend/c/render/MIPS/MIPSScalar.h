@@ -11,6 +11,7 @@
 #define NEVERD_LIB_BACKEND_C_RENDER_MIPS_MIPSSCALAR_H
 
 #include "neverd/backend/MIPS/MIPSDSPSource.h"
+#include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
 
@@ -75,6 +76,25 @@ void writeMIPSScalarHelpers(Stream &OS, Arch Target,
             "    uint64_t word = value & 0xffffffffULL;\n"
             "    if (word & 0x80000000ULL) word |= 0xffffffff00000000ULL;\n"
             "    if (value != word) __builtin_trap();\n}\n\n";
+      continue;
+    }
+    if (mips::isWordDivision(Id)) {
+      OS << "/* Qualified source domain: every retained division reached here\n"
+            "   requires a nonzero divisor; this is not a MIPS exception. */\n"
+         << "static inline "
+         << mips::instructionModeCAttribute(InstructionMode::MIPSClassic)
+         << "uint64_t " << Name
+         << "(uint32_t a, uint32_t b) {\n"
+            "    if (b == 0) __builtin_trap();\n";
+      if (Id == Intrinsic::MIPSDivWord)
+        OS << "    uint32_t x = (a >> 31) ? 0u - a : a;\n"
+              "    uint32_t y = (b >> 31) ? 0u - b : b;\n"
+              "    uint32_t q = x / y, r = x % y;\n"
+              "    if ((a ^ b) >> 31) q = 0u - q;\n"
+              "    if (a >> 31) r = 0u - r;\n";
+      else
+        OS << "    uint32_t q = a / b, r = a % b;\n";
+      OS << "    return ((uint64_t)r << 32) | q;\n}\n\n";
       continue;
     }
     const auto Load = *mips::mergeLoad(Id);

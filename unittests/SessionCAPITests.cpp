@@ -6409,6 +6409,75 @@ TEST(SessionCAPILocalTypes, LanguagesSayHowEachNamesBuiltins) {
   EXPECT_EQ(Prototypes, "c cpp");
 }
 
+TEST_F(SessionCAPITest, LocalTypeNamesReadAheadLeaveDeclarationsAsTheyRead) {
+  const auto Fixtures =
+      std::filesystem::path(__FILE__).parent_path() / "types" / "fixtures";
+  std::ifstream Input(Fixtures / "local_types.exe", std::ios::binary);
+  const std::string Exe =
+      write("local_types.exe",
+            std::string(std::istreambuf_iterator<char>(Input), {}));
+  const std::string PDB = (Fixtures / "local_types.pdb").string();
+  neverd_session_t Plain = neverd_session_create();
+  ASSERT_NE(Plain, nullptr);
+  for (neverd_session_t Each : {Session, Plain}) {
+    neverd_session_set_pdb_path(Each, PDB.c_str());
+    ASSERT_EQ(neverd_session_load(Each, Exe.c_str()), 1)
+        << takeString(neverd_last_error(Each));
+  }
+  // Before the session reads its local types there is nothing to read ahead,
+  // and the error a caller has not read yet stays.
+  EXPECT_EQ(neverd_local_types_declare(Session, "", R"({"language":"x"})"),
+            nullptr);
+  const std::string Error = takeString(neverd_last_error(Session));
+  ASSERT_FALSE(Error.empty());
+  EXPECT_EQ(neverd_local_types_prepare(Session), 0);
+  EXPECT_EQ(takeString(neverd_last_error(Session)), Error);
+  for (neverd_session_t Each : {Session, Plain})
+    ASSERT_NE(takeString(neverd_local_types_json(Each, nullptr)), "");
+  EXPECT_EQ(neverd_local_types_prepare(Session), 1);
+  EXPECT_EQ(neverd_local_types_prepare(Session), 1);
+  std::string Last;
+  // Each declaration reads as it reads where nothing was read ahead: new types
+  // nothing names, one holding a type of the PDB, one the PDB names but only
+  // declares, one naming a type nothing defines yet, one replacing a type of
+  // the PDB (after which the names are read again in full), and the type the
+  // earlier one named, which is read where that one names it.
+  for (const char *Source :
+       {"struct AHEAD_NEW { int value; };",
+        "struct AHEAD_HOLDER { struct _DEVICE Device; char Tail; };",
+        "struct _FORWARD_ONLY { int Defined; };",
+        "struct AHEAD_USER { struct AHEAD_LATER *Later; };",
+        "struct _THREAD_LIKE { long Replaced; };",
+        "struct AHEAD_LATER { struct AHEAD_NEW New; };"}) {
+    EXPECT_EQ(neverd_local_types_prepare(Session), 1);
+    const std::string Ahead =
+        takeString(neverd_local_types_declare(Session, Source, nullptr));
+    Last = takeString(neverd_local_types_declare(Plain, Source, nullptr));
+    EXPECT_EQ(Ahead, Last) << Source;
+    EXPECT_EQ(takeString(neverd_local_types_json(Session, nullptr)),
+              takeString(neverd_local_types_json(Plain, nullptr)))
+        << Source;
+  }
+  // A type another names that the program no longer has, declared again: read
+  // where the other names it, which the names read ahead say.
+  for (neverd_session_t Each : {Session, Plain})
+    ASSERT_NE(takeString(neverd_local_types_forget(Each, R"(["AHEAD_LATER"])")),
+              "");
+  EXPECT_EQ(neverd_local_types_prepare(Session), 1);
+  const char *Again = "struct AHEAD_LATER { long Again; };";
+  const std::string Ahead =
+      takeString(neverd_local_types_declare(Session, Again, nullptr));
+  Last = takeString(neverd_local_types_declare(Plain, Again, nullptr));
+  EXPECT_EQ(Ahead, Last);
+  auto Named = llvm::json::parse(Last);
+  ASSERT_TRUE(static_cast<bool>(Named)) << Last;
+  EXPECT_EQ(Named->getAsObject()->getBoolean("unread"), false) << Last;
+  EXPECT_EQ(takeString(neverd_local_types_json(Session, nullptr)),
+            takeString(neverd_local_types_json(Plain, nullptr)));
+  neverd_session_destroy(Plain);
+  EXPECT_EQ(neverd_local_types_prepare(nullptr), 0);
+}
+
 TEST_F(SessionCAPITest, DeclaredTypesJoinThePDBsAndStayWithTheProject) {
   const auto Fixtures =
       std::filesystem::path(__FILE__).parent_path() / "types" / "fixtures";

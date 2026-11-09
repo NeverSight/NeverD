@@ -467,13 +467,29 @@ An invalid BDE updates BNDSTATUS without changing the bank. A BTE read fault
 forgets only its destination, and store faults retain the provider's partial
 writes. Unavailable memory semantics are distinct from an architectural fault;
 they certify no effects from that request, not rollback of an earlier BDE read.
+`Suspended` separately represents a host backing stop with possible page-walk
+effects but no operand publication or CPU fault. Its provider must retain any
+completed earlier requests and resume without replaying them.
 Enabled operations require a known nontransactional context; an RTM/HLE
 checkpoint and abort continuation are not supplied by this state component.
 Original branch completion takes an explicit preserve/initialize effect;
 it does not infer an architectural branch from a transformed CFG edge.
 The V11 continuation supplies a separate source contract for successful
 long-mode RAM and pending #BR, including original-transfer effects. Ordinary
-function-ABI lifting and transactional/faulting memory completion remain closed.
+function-ABI lifting and transactional completion remain closed.
+
+`translate/X86/X86LegacyMpx` adapts the same byte, bank and memory owners to
+protected code32 execution. Its explicit `WholeOperandRAM` profile supplies
+segmented BNDMOV and flat-DS linear BDE/BTE accesses through `X86PagedMemory`.
+`PendingMpx` retains the authenticated instruction, original inputs, completed
+directory value and debug matches across host backing stops. A BDE can alias
+the PTE modified by a later walk, so repeating that read would change the
+bounds-table address. Architectural faults discard this continuation and
+publish the shared owner's status/knownness effects before existing IDT
+delivery. Legacy near CALL/RET/JMP/Jcc uses the shared byte-owned bank effect
+only at successful completion, including an untaken Jcc and before post-step
+debug entry. The protected source dispatcher reuses this executor and retains
+its existing attempt-budget rules. No second MPX evaluator lives in a C emitter.
 
 The LLVM/NeverC native MPX APIs independently retain the ambient bounds bank.
 Their operands use allocated legacy-encodable carriers, preserving reserved
@@ -1463,8 +1479,9 @@ language pointers, and reloads installed language records before committing.
 Private weak code helpers remain object-local; exported weak definitions and
 private weak data still require a coalescing contract. Other language pointer
 encodings, native TLS/initializers and public whole-image arm64e publication
-remain outside this staging contract. These file checks do not qualify real
-signed exception execution.
+remain outside this staging contract. File checks alone do not qualify real
+signed exception execution; the separate native execution matrix below
+qualifies the supported installation cases.
 Compact unwind and DWARF reservation reuse zero-filled `__TEXT` gaps outside
 sections and load-command payloads without moving original code/data VAs.
 DWARF capacity is sized to the actual records, and PC-relative fields are
@@ -1508,6 +1525,18 @@ not inferred. The strict snapshot charges the existing threaded string-copy
 budget for the table, optional owned imports and each slot's symbol name.
 Repeated long imports therefore cannot create unbounded snapshot copies.
 
+`convertMachOThreadedFixupsToChains` explicitly migrates an existing threaded
+image to modern chained metadata without moving its storage or changing its
+ARM64E word format. Exact slot bindings, addends, authentication parameters,
+symbols and export identities are replayed before mutation. The dyld-info
+command becomes chained-fixup and optional export-trie commands within its old
+header extent. Unrepresentable legacy import flags reject transactionally;
+empty export streams and absent export commands share an empty identity.
+The caller owns subsequent signing. Native execution tests use this migration
+for legacy inputs because the Xcode 27 runner also drops authenticated bind
+addends in a compiler-original threaded control; original-format installation
+and inspection remain separate offline coverage.
+
 Installation is transactional, including automatic producer receipts and the
 optional explicit recipe handoff in `MachOPatcher::appendReplacementImage`.
 Failed placement planning cannot authorize installation at the zero error
@@ -1524,8 +1553,14 @@ change when a new load command is inserted. Such a changed target is rejected
 without publishing any bytes.
 
 This installation phase does not enable whole-image arm64e publication. The
-qualification of the new MC interface with a post-r6 toolchain and native signed
-call/unwind execution remain separate contracts. A runtime fixture exercises
+new MC interface still requires qualification with a post-r6 toolchain and
+the complete publication pipeline. The
+[native installation record](evidence/arm64e-native-installation-2026-11-09.json)
+qualifies twelve installed-dylib cases on each of macOS 26 and Xcode 27, with
+zero failures or skips. It covers O0/O2 authenticated calls, compact/DWARF
+language unwinding and relocated original signed language frames. Legacy
+inputs use the explicit threaded-to-chained migration described above. The
+runtime fixture exercises
 IA/IB calls, DA/DB data, an exception crossing the installed signed frame and
 actual RELRO mapping permissions only after its compiler-original execution
 control succeeds. An unavailable control is an explicit skip, never evidence
@@ -1536,9 +1571,10 @@ address diversity because the current `dyld_info` refuses that format. Apple's
 masks the key with `2` instead of `3`, losing the IA/IB and DA/DB distinction.
 Tests check both raw key bits for all four keys and the decoded names for IA/DA;
 the latter tool cannot independently qualify IB/DB or legacy rebases. Rebase
-replay and per-PC signed CFI comparisons remain offline checks, not proof of
-runtime dyld/unwinder execution. The publication guard remains until those
-contracts are qualified.
+replay and per-PC signed CFI comparisons retain their independent offline
+checks. Native execution qualifies the observed call/exception paths, not every
+possible frame state. Whole-image rebuilding and startup executable loading
+remain unqualified; the publication guard stays in place.
 
 The shared AAPCS64 parameter placement owner describes Darwin fixed value
 spills with their natural size and alignment after either register bank is
@@ -2122,12 +2158,13 @@ ordering follows [dyld's chain validation](https://github.com/apple-oss-distribu
 This preservation contract does not synthesize signed storage, install new
 authenticated imports or authorize whole-image rebuilding.
 
-This support covers static loading, lifting and C/LLVM inspection. Native
-rebuilding and source replacement of an arm64e image fail explicitly until
-ABI-aware signing and fixup emission are implemented; the emitted module
-retains that requirement. Checked emulation's existing disabled-key profile
-does not become an arm64e execution environment. Separate Apple Silicon tests
-compare both C projections with native PACGA. The full PAC/AUT/XPAC oracle
+This support covers static loading, lifting and C/LLVM inspection, together
+with the separately qualified native object installation contract above.
+General rebuilding and source replacement of an arm64e image fail explicitly
+until their complete signing, fixup and publication pipeline is qualified;
+the emitted module retains that requirement. Checked emulation's existing
+disabled-key profile does not become an arm64e execution environment. Separate
+Apple Silicon tests compare both C projections with native PACGA. The full PAC/AUT/XPAC oracle
 requires an executable arm64e process and checks that each signing key changes
 pointer bits. Hosts that refuse arm64e execution explicitly skip that check;
 ordinary arm64 can leave PAC/AUT disabled despite advertising CPU support.
@@ -4907,11 +4944,12 @@ would define a type reads again on a copy (`parseFunctionDeclaration`). The GUI 
 its write, which runs the same journaled transaction in order on a thread of its own
 (`ProjectHistory::persistLater`), joined with what is queued behind one already
 writing. What may read the project's files waits for it first. A document of a view
-notes the addresses its render read and its decoration looked up, and reads what such
+notes the addresses its render read, whether the engine rendered it then or a store
+kept it (`neverd_user_reads`), and those its decoration looked up, and reads what such
 an edit reached when it is next asked for, so the edit leaves the owner's other
 documents as they are (`Engine::keepNamedViewsThrough`, `Engine::readViewEdits`). A
-function's declaration does so too while the stores' names stand, which they do unless
-it hides a prototype analysis read. Where comments alone reached a document since it
+function's declaration does so too, in the owner and in a replica that takes it, while
+the stores' names stand, which they do unless it hides a prototype analysis read. Where comments alone reached a document since it
 was decorated, they are written into a copy of it as decoration writes them: each row's
 comment read again, its line's inline comment replaced and the spans after it moved
 (`CodeEdits::takeComments`). A function's new name, taken in place, is written the same
@@ -4956,7 +4994,10 @@ was read ahead under them stand. One that hides a prototype analysis read, or gi
 one back, lets go of the image's call summaries alone
 (`PipelineAnalysisCache::forgetPrototypes`): only their solve reads an export's
 prototype, while callee effects, no-return proofs and call graphs read bodies. Types new
-to the library that nothing names do the same (`Session::takeUnreadTypes`). Other
+to the library that nothing names do the same (`Session::takeUnreadTypes`); what
+that checks their names against, the names the library spells and those its types
+and prototypes mention, a worker reads while it idles once the session has read its
+types (`neverd_local_types_prepare`), and a declaration keeps it as it adds types. Other
 types let go of what read them, and the summaries, the job and the store start over,
 while the process and its image stand. The owner keeps its listing and reference index
 for those, and reads what a function was declared as when it next decodes it.
@@ -11681,6 +11722,24 @@ explicit bit casts, including separately emitted callers. This proves stack
 transport, not complete x87 control-word or exception semantics. Shared import
 target tracing also rejects partial pointer writes, opaque call barriers and
 instruction temporaries borrowed from another instruction.
+
+HighIR cancels inverse scalar bit reinterpretations by their representation,
+including binary16 and binary80, independently of source-call ABI admission.
+The original scalar width, signedness and reserved Boolean/vector role must
+remain intact. Numeric conversions between the bit views remain observable;
+this cleanup does not remove a real precision reduction or admit additional
+types to a source calling convention. A declared i386 float/double call result
+can consequently return at its original precision without materializing an
+80-bit integer temporary in HighC.
+
+Actual x87 FLD/FST precision conversions remain numerical operations.
+`isX87PrecisionConversion` owns the binary32/binary64-to-binary80 boundary:
+HighIR cannot cancel its numerical round trip, and LLVM uses constrained
+extension/truncation with dynamic rounding. Both C routes use the same native
+FLD/FSTP helpers, so C optimization cannot erase signaling-NaN quieting or
+replace x87 store rounding with an ordinary cast. This covers the observable
+converted value; full x87 exception, stack-tag and status state still belongs
+to the existing context and explicit-state paths.
 
 An internal i386 helper may instead consume one incoming logical ST0 and
 return an integer. The same machine graph proves that every return consumes

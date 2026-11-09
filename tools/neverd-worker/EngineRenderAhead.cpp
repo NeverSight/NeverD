@@ -129,9 +129,10 @@ void eachStatedFunction(Page &page, Each each) {
 }
 } // namespace
 
-void Engine::noteRenderReads(NamedView &document) const {
+void Engine::noteRenderReads(NamedView &document,
+                             std::string_view record) const {
   // The digest, then the addresses it read, to the end of the first line.
-  std::string_view line(keptReads_);
+  std::string_view line(record);
   line = line.substr(0, line.find('\n'));
   if (line.empty())
     return;
