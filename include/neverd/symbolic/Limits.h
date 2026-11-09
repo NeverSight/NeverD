@@ -67,6 +67,9 @@ inline constexpr unsigned kSymExprLogicRemoveDiscardedShiftTermsWork = 256;
 inline constexpr unsigned kSymExprLogicSubsetWork = 256;
 
 // lib/symbolic/expr/SymExprStruct.cpp
+/// Bound inspection of linear literal-tag selection chains.
+inline constexpr unsigned kSymExprSelectionEqualityMaxSteps = 32;
+
 inline constexpr size_t kSymExprStructMaximum = 4096;
 
 // Optional equality/range folds inspect bounded constant words and at most

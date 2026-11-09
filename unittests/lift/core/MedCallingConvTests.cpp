@@ -4540,6 +4540,93 @@ TEST(MedABIPass,
     EXPECT_EQ(Args[RegisterArgs.size() + I], OverflowArgs[I]);
 }
 
+TEST(MedTypePass, StackTopResultsAreNotRegisterRestores) {
+  for (Arch Architecture : {Arch::X86, Arch::X64})
+    for (bool SeparateBlock : {false, true})
+      for (unsigned Case = 0; Case != 8; ++Case) {
+        SCOPED_TRACE(testing::Message() << unsigned(Architecture) << ':'
+                                        << SeparateBlock << ':' << Case);
+        const auto &TRI = getTargetRegInfo(Architecture);
+        const auto Bytes = TRI.PointerSize;
+        MedFunc Func;
+        Func.Entry = 0x1000;
+        Func.Blocks.resize(SeparateBlock ? 2 : 1);
+        auto &Entry = Func.Blocks.front();
+        auto &Exit = Func.Blocks.back();
+        Entry.Id = 0;
+        Entry.StartAddr = Func.Entry;
+        if (SeparateBlock) {
+          Exit.Id = 1;
+          Entry.Succs = {1};
+          Exit.Preds = {0};
+        }
+        const auto SP = reg(1, 0, Bytes, TRI.StackPointer, Architecture);
+        const auto Incoming = reg(2, 0, Bytes, TRI.IntReturnReg, Architecture);
+        addLiveIn(Entry, SP);
+        addLiveIn(Entry, Incoming);
+        const auto Slot = reg(1, 1, Bytes, TRI.StackPointer, Architecture);
+        Entry.Ops.push_back(
+            binary(NdOp::INT_SUB, Slot, SP, MedVar::makeConst(Bytes, Bytes)));
+        auto Store = [&](MedVar Address, MedVar Value) {
+          MedOp Op;
+          Op.Opcode = NdOp::STORE;
+          Op.addInput(Address);
+          Op.addInput(Value);
+          Entry.Ops.push_back(Op);
+        };
+        Store(Slot, Incoming);
+        const auto FP = reg(3, 1, 8, TRI.FPReturnReg, Architecture);
+        Entry.Ops.push_back(
+            unary(NdOp::FLOAT_INT2FLOAT, FP, MedVar::makeConst(42, 4)));
+        // An unchanged entry save may be ignored. A complete computed store,
+        // a partial overwrite, or a reload from another incoming register
+        // supplies a new integer result; a disjoint store leaves the save.
+        if (Case == 1)
+          Store(Slot, MedVar::makeConst(17, Bytes));
+        else if (Case == 2)
+          Store(Slot, MedVar::makeConst(17, 1));
+        else if (Case == 3) {
+          const auto Other = temp(4, 0, Bytes, Architecture);
+          Entry.Ops.push_back(binary(NdOp::INT_SUB, Other, Slot,
+                                     MedVar::makeConst(Bytes, Bytes)));
+          Store(Other, MedVar::makeConst(17, Bytes));
+        } else if (Case == 4)
+          Store(Slot, reg(5, 0, Bytes, TRI.StackPointer, Architecture));
+        else if (Case == 5) {
+          Store(Slot, MedVar::makeConst(17, Bytes));
+          Store(Slot, Incoming);
+        } else if (Case == 6) {
+          const auto Saved = temp(6, 0, Bytes, Architecture);
+          Entry.Ops.push_back(unary(NdOp::COPY, Saved, Incoming));
+          Store(Slot, Saved);
+        }
+        if (Case == 7) {
+          const auto Byte = temp(7, 0, 1, Architecture);
+          Entry.Ops.push_back(binary(NdOp::SUBBYTES, Byte, Incoming,
+                                     MedVar::makeConst(0, Bytes)));
+          Store(Slot, Byte);
+        }
+        const auto Result = reg(2, 1, Bytes, TRI.IntReturnReg, Architecture);
+        Exit.Ops.push_back(unary(NdOp::LOAD, Result, Slot));
+        Exit.Ops.push_back(binary(
+            NdOp::INT_ADD, reg(1, 2, Bytes, TRI.StackPointer, Architecture),
+            Slot, MedVar::makeConst(Bytes, Bytes)));
+        MedOp Return;
+        Return.Opcode = NdOp::RETURN;
+        Return.addInput(Result);
+        Exit.Ops.push_back(Return);
+
+        inferMedTypes(Func, Architecture);
+
+        ASSERT_TRUE(Func.ReturnType);
+        const bool Restores =
+            Case == 0 || Case == 3 || Case == 5 || Case == 6 || Case == 7;
+        EXPECT_EQ(Func.ReturnType->Kind,
+                  Restores ? NdTypeKind::Float : NdTypeKind::Int);
+        EXPECT_EQ(Func.ReturnType->Size, Restores ? 8u : Bytes);
+      }
+}
+
 TEST(MedTypePass, X86InfersFloatReturnFromX87CarrierExtension) {
   constexpr Arch TheArch = Arch::X86;
 
@@ -4706,8 +4793,9 @@ TEST(MedDCE, X86KeepsTheX87ReturnForReturnTyping) {
 TEST(MedTypePass, MergedEpiloguesReturnTheRegisterWrittenLast) {
   constexpr Arch TheArch = Arch::X64;
   const auto &TRI = getTargetRegInfo(TheArch);
-  for (bool Counter : {false, true}) {
-    SCOPED_TRACE(Counter);
+  for (const auto &[Counter, Stack] :
+       {std::pair{false, false}, {true, false}, {false, true}, {true, true}}) {
+    SCOPED_TRACE(testing::Message() << Stack << ":" << Counter);
     MedFunc Func;
     Func.Entry = 0x1000;
     Func.Blocks.resize(4);
@@ -4719,6 +4807,23 @@ TEST(MedTypePass, MergedEpiloguesReturnTheRegisterWrittenLast) {
     Func.Blocks[1].Preds = Func.Blocks[2].Preds = {0};
     Func.Blocks[1].Succs = Func.Blocks[2].Succs = {3};
     Func.Blocks[3].Preds = {1, 2};
+    const MedVar SP = reg(4, 0, 8, TRI.StackPointer, TheArch);
+    addLiveIn(Func.Blocks[0], SP);
+    const MedVar Slot = reg(4, 1, 8, TRI.StackPointer, TheArch);
+    Func.Blocks[0].Ops.push_back(
+        binary(NdOp::INT_SUB, Slot, SP, MedVar::makeConst(8, 8)));
+    auto IntegerResult = [&](std::vector<MedOp> &Ops, MedVar Result,
+                             MedVar Value) {
+      if (Stack) {
+        MedOp Store;
+        Store.Opcode = NdOp::STORE;
+        Store.addInput(Slot);
+        Store.addInput(Value);
+        Ops.push_back(Store);
+        Ops.push_back(unary(NdOp::LOAD, Result, Slot));
+      } else
+        Ops.push_back(unary(NdOp::COPY, Result, Value));
+    };
     const MedVar Limit = reg(1, 0, 8, x86reg::RDI, TheArch);
     addLiveIn(Func.Blocks[0], Limit);
     const MedVar Zero = temp(2, 1, 1, TheArch);
@@ -4746,14 +4851,14 @@ TEST(MedTypePass, MergedEpiloguesReturnTheRegisterWrittenLast) {
       Loop.addInput(More);
       Body.push_back(Loop);
     } else {
-      Body.push_back(unary(NdOp::COPY, Count, MedVar::makeConst(1, 8)));
+      IntegerResult(Body, Count, MedVar::makeConst(1, 8));
     }
     const MedVar Square = reg(10, 2, 8, TRI.FPReturnReg, TheArch);
     const MedVar None = reg(20, 2, 8, TRI.IntReturnReg, TheArch);
     auto &Other = Func.Blocks[2].Ops;
     Other.push_back(binary(NdOp::FLOAT_INT2FLOAT, Square,
                            MedVar::makeConst(7, 8), MedVar::makeConst(8, 4)));
-    Other.push_back(unary(NdOp::COPY, None, MedVar::makeConst(0, 8)));
+    IntegerResult(Other, None, MedVar::makeConst(0, 8));
 
     auto &Epilogue = Func.Blocks[3];
     PhiNode Float;

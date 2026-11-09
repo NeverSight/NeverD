@@ -304,7 +304,9 @@
     "ctest": "Native runtime CTest invocation failed",
     "arguments": "run requires --build-dir and --probe-report",
     "legacy": "Legacy fixtures are missing, stale, or do not match their recorded arm64e binaries",
-    "legacy_linker": "A successful lookup of a real ld-classic is required"
+    "legacy_linker": "A successful lookup of a real ld-classic is required",
+    "syscall": "SDK must define exactly one map_with_linking_np syscall number",
+    "startup_fixups": "userspace startup fixups require probe-startup"
   },
   "library_suffix": ".dylib",
   "loader_suffix": "-loader",
@@ -321,5 +323,32 @@
   "legacy_info_suffix": "-dyld-info",
   "startup_mode": "probe-startup",
   "startup_loading": "exec",
-  "startup_qualification_key": "compiler_original_startup_qualified"
+  "startup_qualification_key": "compiler_original_startup_qualified",
+  "startup_fixups_argument": "--startup-fixups",
+  "startup_fixup_loaders": [
+    "system",
+    "userspace"
+  ],
+  "system_fixup_loader": "system",
+  "userspace_fixup_loader": "userspace",
+  "fixup_loader_key": "fixup_loader",
+  "startup_profile_key": "startup_fixup_profile",
+  "syscall_label": "startup-syscall-macros",
+  "syscall_command": [
+    "/usr/bin/clang",
+    "-dM",
+    "-E",
+    "-include",
+    "sys/syscall.h",
+    "-x",
+    "c",
+    "/dev/null"
+  ],
+  "syscall_pattern": "^#define SYS_map_with_linking_np ([0-9]+)$",
+  "startup_sandbox_profile": "(version 1) (allow default) (deny syscall-unix (syscall-number {number}))",
+  "startup_launcher": [
+    "/usr/bin/sandbox-exec",
+    "-p",
+    "{profile}"
+  ]
 }

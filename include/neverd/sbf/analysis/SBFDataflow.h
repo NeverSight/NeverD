@@ -192,7 +192,7 @@ public:
   void setCoordinates(std::shared_ptr<const StoredMemoryCoordinates> Context) {
     if (!Coordinates || !Context ||
         Coordinates->Addresses != Context->Addresses)
-      CapturedRanges.clear();
+      discardCapturedRanges();
     Coordinates = std::move(Context);
   }
   void setSymbolicAddresses(std::shared_ptr<const SymbolicAddressSpace> Space);
@@ -202,9 +202,24 @@ public:
   /// Only a guard on this exact value may supply a narrower interval.
   void refineCapturedRange(const RegisterValue &Value,
                            UnsignedValueRange Range);
+  /// Import proven numeric and relative-address bounds, optionally binding
+  /// each immutable value to that same value in the receiving context.
+  void refineCapturedRanges(
+      const StoredRegisterMemory &Other,
+      llvm::function_ref<RegisterValue(RegisterValue)> Bind = nullptr);
   std::optional<UnsignedValueRange> valueRange(const RegisterValue &Value,
                                                bool AllowWrap = false) const;
-  void discardCapturedRanges() { CapturedRanges.clear(); }
+  /// A proven modular difference between two immutable values. The interval
+  /// may wrap; unrelated capture names still supply no alias separation.
+  void refineCapturedDifference(const RegisterValue &Value,
+                                const RegisterValue &Base,
+                                UnsignedValueRange Difference);
+  /// A modular difference established on every path in this state. A zero
+  /// singleton proves exact equality, independently of numeric enclosures.
+  std::optional<UnsignedValueRange>
+  capturedDifference(const RegisterValue &Left,
+                     const RegisterValue &Right) const;
+  void discardCapturedRanges() { CapturedFacts.clear(); }
   std::optional<uint64_t> frameTranslationBound() const;
   /// Whether this window can hold typed facts in a scratch region. Frame
   /// coordinates may need translation; this proves neither validity nor
@@ -221,6 +236,9 @@ public:
   /// Rebase captured values at a call boundary, or widen them to ranges at a
   /// loop boundary. Dropping an address identity also drops its keyed cells.
   void transformSymbols(llvm::function_ref<RegisterValue(RegisterValue)> Map);
+  /// Rename one immutable identity after a path-local equality proof. Unlike
+  /// widening, this preserves the bounds already proved for other captures.
+  void renameCapture(uint64_t From, uint64_t To);
   void visitCells(
       llvm::function_ref<void(const RegisterValue &, const ProvenValueSet &)>
           Visit) const;
@@ -254,9 +272,9 @@ public:
   bool translateFrameCoordinates(int64_t Delta);
   void clear() {
     Values.clear();
-    CapturedRanges.clear();
+    discardCapturedRanges();
   }
-  bool empty() const { return Values.empty() && CapturedRanges.empty(); }
+  bool empty() const { return Values.empty() && CapturedFacts.empty(); }
   uint64_t retainedByteEstimate() const;
   RegisterValue
   read(va_t Address,
@@ -284,9 +302,22 @@ private:
   // The second word is a numeric coordinate or a signed capture displacement;
   // the third is the exact byte width of the typed cell.
   std::map<std::tuple<uint64_t, uint64_t, unsigned>, ProvenValueSet> Values;
-  // Bounds of the undisplaced capture on every path reaching this state.
-  // Missing entries use the immutable enclosure in Coordinates.
-  std::map<uint64_t, UnsignedValueRange> CapturedRanges;
+  struct CapturedDifference {
+    uint64_t Base;
+    UnsignedValueRange Offset;
+    bool operator==(const CapturedDifference &) const = default;
+  };
+  struct CapturedFact {
+    // Bounds of the undisplaced capture; absent bounds use Coordinates.
+    std::optional<UnsignedValueRange> Range;
+    // One smaller parent ID per value forms bounded, acyclic chains. IDs only
+    // orient the relation; the instruction proof supplies its offset bounds.
+    std::optional<CapturedDifference> Difference;
+    bool operator==(const CapturedFact &) const = default;
+  };
+  // Both constraints share the capture key. Ordinary scratch snapshots do not
+  // carry captures and must not pay for another empty container per block.
+  std::map<uint64_t, CapturedFact> CapturedFacts;
   std::shared_ptr<const StoredMemoryCoordinates> Coordinates;
   void joinCapturedRanges(const StoredRegisterMemory &Other);
 };

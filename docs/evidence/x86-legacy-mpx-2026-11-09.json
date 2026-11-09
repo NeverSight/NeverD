@@ -31,17 +31,17 @@
         "NeverDX86LegacySourceTests": "589b42c5afc283174aebfd38abcb2ee0891984af9cfde8c31b97a320812778d7"
       },
       "sdk_configuration": {
-        "CMAKE_CXX_COMPILER:STRING": "/home/ad/.local/bin/clang++",
-        "LLVM_DIR:PATH": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/llvm-cache/neverd-native-local/x86_64/neverd-llvm-linux-x86_64/lib/cmake/llvm",
+        "CMAKE_CXX_COMPILER:STRING": "<host>/.local/bin/clang++",
+        "LLVM_DIR:PATH": "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/llvm-cache/neverd-native-local/x86_64/neverd-llvm-linux-x86_64/lib/cmake/llvm",
         "NEVERD_LLVM_PREBUILT:BOOL": "ON",
         "NEVERD_LLVM_PREBUILT_BASE_URL:STRING": "",
-        "NEVERD_LLVM_PREBUILT_CACHE_DIR:PATH": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/llvm-cache",
+        "NEVERD_LLVM_PREBUILT_CACHE_DIR:PATH": "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/llvm-cache",
         "NEVERD_LLVM_PREBUILT_REPO:STRING": "NeverSight/llvm-project",
         "NEVERD_LLVM_PREBUILT_SHA256:STRING": "",
         "NEVERD_LLVM_PREBUILT_TAG:STRING": "neverd-native-local"
       },
       "source_export_cli": {
-        "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/neverd",
+        "path": "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/neverd",
         "sha256": "a172d8ec65618244da897e5e3bee04d5f282e3027803a632850bbcf193f97fe9"
       }
     },
@@ -70,17 +70,17 @@
         "NeverDX86LegacySourceTests": "5841c0e1228602aed514d033487eb159c7dbc6fb1726ec75c29bb31ec28d9395"
       },
       "sdk_configuration": {
-        "CMAKE_CXX_COMPILER:STRING": "/home/ad/.local/bin/clang++",
-        "LLVM_DIR:PATH": "/home/ad/.cache/neverd-llvm/neverd-llvm-v23.0.0-r6/x86_64/neverd-llvm-linux-x86_64/lib/cmake/llvm",
+        "CMAKE_CXX_COMPILER:STRING": "<host>/.local/bin/clang++",
+        "LLVM_DIR:PATH": "<host>/.cache/neverd-llvm/neverd-llvm-v23.0.0-r6/x86_64/neverd-llvm-linux-x86_64/lib/cmake/llvm",
         "NEVERD_LLVM_PREBUILT:BOOL": "ON",
         "NEVERD_LLVM_PREBUILT_BASE_URL:STRING": "",
-        "NEVERD_LLVM_PREBUILT_CACHE_DIR:PATH": "/home/ad/.cache/neverd-llvm",
+        "NEVERD_LLVM_PREBUILT_CACHE_DIR:PATH": "<host>/.cache/neverd-llvm",
         "NEVERD_LLVM_PREBUILT_REPO:STRING": "NeverSight/llvm-project",
         "NEVERD_LLVM_PREBUILT_SHA256:STRING": "",
         "NEVERD_LLVM_PREBUILT_TAG:STRING": "neverd-llvm-v23.0.0-r6"
       },
       "source_export_cli": {
-        "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/neverd",
+        "path": "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/neverd",
         "sha256": "5dd91936b4d6b8721620cf377f22e478a7388bea678b56fbef4bbf2c2b9ad5f8"
       }
     }
@@ -100,7 +100,7 @@
           "taskset",
           "-c",
           "4",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86MpxContextTests",
+          "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86MpxContextTests",
           "--gtest_filter=*",
           "--gtest_output=xml:/mnt/data/neverd-legacy-mpx-20261109/final-native-tests/NeverDX86MpxContextTests.xml"
         ],
@@ -135,7 +135,7 @@
           "taskset",
           "-c",
           "4",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86MpxEncodingTests",
+          "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86MpxEncodingTests",
           "--gtest_filter=*",
           "--gtest_output=xml:/mnt/data/neverd-legacy-mpx-20261109/final-native-tests/NeverDX86MpxEncodingTests.xml"
         ],
@@ -170,7 +170,7 @@
           "taskset",
           "-c",
           "4",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86PagingTests",
+          "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86PagingTests",
           "--gtest_filter=*",
           "--gtest_output=xml:/mnt/data/neverd-legacy-mpx-20261109/final-native-tests/NeverDX86PagingTests.xml"
         ],
@@ -193,177 +193,177 @@
           {
             "suite": "PagingModes/X86PagingNativeTest",
             "case": "OriginalInstructionsMatchPagingFaultsAndCommit/3",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:127\nBound KVM CPU has no LA57\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:127\nBound KVM CPU has no LA57\n"
           },
           {
             "suite": "LegacyDivision/X86LegacyDivisionNativeTest",
             "case": "FullDividendsQuotientsAndPreservedFlagChoice/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
           },
           {
             "suite": "LegacyDivision/X86LegacyDivisionNativeTest",
             "case": "FullDividendsQuotientsAndPreservedFlagChoice/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
           },
           {
             "suite": "LegacyDivision/X86LegacyDivisionNativeTest",
             "case": "EveryRegisterAndImplicitDividendAlias/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
           },
           {
             "suite": "LegacyDivision/X86LegacyDivisionNativeTest",
             "case": "EveryRegisterAndImplicitDividendAlias/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
           },
           {
             "suite": "LegacyDivision/X86LegacyDivisionNativeTest",
             "case": "ReadonlySegmentsPagingAndAlignmentPrecedeDE/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
           },
           {
             "suite": "LegacyDivision/X86LegacyDivisionNativeTest",
             "case": "ReadonlySegmentsPagingAndAlignmentPrecedeDE/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
           },
           {
             "suite": "LegacyDivision/X86LegacyDivisionNativeTest",
             "case": "OriginalPageAndDivideHandlersReturnToRetry/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
           },
           {
             "suite": "LegacyDivision/X86LegacyDivisionNativeTest",
             "case": "OriginalPageAndDivideHandlersReturnToRetry/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
           },
           {
             "suite": "LegacyFastSystem/X86LegacyFastSystemNativeTest",
             "case": "PrivilegesSelectorsFlagsAndCachedState/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
           },
           {
             "suite": "LegacyFastSystem/X86LegacyFastSystemNativeTest",
             "case": "PrivilegesSelectorsFlagsAndCachedState/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
           },
           {
             "suite": "LegacyFastSystem/X86LegacyFastSystemNativeTest",
             "case": "TransfersDoNotReadTablesOrNewStack/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
           },
           {
             "suite": "LegacyFastSystem/X86LegacyFastSystemNativeTest",
             "case": "TransfersDoNotReadTablesOrNewStack/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
           },
           {
             "suite": "LegacyFastSystem/X86LegacyFastSystemNativeTest",
             "case": "PrefixesAndFetchFaultPrecedence/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
           },
           {
             "suite": "LegacyFastSystem/X86LegacyFastSystemNativeTest",
             "case": "PrefixesAndFetchFaultPrecedence/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
           },
           {
             "suite": "LegacyMultiply/X86LegacyMultiplyNativeTest",
             "case": "FullProductsAndSignedOverflow/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
           },
           {
             "suite": "LegacyMultiply/X86LegacyMultiplyNativeTest",
             "case": "FullProductsAndSignedOverflow/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
           },
           {
             "suite": "LegacyMultiply/X86LegacyMultiplyNativeTest",
             "case": "EveryRegisterAndImplicitResultAlias/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
           },
           {
             "suite": "LegacyMultiply/X86LegacyMultiplyNativeTest",
             "case": "EveryRegisterAndImplicitResultAlias/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
           },
           {
             "suite": "LegacyMultiply/X86LegacyMultiplyNativeTest",
             "case": "TruncatedProductsRegistersAndImmediates/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
           },
           {
             "suite": "LegacyMultiply/X86LegacyMultiplyNativeTest",
             "case": "TruncatedProductsRegistersAndImmediates/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
           },
           {
             "suite": "LegacyMultiply/X86LegacyMultiplyNativeTest",
             "case": "ReadonlyMemoryFaultsAndOriginalRepair/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
           },
           {
             "suite": "LegacyMultiply/X86LegacyMultiplyNativeTest",
             "case": "ReadonlyMemoryFaultsAndOriginalRepair/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
           },
           {
             "suite": "LegacyReturns/X86LegacyReturnNativeTest",
             "case": "AlignmentAndPageFaultPriority/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyReturnNativeTests.inc:523\nBind the qualified legacy return alignment priority\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyReturnNativeTests.inc:523\nBind the qualified legacy return alignment priority\n"
           },
           {
             "suite": "LegacyReturns/X86LegacyReturnNativeTest",
             "case": "AlignmentAndPageFaultPriority/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyReturnNativeTests.inc:523\nBind the qualified legacy return alignment priority\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyReturnNativeTests.inc:523\nBind the qualified legacy return alignment priority\n"
           },
           {
             "suite": "LegacyScalars/X86LegacyScalarNativeTest",
             "case": "AlignmentAndPagingPriority/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:129\nBind the qualified scalar #AC-before-paging processor\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:129\nBind the qualified scalar #AC-before-paging processor\n"
           },
           {
             "suite": "LegacyScalars/X86LegacyScalarNativeTest",
             "case": "AlignmentAndPagingPriority/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:129\nBind the qualified scalar #AC-before-paging processor\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:129\nBind the qualified scalar #AC-before-paging processor\n"
           },
           {
             "suite": "LegacyScalars/X86LegacyScalarNativeTest",
             "case": "NearBranchesCallsReturnsAndEveryCondition/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:144\nBind the processor's CALL stack publication profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:144\nBind the processor's CALL stack publication profile\n"
           },
           {
             "suite": "LegacyScalars/X86LegacyScalarNativeTest",
             "case": "NearBranchesCallsReturnsAndEveryCondition/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:144\nBind the processor's CALL stack publication profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:144\nBind the processor's CALL stack publication profile\n"
           },
           {
             "suite": "LegacyScalars/X86LegacyScalarNativeTest",
             "case": "BranchLimitsPrecedeOrFollowStackFaults/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:202\nBind the processor's CALL stack publication profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:202\nBind the processor's CALL stack publication profile\n"
           },
           {
             "suite": "LegacyScalars/X86LegacyScalarNativeTest",
             "case": "BranchLimitsPrecedeOrFollowStackFaults/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:202\nBind the processor's CALL stack publication profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:202\nBind the processor's CALL stack publication profile\n"
           },
           {
             "suite": "LegacySegmentLoads/X86LegacySegmentLoadNativeTest",
             "case": "OriginalAlignmentFaultPriorityUsesTheBoundCore/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacySegmentLoadNativeTests.inc:580\nBind NEVERD_TEST_LEGACY_ALIGNMENT=before or after and pin the qualified core\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacySegmentLoadNativeTests.inc:580\nBind NEVERD_TEST_LEGACY_ALIGNMENT=before or after and pin the qualified core\n"
           },
           {
             "suite": "LegacySegmentLoads/X86LegacySegmentLoadNativeTest",
             "case": "OriginalAlignmentFaultPriorityUsesTheBoundCore/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacySegmentLoadNativeTests.inc:580\nBind NEVERD_TEST_LEGACY_ALIGNMENT=before or after and pin the qualified core\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacySegmentLoadNativeTests.inc:580\nBind NEVERD_TEST_LEGACY_ALIGNMENT=before or after and pin the qualified core\n"
           },
           {
             "suite": "LegacyStrings/X86LegacyStringNativeTest",
             "case": "SegmentPermissionsAndCompetingFaults/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyStringNativeTests.inc:178\nBind the qualified string #AC-before-paging processor\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyStringNativeTests.inc:178\nBind the qualified string #AC-before-paging processor\n"
           },
           {
             "suite": "LegacyStrings/X86LegacyStringNativeTest",
             "case": "SegmentPermissionsAndCompetingFaults/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyStringNativeTests.inc:178\nBind the qualified string #AC-before-paging processor\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyStringNativeTests.inc:178\nBind the qualified string #AC-before-paging processor\n"
           }
         ],
         "passed": 706
@@ -381,14 +381,14 @@
           "taskset",
           "-c",
           "4",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86LegacySourceTests",
+          "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86LegacySourceTests",
           "--gtest_filter=*",
           "--gtest_output=xml:/mnt/data/neverd-legacy-mpx-20261109/complete-source-native/NeverDX86LegacySourceTests.xml"
         ],
         "environment": {
           "NEVERD_THREADS": "1",
-          "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
-          "NEVERD_TEST_NEVERC_LLC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "NEVERD_TEST_NEVERC_LLC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
           "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-mpx-20261109/complete-source-native/exports"
         },
         "backend_sha256": "e9b079493a2363e35288ca89ea7b8fe15d246b342c0ee66c6629c7df3c3ccefe",
@@ -425,7 +425,7 @@
           "taskset",
           "-c",
           "12",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86MpxContextTests",
+          "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86MpxContextTests",
           "--gtest_filter=*",
           "--gtest_output=xml:/mnt/data/neverd-legacy-mpx-20261109/final-r6-tests/NeverDX86MpxContextTests.xml"
         ],
@@ -460,7 +460,7 @@
           "taskset",
           "-c",
           "12",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86MpxEncodingTests",
+          "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86MpxEncodingTests",
           "--gtest_filter=*",
           "--gtest_output=xml:/mnt/data/neverd-legacy-mpx-20261109/final-r6-tests/NeverDX86MpxEncodingTests.xml"
         ],
@@ -495,7 +495,7 @@
           "taskset",
           "-c",
           "12",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86PagingTests",
+          "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86PagingTests",
           "--gtest_filter=*",
           "--gtest_output=xml:/mnt/data/neverd-legacy-mpx-20261109/final-r6-tests/NeverDX86PagingTests.xml"
         ],
@@ -518,177 +518,177 @@
           {
             "suite": "PagingModes/X86PagingNativeTest",
             "case": "OriginalInstructionsMatchPagingFaultsAndCommit/3",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:127\nBound KVM CPU has no LA57\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:127\nBound KVM CPU has no LA57\n"
           },
           {
             "suite": "LegacyDivision/X86LegacyDivisionNativeTest",
             "case": "FullDividendsQuotientsAndPreservedFlagChoice/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
           },
           {
             "suite": "LegacyDivision/X86LegacyDivisionNativeTest",
             "case": "FullDividendsQuotientsAndPreservedFlagChoice/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
           },
           {
             "suite": "LegacyDivision/X86LegacyDivisionNativeTest",
             "case": "EveryRegisterAndImplicitDividendAlias/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
           },
           {
             "suite": "LegacyDivision/X86LegacyDivisionNativeTest",
             "case": "EveryRegisterAndImplicitDividendAlias/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
           },
           {
             "suite": "LegacyDivision/X86LegacyDivisionNativeTest",
             "case": "ReadonlySegmentsPagingAndAlignmentPrecedeDE/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
           },
           {
             "suite": "LegacyDivision/X86LegacyDivisionNativeTest",
             "case": "ReadonlySegmentsPagingAndAlignmentPrecedeDE/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
           },
           {
             "suite": "LegacyDivision/X86LegacyDivisionNativeTest",
             "case": "OriginalPageAndDivideHandlersReturnToRetry/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
           },
           {
             "suite": "LegacyDivision/X86LegacyDivisionNativeTest",
             "case": "OriginalPageAndDivideHandlersReturnToRetry/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyDivisionNativeTests.inc:20\nBind the qualified DIV/IDIV undefined-flags choice\n"
           },
           {
             "suite": "LegacyFastSystem/X86LegacyFastSystemNativeTest",
             "case": "PrivilegesSelectorsFlagsAndCachedState/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
           },
           {
             "suite": "LegacyFastSystem/X86LegacyFastSystemNativeTest",
             "case": "PrivilegesSelectorsFlagsAndCachedState/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
           },
           {
             "suite": "LegacyFastSystem/X86LegacyFastSystemNativeTest",
             "case": "TransfersDoNotReadTablesOrNewStack/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
           },
           {
             "suite": "LegacyFastSystem/X86LegacyFastSystemNativeTest",
             "case": "TransfersDoNotReadTablesOrNewStack/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
           },
           {
             "suite": "LegacyFastSystem/X86LegacyFastSystemNativeTest",
             "case": "PrefixesAndFetchFaultPrecedence/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
           },
           {
             "suite": "LegacyFastSystem/X86LegacyFastSystemNativeTest",
             "case": "PrefixesAndFetchFaultPrecedence/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyFastSystemNativeTests.inc:20\nBind the qualified Intel SEP processor profile\n"
           },
           {
             "suite": "LegacyMultiply/X86LegacyMultiplyNativeTest",
             "case": "FullProductsAndSignedOverflow/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
           },
           {
             "suite": "LegacyMultiply/X86LegacyMultiplyNativeTest",
             "case": "FullProductsAndSignedOverflow/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
           },
           {
             "suite": "LegacyMultiply/X86LegacyMultiplyNativeTest",
             "case": "EveryRegisterAndImplicitResultAlias/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
           },
           {
             "suite": "LegacyMultiply/X86LegacyMultiplyNativeTest",
             "case": "EveryRegisterAndImplicitResultAlias/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
           },
           {
             "suite": "LegacyMultiply/X86LegacyMultiplyNativeTest",
             "case": "TruncatedProductsRegistersAndImmediates/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
           },
           {
             "suite": "LegacyMultiply/X86LegacyMultiplyNativeTest",
             "case": "TruncatedProductsRegistersAndImmediates/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
           },
           {
             "suite": "LegacyMultiply/X86LegacyMultiplyNativeTest",
             "case": "ReadonlyMemoryFaultsAndOriginalRepair/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
           },
           {
             "suite": "LegacyMultiply/X86LegacyMultiplyNativeTest",
             "case": "ReadonlyMemoryFaultsAndOriginalRepair/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyMultiplyNativeTests.inc:21\nBind the qualified MUL/IMUL undefined-flags profile\n"
           },
           {
             "suite": "LegacyReturns/X86LegacyReturnNativeTest",
             "case": "AlignmentAndPageFaultPriority/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyReturnNativeTests.inc:523\nBind the qualified legacy return alignment priority\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyReturnNativeTests.inc:523\nBind the qualified legacy return alignment priority\n"
           },
           {
             "suite": "LegacyReturns/X86LegacyReturnNativeTest",
             "case": "AlignmentAndPageFaultPriority/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyReturnNativeTests.inc:523\nBind the qualified legacy return alignment priority\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyReturnNativeTests.inc:523\nBind the qualified legacy return alignment priority\n"
           },
           {
             "suite": "LegacyScalars/X86LegacyScalarNativeTest",
             "case": "AlignmentAndPagingPriority/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:129\nBind the qualified scalar #AC-before-paging processor\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:129\nBind the qualified scalar #AC-before-paging processor\n"
           },
           {
             "suite": "LegacyScalars/X86LegacyScalarNativeTest",
             "case": "AlignmentAndPagingPriority/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:129\nBind the qualified scalar #AC-before-paging processor\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:129\nBind the qualified scalar #AC-before-paging processor\n"
           },
           {
             "suite": "LegacyScalars/X86LegacyScalarNativeTest",
             "case": "NearBranchesCallsReturnsAndEveryCondition/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:144\nBind the processor's CALL stack publication profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:144\nBind the processor's CALL stack publication profile\n"
           },
           {
             "suite": "LegacyScalars/X86LegacyScalarNativeTest",
             "case": "NearBranchesCallsReturnsAndEveryCondition/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:144\nBind the processor's CALL stack publication profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:144\nBind the processor's CALL stack publication profile\n"
           },
           {
             "suite": "LegacyScalars/X86LegacyScalarNativeTest",
             "case": "BranchLimitsPrecedeOrFollowStackFaults/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:202\nBind the processor's CALL stack publication profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:202\nBind the processor's CALL stack publication profile\n"
           },
           {
             "suite": "LegacyScalars/X86LegacyScalarNativeTest",
             "case": "BranchLimitsPrecedeOrFollowStackFaults/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:202\nBind the processor's CALL stack publication profile\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:202\nBind the processor's CALL stack publication profile\n"
           },
           {
             "suite": "LegacySegmentLoads/X86LegacySegmentLoadNativeTest",
             "case": "OriginalAlignmentFaultPriorityUsesTheBoundCore/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacySegmentLoadNativeTests.inc:580\nBind NEVERD_TEST_LEGACY_ALIGNMENT=before or after and pin the qualified core\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacySegmentLoadNativeTests.inc:580\nBind NEVERD_TEST_LEGACY_ALIGNMENT=before or after and pin the qualified core\n"
           },
           {
             "suite": "LegacySegmentLoads/X86LegacySegmentLoadNativeTest",
             "case": "OriginalAlignmentFaultPriorityUsesTheBoundCore/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacySegmentLoadNativeTests.inc:580\nBind NEVERD_TEST_LEGACY_ALIGNMENT=before or after and pin the qualified core\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacySegmentLoadNativeTests.inc:580\nBind NEVERD_TEST_LEGACY_ALIGNMENT=before or after and pin the qualified core\n"
           },
           {
             "suite": "LegacyStrings/X86LegacyStringNativeTest",
             "case": "SegmentPermissionsAndCompetingFaults/0",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyStringNativeTests.inc:178\nBind the qualified string #AC-before-paging processor\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyStringNativeTests.inc:178\nBind the qualified string #AC-before-paging processor\n"
           },
           {
             "suite": "LegacyStrings/X86LegacyStringNativeTest",
             "case": "SegmentPermissionsAndCompetingFaults/1",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyStringNativeTests.inc:178\nBind the qualified string #AC-before-paging processor\n"
+            "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyStringNativeTests.inc:178\nBind the qualified string #AC-before-paging processor\n"
           }
         ],
         "passed": 706
@@ -706,14 +706,14 @@
           "taskset",
           "-c",
           "12",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86LegacySourceTests",
+          "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86LegacySourceTests",
           "--gtest_filter=*",
           "--gtest_output=xml:/mnt/data/neverd-legacy-mpx-20261109/complete-source-r6/NeverDX86LegacySourceTests.xml"
         ],
         "environment": {
           "NEVERD_THREADS": "1",
-          "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
-          "NEVERD_TEST_NEVERC_LLC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "NEVERD_TEST_NEVERC_LLC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
           "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-mpx-20261109/complete-source-r6/exports"
         },
         "backend_sha256": "e9b079493a2363e35288ca89ea7b8fe15d246b342c0ee66c6629c7df3c3ccefe",
@@ -751,7 +751,7 @@
         "taskset",
         "-c",
         "4",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86PagingTests",
+        "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86PagingTests",
         "--gtest_filter=LegacyDivision/X86LegacyDivisionNativeTest.FullDividendsQuotientsAndPreservedFlagChoice/0:LegacyDivision/X86LegacyDivisionNativeTest.FullDividendsQuotientsAndPreservedFlagChoice/1:LegacyDivision/X86LegacyDivisionNativeTest.EveryRegisterAndImplicitDividendAlias/0:LegacyDivision/X86LegacyDivisionNativeTest.EveryRegisterAndImplicitDividendAlias/1:LegacyDivision/X86LegacyDivisionNativeTest.ReadonlySegmentsPagingAndAlignmentPrecedeDE/0:LegacyDivision/X86LegacyDivisionNativeTest.ReadonlySegmentsPagingAndAlignmentPrecedeDE/1:LegacyDivision/X86LegacyDivisionNativeTest.OriginalPageAndDivideHandlersReturnToRetry/0:LegacyDivision/X86LegacyDivisionNativeTest.OriginalPageAndDivideHandlersReturnToRetry/1:LegacyFastSystem/X86LegacyFastSystemNativeTest.PrivilegesSelectorsFlagsAndCachedState/0:LegacyFastSystem/X86LegacyFastSystemNativeTest.PrivilegesSelectorsFlagsAndCachedState/1:LegacyFastSystem/X86LegacyFastSystemNativeTest.TransfersDoNotReadTablesOrNewStack/0:LegacyFastSystem/X86LegacyFastSystemNativeTest.TransfersDoNotReadTablesOrNewStack/1:LegacyFastSystem/X86LegacyFastSystemNativeTest.PrefixesAndFetchFaultPrecedence/0:LegacyFastSystem/X86LegacyFastSystemNativeTest.PrefixesAndFetchFaultPrecedence/1:LegacyMultiply/X86LegacyMultiplyNativeTest.FullProductsAndSignedOverflow/0:LegacyMultiply/X86LegacyMultiplyNativeTest.FullProductsAndSignedOverflow/1:LegacyMultiply/X86LegacyMultiplyNativeTest.EveryRegisterAndImplicitResultAlias/0:LegacyMultiply/X86LegacyMultiplyNativeTest.EveryRegisterAndImplicitResultAlias/1:LegacyMultiply/X86LegacyMultiplyNativeTest.TruncatedProductsRegistersAndImmediates/0:LegacyMultiply/X86LegacyMultiplyNativeTest.TruncatedProductsRegistersAndImmediates/1:LegacyMultiply/X86LegacyMultiplyNativeTest.ReadonlyMemoryFaultsAndOriginalRepair/0:LegacyMultiply/X86LegacyMultiplyNativeTest.ReadonlyMemoryFaultsAndOriginalRepair/1:LegacyReturns/X86LegacyReturnNativeTest.AlignmentAndPageFaultPriority/0:LegacyReturns/X86LegacyReturnNativeTest.AlignmentAndPageFaultPriority/1:LegacyScalars/X86LegacyScalarNativeTest.AlignmentAndPagingPriority/0:LegacyScalars/X86LegacyScalarNativeTest.AlignmentAndPagingPriority/1:LegacyScalars/X86LegacyScalarNativeTest.NearBranchesCallsReturnsAndEveryCondition/0:LegacyScalars/X86LegacyScalarNativeTest.NearBranchesCallsReturnsAndEveryCondition/1:LegacyScalars/X86LegacyScalarNativeTest.BranchLimitsPrecedeOrFollowStackFaults/0:LegacyScalars/X86LegacyScalarNativeTest.BranchLimitsPrecedeOrFollowStackFaults/1:LegacySegmentLoads/X86LegacySegmentLoadNativeTest.OriginalAlignmentFaultPriorityUsesTheBoundCore/0:LegacySegmentLoads/X86LegacySegmentLoadNativeTest.OriginalAlignmentFaultPriorityUsesTheBoundCore/1:LegacyStrings/X86LegacyStringNativeTest.SegmentPermissionsAndCompetingFaults/0:LegacyStrings/X86LegacyStringNativeTest.SegmentPermissionsAndCompetingFaults/1",
         "--gtest_output=xml:/mnt/data/neverd-legacy-mpx-20261109/profile-replay-native/result.xml"
       ],
@@ -837,7 +837,7 @@
         "taskset",
         "-c",
         "12",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86PagingTests",
+        "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86PagingTests",
         "--gtest_filter=LegacyDivision/X86LegacyDivisionNativeTest.FullDividendsQuotientsAndPreservedFlagChoice/0:LegacyDivision/X86LegacyDivisionNativeTest.FullDividendsQuotientsAndPreservedFlagChoice/1:LegacyDivision/X86LegacyDivisionNativeTest.EveryRegisterAndImplicitDividendAlias/0:LegacyDivision/X86LegacyDivisionNativeTest.EveryRegisterAndImplicitDividendAlias/1:LegacyDivision/X86LegacyDivisionNativeTest.ReadonlySegmentsPagingAndAlignmentPrecedeDE/0:LegacyDivision/X86LegacyDivisionNativeTest.ReadonlySegmentsPagingAndAlignmentPrecedeDE/1:LegacyDivision/X86LegacyDivisionNativeTest.OriginalPageAndDivideHandlersReturnToRetry/0:LegacyDivision/X86LegacyDivisionNativeTest.OriginalPageAndDivideHandlersReturnToRetry/1:LegacyFastSystem/X86LegacyFastSystemNativeTest.PrivilegesSelectorsFlagsAndCachedState/0:LegacyFastSystem/X86LegacyFastSystemNativeTest.PrivilegesSelectorsFlagsAndCachedState/1:LegacyFastSystem/X86LegacyFastSystemNativeTest.TransfersDoNotReadTablesOrNewStack/0:LegacyFastSystem/X86LegacyFastSystemNativeTest.TransfersDoNotReadTablesOrNewStack/1:LegacyFastSystem/X86LegacyFastSystemNativeTest.PrefixesAndFetchFaultPrecedence/0:LegacyFastSystem/X86LegacyFastSystemNativeTest.PrefixesAndFetchFaultPrecedence/1:LegacyMultiply/X86LegacyMultiplyNativeTest.FullProductsAndSignedOverflow/0:LegacyMultiply/X86LegacyMultiplyNativeTest.FullProductsAndSignedOverflow/1:LegacyMultiply/X86LegacyMultiplyNativeTest.EveryRegisterAndImplicitResultAlias/0:LegacyMultiply/X86LegacyMultiplyNativeTest.EveryRegisterAndImplicitResultAlias/1:LegacyMultiply/X86LegacyMultiplyNativeTest.TruncatedProductsRegistersAndImmediates/0:LegacyMultiply/X86LegacyMultiplyNativeTest.TruncatedProductsRegistersAndImmediates/1:LegacyMultiply/X86LegacyMultiplyNativeTest.ReadonlyMemoryFaultsAndOriginalRepair/0:LegacyMultiply/X86LegacyMultiplyNativeTest.ReadonlyMemoryFaultsAndOriginalRepair/1:LegacyReturns/X86LegacyReturnNativeTest.AlignmentAndPageFaultPriority/0:LegacyReturns/X86LegacyReturnNativeTest.AlignmentAndPageFaultPriority/1:LegacyScalars/X86LegacyScalarNativeTest.AlignmentAndPagingPriority/0:LegacyScalars/X86LegacyScalarNativeTest.AlignmentAndPagingPriority/1:LegacyScalars/X86LegacyScalarNativeTest.NearBranchesCallsReturnsAndEveryCondition/0:LegacyScalars/X86LegacyScalarNativeTest.NearBranchesCallsReturnsAndEveryCondition/1:LegacyScalars/X86LegacyScalarNativeTest.BranchLimitsPrecedeOrFollowStackFaults/0:LegacyScalars/X86LegacyScalarNativeTest.BranchLimitsPrecedeOrFollowStackFaults/1:LegacySegmentLoads/X86LegacySegmentLoadNativeTest.OriginalAlignmentFaultPriorityUsesTheBoundCore/0:LegacySegmentLoads/X86LegacySegmentLoadNativeTest.OriginalAlignmentFaultPriorityUsesTheBoundCore/1:LegacyStrings/X86LegacyStringNativeTest.SegmentPermissionsAndCompetingFaults/0:LegacyStrings/X86LegacyStringNativeTest.SegmentPermissionsAndCompetingFaults/1",
         "--gtest_output=xml:/mnt/data/neverd-legacy-mpx-20261109/profile-replay-r6/result.xml"
       ],
@@ -923,7 +923,7 @@
         {
           "suite": "PagingModes/X86PagingNativeTest",
           "case": "OriginalInstructionsMatchPagingFaultsAndCommit/3",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:127\nBound KVM CPU has no LA57\n"
+          "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:127\nBound KVM CPU has no LA57\n"
         }
       ],
       "failures": 0
@@ -939,7 +939,7 @@
         {
           "suite": "PagingModes/X86PagingNativeTest",
           "case": "OriginalInstructionsMatchPagingFaultsAndCommit/3",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:127\nBound KVM CPU has no LA57\n"
+          "reason": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:127\nBound KVM CPU has no LA57\n"
         }
       ],
       "failures": 0
@@ -4612,17 +4612,17 @@
   },
   "compilers": {
     "clang": {
-      "path": "/home/ad/.local/bin/clang",
+      "path": "<host>/.local/bin/clang",
       "resolved_path": "/usr/lib/llvm-23/bin/clang",
       "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
     },
     "neverc": {
       "published_source": "641cd0abc32bf919555ab747844b27a2d3d840da",
-      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+      "path": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
       "sha256": "3d3e283491882d0c745e9ec9c574138abc5f836958cce15bf9eba11bab387786"
     },
     "llvm_backend": {
-      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+      "path": "<host>/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
       "published_source": "e7c81b978b440561583eeb43771cb9d486e3f8ff",
       "sha256": "e9b079493a2363e35288ca89ea7b8fe15d246b342c0ee66c6629c7df3c3ccefe"
     }
@@ -4730,15 +4730,15 @@
           "taskset",
           "-c",
           "4",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86LegacySourceTests",
+          "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86LegacySourceTests",
           "--gtest_filter=*",
           "--gtest_output=xml:/mnt/data/neverd-legacy-mpx-20261109/postmerge-source-native/result.xml"
         ],
         "environment": {
           "NEVERD_THREADS": "1",
-          "NEVERD": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/neverd",
-          "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
-          "NEVERD_TEST_NEVERC_LLC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "NEVERD": "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/neverd",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "NEVERD_TEST_NEVERC_LLC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
           "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-mpx-20261109/postmerge-source-native/exports"
         },
         "seconds": 8.634924890007824,
@@ -4746,7 +4746,7 @@
         "binary_sha256": "589b42c5afc283174aebfd38abcb2ee0891984af9cfde8c31b97a320812778d7",
         "cli_sha256": "a172d8ec65618244da897e5e3bee04d5f282e3027803a632850bbcf193f97fe9",
         "shared_library": {
-          "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/libneverd.so",
+          "path": "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/libneverd.so",
           "sha256": "5c0ba25d2a25de57a35df6045853237bbc3726f12095d92b81fa5558d4fd7492"
         },
         "backend_sha256": "e9b079493a2363e35288ca89ea7b8fe15d246b342c0ee66c6629c7df3c3ccefe",
@@ -4777,15 +4777,15 @@
           "taskset",
           "-c",
           "12",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86LegacySourceTests",
+          "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86LegacySourceTests",
           "--gtest_filter=*",
           "--gtest_output=xml:/mnt/data/neverd-legacy-mpx-20261109/postmerge-source-r6/result.xml"
         ],
         "environment": {
           "NEVERD_THREADS": "1",
-          "NEVERD": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/neverd",
-          "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
-          "NEVERD_TEST_NEVERC_LLC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "NEVERD": "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/neverd",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "NEVERD_TEST_NEVERC_LLC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
           "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-mpx-20261109/postmerge-source-r6/exports"
         },
         "seconds": 14.541164795984514,
@@ -4793,7 +4793,7 @@
         "binary_sha256": "5841c0e1228602aed514d033487eb159c7dbc6fb1726ec75c29bb31ec28d9395",
         "cli_sha256": "5dd91936b4d6b8721620cf377f22e478a7388bea678b56fbef4bbf2c2b9ad5f8",
         "shared_library": {
-          "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/libneverd.so",
+          "path": "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/libneverd.so",
           "sha256": "04cdd483adbdb77d30753353a7b61f0128ba1fc5653ed7eda7c9a09e876e9c6c"
         },
         "backend_sha256": "e9b079493a2363e35288ca89ea7b8fe15d246b342c0ee66c6629c7df3c3ccefe",
@@ -4977,15 +4977,15 @@
           "taskset",
           "-c",
           "4",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86LegacySourceTests",
+          "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86LegacySourceTests",
           "--gtest_filter=*",
           "--gtest_output=xml:/mnt/data/neverd-legacy-mpx-20261109/publish-source-native/result.xml"
         ],
         "environment": {
           "NEVERD_THREADS": "1",
-          "NEVERD": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/neverd",
-          "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
-          "NEVERD_TEST_NEVERC_LLC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "NEVERD": "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/neverd",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "NEVERD_TEST_NEVERC_LLC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
           "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-mpx-20261109/publish-source-native/exports"
         },
         "seconds": 8.552742023020983,
@@ -4993,7 +4993,7 @@
         "binary_sha256": "589b42c5afc283174aebfd38abcb2ee0891984af9cfde8c31b97a320812778d7",
         "cli_sha256": "a172d8ec65618244da897e5e3bee04d5f282e3027803a632850bbcf193f97fe9",
         "shared_library": {
-          "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/libneverd.so",
+          "path": "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/libneverd.so",
           "sha256": "7bb21748aafb372114c8570229c10ebc856f04030f8fbc72c9125d57c53c2bcf"
         },
         "backend_sha256": "e9b079493a2363e35288ca89ea7b8fe15d246b342c0ee66c6629c7df3c3ccefe",
@@ -5024,15 +5024,15 @@
           "taskset",
           "-c",
           "12",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86LegacySourceTests",
+          "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86LegacySourceTests",
           "--gtest_filter=*",
           "--gtest_output=xml:/mnt/data/neverd-legacy-mpx-20261109/publish-source-r6/result.xml"
         ],
         "environment": {
           "NEVERD_THREADS": "1",
-          "NEVERD": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/neverd",
-          "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
-          "NEVERD_TEST_NEVERC_LLC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "NEVERD": "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/neverd",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "NEVERD_TEST_NEVERC_LLC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
           "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-mpx-20261109/publish-source-r6/exports"
         },
         "seconds": 14.016319519956596,
@@ -5040,7 +5040,7 @@
         "binary_sha256": "5841c0e1228602aed514d033487eb159c7dbc6fb1726ec75c29bb31ec28d9395",
         "cli_sha256": "5dd91936b4d6b8721620cf377f22e478a7388bea678b56fbef4bbf2c2b9ad5f8",
         "shared_library": {
-          "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/libneverd.so",
+          "path": "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/libneverd.so",
           "sha256": "22c9e399c6864588ca1eca7f891eafbf6d8fa840fad1ab3a8beacb9da1d4af62"
         },
         "backend_sha256": "e9b079493a2363e35288ca89ea7b8fe15d246b342c0ee66c6629c7df3c3ccefe",

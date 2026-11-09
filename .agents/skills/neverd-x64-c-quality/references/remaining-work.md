@@ -1671,6 +1671,10 @@ conditional memory, invocation lifetime and both C routes remain open.
   shared native C helpers. Raw memory-output oracles cover signaling-NaN
   quieting and all four rounding modes; a floating return alone cannot prove
   these bits because the return transport may quiet the NaN itself.
+  Computed stack values reloaded into EAX/RAX no longer inherit the
+  POP-shaped restore heuristic merely because an FP temporary remains.
+  Native integer-return oracles cover both C routes across COFF/ELF/Mach-O;
+  unknown reaching writes and arbitrary ABI inference remain separate work.
 
 - HighC frame-address projection now checks the known root and signed offset
   in one bounded walk. Zero alignment masks and overflowing offset/rebase

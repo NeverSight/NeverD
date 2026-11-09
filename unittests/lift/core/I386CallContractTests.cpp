@@ -204,6 +204,99 @@ int main(void) {
     }
 }
 
+TEST(I386CallContract, X87StoredBitsReturnThroughTheIntegerRegister) {
+  for (bool Pop : {false, true})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+      // sub esp,4; fld dword [esp+8]; fstp dword [esp]. The x87 stack
+      // is empty again; POP or MOV now returns the stored bits through EAX.
+      std::vector<uint8_t> Code = {0x83, 0xec, 4,    0xd9, 0x44,
+                                   0x24, 8,    0xd9, 0x1c, 0x24};
+      if (Pop)
+        Code.push_back(0x58);
+      else
+        Code.insert(Code.end(), {0x8b, 0x04, 0x24, 0x83, 0xc4, 4});
+      Code.push_back(0xc3);
+      auto Image = makeImage(Code, {});
+      Image.Format = Format;
+      if (Format == BinaryFormat::ELF)
+        Image.Symbols.front().Name = "wrap";
+      for (bool LLVM : {false, true})
+        for (bool NoOpt : {false, true}) {
+          SCOPED_TRACE(testing::Message() << Pop << ':' << unsigned(Format)
+                                          << ':' << LLVM << ':' << NoOpt);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Text};
+          Options.LiftMode = LLVM;
+          Options.SourceProjection = true;
+          Options.NoOpt = NoOpt;
+          auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          ASSERT_EQ(Result.MedFuncs.size(), 1u);
+          const auto &Function = Result.MedFuncs.front();
+          ASSERT_TRUE(Function.ReturnType);
+          ASSERT_EQ(Function.ReturnType->Kind, NdTypeKind::Int);
+          EXPECT_EQ(Function.ReturnType->Size, 4u);
+          EXPECT_FALSE(Function.FPReturnViaX87);
+          CEmitterOptions COptions;
+          COptions.TheArch = Image.Arch;
+          COptions.Format = Format;
+          COptions.Image = &Image;
+          std::string Source;
+          llvm::raw_string_ostream Out(Source);
+          if (LLVM) {
+            ASSERT_TRUE(Result.LlvmModule);
+            ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+            ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Out, COptions));
+          } else
+            ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, COptions));
+          EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+#if defined(__linux__) && (defined(__i386__) || defined(__x86_64__))
+          std::string Oracle;
+          llvm::raw_string_ostream Native(Oracle);
+          Native << R"(
+#include <string.h>
+#include <sys/mman.h>
+int main(void) {
+  static const uint32_t inputs[] = {
+    0, 0x80000000, 1, 0x80000001, 0x7fffff, 0x800000,
+    0x3f800001, 0x7f7fffff, 0xff7fffff, 0x7f800000, 0xff800000,
+    0x7fc12345, 0xffc12345, 0x7f812345, 0xff812345
+  };
+  static const uint8_t original[] = {)";
+          for (uint8_t Byte : Code)
+            Native << unsigned(Byte) << ',';
+          Native << R"(};
+  uint8_t *mapping = mmap(0, sizeof(original) + 16,
+                          PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mapping == MAP_FAILED) return 1;
+  uint8_t *code = mapping + 16;
+  memcpy(code, original, sizeof(original));
+  __builtin___clear_cache((char *)code, (char *)code + sizeof(original));
+  int failed = 0;
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(*inputs); ++i) {
+    uint32_t expected = ((uint32_t (*)(uint32_t))code)(inputs[i]);
+    uint32_t actual = wrap(inputs[i]);
+    failed |= actual != expected;
+  }
+  return munmap(mapping, sizeof(original) + 16) != 0 || failed;
+}
+)";
+          for (llvm::StringRef Level : {"-O0", "-O2"})
+            source_call_execution_test::compileAndRun(
+                "#define _GNU_SOURCE\n" + Source + Oracle,
+                {"-m32", Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+#else
+          RecordProperty("native_i386_integer_return_execution",
+                         "requires Linux x86");
+#endif
+        }
+    }
+}
+
 TEST(I386CallContract, X87MemoryConversionsKeepNaNsAndRounding) {
   for (uint16_t InputBytes : {4u, 8u})
     for (uint16_t OutputBytes : {4u, 8u}) {

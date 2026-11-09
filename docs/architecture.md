@@ -11741,6 +11741,15 @@ replace x87 store rounding with an ordinary cast. This covers the observable
 converted value; full x87 exception, stack-tag and status state still belongs
 to the existing context and explicit-state paths.
 
+`MedTypePass` distinguishes a POP-shaped integer return from an unchanged
+entry-register save. A known reaching stack store of a computed value,
+including a partial overwrite, prevents the load from being ignored as an
+epilogue restore. Both the ordinary return scan and merged-epilogue scan use
+this decision. Entry-stack offsets and ordered memory accesses are indexed
+lazily once per function, and repeated views reuse the load result. Unknown
+aliases, calls and exceptional predecessors end that path without inventing
+a stored value; this does not establish arbitrary function ABI contracts.
+
 An internal i386 helper may instead consume one incoming logical ST0 and
 return an integer. The same machine graph proves that every return consumes
 that value, that no path reads or changes the caller's lower stack entries,
