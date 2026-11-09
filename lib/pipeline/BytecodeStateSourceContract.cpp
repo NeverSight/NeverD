@@ -252,9 +252,10 @@ readBytecodeStateSourceContract(const llvm::json::Value &V,
     for (const auto &I : *O->getArray("imports")) {
       auto *Import = I.getAsObject();
       if (!Import ||
-          !keys(*Import, {"selector", "pointer_source", "name", "parameters",
-                          "result", "variadic_fixed", "void_result", "defaults",
-                          "target_argument", "pass_context"}) ||
+          !keys(*Import,
+                {"selector", "pointer_source", "name", "parameters", "result",
+                 "variadic_fixed", "void_result", "defaults", "target_argument",
+                 "pass_context", "void_result_argument"}) ||
           (G.FunctionPointer ? bool(Import->get("selector"))
                              : !number(*Import, "selector")) ||
           (bool(Import->get("name")) == bool(Import->get("target_argument"))) ||
@@ -319,6 +320,12 @@ readBytecodeStateSourceContract(const llvm::json::Value &V,
           return invalid("invalid void result capture policy");
         if (*Policy == "unspecified")
           Native.VoidResult = StateSourceVoidResult::Unspecified;
+      }
+      if (auto *Value = Import->get("void_result_argument")) {
+        auto Index = Value->getAsUINT64();
+        if (!Index || *Index >= 16 || Import->get("void_result"))
+          return invalid("invalid void result argument");
+        Native.VoidResultArgument = unsigned(*Index);
       }
       if (Import->getArray("parameters")->size() > 16)
         return invalid("too many parameters");

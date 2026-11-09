@@ -78,6 +78,10 @@ struct StateSourceImport {
   /// argument indices still describe only the explicitly supplied operands.
   /// The producer owns the receiver ABI and its observable context effects.
   bool PassContext = false;
+  /// A void gateway may copy this required operand's captured bank bits to
+  /// its result channel. Capture precedes fixed writes and native parameter
+  /// conversion; this is independent of physical native return registers.
+  std::optional<unsigned> VoidResultArgument;
 };
 struct StateSourceImage {
   StateSourceSlot Base;
