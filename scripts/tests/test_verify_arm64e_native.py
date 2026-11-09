@@ -16,9 +16,9 @@ import verify_arm64e_native as native
 CASES = json.loads(Path(__file__).with_suffix(".def").read_text())
 
 
-def runtime_xml():
+def runtime_xml(executable=False):
     root = ET.Element(CASES["suite_tag"])
-    for name in CASES["expected_tests"]:
+    for name in CASES["expected_executable_tests" if executable else "expected_tests"]:
         ET.SubElement(root, CASES["case_tag"], name=name,
                       status=CASES["run_status"])
     return root
@@ -197,6 +197,73 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
             case.set(CASES["name_key"], case.attrib[CASES["name_key"]] + CASES["annotation"])
         self.assertEqual(set(native.check_runtime_report(ET.tostring(root))),
                          set(CASES["expected_tests"]))
+
+    def test_executable_matrix_requires_exact_unskipped_cases(self):
+        root = runtime_xml(True)
+        self.assertEqual(set(native.check_runtime_report(ET.tostring(root), True)),
+                         set(CASES["expected_executable_tests"]))
+        with self.assertRaises(ValueError):
+            native.check_runtime_report(ET.tostring(runtime_xml()), True)
+        for tag in CASES["failure_tags"]:
+            root = runtime_xml(True)
+            ET.SubElement(root[0], tag)
+            with self.assertRaises(ValueError):
+                native.check_runtime_report(ET.tostring(root), True)
+
+    def test_executable_preflight_rejects_wrong_loading_or_stale_evidence(self):
+        for mutation in CASES["executable_probe_mutations"]:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                probe = root / CASES["probe_file"]
+                native.save(probe, dict(CASES["passed_startup_probe"], **mutation))
+                with mock.patch.object(native, "provenance", return_value=CASES["provenance"]), \
+                        mock.patch.object(native, "command") as command:
+                    with self.assertRaises(ValueError):
+                        native.run_installation(root, root, probe, executable=True)
+                    command.assert_not_called()
+
+    def test_executable_run_derives_launcher_and_requires_matching_startup_profile(self):
+        for valid in (False, True):
+            with self.subTest(valid=valid), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                probe = root / CASES["probe_file"]
+                binary = root / native.POLICY["test_binary"]
+                binary.write_text(CASES["test_binary_bytes"])
+                calls = []
+
+                def run(products, output, label, argv, timeout, env=None):
+                    calls.append((label, argv, env))
+                    stdout = CASES["syscall_macros"]
+                    if label == native.POLICY["selection_label"]:
+                        stdout = json.dumps({"tests": [
+                            {"command": [str(binary), native.POLICY["gtest_prefix"] + name]}
+                            for name in CASES["expected_executable_tests"]]})
+                    if label == native.POLICY["runtime_label_name"]:
+                        (output / native.POLICY["xml_name"]).write_bytes(
+                            ET.tostring(runtime_xml(True)))
+                    return subprocess.CompletedProcess(argv, 0, stdout, "")
+
+                with mock.patch.object(native, "provenance", return_value=CASES["provenance"]), \
+                        mock.patch.object(native, "command", side_effect=run):
+                    profile = native.startup_profile(None, root)
+                    native.save(probe, dict(CASES["passed_startup_probe"], **{
+                        native.POLICY["startup_profile_key"]:
+                            profile if valid else CASES["foreign_profile"]}))
+                    calls.clear()
+                    if not valid:
+                        with self.assertRaises(ValueError):
+                            native.run_installation(root, root, probe, executable=True)
+                        self.assertEqual([call[0] for call in calls], [native.POLICY["syscall_label"]])
+                        continue
+                    report = native.run_installation(root, root, probe, executable=True)
+                    self.assertTrue(report[native.POLICY["executable_qualification_key"]])
+                    self.assertFalse(report[native.POLICY["publication_qualification_key"]])
+                    self.assertFalse(report["whole_image_publication_qualified"])
+                    label, argv, env = calls[-1]
+                    self.assertEqual(label, native.POLICY["runtime_label_name"])
+                    self.assertEqual(argv[:len(profile["launcher"])], profile["launcher"])
+                    self.assertEqual(env[native.POLICY["executable_environment"]],
+                                     native.POLICY["executable_environment_value"])
 
     def test_unqualified_or_stale_probe_stops_before_test_execution(self):
         for mutation in CASES["probe_mutations"]:

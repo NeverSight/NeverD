@@ -18,6 +18,7 @@
 #include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
+#include "neverd/loader/MachO/MachOPlatform.h"
 #include "neverd/object/MachOLayout.h"
 #include "neverd/support/DwarfEH.h"
 #include "neverd/support/TargetCodegenInfo.h"
@@ -194,6 +195,30 @@ prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
   return llvm::Error::success();
 }
 
+bool matchesArm64eABI(const llvm::object::MachOObjectFile &Object,
+                      uint32_t Subtype, const BinaryImage &Original) {
+  if (Subtype == Original.MachOCPUSubtype)
+    return true;
+  // Darwin links classic ABI0 objects into ABI1 macOS main executables.
+  // The executable ABI tag is not an instruction to compile ABI1 objects.
+  if (Subtype != kClassicObjectSubtype ||
+      Original.MachOCPUSubtype != kMacOSMainSubtype ||
+      Original.DynInfo.MachOFileType != MH_EXECUTE ||
+      Original.DynInfo.MachOPlatforms.size() != 1 ||
+      Original.DynInfo.MachOPlatforms.front() != PLATFORM_MACOS)
+    return false;
+  bool HasPlatform = false;
+  for (const auto &Command : Object.load_commands()) {
+    auto Platform = machOCommandPlatform(Object, Command, Original.Arch);
+    if (!Platform)
+      continue;
+    if (HasPlatform || *Platform != PLATFORM_MACOS)
+      return false;
+    HasPlatform = true;
+  }
+  return HasPlatform;
+}
+
 llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
                                        const BinaryImage &Original,
                                        llvm::StringRef Triple) {
@@ -226,10 +251,7 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
       M->is64Bit() ? M->getHeader64().cpusubtype : M->getHeader().cpusubtype;
   if (Original.Arch == Arch::AArch64 &&
       (arm64e::isSubtype(RawSubtype) != Original.isArm64e() ||
-       (Original.isArm64e() &&
-        RawSubtype !=
-            reinterpret_cast<const mach_header_64 *>(Original.Raw.data())
-                ->cpusubtype)))
+       (Original.isArm64e() && !matchesArm64eABI(*M, RawSubtype, Original))))
     return fail(kSubtype);
   if (Original.Arch == Arch::ARM) {
     const bool Watch = llvm::Triple(Triple).isWatchOS();

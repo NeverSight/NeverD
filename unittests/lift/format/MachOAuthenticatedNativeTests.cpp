@@ -485,7 +485,7 @@ INSTANTIATE_TEST_SUITE_P(AppleClang, MachOArm64eNativeInstallation,
 class MachOArm64eNativeObjectInstallation
     : public ::testing::TestWithParam<std::tuple<const char *, bool>> {};
 
-enum class NativeObjectOperation { Append, Publish };
+enum class NativeObjectOperation { Append, Publish, PublishExecutable };
 
 void checkNativeObjectInstallation(
     const char *Optimization, bool Threaded, bool ExecuteNative,
@@ -495,6 +495,10 @@ void checkNativeObjectInstallation(
 #ifndef __APPLE__
   GTEST_SKIP() << kMissingHost;
 #else
+  const bool Executable = Operation == NativeObjectOperation::PublishExecutable;
+  const bool Publish = Operation != NativeObjectOperation::Append;
+  if (Executable && ExecuteNative && !std::getenv(kExecutableEnvironment))
+    GTEST_SKIP() << kExecutableUnavailable;
   ::testing::Test::RecordProperty(kOptimizationProperty, Optimization);
   ::testing::Test::RecordProperty(kThreadedProperty, Threaded);
   llvm::SmallString<kPathCapacity> Directory;
@@ -567,9 +571,10 @@ void checkNativeObjectInstallation(
              RuntimeOutput = Path(kRuntimeOutputFile);
   const std::string RpathOption =
       std::string(kRuntimeRpathPrefix) + Directory.str().str();
+  if (ExecuteNative || Executable)
+    ASSERT_FALSE(Write(RuntimeSource, kRuntimeHarness));
   if (ExecuteNative) {
     ASSERT_FALSE(Write(ProviderSource, kRuntimeProviderSource));
-    ASSERT_FALSE(Write(RuntimeSource, kRuntimeHarness));
     ASSERT_FALSE(Write(LoaderSource, kRuntimeLoaderSource));
     Args.append(std::begin(kRuntimeCompileArgs), std::end(kRuntimeCompileArgs));
     Args.append(std::begin(kProviderCompileArgs),
@@ -652,7 +657,11 @@ void checkNativeObjectInstallation(
     ASSERT_TRUE((*Output)->getBuffer().contains(kRuntimeMarker));
   }
   Args.assign({kCompiler});
-  Args.append(std::begin(kCompileArgs), std::end(kCompileArgs));
+  if (Executable)
+    Args.append(std::begin(kExecutableCompileArgs),
+                std::end(kExecutableCompileArgs));
+  else
+    Args.append(std::begin(kCompileArgs), std::end(kCompileArgs));
   if (RelocateOriginalLanguage)
     Args.push_back(kDwarfLanguageOption);
   std::string LinkerOption;
@@ -679,6 +688,8 @@ void checkNativeObjectInstallation(
     } else
       Args.push_back(kChainedOption);
     Args.append({Optimization, Source, Dwarf});
+    if (Executable)
+      Args.append({RpathOption, RuntimeSource});
     Args.append(std::begin(kOutputArgs), std::end(kOutputArgs));
     Args.push_back(OriginalPath);
     ASSERT_EQ(Run(kCompiler, Args), 0);
@@ -715,6 +726,21 @@ void checkNativeObjectInstallation(
   ASSERT_TRUE(bool(Signature)) << llvm::toString(Signature.takeError());
   ::testing::Test::RecordProperty(
       kSignaturePageBefore, Signature->Slices.front().CodeDirectoryPageSize);
+  ::testing::Test::RecordProperty(kOriginalSubtypeProperty,
+                                  std::to_string(Before->MachOCPUSubtype));
+  ::testing::Test::RecordProperty(
+      kObjectSubtypeProperty,
+      std::to_string(reinterpret_cast<const llvm::MachO::mach_header_64 *>(
+                         (*Object)->getBufferStart())
+                         ->cpusubtype));
+  if (Executable && ExecuteNative) {
+    auto Error = macho_signing::verifyStrict(OriginalPath);
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    ASSERT_EQ(Run(OriginalPath, {OriginalPath}, RuntimeOutput), 0);
+    auto Output = llvm::MemoryBuffer::getFile(RuntimeOutput);
+    ASSERT_TRUE(bool(Output));
+    ASSERT_TRUE((*Output)->getBuffer().contains(kExecutableBaselineMarker));
+  }
   if (RelocateOriginalLanguage) {
     auto Compact =
         reserveMachOSourceUnwind(Bytes, Arch::AArch64, 0, kObjectFunctionCount);
@@ -870,8 +896,10 @@ void checkNativeObjectInstallation(
           llvm::MachO::CPU_SUBTYPE_ARM64_ALL;
     });
     Check([&](uint8_t *Data) {
-      reinterpret_cast<llvm::MachO::mach_header_64 *>(Data)->cpusubtype ^=
-          kObjectABIVersionBit;
+      auto &Subtype =
+          reinterpret_cast<llvm::MachO::mach_header_64 *>(Data)->cpusubtype;
+      Subtype = Executable ? kUnsupportedObjectSubtype
+                           : Subtype ^ kObjectABIVersionBit;
     });
     Check([&](uint8_t *Data) {
       writeLE<uint32_t>(Data + *PlainRelocation,
@@ -887,9 +915,57 @@ void checkNativeObjectInstallation(
           ->n_type &= ~llvm::MachO::N_PEXT;
     });
   }
+  if (Executable && !ExecuteNative) {
+    // Exercise the modern main header even with a local compiler whose linker
+    // still emits ABI0 executables. This is a format check, not execution
+    // proof.
+    auto Main = Bytes;
+    reinterpret_cast<llvm::MachO::mach_header_64 *>(Main.data())->cpusubtype =
+        kMacOSMainSubtype;
+    auto Candidate = Main;
+    auto Accepted =
+        appendMachOObjectImage(Candidate, (*Object)->getBuffer(), Dependencies);
+    ASSERT_TRUE(bool(Accepted)) << llvm::toString(Accepted.takeError());
+    const auto Reject = [&](auto Change) {
+      auto Candidate = Main;
+      auto Native = (*Object)->getBuffer().str();
+      Change(Candidate, Native);
+      const auto Snapshot = Candidate;
+      auto Result = appendMachOObjectImage(Candidate, Native, Dependencies);
+      EXPECT_FALSE(bool(Result));
+      llvm::consumeError(Result.takeError());
+      EXPECT_EQ(Candidate, Snapshot);
+    };
+    Reject([](auto &Candidate, auto &) {
+      reinterpret_cast<llvm::MachO::mach_header_64 *>(Candidate.data())
+          ->filetype = llvm::MachO::MH_DYLIB;
+    });
+    for (const auto Subtype : {kUnsupportedObjectSubtype, kKernelMainSubtype})
+      Reject([&](auto &Candidate, auto &) {
+        reinterpret_cast<llvm::MachO::mach_header_64 *>(Candidate.data())
+            ->cpusubtype = Subtype;
+      });
+    const auto ChangePlatform = [](auto &Data) {
+      unsigned Changed = 0;
+      forEachMachOLoadCommand(
+          reinterpret_cast<const uint8_t *>(Data.data()), Data.size(),
+          [&](const uint8_t *Command, uint32_t ID, uint32_t, bool) {
+            if (ID != llvm::MachO::LC_BUILD_VERSION)
+              return;
+            auto *Build =
+                reinterpret_cast<llvm::MachO::build_version_command *>(
+                    const_cast<uint8_t *>(Command));
+            Build->platform = llvm::MachO::PLATFORM_IOS;
+            ++Changed;
+          });
+      EXPECT_EQ(Changed, 1u);
+    };
+    Reject([&](auto &Candidate, auto &) { ChangePlatform(Candidate); });
+    Reject([&](auto &, auto &Native) { ChangePlatform(Native); });
+  }
   const auto BeforeInstallation = Bytes;
   std::vector<SourcePatchMapping> Mappings;
-  if (Operation == NativeObjectOperation::Publish) {
+  if (Publish) {
     const char *Names[] = {kObjectDispatch, kObjectCatch, kObjectCleanup};
     for (unsigned I = 0; I != std::size(Names); ++I) {
       auto Found = llvm::find_if(Before->Symbols, [&](const auto &Symbol) {
@@ -1033,7 +1109,7 @@ void checkNativeObjectInstallation(
     ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
   }
   ::testing::Test::RecordProperty(kConvertedThreadedProperty, Converted);
-  if (Operation == NativeObjectOperation::Publish) {
+  if (Publish) {
     const auto Snapshot = Before->Raw;
     bool ReceiptSeen = false;
     auto Rejected = installMachOObjectPatch(
@@ -1063,6 +1139,7 @@ void checkNativeObjectInstallation(
     EXPECT_FALSE(bool(Again));
     llvm::consumeError(Again.takeError());
     ::testing::Test::RecordProperty(kPublishedProperty, true);
+    ::testing::Test::RecordProperty(kExecutableProperty, Executable);
   } else {
     ASSERT_FALSE(
         Write(InstalledPath, llvm::toStringRef(llvm::ArrayRef(Bytes))));
@@ -1088,7 +1165,7 @@ void checkNativeObjectInstallation(
   Input = llvm::MemoryBuffer::getFile(InstalledPath);
   ASSERT_TRUE(bool(Input));
   auto Final = llvm::arrayRefFromStringRef((*Input)->getBuffer());
-  if (Operation == NativeObjectOperation::Publish) {
+  if (Publish) {
     auto FinalSignature = macho_signature::inspect(Final);
     ASSERT_TRUE(bool(FinalSignature))
         << llvm::toString(FinalSignature.takeError());
@@ -1171,6 +1248,12 @@ void checkNativeObjectInstallation(
                            Image->Bytes.begin() + Section.Offset + Section.Size,
                            Installed));
   }
+  if (Executable) {
+    EXPECT_EQ(Parsed->DynInfo.MachOFileType, llvm::MachO::MH_EXECUTE);
+    EXPECT_EQ(Parsed->MachOCPUSubtype, Before->MachOCPUSubtype);
+    EXPECT_EQ(Parsed->Entry, Before->Entry);
+    EXPECT_NE(Parsed->Entry, 0u);
+  }
   const auto Native = macho_unwind::parseCompactUnwind(*Parsed);
   ASSERT_EQ(Native.ParseStatus, ExceptionParseStatus::Complete);
   EXPECT_TRUE(llvm::any_of(Native.Entries, [&](const auto &Entry) {
@@ -1250,9 +1333,10 @@ void checkNativeObjectInstallation(
         std::to_string(Entry(kObjectCatch) - Anchor->Addr),
         std::to_string(Entry(kObjectCleanup) - Anchor->Addr),
         std::to_string(Image->SymbolAddrs.at(kObjectCleanups) - Anchor->Addr)};
-    Args.assign({DriverPath, InstalledPath});
+    const auto &Runner = Executable ? InstalledPath : DriverPath;
+    Args.assign({Runner, InstalledPath});
     Args.append(std::begin(Offsets), std::end(Offsets));
-    ASSERT_EQ(Run(DriverPath, Args, RuntimeOutput), 0);
+    ASSERT_EQ(Run(Runner, Args, RuntimeOutput), 0);
     auto Output = llvm::MemoryBuffer::getFile(RuntimeOutput);
     ASSERT_TRUE(bool(Output));
     EXPECT_TRUE((*Output)->getBuffer().contains(kRuntimeMarker));
@@ -1324,6 +1408,20 @@ TEST_P(MachOArm64eNativeObjectInstallation, PublishedEntriesExecute) {
   const auto [Optimization, DwarfLanguage] = GetParam();
   checkNativeObjectInstallation(Optimization, false, true, DwarfLanguage, false,
                                 false, false, NativeObjectOperation::Publish);
+}
+
+TEST_P(MachOArm64eNativeObjectInstallation, PublishesSignedExecutable) {
+  const auto [Optimization, DwarfLanguage] = GetParam();
+  checkNativeObjectInstallation(Optimization, false, false, DwarfLanguage,
+                                false, false, false,
+                                NativeObjectOperation::PublishExecutable);
+}
+
+TEST_P(MachOArm64eNativeObjectInstallation, PublishedExecutableStarts) {
+  const auto [Optimization, DwarfLanguage] = GetParam();
+  checkNativeObjectInstallation(Optimization, false, true, DwarfLanguage, false,
+                                false, false,
+                                NativeObjectOperation::PublishExecutable);
 }
 
 INSTANTIATE_TEST_SUITE_P(AppleClang, MachOArm64eNativeObjectInstallation,

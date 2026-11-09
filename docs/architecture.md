@@ -1470,6 +1470,11 @@ unwind validator, including exact personality slot and LSDA identities.
 Failed receipts and pre-existing output paths do not publish or overwrite a
 file. This native C++ API does not enable the source/IR or lifted-image rebuild
 routes, nor the SDK compiler adapter's separate arm64e admission.
+The native object reader also accepts the Darwin linker contract from classic
+userspace ABI0 objects (`0x80000002`) to ABI1 macOS main executables
+(`0x81000002`). Both object and image must name only macOS, and the image must
+be `MH_EXECUTE`. Other differing raw subtypes remain rejected. This does not
+rewrite the output subtype or change the original `LC_MAIN` entry.
 
 Native compact language records retain LSDA addresses and personality slots.
 The arm64e personality slot uses IA/address diversity with zero discriminator;

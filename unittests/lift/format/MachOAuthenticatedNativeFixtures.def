@@ -146,6 +146,22 @@ ret
 MACHO_AUTH_NATIVE_ARGS(kCompileArgs, "-arch", "arm64e", "-dynamiclib",
                        "-std=c++20", "-fno-omit-frame-pointer",
                        "-fno-optimize-sibling-calls", "-Wl,-headerpad,0x1000")
+MACHO_AUTH_NATIVE_ARGS(kExecutableCompileArgs, "-arch", "arm64e", "-std=c++20",
+                       "-fno-omit-frame-pointer", "-fno-optimize-sibling-calls",
+                       "-Wl,-headerpad,0x1000", "-Wl,-export_dynamic",
+                       "-DNEVERD_AUTH_EXECUTABLE")
+MACHO_AUTH_NATIVE_TEXT(kExecutableEnvironment,
+                       "NEVERD_ARM64E_EXECUTABLE_PROFILE")
+MACHO_AUTH_NATIVE_TEXT(
+    kExecutableUnavailable,
+    "run-executable requires qualified userspace startup fixups")
+MACHO_AUTH_NATIVE_TEXT(kExecutableBaselineMarker, "native-original-startup-ok")
+MACHO_AUTH_NATIVE_TEXT(kExecutableProperty, "native_executable_published")
+MACHO_AUTH_NATIVE_TEXT(kOriginalSubtypeProperty, "original_cpu_subtype")
+MACHO_AUTH_NATIVE_TEXT(kObjectSubtypeProperty, "object_cpu_subtype")
+MACHO_AUTH_NATIVE_VALUE(uint32_t, kMacOSMainSubtype, 0x81000002u)
+MACHO_AUTH_NATIVE_VALUE(uint32_t, kUnsupportedObjectSubtype, 0x82000002u)
+MACHO_AUTH_NATIVE_VALUE(uint32_t, kKernelMainSubtype, 0xc1000002u)
 MACHO_AUTH_NATIVE_ARGS(kOutputArgs, "-o")
 MACHO_AUTH_NATIVE_ARGS(kInfoArgs, "dyld_info", "-imports",
                        "-fixup_chain_details")
@@ -414,7 +430,20 @@ extern DataA const native_local_data;
 extern DataB const native_external_data;
 }
 #endif
+#ifdef NEVERD_AUTH_EXECUTABLE
+extern "C" int publication_dispatch();
+extern "C" int publication_catch();
+extern "C" int publication_cleanup();
+#endif
 int main(int argc, char **argv) {
+#ifdef NEVERD_AUTH_EXECUTABLE
+  if (argc == 1) {
+    if (publication_dispatch() != 1 || publication_catch() != 2 ||
+        publication_cleanup() != 3) return 23;
+    puts("native-original-startup-ok");
+    return 0;
+  }
+#endif
 #ifdef NEVERD_AUTH_CONTROL
   Function call = &native_dispatch;
   Function catching = &native_catch;
@@ -431,7 +460,11 @@ int main(int argc, char **argv) {
   *mutableData = 9;
 #else
   if (argc != 9) return 10;
+#ifdef NEVERD_AUTH_EXECUTABLE
+  void *image = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
+#else
   void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+#endif
   if (!image) { fprintf(stderr, "%s\n", dlerror()); return 11; }
   const uintptr_t anchor = (uintptr_t)dlsym(image, "new_slots");
   int *throwFlag = (int *)dlsym(image, "neverd_should_throw");

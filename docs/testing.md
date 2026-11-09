@@ -21841,6 +21841,17 @@ arm64e host. These four runtime cases join the twelve installation cases in
 satisfy the sixteen-case gate. The native object API does not qualify the
 source/IR adapter or a complete lifted-image rebuild.
 
+`PublishesSignedExecutable` adds O0/O2 compact/DWARF main-executable publication,
+including the ABI0-object/ABI1-main contract and rejection of foreign platforms,
+dylib promotion, kernel tags and unknown ABI versions. `PublishedExecutableStarts`
+first launches the original executable, then launches the published executable
+through its retained `LC_MAIN` entry and checks authenticated calls, RELRO and
+signed language unwinding. These four runtime cases require `run-executable`
+and a same-source successful userspace startup probe. The verifier derives the
+sandbox launcher again from the current SDK and rejects a different profile;
+its separate `native_executable_publication_qualified` result cannot satisfy
+the sixteen-case dylib gate or general lifted-image publication.
+
 `MachOArm64eInstallation.*` exercises transactional authenticated dyld
 installation in the six arm64e chain formats. It covers all keys and address
 diversity settings, local/import identities, special library ordinals,

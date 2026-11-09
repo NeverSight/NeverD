@@ -164,8 +164,27 @@ In the explicit ABI1 linked cases, the linker reports that it ignored the
 object. A successful dylib link therefore does not establish retained code or
 ABI compatibility. Reports bind the compiler, command traces, disassembly and
 product hashes; all produced objects and images were removed. No product was
-executed. Native executable publication still needs a qualified ABI handoff;
-the installer's exact object/image subtype check remains in place.
+executed by that compiler comparison. The native installer now admits exactly
+this ABI0-object/ABI1-macOS-main handoff when both platform commands name macOS.
+Other subtype differences remain unsupported. This matches LLVM's
+[Darwin linker subtype test](https://github.com/llvm/llvm-project/blob/b1dc6f680e37cbb19b2ee5ee4195635229c4f6c3/lld/test/MachO/arm64e-cpu-subtype.s);
+the executable test matrix separately establishes execution, not the header alone.
+
+Run the four executable publication cases with the successful same-source
+userspace startup report:
+
+```sh
+python3 scripts/verify_arm64e_native.py run-executable \
+  --build-dir build-release \
+  --probe-report native-evidence/startup/report.json \
+  --output native-evidence/executable
+```
+
+The verifier independently derives the SDK syscall restriction and compares it
+to that report before launching CTest inside the declared profile. It rejects
+missing, skipped or failed cases. The result is separately named
+`native_executable_publication_qualified`; system-default startup and general
+lifted-image publication retain their own unqualified boundaries.
 
 A supplemental linker diagnostic did not stop when `ld-classic` lookup failed
 and therefore does not establish legacy threaded execution. Xcode 27 no longer
