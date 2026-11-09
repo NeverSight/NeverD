@@ -1321,6 +1321,36 @@ TEST(SymExpr, BatchedSubstitutionPreservesDifferentOperandArities) {
   }
 }
 
+TEST(SymExpr, LateSubstitutionKeysPreserveEarlierRootsAndReplacementBodies) {
+  for (unsigned Width : {8u, 64u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext C;
+    const auto X = C.mkVar("earlier_x", Width);
+    const auto Y = C.mkVar("earlier_y", Width);
+    auto Earlier = X;
+    for (unsigned I = 0; I < 48; ++I)
+      Earlier = C.mkXor(C.mkAdd(Earlier, Y), C.mkConst(Width, I + 1));
+    const auto Interior = C.mkAnd(Earlier, Y);
+    const auto Placeholder = C.mkVar("later_placeholder", Width);
+    const auto Root = C.mkAdd(Interior, Placeholder);
+    const std::array Roots{Earlier, Interior, Root, Placeholder, Root, X};
+    // Replacements are simultaneous: Interior inside Placeholder's new body
+    // keeps its original meaning, while a direct Interior root becomes Y.
+    const auto Expected = C.mkAdd(Y, Interior);
+    const auto Nodes = C.numNodes();
+    EXPECT_EQ(
+        C.substituteAll(
+            Roots, {{Interior.index(), Y}, {Placeholder.index(), Interior}}),
+        (std::vector<SymRef>{Earlier, Y, Expected, Interior, Expected, X}));
+    EXPECT_EQ(C.numNodes(), Nodes);
+    // An interior replacement wins over a descendant replacement. The old
+    // roots still participate independently in the same batch.
+    EXPECT_EQ(C.substituteAll({Earlier, Interior, Root},
+                              {{Earlier.index(), X}, {Interior.index(), Y}}),
+              (std::vector<SymRef>{X, Y, C.mkAdd(Y, Placeholder)}));
+  }
+}
+
 TEST(SymExpr, AdditionFastPathsKeepPackedWordIdentities) {
   for (unsigned Width : {8u, 64u, 257u}) {
     SymContext Ctx;

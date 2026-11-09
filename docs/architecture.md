@@ -5690,9 +5690,11 @@ Full-block two-bit admission caches structural identities before constructing
 Boolean corrections. Partial cache entries can answer only identity queries
 and must be completed before arithmetic reads their correction. A full block
 can search past a failed positional probe without repeatedly materializing
-upper carries. Partial factor blocks retain complete probes, preserving their
-existing work headroom. These rules remain in the shared symbolic owner used
-by CLI and GUI source optimization.
+upper carries. Sparse partial blocks can also defer corrections when the
+unmatched period remainder exceeds the number of pairs; dense partial blocks
+keep complete probes. Only a matched pair requests its corrections, and each
+unmatched word stays complete. These rules remain in the shared symbolic owner
+used by CLI and GUI source optimization.
 Complete blocks and odd residual blocks combine two-bit correction columns
 before constructing their carry graph. Literal corrections sum directly modulo
 four; repeated or complementary variable bits cancel or move to the next
@@ -5701,6 +5703,19 @@ need only their shared square, with no zero correction to accumulate.
 Partial even blocks preserve
 streaming accumulation so unfinished proofs leave the established headroom
 for child rewrites. Both strategies retain the same cumulative resource limits.
+Low-word multiplication compresses exact partial products in columns before
+one carry-propagating sum. Three- and four-bit odd products use sign and short
+exponent coordinates; modulo eight, odd multiplication is XOR of the upper
+bits. Summation counts complete complemented edges in dense tables, then sorts
+each finished column before reduction. Final columns balance their parity
+without constructing an unobservable carry. Signature keys occupy stable pages
+whose storage is charged before allocation. These operations retain the full
+identity checks, cumulative allowances and decision-node ceiling.
+Expression restoration skips nodes older than every substitution key: immutable
+children precede their parents, and simultaneous replacement bodies remain
+unchanged. Rendering appends fragments directly into their parent's text and
+stores completed fragments in one dense table. No fragment reference survives
+insertion of its parent; emitted text and precedence remain unchanged.
 Boolean polynomial reconstruction can factor shared cofactors across groups
 with disjoint remaining variables. Exact symmetric differences retain every
 unmatched term. Larger decision graphs try this construction before expanding

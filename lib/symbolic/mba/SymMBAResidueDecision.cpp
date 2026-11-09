@@ -190,8 +190,7 @@ class LowWordDecisions {
         Cache.getMemorySize() / sizeof(typename Map::value_type);
     if ((Cache.size() + 1) * 4 < Buckets * 3)
       return true;
-    const auto Next =
-        std::max(limits::kResidueMinDenseMapBuckets, 2 * Buckets);
+    const auto Next = std::max(limits::kResidueMinDenseMapBuckets, 2 * Buckets);
     if (!charge(0, Next * sizeof(typename Map::value_type)))
       return false;
     Cache.reserve(Cache.size() + 1);
@@ -412,6 +411,16 @@ class LowWordDecisions {
     if (Op == SymOp::Add && A == B) {
       Bits Result(A.size(), 0);
       std::copy(A.begin(), A.end() - 1, Result.begin() + 1);
+      return Result;
+    }
+    // The units modulo eight form a two-bit XOR group: in
+    // (1+2a+4b)(1+2c+4d), the carry from a+c cancels the 4ac term.
+    // The word admission funds these Boolean lookups; they need no second,
+    // whole-word cache entry. Recursive cofactors still pay for their work.
+    if (Op == SymOp::Mul && A.size() <= 3 && A.front() == 1 && B.front() == 1) {
+      Bits Result(A.size(), 1);
+      for (size_t I = 1; I < A.size(); ++I)
+        Result[I] = applyCharged<Xor>(A[I], B[I]);
       return Result;
     }
     if (Op == SymOp::Mul) {
@@ -644,16 +653,47 @@ class LowWordDecisions {
   }
 
   Bits multiply(llvm::ArrayRef<uint32_t> A, llvm::ArrayRef<uint32_t> B) {
-    Bits Result(A.size(), 0);
+    if (A.size() == 2)
+      return multiplyCorrection(Bits(A), Bits(B));
+    // Compress the partial products within their columns. Carry propagation
+    // happens once, after compression, instead of after every shifted row.
+    // A column contains at most N source bits and N-1 incoming carries.
+    constexpr unsigned MaxBits = limits::kMaxAffineResidueTableBits;
+    using Column = llvm::SmallVector<uint32_t, 2 * MaxBits>;
+    std::array<Column, MaxBits> Columns;
+    if (!charge(A.size(), sizeof(Columns)))
+      return Bits(A.size(), 0);
     for (size_t I = 0; I < B.size() && !Failed; ++I) {
       if (!B[I])
         continue;
-      Bits Row(A.size(), 0);
-      for (size_t J = 0; I + J < A.size(); ++J)
-        Row[I + J] = apply<And>(A[J], B[I]);
-      Result = calculate(SymOp::Add, Result, Row);
+      for (size_t J = 0; I + J < A.size(); ++J) {
+        if (!A[J])
+          continue;
+        const auto Bit = apply<And>(A[J], B[I]);
+        if (Bit)
+          Columns[I + J].push_back(Bit);
+      }
     }
-    return Result;
+    Bits Left(A.size(), 0), Right(A.size(), 0);
+    for (size_t I = 0; I < A.size() && !Failed; ++I) {
+      auto &C = Columns[I];
+      while (C.size() > 2 && !Failed) {
+        const auto X = C.pop_back_val(), Y = C.pop_back_val(),
+                   Z = C.pop_back_val();
+        const auto [Sum, Carry] =
+            I + 1 < A.size() ? fullAdder(X, Y, Z)
+                             : std::make_pair(parity(X, Y, Z), uint32_t(0));
+        if (Sum)
+          C.push_back(Sum);
+        if (Carry)
+          Columns[I + 1].push_back(Carry);
+      }
+      if (!C.empty())
+        Left[I] = C[0];
+      if (C.size() > 1)
+        Right[I] = C[1];
+    }
+    return calculate(SymOp::Add, Left, Right);
   }
 
   std::optional<unsigned> lookupWidth(SymRef R) {
@@ -1172,7 +1212,7 @@ class LowWordDecisions {
   // complements contributes one, while repeated copies move to higher columns.
   Bits sumWords(llvm::ArrayRef<Bits> Values, unsigned Count,
                 llvm::ArrayRef<size_t> Multiplicities = {}) {
-    using Column = std::map<uint32_t, size_t>;
+    using Column = llvm::DenseMap<uint32_t, size_t>;
     if (!charge(Count, Count * sizeof(Column)))
       return Bits(Count, 0);
     std::vector<Column> Columns(Count);
@@ -1182,13 +1222,13 @@ class LowWordDecisions {
       if (!Edge)
         return true;
       auto &C = Columns[Bit];
-      if (!charge(1 + std::bit_width(C.size())))
+      if (!charge())
         return false;
       auto It = C.find(Edge);
       if (It == C.end()) {
-        if (!charge(1, sizeof(Column::value_type) + 4 * sizeof(void *)))
+        if (!charge() || !reserveEntry(C))
           return false;
-        It = C.emplace(Edge, 0).first;
+        It = C.try_emplace(Edge, 0).first;
       }
       It->second += Copies;
       return true;
@@ -1201,13 +1241,22 @@ class LowWordDecisions {
     Bits Left(Count, 0), Right(Count, 0);
     for (unsigned I = 0; I < Count && !Failed; ++I) {
       auto &C = Columns[I];
-      if (!charge(C.size(), 2 * C.size() * sizeof(uint32_t)))
+      if (!charge(C.size() * (1 + std::bit_width(C.size())),
+                  2 * C.size() * sizeof(uint32_t)))
         break;
+      // Columns only receive carries from earlier bits. Count by exact edge
+      // identity, then order the completed column once before reducing it.
+      // Hash iteration never controls the decision or carry schedule.
+      Bits Ordered;
+      Ordered.reserve(C.size());
+      for (const auto &Entry : C)
+        Ordered.push_back(Entry.first);
+      std::sort(Ordered.begin(), Ordered.end());
       Bits Remaining;
       Remaining.reserve(C.size());
       size_t Constants = 0;
-      for (auto It = C.begin(); It != C.end(); ++It) {
-        auto [Id, Copies] = *It;
+      for (const auto Id : Ordered) {
+        auto Copies = C.find(Id)->second;
         if (!charge(1 + std::bit_width(Copies)))
           break;
         if (!Copies)
@@ -1239,10 +1288,10 @@ class LowWordDecisions {
         if ((Constants & 1) && !Insert(J, 1))
           break;
       while (Remaining.size() > 2 && !Failed) {
-        // Nonlinear factors keep the established streaming schedule: their
-        // mixed carries can grow under regrouping. Affine/bitwise factors
-        // use balanced columns to avoid long intermediate prefix graphs.
-        if (!BalanceCarryColumns) {
+        // Mixed carries keep their streaming schedule. The final column has
+        // no observable carry, so balance its parity independently of the
+        // factors instead of constructing long intermediate prefix graphs.
+        if (!BalanceCarryColumns && I + 1 < Count) {
           const auto A = Remaining.pop_back_val();
           const auto B = Remaining.pop_back_val();
           const auto C = Remaining.pop_back_val();
@@ -1570,11 +1619,8 @@ class LowWordDecisions {
     uint32_t Flip = 0;
   };
   using SignatureKey = llvm::SmallVector<uint64_t, 8>;
-  struct SignatureHash {
-    size_t operator()(const SignatureKey &Key) const {
-      return size_t(llvm::hash_combine_range(Key.begin(), Key.end()));
-    }
-  };
+  using SignaturePage =
+      std::array<SignatureKey, limits::kResidueSignaturePageEntries>;
   struct WideSignature {
     uint32_t Identity = 0;
     std::array<uint32_t, 2> Delta{};
@@ -1582,18 +1628,18 @@ class LowWordDecisions {
     bool Complete = true;
   };
   struct WidePairingState {
-    std::unordered_map<SignatureKey, uint32_t, SignatureHash> Ids;
-    std::vector<const SignatureKey *> Keys;
-    // Completed values are copied before recursion; only Ids exposes stable
-    // key addresses. Queried precisions keep word keys off both sentinels.
+    llvm::DenseMap<llvm::ArrayRef<uint64_t>, uint32_t> Ids;
+    std::vector<std::unique_ptr<SignaturePage>> Keys;
+    // Completed values are copied before recursion. Immutable key pages keep
+    // their addresses across hash growth; word precisions avoid sentinels.
     llvm::DenseMap<uint64_t, WideSignature> Words;
     unsigned NarrowPrecision = 0;
   };
   // Ordinary low-word searches do not need this state. Construct it only
   // after pairing admission, and keep it within the active odd assumption.
   struct PairingState {
-    std::unordered_map<SignatureKey, uint32_t, SignatureHash> Ids;
-    std::vector<const SignatureKey *> Keys;
+    llvm::DenseMap<llvm::ArrayRef<uint64_t>, uint32_t> Ids;
+    std::vector<std::unique_ptr<SignaturePage>> Keys;
     llvm::DenseMap<uint64_t, ResidueSignature> Words;
     std::unique_ptr<WidePairingState> Wide;
   };
@@ -1604,19 +1650,25 @@ class LowWordDecisions {
       return 0;
     if (auto It = State.Ids.find(Key); It != State.Ids.end())
       return It->second;
-    if (!charge(1, sizeof(SignatureKey) + sizeof(uint32_t) +
-                       Key.size() * sizeof(uint64_t) + 6 * sizeof(void *)))
+    if (!charge(1, Key.size() * sizeof(uint64_t)) || !reserveEntry(State.Ids))
       return 0;
-    if (State.Keys.size() == State.Keys.capacity()) {
-      const size_t Capacity = std::max(size_t(1), 2 * State.Keys.capacity());
-      if (!charge(1, Capacity * sizeof(const SignatureKey *)))
+    const auto Index = State.Ids.size();
+    constexpr size_t PageEntries = limits::kResidueSignaturePageEntries;
+    if (Index % PageEntries == 0) {
+      if (!charge(1, sizeof(SignaturePage)))
         return 0;
-      State.Keys.reserve(Capacity);
+      if (State.Keys.size() == State.Keys.capacity()) {
+        const size_t Capacity = std::max(size_t(1), 2 * State.Keys.capacity());
+        if (!charge(1, Capacity * sizeof(std::unique_ptr<SignaturePage>)))
+          return 0;
+        State.Keys.reserve(Capacity);
+      }
+      State.Keys.push_back(std::make_unique<SignaturePage>());
     }
-    const auto Identity = uint32_t(State.Ids.size() + 1);
-    const auto It = State.Ids.emplace(std::move(Key), Identity).first;
-    // Unordered-map rehash preserves references to these immutable keys.
-    State.Keys.push_back(&It->first);
+    auto &Stored = (*State.Keys[Index / PageEntries])[Index % PageEntries];
+    Stored = std::move(Key);
+    const auto Identity = uint32_t(Index + 1);
+    State.Ids.try_emplace(llvm::ArrayRef<uint64_t>(Stored), Identity);
     return Identity;
   }
 
@@ -1626,7 +1678,9 @@ class LowWordDecisions {
     // The enclosing operand visit is already charged. Only expansion adds
     // entries and sorting work. A shifted child can expose a formerly nested
     // XOR; flatten its exact representative, keeping its correction separate.
-    const auto &Key = *State.Keys[Child - 1];
+    constexpr size_t PageEntries = limits::kResidueSignaturePageEntries;
+    const auto &Key =
+        (*State.Keys[(Child - 1) / PageEntries])[(Child - 1) % PageEntries];
     if (Key[1] == Count && !Key[0]) {
       Literal ^= Key[2];
     } else if (Key[1] == Count && Key[0] == uint64_t(SymOp::Xor) + 1) {
@@ -2132,7 +2186,9 @@ class LowWordDecisions {
       } else {
         std::optional<llvm::ArrayRef<uint32_t>> Value;
         if (Count == State.NarrowPrecision)
-          Value = word(R, IdentityOnly ? Count - 2 : Count);
+          // Complete this small word once; a matching identity will need
+          // the same high bits when its correction is consumed.
+          Value = word(R, Count);
         else if (Count < State.NarrowPrecision) {
           if (!charge())
             return {};
@@ -2212,6 +2268,41 @@ class LowWordDecisions {
     return true;
   }
 
+  Bits oddUnitProduct(llvm::ArrayRef<SymRef> Factors, unsigned Count) {
+    assert(Count >= 3 && Count <= 4);
+    if (Factors.size() < 2)
+      return product(Factors, Count);
+    // Every odd word modulo sixteen is uniquely (-1)^s * (1+4e).
+    // Its sign is bit 1; removing it complements the remaining high bits
+    // exactly when s is set. Products add e because the cross term is zero
+    // modulo sixteen. Modulo eight uses the same one-bit exponent prefix.
+    // Multiplication therefore needs one parity and a sum of short exponents.
+    if (!charge(Factors.size(), Factors.size() * sizeof(Bits)))
+      return {};
+    llvm::SmallVector<Bits, 16> Exponents;
+    Exponents.reserve(Factors.size());
+    uint32_t Sign = 0;
+    for (const auto Factor : Factors) {
+      const auto Value = word(Factor, Count);
+      if (Failed)
+        return {};
+      assert(Value.front() == 1 && "pairing requires proved odd factors");
+      Sign = apply<Xor>(Sign, Value[1]);
+      Bits Exponent;
+      for (unsigned I = 2; I < Count; ++I)
+        Exponent.push_back(apply<Xor>(Value[I], Value[1]));
+      Exponents.push_back(std::move(Exponent));
+    }
+    const auto Exponent = sumWords(Exponents, Count - 2);
+    if (Failed)
+      return {};
+    Bits Result(Count, 1);
+    Result[1] = Sign;
+    for (unsigned I = 2; I < Count; ++I)
+      Result[I] = apply<Xor>(Exponent[I - 2], Sign);
+    return Result;
+  }
+
   // With U=2^(N-2), matched odd factors satisfy B=A+U*d. Thus
   // AB=A^2+U*A*d. For N>=4, U^2 vanishes and every odd square is 1 mod 4:
   // all paired corrections add modulo 4, multiplied only by unpaired factors.
@@ -2220,8 +2311,8 @@ class LowWordDecisions {
   Bits widePairedProduct(PairingState &State, llvm::ArrayRef<SymRef> Factors,
                          unsigned Count,
                          llvm::SmallVectorImpl<SymRef> *Retained = nullptr) {
-    if (Count < 4)
-      return product(Factors, Count);
+    if (Count <= 4)
+      return oddUnitProduct(Factors, Count);
     if (!State.Wide) {
       if (!charge(1, sizeof(WidePairingState)))
         return {};
@@ -2229,6 +2320,13 @@ class LowWordDecisions {
     }
     if (!charge(Factors.size(), 2 * Factors.size() * sizeof(SymRef)))
       return {};
+    // Sparse partial windows can retain more full words than matched pairs.
+    // In dense windows, eager corrections avoid a second signature walk.
+    // This period is only an admission hint; identities prove every pair.
+    const size_t Block = size_t(1) << (Count - 2);
+    const size_t Remainder = Factors.size() % Block;
+    const size_t Unmatched = std::min(Remainder, Block - Remainder);
+    const bool Defer = Retained && Unmatched > (Factors.size() - Unmatched) / 2;
     std::unordered_map<uint32_t, std::pair<SymRef, WideSignature>> Unpaired;
     llvm::SmallVector<SymRef, 16> Pairs, Rest;
     Bits Correction(2, 0);
@@ -2245,7 +2343,8 @@ class LowWordDecisions {
       RepeatedCorrections.reserve(Factors.size() / 2);
     }
     for (auto Factor : Factors) {
-      auto S = wideSignature(*State.Wide, Factor, Count);
+      auto S = Defer ? wideSignature<true>(*State.Wide, Factor, Count)
+                     : wideSignature(*State.Wide, Factor, Count);
       if (Failed || !charge())
         return {};
       auto It = Unpaired.find(S.Identity);
@@ -2256,6 +2355,13 @@ class LowWordDecisions {
         Unpaired.emplace(S.Identity, std::make_pair(Factor, S));
       } else {
         auto A = It->second.first;
+        if (Defer) {
+          // Unmatched factors keep their complete source word. Only matched
+          // pairs consume corrections, so defer their high-bit proof until
+          // the identity lookup establishes that a pair exists.
+          S = wideSignature(*State.Wide, Factor, Count);
+          It->second.second = wideSignature(*State.Wide, A, Count);
+        }
         const auto &D = It->second.second.Delta;
         auto Change = difference(Bits(S.Delta.begin(), S.Delta.end()),
                                  Bits(D.begin(), D.end()));
@@ -2359,6 +2465,8 @@ class LowWordDecisions {
                      unsigned Count, bool PairIdentical = false) {
     if (Count <= 2 || Factors.size() < 2)
       return product(Factors, Count);
+    if (Count <= 4)
+      return oddUnitProduct(Factors, Count);
     if (!charge(Factors.size(), 2 * Factors.size() * sizeof(SymRef)))
       return {};
     std::unordered_map<uint32_t, std::pair<SymRef, uint32_t>> Unpaired;

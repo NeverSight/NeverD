@@ -10423,6 +10423,15 @@ isolation.
 
 ## Modular MBA simplification
 
+`SymExpr.LateSubstitutionKeysPreserveEarlierRootsAndReplacementBodies` covers
+simultaneous interior replacements and late placeholders through 257 bits.
+`SymParse.LargeSharedFragmentsKeepPrecedenceAfterTableGrowth` checks exact text
+and parser roundtrips past the inline table capacity.
+`SymMBAWidePairs.SparseCorrectionsLeaveRoomForTheIndependentTail` independently
+evaluates a nonlinear 33-factor product and its linear tail within the shared
+65,536-unit allowance. These tests exercise the shared expression and MBA
+owners used by CLI and GUI source optimization.
+
 Local MBA research can run disposable producers with
 `python3 tools/neverd-bench/mba_attempt.py --directory <owned-attempt-root> -- <command>`.
 The runner retains current and previous evidence, removes scratch after success,

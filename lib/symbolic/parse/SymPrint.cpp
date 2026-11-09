@@ -14,8 +14,10 @@
 #include "../SymPrintShape.h"
 #include "SymParseDetail.h"
 
+#include "neverd/symbolic/Limits.h"
 #include "neverd/symbolic/SymExpr.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
@@ -24,9 +26,7 @@
 
 #include <optional>
 #include <string>
-#include <unordered_map>
 #include <utility>
-#include <vector>
 
 namespace neverd::symbolic {
 
@@ -52,6 +52,16 @@ std::string wrap(const Fragment &F, int Need) {
   return "(" + F.Text + ")";
 }
 
+// Append directly to the parent's buffer. Materializing a wrapped copy for
+// every child allocates and copies long MBA subexpressions twice.
+void appendWrapped(std::string &Out, const Fragment &F, int Need) {
+  if (F.Prec < Need)
+    Out += '(';
+  Out += F.Text;
+  if (F.Prec < Need)
+    Out += ')';
+}
+
 void appendDigits(std::string &Out, const llvm::APInt &V) {
   llvm::SmallString<48> S;
   // Small numbers read as quantities and belong in decimal.  Larger ones are
@@ -74,7 +84,7 @@ public:
   std::string run(SymRef Root);
 
 private:
-  const Fragment &frag(SymRef R) const { return Memo.at(R.index()); }
+  const Fragment &frag(SymRef R) const { return Memo.find(R.index())->second; }
   /// A child in a comma-separated argument list, which never needs brackets.
   const std::string &arg(SymRef R) const { return frag(R).Text; }
   std::string sub(SymRef R, int Need) const { return wrap(frag(R), Need); }
@@ -113,7 +123,12 @@ private:
 
   const SymContext &Ctx;
   uint32_t Ambient;
-  std::unordered_map<uint32_t, Fragment> Memo;
+  // Completed fragments are consumed before inserting their parent. No
+  // reference survives growth, so one dense table owns all fragment strings.
+  // Widen node IDs to keep every valid handle distinct from the sentinels.
+  llvm::SmallDenseMap<uint64_t, Fragment,
+                      limits::symbolic::kSymExprTraversalInlineBuckets>
+      Memo;
 };
 
 std::string Printer::join(llvm::ArrayRef<SymRef> Ops, const char *Sep,
@@ -122,7 +137,7 @@ std::string Printer::join(llvm::ArrayRef<SymRef> Ops, const char *Sep,
   for (unsigned I = 0, E = Ops.size(); I < E; ++I) {
     if (I)
       T += Sep;
-    T += sub(Ops[I], Need);
+    appendWrapped(T, frag(Ops[I]), Need);
   }
   return T;
 }
@@ -238,7 +253,7 @@ Fragment Printer::render(SymRef R) const {
         continue;
       std::optional<Magnitude> Neg = negatedTerm(Ops[I]);
       T += Neg ? " - " : " + ";
-      T += wrap(Neg ? Neg->Frag : frag(Ops[I]), PrecAdditive + 1);
+      appendWrapped(T, Neg ? Neg->Frag : frag(Ops[I]), PrecAdditive + 1);
     }
     return {std::move(T), PrecAdditive};
   }
@@ -333,8 +348,10 @@ std::string Printer::run(SymRef Root) {
   // walk is iterative and the memo is keyed per node, so a DAG that an
   // obfuscator made deep or wide costs stack proportional to nothing and time
   // proportional to its node count rather than its tree size.
-  std::vector<uint32_t> Order;
-  llvm::DenseSet<uint32_t> Seen;
+  llvm::SmallVector<uint32_t, 64> Order;
+  llvm::SmallDenseSet<uint64_t,
+                      limits::symbolic::kSymExprTraversalInlineBuckets>
+      Seen;
   llvm::SmallVector<SymRef, 64> Work{Root};
   while (!Work.empty()) {
     SymRef R = Work.pop_back_val();
@@ -348,8 +365,8 @@ std::string Printer::run(SymRef Root) {
 
   Memo.reserve(Order.size());
   for (uint32_t I : Order)
-    Memo.emplace(I, render(SymRef(I)));
-  return Memo.at(Root.index()).Text;
+    Memo.try_emplace(I, render(SymRef(I)));
+  return std::move(Memo.find(Root.index())->second.Text);
 }
 
 } // namespace

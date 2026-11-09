@@ -410,6 +410,47 @@ PartialFixture partialFixture(SymContext &Ctx, unsigned Width, unsigned Degree,
           Observed,           High,  Complement};
 }
 
+TEST(SymMBAWidePairs, SparseCorrectionsLeaveRoomForTheIndependentTail) {
+  std::mt19937_64 Random(0x5350415253453333);
+  for (unsigned Width : {8u, 16u, 32u, 64u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto F = partialFixture(Ctx, Width, 33, false, 8, 3, 1);
+    llvm::SmallVector<SymRef, 64> Factors(Ctx.operands(F.Input));
+    const auto Scale = llvm::APInt(Width, 5).shl(Width - 8);
+    Factors.front() = Ctx.mkConst(Scale);
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const auto Z = Ctx.mkVar("z", Width), W = Ctx.mkVar("w", Width);
+    const auto Input =
+        Ctx.mkAdd({Ctx.mkMul(Factors), Ctx.mkXor(X, Y),
+                   Ctx.mkMul(Ctx.mkConst(Width, 2), Ctx.mkAnd(X, Y)),
+                   Ctx.mkOr(Z, W), Ctx.mkAnd(Z, W)});
+    MBAOptions Options;
+    Options.MaxWork = 65536;
+    Options.VerifySamples = 0;
+    const auto Result = simplifyMBADeep(Ctx, Input, Options);
+    ASSERT_TRUE(Result.Changed);
+    EXPECT_LT(Result.Work, Options.MaxWork);
+    EXPECT_LT(Result.SizeAfter, Result.SizeBefore);
+    SymEvalPlan Reduced(Ctx, Result.Expr);
+    for (unsigned Trial = 0; Trial < 256; ++Trial) {
+      std::array<llvm::APInt, 4> V;
+      for (auto &Value : V)
+        Value = llvm::APInt(Width, Random());
+      if (Trial < 4)
+        V.fill(Trial == 3 ? llvm::APInt::getAllOnes(Width)
+                          : llvm::APInt(Width, Trial));
+      auto Expected = Scale;
+      for (unsigned I = 0; I < 33; ++I)
+        Expected *= ((V[0] ^ llvm::APInt(Width, 1)) + 2 * I) ^
+                    (((V[1] + I) & ~llvm::APInt(Width, 1)) *
+                     ((V[2] + 2 * I) & ~llvm::APInt(Width, 3)));
+      Expected += V[0] + V[1] + V[2] + V[3];
+      ASSERT_EQ(Reduced.eval(V), Expected);
+    }
+  }
+}
+
 TEST(SymMBAWidePairs, NarrowNonlinearResiduesKeepTheirCrossTerms) {
   std::mt19937_64 Random(0x4e4152524f575052);
   for (unsigned Width : {8u, 32u, 64u, 65u, 128u, 257u})
