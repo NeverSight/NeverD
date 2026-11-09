@@ -179,6 +179,13 @@ looked unfinished to the user once pointed out.
   and as a disabled check box indicator is drawn. The full `Button` fill
   behind gray text turned a dialog whose actions wait for input, such as
   Binary comparison, into a wall of dead gray blocks.
+- Give every control the style sheet colors a `:disabled` rule. An explicit
+  `color` or `background` hides the palette's disabled colors, so a disabled
+  combo box, such as Binary comparison's SSA representation, looked exactly
+  like an enabled one. Fields, combo boxes and spin boxes give up their fill
+  like buttons, as Windows 11 draws a disabled text box, and dim their
+  chevrons; labels, group titles, tool buttons, tabs and lists take
+  `DisabledText`.
 - Recolor what a theme change cannot reach. Content that stores colors, such
   as the output log's text formats, keeps each part's level or role and colors
   it again on `Theme::changed`; the dark theme's gray log lines all but

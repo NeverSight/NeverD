@@ -50,6 +50,11 @@ QToolButton::right-arrow { image: url(:/neverd/icons/chevron_right-${Mode}.svg);
    padlock closes, takes no fill for it, not even while pressed. */
 QToolButton[glyphToggle="true"]:checked, QToolButton[glyphToggle="true"]:pressed { background: transparent; color: ${WindowText}; }
 QToolButton[glyphToggle="true"]:hover { background: ${ToolBarHover}; }
+/* A tool button that cannot act dims its label with its icon; one that is on
+   keeps an outline in place of its fill, unless its glyph shows its state. */
+QToolButton:disabled, QToolButton[glyphToggle="true"]:disabled { color: ${DisabledText}; }
+QToolButton:checked:disabled { background: transparent; border-color: ${Border}; }
+QToolButton[glyphToggle="true"]:checked:disabled { border-color: transparent; }
 QStatusBar { background: ${StatusBar}; color: ${StatusBarText}; min-height: 22px; border-top: 1px solid ${StatusBarBorder}; }
 QStatusBar QLabel { color: ${StatusBarText}; padding: 0 8px; }
 QStatusBar::item { border: none; }
@@ -65,6 +70,7 @@ QTreeView, QListView, QTableView { background: ${Base}; alternate-background-col
 QTreeView::item, QListView::item { padding: 1px 0; }
 QTreeView::item:hover, QListView::item:hover { background: ${Hover}; }
 QTreeView::item:selected, QListView::item:selected { background: ${Highlight}; color: ${HighlightedText}; }
+QTreeView:disabled, QListView:disabled, QTableView:disabled { color: ${DisabledText}; }
 /* Branches open and close with the chevrons the other controls draw. */
 QTreeView::branch:selected { background: ${Highlight}; }
 QTreeView::branch:has-children:closed { image: url(:/neverd/icons/chevron_right-${Mode}.svg); }
@@ -77,6 +83,11 @@ QLineEdit, QComboBox, QAbstractSpinBox, QPlainTextEdit, QTextEdit { background: 
 QLineEdit:focus, QComboBox:focus, QAbstractSpinBox:focus, QPlainTextEdit:focus, QTextEdit:focus { border: 1px solid ${Focus}; }
 QPlainTextEdit[readOnly="true"], QTextEdit[readOnly="true"] { background: ${Base}; border: none; }
 QLineEdit, QAbstractSpinBox, QPlainTextEdit[readOnly="false"], QTextEdit[readOnly="false"] { font: ${CodeFont}; }
+/* A field that cannot take input gives up its fill and keeps its outline and a
+   dimmed text, as a button that cannot act does and as Windows 11 draws a
+   disabled text box or combo box. */
+QLineEdit:disabled, QComboBox:disabled, QAbstractSpinBox:disabled, QPlainTextEdit[readOnly="false"]:disabled, QTextEdit[readOnly="false"]:disabled { background: transparent; border-color: ${Border}; color: ${DisabledText}; placeholder-text-color: ${DisabledText}; }
+QPlainTextEdit[readOnly="true"]:disabled, QTextEdit[readOnly="true"]:disabled { color: ${DisabledText}; }
 /* A list's filter keeps clear of the scroll bar above it, whose slider is
    nearly the field's gray, and lines up with the status line below. */
 QLineEdit#chooserFilter { margin: 4px 6px 0 6px; }
@@ -92,6 +103,10 @@ QAbstractSpinBox::down-button { subcontrol-position: bottom right; }
 QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover { background: ${ToolBarHover}; }
 QAbstractSpinBox::up-arrow { image: url(:/neverd/icons/chevron_up-${Mode}.svg); width: 10px; height: 10px; }
 QAbstractSpinBox::down-arrow { image: url(:/neverd/icons/chevron_down-${Mode}.svg); width: 10px; height: 10px; }
+/* Chevrons dim with a field that cannot take input, and a spin box's arrow
+   dims where its range ends. */
+QComboBox::down-arrow:disabled, QAbstractSpinBox::down-arrow:disabled, QAbstractSpinBox::down-arrow:off { image: url(:/neverd/icons/chevron_down_disabled-${Mode}.svg); }
+QAbstractSpinBox::up-arrow:disabled, QAbstractSpinBox::up-arrow:off { image: url(:/neverd/icons/chevron_up_disabled-${Mode}.svg); }
 QComboBoxPrivateContainer { background: ${Menu}; border: none; }
 QComboBox QAbstractItemView { background: ${Menu}; color: ${MenuText}; border: 1px solid ${MenuSeparator}; padding: 4px; outline: none; selection-background-color: ${MenuSelection}; selection-color: ${HighlightedText}; }
 QComboBox QAbstractItemView::item { min-height: 22px; padding: 0 12px 0 8px; border-radius: 3px; }
@@ -113,15 +128,15 @@ QCheckBox, QRadioButton, QLabel, QGroupBox { color: ${WindowText}; }
 QLabel[placeholder="true"] { color: ${PlaceholderText}; background: ${Base}; }
 QLabel[statusLine="true"] { color: ${SecondaryText}; }
 QCheckBox, QRadioButton { spacing: 6px; }
-QCheckBox:disabled, QRadioButton:disabled { color: ${DisabledText}; }
+QCheckBox:disabled, QRadioButton:disabled, QLabel:disabled, QGroupBox:disabled { color: ${DisabledText}; }
 QCheckBox::indicator, QGroupBox::indicator, QAbstractItemView::indicator { width: 14px; height: 14px; border: 1px solid ${CheckboxBorder}; border-radius: 3px; background: ${CheckboxBackground}; }
 QRadioButton::indicator { width: 14px; height: 14px; border: 1px solid ${CheckboxBorder}; border-radius: 8px; background: ${CheckboxBackground}; }
 QCheckBox::indicator:hover, QRadioButton::indicator:hover, QGroupBox::indicator:hover { border-color: ${Focus}; }
 QCheckBox::indicator:checked, QGroupBox::indicator:checked, QAbstractItemView::indicator:checked { background: ${CheckboxChecked}; border-color: ${CheckboxChecked}; image: url(:/neverd/icons/check.svg); }
 QCheckBox::indicator:indeterminate, QAbstractItemView::indicator:indeterminate { background: ${CheckboxChecked}; border-color: ${CheckboxChecked}; image: url(:/neverd/icons/check_partial.svg); }
 QRadioButton::indicator:checked { background: ${CheckboxChecked}; border-color: ${CheckboxChecked}; image: url(:/neverd/icons/radio_dot.svg); }
-QCheckBox::indicator:disabled, QRadioButton::indicator:disabled { background: ${Window}; border-color: ${Border}; }
-QCheckBox::indicator:checked:disabled, QRadioButton::indicator:checked:disabled { background: ${DisabledText}; border-color: ${DisabledText}; }
+QCheckBox::indicator:disabled, QRadioButton::indicator:disabled, QGroupBox::indicator:disabled { background: transparent; border-color: ${Border}; }
+QCheckBox::indicator:checked:disabled, QCheckBox::indicator:indeterminate:disabled, QRadioButton::indicator:checked:disabled, QGroupBox::indicator:checked:disabled { background: ${DisabledText}; border-color: ${DisabledText}; }
 QGroupBox { border: 1px solid ${Border}; border-radius: 3px; margin-top: 8px; padding-top: 6px; }
 QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }
 QScrollBar:vertical { background: transparent; width: 12px; margin: 0; border: none; }
@@ -138,6 +153,7 @@ QTabBar { background: ${TabBar}; }
 QTabBar::tab { background: ${TabInactive}; color: ${TabInactiveText}; padding: 5px 10px; border: none; border-right: 1px solid ${TabBar}; border-top: 1px solid transparent; }
 QTabBar::tab:selected { background: ${TabActive}; color: ${TabActiveText}; border-top: 1px solid ${TabActiveBorder}; }
 QTabBar::tab:hover:!selected { color: ${TabActiveText}; }
+QTabBar::tab:disabled { color: ${DisabledText}; }
 /* Qt positions the close button at the tab edge, outside the text padding.
    Leave room on its outer side without shrinking the glyph or click target. */
 QTabBar::close-button { image: url(:/neverd/icons/close_small.svg); subcontrol-position: right; border-radius: 3px; padding: 1px; margin-right: 4px; }
