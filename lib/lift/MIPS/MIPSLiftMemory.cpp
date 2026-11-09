@@ -19,6 +19,14 @@ namespace neverd {
 bool MIPSLifter::liftMemory(State &S, uint32_t Word,
                             std::optional<NdVar> BaseOverride) const {
   const unsigned Opcode = Word >> 26;
+  if (const auto Store = mips::mergeStoreOpcode(Opcode)) {
+    const NdVar Address = S.binary(
+        NdOp::INT_ADD, BaseOverride ? *BaseOverride : S.read((Word >> 21) & 31),
+        NdVar::cst(uint64_t(int64_t(int16_t(Word))), S.Width));
+    const NdVar Value = S.resize(S.read((Word >> 16) & 31), Store->Bytes);
+    S.emitIntrinsic(Store->Id, {}, {Address, Value});
+    return true;
+  }
   if (const auto Load = mips::mergeLoadOpcode(Opcode)) {
     if (Load->Bytes > S.Width)
       return false;

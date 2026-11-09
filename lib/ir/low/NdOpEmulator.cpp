@@ -567,6 +567,8 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following) {
           mips::isScalarIntrinsic(static_cast<Intrinsic>(Op.Inputs[0].Offset)))
         return executeMIPSScalar(Op);
       switch (Op.Opcode) {
+      case NdOp::SELECT:
+        return executeMisc(Op);
       case NdOp::COPY:
       case NdOp::INT_ZEXT:
       case NdOp::INT_SEXT:

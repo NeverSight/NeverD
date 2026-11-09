@@ -1,5 +1,7 @@
 add_neverd_unittest(NeverDMIPSPipelineTests
   mips/MIPS16PipelineTests.cpp
+  mips/MIPS16E2PipelineTests.cpp
+  mips/MIPSCallMemoryTests.cpp
   mips/MIPSDSPPipelineTests.cpp
   mips/MIPSMSAPipelineTests.cpp
   mips/MicroMIPSPipelineTests.cpp
@@ -32,6 +34,7 @@ add_neverd_unittest(NeverDMIPSIntegerTests
   mips/MIPS16IntegerTests.cpp
   mips/MIPS16MemoryTests.cpp
   mips/MIPS16FrameTests.cpp
+  mips/MIPS16E2Tests.cpp
   mips/MIPSDSPTests.cpp
   mips/MIPSMSATests.cpp
   mips/MicroMIPSIntegerTests.cpp

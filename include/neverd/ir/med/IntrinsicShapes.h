@@ -713,7 +713,9 @@ inline bool endsCallArgumentSetup(const MedOp &Op, bool RegistersOnly = false) {
   if (static_cast<uint64_t>(Id) != Op.Inputs[0].ConstVal)
     return true;
   return !preservesCallSetup(Id) && !onlyChecksForAFault(Id) &&
-         !mipsScalarMedShapeIsValid(Op) && !aarch64PAuthMedShapeIsValid(Op) &&
+         !(mipsScalarMedShapeIsValid(Op) &&
+           (RegistersOnly || !mips::mergeStore(Id))) &&
+         !aarch64PAuthMedShapeIsValid(Op) &&
          !aarch64PAuthLoadMedShapeIsValid(Op) &&
          !aarch64WritebackMemoryMedShapeIsValid(Op) &&
          !(RegistersOnly ? aarch64AddressMemoryMedShapeIsValid(Op)

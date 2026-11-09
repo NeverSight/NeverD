@@ -115,6 +115,19 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
                               *Kind == Instruction::SignedMaximumVector;
   const bool Absolute = *Kind == Instruction::AbsoluteMinimumVector ||
                         *Kind == Instruction::AbsoluteMaximumVector;
+  const bool AddAbsolute = *Kind == Instruction::AddAbsoluteVector ||
+                           *Kind == Instruction::AddSaturatedAbsoluteVector;
+  const bool SaturatedSigned = *Kind == Instruction::AddSaturatedSignedVector ||
+                               *Kind == Instruction::SubSaturatedSignedVector;
+  const bool SaturatedUnsigned =
+      *Kind == Instruction::AddSaturatedUnsignedVector ||
+      *Kind == Instruction::SubSaturatedUnsignedVector;
+  const bool AverageSigned = *Kind == Instruction::AverageSignedVector ||
+                             *Kind == Instruction::RoundAverageSignedVector;
+  const bool AverageUnsigned = *Kind == Instruction::AverageUnsignedVector ||
+                               *Kind == Instruction::RoundAverageUnsignedVector;
+  const bool RoundAverage = *Kind == Instruction::RoundAverageSignedVector ||
+                            *Kind == Instruction::RoundAverageUnsignedVector;
   const uint16_t Bytes =
       *Kind == Instruction::FillWord || *Kind == Instruction::InsertWord
           ? 4
@@ -151,7 +164,48 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
                                      ? NdOp::INT_ADD
                                      : NdOp::INT_SUB,
                                  Lane(WD, I, Bytes), Product);
-    } else if (Absolute) {
+    } else if (AverageSigned || AverageUnsigned) {
+      const auto A = Lane(WS, I, Bytes), B = Lane(WT, I, Bytes);
+      // Carry-free identities preserve the widened sum, including signed
+      // negative ties and 64-bit lanes, without requiring a 128-bit carrier.
+      const auto HalfDifference =
+          S.binary(AverageSigned ? NdOp::INT_ASHR : NdOp::INT_RIGHT,
+                   S.binary(NdOp::INT_XOR, A, B), NdVar::cst(1, Bytes));
+      Values[I] =
+          S.binary(RoundAverage ? NdOp::INT_SUB : NdOp::INT_ADD,
+                   S.binary(RoundAverage ? NdOp::INT_OR : NdOp::INT_AND, A, B),
+                   HalfDifference);
+    } else if (SaturatedSigned || SaturatedUnsigned) {
+      const auto A = Lane(WS, I, Bytes), B = Lane(WT, I, Bytes);
+      const bool Subtract = *Kind == Instruction::SubSaturatedSignedVector ||
+                            *Kind == Instruction::SubSaturatedUnsignedVector;
+      const auto Arithmetic =
+          S.binary(Subtract ? NdOp::INT_SUB : NdOp::INT_ADD, A, B);
+      NdVar Overflow, Bound;
+      if (SaturatedSigned) {
+        auto Signs = S.binary(NdOp::INT_XOR, A, B);
+        if (!Subtract) {
+          const auto Inverted = S.makeTemp(Bytes);
+          S.emit(NdOp::INT_NOT, Inverted, {Signs});
+          Signs = Inverted;
+        }
+        Overflow = S.binary(NdOp::INT_SLESS,
+                            S.binary(NdOp::INT_AND, Signs,
+                                     S.binary(NdOp::INT_XOR, A, Arithmetic)),
+                            NdVar::cst(0, Bytes), 1);
+        const uint64_t SignBit = UINT64_C(1) << (Bytes * 8 - 1);
+        Bound = S.makeTemp(Bytes);
+        S.emit(NdOp::SELECT, Bound,
+               {S.binary(NdOp::INT_SLESS, A, NdVar::cst(0, Bytes), 1),
+                NdVar::cst(SignBit, Bytes), NdVar::cst(SignBit - 1, Bytes)});
+      } else {
+        Overflow = S.binary(NdOp::INT_LESS, Subtract ? A : Arithmetic,
+                            Subtract ? B : A, 1);
+        Bound = NdVar::cst(Subtract ? 0 : UINT64_MAX, Bytes);
+      }
+      Values[I] = S.makeTemp(Bytes);
+      S.emit(NdOp::SELECT, Values[I], {Overflow, Bound, Arithmetic});
+    } else if (Absolute || AddAbsolute) {
       const auto A = Lane(WS, I, Bytes), B = Lane(WT, I, Bytes);
       const auto Magnitude = [&](NdVar Value) {
         const auto Result = S.makeTemp(Bytes);
@@ -161,11 +215,25 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
         return Result;
       };
       const auto X = Magnitude(A), Y = Magnitude(B);
-      const bool Min = *Kind == Instruction::AbsoluteMinimumVector;
-      const auto Condition =
-          S.binary(NdOp::INT_LESS, Min ? X : Y, Min ? Y : X, 1);
-      Values[I] = S.makeTemp(Bytes);
-      S.emit(NdOp::SELECT, Values[I], {Condition, A, B}); // Ties choose WT.
+      if (AddAbsolute) {
+        Values[I] = S.binary(NdOp::INT_ADD, X, Y);
+        if (*Kind == Instruction::AddSaturatedAbsoluteVector) {
+          const auto Max =
+              NdVar::cst((UINT64_C(1) << (Bytes * 8 - 1)) - 1, Bytes);
+          const auto Overflow =
+              S.binary(NdOp::BOOL_OR, S.binary(NdOp::INT_LESS, Values[I], X, 1),
+                       S.binary(NdOp::INT_LESS, Max, Values[I], 1), 1);
+          const auto Result = S.makeTemp(Bytes);
+          S.emit(NdOp::SELECT, Result, {Overflow, Max, Values[I]});
+          Values[I] = Result;
+        }
+      } else {
+        const bool Min = *Kind == Instruction::AbsoluteMinimumVector;
+        const auto Condition =
+            S.binary(NdOp::INT_LESS, Min ? X : Y, Min ? Y : X, 1);
+        Values[I] = S.makeTemp(Bytes);
+        S.emit(NdOp::SELECT, Values[I], {Condition, A, B}); // Ties choose WT.
+      }
     } else if (Minimum || Maximum) {
       const auto A = Lane(WS, I, Bytes), B = Lane(WT, I, Bytes);
       const auto Condition =

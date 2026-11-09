@@ -17,6 +17,7 @@
 #include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
+#include "llvm/ADT/APInt.h"
 #include "llvm/Support/ErrorHandling.h"
 
 #ifdef NEVERD_MIPS_UNICORN_REFERENCE
@@ -97,7 +98,17 @@ enum class VectorOperation {
   SignedMinimum,
   UnsignedMinimum,
   AbsoluteMaximum,
-  AbsoluteMinimum
+  AbsoluteMinimum,
+  AddAbsolute,
+  AddSaturatedAbsolute,
+  AddSaturatedSigned,
+  AddSaturatedUnsigned,
+  SubSaturatedSigned,
+  SubSaturatedUnsigned,
+  AverageSigned,
+  AverageUnsigned,
+  RoundAverageSigned,
+  RoundAverageUnsigned
 };
 struct VectorCase {
   uint32_t Encoding;
@@ -132,6 +143,65 @@ std::vector<uint8_t> vectorExpected(const VectorCase &Case,
                                     llvm::ArrayRef<uint8_t> D) {
   // Byte-wise carry/borrow is independent of the lifter's sized lane ops.
   std::vector<uint8_t> Result(16);
+  if (Case.Operation >= VectorOperation::AddAbsolute) {
+    const unsigned Bits = Case.ElementBytes * 8;
+    for (unsigned Base = 0; Base < 16; Base += Case.ElementBytes) {
+      const auto Read = [&](llvm::ArrayRef<uint8_t> V) {
+        uint64_t N = 0;
+        for (unsigned Byte = 0; Byte < Case.ElementBytes; ++Byte)
+          N |= uint64_t(V[Base + Byte]) << (Byte * 8);
+        return llvm::APInt(Bits, N);
+      };
+      const auto UA = Read(A).zext(128), UB = Read(B).zext(128);
+      const auto SA = Read(A).sext(128), SB = Read(B).sext(128);
+      const auto Min = llvm::APInt::getSignedMinValue(Bits).sext(128);
+      const auto Max = llvm::APInt::getSignedMaxValue(Bits).zext(128);
+      const auto UMax = llvm::APInt::getMaxValue(Bits).zext(128);
+      llvm::APInt V(128, 0);
+      switch (Case.Operation) {
+      case VectorOperation::AddAbsolute:
+      case VectorOperation::AddSaturatedAbsolute:
+        V = SA.abs() + SB.abs();
+        if (Case.Operation == VectorOperation::AddSaturatedAbsolute &&
+            V.sgt(Max))
+          V = Max;
+        break;
+      case VectorOperation::AddSaturatedSigned:
+      case VectorOperation::SubSaturatedSigned:
+        V = Case.Operation == VectorOperation::AddSaturatedSigned ? SA + SB
+                                                                  : SA - SB;
+        if (V.slt(Min))
+          V = Min;
+        if (V.sgt(Max))
+          V = Max;
+        break;
+      case VectorOperation::AddSaturatedUnsigned:
+      case VectorOperation::SubSaturatedUnsigned:
+        V = Case.Operation == VectorOperation::AddSaturatedUnsigned ? UA + UB
+                                                                    : UA - UB;
+        if (V.isNegative())
+          V = llvm::APInt(128, 0);
+        if (V.ugt(UMax))
+          V = UMax;
+        break;
+      default: {
+        const bool Signed =
+            Case.Operation == VectorOperation::AverageSigned ||
+            Case.Operation == VectorOperation::RoundAverageSigned;
+        const bool Round =
+            Case.Operation == VectorOperation::RoundAverageSigned ||
+            Case.Operation == VectorOperation::RoundAverageUnsigned;
+        V = (Signed ? SA + SB : UA + UB) + llvm::APInt(128, Round);
+        V = V.ashr(1);
+        break;
+      }
+      }
+      const uint64_t N = V.trunc(Bits).getZExtValue();
+      for (unsigned Byte = 0; Byte < Case.ElementBytes; ++Byte)
+        Result[Base + Byte] = N >> (Byte * 8);
+    }
+    return Result;
+  }
   if (Case.Operation == VectorOperation::AbsoluteMaximum ||
       Case.Operation == VectorOperation::AbsoluteMinimum) {
     for (unsigned Base = 0; Base != 16; Base += Case.ElementBytes) {
@@ -600,12 +670,14 @@ TEST_P(MIPSMSA, IntegerFormatsMatchEnabledP5600AcrossAllOutputBytes) {
             for (unsigned I = 0; I != 4; ++I)
               Actual.push_back(uint8_t(Value >> (I * 8)));
           }
-          EXPECT_EQ(Actual,
-                    vectorExpected(Case, A, SameSource ? A : B,
-                                   Destination == 0 ? A
-                                   : Destination == 1
-                                       ? B
-                                       : std::vector<uint8_t>(16, 0x5a)));
+          const auto &Right = SameSource ? A : B;
+          const auto Expected = vectorExpected(
+              Case, A, Right,
+              Destination == 0   ? A
+              : Destination == 1 ? B
+                                 : std::vector<uint8_t>(16, 0x5a));
+          for (unsigned I = 0; I < Actual.size(); ++I)
+            EXPECT_EQ(Actual[I], Expected[I]) << "byte " << I;
         }
 #endif
 }

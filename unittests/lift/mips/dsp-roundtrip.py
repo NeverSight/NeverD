@@ -18,6 +18,7 @@ import sys
 import roundtrip
 from unicorn import mips_const as mips
 from unicorn import UC_HOOK_CODE
+from unicorn.unicorn_py3.unicorn import uclib
 from elftools.elf.elffile import ELFFile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
@@ -31,7 +32,7 @@ FUNCTIONS = ("dsp_read", "dsp_write", "dsp_partial", "dsp_add",
              "dsp_half_add_saturate", "dsp_half_sub", "dsp_half_sub_saturate",
              "dsp_shrl", "dsp_shrlv", "dsp_shra", "dsp_shrav", "dsp_shra_r",
              "dsp_shrav_r", "dsp_shra_rw", "dsp_shrav_rw", "dsp_pack_h", "dsp_pack_b",
-             "dsp_bitrev", "dsp_raddu", "dsp_repl_qb", "dsp_repl_ph", "dsp_replv_qb", "dsp_replv_ph", "dsp_preceq_phl", "dsp_preceq_phr", "dsp_precequ_qbl", "dsp_precequ_qbr", "dsp_precequ_qbla", "dsp_precequ_qbra", "dsp_preceu_qbl", "dsp_preceu_qbr", "dsp_preceu_qbla", "dsp_preceu_qbra")
+             "dsp_bitrev", "dsp_raddu", "dsp_repl_qb", "dsp_repl_ph", "dsp_replv_qb", "dsp_replv_ph", "dsp_preceq_phl", "dsp_preceq_phr", "dsp_precequ_qbl", "dsp_precequ_qbr", "dsp_precequ_qbla", "dsp_precequ_qbra", "dsp_preceu_qbl", "dsp_preceu_qbr", "dsp_preceu_qbla", "dsp_preceu_qbra", "dsp_addq_w", "dsp_subq_w", "dsp_addsc", "dsp_addwc", "dsp_modsub", "dsp_cmpeq", "dsp_cmplt", "dsp_cmple", "dsp_pick_b", "dsp_pick_h")
 INITIAL_STATES = (0, 0x01100021, 0x0fff7fbf)
 INPUTS = ((0, 0), (0xff01807f, 0x02018081), (0x11223344, 0x55667788),
           (0xffffffff, 1), (0x80808080, 0x80808080),
@@ -46,6 +47,32 @@ def digest(path):
 
 def expected(function, initial, arguments):
     a, b = arguments
+    if function in ("dsp_addq_w", "dsp_subq_w", "dsp_addsc", "dsp_addwc"):
+        sa, sb = (v - 0x100000000 if v & 0x80000000 else v for v in (a, b))
+        if function == "dsp_addsc":
+            return (a + b) & 0xffffffff, (initial & ~0x2000) | (((a + b) >> 32) << 13)
+        total = sa - sb if function == "dsp_subq_w" else sa + sb
+        if function == "dsp_addwc": total += (initial >> 13) & 1
+        state = initial | (0x100000 if total < -0x80000000 or total > 0x7fffffff else 0)
+        if function != "dsp_addwc": total = max(-0x80000000, min(total, 0x7fffffff))
+        return total & 0xffffffff, state
+    if function == "dsp_modsub":
+        return (((b >> 8) & 65535) if a == 0 else (a - (b & 255)) & 0xffffffff), initial
+    if function.startswith("dsp_cmp"):
+        predicates = 0
+        for lane in range(4):
+            x, y = (a >> (8 * lane)) & 255, (b >> (8 * lane)) & 255
+            match = x == y if function == "dsp_cmpeq" else x < y if function == "dsp_cmplt" else x <= y
+            predicates |= int(match) << (24 + lane)
+        state = (initial & ~0x0f000000) | predicates
+        return state, state
+    if function.startswith("dsp_pick"):
+        bits = 8 if function.endswith("_b") else 16
+        value = 0
+        for lane in range(32 // bits):
+            selected = a if initial & (1 << (24 + lane)) else b
+            value |= ((selected >> (bits * lane)) & ((1 << bits) - 1)) << (bits * lane)
+        return value, initial
     if function.startswith("dsp_prece"):
         if function == "dsp_preceq_phl":
             return a & 0xffff0000, initial
@@ -151,7 +178,9 @@ def observe(path, little, function, initial, arguments):
 def run(args, artifacts):
     fixture = Path(__file__).with_name("dsp.S")
     report = {"complete": False, "passed": [], "failures": [],
-              "fixture_sha256": digest(fixture), "neverd_sha256": digest(args.neverd)}
+              "fixture_sha256": digest(fixture), "neverd_sha256": digest(args.neverd),
+              "reference_source_revision": subprocess.check_output(["git", "-C", str(Path(__file__).resolve().parents[3] / "third_party/unicorn"), "rev-parse", "HEAD"], text=True).strip(),
+              "reference_library_sha256": digest(Path(uclib._name))}
     artifacts.write("results.json", report)
     resource = subprocess.check_output([str(args.clang), "-print-resource-dir"], text=True).strip()
     headers = artifacts.work / "includes"

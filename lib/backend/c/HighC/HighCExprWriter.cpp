@@ -2361,7 +2361,7 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
           E, Opts.TheArch, MIPSScalarHelpers.at(E.IntrinsicId),
           E.Operands.empty() ? std::nullopt : constAddress(*E.Operands[0]),
           [this, &E](const HighExpr &V, unsigned Index) {
-            return Index == 0 && mips::mergeLoad(E.IntrinsicId)
+            return Index == 0 && mips::mergeMemory(E.IntrinsicId)
                        ? addrStr(V, 0, true)
                        : exprStr(V);
           });

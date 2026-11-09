@@ -6,6 +6,26 @@
 // MIPS16 major opcode, classic scalar form, destination, source, signed imm8.
 // Extended immediates retain their full 16 bits; the scalar form owns
 // extension.
+
+// MIPS16e2 EXTEND major/selector, classic opcode and base/source register.
+// GP memory offsets and ADDIU are signed; logical immediates stay unsigned.
+#ifdef NEVERD_MIPS16E2_IMMEDIATE
+NEVERD_MIPS16E2_IMMEDIATE(0x00, 1, 9, 28)  // ADDIU gp
+NEVERD_MIPS16E2_IMMEDIATE(0x0d, 1, 15, 0)  // LUI
+NEVERD_MIPS16E2_IMMEDIATE(0x0d, 2, 13, RX) // ORI
+NEVERD_MIPS16E2_IMMEDIATE(0x0d, 3, 12, RX) // ANDI
+NEVERD_MIPS16E2_IMMEDIATE(0x0d, 4, 14, RX) // XORI
+NEVERD_MIPS16E2_IMMEDIATE(0x12, 1, 35, 28) // LW gp
+NEVERD_MIPS16E2_IMMEDIATE(0x12, 2, 33, 28) // LH gp
+NEVERD_MIPS16E2_IMMEDIATE(0x12, 3, 32, 28) // LB gp
+NEVERD_MIPS16E2_IMMEDIATE(0x12, 4, 37, 28) // LHU gp
+NEVERD_MIPS16E2_IMMEDIATE(0x12, 5, 36, 28) // LBU gp
+NEVERD_MIPS16E2_IMMEDIATE(0x1a, 1, 43, 28) // SW gp
+NEVERD_MIPS16E2_IMMEDIATE(0x1a, 2, 41, 28) // SH gp
+NEVERD_MIPS16E2_IMMEDIATE(0x1a, 3, 40, 28) // SB gp
+#undef NEVERD_MIPS16E2_IMMEDIATE
+#endif
+
 #ifdef NEVERD_MIPS16_IMMEDIATE
 NEVERD_MIPS16_IMMEDIATE(0x09, 9, RX, RX, true)   // ADDIU
 NEVERD_MIPS16_IMMEDIATE(0x0a, 10, 24, RX, false) // SLTI

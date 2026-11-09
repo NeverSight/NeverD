@@ -23279,6 +23279,42 @@ ordinary RAM accesses; ordinary dead-load fault delivery remains unqualified
 as documented in [MIPS support](mips.md#ordinary-memory-source-qualification).
 These functions do not qualify omitted MIPS16 instructions or general ABI forms.
 
+### MIPS16e2 and additional DSP/MSA arithmetic
+
+`MIPS16E2` checks all 28 admitted encoding forms in both byte orders, compact
+register aliases, bitfield limits, zero sources, GP memory widths, partial merge
+footprints and reused-decoder feature evidence. `MIPS16E2Pipeline` checks exact
+physical delay-slot widths and writable image-store bindings. Shared scalar
+store tests exercise every alignment, narrow writable spans, absent inputs and
+failure without partial writes. `MIPSCallMemory` checks that a partial overwrite
+invalidates a spilled callee or stack argument while preserving already
+captured registers. SELECT tests distinguish missing/unknown chosen
+values from unobserved arms and retain all 128 result bits.
+
+`mips16e2-roundtrip.py` recompiles the e2 fixture through both source backends
+at O0/O2 with adverse microMIPS defaults. It uses the same explicit tool arguments
+as `mips16-roundtrip.py`, with an output such as `build-mips/roundtrip-mips16e2`.
+The input is assembled with GNU `-mmips16e2` and its ABI flag checked. Generated
+old-MIPS16 code executes against manual-derived results, output memory, saved
+registers and both caller ISA tags. The pinned Unicorn cannot execute original
+e2 correctly; the report explicitly excludes that oracle and records no
+original-e2 equivalence claim.
+
+DSP word/carry tests cover sticky overflow, carry replacement versus
+preservation, condition-bit replacement, byte/halfword PICK, zero destinations,
+register aliases and missing state. MSA adds all four widths of absolute add,
+saturating add/subtract and signed/unsigned average/rounded average. Independent
+widened APInt expectations cover MIN+MIN, unsigned carries, negative ties and
+aliased complete vectors. The DSP/MSA source runners compare originals and both
+regenerated C routes under the pinned enabled 74Kf/P5600 models, including
+DSPControl and saved low FPR views. The pinned reference fixes MSA signed-limit
+construction and absolute `INT64_MIN` magnitudes, with QEMU's required wrapping
+arithmetic enabled in CMake builds. Original and regenerated execution must
+match all independent results; reports identify the source revision and actual
+loaded native-library hash. Ordinary pair padding, predecessor memory barriers,
+single-sided barriers at joins, depth/work exhaustion and non-entry analysis
+roots or exceptional/disconnected paths have separate call-recovery regressions.
+
 ### MIPS decode/lift and firmware performance
 
 `neverd-mips-bench` is an opt-in target, excluded from the default build:
@@ -23289,8 +23325,9 @@ build-mips/bin/neverd-mips-bench mips64el lift /path/to/owned-code.bin 100000
 ```
 
 Profiles are `mips`, `mipsel`, `mips64`, `mips64el`, `micromips`,
-`micromipsel`, `mips16`, `mips16el`, `mipsdsp`, `mipsdspel`, `mipsmsa` and
-`mipsmsael`. The DSP profiles explicitly select the admitted classic32 DSP
+`micromipsel`, `mips16`, `mips16el`, `mips16e2`, `mips16e2el`, `mipsdsp`,
+`mipsdspel`, `mipsmsa` and `mipsmsael`. The e2 profiles add explicit MIPS16e2
+feature evidence to MIPS16 encoding. The DSP profiles explicitly select the admitted classic32 DSP
 capability; MSA profiles select classic32 r5/o32 FP64 with the admitted integer
 vector instructions.
 Stages are `capstone`

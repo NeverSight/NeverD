@@ -3670,21 +3670,23 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
   };
   std::optional<AArch64ImmediateHighBases> ImageMemoryBases;
   std::function<void(const HighExpr &)> Visit = [&](const HighExpr &E) {
-    if (E.Kind == ExprKind::Call && mips::mergeLoad(E.IntrinsicId) &&
+    if (E.Kind == ExprKind::Call && mips::mergeMemory(E.IntrinsicId) &&
         mipsScalarHighShapeIsValid(E, Opts.TheArch)) {
-      const auto Load = *mips::mergeLoad(E.IntrinsicId);
+      const auto Load = *mips::mergeMemory(E.IntrinsicId);
+      const bool Store = mips::mergeStore(E.IntrinsicId).has_value();
       NoteAccessAddress(E.Operands[0]);
       if (const auto VA = constAddress(*E.Operands[0])) {
         const auto Access =
             mips::mergeAccess(Load, *VA, archLittleEndian(Opts.TheArch));
         requireBoundImportMemory(Access.First, Access.Count);
         if (const auto *Segment = Opts.Image->getSegmentFor(*VA)) {
-          if (!Segment->isReadable() || Access.First < Segment->VA ||
+          if (!(Store ? Segment->isWritable() : Segment->isReadable()) ||
+              Access.First < Segment->VA ||
               Access.First - Segment->VA > Segment->Size ||
               Access.Count > Segment->Size - (Access.First - Segment->VA))
             throw std::invalid_argument(kMIPSMergeImageAddress);
-          noteImageObject(Access.First, NdType::makeInt(1, false), false, true);
-          noteImageObject(*VA, NdType::makeInt(1, false), false, true);
+          noteImageObject(Access.First, NdType::makeInt(1, false), Store, true);
+          noteImageObject(*VA, NdType::makeInt(1, false), Store, true);
           auto &Object = ImageObjects[Access.First];
           Object.IndexedBytes =
               std::max<uint64_t>(Object.IndexedBytes, Access.Count);
