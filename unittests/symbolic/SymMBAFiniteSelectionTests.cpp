@@ -242,6 +242,22 @@ TEST(SymMBAFiniteSelection, RepeatedTestsNeedNoTableReading) {
   }
 }
 
+TEST(SymMBAFiniteSelection, OneConditionSelectionsKeepTheirSpelling) {
+  // A SIMD lane mask `c ? 0xFF : 0` and a two-case ordinal chain are already
+  // their shortest source spellings. Read as fields, the lane mask prints as
+  // `(uint8_t)(0 - (uint32_t)c)`.
+  SymContext C;
+  const auto X = C.mkVar("x", 8), Y = C.mkVar("y", 8);
+  const auto Lane = C.mkIte(C.mkSlt(X, Y), C.mkConst(8, 0xFF), C.mkConst(8, 0));
+  const auto Chain = C.mkIte(C.mkEq(X, C.mkConst(8, 0)), C.mkConst(32, 7),
+                             C.mkIte(C.mkEq(X, C.mkConst(8, 1)),
+                                     C.mkConst(32, 11), C.mkConst(32, 99)));
+  for (const auto Original : {Lane, Chain}) {
+    const auto R = simplifyMBADeep(C, Original, options());
+    EXPECT_EQ(R.Expr, Original) << C.toString(R.Expr);
+  }
+}
+
 TEST(SymMBAFiniteSelection, FullOrdinalPrefixStillRetainsItsOutsideDefault) {
   SymContext C;
   const auto Index = C.mkVar("index", 8);
