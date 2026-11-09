@@ -7321,7 +7321,8 @@ TEST(CallExitRegisters, CallStatusFlagsCannotReuseTheCallersOldValue) {
               << Source;
           std::string Oracle;
           llvm::raw_string_ostream Check(Oracle);
-          Check << "\nint64_t produce_flags(void) { ++calls; return 7; }\n"
+          Check << "\n__typeof__(produce_flags()) produce_flags(void) { "
+                   "++calls; return 7; }\n"
                    "int main(void) {\n"
                    "#if defined(__linux__) && defined(__x86_64__)\n"
                    "  const uint8_t bytes[] = {";
