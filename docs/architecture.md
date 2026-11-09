@@ -1459,17 +1459,26 @@ the final mapping is RELRO. An absolute constant (`N_ABS`) is not inferred to
 be a slid address.
 
 `installMachOObjectPatch` also connects this native object profile to the shared
-publication transaction. It prepares authenticated GOT slots before placement,
+publication transaction. Before final signing, native arm64e publication
+migrates threaded inputs through the existing checked chained-fixup converter;
+already chained inputs are unchanged. It prepares authenticated GOT slots before placement,
 installs compact/DWARF language records, and redirects each selected original
 entry with a single relative branch. The new function owns its signing prologue;
 the branch does not change LR. Explicit pointer providers are admitted by the
-existing dependency owner. After signing, recipe replay verifies every pointer
+existing dependency owner. The shared signing transaction passes the input
+CodeDirectory page size explicitly to codesign and retains exact page-size
+validation after reloading. After signing, recipe replay verifies every pointer
 slot and its RELRO contract, while the remaining section bytes must match the
 relocated object exactly. Both staging and publication use the same final
 unwind validator, including exact personality slot and LSDA identities.
 Failed receipts and pre-existing output paths do not publish or overwrite a
 file. This native C++ API does not enable the source/IR or lifted-image rebuild
 routes, nor the SDK compiler adapter's separate arm64e admission.
+The native object reader also accepts the Darwin linker contract from classic
+userspace ABI0 objects (`0x80000002`) to ABI1 macOS main executables
+(`0x81000002`). Both object and image must name only macOS, and the image must
+be `MH_EXECUTE`. Other differing raw subtypes remain rejected. This does not
+rewrite the output subtype or change the original `LC_MAIN` entry.
 
 Native compact language records retain LSDA addresses and personality slots.
 The arm64e personality slot uses IA/address diversity with zero discriminator;
@@ -1521,8 +1530,17 @@ Inline `LC_ID_DYLIB` metadata does not block otherwise available header space.
 
 Typed `ReadOnlyAfterFixups` storage is page-separated from both code and ordinary
 mutable data. Native `__AUTH_CONST`, `__DATA_CONST` and `__DATA,__const` inputs
-use a dedicated `__ND_CONST` segment with writable initial protections and
-`SG_READ_ONLY`; final recipe replay also checks that flag. Apple's
+use `SG_READ_ONLY` storage with writable initial protections; final recipe
+replay also checks that flag. Dylibs use a dedicated `__ND_CONST` segment.
+A main executable with an existing read-only segment reserves a new section in
+its verified, unowned zero tail, because XNU rejects a second
+`SG_READ_ONLY` segment. The compiled section retains its format-owned external
+placement and bytes through native relocation and authenticated fixup collection.
+Installation verifies its declared backing and zero destination before copying
+those bytes. The shared strict dyld reader supplies existing slot ownership,
+including zero-valued rebases beyond section boundaries. Existing addresses
+remain fixed and later symbol section ordinals are adjusted; occupied payloads
+and insufficient capacity reject without mutation. Apple's
 [linker maps the default constant section to read-only-after-fixup storage](https://github.com/apple-oss-distributions/ld64/blob/main/src/ld/Options.cpp),
 and [dyld uses the segment flag when applying its read-only protections](https://github.com/apple-oss-distributions/dyld/blob/main/mach_o/UnsafeHeader.h).
 ELF RELRO and automatic classification of MC-produced constant sections remain
@@ -1586,8 +1604,14 @@ Tests check both raw key bits for all four keys and the decoded names for IA/DA;
 the latter tool cannot independently qualify IB/DB or legacy rebases. Rebase
 replay and per-PC signed CFI comparisons retain their independent offline
 checks. Native execution qualifies the observed call/exception paths, not every
-possible frame state. Whole-image rebuilding and startup executable loading
-remain unqualified; the publication guard stays in place.
+possible frame state. General lifted-image rebuilding remains unqualified.
+Main executable publication has a separate four-case native object gate,
+covering the retained startup entry, new authenticated calls, RELRO, catches
+and cleanup at O0/O2 with compact/DWARF language records. That gate requires
+successful same-source compiler-original startup controls under the
+[explicit userspace-fixup profile](arm64e-native-validation.md); default system
+startup retains its observed B-key page-in fixup failure. Passing the
+prerequisite controls alone cannot qualify a published main executable.
 
 The shared AAPCS64 parameter placement owner describes Darwin fixed value
 spills with their natural size and alignment after either register bank is

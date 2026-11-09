@@ -1,0 +1,69 @@
+{
+  "run_url": "https://github.com/gmh5225/test_mac_intel/actions/runs/42684761389",
+  "source_revision": "ecb93958b046bdb22a5d256d18d4a278f97e3dbc",
+  "hosts": {
+    "macos-26": {
+      "probe": {
+        "sha256": "92e5db35fd346605ea992dcaa4899108b9bb9af9c2f35908e7045e911c772690",
+        "passed": true
+      },
+      "startup": {
+        "sha256": "5ad6f5427729c3606c38ff6c95a83a5f92c13d497f02e99917d8cac4f76b39c2",
+        "passed": true
+      },
+      "installation": {
+        "sha256": "fdb6f809ce6fe54c72e609f259bbeff9316db41aa991b0bfc5b62a6e6987b108",
+        "passed": true
+      },
+      "signing.xml": {
+        "tests": 33,
+        "failed": 0,
+        "skipped": 0
+      },
+      "installation/native-runtime.xml": {
+        "tests": 16,
+        "failed": 0,
+        "skipped": 0
+      },
+      "owned_build_removed": true,
+      "whole_image_publication_qualified": false
+    },
+    "xcode-27": {
+      "probe": {
+        "sha256": "ebb8e3c8fbc7b0d03511294107cd58d0fd756bbfebba71fd9a62eb4af8291b43",
+        "passed": true
+      },
+      "startup": {
+        "sha256": "3bc5ecdc61800a9cc91996872bbe8409481135a7c164fcb07904c03622c2661e",
+        "passed": true
+      },
+      "installation": {
+        "sha256": "f136ca41e6df225b495fef7951d079723c64ced5bd6515a8a6c4e84de5b46079",
+        "passed": true
+      },
+      "signing.xml": {
+        "tests": 33,
+        "failed": 0,
+        "skipped": 0
+      },
+      "installation/native-runtime.xml": {
+        "tests": 16,
+        "failed": 0,
+        "skipped": 0
+      },
+      "owned_build_removed": true,
+      "whole_image_publication_qualified": false
+    }
+  },
+  "date": "2026-11-10",
+  "timezone": "Asia/Singapore",
+  "environment_revision": "c33fa8f8b479b65f7a8155e0e952f9c278a8cc6c",
+  "startup_fixup_loader": "userspace",
+  "system_startup_qualified": false,
+  "native_object_publication_qualified": true,
+  "whole_image_publication_qualified": false,
+  "limits": [
+    "This run qualifies native object publication into dylibs, not published main executables or lifted/source/IR image production.",
+    "The explicit userspace dyld startup profile remains separate from the failing system-default startup control."
+  ]
+}

@@ -19,6 +19,7 @@ PATCH_STORAGE_TEXT(kExtent, "section exceeds its placement image")
 PATCH_STORAGE_TEXT(kSplit,
                    "writable storage is not separated from code by whole pages")
 PATCH_STORAGE_TEXT(
-    kRelro, "RELRO requires a separate leading Mach-O writable page range")
+    kRelro,
+    "RELRO requires a Mach-O writable page range or reserved original storage")
 
 #undef PATCH_STORAGE_TEXT
