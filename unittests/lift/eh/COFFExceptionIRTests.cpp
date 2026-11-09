@@ -6663,12 +6663,14 @@ TEST(COFFExceptionIR, LLVMCRefusesUnrepresentedSegmentedStores) {
 }
 
 TEST(COFFExceptionIR, SourceX86RefusesUnknownOrSharedCleanupWithoutMutation) {
-  for (bool Shared : {false, true}) {
-    SCOPED_TRACE(Shared);
+  for (unsigned Case : {0u, 1u, 2u}) {
+    SCOPED_TRACE(Case);
     auto Func = sourceRegistrationFinally(false);
-    if (Shared)
+    if (Case == 1)
       Func.ExceptionMetadata->Registration->Scopes.push_back(
           {-1, 0, 0x401020, true});
+    else if (Case == 2)
+      Func.RegistrationStates->Display->NoValueCalls.clear();
     else
       Func.RegistrationStates->Display->Stretches.front().Levels = {0, -1};
     llvm::LLVMContext Context;

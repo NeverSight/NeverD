@@ -482,18 +482,22 @@ bool MedLLVMEmitter::emitSourceX86RegistrationSEH(
           return false;
         R.BodyCalls.push_back(Id);
       }
-      // A call into the body past its start enters code the clause cannot.
+      // Every ordinary entry must be one of the calls planned above. Moving
+      // the body into a pad cannot leave a call to an unrepresented helper,
+      // nor can a clause represent an entry into the middle of that body.
       for (const MedBlock &Block : Func.Blocks)
         for (const MedOp &Op : Block.Ops)
-          if (Op.Opcode == NdOp::CALL && Op.NumInputs == 1 &&
-              Op.Inputs[0].isConst() &&
-              Op.Inputs[0].ConstVal != Scope.HandlerVA &&
-              llvm::any_of(Body, [&](int Id) {
+          if (Op.Opcode == NdOp::CALL && Op.NumInputs >= 1 &&
+              Op.Inputs[0].isConst() && llvm::any_of(Body, [&](int Id) {
                 const MedBlock &B = *ById.at(Id);
                 return Op.Inputs[0].ConstVal >= B.StartAddr &&
                        Op.Inputs[0].ConstVal < B.EndAddr;
-              }))
-            return false;
+              })) {
+            const BlockPlan *Caller = PlanOf(Block.Id);
+            if (Op.Inputs[0].ConstVal != Scope.HandlerVA || !Caller ||
+                Caller->Special != &Op || Facts.LocalUnwinds.count(Op.Addr))
+              return false;
+          }
       continue;
     }
     const BlockPlan *HandlerPlan = PlanOf(RootId);
