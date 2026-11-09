@@ -21697,7 +21697,14 @@ object words check signed addends and the full two-bit authentication key.
 O0/O2, installs sixteen recipes including a new libSystem import both in
 existing storage and in newly appended RX/RW segments, re-signs with the
 production signer, verifies the result strictly and asks Apple's
-`dyld_info` to decode every target, key and discriminator for modern chains.
+`dyld_info -imports -fixup_chain_details` to decode every target, import
+identity, addend, key and discriminator for modern chains. This uses raw chain
+locations mapped back to the owning segment. It avoids the symbolicated
+`-fixups` printer: Apple's [section lookup](https://github.com/apple-oss-distributions/dyld/blob/main/other-tools/SymbolicatedImage.cpp)
+can return an index beyond the section inventory for sectionless segments,
+which its [name accessors](https://github.com/apple-oss-distributions/dyld/blob/main/other-tools/SymbolicatedImage.h)
+then dereference. Qualification observed a `dyld_info` `SIGSEGV` in string
+printing; a successful retry does not remove that unsafe oracle path.
 The legacy matrix uses `ld-classic -no_fixup_chains` and `otool -dyld_info` to
 independently decode bind diversity, address diversity and symbols. Current
 `dyld_info` refuses old arm64e bind opcodes, and `otool` does not list legacy

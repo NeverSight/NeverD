@@ -51,6 +51,110 @@ using namespace neverd;
   constexpr llvm::StringLiteral Name[] = {__VA_ARGS__};
 #include "MachOAuthenticatedNativeFixtures.def"
 
+void checkAppleChainedRecipes(llvm::StringRef Info,
+                              llvm::ArrayRef<uint8_t> Binary,
+                              llvm::ArrayRef<MachOAuthenticatedFixup> Fixups) {
+  // Apple's symbolicated -fixups printer indexes past its section inventory
+  // for sectionless segments. Chain details and imports do not use that path.
+  ASSERT_TRUE(Info.contains(kFixupsHeading));
+  ASSERT_TRUE(Info.contains(kImportsHeading));
+  llvm::SmallVector<llvm::StringRef> Lines;
+  Info.split(Lines, '\n');
+  uint64_t PreferredAddress = 0;
+  forEachMachOLoadCommand(Binary.data(), Binary.size(),
+                          [&](const uint8_t *C, uint32_t ID, uint32_t, bool) {
+                            if (ID == llvm::MachO::LC_SEGMENT_64) {
+                              const auto Segment = readMachOSegment(C, true);
+                              if (!Segment.FileOff && Segment.FileSize)
+                                PreferredAddress = Segment.VMAddr;
+                            }
+                          });
+  const auto Number = [](llvm::StringRef Value, llvm::StringRef Suffix,
+                         uint64_t &Result) {
+    return Value.consume_back(Suffix) && !Value.getAsInteger(0, Result);
+  };
+  for (const auto &Fixup : Fixups) {
+    uint64_t FileOffset = 0;
+    unsigned Owners = 0;
+    forEachMachOLoadCommand(
+        Binary.data(), Binary.size(),
+        [&](const uint8_t *C, uint32_t ID, uint32_t, bool) {
+          if (ID != llvm::MachO::LC_SEGMENT_64)
+            return;
+          const auto Segment = readMachOSegment(C, true);
+          if (Fixup.Address >= Segment.VMAddr &&
+              rangeInBounds(Fixup.Address - Segment.VMAddr, kPointerBytes,
+                            Segment.FileSize)) {
+            ++Owners;
+            FileOffset = Segment.FileOff + Fixup.Address - Segment.VMAddr;
+          }
+        });
+    ASSERT_EQ(Owners, 1u);
+    unsigned Matches = 0;
+    for (auto Line : Lines) {
+      llvm::SmallVector<llvm::StringRef> Fields;
+      Line.trim().split(Fields, ' ', -1, false);
+      uint64_t Address;
+      if (Fields.size() != kDetailFieldCount ||
+          !Number(Fields[kDetailAddress], kColon, Address) ||
+          Address != FileOffset)
+        continue;
+      ++Matches;
+      uint64_t Raw, Diversity, AddressDiversity, Target;
+      ASSERT_FALSE(Fields[kDetailRaw].getAsInteger(0, Raw));
+      EXPECT_EQ(Raw, readLE<uint64_t>(Binary.data() + FileOffset));
+      ASSERT_TRUE(Number(Fields[kDetailDiversity], kComma, Diversity));
+      ASSERT_TRUE(
+          Number(Fields[kDetailAddressDiversity], kComma, AddressDiversity));
+      ASSERT_TRUE(Number(Fields[kDetailTarget], kClosingParenthesis, Target));
+      ASSERT_TRUE(Fields[kDetailKey].consume_back(kComma));
+      ASSERT_TRUE(Fields[kDetailKind].consume_back(kColon));
+      const auto &Recipe = Fixup.Recipe;
+      EXPECT_EQ(Diversity, Recipe.Diversity);
+      EXPECT_EQ(AddressDiversity, unsigned(Recipe.AddressDiversity));
+      EXPECT_EQ(Fields[kDetailKey], kKeyNames[Recipe.Key]);
+      EXPECT_EQ(Fields[kDetailKind],
+                Recipe.Symbol.empty() ? kAuthRebase : kAuthBind);
+      if (Recipe.Symbol.empty()) {
+        EXPECT_EQ(Fields[kDetailTargetLabel], kTargetLabel);
+        EXPECT_EQ(Target, Recipe.Target - PreferredAddress);
+        continue;
+      }
+      EXPECT_EQ(Fields[kDetailTargetLabel], kImportLabel);
+      unsigned Imports = 0;
+      for (auto ImportLine : Lines) {
+        llvm::SmallVector<llvm::StringRef> Import;
+        ImportLine.trim().split(Import, ' ', -1, false);
+        const unsigned Weak = unsigned(Recipe.WeakImport);
+        uint64_t Ordinal;
+        if (Import.size() != kImportFieldCount + Weak ||
+            Import[kImportFrom + Weak] != kFromLabel ||
+            Import[kImportOrdinal].getAsInteger(0, Ordinal) ||
+            Ordinal != Target)
+          continue;
+        ++Imports;
+        if (Weak)
+          EXPECT_EQ(Import[kImportFrom], kWeakImportLabel);
+        const auto [Symbol, AddendText] =
+            Import[kImportSymbol].split(kAddendSeparator);
+        uint64_t Addend = 0;
+        if (!AddendText.empty())
+          ASSERT_FALSE(AddendText.getAsInteger(0, Addend));
+        EXPECT_EQ(Symbol, Recipe.Symbol);
+        EXPECT_EQ(Addend, uint64_t(Recipe.Addend));
+        ASSERT_TRUE(
+            Import[kImportModule + Weak].consume_back(kClosingParenthesis));
+        EXPECT_EQ(Import[kImportModule + Weak],
+                  llvm::sys::path::filename(Recipe.Module)
+                      .split(kLibraryVersionSeparator)
+                      .first);
+      }
+      EXPECT_EQ(Imports, 1u);
+    }
+    EXPECT_EQ(Matches, 1u);
+  }
+}
+
 void checkPreservedSignedUnwind(const BinaryImage &Before,
                                 const BinaryImage &After) {
   const auto OldCompact = macho_unwind::parseCompactUnwind(Before);
@@ -301,19 +405,19 @@ TEST_P(MachOArm64eNativeInstallation,
   ASSERT_TRUE(bool(Info));
   EXPECT_TRUE((*Info)->getBuffer().contains(Threaded ? kThreadedHeading
                                                      : kFixupsHeading));
-  // Check Apple's independently decoded target and signing schema. Its legacy
-  // otool decoder drops the low key bit; check that field from the printed
-  // pointer as well and use the decoded key name only where it is reliable.
-  llvm::SmallVector<llvm::StringRef> Lines;
-  (*Info)->getBuffer().split(Lines, '\n');
-  for (const auto &Fixup : Fixups) {
-    if (Threaded && Fixup.Recipe.Symbol.empty())
-      continue; // Apple's otool reports the legacy bind table only.
-    unsigned Matches = 0;
-    for (auto Line : Lines) {
-      llvm::SmallVector<llvm::StringRef> Fields;
-      Line.trim().split(Fields, ' ', -1, false);
-      if (Threaded) {
+  if (!Threaded)
+    checkAppleChainedRecipes((*Info)->getBuffer(), Bytes, Fixups);
+  else {
+    // Apple's legacy decoder drops the low key bit and reports only binds.
+    llvm::SmallVector<llvm::StringRef> Lines;
+    (*Info)->getBuffer().split(Lines, '\n');
+    for (const auto &Fixup : Fixups) {
+      if (Fixup.Recipe.Symbol.empty())
+        continue;
+      unsigned Matches = 0;
+      for (auto Line : Lines) {
+        llvm::SmallVector<llvm::StringRef> Fields;
+        Line.trim().split(Fields, ' ', -1, false);
         if (Fields.size() != kThreadedInfoCount)
           continue;
         uint64_t Address;
@@ -334,48 +438,9 @@ TEST_P(MachOArm64eNativeInstallation,
         if (!(Fixup.Recipe.Key & kThreadedToolMissingKeyBit))
           EXPECT_EQ(Fields[kThreadedInfoKey], kKeyNames[Fixup.Recipe.Key]);
         EXPECT_EQ(Fields[kThreadedInfoSymbol], Fixup.Recipe.Symbol);
-        continue;
       }
-      // dyld_info leaves both name columns blank for sectionless segments.
-      if (!AppendSegments) {
-        if (Fields.size() != kInfoFieldCount + kInfoLocationFields ||
-            Fields[kInfoSegment] != kDataSegment ||
-            Fields[kInfoSection] != kDataSection)
-          continue;
-        Fields.erase(Fields.begin(), Fields.begin() + kInfoLocationFields);
-      }
-      if (Fields.size() != kInfoFieldCount)
-        continue;
-      uint64_t Address;
-      if (Fields[kInfoAddress].getAsInteger(0, Address) ||
-          Address != Fixup.Address)
-        continue;
-      ++Matches;
-      const auto &Recipe = Fixup.Recipe;
-      EXPECT_EQ(Fields[kInfoKind],
-                Recipe.Symbol.empty() ? kAuthRebase : kAuthBind);
-      if (Recipe.Symbol.empty()) {
-        uint64_t Target;
-        ASSERT_FALSE(Fields[kInfoTarget].getAsInteger(0, Target));
-        EXPECT_EQ(Target, Recipe.Target);
-      } else {
-        EXPECT_TRUE(Fields[kInfoTarget].ends_with(
-            std::string(kLibrarySeparator) + Recipe.Symbol));
-      }
-      ASSERT_TRUE(Fields[kInfoDiversity].consume_front(kDiversityPrefix));
-      unsigned Diversity;
-      ASSERT_FALSE(Fields[kInfoDiversity].getAsInteger(0, Diversity));
-      EXPECT_EQ(Diversity, Recipe.Diversity);
-      ASSERT_TRUE(Fields[kInfoAddressDiversity].consume_front(kAddressPrefix));
-      unsigned AddressDiversity;
-      ASSERT_FALSE(
-          Fields[kInfoAddressDiversity].getAsInteger(0, AddressDiversity));
-      EXPECT_EQ(AddressDiversity, unsigned(Recipe.AddressDiversity));
-      ASSERT_TRUE(Fields[kInfoKey].consume_front(kKeyPrefix));
-      ASSERT_TRUE(Fields[kInfoKey].consume_back(kClosingParenthesis));
-      EXPECT_EQ(Fields[kInfoKey], kKeyNames[Recipe.Key]);
+      EXPECT_EQ(Matches, 1u);
     }
-    EXPECT_EQ(Matches, 1u);
   }
   auto Installed = llvm::MemoryBuffer::getFile(InstalledPath);
   ASSERT_TRUE(bool(Installed));
@@ -737,6 +802,8 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
   ASSERT_TRUE(bool(Info));
   EXPECT_TRUE((*Info)->getBuffer().contains(kProviderNativeFunction));
   EXPECT_TRUE((*Info)->getBuffer().contains(kProviderNativeData));
+  if (!Threaded)
+    checkAppleChainedRecipes((*Info)->getBuffer(), Bytes, *Recipes);
   Input = llvm::MemoryBuffer::getFile(InstalledPath);
   ASSERT_TRUE(bool(Input));
   auto Final = llvm::arrayRefFromStringRef((*Input)->getBuffer());
