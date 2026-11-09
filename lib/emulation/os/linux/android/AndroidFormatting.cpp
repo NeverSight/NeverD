@@ -37,7 +37,7 @@ public:
                                          : 1),
         Arguments(Model, Call, FormatArgument + 1, Remaining) {}
 
-  llvm::Expected<uint64_t> run();
+  BionicResult run();
   llvm::Expected<std::string> logMessage();
   BionicResult resultError(llvm::Error Error);
 
@@ -292,24 +292,20 @@ llvm::Error Bionic::StringFormatter::render(llvm::StringRef Format) {
   return llvm::Error::success();
 }
 
-llvm::Expected<uint64_t> Bionic::StringFormatter::run() {
+BionicResult Bionic::StringFormatter::run() {
   const auto &A = Call.Arguments;
   Capacity = CheckedSprintf ? A[2] : Bounded ? A[1] : MaxCount + 1;
   // API 28 ignores flags. The snprintf object guard precedes every guest
   // read, including format and va_list admission; size_t stays full-width.
   if (CheckedSnprintf && Capacity > A[3])
-    return unsupported(diagnostic::FormatFortify);
+    return Model.fortifyBufferFailure(Call, "vsnprintf", Capacity, A[3]);
   // Large n has version-specific FILE counter behavior in Android 9. Do not
   // import host behavior, including checked sprintf's SIZE_MAX -> SSIZE_MAX
-  // mapping, or promise the overflow/fortify failure path.
+  // mapping.
   if ((Bounded || CheckedSprintf) && Capacity > MaxCount)
-    return unsupported(diagnostic::FormatCapacity);
+    return resultError(unsupported(diagnostic::FormatCapacity));
   if (auto E = renderArguments())
-    return std::move(E);
-  // A checked sprintf must fit its final NUL. Stop before publishing the
-  // retained prefix: Bionic's partial writes and abort are not modeled.
-  if (CheckedSprintf && Count >= Capacity)
-    return unsupported(diagnostic::FormatFortify);
+    return resultError(std::move(E));
   if (Capacity) {
     Output.push_back(0);
     if (auto E = Model.access(A[0], Output.size(), Write))
@@ -317,7 +313,13 @@ llvm::Expected<uint64_t> Bionic::StringFormatter::run() {
     if (auto E = Model.CPU.write(A[0], Output))
       return std::move(E);
   }
-  return Count;
+  // API 28 checks vsnprintf's complete count only after its retained prefix
+  // and terminating NUL have been written.
+  if (CheckedSprintf && Count == MaxCount)
+    return resultError(unsupported(diagnostic::FormatFortifyCount));
+  if (CheckedSprintf && Count >= Capacity)
+    return Model.fortifyBufferFailure(Call, "vsprintf", Count + 1, Capacity);
+  return Model.value(Count);
 }
 
 llvm::Error Bionic::StringFormatter::renderArguments() {
@@ -369,10 +371,7 @@ BionicResult Bionic::StringFormatter::resultError(llvm::Error Error) {
 
 BionicResult Bionic::format(const NativeCallEvent &Call) {
   StringFormatter Formatter(*this, Call);
-  auto Value = Formatter.run();
-  if (!Value)
-    return Formatter.resultError(Value.takeError());
-  return std::optional<BionicValue>(*Value);
+  return Formatter.run();
 }
 
 BionicResult Bionic::formatLogCall(const NativeCallEvent &Call) {
@@ -397,6 +396,19 @@ BionicResult Bionic::assertLogCall(const NativeCallEvent &Call) {
   if (!Message)
     return Formatter.resultError(Message.takeError());
   const llvm::StringRef Buffers[] = {*Message, "\n"};
+  auto Written = writeStderr(Buffers);
+  if (!Written || !*Written)
+    return Written;
+  auto Logged =
+      textLogWrite(0, 7, Call.Arguments[1], llvm::StringRef(*Message));
+  if (!Logged)
+    return Logged.takeError();
+  if (!*Logged)
+    return std::optional<BionicValue>();
+  return abortCall(Call);
+}
+
+BionicResult Bionic::writeStderr(llvm::ArrayRef<llvm::StringRef> Buffers) {
   for (;;) {
     auto Written = Kernel.writeBuffers(linux_model::StandardError, Buffers,
                                        Threads ? Threads->kernel() : nullptr);
@@ -407,16 +419,9 @@ BionicResult Bionic::assertLogCall(const NativeCallEvent &Call) {
       return Adapted;
     // TEMP_FAILURE_RETRY repeats only EINTR, never a short write or EBADF.
     if (**Written != uint64_t(0) - linux_model::InterruptedCall)
-      break;
+      return Adapted;
     if (auto E = access(0, 0, 0))
       return std::move(E);
   }
-  auto Logged =
-      textLogWrite(0, 7, Call.Arguments[1], llvm::StringRef(*Message));
-  if (!Logged)
-    return Logged.takeError();
-  if (!*Logged)
-    return std::optional<BionicValue>();
-  return abortCall(Call);
 }
 } // namespace neverd::emulation::android_model

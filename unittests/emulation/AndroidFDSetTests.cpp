@@ -70,8 +70,15 @@ protected:
     EXPECT_EQ(R.MemorySnapshots[0].Bytes, Expected);
   }
   void rejected(const ProcessResult &R, unsigned Mode, const char *Diagnostic) {
-    EXPECT_EQ(R.Stop, ProcessStopReason::RuntimeFailure) << R.Diagnostic;
-    EXPECT_NE(R.Diagnostic.find(Diagnostic), std::string::npos);
+    const bool Fortify = llvm::StringRef(Diagnostic).starts_with("FORTIFY");
+    EXPECT_EQ(R.Stop, Fortify ? ProcessStopReason::UnsupportedService
+                              : ProcessStopReason::RuntimeFailure)
+        << R.Diagnostic;
+    EXPECT_NE(R.Diagnostic.find(Fortify ? "async-safe text log write contract"
+                                        : Diagnostic),
+              std::string::npos);
+    if (Fortify)
+      EXPECT_TRUE(llvm::StringRef(R.StandardError).starts_with("FORTIFY: FD_"));
     EXPECT_FALSE(R.ReturnValue);
     ASSERT_FALSE(R.NativeCalls.empty());
     EXPECT_EQ(R.NativeCalls.back().Name, Names[Mode]);

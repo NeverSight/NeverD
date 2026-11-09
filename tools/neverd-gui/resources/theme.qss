@@ -101,8 +101,12 @@ QPushButton { background: ${Button}; color: ${ButtonText}; border: 1px solid ${B
 QPushButton:hover { background: ${ToolBarHover}; }
 QPushButton:default { background: ${ButtonPrimary}; color: ${ButtonPrimaryText}; border: 1px solid ${ButtonPrimary}; }
 QPushButton:default:hover { background: ${ButtonPrimaryHover}; }
-QPushButton:disabled { color: ${DisabledText}; }
-/* A primary button fades while it cannot act, as Visual Studio Code's does. */
+/* A button that cannot act gives up its fill but keeps its outline and a
+   dimmed label, as Windows 11 draws a disabled button and as the disabled
+   check box indicators below are drawn. */
+QPushButton:disabled { background: transparent; color: ${DisabledText}; }
+/* A primary button that cannot act keeps a faint accent, so a dialog's
+   default action stays recognizable, and its label stays legible on it. */
 QPushButton:default:disabled { background: ${ButtonPrimaryDisabled}; border: 1px solid transparent; color: ${ButtonPrimaryDisabledText}; }
 QDialogButtonBox { dialogbuttonbox-buttons-have-icons: 0; }
 QCheckBox, QRadioButton, QLabel, QGroupBox { color: ${WindowText}; }

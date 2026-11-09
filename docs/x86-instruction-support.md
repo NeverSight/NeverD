@@ -1397,8 +1397,9 @@ the portable builtins on each backend and the legacy Microsoft route.
 NeverD now selects native LLVM calls for the 13 owned VMX operand forms and
 five SVM operations when the SDK supplies the qualified explicit-address APIs.
 The shared mapping also covers long-mode SVM address-size overrides. VMFUNC
-still uses the existing assembly contract: its bounded native API requires
-proof of EAX=0, which the generic two-register contract does not provide.
+now selects the native EPTP-switch API when the typed EAX operand is proven
+zero. Unknown/nonzero leaves retain the original two-register assembly
+contract; the named leaf-zero API cannot represent arbitrary future leaves.
 Old SDKs retain their validated assembly lowering until the final release pin
 changes; no unknown `llvm.*` declaration is fabricated.
 
@@ -4701,8 +4702,9 @@ NeverC also exposes `__builtin_ia32_invlpgb32` and the EPTP-switch VMFUNC API
 in i386. INVLPGB retains the complete address/control word, EDX IDs and ECX
 count. Its long-mode address-size override stays distinct. VMFUNC's named
 EPTP-switch API binds EAX=0 and transports all 32 ECX bits; it does not mask
-an invalid selector into range. A generic lifted VMFUNC still requires its
-own leaf/state proof before it can use that specialized native interface.
+an invalid selector into range. The November 9 integration below now supplies
+typed constant leaf-zero proof across the lifted LLVM and both C routes.
+Unknown/nonzero leaves still retain their original assembly transport.
 
 Capstone now reports the implicit accumulator read at the code-mode width,
 including redundant operand/address prefixes. The strict lifter rejects
@@ -4774,3 +4776,34 @@ index. The compiler change does not extend the x64 continuation provider's
 guest modes or qualify Windows/Darwin i386 source ABIs, physical MPX/RTM,
 general transactional rollback or the remaining full-machine execution gates.
 LLVM release and production pin updates remain gated on that wider work.
+
+## Proven VMFUNC EPTP-switch source integration (2026-11-09)
+
+VMFUNC with a proven complete EAX=0 now uses
+`llvm.x86.vmfunc.eptp.switch` and NeverC's
+`__builtin_ia32_vmfunc_eptp_switch` through the shared native plan. Only that
+constant leaf argument is removed. ECX retains all 32 bits, including 512,
+indices with high bits set and all-ones values; hardware owns invalid-index
+VM exits. Partial AX writes do not establish the proof. High RAX bits do not
+change an independently proven EAX value. Unknown/nonzero leaves keep the
+original two-register instruction transport.
+
+[The Intel SDM, volume 3C, section 26.5.6.3](https://cdrdv2-public.intel.com/774497/326019-sdm-vol-3c.pdf)
+specifies that leaf zero selects EPTP switching, preserves registers and flags,
+and checks the complete ECX index. The compiler interface keeps unknown memory
+effects and supplies no fabricated status. Its C renderer rejects narrowed
+operands/effects, speculative or assumed-returning calls and unsupported names.
+A dedicated capability macro selects NeverC's native API independently of
+other virtualization builtins; stock Clang retains the exact assembly.
+
+The [dated qualification](evidence/x86-vmfunc-source-2026-11-09.json) records
+both SDK builds, complete-source comparisons, deliberate corruptions and
+existing VMX/SVM regressions. All 35 selected tests pass without skips; the
+1,666 unique native/C objects pass 4,998 controlled comparisons and reject
+9,426 deliberate corruptions. The unchanged VMX/SVM source matrix additionally
+passes 1,776 NeverC compilations. Identical cross-SDK products are counted once.
+These are compiler transport and controlled memory-completion checks. They do not qualify successful physical EPT
+switching, VM-exit/fault continuation or a new full-machine state domain.
+LLVM and NeverC already provide the required native API; neither needs a new
+compiler change for this integration. The global release gate remains open,
+and the production LLVM r6 pin and gitlink remain unchanged.

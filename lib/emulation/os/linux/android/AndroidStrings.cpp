@@ -21,7 +21,8 @@ BionicResult Bionic::copyBoundedString(const NativeCallEvent &Call) {
   if ((Name == symbol::StrncpyChk || Name == symbol::StrncpyChk2 ||
        Name == symbol::StrlcpyChk) &&
       Count > A[3])
-    return failure(diagnostic::FortifyWritePrefix + Name);
+    return fortifyBufferFailure(
+        Call, Name == symbol::StrlcpyChk ? "strlcpy" : "strncpy", Count, A[3]);
   if (Complete || Name == symbol::Strlcpy || Name == symbol::StrlcpyChk) {
     // strlcpy returns the complete source length even when no bytes fit.
     // Stage the terminated source before publishing either copy's effect.
@@ -32,7 +33,7 @@ BionicResult Bionic::copyBoundedString(const NativeCallEvent &Call) {
     // API 28 ARM64 checks strlen(src) + 1 before accessing the destination.
     // Source faults and scan budgets therefore precede fortify refusal.
     if (Name == symbol::StrcpyChk && Length >= Count)
-      return failure(diagnostic::FortifyWritePrefix + Name);
+      return fortifyBufferFailure(Call, "strcpy", Length + 1, Count);
     if (!Complete && !Count)
       return value(Length);
     const uint64_t Copied = Complete ? Length : std::min(Length, Count - 1);
@@ -80,12 +81,13 @@ BionicResult Bionic::copyBoundedString(const NativeCallEvent &Call) {
   // Recheck the deadline after staging, before publishing any guest bytes.
   if (auto E = access(A[0], Count, Write))
     return std::move(E);
-  // API 28 checks the consumed source extent after copying, including NUL.
-  // Retain the shared model's atomic refusal instead of pre-abort writes.
-  if (Name == symbol::StrncpyChk2 && ReadCount > A[4])
-    return failure(diagnostic::FortifyReadPrefix + Name);
   if (auto E = CPU.write(A[0], Bytes))
     return std::move(E);
+  // API 28 checks the consumed source extent after copying, including NUL
+  // and destination padding. The abort handler observes those written bytes.
+  if (Name == symbol::StrncpyChk2 && ReadCount > A[4])
+    return fortifyFatal(Call, "strncpy: detected read past end of " +
+                                  llvm::Twine(A[4]) + "-byte buffer");
   return value(A[0]);
 }
 
@@ -96,12 +98,16 @@ BionicResult Bionic::appendCheckedString(const NativeCallEvent &Call) {
   if (Bounded && !A[2])
     return value(A[0]);
   const uint64_t Extent = A[Bounded ? 3 : 2];
-  auto Length = stringLengthValue(A[0], Extent, symbol::StrlenChk);
-  if (!Length)
-    return Length.takeError();
+  NativeCallEvent LengthCall = Call;
+  LengthCall.Name = symbol::StrlenChk;
+  LengthCall.Arguments = {A[0], Extent};
+  auto Measured = stringLength(LengthCall);
+  if (!Measured || !*Measured || !std::holds_alternative<uint64_t>(**Measured))
+    return Measured;
+  const uint64_t Length = std::get<uint64_t>(**Measured);
   // The shared checked scan proves a readable NUL inside the object extent.
-  const uint64_t Output = A[0] + *Length;
-  const uint64_t Remaining = Extent - *Length;
+  const uint64_t Output = A[0] + Length;
+  const uint64_t Remaining = Extent - Length;
   const uint64_t Limit =
       Bounded ? std::min(A[2], Options.MemoryLimit) : Options.MemoryLimit;
   std::vector<uint8_t> Bytes;
@@ -114,8 +120,7 @@ BionicResult Bionic::appendCheckedString(const NativeCallEvent &Call) {
     if (!C)
       return C.takeError();
     ReadCount = I + 1;
-    // Preserve source/read, destination/write and fortify check order while
-    // staging the effect. Abort paths never publish pre-abort guest bytes.
+    // Preserve source/read, destination/write and fortify check order.
     if (auto E = access(Output + I, 1, Write))
       return std::move(E);
     if (!*C) {
@@ -125,8 +130,18 @@ BionicResult Bionic::appendCheckedString(const NativeCallEvent &Call) {
     Bytes.push_back(*C);
     // Both checked entries reject a missing terminator slot before reading
     // the next source byte; strncat checks this before its count can end.
-    if (Bytes.size() == Remaining)
-      return failure(diagnostic::FortifyWritePrefix + Call.Name);
+    if (Bytes.size() == Remaining) {
+      if (A[0] <= A[1] ? A[1] - A[0] < Length + Bytes.size()
+                       : A[0] - A[1] < ReadCount)
+        return failure(diagnostic::StringAppendOverlap);
+      if (auto E = CPU.write(Output, Bytes))
+        return std::move(E);
+      // The ARM64 strcat C implementation prints the remaining extent,
+      // which is zero at this check, not its original object size.
+      return fortifyFatal(
+          Call, Bounded ? "strncat: prevented write past end of buffer"
+                        : "strcat: prevented write past end of 0-byte buffer");
+    }
   }
   if (!Terminated && (!Bounded || Bytes.size() != A[2]))
     return failure(diagnostic::StringScanLimit);
@@ -134,7 +149,7 @@ BionicResult Bionic::appendCheckedString(const NativeCallEvent &Call) {
   // Also admit the synthesized NUL when a count ended the source scan.
   if (auto E = access(Output, Bytes.size(), Write))
     return std::move(E);
-  const uint64_t DestinationSize = *Length + Bytes.size();
+  const uint64_t DestinationSize = Length + Bytes.size();
   if (A[0] <= A[1] ? A[1] - A[0] < DestinationSize : A[0] - A[1] < ReadCount)
     return failure(diagnostic::StringAppendOverlap);
   if (auto E = CPU.write(Output, Bytes))
@@ -314,7 +329,7 @@ BionicResult Bionic::findCharacter(const NativeCallEvent &Call) {
   // The checked memory entry admits the whole count before any read, even
   // when an early match could have used fewer bytes.
   if (Name == symbol::MemchrChk && A[2] > A[3])
-    return failure(diagnostic::FortifyReadPrefix + Name);
+    return fortifyBufferFailure(Call, "memchr", A[2], A[3], true);
   bool Fortified = Name == symbol::StrchrChk || Name == symbol::StrrchrChk;
   bool FindLast = Name == symbol::Strrchr || Name == symbol::StrrchrChk;
   uint8_t Character = static_cast<uint8_t>(A[1]);
@@ -344,7 +359,9 @@ BionicResult Bionic::findCharacter(const NativeCallEvent &Call) {
     return failure(diagnostic::MemoryLimit);
   }
   if (Fortified && Bound <= Options.MemoryLimit)
-    return failure(diagnostic::FortifyReadPrefix + Name);
+    return fortifyFatal(Call,
+                        FindLast ? "strrchr: prevented read past end of buffer"
+                                 : "strchr: prevented read past end of buffer");
   return failure(diagnostic::StringScanLimit);
 }
 
@@ -422,6 +439,9 @@ BionicResult Bionic::stringLength(const NativeCallEvent &Call) {
       stringLengthValue(Call.Arguments[0], Call.Arguments[1], Call.Name);
   if (!Length)
     return Length.takeError();
+  // __strlen_chk scans first, then tests whether the NUL fits in the object.
+  if (Call.Name == symbol::StrlenChk && *Length >= Call.Arguments[1])
+    return fortifyFatal(Call, "strlen: detected read past end of buffer");
   return value(*Length);
 }
 llvm::Expected<uint64_t> Bionic::stringLengthValue(uint64_t Address,
@@ -436,10 +456,6 @@ llvm::Expected<uint64_t> Bionic::stringLengthValue(uint64_t Address,
     if (!V)
       return V.takeError();
     if (!*V) {
-      // API 28 checks the object extent only after strlen has reached NUL.
-      // The terminator must fit too; scan faults and budgets take precedence.
-      if (Name == symbol::StrlenChk && I >= Size)
-        return failure(diagnostic::FortifyReadPrefix + Name);
       return I;
     }
   }

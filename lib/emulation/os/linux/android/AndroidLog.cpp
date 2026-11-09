@@ -26,10 +26,10 @@ bool textBuffer(uint32_t ID) {
 }
 
 template <class Entry, class Matches>
-std::optional<uint32_t>
-consumeLogWrite(const std::optional<std::vector<Entry>> &Writes,
-                std::optional<uint64_t> &Consumed, Matches Match,
-                llvm::StringRef Kind, ProcessResult &Result) {
+const Entry *nextLogWrite(const std::optional<std::vector<Entry>> &Writes,
+                          const std::optional<uint64_t> &Consumed,
+                          Matches Match, llvm::StringRef Kind,
+                          ProcessResult &Result) {
   const char *Reason = nullptr;
   if (!Writes)
     Reason = "contract is not supplied";
@@ -40,9 +40,37 @@ consumeLogWrite(const std::optional<std::vector<Entry>> &Writes,
   if (Reason) {
     Result.Stop = ProcessStopReason::UnsupportedService;
     Result.Diagnostic = ("Android " + Kind + " log write " + Reason).str();
-    return std::nullopt;
+    return nullptr;
   }
-  return uint32_t((*Writes)[(*Consumed)++].Result);
+  return &(*Writes)[*Consumed];
+}
+
+template <class Entry, class Matches>
+std::optional<uint32_t>
+consumeLogWrite(const std::optional<std::vector<Entry>> &Writes,
+                std::optional<uint64_t> &Consumed, Matches Match,
+                llvm::StringRef Kind, ProcessResult &Result) {
+  const auto *Write = nextLogWrite(Writes, Consumed, Match, Kind, Result);
+  if (!Write)
+    return std::nullopt;
+  ++*Consumed;
+  return uint32_t(Write->Result);
+}
+
+std::vector<uint8_t> textPayload(int32_t Priority, llvm::StringRef Tag,
+                                 llvm::StringRef Message) {
+  std::vector<uint8_t> Payload;
+  Payload.reserve(
+      std::min<size_t>(LogPayloadLimit, Tag.size() + Message.size() + 3));
+  Payload.push_back(uint8_t(Priority));
+  // The transport clips concatenated iovecs, without synthesizing a NUL.
+  for (llvm::StringRef Text : {Tag, Message}) {
+    auto Prefix = Text.take_front(LogPayloadLimit - Payload.size());
+    Payload.insert(Payload.end(), Prefix.begin(), Prefix.end());
+    if (Payload.size() < LogPayloadLimit)
+      Payload.push_back(0);
+  }
+  return Payload;
 }
 } // namespace
 
@@ -101,7 +129,13 @@ llvm::Error validateTextLogWrites(
   uint64_t Bytes = 0;
   for (const auto &Write : *Writes) {
     const auto &P = Write.Payload;
-    Bytes += P.size() + sizeof(Write.ID) + sizeof(Write.Result);
+    Bytes += P.size() + sizeof(Write.ID) + sizeof(Write.Result) +
+             (Write.AsyncSafe ? sizeof(Write.OpenErrno) : 0);
+    if ((!Write.AsyncSafe && Write.OpenErrno) || Write.OpenErrno > 4095 ||
+        Write.OpenErrno == linux_model::InterruptedCall ||
+        (Write.AsyncSafe &&
+         (Write.Result < -4095 || Write.Result > int64_t(P.size()) + 11)))
+      return failure("invalid Android async-safe log transport result");
     if (!textBuffer(Write.ID) || P.size() < 3 || P.size() > LogPayloadLimit ||
         Bytes > LogSnapshotLimit)
       return failure(
@@ -258,24 +292,80 @@ Bionic::textLogWrite(uint32_t ID, int32_t Priority, LogString Tag,
         "Android text log write requires a main/radio/system/crash buffer";
     return std::optional<uint32_t>();
   }
-  std::vector<uint8_t> Payload;
-  Payload.reserve(std::min<size_t>(
-      LogPayloadLimit, TagBytes->size() + MessageBytes->size() + 3));
-  Payload.push_back(uint8_t(Priority));
-  // logd clips the concatenated priority/tag/message iovecs. A cut may land
-  // inside either string or just after its NUL; no replacement NUL is added.
-  for (llvm::StringRef Text : {*TagBytes, *MessageBytes}) {
-    auto Prefix = Text.take_front(LogPayloadLimit - Payload.size());
-    Payload.insert(Payload.end(), Prefix.begin(), Prefix.end());
-    if (Payload.size() < LogPayloadLimit)
-      Payload.push_back(0);
-  }
+  const auto Payload = textPayload(Priority, *TagBytes, *MessageBytes);
   return consumeLogWrite(
       Options.Android->TextLogWrites, Result.TextLogWritesConsumed,
       [&](const NativeTextLogWrite &Write) {
-        return ID == Write.ID && Payload == Write.Payload;
+        return !Write.AsyncSafe && ID == Write.ID && Payload == Write.Payload;
       },
       "text", Result);
+}
+
+BionicResult Bionic::fortifyBufferFailure(const NativeCallEvent &Call,
+                                          llvm::StringRef Function,
+                                          uint64_t Count, uint64_t Extent,
+                                          bool Read) {
+  return fortifyFatal(Call, Function + ": prevented " + llvm::Twine(Count) +
+                                "-byte " +
+                                (Read ? "read from " : "write into ") +
+                                llvm::Twine(Extent) + "-byte buffer");
+}
+
+BionicResult Bionic::fortifyFatal(const NativeCallEvent &Call,
+                                  const llvm::Twine &Detail) {
+  const std::string Message = ("FORTIFY: " + Detail).str();
+  // These diagnostics contain only fixed function/action names and decimal
+  // LP64 arguments, so async_safe's 1024-byte buffer always contains them.
+  assert(Message.size() < LogFormattedBufferBytes);
+  const llvm::StringRef Buffers[] = {Message, "\n"};
+  auto Written = writeStderr(Buffers);
+  if (!Written || !*Written)
+    return Written;
+
+  const auto Payload = textPayload(7, "libc", Message);
+  bool Retrying = false;
+  for (;;) {
+    const auto *Write = nextLogWrite(
+        Options.Android->TextLogWrites, Result.TextLogWritesConsumed,
+        [&](const NativeTextLogWrite &W) {
+          return W.AsyncSafe && W.ID == 4 && W.Payload == Payload &&
+                 (!Retrying || !W.OpenErrno);
+        },
+        "async-safe text", Result);
+    if (!Write)
+      return std::optional<BionicValue>();
+    if (Write->OpenErrno) {
+      if (auto E = setErrno(Write->OpenErrno))
+        return std::move(E);
+      const llvm::StringRef Fallback[] = {"libc", ": ", Message, "\n"};
+      auto FallbackResult = writeStderr(Fallback);
+      if (!FallbackResult || !*FallbackResult)
+        return FallbackResult;
+      if (int32_t(std::get<uint64_t>(**FallbackResult)) != Write->Result) {
+        Result.Stop = ProcessStopReason::UnsupportedService;
+        Result.Diagnostic = "Android async-safe stderr result does not match "
+                            "the next entry";
+        return std::optional<BionicValue>();
+      }
+    } else if (Write->Result < 0) {
+      // The supplied negative result is -errno at the transport boundary;
+      // async_safe's raw writev wrapper leaves that errno in the calling TLS.
+      if (auto E = setErrno(uint32_t(-Write->Result)))
+        return std::move(E);
+    }
+    ++*Result.TextLogWritesConsumed;
+    if (Write->OpenErrno || Write->Result != -linux_model::InterruptedCall)
+      break;
+    Retrying = true;
+    if (auto E = access(0, 0, 0))
+      return std::move(E);
+  }
+  // Unlike liblog's FATAL path, async_safe publishes only after the log
+  // attempt (including stderr fallback), then __fortify_fatal calls abort.
+  auto Stored = setAbortMessage(llvm::StringRef(Message));
+  if (!Stored)
+    return Stored.takeError();
+  return *Stored ? abortCall(Call) : BionicResult(std::optional<BionicValue>());
 }
 
 BionicResult Bionic::textLogCall(const NativeCallEvent &Call) {

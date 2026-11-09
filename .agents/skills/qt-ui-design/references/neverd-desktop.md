@@ -171,7 +171,14 @@ looked unfinished to the user once pointed out.
   gray block. The field's edge lines up with the status line's text below.
 - Let a primary button that cannot act fade, as Visual Studio Code's does, to
   40% (`ButtonPrimaryDisabled`, `ButtonPrimaryDisabledText`). The full accent
-  behind gray text read as an enabled button that had broken.
+  behind gray text read as an enabled button that had broken. In the light
+  theme the faded white label all but vanished into the pale fill (1.3:1), so
+  there the fill is the accent at 18% and the label the window text at 55%.
+- Let any other button that cannot act give up its fill and keep its `Border`
+  outline and a `DisabledText` label, as Windows 11 draws a disabled button
+  and as a disabled check box indicator is drawn. The full `Button` fill
+  behind gray text turned a dialog whose actions wait for input, such as
+  Binary comparison, into a wall of dead gray blocks.
 - Recolor what a theme change cannot reach. Content that stores colors, such
   as the output log's text formats, keeps each part's level or role and colors
   it again on `Theme::changed`; the dark theme's gray log lines all but

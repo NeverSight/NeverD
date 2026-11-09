@@ -113,8 +113,9 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
       CatalogBytes += Write.Payload.size() + sizeof(Write.Result);
   if (Native.TextLogWrites)
     for (const auto &Write : *Native.TextLogWrites)
-      CatalogBytes +=
-          Write.Payload.size() + sizeof(Write.Result) + sizeof(Write.ID);
+      CatalogBytes += Write.Payload.size() + sizeof(Write.Result) +
+                      sizeof(Write.ID) +
+                      (Write.AsyncSafe ? sizeof(Write.OpenErrno) : 0);
   if (Native.Libraries.size() >
       ::neverd::limits::emulation::kAndroidNativeRunNativeLibrariesSizeLimit)
     return failure(diagnostic::LibraryCount);

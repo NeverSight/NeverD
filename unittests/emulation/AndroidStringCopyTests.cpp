@@ -71,13 +71,21 @@ protected:
 
   void rejected(const ProcessResult &R, const char *Name,
                 llvm::StringRef Diagnostic) {
-    ASSERT_EQ(R.Stop, ProcessStopReason::RuntimeFailure) << R.Diagnostic;
-    EXPECT_NE(R.Diagnostic.find(Diagnostic.str()), std::string::npos);
+    const bool Fortify = Diagnostic.starts_with("FORTIFY");
+    ASSERT_EQ(R.Stop, Fortify ? ProcessStopReason::UnsupportedService
+                              : ProcessStopReason::RuntimeFailure)
+        << R.Diagnostic;
+    EXPECT_NE(R.Diagnostic.find(Fortify ? "async-safe text log write contract"
+                                        : Diagnostic.str()),
+              std::string::npos);
+    if (Fortify)
+      EXPECT_TRUE(llvm::StringRef(R.StandardError).starts_with("FORTIFY: "));
     ASSERT_FALSE(R.NativeCalls.empty());
     EXPECT_EQ(R.NativeCalls.back().Name, Name);
     EXPECT_FALSE(R.NativeCalls.back().Result);
     EXPECT_FALSE(R.ReturnValue);
-    EXPECT_TRUE(R.MemorySnapshots.empty());
+    if (!Fortify)
+      EXPECT_TRUE(R.MemorySnapshots.empty());
   }
 };
 
@@ -1098,15 +1106,27 @@ TEST(AndroidStringCopyMemory, CheckedAppendRefusalsPreserveCompleteBacking) {
       auto Budget = llvm::cantFail(ExecutionBudget::create(Options.Limits));
       android_model::Bionic Model(CPU, Kernel, Layout, Options, Result, *Budget,
                                   Linked);
+      llvm::cantFail(
+          CPU.write(Buffer, llvm::ArrayRef(Before).take_front(4096)));
       auto Call = makeCall(C.Destination, C.Input, C.Count, C.Extent);
       auto Value = Model.invoke(Call);
-      ASSERT_FALSE(bool(Value));
-      EXPECT_NE(llvm::toString(Value.takeError()).find(C.Diagnostic),
-                std::string::npos);
+      if (llvm::StringRef(C.Diagnostic).starts_with("FORTIFY")) {
+        ASSERT_TRUE(bool(Value)) << llvm::toString(Value.takeError());
+        EXPECT_FALSE(*Value);
+        EXPECT_EQ(Result.Stop, ProcessStopReason::UnsupportedService);
+      } else {
+        ASSERT_FALSE(bool(Value));
+        EXPECT_NE(llvm::toString(Value.takeError()).find(C.Diagnostic),
+                  std::string::npos);
+      }
       std::vector<uint8_t> After(8192);
       llvm::cantFail(Space.snapshotBacking(Buffer, After));
-      EXPECT_EQ(After, Before);
+      auto Expected = Before;
+      if (llvm::StringRef(C.Diagnostic) == "FORTIFY destination")
+        Expected[17] = 'x';
+      EXPECT_EQ(After, Expected);
     }
+    llvm::cantFail(CPU.write(Buffer, llvm::ArrayRef(Before).take_front(4096)));
     for (uint64_t Count : {0u, 1u}) {
       auto Budget = llvm::cantFail(ExecutionBudget::create(
           {1, 1, 1}, ExecutionBudget::Clock::time_point::min()));
@@ -1216,9 +1236,10 @@ TEST(AndroidStringCopyMemory, TerminatedCopyRefusalsPreserveCompleteBacking) {
     Call.Name = "__strcpy_chk";
     Call.Arguments = {Buffer, Buffer + 128, Extent};
     auto Value = Model.invoke(Call);
-    ASSERT_FALSE(bool(Value));
-    EXPECT_NE(llvm::toString(Value.takeError()).find("FORTIFY destination"),
-              std::string::npos);
+    ASSERT_TRUE(bool(Value)) << llvm::toString(Value.takeError());
+    EXPECT_FALSE(*Value);
+    EXPECT_EQ(Result.Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_NE(Result.StandardError.find("FORTIFY: strcpy:"), std::string::npos);
     std::vector<uint8_t> After(8192);
     llvm::cantFail(Space.snapshotBacking(Buffer, After));
     EXPECT_EQ(After, Before);
@@ -1319,10 +1340,11 @@ TEST(AndroidStringCopyMemory, SizedCopyRefusalsPreserveCompleteBacking) {
                                     *Expired, Linked);
       Call.Arguments = {Buffer, UINT64_MAX, 1, 0};
       auto Rejected = Checked.invoke(Call);
-      ASSERT_FALSE(bool(Rejected));
-      EXPECT_NE(
-          llvm::toString(Rejected.takeError()).find("FORTIFY destination"),
-          std::string::npos);
+      ASSERT_TRUE(bool(Rejected)) << llvm::toString(Rejected.takeError());
+      EXPECT_FALSE(*Rejected);
+      EXPECT_EQ(Result.Stop, ProcessStopReason::UnsupportedService);
+      EXPECT_NE(Result.StandardError.find("FORTIFY: strlcpy:"),
+                std::string::npos);
       EXPECT_FALSE(Checked.timedOut());
       llvm::cantFail(Space.snapshotBacking(Buffer, After));
       EXPECT_EQ(After, Before);
@@ -1422,7 +1444,7 @@ TEST(AndroidStringCopyMemory, RefusalsAreAtomicAndBudgetIsNotTruncated) {
   llvm::cantFail(Space.snapshotBacking(Buffer, After));
   EXPECT_EQ(After, Before);
 }
-TEST(AndroidStringCopyMemory, CheckedBoundsAndRefusalsAreAtomic) {
+TEST(AndroidStringCopyMemory, CheckedBoundsPreserveFailureOrderAndCopiedBytes) {
   ExecutionConfiguration Configuration;
   Configuration.Backend = ExecutionBackendKind::Unicorn;
   Configuration.Architecture = GuestArchitecture::AArch64;
@@ -1501,8 +1523,14 @@ TEST(AndroidStringCopyMemory, CheckedBoundsAndRefusalsAreAtomic) {
     Call.Name = CheckedNames[C.Mode];
     Call.Arguments = {C.Destination, C.Input, C.Count, C.DestinationSize,
                       C.SourceSize};
+    llvm::cantFail(CPU.write(Buffer, llvm::ArrayRef(Before).take_front(4096)));
     auto Value = Model.invoke(Call);
-    if (C.Error) {
+    if (C.Error && llvm::StringRef(C.Error).starts_with("FORTIFY")) {
+      ASSERT_TRUE(bool(Value)) << llvm::toString(Value.takeError());
+      EXPECT_FALSE(*Value);
+      EXPECT_EQ(Result.Stop, ProcessStopReason::UnsupportedService);
+      EXPECT_NE(Result.StandardError.find("FORTIFY: "), std::string::npos);
+    } else if (C.Error) {
       ASSERT_FALSE(bool(Value));
       EXPECT_NE(llvm::toString(Value.takeError()).find(C.Error),
                 std::string::npos);
@@ -1514,7 +1542,13 @@ TEST(AndroidStringCopyMemory, CheckedBoundsAndRefusalsAreAtomic) {
     EXPECT_EQ(Model.timedOut(), C.TimesOut);
     std::vector<uint8_t> After(Before.size());
     llvm::cantFail(Space.snapshotBacking(Buffer, After));
-    EXPECT_EQ(After, Before);
+    auto Expected = Before;
+    if (C.Error && llvm::StringRef(C.Error) == "FORTIFY read") {
+      std::fill_n(Expected.begin(), 16, 0);
+      if (C.Input == Source)
+        std::fill_n(Expected.begin(), 3, 'x');
+    }
+    EXPECT_EQ(After, Expected);
   }
 }
 } // namespace

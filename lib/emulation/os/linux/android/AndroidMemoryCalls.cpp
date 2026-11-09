@@ -41,8 +41,14 @@ BionicResult Bionic::copyMemory(const NativeCallEvent &Call) {
   const bool Copy =
       Call.Name == symbol::Memcpy || Call.Name == symbol::MemcpyChk;
   if ((Call.Name == symbol::MemcpyChk || Call.Name == symbol::MemmoveChk) &&
-      Size > A[3])
-    return failure(diagnostic::FortifyWritePrefix + Call.Name);
+      Size > A[3]) {
+    // ARM64's assembler memcpy guard enters the diagnostic helper only on
+    // object overflow; memmove has no separate signed-count check.
+    if (Copy && Size > linux_model::MaxSignedIOSize)
+      return fortifyFatal(Call, "memcpy: count " + llvm::Twine(Size) +
+                                    " > SSIZE_MAX");
+    return fortifyBufferFailure(Call, Copy ? "memcpy" : "memmove", Size, A[3]);
+  }
   if (auto E = access(A[0], Size, Write))
     return std::move(E);
   if (auto E = access(A[1], Size, Read))
@@ -62,8 +68,12 @@ BionicResult Bionic::copyMemory(const NativeCallEvent &Call) {
 BionicResult Bionic::setMemory(const NativeCallEvent &Call) {
   const auto &A = Call.Arguments;
   uint64_t Size = A[2];
-  if (Call.Name == symbol::MemsetChk && Size > A[3])
-    return failure(diagnostic::FortifyWritePrefix + Call.Name);
+  if (Call.Name == symbol::MemsetChk && Size > A[3]) {
+    if (Size > linux_model::MaxSignedIOSize)
+      return fortifyFatal(Call, "memset: count " + llvm::Twine(Size) +
+                                    " > SSIZE_MAX");
+    return fortifyBufferFailure(Call, "memset", Size, A[3]);
+  }
   if (auto E = access(A[0], Size, Write))
     return std::move(E);
   std::vector<uint8_t> Bytes(Size, static_cast<uint8_t>(A[1]));
@@ -101,10 +111,19 @@ BionicResult Bionic::descriptorSet(const NativeCallEvent &Call) {
   // touching memory. This is a memory operation, not a descriptor lookup.
   const auto &A = Call.Arguments;
   const int32_t FD = static_cast<int32_t>(A[0]);
-  if (FD < 0 || FD >= 1024)
-    return failure("FORTIFY fd_set descriptor out of range: " + Call.Name);
+  const llvm::StringRef Function = Call.Name == symbol::FDIsSetChk ? "FD_ISSET"
+                                   : Call.Name == symbol::FDSetChk ? "FD_SET"
+                                                                   : "FD_CLR";
+  if (FD < 0)
+    return fortifyFatal(Call, Function + ": file descriptor " +
+                                  llvm::Twine(FD) + " < 0");
+  if (FD >= 1024)
+    return fortifyFatal(Call, Function + ": file descriptor " +
+                                  llvm::Twine(FD) + " >= FD_SETSIZE " +
+                                  llvm::Twine(A[2]));
   if (A[2] < 128)
-    return failure("FORTIFY fd_set object extent too small: " + Call.Name);
+    return fortifyFatal(Call, Function + ": set size " + llvm::Twine(A[2]) +
+                                  " is too small to be an fd_set");
   const uint64_t Offset = (FD / 64) * 8;
   if (A[1] > UINT64_MAX - Offset)
     return failure(diagnostic::GuestPointer);

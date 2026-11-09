@@ -234,11 +234,16 @@ TEST_P(AndroidNetwork, FortifiedMemorySharesCopyMoveAndFillSemantics) {
   for (uint64_t Mode : {1, 2, 3, 6, 7}) {
     SCOPED_TRACE(Mode);
     auto R = run("network_checked_memory", Mode);
-    EXPECT_EQ(R.Stop, ProcessStopReason::RuntimeFailure) << R.Diagnostic;
+    EXPECT_EQ(R.Stop, Mode < 6 ? ProcessStopReason::UnsupportedService
+                               : ProcessStopReason::RuntimeFailure)
+        << R.Diagnostic;
     EXPECT_FALSE(R.ReturnValue);
-    EXPECT_NE(R.Diagnostic.find(Mode == 6   ? "overlapping memcpy"
-                                : Mode == 7 ? "invalid guest pointer"
-                                            : "FORTIFY"),
+    if (Mode < 6)
+      EXPECT_TRUE(llvm::StringRef(R.StandardError).starts_with("FORTIFY: mem"));
+    EXPECT_NE(R.Diagnostic.find(Mode == 6 ? "overlapping memcpy"
+                                : Mode == 7
+                                    ? "invalid guest pointer"
+                                    : "async-safe text log write contract"),
               std::string::npos);
     ASSERT_FALSE(R.NativeCalls.empty());
     EXPECT_FALSE(R.NativeCalls.back().Result);

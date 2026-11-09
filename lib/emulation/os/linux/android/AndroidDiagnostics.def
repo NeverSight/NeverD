@@ -104,14 +104,6 @@ NEVERD_ANDROID_DIAGNOSTIC(StringAddressOverflow, "string address overflows")
 NEVERD_ANDROID_DIAGNOSTIC(StringScanLimit, "string scan exceeds memory limit")
 NEVERD_ANDROID_DIAGNOSTIC(
     DecimalRange, "out-of-range decimal integer conversion is unmodeled")
-NEVERD_ANDROID_DIAGNOSTIC(FortifyReadPrefix,
-                          "FORTIFY read exceeds object bounds in ")
-NEVERD_ANDROID_DIAGNOSTIC(FortifyWritePrefix,
-                          "FORTIFY destination extent exceeded: ")
-NEVERD_ANDROID_DIAGNOSTIC(FortifiedReadCount,
-                          "fortified read exceeds the signed byte-count limit")
-NEVERD_ANDROID_DIAGNOSTIC(FortifiedReadBounds,
-                          "fortified read extent exceeds destination bounds")
 NEVERD_ANDROID_DIAGNOSTIC(StringCompareLimit,
                           "string comparison exceeds memory limit")
 NEVERD_ANDROID_DIAGNOSTIC(ReallocationOwnership,
@@ -296,8 +288,8 @@ NEVERD_ANDROID_DIAGNOSTIC(FormatConversion,
                           "positional, floating-point, wide text and %n)")
 NEVERD_ANDROID_DIAGNOSTIC(
     FormatCapacity, "formatting capacity exceeds the supported INT_MAX bound")
-NEVERD_ANDROID_DIAGNOSTIC(FormatFortify,
-                          "fortify buffer-size failure requires process abort")
+NEVERD_ANDROID_DIAGNOSTIC(FormatFortifyCount,
+                          "checked sprintf terminator count overflows int")
 NEVERD_ANDROID_DIAGNOSTIC(ArgumentVAListAlignment, "unaligned AAPCS64 va_list")
 NEVERD_ANDROID_DIAGNOSTIC(ArgumentRegisterOffset,
                           "invalid AAPCS64 general register offset")

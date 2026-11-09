@@ -3474,8 +3474,9 @@ reports for these adapters and `strlcpy` through both public routes.
 O0/O2 across three relocation formats and available CPU backends: exact padding,
 truncation, high bytes, errno, full-width and zero counts, page ends, read-only
 source/destination, overlap and dynamic provider lifetime.
-`AndroidStringCopyMemory.*` checks atomic refusal, memory limits and timeout
-against complete guarded guest bytes. No host libc copy is used as the oracle.
+`AndroidStringCopyMemory.*` checks memory limits, timeout, explicit refusals
+and fortify failure order against complete guarded guest bytes. No host libc
+copy is used as the oracle.
 The `SizedCopy*` cases cover `strlcpy` full-source scanning, truncated and empty
 outputs, NUL termination without padding, full-width and zero capacities,
 read-only and page-tail memory, overlap and closed dynamic providers. Direct
@@ -3499,17 +3500,18 @@ suffix, NUL and errno expectations. It covers empty and truncated appends,
 full-width counts and extents, the zero-count shortcut, checked destination
 scan order, fortify failure before a later source read, read-only prefixes,
 source and tail permissions, overlap, page ends and closed providers. The
-direct memory test verifies complete backing on refusals, including expired
-budgets and space required for a synthesized NUL.
+direct memory test verifies unchanged backing on pointer, overlap and budget
+refusals, and the appended prefix retained before a fatal space check.
 `ProcessPublic.AndroidCheckedAppendReportsMatchSDKAndCLI` compares complete
 reports for success, read/write fortify failures and zero-count invalid pointers.
 The `Checked*` cases extend the same callers and byte oracles to
 `__strncpy_chk` and `__strncpy_chk2`: destination checks before access, the
 post-scan source check, NUL-inclusive read counts, padding, truncation, zero
 count, full-width extents, pointer/permission faults and provider lifetime.
-`AndroidStringCopyMemory.CheckedBoundsAndRefusalsAreAtomic` checks unchanged
-backing bytes for fortify, overlap, pointer, memory-limit and deadline refusal,
-including zero count and destination-check precedence over an expired budget.
+`AndroidStringCopyMemory.CheckedBoundsPreserveFailureOrderAndCopiedBytes`
+checks unchanged backing for destination guards, overlap, pointer, memory-limit
+and deadline refusal, plus copied and padded bytes before source-extent failure.
+It includes zero count and destination-check precedence over an expired budget.
 `ProcessPublic.AndroidFortifyCopyReportsMatchSDKAndCLI` compares exact bytes,
 provider identity and terminal reports through both public routes. Run these
 with the string-length, character-search, token, formatting and memory suites.
@@ -7089,6 +7091,24 @@ sizes, mismatched operands and nonreturning/defined intrinsic impostors. The
 pinned SDK skips only the new native-declaration check; generated C still
 selects the current NeverC APIs. The separate PUSHF fixture snapshot retains
 its own LLVM implementation and is not an SGX assembly fallback.
+
+`NeverDX86VmfuncSourceTests` checks proven EAX=0 selection, partial-AX and
+nonzero/dynamic refusal of that specialization, full ECX width and malformed
+native/assembly effects. It builds 210 complete pipeline profiles across i386,
+x64, ELF/COFF/Mach-O and default/NoOpt, plus two effectful-index fixtures.
+Set `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` to retain complete HighC/LLVM C,
+native IR/objects and independent original bytes. Run
+`scripts/check_x86_vmfunc_source.py --exports DIR --output OUT` for native
+objects; add `--compiler CLANG`, or `--compiler NEVERC --backend-llc LLVM_LLC`
+for C compilation and replay at O0/O2. NeverC's qualified i386 source driver
+is Linux ELF only. The witness intercepts VMFUNC, checks the complete EAX/ECX,
+index side effects, post-instruction memory reload, return and saved stack/GPRs,
+and rejects deliberate leaf/index/memory/result/ABI corruptions. It does not
+execute EPT switching or simulate VM-exit/fault continuations. Identical
+complete exports across SDKs can reuse a replay only after exact file-hash
+comparison; report the comparison count once. `--objects-from PRIOR_OUT`
+replays existing products only after matching the prior source, original, object
+and compiler hashes. It does not repeat compilation.
 
 `NeverDX86VirtualizationTests` checks 32/64-bit VMX/SVM operand shapes,
 VMREAD success/failure merges, instruction-owned memory, segmented addresses and
@@ -16733,6 +16753,15 @@ transcripts check stacked scalar arguments, unchanged va_list bytes, 1022/1023/
 edge, signed results and errno. Unsupported conversions precede tag reads and
 log consumption; missing, exhausted and mismatching transcripts preserve the
 completed prefix. Missing fatal state remains explicit.
+`AndroidLog.Fortify*` checks all 23 supported checked imports with exact
+API 28 diagnostic bytes, direct/dynamic binding, post-copy/post-format writes,
+full-width and signed guards, explicit async-safe transport, stderr fallback,
+EINTR and errno, missing state, partial effects and parent/child abort handlers.
+`AndroidLogOptions.AsyncSafe*` validates the transport discriminator and final
+open errors. `ProcessPublic.AndroidFortifyFailureMatchesSDKAndCLI` compares
+complete public reports for successful/failed transport, fallback and unknown
+log, abort-slot and signal state. All inputs and outputs are synthetic and
+local; no logd, host signal or network service participates.
 `AndroidLog.AbortMessage*` checks direct/dynamic setters, parent/child first
 publication, live slot replacement without old-record retirement, exact LP64
 records and zeroed page padding, unbound/occupied/malformed/read-only slots,
@@ -17735,8 +17764,10 @@ counting, truncation, errno preservation and full-width object sizes. Checks
 include guard ordering, exact-fit terminators, zero capacity and existing
 INT_MAX limits. Unsupported conversions, malformed lists, inaccessible
 destinations and retired providers fail explicitly. Direct model checks cover
-exact memory-budget admission, timeout and cross-page write atomicity. Complete buffer comparisons
-check that fortify stops publish no partial output. C API/CLI tests compare complete success and fortify
+exact memory-budget admission, timeout and cross-page write atomicity. Complete
+buffer comparisons check that checked sprintf retains its truncated output
+before a fatal guard or the explicit `INT_MAX + 1` boundary. C API/CLI tests
+compare complete success and fortify
 failure reports for all four dynamically resolved names. Fixtures and expected
 bytes are independently authored; these tests require no Android device or
 host libc formatting oracle.
