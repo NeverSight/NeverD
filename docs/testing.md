@@ -21856,7 +21856,7 @@ object API does not qualify the source/IR adapter or a complete lifted-image reb
 `PublishesSignedExecutable` adds O0/O2 compact/DWARF main-executable publication,
 with explicit metadata headroom for its larger startup harness,
 including the ABI0-object/ABI1-main contract and rejection of foreign platforms,
-dylib promotion, kernel tags and unknown ABI versions. `PublishedExecutableStarts`
+dylib promotion, kernel tags and unknown ABI versions. Main publication
 requires one `SG_READ_ONLY` segment: native read-only data uses the original
 segment's declared, unowned zero tail. Occupied bytes and `LC_NOTE` ownership
 reject installation without mutation; insufficient capacity remains unsupported.

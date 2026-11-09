@@ -94,6 +94,14 @@ neither this profile nor the controlled FVP call matrix establishes that broader
 contract. Keep the configured LLVM r6 package until a separately qualified fork
 release replaces it.
 
+The [cold-build publication run](evidence/arm64e-native-publication-2026-11-10.json)
+qualifies the native dylib transaction on both macOS 26 and Xcode 27: each host
+passes 33 signer/signature tests, 16 installed-call/unwind cases and both sets of
+six prerequisite controls, without failures or skips. The reports bind source
+revision and prerequisite hashes and confirm removal of their owned build.
+That run predates the four migrated-threaded publication cases and the separate
+main executable gate; it does not establish those additions.
+
 Native macOS 26 and Xcode 27 runners execute the four-key PAC controls, including
 checked-authentication traps. The compiler-original call/unwind control passes
 when loaded through `dlopen`. Its equivalent startup executable leaves static
@@ -182,18 +190,18 @@ python3 scripts/verify_arm64e_native.py run-executable \
   --output native-evidence/executable
 ```
 
+Main executable publication retains one `SG_READ_ONLY` segment. The native
+installer declares new authenticated/ordinary pointer storage in its unowned,
+zero-filled tail, preserving existing addresses and adjusting symbol section
+ordinals. Insufficient capacity, occupied bytes and `LC_NOTE` owners reject the
+transaction. [XNU rejects a second read-only segment](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/mach_loader.c#L2499)
+for main executables; the installer preserves RELRO rather than removing flags.
+
 The verifier independently derives the SDK syscall restriction and compares it
 to that report before launching CTest inside the declared profile. It rejects
 missing, skipped or failed cases. The result is separately named
 `native_executable_publication_qualified`; system-default startup and general
 lifted-image publication retain their own unqualified boundaries.
-
-LLVM's [arm64e linker subtype regression](https://github.com/llvm/llvm-project/blob/b1dc6f680e37cbb19b2ee5ee4195635229c4f6c3/lld/test/MachO/arm64e-cpu-subtype.s)
-independently documents this output distinction: macOS and Mac Catalyst main
-executables receive ABI1; dylibs, bundles and iOS executables retain ABI0.
-Executable admission therefore needs a platform/file-kind contract and native
-published-entry tests under the declared startup profile. Masking every ABI
-version bit or forcing ABI1 on the compiler object would not establish it.
 
 A supplemental linker diagnostic did not stop when `ld-classic` lookup failed
 and therefore does not establish legacy threaded execution. Xcode 27 no longer
