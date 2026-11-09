@@ -52,6 +52,7 @@ complete instruction support or semantic test coverage.
 | XABORT | Exact constant imm8 through validated native LLVM, HighC and LLVM-to-C. Missing or inconsistent decoded operands and nonconstant IR fail; enclosing RTM checkpoint recovery remains separate. |
 | BLCFILL, BLCI, BLCIC, BLCMSK, BLCS, BLSFILL, BLSIC, T1MSKC, TZMSK | Validated XOP forms with source-dependent CF, result-dependent ZF/SF, cleared OF and explicit undefined AF/PF. LLVM, HighC and LLVM-to-C consume the same arithmetic semantics; see the TBM qualification below. |
 | BOUND | Strict word/dword i386 source projection and native full-LLVM/Clang APIs, also exposed through NeverC's i386 source-to-IR route; protected code16/code32 execution preserves conditional field access, signed comparisons, restart and MPX #BR status ownership. See [the BOUND contract](x86-legacy-segments.md#protected-bound-and-native-source-projection). |
+| BNDCL, BNDCU, BNDCN, BNDMK, BNDMOV, BNDLDX, BNDSTX | Shared bounds/enable/table semantics and native LLVM/NeverC APIs; explicit [long-mode V11 source](x86-mpx-source.md) and [protected code32 execution](x86-legacy-segments.md#protected-mpx-instructions-and-branch-effects). The protected RAM profile retains original faults, IDT delivery, backing continuation and branch bounds effects through its C dispatcher. |
 | BEXTR | Validated XOP immediate, VEX register-control and APX forms, including NF. Bounded shifts avoid out-of-range LLVM shifts; ordinary forms define CF/OF/ZF and record SF/AF/PF as undefined. See the BEXTR qualification below. |
 | TZCNT, LZCNT, POPCNT | Validated legacy, REX2 and APX/NF forms; aliased inputs, zero operands, destination width and defined/undefined flags retain their architectural meanings. See the count qualification below. |
 | ANDN, BLSI, BLSMSK, BLSR, BZHI | Validated VEX and APX/NF forms; independent value/flag semantics, source-before-destination carry and explicit undefined AF/PF. Shared address validators retain memory-tail ownership. |
@@ -421,7 +422,7 @@ families remain separate work.
 | UIRET faulting/native execution | Decoding and the explicit V8 continuation now own the successful canonical return, UIF feature selection, monitor invalidation and complete represented state through both C routes. Ordinary source, CET, fault delivery, RTM aborts and physical UINTR execution remain unqualified. |
 | RETF/RETFQ, IRET/IRETD/IRETQ | Ordinary source still lacks complete frame, privilege, segment and flag restoration. The separate [explicit x64 continuation](x64-continuation-source.md) V6 profile owns canonical 16/32/64-bit IRET and RETF (with or without imm16) from 64-bit entry to long-mode or compatibility CPL0..3, including hidden caches, descriptor accesses and outer-return segment invalidation. Compatibility returns own eight conditional GPR high-half choices and SS.B-dependent stack restoration/cleanup. All IRET widths pop five fields; word IRET retains AC/ID/VIF/VIP and clears RF. The no-fault returns accept RF, all IOPL values and VIF/VIP on entry while excluding TF; the optional paged-debug binding separately owns entry-TF traps. Raw frame RIP must be canonical before truncation. These instructions have no unconditional empty undefined-output audit. RETFQ preserves NMI blocking; IRETQ unblocks NMIs. The [paged binding](x86-paged-execution.md#faultable-iret-iretd-and-iretq) separately owns long-mode entry faults, retained descriptor effects, handler repair/retry and event composition, with explicit local processor profiles. The separate [legacy return owner](x86-legacy-segments.md#protected-iret-and-far-returns) now executes same/outer-CPL IRET/RETF in 16/32-bit protected entry, with word-sized CS/SS reads, descriptor effects and restartable IDT faults. The explicit protected source dispatcher retains these returns and event stops. CET/FRED, nested-task/VM86 returns, ordinary legacy function projection and compatibility source contexts remain outside these bindings. |
 | SYSENTER, SYSEXIT/SYSEXITQ, SYSRET/SYSRETQ, RSM | Ordinary source still lacks complete register, privilege, segment and SMM continuation state. The separate explicit x64 continuation V5/V6 profiles own canonical SYSRET/SYSRETQ with live STAR and CS/SS caches, flags and compatibility/64-bit target state. SYSRET explicitly consumes eight arbitrary values for the legacy GPR high halves; all defined bits are preserved or assigned as specified. The Intel V7 profile additionally owns canonical SYSENTER from CPL0–3 and SYSEXIT/SYSEXITQ from CPL0, with live CS/ESP/EIP MSRs, complete target caches, state and explicit stops. Unprefixed SYSENTER/SYSEXIT also accept flat compatibility entry with either CS.D and a complete in-limit instruction. RF, all IOPL values and VIF/VIP are admitted on entry; TF still requires debug-trap delivery. Nonflat compatibility entry and faulting IA-32e transfers remain unqualified; SYSRET is architecturally invalid in compatibility mode. The [protected Intel SEP executor](x86-legacy-segments.md#protected-sysenter-and-sysexit) now owns i386 SYSENTER/SYSEXIT from nonflat 16/32-bit entry, with explicit MSRs, fixed caches, ignored prefixes, LOCK #UD, privilege/null-MSR #GP and restartable original-fetch faults. The explicit protected source dispatcher now connects that owner; ordinary function projection remains separate. The separate [native SMM V12 profile](x86-smm-return.md) now owns software-state transport before hardware RSM; SMI entry, other software-managed banks and fault/event routing remain outside that profile. |
-| MPX outside explicit V11 | The [V11 source profile](x86-mpx-source.md) owns all seven qualified long-mode families, bounds, enable state, tables, BNDSTATUS, original branch initialization and a pending-#BR stop through both C routes. Ordinary function ABI, i386/compatibility source entry, memory faults, handler delivery, transactions and physical MPX remain unqualified. |
+| MPX outside explicit state profiles | The [V11 source profile](x86-mpx-source.md) owns all seven qualified long-mode families, bounds, enable state, tables, BNDSTATUS, original branch initialization and a pending-#BR stop through both C routes. The [protected code32 RAM profile](x86-legacy-segments.md#protected-mpx-instructions-and-branch-effects) adds original instructions, memory faults, IDT delivery, retained backing continuation and branch effects through the protected C dispatcher. Ordinary function ABI, compatibility source entry, code16 MPX, 16-bit addresses, non-flat-DS tables, other memory/fault profiles, transactions and physical MPX remain unqualified. |
 | XACQUIRE/XRELEASE outside explicit native steps | The [HLE source binding](x86-hle-state.md) retains 19 memory-operation families through native LLVM/NeverC contexts and both C routes. PAUSE forces a native abort/retry before publishing state; original registers, widths, bit indexes and addr32/FS/GS addressing remain explicit. Ordinary ABI lifting, external active transactions, full RTM checkpoints, native fault continuation and physical HLE commit/rollback remain unqualified. |
 | RTM outside selected native regions | The [native RTM region provider](x86-rtm-regions.md) owns selected x64 transactions through a live outer checkpoint, including memory/state rollback, nesting, selected CALL/RET, loops and actual abort status. Standalone XABORT/XTEST are bound separately within that provider. Unsupported paths and attempt-budget exhaustion roll back and decline. The shared prefix reader now owns valid prefixed forms and rejects forbidden NP XEND/XTEST encodings. Other state effects, i386 state providers, faults/events and physical RTM qualification remain open. |
 | Remaining compact-memory descriptor/fault execution | Native LLVM and both C routes retain long-mode stack references and i386 CS/ES/SS offsets, including implicit SS for SP/BP bases, alongside DS/FS/GS. The [explicit cached-segment operand binding](x86-legacy-segments.md) now executes concrete i386 CS/ES/SS accesses with whole packed bounds; unbound accesses still refuse and zero masks suppress access. Physical AVX-512 and descriptor-fault execution remain unqualified. |
@@ -4866,3 +4867,53 @@ remain outside this explicit source route. Full mode/task transitions, remaining
 original-machine i386 banks/providers, software SMM/SGX and unbound asynchronous
 producers remain separate gaps. No LLVM release is declared, and the production
 r6 pin and LLVM gitlink remain unchanged.
+
+## Protected legacy MPX execution and branch effects (2026-11-09)
+
+Protected code32 execution now routes BNDCL, BNDCU, BNDCN, BNDMK,
+BNDMOV, BNDLDX and BNDSTX through the existing shared MPX owner. A private
+legacy adapter connects original segment caches, paged RAM and IDT faults;
+no second bounds interpreter is introduced. The explicit
+`MpxMemory=WholeOperandRAM` profile covers whole bounds/directory/table
+operands in exclusive ordinary RAM, with the original MIB segment, unscaled
+index, fault priority and untouched reserved BTE field.
+
+A host backing stop retains fetched bytes, the original CPU and paging
+controls, completed directory reads and pending data watchpoints. This fixes
+the case where the BTE page walk changes a PTE that also stores the already-read
+BDE. Repair and resume use that retained BDE, do not refetch changed code and
+do not spend a second instruction-attempt budget. A deliberate control change
+exposed a missing continuation check during development; the final owner now
+rejects that change before completing the pending instruction.
+
+Original near CALL/RET/JMP and short/near Jcc apply the shared branch rule
+only after successful completion, including untaken Jcc and before a debug
+trap. F2, BNDPRESERVE and disabled MPX preserve bounds; F3 does not supply BND
+preservation. Faults retain the qualified bounds state, and #BR status or an
+unknown BNDLDX destination becomes visible before IDT delivery. Generated
+`protected-legacy-v1` C uses the same stateful executor, including original
+fault handlers and backing continuation. LLVM and NeverC already provide the
+native MPX APIs, so this integration does not require another compiler change.
+
+The [dated MPX evidence](evidence/x86-legacy-mpx-2026-11-09.json) binds the
+clean integrated source, both SDK builds, compiler identities and all test
+reports. Each SDK passes 954 of 955 selected tests; its single remaining skip
+requires LA57 on the bound KVM CPU. The original 34 CPU-profile skips per SDK
+are retained in the logs and pass after binding the already-qualified P/E-core
+choices. All 14 new execution tests and 12 compiled MPX cases pass per SDK.
+Each complete Clang/NeverC O0/O2 source matrix passes 165 tests, exports 256
+compiled dispatchers and four i386 objects; both SDKs emit identical dispatcher
+sources, wrappers and instruction manifests. The initial full source runs
+failed two cases because the launcher omitted the full LLVM backend setting;
+complete reruns with that setting pass. Reproducible generated binaries are
+archived with verified decompressed hashes, retaining source, inputs and failed
+diagnostics. These counts do not treat identical cross-SDK inputs as separate
+semantic cases.
+
+The profile does not qualify physical MPX, code16 MPX operands, 16-bit address
+forms, non-flat-DS bounds tables, transactional aborts, MMIO, shared-memory
+synchronization or ordinary function-ABI bounds transport. Whole-operand
+publication and BNDMOV alignment are explicit software-profile choices. Full
+mode/task transitions, remaining original-machine banks/providers, software
+SMM/SGX and unbound asynchronous producers remain global gaps. No LLVM
+release is declared, and the production r6 pin and LLVM gitlink remain unchanged.

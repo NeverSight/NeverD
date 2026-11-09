@@ -2697,8 +2697,10 @@ watchpoint tests retain the completed BDE match until instruction completion.
 `X86LegacySourceTest.Mpx*` in `NeverDX86LegacySourceTests` compiles the actual
 protected dispatcher with Clang and NeverC at O0/O2, checking all seven MPX
 families, bounds-fault handler/IRET retry and resumed attempt budgets. Set
-`NEVERD_TEST_NEVERC` to the built compiler for both NeverC lanes. Run the full
-paging, MPX context/encoding and legacy source targets after this shared-state
+`NEVERD_TEST_NEVERC` to the built compiler and `NEVERD_TEST_NEVERC_LLC` to
+the full NeverSight LLVM backend's `llc`: the complete legacy source target
+also compiles i386 objects in its SDK/CLI export cases. Run the full paging,
+MPX context/encoding and legacy source targets after this shared-state
 boundary changes. These tests qualify the explicit software profile, not
 physical MPX hardware or ordinary function-ABI state transport.
 
