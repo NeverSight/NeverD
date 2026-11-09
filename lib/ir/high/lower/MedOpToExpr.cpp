@@ -10,6 +10,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "neverd/ir/FloatConversion.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/high/X86/X86RegistrationFrame.h"
@@ -133,6 +134,8 @@ ExprPtr MedToHighConverter::medOpToExprImpl(const MedOp &Op) {
       auto Input = sourceFloatValue(Op.Inputs[0], Op.Inputs[0].Size);
       if (Op.Opcode == NdOp::FLOAT_FLOAT2FLOAT &&
           Op.Inputs[0].Size > Op.Output.Size &&
+          !isX87PrecisionConversion(TargetArch, Op.Inputs[0].Size,
+                                    Op.Output.Size) &&
           Input->Kind == ExprKind::UnaryOp &&
           Input->Op == NdOp::FLOAT_FLOAT2FLOAT && Input->Operands.size() == 1 &&
           Input->Operands[0]->Type &&

@@ -856,6 +856,15 @@ finite extrema, infinities and quiet/signaling NaNs retain their result bits
 and exactly one provider call. This checks result transport under the native
 default FP environment, not arbitrary x87 exception or control-word state.
 
+`I386CallContract.X87MemoryConversionsKeepNaNsAndRounding` observes raw stored
+bytes across every binary32/binary64 load/store pair. Both C routes at
+default/NoOpt and C O0/O2 execute against original 32-bit instructions, with
+all four x87 rounding modes, signed signaling/quiet NaNs, finite boundary
+values, subnormals, infinities and surrounding destination bytes. This does
+not use a floating C return as the oracle, because that return can itself
+quiet a signaling NaN. Unmasked exception delivery and arbitrary stack-tag
+state are separate coverage.
+
 `NeverDLocalTypesDebugContextTests` also checks recursive callback borrows and
 portable parameter qualifiers. Its recursive-record case checks that both
 self references and mutual references release their ownership, including
