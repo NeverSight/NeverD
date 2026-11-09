@@ -83,7 +83,7 @@ TEST(X86PortableSystemSource, TlbControlsRetainEveryImplicitInput) {
       for (const bool NoOpt : {false, true})
         for (const uint64_t Value :
              {UINT64_C(0), UINT64_C(1), UINT64_C(0x8000000180000041)})
-          for (unsigned Kind = 0; Kind != 3; ++Kind) {
+          for (unsigned Kind = 0; Kind != 4; ++Kind) {
             if (Kind == 2 && A == Arch::X86)
               continue;
             SCOPED_TRACE(static_cast<unsigned>(A));
@@ -105,18 +105,21 @@ TEST(X86PortableSystemSource, TlbControlsRetainEveryImplicitInput) {
                 Bytes.push_back(uint8_t(Word >> (I * 8)));
             }
             const size_t Offset = Bytes.size();
-            if (Kind == 2)
+            if (Kind == 2 || Kind == 3)
               Bytes.push_back(0x67);
             Bytes.insert(Bytes.end(),
-                         {0x0f, 0x01, uint8_t(Kind == 0 ? 0xff : 0xfe), 0x31,
+                         {0x0f, 0x01,
+                          uint8_t((Kind == 0 || Kind == 3) ? 0xff : 0xfe), 0x31,
                           0xc0, 0xc3});
-            const char *Mnemonic = Kind == 0 ? "tlbsync" : "invlpgb";
-            const std::string API =
-                Kind == 0        ? A == Arch::X64 ? "llvm.x86.tlbsync.control64"
-                                                  : "llvm.x86.tlbsync.control32"
-                : Kind == 2      ? "llvm.x86.invlpgb.addr32"
-                : A == Arch::X64 ? "llvm.x86.invlpgb"
-                                 : "llvm.x86.invlpgb32";
+            const char *Mnemonic =
+                (Kind == 0 || Kind == 3) ? "tlbsync" : "invlpgb";
+            const std::string API = (Kind == 0 || Kind == 3)
+                                        ? A == Arch::X64
+                                              ? "llvm.x86.tlbsync.control64"
+                                              : "llvm.x86.tlbsync.control32"
+                                    : Kind == 2      ? "llvm.x86.invlpgb.addr32"
+                                    : A == Arch::X64 ? "llvm.x86.invlpgb"
+                                                     : "llvm.x86.invlpgb32";
             auto Image = image(A, Format, Bytes);
             std::string High, LLVM;
             sourceRoutes(Image, NoOpt, Entry + Offset, Mnemonic, &High, &LLVM);
@@ -140,7 +143,7 @@ TEST(X86PortableSystemSource, TlbControlsRetainEveryImplicitInput) {
             }
           }
     }
-  EXPECT_EQ(Cases, 264u);
+  EXPECT_EQ(Cases, 360u);
   RecordProperty("native_c_compilations", Cases);
 }
 

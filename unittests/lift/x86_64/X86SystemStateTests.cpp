@@ -843,7 +843,10 @@ TEST(X86SystemExtensions, InputWidthsAndMalformedShapes) {
                              A == Arch::X64 && E.Bytes[0] != 0x67 ? 8 : 4));
         EXPECT_EQ(It->Inputs[2], NdVar::reg(x86reg::RDX, 4));
         EXPECT_EQ(It->Inputs[3], NdVar::reg(x86reg::RCX, 4));
-      } else if (E.Id == Intrinsic::X86HistoryReset)
+      } else if (E.Id == Intrinsic::X86TlbSync)
+        EXPECT_EQ(It->Inputs[1],
+                  NdVar::reg(x86reg::RAX, A == Arch::X64 ? 8 : 4));
+      else if (E.Id == Intrinsic::X86HistoryReset)
         EXPECT_EQ(It->Inputs[1], NdVar::reg(x86reg::RAX, 4));
       else if (E.Id == Intrinsic::X86LoadKernelGs)
         EXPECT_EQ(It->Inputs[1], NdVar::reg(x86reg::RSI, 2));
@@ -877,6 +880,40 @@ TEST(X86SystemExtensions, InputWidthsAndMalformedShapes) {
         EXPECT_FALSE(x86SystemStateShapeIsValid(E.Id, Bad));
       }
     }
+}
+
+TEST(X86SystemExtensions, TlbSyncRejectsMissingOrNarrowedRegisterDetails) {
+  for (const auto A : {Arch::X86, Arch::X64}) {
+    Decoder D;
+    ASSERT_TRUE(D.init(A));
+    for (const bool AddressPrefix : {false, true}) {
+      std::vector<uint8_t> Bytes{0x0f, 0x01, 0xff};
+      if (AddressPrefix)
+        Bytes.insert(Bytes.begin(), 0x67);
+      DecodedInsn I{};
+      ASSERT_EQ(D.decodeOneForLift(Bytes.data(), Bytes.size(), 0x1000, I),
+                Bytes.size());
+      ASSERT_EQ(I.Raw->detail->regs_read_count, 1u);
+      EXPECT_EQ(I.Raw->detail->regs_read[0],
+                A == Arch::X64 ? X86_REG_RAX : X86_REG_EAX);
+      for (unsigned Mutation = 0; Mutation < 3; ++Mutation) {
+        auto Raw = *I.Raw;
+        auto Detail = *Raw.detail;
+        Raw.detail = &Detail;
+        if (Mutation == 0)
+          Detail.regs_read_count = 0;
+        else if (Mutation == 1)
+          Detail.regs_read[0] = A == Arch::X64 ? X86_REG_EAX : X86_REG_AX;
+        else
+          Detail.regs_read[0] = X86_REG_ECX;
+        X86Lifter L(A);
+        L.setStrict(true);
+        std::vector<LowOp> Ops;
+        EXPECT_THROW(L.lift(&Raw, Ops), UnliftedInstruction);
+        EXPECT_TRUE(Ops.empty());
+      }
+    }
+  }
 }
 
 TEST(X86SystemExtensions, ForgedDecodingRefusesBeforeEmission) {

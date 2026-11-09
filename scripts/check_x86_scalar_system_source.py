@@ -38,6 +38,7 @@ def execute(code, entry, completion, corrupt=None, mode=32):
     # Decode boundaries first; newer opcodes may be absent in Capstone 5.
     markers = [(bytes.fromhex('0f01c6'), 'wrmsrns', mode),
                (bytes.fromhex('0f01ff'), 'tlbsync', mode),
+               (bytes.fromhex('670f01ff'), 'tlbsync', mode),
                (bytes.fromhex('0f01fe'), 'invlpgb', mode)]
     if mode == 64:
         markers.insert(0, (bytes.fromhex('670f01fe'), 'invlpgb', 32))
@@ -147,7 +148,7 @@ def main():
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     sources = sorted(args.exports.glob(args.family + '*_*.c'))
-    expected_sources = {'scalar': 84, 'wrmsrns': 12, 'tlb': 60}[args.family]
+    expected_sources = {'scalar': 84, 'wrmsrns': 12, 'tlb': 84}[args.family]
     assert len(sources) == expected_sources, 'missing complete i386 C profiles'
     records, controls = [], []
     for source in sources:

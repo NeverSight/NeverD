@@ -204,6 +204,8 @@ bool systemExtensionEncoding(const cs_insn *Insn, const cs_x86 &X,
     Reads[ReadCount++] = X86_REG_ECX;
     [[fallthrough]];
   case X86_INS_TLBSYNC:
+    if (Insn->id == X86_INS_TLBSYNC)
+      Reads[ReadCount++] = Mode64 ? X86_REG_RAX : X86_REG_EAX;
     ModRM = Insn->id == X86_INS_INVLPGB ? 0xfe : 0xff;
     Mandatory = 0;
     Privileged = true;

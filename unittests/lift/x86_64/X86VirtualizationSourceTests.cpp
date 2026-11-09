@@ -4339,6 +4339,8 @@ static void complete_system(int signal, siginfo_t *info, void *context) {
           value != (address32 ? UINT64_C(0x55667788) : UINT64_C(0x1122334455667788)) ||
           (uint32_t)g[REG_RDX] != UINT32_C(0xcafebabe) ||
           (uint32_t)g[REG_RCX] != UINT32_MAX) _exit(32);
+    } else if ((uint64_t)g[REG_RAX] != UINT64_C(0x1122334455667788)) {
+      _exit(33);
     }
   }
   g[REG_RIP] += n;
