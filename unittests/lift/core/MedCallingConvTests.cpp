@@ -8998,6 +8998,19 @@ TEST(CallRegisterEffects, StatusFlagsDoNotSurviveOrdinaryCalls) {
             for (unsigned I = 0; I < Op.NumInputs; ++I)
               ReadsResult |= Op.Inputs[I] == FlagResult->Value;
         EXPECT_TRUE(ReadsResult);
+        EXPECT_TRUE(verifyMedFunc(Med, "status-flag-call"));
+        if (Target == Arch::X64 && Format == BinaryFormat::COFF && !Indirect)
+          for (bool Wide : {false, true}) {
+            auto Malformed = Med;
+            for (auto &Clobber : Malformed.CallClobbers)
+              if (Clobber.Value.Kind == MedVar::Flag) {
+                if (Wide)
+                  Clobber.Value.Size = 2;
+                else
+                  Clobber.Value.RegOff = Registers.IntReturnReg;
+              }
+            EXPECT_FALSE(verifyMedFunc(Malformed, "malformed-flag-call"));
+          }
       }
 }
 

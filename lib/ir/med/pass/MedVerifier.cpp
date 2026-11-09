@@ -346,7 +346,11 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
     auto Key = std::make_tuple(Clobber.Kind, Clobber.Id, Clobber.SSAVer);
     if (Record.CallSiteId == 0 || !CallSites.count(Record.CallSiteId))
       Err("call clobber has no owning call site", -1, 0);
-    else if (Clobber.Kind != MedVar::Reg || Clobber.Id < 0 || Clobber.Size == 0)
+    else if ((Clobber.Kind != MedVar::Reg &&
+              !(Clobber.Kind == MedVar::Flag &&
+                getTargetRegInfo(Clobber.TheArch)
+                    .isFlag(Clobber.RegOff, Clobber.Size))) ||
+             Clobber.Id < 0 || Clobber.Size == 0)
       Err("invalid call-clobber definition", -1, 0);
     else if (Record.PreservedPrefixSize > 0 &&
              (Record.PreservedPrefixSize >= Clobber.Size ||
