@@ -600,12 +600,19 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
         CapabilityBinary, {CapabilityBinary}, std::nullopt, Redirects,
         kToolTimeout, 0, &Diagnostic);
     ::testing::Test::RecordProperty(kRuntimeCapabilityProperty, Capability);
-    if (Capability < 0 || Capability == kRuntimePACUnavailable)
+    auto CapabilityOutput = llvm::MemoryBuffer::getFile(RuntimeOutput);
+    const bool CapabilityStarted =
+        CapabilityOutput && (*CapabilityOutput)
+                                ->getBuffer()
+                                .contains(kRuntimeCapabilityStartedMarker);
+    if (Capability < 0 && !CapabilityStarted)
       GTEST_SKIP() << kRuntimeControlUnavailable << Capability << '\n'
                    << Diagnostic;
-    ASSERT_EQ(Capability, 0) << Diagnostic;
-    auto CapabilityOutput = llvm::MemoryBuffer::getFile(RuntimeOutput);
     ASSERT_TRUE(bool(CapabilityOutput));
+    ASSERT_TRUE(CapabilityStarted);
+    if (Capability == kRuntimePACUnavailable)
+      GTEST_SKIP() << kRuntimeControlUnavailable << Capability;
+    ASSERT_EQ(Capability, 0) << Diagnostic;
     ASSERT_TRUE(
         (*CapabilityOutput)->getBuffer().contains(kRuntimeCapabilityMarker));
     // Once launch and PAC enforcement work, a broken compiler-original

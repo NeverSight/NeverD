@@ -217,6 +217,8 @@ MACHO_AUTH_NATIVE_TEXT(kRuntimeCapabilityBinary, "native-capability.out")
 MACHO_AUTH_NATIVE_TEXT(kRuntimeCapabilityProperty,
                        "native_pac_capability_result")
 MACHO_AUTH_NATIVE_VALUE(int, kRuntimePACUnavailable, 77)
+MACHO_AUTH_NATIVE_TEXT(kRuntimeCapabilityStartedMarker,
+                       "native-pac-enforcement-started")
 MACHO_AUTH_NATIVE_TEXT(kRuntimeCapabilityMarker, "native-pac-enforcement-ok")
 MACHO_AUTH_NATIVE_TEXT(kRuntimeControlFile, "native-control.out")
 MACHO_AUTH_NATIVE_TEXT(kRuntimeDriverFile, "native-driver.out")
@@ -264,9 +266,13 @@ template <int Key> int checkKey() {
   return Signal == SIGSEGV || Signal == SIGBUS || Signal == SIGILL ? 0 : 7;
 }
 int main() {
+  puts("native-pac-enforcement-started");
+  fflush(stdout);
   rlimit Limit{};
   if (setrlimit(RLIMIT_CORE, &Limit)) return 8;
   const int Results[] = {checkKey<0>(), checkKey<1>(), checkKey<2>(), checkKey<3>()};
+  for (int Result : Results)
+    if (Result && Result != 77) return Result;
   for (int Result : Results)
     if (Result) return Result;
   puts("native-pac-enforcement-ok");

@@ -21870,8 +21870,11 @@ The separate `AuthenticatedCallsAndSignedUnwindExecute` cases first compile an
 arm64e capability control. Each of IA/IB/DA/DB must produce a nontrivial
 signature, authenticate it successfully, and fault in a child process after a
 bit changed by signing is flipped. Core dumps are disabled for these expected
-faults. Only unavailable launch or disabled authentication can skip this gate;
-once it passes, a failed compiler-original call/throw control is a test failure.
+faults. Only unavailable launch before the probe's flushed entry marker or
+disabled authentication can skip this gate. A crash after entry and any
+unexpected key-check failure are failures, including when another key reports
+disabled authentication. Once the gate passes, a failed compiler-original
+call/throw control is also a test failure.
 The tests then load the installed image and check
 authenticated functions/data, exception propagation through its signed frame,
 and the actual read-only mapping. The language runtime controls also check a
