@@ -35,7 +35,8 @@ bool refuse(ProcessResult &Result, const char *Text) {
 llvm::Expected<bool>
 LinuxSignals::enter(ExecutionBackend &CPU, const MemoryLayout &Layout,
                     LinuxMemory &Memory, uint64_t TID, int32_t Signal,
-                    const LinuxSignalAction &Action, ProcessResult &Result) {
+                    const LinuxSignalAction &Action, bool ThreadDirected,
+                    ProcessResult &Result) {
   auto &Thread = Threads.at(TID);
   if (CPU.architecture() != GuestArchitecture::AArch64 ||
       !State.AlternateStackDisabled ||
@@ -130,6 +131,9 @@ LinuxSignals::enter(ExecutionBackend &CPU, const MemoryLayout &Layout,
   if (Action.Flags & 4) {
     std::array<uint8_t, 128> Info{};
     llvm::support::endian::write32le(Info.data(), Signal);
+    // SI_TKILL for thread-directed delivery; kill retains SI_USER (zero).
+    llvm::support::endian::write32le(Info.data() + 8,
+                                     ThreadDirected ? uint32_t(-6) : 0);
     llvm::support::endian::write32le(Info.data() + 16, ProcessID);
     llvm::support::endian::write32le(Info.data() + 20, UserID);
     if (auto E = CPU.write(Base, Info))

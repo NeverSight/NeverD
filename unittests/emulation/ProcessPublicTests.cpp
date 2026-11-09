@@ -4441,6 +4441,100 @@ TEST_F(ProcessPublic, AndroidBinderThreadPolicyMatchesSDKAndCLI) {
 #endif
 }
 
+TEST_F(ProcessPublic, AndroidTextLogAssertMatchesSDKAndCLI) {
+#ifndef NEVERD_ANDROID_FIXTURE_DIR
+  GTEST_SKIP() << "Android shared library fixtures unavailable";
+#else
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(Prefix, Directory));
+  const std::filesystem::path Root(Directory.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Output = (Root / OutputFile).string();
+  constexpr uint64_t Base = 0x22000000, Slot = Base + 2048;
+  for (const char *Variant : {"O0-none", "O2-relr"}) {
+    Path = (std::filesystem::path(NEVERD_ANDROID_FIXTURE_DIR) /
+            (std::string("log-") + Variant + ".so"))
+               .string();
+    for (unsigned Mode = 0; Mode != 8; ++Mode) {
+      SCOPED_TRACE(Variant);
+      SCOPED_TRACE(Mode);
+      std::vector<uint8_t> Memory(28672, 0xc7);
+      std::fill_n(Memory.begin() + 2048, 8, 0);
+      std::copy_n("condition", 10, Memory.begin() + 4096);
+      std::copy_n("tag", 4, Memory.begin() + 10000);
+      std::copy_n("%s", 3, Memory.begin() + 16000);
+      std::copy_n("message", 8, Memory.begin() + 18000);
+      auto Request = llvm::cantFail(llvm::json::parse(R"({
+        "backend":"unicorn","instruction_limit":200000,"instruction_quantum":17,
+        "linux_signals":{"actions":[{"signal":6,"handler":0,"flags":0,"restorer":0,"mask":0}],
+          "initial_mask":32,"alternate_stack_disabled":true},
+        "linux_files":{"files":[]},
+        "android":{"initialize":false,"entry_symbol":"log_assertion",
+          "observe_memory_on_failure":true,
+          "libraries":{"libc.so":["abort"],"liblog.so":["__android_log_assert"]},
+          "read_memory":[{"address":"0x22000000","size":28672}],
+          "text_log_writes":[{"log_id":0,"payload":"07746167006d65737361676500","result":-11}]}
+      })"));
+      auto &Object = *Request.getAsObject();
+      auto &Android = *Object.getObject(field::Android);
+      Android[field::Memory] = llvm::json::Array{
+          llvm::json::Object{{field::Address, Base},
+                             {field::Size, 28672},
+                             {field::Bytes, llvm::toHex(Memory)}}};
+      Android[field::AbortMessageSlot] = Slot;
+      const unsigned Handling = Mode < 3 ? Mode + 2 : Mode == 7 ? 2 : 0;
+      Android[field::Arguments] =
+          llvm::json::Array{Base,
+                            Slot,
+                            Mode == 7 ? 3 : Mode & 1,
+                            (Handling << 8) | (Mode == 6 ? 1u << 16 : 0),
+                            Base + 4096,
+                            Base + 10000,
+                            Base + 16000,
+                            Base + 18000};
+      if (Mode == 3) {
+        Object["output_limit"] = 7;
+        Android.erase(field::ReadMemory);
+      }
+      if (Mode == 4)
+        Android.erase(field::AbortMessageSlot);
+      if (Mode == 5)
+        Object.erase("linux_signals");
+      const auto Options = jsonText(std::move(Object));
+      auto Text = takeString(neverd_emulate_process_json(
+          Session, Path.c_str(), AndroidNativeAArch64, Options.c_str()));
+      ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
+      auto Parsed = llvm::cantFail(llvm::json::parse(Text));
+      const auto *Report = Parsed.getAsObject();
+      ASSERT_NE(Report, nullptr);
+      const char *Stop = Mode == 1                ? "exited"
+                         : Mode == 2              ? "returned"
+                         : Mode == 3              ? "output_limit"
+                         : Mode == 4 || Mode == 5 ? "unsupported_service"
+                                                  : "signaled";
+      EXPECT_EQ(Report->getString(field::Stop), Stop) << Text;
+      EXPECT_EQ(Report->getString(field::Stderr),
+                Mode == 3 || Mode >= 6 ? "" : "6d6573736167650a");
+      EXPECT_EQ(Report->getString(field::Stdout), "");
+      if (Mode == 0 || Mode >= 6)
+        EXPECT_EQ(Report->getInteger(field::TerminationSignal), 6);
+      if (Mode == 1)
+        EXPECT_EQ(Report->getInteger(field::ExitStatus), 23);
+      if (Mode == 2)
+        EXPECT_EQ(Report->getString(field::ReturnValue), "63"); // Hex 99.
+      EXPECT_EQ(Report->getObject(field::Android)
+                    ->getInteger(field::TextLogWritesConsumed),
+                Mode == 3 || Mode == 4 || Mode == 7 ? 0 : 1);
+      EXPECT_EQ(runCLIRequest(Path, AndroidNativeAArch64, Options, Output),
+                Mode == 1   ? process_cli::GuestFailure
+                : Mode == 2 ? process_cli::Success
+                            : process_cli::Incomplete);
+      ASSERT_NO_FATAL_FAILURE(expectCLIReport(Output, Parsed));
+    }
+  }
+#endif
+}
+
 TEST_F(ProcessPublic, AndroidTextLogAbortMessageMatchesSDKAndCLI) {
 #ifndef NEVERD_ANDROID_FIXTURE_DIR
   GTEST_SKIP() << "Android shared library fixtures unavailable";

@@ -352,10 +352,13 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
     // A sigreturn can expose another pending signal before user-mode libc
     // resumes. Convert interrupted wrapper results only after that delivery
     // boundary, using the restored frame depth and PC.
-    if (auto E = Threads.resumeSignal(LibC)) {
-      RuntimeFailure(std::move(E));
+    auto ResumedSignal = Threads.resumeSignal(LibC);
+    if (!ResumedSignal) {
+      RuntimeFailure(ResumedSignal.takeError());
       break;
     }
+    if (!*ResumedSignal)
+      break;
     if (auto E = Kernel.synchronizeDevices()) {
       RuntimeFailure(std::move(E));
       break;
@@ -578,6 +581,14 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
       }
       if (!*Value)
         break;
+      if (std::holds_alternative<GuestAbort>(**Value)) {
+        if (auto E =
+                Threads.suspendAbort(*Request, Result.NativeCalls.size() - 1)) {
+          RuntimeFailure(std::move(E));
+          break;
+        }
+        continue;
+      }
       if (std::holds_alternative<GuestThreadWait>(**Value)) {
         Threads.suspend(*Request, Result.NativeCalls.size() - 1);
         NeedSchedule = true;
