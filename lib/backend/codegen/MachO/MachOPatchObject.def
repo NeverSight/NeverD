@@ -61,6 +61,17 @@ MACHO_OBJECT_TEXT(kLanguageReplay,
 
 MACHO_OBJECT_TEXT(kPrivateWeak,
                   "native private weak data requires a coalescing contract")
+MACHO_OBJECT_TEXT(kSharedCache,
+                  "native publication requires an independent linked image")
+MACHO_OBJECT_TEXT(kDependencyProfile,
+                  "explicit native pointer providers require arm64e")
+MACHO_OBJECT_TEXT(kPublishedPointer,
+                  "published native pointer is not file-backed")
+
+MACHO_OBJECT_TEXT(kPublishedCompact,
+                  "final native compact table cannot be decoded completely")
+MACHO_OBJECT_TEXT(kPublishedRange,
+                  "final native compact encoding or range is not registered")
 
 #undef MACHO_OBJECT_VALUE
 #undef MACHO_OBJECT_TEXT

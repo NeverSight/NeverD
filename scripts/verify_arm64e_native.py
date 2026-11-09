@@ -294,6 +294,7 @@ def check_runtime_report(xml):
 def run_installation(output, build, probe_report, legacy_fixtures=None):
     report = {**provenance(), "status": POLICY["failed"],
               "native_installer_call_unwind_qualified": False,
+              POLICY["publication_qualification_key"]: False,
               "whole_image_publication_qualified": False}
     try:
         control = json.loads(probe_report.read_text())
@@ -344,6 +345,7 @@ def run_installation(output, build, probe_report, legacy_fixtures=None):
                 raise RuntimeError(POLICY["errors"]["ctest"])
             report["runtime_report_sha256"] = digest(xml)
             report["native_installer_call_unwind_qualified"] = True
+            report[POLICY["publication_qualification_key"]] = True
             report["status"] = POLICY["passed"]
         return report
     finally:

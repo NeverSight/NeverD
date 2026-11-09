@@ -94,6 +94,9 @@ unsigned long long new_slots[16] = {
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
 };
 int cleanups = 0;
+__attribute__((noinline)) int publication_dispatch() { return 1; }
+__attribute__((noinline)) int publication_catch() { return 2; }
+__attribute__((noinline)) int publication_cleanup() { return 3; }
 __attribute__((noinline)) int cleanup_frame(int value) {
 #ifdef NEVERD_DWARF_LANGUAGE
   asm volatile(".cfi_escape 0x2e, 0");
@@ -537,6 +540,10 @@ extern "C" __attribute__((noinline)) int native_cleanup() {
 
 MACHO_AUTH_NATIVE_TEXT(kObjectCatch, "native_catch")
 MACHO_AUTH_NATIVE_TEXT(kObjectCleanup, "native_cleanup")
+MACHO_AUTH_NATIVE_ARGS(kPublishedEntries, "_publication_dispatch",
+                       "_publication_catch", "_publication_cleanup")
+MACHO_AUTH_NATIVE_TEXT(kPublishedProperty, "native_object_published")
+MACHO_AUTH_NATIVE_TEXT(kReceiptRejected, "test rejects publication receipt")
 MACHO_AUTH_NATIVE_TEXT(kObjectCleanups, "native_cleanups")
 MACHO_AUTH_NATIVE_TEXT(kOriginalCatch, "_original_catch")
 MACHO_AUTH_NATIVE_TEXT(kOriginalDwarfProperty,

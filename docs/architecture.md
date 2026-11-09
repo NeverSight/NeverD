@@ -1458,6 +1458,19 @@ the signed addend and exact provider. Writable storage is required even when
 the final mapping is RELRO. An absolute constant (`N_ABS`) is not inferred to
 be a slid address.
 
+`installMachOObjectPatch` also connects this native object profile to the shared
+publication transaction. It prepares authenticated GOT slots before placement,
+installs compact/DWARF language records, and redirects each selected original
+entry with a single relative branch. The new function owns its signing prologue;
+the branch does not change LR. Explicit pointer providers are admitted by the
+existing dependency owner. After signing, recipe replay verifies every pointer
+slot and its RELRO contract, while the remaining section bytes must match the
+relocated object exactly. Both staging and publication use the same final
+unwind validator, including exact personality slot and LSDA identities.
+Failed receipts and pre-existing output paths do not publish or overwrite a
+file. This native C++ API does not enable the source/IR or lifted-image rebuild
+routes, nor the SDK compiler adapter's separate arm64e admission.
+
 Native compact language records retain LSDA addresses and personality slots.
 The arm64e personality slot uses IA/address diversity with zero discriminator;
 RTTI slots remain ordinary pointers. Existing unambiguous personality slots

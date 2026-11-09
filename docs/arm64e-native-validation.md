@@ -65,13 +65,20 @@ python3 scripts/verify_arm64e_native.py run \
 ```
 
 The runner requires the probe's exact current revision and source hashes. It
-checks the twelve registered CTest commands before execution, records the owning
+checks the sixteen registered CTest commands before execution, records the owning
 test binary hash and runs with the registered CTest deadlines. Every chained and
 threaded-input O0/O2 case must execute successfully: authenticated calls and signed
 compact unwind, native DWARF catches/cleanup, and relocated original signed
 language frames. Missing, duplicate, foreign, failed or skipped cases fail the
 qualification even if CTest itself returns success. Temporary fixture storage
 is private to the invocation and is removed afterward.
+
+The matrix additionally requires four `PublishedEntriesExecute` cases at O0/O2
+with compact/DWARF language records. These use the native publication API,
+check failed-receipt rollback and exclusive output creation, and enter the new
+authenticated call/catch/cleanup functions through the original addresses.
+`native_object_publication_qualified` names this additional native object
+contract. The matrix now requires sixteen cases with no failures or skips.
 
 `native_installer_call_unwind_qualified` covers this native installation matrix.
 General whole-image publication keeps its separate false qualification field;
@@ -131,6 +138,9 @@ checks that denial, and its
 selects userspace fixups. Every PAC and language control runs under the declared
 launcher. The report records `fixup_loader`, the SDK syscall number, profile and
 launcher; an unsuccessful or ambiguous SDK query fails before execution.
+The [maintained verifier run](https://github.com/gmh5225/test_mac_intel/actions/runs/42659921245)
+passed all six controls in each of the system/dlopen and userspace/exec profiles
+on both hosts, with exact source/report identities in the page-in evidence.
 The default `system` profile retains its observed failure. The installer still
 requires its matching system/dlopen probe, and neither profile qualifies a
 rebuilt image or the missing post-r6 MC publication path.
