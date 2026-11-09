@@ -107,8 +107,36 @@ expand(llvm::ArrayRef<const MedCallClobber *> Clobbers, const MedOp &Call,
       Ops.back().NumInputs != Registers.size())
     return {};
 
-  // A live input that still needs an incoming physical register has no
-  // self-contained source projection. Keep the original call in that case.
+  // Bind only the incoming bytes the ordinary call contract actually passes.
+  // An unbound physical register, including an argument's unpassed high bytes,
+  // still has no source projection. Keep the original call in that case.
+  struct InputBinding {
+    MedVar Entry;
+    MedVar Actual;
+    uint64_t Offset;
+  };
+  std::map<Key, InputBinding> Bindings;
+  const auto Arguments = Target.integerParamRegs(Image.abiFormat());
+  auto BindInput = [&](const MedVar &Value) {
+    if (Value.Kind != MedVar::Reg || !Value.Size ||
+        !isEntryLiveInValue(Captured, Value, Value.RegOff))
+      return false;
+    const uint64_t Register = Value.RegOff & ~uint64_t(7);
+    const auto Found = llvm::find(Arguments, Register);
+    if (Found == Arguments.end())
+      return false;
+    const size_t Slot = Found - Arguments.begin();
+    if (Call.CalleeRegisterArgs < 0 || Slot >= Call.CalleeRegisterArgs ||
+        Slot + 1 >= Call.NumInputs || ((Call.CalleeVectorSlots >> Slot) & 1))
+      return false;
+    const auto &Actual = Call.Inputs[Slot + 1];
+    const uint64_t Offset = Value.RegOff - Register;
+    if (Actual.Size > sizeof(uint64_t) || Value.Size > Actual.Size ||
+        Offset > Actual.Size - Value.Size)
+      return false;
+    Bindings.emplace(key(Value), InputBinding{Value, Actual, Offset});
+    return true;
+  };
   std::map<Key, size_t> Definitions;
   for (size_t I = 0; I + 1 < Ops.size(); ++I) {
     const auto &Op = Ops[I];
@@ -144,9 +172,11 @@ expand(llvm::ArrayRef<const MedCallClobber *> Clobbers, const MedOp &Call,
     if (Value.isConst())
       continue;
     const auto Found = Definitions.find(key(Value));
-    if (Found == Definitions.end())
-      return {};
-    Include(Found->second);
+    if (Found == Definitions.end()) {
+      if (!BindInput(Value))
+        return {};
+    } else
+      Include(Found->second);
   }
 
   std::map<Key, MedVar> Renamed;
@@ -163,6 +193,23 @@ expand(llvm::ArrayRef<const MedCallClobber *> Clobbers, const MedOp &Call,
     return Value.isConst() ? Value : Renamed.at(key(Value));
   };
   std::vector<MedOp> Expanded;
+  for (const auto &[Identity, Binding] : Bindings) {
+    if (!Binding.Offset && Binding.Entry.Size == Binding.Actual.Size) {
+      Renamed.emplace(Identity, Binding.Actual);
+      continue;
+    }
+    if (!Remaining)
+      return {};
+    --Remaining;
+    MedOp Slice;
+    Slice.Addr = Call.Addr;
+    Slice.Opcode = NdOp::SUBBYTES;
+    Slice.Output = NewValue(Binding.Entry);
+    Slice.addInput(Binding.Actual);
+    Slice.addInput(MedVar::makeConst(Binding.Offset, 4,
+                                     ConstantAddressProvenance::Scalar));
+    Expanded.push_back(std::move(Slice));
+  }
   for (size_t I : Needed) {
     MedOp Op = Ops[I];
     // The cloned computation belongs to this call occurrence, not to an

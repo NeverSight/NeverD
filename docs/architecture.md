@@ -18567,13 +18567,17 @@ body only when it has no memory operations, internal calls, exceptional roots,
 unmodeled exception metadata, direction-flag writes or nonordinary return.
 `PipelineRegisterCalls.cpp` uses the ordinary LowIR
 converter to capture the caller's extra result registers; it does not duplicate
-partial-register or intrinsic semantics. Required results must have no remaining
-entry-state dependencies, and every written ABI-preserved GPR must equal its
-incoming value. Each original query is then expanded once, in order, with fresh
-SSA values shared by all outputs. Native lifting retains the original CALL.
+partial-register or intrinsic semantics. An incoming scalar register slice may
+bind only to the bytes published by that occurrence's ordinary integer argument
+contract. A wider actual is sliced; absent positions, vector slots and missing
+high bytes cannot supply an input. Required results must have no other entry
+dependencies, and every written ABI-preserved GPR must equal its incoming value.
+Each original query is then expanded once, in order, with fresh SSA values
+shared by all outputs. Native lifting retains the original CALL.
 The cache accounts for retained leaf bodies, and per-body/per-function work
-bounds prevent unbounded expansion. Incoming-state-dependent, memory-using and
-other hardware leaves retain the ordinary unavailable-state behavior. This is
+bounds, including argument slices, prevent unbounded expansion. Unbound-entry,
+memory-using and other hardware leaves retain the ordinary unavailable-state
+behavior. This is
 not a general machine-state calling convention or a proof of unresolved frame
 aliases.
 

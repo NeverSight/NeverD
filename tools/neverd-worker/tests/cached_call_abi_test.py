@@ -126,6 +126,42 @@ def check_split_exit_constants(worker, directory, joined=False):
     assert path.read_bytes() == data
 
 
+def check_parameterized_query(worker, directory):
+    binary, _ = image()
+    data = bytearray(binary)
+    code = bytearray.fromhex("4883ec28 e8")
+    code.extend(struct.pack("<i", 0x100 - len(code) - 4))
+    code.extend(bytes.fromhex("4c31c0 4831c8 4883c428 c3"))
+    data[0x200:0x200 + len(code)] = code
+    # EDX supplies the leaf and CH supplies the subleaf. The latter consumes
+    # only the second byte of the first actual argument, including in a
+    # separately prepared callee and either source-emitter order.
+    body = bytes.fromhex("89d0 0fb6cd 4531c0 4987d8 0fa2 4987d8 "
+                         "4181f067452301 81f198badcfe b801000000 c3")
+    data[0x300:0x300 + len(body)] = body
+    path = Path(directory) / "query-inputs.exe"
+    path.write_bytes(data)
+    for prepared in (False, True):
+        with Client(worker) as client:
+            ok(client, "open", {"path": str(path), "analysis": False,
+                                "warm": False, "read_only": True})
+            if prepared:
+                ok(client, "decompile", {"address": hex(ENTRY + 0x100),
+                                          "representation": "c"})
+            order = ("llvmc", "c") if prepared else ("c", "llvmc")
+            for representation in order:
+                result = ok(client, "decompile", {
+                    "address": hex(ENTRY), "representation": representation,
+                    "limit": 2048})
+                assert result["complete"], result
+                text = result["text"]
+                assert "__builtin_trap" not in text and "unknown" not in text, text
+                assert "arg0" in text and "arg1" in text, text
+                assert len(re.findall(r'\b__cpuid(?:ex)?\s*\(|"cpuid"', text)) == 1, text
+                assert f"sub_{ENTRY + 0x100:X}(" not in text, text
+    assert path.read_bytes() == data
+
+
 def ok(client, operation, payload=None):
     result = client.call(operation, payload or {})
     assert result["status"] == "ok", result
@@ -175,6 +211,7 @@ def run(worker, compiler=None):
         check_cached_helpers(worker, directory)
         check_split_exit_constants(worker, directory)
         check_split_exit_constants(worker, directory, joined=True)
+        check_parameterized_query(worker, directory)
         for cached in (False, True):
             path = Path(directory) / ("cached.sys" if cached else "direct.sys")
             binary = fixture(cached)
@@ -203,7 +240,7 @@ def run(worker, compiler=None):
                         result = subprocess.run(command, capture_output=True, text=True, timeout=30)
                         assert result.returncode == 0, result.stdout + result.stderr + text
             assert path.read_bytes() == binary
-    print("direct/cached Win64 imports and split-block scratch results passed")
+    print("direct/cached Win64 imports, scratch results and query inputs passed")
 
 
 if __name__ == "__main__":

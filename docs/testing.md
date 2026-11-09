@@ -20507,7 +20507,16 @@ inputs through both C routes at O0/O2 with UBSan. Source execution selects the
 host's GNU intrinsic spelling while retaining the input image's recovered ABI.
 Cached emitter order, repeated calls and high-byte observations check shared
 result identity. IR checks retain exactly one query per expanded call. The
-`RegisterQuery*` controls retain memory/input-dependent leaves, other hardware
+`RegisterQueryBindsTheCallsActualArgumentBytes` cases bind dynamic query inputs
+from each call's actual scalar arguments, including byte/high-byte reads and
+two calls with different selectors. Both C routes execute at O0/O2 with UBSan
+against independent CPUID observations across x64 COFF/ELF/Mach-O models; Linux
+x64 also executes the original public machine bytes. The input-binding boundary
+test rejects narrow actuals, absent/unknown argument counts, vector slots and
+explicit source declarations. A wider scalar actual supplies only the requested
+bytes. `NeverDWorkerCachedCallABI` also checks this through a generated PE,
+an omitted or separately prepared callee, and reversed emitter order.
+The `RegisterQuery*` controls retain memory/unbound-input leaves, other hardware
 operations, branching/nonordinary returns, image addresses, unpreserved RBX,
 unmodeled exception metadata, CLD/STD and native calls. Boundary controls run
 both source routes with and without optimization; the original CALL-slot read must still fail before source
