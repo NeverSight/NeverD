@@ -9,7 +9,11 @@ python3 scripts/verify_arm64e_native.py probe --output native-evidence/probe
 The probe uses the same `.def` compiler inputs, flags and markers as
 `MachOArm64eNativeObjectInstallation`. Both O0/O2 controls must produce nontrivial
 IA/IB/DA/DB signatures, authenticate valid pointers and fault on corrupted
-signatures. Compact and DWARF compiler-original controls then exercise signed
+signatures. Each key first authenticates and reads a valid signed pointer in a
+child process, then repeats that path with one changed signature bit. Both
+hardware faults and Clang's checked-authentication `BRK`/`SIGTRAP` rejection
+are supported; an externally killed child does not pass. Compact and DWARF
+compiler-original controls then exercise signed
 calls, authenticated data, typed catches and propagated destructor cleanup.
 Successful compilation or a process that runs with PAC disabled cannot pass.
 

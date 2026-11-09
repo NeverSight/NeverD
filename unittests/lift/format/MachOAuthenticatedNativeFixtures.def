@@ -253,20 +253,35 @@ template <int Key> int checkKey() {
   // Flip a bit that signing changed; do not guess the host's PAC bit layout.
   const uintptr_t Corrupt = Signed ^ (Difference & -Difference);
   if (__builtin_ptrauth_strip((void *)Corrupt, Key) != Raw) return 2;
-  const pid_t Child = fork();
-  if (Child < 0) return 3;
-  if (!Child) {
-    auto *Pointer = (volatile int *)__builtin_ptrauth_auth(
-        (void *)Corrupt, Key, Discriminator);
-    _exit(*Pointer == 42 ? 4 : 5);
+  for (unsigned Attempt = 0; Attempt != 2; ++Attempt) {
+    const bool Invalid = Attempt != 0;
+    const uintptr_t Candidate = Invalid ? Corrupt : Signed;
+    const pid_t Child = fork();
+    if (Child < 0)
+      return 3;
+    if (!Child) {
+      auto *Pointer = (volatile int *)__builtin_ptrauth_auth(
+          (void *)Candidate, Key, Discriminator);
+      _exit(*Pointer == 42 ? 0 : 5);
+    }
+    int Status = 0;
+    if (waitpid(Child, &Status, 0) != Child)
+      return 6;
+    const int Signal = WIFSIGNALED(Status) ? WTERMSIG(Status) : 0;
+    printf("native-pac-key=%d invalid=%d child-status=%d child-signal=%d\n",
+           Key, Invalid, Status, Signal);
+    fflush(stdout);
+    if (!Invalid) {
+      if (!WIFEXITED(Status) || WEXITSTATUS(Status))
+        return 9;
+      continue;
+    }
+    // Clang's checked AUT/XPAC comparison traps with BRK 0xc470 + Key.
+    if (Signal != SIGSEGV && Signal != SIGBUS && Signal != SIGILL &&
+        Signal != SIGTRAP)
+      return 7;
   }
-  int Status = 0;
-  if (waitpid(Child, &Status, 0) != Child || !WIFSIGNALED(Status)) return 6;
-  const int Signal = WTERMSIG(Status);
-  printf("native-pac-key=%d child-status=%d child-signal=%d\n", Key, Status,
-         Signal);
-  fflush(stdout);
-  return Signal == SIGSEGV || Signal == SIGBUS || Signal == SIGILL ? 0 : 7;
+  return 0;
 }
 int main() {
   puts("native-pac-enforcement-started");
