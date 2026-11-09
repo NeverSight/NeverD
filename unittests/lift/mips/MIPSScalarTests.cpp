@@ -73,6 +73,107 @@ protected:
   }
 };
 
+TEST_P(MIPSScalar, WordDivisionPreservesQuotientRemainderAndUndefinedResults) {
+  auto Image = image(0x2000, {});
+  const bool Wide = isMIPS64(GetParam());
+  const auto Extend = [&](uint32_t V) -> uint64_t {
+    return Wide ? mips::signExtendWord(V) : V;
+  };
+  constexpr uint32_t Cases[][4] = {
+      {10, 3, 3, 1},
+      {uint32_t(-10), 3, uint32_t(-3), uint32_t(-1)},
+      {10, uint32_t(-3), uint32_t(-3), 1},
+      {uint32_t(-10), uint32_t(-3), 3, uint32_t(-1)},
+      {0x80000000, 0xffffffff, 0x80000000, 0},
+      {0x80000000, 3, 0xd5555556, 0xfffffffe},
+      {0xffffffff, 0x80000000, 0, 0xffffffff},
+      {0, 7, 0, 0}};
+  for (bool Signed : {false, true}) {
+    const uint32_t Word = Signed ? 0x0085001a : 0x0085001b;
+    for (const auto &C : Cases) {
+      NdOpEmulator E(Image);
+      E.setStrictMode(true);
+      E.setRegister(mipsreg::A0, Extend(C[0]));
+      E.setRegister(mipsreg::A1, Extend(C[1]));
+      ASSERT_TRUE(execute(E, Word));
+      EXPECT_EQ(E.getRegister(mipsreg::LO),
+                Extend(Signed ? C[2] : C[0] / C[1]));
+      EXPECT_EQ(E.getRegister(mipsreg::HI),
+                Extend(Signed ? C[3] : C[0] % C[1]));
+      E.setRegister(mipsreg::A1, 0);
+      ASSERT_TRUE(execute(E, Word));
+      EXPECT_FALSE(E.getRegister(mipsreg::LO));
+      EXPECT_FALSE(E.getRegister(mipsreg::HI));
+      ASSERT_TRUE(execute(E, 0x00001012)); // transport the unknown quotient
+      EXPECT_FALSE(E.getRegister(mipsreg::V0));
+      E.setRegister(mipsreg::A1, 1);
+      ASSERT_TRUE(execute(E, Word));
+      EXPECT_EQ(E.getRegister(mipsreg::LO), Extend(C[0]));
+      EXPECT_EQ(E.getRegister(mipsreg::HI), 0u);
+    }
+    if (Wide)
+      for (unsigned Input : {mipsreg::A0, mipsreg::A1}) {
+        NdOpEmulator E(Image);
+        E.setStrictMode(true);
+        E.setRegister(mipsreg::A0, 10);
+        E.setRegister(mipsreg::A1, 3);
+        E.setRegister(Input, 0x80000000); // non-sign-extended word
+        E.setRegister(mipsreg::HI, 111);
+        E.setRegister(mipsreg::LO, 222);
+        EXPECT_FALSE(execute(E, Word));
+        EXPECT_EQ(E.getRegister(mipsreg::HI), 111u);
+        EXPECT_EQ(E.getRegister(mipsreg::LO), 222u);
+      }
+  }
+}
+
+TEST_P(MIPSScalar, WordDivisionValidatesShapesAndAllInputBytesBeforeWriting) {
+  auto Image = image(0x2000, {});
+  for (Intrinsic Id :
+       {Intrinsic::MIPSDivWord, Intrinsic::MIPSDivUnsignedWord}) {
+    LowOp Base;
+    Base.Opcode = NdOp::INTRINSIC;
+    Base.Output = NdVar::reg(mipsreg::HI, 8);
+    Base.addInput(NdVar::cst(uint64_t(Id), sizeof(Intrinsic)));
+    Base.addInput(NdVar::reg(mipsreg::A0, 4));
+    Base.addInput(NdVar::reg(mipsreg::A1, 4));
+    for (unsigned Case = 0; Case != 8; ++Case) {
+      auto Op = Base;
+      NdOpEmulator E(Image);
+      E.setStrictMode(true);
+      E.setRegister(mipsreg::HI, 99);
+      if (Case != 0)
+        E.setRegister(mipsreg::A0, 7);
+      if (Case != 1)
+        E.setRegister(mipsreg::A1, 3);
+      switch (Case) {
+      case 2:
+        Op.Output.Size = 4;
+        break;
+      case 3:
+        Op.Inputs[1].Size = 8;
+        break;
+      case 4:
+        Op.Inputs[2].Size = 8;
+        break;
+      case 5:
+        Op.addInput(NdVar::cst(0, 4));
+        break;
+      case 6:
+        Op.MemoryOrdering = NdMemoryOrdering::Acquire;
+        break;
+      case 7:
+        Op.MemoryAddressSpace = NdMemoryAddressSpace::X86GS;
+        break;
+      }
+      EXPECT_FALSE(E.step(Op));
+      EXPECT_EQ(E.getRegister(mipsreg::HI), 99u);
+    }
+    EXPECT_TRUE(mips::isPureScalarValue(Id));
+    EXPECT_TRUE(isSideeffectIntrinsic(Id)); // fresh unknown values cannot CSE
+  }
+}
+
 TEST_P(MIPSScalar, MergeReadsOnlySelectedBytesAndPreservesOtherLanes) {
   const bool Little = archLittleEndian(GetParam());
   const bool Wide = isMIPS64(GetParam());

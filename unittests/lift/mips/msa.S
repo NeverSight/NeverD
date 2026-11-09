@@ -185,3 +185,20 @@ vector_leaf msa_mul_b,mulv.b
 vector_leaf msa_mul_h,mulv.h
 vector_leaf msa_mul_w,mulv.w
 vector_leaf msa_mul_d,mulv.d
+
+vector_leaf msa_madd_b,maddv.b
+vector_leaf msa_madd_h,maddv.h
+vector_leaf msa_madd_w,maddv.w
+vector_leaf msa_madd_d,maddv.d
+vector_leaf msa_msub_b,msubv.b
+vector_leaf msa_msub_h,msubv.h
+vector_leaf msa_msub_w,msubv.w
+vector_leaf msa_msub_d,msubv.d
+vector_leaf msa_max_a_b,max_a.b
+vector_leaf msa_max_a_h,max_a.h
+vector_leaf msa_max_a_w,max_a.w
+vector_leaf msa_max_a_d,max_a.d
+vector_leaf msa_min_a_b,min_a.b
+vector_leaf msa_min_a_h,min_a.h
+vector_leaf msa_min_a_w,min_a.w
+vector_leaf msa_min_a_d,min_a.d

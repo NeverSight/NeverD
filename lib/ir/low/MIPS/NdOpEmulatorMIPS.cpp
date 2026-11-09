@@ -37,6 +37,30 @@ bool NdOpEmulator::executeMIPSScalar(const LowOp &Op) {
   if (!knownOperandBytes(Op.Inputs[1], 0, Op.Inputs[1].Size))
     return false;
   const uint64_t First = readOperand(Op.Inputs[1]);
+  if (mips::isWordDivision(Id)) {
+    if (!knownOperandBytes(Op.Inputs[2], 0, 4))
+      return false;
+    const uint32_t Second = readOperand(Op.Inputs[2]);
+    if (!Second) {
+      writeOutput(Op.Output, 0, UINT64_MAX);
+      return true;
+    }
+    uint32_t Quotient, Remainder;
+    if (Id == Intrinsic::MIPSDivWord) {
+      const auto SignedWord = [](uint64_t V) -> int64_t {
+        return (V & UINT64_C(0x80000000)) ? int64_t(V) - (INT64_C(1) << 32)
+                                          : int64_t(V);
+      };
+      const int64_t A = SignedWord(First), B = SignedWord(Second);
+      Quotient = uint32_t(A / B);
+      Remainder = uint32_t(A % B);
+    } else {
+      Quotient = uint32_t(First) / Second;
+      Remainder = uint32_t(First) % Second;
+    }
+    writeOutput(Op.Output, (uint64_t(Remainder) << 32) | Quotient);
+    return true;
+  }
   if (Id == Intrinsic::MIPSWriteDSPControl) {
     writeOutput(NdVar::reg(mipsreg::DSPControl, 4),
                 First & mips::DSPControlBits);

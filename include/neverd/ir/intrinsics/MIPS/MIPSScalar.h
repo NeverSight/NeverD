@@ -55,10 +55,21 @@ constexpr bool isDSPControlIntrinsic(Intrinsic Id) {
          Id == Intrinsic::MIPSWriteDSPControl;
 }
 
+constexpr bool isWordDivision(Intrinsic Id) {
+  return Id == Intrinsic::MIPSDivWord || Id == Intrinsic::MIPSDivUnsignedWord;
+}
+
+/// No memory/control effect. A fresh unpredictable result is still not
+/// CSE-able.
+constexpr bool isPureScalarValue(Intrinsic Id) {
+  return Id == Intrinsic::MIPSUnpredictable || Id == Intrinsic::MIPSLwrUpper ||
+         isWordDivision(Id);
+}
+
 constexpr bool isScalarIntrinsic(Intrinsic Id) {
   return mergeLoad(Id).has_value() || Id == Intrinsic::MIPSUnpredictable ||
          Id == Intrinsic::MIPSRequireWord || Id == Intrinsic::MIPSLwrUpper ||
-         isDSPControlIntrinsic(Id);
+         isDSPControlIntrinsic(Id) || isWordDivision(Id);
 }
 
 struct ScalarShape {
@@ -91,6 +102,9 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
   if (Id == Intrinsic::MIPSUnpredictable)
     return S.Inputs == 1 && (S.Target == Arch::Unknown ||
                              S.OutputBytes == (isMIPS64(S.Target) ? 8 : 4));
+  if (isWordDivision(Id))
+    return S.Inputs == 3 && S.OutputBytes == 8 && S.FirstBytes == 4 &&
+           S.SecondBytes == 4;
   if (Id == Intrinsic::MIPSLwrUpper)
     return S.Inputs == 4 && S.OutputBytes == 4 && S.FirstBytes == 8 &&
            S.SecondBytes == 8 && S.ThirdBytes == 4 &&

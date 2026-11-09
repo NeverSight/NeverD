@@ -30,7 +30,8 @@ FUNCTIONS = ("dsp_read", "dsp_write", "dsp_partial", "dsp_add",
              "dsp_sub_saturate", "dsp_sub_zero", "dsp_half_add",
              "dsp_half_add_saturate", "dsp_half_sub", "dsp_half_sub_saturate",
              "dsp_shrl", "dsp_shrlv", "dsp_shra", "dsp_shrav", "dsp_shra_r",
-             "dsp_shrav_r", "dsp_shra_rw", "dsp_shrav_rw", "dsp_pack_h", "dsp_pack_b")
+             "dsp_shrav_r", "dsp_shra_rw", "dsp_shrav_rw", "dsp_pack_h", "dsp_pack_b",
+             "dsp_bitrev", "dsp_raddu", "dsp_repl_qb", "dsp_repl_ph", "dsp_replv_qb", "dsp_replv_ph", "dsp_preceq_phl", "dsp_preceq_phr", "dsp_precequ_qbl", "dsp_precequ_qbr", "dsp_precequ_qbla", "dsp_precequ_qbra", "dsp_preceu_qbl", "dsp_preceu_qbr", "dsp_preceu_qbla", "dsp_preceu_qbra")
 INITIAL_STATES = (0, 0x01100021, 0x0fff7fbf)
 INPUTS = ((0, 0), (0xff01807f, 0x02018081), (0x11223344, 0x55667788),
           (0xffffffff, 1), (0x80808080, 0x80808080),
@@ -45,6 +46,23 @@ def digest(path):
 
 def expected(function, initial, arguments):
     a, b = arguments
+    if function.startswith("dsp_prece"):
+        if function == "dsp_preceq_phl":
+            return a & 0xffff0000, initial
+        if function == "dsp_preceq_phr":
+            return (a << 16) & 0xffffffff, initial
+        offsets = {"qbl": (3, 2), "qbr": (1, 0), "qbla": (3, 1), "qbra": (2, 0)}[function.split("_")[-1]]
+        high, low = ((a >> (8 * n)) & 255 for n in offsets)
+        shift = 7 if function.startswith("dsp_precequ") else 0
+        return ((high << 16) | low) << shift, initial
+    if function == "dsp_bitrev":
+        return int(f"{a & 65535:016b}"[::-1], 2), initial
+    if function == "dsp_raddu":
+        return sum(a.to_bytes(4, "little")), initial
+    if function.startswith("dsp_repl"):
+        value = 0xa5 if function == "dsp_repl_qb" else 0xfe00 if function == "dsp_repl_ph" else a
+        width = 8 if function.endswith("qb") else 16
+        return sum((value & ((1 << width) - 1)) << n for n in range(0, 32, width)), initial
     if function.startswith("dsp_pack"):
         value = ((a & 0xffff0000) | (b >> 16)) if function.endswith("_h") else (
             ((a >> 24) << 24) | (((a >> 8) & 255) << 16) | ((b >> 24) << 8) | ((b >> 8) & 255))

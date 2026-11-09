@@ -113,6 +113,8 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
                        *Kind == Instruction::UnsignedMaximumVector;
   const bool SignedExtremum = *Kind == Instruction::SignedMinimumVector ||
                               *Kind == Instruction::SignedMaximumVector;
+  const bool Absolute = *Kind == Instruction::AbsoluteMinimumVector ||
+                        *Kind == Instruction::AbsoluteMaximumVector;
   const uint16_t Bytes =
       *Kind == Instruction::FillWord || *Kind == Instruction::InsertWord
           ? 4
@@ -138,10 +140,33 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
         }
         Values[I] = S.binary(*Bit, A, Mask);
       }
-    } else if (*Kind == Instruction::MultiplyVector)
-      Values[I] =
+    } else if (*Kind == Instruction::MultiplyVector ||
+               *Kind == Instruction::MultiplyAddVector ||
+               *Kind == Instruction::MultiplySubVector) {
+      const auto Product =
           S.binary(NdOp::INT_MULT, Lane(WS, I, Bytes), Lane(WT, I, Bytes));
-    else if (Minimum || Maximum) {
+      Values[I] = *Kind == Instruction::MultiplyVector
+                      ? Product
+                      : S.binary(*Kind == Instruction::MultiplyAddVector
+                                     ? NdOp::INT_ADD
+                                     : NdOp::INT_SUB,
+                                 Lane(WD, I, Bytes), Product);
+    } else if (Absolute) {
+      const auto A = Lane(WS, I, Bytes), B = Lane(WT, I, Bytes);
+      const auto Magnitude = [&](NdVar Value) {
+        const auto Result = S.makeTemp(Bytes);
+        S.emit(NdOp::SELECT, Result,
+               {S.binary(NdOp::INT_SLESS, Value, NdVar::cst(0, Bytes), 1),
+                S.binary(NdOp::INT_SUB, NdVar::cst(0, Bytes), Value), Value});
+        return Result;
+      };
+      const auto X = Magnitude(A), Y = Magnitude(B);
+      const bool Min = *Kind == Instruction::AbsoluteMinimumVector;
+      const auto Condition =
+          S.binary(NdOp::INT_LESS, Min ? X : Y, Min ? Y : X, 1);
+      Values[I] = S.makeTemp(Bytes);
+      S.emit(NdOp::SELECT, Values[I], {Condition, A, B}); // Ties choose WT.
+    } else if (Minimum || Maximum) {
       const auto A = Lane(WS, I, Bytes), B = Lane(WT, I, Bytes);
       const auto Condition =
           S.binary(SignedExtremum ? NdOp::INT_SLESS : NdOp::INT_LESS, A, B, 1);

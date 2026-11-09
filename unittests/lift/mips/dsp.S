@@ -265,3 +265,163 @@ dsp_pack_b:
   nop
 .end dsp_pack_b
 .size dsp_pack_b, .-dsp_pack_b
+
+.globl dsp_bitrev
+.type dsp_bitrev,@function
+.ent dsp_bitrev
+dsp_bitrev:
+  bitrev $v0,$a0
+  jr $ra
+  nop
+.end dsp_bitrev
+.size dsp_bitrev, .-dsp_bitrev
+
+.globl dsp_raddu
+.type dsp_raddu,@function
+.ent dsp_raddu
+dsp_raddu:
+  raddu.w.qb $v0,$a0
+  jr $ra
+  nop
+.end dsp_raddu
+.size dsp_raddu, .-dsp_raddu
+
+.globl dsp_repl_qb
+.type dsp_repl_qb,@function
+.ent dsp_repl_qb
+dsp_repl_qb:
+  repl.qb $v0,165
+  jr $ra
+  nop
+.end dsp_repl_qb
+.size dsp_repl_qb, .-dsp_repl_qb
+
+.globl dsp_repl_ph
+.type dsp_repl_ph,@function
+.ent dsp_repl_ph
+dsp_repl_ph:
+  repl.ph $v0,-512
+  jr $ra
+  nop
+.end dsp_repl_ph
+.size dsp_repl_ph, .-dsp_repl_ph
+
+.globl dsp_replv_qb
+.type dsp_replv_qb,@function
+.ent dsp_replv_qb
+dsp_replv_qb:
+  replv.qb $v0,$a0
+  jr $ra
+  nop
+.end dsp_replv_qb
+.size dsp_replv_qb, .-dsp_replv_qb
+
+.globl dsp_replv_ph
+.type dsp_replv_ph,@function
+.ent dsp_replv_ph
+dsp_replv_ph:
+  replv.ph $v0,$a0
+  jr $ra
+  nop
+.end dsp_replv_ph
+.size dsp_replv_ph, .-dsp_replv_ph
+
+.globl dsp_preceq_phl
+.type dsp_preceq_phl,@function
+.ent dsp_preceq_phl
+dsp_preceq_phl:
+  preceq.w.phl $v0,$a0
+  jr $ra
+  nop
+.end dsp_preceq_phl
+.size dsp_preceq_phl, .-dsp_preceq_phl
+
+.globl dsp_preceq_phr
+.type dsp_preceq_phr,@function
+.ent dsp_preceq_phr
+dsp_preceq_phr:
+  preceq.w.phr $v0,$a0
+  jr $ra
+  nop
+.end dsp_preceq_phr
+.size dsp_preceq_phr, .-dsp_preceq_phr
+
+.globl dsp_precequ_qbl
+.type dsp_precequ_qbl,@function
+.ent dsp_precequ_qbl
+dsp_precequ_qbl:
+  precequ.ph.qbl $v0,$a0
+  jr $ra
+  nop
+.end dsp_precequ_qbl
+.size dsp_precequ_qbl, .-dsp_precequ_qbl
+
+.globl dsp_precequ_qbr
+.type dsp_precequ_qbr,@function
+.ent dsp_precequ_qbr
+dsp_precequ_qbr:
+  precequ.ph.qbr $v0,$a0
+  jr $ra
+  nop
+.end dsp_precequ_qbr
+.size dsp_precequ_qbr, .-dsp_precequ_qbr
+
+.globl dsp_precequ_qbla
+.type dsp_precequ_qbla,@function
+.ent dsp_precequ_qbla
+dsp_precequ_qbla:
+  precequ.ph.qbla $v0,$a0
+  jr $ra
+  nop
+.end dsp_precequ_qbla
+.size dsp_precequ_qbla, .-dsp_precequ_qbla
+
+.globl dsp_precequ_qbra
+.type dsp_precequ_qbra,@function
+.ent dsp_precequ_qbra
+dsp_precequ_qbra:
+  precequ.ph.qbra $v0,$a0
+  jr $ra
+  nop
+.end dsp_precequ_qbra
+.size dsp_precequ_qbra, .-dsp_precequ_qbra
+
+.globl dsp_preceu_qbl
+.type dsp_preceu_qbl,@function
+.ent dsp_preceu_qbl
+dsp_preceu_qbl:
+  preceu.ph.qbl $v0,$a0
+  jr $ra
+  nop
+.end dsp_preceu_qbl
+.size dsp_preceu_qbl, .-dsp_preceu_qbl
+
+.globl dsp_preceu_qbr
+.type dsp_preceu_qbr,@function
+.ent dsp_preceu_qbr
+dsp_preceu_qbr:
+  preceu.ph.qbr $v0,$a0
+  jr $ra
+  nop
+.end dsp_preceu_qbr
+.size dsp_preceu_qbr, .-dsp_preceu_qbr
+
+.globl dsp_preceu_qbla
+.type dsp_preceu_qbla,@function
+.ent dsp_preceu_qbla
+dsp_preceu_qbla:
+  preceu.ph.qbla $v0,$a0
+  jr $ra
+  nop
+.end dsp_preceu_qbla
+.size dsp_preceu_qbla, .-dsp_preceu_qbla
+
+.globl dsp_preceu_qbra
+.type dsp_preceu_qbra,@function
+.ent dsp_preceu_qbra
+dsp_preceu_qbra:
+  preceu.ph.qbra $v0,$a0
+  jr $ra
+  nop
+.end dsp_preceu_qbra
+.size dsp_preceu_qbra, .-dsp_preceu_qbra

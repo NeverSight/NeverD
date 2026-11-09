@@ -131,6 +131,11 @@ struct CallArgumentConvention {
   /// one, since every caller passes exactly those, else those whose incoming
   /// value reaches a use (a call to a summarized callee reads its arguments).
   bool ParametersFromIncomingReads = false;
+  /// An inferred integer parameter retains its whole register carrier. Reading
+  /// only low bytes does not prove the caller supplies the extension required
+  /// by a narrow source parameter. Declared source types are handled
+  /// separately.
+  bool IntegerParametersUseFullRegisters = false;
   /// Register arguments fill the argument registers in order with no gap
   /// (regparm), so a live register after an unread one is not an argument.
   bool RegisterArgumentsFillInOrder = false;

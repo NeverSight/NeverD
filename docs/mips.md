@@ -83,10 +83,30 @@ dependency. Multi-block and nonadjacent pairs remain outside this proof.
 Concrete LowIR transport and source parameter inference have separate validation
 boundaries; this source proof does not initialize absent machine registers.
 
+Classic `DIV`/`DIVU` and MIPS16 word division capture both operands and define
+HI/LO together. Signed division truncates toward zero; remainder follows the
+dividend's sign. MIN32/-1 produces the truncated word quotient and zero
+remainder. A zero divisor makes both LowIR results unknown, without inventing
+an arithmetic exception or adopting a particular CPU's value. On MIPS64, both
+word inputs must be sign-extended words and each result is sign-extended.
+
+Generated source has an explicitly narrower domain: **every retained division
+that executes requires a nonzero divisor**. Its runtime domain check is not a
+MIPS exception. A fully dead division can disappear; checking the divisor after
+a live division does not extend the source domain to zero, even when that path
+never reads HI/LO. C and LLVM use unsigned word magnitudes and wrap signs, so
+MIN32/-1 causes neither signed overflow nor a 64-bit runtime division helper on
+o32. Word division's pure value effect is shared by DCE and leaf stack-return
+proofs; fresh unknown results remain ineligible for common-subexpression reuse.
+Inferred MIPS integer parameters retain their full o32/n64 register carrier.
+Reading only a low byte or halfword does not prove that incoming upper bits
+have the extension a narrow C parameter would require. Declared source types
+remain a separate contract.
+
 This is a strict subset. n32, historical MIPS I–V profiles, Release 6,
 microMIPS64, floating point, MSA/DSP forms beyond the slices below, privileged
 instructions, LL/SC reservations,
-unaligned merge stores and trapping arithmetic/division are not admitted by
+unaligned merge stores, doubleword division and trapping arithmetic are not admitted by
 the current lifter. Unsupported instructions, missing slots and transfers in a
 delay slot produce errors, not replacement NOPs. Floating/aggregate source ABI
 classification, arbitrary PIC/gp recovery, raw-input target selection and
@@ -107,6 +127,13 @@ The initial DSP slice admits classic MIPS32r2/o32 ELF in either byte order when
 `SUBQ.PH` and `SUBQ_S.PH`. Pure integer forms include `SHRL.QB`/`SHRLV.QB`,
 `SHRA.PH`/`SHRAV.PH`, `SHRA_R.PH`/`SHRAV_R.PH`,
 `SHRA_R.W`/`SHRAV_R.W`, `PRECRQ.QB.PH` and `PRECRQ.PH.W`.
+`PRECEQ.W.PHL/PHR`, `PRECEQU.PH.QBL/QBR/QBLA/QBRA`, and
+`PRECEU.PH.QBL/QBR/QBLA/QBRA` preserve the specified byte/halfword positions;
+PRECEQU appends seven fractional zero bits. `REPL.QB/PH` and `REPLV.QB/PH`
+replicate immediate or register values, with signed ten-bit REPL.PH immediates.
+`BITREV` reverses the low sixteen bits and zero-fills the upper half;
+`RADDU.W.QB` sums the four unsigned RS bytes (maximum 1020). All these forms
+leave DSPControl unchanged; reserved source/immediate bits are checked.
 Variable counts are reduced modulo the lane width. Rounded arithmetic shifts
 round in widened signed precision, including the identity at count zero.
 Pack operations select the upper half of each source lane. These forms leave
@@ -236,6 +263,19 @@ extended offsets are signed, unscaled 16-bit values. `EXTEND` and its suffix
 form one four-byte instruction, including at addresses two modulo four.
 `MIPS16Integer.def` owns the scalar and memory encoding descriptions.
 
+Short and extended `SAVE`/`RESTORE` have a distinct encoding kind. Their ordered
+word accesses reuse the ordinary memory owner. SAVE writes incoming argument
+homes first, followed by ra, extended saved registers, s1, s0 and static argument
+registers in descending stack addresses. RESTORE loads only the static/saved
+registers from the old SP plus frame size. SP changes after every access
+succeeds; a fault retains previous individual effects and the old SP. Frames
+with no accesses impose no alignment check. Short frame zero means 128 bytes;
+extended zero means zero bytes. Reserved aregs 15 is refused. A short frame can
+occupy a two-byte delay slot; the transfer still captures its target/link first.
+These operations are not alignment padding during function discovery.
+In a leaf, saving other registers does not by itself invalidate the saved
+return link; overlapping and unresolved writes still invalidate its proof.
+
 PC/SP-relative `ADDIU` and PC-relative `LW` are supported. PC-relative operations
 clear the base PC's low two bits before adding the offset; they never align the
 sum. In a delay slot the base is the transfer head's first halfword, while the
@@ -262,7 +302,7 @@ verify ELF flags, symbol tags, memory, saved registers and actual callee entry.
 The GNU assembler's [`.insn` directive](https://sourceware.org/binutils/docs-2.29/as/MIPS-insn.html)
 marks literal instruction fixtures so their symbols retain the code mode.
 
-SAVE/RESTORE, division, MIPS16e2 and MIPS16 on MIPS64 remain
+MIPS16e2 and MIPS16 on MIPS64 remain
 unsupported. No path treats a misdecoded operand or unknown instruction as
 valid semantics. The immediate, memory, call and slot rules follow
 [MIPS16e Volume IV-a, revision 2.63](https://jnastarot.io/arch_index/pdf/MD00076-2B-MIPS1632-AFP-02.63.pdf)
@@ -278,7 +318,7 @@ MSA. Other revisions, MSA64, microMIPS/MSA and DSP/MSA combinations are refused.
 
 `FILL.W`, `INSERT.W`, `COPY_S.W`, all four B/H/W/D formats of `ADDV` and
 `SUBV`, `CEQ`, `CLT_S`/`CLT_U`, `CLE_S`/`CLE_U`, `MIN_S`/`MIN_U`,
-`MAX_S`/`MAX_U`, `SLL`/`SRL`/`SRA`, `BCLR`/`BSET`/`BNEG`, `MULV`, and
+`MAX_S`/`MAX_U`, `SLL`/`SRL`/`SRA`, `BCLR`/`BSET`/`BNEG`, `MULV`/`MADDV`/`MSUBV`, `MAX_A`/`MIN_A`, and
 `AND.V`/`OR.V`/`NOR.V`/`XOR.V` use exact encoding descriptors in
 `MIPSMSA.def`. The 32 W registers are 128-bit containers. Lane zero occupies
 the low bits in both byte orders; addition and subtraction wrap independently
@@ -287,7 +327,10 @@ lane to one and every bit of a false lane to zero; signed and unsigned ordering
 have separate rules. Min/max selects the complete winning lane using the same
 signed/unsigned ordering, including 64-bit extrema. Shifts and bit edits use
 the low log2(lane width) bits of each corresponding count/index lane. Multiply
-retains the low lane-width product independently for every lane. Logical
+retains the low lane-width product independently for every lane. MADDV/MSUBV
+add/subtract it from the captured old destination lane. Absolute min/max uses
+unsigned magnitudes, so the minimum signed value has the greatest magnitude;
+equal magnitudes select WT, including opposite signs. Logical
 operations consume all 128 bits.
 Inputs are captured before an overlapping destination is written. F registers
 share the low 64 bits of their corresponding W register.
@@ -311,7 +354,7 @@ The execution contract requires MSA enabled with CU1/FR configured. It does not
 model disabled-MSA exceptions, MSA floating point/control state or arbitrary
 MSA guest execution. The operation and alias rules follow the MIPS32 MSA manual
 (MD00866, revision 1.12), sections ADDV, SUBV, CEQ, CLT/CLE, MIN/MAX,
-SLL/SRL/SRA, BCLR/BSET/BNEG, MULV, AND/OR/NOR/XOR,
+SLL/SRL/SRA, BCLR/BSET/BNEG, MULV/MADDV/MSUBV, MAX_A/MIN_A, AND/OR/NOR/XOR,
 COPY_S, FILL and INSERT. Owned execution
 fixtures validate scalar results, output bytes and the ABI-preserved low FPR
 views against an enabled P5600 reference; no unimplemented W-register API is
