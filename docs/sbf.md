@@ -568,6 +568,17 @@ live. When a later root needs a specialization,
 unused earlier parents and their unreferenced children can be reclaimed
 together. Other published dependencies and the current root stay live; reusable
 completed inputs remain cached while no specialization needs their space.
+A completed older root whose inputs match the generic entry can also release
+its specialization when the generic result preserves its opaque return and
+every target proof remains independently published. Return differences and
+finite alternatives still prevent this replacement. Independent publication
+excludes the retiring root from both traversal seeds and incoming edges; its
+own descendants cannot serve as witnesses that they survive its removal.
+When same-entry siblings do not cover the evidence, a bounded traversal of
+other completed published roots can establish that the exact retained
+witnesses remain reachable. This requires the same evidence objects and proof
+keys, rather than equal target addresses from different input constraints.
+Only required witnesses are retained in the existing charged target index.
 Function-call-free generic
 summaries with identical projected inputs are reused without losing input facts.
 A completed specialized summary can also serve another caller when every input
