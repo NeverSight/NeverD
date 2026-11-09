@@ -220,9 +220,40 @@ Saving an abort message or writing a fatal log does not itself terminate the
 process. Ordinary memory snapshots observe the slot and record; there is no
 second host-side copy of the live abort pointer.
 
+Direct and dynamically resolved `__android_log_assert` reuse the formatter's
+1024-byte buffer and AAPCS64 argument reader. A null format selects the literal
+`Assertion failed: ` plus condition, or `Unspecified assertion failed` when both
+are null. The complete condition is read even when the retained prefix is full;
+a supplied format leaves the condition unread. The first embedded NUL ends the
+subsequent output. The model writes that message and one newline to live fd 2
+through the shared Linux writev output owner, then performs a fatal text write,
+then calls shared Bionic `abort`. It retries stderr only for EINTR; a modeled
+write error or short result does not suppress logging or abort. Closed/read-only
+descriptors set libc errno, dup aliases select the actual sink, and the shared
+output budget precedes any output bytes. Unmodeled file/device/socket writev
+providers remain explicit boundaries. Earlier stderr bytes survive a later tag
+fault, missing abort binding or log-transcript refusal. A supplied negative
+log result still proceeds to abort.
+
+API 28 `abort` blocks all blockable signals except SIGABRT in the calling
+thread and sends that thread SIGABRT with SI_TKILL. A previously blocked pending
+SIGABRT is delivered when the mask changes, before that new send. It uses
+explicit shared Linux
+dispositions and ordinary guest signal frames; a default action reports
+`signaled` with signal 6 for the whole guest process. If SIGABRT is ignored or
+its handler returns, abort installs the default action, restores its mask and
+sends SIGABRT again. Handler exit and mutable-ucontext redirection retain their
+ordinary semantics, without inventing a normal return from the abort/assert
+import. An omitted signal environment or unknown disposition stops explicitly;
+handler delivery also needs the existing alternate-stack declaration. No host
+signal, core file, atexit callback or stdio flush is generated. See the fixed
+[Bionic abort implementation](https://android.googlesource.com/platform/bionic/+/android-9.0.0_r1/libc/bionic/abort.cpp).
+Handler `_exit` and `_Exit` calls both bind to shared Linux `exit_group`, as
+specified by the [API 28 ARM64 syscall stub](https://android.googlesource.com/platform/bionic/+/android-9.0.0_r1/libc/arch-arm64/syscalls/_exit.S).
+
 This bounded subset requires explicit results and supplies no logd clock,
-property filter or host transport. Log assertions and Java Log wrappers remain
-explicit boundaries. Formatting-buffer clipping
+property filter or host transport. Java Log wrappers remain explicit boundaries.
+Formatting-buffer clipping
 and transport clipping have separate byte limits; the shared text-write owner
 applies the latter after formatting and radio-tag routing.
 

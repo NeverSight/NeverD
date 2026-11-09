@@ -18,7 +18,7 @@ struct SignalActionResult {
 };
 
 /// Raw syscalls and libc adapters share the same process-wide action table.
-/// Standard process-directed pending signals and per-thread blocked sets.
+/// Standard process/thread pending signals and per-thread blocked sets.
 /// AArch64 handlers use guest signal frames, never host callbacks.
 class LinuxSignals {
 public:
@@ -37,6 +37,10 @@ public:
   /// Linux pid_t/int arguments have already been narrowed by the service layer.
   std::optional<uint64_t> send(int32_t PID, int32_t Signal, uint64_t TID,
                                ProcessResult &Result);
+  /// Queue a standard signal to the current, registered guest thread.
+  /// Unlike kill, this cannot be consumed by a different runnable thread.
+  std::optional<uint64_t> sendThread(int32_t Signal, uint64_t TID,
+                                     ProcessResult &Result);
   struct MaskResult {
     uint64_t Status = 0, Previous = 0;
   };
@@ -58,6 +62,7 @@ public:
   struct Delivery {
     int32_t Signal = 0;
     LinuxSignalAction Action;
+    bool ThreadDirected = false;
   };
   /// Discard ignored signals and resolve defaults before interrupting a wait.
   /// Signal zero means no handler; an absent result is a classified stop.
@@ -79,14 +84,17 @@ private:
   struct ThreadState {
     std::optional<uint64_t> Mask;
     std::vector<uint64_t> Frames;
+    uint64_t Pending = 0;
   };
   std::map<uint64_t, ThreadState> Threads;
   std::function<std::vector<ProcTask>()> Tasks;
   uint64_t Pending = 0, Trampoline = 0;
+  std::optional<uint64_t> queue(int32_t Signal, uint64_t TID,
+                                bool ThreadDirected, ProcessResult &Result);
   llvm::Expected<bool> enter(ExecutionBackend &CPU, const MemoryLayout &Layout,
                              LinuxMemory &Memory, uint64_t TID, int32_t Signal,
                              const LinuxSignalAction &Action,
-                             ProcessResult &Result);
+                             bool ThreadDirected, ProcessResult &Result);
 };
 } // namespace neverd::emulation::linux_model
 #endif

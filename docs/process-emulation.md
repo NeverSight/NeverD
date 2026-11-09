@@ -264,13 +264,17 @@ Standard self-process signals use one coalesced pending set and per-thread
 blocked sets. Supply `initial_mask` explicitly (an unsigned 64-bit integer or
 decimal string); an omitted mask remains unknown. New Android threads inherit
 their creator's mask. Runnable threads receive eligible signals at guest
-execution boundaries, with lower signal numbers selected first. `rt_sigprocmask`
+execution boundaries, with lower signal numbers selected first. Bionic `abort`
+also uses a separate calling-thread pending set; Linux dequeues eligible private
+signals before process-wide ones, and the sets coalesce independently.
+`rt_sigprocmask`
 uses an eight-byte set, captures input before output, filters SIGKILL/SIGSTOP,
 and commits a valid mask change before a failed old-mask copy. `rt_sigpending`
 copies the blocked pending subset, accepting output lengths from zero to eight.
 Installing SIG_IGN, or SIG_DFL for SIGCHLD/SIGURG/SIGWINCH, discards pending
 instances. Default terminating actions produce the same typed `signaled`
-outcome as SIGKILL; core-dumping actions remain unsupported.
+outcome as SIGKILL. SIGABRT is included with signal 6; the model does not generate
+a core file. Other core-dumping default actions remain unsupported.
 
 AArch64 handlers additionally require `alternate_stack_disabled: true`, meaning
 the alternate stack is explicitly cleared and disabled. They execute original
@@ -287,6 +291,10 @@ Android API 28 adapters include `sigprocmask[64]`, `sigpending[64]`, `signal`,
 and `sigemptyset`, `sigfillset`, `sigaddset`, `sigdelset`, `sigismember` (also their
 64 variants). They share the Linux state while preserving Bionic's reserved
 signals, wrapper copy ordering and errno. `signal` installs SA_RESTART.
+`abort` establishes its own mask, sends private SIGABRT with SI_TKILL, and after
+an ignored signal or a returning handler installs SIG_DFL/SA_RESTART and sends
+again. It shares the existing handler, mutable-frame and whole-process
+termination owners. This does not add general `tgkill` or `raise` imports.
 
 An eligible pending signal also makes an Android cooperative waiter schedulable.
 Ignored signals leave its operation pending; default termination ends the

@@ -35,6 +35,11 @@ public:
   llvm::Expected<std::optional<uint64_t>>
   handle(ServiceKind Kind, const ProcessServiceEvent &Event,
          ThreadContext *Thread = nullptr);
+  /// A libc model has already constructed these writev buffers. Descriptor
+  /// identity, captured output, errno and unsupported providers stay shared.
+  llvm::Expected<std::optional<uint64_t>>
+  writeBuffers(uint32_t FD, llvm::ArrayRef<llvm::StringRef> Buffers,
+               ThreadContext *Thread = nullptr);
   llvm::Error initializeProc() { return Memory.initializeProc(); }
   void setTaskProvider(std::function<std::vector<ProcTask>()> Provider) {
     Signals.setTaskProvider(Provider);
@@ -81,6 +86,10 @@ public:
   }
 
 private:
+  llvm::Expected<std::optional<uint64_t>>
+  write(ServiceKind Kind, const ProcessServiceEvent &Event,
+        ThreadContext *Thread,
+        std::optional<llvm::ArrayRef<llvm::StringRef>> Buffers = std::nullopt);
   ExecutionBackend &CPU;
   const MemoryLayout &Layout;
   const ProcessOptions &Options;

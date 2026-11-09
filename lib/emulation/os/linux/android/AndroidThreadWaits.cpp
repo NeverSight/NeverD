@@ -310,32 +310,58 @@ GuestThreads::interruptWait(const LinuxSignalAction &Action) {
   return true;
 }
 
-llvm::Error GuestThreads::resumeSignal(Bionic &LibC) {
-  auto &Returns = current().SignalReturns;
-  if (Returns.empty() || Signals.frameDepth(id()) != Returns.back().Depth)
-    return llvm::Error::success();
-  const auto Pending = Returns.back();
-  Returns.pop_back();
-  auto PC = CPU.readRegister(CPURegister::AArch64PC);
-  if (!PC)
-    return PC.takeError();
-  // A ucontext redirect can deliberately bypass the modeled wrapper. Do not
-  // force its old return value/PC/errno onto the new guest continuation, or
-  // claim that this native call returned normally.
-  if ((*PC)[0] != Pending.Request.NextPC)
-    return llvm::Error::success();
-  auto Raw = CPU.readRegister(CPURegister::AArch64X0);
-  if (!Raw)
-    return Raw.takeError();
-  auto Adapted = LibC.kernelResult((*Raw)[0], Pending.Sleep);
-  if (!Adapted)
-    return Adapted.takeError();
-  assert(*Adapted && std::holds_alternative<uint64_t>(**Adapted));
-  const auto Value = std::get<uint64_t>(**Adapted);
-  if (auto E = CPU.writeRegister(CPURegister::AArch64X0, {Value, 0}))
+llvm::Error GuestThreads::suspendAbort(const ServiceRequest &Request,
+                                       size_t Event) {
+  if (auto E = CPU.writeRegister(CPURegister::AArch64PC, {Request.NextPC, 0}))
     return E;
-  Result.NativeCalls[Pending.Event].Result = Value;
+  Result.PC = Request.NextPC;
+  current().SignalReturns.push_back({Request, Event, Signals.frameDepth(id()),
+                                     std::nullopt,
+                                     SignalReturn::AbortUnblocked});
   return llvm::Error::success();
+}
+
+llvm::Expected<bool> GuestThreads::resumeSignal(Bionic &LibC) {
+  auto &Returns = current().SignalReturns;
+  for (;;) {
+    if (Returns.empty() || Signals.frameDepth(id()) != Returns.back().Depth)
+      return true;
+    const auto Pending = Returns.back();
+    auto PC = CPU.readRegister(CPURegister::AArch64PC);
+    if (!PC)
+      return PC.takeError();
+    // A ucontext redirect can deliberately bypass the modeled wrapper. Do not
+    // force its old return value/PC/errno onto the new guest continuation, or
+    // claim that this native call returned normally.
+    if ((*PC)[0] != Pending.Request.NextPC) {
+      Returns.pop_back();
+      return true;
+    }
+    if (Pending.Continuation == SignalReturn::AbortUnblocked) {
+      Returns.back().Continuation = SignalReturn::AbortSignaled;
+      auto Delivered = LibC.continueAbort(false);
+      if (!Delivered || !*Delivered)
+        return Delivered;
+      // Ignored/blocked sends leave no frame. Continue to the default phase;
+      // otherwise the changed depth defers it until the handler returns.
+      continue;
+    }
+    Returns.pop_back();
+    if (Pending.Continuation == SignalReturn::AbortSignaled)
+      return LibC.continueAbort(true);
+    auto Raw = CPU.readRegister(CPURegister::AArch64X0);
+    if (!Raw)
+      return Raw.takeError();
+    auto Adapted = LibC.kernelResult((*Raw)[0], Pending.Sleep);
+    if (!Adapted)
+      return Adapted.takeError();
+    assert(*Adapted && std::holds_alternative<uint64_t>(**Adapted));
+    const auto Value = std::get<uint64_t>(**Adapted);
+    if (auto E = CPU.writeRegister(CPURegister::AArch64X0, {Value, 0}))
+      return std::move(E);
+    Result.NativeCalls[Pending.Event].Result = Value;
+    return true;
+  }
 }
 
 void GuestThreads::suspend(const ServiceRequest &Request, size_t Event,

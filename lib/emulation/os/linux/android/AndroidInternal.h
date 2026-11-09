@@ -130,6 +130,7 @@ struct GuestCallback {
       Continuation;
 };
 struct GuestThreadWait {};
+struct GuestAbort {};
 struct GuestThreadExit {
   uint64_t Value;
 };
@@ -139,9 +140,9 @@ struct SleepContinuation {
   uint32_t Seconds, Excess;
   std::shared_ptr<LinuxTimespec> Remaining;
 };
-/// A returning model either completes now or suspends for a guest callback.
-using BionicValue =
-    std::variant<uint64_t, GuestCallback, GuestThreadWait, GuestThreadExit>;
+/// A model completes now or transfers control to guest execution.
+using BionicValue = std::variant<uint64_t, GuestCallback, GuestThreadWait,
+                                 GuestThreadExit, GuestAbort>;
 using BionicResult = llvm::Expected<std::optional<BionicValue>>;
 using DexCompletion = std::function<BionicResult(uint64_t)>;
 struct DexContinuation {
@@ -190,6 +191,7 @@ public:
   bool timedOut() const { return Expired; }
   BionicResult invoke(NativeCallEvent &Call);
   BionicResult finishCallback(const GuestCallback &Callback);
+  llvm::Expected<bool> continueAbort(bool ResetHandler);
   void reportJNIState();
   BionicResult resumeMutex(uint64_t Address, uint16_t Attributes);
   /// Complete a shared kernel result using the current thread's libc errno.
@@ -324,6 +326,8 @@ private:
   BionicResult signalPending(const NativeCallEvent &Call);
   BionicResult signalHandler(const NativeCallEvent &Call);
   BionicResult signalSet(const NativeCallEvent &Call);
+  BionicResult abortCall(const NativeCallEvent &Call);
+  bool abortMask();
   llvm::Expected<std::optional<uint64_t>>
   kernelService(linux_model::ServiceKind Kind,
                 const ProcessServiceEvent &Event);
@@ -373,6 +377,7 @@ private:
   textLogWrite(uint32_t ID, int32_t Priority, LogString Tag, LogString Message);
   BionicResult textLogCall(const NativeCallEvent &Call);
   BionicResult formatLogCall(const NativeCallEvent &Call);
+  BionicResult assertLogCall(const NativeCallEvent &Call);
   BionicResult unsupportedLog(llvm::StringRef Detail);
   struct InputStream {
     uint32_t FD;

@@ -16,6 +16,47 @@ constexpr uint64_t ReservedSignals = uint64_t(0xf) << 31;
 constexpr unsigned ActionSize = 32;
 } // namespace
 
+bool Bionic::abortMask() {
+  // API 28 blocks every blockable signal except SIGABRT, rather than just
+  // unblocking that signal. Reuse the kernel's mask and thread-pending state.
+  const uint64_t Mask =
+      ~(uint64_t(1) << (linux_model::SignalAbort - 1)) & ~ReservedSignals;
+  auto Applied = Kernel.signals().mask(threadID(), 2, Mask, false, Result);
+  if (!Applied)
+    return false;
+  assert(!Applied->Status);
+  return true;
+}
+
+BionicResult Bionic::abortCall(const NativeCallEvent &) {
+  if (!abortMask())
+    return std::optional<BionicValue>();
+  // A previously blocked SIGABRT can run as sigprocmask returns, before the
+  // first tgkill. Retain that boundary without claiming an import return.
+  return std::optional<BionicValue>(GuestAbort{});
+}
+
+llvm::Expected<bool> Bionic::continueAbort(bool ResetHandler) {
+  if (ResetHandler) {
+    const LinuxSignalAction Default{0, 0x10000000, 0, 0}; // SA_RESTART
+    auto Applied =
+        Kernel.signalAction(linux_model::SignalAbort, &Default, false);
+    if (!Applied)
+      return false;
+    assert(!Applied->Status);
+    if (!abortMask())
+      return false;
+  }
+  auto Sent =
+      Kernel.signals().sendThread(linux_model::SignalAbort, threadID(), Result);
+  if (!Sent)
+    return false;
+  assert(!*Sent);
+  // The first send may enter a guest handler. After a normal handler return,
+  // the second has a known default and terminates the whole guest process.
+  return Kernel.deliverSignals(threadID());
+}
+
 BionicResult Bionic::signalAction(const NativeCallEvent &Call) {
   const auto &A = Call.Arguments;
   LinuxSignalAction NewAction;

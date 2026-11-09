@@ -483,8 +483,7 @@ if(TARGET neverd_shared)
     "${CMAKE_SOURCE_DIR}/include" "${CMAKE_SOURCE_DIR}/lib/sdk/capi"
     ${LLVM_INCLUDE_DIRS})
   if(WIN32)
-    target_sources(NeverDSessionFunctionDiscoveryTests PRIVATE
-      "${CMAKE_SOURCE_DIR}/lib/ir/NdTypes.cpp")
+    target_link_libraries(NeverDSessionFunctionDiscoveryTests PRIVATE NeverDIR)
   endif()
   target_include_directories(NeverDSessionCAPITests PRIVATE
     "${CMAKE_SOURCE_DIR}/include"
