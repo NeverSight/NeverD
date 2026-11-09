@@ -226,6 +226,30 @@ TEST(SymMBA, ProofInstantiationRejectsRelatedButNonEquivalentInputs) {
   }
 }
 
+TEST(SymMBA, CornerAgreementDoesNotProveMaskedOrNonlinearIdentities) {
+  for (unsigned Width : {8u, 64u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width);
+    const auto Negated = Ctx.mkNeg(X);
+    for (const auto Input : {Ctx.mkAnd(X, Ctx.mkOne(Width)), Ctx.mkMul(X, X)}) {
+      // Both sides agree at zero and all-ones. At x=2 they differ, so a
+      // surviving literal mask or a product must retain its independent
+      // abstraction instead of being treated as a uniform linear expression.
+      detail::WorkBudget Budget(65536);
+      EXPECT_FALSE(detail::proveLinearIdentity(Ctx, Input, Negated, 2, Budget));
+      const std::vector<llvm::APInt> Values{llvm::APInt(Width, 2)};
+      EXPECT_NE(Ctx.eval(Input, Values), Ctx.eval(Negated, Values));
+    }
+    const auto Y = Ctx.mkVar("y", Width);
+    const auto Complement = Ctx.mkNot(Ctx.mkAdd(X, Y));
+    detail::WorkBudget Budget(65536);
+    EXPECT_TRUE(detail::proveLinearIdentity(
+        Ctx, Complement,
+        Ctx.mkSub(Ctx.mkNeg(Ctx.mkAdd(X, Y)), Ctx.mkOne(Width)), 2, Budget));
+  }
+}
+
 TEST(SymMBA, ProofInstantiationRespectsRefusalAndIndependentInputs) {
   SymContext Ctx;
   SymRef X = Ctx.mkVar("x", 32);

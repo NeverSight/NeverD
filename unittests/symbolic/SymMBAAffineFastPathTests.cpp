@@ -169,6 +169,58 @@ TEST(SymMBAAffineFastPath, GateBudgetRefusalRemainsAtomic) {
   }
 }
 
+TEST(SymMBAAffineFastPath, DirectAffineLeavesKeepOpaqueAndNestedBoundaries) {
+  std::mt19937_64 Random(0x4449524543544146);
+  for (unsigned Width : {3u, 8u, 64u, 257u}) {
+    auto Word = [&] {
+      llvm::APInt Value(Width, Random(), false, true);
+      for (unsigned Bit = 64; Bit < Width; Bit += 64)
+        Value |= llvm::APInt(Width, Random()).shl(Bit);
+      return Value;
+    };
+    for (unsigned Kind = 0; Kind < 4; ++Kind)
+      for (bool Scale : {false, true})
+        for (bool Products : {false, true}) {
+          SCOPED_TRACE(::testing::Message() << Width << " / " << Kind << " / "
+                                            << Scale << " / " << Products);
+          SymContext Ctx;
+          const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+          const auto Z = Ctx.mkVar("z", Width);
+          const std::array Bases{X, Ctx.mkAnd(X, Y), Ctx.mkMul(X, Y),
+                                 Ctx.mkAdd(X, Y)};
+          const auto Base = Bases[Kind];
+          const auto Literal = Ctx.mkConst(Width, Scale ? 5 : 17);
+          const auto Affine =
+              Scale ? Ctx.mkMul(Literal, Base) : Ctx.mkAdd(Literal, Base);
+          const auto Root = Ctx.mkAdd(Ctx.mkXor(Affine, Z), Base);
+          detail::WorkBudget Budget(MBAOptions::UnlimitedWork);
+          const auto A = detail::abstractToMBA(Ctx, Root, Products, &Budget);
+          ASSERT_TRUE(A);
+          SymEvalPlan Restored(Ctx, Ctx.substitute(A->Body, A->Hidden));
+          for (unsigned Trial = 0; Trial < (Width == 3 ? 512u : 64u); ++Trial) {
+            const auto XV = Width == 3 ? llvm::APInt(Width, Trial & 7) : Word();
+            const auto YV =
+                Width == 3 ? llvm::APInt(Width, (Trial >> 3) & 7) : Word();
+            const auto ZV =
+                Width == 3 ? llvm::APInt(Width, Trial >> 6) : Word();
+            const auto B = Kind == 0   ? XV
+                           : Kind == 1 ? XV & YV
+                           : Kind == 2 ? XV * YV
+                                       : XV + YV;
+            const auto F = Scale ? 5 * B : B + 17;
+            EXPECT_EQ(
+                Restored.evalWith([&](uint32_t Id) -> const llvm::APInt * {
+                  return Id == Ctx.varId(X)   ? &XV
+                         : Id == Ctx.varId(Y) ? &YV
+                         : Id == Ctx.varId(Z) ? &ZV
+                                              : nullptr;
+                }),
+                (F ^ ZV) + B);
+          }
+        }
+  }
+}
+
 TEST(SymMBAAffineFastPath, WideFrontiersRetainIndependentProductInputs) {
   std::mt19937_64 Random(0x46524f4e54494552);
   for (unsigned Width : {3u, 8u, 64u, 65u, 128u, 257u}) {

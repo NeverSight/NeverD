@@ -403,6 +403,27 @@ std::optional<AffineInput> affineInput(const SymContext &Ctx, SymRef Root,
   if (!Resources.array((size_t(Width) + 63) / 64, sizeof(uint64_t)))
     return std::nullopt;
   AffineInput Out{{}, llvm::APInt(Width, 0)};
+  // A literal offset or scale of one opaque base has its complete affine
+  // description already. Do not allocate pending tree nodes just to move the
+  // same base into the result. The boundary is the one the general walk uses;
+  // a linear child still needs that walk to recover its nested relation.
+  const auto RootOp = Ctx.op(Root);
+  const auto RootOps = Ctx.operands(Root);
+  if ((RootOp == SymOp::Add || RootOp == SymOp::Mul) && RootOps.size() == 2 &&
+      Ctx.isConst(RootOps[0]) &&
+      (ForcedAtoms.contains(RootOps[1].index()) ||
+       Roles.lookup(RootOps[1].index()) != Role::Linear)) {
+    const auto &Literal = Ctx.constValue(RootOps[0]);
+    if (RootOp == SymOp::Add) {
+      if (!Resources.charge(Literal.getNumWords()) ||
+          !Resources.add(Out.Terms, RootOps[1].index(), llvm::APInt(Width, 1)))
+        return std::nullopt;
+      Out.Offset = Literal;
+    } else if (!Resources.add(Out.Terms, RootOps[1].index(), Literal)) {
+      return std::nullopt;
+    }
+    return Out;
+  }
   // Parents have larger indices than children.  Combining all incoming
   // coefficients before visiting a child avoids expanding shared DAG paths.
   std::map<uint32_t, llvm::APInt, std::greater<uint32_t>> Pending;
@@ -1265,6 +1286,27 @@ abstractToMBAImpl(SymContext &Ctx, SymRef Root, bool AllowProducts,
 
   Abstraction Out;
   Out.MayHaveProducts = HasProducts;
+  // Classification already establishes the measurement domain. If every
+  // opaque input is an original variable and no mask or arithmetic complement
+  // needs rewriting, the independent body is the original DAG. In particular,
+  // identity proofs need no second placeholder pool or reconstruction tables.
+  const bool NeedsRewriting = llvm::any_of(Order, [&](uint32_t Index) {
+    const SymRef R(Index);
+    const auto Op = Ctx.op(R);
+    const auto Role = Roles.lookup(Index);
+    if (Role == Role::Atom)
+      return !Ctx.isVar(R);
+    if (Op == SymOp::Not)
+      return Role == Role::Linear;
+    return (Op == SymOp::And || Op == SymOp::Or || Op == SymOp::Xor) &&
+           llvm::any_of(Ctx.operands(R),
+                        [&](SymRef C) { return Ctx.isConst(C); });
+  });
+  if (!NeedsRewriting) {
+    Out.Body = Root;
+    Out.IndependentBody = Root;
+    return Out;
+  }
   NodeSet Reserved;
   // Caller inputs below opaque boundaries must still keep their identities,
   // even when their names coincide with a numbered placeholder declaration.

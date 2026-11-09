@@ -10487,6 +10487,29 @@ isolation.
 
 ## Modular MBA simplification
 
+`SymExpr.LateSubstitutionKeysPreserveEarlierRootsAndReplacementBodies` covers
+simultaneous interior replacements and late placeholders through 257 bits.
+`SymParse.LargeSharedFragmentsKeepPrecedenceAfterTableGrowth` checks exact text
+and parser roundtrips past the inline table capacity, including sparse source
+handles separated by unreachable nodes.
+`SymExpr.BinaryProductsPreserveOpaqueOperandsAndModularOverflow` checks direct
+two-factor construction, repeated operands and literal coefficients against
+independent APInt arithmetic through 257 bits, including the 65-bit boundary.
+The incremental-product regression also covers that boundary and retains
+constant, nested-product and zero/unit-coefficient folding.
+`SymMBA.CornerAgreementDoesNotProveMaskedOrNonlinearIdentities` retains
+nonuniform-mask and nonlinear-product refusals even when zero/all-ones
+corners agree, and checks arithmetic complements through 257 bits.
+`SymMBAAffineFastPath.DirectAffineLeavesKeepOpaqueAndNestedBoundaries`
+exhausts every three-bit input tuple and checks independent APInt arithmetic
+through 257 bits for direct offsets/scales over variable, bitwise, product and
+nested linear bases. Existing refusal tests cover every smaller work budget
+and constrained storage during affine recovery.
+`SymMBAWidePairs.SparseCorrectionsLeaveRoomForTheIndependentTail` independently
+evaluates a nonlinear 33-factor product and its linear tail within the shared
+65,536-unit allowance. These tests exercise the shared expression and MBA
+owners used by CLI and GUI source optimization.
+
 Local MBA research can run disposable producers with
 `python3 tools/neverd-bench/mba_attempt.py --directory <owned-attempt-root> -- <command>`.
 The runner retains current and previous evidence, removes scratch after success,
