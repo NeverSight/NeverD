@@ -7373,6 +7373,53 @@ TEST(SBFCallXMemoryPostconditions, RebasesWritesThroughCapturedPointers) {
       Value);
 }
 
+TEST(SBFCallXMemoryPostconditions, FrameWritesKeepOnlyDisjointFormalFields) {
+  using namespace callx_detail;
+  auto Image = test::makeImage({encode(Opcode::EXIT)}, {});
+  Image.SBF->Version = Version::V0;
+  Image.SBF->ELFFlags = 0;
+  Image.SBF->StrictLayout = false;
+  auto Program = analyze(Image);
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  const RegisterValue Number{RegisterValue::Kind::Constant, 42, 0};
+  const RegisterValue Saved{RegisterValue::Kind::StackAddress, 11, -16};
+  const RegisterValue Expression{RegisterValue::Kind::StackAddress, 11, -24};
+  const RegisterValue Copied{RegisterValue::Kind::StackAddress, 11, -32};
+  for (unsigned Mode = 0; Mode < 6; ++Mode) {
+    SCOPED_TRACE(Mode);
+    MemoryPostconditions Post;
+    Post.store(Saved, 8, Number);
+    Post.storeExpression(Expression, 7);
+    Post.recordInputCopy({RegisterValue::Kind::StackAddress, 2, 0}, Copied, 8,
+                         {});
+    auto Entry = symbolicInputs();
+    // Automatic frames advance by a frame and its gap. The saved fields
+    // remain in the caller; the callee may write any of its own descendants.
+    Entry[10].Offset = 2 * Program->Config.StackFrameSize;
+    MemoryEffects Effects;
+    Effects.addWrite({RegisterValue::Kind::StackAddress, 11, -8}, 8, *Program);
+    ASSERT_TRUE(Effects.WritesFrames);
+    if (Mode == 1)
+      Entry[10] = {};
+    if (Mode == 2)
+      Entry[10].Value = 2; // A different formal base can alias these fields.
+    if (Mode == 3)
+      Effects.Unknown = true;
+    if (Mode == 4)
+      Entry[10].Offset = Program->Config.StackFrameSize - 20;
+    if (Mode == 5)
+      Effects.addWrite({RegisterValue::Kind::StackAddress, 3, 0}, 24, *Program);
+    Entry[2] = Copied;
+    Post.invalidate(Effects, Entry, *Program);
+    EXPECT_EQ(Post.read(Saved).singleton(),
+              Mode == 0 ? Number : RegisterValue{});
+    EXPECT_EQ(Post.readExpression(Expression),
+              Mode == 0 ? std::optional<size_t>(7) : std::nullopt);
+    EXPECT_EQ(Post.copyCount(), Mode == 0 || Mode == 4 ? 1u : 0u);
+  }
+}
+
 TEST(SBFCallXContexts,
      ForwardedImageBindingsCanReplaceRedundantOpaqueVariants) {
   for (bool DiverseImageInputs : {false, true}) {

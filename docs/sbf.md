@@ -357,6 +357,12 @@ proven summary outputs are applied. Callee-saved registers survive a return;
 automatic frames advance by the VM stride. The same call-register rule drives
 ordinary block transfer, contextual values, origins, input expressions,
 input dependencies and missing-fact attribution.
+Parameterized fields, saved expressions and deferred copies also survive a
+callee-frame write when their complete destination extent precedes that frame
+under the same formal base. They use the ordinary memory-effect frame boundary;
+different formal bases, unknown frames and overlapping writes still invalidate
+the facts. This preserves older-frame fields without assuming that independent
+parameters cannot alias.
 Resolved syscalls depend on their five exposed host-ABI argument carriers;
 unexposed return, callee-saved and frame registers do not create new summary
 variants unless the function itself reads them. Unknown calls still depend on
