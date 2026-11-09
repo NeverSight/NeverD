@@ -13261,4 +13261,200 @@ TEST(SBFCallXContexts, ReusesTargetEvidenceWhenTheReturnedScalarIsUnknown) {
   RecordProperty("raw_executions", static_cast<int>(RawExecutions));
 }
 
+TEST(SBFCallXContexts, OrdersOffsetsOfTheSameCapturedValueWithoutWrap) {
+  struct Case {
+    Opcode Predicate;
+    int32_t Left, Right;
+    bool Independent;
+    std::optional<bool> Taken;
+    unsigned Mask = 0;
+    bool Truncate = false;
+  };
+  const std::array Cases{
+      Case{Opcode::JGT64_REG, -24, 0, false, false},
+      Case{Opcode::JGE64_REG, 0, -24, false, true},
+      Case{Opcode::JLT64_REG, -24, 0, false, true},
+      Case{Opcode::JLE64_REG, 0, -24, false, false},
+      Case{Opcode::JEQ64_REG, -24, -24, false, true},
+      Case{Opcode::JNE64_REG, -24, -16, false, true},
+      Case{Opcode::JEQ64_REG, -24, -16, false, false},
+      Case{Opcode::JNE64_REG, -24, -24, false, false},
+      // Equality is modular; ordered comparisons additionally need both
+      // displacements to stay within the captured value's numeric bounds.
+      Case{Opcode::JEQ64_REG, 24, 24, false, true},
+      Case{Opcode::JGT64_REG, 24, 0, false, std::nullopt},
+      Case{Opcode::JLT64_REG, 0, 24, false, std::nullopt},
+      Case{Opcode::JSGT64_REG, -24, 0, false, std::nullopt},
+      Case{Opcode::JEQ64_REG, 0, 0, true, std::nullopt},
+      Case{Opcode::JEQ64_REG, 0, 0, false, true, 1},
+      Case{Opcode::JEQ64_REG, 0, 0, false, true, 2},
+      Case{Opcode::JEQ64_REG, 0, 0, false, std::nullopt, 3},
+      Case{Opcode::JGT64_REG, -24, 0, false, std::nullopt, 0, true}};
+  const uint64_t Lower = kHeapStart + 8;
+  size_t RawExecutions = 0;
+  for (const auto &C : Cases)
+    for (bool Reverse : {false, true}) {
+      SCOPED_TRACE(::testing::Message()
+                   << static_cast<unsigned>(C.Predicate) << ", left=" << C.Left
+                   << ", right=" << C.Right << ", independent=" << C.Independent
+                   << ", mask=" << C.Mask << ", truncate=" << C.Truncate
+                   << ", reverse=" << Reverse);
+      std::vector<test::EncodedInstruction> Text;
+      const auto Literal = [&](unsigned R, uint64_t Value) {
+        const size_t Slot = Text.size();
+        const auto Words = test::loadImm64(R, Value);
+        Text.insert(Text.end(), Words.begin(), Words.end());
+        return Slot;
+      };
+      Literal(1, kInputStart);
+      const size_t AcquireCall = Text.size();
+      Text.push_back({});
+      const size_t Null = Text.size();
+      Text.push_back({});
+      Text.push_back(encode(Opcode::MOV64_REG, 6, 0));
+      std::optional<size_t> OtherCall, OtherNull;
+      if (C.Independent) {
+        Literal(1, kInputStart + 8);
+        OtherCall = Text.size();
+        Text.push_back({});
+        OtherNull = Text.size();
+        Text.push_back({});
+      }
+      Text.push_back(encode(Opcode::MOV64_REG, 1, 6));
+      Text.push_back(encode(Opcode::ADD64_IMM, 1, 0, 0, C.Left));
+      Text.push_back(encode(Opcode::MOV64_REG, 2, C.Independent ? 0 : 6));
+      Text.push_back(encode(Opcode::ADD64_IMM, 2, 0, 0, C.Right));
+      if (C.Mask == 2) {
+        Text.push_back(encode(Opcode::MOV64_IMM, 3, 0, 0, -1));
+        Text.push_back(encode(Opcode::AND64_REG, 1, 3));
+      } else if (C.Mask) {
+        Text.push_back(
+            encode(Opcode::AND64_IMM, 1, 0, 0, C.Mask == 1 ? -1 : -8));
+      }
+      if (C.Truncate) {
+        Text.push_back(encode(Opcode::MOV32_REG, 1, 1));
+        Text.push_back(encode(Opcode::MOV32_REG, 2, 2));
+      }
+      const size_t Branch = Text.size();
+      Text.push_back({});
+      const size_t FalseLiteral = Literal(5, 0);
+      const size_t JoinBranch = Text.size();
+      Text.push_back({});
+      const size_t TrueLiteral = Literal(5, 0);
+      const size_t CallX = Text.size();
+      Text.push_back(encode(Opcode::CALL_REG, 5));
+      const size_t Exit = Text.size();
+      Text.push_back(encode(Opcode::EXIT));
+      // The input address is bounded, but neither allocator freshness nor a
+      // heap initialization is assumed. Two calls can return the same value.
+      const size_t Acquire = Text.size();
+      Text.push_back(encode(Opcode::LD_DW_REG, 0, 1));
+      Literal(2, Lower);
+      Text.push_back(encode(Opcode::JGE64_REG, 0, 2, 1));
+      Text.push_back(encode(Opcode::MOV64_IMM, 0));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t FalseTarget = Text.size();
+      Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t TrueTarget = Text.size();
+      Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 73));
+      Text.push_back(encode(Opcode::EXIT));
+      for (size_t Slot : {AcquireCall, OtherCall.value_or(AcquireCall)})
+        Text[Slot] = encode(Opcode::CALL_IMM, 0, 1, 0, Acquire - Slot - 1);
+      for (size_t Slot : {Null, OtherNull.value_or(Null)})
+        Text[Slot] = encode(Opcode::JEQ64_IMM, 0, 0, Exit - Slot - 1);
+      Text[Branch] = encode(C.Predicate, 1, 2, TrueLiteral - Branch - 1);
+      Text[JoinBranch] = encode(Opcode::JA, 0, 0, CallX - JoinBranch - 1);
+      for (const auto &[Slot, Target] : {std::pair{FalseLiteral, FalseTarget},
+                                         std::pair{TrueLiteral, TrueTarget}}) {
+        const auto Words = test::loadImm64(5, kBytecodeStart + Target * 8);
+        std::copy(Words.begin(), Words.end(), Text.begin() + Slot);
+      }
+      auto Program = analyze(test::makeImage(Text, {}));
+      ASSERT_TRUE(static_cast<bool>(Program))
+          << llvm::toString(Program.takeError());
+      if (Reverse)
+        std::reverse(Program->Low.Edges.begin(), Program->Low.Edges.end());
+      auto Report = recoverCallXContexts(*Program);
+      ASSERT_TRUE(static_cast<bool>(Report))
+          << llvm::toString(Report.takeError());
+      checkSummaryReferences(*Report);
+      EXPECT_FALSE(Report->SpecializationBudgetExhausted);
+      bool Proven = false;
+      for (const auto &Site : Report->Contexts)
+        if (!Site.EntryPrefixOnly && Site.CallXSlot == CallX &&
+            Site.TargetSlot) {
+          Proven = true;
+          ASSERT_TRUE(C.Taken.has_value());
+          EXPECT_EQ(*Site.TargetSlot, *C.Taken ? TrueTarget : FalseTarget);
+        }
+      EXPECT_EQ(Proven, C.Taken.has_value());
+      bool SawTrue = false, SawFalse = false;
+      for (uint64_t Value :
+           {Lower + 64, UINT64_MAX - 8, (uint64_t{1} << 63) + 8,
+            (uint64_t{4} << 32) + 8, uint64_t{0}})
+        for (bool Same : {false, true}) {
+          const uint64_t Other = Same ? Value : Lower + 128;
+          uint64_t Left = Value + static_cast<uint64_t>(C.Left);
+          uint64_t Right =
+              (C.Independent ? Other : Value) + static_cast<uint64_t>(C.Right);
+          if (C.Mask)
+            Left &= C.Mask == 3 ? ~uint64_t{7} : UINT64_MAX;
+          if (C.Truncate) {
+            Left = static_cast<uint32_t>(Left);
+            Right = static_cast<uint32_t>(Right);
+          }
+          bool Taken = false;
+          switch (C.Predicate) {
+          case Opcode::JGT64_REG:
+            Taken = Left > Right;
+            break;
+          case Opcode::JGE64_REG:
+            Taken = Left >= Right;
+            break;
+          case Opcode::JLT64_REG:
+            Taken = Left < Right;
+            break;
+          case Opcode::JLE64_REG:
+            Taken = Left <= Right;
+            break;
+          case Opcode::JEQ64_REG:
+            Taken = Left == Right;
+            break;
+          case Opcode::JNE64_REG:
+            Taken = Left != Right;
+            break;
+          case Opcode::JSGT64_REG:
+            Taken = static_cast<int64_t>(Left) > static_cast<int64_t>(Right);
+            break;
+          default:
+            FAIL() << "unexpected comparison";
+          }
+          std::vector<uint8_t> Input(16);
+          llvm::support::endian::write64le(Input.data(), Value);
+          llvm::support::endian::write64le(Input.data() + 8, Other);
+          ExecutionEnvironment Environment;
+          Environment.Memory.push_back({kInputStart, Input, false, "input"});
+          auto Raw = executeRaw(*Program, std::move(Environment));
+          ASSERT_TRUE(static_cast<bool>(Raw))
+              << llvm::toString(Raw.takeError());
+          ASSERT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+          const bool NullReturn =
+              Value < Lower || (C.Independent && Other < Lower);
+          EXPECT_EQ(Raw->ReturnValue, NullReturn ? 0u : Taken ? 73u : 42u);
+          if (!NullReturn) {
+            SawTrue |= Taken;
+            SawFalse |= !Taken;
+          }
+          ++RawExecutions;
+        }
+      if (!C.Taken) {
+        EXPECT_TRUE(SawTrue);
+        EXPECT_TRUE(SawFalse);
+      }
+    }
+  EXPECT_EQ(RawExecutions, 340u);
+  RecordProperty("raw_executions", static_cast<int>(RawExecutions));
+}
+
 } // namespace neverd::sbf

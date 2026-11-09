@@ -1036,6 +1036,15 @@ existing `instantiated_memory_path_instructions` and
 intervals and `output_memory_copies` describe these additional facts separately
 from literal CALLX target proofs.
 
+Full-width equality comparisons preserve the identity shared by two offsets of
+one captured value, including modular addition. Unsigned ordering additionally
+requires both displaced numeric intervals to stay within the 64-bit address
+space. Different captures, signed comparisons and truncated values do not
+inherit that ordering. A 64-bit AND with an all-ones immediate or register mask
+also preserves the value's identity; other masks retain their existing transfer.
+These proofs share the normal branch and register-transfer owners and introduce
+no allocator freshness or initial-memory assumption.
+
 Every result remains conditional on recognized CFG/function entries and its
 recorded caller facts. Unaligned targets and continuation slots use raw VM rules;
 proving an address does not prove call success. Unknown indirect entries,

@@ -3217,6 +3217,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
             {
                 "analysis.mips.classic-r2": "experimental",
                 "analysis.mips.micromips32-r2": "experimental",
+                "analysis.mips.dsp32-r2": "experimental",
                 "analysis.ir-view.instruction-anchors": "experimental",
                 "analysis.materialized-image-sections": "experimental",
                 "analysis.external-bytecode-recovery": "experimental",
@@ -3250,6 +3251,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
         expected_surfaces = {
             "analysis.mips.classic-r2": no_surfaces,
             "analysis.mips.micromips32-r2": no_surfaces,
+            "analysis.mips.dsp32-r2": no_surfaces,
             "rewrite.interactive-byte-overlay": {
                 "c": [
                     "neverd_assemble_json",
