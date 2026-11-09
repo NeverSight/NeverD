@@ -1285,4 +1285,47 @@ TEST(CompactUnwindRaw, RejectsEncodingAndSideTableDisagreement) {
   EXPECT_TRUE(rawParseFails(OrphanLSDA));
 }
 
+TEST(CompactUnwindRaw, LegacyARM64DwarfLSDAsNeedExplicitArchitecture) {
+  auto Bytes = buildRawRegularWithLSDAs();
+  for (auto Offset : {fixture::kLegacyFirstEncodingOffset,
+                      fixture::kLegacySecondEncodingOffset})
+    putU32(Bytes, Offset, fixture::kLegacyDwarfEncoding);
+  for (Arch A :
+       {Arch::AArch64, Arch::X64, Arch::X86, Arch::ARM, Arch::Unknown}) {
+    CompactUnwindRawParseOptions Options;
+    Options.TargetArch = A;
+    auto Raw = parseCompactUnwindRaw(Bytes, Options);
+    if (A != Arch::AArch64) {
+      EXPECT_FALSE(bool(Raw));
+      llvm::consumeError(Raw.takeError());
+      continue;
+    }
+    ASSERT_TRUE(bool(Raw)) << llvm::toString(Raw.takeError());
+    EXPECT_EQ(Raw->OriginalBytes, Bytes);
+    auto Image = makeImage(A);
+    attachUnwindInfo(Image, Bytes);
+    const auto Parsed = parseCompactUnwind(Image);
+    ASSERT_EQ(Parsed.ParseStatus, ExceptionParseStatus::Complete);
+    ASSERT_EQ(Parsed.Entries.size(), Raw->LSDAEntries.size());
+    for (size_t I = 0; I < Parsed.Entries.size(); ++I) {
+      EXPECT_TRUE(Parsed.Entries[I].HasLSDA);
+      EXPECT_EQ(Parsed.Entries[I].NativeEncoding,
+                fixture::kLegacyDwarfEncoding);
+      EXPECT_EQ(Parsed.Entries[I].LSDAVA,
+                kImageBase + (I ? fixture::kLegacySecondLSDA
+                                : fixture::kLegacyFirstLSDA));
+    }
+  }
+  for (uint32_t Encoding :
+       {fixture::kFrameWithoutSigning, fixture::kPAuthLRFirst}) {
+    auto Invalid = Bytes;
+    putU32(Invalid, fixture::kLegacyFirstEncodingOffset, Encoding);
+    auto Raw = parseCompactUnwindRaw(Invalid, {.TargetArch = Arch::AArch64});
+    EXPECT_FALSE(bool(Raw));
+    llvm::consumeError(Raw.takeError());
+  }
+  EXPECT_FALSE(isValidLSDAIndex(
+      Arch::AArch64, fixture::kLegacyDwarfEncoding | kHasLSDA, false));
+}
+
 } // namespace

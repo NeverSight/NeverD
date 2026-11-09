@@ -1,0 +1,611 @@
+{
+  "schema": "neverd-arm64e-signed-language-relocation-v1",
+  "overall_arm64e_complete": false,
+  "base_revision": "1d61ab50df053f0f8c0d73895c59e8d6b86ae2cb",
+  "feature_revision": "6ebd2f830b5e60519673d24b4976aea83cf65f00",
+  "integration_revision": "e8e9c283fb7248ca7478fef3fab651beb3235313",
+  "native_gate_revision": "2c0e6c165dec038ccc281eec42dcbcd3dcbbd5e2",
+  "source_sha256": {
+    "include/neverd/backend/codegen/MachO/MachOFrameRelocation.def": "30af829031bb5109e8db7c57f00157e31f0ce2cb762e10539b053bca5a141b28",
+    "include/neverd/loader/MachO/CompactUnwind.h": "317e1de048082cd15b171f61cd34b6e9aa0991b28e86e24c0625e39b8bb85152",
+    "lib/backend/codegen/MachO/MachOCompactUnwindPatch.cpp": "a866bc14d52d4ac2d6862c5b3dfdd6cf46af6b810a78cb47ef82362a36d596be",
+    "lib/backend/codegen/MachO/MachOHeaderGrowth.cpp": "9313e2d393385b4049d69f2792615881fad3de050fc1ea61e5476c82dbbdf9d4",
+    "lib/backend/codegen/MachO/MachOLayoutGrowth.cpp": "190072bc737a590912632c9607ba207ca743c5dfa458e51fd81f6d05aa743834",
+    "lib/loader/MachO/CompactUnwindPage.def": "73f9805efe03a67b349f9271a667ac14441f5ae6fdec24a8920334db1b00cbe2",
+    "lib/loader/MachO/MachOCompactUnwind.cpp": "95893258183944b5b25de35556d300c54cc3af9d32235e05ffe4e192671226f9",
+    "unittests/lift/format/MachOAuthenticatedNativeFixtures.def": "3b2c753e093c115b6f7f4dd56b6a750e66fe54a2730bfc2ae2a8a0e3e770a89f",
+    "unittests/lift/format/MachOAuthenticatedNativeTests.cpp": "e920f52224b24dac227e4a4d785152806fb729ea59a1a156ebc4b96633faf92a",
+    "unittests/lift/language/AArch64DwarfFixtures.def": "341a0d91e8de1f7f71e8b5716829e73caf551e8d3708936fb2d793178430c4d0",
+    "unittests/lift/language/CompactUnwindARM64Fixtures.def": "ae29463b015c53e41dc671f37e28a20443b0effec05115122a277c0c1864b0ea",
+    "unittests/lift/language/CompactUnwindSectionTests.cpp": "a452596c7ee334fc2fc6542dc788bd644b9f301937cc6d5225c362abad038df5"
+  },
+  "changes": [
+    "Relocate original arm64e DWARF CIE personality and FDE LSDA PC-relative fields while code, LSDA storage and authenticated personality slots retain their addresses.",
+    "Retain fixed-width signed 32/64-bit or Darwin PC-relative absptr encoding, null augmentation pointers, normalized CFI and every statically known return-address signing state; refuse moved-EH targets, unsupported encodings, dynamic CFI and out-of-range displacements.",
+    "Use 65-bit pointer-difference arithmetic to avoid signed overflow at the uint64 address boundary.",
+    "Recognize ld-classic ARM64 DWARF side-table LSDAs without UNWIND_HAS_LSDA through one architecture-aware loader rule shared by rewriting and replay; preserve the original encoding and keep generated-record contracts strict.",
+    "Force original compiler catch/cleanup frames to move in O0/O2 chained/threaded native installation fixtures, preserving language identity and independently validating the output.",
+    "Require nontrivial signatures and successful valid authentication for IA/IB/DA/DB plus a fault from corrupted signatures. A flushed main-entry marker distinguishes unavailable startup from a failed running probe. Unexpected key failures take precedence over unavailable keys.",
+    "Check original caught and propagated cleanup paths alongside installed native functions after the capability gate; keep file checks distinct from runtime qualification."
+  ],
+  "toolchain": {
+    "profile": "Release",
+    "llvm_package": "neverd-llvm-v23.0.0-r6",
+    "llvm_source_patches_or_overlays": false,
+    "compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+    "macos_sdk": "15.5",
+    "host": "Apple M4 Max, macOS 15.6.1",
+    "clang_format": "22.1.2",
+    "working_dependencies": {
+      "signatures": "20b9036f4367e1308a3d2f0b214e06859090a7af",
+      "third_party/capstone": "b8c22e0c16b1769dfa712547d4a5c5d49560ae46"
+    }
+  },
+  "validation": {
+    "initial_focused": {
+      "tests": 91,
+      "totals": {
+        "passed": 74,
+        "skipped": 13,
+        "failed": 4
+      },
+      "files": {
+        "focused.xml": {
+          "sha256": "2a839e5d5815dcd00192f5ada1c2f093f6d628995c0df6862f984804dbab86bc",
+          "bytes": 105815
+        },
+        "focused.log": {
+          "sha256": "c66ec8b0466956b75b190069b290e3e88b87f43faacd72e85e77acd50038f475",
+          "bytes": 28065
+        },
+        "focused-selection.json": {
+          "sha256": "98b7a5349ea2b02d6270036168e5c20b5f79a89f1dc13e1e5a1f1f3f16c214d6",
+          "bytes": 94768
+        },
+        "focused-indices.txt": {
+          "sha256": "3a87c68dd296f6e3e75261f703ab1f770390b8cda0784d5151b855d250864813",
+          "bytes": 552
+        }
+      }
+    },
+    "resolved_initial_failures": [
+      "Two modern fixtures needed compact-registry reservation before forcing an EH section move.",
+      "Two threaded fixtures exposed the real ld-classic ARM64 DWARF LSDA flag/index compatibility gap."
+    ],
+    "focused_fixed": {
+      "tests": 116,
+      "totals": {
+        "passed": 103,
+        "skipped": 13
+      },
+      "files": {
+        "focused-fixed.xml": {
+          "sha256": "8ddf615747cce48779d2eb8680cdeeca1186d6f7a15f8224062bc734b4d6a9a7",
+          "bytes": 128440
+        },
+        "focused-fixed.log": {
+          "sha256": "3d7547a3e55f7c05bf10607ede88d0bd480c115de56ebc782d04b864d551af39",
+          "bytes": 27675
+        },
+        "focused-fixed-selection.json": {
+          "sha256": "4d3cddc69d75c7af14ae7a762e29557403e369cfb9ad0c4c7ce458ac3ae89a42",
+          "bytes": 119888
+        },
+        "focused-fixed-indices.txt": {
+          "sha256": "bd75b4d5b54d46132c762b5e2213be3dfcc3e4f1addc1e7026cfea902ffe16d2",
+          "bytes": 702
+        }
+      }
+    },
+    "integrated_regression": {
+      "tests": 1184,
+      "totals": {
+        "passed": 1160,
+        "skipped": 24
+      },
+      "by_executable": {
+        "NeverDSourcePatchLayoutTests": {
+          "passed": 14
+        },
+        "NeverDSourcePatchMatrixTests": {
+          "passed": 111,
+          "skipped": 10
+        },
+        "NeverDArm64eAnalysisTests": {
+          "passed": 100,
+          "skipped": 13
+        },
+        "NeverDNativeExceptionRewriteContractTests": {
+          "passed": 288
+        },
+        "NeverDMachOPointerRelocationBoundaryTests": {
+          "passed": 335
+        },
+        "NeverDLanguageEHTests": {
+          "passed": 312,
+          "skipped": 1
+        }
+      },
+      "files": {
+        "regression.xml": {
+          "sha256": "63acfc5b01154dd374d09d7a9448457eb10e852de51e6bfe0650c18068e46cab",
+          "bytes": 1337091
+        },
+        "regression.log": {
+          "sha256": "594e6b1e0891192d4f20d5c1f7cdcaf76ad2443c8eacfc9e756387a537f8e17d",
+          "bytes": 476148
+        },
+        "regression-selection.json": {
+          "sha256": "51cfa13602166d61ecde0d38c061933ac0032d073b14ed7050f800c0a8480aa0",
+          "bytes": 1260172
+        },
+        "regression-indices.txt": {
+          "sha256": "b3db0255d41b8c5f51a8c37f9c23de975952bc6660d298d89b8d6c89a9d48739",
+          "bytes": 6840
+        }
+      }
+    },
+    "final_native_gate": {
+      "tests": 28,
+      "totals": {
+        "passed": 16,
+        "skipped": 12
+      },
+      "files": {
+        "capability-gate.xml": {
+          "sha256": "df1ffe17d3708a117c8069d8fcf79de50a2c27cd6ef483926fed4b2fae61a613",
+          "bytes": 39531
+        },
+        "capability-gate.log": {
+          "sha256": "049cf992bf3d3370962dc0ba7b712c1775c75c9aabea0e8452e9b9dad72492ac",
+          "bytes": 8374
+        },
+        "capability-gate-selection.json": {
+          "sha256": "f612b53b18257438637e5fbe27f8c264320c38883b17acb062b4f8ae23736469",
+          "bytes": 30012
+        },
+        "capability-gate-indices.txt": {
+          "sha256": "81a1bd130c24b8bbfe529949012ada7fe956b6edd64e192e605cd90ea1d35529",
+          "bytes": 174
+        }
+      }
+    },
+    "nonpassing_regression_cases": [
+      {
+        "name": "NeverCProfiles/NeverCSourcePatchMatrix.CIRPreservesTargetLayout/MachO_X64  # GetParam() = 32-byte object <00-02 00-00 00-00 00-00 41-BA 25-05 01-00 00-00 4B-BA 25-05 01-00 00-00 00-00 00-00 00-00 00-00>",
+        "executable": "NeverDSourcePatchMatrixTests",
+        "status": "skipped"
+      },
+      {
+        "name": "NeverCProfiles/NeverCSourcePatchMatrix.CIRPreservesTargetLayout/MachO_ARM64  # GetParam() = 32-byte object <01-02 00-00 00-00 00-00 6E-BA 25-05 01-00 00-00 7A-BA 25-05 01-00 00-00 00-00 00-00 00-00 00-00>",
+        "executable": "NeverDSourcePatchMatrixTests",
+        "status": "skipped"
+      },
+      {
+        "name": "NeverCProfiles/NeverCSourcePatchMatrix.CObjectPreservesTargetLayout/MachO_X64  # GetParam() = 32-byte object <00-02 00-00 00-00 00-00 41-BA 25-05 01-00 00-00 4B-BA 25-05 01-00 00-00 00-00 00-00 00-00 00-00>",
+        "executable": "NeverDSourcePatchMatrixTests",
+        "status": "skipped"
+      },
+      {
+        "name": "NeverCProfiles/NeverCSourcePatchMatrix.CObjectPreservesTargetLayout/MachO_ARM64  # GetParam() = 32-byte object <01-02 00-00 00-00 00-00 6E-BA 25-05 01-00 00-00 7A-BA 25-05 01-00 00-00 00-00 00-00 00-00 00-00>",
+        "executable": "NeverDSourcePatchMatrixTests",
+        "status": "skipped"
+      },
+      {
+        "name": "NeverCProfiles/NeverCSourcePatchMatrix.HostedCUsesExactPayloadLayout/MachO_X64  # GetParam() = 32-byte object <00-02 00-00 00-00 00-00 41-BA 25-05 01-00 00-00 4B-BA 25-05 01-00 00-00 00-00 00-00 00-00 00-00>",
+        "executable": "NeverDSourcePatchMatrixTests",
+        "status": "skipped"
+      },
+      {
+        "name": "NeverCProfiles/NeverCSourcePatchMatrix.HostedCUsesExactPayloadLayout/MachO_ARM64  # GetParam() = 32-byte object <01-02 00-00 00-00 00-00 6E-BA 25-05 01-00 00-00 7A-BA 25-05 01-00 00-00 00-00 00-00 00-00 00-00>",
+        "executable": "NeverDSourcePatchMatrixTests",
+        "status": "skipped"
+      },
+      {
+        "name": "NeverCProfiles/NeverCSourcePatchMatrix.HostedCHelpersAndRecursionKeepExactPayloadLayout/MachO_X64  # GetParam() = 32-byte object <00-02 00-00 00-00 00-00 41-BA 25-05 01-00 00-00 4B-BA 25-05 01-00 00-00 00-00 00-00 00-00 00-00>",
+        "executable": "NeverDSourcePatchMatrixTests",
+        "status": "skipped"
+      },
+      {
+        "name": "NeverCProfiles/NeverCSourcePatchMatrix.HostedCHelpersAndRecursionKeepExactPayloadLayout/MachO_ARM64  # GetParam() = 32-byte object <01-02 00-00 00-00 00-00 6E-BA 25-05 01-00 00-00 7A-BA 25-05 01-00 00-00 00-00 00-00 00-00 00-00>",
+        "executable": "NeverDSourcePatchMatrixTests",
+        "status": "skipped"
+      },
+      {
+        "name": "NeverCProfiles/NeverCSourcePatchMatrix.CppSourceCannotPublishWithNeverC/MachO_X64  # GetParam() = 32-byte object <00-02 00-00 00-00 00-00 41-BA 25-05 01-00 00-00 4B-BA 25-05 01-00 00-00 00-00 00-00 00-00 00-00>",
+        "executable": "NeverDSourcePatchMatrixTests",
+        "status": "skipped"
+      },
+      {
+        "name": "NeverCProfiles/NeverCSourcePatchMatrix.CppSourceCannotPublishWithNeverC/MachO_ARM64  # GetParam() = 32-byte object <01-02 00-00 00-00 00-00 6E-BA 25-05 01-00 00-00 7A-BA 25-05 01-00 00-00 00-00 00-00 00-00 00-00>",
+        "executable": "NeverDSourcePatchMatrixTests",
+        "status": "skipped"
+      },
+      {
+        "name": "MachOArm64eInstallation.MCProducerCapturesRecipesThroughFinalPlacement",
+        "executable": "NeverDArm64eAnalysisTests",
+        "status": "skipped"
+      },
+      {
+        "name": "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/0",
+        "executable": "NeverDArm64eAnalysisTests",
+        "status": "skipped"
+      },
+      {
+        "name": "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/1",
+        "executable": "NeverDArm64eAnalysisTests",
+        "status": "skipped"
+      },
+      {
+        "name": "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/2",
+        "executable": "NeverDArm64eAnalysisTests",
+        "status": "skipped"
+      },
+      {
+        "name": "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/3",
+        "executable": "NeverDArm64eAnalysisTests",
+        "status": "skipped"
+      },
+      {
+        "name": "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/0",
+        "executable": "NeverDArm64eAnalysisTests",
+        "status": "skipped"
+      },
+      {
+        "name": "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/1",
+        "executable": "NeverDArm64eAnalysisTests",
+        "status": "skipped"
+      },
+      {
+        "name": "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/2",
+        "executable": "NeverDArm64eAnalysisTests",
+        "status": "skipped"
+      },
+      {
+        "name": "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/3",
+        "executable": "NeverDArm64eAnalysisTests",
+        "status": "skipped"
+      },
+      {
+        "name": "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/0",
+        "executable": "NeverDArm64eAnalysisTests",
+        "status": "skipped"
+      },
+      {
+        "name": "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/1",
+        "executable": "NeverDArm64eAnalysisTests",
+        "status": "skipped"
+      },
+      {
+        "name": "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/2",
+        "executable": "NeverDArm64eAnalysisTests",
+        "status": "skipped"
+      },
+      {
+        "name": "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/3",
+        "executable": "NeverDArm64eAnalysisTests",
+        "status": "skipped"
+      },
+      {
+        "name": "Scratch.DumpRealBinary",
+        "executable": "NeverDLanguageEHTests",
+        "status": "skipped"
+      }
+    ],
+    "native_file_matrix": "16 passing native object installation cases across O0/O2 and chained/threaded formats; four force original signed language frames to move. Apple tool output, strict codesign verification, language reload and signed CFI replay are checked.",
+    "native_runtime": {
+      "qualified": false,
+      "skipped_cases": 12,
+      "latest_control_result": "ExecuteAndWait reports -2 / Segmentation fault: 11 before the flushed entry marker in all twelve controls. Standalone subprocess arm64e probes separately terminate with SIGKILL. Neither result qualifies native execution.",
+      "ordinary_arm64_control": "O0/O2 probes enter main and return 77 because PAC produces no nontrivial signatures, despite PAC instruction generation.",
+      "probe_reports": [
+        {
+          "path": "capability-gate-probe/results.json",
+          "sha256": "1119e9bb12666a84bf7229c1adacabd2ba2c0f5ca3fbcbef5d3f17be6aec99af"
+        },
+        {
+          "path": "probe/capability-results.json",
+          "sha256": "54738f7bbcfc253be78d3efa602ca2dcb50a743812390ecd4ef37634916731d8"
+        },
+        {
+          "path": "probe/dynamic-results.json",
+          "sha256": "3c8d32f17cdbbf8213539f52e352bf47075b6a87870e8f5dd6bf532a42638327"
+        },
+        {
+          "path": "probe/builtin-results.json",
+          "sha256": "666c881f8e73ba8748a481a5a0bc538f593208c71836773bfae190a587280636"
+        }
+      ]
+    },
+    "model": {
+      "passed": true,
+      "producer_revision": "e8e9c283fb7248ca7478fef3fab651beb3235313",
+      "guests": 30,
+      "routes": [
+        "high-O0",
+        "high-O2",
+        "llvm-O0",
+        "llvm-O2",
+        "native"
+      ],
+      "pauth_levels": [
+        1,
+        4,
+        5
+      ],
+      "exception_levels": [
+        0,
+        1
+      ],
+      "cpta_controls": [
+        0,
+        512,
+        1024,
+        1536
+      ],
+      "shapes": 73,
+      "objects": 1825,
+      "valid_original_projected_pairs": 43800,
+      "invalid_signature_pairs": 105120,
+      "original_exception_class_differences": 0,
+      "scope": "Controlled PAC execution for complete recovered NativeAnalysis fixed C prototypes with scalar, 128-bit integer, 64/128-bit short vectors, one-to-four-member nested/array HVA with full guarded return observation, record/HFA and original indirect record address operands. ABI recovery accuracy itself is not established by supplied IR fixtures. All five Mach-O routes require original exception classes. Declared memcpy CALL26 relocations are linked to a tested freestanding runtime; every other input instruction byte is checked unchanged in the final guest. Raw indirect calls are controls. Hidden results are qualified separately. Signed exception unwinding, authenticated whole-image execution, native Apple PAC and exact fault PC/full ESR remain unqualified.",
+      "model_binary_sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+      "summary_sha256": "d549ace88b4baf0516ba52ba5e5317e3b5928a0576b59aea0a857c8d27015ddd",
+      "provenance_sha256": "7d68ebd1a04ff52f6877eae92e40de76658ff6bc167ccab5487bf650c0bd88ac",
+      "model_version": "Fast Models [11.32+19 (Jul 29 2026)]\nCopyright 2000-2026 ARM Limited.\nAll Rights Reserved.\n\n\nInfo: /OSCI/SystemC: Simulation stopped by user."
+    },
+    "model_input_identity": {
+      "export_tests": 73,
+      "export_failures": 0,
+      "objects": 1825,
+      "all_objects_equal_prior_canonical_baseline": true,
+      "comparison": {
+        "path": "object-comparison.json",
+        "sha256": "d7714dd7bee38d1643eccb45e44ef73ed97e2b86f9c6657018cc8b731b9a108a"
+      },
+      "baseline": "arm64e-vector-aggregates-objects-2026-11-08.json",
+      "linked_input_checks": [
+        {
+          "path": "llvm-O0-pac3-el0/linked-inputs.json",
+          "sha256": "f1329edd464b5274242c08975d48426b607c6106fbb428a7b9c8291b7b2aa2d6",
+          "relocated_objects": 0
+        },
+        {
+          "path": "llvm-O0-pac0-el1/linked-inputs.json",
+          "sha256": "3c30ae34e02b0605cf9660e39b2991e96f5f9c5f554cb8ef0d7c541d2d5165d9",
+          "relocated_objects": 0
+        },
+        {
+          "path": "llvm-O0-pac2-el0/linked-inputs.json",
+          "sha256": "14c2524b201cf3df33676b71608c8927e1cd8dcc5ce34b871ca14b60a1c8df14",
+          "relocated_objects": 0
+        },
+        {
+          "path": "llvm-O0-pac0-el0/linked-inputs.json",
+          "sha256": "d06e83e36f155aa906225031f53b1ead5581471c1744ac2a8cf17e8c8d61ab97",
+          "relocated_objects": 0
+        },
+        {
+          "path": "llvm-O0-pac3-el1/linked-inputs.json",
+          "sha256": "54eadd9b1e85e32f84e4f9644297c4848ba1b24ca0d2249ae7d1ff25e9299fed",
+          "relocated_objects": 0
+        },
+        {
+          "path": "llvm-O0-pac2-el1/linked-inputs.json",
+          "sha256": "7befb96c06f17a15ecc5e8250c242b69d2837d38d4a5ebc3afca42c8c72365d1",
+          "relocated_objects": 0
+        },
+        {
+          "path": "high-O0-pac2-el0/linked-inputs.json",
+          "sha256": "b7f796db0bb5cc5a19aa8db69f6b9bc15e3a936612fd980f2293d14cceaf316b",
+          "relocated_objects": 40
+        },
+        {
+          "path": "high-O0-pac0-el1/linked-inputs.json",
+          "sha256": "878ad7b3ba657cf5f3bfd5ffc25847274a8a075bbde8f3f15b91fb9115c111a6",
+          "relocated_objects": 40
+        },
+        {
+          "path": "high-O0-pac3-el0/linked-inputs.json",
+          "sha256": "a26b31786a968d3a01e5a1848a589d85df64f939726d3bc4c607877ec2ebbbf7",
+          "relocated_objects": 40
+        },
+        {
+          "path": "high-O0-pac2-el1/linked-inputs.json",
+          "sha256": "db0779e8e267643c4b885c46e07edb69b1c200173f84ed6f6e95b0ae2adb8eda",
+          "relocated_objects": 40
+        },
+        {
+          "path": "high-O0-pac3-el1/linked-inputs.json",
+          "sha256": "d6c9a2fdd8dd175bdb9b924d9e423498e440b015d58fea61707c3c67231d0b9a",
+          "relocated_objects": 40
+        },
+        {
+          "path": "high-O0-pac0-el0/linked-inputs.json",
+          "sha256": "f5eb49ceda4e56bab012063c5134c3e04f5dbe7c3606f3690620f94974f07bc4",
+          "relocated_objects": 40
+        },
+        {
+          "path": "native-pac0-el0/linked-inputs.json",
+          "sha256": "e21203c6524ebb90b77305efa5edc947755a01fce5e047c486e89c1c26238cc7",
+          "relocated_objects": 0
+        },
+        {
+          "path": "native-pac3-el1/linked-inputs.json",
+          "sha256": "686b6a57aab834fcb934d910cf32c58af0ac990fb267fd5c09e2a39c476d06de",
+          "relocated_objects": 0
+        },
+        {
+          "path": "native-pac2-el1/linked-inputs.json",
+          "sha256": "b456e44c534e65e9da94fd54afccb3b20e509a31289aec81be353b26fb514ae1",
+          "relocated_objects": 0
+        },
+        {
+          "path": "native-pac3-el0/linked-inputs.json",
+          "sha256": "fcf8e311f2cc7ad007e77de99633ab8f4c407a58161ac4ebbb07575a9c9954ea",
+          "relocated_objects": 0
+        },
+        {
+          "path": "native-pac0-el1/linked-inputs.json",
+          "sha256": "82875cddac5cabfca751f2d3e1ef018d1e8bcb2b1d0ec99daed59568c6e0f083",
+          "relocated_objects": 0
+        },
+        {
+          "path": "native-pac2-el0/linked-inputs.json",
+          "sha256": "c4ee6a2180cd83062df3b3d66eab3c91e782cb1d5c6670d921d0dddf64d61454",
+          "relocated_objects": 0
+        },
+        {
+          "path": "high-O2-pac2-el1/linked-inputs.json",
+          "sha256": "30fbf63617a4cff0ae4785e57542627f354fe9e99737e78b37db3a7d4b227571",
+          "relocated_objects": 0
+        },
+        {
+          "path": "high-O2-pac3-el1/linked-inputs.json",
+          "sha256": "7086f4e97bfa91c18f7521e906b0b2430f60d9d4d993030bed7a3b702f9d139d",
+          "relocated_objects": 0
+        },
+        {
+          "path": "high-O2-pac0-el0/linked-inputs.json",
+          "sha256": "1422f941a0b29faa1f024613819ffb9088195c8bcd473709909e83eabd540222",
+          "relocated_objects": 0
+        },
+        {
+          "path": "high-O2-pac2-el0/linked-inputs.json",
+          "sha256": "e0a1bb57aae86c8443c45ae48a82924027f4503bc507fb6f3c8fc88cdaa81bff",
+          "relocated_objects": 0
+        },
+        {
+          "path": "high-O2-pac0-el1/linked-inputs.json",
+          "sha256": "52ac613792fa3d481f5cd65cd980e638075552ac7b4292a5b781ec2ec1bac23c",
+          "relocated_objects": 0
+        },
+        {
+          "path": "high-O2-pac3-el0/linked-inputs.json",
+          "sha256": "b8162ea8c4bcd7204e0482b287687e416746ea0b67517570ae865411077e287c",
+          "relocated_objects": 0
+        },
+        {
+          "path": "llvm-O2-pac0-el0/linked-inputs.json",
+          "sha256": "1e556b333dd9428508f9e1ec97d3ad7aee3664c8ab2c33f96755cd18fd36dde0",
+          "relocated_objects": 0
+        },
+        {
+          "path": "llvm-O2-pac3-el1/linked-inputs.json",
+          "sha256": "65eb193dcab678e143f9570916ea390292f8538618d460ac0dc47629a8c4ab24",
+          "relocated_objects": 0
+        },
+        {
+          "path": "llvm-O2-pac2-el1/linked-inputs.json",
+          "sha256": "b10c1a7bd8662ed7d8797c30e96da80886ac8deb0ed7e7f279896c60d142ec5e",
+          "relocated_objects": 0
+        },
+        {
+          "path": "llvm-O2-pac3-el0/linked-inputs.json",
+          "sha256": "692cb1c66b443c7d16fce26ff0b51988293ce343928e04322f718048d75e5dee",
+          "relocated_objects": 0
+        },
+        {
+          "path": "llvm-O2-pac0-el1/linked-inputs.json",
+          "sha256": "497143cdf8fc59062248509fdbc182de5ca215f1f8279495e2da1179c847e30b",
+          "relocated_objects": 0
+        },
+        {
+          "path": "llvm-O2-pac2-el0/linked-inputs.json",
+          "sha256": "77a9bdf1e0e29257b33b99c07a57d2f2873a6c3b6e8e78620ac7604051547ff2",
+          "relocated_objects": 0
+        }
+      ],
+      "notes": "Fresh current producer exports were executed. Native gate-only edits followed the producer revision; no production/compiler source changed afterward. Forty unique HighC O0 objects use declared memcpy CALL26 relocation; all remaining input instruction bytes are checked unchanged in each guest."
+    },
+    "environment": {
+      "repository": "gmh5225/test_mac_intel",
+      "revision": "71b8ed7301f4e73fe63e1519fe926ba9405da55b",
+      "unit_tests_passed": 60,
+      "unit_log": {
+        "path": "environment-unit.log",
+        "sha256": "fca4b28427b1f3dcffa1c018e064277edc7821b07ae5a06530d2084d8a0a6274"
+      },
+      "docker_image": "sha256:b60022df2f5f52d4461b273e3b44190abb85effff05cbb52e1ed25818f010023",
+      "command": {
+        "path": "model-command.json",
+        "sha256": "27b1c6ae5d96cfff6f29240881f4f5ba891e89d980973371e0c50ac28815339e"
+      },
+      "network_disabled": true,
+      "existing_model_installation_reused": true
+    },
+    "harness_notes": [
+      "Capability-gate selection with an omitted CTest range expanded beyond the intended cases; exact-selection preflight refused it before any test ran. Corrected to the established 0,0,0 explicit-index form."
+    ],
+    "format_and_whitespace": "clang-format 22.1.2 and git diff --check passed.",
+    "remote_ci": "Not asserted by this local qualification. GitHub checks must be observed separately through the connected diagnostic tool.",
+    "local_evidence_directory": "build-arm64e/arm64e-native-execution-evidence"
+  },
+  "cleanup": {
+    "fixture_and_probe_product_bytes_removed": 21125088,
+    "model_product_bytes_removed": 18055048,
+    "model_products_removed": 3680,
+    "total_product_bytes_removed": 39180136,
+    "total_recorded_disk_bytes_reclaimed_including_report_archival": 63741207,
+    "initial_probe_inventory_note": "The first probe cleanup receipt was superseded; the aggregate and binary hashes are retained in the dynamic/builtin probe reports. This is not a complete reconstructed per-file cleanup receipt.",
+    "receipts": [
+      {
+        "path": "capability-probe-cleanup.json",
+        "sha256": "093fc82d92e994f89e0ed45d01b1dc5662b56bd0f24ade91636c0f97cc13ff81"
+      },
+      {
+        "path": "focused-artifacts-cleanup.json",
+        "sha256": "9369a1fd74c5f9da07d36929969e57406597766ab8323fdf4874bc7871b2774a"
+      },
+      {
+        "path": "focused-fixed-artifacts-cleanup.json",
+        "sha256": "8979d586db308f520c113a76794d0299ab5bfada9b0c524fbedd3ab2e7236f44"
+      },
+      {
+        "path": "regression-artifacts-cleanup.json",
+        "sha256": "4649043e21cb27ff6ea7b9909df64b65436f7ddf2a581aafae4cb8fbbd26d227"
+      },
+      {
+        "path": "capability-gate-probe-cleanup.json",
+        "sha256": "788e93cdaa2773c6f24b1977be6432e6f24dd4c323c39f441ef982a0a3f30c1a"
+      },
+      {
+        "path": "capability-gate-artifacts-cleanup.json",
+        "sha256": "b6ea9d9b1b5ce46aa10dcf066bc4a95f12417b0f2457e3219a522eeea3475a53"
+      },
+      {
+        "path": "completed-model-generated-cleanup.json",
+        "sha256": "3c4a16d7981597cab8c44192a08987b9768d6f38e086420d4412a284860c8c8d"
+      }
+    ],
+    "archives": [
+      {
+        "archive": "superseded-focused.tar.gz",
+        "sha256": "82e125d583c1a265f92c25ca7278544dca6f0f08f8f0d50865c77f1f341a1e8d",
+        "compressed_bytes": 140661,
+        "decompressed_hashes_verified": true,
+        "recovery_index": {
+          "path": "superseded-focused-recovery.json",
+          "sha256": "47dafe8edb8bc69d229e71b7dd6f210583eea3ab248efe41e8eed6fe8455202f"
+        }
+      },
+      {
+        "archive": "completed-model.tar.gz",
+        "sha256": "9148adf02cc4e6962d93c1092f2c84edb356f3b72bf20fce40bb0db2a9bd9033",
+        "compressed_bytes": 3218391,
+        "decompressed_hashes_verified": true,
+        "recovery_index": {
+          "path": "completed-model-recovery.json",
+          "sha256": "8327c121ef6045a766eb7d5a3dbaec045fda4683c55c534e0b7d7acded6bada7"
+        }
+      }
+    ],
+    "retained": "One active incremental Release build, the existing official model installation and canonical baseline inputs. Current summaries and necessary diagnostics remain; superseded reports are compressed with verified recovery indexes. Duplicate exported objects and all thirty model guest ELFs were discarded, including from the compressed archive."
+  },
+  "remaining_boundaries": [
+    "Native Apple dyld authenticated calls and compact/DWARF signed language exception unwinding remain unqualified until the compiler-original arm64e capability and runtime controls can execute.",
+    "The FVP replay qualifies these controlled recovered fixed-prototype calls and original exception classes under CPTA/CPTA0. It does not qualify ABI recovery accuracy, Apple hardware CPA2/arm64e.x1, signed language unwinding, whole-image execution, exact fault PC or full ESR.",
+    "General whole-image arm64e publication remains gated; other native language-pointer encodings, TLS/initializers and public weak coalescing are outside this change.",
+    "LLVM prebuilt r6 lacks the gated MC producer callback. Any LLVM changes must be committed to NeverSight/llvm-project directly; no LLVM patch or source overlay was added."
+  ]
+}
