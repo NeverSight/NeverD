@@ -4935,11 +4935,12 @@ would define a type reads again on a copy (`parseFunctionDeclaration`). The GUI 
 its write, which runs the same journaled transaction in order on a thread of its own
 (`ProjectHistory::persistLater`), joined with what is queued behind one already
 writing. What may read the project's files waits for it first. A document of a view
-notes the addresses its render read and its decoration looked up, and reads what such
+notes the addresses its render read, whether the engine rendered it then or a store
+kept it (`neverd_user_reads`), and those its decoration looked up, and reads what such
 an edit reached when it is next asked for, so the edit leaves the owner's other
 documents as they are (`Engine::keepNamedViewsThrough`, `Engine::readViewEdits`). A
-function's declaration does so too while the stores' names stand, which they do unless
-it hides a prototype analysis read. Where comments alone reached a document since it
+function's declaration does so too, in the owner and in a replica that takes it, while
+the stores' names stand, which they do unless it hides a prototype analysis read. Where comments alone reached a document since it
 was decorated, they are written into a copy of it as decoration writes them: each row's
 comment read again, its line's inline comment replaced and the spans after it moved
 (`CodeEdits::takeComments`). A function's new name, taken in place, is written the same

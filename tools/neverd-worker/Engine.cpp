@@ -1623,8 +1623,10 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
     throw Error("not_kept", "No session has kept this view");
   // A hit answers from its finished document without pretending the mutable
   // Session still holds this function. Graph/IR requests prepare it normally.
-  if (original.is_null() && !replay && !recovery)
+  if (original.is_null() && !replay && !recovery) {
+    ++namedViewRenders_;
     prepareFunction(address, representation);
+  }
   // Whole-program VM preparation can analyze(), invalidating the listing and
   // advancing the revision. Rebuild aliases and stamp the prepared context;
   // never keep an alias reference across that invalidation.
@@ -1793,8 +1795,11 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
     if (reused && reused->readsKnown) {
       document->reads = reused->reads;
       document->readsKnown = true;
-    } else if (replay) {
-      noteRenderReads(*document);
+    } else if (sourceView && !recovery) {
+      // What the render its pages came from read, kept or this one: every
+      // address whose name or declaration the session's results asked since
+      // they were last let go of, which holds this function's.
+      noteRenderReads(*document, document->renderReads);
     }
     // What a data's new name respells, of an engine document of C on one
     // page, as respell reads its kept page (renderedAheadPages).
@@ -2760,6 +2765,7 @@ Json Engine::metadata() const {
           {"named_view_comment_patches", commentPatches_},
           {"named_view_name_patches", namePatches_},
           {"named_view_data_name_patches", dataNamePatches_},
+          {"named_view_renders", namedViewRenders_},
           {"dirty", dirty_},
           // How the file was read: for a binary file, its processor,
           // placement and platform, and whether detection chose the platform.
@@ -3387,6 +3393,12 @@ Json Engine::updateAnalysisNames(const Json &snapshot) {
     }
     return true;
   };
+  // What analysis reads of the declarations, before this update states them:
+  // where it reads the same after, the declarations reach only the views that
+  // read them, as an owner's edit does (keepNamedViewsThrough).
+  std::optional<Json> analysisBefore;
+  if (declared && !typesChanged && rendersSayTheirReads())
+    analysisBefore = userFactsAnalysisReads();
   codeEdits_ = next.value("code_edits", Json::array());
   restoredSnapshot_ = snapshot;
   imageFactsRevision_.reset();
@@ -3456,8 +3468,33 @@ Json Engine::updateAnalysisNames(const Json &snapshot) {
     }
     if (!summariesHeld && !summariesDeferred_ && (declared || deferred))
       restartSummaries();
-    if (declared)
-      declarationsChanged();
+    if (declared) {
+      const bool viewsReadIt =
+          analysisBefore && userFactsAnalysisReads() == *analysisBefore;
+      if (viewsReadIt) {
+        // Each function whose declaration changed, as its row reads.
+        std::map<std::uint64_t, Json> was, now;
+        for (const auto &row : functionRowsRead(oldFunctions, true))
+          was[parseAddress(row.at("addr").get<std::string>())] = row;
+        for (const auto &row : functionRowsRead(newFunctions, true))
+          now[parseAddress(row.at("addr").get<std::string>())] = row;
+        std::set<std::uint64_t> changed;
+        for (const auto *rows : {&was, &now})
+          for (const auto &[address, row] : *rows) {
+            const auto &other = rows == &was ? now : was;
+            const auto same = other.find(address);
+            if (same == other.end() || same->second != row)
+              changed.insert(address);
+          }
+        for (const auto address : changed)
+          keepNamedViewsThrough(address, {}, true);
+      }
+      declarationsChanged(viewsReadIt);
+      // The job renders again what no longer reads as it rendered it, as it
+      // does once every view went.
+      if (viewsReadIt)
+        restartRenderAhead();
+    }
     if (dataRenamed || itemsChanged) {
       // Names and data items, each as the listing can take it.
       const bool inPlace =
