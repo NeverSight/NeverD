@@ -572,6 +572,11 @@ When a completed root has exactly the generic entry's register and scratch
 facts, a literal scalar return can refine that generic summary's unknown
 return. Its conservative memory effects and target evidence remain unchanged;
 results from bound caller arguments do not establish this all-input fact.
+A completed generic literal without a return-input expression also refines an
+unknown specialized return when nested calls lose precision at their own
+variant limit. Expression-backed results retain their existing instantiation
+and specialization demand; flattening them can displace later caller proofs.
+This reuses an all-input proof without changing the specialized memory result.
 A completed older root whose inputs match the generic entry can also release
 its specialization when the generic result preserves its opaque return and
 every target proof remains independently published or survives in a transferred

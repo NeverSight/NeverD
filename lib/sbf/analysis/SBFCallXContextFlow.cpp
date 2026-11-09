@@ -887,6 +887,18 @@ uint64_t stateBytes(const ContextState &State) {
   return Bytes;
 }
 
+// The caller establishes that Proof covers every input represented by Result.
+// Keep memory and target evidence unchanged; one literal fits inline storage.
+void refineLiteralReturn(ContextState &Result, const ContextState &Proof) {
+  const auto Value = Proof.Registers[kReturnRegister].singleton();
+  if (Value.ValueKind != RegisterValue::Kind::Constant ||
+      !Result.Registers[kReturnRegister].unknown())
+    return;
+  Result.Registers[kReturnRegister] = Value;
+  Result.Origins[kReturnRegister] = Value;
+  Result.InputExpressions[kReturnRegister].reset();
+}
+
 std::optional<uint64_t> maximumCopyLength(const ProvenValueSet &Lengths) {
   if (Lengths.unknown())
     return std::nullopt;
@@ -1425,15 +1437,9 @@ void ContextFlow::publishRoot(FunctionContext &Context) {
   // inline register/origin value storage.
   if (!Context.Generic && Context.Return) {
     auto &Generic = *GenericContexts.at(Context.EntryBlock);
-    const auto Value = Context.Return->Registers[kReturnRegister].singleton();
-    if (Value.ValueKind == RegisterValue::Kind::Constant && Generic.Return &&
-        Generic.Return->Registers[kReturnRegister].unknown() &&
-        Context.Input.Registers == Generic.Input.Registers &&
-        Context.Input.Scratch == Generic.Input.Scratch) {
-      Generic.Return->Registers[kReturnRegister] = Value;
-      Generic.Return->Origins[kReturnRegister] = Value;
-      Generic.Return->InputExpressions[kReturnRegister].reset();
-    }
+    if (Generic.Return && Context.Input.Registers == Generic.Input.Registers &&
+        Context.Input.Scratch == Generic.Input.Scratch)
+      refineLiteralReturn(*Generic.Return, *Context.Return);
   }
   if (Context.Published)
     return;
@@ -6518,18 +6524,26 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
         !Edge.InputExpressionTargets.empty() ||
         (Edge.CalleeSummaryID &&
          Contexts[*Edge.CalleeSummaryID]->HasTargetEvidence);
-  if (Context.Return) {
-    if (auto Error = retain(stateBytes(*Context.Return)))
-      return std::move(Error);
-    Context.RetainedBytes += stateBytes(*Context.Return);
-  }
   if (!Context.Generic && Context.Return) {
     const auto &Template = *GenericContexts.at(Entry);
     // The completed generic proof covers every entry binding. A specialized
     // replay can lose the saved input-load expression without losing that
     // proof that the caller's bytes are unchanged on return.
-    if (Template.Complete && Template.Return && Template.PreservesMemory)
-      Context.Effects = {};
+    if (Template.Complete && Template.Return) {
+      if (Template.PreservesMemory)
+        Context.Effects = {};
+      // Nested calls can exhaust their variants even when this caller still
+      // specializes. Reuse an explicit all-input literal proof. Expression-
+      // backed results keep their existing instantiation and variant demand;
+      // flattening those results here can displace later caller proofs.
+      if (!Template.Return->InputExpressions[kReturnRegister])
+        refineLiteralReturn(*Context.Return, *Template.Return);
+    }
+  }
+  if (Context.Return) {
+    if (auto Error = retain(stateBytes(*Context.Return)))
+      return std::move(Error);
+    Context.RetainedBytes += stateBytes(*Context.Return);
   }
   const uint64_t AccessBytes = (Context.Effects.Writes.capacity() +
                                 Context.ReadEffects.Writes.capacity()) *
