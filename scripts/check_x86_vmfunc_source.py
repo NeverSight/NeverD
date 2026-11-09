@@ -155,9 +155,6 @@ def main():
         format_id = 0 if effects else int(fields[2])
         if not args.compiler and (effects or route == 'llvm'):
             continue
-        # The qualified NeverC external source driver is Linux i386 only.
-        if args.backend_llc and mode == 32 and format_id != 0:
-            continue
         original = source.with_name(stem + '.bin')
         baselines = {seed: execute(original.read_bytes(), 0, mode, seed, effects) for seed in SEEDS}
         for seed, expected in baselines.items():

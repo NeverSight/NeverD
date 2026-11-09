@@ -163,6 +163,11 @@ bool NdOpEmulator::executeX86Crypto(const LowOp &Op) {
 bool NdOpEmulator::executeArith(const LowOp &Op) {
   if (Op.NumInputs < 2)
     return false;
+  // Constant recovery may validate a guessed value against the image later.
+  // Strict execution must not turn an absent or partial operand into zero.
+  if (StrictMode && (!knownOperandBytes(Op.Inputs[0], 0, Op.Inputs[0].Size) ||
+                     !knownOperandBytes(Op.Inputs[1], 0, Op.Inputs[1].Size)))
+    return false;
   const bool IsBitwise = Op.Opcode == NdOp::INT_AND ||
                          Op.Opcode == NdOp::INT_OR ||
                          Op.Opcode == NdOp::INT_XOR;
@@ -2649,6 +2654,9 @@ bool NdOpEmulator::executeCopy(const LowOp &Op) {
 
 bool NdOpEmulator::executeCompare(const LowOp &Op) {
   if (Op.NumInputs < 2)
+    return false;
+  if (StrictMode && (!knownOperandBytes(Op.Inputs[0], 0, Op.Inputs[0].Size) ||
+                     !knownOperandBytes(Op.Inputs[1], 0, Op.Inputs[1].Size)))
     return false;
   if (Op.Inputs[0].Size > sizeof(uint64_t) ||
       Op.Inputs[1].Size > sizeof(uint64_t)) {

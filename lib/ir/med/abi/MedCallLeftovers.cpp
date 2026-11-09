@@ -59,6 +59,10 @@ bool callClobbersRegister(const MedOp &Call, uint64_t RegOff, uint16_t Size,
   if ((Call.Opcode != NdOp::CALL && Call.Opcode != NdOp::INDIR_CALL) ||
       Call.PreservesCallerSaved)
     return false;
+  // The ordinary x86 ABI keeps DF clear. Arithmetic flags have no such
+  // promise and participate in the same SSA clobbers as volatile registers.
+  if (TRI.FlagDF && RegOff == TRI.FlagDF && TRI.isFlag(RegOff, Size))
+    return false;
   if (Call.X87ArgumentInput && !Call.X87ImportArguments &&
       TRI.TheArch == Arch::X86) {
     // The checked consumer closure forbids control-word changes.

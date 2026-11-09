@@ -13,6 +13,11 @@
 #define NEVERD_MIPS_DSP_INSTRUCTION(Name, Mask, Value)
 #endif
 
+#ifndef NEVERD_MIPS_DSP_SHIFT
+#define NEVERD_MIPS_DSP_SHIFT(Name, Mask, Value, Bytes, Variable, Rounded)     \
+  NEVERD_MIPS_DSP_INSTRUCTION(Name, Mask, Value)
+#endif
+
 NEVERD_MIPS_DSP_FIELD(Position, 0x01, 0x0000003f)
 NEVERD_MIPS_DSP_FIELD(ShiftCount, 0x02, 0x00001f80)
 NEVERD_MIPS_DSP_FIELD(Carry, 0x04, 0x00002000)
@@ -33,5 +38,24 @@ NEVERD_MIPS_DSP_INSTRUCTION(AddSaturatedSignedHalfwords, 0xfc0007ff, 0x7c000390)
 NEVERD_MIPS_DSP_INSTRUCTION(SubSignedHalfwords, 0xfc0007ff, 0x7c0002d0)
 NEVERD_MIPS_DSP_INSTRUCTION(SubSaturatedSignedHalfwords, 0xfc0007ff, 0x7c0003d0)
 
+// Right shifts leave DSPControl unchanged. Reserved immediate bits are masked.
+NEVERD_MIPS_DSP_SHIFT(ShiftRightBytes, 0xff0007ff, 0x7c000053, 1, false, false)
+NEVERD_MIPS_DSP_SHIFT(ShiftRightVariableBytes, 0xfc0007ff, 0x7c0000d3, 1, true,
+                      false)
+NEVERD_MIPS_DSP_SHIFT(ShiftRightHalfwords, 0xfe0007ff, 0x7c000253, 2, false,
+                      false)
+NEVERD_MIPS_DSP_SHIFT(ShiftRightVariableHalfwords, 0xfc0007ff, 0x7c0002d3, 2,
+                      true, false)
+NEVERD_MIPS_DSP_SHIFT(RoundRightHalfwords, 0xfe0007ff, 0x7c000353, 2, false,
+                      true)
+NEVERD_MIPS_DSP_SHIFT(RoundRightVariableHalfwords, 0xfc0007ff, 0x7c0003d3, 2,
+                      true, true)
+NEVERD_MIPS_DSP_SHIFT(RoundRightWord, 0xfc0007ff, 0x7c000553, 4, false, true)
+NEVERD_MIPS_DSP_SHIFT(RoundRightVariableWord, 0xfc0007ff, 0x7c0005d3, 4, true,
+                      true)
+NEVERD_MIPS_DSP_INSTRUCTION(PackHalfwords, 0xfc0007ff, 0x7c000511)
+NEVERD_MIPS_DSP_INSTRUCTION(PackBytes, 0xfc0007ff, 0x7c000311)
+
+#undef NEVERD_MIPS_DSP_SHIFT
 #undef NEVERD_MIPS_DSP_FIELD
 #undef NEVERD_MIPS_DSP_INSTRUCTION

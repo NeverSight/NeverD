@@ -163,6 +163,68 @@ def check_parameterized_query(worker, directory):
     assert path.read_bytes() == data
 
 
+def check_scalar_results(worker, directory):
+    binary, _ = image()
+    data = bytearray(binary)
+    code = bytearray.fromhex("4883ec28 e8")
+    code.extend(struct.pack("<i", 0x100 - len(code) - 4))
+    code.extend(bytes.fromhex("4c31c0 4831c8 4883c428 c3"))
+    data[0x200:0x200 + len(code)] = code
+    # Only arithmetic: RAX, R8 and RCX all depend on this call's arguments.
+    # There is no CPU query to trigger the formerly query-only projection.
+    body = bytes.fromhex("4889d0 4989c8 4901c0 4981f067452301 "
+                         "4889c1 4885c0 4c0f44c1 48c1e00d c3")
+    data[0x300:0x300 + len(body)] = body
+    path = Path(directory) / "scalar-results.exe"
+    path.write_bytes(data)
+    for prepared in (False, True):
+        with Client(worker) as client:
+            ok(client, "open", {"path": str(path), "analysis": False,
+                                "warm": False, "read_only": True})
+            if prepared:
+                ok(client, "decompile", {"address": hex(ENTRY + 0x100),
+                                          "representation": "c"})
+            for representation in (("llvmc", "c") if prepared else ("c", "llvmc")):
+                result = ok(client, "decompile", {
+                    "address": hex(ENTRY), "representation": representation,
+                    "limit": 2048})
+                assert result["complete"], result
+                text = result["text"]
+                assert "__builtin_trap" not in text and "unknown" not in text, text
+                assert "arg0" in text and "arg1" in text, text
+                assert f"sub_{ENTRY + 0x100:X}(" not in text, text
+    assert path.read_bytes() == data
+
+
+def check_call_flags(worker, directory):
+    for overwrite in (False, True):
+        binary, _ = image()
+        data = bytearray(binary)
+        code = bytearray.fromhex("4883ec28 f8 e8")
+        code.extend(struct.pack("<i", 0x100 - len(code) - 4))
+        if overwrite:
+            code.append(0xF8)  # A fresh CLC owns the subsequent ADC's carry.
+        code.extend(bytes.fromhex("4883d000 4883c428 c3"))
+        data[0x200:0x200 + len(code)] = code
+        data[0x300:0x307] = bytes.fromhex("b807000000 f9 c3")
+        path = Path(directory) / f"call-flags-{overwrite}.exe"
+        path.write_bytes(data)
+        for prepared in (False, True):
+            with Client(worker) as client:
+                ok(client, "open", {"path": str(path), "analysis": False,
+                                    "warm": False, "read_only": True})
+                if prepared:
+                    ok(client, "decompile", {"address": hex(ENTRY + 0x100),
+                                              "representation": "c"})
+                for representation in (("llvmc", "c") if prepared else ("c", "llvmc")):
+                    result = ok(client, "decompile", {
+                        "address": hex(ENTRY), "representation": representation,
+                        "limit": 2048})
+                    assert result["complete"], result
+                    assert ("__builtin_trap" in result["text"]) != overwrite, result
+        assert path.read_bytes() == data
+
+
 def ok(client, operation, payload=None):
     result = client.call(operation, payload or {})
     assert result["status"] == "ok", result
@@ -213,6 +275,8 @@ def run(worker, compiler=None):
         check_split_exit_constants(worker, directory)
         check_split_exit_constants(worker, directory, joined=True)
         check_parameterized_query(worker, directory)
+        check_scalar_results(worker, directory)
+        check_call_flags(worker, directory)
         for cached in (False, True):
             path = Path(directory) / ("cached.sys" if cached else "direct.sys")
             binary = fixture(cached)

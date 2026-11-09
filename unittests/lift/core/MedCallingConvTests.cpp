@@ -8933,6 +8933,87 @@ TEST(CallRegisterEffects, ExitConstantsRequireAgreementAtEveryReturn) {
   }
 }
 
+TEST(CallRegisterEffects, ScalarLeafRetentionSkipsOrdinaryResults) {
+  for (auto Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (unsigned Shape : {0u, 1u, 3u}) {
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      SCOPED_TRACE(Shape);
+      BinaryImage Image;
+      Image.Arch = Arch::X64;
+      Image.Format = Format;
+      Segment Text;
+      Text.VA = 0x1000;
+      Text.Size = 16;
+      Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+      Text.Data.resize(16, 0x90);
+      Text.Data[12] = 0xC3;
+      Image.Segments.push_back(std::move(Text));
+      const auto RAX = NdVar::reg(x86reg::RAX, 8);
+      const auto RCX = NdVar::reg(x86reg::RCX, 8);
+      auto Function = makeOneBlockLow(0x1000, "leaf", [&](auto Push) {
+        Push(NdOp::COPY, RAX, {RCX});
+        if (Shape)
+          Push(NdOp::COPY, NdVar::reg(Shape == 3 ? x86reg::RBX : x86reg::R8, 8),
+               {Shape == 1 ? NdVar::cst(27, 8) : RCX});
+      });
+      Function.Blocks.front().Ops.back().addInput(RAX);
+      const auto Effect = localRegisterEffect(Image, Function);
+      EXPECT_FALSE(Effect.RegisterLeaf);
+      if (Shape == 1)
+        EXPECT_EQ(Effect.ExitConstants, (GPRExitConstants{{x86reg::R8, 27}}));
+    }
+}
+
+TEST(CallRegisterEffects, StatusFlagsDoNotSurviveOrdinaryCalls) {
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (auto Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+      for (bool Indirect : {false, true}) {
+        SCOPED_TRACE(static_cast<unsigned>(Target));
+        SCOPED_TRACE(static_cast<unsigned>(Format));
+        SCOPED_TRACE(Indirect);
+        const auto &Registers = getTargetRegInfo(Target);
+        const auto Flag = NdVar::reg(Registers.FlagCF, 1);
+        const auto Result =
+            NdVar::reg(Registers.IntReturnReg, Registers.PointerSize);
+        auto Low = makeOneBlockLow(0x1000, "flags", [&](auto Push) {
+          Push(NdOp::COPY, Flag, {NdVar::cst(1, 1)});
+          Push(Indirect ? NdOp::INDIR_CALL : NdOp::CALL, {},
+               {NdVar::cst(0x2000, Registers.PointerSize)});
+          Push(NdOp::INT_ZEXT, Result, {Flag});
+        });
+        Low.Blocks.front().Ops.back().addInput(Result);
+        LowToMedConverter Converter;
+        const auto Med = Converter.convert(Low, Target, Format);
+        const MedCallClobber *FlagResult = nullptr;
+        for (const auto &Clobber : Med.CallClobbers)
+          if (Clobber.Value.Kind == MedVar::Flag &&
+              Clobber.Value.RegOff == Registers.FlagCF)
+            FlagResult = &Clobber;
+        ASSERT_NE(FlagResult, nullptr);
+        bool ReadsResult = false;
+        for (const auto &Block : Med.Blocks)
+          for (const auto &Op : Block.Ops)
+            for (unsigned I = 0; I < Op.NumInputs; ++I)
+              ReadsResult |= Op.Inputs[I] == FlagResult->Value;
+        EXPECT_TRUE(ReadsResult);
+        EXPECT_TRUE(verifyMedFunc(Med, "status-flag-call"));
+        if (Target == Arch::X64 && Format == BinaryFormat::COFF && !Indirect)
+          for (bool Wide : {false, true}) {
+            auto Malformed = Med;
+            for (auto &Clobber : Malformed.CallClobbers)
+              if (Clobber.Value.Kind == MedVar::Flag) {
+                if (Wide)
+                  Clobber.Value.Size = 2;
+                else
+                  Clobber.Value.RegOff = Registers.IntReturnReg;
+              }
+            EXPECT_FALSE(verifyMedFunc(Malformed, "malformed-flag-call"));
+          }
+      }
+}
+
 TEST(CallRegisterEffects, ExitConstantsKeepUnknownAndAddressBoundaries) {
   BinaryImage Image;
   Image.Arch = Arch::X64;

@@ -4807,3 +4807,62 @@ switching, VM-exit/fault continuation or a new full-machine state domain.
 LLVM and NeverC already provide the required native API; neither needs a new
 compiler change for this integration. The global release gate remains open,
 and the production LLVM r6 pin and gitlink remain unchanged.
+
+## i386 platform source ABIs and VMFUNC replay (2026-11-09)
+
+NeverC now admits freestanding i386 C23 source for Linux ELF, Windows MSVC
+COFF and Darwin Mach-O through the explicit full LLVM backend. A shared
+`ABI32` classifier owns platform argument/return rules, including Windows
+fastcall and variadic vectors, Darwin vector/stack rules and the different
+`long double` data models. The builtin target route owns admission; the backend
+checks the returned object's architecture, byte order, address size and exact
+format. Darwin i386/i486/i586/i686 aliases reach the same i386 target.
+
+Microsoft C record layout has a separate tree owner reused by record emission.
+It handles allocation-unit changes between bitfield types, zero-width fields,
+unions, packing and required alignment. Wide `_BitInt` storage now follows the
+C tree's size rather than LLVM's rounded allocation size: a 65-bit i386 value
+occupies 12 bytes, so arrays no longer advance by an incorrect 16-byte stride.
+Scalar loads/stores, constants and variadic reads share this storage decision.
+The layout comparison also corrected the AArch64 maximum `_BitInt` alignment.
+
+The full LLVM fork fixes two independent ABI problems exposed by the mixed
+compiler tests. Both instruction selectors now make a callee pop actual
+argument bytes, leaving the caller's alignment padding to the caller. Clang's
+i386 Windows `va_arg` now classifies unnamed over-aligned records and vectors
+consistently with their call sites. These fixes are published in
+[`e7c81b978b44`](https://github.com/NeverSight/llvm-project/commit/e7c81b978b440561583eeb43771cb9d486e3f8ff).
+
+The [dated platform evidence](evidence/x86-i386-platforms-2026-11-09.json)
+records exact compiler/build revisions, input identity, failed diagnostics and
+verified archive recovery. Actual Clang/NeverC caller and callee objects pass
+12,624 value/ABI comparisons and 9,348 corruption controls across all three
+formats at O0/O2. The independent layout comparison checks 6,480 size, alignment
+and trailing-field offsets over 432 records and five triples. Native Linux
+regressions pass 2,560,000 mixed-ABI checks, 884,736 intrinsic-header checks and
+100,000 backend checks. The driver rejects missing backends and mismatched
+object formats in 15 controls. All 54 selected LLVM codegen tests and six Clang
+ABI tests pass after the recorded fixes. The selected NeverC suite passes 205
+tests; three DynCode tests are skipped because their loader is unavailable on
+this host. All four target-provider tests and the strict linked-compiler
+global-state audit pass, with no unscannable inputs.
+
+The expanded bounded-system witness passes 1,152 checks over 184 profiles with
+62 negative controls. NeverD's VMFUNC witness now recompiles all 848 complete
+C objects through NeverC, including the previously excluded Windows/Darwin
+i386 profiles; 2,544 comparisons and 4,728 corruption controls pass. It retains
+native leaf-zero selection and exact assembly transport for unproved leaves.
+The final NeverD merge passes all 35 selected VMFUNC/VMX/SVM tests across the
+existing native and r6 SDKs, including 1,776 native NeverC C compilations.
+Every one of the 1,056 exports per SDK is unchanged from the preceding VMFUNC
+qualification, and all replay inputs are bound to those final exports by hash.
+Identical cross-SDK inputs are counted once.
+
+Cross-platform ABI execution uses Unicorn; it does not qualify platform OS
+services, SEH or integrated linking. The bounded-system and VMFUNC checks
+intercept privileged instructions and do not establish physical system effects
+or EPT switching. The embedded i386 backend, vectorcall and bundled runtime
+remain outside this explicit source route. Full mode/task transitions, remaining
+original-machine i386 banks/providers, software SMM/SGX and unbound asynchronous
+producers remain separate gaps. No LLVM release is declared, and the production
+r6 pin and LLVM gitlink remain unchanged.

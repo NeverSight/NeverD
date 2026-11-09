@@ -104,7 +104,14 @@ owned here. Decoder recognition alone does not qualify instruction semantics.
 The initial DSP slice admits classic MIPS32r2/o32 ELF in either byte order when
 `.MIPS.abiflags` declares the DSP ASE. It supports `RDDSP`, `WRDSP`, `ADDU.QB`,
 `ADDU_S.QB`, `SUBU.QB`, `SUBU_S.QB`, `ADDQ.PH`, `ADDQ_S.PH`,
-`SUBQ.PH` and `SUBQ_S.PH`. Decoder reuse consumes the current
+`SUBQ.PH` and `SUBQ_S.PH`. Pure integer forms include `SHRL.QB`/`SHRLV.QB`,
+`SHRA.PH`/`SHRAV.PH`, `SHRA_R.PH`/`SHRAV_R.PH`,
+`SHRA_R.W`/`SHRAV_R.W`, `PRECRQ.QB.PH` and `PRECRQ.PH.W`.
+Variable counts are reduced modulo the lane width. Rounded arithmetic shifts
+round in widened signed precision, including the identity at count zero.
+Pack operations select the upper half of each source lane. These forms leave
+DSPControl untouched and need no incoming DSPControl value, including when
+their destination is `$zero`. Decoder reuse consumes the current
 image's feature evidence; Capstone recognizing an encoding without that
 evidence does not authorize its lift. DSPR2, DSP64, microMIPS DSP, accumulators and other DSP instructions remain
 unsupported.
@@ -130,8 +137,9 @@ state. This source contract requires an enabled DSP execution environment and
 an original-target compiler. Disabled-DSP exception delivery is not modeled.
 Every generated function in a DSP image, including ordinary scalar functions
 and generated helpers, disables automatic DSP instruction selection with
-negative target features. Without an image, a batch containing DSP state
-transfers establishes the same contract for its siblings and source shards.
+negative target features. Without an image, all MIPS32 source has the same
+contract because no image profile rules out live DSPControl. This also covers
+pure arithmetic with no state intrinsics, siblings, helpers and source shards.
 Generated C requires Clang's scoped target attributes; both `-O0` and `-O2`
 are exercised with external `-mdsp` enabled.
 Explicit state transfers use local assembler directives. This prevents a
@@ -207,8 +215,21 @@ source instruction is classic MIPS. Serialized callables retain bit zero;
 ordinary data pointers do not acquire a code tag.
 
 The scalar set is `LI`, `ADDIU`, `ADJSP`, `CMPI`, `SLTI`/`SLTIU`,
-`ADDU`/`SUBU`, `AND`/`OR`/`XOR`/`NOT`, and both compact/full-GPR `MOVE`
-directions. Ordinary `LB`/`LBU`/`LH`/`LHU`/`LW` and `SB`/`SH`/`SW`,
+`ADDU`/`SUBU`, `AND`/`OR`/`XOR`/`NOT`, `CMP`, `SLT`/`SLTU`, `NEG`,
+`SLL`/`SRL`/`SRA`, `SLLV`/`SRLV`/`SRAV`, `MULT`/`MULTU`,
+`MFHI`/`MFLO`, and both compact/full-GPR `MOVE` directions.
+`CMP` writes the full XOR result to T, while the comparisons write a boolean.
+Short shifts encode counts 1..8 (zero means eight); extended shifts encode
+0..31 in prefix bits 10:6 and reject nonzero reserved prefix/suffix fields.
+Variable shifts mask the count to five bits. Multiply produces both HI/LO
+halves through the classic semantics; moves from HI/LO preserve their known-bit
+state and never initialize an absent value.
+Before source optimization, the shared MIPS qualification requires HI/LO reads
+to come from definitions on every incoming path. Entry values and call-clobbered
+values have no ordinary C ABI carrier and are refused, including without an
+image. This check also applies to classic MIPS32/64; an unknown accumulator
+return must not silently turn into a void function.
+Ordinary `LB`/`LBU`/`LH`/`LHU`/`LW` and `SB`/`SH`/`SW`,
 SP-relative word loads/stores, and the RA stack store reuse the classic memory
 semantics. Short memory offsets are unsigned and scaled by access width;
 extended offsets are signed, unscaled 16-bit values. `EXTEND` and its suffix
@@ -241,7 +262,7 @@ verify ELF flags, symbol tags, memory, saved registers and actual callee entry.
 The GNU assembler's [`.insn` directive](https://sourceware.org/binutils/docs-2.29/as/MIPS-insn.html)
 marks literal instruction fixtures so their symbols retain the code mode.
 
-Shifts, SAVE/RESTORE, HI/LO operations, MIPS16e2 and MIPS16 on MIPS64 remain
+SAVE/RESTORE, division, MIPS16e2 and MIPS16 on MIPS64 remain
 unsupported. No path treats a misdecoded operand or unknown instruction as
 valid semantics. The immediate, memory, call and slot rules follow
 [MIPS16e Volume IV-a, revision 2.63](https://jnastarot.io/arch_index/pdf/MD00076-2B-MIPS1632-AFP-02.63.pdf)
@@ -257,15 +278,17 @@ MSA. Other revisions, MSA64, microMIPS/MSA and DSP/MSA combinations are refused.
 
 `FILL.W`, `INSERT.W`, `COPY_S.W`, all four B/H/W/D formats of `ADDV` and
 `SUBV`, `CEQ`, `CLT_S`/`CLT_U`, `CLE_S`/`CLE_U`, `MIN_S`/`MIN_U`,
-`MAX_S`/`MAX_U`, and
+`MAX_S`/`MAX_U`, `SLL`/`SRL`/`SRA`, `BCLR`/`BSET`/`BNEG`, `MULV`, and
 `AND.V`/`OR.V`/`NOR.V`/`XOR.V` use exact encoding descriptors in
 `MIPSMSA.def`. The 32 W registers are 128-bit containers. Lane zero occupies
 the low bits in both byte orders; addition and subtraction wrap independently
 within each 8/16/32/64-bit lane. Integer comparisons set every bit of a true
 lane to one and every bit of a false lane to zero; signed and unsigned ordering
 have separate rules. Min/max selects the complete winning lane using the same
-signed/unsigned ordering, including 64-bit extrema. Logical operations consume
-all 128 bits.
+signed/unsigned ordering, including 64-bit extrema. Shifts and bit edits use
+the low log2(lane width) bits of each corresponding count/index lane. Multiply
+retains the low lane-width product independently for every lane. Logical
+operations consume all 128 bits.
 Inputs are captured before an overlapping destination is written. F registers
 share the low 64 bits of their corresponding W register.
 Scalar floating instructions remain unsupported: their future implementation
@@ -287,7 +310,8 @@ work. Both C paths use Clang's bit-precise integer support for any surviving
 The execution contract requires MSA enabled with CU1/FR configured. It does not
 model disabled-MSA exceptions, MSA floating point/control state or arbitrary
 MSA guest execution. The operation and alias rules follow the MIPS32 MSA manual
-(MD00866, revision 1.12), sections ADDV, SUBV, CEQ, CLT/CLE, MIN/MAX, AND/OR/NOR/XOR,
+(MD00866, revision 1.12), sections ADDV, SUBV, CEQ, CLT/CLE, MIN/MAX,
+SLL/SRL/SRA, BCLR/BSET/BNEG, MULV, AND/OR/NOR/XOR,
 COPY_S, FILL and INSERT. Owned execution
 fixtures validate scalar results, output bytes and the ABI-preserved low FPR
 views against an enabled P5600 reference; no unimplemented W-register API is

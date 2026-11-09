@@ -12,6 +12,7 @@
 #include "neverd/symbolic/SymExplore.h"
 
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -26,6 +27,72 @@ TEST_F(NdOpEmulatorTest, BasicArithmetic) {
   LowOp Add = makeArith(NdOp::INT_ADD, 8, 0, 5);
   ASSERT_TRUE(Emu.step(Add));
   EXPECT_EQ(Emu.getRegister(8).value_or(0), 15u);
+}
+
+TEST_F(NdOpEmulatorTest,
+       StrictArithmeticAndComparisonsRequireEveryOperandByteBeforeWriting) {
+  const struct {
+    NdOp Opcode;
+    uint64_t Expected;
+    bool Comparison = false;
+  } Cases[] = {{NdOp::INT_ADD, 16},
+               {NdOp::INT_SUB, 10},
+               {NdOp::INT_MULT, 39},
+               {NdOp::INT_AND, 1},
+               {NdOp::INT_OR, 15},
+               {NdOp::INT_XOR, 14},
+               {NdOp::INT_LEFT, 104},
+               {NdOp::INT_RIGHT, 1},
+               {NdOp::INT_ASHR, 1},
+               {NdOp::INT_EQUAL, 0, true},
+               {NdOp::INT_NOTEQUAL, 1, true},
+               {NdOp::INT_LESS, 0, true},
+               {NdOp::INT_SLESS, 0, true},
+               {NdOp::INT_LESSEQUAL, 0, true},
+               {NdOp::INT_SLESSEQUAL, 0, true}};
+  for (const auto &[Opcode, Expected, Comparison] : Cases)
+    for (uint16_t Width : {1, 2, 4, 8, 16}) {
+      if (Width == 16 && (Opcode == NdOp::INT_ADD || Opcode == NdOp::INT_SUB ||
+                          (Comparison && Opcode != NdOp::INT_EQUAL &&
+                           Opcode != NdOp::INT_NOTEQUAL)))
+        continue;
+      const uint16_t OutputWidth = Comparison ? 1 : Width;
+      for (unsigned Missing : {0u, 1u})
+        for (unsigned Available : {0u, unsigned(Width - 1)}) {
+          SCOPED_TRACE(::testing::Message()
+                       << unsigned(Opcode) << "/" << Width << "/" << Missing
+                       << "/" << Available);
+          NdOpEmulator Emu(Img);
+          Emu.setStrictMode(true);
+          LowOp Op;
+          Op.Opcode = Opcode;
+          Op.Output = NdVar::reg(0x90, OutputWidth);
+          Op.addInput(NdVar::reg(0x70, Width));
+          Op.addInput(NdVar::tmp(0x80, Width));
+          const std::vector<uint8_t> Before(OutputWidth, 0xa5);
+          Emu.setRegisterBytes(Op.Output.Offset, Before);
+          for (unsigned I = 0; I != 2; ++I) {
+            std::vector<uint8_t> Value(I == Missing ? Available : Width);
+            if (!Value.empty()) {
+              Value[0] = I ? 3 : 13;
+              Emu.setRegisterBytes(Op.Inputs[I].Offset, Value);
+            }
+          }
+          EXPECT_FALSE(Emu.step(Op));
+          EXPECT_EQ(Emu.getRegisterBytes(Op.Output.Offset), Before);
+          EXPECT_FALSE(Emu.skips().any());
+          std::vector<uint8_t> Value(Width);
+          Value[0] = Missing ? 3 : 13;
+          Emu.setRegisterBytes(Op.Inputs[Missing].Offset, Value);
+          ASSERT_TRUE(Emu.step(Op));
+          Value.assign(OutputWidth, 0);
+          Value[0] = Expected;
+          if (OutputWidth > 8)
+            EXPECT_EQ(Emu.getRegisterBytes(Op.Output.Offset), Value);
+          else
+            EXPECT_EQ(Emu.getRegister(Op.Output.Offset), Expected);
+        }
+    }
 }
 
 TEST_F(NdOpEmulatorTest, SubAndShift) {

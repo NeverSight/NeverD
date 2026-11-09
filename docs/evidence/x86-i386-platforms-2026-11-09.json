@@ -1,0 +1,666 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-09",
+  "scope": "NeverC i386 Linux/Windows MSVC/Darwin C23 source ABI and explicit full LLVM backend; expanded NeverD VMFUNC source replay",
+  "artifact_root": "/mnt/data/neverd-i386-platforms-20261109",
+  "neverd_build_source": "b11f6ae8f754c564aa3df346c2b9225e43ccf99b",
+  "integrated_dev_commit": "f90104ac9bfe04daaf0f26ca8a4dc1cc9d1de29e",
+  "neverc_build_source": "6b8e3d59144d0c382de86c849ba2922eb99aabd2",
+  "neverc_published_source": "641cd0abc32bf919555ab747844b27a2d3d840da",
+  "llvm_published_source": "e7c81b978b440561583eeb43771cb9d486e3f8ff",
+  "builds": {
+    "neverc-build-eighth-receipt": {
+      "source_head": "27577b3161f04058cd48820721fc3cc000ba60f3",
+      "command": [
+        "cmake",
+        "--build",
+        "build-neverc",
+        "--target",
+        "neverc",
+        "neverc-tests",
+        "neverc-plugin-target-mc-tests",
+        "--parallel",
+        "4"
+      ],
+      "exit_code": 0,
+      "seconds": 357.656,
+      "log_sha256": "a5089cb98fc60074dfc9adadad81de4b567df10e457359e38486dd9717e8bac4",
+      "outputs": {
+        "neverc": "f6ec1c795b977bc4aedf4b9529784621e286cc2749254277c622a84cac225593",
+        "neverc-tests": "f8cedae64b85b15b349462aac3345fbde66f7cd71b108f004f77f8768bed070d"
+      },
+      "receipt_sha256": "d460fc0ef573bcaff1a218378a7333a9526993d4ae5ba81218f5d223f270f6bc"
+    },
+    "neverc-build-ninth-receipt": {
+      "source_head": "6b8e3d59144d0c382de86c849ba2922eb99aabd2",
+      "command": [
+        "cmake",
+        "--build",
+        "build-neverc",
+        "--target",
+        "neverc",
+        "neverc-tests",
+        "neverc-plugin-target-mc-tests",
+        "--parallel",
+        "4"
+      ],
+      "exit_code": 0,
+      "seconds": 41.008,
+      "log_sha256": "bde0f65201865d39288c6754a68ca25c75dbabe334ada95ff2473ee420619ca5",
+      "outputs": {
+        "neverc": "3d3e283491882d0c745e9ec9c574138abc5f836958cce15bf9eba11bab387786",
+        "neverc-tests": "f8cedae64b85b15b349462aac3345fbde66f7cd71b108f004f77f8768bed070d"
+      },
+      "receipt_sha256": "ccb7aeb6e4ea72f0a6b96faf10786e072f2f42539f79de284f3386c83c457a6c"
+    },
+    "llvm-build-second-receipt": {
+      "source_head": "2cf020bb6458c44eea7a4d75616ec946a4d300a5",
+      "command": [
+        "cmake",
+        "--build",
+        "build-intrinsics",
+        "--target",
+        "llc",
+        "--parallel",
+        "4"
+      ],
+      "exit_code": 0,
+      "seconds": 7.104,
+      "log_sha256": "128721fcf1bbe257ba65de0a05407440aa9f02bc2a81030e9a445e2417d7c672",
+      "llc_sha256": "e9b079493a2363e35288ca89ea7b8fe15d246b342c0ee66c6629c7df3c3ccefe",
+      "receipt_sha256": "86013b3fd6bc97e82bd662f129a9325ad0020658f0133402982b4ab939976d69"
+    },
+    "clang-build-second-receipt": {
+      "source_head": "f2bf6d81103420993783cb9ce1e8d1b27299aead",
+      "command": [
+        "cmake",
+        "--build",
+        "/mnt/data/neverd-flags-20261104/clang-build",
+        "--target",
+        "clang",
+        "--parallel",
+        "4"
+      ],
+      "exit_code": 0,
+      "seconds": 4.357,
+      "log_sha256": "883a08e45e16ed52342dd1de54b075ca53f7151c57993915f92b7451367bd896",
+      "clang_sha256": "43df92bb8a2021b52beb9c5eb7e552ec613963114ab230eb15f45b1d570c9a07",
+      "receipt_sha256": "05042c2dbe6d877dcd8a15cb1b93ab8f6270921f9deae85297d4fa29de5f8cc0"
+    },
+    "integrated-native-build-receipt": {
+      "source_head": "b11f6ae8f754c564aa3df346c2b9225e43ccf99b",
+      "source_status": "",
+      "command": [
+        "python3",
+        "scripts/build.py",
+        "build-x86-native",
+        "--target",
+        "NeverDX86VmfuncSourceTests",
+        "NeverDX86VirtualizationTests",
+        "NeverDX86VirtualizationSourceTests",
+        "--parallel",
+        "4"
+      ],
+      "exit_code": 0,
+      "seconds": 171.641,
+      "log_sha256": "eb312cb1032bf3b6a9ce0a42f559d5d90c75a36f1485531df3cbb2d8f4480a23",
+      "outputs": {
+        "NeverDX86VmfuncSourceTests": "bb1a4d27ad9bbd3d3ac73910f3aeb7df37a4c210c0119838e3a2ceb17bd2f6d4",
+        "NeverDX86VirtualizationTests": "044b366d7b6e3e928d118e6392f1dec724ea4474dfb70c0d2b1419657e494653",
+        "NeverDX86VirtualizationSourceTests": "b0b453e59c535a9480358f0dda69bfc9fa3f556ab99e441212742f4ae25b3dbc"
+      },
+      "receipt_sha256": "1c74554c12205eb1f8c3f5d9c5bf69d72a50791e52acb49767d2891bee4b9a78"
+    },
+    "integrated-r6-build-receipt": {
+      "source_head": "b11f6ae8f754c564aa3df346c2b9225e43ccf99b",
+      "source_status": "",
+      "command": [
+        "python3",
+        "scripts/build.py",
+        "build-x86",
+        "--target",
+        "NeverDX86VmfuncSourceTests",
+        "NeverDX86VirtualizationTests",
+        "NeverDX86VirtualizationSourceTests",
+        "--parallel",
+        "4"
+      ],
+      "exit_code": 0,
+      "seconds": 173.197,
+      "log_sha256": "81627da5f03a5edf3fd02295c3bcacea02939334cd4dff3a7cb7db115c29494d",
+      "outputs": {
+        "NeverDX86VmfuncSourceTests": "de7630f60eee23d8c12f95c15ae8bbded5fa9dfeffd207211fd4ac766734ff9a",
+        "NeverDX86VirtualizationTests": "f7265795655b99a01cf3be4d9ccad86d9ba2632c55a4700f98881d54d99dff9a",
+        "NeverDX86VirtualizationSourceTests": "2a78504e13007233db0c1dd40357afa5b78fb794665146050bdac916fffb23f3"
+      },
+      "receipt_sha256": "f26636c1b9ab813421a605133ff2beba627df7287bc1e97ebf4070cb99e97a5d"
+    }
+  },
+  "build_notes": [
+    "NeverC ninth build changes only Darwin alias canonicalization after the eighth semantic build; the exact compiler hash is retained in each executable witness report.",
+    "llc was built at 2cf020bb6458; later LLVM commits change Clang and tests. Clang was built at f2bf6d811034; the subsequent LLVM commit changes regression tests only.",
+    "NeverD is rebuilt against its existing local native SDK and production r6 SDK. NeverC object compilation uses the separately identified full llc; this is not a newly published SDK."
+  ],
+  "tools": {
+    "neverc": {
+      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+      "resolved_path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+      "sha256": "3d3e283491882d0c745e9ec9c574138abc5f836958cce15bf9eba11bab387786"
+    },
+    "neverc-tests": {
+      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc-tests",
+      "resolved_path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc-tests",
+      "sha256": "f8cedae64b85b15b349462aac3345fbde66f7cd71b108f004f77f8768bed070d"
+    },
+    "neverc-plugin-target-mc-tests": {
+      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc-plugin-target-mc-tests",
+      "resolved_path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc-plugin-target-mc-tests",
+      "sha256": "dc63d90caf992bd06fb8b9ffb3c414dedb22ef85cdb81c7c1d6d95969ca88dc6"
+    },
+    "clang": {
+      "path": "/mnt/data/neverd-flags-20261104/clang-build/bin/clang",
+      "resolved_path": "/mnt/data/neverd-flags-20261104/clang-build/bin/clang-23",
+      "sha256": "43df92bb8a2021b52beb9c5eb7e552ec613963114ab230eb15f45b1d570c9a07"
+    },
+    "host-clang": {
+      "path": "/home/ad/.local/bin/clang",
+      "resolved_path": "/usr/lib/llvm-23/bin/clang",
+      "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+    },
+    "llc": {
+      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+      "resolved_path": "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llc",
+      "sha256": "e9b079493a2363e35288ca89ea7b8fe15d246b342c0ee66c6629c7df3c3ccefe"
+    },
+    "opt": {
+      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/opt",
+      "resolved_path": "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/opt",
+      "sha256": "6722b904bbba3a270076ad01147f3d1356d0f437d020dd8b803dec6861e092e5"
+    },
+    "llvm-mc": {
+      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llvm-mc",
+      "resolved_path": "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llvm-mc",
+      "sha256": "52a2080052818b01208158b76a02eeaf46866e4976b3dd1663390097feb67de9"
+    },
+    "llvm-readobj": {
+      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llvm-readobj",
+      "resolved_path": "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llvm-readobj",
+      "sha256": "05727d589aaa1bdb96990599aa90c94fbf592d82faa66fcec13e0dd45ef08f4b"
+    },
+    "llvm-readelf": {
+      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llvm-readelf",
+      "resolved_path": "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llvm-readobj",
+      "sha256": "05727d589aaa1bdb96990599aa90c94fbf592d82faa66fcec13e0dd45ef08f4b"
+    },
+    "llvm-objdump": {
+      "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llvm-objdump",
+      "resolved_path": "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llvm-objdump",
+      "sha256": "0c2bb9d9cc3ab123ff92ae8f79edc6e05b73fb2ea10f96a5cfbae5136564931a"
+    },
+    "native-NeverDX86VmfuncSourceTests": {
+      "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86VmfuncSourceTests",
+      "resolved_path": "/mnt/data/neverd-mpx-source-20261031/build-x86-native/bin/NeverDX86VmfuncSourceTests",
+      "sha256": "bb1a4d27ad9bbd3d3ac73910f3aeb7df37a4c210c0119838e3a2ceb17bd2f6d4"
+    },
+    "native-NeverDX86VirtualizationTests": {
+      "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86VirtualizationTests",
+      "resolved_path": "/mnt/data/neverd-mpx-source-20261031/build-x86-native/bin/NeverDX86VirtualizationTests",
+      "sha256": "044b366d7b6e3e928d118e6392f1dec724ea4474dfb70c0d2b1419657e494653"
+    },
+    "native-NeverDX86VirtualizationSourceTests": {
+      "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86VirtualizationSourceTests",
+      "resolved_path": "/mnt/data/neverd-mpx-source-20261031/build-x86-native/bin/NeverDX86VirtualizationSourceTests",
+      "sha256": "b0b453e59c535a9480358f0dda69bfc9fa3f556ab99e441212742f4ae25b3dbc"
+    },
+    "r6-NeverDX86VmfuncSourceTests": {
+      "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86VmfuncSourceTests",
+      "resolved_path": "/mnt/data/neverd-sgx-transfer-20261101/build-x86/bin/NeverDX86VmfuncSourceTests",
+      "sha256": "de7630f60eee23d8c12f95c15ae8bbded5fa9dfeffd207211fd4ac766734ff9a"
+    },
+    "r6-NeverDX86VirtualizationTests": {
+      "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86VirtualizationTests",
+      "resolved_path": "/mnt/data/neverd-sgx-transfer-20261101/build-x86/bin/NeverDX86VirtualizationTests",
+      "sha256": "f7265795655b99a01cf3be4d9ccad86d9ba2632c55a4700f98881d54d99dff9a"
+    },
+    "r6-NeverDX86VirtualizationSourceTests": {
+      "path": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86VirtualizationSourceTests",
+      "resolved_path": "/mnt/data/neverd-sgx-transfer-20261101/build-x86/bin/NeverDX86VirtualizationSourceTests",
+      "sha256": "2a78504e13007233db0c1dd40357afa5b78fb794665146050bdac916fffb23f3"
+    }
+  },
+  "environment": {
+    "python": "3.14.4",
+    "platform": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+    "machine": "x86_64",
+    "libraries": {
+      "lief": "1.0.0",
+      "capstone": "5.0.9",
+      "unicorn": "2.1.4"
+    }
+  },
+  "source_snapshot": {
+    "path": "qualified-source-snapshot.json",
+    "sha256": "11c70418aeea0573e96c33da7c75a24b201acea88243d2f88ff1455786c24ef3"
+  },
+  "tests": {
+    "mixed_platform_abi": {
+      "profiles": 3156,
+      "comparisons": 12624,
+      "corruption_controls": 9348,
+      "report": {
+        "path": "abi-final/products/qualification.json",
+        "sha256": "46df0e0722a4c87e42f76b031bfcde543d741bad301fc8ed1759df65a3972d7e"
+      },
+      "platforms": [
+        "Linux ELF32",
+        "Windows MSVC COFF32",
+        "Darwin Mach-O32"
+      ],
+      "optimization": [
+        "O0",
+        "O2"
+      ],
+      "execution": "Unicorn executes full Clang/NeverC caller and callee objects in all four pairings, including stack cleanup and preserved registers.",
+      "receipt": {
+        "path": "abi-final/receipt.json",
+        "sha256": "1cc4b30e0212b5c8ff5b38446ef03c11f5b121062355afc89d6d026fd7707775"
+      },
+      "log": {
+        "path": "abi-final/run.log",
+        "sha256": "17b006a1a27dcc6b4fbca956f36158fcad8b3d8088dc448e07d100f5a0032bba"
+      }
+    },
+    "record_layouts": {
+      "records": 432,
+      "target_triples": 5,
+      "comparisons": 6480,
+      "report": {
+        "path": "layouts-eighth/products/qualification.json",
+        "sha256": "757aaaa6e77ccbafdcacedfff0518814f3fead1dd252abd81115d8ffb1c22f2a"
+      },
+      "execution": "Compile-time size, alignment and trailing-field offsets; Windows i386/x64/AArch64 and Linux/Darwin i386.",
+      "receipt": {
+        "path": "layouts-eighth/receipt.json",
+        "sha256": "3800406c7f24e85d5d1470b9c1e1a25cc0bfd27a3578af9f9cb0dd370b175c15"
+      },
+      "log": {
+        "path": "layouts-eighth/run.log",
+        "sha256": "26c6e51dade94e0192dd51cec1aa76e234f0f15b2e16d3c7506ec21df9ae7b50"
+      }
+    },
+    "platform_driver": {
+      "profiles": 6,
+      "darwin_aliases": [
+        "i386-apple-darwin",
+        "i486-apple-darwin",
+        "i586-apple-darwin",
+        "i686-apple-darwin"
+      ],
+      "negative_controls": 15,
+      "report": {
+        "path": "driver-aliases/products/qualification.json",
+        "sha256": "a8827285745612809c70e0d03c5810b3c9077ef68058c5ecc3825d1f8a3419d9"
+      },
+      "receipt": {
+        "path": "driver-aliases/receipt.json",
+        "sha256": "bd446e59a3f636dfc0f1c62fa89679f667257e49568816c2cb030d738566b913"
+      },
+      "log": {
+        "path": "driver-aliases/run.log",
+        "sha256": "0ee52f508b9376f0fb64a0c9f8d3b47386cec1e87717ed07d466070046c2c22c"
+      }
+    },
+    "bounded_system": {
+      "profiles": 184,
+      "checks": 1152,
+      "negative_controls": 62,
+      "physical_privileged_execution": false,
+      "report": {
+        "path": "bounded-platforms-final/products/results.json",
+        "sha256": "5083b6ef1f0386a09d4370a626cc9e7da3dd91b0bebbfa0a7ddc1474f9e3714c"
+      },
+      "receipt": {
+        "path": "bounded-platforms-final/receipt.json",
+        "sha256": "ecbcda46e135b26a65d16f4e3bab02f55c12301efbaf49999b1b7e2c2879d8b0"
+      },
+      "log": {
+        "path": "bounded-platforms-final/run.log",
+        "sha256": "8ad2e3717de76402ba9245db24a7a29d3f194a61156a18f515bc606b9cdfc5cf"
+      }
+    },
+    "vmfunc_source": {
+      "objects": 848,
+      "comparisons": 2544,
+      "corruption_controls": 4728,
+      "physical_vmfunc_execution": false,
+      "report": {
+        "path": "vmfunc-platforms/products/results.json",
+        "sha256": "5f7a12de8fe632288e4e17d13c566e400a08f9e3a154ec73c7fd8a5f334f98e4"
+      },
+      "receipt": {
+        "path": "vmfunc-platforms/receipt.json",
+        "sha256": "11049b68d748c9a2a05dc240b91894e3c9a965b7ab93cb006e6660adf6f94b66"
+      },
+      "log": {
+        "path": "vmfunc-platforms/run.log",
+        "sha256": "0192d94dd457348aa1df195bf15fbf7fb12d1e337701fc0e6bec44ce8ef6c5d7"
+      }
+    },
+    "x86_type_regressions": {
+      "path": "x86-regressions/result.xml",
+      "sha256": "beb7863a82b4df6c2d81700b992193579c716668c631d732f53584d7f6e291c8",
+      "tests": 208,
+      "passed": 205,
+      "skipped": [
+        "DynCodeTest.Struct",
+        "DynCodeTest.ConstStruct",
+        "DynCodeTest.RichStruct"
+      ],
+      "properties": {}
+    },
+    "i386_frontend_subset": {
+      "path": "frontend-eighth/result.xml",
+      "sha256": "908db262792a2185b17b7e9b9fca9bdd658a510c29b61123a9e839e9facf29b1",
+      "tests": 13,
+      "passed": 13,
+      "skipped": [],
+      "properties": {}
+    },
+    "builtin_targets": {
+      "path": "plugin-target-regressions/result.xml",
+      "sha256": "76a6aa3a4a5dc2a59e229596021fc34c852eb9815ec0d38d0d4c4155b9037e97",
+      "tests": 4,
+      "passed": 4,
+      "skipped": [],
+      "properties": {}
+    },
+    "llvm_codegen": {
+      "unique_passing_tests": 54,
+      "tests": [
+        "LLVM :: CodeGen/X86/call-graph-section-tailcall.ll",
+        "LLVM :: CodeGen/X86/callee-pop-vector-padding.ll",
+        "LLVM :: CodeGen/X86/callsite-emit-calleetypeid-tailcall.ll",
+        "LLVM :: CodeGen/X86/conditional-tailcall-pgso.ll",
+        "LLVM :: CodeGen/X86/conditional-tailcall.ll",
+        "LLVM :: CodeGen/X86/dynamic-allocas-VLAs-stack-align.ll",
+        "LLVM :: CodeGen/X86/fake-use-tailcall.ll",
+        "LLVM :: CodeGen/X86/fast-cc-callee-pops.ll",
+        "LLVM :: CodeGen/X86/fast-isel-tailcall.ll",
+        "LLVM :: CodeGen/X86/fastcall-correct-mangling.ll",
+        "LLVM :: CodeGen/X86/inalloca-stdcall.ll",
+        "LLVM :: CodeGen/X86/machine-outliner-tailcalls.ll",
+        "LLVM :: CodeGen/X86/movtopush-stack-align.ll",
+        "LLVM :: CodeGen/X86/musttail-fastcall.ll",
+        "LLVM :: CodeGen/X86/patchable-prologue-tailcall.ll",
+        "LLVM :: CodeGen/X86/stack-align-memcpy.ll",
+        "LLVM :: CodeGen/X86/stack-align.ll",
+        "LLVM :: CodeGen/X86/stack-align2.ll",
+        "LLVM :: CodeGen/X86/stdcall-notailcall.ll",
+        "LLVM :: CodeGen/X86/stdcall.ll",
+        "LLVM :: CodeGen/X86/tailcall-3regparm.ll",
+        "LLVM :: CodeGen/X86/tailcall-64.ll",
+        "LLVM :: CodeGen/X86/tailcall-assume.ll",
+        "LLVM :: CodeGen/X86/tailcall-calleesave.ll",
+        "LLVM :: CodeGen/X86/tailcall-caller-nocsr.ll",
+        "LLVM :: CodeGen/X86/tailcall-cgp-dup.ll",
+        "LLVM :: CodeGen/X86/tailcall-disable.ll",
+        "LLVM :: CodeGen/X86/tailcall-extract.ll",
+        "LLVM :: CodeGen/X86/tailcall-fastisel.ll",
+        "LLVM :: CodeGen/X86/tailcall-largecode.ll",
+        "LLVM :: CodeGen/X86/tailcall-lifetime-end.ll",
+        "LLVM :: CodeGen/X86/tailcall-mem-intrinsics.ll",
+        "LLVM :: CodeGen/X86/tailcall-mem_enoughregs.ll",
+        "LLVM :: CodeGen/X86/tailcall-msvc-conventions.ll",
+        "LLVM :: CodeGen/X86/tailcall-multiret.ll",
+        "LLVM :: CodeGen/X86/tailcall-nofpclass.ll",
+        "LLVM :: CodeGen/X86/tailcall-range.ll",
+        "LLVM :: CodeGen/X86/tailcall-readnone.ll",
+        "LLVM :: CodeGen/X86/tailcall-returndup-void.ll",
+        "LLVM :: CodeGen/X86/tailcall-ri64.ll",
+        "LLVM :: CodeGen/X86/tailcall-ssp-split-debug.ll",
+        "LLVM :: CodeGen/X86/tailcall-stackalign.ll",
+        "LLVM :: CodeGen/X86/tailcall-structret.ll",
+        "LLVM :: CodeGen/X86/tailcall-swifttailcc.ll",
+        "LLVM :: CodeGen/X86/tailcall-tailcc.ll",
+        "LLVM :: CodeGen/X86/tailcall.ll",
+        "LLVM :: CodeGen/X86/tailcallbyval.ll",
+        "LLVM :: CodeGen/X86/tailcallbyval64.ll",
+        "LLVM :: CodeGen/X86/tailcallfp.ll",
+        "LLVM :: CodeGen/X86/tailcallfp2.ll",
+        "LLVM :: CodeGen/X86/tailcallpic.ll",
+        "LLVM :: CodeGen/X86/tailcallstack64.ll",
+        "LLVM :: CodeGen/X86/vararg_tailcall.ll",
+        "LLVM :: CodeGen/X86/win64-tailcall-memory.ll"
+      ],
+      "runs": [
+        {
+          "path": "llvm-call-regressions/receipt.json",
+          "sha256": "06a63ab672c98c8726413f128a5f830b42b07af340ced5db5a34d190a55a4129"
+        },
+        {
+          "path": "llvm-readelf-regression/receipt.json",
+          "sha256": "82dd450bc09239fd14e21ffb2da50b9aae6cba3b755283fc55aad20ba2d06352"
+        },
+        {
+          "path": "llvm-padding-platforms/receipt.json",
+          "sha256": "244f265154f9c8a7b96d0a77734554698bcb5f32a687e9dc00869c2965a2f835"
+        }
+      ]
+    },
+    "clang_abi": {
+      "unique_passing_tests": 6,
+      "tests": [
+        "Clang :: CodeGen/X86/vaarg-indirect-bitint.c",
+        "Clang :: CodeGen/X86/x86_32-arguments-darwin.c",
+        "Clang :: CodeGen/X86/x86_32-arguments-linux.c",
+        "Clang :: CodeGen/X86/x86_32-arguments-win32.c",
+        "Clang :: CodeGen/i386-varargs-required-alignment.c",
+        "Clang :: CodeGen/x86_32-align-linux.c"
+      ],
+      "runs": [
+        {
+          "path": "clang-abi-build-path/receipt.json",
+          "sha256": "df234f5974c099829eb21bc7d4ce6e20e36345ca2c9c8ba5c6000cbf6f39e606"
+        },
+        {
+          "path": "clang-abi-regression-fixed/receipt.json",
+          "sha256": "2ac167796a6aabdafc81f13562e205595ba0c33aa3ac1c88579d4978ce9dc78e"
+        }
+      ]
+    },
+    "strict_global_state": {
+      "forbidden": [],
+      "heuristic": [],
+      "headers": [],
+      "source_globals": [],
+      "binary": [],
+      "unscannable": [],
+      "failed": false,
+      "receipt": {
+        "path": "global-state-final/receipt.json",
+        "sha256": "3980300362b4931272c880b4489224554bbca4a578425f9dd7fe6e7c52be4403"
+      },
+      "log": {
+        "path": "global-state-final/run.log",
+        "sha256": "971a67243437e9a0d0d851ee285b372b1413947eb087cdc13cf37c28fe989de2"
+      }
+    },
+    "backend-native": {
+      "checks": 100000,
+      "negative_controls": 11,
+      "report": {
+        "path": "backend-native/products/qualification.json",
+        "sha256": "7d86733d275443c55886ed8211c087b237212143d94f32e59158bfdbbe6cce3f"
+      },
+      "neverc_build_source": "27577b3161f04058cd48820721fc3cc000ba60f3",
+      "neverc_sha256": "f6ec1c795b977bc4aedf4b9529784621e286cc2749254277c622a84cac225593",
+      "execution": "Native Linux; header HRESET/AVX-512 cases are compile-only.",
+      "receipt": {
+        "path": "backend-native/receipt.json",
+        "sha256": "e22b65d83f24adf4d654fa13f2cf5816ec9c1aea051e28388ac49f34cef7148a"
+      },
+      "log": {
+        "path": "backend-native/run.log",
+        "sha256": "731384c752cfc392b8de6faf1f493867d4e7a9e362b83eb38be34e29d400ffea"
+      }
+    },
+    "abi-native-final": {
+      "checks": 2560000,
+      "negative_controls": 2,
+      "report": {
+        "path": "abi-native-final/products/summary.json",
+        "sha256": "9805b8f83541e5491114d06486e02bfa222c60429599b6cdc2afd3e22c95401f"
+      },
+      "neverc_build_source": "27577b3161f04058cd48820721fc3cc000ba60f3",
+      "neverc_sha256": "f6ec1c795b977bc4aedf4b9529784621e286cc2749254277c622a84cac225593",
+      "execution": "Native Linux; header HRESET/AVX-512 cases are compile-only.",
+      "receipt": {
+        "path": "abi-native-final/receipt.json",
+        "sha256": "d614267184731ec7c0af543f1f909d79766aa8bb83dd386f82206cd10f16c053"
+      },
+      "log": {
+        "path": "abi-native-final/run.log",
+        "sha256": "df693374f0c68716887bfc805aa0a220a86b7a040978053fac71e3d80e6fe7c3"
+      }
+    },
+    "headers-native": {
+      "checks": 884736,
+      "negative_controls": 2,
+      "report": {
+        "path": "headers-native/products/qualification.json",
+        "sha256": "5044d55ecfb7e697ac36204aae5b0fde4bc828e6d00518aa6707ccb93d3d3b48"
+      },
+      "neverc_build_source": "27577b3161f04058cd48820721fc3cc000ba60f3",
+      "neverc_sha256": "f6ec1c795b977bc4aedf4b9529784621e286cc2749254277c622a84cac225593",
+      "execution": "Native Linux; header HRESET/AVX-512 cases are compile-only.",
+      "receipt": {
+        "path": "headers-native/receipt.json",
+        "sha256": "de9cb27bc3c5fd209890e0e101e9a867c07f26d9a53901687b7fe748595b9245"
+      },
+      "log": {
+        "path": "headers-native/run.log",
+        "sha256": "f8c8357cce406b8cc2bce3df8f3470341c327e74d877bf5c49c3e59a9723ecf9"
+      }
+    }
+  },
+  "neverd_integration": {
+    "native": [
+      {
+        "path": "integrated-native-tests/result.xml",
+        "sha256": "f19b418874a7478a1a9e499d277077e2bb010b652fbc096552f10e937fe4fbae",
+        "tests": 5,
+        "passed": 5,
+        "skipped": [],
+        "properties": {
+          "complete_vmfunc_pipeline_profiles": "210"
+        }
+      },
+      {
+        "path": "native-regressions/NeverDX86VirtualizationTests.xml",
+        "sha256": "b40fa173e9abd0cdc47416dee82a8ce64b33196fe5b079bcea7368a8dadd9ce5",
+        "tests": 8,
+        "passed": 8,
+        "skipped": [],
+        "properties": {}
+      },
+      {
+        "path": "native-regressions/NeverDX86VirtualizationSourceTests.xml",
+        "sha256": "6f0cd5b11e7e458de2658ebde23d1f50a34da7c6a505019e7e1d887bdce801d9",
+        "tests": 5,
+        "passed": 5,
+        "skipped": [],
+        "properties": {
+          "native_modules": "444",
+          "assembly_modules": "0",
+          "native_c_compilations": "888"
+        }
+      }
+    ],
+    "r6": [
+      {
+        "path": "integrated-r6-tests/result.xml",
+        "sha256": "a79dec5bee46f67aa226a99b85e8e0ed8f1979bdc6f2b776e3928b4a7735f9e9",
+        "tests": 5,
+        "passed": 5,
+        "skipped": [],
+        "properties": {
+          "complete_vmfunc_pipeline_profiles": "210"
+        }
+      },
+      {
+        "path": "r6-regressions/NeverDX86VirtualizationTests.xml",
+        "sha256": "2d4512e848dd81f49771dc605ddeaf90a685d024e8d139ebe18394c7a49c1a73",
+        "tests": 8,
+        "passed": 8,
+        "skipped": [],
+        "properties": {}
+      },
+      {
+        "path": "r6-regressions/NeverDX86VirtualizationSourceTests.xml",
+        "sha256": "07d2438f1fbfeddc25446bbba912e4789d503265bf841e2b46170d6c49fadfc4",
+        "tests": 4,
+        "passed": 4,
+        "skipped": [],
+        "properties": {
+          "native_c_compilations": "888"
+        }
+      }
+    ]
+  },
+  "export_identity": {
+    "manifest": {
+      "path": "integrated-export-equality.json",
+      "sha256": "db66f49454ca7a77948967d5dcc4a0bce9e47293dad8a366754f0eb4d05e4268"
+    },
+    "unchanged_files_per_sdk": 1056,
+    "complete_c_files_per_sdk": 424,
+    "original_byte_files_per_sdk": 212,
+    "native_objects_per_sdk": 210,
+    "qualified_c_object_profiles": 848,
+    "previous_neverd_build_source": "fd21f9a2da6f50abf1f15ab98152d42b23efac1b",
+    "counting": "Every new source/original/object/IR export equals its previous qualified SDK export. All 848 replay records bind to both final SDK sources and original bytes by SHA-256. Identical inputs are counted once."
+  },
+  "ownership": [
+    "BuiltinTargetRoutes owns platform admission; FullLLVMBackend validates little-endian, 32-bit x86, requested object format and relocatable output.",
+    "ABI32 owns platform calling/return rules; MicrosoftStructLayout owns Microsoft C record layout, reused by IR emission.",
+    "Tree size and target BitInt maximum alignment own wide integer storage, constants and scalar/variadic loads.",
+    "LLVM DAG/FastISel count actual callee-popped bytes separately from caller alignment padding; Clang va_arg classifies unnamed records/vectors consistently with calls."
+  ],
+  "diagnostic_history": [
+    "Reference and mixed-call failures exposed Windows vector/regparm/fastcall, Microsoft bitfield layout, BitInt array stride and variadic scalar storage bugs; fixed before the final ABI matrix.",
+    "Mach-O relocation-site interpretation and COFF section alignment in the test loader were repaired against actual object tables; earlier failing fixtures/logs are preserved.",
+    "The first LLVM regression run lacked the llvm-readelf build alias; building that target and rerunning the affected test closed it.",
+    "The new Clang regression initially used an unqualified Windows-only CHECK label on Linux. The corrected prefix passes; all six selected tests pass.",
+    "The first expanded bounded run exposed the i686-apple-darwin alias bug, fixed and tested for i386/i486/i586/i686."
+  ],
+  "limitations": [
+    "Three DynCode struct tests are skipped because their native loader is unavailable on this Linux host.",
+    "Cross-platform ABI tests execute objects in Unicorn, not Windows/Darwin OS services, SEH or integrated linking.",
+    "Bounded-system and VMFUNC witnesses intercept privileged instructions. They do not qualify physical EPT switching, system effects, VM-exit/fault/event continuation or hardware completion.",
+    "Vectorcall, MinGW/Android/iOS source routes, an embedded i386 machine backend and bundled i386 runtime/sysroot remain outside this route.",
+    "Real/VM86/task transitions, remaining original-machine i386 banks/providers, software SMM/SGX, unbound asynchronous producers and hardware-specific qualification remain open."
+  ],
+  "release": {
+    "published": false,
+    "global_gate_complete": false,
+    "production_sdk": "neverd-llvm-v23.0.0-r6",
+    "llvm_gitlink": "b726cb0425bc7e1f7e2753972a748ebcfa8b5741"
+  },
+  "artifact_preservation": {
+    "archive": "qualified-i386-platform-products.tar.xz",
+    "archive_sha256": "1c43763de56988abbad96bf9c46767fca1a2a1606c6168bc24b147444f9a4488",
+    "files": 2079,
+    "decompressed_hashes_verified": true,
+    "recovery_index": {
+      "path": "qualified-i386-platform-products-recovery.json",
+      "sha256": "95af3d8b94dd34b11122baf19dfd6115cce3d3c2f95fa3f182b9955e6869c762"
+    },
+    "full_manifest": {
+      "path": "qualified-artifact-manifest.json",
+      "sha256": "38010aaf9f62e980d7078ae9b24c413b97975c7333edf5194e439ce88d090e7c"
+    },
+    "source_original_bytes_ir_logs_receipts_retained": true
+  },
+  "neverd_selected_tests": 35,
+  "neverd_native_c_compilations": 1776
+}
