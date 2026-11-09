@@ -143,6 +143,23 @@
     "-tvV"
   ],
   "disassembly_suffix": "-disassembly",
+  "debugger_command": [
+    "/usr/bin/xcrun",
+    "lldb",
+    "--batch",
+    "-o",
+    "settings set target.disable-aslr false",
+    "-o",
+    "run",
+    "-o",
+    "thread backtrace all",
+    "-o",
+    "register read",
+    "-o",
+    "disassemble --frame",
+    "--"
+  ],
+  "debugger_suffix": "-debugger",
   "header_format": "<III",
   "macho_magic": 4277009103,
   "cpu_type": 16777228,

@@ -134,6 +134,10 @@ def probe(output):
                 row = {"label": label, **identity, "returncode": run.returncode,
                        "stdout": run.stdout, "stderr": run.stderr}
                 report["controls"].append(row)
+                if run.returncode < 0:
+                    command(products, output, label + POLICY["debugger_suffix"],
+                            [*POLICY["debugger_command"], str(binary)],
+                            POLICY["tool_timeout"])
                 return run, row
 
             for optimization in POLICY["optimizations"]:
