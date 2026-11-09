@@ -130,6 +130,9 @@ def probe(output):
                 command(products, output, label + POLICY["disassembly_suffix"],
                         [*POLICY["disassembly_command"], str(binary)],
                         POLICY["tool_timeout"])
+                command(products, output, label + POLICY["fixup_suffix"],
+                        [*POLICY["fixup_command"], str(binary)],
+                        POLICY["tool_timeout"])
                 run = command(products, output, label, [str(binary)], POLICY["tool_timeout"])
                 row = {"label": label, **identity, "returncode": run.returncode,
                        "stdout": run.stdout, "stderr": run.stderr}

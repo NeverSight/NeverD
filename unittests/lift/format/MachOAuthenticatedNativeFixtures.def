@@ -393,6 +393,14 @@ int main(int argc, char **argv) {
   OriginalFunction OriginalCatch = &original_catch;
   OriginalFunction OriginalCleanup = &cleanup_frame;
   int *OriginalCleanups = &::cleanups;
+  const uintptr_t RawExternal = *(const volatile uintptr_t *)&native_external_data;
+  void *RawTarget = ptrauth_strip((void *)RawExternal, 3);
+  const uintptr_t Modifier = ptrauth_blend_discriminator(&native_external_data, 4660);
+  printf("native-db-slot=%p raw=%llx expected-da=%llx expected-db=%llx\n",
+         &native_external_data, (unsigned long long)RawExternal,
+         (unsigned long long)ptrauth_sign_unauthenticated(RawTarget, 2, Modifier),
+         (unsigned long long)ptrauth_sign_unauthenticated(RawTarget, 3, Modifier));
+  fflush(stdout);
   if (*native_local_data != 9 || *native_external_data != 13) return 2;
   volatile int *mutableData = native_local_data;
   *mutableData = 19;
