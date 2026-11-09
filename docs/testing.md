@@ -23090,6 +23090,8 @@ HighExprSimplify selected-byte regressions recover only contiguous captured-loca
 
 SymExprCancellation captured-mask tests use independent exhaustive small-word and multiword APInt evaluation. Negative controls retain overlapping carries and uncovered fields; bounded known-bit queries leave unresolved inputs intact. Existing complemented-offset MBA tests qualify the equivalent normalized constructor forms.
 
+`SymMBAFiniteSelection` checks exact small ordinal tables and shared Boolean selection trees through the ordinary `simplifyMBADeep` entry. APInt oracles and independent bitvector UNSAT checks cover 8--128 bits, wide out-of-range selectors, unknown defaults, duplicate priorities, complete shifted-bit trees and caller work/storage refusals. No sample-only candidate is published.
+
 SymConditionalControls and SymMBASelector Boolean-word tests use exhaustive small input tables and an independent solver check through 257 bits. Partial-mask and nonfitting-constant controls retain their data semantics; a large opaque predicate must not consume the budget before a complete root choice is recognized.
 
 SymMBARewriteCache regressions compare cold/hot work counts rather than wall-clock thresholds. Completed unchanged subtrees, opaque parent compositions, refused siblings, working-set eviction and option/context/work boundaries retain exact derivation semantics. SymMBASparseContext additionally checks placeholder declaration reuse without hiding caller inputs or carrying declarations across contexts.
