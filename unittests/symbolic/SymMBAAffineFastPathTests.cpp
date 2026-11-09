@@ -169,6 +169,107 @@ TEST(SymMBAAffineFastPath, GateBudgetRefusalRemainsAtomic) {
   }
 }
 
+TEST(SymMBAAffineFastPath, DirectAffineLeavesKeepOpaqueAndNestedBoundaries) {
+  std::mt19937_64 Random(0x4449524543544146);
+  for (unsigned Width : {3u, 8u, 64u, 257u}) {
+    auto Word = [&] {
+      llvm::APInt Value(Width, Random(), false, true);
+      for (unsigned Bit = 64; Bit < Width; Bit += 64)
+        Value |= llvm::APInt(Width, Random()).shl(Bit);
+      return Value;
+    };
+    for (unsigned Kind = 0; Kind < 4; ++Kind)
+      for (bool Scale : {false, true})
+        for (bool Products : {false, true}) {
+          SCOPED_TRACE(::testing::Message() << Width << " / " << Kind << " / "
+                                            << Scale << " / " << Products);
+          SymContext Ctx;
+          const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+          const auto Z = Ctx.mkVar("z", Width);
+          const std::array Bases{X, Ctx.mkAnd(X, Y), Ctx.mkMul(X, Y),
+                                 Ctx.mkAdd(X, Y)};
+          const auto Base = Bases[Kind];
+          const auto Literal = Ctx.mkConst(Width, Scale ? 5 : 17);
+          const auto Affine =
+              Scale ? Ctx.mkMul(Literal, Base) : Ctx.mkAdd(Literal, Base);
+          const auto Root = Ctx.mkAdd(Ctx.mkXor(Affine, Z), Base);
+          detail::WorkBudget Budget(MBAOptions::UnlimitedWork);
+          const auto A = detail::abstractToMBA(Ctx, Root, Products, &Budget);
+          ASSERT_TRUE(A);
+          SymEvalPlan Restored(Ctx, Ctx.substitute(A->Body, A->Hidden));
+          for (unsigned Trial = 0; Trial < (Width == 3 ? 512u : 64u); ++Trial) {
+            const auto XV = Width == 3 ? llvm::APInt(Width, Trial & 7) : Word();
+            const auto YV =
+                Width == 3 ? llvm::APInt(Width, (Trial >> 3) & 7) : Word();
+            const auto ZV =
+                Width == 3 ? llvm::APInt(Width, Trial >> 6) : Word();
+            const auto B = Kind == 0   ? XV
+                           : Kind == 1 ? XV & YV
+                           : Kind == 2 ? XV * YV
+                                       : XV + YV;
+            const auto F = Scale ? 5 * B : B + 17;
+            EXPECT_EQ(
+                Restored.evalWith([&](uint32_t Id) -> const llvm::APInt * {
+                  return Id == Ctx.varId(X)   ? &XV
+                         : Id == Ctx.varId(Y) ? &YV
+                         : Id == Ctx.varId(Z) ? &ZV
+                                              : nullptr;
+                }),
+                (F ^ ZV) + B);
+          }
+        }
+  }
+}
+
+TEST(SymMBAAffineFastPath, BitwiseFrontiersKeepArithmeticRecoveryAtItsUses) {
+  std::mt19937_64 Random(0x425754414c494153);
+  for (unsigned Width : {3u, 8u, 65u, 257u}) {
+    for (bool Products : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << Width << " / " << Products);
+      SymContext Ctx;
+      const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+      const auto Z = Ctx.mkVar("z", Width);
+      const auto Pure = Ctx.mkXor(Ctx.mkAnd(affine(Ctx, X, 3, 2), Z),
+                                  Ctx.mkOr(affine(Ctx, Y, 5, 4), Z));
+      // Equal offset parity excludes complements. The bitwise body cannot
+      // read recovered arithmetic bases, so its boundary fits a small budget.
+      detail::WorkBudget Bounded(64);
+      const auto A = detail::abstractToMBA(Ctx, Pure, Products, &Bounded);
+      ASSERT_TRUE(A);
+      EXPECT_FALSE(Bounded.exhausted());
+      EXPECT_EQ(A->Body, A->IndependentBody);
+      SymEvalPlan Bitwise(Ctx, Ctx.substitute(A->Body, A->Hidden));
+
+      // Adding arithmetic uses of those same bases must retain their exact
+      // relation to the hidden affine words, including odd modular inverses.
+      const auto Mixed = Ctx.mkAdd({Pure, X, Y});
+      detail::WorkBudget Unlimited(MBAOptions::UnlimitedWork);
+      const auto B = detail::abstractToMBA(Ctx, Mixed, Products, &Unlimited);
+      ASSERT_TRUE(B);
+      EXPECT_FALSE(Unlimited.exhausted());
+      EXPECT_NE(B->Body, B->IndependentBody);
+      SymEvalPlan Arithmetic(Ctx, Ctx.substitute(B->Body, B->Hidden));
+      const unsigned Trials = Width == 3 ? 512 : 128;
+      for (unsigned Trial = 0; Trial != Trials; ++Trial) {
+        std::array<llvm::APInt, 3> Values;
+        for (unsigned I = 0; I != Values.size(); ++I) {
+          Values[I] = llvm::APInt(Width, Width == 3 ? (Trial >> (3 * I)) & 7
+                                                    : Random());
+          for (unsigned Bit = 64; Bit < Width; Bit += 64)
+            Values[I] |= llvm::APInt(Width, Random()).shl(Bit);
+        }
+        const auto Expected = ((Values[0] * 3 + 2) & Values[2]) ^
+                              ((Values[1] * 5 + 4) | Values[2]);
+        auto Value = [&](uint32_t Id) -> const llvm::APInt * {
+          return Id < Values.size() ? &Values[Id] : nullptr;
+        };
+        EXPECT_EQ(Bitwise.evalWith(Value), Expected);
+        EXPECT_EQ(Arithmetic.evalWith(Value), Expected + Values[0] + Values[1]);
+      }
+    }
+  }
+}
+
 TEST(SymMBAAffineFastPath, WideFrontiersRetainIndependentProductInputs) {
   std::mt19937_64 Random(0x46524f4e54494552);
   for (unsigned Width : {3u, 8u, 64u, 65u, 128u, 257u}) {

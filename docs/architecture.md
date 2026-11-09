@@ -5824,9 +5824,11 @@ Full-block two-bit admission caches structural identities before constructing
 Boolean corrections. Partial cache entries can answer only identity queries
 and must be completed before arithmetic reads their correction. A full block
 can search past a failed positional probe without repeatedly materializing
-upper carries. Partial factor blocks retain complete probes, preserving their
-existing work headroom. These rules remain in the shared symbolic owner used
-by CLI and GUI source optimization.
+upper carries. Sparse partial blocks can also defer corrections when the
+unmatched period remainder exceeds the number of pairs; dense partial blocks
+keep complete probes. Only a matched pair requests its corrections, and each
+unmatched word stays complete. These rules remain in the shared symbolic owner
+used by CLI and GUI source optimization.
 Complete blocks and odd residual blocks combine two-bit correction columns
 before constructing their carry graph. Literal corrections sum directly modulo
 four; repeated or complementary variable bits cancel or move to the next
@@ -5835,6 +5837,47 @@ need only their shared square, with no zero correction to accumulate.
 Partial even blocks preserve
 streaming accumulation so unfinished proofs leave the established headroom
 for child rewrites. Both strategies retain the same cumulative resource limits.
+Low-word multiplication compresses exact partial products in columns before
+one carry-propagating sum. Three- and four-bit odd products use sign and short
+exponent coordinates; modulo eight, odd multiplication is XOR of the upper
+bits. Summation counts complete complemented edges in dense tables, then sorts
+each finished column before reduction. Final columns balance their parity
+without constructing an unobservable carry. Signature keys occupy stable pages
+whose storage is charged before allocation. These operations retain the full
+identity checks, cumulative allowances and decision-node ceiling.
+Expression restoration skips nodes older than every substitution key: immutable
+children precede their parents, and simultaneous replacement bodies remain
+unchanged. Rendering appends fragments directly into their parent's text and
+stores them in contiguous slots indexed by the same dense table used for
+discovery. Slots are sized from the reachable count before rendering, so
+completed child references remain stable. Text and precedence stay unchanged.
+Rendering gathers children before parents with an iterative postorder instead
+of sorting node IDs; a leaf root renders directly. MBA abstraction reuses the
+original DAG when its existing classification requires no hidden inputs,
+literal-mask carriers or arithmetic-complement rewrite. Independent identity
+verification and work accounting remain unchanged.
+Literal offsets and scales of an already opaque affine base are read directly
+into the coefficient result, avoiding a temporary pending tree. Linear
+children retain the general traversal; result storage and word operations
+remain charged before a complete relation is published.
+
+Successful full-width linear identities are retained within one deep request,
+keyed by their immutable difference in the owning context. Reuse still admits
+the input count, work and storage; incomplete or refused proofs grant no
+equality. Candidate synthesis for identical opaque abstractions reuses its
+ordered forms only under the same term budget and resolved synthesis limits.
+Each caller still passes the independent equality verifier and restores its
+own hidden inputs. Both memos use shares of the existing bounded request
+storage.
+
+Entries also retain requested measurement weights; the last admitted proof
+query avoids reconstructing its difference. For a free variable X at widths of
+at least three, C + (X ^ 1) already meets its five-node MBA reading bound when
+C is even, nonzero and different from the highest bit. This skips candidate
+construction without changing the expression. Highest-bit offsets instead
+merge into the XOR mask under the existing resource allowances; opaque inputs
+and other offsets keep their search.
+
 Boolean polynomial reconstruction can factor shared cofactors across groups
 with disjoint remaining variables. Exact symmetric differences retain every
 unmatched term. Larger decision graphs try this construction before expanding

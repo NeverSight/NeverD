@@ -10415,6 +10415,46 @@ isolation.
 
 ## Modular MBA simplification
 
+`SymMBALinearProofMemo` checks successful full-width proof reuse, alternating
+queries with the same difference, context isolation, incomplete proofs and
+input/work/storage limits through 257 bits. `SymMBALinearCandidateMemo` keeps
+ordered candidates and requested weights tied to the same opaque body and
+resolved synthesis limits; each source retains its own substitutions and
+independent equality verification.
+`SymMBAMinimalLeaf` exhausts smaller affine, per-bit and negated-XOR candidates
+at three and four bits, checks parent rewrites through 257 bits, and retains
+opaque, narrow and resource-constrained cases. Highest-bit offsets combine
+with literal XOR masks; neighboring offsets keep their arithmetic search.
+`SymMBAWidePairs.FiveAndSixBitUnits*` independently exhausts low-word product
+values and checks wide inputs, nearby nonidentities and resource refusal.
+
+`SymExpr.LateSubstitutionKeysPreserveEarlierRootsAndReplacementBodies` covers
+simultaneous interior replacements and late placeholders through 257 bits.
+`SymParse.LargeSharedFragmentsKeepPrecedenceAfterTableGrowth` checks exact text
+and parser roundtrips past the inline table capacity, including sparse source
+handles separated by unreachable nodes.
+`SymExpr.BinaryProductsPreserveOpaqueOperandsAndModularOverflow` checks direct
+two-factor construction, repeated operands and literal coefficients against
+independent APInt arithmetic through 257 bits, including the 65-bit boundary.
+The incremental-product regression also covers that boundary and retains
+constant, nested-product and zero/unit-coefficient folding.
+`SymMBA.CornerAgreementDoesNotProveMaskedOrNonlinearIdentities` retains
+nonuniform-mask and nonlinear-product refusals even when zero/all-ones
+corners agree, and checks arithmetic complements through 257 bits.
+`SymMBAAffineFastPath.DirectAffineLeavesKeepOpaqueAndNestedBoundaries`
+exhausts every three-bit input tuple and checks independent APInt arithmetic
+through 257 bits for direct offsets/scales over variable, bitwise, product and
+nested linear bases. Existing refusal tests cover every smaller work budget
+and constrained storage during affine recovery.
+`SymMBAAffineFastPath.BitwiseFrontiersKeepArithmeticRecoveryAtItsUses` checks
+that purely bitwise bodies fit bounded work after complements are excluded,
+while added arithmetic uses retain their exact hidden-input relations. It
+exhausts three-bit triples and checks independent APInt values through 257 bits.
+`SymMBAWidePairs.SparseCorrectionsLeaveRoomForTheIndependentTail` independently
+evaluates a nonlinear 33-factor product and its linear tail within the shared
+65,536-unit allowance. These tests exercise the shared expression and MBA
+owners used by CLI and GUI source optimization.
+
 Local MBA research can run disposable producers with
 `python3 tools/neverd-bench/mba_attempt.py --directory <owned-attempt-root> -- <command>`.
 The runner retains current and previous evidence, removes scratch after success,
@@ -23059,6 +23099,10 @@ SymExprCancellation captured-mask tests use independent exhaustive small-word an
 SymConditionalControls and SymMBASelector Boolean-word tests use exhaustive small input tables and an independent solver check through 257 bits. Partial-mask and nonfitting-constant controls retain their data semantics; a large opaque predicate must not consume the budget before a complete root choice is recognized.
 
 SymMBARewriteCache regressions compare cold/hot work counts rather than wall-clock thresholds. Completed unchanged subtrees, opaque parent compositions, refused siblings, working-set eviction and option/context/work boundaries retain exact derivation semantics. SymMBASparseContext additionally checks placeholder declaration reuse without hiding caller inputs or carrying declarations across contexts.
+
+The refused-sibling case derives its allowance from one child's measured work
+so faster analysis still reaches exhaustion between siblings. It checks both
+the completed child's one-unit reuse and the unfinished sibling's remaining work.
 
 `HighControlFlowSemantics.UnusedValuesDropReadsOfTheirOwnFrame` keeps unused reads through pointers and past the frame while dropping reads of the private frame, across stack-adjustment chains longer than one address walk. `HighCPointerAddresses.UnusedFieldLoadIsNotARegistersEntryValue` keeps a register's entry value from taking a later unused field load's name. `SymState.AnUnreadRunOfAPartlyKnownWordIsOneInput`, `SymMBARewriteCache.RecoveredWordChoicesStayInTheEvictionOrder` and `SymMBAKnownFacts.ConstantsBesideSeveralTermsStillFold` cover unread byte runs, cache eviction of recovered word choices and masks beside several terms. `HighControlFlowSemantics.UnusedOwnFrameReadsFollowEveryStackAdjustment` proves a read of the private frame through i386's sign-extended stack adjustment and in a function whose locals are all temporaries, so an unused reload no longer keeps its register's save. `HighCPointerAddresses.ImmutableSlotLoadsConvertTheirAddressOnce` converts a read-only GOT slot's address to an integer once. `HighControlFlowSemantics.StoreBetweenNestedTestsKeepsTheInnerTest` keeps an inner test of a slot that a store, or an assignment through it, changed after the outer test, as each block of the bounded graph in `BytecodeCLI.JoinedLoopBackEdgesKeepLabelsAndStateUpdates` does.
 

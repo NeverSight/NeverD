@@ -214,17 +214,27 @@ TEST(SymMBARewriteCache, ARefusedSiblingRetainsOnlyTheCompletedChildWork) {
   for (unsigned I = 0; I < 12; ++I)
     Sibling = C.mkXor(C.mkAdd(Sibling, B), D);
   MBAOptions Options;
-  Options.MaxWork = 30000;
+  const auto Completed = simplifyMBADeep(C, Value, Options);
+  ASSERT_NE(Completed.Outcome, MBAOutcome::BudgetExhausted);
+  ASSERT_GT(Completed.Work, 0u);
+  // Permit one complete child, but not both equal-cost siblings. Derive the
+  // allowance from actual proof work so faster analysis still tests refusal.
+  Options.MaxWork = Completed.Work + Completed.Work / 2;
   MBARewriteCache Cache(C);
   const auto Warm =
       simplifyMBADeep(C, C.mkConcat({Value, Sibling}), Options, Cache);
   ASSERT_EQ(Warm.Outcome, MBAOutcome::BudgetExhausted);
+  EXPECT_EQ(simplifyMBADeep(C, Value, Options, Cache).Work, 1u);
   const auto Root = C.mkUDiv(Value, C.mkXor(A, B));
   const auto Cold = simplifyMBADeep(C, Root, Options);
   const auto Hot = simplifyMBADeep(C, Root, Options, Cache);
   EXPECT_EQ(Hot.Expr, Cold.Expr);
   EXPECT_EQ(Hot.Outcome, Cold.Outcome);
   EXPECT_LT(Hot.Work * 4, Cold.Work);
+  // A partly visited sibling must still do work, not masquerade as complete.
+  const auto Refused = simplifyMBADeep(C, Sibling, Options, Cache);
+  EXPECT_GT(Refused.Work, 1u);
+  EXPECT_NE(Refused.Outcome, MBAOutcome::BudgetExhausted);
 }
 
 TEST(SymMBARewriteCache, AFullCacheRetainsNewExactDerivations) {

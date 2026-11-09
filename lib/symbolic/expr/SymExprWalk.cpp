@@ -174,6 +174,13 @@ SymContext::substituteAll(llvm::ArrayRef<SymRef> Roots,
   std::vector<SymRef> Results(Roots.begin(), Roots.end());
   if (Map.empty())
     return Results;
+  // Interned children always precede their parents. A subtree created before
+  // every replacement key cannot contain a replacement, even when the key is
+  // an interior expression rather than a variable. In particular, restoring
+  // MBA placeholders need not revisit the original, unchanged input DAGs.
+  uint32_t FirstReplacement = std::numeric_limits<uint32_t>::max();
+  for (const auto &[Index, Value] : Map)
+    FirstReplacement = std::min(FirstReplacement, Index);
   std::optional<uint32_t> ReplacedVariable;
   if (Map.size() == 1) {
     const auto Key = Map.begin()->first;
@@ -191,7 +198,8 @@ SymContext::substituteAll(llvm::ArrayRef<SymRef> Roots,
   llvm::SmallVector<SymRef, 8> NewOps;
   llvm::SmallVector<std::pair<SymRef, bool>, 32> Work;
   for (SymRef R : Results)
-    Work.emplace_back(R, false);
+    if (R.index() >= FirstReplacement)
+      Work.emplace_back(R, false);
   while (!Work.empty()) {
     auto [Cur, Expanded] = Work.pop_back_val();
     if (!Expanded) {
@@ -217,7 +225,8 @@ SymContext::substituteAll(llvm::ArrayRef<SymRef> Roots,
       }
       Work.emplace_back(Cur, true);
       for (SymRef C : operands(Cur))
-        Work.emplace_back(C, false);
+        if (C.index() >= FirstReplacement)
+          Work.emplace_back(C, false);
       continue;
     }
 
@@ -225,7 +234,8 @@ SymContext::substituteAll(llvm::ArrayRef<SymRef> Roots,
     NewOps.reserve(numOperands(Cur));
     bool Changed = false;
     for (SymRef C : operands(Cur)) {
-      SymRef NC = Done.find(C.index())->second;
+      SymRef NC =
+          C.index() < FirstReplacement ? C : Done.find(C.index())->second;
       Changed |= (NC != C);
       NewOps.push_back(NC);
     }
@@ -233,7 +243,8 @@ SymContext::substituteAll(llvm::ArrayRef<SymRef> Roots,
   }
 
   for (SymRef &R : Results)
-    R = Done.find(R.index())->second;
+    if (R.index() >= FirstReplacement)
+      R = Done.find(R.index())->second;
   return Results;
 }
 
