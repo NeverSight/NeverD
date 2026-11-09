@@ -21848,8 +21848,13 @@ bits and a mismatched ABI
 reject transactionally; removing `SG_READ_ONLY` fails final recipe replay.
 The matrix exercises both header and tail placement of compact unwind metadata;
 nonzero tail bytes and zero-filled ranges owned by `LC_NOTE` prevent reuse.
-The separate `AuthenticatedCallsAndSignedUnwindExecute` cases first compile and
-run an original call/throw control, then load the installed image and check
+The separate `AuthenticatedCallsAndSignedUnwindExecute` cases first compile an
+arm64e capability control. Each of IA/IB/DA/DB must produce a nontrivial
+signature, authenticate it successfully, and fault in a child process after a
+bit changed by signing is flipped. Core dumps are disabled for these expected
+faults. Only unavailable launch or disabled authentication can skip this gate;
+once it passes, a failed compiler-original call/throw control is a test failure.
+The tests then load the installed image and check
 authenticated functions/data, exception propagation through its signed frame,
 and the actual read-only mapping. The language runtime controls also check a
 typed catch's result and exact cleanup counts after both caught and propagated
@@ -21859,8 +21864,20 @@ truncated augmentation payloads and address overflow. Ordinary-chain tests
 exercise all supported formats, threaded imports, negative/large addends,
 separate loader replay and refusal to treat unsigned slots as signed ones.
 DWARF reservation also exercises reuse of the bounded gaps between original
-sections and the enlarged compact registry. A control that cannot execute causes an
-explicit skip. File-level validation does not qualify these runtime contracts.
+sections and the enlarged compact registry.
+`RelocatesOriginalSignedLanguageFrames` forces the original compiler-generated
+catch/cleanup DWARF section to move before installing the new object. O0/O2
+and chained/threaded cases retain original code and LSDA addresses, personality
+slot identity, compact fallback offsets and every instruction's signed-return
+state. The legacy inputs also exercise `ld-classic`'s DWARF LSDA indexes without
+the compact LSDA flag. `LegacyARM64DwarfLSDAsNeedExplicitArchitecture` checks
+strict and semantic loading of this form and refuses the same flag/index
+disagreement for other architectures and non-DWARF ARM64 modes.
+Apple `dwarfdump`, fixup inspection and strict code-signature verification
+check the final file. `RelocatedSignedLanguageFramesExecute` adds the original
+catch and propagated cleanup paths to the capability-gated execution matrix.
+The installed runtime driver also checks original functions in the other cases.
+File-level validation does not qualify these runtime contracts.
 The [native language qualification](evidence/arm64e-native-language-2026-11-09.json)
 records tested source identities, regression results, independent checks and
 the remaining runtime and publication boundaries.

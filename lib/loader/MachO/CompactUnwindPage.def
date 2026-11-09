@@ -42,5 +42,8 @@ NEVERD_COMPACT_PAGE_TEXT(
     kCompressedEntriesNotIncreasing,
     "compressed entries are duplicated or not strictly sorted")
 
+NEVERD_COMPACT_PAGE_TEXT(kLSDAIndexMismatch,
+                         "encoding and LSDA index disagree for a function")
+
 #undef NEVERD_COMPACT_PAGE_VALUE
 #undef NEVERD_COMPACT_PAGE_TEXT

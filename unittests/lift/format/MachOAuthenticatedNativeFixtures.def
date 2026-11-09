@@ -95,11 +95,17 @@ unsigned long long new_slots[16] = {
 };
 int cleanups = 0;
 __attribute__((noinline)) int cleanup_frame(int value) {
+#ifdef NEVERD_DWARF_LANGUAGE
+  asm volatile(".cfi_escape 0x2e, 0");
+#endif
   struct Guard { ~Guard() { ++cleanups; } } guard;
   if (value) throw value;
   return puts("signed frame");
 }
 __attribute__((noinline)) int original_catch(int value) {
+#ifdef NEVERD_DWARF_LANGUAGE
+  asm volatile(".cfi_escape 0x2e, 0");
+#endif
   try { return cleanup_frame(value); }
   catch (int result) { if (result < 0) std::terminate(); return result; }
 }
@@ -206,6 +212,12 @@ MACHO_AUTH_NATIVE_ARGS(kObjectCompileArgs, "-arch", "arm64e", "-c",
                        "-funwind-tables")
 MACHO_AUTH_NATIVE_TEXT(kRuntimeProviderSourceFile, "provider.cpp")
 MACHO_AUTH_NATIVE_TEXT(kRuntimeHarnessFile, "native-runtime.cpp")
+MACHO_AUTH_NATIVE_TEXT(kRuntimeCapabilityFile, "native-capability.cpp")
+MACHO_AUTH_NATIVE_TEXT(kRuntimeCapabilityBinary, "native-capability.out")
+MACHO_AUTH_NATIVE_TEXT(kRuntimeCapabilityProperty,
+                       "native_pac_capability_result")
+MACHO_AUTH_NATIVE_VALUE(int, kRuntimePACUnavailable, 77)
+MACHO_AUTH_NATIVE_TEXT(kRuntimeCapabilityMarker, "native-pac-enforcement-ok")
 MACHO_AUTH_NATIVE_TEXT(kRuntimeControlFile, "native-control.out")
 MACHO_AUTH_NATIVE_TEXT(kRuntimeDriverFile, "native-driver.out")
 MACHO_AUTH_NATIVE_TEXT(kRuntimeProviderFile, "libneverd_provider.dylib")
@@ -214,9 +226,53 @@ MACHO_AUTH_NATIVE_TEXT(kRuntimeControlOption, "-DNEVERD_AUTH_CONTROL")
 MACHO_AUTH_NATIVE_TEXT(kRuntimeInstallName,
                        "-Wl,-install_name,@rpath/libneverd_provider.dylib")
 MACHO_AUTH_NATIVE_TEXT(kRuntimeRpathPrefix, "-Wl,-rpath,")
-MACHO_AUTH_NATIVE_TEXT(
-    kRuntimeControlUnavailable,
-    "compiler-original arm64e call/unwind control could not execute: ")
+MACHO_AUTH_NATIVE_TEXT(kRuntimeControlUnavailable,
+                       "arm64e execution/PAC-enforcement control unavailable: ")
+MACHO_AUTH_NATIVE_TEXT(kRuntimeCapabilitySource, R"cpp(
+#include <ptrauth.h>
+#include <stdint.h>
+#include <signal.h>
+#include <stdio.h>
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include <unistd.h>
+template <int Key> int checkKey() {
+  volatile int Value = 42;
+  void *Raw = (void *)&Value;
+  uintptr_t Signed = 0, Difference = 0;
+  unsigned Discriminator = 0;
+  for (unsigned Salt = 1; Salt != 17; ++Salt) {
+    void *Pointer = __builtin_ptrauth_sign_unauthenticated(Raw, Key, Salt);
+    if (__builtin_ptrauth_auth(Pointer, Key, Salt) != Raw) return 1;
+    Difference = (uintptr_t)Pointer ^ (uintptr_t)Raw;
+    if (Difference) { Signed = (uintptr_t)Pointer; Discriminator = Salt; break; }
+  }
+  if (!Difference) return 77;
+  // Flip a bit that signing changed; do not guess the host's PAC bit layout.
+  const uintptr_t Corrupt = Signed ^ (Difference & -Difference);
+  if (__builtin_ptrauth_strip((void *)Corrupt, Key) != Raw) return 2;
+  const pid_t Child = fork();
+  if (Child < 0) return 3;
+  if (!Child) {
+    auto *Pointer = (volatile int *)__builtin_ptrauth_auth(
+        (void *)Corrupt, Key, Discriminator);
+    _exit(*Pointer == 42 ? 4 : 5);
+  }
+  int Status = 0;
+  if (waitpid(Child, &Status, 0) != Child || !WIFSIGNALED(Status)) return 6;
+  const int Signal = WTERMSIG(Status);
+  return Signal == SIGSEGV || Signal == SIGBUS || Signal == SIGILL ? 0 : 7;
+}
+int main() {
+  rlimit Limit{};
+  if (setrlimit(RLIMIT_CORE, &Limit)) return 8;
+  const int Results[] = {checkKey<0>(), checkKey<1>(), checkKey<2>(), checkKey<3>()};
+  for (int Result : Results)
+    if (Result) return Result;
+  puts("native-pac-enforcement-ok");
+  return 0;
+}
+)cpp")
 MACHO_AUTH_NATIVE_TEXT(kRuntimeMarker, "native-auth-call-unwind-ok")
 MACHO_AUTH_NATIVE_TEXT(kRelroRuntimeMarker, "native-relro-permissions-ok")
 MACHO_AUTH_NATIVE_TEXT(
@@ -286,6 +342,7 @@ MACHO_AUTH_NATIVE_TEXT(kRuntimeHarness, R"cpp(
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
 using Function = int (*)();
+using OriginalFunction = int (*)(int);
 using DataA = int * __ptrauth(2, 1, 4660);
 using DataB = int * __ptrauth(3, 1, 4660);
 #ifdef NEVERD_AUTH_CONTROL
@@ -295,6 +352,9 @@ int native_catch();
 int native_cleanup();
 extern int native_cleanups;
 extern int neverd_should_throw;
+int original_catch(int);
+int cleanup_frame(int);
+extern int cleanups;
 extern DataA const native_local_data;
 extern DataB const native_external_data;
 }
@@ -306,6 +366,9 @@ int main(int argc, char **argv) {
   Function cleanup = &native_cleanup;
   int *cleanups = &native_cleanups;
   int *throwFlag = &neverd_should_throw;
+  OriginalFunction OriginalCatch = &original_catch;
+  OriginalFunction OriginalCleanup = &cleanup_frame;
+  int *OriginalCleanups = &::cleanups;
   if (*native_local_data != 9 || *native_external_data != 13) return 2;
   volatile int *mutableData = native_local_data;
   *mutableData = 19;
@@ -318,6 +381,16 @@ int main(int argc, char **argv) {
   const uintptr_t anchor = (uintptr_t)dlsym(image, "new_slots");
   int *throwFlag = (int *)dlsym(image, "neverd_should_throw");
   if (!anchor || !throwFlag) return 12;
+  void *CatchAddress = dlsym(image, "original_catch");
+  void *CleanupAddress = dlsym(image, "cleanup_frame");
+  int *OriginalCleanups = (int *)dlsym(image, "cleanups");
+  if (!CatchAddress || !CleanupAddress || !OriginalCleanups) return 19;
+  OriginalFunction OriginalCatch = (OriginalFunction)ptrauth_sign_unauthenticated(
+      ptrauth_strip(CatchAddress, ptrauth_key_function_pointer),
+      ptrauth_key_function_pointer, 0);
+  OriginalFunction OriginalCleanup = (OriginalFunction)ptrauth_sign_unauthenticated(
+      ptrauth_strip(CleanupAddress, ptrauth_key_function_pointer),
+      ptrauth_key_function_pointer, 0);
   Function call = (Function)ptrauth_sign_unauthenticated(
       (void *)(anchor + strtoull(argv[2], nullptr, 0)), ptrauth_key_function_pointer, 0);
   Function catching = (Function)ptrauth_sign_unauthenticated(
@@ -344,6 +417,10 @@ int main(int argc, char **argv) {
   if (status || address > slot || slot - address >= size ||
       (info.protection & VM_PROT_WRITE)) return 14;
 #endif
+  *OriginalCleanups = 0;
+  if (OriginalCatch(71) != 71 || *OriginalCleanups != 1) return 20;
+  try { (void)OriginalCleanup(71); return 21; }
+  catch (int Value) { if (Value != 71 || *OriginalCleanups != 2) return 22; }
   if (call() != 49) return 3;
   *throwFlag = 1;
   try { (void)call(); return 4; }
@@ -409,6 +486,10 @@ extern "C" __attribute__((noinline)) int native_cleanup() {
 MACHO_AUTH_NATIVE_TEXT(kObjectCatch, "native_catch")
 MACHO_AUTH_NATIVE_TEXT(kObjectCleanup, "native_cleanup")
 MACHO_AUTH_NATIVE_TEXT(kObjectCleanups, "native_cleanups")
+MACHO_AUTH_NATIVE_TEXT(kOriginalCatch, "_original_catch")
+MACHO_AUTH_NATIVE_TEXT(kOriginalDwarfProperty,
+                       "relocated_original_language_frames")
+MACHO_AUTH_NATIVE_VALUE(unsigned, kOriginalLanguageFrames, 2)
 MACHO_AUTH_NATIVE_TEXT(kPlainLocal, "native_plain_local")
 MACHO_AUTH_NATIVE_TEXT(kPlainExternal, "native_plain_external")
 MACHO_AUTH_NATIVE_TEXT(kDwarfLanguageOption, "-DNEVERD_DWARF_LANGUAGE")

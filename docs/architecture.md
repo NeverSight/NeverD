@@ -1468,7 +1468,24 @@ signed exception execution.
 Compact unwind and DWARF reservation reuse zero-filled `__TEXT` gaps outside
 sections and load-command payloads without moving original code/data VAs.
 DWARF capacity is sized to the actual records, and PC-relative fields are
-relocated for the selected storage address before installation. A shared payload inventory protects
+relocated for the selected storage address before installation. Original
+arm64e language-bearing frames may also move: their code ranges, LSDA storage
+and personality slots stay at the same addresses, while the initial-location,
+personality and LSDA fields receive checked signed PC-relative displacements.
+Null augmentation pointers remain null. Moving the EH section does not move
+or re-sign an address-diversified personality slot. Replay compares language
+pointer identity, normalized CFI and every statically known return-address
+signing state. Unsupported encodings, pointers into the moved EH storage,
+dynamic CFI and out-of-range displacements reject transactionally.
+Strict compact parsing, semantic loading and rewriting share the ARM64 DWARF
+fallback LSDA rule. `ld-classic` can retain an LSDA index without setting the
+redundant compact LSDA flag; the writer preserves both the original encoding
+and the index. Strict parsing requires an explicit AArch64 target for this
+form. Unknown architectures, non-DWARF encodings and a set flag with a missing
+index retain their rejection behavior. The DWARF record remains the language
+metadata authority, consistent with
+[Apple's libunwind fallback](https://github.com/apple-oss-distributions/libunwind/blob/main/libunwind/src/UnwindCursor.hpp).
+A shared payload inventory protects
 declared load-command data, including zero-filled `LC_NOTE` ranges, from reuse.
 Inline `LC_ID_DYLIB` metadata does not block otherwise available header space.
 

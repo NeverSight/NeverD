@@ -104,9 +104,10 @@ llvm::Error headerReferences(Bytes &B, const section_64 &S, uint64_t Old,
   }
   return llvm::Error::success();
 }
-llvm::Error compact(Bytes &B, uint64_t Off, uint64_t Size, uint64_t Shift) {
+llvm::Error compact(Bytes &B, Arch TargetArch, uint64_t Off, uint64_t Size,
+                    uint64_t Shift) {
   auto R = macho_unwind::parseCompactUnwindRaw(
-      llvm::ArrayRef<uint8_t>(B).slice(Off, Size));
+      llvm::ArrayRef<uint8_t>(B).slice(Off, Size), {.TargetArch = TargetArch});
   if (!R)
     return R.takeError();
   std::set<uint64_t> Fields;
@@ -131,7 +132,7 @@ llvm::Error compact(Bytes &B, uint64_t Off, uint64_t Size, uint64_t Shift) {
     writeLE<uint32_t>(B.data() + Off + O, V + Shift);
   }
   auto Check = macho_unwind::parseCompactUnwindRaw(
-      llvm::ArrayRef<uint8_t>(B).slice(Off, Size));
+      llvm::ArrayRef<uint8_t>(B).slice(Off, Size), {.TargetArch = TargetArch});
   if (!Check)
     return Check.takeError();
   return llvm::Error::success();
@@ -333,7 +334,7 @@ llvm::Expected<bool> reserveMachOHeaderStorage(Bytes &Binary, Arch A,
           if (auto E = headerReferences(B, Old, OldBase, End, Shift, A))
             return E;
           if (readMachOName(Old.sectname) == "__unwind_info")
-            if (auto E = compact(B, Old.offset + Shift, Old.size, Shift))
+            if (auto E = compact(B, A, Old.offset + Shift, Old.size, Shift))
               return E;
         }
       }

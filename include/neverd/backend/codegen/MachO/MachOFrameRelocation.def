@@ -22,6 +22,13 @@
 
 NEVERD_MACHO_FRAME_VALUE(char, kAugmentationLength, 'z')
 NEVERD_MACHO_FRAME_VALUE(char, kAugmentationEncoding, 'R')
+NEVERD_MACHO_FRAME_VALUE(char, kAugmentationPersonality, 'P')
+NEVERD_MACHO_FRAME_VALUE(char, kAugmentationLSDA, 'L')
+NEVERD_MACHO_FRAME_VALUE(unsigned, kFramePointerArithmeticBits, 65)
+NEVERD_MACHO_FRAME_VALUE(unsigned, kFrameMissingStatus, 255)
+NEVERD_MACHO_FRAME_TEXT(kFrameMissingCIE, "absent")
+NEVERD_MACHO_FRAME_TEXT(kFramePointerContext,
+                        "{0}: VA={1}, CIE={2}, encoding={3}, status={4}")
 NEVERD_MACHO_FRAME_TEXT(kBasicAugmentation, "zR")
 // Each old/new query has a preflight and state replay. One extra unit charges
 // an empty program, so the total bounds both instruction work and query count.
@@ -35,6 +42,13 @@ NEVERD_MACHO_FRAME_TEXT(
     "relocated DWARF return-address state is not statically known")
 NEVERD_MACHO_FRAME_TEXT(kFrameStateChanged,
                         "relocated DWARF return-address signing recipe changed")
+NEVERD_MACHO_FRAME_TEXT(
+    kFramePointerContract,
+    "EH growth needs an address-stable DWARF pointer contract")
+NEVERD_MACHO_FRAME_TEXT(kFramePointerReach,
+                        "relocated DWARF pointer exceeds its encoded reach")
+NEVERD_MACHO_FRAME_TEXT(kFrameLanguageChanged,
+                        "relocated DWARF personality or LSDA identity changed")
 NEVERD_MACHO_FRAME_TEXT(
     kFrameStateBudget,
     "DWARF return-address relocation exceeds its comparison budget")

@@ -1507,7 +1507,8 @@ normalizeOriginalTable(Arch TargetArch, uint64_t MachHeaderVA,
   if (Original.OriginalBytes.empty())
     return mergeError(MergeFailure::InvalidOriginalTable,
                       "retained byte image is empty");
-  auto Reparsed = parseCompactUnwindRaw(Original.OriginalBytes);
+  auto Reparsed =
+      parseCompactUnwindRaw(Original.OriginalBytes, {.TargetArch = TargetArch});
   if (!Reparsed)
     return mergeError(MergeFailure::InvalidOriginalTable,
                       llvm::toString(Reparsed.takeError()));
@@ -1588,7 +1589,7 @@ normalizeOriginalTable(Arch TargetArch, uint64_t MachHeaderVA,
 
     const auto LSDAIt = RemainingLSDAs.find(RawFunctionRVA);
     const bool HasLSDAEntry = LSDAIt != RemainingLSDAs.end();
-    if (((Encoding & kHasLSDA) != 0) != HasLSDAEntry)
+    if (!isValidLSDAIndex(TargetArch, Encoding, HasLSDAEntry))
       return mergeError(MergeFailure::LSDAEncodingMismatch,
                         MergeInputKind::OriginalRecord, I);
 
@@ -1736,6 +1737,7 @@ buildMachOCompactUnwindRangeMappings(
 
   macho_unwind::CompactUnwindRawParseOptions ParseOptions;
   ParseOptions.ByteOrder = ByteOrder;
+  ParseOptions.TargetArch = TargetArch;
   auto Original = macho_unwind::parseCompactUnwindRaw(
       Binary.slice(static_cast<size_t>(Region.SectionFileOff),
                    static_cast<size_t>(Region.SectionSize)),
@@ -2296,7 +2298,10 @@ validateRegularEncodeInput(const MachOCompactUnwindMergeResult &Input,
                          "index names a different pointer slot");
 
     const bool EncodingHasLSDA = (Record.Encoding & kHasLSDA) != 0;
-    if (EncodingHasLSDA != Record.LSDARVA.has_value())
+    if (EncodingHasLSDA != Record.LSDARVA.has_value() &&
+        (Record.Origin != MachOCompactUnwindRecordOrigin::Original ||
+         !isValidLSDAIndex(Input.TargetArch, Record.Encoding,
+                           Record.LSDARVA.has_value())))
       return encodeError(EncodeFailure::LSDAEncodingMismatch,
                          EncodeInputKind::Record, I);
     LSDAEntryCount += Record.LSDARVA.has_value();
@@ -2489,7 +2494,8 @@ encodeMachOCompactUnwindRegular(const MachOCompactUnwindMergeResult &Input,
   std::vector<uint8_t> Bytes(Layout->TotalSize, 0);
   writeRegularSection(Input, *Layout, Bytes);
 
-  auto Parsed = macho_unwind::parseCompactUnwindRaw(Bytes);
+  auto Parsed = macho_unwind::parseCompactUnwindRaw(
+      Bytes, {.TargetArch = Input.TargetArch});
   if (!Parsed)
     return encodeError(EncodeFailure::StrictRoundTripFailure,
                        llvm::toString(Parsed.takeError()));
@@ -2701,6 +2707,7 @@ llvm::Expected<MachOCompactUnwindInstallPlan> prepareMachOCompactUnwindInstall(
                    static_cast<size_t>(Region.SectionSize));
   macho_unwind::CompactUnwindRawParseOptions ParseOptions;
   ParseOptions.ByteOrder = ByteOrder;
+  ParseOptions.TargetArch = TargetArch;
   auto Original =
       macho_unwind::parseCompactUnwindRaw(SectionBytes, ParseOptions);
   if (!Original)
@@ -2787,6 +2794,7 @@ applyMachOCompactUnwindInstall(std::vector<uint8_t> &Binary,
       static_cast<size_t>(ExpectedRegion.SectionSize));
   macho_unwind::CompactUnwindRawParseOptions ParseOptions;
   ParseOptions.ByteOrder = Plan.ByteOrder;
+  ParseOptions.TargetArch = Plan.ExpectedSemantics.TargetArch;
   auto Installed =
       macho_unwind::parseCompactUnwindRaw(InstalledBytes, ParseOptions);
   if (!Installed)
@@ -2853,7 +2861,8 @@ llvm::Error installNativeMachOCompactUnwind(
     const auto Region = **Located;
     auto Raw = macho_unwind::parseCompactUnwindRaw(
         llvm::ArrayRef<uint8_t>(Binary).slice(Region.SectionFileOff,
-                                              Region.SectionSize));
+                                              Region.SectionSize),
+        {.TargetArch = Architecture});
     if (!Raw)
       return Raw.takeError();
     auto Old = normalizeOriginalTable(Architecture, *HeaderVA, *Raw);
@@ -2965,10 +2974,12 @@ llvm::Error installNativeMachOCompactUnwind(
       Candidate.begin() + (**Final).SectionFileOff + (**Final).SectionSize, 0);
   auto Replay = macho_unwind::parseCompactUnwindRaw(
       llvm::ArrayRef<uint8_t>(Candidate).slice((**Final).SectionFileOff,
-                                               (**Final).SectionSize));
+                                               (**Final).SectionSize),
+      {.TargetArch = Architecture});
   if (!Replay)
     return Replay.takeError();
-  auto Expected = macho_unwind::parseCompactUnwindRaw(*Encoded);
+  auto Expected = macho_unwind::parseCompactUnwindRaw(
+      *Encoded, {.TargetArch = Architecture});
   if (!Expected)
     return Expected.takeError();
   if (Replay->Index != Expected->Index || Replay->Pages != Expected->Pages ||
