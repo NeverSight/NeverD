@@ -4608,15 +4608,20 @@ TEST_F(SessionCAPITest, ADeclarationThatHidesAPrototypeKeepsTheContext) {
   const auto *Context = State.LocalTypesDbg.get();
   ASSERT_NE(Context, nullptr);
   EXPECT_TRUE(hiding(Session).empty());
+  const auto Facts =
+      neverd::PipelineTestPeer::analysisFacts(State.AnalysisCache);
+  ASSERT_NE(Facts, nullptr);
 
   // The context takes the declaration in place; what analysis read of the
-  // prototype it hides goes.
+  // prototype it hides goes, and what it read of the bodies stays.
   constexpr char Declaration[] =
       R"J({"type":"int CloseHandle(int First, int Second)"})J";
   ASSERT_EQ(neverd_func_edit(Session, Entry + Stride, Declaration), 0)
       << neverd_last_error(Session);
   EXPECT_EQ(State.LocalTypesDbg.get(), Context);
   EXPECT_EQ(neverd_call_summaries_held(Session), 0);
+  EXPECT_EQ(neverd::PipelineTestPeer::analysisFacts(State.AnalysisCache),
+            Facts);
   EXPECT_EQ(hiding(Session),
             std::vector<std::string>{neverd::sdk::vaHex(Entry + Stride)});
   const std::string Declared = printed(Session);
