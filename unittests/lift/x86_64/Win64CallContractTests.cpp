@@ -3932,7 +3932,7 @@ TEST(CallExitRegisters, ConstantScratchValueReachesTheCallersStore) {
     SCOPED_TRACE(static_cast<unsigned>(Format));
     const bool Windows = Format == BinaryFormat::COFF;
     const uint8_t Frame = Windows ? 32 : 0;
-    for (unsigned Shape = 0; Shape != 3; ++Shape) {
+    for (unsigned Shape = 0; Shape != 5; ++Shape) {
       SCOPED_TRACE(Shape);
       std::vector<uint8_t> Code(0xA0, 0xCC);
       // Keep the output pointer in RBX while the leaf writes a non-return
@@ -3954,12 +3954,24 @@ TEST(CallExitRegisters, ConstantScratchValueReachesTheCallersStore) {
       if (Shape == 1)
         // The constant precedes a direct jump, outside the return block.
         Body.insert(Body.end(), {0xEB, 1, 0xCC});
-      if (Shape == 2) {
-        // Both exits inherit the constant, but return different scalar results.
-        // The second incoming argument selects the path.
+      if (Shape >= 2) {
+        // The second argument selects different ordinary results. Shape 2
+        // has separate returns; the other shapes rejoin before RET.
         Body.insert(Body.end(),
-                    {0x85, static_cast<uint8_t>(Windows ? 0xD2 : 0xF6), 0x74, 6,
-                     0xB8, 2, 0, 0, 0, 0xC3});
+                    {0x85, static_cast<uint8_t>(Windows ? 0xD2 : 0xF6), 0x74,
+                     static_cast<uint8_t>(Shape == 2 ? 6 : 7), 0xB8, 2, 0, 0,
+                     0});
+        if (Shape == 2)
+          Body.push_back(0xC3);
+        else {
+          Body.insert(Body.end(),
+                      {0xEB, static_cast<uint8_t>(Shape == 4 ? 10 : 5)});
+          if (Shape == 4)
+            // This predecessor supplies a separate, equal definition.
+            Body.insert(
+                Body.end(),
+                {static_cast<uint8_t>(Windows ? 0xB9 : 0xBF), 27, 0, 0, 0});
+        }
       }
       Body.insert(Body.end(), {0xB8, 1, 0, 0, 0, 0xC3});
       put(Code, Producer, Body);
@@ -4014,13 +4026,13 @@ TEST(CallExitRegisters, ConstantScratchValueReachesTheCallersStore) {
                    "  for (uint32_t choice = 0; choice != 2; ++choice) {\n"
                    "    uint64_t machine = 27, source = 999;\n"
                    "    uint64_t expected = "
-                << (Shape == 2 ? "choice ? 2 : 1" : "1")
+                << (Shape >= 2 ? "choice ? 2 : 1" : "1")
                 << ";\n#if defined(__linux__) && defined(__x86_64__)\n"
                    "    machine = 999;\n"
                    "    uint64_t original = ((fn)native)(&machine, choice);\n"
                    "    if (original != expected) return 12;\n#endif\n"
                    "    uint64_t actual = observe_exit(&source"
-                << (Shape == 2 ? ", choice" : "")
+                << (Shape >= 2 ? ", choice" : "")
                 << ");\n"
                    "    if (machine != 27 || source != machine || "
                    "actual != expected) return 11;\n"

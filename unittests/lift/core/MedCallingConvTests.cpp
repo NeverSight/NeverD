@@ -9026,7 +9026,7 @@ TEST(CallRegisterEffects, ExitConstantsFollowUniquePredecessors) {
     if (Case == 8)
       std::swap(Function.Blocks[1], Function.Blocks[2]);
     if (Case == 9) {
-      // A second predecessor makes the inherited value unavailable.
+      // Both predecessors carry the same inherited value into the join.
       Function.Blocks[2].Succs = {1};
       Function.Blocks[1].Preds.push_back(2);
       auto &Jump = Function.Blocks[2].Ops.back();
@@ -9034,11 +9034,109 @@ TEST(CallRegisterEffects, ExitConstantsFollowUniquePredecessors) {
       Jump.NumInputs = 0;
       Jump.addInput(NdVar::cst(First.StartAddr, 8));
     }
-    const GPRExitConstants Expected = Case == 0 || Case == 6 || Case == 8
+    const GPRExitConstants Expected = Case == 0 || Case == 6 || Case >= 8
                                           ? GPRExitConstants{{x86reg::RCX, 27}}
                                           : GPRExitConstants{};
     const auto Effect = localRegisterEffect(Image, Function);
     EXPECT_EQ(Effect.ExitConstants, Expected);
+  }
+}
+
+TEST(CallRegisterEffects, ExitConstantsIntersectAllPredecessorsAtJoins) {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Format = BinaryFormat::COFF;
+  const auto RCX = NdVar::reg(x86reg::RCX, 8);
+  const auto RDX = NdVar::reg(x86reg::RDX, 8);
+  for (unsigned Case = 0; Case != 13; ++Case) {
+    SCOPED_TRACE(Case);
+    LowFunc Function;
+    Function.Entry = 0x1000;
+    Function.Name = "joined_exits";
+    Function.Blocks.resize(4);
+    auto Add = [&](size_t B, NdOp Opcode, NdVar Out,
+                   std::initializer_list<NdVar> Inputs) {
+      LowOp Op;
+      Op.Opcode = Opcode;
+      Op.Output = Out;
+      Op.Addr = 0x1000 + B * 0x100 + Function.Blocks[B].Ops.size();
+      for (auto Input : Inputs)
+        Op.addInput(Input);
+      Function.Blocks[B].Ops.push_back(Op);
+    };
+    for (size_t B = 0; B != Function.Blocks.size(); ++B) {
+      Function.Blocks[B].Id = B;
+      Function.Blocks[B].StartAddr = 0x1000 + B * 0x100;
+      Function.Blocks[B].EndAddr = Function.Blocks[B].StartAddr + 0x10;
+    }
+    Function.Blocks[0].Succs = {1, 2};
+    Add(0, NdOp::COND_BR, {},
+        {NdVar::cst(0x1100, 8), NdVar::reg(x86reg::ZF, 1)});
+    for (size_t B : {1u, 2u}) {
+      Function.Blocks[B].Succs = {3};
+      Add(B, NdOp::COPY, RCX, {NdVar::cst(27, 8)});
+      Add(B, NdOp::BRANCH, {}, {NdVar::cst(0x1300, 8)});
+    }
+    Add(3, NdOp::INT_ADD, RCX, {RCX, NdVar::cst(1, 8)});
+    Add(3, NdOp::RETURN, {}, {NdVar::reg(x86reg::RAX, 8)});
+    if (Case == 1)
+      Function.Blocks[2].Ops.front().Inputs[0] = NdVar::cst(28, 8);
+    if (Case == 2)
+      Function.Blocks[2].Ops.erase(Function.Blocks[2].Ops.begin());
+    if (Case == 3) {
+      auto &Write = Function.Blocks[2].Ops.front();
+      Write.Output.Size = Write.Inputs[0].Size = 1;
+    }
+    if (Case == 4)
+      Function.Blocks[2].Ops.front().Inputs[0] = RDX;
+    if (Case == 5)
+      Function.Blocks[2].Ops.front().Inputs[0].Provenance =
+          ConstantAddressProvenance::DataAddress;
+    if (Case == 6 || Case == 7) {
+      // A second edge from one predecessor must still meet the other path.
+      Function.Blocks[1].Succs.push_back(3);
+      if (Case == 7)
+        Function.Blocks[2].Ops.front().Inputs[0] = RDX;
+    }
+    if (Case == 8) {
+      // Backedges cannot establish a value at the ordinary entry.
+      Function.Blocks[2].Succs = {0};
+      Function.Blocks[2].Ops.back().Inputs[0] = NdVar::cst(0x1000, 8);
+      Function.Blocks[1].Ops.front().Inputs[0] = RDX;
+    }
+    if (Case == 9 || Case == 10) {
+      // The loop's join keeps its existing conservative boundary. A local
+      // definition at that boundary may still reach its unique exit child.
+      Function.Blocks[1].Succs = {1, 3};
+      Function.Blocks[1].Ops.back().Opcode = NdOp::COND_BR;
+      Function.Blocks[1].Ops.back().addInput(NdVar::reg(x86reg::ZF, 1));
+      Function.Blocks[2].Succs = {1};
+      Function.Blocks[2].Ops.back().Inputs[0] = NdVar::cst(0x1100, 8);
+      if (Case == 10)
+        Function.Blocks[1].Ops.front().Inputs[0] = RDX;
+    }
+    if (Case == 11) {
+      // An unreachable extra predecessor supplies no guessed entry state.
+      LowBlock Extra = Function.Blocks[2];
+      Extra.Id = 4;
+      Extra.StartAddr = 0x1400;
+      Extra.Ops.front().Inputs[0] = RDX;
+      Function.Blocks.push_back(std::move(Extra));
+    }
+    if (Case == 12)
+      Function.Blocks[3].Ops.front().Inputs[0] = NdVar::tmp(42, 8);
+    const GPRExitConstants Expected = Case == 0 || Case == 6 || Case == 9
+                                          ? GPRExitConstants{{x86reg::RCX, 28}}
+                                          : GPRExitConstants{};
+    // Entry is fixed, but block and successor order cannot choose the fact.
+    for (unsigned Order = 0; Order != 4; ++Order) {
+      SCOPED_TRACE(Order);
+      EXPECT_EQ(localRegisterEffect(Image, Function).ExitConstants, Expected);
+      std::reverse(Function.Blocks.begin() + 1, Function.Blocks.end());
+      if (Order == 1)
+        for (auto &Block : Function.Blocks)
+          std::reverse(Block.Succs.begin(), Block.Succs.end());
+    }
   }
 }
 
@@ -9057,6 +9155,63 @@ TEST(CallRegisterEffects, ExitConstantsUseScalarWidthsAndBoundedWork) {
   auto &Ops = Function.Blocks.front().Ops;
   const LowOp Padding = Ops.front();
   Ops.insert(Ops.begin(), limits::kMaxCallExitConstantOps - Ops.size(),
+             Padding);
+  EXPECT_EQ(localRegisterEffect(Image, Function).ExitConstants, Expected);
+  Ops.insert(Ops.begin(), Padding);
+  EXPECT_TRUE(localRegisterEffect(Image, Function).ExitConstants.empty());
+}
+
+TEST(CallRegisterEffects, ExitConstantsCarryNestedJoinsWithinBodyBudget) {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Format = BinaryFormat::COFF;
+  const auto RCX = NdVar::reg(x86reg::RCX, 8);
+  LowFunc Function = makeOneBlockLow(0x1000, "diamonds", [&](auto Push) {
+    Push(NdOp::COPY, RCX, {NdVar::cst(27, 8)});
+  });
+  constexpr size_t Diamonds = 64;
+  for (size_t I = 0; I < Diamonds; ++I) {
+    const size_t Head = Function.Blocks.size() - 1;
+    const int Left = Function.Blocks.size(), Right = Left + 1, Join = Left + 2;
+    auto Address = [](int Id) { return va_t(0x1000 + Id * 0x100); };
+    auto &Before = Function.Blocks.back();
+    Before.Succs = {Left, Right};
+    auto &Conditional = Before.Ops.back();
+    Conditional.Opcode = NdOp::COND_BR;
+    Conditional.NumInputs = 0;
+    Conditional.addInput(NdVar::cst(Address(Left), 8));
+    Conditional.addInput(NdVar::reg(x86reg::ZF, 1));
+    for (int Id : {Left, Right, Join}) {
+      auto Local = makeOneBlockLow(Address(Id), "", [&](auto Push) {
+        if (Id == Join)
+          Push(NdOp::INT_ADD, RCX, {RCX, NdVar::cst(1, 8)});
+      });
+      auto Block = std::move(Local.Blocks.front());
+      Block.Id = Id;
+      if (Id != Join) {
+        Block.Succs = {Join};
+        Block.Preds = {static_cast<int>(Head)};
+        Block.Ops.back().Opcode = NdOp::BRANCH;
+        Block.Ops.back().addInput(NdVar::cst(Address(Join), 8));
+      } else
+        Block.Preds = {Left, Right};
+      Function.Blocks.push_back(std::move(Block));
+    }
+  }
+  const GPRExitConstants Expected{{x86reg::RCX, 27 + Diamonds}};
+  EXPECT_EQ(localRegisterEffect(Image, Function).ExitConstants, Expected);
+  std::reverse(Function.Blocks.begin() + 1, Function.Blocks.end());
+  EXPECT_EQ(localRegisterEffect(Image, Function).ExitConstants, Expected);
+  size_t Operations = 0;
+  for (const auto &Block : Function.Blocks)
+    Operations += Block.Ops.size();
+  ASSERT_LT(Operations, limits::kMaxCallExitConstantOps);
+  LowOp Padding;
+  Padding.Opcode = NdOp::COPY;
+  Padding.Output = NdVar::tmp(1, 8);
+  Padding.addInput(NdVar::cst(0, 8));
+  auto &Ops = Function.Blocks.front().Ops;
+  Ops.insert(Ops.begin(), limits::kMaxCallExitConstantOps - Operations,
              Padding);
   EXPECT_EQ(localRegisterEffect(Image, Function).ExitConstants, Expected);
   Ops.insert(Ops.begin(), Padding);

@@ -1171,7 +1171,10 @@ markers when reporting residuals.
 Bounded call-free x64 callees now publish scalar constants agreed at every
 return, before SSA, through the shared register-effect summary. Ordinary ABI
 result registers, addresses, exceptional roots and unknown paths remain outside
-that proof. Public caller stores execute through both C routes and real PE/ELF
+that proof. Exact register facts now survive acyclic joins only after every
+predecessor agrees; pending backedges retain the conservative local boundary.
+Each block is evaluated once, with the existing operation budget unchanged.
+Public caller stores execute through both C routes and real PE/ELF
 consumers, including cached query order. Complete register-only CPUID leaves
 now have a bounded source expansion: the shared converter retains their extra
 exit words, proves the written ABI-preserved GPRs unchanged, and emits every
