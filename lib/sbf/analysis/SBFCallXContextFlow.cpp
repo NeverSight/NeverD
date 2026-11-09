@@ -1418,6 +1418,23 @@ void ContextFlow::reclaimContext(FunctionContext &Context,
 
 void ContextFlow::publishRoot(FunctionContext &Context) {
   Context.IsRoot = true;
+  // Generic calls initially discard locally known argument bindings. A
+  // completed root with the same entry facts can prove a literal return for
+  // every caller. Refine only that scalar result; the generic memory effects
+  // and target evidence remain conservative. One constant fits the existing
+  // inline register/origin value storage.
+  if (!Context.Generic && Context.Return) {
+    auto &Generic = *GenericContexts.at(Context.EntryBlock);
+    const auto Value = Context.Return->Registers[kReturnRegister].singleton();
+    if (Value.ValueKind == RegisterValue::Kind::Constant && Generic.Return &&
+        Generic.Return->Registers[kReturnRegister].unknown() &&
+        Context.Input.Registers == Generic.Input.Registers &&
+        Context.Input.Scratch == Generic.Input.Scratch) {
+      Generic.Return->Registers[kReturnRegister] = Value;
+      Generic.Return->Origins[kReturnRegister] = Value;
+      Generic.Return->InputExpressions[kReturnRegister].reset();
+    }
+  }
   if (Context.Published)
     return;
   std::vector<size_t> Pending;

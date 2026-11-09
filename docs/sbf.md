@@ -568,6 +568,10 @@ live. When a later root needs a specialization,
 unused earlier parents and their unreferenced children can be reclaimed
 together. Other published dependencies and the current root stay live; reusable
 completed inputs remain cached while no specialization needs their space.
+When a completed root has exactly the generic entry's register and scratch
+facts, a literal scalar return can refine that generic summary's unknown
+return. Its conservative memory effects and target evidence remain unchanged;
+results from bound caller arguments do not establish this all-input fact.
 A completed older root whose inputs match the generic entry can also release
 its specialization when the generic result preserves its opaque return and
 every target proof remains independently published. Return differences and
