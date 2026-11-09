@@ -256,9 +256,14 @@ TEST(X86VmfuncSource, CompletePipelineRetainsLeafIndexAndNativeObjects) {
                         ZeroLeaf)
                   << Source;
             }
-            if (!ZeroLeaf)
-              EXPECT_EQ(IR.find("@llvm.x86.vmfunc.eptp.switch("),
-                        std::string::npos);
+            const bool NativeAvailable =
+                llvm::Intrinsic::lookupIntrinsicID("llvm.x86.vmread.address") &&
+                llvm::Intrinsic::lookupIntrinsicID(
+                    "llvm.x86.vmfunc.eptp.switch");
+            EXPECT_EQ(IR.find("@llvm.x86.vmfunc.eptp.switch(") !=
+                          std::string::npos,
+                      ZeroLeaf && NativeAvailable)
+                << IR;
             auto Copy = llvm::CloneModule(*M);
             const auto Object = Codegen().compile(*Copy, A, Format);
             ASSERT_TRUE(Object.Success);

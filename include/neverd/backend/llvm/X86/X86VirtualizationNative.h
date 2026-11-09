@@ -14,6 +14,7 @@
 
 #include "neverd/backend/llvm/X86/X86VirtualizationAsm.h"
 
+#include <cstdint>
 #include <optional>
 #include <string>
 
