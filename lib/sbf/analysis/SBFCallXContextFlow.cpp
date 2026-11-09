@@ -4810,7 +4810,13 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
         auto Objects = Original.Values;
         rebaseReturnedFrame(Objects, ReturnFrameDelta);
         Objects.transformSymbols(BindCapture);
-        Values.Values.includeCells(Objects, [](const auto &) { return true; });
+        // Projected reuse can change unread incoming globals. Only rebound
+        // postconditions and owned captures survive that weaker binding;
+        // an absolute snapshot could restore a previous invocation's value.
+        Values.Values.includeCells(Objects, [&](const RegisterValue &Cell) {
+          return !Edge.ReadProjectedInput ||
+                 Cell.ValueKind == RegisterValue::Kind::SymbolicAddress;
+        });
         const uint64_t Temporary = Fields.retainedByteEstimate() +
                                    Values.retainedByteEstimate() +
                                    Objects.retainedByteEstimate();
@@ -5965,9 +5971,13 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
     Case.Postconditions.discardInputCopies();
     Case.Postconditions.store(Address, Width, Tag);
     Case.Values.setCoordinates(Coordinates);
+    // A specialized path can separate an absolute cell from an actual output
+    // pointer even when formal postconditions cannot. Keep that fact with its
+    // tag; call-site binding above excludes it when incoming memory changes.
     Case.Values.includeCells(Path.Scratch.Values, [&](const auto &Cell) {
-      return Cell.ValueKind == RegisterValue::Kind::SymbolicAddress &&
-             CaptureOwners[Cell.Value] == Context.ID;
+      return Cell.ValueKind == RegisterValue::Kind::Constant ||
+             (Cell.ValueKind == RegisterValue::Kind::SymbolicAddress &&
+              CaptureOwners[Cell.Value] == Context.ID);
     });
     Case.DefinedCaptures = std::move(Path.DefinedCaptures);
     std::erase_if(Case.DefinedCaptures, [&](uint64_t Capture) {

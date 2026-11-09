@@ -13943,4 +13943,153 @@ TEST(SBFCallXContexts, CapturedCursorOffsetsKeepConditionalWritesAndAliases) {
   RecordProperty("raw_executions", static_cast<int>(RawExecutions));
 }
 
+TEST(SBFCallXContexts, TaggedReturnsRestoreGuardedAbsoluteFacts) {
+  unsigned RawExecutions = 0;
+  for (unsigned Mode = 0; Mode != 6; ++Mode)
+    for (bool ByteTag : {false, true})
+      for (bool Reverse : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << "mode=" << Mode << ", byte=" << ByteTag
+                     << ", reverse=" << Reverse);
+        const unsigned Count =
+            Mode == 3 ? kCallXContextSpecializationsPerEntry + 2 : 1;
+        std::vector<test::EncodedInstruction> Text;
+        const auto Literal = [&](unsigned Register, uint64_t Value) {
+          const size_t Slot = Text.size();
+          const auto Words = test::loadImm64(Register, Value);
+          Text.insert(Text.end(), Words.begin(), Words.end());
+          return Slot;
+        };
+        Literal(7, kHeapStart);
+        Literal(8, kInputStart);
+        Text.push_back(encode(Opcode::LD_DW_REG, 9, 8));
+        std::vector<size_t> Calls;
+        for (unsigned I = 0; I != Count; ++I) {
+          // This cell is never read or written by the helper. A projected
+          // summary must not restore a different invocation's old snapshot.
+          Text.push_back(encode(Opcode::ST_DW_IMM, 7, 0, 16, I));
+          Text.push_back(encode(Opcode::MOV64_REG, 1, 10));
+          Text.push_back(encode(Opcode::ADD64_IMM, 1, 0, 0, -16));
+          Text.push_back(encode(Opcode::MOV64_REG, 2, 9));
+          Calls.push_back(Text.size());
+          Text.push_back({});
+        }
+        if (Mode == 1 || Mode == 4)
+          Text.push_back(encode(
+              Mode == 4 ? Opcode::ST_B_IMM : Opcode::ST_DW_IMM, 7, 0, 0, 73));
+        if (Mode == 2) {
+          Text.push_back(encode(Opcode::LD_DW_REG, 3, 8, 8));
+          Text.push_back(encode(Opcode::ST_DW_IMM, 3, 0, 0, 73));
+        }
+        if (Mode == 5)
+          Text.push_back(encode(ByteTag ? Opcode::ST_B_IMM : Opcode::ST_DW_IMM,
+                                10, 0, -16));
+        Text.push_back(
+            encode(ByteTag ? Opcode::LD_B_REG : Opcode::LD_DW_REG, 1, 10, -16));
+        const size_t Skip = Text.size();
+        Text.push_back({});
+        Text.push_back(encode(Opcode::LD_DW_REG, 2, 7, Mode == 3 ? 16 : 0));
+        const size_t AValue = Literal(5, 0);
+        Text.push_back(
+            encode(Opcode::JEQ64_IMM, 2, 0, 2, Mode == 3 ? Count - 1 : 42));
+        const size_t BValue = Literal(5, 0);
+        const size_t CallX = Text.size();
+        Text.push_back(encode(Opcode::CALL_REG, 5));
+        Text.push_back(encode(Opcode::EXIT));
+        const size_t Empty = Text.size();
+        Text.push_back(encode(Opcode::MOV64_IMM, 0));
+        Text.push_back(encode(Opcode::EXIT));
+        Text[Skip] = encode(Opcode::JNE64_IMM, 1, 0, Empty - Skip - 1, 1);
+        const size_t Helper = Text.size();
+        Text.push_back(encode(Opcode::MOV64_REG, 6, 1));
+        // Give the specialized summary a useful scalar result as well, so
+        // the changing unread cell actually exercises conditional reuse.
+        Text.push_back(encode(Opcode::MOV64_REG, 0, 1));
+        Literal(3, kHeapStart);
+        const size_t Choice = Text.size();
+        Text.push_back({});
+        Text.push_back(encode(Opcode::ST_DW_IMM, 3, 0, 0, 42));
+        Text.push_back(encode(Opcode::ST_DW_IMM, 6, 0, 8, 42));
+        Text.push_back(encode(Opcode::MOV64_IMM, 1, 0, 0, 1));
+        const size_t Join = Text.size();
+        Text.push_back({});
+        const size_t Other = Text.size();
+        Text.push_back(encode(Opcode::ST_DW_IMM, 3, 0, 0, 73));
+        Text.push_back(encode(Opcode::ST_DW_IMM, 6, 0, 8, 73));
+        Text.push_back(encode(Opcode::MOV64_IMM, 1));
+        const size_t Tail = Text.size();
+        Text.push_back(
+            encode(ByteTag ? Opcode::ST_B_REG : Opcode::ST_DW_REG, 6, 1));
+        Text.push_back(encode(Opcode::EXIT));
+        Text[Choice] = encode(Opcode::JEQ64_IMM, 2, 0, Other - Choice - 1);
+        Text[Join] = encode(Opcode::JA, 0, 0, Tail - Join - 1);
+        const size_t A = Text.size();
+        Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+        Text.push_back(encode(Opcode::EXIT));
+        const size_t B = Text.size();
+        Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 43));
+        Text.push_back(encode(Opcode::EXIT));
+        for (const auto &[Slot, Target] :
+             {std::pair{AValue, A}, std::pair{BValue, B}}) {
+          const auto Words =
+              test::loadImm64(5, kBytecodeStart + Target * kInstructionSize);
+          std::copy(Words.begin(), Words.end(), Text.begin() + Slot);
+        }
+        for (size_t Slot : Calls)
+          Text[Slot] = encode(Opcode::CALL_IMM, 0, 1, 0, Helper - Slot - 1);
+        auto Program = analyze(test::makeImage(Text, {}));
+        ASSERT_TRUE(static_cast<bool>(Program))
+            << llvm::toString(Program.takeError());
+        if (Reverse)
+          std::reverse(Program->Low.Edges.begin(), Program->Low.Edges.end());
+        auto Report = recoverCallXContexts(*Program);
+        ASSERT_TRUE(static_cast<bool>(Report))
+            << llvm::toString(Report.takeError());
+        checkSummaryReferences(*Report);
+        EXPECT_FALSE(Report->SpecializationBudgetExhausted);
+        bool Proven = false;
+        for (const auto &Site : Report->Contexts)
+          if (!Site.EntryPrefixOnly && !Site.GeneralizedInputs &&
+              Site.CallXSlot == CallX && Site.TargetSlot) {
+            Proven = true;
+            EXPECT_EQ(*Site.TargetSlot, Mode == 1 ? B : A);
+          }
+        EXPECT_EQ(Proven, Mode == 0 || Mode == 1 || Mode == 3);
+        if (Mode == 3)
+          EXPECT_TRUE(llvm::any_of(Report->SummaryEdges, [&](const auto &Edge) {
+            return Edge.CallerSlot == Calls.back() &&
+                   Edge.InputGeneralization ==
+                       CallXInputGeneralization::EquivalentSpecializedInputs;
+          }));
+        for (uint64_t Selector : {0u, 1u})
+          for (unsigned Destination = 0; Destination != 3; ++Destination) {
+            std::vector<uint8_t> Input(16);
+            llvm::support::endian::write64le(Input.data(), Selector);
+            const uint64_t Address =
+                Destination == 2 ? initialFramePointer(Program->Low.TheVersion,
+                                                       Program->Config) -
+                                       16
+                                 : kHeapStart + Destination * 8;
+            llvm::support::endian::write64le(Input.data() + 8, Address);
+            ExecutionEnvironment Environment;
+            Environment.Memory.push_back({kInputStart, Input, false, "input"});
+            Environment.Memory.push_back(
+                {kHeapStart, std::vector<uint8_t>(64), true, "globals"});
+            auto Raw = executeRaw(*Program, std::move(Environment));
+            ASSERT_TRUE(static_cast<bool>(Raw))
+                << llvm::toString(Raw.takeError());
+            ASSERT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+            const uint64_t Expected =
+                !Selector || Mode == 5 || (Mode == 2 && Destination == 2) ? 0
+                : Mode == 1 || Mode == 4 || (Mode == 2 && Destination == 0)
+                    ? 43
+                    : 42;
+            EXPECT_EQ(Raw->ReturnValue, Expected);
+            ++RawExecutions;
+          }
+      }
+  EXPECT_EQ(RawExecutions, 144u);
+  RecordProperty("raw_executions", static_cast<int>(RawExecutions));
+}
+
 } // namespace neverd::sbf

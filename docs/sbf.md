@@ -1101,6 +1101,15 @@ untyped descriptor byte buffer also remains projected out. Consuming caller
 narrow fields inside another function needs read-dependent input summaries and
 remains an explicit precision gap; this round does not claim that capability.
 
+A specialized tagged return also retains absolute cells proven on each return
+path. Its actual output pointer may be disjoint from such a cell even when a
+formal output postcondition cannot prove that separation. Selecting a tag can
+restore these facts after the ordinary alias checks. This snapshot requires an
+exact memory binding: reuse with changed unread inputs applies rebound
+postconditions and captured object fields, without restoring old absolute
+cells. Subsequent writes invalidate the conditional facts through the same
+typed-memory rules.
+
 Within one invocation, CFG joins retain a captured object's fields when its
 capture was introduced on only one incoming path. The pointer and its fields
 remain conditional on that path. A capture already introduced on both paths
