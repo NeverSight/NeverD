@@ -157,7 +157,8 @@ def check_parameterized_query(worker, directory):
                 text = result["text"]
                 assert "__builtin_trap" not in text and "unknown" not in text, text
                 assert "arg0" in text and "arg1" in text, text
-                assert len(re.findall(r'\b__cpuid(?:ex)?\s*\(|"cpuid"', text)) == 1, text
+                assert len(re.findall(r'^\s*__cpuid(?:ex)?\s*\(|"cpuid"',
+                                      text, re.M)) == 1, text
                 assert f"sub_{ENTRY + 0x100:X}(" not in text, text
     assert path.read_bytes() == data
 
