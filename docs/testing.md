@@ -17906,6 +17906,13 @@ pointer faults, dynamic proc FD reuse and directory buffering/cookies.
 `LinuxFileNamespace` in `NeverDLinuxProcessTests` independently checks both
 LP64 architectures, complete defined dirent bytes and untouched padding,
 partial source-page writes, closed FD slots, EOF cookies and budget refusal.
+Its `Vectored*` and `MaterializedVectors*` cases check regular-file writev import
+ordering, GKI variants, partial payload faults, shared cursors, append overflow,
+timestamps and whole-call reservations. `LinuxProcess.VectoredFiles*` and
+`AndroidFiles.VectoredFiles*` execute the same O0/O2 caller through raw LP64,
+named Bionic, variadic syscall and dynamic bindings. `AndroidLog` also reads
+redirected assert/fortify diagnostics from the file inside the abort handler,
+including both writes after an explicit async-safe transport-open failure.
 C/CLI and Python exercise fresh mutable-file and proc workloads through the
 public JSON contract. None of these fixtures needs a phone or a host filesystem
 oracle. Live maps/task/status/fdinfo and opt-in timestamp/allocation maintenance
@@ -21829,15 +21836,34 @@ external providers, and a nonzero data addend. Inputs include explicit
 Both modern chained and legacy threaded installations retain generated
 `BLRAA`, `BLRAB` and `RETAB` instructions, add native compact unwind entries,
 preserve original C++ LSDA/personality and signed DWARF state, and pass strict
-code-signature verification. Malformed relocation bits and a mismatched ABI
+code-signature verification. Native inputs also contain ordinary local/imported
+data pointers, typed catches and destructor cleanup with an authenticated call.
+The matrix exercises compact language records and compiler-generated DWARF
+fallbacks, including unresolved object section differences, LSDA RTTI GOT
+references, private compiler helpers and newly allocated authenticated
+personality slots. The independent loader must recover complete language
+records at the installed function/LSDA addresses; malformed ordinary relocation
+flags or LSDA bytes reject without changing the image. Malformed relocation
+bits and a mismatched ABI
 reject transactionally; removing `SG_READ_ONLY` fails final recipe replay.
 The matrix exercises both header and tail placement of compact unwind metadata;
 nonzero tail bytes and zero-filled ranges owned by `LC_NOTE` prevent reuse.
 The separate `AuthenticatedCallsAndSignedUnwindExecute` cases first compile and
 run an original call/throw control, then load the installed image and check
 authenticated functions/data, exception propagation through its signed frame,
-and the actual read-only mapping. A control that cannot execute causes an
+and the actual read-only mapping. The language runtime controls also check a
+typed catch's result and exact cleanup counts after both caught and propagated
+exceptions, for compact and DWARF frames. `DwarfEHFrame` separately checks
+encoded personality/LSDA identity, null and negative relative pointers,
+truncated augmentation payloads and address overflow. Ordinary-chain tests
+exercise all supported formats, threaded imports, negative/large addends,
+separate loader replay and refusal to treat unsigned slots as signed ones.
+DWARF reservation also exercises reuse of the bounded gaps between original
+sections and the enlarged compact registry. A control that cannot execute causes an
 explicit skip. File-level validation does not qualify these runtime contracts.
+The [native language qualification](evidence/arm64e-native-language-2026-11-09.json)
+records tested source identities, regression results, independent checks and
+the remaining runtime and publication boundaries.
 `MachONativeRelro.DyldProtectsConstantsAndKeepsMutablePagesWritable` separately
 loads an ordinary arm64 image with the same RELRO installer, reads the constant,
 writes adjacent mutable storage and queries the actual mapping permissions.

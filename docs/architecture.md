@@ -1425,7 +1425,7 @@ create dependency load commands or infer a provider.
 providers through the same library-command owner used by ordinary source
 dependencies. It validates request identity and header capacity, rejects weak
 library contracts for strong requests, and requires every declaration to serve
-an undefined authenticated reference. Library admission and fixup installation
+an undefined loader pointer reference. Library admission and fixup installation
 commit together; a failed or unused declaration leaves the input unchanged.
 
 `appendMachOObjectImage` connects the existing native Mach-O parser, placement,
@@ -1435,10 +1435,40 @@ analysis loader and installer share authenticated object-word decoding, retainin
 the signed 32-bit addend and both key bits. Native symbol names remain canonical
 inside the compiled image and acquire their Mach-O prefix only at the dyld
 provider boundary. This staging API neither redirects original entries nor
-signs the output. Native object LSDA/personality installation and ordinary
-absolute-pointer rebases remain outside its supported contract.
-Compact unwind reservation can reuse existing zero-filled `__TEXT` tail space
-without moving original code/data VAs. A shared payload inventory protects
+signs the output. Native eight-byte `ARM64_RELOC_UNSIGNED` data slots now
+retain ordinary rebase/bind receipts alongside authenticated ones; section
+relocations retain a complete local target, while external relocations preserve
+the signed addend and exact provider. Writable storage is required even when
+the final mapping is RELRO. An absolute constant (`N_ABS`) is not inferred to
+be a slid address.
+
+Native compact language records retain LSDA addresses and personality slots.
+The arm64e personality slot uses IA/address diversity with zero discriminator;
+RTTI slots remain ordinary pointers. Existing unambiguous personality slots
+can be reused, and explicit providers can allocate new slots. Native
+`ARM64_RELOC_POINTER_TO_GOT` uses the linker's addend-free PC-relative contract;
+GOT page/pageoff references use the same allocated slots. The shared chain
+installer handles both pointer kinds in modern and threaded images. Language
+name resolution consumes canonical ordinary bindings and authenticated recipes
+even when a new slot has no indirect-symbol-table entry; it does not reclassify
+an authenticated slot as ordinary import storage.
+
+For native DWARF, the framing decoder retains CIE personality and FDE LSDA
+field offsets, widths and encodings without dereferencing indirect pointers.
+Object-local section differences are resolved in a temporary logical address
+view before range decoding; raw producer bytes remain available for final
+placement. The native installer accepts indirect pcrel/sdata4 personality and
+fixed-width direct pcrel LSDA fields, cross-checks duplicated compact/DWARF
+language pointers, and reloads installed language records before committing.
+Private weak code helpers remain object-local; exported weak definitions and
+private weak data still require a coalescing contract. Other language pointer
+encodings, native TLS/initializers and public whole-image arm64e publication
+remain outside this staging contract. These file checks do not qualify real
+signed exception execution.
+Compact unwind and DWARF reservation reuse zero-filled `__TEXT` gaps outside
+sections and load-command payloads without moving original code/data VAs.
+DWARF capacity is sized to the actual records, and PC-relative fields are
+relocated for the selected storage address before installation. A shared payload inventory protects
 declared load-command data, including zero-filled `LC_NOTE` ranges, from reuse.
 Inline `LC_ID_DYLIB` metadata does not block otherwise available header space.
 
@@ -4905,7 +4935,10 @@ item, which nothing analyzed or rendered reads, leave the renders as they are, a
 new name of data costs those that asked for it. A function's declaration reaches only
 what the decompiler reads, so the debug context takes it in place
 (`LocalTypesDebugContext::takeDeclarations`) and the analysis, the summaries and what
-was read ahead under them stand, unless it hides a prototype analysis read. Types new
+was read ahead under them stand. One that hides a prototype analysis read, or gives
+one back, lets go of the image's call summaries alone
+(`PipelineAnalysisCache::forgetPrototypes`): only their solve reads an export's
+prototype, while callee effects, no-return proofs and call graphs read bodies. Types new
 to the library that nothing names do the same (`Session::takeUnreadTypes`). Other
 types let go of what read them, and the summaries, the job and the store start over,
 while the process and its image stand. The owner keeps its listing and reference index
@@ -16435,7 +16468,9 @@ events remain incomplete until guest execution actually returns.
 `LinuxFiles.cpp` dispatches typed file operations. Catalogue validation lives in
 `LinuxFileOptions.cpp`, path import and lookup in `LinuxFilePaths.cpp`, descriptor
 ownership and transfers in `LinuxFileIO.cpp`, and metadata serialization in
-`LinuxFileStatus.cpp`. These files implement the same process-owned `LinuxFiles`
+`LinuxFileStatus.cpp`. `LinuxFileWrite.cpp` owns scalar, vector and materialized
+regular-file writes, including shared cursors, reservations, append selection
+and metadata updates. These files implement the same process-owned `LinuxFiles`
 object; they do not maintain separate catalogues or cursors. `fstatat` reuses the
 path classifier and `fstat` serializer, while Bionic only adapts arguments and
 errno through its existing service registry.
@@ -16586,9 +16621,10 @@ versioned `pidfd_open` flag mask, nonleader error and iovec import policy. JSON 
 select that contract
 explicitly; Android's Bionic API level does not infer it. `LinuxServices`
 dispatches the shared kernel call, and `LinuxFiles` owns process descriptors
-alongside regular files and standard streams. `LinuxOutput` supplies the same
-version-selected vector import/error ordering for captured output and before a
-pidfd's missing write operation. There
+alongside regular files and standard streams. `LinuxWriteBuffers` supplies one
+version-selected vector importer for captured output, regular-file writes and
+the validation before a pidfd's missing write operation. `LinuxOutput` owns
+captured stdout/stderr budgets and byte sinks. There
 is no host process lookup or parallel descriptor namespace. `LinuxKernelOptions`
 also owns an optional fixed catalogue of additional live guest tasks. A declared
 closed catalogue supplies lookup absence; an omitted one leaves foreign targets

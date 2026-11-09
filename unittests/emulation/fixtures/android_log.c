@@ -44,6 +44,8 @@ extern int kill(int, int);
 extern int close(int);
 extern int dup2(int, int);
 extern int open(const char *, int, ...);
+extern long read(int, void *, U64);
+extern long lseek(int, long, int);
 extern int sigaction64(int, const void *, void *);
 extern int sigprocmask64(int, const U64 *, U64 *);
 
@@ -296,6 +298,11 @@ static void assert_handler(int Signal, void *Info, void *Context) {
   Out[8] = gettid();
   if (Out[7])
     memcpy((char *)Out + 24000, (void *)Out[7], 4096);
+  if (((Call->Mode >> 16) & 255) == 4) {
+    Out[14] = lseek(2, 0, 1);
+    Out[16] = lseek(2, 0, 0);
+    Out[15] = read(2, (char *)Out + 28672, 4096);
+  }
   const U64 Handling = (Call->Mode >> 8) & 255;
   if (Handling == 3)
     _exit(23);

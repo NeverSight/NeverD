@@ -11,9 +11,20 @@
 #include "llvm/Support/Error.h"
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace neverd {
+
+/// Encoded address before any indirect load. Offset is section-relative.
+struct DwarfEHFramePointer {
+  uint64_t Offset = 0;
+  uint64_t Value = 0;
+  uint8_t Encoding = 0;
+  uint8_t Width = 0;
+
+  bool operator==(const DwarfEHFramePointer &) const = default;
+};
 
 struct DwarfEHFrameRecord {
   uint64_t BeginVA = 0;
@@ -25,6 +36,8 @@ struct DwarfEHFrameRecord {
   uint8_t InitialLocationEncoding = 0;
   uint8_t InitialLocationWidth = 0;
   bool HasLanguageAugmentation = false;
+  std::optional<DwarfEHFramePointer> Personality;
+  std::optional<DwarfEHFramePointer> LSDA;
 
   bool covers(uint64_t Address) const {
     return BeginVA <= Address && Address < EndVA;

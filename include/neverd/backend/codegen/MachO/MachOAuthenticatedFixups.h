@@ -28,12 +28,15 @@ struct MachOAuthenticatedFixup {
   MachOAuthenticatedPointer Recipe;
   /// Require dyld's post-fixup read-only protection on the owning segment.
   bool ReadOnlyAfterFixups = false;
+  /// False for an ordinary pointer sharing the same dyld chain. Signing
+  /// fields must then be zero; Target/import identity retain their meaning.
+  bool Authenticated = true;
 };
 
 /// Translate producer receipts at their final section VAs. External symbols
 /// identify one exact dyld provider. Explicit declarations select a library
 /// already admitted to Original; otherwise conflicting providers are rejected.
-/// Every declaration must be used by an undefined authenticated reference.
+/// Every declaration must be used by an undefined loader pointer reference.
 llvm::Expected<std::vector<MachOAuthenticatedFixup>>
 collectMachOAuthenticatedFixups(
     llvm::ArrayRef<uint8_t> Original, const CompiledImage &Image,

@@ -27,6 +27,8 @@ namespace neverd {
 using namespace dweh;
 
 namespace {
+#define DWARF_EH_FRAME_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "DwarfEHFrame.def"
 
 /// DW_EH_PE_signed: a signed integer whose width is the target address size.
 /// It has no fixed width without the CIE's address-size context, so the shared
@@ -68,107 +70,6 @@ bool skipSLEB(llvm::ArrayRef<uint8_t> Bytes, size_t &Cursor) {
       return true;
   }
   return false;
-}
-
-bool readCIEEncoding(llvm::ArrayRef<uint8_t> Record, size_t Cursor,
-                     bool Is64BitAddress, uint8_t &Encoding,
-                     bool &HasAugmentationData, bool &HasLanguageAugmentation) {
-  Encoding = Absptr;
-  HasAugmentationData = false;
-  if (Cursor >= Record.size())
-    return false;
-  const uint8_t Version = Record[Cursor++];
-  if (Version != 1 && Version != 3 && Version != 4)
-    return false;
-
-  const size_t AugmentationBegin = Cursor;
-  while (Cursor < Record.size() && Record[Cursor] != 0)
-    ++Cursor;
-  if (Cursor >= Record.size())
-    return false;
-  const llvm::StringRef Augmentation(
-      reinterpret_cast<const char *>(Record.data() + AugmentationBegin),
-      Cursor - AugmentationBegin);
-  ++Cursor;
-
-  if (Version == 4) {
-    if (Cursor + 2 > Record.size())
-      return false;
-    const uint8_t AddressSize = Record[Cursor++];
-    const uint8_t SegmentSelectorSize = Record[Cursor++];
-    if (AddressSize != (Is64BitAddress ? 8 : 4) || SegmentSelectorSize != 0)
-      return false;
-  }
-
-  uint64_t Scratch = 0;
-  if (!readULEB(Record, Cursor, Scratch) || !skipSLEB(Record, Cursor))
-    return false;
-  // Version 1 predates the ULEB form and stores the return-address register in
-  // exactly one byte.  Versions 3 and 4 use ULEB128.
-  if (Version == 1) {
-    if (Cursor >= Record.size())
-      return false;
-    ++Cursor;
-  } else if (!readULEB(Record, Cursor, Scratch)) {
-    return false;
-  }
-  if (Augmentation.empty())
-    return true;
-  if (Augmentation.front() != 'z')
-    return false;
-  HasAugmentationData = true;
-
-  uint64_t AugmentationSize = 0;
-  if (!readULEB(Record, Cursor, AugmentationSize) ||
-      AugmentationSize > Record.size() - Cursor)
-    return false;
-  const size_t AugmentationEnd = Cursor + AugmentationSize;
-  for (char Kind : Augmentation.drop_front()) {
-    switch (Kind) {
-    case 'L':
-      HasLanguageAugmentation = true;
-      if (Cursor >= AugmentationEnd)
-        return false;
-      ++Cursor;
-      break;
-    case 'P': {
-      HasLanguageAugmentation = true;
-      if (Cursor >= AugmentationEnd)
-        return false;
-      const uint8_t PersonalityEncoding = Record[Cursor++];
-      const uint8_t PersonalityFormat = getFormat(PersonalityEncoding);
-      const size_t Size = PersonalityFormat == Absptr ||
-                                  PersonalityFormat == kSignedPointerFormat
-                              ? (Is64BitAddress ? 8 : 4)
-                              : getEncodedSize(PersonalityEncoding);
-      if (Size == 0 || Size > AugmentationEnd - Cursor)
-        return false;
-      Cursor += Size;
-      break;
-    }
-    case 'R':
-      if (Cursor >= AugmentationEnd)
-        return false;
-      Encoding = Record[Cursor++];
-      break;
-    case 'S':
-    case 'B':
-    case dwarf_eh::aarch64::kNonHintAugmentation:
-    case 'G':
-      break;
-    default:
-      return false;
-    }
-  }
-  const uint8_t Format = getFormat(Encoding);
-  const bool SupportedFormat =
-      Format == Absptr || Format == kSignedPointerFormat || Format == Udata2 ||
-      Format == Udata4 || Format == Udata8 || Format == Sdata2 ||
-      Format == Sdata4 || Format == Sdata8;
-  const uint8_t Application = getApplication(Encoding);
-  return Cursor == AugmentationEnd && Encoding != Omit &&
-         (Encoding & Indirect) == 0 && SupportedFormat &&
-         (Application == AbsoluteApp || Application == PCRel);
 }
 
 struct EncodedValue {
@@ -255,6 +156,141 @@ bool addSigned(uint64_t Base, int64_t Offset, uint64_t &Result) {
   return true;
 }
 
+std::optional<DwarfEHFramePointer> readPointer(llvm::ArrayRef<uint8_t> Bytes,
+                                               size_t Offset, uint8_t Encoding,
+                                               bool Is64BitAddress,
+                                               uint64_t BaseVA) {
+  if (Encoding == Omit)
+    return std::nullopt;
+  auto Value = readFixedValue(Bytes, Offset, Encoding, Is64BitAddress);
+  if (!Value)
+    return std::nullopt;
+  uint64_t Base = 0;
+  switch (getApplication(Encoding)) {
+  case AbsoluteApp:
+    break;
+  case PCRel:
+    if (Offset > UINT64_MAX - BaseVA)
+      return std::nullopt;
+    Base = BaseVA + Offset;
+    break;
+  default:
+    return std::nullopt;
+  }
+  uint64_t Address = 0;
+  // Zero is the omitted pointer, including in a PC-relative augmentation.
+  if (Value->IsSigned) {
+    if (Value->Signed && !addSigned(Base, Value->Signed, Address))
+      return std::nullopt;
+  } else if (Value->Unsigned) {
+    if (Value->Unsigned > UINT64_MAX - Base)
+      return std::nullopt;
+    Address = Base + Value->Unsigned;
+  }
+  return DwarfEHFramePointer{Offset, Address, Encoding, uint8_t(Value->Size)};
+}
+
+bool readCIEEncoding(llvm::ArrayRef<uint8_t> Record, size_t Cursor,
+                     bool Is64BitAddress, uint8_t &Encoding,
+                     bool &HasAugmentationData, bool &HasLanguageAugmentation,
+                     uint8_t &LSDAEncoding,
+                     std::optional<DwarfEHFramePointer> &Personality,
+                     uint64_t BaseVA) {
+  Encoding = Absptr;
+  HasAugmentationData = false;
+  if (Cursor >= Record.size())
+    return false;
+  const uint8_t Version = Record[Cursor++];
+  if (Version != 1 && Version != 3 && Version != 4)
+    return false;
+
+  const size_t AugmentationBegin = Cursor;
+  while (Cursor < Record.size() && Record[Cursor] != 0)
+    ++Cursor;
+  if (Cursor >= Record.size())
+    return false;
+  const llvm::StringRef Augmentation(
+      reinterpret_cast<const char *>(Record.data() + AugmentationBegin),
+      Cursor - AugmentationBegin);
+  ++Cursor;
+
+  if (Version == 4) {
+    if (Cursor + 2 > Record.size())
+      return false;
+    const uint8_t AddressSize = Record[Cursor++];
+    const uint8_t SegmentSelectorSize = Record[Cursor++];
+    if (AddressSize != (Is64BitAddress ? 8 : 4) || SegmentSelectorSize != 0)
+      return false;
+  }
+
+  uint64_t Scratch = 0;
+  if (!readULEB(Record, Cursor, Scratch) || !skipSLEB(Record, Cursor))
+    return false;
+  // Version 1 predates the ULEB form and stores the return-address register in
+  // exactly one byte.  Versions 3 and 4 use ULEB128.
+  if (Version == 1) {
+    if (Cursor >= Record.size())
+      return false;
+    ++Cursor;
+  } else if (!readULEB(Record, Cursor, Scratch)) {
+    return false;
+  }
+  if (Augmentation.empty())
+    return true;
+  if (Augmentation.front() != 'z')
+    return false;
+  HasAugmentationData = true;
+
+  uint64_t AugmentationSize = 0;
+  if (!readULEB(Record, Cursor, AugmentationSize) ||
+      AugmentationSize > Record.size() - Cursor)
+    return false;
+  const size_t AugmentationEnd = Cursor + AugmentationSize;
+  for (char Kind : Augmentation.drop_front()) {
+    switch (Kind) {
+    case 'L':
+      HasLanguageAugmentation = true;
+      if (Cursor >= AugmentationEnd)
+        return false;
+      LSDAEncoding = Record[Cursor++];
+      break;
+    case 'P': {
+      HasLanguageAugmentation = true;
+      if (Cursor >= AugmentationEnd)
+        return false;
+      const uint8_t PersonalityEncoding = Record[Cursor++];
+      Personality = readPointer(Record.take_front(AugmentationEnd), Cursor,
+                                PersonalityEncoding, Is64BitAddress, BaseVA);
+      if (!Personality)
+        return false;
+      Cursor += Personality->Width;
+      break;
+    }
+    case 'R':
+      if (Cursor >= AugmentationEnd)
+        return false;
+      Encoding = Record[Cursor++];
+      break;
+    case 'S':
+    case 'B':
+    case dwarf_eh::aarch64::kNonHintAugmentation:
+    case 'G':
+      break;
+    default:
+      return false;
+    }
+  }
+  const uint8_t Format = getFormat(Encoding);
+  const bool SupportedFormat =
+      Format == Absptr || Format == kSignedPointerFormat || Format == Udata2 ||
+      Format == Udata4 || Format == Udata8 || Format == Sdata2 ||
+      Format == Sdata4 || Format == Sdata8;
+  const uint8_t Application = getApplication(Encoding);
+  return Cursor == AugmentationEnd && Encoding != Omit &&
+         (Encoding & Indirect) == 0 && SupportedFormat &&
+         (Application == AbsoluteApp || Application == PCRel);
+}
+
 } // namespace
 
 llvm::Expected<std::vector<DwarfEHFrameRecord>>
@@ -265,6 +301,8 @@ decodeDwarfEHFrameRecords(llvm::ArrayRef<uint8_t> Bytes, uint64_t BaseVA,
     uint8_t Encoding = Absptr;
     bool HasAugmentationData = false;
     bool HasLanguageAugmentation = false;
+    uint8_t LSDAEncoding = Omit;
+    std::optional<DwarfEHFramePointer> Personality;
   };
   std::map<uint64_t, CIEInfo> CIEs;
   std::set<uint64_t> FDEBegins;
@@ -305,7 +343,8 @@ decodeDwarfEHFrameRecords(llvm::ArrayRef<uint8_t> Bytes, uint64_t BaseVA,
       llvm::ArrayRef<uint8_t> Record = Bytes.take_front(RecordEnd);
       if (!readCIEEncoding(Record, IdOffset + IdSize, Is64BitAddress,
                            Info.Encoding, Info.HasAugmentationData,
-                           Info.HasLanguageAugmentation))
+                           Info.HasLanguageAugmentation, Info.LSDAEncoding,
+                           Info.Personality, BaseVA))
         return parseError("malformed CIE augmentation");
       if (!CIEs.emplace(Offset, Info).second)
         return parseError("duplicate CIE offset");
@@ -362,12 +401,21 @@ decodeDwarfEHFrameRecords(llvm::ArrayRef<uint8_t> Bytes, uint64_t BaseVA,
           RangeSize > std::numeric_limits<uint64_t>::max() - BeginVA)
         return parseError("FDE address range overflows");
       size_t BodyCursor = RangeOffset + Range->Size;
+      std::optional<DwarfEHFramePointer> LSDA;
       if (CIE->second.HasAugmentationData) {
         uint64_t AugmentationSize = 0;
         if (!readULEB(Bytes.take_front(RecordEnd), BodyCursor,
                       AugmentationSize) ||
             AugmentationSize > RecordEnd - BodyCursor)
           return parseError("malformed FDE augmentation");
+        if (CIE->second.LSDAEncoding != Omit) {
+          LSDA = readPointer(Bytes.take_front(BodyCursor + AugmentationSize),
+                             BodyCursor, CIE->second.LSDAEncoding,
+                             Is64BitAddress, BaseVA);
+          if (!LSDA || LSDA->Width != AugmentationSize)
+            return parseError(kInvalidLanguagePointer);
+        } else if (AugmentationSize)
+          return parseError(kInvalidLanguagePointer);
       }
       const uint64_t EndVA = BeginVA + RangeSize;
       if (!FDEBegins.insert(BeginVA).second)
@@ -382,7 +430,8 @@ decodeDwarfEHFrameRecords(llvm::ArrayRef<uint8_t> Bytes, uint64_t BaseVA,
         return parseError("FDE record address overflows");
       Records.push_back({BeginVA, EndVA, BaseVA + Offset, InitialOffset,
                          CIE->second.Encoding, uint8_t(Initial->Size),
-                         CIE->second.HasLanguageAugmentation});
+                         CIE->second.HasLanguageAugmentation,
+                         CIE->second.Personality, LSDA});
     }
 
     if (RecordEnd <= Offset)

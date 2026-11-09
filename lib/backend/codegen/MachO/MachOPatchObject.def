@@ -4,6 +4,10 @@
 //
 //===----------------------------------------------------------------------===//
 
+#ifndef MACHO_OBJECT_VALUE
+#define MACHO_OBJECT_VALUE(Type, Name, Value)
+#endif
+
 #ifndef MACHO_OBJECT_TEXT
 #define MACHO_OBJECT_TEXT(Name, Text)
 #endif
@@ -29,4 +33,34 @@ MACHO_OBJECT_TEXT(kNativeStorage,
 MACHO_OBJECT_TEXT(kNativePlacement,
                   "native authenticated object has no safe placement")
 
+MACHO_OBJECT_VALUE(unsigned, kRelocationBits, 128)
+// Native compact records contain three pointers and two 32-bit words.
+MACHO_OBJECT_VALUE(unsigned, kCompactPointers, 3)
+MACHO_OBJECT_VALUE(unsigned, kCompactFixedBytes, 2 * sizeof(uint32_t))
+// Darwin arm64e unwind personality GOT signing schema.
+MACHO_OBJECT_VALUE(uint8_t, kPersonalityKey, 0)
+MACHO_OBJECT_VALUE(uint16_t, kPersonalityDiversity, 0)
+MACHO_OBJECT_VALUE(bool, kPersonalityAddressDiversity, true)
+MACHO_OBJECT_TEXT(kNativeGOT, "__nd_got")
+MACHO_OBJECT_TEXT(kGOTRelocation,
+                  "invalid native GOT or personality relocation")
+MACHO_OBJECT_TEXT(kGOTRange, "native GOT displacement overflows")
+MACHO_OBJECT_TEXT(kOrdinaryStorage,
+                  "ordinary pointer lacks writable native pointer storage")
+MACHO_OBJECT_TEXT(kOrdinarySymbol,
+                  "ordinary pointer names an unavailable native symbol")
+MACHO_OBJECT_TEXT(kOrdinaryTarget,
+                  "ordinary pointer target overflows or lacks native storage")
+MACHO_OBJECT_TEXT(kCompactLanguage,
+                  "native compact language or range fields are inconsistent")
+
+MACHO_OBJECT_TEXT(kLanguagePointer,
+                  "native language pointer lacks an exact relocation contract")
+MACHO_OBJECT_TEXT(kLanguageReplay,
+                  "installed native language metadata failed semantic replay")
+
+MACHO_OBJECT_TEXT(kPrivateWeak,
+                  "native private weak data requires a coalescing contract")
+
+#undef MACHO_OBJECT_VALUE
 #undef MACHO_OBJECT_TEXT

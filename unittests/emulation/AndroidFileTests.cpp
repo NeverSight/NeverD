@@ -60,6 +60,22 @@ protected:
   }
 };
 
+TEST_P(AndroidFiles, VectoredFilesShareRawNamedVariadicAndDynamicSemantics) {
+  Options.LinuxFiles->WriteLimits["/fixture/data"] = 8192;
+  Options.Android->Libraries["libfiles.so"] = {"writev"};
+  returned(run("files_writev_raw"));
+  for (unsigned Mode = 0; Mode != 3; ++Mode) {
+    SCOPED_TRACE(Mode);
+    returned(run("files_writev_bionic", {Mode}));
+  }
+  auto R = run("files_writev_bionic", {3});
+  EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(R.Diagnostic.find("inactive dynamic library"), std::string::npos);
+  ASSERT_FALSE(R.NativeCalls.empty());
+  EXPECT_EQ(R.NativeCalls.back().Name, "writev");
+  EXPECT_FALSE(R.NativeCalls.back().Result);
+}
+
 TEST_P(AndroidFiles,
        RenamePreservesObjectsAcrossRawNamedVariadicAndDynamicCalls) {
   Options.LinuxFiles = fileRenameTestInput();

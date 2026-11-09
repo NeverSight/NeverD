@@ -7,6 +7,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/codegen/DwarfEHFrame.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
@@ -14,6 +15,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <string>
 #include <utility>
@@ -385,6 +387,51 @@ TEST(DwarfEHFrame, RejectsIndirectFDEEncoding) {
       0,    1, 0x78, 16, 1, 0x9b, 0, 0, 0, 0,
   };
   expectDecodeError(Bytes, 0, "malformed CIE augmentation");
+}
+
+#define DWARF_LANGUAGE_BYTES(Name, ...)                                        \
+  constexpr uint8_t Name[] = {__VA_ARGS__};
+#define DWARF_LANGUAGE_VALUE(Type, Name, Value) constexpr Type Name = Value;
+#include "DwarfEHFrameLanguageFixtures.def"
+
+TEST(DwarfEHFrame, RetainsNativePersonalityAndLSDARelocationFields) {
+  for (uint64_t Target :
+       {kLanguageLSDA, kLanguageBase - kLanguageRange, uint64_t(0)}) {
+    std::vector<uint8_t> Bytes(std::begin(kLanguageFrame),
+                               std::end(kLanguageFrame));
+    writeLE<uint64_t>(Bytes.data() + kLSDAOffset,
+                      Target ? Target - (kLanguageBase + kLSDAOffset) : 0);
+    auto Records = decodeDwarfEHFrameRecords(Bytes, kLanguageBase, true);
+    ASSERT_TRUE(bool(Records)) << llvm::toString(Records.takeError());
+    ASSERT_EQ(Records->size(), 1u);
+    const auto &Record = Records->front();
+    EXPECT_EQ(Record.BeginVA, kLanguageCode);
+    EXPECT_EQ(Record.EndVA, kLanguageCode + kLanguageRange);
+    EXPECT_TRUE(Record.HasLanguageAugmentation);
+    ASSERT_TRUE(Record.Personality);
+    EXPECT_EQ(Record.Personality->Value, kLanguagePersonality);
+    EXPECT_EQ(Record.Personality->Offset, kPersonalityOffset);
+    EXPECT_EQ(Record.Personality->Encoding, kPersonalityEncoding);
+    EXPECT_EQ(Record.Personality->Width, sizeof(uint32_t));
+    ASSERT_TRUE(Record.LSDA);
+    EXPECT_EQ(Record.LSDA->Value, Target);
+    EXPECT_EQ(Record.LSDA->Offset, kLSDAOffset);
+    EXPECT_EQ(Record.LSDA->Encoding, kLSDAEncoding);
+    EXPECT_EQ(Record.LSDA->Width, sizeof(uint64_t));
+  }
+}
+
+TEST(DwarfEHFrame, RejectsTruncatedLanguagePointerAndOverflow) {
+  std::vector<uint8_t> Bytes(std::begin(kLanguageFrame),
+                             std::end(kLanguageFrame));
+  --Bytes[kLSDAOffset - 1];
+  auto Result = decodeDwarfEHFrameRecords(Bytes, kLanguageBase, true);
+  EXPECT_FALSE(bool(Result));
+  llvm::consumeError(Result.takeError());
+  Result = decodeDwarfEHFrameRecords(kLanguageFrame,
+                                     UINT64_MAX - kPersonalityOffset, true);
+  EXPECT_FALSE(bool(Result));
+  llvm::consumeError(Result.takeError());
 }
 
 } // namespace

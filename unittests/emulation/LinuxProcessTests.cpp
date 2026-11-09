@@ -458,6 +458,22 @@ TEST_P(LinuxProcess, MemoryFilesPreserveBinaryBytesCursorsAndFaultPrefixes) {
   }
 }
 
+TEST_P(LinuxProcess, VectoredFilesPreservePrefixesErrorsAndSharedCursors) {
+  Options.LinuxFiles.emplace();
+  Options.LinuxFiles->Files["/fixture/data"] = {0,    0xff, 0x41,
+                                                0x0a, 0x80, 0x5a};
+  Options.LinuxFiles->WriteLimits["/fixture/data"] = 8192;
+  Options.Arguments = {"files", "w"};
+  for (const char *Opt : {"O0", "O2"}) {
+    auto File =
+        Path.parent_path() / (Path.stem().string() + "-files-" + Opt + ".elf");
+    auto R = llvm::cantFail(
+        emulateProcess(File, ProcessProfile::LinuxELF64, Options));
+    ASSERT_EQ(R.Stop, ProcessStopReason::Exited) << R.Diagnostic;
+    EXPECT_EQ(R.ExitStatus, 0u);
+  }
+}
+
 TEST_P(LinuxProcess, RenameMovesNamesWithoutReplacingOpenFileIdentity) {
   Options.LinuxTime.emplace().Clocks[0] = {100, 123};
   for (const char *opt : {"O0", "O2"}) {

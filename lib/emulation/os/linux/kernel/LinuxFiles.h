@@ -17,6 +17,7 @@
 namespace neverd::emulation::linux_model {
 class LinuxMemory;
 class LinuxClock;
+struct WriteBuffer;
 bool isCanonicalFilePath(llvm::StringRef Path);
 bool isDeclaredDirectory(const LinuxFileOptions &Options, llvm::StringRef Path);
 llvm::Error validateFileOptions(const LinuxFileOptions &Options);
@@ -42,6 +43,10 @@ public:
   extendedAttribute(ServiceKind Kind, const ProcessServiceEvent &Event,
                     const std::optional<LinuxKernelOptions> &Kernel,
                     ProcessResult &Result);
+  llvm::Expected<std::optional<uint64_t>> writeDescriptor(
+      ServiceKind Kind, const ProcessServiceEvent &Event,
+      const std::optional<LinuxKernelOptions> &Kernel, ProcessResult &Result,
+      std::optional<llvm::ArrayRef<llvm::StringRef>> Buffers = std::nullopt);
   struct DescriptorStatus {
     uint32_t AccessMode;
     std::optional<uint32_t> BlockSize;
@@ -274,8 +279,8 @@ private:
   directoryEntries(uint32_t FD, uint64_t Address, uint32_t Size,
                    ProcessResult &Result);
   llvm::Expected<std::optional<uint64_t>>
-  writeDescriptor(ServiceKind Kind, uint32_t FD, uint64_t Address,
-                  uint64_t Size, ProcessResult &Result);
+  writeFile(OpenFile &File, llvm::ArrayRef<WriteBuffer> Buffers,
+            ProcessResult &Result);
 
   static std::optional<uint64_t> unsupported(ProcessResult &Result,
                                              const char *Reason);

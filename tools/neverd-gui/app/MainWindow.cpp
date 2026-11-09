@@ -113,6 +113,7 @@
 #include <QStatusBar>
 #include <QStorageInfo>
 #include <QStyle>
+#include <QStyledItemDelegate>
 #include <QTableView>
 #include <QTableWidget>
 #include <QTextStream>
@@ -299,6 +300,23 @@ public:
 private:
   QVector<CodeText::LocalReference> references_;
   QStringList headers_;
+};
+
+/// The Shortcuts list prints a command's missing key in the placeholder
+/// color, so the keys that are assigned stand out.
+class UnassignedKeyDelegate final : public QStyledItemDelegate {
+public:
+  static constexpr int UnassignedRole = Qt::UserRole + 1;
+  using QStyledItemDelegate::QStyledItemDelegate;
+
+protected:
+  void initStyleOption(QStyleOptionViewItem *option,
+                       const QModelIndex &index) const override {
+    QStyledItemDelegate::initStyleOption(option, index);
+    if (index.data(UnassignedRole).toBool())
+      option->palette.setColor(
+          QPalette::Text, option->palette.color(QPalette::PlaceholderText));
+  }
 };
 } // namespace
 
@@ -4629,13 +4647,21 @@ void MainWindow::showShortcuts() {
   tree->setHeaderLabels({tr("Action"), tr("Shortcut"), tr("Scope")});
   tree->setRootIsDecorated(false);
   tree->setUniformRowHeights(true);
+  tree->setItemDelegateForColumn(1, new UnassignedKeyDelegate(tree));
+  // An entry without an icon keeps the icon's room, so every name lines up.
+  const int iconSize =
+      tree->style()->pixelMetric(QStyle::PM_SmallIconSize, nullptr, tree);
+  QPixmap blank(iconSize, iconSize);
+  blank.fill(Qt::transparent);
+  const QIcon noIcon(blank);
   const auto add = [&](const QString &text, const QList<QKeySequence> &keys,
                        const QString &scope, const QIcon &icon = {}) {
     auto *item = new QTreeWidgetItem(tree);
-    item->setIcon(0, icon);
+    item->setIcon(0, icon.isNull() ? noIcon : icon);
     item->setText(0, QString(text).remove(QLatin1Char('&')));
     const auto hint = shortcutHint(keys);
     item->setText(1, hint.isEmpty() ? tr("Unassigned") : hint);
+    item->setData(1, UnassignedKeyDelegate::UnassignedRole, hint.isEmpty());
     item->setText(2, scope);
     item->setData(1, Qt::UserRole,
                   shortcutHint(keys, QKeySequence::PortableText));

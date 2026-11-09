@@ -7,8 +7,13 @@
 #ifndef MACHO_LAYOUT_TEXT
 #define MACHO_LAYOUT_TEXT(Name, Text)
 #endif
+#ifndef MACHO_LAYOUT_VALUE
+#define MACHO_LAYOUT_VALUE(Type, Name, Value)
+#endif
 
 MACHO_LAYOUT_TEXT(kMetadataTextSegment, "__TEXT")
 MACHO_LAYOUT_TEXT(kCompactSection, "__unwind_info")
+MACHO_LAYOUT_VALUE(uint64_t, kMetadataCommandReserve, 512)
 
 #undef MACHO_LAYOUT_TEXT
+#undef MACHO_LAYOUT_VALUE
