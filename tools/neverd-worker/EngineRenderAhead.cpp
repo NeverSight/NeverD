@@ -628,13 +628,30 @@ void Engine::keepVisitedRender(std::uint64_t address,
   store->write(key, compact);
 }
 
+std::string Engine::renderInputsDigest() {
+  return BrowseCache::digest(BrowseCache::runtimeIdentity() +
+                             renderStoreIdentity().dump());
+}
+
 std::vector<std::string> Engine::renderedAheadPages(
     std::uint64_t address, const std::string &representation,
     const std::string &optionText, const std::string &sourceKey) {
   std::vector<std::string> pages, stored;
   renderFailedAddress_.reset();
   const auto kept = renderedAhead_.find(sourceKey);
-  if (kept == renderedAhead_.end()) {
+  if (kept == renderedAhead_.end() && declaredRender_ &&
+      declaredRender_->address == address &&
+      declaredRender_->representation == representation &&
+      declaredRender_->optionText == optionText &&
+      declaredRender_->summaries == summariesEpoch_ &&
+      declaredRender_->summariesHeld == callSummariesHeld() &&
+      renderReadsHold(declaredRender_->pages.front())) {
+    // The render a declaration the user was typing made, now that what it read
+    // holds: the user stated that declaration.  Until then the function reads
+    // as it did, and what is kept of that answers.
+    stored = declaredRender_->pages;
+    ++declaredRenderHits_;
+  } else if (kept == renderedAhead_.end()) {
     // An owner reads the store only for a request that asks for that.
     if (auto *store =
             renderStoreMode_.empty() && !keptOnly_ ? nullptr : storeOfViews()) {
@@ -695,6 +712,7 @@ Json Engine::renderAheadJson() const {
           {"rendered", renderAheadRendered_},
           {"failed", renderAheadFailed_},
           {"hits", renderAheadHits_},
+          {"declared_hits", declaredRenderHits_},
           {"raw_bytes", renderAheadRawBytes_},
           {"bytes", renderAheadBytes_},
           {"kept", renderStore_ ? renderStore_->records() : 0},
