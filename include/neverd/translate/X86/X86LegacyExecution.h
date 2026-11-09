@@ -87,6 +87,26 @@ struct X86LegacyStackContinuation {
   uint8_t DataBreakpoints = 0;
 };
 
+/// MPX ordinary-RAM progress across a backing stop. Retain CPU/profile state
+/// and RAM, repair only backing, and retry the same bytes. A completed BDE
+/// read must not be repeated: later page walks can alias its storage. No
+/// operand store or bounds result is published before the whole operand
+/// succeeds. Architectural faults discard this continuation before IDT entry.
+struct X86LegacyMpxContinuation {
+  X86LegacySegmentState Entry;
+  X86PagingState Controls;
+  std::optional<X86MpxContext> Mpx;
+  uint32_t EIP = 0;
+  uint32_t EFlags = 0;
+  llvm::SmallVector<uint8_t> Instruction;
+  struct DirectoryRead {
+    uint32_t Address;
+    uint32_t Value;
+  };
+  std::optional<DirectoryRead> Directory;
+  uint8_t DataBreakpoints = 0;
+};
+
 /// Debug bank shared with the paged x64 owner, with 32-bit address wrap.
 using X86LegacyDebugState = X86InstructionDebugState<uint32_t>;
 
@@ -102,13 +122,13 @@ struct X86LegacyExecutionState {
   bool SSBlocked = false;
   bool NMIBlocked = false;
   X86LegacySysenterState Sysenter;
-  /// BOUND's #BR clears BNDSTATUS only when MPX is enabled. Absence proves
-  /// nothing; CR4.OSXSAVE=0 alone can prove that no MPX state is needed.
-  /// Other MPX instructions/control transfers still need their own dispatch.
+  /// Shared bounds/check/table and branch bank, rebound to live CPL/OSXSAVE.
+  /// Absence proves nothing; CR4.OSXSAVE=0 can prove MPX is disabled.
   std::optional<X86MpxContext> Mpx;
   std::optional<X86LegacyEventContinuation> PendingEvent;
   std::optional<X86LegacyDebugState> Debug;
   std::optional<X86LegacyStackContinuation> PendingStack;
+  std::optional<X86LegacyMpxContinuation> PendingMpx;
 };
 
 /// One CPU, ordinary RAM, 16/32-bit gates, qword accessed writes, offset-first
@@ -177,6 +197,14 @@ enum class X86LegacyStringProfile : uint8_t { ElementwiseDestinationFirst };
 /// Locked operands use one prepared read/write plan, including failed
 /// compare-exchange. This is not a shared-memory synchronization primitive.
 enum class X86LegacyAtomicProfile : uint8_t { ExclusiveRAM };
+
+/// One CPU, exclusive ordinary RAM, whole BNDMOV/BDE/BTE operands. Page A/D
+/// effects survive faults; bounds loads and stores publish only on complete
+/// access. BNDMOV uses eight-byte alignment when #AC is enabled. BDE/BTE
+/// addresses are linear with a flat DS base; DS permission/limit checks apply
+/// to BTE operands. BNDLDX BTE faults forget only its destination bounds.
+/// Non-flat DS tables, MMIO and transactional aborts need other bindings.
+enum class X86LegacyMpxProfile : uint8_t { WholeOperandRAM };
 
 inline constexpr uint32_t kX86LegacyArithmeticFlagsMask = 0x8d5;
 inline constexpr uint32_t kX86LegacyShiftUndefinedFlagsMask = 0x811;
@@ -307,6 +335,7 @@ struct X86LegacyExecutionOptions {
   std::optional<X86LegacySystemSelectorProfile> SystemSelectors;
   std::optional<X86LegacyMachineStatusProfile> MachineStatus;
   std::optional<X86LegacyControlRegisterBinding> ControlRegisters;
+  std::optional<X86LegacyMpxProfile> MpxMemory;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {
@@ -372,6 +401,9 @@ resumeX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// BT/BTS/BTR/BTC, BSF/BSR, XCHG/XADD/CMPXCHG/CMPXCHG8B,
 /// AAA/AAS/DAA/DAS and AAM/AAD with every immediate base,
 /// PUSH/POP, PUSHF/POPF and near CALL/JMP/Jcc/RET.
+/// Code32 MPX uses the shared bounds context; memory additionally requires
+/// MpxMemory. PendingMpx retains host backing progress. Original near branch
+/// BNDINIT commits only on success, including untaken Jcc, before debug entry.
 /// FarTransfers adds direct and memory far CALL/JMP and 16/32-bit call gates,
 /// including inner-ring stack switches and parameter copying. Transfers stop
 /// before fetching the destination. Task gates and TSS transfers refuse.

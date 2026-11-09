@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <set>
 #include <string>
+#include <utility>
 
 namespace neverd {
 void narrowSourceConcatLocals(HighFunc &Function);
@@ -2807,6 +2808,58 @@ TEST(SourceABI, BitCastRejectsMismatchedWidthsAndDistinguishesTargetTypes) {
             ExprKind::Undef);
   auto RoundTrip = HighExpr::makeBitCast(Float, Bits->Type);
   EXPECT_TRUE(RoundTrip->structuralEq(*Bits));
+}
+
+TEST(SourceABI, BitCastRoundTripsKeepMachineScalarTypes) {
+  for (uint16_t Bytes : {2u, 4u, 8u, 10u})
+    for (bool Floating : {false, true}) {
+      SCOPED_TRACE(testing::Message() << Bytes << ':' << Floating);
+      const auto Type =
+          Floating ? NdType::makeFloat(Bytes) : NdType::makeInt(Bytes, false);
+      const auto Carrier =
+          Floating ? NdType::makeInt(Bytes, false) : NdType::makeFloat(Bytes);
+      MedVar Variable;
+      Variable.Size = Bytes;
+      auto Value = HighExpr::makeVar(Variable, Type);
+      auto Bits = HighExpr::makeBitCast(Value, Carrier);
+      // Use a distinct type object: IR representation equality does not
+      // depend on interning or on admitting this type to a source-call ABI.
+      auto Restored =
+          HighExpr::makeBitCast(Bits, Floating ? NdType::makeFloat(Bytes)
+                                               : NdType::makeInt(Bytes, false));
+      EXPECT_EQ(Restored, Value);
+      if (Floating && (Bytes == 2 || Bytes == 10))
+        EXPECT_FALSE(equalSourceTypes(Type, Type));
+      if (!Floating) {
+        auto Signed = HighExpr::makeBitCast(Bits, NdType::makeInt(Bytes));
+        EXPECT_EQ(Signed->Kind, ExprKind::BitCast);
+      }
+    }
+}
+
+TEST(SourceABI, BitCastRoundTripsKeepConversionsAndSourceScalarRoles) {
+  MedVar Variable;
+  Variable.Size = 10;
+  auto Extended = HighExpr::makeVar(Variable, NdType::makeFloat(10));
+  auto Rounded = HighExpr::makeUnary(NdOp::FLOAT_FLOAT2FLOAT, Extended);
+  Rounded->Type = NdType::makeFloat(4);
+  auto Widened = HighExpr::makeUnary(NdOp::FLOAT_FLOAT2FLOAT, Rounded);
+  Widened->Type = NdType::makeFloat(10);
+  auto Bits = HighExpr::makeBitCast(Widened, NdType::makeInt(10, false));
+  EXPECT_EQ(HighExpr::makeBitCast(Bits, NdType::makeFloat(10)), Widened);
+  EXPECT_EQ(Widened->Operands.front(), Rounded);
+
+  for (const auto &[Bytes, Name] :
+       {std::pair{uint16_t{1}, kSourceBooleanCType},
+        std::pair{uint16_t{8}, kSourceAArch64Vector64CType}}) {
+    auto Type = NdType::makeInt(Bytes, false);
+    Type->SourceName = Name;
+    Variable.Size = Bytes;
+    auto Value = HighExpr::makeVar(Variable, Type);
+    auto View = HighExpr::makeBitCast(Value, NdType::makeInt(Bytes));
+    auto Plain = HighExpr::makeBitCast(View, NdType::makeInt(Bytes, false));
+    EXPECT_EQ(Plain->Kind, ExprKind::BitCast);
+  }
 }
 
 HighFunc scalarFloatFunction(Arch Architecture, uint16_t Width, bool Add,

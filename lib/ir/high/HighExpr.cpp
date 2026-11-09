@@ -92,9 +92,20 @@ ExprPtr HighExpr::makeBitCast(ExprPtr Value, TypeRef Type) {
     return makeUndef(Type ? Type->Size : 0);
   // Inverse bit reinterpretations cancel without any numeric conversion.
   if (Value->Kind == ExprKind::BitCast && Value->Operands.size() == 1 &&
-      Value->Operands[0] && Value->Operands[0]->Type &&
-      equalSourceTypes(Value->Operands[0]->Type, Type))
-    return Value->Operands[0];
+      Value->Operands[0] && Value->Operands[0]->Type) {
+    const auto &Original = Value->Operands[0];
+    const auto &From = Original->Type;
+    // Machine scalar representations include binary16, binary80 and raw
+    // carriers outside the source-call ABI's supported type set. Comparing
+    // them must not grant an ABI contract or erase a Boolean/vector role.
+    const bool SameScalar =
+        (Type->Kind == NdTypeKind::Int || Type->Kind == NdTypeKind::Float) &&
+        From->Kind == Type->Kind && From->Size == Type->Size &&
+        From->IsSigned == Type->IsSigned &&
+        From->SourceName == Type->SourceName;
+    if (SameScalar || equalSourceTypes(From, Type))
+      return Original;
+  }
   auto E = std::make_shared<HighExpr>();
   E->Kind = ExprKind::BitCast;
   E->Type = std::move(Type);

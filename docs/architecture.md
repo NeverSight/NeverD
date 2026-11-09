@@ -467,13 +467,29 @@ An invalid BDE updates BNDSTATUS without changing the bank. A BTE read fault
 forgets only its destination, and store faults retain the provider's partial
 writes. Unavailable memory semantics are distinct from an architectural fault;
 they certify no effects from that request, not rollback of an earlier BDE read.
+`Suspended` separately represents a host backing stop with possible page-walk
+effects but no operand publication or CPU fault. Its provider must retain any
+completed earlier requests and resume without replaying them.
 Enabled operations require a known nontransactional context; an RTM/HLE
 checkpoint and abort continuation are not supplied by this state component.
 Original branch completion takes an explicit preserve/initialize effect;
 it does not infer an architectural branch from a transformed CFG edge.
 The V11 continuation supplies a separate source contract for successful
 long-mode RAM and pending #BR, including original-transfer effects. Ordinary
-function-ABI lifting and transactional/faulting memory completion remain closed.
+function-ABI lifting and transactional completion remain closed.
+
+`translate/X86/X86LegacyMpx` adapts the same byte, bank and memory owners to
+protected code32 execution. Its explicit `WholeOperandRAM` profile supplies
+segmented BNDMOV and flat-DS linear BDE/BTE accesses through `X86PagedMemory`.
+`PendingMpx` retains the authenticated instruction, original inputs, completed
+directory value and debug matches across host backing stops. A BDE can alias
+the PTE modified by a later walk, so repeating that read would change the
+bounds-table address. Architectural faults discard this continuation and
+publish the shared owner's status/knownness effects before existing IDT
+delivery. Legacy near CALL/RET/JMP/Jcc uses the shared byte-owned bank effect
+only at successful completion, including an untaken Jcc and before post-step
+debug entry. The protected source dispatcher reuses this executor and retains
+its existing attempt-budget rules. No second MPX evaluator lives in a C emitter.
 
 The LLVM/NeverC native MPX APIs independently retain the ambient bounds bank.
 Their operands use allocated legacy-encodable carriers, preserving reserved
@@ -11682,6 +11698,24 @@ transport, not complete x87 control-word or exception semantics. Shared import
 target tracing also rejects partial pointer writes, opaque call barriers and
 instruction temporaries borrowed from another instruction.
 
+HighIR cancels inverse scalar bit reinterpretations by their representation,
+including binary16 and binary80, independently of source-call ABI admission.
+The original scalar width, signedness and reserved Boolean/vector role must
+remain intact. Numeric conversions between the bit views remain observable;
+this cleanup does not remove a real precision reduction or admit additional
+types to a source calling convention. A declared i386 float/double call result
+can consequently return at its original precision without materializing an
+80-bit integer temporary in HighC.
+
+Actual x87 FLD/FST precision conversions remain numerical operations.
+`isX87PrecisionConversion` owns the binary32/binary64-to-binary80 boundary:
+HighIR cannot cancel its numerical round trip, and LLVM uses constrained
+extension/truncation with dynamic rounding. Both C routes use the same native
+FLD/FSTP helpers, so C optimization cannot erase signaling-NaN quieting or
+replace x87 store rounding with an ordinary cast. This covers the observable
+converted value; full x87 exception, stack-tag and status state still belongs
+to the existing context and explicit-state paths.
+
 An internal i386 helper may instead consume one incoming logical ST0 and
 return an integer. The same machine graph proves that every return consumes
 that value, that no path reads or changes the caller's lower stack entries,
@@ -16889,14 +16923,28 @@ and no bounded proof of where the frame is follows them.
 
 For LLVM-to-C, `MedLLVMRegistrationSourceSEH.cpp` consumes these display facts
 in the private source module. It preflights distinct, closed finally bodies,
-their normal calls, local-unwind ancestors and pure constant execute-handler
-filters before changing any blocks. Unsupported ownership, ambiguous levels,
-shared cleanup bodies and expression filters retain the unlowered source CFG.
+their normal calls, local-unwind ancestors and owned filter CFGs before
+changing any blocks. Unsupported ownership, ambiguous levels, shared cleanup
+bodies and unrepresentable callback dependencies retain the unlowered source CFG.
 Normal calls receive a copy of their finally body; a local unwind receives the
 exited bodies in inner-to-outer order, each under its enclosing scope. The
 exceptional copy lives in a cleanup pad. Clone work is bounded per function by
 the backend limits owner. Native registration admission still requires its
 independent frame and rewrite proofs.
+
+`MedLLVMSourceSEHFilter.cpp` reuses the callback closure planner for source
+filters. A marked source helper takes the exception pointers and explicit
+parent storage. Incoming scalar arguments receive homes before any protected
+instruction; private SSA temporaries stay private to each filter invocation.
+The helper initializes the recovered exception-pointer cell and preserves the
+filter's memory writes and signed i32 disposition. A parent's void or wider
+return type does not erase or widen that disposition: a source-only result
+bundle retains it until outlining. Both C routes use `RegistrationDisplay.h`
+for the exception-pointer cell's frame coordinate. The catchpad carries the
+helper and capture allocas, which LLVMC
+prints as a call inside `__except`. Selected-source emission includes these
+helper definitions. The marker grants no Windows native callback ABI, and
+native outlining keeps its independent personality and frame checks.
 
 LLVMC can print a closed, branching cleanup CFG in each fragmented `__finally`.
 Each printed copy has private C labels and explicit PHI edge assignments. The

@@ -276,6 +276,34 @@ private:
   std::size_t renderAheadBytes_ = 0, renderAheadRawBytes_ = 0;
   /// Compact engine pages by namedView's source key.
   std::unordered_map<std::string, std::vector<std::string>> renderedAhead_;
+  /// A function rendered under a declaration the user is about to state
+  /// (prepare_function with "declaration"), with the declaration it had given
+  /// back: its compact pages, what the render read first, as renderedAhead_
+  /// keeps them.  A view takes them while what the render read holds, the
+  /// store's inputs are those it was made under and the summaries are those
+  /// it read; the next declaration made so replaces it.
+  struct DeclaredRender {
+    std::uint64_t address = 0;
+    std::string representation, optionText, inputs;
+    std::uint64_t summaries = 0;
+    bool summariesHeld = false;
+    std::vector<std::string> pages;
+  };
+  std::optional<DeclaredRender> declaredRender_;
+  /// The views a DeclaredRender answered (render_ahead.declared_hits).
+  std::uint64_t declaredRenderHits_ = 0;
+  /// Moves as the engine takes the image's call summaries or lets them go,
+  /// which changes what every render reads (DeclaredRender::summaries).
+  std::uint64_t summariesEpoch_ = 0;
+  /// What the store's inputs read now, as a digest (renderStoreIdentity).
+  std::string renderInputsDigest();
+  /// Whether the engine holds the image's call summaries.
+  bool callSummariesHeld();
+  /// prepare_function with "declaration": renders the function at \p entry as
+  /// stating \p declaration would make it read, and gives its declaration
+  /// back (DeclaredRender).
+  Json prepareUnderDeclaration(std::uint64_t entry,
+                               const std::string &declaration);
   std::unique_ptr<RenderStore> renderStore_;
   /// The compact bytes in renderedAhead_, which count against the job's limit
   /// with the store's.

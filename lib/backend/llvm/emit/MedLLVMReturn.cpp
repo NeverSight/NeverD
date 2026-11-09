@@ -10,7 +10,10 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../X86/MedLLVMSourceSEHFilter.h"
+
 #include "neverd/backend/LLVMValueProvenance.h"
+#include "neverd/backend/llvm/LLVMSourceSEHFilter.h"
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 
@@ -18,6 +21,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedReturnValue.h"
 
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 
@@ -88,6 +92,29 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     return GetReturnValue(Op.Inputs[Idx]);
   };
   auto *RetTy = CurFunc->getReturnType();
+  llvm::Value *FilterResult = nullptr;
+  if (AnalysisRecoveryForSource && TargetArch == Arch::X86 &&
+      TargetFormat == BinaryFormat::COFF && CurMedFunc &&
+      (RetTy->isVoidTy() ||
+       (RetTy->isIntegerTy() && !RetTy->isIntegerTy(32))) &&
+      x86_registration::isSourceFilterReturn(*CurMedFunc, Op)) {
+    auto *Value = getVar(Op.Inputs[0], Builder);
+    if (Value->getType()->isIntegerTy(32))
+      FilterResult = Value;
+  }
+  auto KeepFilterResult = llvm::make_scope_exit([&] {
+    if (!FilterResult)
+      return;
+    if (auto *Return = llvm::dyn_cast_or_null<llvm::ReturnInst>(
+            Builder.GetInsertBlock()->getTerminator())) {
+      llvm::IRBuilder<> AtReturn(Return);
+      llvm::OperandBundleDef Result(LLVMSourceSEHFilterResult.str(),
+                                    FilterResult);
+      AtReturn.CreateCall(llvm::Intrinsic::getOrInsertDeclaration(
+                              Mod, llvm::Intrinsic::sideeffect),
+                          {}, {Result});
+    }
+  });
   if (RetTy->isVoidTy()) {
     llvm::ReturnInst *Return = Builder.CreateRetVoid();
     markCxxContinuationReturn(Op, BlockId, *Return);

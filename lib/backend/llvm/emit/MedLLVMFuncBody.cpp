@@ -18,6 +18,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../X86/MedLLVMSourceSEHFilter.h"
 #include "MedLLVMDeadSlots.h"
 
 #include "neverd/ArchSupport.h"
@@ -1227,6 +1228,10 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
       !emitNativeSEH(Func, *LLVMFunc, BBMap) &&
       !emitNativeCxxEH(Func, *LLVMFunc, BBMap))
     emitNativeItaniumEH(Func, *LLVMFunc, BBMap);
+
+  if (AnalysisRecoveryForSource && TargetArch == Arch::X86 &&
+      TargetFormat == BinaryFormat::COFF)
+    x86_registration::discardSourceFilterResults(*LLVMFunc);
 
   for (auto &BB : *CurFunc) {
     if (BB.empty() || !BB.back().isTerminator()) {

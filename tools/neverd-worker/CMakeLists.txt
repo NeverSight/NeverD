@@ -285,6 +285,10 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/kept_reads_test.py"
                 "$<TARGET_FILE:neverd-worker>")
       set_tests_properties(NeverDWorkerKeptReads PROPERTIES TIMEOUT 120)
+      add_test(NAME NeverDWorkerDeclaredRender
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/declared_render_test.py"
+                "$<TARGET_FILE:neverd-worker>")
+      set_tests_properties(NeverDWorkerDeclaredRender PROPERTIES TIMEOUT 120)
       add_test(NAME NeverDWorkerEditWrites
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/edit_writes_test.py"
                 "$<TARGET_FILE:neverd-worker>")

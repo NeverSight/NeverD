@@ -204,6 +204,117 @@ int main(void) {
     }
 }
 
+TEST(I386CallContract, X87MemoryConversionsKeepNaNsAndRounding) {
+  for (uint16_t InputBytes : {4u, 8u})
+    for (uint16_t OutputBytes : {4u, 8u}) {
+      // mov ecx,[esp+4]; mov edx,[esp+8]; fld [edx]; fstp [ecx];
+      // xor eax,eax; ret. Observe the stored bytes, not a C FP return that
+      // could itself quiet the signaling NaN before the comparison.
+      const std::vector<uint8_t> Code = {
+          0x8b,
+          0x4c,
+          0x24,
+          4,
+          0x8b,
+          0x54,
+          0x24,
+          8,
+          uint8_t(InputBytes == 4 ? 0xd9 : 0xdd),
+          2,
+          uint8_t(OutputBytes == 4 ? 0xd9 : 0xdd),
+          0x19,
+          0x31,
+          0xc0,
+          0xc3};
+      auto Image = makeImage(Code, {});
+      for (bool LLVM : {false, true})
+        for (bool NoOpt : {false, true}) {
+          SCOPED_TRACE(testing::Message() << InputBytes << ':' << OutputBytes
+                                          << ':' << LLVM << ':' << NoOpt);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Text};
+          Options.LiftMode = LLVM;
+          Options.SourceProjection = true;
+          Options.NoOpt = NoOpt;
+          auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          CEmitterOptions COptions;
+          COptions.TheArch = Image.Arch;
+          COptions.Format = Image.Format;
+          COptions.Image = &Image;
+          std::string Source;
+          llvm::raw_string_ostream Out(Source);
+          if (LLVM) {
+            ASSERT_TRUE(Result.LlvmModule);
+            ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+            ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Out, COptions));
+          } else
+            ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, COptions));
+#if defined(__linux__) && (defined(__i386__) || defined(__x86_64__))
+          std::string Oracle;
+          llvm::raw_string_ostream Native(Oracle);
+          Native << "\n#include <string.h>\n#include <sys/mman.h>\n"
+                    "#define SOURCE_ADDRESS(value) "
+                 << (LLVM ? "((uintptr_t)(value))" : "((void *)(value))")
+                 << "\nstatic const uint64_t inputs[] = {";
+          if (InputBytes == 4)
+            Native << "0, 0x80000000, 1, 0x80000001, 0x7fffff, 0x800000, "
+                      "0x3f800001, 0x7f7fffff, 0xff7fffff, 0x7f800000, "
+                      "0xff800000, 0x7fc12345, 0xffc12345, 0x7f812345, "
+                      "0xff812345";
+          else
+            Native << "0, 0x8000000000000000ULL, 1, 0x8000000000000001ULL, "
+                      "0xfffffffffffffULL, 0x10000000000000ULL, "
+                      "0x3ff0000010000000ULL, 0x7fefffffffffffffULL, "
+                      "0xffefffffffffffffULL, 0x7ff0000000000000ULL, "
+                      "0xfff0000000000000ULL, 0x7ff8123456789abcULL, "
+                      "0xfff8123456789abcULL, 0x7ff0123456789abcULL, "
+                      "0xfff0123456789abcULL";
+          Native << "};\nint main(void) {\n"
+                    "  static const uint8_t original[] = {";
+          for (uint8_t Byte : Code)
+            Native << unsigned(Byte) << ',';
+          Native << R"(};
+  uint8_t *mapping = mmap(0, sizeof(original) + 16,
+                          PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mapping == MAP_FAILED) return 1;
+  uint8_t *code = mapping + 16;
+  memcpy(code, original, sizeof(original));
+  __builtin___clear_cache((char *)code, (char *)code + sizeof(original));
+  uint16_t saved;
+  __asm__ volatile("fnstcw %0" : "=m"(saved));
+  int failed = 0;
+  for (unsigned mode = 0; mode != 4; ++mode) {
+    uint16_t control = (saved & ~0xc00u) | (mode << 10);
+    __asm__ volatile("fldcw %0" :: "m"(control));
+    for (unsigned i = 0; i < sizeof(inputs) / sizeof(*inputs); ++i) {
+      uint64_t expected = 0xa55aa55aa55aa55aULL;
+      uint64_t actual = expected;
+      ((uint32_t (*)(uintptr_t, uintptr_t))code)(
+          (uintptr_t)&expected, (uintptr_t)&inputs[i]);
+      wrap(SOURCE_ADDRESS(&actual), SOURCE_ADDRESS(&inputs[i]));
+      failed |= actual != expected;
+    }
+  }
+  __asm__ volatile("fldcw %0" :: "m"(saved));
+  return munmap(mapping, sizeof(original) + 16) != 0 || failed;
+}
+)";
+          for (llvm::StringRef Level : {"-O0", "-O2"})
+            source_call_execution_test::compileAndRun(
+                "#define _GNU_SOURCE\n" + Source + Oracle,
+                {"-m32", Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+#else
+          RecordProperty("native_i386_conversion_execution",
+                         "requires Linux x86");
+#endif
+        }
+    }
+}
+
 TEST(I386CallContract, HeaderFloatingImportsDefineTheNormalizedX87Result) {
   class Header : public NullDebugContext {
   public:
@@ -251,6 +362,7 @@ TEST(I386CallContract, HeaderFloatingImportsDefineTheNormalizedX87Result) {
         Push(0xC0D00000);
         Push(0x40200000);
       }
+      const size_t CallOffset = Code.size();
       const auto Call = callThroughSlot(Iat);
       Code.insert(Code.end(), Call.begin(), Call.end());
       Code.insert(Code.end(), {0x83, 0xC4, uint8_t(2 * Bytes)});
@@ -303,6 +415,75 @@ TEST(I386CallContract, HeaderFloatingImportsDefineTheNormalizedX87Result) {
             "  if (left != 2.5 || right != -6.5) __builtin_trap();\n"
             "  return 42.25;\n}\n"
             "int main(void) { return wrap() != 42.25; }\n");
+#if defined(__linux__) && (defined(__i386__) || defined(__x86_64__))
+        std::string Oracle;
+        llvm::raw_string_ostream Native(Oracle);
+        Native << "\n#include <stdint.h>\n#include <string.h>\n"
+                  "#include <sys/mman.h>\n"
+                  "static unsigned calls, sample;\n"
+                  "static const uint64_t samples[] = {\n";
+        if (Bytes == 4)
+          Native << "0, 0x80000000, 1, 0x80000001, 0x7fffff, 0x800000, "
+                    "0x3f800001, 0x7f7fffff, 0xff7fffff, 0x7f800000, "
+                    "0xff800000, 0x7fc12345, 0xffc12345, 0x7f812345";
+        else
+          Native << "0, 0x8000000000000000ULL, 1, 0x8000000000000001ULL, "
+                    "0xfffffffffffffULL, 0x10000000000000ULL, "
+                    "0x3ff0000000000001ULL, 0x7fefffffffffffffULL, "
+                    "0xffefffffffffffffULL, 0x7ff0000000000000ULL, "
+                    "0xfff0000000000000ULL, 0x7ff8123456789abcULL, "
+                    "0xfff8123456789abcULL, 0x7ff0123456789abcULL";
+        Native << "};\n"
+               << Type << " fixture_scalar_fp(" << Type << " left, " << Type
+               << " right) {\n"
+                  "  if (left != 2.5 || right != -6.5) __builtin_trap();\n"
+                  "  ++calls;\n"
+               << "  " << Type
+               << " result;\n"
+                  "  memcpy(&result, &samples[sample], sizeof(result));\n"
+                  "  return result;\n}\n"
+                  "int main(void) {\n"
+                  "  static const uint8_t original[] = {";
+        for (uint8_t Byte : Code)
+          Native << unsigned(Byte) << ',';
+        Native << "};\n  const size_t size = " << Iat - Text + 4 << ";\n"
+               << R"(
+  uint8_t *mapping = mmap(0, size + 16, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mapping == MAP_FAILED) return 1;
+  uint8_t *code = mapping + 16;
+  memcpy(code, original, sizeof(original));
+  uint32_t target = (uint32_t)(uintptr_t)fixture_scalar_fp;
+)";
+        Native
+            << "  uint32_t slot = (uint32_t)(uintptr_t)(code + " << Iat - Text
+            << ");\n"
+            << "  memcpy(code + " << Iat - Text << ", &target, 4);\n"
+            << "  memcpy(code + " << CallOffset + 2
+            << ", &slot, 4);\n"
+               "  __builtin___clear_cache((char *)code, (char *)code + size);\n"
+               "  for (sample = 0; sample < sizeof(samples) / "
+               "sizeof(*samples);\n"
+               "       ++sample) {\n"
+               "    calls = 0;\n"
+            << "    " << Type << " expected = ((" << Type
+            << " (*)(void))code)();\n"
+               "    if (calls != 1) return 2;\n"
+               "    calls = 0;\n"
+            << "    " << Type
+            << " actual = wrap();\n"
+               "    if (calls != 1 || memcmp(&actual, &expected, "
+               "sizeof(actual)))\n"
+               "      return 3;\n"
+               "  }\n"
+               "  return munmap(mapping, size + 16) != 0;\n}\n";
+        for (llvm::StringRef Level : {"-O0", "-O2"})
+          source_call_execution_test::compileAndRun(
+              "#define _GNU_SOURCE\n" + Source + Oracle,
+              {"-m32", Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+#else
+        RecordProperty("native_i386_fp_execution", "requires Linux x86");
+#endif
       }
     }
   }

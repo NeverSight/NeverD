@@ -1726,6 +1726,8 @@ std::string HighCWriter::renderUnaryOp(const HighExpr &E, int ParentPrec) {
     return "(" + typeToC(E.Type) + ")" + exprStr(Source, 99);
   }
   case NdOp::FLOAT_FLOAT2FLOAT:
+    if (const auto Helper = x87HelperFor(E))
+      return useX87Helper(*Helper) + "(" + exprStr(*E.Operands[0]) + ")";
     return "(" + typeToC(E.Type) + ")" + exprStr(*E.Operands[0], 99);
   default:
     return "/* unary " + std::to_string(static_cast<int>(E.Op)) + " */ " +
@@ -1738,6 +1740,10 @@ bool HighCWriter::isX87Value(const HighExpr &E) {
 }
 
 std::optional<X87CHelper> HighCWriter::x87HelperFor(const HighExpr &E) const {
+  if (E.Kind == ExprKind::UnaryOp && E.Op == NdOp::FLOAT_FLOAT2FLOAT &&
+      E.Type && E.Operands.size() == 1 && E.Operands[0] && E.Operands[0]->Type)
+    return x87PrecisionConversionHelper(Opts.TheArch, E.Operands[0]->Type->Size,
+                                        E.Type->Size);
   // The control word the function reads before setting it is the unit's.
   if (E.Kind == ExprKind::Var && E.Var.SSAVer == 0 &&
       isX87ControlWord(Opts.TheArch, E.Var))

@@ -4784,6 +4784,17 @@ TEST_F(SessionCAPITest, ADeclarationThatHidesAPrototypeKeepsTheContext) {
   const auto Facts =
       neverd::PipelineTestPeer::analysisFacts(State.AnalysisCache);
   ASSERT_NE(Facts, nullptr);
+  // Whether a declaration of it would hide a prototype, before any is stated:
+  // CloseHandle's name binds the header's, the caller's binds none.
+  const auto hides = [&](neverd_va_t At) {
+    auto Reply = llvm::json::parse(takeString(neverd_func_type_json(
+        Session, At, R"J({"declaration":"int f(int First)"})J")));
+    EXPECT_TRUE(bool(Reply)) << llvm::toString(Reply.takeError());
+    const auto *Object = Reply ? Reply->getAsObject() : nullptr;
+    return Object ? Object->getBoolean("hides_prototype") : std::nullopt;
+  };
+  EXPECT_EQ(hides(Entry + Stride), true);
+  EXPECT_EQ(hides(Entry), false);
 
   // The context takes the declaration in place; what analysis read of the
   // prototype it hides goes, and what it read of the bodies stays.

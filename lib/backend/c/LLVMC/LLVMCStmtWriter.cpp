@@ -40,6 +40,7 @@
 #include "LLVMCSourceStrings.h"
 #include "LLVMCStackAllocation.h"
 #include "LLVMCWriter.h"
+#include "LLVMCX87Precision.h"
 
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
@@ -55,6 +56,7 @@
 #include "neverd/backend/llvm/AArch64/LLVMAArch64AuthenticatedCall.h"
 #include "neverd/backend/llvm/LLVMName.h"
 #include "neverd/backend/llvm/LLVMSourceCallValue.h"
+#include "neverd/backend/llvm/LLVMSourceSEHFilter.h"
 #include "neverd/backend/llvm/LLVMSourceTypeHints.h"
 #include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
 #include "neverd/backend/llvm/X86/LLVMX86DivRem.h"
@@ -4539,6 +4541,14 @@ bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
        << valueStr(Call.getArgOperand(2)) << ");\n";
     return true;
   }
+  if (const auto Helper = llvmX87PrecisionConversion(Call, Opts.TheArch)) {
+    emitIndent(Indent);
+    if (!Call.use_empty())
+      OS << getName(&Call) << " = ";
+    OS << x87CHelperName(*Helper) << "(" << valueStr(Call.getArgOperand(0))
+       << ");\n";
+    return true;
+  }
   if (IID == llvm::Intrinsic::experimental_constrained_sitofp &&
       Call.getType()->isX86_FP80Ty()) {
     if (Call.arg_size() != 3)
@@ -8378,6 +8388,22 @@ std::string LLVMCWriter::windowsEHFilterExpr(const llvm::CatchSwitchInst &CS) {
   if (llvm::isa<llvm::ConstantPointerNull>(Filter))
     return "EXCEPTION_EXECUTE_HANDLER";
   if (const auto *Fn = llvm::dyn_cast<llvm::Function>(Filter)) {
+    if (Fn->hasFnAttribute(LLVMSourceSEHFilter)) {
+      if (!Fn->hasFnAttribute(LLVMSourceBody) || Fn->isDeclaration() ||
+          Fn->isVarArg() || !Fn->getReturnType()->isIntegerTy(32) ||
+          Fn->arg_empty() || Fn->arg_size() != Pad->arg_size() ||
+          !Fn->getArg(0)->getType()->isPointerTy() ||
+          Fn->getArg(0)->getType()->getPointerAddressSpace())
+        throw std::runtime_error("invalid captured source SEH filter");
+      std::string Args = "(void *)GetExceptionInformation()";
+      for (unsigned I = 1; I < Pad->arg_size(); ++I) {
+        auto *Capture = Pad->getArgOperand(I);
+        if (Capture->getType() != Fn->getArg(I)->getType())
+          throw std::runtime_error("invalid source SEH filter capture type");
+        Args += ", " + valueStr(Capture);
+      }
+      return "(int32_t)" + functionIdentifier(*Fn) + "(" + Args + ")";
+    }
     // A filter takes the arguments it reads: none, the exception pointers,
     // or those and the establisher frame, each a pointer or, as lifted, a
     // pointer-wide integer.
