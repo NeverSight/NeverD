@@ -100,8 +100,10 @@ std::string preamble(const std::set<std::string> &Amx, bool Sgx, bool Rep,
             "#endif\n#endif\n";
   if (Rep)
     Text += "#ifndef NEVERD_X86_REP\n"
-            "#if defined(__NEVERC_X86_REP_STATE__) && __NEVERC_X86_REP_STATE__ "
-            ">= 1\n"
+            "#if (defined(__NEVERC_X86_REP_STATE__) && "
+            "__NEVERC_X86_REP_STATE__ >= 1) || "
+            "(defined(__NEVERC_X86_REP_STATE32__) && "
+            "__NEVERC_X86_REP_STATE32__ >= 1)\n"
             "#define NEVERD_X86_REP(native, ...) native\n"
             "#else\n"
             "#define NEVERD_X86_REP(native, ...) __VA_ARGS__\n"
@@ -174,7 +176,7 @@ std::string x86NativeFunctionPreamble(const HighFunc &Function,
     }
     if (const auto C = x86RepContract(E->IntrinsicId)) {
       Rep = true;
-      Compare |= C->Compare;
+      Compare |= C->Compare && TargetArch == Arch::X64;
     }
     if (const auto C = x86SystemStateContract(E->IntrinsicId); C.Mnemonic)
       if (const auto *Feature = x86SystemNativeTargetFeature(
@@ -234,7 +236,7 @@ std::string x86NativeFunctionPreamble(const llvm::Function &Function,
       }
       if (const auto P = x86RepCallPlan(RepArch, *Call)) {
         Rep = true;
-        Compare |= P->Contract.Compare;
+        Compare |= P->Contract.Compare && RepArch == Arch::X64;
       }
       if (const auto *Callee = Call->getCalledFunction()) {
         if (Callee->getName() == "llvm.x86.enclu.transfer.at.context") {

@@ -444,24 +444,29 @@ TEST(X86RepState, OwnedAssemblyRejectsLostEffectsAndAlteredControls) {
 }
 
 TEST(X86RepState, OwnedScasCapturesAccumulatorOncePerCompilerRoute) {
-  const auto P = *x86RepAsm(
-      Intrinsic::X86RepScasState, Arch::X64,
-      *x86RepDescriptor(Intrinsic::X86RepScasState, Arch::X64, 1, 8, 0, false));
-  llvm::LLVMContext Context;
-  llvm::Module M("rep-scas-input", Context);
-  auto *Call = wrapper(M, P, false);
-  const auto Text = renderX86RepCall(
-      Arch::X64, *Call, "result", true,
-      {"destination", "count", "accumulator_provider()", "direction", "flags"});
-  ASSERT_TRUE(Text);
-  size_t At = 0;
-  unsigned Occurrences = 0;
-  while ((At = Text->find("accumulator_provider()", At)) != std::string::npos) {
-    ++Occurrences;
-    ++At;
+  for (const auto A : {Arch::X86, Arch::X64}) {
+    const auto P =
+        *x86RepAsm(Intrinsic::X86RepScasState, A,
+                   *x86RepDescriptor(Intrinsic::X86RepScasState, A, 1,
+                                     A == Arch::X64 ? 8 : 4, 0, false));
+    llvm::LLVMContext Context;
+    llvm::Module M("rep-scas-input", Context);
+    auto *Call = wrapper(M, P, false);
+    const auto Text =
+        renderX86RepCall(A, *Call, "result", true,
+                         {"destination", "count", "accumulator_provider()",
+                          "direction", "flags"});
+    ASSERT_TRUE(Text);
+    size_t At = 0;
+    unsigned Occurrences = 0;
+    while ((At = Text->find("accumulator_provider()", At)) !=
+           std::string::npos) {
+      ++Occurrences;
+      ++At;
+    }
+    // Each compile-time alternative evaluates the original input once.
+    EXPECT_EQ(Occurrences, 2u) << *Text;
   }
-  // Each compile-time alternative evaluates the original input once.
-  EXPECT_EQ(Occurrences, 2u) << *Text;
 }
 
 TEST(X86RepState, NativeContractsRejectWrongModeEffectsAndControls) {
@@ -579,6 +584,19 @@ TEST(X86RepState, PipelinePreservesAllFamiliesAcrossModesAndFormats) {
               << High;
           EXPECT_NE(LLVM.find("# neverd-rep-state-v1:"), std::string::npos)
               << LLVM;
+          const auto Builtin = "__builtin_ia32_rep_" +
+                               std::string(P.Contract.Name) +
+                               (A == Arch::X64 ? "_state(" : "_state32(");
+          for (const auto *Source : {&High, &LLVM}) {
+            EXPECT_NE(Source->find(Builtin), std::string::npos) << *Source;
+            if (A == Arch::X86) {
+              EXPECT_NE(Source->find("__NEVERC_X86_REP_STATE32__"),
+                        std::string::npos)
+                  << *Source;
+              EXPECT_EQ(Source->find("target(\"sahf\")"), std::string::npos)
+                  << *Source;
+            }
+          }
           if (Directory) {
             const auto Stem = std::string(Directory) + "/pipeline/" +
                               (A == Arch::X64 ? "64-" : "32-") +

@@ -1009,7 +1009,7 @@ add_neverd_unittest(NeverDX86HleSourceTests
   LINK_COMPONENTS BackendC CodeGen)
 
 add_neverd_unittest(NeverDX86RepStateTests
-  x86_64/X86RepStateTests.cpp
+  x86/X86RepStateTests.cpp
   LINK_COMPONENTS Pipeline BackendC CodeGen)
 
 add_neverd_unittest(NeverDX86SystemSideeffectTests

@@ -109,21 +109,23 @@ std::string native(const X86RepAsm &P, const std::vector<std::string> &Outputs,
   const bool Scratch =
       P.Id == Intrinsic::X86RepScasState && Outputs.size() == 4;
   auto Inputs = Arguments;
-  std::string Text = "unsigned long long " + Array + "[" +
-                     std::to_string(P.Contract.WordResults) + "]; ";
+  const std::string Word = P.WordBytes == 8 ? "unsigned long long" : "unsigned";
+  std::string Text =
+      Word + " " + Array + "[" + std::to_string(P.Contract.WordResults) + "]; ";
   if (Scratch) {
     Inputs[2] = Prefix + "accumulator";
-    Text += "unsigned long long " + Inputs[2] + " = (unsigned long long)(" +
-            Arguments[2] + "); ";
+    Text +=
+        Word + " " + Inputs[2] + " = (" + Word + ")(" + Arguments[2] + "); ";
   }
   if (P.Contract.Compare)
     Text += "unsigned short " + Flags + "; ";
-  Text += "__builtin_ia32_rep_" + std::string(P.Contract.Name) + "_state(";
+  Text += "__builtin_ia32_rep_" + std::string(P.Contract.Name) +
+          (P.WordBytes == 8 ? "_state(" : "_state32(");
   for (unsigned I = 0; I < Arguments.size(); ++I) {
-    const char *Type = I == 3 ? "unsigned char"
-                       : I == 4 || (I == 2 && P.Contract.Port)
-                           ? "unsigned short"
-                           : "unsigned long long";
+    const std::string Type = I == 3 ? "unsigned char"
+                             : I == 4 || (I == 2 && P.Contract.Port)
+                                 ? "unsigned short"
+                                 : Word;
     // Owned assembly takes an i32 direction condition. Normalize before
     // narrowing to the native API's byte so values such as 256 stay true.
     Text += "(" + std::string(Type) + ")(" +
@@ -149,8 +151,6 @@ std::string dispatch(const X86RepAsm &P,
                      const std::vector<std::string> &Outputs,
                      const std::vector<std::string> &Arguments) {
   const auto Asm = fallback(P, Outputs, Arguments);
-  if (P.WordBytes != 8)
-    return Asm;
   return "NEVERD_X86_REP(({ " + native(P, Outputs, Arguments) + "}), ({ " +
          Asm + "})); ";
 }
