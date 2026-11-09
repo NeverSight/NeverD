@@ -7,10 +7,21 @@
 #ifndef NEVERD_BACKEND_CODEGEN_PATCHOBJECT_H
 #define NEVERD_BACKEND_CODEGEN_PATCHOBJECT_H
 
+#include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/codegen/SourcePatchBindings.h"
 
 namespace neverd {
-struct CompiledImage;
+struct SourcePatchDependency;
+
+/// Append a native arm64e object's storage, authenticated fixups and supported
+/// native unwind records to a linked image. Does not change original entries,
+/// sign the file, or grant source-publication/call ABI qualification. Explicit
+/// dependencies name providers for the object's authenticated undefined
+/// symbols. The binary is changed only after the entire transaction is
+/// replayed.
+llvm::Expected<CompiledImage>
+appendMachOObjectImage(std::vector<uint8_t> &Binary, llvm::StringRef Object,
+                       llvm::ArrayRef<SourcePatchDependency> Dependencies = {});
 
 /// NeverC hosted DynCode carries a flat, verified payload and the native object
 /// that owns its function extents/unwind records. The installer must compare

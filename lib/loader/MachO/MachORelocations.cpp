@@ -753,11 +753,11 @@ llvm::Error applyObjectRelocations(const llvm::object::MachOObjectFile &Obj,
             return relocationError(arm64e::kInvalidObjectPointer, SecAddr,
                                    RAddr);
           const uint64_t Raw = readLE<uint64_t>(ApplySeg->Data.data() + SegOff);
-          if (!arm64e::kAuthentication.extract(Raw) ||
-              arm64e::kObjectReserved.extract(Raw))
+          const auto Word = arm64e::decodeObjectPointerWord(Raw);
+          if (!Word)
             return relocationError(arm64e::kInvalidObjectPointerBits, SecAddr,
                                    RAddr);
-          const int64_t Addend = arm64e::kObjectAddend.signExtend(Raw);
+          const int64_t Addend = Word->Addend;
           const auto Target = addSigned(S, Addend);
           if (!Target || Img.MachOAuthenticatedPointers.count(P))
             return relocationError(arm64e::kConflictingObjectPointer, SecAddr,
@@ -766,9 +766,9 @@ llvm::Error applyObjectRelocations(const llvm::object::MachOObjectFile &Obj,
           Auth.Target = *Target;
           Auth.EncodedValue = Raw;
           Auth.Addend = Addend;
-          Auth.Diversity = arm64e::kDiversity.extract(Raw);
-          Auth.AddressDiversity = arm64e::kAddressDiversity.extract(Raw);
-          Auth.Key = arm64e::kKey.extract(Raw);
+          Auth.Diversity = Word->Diversity;
+          Auth.AddressDiversity = Word->AddressDiversity;
+          Auth.Key = Word->Key;
           if (const auto Symbol = Reloc.getSymbol();
               Symbol != Obj.symbol_end()) {
             auto Name = Symbol->getName();

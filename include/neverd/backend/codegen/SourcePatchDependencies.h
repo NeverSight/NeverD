@@ -36,6 +36,11 @@ struct SourcePatchDependencies {
   std::vector<SourcePatchImport> Imports;
 };
 
+/// Validate request shape, uniqueness and resource limits before a native
+/// format admits providers or allocates loader-owned slots.
+llvm::Error validateSourcePatchDependencyRequests(
+    llvm::ArrayRef<SourcePatchDependency> Requests);
+
 /// Append real native loader metadata, preserving all original import slots.
 /// Requests have exact symbol identities; TLS, ordinal and version guessing
 /// are not part of this contract. No filesystem output is produced.

@@ -4,6 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "MachODependencyState.h"
+
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/codegen/MachO/MachOCompactUnwindPatch.h"
 #include "neverd/backend/codegen/MachO/MachOExceptionPatch.h"
@@ -14,6 +16,7 @@
 #include "neverd/backend/codegen/SourcePatchPreparation.h"
 #include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
+#include "neverd/loader/MachO/MachOArm64e.h"
 #include "neverd/object/MachOLayout.h"
 #include "neverd/support/TargetCodegenInfo.h"
 
@@ -21,6 +24,7 @@
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/MathExtras.h"
 
+#include <climits>
 #include <map>
 #include <set>
 
@@ -28,6 +32,9 @@ namespace neverd {
 namespace {
 using Kind = llvm::mc_rewrite::RewriteSectionKind;
 using namespace llvm::MachO;
+namespace arm64e = macho_loader::arm64e;
+#define MACHO_OBJECT_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "MachOPatchObject.def"
 llvm::Error fail(const llvm::Twine &Message) {
   return llvm::createStringError(llvm::errc::not_supported,
                                  "Mach-O patch object: " + Message);
@@ -74,7 +81,8 @@ struct NativeMachO {
 };
 
 llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
-                                       const BinaryImage &Original) {
+                                       const BinaryImage &Original,
+                                       llvm::StringRef Triple) {
   auto File = llvm::object::ObjectFile::createObjectFile(
       llvm::MemoryBufferRef(Bytes, "patch-object"));
   if (!File)
@@ -100,25 +108,30 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
   if (Filetype != MH_OBJECT || CPU != ExpectedCPU ||
       !(Flags & MH_SUBSECTIONS_VIA_SYMBOLS))
     return fail("native object ISA or linker atom contract does not match");
-  auto Triple = sourcePatchTargetTriple(Original);
-  if (!Triple)
-    return Triple.takeError();
+  const uint32_t RawSubtype =
+      M->is64Bit() ? M->getHeader64().cpusubtype : M->getHeader().cpusubtype;
+  if (Original.Arch == Arch::AArch64 &&
+      (arm64e::isSubtype(RawSubtype) != Original.isArm64e() ||
+       (Original.isArm64e() &&
+        RawSubtype !=
+            reinterpret_cast<const mach_header_64 *>(Original.Raw.data())
+                ->cpusubtype)))
+    return fail(kSubtype);
   if (Original.Arch == Arch::ARM) {
-    const bool Watch = llvm::Triple(*Triple).isWatchOS();
+    const bool Watch = llvm::Triple(Triple).isWatchOS();
     if (Watch
             ? Subtype != CPU_SUBTYPE_ARM_V7K
             : (Subtype != CPU_SUBTYPE_ARM_V7 && Subtype != CPU_SUBTYPE_ARM_V7S))
       return fail("native ARM platform ABI does not match the image");
   }
   NativeMachO Result;
-  Result.SjLj =
-      Original.Arch == Arch::ARM && !llvm::Triple(*Triple).isWatchOS();
+  Result.SjLj = Original.Arch == Arch::ARM && !llvm::Triple(Triple).isWatchOS();
   auto &Image = Result.Image;
   Image.InputKind = RewriteInputKind::ReplacementObject;
   Image.TargetArch = Original.Arch;
   Image.Format = BinaryFormat::MachO;
   Image.PointerWidth = Original.getPointerSize();
-  Image.TargetTriple = *Triple;
+  Image.TargetTriple = Triple.str();
   uint64_t Total = 0;
   for (const auto &S : M->sections()) {
     auto Name = S.getName();
@@ -154,8 +167,12 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
     Item.Name = Name->str();
     Item.Size = S.getSize();
     Item.Alignment = S.getAlignment().value();
-    const bool Writable = Zero || M->getSectionFinalSegmentName(
-                                      S.getRawDataRefImpl()) == "__DATA";
+    const auto Segment = M->getSectionFinalSegmentName(S.getRawDataRefImpl());
+    Item.ReadOnlyAfterFixups =
+        Segment == kDataConstSegment || Segment == kAuthConstSegment ||
+        (Segment == kDataSegment && *Name == kConstSection);
+    const bool Writable = Zero || Segment == kDataSegment ||
+                          Segment == kAuthSegment || Item.ReadOnlyAfterFixups;
     Item.Kind = Compact    ? Kind::Other
                 : Code     ? Kind::Code
                 : Zero     ? Kind::UninitializedData
@@ -467,13 +484,22 @@ llvm::Error place(NativeMachO &Object, uint64_t Base,
   auto &Image = Object.Image;
   Image.BaseVA = Base;
   uint64_t Cursor = Base;
-  for (Kind Group : {Kind::Code, Kind::ReadOnlyData, Kind::WritableData,
-                     Kind::UninitializedData}) {
-    if (Group == Kind::WritableData)
+  // Two writable groups: loader-only mutation, then ordinary mutable data.
+  enum class PlacementGroup { Code, ReadOnly, Relro, Mutable };
+  for (const auto Group : {PlacementGroup::Code, PlacementGroup::ReadOnly,
+                           PlacementGroup::Relro, PlacementGroup::Mutable}) {
+    if (Group == PlacementGroup::Relro || Group == PlacementGroup::Mutable)
       Cursor = llvm::alignTo(
           Cursor, sourcePatchStorageAlignment(Image.TargetArch, Image.Format));
     for (auto &S : Image.Sections)
-      if (S.IsAllocated && S.IsInImage && S.Kind == Group) {
+      if (S.IsAllocated && S.IsInImage &&
+          (Group == PlacementGroup::Code ? S.Kind == Kind::Code
+           : Group == PlacementGroup::ReadOnly
+               ? S.Kind == Kind::ReadOnlyData
+               : (S.Kind == Kind::WritableData ||
+                  S.Kind == Kind::UninitializedData) &&
+                     S.ReadOnlyAfterFixups ==
+                         (Group == PlacementGroup::Relro))) {
         Cursor = llvm::alignTo(Cursor, S.Alignment);
         if (Cursor < Base ||
             Cursor - Base >
@@ -602,6 +628,43 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
     const uint64_t Raw = R.Width == 8 ? readLE<uint64_t>(Out)
                                       : readLE<uint32_t>(Out),
                    P = S.VA + R.Offset;
+    if (A == Arch::AArch64 && R.Type == ARM64_RELOC_AUTHENTICATED_POINTER) {
+      if (!Original.isArm64e() || R.Width != arm64e::kPointerBytes || R.PCRel ||
+          R.Scattered || !R.External || R.SubtractVA || R.SubtractSymbol ||
+          !S.IsAllocated || !S.IsInImage || S.Kind != Kind::WritableData)
+        return fail(kAuthMetadata);
+      const auto Word = arm64e::decodeObjectPointerWord(Raw);
+      if (!Word)
+        return fail(arm64e::kInvalidObjectPointerBits);
+      const auto Symbol = Object.Symbols.find(R.SymbolIndex);
+      if (Symbol == Object.Symbols.end() || Symbol->second.Name.empty() ||
+          Bindings.contains(Symbol->second.Name))
+        return fail(kAuthSymbol);
+      CompiledFixupReference Reference;
+      Reference.Offset = R.Offset;
+      Reference.Kind = R.Type;
+      Reference.BitWidth = arm64e::kPointerBytes * CHAR_BIT;
+      Reference.Symbol = Symbol->second.Name;
+      Reference.Addend = Word->Addend;
+      Reference.IsResolved = true;
+      Reference.PointerAuth = CompiledPointerAuthentication{
+          Word->Key, Word->Diversity, Word->AddressDiversity};
+      if (Symbol->second.Section) {
+        auto Target = resolve(Object, R.SymbolIndex, Original, Bindings);
+        if (!Target)
+          return Target.takeError();
+        constexpr unsigned WideBits = 2 * arm64e::kPointerBytes * CHAR_BIT;
+        const auto Value = llvm::APInt(WideBits, *Target) +
+                           llvm::APInt(WideBits, Word->Addend, true);
+        if (!Value.isIntN(arm64e::kPointerBytes * CHAR_BIT))
+          return fail(kAuthTarget);
+        Reference.ResolvedValue = Value.getZExtValue();
+      }
+      Object.Image.Sections[R.Section].FixupReferences.push_back(
+          std::move(Reference));
+      writeLE<uint64_t>(Out, 0);
+      continue;
+    }
     const auto Number = llvm::find_if(Object.Sections, [&](const auto &X) {
                           return X.second == R.Section;
                         })->first;
@@ -945,6 +1008,68 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
 }
 } // namespace
 
+llvm::Expected<CompiledImage>
+appendMachOObjectImage(std::vector<uint8_t> &Binary, llvm::StringRef Bytes,
+                       llvm::ArrayRef<SourcePatchDependency> Dependencies) {
+  auto Before = readMachODependencyState(Binary);
+  if (!Before)
+    return Before.takeError();
+  auto Reader = Loader::create(BinaryFormat::MachO);
+  const auto Load = [&](llvm::ArrayRef<uint8_t> Data) {
+    return Reader->loadBuffer(llvm::MemoryBufferRef(
+        llvm::StringRef(reinterpret_cast<const char *>(Data.data()),
+                        Data.size()),
+        kNativeImage));
+  };
+  auto Original = Load(Binary);
+  if (!Original)
+    return Original.takeError();
+  if (!Original->isArm64e() || Original->MachOSharedCache)
+    return fail(kNativeStorage);
+  auto Object = readObject(Bytes, *Original, kArm64eTriple);
+  if (!Object)
+    return Object.takeError();
+  auto Candidate = Binary;
+  const uint64_t ExtraEH = Object->EH && findMachOEHFrameRegion(Candidate)
+                               ? Object->Image.Sections[*Object->EH].Size
+                               : 0;
+  auto Grown = reserveMachOSourceUnwind(Candidate, Original->Arch, ExtraEH,
+                                        Object->Symbols.size());
+  if (!Grown)
+    return Grown.takeError();
+  MachOPatcher Patcher;
+  Patcher.setInputKind(RewriteInputKind::ReplacementObject);
+  const auto Base = Patcher.plannedExecSegmentVA(Candidate, Original->Arch);
+  if (!Base)
+    return fail(kNativePlacement);
+  const auto EH = findMachOEHFrameRegion(Candidate);
+  if (auto Error = place(*Object, Base, EH))
+    return Error;
+  auto Layout = Load(Candidate);
+  if (!Layout)
+    return Layout.takeError();
+  scanImportThunks(*Layout);
+  if (auto Error = relocate(*Object, *Layout, {}))
+    return Error;
+  if (Object->EH && !Object->CompactOnly)
+    if (auto Error = installNativeMachOEHFrame(
+            Candidate, *EH, Object->Image.Sections[*Object->EH]))
+      return Error;
+  if (auto Error = installNativeMachOCompactUnwind(Candidate, Original->Arch,
+                                                   Object->Compact))
+    return Error;
+  if (auto Error = Patcher.appendReplacementImage(Candidate, Object->Image, {},
+                                                  Dependencies))
+    return Error;
+  auto After = readMachODependencyState(Candidate);
+  if (!After)
+    return After.takeError();
+  if (auto Error = preserveMachODependencyState(*Before, *After))
+    return Error;
+  Binary.swap(Candidate);
+  return std::move(Object->Image);
+}
+
 llvm::Expected<PatchResult> installMachOObjectPatch(
     llvm::StringRef Bytes, const BinaryImage &OriginalInput,
     llvm::ArrayRef<SourcePatchMapping> Mappings,
@@ -955,7 +1080,10 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
     const SourcePatchPreparation *Preparation) {
   const BinaryImage &Original =
       Preparation ? Preparation->Image : OriginalInput;
-  auto Object = readObject(Bytes, Original);
+  auto Triple = sourcePatchTargetTriple(Original);
+  if (!Triple)
+    return Triple.takeError();
+  auto Object = readObject(Bytes, Original, *Triple);
   if (!Object)
     return Object.takeError();
   std::set<std::string> Entries;

@@ -21714,11 +21714,24 @@ Long-name controls distinguish an admitted shared symbol from repeated copies
 that exhaust the threaded budget; both snapshot decoding and installation must
 reject the latter before changing the image.
 
+The installation suite also covers explicit provider admission and page-isolated
+RELRO in both chain formats, with and without ordinary mutable storage. Invalid,
+unused, duplicate and weak-library requests, occupied header padding and mixed
+RELRO/mutable pages must reject without changing the input. Independent literal
+object words check signed addends and the full two-bit authentication key.
+
 `AppleClang/MachOArm64eNativeInstallation.*` compiles actual arm64e dylibs at
 O0/O2, installs sixteen recipes including a new libSystem import both in
 existing storage and in newly appended RX/RW segments, re-signs with the
 production signer, verifies the result strictly and asks Apple's
-`dyld_info` to decode every target, key and discriminator for modern chains.
+`dyld_info -imports -fixup_chain_details` to decode every target, import
+identity, addend, key and discriminator for modern chains. This uses raw chain
+locations mapped back to the owning segment. It avoids the symbolicated
+`-fixups` printer: Apple's [section lookup](https://github.com/apple-oss-distributions/dyld/blob/main/other-tools/SymbolicatedImage.cpp)
+can return an index beyond the section inventory for sectionless segments,
+which its [name accessors](https://github.com/apple-oss-distributions/dyld/blob/main/other-tools/SymbolicatedImage.h)
+then dereference. Qualification observed a `dyld_info` `SIGSEGV` in string
+printing; a successful retry does not remove that unsafe oracle path.
 The legacy matrix uses `ld-classic -no_fixup_chains` and `otool -dyld_info` to
 independently decode bind diversity, address diversity and symbols. Current
 `dyld_info` refuses old arm64e bind opcodes, and `otool` does not list legacy
@@ -21733,6 +21746,35 @@ exception-unwind evidence. These tests inspect files and do not execute dyld,
 C++ cleanup or the native signed unwinder. Non-Apple hosts explicitly skip the
 Apple-tool cases. `NEVERD_ARM64E_DYLD_ARTIFACT_DIR` exports qualification inputs
 and diagnostics; ordinary runs remove their temporary directory.
+
+`AppleClang/MachOArm64eNativeObjectInstallation.*` compiles O0/O2 native objects
+with four authenticated relocations using IA/IB/DA/DB, local and newly declared
+external providers, and a nonzero data addend. Inputs include explicit
+`__AUTH_CONST`/`__DATA_CONST` sections and the compiler's default `__DATA,__const`.
+Both modern chained and legacy threaded installations retain generated
+`BLRAA`, `BLRAB` and `RETAB` instructions, add native compact unwind entries,
+preserve original C++ LSDA/personality and signed DWARF state, and pass strict
+code-signature verification. Malformed relocation bits and a mismatched ABI
+reject transactionally; removing `SG_READ_ONLY` fails final recipe replay.
+The matrix exercises both header and tail placement of compact unwind metadata;
+nonzero tail bytes and zero-filled ranges owned by `LC_NOTE` prevent reuse.
+The separate `AuthenticatedCallsAndSignedUnwindExecute` cases first compile and
+run an original call/throw control, then load the installed image and check
+authenticated functions/data, exception propagation through its signed frame,
+and the actual read-only mapping. A control that cannot execute causes an
+explicit skip. File-level validation does not qualify these runtime contracts.
+`MachONativeRelro.DyldProtectsConstantsAndKeepsMutablePagesWritable` separately
+loads an ordinary arm64 image with the same RELRO installer, reads the constant,
+writes adjacent mutable storage and queries the actual mapping permissions.
+That control qualifies the shared protection mechanism on Apple Silicon hosts
+that cannot launch arm64e; it does not qualify authenticated calls or unwinding.
+The [native object/RELRO qualification record](evidence/arm64e-native-relro-2026-11-09.json)
+records 1,206 selected cases: 1,186 passed and 20 explicitly skipped. Two parallel
+120-second timeouts passed serially without extending their limits. A separate
+Apple `dyld_info` crash prompted the oracle change above; its 17 affected native
+cases then yielded 13 passes and four arm64e execution-control skips. Production
+sources remained unchanged during this oracle correction. Native runtime,
+r6 MC callback, NeverC and optional input limits remain recorded separately.
 The [producer/threaded qualification record](evidence/arm64e-producer-threaded-2026-11-09.json)
 records integration checks and the remaining producer/runtime limits. The
 [earlier chained-only record](evidence/arm64e-dyld-install-2026-11-08.json)

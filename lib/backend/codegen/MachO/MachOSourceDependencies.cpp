@@ -13,7 +13,9 @@
 #include "MachOStrictLayout.h"
 
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
+#include "neverd/loader/MachO/MachOLoaderUtils.h"
 
+#include "llvm/Object/MachO.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/LEB128.h"
 
@@ -22,6 +24,8 @@
 namespace neverd {
 namespace {
 using namespace llvm::MachO;
+#define MACHO_DEPENDENCIES_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "MachOSourceDependencies.def"
 llvm::Error fail(const llvm::Twine &S) {
   return llvm::createStringError(llvm::errc::not_supported,
                                  "Mach-O dependency: " + S);
@@ -440,6 +444,56 @@ chained(std::vector<uint8_t> &B, const Layout &L, const BinaryImage &Original,
 }
 } // namespace
 
+llvm::Expected<std::map<std::string, uint32_t>>
+admitMachOSourceLibraries(std::vector<uint8_t> &B,
+                          llvm::ArrayRef<SourcePatchDependency> Requests) {
+  auto State = readMachODependencyState(B);
+  if (!State)
+    return State.takeError();
+  const auto Header = parseMachOHeader(B.data(), B.size());
+  auto Object = llvm::object::MachOObjectFile::create(
+      llvm::MemoryBufferRef(
+          llvm::StringRef(reinterpret_cast<const char *>(B.data()), B.size()),
+          kLibraryImage),
+      true, Header.Is64);
+  if (!Object)
+    return Object.takeError();
+  BinaryImage Parsed;
+  macho_loader::parseNeededLibraries(**Object, Parsed);
+  std::map<std::string, uint32_t> Libraries;
+  for (size_t I = 0; I < Parsed.MachODylibReferences.size(); ++I) {
+    const auto &R = Parsed.MachODylibReferences[I];
+    if (!Libraries.emplace(R.Name, I + 1).second)
+      return fail(kDuplicateLibraries);
+  }
+  std::vector<std::vector<uint8_t>> Commands;
+  for (const auto &I : Requests) {
+    if (Libraries.contains(I.Library)) {
+      const auto Ordinal = Libraries.at(I.Library);
+      if (Ordinal > Parsed.MachODylibReferences.size())
+        continue;
+      const auto &R = Parsed.MachODylibReferences[Ordinal - 1];
+      if (R.Weak)
+        return fail(kWeakLibrary);
+      continue;
+    }
+    Libraries.emplace(I.Library, Libraries.size() + 1);
+    std::vector<uint8_t> C(
+        llvm::alignTo(sizeof(dylib_command) + I.Library.size() + 1,
+                      Header.Is64 ? 8 : 4),
+        0);
+    auto *D = reinterpret_cast<dylib_command *>(C.data());
+    D->cmd = LC_LOAD_DYLIB;
+    D->cmdsize = C.size();
+    D->dylib.name = sizeof(*D);
+    std::copy(I.Library.begin(), I.Library.end(), C.begin() + sizeof(*D));
+    Commands.push_back(std::move(C));
+  }
+  if (auto E = appendCommands(B, Commands))
+    return E;
+  return Libraries;
+}
+
 llvm::Expected<std::vector<uint8_t>>
 appendMachOSourceDependencies(const BinaryImage &Original,
                               std::vector<SourcePatchImport> &Imports) {
@@ -451,40 +505,14 @@ appendMachOSourceDependencies(const BinaryImage &Original,
   if (!Before)
     return Before.takeError();
   if (Before->Slots)
-    return fail("dependency storage already exists");
-  std::map<std::string, uint32_t> Libraries;
-  for (size_t I = 0; I < Original.MachODylibReferences.size(); ++I) {
-    const auto &R = Original.MachODylibReferences[I];
-    if (!Libraries.emplace(R.Name, I + 1).second)
-      return fail("duplicate dylib identities");
-  }
-  std::vector<std::vector<uint8_t>> Commands;
-  for (const auto &I : Imports) {
-    if (Libraries.contains(I.Request.Library)) {
-      const auto Ordinal = Libraries.at(I.Request.Library);
-      if (Ordinal > Original.MachODylibReferences.size())
-        continue;
-      const auto &R = Original.MachODylibReferences[Ordinal - 1];
-      if (R.Weak)
-        return fail(
-            "new import cannot silently acquire a weak library contract");
-      continue;
-    }
-    Libraries.emplace(I.Request.Library, Libraries.size() + 1);
-    std::vector<uint8_t> C(
-        llvm::alignTo(sizeof(dylib_command) + I.Request.Library.size() + 1,
-                      Before->H.Is64 ? 8 : 4),
-        0);
-    auto *D = reinterpret_cast<dylib_command *>(C.data());
-    D->cmd = LC_LOAD_DYLIB;
-    D->cmdsize = C.size();
-    D->dylib.name = sizeof(*D);
-    std::copy(I.Request.Library.begin(), I.Request.Library.end(),
-              C.begin() + sizeof(*D));
-    Commands.push_back(std::move(C));
-  }
-  if (auto E = appendCommands(B, Commands))
-    return E;
+    return fail(kStorageExists);
+  std::vector<SourcePatchDependency> Requests;
+  for (const auto &Import : Imports)
+    Requests.push_back(Import.Request);
+  auto Admitted = admitMachOSourceLibraries(B, Requests);
+  if (!Admitted)
+    return Admitted.takeError();
+  const auto &Libraries = *Admitted;
   MachOPatcher P;
   P.setInputKind(RewriteInputKind::ReplacementIR);
   std::vector<uint8_t> Zeros(Imports.size() * Original.getPointerSize(), 0);

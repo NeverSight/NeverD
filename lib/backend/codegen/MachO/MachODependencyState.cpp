@@ -179,6 +179,9 @@ struct Reader {
                                            0,
                                            0,
                                            {}});
+              Chained->Segments.back().Flags =
+                  Is64 ? reinterpret_cast<const segment_command_64 *>(P)->flags
+                       : reinterpret_cast<const segment_command *>(P)->flags;
             }
             Segments.push_back(S);
             if (S.FileOff == 0 && S.FileSize) {

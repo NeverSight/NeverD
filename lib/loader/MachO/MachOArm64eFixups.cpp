@@ -16,6 +16,18 @@
 
 namespace neverd::macho_loader::arm64e {
 
+std::optional<PointerWord> decodeObjectPointerWord(uint64_t Raw) {
+  if (!kAuthentication.extract(Raw) || kObjectReserved.extract(Raw))
+    return std::nullopt;
+  PointerWord Word;
+  Word.Authenticated = true;
+  Word.Addend = kObjectAddend.signExtend(Raw);
+  Word.Diversity = kDiversity.extract(Raw);
+  Word.AddressDiversity = kAddressDiversity.extract(Raw);
+  Word.Key = kKey.extract(Raw);
+  return Word;
+}
+
 std::optional<PointerWord> decodePointerWord(uint64_t Raw,
                                              const ChainFormat &Format) {
   PointerWord Word;

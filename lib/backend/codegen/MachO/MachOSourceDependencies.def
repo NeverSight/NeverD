@@ -1,0 +1,17 @@
+//===- MachOSourceDependencies.def - Dylib admission -----------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef MACHO_DEPENDENCIES_TEXT
+#define MACHO_DEPENDENCIES_TEXT(Name, Text)
+#endif
+
+MACHO_DEPENDENCIES_TEXT(kDuplicateLibraries, "duplicate dylib identities")
+MACHO_DEPENDENCIES_TEXT(
+    kWeakLibrary, "new import cannot silently acquire a weak library contract")
+MACHO_DEPENDENCIES_TEXT(kLibraryImage, "dependency-image")
+MACHO_DEPENDENCIES_TEXT(kStorageExists, "dependency storage already exists")
+
+#undef MACHO_DEPENDENCIES_TEXT
