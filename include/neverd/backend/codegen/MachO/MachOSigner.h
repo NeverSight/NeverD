@@ -6,7 +6,9 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
 
+#include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -35,7 +37,9 @@ const Operations &productionOperations();
 
 llvm::Error verifyStrict(llvm::StringRef Path,
                          const Operations &Ops = productionOperations());
+/// PageSize is in bytes; omission retains codesign's host default.
 llvm::Error adHocResign(llvm::StringRef Path, llvm::StringRef Identifier,
+                        std::optional<uint64_t> PageSize = std::nullopt,
                         const Operations &Ops = productionOperations());
 
 } // namespace neverd::macho_signing

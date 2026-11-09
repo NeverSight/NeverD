@@ -543,6 +543,8 @@ MACHO_AUTH_NATIVE_TEXT(kObjectCleanup, "native_cleanup")
 MACHO_AUTH_NATIVE_ARGS(kPublishedEntries, "_publication_dispatch",
                        "_publication_catch", "_publication_cleanup")
 MACHO_AUTH_NATIVE_TEXT(kPublishedProperty, "native_object_published")
+MACHO_AUTH_NATIVE_TEXT(kSignaturePageBefore, "signature_page_exponent_before")
+MACHO_AUTH_NATIVE_TEXT(kSignaturePageAfter, "signature_page_exponent_after")
 MACHO_AUTH_NATIVE_TEXT(kReceiptRejected, "test rejects publication receipt")
 MACHO_AUTH_NATIVE_TEXT(kObjectCleanups, "native_cleanups")
 MACHO_AUTH_NATIVE_TEXT(kOriginalCatch, "_original_catch")

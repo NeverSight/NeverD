@@ -8,6 +8,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Program.h"
 
 #include <algorithm>
@@ -23,6 +24,10 @@ namespace neverd::macho_signing {
 namespace {
 
 constexpr llvm::StringLiteral CodesignPath = "/usr/bin/codesign";
+
+#define MACHO_SIGNER_TEXT(Name, Value)                                         \
+  constexpr llvm::StringLiteral Name = Value;
+#include "MachOSigner.def"
 
 llvm::Error signerError(llvm::StringRef Detail) {
   return llvm::make_error<llvm::StringError>("macho signing: " + Detail,
@@ -132,15 +137,23 @@ llvm::Error verifyStrict(llvm::StringRef Path, const Operations &Ops) {
 }
 
 llvm::Error adHocResign(llvm::StringRef Path, llvm::StringRef Identifier,
+                        std::optional<uint64_t> PageSize,
                         const Operations &Ops) {
   if (invalidArgument(Path))
     return signerError("codesign output path is empty or invalid");
   if (invalidArgument(Identifier))
     return signerError("codesign identifier is empty or invalid");
-  return execute("signing",
-                 {CodesignPath.str(), "--force", "--sign", "-", "--identifier",
-                  Identifier.str(), "--timestamp=none", Path.str()},
-                 Ops);
+  if (PageSize && *PageSize && !llvm::isPowerOf2_64(*PageSize))
+    return signerError(kInvalidPageSize);
+  std::vector<std::string> Arguments{
+      CodesignPath.str(), "--force",        "--sign",          "-",
+      "--identifier",     Identifier.str(), "--timestamp=none"};
+  if (PageSize) {
+    Arguments.push_back(kPageSizeOption.str());
+    Arguments.push_back(std::to_string(*PageSize));
+  }
+  Arguments.push_back(Path.str());
+  return execute("signing", std::move(Arguments), Ops);
 }
 
 } // namespace neverd::macho_signing

@@ -713,6 +713,8 @@ void checkNativeObjectInstallation(
   ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
   auto Signature = macho_signature::inspect(Bytes);
   ASSERT_TRUE(bool(Signature)) << llvm::toString(Signature.takeError());
+  ::testing::Test::RecordProperty(
+      kSignaturePageBefore, Signature->Slices.front().CodeDirectoryPageSize);
   if (RelocateOriginalLanguage) {
     auto Compact =
         reserveMachOSourceUnwind(Bytes, Arch::AArch64, 0, kObjectFunctionCount);
@@ -1086,6 +1088,16 @@ void checkNativeObjectInstallation(
   Input = llvm::MemoryBuffer::getFile(InstalledPath);
   ASSERT_TRUE(bool(Input));
   auto Final = llvm::arrayRefFromStringRef((*Input)->getBuffer());
+  if (Operation == NativeObjectOperation::Publish) {
+    auto FinalSignature = macho_signature::inspect(Final);
+    ASSERT_TRUE(bool(FinalSignature))
+        << llvm::toString(FinalSignature.takeError());
+    ::testing::Test::RecordProperty(
+        kSignaturePageAfter,
+        FinalSignature->Slices.front().CodeDirectoryPageSize);
+    EXPECT_EQ(FinalSignature->Slices.front().CodeDirectoryPageSize,
+              Signature->Slices.front().CodeDirectoryPageSize);
+  }
   Error = verifyMachOAuthenticatedFixups(Final, *Recipes);
   ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
   auto MissingProtection = std::vector<uint8_t>(Final.begin(), Final.end());

@@ -1,0 +1,43 @@
+//===- MachOSignerFixtures.def - Signing granularity controls -----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// TEXT and VALUE define fixture constants; PAGE supplies byte/exponent pairs;
+/// INVALID_PAGE supplies invalid granularities for subprocess rejection.
+//===----------------------------------------------------------------------===//
+
+#ifndef MACHO_SIGNER_TEST_TEXT
+#define MACHO_SIGNER_TEST_TEXT(Name, Value)
+#endif
+#ifndef MACHO_SIGNER_TEST_PAGE
+#define MACHO_SIGNER_TEST_PAGE(Bytes, Exponent, Text)
+#endif
+#ifndef MACHO_SIGNER_TEST_INVALID_PAGE
+#define MACHO_SIGNER_TEST_INVALID_PAGE(Bytes)
+#endif
+#ifndef MACHO_SIGNER_TEST_VALUE
+#define MACHO_SIGNER_TEST_VALUE(Name, Value)
+#endif
+
+MACHO_SIGNER_TEST_TEXT(kCandidate, "/tmp/neverd-signer-candidate")
+MACHO_SIGNER_TEST_TEXT(kIdentifier, "com.neverd.signer-pages")
+MACHO_SIGNER_TEST_TEXT(kPageOption, "--pagesize")
+MACHO_SIGNER_TEST_TEXT(kWholeFilePage, "0")
+MACHO_SIGNER_TEST_TEXT(kInvalidPage, "page size must be zero or a power of two")
+MACHO_SIGNER_TEST_TEXT(kTemporaryPrefix, "neverd-signer-pages")
+MACHO_SIGNER_TEST_TEXT(kMissingHost, "requires native Apple codesign")
+MACHO_SIGNER_TEST_TEXT(kCodesign, "/usr/bin/codesign")
+MACHO_SIGNER_TEST_TEXT(kRemoveSignature, "--remove-signature")
+MACHO_SIGNER_TEST_VALUE(kPathCapacity, 128)
+
+MACHO_SIGNER_TEST_PAGE(4096, 12, "4096")
+MACHO_SIGNER_TEST_PAGE(16384, 14, "16384")
+MACHO_SIGNER_TEST_INVALID_PAGE(3)
+MACHO_SIGNER_TEST_INVALID_PAGE(4097)
+
+#undef MACHO_SIGNER_TEST_TEXT
+#undef MACHO_SIGNER_TEST_PAGE
+#undef MACHO_SIGNER_TEST_INVALID_PAGE
+#undef MACHO_SIGNER_TEST_VALUE

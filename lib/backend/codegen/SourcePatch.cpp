@@ -384,8 +384,11 @@ llvm::Expected<PatchResult> publishSourcePatch(
   }
 
   if (Signature) {
+    // codesign defaults can differ from the input linker's granularity. Keep
+    // the admitted CodeDirectory page size as part of the signing contract.
     if (auto Error = macho_signing::adHocResign(
-            Candidate.string(), Signature->Slices.front().Identifier))
+            Candidate.string(), Signature->Slices.front().Identifier,
+            uint64_t{1} << Signature->Slices.front().CodeDirectoryPageSize))
       return std::move(Error);
     if (auto Error = macho_signing::verifyStrict(Candidate.string()))
       return std::move(Error);
