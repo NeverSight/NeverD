@@ -60,7 +60,7 @@ def execute(code, entry, completion, corrupt=None):
     machine.reg_write(regs.UC_X86_REG_ESP, sp)
     machine.mem_write(sp, struct.pack('<I', STOP))
     machine.reg_write(regs.UC_X86_REG_EFLAGS, 2)
-    saved = {r: 0x19283740 + i for i, r in enumerate(
+    saved = {r: (0x19283740 + i) ^ (completion & 0xFFFFFFFF) for i, r in enumerate(
         (regs.UC_X86_REG_EBX, regs.UC_X86_REG_ESI, regs.UC_X86_REG_EDI,
          regs.UC_X86_REG_EBP))}
     for register, value in saved.items():
