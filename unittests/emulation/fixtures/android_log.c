@@ -152,6 +152,120 @@ struct AbortCall {
   U64 Error;
 };
 
+// Checked entry names are called directly as well as through dlsym, so both
+// ELF binding routes carry real function relocations.
+extern void *__memcpy_chk(void *, const void *, U64, U64);
+extern void *__memmove_chk(void *, const void *, U64, U64);
+extern void *__memset_chk(void *, int, U64, U64);
+extern void *__memchr_chk(const void *, int, U64, U64);
+extern void __FD_SET_chk(int, void *, U64);
+extern void __FD_CLR_chk(int, void *, U64);
+extern int __FD_ISSET_chk(int, const void *, U64);
+extern U64 __strlen_chk(const char *, U64);
+extern char *__strcpy_chk(char *, const char *, U64);
+extern char *__strncpy_chk(char *, const char *, U64, U64);
+extern char *__strncpy_chk2(char *, const char *, U64, U64, U64);
+extern U64 __strlcpy_chk(char *, const char *, U64, U64);
+extern char *__strcat_chk(char *, const char *, U64);
+extern char *__strncat_chk(char *, const char *, U64, U64);
+extern char *__strchr_chk(const char *, int, U64);
+extern char *__strrchr_chk(const char *, int, U64);
+extern long __read_chk(int, void *, U64, U64);
+extern char *__fgets_chk(char *, int, void *, U64);
+extern U64 __fread_chk(void *, U64, U64, void *, U64);
+extern int __snprintf_chk(char *, U64, int, U64, const char *, ...);
+extern int __sprintf_chk(char *, int, U64, const char *, ...);
+extern int __vsnprintf_chk(char *, U64, int, U64, const char *,
+                           __builtin_va_list);
+extern int __vsprintf_chk(char *, int, U64, const char *, __builtin_va_list);
+#define FORTIFY_CALL(Name, ...)                                                \
+  (Library ? ((__typeof__(&Name))dlsym(Library, #Name))(__VA_ARGS__)           \
+           : Name(__VA_ARGS__))
+static int fortify_va(U64 Function, void *Library, const U64 *A, ...) {
+  __builtin_va_list Args;
+  __builtin_va_start(Args, A);
+  int Result = Function == 20
+                   ? FORTIFY_CALL(__vsnprintf_chk, (char *)A[0], A[2], 0, A[3],
+                                  (const char *)A[1], Args)
+                   : FORTIFY_CALL(__vsprintf_chk, (char *)A[0], 0, A[3],
+                                  (const char *)A[1], Args);
+  __builtin_va_end(Args);
+  return Result;
+}
+static void fortify_dispatch(U64 Function, void *Library, const U64 *A) {
+  switch (Function) {
+  case 0:
+    FORTIFY_CALL(__memcpy_chk, (void *)A[0], (void *)A[1], A[2], A[3]);
+    break;
+  case 1:
+    FORTIFY_CALL(__memmove_chk, (void *)A[0], (void *)A[1], A[2], A[3]);
+    break;
+  case 2:
+    FORTIFY_CALL(__memset_chk, (void *)A[0], (int)A[1], A[2], A[3]);
+    break;
+  case 3:
+    FORTIFY_CALL(__memchr_chk, (void *)A[0], (int)A[1], A[2], A[3]);
+    break;
+  case 4:
+    FORTIFY_CALL(__FD_SET_chk, (int)A[0], (void *)A[1], A[2]);
+    break;
+  case 5:
+    FORTIFY_CALL(__FD_CLR_chk, (int)A[0], (void *)A[1], A[2]);
+    break;
+  case 6:
+    FORTIFY_CALL(__FD_ISSET_chk, (int)A[0], (void *)A[1], A[2]);
+    break;
+  case 7:
+    FORTIFY_CALL(__strlen_chk, (void *)A[0], A[1]);
+    break;
+  case 8:
+    FORTIFY_CALL(__strcpy_chk, (void *)A[0], (void *)A[1], A[2]);
+    break;
+  case 9:
+    FORTIFY_CALL(__strncpy_chk, (void *)A[0], (void *)A[1], A[2], A[3]);
+    break;
+  case 10:
+    FORTIFY_CALL(__strncpy_chk2, (void *)A[0], (void *)A[1], A[2], A[3], A[4]);
+    break;
+  case 11:
+    FORTIFY_CALL(__strlcpy_chk, (void *)A[0], (void *)A[1], A[2], A[3]);
+    break;
+  case 12:
+    FORTIFY_CALL(__strcat_chk, (void *)A[0], (void *)A[1], A[2]);
+    break;
+  case 13:
+    FORTIFY_CALL(__strncat_chk, (void *)A[0], (void *)A[1], A[2], A[3]);
+    break;
+  case 14:
+    FORTIFY_CALL(__strchr_chk, (void *)A[0], (int)A[1], A[2]);
+    break;
+  case 15:
+    FORTIFY_CALL(__strrchr_chk, (void *)A[0], (int)A[1], A[2]);
+    break;
+  case 16:
+    FORTIFY_CALL(__read_chk, (int)A[0], (void *)A[1], A[2], A[3]);
+    break;
+  case 17:
+    FORTIFY_CALL(__fgets_chk, (void *)A[0], (int)A[1], (void *)A[2], A[3]);
+    break;
+  case 18:
+    FORTIFY_CALL(__fread_chk, (void *)A[0], A[1], A[2], (void *)A[3], A[4]);
+    break;
+  case 19:
+    FORTIFY_CALL(__snprintf_chk, (void *)A[0], A[2], 0, A[3], (void *)A[1],
+                 (void *)A[4]);
+    break;
+  case 21:
+    FORTIFY_CALL(__sprintf_chk, (void *)A[0], 0, A[3], (void *)A[1],
+                 (void *)A[4]);
+    break;
+  default:
+    fortify_va(Function, Library, A, (void *)A[4]);
+    break;
+  }
+}
+#undef FORTIFY_CALL
+
 struct AssertAction {
   int Flags;
   void (*Handler)(int, void *, void *);
@@ -162,6 +276,8 @@ struct AssertCall {
   U64 *Out, *Slot;
   U64 Form, Mode;
   const char *Condition, *Tag, *Format, *Message;
+  U64 FortifyFunction;
+  const U64 *FortifyArguments;
 };
 static struct AssertCall *ActiveAssert;
 
@@ -240,7 +356,9 @@ static void *assert_body(void *Arg) {
        ? Assert(Call->Condition, Call->Tag, Call->Format, __VA_ARGS__)         \
        : __android_log_assert(Call->Condition, Call->Tag, Call->Format,        \
                               __VA_ARGS__))
-  if (Call->Form >= 2) {
+  if (Call->Form >= 4) {
+    fortify_dispatch(Call->FortifyFunction, Library, Call->FortifyArguments);
+  } else if (Call->Form >= 2) {
     if (Call->Form == 3)
       Abort();
     else
@@ -257,13 +375,30 @@ static void *assert_body(void *Arg) {
   return (void *)99;
 }
 
+U64 log_fortify(U64 *Out, U64 *Slot, U64 Function, U64 Mode, const U64 *Args) {
+  for (unsigned I = 0; I != 32; ++I)
+    Out[I] = 0;
+  struct AssertCall Call = {Out, Slot, 4 + (Mode & 1), Mode, 0, 0,
+                            0,   0,    Function,       Args};
+  ActiveAssert = &Call;
+  if (Mode & (1UL << 24)) {
+    U64 Thread;
+    void *Value;
+    if (pthread_create(&Thread, (void *)0, assert_body, &Call) ||
+        pthread_join(Thread, &Value))
+      return 96;
+    return (U64)Value;
+  }
+  return (U64)assert_body(&Call);
+}
+
 U64 log_assertion(U64 *Out, U64 *Slot, U64 Form, U64 Mode,
                   const char *Condition, const char *Tag, const char *Format,
                   const char *Message) {
   for (unsigned I = 0; I != 32; ++I)
     Out[I] = 0;
-  struct AssertCall Call = {Out,       Slot, Form,   Mode,
-                            Condition, Tag,  Format, Message};
+  struct AssertCall Call = {Out, Slot,   Form,    Mode, Condition,
+                            Tag, Format, Message, 0,    (void *)0};
   ActiveAssert = &Call;
   if (Mode & (1UL << 24)) {
     U64 Thread;

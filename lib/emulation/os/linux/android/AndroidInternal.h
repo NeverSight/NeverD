@@ -378,6 +378,12 @@ private:
   BionicResult textLogCall(const NativeCallEvent &Call);
   BionicResult formatLogCall(const NativeCallEvent &Call);
   BionicResult assertLogCall(const NativeCallEvent &Call);
+  BionicResult writeStderr(llvm::ArrayRef<llvm::StringRef> Buffers);
+  BionicResult fortifyFatal(const NativeCallEvent &Call,
+                            const llvm::Twine &Detail);
+  BionicResult fortifyBufferFailure(const NativeCallEvent &Call,
+                                    llvm::StringRef Function, uint64_t Count,
+                                    uint64_t Extent, bool Read = false);
   BionicResult unsupportedLog(llvm::StringRef Detail);
   struct InputStream {
     uint32_t FD;

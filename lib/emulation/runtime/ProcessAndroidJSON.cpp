@@ -494,8 +494,28 @@ androidOptionsFromJSON(const llvm::json::Value &Value) {
       uint64_t Remaining = android_model::LogSnapshotLimit;
       for (const auto &Item : *Writes) {
         const auto *Write = Item.getAsObject();
-        if (!Write || Write->size() != (Text ? 3u : 2u))
+        if (!Write)
           return invalid(Name);
+        const auto *Async = Text ? Write->get(field::AsyncSafe) : nullptr;
+        const auto *Open = Text ? Write->get(field::OpenErrno) : nullptr;
+        if (Write->size() != (Text ? 3u : 2u) + bool(Async) + bool(Open))
+          return invalid(Name);
+        bool AsyncSafe = false;
+        uint32_t OpenErrno = 0;
+        if (Async) {
+          auto B = Async->getAsBoolean();
+          if (!B)
+            return invalid(field::AsyncSafe);
+          AsyncSafe = *B;
+        }
+        if (Open) {
+          auto N = number(*Open, field::OpenErrno);
+          if (!N)
+            return N.takeError();
+          if (*N > UINT32_MAX)
+            return invalid(field::OpenErrno);
+          OpenErrno = uint32_t(*N);
+        }
         const auto Payload = Write->getString(field::LogPayload);
         const auto *Result = Write->get(field::Result);
         if (!Payload || !Result || Payload->size() % 2 ||
@@ -506,7 +526,8 @@ androidOptionsFromJSON(const llvm::json::Value &Value) {
         if (!Returned)
           return Returned.takeError();
         const uint64_t Size = Payload->size() / 2 + sizeof(int32_t) +
-                              (Text ? sizeof(uint32_t) : 0);
+                              (Text ? sizeof(uint32_t) : 0) +
+                              (AsyncSafe ? sizeof(OpenErrno) : 0);
         if (Size > Remaining)
           return invalid(Name);
         Remaining -= Size;
@@ -520,8 +541,11 @@ androidOptionsFromJSON(const llvm::json::Value &Value) {
             return Buffer.takeError();
           if (*Buffer > UINT32_MAX)
             return invalid(Name);
-          Out.TextLogWrites->push_back(
-              {uint32_t(*Buffer), {Bytes.begin(), Bytes.end()}, *Returned});
+          Out.TextLogWrites->push_back({uint32_t(*Buffer),
+                                        {Bytes.begin(), Bytes.end()},
+                                        *Returned,
+                                        AsyncSafe,
+                                        OpenErrno});
         } else
           Out.EventLogWrites->push_back(
               {{Bytes.begin(), Bytes.end()}, *Returned});

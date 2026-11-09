@@ -151,7 +151,8 @@ writes remain outside this subset.
 `__android_log_write`, `__android_log_buf_write`, the three formatted liblog
 entries below and BinderProxy's API 28
 FAILED_TRANSACTION diagnostic share `android.text_log_writes`. Each entry has
-exactly `log_id`, `payload` and `result`. IDs 0, 1, 3 and 4 select main, radio,
+`log_id`, `payload` and `result`, plus the optional async-safe fields described
+below. IDs 0, 1, 3 and 4 select main, radio,
 system and crash. Payload bytes are the first 4068 bytes of one priority byte,
 a NUL-terminated tag and a NUL-terminated message. Transport clipping can
 remove either terminator, the whole message, or part of a multibyte character;
@@ -250,6 +251,50 @@ signal, core file, atexit callback or stdio flush is generated. See the fixed
 [Bionic abort implementation](https://android.googlesource.com/platform/bionic/+/android-9.0.0_r1/libc/bionic/abort.cpp).
 Handler `_exit` and `_Exit` calls both bind to shared Linux `exit_group`, as
 specified by the [API 28 ARM64 syscall stub](https://android.googlesource.com/platform/bionic/+/android-9.0.0_r1/libc/arch-arm64/syscalls/_exit.S).
+
+FORTIFY failures use the fixed API 28
+[fortify helpers](https://android.googlesource.com/platform/bionic/+/android-9.0.0_r1/libc/private/bionic_fortify.h)
+and [async-safe fatal sequence](https://android.googlesource.com/platform/bionic/+/android-9.0.0_r1/libc/async_safe/async_safe_log.cpp).
+The message is `FORTIFY: ` followed by the exact function-specific diagnostic.
+Only fixed names and LP64 integer values occur, so these messages fit the
+1024-byte async-safe buffer. This is independent of libc printf formatting.
+The order is stderr message/newline, crash-buffer log with priority 7 and tag
+`libc`, abort-message publication, then Bionic abort. Earlier bytes survive any
+later missing environment, transcript refusal, pointer fault or budget stop.
+
+These attempts reuse `text_log_writes` with `"async_safe": true`. Absence or
+false selects ordinary liblog; the two sources never consume each other's
+records. With `open_errno` absent or zero, the record explicitly declares an
+opened transport and `result` is its signed write result (negative means
+`-errno`). This finite outcome declares that header preparation and closing
+the transport add no further failure. EINTR consumes another matching
+async-safe record for the same opened transport; it does not repeat the initial
+stderr message. Other errors
+and short writes still proceed to abort-message publication and abort.
+
+A positive `open_errno` in 1..4095, excluding EINTR, declares the final
+socket/connect failure. It sets caller errno and selects `libc: MESSAGE\n`
+on the live stderr descriptor. For this branch, `result` must equal the
+shared Linux write's actual libc return (byte count or -1); a mismatch stops
+after the completed output and before abort-message publication. Descriptor
+errors, aliases, output budgets and errno reuse the existing Linux/Bionic
+owners. Each async-safe record adds four bytes to the transcript budget.
+This finite boundary supplies transport outcomes, not a logd socket, kernel
+FD history, clock metadata or a live connection. No transport availability
+is inferred from missing input. Raw socket/device/file writev remains outside
+this modeled subset.
+
+Checked imports preserve their own effect order. `__strncpy_chk2` keeps its
+copy and zero padding before a source-extent failure. Checked concatenation
+keeps the appended prefix, without inventing a final NUL. Checked `sprintf`
+keeps the truncated formatted result and NUL before reporting its full count.
+API 28's checked sprintf adds one to its signed result; an exact `INT_MAX`
+result would overflow that addition. The model stops explicitly after the
+retained output instead of inventing a diagnostic count for that case.
+The other implemented fortify guards reject before destination mutation.
+Source scans, undefined overlap, pointer faults and resource bounds retain
+their existing explicit boundaries; unknown calls do not acquire fortify
+semantics merely from an `_chk` suffix.
 
 This bounded subset requires explicit results and supplies no logd clock,
 property filter or host transport. Java Log wrappers remain explicit boundaries.
