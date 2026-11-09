@@ -396,7 +396,8 @@ void MIPSLifter::lift(const cs_insn &Instruction,
     return;
   }
   State S(Instruction.address, Ops, isMIPS64(Target) ? 8 : 4, Instruction.size);
-  if (liftInteger(S, Word) || liftMemory(S, Word))
+  if (Code->PCRelative ? liftPCRelative(S, Word, Instruction.address)
+                       : liftInteger(S, Word) || liftMemory(S, Word))
     return;
   Ops.resize(Begin);
   throw UnliftedInstruction(Instruction.address, Instruction.mnemonic,
@@ -521,7 +522,11 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
     S.Addr = Slot->address;
     S.InsnSize = Slot->size;
     S.Seq = 0;
-    if (!liftInteger(S, SlotCode->Word) && !liftMemory(S, SlotCode->Word)) {
+    const bool Lifted =
+        SlotCode->PCRelative
+            ? liftPCRelative(S, SlotCode->Word, Head.address)
+            : liftInteger(S, SlotCode->Word) || liftMemory(S, SlotCode->Word);
+    if (!Lifted) {
       Ops.resize(Begin);
       throw UnliftedInstruction(Slot->address, Slot->mnemonic, Slot->op_str);
     }

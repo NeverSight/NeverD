@@ -1,0 +1,34 @@
+//===- MIPS16MemoryFixtures.def - Literal MIPS16 transfers --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// MD00076 r2.63 literals independent of production normalization/Capstone.
+/// Name, first, second, size, base, register, offset, width, store, signed.
+//===----------------------------------------------------------------------===//
+MIPS16_MEMORY(LB, 0x8443, 0, 2, 4, 2, 3, 1, false, true)
+MIPS16_MEMORY(LBU, 0xa443, 0, 2, 4, 2, 3, 1, false, false)
+MIPS16_MEMORY(LH, 0x8c43, 0, 2, 4, 2, 6, 2, false, true)
+MIPS16_MEMORY(LHU, 0xac43, 0, 2, 4, 2, 6, 2, false, false)
+MIPS16_MEMORY(LW, 0x9c43, 0, 2, 4, 2, 12, 4, false, true)
+MIPS16_MEMORY(SB, 0xc443, 0, 2, 4, 2, 3, 1, true, false)
+MIPS16_MEMORY(SH, 0xcc43, 0, 2, 4, 2, 6, 2, true, false)
+MIPS16_MEMORY(SW, 0xdc43, 0, 2, 4, 2, 12, 4, true, false)
+MIPS16_MEMORY(LWSP, 0x9203, 0, 2, 29, 2, 12, 4, false, true)
+MIPS16_MEMORY(SWSP, 0xd203, 0, 2, 29, 2, 12, 4, true, false)
+MIPS16_MEMORY(SWRA, 0x6203, 0, 2, 29, 31, 12, 4, true, false)
+MIPS16_MEMORY(LBAlias, 0x8483, 0, 2, 4, 4, 3, 1, false, true)
+MIPS16_MEMORY(LWCompactBank, 0x9822, 0, 2, 16, 17, 8, 4, false, true)
+MIPS16_MEMORY(ExtendedLB, 0xf7ff, 0x845c, 4, 4, 2, -4, 1, false, true)
+MIPS16_MEMORY(ExtendedLBU, 0xf7ff, 0xa45c, 4, 4, 2, -4, 1, false, false)
+MIPS16_MEMORY(ExtendedLH, 0xf7ff, 0x8c5c, 4, 4, 2, -4, 2, false, true)
+MIPS16_MEMORY(ExtendedLHU, 0xf7ff, 0xac5c, 4, 4, 2, -4, 2, false, false)
+MIPS16_MEMORY(ExtendedLW, 0xf7ff, 0x9c5c, 4, 4, 2, -4, 4, false, true)
+MIPS16_MEMORY(ExtendedSB, 0xf7ff, 0xc45c, 4, 4, 2, -4, 1, true, false)
+MIPS16_MEMORY(ExtendedSH, 0xf7ff, 0xcc5c, 4, 4, 2, -4, 2, true, false)
+MIPS16_MEMORY(ExtendedSW, 0xf7ff, 0xdc5c, 4, 4, 2, -4, 4, true, false)
+MIPS16_MEMORY(ExtendedLWSP, 0xf7ff, 0x921c, 4, 29, 2, -4, 4, false, true)
+MIPS16_MEMORY(ExtendedSWSP, 0xf7ff, 0xd21c, 4, 29, 2, -4, 4, true, false)
+MIPS16_MEMORY(ExtendedSWRA, 0xf7ff, 0x621c, 4, 29, 31, -4, 4, true, false)
+#undef MIPS16_MEMORY

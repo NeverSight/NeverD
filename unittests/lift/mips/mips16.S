@@ -67,3 +67,59 @@ b 1f
 addu $2,$4,$5
 jrc $31
 end m16_skip_data
+
+begin m16_pc_load
+lw $2,1f
+jrc $31
+.align 2
+1:
+.word 0x89abcdef
+end m16_pc_load
+
+# Exercise signed byte/halfword loads, exact stores and base capture.
+begin m16_memory
+sw $5,0($4)
+lb $2,1($4)
+lhu $3,2($4)
+addu $2,$2,$3
+jrc $31
+end m16_memory
+
+begin m16_stack
+addiu $sp,-24
+sw $4,16($sp)
+lw $2,16($sp)
+addiu $sp,24
+jrc $31
+end m16_stack
+
+# Keep the authenticated entry return in a callee-saved GPR across the call.
+# The stack slot preserves the caller's s0, outside o32's outgoing home area.
+.macro call_frame name,transfer,target
+begin \name
+addiu $sp,-24
+sw $16,16($sp)
+move $16,$31
+\transfer \target
+addiu $4,1
+move $31,$16
+lw $16,16($sp)
+addiu $sp,24
+jrc $31
+end \name
+.endm
+call_frame m16_call,jal,m16_add
+call_frame m16_callx,jalx,m16_classic_add
+
+.set nomips16
+.align 2
+.globl m16_classic_add
+.type m16_classic_add,@function
+.ent m16_classic_add
+m16_classic_add:
+addu $2,$4,$5
+jr $31
+nop
+.end m16_classic_add
+.size m16_classic_add, .-m16_classic_add
+.set mips16

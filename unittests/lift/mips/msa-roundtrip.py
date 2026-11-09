@@ -23,7 +23,7 @@ from mips_validation_artifacts import MIPSValidationArtifacts
 
 VECTOR_FUNCTIONS = ("msa_add_b", "msa_add_h", "msa_add_d", "msa_sub_b", "msa_sub_h",
                     "msa_sub_w", "msa_sub_d", "msa_and", "msa_or", "msa_nor", "msa_xor") + tuple(
-    f"msa_{operation}_{width}" for operation in ("ceq", "clt_s", "clt_u", "cle_s", "cle_u")
+    f"msa_{operation}_{width}" for operation in ("ceq", "clt_s", "clt_u", "cle_s", "cle_u", "max_s", "max_u", "min_s", "min_u")
     for width in ("b", "h", "w", "d"))
 FUNCTIONS = tuple(f"msa_lane{i}" for i in range(4)) + ("msa_mix", "msa_store", "msa_return_slot") + VECTOR_FUNCTIONS
 INPUTS = [(0, 0, 0, 0), (0xffffffff, 0x7fffffff, 0x80000000, 1),
@@ -53,7 +53,7 @@ def expected(function, arguments, little):
                 x, y = (left >> shift) & mask, (right >> shift) & mask
                 lane = x + y if operation.startswith("add_") else x - y
                 value |= (lane & mask) << shift
-        elif operation.startswith(("ceq_", "clt_", "cle_")):
+        elif operation.startswith(("ceq_", "clt_", "cle_", "max_", "min_")):
             bits = {"b": 8, "h": 16, "w": 32, "d": 64}[operation[-1]]
             mask = (1 << bits) - 1
             value = 0
@@ -62,9 +62,13 @@ def expected(function, arguments, little):
                 if "_s_" in operation:
                     x = x - (1 << bits) if x & (1 << (bits - 1)) else x
                     y = y - (1 << bits) if y & (1 << (bits - 1)) else y
-                result = (x == y if operation.startswith("ceq") else
-                          x < y if operation.startswith("clt") else x <= y)
-                value |= (mask if result else 0) << shift
+                if operation.startswith(("max_", "min_")):
+                    result = max(x, y) if operation.startswith("max_") else min(x, y)
+                    value |= (result & mask) << shift
+                else:
+                    result = (x == y if operation.startswith("ceq") else
+                              x < y if operation.startswith("clt") else x <= y)
+                    value |= (mask if result else 0) << shift
         else:
             value = {"and": left & right, "or": left | right,
                      "nor": ~(left | right), "xor": left ^ right}[operation]

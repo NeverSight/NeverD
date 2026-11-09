@@ -125,3 +125,43 @@ dsp_plain_add:
   nop
 .end dsp_plain_add
 .size dsp_plain_add, .-dsp_plain_add
+
+.globl dsp_half_add
+.type dsp_half_add,@function
+.ent dsp_half_add
+dsp_half_add:
+  addq.ph $v0, $a0, $a1
+  jr $ra
+  nop
+.end dsp_half_add
+.size dsp_half_add, .-dsp_half_add
+
+.globl dsp_half_add_saturate
+.type dsp_half_add_saturate,@function
+.ent dsp_half_add_saturate
+dsp_half_add_saturate:
+  addq_s.ph $v0, $a0, $a1
+  jr $ra
+  nop
+.end dsp_half_add_saturate
+.size dsp_half_add_saturate, .-dsp_half_add_saturate
+
+.globl dsp_half_sub
+.type dsp_half_sub,@function
+.ent dsp_half_sub
+dsp_half_sub:
+  subq.ph $v0, $a0, $a1
+  jr $ra
+  nop
+.end dsp_half_sub
+.size dsp_half_sub, .-dsp_half_sub
+
+.globl dsp_half_sub_saturate
+.type dsp_half_sub_saturate,@function
+.ent dsp_half_sub_saturate
+dsp_half_sub_saturate:
+  subq_s.ph $v0, $a0, $a1
+  jr $ra
+  nop
+.end dsp_half_sub_saturate
+.size dsp_half_sub_saturate, .-dsp_half_sub_saturate

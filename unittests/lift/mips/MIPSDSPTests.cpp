@@ -174,6 +174,49 @@ TEST_P(MIPSDSP, PackedArithmeticPreservesStickyFlagsIncludingZeroDestination) {
           }
 }
 
+TEST_P(MIPSDSP, SignedHalfwordsSaturateIndependentlyAndPreserveStickyState) {
+  auto Image = dspImage(GetParam());
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(Image));
+  const uint32_t Inputs[] = {0,          0x7fff8000, 0x80007fff, 0xffffffff,
+                             0x00010001, 0x80008000, 0x7fff7fff, 0x1234fedc};
+  for (bool Subtract : {false, true})
+    for (bool Saturate : {false, true})
+      for (uint32_t Left : Inputs)
+        for (uint32_t Right : Inputs)
+          for (uint32_t Initial : {0u, 0x01000021u, 0x05557f9fu})
+            for (unsigned Destination : {0u, 2u, 4u, 5u}) {
+              NdOpEmulator Emulator(Image);
+              Emulator.setStrictMode(true);
+              Emulator.setRegister(mipsreg::A0, Left);
+              Emulator.setRegister(mipsreg::A1, Right);
+              Emulator.setRegister(mipsreg::DSPControl, Initial);
+              uint32_t Result = 0, State = Initial;
+              for (unsigned Lane = 0; Lane != 2; ++Lane) {
+                const int A = int16_t(Left >> (Lane * 16));
+                const int B = int16_t(Right >> (Lane * 16));
+                const int Value = Subtract ? A - B : A + B;
+                if (Value < -32768 || Value > 32767)
+                  State |= 0x100000;
+                Result |=
+                    uint32_t(uint16_t(
+                        Saturate ? std::clamp(Value, -32768, 32767) : Value))
+                    << (Lane * 16);
+              }
+              // MD00076/DSP manual selectors; deliberately no production table.
+              ASSERT_TRUE(executeDSP(Decode, GetParam(),
+                                     0x7c850290 | (Destination << 11) |
+                                         (Subtract ? 0x40 : 0) |
+                                         (Saturate ? 0x100 : 0),
+                                     Emulator));
+              EXPECT_EQ(Emulator.getRegister(mipsreg::DSPControl), State);
+              if (Destination)
+                EXPECT_EQ(Emulator.getRegister(mipsreg::r(Destination)),
+                          Result);
+              EXPECT_FALSE(Emulator.skips().any());
+            }
+}
+
 TEST_P(MIPSDSP, DecoderReuseConsumesTheCurrentImagesFeatureEvidence) {
   auto Image = dspImage(GetParam());
   Decoder Decode;
