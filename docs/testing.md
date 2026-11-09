@@ -21840,6 +21840,17 @@ unwind qualification.
 
 ### Arm64e dyld installation
 
+`MachOArm64eNativeObjectInstallation.PublishesSignedNativeObject` covers the
+native publication transaction at O0/O2 with compact/DWARF language metadata.
+It checks three exact original-entry branches, signed output, recipe/RELRO
+replay, receipt-failure rollback, unchanged input and refusal to overwrite an
+existing destination. `PublishedEntriesExecute` uses those original addresses
+for authenticated calls, integer catches and destructor cleanup on a qualified
+arm64e host. These four runtime cases join the twelve installation cases in
+`scripts/verify_arm64e_native.py`; a missing or skipped publication case cannot
+satisfy the sixteen-case gate. The native object API does not qualify the
+source/IR adapter or a complete lifted-image rebuild.
+
 `MachOArm64eInstallation.*` exercises transactional authenticated dyld
 installation in the six arm64e chain formats. It covers all keys and address
 diversity settings, local/import identities, special library ordinals,

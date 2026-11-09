@@ -1978,6 +1978,10 @@ add_neverd_unittest(NeverDMachOSignerTests
   CodeGen
 )
 
+target_compile_definitions(NeverDMachOSignerTests PRIVATE
+  NEVERD_MACHO_SIGNATURE_FIXTURE="${CMAKE_SOURCE_DIR}/unittests/safety/fixtures/binaries/safety_cases_macho_arm64"
+)
+
 target_include_directories(NeverDMachOSignerTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include
   ${LLVM_INCLUDE_DIRS}

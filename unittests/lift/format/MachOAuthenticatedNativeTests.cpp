@@ -31,6 +31,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/Errc.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
@@ -484,12 +485,13 @@ INSTANTIATE_TEST_SUITE_P(AppleClang, MachOArm64eNativeInstallation,
 class MachOArm64eNativeObjectInstallation
     : public ::testing::TestWithParam<std::tuple<const char *, bool>> {};
 
-void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
-                                   bool ExecuteNative,
-                                   bool DwarfLanguage = false,
-                                   bool FreshPersonality = false,
-                                   bool RelocateOriginalLanguage = false,
-                                   bool ConvertLegacy = false) {
+enum class NativeObjectOperation { Append, Publish };
+
+void checkNativeObjectInstallation(
+    const char *Optimization, bool Threaded, bool ExecuteNative,
+    bool DwarfLanguage = false, bool FreshPersonality = false,
+    bool RelocateOriginalLanguage = false, bool ConvertLegacy = false,
+    NativeObjectOperation Operation = NativeObjectOperation::Append) {
 #ifndef __APPLE__
   GTEST_SKIP() << kMissingHost;
 #else
@@ -711,6 +713,8 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
   ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
   auto Signature = macho_signature::inspect(Bytes);
   ASSERT_TRUE(bool(Signature)) << llvm::toString(Signature.takeError());
+  ::testing::Test::RecordProperty(
+      kSignaturePageBefore, Signature->Slices.front().CodeDirectoryPageSize);
   if (RelocateOriginalLanguage) {
     auto Compact =
         reserveMachOSourceUnwind(Bytes, Arch::AArch64, 0, kObjectFunctionCount);
@@ -884,6 +888,17 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
     });
   }
   const auto BeforeInstallation = Bytes;
+  std::vector<SourcePatchMapping> Mappings;
+  if (Operation == NativeObjectOperation::Publish) {
+    const char *Names[] = {kObjectDispatch, kObjectCatch, kObjectCleanup};
+    for (unsigned I = 0; I != std::size(Names); ++I) {
+      auto Found = llvm::find_if(Before->Symbols, [&](const auto &Symbol) {
+        return Symbol.Name == kPublishedEntries[I];
+      });
+      ASSERT_NE(Found, Before->Symbols.end());
+      Mappings.push_back({Names[I], Found->Addr});
+    }
+  }
   auto Image =
       appendMachOObjectImage(Bytes, (*Object)->getBuffer(), Dependencies);
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
@@ -1018,11 +1033,44 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
     ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
   }
   ::testing::Test::RecordProperty(kConvertedThreadedProperty, Converted);
-  ASSERT_FALSE(Write(InstalledPath, llvm::toStringRef(llvm::ArrayRef(Bytes))));
-  auto Error = macho_signing::adHocResign(InstalledPath,
-                                          Signature->Slices.front().Identifier);
-  ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
-  Error = macho_signing::verifyStrict(InstalledPath);
+  if (Operation == NativeObjectOperation::Publish) {
+    const auto Snapshot = Before->Raw;
+    bool ReceiptSeen = false;
+    auto Rejected = installMachOObjectPatch(
+        (*Object)->getBuffer(), *Before, Mappings, {}, InstalledPath,
+        [&](const PatchResult &) -> llvm::Error {
+          ReceiptSeen = true;
+          return llvm::createStringError(llvm::errc::not_supported,
+                                         kReceiptRejected);
+        },
+        nullptr, nullptr, Dependencies);
+    ASSERT_FALSE(bool(Rejected));
+    EXPECT_EQ(llvm::toString(Rejected.takeError()), kReceiptRejected);
+    EXPECT_TRUE(ReceiptSeen);
+    EXPECT_FALSE(llvm::sys::fs::exists(InstalledPath));
+    auto Published = installMachOObjectPatch((*Object)->getBuffer(), *Before,
+                                             Mappings, {}, InstalledPath, {},
+                                             nullptr, nullptr, Dependencies);
+    ASSERT_TRUE(bool(Published)) << llvm::toString(Published.takeError());
+    ASSERT_TRUE(Published->Success);
+    EXPECT_EQ(Published->TrampolineCount, Mappings.size());
+    for (const auto &Entry : Published->PatchedFunctions)
+      EXPECT_EQ(Entry.OwnerVA, Image->SymbolAddrs.at(Entry.SourceFunction));
+    EXPECT_EQ(Before->Raw, Snapshot);
+    auto Again = installMachOObjectPatch((*Object)->getBuffer(), *Before,
+                                         Mappings, {}, InstalledPath, {},
+                                         nullptr, nullptr, Dependencies);
+    EXPECT_FALSE(bool(Again));
+    llvm::consumeError(Again.takeError());
+    ::testing::Test::RecordProperty(kPublishedProperty, true);
+  } else {
+    ASSERT_FALSE(
+        Write(InstalledPath, llvm::toStringRef(llvm::ArrayRef(Bytes))));
+    auto Error = macho_signing::adHocResign(
+        InstalledPath, Signature->Slices.front().Identifier);
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+  }
+  auto Error = macho_signing::verifyStrict(InstalledPath);
   ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
   Args.assign({kXcrun});
   if (Threaded && !Converted)
@@ -1040,6 +1088,16 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
   Input = llvm::MemoryBuffer::getFile(InstalledPath);
   ASSERT_TRUE(bool(Input));
   auto Final = llvm::arrayRefFromStringRef((*Input)->getBuffer());
+  if (Operation == NativeObjectOperation::Publish) {
+    auto FinalSignature = macho_signature::inspect(Final);
+    ASSERT_TRUE(bool(FinalSignature))
+        << llvm::toString(FinalSignature.takeError());
+    ::testing::Test::RecordProperty(
+        kSignaturePageAfter,
+        FinalSignature->Slices.front().CodeDirectoryPageSize);
+    EXPECT_EQ(FinalSignature->Slices.front().CodeDirectoryPageSize,
+              Signature->Slices.front().CodeDirectoryPageSize);
+  }
   Error = verifyMachOAuthenticatedFixups(Final, *Recipes);
   ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
   auto MissingProtection = std::vector<uint8_t>(Final.begin(), Final.end());
@@ -1177,14 +1235,20 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
       return Symbol.Name == kSlotSymbol;
     });
     ASSERT_NE(Anchor, Parsed->Symbols.end());
+    const auto Entry = [&](llvm::StringRef Name) {
+      for (const auto &Mapping : Mappings)
+        if (Mapping.Symbol == Name)
+          return Mapping.OriginalVA;
+      return Image->SymbolAddrs.at(Name.str());
+    };
     const std::string Offsets[] = {
-        std::to_string(Image->SymbolAddrs.at(kObjectDispatch) - Anchor->Addr),
+        std::to_string(Entry(kObjectDispatch) - Anchor->Addr),
         std::to_string(Image->SymbolAddrs.at(kObjectLocalData) - Anchor->Addr),
         std::to_string(Image->SymbolAddrs.at(kObjectExternalData) -
                        Anchor->Addr),
         std::to_string(Image->SymbolAddrs.at(kObjectLocalCode) - Anchor->Addr),
-        std::to_string(Image->SymbolAddrs.at(kObjectCatch) - Anchor->Addr),
-        std::to_string(Image->SymbolAddrs.at(kObjectCleanup) - Anchor->Addr),
+        std::to_string(Entry(kObjectCatch) - Anchor->Addr),
+        std::to_string(Entry(kObjectCleanup) - Anchor->Addr),
         std::to_string(Image->SymbolAddrs.at(kObjectCleanups) - Anchor->Addr)};
     Args.assign({DriverPath, InstalledPath});
     Args.append(std::begin(Offsets), std::end(Offsets));
@@ -1245,6 +1309,21 @@ TEST_P(MachOArm64eNativeObjectInstallation,
   const auto [Optimization, Threaded] = GetParam();
   checkNativeObjectInstallation(Optimization, Threaded, true, true, false,
                                 true);
+}
+
+// The second parameter selects DWARF for publication; legacy fixtures retain
+// their separate explicit threaded-to-chained migration contract above.
+TEST_P(MachOArm64eNativeObjectInstallation, PublishesSignedNativeObject) {
+  const auto [Optimization, DwarfLanguage] = GetParam();
+  checkNativeObjectInstallation(Optimization, false, false, DwarfLanguage,
+                                false, false, false,
+                                NativeObjectOperation::Publish);
+}
+
+TEST_P(MachOArm64eNativeObjectInstallation, PublishedEntriesExecute) {
+  const auto [Optimization, DwarfLanguage] = GetParam();
+  checkNativeObjectInstallation(Optimization, false, true, DwarfLanguage, false,
+                                false, false, NativeObjectOperation::Publish);
 }
 
 INSTANTIATE_TEST_SUITE_P(AppleClang, MachOArm64eNativeObjectInstallation,

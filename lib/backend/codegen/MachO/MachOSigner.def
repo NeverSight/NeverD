@@ -1,0 +1,18 @@
+//===- MachOSigner.def - Explicit signing policy arguments --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// MACHO_SIGNER_TEXT(Name, Value) defines signing arguments and diagnostics.
+//===----------------------------------------------------------------------===//
+
+#ifndef MACHO_SIGNER_TEXT
+#define MACHO_SIGNER_TEXT(Name, Value)
+#endif
+
+MACHO_SIGNER_TEXT(kPageSizeOption, "--pagesize")
+MACHO_SIGNER_TEXT(kInvalidPageSize,
+                  "codesign page size must be zero or a power of two")
+
+#undef MACHO_SIGNER_TEXT
