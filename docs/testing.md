@@ -4307,6 +4307,10 @@ CLI whole/function requests, GUI worker requests and toggle/cache isolation.
 `HighSymSimplify.PreservesSupportedAndRefusedSubByteProjections` checks 1/3/7-bit
 fragments at low and high offsets in 8/16/32/64-bit words against independent
 modular arithmetic, including closed refusal of unsupported narrow arithmetic.
+`HighSymSimplify.BitWindowsOfAssembledWordsDropUnobservedWords` reads a 7-bit
+field at bit 14 of a word assembled from three inputs; builders keep that
+window at its source bit, and the published result must read only the input
+that supplies the field.
 `HighSymSimplify.ReusesLiveAffineWordInNonzeroResidueLookups` requires compact
 lookup output through live definitions and widened carriers at the same four
 widths. Existing
