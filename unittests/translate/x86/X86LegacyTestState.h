@@ -91,6 +91,36 @@ protected:
       put(S.EIP + I, Bytes[I], GuestScalarWidth::I8);
     return llvm::cantFail(executeX86LegacyInstruction(S, *M, Bytes, O));
   }
+
+  void bindMpx(uint32_t Config = 0x8001) {
+    auto Controls = M->controls();
+    Controls.CR4 |= uint64_t{1} << 18;
+    ASSERT_FALSE(M->bindControls(Controls));
+    S.Mpx.emplace();
+    ASSERT_TRUE(S.Mpx->configure({.Supported = true,
+                                  .OSXSAVE = false,
+                                  .XCR0 = X86MpxXcr0Mask,
+                                  .PrivilegeLevel = 0,
+                                  .UserConfig = Config,
+                                  .SupervisorConfig = 0,
+                                  .InTransaction = false}));
+    S.Mpx->setStatus(0x12345678);
+    for (unsigned I = 0; I != 4; ++I)
+      ASSERT_TRUE(S.Mpx->setBounds(
+          I, {{0x100u + I, UINT64_MAX}, {0xfffff000u + I, UINT64_MAX}}));
+    O.MpxMemory = X86LegacyMpxProfile::WholeOperandRAM;
+  }
+
+  void repairMpxBacking() {
+    auto RAM =
+        llvm::cantFail(createZeroedGuestState(GuestArchitecture::X86_64));
+    RAM.Memory = M->physicalMemory().snapshotMemoryRegions();
+    RAM.Memory.push_back({0x21000,
+                          MemoryPermission::Read | MemoryPermission::Write, 0,
+                          std::vector<uint8_t>(0x1000)});
+    M = llvm::cantFail(
+        X86PagedMemory::create(RAM, M->features(), M->controls()));
+  }
 };
 
 } // namespace neverd::translate

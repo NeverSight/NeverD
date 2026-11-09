@@ -20,6 +20,7 @@ X86MpxResult result(X86MpxMemoryOutcome Outcome) {
   case X86MpxMemoryOutcome::Fault:
     return X86MpxResult::MemoryFault;
   case X86MpxMemoryOutcome::Unavailable:
+  case X86MpxMemoryOutcome::Suspended:
     return X86MpxResult::UnknownMemory;
   }
   return X86MpxResult::UnknownMemory;

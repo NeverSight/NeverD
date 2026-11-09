@@ -2685,6 +2685,23 @@ loads/stores checks destination knownness, retained provider effects and the
 untouched fourth field. Unknown stored bounds, invalid banks/modes/segments
 and missing operands cannot start an access.
 
+`X86LegacyMpxTest.*` in `NeverDX86PagingTests` integrates those owners with
+original protected code32 bytes, segmented RAM, BDE/BTE paging and IDT entry.
+It checks all four banks, unsigned check boundaries, MIB scale/index/base rules,
+the untouched fourth BTE field, whole-operand fault publication, LOCK and
+alignment priority. Branch tests include taken/untaken Jcc, F2/F3, near
+CALL/RET/JMP, short JMP/LOOP, BNDPRESERVE, failed transfers and post-step #DB.
+The backing-stop witness aliases a BDE with the PTE modified by the BTE walk;
+resuming must use the retained directory value and fetched bytes. Separate
+watchpoint tests retain the completed BDE match until instruction completion.
+`X86LegacySourceTest.Mpx*` in `NeverDX86LegacySourceTests` compiles the actual
+protected dispatcher with Clang and NeverC at O0/O2, checking all seven MPX
+families, bounds-fault handler/IRET retry and resumed attempt budgets. Set
+`NEVERD_TEST_NEVERC` to the built compiler for both NeverC lanes. Run the full
+paging, MPX context/encoding and legacy source targets after this shared-state
+boundary changes. These tests qualify the explicit software profile, not
+physical MPX hardware or ordinary function-ABI state transport.
+
 `NeverDX86MpxEncodingTests` checks the shared byte reader and full/for-lift/light
 decode routes: 504 memory combinations, 1,152 register combinations, 9,216
 architectural register NOP cases and 6,912 SIB addresses compared with ordinary

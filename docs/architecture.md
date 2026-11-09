@@ -467,13 +467,29 @@ An invalid BDE updates BNDSTATUS without changing the bank. A BTE read fault
 forgets only its destination, and store faults retain the provider's partial
 writes. Unavailable memory semantics are distinct from an architectural fault;
 they certify no effects from that request, not rollback of an earlier BDE read.
+`Suspended` separately represents a host backing stop with possible page-walk
+effects but no operand publication or CPU fault. Its provider must retain any
+completed earlier requests and resume without replaying them.
 Enabled operations require a known nontransactional context; an RTM/HLE
 checkpoint and abort continuation are not supplied by this state component.
 Original branch completion takes an explicit preserve/initialize effect;
 it does not infer an architectural branch from a transformed CFG edge.
 The V11 continuation supplies a separate source contract for successful
 long-mode RAM and pending #BR, including original-transfer effects. Ordinary
-function-ABI lifting and transactional/faulting memory completion remain closed.
+function-ABI lifting and transactional completion remain closed.
+
+`translate/X86/X86LegacyMpx` adapts the same byte, bank and memory owners to
+protected code32 execution. Its explicit `WholeOperandRAM` profile supplies
+segmented BNDMOV and flat-DS linear BDE/BTE accesses through `X86PagedMemory`.
+`PendingMpx` retains the authenticated instruction, original inputs, completed
+directory value and debug matches across host backing stops. A BDE can alias
+the PTE modified by a later walk, so repeating that read would change the
+bounds-table address. Architectural faults discard this continuation and
+publish the shared owner's status/knownness effects before existing IDT
+delivery. Legacy near CALL/RET/JMP/Jcc uses the shared byte-owned bank effect
+only at successful completion, including an untaken Jcc and before post-step
+debug entry. The protected source dispatcher reuses this executor and retains
+its existing attempt-budget rules. No second MPX evaluator lives in a C emitter.
 
 The LLVM/NeverC native MPX APIs independently retain the ambient bounds bank.
 Their operands use allocated legacy-encodable carriers, preserving reserved
