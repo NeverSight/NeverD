@@ -23,6 +23,8 @@ enum {
   StatFS = 43,
   FstatFS = 44,
   Write = 64,
+  WriteV = 66,
+  Dup3 = 24,
   Protect = 226,
   Exit = 93,
   GetXAttr = 8,
@@ -49,6 +51,8 @@ enum {
   StatFS = 137,
   FstatFS = 138,
   Write = 1,
+  WriteV = 20,
+  Dup3 = 292,
   Protect = 10,
   Exit = 60,
   GetXAttr = 191,
@@ -91,6 +95,79 @@ static const unsigned char Expected[] = {0, 0xff, 0x41, 0x0a, 0x80, 0x5a};
     if ((U64)(A) != (U64)(B))                                                  \
       return __LINE__;                                                         \
   } while (0)
+
+struct FileIOVector {
+  const void *Base;
+  U64 Size;
+};
+typedef U64 (*VectorCall)(int, const struct FileIOVector *, int);
+static U64 raw_file_writev(int FD, const struct FileIOVector *Vector,
+                           int Count) {
+  return raw(WriteV, (U64)FD, (U64)Vector, (U64)Count, 0);
+}
+
+// The same original sequence runs through both raw ABIs and libc entry paths.
+static U64 file_vector_sequence(VectorCall Call) {
+  U64 Reader = raw(OpenAt, (U64)-100, (U64)Path, 0, 0);
+  U64 Writer = raw(OpenAt, (U64)-100, (U64)Path, 2, 0);
+  CHECK(Reader, 3);
+  CHECK(Writer, 4);
+  CHECK(raw(Dup3, Writer, 5, 0, 0), 5);
+  Pages[512] = 'W';
+  Pages[513] = 0;
+  Pages[514] = 0xff;
+  Pages[4094] = 'Y';
+  Pages[4095] = 'Z';
+  struct FileIOVector V[3];
+  V[0].Base = Pages + 512;
+  V[0].Size = 3;
+  V[1].Base = (void *)1;
+  V[1].Size = 0;
+  V[2].Base = Pages + 4094;
+  V[2].Size = 6;
+  CHECK(raw(Protect, (U64)Pages + 4096, 4096, 0, 0), 0);
+  CHECK(Call(99, (void *)-1UL, -1), -9);
+  CHECK(Call(Reader, (void *)-1UL, 1), -14);
+  CHECK(Call(Reader, V, 3), -9);
+  CHECK(Call(Writer, (void *)-1UL, 0), 0);
+  CHECK(Call(Reader, (void *)-1UL, 0), -9);
+  CHECK(Call(Writer, V, 3), 5);
+  CHECK(raw(Seek, 5, 0, 1, 0), 5);
+  CHECK(V[0].Size, 3);
+  CHECK(V[2].Size, 6);
+  V[0].Base = Pages + 4096;
+  V[0].Size = 1;
+  CHECK(Call(Writer, V, 1), -14);
+  CHECK(raw(Seek, 5, 0, 1, 0), 5);
+  struct FileIOVector *Cross = (void *)(Pages + 4080);
+  Cross[0].Base = Pages + 512;
+  Cross[0].Size = 1;
+  CHECK(Call(Writer, Cross, 2), -14);
+  CHECK(raw(Seek, 5, 0, 1, 0), 5);
+  CHECK(raw(Read, Reader, (U64)Pages, 32, 0), 6);
+  const unsigned char Want[] = {'W', 0, 0xff, 'Y', 'Z', 0x5a};
+  for (unsigned I = 0; I != sizeof(Want); ++I)
+    CHECK(Pages[I], Want[I]);
+  U64 Append = raw(OpenAt, (U64)-100, (U64)Path, 1 | 02000, 0);
+  CHECK(Append, 6);
+  CHECK(raw(Seek, Append, 0x7fffffffffffffffUL, 0, 0), 0x7fffffffffffffffUL);
+  Pages[4094] = 'Y';
+  Pages[4095] = 'Z';
+  V[0].Base = Pages + 512;
+  V[0].Size = 3;
+  V[2].Size = 2;
+  CHECK(Call(Append, V, 3), -22);
+  CHECK(raw(Seek, Append, 100, 0, 0), 100);
+  CHECK(Call(Append, V, 3), 5);
+  CHECK(raw(Seek, Append, 0, 1, 0), 11);
+  CHECK(raw(Seek, 5, 0, 1, 0), 5);
+  CHECK(raw(Read, Reader, (U64)Pages, 32, 0), 5);
+  for (unsigned I = 0; I != 5; ++I)
+    CHECK(Pages[I], Want[I]);
+  CHECK(raw(Protect, (U64)Pages + 4096, 4096, 3, 0), 0);
+  return 0;
+}
+U64 files_writev_raw(void) { return file_vector_sequence(raw_file_writev); }
 
 U64 files_unlink_errors(void) {
   CHECK(raw(UnlinkAt, (U64)-1, (U64) "/absent", 0, 0), (U64)-2);
@@ -1881,6 +1958,37 @@ U64 files_directory_dynamic(U64 Closed, U64 At) {
 
 extern int rename(const char *, const char *);
 extern int renameat(int, const char *, int, const char *);
+extern I64 writev(int, const struct FileIOVector *, int);
+static U64 VectorMode;
+static I64 (*DynamicWriteV)(int, const struct FileIOVector *, int);
+static U64 bionic_file_writev(int FD, const struct FileIOVector *V, int Count) {
+  *__errno() = 73;
+  I64 Result = VectorMode == 0   ? writev(FD, V, Count)
+               : VectorMode == 1 ? syscall(WriteV, (U64)FD, V, (U64)Count)
+                                 : DynamicWriteV(FD, V, Count);
+  if (Result == -1)
+    return 0UL - *__errno();
+  return *__errno() == 73 ? (U64)Result : 0x8000000000000000UL;
+}
+U64 files_writev_bionic(U64 Mode) {
+  VectorMode = Mode;
+  void *Library = (void *)0;
+  if (Mode >= 2) {
+    Library = dlopen("libfiles.so", 2);
+    if (!Library)
+      return 99;
+    DynamicWriteV = dlsym(Library, "writev");
+    if (!DynamicWriteV)
+      return 98;
+    if (Mode == 3)
+      CHECK(dlclose(Library), 0);
+  }
+  CHECK(file_vector_sequence(bionic_file_writev), 0);
+  if (Library)
+    CHECK(dlclose(Library), 0);
+  return 0;
+}
+
 U64 files_rename_bionic(U64 mode) {
   void *library = 0, *function = 0;
   if (mode >= 3) {
@@ -2055,7 +2163,8 @@ void process_main(U64 *Stack) {
   if (Stack[0] != 2)
     __builtin_trap();
   char Mode = ((const char **)(Stack + 1))[1][0];
-  U64 Status = Mode == 'M'   ? files_creation_counted_raw()
+  U64 Status = Mode == 'w'   ? files_writev_raw()
+               : Mode == 'M' ? files_creation_counted_raw()
                : Mode == 'N' ? files_creation_raw()
                : Mode == 'Q' ? files_rename_raw()
                : Mode == 'T' ? files_rename_reuse(0)

@@ -12,7 +12,9 @@
 
 #include "llvm/Support/Endian.h"
 
+#include <initializer_list>
 #include <set>
+#include <utility>
 
 namespace neverd::emulation {
 namespace {
@@ -78,6 +80,29 @@ protected:
     std::vector<uint8_t> V(Count);
     llvm::cantFail(cpu().read(At, V));
     return V;
+  }
+  void vectors(std::initializer_list<std::pair<uint64_t, uint64_t>> Entries,
+               uint64_t At = Base + 256) {
+    for (auto [Address, Size] : Entries) {
+      llvm::cantFail(cpu().writeInteger(At, Address, 8));
+      llvm::cantFail(cpu().writeInteger(At + 8, Size, 8));
+      At += 16;
+    }
+  }
+  void trackWrites() {
+    Options.LinuxFiles->TrackWriteMetadata.insert("/files/data");
+    auto &M = Options.LinuxFiles->Metadata.at("/files/data");
+    M.Blocks = 8;
+    M.LinkCount = 1;
+    M.AccessTime = {3, 4};
+    M.ModificationTime = {5, 6};
+    M.ChangeTime = {7, 8};
+    Options.LinuxTime.emplace().Clocks[0] = {100, 123};
+    llvm::cantFail(linux_model::validateFileOptions(*Options.LinuxFiles));
+  }
+  std::vector<uint8_t> stat(uint64_t FD) {
+    EXPECT_EQ(call(ServiceKind::Fstat, FD, Base + 1024), 0u);
+    return bytes(Base + 1024, GetParam() == GuestArchitecture::X64 ? 144 : 128);
   }
 };
 
@@ -1686,6 +1711,203 @@ TEST_P(LinuxFileNamespace, AppendValidatesOriginalCursorBeforeSelectingEOF) {
   EXPECT_EQ(call(ServiceKind::Read, Reader, Base + 512, 8), 1u);
   EXPECT_EQ(bytes(Base + 512, 1), (std::vector<uint8_t>{'Z'}));
 }
+TEST_P(LinuxFileNamespace, VectoredWritesShareObjectBytesAndAppendCursors) {
+  const auto FD = open("/files/data", 2), Alias = *call(ServiceKind::Dup, FD),
+             Reader = open("/files/data"),
+             Append = open("/files/data", 1 | 02000);
+  llvm::cantFail(cpu().write(Base + 512, {0, 0xff, 'X', 'Y', 'Z'}));
+  vectors({{Base + 512, 2}, {Base + 8192, 0}, {Base + 514, 3}});
+  const auto Guard = bytes(Base + 256, 48);
+  ASSERT_EQ(call(ServiceKind::Lseek, Alias, 5, 0), 5u);
+  EXPECT_EQ(call(ServiceKind::WriteV, FD | (uint64_t(1) << 32), Base + 256,
+                 (uint64_t(1) << 32) | 3),
+            5u);
+  EXPECT_EQ(bytes(Base + 256, 48), Guard);
+  EXPECT_EQ(call(ServiceKind::Lseek, Alias, 0, 1), 10u);
+  ASSERT_EQ(call(ServiceKind::Lseek, Append, 100, 0), 100u);
+  EXPECT_EQ(call(ServiceKind::WriteV, Append, Base + 256, 3), 5u);
+  EXPECT_EQ(call(ServiceKind::Lseek, Append, 0, 1), 15u);
+  EXPECT_EQ(call(ServiceKind::Lseek, Alias, 0, 1), 10u);
+  EXPECT_EQ(call(ServiceKind::Read, Reader, Base + 768, 32), 15u);
+  EXPECT_EQ(bytes(Base + 768, 15),
+            (std::vector<uint8_t>{'a', 'b', 'c', 0, 0, 0, 0xff, 'X', 'Y', 'Z',
+                                  0, 0xff, 'X', 'Y', 'Z'}));
+  EXPECT_FALSE(call(ServiceKind::Fstat, Reader, Base + 1024));
+  EXPECT_NE(Report.Diagnostic.find("invalidated"), std::string::npos);
+}
+
+TEST_P(LinuxFileNamespace, VectoredPayloadFaultsRetainPrefixAndLiveMetadata) {
+  trackWrites();
+  const auto FD = open("/files/data", 2), Alias = *call(ServiceKind::Dup, FD),
+             Reader = open("/files/data");
+  auto Expected = stat(FD);
+  llvm::cantFail(cpu().write(Base + 512, {'W', 'X', 'Y'}));
+  llvm::cantFail(cpu().write(Base + 4094, {'Z', 0xff}));
+  llvm::cantFail(
+      cpu().addressSpace()->protect(Base + 4096, 4096, UserAccessible));
+  vectors({{Base + 512, 3}, {Base + 4094, 6}, {Base + 512, 1}});
+  EXPECT_EQ(call(ServiceKind::WriteV, FD, Base + 256, 3), 5u);
+  EXPECT_EQ(call(ServiceKind::Lseek, Alias, 0, 1), 5u);
+  EXPECT_EQ(call(ServiceKind::Read, Reader, Base + 768, 32), 5u);
+  EXPECT_EQ(bytes(Base + 768, 5),
+            (std::vector<uint8_t>{'W', 'X', 'Y', 'Z', 0xff}));
+  llvm::support::endian::write64le(Expected.data() + 48, 5);
+  for (unsigned Offset : {88u, 104u}) {
+    llvm::support::endian::write64le(Expected.data() + Offset, 100);
+    llvm::support::endian::write64le(Expected.data() + Offset + 8, 123);
+  }
+  EXPECT_EQ(stat(FD), Expected);
+  Options.LinuxTime->Clocks[0] = {101, 456};
+  vectors({{Base + 4096, 1}});
+  EXPECT_EQ(call(ServiceKind::WriteV, FD, Base + 256, 1), uint64_t(-14));
+  EXPECT_EQ(call(ServiceKind::Lseek, Alias, 0, 1), 5u);
+  for (unsigned Offset : {88u, 104u}) {
+    llvm::support::endian::write64le(Expected.data() + Offset, 101);
+    llvm::support::endian::write64le(Expected.data() + Offset + 8, 456);
+  }
+  EXPECT_EQ(stat(FD), Expected);
+}
+
+TEST_P(LinuxFileNamespace,
+       VectoredImportPrecedesAccessModeButNotDescriptorLookup) {
+  trackWrites();
+  const auto FD = open("/files/data", 2), ReadOnly = open("/files/data");
+  const auto Before = stat(FD);
+  EXPECT_EQ(call(ServiceKind::WriteV, 99, UINT64_MAX, 1025), uint64_t(-9));
+  EXPECT_EQ(call(ServiceKind::WriteV, ReadOnly, UINT64_MAX, 1025),
+            uint64_t(-22));
+  EXPECT_EQ(call(ServiceKind::WriteV, ReadOnly, UINT64_MAX, 1), uint64_t(-14));
+  vectors({{Base + 512, UINT64_MAX}});
+  EXPECT_EQ(call(ServiceKind::WriteV, ReadOnly, Base + 256, 1), uint64_t(-22));
+  vectors({{Base + 8192, 1}});
+  EXPECT_EQ(call(ServiceKind::WriteV, ReadOnly, Base + 256, 1), uint64_t(-9));
+  EXPECT_EQ(call(ServiceKind::WriteV, ReadOnly, UINT64_MAX, 0), uint64_t(-9));
+  EXPECT_EQ(call(ServiceKind::WriteV, FD, UINT64_MAX, 0), 0u);
+  vectors({{Base + 8192, 0}});
+  EXPECT_EQ(call(ServiceKind::WriteV, FD, Base + 256, 1), 0u);
+  vectors({{Base + 512, 1}, {Layout.UserLimit, 0}});
+  EXPECT_EQ(call(ServiceKind::WriteV, FD, Base + 256, 2), uint64_t(-14));
+  EXPECT_EQ(stat(FD), Before);
+  EXPECT_EQ(call(ServiceKind::Lseek, FD, 0, 1), 0u);
+}
+
+TEST_P(LinuxFileNamespace, VectoredFilesReuseEachSelectedKernelImporter) {
+  const auto FD = open("/files/data", 2);
+  struct Policy {
+    AndroidGKIKernel Kernel;
+    bool CopyAll;
+  };
+  const Policy Policies[] = {{AndroidGKIKernel::Android12_5_10, true},
+                             {AndroidGKIKernel::Android13_5_10, true},
+                             {AndroidGKIKernel::Android13_5_15, true},
+                             {AndroidGKIKernel::Android14_5_15, true},
+                             {AndroidGKIKernel::Android14_6_1, true},
+                             {AndroidGKIKernel::Android15_6_6, false},
+                             {AndroidGKIKernel::Android16_6_12, false},
+                             {AndroidGKIKernel::Android17_6_18, false}};
+  const auto Before = stat(FD);
+  for (const auto &Policy : Policies) {
+    SCOPED_TRACE(unsigned(Policy.Kernel));
+    Options.LinuxKernel.emplace().GKI = Policy.Kernel;
+    vectors({{Base, UINT64_MAX}}, Base + 4080);
+    llvm::cantFail(
+        cpu().addressSpace()->protect(Base + 4096, 4096, UserAccessible));
+    EXPECT_EQ(call(ServiceKind::WriteV, FD, Base + 4080, 2),
+              Policy.CopyAll ? uint64_t(-14) : uint64_t(-22));
+    // A newer single-vector import caps before checking its original extent.
+    // The explicit file reservation then refuses the large admitted write.
+    vectors({{Base, Layout.UserLimit}});
+    auto Result = call(ServiceKind::WriteV, FD, Base + 256, 1);
+    if (Policy.CopyAll)
+      EXPECT_EQ(Result, uint64_t(-14));
+    else {
+      EXPECT_FALSE(Result);
+      EXPECT_NE(Report.Diagnostic.find("reservation"), std::string::npos);
+    }
+    // Multi-vector import validates later extents even beyond the size cap.
+    vectors({{Base, 0x7ffff000}, {Layout.UserLimit, 0}});
+    EXPECT_EQ(call(ServiceKind::WriteV, FD, Base + 256, 2), uint64_t(-14));
+    EXPECT_EQ(stat(FD), Before);
+    EXPECT_EQ(call(ServiceKind::Lseek, FD, 0, 1), 0u);
+  }
+}
+
+TEST_P(LinuxFileNamespace,
+       VectoredRefusalsLeaveMetadataBytesAndCursorUntouched) {
+  trackWrites();
+  Options.LinuxTime.reset();
+  const auto FD = open("/files/data", 2);
+  const auto Before = stat(FD);
+  vectors({{Base + 512, 1}, {Base + 513, 1}});
+  ASSERT_EQ(call(ServiceKind::Lseek, FD, 8191, 0), 8191u);
+  EXPECT_FALSE(call(ServiceKind::WriteV, FD, Base + 256, 2));
+  EXPECT_NE(Report.Diagnostic.find("reservation"), std::string::npos);
+  EXPECT_EQ(stat(FD), Before);
+  EXPECT_EQ(call(ServiceKind::Lseek, FD, 0, 1), 8191u);
+  ASSERT_EQ(call(ServiceKind::Lseek, FD, 0, 0), 0u);
+  EXPECT_FALSE(call(ServiceKind::WriteV, FD, Base + 256, 2));
+  EXPECT_NE(Report.Diagnostic.find("clock"), std::string::npos);
+  EXPECT_EQ(stat(FD), Before);
+  EXPECT_EQ(call(ServiceKind::Read, FD, Base + 768, 16), 3u);
+  EXPECT_EQ(bytes(Base + 768, 3), (std::vector<uint8_t>{'a', 'b', 'c'}));
+}
+
+TEST_P(LinuxFileNamespace,
+       VectoredAppendChecksCappedTotalAgainstOriginalCursor) {
+  const auto FD = open("/files/data", 1 | 02000);
+  const auto Before = stat(FD);
+  ASSERT_EQ(call(ServiceKind::Lseek, FD, INT64_MAX, 0), uint64_t(INT64_MAX));
+  vectors({{Base + 512, 1}});
+  EXPECT_EQ(call(ServiceKind::WriteV, FD, Base + 256, 1), uint64_t(-22));
+  EXPECT_EQ(call(ServiceKind::WriteV, FD, UINT64_MAX, 0), 0u);
+  EXPECT_EQ(call(ServiceKind::Lseek, FD, 0, 1), uint64_t(INT64_MAX));
+  constexpr uint64_t Offset = INT64_MAX - 0x7ffff000;
+  ASSERT_EQ(call(ServiceKind::Lseek, FD, Offset, 0), Offset);
+  vectors({{Base, 0x7ffff001}});
+  EXPECT_FALSE(call(ServiceKind::WriteV, FD, Base + 256, 1));
+  EXPECT_NE(Report.Diagnostic.find("reservation"), std::string::npos);
+  EXPECT_EQ(call(ServiceKind::Write, FD, Base, 0x7ffff001), uint64_t(-22));
+  EXPECT_EQ(stat(FD), Before);
+  EXPECT_EQ(call(ServiceKind::Lseek, FD, 0, 1), Offset);
+}
+
+TEST_P(LinuxFileNamespace,
+       MaterializedVectorsUseLiveFilesAndWholeCallReservations) {
+  trackWrites();
+  Options.OutputLimit = 1;
+  const auto FD = open("/files/data", 2), Reader = open("/files/data");
+  EXPECT_EQ(call(ServiceKind::Dup2, FD, 2), 2u);
+  const llvm::StringRef Buffers[] = {llvm::StringRef("A\0B", 3), "", "CD"};
+  EXPECT_EQ(llvm::cantFail(Kernel->writeBuffers(2, Buffers)), 5u);
+  EXPECT_EQ(call(ServiceKind::Lseek, FD, 0, 1), 5u);
+  EXPECT_TRUE(Report.StandardError.empty());
+  EXPECT_TRUE(Report.StandardOutput.empty());
+  EXPECT_EQ(call(ServiceKind::Read, Reader, Base + 768, 32), 5u);
+  EXPECT_EQ(bytes(Base + 768, 5),
+            (std::vector<uint8_t>{'A', 0, 'B', 'C', 'D'}));
+  auto Expected = stat(FD);
+  ASSERT_EQ(call(ServiceKind::Lseek, FD, 4095, 0), 4095u);
+  EXPECT_EQ(llvm::cantFail(Kernel->writeBuffers(2, Buffers)), 5u);
+  EXPECT_EQ(call(ServiceKind::Lseek, FD, 0, 1), 4100u);
+  llvm::support::endian::write64le(Expected.data() + 48, 4100);
+  llvm::support::endian::write64le(Expected.data() + 64, 16);
+  EXPECT_EQ(stat(FD), Expected);
+  ASSERT_EQ(call(ServiceKind::Lseek, Reader, 4093, 0), 4093u);
+  EXPECT_EQ(call(ServiceKind::Read, Reader, Base + 768, 16), 7u);
+  EXPECT_EQ(bytes(Base + 768, 7),
+            (std::vector<uint8_t>{0, 0, 'A', 0, 'B', 'C', 'D'}));
+  const auto Before = stat(FD);
+  ASSERT_EQ(call(ServiceKind::Lseek, FD, 8190, 0), 8190u);
+  EXPECT_FALSE(llvm::cantFail(Kernel->writeBuffers(2, Buffers)));
+  EXPECT_NE(Report.Diagnostic.find("reservation"), std::string::npos);
+  EXPECT_EQ(stat(FD), Before);
+  EXPECT_EQ(call(ServiceKind::Lseek, FD, 0, 1), 8190u);
+  EXPECT_EQ(llvm::cantFail(Kernel->writeBuffers(Reader, Buffers)),
+            uint64_t(-9));
+  EXPECT_EQ(call(ServiceKind::Close, 2), 0u);
+  EXPECT_EQ(llvm::cantFail(Kernel->writeBuffers(2, Buffers)), uint64_t(-9));
+}
+
 INSTANTIATE_TEST_SUITE_P(LP64, LinuxFileNamespace,
                          testing::Values(GuestArchitecture::X64,
                                          GuestArchitecture::AArch64));

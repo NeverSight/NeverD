@@ -193,20 +193,18 @@ LinuxServices::handle(ServiceKind Kind, const ProcessServiceEvent &Event,
     return archPrctl(CPU, Event, Layout, Result);
   case ServiceKind::Write:
   case ServiceKind::WriteV:
-    return write(Kind, Event, Thread);
+    return write(Kind, Event);
   }
   llvm_unreachable("unhandled Linux service kind");
 }
 
 llvm::Expected<std::optional<uint64_t>>
 LinuxServices::write(ServiceKind Kind, const ProcessServiceEvent &Event,
-                     ThreadContext *Thread,
                      std::optional<llvm::ArrayRef<llvm::StringRef>> Buffers) {
   const uint32_t FD = Event.Arguments[0];
-  // These providers currently reject writev before inspecting payloads. Keep
-  // that same boundary for materialized libc buffers, including access errors.
   if (Files.isDevice(FD) || Files.isRegularFile(FD) || Files.isSocket(FD))
-    return Files.handle(Kind, Event, Result, Thread);
+    return Files.writeDescriptor(Kind, Event, Options.LinuxKernel, Result,
+                                 Buffers);
   uint32_t Target = FD;
   if (Options.LinuxFiles) {
     if (auto E = Files.outputError(FD)) {
@@ -230,7 +228,7 @@ LinuxServices::writeBuffers(uint32_t FD,
   Files.setCurrentTask(Thread ? Thread->ID : ThreadID);
   if (auto E = synchronizeDevices())
     return std::move(E);
-  return write(ServiceKind::WriteV, {0, 0, {FD, 0, Buffers.size()}, {}}, Thread,
+  return write(ServiceKind::WriteV, {0, 0, {FD, 0, Buffers.size()}, {}},
                Buffers);
 }
 } // namespace neverd::emulation::linux_model

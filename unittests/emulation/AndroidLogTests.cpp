@@ -997,25 +997,26 @@ TEST_P(AndroidLog, AssertUsesLiveStderrDescriptorsAndSharedOutputLimits) {
     auto R =
         emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
     ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
-    ASSERT_EQ(R->Stop, Mode == 4 ? ProcessStopReason::UnsupportedService
-                                 : ProcessStopReason::Signaled)
-        << R->Diagnostic;
+    ASSERT_EQ(R->Stop, ProcessStopReason::Signaled) << R->Diagnostic;
     EXPECT_EQ(R->StandardError, Mode == 0 ? "message\n" : "");
     EXPECT_EQ(R->StandardOutput, Mode == 2 ? "message\n" : "");
-    EXPECT_EQ(R->TextLogWritesConsumed, Mode == 4 ? 0u : 1u);
+    EXPECT_EQ(R->TextLogWritesConsumed, 1u);
     ASSERT_EQ(R->MemorySnapshots.size(), 1u);
     const auto &Bytes = R->MemorySnapshots[0].Bytes;
-    EXPECT_EQ(word(Bytes, 0), Mode == 4 ? 0u : 1u);
-    if (Mode != 4) {
-      EXPECT_EQ(R->TerminationSignal, 6u);
-      EXPECT_EQ(word(Bytes, 5 * 8), Mode == 1 || Mode == 3 ? 9u : 55u);
-      auto Record = abortRecord("message");
-      EXPECT_TRUE(
-          std::equal(Record.begin(), Record.end(), Bytes.begin() + 24000));
-    } else {
-      EXPECT_FALSE(R->TerminationSignal);
-      EXPECT_EQ(word(Bytes, 2048), 0u);
-      EXPECT_NE(R->Diagnostic.find("vectored mutable-file"), std::string::npos);
+    EXPECT_EQ(word(Bytes, 0), 1u);
+    EXPECT_EQ(R->TerminationSignal, 6u);
+    EXPECT_EQ(word(Bytes, 5 * 8), Mode == 1 || Mode == 3 ? 9u : 55u);
+    auto Record = abortRecord("message");
+    EXPECT_TRUE(
+        std::equal(Record.begin(), Record.end(), Bytes.begin() + 24000));
+    if (Mode == 4) {
+      EXPECT_EQ(word(Bytes, 14 * 8), 8u);
+      EXPECT_EQ(word(Bytes, 15 * 8), 8u);
+      EXPECT_EQ(word(Bytes, 16 * 8), 0u);
+      EXPECT_EQ(llvm::StringRef(
+                    reinterpret_cast<const char *>(Bytes.data() + 28672), 8),
+                "message\n");
+      EXPECT_EQ(Bytes[28680], 0xc7);
     }
     EXPECT_EQ(word(Bytes, 17 * 8), 0u);
   }
@@ -1534,6 +1535,65 @@ TEST_P(AndroidLog, FortifyTransportFallbackErrnoAndSharedAbortHandlers) {
         EXPECT_EQ(word(Bytes, 5 * 8), ErrorNumber);
       }
     }
+}
+
+TEST_P(AndroidLog, FortifyRedirectedFilesRetainBothDiagnosticsBeforeAbort) {
+  for (unsigned Form : {0u, 1u})
+    for (bool Fallback : {false, true}) {
+      SCOPED_TRACE(Form);
+      SCOPED_TRACE(Fallback);
+      const auto Message =
+          prepareFortify(7, Form | (2u << 8) | (4u << 16), {Output + 8192, 3},
+                         "strlen: detected read past end of buffer");
+      Options.LinuxFiles->Files["/assert-output"] = {};
+      Options.LinuxFiles->WriteLimits["/assert-output"] = 4096;
+      if (Fallback) {
+        auto &Write = Options.Android->TextLogWrites->front();
+        Write.OpenErrno = 2;
+        Write.Result = Message.size() + 7;
+      }
+      auto R =
+          emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+      ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+      ASSERT_EQ(R->Stop, ProcessStopReason::Signaled) << R->Diagnostic;
+      EXPECT_EQ(R->TerminationSignal, 6u);
+      EXPECT_EQ(R->TextLogWritesConsumed, 1u);
+      EXPECT_TRUE(R->StandardOutput.empty());
+      EXPECT_TRUE(R->StandardError.empty());
+      ASSERT_EQ(R->MemorySnapshots.size(), 1u);
+      const auto &Bytes = R->MemorySnapshots[0].Bytes;
+      const auto Expected =
+          Message + "\n" + (Fallback ? "libc: " + Message + "\n" : "");
+      EXPECT_EQ(word(Bytes, 0), 1u);
+      EXPECT_EQ(word(Bytes, 5 * 8), Fallback ? 2u : 55u);
+      EXPECT_EQ(word(Bytes, 14 * 8), Expected.size());
+      EXPECT_EQ(word(Bytes, 15 * 8), Expected.size());
+      EXPECT_EQ(word(Bytes, 16 * 8), 0u);
+      EXPECT_EQ(word(Bytes, 17 * 8), 0u);
+      auto Record = abortRecord(Message);
+      EXPECT_TRUE(
+          std::equal(Record.begin(), Record.end(), Bytes.begin() + 24000));
+      std::vector<uint8_t> Readback(4096, 0xc7);
+      std::copy(Expected.begin(), Expected.end(), Readback.begin());
+      EXPECT_TRUE(
+          std::equal(Readback.begin(), Readback.end(), Bytes.begin() + 28672));
+    }
+}
+
+TEST_P(AndroidLog, AssertFileReservationStopsBeforeLoggingAndAbortPublication) {
+  prepareAssertion(1, (2u << 8) | (4u << 16), "message");
+  Options.LinuxFiles.emplace();
+  Options.LinuxFiles->Files["/assert-output"] = {};
+  Options.LinuxFiles->WriteLimits["/assert-output"] = 7;
+  auto R = emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+  ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+  EXPECT_EQ(R->Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(R->Diagnostic.find("reservation"), std::string::npos);
+  EXPECT_EQ(R->TextLogWritesConsumed, 0u);
+  EXPECT_FALSE(R->TerminationSignal);
+  ASSERT_EQ(R->MemorySnapshots.size(), 1u);
+  EXPECT_EQ(word(R->MemorySnapshots[0].Bytes, 0), 0u);
+  EXPECT_EQ(word(R->MemorySnapshots[0].Bytes, 2048), 0u);
 }
 
 TEST_P(AndroidLog, AsyncSafeRecordsDoNotCompleteLiblogWrites) {

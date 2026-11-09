@@ -88,7 +88,6 @@ public:
 private:
   llvm::Expected<std::optional<uint64_t>>
   write(ServiceKind Kind, const ProcessServiceEvent &Event,
-        ThreadContext *Thread,
         std::optional<llvm::ArrayRef<llvm::StringRef>> Buffers = std::nullopt);
   ExecutionBackend &CPU;
   const MemoryLayout &Layout;

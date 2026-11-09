@@ -16468,7 +16468,9 @@ events remain incomplete until guest execution actually returns.
 `LinuxFiles.cpp` dispatches typed file operations. Catalogue validation lives in
 `LinuxFileOptions.cpp`, path import and lookup in `LinuxFilePaths.cpp`, descriptor
 ownership and transfers in `LinuxFileIO.cpp`, and metadata serialization in
-`LinuxFileStatus.cpp`. These files implement the same process-owned `LinuxFiles`
+`LinuxFileStatus.cpp`. `LinuxFileWrite.cpp` owns scalar, vector and materialized
+regular-file writes, including shared cursors, reservations, append selection
+and metadata updates. These files implement the same process-owned `LinuxFiles`
 object; they do not maintain separate catalogues or cursors. `fstatat` reuses the
 path classifier and `fstat` serializer, while Bionic only adapts arguments and
 errno through its existing service registry.
@@ -16619,9 +16621,10 @@ versioned `pidfd_open` flag mask, nonleader error and iovec import policy. JSON 
 select that contract
 explicitly; Android's Bionic API level does not infer it. `LinuxServices`
 dispatches the shared kernel call, and `LinuxFiles` owns process descriptors
-alongside regular files and standard streams. `LinuxOutput` supplies the same
-version-selected vector import/error ordering for captured output and before a
-pidfd's missing write operation. There
+alongside regular files and standard streams. `LinuxWriteBuffers` supplies one
+version-selected vector importer for captured output, regular-file writes and
+the validation before a pidfd's missing write operation. `LinuxOutput` owns
+captured stdout/stderr budgets and byte sinks. There
 is no host process lookup or parallel descriptor namespace. `LinuxKernelOptions`
 also owns an optional fixed catalogue of additional live guest tasks. A declared
 closed catalogue supplies lookup absence; an omitted one leaves foreign targets

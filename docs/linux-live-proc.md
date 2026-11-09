@@ -152,6 +152,24 @@ Android kernel/VMA implementation.
 
 ## Metadata after regular-file writes
 
+Regular memory files accept scalar `write`, LP64 `writev` and materialized
+Bionic diagnostic buffers through the same file owner. Vector metadata is
+fully imported before file effects. Missing descriptors return EBADF before
+import; for existing regular files, metadata errors precede the write-access
+check. The shared kernel importer retains the selected GKI length/range order
+and cumulative MAX_RW_COUNT cap. The VFS cursor check uses that capped vector
+total before selecting EOF for O_APPEND; scalar writes retain their original
+count check. Zero totals leave the cursor and metadata unchanged.
+
+One vector call checks the entire storage reservation before writing, then
+shares one timestamp update and append position across its buffers. A later
+payload fault returns the copied prefix, retaining its bytes and the shared
+open-description cursor; an initial payload fault returns EFAULT. Materialized
+buffers use borrowed model bytes with these same file effects. They do not
+create guest scratch iovecs or consume the captured stdout/stderr budget.
+This follows Linux's [vector import and VFS ordering](https://github.com/torvalds/linux/blob/v6.6/fs/read_write.c).
+Device and socket vector providers remain separate unsupported boundaries.
+
 An existing file may opt into complete stat maintenance with
 `"track_write_metadata": true` alongside `write_limit` and its complete initial
 `metadata`. This selects a noatime, page-backed memory-file provider, independently

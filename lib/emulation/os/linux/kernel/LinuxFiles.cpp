@@ -105,9 +105,6 @@ LinuxFiles::handle(ServiceKind Kind, const ProcessServiceEvent &Event,
     return directoryEntries(A0, A1, A2, Result);
   case ServiceKind::Ioctl:
     return tracedIoctl(Event, Result);
-  case ServiceKind::Write:
-  case ServiceKind::WriteV:
-    return writeDescriptor(Kind, A0, A1, A2, Result);
   case ServiceKind::Readlink:
     return readLink(AtCurrentDirectory, A0, A1, A2, Result);
   case ServiceKind::ReadlinkAt:

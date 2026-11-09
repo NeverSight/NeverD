@@ -17906,6 +17906,13 @@ pointer faults, dynamic proc FD reuse and directory buffering/cookies.
 `LinuxFileNamespace` in `NeverDLinuxProcessTests` independently checks both
 LP64 architectures, complete defined dirent bytes and untouched padding,
 partial source-page writes, closed FD slots, EOF cookies and budget refusal.
+Its `Vectored*` and `MaterializedVectors*` cases check regular-file writev import
+ordering, GKI variants, partial payload faults, shared cursors, append overflow,
+timestamps and whole-call reservations. `LinuxProcess.VectoredFiles*` and
+`AndroidFiles.VectoredFiles*` execute the same O0/O2 caller through raw LP64,
+named Bionic, variadic syscall and dynamic bindings. `AndroidLog` also reads
+redirected assert/fortify diagnostics from the file inside the abort handler,
+including both writes after an explicit async-safe transport-open failure.
 C/CLI and Python exercise fresh mutable-file and proc workloads through the
 public JSON contract. None of these fixtures needs a phone or a host filesystem
 oracle. Live maps/task/status/fdinfo and opt-in timestamp/allocation maintenance

@@ -231,8 +231,10 @@ through the shared Linux writev output owner, then performs a fatal text write,
 then calls shared Bionic `abort`. It retries stderr only for EINTR; a modeled
 write error or short result does not suppress logging or abort. Closed/read-only
 descriptors set libc errno, dup aliases select the actual sink, and the shared
-output budget precedes any output bytes. Unmodeled file/device/socket writev
-providers remain explicit boundaries. Earlier stderr bytes survive a later tag
+output budget precedes any captured output bytes. Regular-file redirection uses
+the shared [memory-file write contract](linux-live-proc.md#metadata-after-regular-file-writes),
+including reservation, cursor, metadata and append semantics. Device/socket
+writev providers remain explicit boundaries. Earlier stderr bytes survive a later tag
 fault, missing abort binding or log-transcript refusal. A supplied negative
 log result still proceeds to abort.
 
@@ -281,8 +283,8 @@ errors, aliases, output budgets and errno reuse the existing Linux/Bionic
 owners. Each async-safe record adds four bytes to the transcript budget.
 This finite boundary supplies transport outcomes, not a logd socket, kernel
 FD history, clock metadata or a live connection. No transport availability
-is inferred from missing input. Raw socket/device/file writev remains outside
-this modeled subset.
+is inferred from missing input. Raw socket/device writev remains outside this
+modeled subset; regular-file fallback writes use the shared memory-file owner.
 
 Checked imports preserve their own effect order. `__strncpy_chk2` keeps its
 copy and zero padding before a source-extent failure. Checked concatenation
