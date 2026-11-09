@@ -60,13 +60,16 @@ private:
 
   bool liftInteger(State &S, uint32_t Word) const;
   bool liftBitfield(State &S, uint32_t Word) const;
-  bool liftMemory(State &S, uint32_t Word) const;
+  bool liftMemory(State &S, uint32_t Word,
+                  std::optional<NdVar> BaseOverride = std::nullopt) const;
+  bool liftPCRelative(State &S, uint32_t Word, va_t BasePC) const;
   bool liftDSP(State &S, uint32_t Word) const;
   bool liftMSA(State &S, uint32_t Word) const;
   struct Encoding {
     uint32_t Word;
     unsigned SlotBytes = 0;
     bool Unconditional = false;
+    bool PCRelative = false;
   };
   std::optional<Encoding> encoding(const cs_insn &Instruction) const;
   std::optional<Encoding> microEncoding(const cs_insn &Instruction) const;

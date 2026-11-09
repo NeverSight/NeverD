@@ -21,6 +21,9 @@ uint64_t sourcePatchStorageAlignment(Arch Architecture, BinaryFormat Format);
 struct PatchStorageLayout {
   uint64_t WritableOffset = 0;
   uint64_t ReadOnlySize = 0;
+  /// Page-rounded prefix of the writable allocation which dyld makes read-only
+  /// after fixups. Zero denotes no such allocation.
+  uint64_t RelroSize = 0;
 };
 
 /// Validate section extents and a complete permission split before writing

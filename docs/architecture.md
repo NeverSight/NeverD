@@ -1403,9 +1403,10 @@ object emission retains their authentication relocations.
 
 `CompiledImage` retains the fork's typed MC signing receipts through sizing
 and final layout compilation. Authenticated slots remain zero until installation;
-only arm64e Mach-O replacement IR has a signing owner. The final collector
-uses exact local symbol addresses and addends, or one unambiguous existing dyld
-provider for an external symbol. Missing/conflicting providers, unresolved or
+arm64e Mach-O replacement IR and native objects have a signing owner. The final
+collector uses exact local symbol addresses and addends, one unambiguous existing
+dyld provider, or an explicit provider declaration for an external symbol.
+Missing/conflicting providers, unresolved or
 subtracted expressions, non-writable storage and stale placement fail before
 mutation. The r6 build cannot exercise this MC callback path; its integration
 test is explicitly skipped until a toolchain exposing the fork interface is used.
@@ -1420,6 +1421,36 @@ arm64e chain formats share the same pointer-field authority. Segmented chains
 cannot express binds and reject them. Imports may extend the table but do not
 create dependency load commands or infer a provider.
 
+`MachOPatcher::appendReplacementImage` can first admit explicitly declared
+providers through the same library-command owner used by ordinary source
+dependencies. It validates request identity and header capacity, rejects weak
+library contracts for strong requests, and requires every declaration to serve
+an undefined authenticated reference. Library admission and fixup installation
+commit together; a failed or unused declaration leaves the input unchanged.
+
+`appendMachOObjectImage` connects the existing native Mach-O parser, placement,
+relocation and unwind owners to that transaction. The object must match the
+linked image's exact arm64e CPU subtype, including ABI capability bits. The
+analysis loader and installer share authenticated object-word decoding, retaining
+the signed 32-bit addend and both key bits. Native symbol names remain canonical
+inside the compiled image and acquire their Mach-O prefix only at the dyld
+provider boundary. This staging API neither redirects original entries nor
+signs the output. Native object LSDA/personality installation and ordinary
+absolute-pointer rebases remain outside its supported contract.
+Compact unwind reservation can reuse existing zero-filled `__TEXT` tail space
+without moving original code/data VAs. A shared payload inventory protects
+declared load-command data, including zero-filled `LC_NOTE` ranges, from reuse.
+Inline `LC_ID_DYLIB` metadata does not block otherwise available header space.
+
+Typed `ReadOnlyAfterFixups` storage is page-separated from both code and ordinary
+mutable data. Native `__AUTH_CONST`, `__DATA_CONST` and `__DATA,__const` inputs
+use a dedicated `__ND_CONST` segment with writable initial protections and
+`SG_READ_ONLY`; final recipe replay also checks that flag. Apple's
+[linker maps the default constant section to read-only-after-fixup storage](https://github.com/apple-oss-distributions/ld64/blob/main/src/ld/Options.cpp),
+and [dyld uses the segment flag when applying its read-only protections](https://github.com/apple-oss-distributions/dyld/blob/main/mach_o/UnsafeHeader.h).
+ELF RELRO and automatic classification of MC-produced constant sections remain
+separate installation work.
+
 The original threaded format reuses the analysis reader's bytecode plan and
 the same arm64e word decoder as modern chains. Installation rebuilds the ordinal
 table and APPLY roots, preserving raw import flags, signed addends and special
@@ -1433,7 +1464,7 @@ Repeated long imports therefore cannot create unbounded snapshot copies.
 Installation is transactional, including automatic producer receipts and the
 optional explicit recipe handoff in `MachOPatcher::appendReplacementImage`.
 Failed placement planning cannot authorize installation at the zero error
-sentinel. New RX/RW placement precedes dyld encoding so address diversity uses
+sentinel. New RX/RELRO/RW placement precedes dyld encoding so address diversity uses
 the final storage VA. Re-decoding compares every requested recipe and preserves
 every original fixup. A staged signature remains opaque and terminal in LINKEDIT
 so the existing publication signer can
@@ -1446,9 +1477,12 @@ change when a new load command is inserted. Such a changed target is rejected
 without publishing any bytes.
 
 This installation phase does not enable whole-image arm64e publication. The
-native-object producer handoff, qualification of the new MC interface with a
-post-r6 toolchain, new provider admission and native signed call/unwind execution
-remain separate contracts. Apple ld-classic fixtures use `-no_fixup_chains`;
+qualification of the new MC interface with a post-r6 toolchain and native signed
+call/unwind execution remain separate contracts. A runtime fixture exercises
+IA/IB calls, DA/DB data, an exception crossing the installed signed frame and
+actual RELRO mapping permissions only after its compiler-original execution
+control succeeds. An unavailable control is an explicit skip, never evidence
+of successful execution. Apple ld-classic fixtures use `-no_fixup_chains`;
 `otool -dyld_info` independently verifies legacy bind symbols, diversity and
 address diversity because the current `dyld_info` refuses that format. Apple's
 [legacy otool decoder](https://github.com/apple-oss-distributions/cctools/blob/main/otool/dyld_bind_info.c)
@@ -15467,14 +15501,22 @@ and the numeric code-pointer source qualification boundary. Actual two/four-byte
 head and slot lengths remain in the shared LowIR instruction records.
 The MIPS16e32 subset shares these owners with an explicit MIPS16 family and
 target-bit contract, including register transfers originating in classic code.
-`MIPS16Integer.def` and `MIPSLiftMIPS16` normalize qualified scalar/control
-encodings; EXTEND pairs are one physical instruction and delayed JR accepts
-only one two-byte non-extended slot. B carries unconditional control semantics
+`MIPS16Integer.def` and `MIPSLiftMIPS16` normalize qualified scalar, memory and
+control encodings. EXTEND pairs and JAL/JALX heads are four-byte instructions;
+delayed transfers accept one two-byte non-extended slot. PC-relative operations
+receive the transfer head as their base in a slot, preserve the slot operation
+address, and delegate accesses to `MIPSLiftMemory`. CFG and function discovery
+validate the entire unit against local mode evidence. B carries unconditional control semantics
 through normalization so CFG does not visit a nonexistent fallthrough.
 MIPS16 symbols are classified before their overlapping microMIPS flag bit.
 Both source routes emit the positive encoding attribute and explicitly exclude
 the other compressed family. GNU as/ld and original-target execution qualify
 the MIPS16 source path separately from LLVM's incomplete assembler support.
+Call-source return identity uses the existing callee-saved-register proof; it
+does not admit unproved stack restores across calls. Ordinary RAM source
+equivalence assumes valid, accessible, aligned original accesses. LowIR fault
+order is tested independently; ordinary MedIR/C dead-load elimination still
+prevents a general source memory-fault equivalence claim.
 The official Archer C7 V5 example qualifies selected static function views,
 not an entire firmware image. This is an analysis-only addition to the matrix
 above: no MIPS rewrite or guest-process execution backend is claimed. See

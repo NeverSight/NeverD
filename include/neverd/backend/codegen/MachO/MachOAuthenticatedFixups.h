@@ -21,18 +21,23 @@
 namespace neverd {
 
 struct CompiledImage;
+struct SourcePatchDependency;
 
 struct MachOAuthenticatedFixup {
   va_t Address = 0;
   MachOAuthenticatedPointer Recipe;
+  /// Require dyld's post-fixup read-only protection on the owning segment.
+  bool ReadOnlyAfterFixups = false;
 };
 
 /// Translate producer receipts at their final section VAs. External symbols
-/// must identify one exact existing dyld provider; conflicting providers are
-/// rejected. Explicit recipes remain useful for caller-owned new dependencies.
+/// identify one exact dyld provider. Explicit declarations select a library
+/// already admitted to Original; otherwise conflicting providers are rejected.
+/// Every declaration must be used by an undefined authenticated reference.
 llvm::Expected<std::vector<MachOAuthenticatedFixup>>
-collectMachOAuthenticatedFixups(llvm::ArrayRef<uint8_t> Original,
-                                const CompiledImage &Image);
+collectMachOAuthenticatedFixups(
+    llvm::ArrayRef<uint8_t> Original, const CompiledImage &Image,
+    llvm::ArrayRef<SourcePatchDependency> Dependencies = {});
 
 /// Install new recipes in writable file-backed storage. Imports name an exact
 /// existing dylib ordinal (or a dyld special ordinal); Target is already the
@@ -45,7 +50,8 @@ installMachOAuthenticatedFixups(std::vector<uint8_t> &Binary,
                                 llvm::ArrayRef<MachOAuthenticatedFixup> Fixups);
 
 /// Replay installed recipes after subsequent image edits, retaining exact
-/// storage addresses, import identities and signing discriminators.
+/// storage addresses, import identities, signing discriminators and requested
+/// post-fixup read-only protection.
 llvm::Error
 verifyMachOAuthenticatedFixups(llvm::ArrayRef<uint8_t> Binary,
                                llvm::ArrayRef<MachOAuthenticatedFixup> Fixups);

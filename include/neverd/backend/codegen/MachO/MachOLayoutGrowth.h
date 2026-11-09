@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Reserve native metadata without padding.
+/// Reserve native metadata while preserving original code and data addresses.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_BACKEND_CODEGEN_MACHO_MACHOLAYOUTGROWTH_H
@@ -44,8 +44,10 @@ struct MachOUnwindRelocationLimits {
 
 /// Reserve native unwind storage without moving the Mach header or original
 /// code/data. Existing metadata is copied and its encoded references rebased.
-/// A live segment blocking the TEXT tail requires a complete relocation
-/// contract and is refused. Returns whether the private candidate changed.
+/// Compact tables can reuse zero-filled TEXT capacity after all section and
+/// load-command payload owners. If no existing capacity remains, a live segment
+/// blocking TEXT extension requires a complete relocation contract and is
+/// refused. Returns whether the private candidate changed.
 llvm::Expected<bool>
 reserveMachOSourceUnwind(std::vector<uint8_t> &Binary, Arch Architecture,
                          uint64_t AdditionalEHBytes,

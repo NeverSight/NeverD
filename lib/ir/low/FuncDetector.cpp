@@ -22,6 +22,7 @@
 #include "neverd/libc/NoReturnLoadedTarget.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/COFF/ControlFlowEntries.h"
+#include "neverd/loader/ELF/MIPSCodeMode.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/Parallel.h"
 #include "neverd/support/ProloguePatterns.h"
@@ -103,9 +104,10 @@ bool hasBoundedSemanticTerminator(
         return false;
       if (!Img.hasExecutableCodeOwnerRange(Cur, static_cast<uint64_t>(Sz)))
         return false;
-      if (Img.Arch == Arch::ARM &&
-          Img.instructionModeAt(Cur + Sz - 1, Dec.currentMode()) !=
-              Dec.currentMode())
+      if (!mips::codeModeRangeMatches(Img, Cur, Sz, Dec.currentMode()) ||
+          (Img.Arch == Arch::ARM &&
+           Img.instructionModeAt(Cur + Sz - 1, Dec.currentMode()) !=
+               Dec.currentMode()))
         return false;
       if (Dec.isFunctionTerminator(DI)) {
         if (Unit.HasDelaySlot) {
@@ -1084,6 +1086,8 @@ bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
         isMIPS(Img.Arch)
             ? Dec.decodeUnitForLift(Seg->Data.data() + Off, Remain, Cur, Unit)
             : Dec.decodeOneLight(Seg->Data.data() + Off, Remain, Cur, DI);
+    if (Sz > 0 && !mips::codeModeRangeMatches(Img, Cur, Sz, Dec.currentMode()))
+      return false;
     if (Sz > 0 && isMIPS(Img.Arch)) {
       std::vector<LowOp> Ops;
       try {
@@ -1182,9 +1186,10 @@ bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
           return false;
         if (!Img.hasExecutableCodeOwnerRange(Cur, static_cast<uint64_t>(Sz)))
           return false;
-        if (Img.Arch == Arch::ARM &&
-            Img.instructionModeAt(Cur + Sz - 1, Dec.currentMode()) !=
-                Dec.currentMode())
+        if (!mips::codeModeRangeMatches(Img, Cur, Sz, Dec.currentMode()) ||
+            (Img.Arch == Arch::ARM &&
+             Img.instructionModeAt(Cur + Sz - 1, Dec.currentMode()) !=
+                 Dec.currentMode()))
           return false;
         Explored.emplace(Cur, Dec.currentMode());
 

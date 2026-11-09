@@ -21714,11 +21714,24 @@ Long-name controls distinguish an admitted shared symbol from repeated copies
 that exhaust the threaded budget; both snapshot decoding and installation must
 reject the latter before changing the image.
 
+The installation suite also covers explicit provider admission and page-isolated
+RELRO in both chain formats, with and without ordinary mutable storage. Invalid,
+unused, duplicate and weak-library requests, occupied header padding and mixed
+RELRO/mutable pages must reject without changing the input. Independent literal
+object words check signed addends and the full two-bit authentication key.
+
 `AppleClang/MachOArm64eNativeInstallation.*` compiles actual arm64e dylibs at
 O0/O2, installs sixteen recipes including a new libSystem import both in
 existing storage and in newly appended RX/RW segments, re-signs with the
 production signer, verifies the result strictly and asks Apple's
-`dyld_info` to decode every target, key and discriminator for modern chains.
+`dyld_info -imports -fixup_chain_details` to decode every target, import
+identity, addend, key and discriminator for modern chains. This uses raw chain
+locations mapped back to the owning segment. It avoids the symbolicated
+`-fixups` printer: Apple's [section lookup](https://github.com/apple-oss-distributions/dyld/blob/main/other-tools/SymbolicatedImage.cpp)
+can return an index beyond the section inventory for sectionless segments,
+which its [name accessors](https://github.com/apple-oss-distributions/dyld/blob/main/other-tools/SymbolicatedImage.h)
+then dereference. Qualification observed a `dyld_info` `SIGSEGV` in string
+printing; a successful retry does not remove that unsafe oracle path.
 The legacy matrix uses `ld-classic -no_fixup_chains` and `otool -dyld_info` to
 independently decode bind diversity, address diversity and symbols. Current
 `dyld_info` refuses old arm64e bind opcodes, and `otool` does not list legacy
@@ -21733,6 +21746,35 @@ exception-unwind evidence. These tests inspect files and do not execute dyld,
 C++ cleanup or the native signed unwinder. Non-Apple hosts explicitly skip the
 Apple-tool cases. `NEVERD_ARM64E_DYLD_ARTIFACT_DIR` exports qualification inputs
 and diagnostics; ordinary runs remove their temporary directory.
+
+`AppleClang/MachOArm64eNativeObjectInstallation.*` compiles O0/O2 native objects
+with four authenticated relocations using IA/IB/DA/DB, local and newly declared
+external providers, and a nonzero data addend. Inputs include explicit
+`__AUTH_CONST`/`__DATA_CONST` sections and the compiler's default `__DATA,__const`.
+Both modern chained and legacy threaded installations retain generated
+`BLRAA`, `BLRAB` and `RETAB` instructions, add native compact unwind entries,
+preserve original C++ LSDA/personality and signed DWARF state, and pass strict
+code-signature verification. Malformed relocation bits and a mismatched ABI
+reject transactionally; removing `SG_READ_ONLY` fails final recipe replay.
+The matrix exercises both header and tail placement of compact unwind metadata;
+nonzero tail bytes and zero-filled ranges owned by `LC_NOTE` prevent reuse.
+The separate `AuthenticatedCallsAndSignedUnwindExecute` cases first compile and
+run an original call/throw control, then load the installed image and check
+authenticated functions/data, exception propagation through its signed frame,
+and the actual read-only mapping. A control that cannot execute causes an
+explicit skip. File-level validation does not qualify these runtime contracts.
+`MachONativeRelro.DyldProtectsConstantsAndKeepsMutablePagesWritable` separately
+loads an ordinary arm64 image with the same RELRO installer, reads the constant,
+writes adjacent mutable storage and queries the actual mapping permissions.
+That control qualifies the shared protection mechanism on Apple Silicon hosts
+that cannot launch arm64e; it does not qualify authenticated calls or unwinding.
+The [native object/RELRO qualification record](evidence/arm64e-native-relro-2026-11-09.json)
+records 1,206 selected cases: 1,186 passed and 20 explicitly skipped. Two parallel
+120-second timeouts passed serially without extending their limits. A separate
+Apple `dyld_info` crash prompted the oracle change above; its 17 affected native
+cases then yielded 13 passes and four arm64e execution-control skips. Production
+sources remained unchanged during this oracle correction. Native runtime,
+r6 MC callback, NeverC and optional input limits remain recorded separately.
 The [producer/threaded qualification record](evidence/arm64e-producer-threaded-2026-11-09.json)
 records integration checks and the remaining producer/runtime limits. The
 [earlier chained-only record](evidence/arm64e-dyld-install-2026-11-08.json)
@@ -22855,13 +22897,13 @@ execution. Source numeric callable/import values remain explicitly unqualified;
 the pipeline suite checks those refusals as well as ordinary leaf emission.
 
 `MIPSDSPTests` in the integer target covers every control selector, ignored
-selector bits, missing state, sticky flags, saturated lanes, destination/input
+selector bits, missing state, sticky flags, saturated byte and signed-halfword lanes, destination/input
 aliases and discarded results. The pipeline target checks that DSPControl
 effects survive both source routes without invented source arguments. Return
 identity, standalone conversion, source shards and generated helper protection
 have separate regressions.
 `unittests/lift/mips/dsp-roundtrip.py` accepts the same explicit `--neverd`,
-`--clang`, `--ld` and `--output` arguments as the ordinary runner. Its twelve
+`--clang`, `--ld` and `--output` arguments as the ordinary runner. Its sixteen
 owned `dsp.S` leaves check scalar results and DSPControl after returning, in
 both byte orders and both C routes at `-O0` and `-O2`, with external `-mdsp`
 enabled. It uses the pinned 74Kf model with
@@ -22872,11 +22914,11 @@ executable after its comparisons.
 
 `MIPSMSATests` covers scalar word transfers across all vector registers,
 B/H/W/D carry and borrow boundaries, equality and signed/unsigned comparison
-masks, full-container logical operations and
+masks and signed/unsigned min/max lane selection, full-container logical operations and
 aliasing, independent byte-wise expectations, missing state, decoder reuse and
 P5600 reference execution. Loader cases check r5/MSA/CPR128/FP64 evidence;
 pipeline cases check both source routes and unchanged refusals with/without an
-Image. The owned MSA source runner recompiles thirty-eight scalar/memory leaves
+Image. The owned MSA source runner recompiles fifty-four scalar/memory leaves
 in both byte orders at O0/O2 through HighC and LLVMC. It checks each output byte
 and the preserved F20/F22/.../F30 low64 values, maps original/generated ELF separately,
 and retires scratch on success and failure:
@@ -22896,17 +22938,26 @@ separate target syntax checks; those four checks do not claim linked execution.
 
 ### MIPS16 source qualification
 
-`MIPS16Integer`, `MIPS16Flow`, `MIPS16Loader`, `MIPS16SDK` and `MIPS16Pipeline`
+`MIPS16Integer`, `MIPS16Memory`, `MIPS16Flow`, `MIPS16Loader`, `MIPS16SDK` and `MIPS16Pipeline`
 cover unsigned/signed immediate boundaries, EXTEND/truncation, compact register
 fields, strict unsupported forms, local ISA evidence, physical pagination,
 two-byte slots, direct/indirect target modes and image-free return proofs.
-The literal scalar reference runs on pinned Unicorn's 24Kf model.
-`mips16-roundtrip.py` recompiles seven scalar/control leaves through HighC and
+The literal scalar/memory reference runs on pinned Unicorn's 24Kf model.
+Memory tests cover all compact register fields, short/extended offsets,
+PC alignment before displacement, transfer-head PC bases in slots, exact output
+bytes, and LowIR fault order even for dead results. Call tests check physical
+widths, tagged links, target capture, conflicting mode evidence in discovery
+and rejection of unproved cross-call return identities.
+`mips16-roundtrip.py` recompiles twelve scalar/control/memory/call functions through HighC and
 LLVMC, in both byte orders at O0/O2. It checks independent results, stack and
 callee-saved GPR preservation, both incoming return-mode tags, ELF mode
 flags and function tags under an adverse microMIPS compiler default.
 An instruction in the caller's selected ISA executes after each return, so
-checking only the canonical return address cannot hide a lost mode tag. GNU MIPS
+checking only the canonical return address cannot hide a lost mode tag.
+Call tests disable inlining and sibling-call optimization and require one actual
+entry into the linked MIPS16 or classic callee. LLVMC callees are decompiled and
+linked as separate objects, retaining their ELF mode tags. PC-pool accesses and
+LLVMC original-storage declarations retain the original data mapping. GNU MIPS
 as and ld are required; LLVM's integrated assembler/linker do not qualify this
 MIPS16 route. Pass the executables explicitly:
 
@@ -22920,7 +22971,10 @@ LIBUNICORN_PATH=/path/to/repo-pinned-unicorn-library \
 
 The runner retires each generated source, assembly, object and ELF after its
 readers finish; commands, hashes, observations and bounded failure evidence
-remain. These leaves do not qualify omitted MIPS16 memory, calls or ABI forms.
+remain. Source memory equivalence requires valid, accessible, target-aligned
+ordinary RAM accesses; ordinary dead-load fault delivery remains unqualified
+as documented in [MIPS support](mips.md#ordinary-memory-source-qualification).
+These functions do not qualify omitted MIPS16 instructions or general ABI forms.
 
 ### MIPS decode/lift and firmware performance
 

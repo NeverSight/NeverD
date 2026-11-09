@@ -93,6 +93,10 @@ struct PointerWord {
 std::optional<PointerWord> decodePointerWord(uint64_t Raw,
                                              const ChainFormat &Format);
 
+/// The relocatable-object payload contains a signed addend and a signing
+/// schema, not a linked-image target or chain link.
+std::optional<PointerWord> decodeObjectPointerWord(uint64_t Raw);
+
 } // namespace neverd::macho_loader::arm64e
 
 #endif // NEVERD_LOADER_MACHO_MACHOARM64E_H

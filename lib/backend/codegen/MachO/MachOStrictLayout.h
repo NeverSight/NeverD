@@ -119,6 +119,106 @@ struct MachOFileRange {
   uint64_t HeaderOff = 0;
 };
 
+/// Enumerate external load-command payloads after structural validation. Zero
+/// bytes still belong to their declared owner; unknown commands reject reuse.
+inline bool collectMachOPayloadRanges(llvm::ArrayRef<uint8_t> Binary,
+                                      std::vector<MachOFileRange> &Ranges) {
+  using namespace llvm::MachO;
+  bool Valid = true;
+  const auto Owner = [&](uint64_t Off, uint64_t Size) {
+    if (!Size)
+      return;
+    if (!rangeInBounds(Off, Size, Binary.size())) {
+      Valid = false;
+      return;
+    }
+    Ranges.push_back({Off, Off + Size});
+  };
+  forEachMachOLoadCommand(
+      Binary.data(), Binary.size(),
+      [&](const uint8_t *C, uint32_t ID, uint32_t, bool Is64) {
+        if (ID == getMachOSegmentCmdID(Is64)) {
+          auto G = readMachOSegment(C, Is64);
+          auto *P = C + getMachOSegmentCmdSize(Is64);
+          for (unsigned I = 0; I < G.NSects;
+               ++I, P += getMachOSectionSize(Is64)) {
+            if (Is64) {
+              const auto *S = reinterpret_cast<const section_64 *>(P);
+              Owner(S->reloff, uint64_t(S->nreloc) * 8);
+            } else {
+              const auto *S = reinterpret_cast<const section *>(P);
+              Owner(S->reloff, uint64_t(S->nreloc) * 8);
+            }
+          }
+          return;
+        }
+        switch (ID) {
+        case LC_SYMTAB: {
+          const auto *T = reinterpret_cast<const symtab_command *>(C);
+          Owner(T->symoff,
+                uint64_t(T->nsyms) * (Is64 ? sizeof(nlist_64) : sizeof(nlist)));
+          Owner(T->stroff, T->strsize);
+          break;
+        }
+        case LC_DYSYMTAB: {
+          const auto *D = reinterpret_cast<const dysymtab_command *>(C);
+          Owner(D->tocoff, uint64_t(D->ntoc) * 8);
+          Owner(D->modtaboff, uint64_t(D->nmodtab) * (Is64 ? 56 : 52));
+          Owner(D->extrefsymoff, uint64_t(D->nextrefsyms) * 4);
+          Owner(D->indirectsymoff, uint64_t(D->nindirectsyms) * 4);
+          Owner(D->extreloff, uint64_t(D->nextrel) * 8);
+          Owner(D->locreloff, uint64_t(D->nlocrel) * 8);
+          break;
+        }
+        case LC_DYLD_INFO:
+        case LC_DYLD_INFO_ONLY: {
+          const auto *D = reinterpret_cast<const dyld_info_command *>(C);
+          Owner(D->rebase_off, D->rebase_size);
+          Owner(D->bind_off, D->bind_size);
+          Owner(D->weak_bind_off, D->weak_bind_size);
+          Owner(D->lazy_bind_off, D->lazy_bind_size);
+          Owner(D->export_off, D->export_size);
+          break;
+        }
+        case LC_DYLD_CHAINED_FIXUPS:
+        case LC_DYLD_EXPORTS_TRIE:
+        case LC_FUNCTION_STARTS:
+        case LC_DATA_IN_CODE:
+        case LC_CODE_SIGNATURE: {
+          const auto *D = reinterpret_cast<const linkedit_data_command *>(C);
+          Owner(D->dataoff, D->datasize);
+          break;
+        }
+        case LC_NOTE: {
+          const auto *N = reinterpret_cast<const note_command *>(C);
+          Owner(N->offset, N->size);
+          break;
+        }
+        case LC_MAIN:
+        case LC_UNIXTHREAD:
+        case LC_UUID:
+        case LC_BUILD_VERSION:
+        case LC_VERSION_MIN_MACOSX:
+        case LC_VERSION_MIN_IPHONEOS:
+        case LC_VERSION_MIN_TVOS:
+        case LC_VERSION_MIN_WATCHOS:
+        case LC_LOAD_DYLINKER:
+        case LC_ID_DYLIB:
+        case LC_LOAD_DYLIB:
+        case LC_LOAD_WEAK_DYLIB:
+        case LC_REEXPORT_DYLIB:
+        case LC_LOAD_UPWARD_DYLIB:
+        case LC_RPATH:
+        case LC_SOURCE_VERSION:
+          break;
+        default:
+          Valid = false;
+          break;
+        }
+      });
+  return Valid;
+}
+
 inline bool collectMachOFileRanges(llvm::ArrayRef<uint8_t> Binary,
                                    std::vector<MachOFileRange> &Segments,
                                    std::vector<MachOFileRange> &Sections) {
@@ -178,8 +278,7 @@ inline bool collectMachOFileRanges(llvm::ArrayRef<uint8_t> Binary,
           }
           const uint64_t Address = Is64 ? Section64->addr : Section32->addr;
           const uint64_t Size = Is64 ? Section64->size : Section32->size;
-          const uint32_t FileOff =
-              Is64 ? Section64->offset : Section32->offset;
+          const uint32_t FileOff = Is64 ? Section64->offset : Section32->offset;
           const uint32_t Flags = Is64 ? Section64->flags : Section32->flags;
           uint64_t SectionVMEnd = 0;
           if (!checkedAdd(Address, Size, SectionVMEnd) ||

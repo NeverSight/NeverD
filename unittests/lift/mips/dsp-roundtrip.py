@@ -23,10 +23,13 @@ from mips_validation_artifacts import MIPSValidationArtifacts
 FUNCTIONS = ("dsp_read", "dsp_write", "dsp_partial", "dsp_add",
              "dsp_saturate", "dsp_zero", "dsp_read_then_write",
              "dsp_return_slot", "dsp_plain_add", "dsp_sub",
-             "dsp_sub_saturate", "dsp_sub_zero")
+             "dsp_sub_saturate", "dsp_sub_zero", "dsp_half_add",
+             "dsp_half_add_saturate", "dsp_half_sub", "dsp_half_sub_saturate")
 INITIAL_STATES = (0, 0x01100021, 0x0fff7fbf)
 INPUTS = ((0, 0), (0xff01807f, 0x02018081), (0x11223344, 0x55667788),
-          (0xffffffff, 1), (0x80808080, 0x80808080))
+          (0xffffffff, 1), (0x80808080, 0x80808080),
+          (0x7fff8000, 0x0001ffff), (0x80007fff, 0x7fff8000),
+          (0x80008000, 0x80008000))
 
 
 def digest(path):
@@ -49,6 +52,16 @@ def expected(function, initial, arguments):
         mask = 0x0f00203f  # position, carry and condition groups
         state = (initial & ~mask) | (a & mask)
         return state, state
+    if function.startswith("dsp_half_"):
+        value, state = 0, initial
+        for lane in range(2):
+            left, right = (a >> (lane * 16)) & 65535, (b >> (lane * 16)) & 65535
+            left = left - 65536 if left >= 32768 else left
+            right = right - 65536 if right >= 32768 else right
+            total = left - right if "_sub" in function else left + right
+            state |= 0x100000 if total < -32768 or total > 32767 else 0
+            value |= ((max(-32768, min(total, 32767)) if function.endswith("saturate") else total) & 65535) << (lane * 16)
+        return value, state
     value, state = 0, initial
     for lane in range(4):
         left, right = (a >> (lane * 8)) & 255, (b >> (lane * 8)) & 255

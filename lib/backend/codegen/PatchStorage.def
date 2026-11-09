@@ -1,0 +1,24 @@
+//===- PatchStorage.def - Replacement storage contracts -------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef PATCH_STORAGE_TEXT
+#define PATCH_STORAGE_TEXT(Name, Text)
+#endif
+
+PATCH_STORAGE_TEXT(kPrefix, "patch storage: ")
+PATCH_STORAGE_TEXT(kImage, "invalid image or page alignment")
+PATCH_STORAGE_TEXT(kELFRelroPrefix, ".data.rel.ro")
+PATCH_STORAGE_TEXT(
+    kELFRelro, "post-relocation read-only storage requires RELRO registration")
+PATCH_STORAGE_TEXT(kExternal,
+                   "external writable storage has no installation owner")
+PATCH_STORAGE_TEXT(kExtent, "section exceeds its placement image")
+PATCH_STORAGE_TEXT(kSplit,
+                   "writable storage is not separated from code by whole pages")
+PATCH_STORAGE_TEXT(
+    kRelro, "RELRO requires a separate leading Mach-O writable page range")
+
+#undef PATCH_STORAGE_TEXT

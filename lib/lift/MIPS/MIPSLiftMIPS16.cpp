@@ -38,8 +38,16 @@ MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
   const bool Little = archLittleEndian(Target);
   const uint16_t First = readTargetEndian<uint16_t>(Instruction.bytes, Little);
   const bool Extended = First >> 11 == 0x1e;
-  if (Instruction.size != (Extended ? 4 : 2))
+  const bool DirectCall = First >> 11 == 3;
+  if (Instruction.size != (Extended || DirectCall ? 4 : 2))
     return std::nullopt;
+  if (DirectCall) {
+    const uint16_t Second =
+        readTargetEndian<uint16_t>(Instruction.bytes + 2, Little);
+    const uint32_t Index =
+        ((First & 31) << 21) | (((First >> 5) & 31) << 16) | Second;
+    return Encoding{(uint32_t(First & 0x400 ? 29 : 3) << 26) | Index, 2};
+  }
   const uint16_t Half =
       Extended ? readTargetEndian<uint16_t>(Instruction.bytes + 2, Little)
                : First;
@@ -52,6 +60,24 @@ MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
   const uint16_t SignedImmediate =
       Extended ? Immediate : uint16_t(int16_t(int8_t(Immediate)));
   switch (Major) {
+#define NEVERD_MIPS16_MEMORY(Major, Classic, Scale)                            \
+  case Major:                                                                  \
+    return Encoding{immediateForm(                                             \
+        Classic, RY, RX, Extended ? Immediate : (Half & 31) << Scale)};
+#include "neverd/lift/MIPS/MIPS16Integer.def"
+  case 0x00:   // ADDIU rx,sp,offset
+  case 0x01:   // ADDIU rx,pc,offset
+  case 0x12:   // LW rx,offset(sp)
+  case 0x16:   // LW rx,offset(pc)
+  case 0x1a: { // SW rx,offset(sp)
+    if (Extended && (Half & 0xe0))
+      return std::nullopt;
+    const bool PCRelative = Major == 1 || Major == 0x16;
+    const unsigned Opcode = Major < 2 ? 9 : Major == 0x1a ? 43 : 35;
+    return Encoding{immediateForm(Opcode, RX, PCRelative ? 0 : 29,
+                                  Extended ? Immediate : (Half & 255) << 2),
+                    0, false, PCRelative};
+  }
 #define NEVERD_MIPS16_IMMEDIATE(Major, Classic, Destination, Source, Signed)   \
   case Major:                                                                  \
     if (Extended && (Half & 0xe0))                                             \
@@ -77,6 +103,9 @@ MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
       return std::nullopt;
     if (Minor <= 1) // BTEQZ / BTNEZ use GPR24 as T.
       return Encoding{immediateForm(Minor ? 5 : 4, 0, 24, SignedImmediate)};
+    if (Minor == 2) // SW ra,offset(sp)
+      return Encoding{
+          immediateForm(43, 31, 29, Extended ? Immediate : (Half & 255) << 2)};
     if (Minor == 3) // ADJSP
       return Encoding{immediateForm(
           9, 29, 29, Extended ? Immediate : uint16_t(int8_t(Immediate) * 8))};
@@ -86,6 +115,8 @@ MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
           Destination ? registerForm(33, Destination, compactRegister(Half & 7))
                       : 0};
     }
+    if (!Extended && Minor == 7) // MOVE compact GPR, full GPR
+      return Encoding{registerForm(33, RY, Half & 31)};
     return std::nullopt;
   }
   case 0x1c: // ADDU / SUBU
@@ -98,8 +129,11 @@ MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
       return std::nullopt;
     if (Half == 0xe820 || Half == 0xe8a0) // JR / JRC ra
       return Encoding{registerForm(8, 0, 31), Half == 0xe820 ? 2u : 0u};
-    if ((Half & 255) == 0) // JR compact GPR
-      return Encoding{registerForm(8, 0, RX), 2};
+    if (!(Half & 0x3f)) { // JR/JALR/JRC/JALRC compact GPR
+      const unsigned Kind = (Half >> 6) & 3;
+      return Encoding{registerForm(Kind & 1 ? 9 : 8, Kind & 1 ? 31 : 0, RX),
+                      Kind < 2 ? 2u : 0u};
+    }
     switch (Half & 31) {
 #define NEVERD_MIPS16_LOGICAL(Minor, Classic)                                  \
   case Minor:                                                                  \
@@ -113,6 +147,17 @@ MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
   default:
     return std::nullopt;
   }
+}
+
+bool MIPSLifter::liftPCRelative(State &S, uint32_t Word, va_t BasePC) const {
+  // MD00076: align the executing instruction's first halfword (or its
+  // transfer head in a slot), then add the offset. Never align the sum.
+  const uint32_t Base = uint32_t(BasePC) & ~uint32_t(3);
+  if (Word >> 26 == 9) {
+    S.write((Word >> 16) & 31, NdVar::cst(uint32_t(Base + int16_t(Word)), 4));
+    return true;
+  }
+  return liftMemory(S, Word, NdVar::cst(Base, 4));
 }
 
 } // namespace neverd

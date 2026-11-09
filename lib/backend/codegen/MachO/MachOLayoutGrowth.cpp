@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Reserve native metadata without padding.
+/// Reserve native metadata while preserving original code and data addresses.
 //===----------------------------------------------------------------------===//
 
 #include "neverd/backend/codegen/MachO/MachOLayoutGrowth.h"
@@ -31,6 +31,8 @@
 
 namespace neverd {
 namespace {
+#define MACHO_LAYOUT_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "MachOLayoutGrowth.def"
 #define NEVERD_MACHO_FRAME_VALUE(Type, Name, Value) constexpr Type Name = Value;
 #define NEVERD_MACHO_FRAME_TEXT(Name, Text) constexpr char Name[] = Text;
 #include "neverd/backend/codegen/MachO/MachOFrameRelocation.def"
@@ -77,6 +79,38 @@ llvm::Expected<uint64_t> moveTextSection(std::vector<uint8_t> &Binary, Arch A,
         });
     if (VA)
       std::copy(Content.begin(), Content.end(), Binary.begin() + Off);
+  }
+  // Compact tables use section/image-relative references, so moving them into
+  // an existing TEXT tail does not change their payload. EH frames are already
+  // encoded for a planned address and must retain that separate contract.
+  if (!VA && Name == kCompactSection) {
+    std::vector<macho_patch_detail::MachOFileRange> Segments, Sections,
+        Payloads;
+    if (macho_patch_detail::collectMachOFileRanges(Binary, Segments,
+                                                   Sections) &&
+        macho_patch_detail::collectMachOPayloadRanges(Binary, Payloads)) {
+      for (const auto &Segment : Segments) {
+        const auto Fields =
+            readMachOSegment(Binary.data() + Segment.HeaderOff, H.Is64);
+        if (readMachOName(Fields.SegName) != kMetadataTextSegment)
+          continue;
+        uint64_t Tail =
+            std::max(Segment.Begin, uint64_t(H.HeaderSize) + H.SizeOfCmds);
+        for (const auto *Ranges : {&Sections, &Payloads})
+          for (const auto &Range : *Ranges)
+            if (Range.Begin < Segment.End && Segment.Begin < Range.End)
+              Tail = std::max(Tail, Range.End);
+        if (!macho_patch_detail::checkedAlignUp(Tail, alignof(uint64_t),
+                                                Tail) ||
+            Tail > Segment.End || Capacity > Segment.End - Tail ||
+            !llvm::all_of(llvm::ArrayRef<uint8_t>(Binary).slice(Tail, Capacity),
+                          [](uint8_t Byte) { return Byte == 0; }))
+          continue;
+        VA = Fields.VMAddr + (Tail - Segment.Begin);
+        std::copy(Content.begin(), Content.end(), Binary.begin() + Tail);
+        break;
+      }
+    }
   }
   if (!VA) {
     MachOPatcher P;

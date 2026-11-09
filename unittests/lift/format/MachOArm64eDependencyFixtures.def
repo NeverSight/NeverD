@@ -66,6 +66,7 @@ ARM64E_DEPENDENCY_VALUE(uint64_t, kInstalledTarget, 0x900)
 ARM64E_DEPENDENCY_VALUE(uint16_t, kInstalledDiversity, 0x1234)
 ARM64E_DEPENDENCY_VALUE(uint64_t, kBindMask, 0x4000000000000000ULL)
 ARM64E_DEPENDENCY_VALUE(uint64_t, kLargePage, 0x4000)
+ARM64E_DEPENDENCY_VALUE(uint64_t, kAlignedMutableOffset, 4 * kLargePage)
 ARM64E_DEPENDENCY_VALUE(uint64_t, kFarSlot, 0x3000)
 ARM64E_DEPENDENCY_VALUE(uint64_t, kNewImportAddend, 0x100000004ULL)
 ARM64E_DEPENDENCY_VALUE(uint64_t, kImportLimit16, 0xffff)
@@ -151,6 +152,18 @@ ARM64E_DEPENDENCY_TEXT(
     kWideThreadedProgram,
     "\xd0\x01\x20\xf1\xff\x03\x40_target\0\x51\x60\x7c\x90\x71\0\xd1\0")
 ARM64E_DEPENDENCY_VALUE(int64_t, kWideThreadedLibraryOrdinal, 0xfff1)
+
+ARM64E_DEPENDENCY_TEXT(kRelroSegment, "__ND_CONST")
+ARM64E_DEPENDENCY_TEXT(kMutableSegment, "__ND_DATA")
+ARM64E_DEPENDENCY_TEXT(kAdditionalLibrary, "@rpath/libneverd_provider.dylib")
+ARM64E_DEPENDENCY_TEXT(kAdditionalSymbol, "neverd_provider")
+ARM64E_DEPENDENCY_TEXT(kAdditionalNativeSymbol, "_neverd_provider")
+ARM64E_DEPENDENCY_TEXT(kUnusedDependency, "unused_provider")
+ARM64E_DEPENDENCY_VALUE(uint32_t, kReadOnlySegmentFlag, 0x10)
+ARM64E_DEPENDENCY_VALUE(uint8_t, kOccupiedHeader, 0x55)
+ARM64E_DEPENDENCY_VALUE(uint64_t, kObjectSigningWord, 0x80071234fffffffcULL)
+ARM64E_DEPENDENCY_VALUE(uint64_t, kObjectReservedWord, 0x800f1234fffffffcULL)
+ARM64E_DEPENDENCY_VALUE(int64_t, kObjectSignedAddend, -4)
 
 #undef ARM64E_DEPENDENCY_VALUE
 #undef ARM64E_DEPENDENCY_TEXT

@@ -82,7 +82,11 @@ enum class VectorOperation {
   SignedLess,
   UnsignedLess,
   SignedLessEqual,
-  UnsignedLessEqual
+  UnsignedLessEqual,
+  SignedMaximum,
+  UnsignedMaximum,
+  SignedMinimum,
+  UnsignedMinimum
 };
 struct VectorCase {
   uint32_t Encoding;
@@ -109,7 +113,9 @@ std::vector<uint8_t> vectorExpected(const VectorCase &Case,
   std::vector<uint8_t> Result(16);
   if (Case.Operation >= VectorOperation::Equal) {
     const bool Signed = Case.Operation == VectorOperation::SignedLess ||
-                        Case.Operation == VectorOperation::SignedLessEqual;
+                        Case.Operation == VectorOperation::SignedLessEqual ||
+                        Case.Operation == VectorOperation::SignedMaximum ||
+                        Case.Operation == VectorOperation::SignedMinimum;
     const bool Inclusive = Case.Operation == VectorOperation::SignedLessEqual ||
                            Case.Operation == VectorOperation::UnsignedLessEqual;
     // Compare bytes from most significant to least significant. Biasing only
@@ -121,6 +127,14 @@ std::vector<uint8_t> vectorExpected(const VectorCase &Case,
         const unsigned X = A[Base + J - 1] ^ Bias;
         const unsigned Y = B[Base + J - 1] ^ Bias;
         Order = X < Y ? -1 : X > Y ? 1 : 0;
+      }
+      if (Case.Operation >= VectorOperation::SignedMaximum) {
+        const bool Maximum = Case.Operation == VectorOperation::SignedMaximum ||
+                             Case.Operation == VectorOperation::UnsignedMaximum;
+        const auto Source = (Maximum ? Order > 0 : Order < 0) ? A : B;
+        std::copy_n(Source.begin() + Base, Case.ElementBytes,
+                    Result.begin() + Base);
+        continue;
       }
       const bool True = Case.Operation == VectorOperation::Equal ? Order == 0
                         : Inclusive                              ? Order <= 0
