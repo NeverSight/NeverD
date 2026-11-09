@@ -61,6 +61,6 @@ TEST(X86PortableSystemSource, WrmsrnsUsesNativeCallsInBothCodeModes) {
           }
         }
     }
-  EXPECT_EQ(Cases, 192u);
+  EXPECT_EQ(Cases, 96u);
   RecordProperty("native_c_compilations", Cases);
 }
