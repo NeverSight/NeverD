@@ -389,6 +389,16 @@ const char *neverd_func_type_json(neverd_session_t Sess, neverd_va_t Entry,
   llvm::json::Object Reply = declarationReply(*S, *Library, Text, Read);
   Reply["entry"] = vaHex(Entry);
   Reply["stated"] = !Asked && !Index && HasStated;
+  // Whether a declaration stated for the function hides the prototype its
+  // name binds, which analysis reads (neverd_user_facts_analysis_reads_json):
+  // that reads the name, never the declaration.
+  {
+    const std::string Error = S->LastError;
+    (void)S->decompileDebug();
+    S->LastError = Error;
+    const LocalTypesDebugContext *Local = S->LocalTypesDbg.get();
+    Reply["hides_prototype"] = Local && Local->hidesPrototype(Entry);
+  }
   return dupStr(jsonToString(llvm::json::Value(std::move(Reply))));
 }
 
