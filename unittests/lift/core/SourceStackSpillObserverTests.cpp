@@ -88,9 +88,13 @@ BinaryImage fixture(BinaryFormat Format, bool ObserveRestored,
       0x52,                                     // push rdx
       0x48, 0x8D, 0x15, 3,    0,    0,  0,      // lea rdx,[rip+3]
       0xFF, 0xE2, 0xE9,                         // jmp rdx; stray E9
-      0x5A, 0x9C, 0x9D,                         // pop rdx; pushfq; popfq
+      0x5A,                                     // pop rdx
+      0x39, 0xC0,                               // cmp eax,eax
+      0x9C, 0x9D,                               // pushfq; popfq
       0x48, 0xC7, 0x44, 0x24, 0xF8, 19, 0, 0, 0 // mov [rsp-8],19
   };
+  // Define the status flags explicitly: this fixture observes RDX and stack
+  // storage, not the opaque observer's unavailable arithmetic flags.
   Text.Data.insert(Text.Data.end(), std::begin(Body), std::end(Body));
   if (ObserveRestored)
     Text.Data.insert(Text.Data.end(), {0x48, 0x89, 0xD0}); // mov rax,rdx

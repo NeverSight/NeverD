@@ -23,11 +23,16 @@ from mips_validation_artifacts import MIPSValidationArtifacts
 
 VECTOR_FUNCTIONS = ("msa_add_b", "msa_add_h", "msa_add_d", "msa_sub_b", "msa_sub_h",
                     "msa_sub_w", "msa_sub_d", "msa_and", "msa_or", "msa_nor", "msa_xor") + tuple(
-    f"msa_{operation}_{width}" for operation in ("ceq", "clt_s", "clt_u", "cle_s", "cle_u", "max_s", "max_u", "min_s", "min_u")
+    f"msa_{operation}_{width}" for operation in (
+        "ceq", "clt_s", "clt_u", "cle_s", "cle_u", "max_s", "max_u", "min_s", "min_u",
+        "sll", "sra", "srl", "bclr", "bset", "bneg", "mul")
     for width in ("b", "h", "w", "d"))
 FUNCTIONS = tuple(f"msa_lane{i}" for i in range(4)) + ("msa_mix", "msa_store", "msa_return_slot") + VECTOR_FUNCTIONS
 INPUTS = [(0, 0, 0, 0), (0xffffffff, 0x7fffffff, 0x80000000, 1),
           (0x11223344, 0x55667788, 0x99aabbcc, 0xddeeff00), (1, 2, 3, 4)]
+# The first D count is d | (b << 32); the first input has sign bit c[31].
+INPUTS += [(0, 0xffffffff, 0x80000000, count)
+           for count in (0, 63, 64, 65, 127)]
 rng = random.Random(0x4d5341)
 INPUTS += [tuple(rng.getrandbits(32) for _ in range(4)) for _ in range(12)]
 SAVED = {index: (0x1234000000000000 | (index << 32) | (0x87654300 + index))
@@ -45,7 +50,18 @@ def expected(function, arguments, little):
         left = sum(v << (32 * i) for i, v in enumerate((b, c, d, b ^ d)))
         right = sum(v << (32 * i) for i, v in enumerate((d, b, c, c ^ d)))
         operation = function.removeprefix("msa_")
-        if operation.startswith(("add_", "sub_")):
+        if operation.startswith(("sll_", "sra_", "srl_", "bclr_", "bset_", "bneg_", "mul_")):
+            bits = {"b": 8, "h": 16, "w": 32, "d": 64}[operation[-1]]
+            mask, value = (1 << bits) - 1, 0
+            for shift in range(0, 128, bits):
+                x, y = (left >> shift) & mask, (right >> shift) & mask
+                count = y & (bits - 1)
+                signed = x - (1 << bits) if x & (1 << (bits - 1)) else x
+                result = {"sll": x << count, "srl": x >> count, "sra": signed >> count,
+                          "bclr": x & ~(1 << count), "bset": x | (1 << count),
+                          "bneg": x ^ (1 << count), "mul": x * y}[operation[:-2]]
+                value |= (result & mask) << shift
+        elif operation.startswith(("add_", "sub_")):
             bits = {"b": 8, "h": 16, "w": 32, "d": 64}[operation[-1]]
             mask = (1 << bits) - 1
             value = 0

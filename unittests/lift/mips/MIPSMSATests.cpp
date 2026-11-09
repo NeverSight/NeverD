@@ -78,6 +78,13 @@ enum class VectorOperation {
   Or,
   Nor,
   Xor,
+  ShiftLeft,
+  ShiftRightSigned,
+  ShiftRight,
+  ClearBit,
+  SetBit,
+  NegateBit,
+  Multiply,
   Equal,
   SignedLess,
   UnsignedLess,
@@ -99,6 +106,11 @@ constexpr VectorCase VectorCases[] = {
 #include "MIPSMSAVectorFixtures.def"
 };
 constexpr std::array<uint32_t, 4> VectorInputs[][2] = {
+    {{0xffffffff, 0x7fffffff, 1, 0x80000000}, {63, 0xffffffff, 64, 0x80000000}},
+    {{0x80000000, 0x80000000, 0xffffffff, 0x7fffffff},
+     {65, 0x12345678, 127, 0xffffffff}},
+    {{0x80008080, 0x7fff7fff, 0x80000000, 0xffffffff},
+     {0x08080707, 0x10100f0f, 32, 31}},
     {{0xffffffff, 0xffffffff, 0, 0}, {1, 0, 1, 0}},
     {{0x00ff00ff, 0x0000ffff, 0x7fffffff, 0x80000000},
      {0x01010101, 0x00010001, 0x87654321, 0x7fffffff}},
@@ -140,6 +152,44 @@ std::vector<uint8_t> vectorExpected(const VectorCase &Case,
                         : Inclusive                              ? Order <= 0
                                                                  : Order < 0;
       std::fill_n(Result.begin() + Base, Case.ElementBytes, True ? 255 : 0);
+    }
+    return Result;
+  }
+  if (Case.Operation >= VectorOperation::ShiftLeft &&
+      Case.Operation <= VectorOperation::Multiply) {
+    const unsigned Bits = Case.ElementBytes * 8;
+    for (unsigned Base = 0; Base != 16; Base += Case.ElementBytes) {
+      const unsigned Count = B[Base] & (Bits - 1);
+      if (Case.Operation == VectorOperation::Multiply) {
+        unsigned Carry = 0;
+        for (unsigned Byte = 0; Byte != Case.ElementBytes; ++Byte) {
+          unsigned Sum = Carry;
+          for (unsigned J = 0; J <= Byte; ++J)
+            Sum += unsigned(A[Base + J]) * B[Base + Byte - J];
+          Result[Base + Byte] = uint8_t(Sum);
+          Carry = Sum >> 8;
+        }
+        continue;
+      }
+      for (unsigned Bit = 0; Bit != Bits; ++Bit) {
+        const auto Get = [&](unsigned N) {
+          return (A[Base + N / 8] >> (N % 8)) & 1;
+        };
+        unsigned Value = Get(Bit);
+        if (Case.Operation == VectorOperation::ShiftLeft)
+          Value = Bit < Count ? 0 : Get(Bit - Count);
+        else if (Case.Operation == VectorOperation::ShiftRight ||
+                 Case.Operation == VectorOperation::ShiftRightSigned)
+          Value = Bit + Count < Bits ? Get(Bit + Count)
+                  : Case.Operation == VectorOperation::ShiftRightSigned
+                      ? Get(Bits - 1)
+                      : 0;
+        else if (Bit == Count)
+          Value = Case.Operation == VectorOperation::ClearBit ? 0
+                  : Case.Operation == VectorOperation::SetBit ? 1
+                                                              : !Value;
+        Result[Base + Bit / 8] |= Value << (Bit % 8);
+      }
     }
     return Result;
   }
@@ -338,7 +388,7 @@ TEST_P(MIPSMSA, ReusedDecoderConsumesRevisionAndFeatureEvidence) {
 TEST_P(MIPSMSA, UnadmittedFormatsRefuseBeforeEmittingEffects) {
   MIPSLifter Lifter(GetParam());
   Lifter.setMSAEnabled(true);
-  for (uint32_t Word : {0x7b03201eu, 0x79342819u, 0x78f00099u, 0x78000012u}) {
+  for (uint32_t Word : {0x7b03201eu, 0x79342819u, 0x78f00099u, 0x78800012u}) {
     cs_insn Instruction{};
     Instruction.address = 0x10000;
     Instruction.size = 4;

@@ -151,7 +151,7 @@ TEST_P(MicroMIPSFlow, CallableTagsAndCanonicalDirectDestinationsStayDistinct) {
   EXPECT_EQ(mips::serializedCodeTarget(Image, 0x1004), 0x1004u);
   EXPECT_FALSE(mips::serializedCodeTarget(Image, 0x1000));
   EXPECT_FALSE(mips::serializedCodeTarget(Image, 0x1005));
-  for (uint64_t Raw : {0x1002ULL, 0x100000001ULL, InvalidVA}) {
+  for (uint64_t Raw : {va_t{0x1002}, va_t{0x100000001}, InvalidVA}) {
     auto Invalid =
         canonicalizeLowControlTarget(Raw, InstructionMode::MicroMIPS,
                                      LowInstructionTargetMode::FromTargetBit0);

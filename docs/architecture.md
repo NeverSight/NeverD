@@ -10076,6 +10076,14 @@ For Win64 calls LowToMed publishes those argument registers as CALL inputs.
 SSA then sees a caller's pass-through argument, and HighC passes exactly the
 arguments the callee reads. Stack arguments follow the 32-byte home area.
 
+SSA includes explicitly read condition flags in ordinary call clobbers. A
+post-call carry or condition cannot borrow its pre-call definition; both C
+routes retain an explicit unknown observation until a later instruction defines
+it. Unread arithmetic flags add no register-summary work. The x86 direction
+flag retains its separate ordinary ABI clear-state rule. See the
+[Windows x64 convention](https://learn.microsoft.com/en-us/cpp/build/x64-software-conventions)
+and [AAPCS64 status register contract](https://github.com/ARM-software/abi-aa/blob/main/aapcs64/aapcs64.rst).
+
 Win64 home-spill input elision accepts ordinary stores of an incoming
 register's low bytes only when their home slot is unread and does not escape.
 FS/GS and ordered stores keep their register observations. Returning an
@@ -15536,6 +15544,13 @@ storage and low F views without assigning a floating ABI to ordinary integers.
 and multi-block source before optimization. It does not narrow LowIR register
 coverage or invent initial machine state.
 
+`MedMIPSSourceAccumulators` checks HI/LO inputs immediately after SSA and before
+propagation or return inference. It follows read PHIs and the shared call-clobber
+identities, refusing entry or call-clobbered state without a C ABI carrier.
+Classic and compressed forms share this owner; unknown HI/LO cannot disappear
+through a void-return inference. Defined multiply and explicit accumulator
+writes continue through the existing scalar pipeline.
+
 The focused MIPS loader, integer, flow, SDK and pipeline suites cover these
 contracts. Owned kernels are recompiled from HighC and LLVMC for the original
 MIPS target and compared with their assembly originals in pinned Unicorn.
@@ -18672,6 +18687,9 @@ Source register-call recovery runs after that original CALL-slot guard. The
 callee-effect owner retains a bounded, complete, straight-line x64 scalar/CPUID
 body only when it has no memory operations, internal calls, exceptional roots,
 unmodeled exception metadata, direction-flag writes or nonordinary return.
+Plain scalar arithmetic and conditional selects use the same contract without
+requiring a CPU query. Return-only scalar bodies are not retained; an extra
+volatile register result must need more than the existing exit-constant summary.
 `PipelineRegisterCalls.cpp` uses the ordinary LowIR
 converter to capture the caller's extra result registers; it does not duplicate
 partial-register or intrinsic semantics. An incoming scalar register slice may
@@ -18679,8 +18697,10 @@ bind only to the bytes published by that occurrence's ordinary integer argument
 contract. A wider actual is sliced; absent positions, vector slots and missing
 high bytes cannot supply an input. Required results must have no other entry
 dependencies, and every written ABI-preserved GPR must equal its incoming value.
-Each original query is then expanded once, in order, with fresh SSA values
-shared by all outputs. Native lifting retains the original CALL.
+Observed call-clobbered flags refuse the GPR-only source expansion; unread
+flag definitions require no result. Each original body is expanded once, in
+order, with fresh SSA values shared by all outputs. Native lifting retains the
+original CALL.
 The cache accounts for retained leaf bodies, and per-body/per-function work
 bounds, including argument slices, prevent unbounded expansion. Unbound-entry,
 memory-using and other hardware leaves retain the ordinary unavailable-state

@@ -2029,7 +2029,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   const auto NativeFrameConvention = [&](const HighFunc &Function) {
     if (isMIPS(Opts.TheArch))
       OS << mips::dspSourceCAttribute(
-          Opts.Image,
+          Opts.TheArch, Opts.Image,
           MIPSScalarHelpers.count(Intrinsic::MIPSReadDSPControl) ||
               MIPSScalarHelpers.count(Intrinsic::MIPSWriteDSPControl));
     if (Opts.Image && isMIPS(Opts.TheArch))
@@ -5148,7 +5148,7 @@ void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
   // their wide arithmetic from introducing unmodeled DSPControl writes too.
   const bool PreserveDSPControl =
       isMIPS(Opts.TheArch) &&
-      (mips::imagePreservesDSPControl(Opts.Image) ||
+      (mips::sourcePreservesDSPControl(Opts.TheArch, Opts.Image) ||
        MIPSScalarHelpers.count(Intrinsic::MIPSReadDSPControl) ||
        MIPSScalarHelpers.count(Intrinsic::MIPSWriteDSPControl));
   if (PreserveDSPControl)

@@ -123,3 +123,92 @@ nop
 .end m16_classic_add
 .size m16_classic_add, .-m16_classic_add
 .set mips16
+
+begin m16_sllv
+move $2,$4
+sllv $2,$5
+jrc $31
+end m16_sllv
+
+begin m16_srlv
+move $2,$4
+srlv $2,$5
+jrc $31
+end m16_srlv
+
+begin m16_srav
+move $2,$4
+srav $2,$5
+jrc $31
+end m16_srav
+
+begin m16_shift_imm
+sll $2,$4,8
+srl $3,$5,31
+xor $2,$3
+sra $2,$2,7
+jrc $31
+end m16_shift_imm
+
+begin m16_cmp
+cmp $4,$5
+move $2,$24
+jrc $31
+end m16_cmp
+
+begin m16_slt
+slt $4,$5
+move $2,$24
+jrc $31
+end m16_slt
+
+begin m16_sltu
+sltu $4,$5
+move $2,$24
+jrc $31
+end m16_sltu
+
+begin m16_neg
+neg $2,$4
+jrc $31
+end m16_neg
+
+begin m16_mult
+mult $4,$5
+mfhi $2
+mflo $3
+xor $2,$3
+jrc $31
+end m16_mult
+
+begin m16_multu
+multu $4,$5
+mfhi $2
+mflo $3
+xor $2,$3
+jrc $31
+end m16_multu
+
+begin m16_mult_hi
+mult $4,$5
+mfhi $2
+jrc $31
+end m16_mult_hi
+
+begin m16_mult_lo
+mult $4,$5
+mflo $2
+jrc $31
+end m16_mult_lo
+
+begin m16_multu_hi
+multu $4,$5
+mfhi $2
+jrc $31
+end m16_multu_hi
+
+begin m16_multu_lo
+multu $4,$5
+mflo $2
+jrc $31
+end m16_multu_lo

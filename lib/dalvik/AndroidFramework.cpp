@@ -1190,7 +1190,8 @@ AndroidFrameworkState AndroidFramework::inspect(const Heap &heap,
                                                 const Program &program) const {
   AndroidFrameworkState result;
   if (binder_calls_start) {
-    auto &calls = result.binder_calls.emplace();
+    auto &calls =
+        result.binder_calls.emplace(AndroidFrameworkState::BinderCalls{});
     calls.start_milliseconds = *binder_calls_start;
     for (const auto &[uid, count] : binder_calls)
       calls.entries.push_back({uid, count});

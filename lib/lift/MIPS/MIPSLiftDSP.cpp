@@ -11,6 +11,8 @@
 #include "neverd/ir/intrinsics/MIPS/MIPSDSP.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
 
+#include <optional>
+
 namespace neverd {
 
 bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
@@ -55,6 +57,76 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
                        S.binary(NdOp::INT_AND, ReadControl(),
                                 NdVar::cst(mips::DSPControlBits & ~Bits, 4)));
     WriteControl(Value);
+    return true;
+  }
+
+  struct ShiftForm {
+    uint16_t Bytes;
+    bool Variable, Rounded;
+  };
+  std::optional<ShiftForm> Shift;
+  switch (*Kind) {
+#define NEVERD_MIPS_DSP_SHIFT(Name, Mask, Value, Bytes, Variable, Rounded)     \
+  case mips::DSPInstruction::Name:                                             \
+    Shift = ShiftForm{Bytes, Variable, Rounded};                               \
+    break;
+#include "neverd/ir/intrinsics/MIPS/MIPSDSP.def"
+  default:
+    break;
+  }
+  const bool Pack = *Kind == mips::DSPInstruction::PackHalfwords ||
+                    *Kind == mips::DSPInstruction::PackBytes;
+  if (Shift || Pack) {
+    // These enabled-DSP forms have no state effect or input dependency when
+    // their sole result is discarded.
+    if (!RD) {
+      S.emit(NdOp::NOP, {}, {});
+      return true;
+    }
+    const auto Right = S.read(RT);
+    NdVar Result = NdVar::cst(0, 4);
+    if (Pack) {
+      const auto Left = S.read(RS);
+      const unsigned Bytes =
+          *Kind == mips::DSPInstruction::PackHalfwords ? 2 : 1;
+      for (unsigned I = 0; I != 4 / Bytes; ++I) {
+        const bool FromLeft = I >= 2 / Bytes;
+        const unsigned Offset = ((I % (2 / Bytes)) * 2 + 1) * Bytes;
+        const auto Lane = S.makeTemp(Bytes);
+        S.emit(NdOp::SUBBYTES, Lane,
+               {FromLeft ? Left : Right, NdVar::cst(Offset, 4)});
+        auto Value = S.resize(Lane, 4);
+        if (I)
+          Value = S.binary(NdOp::INT_LEFT, Value, NdVar::cst(I * Bytes * 8, 4));
+        Result = S.binary(NdOp::INT_OR, Result, Value);
+      }
+    } else {
+      const unsigned Bits = Shift->Bytes * 8;
+      const uint16_t Wide = Shift->Bytes == 4 ? 8 : 4;
+      const auto Count = Shift->Variable ? S.binary(NdOp::INT_AND, S.read(RS),
+                                                    NdVar::cst(Bits - 1, 4))
+                                         : NdVar::cst(RS, 4);
+      for (unsigned I = 0; I != 4 / Shift->Bytes; ++I) {
+        const auto Lane = S.makeTemp(Shift->Bytes);
+        S.emit(NdOp::SUBBYTES, Lane, {Right, NdVar::cst(I * Shift->Bytes, 4)});
+        auto Value = S.resize(Lane, Wide, Shift->Bytes != 1);
+        // One extra precision bit implements rounding without count-1 or a
+        // shift by the word width, and also gives the identity for count zero.
+        if (Shift->Rounded)
+          Value = S.binary(NdOp::INT_LEFT, Value, NdVar::cst(1, Wide));
+        Value = S.binary(Shift->Bytes == 1 ? NdOp::INT_RIGHT : NdOp::INT_ASHR,
+                         Value, S.resize(Count, Wide));
+        if (Shift->Rounded)
+          Value = S.binary(NdOp::INT_ASHR,
+                           S.binary(NdOp::INT_ADD, Value, NdVar::cst(1, Wide)),
+                           NdVar::cst(1, Wide));
+        Value = S.resize(S.resize(Value, Shift->Bytes), 4);
+        if (I)
+          Value = S.binary(NdOp::INT_LEFT, Value, NdVar::cst(I * Bits, 4));
+        Result = S.binary(NdOp::INT_OR, Result, Value);
+      }
+    }
+    S.write(RD, Result);
     return true;
   }
 

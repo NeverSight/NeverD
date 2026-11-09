@@ -13,8 +13,13 @@
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
+#include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/LowToMedError.h"
+#include "neverd/ir/med/MIPS/MIPSSourceAccumulators.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/ELFLoader.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -35,6 +40,170 @@ using namespace neverd;
 namespace {
 
 class MIPSPipeline : public ::testing::TestWithParam<Arch> {};
+
+TEST_P(MIPSPipeline, AccumulatorSourceRequiresDefinedInputsAcrossEncodings) {
+  for (bool Compressed : {false, true}) {
+    if (Compressed && isMIPS64(GetParam()))
+      continue;
+    for (bool High : {false, true})
+      for (bool Defined : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Compressed << "/" << High << "/" << Defined);
+        mips_test::ELFBytes File(GetParam());
+        std::vector<uint32_t> Words;
+        if (Compressed) {
+          File.put(36, 0x74001000, 4);
+          File.put(24, 0x10101, 4);
+          if (Defined)
+            Words.push_back(0xecb8); // mult a0,a1
+          Words.push_back(High ? 0xea10 : 0xea12);
+          Words.push_back(0xe8a0); // jrc ra
+        } else {
+          if (Defined)
+            Words.push_back(High ? 0x00800011 : 0x00800013); // mt[hi/lo] a0
+          Words.push_back(High ? 0x00001010 : 0x00001012);
+          Words.push_back(0x03e00008); // jr ra
+          Words.push_back(0);
+        }
+        const unsigned Width = Compressed ? 2 : 4;
+        for (unsigned I = 0; I != Words.size(); ++I)
+          File.put(0x100 + I * Width, Words[I], Width);
+        ELFLoader Loader;
+        auto Image = Loader.loadBuffer(File.buffer());
+        ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+        auto Symbol = Symbol::makeFunc(Image->Entry, Words.size() * Width);
+        Symbol.Name = "accumulator_read";
+        Image->Symbols.push_back(std::move(Symbol));
+        Decoder Decode;
+        ASSERT_TRUE(Decode.init(*Image));
+        const auto Low = CFGBuilder().build(*Image, Decode, Image->Entry,
+                                            "accumulator_read");
+        ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+        for (bool WithImage : {false, true}) {
+          LowToMedConverter Convert;
+          if (WithImage)
+            Convert.setBinaryImage(&*Image);
+          if (Defined)
+            EXPECT_NO_THROW(
+                Convert.convert(Low, GetParam(), BinaryFormat::ELF));
+          else
+            EXPECT_THROW(Convert.convert(Low, GetParam(), BinaryFormat::ELF),
+                         LowToMedConversionError);
+        }
+        for (bool LLVM : {false, true}) {
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.OnlyFunctionEntries = {Image->Entry};
+          Options.LiftMode = LLVM;
+          Options.EmitDumpOutput = false;
+          const auto Result = Pipeline().run(*Image, Context, Options);
+          EXPECT_EQ(Result.Success, Defined) << Result.Error;
+          if (!Defined)
+            EXPECT_NE(Result.Error.find("HI/LO"), std::string::npos)
+                << Result.Error;
+        }
+      }
+  }
+}
+
+TEST_P(MIPSPipeline, AccumulatorJoinsAndCallsCannotInventSourceState) {
+  for (bool High : {false, true})
+    for (bool Defined : {false, true})
+      for (bool Call : {false, true}) {
+        const uint32_t Write = High ? 0x00800011 : 0x00800013;
+        const uint32_t Read = High ? 0x00001010 : 0x00001012;
+        // The branch's taken path skips the write. A dominating write makes
+        // both arms defined. Across a call only a fresh write is sufficient.
+        const bool Wide = isMIPS64(GetParam());
+        const std::vector<uint32_t> Words =
+            Call ? std::vector<uint32_t>{Wide ? 0x67bdfff0u : 0x27bdffe8u,
+                                         Wide ? 0xffbf0008u : 0xafbf0014u,
+                                         Write,
+                                         0x0c00404c,
+                                         0,
+                                         Defined ? Write : 0,
+                                         Read,
+                                         Wide ? 0xdfbf0008u : 0x8fbf0014u,
+                                         0x03e00008,
+                                         Wide ? 0x67bd0010u : 0x27bd0018u}
+                 : std::vector<uint32_t>{
+                       Defined ? Write : 0, 0x10a00003, 0, Write,
+                       0x10000002,          0,          0, Read,
+                       0x03e00008,          0};
+        SCOPED_TRACE(::testing::Message()
+                     << High << "/" << Defined << "/" << Call);
+        mips_test::ELFBytes File(GetParam());
+        File.Bytes.resize(0x140);
+        const unsigned Program = File.Is64 ? 64 : 52;
+        File.put(Program + (File.Is64 ? 32 : 16), File.Bytes.size(),
+                 File.Is64 ? 8 : 4);
+        File.put(Program + (File.Is64 ? 40 : 20), File.Bytes.size(),
+                 File.Is64 ? 8 : 4);
+        for (unsigned I = 0; I != Words.size(); ++I)
+          File.put(0x100 + I * 4, Words[I], 4);
+        File.put(0x130, 0x03e00008, 4);
+        File.put(0x134, 0, 4);
+        ELFLoader Loader;
+        auto Image = Loader.loadBuffer(File.buffer());
+        ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+        Image->Symbols.push_back(
+            Symbol::makeFunc(Image->Entry, Words.size() * 4));
+        Image->Symbols.push_back(Symbol::makeFunc(0x10130, 8));
+        Decoder Decode;
+        ASSERT_TRUE(Decode.init(*Image));
+        const auto Low = CFGBuilder().build(*Image, Decode, Image->Entry,
+                                            "accumulator_paths");
+        ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+        for (bool WithImage : {false, true}) {
+          LowToMedConverter Convert;
+          if (WithImage)
+            Convert.setBinaryImage(&*Image);
+          const bool MissingMode = Call && !WithImage && !Wide;
+          if (Defined && !MissingMode)
+            EXPECT_NO_THROW(
+                Convert.convert(Low, GetParam(), BinaryFormat::ELF));
+          else {
+            try {
+              Convert.convert(Low, GetParam(), BinaryFormat::ELF);
+              FAIL() << "unqualified accumulator/call source was accepted";
+            } catch (const LowToMedConversionError &Error) {
+              EXPECT_NE(std::string(Error.what())
+                            .find(MissingMode ? "instruction mode" : "HI/LO"),
+                        std::string::npos)
+                  << Error.what();
+            }
+          }
+        }
+      }
+}
+
+TEST_P(MIPSPipeline, AccumulatorPhiChecksOnlyReadJoinsAndRejectsAbsentEdges) {
+  MedFunc Function;
+  Function.Blocks.emplace_back();
+  auto &Block = Function.Blocks.back();
+  PhiNode Phi;
+  Phi.Output.Kind = MedVar::Reg;
+  Phi.Output.Id = 1;
+  Phi.Output.SSAVer = 0;
+  Phi.Output.RegOff = mipsreg::HI;
+  Phi.Output.Size = isMIPS64(GetParam()) ? 8 : 4;
+  Phi.Output.TheArch = GetParam();
+  Phi.Args = {{0, MedVar::makeUnspecified(Phi.Output.Size, GetParam())},
+              {1, MedVar::makeConst(7, Phi.Output.Size)}};
+  Block.Phis.push_back(Phi);
+  EXPECT_NO_THROW(requireMIPSSourceAccumulators(Function));
+  MedOp Read;
+  Read.Opcode = NdOp::COPY;
+  Read.Output = Phi.Output;
+  Read.Output.Id = 2;
+  Read.Output.RegOff = mipsreg::V0;
+  Read.addInput(Phi.Output);
+  Block.Ops.push_back(Read);
+  EXPECT_THROW(requireMIPSSourceAccumulators(Function),
+               LowToMedConversionError);
+  Block.Phis[0].Args[0].second = MedVar::makeConst(9, Phi.Output.Size);
+  EXPECT_NO_THROW(requireMIPSSourceAccumulators(Function));
+}
 
 TEST_P(MIPSPipeline, ReturnSlotComputationReachesCAndLLVMWithCorrectABI) {
   mips_test::ELFBytes File(GetParam());

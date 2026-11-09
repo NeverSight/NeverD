@@ -29,9 +29,16 @@ inline bool imagePreservesDSPControl(const BinaryImage *Image) {
   return Image && Image->MIPS && Image->MIPS->HasDSP;
 }
 
+inline bool sourcePreservesDSPControl(Arch Target, const BinaryImage *Image) {
+  // Standalone MIPS32 source has no image profile that can rule out DSP state.
+  // Even pure lifted arithmetic must not acquire compiler-generated DSP writes.
+  return imagePreservesDSPControl(Image) ||
+         (!Image && (Target == Arch::MIPS32 || Target == Arch::MIPS32EL));
+}
+
 inline bool modulePreservesDSPControl(const llvm::Module &Module,
-                                      const BinaryImage *Image) {
-  if (imagePreservesDSPControl(Image))
+                                      const BinaryImage *Image, Arch Target) {
+  if (sourcePreservesDSPControl(Target, Image))
     return true;
   for (const llvm::Function &Function : Module)
     if (Function.hasFnAttribute(DSPSourceMarker))
@@ -39,9 +46,9 @@ inline bool modulePreservesDSPControl(const llvm::Module &Module,
   return false;
 }
 
-inline const char *dspSourceCAttribute(const BinaryImage *Image,
+inline const char *dspSourceCAttribute(Arch Target, const BinaryImage *Image,
                                        bool HasStateTransfers = false) {
-  return imagePreservesDSPControl(Image) || HasStateTransfers
+  return sourcePreservesDSPControl(Target, Image) || HasStateTransfers
              ? DSPSourceCAttribute
              : "";
 }

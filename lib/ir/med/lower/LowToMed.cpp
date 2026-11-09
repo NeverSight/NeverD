@@ -48,6 +48,7 @@
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MIPS/MIPSMergeValues.h"
 #include "neverd/ir/med/MIPS/MIPSReturnTargets.h"
+#include "neverd/ir/med/MIPS/MIPSSourceAccumulators.h"
 #include "neverd/ir/med/MIPS/MIPSSourceVectors.h"
 #include "neverd/ir/med/MedBoundCallStackArguments.h"
 #include "neverd/ir/med/MedCallConvention.h"
@@ -1727,6 +1728,8 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
     // selectors bind exactly as they would after the full pipeline.
     resolveSwitchSelectorPlans(Func);
     Func.SkippedSSA = true;
+    if (isMIPS(TheArch))
+      requireMIPSSourceAccumulators(Func);
     if (QualifyMIPSReturns)
       throw LowToMedConversionError("MIPS source return proof requires SSA");
     projectOriginalAddressSelectors(Func);
@@ -1774,6 +1777,8 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
     debugVerifyMedFunc(Func, "splitEntryLoopHeader");
     buildSsa(Func, Low);
     debugVerifyMedFunc(Func, "buildSsa");
+    if (isMIPS(TheArch))
+      requireMIPSSourceAccumulators(Func);
     if (QualifyMIPSReturns) {
       MIPSReturnsQualified =
           hasMIPSSourceReturnTargets(Low, Func, TheArch, Fmt);
