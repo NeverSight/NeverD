@@ -552,6 +552,8 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
   const auto ProviderSource = Path(kRuntimeProviderSourceFile),
              RuntimeSource = Path(kRuntimeHarnessFile),
              ControlPath = Path(kRuntimeControlFile),
+             LoaderSource = Path(kRuntimeLoaderFile),
+             LoaderPath = Path(kRuntimeLoaderBinary),
              DriverPath = Path(kRuntimeDriverFile),
              ProviderPath = Path(kRuntimeProviderFile),
              RuntimeOutput = Path(kRuntimeOutputFile);
@@ -560,13 +562,22 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
   if (ExecuteNative) {
     ASSERT_FALSE(Write(ProviderSource, kRuntimeProviderSource));
     ASSERT_FALSE(Write(RuntimeSource, kRuntimeHarness));
+    ASSERT_FALSE(Write(LoaderSource, kRuntimeLoaderSource));
     Args.append(std::begin(kRuntimeCompileArgs), std::end(kRuntimeCompileArgs));
+    Args.append(std::begin(kProviderCompileArgs),
+                std::end(kProviderCompileArgs));
     if (DwarfLanguage)
       Args.push_back(kDwarfLanguageOption);
     Args.append({Optimization, kRuntimeControlOption, Source, ObjectSource,
                  ProviderSource, RuntimeSource});
     Args.append(std::begin(kOutputArgs), std::end(kOutputArgs));
     Args.push_back(ControlPath);
+    ASSERT_EQ(Run(kCompiler, Args), 0);
+    Args.assign({kCompiler});
+    Args.append(std::begin(kRuntimeCompileArgs), std::end(kRuntimeCompileArgs));
+    Args.append({Optimization, LoaderSource});
+    Args.append(std::begin(kOutputArgs), std::end(kOutputArgs));
+    Args.push_back(LoaderPath);
     ASSERT_EQ(Run(kCompiler, Args), 0);
     Args.assign({kCompiler});
     Args.append(std::begin(kRuntimeCompileArgs), std::end(kRuntimeCompileArgs));
@@ -583,6 +594,8 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
     Args.push_back(DriverPath);
     ASSERT_EQ(Run(kCompiler, Args), 0);
     auto Signed = macho_signing::verifyStrict(ControlPath);
+    ASSERT_FALSE(bool(Signed)) << llvm::toString(std::move(Signed));
+    Signed = macho_signing::verifyStrict(LoaderPath);
     ASSERT_FALSE(bool(Signed)) << llvm::toString(std::move(Signed));
     const auto CapabilitySource = Path(kRuntimeCapabilityFile);
     const auto CapabilityBinary = Path(kRuntimeCapabilityBinary);
@@ -617,9 +630,9 @@ void checkNativeObjectInstallation(const char *Optimization, bool Threaded,
         (*CapabilityOutput)->getBuffer().contains(kRuntimeCapabilityMarker));
     // Once launch and PAC enforcement work, a broken compiler-original
     // call/catch/cleanup is a failure, never an environmental skip.
-    const int Status =
-        llvm::sys::ExecuteAndWait(ControlPath, {ControlPath}, std::nullopt,
-                                  Redirects, kToolTimeout, 0, &Diagnostic);
+    const int Status = llvm::sys::ExecuteAndWait(
+        LoaderPath, {LoaderPath, ControlPath}, std::nullopt, Redirects,
+        kToolTimeout, 0, &Diagnostic);
     ::testing::Test::RecordProperty(kRuntimeControlResult, Status);
     ASSERT_EQ(Status, 0) << Diagnostic;
     auto Output = llvm::MemoryBuffer::getFile(RuntimeOutput);

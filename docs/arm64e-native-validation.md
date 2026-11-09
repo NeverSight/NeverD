@@ -13,8 +13,10 @@ signatures. Each key first authenticates and reads a valid signed pointer in a
 child process, then repeats that path with one changed signature bit. Both
 hardware faults and Clang's checked-authentication `BRK`/`SIGTRAP` rejection
 are supported; an externally killed child does not pass. Compact and DWARF
-compiler-original controls then exercise signed
-calls, authenticated data, typed catches and propagated destructor cleanup.
+compiler-original dylib controls then exercise signed calls, authenticated data,
+typed catches and propagated destructor cleanup through the same `dlopen`
+loading contract as the installed image. The report identifies this loading
+contract and hashes both the library and its arm64e loader.
 Successful compilation or a process that runs with PAC disabled cannot pass.
 
 `report.json` records the source revision and hashes, compiler/SDK, effective
@@ -60,3 +62,10 @@ General whole-image publication keeps its separate false qualification field;
 neither this profile nor the controlled FVP call matrix establishes that broader
 contract. Keep the configured LLVM r6 package until a separately qualified fork
 release replaces it.
+
+Native macOS 26 and Xcode 27 runners execute the four-key PAC controls, including
+checked-authentication traps. The compiler-original call/unwind control passes
+when loaded through `dlopen`. Its equivalent startup executable leaves static
+B-key chained fixups unresolved on those runners and fails before unwinding;
+this profile does not qualify startup loading or hide that failure behind a
+retry. See the [native runner experiment](https://github.com/gmh5225/test_mac_intel/actions/runs/42626899000).

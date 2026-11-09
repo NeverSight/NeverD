@@ -91,6 +91,7 @@ def probe(output):
     report = {**provenance(), "status": POLICY["failed"],
               "native_pac_qualified": False,
               "compiler_original_call_unwind_qualified": False,
+              "control_loading": POLICY["control_loading"],
               "whole_image_publication_qualified": False,
               "platform": platform.platform(), "machine": platform.machine(),
               "controls": []}
@@ -112,8 +113,8 @@ def probe(output):
                 path.write_text(contract[name])
                 sources[name] = path
 
-            def compile_control(label, args):
-                binary = output / (label + POLICY["binary_suffix"])
+            def compile_binary(label, args, suffix):
+                binary = output / (label + suffix)
                 products.append(binary)
                 result = command(products, output, label + POLICY["compile_suffix"],
                                  [contract["compiler"], *contract["compile_args"],
@@ -127,38 +128,28 @@ def probe(output):
                                  POLICY["tool_timeout"])
                 if signed.returncode:
                     raise RuntimeError(POLICY["errors"]["signature"].format(label=label))
+                return binary, identity
+
+            def compile_control(label, args, library=False):
+                suffix = POLICY["library_suffix"] if library else POLICY["binary_suffix"]
+                binary, identity = compile_binary(label, args, suffix)
                 command(products, output, label + POLICY["disassembly_suffix"],
                         [*POLICY["disassembly_command"], str(binary)],
                         POLICY["tool_timeout"])
                 command(products, output, label + POLICY["fixup_suffix"],
                         [*POLICY["fixup_command"], str(binary)],
                         POLICY["tool_timeout"])
-                run = command(products, output, label, [str(binary)], POLICY["tool_timeout"])
+                argv = [str(binary)]
+                if library:
+                    driver, driver_identity = compile_binary(
+                        label + POLICY["loader_suffix"], [args[0], sources["loader"]],
+                        POLICY["binary_suffix"])
+                    identity["loader"] = driver_identity
+                    argv.insert(0, str(driver))
+                run = command(products, output, label, argv, POLICY["tool_timeout"])
                 row = {"label": label, **identity, "returncode": run.returncode,
                        "stdout": run.stdout, "stderr": run.stderr}
                 report["controls"].append(row)
-                if run.returncode < 0:
-                    if contract["control_option"] in args:
-                        library = output / (label + POLICY["dlopen_library_suffix"])
-                        driver = output / (label + POLICY["dlopen_driver_suffix"])
-                        products.extend([library, driver])
-                        command(products, output, label + POLICY["dlopen_library_suffix"],
-                                [contract["compiler"], *contract["compile_args"],
-                                 POLICY["dynamic_library_option"], *map(str, args),
-                                 POLICY["output_flag"], str(library)], POLICY["tool_timeout"])
-                        command(products, output, label + POLICY["dlopen_driver_suffix"],
-                                [contract["compiler"], *contract["compile_args"],
-                                 str(sources["loader"]), POLICY["output_flag"], str(driver)],
-                                POLICY["tool_timeout"])
-                        command(products, output, label + POLICY["dlopen_suffix"],
-                                [str(driver), str(library)], POLICY["tool_timeout"])
-                    command(products, output,
-                            label + POLICY["dyld_diagnostic_suffix"], [str(binary)],
-                            POLICY["tool_timeout"],
-                            dict(os.environ, **POLICY["dyld_diagnostic_environment"]))
-                    command(products, output, label + POLICY["debugger_suffix"],
-                            [*POLICY["debugger_command"], str(binary)],
-                            POLICY["tool_timeout"])
                 return run, row
 
             for optimization in POLICY["optimizations"]:
@@ -172,11 +163,11 @@ def probe(output):
             for optimization in POLICY["optimizations"]:
                 for dwarf in POLICY["dwarf_modes"]:
                     label = POLICY["runtime_label"].format(optimization=optimization, dwarf=dwarf)
-                    args = [optimization, contract["control_option"]]
+                    args = [optimization, *contract["library_args"], contract["control_option"]]
                     if dwarf:
                         args.append(contract["dwarf_option"])
                     args.extend(sources[name] for name in POLICY["runtime_sources"])
-                    run, row = compile_control(label, args)
+                    run, row = compile_control(label, args, library=True)
                     row["status"] = POLICY["passed"] if (
                         run.returncode == 0 and contract["runtime_completed"] in run.stdout.splitlines()
                     ) else POLICY["failed"]
