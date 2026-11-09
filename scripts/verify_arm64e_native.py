@@ -158,11 +158,13 @@ def verify_legacy_fixtures(directory):
     return report
 
 
-def probe(output, *, startup=False):
+def probe(output, *, startup=False, userspace_fixups=False):
     report = {**provenance(), "status": POLICY["failed"],
               "native_pac_qualified": False,
               "compiler_original_call_unwind_qualified": False,
               "control_loading": POLICY["startup_loading"] if startup else POLICY["control_loading"],
+              POLICY["fixup_loader_key"]: POLICY[
+                  "userspace_fixup_loader" if userspace_fixups else "system_fixup_loader"],
               POLICY["startup_qualification_key"]: False,
               "whole_image_publication_qualified": False,
               "platform": platform.platform(), "machine": platform.machine(),
@@ -179,6 +181,20 @@ def probe(output, *, startup=False):
                 report["environment"][name] = {
                     "returncode": result.returncode,
                     "stdout": result.stdout, "stderr": result.stderr}
+            execution_prefix = []
+            if userspace_fixups:
+                macros = command(products, output, POLICY["syscall_label"],
+                                 POLICY["syscall_command"], POLICY["tool_timeout"])
+                macros.check_returncode()
+                numbers = re.findall(POLICY["syscall_pattern"], macros.stdout, re.MULTILINE)
+                if len(numbers) != 1:
+                    raise ValueError(POLICY["errors"]["syscall"])
+                profile = POLICY["startup_sandbox_profile"].format(number=numbers[0])
+                execution_prefix = [arg.format(profile=profile)
+                                    for arg in POLICY["startup_launcher"]]
+                report[POLICY["startup_profile_key"]] = {
+                    "syscall_number": int(numbers[0]), "profile": profile,
+                    "launcher": execution_prefix}
             sources = {}
             for name, filename in POLICY["source_names"].items():
                 path = output / filename
@@ -218,7 +234,8 @@ def probe(output, *, startup=False):
                         POLICY["binary_suffix"])
                     identity["loader"] = driver_identity
                     argv.insert(0, str(driver))
-                run = command(products, output, label, argv, POLICY["tool_timeout"])
+                run = command(products, output, label, execution_prefix + argv,
+                              POLICY["tool_timeout"])
                 row = {"label": label, **identity, "returncode": run.returncode,
                        "stdout": run.stdout, "stderr": run.stderr}
                 report["controls"].append(row)
@@ -282,6 +299,7 @@ def run_installation(output, build, probe_report, legacy_fixtures=None):
         control = json.loads(probe_report.read_text())
         if (control.get("status") != POLICY["passed"] or
                 control.get("control_loading") != POLICY["control_loading"] or
+                control.get(POLICY["fixup_loader_key"]) != POLICY["system_fixup_loader"] or
                 not control.get("native_pac_qualified") or
                 not control.get("compiler_original_call_unwind_qualified") or
                 any(control.get(key) != report[key] for key in POLICY["provenance_keys"])):
@@ -339,14 +357,20 @@ def main():
     parser.add_argument(POLICY["build_argument"], type=Path)
     parser.add_argument(POLICY["probe_argument"], type=Path)
     parser.add_argument(POLICY["legacy_argument"], type=Path)
+    parser.add_argument(POLICY["startup_fixups_argument"],
+                        choices=POLICY["startup_fixup_loaders"],
+                        default=POLICY["system_fixup_loader"])
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     try:
+        userspace = args.startup_fixups == POLICY["userspace_fixup_loader"]
+        if userspace and args.mode != POLICY["startup_mode"]:
+            raise ValueError(POLICY["errors"]["startup_fixups"])
         if args.mode == POLICY["probe_mode"]:
             report = probe(output)
         elif args.mode == POLICY["startup_mode"]:
-            report = probe(output, startup=True)
+            report = probe(output, startup=True, userspace_fixups=userspace)
         elif args.mode == POLICY["legacy_mode"]:
             report = build_legacy_fixtures(output)
         else:

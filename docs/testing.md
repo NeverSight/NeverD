@@ -848,6 +848,15 @@ not use a floating C return as the oracle, because that return can itself
 quiet a signaling NaN. Unmasked exception delivery and arbitrary stack-tag
 state are separate coverage.
 
+`MedTypePass.StackTopResultsAreNotRegisterRestores` distinguishes computed,
+partial and disjoint stack writes from unchanged saves on i386/x64, within a
+block and across predecessors. `I386CallContract.X87StoredBitsReturnThroughTheIntegerRegister`
+and `Win64CallContract.StackTransportedIntegerWinsOverAScratchFloat` cover
+COFF/ELF/Mach-O, HighC/LLVMC and default/NoOpt. On Linux x86 they compare both
+C routes at O0/O2 under UBSan with original i386/x64 instructions. Results
+are observed through integer registers, including raw x87-converted NaN bits;
+an unused floating temporary must not determine the source return type.
+
 `NeverDLocalTypesDebugContextTests` also checks recursive callback borrows and
 portable parameter qualifiers. Its recursive-record case checks that both
 self references and mutual references release their ownership, including
@@ -22371,6 +22380,8 @@ The repeated-image regression also covers unrelated function-pointer relocations
 
 ## Constant covers in OR/XOR expressions
 
+`SymExpr.DisjointFields*` checks constant equality of proved-disjoint fields, unreachable target bits, operand exchange, overlapping and unknown lanes, and constructor-work refusal. Independent exhaustive APInt evaluations cover small values and 8/32/64/128-bit carriers.
+
 `SymExprMask.ConstantCover*` checks exhaustive four-bit masks and inputs, 8–257-bit words, live high bits, shared deep sources, and word/term budget refusal. `FrameOffsets.ConstantCoveredBitsExposeOffsetsWithoutSolverQueries` checks a constant displacement with zero solver queries and rejects an input-dependent neighbor. Run `NeverDSymbolicTests` and `NeverDInterpreterSpecializationTests`.
 
 The captured-word slice regressions in `SymExprTests.cpp` reconstruct selected byte lanes and modular arithmetic prefixes, normalize constant-shift windows, and restore only zero-padded quotient slices. Independent APInt checks retain reversed lanes, padding and signed shifts.
@@ -22912,6 +22923,8 @@ recorded baseline; this change adds none and does not weaken the audit.
 
 `HighControlFlowSemantics.SimplifierPublishesSharedReplacementAtEveryUse` checks shared DAG replacement publication in both root orders, independent return values and a stable second cleanup invocation.
 
+Nested literal-tag comparisons retain original branch priority and unknown tails. `SymExpr` regressions exhaust small selectors, retain data-valued arms and check bounded inspection of a 4096-node tail.
+
 `SymExpr.ConditionalConstantWindowsIgnorePredicatesAndRespectWork` and `ConditionalSlicesKeepDifferentAndUnknownArms` check branch-common constant windows, exact work refusal and differing or unknown arms.
 
 `SymKnownBits` carrier, partial-cache and CONCAT refusal regressions check independent facts under exhausted child work and precision recovery on a later query without increasing query limits.
@@ -22973,6 +22986,8 @@ HighExprSimplify selected-byte regressions recover only contiguous captured-loca
 Common-word equality cancellation is covered by independent APInt evaluations at 1--256 bits. It cancels only identical complete XOR or additive operands; subtraction reuses the same additive collector. Packed word contents remain unconstrained.
 
 SymExprCancellation captured-mask tests use independent exhaustive small-word and multiword APInt evaluation. Negative controls retain overlapping carries and uncovered fields; bounded known-bit queries leave unresolved inputs intact. Existing complemented-offset MBA tests qualify the equivalent normalized constructor forms.
+
+`SymMBAFiniteSelection` checks exact small ordinal tables and shared Boolean selection trees through the ordinary `simplifyMBADeep` entry. APInt oracles and independent bitvector UNSAT checks cover 8--128 bits, wide out-of-range selectors, unknown defaults, duplicate priorities, complete shifted-bit trees and caller work/storage refusals. No sample-only candidate is published.
 
 SymConditionalControls and SymMBASelector Boolean-word tests use exhaustive small input tables and an independent solver check through 257 bits. Partial-mask and nonfitting-constant controls retain their data semantics; a large opaque predicate must not consume the budget before a complete root choice is recognized.
 

@@ -495,12 +495,12 @@ StoredRegisterMemory::valueRange(const RegisterValue &Value,
                                  bool AllowWrap) const {
   if (Value.ValueKind != RegisterValue::Kind::SymbolicAddress)
     return unsignedValueRange(Value);
-  const auto It = CapturedRanges.find(Value.Value);
-  if (It == CapturedRanges.end())
+  const auto It = CapturedFacts.find(Value.Value);
+  if (It == CapturedFacts.end() || !It->second.Range)
     return AllowWrap ? addressValueRange(Value, symbolicAddresses().get())
                      : unsignedValueRange(Value, symbolicAddresses().get());
   const auto Delta = static_cast<uint64_t>(Value.Offset);
-  const auto &Range = It->second;
+  const auto &Range = *It->second.Range;
   if (AllowWrap || (Value.Offset >= 0 && Delta <= UINT64_MAX - Range.Upper) ||
       (Value.Offset < 0 && uint64_t{0} - Delta <= Range.Lower))
     return UnsignedValueRange{Range.Lower + Delta, Range.Upper + Delta};
@@ -516,20 +516,145 @@ void StoredRegisterMemory::refineCapturedRange(const RegisterValue &Value,
       Range.Upper > Before->Upper || Range == *Before)
     return;
   const auto Delta = static_cast<uint64_t>(Value.Offset);
-  CapturedRanges[Value.Value] = {Range.Lower - Delta, Range.Upper - Delta};
+  CapturedFacts[Value.Value].Range = {Range.Lower - Delta, Range.Upper - Delta};
+}
+
+namespace {
+llvm::ConstantRange modularRange(UnsignedValueRange Range) {
+  return llvm::ConstantRange::getNonEmpty(llvm::APInt(64, Range.Lower),
+                                          llvm::APInt(64, Range.Upper + 1));
+}
+
+UnsignedValueRange inclusiveRange(const llvm::ConstantRange &Range) {
+  return {Range.getLower().getZExtValue(),
+          (Range.getUpper() - 1).getZExtValue()};
+}
+} // namespace
+
+void StoredRegisterMemory::refineCapturedDifference(
+    const RegisterValue &Value, const RegisterValue &Base,
+    UnsignedValueRange Difference) {
+  if (Value.ValueKind != RegisterValue::Kind::SymbolicAddress ||
+      Base.ValueKind != RegisterValue::Kind::SymbolicAddress ||
+      Value.Value == Base.Value)
+    return;
+  uint64_t Child = Value.Value, Parent = Base.Value;
+  auto Offset = modularRange(Difference)
+                    .add(llvm::ConstantRange(llvm::APInt(
+                        64, static_cast<uint64_t>(Base.Offset) -
+                                static_cast<uint64_t>(Value.Offset))));
+  if (Child < Parent) {
+    std::swap(Child, Parent);
+    Offset = llvm::ConstantRange(llvm::APInt(64, 0)).sub(Offset);
+  }
+  if (Offset.isFullSet())
+    return;
+  const auto Found = CapturedFacts.find(Child);
+  if (Found != CapturedFacts.end() && Found->second.Difference) {
+    if (Found->second.Difference->Base != Parent)
+      return;
+    Offset =
+        Offset.intersectWith(modularRange(Found->second.Difference->Offset));
+    if (Offset.isEmptySet())
+      return;
+  }
+  CapturedFacts[Child].Difference = {Parent, inclusiveRange(Offset)};
+}
+
+std::optional<UnsignedValueRange>
+StoredRegisterMemory::capturedDifference(const RegisterValue &Left,
+                                         const RegisterValue &Right) const {
+  if (Left.ValueKind != RegisterValue::Kind::SymbolicAddress ||
+      Right.ValueKind != RegisterValue::Kind::SymbolicAddress)
+    return std::nullopt;
+  uint64_t L = Left.Value, R = Right.Value;
+  auto Difference = llvm::ConstantRange(
+      llvm::APInt(64, static_cast<uint64_t>(Left.Offset) -
+                          static_cast<uint64_t>(Right.Offset)));
+  // Both chains strictly descend. Move the larger ID until they meet or one
+  // loses its proven parent; no numeric ordering of VM pointers is inferred.
+  while (L != R) {
+    const auto It = CapturedFacts.find(std::max(L, R));
+    if (It == CapturedFacts.end() || !It->second.Difference)
+      return std::nullopt;
+    const auto &Relation = *It->second.Difference;
+    if (L > R) {
+      Difference = Difference.add(modularRange(Relation.Offset));
+      L = Relation.Base;
+    } else {
+      Difference = Difference.sub(modularRange(Relation.Offset));
+      R = Relation.Base;
+    }
+    if (Difference.isFullSet())
+      return std::nullopt;
+  }
+  return inclusiveRange(Difference);
+}
+
+void StoredRegisterMemory::refineCapturedRanges(
+    const StoredRegisterMemory &Other,
+    llvm::function_ref<RegisterValue(RegisterValue)> Bind) {
+  for (const auto &[ID, Fact] : Other.CapturedFacts) {
+    if (!Fact.Range)
+      continue;
+    const auto &Range = *Fact.Range;
+    RegisterValue Value{RegisterValue::Kind::SymbolicAddress, ID, 0};
+    if (Bind)
+      Value = Bind(Value);
+    const auto Before = valueRange(Value);
+    if (!Before)
+      continue;
+    const UnsignedValueRange Common{std::max(Before->Lower, Range.Lower),
+                                    std::min(Before->Upper, Range.Upper)};
+    if (Common.Lower <= Common.Upper)
+      refineCapturedRange(Value, Common);
+  }
+  for (const auto &[ID, Fact] : Other.CapturedFacts) {
+    if (!Fact.Difference)
+      continue;
+    const auto &Relation = *Fact.Difference;
+    RegisterValue Value{RegisterValue::Kind::SymbolicAddress, ID, 0};
+    RegisterValue Base{RegisterValue::Kind::SymbolicAddress, Relation.Base, 0};
+    if (Bind) {
+      Value = Bind(Value);
+      Base = Bind(Base);
+    }
+    refineCapturedDifference(Value, Base, Relation.Offset);
+  }
 }
 
 void StoredRegisterMemory::joinCapturedRanges(
     const StoredRegisterMemory &Other) {
-  for (auto It = CapturedRanges.begin(); It != CapturedRanges.end();) {
-    const auto Found = Other.CapturedRanges.find(It->first);
-    if (Found == Other.CapturedRanges.end()) {
-      It = CapturedRanges.erase(It);
-    } else {
-      It->second.Lower = std::min(It->second.Lower, Found->second.Lower);
-      It->second.Upper = std::max(It->second.Upper, Found->second.Upper);
-      ++It;
+  for (auto It = CapturedFacts.begin(); It != CapturedFacts.end();) {
+    const auto Found = Other.CapturedFacts.find(It->first);
+    if (Found == Other.CapturedFacts.end()) {
+      It = CapturedFacts.erase(It);
+      continue;
     }
+    auto &Fact = It->second;
+    const auto &OtherFact = Found->second;
+    if (Fact.Difference && OtherFact.Difference &&
+        Fact.Difference->Base == OtherFact.Difference->Base) {
+      const auto Joined =
+          modularRange(Fact.Difference->Offset)
+              .unionWith(modularRange(OtherFact.Difference->Offset));
+      if (Joined.isFullSet())
+        Fact.Difference.reset();
+      else
+        Fact.Difference->Offset = inclusiveRange(Joined);
+    } else {
+      Fact.Difference.reset();
+    }
+    if (Fact.Range && OtherFact.Range) {
+      Fact.Range->Lower = std::min(Fact.Range->Lower, OtherFact.Range->Lower);
+      Fact.Range->Upper = std::max(Fact.Range->Upper, OtherFact.Range->Upper);
+    } else {
+      Fact.Range.reset();
+    }
+    if (!Fact.Range && !Fact.Difference)
+      It = CapturedFacts.erase(It);
+    else
+      ++It;
   }
 }
 
@@ -545,13 +670,13 @@ void StoredRegisterMemory::setSymbolicAddresses(
     std::shared_ptr<const SymbolicAddressSpace> Space) {
   if (Space == symbolicAddresses())
     return;
-  CapturedRanges.clear();
+  discardCapturedRanges();
   Coordinates = std::make_shared<StoredMemoryCoordinates>(
       StoredMemoryCoordinates{frameTranslationBound(), std::move(Space)});
 }
 
 bool StoredRegisterMemory::operator==(const StoredRegisterMemory &Other) const {
-  return Values == Other.Values && CapturedRanges == Other.CapturedRanges &&
+  return Values == Other.Values && CapturedFacts == Other.CapturedFacts &&
          frameTranslationBound() == Other.frameTranslationBound() &&
          symbolicAddresses() == Other.symbolicAddresses();
 }
@@ -641,9 +766,17 @@ void StoredRegisterMemory::invalidate(const RegisterValue &Address,
               : Key->Value;
       Disjoint =
           Start - Write >= Size && Write - Start >= std::get<2>(It->first);
-    } else if (Written) {
-      const auto Existing = Footprint(Other, std::get<2>(It->first));
-      Disjoint = Existing && Existing->intersectWith(*Written).isEmptySet();
+    } else {
+      if (const auto Difference = capturedDifference(Other, Address)) {
+        const auto Overlap =
+            modularRange({uint64_t{1} - std::get<2>(It->first), Size - 1});
+        Disjoint =
+            modularRange(*Difference).intersectWith(Overlap).isEmptySet();
+      }
+      if (!Disjoint && Written) {
+        const auto Existing = Footprint(Other, std::get<2>(It->first));
+        Disjoint = Existing && Existing->intersectWith(*Written).isEmptySet();
+      }
     }
     if (Disjoint)
       ++It;
@@ -754,8 +887,8 @@ uint64_t StoredRegisterMemory::retainedByteEstimate() const {
     Allocated += Value.allocatedBytes();
   return empty() ? 0
                  : sizeof(*this) + Allocated +
-                       CapturedRanges.size() *
-                           (sizeof(decltype(CapturedRanges)::value_type) +
+                       CapturedFacts.size() *
+                           (sizeof(decltype(CapturedFacts)::value_type) +
                             NodeOverhead) +
                        Values.size() * (sizeof(decltype(Values)::value_type) +
                                         NodeOverhead);
@@ -795,6 +928,15 @@ StoredRegisterMemory::readValues(const RegisterValue &Address,
         return Absolute->second;
     }
   }
+  if (Key->ValueKind == RegisterValue::Kind::SymbolicAddress &&
+      !CapturedFacts.empty())
+    for (const auto &[Cell, Stored] : Values) {
+      if (std::get<2>(Cell) != ByteWidth)
+        continue;
+      const auto Difference = capturedDifference(*Key, cellAddress(Cell));
+      if (Difference && Difference->Lower == 0 && Difference->Upper == 0)
+        return Stored;
+    }
   return Unknown;
 }
 
@@ -843,11 +985,20 @@ void StoredRegisterMemory::profile(llvm::FoldingSetNodeID &ID) const {
   ID.AddBoolean(Bound.has_value());
   if (Bound)
     ID.AddInteger(*Bound);
-  ID.AddInteger(CapturedRanges.size());
-  for (const auto &[Capture, Range] : CapturedRanges) {
+  ID.AddInteger(CapturedFacts.size());
+  for (const auto &[Capture, Fact] : CapturedFacts) {
     ID.AddInteger(Capture);
-    ID.AddInteger(Range.Lower);
-    ID.AddInteger(Range.Upper);
+    ID.AddBoolean(Fact.Range.has_value());
+    if (Fact.Range) {
+      ID.AddInteger(Fact.Range->Lower);
+      ID.AddInteger(Fact.Range->Upper);
+    }
+    ID.AddBoolean(Fact.Difference.has_value());
+    if (Fact.Difference) {
+      ID.AddInteger(Fact.Difference->Base);
+      ID.AddInteger(Fact.Difference->Offset.Lower);
+      ID.AddInteger(Fact.Difference->Offset.Upper);
+    }
   }
   ID.AddInteger(Values.size());
   for (const auto &[Key, Value] : Values) {
@@ -904,7 +1055,7 @@ void StoredRegisterMemory::transformSymbols(
     llvm::function_ref<RegisterValue(RegisterValue)> Map) {
   // A mapping can widen a name or change its displacement. The transformed
   // cells remain facts, but need a fresh proof before retaining local bounds.
-  CapturedRanges.clear();
+  discardCapturedRanges();
   decltype(Values) Transformed;
   for (const auto &[Key, Value] : Values) {
     auto Address = cellAddress(Key);
@@ -927,6 +1078,30 @@ void StoredRegisterMemory::transformSymbols(
                           std::move(*Stored));
   }
   Values = std::move(Transformed);
+}
+
+void StoredRegisterMemory::renameCapture(uint64_t From, uint64_t To) {
+  if (From == To)
+    return;
+  auto Facts = std::move(CapturedFacts);
+  transformSymbols([&](RegisterValue Value) {
+    if (Value.Value == From)
+      Value.Value = To;
+    return Value;
+  });
+  for (const auto &[ID, Fact] : Facts) {
+    const uint64_t Renamed = ID == From ? To : ID;
+    if (Fact.Range)
+      CapturedFacts[Renamed].Range = Fact.Range;
+    if (Fact.Difference) {
+      const auto &Relation = *Fact.Difference;
+      refineCapturedDifference(
+          {RegisterValue::Kind::SymbolicAddress, Renamed, 0},
+          {RegisterValue::Kind::SymbolicAddress,
+           Relation.Base == From ? To : Relation.Base, 0},
+          Relation.Offset);
+    }
+  }
 }
 
 void StoredRegisterMemory::visitCells(
