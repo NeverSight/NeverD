@@ -142,14 +142,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--exports', type=Path, required=True)
     parser.add_argument('--compiler', type=Path, required=True)
-    parser.add_argument('--backend-llc', type=Path)
+    parser.add_argument('--backend-llc', type=Path,
+                        help='NeverC: i386 external driver, x64 emitted IR through llc')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--family', choices=('scalar', 'wrmsrns', 'tlb'), default='scalar')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     sources = sorted(args.exports.glob(args.family + '*_*.c'))
     expected_sources = {'scalar': 84, 'wrmsrns': 12, 'tlb': 84}[args.family]
-    assert len(sources) == expected_sources, 'missing complete i386 C profiles'
+    assert len(sources) == expected_sources, 'missing complete C profiles'
     records, controls = [], []
     for source in sources:
         stem, route = source.stem.rsplit('.', 1)
@@ -165,9 +166,20 @@ def main():
                       '-fno-stack-protector', '-fno-strict-aliasing', str(source)]
             if args.backend_llc:
                 common += ['-fno-builtin-mimalloc']
-            commands = [common + ['-S', '-emit-llvm', '-o', str(ir)],
-                        common + ['-c', '-o', str(obj)] +
-                        (['-fllvm-backend=' + str(args.backend_llc)] if args.backend_llc else [])]
+            commands = [common + ['-S', '-emit-llvm', '-o', str(ir)]]
+            if args.backend_llc and mode == 64:
+                # NeverC's external driver owns Linux i386. For code64, pass
+                # its actual IR to the qualified full backend explicitly.
+                commands.append([str(args.backend_llc), '-mtriple=' + triple,
+                                 '-' + level, '-verify-machineinstrs',
+                                 '-relocation-model=static', '-filetype=obj',
+                                 str(ir), '-o', str(obj)])
+                object_route = 'neverc-ir-to-llvm'
+            else:
+                commands.append(common + ['-c', '-o', str(obj)] +
+                                (['-fllvm-backend=' + str(args.backend_llc)]
+                                 if args.backend_llc else []))
+                object_route = 'neverc-driver' if args.backend_llc else 'compiler-driver'
             for step, command in enumerate(commands):
                 result = subprocess.run(command, capture_output=True, text=True, timeout=120)
                 Path(str(output) + f'-{step}.log').write_text(result.stdout + result.stderr)
@@ -195,7 +207,8 @@ def main():
                     raise AssertionError(corruption + ' corruption escaped the oracle')
                 controls.append({'source': source.name, 'optimization': level, 'field': corruption})
             records.append({'source': source.name, 'route': route, 'optimization': level,
-                            'code_mode': mode, 'source_sha256': digest(source), 'original_sha256': digest(original),
+                            'code_mode': mode, 'object_route': object_route,
+                            'source_sha256': digest(source), 'original_sha256': digest(original),
                             'object_sha256': digest(obj), 'commands': commands,
                             'observations': baselines, 'comparisons': len(COMPLETIONS)})
     report = {'profiles': records, 'comparisons': sum(r['comparisons'] for r in records),
