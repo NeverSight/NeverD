@@ -4398,6 +4398,15 @@ The generated C dispatcher uses the same state and counts only the original
 HLT attempt, including when its following code is unselected or unavailable.
 See [the halt contract](x86-legacy-segments.md#protected-hlt-and-event-wake).
 
+The integrated local full-SDK build passes 407 distinct execution, event and
+generated-source cases, with no skips. The new native HLT matrix performs
+344 original-instruction comparisons on each of the Intel P-core and E-core
+lanes. Its 8 E-core test replays are not added to the distinct-case count.
+All 268 generated dispatch libraries are host x64, using Clang/NeverC at
+O0/O2. The pinned r6 SDK was not rerun for this change. Build identities,
+commands, reports and the corrected KVM fixture diagnostics are recorded in
+[the qualification evidence](evidence/x86-legacy-halt-2026-11-09.json).
+
 Native HLT already has an LLVM intrinsic and NeverC x64 builtin. This change
 adds owned software execution and keeps both generated-C compiler lanes on
 x64. It adds no NeverC 32-bit target. SMI/INIT/RESET and machine-check wake,
