@@ -544,3 +544,14 @@ the selected compiler's execution of this fixed entry matrix. It does not
 qualify NeverD's LLVM backend, original prototype recovery, arbitrary lifted
 image publication or native CPTA-on; these remain separate report fields and
 requirements. The r6 package selection does not change.
+
+[Run 42859085649](https://github.com/gmh5225/test_mac_intel/actions/runs/42859085649)
+passed all eight entry combinations and six prerequisite PAC/unwind controls
+on each of macos-26 and xcode-27. The source-bound Release/r6 test host was
+delivered to the runners; this was not a cold source build there. The local
+12-entry, 31-script and eight offline checks also passed. The
+[recorded evidence](evidence/arm64e-native-entry-2026-11-11.json) binds commit
+`2201fbe2f1291e61ebca8856b3f726d314cdda21`, compiler/SDK identities, exports and
+case hashes. Both hosts reported Apple M1 (Virtual); CPA/CPA2 remained absent
+or zero, and no self-hosted runner was registered, so native CPTA-on remains
+unqualified.
