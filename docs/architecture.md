@@ -5928,6 +5928,10 @@ a prefix-cache entry; wide literals retain their accounted APInt path.
 Ordinary HighIR expression cleanup also uses an iterative operand walk, keeping
 its large local-rewrite frame off nested worker stacks. Operand order, shared
 node visitation and ordered-memory guards remain unchanged.
+Ordered-memory ancestry records boundary-bearing leaves directly and seeds
+their parents for propagation. Only expressions with children need reverse
+edges; indirect call targets remain children. Each invocation rebuilds its
+facts from the current graph.
 Long odd-product blocks can recursively pair exact modular signatures. A
 signature preserves the complete word except for its highest observed bit;
 that bit's correction may itself depend on the inputs. Addition, XOR, constant

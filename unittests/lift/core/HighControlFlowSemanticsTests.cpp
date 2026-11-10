@@ -1971,6 +1971,39 @@ TEST(HighControlFlowSemantics, MemoryBoundaryAncestorsMatchIndividualQueries) {
   A->Operands.clear(); // Break the deliberately malformed cycle.
 }
 
+TEST(HighControlFlowSemantics, MemoryBoundaryLeavesRetainTheirAncestors) {
+  for (const auto &Leaf : {local(0), HighExpr::makeConst(7, 8),
+                           HighExpr::makeCall("callee", 0x4000, {})}) {
+    const auto Clean = local(1);
+    const auto Shared = HighExpr::makeBinop(NdOp::INT_ADD, Leaf, Clean);
+    auto Call = HighExpr::makeCall("indirect", 0x5000, {Clean});
+    Call->IsIndirectCall = true;
+    Call->IndirectTarget = Shared;
+    const auto Outer = HighExpr::makeUnary(NdOp::INT_NEGATE, Call);
+    std::vector<ExprPtr> Roots{Outer, Shared, Leaf, Clean, nullptr};
+    EXPECT_TRUE(findOrderedMemoryAncestors(Roots).empty());
+    for (const bool NonDefaultSpace : {false, true}) {
+      if (NonDefaultSpace)
+        Leaf->MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+      else
+        Leaf->MemoryOrdering = NdMemoryOrdering::Acquire;
+      const auto LeafOnly =
+          findOrderedMemoryAncestors({Leaf, Clean, Leaf, nullptr});
+      EXPECT_EQ(LeafOnly.size(), 1U);
+      EXPECT_TRUE(LeafOnly.contains(Leaf.get()));
+      const auto Ancestors = findOrderedMemoryAncestors(Roots);
+      EXPECT_EQ(Ancestors.size(), 4U);
+      for (const auto &Expected : {Leaf, Shared, Call, Outer})
+        EXPECT_TRUE(Ancestors.contains(Expected.get()));
+      EXPECT_FALSE(Ancestors.contains(Clean.get()));
+      Leaf->MemoryOrdering = NdMemoryOrdering::None;
+      Leaf->MemoryAddressSpace = NdMemoryAddressSpace::Default;
+      std::reverse(Roots.begin(), Roots.end());
+      EXPECT_TRUE(findOrderedMemoryAncestors(Roots).empty());
+    }
+  }
+}
+
 TEST(HighControlFlowSemantics, SharedOrderedComparisonsRemainObservable) {
   for (const bool Reverse : {false, true}) {
     HighFunc F;
