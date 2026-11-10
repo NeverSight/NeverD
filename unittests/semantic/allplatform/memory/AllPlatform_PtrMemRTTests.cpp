@@ -5,14 +5,15 @@
 //===----------------------------------------------------------------------===//
 //
 // High-yield roundtrip probing of pointer- and memory-heavy code, the area
-// recent rounds kept finding addressing bugs in (#390 post-index, #397 constant-
-// pool induction pointers, #394 sub-register memory writes).  These idioms are
-// distinct from the struct/array suites: post/pre-increment pointer walks, raw
-// pointer differences steering control flow, in-place reverse and the
-// three-reverse rotation (overlapping reads/writes), pointer-based selection
-// sort, union byte/word reinterpretation, and a 2D access with a runtime row
-// stride.  Each kernel returns a value-dependent hash compiled at -O2; the
-// roundtrip compares native vs lifted execution across all four targets.
+// recent rounds kept finding addressing bugs in (#390 post-index, #397
+// constant-pool induction pointers, #394 sub-register memory writes).  These
+// idioms are distinct from the struct/array suites: post/pre-increment pointer
+// walks, raw pointer differences steering control flow, in-place reverse and
+// the three-reverse rotation (overlapping reads/writes), pointer-based
+// selection sort, union byte/word reinterpretation, and a 2D access with a
+// runtime row stride.  Each kernel returns a value-dependent hash compiled at
+// -O2; the roundtrip compares native vs lifted execution across all four
+// targets.
 //
 //===----------------------------------------------------------------------===//
 
@@ -30,6 +31,15 @@ TEST_P(A64PtrRT, Verify) { roundTripAArch64(GetParam()); }
 class ARM32PtrRT : public SemanticRoundTripFixture,
                    public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(ARM32PtrRT, Verify) { roundTripARM32(GetParam()); }
+// The LLVM C route writes 128-bit carriers and 16-byte frame members for
+// these kernels, which a 32-bit target's compiler must take: its own
+// `__int128` and `__uint128_t` names are missing.
+class X86PtrLLVMCRT : public SemanticRoundTripFixture,
+                      public ::testing::WithParamInterface<RoundTripTC> {};
+TEST_P(X86PtrLLVMCRT, Verify) { roundTripX86(GetParam()); }
+class ARM32PtrLLVMCRT : public SemanticRoundTripFixture,
+                        public ::testing::WithParamInterface<RoundTripTC> {};
+TEST_P(ARM32PtrLLVMCRT, Verify) { roundTripARM32(GetParam()); }
 
 // clang-format off
 static std::vector<RoundTripTC> makePtrTC(const char *prefix, const char *T) {
@@ -130,7 +140,17 @@ static const std::vector<RoundTripTC> kX86 = makePtrTC("x86ptr", "int");
 static const std::vector<RoundTripTC> kA64 = makePtrTC("a64ptr", "long");
 static const std::vector<RoundTripTC> kARM = makePtrTC("armptr", "int");
 
+static std::vector<RoundTripTC> llvmCRoute(std::vector<RoundTripTC> Cases) {
+  for (RoundTripTC &Case : Cases)
+    Case.SourceRoute = true;
+  return Cases;
+}
+
 INSTANTIATE_TEST_SUITE_P(Ptr, X64PtrRT, ::testing::ValuesIn(kX64), rtTCName);
 INSTANTIATE_TEST_SUITE_P(Ptr, X86PtrRT, ::testing::ValuesIn(kX86), rtTCName);
 INSTANTIATE_TEST_SUITE_P(Ptr, A64PtrRT, ::testing::ValuesIn(kA64), rtTCName);
 INSTANTIATE_TEST_SUITE_P(Ptr, ARM32PtrRT, ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(PtrLLVMC, X86PtrLLVMCRT,
+                         ::testing::ValuesIn(llvmCRoute(kX86)), rtTCName);
+INSTANTIATE_TEST_SUITE_P(PtrLLVMC, ARM32PtrLLVMCRT,
+                         ::testing::ValuesIn(llvmCRoute(kARM)), rtTCName);

@@ -483,6 +483,20 @@ struct RestoreOutput {
   llvm::raw_ostream *Original;
   ~RestoreOutput() { Out.retarget(Original); }
 };
+
+/// Whether \p Text spells the `__int128` keyword, not the `__int128_t` alias.
+bool spellsInt128Keyword(llvm::StringRef Text) {
+  constexpr llvm::StringLiteral Keyword("__int128");
+  const auto Identifier = [](char C) { return llvm::isAlnum(C) || C == '_'; };
+  for (size_t At = Text.find(Keyword); At != llvm::StringRef::npos;
+       At = Text.find(Keyword, At + Keyword.size())) {
+    const size_t End = At + Keyword.size();
+    if ((At == 0 || !Identifier(Text[At - 1])) &&
+        (End == Text.size() || !Identifier(Text[End])))
+      return true;
+  }
+  return false;
+}
 } // namespace
 
 void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
@@ -521,8 +535,20 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
     OS.retarget(&RestOS);
     writeModuleBody(Mod);
   }
-  writeRecordDefinitions(Rest);
-  OS << Rest;
+  std::string Records;
+  {
+    llvm::raw_string_ostream RecordsOS(Records);
+    RestoreOutput Restore{OS, &OS.stream()};
+    OS.retarget(&RecordsOS);
+    writeRecordDefinitions(Rest);
+  }
+  // A 16-byte integer spelled by its type, as a frame record's member is, is
+  // `__int128`, which a 32-bit target's compiler lacks: there it is the C23
+  // type of that width, as in HighC.
+  if (getTargetRegInfo(Opts.TheArch).PointerSize < 8 &&
+      (spellsInt128Keyword(Records) || spellsInt128Keyword(Rest)))
+    OS << "#define __int128 _BitInt(128)\n\n";
+  OS << Records << Rest;
   if (isMIPS(Opts.TheArch) &&
       (mips::modulePreservesDSPControl(Mod, Img ? Img : Opts.Image,
                                        Opts.TheArch) ||
@@ -906,8 +932,12 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
   bool HasFloatingArithmetic = false;
   bool HasWin64Call = false;
   std::set<X87CHelper> X87PrecisionHelpers;
-  const bool NeedsMIPSWideCarrier =
-      Opts.TheArch == Arch::MIPS32 || Opts.TheArch == Arch::MIPS32EL;
+  // A 32-bit target's compiler lacks the native 128-bit aliases. x86 defines
+  // them for every unit below; another such target, for a unit that needs
+  // them.
+  const bool NeedsWideCarrierAlias =
+      Opts.TheArch != Arch::X86 &&
+      getTargetRegInfo(Opts.TheArch).PointerSize == 4;
   bool HasWideInteger = false;
   const auto IsWideInteger = [](auto &&Visit, llvm::Type *Type) -> bool {
     if (const auto *Integer = llvm::dyn_cast<llvm::IntegerType>(Type))
@@ -919,10 +949,10 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     return false;
   };
   const auto NoteWideInteger = [&](llvm::Type *Type) {
-    if (NeedsMIPSWideCarrier && !HasWideInteger)
+    if (NeedsWideCarrierAlias && !HasWideInteger)
       HasWideInteger = IsWideInteger(IsWideInteger, Type);
   };
-  if (NeedsMIPSWideCarrier)
+  if (NeedsWideCarrierAlias)
     for (const auto &Global : Mod.globals())
       NoteWideInteger(Global.getValueType());
   Win64CallABI.clear();
@@ -960,7 +990,7 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     // Declarations and aggregate definitions can survive selection of only
     // one body, including a function referenced only through its address.
     NoteWideInteger(Fn.getReturnType());
-    if (NeedsMIPSWideCarrier)
+    if (NeedsWideCarrierAlias)
       for (const auto &Arg : Fn.args())
         NoteWideInteger(Arg.getType());
     if (!SelectedFunctions.contains(Fn))
@@ -982,7 +1012,7 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
       for (auto &Inst : BB) {
         NoteWideInteger(Inst.getType());
         // Opaque pointer results do not describe the declared local storage.
-        if (NeedsMIPSWideCarrier)
+        if (NeedsWideCarrierAlias)
           if (const auto *Allocation = llvm::dyn_cast<llvm::AllocaInst>(&Inst))
             NoteWideInteger(Allocation->getAllocatedType());
         for (const llvm::Use &Operand : Inst.operands()) {
@@ -1342,13 +1372,11 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     OS << X86VirtualizationCompilerDispatch;
   if (NeedsX86SystemStateDispatch)
     OS << X86SystemStateCompilerDispatch;
-  if (Opts.TheArch == Arch::X86 ||
-      (HasWideInteger &&
-       (Opts.TheArch == Arch::MIPS32 || Opts.TheArch == Arch::MIPS32EL))) {
-    // 32-bit x86/MIPS Clang supports bit-precise integers but does not define
-    // the native 128-bit aliases used by LLVM C's 65..128-bit scalar carriers.
-    // Retain the same signed/unsigned operations, including packed FP results
-    // and MXCSR.
+  if (Opts.TheArch == Arch::X86 || HasWideInteger) {
+    // A 32-bit target's Clang supports bit-precise integers but does not
+    // define the native 128-bit aliases used by LLVM C's 65..128-bit scalar
+    // carriers. Retain the same signed/unsigned operations, including x86's
+    // packed FP results and MXCSR.
     OS << "#if !defined(__SIZEOF_INT128__) && defined(__BITINT_MAXWIDTH__) && "
           "__BITINT_MAXWIDTH__ >= 128\n"
           "typedef unsigned _BitInt(128) __uint128_t;\n"
