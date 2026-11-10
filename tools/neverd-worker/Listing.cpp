@@ -2094,12 +2094,17 @@ struct Listing::Impl {
   /// Read the user's data items. Their strings join the scan's, and replace
   /// what the scan read in their bytes.
   void readUserItems() {
+    readUserItems(itemsQuery ? takeJson(itemsQuery(session)) : Json());
+  }
+  /// The user's items as \p rows hold them: the engine's, or the table a
+  /// history committed of them.
+  void readUserItems(const Json &rows) {
     userItems.clear();
     dataElementTypes.clear();
     userInstructions.clear();
     if (!itemsQuery)
       return;
-    if (const auto rows = takeJson(itemsQuery(session)); rows.is_array())
+    if (rows.is_array())
       for (const auto &row : rows) {
         const auto address = jsonAddress(row.value("addr", Json()));
         UserItem item;
@@ -5741,12 +5746,15 @@ bool Listing::dataRenamed(std::uint64_t address, const std::string &name) {
   return true;
 }
 
-bool Listing::dataItemsChanged() {
+bool Listing::dataItemsChanged(const Json *rows) {
   auto &d = *impl_;
   if (!d.built || d.namesStale)
     return false;
   const auto before = std::move(d.userItems);
-  d.readUserItems();
+  if (rows)
+    d.readUserItems(*rows);
+  else
+    d.readUserItems();
   const auto same = [](const auto &a, const auto &b) {
     return a.size == b.size && a.kind == b.kind && a.encoding == b.encoding &&
            a.type == b.type && a.elementSize == b.elementSize &&

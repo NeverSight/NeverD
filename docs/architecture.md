@@ -5124,7 +5124,8 @@ An invalid index is discarded before reading pages; the original file still
 recovers every complete record.
 An edit costs what it changes. The owner's listing takes a name of data and a data
 item over bytes no string or code holds where they are (`Listing::dataRenamed`,
-`Listing::dataItemsChanged`), the session a name without reading its table
+`Listing::dataItemsChanged`, which reads the items from the table the history has just
+committed rather than asking the engine for all of them again), the session a name without reading its table
 (`neverd_rename_take`), and a declaration of types no other names reads them against
 what it read of the library once (`Session::LocalTypeNames`), on the library itself
 (`TypeLibrary::Trial`, which undoes a refused declaration). A function's declaration

@@ -5083,7 +5083,8 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
         }
         if (kind == "item") {
           // Items over bytes no string or code holds stay where they are.
-          const bool itemsInPlace = listing_ && listing_->dataItemsChanged();
+          const bool itemsInPlace =
+              listing_ && listing_->dataItemsChanged(&committed);
           if (itemsInPlace)
             dataItemsChanged();
           else
@@ -6876,7 +6877,9 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       namesChanged();
       throw;
     }
-    const bool itemsInPlace = listing_ && listing_->dataItemsChanged();
+    // The listing reads the rows the history now holds, which the engine's are.
+    const bool itemsInPlace =
+        listing_ && listing_->dataItemsChanged(&store.committedTable("items"));
     if (itemsInPlace)
       dataItemsChanged();
     else

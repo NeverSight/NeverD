@@ -120,7 +120,9 @@ public:
   /// bytes show and where the items around them stop, and the listing has read
   /// them: no string, code or function is in them.  Otherwise the caller says
   /// namesChanged.  A view of a function reads no data item (viewGeneration).
-  bool dataItemsChanged();
+  /// \p rows, where given, are the items as the engine now holds them (the
+  /// table the history committed), read in place of asking the engine.
+  bool dataItemsChanged(const Json *rows = nullptr);
   /// A declaration changed.  What the listing decoded shows what a function was
   /// declared as, and reads it again; nothing else it has read changes.  With
   /// \p viewsReadIt a kept view of a function reads it by its reads, as a name
