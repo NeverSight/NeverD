@@ -73,9 +73,30 @@ A64_ENTRY_TEXT(kOptimize0, "-O0")
 A64_ENTRY_TEXT(kOptimize2, "-O2")
 A64_ENTRY_TEXT(kUnavailable,
                "native Darwin AArch64 host and Clang are required")
+A64_ENTRY_TEXT(kExportDirectory, "NEVERD_ARM64E_ENTRY_FIXTURE_DIR")
+A64_ENTRY_TEXT(kExportIR, "entry.ll")
+A64_ENTRY_TEXT(kExportCaller, "caller.cpp")
+A64_ENTRY_TEXT(kDisableTailCalls, "disable-tail-calls")
+A64_ENTRY_TEXT(kTrue, "true")
+A64_ENTRY_TEXT(kNativeABIVersion, "ptrauth.abi-version")
+A64_ENTRY_VALUE(unsigned, kClassicABIVersion, 0)
 A64_ENTRY_TEXT(kNativeCaller, R"cpp(
 #include <stdint.h>
 #include <string.h>
+#ifdef NEVERD_ENTRY_AUTH_KEY
+#include <ptrauth.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
+template<class T> __attribute__((noinline)) T *authenticated(T *Fn) {
+  using Signed = T * __ptrauth(NEVERD_ENTRY_AUTH_KEY, 1, 47);
+  Signed volatile Stored = Fn;
+  return Stored;
+}
+#define ENTRY_INVOKE(Name) authenticated(&Name)
+#else
+#define ENTRY_INVOKE(Name) Name
+#endif
 using V8 = uint8_t __attribute__((vector_size(8)));
 using V16 = uint8_t __attribute__((vector_size(16)));
 struct HFA { double v[4]; };
@@ -113,6 +134,32 @@ uint64_t entry_packed(uint64_t,uint64_t,uint64_t,uint64_t,
                       uint8_t,uint8_t,uint8_t,uint8_t,
                       uint8_t,uint8_t,uint8_t,uint8_t);
 }
+#ifdef NEVERD_ENTRY_AUTH_KEY
+static int rejects_corrupt_entry() {
+  using Signed = uint64_t (* __ptrauth(NEVERD_ENTRY_AUTH_KEY, 1, 47))(uint64_t);
+  Signed stored = &entry_scalar;
+  asm volatile("" : "+m"(stored));
+  if (stored(23) != 23) return 1;
+  uintptr_t bits;
+  memcpy(&bits, (const void *)&stored, sizeof(bits));
+  auto raw = (uintptr_t)__builtin_ptrauth_strip((void *)bits, NEVERD_ENTRY_AUTH_KEY);
+  uintptr_t changed = bits ^ raw;
+  if (!changed) return 2;
+  pid_t child = fork();
+  if (child < 0) return 3;
+  if (!child) {
+    bits ^= changed & (~changed + 1);
+    memcpy((void *)&stored, &bits, sizeof(bits));
+    asm volatile("" : "+m"(stored));
+    (void)stored(23);
+    _exit(4);
+  }
+  int status = 0;
+  if (waitpid(child, &status, 0) != child || !WIFSIGNALED(status)) return 5;
+  int signal = WTERMSIG(status);
+  return signal != SIGSEGV && signal != SIGBUS && signal != SIGILL && signal != SIGTRAP;
+}
+#endif
 extern "C" uint64_t entry_throw(uint64_t x) {
   if (x) throw int(x);
   return 23;
@@ -125,11 +172,11 @@ template<class T> T rotated(T value) {
   return value;
 }
 int main() {
-  if (entry_scalar(0x8123456789abcdefULL) != 0x8123456789abcdefULL) return 1;
+  if (ENTRY_INVOKE(entry_scalar)(0x8123456789abcdefULL) != 0x8123456789abcdefULL) return 1;
   __uint128_t w = (__uint128_t(0x9876543210fedcbaULL) << 64) |
                   0x123456789abcdef0ULL;
-  if (entry_wide(0x5555555555555555ULL, w) != w) return 2;
-  HFA a{{1.25, -2.5, 17.75, 0.125}}, b = entry_hfa(a);
+  if (ENTRY_INVOKE(entry_wide)(0x5555555555555555ULL, w) != w) return 2;
+  HFA a{{1.25, -2.5, 17.75, 0.125}}, b = ENTRY_INVOKE(entry_hfa)(a);
   HFA expected_a = rotated(a);
   if (memcmp(&expected_a, &b, sizeof(a))) return 3;
   HVA8 c{}; HVA16 e{};
@@ -137,42 +184,45 @@ int main() {
     for (unsigned j = 0; j != 8; ++j) c.v[i][j] = 11 + 31*i + j;
     for (unsigned j = 0; j != 16; ++j) e.v[i][j] = 17 + 47*i + j;
   }
-  HVA8 d = entry_hva64(c); HVA16 f = entry_hva128(e);
+  HVA8 d = ENTRY_INVOKE(entry_hva64)(c); HVA16 f = ENTRY_INVOKE(entry_hva128)(e);
   HVA8 expected_c = rotated(c); HVA16 expected_e = rotated(e);
   if (memcmp(&expected_c, &d, sizeof(c))) return 4;
   if (memcmp(&expected_e, &f, sizeof(e))) return 5;
   Large g{{3.5, -6.25, 13.75, 19.125, -21.5, 37.75}};
-  Large h = entry_large(g);
+  Large h = ENTRY_INVOKE(entry_large)(g);
   if (memcmp(&g, &h, sizeof(g))) return 6;
-  if (entry_stack(1,2,3,4,5,6,7,8,9,10,0xfedcba9876543210ULL) !=
+  if (ENTRY_INVOKE(entry_stack)(1,2,3,4,5,6,7,8,9,10,0xfedcba9876543210ULL) !=
       0xfedcba9876543210ULL) return 7;
   int cleaned = 0;
   struct Guard { int *count; ~Guard() { ++*count; } };
-  try { Guard guard{&cleaned}; entry_throwing(31); return 8; }
+  try { Guard guard{&cleaned}; ENTRY_INVOKE(entry_throwing)(31); return 8; }
   catch (int x) { if (x != 31 || cleaned != 1) return 9; }
-  if (entry_throwing(0) != 23) return 10;
-  if (entry_signed(-97) != -97 || entry_unsigned(219) != 219) return 11;
-  if (entry_wide_stack(1,2,3,4,5,6,7,8,w) != w) return 12;
-  HFA stacked = entry_hfa_stack(1,2,3,4,5,6,7,8,a);
+  if (ENTRY_INVOKE(entry_throwing)(0) != 23) return 10;
+  if (ENTRY_INVOKE(entry_signed)(-97) != -97 || ENTRY_INVOKE(entry_unsigned)(219) != 219) return 11;
+  if (ENTRY_INVOKE(entry_wide_stack)(1,2,3,4,5,6,7,8,w) != w) return 12;
+  HFA stacked = ENTRY_INVOKE(entry_hfa_stack)(1,2,3,4,5,6,7,8,a);
   if (memcmp(&expected_a, &stacked, sizeof(a))) return 13;
   Pair pair{0xfeed010203045678ULL, 0xdead987654321000ULL};
-  Pair returned = entry_pair(pair);
+  Pair returned = ENTRY_INVOKE(entry_pair)(pair);
   if (returned.lo != pair.hi || returned.hi != pair.lo) return 14;
-  if (entry_packed(1,2,3,4,5,6,7,8,0x11,0x93,0x25,0xa7,0x39,0xcb,0x4d,0xef)
+  if (ENTRY_INVOKE(entry_packed)(1,2,3,4,5,6,7,8,0x11,0x93,0x25,0xa7,0x39,0xcb,0x4d,0xef)
        != 0xef4dcb39a7259311ULL) return 15;
-  HVA16 emitted = entry_emitted_hva(e);
+  HVA16 emitted = ENTRY_INVOKE(entry_emitted_hva)(e);
   if (memcmp(&expected_e, &emitted, sizeof(e))) return 16;
-  if (entry_signed16(-19371) != -19371 || entry_unsigned16(49127) != 49127)
+  if (ENTRY_INVOKE(entry_signed16)(-19371) != -19371 || ENTRY_INVOKE(entry_unsigned16)(49127) != 49127)
     return 17;
-  if (entry_float(-7.625f) != -7.625f || entry_double(8193.125) != 8193.125)
+  if (ENTRY_INVOKE(entry_float)(-7.625f) != -7.625f || ENTRY_INVOKE(entry_double)(8193.125) != 8193.125)
     return 18;
-  if (entry_pointer(&pair.hi) != &pair.hi) return 19;
-  V8 v8 = entry_vector64(c.v[1]);
-  V16 v16 = entry_vector128(e.v[1]);
-  V16 stacked_vector = entry_vector_stack(1,2,3,4,5,6,7,8,e.v[2]);
+  if (ENTRY_INVOKE(entry_pointer)(&pair.hi) != &pair.hi) return 19;
+  V8 v8 = ENTRY_INVOKE(entry_vector64)(c.v[1]);
+  V16 v16 = ENTRY_INVOKE(entry_vector128)(e.v[1]);
+  V16 stacked_vector = ENTRY_INVOKE(entry_vector_stack)(1,2,3,4,5,6,7,8,e.v[2]);
   if (memcmp(&v8, &c.v[1], sizeof(v8)) ||
       memcmp(&v16, &e.v[1], sizeof(v16)) ||
       memcmp(&stacked_vector, &e.v[2], sizeof(stacked_vector))) return 20;
+#ifdef NEVERD_ENTRY_AUTH_KEY
+  if (rejects_corrupt_entry()) return 21;
+#endif
   return 0;
 }
 )cpp")

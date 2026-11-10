@@ -35,6 +35,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -141,8 +142,11 @@ Fixture identity(llvm::Module &Module, llvm::StringRef Name, TypeRef Type,
     auto *Input =
         Builder.CreateIntToPtr(Find(Bindings.back().Location), Pointer);
     auto *Output = Builder.CreateIntToPtr(Find(Hint.ReturnLocation), Pointer);
-    Builder.CreateMemCpy(Output, llvm::MaybeAlign(), Input, llvm::MaybeAlign(),
-                         Type->Size);
+    // Keep this independent entry fixture usable by Apple's native IR
+    // reader without version-specific memcpy intrinsic attributes.
+    auto *Bytes = Builder.getIntNTy(Type->Size * kByteBits);
+    auto *Value = Builder.CreateAlignedLoad(Bytes, Input, llvm::Align(1));
+    Builder.CreateAlignedStore(Value, Output, llvm::Align(1));
     Builder.CreateRetVoid();
   } else {
     llvm::Value *Result = llvm::PoisonValue::get(ResultType);
@@ -605,5 +609,46 @@ TEST(AArch64EntryABI, IndependentNativeCallersAgreeAtO0AndO2) {
 #else
   GTEST_SKIP() << kUnavailable;
 #endif
+}
+
+TEST(AArch64EntryABI, ExportSignedNativeInputs) {
+  llvm::LLVMContext Context;
+  auto Module = module(Context);
+  addFixtures(*Module);
+  ASSERT_FALSE(HasFailure());
+  Module->setTargetTriple(llvm::Triple(kArm64eTriple));
+  // Apple's native IR reader requires the explicit classic arm64e contract
+  // emitted by its frontend, otherwise it produces an arm64e.old object.
+  auto *ABI = llvm::MDNode::get(
+      Context,
+      {llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
+           llvm::Type::getInt32Ty(Context), kClassicABIVersion)),
+       llvm::ConstantAsMetadata::get(llvm::ConstantInt::getFalse(Context))});
+  Module->addModuleFlag(llvm::Module::AppendUnique, kNativeABIVersion,
+                        llvm::MDNode::get(Context, {ABI}));
+  for (auto &Function : *Module) {
+    if (Function.isDeclaration())
+      continue;
+    Function.addFnAttr(kReturnSigningArm64eAttribute);
+    Function.addFnAttr(llvm::Attribute::NoInline);
+    Function.addFnAttr(kDisableTailCalls, kTrue);
+    Function.setUWTableKind(llvm::UWTableKind::Async);
+  }
+  ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+  const char *Directory = std::getenv(kExportDirectory);
+  if (!Directory || !*Directory)
+    return;
+  const std::filesystem::path Root(Directory);
+  ASSERT_TRUE(std::filesystem::is_directory(Root));
+  std::error_code Error;
+  llvm::raw_fd_ostream IR((Root / kExportIR).string(), Error);
+  ASSERT_FALSE(Error);
+  Module->print(IR, nullptr);
+  IR.close();
+  ASSERT_FALSE(IR.has_error());
+  std::ofstream Caller(Root / kExportCaller);
+  Caller << kNativeCaller;
+  Caller.close();
+  ASSERT_TRUE(Caller);
 }
 } // namespace

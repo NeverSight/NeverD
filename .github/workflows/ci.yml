@@ -124,6 +124,9 @@ jobs:
             scripts.tests.test_probe_native_host \
             scripts.tests.test_run_native_cpu_methods \
             scripts.tests.test_first_fatal_snapshots \
+            scripts.tests.test_verify_arm64e_entry \
+            scripts.tests.test_verify_arm64e_native \
+            scripts.tests.test_arm64e_artifact_lifecycle \
             scripts.tests.test_neverd_bench_harness \
             scripts.tests.test_mips_validation_artifacts \
             scripts.tests.test_benchmark_cpu \

@@ -1,0 +1,28 @@
+{
+  "export_xml": "<testsuites><testsuite><testcase classname=\"AArch64EntryABI\" name=\"ExportSignedNativeInputs\" status=\"run\"/></testsuite></testsuites>",
+  "assembly": "_entry_throwing:\n pacibsp\n bl _entry_throwing.neverd.carriers\n retab\n_entry_throwing.neverd.carriers:\n pacibsp\n bl _entry_throw\n retab\n_main:\n blraaz x16\n blraa x16, x17\n blrab x16, x17\n",
+  "missing_frame_tokens": ["_entry_throwing:", "_entry_throwing.neverd.carriers:", "pacibsp", "retab"],
+  "invalid_probe_overrides": [
+    {"status": "unavailable"},
+    {"native_pac_qualified": false},
+    {"compiler_original_call_unwind_qualified": false},
+    {"control_loading": "exec"},
+    {"fixup_loader": "userspace"},
+    {"source_revision": "foreign"},
+    {"source_sha256": {}}
+  ],
+  "provenance": {"source_revision": "exact", "source_sha256": {"fixture": "identity"}},
+  "probe": {"source_revision": "exact", "source_sha256": {"fixture": "identity"}, "status": "passed", "native_pac_qualified": true, "compiler_original_call_unwind_qualified": true, "control_loading": "dlopen", "fixup_loader": "system"},
+  "fake_binary": "test-host",
+  "fake_compiler": "compiler",
+  "probe_name": "probe.json",
+  "output_name": "output",
+  "source_name": "source",
+  "binary_bytes": "disposable-test-product",
+  "compiler_version": "independent test compiler",
+  "sections_dwarf": " sectname __eh_frame\n",
+  "sections_compact": " sectname __unwind_info\n",
+  "dwarf_name_fragment": "dwarf-True",
+  "failure_code": 17,
+  "case_count": 8
+}

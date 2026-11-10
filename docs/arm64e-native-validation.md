@@ -485,3 +485,43 @@ exception coverage, address ownership or publication closure. Arbitrary lifted
 images still need those proofs, including variadic and non-C entries. The
 previous canonical-IR installation qualification and pinned r6 package remain
 unchanged; source-fork-only producer features still require the source build.
+
+## Reconstructed entries through the native compiler
+
+`scripts/verify_arm64e_entry.py` separately validates the entry reconstruction
+IR with an explicitly selected native compiler. It uses the actual
+`AArch64EntryABI.ExportSignedNativeInputs` producer, including the MedIR HVA
+case, rather than a handwritten replacement IR fixture. A same-source system
+PAC and compiler-original unwind preflight is mandatory for execution:
+
+```sh
+python3 scripts/verify_arm64e_native.py probe --output entry-evidence/probe
+python3 scripts/verify_arm64e_entry.py \
+  --test-binary build-release/bin/NeverDArm64eAnalysisTests \
+  --compiler /usr/bin/clang++ \
+  --probe-report entry-evidence/probe/report.json \
+  --output entry-evidence/native
+```
+
+The eight combinations cover O0/O2, IA/IB address-diverse pointer storage and
+compact/forced-DWARF unwind. The independent caller checks the logical values,
+C++ catch and destructor cleanup. The generated exception entry and its private
+carrier body must retain signed return sequences and separate calls; the
+caller must contain authenticated branches. A valid signed pointer to the
+reconstructed scalar entry executes first; flipping one observed signature bit
+must then fault in a child process. Missing signing, skipped export tests,
+stale preflight identities and nonzero execution outcomes fail qualification.
+The exported fixture explicitly declares classic `ptrauth.abi-version`, as
+Apple's frontend does; without it the native IR reader produces `arm64e.old`.
+The verifier requires the exact classic object/dylib subtype and performs no
+Mach-O header conversion. Its explicit indirect-value loads/stores avoid
+version-specific `memcpy` intrinsic attributes in older native IR readers.
+
+`--compile-only` checks objects, signatures and disassembly without claiming
+execution. Reports bind the source, exported IR, caller, selected compiler,
+test host, loader and each object/dylib. Owned executable products are removed
+on success and failure. `native_reconstructed_entry_qualified` refers only to
+the selected compiler's execution of this fixed entry matrix. It does not
+qualify NeverD's LLVM backend, original prototype recovery, arbitrary lifted
+image publication or native CPTA-on; these remain separate report fields and
+requirements. The r6 package selection does not change.
