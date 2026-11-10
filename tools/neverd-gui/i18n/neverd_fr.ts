@@ -2653,6 +2653,10 @@ Signé : %4</translation>
         <translation>Clair (Visual Studio Code Light+)</translation>
     </message>
     <message>
+        <source>System (follows the desktop&apos;s light or dark mode)</source>
+        <translation>Système (suit le mode clair ou sombre du bureau)</translation>
+    </message>
+    <message>
         <source>Colors</source>
         <translation>Couleurs</translation>
     </message>

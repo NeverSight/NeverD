@@ -19,14 +19,25 @@ enum class ColorRole : int {
 class Theme final : public QObject {
   Q_OBJECT
 public:
+  /// The palette the workbench shows.
   enum class Mode { Dark, Light };
+  /// The theme a person chose: one of the workbench's, or the desktop's light
+  /// or dark mode, which the workbench follows as it changes.
+  enum class Choice { Dark, Light, System };
 
   static Theme &instance();
 
   Mode mode() const { return mode_; }
+  /// Chooses the theme of \p mode.
   void setMode(Mode mode);
   static QString modeName(Mode mode);
-  static Mode modeFromName(const QString &name);
+  Choice choice() const { return choice_; }
+  void setChoice(Choice choice);
+  static QString choiceName(Choice choice);
+  static Choice choiceFromName(const QString &name);
+  /// Follows the desktop's color scheme, \p scheme, while the person chose
+  /// the system's theme; an unknown scheme keeps the theme shown.
+  void followColorScheme(Qt::ColorScheme scheme);
 
   bool dark() const { return mode_ == Mode::Dark; }
   QColor color(ColorRole role) const { return colors_[static_cast<int>(role)]; }
@@ -57,6 +68,7 @@ private:
   Theme();
   void loadColors();
   Mode mode_ = Mode::Dark;
+  Choice choice_ = Choice::Dark;
   QFont codeFont_;
   std::array<QColor, static_cast<int>(ColorRole::Count)> colors_;
   QHash<QString, QColor> chrome_;

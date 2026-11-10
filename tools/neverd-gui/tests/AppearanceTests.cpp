@@ -53,6 +53,7 @@
 #include <QSignalSpy>
 #include <QStandardItemModel>
 #include <QStyle>
+#include <QStyleHints>
 #include <QStyleOption>
 #include <QSvgRenderer>
 #include <QTabBar>
@@ -593,6 +594,62 @@ private slots:
              qPrintable(QStringLiteral("label %1, shortcut %2")
                             .arg(activeLabel)
                             .arg(activeShortcut)));
+  }
+
+  void themeFollowsTheDesktopWhileChosen() {
+    Theme &theme = Theme::instance();
+    const auto restore = qScopeGuard([&] {
+      theme.setMode(Theme::Mode::Dark);
+      theme.apply();
+    });
+    theme.setMode(Theme::Mode::Dark);
+    QSignalSpy changed(&theme, &Theme::changed);
+    // The desktop's scheme, which the offscreen platform does not know: an
+    // unknown one keeps the theme shown.
+    const Qt::ColorScheme desktop =
+        QGuiApplication::styleHints()->colorScheme();
+    const Theme::Mode expected = desktop == Qt::ColorScheme::Light
+                                     ? Theme::Mode::Light
+                                     : Theme::Mode::Dark;
+    theme.setChoice(Theme::Choice::System);
+    QCOMPARE(theme.choice(), Theme::Choice::System);
+    QCOMPARE(QSettings().value(QStringLiteral("appearance/theme")).toString(),
+             QStringLiteral("system"));
+    QCOMPARE(theme.mode(), expected);
+    QCOMPARE(changed.count(), expected == Theme::Mode::Dark ? 0 : 1);
+    changed.clear();
+    // It takes the desktop's light or dark mode as it changes.
+    theme.followColorScheme(Qt::ColorScheme::Dark);
+    theme.followColorScheme(Qt::ColorScheme::Light);
+    QCOMPARE(theme.mode(), Theme::Mode::Light);
+    changed.clear();
+    theme.followColorScheme(Qt::ColorScheme::Dark);
+    QCOMPARE(theme.mode(), Theme::Mode::Dark);
+    QCOMPARE(changed.count(), 1);
+    theme.followColorScheme(Qt::ColorScheme::Light);
+    QCOMPARE(theme.mode(), Theme::Mode::Light);
+    QCOMPARE(changed.count(), 2);
+    QCOMPARE(qApp->palette().color(QPalette::Window),
+             theme.chrome(QStringLiteral("Window")));
+    QCOMPARE(theme.chrome(QStringLiteral("Window")), QColor(0xF3F3F3));
+    theme.followColorScheme(Qt::ColorScheme::Light);
+    QCOMPARE(changed.count(), 2);
+    theme.followColorScheme(Qt::ColorScheme::Dark);
+    QCOMPARE(theme.mode(), Theme::Mode::Dark);
+    QCOMPARE(theme.chrome(QStringLiteral("Window")), QColor(0x252526));
+    theme.followColorScheme(Qt::ColorScheme::Unknown);
+    QCOMPARE(theme.mode(), Theme::Mode::Dark);
+    // A theme chosen by name stays whatever the desktop does.
+    theme.setChoice(Theme::Choice::Light);
+    QCOMPARE(theme.mode(), Theme::Mode::Light);
+    QCOMPARE(QSettings().value(QStringLiteral("appearance/theme")).toString(),
+             QStringLiteral("light"));
+    theme.followColorScheme(Qt::ColorScheme::Dark);
+    QCOMPARE(theme.mode(), Theme::Mode::Light);
+    QCOMPARE(Theme::choiceFromName(QStringLiteral("system")),
+             Theme::Choice::System);
+    QCOMPARE(Theme::choiceFromName(QStringLiteral("bogus")),
+             Theme::Choice::Dark);
   }
 
   void deviceBoxesPaintAsStyleSheetsAtWholeScales_data() {

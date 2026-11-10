@@ -2647,6 +2647,10 @@ Signed: %4</source>
         <translation>밝게 (Visual Studio Code Light+)</translation>
     </message>
     <message>
+        <source>System (follows the desktop&apos;s light or dark mode)</source>
+        <translation>시스템 (데스크톱의 밝게 또는 어둡게 모드를 따름)</translation>
+    </message>
+    <message>
         <source>Colors</source>
         <translation>색상</translation>
     </message>

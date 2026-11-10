@@ -2659,6 +2659,10 @@ Signed: %4</source>
         <translation>Светлая (Visual Studio Code Light+)</translation>
     </message>
     <message>
+        <source>System (follows the desktop&apos;s light or dark mode)</source>
+        <translation>Системная (следует светлому или тёмному режиму рабочего стола)</translation>
+    </message>
+    <message>
         <source>Colors</source>
         <translation>Цвета</translation>
     </message>

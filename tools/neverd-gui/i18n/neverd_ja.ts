@@ -2647,6 +2647,10 @@ Signed: %4</source>
         <translation>ライト（Visual Studio Code Light+）</translation>
     </message>
     <message>
+        <source>System (follows the desktop&apos;s light or dark mode)</source>
+        <translation>システム（デスクトップのライトまたはダーク モードに従う）</translation>
+    </message>
+    <message>
         <source>Colors</source>
         <translation>配色</translation>
     </message>

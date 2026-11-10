@@ -2653,6 +2653,10 @@ Mit Vorzeichen: %4</translation>
         <translation>Hell (Visual Studio Code Light+)</translation>
     </message>
     <message>
+        <source>System (follows the desktop&apos;s light or dark mode)</source>
+        <translation>System (folgt dem hellen oder dunklen Modus des Desktops)</translation>
+    </message>
+    <message>
         <source>Colors</source>
         <translation>Farben</translation>
     </message>

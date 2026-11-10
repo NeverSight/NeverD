@@ -2653,6 +2653,10 @@ Con segno: %4</translation>
         <translation>Chiaro (Visual Studio Code Light+)</translation>
     </message>
     <message>
+        <source>System (follows the desktop&apos;s light or dark mode)</source>
+        <translation>Sistema (segue la modalità chiara o scura del desktop)</translation>
+    </message>
+    <message>
         <source>Colors</source>
         <translation>Colori</translation>
     </message>

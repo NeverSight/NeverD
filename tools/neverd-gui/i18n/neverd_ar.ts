@@ -2677,6 +2677,10 @@ Signed: %4</source>
         <translation>فاتحة (Visual Studio Code Light+)</translation>
     </message>
     <message>
+        <source>System (follows the desktop&apos;s light or dark mode)</source>
+        <translation>النظام (يتبع الوضع الفاتح أو الداكن لسطح المكتب)</translation>
+    </message>
+    <message>
         <source>Colors</source>
         <translation>الألوان</translation>
     </message>

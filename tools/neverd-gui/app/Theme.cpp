@@ -22,6 +22,7 @@
 #include <QSettings>
 #include <QStringList>
 #include <QStyle>
+#include <QStyleHints>
 #include <algorithm>
 
 namespace neverd::gui {
@@ -175,7 +176,9 @@ Theme &Theme::instance() {
 
 Theme::Theme() {
   QSettings settings;
-  mode_ = modeFromName(settings.value(ModeKey).toString());
+  choice_ = choiceFromName(settings.value(ModeKey).toString());
+  // The desktop's scheme is known once the application starts (apply()).
+  mode_ = choice_ == Choice::Light ? Mode::Light : Mode::Dark;
   codeFont_ = defaultCodeFont();
   if (const auto saved = settings.value(FontKey).toString(); !saved.isEmpty()) {
     QFont font;
@@ -189,15 +192,53 @@ QString Theme::modeName(Mode mode) {
   return mode == Mode::Light ? QStringLiteral("light") : QStringLiteral("dark");
 }
 
-Theme::Mode Theme::modeFromName(const QString &name) {
-  return name == QLatin1String("light") ? Mode::Light : Mode::Dark;
+void Theme::setMode(Mode mode) {
+  setChoice(mode == Mode::Light ? Choice::Light : Choice::Dark);
 }
 
-void Theme::setMode(Mode mode) {
+QString Theme::choiceName(Choice choice) {
+  switch (choice) {
+  case Choice::Light:
+    return QStringLiteral("light");
+  case Choice::System:
+    return QStringLiteral("system");
+  case Choice::Dark:
+    break;
+  }
+  return QStringLiteral("dark");
+}
+
+Theme::Choice Theme::choiceFromName(const QString &name) {
+  if (name == QLatin1String("light"))
+    return Choice::Light;
+  if (name == QLatin1String("system"))
+    return Choice::System;
+  return Choice::Dark;
+}
+
+void Theme::setChoice(Choice choice) {
+  if (choice == choice_)
+    return;
+  choice_ = choice;
+  QSettings().setValue(ModeKey, choiceName(choice));
+  const Mode shown = mode_;
+  if (choice == Choice::System) {
+    if (const auto *hints = QGuiApplication::styleHints())
+      followColorScheme(hints->colorScheme());
+    return;
+  }
+  mode_ = choice == Choice::Light ? Mode::Light : Mode::Dark;
+  if (mode_ != shown)
+    apply();
+}
+
+void Theme::followColorScheme(Qt::ColorScheme scheme) {
+  if (choice_ != Choice::System || scheme == Qt::ColorScheme::Unknown)
+    return;
+  const Mode mode = scheme == Qt::ColorScheme::Light ? Mode::Light : Mode::Dark;
   if (mode == mode_)
     return;
   mode_ = mode;
-  QSettings().setValue(ModeKey, modeName(mode));
   apply();
 }
 
@@ -256,9 +297,20 @@ void Theme::loadColors() {
 }
 
 void Theme::apply() {
-  loadColors();
   auto *application =
       qobject_cast<QApplication *>(QCoreApplication::instance());
+  // The system's theme takes the desktop's light or dark mode now and
+  // whenever it changes.
+  if (application) {
+    connect(application->styleHints(), &QStyleHints::colorSchemeChanged, this,
+            &Theme::followColorScheme, Qt::UniqueConnection);
+    if (choice_ == Choice::System &&
+        application->styleHints()->colorScheme() != Qt::ColorScheme::Unknown)
+      mode_ = application->styleHints()->colorScheme() == Qt::ColorScheme::Light
+                  ? Mode::Light
+                  : Mode::Dark;
+  }
+  loadColors();
   if (!application) {
     emit changed();
     return;

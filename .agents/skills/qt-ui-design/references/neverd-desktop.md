@@ -173,6 +173,12 @@ looked unfinished to the user once pointed out.
   as the output log's text formats, keeps each part's level or role and colors
   it again on `Theme::changed`; the dark theme's gray log lines all but
   vanished on the light theme's white.
+- Follow the desktop when the person chooses it. The System theme
+  (`Theme::Choice::System`) takes `QStyleHints::colorScheme()` and follows
+  `colorSchemeChanged`, as Visual Studio Code's
+  `window.autoDetectColorScheme` does; an unknown scheme keeps the theme shown,
+  and a theme chosen by name ignores the desktop. Paint code reads
+  `Theme::mode()`, the palette shown, never the choice.
 - Scroll sideways rather than cut content off. A view that paints rows of a
   fixed width, as the hex view does, scrolls horizontally when its pane is
   narrower than a row, keeps the byte the keys reach in view, and maps clicks

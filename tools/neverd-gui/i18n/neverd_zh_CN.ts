@@ -2647,6 +2647,10 @@ Signed: %4</source>
         <translation>浅色（Visual Studio Code Light+）</translation>
     </message>
     <message>
+        <source>System (follows the desktop&apos;s light or dark mode)</source>
+        <translation>系统（跟随桌面的浅色或深色模式）</translation>
+    </message>
+    <message>
         <source>Colors</source>
         <translation>颜色</translation>
     </message>
