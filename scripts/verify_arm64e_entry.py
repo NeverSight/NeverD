@@ -35,6 +35,11 @@ def check_probe(control, provenance):
         raise ValueError(POLICY["errors"]["probe"])
 
 
+def exception_frames():
+    return [name for entry in POLICY["exception_entries"]
+            for name in (entry, entry + POLICY["carrier_suffix"])]
+
+
 def check_disassembly(text, key):
     functions = {}
     current = None
@@ -45,11 +50,10 @@ def check_disassembly(text, key):
             functions[current] = []
         elif current:
             functions[current].append(line)
-    for name in (POLICY["exception_entry"],
-                 POLICY["exception_entry"] + POLICY["carrier_suffix"]):
+    for name in exception_frames():
         body = "\n".join(functions.get(name, []))
         if not all(re.search(pattern, body) for pattern in POLICY["signed_return_patterns"]):
-            raise ValueError(POLICY["errors"]["signed_frames"])
+            raise ValueError(POLICY["errors"]["signed_frames"].format(function=name))
     if (not re.search(POLICY["authenticated_call_pattern"], text) or
             not re.search(POLICY["key_call_patterns"][str(key)], text)):
         raise ValueError(POLICY["errors"]["authenticated_call"])
@@ -58,8 +62,22 @@ def check_disassembly(text, key):
 def check_sections(text, dwarf):
     sections = set(re.findall(POLICY["section_pattern"], text, re.MULTILINE))
     if ((dwarf and POLICY["dwarf_section"] not in sections) or
-            (POLICY["compact_section"] in sections) == dwarf):
+            POLICY["compact_section"] not in sections):
         raise ValueError(POLICY["errors"]["unwind_mode"])
+
+
+def check_unwind(text, dwarf):
+    symbols = {name: int(address, POLICY["hex_radix"])
+               for address, name in re.findall(POLICY["symbol_pattern"], text, re.MULTILINE)}
+    records = {int(address, POLICY["hex_radix"]): int(encoding, POLICY["hex_radix"])
+               for address, encoding in re.findall(POLICY["unwind_pattern"], text)}
+    modes = (POLICY["dwarf_unwind_modes"] if dwarf else POLICY["compact_unwind_modes"])
+    for name in exception_frames() + POLICY["native_exception_functions"]:
+        # Adjacent compact entries with the same encoding may be coalesced.
+        starts = [address for address in records if address <= symbols.get(name, -1)]
+        if (not starts or (dwarf and symbols[name] not in records) or
+                records[max(starts)] & POLICY["unwind_mode_mask"] not in modes):
+            raise ValueError(POLICY["errors"]["unwind_records"].format(function=name))
 
 
 def check_classic(binary):
@@ -96,6 +114,9 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False):
             version = command(POLICY["version_label"], [compiler, *POLICY["version_args"]])
             report["compiler"] = {"path": str(compiler), "sha256": native.digest(compiler),
                                   "version": version.stdout}
+            sdk = command(POLICY["sdk_label"], POLICY["sdk_command"])
+            report["sdk_path"] = sdk.stdout.strip()
+            compile_args = [*POLICY["compile_args"], POLICY["sysroot_option"], report["sdk_path"]]
             xml = output / POLICY["export_xml"]
             command(POLICY["export_label"], [binary, POLICY["export_filter"],
                                             POLICY["export_xml_option"] + str(xml)],
@@ -108,23 +129,24 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False):
             loader_source, loader = output / POLICY["loader_source"], output / POLICY["loader_binary"]
             loader_source.write_text(contract["loader"])
             products.append(loader)
-            command(POLICY["loader_binary"], [compiler, *POLICY["compile_args"], *POLICY["cxx_args"],
+            command(POLICY["loader_binary"], [compiler, *compile_args, *POLICY["cxx_args"],
                                               loader_source, POLICY["output_option"], loader])
             report["loader"] = native.check_binary(loader)
             for optimization in POLICY["optimizations"]:
-                obj = output / POLICY["object_name"].format(optimization=optimization)
-                products.append(obj)
-                command(obj.name, [compiler, *POLICY["compile_args"], optimization,
-                                   *POLICY["object_args"], output / POLICY["entry_source"],
-                                   POLICY["output_option"], obj])
-                object_identity = check_classic(obj)
-                for key in POLICY["keys"]:
-                    for dwarf in POLICY["dwarf_modes"]:
+                for dwarf in POLICY["dwarf_modes"]:
+                    obj = output / POLICY["object_name"].format(optimization=optimization, dwarf=dwarf)
+                    products.append(obj)
+                    source = POLICY["dwarf_entry_source"] if dwarf else POLICY["entry_source"]
+                    command(obj.name, [compiler, *compile_args, optimization,
+                                       *POLICY["object_args"], output / source,
+                                       POLICY["output_option"], obj])
+                    object_identity = check_classic(obj)
+                    for key in POLICY["keys"]:
                         fields = dict(optimization=optimization, key=key, dwarf=dwarf)
                         label = POLICY["case_name"].format(**fields)
                         library = output / POLICY["library_name"].format(**fields)
                         products.append(library)
-                        args = [compiler, *POLICY["compile_args"], *POLICY["cxx_args"], optimization,
+                        args = [compiler, *compile_args, *POLICY["cxx_args"], optimization,
                                 *POLICY["library_args"], POLICY["key_option"].format(key=key)]
                         if dwarf:
                             args.append(POLICY["dwarf_option"])
@@ -139,6 +161,9 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False):
                         sections = command(label + POLICY["sections_suffix"],
                                            [*POLICY["sections_command"], library])
                         check_sections(sections.stdout, dwarf)
+                        unwind = command(label + POLICY["unwind_suffix"],
+                                         [*POLICY["unwind_command"], library])
+                        check_unwind(unwind.stdout, dwarf)
                         row = {**fields, **check_classic(library),
                                "object": object_identity, "executed": False}
                         report["cases"].append(row)
@@ -165,7 +190,8 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     try:
-        report = run(output, args.test_binary.resolve(), args.compiler.resolve(),
+        # clang++ may be a symlink to clang; argv[0] selects C++ driver mode.
+        report = run(output, args.test_binary.resolve(), args.compiler.absolute(),
                      args.probe_report.resolve() if args.probe_report else None,
                      compile_only=args.compile_only)
         print(json.dumps({"status": report["status"], "report": str(output / POLICY["report_name"])}))

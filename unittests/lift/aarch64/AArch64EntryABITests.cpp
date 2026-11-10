@@ -26,6 +26,7 @@
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Linker/Linker.h"
@@ -286,6 +287,22 @@ void addFixtures(llvm::Module &Module) {
   Throwing.Body->setUWTableKind(llvm::UWTableKind::Async);
   auto Entry = reconstructDarwinAArch64Entry(*Throwing.Body, Throwing.Source);
   ASSERT_TRUE(bool(Entry)) << llvm::toString(Entry.takeError());
+  auto AddThrowing = [&](llvm::StringRef Name, TypeRef ValueType) {
+    auto F = identity(Module, Name, ValueType, 1);
+    llvm::IRBuilder<> CallBuilder(
+        &*F.Body->getEntryBlock().getFirstInsertionPt());
+    // Reversed carriers put the first logical argument (the throw selector)
+    // last, including when the result uses x8. Values must survive the call.
+    CallBuilder.CreateCall(Module.getOrInsertFunction(kThrow, Type),
+                           {F.Body->getArg(F.Body->arg_size() - 1)});
+    F.Body->setUWTableKind(llvm::UWTableKind::Async);
+    auto Result = reconstructDarwinAArch64Entry(*F.Body, F.Source);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  };
+  AddThrowing(kWideThrowing, NdType::makeInt(kWideBytes, false));
+  AddThrowing(kLargeThrowing,
+              record(NdType::makeFloat(sizeof(double)), kLargeElements));
+  AddThrowing(kHVAThrowing, record(Vector(kWideBytes), kHVAElements));
 }
 
 std::unique_ptr<llvm::Module> module(llvm::LLVMContext &Context) {
@@ -632,20 +649,45 @@ TEST(AArch64EntryABI, ExportSignedNativeInputs) {
     Function.addFnAttr(kReturnSigningArm64eAttribute);
     Function.addFnAttr(llvm::Attribute::NoInline);
     Function.addFnAttr(kDisableTailCalls, kTrue);
-    Function.setUWTableKind(llvm::UWTableKind::Async);
+    Function.addFnAttr(kFramePointer, kAll);
+    // Match the native C++ frontend's synchronous exception-table contract.
+    // Async epilogue CFI forces DWARF even without the explicit escape below.
+    Function.setUWTableKind(llvm::UWTableKind::Sync);
   }
-  ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
   const char *Directory = std::getenv(kExportDirectory);
-  if (!Directory || !*Directory)
+  std::filesystem::path Root;
+  if (Directory && *Directory) {
+    Root = Directory;
+    ASSERT_TRUE(std::filesystem::is_directory(Root));
+  }
+  for (bool Dwarf : {false, true}) {
+    if (Dwarf) {
+      // Force per-function DWARF while retaining Darwin's lookup index.
+      // Removing __unwind_info prevents even compiler-only C++ unwinding.
+      auto *Type =
+          llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
+      auto *CFI = llvm::InlineAsm::get(Type, kDwarfCFI, {}, true);
+      for (auto &Function : *Module) {
+        if (Function.isDeclaration())
+          continue;
+        llvm::IRBuilder<> Builder(
+            &*Function.getEntryBlock().getFirstInsertionPt());
+        Builder.CreateCall(CFI);
+      }
+    }
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    if (Root.empty())
+      continue;
+    std::error_code Error;
+    llvm::raw_fd_ostream IR(
+        (Root / (Dwarf ? kExportDwarfIR : kExportIR)).string(), Error);
+    ASSERT_FALSE(Error);
+    Module->print(IR, nullptr);
+    IR.close();
+    ASSERT_FALSE(IR.has_error());
+  }
+  if (Root.empty())
     return;
-  const std::filesystem::path Root(Directory);
-  ASSERT_TRUE(std::filesystem::is_directory(Root));
-  std::error_code Error;
-  llvm::raw_fd_ostream IR((Root / kExportIR).string(), Error);
-  ASSERT_FALSE(Error);
-  Module->print(IR, nullptr);
-  IR.close();
-  ASSERT_FALSE(IR.has_error());
   std::ofstream Caller(Root / kExportCaller);
   Caller << kNativeCaller;
   Caller.close();

@@ -21729,7 +21729,11 @@ are removed after execution.
 actual reconstructed entry IR and its independent caller for
 `scripts/verify_arm64e_entry.py`. The explicit native-compiler matrix covers
 O0/O2 IA/IB address-diverse calls, a corrupted-entry-signature negative control
-and compact/forced-DWARF exception propagation. Its Python tests reject missing
+and compact/forced-DWARF exception propagation. Both profiles retain Darwin's
+unwind lookup index; the DWARF profile verifies the final per-function encoding
+for scalar/i128/HVA128/x8 entries, their carrier bodies, the thrower and catcher.
+Each exception case checks destructor cleanup and the subsequent normal value.
+Its Python tests reject missing
 or skipped exports, stale/system-profile mismatches and missing signed frames;
 they also check partial-run cleanup and prevent offline execution, NeverD
 codegen or CPTA qualification from being inferred. Run

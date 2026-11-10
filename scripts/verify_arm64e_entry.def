@@ -11,37 +11,72 @@
   "export_xml_option": "--gtest_output=xml:",
   "export_xml": "export.xml",
   "export_label": "export",
-  "export_sources": ["entry.ll", "caller.cpp"],
+  "export_sources": [
+    "entry.ll",
+    "entry-dwarf.ll",
+    "caller.cpp"
+  ],
   "loader_source": "loader.cpp",
   "loader_binary": "loader.out",
-  "object_name": "entry-{optimization}.o",
+  "object_name": "entry-{optimization}-dwarf-{dwarf}.o",
   "library_name": "entry-{optimization}-key-{key}-dwarf-{dwarf}.dylib",
   "case_name": "{optimization}-key-{key}-dwarf-{dwarf}",
   "entry_source": "entry.ll",
   "caller_source": "caller.cpp",
-  "version_args": ["--version"],
+  "version_args": [
+    "--version"
+  ],
   "version_label": "compiler",
-  "compile_args": ["-arch", "arm64e", "-fno-omit-frame-pointer", "-fno-optimize-sibling-calls"],
-  "cxx_args": ["-std=c++20"],
-  "object_args": ["-c"],
-  "library_args": ["-dynamiclib"],
-  "dwarf_option": "-Wl,-no_compact_unwind",
+  "compile_args": [
+    "-arch",
+    "arm64e",
+    "-fno-omit-frame-pointer",
+    "-fno-optimize-sibling-calls"
+  ],
+  "cxx_args": [
+    "-std=c++20"
+  ],
+  "object_args": [
+    "-c"
+  ],
+  "library_args": [
+    "-dynamiclib"
+  ],
+  "dwarf_option": "-DNEVERD_ENTRY_DWARF",
   "key_option": "-DNEVERD_ENTRY_AUTH_KEY={key}",
   "output_option": "-o",
-  "optimizations": ["-O0", "-O2"],
-  "keys": [0, 1],
-  "dwarf_modes": [false, true],
+  "optimizations": [
+    "-O0",
+    "-O2"
+  ],
+  "keys": [
+    0,
+    1
+  ],
+  "dwarf_modes": [
+    false,
+    true
+  ],
   "tool_timeout": 120,
   "export_timeout": 180,
   "execute_timeout": 30,
   "report_name": "report.json",
-  "exception_entry": "_entry_throwing",
   "carrier_suffix": ".neverd.carriers",
   "function_pattern": "^([^\\s:]+):$",
-  "signed_return_patterns": ["\\bpacibsp\\b", "\\b(retab|autibsp)\\b"],
+  "signed_return_patterns": [
+    "\\bpacibsp\\b",
+    "\\b(retab|autibsp)\\b"
+  ],
   "authenticated_call_pattern": "\\bblraa[z]?\\b",
-  "key_call_patterns": {"0": "\\bblraa\\b", "1": "\\bblrab\\b"},
-  "sections_command": ["/usr/bin/xcrun", "otool", "-l"],
+  "key_call_patterns": {
+    "0": "\\bblraa\\b",
+    "1": "\\bblrab\\b"
+  },
+  "sections_command": [
+    "/usr/bin/xcrun",
+    "otool",
+    "-l"
+  ],
   "sections_suffix": "-sections",
   "section_pattern": "^\\s*sectname (\\S+)\\s*$",
   "dwarf_section": "__eh_frame",
@@ -64,10 +99,49 @@
     "arguments": "Native entry validation requires --probe-report; --compile-only does not accept one",
     "export": "Entry export must contain exactly the successful, unskipped owning test",
     "probe": "Native entry validation requires a successful same-source system PAC/unwind preflight",
-    "signed_frames": "The reconstructed exception entry and carrier body must both contain signed return sequences",
+    "signed_frames": "The reconstructed exception frame {function} must contain signed return sequences",
     "authenticated_call": "The independent caller must contain an authenticated indirect call",
     "unwind_mode": "The native image does not retain the requested compact or forced-DWARF unwind sections",
     "subtype": "The generated object or dylib does not declare the classic arm64e ABI",
-    "matrix": "The complete native entry matrix did not execute successfully"
-  }
+    "matrix": "The complete native entry matrix did not execute successfully",
+    "unwind_records": "The exception frame {function} must use the requested indexed unwind encoding"
+  },
+  "dwarf_entry_source": "entry-dwarf.ll",
+  "unwind_command": [
+    "/usr/bin/xcrun",
+    "llvm-objdump",
+    "--macho",
+    "--syms",
+    "--unwind-info"
+  ],
+  "unwind_suffix": "-unwind",
+  "symbol_pattern": "^([0-9a-fA-F]+)\\s+.*\\bF\\s+__TEXT,__text\\s+(\\S+)\\s*$",
+  "unwind_pattern": "function offset=(0x[0-9a-fA-F]+), encoding\\[\\d+\\]=(0x[0-9a-fA-F]+)",
+  "hex_radix": 16,
+  "unwind_mode_mask": 251658240,
+  "dwarf_unwind_modes": [
+    50331648
+  ],
+  "compact_unwind_modes": [
+    33554432,
+    67108864
+  ],
+  "exception_entries": [
+    "_entry_throwing",
+    "_entry_wide_throwing",
+    "_entry_large_throwing",
+    "_entry_hva_throwing"
+  ],
+  "native_exception_functions": [
+    "_entry_throw",
+    "_main"
+  ],
+  "sdk_label": "sdk",
+  "sdk_command": [
+    "/usr/bin/xcrun",
+    "--sdk",
+    "macosx",
+    "--show-sdk-path"
+  ],
+  "sysroot_option": "-isysroot"
 }

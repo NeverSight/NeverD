@@ -59,6 +59,9 @@ A64_ENTRY_TEXT(kSaved, "entry_saved")
 A64_ENTRY_TEXT(kCaller, "entry_caller")
 A64_ENTRY_TEXT(kThrow, "entry_throw")
 A64_ENTRY_TEXT(kThrowing, "entry_throwing")
+A64_ENTRY_TEXT(kWideThrowing, "entry_wide_throwing")
+A64_ENTRY_TEXT(kLargeThrowing, "entry_large_throwing")
+A64_ENTRY_TEXT(kHVAThrowing, "entry_hva_throwing")
 A64_ENTRY_TEXT(kCxxRuntime, "-lc++")
 A64_ENTRY_TEXT(kInterior, "entry_interior")
 A64_ENTRY_TEXT(kPersonality, "__gxx_personality_v0")
@@ -75,14 +78,23 @@ A64_ENTRY_TEXT(kUnavailable,
                "native Darwin AArch64 host and Clang are required")
 A64_ENTRY_TEXT(kExportDirectory, "NEVERD_ARM64E_ENTRY_FIXTURE_DIR")
 A64_ENTRY_TEXT(kExportIR, "entry.ll")
+A64_ENTRY_TEXT(kExportDwarfIR, "entry-dwarf.ll")
+A64_ENTRY_TEXT(kDwarfCFI, ".cfi_escape 0x2e, 0")
 A64_ENTRY_TEXT(kExportCaller, "caller.cpp")
 A64_ENTRY_TEXT(kDisableTailCalls, "disable-tail-calls")
+A64_ENTRY_TEXT(kFramePointer, "frame-pointer")
+A64_ENTRY_TEXT(kAll, "all")
 A64_ENTRY_TEXT(kTrue, "true")
 A64_ENTRY_TEXT(kNativeABIVersion, "ptrauth.abi-version")
 A64_ENTRY_VALUE(unsigned, kClassicABIVersion, 0)
 A64_ENTRY_TEXT(kNativeCaller, R"cpp(
 #include <stdint.h>
 #include <string.h>
+#ifdef NEVERD_ENTRY_DWARF
+#define ENTRY_DWARF() asm volatile(".cfi_escape 0x2e, 0")
+#else
+#define ENTRY_DWARF() do {} while (false)
+#endif
 #ifdef NEVERD_ENTRY_AUTH_KEY
 #include <ptrauth.h>
 #include <signal.h>
@@ -117,6 +129,9 @@ V8 entry_vector64(V8);
 V16 entry_vector128(V16);
 V16 entry_vector_stack(double,double,double,double,double,double,double,double,V16);
 uint64_t entry_throwing(uint64_t);
+__uint128_t entry_wide_throwing(uint64_t, __uint128_t);
+Large entry_large_throwing(uint64_t, Large);
+HVA16 entry_hva_throwing(uint64_t, HVA16);
 __uint128_t entry_wide(uint64_t, __uint128_t);
 __uint128_t entry_wide_stack(uint64_t,uint64_t,uint64_t,uint64_t,
                             uint64_t,uint64_t,uint64_t,uint64_t,__uint128_t);
@@ -161,6 +176,7 @@ static int rejects_corrupt_entry() {
 }
 #endif
 extern "C" uint64_t entry_throw(uint64_t x) {
+  ENTRY_DWARF();
   if (x) throw int(x);
   return 23;
 }
@@ -172,6 +188,7 @@ template<class T> T rotated(T value) {
   return value;
 }
 int main() {
+  ENTRY_DWARF();
   if (ENTRY_INVOKE(entry_scalar)(0x8123456789abcdefULL) != 0x8123456789abcdefULL) return 1;
   __uint128_t w = (__uint128_t(0x9876543210fedcbaULL) << 64) |
                   0x123456789abcdef0ULL;
@@ -223,6 +240,17 @@ int main() {
 #ifdef NEVERD_ENTRY_AUTH_KEY
   if (rejects_corrupt_entry()) return 21;
 #endif
+  try { Guard guard{&cleaned}; ENTRY_INVOKE(entry_wide_throwing)(31,w); return 22; }
+  catch (int x) { if (x != 31 || cleaned != 2) return 23; }
+  try { Guard guard{&cleaned}; ENTRY_INVOKE(entry_large_throwing)(31,g); return 24; }
+  catch (int x) { if (x != 31 || cleaned != 3) return 25; }
+  try { Guard guard{&cleaned}; ENTRY_INVOKE(entry_hva_throwing)(31,e); return 26; }
+  catch (int x) { if (x != 31 || cleaned != 4) return 27; }
+  if (ENTRY_INVOKE(entry_wide_throwing)(0,w) != w) return 28;
+  Large after_large_throw = ENTRY_INVOKE(entry_large_throwing)(0,g);
+  HVA16 after_hva_throw = ENTRY_INVOKE(entry_hva_throwing)(0,e);
+  if (memcmp(&g, &after_large_throw, sizeof(g)) ||
+      memcmp(&expected_e, &after_hva_throw, sizeof(e))) return 29;
   return 0;
 }
 )cpp")

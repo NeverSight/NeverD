@@ -16,6 +16,25 @@ CASES = json.loads(Path(__file__).with_suffix(".def").read_text())
 
 
 class EntryQualificationTests(unittest.TestCase):
+    def test_cli_preserves_cxx_driver_symlink_name(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            target = root / CASES["compiler_target"]
+            target.write_text(CASES["binary_bytes"])
+            compiler = root / CASES["compiler_symlink"]
+            compiler.symlink_to(target)
+            output = root / CASES["output_name"]
+            argv = [entry.__file__, entry.POLICY["output_argument"], str(output),
+                    entry.POLICY["binary_argument"], str(target),
+                    entry.POLICY["compiler_argument"], str(compiler),
+                    entry.POLICY["offline_argument"]]
+            with mock.patch.object(sys, "argv", argv), \
+                    mock.patch.object(entry, "run", return_value={"status": entry.native.POLICY["passed"]}) as run, \
+                    mock.patch("builtins.print"):
+                self.assertEqual(entry.main(), 0)
+            self.assertEqual(run.call_args.args[2], compiler)
+            self.assertNotEqual(run.call_args.args[2], compiler.resolve())
+
     def test_export_requires_exact_executed_case(self):
         entry.check_export(CASES["export_xml"])
         for failure in entry.native.POLICY["failure_tags"]:
@@ -65,11 +84,17 @@ class EntryQualificationTests(unittest.TestCase):
                         for name in entry.POLICY["export_sources"]:
                             (output / name).write_text(CASES["binary_bytes"])
                     elif entry.POLICY["output_option"] in argv:
+                        self.assertIn(entry.POLICY["sysroot_option"], argv)
+                        self.assertEqual(argv[argv.index(entry.POLICY["sysroot_option"]) + 1], CASES["sdk_path"])
                         Path(argv[-1]).write_text(CASES["binary_bytes"])
+                    elif label == entry.POLICY["sdk_label"]:
+                        stdout = CASES["sdk_path"]
                     elif label.endswith(entry.native.POLICY["disassembly_suffix"]):
                         stdout = CASES["assembly"]
                     elif label.endswith(entry.POLICY["sections_suffix"]):
                         stdout = CASES["sections_dwarf"] if CASES["dwarf_name_fragment"] in label else CASES["sections_compact"]
+                    elif label.endswith(entry.POLICY["unwind_suffix"]):
+                        stdout = CASES["unwind_dwarf"] if CASES["dwarf_name_fragment"] in label else CASES["unwind_compact"]
                     elif argv[0] == str(output / entry.POLICY["loader_binary"]):
                         executed.append(label)
                         if fail:
@@ -101,10 +126,28 @@ class EntryQualificationTests(unittest.TestCase):
     def test_requested_unwind_mode_matches_image_sections(self):
         entry.check_sections(CASES["sections_dwarf"], True)
         entry.check_sections(CASES["sections_compact"], False)
-        for text, dwarf in ((CASES["sections_dwarf"], False),
+        for text, dwarf in ((CASES["sections_no_index"], False),
+                            (CASES["sections_no_index"], True),
                             (CASES["sections_compact"], True), ("", True)):
             with self.subTest(dwarf=dwarf), self.assertRaises(ValueError):
                 entry.check_sections(text, dwarf)
+
+    def test_unwind_encoding_covers_each_exception_frame(self):
+        entry.check_unwind(CASES["unwind_dwarf"], True)
+        entry.check_unwind(CASES["unwind_compact"], False)
+        for text, dwarf in ((CASES["unwind_dwarf"], False),
+                            (CASES["unwind_compact"], True), ("", True)):
+            with self.subTest(dwarf=dwarf), self.assertRaises(ValueError):
+                entry.check_unwind(text, dwarf)
+        for name in entry.exception_frames() + entry.POLICY["native_exception_functions"]:
+            for dwarf in (False, True):
+                text = CASES["unwind_dwarf" if dwarf else "unwind_compact"]
+                with self.subTest(name=name, dwarf=dwarf), self.assertRaises(ValueError):
+                    entry.check_unwind(text.replace(name, ""), dwarf)
+        for line in CASES["unwind_dwarf"].splitlines():
+            if entry.re.search(entry.POLICY["unwind_pattern"], line):
+                with self.subTest(line=line), self.assertRaises(ValueError):
+                    entry.check_unwind(CASES["unwind_dwarf"].replace(line, ""), True)
 
     def test_abi_subtype_is_exact_without_rewriting_the_object(self):
         for subtype in (entry.native.POLICY["cpu_subtype"], entry.POLICY["classic_subtype"]):

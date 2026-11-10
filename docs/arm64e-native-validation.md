@@ -498,15 +498,17 @@ PAC and compiler-original unwind preflight is mandatory for execution:
 python3 scripts/verify_arm64e_native.py probe --output entry-evidence/probe
 python3 scripts/verify_arm64e_entry.py \
   --test-binary build-release/bin/NeverDArm64eAnalysisTests \
-  --compiler /usr/bin/clang++ \
+  --compiler "$(xcrun --find clang++)" \
   --probe-report entry-evidence/probe/report.json \
   --output entry-evidence/native
 ```
 
 The eight combinations cover O0/O2, IA/IB address-diverse pointer storage and
 compact/forced-DWARF unwind. The independent caller checks the logical values,
-C++ catch and destructor cleanup. The generated exception entry and its private
-carrier body must retain signed return sequences and separate calls; the
+C++ catch and destructor cleanup through scalar, i128, HVA128 and indirect
+aggregate/x8 entries, including their normal values after catching. Every
+generated exception entry and its private carrier body must retain signed
+return sequences and separate calls; the
 caller must contain authenticated branches. A valid signed pointer to the
 reconstructed scalar entry executes first; flipping one observed signature bit
 must then fault in a child process. Missing signing, skipped export tests,
@@ -516,6 +518,23 @@ Apple's frontend does; without it the native IR reader produces `arm64e.old`.
 The verifier requires the exact classic object/dylib subtype and performs no
 Mach-O header conversion. Its explicit indirect-value loads/stores avoid
 version-specific `memcpy` intrinsic attributes in older native IR readers.
+The fixture sets `frame-pointer=all` and the native frontend's `uwtable(sync)`
+contract in the IR itself. Frontend flags alone do not establish the IR frame
+policy, and asynchronous epilogue CFI forced DWARF in the nominal compact
+profile. Final per-function encoding checks reject that mismatch; asynchronous
+unwinding remains outside this synchronous C++ matrix. The verifier
+also records and passes the selected macOS SDK, preserving the `clang++`
+invocation name when it is a symlink to `clang`.
+
+The DWARF profile keeps `__unwind_info` and forces per-function FDEs with
+`DW_CFA_GNU_args_size`. The verifier checks the final indexed encoding for the
+entries, carrier bodies, thrower and catching caller. Merely retaining `__eh_frame`
+does not establish a usable Darwin lookup path: the compiler-only controls in
+[run 42849216672](https://github.com/gmh5225/test_mac_intel/actions/runs/42849216672)
+passed compact and indexed DWARF on both native hosts, but removing the index
+with `-no_compact_unwind` caused an uncaught-exception abort on both. That
+unsupported link profile is retained as diagnostic evidence, not counted as a
+DWARF execution test.
 
 `--compile-only` checks objects, signatures and disassembly without claiming
 execution. Reports bind the source, exported IR, caller, selected compiler,
