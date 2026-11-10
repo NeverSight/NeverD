@@ -1721,14 +1721,24 @@ operand store on #AC.
 
 The profile binds observed Intel behavior where the SDM pseudocode is not a
 complete executable specification: word IRET with VME succeeds below IOPL3;
-IRETD entry truncates the target EIP to16bits; a VM86 VIF+VIP conflict uses either
+IRETD entry truncates the target EIP to 16 bits; a VM86 VIF+VIP conflict uses either
 CR4.VME or CR4.PVI even at IOPL3; redirected INT reads its IVT before stack
 stores, including aliasing. Original instruction comparisons on both local
 core types qualify these choices. They are not an inferred universal AMD or
-future-Intel policy. See [Intel SDM revision093, volume3B chapter23 and the
+future-Intel policy. See [Intel SDM revision 093, volume 3B chapter 23 and the
 INT/IRET/PUSHF/POPF instruction references](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 
 The generated drivers remain host-x64 Clang/NeverC programs over explicit guest
 state. This adds no NeverC 32-bit target. Physical SGX/EPC/AEX, software SMM/SGX,
 real/IA-32e transitions, CET/FRED and other outstanding execution contracts still
 prevent a global completion claim or final LLVM release.
+
+The [November 10 qualification](evidence/x86-vm86-returns-mpx-2026-11-10.json)
+records 2,764 passing executions with no skips on the full local SDK and
+production r6 SDK: 548 paging/execution checks on each SDK and P/E-core pair,
+229 generated-source checks per SDK, eight C/Python bridge checks and 106
+shared MPX checks. Each original VM86 comparison runs 57 instruction streams;
+the four added MPX streams cover OSXSAVE-disabled behavior only. The two SDKs
+produce 1,284 identical exported artifacts each. The evidence retains the
+failing IRETD frame/PTE-alias reproducer, corrected test-fixture failures,
+source and binary identities, and the separate hardware limitations above.

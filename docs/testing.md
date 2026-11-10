@@ -255,6 +255,12 @@ The VM86 source group also preserves frame values and attempt budgets after
 context recreation, overwritten code and zero-budget calls. These are host
 backing-continuation checks; they do not claim a native CPU exposes that pause.
 
+The combined [VM86, return-resumption and MPX qualification](evidence/x86-vm86-returns-mpx-2026-11-10.json)
+records 2,764 passing executions with no skips across the two SDKs and P/E-core
+matrix, plus matching hashes for 1,284 generated artifacts per SDK. Its initial
+failing reproducer and fixture corrections remain separate from final passing
+qualification. Enabled physical MPX and SGX execution remain unqualified.
+
 `X86LegacyExecutionTest`, `LegacyEvents/*` and `LegacySteps/*` in
 `NeverDX86PagingTests` cover original-byte protected legacy execution and
 16/32-bit IDT entry. The independent KVM oracle compares code/stack caches,
