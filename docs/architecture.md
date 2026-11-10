@@ -4691,9 +4691,10 @@ terminate a CFG path. `DebugContext::resolvePrototypeABI` provides the same
 validated types, calling convention and declaration origin for structural
 queries. The x86 import-return inventory and LowIR import-argument summaries
 use it without spelling every library type, including declarations outside
-the selected function. User declarations retain their existing precedence
-over header and runtime tables. Both local-type queries use the ordinary
-signature converter; source emitters retain `resolvePrototype` and its
+the selected function. An import's return, scalar, variadic and record
+adapters share one converted declaration. User declarations retain their
+existing precedence over header and runtime tables. Both local-type queries
+use the ordinary signature converter; source emitters retain `resolvePrototype` and its
 complete C spellings.
 C declaration writers build their library-wide name table only when a named
 type or enumerator needs it. Scalar and parameter spelling use the same
