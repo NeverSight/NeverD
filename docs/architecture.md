@@ -15905,11 +15905,15 @@ at partial stores, while queries confined to registers retain their existing
 values across these memory effects.
 
 The qualified MIPS16e2 system/atomic slice shares scalar shape admission but
-retains separate effectful IDs. `MIPSSystemContext` authenticates one system
-observation; `NdOpEmulatorMIPS` owns permission/hazard consumption and the opt-in
+retains separate effectful IDs. `MIPSSystemContext` authenticates a system step;
+`MIPSCP0.def` owns the admitted CP0 word selectors, context fields and write
+permissions. Status shares the DI/EI owner; EPC/ErrorEPC words preserve all bits.
+`NdOpEmulatorMIPS` owns permission/hazard consumption and the opt-in
 flat Config5.LLB=1 reservation model. `storeMemoryBytes` invalidates overlapping
-reservation granules only on committed stores. Calls/reset and lenient unknown
-operations discard reservation knowledge. `scalarMayWriteMemory` is shared with
+reservation granules only on committed stores. PAUSE is effectful and completes
+only with a configured, known-clear reservation; scheduling is not inferred.
+Calls/reset and lenient unknown operations discard reservation knowledge.
+`scalarMayWriteMemory` is shared with
 ABI setup recovery so SC cannot preserve a stale outgoing stack value. HighC and
 LLVM reject stateful native-source lowering until an execution-region contract
 can preserve the reservation or privileged state; no helper approximates it.

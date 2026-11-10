@@ -234,8 +234,8 @@ link spills remain outside the current source proof.
 The operation rules follow the
 [MIPS32 DSP ASE manual, revision 1.00](https://0x04.net/~mwk/doc/mips/MD00374-2B-MIPS32DSP-AFP-01.00.pdf).
 The pinned Unicorn model is checked with Status.MX enabled. Its packed
-arithmetic, shift and the three packed-multiply translators preserve DSPControl effects for zero
-destinations and still check the enabled state. The source runner rejects any
+arithmetic, shift and admitted GPR-multiply translators preserve DSPControl
+effects for zero destinations and still check the enabled state. The source runner rejects any
 original/generated disagreement with the independent expectations. Historical
 receipts below retain the zero-destination defect of the older reference.
 
@@ -529,7 +529,7 @@ model disabled-MSA exceptions, MSA floating point/control state or arbitrary
 MSA guest execution. The operation and alias rules follow the MIPS32 MSA manual
 (MD00866, revision 1.12), sections ADDV, SUBV, CEQ, CLT/CLE, MIN/MAX,
 SLL/SRL/SRA, BCLR/BSET/BNEG, MULV/MADDV/MSUBV, MAX_A/MIN_A, ADD_A/ADDS_A, ADDS/SUBS, AVE/AVER,
-AND/OR/NOR/XOR,
+AND/OR/NOR/XOR, ADDVI/SUBVI, CEQI, CLTI/CLEI, MAXI/MINI,
 COPY_S, FILL and INSERT. Owned execution
 fixtures validate scalar results, output bytes and the ABI-preserved low FPR
 views against an enabled P5600 reference. The pinned Unicorn includes fixes
