@@ -12,6 +12,7 @@
 
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/CodeGen.h"
+#include "neverd/backend/codegen/SourcePatch.h"
 #include "neverd/backend/llvm/AArch64/LLVMAArch64ReturnProtection.h"
 #include "neverd/backend/llvm/AArch64/LLVMEntryABI.h"
 #include "neverd/backend/llvm/LLVMSourceCallValue.h"
@@ -22,17 +23,27 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/loader/Loader.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/Twine.h"
+#include "llvm/BinaryFormat/Dwarf.h"
+#include "llvm/DebugInfo/DWARF/DWARFContext.h"
+#include "llvm/DebugInfo/DWARF/DWARFDebugFrame.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Linker/Linker.h"
+#include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/JSON.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 
 #include <algorithm>
 #include <array>
@@ -40,7 +51,9 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace {
@@ -628,11 +641,9 @@ TEST(AArch64EntryABI, IndependentNativeCallersAgreeAtO0AndO2) {
 #endif
 }
 
-TEST(AArch64EntryABI, ExportSignedNativeInputs) {
-  llvm::LLVMContext Context;
-  auto Module = module(Context);
-  addFixtures(*Module);
-  ASSERT_FALSE(HasFailure());
+void prepareNativeModule(llvm::Module &Value, bool Dwarf) {
+  auto *Module = &Value;
+  auto &Context = Value.getContext();
   Module->setTargetTriple(llvm::Triple(kArm64eTriple));
   // Apple's native IR reader requires the explicit classic arm64e contract
   // emitted by its frontend, otherwise it produces an arm64e.old object.
@@ -654,6 +665,30 @@ TEST(AArch64EntryABI, ExportSignedNativeInputs) {
     // Async epilogue CFI forces DWARF even without the explicit escape below.
     Function.setUWTableKind(llvm::UWTableKind::Sync);
   }
+  if (Dwarf) {
+    auto *Type = llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
+    auto *CFI = llvm::InlineAsm::get(Type, kDwarfCFI, {}, true);
+    for (auto &Function : *Module) {
+      if (Function.isDeclaration())
+        continue;
+      llvm::IRBuilder<> Builder(
+          &*Function.getEntryBlock().getFirstInsertionPt());
+      Builder.CreateCall(CFI);
+    }
+  }
+}
+
+void writeIR(const llvm::Module &Module, const std::filesystem::path &Path) {
+  std::error_code Error;
+  llvm::raw_fd_ostream IR(Path.string(), Error);
+  ASSERT_FALSE(Error);
+  Module.print(IR, nullptr);
+  IR.close();
+  ASSERT_FALSE(IR.has_error());
+}
+
+TEST(AArch64EntryABI, ExportSignedNativeInputs) {
+  llvm::LLVMContext Context;
   const char *Directory = std::getenv(kExportDirectory);
   std::filesystem::path Root;
   if (Directory && *Directory) {
@@ -661,30 +696,58 @@ TEST(AArch64EntryABI, ExportSignedNativeInputs) {
     ASSERT_TRUE(std::filesystem::is_directory(Root));
   }
   for (bool Dwarf : {false, true}) {
-    if (Dwarf) {
-      // Force per-function DWARF while retaining Darwin's lookup index.
-      // Removing __unwind_info prevents even compiler-only C++ unwinding.
-      auto *Type =
-          llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
-      auto *CFI = llvm::InlineAsm::get(Type, kDwarfCFI, {}, true);
-      for (auto &Function : *Module) {
-        if (Function.isDeclaration())
-          continue;
-        llvm::IRBuilder<> Builder(
-            &*Function.getEntryBlock().getFirstInsertionPt());
-        Builder.CreateCall(CFI);
-      }
-    }
+    auto Module = module(Context);
+    addFixtures(*Module);
+    ASSERT_FALSE(HasFailure());
+    prepareNativeModule(*Module, Dwarf);
     ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
     if (Root.empty())
       continue;
-    std::error_code Error;
-    llvm::raw_fd_ostream IR(
-        (Root / (Dwarf ? kExportDwarfIR : kExportIR)).string(), Error);
-    ASSERT_FALSE(Error);
-    Module->print(IR, nullptr);
-    IR.close();
-    ASSERT_FALSE(IR.has_error());
+    writeIR(*Module, Root / (Dwarf ? kExportDwarfIR : kExportIR));
+    ASSERT_FALSE(HasFailure());
+    if (!std::getenv(kBackendExport))
+      continue;
+    auto Copy = llvm::CloneModule(*Module);
+    auto Object = Codegen().compile(*Copy, Arch::AArch64, BinaryFormat::MachO,
+                                    kArm64eTriple);
+    ASSERT_TRUE(Object.Success);
+    auto Buffer = llvm::MemoryBuffer::getMemBuffer(
+        llvm::StringRef(
+            reinterpret_cast<const char *>(Object.ObjectData.data()),
+            Object.ObjectData.size()),
+        {}, false);
+    auto Native =
+        llvm::object::ObjectFile::createObjectFile(Buffer->getMemBufferRef());
+    ASSERT_TRUE(bool(Native)) << llvm::toString(Native.takeError());
+    auto Debug = llvm::DWARFContext::create(
+        **Native, llvm::DWARFContext::ProcessDebugRelocations::Ignore);
+    auto Frames = Debug->getEHFrame();
+    ASSERT_TRUE(bool(Frames)) << llvm::toString(Frames.takeError());
+    for (const auto &Frame : (*Frames)->entries())
+      for (const auto &Instruction : Frame.cfis())
+        ASSERT_NE(Instruction.Opcode,
+                  llvm::dwarf::DW_CFA_AARCH64_negate_ra_state)
+            << kIncompatibleCFI;
+    std::ofstream Output(Root / (Dwarf ? kBackendDwarfObject : kBackendObject),
+                         std::ios::binary);
+    Output.write(reinterpret_cast<const char *>(Object.ObjectData.data()),
+                 Object.ObjectData.size());
+    Output.close();
+    ASSERT_TRUE(Output);
+    // Every public baseline entry traps. A publication that accidentally keeps
+    // the original implementation cannot satisfy the independent caller.
+    for (auto &Function : *Module) {
+      if (Function.isDeclaration() || Function.hasLocalLinkage())
+        continue;
+      Function.deleteBody();
+      auto *Block = llvm::BasicBlock::Create(Context, kBody, &Function);
+      llvm::IRBuilder<> Builder(Block);
+      auto *Type = llvm::FunctionType::get(Builder.getVoidTy(), false);
+      Builder.CreateCall(llvm::InlineAsm::get(Type, kOriginalTrap, {}, true));
+      Builder.CreateUnreachable();
+    }
+    writeIR(*Module, Root / (Dwarf ? kOriginalDwarfIR : kOriginalIR));
+    ASSERT_FALSE(HasFailure());
   }
   if (Root.empty())
     return;
@@ -692,5 +755,101 @@ TEST(AArch64EntryABI, ExportSignedNativeInputs) {
   Caller << kNativeCaller;
   Caller.close();
   ASSERT_TRUE(Caller);
+}
+
+TEST(AArch64EntryABI, PublishSignedNativeInputs) {
+  const char *Input = std::getenv(kPublicationInput);
+  if (!Input)
+    GTEST_SKIP() << kPublicationUnavailable;
+  const char *Output = std::getenv(kPublicationOutput);
+  const char *Receipt = std::getenv(kPublicationReceipt);
+  ASSERT_NE(Output, nullptr);
+  ASSERT_NE(Receipt, nullptr);
+  const bool Dwarf = std::getenv(kPublicationDwarf) != nullptr;
+  auto Image = Loader::create(BinaryFormat::MachO)->load(Input);
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  llvm::LLVMContext Context;
+  auto Module = module(Context);
+  addFixtures(*Module);
+  ASSERT_FALSE(HasFailure());
+  prepareNativeModule(*Module, Dwarf);
+  std::vector<SourcePatchMapping> Mappings;
+  for (auto &Function : *Module) {
+    if (Function.isDeclaration() || Function.hasLocalLinkage())
+      continue;
+    const auto Name = (llvm::Twine(kMachOPrefix) + Function.getName()).str();
+    auto Found = llvm::find_if(Image->Symbols, [&](const auto &Symbol) {
+      return Symbol.Name == Name && Symbol.IsFunc;
+    });
+    ASSERT_NE(Found, Image->Symbols.end()) << Name;
+    rewrite_source::setOriginalVA(Function, Found->Addr);
+    Mappings.push_back({Function.getName().str(), Found->Addr});
+  }
+  ASSERT_EQ(Mappings.size(), kPublicEntryCount);
+  auto Bound = bindSourcePatch(*Module, *Image, Mappings);
+  ASSERT_TRUE(bool(Bound)) << llvm::toString(Bound.takeError());
+  auto Copy = llvm::CloneModule(*Module);
+  auto Object =
+      Codegen().compile(*Copy, Image->Arch, Image->Format, kArm64eTriple);
+  ASSERT_TRUE(Object.Success);
+  const auto Snapshot = Image->Raw;
+  // Publication does not grant admission to an arbitrary analysis module.
+  auto Analysis = llvm::CloneModule(*Module);
+  Analysis->addModuleFlag(llvm::Module::Error, kArm64eAnalysisModuleFlag, true);
+  auto Refused = installSourcePatch(*Analysis, *Image, *Bound, Output);
+  ASSERT_FALSE(bool(Refused));
+  llvm::consumeError(Refused.takeError());
+  ASSERT_FALSE(std::filesystem::exists(Output));
+  bool ReceiptSeen = false;
+  auto Rejected =
+      installSourcePatch(*Module, *Image, *Bound, Output, {},
+                         [&](const PatchResult &) -> llvm::Error {
+                           ReceiptSeen = true;
+                           return llvm::createStringError(
+                               std::errc::operation_canceled, kReceiptRejected);
+                         });
+  ASSERT_FALSE(bool(Rejected));
+  EXPECT_EQ(llvm::toString(Rejected.takeError()), kReceiptRejected);
+  ASSERT_TRUE(ReceiptSeen);
+  ASSERT_FALSE(std::filesystem::exists(Output));
+  auto Installed = installSourcePatch(*Module, *Image, *Bound, Output);
+  ASSERT_TRUE(bool(Installed)) << llvm::toString(Installed.takeError());
+  ASSERT_TRUE(Installed->Success);
+  ASSERT_EQ(Installed->TrampolineCount, Mappings.size());
+  ASSERT_EQ(Installed->PatchedFunctions.size(), Mappings.size());
+  EXPECT_EQ(Image->Raw, Snapshot);
+  auto Again = installSourcePatch(*Module, *Image, *Bound, Output);
+  EXPECT_FALSE(bool(Again));
+  llvm::consumeError(Again.takeError());
+  std::optional<uint64_t> TextBase;
+  llvm::json::Array Entries;
+  for (const auto &Entry : Installed->PatchedFunctions) {
+    const auto Name = std::string(kMachOPrefix) + Entry.SourceFunction;
+    auto Found = llvm::find_if(Object.Functions, [&](const auto &Function) {
+      return Function.Name == Name;
+    });
+    ASSERT_NE(Found, Object.Functions.end());
+    ASSERT_GE(Entry.OwnerVA, Found->Offset);
+    const auto Base = Entry.OwnerVA - Found->Offset;
+    if (TextBase)
+      ASSERT_EQ(*TextBase, Base);
+    TextBase = Base;
+    Entries.emplace_back(
+        llvm::json::Object{{kReceiptSymbol, Name},
+                           {kReceiptOriginal, Entry.OriginalVA},
+                           {kReceiptInstalled, Entry.OwnerVA}});
+  }
+  ASSERT_TRUE(TextBase);
+  llvm::json::Object Functions;
+  for (const auto &Function : Object.Functions)
+    Functions[Function.Name] = *TextBase + Function.Offset;
+  std::error_code Error;
+  llvm::raw_fd_ostream Record(Receipt, Error);
+  ASSERT_FALSE(Error);
+  Record << llvm::json::Value(
+      llvm::json::Object{{kReceiptEntries, std::move(Entries)},
+                         {kReceiptFunctions, std::move(Functions)}});
+  Record.close();
+  ASSERT_FALSE(Record.has_error());
 }
 } // namespace

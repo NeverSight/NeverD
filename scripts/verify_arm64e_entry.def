@@ -93,7 +93,10 @@
     "include/neverd/backend/llvm/LLVMSourceCallValue.h",
     "include/neverd/backend/llvm/LLVMSourceCallValue.def",
     "lib/ir/SourceABI.cpp",
-    "lib/backend/llvm/emit/MedLLVMEmitter.cpp"
+    "lib/backend/llvm/emit/MedLLVMEmitter.cpp",
+    "lib/backend/codegen/CodeGen.cpp",
+    "lib/backend/codegen/SourcePatch.cpp",
+    "lib/backend/codegen/MachO/MachOPatchObject.cpp"
   ],
   "errors": {
     "arguments": "Native entry validation requires --probe-report; --compile-only does not accept one",
@@ -104,7 +107,10 @@
     "unwind_mode": "The native image does not retain the requested compact or forced-DWARF unwind sections",
     "subtype": "The generated object or dylib does not declare the classic arm64e ABI",
     "matrix": "The complete native entry matrix did not execute successfully",
-    "unwind_records": "The exception frame {function} must use the requested indexed unwind encoding"
+    "unwind_records": "The exception frame {function} must use the requested indexed unwind encoding",
+    "producer": "Image publication requires the NeverD backend producer",
+    "baseline": "The original entry must trap before the installed image can qualify",
+    "receipt": "Publication must replace every declared public entry with a unique generated address and retain every exception frame"
   },
   "dwarf_entry_source": "entry-dwarf.ll",
   "unwind_command": [
@@ -143,5 +149,74 @@
     "macosx",
     "--show-sdk-path"
   ],
-  "sysroot_option": "-isysroot"
+  "sysroot_option": "-isysroot",
+  "producer_argument": "--producer",
+  "producers": [
+    "compiler",
+    "neverd"
+  ],
+  "backend_producer": "neverd",
+  "publication_argument": "--publish",
+  "backend_environment": "NEVERD_ARM64E_ENTRY_BACKEND",
+  "backend_object": "entry-backend.o",
+  "backend_dwarf_object": "entry-backend-dwarf.o",
+  "original_ir": "entry-original.ll",
+  "original_dwarf_ir": "entry-original-dwarf.ll",
+  "publication_case": "PublishSignedNativeInputs",
+  "publication_filter": "--gtest_filter=AArch64EntryABI.PublishSignedNativeInputs",
+  "publication_input_environment": "NEVERD_ARM64E_ENTRY_ORIGINAL",
+  "publication_output_environment": "NEVERD_ARM64E_ENTRY_INSTALLED",
+  "publication_receipt_environment": "NEVERD_ARM64E_ENTRY_RECEIPT",
+  "publication_dwarf_environment": "NEVERD_ARM64E_ENTRY_DWARF",
+  "original_object_name": "original-dwarf-{dwarf}.o",
+  "original_library_name": "original-{optimization}-key-{key}-dwarf-{dwarf}.dylib",
+  "installed_library_name": "installed-{optimization}-key-{key}-dwarf-{dwarf}.dylib",
+  "publication_suffix": "-publication",
+  "baseline_suffix": "-original",
+  "publication_xml_suffix": "-publication.xml",
+  "receipt_suffix": "-receipt.json",
+  "public_entry_count": 26,
+  "baseline_returncodes": [
+    -5
+  ],
+  "publication_disassembly_command": [
+    "/usr/bin/xcrun",
+    "llvm-objdump",
+    "--disassemble",
+    "--no-show-raw-insn"
+  ],
+  "addressed_instruction_pattern": "^\\s*([0-9a-fA-F]+):\\s+(.*)$",
+  "enabled_environment_value": "1",
+  "public_entries": [
+    "_entry_scalar",
+    "_entry_signed",
+    "_entry_unsigned",
+    "_entry_signed16",
+    "_entry_unsigned16",
+    "_entry_float",
+    "_entry_double",
+    "_entry_pointer",
+    "_entry_vector64",
+    "_entry_vector128",
+    "_entry_vector_stack",
+    "_entry_wide",
+    "_entry_wide_stack",
+    "_entry_pair",
+    "_entry_hfa",
+    "_entry_hfa_stack",
+    "_entry_hva64",
+    "_entry_hva128",
+    "_entry_emitted_hva",
+    "_entry_large",
+    "_entry_stack",
+    "_entry_packed",
+    "_entry_throwing",
+    "_entry_wide_throwing",
+    "_entry_large_throwing",
+    "_entry_hva_throwing"
+  ],
+  "optimization_scopes": {
+    "compiler": "entry object and native caller",
+    "neverd": "native caller; NeverD Codegen::compile uses CodeGenOptLevel::Less"
+  }
 }

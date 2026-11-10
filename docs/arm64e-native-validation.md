@@ -555,3 +555,49 @@ delivered to the runners; this was not a cold source build there. The local
 case hashes. Both hosts reported Apple M1 (Virtual); CPA/CPA2 remained absent
 or zero, and no self-hosted runner was registered, so native CPTA-on remains
 unqualified.
+
+## Reconstructed entries through NeverD codegen and publication
+
+Use `--producer neverd` with `scripts/verify_arm64e_entry.py` to export the
+reconstructed entry objects through `Codegen::compile`. The independent Apple
+compiler builds the caller and links the image. The exported objects must
+already have the classic arm64e subtype and compatible signed-return CFI;
+neither the verifier nor linker repairs those identities. In particular, r6
+is rejected when it emits `DW_CFA_AARCH64_negate_ra_state`. Use a separate
+source build of the pinned NeverSight LLVM fork for this qualification; the
+default r6 selection stays unchanged.
+
+Add `--publish` to exercise `bindSourcePatch` and `installSourcePatch` on the
+same reconstructed fixed-C entry matrix. The original dylib contains 26
+public trapping entries and the independently compiled native caller/thrower.
+Native validation first requires that original image to trap, then installs
+all 26 reconstructed entries, preserving the original caller and its
+address-diverse signed entry pointers. The installed image must pass every
+value, catch, cleanup, post-exception and corrupted-pointer check. This is a
+complete published fixture image, not automatic admission of arbitrary lifted
+modules.
+
+The publication test also checks rejection before the receipt commits,
+unchanged input bytes, exact installed entry receipts and refusal to overwrite
+an existing output. Analysis-marked modules remain rejected. The verifier
+uses the installed function addresses from the receipt to check both signed
+frames and final compact/DWARF lookup encodings; inspecting the original
+symbol table would otherwise check the old code. All 26 public identities and
+all exceptional carrier frames must be present.
+
+The matrix remains eight combinations per route: caller O0/O2, IA/IB stored
+entry pointers and compact/indexed-DWARF frames. NeverD's current
+`Codegen::compile` uses `CodeGenOptLevel::Less`; the caller optimization axis
+must not be reported as two NeverD optimization levels. Reports record that
+scope, the producer, the original trap status, installed addresses and image
+hashes. `--compile-only` exercises emission and publication checks without
+claiming native execution. Executable products are removed on success and
+failure, including partially exported backend objects.
+
+`neverd_codegen_qualified` requires native execution with the NeverD producer.
+`reconstructed_entry_publication_qualified` additionally requires the complete
+publication matrix. These fields concern the declared fixed-C fixture. They
+do not set `whole_image_publication_qualified` or `native_apple_cpta_qualified`:
+prototype recovery, asynchronous interruption through prologues/epilogues,
+variadic/non-C entries and general lifted-image admission still require their
+own implementation and native evidence.

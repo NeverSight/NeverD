@@ -70,5 +70,173 @@
   "unwind_dwarf": "00000100 g F __TEXT,__text _entry_throwing\n00000200 g F __TEXT,__text _entry_throwing.neverd.carriers\n00000300 g F __TEXT,__text _entry_wide_throwing\n00000400 g F __TEXT,__text _entry_wide_throwing.neverd.carriers\n00000500 g F __TEXT,__text _entry_large_throwing\n00000600 g F __TEXT,__text _entry_large_throwing.neverd.carriers\n00000700 g F __TEXT,__text _entry_hva_throwing\n00000800 g F __TEXT,__text _entry_hva_throwing.neverd.carriers\n00000900 g F __TEXT,__text _entry_throw\n00000a00 g F __TEXT,__text _main\n[0]: function offset=0x00000100, encoding[0]=0x03000001\n[1]: function offset=0x00000200, encoding[1]=0x03000002\n[2]: function offset=0x00000300, encoding[2]=0x03000003\n[3]: function offset=0x00000400, encoding[3]=0x03000004\n[4]: function offset=0x00000500, encoding[4]=0x03000005\n[5]: function offset=0x00000600, encoding[5]=0x03000006\n[6]: function offset=0x00000700, encoding[6]=0x03000007\n[7]: function offset=0x00000800, encoding[7]=0x03000008\n[8]: function offset=0x00000900, encoding[8]=0x03000009\n[9]: function offset=0x00000a00, encoding[9]=0x0300000a\n",
   "compiler_target": "clang",
   "compiler_symlink": "clang++",
-  "sdk_path": "/independent-macos-sdk"
+  "sdk_path": "/independent-macos-sdk",
+  "receipt": {
+    "entries": [
+      {
+        "symbol": "_entry_scalar",
+        "original": 65536,
+        "installed": 4096
+      },
+      {
+        "symbol": "_entry_signed",
+        "original": 65792,
+        "installed": 4352
+      },
+      {
+        "symbol": "_entry_unsigned",
+        "original": 66048,
+        "installed": 4608
+      },
+      {
+        "symbol": "_entry_signed16",
+        "original": 66304,
+        "installed": 4864
+      },
+      {
+        "symbol": "_entry_unsigned16",
+        "original": 66560,
+        "installed": 5120
+      },
+      {
+        "symbol": "_entry_float",
+        "original": 66816,
+        "installed": 5376
+      },
+      {
+        "symbol": "_entry_double",
+        "original": 67072,
+        "installed": 5632
+      },
+      {
+        "symbol": "_entry_pointer",
+        "original": 67328,
+        "installed": 5888
+      },
+      {
+        "symbol": "_entry_vector64",
+        "original": 67584,
+        "installed": 6144
+      },
+      {
+        "symbol": "_entry_vector128",
+        "original": 67840,
+        "installed": 6400
+      },
+      {
+        "symbol": "_entry_vector_stack",
+        "original": 68096,
+        "installed": 6656
+      },
+      {
+        "symbol": "_entry_wide",
+        "original": 68352,
+        "installed": 6912
+      },
+      {
+        "symbol": "_entry_wide_stack",
+        "original": 68608,
+        "installed": 7168
+      },
+      {
+        "symbol": "_entry_pair",
+        "original": 68864,
+        "installed": 7424
+      },
+      {
+        "symbol": "_entry_hfa",
+        "original": 69120,
+        "installed": 7680
+      },
+      {
+        "symbol": "_entry_hfa_stack",
+        "original": 69376,
+        "installed": 7936
+      },
+      {
+        "symbol": "_entry_hva64",
+        "original": 69632,
+        "installed": 8192
+      },
+      {
+        "symbol": "_entry_hva128",
+        "original": 69888,
+        "installed": 8448
+      },
+      {
+        "symbol": "_entry_emitted_hva",
+        "original": 70144,
+        "installed": 8704
+      },
+      {
+        "symbol": "_entry_large",
+        "original": 70400,
+        "installed": 8960
+      },
+      {
+        "symbol": "_entry_stack",
+        "original": 70656,
+        "installed": 9216
+      },
+      {
+        "symbol": "_entry_packed",
+        "original": 70912,
+        "installed": 9472
+      },
+      {
+        "symbol": "_entry_throwing",
+        "original": 71168,
+        "installed": 256
+      },
+      {
+        "symbol": "_entry_wide_throwing",
+        "original": 71424,
+        "installed": 768
+      },
+      {
+        "symbol": "_entry_large_throwing",
+        "original": 71680,
+        "installed": 1280
+      },
+      {
+        "symbol": "_entry_hva_throwing",
+        "original": 71936,
+        "installed": 1792
+      }
+    ],
+    "functions": {
+      "_entry_throwing": 256,
+      "_entry_throwing.neverd.carriers": 512,
+      "_entry_wide_throwing": 768,
+      "_entry_wide_throwing.neverd.carriers": 1024,
+      "_entry_large_throwing": 1280,
+      "_entry_large_throwing.neverd.carriers": 1536,
+      "_entry_hva_throwing": 1792,
+      "_entry_hva_throwing.neverd.carriers": 2048,
+      "_entry_scalar": 4096,
+      "_entry_signed": 4352,
+      "_entry_unsigned": 4608,
+      "_entry_signed16": 4864,
+      "_entry_unsigned16": 5120,
+      "_entry_float": 5376,
+      "_entry_double": 5632,
+      "_entry_pointer": 5888,
+      "_entry_vector64": 6144,
+      "_entry_vector128": 6400,
+      "_entry_vector_stack": 6656,
+      "_entry_wide": 6912,
+      "_entry_wide_stack": 7168,
+      "_entry_pair": 7424,
+      "_entry_hfa": 7680,
+      "_entry_hfa_stack": 7936,
+      "_entry_hva64": 8192,
+      "_entry_hva128": 8448,
+      "_entry_emitted_hva": 8704,
+      "_entry_large": 8960,
+      "_entry_stack": 9216,
+      "_entry_packed": 9472
+    }
+  },
+  "publication_xml": "<testsuites><testsuite><testcase classname=\"AArch64EntryABI\" name=\"PublishSignedNativeInputs\" status=\"run\"/></testsuite></testsuites>",
+  "installed_assembly": "0000000000000100: pacibsp\n0000000000000104: bl _entry_throw\n0000000000000108: retab\n0000000000000200: pacibsp\n0000000000000204: bl _entry_throw\n0000000000000208: retab\n0000000000000300: pacibsp\n0000000000000304: bl _entry_throw\n0000000000000308: retab\n0000000000000400: pacibsp\n0000000000000404: bl _entry_throw\n0000000000000408: retab\n0000000000000500: pacibsp\n0000000000000504: bl _entry_throw\n0000000000000508: retab\n0000000000000600: pacibsp\n0000000000000604: bl _entry_throw\n0000000000000608: retab\n0000000000000700: pacibsp\n0000000000000704: bl _entry_throw\n0000000000000708: retab\n0000000000000800: pacibsp\n0000000000000804: bl _entry_throw\n0000000000000808: retab\n0000000000004000: pacibsp\n0000000000004004: bl _entry_throw\n0000000000004008: retab\n0000000000004000: pacibsp\n0000000000004004: bl _entry_throw\n0000000000004008: retab\n000000000000400c: blraaz x16\n0000000000004010: blraa x16, x17\n0000000000004014: blrab x16, x17\n"
 }
