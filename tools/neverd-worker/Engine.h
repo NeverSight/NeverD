@@ -452,7 +452,11 @@ private:
   std::uint64_t namedViewsEpoch_ = 1;
   /// open.write_behind: an edit's reply need not wait for its write.
   bool writeBehind_ = false;
-  void persistEdit(ProjectHistory &store, Json state);
+  /// Persists an edit that changes \p table alone, whose rows after it are
+  /// \p rows (ProjectHistory::persistTable), behind the reply with
+  /// write_behind.
+  void persistTableEdit(ProjectHistory &store, const std::string &table,
+                        Json rows);
   /// The listing took a new name of data in place (Listing::dataRenamed).
   void dataNameChanged();
   /// The listing took the user's data items in place

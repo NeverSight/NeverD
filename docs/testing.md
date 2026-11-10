@@ -6680,7 +6680,14 @@ unchanged journal, preserves newer staged edits and undo/redo, and refuses forei
 sidecars. Reopening also recovers the pending edit.
 `NeverDWorkerHistory` injects failure before and after each transaction write,
 checks unchanged sidecars and foreign-edit refusal, and retries newer staged
-edits. It compares complete published journals for first and later saves with
+edits. A table equal to the committed one but printing otherwise (a zero's sign) is
+encoded anew, a table left as it was keeps its bytes while another changes, and a
+row put between others or rows out of order take their place by address. A table's edit
+persists exactly as its whole state does and writes only its table, what is no table
+of rows is refused unwritten, and after an interrupted table write the next one keeps
+the tables that write completed. Renames kept row by row persist as their whole state
+does, write only their file, leave the rows they keep the same objects, and survive
+an interrupted rows write. It compares complete published journals for first and later saves with
 escaped/Unicode annotation text, then verifies retry and reopening. History and
 journal budget cases must refuse before publishing any transaction file.
 It also checks independent rollback checkpoints, equivalent file reformatting,
@@ -16932,6 +16939,14 @@ raw executions check the callback or loop, and the reported generic return
 remains unknown even when the first-call address is recovered.
 The pinned 72-file native-object scan described in [sbf-corpus.md](sbf-corpus.md)
 is separate from these synthetic execution tests and from official VM gates.
+`InitializedIndexGuardRefinesBothBoundedOperands` checks finite and interval
+count guards with strict and non-strict unsigned ordering, both operand orders,
+both branch directions, and reversed CFG edges. Low and near-`UINT64_MAX`
+domains each execute raw bytecode for accepted and rejected indices; a genuine
+two-element choice must not become a singleton callback proof.
+`FallthroughComparisonDoesNotSelectAnOutcome` checks that a conditional jump
+to its next instruction cannot exclude either input value, using immediate
+and register comparisons and independent raw returns.
 
 ## One-shot targets
 
