@@ -1770,3 +1770,12 @@ After integrating dev's type-name rendering changes, both SDKs pass another
 862 type, generated-source and C/Python bridge checks, retaining identical
 exports. Ten optional UCRT/provider and kernel-PDB fixture checks are skipped
 across the two SDKs; the evidence lists their exact missing inputs separately.
+
+The same evidence records subsequent integration of the concurrent MIPS/dependency
+and C backend changes. Each integration passed 1,490 checks across both SDKs,
+with two unavailable LA57 cases. C integration also exposed stale native-oracle
+translations between independently rewritten compatibility page tables. The
+fixture now changes CR3 before restoring each case. Both SDKs then passed 100
+repetitions on each of the two bound CPU core types: 400 executions and 2,800
+original instruction comparisons. Initial failures remain in the evidence.
+The source and return exports stayed byte-identical to their qualified baselines.
