@@ -1,5 +1,6 @@
 #include "ChooserView.h"
 
+#include "../Config.h"
 #include "../ResourceLimits.h"
 #include "AddressSpace.h"
 #include "Icons.h"
@@ -13,6 +14,7 @@
 #include <QClipboard>
 #include <QFontInfo>
 #include <QFontMetrics>
+#include <QHBoxLayout>
 #include <QHeaderView>
 #include <QKeyEvent>
 #include <QLabel>
@@ -736,8 +738,8 @@ void ChooserModel::sort(int column, Qt::SortOrder order) {
 ChooserView::ChooserView(Session &session, const AddressSpace &space,
                          ChooserKind kind, QWidget *parent)
     : QWidget(parent), model_(new ChooserModel(session, space, kind, this)),
-      table_(new QTreeView(this)), filter_(new QLineEdit(this)),
-      status_(new QLabel(this)) {
+      table_(new QTreeView(this)), filterRow_(new QWidget(this)),
+      filter_(new QLineEdit(filterRow_)), status_(new QLabel(this)) {
   auto *layout = new QVBoxLayout(this);
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(0);
@@ -760,9 +762,13 @@ ChooserView::ChooserView(Session &session, const AddressSpace &space,
   layout->addWidget(table_, 1);
   filter_->setObjectName(QStringLiteral("chooserFilter"));
   filter_->setClearButtonEnabled(true);
-  filter_->setVisible(false);
   filter_->installEventFilter(this);
-  layout->addWidget(filter_);
+  auto *filterRow = new QHBoxLayout(filterRow_);
+  filterRow->setContentsMargins(
+      ::neverd::limits::gui_config::kChooserViewFilterMargins);
+  filterRow->addWidget(filter_);
+  filterRow_->setVisible(false);
+  layout->addWidget(filterRow_);
   makeStatusLine(*status_);
   layout->addWidget(status_);
   filterTimer_.setSingleShot(true);
@@ -850,13 +856,13 @@ QString ChooserView::selectedText() const {
 }
 
 void ChooserView::focusFilter() {
-  filter_->setVisible(true);
+  filterRow_->setVisible(true);
   filter_->setFocus(Qt::ShortcutFocusReason);
   filter_->selectAll();
 }
 
 void ChooserView::setFilterText(const QString &text) {
-  filter_->setVisible(true);
+  filterRow_->setVisible(true);
   filter_->setText(text);
 }
 
@@ -930,7 +936,7 @@ bool ChooserView::eventFilter(QObject *object, QEvent *event) {
   auto *key = static_cast<QKeyEvent *>(event);
   if (object == filter_ && key->key() == Qt::Key_Escape) {
     filter_->clear();
-    filter_->setVisible(false);
+    filterRow_->setVisible(false);
     table_->setFocus();
     return true;
   }

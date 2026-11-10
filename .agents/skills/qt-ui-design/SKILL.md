@@ -219,7 +219,7 @@ Thin lines show their full colour only where they cover whole pixels. A 1 px lin
 - **Snap straight strokes at the size the asset is drawn.** Centre strokes at least 1 px and under 2 px wide on pixel centres (x.5), centre 2 px strokes on pixel boundaries, and put the edges of unstroked fills on whole pixels. Curves and diagonals always antialias. An icon drawn on a 16 px grid stays crisp at 16 px and at whole multiples (32, 48), but not at 20 or 24.
 - **In paint code**, fill hairlines as integer rectangles or offset 1 px pens by 0.5. Round a computed position before drawing a thin line with antialiasing on. In QML, place thin items and icons at whole-pixel positions (for example with `Math.round`), and draw icons at their native size or a whole multiple of it.
 - **Choose thin-stroke colours by how they render.** On dark surfaces, a thin icon needs a lighter tone than text of the same hue. Visual Studio Code, for example, uses `#75BEFF` for coloured icons and `#4DAAFC` for links.
-- **Verify at 100% scale** in a capture of the real UI, because 100% is common on desktop monitors. Then check that 150% and 200% are no worse. Fractional scales cannot be snapped everywhere, so do not distort a design to chase them.
+- **Verify at 100% scale** in a capture of the real UI, because 100% is common on desktop monitors. Then check 125%, 150% and 200%. At a fractional scale a toolkit can place a widget at a fraction of a device pixel, so a 1 px border drawn at that position spreads over two pixels. Paint chrome borders and hairlines in device pixels instead: round each side to the nearest device pixel and give a 1 px line one device pixel, as browsers snap border widths. Icons and text cannot be snapped everywhere; keep them no worse.
 ---
 
 ## 2. Accessibility (WCAG 2.2)
@@ -341,7 +341,7 @@ Apply section 4 constraints first if the target is embedded.
 - [ ] Typography: are body text ≥ 16 px and no more than three type sizes used per screen?
 - [ ] Keyboard: is every interactive element reachable and operable by keyboard alone?
 - [ ] Colour: are all colours token-based or semantically named? Is colour paired with a second cue for all state changes?
-- [ ] Crispness: at 100% scale, do straight icon strokes and 1 px lines cover whole pixels, so thin elements show their real colour?
+- [ ] Crispness: at 100% scale, do straight icon strokes and 1 px lines cover whole pixels, so thin elements show their real colour? At 125%, does each border and hairline still take one whole device pixel?
 - [ ] States: does every control read differently at rest, under the pointer, pressed, with keyboard focus, checked and disabled, in every theme, and does a disabled control stay legible rather than vanish or look enabled?
 - [ ] Localisation: do all user-visible strings use locale-aware formatting? Are containers able to expand 30–40% for translated text?
 - [ ] Languages: does every window fit its texts in every bundled language, does a live language switch reword every pane, and do layouts placed by hand mirror right to left?

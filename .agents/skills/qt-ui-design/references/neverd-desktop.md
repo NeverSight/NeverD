@@ -365,6 +365,57 @@ navigation band's cursor.
   with its reason. To judge a single glyph, compare the share of its drawn
   pixels at full coverage in a capture before and after a change.
 
+### Fractional display scales
+
+Many Windows laptops run at 125%. There Qt places a child widget at a
+fraction of a device pixel (a widget at logical x 26 starts at device 32.5)
+and clips its painting to its sides rounded to the nearest pixel, half up. A
+style sheet border is a 1.25-pixel antialiased rectangle at that fraction, so
+it spreads over two pixels at partial strength, with a seam of the surface
+between a rounded fill and its border at some offsets. Only the top edge of a
+field looked sharp. Chrome boxes and hairlines do not have to look like this.
+
+- Paint chrome boxes and hairlines through `DevicePixels` (`app/DevicePixels.h`):
+  `paintDeviceBox` for a fill and border with round corners,
+  `fillDeviceLine` for a separator, `paintDeviceSeparator` for a resize
+  handle's hairline and highlight, and `DevicePixels::outline` for a pen
+  outline such as a focus frame. It rounds each side to the nearest device
+  pixel, as Qt rounds a widget's clip, so neighbors share their edges, and it
+  draws a line as many whole device pixels as its scaled width holds, at
+  least one, as a browser snaps a border. Where each logical pixel already
+  covers whole device pixels (100%, 200%), it leaves the painter alone, so the
+  output equals the style sheet's pixel for pixel;
+  `AppearanceTests::deviceBoxesPaintAsStyleSheetsAtWholeScales` holds it to
+  that.
+- `WorkbenchStyle` paints the boxes the style sheet used to: fields, push and
+  tool buttons, the combo box's list and the cards by object name, just
+  before the widget paints (the application event filter's `QEvent::Paint`);
+  check boxes, radio buttons and list items' boxes, group frames, menus,
+  tooltips, headings, the status bar, splitter handles and menu separators
+  through the primitives Qt hands to the base style; tabs whole. Their rules
+  keep the box model with `border: 1px solid transparent`, or
+  `border: 1px native` where Qt then delegates the box. The colors live in
+  `WorkbenchStyle`'s face functions, with the state the style sheet's
+  pseudo-states read (`paintedOption` asks the widget for its own option).
+- Before moving a rule, read the cascade that applies to it, not the rule
+  alone. `QAbstractScrollArea { border: none }` later in `theme.qss` takes the
+  outline off text edits, so an editor shows an outline only with focus.
+  `border: 1px native` with any `border-radius` becomes no border at all.
+  Removing a widget's last `:hover` rule also drops the mouse tracking the
+  style sheet turned on for it, which `QPushButton` needs to set its hover
+  state, so `WorkbenchStyle::polish` turns it on. A rule that keeps a fill for
+  boxes the style does not paint, such as the field rule's radius for
+  read-only editors, must stay.
+- Qt passes the splitter, not the handle, as `CE_Splitter`'s widget; a
+  default-constructed `QSizeF` is -1 by -1, not empty.
+- Verify at 125%, 150% and 175% with
+  `AppearanceTests::controlsKeepTheirLinesOnDevicePixels`: render the window
+  with `QWidget::render` into a `QImage` whose device pixel ratio is the scale,
+  at four logical offsets so the box lands on each quarter pixel, and require
+  every pixel on a line across the box to be the surface, the border or the
+  fill. Then compare captures at 100% before and after the change pixel for
+  pixel; any difference there is a regression or needs a reason.
+
 ## Languages and direction
 
 The workbench speaks eleven languages, Arabic right to left, and switches
@@ -432,8 +483,10 @@ Use the real Qt implementation, fonts, and theme. A browser mockup or source
 diff does not establish the appearance of a Qt widget.
 
 1. Build the affected GUI targets and inspect real captures in both themes at
-   100% and a fractional scale such as 150%. At 100%, thin lines and icon
-   strokes must cover whole pixels (see "Crisp lines on the pixel grid").
+   100% and a fractional scale such as 125% or 150%. At 100%, thin lines and
+   icon strokes must cover whole pixels, and at a fractional scale chrome
+   borders and hairlines must still take whole device pixels (see "Crisp lines
+   on the pixel grid").
    Check long names, empty content, disabled actions, selection, hover, and
    keyboard focus as relevant.
 2. For resizing changes, exercise a mouse gesture, content expansion, minimum

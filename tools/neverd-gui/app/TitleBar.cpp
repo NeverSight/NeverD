@@ -1,6 +1,7 @@
 #include "TitleBar.h"
 
 #include "../Config.h"
+#include "DevicePixels.h"
 #include "Theme.h"
 
 #include <QAbstractButton>
@@ -129,13 +130,17 @@ protected:
   void paintEvent(QPaintEvent *) override {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(QPen(
-        chrome(lit() ? "CommandCenterHoverBorder" : "CommandCenterBorder"), 1));
-    painter.setBrush(chrome(lit() ? "CommandCenterHover" : "CommandCenter"));
-    painter.drawRoundedRect(
-        QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5),
-        ::neverd::limits::gui_config::kTitleBarCenterRadius,
-        ::neverd::limits::gui_config::kTitleBarCenterRadius);
+    {
+      // The field's outline on whole device pixels.
+      DevicePixels device(painter);
+      painter.setPen(QPen(
+          chrome(lit() ? "CommandCenterHoverBorder" : "CommandCenterBorder"),
+          device.width(1)));
+      painter.setBrush(chrome(lit() ? "CommandCenterHover" : "CommandCenter"));
+      const qreal radius =
+          device.length(::neverd::limits::gui_config::kTitleBarCenterRadius);
+      painter.drawRoundedRect(device.outline(rect(), 1), radius, radius);
+    }
     // The magnifier and the name, centered together; a long name keeps both
     // of its ends.
     const QFontMetrics metrics(font());
@@ -177,6 +182,47 @@ protected:
                      name);
   }
 };
+/// A window control's glyph at a fractional scale, its one-pixel strokes on
+/// whole device pixels: the same lines in a box \p origin's glyph size wide.
+void paintSnappedGlyph(QPainter &painter, QPoint origin, const QColor &glyph,
+                       TitleBar::WindowControl control, bool maximized) {
+  constexpr int size = ::neverd::limits::gui_config::kTitleBarGlyphSize;
+  const auto stroke = [&](int x, int y, int width, int height,
+                          Qt::Edges edges) {
+    paintDeviceBox(painter, QRect(origin + QPoint(x, y), QSize(width, height)),
+                   DeviceBox{QColor(), glyph, 1, edges});
+  };
+  const Qt::Edges all =
+      Qt::TopEdge | Qt::LeftEdge | Qt::RightEdge | Qt::BottomEdge;
+  switch (control) {
+  case TitleBar::WindowControl::Minimize:
+    stroke(0, 5, size, 1, Qt::TopEdge);
+    break;
+  case TitleBar::WindowControl::Maximize:
+    if (maximized) {
+      // Restore: the window, and the edges of the one behind it.
+      stroke(0, 2, size - 2, size - 2, all);
+      stroke(2, 0, size - 2, size - 2, Qt::TopEdge | Qt::RightEdge);
+      stroke(2, 0, size - 2, 2, Qt::LeftEdge);
+      stroke(size - 2, 0, 2, size - 2, Qt::BottomEdge);
+    } else {
+      stroke(0, 0, size, size, all);
+    }
+    break;
+  case TitleBar::WindowControl::Close: {
+    DevicePixels device(painter);
+    const QRect box = device.rect(QRect(origin, QSize(size, size)));
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(glyph, device.width(1)));
+    const QPointF topLeft = box.topLeft();
+    const QPointF bottomRight = topLeft + QPointF(box.width(), box.height());
+    painter.drawLine(topLeft, bottomRight);
+    painter.drawLine(QPointF(bottomRight.x(), topLeft.y()),
+                     QPointF(topLeft.x(), bottomRight.y()));
+    break;
+  }
+  }
+}
 } // namespace
 
 void TitleBar::paintWindowControl(QPainter &painter,
@@ -184,12 +230,17 @@ void TitleBar::paintWindowControl(QPainter &painter,
                                   const QWidget &window,
                                   WindowControl control) {
   const bool close = control == WindowControl::Close;
+  // The fill reaches every device pixel of the button at any scale.
   if (button.isDown())
-    painter.fillRect(button.rect(), chrome(close ? "WindowClosePressed"
-                                                 : "WindowControlPressed"));
+    paintDeviceBox(
+        painter, button.rect(),
+        DeviceBox{chrome(close ? "WindowClosePressed" : "WindowControlPressed"),
+                  QColor(), 0});
   else if (button.underMouse())
-    painter.fillRect(button.rect(),
-                     chrome(close ? "WindowCloseHover" : "WindowControlHover"));
+    paintDeviceBox(
+        painter, button.rect(),
+        DeviceBox{chrome(close ? "WindowCloseHover" : "WindowControlHover"),
+                  QColor(), 0});
   const QColor glyph = close && (button.underMouse() || button.isDown())
                            ? chrome("WindowCloseText")
                            : titleText(window);
@@ -201,6 +252,11 @@ void TitleBar::paintWindowControl(QPainter &painter,
   const double top = std::round(
       (button.height() - ::neverd::limits::gui_config::kTitleBarGlyphSize) /
       2.0);
+  if (DevicePixels::snaps(painter)) {
+    paintSnappedGlyph(painter, QPoint(int(left), int(top)), glyph, control,
+                      window.isMaximized());
+    return;
+  }
   switch (control) {
   case WindowControl::Minimize:
     painter.drawLine(

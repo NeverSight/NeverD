@@ -9,6 +9,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "ActionRegistry.h"
+#include "DevicePixels.h"
 #include "Docking.h"
 #include "GnomeModalDialogs.h"
 #include "Language.h"
@@ -23,6 +24,7 @@
 #include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
 #include <QColorDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -32,6 +34,8 @@
 #include <QFontDialog>
 #include <QFontInfo>
 #include <QGlyphRun>
+#include <QGroupBox>
+#include <QHeaderView>
 #include <QImage>
 #include <QInputDialog>
 #include <QKeySequence>
@@ -42,10 +46,12 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPixmap>
+#include <QPushButton>
 #include <QScopeGuard>
 #include <QScreen>
 #include <QSettings>
 #include <QSignalSpy>
+#include <QStandardItemModel>
 #include <QStyle>
 #include <QStyleOption>
 #include <QSvgRenderer>
@@ -55,6 +61,7 @@
 #include <QTextLayout>
 #include <QTimer>
 #include <QToolButton>
+#include <QTreeView>
 #include <QWheelEvent>
 #include <QWindow>
 #include <algorithm>
@@ -586,6 +593,239 @@ private slots:
              qPrintable(QStringLiteral("label %1, shortcut %2")
                             .arg(activeLabel)
                             .arg(activeShortcut)));
+  }
+
+  void deviceBoxesPaintAsStyleSheetsAtWholeScales_data() {
+    QTest::addColumn<QString>("rule");
+    QTest::addColumn<QSize>("size");
+    QTest::addColumn<QColor>("fill");
+    QTest::addColumn<QColor>("border");
+    QTest::addColumn<int>("edges");
+    QTest::addColumn<int>("radius");
+    QTest::addColumn<qreal>("scale");
+    const int all = Qt::TopEdge | Qt::LeftEdge | Qt::RightEdge | Qt::BottomEdge;
+    const QColor none;
+    const QColor faint = QColor::fromRgba(0x660E639Cu);
+    struct Box {
+      const char *name;
+      QSize size;
+      QColor fill, border;
+      int edges, radius;
+    };
+    const Box boxes[] = {
+        {"field", {120, 24}, QColor(0xFFFFFF), QColor(0xCECECE), all, 2},
+        {"tool-hover", {24, 24}, QColor(0xE1E1E1), none, all, 3},
+        {"editor", {120, 60}, QColor(0xFFFFFF), none, 0, 2},
+        {"tool-focus", {24, 22}, none, QColor(0x0090F1), all, 3},
+        {"check", {16, 16}, QColor(0xFFFFFF), QColor(0x919191), all, 3},
+        {"radio", {16, 16}, QColor(0x007ACC), QColor(0x007ACC), all, 8},
+        {"card", {300, 80}, QColor(0xFFFFFF), QColor(0xE5E5E5), all, 6},
+        {"faint-fill", {75, 26}, faint, none, all, 2},
+        {"faint-border", {60, 20}, QColor(0xFFFFFF), faint, all, 2},
+        {"menu", {180, 120}, QColor(0x252526), QColor(0x454545), all, 0},
+        {"heading",
+         {90, 22},
+         QColor(0xF3F3F3),
+         QColor(0xE5E5E5),
+         Qt::RightEdge | Qt::BottomEdge,
+         0},
+        {"status",
+         {300, 22},
+         QColor(0x007ACC),
+         QColor(0xE5E5E5),
+         Qt::TopEdge,
+         0}};
+    for (const Box &box : boxes)
+      for (const qreal scale : {1.0, 2.0}) {
+        QString rule =
+            QStringLiteral("QWidget { background: %1; border: none; ")
+                .arg(box.fill.isValid() ? box.fill.name(QColor::HexArgb)
+                                        : QStringLiteral("none"));
+        const std::pair<Qt::Edge, const char *> sides[] = {
+            {Qt::TopEdge, "top"},
+            {Qt::RightEdge, "right"},
+            {Qt::BottomEdge, "bottom"},
+            {Qt::LeftEdge, "left"}};
+        for (const auto &[edge, side] : sides)
+          if (box.edges & edge)
+            rule +=
+                QStringLiteral("border-%1: 1px solid %2; ")
+                    .arg(QLatin1String(side),
+                         box.border.isValid() ? box.border.name(QColor::HexArgb)
+                                              : QStringLiteral("transparent"));
+        if (box.radius)
+          rule += QStringLiteral("border-radius: %1px; ").arg(box.radius);
+        rule += QLatin1Char('}');
+        QTest::newRow(qPrintable(
+            QStringLiteral("%1-%2x").arg(QLatin1String(box.name)).arg(scale)))
+            << rule << box.size << box.fill << box.border << box.edges
+            << box.radius << scale;
+      }
+  }
+
+  void deviceBoxesPaintAsStyleSheetsAtWholeScales() {
+    QFETCH(QString, rule);
+    QFETCH(QSize, size);
+    QFETCH(QColor, fill);
+    QFETCH(QColor, border);
+    QFETCH(int, edges);
+    QFETCH(int, radius);
+    QFETCH(qreal, scale);
+    // The workbench paints its controls' boxes itself; where every logical
+    // pixel covers whole device pixels, a box is exactly the style sheet's.
+    const auto canvas = [&] {
+      QImage image((size + QSize(8, 8)) * scale,
+                   QImage::Format_ARGB32_Premultiplied);
+      image.setDevicePixelRatio(scale);
+      image.fill(QColor(0x808080));
+      return image;
+    };
+    QImage expected = canvas();
+    QWidget styled;
+    styled.setAttribute(Qt::WA_StyledBackground);
+    styled.setStyleSheet(rule);
+    styled.resize(size);
+    styled.ensurePolished();
+    styled.render(&expected, QPoint(4, 4), QRegion(), QWidget::RenderFlags());
+    QImage actual = canvas();
+    {
+      QPainter painter(&actual);
+      painter.translate(4, 4);
+      // As Qt clips a widget's painting to the widget.
+      painter.setClipRect(QRect(QPoint(), size));
+      DeviceBox box;
+      box.fill = fill;
+      box.border = border.isValid() ? border : QColor(Qt::transparent);
+      box.edges = Qt::Edges(edges);
+      box.radius = radius;
+      paintDeviceBox(painter, QRect(QPoint(), size), box);
+    }
+    QCOMPARE(actual, expected);
+  }
+
+  void controlsKeepTheirLinesOnDevicePixels_data() {
+    QTest::addColumn<QString>("kind");
+    QTest::addColumn<qreal>("scale");
+    for (const char *kind :
+         {"field", "button", "default", "check", "group", "heading", "tab"})
+      for (const qreal scale : {1.0, 1.25, 1.5, 1.75})
+        QTest::newRow(qPrintable(
+            QStringLiteral("%1-%2x").arg(QLatin1String(kind)).arg(scale)))
+            << QString::fromLatin1(kind) << scale;
+  }
+
+  void controlsKeepTheirLinesOnDevicePixels() {
+    QFETCH(QString, kind);
+    QFETCH(qreal, scale);
+    Theme::instance().setMode(Theme::Mode::Light);
+    Theme::instance().apply();
+    const Theme &theme = Theme::instance();
+    QWidget window;
+    window.setAttribute(Qt::WA_StyledBackground);
+    window.setStyleSheet(QStringLiteral("QWidget#surface { background: %1; }")
+                             .arg(theme.chrome("Window").name()));
+    window.setObjectName(QStringLiteral("surface"));
+    window.resize(220, 120);
+    // The control's box, in the window, and the colors a line across it may
+    // take: the surface, the box's border and its fill.
+    QWidget *control = nullptr;
+    QRect box;
+    QList<QColor> allowed = {theme.chrome("Window")};
+    // Headings without labels, so only the header's own lines cross them.
+    QStandardItemModel headings(0, 2);
+    headings.setHorizontalHeaderLabels(
+        {QStringLiteral(" "), QStringLiteral(" ")});
+    if (kind == QLatin1String("field")) {
+      control = new QLineEdit(&window);
+      allowed << theme.chrome("InputBorder") << theme.chrome("Input");
+    } else if (kind == QLatin1String("button") ||
+               kind == QLatin1String("default")) {
+      auto *button = new QPushButton(&window);
+      button->setDefault(kind == QLatin1String("default"));
+      control = button;
+      allowed << theme.chrome(button->isDefault() ? "ButtonPrimary" : "Border")
+              << theme.chrome(button->isDefault() ? "ButtonPrimary" : "Button");
+    } else if (kind == QLatin1String("check")) {
+      control = new QCheckBox(&window);
+      allowed << theme.chrome("CheckboxBorder")
+              << theme.chrome("CheckboxBackground");
+    } else if (kind == QLatin1String("group")) {
+      control = new QGroupBox(&window);
+      allowed << theme.chrome("Border");
+    } else if (kind == QLatin1String("tab")) {
+      // Tabs without labels, the first selected.
+      auto *tabs = new QTabBar(&window);
+      tabs->addTab(QStringLiteral(" "));
+      tabs->addTab(QStringLiteral(" "));
+      control = tabs;
+      allowed << theme.chrome("TabBar") << theme.chrome("TabActive")
+              << theme.chrome("TabInactive") << theme.chrome("TabActiveBorder");
+    } else {
+      auto *view = new QTreeView(&window);
+      view->setModel(&headings);
+      control = view;
+      allowed << theme.chrome("Border") << theme.chrome("HeaderBackground")
+              << theme.chrome("Base");
+    }
+    // At rest: a field with focus takes the focus color's outline.
+    control->setFocusPolicy(Qt::NoFocus);
+    control->setGeometry(13, 17, 150, 60);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    if (auto *check = qobject_cast<QCheckBox *>(control)) {
+      QStyleOptionButton option;
+      option.initFrom(check);
+      box = check->style()->subElementRect(QStyle::SE_CheckBoxIndicator,
+                                           &option, check);
+    } else if (auto *group = qobject_cast<QGroupBox *>(control)) {
+      QStyleOptionGroupBox option;
+      option.initFrom(group);
+      option.subControls = QStyle::SC_GroupBoxFrame;
+      box = group->style()->subControlRect(QStyle::CC_GroupBox, &option,
+                                           QStyle::SC_GroupBoxFrame, group);
+    } else if (auto *view = qobject_cast<QTreeView *>(control)) {
+      box = view->header()->geometry();
+    } else if (auto *tabs = qobject_cast<QTabBar *>(control)) {
+      box = tabs->tabRect(0);
+    } else {
+      box = control->rect();
+    }
+    box.translate(control->pos());
+    // Each logical offset puts the box at another quarter of a device pixel.
+    for (int offset = 0; offset < 4; ++offset) {
+      QImage image(QSize(240, 140) * scale,
+                   QImage::Format_ARGB32_Premultiplied);
+      image.setDevicePixelRatio(scale);
+      image.fill(theme.chrome("Window"));
+      window.render(&image, QPoint(offset, offset));
+      const QRect device(
+          QPoint(qFloor((box.left() + offset) * scale) - 2,
+                 qFloor((box.top() + offset) * scale) - 2),
+          QPoint(qCeil((box.right() + 1 + offset) * scale) + 1,
+                 qCeil((box.bottom() + 1 + offset) * scale) + 1));
+      const auto check = [&](QPoint pixel) {
+        const QColor color = image.pixelColor(pixel);
+        return std::any_of(
+            allowed.begin(), allowed.end(),
+            [&](const QColor &c) { return c.rgb() == color.rgb(); });
+      };
+      const int middleY = (device.top() + device.bottom()) / 2;
+      const int middleX = (device.left() + device.right()) / 2;
+      for (int x = device.left(); x <= device.right(); ++x)
+        QVERIFY2(check({x, middleY}),
+                 qPrintable(QStringLiteral("offset %1: %2 at (%3, %4)")
+                                .arg(offset)
+                                .arg(image.pixelColor(x, middleY).name())
+                                .arg(x)
+                                .arg(middleY)));
+      for (int y = device.top(); y <= device.bottom(); ++y)
+        QVERIFY2(check({middleX, y}),
+                 qPrintable(QStringLiteral("offset %1: %2 at (%3, %4)")
+                                .arg(offset)
+                                .arg(image.pixelColor(middleX, y).name())
+                                .arg(middleX)
+                                .arg(y)));
+    }
   }
 
   void longMenusScrollWithinOneColumn_data() {

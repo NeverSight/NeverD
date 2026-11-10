@@ -31,6 +31,8 @@ public:
   QSize sizeFromContents(ContentsType type, const QStyleOption *option,
                          const QSize &contents,
                          const QWidget *widget = nullptr) const override;
+  QRect subElementRect(SubElement element, const QStyleOption *option,
+                       const QWidget *widget = nullptr) const override;
   QIcon standardIcon(StandardPixmap pixmap,
                      const QStyleOption *option = nullptr,
                      const QWidget *widget = nullptr) const override;

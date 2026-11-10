@@ -10,6 +10,7 @@
 #include "FocusSidebar.h"
 
 #include "../Config.h"
+#include "DevicePixels.h"
 #include "Theme.h"
 
 #include <QApplication>
@@ -165,19 +166,13 @@ bool FocusSidebar::eventFilter(QObject *object, QEvent *event) {
       const int line = config::kDockingSeparatorLineWidth;
       const int inset = (config::kDockingSeparatorGrabWidth - line) / 2;
       const auto &theme = Theme::instance();
-      painter.fillRect(QRect(inset, 0, line, resizeHandle_->height()),
-                       theme.chrome(QStringLiteral("DockSeparator")));
-      if (resizing_ || resizeHandle_->underMouse() ||
-          resizeHandle_->hasFocus()) {
-        const qreal highlight = config::kDockingSeparatorHighlightWidth;
-        const qreal start = inset + (line - highlight) / 2;
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(theme.chrome(QStringLiteral("DockSeparatorHover")));
-        painter.drawRoundedRect(
-            QRectF(start, 0, highlight, resizeHandle_->height()), highlight / 2,
-            highlight / 2);
-      }
+      const bool lit =
+          resizing_ || resizeHandle_->underMouse() || resizeHandle_->hasFocus();
+      paintDeviceSeparator(
+          painter, QRect(inset, 0, line, resizeHandle_->height()), Qt::Vertical,
+          theme.chrome(QStringLiteral("DockSeparator")),
+          config::kDockingSeparatorHighlightWidth,
+          lit ? theme.chrome(QStringLiteral("DockSeparatorHover")) : QColor());
       return true;
     }
     case QEvent::MouseButtonPress: {
@@ -246,10 +241,10 @@ bool FocusSidebar::eventFilter(QObject *object, QEvent *event) {
 
 void FocusSidebar::paintEvent(QPaintEvent *) {
   QPainter painter(this);
-  painter.fillRect(rect(), Theme::instance().chrome(QStringLiteral("Window")));
-  painter.setPen(Theme::instance().chrome(QStringLiteral("Border")));
-  painter.drawRect(rect().adjusted(0, 0, -config::kFocusSidebarBorderWidth,
-                                   -config::kFocusSidebarBorderWidth));
+  paintDeviceBox(painter, rect(),
+                 DeviceBox{Theme::instance().chrome(QStringLiteral("Window")),
+                           Theme::instance().chrome(QStringLiteral("Border")),
+                           config::kFocusSidebarBorderWidth});
 }
 
 } // namespace neverd::gui
