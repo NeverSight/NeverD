@@ -168,6 +168,12 @@ fault before starting post-return #DB or fault entry. If that entry itself
 pauses, retain `lastResult().Delivery->Continuation` and use the event resume
 API. Do not restart the return.
 
+The [2026-11-10 qualification](evidence/x86-x64-return-continuation-2026-11-10.json)
+records 876 passing executions across both SDK profiles and 1,872 byte-identical
+C/header/manifest artifacts per SDK. The initially skipped REP watchpoint
+cases passed in explicit P/E-core reruns. This qualifies retained return
+progress, not complete machine-mode or SMM/SGX execution.
+
 ## Instruction-step debug events
 
 Add `"paged_debug": true` to a paged V6 instruction-region export and bind a
