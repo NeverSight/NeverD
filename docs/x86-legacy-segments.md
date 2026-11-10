@@ -386,6 +386,16 @@ ordinary i386 function C, IA-32e compatibility dispatch, real-mode execution,
 software SMM/SGX and native device qualification remain separate work.
 Global LLVM release remains gated on those separately documented contracts.
 
+The [November 10 resumption qualification](evidence/x86-legacy-resume-budget-2026-11-10.json)
+records 1,350 passing executions with no skips or failures across both SDKs:
+40 focused, 396 related software, 237 complete source and two SDK ownership
+checks per SDK. The red checkpoint fails 28 of the 40 focused cases on each
+SDK before the resource-receipt fix. Both protected and genuine VM86 returns
+continue through paused #DB delivery, with the VM86 path checking all nine
+saved frame fields. Each SDK produces the same 1,022 C/manifest files and 340
+compiled host-x64 libraries. This closes instruction-attempt accounting; it
+does not qualify the remaining mixed-mode or physical execution domains.
+
 The [November 7 source qualification](evidence/x86-legacy-source-2026-11-07.json)
 records 2,075 source, semantic and interface executions across qualification
 and subsequent `dev` integrations: 2,074 pass, with one explicit KVM LA57
