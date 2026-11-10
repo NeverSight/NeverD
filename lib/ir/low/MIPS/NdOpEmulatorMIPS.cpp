@@ -18,10 +18,95 @@
 
 namespace neverd {
 
+bool NdOpEmulator::setMIPSReservationModel(uint32_t GranuleBytes) {
+  if (!isMIPS(Img.Arch) || isMIPS64(Img.Arch) || GranuleBytes < 4 ||
+      !llvm::isPowerOf2_32(GranuleBytes))
+    return false;
+  MIPSReservationGranule = GranuleBytes;
+  MIPSReservationKnown = false;
+  MIPSReservationAddress.reset();
+  return true;
+}
+
+void NdOpEmulator::clearMIPSReservation() {
+  MIPSReservationKnown = true;
+  MIPSReservationAddress.reset();
+}
+
+bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
+  if (!isMIPS(Img.Arch) || isMIPS64(Img.Arch) ||
+      !mipsScalarLowShapeIsValid(Op, Img.Arch))
+    return false;
+  const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+  if (Id == Intrinsic::MIPSExecutionHazardBarrier) {
+    Context.ExecutionHazardPending = false;
+    return true;
+  }
+  if (!mips::isSystemIntrinsic(Id) || Context.ExecutionHazardPending)
+    return false;
+  if (Id == Intrinsic::MIPSReadHardwareRegister) {
+    const unsigned Index = Op.Inputs[1].Offset;
+    if ((!Context.CP0Usable && !(Context.HWREna & (uint32_t(1) << Index))) ||
+        !Context.Hardware || Context.Hardware->Index != Index)
+      return false;
+    writeOutput(Op.Output, Context.Hardware->Value);
+    Context.Hardware.reset();
+    return true;
+  }
+  if (!Context.CP0Usable || !Context.Status)
+    return false;
+  const uint32_t Old = *Context.Status;
+  writeOutput(Op.Output, Old);
+  Context.Status =
+      (Old & ~uint32_t(1)) | (Id == Intrinsic::MIPSEnableInterrupts ? 1u : 0u);
+  Context.ExecutionHazardPending = true;
+  return true;
+}
+
 bool NdOpEmulator::executeMIPSScalar(const LowOp &Op) {
   if (!mipsScalarLowShapeIsValid(Op, Img.Arch))
     return false;
   const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+  if (mips::isSystemIntrinsic(Id))
+    return false; // Explicit, single-step context required in either mode.
+  if (mips::isReservationIntrinsic(Id)) {
+    if (!MIPSReservationGranule || !knownOperandBytes(Op.Inputs[1], 0, 4))
+      return false;
+    const uint32_t Address = readOperand(Op.Inputs[1]);
+    const bool Store = Id == Intrinsic::MIPSStoreConditionalWord;
+    if (Address & 3)
+      return false;
+    // Validate mapping independently of lenient store policy and the overlay.
+    // Even a failed SC performs its address translation and permission checks.
+    for (unsigned I = 0; I != 4; ++I) {
+      const auto *Mapped = Img.getSegmentFor(uint64_t(Address) + I);
+      if (!Mapped || uint64_t(Address) + I < Mapped->VA ||
+          uint64_t(Address) + I - Mapped->VA >= Mapped->Size ||
+          (Store ? !Mapped->isWritable() : !Mapped->isReadable()))
+        return false;
+    }
+    if (!Store) {
+      const auto Value = loadMemory(Address, 4);
+      if (!Value)
+        return false;
+      MIPSReservationKnown = true;
+      MIPSReservationAddress = Address;
+      writeOutput(Op.Output, *Value);
+      if (CollectLoads && int(LoadLog.size()) < limits::kMaxLoadRecords)
+        LoadLog.push_back({Address, 4});
+      return true;
+    }
+    if (!MIPSReservationKnown)
+      return false;
+    const bool Success =
+        MIPSReservationAddress && *MIPSReservationAddress == Address;
+    if (Success && (!knownOperandBytes(Op.Inputs[2], 0, 4) ||
+                    !storeMemory(Address, 4, readOperand(Op.Inputs[2]))))
+      return false;
+    clearMIPSReservation();
+    writeOutput(Op.Output, Success ? 1 : 0);
+    return true;
+  }
   // Sequential ordinary-memory execution has no pending accesses or
   // execution hazards. Retain the operation in IR and native source; this
   // observation does not model devices, speculation or multiple processors.

@@ -48,6 +48,9 @@ NEVERD_MIPS_DSP_INSTRUCTION(AddSignedHalfwords, 0xfc0007ff, 0x7c000290)
 NEVERD_MIPS_DSP_INSTRUCTION(AddSaturatedSignedHalfwords, 0xfc0007ff, 0x7c000390)
 NEVERD_MIPS_DSP_INSTRUCTION(SubSignedHalfwords, 0xfc0007ff, 0x7c0002d0)
 NEVERD_MIPS_DSP_INSTRUCTION(SubSaturatedSignedHalfwords, 0xfc0007ff, 0x7c0003d0)
+NEVERD_MIPS_DSP_INSTRUCTION(MultiplyLeftBytes, 0xfc0007ff, 0x7c000190)
+NEVERD_MIPS_DSP_INSTRUCTION(MultiplyRightBytes, 0xfc0007ff, 0x7c0001d0)
+NEVERD_MIPS_DSP_INSTRUCTION(MultiplyRoundedHalfwords, 0xfc0007ff, 0x7c0007d0)
 
 // Right shifts leave DSPControl unchanged. Reserved immediate bits are masked.
 NEVERD_MIPS_DSP_SHIFT(ShiftRightBytes, 0xff0007ff, 0x7c000053, 1, false, false)

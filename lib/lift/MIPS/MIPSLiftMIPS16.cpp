@@ -9,6 +9,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ArchSupport.h"
+#include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -86,11 +87,32 @@ MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
       return Encoding{0x000000c0}; // EHB
     if (!(First & 63) && Half == 0x3014)
       return Encoding{uint32_t(First & 0x7c0) | 15}; // SYNC stype
+    if (!(First & 0x7e0) && (Half & 0xff1f) == 0x300c &&
+        mips::supportedHardwareRegister(First & 31))
+      return Encoding{0x7c00003b | (RY << 16) | ((First & 31) << 11)};
+    if ((First == 0xf002 || First == 0xf003 || First == 0xf006 ||
+         First == 0xf007) &&
+        (Half & 0xff1f) == 0x670c) {
+      const bool Discard = First & 4;
+      if (Discard && (Half & 0xe0))
+        return std::nullopt;
+      return Encoding{uint32_t(0x41606000 | ((First & 1) << 5) |
+                               ((Discard ? 0 : RY) << 16))};
+    }
     switch ((Major << 3) | ((Half >> 5) & 7)) {
 #define NEVERD_MIPS16E2_IMMEDIATE(Major, Selector, Classic, Source)            \
   case ((Major) << 3) | (Selector):                                            \
     return Encoding{immediateForm(Classic, RX, Source, Immediate)};
 #include "neverd/lift/MIPS/MIPS16Integer.def"
+    case (0x12 << 3) | 6:
+    case (0x1a << 3) | 6: {
+      if (First & 0x618)
+        return std::nullopt;
+      const int Offset = int(((First & 0x1e0) | (Half & 31)) ^ 0x100) - 0x100;
+      return Encoding{immediateForm(Major == 0x12 ? 48 : 56, RX,
+                                    compactRegister(First & 7),
+                                    uint16_t(Offset))};
+    }
     case (0x12 << 3) | 7:
     case (0x1a << 3) | 7: {
       if (First & 0x608)

@@ -680,3 +680,66 @@ dsp_shll_zero:
   nop
 .end dsp_shll_zero
 .size dsp_shll_zero, .-dsp_shll_zero
+
+.globl dsp_muleu_l
+.type dsp_muleu_l,@function
+.ent dsp_muleu_l
+dsp_muleu_l:
+  muleu_s.ph.qbl $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_muleu_l
+.size dsp_muleu_l, .-dsp_muleu_l
+
+.globl dsp_muleu_l_zero
+.type dsp_muleu_l_zero,@function
+.ent dsp_muleu_l_zero
+dsp_muleu_l_zero:
+  muleu_s.ph.qbl $zero,$a0,$a1
+  addiu $v0,$zero,7
+  jr $ra
+  nop
+.end dsp_muleu_l_zero
+.size dsp_muleu_l_zero, .-dsp_muleu_l_zero
+
+.globl dsp_muleu_r
+.type dsp_muleu_r,@function
+.ent dsp_muleu_r
+dsp_muleu_r:
+  muleu_s.ph.qbr $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_muleu_r
+.size dsp_muleu_r, .-dsp_muleu_r
+
+.globl dsp_muleu_r_zero
+.type dsp_muleu_r_zero,@function
+.ent dsp_muleu_r_zero
+dsp_muleu_r_zero:
+  muleu_s.ph.qbr $zero,$a0,$a1
+  addiu $v0,$zero,7
+  jr $ra
+  nop
+.end dsp_muleu_r_zero
+.size dsp_muleu_r_zero, .-dsp_muleu_r_zero
+
+.globl dsp_mulq_rs
+.type dsp_mulq_rs,@function
+.ent dsp_mulq_rs
+dsp_mulq_rs:
+  mulq_rs.ph $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_mulq_rs
+.size dsp_mulq_rs, .-dsp_mulq_rs
+
+.globl dsp_mulq_rs_zero
+.type dsp_mulq_rs_zero,@function
+.ent dsp_mulq_rs_zero
+dsp_mulq_rs_zero:
+  mulq_rs.ph $zero,$a0,$a1
+  addiu $v0,$zero,7
+  jr $ra
+  nop
+.end dsp_mulq_rs_zero
+.size dsp_mulq_rs_zero, .-dsp_mulq_rs_zero

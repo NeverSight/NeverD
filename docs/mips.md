@@ -120,7 +120,7 @@ remain a separate contract.
 
 This is a strict subset. n32, historical MIPS I–V profiles, Release 6,
 microMIPS64, floating point, MSA/DSP forms beyond the slices below, privileged
-instructions, LL/SC reservations,
+instructions and LL/SC reservations outside the qualified MIPS16e2 LowIR slice below,
 doubleword merge stores (`SDL`/`SDR`), doubleword division and trapping arithmetic are not admitted by
 the current lifter. Unsupported instructions, missing slots and transfers in a
 delay slot produce errors, not replacement NOPs. Floating/aggregate source ABI
@@ -180,6 +180,13 @@ all-ones pseudocode is not used as the oracle.
 DSPControl. `CMP.EQ/LT/LE.PH` remains unsupported: its upper condition bits become
 UNPREDICTABLE, requiring a partial-known state transport/source contract.
 
+`MULEU_S.PH.QBL/QBR` saturate unsigned byte-by-halfword products to 65535.
+`MULQ_RS.PH` rounds signed Q15 products toward positive infinity at halfway
+values and saturates the pair of -1 operands to 32767. Both families set sticky
+DSPControl bit 21 and leave HI/LO unpredictable, including with a `$zero`
+destination. Explicit accumulator writes can redefine either value independently;
+source refuses a retained observation of an unpredictable result.
+
 The ten-bit control selector selects six field groups; its upper four bits are
 ignored. Partial writes preserve unselected fields, and packed byte additions
 and subtractions set the sticky overflow flag even when the destination is
@@ -217,7 +224,7 @@ link spills remain outside the current source proof.
 The operation rules follow the
 [MIPS32 DSP ASE manual, revision 1.00](https://0x04.net/~mwk/doc/mips/MD00374-2B-MIPS32DSP-AFP-01.00.pdf).
 The pinned Unicorn model is checked with Status.MX enabled. Its packed
-arithmetic and shift translators preserve DSPControl effects for zero
+arithmetic, shift and the three packed-multiply translators preserve DSPControl effects for zero
 destinations and still check the enabled state. The source runner rejects any
 original/generated disagreement with the independent expectations. Historical
 receipts below retain the zero-destination defect of the older reference.
@@ -360,18 +367,65 @@ GNU `-mmips16e2` supplies explicit ELF evidence for the owned fixtures; a local
 The pinned Unicorn predates e2, so it is **not** an original-e2 oracle. Literal
 GNU bytes, independent LowIR expectations and execution of generated old-MIPS16
 source are separate checks. Hardware or independent original-e2 execution
-remains unavailable. Other e2 system/MT, atomic, cache/hint forms and MIPS16
-on MIPS64 remain unsupported. No path treats a misdecoded operand or unknown instruction as
+remains unavailable. General CP0 transfers, MT, cache/hint/PAUSE forms and
+MIPS16 on MIPS64 remain unsupported. The following system/atomic slice is
+qualified at LowIR, not as native source or original-e2 hardware execution. No path treats a misdecoded operand or unknown instruction as
 valid semantics. The immediate, memory, call and slot rules follow
 [MIPS16e Volume IV-a, revision 2.63](https://jnastarot.io/arch_index/pdf/MD00076-2B-MIPS1632-AFP-02.63.pdf)
 and were cross-checked against the pinned Ghidra definitions linked above.
+
+MIPS16e2 `LL`/`SC`, `RDHWR` (indices 0–3 and 29), and `DI`/`EI` (with or
+without a result) retain explicit effectful intrinsics. Reserved fields and
+feature evidence are checked before effects. SC captures the original address
+and stored value before overwriting its GPR with 0/1. An unused result cannot
+remove the memory/reservation or system effect. SC ends stack-memory argument
+recovery, so an earlier outgoing stack value cannot survive a conditional write.
+Classic LL/SC and general privileged instruction admission are unchanged.
+
+`NdOpEmulator::setMIPSReservationModel` explicitly selects a MIPS32 flat,
+synchronizable ordinary-RAM model with identity virtual/physical addresses,
+Config5.LLB=1 and a supplied power-of-two coherence granule of at least four
+bytes. It assumes no unreported interference or cache eviction. Incoming
+reservation knowledge is unknown until LL or an explicitly reported clear.
+Aligned mapped reads establish or replace the word reservation. SC checks full
+mapping and write permission even on a known failure, matches the LL address,
+and clears the reservation after completion. Same-granule committed stores
+invalidate it even after an ABA change; unknown calls, skipped unknown effects
+and reset forget it. `clearMIPSReservation` reports an observed ERET, coherent
+invalidation or spurious failure without changing memory. Rejected operations
+leave architectural outputs/reservation state unchanged; rejection is not
+modeled guest exception delivery. Both strict and lenient execution require the
+same admission. With this profile enabled, ordinary LowOp inputs must be fully
+known even in lenient mode; partial-unknown transports are conservatively refused.
+MIPS scalar intrinsics keep their own narrower observed-byte rules. Skipping a
+budget-limited ordinary write forgets reservation knowledge; an operation that
+stops without writing preserves it. Virtual aliases, MMIO, arbitrary SMP and unreported events are
+outside this declared model.
+
+`stepMIPSSystem` binds a caller-authenticated `MIPSSystemContext` for one
+operation. RDHWR requires CP0 usability or the selected HWREna bit and consumes
+a matching hardware-register observation on success. It never guesses Count
+progression or the existence of UserLocal. DI/EI require known Status and CP0
+permission, return the old word, change only IE and mark an execution hazard.
+While that obligation is pending, only a bound EHB can clear it; SYNC cannot.
+Unbound system execution refuses. Context authentication and interrupt/event
+sequencing belong to the caller; this API does not simulate interrupt delivery,
+CP0 pipeline timing or privilege transitions.
+
+HighC, LLVM and LLVMC explicitly refuse native lowering of this stateful slice.
+An isolated LL/SC asm helper would permit compiler spills or calls inside the
+reservation interval; ordinary loads/stores or compare-exchange are not a
+replacement. A future native-source contract must own the whole reservation or
+privileged execution region. Encoding and model tests are separate from native
+hardware equivalence and source execution qualification.
 
 EHB/SYNC remain effectful through SSA and dead-code elimination. They order
 execution or memory but do not overwrite saved data, so a saved-return proof
 can cross them. Native source uses non-inlined classic-mode helpers containing
 the original barrier and exact stype, including under compressed compiler
 defaults. The LowIR emulator observes only its sequential ordinary-memory
-contract; it has no pending accesses or execution hazards. No multicore,
+contract when no system context is bound; a bound EHB additionally clears the
+explicit execution-hazard obligation described above. No multicore,
 device/cache, privileged hazard, or original-e2 execution equivalence is
 claimed. In particular the qualified native-source domain has no incoming
 CP0/privileged execution hazard: helper calls and their instruction fetches
@@ -396,7 +450,10 @@ MSA. Other revisions, MSA64, microMIPS/MSA and DSP/MSA combinations are refused.
 `AVE_S`/`AVE_U`, `AVER_S`/`AVER_U`, and `AND.V`/`OR.V`/`NOR.V`/`XOR.V` use exact encoding descriptors in
 `MIPSMSA.def`. Additional forms are `ANDI/ORI/NORI/XORI.B`,
 `BSEL/BMNZ/BMZ.V`, and B/H/W/D formats of `PCNT`, `NLZC`, `NLOC`,
-`SLLI/SRLI/SRAI`, and `BCLRI/BSETI/BNEGI`. BIT immediates have a prefix-coded
+`SLLI/SRLI/SRAI`, `BCLRI/BSETI/BNEGI`, `ASUB_S/ASUB_U` and `SAT_S/SAT_U`.
+Absolute difference preserves the full unsigned magnitude, including signed
+min/max pairs. Saturation clamps to the signed/unsigned range of m+1 bits while
+retaining the lane width; m=0 and full-width saturation are defined. BIT immediates have a prefix-coded
 width; the reserved `1111xxx` field is rejected. Counts define the zero/full
 lane cases without poison. BSEL uses old WD as its mask; BMNZ/BMZ use WT and
 merge selected WS bits with old WD. Every input is captured before writing an

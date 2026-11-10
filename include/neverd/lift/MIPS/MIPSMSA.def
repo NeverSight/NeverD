@@ -69,4 +69,9 @@ NEVERD_MIPS_MSA(ClearBitImmediate, 0xff80003f, 0x79800009)
 NEVERD_MIPS_MSA(SetBitImmediate, 0xff80003f, 0x7a000009)
 NEVERD_MIPS_MSA(NegateBitImmediate, 0xff80003f, 0x7a800009)
 
+NEVERD_MIPS_MSA(AbsoluteDifferenceSigned, 0xff80003f, 0x7a000011)
+NEVERD_MIPS_MSA(AbsoluteDifferenceUnsigned, 0xff80003f, 0x7a800011)
+NEVERD_MIPS_MSA(SaturateSignedImmediate, 0xff80003f, 0x7800000a)
+NEVERD_MIPS_MSA(SaturateUnsignedImmediate, 0xff80003f, 0x7880000a)
+
 #undef NEVERD_MIPS_MSA
