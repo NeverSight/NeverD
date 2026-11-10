@@ -515,7 +515,18 @@ private:
   /// happens to equal an image VA must not be rewritten to ptrtoint(@global)
   /// or ptrtoint(@function).  Rebuild the pure integer dependency chain with
   /// raw constants instead of reusing a potentially symbolized SSA value.
+  /// An offset that cannot be rebuilt so refuses its body, not the unit.
   llvm::Value *getRawSegmentOffset(const MedVar &V, llvm::IRBuilder<> &Builder);
+  /// Materialize an x86 REP MOVS/STOS count the same way: it is an integer,
+  /// so its constants stay raw where their bits equal an image VA. Unlike an
+  /// offset it may derive from a process pointer, as a pointer difference
+  /// does, and then takes that pointer's runtime bits. An image address
+  /// among the raw constants beside such a pointer would mix the original
+  /// and the runtime coordinates, so that body is refused.
+  llvm::Value *getRawRepeatCount(const MedVar &V, llvm::IRBuilder<> &Builder);
+  enum class RawIntegerRole : uint8_t { SegmentOffset, RepeatCount };
+  llvm::Value *getRawInteger(const MedVar &V, RawIntegerRole Role,
+                             llvm::IRBuilder<> &Builder);
   /// Materialize a constant copied along a PHI edge. Ordinary and exceptional
   /// edges must share this policy: untagged legacy constants remain raw,
   /// while an occurrence carrying architectural address origin goes through

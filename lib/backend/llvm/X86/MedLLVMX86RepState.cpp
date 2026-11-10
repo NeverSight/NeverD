@@ -11,13 +11,15 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/X86/X86RepStateAsm.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
+#include "neverd/support/Diagnostic.h"
 
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/ErrorHandling.h"
 
 #include <array>
-#include <stdexcept>
 #include <vector>
 
 namespace neverd {
@@ -43,24 +45,36 @@ llvm::Value *MedLLVMEmitter::emitX86RepState(const MedOp &Op, Intrinsic Id,
   auto Input = [&](unsigned I) -> llvm::Value * {
     const auto &V = Op.Inputs[I];
     // Counts and unproven immediate fill patterns are integer values, even
-    // when their bits coincide with an address in the image.
-    if ((Copy || Id == Intrinsic::X86RepStosState) &&
-        (I == (Copy ? 3u : 2u) || (!Copy && I == 3 && V.isConst() &&
-                                   !isExactAddressProvenance(V.Provenance))))
+    // when their bits coincide with an address in the image. A count may
+    // also derive from a process pointer, as a pointer difference does.
+    if ((Copy || Id == Intrinsic::X86RepStosState) && I == (Copy ? 3u : 2u))
+      return getRawRepeatCount(V, B);
+    if (Id == Intrinsic::X86RepStosState && I == 3 && V.isConst() &&
+        !isExactAddressProvenance(V.Provenance))
       return getRawSegmentOffset(V, B);
     if (BoundedMemory && I <= (Copy ? 2u : 1u)) {
       const auto Address =
           V.isConst() ? std::optional<uint64_t>(V.ConstVal) : traceSSAConst(V);
       const auto *Segment = Address ? Img->getSegmentFor(*Address) : nullptr;
       if (Segment && Segment->isReadable() && !Segment->isExecutable()) {
+        // An access the image storage cannot hold refuses its body, not the
+        // unit, which leaves the body out with this reason.
+        auto Refuse = [&](const char *Why) -> llvm::Value * {
+          if (!FatalDataPointerResolution && !FatalCodePointerResolution)
+            syncError() << "med_llvm_emitter: repeated image access at 0x"
+                        << llvm::utohexstr(*Address) << " in "
+                        << (CurMedFunc ? CurMedFunc->Name : "<unknown>") << ' '
+                        << Why << "; refusing stale-address fallback\n";
+          FatalDataPointerResolution = true;
+          return llvm::PoisonValue::get(B.getPtrTy());
+        };
         const bool Backward =
             (Op.Inputs[4].ConstVal >> X86RepDirectionShift) & 1;
         const auto Span =
             x86RepAccessSpan(*Address, Count.ConstVal, P.Control, Backward,
                              Segment->VA, Segment->Size);
         if (!Span)
-          throw std::invalid_argument(
-              "repeated image access crosses its mapped storage");
+          return Refuse("crosses its mapped storage");
         // REP owns the memory role that a neutral LEA/COPY cannot decide.
         // Request every accessed byte, starting at the low end for DF=1.
         // Reuse ordinary data storage so adjacent relocated pointers do not
@@ -72,9 +86,16 @@ llvm::Value *MedLLVMEmitter::emitX86RepState(const MedOp &Op, Intrinsic Id,
         if (!Base)
           Base = tryResolveOwnedGlobalData(Span->Begin, Segment->VA, 0,
                                            /*WholeOwner=*/true);
+        // The section at the segment's start owns only its own bytes. An
+        // access that starts in a later section, as one into .data or .bss
+        // behind ELF's .init_array, belongs to that section; the segment's
+        // storage run holds all of it.
+        if (const Section *Owner = Img->getSectionFor(Span->Begin);
+            !Base && Owner && Owner->VA != Segment->VA)
+          Base = tryResolveOwnedGlobalData(Span->Begin, Owner->VA, 0,
+                                           /*WholeOwner=*/true);
         if (!Base)
-          throw std::invalid_argument(
-              "cannot materialize repeated image access storage");
+          return Refuse("has no storage that holds every accessed byte");
         auto *Pointer =
             B.CreateConstGEP1_64(B.getInt8Ty(), Base, *Address - Span->Begin);
         OriginalAddresses[I - 1] = Coerce(getVar(V, B), Word);

@@ -6129,4 +6129,54 @@ TEST(LowInstructionBoundary, RejectsOverflowAndNonCanonicalOpCoverage) {
             std::string::npos);
 }
 
+// An FS/GS offset is an integer in the segment's own address domain, so a
+// live-in typed as a process pointer cannot be one. Its body is refused with
+// the reason instead of aborting the process.
+TEST(LowInstructionBoundary, PointerTypedSegmentOffsetRefusesItsBody) {
+  MedFunc Med;
+  Med.Entry = 0x2c00;
+  Med.Name = "segment_offset_pointer";
+  Med.CC = CallingConv::SysV_AMD64;
+  Med.ReturnType = NdType::makeInt(8, false);
+  MedVar Offset;
+  Offset.Kind = MedVar::Param;
+  Offset.TheArch = Arch::X64;
+  Offset.Id = 0;
+  Offset.RegOff = x86reg::RDI;
+  Offset.Size = 8;
+  Med.Params.push_back(Offset);
+  Med.TypedParams.push_back({"offset", NdType::makePtr()});
+  MedBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Med.Entry;
+  Block.EndAddr = Med.Entry + 8;
+  MedOp Load;
+  Load.Opcode = NdOp::LOAD;
+  Load.Addr = Med.Entry;
+  Load.Output.Kind = MedVar::Temp;
+  Load.Output.Id = 1;
+  Load.Output.Size = 8;
+  Load.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+  Load.addInput(Offset);
+  Block.Ops.push_back(Load);
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = Med.Entry + 4;
+  Return.addInput(Load.Output);
+  Block.Ops.push_back(Return);
+  Med.Blocks.push_back(std::move(Block));
+
+  llvm::LLVMContext Context;
+  MedLLVMEmitter Emitter;
+  std::unique_ptr<llvm::Module> Module;
+  ASSERT_NO_THROW(Module = Emitter.emit({Med}, Context,
+                                        "segment-offset-pointer", Arch::X64));
+  EXPECT_FALSE(Module);
+  ASSERT_EQ(Emitter.refusedBodies().size(), 1u);
+  EXPECT_NE(Emitter.refusedBodies().front().Reason.find(
+                "FS/GS live-in offset was inferred as a process pointer"),
+            std::string::npos)
+      << Emitter.refusedBodies().front().Reason;
+}
+
 } // namespace
