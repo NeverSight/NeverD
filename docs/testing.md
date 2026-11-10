@@ -16924,6 +16924,14 @@ raw executions check the callback or loop, and the reported generic return
 remains unknown even when the first-call address is recovered.
 The pinned 72-file native-object scan described in [sbf-corpus.md](sbf-corpus.md)
 is separate from these synthetic execution tests and from official VM gates.
+`InitializedIndexGuardRefinesBothBoundedOperands` checks finite and interval
+count guards with strict and non-strict unsigned ordering, both operand orders,
+both branch directions, and reversed CFG edges. Low and near-`UINT64_MAX`
+domains each execute raw bytecode for accepted and rejected indices; a genuine
+two-element choice must not become a singleton callback proof.
+`FallthroughComparisonDoesNotSelectAnOutcome` checks that a conditional jump
+to its next instruction cannot exclude either input value, using immediate
+and register comparisons and independent raw returns.
 
 ## One-shot targets
 

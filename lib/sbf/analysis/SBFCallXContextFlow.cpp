@@ -782,210 +782,244 @@ bool refineAddressBranch(const MedBlock &Block,
   const auto *Last = Index.find(Block.EndSlot - 1);
   if (!Last || Last->Semantics.Terminator != TerminatorKind::ConditionalJump)
     return true;
+  if (*Last->BranchTarget == Last->Slot + Last->SlotWidth)
+    return true;
   if (!refinePredicateBranch(*Last, Successor, State))
     return false;
   if (Last->Width != kDoubleWordBitWidth)
     return true;
   const bool Taken = Successor == *Last->BranchTarget;
-  RegisterValue Right =
-      Last->Semantics.Source == OperandSourceKind::SourceRegister
-          ? State.Registers[Last->Src].singleton()
-          : RegisterValue{
-                RegisterValue::Kind::Constant,
-                normalizeImmediate(Last->Immediate, Last->Semantics.Immediate),
-                0};
-  unsigned Register = Last->Dst;
-  Operation Predicate = Last->Op;
-  if (Right.ValueKind != RegisterValue::Kind::Constant) {
-    Right = State.Registers[Last->Dst].singleton();
-    if (Right.ValueKind != RegisterValue::Kind::Constant ||
-        Last->Semantics.Source != OperandSourceKind::SourceRegister)
+  const auto Refine = [&](unsigned Register, Operation Predicate,
+                          uint64_t Constant) {
+    if (!RefineUnknownScalars && State.Registers[Register].unknown() &&
+        (!(ReturnCarriers & registerBit(Register)) ||
+         !hasHeapAddressLowerBound(Constant)))
       return true;
-    Register = Last->Src;
+    std::optional<ProvenValueSet> Refined;
+    bool Reachable = false;
+    for (const auto &Value : possibleValues(State.Registers[Register])) {
+      auto Bounds = State.Scratch.Values.valueRange(Value);
+      if (!Bounds && Value.ValueKind != RegisterValue::Kind::Unknown)
+        return true;
+      const auto Before = Bounds.value_or(UnsignedValueRange{});
+      auto Range = Before;
+      std::optional<UnsignedValueRange> LowerPart;
+      bool Possible = true;
+      switch (Predicate) {
+      case Operation::Eq:
+      case Operation::Ne: {
+        const bool Equal = Taken == (Predicate == Operation::Eq);
+        if (Equal) {
+          Possible = Constant >= Range.Lower && Constant <= Range.Upper;
+          Range = {Constant, Constant};
+        } else if (Range.Lower == Constant) {
+          Possible = Range.Upper != Constant;
+          if (Possible)
+            ++Range.Lower;
+        } else if (Range.Upper == Constant) {
+          --Range.Upper;
+        } else if (Range.Lower < Constant && Constant < Range.Upper) {
+          // A tag excluded from the middle of a range needs both remaining
+          // intervals. Keeping the original hull would let this path supply a
+          // payload for the very tag its branch rejected.
+          LowerPart = UnsignedValueRange{Range.Lower, Constant - 1};
+          Range.Lower = Constant + 1;
+        }
+        break;
+      }
+      case Operation::UGt:
+      case Operation::ULe:
+        if (Taken == (Predicate == Operation::UGt)) {
+          Possible = Constant != UINT64_MAX && Range.Upper > Constant;
+          if (Possible)
+            Range.Lower = std::max(Range.Lower, Constant + 1);
+        } else {
+          Possible = Range.Lower <= Constant;
+          Range.Upper = std::min(Range.Upper, Constant);
+        }
+        break;
+      case Operation::UGe:
+      case Operation::ULt:
+        if (Taken == (Predicate == Operation::UGe)) {
+          Possible = Range.Upper >= Constant;
+          Range.Lower = std::max(Range.Lower, Constant);
+        } else {
+          Possible = Constant != 0 && Range.Lower < Constant;
+          if (Possible)
+            Range.Upper = std::min(Range.Upper, Constant - 1);
+        }
+        break;
+      default:
+        return true;
+      }
+      if (!Possible)
+        continue;
+      Reachable = true;
+      // A guard on one exact capture constrains all its affine aliases on this
+      // path. A disjunction cannot constrain its unrelated alternatives, and a
+      // split interval cannot be represented by the single local enclosure.
+      const auto Include = [&](UnsignedValueRange Part) {
+        const bool KeepIdentity =
+            PreserveCapturedIdentity &&
+            Value.ValueKind == RegisterValue::Kind::SymbolicAddress &&
+            State.Registers[Register].values().size() == 1 && !LowerPart;
+        if (KeepIdentity)
+          State.Scratch.Values.refineCapturedRange(Value, Part);
+        RegisterValue Narrowed =
+            Part == Before || KeepIdentity ? Value : unsignedRangeValue(Part);
+        if (!RefineUnknownScalars &&
+            Value.ValueKind == RegisterValue::Kind::Unknown &&
+            Part.Lower < kHeapStart)
+          Narrowed = {};
+        if (!Refined)
+          Refined = Narrowed;
+        else
+          Refined->join(Narrowed);
+      };
+      Include(Range);
+      if (LowerPart)
+        Include(*LowerPart);
+    }
+    if (Reachable) {
+      // Splitting several intervals can exceed the existing alternative limit.
+      // The incoming value remains sound on this edge and retains its bounds.
+      if (Refined->unknown() && !State.Registers[Register].unknown())
+        return true;
+      const uint16_t ReturnAliases =
+          State.Nullable && (State.Nullable->Registers & registerBit(Register))
+              ? State.Nullable->Registers
+              : 0;
+      if (ReturnAliases) {
+        const auto Value = Refined->singleton();
+        if (Value.ValueKind == RegisterValue::Kind::Constant &&
+            Value.Value == 0) {
+          if (State.Nullable->ConditionalDefinition)
+            std::erase(State.DefinedCaptures, State.Nullable->Value.Value);
+          State.Nullable.reset();
+        } else if (llvm::all_of(
+                       Refined->values(), [&](const auto &Alternative) {
+                         const auto Bounds =
+                             unsignedValueRange(Alternative, &Addresses);
+                         return Bounds && Bounds->Lower != 0 &&
+                                Bounds->Lower <= Bounds->Upper;
+                       })) {
+          if (State.Nullable->Bounds)
+            State.Scratch.Values.refineCapturedRange(State.Nullable->Value,
+                                                     *State.Nullable->Bounds);
+          State.Scratch.Values.refineCapturedRanges(State.Nullable->Values);
+          State.Scratch.Values.includeCells(State.Nullable->Values,
+                                            [](const auto &) { return true; });
+          std::array<ProvenValueSet, kRegisterCount> Identity;
+          const auto Inputs = symbolicInputs();
+          for (unsigned R = 0; R < kRegisterCount; ++R)
+            Identity[R] = Inputs[R];
+          State.Postconditions.include(State.Nullable->Postconditions, Identity,
+                                       Program);
+          State.Nullable.reset();
+        }
+      }
+      const auto Origin = State.Origins[Register].singleton();
+      const bool ScalarOrigin =
+          llvm::all_of(Refined->values(), [](const RegisterValue &Value) {
+            return Value.ValueKind == RegisterValue::Kind::Constant ||
+                   Value.ValueKind == RegisterValue::Kind::UnsignedRange ||
+                   Value.ValueKind == RegisterValue::Kind::SymbolicAddress;
+          });
+      for (unsigned R = 0; R < kRegisterCount; ++R)
+        if (R == Register || (ReturnAliases & registerBit(R)) ||
+            (hasValueIdentity(Origin) &&
+             State.Origins[R].singleton() == Origin)) {
+          State.Registers[R] = *Refined;
+          if (ScalarOrigin)
+            State.Origins[R] = *Refined;
+        }
+      // A full-width store immediately before this comparison captured this
+      // very register value. The guard narrows that cell as well, even when the
+      // scalar has no equality identity. No alternate entry, intervening write,
+      // changed base or truncated store can inherit this local witness.
+      const auto *Stored =
+          Last->Slot > Block.StartSlot ? Index.find(Last->Slot - 1) : nullptr;
+      if (ScalarOrigin && Stored && Stored->Op == Operation::Store &&
+          Stored->Form == OperandForm::StoreReg &&
+          Stored->Width == kDoubleWordBitWidth && Stored->Src == Register &&
+          Stored->Dst != Register) {
+        if (const auto Address = memoryAddress(
+                State.Registers[Stored->Dst].singleton(), Stored->Offset)) {
+          State.Scratch.Values.writeValues(*Address, *Refined);
+          State.OriginScratch.Values.writeValues(*Address, *Refined);
+        }
+        RegisterState Entry{};
+        Entry[0] = State.Origins[Stored->Dst].singleton();
+        const auto Origin = substituteOrigin(
+            {RegisterValue::Kind::StackAddress, 1, Stored->Offset}, Entry,
+            Program);
+        if (Origin.ValueKind != RegisterValue::Kind::Unknown)
+          State.Postconditions.store(Origin, sizeof(uint64_t), *Refined);
+      }
+    }
+    return Reachable;
+  };
+
+  // Use the least restrictive endpoint of the opposite operand. For example,
+  // x < {0, 1} implies x < 1; x > [4, 8] implies x > 4. Equality and inequality
+  // still need a singleton: excluding every possible RHS would be unsound.
+  const auto Bound = [&](const ProvenValueSet &Values,
+                         Operation Predicate) -> std::optional<uint64_t> {
+    const auto Single = Values.singleton();
+    if (Single.ValueKind == RegisterValue::Kind::Constant)
+      return Single.Value;
+    bool Lower;
     switch (Predicate) {
     case Operation::UGt:
-      Predicate = Operation::ULt;
-      break;
     case Operation::UGe:
-      Predicate = Operation::ULe;
+      Lower = Taken;
       break;
     case Operation::ULt:
-      Predicate = Operation::UGt;
-      break;
     case Operation::ULe:
-      Predicate = Operation::UGe;
+      Lower = !Taken;
       break;
     default:
-      break;
+      return std::nullopt;
     }
+    uint64_t Endpoint = Lower ? UINT64_MAX : 0;
+    for (const auto &Value : possibleValues(Values)) {
+      const auto Range = State.Scratch.Values.valueRange(Value);
+      if (!Range)
+        return std::nullopt;
+      Endpoint = Lower ? std::min(Endpoint, Range->Lower)
+                       : std::max(Endpoint, Range->Upper);
+    }
+    return Endpoint;
+  };
+  Operation Reverse = Last->Op;
+  switch (Reverse) {
+  case Operation::UGt:
+    Reverse = Operation::ULt;
+    break;
+  case Operation::UGe:
+    Reverse = Operation::ULe;
+    break;
+  case Operation::ULt:
+    Reverse = Operation::UGt;
+    break;
+  case Operation::ULe:
+    Reverse = Operation::UGe;
+    break;
+  default:
+    break;
   }
-  const uint64_t Constant = Right.Value;
-  if (!RefineUnknownScalars && State.Registers[Register].unknown() &&
-      (!(ReturnCarriers & registerBit(Register)) ||
-       !hasHeapAddressLowerBound(Constant)))
-    return true;
-  std::optional<ProvenValueSet> Refined;
-  bool Reachable = false;
-  for (const auto &Value : possibleValues(State.Registers[Register])) {
-    auto Bounds = State.Scratch.Values.valueRange(Value);
-    if (!Bounds && Value.ValueKind != RegisterValue::Kind::Unknown)
-      return true;
-    const auto Before = Bounds.value_or(UnsignedValueRange{});
-    auto Range = Before;
-    std::optional<UnsignedValueRange> LowerPart;
-    bool Possible = true;
-    switch (Predicate) {
-    case Operation::Eq:
-    case Operation::Ne: {
-      const bool Equal = Taken == (Predicate == Operation::Eq);
-      if (Equal) {
-        Possible = Constant >= Range.Lower && Constant <= Range.Upper;
-        Range = {Constant, Constant};
-      } else if (Range.Lower == Constant) {
-        Possible = Range.Upper != Constant;
-        if (Possible)
-          ++Range.Lower;
-      } else if (Range.Upper == Constant) {
-        --Range.Upper;
-      } else if (Range.Lower < Constant && Constant < Range.Upper) {
-        // A tag excluded from the middle of a range needs both remaining
-        // intervals. Keeping the original hull would let this path supply a
-        // payload for the very tag its branch rejected.
-        LowerPart = UnsignedValueRange{Range.Lower, Constant - 1};
-        Range.Lower = Constant + 1;
-      }
-      break;
-    }
-    case Operation::UGt:
-    case Operation::ULe:
-      if (Taken == (Predicate == Operation::UGt)) {
-        Possible = Constant != UINT64_MAX && Range.Upper > Constant;
-        if (Possible)
-          Range.Lower = std::max(Range.Lower, Constant + 1);
-      } else {
-        Possible = Range.Lower <= Constant;
-        Range.Upper = std::min(Range.Upper, Constant);
-      }
-      break;
-    case Operation::UGe:
-    case Operation::ULt:
-      if (Taken == (Predicate == Operation::UGe)) {
-        Possible = Range.Upper >= Constant;
-        Range.Lower = std::max(Range.Lower, Constant);
-      } else {
-        Possible = Constant != 0 && Range.Lower < Constant;
-        if (Possible)
-          Range.Upper = std::min(Range.Upper, Constant - 1);
-      }
-      break;
-    default:
-      return true;
-    }
-    if (!Possible)
-      continue;
-    Reachable = true;
-    // A guard on one exact capture constrains all its affine aliases on this
-    // path. A disjunction cannot constrain its unrelated alternatives, and a
-    // split interval cannot be represented by the single local enclosure.
-    const auto Include = [&](UnsignedValueRange Part) {
-      const bool KeepIdentity =
-          PreserveCapturedIdentity &&
-          Value.ValueKind == RegisterValue::Kind::SymbolicAddress &&
-          State.Registers[Register].values().size() == 1 && !LowerPart;
-      if (KeepIdentity)
-        State.Scratch.Values.refineCapturedRange(Value, Part);
-      RegisterValue Narrowed =
-          Part == Before || KeepIdentity ? Value : unsignedRangeValue(Part);
-      if (!RefineUnknownScalars &&
-          Value.ValueKind == RegisterValue::Kind::Unknown &&
-          Part.Lower < kHeapStart)
-        Narrowed = {};
-      if (!Refined)
-        Refined = Narrowed;
-      else
-        Refined->join(Narrowed);
-    };
-    Include(Range);
-    if (LowerPart)
-      Include(*LowerPart);
-  }
-  if (Reachable) {
-    // Splitting several intervals can exceed the existing alternative limit.
-    // The incoming value remains sound on this edge and retains its bounds.
-    if (Refined->unknown() && !State.Registers[Register].unknown())
-      return true;
-    const uint16_t ReturnAliases =
-        State.Nullable && (State.Nullable->Registers & registerBit(Register))
-            ? State.Nullable->Registers
-            : 0;
-    if (ReturnAliases) {
-      const auto Value = Refined->singleton();
-      if (Value.ValueKind == RegisterValue::Kind::Constant &&
-          Value.Value == 0) {
-        if (State.Nullable->ConditionalDefinition)
-          std::erase(State.DefinedCaptures, State.Nullable->Value.Value);
-        State.Nullable.reset();
-      } else if (llvm::all_of(Refined->values(), [&](const auto &Alternative) {
-                   const auto Bounds =
-                       unsignedValueRange(Alternative, &Addresses);
-                   return Bounds && Bounds->Lower != 0 &&
-                          Bounds->Lower <= Bounds->Upper;
-                 })) {
-        if (State.Nullable->Bounds)
-          State.Scratch.Values.refineCapturedRange(State.Nullable->Value,
-                                                   *State.Nullable->Bounds);
-        State.Scratch.Values.refineCapturedRanges(State.Nullable->Values);
-        State.Scratch.Values.includeCells(State.Nullable->Values,
-                                          [](const auto &) { return true; });
-        std::array<ProvenValueSet, kRegisterCount> Identity;
-        const auto Inputs = symbolicInputs();
-        for (unsigned R = 0; R < kRegisterCount; ++R)
-          Identity[R] = Inputs[R];
-        State.Postconditions.include(State.Nullable->Postconditions, Identity,
-                                     Program);
-        State.Nullable.reset();
-      }
-    }
-    const auto Origin = State.Origins[Register].singleton();
-    const bool ScalarOrigin =
-        llvm::all_of(Refined->values(), [](const RegisterValue &Value) {
-          return Value.ValueKind == RegisterValue::Kind::Constant ||
-                 Value.ValueKind == RegisterValue::Kind::UnsignedRange ||
-                 Value.ValueKind == RegisterValue::Kind::SymbolicAddress;
-        });
-    for (unsigned R = 0; R < kRegisterCount; ++R)
-      if (R == Register || (ReturnAliases & registerBit(R)) ||
-          (hasValueIdentity(Origin) &&
-           State.Origins[R].singleton() == Origin)) {
-        State.Registers[R] = *Refined;
-        if (ScalarOrigin)
-          State.Origins[R] = *Refined;
-      }
-    // A full-width store immediately before this comparison captured this
-    // very register value. The guard narrows that cell as well, even when the
-    // scalar has no equality identity. No alternate entry, intervening write,
-    // changed base or truncated store can inherit this local witness.
-    const auto *Stored =
-        Last->Slot > Block.StartSlot ? Index.find(Last->Slot - 1) : nullptr;
-    if (ScalarOrigin && Stored && Stored->Op == Operation::Store &&
-        Stored->Form == OperandForm::StoreReg &&
-        Stored->Width == kDoubleWordBitWidth && Stored->Src == Register &&
-        Stored->Dst != Register) {
-      if (const auto Address = memoryAddress(
-              State.Registers[Stored->Dst].singleton(), Stored->Offset)) {
-        State.Scratch.Values.writeValues(*Address, *Refined);
-        State.OriginScratch.Values.writeValues(*Address, *Refined);
-      }
-      RegisterState Entry{};
-      Entry[0] = State.Origins[Stored->Dst].singleton();
-      const auto Origin = substituteOrigin(
-          {RegisterValue::Kind::StackAddress, 1, Stored->Offset}, Entry,
-          Program);
-      if (Origin.ValueKind != RegisterValue::Kind::Unknown)
-        State.Postconditions.store(Origin, sizeof(uint64_t), *Refined);
-    }
-  }
-  return Reachable;
+  const bool RegisterSource =
+      Last->Semantics.Source == OperandSourceKind::SourceRegister;
+  const auto LeftBound =
+      RegisterSource
+          ? Bound(State.Registers[Last->Src], Last->Op)
+          : normalizeImmediate(Last->Immediate, Last->Semantics.Immediate);
+  // Snapshot both endpoints before either refinement updates affine aliases.
+  const auto RightBound = RegisterSource && Last->Src != Last->Dst
+                              ? Bound(State.Registers[Last->Dst], Reverse)
+                              : std::nullopt;
+  return (!LeftBound || Refine(Last->Dst, Last->Op, *LeftBound)) &&
+         (!RightBound || Refine(Last->Src, Reverse, *RightBound));
 }
 
 std::optional<size_t> knownBranchSuccessor(const MedInstruction *Last,
