@@ -71,7 +71,8 @@ decodeInstruction(llvm::ArrayRef<uint8_t> Instruction, bool Code32) {
       detail::decodeLegacyString(Instruction, Code32),
       detail::decodeLegacyPortIO(Instruction, Code32),
       detail::decodeLegacyFarTransfer(Instruction, Code32),
-      Code32 ? decodeX86MpxEncoding(Instruction, Arch::X86) : std::nullopt,
+      decodeX86MpxEncoding(Instruction, Code32 ? X86MpxCodeMode::Legacy32
+                                               : X86MpxCodeMode::Legacy16),
       Instruction,
       Code32 ? 4u : 2u,
       false,
@@ -606,8 +607,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       R.Exception = X86MemoryException{
           uint8_t(Result == Status::UndefinedOpcode ? 6 : 13), 0, {}};
   } else if (!R.Exception && Mpx && Mpx->Id != X86_INS_NOP) {
-    auto Got =
-        detail::executeLegacyMpx(State, Memory, Instruction, *NextMpx, Options);
+    auto Got = detail::executeLegacyMpx(State, Memory, Instruction, Code32,
+                                        *NextMpx, Options);
     if (State.PendingMpx)
       State.PendingMpx->DataBreakpoints = Observation.Matches;
     if (!Got)

@@ -121,6 +121,17 @@ protected:
       Units.insert(
           Units.end(),
           {{0x1100, {0x8e, 0xd0}}, {0x1102, {0x90}}, {0x1103, {0xcc}}});
+    } else if (Case >= 53) {
+      // OSXSAVE is clear: these original instructions qualify disabled MPX,
+      // including address16 extents, never an enabled physical bounds bank.
+      const std::vector<std::vector<uint8_t>> Disabled{
+          {0xf3, 0x0f, 0x1a, 4},
+          {0x67, 0x66, 0x0f, 0x1a, 5, 0xff, 0xff, 0xff, 0x7f},
+          {0xf3, 0x0f, 0x1a, 0xc0},
+          {0x0f, 0x1a, 6, 0xff, 0xff}};
+      const auto &Bytes = Disabled[Case - 53];
+      Units.push_back({0x1100, Bytes});
+      Units.push_back({uint32_t(0x1100 + Bytes.size()), {0xcc}});
     } else if (Case >= 51) {
       put(0xd008, (Low ? 0x20202 : 0x23202) | 0x10000, GuestScalarWidth::I32);
       put(0xc000, 0x180, GuestScalarWidth::I16);
@@ -290,7 +301,7 @@ protected:
 };
 
 TEST_P(X86LegacyVM86NativeTest, IretExecutionVMEAndProtectedFrames) {
-  for (unsigned Case = 0; Case != 53; ++Case)
+  for (unsigned Case = 0; Case != 57; ++Case)
     ASSERT_NO_FATAL_FAILURE(compare(Case));
   RecordProperty("original_sequence_comparisons", Comparisons);
 }

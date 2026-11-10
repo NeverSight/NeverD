@@ -458,9 +458,10 @@ resumeX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// BT/BTS/BTR/BTC, BSF/BSR, XCHG/XADD/CMPXCHG/CMPXCHG8B,
 /// AAA/AAS/DAA/DAS and AAM/AAD with every immediate base,
 /// PUSH/POP, PUSHF/POPF and near CALL/JMP/Jcc/RET.
-/// Code32 MPX uses the shared bounds context; memory additionally requires
-/// MpxMemory. PendingMpx retains host backing progress. Original near branch
-/// BNDINIT commits only on success, including untaken Jcc, before debug entry.
+/// Protected code16/code32 and VM86 MPX use the shared bounds context.
+/// Enabled address16 memory forms raise #UD; legal memory requires MpxMemory.
+/// PendingMpx retains host backing progress. Original near branch BNDINIT
+/// commits only on success, including untaken Jcc, before debug entry.
 /// FarTransfers adds direct and memory far CALL/JMP and 16/32-bit call gates,
 /// including inner-ring stack switches and parameter copying. Transfers stop
 /// before fetching the destination. Tasks additionally owns protected TSS

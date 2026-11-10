@@ -236,6 +236,17 @@ reference; explicit software tests own its declared fault-order contract.
 `Compilers/X86LegacySourceTest.VM86*` compiles host-x64 drivers with Clang/NeverC
 at O0/O2, including event/task/backing resume and exact attempt budgets. These
 are VM86 guest-state tests, not NeverC 32-bit source-target support.
+MPX tests cover protected code16 and VM86 alongside code32, preserving full
+32-bit bounds, MIB translation, original segments, BDE/PTE alias recovery and
+source attempt budgets. The explicit reader checks every address16 ModRM extent,
+including rm=4 without SIB, absolute disp16 and truncations. Enabled address16
+memory forms deliver #UD without operand/RAM bindings; disabled forms complete,
+and an instruction-fetch fault still takes precedence. Register forms ignore
+67H. VM86 table tests retain the explicit flat-DS constraint and 64 KiB limit.
+Four additional original VM86 streams qualify only OSXSAVE-disabled MPX no-op
+behavior; this host does not qualify enabled physical MPX. Host-x64 Clang/NeverC
+O0/O2 source tests retain code16 tables and VM86 fault/handler/IRETD redispatch.
+
 `X86LegacyReturnContinuationTest.*` covers protected and VM86 frame resumption:
 page-table A bits aliasing a saved IP, descriptor accessed writes aliasing CS,
 empty/repeated journals, NMI timing, admission refusal without losing progress,

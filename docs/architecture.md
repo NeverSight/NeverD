@@ -510,7 +510,8 @@ long-mode RAM and pending #BR, including original-transfer effects. Ordinary
 function-ABI lifting and transactional completion remain closed.
 
 `translate/X86/X86LegacyMpx` adapts the same byte, bank and memory owners to
-protected code32 execution. Its explicit `WholeOperandRAM` profile supplies
+protected code16/code32 and VM86 execution. Its explicit `WholeOperandRAM`
+profile supplies
 segmented BNDMOV and flat-DS linear BDE/BTE accesses through `X86PagedMemory`.
 `PendingMpx` retains the authenticated instruction, original inputs, completed
 directory value and debug matches across host backing stops. A BDE can alias
@@ -537,7 +538,12 @@ and the architectural register NOP forms. Encoded MIB index, scale and absent
 base remain distinct; they do not authorize an ordinary memory operation at
 the displayed expression. Invalid banks, 16-bit memory forms, prohibited
 RIP-relative forms and competing mandatory prefixes do not acquire a qualified
-shape. Decoding a valid stateful instruction does not enable its strict lifter.
+shape through the ordinary Arch adapter. The explicit code-mode reader uses
+the same parser and retains complete address16 memory encodings, including
+ModRM/disp16 extents without a SIB. The concrete executor distinguishes enabled
+#UD from disabled no-op before evaluating operands. Register-only forms ignore
+67H in every mode. Decoding a valid stateful instruction does not enable its
+strict lifter.
 
 `lift/X86/X86MpxExecution.h` connects that byte reader to the shared context and
 memory provider for concrete single-instruction execution. Its explicit GPR

@@ -23,6 +23,8 @@
 
 namespace neverd {
 
+enum class X86MpxCodeMode : uint8_t { Legacy16, Legacy32, Long64 };
+
 struct X86MpxEncoding {
   unsigned Id = X86_INS_INVALID;
   const char *Mnemonic = nullptr;
@@ -39,6 +41,13 @@ struct X86MpxEncoding {
 /// ignore scale, and discard displacement when there is no base register.
 std::optional<X86MpxEncoding>
 decodeX86MpxEncoding(llvm::ArrayRef<uint8_t> Bytes, Arch Target);
+
+/// Explicit execution-mode reader. Unlike the ordinary Arch adapter, this
+/// retains complete address16 memory encodings with Detail.addr_size == 2.
+/// Enabled MPX raises #UD for those forms; disabled MPX does not access them.
+/// Register forms always ignore 67H (SDM Volume 1 E.5.1).
+std::optional<X86MpxEncoding>
+decodeX86MpxEncoding(llvm::ArrayRef<uint8_t> Bytes, X86MpxCodeMode Mode);
 
 /// Classify the bank effect of an already decoded, complete control transfer.
 /// Null means this reader cannot authenticate that transfer. In particular an

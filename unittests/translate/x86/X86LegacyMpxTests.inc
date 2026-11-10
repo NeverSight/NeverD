@@ -302,7 +302,7 @@ TEST_F(X86LegacyMpxTest, AdmissionDisabledStateAndOriginalNopsAreDistinct) {
   for (const std::vector<uint8_t> Bytes :
        {std::vector<uint8_t>{0x66, 0x0f, 0x1a},
         {0x66, 0x0f, 0x1a, 0, 0},
-        {0x67, 0x66, 0x0f, 0x1a, 0},
+        {0x67, 0x66, 0x0f, 0x1a, 6, 0}, // Truncated address16 disp16.
         {0x66, 0x0f, 0x1a, 0xe0},
         {0xf0, 0x0f, 0x1a, 0},
         {0xf2, 0x90},
@@ -470,4 +470,106 @@ TEST_F(X86LegacyMpxTest, UnknownStoredBoundsNeverPublishFabricatedValues) {
     EXPECT_EQ(get(0x11020) & 0x20, 0u);
     EXPECT_FALSE(S.PendingMpx);
   }
+}
+
+TEST_F(X86LegacyMpxTest, Code16UsesAddress32AndFullBoundsAcrossEveryFamily) {
+  S.Core.Segments[1].Attributes &= ~0x4000u;
+  bindMpx();
+  S.Core.GPR[0] = 0x3004;
+  S.Core.GPR[1] = 0x1234;
+  S.Core.GPR[2] = 0;
+  S.Core.GPR[3] = 0xc100;
+  put(0x800c, 0xa001, GuestScalarWidth::I32);
+  put(0xa01c, 0xdeadbeef, GuestScalarWidth::I32);
+  for (const auto &Bytes :
+       std::vector<std::vector<uint8_t>>{{0x67, 0xf3, 0x0f, 0x1b, 0x44, 8, 8},
+                                         {0x66, 0x0f, 0x1a, 0xc8},
+                                         {0x67, 0x66, 0x0f, 0x1b, 0x0b},
+                                         {0x67, 0x66, 0x0f, 0x1a, 0x13},
+                                         {0x67, 0x0f, 0x1b, 0x14, 8},
+                                         {0x67, 0x0f, 0x1a, 0x1c, 8},
+                                         {0xf3, 0x0f, 0x1a, 0xd8},
+                                         {0x67, 0xf2, 0x0f, 0x1a, 0xd8},
+                                         {0xf2, 0x0f, 0x1b, 0xda}})
+    ASSERT_TRUE(run(Bytes).InstructionCompleted);
+  for (unsigned I = 0; I != 4; ++I)
+    EXPECT_EQ(*S.Mpx->bounds(I),
+              (X86MpxBounds{{0x3004, UINT32_MAX}, {~0x4240u, UINT32_MAX}}));
+  EXPECT_EQ(get(0xc100, GuestScalarWidth::I64), 0xffffbdbf00003004ULL);
+  EXPECT_EQ(get(0xa010, GuestScalarWidth::I64), 0xffffbdbf00003004ULL);
+  EXPECT_EQ(get(0xa018), 0x1234u);
+  EXPECT_EQ(get(0xa01c), 0xdeadbeefu);
+  EXPECT_EQ(S.Mpx->status(), 0x12345678u);
+}
+
+TEST_F(X86LegacyMpxTest,
+       Address16FaultNeedsNoRAMProfileAndDisabledFormsComplete) {
+  for (bool Code32 : {false, true})
+    for (bool Enabled : {false, true})
+      for (unsigned Kind = 0; Kind != 8; ++Kind) {
+        resetLegacyState();
+        if (!Code32)
+          S.Core.Segments[1].Attributes &= ~0x4000u;
+        bindMpx(Enabled ? 0x8001 : 0x8000);
+        O.MpxMemory.reset();
+        S.Core.Segments[3].Unusable = true;
+        S.Core.GPR[6] = 0xffffffff;
+        const auto Bounds = S.Mpx->bounds(0);
+        std::vector<uint8_t> Bytes;
+        if (Code32)
+          Bytes.push_back(0x67);
+        if (Kind < 6)
+          Bytes.push_back(Kind < 2 ? 0xf3 : Kind < 4 ? 0xf2 : 0x66);
+        Bytes.insert(Bytes.end(), {0x0f, uint8_t(Kind % 2 ? 0x1b : 0x1a), 4});
+        const auto R = run(Bytes);
+        EXPECT_TRUE(R.InstructionAttempted);
+        EXPECT_EQ(R.InstructionCompleted, !Enabled);
+        EXPECT_EQ(R.DeliveredVector, Enabled ? 6 : 0);
+        EXPECT_EQ(S.Mpx->bounds(0), Bounds);
+        EXPECT_EQ(S.Mpx->status(), 0x12345678u);
+        EXPECT_FALSE(S.PendingMpx);
+        if (Enabled)
+          EXPECT_EQ(get(S.Core.GPR[4]), 0x1000u);
+        else
+          EXPECT_EQ(S.EIP, 0x1000 + Bytes.size());
+      }
+}
+
+TEST_F(X86LegacyMpxTest, Address16FetchFaultPrecedesUndefinedOpcode) {
+  S.Core.Segments[1].Attributes &= ~0x4000u;
+  bindMpx();
+  O.MpxMemory.reset();
+  S.EIP = 0x1fff;
+  put(0x11008, 0, GuestScalarWidth::I32);
+  const auto R = run({0x66, 0x0f, 0x1a, 4});
+  EXPECT_EQ(R.DeliveredVector, 14);
+  EXPECT_EQ(S.CR2, 0x2000u);
+  EXPECT_EQ(get(S.Core.GPR[4] + 4), 0x1fffu);
+  EXPECT_FALSE(R.InstructionAttempted);
+  EXPECT_FALSE(S.PendingMpx);
+}
+
+TEST_F(X86LegacyMpxTest, Code16TableResumeRetainsDirectoryAndInstructionMode) {
+  S.Core.Segments[1].Attributes &= ~0x4000u;
+  bindMpx(0x10001);
+  S.Core.GPR[0] = 0x421000;
+  S.Core.GPR[1] = 0x1234;
+  put(0x11084, 0x21007, GuestScalarWidth::I32);
+  const std::vector<uint8_t> Bytes{0x67, 0x0f, 0x1a, 4, 8};
+  auto R = run(Bytes);
+  ASSERT_EQ(R.Status, X86LegacyExecutionStatus::BackingFault);
+  ASSERT_TRUE(S.PendingMpx && S.PendingMpx->Directory);
+  EXPECT_EQ(S.PendingMpx->Directory->Value, 0x21007u);
+  EXPECT_TRUE(R.InstructionAttempted);
+  repairMpxBacking();
+  put(0x21004, 0x2222222211111111ULL);
+  put(0x2100c, 0x1234, GuestScalarWidth::I32);
+  put(0x1000, 0xcc, GuestScalarWidth::I8);
+  R = llvm::cantFail(executeX86LegacyInstruction(S, *M, Bytes, O));
+  EXPECT_TRUE(R.InstructionCompleted);
+  EXPECT_FALSE(R.InstructionAttempted);
+  EXPECT_FALSE(S.PendingMpx);
+  EXPECT_EQ(S.EIP, 0x1005u);
+  EXPECT_EQ(*S.Mpx->bounds(0),
+            (X86MpxBounds{{0x11111111, UINT32_MAX}, {0x22222222, UINT32_MAX}}));
 }

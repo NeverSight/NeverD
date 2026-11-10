@@ -1189,8 +1189,14 @@ from the [Intel manual page](https://www.intel.com/content/www/us/en/developer/a
 
 ## Protected MPX instructions and branch effects
 
-Protected code32 execution admits BNDCL, BNDCU, BNDCN, BNDMK, BNDMOV,
+Protected code16/code32 and explicit VM86 execution admit BNDCL, BNDCU,
+BNDCN, BNDMK, BNDMOV,
 BNDLDX and BNDSTX through the shared original-byte MPX reader and context.
+Memory forms use 32-bit addresses: code16/VM86 requires 67H, while code32
+requires its absence. Enabled address16 memory forms raise #UD after fetch
+without reading an operand or requiring a RAM profile. Disabled forms complete
+without operand access. Register forms ignore 67H and still use 32-bit GPRs
+and bounds, as specified separately in SDM Volume 1 E.5.1.
 Checks and BNDMK consume unsigned effective values without reading memory or
 adding a segment base. BNDMOV retains the selected segment and default SS;
 32-bit writes qualify only the low 32 bits of each bounds field. Register NOP
@@ -1232,8 +1238,9 @@ observes the completed bank.
 The `protected-legacy-v1` C dispatcher uses this same stateful executor.
 Its C callbacks retain guest state and faults; they are distinct from native
 MPX intrinsic emission into the ambient host bank. Existing LLVM and NeverC
-native APIs remain independent. This profile does not admit code16 MPX
-operands, non-flat-DS table accesses, 16-bit address forms, RTM/HLE aborts,
+native APIs remain independent. VM86 table accesses still require DS.Base=0
+and obey its 64 KiB limit; other VM86 segment bases remain effective for BNDMOV.
+This profile does not admit non-flat-DS table accesses, RTM/HLE aborts,
 MMIO or physical MPX hardware. Unsupported forms fail explicitly. The
 architectural reference is Intel SDM Volume 1 Appendix E and Volume 2A BND*,
 available from the [Intel manual page](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
@@ -1689,7 +1696,7 @@ stores across host backing stops, including a stack that overwrites its own
 far pointer or instruction bytes. Source resume keeps the original attempt
 budget and data-breakpoint observations. Existing scalar, selector, stack, string,
 port and event owners continue to supply their admitted instruction semantics.
-The code16 MPX decoder, real-mode execution and IA-32e mode transitions remain
+Real-mode execution and IA-32e mode transitions remain
 outside this binding; unsupported instructions still fail explicitly.
 
 Normal VM86 interrupts require a nonconforming CPL0 code target, switch to its

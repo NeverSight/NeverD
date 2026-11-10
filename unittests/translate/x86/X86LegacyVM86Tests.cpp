@@ -600,4 +600,74 @@ TEST_F(X86LegacyVM86Test, IretdResumeRetainsIPAliasedByPageAccessedBit) {
   EXPECT_EQ(S.Core.Segments[5].Selector, 0x600);
 }
 
+TEST_F(X86LegacyVM86Test, MpxUsesUserBoundsAndOriginalSegmentBases) {
+  vm86State();
+  bindMpx();
+  S.Core.GPR[0] = 0x500;
+  put(0x4500, 0x8765432112345678ULL);
+  ASSERT_TRUE(vmRun({0x67, 0x66, 0x0f, 0x1a, 0}).InstructionCompleted);
+  EXPECT_EQ(*S.Mpx->bounds(0),
+            (X86MpxBounds{{0x12345678, UINT32_MAX}, {0x87654321, UINT32_MAX}}));
+  ASSERT_TRUE(vmRun({0x67, 0x2e, 0x66, 0x0f, 0x1b, 0}).InstructionCompleted);
+  EXPECT_EQ(get(0x1500, GuestScalarWidth::I64), 0x8765432112345678ULL);
+  const auto R = vmRun({0xf3, 0x0f, 0x1a, 0xc0});
+  EXPECT_EQ(R.DeliveredVector, 5);
+  EXPECT_EQ(S.Mpx->status(), 1u);
+  EXPECT_EQ(S.Core.CPL, 0);
+  EXPECT_EQ(get(S.Core.GPR[4]), 0x10bu);
+  EXPECT_EQ(get(S.Core.GPR[4] + 8) & 0x20000, 0x20000u);
+}
+
+TEST_F(X86LegacyVM86Test,
+       MpxAddress16FaultAndDisabledNoopKeepOperandUntouched) {
+  for (bool Enabled : {false, true}) {
+    vm86State();
+    bindMpx(Enabled ? 0x8001 : 0x8000);
+    O.MpxMemory.reset();
+    S.Core.GPR[6] = 0xfffffffc;
+    const auto Before = S.Mpx->bounds(0);
+    const auto R = vmRun({0x66, 0x0f, 0x1a, 4});
+    EXPECT_EQ(R.InstructionCompleted, !Enabled);
+    EXPECT_EQ(R.DeliveredVector, Enabled ? 6 : 0);
+    EXPECT_EQ(S.Mpx->bounds(0), Before);
+    EXPECT_EQ(S.Mpx->status(), 0x12345678u);
+    EXPECT_EQ(S.CR2, 0x12345678u);
+    if (Enabled) {
+      EXPECT_EQ(get(S.Core.GPR[4]), 0x100u);
+      EXPECT_EQ(get(S.Core.GPR[4] + 8) & 0x20000, 0x20000u);
+    } else {
+      EXPECT_EQ(S.EIP, 0x104u);
+    }
+  }
+}
+
+TEST_F(X86LegacyVM86Test, MpxTablesRequireFlatDSAndKeepItsLimit) {
+  vm86State();
+  bindMpx();
+  S.Core.GPR[0] = 0x3004;
+  S.Core.GPR[1] = 0x1234;
+  const std::vector<uint8_t> Store{0x67, 0x0f, 0x1b, 4, 8};
+  auto Refused = executeX86LegacyInstruction(S, *M, Store, O);
+  ASSERT_FALSE(bool(Refused));
+  EXPECT_NE(llvm::toString(Refused.takeError()).find("flat DS"),
+            std::string::npos);
+  EXPECT_EQ(S.EIP, 0x100u);
+  S.Core.Segments[3] = {0, 65535, 0, 0xf3, false};
+  put(0x800c, 0xa001, GuestScalarWidth::I32);
+  ASSERT_TRUE(vmRun(Store).InstructionCompleted);
+  EXPECT_EQ(get(0xa010, GuestScalarWidth::I64), 0xfffff00000000100ULL);
+  EXPECT_EQ(get(0xa018), 0x1234u);
+  ASSERT_TRUE(S.Mpx->setBounds(1, {}));
+  ASSERT_TRUE(vmRun({0x67, 0x0f, 0x1a, 0x0c, 8}).InstructionCompleted);
+  EXPECT_EQ(*S.Mpx->bounds(1),
+            (X86MpxBounds{{0x100, UINT32_MAX}, {0xfffff000, UINT32_MAX}}));
+  put(0x800c, 0x10001, GuestScalarWidth::I32);
+  const auto Before = S.Mpx->bounds(1);
+  EXPECT_EQ(vmRun({0x67, 0x0f, 0x1a, 0x0c, 8}).DeliveredVector, 13);
+  // A fault during BTE loading leaves destination fields architecturally
+  // unknown.
+  EXPECT_EQ(*S.Mpx->bounds(1), X86MpxBounds{});
+  EXPECT_NE(S.Mpx->bounds(1), Before);
+}
+
 } // namespace
