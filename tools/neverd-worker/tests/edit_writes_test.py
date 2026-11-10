@@ -19,6 +19,8 @@ from source_variable_types_test import global_elf
 from transport_test import Client
 
 GLOBAL = 0x401000
+# A qword in the 32 bytes of data from GLOBAL.
+ITEM = GLOBAL + 16
 BURST = 40
 
 
@@ -50,6 +52,16 @@ def names_of(client):
 def resolves(client, name):
     reply = client.call("resolve", {"query": name})
     return reply["status"] == "ok" and int(reply["payload"]["address"], 16) == GLOBAL
+
+
+def qword_at(client, address):
+    rows = ok(client, "listing", {"address": hex(address), "before": 0, "after": 1})["lines"]
+    return any(int(row["item"], 16) == address and int(row["item_size"], 16) == 8
+               for row in rows if row.get("kind") == "data")
+
+
+def colour_of(client, address):
+    return ok(client, "function_attributes", {"address": hex(address)}).get("color")
 
 
 def run(executable):
@@ -190,6 +202,62 @@ def run(executable):
             for name in reversed(taken):
                 ok(client, "undo")
                 assert resolves(client, name), name
+            client.close()
+
+        # What an edit refused while the files lag behind undoes leaves the
+        # engine as the history holds it: a data item refused right behind one
+        # whose write fails, and function edits taken before a failed write is
+        # found, stay, and reach the files once they take writes again.
+        if os.name == "posix" and os.geteuid() != 0:
+            client = opened(executable, path)
+            folder_path = project_folder(path)
+            mode = stat.S_IMODE(folder_path.stat().st_mode)
+            ok(client, "analysis_snapshot")
+            folder_path.chmod(0o500)
+            try:
+                ok(client, "item_define", {"address": hex(ITEM), "action": "data", "size": 8})
+                refused = client.call("item_define", {"address": hex(GLOBAL), "action": "array",
+                                                      "element_size": 8, "count": 3})
+                assert refused["status"] != "ok", refused
+                assert refused["error"]["code"] == "invalid_request", refused
+                assert qword_at(client, ITEM)
+            finally:
+                folder_path.chmod(mode)
+            ok(client, "rename", {"address": hex(GLOBAL), "name": "after_refused_item"})
+            client.close()
+            assert not journal(path), journal(path)
+            client = opened(executable, path)
+            assert qword_at(client, ITEM)
+            # The entry is a function once a view has prepared it.
+            ok(client, "decompile", {"address": hex(entry), "representation": "source",
+                                     "offset": 0, "limit": 200})
+            ok(client, "analysis_snapshot")
+            folder_path.chmod(0o500)
+            try:
+                taken = []
+                for index in range(200):
+                    colour = "#%06x" % (0x102030 + index)
+                    reply = client.call("function_edit", {"address": hex(entry),
+                                                          "attributes": {"color": colour}})
+                    if reply["status"] != "ok":
+                        break
+                    taken.append(colour)
+                    time.sleep(0.01)
+                assert reply["status"] != "ok", reply
+                assert reply["error"]["code"] == "save_failed", reply
+                assert taken, reply
+            finally:
+                folder_path.chmod(mode)
+            # The engine kept them, and what reads it now writes them first.
+            assert colour_of(client, entry) == taken[-1]
+            ok(client, "rename", {"address": hex(GLOBAL), "name": "after_refused_colour"})
+            client.close()
+            assert not journal(path), journal(path)
+            client = opened(executable, path)
+            ok(client, "decompile", {"address": hex(entry), "representation": "source",
+                                     "offset": 0, "limit": 200})
+            assert colour_of(client, entry) == taken[-1]
+            assert qword_at(client, ITEM)
             client.close()
 
         # Files changed behind the worker stop the next edit.

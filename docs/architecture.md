@@ -5135,7 +5135,11 @@ its write, which runs the same journaled transaction in order on a thread of its
 writing. What may read the project's files waits for it first. Staged comments an edit
 must not pass are committed ahead of it the same way (`save.write_behind`,
 `Session::commitComments`, counting comments still on their way to the worker), while
-the user's Save, closing and packing a database send a plain save that waits. A transaction encodes
+the user's Save, closing and packing a database send a plain save that waits. A refused
+edit takes back what it changed of the engine's data items and function edits from the
+rows the history holds (`Engine::restoreDataItems`, `Engine::restoreFunctionEdits`),
+never from the files, which lag behind the history while writes are queued; a refused
+declaration reads the files once the queued writes are done (`Engine::catchUpWrites`). A transaction encodes
 and formats only the tables the edit changed: a table whose rows print as the
 committed ones do (a zero's sign included) copies its committed encoding and keeps
 its file, checked against the file budget at the size this history last wrote, and a

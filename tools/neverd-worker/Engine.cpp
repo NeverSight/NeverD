@@ -1005,6 +1005,54 @@ Json Engine::dataItemRows() const {
   const auto &items = dataItems();
   return items ? backendJson(items.rows(session_)) : Json::array();
 }
+bool Engine::restoreDataItems(const Json &committed) noexcept {
+  using ItemClearFunction = int (*)(neverd_session_t, neverd_va_t);
+  static const auto clear =
+      engineSymbol<ItemClearFunction>("neverd_item_clear");
+  const auto &items = dataItems();
+  if (!items || !clear || !committed.is_array())
+    return false;
+  try {
+    const auto keyed = [](const Json &rows) {
+      std::map<std::uint64_t, const Json *> byAddress;
+      for (const auto &row : rows)
+        byAddress[parseAddress(row.at("addr").get<std::string>())] = &row;
+      return byAddress;
+    };
+    const Json now = dataItemRows();
+    const auto want = keyed(committed), have = keyed(now);
+    // What the edit set or changed goes first; the committed rows it took
+    // away share no byte with one another.
+    for (const auto &[address, row] : have)
+      if (const auto kept = want.find(address);
+          (kept == want.end() || *kept->second != *row) &&
+          clear(session_, address) != 0)
+        return false;
+    for (const auto &[address, row] : want)
+      if (const auto held = have.find(address);
+          (held == have.end() || *held->second != *row) &&
+          items.set(session_, address, row->dump().c_str()) != 0)
+        return false;
+    return dataItemRows() == committed;
+  } catch (...) {
+    return false;
+  }
+}
+bool Engine::restoreFunctionEdits(const Json &committed) noexcept {
+  try {
+    return takeFunctionRows(functionEditRows(), committed);
+  } catch (...) {
+    return false;
+  }
+}
+void Engine::catchUpWrites() noexcept {
+  if (history_)
+    try {
+      history_->finishWrites();
+    } catch (...) {
+      // A write that fails leaves the files behind the history.
+    }
+}
 bool Engine::reloadFunctionEdits() {
   const auto &edits = functionEdits();
   if (!edits)
@@ -5095,6 +5143,9 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
         persistTableEdit(store, "types", std::move(declared));
       } catch (...) {
         store = checkpoint;
+        // The declarations the files hold once the writes queued before this
+        // edit are done.
+        catchUpWrites();
         (void)load(session_);
         throw;
       }
@@ -6383,8 +6434,12 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       persistTableEdit(store, "functions", std::move(rows));
     } catch (...) {
       store = checkpoint;
-      // The sidecar still holds the edits before this one.
-      (void)edits.load(session_);
+      // The edits go back to the rows the history holds, as the files do once
+      // the writes queued before this edit are done.
+      if (!restoreFunctionEdits(store.committedTable("functions"))) {
+        catchUpWrites();
+        (void)edits.load(session_);
+      }
       functionsChanged();
       throw;
     }
@@ -6585,7 +6640,12 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
         if (items.set(session_, entry, definition.dump().c_str()) != 0)
           throw Error("invalid_request", error());
     } catch (...) {
-      (void)items.load(session_);
+      // What it set goes back to the rows the history holds, which the files
+      // may not hold yet.
+      if (!restoreDataItems(committedItems)) {
+        catchUpWrites();
+        (void)items.load(session_);
+      }
       namesChanged();
       throw;
     }
@@ -6612,8 +6672,12 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       persistTableEdit(store, "items", std::move(rows));
     } catch (...) {
       store = checkpoint;
-      // The sidecar still holds the items before this one.
-      (void)items.load(session_);
+      // The items go back to the rows the history holds, as the files do once
+      // the writes queued before this edit are done.
+      if (!restoreDataItems(store.committedTable("items"))) {
+        catchUpWrites();
+        (void)items.load(session_);
+      }
       namesChanged();
       throw;
     }

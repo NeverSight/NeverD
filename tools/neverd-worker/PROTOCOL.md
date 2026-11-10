@@ -113,7 +113,9 @@ kill in that time leaves the project's files as they were, or a journal that
 completes them; a clean exit, `save` (except `save.write_behind`), `analysis_snapshot`
 and any operation that may read the project's files wait for the write first.  A write that fails stays
 queued and fails the next edit or waiting operation with its error, and goes
-through once it can.  By default the reply follows the write.
+through once it can.  An edit refused meanwhile takes back what it changed of
+the session's data items and function edits as its history holds them, never
+as the files, which lag behind it, do.  By default the reply follows the write.
 `analysis_snapshot` with `in_memory:true` does not wait: while a write is on its
 way the snapshot says `written:false`, for a replica that takes it in place
 (`analysis_update_names`).

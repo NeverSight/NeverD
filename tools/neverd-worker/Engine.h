@@ -737,6 +737,15 @@ private:
   bool reloadDataItems();
   /// The user's data items as rows; none from an older engine.
   Json dataItemRows() const;
+  /// What a failed edit changed of the engine's data items or function edits
+  /// goes back to the rows the history committed, one by one: the project's
+  /// files hold those only once the writes queued behind earlier replies are
+  /// done.  False where it cannot, and the files are read after those writes.
+  bool restoreDataItems(const Json &committed) noexcept;
+  bool restoreFunctionEdits(const Json &committed) noexcept;
+  /// Before a failed edit reads the project's files to undo what it changed:
+  /// the writes queued behind earlier replies go first.
+  void catchUpWrites() noexcept;
   Json bytePatchRows() const;
   /// A committed patch command already proves invalidation is necessary;
   /// ordinary reloads must discover changes from the before/after inventories.
