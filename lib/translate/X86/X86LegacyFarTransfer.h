@@ -34,10 +34,6 @@ struct X86LegacyFarTransfer {
 std::optional<X86LegacyFarTransfer>
 decodeLegacyFarTransfer(llvm::ArrayRef<uint8_t> Bytes, bool Code32);
 
-llvm::Error validateLegacyFarContinuation(
-    const X86LegacyExecutionState &State, const X86PagedMemory &Memory,
-    llvm::ArrayRef<uint8_t> Bytes, const X86LegacyExecutionOptions &Options);
-
 /// Ordinary far branches stage caches until completion. Hardware task branches
 /// publish their incoming state at the task owner's commit point, including
 /// when a subsequent descriptor load faults.

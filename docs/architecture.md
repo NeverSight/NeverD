@@ -181,6 +181,14 @@ faults. `ir/X86/X86ReturnRules` shares code-return privilege checks, inaccessibl
 data-cache invalidation and IRET flag restoration with the x64 source and
 faultable owners. Frame access order and mode-specific stack transitions remain
 in their respective owners, with explicit target profiles.
+`translate/X86/X86LegacyTransferJournal` retains completed frame/descriptor
+accesses for ordinary IRET/RETF and VM86 far branches across host backing stops.
+Its immutable private continuation is shared by copied execution states; each
+resumption works on its own journal copy. Admission refusals preserve it, while
+completion, guest faults and owner-level binding refusals retire it. The caller
+still publishes IRET NMI unblocking on every attempted return. Source budgets and
+watchpoint observations follow the original attempt through return completion
+and any separately suspended debug-event entry.
 `translate/X86/X86LegacyFarTransfer` owns protected far CALL/JMP and 16/32-bit
 call-gate entry in the same executor. It authenticates descriptors, stages
 coupled CS/SS/CPL/SP/EIP publication and retains ordered descriptor/frame/argument

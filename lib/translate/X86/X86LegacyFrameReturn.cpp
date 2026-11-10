@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "X86LegacyExecutionInternal.h"
+#include "X86LegacyTransferJournal.h"
 
 #include "neverd/ir/X86/X86PopFlagsRules.h"
 #include "neverd/ir/X86/X86ReturnRules.h"
@@ -54,9 +55,15 @@ public:
     return Bad;
   }
 
-  llvm::Expected<X86MemoryAccessResult> run(unsigned Bytes, uint16_t Discard,
-                                            bool Interrupt) {
+  llvm::Expected<X86MemoryAccessResult>
+  run(unsigned Bytes, uint16_t Discard, bool Interrupt,
+      llvm::ArrayRef<uint8_t> Instruction) {
+    if (Interrupt)
+      S.NMIBlocked = false;
+    Journal.emplace(S, M, O, Instruction,
+                    detail::X86LegacyTransferKind::Return);
     execute(Bytes, Discard, Interrupt);
+    Journal->finish(Failure ? X86PageWalkStatus::Completed : R.Status);
     if (Failure)
       return std::move(*Failure);
     return std::move(R);
@@ -68,6 +75,7 @@ private:
   const X86LegacyExecutionOptions &O;
   X86MemoryAccessResult R;
   std::optional<llvm::Error> Failure;
+  std::optional<detail::X86LegacyTransferJournal> Journal;
 
   void unsupported(const char *Message) {
     Failure = llvm::createStringError(llvm::errc::not_supported, Message);
@@ -75,6 +83,13 @@ private:
 
   bool access(uint32_t Address, unsigned Bytes, Value &V, bool Implicit,
               bool Write = false) {
+    auto Replayed = Journal->replay(Address, Bytes, Write, V);
+    if (!Replayed) {
+      Failure = Replayed.takeError();
+      return false;
+    }
+    if (*Replayed)
+      return true;
     const bool Misaligned = !Implicit && S.Core.CPL == 3 &&
                             (M.controls().CR0 & 0x40000) &&
                             (S.EFlags & 0x40000) && (Address & (Bytes - 1));
@@ -114,6 +129,7 @@ private:
       for (unsigned I = 0; I != Bytes; ++I)
         V |= Value(Buffer[I]) << (I * 8);
     }
+    Journal->record(Address, Bytes, Write, V);
     return true;
   }
 
@@ -212,8 +228,6 @@ private:
   }
 
   void execute(unsigned Bytes, uint16_t Discard, bool Interrupt) {
-    if (Interrupt)
-      S.NMIBlocked = false;
     const bool VM86 = S.EFlags & 0x20000;
     if (faultIf(Interrupt && VM86 && (S.EFlags & 0x3000) != 0x3000 &&
                     (Bytes != 2 || !(M.controls().CR4 & 1)),
@@ -299,12 +313,12 @@ private:
 
 } // namespace
 
-llvm::Expected<X86MemoryAccessResult>
-detail::returnLegacyFrame(X86LegacyExecutionState &State,
-                          X86PagedMemory &Memory, unsigned Bytes,
-                          uint16_t Discard, bool Interrupt,
-                          const X86LegacyExecutionOptions &Options) {
-  return FrameReturn(State, Memory, Options).run(Bytes, Discard, Interrupt);
+llvm::Expected<X86MemoryAccessResult> detail::returnLegacyFrame(
+    X86LegacyExecutionState &State, X86PagedMemory &Memory, unsigned Bytes,
+    uint16_t Discard, bool Interrupt, llvm::ArrayRef<uint8_t> Instruction,
+    const X86LegacyExecutionOptions &Options) {
+  return FrameReturn(State, Memory, Options)
+      .run(Bytes, Discard, Interrupt, Instruction);
 }
 
 } // namespace neverd::translate

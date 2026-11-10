@@ -31,6 +31,7 @@ namespace neverd::translate {
 
 namespace detail {
 struct X86LegacyTaskContinuation;
+struct X86LegacyTransferContinuation;
 }
 
 /// Low 32-bit architectural inputs for non-IA-32e SYSENTER/SYSEXIT.
@@ -114,25 +115,6 @@ struct X86LegacyMpxContinuation {
   uint8_t DataBreakpoints = 0;
 };
 
-/// VM86 far-transfer RAM progress, including an operand aliased by its frame.
-/// Repair only unavailable backing, retaining the CPU, bindings and original
-/// bytes. Completed accesses are replayed from this journal, never repeated.
-struct X86LegacyFarContinuation {
-  struct Access {
-    uint32_t Address;
-    uint64_t Value;
-    uint8_t Bytes;
-    bool Write;
-  };
-  X86LegacySegmentState Entry;
-  X86PagingState Controls;
-  uint32_t EIP = 0, EFlags = 0;
-  llvm::SmallVector<uint8_t> Instruction;
-  llvm::SmallVector<Access> CompletedAccesses;
-  std::optional<X86AlignmentPriority> AlignmentPriority;
-  uint8_t DataBreakpoints = 0;
-};
-
 /// Debug bank shared with the paged x64 owner, with 32-bit address wrap.
 using X86LegacyDebugState = X86InstructionDebugState<uint32_t>;
 
@@ -164,7 +146,10 @@ struct X86LegacyExecutionState {
   /// stop or a fault after loading the incoming task. Preserve this with the
   /// CPU and RAM; only that owner may resume or retire it.
   std::shared_ptr<const detail::X86LegacyTaskContinuation> PendingTask;
-  std::optional<X86LegacyFarContinuation> PendingFar;
+  /// Return and VM86 far-transfer progress across unavailable backing. Retain
+  /// this opaque state with the CPU, bindings and original instruction bytes;
+  /// repair only backing. Completed RAM accesses are never repeated.
+  std::shared_ptr<const detail::X86LegacyTransferContinuation> PendingTransfer;
 };
 
 /// One CPU, ordinary RAM, 16/32-bit gates, qword accessed writes, offset-first
@@ -182,7 +167,8 @@ enum class X86LegacyEventProfile : uint8_t { OrderedFrame };
 /// IRET reads FLAGS/CS/IP, RETF reads CS/IP; descriptor accessed writes precede
 /// outer SS/SP reads and late target-limit checks. CS/SS accesses cover only
 /// their selector word, independently of the frame slot width. Ordinary RAM,
-/// one CPU.
+/// one CPU. Host backing stops retain private frame/descriptor access progress
+/// and IRET NMI unblocking; resumption does not repeat an instruction attempt.
 enum class X86LegacyReturnProfile : uint8_t { OrderedFrame };
 
 /// Intel VM86 execution with VME word IRET and low-word IRETD entry IP.

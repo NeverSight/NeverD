@@ -491,7 +491,7 @@ TEST_F(X86LegacyVM86Test, FarCallResumeKeepsAliasedPointerAndCompletedPush) {
   auto R = vmRun(Call);
   ASSERT_EQ(R.Status, X86LegacyExecutionStatus::BackingFault);
   EXPECT_TRUE(R.InstructionAttempted);
-  ASSERT_TRUE(S.PendingFar);
+  ASSERT_TRUE(S.PendingTransfer);
   EXPECT_EQ(get(0x1000, GuestScalarWidth::I16), 0x100u);
   EXPECT_EQ(S.Core.GPR[4], 0xabcd1002u);
   put(0x1000, 0x55aa, GuestScalarWidth::I16);
@@ -504,7 +504,7 @@ TEST_F(X86LegacyVM86Test, FarCallResumeKeepsAliasedPointerAndCompletedPush) {
   EXPECT_EQ(S.Core.GPR[4], 0xabcd0ffeu);
   EXPECT_EQ(get(0x1000, GuestScalarWidth::I16), 0x55aau);
   EXPECT_EQ(get(0x21ffe, GuestScalarWidth::I16), 0x104u);
-  EXPECT_FALSE(S.PendingFar);
+  EXPECT_FALSE(S.PendingTransfer);
 }
 
 TEST_F(X86LegacyVM86Test,
@@ -544,8 +544,7 @@ TEST_F(X86LegacyVM86Test, FarCallResumeRetainsCompletedStoreWatchpoint) {
   const std::vector<uint8_t> Call{0x9a, 0x80, 1, 0, 1};
   auto R = vmRun(Call);
   ASSERT_EQ(R.Status, X86LegacyExecutionStatus::BackingFault);
-  ASSERT_TRUE(S.PendingFar);
-  EXPECT_EQ(S.PendingFar->DataBreakpoints, 1);
+  ASSERT_TRUE(S.PendingTransfer);
   repairMpxBacking();
   R = llvm::cantFail(executeX86LegacyInstruction(S, *M, Call, O));
   ASSERT_EQ(R.Status, X86LegacyExecutionStatus::EventDelivered);
@@ -554,7 +553,7 @@ TEST_F(X86LegacyVM86Test, FarCallResumeRetainsCompletedStoreWatchpoint) {
   EXPECT_FALSE(R.InstructionAttempted);
   EXPECT_EQ(get(S.Core.GPR[4]), 0x180u);
   EXPECT_EQ(S.Debug->DR6 & 15, 1u);
-  EXPECT_FALSE(S.PendingFar);
+  EXPECT_FALSE(S.PendingTransfer);
 }
 
 TEST_F(X86LegacyVM86Test, WordIretClearsEntryResumeFlagWithAndWithoutVME) {

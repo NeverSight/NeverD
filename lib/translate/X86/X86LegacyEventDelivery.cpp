@@ -540,7 +540,7 @@ llvm::Expected<X86LegacyExecutionResult>
 deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                       const X86LegacyEvent &Input,
                       const X86LegacyExecutionOptions &Options) {
-  if (State.PendingStack || State.PendingMpx || State.PendingFar ||
+  if (State.PendingStack || State.PendingMpx || State.PendingTransfer ||
       detail::legacyTaskInstructionPending(State) ||
       detail::legacyTaskEventPending(State))
     return invalid("resume the pending legacy instruction before events");
@@ -599,7 +599,7 @@ resumeX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
     R.Status = X86LegacyExecutionStatus::ModeUnavailable;
     return R;
   }
-  if (State.PendingStack || State.PendingMpx || State.PendingFar ||
+  if (State.PendingStack || State.PendingMpx || State.PendingTransfer ||
       detail::legacyTaskInstructionPending(State))
     return invalid("resume the pending legacy instruction before events");
   if (!State.PendingEvent || !validEvent(State.PendingEvent->Event))

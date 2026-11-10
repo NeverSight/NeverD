@@ -41,6 +41,7 @@ struct X86PagingFeatures {
   bool SMAP = false;
   bool PKU = false;
   bool PKS = false;
+  bool operator==(const X86PagingFeatures &) const = default;
 };
 
 struct X86PagingState {

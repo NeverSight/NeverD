@@ -20,6 +20,7 @@
 #include "X86LegacySegmentEncoding.h"
 #include "X86LegacyString.h"
 #include "X86LegacyTaskSwitch.h"
+#include "X86LegacyTransferJournal.h"
 
 #include "neverd/ir/X86/X86DebugRules.h"
 #include "neverd/ir/X86/X86ExceptionDelivery.h"
@@ -125,7 +126,7 @@ llvm::Error detail::admitLegacyExecution(const X86LegacyExecutionState &S,
     return invalid("event delivery requires a positive work budget");
   if (S.Halted &&
       (S.Core.CPL || S.STIBlocked || S.SSBlocked || S.PendingStack ||
-       S.PendingMpx || S.PendingTask || S.PendingFar || S.PendingEvent))
+       S.PendingMpx || S.PendingTask || S.PendingTransfer || S.PendingEvent))
     return invalid("legacy halt state requires completed CPL0 HLT state");
   if (bool(S.Debug) != bool(O.Debug) ||
       (S.PendingEvent && S.PendingEvent->DataBreakpoints &&
@@ -193,13 +194,13 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   if (auto Error =
           detail::validateLegacyMpxContinuation(State, Memory, Instruction))
     return std::move(Error);
-  if (auto Error = detail::validateLegacyFarContinuation(State, Memory,
-                                                         Instruction, Options))
+  if (auto Error = detail::validateLegacyTransferContinuation(
+          State, Memory, Instruction, Options))
     return std::move(Error);
   const bool ResumingStack = State.PendingStack.has_value();
   const bool ResumingTask = detail::legacyTaskInstructionPending(State);
   const bool Resuming = ResumingStack || State.PendingMpx.has_value() ||
-                        State.PendingFar.has_value() || ResumingTask;
+                        bool(State.PendingTransfer) || ResumingTask;
   const bool Code32 = ResumingTask
                           ? bool(detail::legacyTaskInstructionKey(State) >> 32)
                           : bool(State.Core.Segments[1].Attributes & 0x4000);
@@ -384,8 +385,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     Observation.Matches = State.PendingStack->DataBreakpoints;
   if (State.PendingMpx)
     Observation.Matches = State.PendingMpx->DataBreakpoints;
-  if (State.PendingFar)
-    Observation.Matches = State.PendingFar->DataBreakpoints;
+  if (State.PendingTransfer)
+    Observation.Matches = detail::legacyTransferWatchpoints(State);
   if (ResumingTask)
     Observation.Matches = detail::legacyTaskWatchpoints(State);
   const auto Accept = [&](const X86MemoryAccessResult &Got) {
@@ -526,11 +527,13 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
                                  ? uint16_t(Body[1]) | uint16_t(Body[2]) << 8
                                  : 0;
     auto Got = detail::returnLegacyFrame(Returned, Memory, Width, Discard, IRET,
-                                         Options);
+                                         Instruction, Options);
     State.NMIBlocked = Returned.NMIBlocked;
+    State.PendingTransfer = Returned.PendingTransfer;
+    detail::retainLegacyTransferWatchpoints(State, Observation.Matches);
     if (!Got)
       return Got.takeError();
-    R.InstructionAttempted = true;
+    R.InstructionAttempted = !Resuming;
     if (Accept(*Got)) {
       State = Returned;
       State.SSBlocked = State.STIBlocked = false;
@@ -621,8 +624,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   } else if (!R.Exception && Far) {
     auto Got = detail::executeLegacyFarTransfer(State, Memory, *Far, NextIP,
                                                 Instruction, Options);
-    if (State.PendingFar)
-      State.PendingFar->DataBreakpoints = Observation.Matches;
+    detail::retainLegacyTransferWatchpoints(State, Observation.Matches);
     if (!Got)
       return Got.takeError();
     if (Got->Committed || detail::legacyTaskInstructionPending(State))

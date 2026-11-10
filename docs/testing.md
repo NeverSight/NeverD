@@ -236,6 +236,13 @@ reference; explicit software tests own its declared fault-order contract.
 `Compilers/X86LegacySourceTest.VM86*` compiles host-x64 drivers with Clang/NeverC
 at O0/O2, including event/task/backing resume and exact attempt budgets. These
 are VM86 guest-state tests, not NeverC 32-bit source-target support.
+`X86LegacyReturnContinuationTest.*` covers protected and VM86 frame resumption:
+page-table A bits aliasing a saved IP, descriptor accessed writes aliasing CS,
+empty/repeated journals, NMI timing, admission refusal without losing progress,
+late guest faults and a successful resumed return whose #DB entry then stops.
+The VM86 source group also preserves frame values and attempt budgets after
+context recreation, overwritten code and zero-budget calls. These are host
+backing-continuation checks; they do not claim a native CPU exposes that pause.
 
 `X86LegacyExecutionTest`, `LegacyEvents/*` and `LegacySteps/*` in
 `NeverDX86PagingTests` cover original-byte protected legacy execution and

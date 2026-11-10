@@ -9,15 +9,15 @@
 
 #include "X86LegacyFarTransfer.h"
 
+#include "X86LegacyTransferJournal.h"
+
 #include "neverd/ir/X86/X86SegmentDescriptorRules.h"
 
 #include "llvm/Support/Errc.h"
 
-#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <optional>
-#include <tuple>
 #include <utility>
 
 namespace neverd::translate {
@@ -56,21 +56,12 @@ public:
   run(const detail::X86LegacyFarTransfer &F, uint32_t NextIP,
       llvm::ArrayRef<uint8_t> Bytes) {
     Original = Bytes;
-    if ((S.EFlags & 0x20000) && !S.PendingFar) {
-      S.PendingFar.emplace();
-      auto &P = *S.PendingFar;
-      P.Entry = S.Core;
-      P.Controls = M.controls();
-      P.EIP = S.EIP;
-      P.EFlags = S.EFlags;
-      P.Instruction.assign(Bytes.begin(), Bytes.end());
-      P.AlignmentPriority = O.Segments.AlignmentPriority;
-    }
+    Journal.emplace(S, M, O, Bytes, detail::X86LegacyTransferKind::Far,
+                    bool(S.EFlags & 0x20000));
     execute(F, NextIP);
+    Journal->finish(Failure ? X86PageWalkStatus::Completed : R.Status);
     if (Failure)
       return std::move(*Failure);
-    if (!R.BackingFault)
-      S.PendingFar.reset();
     return std::move(R);
   }
 
@@ -81,7 +72,7 @@ private:
   detail::X86LegacyTaskResult R;
   std::optional<llvm::Error> Failure;
   llvm::ArrayRef<uint8_t> Original;
-  size_t NextAccess = 0;
+  std::optional<detail::X86LegacyTransferJournal> Journal;
 
   bool accept(llvm::Expected<X86MemoryAccessResult> Got) {
     if (!Got) {
@@ -101,19 +92,13 @@ private:
 
   bool access(uint32_t Address, unsigned Bytes, Value &V, bool Write = false,
               bool Implicit = true, uint8_t CPL = 0, bool Stack = false) {
-    if (S.PendingFar && NextAccess < S.PendingFar->CompletedAccesses.size()) {
-      const auto &Done = S.PendingFar->CompletedAccesses[NextAccess++];
-      if (Done.Address != Address || Done.Bytes != Bytes ||
-          Done.Write != Write || (Write && Done.Value != V)) {
-        Failure = llvm::createStringError(
-            llvm::errc::invalid_argument,
-            "far-transfer journal disagrees with access");
-        return false;
-      }
-      if (!Write)
-        V = Done.Value;
-      return true;
+    auto Replayed = Journal->replay(Address, Bytes, Write, V);
+    if (!Replayed) {
+      Failure = Replayed.takeError();
+      return false;
     }
+    if (*Replayed)
+      return true;
     const bool Misaligned = !Implicit && CPL == 3 &&
                             (M.controls().CR0 & 0x40000) &&
                             (S.EFlags & 0x40000) && (Address & (Bytes - 1));
@@ -145,11 +130,7 @@ private:
       for (unsigned I = 0; I != Bytes; ++I)
         V |= Value(Buffer[I]) << (I * 8);
     }
-    if (S.PendingFar) {
-      S.PendingFar->CompletedAccesses.push_back(
-          {Address, V, uint8_t(Bytes), Write});
-      ++NextAccess;
-    }
+    Journal->record(Address, Bytes, Write, V);
     return true;
   }
 
@@ -422,37 +403,6 @@ detail::decodeLegacyFarTransfer(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
     return std::nullopt;
   }
   return E.done() ? std::optional(F) : std::nullopt;
-}
-
-llvm::Error detail::validateLegacyFarContinuation(
-    const X86LegacyExecutionState &S, const X86PagedMemory &M,
-    llvm::ArrayRef<uint8_t> Bytes, const X86LegacyExecutionOptions &O) {
-  if (!S.PendingFar)
-    return llvm::Error::success();
-  const auto &P = *S.PendingFar;
-  const auto &C = S.Core;
-  const auto SameCache = [](const X86LegacySegmentCache &A,
-                            const X86LegacySegmentCache &B) {
-    return std::tie(A.Base, A.Limit, A.Selector, A.Attributes, A.Unusable) ==
-           std::tie(B.Base, B.Limit, B.Selector, B.Attributes, B.Unusable);
-  };
-  const auto Controls = [](const X86PagingState &A) {
-    return std::tie(A.CR0, A.CR3, A.CR4, A.EFER, A.RFlags, A.PKRU, A.PKRS,
-                    A.PDPTE);
-  };
-  if (S.PendingEvent || S.PendingStack || S.PendingMpx || S.PendingTask ||
-      P.EIP != S.EIP || P.EFlags != S.EFlags || C.GPR != P.Entry.GPR ||
-      C.CPL != P.Entry.CPL || C.GDTRBase != P.Entry.GDTRBase ||
-      C.GDTRLimit != P.Entry.GDTRLimit || !SameCache(C.LDTR, P.Entry.LDTR) ||
-      !std::equal(C.Segments.begin(), C.Segments.end(),
-                  P.Entry.Segments.begin(), SameCache) ||
-      Controls(M.controls()) != Controls(P.Controls) ||
-      O.Segments.AlignmentPriority != P.AlignmentPriority ||
-      Bytes != llvm::ArrayRef(P.Instruction) || (P.DataBreakpoints & ~15u))
-    return llvm::createStringError(
-        llvm::errc::invalid_argument,
-        "resume the retained VM86 far transfer and state");
-  return llvm::Error::success();
 }
 
 llvm::Expected<detail::X86LegacyTaskResult> detail::executeLegacyFarTransfer(

@@ -119,5 +119,99 @@ TEST_P(X86LegacySourceTest, VM86FarCallRetainsAliasedOperandAndAttemptBudget) {
   EXPECT_EQ(Budget, 0u);
   EXPECT_EQ(S.EIP, 0x201u);
   EXPECT_EQ(get(0x1000, GuestScalarWidth::I16), 0x55aau);
-  EXPECT_FALSE(S.PendingFar);
+  EXPECT_FALSE(S.PendingTransfer);
+}
+
+TEST_P(X86LegacySourceTest, VM86IretdResumeRetainsAliasedFrameAndBudget) {
+  vm86ReturnFrame();
+  S.Core.GPR[4] = 0x3fcff4;
+  put(0x11ff0, 0x11007, GuestScalarWidth::I32);
+  put(0x11ff4, 0x21007, GuestScalarWidth::I32);
+  put(0x11ff8, 0x100, GuestScalarWidth::I32);
+  put(0x11ffc, 0x23202, GuestScalarWidth::I32);
+  const std::vector<SourceUnit> Units{{0x1000, 32, {0xcf}},
+                                      {0x2007, 16, {0x90}}};
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(compile(Units, Run));
+  install(Units);
+  uint64_t Budget = 2;
+  {
+    X86LegacySourceExecution Context(S, *M, O);
+    EXPECT_EQ(Run(&Context, &Budget),
+              uint32_t(X86LegacyExecutionStatus::BackingFault));
+    EXPECT_EQ(Budget, 1u);
+    const auto RAM = M->physicalMemory().snapshotMemoryRegions().front().Bytes;
+    uint64_t Empty = 0;
+    EXPECT_EQ(Run(&Context, &Empty),
+              uint32_t(X86LegacySourceExit::BudgetExhausted));
+    EXPECT_EQ(M->physicalMemory().snapshotMemoryRegions().front().Bytes, RAM);
+  }
+  put(0x1000, 0xcc, GuestScalarWidth::I8);
+  repairMpxBacking();
+  const uint32_t Tail[]{0xabcd4000, 0x800, 0x300, 0x400, 0x500, 0x600};
+  for (unsigned I = 0; I != 6; ++I)
+    put(0x21000 + 4 * I, Tail[I], GuestScalarWidth::I32);
+  X86LegacySourceExecution Restored(S, *M, O);
+  EXPECT_EQ(Run(&Restored, &Budget),
+            uint32_t(X86LegacySourceExit::BudgetExhausted));
+  EXPECT_EQ(Budget, 0u);
+  EXPECT_EQ(S.EIP, 0x1008u);
+  EXPECT_EQ(S.Core.CPL, 3);
+  EXPECT_FALSE(S.PendingTransfer);
+}
+
+TEST_P(X86LegacySourceTest, VM86ReturnContinuationTransfersToPausedDebugEvent) {
+  vm86ReturnFrame();
+  S.Core.GPR[4] = 0xaff4;
+  put(0xaff4, 0x4000, GuestScalarWidth::I32);
+  put(0xaff8, 0x1b, GuestScalarWidth::I32);
+  put(0xaffc, 0x202, GuestScalarWidth::I32);
+  put(0x1102c, 0x21007, GuestScalarWidth::I32);
+  put(0x11018, 0x22007, GuestScalarWidth::I32);
+  S.Debug.emplace();
+  O.Debug = X86LegacyDebugProfile::Watchpoints;
+  S.Debug->DR[0] = 0xaff4;
+  S.Debug->DR7 = 0xf0401;
+  const std::vector<SourceUnit> Units{
+      {0x1000, 32, {0xcf}}, {0x4000, 32, {0x90}}, {0x2000, 32, {0x90}}};
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(compile(Units, Run));
+  install(Units);
+  uint64_t Budget = 2;
+  {
+    X86LegacySourceExecution Context(S, *M, O);
+    EXPECT_EQ(Run(&Context, &Budget),
+              uint32_t(X86LegacyExecutionStatus::BackingFault));
+    EXPECT_EQ(Budget, 1u);
+  }
+  repairMpxBacking();
+  put(0x21000, 0xc000, GuestScalarWidth::I32);
+  put(0x21004, 0x23, GuestScalarWidth::I32);
+  {
+    X86LegacySourceExecution Context(S, *M, O);
+    EXPECT_EQ(Run(&Context, &Budget),
+              uint32_t(X86LegacyExecutionStatus::BackingFault));
+    EXPECT_EQ(Budget, 1u);
+    EXPECT_TRUE(Context.lastResult().InstructionCompleted);
+    EXPECT_FALSE(S.PendingTransfer);
+    ASSERT_TRUE(S.PendingEvent);
+    EXPECT_EQ(S.PendingEvent->Event.Vector, 1);
+  }
+  auto RAM = llvm::cantFail(createZeroedGuestState(GuestArchitecture::X86_64));
+  RAM.Memory = M->physicalMemory().snapshotMemoryRegions();
+  const auto &OldBytes = RAM.Memory.front().Bytes;
+  RAM.Memory.push_back(
+      {0x22000,
+       MemoryPermission::Read | MemoryPermission::Write,
+       0,
+       {OldBytes.begin() + 0x6000, OldBytes.begin() + 0x7000}});
+  M = llvm::cantFail(X86PagedMemory::create(RAM, M->features(), M->controls()));
+  X86LegacySourceExecution Restored(S, *M, O);
+  EXPECT_EQ(Restored.resume(),
+            uint32_t(X86LegacyExecutionStatus::EventDelivered));
+  EXPECT_EQ(S.Debug->DR6 & 15, 1u);
+  EXPECT_EQ(Run(&Restored, &Budget),
+            uint32_t(X86LegacySourceExit::BudgetExhausted));
+  EXPECT_EQ(Budget, 0u);
+  EXPECT_EQ(S.EIP, 0x2001u);
 }

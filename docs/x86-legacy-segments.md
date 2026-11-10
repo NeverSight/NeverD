@@ -339,7 +339,10 @@ Changed code, pre-attempt fetch backing stops and refused steps consume none.
 An ordered stack instruction consumes one unit when first attempted, including
 when an operand subsequently stops on host backing. Resuming `PendingStack`
 does not consume another unit; an architectural fault followed by handler
-retry is a new attempt. IRET retains its existing attempted-frame semantics.
+retry is a new attempt. Ordinary IRET/RETF and VM86 far transfers similarly retain
+their original attempt in `PendingTransfer`, including completed frame and
+descriptor accesses. A subsequent debug-event backing stop belongs to the event
+continuation and does not repeat the completed return.
 Zero budget returns 258
 without selection or guest accesses; a null context/budget returns 256.
 
@@ -1664,10 +1667,17 @@ page permissions, independently of IOPL.
 
 CPL0 IRETD consumes the extended ESP/SS/ES/DS/FS/GS frame and installs the whole
 mode image together; backing failures preserve the protected register image and
-IRET's NMI-unblock effect. Returns retain the existing attempted-frame retry
-contract: a retry rereads frame fields and consumes another attempt. It is not
-the retained-access continuation used by events and VM86 far transfers; frame
-bytes aliased by page-table A/D writes can therefore change a later retry.
+IRET's NMI-unblock effect. Ordinary IRET/RETF and VM86 far branches share a private
+transfer journal. Frame reads and descriptor accessed writes that have completed
+are not repeated after backing repair, even if later page A/D or descriptor
+writes alias the saved IP or selector. An empty journal still retains an attempt
+once instruction authentication has completed. Source resumption skips a second
+fetch and budget charge; a pre-attempt fetch stop does neither.
+Admission errors leave the suspended journal intact. Completion and guest faults
+retire it before publishing a target or entering an event. An owner-level refusal
+(for example, discovering an unbound VM86 destination) also retires it, allowing
+a new attempt after the missing binding is supplied. Registers remain staged on
+failure; completed RAM effects and IRET's NMI unblock remain visible.
 Task entry publishes incoming registers before LDT
 validation, preserving incoming-task fault ownership. VM86 IRET ignores NT.
 VM86 far CALL/JMP/RETF use paragraph selectors and word stack offsets, with
