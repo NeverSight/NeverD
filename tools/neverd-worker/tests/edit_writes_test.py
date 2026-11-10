@@ -184,8 +184,12 @@ def run(executable):
         assert refused["error"]["code"] == "unsaved_changes", refused
         refused = client.call("undo", {"commit_staged": "yes"})
         assert refused["error"]["code"] == "invalid_request", refused
-        undone = ok(client, "undo", {"commit_staged": True})
+        refused = client.call("undo", {"commit_staged": True, "limit": 0})
+        assert refused["error"]["code"] == "invalid_request", refused
+        assert resolves(client, "before_staged")
+        undone = ok(client, "undo", {"commit_staged": True, "limit": 1})
         assert not undone["dirty"] and undone["saved"], undone
+        assert len(undone["items"]) == 1 and undone["total"] > 1, undone
         assert resolves(client, "before_save_7")
         ok(client, "redo", {"commit_staged": True})
         assert resolves(client, "before_staged")

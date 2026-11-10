@@ -1659,7 +1659,7 @@ void Session::undo() {
     return;
   // A step past staged comments commits them first, as an edit does.
   command(
-      QStringLiteral("undo"), {{"commit_staged", true}},
+      QStringLiteral("undo"), {{"commit_staged", true}, {"limit", 1}},
       [this](const QJsonObject &payload) {
         emit message(
             tr("Undid edit at %1.").arg(payload.value("address").toString()),
@@ -1673,7 +1673,7 @@ void Session::redo() {
   if (!canRedo())
     return;
   command(
-      QStringLiteral("redo"), {{"commit_staged", true}},
+      QStringLiteral("redo"), {{"commit_staged", true}, {"limit", 1}},
       [this](const QJsonObject &payload) {
         emit message(
             tr("Redid edit at %1.").arg(payload.value("address").toString()),

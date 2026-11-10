@@ -4917,6 +4917,15 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     auto &store = history();
     const bool redo = operation == "redo";
     const bool commitStaged = commitsStaged(p);
+    // The reply's page of the history, as history pages it: the workbench
+    // reads its counts alone.
+    const auto limit = sizeField(
+        p, "limit",
+        ::neverd::limits::worker::
+            kEngineExecuteImplHistoryLimitSizeFieldDefault,
+        ::neverd::limits::worker::kEngineExecuteImplHistoryLimitSizeFieldMax);
+    if (!limit)
+      throw Error("invalid_request", "limit must be at least 1");
     const auto command = store.next(redo);
     const auto value = command.at(redo ? "after" : "before");
     const auto address = parseAddress(command.at("address").get<std::string>());
@@ -5119,7 +5128,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
         invalidate();
       ++revision_;
     }
-    auto result = store.listing(0, 128);
+    auto result = store.listing(0, limit);
     result["dirty"] = dirty_;
     result["saved"] = !dirty_;
     result["address"] = hexAddress(ProjectHistory::displayAddress(command));
