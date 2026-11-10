@@ -12,7 +12,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/ArchSupport.h"
-#include "neverd/backend/MIPS/MIPSDSPSource.h"
+#include "neverd/backend/MIPS/MIPSSourceCompiler.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
@@ -254,8 +254,10 @@ TEST(MIPSDSPPipeline, StandaloneModuleAndShardsProtectOrdinarySiblings) {
           const auto *Body = Module->getFunction(Function.Name);
           ASSERT_NE(Body, nullptr);
           EXPECT_TRUE(Body->hasFnAttribute(mips::DSPSourceMarker));
-          EXPECT_EQ(Body->getFnAttribute("target-features").getValueAsString(),
-                    "-dsp,-dspr2");
+          const auto Features =
+              Body->getFnAttribute("target-features").getValueAsString();
+          EXPECT_TRUE(Features.contains("-dsp,-dspr2"));
+          EXPECT_EQ(Features.contains("-msa"), Target == Arch::MIPS32);
         }
         CEmitterOptions Options;
         Options.TheArch = Target;
@@ -263,7 +265,10 @@ TEST(MIPSDSPPipeline, StandaloneModuleAndShardsProtectOrdinarySiblings) {
         std::string Text;
         llvm::raw_string_ostream Stream(Text);
         ASSERT_TRUE(LLVMCEmitter().emit(*Module, Stream, Options));
-        EXPECT_NE(Text.find(mips::DSPSourceCBegin), std::string::npos) << Text;
+        EXPECT_NE(Text.find(Target == Arch::MIPS32 ? mips::DSPNoMSACBegin
+                                                   : mips::DSPSourceCBegin),
+                  std::string::npos)
+            << Text;
         EXPECT_NE(Text.find(mips::DSPSourceCEnd), std::string::npos) << Text;
         // A declaration-only shard cannot hide a malformed state contract.
         auto &State = Functions[Reverse ? 1 : 0].Blocks[0].Ops[0];
@@ -353,14 +358,18 @@ TEST(MIPSDSPPipeline,
             Emitter.emit(Result.MedFuncs, Context, "pure_dsp", Target);
         ASSERT_NE(Module, nullptr);
         EXPECT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
-        EXPECT_EQ(Module->getFunction("dsp_pure_round")
-                      ->getFnAttribute("target-features")
-                      .getValueAsString(),
-                  "-dsp,-dspr2");
+        const auto Features = Module->getFunction("dsp_pure_round")
+                                  ->getFnAttribute("target-features")
+                                  .getValueAsString();
+        EXPECT_TRUE(Features.contains("-dsp,-dspr2"));
+        EXPECT_EQ(Features.contains("-msa"), Target == Arch::MIPS32);
         ASSERT_TRUE(LLVMCEmitter().emit(*Module, Stream, Options));
       } else
         ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Stream, Options));
-      EXPECT_NE(Text.find(mips::DSPSourceCBegin), std::string::npos) << Text;
+      EXPECT_NE(Text.find(Target == Arch::MIPS32 ? mips::DSPNoMSACBegin
+                                                 : mips::DSPSourceCBegin),
+                std::string::npos)
+          << Text;
       EXPECT_EQ(Text.find("rddsp"), std::string::npos);
       EXPECT_EQ(Text.find("wrdsp"), std::string::npos);
       if (const char *Directory =
@@ -484,7 +493,10 @@ TEST(MIPSDSPPipeline, StandaloneWideHelpersHaveTheSameCompilerContract) {
         Caller.Body.push_back(Return);
         ASSERT_TRUE(HighCEmitter().emit({Helper, Caller}, Stream, Options));
       }
-      EXPECT_NE(Text.find(mips::DSPSourceCBegin), std::string::npos) << Text;
+      EXPECT_NE(Text.find(Target == Arch::MIPS32 ? mips::DSPNoMSACBegin
+                                                 : mips::DSPSourceCBegin),
+                std::string::npos)
+          << Text;
       EXPECT_NE(Text.find(mips::DSPSourceCEnd), std::string::npos) << Text;
       if (const char *Directory =
               std::getenv("NEVERD_MIPS_DSP_SOURCE_OUTPUT")) {

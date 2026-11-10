@@ -524,6 +524,25 @@ vector ABI, saved-FPR restoration and multi-block source proofs remain future
 work. Both C paths use Clang's bit-precise integer support for any surviving
 128-bit scalar temporaries on MIPS32.
 
+Big-endian MSA scalar source carries a `-msa` LLVM feature and a Clang
+`target("no-msa")` C constraint, including helper functions. Clang 22.1.6
+miscompiles a vectorized unsigned 64-bit comparison against 32: its MSA
+constant-splat bitcast emits `LDI.D 32; SHF.W 0xb1`, changing the bound to
+`32 << 32`. The scalar C and optimized LLVM comparison remain correct; the
+constraint prevents that instruction selection while retaining scalar
+optimization. The compiler's
+[constant-splat selector](https://github.com/llvm/llvm-project/blob/llvmorg-22.1.6/llvm/lib/Target/Mips/MipsSEISelDAGToDAG.cpp)
+also documents big-endian bitcast limitations. This is a source-compiler
+boundary, not a change to MSA instruction semantics. Little-endian and known
+non-MSA images keep their existing profile.
+
+`MIPSSourceCompiler.h` composes this constraint with DSPControl preservation.
+Image-less big-endian MIPS32 source needs both; one complete target attribute
+is emitted because separate declaration and pragma attributes do not compose
+in Clang. LLVM functions, declarations, C source shards and helpers retain the
+same constraints. The original-versus-generated source matrix includes the
+`CLEI_U.D 31` case that exposed the compiler defect.
+
 The execution contract requires MSA enabled with CU1/FR configured. It does not
 model disabled-MSA exceptions, MSA floating point/control state or arbitrary
 MSA guest execution. The operation and alias rules follow the MIPS32 MSA manual

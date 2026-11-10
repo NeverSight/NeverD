@@ -55,8 +55,8 @@
 #include "neverd/backend/LLVMAnalysisDispatch.h"
 #include "neverd/backend/LLVMOriginalImageStorage.h"
 #include "neverd/backend/Limits.h"
-#include "neverd/backend/MIPS/MIPSDSPSource.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
+#include "neverd/backend/MIPS/MIPSSourceCompiler.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/FloatingPointContract.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
@@ -517,8 +517,10 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
   }
   writeRecordDefinitions(Rest);
   OS << Rest;
-  if (isMIPS(Opts.TheArch) && mips::modulePreservesDSPControl(
-                                  Mod, Img ? Img : Opts.Image, Opts.TheArch))
+  if (isMIPS(Opts.TheArch) &&
+      (mips::modulePreservesDSPControl(Mod, Img ? Img : Opts.Image,
+                                       Opts.TheArch) ||
+       mips::moduleAvoidsMSA(Mod, Img ? Img : Opts.Image, Opts.TheArch)))
     OS << mips::DSPSourceCEnd;
 }
 
@@ -1296,9 +1298,12 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     for (const auto *Prototype : HeaderPrototypes)
       c_library::appendHeaderTypeNames(*Prototype, HeaderCallRecords);
   }
-  if (isMIPS(Opts.TheArch) && mips::modulePreservesDSPControl(
-                                  Mod, Img ? Img : Opts.Image, Opts.TheArch))
-    OS << mips::DSPSourceCBegin;
+  if (isMIPS(Opts.TheArch))
+    OS << mips::sourceCompilerCBegin(
+        Opts.TheArch, Img ? Img : Opts.Image,
+        mips::modulePreservesDSPControl(Mod, Img ? Img : Opts.Image,
+                                        Opts.TheArch),
+        mips::moduleAvoidsMSA(Mod, Img ? Img : Opts.Image, Opts.TheArch));
   if (NeedsX86SystemRegisterDispatch)
     OS << X86SystemRegisterCompilerDispatch;
   if (NeedsX86SegmentMoveDispatch)
@@ -2606,8 +2611,10 @@ void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
     // takes (printedCallArgLimit), which the declaration takes too.
     const std::optional<unsigned> Params = prototypedParamCount(Fn);
     if (isMIPS(Opts.TheArch)) {
-      OS << mips::dspSourceCAttribute(Opts.TheArch, Img ? Img : Opts.Image,
-                                      Fn.hasFnAttribute(mips::DSPSourceMarker));
+      OS << mips::sourceCompilerCAttribute(
+          Opts.TheArch, Img ? Img : Opts.Image,
+          Fn.hasFnAttribute(mips::DSPSourceMarker),
+          Fn.hasFnAttribute(mips::NoMSAMarker));
       OS << mips::instructionModeCAttribute(mips::instructionModeFromLLVM(Fn));
     }
     if (Fn.hasFnAttribute("neverd.x64_dispatch_frame"))
