@@ -8083,6 +8083,10 @@ complete scalar FP descriptors before and after declaration rendering across
 three data models, four architectures and COFF/ELF/Mach-O, including variadic,
 fastcall, record, pointer and long-double declarations. The header-origin
 regression also compares the ABI-only query with the full resolver.
+`TypeRender.ScalarSpellingsPreserveLaterNameCollisions` starts with scalar
+prototypes, then queries colliding named records in opposite orders and
+repeats the scalar prototype. C and C++ retain their parameter keyword rules;
+deferred name-table construction cannot change canonical type names.
 `HighCReturnJoin.BareReturnBesideATailCallReturnsTheParameter` decompiles
 `if (b) return g(b); return a;` with a direct and an indirect tail call for
 x86-64, i386, ARM and AArch64 (`test_return_join.c`) and requires

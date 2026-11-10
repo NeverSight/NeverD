@@ -66,6 +66,9 @@ public:
   std::string enumerator(const EnumDef &Enum, size_t Index) const;
   /// The spelling of a member, a parameter or an accessor named \p Name.
   std::string member(llvm::StringRef Name) const;
+  /// Member names do not depend on the library's type or enumerator names.
+  /// \p Reserved selects the language whose keywords must be escaped.
+  static std::string member(llvm::StringRef Name, Language Reserved);
   /// The names spelled otherwise than they are, with their spellings, in
   /// the library's order.
   const std::vector<std::pair<std::string, std::string>> &renamed() const {
@@ -73,7 +76,8 @@ public:
   }
 
 private:
-  std::string identifier(llvm::StringRef Name, bool TypeName) const;
+  static std::string identifier(llvm::StringRef Name, bool TypeName,
+                                Language Lang, Language Reserved);
   void enumeration(const EnumDef &Enum, llvm::StringRef Owner,
                    llvm::StringSet<> &Taken);
   void inlineEnums(const RecordDef &Record, llvm::StringRef Owner,

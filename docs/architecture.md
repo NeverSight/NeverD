@@ -4656,6 +4656,11 @@ validated types, calling convention and declaration origin for structural
 queries. The x86 import-return inventory uses it without spelling every
 library type. Both local-type queries use the ordinary signature converter;
 source emitters retain `resolvePrototype` and its complete C spellings.
+C declaration writers build their library-wide name table only when a named
+type or enumerator needs it. Scalar and parameter spelling use the same
+identifier rules directly. The deferred table still consumes the whole
+library in its canonical order, preserving collisions independently of
+which type is requested first. Shared embedded-name tables remain reusable.
 A name a program may also give a routine
 of its own decides only together with the module that exports it
 (`isNoReturnImport`, `WindowsNoReturnImports.inc`): the Universal CRT's
