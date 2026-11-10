@@ -3,6 +3,9 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+/// \file
+/// ABI identities shared by native arm64e source emission and installation.
+//===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_BACKEND_CODEGEN_MACHO_MACHOARM64EABI_H
 #define NEVERD_BACKEND_CODEGEN_MACHO_MACHOARM64EABI_H
@@ -16,4 +19,4 @@ namespace neverd::macho_arm64e_abi {
 #include "MachOArm64eABI.def"
 } // namespace neverd::macho_arm64e_abi
 
-#endif
+#endif // NEVERD_BACKEND_CODEGEN_MACHO_MACHOARM64EABI_H

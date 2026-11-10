@@ -346,7 +346,8 @@ Compiler selection never silently changes. The default prebuilt package remains
 r6. Its explicit classic signed-return CFI is incompatible with the macOS 26
 system unwinder, so publication rejects those objects transactionally. The
 Apple-native object route remains available. Canonical generation requires the
-Darwin CFI correction committed directly to the NeverSight LLVM fork; it does
+[Darwin CFI correction](https://github.com/NeverSight/llvm-project/pull/8)
+committed directly to the NeverSight LLVM fork; it does
 not strip assembly or patch LLVM during the NeverD build. A separate source
 build validates that correction without changing the prebuilt release selection.
 The native object route does not require the raw MC final-address callback.
@@ -369,6 +370,13 @@ the generic RA-state directives in the diagnostic assembly restored the catch
 and cleanup. This isolated the producer ABI defect; the diagnostic ablation is
 not a production transformation. Xcode 27 accepting the original bytes does
 not establish compatibility with the earlier deployment target.
+
+The [fixed-fork direct-link controls](https://github.com/gmh5225/test_mac_intel/actions/runs/42761893719)
+pass all four O0/O2 compact/DWARF call/catch/cleanup cases on each host, along
+with all six compiler-original prerequisites. LLVM's 68 return-signing,
+pointer-authentication and arm64e regressions also pass. These direct-link
+controls establish the producer correction; NeverD's generated publication
+matrices remain a separate qualification.
 
 Run the new matrices using a source build of the corrected fork and a successful
 same-source system preflight:

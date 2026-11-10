@@ -3,6 +3,8 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+// Define MACHO_ARM64E_ABI_VALUE and/or MACHO_ARM64E_ABI_TEXT to expand this
+// table. Each expansion undefines both macros.
 
 #ifndef MACHO_ARM64E_ABI_VALUE
 #define MACHO_ARM64E_ABI_VALUE(Type, Name, Value)

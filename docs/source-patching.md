@@ -41,8 +41,11 @@ neverd patch app --from-object=replacement.o --entry=replacement \
 
 For classic macOS arm64e images and ABI1 macOS main executables, canonical
 LLVM IR is emitted through NeverD's native MC object writer before installation.
-Select a compatible frontend explicitly (the validation uses Clang 22); the
-backend remains r6. The native object artifact also preserves Apple's original
+Select a compatible frontend explicitly (the validation uses Clang 22), and
+build NeverD against the LLVM fork's Darwin signed-return CFI fix. The default
+prebuilt selection remains r6; it rejects incompatible classic signed-return
+CFI instead of publishing an image that fails native exception handling.
+The native object artifact also preserves Apple's original
 authenticated relocation and unwind contracts. See the [arm64e producer and
 runtime boundaries](arm64e-native-validation.md#canonical-ir-through-native-mc-objects)
 for provider declarations, signing, supported ABIs and validation commands.
