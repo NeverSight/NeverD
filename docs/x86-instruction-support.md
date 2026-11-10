@@ -3884,8 +3884,9 @@ shares DR0–DR3 matching and DR6 status with paged x64, including RF/SS inhibit
 coincident single stepping, pending virtual-interrupt priority and accepted
 fault continuation. The shared MOV-DR/GD binding adds protected register
 access and restart, including explicit saved-RF choices. The shared watchpoint
-profile adds data/I/O causes and delayed/event-entry state. Branch stepping and
-task traps remain outside these bindings.
+profile adds data/I/O causes and delayed/event-entry state. Branch stepping
+requires the additional branch-watchpoint binding. Task traps require the
+[Tasks binding](x86-legacy-segments.md#protected-task-transfers).
 
 [Protected legacy returns](x86-legacy-segments.md#protected-iret-and-far-returns)
 now connect IDT entry back to the interrupted code. The explicit return profile
@@ -3894,7 +3895,8 @@ widths, flags, descriptor access ordering, NMI unblocking and restartable faults
 The native oracle covers INT/IRQ/NMI round trips, page-repair/IRET/retry and
 descriptor/frame aliasing; shared return rules keep x64 concrete and source
 execution consistent. This closes the protected legacy return boundary;
-nested-task and VM86 returns still require their separate machine-state owners.
+nested-task returns use the separate [Tasks binding](x86-legacy-segments.md#protected-task-transfers).
+VM86 returns still require their execution-mode owner.
 
 ### Native memory bit strings and protected scans
 
@@ -4413,3 +4415,22 @@ x64. It adds no NeverC 32-bit target. SMI/INIT/RESET and machine-check wake,
 full mode/task transitions, software SMM/SGX and unbound event producers remain
 separate completion work. The final LLVM release and production pin are
 unchanged.
+
+## Protected task transfers (2026-11-09)
+
+The explicit [OrderedTSS binding](x86-legacy-segments.md#protected-task-transfers)
+connects protected task CALL/JMP, GDT/LDT/IDT task gates and NT IRET to one
+execution owner. It retains outgoing stores, incoming register/address-space
+publication, task/debug causes, fault recovery and host-backing continuation.
+Generated host-x64 C uses that owner; NeverC remains a 64-bit source compiler.
+The [merged qualification](evidence/x86-legacy-tasks-2026-11-09.json) records
+2,402 passing checks across both SDKs and qualified P/E cores. KVM's 28 task
+comparisons per SDK/core are software-reference evidence, because KVM emulates
+VMX task-switch exits. They do not establish physical task microcode or debug
+behavior. VM86 task destinations stop explicitly with retained state; full mode
+transitions, software SMM/SGX and unbound event/state owners remain open.
+
+The [Actions runner discovery](evidence/x86-sgx-runner-discovery-2026-11-09.json)
+also found no usable SGX1/EPC/device on Ubuntu 24.04 or Intel macOS 15/26. It
+executed zero enclave instructions. No final LLVM release, production pin or
+LLVM gitlink update is implied by either result.

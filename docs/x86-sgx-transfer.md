@@ -117,6 +117,23 @@ qualified here. A software enclave model, complete legacy i386 dispatcher and
 general fault/asynchronous-event execution remain separate work; this profile
 does not make them disappear.
 
+## Actions runner discovery (2026-11-09)
+
+The [discovery run in `gmh5225/test_mac_intel`](https://github.com/gmh5225/test_mac_intel/actions/runs/42757819869)
+checked three hosted runner images. Ubuntu 24.04 exposed an AMD EPYC 9V45;
+Intel macOS 15 and 26 exposed an Intel Core i7-8700B. All three reported no
+SGX1, no EPC section and no accessible enclave device. The macOS guests did
+expose CPUID's general SGX enumeration bit, but leaf 12 remained zero; that bit
+alone does not make enclave execution available to these guests.
+
+The [retained evidence](evidence/x86-sgx-runner-discovery-2026-11-09.json)
+records exact image versions, source commit and raw CPUID/report hashes.
+The workflow's successful status means capability discovery completed. Exactly
+zero enclave instructions executed, so EENTER/ERESUME/EEXIT/AEX remain
+unqualified. The Linux enclave test route still needs an SGX/EPC-enabled host
+with an accessible driver and an actual enclave execution oracle. The software
+EPCM/SSA/AEX model remains separate implementation work.
+
 Architectural ownership follows Intel SDM revision 090, ENCLU/EENTER/ERESUME/
 EEXIT and enclave entry/exit chapters, available from the
 [Intel SDM index](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
