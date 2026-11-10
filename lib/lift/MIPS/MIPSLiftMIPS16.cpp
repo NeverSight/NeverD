@@ -32,6 +32,33 @@ uint32_t immediateForm(unsigned Opcode, unsigned RT, unsigned RS,
 } // namespace
 
 std::optional<MIPSLifter::Encoding>
+MIPSLifter::mips16JumpEncoding(const cs_insn &Instruction) const {
+  if (Instruction.size != 2 && Instruction.size != 4)
+    return std::nullopt;
+  const bool Little = archLittleEndian(Target);
+  const uint16_t First = readTargetEndian<uint16_t>(Instruction.bytes, Little);
+  // Only direct calls and short register jumps can have a delay slot. Keep
+  // their normalization here so slot queries do not normalize scalar ops.
+  if (First >> 11 == 3 && Instruction.size == 4) {
+    const uint16_t Second =
+        readTargetEndian<uint16_t>(Instruction.bytes + 2, Little);
+    const uint32_t Index =
+        ((First & 31) << 21) | (((First >> 5) & 31) << 16) | Second;
+    return Encoding{(uint32_t(First & 0x400 ? 29 : 3) << 26) | Index, 2};
+  }
+  if (First >> 11 != 0x1d || Instruction.size != 2)
+    return std::nullopt;
+  if (First == 0xe820 || First == 0xe8a0)
+    return Encoding{registerForm(8, 0, 31), First == 0xe820 ? 2u : 0u};
+  if (First & 0x3f)
+    return std::nullopt;
+  const unsigned Kind = (First >> 6) & 3;
+  return Encoding{registerForm(Kind & 1 ? 9 : 8, Kind & 1 ? 31 : 0,
+                               compactRegister((First >> 8) & 7)),
+                  Kind < 2 ? 2u : 0u};
+}
+
+std::optional<MIPSLifter::Encoding>
 MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
   if (Instruction.size != 2 && Instruction.size != 4)
     return std::nullopt;
@@ -41,13 +68,8 @@ MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
   const bool DirectCall = First >> 11 == 3;
   if (Instruction.size != (Extended || DirectCall ? 4 : 2))
     return std::nullopt;
-  if (DirectCall) {
-    const uint16_t Second =
-        readTargetEndian<uint16_t>(Instruction.bytes + 2, Little);
-    const uint32_t Index =
-        ((First & 31) << 21) | (((First >> 5) & 31) << 16) | Second;
-    return Encoding{(uint32_t(First & 0x400 ? 29 : 3) << 26) | Index, 2};
-  }
+  if (DirectCall)
+    return mips16JumpEncoding(Instruction);
   const uint16_t Half =
       Extended ? readTargetEndian<uint16_t>(Instruction.bytes + 2, Little)
                : First;
@@ -60,6 +82,10 @@ MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
   const uint16_t SignedImmediate =
       Extended ? Immediate : uint16_t(int16_t(int8_t(Immediate)));
   if (Extended && HasMIPS16E2) {
+    if (First == 0xf0c0 && Half == 0x3010)
+      return Encoding{0x000000c0}; // EHB
+    if (!(First & 63) && Half == 0x3014)
+      return Encoding{uint32_t(First & 0x7c0) | 15}; // SYNC stype
     switch ((Major << 3) | ((Half >> 5) & 7)) {
 #define NEVERD_MIPS16E2_IMMEDIATE(Major, Selector, Classic, Source)            \
   case ((Major) << 3) | (Selector):                                            \
@@ -190,13 +216,8 @@ MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
   case 0x1d:
     if (Extended)
       return std::nullopt;
-    if (Half == 0xe820 || Half == 0xe8a0) // JR / JRC ra
-      return Encoding{registerForm(8, 0, 31), Half == 0xe820 ? 2u : 0u};
-    if (!(Half & 0x3f)) { // JR/JALR/JRC/JALRC compact GPR
-      const unsigned Kind = (Half >> 6) & 3;
-      return Encoding{registerForm(Kind & 1 ? 9 : 8, Kind & 1 ? 31 : 0, RX),
-                      Kind < 2 ? 2u : 0u};
-    }
+    if (!(Half & 31)) // JR/JALR/JRC/JALRC, including the dedicated ra forms.
+      return mips16JumpEncoding(Instruction);
     switch (Half & 31) {
 #define NEVERD_MIPS16_REGISTER(Minor, Classic, Destination, Left, Right)       \
   case Minor:                                                                  \

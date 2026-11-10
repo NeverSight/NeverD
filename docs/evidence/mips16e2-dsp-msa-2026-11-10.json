@@ -1,0 +1,947 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-10",
+  "scope": {
+    "mips16e2": [
+      "EHB",
+      "SYNC (all 32 stypes)"
+    ],
+    "dsp_added_forms": 13,
+    "msa_added_forms": 43,
+    "mips16_performance": "Shared jump normalization removes full scalar normalization from delay-slot queries",
+    "shared_abi": "Concrete reaching scalar/wide stack values, target-endian lane projection, and unknown required arguments when predecessor wide evidence is unavailable"
+  },
+  "feature_commit": "67f06dbf3387c0953f119e1506b47af98b89551e",
+  "abi_fix_commit": "c816459389841b20594ec2dfdb51e87a6261e879",
+  "integration": {
+    "source_commit": "596bf9590fba55550ce503d1008f44ce399af3e4",
+    "source_tree": "337aa1748b45220bea27059538e2adf022538d8d",
+    "dev_commit": "089309d8a426d8c9271bfc929102d01bcb04057f",
+    "source_clean": true,
+    "build": {
+      "command": [
+        "python3",
+        "scripts/build.py",
+        "build-mips",
+        "--target",
+        "neverd",
+        "neverd-mips-bench",
+        "NeverDMIPSTests",
+        "NeverDMIPSIntegerTests",
+        "NeverDMIPSFlowTests",
+        "NeverDMIPSPipelineTests",
+        "NeverDMIPSSDKTests",
+        "NeverDFPParameterMaskTests",
+        "NeverDCPointerProjectionTests",
+        "NeverDMedCachedCallTargetTests",
+        "NeverDSourceInlineCallsTests",
+        "NeverDLLVMCIntrinsicSemanticTests",
+        "NeverDMedDceTests",
+        "--parallel",
+        "10"
+      ],
+      "exit_code": 0,
+      "configuration": "Release",
+      "configuration_sha256": "4b7f763d84ee332278241fec784a58db369b66635259905045b6f9bf39a29f84",
+      "dependency_inputs_sha256": "0a2047e110412d0ca2908fa8847878fc1e1b25d5238139c4ba78f8a6b2030dde",
+      "started_at": "2026-11-10T05:44:33.155772+00:00",
+      "finished_at": "2026-11-10T05:55:15.339646+00:00",
+      "receipt": {
+        "neverd-build-receipt.json": {
+          "path": "build-mips/mips16e2-next/integration-neverd-build-receipt.json",
+          "sha256": "ab0653841334b988475e15c1fe37fee00b1165d981eec3ba23bdecece30e11f6"
+        },
+        "neverd-dependency-inputs.json": {
+          "path": "build-mips/mips16e2-next/integration-neverd-dependency-inputs.json",
+          "sha256": "0a2047e110412d0ca2908fa8847878fc1e1b25d5238139c4ba78f8a6b2030dde"
+        },
+        "CMakeCache.txt": {
+          "path": "build-mips/mips16e2-next/integration-CMakeCache.txt",
+          "sha256": "4b7f763d84ee332278241fec784a58db369b66635259905045b6f9bf39a29f84"
+        }
+      },
+      "log": {
+        "path": "build-mips/mips16e2-next/build-dev-final.log",
+        "sha256": "d16808ee7fcc4edd35fb6d36ed37b02e764d93b4fab8dca1d9a74f7ff1e966f3"
+      },
+      "managed_dependencies": {
+        "purpose": "configure_inputs",
+        "schema": 1,
+        "sources": {
+          "neverd_highway": {
+            "branch": "master",
+            "commit": "1693ca7926ed12c5520623564e465cff97d93374",
+            "repository": "https://github.com/NeverSight/highway.git",
+            "selection": "managed",
+            "sha256": "f5149df5acb77cd9730ed8e5160f2deff0b02fe49cc45443fd396fdb5f0519d2",
+            "used": true
+          },
+          "neverd_mimalloc": {
+            "branch": "main3",
+            "commit": "e8e7bc41ce904b4c83fe20e87d93f24d5286315a",
+            "repository": "https://github.com/NeverSight/mimalloc.git",
+            "selection": "managed",
+            "sha256": "aea4126df4ada4e8f733e2a0f08642a8aabe6c2afc01886a1a9a259c18231ac3",
+            "used": true
+          },
+          "neverd_simdjson": {
+            "branch": "master",
+            "commit": "edb7016c62efbe6155226896cdba5736307190e3",
+            "repository": "https://github.com/NeverSight/simdjson.git",
+            "selection": "managed",
+            "sha256": "e4e849bbb16878f8555501cc09bf4a6d90d4a06ccfc67a202a3c030486c3823d",
+            "used": true
+          },
+          "neverd_simdutf": {
+            "branch": "master",
+            "commit": "8d82299606e675b50de8dc16fd118aae4b65bfde",
+            "repository": "https://github.com/NeverSight/simdutf.git",
+            "selection": "managed",
+            "sha256": "48e9c9fc33940bcc81cdaec785ce6e21ea20f7b03b7a26bff56abb41d2cf5126",
+            "used": true
+          },
+          "neverd_tbb": {
+            "branch": "master",
+            "commit": "d26e0502ca39f888c1266cbbf1e2c2226d31e41b",
+            "repository": "https://github.com/NeverSight/oneTBB.git",
+            "selection": "managed",
+            "sha256": "98300a443e43d047eabae27d3e30232efe7508b20d8e24a92ff2d54ef511761b",
+            "used": true
+          }
+        }
+      }
+    },
+    "capstone": "fc0377b84098bf81bc4eae544eb7e0ac39292f47",
+    "unicorn": "daea41b5a72ee7f12be5e6df935c84c7118bddb1",
+    "capstone_delta_from_performance": "fc0377b8 descends from c51100bd; additional changes are x86 printer, sync tooling and corresponding docs/tests. MIPS decoder/core sources are unchanged.",
+    "products": {
+      "neverd": {
+        "sha256": "35c423a448993dd25a0d308230abef7d52c8924561c827953da1aa5eeb0b255f",
+        "bytes": 3679656
+      },
+      "libneverd.dylib": {
+        "sha256": "dfcdac9062d4802376d5ca6da86ac7bd7086ecb1d0121d1f300146a312341aa7",
+        "bytes": 171590656
+      },
+      "neverd-mips-bench": {
+        "sha256": "1aa77bb53239c09509bba48032e49eaabb59cf64d64edecc83929e029466f449",
+        "bytes": 20205392
+      },
+      "NeverDMIPSTests": {
+        "sha256": "3351d34a91531ef40cc7c956533490814948c2801404a0310bbdbc2489977c43",
+        "bytes": 64247920
+      },
+      "NeverDMIPSIntegerTests": {
+        "sha256": "f3e6efd177d0608e409a75aa3b872a8b17ef77ee9186346dda6ea877fe41f8bd",
+        "bytes": 69846232
+      },
+      "NeverDMIPSFlowTests": {
+        "sha256": "0b660e4151059db60c74a28db6d81b0ca4579f3d0dc8a0cfc02bbdb65192f98d",
+        "bytes": 73128000
+      },
+      "NeverDMIPSPipelineTests": {
+        "sha256": "60a82b7428245f3656219470f38d6bde692855dc26bcc69e87c9d55c773f6f9a",
+        "bytes": 92617160
+      },
+      "NeverDMIPSSDKTests": {
+        "sha256": "c6e23dec20c83a1af50ae1b024e6bdd975baf021e6e9014072b2ac6f18cf25cc",
+        "bytes": 915024
+      },
+      "NeverDFPParameterMaskTests": {
+        "sha256": "e5d100a2b83139d9380bfe53efe7ba9b91315681b9c4d82f131f045f42aae7b3",
+        "bytes": 80879672
+      },
+      "NeverDCPointerProjectionTests": {
+        "sha256": "7c65dd4562b22d24840d173971f774eb5b1b8add5ab2ce43ca93d0898071ab12",
+        "bytes": 117740576
+      },
+      "NeverDMedCachedCallTargetTests": {
+        "sha256": "2353cd23c864f5305caed821b5591ef5fc7a65e42d9c0ee501215e23d4d8d66c",
+        "bytes": 80415968
+      },
+      "NeverDSourceInlineCallsTests": {
+        "sha256": "559748d5eb83aeacf2a4d5a54004a341fd688ae9404f7a303f06843d86953a76",
+        "bytes": 105083904
+      },
+      "NeverDLLVMCIntrinsicSemanticTests": {
+        "sha256": "ef7f5d7ae84b6c220a957470e3cf1c3e081e32336c383d1ba5a0c60d4002e878",
+        "bytes": 80225984
+      },
+      "NeverDMedDceTests": {
+        "sha256": "6a7cca4ac4d700c1cf1cec9db5dbc3a3d582bce9e81e49ae756acbe8ceadde0e",
+        "bytes": 71614160
+      }
+    },
+    "performance_boundary": "Performance is measured on the common 0094b433 baseline and 67f06dbf feature sources. ABI and latest dev integration are verified separately with these products; timing claims do not describe this later full integration.",
+    "post_build_source_changes": {
+      "kind": "clang-format 22.1.2 layout only in three .def files; manually inspected macro continuation and directive boundaries; no semantic rebuild required",
+      "files": [
+        {
+          "path": "include/neverd/backend/MIPS/MIPSBarrierSource.def",
+          "before_sha256": "177a93d16a503044b2d9e569e392f1f697348de5ea13b34fd04898168be15562",
+          "after_sha256": "2a20e41032c6f58729f195922fedb764dc6e8194dba92cd6b7134e8d7e7f0c1b",
+          "non_whitespace_tokens_equal": true
+        },
+        {
+          "path": "include/neverd/ir/intrinsics/MIPS/MIPSDSP.def",
+          "before_sha256": "71422ca34df8647f723830bf00cd86e6f67250d3458fc898f4ce5fde5076333e",
+          "after_sha256": "4dda99a5d7771fdc325d9c66292d7558215fc79ddb67ba9f11885c3630dc3453",
+          "non_whitespace_tokens_equal": true
+        },
+        {
+          "path": "include/neverd/ir/intrinsics/MIPS/MIPSScalar.def",
+          "before_sha256": "aae36294560aa5b3d79ab2c346968a4465217920543a22a592e4738b76c3a44d",
+          "after_sha256": "d54ffcddcdb80685bf0a1e6d3c7184fdaad04a231ebc7f6f0c318ad3872152bb",
+          "non_whitespace_tokens_equal": true
+        }
+      ],
+      "commit": "56e028f5f"
+    }
+  },
+  "local_tests": {
+    "mips_and_shared": {
+      "selected": 1735,
+      "passed": 1675,
+      "failed": 0,
+      "skipped": 60,
+      "labels": {
+        "NeverDCPointerProjectionTests": 881,
+        "NeverDFPParameterMaskTests": 233,
+        "NeverDLLVMCIntrinsicSemanticTests": 71,
+        "NeverDMIPSFlowTests": 77,
+        "NeverDMIPSIntegerTests": 239,
+        "NeverDMIPSPipelineTests": 124,
+        "NeverDMIPSSDKTests": 22,
+        "NeverDMIPSTests": 58,
+        "NeverDMedCachedCallTargetTests": 19,
+        "NeverDMedDceTests": 11
+      },
+      "log": {
+        "path": "build-mips/mips16e2-next/test-dev-final.log",
+        "sha256": "5dace326ca533ccaf4cbcb60d443630bfab94fb42886755200deffeb89a2825b"
+      }
+    },
+    "source_inline": {
+      "selected": 17,
+      "passed": 17,
+      "failed": 0,
+      "skipped": 0,
+      "labels": {
+        "NeverDSourceInlineCallsTests": 17
+      },
+      "log": {
+        "path": "build-mips/mips16e2-next/test-dev-inline.log",
+        "sha256": "ef992b4166c18be6319f6a7ae0bdf2f3c50e0e13d4ccb0b1e14924b18bd51af4"
+      }
+    },
+    "skip_inventory": [
+      {
+        "test": "HighCPointerAddresses.AtomicFetchAddComposesIntoCompare",
+        "reason": "Native x64 memory operations require an x64 host"
+      },
+      {
+        "test": "HighCPointerAddresses.CorpusFuncLoadCxxEhProbePrintsThrow",
+        "reason": "unittests/corpus/corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/cxx_eh_probe-msvc-x86_64-fh4-no-gs-o0.exe is missing"
+      },
+      {
+        "test": "HighCPointerAddresses.CorpusBufferedCatchUsesParentFrameForIndex",
+        "reason": "unittests/corpus/corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/cxx_eh_probe-msvc-x86_64-fh4-no-gs-o0.exe is missing"
+      },
+      {
+        "test": "HighCPointerAddresses.CorpusSehIndexedBufferUsesSameFrame",
+        "reason": "unittests/corpus/corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/seh_probe-msvc-x86_64-fh4-no-gs-o0.exe is missing"
+      },
+      {
+        "test": "HighCPointerAddresses.CorpusFuncLoadGsCookieReturnsOnTheValidPath",
+        "reason": "unittests/corpus/corpus/windows-eh/msvc/x86_64/fh4/gs/o0/abi-probe/seh_probe-msvc-x86_64-fh4-gs-o0.exe is missing"
+      },
+      {
+        "test": "HighCPointerAddresses.CorpusFuncLoadGsHandlerCheckReturnsOne",
+        "reason": "unittests/corpus/corpus/windows-eh/msvc/x86_64/fh4/gs/o0/abi-probe/seh_probe-msvc-x86_64-fh4-gs-o0.exe is missing"
+      },
+      {
+        "test": "HighCPointerAddresses.CorpusFuncLoadCxxEhProbeCatchReturnsValue",
+        "reason": "unittests/corpus/corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/cxx_eh_probe-msvc-x86_64-fh4-no-gs-o0.exe is missing"
+      },
+      {
+        "test": "HighCPointerAddresses.CorpusCalleeSavesAreNotStoresOfLaterArguments",
+        "reason": "unittests/corpus/corpus/windows-eh/clang-cl/x86_64/fh3/gs/o0/abi-probe/cxx_eh_probe-clang-cl-x86_64-fh3-gs-o0.exe is missing"
+      },
+      {
+        "test": "HighCPointerAddresses.CorpusFuncLoadCxxEhProbeNestedCatchReturnsValues",
+        "reason": "unittests/corpus/corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/cxx_eh_probe-msvc-x86_64-fh4-no-gs-o0.exe is missing"
+      },
+      {
+        "test": "HighCPointerAddresses.CorpusFuncLoadCxxEhProbePrintsUnwindDestructor",
+        "reason": "unittests/corpus/corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/cxx_eh_probe-msvc-x86_64-fh4-no-gs-o0.exe is missing"
+      },
+      {
+        "test": "HighCPointerAddresses.CorpusArmPredicatedBranchesStayForwardJumps",
+        "reason": "unittests/corpus/corpus/windows-eh/msvc/vs2019/arm/native/gs/o2/windows-seh-tests/xcpt4-msvc-arm-native-gs-o2.exe is missing"
+      },
+      {
+        "test": "HighCPointerAddresses.CorpusFuncLoadSehProbeRaisesImmediate",
+        "reason": "unittests/corpus/corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/seh_probe-msvc-x86_64-fh4-no-gs-o0.exe is missing"
+      },
+      {
+        "test": "HighCPointerAddresses.FuncLoadUsesDebugFunctionNameOnSynthesizedEntry",
+        "reason": "unittests/corpus/corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/seh_probe-msvc-x86_64-fh4-no-gs-o0.exe is missing"
+      },
+      {
+        "test": "HighCPointerAddresses.CorpusFuncLoadX86FilterThunksPrintTheirValue",
+        "reason": "unittests/corpus/corpus/windows-eh/msvc/vs2019/x86/native/no-gs/o0/windows-seh-tests/xcpt4-msvc-x86-native-no-gs-o0.exe is missing"
+      },
+      {
+        "test": "HighCPointerAddresses.CorpusFuncLoadX86SehProbeExceptAssignsResult",
+        "reason": "unittests/corpus/corpus/windows-eh/msvc/x86/native/no-gs/o0/abi-probe/seh_probe-msvc-x86-native-no-gs-o0.exe is missing"
+      },
+      {
+        "test": "HighCPointerAddresses.CorpusRustFormatKeepsTheEntryStackPointer",
+        "reason": "unittests/corpus/corpus/rust-eh/x86_64-unknown-linux-gnu/unwind/o0/bin/rust_eh_probe-x86_64-unknown-linux-gnu-unwind-o0 is missing"
+      },
+      {
+        "test": "HighCPointerAddresses.MemoryExchangePreservesTypedPointerMemberBits",
+        "reason": "Native x64 exchanges require an x64 host"
+      },
+      {
+        "test": "HighCPointerAddresses.MemoryExchangeReturnsItsSnapshotThroughBothRoutes",
+        "reason": "Native x64 memory operations require an x64 host"
+      },
+      {
+        "test": "HighCPointerAddresses.MemoryAdditionReturnsItsSnapshotThroughBothRoutes",
+        "reason": "Native x64 memory operations require an x64 host"
+      },
+      {
+        "test": "HighCPointerAddresses.DirectionFlagIsClearOnEntry",
+        "reason": "the generated x64 intrinsics require an x64 compiler host"
+      },
+      {
+        "test": "HighCPointerAddresses.FlatRepeatedFillsAndCopiesRetainMachineCompletion",
+        "reason": "the generated x64 intrinsics require an x64 compiler host"
+      },
+      {
+        "test": "HighCPointerAddresses.AnX87ValueRoundsToTheDoubleItIsStoredAs",
+        "reason": "typed x87 execution requires x64 and an 80-bit long double"
+      },
+      {
+        "test": "HighCPointerAddresses.X87ArithmeticComputesInLongDouble",
+        "reason": "typed x87 execution requires x64 and an 80-bit long double"
+      },
+      {
+        "test": "HighCPointerAddresses.AnX87StoreWritesItsTenBytes",
+        "reason": "the generated x64 intrinsics require an x64 compiler host"
+      },
+      {
+        "test": "HighCPointerAddresses.AScalarFloatArgumentIsADoubleParameter",
+        "reason": "the generated x64 intrinsics require an x64 compiler host"
+      },
+      {
+        "test": "HighCPointerAddresses.AnIntegerConvertedIntoXMM0IsNoParameter",
+        "reason": "the generated x64 intrinsics require an x64 compiler host"
+      },
+      {
+        "test": "HighCPointerAddresses.RecordsNamedLikeFunctionsAreSpelledByTheirTags",
+        "reason": "the generated declarations require glibc headers"
+      },
+      {
+        "test": "HighCPointerAddresses.TrapsUseTheBuiltinsTheirHeadersDeclare",
+        "reason": "the generated x64 intrinsics require an x64 compiler host"
+      },
+      {
+        "test": "HighCPointerAddresses.GnuToolchainsReadCpuidThroughCpuidH",
+        "reason": "the generated x64 intrinsics require an x64 compiler host"
+      },
+      {
+        "test": "HighCPointerAddresses.GnuLibrariesHeadersDeclareTheirExtensions",
+        "reason": "the generated declarations require glibc headers"
+      },
+      {
+        "test": "HighCPointerAddresses.UnderscoredHeaderRoutinesTakeTheirStreams",
+        "reason": "the generated declarations require glibc headers"
+      },
+      {
+        "test": "HighCPointerAddresses.GnuProgramObjectsAreTheHeaders",
+        "reason": "the generated declarations require glibc headers"
+      },
+      {
+        "test": "HighCPointerAddresses.LargeFileComparatorsTakeTheirOwnRecords",
+        "reason": "the generated declarations require glibc headers"
+      },
+      {
+        "test": "HighCPointerAddresses.AlignedAccessesInRelocatedWordsKeepTheirResidue",
+        "reason": "the generated x64 intrinsics require an x64 compiler host"
+      },
+      {
+        "test": "HighCPointerAddresses.HeaderRecordsNamedLikeTheirFunctionsKeepTags",
+        "reason": "the generated declarations require glibc headers"
+      },
+      {
+        "test": "HighCPointerAddresses.AlignedReadsOfAStringAlignItsArray",
+        "reason": "the generated x64 intrinsics require an x64 compiler host"
+      },
+      {
+        "test": "HighCPointerAddresses.HeaderVaListsKeepTheOriginalVariadicValues",
+        "reason": "the execution oracle uses x86-64's va_list transport"
+      },
+      {
+        "test": "LLVMCPointerAddresses.CorpusCalleeSavesStayOutOfTheFrame",
+        "reason": "unittests/corpus/corpus/windows-eh/clang-cl/x86_64/fh3/gs/o0/abi-probe/cxx_eh_probe-clang-cl-x86_64-fh3-gs-o0.exe is missing"
+      },
+      {
+        "test": "LLVMCPointerAddresses.CorpusFuncLoadGsCookieDoesNotLoadNull",
+        "reason": "unittests/corpus/corpus/windows-eh/msvc/x86_64/fh4/gs/o0/abi-probe/seh_probe-msvc-x86_64-fh4-gs-o0.exe is missing"
+      },
+      {
+        "test": "LLVMCPointerAddresses.CorpusFuncLoadSehProbeHasSingleWin64Arg",
+        "reason": "unittests/corpus/corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/seh_probe-msvc-x86_64-fh4-no-gs-o0.exe is missing"
+      },
+      {
+        "test": "LLVMCPointerAddresses.CorpusFuncLoadSehProbeLlvmcExceptContainsHandler",
+        "reason": "unittests/corpus/corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/seh_probe-msvc-x86_64-fh4-no-gs-o0.exe is missing"
+      },
+      {
+        "test": "LLVMCPointerAddresses.CorpusOptimizedSehResultIsAssignedOnBothPaths",
+        "reason": "unittests/corpus/corpus/windows-eh/msvc/x86_64/fh4/gs/o2/abi-probe/seh_probe-msvc-x86_64-fh4-gs-o2.exe is missing"
+      },
+      {
+        "test": "LLVMCPointerAddresses.CorpusSehProbeCliLlvmcKeepsProtectedEffects",
+        "reason": "unittests/corpus/corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/seh_probe-msvc-x86_64-fh4-no-gs-o0.exe is missing"
+      },
+      {
+        "test": "LLVMCPointerAddresses.CorpusFuncLoadGsWrappedSehLlvmcNestsHandlerBodies",
+        "reason": "unittests/corpus/corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/seh_probe-msvc-x86_64-fh4-no-gs-o0.exe is missing"
+      },
+      {
+        "test": "LLVMCPointerAddresses.CorpusFuncLoadCxxEhProbeCatchContinuationEmits",
+        "reason": "unittests/corpus/corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/cxx_eh_probe-msvc-x86_64-fh4-no-gs-o0.exe is missing"
+      },
+      {
+        "test": "LLVMCPointerAddresses.CorpusFuncLoadCxxEhProbeLlvmOptIsVerifierClean",
+        "reason": "unittests/corpus/corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/cxx_eh_probe-msvc-x86_64-fh4-no-gs-o0.exe is missing"
+      },
+      {
+        "test": "LLVMCPointerAddresses.CorpusFuncLoadSehProbeLlvmOptIsVerifierClean",
+        "reason": "unittests/corpus/corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/seh_probe-msvc-x86_64-fh4-no-gs-o0.exe is missing"
+      },
+      {
+        "test": "LLVMCIntrinsicSemantics.FxSnapshotsRetainLegacyAnd64BitStateEffects",
+        "reason": "native x64 snapshot oracle required"
+      },
+      {
+        "test": "LLVMCIntrinsicSemantics.TimestampPairRetainsUnusedReadsAndChecksContracts",
+        "reason": "the C retains x86 instructions; running it requires an x86 host"
+      },
+      {
+        "test": "LLVMCIntrinsicSemantics.ReturnSlotAddressTracksTheCompiledFrame",
+        "reason": "the return-slot execution control requires x64"
+      },
+      {
+        "test": "LLVMCIntrinsicSemantics.IntegerToFloatUsesOpcodeSignednessAndWidth",
+        "reason": "this Clang lacks the _BitInt width the C spells\n\nunittests/lift/core/LLVMCIntrinsicSemanticTests.cpp:174: Skipped\nthis Clang lacks the _BitInt width the C spells"
+      },
+      {
+        "test": "LLVMCIntrinsicSemantics.FloatToIntegerPreservesSignedResultBits",
+        "reason": "this Clang lacks the _BitInt width the C spells\n\nunittests/lift/core/LLVMCIntrinsicSemanticTests.cpp:174: Skipped\nthis Clang lacks the _BitInt width the C spells"
+      },
+      {
+        "test": "LLVMCIntrinsicSemantics.PackedIntegerNumericCastsKeepEveryLimb",
+        "reason": "this Clang lacks the _BitInt width the C spells\n\nunittests/lift/core/LLVMCIntrinsicSemanticTests.cpp:174: Skipped\nthis Clang lacks the _BitInt width the C spells"
+      },
+      {
+        "test": "LLVMCIntrinsicSemantics.PackedWideVectorCastsKeepLaneOrder",
+        "reason": "this Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCIntrinsicSemanticTests.cpp:2557: false\n\nunittests/lift/core/LLVMCIntrinsicSemanticTests.cpp:174: Skipped\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCIntrinsicSemanticTests.cpp:2557: false\n\nunittests/lift/core/LLVMCIntrinsicSemanticTests.cpp:174: Skipped\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCIntrinsicSemanticTests.cpp:2557: true\n\nunittests/lift/core/LLVMCIntrinsicSemanticTests.cpp:174: Skipped\nthis Clang lacks the _BitInt width the C spells\nGoogle Test trace:\nunittests/lift/core/LLVMCIntrinsicSemanticTests.cpp:2557: true"
+      },
+      {
+        "test": "LLVMCIntrinsicSemantics.X87SaturatingConversionsGuardUndefinedCasts",
+        "reason": "native x87 C execution requires Linux x86-64"
+      },
+      {
+        "test": "LLVMCIntrinsicSemantics.CPUArraysKeepDistinctNamesAcrossBlocks",
+        "reason": "Native CPU queries require an x64 host"
+      },
+      {
+        "test": "LLVMCIntrinsicSemantics.XGETBVArraysKeepDistinctNamesAcrossBlocks",
+        "reason": "Native CPU queries require an x64 host"
+      },
+      {
+        "test": "LLVMCIntrinsicSemantics.DeadCPUIDRetainsNativeQueryAndBreakpointOrder",
+        "reason": "This native event observer uses Windows x64 single stepping"
+      },
+      {
+        "test": "LLVMCIntrinsicSemantics.NativeExchangeKeepsDeadWritesAndUnalignedBytes",
+        "reason": "Native x64 memory operations require an x64 host"
+      },
+      {
+        "test": "LLVMCIntrinsicSemantics.NativeAdditionKeepsDeadWritesAndUnalignedBytes",
+        "reason": "Native x64 memory operations require an x64 host"
+      }
+    ],
+    "abi_red": {
+      "failed": 4,
+      "log": {
+        "path": "build-mips/mips16e2-next/test-abi-red.log",
+        "sha256": "8dc5d1f2c644aaf13df5b89680c3b95eac7f109ef15d697170a7643196ea1a37"
+      }
+    },
+    "abi_green": {
+      "passed": 4,
+      "log": {
+        "path": "build-mips/mips16e2-next/test-abi-green.log",
+        "sha256": "a693d69e470f8a57b8cf8aa1ce09ac866d88a1402be1ca2651876d4f6d1c7b8f"
+      }
+    },
+    "abi_shared_before_final_integration": {
+      "selected": 233,
+      "passed": 233,
+      "failed": 0,
+      "skipped": 0,
+      "labels": {
+        "NeverDFPParameterMaskTests": 233
+      },
+      "log": {
+        "path": "build-mips/mips16e2-next/test-abi-full.log",
+        "sha256": "93ad1ee2617ad514051dca82867a403d275fa2e78571c899c11c1910d3971b11"
+      }
+    },
+    "source_groups": 3300,
+    "source": {
+      "classic": {
+        "groups": 400,
+        "observations": 4992,
+        "result": {
+          "path": "build-mips/mips16e2-next/source-dev-classic/results.json",
+          "sha256": "72e08f55d02641f5515669ec25a89307443c416afa04f5ff389880ca50d1cd6e"
+        },
+        "faults": 96,
+        "strict_word_refusals": 24
+      },
+      "micro": {
+        "groups": 20,
+        "observations": 44,
+        "result": {
+          "path": "build-mips/mips16e2-next/source-dev-micro/results.json",
+          "sha256": "6e290f0b640d90c292844e95039f084e2d9a18a931bd7861ebd5ea019577cff4"
+        },
+        "faults": 0,
+        "strict_word_refusals": 0
+      },
+      "mips16": {
+        "groups": 312,
+        "observations": 16736,
+        "result": {
+          "path": "build-mips/mips16e2-next/source-dev-mips16/results.json",
+          "sha256": "24de4df1023336c37e2fc517b59ae50a0aaeb2f5f909233af7f88e53c4f3a234"
+        },
+        "qualification_refusals_groups": 16
+      },
+      "mips16e2": {
+        "groups": 520,
+        "observations": 16640,
+        "result": {
+          "path": "build-mips/mips16e2-next/source-dev-mips16e2/results.json",
+          "sha256": "a6f874a269f82d5ccdc09c8d938a9f39c8229e025d020995d5739734695908a2"
+        }
+      },
+      "dsp": {
+        "groups": 536,
+        "observations": 20904,
+        "result": {
+          "path": "build-mips/mips16e2-next/source-dev-dsp/results.json",
+          "sha256": "6a54ec6dab64af123ec0f3e58464aaf03d5f2cf3f835a46d896629e03ff3d9a3"
+        },
+        "standalone_groups": 16
+      },
+      "msa": {
+        "groups": 1512,
+        "observations": 37800,
+        "result": {
+          "path": "build-mips/mips16e2-next/source-dev-msa/results.json",
+          "sha256": "f6c73e15efa1aace1bcb0094f1071a222ad699769f93efd6d2869c8b849b5bc7"
+        },
+        "wide_carriers_groups": 4,
+        "wide_storage_syntax_groups": 4
+      }
+    },
+    "source_products_unchanged": {
+      "head": "56e028f5ff62eacb1176ef6547feaa755d4942df",
+      "products": {
+        "neverd": "35c423a448993dd25a0d308230abef7d52c8924561c827953da1aa5eeb0b255f",
+        "libneverd.dylib": "dfcdac9062d4802376d5ca6da86ac7bd7086ecb1d0121d1f300146a312341aa7",
+        "NeverDMIPSPipelineTests": "60a82b7428245f3656219470f38d6bde692855dc26bcc69e87c9d55c773f6f9a"
+      },
+      "results": {
+        "source-dev-dsp": 0,
+        "source-dev-mips16": 0,
+        "source-dev-micro": 0,
+        "source-dev-mips16e2": 0,
+        "source-dev-classic": 0,
+        "source-dev-msa": 0
+      },
+      "binaries_unchanged": true
+    },
+    "source_commands": {
+      "path": "build-mips/mips16e2-next/source-dev-commands.json",
+      "sha256": "745afe00067edda42bc28b4766ea3c4ebe2c6f17612e0511f3f1f2079ed06eac"
+    },
+    "prior_validation_scope": "Initial MIPS/shared and 3300 source groups have their own recorded product hashes. Final integration matrices above are a fresh execution after the ABI repair and dev integration."
+  },
+  "performance": {
+    "scope": "Same-base Release controls for normalization, full feature, mixed compressed streams, added-form throughput and firmware requests. Timing summaries remain local per CONTRIBUTING.md.",
+    "artifact": "build-mips/mips16e2-next/qualification.json",
+    "method": "Seven warmed alternating pairs; paired CPU percentage median and full range. Primitive CPU is measured inside the loop; request CPU is process user+system. Wall and RSS remain separate.",
+    "limits": "These are same-base feature measurements before the separately recorded dev/ABI integration. Direct Capstone compares physical decoding only. Added forms have no supported-baseline speedup ratio. Shared-host ranges do not establish world-leading performance."
+  },
+  "firmware": {
+    "firmware_sha256": "6e1129aa58cb398a2453876ea4aa2395feecc84ecf78ed8ab43efd534b40e475",
+    "results": [
+      {
+        "backend": "highc",
+        "selection": "call",
+        "equal": true,
+        "outputs": {
+          "old": {
+            "sha256": "746482c701b92ddc0e77a202028fe20ec48232597fc05dbf175209dae56158e4",
+            "bytes": 3038
+          },
+          "new": {
+            "sha256": "746482c701b92ddc0e77a202028fe20ec48232597fc05dbf175209dae56158e4",
+            "bytes": 3038
+          }
+        }
+      },
+      {
+        "backend": "highc",
+        "selection": "discovered",
+        "equal": true,
+        "outputs": {
+          "old": {
+            "sha256": "30a79315c656ec1d1d124120928864b0a784ed1215bd1156c2d98d713708db87",
+            "bytes": 9323
+          },
+          "new": {
+            "sha256": "30a79315c656ec1d1d124120928864b0a784ed1215bd1156c2d98d713708db87",
+            "bytes": 9323
+          }
+        }
+      },
+      {
+        "backend": "llvmc",
+        "selection": "call",
+        "equal": true,
+        "outputs": {
+          "old": {
+            "sha256": "f6a00e8664b28617f13e289fbee1067450351f3d5fabd5b291d62c7876305a96",
+            "bytes": 4099
+          },
+          "new": {
+            "sha256": "f6a00e8664b28617f13e289fbee1067450351f3d5fabd5b291d62c7876305a96",
+            "bytes": 4099
+          }
+        }
+      },
+      {
+        "backend": "llvmc",
+        "selection": "discovered",
+        "equal": true,
+        "outputs": {
+          "old": {
+            "sha256": "ea9cb10ed758722f9bf8d8678e9f8b66010c1432332417739e55821f9d809f33",
+            "bytes": 8453
+          },
+          "new": {
+            "sha256": "ea9cb10ed758722f9bf8d8678e9f8b66010c1432332417739e55821f9d809f33",
+            "bytes": 8453
+          }
+        }
+      }
+    ]
+  },
+  "prerequisites": {
+    "capstone": {
+      "pr": "https://github.com/NeverSight/capstone/pull/24",
+      "normal_release_unit_tests": 19,
+      "diet_release_unit_tests": 7
+    },
+    "unicorn": {
+      "pr": "https://github.com/NeverSight/unicorn/pull/17",
+      "release_ctest": 3,
+      "zero_destination_observations": 216,
+      "disabled_feature_checks": 4,
+      "reference_library_sha256": "ba76dc0cd1153cd2a64e6c936b22578ddea6c736627d72e5b5e0b4ab9077c175"
+    }
+  },
+  "limits": [
+    "No independent original-MIPS16e2 hardware/emulator execution; GNU encoding, LowIR expectations and regenerated old-MIPS16 execution are separate evidence.",
+    "Barrier source qualification excludes incoming CP0/privileged hazards and SMP/device/cache equivalence.",
+    "Remaining system/atomic/cache e2, DSP revisions/profiles and MSA floating/other families remain unsupported; this increment does not complete issue 97.",
+    "Local Release qualification uses macOS arm64. Linux/Windows host builds, hardware execution and new UBSan runs were not performed in this increment."
+  ],
+  "local_artifact_root": "build-mips/mips16e2-next",
+  "cleanup": "Successful producer objects/ELFs/sources are discarded after their last reader. Frozen comparison binaries and completed test executables are removed separately with hash receipts; cold raw reports are retained in verified local archives.",
+  "later_dev_integration": {
+    "source_commit": "9dac29f3d52f30de6995af6f2eedfaf9bc99fe3b",
+    "source_tree": "ab1d4a64e374b4a3aa6110b0e4b13d274757a2a3",
+    "dev_commit": "0b3e47cb12db2f89fd7b90b4795365dd29c513af",
+    "pending_documentation": "M docs/mips.md\n M docs/testing.md\n?? docs/evidence/mips16e2-dsp-msa-2026-11-10.json",
+    "delta": "Only the reviewed LLVMC frame debug-variable exact-key cache and no-debug lookup guard were added by this later dev sync. The earlier three .def formatting edits are token-identical. Complete source matrices are tied to the preceding integration products, not these products.",
+    "build": {
+      "command": [
+        "python3",
+        "scripts/build.py",
+        "build-mips",
+        "--target",
+        "neverd",
+        "NeverDMIPSPipelineTests",
+        "NeverDCPointerProjectionTests",
+        "--parallel",
+        "10"
+      ],
+      "exit_code": 0,
+      "configuration": "Release",
+      "configuration_sha256": "4b7f763d84ee332278241fec784a58db369b66635259905045b6f9bf39a29f84",
+      "dependency_inputs_sha256": "0a2047e110412d0ca2908fa8847878fc1e1b25d5238139c4ba78f8a6b2030dde",
+      "started_at": "2026-11-10T06:36:07.440965+00:00",
+      "finished_at": "2026-11-10T06:51:30.940640+00:00",
+      "receipt": {
+        "neverd-build-receipt.json": {
+          "path": "build-mips/mips16e2-next/tip-neverd-build-receipt.json",
+          "sha256": "f7e12160576eacbc2151c6ad24329e9c1c559526462128203395b32c6aa2ec3c"
+        },
+        "neverd-dependency-inputs.json": {
+          "path": "build-mips/mips16e2-next/tip-neverd-dependency-inputs.json",
+          "sha256": "0a2047e110412d0ca2908fa8847878fc1e1b25d5238139c4ba78f8a6b2030dde"
+        },
+        "CMakeCache.txt": {
+          "path": "build-mips/mips16e2-next/tip-CMakeCache.txt",
+          "sha256": "4b7f763d84ee332278241fec784a58db369b66635259905045b6f9bf39a29f84"
+        }
+      },
+      "log": {
+        "path": "build-mips/mips16e2-next/build-tip.log",
+        "sha256": "93d7a0caf8df086bed5d1468fabef582ad6c7f48f31514f3714c3629fa331684"
+      },
+      "managed_dependencies": {
+        "purpose": "configure_inputs",
+        "schema": 1,
+        "sources": {
+          "neverd_highway": {
+            "branch": "master",
+            "commit": "1693ca7926ed12c5520623564e465cff97d93374",
+            "repository": "https://github.com/NeverSight/highway.git",
+            "selection": "managed",
+            "sha256": "f5149df5acb77cd9730ed8e5160f2deff0b02fe49cc45443fd396fdb5f0519d2",
+            "used": true
+          },
+          "neverd_mimalloc": {
+            "branch": "main3",
+            "commit": "e8e7bc41ce904b4c83fe20e87d93f24d5286315a",
+            "repository": "https://github.com/NeverSight/mimalloc.git",
+            "selection": "managed",
+            "sha256": "aea4126df4ada4e8f733e2a0f08642a8aabe6c2afc01886a1a9a259c18231ac3",
+            "used": true
+          },
+          "neverd_simdjson": {
+            "branch": "master",
+            "commit": "edb7016c62efbe6155226896cdba5736307190e3",
+            "repository": "https://github.com/NeverSight/simdjson.git",
+            "selection": "managed",
+            "sha256": "e4e849bbb16878f8555501cc09bf4a6d90d4a06ccfc67a202a3c030486c3823d",
+            "used": true
+          },
+          "neverd_simdutf": {
+            "branch": "master",
+            "commit": "8d82299606e675b50de8dc16fd118aae4b65bfde",
+            "repository": "https://github.com/NeverSight/simdutf.git",
+            "selection": "managed",
+            "sha256": "48e9c9fc33940bcc81cdaec785ce6e21ea20f7b03b7a26bff56abb41d2cf5126",
+            "used": true
+          },
+          "neverd_tbb": {
+            "branch": "master",
+            "commit": "d26e0502ca39f888c1266cbbf1e2c2226d31e41b",
+            "repository": "https://github.com/NeverSight/oneTBB.git",
+            "selection": "managed",
+            "sha256": "98300a443e43d047eabae27d3e30232efe7508b20d8e24a92ff2d54ef511761b",
+            "used": true
+          }
+        }
+      }
+    },
+    "capstone": "fc0377b84098bf81bc4eae544eb7e0ac39292f47",
+    "unicorn": "daea41b5a72ee7f12be5e6df935c84c7118bddb1",
+    "products": {
+      "neverd": {
+        "sha256": "35c423a448993dd25a0d308230abef7d52c8924561c827953da1aa5eeb0b255f",
+        "bytes": 3679656
+      },
+      "libneverd.dylib": {
+        "sha256": "804fdfad1fd48535613d7e9df7eb0a0aa33aec6fe7d231b9cf1936fd3341851c",
+        "bytes": 171591968
+      },
+      "NeverDMIPSPipelineTests": {
+        "sha256": "2f677f1208a42cd79c68dbe97e57f0a7e85fc9a0768d5bdf3c8a3794ec9fa593",
+        "bytes": 92618456
+      },
+      "NeverDCPointerProjectionTests": {
+        "sha256": "ef133a77b47353281fac258b3a2a151978253507d8ef552294c430bdff366f8e",
+        "bytes": 117758384
+      }
+    }
+  },
+  "later_dev_checks": {
+    "mips_pipeline_and_pointer_projection": {
+      "selected": 1005,
+      "passed": 958,
+      "failed": 0,
+      "skipped": 47,
+      "labels": {
+        "NeverDCPointerProjectionTests": 881,
+        "NeverDMIPSPipelineTests": 124
+      },
+      "log": {
+        "path": "build-mips/mips16e2-next/test-tip.log",
+        "sha256": "324df04a6d697ec16f737633929866d5128751623210bb5cdf2771c825d51375"
+      }
+    },
+    "firmware": {
+      "firmware_sha256": "6e1129aa58cb398a2453876ea4aa2395feecc84ecf78ed8ab43efd534b40e475",
+      "products": {
+        "neverd": "35c423a448993dd25a0d308230abef7d52c8924561c827953da1aa5eeb0b255f",
+        "libneverd.dylib": "804fdfad1fd48535613d7e9df7eb0a0aa33aec6fe7d231b9cf1936fd3341851c"
+      },
+      "expected_receipt_sha256": "0275a4c5ac8605e591c986fadce246a5df90786f96783a2081238d6d8e10c14a",
+      "results": [
+        {
+          "backend": "highc",
+          "selection": "call",
+          "equal": true,
+          "output": {
+            "sha256": "746482c701b92ddc0e77a202028fe20ec48232597fc05dbf175209dae56158e4",
+            "bytes": 3038
+          }
+        },
+        {
+          "backend": "highc",
+          "selection": "discovered",
+          "equal": true,
+          "output": {
+            "sha256": "30a79315c656ec1d1d124120928864b0a784ed1215bd1156c2d98d713708db87",
+            "bytes": 9323
+          }
+        },
+        {
+          "backend": "llvmc",
+          "selection": "call",
+          "equal": true,
+          "output": {
+            "sha256": "f6a00e8664b28617f13e289fbee1067450351f3d5fabd5b291d62c7876305a96",
+            "bytes": 4099
+          }
+        },
+        {
+          "backend": "llvmc",
+          "selection": "discovered",
+          "equal": true,
+          "output": {
+            "sha256": "ea9cb10ed758722f9bf8d8678e9f8b66010c1432332417739e55821f9d809f33",
+            "bytes": 8453
+          }
+        }
+      ]
+    },
+    "skip_inventory": {
+      "receipt": {
+        "path": "build-mips/mips16e2-next/ctest-tip-skips.json",
+        "sha256": "bfabe679c5881c7dc1366598c5f8c2e59fde6313597d93e8fa616bcb01a3622d"
+      },
+      "same_cases_as_subset_of_main_run": true
+    }
+  },
+  "raw_report_archives": [
+    {
+      "manifest": {
+        "path": "build-mips/mips16e2-next/archives/final-cache-test-detail.json",
+        "sha256": "a3b8b8093230cd63de3b796b9c8a638f650a671735cb29ea0f1723ea63befa38"
+      },
+      "archive": "archives/final-cache-test-detail.tar.gz",
+      "sha256": "0e0016dc7f82980bc2149c0e2273460045ec2dae99da19cc10b8a5c33ada0b43"
+    },
+    {
+      "manifest": {
+        "path": "build-mips/mips16e2-next/archives/final-source-raw-reports.json",
+        "sha256": "f6f6f08b7d3bc731ea511fdccee8e23564ad3aa00e02b859070cc82a6ad982d8"
+      },
+      "archive": "archives/final-source-raw-reports.tar.gz",
+      "sha256": "df2c218340056559fbfe9be149540e24bdeca250f1148890bd08a2605502a3d4"
+    },
+    {
+      "manifest": {
+        "path": "build-mips/mips16e2-next/archives/preintegration-raw-reports.json",
+        "sha256": "52fdd6fe4260f6e38aa3d81fde1ea56bfe583bfbc04eb3bfb90c42ee5f9d5b44"
+      },
+      "archive": "archives/preintegration-raw-reports.tar.gz",
+      "sha256": "386e3ae42eb4c94221aabe1eac627ae4208c26da4e57c4ab2373562b41408107"
+    }
+  ],
+  "cleanup_receipt": {
+    "binary_cleanup_receipts": [
+      {
+        "path": "cleanup-baseline.json",
+        "sha256": "c93adc5e5fc8c54d7e790de81e73f1fc1a35c61457a181d78fc8e3ab40d6960a",
+        "bytes": 195574712
+      },
+      {
+        "path": "cleanup-completed-regressions.json",
+        "sha256": "d57f386cb4b399f0a80466d7c019413113c6ff2fbc038b851c5c81dead3a98f7",
+        "bytes": 704443760
+      },
+      {
+        "path": "cleanup-control.json",
+        "sha256": "1299ce876da528742219aeb529f38564bab7b337c0850d29fe01e18f2c850c28",
+        "bytes": 195574936
+      },
+      {
+        "path": "cleanup-final-tests-early.json",
+        "sha256": "3d99d01f9663367b739654f055ebd2d9431c7c351530bd9da0b2de6e0d94ed09",
+        "bytes": 764302832
+      },
+      {
+        "path": "cleanup-final-tests.json",
+        "sha256": "9194f8ad2e33cc0bbb7ba4277f4619aaa64176f1bb1c2ef4ab4762ac60512f87",
+        "bytes": 210376840
+      },
+      {
+        "path": "cleanup-performance-candidates.json",
+        "sha256": "e55ffa02f402654fcb8592b8fada9e58e783642697b668a92945763b165ee757",
+        "bytes": 391153632
+      },
+      {
+        "path": "cleanup-rejected-candidate.json",
+        "sha256": "30e99fdc7c57fbdf4f177e75c96e689b5205b82aab8c5d000095bb35e2771e97",
+        "bytes": 195576200
+      }
+    ],
+    "cumulative_logical_binary_bytes_removed": 2657002912,
+    "archive_raw_bytes": 174227663,
+    "archive_bytes": 4021677,
+    "scope": "Cumulative logical file sizes across this increment, including retired rebuild epochs; not a physical free-space delta. Original raw contents remain in verified archives.",
+    "retained": [
+      "active CLI/SDK",
+      "incremental build cache",
+      "reference Unicorn and GNU tools",
+      "firmware",
+      "compact receipts and failure sources"
+    ]
+  },
+  "publication_sync": {
+    "head": "8ece2f02cb064269fd1806a4d5d41738492afd19",
+    "dev": "1fcf8186adeda499316be87a16bb5615ffeae2c8",
+    "qualified_mips_source": "9dac29f3d52f30de6995af6f2eedfaf9bc99fe3b",
+    "changed_paths": [
+      "docs/sbf.md",
+      "lib/sbf/analysis/SBFCallXContextFlow.cpp",
+      "unittests/sbf/SBFCallXContextTests.cpp"
+    ],
+    "scope": "An unrelated SBF-only dev update arrived during final qualification. Reviewed and merged before publication; no MIPS source, shared source backend, ABI owner, build configuration or dependency changes. No additional MIPS rebuild/tests were needed for these target-private changes. The new SBF implementation was not qualified by this MIPS task."
+  }
+}

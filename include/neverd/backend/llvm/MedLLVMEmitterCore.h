@@ -2466,6 +2466,9 @@ private:
   /// another call's.
   std::map<va_t, std::pair<size_t, size_t>> DirectCallArgumentCounts;
   std::map<va_t, std::string> FuncNames;
+  /// Native spellings in the barrier-helper namespace, reserved before any
+  /// body or deferred import declaration is emitted.
+  std::set<std::string, std::less<>> MIPSBarrierReservedNames;
   // Ordinary LLVM blocks are created for every body-emitted MedFunc before
   // any body operation runs.  This makes blockaddress resolution independent
   // of function emission order while leaving BodyMask-omitted functions as

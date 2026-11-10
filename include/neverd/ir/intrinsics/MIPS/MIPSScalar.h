@@ -93,10 +93,17 @@ constexpr bool isPureScalarValue(Intrinsic Id) {
          isWordDivision(Id);
 }
 
+/// Ordering effects remain observable, but neither operation writes data.
+/// This is not a purity/CSE contract.
+constexpr bool isBarrier(Intrinsic Id) {
+  return Id == Intrinsic::MIPSExecutionHazardBarrier ||
+         Id == Intrinsic::MIPSSync;
+}
+
 constexpr bool isScalarIntrinsic(Intrinsic Id) {
   return mergeMemory(Id).has_value() || Id == Intrinsic::MIPSUnpredictable ||
          Id == Intrinsic::MIPSRequireWord || Id == Intrinsic::MIPSLwrUpper ||
-         isDSPControlIntrinsic(Id) || isWordDivision(Id);
+         isDSPControlIntrinsic(Id) || isWordDivision(Id) || isBarrier(Id);
 }
 
 struct ScalarShape {
@@ -109,12 +116,18 @@ struct ScalarShape {
   uint16_t SecondBytes = 0;
   uint16_t ThirdBytes = 0;
   bool Ordinary = false;
+  std::optional<uint64_t> FirstConstant;
 };
 
 constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
   if (!S.IdIsValid || !S.Ordinary ||
       (S.Target != Arch::Unknown && !isMIPS(S.Target)))
     return false;
+  if (Id == Intrinsic::MIPSExecutionHazardBarrier)
+    return S.Inputs == 1 && !S.OutputBytes;
+  if (Id == Intrinsic::MIPSSync)
+    return S.Inputs == 2 && !S.OutputBytes && S.FirstBytes == 1 &&
+           S.FirstConstant && *S.FirstConstant < 32;
   if (Id == Intrinsic::MIPSRequireWord)
     return S.Inputs == 2 && !S.OutputBytes && S.FirstBytes == 8 &&
            (S.Target == Arch::Unknown || isMIPS64(S.Target));

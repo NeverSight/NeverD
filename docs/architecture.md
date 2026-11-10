@@ -3504,6 +3504,15 @@ graph; `COFFExceptionPatch` continues to require that evidence for lifted code.
 
 Recovered indirect-call arguments retain separate integer and floating register runs and the remaining stack bytes. Each stack value also keeps the offset it was stored at, so a value narrower than its slot leaves the rest of the slot as padding: -O0 x86-64 code passes an `int` with `mov [rsp+8], r10d` in an eight-byte slot. `LLVMCallContract` uses one binder during emission and after LLVM target resolution: surplus registers cannot shift another bank, packed 32-bit stores are assembled into the callee’s complete stack slots, a narrower value fills only its own slot, and a slot that no value was stored to refuses. A callback table cannot replace an already recovered first argument with an inferred object pointer. AArch64 copy-initialized tables authenticate the native BL/import identity, MOVZ length, ADRP/ADD source and complete immutable span; publication and jump-table proof replay check the same witness.
 
+For fixed pair-aligned stack arguments, the reaching-store owner publishes
+concrete scalar values and local wide-store lanes with their memory offsets.
+The final argument boundary reapplies these values after local packing, even
+when the proof is complete; matching a slot number alone does not authenticate
+a candidate. Local scanning and certified lanes share the target-endian
+conversion from memory bytes to numeric SUBBYTES offsets. A predecessor wide
+store without published lane evidence makes the proof incomplete, so required
+unknown arguments cannot become alignment padding.
+
 ## Manual PDB presentation boundary
 
 `lib/debug/PDBIdentity.h` owns RSDS build identity for full loading, symbol-store
@@ -15857,7 +15866,14 @@ through normalization so CFG does not visit a nonexistent fallthrough.
 MIPS16 symbols are classified before their overlapping microMIPS flag bit.
 MIPS16e2 is an explicit ABI-record feature on that same instruction mode;
 `ELFMIPSProfile` owns the GNU e2 ASE bit and `Decoder::configureFor` refreshes it.
-Its integer/memory EXTEND forms reuse the classic semantic owners. The pinned
+Its integer/memory EXTEND forms reuse the classic semantic owners. Delay-slot
+queries reuse the small MIPS16 jump normalizer instead of normalizing all scalar
+instructions. EHB/SYNC are effectful native barriers with an independent
+no-data-write contract for saved returns; their exact stype and source mode are
+validated at the owning shape/source boundaries. Module name planning reserves
+native symbols, deferred call hints and import-storage names before allocating
+barrier helpers. Source-body markers own their selected-definition closure;
+matching a symbol's spelling does not establish helper identity. The pinned
 Unicorn does not implement e2; GNU bytes, independent LowIR checks and execution
 of regenerated old-MIPS16 source remain distinct evidence.
 Both source routes emit the positive encoding attribute and explicitly exclude

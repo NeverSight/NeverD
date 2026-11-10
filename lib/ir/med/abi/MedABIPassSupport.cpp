@@ -102,11 +102,10 @@ bool incomingArgumentReachesCall(const AbiCallContext &C, int ArgIndex) {
   return ReachedEntry;
 }
 
-std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C,
-                                               CallSetupStackJoins *Joins,
-                                               size_t *SharedWork,
-                                               bool *Incomplete,
-                                               std::set<int64_t> *WideSlots) {
+std::map<int64_t, MedVar>
+callSetupStackStores(const AbiCallContext &C, CallSetupStackJoins *Joins,
+                     size_t *SharedWork, bool *Incomplete,
+                     std::map<int64_t, CallSetupStackLane> *WideSlots) {
   using Stores = std::map<int64_t, CallSetupStackValue>;
   if (Joins)
     *Joins = {};
@@ -224,15 +223,18 @@ std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C,
             !isIncomingRegisterSave(C.TRI, Op.Inputs[1], &C.Func))
           Local.emplace(Slot, Op.Inputs[1]);
         // A partial scalar write cannot prove an entire required carrier.
-        // Preserve the existing local multi-slot wide-store path only for
-        // complete aligned words; it is separately certified by that scan.
-        const bool WholeWideStore = *Offset % Word == 0 &&
-                                    Op.Inputs[1].Size > Word &&
-                                    Op.Inputs[1].Size % Word == 0;
+        // Keep concrete evidence for complete aligned lanes. A slot number
+        // alone cannot certify what a later local scan reconstructs.
+        const bool WholeWideStore =
+            *Offset % Word == 0 && Op.Inputs[1].Size > Word &&
+            Op.Inputs[1].Size % Word == 0 &&
+            !isIncomingRegisterSave(C.TRI, Op.Inputs[1], &C.Func);
         if (WholeWideStore && Depth == 0 && WideSlots)
-          WideSlots->insert(Slot);
+          WideSlots->emplace(
+              Slot, CallSetupStackLane{Op.Inputs[1],
+                                       static_cast<uint16_t>(Slot - *Offset)});
         if (Incomplete && (!Local.count(Slot) || Op.Inputs[1].Size < Word) &&
-            !WholeWideStore)
+            (!WholeWideStore || Depth != 0 || !WideSlots))
           markIncomplete();
       }
     }

@@ -14309,12 +14309,20 @@ x64 machine code and both optimized/unoptimized lifted LLVM at O0/O2, checking
 1024 selectors plus the two-level default boundary against independent results.
 
 `MedABIPass.PairAlignedWideStackStoreKeepsItsLanes` covers the pair-aligned
-conventions (ARM AAPCS and little-endian MIPS o32). One aligned store of a
+conventions (ARM AAPCS and both byte orders of MIPS o32). One aligned store of a
 stack `double` keeps both slot lanes when a loop surrounds the call, and when an
 earlier call leaves a later slot unproven; that slot stays unknown.
 `MedABIPass.CoveredCallSetupNeedsNoPredecessor` checks that stores covering
-every slot in the call block keep the stack proof complete, and that the proof
-names the slots of such a wide store for the block scan to split.
+every slot in the call block keep the stack proof complete. Wide-lane evidence
+retains the actual stored value and its memory offset; incoming register saves
+do not supply argument evidence.
+`PairAlignedWideStackLanesIgnoreOlderPackedStores` checks complete/incomplete
+proofs and later scalar overwrites: old byte-store packing cannot replace the
+owner's scalar or wide values. Both lane materialization paths convert memory
+offsets to numeric SUBBYTES positions in the target's byte order.
+`PairAlignedPredecessorWideStoreRequiresLaneEvidence` keeps required lanes
+unknown when a predecessor wide store has no published lane proof; a later
+proven scalar remains available. Missing evidence never becomes padding zero.
 
 `MedABIPass.SplitStackArgumentSetupRequiresEveryIncomingPath` checks all twelve
 architecture/format cells, block-order changes, conflicting or missing stores,
@@ -23372,7 +23380,7 @@ These functions do not qualify omitted MIPS16 instructions or general ABI forms.
 
 ### MIPS16e2 and additional DSP/MSA arithmetic
 
-`MIPS16E2` checks all 28 admitted encoding forms in both byte orders, compact
+`MIPS16E2` checks all 30 admitted encoding forms in both byte orders, compact
 register aliases, bitfield limits, zero sources, GP memory widths, partial merge
 footprints and reused-decoder feature evidence. `MIPS16E2Pipeline` checks exact
 physical delay-slot widths and writable image-store bindings. Shared scalar
@@ -23402,12 +23410,38 @@ DSPControl and saved low FPR views. The pinned reference fixes MSA signed-limit
 construction and absolute `INT64_MIN` magnitudes, with QEMU's required wrapping
 arithmetic enabled in CMake builds. All regenerated execution and the newly
 added original-instruction fixtures must match independent results. The
-existing DSP zero-destination reference defect remains explicitly recorded;
-see the [DSP reference boundary](mips.md#classic-mips32-dsp-state-and-packed-arithmetic).
+reference also fixes discarded packed-DSP/shift results: helpers still update
+DSPControl and enforce DSP enablement. The source runner permits no original
+zero-destination mismatch; see the [DSP reference boundary](mips.md#classic-mips32-dsp-state-and-packed-arithmetic).
 Reports identify the source revision and actual loaded native-library hash.
 Ordinary pair padding, predecessor memory barriers,
 single-sided barriers at joins, depth/work exhaustion and non-entry analysis
 roots or exceptional/disconnected paths have separate call-recovery regressions.
+
+MIPS16 delay-slot classification exhausts all 65,536 halfwords, both byte orders
+and physical sizes. A shared jump normalizer avoids full scalar normalization
+in slot queries. EHB/SYNC tests retain every stype, reject malformed shapes and
+reserved fields, and prove SAVE/barrier/RESTORE source output in HighC and
+LLVMC. The e2 runner compiles and executes each barrier's generated source and
+checks its native assembly at O0/O2. This is not original-e2 or multiprocessor
+ordering execution evidence.
+Selected-function LLVMC regressions require the source-only helper definitions,
+including when an input function collides with a barrier helper's name.
+Deferred imports and named call hints are checked in both instruction/function
+orders, including reserved suffixes and canonical import-storage-only evidence.
+DSP ABS/SHLL tests cover signed extrema, every count, sticky fields, aliases,
+zero destinations and missing state; CMPGU requires no DSPControl input.
+MSA tests enumerate all 128 BIT fields and 256 byte immediates, unary count
+extrema, all vector bytes, old-destination dependence and three-register aliases.
+The source fixtures observe complete output memory and post-return state.
+
+The [2026-11-10 evidence](evidence/mips16e2-dsp-msa-2026-11-10.json) separates
+the final dev/ABI integration's correctness runs from the same-base feature
+performance measurements. It includes the four failing-then-passing stack-lane
+regressions, exact product/dependency hashes, six fresh source matrices, the
+firmware output comparison and the location of local optimization controls.
+Original e2 hardware execution and SMP/device ordering remain outside this
+qualification.
 
 ### MIPS decode/lift and firmware performance
 

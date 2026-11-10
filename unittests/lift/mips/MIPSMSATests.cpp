@@ -28,6 +28,7 @@
 #include <array>
 #include <ios>
 #include <memory>
+#include <stdexcept>
 #include <vector>
 
 using namespace neverd;
@@ -680,6 +681,176 @@ TEST_P(MIPSMSA, IntegerFormatsMatchEnabledP5600AcrossAllOutputBytes) {
             EXPECT_EQ(Actual[I], Expected[I]) << "byte " << I;
         }
 #endif
+}
+
+TEST_P(MIPSMSA, ImmediateBitFormatsExhaustEveryPrefixAndCaptureAliases) {
+  auto Image = msaImage(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  MIPSLifter L(GetParam());
+  L.setMSAEnabled(true);
+  for (unsigned Operation = 0; Operation != 6; ++Operation)
+    for (unsigned Field = 0; Field != 128; ++Field)
+      for (unsigned Destination : {0u, 2u}) {
+        const uint32_t Word =
+            0x78000009 | (Operation << 23) | (Field << 16) | (Destination << 6);
+        if (Field >= 120) {
+          const auto Bytes = msaBytes({Word}, archLittleEndian(GetParam()));
+          cs_insn Raw{};
+          Raw.size = 4;
+          std::copy(Bytes.begin(), Bytes.end(), Raw.bytes);
+          std::vector<LowOp> Ops;
+          EXPECT_THROW(L.lift(Raw, Ops), std::runtime_error);
+          EXPECT_TRUE(Ops.empty());
+          continue;
+        }
+        const unsigned Bits = Field < 64    ? 64
+                              : Field < 96  ? 32
+                              : Field < 112 ? 16
+                                            : 8;
+        const unsigned Count = Field % Bits;
+        for (unsigned Pattern : {0u, 1u, 2u, 3u}) {
+          std::vector<uint8_t> Input(16), Expected(16);
+          for (unsigned I = 0; I != 16; ++I)
+            Input[I] = Pattern == 0   ? 0
+                       : Pattern == 1 ? 255
+                       : Pattern == 2 ? 0x80
+                                      : I * 37 + 19;
+          for (unsigned I = 0; I != 16; I += Bits / 8) {
+            uint64_t V = 0;
+            for (unsigned B = 0; B != Bits / 8; ++B)
+              V |= uint64_t(Input[I + B]) << (8 * B);
+            uint64_t Result = V;
+            switch (Operation) {
+            case 0:
+              Result = V << Count;
+              break;
+            case 1:
+              Result = V >> Count;
+              if (Count && (V & (UINT64_C(1) << (Bits - 1))))
+                Result |= UINT64_MAX << (Bits - Count);
+              break;
+            case 2:
+              Result = V >> Count;
+              break;
+            case 3:
+              Result = V & ~(UINT64_C(1) << Count);
+              break;
+            case 4:
+              Result = V | (UINT64_C(1) << Count);
+              break;
+            case 5:
+              Result = V ^ (UINT64_C(1) << Count);
+              break;
+            }
+            for (unsigned B = 0; B != Bits / 8; ++B)
+              Expected[I + B] = Result >> (8 * B);
+          }
+          NdOpEmulator E(Image);
+          E.setStrictMode(true);
+          E.setRegisterBytes(mipsreg::w(0), Input);
+          ASSERT_TRUE(msaExecute(D, GetParam(), Word, E));
+          EXPECT_EQ(E.getRegisterBytes(mipsreg::w(Destination)), Expected)
+              << "operation=" << Operation << " field=" << Field
+              << " pattern=" << Pattern;
+        }
+      }
+}
+
+TEST_P(MIPSMSA, UnaryCountsObserveAllBitsAndDefineZeroAndFullLanes) {
+  auto Image = msaImage(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  for (unsigned Operation = 0; Operation != 3; ++Operation)
+    for (unsigned Format = 0; Format != 4; ++Format)
+      for (unsigned Destination : {0u, 2u, 31u})
+        for (unsigned Pattern : {0u, 1u, 2u, 3u}) {
+          const unsigned Bytes = 1u << Format, Bits = Bytes * 8;
+          std::vector<uint8_t> Input(16), Expected(16, 0);
+          for (unsigned I = 0; I != 16; ++I)
+            Input[I] = Pattern == 0   ? 0
+                       : Pattern == 1 ? 255
+                       : Pattern == 2 ? 0x80
+                                      : I * 37 + 19;
+          for (unsigned I = 0; I != 16; I += Bytes) {
+            unsigned Count = 0;
+            for (unsigned B = 0; B != Bits; ++B) {
+              unsigned Bit = Operation == 0 ? B : Bits - B - 1;
+              const bool Set = Input[I + Bit / 8] & (1u << (Bit % 8));
+              if (Operation == 0)
+                Count += Set;
+              else if (Set == (Operation == 1))
+                ++Count;
+              else
+                break;
+            }
+            Expected[I] = Count;
+          }
+          const uint32_t Word = 0x7b00001e | ((Operation + 1) << 18) |
+                                (Format << 16) | (Destination << 6);
+          NdOpEmulator E(Image);
+          E.setStrictMode(true);
+          E.setRegisterBytes(mipsreg::w(0), Input);
+          ASSERT_TRUE(msaExecute(D, GetParam(), Word, E));
+          EXPECT_EQ(E.getRegisterBytes(mipsreg::w(Destination)), Expected);
+        }
+}
+
+TEST_P(MIPSMSA, ImmediateLogicalBytesAndThreeInputMasksPreserveEveryBit) {
+  auto Image = msaImage(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  const std::vector<uint8_t> A = {0,  1,  2,  0xff, 0x80, 0x7f, 0x55, 0xaa,
+                                  17, 29, 31, 67,   127,  9,    123,  45};
+  for (unsigned Operation = 0; Operation != 4; ++Operation)
+    for (unsigned Immediate = 0; Immediate != 256; ++Immediate)
+      for (unsigned Destination : {0u, 31u}) {
+        auto Expected = A;
+        for (auto &B : Expected)
+          B = Operation == 0   ? B & Immediate
+              : Operation == 1 ? B | Immediate
+              : Operation == 2 ? ~(B | Immediate)
+                               : B ^ Immediate;
+        NdOpEmulator E(Image);
+        E.setStrictMode(true);
+        E.setRegisterBytes(mipsreg::w(0), A);
+        ASSERT_TRUE(msaExecute(D, GetParam(),
+                               0x78000000 | (Operation << 24) |
+                                   (Immediate << 16) | (Destination << 6),
+                               E));
+        EXPECT_EQ(E.getRegisterBytes(mipsreg::w(Destination)), Expected);
+      }
+  const std::vector<uint8_t> B(A.rbegin(), A.rend()), C(16, 0x5a);
+  for (unsigned Operation = 0; Operation != 3; ++Operation)
+    for (unsigned Destination : {0u, 1u, 2u})
+      for (bool SameSource : {false, true}) {
+        const auto Old = Destination == 0 ? A : Destination == 1 ? B : C;
+        const auto Other = SameSource ? A : B;
+        auto Expected = A;
+        for (unsigned I = 0; I != 16; ++I)
+          Expected[I] =
+              Operation == 0   ? (A[I] & Other[I]) | (Old[I] & ~Other[I])
+              : Operation == 1 ? (A[I] & ~Other[I]) | (Old[I] & Other[I])
+                               : (Other[I] & Old[I]) | (A[I] & ~Old[I]);
+        NdOpEmulator E(Image);
+        E.setStrictMode(true);
+        E.setRegisterBytes(mipsreg::w(0), A);
+        E.setRegisterBytes(mipsreg::w(1), B);
+        E.setRegisterBytes(mipsreg::w(2), C);
+        ASSERT_TRUE(msaExecute(D, GetParam(),
+                               0x7880001e | (Operation << 21) |
+                                   (Destination << 6) |
+                                   (SameSource ? 0 : 1 << 16),
+                               E));
+        EXPECT_EQ(E.getRegisterBytes(mipsreg::w(Destination)), Expected);
+      }
+  for (uint32_t Encoding : {0x7880001eu, 0x78a0001eu, 0x78c0001eu}) {
+    NdOpEmulator E(Image);
+    E.setStrictMode(true);
+    E.setRegisterBytes(mipsreg::w(0), A);
+    E.setRegisterBytes(mipsreg::w(1), B);
+    EXPECT_FALSE(msaExecute(D, GetParam(), Encoding | (2 << 6) | (1 << 16), E));
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(Endian, MIPSMSA,

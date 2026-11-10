@@ -11,6 +11,7 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
@@ -278,6 +279,71 @@ TEST_P(MIPS16E2,
   for (unsigned Size = 0; Size < 4; ++Size)
     EXPECT_EQ(D.decodeOneForLift(B.data(), Size, 0x1000, Insn), 0);
 }
+TEST_P(MIPS16E2, BarriersKeepAllStypesAndNeverBecomePureOrAlignmentNops) {
+  auto I = e2Image(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(I));
+  for (unsigned Kind = 0; Kind != 33; ++Kind) {
+    const uint32_t Word = Kind == 32 ? 0xf0c03010 : 0xf0003014 | (Kind << 22);
+    auto Ops = e2Lift(D, GetParam(), Word);
+    ASSERT_EQ(Ops.size(), 1u);
+    const auto Id = Kind == 32 ? Intrinsic::MIPSExecutionHazardBarrier
+                               : Intrinsic::MIPSSync;
+    ASSERT_EQ(Ops[0].Opcode, NdOp::INTRINSIC);
+    EXPECT_EQ(Ops[0].Inputs[0].Offset, uint64_t(Id));
+    EXPECT_EQ(Ops[0].NumInputs, Kind == 32 ? 1u : 2u);
+    if (Kind < 32)
+      EXPECT_EQ(Ops[0].Inputs[1].Offset, Kind);
+    EXPECT_TRUE(isSideeffectIntrinsic(Id));
+    EXPECT_FALSE(mips::isPureScalarValue(Id));
+    NdOpEmulator E(I);
+    E.setStrictMode(true);
+    EXPECT_TRUE(run(E, Ops));
+    if (Kind < 32) {
+      for (unsigned Bad = 0; Bad != 4; ++Bad) {
+        auto Op = Ops[0];
+        if (Bad == 0)
+          Op.Inputs[1] = NdVar::cst(32, 1);
+        if (Bad == 1)
+          Op.Inputs[1] = NdVar::reg(mipsreg::A0, 1);
+        if (Bad == 2)
+          Op.Inputs[1].Size = 4;
+        if (Bad == 3)
+          Op.Output = NdVar::tmp(1, 4);
+        EXPECT_FALSE(mipsScalarLowShapeIsValid(Op, GetParam()));
+        EXPECT_FALSE(E.step(Op));
+      }
+    }
+  }
+  MIPSLifter L(GetParam(), InstructionMode::MIPS16);
+  L.setMIPS16E2Enabled(true);
+  for (uint32_t Word : {0xf0c03011u, 0xf0e03010u, 0xf0803010u, 0xf0013014u,
+                        0xf0203014u, 0xf0003114u, 0xf0003034u}) {
+    cs_insn Raw{};
+    Raw.size = 4;
+    const auto B = e2Bytes(Word, GetParam());
+    std::copy(B.begin(), B.end(), Raw.bytes);
+    std::vector<LowOp> Ops;
+    EXPECT_THROW(L.lift(Raw, Ops), UnliftedInstruction);
+    EXPECT_TRUE(Ops.empty());
+  }
+  for (Arch Target :
+       {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    MIPSLifter Classic(Target);
+    for (uint32_t Word : {0x000000c0u, 0x0000000fu, 0x000007cfu}) {
+      cs_insn Raw{};
+      Raw.size = 4;
+      for (unsigned N = 0; N != 4; ++N)
+        Raw.bytes[N] = Word >> (8 * (archLittleEndian(Target) ? N : 3 - N));
+      EXPECT_FALSE(Classic.isAlignmentNop(Raw));
+      std::vector<LowOp> Ops;
+      ASSERT_NO_THROW(Classic.lift(Raw, Ops));
+      ASSERT_EQ(Ops.size(), 1u);
+      EXPECT_EQ(Ops[0].Opcode, NdOp::INTRINSIC);
+    }
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(BothByteOrders, MIPS16E2,
                          testing::Values(Arch::MIPS32, Arch::MIPS32EL));
 } // namespace

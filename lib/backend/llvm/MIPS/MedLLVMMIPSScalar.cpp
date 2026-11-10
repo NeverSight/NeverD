@@ -9,7 +9,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ArchSupport.h"
+#include "neverd/backend/MIPS/MIPSBarrierSource.h"
 #include "neverd/backend/MIPS/MIPSDSPSource.h"
+#include "neverd/backend/llvm/LLVMSourceBody.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
 
@@ -29,6 +31,40 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
     throw std::runtime_error(mips::kUnpredictableResult);
   if (Id == Intrinsic::MIPSLwrUpper)
     throw std::runtime_error(mips::kPartialLwrRequiresWord);
+  if (mips::isBarrier(Id)) {
+    const auto Assembly = mips::barrierAssembly(
+        Id, Id == Intrinsic::MIPSSync ? Op.Inputs[1].ConstVal : 0);
+    auto *Module = B.GetInsertBlock()->getModule();
+    const auto Base = std::string(mips::BarrierHelperPrefix) + Assembly;
+    auto Name = Base;
+    llvm::Function *Helper = nullptr;
+    for (unsigned Suffix = 1;; ++Suffix) {
+      auto *Existing = Module->getNamedValue(Name);
+      Helper = llvm::dyn_cast_or_null<llvm::Function>(Existing);
+      if (!MIPSBarrierReservedNames.contains(Name) &&
+          (!Existing ||
+           (Helper && Helper->hasFnAttribute(mips::BarrierSourceMarker))))
+        break;
+      Name = Base + "." + std::to_string(Suffix);
+    }
+    if (!Helper) {
+      auto *Type = llvm::FunctionType::get(B.getVoidTy(), false);
+      Helper = llvm::Function::Create(Type, llvm::GlobalValue::InternalLinkage,
+                                      Name, Module);
+      // A target instruction in a classic helper must not be inlined into a
+      // compressed function by subsequent optimization.
+      Helper->addFnAttr(llvm::Attribute::NoInline);
+      Helper->addFnAttr(mips::BarrierSourceMarker);
+      Helper->addFnAttr(LLVMSourceBody);
+      mips::applyInstructionModeLLVMAttributes(*Helper,
+                                               InstructionMode::MIPSClassic);
+      llvm::IRBuilder<> HB(llvm::BasicBlock::Create(*Ctx, "entry", Helper));
+      HB.CreateCall(
+          llvm::InlineAsm::get(Type, Assembly, mips::BarrierConstraints, true));
+      HB.CreateRetVoid();
+    }
+    return B.CreateCall(Helper);
+  }
   if (Id == Intrinsic::MIPSReadDSPControl ||
       Id == Intrinsic::MIPSWriteDSPControl) {
     mips::applyDSPSourceAttributes(*B.GetInsertBlock()->getParent());

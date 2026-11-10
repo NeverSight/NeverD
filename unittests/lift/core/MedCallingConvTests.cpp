@@ -1975,7 +1975,7 @@ TEST(MedABIPass, ForwardedLiveInKeepsParameterProvenance) {
 // The call block's scan splits that store into the slot lanes. Neither a loop
 // around the call nor an unproven later slot makes those lanes unknown.
 TEST(MedABIPass, PairAlignedWideStackStoreKeepsItsLanes) {
-  for (Arch A : {Arch::ARM, Arch::MIPS32EL})
+  for (Arch A : {Arch::ARM, Arch::MIPS32, Arch::MIPS32EL})
     for (bool Loop : {false, true}) {
       SCOPED_TRACE(static_cast<unsigned>(A));
       SCOPED_TRACE(Loop);
@@ -2051,83 +2051,250 @@ TEST(MedABIPass, PairAlignedWideStackStoreKeepsItsLanes) {
         EXPECT_TRUE(Def->Inputs[0].isConst());
         EXPECT_EQ(Def->Inputs[0].ConstVal, Wide.ConstVal);
         ASSERT_TRUE(Def->Inputs[1].isConst());
-        EXPECT_EQ(Def->Inputs[1].ConstVal, 4u * Lane);
+        EXPECT_EQ(Def->Inputs[1].ConstVal,
+                  4u * (archLittleEndian(A) ? Lane : 1u - Lane));
       }
       if (!Loop)
         EXPECT_EQ(Call->Args[6].Kind, MedVar::Unspecified);
     }
 }
 
-// Stores in the call's block that cover every outgoing slot decide what
-// reaches the call, so the loop around it leaves the proof complete. One whole
-// store wider than a slot is named for the caller's block scan to split.
-TEST(MedABIPass, CoveredCallSetupNeedsNoPredecessor) {
-  for (bool Wide : {false, true}) {
-    SCOPED_TRACE(Wide);
-    constexpr Arch A = Arch::ARM;
-    const TargetRegInfo &TRI = getTargetRegInfo(A);
+TEST(MedABIPass, PairAlignedWideStackLanesIgnoreOlderPackedStores) {
+  for (Arch A : {Arch::ARM, Arch::MIPS32, Arch::MIPS32EL})
+    for (bool Complete : {false, true})
+      for (bool LaterScalar : {false, true}) {
+        SCOPED_TRACE(static_cast<unsigned>(A));
+        SCOPED_TRACE(Complete);
+        SCOPED_TRACE(LaterScalar);
+        const auto &TRI = getTargetRegInfo(A);
+        const auto Layout = TRI.integerArgumentLayout(BinaryFormat::ELF);
+        const bool MIPS = isMIPS(A);
+        const int Total = MIPS ? 10 : 7;
+        MedFunc F;
+        F.Entry = 0x1000;
+        F.Blocks.resize(1);
+        auto &B = F.Blocks[0];
+        B.Id = 0;
+        B.StartAddr = F.Entry;
+        const MedVar SP = reg(200, 1, 4, TRI.StackPointer, A);
+        B.Ops.push_back(unary(NdOp::COPY, SP, SP));
+        // Missing required slots must stop at this unknown write. Complete
+        // setup must instead end the proof before reaching it.
+        B.Ops.push_back(binary(NdOp::STORE, MedVar(), temp(201, 1, 4, A),
+                               MedVar::makeConst(0xcc, 1)));
+        int NextId = 202;
+        const auto Store = [&](int64_t Offset, uint64_t Value, uint16_t Bytes) {
+          const MedVar Address = temp(NextId++, 1, 4, A);
+          B.Ops.push_back(
+              binary(NdOp::INT_ADD, Address, SP, MedVar::makeConst(Offset, 4)));
+          B.Ops.push_back(binary(NdOp::STORE, MedVar(), Address,
+                                 MedVar::makeConst(Value, Bytes)));
+        };
+        Store(Layout.CallStackBase, 0xaa, 1);
+        Store(Layout.CallStackBase + 1, 0xbb, 1);
+        constexpr uint64_t FirstWide = 0x1122334455667788ull;
+        constexpr uint64_t LastWide = 0x99aabbccddeeff00ull;
+        Store(Layout.CallStackBase, FirstWide, 8);
+        if (MIPS)
+          Store(Layout.CallStackBase + 16, LastWide, 8);
+        if (LaterScalar)
+          Store(Layout.CallStackBase + (MIPS ? 16 : 0), 0x55, 4);
+        if (Complete) {
+          Store(Layout.CallStackBase + 8, 0x77, 4);
+          if (MIPS)
+            Store(Layout.CallStackBase + 12, 0x88, 4);
+        }
+        for (unsigned I = 0; I < 4; ++I)
+          B.Ops.push_back(unary(NdOp::COPY,
+                                reg(100 + I, 1, 4, Layout.Registers[I], A),
+                                MedVar::makeConst(47 + I, 4)));
+        B.Ops.push_back(unary(NdOp::CALL, MedVar(),
+                              MedVar::makeConst(0x2000, TRI.PointerSize)));
+        BinaryImage Image;
+        Image.Arch = A;
+        Image.Bits = Bitness::Bits32;
+        Image.Format = BinaryFormat::ELF;
+        std::map<va_t, int> RegArity{{0x2000, 4}}, TotalArity{{0x2000, Total}};
+        recoverCallAbi(F, A, {{0x2000, "takes_stack_words"}}, &Image, &RegArity,
+                       &TotalArity);
+        ASSERT_EQ(F.CallInfos.size(), 1u);
+        const auto &Args = F.CallInfos[0].Args;
+        ASSERT_EQ(Args.size(), size_t(Total));
+        for (unsigned Pair = 0; Pair < (MIPS ? 2u : 1u); ++Pair)
+          for (unsigned Lane = 0; Lane < 2; ++Lane) {
+            SCOPED_TRACE(Pair);
+            SCOPED_TRACE(Lane);
+            const auto &Arg = Args[4 + Pair * 4 + Lane];
+            if (LaterScalar && Pair == (MIPS ? 1u : 0u) && Lane == 0) {
+              EXPECT_TRUE(Arg.isConst());
+              if (Arg.isConst())
+                EXPECT_EQ(Arg.ConstVal, 0x55u);
+              continue;
+            }
+            const auto Def = llvm::find_if(B.Ops, [&](const MedOp &Op) {
+              return Arg.Kind == MedVar::Temp &&
+                     Op.Output.Kind == MedVar::Temp && Op.Output.Id == Arg.Id;
+            });
+            ASSERT_NE(Def, B.Ops.end());
+            EXPECT_EQ(Def->Opcode, NdOp::SUBBYTES);
+            if (Def->Opcode != NdOp::SUBBYTES)
+              continue;
+            ASSERT_EQ(Def->NumInputs, 2u);
+            ASSERT_TRUE(Def->Inputs[0].isConst());
+            EXPECT_EQ(Def->Inputs[0].ConstVal, Pair ? LastWide : FirstWide);
+            ASSERT_TRUE(Def->Inputs[1].isConst());
+            EXPECT_EQ(Def->Inputs[1].ConstVal,
+                      4u * (archLittleEndian(A) ? Lane : 1u - Lane));
+          }
+        if (!Complete) {
+          EXPECT_EQ(Args[6].Kind, MedVar::Unspecified);
+          if (MIPS)
+            EXPECT_EQ(Args[7].Kind, MedVar::Unspecified);
+        }
+      }
+}
+
+TEST(MedABIPass, PairAlignedPredecessorWideStoreRequiresLaneEvidence) {
+  for (Arch A : {Arch::ARM, Arch::MIPS32, Arch::MIPS32EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(A));
+    const auto &TRI = getTargetRegInfo(A);
     const auto Layout = TRI.integerArgumentLayout(BinaryFormat::ELF);
     MedFunc F;
     F.Entry = 0x1000;
     F.Blocks.resize(2);
-    F.Blocks[0].Id = 0;
-    F.Blocks[0].StartAddr = 0x1000;
+    for (unsigned I = 0; I != 2; ++I) {
+      F.Blocks[I].Id = I;
+      F.Blocks[I].StartAddr = F.Entry + 16 * I;
+    }
     F.Blocks[0].Succs = {1};
-    F.Blocks[1].Id = 1;
-    F.Blocks[1].StartAddr = 0x1010;
-    F.Blocks[1].Preds = {0, 1};
-    F.Blocks[1].Succs = {1};
-    const MedVar Low = temp(201, 1, 4, A), High = temp(202, 1, 4, A);
-    auto &B = F.Blocks[1];
-    if (Wide) {
-      B.Ops.push_back(binary(NdOp::STORE, MedVar(), Low,
-                             MedVar::makeConst(0x1122334455667788ull, 8)));
-    } else {
-      B.Ops.push_back(
-          binary(NdOp::STORE, MedVar(), Low, MedVar::makeConst(7, 4)));
-      B.Ops.push_back(
-          binary(NdOp::STORE, MedVar(), High, MedVar::makeConst(8, 4)));
+    F.Blocks[1].Preds = {0};
+    const MedVar SP = reg(200, 1, 4, TRI.StackPointer, A);
+    auto &Setup = F.Blocks[0];
+    Setup.Ops.push_back(unary(NdOp::COPY, SP, SP));
+    for (unsigned I = 0; I != 2; ++I) {
+      const MedVar Address = temp(201 + I, 1, 4, A);
+      Setup.Ops.push_back(
+          binary(NdOp::INT_ADD, Address, SP,
+                 MedVar::makeConst(Layout.CallStackBase + I * 8, 4)));
+      Setup.Ops.push_back(
+          binary(NdOp::STORE, MedVar(), Address,
+                 I ? MedVar::makeConst(7, 4)
+                   : MedVar::makeConst(0x1122334455667788ull, 8)));
     }
-    B.Ops.push_back(unary(NdOp::CALL, MedVar(),
-                          MedVar::makeConst(0x2000, TRI.PointerSize)));
-    MedCallInfo CI;
-    CI.TargetAddr = 0x2000;
-    std::vector<MedVar> Found(6);
-    std::vector<bool> FoundMask(6), FromStackScan(6);
-    const auto Offset = [&](const MedVar &V) -> std::optional<int64_t> {
-      if (V.Kind == MedVar::Temp && V.Id == Low.Id)
-        return Layout.CallStackBase;
-      if (V.Kind == MedVar::Temp && V.Id == High.Id)
-        return Layout.CallStackBase + Layout.SlotBytes;
-      return std::nullopt;
-    };
-    const AbiCallContext Context{F,
-                                 B,
-                                 static_cast<int>(B.Ops.size() - 1),
-                                 CI,
-                                 TRI,
-                                 A,
-                                 Layout,
-                                 Found,
-                                 FoundMask,
-                                 FromStackScan,
-                                 /*MaxArgs=*/2,
-                                 Offset,
-                                 nullptr};
-    bool Incomplete = true;
-    std::set<int64_t> WideSlots{-1};
-    const auto Stores = callSetupStackStores(Context, nullptr, nullptr,
-                                             &Incomplete, &WideSlots);
-    EXPECT_FALSE(Incomplete);
-    const int64_t Base = Layout.CallStackBase;
-    if (Wide) {
-      EXPECT_TRUE(Stores.empty());
-      EXPECT_EQ(WideSlots, (std::set<int64_t>{Base, Base + Layout.SlotBytes}));
-    } else {
-      EXPECT_EQ(Stores.size(), 2u);
-      EXPECT_TRUE(WideSlots.empty());
-    }
+    auto &CallBlock = F.Blocks[1];
+    for (unsigned I = 0; I != 4; ++I)
+      CallBlock.Ops.push_back(unary(NdOp::COPY,
+                                    reg(100 + I, 1, 4, Layout.Registers[I], A),
+                                    MedVar::makeConst(47 + I, 4)));
+    CallBlock.Ops.push_back(unary(NdOp::CALL, MedVar(),
+                                  MedVar::makeConst(0x2000, TRI.PointerSize)));
+    BinaryImage Image;
+    Image.Arch = A;
+    Image.Bits = Bitness::Bits32;
+    Image.Format = BinaryFormat::ELF;
+    std::map<va_t, int> RegArity{{0x2000, 4}}, TotalArity{{0x2000, 7}};
+    recoverCallAbi(F, A, {{0x2000, "takes_stack_words"}}, &Image, &RegArity,
+                   &TotalArity);
+    ASSERT_EQ(F.CallInfos.size(), 1u);
+    const auto &Args = F.CallInfos[0].Args;
+    ASSERT_EQ(Args.size(), 7u);
+    EXPECT_EQ(Args[4].Kind, MedVar::Unspecified);
+    EXPECT_EQ(Args[5].Kind, MedVar::Unspecified);
+    ASSERT_TRUE(Args[6].isConst());
+    EXPECT_EQ(Args[6].ConstVal, 7u);
   }
+}
+
+// Stores in the call's block that cover every outgoing slot decide what
+// reaches the call, so the loop around it leaves the proof complete. One whole
+// store wider than a slot is named for the caller's block scan to split.
+TEST(MedABIPass, CoveredCallSetupNeedsNoPredecessor) {
+  for (bool Wide : {false, true})
+    for (bool IncomingSave : {false, true}) {
+      SCOPED_TRACE(Wide);
+      SCOPED_TRACE(IncomingSave);
+      constexpr Arch A = Arch::ARM;
+      const TargetRegInfo &TRI = getTargetRegInfo(A);
+      const auto Layout = TRI.integerArgumentLayout(BinaryFormat::ELF);
+      MedFunc F;
+      F.Entry = 0x1000;
+      F.Blocks.resize(2);
+      F.Blocks[0].Id = 0;
+      F.Blocks[0].StartAddr = 0x1000;
+      F.Blocks[0].Succs = {1};
+      F.Blocks[1].Id = 1;
+      F.Blocks[1].StartAddr = 0x1010;
+      F.Blocks[1].Preds = {0, 1};
+      F.Blocks[1].Succs = {1};
+      const MedVar Low = temp(201, 1, 4, A), High = temp(202, 1, 4, A);
+      // A single-word or combined r4/r5 incoming save is no outgoing argument.
+      const MedVar Saved = reg(203, 0, Wide ? 8 : 4, armreg::R4, A);
+      ASSERT_TRUE(TRI.isCalleeSaveReg(Saved.RegOff));
+      auto &B = F.Blocks[1];
+      if (Wide) {
+        B.Ops.push_back(
+            binary(NdOp::STORE, MedVar(), Low,
+                   IncomingSave ? Saved
+                                : MedVar::makeConst(0x1122334455667788ull, 8)));
+      } else {
+        B.Ops.push_back(binary(NdOp::STORE, MedVar(), Low,
+                               IncomingSave ? Saved : MedVar::makeConst(7, 4)));
+        B.Ops.push_back(binary(NdOp::STORE, MedVar(), High,
+                               IncomingSave ? Saved : MedVar::makeConst(8, 4)));
+      }
+      B.Ops.push_back(unary(NdOp::CALL, MedVar(),
+                            MedVar::makeConst(0x2000, TRI.PointerSize)));
+      MedCallInfo CI;
+      CI.TargetAddr = 0x2000;
+      std::vector<MedVar> Found(6);
+      std::vector<bool> FoundMask(6), FromStackScan(6);
+      const auto Offset = [&](const MedVar &V) -> std::optional<int64_t> {
+        if (V.Kind == MedVar::Temp && V.Id == Low.Id)
+          return Layout.CallStackBase;
+        if (V.Kind == MedVar::Temp && V.Id == High.Id)
+          return Layout.CallStackBase + Layout.SlotBytes;
+        return std::nullopt;
+      };
+      const AbiCallContext Context{F,
+                                   B,
+                                   static_cast<int>(B.Ops.size() - 1),
+                                   CI,
+                                   TRI,
+                                   A,
+                                   Layout,
+                                   Found,
+                                   FoundMask,
+                                   FromStackScan,
+                                   /*MaxArgs=*/2,
+                                   Offset,
+                                   nullptr};
+      bool Incomplete = true;
+      std::map<int64_t, CallSetupStackLane> WideSlots{{-1, {MedVar{}, 0}}};
+      const auto Stores = callSetupStackStores(Context, nullptr, nullptr,
+                                               &Incomplete, &WideSlots);
+      if (IncomingSave) {
+        EXPECT_TRUE(Incomplete);
+        EXPECT_TRUE(Stores.empty());
+        EXPECT_TRUE(WideSlots.empty());
+        continue;
+      }
+      EXPECT_FALSE(Incomplete);
+      const int64_t Base = Layout.CallStackBase;
+      if (Wide) {
+        EXPECT_TRUE(Stores.empty());
+        ASSERT_EQ(WideSlots.size(), 2u);
+        for (unsigned Lane = 0; Lane != 2; ++Lane) {
+          const auto Slot = WideSlots.find(Base + Lane * Layout.SlotBytes);
+          ASSERT_NE(Slot, WideSlots.end());
+          ASSERT_TRUE(Slot->second.StoredValue.isConst());
+          EXPECT_EQ(Slot->second.StoredValue.ConstVal, 0x1122334455667788ull);
+          EXPECT_EQ(Slot->second.MemoryOffset, Lane * Layout.SlotBytes);
+        }
+      } else {
+        EXPECT_EQ(Stores.size(), 2u);
+        EXPECT_TRUE(WideSlots.empty());
+      }
+    }
 }
 
 TEST(MedABIPass, ExactImportSlotsRecoverOnlyProvenIncomingRegisters) {

@@ -11,6 +11,7 @@ import io
 from itertools import product
 from pathlib import Path
 import random
+import re
 import subprocess
 import sys
 
@@ -26,6 +27,7 @@ FUNCTIONS = ('andi', 'ori', 'xori', 'lui', 'ext', 'ins', 'ins_zero',
              'movtn', 'movtn_zero', 'lwl', 'lwr', 'swl', 'swr', 'load_pair',
              'load_pair_reverse', 'store_pair', 'store_pair_reverse', 'gp_add', 'gp_lb', 'gp_lbu',
              'gp_lh', 'gp_lhu', 'gp_lw', 'gp_sb', 'gp_sh', 'gp_sw')
+FUNCTIONS += ("ehb",) + tuple(f"sync{i}" for i in range(32))
 INPUTS = [(0, 0), (1, 0xffffffff), (0xffffffff, 1), (0x80000000, 0x7fffffff),
           (0x89abcdef, 0x12345678), (0x80000000, 0), (0x7fffffff, 0x80000000)]
 rng = random.Random(0x16e2)
@@ -41,6 +43,8 @@ def memory_function(name):
 def expected(name, inputs, little):
     a, b = inputs
     memory = bytearray(INITIAL)
+    if name == "ehb" or name.startswith("sync"):
+        return 7, bytes(memory)
     if name.startswith('gp_'):
         if name == 'gp_add': value = a - 1
         else:
@@ -142,8 +146,14 @@ def run(args, artifacts):
                     raise RuntimeError('source lost its explicit ISA mode')
                 command([args.clang,f'--target={profile}-linux-gnu','-march=mips32r2','-mabi=32',
                          '-mmicromips','-mno-abicalls','-fno-pic','-ffreestanding','-G0','-fno-addrsig',
-                         '-fno-strict-aliasing','-fno-inline','-nostdinc','-isystem',resource+'/include',
+                         '-fno-strict-aliasing',*([] if name == 'ehb' or name.startswith('sync') else ['-fno-inline']),'-nostdinc','-isystem',resource+'/include',
                          '-I',headers,opt,'-S',source,'-o',assembly],log)
+                if name == "ehb" or name.startswith("sync"):
+                    # Clang prints the zero stype as the canonical bare SYNC.
+                    mnemonic = (r"ehb" if name == "ehb" else r"sync(?:\s+0)?"
+                                if name == "sync0" else r"sync\s+" + name[4:])
+                    if not re.search(r"(?m)^\s*" + mnemonic + r"\s*$", assembly.read_text()):
+                        raise RuntimeError("native barrier disappeared or changed stype in generated assembly")
                 command([*assemble,assembly,'-o',obj],log)
                 command([*link,'-Ttext','0x200000','-e',function,obj,'-o',rebuilt],log)
                 observations=[]

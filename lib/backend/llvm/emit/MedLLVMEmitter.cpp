@@ -27,6 +27,7 @@
 #include "neverd/Common.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/MIPS/MIPSBarrierSource.h"
 #include "neverd/backend/MIPS/MIPSDSPSource.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
@@ -1441,6 +1442,44 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   }
   for (auto &[Addr, Name] : Imports)
     FuncNames[Addr] = llvm_name::fromObjectSymbol(Name, Fmt).str();
+
+  MIPSBarrierReservedNames.clear();
+  if (isMIPS(TheArch) && llvm::any_of(Funcs, [](const MedFunc &Function) {
+        return llvm::any_of(Function.Blocks, [](const MedBlock &Block) {
+          return llvm::any_of(Block.Ops, [](const MedOp &Op) {
+            return Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+                   Op.Inputs[0].isConst() &&
+                   mips::isBarrier(
+                       static_cast<Intrinsic>(Op.Inputs[0].ConstVal));
+          });
+        });
+      })) {
+    // Names are not helper identities. Imports and image code pointers can
+    // acquire declarations after an earlier body emitted a barrier helper.
+    const auto Reserve = [&](llvm::StringRef Name) {
+      if (Name.starts_with(mips::BarrierHelperPrefix))
+        MIPSBarrierReservedNames.insert(Name.str());
+    };
+    for (const auto &[Address, Name] : FuncNames)
+      Reserve(Name);
+    for (const auto &Function : Funcs)
+      for (const auto &Call : Function.CallInfos)
+        Reserve(Call.TargetName);
+    if (Img) {
+      for (const auto &Symbol : Img->Symbols)
+        Reserve(Symbol.Name);
+      for (const auto &Export : Img->Exports)
+        Reserve(Export.Name);
+      for (const auto &Import : Img->Imports)
+        Reserve(Import.Name);
+      for (const auto &Relocation : Img->Relocations)
+        Reserve(Relocation.SymbolName);
+    }
+    for (const auto &[Address, Name] : ExternalFunctionPointerSlots)
+      Reserve(Name);
+    for (const auto &[Address, Slot] : EffectiveImportStorageSlots)
+      Reserve(Slot.Name);
+  }
 
   // Suppression preflight intentionally runs against the complete key domain
   // before exact emitted spellings exist. Once those spellings are installed,
