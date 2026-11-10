@@ -222,14 +222,16 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
     } else if (Info.Op == Operation::SHighMul) {
       Registers[Instruction.Dst] =
           signedHighMultiply64(Registers[Instruction.Dst], Source);
-    } else if (Info.Op == Operation::UDiv || Info.Op == Operation::URem ||
-               Info.Op == Operation::SDiv || Info.Op == Operation::SRem) {
+    } else if (Info.Op == Operation::UDiv || Info.Op == Operation::URem) {
+      // Successful unsigned operations were handled by the scalar owner.
+      Fail(FaultCode::DivideByZero, "SBF division by zero");
+    } else if (Info.Op == Operation::SDiv || Info.Op == Operation::SRem) {
       if (Info.Width == kWordBitWidth) {
         const uint32_t Left = static_cast<uint32_t>(Registers[Instruction.Dst]);
         const uint32_t Right = static_cast<uint32_t>(Source);
         if (Right == 0) {
           Fail(FaultCode::DivideByZero, "SBF division by zero");
-        } else if (Info.Op == Operation::SDiv || Info.Op == Operation::SRem) {
+        } else {
           const int32_t SignedLeft = signed32(Left);
           const int32_t SignedRight = signed32(Right);
           if (SignedLeft == std::numeric_limits<int32_t>::min() &&
@@ -241,16 +243,13 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
                                       : SignedLeft % SignedRight;
             Registers[Instruction.Dst] = static_cast<uint32_t>(Value);
           }
-        } else {
-          Registers[Instruction.Dst] =
-              Info.Op == Operation::UDiv ? Left / Right : Left % Right;
         }
       } else {
         const uint64_t Left = Registers[Instruction.Dst];
         const uint64_t Right = Source;
         if (Right == 0) {
           Fail(FaultCode::DivideByZero, "SBF division by zero");
-        } else if (Info.Op == Operation::SDiv || Info.Op == Operation::SRem) {
+        } else {
           const int64_t SignedLeft = signed64(Left);
           const int64_t SignedRight = signed64(Right);
           if (SignedLeft == std::numeric_limits<int64_t>::min() &&
@@ -262,9 +261,6 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
                                       : SignedLeft % SignedRight;
             Registers[Instruction.Dst] = static_cast<uint64_t>(Value);
           }
-        } else {
-          Registers[Instruction.Dst] =
-              Info.Op == Operation::UDiv ? Left / Right : Left % Right;
         }
       }
     } else if (Info.Op == Operation::EndianLE ||

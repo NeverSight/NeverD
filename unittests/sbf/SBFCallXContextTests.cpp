@@ -2927,6 +2927,92 @@ TEST(SBFCallXContexts, GenericFrameWritesPreserveOnlyProvenOlderFrames) {
   }
 }
 
+TEST(SBFStoredRegisterMemory, UnsignedDivisionPreservesExactValuesAndFaults) {
+  auto Image = analyze(test::makeImage({encode(Opcode::EXIT)}, {}));
+  ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
+  unsigned RawExecutions = 0;
+  for (bool Remainder : {false, true})
+    for (bool Immediate : {false, true})
+      for (const auto Range :
+           {UnsignedValueRange{0, 65535}, UnsignedValueRange{100, 255},
+            UnsignedValueRange{UINT64_MAX - 255, UINT64_MAX}})
+        for (uint64_t Divisor :
+             {uint64_t{1}, uint64_t{2}, uint64_t{100}, UINT64_MAX}) {
+          const auto Op =
+              Remainder ? (Immediate ? Opcode::MOD64_IMM : Opcode::MOD64_REG)
+                        : (Immediate ? Opcode::DIV64_IMM : Opcode::DIV64_REG);
+          const auto &Info = *getOpcodeInfo(Op);
+          MedInstruction I;
+          I.Op = Info.Op;
+          I.Form = Info.Form;
+          I.Width = Info.Width;
+          I.Src = 1;
+          I.Immediate = Divisor;
+          I.Semantics = semanticTraits(Info, Version::V0);
+          RegisterState State{};
+          State[0] = unsignedRangeValue(Range);
+          State[1] = {RegisterValue::Kind::Constant, Divisor, 0};
+          applyRegisterTransfer(I, State, Image->ExecutableImage);
+          // Exact arithmetic must not silently add an interval transfer.
+          EXPECT_EQ(State[0].ValueKind, RegisterValue::Kind::Unknown);
+          for (uint64_t Input :
+               {Range.Lower, Range.Lower + (Range.Upper - Range.Lower) / 2,
+                Range.Upper}) {
+            const uint64_t Expected =
+                Remainder ? Input % Divisor : Input / Divisor;
+            State[0] = {RegisterValue::Kind::Constant, Input, 0};
+            applyRegisterTransfer(I, State, Image->ExecutableImage);
+            EXPECT_EQ(State[0], (RegisterValue{RegisterValue::Kind::Constant,
+                                               Expected, 0}));
+            const auto Left = test::loadImm64(0, Input);
+            const auto Right = test::loadImm64(1, Divisor);
+            std::vector<test::EncodedInstruction> Text(Left.begin(),
+                                                       Left.end());
+            Text.insert(Text.end(), Right.begin(), Right.end());
+            Text.push_back(encode(Op, 0, 1, 0, static_cast<int32_t>(Divisor)));
+            Text.push_back(encode(Opcode::EXIT));
+            auto Program = analyze(test::makeImage(Text, {}));
+            ASSERT_TRUE(static_cast<bool>(Program))
+                << llvm::toString(Program.takeError());
+            auto Raw = executeRaw(*Program);
+            ASSERT_TRUE(static_cast<bool>(Raw))
+                << llvm::toString(Raw.takeError());
+            ASSERT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+            EXPECT_EQ(Raw->ReturnValue, Expected);
+            if (auto Bounds = unsignedValueRange(State[0])) {
+              EXPECT_LE(Bounds->Lower, Raw->ReturnValue);
+              EXPECT_GE(Bounds->Upper, Raw->ReturnValue);
+            }
+            ++RawExecutions;
+          }
+          State[0] = unsignedRangeValue({UINT64_MAX - 1, 1});
+          applyRegisterTransfer(I, State, Image->ExecutableImage);
+          EXPECT_EQ(State[0].ValueKind, RegisterValue::Kind::Unknown);
+          State[0] = {RegisterValue::Kind::StackAddress, kStackStart, 0};
+          applyRegisterTransfer(I, State, Image->ExecutableImage);
+          EXPECT_EQ(State[0].ValueKind, RegisterValue::Kind::Unknown);
+          State[0] = unsignedRangeValue(Range);
+          I.Immediate = 0;
+          State[1] = {RegisterValue::Kind::Constant, 0, 0};
+          applyRegisterTransfer(I, State, Image->ExecutableImage);
+          EXPECT_EQ(State[0].ValueKind, RegisterValue::Kind::Unknown);
+        }
+  for (const auto Op : {Opcode::DIV64_REG, Opcode::MOD64_REG}) {
+    auto Zero = analyze(test::makeImage(
+        {encode(Opcode::MOV64_IMM, 0, 0, 0, 1), encode(Opcode::MOV64_IMM, 1),
+         encode(Op, 0, 1), encode(Opcode::EXIT)},
+        {}));
+    ASSERT_TRUE(static_cast<bool>(Zero)) << llvm::toString(Zero.takeError());
+    auto Raw = executeRaw(*Zero);
+    ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
+    EXPECT_EQ(Raw->Status, ExecutionStatus::Faulted);
+    EXPECT_EQ(Raw->Fault, FaultCode::DivideByZero);
+    ++RawExecutions;
+  }
+  EXPECT_EQ(RawExecutions, 146u);
+  RecordProperty("raw_executions", RawExecutions);
+}
+
 TEST(SBFStoredRegisterMemory, FiniteJoinsAreCompleteAndUnknownIsAbsorbing) {
   const RegisterValue One{RegisterValue::Kind::Constant, 1, 0};
   ProvenValueSet Values(One);

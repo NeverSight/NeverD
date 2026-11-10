@@ -993,8 +993,12 @@ mask clears a low-bit suffix of a nonwrapping unsigned interval. Other masks and
 wrapping intervals use the sound zero-to-mask enclosure, which also bounds an
 unknown input without retaining pointer identity. A known unsigned interval
 survives a constant 64-bit left shift when every input avoids overflow; the
-scalar semantic owner supplies the effective shift count. These numeric bounds
-can delimit a table-read footprint without proving any table bytes or target.
+scalar semantic owner supplies the effective shift count. The same owner
+evaluates unsigned division and remainder when both operands are exact
+constants, including operand truncation and zero-divisor handling. The
+interpreter still faults on a zero divisor; analysis supplies no value for that
+case. Nonconstant division/remainder remain unknown. These numeric bounds can
+delimit a table-read footprint without proving any table bytes or target.
 Memory-access offsets use the shared modular address transfer, both for a
 local store and when collecting, binding or applying a callee's write summary.
 A heap interval shifted across address zero can still exclude a caller frame.
