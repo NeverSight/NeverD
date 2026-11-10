@@ -8072,6 +8072,12 @@ providers' declaration behavior. `LocalTypesDebugContext.NoReturnQueryMatchesVal
 compares the cheap declaration query with the full resolver across ILP32, LLP64
 and LP64, including recursive pointer records, variadic declarations, missing
 names and invalid no-return parameter/return types before and after cache fill.
+`LocalTypesDebugContext.NoReturnValidationRetainsTypeBoundaries` checks the
+same converter without C spelling, including callback and recursive record
+parameters, enums, typedefs, unavailable values and their valid pointers.
+Repeated predicates and opposite query orders retain the full resolver's
+declarations, portable parameter spellings and ABI. No-return queries must
+not construct library-wide naming tables just to validate these types.
 `HighCReturnJoin.BareReturnBesideATailCallReturnsTheParameter` decompiles
 `if (b) return g(b); return a;` with a direct and an indirect tail call for
 x86-64, i386, ARM and AArch64 (`test_return_join.c`) and requires

@@ -331,6 +331,80 @@ TEST(LocalTypesDebugContext, NoReturnQueryMatchesValidatedPrototype) {
   }
 }
 
+TEST(LocalTypesDebugContext, NoReturnValidationRetainsTypeBoundaries) {
+  using namespace neverd;
+  for (auto Model : {types::DataModel::ILP32, types::DataModel::LLP64,
+                     types::DataModel::LP64}) {
+    auto Library = std::make_shared<types::TypeLibrary>(Model);
+    ASSERT_TRUE(types::parseCTypes(R"(
+      typedef long Count;
+      typedef struct Node { struct Node *Next; Count Value; } Node;
+      enum Mode { StopNow, StopLater };
+      typedef void (*Callback)(Node *Input, Count Value);
+    )",
+                                   *Library)
+                    .ok());
+    auto Callback = std::make_shared<types::FunctionDef>();
+    Callback->Return = types::makeBuiltin(types::Builtin::Void);
+    const auto Missing = types::makeNamed("Missing", types::TypeKind::Typedef);
+    // The display type stores object sizes in uint16_t. A value beyond that
+    // boundary is unavailable, but a pointer to it still has a valid ABI.
+    const auto Oversized =
+        types::makeArray(types::makeBuiltin(types::Builtin::UChar), 0x10000);
+    struct Case {
+      const char *Name;
+      types::TypeExprRef Type;
+      bool Valid;
+    };
+    const std::vector<Case> Cases = {
+        {"Count", types::makeNamed("Count", types::TypeKind::Typedef), true},
+        {"Node", types::makeNamed("Node", types::TypeKind::Typedef), true},
+        {"Mode", types::makeNamed("Mode", types::TypeKind::Enum), true},
+        {"Callback", types::makeNamed("Callback", types::TypeKind::Typedef),
+         true},
+        {"Missing", Missing, false},
+        {"Oversized", Oversized, false},
+        {"OpaquePointer",
+         types::makePointer(Missing, types::pointerBytes(Model)), true},
+        {"LargePointer",
+         types::makePointer(Oversized, types::pointerBytes(Model)), true},
+        {"Function", types::makeFunction(Callback), false},
+        {"Void", types::makeBuiltin(types::Builtin::Void), false},
+        {"Null", nullptr, false}};
+    for (const auto &Item : Cases) {
+      auto Function = std::make_shared<types::FunctionDef>();
+      Function->NoReturn = true;
+      Function->Return = types::makeBuiltin(types::Builtin::Void);
+      Function->Params.push_back({"Input", Item.Type});
+      Library->definePrototype(std::string("Stop") + Item.Name,
+                               std::move(Function));
+    }
+    NamesOnlyDebugContext Names;
+    sdk::LocalTypesDebugContext Queried(Names, Library);
+    sdk::LocalTypesDebugContext Resolved(Names, Library);
+    for (const auto &Item : Cases) {
+      const std::string Name = std::string("Stop") + Item.Name;
+      SCOPED_TRACE(Name);
+      EXPECT_EQ(Queried.prototypeDoesNotReturn(Name), Item.Valid);
+      EXPECT_EQ(Queried.prototypeDoesNotReturn(Name), Item.Valid);
+      const auto Expected = Resolved.resolvePrototype(Name);
+      const auto Actual = Queried.resolvePrototype(Name);
+      ASSERT_EQ(Expected.has_value(), Item.Valid);
+      ASSERT_EQ(Actual.has_value(), Item.Valid);
+      EXPECT_EQ(Queried.prototypeDoesNotReturn(Name), Item.Valid);
+      EXPECT_EQ(Resolved.prototypeDoesNotReturn(Name), Item.Valid);
+      if (Expected && Actual) {
+        EXPECT_EQ(Actual->PrototypeDeclaration, Expected->PrototypeDeclaration);
+        EXPECT_EQ(Actual->PortablePrototypeDeclaration,
+                  Expected->PortablePrototypeDeclaration);
+        EXPECT_EQ(Actual->PortableParameterTypes,
+                  Expected->PortableParameterTypes);
+        EXPECT_TRUE(sdk::passesAlike(*Actual, *Expected));
+      }
+    }
+  }
+}
+
 TEST(LocalTypesDebugContext, SourceCallDeclarationsRetainCompleteValueLayouts) {
   using namespace neverd;
   types::TypeLibrary Library(types::DataModel::LP64);

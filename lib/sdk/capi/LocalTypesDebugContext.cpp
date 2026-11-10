@@ -1243,7 +1243,12 @@ bool LocalTypesDebugContext::prototypeDoesNotReturn(
     return false;
   // Keep the ordinary resolver's validation for positive declarations: an
   // unrepresentable return or parameter type must not terminate a CFG path.
-  return DebugContext::prototypeDoesNotReturn(Name);
+  // Scalar spellings only name the converted types. The predicate needs the
+  // same conversion, without constructing the whole library's C name tables.
+  std::lock_guard<std::mutex> Guard(Mutex);
+  if (auto Known = Signatures.find(Name); Known != Signatures.end())
+    return Known->second && Known->second->NoReturn;
+  return signatureOf(*Types, *Function, Name).has_value();
 }
 
 std::optional<FunctionSym> LocalTypesDebugContext::entrySignature() const {
