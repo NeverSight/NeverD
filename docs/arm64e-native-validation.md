@@ -570,7 +570,8 @@ default r6 selection stays unchanged.
 Add `--publish` to exercise `bindSourcePatch` and `installSourcePatch` on the
 same reconstructed fixed-C entry matrix. The original dylib contains 26
 public trapping entries and the independently compiled native caller/thrower.
-Native validation first requires that original image to trap, then installs
+Native validation first requires that original image to enter its caller and
+then trap before the completion marker; a startup trap is insufficient. It installs
 all 26 reconstructed entries, preserving the original caller and its
 address-diverse signed entry pointers. The installed image must pass every
 value, catch, cleanup, post-exception and corrupted-pointer check. This is a

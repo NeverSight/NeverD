@@ -63,7 +63,7 @@ class EntryQualificationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             entry.check_disassembly(CASES["assembly"].replace("blrab", "blr"), 1)
 
-    def test_complete_matrix_cleanup_and_no_codegen_or_cpta_claim(self):
+    def test_complete_matrix_cleanup_and_qualified_producer_scope(self):
         contract = entry.native.fixture_contract()
         for compile_only, fail, backend, publish in (
                 (False, False, False, False), (True, False, False, False),
@@ -114,7 +114,9 @@ class EntryQualificationTests(unittest.TestCase):
                     elif argv[0] == str(output / entry.POLICY["loader_binary"]):
                         if label.endswith(entry.POLICY["baseline_suffix"]):
                             code = entry.POLICY["baseline_returncodes"][0]
+                            stdout = entry.POLICY["caller_entry_marker"]
                         else:
+                            stdout = entry.POLICY["caller_entry_marker"] + entry.POLICY["caller_pass_marker"]
                             executed.append(label)
                             if fail:
                                 code = CASES["failure_code"]
@@ -172,6 +174,17 @@ class EntryQualificationTests(unittest.TestCase):
             entry.check_disassembly(CASES["installed_assembly"], 0, moved)
         with self.assertRaises(ValueError):
             entry.check_unwind(CASES["unwind_dwarf"], True, moved)
+
+    def test_startup_traps_and_early_returns_do_not_qualify(self):
+        started = entry.POLICY["caller_entry_marker"]
+        passed = entry.POLICY["caller_pass_marker"]
+        trap = entry.POLICY["baseline_returncodes"][0]
+        entry.check_execution(subprocess.CompletedProcess([], trap, started), original=True)
+        entry.check_execution(subprocess.CompletedProcess([], 0, started + passed))
+        for code, output, original in ((trap, "", True), (trap, started + passed, True),
+                                        (0, started, True), (0, "", False), (0, started, False)):
+            with self.subTest(code=code, output=output, original=original), self.assertRaises(ValueError):
+                entry.check_execution(subprocess.CompletedProcess([], code, output), original=original)
 
     def test_requested_unwind_mode_matches_image_sections(self):
         entry.check_sections(CASES["sections_dwarf"], True)

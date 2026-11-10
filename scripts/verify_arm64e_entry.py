@@ -119,6 +119,13 @@ def check_receipt(receipt):
     return functions
 
 
+def check_execution(result, *, original=False):
+    if (result.returncode not in (POLICY["baseline_returncodes"] if original else [0]) or
+            POLICY["caller_entry_marker"] not in result.stdout or
+            (POLICY["caller_pass_marker"] in result.stdout) == original):
+        raise ValueError(POLICY["errors"]["baseline" if original else "execution"])
+
+
 def run(output, binary, compiler, probe_report=None, *, compile_only=False, producer=None, publish=False):
     producer = producer or POLICY["producers"][0]
     backend = producer == POLICY["backend_producer"]
@@ -224,8 +231,7 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                                 control = native.command(products, output, label + POLICY["baseline_suffix"],
                                                          [str(loader), str(original)], POLICY["execute_timeout"])
                                 baseline = control.returncode
-                                if baseline not in POLICY["baseline_returncodes"]:
-                                    raise ValueError(POLICY["errors"]["baseline"])
+                                check_execution(control, original=True)
                             library = output / POLICY["installed_library_name"].format(**fields)
                             products.append(library)
                             receipt_path = output / (label + POLICY["receipt_suffix"])
@@ -260,7 +266,8 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                                "publication": receipt, "baseline_returncode": baseline}
                         report["cases"].append(row)
                         if not compile_only:
-                            command(label, [loader, library], POLICY["execute_timeout"])
+                            execution = command(label, [loader, library], POLICY["execute_timeout"])
+                            check_execution(execution)
                             row["executed"] = True
             if not compile_only and not all(row["executed"] for row in report["cases"]):
                 raise ValueError(POLICY["errors"]["matrix"])

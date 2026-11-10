@@ -111,6 +111,7 @@ A64_ENTRY_TEXT(kReceiptEntries, "entries")
 A64_ENTRY_TEXT(kReceiptFunctions, "functions")
 A64_ENTRY_TEXT(kNativeCaller, R"cpp(
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #ifdef NEVERD_ENTRY_DWARF
 #define ENTRY_DWARF() asm volatile(".cfi_escape 0x2e, 0")
@@ -209,8 +210,10 @@ template<class T> T rotated(T value) {
   value.v[count-1] = first;
   return value;
 }
-int main() {
+int main(int, char **) {
   ENTRY_DWARF();
+  fputs("neverd-entry-caller-entered\n", stdout);
+  fflush(stdout);
   if (ENTRY_INVOKE(entry_scalar)(0x8123456789abcdefULL) != 0x8123456789abcdefULL) return 1;
   __uint128_t w = (__uint128_t(0x9876543210fedcbaULL) << 64) |
                   0x123456789abcdef0ULL;
@@ -273,6 +276,8 @@ int main() {
   HVA16 after_hva_throw = ENTRY_INVOKE(entry_hva_throwing)(0,e);
   if (memcmp(&g, &after_large_throw, sizeof(g)) ||
       memcmp(&expected_e, &after_hva_throw, sizeof(e))) return 29;
+  fputs("neverd-entry-caller-passed\n", stdout);
+  fflush(stdout);
   return 0;
 }
 )cpp")

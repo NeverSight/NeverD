@@ -109,8 +109,9 @@
     "matrix": "The complete native entry matrix did not execute successfully",
     "unwind_records": "The exception frame {function} must use the requested indexed unwind encoding",
     "producer": "Image publication requires the NeverD backend producer",
-    "baseline": "The original entry must trap before the installed image can qualify",
-    "receipt": "Publication must replace every declared public entry with a unique generated address and retain every exception frame"
+    "baseline": "The original entry must trap after entering the independent caller and before completing it",
+    "receipt": "Publication must replace every declared public entry with a unique generated address and retain every exception frame",
+    "execution": "The independent caller must enter and finish the complete entry matrix"
   },
   "dwarf_entry_source": "entry-dwarf.ll",
   "unwind_command": [
@@ -218,5 +219,7 @@
   "optimization_scopes": {
     "compiler": "entry object and native caller",
     "neverd": "native caller; NeverD Codegen::compile uses CodeGenOptLevel::Less"
-  }
+  },
+  "caller_entry_marker": "neverd-entry-caller-entered\n",
+  "caller_pass_marker": "neverd-entry-caller-passed\n"
 }
