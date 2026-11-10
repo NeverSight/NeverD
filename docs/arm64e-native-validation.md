@@ -568,19 +568,21 @@ source build of the pinned NeverSight LLVM fork for this qualification; the
 default r6 selection stays unchanged.
 
 Add `--publish` to exercise `bindSourcePatch` and `installSourcePatch` on the
-same reconstructed fixed-C entry matrix. The admitted original dylib reserves TEXT/header capacity and contains 26
+same reconstructed fixed-C entry matrix. The admitted original dylib reserves
+TEXT/header capacity and contains 26
 public trapping entries and the independently compiled native caller/thrower.
 Native validation first requires that original image to enter its caller and
-then trap before the completion marker; a startup trap is insufficient. It installs
-all 26 reconstructed entries, preserving the original caller and its
+then trap before the completion marker; a startup trap is insufficient. It
+installs all 26 reconstructed entries, preserving the original caller and its
 address-diverse signed entry pointers. The installed image must pass every
 value, catch, cleanup, post-exception and corrupted-pointer check. This is a
 complete published fixture image, not automatic admission of arbitrary lifted
 modules.
 
 The same matrix first checks refusal of dylibs with `-Wl,-headerpad,0` and no
-such reservation. The initial default-linked local dylib also lacked capacity. Their DATA mapping blocks TEXT growth, and the current installer
-has no complete relocation contract to move those original addresses. The
+such reservation. The initial default-linked local dylib also lacked capacity.
+Their DATA mapping blocks TEXT growth, and the current installer has no
+complete relocation contract to move those original addresses. The
 publication lane explicitly links with `-Wl,-headerpad,0x8000`; it does not
 qualify arbitrary tightly packed dylibs. Closing that layout gap remains
 required for general whole-image publication.
@@ -594,8 +596,8 @@ segment without a section descriptor, so ordinary object disassembly only
 shows the original sections. The verifier extracts the loader-validated final
 text range, hashes it, and places those exact bytes in a temporary
 inspection-only object for the independent disassembler. That object is never
-executed; the signed published image remains the runtime input. Inspecting the original
-symbol table would otherwise check the old code. All 26 public identities and
+executed; the signed published image remains the runtime input. Inspecting the
+original symbol table would otherwise check the old code. All 26 public identities and
 all exceptional carrier frames must be present.
 
 The matrix remains eight combinations per route: caller O0/O2, IA/IB stored
@@ -614,3 +616,16 @@ do not set `whole_image_publication_qualified` or `native_apple_cpta_qualified`:
 prototype recovery, asynchronous interruption through prologues/epilogues,
 variadic/non-C entries and general lifted-image admission still require their
 own implementation and native evidence.
+
+The [native backend/publication run](https://github.com/gmh5225/test_mac_intel/actions/runs/42877451388)
+passed on both macos-26 and xcode-27. Each host executed eight direct backend
+cases and eight installed-image cases, with six independent compiler-original
+PAC/unwind controls. All eight original images per host reached the caller
+marker and trapped; all eight unreserved layouts were refused without output.
+The [evidence record](evidence/arm64e-backend-publication-2026-11-11.json)
+binds source `3f5513c8e936cc057326213abfe976748c98ee50`, the source LLVM fork
+`5676029e378c9e37adc16c8216a8e8453ffafcae`, the local Release host and both
+runner reports. This was source-bound replay of a locally built host, not a
+cold runner build. The fork checkout was clean and prebuilt mode was disabled
+only in that separate build. The runners still reported no CPA/CPA2 feature;
+native Apple CPTA-on remains unqualified.
