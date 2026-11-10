@@ -291,7 +291,7 @@ NameSpelling::NameSpelling(const TypeLibrary &Library, Language Lang,
     : Lang(Lang),
       Reserved(CppToo && Lang == Language::C ? Language::Cpp : Lang) {
   const std::vector<const LocalType *> All = Library.types();
-  llvm::StringSet<> Taken(All.size());
+  llvm::StringSet<> Taken;
   for (const LocalType *Type : All) {
     std::string Spelled =
         identifier(Type->Name, /*TypeName=*/true, Lang, Reserved);
