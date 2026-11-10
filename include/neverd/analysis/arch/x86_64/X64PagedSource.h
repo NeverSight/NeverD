@@ -37,6 +37,12 @@ enum class X64PagedExit : uint64_t {
 /// failure. An accepted external event is consumed even on secondary faults.
 inline constexpr uint64_t kX64PagedInstructionAttempted = 1;
 inline constexpr uint64_t kX64PagedEventAccepted = 2;
+inline constexpr uint64_t kX64PagedInstructionCompleted = 4;
+inline constexpr uint64_t kX64PagedInstructionResumed = 8;
+
+/// Independent persistent progress returned by the pending bridge.
+inline constexpr uint64_t kX64PagedInstructionPending = 1;
+inline constexpr uint64_t kX64PagedAttemptConsumed = 2;
 
 // Synthetic source-only identity. Original instruction addresses cannot occupy
 // the reserved final addresses used by continuation helpers.

@@ -65,6 +65,7 @@ template <typename Word> struct X86InstructionDebugState {
   /// Data causes postponed by MOV/POP SS or a bound REP group, distinct from
   /// published DR6. Retain across host stops; accepted ordinary events clear.
   uint8_t PendingData = 0;
+  bool operator==(const X86InstructionDebugState &) const = default;
 };
 
 inline bool

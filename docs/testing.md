@@ -4670,6 +4670,18 @@ comparison counts and the separate #AC VMX/NMI discrepancy count; neither
 undefined compatibility upper halves nor unusable SS attributes are silently
 counted as native equality. See [the runtime contract](x86-paged-execution.md#faultable-iret-iretd-and-iretq).
 
+`X64PagedReturnContinuationTest.*` covers host backing suspension separately
+from guest fault/retry: aliased saved CS/accessed writes, every frame width,
+multiple pauses, added physical backing with context reconstruction, frozen
+state/control/debug bindings, consumed versus unconsumed budgets, STI/SS
+shadows, event-poll exclusion, retained TF/watchpoints and fault/debug event
+handoff. The generated cases run HighC/LLVMC with Clang and optional NeverC;
+none adds a NeverC 32-bit target. `PendingHandlerResumesReturnWithoutAnotherAttempt`
+checks actual generated handler edits, suspended IRET, completion receipts and
+the subsequent original CALL/RET through both scheduled and plain interfaces.
+These host-stop tests complement the uninterrupted original-CPU return matrix;
+they do not claim physical intra-instruction suspension.
+
 Faultable RETF is covered by `PagedFarReturnsMatchOriginalCPU` and
 `PagedFarReturnRetainedEffectsControlProgress` in
 `unittests/translate/x86/X64PagedFarReturnTests.inc`. The common return retry

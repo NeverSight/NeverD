@@ -30,10 +30,23 @@
 #include <cstdint>
 #include <cstring>
 #include <initializer_list>
+#include <memory>
 #include <optional>
 #include <utility>
 
 namespace neverd::analysis {
+namespace detail {
+struct X64PagedReturnContinuation {
+  X64ContinuationStateV6 State;
+  translate::X86PagingState Controls;
+  translate::X86PagingFeatures Features;
+  llvm::SmallVector<X64PagedEventContinuation::Access> CompletedAccesses;
+  uint16_t FieldBytes = 0, Discard = 0;
+  X64PagedAlignmentPriority AlignmentPriority;
+  bool Interrupt = false, TruncateCompatibilityIP = false;
+  bool AttemptConsumed = false;
+};
+} // namespace detail
 namespace {
 using translate::MemoryAccessKind;
 using translate::X86MemoryException;
@@ -303,10 +316,15 @@ private:
         Explicit ? AccessCPL : uint8_t(0), !Explicit, Stack};
     if (AccessCursor < CompletedAccesses.size()) {
       const auto &Completed = CompletedAccesses[AccessCursor++];
-      assert(Completed.Address == Access.Address && Completed.Bytes == Size &&
-             Completed.Write == Write &&
-             (!Write || Completed.Value == value(Inputs.begin()[1])) &&
-             "resume preserves accepted state and access order");
+      if (Completed.Address != Access.Address || Completed.Bytes != Size ||
+          Completed.Write != Write ||
+          (Write && Completed.Value != value(Inputs.begin()[1]))) {
+        Error = llvm::createStringError(
+            llvm::errc::invalid_argument,
+            "paged transition resume changed a completed access");
+        Stopped = true;
+        return;
+      }
       if (!Write)
         Values[Output.Offset] = Completed.Value;
       return;
@@ -563,13 +581,18 @@ llvm::Expected<X64PagedReturnResult>
 returnFrame(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
             uint16_t FieldBytes, uint16_t Discard, bool Interrupt,
             X64PagedAlignmentPriority AlignmentPriority,
-            bool TruncateCompatibilityIP = false) {
+            bool TruncateCompatibilityIP = false,
+            const detail::X64PagedReturnContinuation *Continuation = nullptr) {
   assert((FieldBytes == 2 || FieldBytes == 4 || FieldBytes == 8) &&
          "authenticated return operand size");
   auto Next = State;
   const X64ContinuationEventV1 Event{};
   TransitionWriter W(Next, Memory, Event, 0);
   W.AlignmentPriority = AlignmentPriority;
+  W.CaptureAccesses = true;
+  W.Resuming = Continuation != nullptr;
+  if (Continuation)
+    W.CompletedAccesses = Continuation->CompletedAccesses;
   detail::X64ContinuationEvents<TransitionWriter> Transfer(
       W, Memory.controls().CR4 & 0x1000 ? 57 : 48);
   if (Interrupt)
@@ -585,8 +608,24 @@ returnFrame(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
   Result.Exception = W.Fault;
   Result.BackingFault = W.Result.BackingFault;
   Result.Completed = W.Exit == X64ContinuationExitV1::PrivilegeReturn;
+  const bool Consumed = Continuation && Continuation->AttemptConsumed;
   Result.InstructionAttempted =
-      Result.Completed || bool(Result.Exception) || W.InstructionEffects;
+      !Consumed &&
+      (Result.Completed || bool(Result.Exception) || W.InstructionEffects);
+  if (Result.BackingFault) {
+    auto Pending = std::make_shared<detail::X64PagedReturnContinuation>();
+    Pending->State = State;
+    Pending->Controls = Memory.controls();
+    Pending->Features = Memory.features();
+    Pending->CompletedAccesses = std::move(W.CompletedAccesses);
+    Pending->FieldBytes = FieldBytes;
+    Pending->Discard = Discard;
+    Pending->AlignmentPriority = AlignmentPriority;
+    Pending->Interrupt = Interrupt;
+    Pending->TruncateCompatibilityIP = TruncateCompatibilityIP;
+    Pending->AttemptConsumed = Consumed || Result.InstructionAttempted;
+    Result.Continuation = std::move(Pending);
+  }
   if (Result.Completed) {
     State = Next;
     auto Controls = Memory.controls();
@@ -597,6 +636,30 @@ returnFrame(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
   return Result;
 }
 } // namespace
+
+llvm::Error
+validateX64PagedReturnResume(const X64ContinuationStateV6 &State,
+                             const X86PagedMemory &Memory,
+                             const X64PagedReturnContinuation &Continuation) {
+  if (!Continuation || State != Continuation->State ||
+      Memory.controls() != Continuation->Controls ||
+      Memory.features() != Continuation->Features)
+    return llvm::createStringError(
+        llvm::errc::invalid_argument,
+        "paged return resume changed CPU, paging controls or features");
+  return llvm::Error::success();
+}
+
+llvm::Expected<X64PagedReturnResult>
+resumeX64PagedReturn(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
+                     const X64PagedReturnContinuation &Continuation) {
+  if (auto Error = validateX64PagedReturnResume(State, Memory, Continuation))
+    return std::move(Error);
+  return returnFrame(State, Memory, Continuation->FieldBytes,
+                     Continuation->Discard, Continuation->Interrupt,
+                     Continuation->AlignmentPriority,
+                     Continuation->TruncateCompatibilityIP, Continuation.get());
+}
 
 llvm::Expected<X64PagedInterruptReturnResult>
 returnX64PagedInterrupt(X64ContinuationStateV6 &State, X86PagedMemory &Memory,

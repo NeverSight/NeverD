@@ -103,7 +103,7 @@ void emitX64FunctionCallHandlerResume(llvm::raw_ostream &OS, va_t Site,
   if (PagedMemory)
     OS << "        if (!(neverd_x64_paged_progress_v1("
        << (ScheduledEvents ? "memory_context" : "context") << ") & "
-       << analysis::kX64PagedInstructionAttempted << ")) return result;\n";
+       << analysis::kX64PagedInstructionCompleted << ")) return result;\n";
   OS << "        handler->Ready = 1;\n"
         "    }\n"
         "    result = ";

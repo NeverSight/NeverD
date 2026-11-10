@@ -313,7 +313,13 @@ commits prepared stores. Faultable IRET and RETF reuse the same continuation
 return and descriptor templates through that concrete evaluator. Their bound
 processor profiles preserve ordered descriptor writes on a later failure;
 IRET also unblocks NMI, while RETF retains inhibition. Register/segment
-publication remains staged. RETF's compatibility-IP validation differs across
+publication remains staged. An immutable return journal retains completed
+64-bit frame/descriptor accesses. A separate execution token retains the
+original exported body binding, entry debug state and consumed-attempt status;
+neither changes V6 storage. Source drivers resume pending returns before new
+budget/event boundaries and preserve STI/SS inhibition across backing stops.
+The instruction token retires before fault or post-return debug-event delivery,
+whose independent continuation then owns any further suspension. RETF's compatibility-IP validation differs across
 the qualified hybrid core types, so the profile is explicit and the test oracle
 pins its processor. Scalar rollback cannot erase completed transition effects;
 backing stops after such effects charge an attempt. The optional `paged_debug`

@@ -54,6 +54,7 @@ struct X86PagingState {
   uint32_t PKRS = 0;
   /// PAE uses the previously loaded registers, not a fresh CR3 memory read.
   std::array<uint64_t, 4> PDPTE{};
+  bool operator==(const X86PagingState &) const = default;
 };
 
 /// Segment/canonical checks precede either order. Competing #AC/#PF priority

@@ -218,6 +218,10 @@ uint64_t neverd_x64_paged_step_v1(
     site_exchange e={0,0,m};status=body(s,&e);
     m->progress=status<=3;return status;
 }
+uint64_t neverd_x64_paged_pending_v1(uint8_t *context) {
+  (void)context;
+  return 0;
+}
 uint64_t neverd_x64_paged_progress_v1(uint8_t *context) {
     return ((site_outcomes *)context)->progress;
 }

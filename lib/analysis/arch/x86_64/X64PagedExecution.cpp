@@ -21,17 +21,39 @@
 #include "neverd/lift/X86/X86DebugRegisterEncoding.h"
 #include "neverd/translate/X86/X86WatchpointObservation.h"
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Errc.h"
 
 #include <array>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
 
 namespace neverd::analysis {
+namespace detail {
+struct X64PagedInstructionContinuation {
+  analysis::X64PagedReturnContinuation Return;
+  llvm::SmallVector<uint8_t, 15> Bytes;
+  X64PagedBody Body = nullptr, Validate = nullptr;
+  uint64_t Address = 0;
+  uint32_t MXCSRMask = 0;
+  unsigned PagingAddressBits = 0;
+  std::optional<bool> DebugSSBlocked;
+  bool BranchDebug = false, SingleStep = false, AttemptConsumed = false;
+  std::optional<X64PagedDebugState> Debug;
+  X86InstructionDebugProfile DebugProfile;
+  std::optional<X64PagedAlignmentPriority> AlignmentPriority;
+  std::optional<X64PagedIretAccessOrder> IretAccessOrder;
+  std::optional<X64PagedFarReturnProfile> FarReturnProfile;
+  uint8_t DataBreakpoints = 0;
+  uint16_t FieldBytes = 0, Discard = 0;
+  bool Interrupt = false;
+};
+} // namespace detail
 namespace {
 using translate::MemoryAccessKind;
 using translate::X86LinearAccess;
@@ -300,13 +322,32 @@ X64PagedExecution::validate(X64ContinuationStateV6 &State, uint64_t Address,
   Error.clear();
   if (!Validate || (PagingAddressBits != 48 && PagingAddressBits != 57))
     return invalid("invalid paged entry binding");
+  if (!Options.EventDelivery.MaxAttempts)
+    return invalid("event delivery requires a positive work budget");
+  if (PendingReturn) {
+    const auto &P = *PendingReturn;
+    const auto Debug = Options.Debug
+                           ? std::optional<X64PagedDebugState>(*Options.Debug)
+                           : std::nullopt;
+    if (Address != P.Address || Validate != P.Validate ||
+        PagingAddressBits != P.PagingAddressBits ||
+        InstructionDebug != P.DebugSSBlocked.has_value() ||
+        BranchDebug != P.BranchDebug || Debug != P.Debug ||
+        Options.DebugProfile != P.DebugProfile ||
+        Options.AlignmentPriority != P.AlignmentPriority ||
+        Options.IretAccessOrder != P.IretAccessOrder ||
+        Options.FarReturnProfile != P.FarReturnProfile)
+      return invalid(
+          "paged return resume changed instruction or debug binding");
+    if (auto Failure = validateX64PagedReturnResume(State, Memory, P.Return))
+      return std::move(Failure);
+    return true;
+  }
   auto Controls = Memory.controls();
   if (!(Controls.EFER & 0x400) || (Controls.CR4 & (uint64_t(1) << 32)) ||
       PagingAddressBits != (Controls.CR4 & 0x1000 ? 57u : 48u))
     return invalid("paged instruction binding disagrees with IA-32e controls");
   auto &Original = State.Core.Core.Core.Core;
-  if (!Options.EventDelivery.MaxAttempts)
-    return invalid("event delivery requires a positive work budget");
   if ((InstructionDebug && !Options.Debug) ||
       (Options.Debug &&
        !x86InstructionDebugValid(Options.Debug->DR6, Options.Debug->DR7,
@@ -401,6 +442,8 @@ X64PagedExecution::deliver(X64ContinuationStateV6 &State,
                            uint32_t MXCSRMask) {
   Last = {};
   Error.clear();
+  if (PendingReturn)
+    return invalid("resume the pending return before delivering an event");
   if (auto Failure = deliverEvent(State, Event, MXCSRMask))
     return std::move(Failure);
   Last.Exception = Last.Delivery->LastException;
@@ -413,6 +456,8 @@ X64PagedExecution::resume(X64ContinuationStateV6 &State,
                           uint32_t MXCSRMask) {
   Last = {};
   Error.clear();
+  if (PendingReturn)
+    return invalid("resume the pending return before resuming an event");
   if (auto Failure =
           deliverEvent(State, Continuation.Event, MXCSRMask, &Continuation))
     return std::move(Failure);
@@ -433,6 +478,14 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
     return invalid("invalid paged instruction binding");
   if (!*Valid)
     return Last;
+  if (PendingReturn) {
+    // Keep the immutable binding alive while executeReturn retires/replaces it.
+    const auto P = PendingReturn;
+    if (Body != P->Body || Bytes != llvm::ArrayRef(P->Bytes) ||
+        MXCSRMask != P->MXCSRMask || DebugSSBlocked != P->DebugSSBlocked)
+      return invalid("paged return resume changed body, bytes, mask or shadow");
+    return executeReturn(State, *P);
+  }
   auto Controls = Memory.controls();
   const auto &Original = State.Core.Core.Core.Core;
   const bool SingleStep = Original.RFlags & 0x100;
@@ -581,34 +634,28 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
     if (T.Return->Interrupt ? !Options.IretAccessOrder
                             : !Options.FarReturnProfile)
       return invalid("paged return requires bound frame-access order");
-    auto Returned =
-        T.Return->Interrupt
-            ? returnX64PagedInterrupt(State, Memory, T.Return->Bytes,
-                                      T.AlignmentPriority,
-                                      *Options.IretAccessOrder)
-            : returnX64PagedFar(State, Memory, T.Return->Bytes,
-                                T.Return->Discard, T.AlignmentPriority,
-                                *Options.FarReturnProfile);
-    if (!Returned)
-      return Returned.takeError();
-    Last.InstructionAttempted = Returned->InstructionAttempted;
-    if (Returned->Completed) {
-      Last.InstructionCompleted = true;
-      Last.Exit = uint64_t(X64ContinuationExitV1::PrivilegeReturn);
-      if (auto Failure =
-              FinishDebug(x86InstructionDebugStep(SingleStep, DebugCTL, true)))
-        return std::move(Failure);
-      return Last;
-    }
-    if (Returned->BackingFault) {
-      Last.Exit = uint64_t(X64PagedExit::BackingFault);
-      Last.BackingFault = Returned->BackingFault;
-      return Last;
-    }
-    if (!Returned->Exception)
-      return invalid("paged return stopped without an architectural outcome");
-    T.Access.Status = X86PageWalkStatus::Exception;
-    T.Access.Exception = Returned->Exception;
+    detail::X64PagedInstructionContinuation Binding;
+    Binding.Bytes.assign(Bytes.begin(), Bytes.end());
+    Binding.Body = Body;
+    Binding.Validate = Validate;
+    Binding.Address = Address;
+    Binding.MXCSRMask = MXCSRMask;
+    Binding.PagingAddressBits = PagingAddressBits;
+    Binding.DebugSSBlocked = DebugSSBlocked;
+    Binding.BranchDebug = BranchDebug;
+    Binding.SingleStep = SingleStep;
+    if (Options.Debug)
+      Binding.Debug = *Options.Debug;
+    Binding.DebugProfile = Options.DebugProfile;
+    Binding.AlignmentPriority = Options.AlignmentPriority;
+    Binding.IretAccessOrder = Options.IretAccessOrder;
+    Binding.FarReturnProfile = Options.FarReturnProfile;
+    Binding.DataBreakpoints = Observation.Matches;
+    Binding.FieldBytes = T.Return->Bytes;
+    Binding.Discard = T.Return->Discard;
+    Binding.Interrupt = T.Return->Interrupt;
+    Observation.stop();
+    return executeReturn(State, Binding);
   }
   if (T.FarPointer || T.SegmentMove) {
     if (T.FarPointer ? !Options.FarPointerProfile : !Options.SegmentMoveProfile)
@@ -737,6 +784,76 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
   return Last;
 }
 
+uint64_t X64PagedExecution::pendingProgress() const {
+  return PendingReturn
+             ? kX64PagedInstructionPending |
+                   (PendingReturn->AttemptConsumed ? kX64PagedAttemptConsumed
+                                                   : 0)
+             : 0;
+}
+
+llvm::Expected<X64PagedExecutionResult> X64PagedExecution::executeReturn(
+    X64ContinuationStateV6 &State,
+    const detail::X64PagedInstructionContinuation &Binding) {
+  translate::X86WatchpointObservation Observation(
+      Memory, Options.Debug, Options.DebugProfile, Binding.DataBreakpoints);
+  // Admission has succeeded. A terminal owner failure or architectural outcome
+  // retires this instruction before any subsequent event can begin.
+  PendingReturn.reset();
+  const auto Alignment = Binding.AlignmentPriority.value_or(
+      X64PagedAlignmentPriority::AfterPaging);
+  auto Returned =
+      Binding.Return ? resumeX64PagedReturn(State, Memory, Binding.Return)
+      : Binding.Interrupt
+          ? returnX64PagedInterrupt(State, Memory, Binding.FieldBytes,
+                                    Alignment, *Binding.IretAccessOrder)
+          : returnX64PagedFar(State, Memory, Binding.FieldBytes,
+                              Binding.Discard, Alignment,
+                              *Binding.FarReturnProfile);
+  if (!Returned)
+    return Returned.takeError();
+  Last.InstructionResumed = bool(Binding.Return);
+  Last.InstructionAttempted = Returned->InstructionAttempted;
+  if (Returned->Continuation) {
+    auto Pending =
+        std::make_shared<detail::X64PagedInstructionContinuation>(Binding);
+    Pending->Return = std::move(Returned->Continuation);
+    Pending->DataBreakpoints = Observation.Matches;
+    Pending->AttemptConsumed |= Last.InstructionAttempted;
+    PendingReturn = std::move(Pending);
+    Last.Exit = uint64_t(X64PagedExit::BackingFault);
+    Last.BackingFault = Returned->BackingFault;
+    return Last;
+  }
+  Observation.stop();
+  if (Returned->Completed) {
+    Last.InstructionCompleted = true;
+    Last.Exit = uint64_t(X64ContinuationExitV1::PrivilegeReturn);
+    const uint8_t Data =
+        Options.Debug ? x86CompleteDataBreakpoints(*Options.Debug,
+                                                   Observation.Matches, false)
+                      : 0;
+    const bool Step = x86InstructionDebugStep(
+        Binding.SingleStep, Binding.Debug ? Binding.Debug->DebugCTL : 0, true);
+    if (Step || Data)
+      if (auto Failure = deliverDebug(State, Step, Binding.MXCSRMask, Data))
+        return std::move(Failure);
+    return Last;
+  }
+  if (!Returned->Exception)
+    return invalid("paged return stopped without an architectural outcome");
+  Last.Exception = Returned->Exception;
+  X64ContinuationEventV1 Event;
+  Event.SavedPC = Binding.Address;
+  Event.Vector = Returned->Exception->Vector;
+  Event.Kind = X64ContinuationEventKind::Fault;
+  Event.ErrorCode = Returned->Exception->ErrorCode;
+  Event.FaultAddress = Returned->Exception->CR2.value_or(0);
+  if (auto Failure = deliverEvent(State, Event, Binding.MXCSRMask))
+    return std::move(Failure);
+  return Last;
+}
+
 void X64PagedExecution::recordError(llvm::Error Failure) {
   Error = llvm::toString(std::move(Failure));
 }
@@ -798,7 +915,13 @@ extern "C" uint64_t neverd_x64_paged_progress_v1(uint8_t *Context) {
       reinterpret_cast<X64PagedExecution *>(Context)->lastResult();
   return (Last.InstructionAttempted ? kX64PagedInstructionAttempted : 0) |
          (Last.Delivery && Last.Delivery->InputAccepted ? kX64PagedEventAccepted
-                                                        : 0);
+                                                        : 0) |
+         (Last.InstructionCompleted ? kX64PagedInstructionCompleted : 0) |
+         (Last.InstructionResumed ? kX64PagedInstructionResumed : 0);
+}
+
+extern "C" uint64_t neverd_x64_paged_pending_v1(uint8_t *Context) {
+  return reinterpret_cast<X64PagedExecution *>(Context)->pendingProgress();
 }
 
 extern "C" uint64_t neverd_x64_paged_transfer_v1(uint8_t *Context,

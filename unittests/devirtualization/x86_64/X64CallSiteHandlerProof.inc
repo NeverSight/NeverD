@@ -86,13 +86,17 @@ uint64_t neverd_x64_paged_step_v1(uint8_t *context,uint8_t *raw,
     }
     handler_exchange e={0,0,m};status=body(s,&e);m->progress=status<=3;return status;
 }
+uint64_t neverd_x64_paged_pending_v1(uint8_t *context) {
+  (void)context;
+  return 0;
+}
 uint64_t neverd_x64_paged_progress_v1(uint8_t *context) {
     return ((handler_outcomes *)context)->progress;
 }
 uint64_t neverd_x64_paged_event_v1(uint8_t *context,uint8_t *raw,
                                  const uint8_t *event,uint64_t mxcsr) { return 5; }
 #define STORAGE() handler_outcomes memory={0};memory.return_pc=0x1005; \
-    memory.return_sp=STACK;memory.return_progress=1;memory.cell=0xdeadbeef
+    memory.return_sp=STACK;memory.return_progress=5;memory.cell=0xdeadbeef
 #define SET_INPUT(Value) (memory.incoming=(Value))
 #define INPUT memory.incoming
 #define CELL memory.cell
@@ -257,7 +261,7 @@ int proof_handler_poll_budget_after_return(uint64_t incoming) {
 }
 #endif
 #if PAGED
-int proof_handler_return_needs_attempt(void) {
+int proof_handler_return_needs_completion(void) {
     PREPARE();state.PC=0x1033;memory.return_progress=2;
     neverd_x64_call_result_v1 r=RESUME();
     return r.Status!=6||r.Completed||handler.Ready||budget!=10||memory.calls||memory.writes;

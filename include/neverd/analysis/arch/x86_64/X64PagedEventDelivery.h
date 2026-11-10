@@ -22,6 +22,7 @@
 #include "llvm/Support/Error.h"
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 
 namespace neverd::analysis {
@@ -158,7 +159,17 @@ struct X64PagedInstructionTransitionResult {
   std::optional<translate::GuestMemoryFault> BackingFault;
 };
 
-using X64PagedReturnResult = X64PagedInstructionTransitionResult;
+namespace detail {
+struct X64PagedReturnContinuation;
+}
+/// Immutable progress outside the V6 ABI. Retain state and existing RAM effects
+/// when repairing physical backing; use resume rather than starting a return.
+using X64PagedReturnContinuation =
+    std::shared_ptr<const detail::X64PagedReturnContinuation>;
+
+struct X64PagedReturnResult : X64PagedInstructionTransitionResult {
+  X64PagedReturnContinuation Continuation;
+};
 using X64PagedInterruptReturnResult = X64PagedReturnResult;
 
 /// Execute an authenticated 64-bit-mode IRET/IRETD/IRETQ after instruction
@@ -181,6 +192,20 @@ returnX64PagedFar(X64ContinuationStateV6 &State,
                   translate::X86PagedMemory &Memory, uint16_t FieldBytes,
                   uint16_t Discard, X64PagedAlignmentPriority AlignmentPriority,
                   X64PagedFarReturnProfile Profile);
+
+/// Check retained CPU, control and feature values without accessing RAM.
+/// Refusal leaves the immutable record usable with its original bindings.
+llvm::Error
+validateX64PagedReturnResume(const X64ContinuationStateV6 &State,
+                             const translate::X86PagedMemory &Memory,
+                             const X64PagedReturnContinuation &Continuation);
+
+/// Continue ordered accesses without repeating successful reads or writes.
+/// InstructionAttempted reports only a newly consumed attempt on this call.
+llvm::Expected<X64PagedReturnResult>
+resumeX64PagedReturn(X64ContinuationStateV6 &State,
+                     translate::X86PagedMemory &Memory,
+                     const X64PagedReturnContinuation &Continuation);
 
 /// Execute an authenticated 64-bit-mode LSS/LFS/LGS. Explicit operands use
 /// the current CPL; descriptors use implicit supervisor privilege. Both

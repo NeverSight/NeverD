@@ -59,15 +59,24 @@ void emitScheduledDriver(
   OS << ") {\n";
   if (FunctionContext)
     emitX64FunctionContextGuard(OS, Options.PagedDebug);
-  OS << R"C(    uint64_t last = 8;
-    if (!*budget) return 9;
-    if (!peek || !accepted || shadows->STIBlocked > 1 || shadows->SSBlocked > 1 ||
+  OS << "    uint64_t last = 8;\n"
+     << "    if (!*budget";
+  if (Paged)
+    OS << " && !(neverd_x64_paged_pending_v1(memory_context) & "
+       << analysis::kX64PagedAttemptConsumed << ")";
+  OS << ") return 9;\n";
+  OS << R"C(    if (!peek || !accepted || shadows->STIBlocked > 1 || shadows->SSBlocked > 1 ||
         shadows->NMIBlockedBySTI > 1 ||
         (shadows->STIBlocked && !(state->RFlags & 512))) return 5;
     for (unsigned i = 0; i < sizeof(shadows->Reserved); ++i)
         if (shadows->Reserved[i]) return 5;
-    while (*budget) {
-        uint64_t status;
+)C";
+  OS << "    while (*budget";
+  if (Paged)
+    OS << " || (neverd_x64_paged_pending_v1(memory_context) & "
+       << analysis::kX64PagedAttemptConsumed << ")";
+  OS << ") {\n";
+  OS << R"C(        uint64_t status;
         int sti, mov_ss;
         switch (state->PC) {
 )C";
@@ -92,6 +101,8 @@ void emitScheduledDriver(
         }
         if (status) return status;
 )C";
+  if (Paged)
+    OS << "        if (!neverd_x64_paged_pending_v1(memory_context)) {\n";
   OS << "        if (!*poll_budget) return "
      << uint64_t(analysis::X64ContinuationExitV1::EventBudgetExhausted)
      << ";\n";
@@ -126,7 +137,10 @@ void emitScheduledDriver(
             }
             if (status != 15) return status;
         }
-        const uint64_t old_flags = state->RFlags;
+)C";
+  if (Paged)
+    OS << "        }\n";
+  OS << R"C(        const uint64_t old_flags = state->RFlags;
         switch (state->PC) {
 )C";
   for (const auto &Unit : Units) {
@@ -158,13 +172,19 @@ void emitScheduledDriver(
   OS << R"C(        default: return 5;
         }
 )C";
-  if (Paged)
-    OS << "        if (!(neverd_x64_paged_progress_v1(memory_context) & "
-       << analysis::kX64PagedInstructionAttempted << ")) return status;\n";
-  else
-    OS << "        if (status == 4 || status == 5) return status;\n";
-  OS << R"C(        --*budget;
-)C";
+  if (Paged) {
+    OS << "        const uint64_t progress = "
+          "neverd_x64_paged_progress_v1(memory_context);\n"
+       << "        if (progress & " << analysis::kX64PagedInstructionAttempted
+       << ") --*budget;\n"
+       << "        else if (!(progress & "
+       << analysis::kX64PagedInstructionResumed << ")) return status;\n"
+       << "        if (neverd_x64_paged_pending_v1(memory_context)) return "
+          "status;\n";
+  } else {
+    OS << "        if (status == 4 || status == 5) return status;\n"
+       << "        --*budget;\n";
+  }
   emitCompletedShadows(OS, "        ", Paged);
   if (Paged)
     OS << "        if (status == "

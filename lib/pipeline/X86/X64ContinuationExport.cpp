@@ -1182,6 +1182,15 @@ typedef struct neverd_x64_event_v1 {
         "original acceptance recorded before IDT RAM; secondary faults do "
         "not restore a consumed event; architectural instruction attempts "
         "remain charged if subsequent exception entry hits backing failure";
+    Report["return_continuation"] = llvm::json::Object{
+        {"pending_bridge", "neverd_x64_paged_pending_v1"},
+        {"domain",
+         "immutable IRET/RETF progress across physical backing stops; "
+         "retain CPU/debug state, paging controls, profiles and completed "
+         "RAM effects; resume without refetch, replay or event polling; "
+         "charge an attempt once; preserve STI/SS inhibition until "
+         "completion or architectural fault; context reconstruction "
+         "requires its retained continuation"}};
     Report["alignment_fault_priority"] =
         "explicit runtime CPU binding when CPL3 AC and CR0.AM are set; "
         "canonical checks first; no host-policy inference";
@@ -1298,7 +1307,8 @@ typedef struct neverd_x64_event_v1 {
         "call-site pauses enabled; explicitly declared delivered handler "
         "context; selected instructions retain original state and RAM; only a "
         "successful privilege return to the pending CALL PC/SP permits retry, "
-        "with attempted progress in paged mode; budgets and external stops "
+        "with instruction-completed progress in paged mode; budgets and "
+        "external stops "
         "retain the handler; no implicit provider, restored frame or initial "
         "capture";
   }

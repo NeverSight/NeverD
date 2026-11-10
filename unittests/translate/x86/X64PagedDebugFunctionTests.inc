@@ -891,3 +891,82 @@ TEST_F(X64PagedDebugFunctionTest,
         }
       }
 }
+
+TEST_F(X64PagedDebugFunctionTest,
+       PendingHandlerResumesReturnWithoutAnotherAttempt) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "No test Clang";
+  for (const auto &Compiler : compilers())
+    for (bool LLVM : {false, true})
+      for (bool Scheduled : {false, true})
+        for (const std::string O : {"-O0", "-O2"}) {
+          API A;
+          ASSERT_NO_FATAL_FAILURE(
+              compileFunctions(LLVM, Scheduled, true, true, A, Compiler, O));
+          resetFunction(true);
+          auto &Core = State.Core.Core.Core.Core;
+          Core.RFlags = 0x202;
+          const auto EntrySP = Core.GPR[4], OriginalValue = Core.GPR[0];
+          // Entry loads only CS. IRET later needs SS on the missing physical
+          // page, after the actual handler has edited the saved flags.
+          State.GDTR = {0x4ff0, 0x3f};
+          put(0x4ff8, 0x00af9b000000ffffULL);
+          put(0x5000, 0x00cf93000000ffffULL);
+          put(0x13028, 0x50007);
+          X64PagedDebugState Debug;
+          Debug.DR7 = 0x401;
+          Debug.DR[0] = 0x1000;
+          Memory =
+              llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
+          const auto Options = watchOptions(Debug);
+          X64PagedExecution Context(*Memory, Options);
+          auto *Opaque = reinterpret_cast<uint8_t *>(&Context);
+          uint64_t Budget = 1, Polls = 1;
+          Shadows Shadow;
+          Site S;
+          ASSERT_EQ(
+              A.StartSite(&State, Opaque, &Budget, &Shadow, &Polls, &S).Status,
+              7u)
+              << Context.lastError();
+          HandlerContext H;
+          ASSERT_EQ(A.BeginHandler(&S, &H), 1);
+          Budget = Polls = 4;
+          const auto Paused =
+              A.ResumeHandler(&State, Opaque, &Budget, &Shadow, &Polls, &S, &H);
+          ASSERT_EQ(Paused.Status, 18u) << Context.lastError();
+          EXPECT_EQ(Budget, 0u);
+          EXPECT_EQ(H.Ready, 0u);
+          ASSERT_TRUE(Context.continuation());
+          auto Snapshot = RAM;
+          Snapshot.Memory = Memory->physicalMemory().snapshotMemoryRegions();
+          const auto &Bytes = RAM.Memory.front().Bytes;
+          Snapshot.Memory.push_back(
+              {0x50000, MemoryPermission::Read | MemoryPermission::Write, 0,
+               std::vector<uint8_t>(Bytes.begin() + 0x5000,
+                                    Bytes.begin() + 0x6000)});
+          auto Repaired = llvm::cantFail(
+              X86PagedMemory::create(Snapshot, Features, Memory->controls()));
+          X64PagedExecution Resumed(*Repaired, Options, Context.continuation());
+          Opaque = reinterpret_cast<uint8_t *>(&Resumed);
+          Polls = 0;
+          auto R =
+              A.ResumeHandler(&State, Opaque, &Budget, &Shadow, &Polls, &S, &H);
+          EXPECT_EQ(R.Status, 9u) << Resumed.lastError();
+          EXPECT_EQ(R.Completed, 0u);
+          EXPECT_EQ(Budget, 0u);
+          EXPECT_EQ(Polls, 0u);
+          EXPECT_EQ(H.Ready, 1u);
+          EXPECT_EQ(Core.PC, 0x1000u);
+          EXPECT_EQ(Core.GPR[4], EntrySP);
+          EXPECT_FALSE(Resumed.continuation());
+          EXPECT_TRUE(Resumed.lastResult().InstructionCompleted);
+          EXPECT_FALSE(Resumed.lastResult().InstructionAttempted);
+          Budget = Polls = 2;
+          R = A.ResumeHandler(&State, Opaque, &Budget, &Shadow, &Polls, &S, &H);
+          EXPECT_EQ(R.Status, 3u) << Resumed.lastError();
+          EXPECT_EQ(R.Completed, 1u);
+          EXPECT_EQ(R.Value, OriginalValue + 1);
+          EXPECT_EQ(Core.PC, 0x1005u);
+          EXPECT_EQ(Core.GPR[4], EntrySP);
+        }
+}

@@ -71,7 +71,7 @@ protected:
   using DebugStep = decltype(&neverd_x64_paged_debug_step_v2);
   using DebugValidate = decltype(&neverd_x64_paged_debug_validate_v2);
   using Bind = void (*)(Access, Step, Validate, Event, Progress, DebugStep,
-                        DebugValidate, Access);
+                        DebugValidate, Access, Progress);
   struct Shadows {
     uint8_t STIBlocked = 0, SSBlocked = 0, NMIBlockedBySTI = 0, Reserved[5]{};
   };
@@ -237,6 +237,7 @@ static uint64_t (*validate_bridge)(uint8_t *, uint8_t *, uint64_t,
     neverd_x64_paged_body_v1, uint64_t);
 static uint64_t (*event_bridge)(uint8_t *, uint8_t *, const uint8_t *, uint64_t);
 static uint64_t (*progress_bridge)(uint8_t *);
+static uint64_t (*pending_bridge)(uint8_t *);
 static uint64_t (*debug_step_bridge)(uint8_t *, uint8_t *, uint64_t, const uint8_t *,
     uint64_t, neverd_x64_paged_body_v1, neverd_x64_paged_body_v1, uint64_t, uint64_t, uint64_t);
 static uint64_t (*debug_validate_bridge)(uint8_t *, uint8_t *, uint64_t,
@@ -252,11 +253,12 @@ void bind_paged(uint64_t (*access)(void *, uint64_t, uint64_t, uint64_t),
         neverd_x64_paged_body_v1, neverd_x64_paged_body_v1, uint64_t, uint64_t, uint64_t),
     uint64_t (*debug_validate)(uint8_t *, uint8_t *, uint64_t,
         neverd_x64_paged_body_v1, uint64_t),
-    uint64_t (*debug_access)(void *, uint64_t, uint64_t, uint64_t)) {
+    uint64_t (*debug_access)(void *, uint64_t, uint64_t, uint64_t),
+    uint64_t (*pending)(uint8_t *)) {
     access_bridge = access; step_bridge = step;
     validate_bridge = validate; event_bridge = event; progress_bridge = progress;
     debug_step_bridge = debug_step; debug_validate_bridge = debug_validate;
-    debug_access_bridge = debug_access;
+    debug_access_bridge = debug_access; pending_bridge = pending;
 }
 uint64_t neverd_x64_paged_access_v1(void *exchange, uint64_t address,
                                    uint64_t bytes, uint64_t flags) {
@@ -282,6 +284,9 @@ uint64_t neverd_x64_paged_event_v1(uint8_t *context, uint8_t *state,
 }
 uint64_t neverd_x64_paged_progress_v1(uint8_t *context) {
     return progress_bridge(context);
+}
+uint64_t neverd_x64_paged_pending_v1(uint8_t *context) {
+    return pending_bridge(context);
 }
 uint64_t neverd_x64_paged_debug_step_v2(uint8_t *context, uint8_t *state,
     uint64_t address, const uint8_t *bytes, uint64_t size,
@@ -321,7 +326,7 @@ uint64_t neverd_x64_paged_debug_validate_v2(uint8_t *context, uint8_t *state,
            &neverd_x64_paged_validate_v1, &neverd_x64_paged_event_v1,
            &neverd_x64_paged_progress_v1, &neverd_x64_paged_debug_step_v2,
            &neverd_x64_paged_debug_validate_v2,
-           &neverd_x64_paged_debug_access_v1);
+           &neverd_x64_paged_debug_access_v1, &neverd_x64_paged_pending_v1);
   }
 };
 
