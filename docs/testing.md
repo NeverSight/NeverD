@@ -1441,6 +1441,10 @@ real headers.
 `COFFExceptionIR.LLVMCCRTArgumentsKeepTheRuntimeType` keeps a mismatched debug
 enum out of a runtime argument and prevents displayed header enumerators from
 requesting duplicate local definitions.
+`NativePointerRelocationBoundary.MinGWProgramWholeModuleLLVMCCompiles` compiles
+the complete runtime-linked output at O0/O2. Regenerate its header-name inventory
+with `scripts/generate_mingw_header_functions.py`; the corresponding Python
+unit test checks macro expansion locations and subsequent elided file names.
 
 `*LookupFailures*` and `ProcessReport.AndroidLoaderFailures*` cover strict
 binary names and literal `exact_query` strings, whitespace preservation,
