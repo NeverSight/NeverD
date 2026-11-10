@@ -1238,5 +1238,12 @@
     "export_artifacts_identical_to_full_qualification": 1140,
     "publication_note": "The measured integration commit is retained locally. Its two unpublished documentation commits were consolidated before publication to exclude private host paths. All source files outside docs/ and both paging executables are unchanged; exact raw receipts remain in the artifact root."
   },
-  "path_convention": "Published host paths use <host>; unmodified command/report receipts and hashes remain in the local artifact root."
+  "path_convention": "Published host paths use <host>; unmodified command/report receipts and hashes remain in the local artifact root.",
+  "publication_dev_sync": {
+    "commit": "3f15f2fdebb97b6f3e1d74c9dc4be183cd5ed759",
+    "integrated_dev": "dc78521e6f58ab3faa35aa01f4b5b78577e99df0",
+    "scope": "Linux TCP-connect failure-exhaustion diagnostic text, documentation and matching network assertions.",
+    "feature_source_hashes_unchanged": true,
+    "validation": "Reviewed the isolated Linux emulation delta. It changes no x86 task/translation/export path or compiler mapping; preceding x86 qualification is retained without another runtime rerun."
+  }
 }
