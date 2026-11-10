@@ -5492,6 +5492,13 @@ Support discovery consumes the shared work allowance, and constants keep a
 single coefficient with the minterm basis's negative sign. Projection does
 not authorize a replacement: the complete polynomial difference must still
 be proved before CLI or GUI source output uses the result.
+Within one admitted polynomial expansion, factor slots reuse their minterm
+selections while the factor identity is unchanged. The context and atom order
+are fixed for that call; changing or removing a factor invalidates its slot.
+Selection storage is reserved from the exact table population. Tables fitting
+one machine word enumerate set bits in ascending order; larger tables retain
+the complete entry scan. This preserves term order, coefficients and work
+accounting, with no state retained between calls.
 Cubic recovery uses a minterm shared by all three factors as an anchor. Its
 diagonal coefficient fixes the scale; coefficients with two copies of the
 anchor identify how many factors select each other minterm. Coefficients with

@@ -10440,6 +10440,13 @@ isolation.
 
 ## Modular MBA simplification
 
+`SymMBAHigherProduct.MintermSelectionsKeepEveryBoundaryCorner` checks empty,
+singleton and complete tables across the 64-entry storage boundary.
+`MixedDegreeExpansionPreservesIndependentWordValues` checks changing factor
+counts, repeated and replaced factors, constants, cancellation and zero products
+against an independent word oracle. It exhausts two-bit triples and populates
+all limbs through 257 bits, including single-term expansion and budget refusal.
+
 `SymMBALinearProofMemo` checks successful full-width proof reuse, alternating
 queries with the same difference, context isolation, incomplete proofs and
 input/work/storage limits through 257 bits. `SymMBALinearCandidateMemo` keeps
