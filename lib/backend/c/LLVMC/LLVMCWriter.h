@@ -168,7 +168,8 @@ public:
   /// addresses alone their printed \p Text names, with each pointer mirror
   /// the text names that the environment holds rather than the module.
   void writeReferencedImageObjects(llvm::ArrayRef<const llvm::Function *> Fns,
-                                   llvm::StringRef Text);
+                                   llvm::StringRef Text,
+                                   llvm::StringRef Globals);
   void writeForwardDecls(llvm::Module &Mod);
 
   //--- PE image headers (COFF/LLVMCImageBase.cpp) ---
@@ -970,6 +971,8 @@ public:
   /// Tags and displayed enumerators supplied by included library headers.
   /// The textual type scan must not request their local definitions again.
   mutable std::set<std::string> HeaderCallRecords;
+  /// A header's tag need not also be a typedef with the same name.
+  std::map<std::string, std::string> HeaderCallRecordTags;
   mutable std::map<const llvm::Value *, std::string> KnownImmediates;
   bool UseScalarExpressionTypes = false;
   std::set<std::string> ScopedScalarNames;

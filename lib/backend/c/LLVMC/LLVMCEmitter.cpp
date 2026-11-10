@@ -497,11 +497,17 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
   DeclaredCalleeNames.clear();
   RecordPointerTags.clear();
   HeaderCallRecords.clear();
+  HeaderCallRecordTags.clear();
   DefinitionPointers.clear();
   CurMod = &Mod;
   prepareFunctionIdentifiers(Mod);
   collectImageDataUses(Mod);
   writeIncludes(Mod);
+  const auto HeaderTag = [this](llvm::StringRef Name) -> const char * {
+    const auto It = HeaderCallRecordTags.find(Name.str());
+    return It == HeaderCallRecordTags.end() ? nullptr : It->second.c_str();
+  };
+  CRecordTagSpelling Tags(HeaderTag);
   // Header conflicts can rename a local import. Key its checked declaration
   // by that final C identifier while retaining the original lookup name.
   prepareSourceImportPrototypes(Mod);
@@ -527,6 +533,9 @@ std::string LLVMCWriter::recordPointerSpelling(const NdType &Record) {
   if (Tag.empty())
     return {};
   RecordPointerTags.insert(Tag);
+  if (const auto It = HeaderCallRecordTags.find(Tag);
+      It != HeaderCallRecordTags.end())
+    return It->second + " " + Tag + "*";
   return Tag + "*";
 }
 
@@ -766,7 +775,13 @@ void LLVMCWriter::writeModuleBody(llvm::Module &Mod) {
   };
   if (OnlyFunction) {
     writeForwardDecls(Mod);
-    writeGlobals(Mod);
+    std::string Globals;
+    llvm::raw_string_ostream GlobalsOS(Globals);
+    {
+      RestoreOutput Restore{OS, &OS.stream()};
+      OS.retarget(&GlobalsOS);
+      writeGlobals(Mod);
+    }
     // The objects the function only takes the address of are declared where
     // its text names them, so that text comes first.
     std::string Tail;
@@ -777,8 +792,8 @@ void LLVMCWriter::writeModuleBody(llvm::Module &Mod) {
       writeImportCalleeDecls(Mod);
       WriteFunctions();
     }
-    writeReferencedImageObjects(SelectedFunctions.selected(), Tail);
-    OS << Tail;
+    writeReferencedImageObjects(SelectedFunctions.selected(), Tail, Globals);
+    OS << Globals << Tail;
     recordSourceNames(Mod);
     return;
   }
@@ -797,15 +812,21 @@ void LLVMCWriter::writeModuleBody(llvm::Module &Mod) {
   // A global's initializer can hold an import's address, as an import
   // table's mirror does.
   writeImportCalleeDecls(Mod);
-  writeGlobals(Mod);
+  std::string Globals;
+  llvm::raw_string_ostream GlobalsOS(Globals);
+  {
+    RestoreOutput Restore{OS, &OS.stream()};
+    OS.retarget(&GlobalsOS);
+    writeGlobals(Mod);
+  }
   // Code that reaches image data through a mirror the environment holds
   // names the data itself, as one function's output does.
   std::vector<const llvm::Function *> Defined;
   for (const auto &Fn : Mod)
     if (!Fn.isDeclaration())
       Defined.push_back(&Fn);
-  writeReferencedImageObjects(Defined, Functions);
-  OS << "\n" << Functions;
+  writeReferencedImageObjects(Defined, Functions, Globals);
+  OS << Globals << "\n" << Functions;
   recordSourceNames(Mod);
 }
 
@@ -1294,7 +1315,8 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     OS << "\n";
     IncludedHeaders.insert(Headers.begin(), Headers.end());
     for (const auto *Prototype : HeaderPrototypes)
-      c_library::appendHeaderTypeNames(*Prototype, HeaderCallRecords);
+      c_library::appendHeaderTypeNames(*Prototype, HeaderCallRecords,
+                                       &HeaderCallRecordTags);
   }
   if (isMIPS(Opts.TheArch) && mips::modulePreservesDSPControl(
                                   Mod, Img ? Img : Opts.Image, Opts.TheArch))
@@ -1586,17 +1608,36 @@ void LLVMCWriter::writeImageByteArray(const llvm::GlobalVariable &Global,
 }
 
 void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
+  // Forward dependencies retain the original image's storage contract and
+  // provenance, including its shape validation before declaration
+  // deduplication.
+  const auto declareOriginalImage = [&](const llvm::GlobalVariable &Global) {
+    const auto Base = parseNdDataSymbol(Global.getName());
+    const auto *Array = llvm::dyn_cast<llvm::ArrayType>(Global.getValueType());
+    if (!Base || !Array || !Array->getElementType()->isIntegerTy(8) ||
+        Global.hasInitializer())
+      throw std::invalid_argument("invalid original image storage");
+    const std::string Name = namedImageObject(*Base);
+    OS << "/* neverd.image: 0x" << llvm::utohexstr(*Base)
+       << " (original loaded image storage) */\n";
+    writeImageByteArray(Global, Name);
+    EmittedGlobalNames.insert(Name);
+  };
   // Initializers can refer forward or form cycles. The declarations use the
   // same storage shape and linkage as the definitions below.
   auto declare = [&](const llvm::GlobalVariable &Global) {
+    if (llvm_original_image::isMarked(Global)) {
+      declareOriginalImage(Global);
+      return;
+    }
     OS << llvmc::storageAlignment(Global.getValueType(), Mod.getDataLayout(),
                                   Global.getAlign().valueOrOne());
     OS << (Global.hasLocalLinkage() ? "static " : "extern ");
     if (Global.isConstant())
       OS << "const ";
     auto *Array = llvm::dyn_cast<llvm::ArrayType>(Global.getValueType());
-    const auto *Data =
-        llvm::dyn_cast<llvm::ConstantDataArray>(Global.getInitializer());
+    const auto *Data = llvm::dyn_cast_or_null<llvm::ConstantDataArray>(
+        Global.hasInitializer() ? Global.getInitializer() : nullptr);
     const bool String = Global.isConstant() && Data && Data->isString() &&
                         !parseNdDataSymbol(Global.getName());
     OS << (String ? "char"
@@ -1606,11 +1647,26 @@ void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
     if (Array)
       OS << "[" << Array->getNumElements() << "]";
     OS << ";\n";
+    if (!Global.hasInitializer())
+      EmittedGlobalNames.insert(globalNameStr(&Global));
+  };
+  // An initializer can also name storage the environment owns. Its address
+  // must be declared even when readonly loads would fold away. Imported
+  // routines and their slots retain their separate declaration owner.
+  auto externalImageStorage = [&](const llvm::GlobalVariable &Global) {
+    if (Global.hasInitializer() || ExternalDataIdentifiers.count(&Global))
+      return false;
+    auto Address = parseNdDataSymbol(Global.getName());
+    if (!Address)
+      Address = parseNdCodePtrSymbol(Global.getName());
+    return Address && (!Img || !Img->findImportAt(*Address)) &&
+           !headerDeclaresObject(globalNameStr(&Global));
   };
   if (OnlyFunction) {
     for (const auto &Global : Mod.globals())
-      if (SelectedGlobals.count(&Global) && Global.hasInitializer() &&
-          !mirrorsImageStorage(Global))
+      if (SelectedGlobals.count(&Global) &&
+          ((Global.hasInitializer() && !mirrorsImageStorage(Global)) ||
+           externalImageStorage(Global)))
         declare(Global);
   } else {
     // The whole module defines the image's storage too, in module order: a
@@ -1629,7 +1685,7 @@ void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
         if (!Seen.insert(C).second)
           continue;
         if (const auto *Var = llvm::dyn_cast<llvm::GlobalVariable>(C)) {
-          if (!Defined.count(Var))
+          if (!Defined.count(Var) || !Var->hasInitializer())
             NamedEarlier.insert(Var);
         } else if (!llvm::isa<llvm::GlobalValue>(C)) {
           for (const llvm::Use &Operand : C->operands())
@@ -1639,7 +1695,8 @@ void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
       }
     }
     for (const auto &Global : Mod.globals())
-      if (NamedEarlier.count(&Global) && Global.hasInitializer() &&
+      if (NamedEarlier.count(&Global) &&
+          (Global.hasInitializer() || externalImageStorage(Global)) &&
           !Global.getName().empty() &&
           !ExternalDataIdentifiers.count(&Global) &&
           !sourceStringOnlyCalledByValue(Global))
@@ -1670,17 +1727,10 @@ void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
 
     if (ExternalDataIdentifiers.count(&GV))
       continue;
+    if (!GV.hasInitializer() && EmittedGlobalNames.count(globalNameStr(&GV)))
+      continue;
     if (llvm_original_image::isMarked(GV)) {
-      const auto Base = parseNdDataSymbol(GV.getName());
-      const auto *Array = llvm::dyn_cast<llvm::ArrayType>(GV.getValueType());
-      if (!Base || !Array || !Array->getElementType()->isIntegerTy(8) ||
-          GV.hasInitializer())
-        throw std::invalid_argument("invalid original image storage");
-      const std::string Name = namedImageObject(*Base);
-      OS << "/* neverd.image: 0x" << llvm::utohexstr(*Base)
-         << " (original loaded image storage) */\n";
-      writeImageByteArray(GV, Name);
-      EmittedGlobalNames.insert(Name);
+      declareOriginalImage(GV);
       continue;
     }
     // IAT/import slots are callable names at call sites, not C objects.
@@ -1846,8 +1896,9 @@ void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
 }
 
 void LLVMCWriter::writeReferencedImageObjects(
-    llvm::ArrayRef<const llvm::Function *> Fns, llvm::StringRef Text) {
-  if (Fns.empty())
+    llvm::ArrayRef<const llvm::Function *> Fns, llvm::StringRef Text,
+    llvm::StringRef Globals) {
+  if (!CurMod)
     return;
   std::map<std::string, llvm::Type *> Objs;
   std::map<va_t, const llvm::GlobalVariable *> ByteArrays;
@@ -1873,7 +1924,7 @@ void LLVMCWriter::writeReferencedImageObjects(
       if (const auto Width = Widths->at(VA);
           Width && (*Width == 2 || *Width == 4 || *Width == 8))
         Bytes = *Width;
-    return llvm::Type::getIntNTy(Fns.front()->getContext(), Bytes * 8);
+    return llvm::Type::getIntNTy(CurMod->getContext(), Bytes * 8);
   };
   auto Note = [&](const llvm::Value *Ptr, llvm::Type *Ty, bool MayFold) {
     if (!Ty)
@@ -1914,15 +1965,17 @@ void LLVMCWriter::writeReferencedImageObjects(
     if (!Identifiers) {
       Identifiers.emplace();
       const auto Part = [](char C) { return llvm::isAlnum(C) || C == '_'; };
-      for (size_t At = 0; At < Text.size();) {
-        if (!Part(Text[At])) {
-          ++At;
-          continue;
+      for (const llvm::StringRef PartText : {Text, Globals}) {
+        for (size_t At = 0; At < PartText.size();) {
+          if (!Part(PartText[At])) {
+            ++At;
+            continue;
+          }
+          const size_t Begin = At;
+          while (At < PartText.size() && Part(PartText[At]))
+            ++At;
+          Identifiers->insert(PartText.slice(Begin, At));
         }
-        const size_t Begin = At;
-        while (At < Text.size() && Part(Text[At]))
-          ++At;
-        Identifiers->insert(Text.slice(Begin, At));
       }
     }
     return Identifiers->contains(Name);
@@ -1950,7 +2003,7 @@ void LLVMCWriter::writeReferencedImageObjects(
       }
     // A global's operand is its initializer, which the function does not
     // spell.
-    if (llvm::isa<llvm::ConstantExpr>(C))
+    if (!llvm::isa<llvm::GlobalValue>(C))
       for (const llvm::Use &Op : C->operands())
         Self(Self, Op.get());
   };
@@ -1959,6 +2012,14 @@ void LLVMCWriter::writeReferencedImageObjects(
       for (const auto &Inst : BB)
         for (const llvm::Use &Op : Inst.operands())
           NoteAddresses(NoteAddresses, Op.get());
+  // Initializers can name an interior image alias through a constant GEP,
+  // even when no function names that alias. Its declaration precedes the
+  // initializer as well as the function bodies, without copying their text.
+  for (const auto &Global : CurMod->globals())
+    if ((!OnlyFunction || SelectedGlobals.count(&Global)) &&
+        Global.hasInitializer() &&
+        (!OnlyFunction || !mirrorsImageStorage(Global)))
+      NoteAddresses(NoteAddresses, Global.getInitializer());
   // A pointer mirror the environment holds (runtime-filled slots) is no
   // module's to define, but code that reaches it by offset still names it.
   bool Declared = false;

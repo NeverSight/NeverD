@@ -763,7 +763,11 @@ TEST(LibCPrototype, WindowsDriverCRTUsesExactFixedParameters) {
     const auto *Prototype = libcPrototype(Name, BinaryFormat::COFF);
     ASSERT_NE(Prototype, nullptr) << Name;
     EXPECT_EQ(Prototype->ParamCount, Count) << Name;
-    EXPECT_EQ(Prototype->Return, "int") << Name;
+    EXPECT_EQ(Prototype->Return,
+              std::string_view(Name) == "__C_specific_handler"
+                  ? "EXCEPTION_DISPOSITION"
+                  : "int")
+        << Name;
     EXPECT_FALSE(Prototype->Variadic) << Name;
     EXPECT_FALSE(Prototype->Winapi) << Name;
   }
