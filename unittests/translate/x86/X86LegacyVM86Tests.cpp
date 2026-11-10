@@ -572,4 +572,33 @@ TEST_F(X86LegacyVM86Test, WordIretClearsEntryResumeFlagWithAndWithoutVME) {
   }
 }
 
+TEST_F(X86LegacyVM86Test, IretdResumeRetainsIPAliasedByPageAccessedBit) {
+  vm86ReturnFrame();
+  S.Core.GPR[4] = 0x3fcff4;
+  S.NMIBlocked = true;
+  // The frame starts in its own last four PTEs. Reading the outer SS uses
+  // the next PTE, which is also the IP already read by this same IRETD.
+  put(0x11ff0, 0x11007, GuestScalarWidth::I32);
+  put(0x11ff4, 0x21007, GuestScalarWidth::I32);
+  put(0x11ff8, 0x100, GuestScalarWidth::I32);
+  put(0x11ffc, 0x23202, GuestScalarWidth::I32);
+  auto R = vmRun({0xcf});
+  ASSERT_EQ(R.Status, X86LegacyExecutionStatus::BackingFault);
+  EXPECT_TRUE(R.InstructionAttempted);
+  EXPECT_FALSE(S.NMIBlocked);
+  EXPECT_EQ(get(0x11ff4), 0x21027u);
+  EXPECT_EQ(S.EIP, 0x1000u);
+  EXPECT_EQ(S.Core.GPR[4], 0x3fcff4u);
+  repairMpxBacking();
+  const uint32_t Tail[]{0xabcd4000, 0x800, 0x300, 0x400, 0x500, 0x600};
+  for (unsigned I = 0; I != 6; ++I)
+    put(0x21000 + 4 * I, Tail[I], GuestScalarWidth::I32);
+  R = vmRun({0xcf});
+  ASSERT_TRUE(R.InstructionCompleted);
+  EXPECT_FALSE(R.InstructionAttempted);
+  EXPECT_EQ(S.EIP, 0x1007u);
+  EXPECT_EQ(S.Core.GPR[4], 0xabcd4000u);
+  EXPECT_EQ(S.Core.Segments[5].Selector, 0x600);
+}
+
 } // namespace
