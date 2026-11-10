@@ -8116,6 +8116,12 @@ widths, variadic prefixes, missing declarations and user/header provenance
 without requesting C declarations. Run the
 Win64, i386, AAPCS64, System V and record-call suites alongside this shared
 consumer; emitters still require the ordinary source-bearing resolver.
+`LocalTypesDebugContext.ABIQueriesShareConversionWithSourceDeclarations`
+checks that repeated ABI queries and later C declarations share the same
+converted types while retaining a fresh resolver's declarations and scalar
+spellings. `NewTypesInvalidateUnrenderedABISignatures` adds an opaque
+pointee's layout before rendering, both with stable C names and with a name
+table reset; an earlier query cannot retain the old layout for later callers.
 `TypeRender.ScalarSpellingsPreserveLaterNameCollisions` starts with scalar
 prototypes, then queries colliding named records in opposite orders and
 repeats the scalar prototype. C and C++ retain their parameter keyword rules;
