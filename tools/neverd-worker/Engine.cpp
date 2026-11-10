@@ -6176,25 +6176,29 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     const int index = neverd_func_find_by_addr(session_, address);
     auto &store = history();
     auto state = store.committedState();
-    auto &renames = state["renames"];
-    Json before = nullptr;
-    bool found = false;
-    for (auto &item : renames)
-      if (parseAddress(item.at("addr").get<std::string>()) == address) {
-        before = item;
-        item["renamed"] = name;
-        found = true;
-      }
-    if (!found)
-      renames.push_back({{"addr", hexAddress(address)},
-                         {"original", index >= 0 ? ownedString(neverd_func_name(
-                                                       session_, index))
-                                                 : listing().nameAt(address)},
-                         {"renamed", name}});
-    Json after;
-    for (const auto &item : renames)
-      if (parseAddress(item.at("addr").get<std::string>()) == address)
-        after = item;
+    auto &renames = state["renames"].get_ref<Json::array_t &>();
+    // The committed rows lie in address order: the row of this address, or
+    // the place a new one takes, as the history would sort it.
+    const auto rowAddress = [](const Json &row) {
+      return parseAddress(row.at("addr").get_ref<const std::string &>());
+    };
+    auto at = std::lower_bound(renames.begin(), renames.end(), address,
+                               [&](const Json &row, std::uint64_t key) {
+                                 return rowAddress(row) < key;
+                               });
+    const bool found = at != renames.end() && rowAddress(*at) == address;
+    Json before = found ? *at : Json(nullptr);
+    if (found)
+      (*at)["renamed"] = name;
+    else {
+      Json row = {{"addr", hexAddress(address)},
+                  {"original",
+                   index >= 0 ? ownedString(neverd_func_name(session_, index))
+                              : listing().nameAt(address)},
+                  {"renamed", name}};
+      at = renames.insert(at, std::move(row));
+    }
+    const Json after = *at;
     settleNamedViews();
     // The session takes the name from here, so the reply need not wait for the
     // disk (ProjectHistory::persistLater).

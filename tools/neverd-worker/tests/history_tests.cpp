@@ -569,6 +569,56 @@ void stateEncodingAndSidecars() {
   state["unknown\"key"] = {{"value", "nested\n[]"}, {"float", -0.0}};
   verify();
 }
+void unchangedTablesKeepTheirBytes() {
+  Fixture fixture;
+  auto store = fixture.open();
+  auto state = store.committedState();
+  const auto history = [&] { return text(fixture.path(files::File::History)); };
+  const auto expected = [&] {
+    return Json{{"commands", Json::array()},
+                {"cursor", 0},
+                {"engine_version", "fixture"},
+                {"schema_version", 1},
+                {"source_sha256", std::string(64, '0')},
+                {"state", state}}
+        .dump();
+  };
+  state["annotations"] = Json::array({annotation("signed")});
+  state["annotations"][0]["extra"] = {{"zero", 0.0}};
+  store.persist(state);
+  check(history() == expected(), "First state lost its bytes");
+  // A row equal to the committed one but printing otherwise, a zero's sign,
+  // is encoded anew rather than copied.
+  state["annotations"][0]["extra"]["zero"] = -0.0;
+  store.persist(state);
+  check(history() == expected() &&
+            history().find("\"zero\":-0.0") != std::string::npos,
+        "A zero's sign was taken from the committed bytes");
+  // A table left as it was keeps the committed bytes while another changes,
+  // including a row put between the committed ones, which moves the rest.
+  state["renames"] =
+      Json::array({rename("first"),
+                   {{"addr", "0x3000"}, {"original", "f"}, {"renamed", "c"}}});
+  store.persist(state);
+  check(history() == expected(), "Another table's edit changed these bytes");
+  auto renames = state["renames"];
+  renames.insert(renames.begin() + 1,
+                 Json{{"addr", "0x2000"}, {"original", "f"}, {"renamed", "b"}});
+  state["renames"] = renames;
+  store.persist(state);
+  check(history() == expected() && text(fixture.path(files::File::Renames)) ==
+                                       sidecarText(state["renames"]),
+        "A row put between others changed the table's bytes");
+  // Rows out of order take the order of addresses, once each.
+  auto unordered = state;
+  std::swap(unordered["renames"][0], unordered["renames"][2]);
+  store.persist(unordered);
+  check(history() == expected(), "Rows out of order kept their order");
+  check(ProjectHistory(fixture.binary, std::string(64, '0'), "fixture", false,
+                       Writer::write)
+                .committedState() == state,
+        "Reopening changed the committed tables");
+}
 void changedAddressSequence() {
   Fixture fixture;
   auto store = fixture.open();
@@ -999,6 +1049,7 @@ int main() {
     normalization();
     commandEncodingAndBranches();
     stateEncodingAndSidecars();
+    unchangedTablesKeepTheirBytes();
     changedAddressSequence();
     commandBudgetCountsEncodedBytes();
     budgetBeforePublication();

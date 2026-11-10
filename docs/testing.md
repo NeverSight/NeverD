@@ -6672,7 +6672,9 @@ unchanged journal, preserves newer staged edits and undo/redo, and refuses forei
 sidecars. Reopening also recovers the pending edit.
 `NeverDWorkerHistory` injects failure before and after each transaction write,
 checks unchanged sidecars and foreign-edit refusal, and retries newer staged
-edits. It compares complete published journals for first and later saves with
+edits. A table equal to the committed one but printing otherwise (a zero's sign) is
+encoded anew, a table left as it was keeps its bytes while another changes, and a
+row put between others or rows out of order take their place by address. It compares complete published journals for first and later saves with
 escaped/Unicode annotation text, then verifies retry and reopening. History and
 journal budget cases must refuse before publishing any transaction file.
 It also checks independent rollback checkpoints, equivalent file reformatting,

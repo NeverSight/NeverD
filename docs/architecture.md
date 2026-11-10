@@ -5116,7 +5116,12 @@ reads against the library without copying it, its prototype the parse's own; one
 would define a type reads again on a copy (`parseFunctionDeclaration`). The GUI opens with `write_behind`: the reply to such an edit goes before
 its write, which runs the same journaled transaction in order on a thread of its own
 (`ProjectHistory::persistLater`), joined with what is queued behind one already
-writing. What may read the project's files waits for it first. A document of a view
+writing. What may read the project's files waits for it first. A transaction encodes
+and formats only the tables the edit changed: a table whose rows print as the
+committed ones do (a zero's sign included) copies its committed encoding and keeps
+its file, checked against the file budget at the size this history last wrote, and a
+row equal to the committed row at its address keeps its admission wherever it moved
+(`normalizeTable`). A document of a view
 notes the addresses its render read, whether the engine rendered it then or a store
 kept it (`neverd_user_reads`), and those its decoration looked up, and reads what such
 an edit reached when it is next asked for, so the edit leaves the owner's other
