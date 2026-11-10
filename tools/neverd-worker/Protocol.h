@@ -33,11 +33,64 @@ std::uint64_t parseAddress(std::string_view text);
 void validateRequest(const Json &request);
 std::uint32_t frameSize(const unsigned char *header);
 std::string frame(const Json &message);
+/// Writes a JSON value piece by piece, byte for byte as the serializer prints
+/// the document with the same members, for replies whose rows cost more built
+/// as a document than written as text.  An object's keys must come in the
+/// order a document keeps them (sorted), and every string goes through the
+/// serializer's escaping: copied where the serializer copies it, printed by
+/// the serializer otherwise.  Only EncodedJson takes what it wrote.
+class JsonWriter {
+public:
+  void beginObject() {
+    separate();
+    text_ += '{';
+    first_ = true;
+  }
+  void endObject() {
+    text_ += '}';
+    first_ = false;
+  }
+  void beginArray() {
+    separate();
+    text_ += '[';
+    first_ = true;
+  }
+  void endArray() {
+    text_ += ']';
+    first_ = false;
+  }
+  void key(std::string_view name);
+  void string(std::string_view text);
+  /// An address, as hexAddress spells it.
+  void address(std::uint64_t value);
+  void number(std::uint64_t value);
+  void number(std::int64_t value);
+  void boolean(bool value) {
+    separate();
+    text_ += value ? "true" : "false";
+  }
+  /// A value the serializer prints whole.
+  void value(const Json &value);
+
+private:
+  friend class EncodedJson;
+  void separate() {
+    if (!first_)
+      text_ += ',';
+    first_ = false;
+  }
+  void escaped(std::string_view text);
+  std::string text_;
+  bool first_ = true;
+};
+
 /// Owned JSON produced by the same serializer as ordinary frames. Keeping its
 /// constructor typed prevents an unescaped string from entering a response.
 class EncodedJson {
 public:
   explicit EncodedJson(const Json &value);
+  /// What \p writer wrote, within the payload budget a frame allows.
+  explicit EncodedJson(JsonWriter &&writer);
   /// Encode generated rows without retaining a complete array DOM. The row
   /// producer is synchronous and never escapes this construction.
   EncodedJson(const Json::object_t &fields, const std::string &arrayKey,
