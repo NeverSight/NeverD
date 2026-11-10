@@ -441,6 +441,11 @@ an Apple native execution environment.
 
 ## Lifted source entry reconstruction
 
+The [entry ABI validation record](evidence/arm64e-entry-abi-2026-11-10.json)
+records 886 passed and 46 skipped broader regression cases, followed by all
+11 final entry tests passing. It distinguishes the two build/test phases,
+identifies the final source and binary, and retains each unavailable check.
+
 `MedLLVMEmitter::setReconstructAArch64SourceEntries(true)` projects a complete
 fixed Darwin C declaration onto each emitted body's recovered carriers. The
 shared ABI owner must reproduce exactly the declared register and stack layout;
