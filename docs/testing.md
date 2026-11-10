@@ -16648,7 +16648,10 @@ the freestanding image cannot link (a rounding instruction printed as
 reason. Every round-trip test runs this way, so compare the failing names of
 two such runs to judge a HighC or HighIR change. `NEVERD_SEMANTIC_LLVMC=1`
 does the same with the LLVM-C route's C, the check for an LLVM-C printer
-change.
+change. A case with `RoundTripTC::SourceRoute` set takes that route without
+the variable: the pointer kernels (`PtrLLVMC/*`) check the LLVM-C route on
+i386 and ARM32 in every run, since their 128-bit carriers and 16-byte frame
+members depend on the 32-bit spellings.
 The patch-full fixture uses `Codegen::compileForRewrite`, the same rewrite
 backend as patch operations, then compares baseline and transformed code across
 the full 4 x 3 ISA/format grid.

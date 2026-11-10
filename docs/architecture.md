@@ -10953,9 +10953,11 @@ blockaddress(...)` for an address inside a function's code). So is one whose
 source requirements, checked before any rendering, fail (`c-emission-failed;
 immediate original memory requires a runtime GPR value or a complete
 occurrence-bound image span`): no rendering reads it, and its callers call it
-as a function outside the unit. Before any C, a body the LLVM emitter refuses
-for a stale code or data address no longer discards its whole shard: the
-emitter names the body that wrote the refusal
+as a function outside the unit. Before any C, a body the LLVM emitter refuses,
+for a stale code or data address, for an FS/GS offset or REP count it cannot
+rebuild as a raw integer (`refusing raw-integer reconstruction`), or for a
+resolved call its module cannot reconcile, no longer discards its whole shard:
+the emitter names the body that wrote the refusal
 (`MedLLVMEmitter::refusedBodies`), the shard, or the serial module, is
 emitted again with that body masked off, and the LLVM C unit notes it first
 (`llvm-emission-failed; med_llvm_emitter: ambiguous pointer-table address
@@ -10967,9 +10969,17 @@ The emitter names every refused body it writes before it throws the first
 one's reason. A shard checks only the bodies it writes, since the shards'
 masks partition the unit, and a retry only the bodies it keeps; a module
 that merely filters bodies out, as the SDK's view of one function, still
-checks every one (`setMaskedBodiesOwnedElsewhere`). A lift, whose IR names
-nothing it leaves out, and a patch, which rewrites every function it lifts,
-still fail at such a body (`PipelineOptions::OmitRefusedLLVMBodies`). Two
+checks every one (`setMaskedBodiesOwnedElsewhere`). A resolved call that only
+the linked module shows short of arguments, as when two shards declared a
+callee without a prototype with different fixed prefixes, leaves its body
+declared only at the shard link, with its source identity, and noted the same
+way (`llvm-emission-failed; med_llvm_emitter: resolved call in sub_1C2680 to
+__unordtf2 lacks recovered arguments`). Lifted IR text leaves such a body out
+too and opens with a `; neverd.not-lifted: NAME at 0xENTRY: REASON` line for
+it and for each function the pipeline refused (`neverd_lift_module`). A patch,
+which rewrites every function it lifts, still fails at such a body
+(`PipelineOptions::OmitRefusedLLVMBodies`), as do the object round trip
+(`neverd_lift_to_obj`) and a view of one function, with that body's reason. Two
 functions that carry one name, as the local symbols of one Rust generic in
 two codegen units of a Mach-O, each keep their own LLVM function: the first
 named keeps the name and a later one takes its entry address after it
@@ -11815,10 +11825,15 @@ XMM operands; 32-bit VEX ignores the documented B and used-vvvv extension
 bits without relaxing unused-vvvv or LES/LDS disambiguation. The shared address
 tail validator retains wrapping and segment ownership.
 
-LLVM-to-C's i386 scalar carriers use signed/unsigned `_BitInt(128)` aliases
-when the target compiler has bit-precise integers but no native 128-bit aliases.
-This preserves 65..128-bit value operations, including packed numerical/MXCSR
-results. It does not establish every wide-integer runtime or calling convention.
+LLVM-to-C's 32-bit scalar carriers use signed/unsigned `_BitInt(128)` aliases
+when the target compiler has bit-precise integers but no native 128-bit aliases:
+every i386 unit defines them, and so does an ARM32 or MIPS32 unit that holds a
+65..128-bit value. A 16-byte integer such a unit spells by its type, as a frame
+record's member, is `__int128`, which the unit then defines as `_BitInt(128)`,
+as HighC does; that type is 16 bytes there, aligned to at most 16, so the
+member keeps its frame offset. This preserves 65..128-bit value operations,
+including packed numerical/MXCSR results. It does not establish every
+wide-integer runtime or calling convention.
 
 `IntrinsicValueEffects` defines positive, shape-validated contracts for operations
 whose effects are entirely explicit values. `LowIntrinsicEffects` additionally
