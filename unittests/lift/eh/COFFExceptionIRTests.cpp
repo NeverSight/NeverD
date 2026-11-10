@@ -176,7 +176,18 @@ void checkStandaloneSEHSource(
   {
     llvm::raw_fd_ostream Header(HeaderPath, Error);
     ASSERT_FALSE(Error);
-    Header << "#define EXCEPTION_EXECUTE_HANDLER 1\n"
+    Header << "#pragma once\n"
+              "typedef enum _EXCEPTION_DISPOSITION {\n"
+              "  ExceptionContinueExecution, ExceptionContinueSearch,\n"
+              "  ExceptionNestedException, ExceptionCollidedUnwind\n"
+              "} EXCEPTION_DISPOSITION;\n"
+              "struct _EXCEPTION_RECORD;\n"
+              "struct _CONTEXT;\n"
+              "struct _DISPATCHER_CONTEXT;\n"
+              "EXCEPTION_DISPOSITION __C_specific_handler(\n"
+              "  struct _EXCEPTION_RECORD *, void *, struct _CONTEXT *,\n"
+              "  struct _DISPATCHER_CONTEXT *);\n"
+              "#define EXCEPTION_EXECUTE_HANDLER 1\n"
               "#define EXCEPTION_CONTINUE_SEARCH 0\n"
               "#define EXCEPTION_CONTINUE_EXECUTION (-1)\n"
               "unsigned long _exception_code(void);\n"
@@ -1771,7 +1782,8 @@ TEST(COFFExceptionIR, LLVMCAddressedImportKeepsItsRuntimeFunctionDeclaration) {
       ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
       const bool Function = Import && Format == BinaryFormat::COFF;
       const std::string Declaration =
-          Function ? "extern int32_t neverd_data___C_specific_handler("
+          Function ? "extern EXCEPTION_DISPOSITION "
+                     "neverd_data___C_specific_handler("
                    : "extern unsigned char neverd_data___C_specific_handler[]";
       EXPECT_NE(Source.find(Declaration), std::string::npos) << Source;
       EXPECT_NE(Source.find("__asm__(\"__C_specific_handler\")"),
@@ -1824,9 +1836,10 @@ TEST(COFFExceptionIR, HighCAddressedRuntimeFunctionPrecedesSEH) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   ASSERT_TRUE(HighCEmitter().emit({Function}, OS, Options));
-  EXPECT_NE(Source.find("extern int32_t __C_specific_handler("),
+  EXPECT_NE(Source.find("extern EXCEPTION_DISPOSITION __C_specific_handler("),
             std::string::npos)
       << Source;
+  EXPECT_NE(Source.find("#include <excpt.h>"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("extern unsigned char neverd_code_"), std::string::npos)
       << Source;
   REQUIRE_HOST_FIXTURE_COMPILER();

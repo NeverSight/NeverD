@@ -18,6 +18,7 @@
 #include "neverd/Limits.h"
 #include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/backend/llvm/X86/LLVMX86BitTest.h"
@@ -50,6 +51,7 @@
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/Triple.h"
 
+#include <array>
 #include <cstdlib>
 #include <iterator>
 #include <optional>
@@ -8268,4 +8270,347 @@ int main(void) {
         compileAndRun(Source, Level, {}, true);
     }
   }
+}
+
+namespace {
+
+void checkImageByteFrameStores(bool NativeI386) {
+  const auto Architectures =
+      NativeI386 ? std::array{neverd::Arch::X86, neverd::Arch::ARM}
+                 : std::array{neverd::Arch::X64, neverd::Arch::AArch64};
+  for (const auto Arch : Architectures)
+    for (const auto Format :
+         {neverd::BinaryFormat::COFF, neverd::BinaryFormat::ELF,
+          neverd::BinaryFormat::MachO})
+      for (bool Volatile : {false, true}) {
+        SCOPED_TRACE(static_cast<unsigned>(Arch));
+        SCOPED_TRACE(static_cast<unsigned>(Format));
+        SCOPED_TRACE(Volatile);
+        llvm::LLVMContext Context;
+        llvm::SMDiagnostic Error;
+        std::string IR = R"ir(
+target datalayout = "e-p:64:64-i64:64"
+@__nd_data_2000 = internal global [24 x i8] zeroinitializer
+define i32 @store_frame_address(i32 %value) {
+entry:
+  %frame = alloca [32 x i8], align 16
+  %base = ptrtoint ptr %frame to i64
+  %address = add i64 %base, 8
+  %slot = inttoptr i64 %address to ptr
+  store i32 %value, ptr %slot, align 1
+  %image = getelementptr i8, ptr @__nd_data_2000, i64 1
+  store volatile i64 %address, ptr %image, align 1
+  %bits = load volatile i64, ptr %image, align 1
+  %restored = inttoptr i64 %bits to ptr
+  %result = load i32, ptr %restored, align 1
+  %before = load i8, ptr @__nd_data_2000, align 1
+  %end = getelementptr i8, ptr @__nd_data_2000, i64 9
+  %after = load i8, ptr %end, align 1
+  %outside = or i8 %before, %after
+  %unchanged = icmp eq i8 %outside, 0
+  %answer = select i1 %unchanged, i32 %result, i32 0
+  ret i32 %answer
+}
+)ir";
+        if (NativeI386) {
+          for (const auto &[From, To] :
+               {std::pair{"e-p:64:64-i64:64", "e-p:32:32"},
+                std::pair{"i64", "i32"}, std::pair{"i32 9", "i32 5"}})
+            for (size_t At = IR.find(From); At != std::string::npos;
+                 At = IR.find(From, At + std::char_traits<char>::length(To)))
+              IR.replace(At, std::char_traits<char>::length(From), To);
+        }
+        auto Module = llvm::parseAssemblyString(IR, Error, Context);
+        ASSERT_TRUE(Module) << Error.getMessage().str();
+        for (auto &Block : *Module->getFunction("store_frame_address"))
+          for (auto &Inst : Block) {
+            if (auto *Store = llvm::dyn_cast<llvm::StoreInst>(&Inst))
+              if (Store->isVolatile())
+                Store->setVolatile(Volatile);
+            if (auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst))
+              if (Load->isVolatile())
+                Load->setVolatile(Volatile);
+          }
+        ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+        neverd::CEmitterOptions Options;
+        Options.TheArch = Arch;
+        Options.Format = Format;
+        std::string Source;
+        llvm::raw_string_ostream Out(Source);
+        ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Out, Options));
+        ASSERT_NE(Source.find("image_bits"), std::string::npos);
+        Source += R"c(
+int main(void) {
+  return store_frame_address(0x87654321U) != 0x87654321U ||
+         store_frame_address(0x12345678U) != 0x12345678U;
+}
+)c";
+        for (llvm::StringRef Level : {"-O0", "-O2"})
+          compileAndRun(Source, Level, {}, true, NativeI386);
+      }
+}
+
+} // namespace
+
+TEST(LLVMCValues, ImageByteStoresRetainFrameAddressBits) {
+  checkImageByteFrameStores(false);
+}
+
+TEST(LLVMCValues, ImageByteStoresRetain32BitFrameAddressBits) {
+#if defined(__linux__) && (defined(__x86_64__) || defined(__i386__))
+  checkImageByteFrameStores(true);
+#else
+  GTEST_SKIP() << "32-bit address execution requires Linux i386 support";
+#endif
+}
+
+TEST(LLVMCValues, GlobalInitializersDeclareExternalImageStorageFirst) {
+  for (bool Earlier : {false, true}) {
+    SCOPED_TRACE(Earlier);
+    llvm::LLVMContext Context;
+    llvm::SMDiagnostic Error;
+    const std::string External = "@__nd_data_3000 = external global i8\n";
+    auto Module = llvm::parseAssemblyString((Earlier ? External : "") + R"ir(
+@first = internal global [1 x ptr] [ptr @__nd_data_3000]
+define ptr @get_image_address() {
+  %address = load ptr, ptr @first
+  ret ptr %address
+}
+)ir" + (Earlier ? "" : External),
+                                            Error, Context);
+    ASSERT_TRUE(Module) << Error.getMessage().str();
+    Module->setDataLayout("e-p:64:64");
+    const std::map<neverd::va_t, std::string> Names{{0x3000, "external_image"}};
+    neverd::CEmitterOptions Options;
+    Options.TheArch = neverd::Arch::X64;
+    Options.UserNames = &Names;
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Out, Options));
+    Source += R"c(
+uint8_t external_image = 71;
+int main(void) {
+  return get_image_address() != &external_image ||
+         *(uint8_t *)get_image_address() != 71;
+}
+)c";
+    for (llvm::StringRef Level : {"-O0", "-O2"})
+      compileAndRun(Source, Level, {}, true);
+  }
+}
+
+TEST(LLVMCValues, WindowsPersonalityRetainsHeaderContextTypes) {
+  for (const auto Arch :
+       {neverd::Arch::ARM, neverd::Arch::X64, neverd::Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<unsigned>(Arch));
+    llvm::LLVMContext Context;
+    llvm::SMDiagnostic Error;
+    auto Module = llvm::parseAssemblyString(R"ir(
+declare i32 @__C_specific_handler(ptr, ptr, ptr, ptr)
+define i32 @dispatch_exception(ptr %exception, ptr %frame, ptr %context,
+                                ptr %dispatcher) {
+  %result = call i32 @__C_specific_handler(ptr %exception, ptr %frame,
+                                          ptr %context, ptr %dispatcher)
+  ret i32 %result
+}
+)ir",
+                                            Error, Context);
+    ASSERT_TRUE(Module) << Error.getMessage().str();
+    Module->setDataLayout(Arch == neverd::Arch::ARM ? "e-p:32:32"
+                                                    : "e-p:64:64");
+    neverd::CEmitterOptions Options;
+    Options.TheArch = Arch;
+    Options.Format = neverd::BinaryFormat::COFF;
+    Options.EmitIncludes = false;
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Out, Options));
+    const std::string Prelude = R"c(
+#include <stdint.h>
+typedef enum { disposition_continue, disposition_search, disposition_nested,
+               disposition_collided } EXCEPTION_DISPOSITION;
+struct _EXCEPTION_RECORD { int value; };
+struct _CONTEXT { int value; };
+struct _DISPATCHER_CONTEXT { int value; };
+EXCEPTION_DISPOSITION __C_specific_handler(struct _EXCEPTION_RECORD *, void *,
+                                           struct _CONTEXT *,
+                                           struct _DISPATCHER_CONTEXT *);
+)c";
+    const std::string Harness = R"c(
+EXCEPTION_DISPOSITION __C_specific_handler(struct _EXCEPTION_RECORD *exception,
+    void *frame, struct _CONTEXT *context, struct _DISPATCHER_CONTEXT *dispatcher) {
+  return exception->value == 11 && *(int *)frame == 23 && context->value == 37 &&
+         dispatcher->value == 41 ? disposition_collided : disposition_nested;
+}
+int main(void) {
+  struct _EXCEPTION_RECORD exception = {11};
+  struct _CONTEXT context = {37};
+  struct _DISPATCHER_CONTEXT dispatcher = {41};
+  int frame = 23;
+  if (dispatch_exception(&exception, &frame, &context, &dispatcher) != 3) return 1;
+  frame = 24;
+  return dispatch_exception(&exception, &frame, &context, &dispatcher) != 2;
+}
+)c";
+    for (llvm::StringRef Level : {"-O0", "-O2"})
+      compileAndRun(Prelude + Source + Harness, Level, {}, true);
+  }
+}
+
+TEST(LLVMCValues, GlobalInitializersDeclareInteriorImageAliases) {
+  for (bool Selected : {false, true})
+    for (bool HasFunction : {false, true}) {
+      SCOPED_TRACE(Selected);
+      SCOPED_TRACE(HasFunction);
+      if (Selected && !HasFunction)
+        continue;
+      llvm::LLVMContext Context;
+      llvm::SMDiagnostic Error;
+      auto Module = llvm::parseAssemblyString(R"ir(
+target datalayout = "e-p:64:64"
+@__nd_codeptr_2000 = external global [32 x i8]
+@first = internal global [1 x ptr] [ptr getelementptr (i8, ptr @__nd_codeptr_2000, i64 8)]
+define ptr @get_image_address() {
+  %address = load ptr, ptr @first
+  ret ptr %address
+}
+)ir",
+                                              Error, Context);
+      ASSERT_TRUE(Module) << Error.getMessage().str();
+      auto *Function = Module->getFunction("get_image_address");
+      if (!HasFunction) {
+        Function->eraseFromParent();
+        Function = nullptr;
+      }
+      const std::map<neverd::va_t, std::string> Names{
+          {0x2008, "external_image"}};
+      neverd::CEmitterOptions Options;
+      Options.UserNames = &Names;
+      std::string Source;
+      llvm::raw_string_ostream Out(Source);
+      ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Out, Options, nullptr,
+                                              nullptr,
+                                              Selected ? Function : nullptr));
+      ASSERT_LT(Source.find("extern uint8_t external_image;"),
+                Source.find("first[1] ="));
+      Source += R"c(
+uint8_t external_image = 71;
+int main(void) { return first[0] != &external_image; }
+)c";
+      for (llvm::StringRef Level : {"-O0", "-O2"})
+        compileAndRun(Source, Level, {}, true);
+    }
+}
+
+TEST(LLVMCValues, InitializerDeclarationsKeepOriginalImageValidation) {
+  for (llvm::StringRef Storage : {"[16 x i8]", "i32", "[8 x i16]"})
+    for (bool Selected : {false, true}) {
+      SCOPED_TRACE(Storage.str());
+      SCOPED_TRACE(Selected);
+      llvm::LLVMContext Context;
+      llvm::SMDiagnostic Error;
+      const std::string IR = "target datalayout = \"e-p:64:64\"\n"
+                             "@first = internal global ptr @__nd_data_2000\n"
+                             "@__nd_data_2000 = external global " +
+                             Storage.str() +
+                             ", !neverd.source.image-storage !0\n"
+                             "define ptr @image_address() {\n"
+                             "  %value = load ptr, ptr @first\n"
+                             "  ret ptr %value\n}\n!0 = !{}\n";
+      auto Module = llvm::parseAssemblyString(IR, Error, Context);
+      ASSERT_TRUE(Module) << Error.getMessage().str();
+      auto *Function =
+          Selected ? Module->getFunction("image_address") : nullptr;
+      neverd::CEmitterOptions Options;
+      std::string Source;
+      llvm::raw_string_ostream Out(Source);
+      if (Storage != "[16 x i8]") {
+        EXPECT_THROW(neverd::LLVMCEmitter().emit(*Module, Out, Options, nullptr,
+                                                 nullptr, Function),
+                     std::invalid_argument);
+        continue;
+      }
+      ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Out, Options, nullptr,
+                                              nullptr, Function));
+      EXPECT_NE(Source.find("(original loaded image storage)"),
+                std::string::npos)
+          << Source;
+      Source += R"c(
+uint8_t unk_2000[16] = {79};
+int main(void) {
+  return image_address() != unk_2000 || *(uint8_t *)image_address() != 79;
+}
+)c";
+      for (llvm::StringRef Level : {"-O0", "-O2"})
+        compileAndRun(Source, Level, {}, true);
+    }
+}
+
+TEST(LLVMCValues, HeaderContextTagsDoNotRequireDebugTypedefs) {
+  class ContextDebug : public neverd::NullDebugContext {
+  public:
+    std::optional<neverd::FunctionSym>
+    resolveFunction(neverd::va_t VA) const override {
+      if (VA != 0x1000)
+        return std::nullopt;
+      neverd::FunctionSym Function;
+      Function.Addr = VA;
+      Function.Name = "context_address";
+      Function.ReturnType = neverd::NdType::makePtr(neverd::NdType::makeVoid());
+      Function.Params.emplace_back(
+          "context", neverd::NdType::makePtr(
+                         neverd::NdType::makeNamedRecord("_CONTEXT", 0)));
+      return Function;
+    }
+  } Debug;
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"ir(
+target datalayout = "e-p:64:64"
+declare i32 @__C_specific_handler(ptr, ptr, ptr, ptr)
+define ptr @context_address(ptr %context) {
+  %result = call i32 @__C_specific_handler(ptr null, ptr null,
+                                          ptr %context, ptr null)
+  ret ptr %context
+}
+)ir",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  neverd::rewrite_source::setOriginalVA(*Module->getFunction("context_address"),
+                                        0x1000);
+  neverd::CEmitterOptions Options;
+  Options.Format = neverd::BinaryFormat::COFF;
+  Options.RecordDefinitions = [](const std::vector<neverd::TypeRef> &Types) {
+    for (const auto &Type : Types)
+      EXPECT_NE(Type->SourceName, "_CONTEXT");
+    return neverd::CRecordDefinitions{};
+  };
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Out, Options, &Debug));
+  EXPECT_NE(Source.find("struct _CONTEXT*"), std::string::npos) << Source;
+  const auto Include = Source.find("#include <excpt.h>");
+  ASSERT_NE(Include, std::string::npos);
+  // Independent header supplies tags but deliberately no _CONTEXT typedef.
+  Source.replace(Include, std::string("#include <excpt.h>").size(), R"c(
+#define EXCEPTION_DISPOSITION int
+struct _CONTEXT { int value; };
+struct _EXCEPTION_RECORD;
+struct _DISPATCHER_CONTEXT;
+int __C_specific_handler(struct _EXCEPTION_RECORD *, void *, struct _CONTEXT *,
+                          struct _DISPATCHER_CONTEXT *);
+)c");
+  Source += R"c(
+static struct _CONTEXT *observed;
+int __C_specific_handler(struct _EXCEPTION_RECORD *record, void *frame,
+    struct _CONTEXT *context, struct _DISPATCHER_CONTEXT *dispatcher) {
+  observed = context; return 1;
+}
+int main(void) {
+  struct _CONTEXT context = {73};
+  return context_address(&context) != &context || observed != &context;
+}
+)c";
+  for (llvm::StringRef Level : {"-O0", "-O2"})
+    compileAndRun(Source, Level, {}, true);
 }
