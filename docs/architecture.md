@@ -47,6 +47,13 @@ execute-breakpoint profile compares original linear instruction starts before
 fetch, after pending virtual-interrupt selection. `ir/X86/X86DebugRules` owns
 the shared legacy/x64 control validation, RF/SS suppression, matching and DR6
 status, including coincident single-step and next-PC breakpoint causes.
+The legacy executor owns HLT's persistent `Halted` cell. Completion publishes
+the following EIP and expires SS/STI inhibition; waiting performs no fetch.
+Only the event owner clears the halt when accepting IRQ/NMI or a debug trap,
+before any IDT access. Its existing continuation then retains wake acceptance
+across delivery faults and backing/work stops. Source selection checks this
+cell before selecting the next code extent, so compiled dispatch cannot turn
+HLT into fallthrough or charge repeated instruction attempts while waiting.
 `ir/X86/X86DebugRegisterRules` owns MOV-DR access priority and normalization;
 `lift/X86/X86DebugRegisterEncoding` owns its register-only byte grammar.
 The paged continuation provider retains these bytes with a dedicated projection
@@ -1567,6 +1574,26 @@ The caller owns subsequent signing. Native execution tests use this migration
 for legacy inputs because the Xcode 27 runner also drops authenticated bind
 addends in a compiler-original threaded control; original-format installation
 and inspection remain separate offline coverage.
+
+`prepareMachOAuthenticatedStartup` is the publication-time owner for default
+dyld startup. It migrates legacy threaded metadata and repartitions userland
+arm64e chains containing IB/DB slots into valid 4 KiB chain pages. The shared
+publication transaction invokes it before final signing, including when no
+new signing recipes were added. It rebuilds page roots and next fields while
+retaining storage VAs, targets, imports/addends, signing parameters, code and
+segment protections. Existing 4 KiB chains and A-key-only chained images are
+unchanged. Kernel/firmware formats and unrepresentable legacy imports reject
+transactionally. CodeDirectory page size is a separate signing contract and
+is preserved.
+
+This follows the default dyld fallback contract: XNU's
+[page-in signer supports only A keys](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/osfmk/vm/vm_dyld_pager.c),
+and its [mapping syscall rejects a non-native chain page size](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/vm/vm_unix.c).
+[dyld falls back to its in-process fixup implementation](https://github.com/apple-oss-distributions/dyld/blob/fd8d0c4d52320ebf64db34f3cb280310d905c5ae/dyld/Loader.cpp)
+when that mapping fails. On the qualified 16 KiB Apple hosts this retains all
+four keys without a launcher profile, environment override or protection change.
+Default startup qualification is separate from the explicit userspace diagnostic
+profile and from arbitrary lifted-image rebuilding.
 
 Installation is transactional, including automatic producer receipts and the
 optional explicit recipe handoff in `MachOPatcher::appendReplacementImage`.
@@ -11838,10 +11865,22 @@ context and explicit-state paths.
 entry-register save. A known reaching stack store of a computed value,
 including a partial overwrite, prevents the load from being ignored as an
 epilogue restore. Both the ordinary return scan and merged-epilogue scan use
-this decision. Entry-stack offsets and ordered memory accesses are indexed
+this decision. A partial identity restore covers only its own bytes; each
+predecessor retains the uncovered-byte mask, and revisits process only new
+bytes. A validated F16C store supplies computed bytes, while a validated
+floating-point memory read cannot hide an earlier write. Entry-stack offsets
+and ordered memory accesses are indexed
 lazily once per function, and repeated views reuse the load result. Unknown
 aliases, calls and exceptional predecessors end that path without inventing
 a stored value; this does not establish arbitrary function ABI contracts.
+
+`endsCallArgumentSetup` owns the distinction between register and memory
+effects during ABI recovery. Validated F16C conversions that store half values
+and ARM64 scalar, vector, pair and structure stores invalidate earlier stack
+setup. Register-only scans preserve that setup across these operations while
+still observing their explicit outputs. Invalid shapes remain barriers for
+both queries; an overwritten stack argument is not replaced with its stale
+earlier value.
 
 An internal i386 helper may instead consume one incoming logical ST0 and
 return an integer. The same machine graph proves that every return consumes

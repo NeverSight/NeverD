@@ -1682,6 +1682,11 @@ conditional memory, invocation lifetime and both C routes remain open.
   these bits because the return transport may quiet the NaN itself.
   Computed stack values reloaded into EAX/RAX no longer inherit the
   POP-shaped restore heuristic merely because an FP temporary remains.
+  Partial identity restores now account for each byte independently across
+  predecessors and loops. Validated F16C memory stores supply computed bytes;
+  floating memory reads preserve earlier reaching stores. The shared call
+  setup effect rule also separates register arguments from memory overwritten
+  by F16C and ARM64 scalar/vector/pair/structure stores.
   Native integer-return oracles cover both C routes across COFF/ELF/Mach-O;
   unknown reaching writes and arbitrary ABI inference remain separate work.
 

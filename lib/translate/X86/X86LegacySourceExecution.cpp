@@ -43,6 +43,10 @@ uint32_t X86LegacySourceExecution::select(uint64_t &Key) {
     return uint32_t(X86LegacySourceExit::PendingEvent);
   if (auto Failure = detail::admitLegacyExecution(State, Memory, Options))
     return fail(std::move(Failure));
+  if (State.Halted) {
+    Error.clear();
+    return uint32_t(X86LegacyExecutionStatus::Halted);
+  }
   Key = key();
   Error.clear();
   return uint32_t(X86LegacyExecutionStatus::Completed);

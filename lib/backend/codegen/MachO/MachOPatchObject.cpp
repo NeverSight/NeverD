@@ -1636,8 +1636,6 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
                                                           {}, Dependencies))
                 return Reject(std::move(E));
               if (Original.isArm64e()) {
-                if (auto E = convertMachOThreadedFixupsToChains(Binary))
-                  return Reject(std::move(E));
                 auto Collected = collectMachOAuthenticatedFixups(
                     Binary, Object->Image, Dependencies);
                 if (!Collected)
