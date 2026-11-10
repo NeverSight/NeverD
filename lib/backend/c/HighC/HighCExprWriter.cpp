@@ -7486,10 +7486,15 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
         return Access(bareLoad(
             "(*(" + memoryTypeName(E.Type) + " *)(" + Addr + "))", ParentPrec));
     }
-    return Access(
-        bareLoad(memoryLoadExpr(E.Type, Addr, E.MemoryOrdering,
-                                E.MemoryAddressSpace, false, Destination),
-                 ParentPrec));
+    return Access(bareLoad(
+        memoryLoadExpr(E.Type, Addr, E.MemoryOrdering, E.MemoryAddressSpace,
+                       false, Destination,
+                       E.Operands[0]->Kind == ExprKind::Const &&
+                               E.Operands[0]->Type &&
+                               E.Operands[0]->Type->Size >= 4
+                           ? std::optional<uint64_t>(E.Operands[0]->ConstVal)
+                           : std::nullopt),
+        ParentPrec));
   }
   case ExprKind::Store: {
     if (E.Operands.size() < 2)

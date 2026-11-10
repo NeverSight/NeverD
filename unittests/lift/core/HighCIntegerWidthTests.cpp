@@ -22,6 +22,7 @@
 #include "llvm/Support/Program.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <array>
 #include <optional>
 #include <string>
 #include <utility>
@@ -1244,7 +1245,7 @@ TEST(HighCIntegerWidths, SegmentedOffsetsDoNotAliasOverlappingImageBacking) {
         << Name << "\n"
         << Source;
   }
-  EXPECT_NE(Body("read_gs_coincident").find("__readgsqword"), std::string::npos)
+  EXPECT_NE(Body("read_gs_coincident").find("%%gs:(%1)"), std::string::npos)
       << Source;
   EXPECT_NE(Body("read_gs_compound").find(" + 0x140002000"), std::string::npos)
       << Source;
@@ -1403,18 +1404,88 @@ TEST(HighCIntegerWidths, SegmentOffsetsPreserveIntegerExtensions) {
   CEmitterOptions Options;
   Options.TheArch = Arch::X64;
   Options.Format = BinaryFormat::ELF;
-  ASSERT_TRUE(HighCEmitter().emit(Functions, OS, Options));
-  OS.flush();
-  Source += "\n#include <asm/prctl.h>\n#include <sys/syscall.h>\n"
-            "#include <unistd.h>\n";
-  // A PIE static object has headroom for both positive and negative offsets,
-  // independently of the subprocess stack's ASLR position.
-  for (const auto *Opt : {"-O0", "-O2"})
-    compileAndExecute(Source + executionHarness(Checks), false, true, Opt,
-                      {"-fPIE", "-pie"});
+  BinaryImage Windows;
+  Windows.Arch = Arch::X64;
+  Windows.Bits = Bitness::Bits64;
+  Windows.Format = BinaryFormat::COFF;
+  // Exercise both the generic memory helper and the Windows read spelling.
+  // A host observer has the real intrinsic's 32-bit offset contract.
+  const std::string Observer = R"(
+#define _GNU_SOURCE 1
+#include <stdint.h>
+static uint32_t __readgsdword(uint32_t offset) {
+  uint32_t value;
+  __asm__ volatile("movl %%gs:(%1), %0" : "=r"(value)
+                   : "r"((uintptr_t)offset) : "memory");
+  return value;
+}
+)";
+  for (bool Msvc : {false, true}) {
+    SCOPED_TRACE(Msvc);
+    Source.clear();
+    Options.Image = Msvc ? &Windows : nullptr;
+    ASSERT_TRUE(HighCEmitter().emit(Functions, OS, Options));
+    OS.flush();
+    Source += "\n#include <asm/prctl.h>\n#include <sys/syscall.h>\n"
+              "#include <unistd.h>\n";
+    // A PIE static object has headroom for both positive and negative offsets,
+    // independently of the subprocess stack's ASLR position.
+    for (const auto *Opt : {"-O0", "-O2"})
+      compileAndExecute(Observer + Source + executionHarness(Checks), false,
+                        true, Opt, {"-fPIE", "-pie"});
+  }
   ASSERT_EQ(Functions.size(), 20u);
-  RecordProperty("native_gs_loads", 40);
-  RecordProperty("native_executables", 2);
+  RecordProperty("native_gs_loads", 80);
+  RecordProperty("native_executables", 4);
+#else
+  GTEST_SKIP() << "native GS-base execution requires Linux x86-64";
+#endif
+}
+
+TEST(HighCIntegerWidths, WindowsSegmentLoadsKeepPointerAndFloatingBits) {
+#if defined(__x86_64__) && defined(__linux__)
+  BinaryImage Windows;
+  Windows.Arch = Arch::X64;
+  Windows.Bits = Bitness::Bits64;
+  Windows.Format = BinaryFormat::COFF;
+  std::vector<HighFunc> Functions;
+  const auto U64 = NdType::makeInt(8, false);
+  const std::array<TypeRef, 3> Types = {NdType::makePtr(NdType::makeVoid()),
+                                        NdType::makeFloat(4),
+                                        NdType::makeFloat(8)};
+  for (unsigned I = 0; I < Types.size(); ++I) {
+    HighFunc F;
+    F.Name = "read_segment_type_" + std::to_string(I);
+    F.Params = {{"arg0", U64}};
+    F.ReturnType = Types[I];
+    returnValue(F, HighExpr::makeLoad(parameter(0, U64), F.ReturnType,
+                                      NdMemoryOrdering::None,
+                                      NdMemoryAddressSpace::X86GS));
+    Functions.push_back(std::move(F));
+  }
+  const std::string Source = emitFunctions(Functions, &Windows);
+  const std::string Harness = R"(
+#include <asm/prctl.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+int main(void) {
+  static const uint64_t bits[] = {0x1234567889abcdef, 0x40500000,
+                                 0x400a000000000000};
+  uintptr_t saved_gs;
+  int failed = 0;
+  if (syscall(SYS_arch_prctl, ARCH_GET_GS, &saved_gs)) return 2;
+  if (syscall(SYS_arch_prctl, ARCH_SET_GS,
+              (uintptr_t)bits - UINT64_C(0x100000000))) return 3;
+  failed |= (uintptr_t)read_segment_type_0(UINT64_C(0x100000000)) != bits[0];
+  failed |= read_segment_type_1(UINT64_C(0x100000008)) != 3.25f;
+  failed |= read_segment_type_2(UINT64_C(0x100000010)) != 3.25;
+  if (syscall(SYS_arch_prctl, ARCH_SET_GS, saved_gs)) return 4;
+  return failed;
+}
+)";
+  for (const auto *Opt : {"-O0", "-O2"})
+    compileAndExecute("#define _GNU_SOURCE 1\n" + Source + Harness, false, true,
+                      Opt, {"-fPIE", "-pie"});
 #else
   GTEST_SKIP() << "native GS-base execution requires Linux x86-64";
 #endif
