@@ -1653,6 +1653,16 @@ original KVM instruction comparisons. These changes add no NeverC 32-bit source
 target and do not admit real/IA-32e execution-mode transitions, software SMM/SGX,
 TLB timing or external memory writers.
 
+The [November 10 MOV-CR qualification](evidence/x86-control-resume-2026-11-10.json)
+records 1,594 passing executions across both SDKs, including 11,096 original
+control-register comparisons on both bound CPU core types. Two native LA57
+cases are unavailable. All 16 focused cases fail before the fix on each SDK
+and pass after it. The full host-x64 Clang/NeverC O0/O2 source suite produces
+1,810 identical files per SDK, including 452 shared libraries; all 1,362 prior
+source artifacts and 260 return C/header/manifest files remain unchanged.
+Build failures and the superseded stale-object attempt are retained separately
+from the passing qualification, with exact source and binary identities.
+
 ## Protected task transfers
 
 The `X86LegacyExecutionOptions::Tasks` binding with `OrderedTSS` connects far CALL/JMP
