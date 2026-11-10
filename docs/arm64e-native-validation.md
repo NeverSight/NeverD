@@ -352,6 +352,11 @@ Apple-native object route remains available. Canonical generation requires the
 committed directly to the NeverSight LLVM fork; it does
 not strip assembly or patch LLVM during the NeverD build. A separate source
 build validates that correction without changing the prebuilt release selection.
+The prebuilt audit checks the tag, release commit, all archive digests and checksum
+sidecars against the r6 snapshot. The source gitlink may advance only when the
+fork's authoritative comparison proves that snapshot is its ancestor; older,
+divergent or unavailable ancestry fails the audit. The report prints both
+identities. A source fix does not qualify the unchanged prebuilt package.
 The native object route does not require the raw MC final-address callback.
 
 The generated fixtures cover O0/O2, four authentication keys, address diversity,
@@ -390,6 +395,13 @@ Source, frontend, test-binary, preflight and runtime XML identities are bound in
 the record; both controllers remove their owned builds. These runs qualify the
 bounded canonical source pipeline, including real authenticated calls and C++
 catch/cleanup through newly generated signed frames.
+
+The [integrated replay](https://github.com/gmh5225/test_mac_intel/actions/runs/42772199612)
+uses the local Release host built from `0d3511620291254bffcaa90a356870016f2741f4`
+after merging dev and recording the corrected LLVM gitlink. Both hosts again
+pass all 36 native cases and both six-control prerequisites, with no failures
+or skips. The temporary delivery binds source-file, manifest, archive and
+test-binary hashes; it is recorded separately from the cold builds.
 
 A source build also exercises `MCProducerCapturesRecipesThroughFinalPlacement`
 for IR and assembly producers with chained and threaded installers, plus

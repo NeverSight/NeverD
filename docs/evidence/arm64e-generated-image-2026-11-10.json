@@ -456,6 +456,146 @@
     "environment_controller_tests_passed": 11,
     "clang_format": "22.1.2",
     "source_provenance": "passed",
-    "diff_check": "passed"
+    "diff_check": "passed",
+    "prebuilt_release_and_ancestry_tests_passed": 33
+  },
+  "integrated_replay": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42772199612",
+    "environment_revision": "415a110c1b8ed6494901f16ba08ed83ab7f44714",
+    "source_revision": "0d3511620291254bffcaa90a356870016f2741f4",
+    "llvm_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+    "delivery": "Temporary immutable local Release test host, not an independent cold build. Per-stage strict NeverD verifiers validate complete native matrices.",
+    "archive_sha256": "7476e9284e5358843f048757d55689e2c626bd6c534b74d4aea09e811745baf0",
+    "manifest_sha256": "e5e57d46666bff6a957e11ba2274e5ea203dce30a6c290656bb53a6715466d1d",
+    "runners": {
+      "macos-26": {
+        "replay_report_sha256": "30a930824e40356ac8921872c0725374ae3a2f8a390a93ffa684919cb150b388",
+        "manifest_sha256": "e5e57d46666bff6a957e11ba2274e5ea203dce30a6c290656bb53a6715466d1d",
+        "test_binary_sha256": "eb981eec998aa8fc30a4420a432e1f11c1981db1db852646f8b75c8d3f8a8836",
+        "probes": {
+          "probe": {
+            "passed": 6,
+            "report_sha256": "4f52884a12a8f9c4232320a6222fbed4f0f1455ff891ab3e18469274dba0ec5f"
+          },
+          "startup": {
+            "passed": 6,
+            "report_sha256": "3d4b3b5e9f2b9f8ddbdcfe581596cf5ce1cfcaf71b42e03002115d22bc67a503"
+          }
+        },
+        "matrices": {
+          "dylib-installation": {
+            "passed": 20,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "3ef34b447a1245b5c986a85dff5115dde54cc8ad7505ba4624abbbe469dae155",
+            "xml_sha256": "16f8aa842d7cce6e009bab9482299902e132ad101c659738182589d12d51bf67"
+          },
+          "installation": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "8739aa68944a43fcf9639c861cf78ac6be3cce90537879a3a8fadd547be4ca51",
+            "xml_sha256": "f8b9005b590bca3ed0775597aeb828fe7a4068f6b9823c911512da6ef64aae6e"
+          },
+          "default-installation": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "30d850103824dd184f1dfd4245a7f60611110efa2a9983a0890745ede30806de",
+            "xml_sha256": "2ce4a505d7e98d7d08241c46a3e8b5966c34dde928bcc670a0f14f04c4c8059c"
+          },
+          "generated": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "d7fe815462c6690e2994513e3d4fa204b48434f20a939784bf7ef18bfbab0572",
+            "xml_sha256": "6c2eeaf769c06cc907649b3a729b53ab7daeafc661b10d4b7ac6143437c6f34f",
+            "frontend": {
+              "sha256": "012b35304481c5d5db6b57f20e144fb78f198ca9db14aa0b8db72cd2e493e12d",
+              "version": "Homebrew clang version 22.1.8\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm@22/22.1.8/bin\nConfiguration file: /opt/homebrew/Cellar/llvm@22/22.1.8/etc/clang/arm64-apple-darwin25.cfg\n"
+            }
+          },
+          "generated-executable": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "d280e988d1aa56f97f0bbd59c8374fb6bbdff5272efc6dad2415c6c76322061b",
+            "xml_sha256": "ae590089f159e922eb07e40bd85ec0e38545e5aeb859965a0167c2be8dbab02b",
+            "frontend": {
+              "sha256": "012b35304481c5d5db6b57f20e144fb78f198ca9db14aa0b8db72cd2e493e12d",
+              "version": "Homebrew clang version 22.1.8\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm@22/22.1.8/bin\nConfiguration file: /opt/homebrew/Cellar/llvm@22/22.1.8/etc/clang/arm64-apple-darwin25.cfg\n"
+            }
+          }
+        }
+      },
+      "xcode-27": {
+        "replay_report_sha256": "30a930824e40356ac8921872c0725374ae3a2f8a390a93ffa684919cb150b388",
+        "manifest_sha256": "e5e57d46666bff6a957e11ba2274e5ea203dce30a6c290656bb53a6715466d1d",
+        "test_binary_sha256": "eb981eec998aa8fc30a4420a432e1f11c1981db1db852646f8b75c8d3f8a8836",
+        "probes": {
+          "probe": {
+            "passed": 6,
+            "report_sha256": "af7947164222292ab96b15b9940315ae8ae230303d0b357c5c85061f58538b34"
+          },
+          "startup": {
+            "passed": 6,
+            "report_sha256": "cfa3f48da67832c5c2a2cd1f685e9e8e7d7a5d0a5ad1ea331300230034c37c7d"
+          }
+        },
+        "matrices": {
+          "dylib-installation": {
+            "passed": 20,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "fc8fe176a96b952e8c24c67559617652f8721ccb30301729a31af8c290445680",
+            "xml_sha256": "060fda56f1e7cf030df0928b9ce5f7dbeb133f0af5a3ced625d0904834c7f680"
+          },
+          "installation": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "dbf04f499d77ca3c64509e481ffd8b843c8f2fe6d2f7f7fae1714764283033cc",
+            "xml_sha256": "a043b98deb7885c1866228866983990e239012ecead04adff21e54fbb3a05644"
+          },
+          "default-installation": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "e64bb2bbf2fab656cc0278f1db03a47ac932904dae01039e173e3c49c1c7f40e",
+            "xml_sha256": "e2415b7fb6a5df88c2cbcc585dca7bdadfb6768fc1e7bed6a7dd3e04acff0d9e"
+          },
+          "generated": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "72a1efdbd22ede6bfbd4b49047ab275c3d09b91cdb12b42a136a375837a519b6",
+            "xml_sha256": "70769284e565c0ba618c8c2bf1933a0b291213a081a7bd32610557c17b342564",
+            "frontend": {
+              "sha256": "5ff8c034eab4eef825e353dbb0d602b5422236e1e2db77fd45933a42c5ccffad",
+              "version": "Homebrew clang version 22.1.8\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm@22/22.1.8/bin\nConfiguration file: /opt/homebrew/Cellar/llvm@22/22.1.8/etc/clang/arm64-apple-darwin27.cfg\n"
+            }
+          },
+          "generated-executable": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "ae9412ce36590336bf531266a9c3fccfd99b4ce3e6391d2d6d4c734877bd27ed",
+            "xml_sha256": "0a1fa465684b7fedf32f601c4342bbd3c57ab6d53a07f10ea257f60e49882c3c",
+            "frontend": {
+              "sha256": "5ff8c034eab4eef825e353dbb0d602b5422236e1e2db77fd45933a42c5ccffad",
+              "version": "Homebrew clang version 22.1.8\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm@22/22.1.8/bin\nConfiguration file: /opt/homebrew/Cellar/llvm@22/22.1.8/etc/clang/arm64-apple-darwin27.cfg\n"
+            }
+          }
+        }
+      }
+    }
+  },
+  "prebuilt_audit": {
+    "tag": "neverd-llvm-v23.0.0-r6",
+    "prebuilt_snapshot": "06788fb19109851e6a6b9f109a2b8027a606f0c6",
+    "source_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+    "archives_verified": 3,
+    "live_audit_passed": true,
+    "source_ancestry_sha256": "3f091d76b7974a0295a9f43a5bd9d9a3a3d2532aad4f0ba93e6ee583decbfa32"
   }
 }

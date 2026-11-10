@@ -659,7 +659,7 @@ message(STATUS "PIN=[${{resolved}}]")
                     self.resolve_pin(tag.group(1), package), r"^[0-9a-f]{64}$"
                 )
 
-    def test_default_tag_and_pinned_commit_match_the_llvm_gitlink(self):
+    def test_default_tag_names_one_complete_prebuilt_snapshot(self):
         source = CONSUMER.read_text(encoding="utf-8")
         default_tag = re.search(
             r'set\(NEVERD_LLVM_PREBUILT_TAG "([^"]+)"', source
@@ -676,19 +676,8 @@ message(STATUS "PIN=[${{resolved}}]")
         self.assertIsNotNone(pinned_commit, source)
         self.assertEqual(default_tag.group(1), pinned_tag.group(1))
 
-        gitlink = subprocess.run(
-            ["git", "ls-tree", "HEAD", "third_party/llvm-project"],
-            cwd=ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(gitlink.returncode, 0, gitlink.stdout)
-        fields = gitlink.stdout.split()
-        self.assertGreaterEqual(len(fields), 3, gitlink.stdout)
-        self.assertEqual(fields[1], "commit", gitlink.stdout)
-        self.assertEqual(pinned_commit.group(1), fields[2])
+        # The live audit owns source ancestry; a source fork may advance
+        # while this exact prebuilt package set remains selected.
 
     # A caller who overrode the tag is asking for a build this file makes no
     # claim about, so the pins must not be applied to it: doing so would reject

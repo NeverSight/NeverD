@@ -1,12 +1,15 @@
 import copy
+import json
 import subprocess
 import unittest
 from pathlib import Path
 from urllib.error import URLError
+from unittest.mock import patch
 
 from scripts import audit_prebuilt_llvm_release as audit
 
 
+POLICY = json.loads(Path(__file__).with_suffix(".def").read_text(encoding="utf-8"))
 ROOT = Path(__file__).resolve().parents[2]
 CONSUMER = ROOT / "cmake" / "NeverDLLVMPrebuilt.cmake"
 WORKFLOW = ROOT / ".github" / "workflows" / "prebuilt-llvm-audit.yml"
@@ -58,7 +61,7 @@ class PrebuiltLlvmReleaseAuditTests(unittest.TestCase):
             "object": {"type": "commit", "sha": self.pins.commit}
         }
 
-    def test_current_consumer_pins_are_complete_and_match_the_gitlink(self):
+    def test_current_consumer_pins_and_source_gitlink_are_complete(self):
         pins = audit.parse_pins(CONSUMER.read_text(encoding="utf-8"))
 
         self.assertEqual(pins.repository, "NeverSight/llvm-project")
@@ -72,7 +75,7 @@ class PrebuiltLlvmReleaseAuditTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(gitlink.returncode, 0, gitlink.stdout)
-        self.assertEqual(audit.audit_gitlink(pins, gitlink.stdout), pins.commit)
+        self.assertRegex(audit.parse_gitlink(gitlink.stdout), POLICY["gitlink_pattern"])
 
     def test_matching_release_and_sidecars_pass(self):
         result = audit.audit_release(
@@ -81,22 +84,53 @@ class PrebuiltLlvmReleaseAuditTests(unittest.TestCase):
 
         self.assertEqual(result, tuple(asset.name for asset in self.pins.assets))
 
-    def test_pinned_commit_must_match_the_consumer_gitlink(self):
-        matching_tree = (
-            f"160000 commit {self.pins.commit}\tthird_party/llvm-project\n"
-        )
-        self.assertEqual(
-            audit.audit_gitlink(self.pins, matching_tree), self.pins.commit
-        )
-
-        drifting_tree = (
-            f"160000 commit {'b' * 40}\tthird_party/llvm-project\n"
-        )
-        with self.assertRaisesRegex(audit.AuditError, "submodule gitlink"):
-            audit.audit_gitlink(self.pins, drifting_tree)
-
+    def test_gitlink_requires_one_exact_submodule(self):
+        for revision in (self.pins.commit, POLICY["source_commit"]):
+            tree = f"160000 commit {revision}\t{audit.GITLINK_PATH}\n"
+            self.assertEqual(audit.parse_gitlink(tree), revision)
         with self.assertRaisesRegex(audit.AuditError, "expected one LLVM gitlink"):
-            audit.audit_gitlink(self.pins, "")
+            audit.parse_gitlink("")
+
+    def test_identical_source_needs_no_comparison_request(self):
+        with patch.object(audit, "_fetch_json") as fetch:
+            comparison = audit.fetch_source_ancestry(self.pins, self.pins.commit, None)
+            audit.audit_source_ancestry(self.pins, self.pins.commit, comparison)
+            fetch.assert_not_called()
+
+    def test_source_descendant_keeps_the_prebuilt_snapshot(self):
+        comparison = {
+            "status": POLICY["accepted_status"],
+            "base_commit": {"sha": self.pins.commit},
+            "merge_base_commit": {"sha": self.pins.commit},
+        }
+        source = POLICY["source_commit"]
+        with patch.object(audit, "_fetch_json", return_value=comparison) as fetch:
+            result = audit.fetch_source_ancestry(self.pins, source, None)
+            audit.audit_source_ancestry(self.pins, source, result)
+            fetch.assert_called_once_with(
+                audit.POLICY["source_ancestry_url"].format(
+                    api=audit._repository_api_url(self.pins),
+                    base=self.pins.commit, head=source),
+                None, audit.POLICY["source_ancestry_description"])
+        self.assertEqual(len(audit.audit_release(
+            self.pins, self.release, self.tag_ref, self.sidecars)), len(self.pins.assets))
+
+    def test_older_divergent_and_malformed_source_ancestry_is_refused(self):
+        valid = {
+            "status": POLICY["accepted_status"],
+            "base_commit": {"sha": self.pins.commit},
+            "merge_base_commit": {"sha": self.pins.commit},
+        }
+        invalid = [None, {}, []]
+        for status in POLICY["rejected_statuses"]:
+            invalid.append(dict(valid, status=status))
+        for field in ("base_commit", "merge_base_commit"):
+            for value in (None, {}, {"sha": POLICY["unrelated_commit"]}):
+                invalid.append(dict(valid, **{field: value}))
+        for comparison in invalid:
+            with self.subTest(comparison=comparison):
+                with self.assertRaises(audit.AuditError):
+                    audit.audit_source_ancestry(self.pins, POLICY["source_commit"], comparison)
 
     def test_release_metadata_or_checksum_drift_fails_closed(self):
         cases = []

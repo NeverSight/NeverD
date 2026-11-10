@@ -1,0 +1,9 @@
+{
+  "source_ancestry_url": "{api}/compare/{base}...{head}?per_page=1&page=2",
+  "source_ancestry_description": "GitHub LLVM source ancestry",
+  "source_ancestor_status": "ahead",
+  "source_ancestry_error": "LLVM source revision must retain the prebuilt snapshot as an ancestor: prebuilt {prebuilt}, source {source}",
+  "release_target_error": "release target commit does not match the pinned prebuilt snapshot: expected {expected}, got {actual!r}",
+  "tag_target_error": "Git tag target does not match the pinned prebuilt snapshot: expected commit {expected}, got {actual!r}",
+  "success": "prebuilt LLVM release valid: {tag} at {prebuilt}; {count} archives; source gitlink {source}"
+}
