@@ -693,6 +693,27 @@ rejected barrier-dispatch experiment remain in the ignored
 `build-mips/mips16e2-next/qualification.json`; they do not establish universal
 improvement or a cross-tool speed ranking.
 
+The [system/atomic and packed-integer increment](https://github.com/NeverSight/NeverD/pull/2293)
+qualifies LL/SC, RDHWR and DI/EI at their explicit LowIR state boundaries,
+three packed DSP multiplies, and ASUB/SAT in all four MSA lane widths. Release
+verification after the shared ABI/LLVM dev integration passed 2,002 CTest
+cases with 82 host, compiler or fixture skips; all 539 MIPS cases ran. All six
+source matrices passed 3,604 groups, plus 28 stateful e2 source refusals and
+standalone/wide-value controls. The four Archer C7 `ubus` outputs remained
+byte-identical. Original e2 hardware and native stateful source execution are
+still outside the qualified domain described above.
+
+The feature comparison retains seven warmed alternating pairs across fourteen
+profiles, long/mixed compressed streams and complete firmware requests. Newly
+admitted forms have separate throughput measurements. The later shared-dev
+integration has its own build/products, source matrices, firmware checks and
+42 matching primitive fingerprints; its timing is not inferred from the earlier
+feature products. Exact receipts and compressed source evidence remain in
+`build-mips/mips-system-atomic/`, including `qualification.json` and
+`final-integration.json`. Test executables and one-use comparison/dependency
+builds are removed after their last readers; the current CLI/SDK, incremental
+cache and qualified reference library are retained.
+
 ## TP-Link firmware workflow
 
 Start with the actual extracted ELF profile instead of assuming a device is
