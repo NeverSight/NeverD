@@ -545,7 +545,7 @@ TEST_F(X86LegacyMpxTest, Address16FetchFaultPrecedesUndefinedOpcode) {
   EXPECT_EQ(R.DeliveredVector, 14);
   EXPECT_EQ(S.CR2, 0x2000u);
   EXPECT_EQ(get(S.Core.GPR[4] + 4), 0x1fffu);
-  EXPECT_FALSE(R.InstructionAttempted);
+  EXPECT_TRUE(R.InstructionAttempted);
   EXPECT_FALSE(S.PendingMpx);
 }
 

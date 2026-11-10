@@ -18,6 +18,7 @@ protected:
     const bool Low = Case == 1 || Case == 2 || Case == 3 || Case == 10 ||
                      Case == 11 || Case == 15 || Case == 21 || Case == 52;
     vm86ReturnFrame(Low ? 0x20202 : 0x23202);
+    O.Debug.reset();
     O.FarTransfers = X86LegacyFarTransferProfile::OrderedFrame;
     auto Controls = M->controls();
     Controls.CR0 |= 0x10;
