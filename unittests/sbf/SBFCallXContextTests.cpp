@@ -13786,11 +13786,14 @@ TEST(SBFCallXContexts, RestoredEntryWordsPreserveCallerMemory) {
   RecordProperty("raw_executions", static_cast<int>(RawExecutions));
 }
 
-TEST(SBFCallXContexts, IncomingCapturedFieldsSurviveCalleeBackedges) {
+TEST(SBFCallXContexts, CapturedFieldsSurviveLoopsWithoutRedefinition) {
   unsigned RawExecutions = 0;
-  for (bool Clobber : {false, true})
+  for (unsigned Mode : {0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u})
     for (bool Reverse : {false, true}) {
-      SCOPED_TRACE(Clobber);
+      const bool Clobber = Mode & 1;
+      const bool LocalLoop = Mode & 2;
+      const bool Narrow = Mode & 4;
+      SCOPED_TRACE(Mode);
       SCOPED_TRACE(Reverse);
       std::vector<test::EncodedInstruction> Text;
       const auto Literal = [&](unsigned Register, uint64_t Value) {
@@ -13806,7 +13809,8 @@ TEST(SBFCallXContexts, IncomingCapturedFieldsSurviveCalleeBackedges) {
       Text.push_back({});
       Text.push_back(encode(Opcode::MOV64_REG, 6, 0));
       const size_t InitialTarget = Literal(3, 0);
-      Text.push_back(encode(Opcode::ST_DW_REG, 6, 3, 8));
+      Text.push_back(
+          encode(Narrow ? Opcode::ST_B_REG : Opcode::ST_DW_REG, 6, 3, 8));
       Literal(2, kInputStart + 8);
       Text.push_back(encode(Opcode::LD_DW_REG, 2, 2));
       Text.push_back(encode(Opcode::MOV64_REG, 1, 6));
@@ -13827,13 +13831,20 @@ TEST(SBFCallXContexts, IncomingCapturedFieldsSurviveCalleeBackedges) {
         // This may alias the incoming object's field. Keeping its identity
         // must not retain a field invalidated by a possibly overlapping
         // write.
-        Text.push_back(encode(Opcode::ST_DW_REG, 3, 4, 8));
+        Text.push_back(
+            encode(Narrow ? Opcode::ST_B_REG : Opcode::ST_DW_REG, 3, 4, 8));
       }
       Text.push_back(encode(Opcode::ADD64_IMM, 7, 0, 0, -1));
       const size_t Back = Text.size();
       Text.push_back(encode(Opcode::JA, 0, 0, Header - Back - 1));
       const size_t Read = Text.size();
-      Text.push_back(encode(Opcode::LD_DW_REG, 5, 6, 8));
+      Text.push_back(
+          encode(Narrow ? Opcode::LD_B_REG : Opcode::LD_DW_REG, 5, 6, 8));
+      if (Narrow) {
+        Text.push_back(encode(Opcode::LSH64_IMM, 5, 0, 0, 3));
+        Literal(2, kBytecodeStart);
+        Text.push_back(encode(Opcode::ADD64_REG, 5, 2));
+      }
       const size_t CallX = Text.size();
       Text.push_back(encode(Opcode::CALL_REG, 5));
       Text.push_back(encode(Opcode::EXIT));
@@ -13851,15 +13862,18 @@ TEST(SBFCallXContexts, IncomingCapturedFieldsSurviveCalleeBackedges) {
       Text.push_back(encode(Opcode::EXIT));
       Text[AcquireCall] =
           encode(Opcode::CALL_IMM, 0, 1, 0, Acquire - AcquireCall - 1);
-      Text[LoopCall] = encode(Opcode::CALL_IMM, 0, 1, 0, Loop - LoopCall - 1);
+      Text[LoopCall] =
+          LocalLoop ? encode(Opcode::JA, 0, 0, Loop - LoopCall - 1)
+                    : encode(Opcode::CALL_IMM, 0, 1, 0, Loop - LoopCall - 1);
       Text[Null] = encode(Opcode::JEQ64_IMM, 0, 0, Exit - Null - 1);
       Text[Header] = encode(Opcode::JEQ64_IMM, 7, 0, Read - Header - 1);
       for (const auto &[Slot, Target] :
            {std::pair{InitialTarget, FirstTarget},
             std::pair{ReplacementTarget.value_or(InitialTarget),
                       ReplacementTarget ? SecondTarget : FirstTarget}}) {
-        const auto Words = test::loadImm64(Slot == InitialTarget ? 3 : 4,
-                                           kBytecodeStart + Target * 8);
+        const auto Words =
+            test::loadImm64(Slot == InitialTarget ? 3 : 4,
+                            Narrow ? Target : kBytecodeStart + Target * 8);
         std::copy(Words.begin(), Words.end(), Text.begin() + Slot);
       }
       auto Program = analyze(test::makeImage(Text, {}));
@@ -13877,10 +13891,10 @@ TEST(SBFCallXContexts, IncomingCapturedFieldsSurviveCalleeBackedges) {
         if (!Site.EntryPrefixOnly && Site.CallXSlot == CallX &&
             Site.TargetSlot) {
           Proven = true;
-          EXPECT_FALSE(Clobber);
+          EXPECT_FALSE(Clobber || Narrow);
           EXPECT_EQ(*Site.TargetSlot, FirstTarget);
         }
-      EXPECT_EQ(Proven, !Clobber);
+      EXPECT_EQ(Proven, !Clobber && !Narrow);
       for (uint64_t Count : {1u, 2u, 4u})
         for (bool Alias : {false, true}) {
           ExecutionEnvironment Environment;
@@ -13900,7 +13914,7 @@ TEST(SBFCallXContexts, IncomingCapturedFieldsSurviveCalleeBackedges) {
           ++RawExecutions;
         }
     }
-  EXPECT_EQ(RawExecutions, 24u);
+  EXPECT_EQ(RawExecutions, 96u);
   RecordProperty("raw_executions", static_cast<int>(RawExecutions));
 }
 

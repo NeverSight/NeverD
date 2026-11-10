@@ -27,6 +27,7 @@
 #include <array>
 #include <bit>
 #include <deque>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
@@ -132,6 +133,11 @@ void pushAbstractFrame(RegisterState &State, const SBFProgram &Program) {
     Frame = {};
   }
 }
+
+struct CaptureDefinition {
+  size_t Owner;
+  size_t BlockOrder;
+};
 
 struct TaggedMemoryCase {
   ProvenValueSet Tags;
@@ -599,15 +605,25 @@ void renameCapturedValue(ContextState &State, uint64_t From, uint64_t To) {
 
 void widenCapturedValues(ContextState &State,
                          const SymbolicAddressSpace &Addresses,
-                         llvm::ArrayRef<size_t> CaptureOwners, size_t Owner) {
+                         llvm::ArrayRef<CaptureDefinition> Definitions,
+                         size_t Owner, size_t NextOrder,
+                         llvm::ArrayRef<uint64_t> WordObjects) {
   State.Tagged.reset();
   State.Nullable.reset();
   State.Predicate.reset();
   State.NonzeroRegisters = 0;
   const auto Widen = [&](RegisterValue Value) {
-    // An incoming capture names one fixed value throughout this invocation.
-    // Keeping its identity does not preserve fields erased by may-alias writes.
-    if (CaptureOwners[Value.Value] != Owner)
+    // Repeating a definition must cross an edge to its order or earlier.
+    // An inner backedge cannot repeat an earlier definition. Keep that
+    // identity while it carries full-word fields, matching the facts retained
+    // at summary entries. Narrow-only buffers still widen.
+    // Incoming names stay fixed throughout this invocation. Keeping either
+    // identity does not preserve fields erased by may-alias writes.
+    const auto &Definition = Definitions[Value.Value];
+    if (Definition.Owner != Owner ||
+        (Definition.BlockOrder < NextOrder &&
+         std::binary_search(WordObjects.begin(), WordObjects.end(),
+                            Value.Value)))
       return Value;
     const auto Range = unsignedValueRange(Value, &Addresses);
     return Range ? unsignedRangeValue(*Range) : RegisterValue{};
@@ -616,11 +632,11 @@ void widenCapturedValues(ContextState &State,
     State.Registers[R] = mapSymbolicValues(State.Registers[R], Widen);
     State.Origins[R] = mapSymbolicValues(State.Origins[R], Widen);
   }
-  State.Scratch.Values.transformSymbols(Widen);
   State.OriginScratch.Values.transformSymbols(Widen);
   State.InputSpills.transformSymbols(Widen);
   State.NonzeroSpills.transformSymbols(Widen);
   State.Postconditions.transformSymbols(Widen);
+  State.Scratch.Values.transformSymbols(Widen);
 }
 
 // Formal entry-relative origins and immutable captures name one value.
@@ -1326,6 +1342,8 @@ private:
                                          bool &CoveringInputs);
   llvm::Error computeInputDependencies();
   llvm::Error computeReturnReachability();
+  llvm::Error widenCapturedState(ContextState &State, size_t Owner,
+                                 size_t NextOrder);
   uint16_t usedCalleeInputs(const MedInstruction &Call, size_t Entry,
                             uint16_t Inputs) const {
     // EXIT alone observes only its scalar result. If the caller discards
@@ -1506,7 +1524,7 @@ private:
       std::make_shared<StoredMemoryCoordinates>(StoredMemoryCoordinates{
           frameTranslationLimit(Program.Low.TheVersion, Program.Config),
           CapturedAddresses});
-  std::vector<size_t> CaptureOwners;
+  std::vector<CaptureDefinition> CaptureDefinitions;
   std::map<std::tuple<size_t, size_t, uint64_t, uint64_t, uint64_t>, size_t>
       CaptureIndex;
   // A join identity is scoped to one owner/block and its complete source set.
@@ -1809,7 +1827,7 @@ bool ContextFlow::hasCompletedObjectResult(
     return false;
   const auto Object = Context.Return->Registers[kReturnRegister].singleton();
   return Object.ValueKind == RegisterValue::Kind::SymbolicAddress &&
-         CaptureOwners[Object.Value] == Context.ID &&
+         CaptureDefinitions[Object.Value].Owner == Context.ID &&
          Context.Return->Origins[kReturnRegister] ==
              Context.Return->Registers[kReturnRegister];
 }
@@ -2476,21 +2494,46 @@ ContextState ContextFlow::genericInput() const {
   return Input;
 }
 
+llvm::Error ContextFlow::widenCapturedState(ContextState &State, size_t Owner,
+                                            size_t NextOrder) {
+  // Build this lookup once for all register and memory lanes. Walking an
+  // object's byte cells for every occurrence would make buffer widening
+  // quadratic. The temporary index uses the existing retained-state budget.
+  const uint64_t Bytes = sizeof(std::vector<uint64_t>) +
+                         2 * State.Scratch.Values.size() * sizeof(uint64_t);
+  if (auto Error = retain(Bytes))
+    return Error;
+  const auto Release = llvm::scope_exit([&] { RetainedBytes -= Bytes; });
+  std::vector<uint64_t> WordObjects;
+  WordObjects.reserve(State.Scratch.Values.size());
+  State.Scratch.Values.visitCells([&](const auto &Address, const auto &) {
+    if (Address.ValueKind == RegisterValue::Kind::SymbolicAddress)
+      WordObjects.push_back(Address.Value);
+  });
+  llvm::sort(WordObjects);
+  WordObjects.erase(std::unique(WordObjects.begin(), WordObjects.end()),
+                    WordObjects.end());
+  widenCapturedValues(State, *CapturedAddresses, CaptureDefinitions, Owner,
+                      NextOrder, WordObjects);
+  return llvm::Error::success();
+}
+
 llvm::Expected<RegisterValue>
 ContextFlow::captureAddress(size_t Owner, size_t Slot, uint64_t Source,
                             UnsignedValueRange Bounds) {
   const auto Key = std::tuple(Owner, Slot, Source, Bounds.Lower, Bounds.Upper);
   if (const auto It = CaptureIndex.find(Key); It != CaptureIndex.end())
     return RegisterValue{RegisterValue::Kind::SymbolicAddress, It->second, 0};
-  const uint64_t Bytes = 2 * sizeof(UnsignedValueRange) + 2 * sizeof(size_t) +
-                         sizeof(decltype(CaptureIndex)::value_type) +
-                         6 * sizeof(void *);
+  const uint64_t Bytes =
+      2 * sizeof(UnsignedValueRange) + 2 * sizeof(CaptureDefinition) +
+      sizeof(decltype(CaptureIndex)::value_type) + 6 * sizeof(void *);
   if (auto Error = retain(Bytes))
     return std::move(Error);
   const size_t ID = CapturedAddresses->size();
   CaptureIndex.emplace(Key, ID);
   CapturedAddresses->push_back(Bounds);
-  CaptureOwners.push_back(Owner);
+  const size_t Block = std::prev(ByEntry.upper_bound(Slot))->second;
+  CaptureDefinitions.push_back({Owner, BlockOrder[Block]});
   return RegisterValue{RegisterValue::Kind::SymbolicAddress, ID, 0};
 }
 
@@ -2911,10 +2954,10 @@ llvm::Error ContextFlow::joinCapturedStates(const FunctionContext &Owner,
            A.ValueKind == RegisterValue::Kind::SymbolicAddress &&
            B.ValueKind == RegisterValue::Kind::SymbolicAddress &&
            A.Value != B.Value && A.Offset == B.Offset &&
-           CaptureOwners[A.Value] == Owner.ID &&
-           CaptureOwners[B.Value] == Owner.ID && Left.definesCapture(A.Value) &&
-           Right.definesCapture(B.Value) && !Left.definesCapture(B.Value) &&
-           !Right.definesCapture(A.Value);
+           CaptureDefinitions[A.Value].Owner == Owner.ID &&
+           CaptureDefinitions[B.Value].Owner == Owner.ID &&
+           Left.definesCapture(A.Value) && Right.definesCapture(B.Value) &&
+           !Left.definesCapture(B.Value) && !Right.definesCapture(A.Value);
   };
   bool Needed = false;
   for (unsigned R = 0; R < kRegisterCount; ++R)
@@ -2958,7 +3001,7 @@ llvm::Error ContextFlow::joinCapturedStates(const FunctionContext &Owner,
         Bounds.Upper = std::max(Bounds.Upper, (*CapturedAddresses)[ID].Upper);
       }
       const uint64_t Bytes =
-          2 * sizeof(UnsignedValueRange) + 2 * sizeof(size_t) +
+          2 * sizeof(UnsignedValueRange) + 2 * sizeof(CaptureDefinition) +
           sizeof(decltype(JoinedCaptureIndex)::value_type) +
           sizeof(decltype(JoinedCaptureMembers)::value_type) +
           8 * sizeof(void *) +
@@ -2967,7 +3010,7 @@ llvm::Error ContextFlow::joinCapturedStates(const FunctionContext &Owner,
         return Error;
       Joined = CapturedAddresses->size();
       CapturedAddresses->push_back(Bounds);
-      CaptureOwners.push_back(Owner.ID);
+      CaptureDefinitions.push_back({Owner.ID, BlockOrder[Block]});
       JoinedCaptureIndex.emplace(std::move(Key), Joined);
       JoinedCaptureMembers.emplace(Joined, std::move(Members));
     }
@@ -5514,7 +5557,7 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
       llvm::scope_exit([&] { RetainedBytes -= NewCaptureBytes; });
   const auto BindCapture = [&](RegisterValue Value) {
     if (Edge.LegacyRuntime || !Callee ||
-        CaptureOwners[Value.Value] != Callee->ID)
+        CaptureDefinitions[Value.Value].Owner != Callee->ID)
       return Value;
     auto Bound = captureAddress(Context.ID, Instruction.Slot, Value.Value,
                                 (*CapturedAddresses)[Value.Value]);
@@ -6718,11 +6761,12 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
           continue;
         // Reverse postorder identifies a DFS backedge even when the bytecode
         // places an acyclic continuation before its allocating predecessor.
-        // Every cycle still crosses such an edge and widens locally defined
-        // captures. Incoming identities remain fixed within this invocation.
+        // Every repeated definition crosses such an edge to its rank or
+        // earlier. Captures defined before an inner loop remain fixed.
         if (BlockOrder[Successors[E]] <= BlockOrder[BlockID])
-          widenCapturedValues(SuccessorState, *CapturedAddresses, CaptureOwners,
-                              Context.ID);
+          if (auto Error = widenCapturedState(SuccessorState, Context.ID,
+                                              BlockOrder[Successors[E]]))
+            return std::move(Error);
         if (auto Error = Enqueue(Successors[E], SuccessorState, Defined))
           return std::move(Error);
       }
@@ -6796,7 +6840,9 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
                              *CapturedAddresses, ReturnCarriers[*TaggedTail]))
       return llvm::Error::success();
     if (BlockOrder[*TaggedTail] <= BlockOrder[BlockID])
-      widenCapturedValues(Path, *CapturedAddresses, CaptureOwners, Context.ID);
+      if (auto Error =
+              widenCapturedState(Path, Context.ID, BlockOrder[*TaggedTail]))
+        return Error;
     unsigned Width;
     ProvenValueSet Tag;
     RegisterValue Address;
@@ -6846,12 +6892,12 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
     Case.Values.includeCells(Path.Scratch.Values, [&](const auto &Cell) {
       return Cell.ValueKind == RegisterValue::Kind::Constant ||
              (Cell.ValueKind == RegisterValue::Kind::SymbolicAddress &&
-              CaptureOwners[Cell.Value] == Context.ID);
+              CaptureDefinitions[Cell.Value].Owner == Context.ID);
     });
     Case.Values.refineCapturedRanges(Path.Scratch.Values);
     Case.DefinedCaptures = std::move(Path.DefinedCaptures);
     std::erase_if(Case.DefinedCaptures, [&](uint64_t Capture) {
-      return CaptureOwners[Capture] != Context.ID;
+      return CaptureDefinitions[Capture].Owner != Context.ID;
     });
     auto Existing = llvm::find_if(TaggedReturn->Cases, [&](const auto &Old) {
       return Old.Tags == Case.Tags;
