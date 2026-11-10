@@ -904,9 +904,9 @@ private:
   /// shard is emitted (with link-mergeable globals), verified and optimized in
   /// its own LLVMContext on one of \p NumThreads workers, then the shard
   /// modules are serialized to bitcode and linked into one module in \p Ctx.
-  /// Because the emit and (function-local) optimization passes are the
-  /// single-threaded bottleneck of lift, this is the main end-to-end speedup.
-  /// The result is semantically identical to the serial path: every function is
+  /// Emission and optimization run concurrently on independent shards. Worker
+  /// count changes scheduling only: the fixed work-budget partition preserves
+  /// each function's module-level optimization context. Every function is
   /// defined in exactly one shard and per-address globals (crucially the
   /// writable .data/.bss segment globals) merge to one shared object at link
   /// time. A failed result owns a diagnostic and no module, so callers never
@@ -916,11 +916,10 @@ private:
   /// The shard count is derived from the total MedIR work rather than pinned to
   /// \p NumThreads: peak memory is (in-flight shards) x (slice size), so
   /// slicing finely keeps a large binary's unoptimized IR from all being
-  /// resident at once while still saturating every worker.  C++ exception
-  /// contributions carrying the same nonzero native FuncInfo identity are one
-  /// indivisible scheduling unit.  Such a group may exceed the soft slice
-  /// budget, because splitting it would make later group-level EH lowering
-  /// impossible to validate or commit atomically.
+  /// resident at once. C++ exception contributions sharing native FuncInfo,
+  /// SEH parents and callbacks, and interior-code owners and consumers form
+  /// indivisible scheduling units. A group may exceed the soft slice budget:
+  /// splitting it would lose module-local identities or the atomic EH contract.
   static LLVMEmissionResult emitLLVMSharded(
       const std::vector<MedFunc> &Funcs, llvm::LLVMContext &Ctx, Arch TheArch,
       const std::vector<std::pair<va_t, std::string>> &Imports,

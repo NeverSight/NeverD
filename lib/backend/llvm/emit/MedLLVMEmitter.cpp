@@ -49,6 +49,7 @@
 #include "neverd/ir/med/AArch64/AArch64SVEState.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
+#include "neverd/ir/med/MedCodeIdentity.h"
 #include "neverd/ir/med/MedRawEnvironment.h"
 #include "neverd/ir/med/X86/X86CompactShape.h"
 #include "neverd/ir/med/X86/X86FourSourceShape.h"
@@ -1525,38 +1526,9 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
     // addresses cannot be reconstructed from the declaration alone.
     if (BodyMask && !(*BodyMask)[FuncIndex])
       continue;
-    std::vector<std::pair<va_t, va_t>> Ranges;
-    const auto Add = [&](va_t Begin, va_t End) {
-      if (End > Begin)
-        Ranges.emplace_back(Begin, End);
-    };
-    // A sized body runs on from its entry; where unwind records describe
-    // it, only as far as they do without a gap, since its size then reaches
-    // its farthest part across other functions' code.
-    if (Func.OriginalSize) {
-      va_t End = Func.Entry + Func.OriginalSize;
-      if (Func.ExceptionMetadata)
-        End = std::min(End, Func.ExceptionMetadata->contiguousEnd());
-      Add(Func.Entry, End);
-    }
-    if (Func.ExceptionMetadata) {
-      Add(Func.ExceptionMetadata->CodeRange.Begin,
-          Func.ExceptionMetadata->CodeRange.End);
-      for (const ExceptionAddressRange &Fragment :
-           Func.ExceptionMetadata->FragmentRanges)
-        Add(Fragment.Begin, Fragment.End);
-    }
-    for (const MedBlock &Block : Func.Blocks)
-      Add(Block.StartAddr, Block.EndAddr);
-    llvm::sort(Ranges);
-    std::vector<std::pair<va_t, va_t>> Merged;
-    for (const auto &Range : Ranges)
-      if (!Merged.empty() && Range.first <= Merged.back().second)
-        Merged.back().second = std::max(Merged.back().second, Range.second);
-      else
-        Merged.push_back(Range);
-    if (!Merged.empty())
-      EmittedFuncCodeRanges[Func.Entry] = std::move(Merged);
+    auto Ranges = medFunctionCodeRanges(Func);
+    if (!Ranges.empty())
+      EmittedFuncCodeRanges[Func.Entry] = std::move(Ranges);
   }
   // Definitions selected for this module own their types. Omitted declarations
   // supply no implementation, interior-code range or exception contract.
@@ -1636,9 +1608,7 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
       auto *BB = llvm::BasicBlock::Create(
           *Ctx, "bb_" + std::to_string(Block.Id), LLVMFunc);
       PreparedFuncBlocks[{Func.Entry, Block.Id}] = BB;
-      const va_t Address = Block.StartAddr != 0 || Block.Ops.empty()
-                               ? Block.StartAddr
-                               : Block.Ops.front().Addr;
+      const va_t Address = medBlockCodeAddress(Block);
       auto [It, Inserted] = LiftedCodeBlocks.try_emplace(Address, BB);
       if (!Inserted && It->second != BB)
         ConflictingLiftedCodeBlocks.insert(Address);

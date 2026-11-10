@@ -29,6 +29,7 @@
 #include "neverd/debug/UserPrototype.h"
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/SymbolDecoration.h"
 
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/IRBuilder.h"
@@ -4387,6 +4388,191 @@ int main(void) {
   compileAndRun(Source, "-O0");
 }
 
+TEST(LLVMCValues, WindowsCRTEnumsAndCallbacksAgreeWithHeaderDeclarations) {
+  for (const auto Arch : {neverd::Arch::X86, neverd::Arch::X64,
+                          neverd::Arch::ARM, neverd::Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<unsigned>(Arch));
+    for (bool Indirect : {false, true}) {
+      SCOPED_TRACE(Indirect);
+      llvm::LLVMContext Context;
+      llvm::SMDiagnostic Error;
+      const std::string Imports = Indirect ? R"ir(
+@_set_app_type = external global i8, !neverd.data-symbol !0
+@_configure_narrow_argv = external global i8, !neverd.data-symbol !0
+@_configure_wide_argv = external global i8, !neverd.data-symbol !0
+@__setusermatherr = external global i8, !neverd.data-symbol !0
+@_initialize_onexit_table = external global i8, !neverd.data-symbol !0
+@_register_onexit_function = external global i8, !neverd.data-symbol !0
+@_execute_onexit_table = external global i8, !neverd.data-symbol !0
+@_register_thread_local_exe_atexit_callback = external global i8, !neverd.data-symbol !0
+)ir"
+                                           : R"ir(
+declare void @_set_app_type(i32)
+declare i32 @_configure_narrow_argv(i32)
+declare i32 @_configure_wide_argv(i32)
+declare void @__setusermatherr(ptr)
+declare i32 @_initialize_onexit_table(ptr)
+declare i32 @_register_onexit_function(ptr, ptr)
+declare i32 @_execute_onexit_table(ptr)
+declare void @_register_thread_local_exe_atexit_callback(ptr)
+)ir";
+      auto Module = llvm::parseAssemblyString(Imports + R"ir(
+define i32 @configure_crt(i32 %mode, ptr %callback, ptr %table,
+                          ptr %onexit, ptr %tls) {
+  call void @_set_app_type(i32 %mode)
+  %narrow = call i32 @_configure_narrow_argv(i32 %mode)
+  %wide = call i32 @_configure_wide_argv(i32 %mode)
+  call void @__setusermatherr(ptr %callback)
+  %init = call i32 @_initialize_onexit_table(ptr %table)
+  %reg = call i32 @_register_onexit_function(ptr %table, ptr %onexit)
+  %exec = call i32 @_execute_onexit_table(ptr %table)
+  call void @_register_thread_local_exe_atexit_callback(ptr %tls)
+  %argv = add i32 %narrow, %wide
+  %registered = add i32 %init, %reg
+  %executed = add i32 %registered, %exec
+  %result = add i32 %argv, %executed
+  ret i32 %result
+}
+!0 = !{}
+)ir",
+                                              Error, Context);
+      ASSERT_TRUE(Module) << Error.getMessage().str();
+      for (auto &Function : *Module)
+        Function.setName(neverd::symbolOfCName(
+            Function.getName(), neverd::BinaryFormat::COFF, Arch));
+      for (auto &Global : Module->globals())
+        Global.setName(neverd::symbolOfCName(Global.getName(),
+                                             neverd::BinaryFormat::COFF, Arch));
+      Module->setDataLayout(Arch == neverd::Arch::X86 ||
+                                    Arch == neverd::Arch::ARM
+                                ? "e-p:32:32-i64:64-n8:16:32"
+                                : "e-p:64:64-i64:64-n8:16:32:64");
+      ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+      neverd::CEmitterOptions Options;
+      Options.TheArch = Arch;
+      Options.Format = neverd::BinaryFormat::COFF;
+      Options.EmitIncludes = false;
+      std::string Source;
+      llvm::raw_string_ostream OS(Source);
+      ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options));
+      // Independent source declarations model corecrt_startup.h, process.h
+      // and math.h. Native stubs observe enum values, table writes and calls.
+      const std::string Prelude = R"c(
+#include <stdint.h>
+enum _crt_app_type { _crt_unknown_app, _crt_console_app, _crt_gui_app };
+enum _crt_argv_mode { argv_none, argv_plain, argv_expanded };
+struct _exception { int type; };
+typedef void (*_PVFV)(void);
+typedef int (*_onexit_t)(void);
+typedef struct _onexit_table_t {
+  _PVFV *_first, *_last, *_end;
+} _onexit_table_t;
+typedef void (__attribute__((stdcall)) *_tls_callback_type)(
+    void *, unsigned long, void *);
+void _set_app_type(enum _crt_app_type);
+int _configure_narrow_argv(enum _crt_argv_mode);
+int _configure_wide_argv(enum _crt_argv_mode);
+void __setusermatherr(int (*)(struct _exception *));
+int _initialize_onexit_table(_onexit_table_t *);
+int _register_onexit_function(_onexit_table_t *, _onexit_t);
+int _execute_onexit_table(_onexit_table_t *);
+void _register_thread_local_exe_atexit_callback(_tls_callback_type);
+)c";
+      const std::string Harness = R"c(
+static int app, narrow, wide, observed, exit_observed, tls_observed;
+static _onexit_table_t *initialized;
+static _PVFV exit_slot;
+static _onexit_t exit_callback;
+void _set_app_type(enum _crt_app_type value) { app = value; }
+int _configure_narrow_argv(enum _crt_argv_mode value) {
+  narrow = value;
+  return value + 1;
+}
+int _configure_wide_argv(enum _crt_argv_mode value) {
+  wide = value;
+  return value + 2;
+}
+void __setusermatherr(int (*callback)(struct _exception *)) {
+  struct _exception error = {41};
+  observed = callback(&error);
+}
+static int handle_math_error(struct _exception *error) {
+  return error->type + 1;
+}
+int _initialize_onexit_table(_onexit_table_t *table) {
+  initialized = table;
+  table->_first = &exit_slot;
+  table->_last = table->_first;
+  table->_end = table->_first + 1;
+  return 3;
+}
+int _register_onexit_function(_onexit_table_t *table, _onexit_t callback) {
+  if (table != initialized || table->_first != &exit_slot ||
+      table->_last != table->_first || table->_end != table->_first + 1)
+    __builtin_trap();
+  exit_callback = callback;
+  return 5;
+}
+int _execute_onexit_table(_onexit_table_t *table) {
+  if (table != initialized) __builtin_trap();
+  return exit_callback();
+}
+static int handle_exit(void) {
+  ++exit_observed;
+  return 11;
+}
+void _register_thread_local_exe_atexit_callback(_tls_callback_type callback) {
+  callback(initialized, 0x12345678UL, &exit_slot);
+}
+static void __attribute__((stdcall)) handle_tls(
+    void *module, unsigned long reason, void *reserved) {
+  tls_observed = module == initialized && reason == 0x12345678UL &&
+                 reserved == &exit_slot;
+}
+int main(void) {
+  _onexit_table_t table;
+  return configure_crt(2, (void *)handle_math_error, &table,
+                       (void *)handle_exit, (void *)handle_tls) != 26 ||
+         app != 2 || narrow != 2 || wide != 2 || observed != 42 ||
+         exit_observed != 1 || tls_observed != 1;
+}
+)c";
+      for (llvm::StringRef Level : {"-O0", "-O2"}) {
+        compileAndRun(Prelude + Source + Harness, Level, {}, true);
+#if defined(__linux__) && defined(__x86_64__)
+        // Exercise stdcall's actual stack cleanup, not only its spelling in
+        // a 64-bit host projection where the compiler ignores the attribute.
+        if (Arch == neverd::Arch::X86)
+          compileAndRun(Prelude + Source + Harness, Level, {}, true, true);
+#endif
+      }
+
+      // With headers enabled, a PDB may offer the same named definitions.
+      // Asking for them would duplicate both the tags and their enumerators.
+      Options.EmitIncludes = true;
+      bool AskedForTypes = false;
+      Options.RecordDefinitions =
+          [&](const std::vector<neverd::TypeRef> &Types) {
+            AskedForTypes = true;
+            for (const auto &Type : Types)
+              for (const char *Name : {"_crt_app_type", "_crt_argv_mode",
+                                       "_exception", "_crt_console_app",
+                                       "_onexit_table_t", "_tls_callback_type"})
+                EXPECT_NE(Type->SourceName, Name);
+            return neverd::CRecordDefinitions{};
+          };
+      std::string WithHeaders;
+      llvm::raw_string_ostream HeaderOS(WithHeaders);
+      ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, HeaderOS, Options));
+      EXPECT_TRUE(AskedForTypes);
+      EXPECT_NE(WithHeaders.find("#include <corecrt_startup.h>"),
+                std::string::npos);
+      EXPECT_NE(WithHeaders.find("#include <math.h>"), std::string::npos);
+      EXPECT_NE(WithHeaders.find("#include <process.h>"), std::string::npos);
+    }
+  }
+}
+
 TEST(LLVMCValues, LocalRegisterImportPrototypesAgreeWithCalls) {
   for (const auto Arch : {neverd::Arch::X64, neverd::Arch::AArch64})
     for (const auto Format :
@@ -7914,4 +8100,172 @@ define i64 @after_exchange(i64 %x) {
   llvm::raw_string_ostream UnitOS(Unit);
   EXPECT_THROW(neverd::LLVMCEmitter().emit(*Module, UnitOS, Options),
                std::runtime_error);
+}
+
+TEST(LLVMCValues, EarlyBodyRefusalRetainsTheCalleeDeclaration) {
+  for (bool CalleeLast : {false, true}) {
+    SCOPED_TRACE(CalleeLast);
+    llvm::LLVMContext Context;
+    llvm::SMDiagnostic Error;
+    auto Module = llvm::parseAssemblyString(R"ir(
+declare void @take_address(i64, ptr)
+define i64 @resume_owner() {
+entry:
+  br label %resume
+resume:
+  ret i64 17
+}
+define void @refused_callback(i1 %condition, ptr %frame) noinline optnone {
+entry:
+  br i1 %condition, label %left, label %right
+left:
+  br label %join
+right:
+  br label %join
+join:
+  call void @take_address(i64 ptrtoint (ptr blockaddress(@resume_owner, %resume) to i64), ptr %frame)
+  ret void
+}
+define i64 @retained_caller(ptr %frame) {
+  call void @refused_callback(i1 true, ptr %frame)
+  ret i64 17
+}
+)ir",
+                                            Error, Context);
+    ASSERT_TRUE(Module) << Error.getMessage().str();
+    Module->setTargetTriple(llvm::Triple("x86_64-linux-gnu"));
+    Module->setDataLayout("e-m:e-p:64:64-i64:64-n8:16:32:64-S128");
+    if (CalleeLast)
+      Module->getFunctionList().splice(
+          Module->end(), Module->getFunctionList(),
+          Module->getFunction("refused_callback")->getIterator());
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    neverd::CEmitterOptions Options;
+    Options.TheArch = neverd::Arch::X64;
+    Options.Format = neverd::BinaryFormat::ELF;
+    std::vector<neverd::CEmitterOptions::RefusedDefinition> Refused;
+    Options.RefusedDefinitions = &Refused;
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options));
+    ASSERT_EQ(Refused.size(), 1u) << Source;
+    EXPECT_EQ(Refused.front().Name, "refused_callback");
+    EXPECT_NE(Refused.front().Reason.find("blockaddress"), std::string::npos);
+    llvm::SmallVector<llvm::StringRef> Lines;
+    llvm::StringRef(Source).split(Lines, '\n');
+    EXPECT_TRUE(llvm::any_of(Lines, [](llvm::StringRef Line) {
+      return Line.starts_with("void refused_callback(") && Line.ends_with(");");
+    })) << Source;
+    EXPECT_FALSE(llvm::any_of(Lines, [](llvm::StringRef Line) {
+      return Line.starts_with("void refused_callback(") &&
+             Line.ends_with(") {");
+    })) << Source;
+    // The rejected body remains external. Compile and execute the retained
+    // caller against an independently supplied implementation of that ABI.
+    const std::string Harness = R"c(
+#include <stdint.h>
+static void *expected;
+static unsigned calls, errors;
+void refused_callback(uint8_t condition, void *frame) {
+  ++calls;
+  errors += condition != 1 || frame != expected;
+}
+extern uint64_t retained_caller(void *);
+int main(void) {
+  uint64_t frame = 0;
+  expected = &frame;
+  return retained_caller(&frame) != 17 || calls != 1 || errors;
+}
+)c";
+    for (llvm::StringRef Level : {"-O0", "-O2"})
+      compileAndRun(Source, Level, {}, true, false, {}, Harness);
+    Options.RefusedDefinitions = nullptr;
+    std::string Strict;
+    llvm::raw_string_ostream StrictOS(Strict);
+    EXPECT_THROW(neverd::LLVMCEmitter().emit(*Module, StrictOS, Options),
+                 std::runtime_error);
+  }
+}
+
+TEST(LLVMCValues, SavedFrameAddressKeepsItsIntegerCarrier) {
+  // A finally callback retains stack-register homes, even when its restored
+  // link and stack registers have no source-level consumer. Their surviving
+  // assignments must still obey the local declarations.
+  for (const neverd::Arch Arch : {neverd::Arch::X64, neverd::Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<unsigned>(Arch));
+    for (const neverd::BinaryFormat Format :
+         {neverd::BinaryFormat::ELF, neverd::BinaryFormat::COFF,
+          neverd::BinaryFormat::MachO}) {
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      llvm::LLVMContext Context;
+      llvm::SMDiagnostic Error;
+      auto Module = llvm::parseAssemblyString(R"ir(
+declare ptr @llvm.returnaddress.p0(i32)
+define void @saved_frame(i8 %condition, ptr %out) noinline optnone {
+frame_setup:
+  %restored_link = alloca i64, align 8
+  %stack = alloca i64, align 8
+  %restored_sp = alloca i64, align 8
+  %saved = alloca i64, align 8
+  %frame = alloca [96 x i8], align 16
+  %frame_end = getelementptr inbounds i8, ptr %frame, i64 16
+  %rsp_init = ptrtoint ptr %frame_end to i64
+  br label %bb_0
+
+bb_0:
+  store i64 %rsp_init, ptr %stack, align 8
+  %link = call ptr @llvm.returnaddress.p0(i32 0)
+  %retaddr = ptrtoint ptr %link to i64
+  %stack_value = load i64, ptr %stack, align 8
+  %address = add i64 %stack_value, -16
+  store i64 %address, ptr %saved, align 8
+  %slot_bits = add i64 %address, 8
+  %slot = inttoptr i64 %slot_bits to ptr
+  store i64 %retaddr, ptr %slot, align 1
+  %cond = icmp ne i8 %condition, 0
+  br i1 %cond, label %bb_1, label %bb_2
+
+bb_1:
+  store i64 99, ptr %out
+  br label %bb_3
+bb_2:
+  store i64 100, ptr %out
+  br label %bb_3
+
+bb_3:
+  %restore_address = load i64, ptr %saved, align 8
+  %read_bits = add i64 %restore_address, 8
+  %read_slot = inttoptr i64 %read_bits to ptr
+  %link_value = load i64, ptr %read_slot, align 1
+  store i64 %link_value, ptr %restored_link, align 8
+  %restore_stack = load i64, ptr %saved, align 8
+  %stack_end = add i64 %restore_stack, 16
+  store i64 %stack_end, ptr %restored_sp, align 8
+  ret void
+}
+)ir",
+                                              Error, Context);
+      ASSERT_TRUE(Module) << Error.getMessage().str();
+      Module->setDataLayout("e-p:64:64-i64:64-n8:16:32:64-S128");
+      ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+      neverd::CEmitterOptions Options;
+      Options.TheArch = Arch;
+      Options.Format = Format;
+      std::string Source;
+      llvm::raw_string_ostream OS(Source);
+      ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options));
+      Source += R"c(
+int main(void) {
+  uint64_t output = 0;
+  saved_frame(0, &output);
+  if (output != 100) return 1;
+  saved_frame(1, &output);
+  if (output != 99) return 2;
+  return 0;
+}
+)c";
+      for (llvm::StringRef Level : {"-O0", "-O2"})
+        compileAndRun(Source, Level, {}, true);
+    }
+  }
 }
