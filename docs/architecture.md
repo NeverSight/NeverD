@@ -5038,7 +5038,10 @@ render as it was, and a file beside the folders (`.same`) says the folder holds 
 the inputs after them too. A session whose job starts over after it began no longer
 reads as a new session does, and stops reading and adding to the store.
 With a store that reaches every function, the owner answers those views itself
-(`kept_only`), and a replica starts only for what the store does not answer.
+(`kept_only`), and a replica starts only for what the store does not answer. A page
+the owner gave stays the owner's to answer for while it keeps it, even once a replica
+is ready (`AnalysisService::askOwner`), since the replica would read it from the store
+and send it whole; a graph, and a page a replica gave, stay with the replica.
 The job also keeps what a function's first look in the listing asks the engine, its
 recovered instructions and its stack frame, in `local/listing-facts` under the same
 identity without the names of data, which those answers do not spell either. The

@@ -6941,6 +6941,9 @@ file still reproduce their exact source without asking the engine.
 through a real view. `QueryServiceTests::sourcePageKeptAcrossAReadContextIsNamed`
 checks that a replica's dispatcher names the page it kept after its owner's change
 starts its read context anew, and names none of another project's.
+`WorkbenchTests::ownerAnswersForItsPagesWhileAReplicaIsReady` checks that the owner
+still answers for the page it gave after a note, with a replica ready, and that a
+graph is still the replica's.
 `NeverDWorkerListingFacts` runs that job over a real PE: the owner of the same
 session takes up what the replica keeps of a function's first look, a later session
 lists what asking the engine lists, a new name of a function or of data keeps the

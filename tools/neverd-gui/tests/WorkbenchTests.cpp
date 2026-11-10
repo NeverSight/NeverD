@@ -7439,6 +7439,71 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(editing.analysisReplicaReady(), OpenTimeoutMs);
   }
 
+  void ownerAnswersForItsPagesWhileAReplicaIsReady() {
+    QTemporaryDir directory;
+    const auto path = writeFixture(
+        directory,
+        QStringLiteral("summaries-ready-render-store-source-cache.bin"));
+    {
+      // An earlier session renders every function into the project's store.
+      Session session(QString::fromLocal8Bit(TEST_WORKER));
+      session.open(path);
+      QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+      session.prepareFunctionRead(Base);
+      QTRY_COMPARE_WITH_TIMEOUT(session.analysisRenderAheadState(),
+                                QStringLiteral("done"), NativeOpenTimeoutMs);
+    }
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    session.open(path);
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    QObject reader, other;
+    const auto read = [&](QObject &owner, const QJsonObject &function) {
+      QJsonObject payload;
+      session.analysisQueries(function, &owner)
+          .subscribe({"decompile", function}, &owner,
+                     [&](const QJsonObject &response) {
+                       payload = response.value("payload").toObject();
+                     });
+      (void)QTest::qWaitFor([&] { return !payload.isEmpty(); }, OpenTimeoutMs);
+      return payload;
+    };
+    const QJsonObject kept{{"address", hexAddress(Base + 32)},
+                           {"representation", "source"},
+                           {"offset", 0},
+                           {"limit", 4}};
+    // The owner answers from the store, and no replica starts.
+    const auto given = read(reader, kept);
+    QVERIFY(!given.value("etag").toString().isEmpty());
+    QTest::qWait(100);
+    QVERIFY(!session.analysisReplicaStarted());
+    // A note reads nowhere, and a graph, which the owner does not answer from
+    // the store, starts a replica that is ready from then on.  A graph solves
+    // no summaries, whose refinement would have every view read its page whole.
+    const auto revision = session.revision();
+    session.editFunction(Base + 16, {{"color", "#204060"}});
+    QTRY_VERIFY_WITH_TIMEOUT(session.revision() != revision, OpenTimeoutMs);
+    const QJsonObject graphed{{"address", hexAddress(Base + 48)}};
+    bool drawn = false;
+    session.analysisQueries(graphed, &other)
+        .subscribe({"cfg", graphed}, &other, [&](const QJsonObject &response) {
+          drawn = response.value("status") == QLatin1String("ok");
+        });
+    QTRY_VERIFY_WITH_TIMEOUT(drawn, OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(session.analysisReplicaReady(), OpenTimeoutMs);
+    // The owner still answers for the page it gave: it says the page stands,
+    // where the ready replica would send its own whole.
+    const auto again = read(reader, kept);
+    QVERIFY(!again.isEmpty());
+    QCOMPARE(again.value("etag"), given.value("etag"));
+    QCOMPARE(again.value("text"), given.value("text"));
+    QVERIFY(session.analysisReplicaReady());
+    // A graph is still the replica's to draw.
+    GraphView graph(session);
+    graph.showFunction(Base + 32);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        graph.loaded() && graph.currentAddress() == Base + 32, OpenTimeoutMs);
+  }
+
   void analysisReplicaReadsAFunctionAnEditIsAboutToChange() {
     // Without the job the engine's pages are this read's and the next one's.
     const auto forget = qScopeGuard(

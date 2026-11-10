@@ -138,6 +138,10 @@ inline constexpr int kCodeViewPageLines = 256;
 /// once the read has run this long, or as many times what restoring it took.
 inline constexpr int kAnalysisAbandonedReadMinimumMilliseconds = 300;
 inline constexpr int kAnalysisAbandonedReadRestores = 2;
+/// The names of the owner's pages a replica's dispatcher remembers, many times
+/// the pages its views keep (kQueryServiceKeptPages); past this it forgets
+/// them all, and those pages go to the replica.
+inline constexpr int kAnalysisOwnerPageNames = 256;
 /// A completed function's display-name refresh can batch existing text. Keep
 /// the interactive first load small, and retry it if a batch exceeds bytes.
 inline constexpr int kCodeViewNameRefreshPageLines =
