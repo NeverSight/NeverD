@@ -99,6 +99,12 @@ public:
   void setAnalystSourceProjection(bool Enabled) {
     AnalystSourceProjection = Enabled;
   }
+  /// Reconstruct fixed Darwin AArch64 source entries from complete declared
+  /// ABI hints. This changes entry transport only; arm64e image publication
+  /// still requires its independent frame, pointer and loader contracts.
+  void setReconstructAArch64SourceEntries(bool Enabled) {
+    ReconstructAArch64SourceEntries = Enabled;
+  }
   /// Display tentative control flow only in a private LLVM-to-C module.
   /// Native LLVM, patching and runtime reconstruction retain strict admission.
   void setAnalysisRecoveryForSource(bool Enabled) {
@@ -199,6 +205,7 @@ private:
   llvm::Value *emitPortableX87Intrinsic(const MedOp &Op,
                                         llvm::IRBuilder<> &Builder);
   bool AnalystSourceProjection = false;
+  bool ReconstructAArch64SourceEntries = false;
   bool AnalysisRecoveryForSource = false;
   bool PreserveUnknownSourceValues = false;
   bool OriginalImageStorageForSource = false;

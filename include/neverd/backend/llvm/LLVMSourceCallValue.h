@@ -24,6 +24,9 @@ inline llvm::Type *llvmSourceCallValueType(llvm::LLVMContext &Context,
                                            bool Parameter) {
 #define LLVM_SOURCE_VALUE(Type, Name, Value) constexpr Type Name = Value;
 #include "neverd/backend/llvm/LLVMSourceCallValue.def"
+  if (isSourceAArch64VectorType(Source))
+    return llvm::FixedVectorType::get(llvm::Type::getInt8Ty(Context),
+                                      Source->Size);
   switch (Source->Kind) {
   case NdTypeKind::Void:
     return Parameter ? nullptr : llvm::Type::getVoidTy(Context);
@@ -37,7 +40,8 @@ inline llvm::Type *llvmSourceCallValueType(llvm::LLVMContext &Context,
                : llvm::Type::getDoubleTy(Context);
   case NdTypeKind::Struct: {
     const auto Members = sourceAggregateMembers(Source);
-    const bool Floating = Members.front().Type->Kind == NdTypeKind::Float;
+    const bool Floating = Members.front().Type->Kind == NdTypeKind::Float ||
+                          isSourceAArch64VectorType(Members.front().Type);
     auto *Element =
         Floating ? llvmSourceCallValueType(Context, Members.front().Type, true)
                  : llvm::Type::getInt64Ty(Context);

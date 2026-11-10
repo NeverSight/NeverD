@@ -10833,4 +10833,11 @@ Your previous graph is still available.</source>
         <translation>取消停靠窗口</translation>
     </message>
 </context>
+<context>
+    <name>CloseButton</name>
+    <message>
+        <source>Close Tab</source>
+        <translation>关闭标签页</translation>
+    </message>
+</context>
 </TS>
