@@ -123,8 +123,8 @@ TEST_F(X64PagedReturnContinuationTest,
   for (const auto &Compiler : compilers())
     for (bool LLVM : {false, true})
       for (const std::string O : {"-O0", "-O2"})
-        for (unsigned Case = 0; Case != 3; ++Case) {
-          const bool Interrupt = Case == 0, Consumed = Case != 1;
+        for (unsigned Case = 0; Case != 4; ++Case) {
+          const bool Interrupt = Case == 0, Consumed = Case == 0 || Case == 2;
           const std::vector<uint8_t> Code{0x48,
                                           uint8_t(Interrupt ? 0xcf : 0xcb)};
           Run Driver = nullptr;
@@ -133,8 +133,9 @@ TEST_F(X64PagedReturnContinuationTest,
                                           Compiler, 0x1000, &Scheduled,
                                           std::nullopt, false, true));
           frame(Interrupt, !Interrupt);
-          // Case 1 stops before any RETF read/effect. Case 2 stops after its
-          // accessed-bit write. IRET consumes an attempt at NMI unblocking.
+          // RETF stops before any read in case 1, after an accessed-bit write
+          // in case 2, or after reads without a write in case 3. IRET consumes
+          // an attempt at NMI unblocking.
           if (Case == 2)
             put(0x5018, 0x00affa000000ffffULL);
           const auto Page = Case == 1 ? 0x17000 : 0x18000;

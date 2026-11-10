@@ -160,9 +160,13 @@ lets handler-return wrappers recognize completion without another attempt.
 
 Direct return-owner users retain `X64PagedReturnResult::Continuation` and call
 `resumeX64PagedReturn`; `validateX64PagedReturnResume` checks its CPU/control/feature
-binding without RAM access. Completion or a guest fault retires the instruction
-record before post-return #DB or fault entry. If that entry itself pauses, use
-`Delivery.Continuation` and the event resume API. Do not restart the return.
+binding without RAM access. This owner reports an exception to its caller;
+the caller owns subsequent event delivery.
+
+`X64PagedExecution` retires the instruction record on completion or a guest
+fault before starting post-return #DB or fault entry. If that entry itself
+pauses, retain `lastResult().Delivery->Continuation` and use the event resume
+API. Do not restart the return.
 
 ## Instruction-step debug events
 

@@ -19369,7 +19369,7 @@ model-specific choice for arbitrary hardware.
 with a pending original CALL. The interface requires call-site pauses so that
 near RET/fallthrough cannot execute the pending CALL first. It uses the existing
 region driver without a callee activation and admits retry only after an actual privilege-return
-boundary to the original CALL PC/SP; paged returns also need attempted progress.
+boundary to the original CALL PC/SP; paged returns also need completed progress.
 A separate context retains that completed return through budgets/backing stops
 and returns to handler continuation if the retried CALL delivers another fault.
 Instruction effects, event polling, shadows, budgets, CALL and near-RET
