@@ -4746,6 +4746,9 @@ the name again or retaining a second copy of it. Every type still takes its
 place in the ordinary namespace before enumerators, including unchanged
 identifiers and generated collision suffixes. Undeclared names follow the
 ordinary identifier rules.
+Name-map entries share an allocator owned by the table and are released with
+it. Returned spellings remain owned strings, and the library's canonical
+insertion order still decides collisions.
 A name a program may also give a routine
 of its own decides only together with the module that exports it
 (`isNoReturnImport`, `WindowsNoReturnImports.inc`): the Universal CRT's
