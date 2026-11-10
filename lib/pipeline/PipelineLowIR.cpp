@@ -4868,7 +4868,7 @@ struct PipelineAnalysisCache::Impl {
     if (Image.Arch != Arch::X86 || !Debug)
       return Returns;
     for (const auto &Import : Image.Imports)
-      if (const auto Function = Debug->resolvePrototype(
+      if (const auto Function = Debug->resolvePrototypeABI(
               cNameOfStatedName(Import.Name, Image.Format, Image.Arch)))
         if (const auto Signature = libc::floatingCallArguments(
                 *Function, Image.Arch, Image.abiFormat()))

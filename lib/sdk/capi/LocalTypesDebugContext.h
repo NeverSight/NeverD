@@ -204,6 +204,8 @@ public:
   /// for a name without a prototype or a type the decompiler cannot describe.
   std::optional<FunctionSym>
   resolvePrototype(llvm::StringRef Name) const override;
+  std::optional<FunctionSym>
+  resolvePrototypeABI(llvm::StringRef Name) const override;
   bool prototypeDoesNotReturn(llvm::StringRef Name) const override;
 
   /// The signature of the user's declaration of the function at \p Entry.
@@ -289,6 +291,12 @@ private:
   std::optional<types::HeaderLibrary>
   prototypeHeader(llvm::StringRef Name,
                   const types::FunctionDef *Function) const;
+  /// Converts and identifies the prototype, with optional source spellings.
+  /// Both ABI queries and emitted declarations use this validation. Holds
+  /// Mutex.
+  std::optional<FunctionSym>
+  prototypeSignature(llvm::StringRef Name, const types::FunctionDef &Function,
+                     const types::TypeSpeller *Speller = nullptr) const;
 
   /// The function at \p Addr as the context gives it without a declaration.
   std::optional<FunctionSym> undeclared(va_t Addr) const;

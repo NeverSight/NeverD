@@ -158,7 +158,16 @@ state, memory, options and result at its private bridge. Selection keys combine
 the live linear instruction address with CS.D; the dispatcher does not duplicate
 instruction semantics or infer an ordinary C ABI. Event delivery always stops;
 pending entry resumes through the existing owner before more source dispatch.
-This path supplies neither IA-32e compatibility state nor task transitions.
+This path does not supply IA-32e compatibility state. Protected task transfers
+are owned by `translate/X86/X86LegacyTaskSwitch`, shared by far CALL/JMP,
+NT IRET and IDT task gates. It separates outgoing TSS effects from incoming
+register/address-space publication and retains a private, immutable continuation
+for backing stops and incoming-task faults. Ordinary instruction admission stays
+strict; only this owner can admit its partially loaded CS/SS fault context.
+Source selection uses the retained original instruction key during a suspended
+task switch, so it neither fetches overwritten bytes nor charges another attempt.
+VM86 destinations stop at an explicit `ModeUnavailable` boundary; their execution
+and event routing still require a complete mode owner.
 `translate/X86/X86LegacyFrameReturn` adds protected 16/32-bit IRET/RETF to that
 executor, retaining ordered descriptor writes and IRET NMI unblocking on later
 faults. `ir/X86/X86ReturnRules` shares code-return privilege checks, inaccessible
@@ -4659,7 +4668,17 @@ code calls (`NoReturnTargetIndex`). Its declaration query uses
 The local-type provider can reject missing or returning declarations directly
 from its immutable library, without converting and caching every image symbol's
 parameter/return graph. Positive declarations still pass full prototype
-validation; an unsupported type cannot terminate a CFG path.
+validation without C name-table construction; an unsupported type cannot
+terminate a CFG path. `DebugContext::resolvePrototypeABI` provides the same
+validated types, calling convention and declaration origin for structural
+queries. The x86 import-return inventory uses it without spelling every
+library type. Both local-type queries use the ordinary signature converter;
+source emitters retain `resolvePrototype` and its complete C spellings.
+C declaration writers build their library-wide name table only when a named
+type or enumerator needs it. Scalar and parameter spelling use the same
+identifier rules directly. The deferred table still consumes the whole
+library in its canonical order, preserving collisions independently of
+which type is requested first. Shared embedded-name tables remain reusable.
 A name a program may also give a routine
 of its own decides only together with the module that exports it
 (`isNoReturnImport`, `WindowsNoReturnImports.inc`): the Universal CRT's
@@ -5070,7 +5089,9 @@ prototype, while callee effects, no-return proofs and call graphs read bodies. T
 to the library that nothing names do the same (`Session::takeUnreadTypes`); what
 that checks their names against, the names the library spells and those its types
 and prototypes mention, a worker reads while it idles once the session has read its
-types (`neverd_local_types_prepare`), and a declaration keeps it as it adds types. Other
+types (`neverd_local_types_prepare`), and a declaration keeps it as it adds types; the
+same step reads the image's symbol names a rename checks against
+(`neverd_names_prepare`). Other
 types let go of what read them, and the summaries, the job and the store start over,
 while the process and its image stand. The owner keeps its listing and reference index
 for those, and reads what a function was declared as when it next decodes it.

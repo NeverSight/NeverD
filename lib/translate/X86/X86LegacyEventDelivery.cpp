@@ -9,6 +9,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "X86LegacyExecutionInternal.h"
+#include "X86LegacyTaskSwitch.h"
 
 #include "neverd/ir/X86/X86ExceptionDelivery.h"
 #include "neverd/ir/X86/X86SegmentDescriptorRules.h"
@@ -83,7 +84,9 @@ public:
     return Bad;
   }
 
-  llvm::Expected<X86MemoryAccessResult> run() {
+  llvm::Expected<detail::X86LegacyTaskResult> run() {
+    if (detail::legacyTaskEventPending(S))
+      return detail::resumeLegacyTask(S, M, {}, O);
     execute();
     if (Failure)
       return std::move(*Failure);
@@ -97,7 +100,7 @@ private:
   const X86LegacyExecutionOptions &O;
   uint32_t Flags;
   uint32_t External;
-  X86MemoryAccessResult R;
+  detail::X86LegacyTaskResult R;
   std::optional<llvm::Error> Failure;
   size_t NextAccess = 0;
 
@@ -191,7 +194,24 @@ private:
         faultIf(!(Gate & (Value{1} << 47)), 11, GateError))
       return;
     if (Type == 5) {
-      Failure = invalid("legacy task-gate delivery requires task-switch state");
+      detail::X86LegacyTaskRequest Request{
+          detail::X86LegacyTaskReason::Interrupt};
+      Request.Selector = Gate >> 16;
+      Request.SavedEIP = E.SavedEIP;
+      Request.SavedFlags = Flags;
+      Request.ThroughGate = Request.EventOwner = true;
+      Request.External = External;
+      if (x86EventHasErrorCode(E.Kind, E.Vector))
+        Request.ErrorCode = E.ErrorCode;
+      auto Got = detail::switchLegacyTask(S, M, Request, {}, O);
+      if (!Got) {
+        Failure = Got.takeError();
+        return;
+      }
+      Got->SelfModifications.insert(Got->SelfModifications.begin(),
+                                    R.SelfModifications.begin(),
+                                    R.SelfModifications.end());
+      R = std::move(*Got);
       return;
     }
     const unsigned Width = Type & 8 ? 4 : 2;
@@ -260,6 +280,10 @@ private:
                : (S.Core.GPR[4] & 0xffff0000) | uint16_t(NewSP);
     }
     const bool HasError = x86EventHasErrorCode(E.Kind, E.Vector);
+    // A failed incoming task may not have loaded SS yet. Only that private
+    // context can reach this path with an unusable stack cache.
+    if (faultIf(SS.Unusable, 12, 0))
+      return;
     const unsigned Count = (Inner ? 5 : 3) + HasError;
     const uint32_t Mask = SS.Attributes & 0x4000 ? UINT32_MAX : UINT16_MAX;
     const uint32_t Bottom = (SP - Count * Width) & Mask;
@@ -291,6 +315,7 @@ private:
     S.Core.GPR[4] = SP;
     S.EIP = IP;
     S.EFlags &= ~(0x34100u | (Type & 1 ? 0 : 0x200u));
+    detail::completeLegacyTaskFault(S);
   }
 };
 
@@ -329,6 +354,15 @@ continueEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
     R.SelfModifications.insert(R.SelfModifications.end(),
                                Got->SelfModifications.begin(),
                                Got->SelfModifications.end());
+    if (Got->Committed) {
+      Pending.FaultEIP = State.EIP;
+      SavedFlags = State.EFlags;
+    }
+    if (Got->ModeUnavailable) {
+      Pending.DataBreakpoints = Observation.Matches;
+      R.Status = X86LegacyExecutionStatus::ModeUnavailable;
+      return R;
+    }
     if (Got->Status == X86PageWalkStatus::BackingFault) {
       Pending.DataBreakpoints = Observation.Matches;
       R.Status = X86LegacyExecutionStatus::BackingFault;
@@ -339,10 +373,14 @@ continueEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
       const bool Software = Event.Kind == Kind::Software;
       R.SoftwareCompleted |= Software;
       Pending.SoftwareCompleted = R.SoftwareCompleted;
-      if (State.Debug && x86EventDataBreakpoints(
-                             *State.Debug, Software, Observation.Matches,
-                             uint32_t(State.Core.Segments[1].Base + State.EIP),
-                             State.EFlags)) {
+      if (Got->DebugTrap)
+        x86PublishTaskDebug(*State.Debug);
+      const bool DataTrap =
+          State.Debug &&
+          x86EventDataBreakpoints(
+              *State.Debug, Software, Observation.Matches,
+              uint32_t(State.Core.Segments[1].Base + State.EIP), State.EFlags);
+      if (DataTrap || Got->DebugTrap) {
         x86AcceptDebugException(*State.Debug);
         Observation.Matches = Pending.DataBreakpoints = 0;
         Pending.CompletedAccesses.clear();
@@ -390,7 +428,9 @@ llvm::Expected<X86LegacyExecutionResult>
 deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                       const X86LegacyEvent &Input,
                       const X86LegacyExecutionOptions &Options) {
-  if (State.PendingStack || State.PendingMpx)
+  if (State.PendingStack || State.PendingMpx ||
+      detail::legacyTaskInstructionPending(State) ||
+      detail::legacyTaskEventPending(State))
     return invalid("resume the pending legacy instruction before events");
   if (State.PendingEvent)
     return invalid("resume the pending legacy event before accepting another");
@@ -439,7 +479,15 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 llvm::Expected<X86LegacyExecutionResult>
 resumeX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                      const X86LegacyExecutionOptions &Options) {
-  if (State.PendingStack || State.PendingMpx)
+  if (detail::legacyTaskModeUnavailable(State)) {
+    if (auto Error = detail::validateLegacyTaskState(State, Memory))
+      return std::move(Error);
+    X86LegacyExecutionResult R;
+    R.Status = X86LegacyExecutionStatus::ModeUnavailable;
+    return R;
+  }
+  if (State.PendingStack || State.PendingMpx ||
+      detail::legacyTaskInstructionPending(State))
     return invalid("resume the pending legacy instruction before events");
   if (!State.PendingEvent || !validEvent(State.PendingEvent->Event))
     return invalid("no valid pending legacy event to resume");

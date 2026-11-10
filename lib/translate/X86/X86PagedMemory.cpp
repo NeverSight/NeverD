@@ -293,4 +293,12 @@ X86PagedMemory::storeSegment(const X86SegmentedAccess &Access,
   return static_cast<X86MemoryAccessResult &&>(*Store);
 }
 
+llvm::Expected<X86MemoryAccessResult>
+X86PagedMemory::probe(const X86LinearAccess &Access, uint64_t Bytes) {
+  auto Plan = plan(Access, Bytes);
+  if (!Plan)
+    return Plan.takeError();
+  return std::move(Plan->Result);
+}
+
 } // namespace neverd::translate

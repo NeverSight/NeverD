@@ -27,6 +27,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <map>
+#include <optional>
 #include <set>
 
 namespace neverd::types::render {
@@ -111,20 +112,17 @@ public:
   /// writer names, such as a long double exactly as large.
   /// \p Shared: the spelling of the names of \p Library that this writer
   /// would make itself, made once for many writers.
+  /// \p DeclarationsOnly: the writer only spells types, never definitions
+  /// or enumerator values, as CSpeller does.
   CWriter(const TypeLibrary &Library, const RenderOptions &Options,
           bool Embedded = false, bool Prelude = false,
-          const NameSpelling *Shared = nullptr)
+          const NameSpelling *Shared = nullptr, bool DeclarationsOnly = false)
       : Library(Library), Options(Options), Cpp(Options.Lang == Language::Cpp),
         Embedded(Embedded), Prelude(Prelude && !Embedded),
         System(!Embedded && Options.SystemLibrary
                    ? headerLibrary(*Options.SystemLibrary)
                    : nullptr),
-        Own(Shared ? std::nullopt
-                   : std::optional<NameSpelling>(std::in_place, Library,
-                                                 Options.Lang,
-                                                 /*CppToo=*/!Embedded)),
-        Names(Shared ? *Shared : *Own) {}
-  // Names may refer to Own.
+        Shared(Shared), DeclarationsOnly(DeclarationsOnly) {}
   CWriter(const CWriter &) = delete;
   CWriter &operator=(const CWriter &) = delete;
 
@@ -163,7 +161,19 @@ public:
   bool gnuBitfields() const { return GnuBitfields; }
   /// Whether a type rendered so far is followed by checks.
   bool asserts() const { return Asserted; }
-  const NameSpelling &names() const { return Names; }
+  std::string memberName(llvm::StringRef Name) const {
+    return NameSpelling::member(Name, !Embedded && Options.Lang == Language::C
+                                          ? Language::Cpp
+                                          : Options.Lang);
+  }
+  const NameSpelling &names() const {
+    if (Shared)
+      return *Shared;
+    if (!Own)
+      Own.emplace(Library, Options.Lang, /*CppToo=*/!Embedded, nullptr,
+                  /*IncludeEnumerators=*/!DeclarationsOnly);
+    return *Own;
+  }
   /// In a decompiled unit, the type a typedef of a name the implementation
   /// reserves stands for (reservedTypedef); none elsewhere.
   const TypeExpr *spelledThrough(llvm::StringRef Name) const {
@@ -226,8 +236,11 @@ private:
   const bool Embedded;
   const bool Prelude;
   const TypeLibrary *const System;
-  const std::optional<NameSpelling> Own;
-  const NameSpelling &Names;
+  /// Scalar declarations and member names do not need the library-wide
+  /// collision table. Build it only when a named type or enumerator is read.
+  const NameSpelling *const Shared;
+  const bool DeclarationsOnly;
+  mutable std::optional<NameSpelling> Own;
   bool DeclaredAhead = false;
   bool SeparateAsserts = false;
   unsigned Digits = 1;
@@ -330,7 +343,7 @@ std::string CWriter::declare(const TypeExpr &Type,
       else if (Kind == TypeKind::Enum)
         Base += "enum ";
     }
-    return spaced(Base + Names.type(Type.Name));
+    return spaced(Base + names().type(Type.Name));
   }
   case TypeExprKind::Pointer: {
     std::string Inner = Type.Reference ? "&" : "*";
@@ -376,7 +389,7 @@ std::string CWriter::declare(const TypeExpr &Type,
     for (const Parameter &Param : Function.Params) {
       if (!Params.empty())
         Params += ", ";
-      Params += Param.Type ? declare(*Param.Type, Names.member(Param.Name))
+      Params += Param.Type ? declare(*Param.Type, memberName(Param.Name))
                            : builtin(Builtin::Int);
     }
     if (Function.Variadic)
@@ -559,12 +572,12 @@ std::string CWriter::bareTypedef(const LocalType &Type) const {
   const char *Keyword = Type.Kind == TypeKind::Enum    ? "enum"
                         : Type.Kind == TypeKind::Union ? "union"
                                                        : "struct";
-  const std::string Name = Names.type(Type.Name);
+  const std::string Name = names().type(Type.Name);
   return "typedef " + std::string(Keyword) + " " + Name + " " + Name + ";\n";
 }
 
 std::string CWriter::tagged(const LocalType &Type) const {
-  const std::string Name = Names.type(Type.Name);
+  const std::string Name = names().type(Type.Name);
   if (Cpp || bare(Type))
     return Name;
   switch (Type.Kind) {
@@ -633,7 +646,7 @@ void CWriter::enumerators(const EnumDef &Enum, unsigned Indent,
                              : Value.Value);
     else
       Number = std::to_string(Value.Value);
-    Out += std::string(Indent, ' ') + Names.enumerator(Enum, I) + " = " +
+    Out += std::string(Indent, ' ') + names().enumerator(Enum, I) + " = " +
            Number + ",\n";
   }
 }
@@ -664,7 +677,7 @@ void CWriter::body(const RecordDef &Record, uint32_t Pack, unsigned Indent,
     const uint64_t Bit = Base + Field.BitOffset;
     const uint64_t Size = Library.sizeOf(*Field.Type).value_or(0);
     const uint32_t Align = Library.alignOf(*Field.Type);
-    const std::string Name = Names.member(Field.Name);
+    const std::string Name = memberName(Field.Name);
     if (Record.Union) {
       UnionSize = std::max(UnionSize, Size);
       UnionAlign = std::max(UnionAlign, Align);
@@ -804,7 +817,7 @@ void CWriter::record(const LocalType &Type, std::string &Out) {
   const char *Keyword = Record.Union ? "union" : "struct";
   if (!Record.Defined) {
     Out += "// Declared only: its members are unknown.\n";
-    Out += std::string(Keyword) + " " + Names.type(Type.Name) + ";\n";
+    Out += std::string(Keyword) + " " + names().type(Type.Name) + ";\n";
     if (!DeclaredAhead)
       Out += bareTypedef(Type);
     return;
@@ -814,7 +827,7 @@ void CWriter::record(const LocalType &Type, std::string &Out) {
   // declared, which a pointer to it needs.
   if (!Record.Size) {
     Out += "// " + Type.Name + ": 0 bytes, which C defines no record of\n";
-    Out += std::string(Keyword) + " " + Names.type(Type.Name) + ";\n";
+    Out += std::string(Keyword) + " " + names().type(Type.Name) + ";\n";
     if (!DeclaredAhead)
       Out += bareTypedef(Type);
     return;
@@ -826,7 +839,7 @@ void CWriter::record(const LocalType &Type, std::string &Out) {
   // substitute its definition or redefine the header's tag.
   bool HeaderRecord = false;
   if (Embedded && Options.Asserts && !SeparateAsserts && !Record.Union &&
-      Names.type(Type.Name) == Type.Name) {
+      names().type(Type.Name) == Type.Name) {
 #define NEVERD_PRELUDE_RECORD(RecordName, Platform, Header, Declared)          \
   if (Type.Name == #RecordName) {                                              \
     Out += "#if " Platform "\n#include <" Header ">\n#endif\n";                \
@@ -854,7 +867,7 @@ void CWriter::record(const LocalType &Type, std::string &Out) {
   Out += Header + "\n";
   if (Pack)
     Out += "#pragma pack(push, " + std::to_string(Pack) + ")\n";
-  Out += keyword(Record) + " " + Names.type(Type.Name) + "\n{\n";
+  Out += keyword(Record) + " " + names().type(Type.Name) + "\n{\n";
   body(Record, Pack, 4, 0, /*Outer=*/true, Out);
   Out += "};\n";
   if (Pack)
@@ -873,7 +886,7 @@ void CWriter::record(const LocalType &Type, std::string &Out) {
       if (!Field.Type || Field.BitWidth || Field.Name.empty() ||
           isFillerName(Field.Name))
         continue;
-      const std::string Member = Names.member(Field.Name);
+      const std::string Member = memberName(Field.Name);
       const std::string Access = "((" + tagged(Type) + " *)0)->" + Member;
       const std::string Expected = declare(*Field.Type, "");
       const std::string Message = stringLiteralBody(Type.Name + "." + Member);
@@ -895,11 +908,11 @@ void CWriter::enumeration(const LocalType &Type, std::string &Out) {
   // stated: C has no enumeration without enumerators, and C23 and C++ take
   // the type as complete.
   if (Enum.Values.empty()) {
-    Out += "enum " + Names.type(Type.Name) + " : " + builtin(Enum.Underlying) +
-           ";\n";
+    Out += "enum " + names().type(Type.Name) + " : " +
+           builtin(Enum.Underlying) + ";\n";
   } else {
     std::string Head = enumHead(Enum);
-    Head.insert(4, " " + Names.type(Type.Name));
+    Head.insert(4, " " + names().type(Type.Name));
     Out += Head + "\n{\n";
     enumerators(Enum, 4, Out);
     Out += "};\n";
@@ -922,7 +935,7 @@ void CWriter::hoisted(
     // system's own declaration does not have.
     if (Field.isBitfield() || Field.Name.empty() || isFillerName(Field.Name))
       continue;
-    Out.push_back({Names.member(Field.Name), (Base + Field.BitOffset) / 8});
+    Out.push_back({memberName(Field.Name), (Base + Field.BitOffset) / 8});
   }
 }
 
@@ -969,12 +982,12 @@ void CWriter::definition(const LocalType &Type, std::string &Out) {
              ", whose members are unknown: C declares no array of it.\n";
       return;
     }
-    Out += "typedef " + declare(*Type.Target, Names.type(Type.Name)) + ";\n";
+    Out += "typedef " + declare(*Type.Target, names().type(Type.Name)) + ";\n";
     return;
   case TypeKind::Function:
     if (Type.Function)
       Out += "typedef " +
-             declare(*makeFunction(Type.Function), Names.type(Type.Name)) +
+             declare(*makeFunction(Type.Function), names().type(Type.Name)) +
              ";\n";
     return;
   }
@@ -988,7 +1001,7 @@ void CWriter::forwardDeclaration(const LocalType &Type,
     Out += Typedef;
   else
     Out += (Type.Kind == TypeKind::Struct ? "struct " : "union ") +
-           Names.type(Type.Name) + ";\n";
+           names().type(Type.Name) + ";\n";
 }
 
 void CWriter::checks(const LocalType &Type, std::string &Out) {
@@ -1142,7 +1155,9 @@ struct CSpeller::Impl {
   // Types spelled as decompiled code spells them, beside the definitions
   // its unit embeds.
   Impl(const TypeLibrary &Library, const RenderOptions &Options)
-      : Options(Options), Writer(Library, this->Options, /*Embedded=*/true) {}
+      : Options(Options),
+        Writer(Library, this->Options, /*Embedded=*/true, /*Prelude=*/false,
+               nullptr, /*DeclarationsOnly=*/true) {}
   RenderOptions Options;
   CWriter Writer;
 };

@@ -280,13 +280,15 @@ constexpr const char *RustPrimitives[] = {
 };
 
 NameSpelling::NameSpelling(const TypeLibrary &Library, Language Lang,
-                           bool CppToo, llvm::StringSet<> *TakenNames)
+                           bool CppToo, llvm::StringSet<> *TakenNames,
+                           bool IncludeEnumerators)
     : Lang(Lang),
       Reserved(CppToo && Lang == Language::C ? Language::Cpp : Lang) {
   const std::vector<const LocalType *> All = Library.types();
   llvm::StringSet<> Taken;
   for (const LocalType *Type : All) {
-    std::string Spelled = identifier(Type->Name, /*TypeName=*/true);
+    std::string Spelled =
+        identifier(Type->Name, /*TypeName=*/true, Lang, Reserved);
     if (!Taken.insert(Spelled).second) {
       unsigned Number = 2;
       while (!Taken.insert(Spelled + "_" + std::to_string(Number)).second)
@@ -297,18 +299,19 @@ NameSpelling::NameSpelling(const TypeLibrary &Library, Language Lang,
       Renamed.push_back({Type->Name, Spelled});
     Types[Type->Name] = std::move(Spelled);
   }
-  for (const LocalType *Type : All) {
-    if (Type->Enum)
-      enumeration(*Type->Enum, type(Type->Name), Taken);
-    if (Type->Record)
-      inlineEnums(*Type->Record, type(Type->Name), Taken);
-  }
+  if (IncludeEnumerators)
+    for (const LocalType *Type : All) {
+      if (Type->Enum)
+        enumeration(*Type->Enum, type(Type->Name), Taken);
+      if (Type->Record)
+        inlineEnums(*Type->Record, type(Type->Name), Taken);
+    }
   if (TakenNames)
     *TakenNames = std::move(Taken);
 }
 
-std::string NameSpelling::identifier(llvm::StringRef Name,
-                                     bool TypeName) const {
+std::string NameSpelling::identifier(llvm::StringRef Name, bool TypeName,
+                                     Language Lang, Language Reserved) {
   std::string Text;
   for (char C : Name)
     Text += llvm::isAlnum(C) || C == '_' ? C : '_';
@@ -337,7 +340,8 @@ void NameSpelling::enumeration(const EnumDef &Enum, llvm::StringRef Owner,
                                llvm::StringSet<> &Taken) {
   std::vector<std::string> &Spelled = Enumerators[&Enum];
   for (const Enumerator &Value : Enum.Values) {
-    std::string Name = identifier(Value.Name, /*TypeName=*/true);
+    std::string Name =
+        identifier(Value.Name, /*TypeName=*/true, Lang, Reserved);
     if (!Taken.insert(Name).second) {
       Name = Owner.str() + "_" + Name;
       while (!Taken.insert(Name).second)
@@ -366,8 +370,9 @@ void NameSpelling::inlineEnums(const RecordDef &Record, llvm::StringRef Owner,
 std::string NameSpelling::type(llvm::StringRef Name) const {
   auto Found = Types.find(Name);
   // A name the library lacks, such as a declared-only reference.
-  return Found != Types.end() ? Found->second
-                              : identifier(Name, /*TypeName=*/true);
+  return Found != Types.end()
+             ? Found->second
+             : identifier(Name, /*TypeName=*/true, Lang, Reserved);
 }
 
 std::string NameSpelling::enumerator(const EnumDef &Enum, size_t Index) const {
@@ -375,12 +380,19 @@ std::string NameSpelling::enumerator(const EnumDef &Enum, size_t Index) const {
   if (Found != Enumerators.end() && Index < Found->second.size())
     return Found->second[Index];
   return Index < Enum.Values.size()
-             ? identifier(Enum.Values[Index].Name, /*TypeName=*/true)
+             ? identifier(Enum.Values[Index].Name, /*TypeName=*/true, Lang,
+                          Reserved)
              : std::string("_");
 }
 
 std::string NameSpelling::member(llvm::StringRef Name) const {
-  return Name.empty() ? std::string() : identifier(Name, /*TypeName=*/false);
+  return member(Name, Reserved);
+}
+
+std::string NameSpelling::member(llvm::StringRef Name, Language Reserved) {
+  return Name.empty()
+             ? std::string()
+             : identifier(Name, /*TypeName=*/false, Reserved, Reserved);
 }
 
 std::string withComment(std::string Code, llvm::StringRef Comment,

@@ -1071,11 +1071,11 @@ page-table effects survive later faults and backing failures. Missing physical
 backing never manufactures a guest #PF, and retry does not duplicate an ESP
 increment. The fault path enters the existing IDT owner with the original EIP.
 
-Nested-task IRET is refused before execution because task-switch state is
-not owned. A CPL0 frame requesting VM86 is refused after reading its flags,
-retaining NMI unblocking; it is not misreported as an ordinary protected
-return. Restored TF is preserved; the instruction-step binding samples entry
-TF independently of the restored frame.
+Nested-task IRET requires the separate [Tasks binding](#protected-task-transfers);
+it does not use the protected stack-frame return path. A CPL0 frame requesting
+VM86 is refused after reading its flags, retaining NMI unblocking; it is not
+misreported as an ordinary protected return. Restored TF is preserved; the
+instruction-step binding samples entry TF independently of the restored frame.
 Reserved legacy descriptor bits, CET/FRED and unbound profiles remain explicit
 errors. The error holders in selector, event and return transitions preserve
 LLVM's checked-error contract, including these dynamically discovered refusals.
@@ -1262,8 +1262,10 @@ with gate entry and removes parameters from both stack contexts.
 
 LOCK delivers #UD only after authenticated fetch. Duplicate prefixes, REP/BND
 prefixes and register forms of FF /3 or /5 refuse explicitly. Task-gate/TSS
-transfers, reserved L-bit targets, VM86 and CET/FRED remain outside this
-boundary. TF requires the separate instruction-step debug binding. They do not become guessed near calls or NOPs.
+transfers require the separate [Tasks binding](#protected-task-transfers).
+Reserved L-bit targets, VM86 and CET/FRED remain outside this boundary. TF
+requires the separate instruction-step debug binding. Unsupported transfers
+never become guessed near calls or NOPs.
 
 The ordinary lifter previously mapped far calls/jumps to near control flow,
 discarding the selector and possible stack/privilege transition. It now refuses
@@ -1569,3 +1571,73 @@ After the later SBF-only dev integration, both rebuilt SDKs pass another 260
 source and ordinary system-state checks, retaining 280 additional compiled
 libraries. The paging executables remain byte-identical to the complete
 qualification. The evidence records this integration commit separately.
+
+## Protected task transfers
+
+The `X86LegacyExecutionOptions::Tasks` binding with `OrderedTSS` connects far CALL/JMP
+through available TSS descriptors and GDT/LDT task gates, IDT task gates, and
+nested-task IRET to one task-switch owner. Both 16-bit and 32-bit TSS layouts
+are represented independently of the source code's CS.D and operand prefix.
+Generated host-x64 Clang/NeverC dispatch uses that same owner; this adds no
+NeverC 32-bit source target.
+
+The binding requires a valid debug bank/profile and an explicit full-limit stack
+choice. Word TSS loads also require eight explicit GPR upper-half values; their
+FS/GS selectors become null/unusable. Outgoing saves include dynamic GPRs,
+selectors, EIP and flags, while CR3 and LDTR remain static TSS inputs. CALL and
+interrupts set the incoming backlink/NT; JMP and IRET clear the outgoing busy
+bit; IRET clears NT in the outgoing saved image. All transfers set CR0.TS and
+clear DR7 local enables/LE. Incoming RF is retained, old TF is saved without
+an entry single-step trap, incoming TF affects its first instruction, and TSS.T
+produces a separate DR6.BT cause, including coincident data breakpoints.
+
+This is one CPU over exclusive ordinary RAM with a declared access order.
+Guest page residency/permissions for TSS regions and busy updates are probed
+before task stores. Outgoing stores precede incoming TSS reads; LDT, CS, SS,
+ES, DS, FS and GS descriptor loads follow incoming register publication. PAE
+PDPTEs reload only when CR3 changes. An invalid reload publishes the incoming
+task, a cleared PDPTE bank and #TS(0) in this profile. Task-gate error-code
+stores precede the late target-EIP limit check. This does not infer a physical
+CPU's TSS microcode access widths, contiguous-physical TSS behavior, TLB effects,
+undefined fault state or every competing-fault priority.
+
+Incoming TR, controls, registers and selectors remain published when a later
+segment check faults. The private continuation admits that fault context
+without weakening ordinary loaded-cache validation. A following interrupt gate
+can load a valid inner stack; a task gate can enter a recovery task. Completed
+RAM effects and the original instruction are retained across host backing
+stops, including aliases and a changed address space. Event-owned continuations
+keep the already accepted event and never reread its old IDT gate after commit.
+
+A VM86 task image stops with `ModeUnavailable`, retaining `PendingTask` and any
+accepted event before destination descriptor processing. It is neither an
+instruction completion nor a fabricated guest fault. Real/VM86 execution,
+IA-32e transitions, software SMM/SGX and the broader outstanding state matrix
+remain open. The LLVM release, production SDK pin and submodule are unchanged.
+
+The contract follows [Intel SDM, task management and exception delivery](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
+`X86LegacyTaskTest` covers publication, faults, both TSS widths, aliasing,
+address-space changes and suspension; generated-source cases run with host-x64
+Clang/NeverC at O0/O2. `KVMTaskSoftwareReference` compares original 32-bit TSS
+CALL/JMP, direct/task-gate/INT paths and nested IRET under legacy and PAE paging.
+VMX exits task switches to KVM software, so those comparisons are independent
+software evidence, not physical task-switch or task-debug qualification.
+
+The [2026-11-09 qualification](evidence/x86-legacy-tasks-2026-11-09.json)
+records 2,402 passing checks on the qualified integration: 502 affected paging,
+event, task and debug cases on both P/E cores with each SDK, 193 generated-C
+cases per SDK, and four C/Python bridge checks per SDK. None of these selected
+checks skip. The 29 direct task cases include final error-slot backing pauses,
+word/dword task-gate error pushes and incoming-fault recovery; 16 generated-C
+task cases cover Clang/NeverC at O0/O2, including retained VM86 mode stops.
+All 1,140 retained source/manifest/compiled artifacts are identical between the
+SDKs. The earlier complete native paging run and its repaired diagnostic/profile
+reruns are recorded separately; its unavailable LA57 case is not counted as a
+pass. The reference task paths compare ordinary RAM byte-for-byte and page-table
+RAM with only paging A/D bits excluded.
+
+The final integration additionally includes dev's independent SBF analysis and
+x87 `fabs` C-name update. Task-owner source hashes and all 1,140 source/export
+artifacts remain unchanged; both SDKs pass another 1,182 affected software,
+generated-C and C/Python bridge checks with no skips. The evidence records this
+integration separately from the complete P/E-core qualification.

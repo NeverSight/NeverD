@@ -219,6 +219,16 @@ struct ScalarPredicate {
   std::optional<bool> Taken;
   uint16_t Positive = 0;
   uint16_t Negative = 0;
+  uint16_t LeftAliases;
+  uint16_t RightAliases;
+
+  ScalarPredicate(const MedInstruction &Instruction, bool Outcome)
+      : Comparison(&Instruction), Taken(Outcome),
+        LeftAliases(registerBit(Instruction.Dst)),
+        RightAliases(Instruction.Semantics.Source ==
+                             OperandSourceKind::SourceRegister
+                         ? registerBit(Instruction.Src)
+                         : 0) {}
 
   bool sameCondition(const MedInstruction &Other) const {
     return Comparison->Op == Other.Op && Comparison->Width == Other.Width &&
@@ -254,7 +264,9 @@ struct ScalarPredicate {
 
   bool operator==(const ScalarPredicate &Other) const {
     return sameCondition(*Other.Comparison) && Taken == Other.Taken &&
-           Positive == Other.Positive && Negative == Other.Negative;
+           Positive == Other.Positive && Negative == Other.Negative &&
+           LeftAliases == Other.LeftAliases &&
+           RightAliases == Other.RightAliases;
   }
 };
 
@@ -280,8 +292,12 @@ struct ContextState {
   // A null branch removes a name only if its definition was also conditional.
   std::optional<NullableCapture> Nullable;
   std::optional<ScalarPredicate> Predicate;
+  // A finite must-fact domain. No numeric interval is retained for an otherwise
+  // unknown scalar, including a guarded product that cannot wrap to zero.
+  uint16_t NonzeroRegisters = 0;
 
-  void forgetPredicateRegisters(uint16_t Written) {
+  void forgetScalarRegisters(uint16_t Written) {
+    NonzeroRegisters &= ~Written;
     if (!Predicate)
       return;
     if (Predicate->operands() & Written) {
@@ -289,6 +305,8 @@ struct ContextState {
     } else {
       Predicate->Positive &= ~Written;
       Predicate->Negative &= ~Written;
+      Predicate->LeftAliases &= ~Written;
+      Predicate->RightAliases &= ~Written;
     }
   }
 
@@ -322,12 +340,15 @@ struct ContextState {
   void join(const ContextState &Other, const SBFProgram &Program,
             const std::shared_ptr<const StoredMemoryCoordinates> &Coordinates,
             MemoryPostconditions::ExpressionJoin MergeExpression = nullptr) {
+    NonzeroRegisters &= Other.NonzeroRegisters;
     if (Predicate && Other.Predicate &&
         Predicate->sameCondition(*Other.Predicate->Comparison)) {
       const auto Left = Predicate->carriers(Registers);
       const auto Right = Other.Predicate->carriers(Other.Registers);
       Predicate->Positive = Left.first & Right.first;
       Predicate->Negative = Left.second & Right.second;
+      Predicate->LeftAliases &= Other.Predicate->LeftAliases;
+      Predicate->RightAliases &= Other.Predicate->RightAliases;
       if (Predicate->Taken != Other.Predicate->Taken)
         Predicate->Taken.reset();
     } else {
@@ -577,6 +598,7 @@ void widenCapturedValues(ContextState &State,
   State.Tagged.reset();
   State.Nullable.reset();
   State.Predicate.reset();
+  State.NonzeroRegisters = 0;
   const auto Widen = [&](RegisterValue Value) {
     // An incoming capture names one fixed value throughout this invocation.
     // Keeping its identity does not preserve fields erased by may-alias writes.
@@ -701,8 +723,26 @@ bool refinePredicateBranch(const MedInstruction &Branch, size_t Successor,
     }
     State.Predicate->Taken = Taken;
   } else {
-    State.Predicate = ScalarPredicate{&Branch, Taken};
+    State.Predicate.emplace(Branch, Taken);
   }
+  const bool RegisterSource =
+      Branch.Semantics.Source == OperandSourceKind::SourceRegister;
+  const auto Right =
+      RegisterSource
+          ? State.Registers[Branch.Src].singleton()
+          : RegisterValue{RegisterValue::Kind::Constant,
+                          normalizeImmediate(Branch.Immediate,
+                                             Branch.Semantics.Immediate),
+                          0};
+  if (Right.ValueKind == RegisterValue::Kind::Constant &&
+      (!RegisterSource || Branch.Dst != Branch.Src) &&
+      evaluateBranchCondition(Branch.Op, Branch.Width, 0, Right.Value) != Taken)
+    State.NonzeroRegisters |= registerBit(Branch.Dst);
+  const auto Left = State.Registers[Branch.Dst].singleton();
+  if (RegisterSource && Branch.Dst != Branch.Src &&
+      Left.ValueKind == RegisterValue::Kind::Constant &&
+      evaluateBranchCondition(Branch.Op, Branch.Width, Left.Value, 0) != Taken)
+    State.NonzeroRegisters |= registerBit(Branch.Src);
   return true;
 }
 
@@ -933,9 +973,16 @@ std::optional<size_t> knownBranchSuccessor(const MedInstruction *Last,
   const ProvenValueSet Immediate(RegisterValue{
       RegisterValue::Kind::Constant,
       normalizeImmediate(Last->Immediate, Last->Semantics.Immediate), 0});
+  const ProvenValueSet Nonzero(unsignedRangeValue({1, UINT64_MAX}));
+  const auto Values = [&](unsigned Register) -> const ProvenValueSet & {
+    return State.Registers[Register].unknown() &&
+                   (State.NonzeroRegisters & registerBit(Register))
+               ? Nonzero
+               : State.Registers[Register];
+  };
   const auto &Right =
       Last->Semantics.Source == OperandSourceKind::SourceRegister
-          ? State.Registers[Last->Src]
+          ? Values(Last->Src)
           : Immediate;
   const auto Outcome = [&](const RegisterValue &Left,
                            const RegisterValue &RHS) -> std::optional<bool> {
@@ -1011,7 +1058,7 @@ std::optional<size_t> knownBranchSuccessor(const MedInstruction *Last,
     return Result;
   };
   std::optional<bool> Taken;
-  for (const auto &Left : State.Registers[Last->Dst].values())
+  for (const auto &Left : Values(Last->Dst).values())
     for (const auto &RHS : Right.values()) {
       const auto Value = Outcome(Left, RHS);
       if (!Value || (Taken && *Taken != *Value))
@@ -1021,6 +1068,54 @@ std::optional<size_t> knownBranchSuccessor(const MedInstruction *Last,
   if (!Taken)
     return std::nullopt;
   return *Taken ? *Last->BranchTarget : Last->Slot + Last->SlotWidth;
+}
+
+bool guardedProductIsNonzero(const MedInstruction &Instruction,
+                             const ContextState &State) {
+  if (Instruction.Op != Operation::Mul ||
+      Instruction.Width != kDoubleWordBitWidth ||
+      !(State.NonzeroRegisters & registerBit(Instruction.Dst)))
+    return false;
+  const auto Factor =
+      Instruction.Semantics.Source == OperandSourceKind::SourceRegister
+          ? State.Registers[Instruction.Src].singleton()
+          : RegisterValue{RegisterValue::Kind::Constant,
+                          normalizeImmediate(Instruction.Immediate,
+                                             Instruction.Semantics.Immediate),
+                          0};
+  if (Factor.ValueKind != RegisterValue::Kind::Constant || !Factor.Value)
+    return false;
+  if (Factor.Value == 1)
+    return true;
+  if (!State.Predicate || !State.Predicate->Taken ||
+      State.Predicate->Comparison->Width != kDoubleWordBitWidth)
+    return false;
+  const auto &Predicate = *State.Predicate;
+  const auto &Comparison = *Predicate.Comparison;
+  const bool Left = Predicate.LeftAliases & registerBit(Instruction.Dst);
+  const bool Right = Predicate.RightAliases & registerBit(Instruction.Dst);
+  if (Left == Right)
+    return false;
+  ContextState Probe;
+  if (Left &&
+      Comparison.Semantics.Source == OperandSourceKind::SourceRegister) {
+    const auto Other = State.Registers[Comparison.Src].singleton();
+    if (Other.ValueKind != RegisterValue::Kind::Constant)
+      return false;
+    Probe.Registers[Comparison.Src] = Other;
+  } else if (Right) {
+    const auto Other = State.Registers[Comparison.Dst].singleton();
+    if (Other.ValueKind != RegisterValue::Kind::Constant)
+      return false;
+    Probe.Registers[Comparison.Dst] = Other;
+  }
+  // Reuse the branch owner to exclude every overflowing operand. This probe
+  // is temporary: only the resulting nonzero fact enters the CFG fixed point.
+  Probe.Registers[Left ? Comparison.Dst : Comparison.Src] =
+      unsignedRangeValue({UINT64_MAX / Factor.Value + 1, UINT64_MAX});
+  const auto Selected = knownBranchSuccessor(&Comparison, Probe);
+  return Selected &&
+         (*Selected == *Comparison.BranchTarget) != *Predicate.Taken;
 }
 
 void pushAbstractFrame(std::array<ProvenValueSet, kRegisterCount> &State,
@@ -3444,21 +3539,40 @@ ContextFlow::refineTaggedBranch(const FunctionContext &Context,
 
 void ContextFlow::transferValues(const MedInstruction &Instruction,
                                  ContextState &State) {
+  const bool Copy = Instruction.Op == Operation::Mov &&
+                    Instruction.Form == OperandForm::DstSrc &&
+                    Instruction.Width == kDoubleWordBitWidth;
+  const bool Nonzero =
+      (Copy && (State.NonzeroRegisters & registerBit(Instruction.Src))) ||
+      guardedProductIsNonzero(Instruction, State);
+  const bool Positive =
+      Copy && State.Predicate &&
+      (State.Predicate->Positive & registerBit(Instruction.Src));
+  const bool Negative =
+      Copy && State.Predicate &&
+      (State.Predicate->Negative & registerBit(Instruction.Src));
+  const bool Left =
+      Copy && State.Predicate &&
+      (State.Predicate->LeftAliases & registerBit(Instruction.Src));
+  const bool Right =
+      Copy && State.Predicate &&
+      (State.Predicate->RightAliases & registerBit(Instruction.Src));
+  State.forgetScalarRegisters(instructionDependencies(Instruction).Writes);
   if (State.Predicate) {
-    const bool Copy = Instruction.Op == Operation::Mov &&
-                      Instruction.Form == OperandForm::DstSrc &&
-                      Instruction.Width == kDoubleWordBitWidth;
-    const bool Positive =
-        Copy && (State.Predicate->Positive & registerBit(Instruction.Src));
-    const bool Negative =
-        Copy && (State.Predicate->Negative & registerBit(Instruction.Src));
-    State.forgetPredicateRegisters(instructionDependencies(Instruction).Writes);
-    if (State.Predicate) {
-      if (Positive)
-        State.Predicate->Positive |= registerBit(Instruction.Dst);
-      if (Negative)
-        State.Predicate->Negative |= registerBit(Instruction.Dst);
-    }
+    if (Positive)
+      State.Predicate->Positive |= registerBit(Instruction.Dst);
+    if (Negative)
+      State.Predicate->Negative |= registerBit(Instruction.Dst);
+    if (Left)
+      State.Predicate->LeftAliases |= registerBit(Instruction.Dst);
+    if (Right)
+      State.Predicate->RightAliases |= registerBit(Instruction.Dst);
+  }
+  if (Nonzero)
+    State.NonzeroRegisters |= registerBit(Instruction.Dst);
+  if (Instruction.Call != CallKind::None) {
+    State.Predicate.reset();
+    State.NonzeroRegisters = 0;
   }
   const auto OriginAddress = [&](unsigned Register) {
     RegisterState Entry{};
@@ -4347,8 +4461,11 @@ llvm::Expected<bool> ContextFlow::call(FunctionContext &Context,
                                        ContextState &State, bool Collect) {
   State.Tagged.reset();
   State.Predicate.reset();
-  const auto ForgetPredicate =
-      llvm::scope_exit([&] { State.Predicate.reset(); });
+  State.NonzeroRegisters = 0;
+  const auto ForgetScalarFacts = llvm::scope_exit([&] {
+    State.Predicate.reset();
+    State.NonzeroRegisters = 0;
+  });
   if (Instruction.Call != CallKind::Indirect)
     return callTarget(Context, Instruction, State, Collect);
   const auto Targets = State.Registers[Instruction.CallRegister].values();
@@ -4546,6 +4663,7 @@ ContextFlow::instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
   Result.Output = Input;
   auto &State = Result.Output;
   State.Predicate.reset();
+  State.NonzeroRegisters = 0;
   const auto RetainState = [&]() -> llvm::Error {
     const uint64_t NewBytes =
         stateBytes(State) + ResultOverhead +
@@ -4645,6 +4763,7 @@ ContextFlow::instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
           State.InputExpressions[R] = Input.InputExpressions[R];
         }
         State.Predicate.reset();
+        State.NonzeroRegisters = 0;
         if (auto Error = RetainState())
           return std::move(Error);
         if (MergeScalarBranches) {
@@ -6146,6 +6265,7 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
   Input.Postconditions.clear();
   Input.Tagged.reset();
   Input.Predicate.reset();
+  Input.NonzeroRegisters = 0;
   // Incoming names belong to callers, not to the invocation being summarized.
   // Their fields still use the ordinary must-fact join within this summary.
   Input.DefinedCaptures = std::vector<uint64_t>{};
@@ -6404,9 +6524,18 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
   const auto Enqueue = [&](size_t BlockID, const ContextState &Incoming,
                            uint16_t Defined) -> llvm::Error {
     const auto ProjectInputs = [&](ContextState &State) {
-      const uint16_t Inputs =
+      uint16_t Inputs =
           InputRegisters[BlockID] | registerBit(kFramePointerRegister);
-      State.forgetPredicateRegisters(AllRegisters & ~Inputs);
+      // A literal comparand is still read by the local scalar proof while
+      // the tested value is live, even if machine instructions next redefine
+      // that literal's register. Other dead values still project to unknown.
+      if (State.Predicate && (State.Predicate->operands() & Inputs))
+        for (unsigned R = 0; R < kRegisterCount; ++R)
+          if ((State.Predicate->operands() & registerBit(R)) &&
+              State.Registers[R].singleton().ValueKind ==
+                  RegisterValue::Kind::Constant)
+            Inputs |= registerBit(R);
+      State.forgetScalarRegisters(AllRegisters & ~Inputs);
       for (unsigned R = 0; R < kRegisterCount; ++R)
         if (!(Inputs & registerBit(R))) {
           State.Registers[R] = {};
@@ -6459,6 +6588,7 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
         Merged.DefinedCaptures == It->second.Entry.DefinedCaptures &&
         Merged.Nullable == It->second.Entry.Nullable &&
         Merged.Predicate == It->second.Entry.Predicate &&
+        Merged.NonzeroRegisters == It->second.Entry.NonzeroRegisters &&
         MergedDefinitions == It->second.DefinitelyWritten)
       return llvm::Error::success();
     const uint64_t OldCharge = StateCharge(It->second.Entry);

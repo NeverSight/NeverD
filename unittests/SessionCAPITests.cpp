@@ -6478,6 +6478,72 @@ TEST_F(SessionCAPITest, LocalTypeNamesReadAheadLeaveDeclarationsAsTheyRead) {
   EXPECT_EQ(neverd_local_types_prepare(nullptr), 0);
 }
 
+TEST_F(SessionCAPITest, NamesReadAheadLeaveNameChecksAsTheyRead) {
+  // What neverd_names_prepare reads ahead, every check reads as a session that
+  // read nothing ahead does: a name another address's symbol has is refused,
+  // others pass, and a rename frees a symbol's name as it does there.
+  const std::string Binary =
+      buildProgram("names_ahead",
+                   "#include <stdio.h>\n"
+                   "int counter;\n"
+                   "__attribute__((noinline)) int bump(int v) { counter += v; "
+                   "return counter; }\n"
+                   "int main(int argc, char **argv) { (void)argv; puts(\"x\"); "
+                   "return bump(argc); }\n");
+  ASSERT_FALSE(Binary.empty());
+  // Before a binary is loaded there is nothing to read, and the error a caller
+  // has not read yet stays.
+  EXPECT_EQ(neverd_name_check(Session, 0, "unloaded"), -1);
+  const std::string Error = takeString(neverd_last_error(Session));
+  ASSERT_FALSE(Error.empty());
+  EXPECT_EQ(neverd_names_prepare(Session), 0);
+  EXPECT_EQ(takeString(neverd_last_error(Session)), Error);
+  neverd_session_t Plain = neverd_session_create();
+  ASSERT_NE(Plain, nullptr);
+  for (neverd_session_t Each : {Session, Plain})
+    ASSERT_EQ(neverd_session_load(Each, Binary.c_str()), 1)
+        << takeString(neverd_last_error(Each));
+  EXPECT_EQ(neverd_names_prepare(Session), 1);
+  EXPECT_EQ(neverd_names_prepare(Session), 1);
+#if defined(__APPLE__)
+  const std::string Prefix = "_";
+#else
+  const std::string Prefix;
+#endif
+  const auto named = [&](const char *Name) { return Prefix + Name; };
+  const auto entryOf = [&](neverd_session_t Each, const char *Name) {
+    const int Index = neverd_func_find_by_name(Each, named(Name).c_str());
+    EXPECT_GE(Index, 0) << Name;
+    return Index < 0 ? neverd_va_t(0) : neverd_func_entry(Each, Index);
+  };
+  const auto Bump = entryOf(Session, "bump"), Main = entryOf(Session, "main");
+  ASSERT_NE(Bump, 0u);
+  ASSERT_NE(Main, 0u);
+  ASSERT_EQ(entryOf(Plain, "bump"), Bump);
+  const auto answer = [&](neverd_session_t Each, const std::string &Name) {
+    const int Result = neverd_name_check(Each, Bump, Name.c_str());
+    return std::to_string(Result) + " " + takeString(neverd_last_error(Each));
+  };
+  const auto sameAnswers = [&] {
+    for (const std::string &Name :
+         {named("counter"), named("main"), named("bump"), std::string("puts"),
+          std::string("entry_main"), std::string("fresh_name")})
+      EXPECT_EQ(answer(Session, Name), answer(Plain, Name)) << Name;
+  };
+  sameAnswers();
+  EXPECT_EQ(answer(Session, named("counter")).rfind("-1 ", 0), 0u);
+  // Renamed, main's symbol no longer names its address, and its name is
+  // free; the names read ahead still hold for the image's symbols.
+  for (neverd_session_t Each : {Session, Plain})
+    ASSERT_EQ(neverd_rename_addr(Each, Main, "entry_main"), 0)
+        << takeString(neverd_last_error(Each));
+  EXPECT_EQ(neverd_names_prepare(Session), 1);
+  sameAnswers();
+  EXPECT_EQ(answer(Session, named("main")).rfind("0 ", 0), 0u);
+  neverd_session_destroy(Plain);
+  EXPECT_EQ(neverd_names_prepare(nullptr), 0);
+}
+
 TEST_F(SessionCAPITest, DeclaredTypesJoinThePDBsAndStayWithTheProject) {
   const auto Fixtures =
       std::filesystem::path(__FILE__).parent_path() / "types" / "fixtures";
