@@ -166,6 +166,35 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
   const uint64_t Immediate = static_cast<uint64_t>(int64_t(int16_t(Word)));
   const bool Wide = S.Width == 8;
 
+  if (Mode == InstructionMode::MIPS16 && HasMIPS16E2 && !Wide) {
+    if (Opcode == 48 || Opcode == 56) {
+      const auto Address =
+          S.binary(NdOp::INT_ADD, S.read(RS), NdVar::cst(Immediate, 4));
+      const auto Result = S.makeTemp(4);
+      if (Opcode == 48)
+        S.emitIntrinsic(Intrinsic::MIPSLoadLinkedWord, Result, {Address});
+      else
+        S.emitIntrinsic(Intrinsic::MIPSStoreConditionalWord, Result,
+                        {Address, S.read(RT)});
+      S.write(RT, Result);
+      return true;
+    }
+    if ((Word & 0xffe007ff) == 0x7c00003b) {
+      const auto Result = S.makeTemp(4);
+      S.emitIntrinsic(Intrinsic::MIPSReadHardwareRegister, Result,
+                      {NdVar::cst(RD, 1)});
+      S.write(RT, Result);
+      return true;
+    }
+    if ((Word & 0xffe0ffdf) == 0x41606000) {
+      const auto Result = S.makeTemp(4);
+      S.emitIntrinsic(Word & 32 ? Intrinsic::MIPSEnableInterrupts
+                                : Intrinsic::MIPSDisableInterrupts,
+                      Result);
+      S.write(RT, Result);
+      return true;
+    }
+  }
   if (Word == 0x000000c0) { // EHB, before the generic SLL zero destination.
     S.emitIntrinsic(Intrinsic::MIPSExecutionHazardBarrier, {});
     return true;

@@ -485,3 +485,87 @@ barrier_leaf m16e2_sync28,28
 barrier_leaf m16e2_sync29,29
 barrier_leaf m16e2_sync30,30
 barrier_leaf m16e2_sync31,31
+
+.align 1
+.globl m16e2_state_ll
+.type m16e2_state_ll,@function
+.ent m16e2_state_ll
+m16e2_state_ll:
+.insn
+ll $v0,0($a0)
+li $v0,7
+jrc $ra
+.end m16e2_state_ll
+.size m16e2_state_ll, .-m16e2_state_ll
+
+.align 1
+.globl m16e2_state_sc
+.type m16e2_state_sc,@function
+.ent m16e2_state_sc
+m16e2_state_sc:
+.insn
+sc $v0,0($a0)
+li $v0,7
+jrc $ra
+.end m16e2_state_sc
+.size m16e2_state_sc, .-m16e2_state_sc
+
+.align 1
+.globl m16e2_state_rdhwr
+.type m16e2_state_rdhwr,@function
+.ent m16e2_state_rdhwr
+m16e2_state_rdhwr:
+.insn
+rdhwr $v0,$29
+li $v0,7
+jrc $ra
+.end m16e2_state_rdhwr
+.size m16e2_state_rdhwr, .-m16e2_state_rdhwr
+
+.align 1
+.globl m16e2_state_di
+.type m16e2_state_di,@function
+.ent m16e2_state_di
+m16e2_state_di:
+.insn
+di $v0
+li $v0,7
+jrc $ra
+.end m16e2_state_di
+.size m16e2_state_di, .-m16e2_state_di
+
+.align 1
+.globl m16e2_state_ei
+.type m16e2_state_ei,@function
+.ent m16e2_state_ei
+m16e2_state_ei:
+.insn
+ei $v0
+li $v0,7
+jrc $ra
+.end m16e2_state_ei
+.size m16e2_state_ei, .-m16e2_state_ei
+
+.align 1
+.globl m16e2_state_di_discard
+.type m16e2_state_di_discard,@function
+.ent m16e2_state_di_discard
+m16e2_state_di_discard:
+.insn
+di
+li $v0,7
+jrc $ra
+.end m16e2_state_di_discard
+.size m16e2_state_di_discard, .-m16e2_state_di_discard
+
+.align 1
+.globl m16e2_state_ei_discard
+.type m16e2_state_ei_discard,@function
+.ent m16e2_state_ei_discard
+m16e2_state_ei_discard:
+.insn
+ei
+li $v0,7
+jrc $ra
+.end m16e2_state_ei_discard
+.size m16e2_state_ei_discard, .-m16e2_state_ei_discard

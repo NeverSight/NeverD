@@ -57,6 +57,8 @@ void writeMIPSScalarHelpers(Stream &OS, Arch Target,
   const bool Little = archLittleEndian(Target);
   const char *Reg = Wide ? "uint64_t" : "uint32_t";
   for (const auto &[Id, Name] : Helpers) {
+    if (mips::isStatefulScalar(Id))
+      throw std::runtime_error(mips::kStatefulSourceUnsupported);
     if (mips::isBarrier(Id)) {
       for (unsigned Stype = 0; Stype != (Id == Intrinsic::MIPSSync ? 32u : 1u);
            ++Stype) {
@@ -160,6 +162,8 @@ renderMIPSScalar(const HighExpr &E, Arch Target, const std::string &Name,
                  std::optional<uint64_t> GuestAddress, Render &&Expression) {
   if (!mipsScalarHighShapeIsValid(E, Target))
     throw std::runtime_error(mips::kMalformedScalar);
+  if (mips::isStatefulScalar(E.IntrinsicId))
+    throw std::runtime_error(mips::kStatefulSourceUnsupported);
   if (E.IntrinsicId == Intrinsic::MIPSUnpredictable)
     throw std::runtime_error(mips::kUnpredictableResult);
   if (E.IntrinsicId == Intrinsic::MIPSLwrUpper)

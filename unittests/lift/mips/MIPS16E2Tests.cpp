@@ -10,6 +10,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/ArchSupport.h"
+#include "neverd/Limits.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/low/NdOpEmulator.h"
@@ -264,7 +265,8 @@ TEST_P(MIPS16E2,
        {0xf00832a6u, 0xf01032a6u, 0xf04032a6u, 0xf10032a6u, 0xf20032a6u,
         0xf40032a6u, 0xf00132a6u, 0xf00232a6u, 0xf00432a6u, 0xf0243236u,
         0xf0243256u, 0xf0243296u, 0xf0cb3144u, 0xf0cb3244u, 0xf0cb3444u,
-        0xf7e13448u, 0xf1ec92ffu, 0xf3e492ffu, 0xf5e492ffu, 0xf00092c0u}) {
+        0xf7e13448u, 0xf1ec92ffu, 0xf3e492ffu, 0xf5e492ffu, 0xf01892c0u,
+        0xf60492c0u, 0xf00430ccu, 0xf006674cu}) {
     cs_insn Insn{};
     Insn.size = 4;
     Insn.address = 0x1000;
@@ -341,6 +343,366 @@ TEST_P(MIPS16E2, BarriersKeepAllStypesAndNeverBecomePureOrAlignmentNops) {
       ASSERT_EQ(Ops.size(), 1u);
       EXPECT_EQ(Ops[0].Opcode, NdOp::INTRINSIC);
     }
+  }
+}
+
+LowOp stateOp(Intrinsic Id, NdVar Output,
+              std::initializer_list<NdVar> Inputs = {}) {
+  LowOp Op;
+  Op.Opcode = NdOp::INTRINSIC;
+  Op.Output = Output;
+  Op.addInput(NdVar::cst(uint64_t(Id), sizeof(Intrinsic)));
+  for (auto Input : Inputs)
+    Op.addInput(Input);
+  return Op;
+}
+LowOp ordinaryStore(uint32_t Address, uint64_t Value, uint16_t Bytes = 4) {
+  LowOp Op;
+  Op.Opcode = NdOp::STORE;
+  Op.addInput(NdVar::cst(Address, 4));
+  Op.addInput(NdVar::cst(Value, Bytes));
+  return Op;
+}
+LowOp linked(uint32_t Address) {
+  return stateOp(Intrinsic::MIPSLoadLinkedWord, NdVar::reg(mipsreg::V0, 4),
+                 {NdVar::cst(Address, 4)});
+}
+LowOp conditional(uint32_t Address, NdVar Data = NdVar::cst(0xdeadbeef, 4)) {
+  return stateOp(Intrinsic::MIPSStoreConditionalWord,
+                 NdVar::reg(mipsreg::V1, 4), {NdVar::cst(Address, 4), Data});
+}
+
+TEST_P(MIPS16E2, LinkedWordsCaptureEveryCompactBaseDestinationAndSignedOffset) {
+  auto I = e2Image(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(I));
+  for (bool Strict : {false, true})
+    for (unsigned X = 0; X != 8; ++X)
+      for (unsigned B = 0; B != 8; ++B)
+        for (int Offset : {-256, -4, 0, 252, 255}) {
+          const auto Word =
+              uint32_t(0xf0000000 | ((uint32_t(Offset) & 0x1e0) << 16) |
+                       (B << 16) | 0x90c0 | (X << 8) | (uint32_t(Offset) & 31));
+          auto Load = e2Lift(D, GetParam(), Word);
+          auto Store = e2Lift(D, GetParam(), Word | 0x4000);
+          NdOpEmulator E(I);
+          E.setStrictMode(Strict);
+          E.setRegister(mipsreg::r(compact(B)), uint32_t(0x2100 - Offset));
+          EXPECT_FALSE(run(E, Load));
+          ASSERT_TRUE(E.setMIPSReservationModel(16));
+          ASSERT_TRUE(run(E, Load));
+          uint32_t Expected = 0;
+          for (unsigned N = 0; N != 4; ++N)
+            Expected |= uint32_t(I.Segments[0].Data[0x100 + N])
+                        << (8 * (archLittleEndian(GetParam()) ? N : 3 - N));
+          EXPECT_EQ(E.getRegister(mipsreg::r(compact(X))), Expected);
+          E.setRegister(mipsreg::r(compact(B)), uint32_t(0x2100 - Offset));
+          if (X != B)
+            E.setRegister(mipsreg::r(compact(X)), 0x12345678);
+          const auto Stored = X == B ? uint32_t(0x2100 - Offset) : 0x12345678u;
+          ASSERT_TRUE(run(E, Store));
+          EXPECT_EQ(E.getRegister(mipsreg::r(compact(X))), 1u);
+          ASSERT_TRUE(E.step(linked(0x2100)));
+          EXPECT_EQ(E.getRegister(mipsreg::V0), Stored);
+        }
+}
+
+TEST_P(MIPS16E2, ReservationTracksGranulesABAReplacementAndKnownFailure) {
+  auto I = e2Image(GetParam());
+  for (bool Strict : {false, true})
+    for (uint32_t Granule : {4u, 16u, 64u}) {
+      NdOpEmulator E(I);
+      E.setStrictMode(Strict);
+      for (uint32_t Invalid : {0u, 1u, 2u, 3u, 6u})
+        EXPECT_FALSE(E.setMIPSReservationModel(Invalid));
+      ASSERT_TRUE(E.setMIPSReservationModel(Granule));
+      EXPECT_FALSE(E.step(conditional(0x2000)));
+      E.clearMIPSReservation();
+      ASSERT_TRUE(E.step(conditional(0x2000, NdVar::reg(mipsreg::A3, 4))));
+      EXPECT_EQ(E.getRegister(mipsreg::V1), 0u);
+      ASSERT_TRUE(E.step(linked(0x2000)));
+      const auto Old = *E.getRegister(mipsreg::V0);
+      // A load within the same block and an outside store in the declared
+      // no-eviction profile do not invalidate the reservation.
+      LowOp Load;
+      Load.Opcode = NdOp::LOAD;
+      Load.Output = NdVar::reg(mipsreg::A2, 1);
+      Load.addInput(NdVar::cst(0x2000 + Granule - 1, 4));
+      ASSERT_TRUE(E.step(Load));
+      ASSERT_TRUE(E.step(ordinaryStore(0x2000 + Granule, 17)));
+      ASSERT_TRUE(E.step(conditional(0x2000)));
+      EXPECT_EQ(E.getRegister(mipsreg::V1), 1u);
+      ASSERT_TRUE(E.step(conditional(0x2000)));
+      EXPECT_EQ(E.getRegister(mipsreg::V1), 0u);
+      // Same-block byte store invalidates even if the linked word is intact.
+      ASSERT_TRUE(E.step(linked(0x2000)));
+      ASSERT_TRUE(E.step(ordinaryStore(0x2000 + Granule - 1, 17, 1)));
+      ASSERT_TRUE(E.step(conditional(0x2000)));
+      EXPECT_EQ(E.getRegister(mipsreg::V1), 0u);
+      // Restoring exactly the original word does not revive a reservation.
+      ASSERT_TRUE(E.step(linked(0x2000)));
+      ASSERT_TRUE(E.step(ordinaryStore(0x2000, 0)));
+      ASSERT_TRUE(E.step(ordinaryStore(0x2000, Old)));
+      ASSERT_TRUE(E.step(conditional(0x2000)));
+      EXPECT_EQ(E.getRegister(mipsreg::V1), 0u);
+      // A new LL replaces rather than accumulates outstanding addresses.
+      ASSERT_TRUE(E.step(linked(0x2000)));
+      ASSERT_TRUE(E.step(linked(0x2004)));
+      ASSERT_TRUE(E.step(conditional(0x2000, NdVar::reg(mipsreg::A3, 4))));
+      EXPECT_EQ(E.getRegister(mipsreg::V1), 0u);
+      ASSERT_TRUE(E.step(conditional(0x2004)));
+      EXPECT_EQ(E.getRegister(mipsreg::V1), 0u);
+      ASSERT_TRUE(E.step(linked(0x2000)));
+      EXPECT_FALSE(E.step(conditional(0x2000, NdVar::reg(mipsreg::A3, 4))));
+      ASSERT_TRUE(E.step(conditional(0x2000)));
+      EXPECT_EQ(E.getRegister(mipsreg::V1), 1u);
+    }
+}
+
+TEST_P(MIPS16E2, ReservationRefusesInvalidAccessBeforeEffectInBothModes) {
+  for (bool Strict : {false, true}) {
+    auto I = e2Image(GetParam());
+    // Adjacent read-only segment and wholly unmapped memory exercise both
+    // permissions even when a lenient prior write has populated the overlay.
+    Segment RO = I.Segments[0];
+    RO.VA = 0x3000;
+    RO.Flags = SegmentFlags::Readable;
+    I.Segments.push_back(RO);
+    NdOpEmulator E(I);
+    E.setStrictMode(false);
+    ASSERT_TRUE(E.step(ordinaryStore(0x3000, 9)));
+    ASSERT_TRUE(E.step(ordinaryStore(0x4000, 11)));
+    E.setStrictMode(Strict);
+    ASSERT_TRUE(E.setMIPSReservationModel(16));
+    ASSERT_TRUE(E.step(linked(0x2000)));
+    E.setRegister(mipsreg::V1, 73);
+    for (uint32_t Bad : {0x2001u, 0x3000u, 0x4000u}) {
+      EXPECT_FALSE(E.step(conditional(Bad)));
+      EXPECT_EQ(E.getRegister(mipsreg::V1), 73u);
+    }
+    EXPECT_FALSE(E.step(linked(0x4000)));
+    EXPECT_FALSE(E.step(linked(0x2001)));
+    auto Invalid = conditional(0x2000);
+    Invalid.Inputs[2].Size = 8;
+    EXPECT_FALSE(E.step(Invalid));
+    Invalid = conditional(0x2000);
+    Invalid.Output = NdVar::cst(0, 4);
+    EXPECT_FALSE(E.step(Invalid));
+    Invalid = conditional(0x2000);
+    Invalid.MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+    EXPECT_FALSE(E.step(Invalid));
+    ASSERT_TRUE(E.step(conditional(0x2000)));
+    EXPECT_EQ(E.getRegister(mipsreg::V1), 1u);
+    E.clearMIPSReservation();
+    EXPECT_FALSE(
+        E.step(conditional(0x3000))); // failed-SC still needs writable mapping
+    ASSERT_TRUE(
+        E.step(linked(0x3000))); // readable mapping is sufficient for LL
+    EXPECT_EQ(E.getRegister(mipsreg::V0), 9u);
+    EXPECT_FALSE(E.step(conditional(0x3000)));
+    I.Segments[0].Flags = SegmentFlags::Writable;
+    EXPECT_FALSE(
+        E.step(linked(0x2000))); // overlay cannot bypass read permissions
+  }
+}
+
+TEST_P(MIPS16E2, UnknownEffectsAndCallsForgetReservationsUntilAnotherLL) {
+  auto I = e2Image(GetParam());
+  NdOpEmulator E(I);
+  E.setCallPreservedRegisters({mipsreg::A0});
+  ASSERT_TRUE(E.setMIPSReservationModel(16));
+  for (unsigned Kind = 0; Kind != 4; ++Kind) {
+    ASSERT_TRUE(E.step(linked(0x2000)));
+    LowOp Unknown;
+    if (Kind == 0) {
+      Unknown.Opcode = NdOp::CALL;
+      Unknown.addInput(NdVar::cst(0x1234, 4));
+      ASSERT_TRUE(E.step(Unknown));
+    } else if (Kind == 1) {
+      Unknown.Opcode = NdOp::INTRINSIC;
+      Unknown.addInput(
+          NdVar::cst(uint64_t(Intrinsic::_Count) - 1, sizeof(Intrinsic)));
+      ASSERT_TRUE(E.step(Unknown));
+    } else if (Kind == 2) {
+      Unknown.Opcode = static_cast<NdOp>(0xffff);
+      ASSERT_TRUE(E.step(Unknown));
+    } else
+      E.reset();
+    E.setRegister(mipsreg::V1, 91);
+    EXPECT_FALSE(E.step(conditional(0x2000)));
+    EXPECT_EQ(E.getRegister(mipsreg::V1), 91u);
+    ASSERT_TRUE(E.step(linked(0x2000)));
+    ASSERT_TRUE(E.step(conditional(0x2000)));
+    EXPECT_EQ(E.getRegister(mipsreg::V1), 1u);
+  }
+}
+
+TEST_P(MIPS16E2,
+       ReservationProfileNeverManufacturesUnknownInputsOrForeignEffects) {
+  for (bool Strict : {false, true}) {
+    auto I = e2Image(GetParam());
+    Segment Zero = I.Segments[0];
+    Zero.VA = 0;
+    I.Segments.push_back(Zero);
+    Decoder D;
+    ASSERT_TRUE(D.init(I));
+    NdOpEmulator E(I);
+    E.setStrictMode(Strict);
+    ASSERT_TRUE(E.setMIPSReservationModel(16));
+    ASSERT_TRUE(E.step(linked(0x2000)));
+    const auto Before = E.getRegister(mipsreg::V0);
+    EXPECT_FALSE(run(E, e2Lift(D, GetParam(),
+                               0xf00492c0))); // missing base must not become 0
+    EXPECT_EQ(E.getRegister(mipsreg::V0), Before);
+    auto Store = ordinaryStore(0x2000, 11);
+    Store.Inputs[0] = NdVar::reg(mipsreg::A2, 4);
+    EXPECT_FALSE(E.step(Store));
+    E.setRegister(mipsreg::A2, 0x2000);
+    Store.Inputs[1] = NdVar::reg(mipsreg::A3, 4);
+    EXPECT_FALSE(E.step(Store));
+    ASSERT_TRUE(E.step(
+        stateOp(Intrinsic::MIPSUnpredictable, NdVar::reg(mipsreg::A3, 4))));
+    EXPECT_FALSE(E.step(Store));
+    ASSERT_TRUE(
+        E.step(stateOp(Intrinsic::MIPSLwl, NdVar::reg(mipsreg::A3, 4),
+                       {NdVar::cst(0x2001, 4), NdVar::reg(mipsreg::A3, 4)})));
+    LowOp Transport;
+    Transport.Opcode = NdOp::COPY;
+    Transport.Output = NdVar::reg(mipsreg::A0, 4);
+    Transport.addInput(NdVar::reg(mipsreg::A3, 4));
+    EXPECT_FALSE(E.step(Transport)); // conservative ordinary-input profile
+    std::vector<uint8_t> Bytes(16, 255);
+    E.setRegisterBytes(mipsreg::w(0), Bytes);
+    E.setRegisterBytes(mipsreg::w(1), Bytes);
+    auto Foreign =
+        stateOp(Intrinsic::MaskedStoreD, {},
+                {NdVar::cst(0x2000, 4), NdVar::reg(mipsreg::w(0), 16),
+                 NdVar::reg(mipsreg::w(1), 16)});
+    EXPECT_FALSE(E.step(Foreign));
+    auto Align = stateOp(Intrinsic::RequireAligned, {},
+                         {NdVar::cst(0x2000, 8), NdVar::scalar(4, 8)});
+    ASSERT_TRUE(E.step(Align));
+    ASSERT_TRUE(E.step(conditional(0x2000)));
+    EXPECT_EQ(E.getRegister(mipsreg::V1), 1u);
+    ASSERT_TRUE(E.step(linked(0x2000)));
+    E.setRegister(mipsreg::GP, 0x2000);
+    E.setRegister(mipsreg::A0, 7);
+    ASSERT_TRUE(
+        run(E, e2Lift(D, GetParam(), 0xf000d420))); // ordinary aligned SW
+    ASSERT_TRUE(E.step(conditional(0x2000)));
+    EXPECT_EQ(E.getRegister(mipsreg::V1), 0u);
+  }
+}
+
+TEST_P(MIPS16E2, ASkippedBudgetedStoreCannotAuthenticateConditionalSuccess) {
+  auto I = e2Image(GetParam());
+  for (bool Strict : {false, true}) {
+    NdOpEmulator E(I);
+    E.setStrictMode(Strict);
+    ASSERT_TRUE(E.setMIPSReservationModel(16));
+    ASSERT_TRUE(E.step(ordinaryStore(0x2000, 11)));
+    for (int N = 1; N < limits::kMaxEmulatorStoreEntries; ++N)
+      ASSERT_TRUE(E.step(ordinaryStore(0x2100 + 4 * N, 17)));
+    ASSERT_TRUE(E.step(linked(0x2000)));
+    EXPECT_EQ(E.step(ordinaryStore(0x2004, 9)), !Strict);
+    EXPECT_EQ(E.step(conditional(0x2000)), Strict);
+    ASSERT_TRUE(E.step(linked(0x2000)));
+    ASSERT_TRUE(E.step(conditional(0x2000)));
+    EXPECT_EQ(E.getRegister(mipsreg::V1), 1u);
+  }
+}
+
+TEST_P(MIPS16E2,
+       SystemReadsConsumeOneAuthenticatedObservationAndHonorPermissions) {
+  auto I = e2Image(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(I));
+  for (bool Strict : {false, true})
+    for (unsigned Index : {0u, 1u, 2u, 3u, 29u})
+      for (unsigned RY = 0; RY != 8; ++RY)
+        for (bool CP0 : {false, true}) {
+          NdOpEmulator E(I);
+          E.setStrictMode(Strict);
+          auto Ops =
+              e2Lift(D, GetParam(), 0xf000300c | (Index << 16) | (RY << 5));
+          ASSERT_EQ(Ops.size(), 2u);
+          EXPECT_FALSE(E.step(Ops[0]));
+          MIPSSystemContext C;
+          C.Hardware = MIPSHardwareObservation{uint8_t(Index), 0xabcdef01};
+          EXPECT_FALSE(E.stepMIPSSystem(Ops[0], C));
+          ASSERT_TRUE(C.Hardware);
+          C.HWREna = uint32_t(1) << ((Index + 1) % 32);
+          EXPECT_FALSE(E.stepMIPSSystem(Ops[0], C));
+          ASSERT_TRUE(C.Hardware);
+          C.CP0Usable = CP0;
+          C.HWREna = CP0 ? 0 : uint32_t(1) << Index;
+          C.ExecutionHazardPending = true;
+          EXPECT_FALSE(E.stepMIPSSystem(Ops[0], C));
+          ASSERT_TRUE(E.stepMIPSSystem(
+              stateOp(Intrinsic::MIPSExecutionHazardBarrier, {}), C));
+          C.Hardware->Index = (Index + 1) % 32;
+          EXPECT_FALSE(E.stepMIPSSystem(Ops[0], C));
+          C.Hardware->Index = Index;
+          ASSERT_TRUE(E.stepMIPSSystem(Ops[0], C));
+          ASSERT_TRUE(E.step(Ops[1]));
+          EXPECT_EQ(E.getRegister(mipsreg::r(compact(RY))), 0xabcdef01u);
+          EXPECT_FALSE(C.Hardware);
+          EXPECT_FALSE(E.stepMIPSSystem(Ops[0], C));
+        }
+}
+
+TEST_P(MIPS16E2, InterruptUpdatesReturnOldStatusAndRequireAnExecutionBarrier) {
+  auto I = e2Image(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(I));
+  for (bool Enable : {false, true})
+    for (bool Discard : {false, true})
+      for (uint32_t Status : {0u, 1u, 0xfffffffeu, 0xffffffffu}) {
+        auto Ops = e2Lift(D, GetParam(),
+                          0xf002670c | (uint32_t(Enable) << 16) |
+                              (Discard ? 0x40000 : 2 << 5));
+        NdOpEmulator E(I);
+        E.setRegister(mipsreg::V0, 17);
+        MIPSSystemContext C;
+        EXPECT_FALSE(E.step(Ops[0]));
+        EXPECT_FALSE(E.stepMIPSSystem(Ops[0], C));
+        C.Status = Status;
+        EXPECT_FALSE(E.stepMIPSSystem(Ops[0], C));
+        EXPECT_EQ(C.Status, Status);
+        C.Status.reset();
+        C.CP0Usable = true;
+        EXPECT_FALSE(E.stepMIPSSystem(Ops[0], C));
+        C.Status = Status;
+        ASSERT_TRUE(E.stepMIPSSystem(Ops[0], C));
+        for (unsigned N = 1; N < Ops.size(); ++N)
+          ASSERT_TRUE(E.step(Ops[N]));
+        EXPECT_EQ(E.getRegister(mipsreg::V0), Discard ? 17u : Status);
+        EXPECT_EQ(C.Status, (Status & ~1u) | unsigned(Enable));
+        EXPECT_TRUE(C.ExecutionHazardPending);
+        EXPECT_FALSE(E.stepMIPSSystem(Ops[0], C));
+        auto Sync = stateOp(Intrinsic::MIPSSync, {}, {NdVar::cst(0, 1)});
+        ASSERT_TRUE(E.step(Sync));
+        EXPECT_FALSE(E.stepMIPSSystem(Sync, C));
+        EXPECT_TRUE(C.ExecutionHazardPending);
+        auto EHB = stateOp(Intrinsic::MIPSExecutionHazardBarrier, {});
+        ASSERT_TRUE(E.step(EHB));
+        EXPECT_TRUE(
+            C.ExecutionHazardPending); // unbound step cannot alter caller state
+        ASSERT_TRUE(E.stepMIPSSystem(EHB, C));
+        EXPECT_FALSE(C.ExecutionHazardPending);
+        ASSERT_TRUE(E.stepMIPSSystem(Ops[0], C));
+      }
+  for (unsigned Index : {4u, 5u, 28u, 30u, 31u}) {
+    auto Invalid = stateOp(Intrinsic::MIPSReadHardwareRegister,
+                           NdVar::reg(mipsreg::V0, 4), {NdVar::cst(Index, 1)});
+    NdOpEmulator E(I);
+    MIPSSystemContext C;
+    C.CP0Usable = true;
+    C.Hardware = MIPSHardwareObservation{uint8_t(Index), 13};
+    EXPECT_FALSE(E.stepMIPSSystem(Invalid, C));
+    EXPECT_TRUE(C.Hardware);
+    EXPECT_THROW(e2Lift(D, GetParam(), 0xf000304c | (Index << 16)),
+                 UnliftedInstruction);
   }
 }
 

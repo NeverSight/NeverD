@@ -34,6 +34,7 @@ FUNCTIONS = ("dsp_read", "dsp_write", "dsp_partial", "dsp_add",
              "dsp_shrav_r", "dsp_shra_rw", "dsp_shrav_rw", "dsp_pack_h", "dsp_pack_b",
              "dsp_bitrev", "dsp_raddu", "dsp_repl_qb", "dsp_repl_ph", "dsp_replv_qb", "dsp_replv_ph", "dsp_preceq_phl", "dsp_preceq_phr", "dsp_precequ_qbl", "dsp_precequ_qbr", "dsp_precequ_qbla", "dsp_precequ_qbra", "dsp_preceu_qbl", "dsp_preceu_qbr", "dsp_preceu_qbla", "dsp_preceu_qbra", "dsp_addq_w", "dsp_subq_w", "dsp_addsc", "dsp_addwc", "dsp_modsub", "dsp_cmpeq", "dsp_cmplt", "dsp_cmple", "dsp_pick_b", "dsp_pick_h")
 FUNCTIONS += ('dsp_abs_ph', 'dsp_abs_w', 'dsp_abs_zero', 'dsp_cmpgueq', 'dsp_cmpgult', 'dsp_cmpgule', 'dsp_shll_qb', 'dsp_shllv_qb', 'dsp_shll_ph', 'dsp_shllv_ph', 'dsp_shll_s_ph', 'dsp_shllv_s_ph', 'dsp_shll_s_w', 'dsp_shllv_s_w', 'dsp_shll_zero')
+FUNCTIONS += tuple(f"dsp_{op}{suffix}" for op in ("muleu_l", "muleu_r", "mulq_rs") for suffix in ("", "_zero"))
 INITIAL_STATES = (0, 0x01100021, 0x0fff7fbf)
 INPUTS = ((0, 0), (0xff01807f, 0x02018081), (0x11223344, 0x55667788),
           (0xffffffff, 1), (0x80808080, 0x80808080),
@@ -48,6 +49,23 @@ def digest(path):
 
 def expected(function, initial, arguments):
     a, b = arguments
+    if function.startswith(("dsp_muleu_", "dsp_mulq_")):
+        value, state = 0, initial
+        for lane in range(2):
+            y = (b >> (16*lane)) & 65535
+            if function.startswith("dsp_mulq_"):
+                x = (a >> (16*lane)) & 65535
+                if x == y == 32768: result, state = 32767, state | (1 << 21)
+                else:
+                    x = x - 65536 if x & 32768 else x
+                    y = y - 65536 if y & 32768 else y
+                    result = (x*y + 16384) // 32768
+            else:
+                x = (a >> (8*(lane + (2 if "muleu_l" in function else 0)))) & 255
+                result = x*y
+                if result > 65535: result, state = 65535, state | (1 << 21)
+            value |= (result & 65535) << (16*lane)
+        return (7 if function.endswith("zero") else value), state
     if function.startswith("dsp_abs") or function.startswith("dsp_shll"):
         absolute = function.startswith("dsp_abs")
         bits = 32 if function.endswith("_w") else 8 if function.endswith("_qb") else 16

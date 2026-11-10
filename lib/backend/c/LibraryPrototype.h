@@ -11,17 +11,20 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 
+#include <map>
 #include <set>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace neverd::c_library {
-/// Tags and known pointer typedefs in a runtime prototype come from its named
+/// Tags and known typedefs in a runtime prototype come from its named
 /// header, including tags nested inside callback parameters. Callers use this
 /// only when they include that header, so debug types must not redefine them.
-inline void appendHeaderTypeNames(const libc::LibCPrototype &Prototype,
-                                  std::set<std::string> &Names) {
+inline void
+appendHeaderTypeNames(const libc::LibCPrototype &Prototype,
+                      std::set<std::string> &Names,
+                      std::map<std::string, std::string> *Tags = nullptr) {
   if (Prototype.Header.empty())
     return;
   const auto Visit = [&](std::string_view Type) {
@@ -37,8 +40,15 @@ inline void appendHeaderTypeNames(const libc::LibCPrototype &Prototype,
         ++End;
       const std::string_view Word = Type.substr(I, End - I);
       if (Previous == "struct" || Previous == "union" || Previous == "enum" ||
-          libc::isPointerType(Word))
+          libc::isPointerType(Word) || Word == "EXCEPTION_DISPOSITION")
         Names.emplace(Word);
+      if (Tags &&
+          (Previous == "struct" || Previous == "union" || Previous == "enum"))
+        Tags->emplace(Word, Previous);
+      // MSVC's typedef names this enum tag; MinGW spells the same public
+      // result type with a macro. Neither permits a debug redefinition.
+      if (Word == "EXCEPTION_DISPOSITION")
+        Names.emplace("_EXCEPTION_DISPOSITION");
       Previous = Word;
       I = End;
     }

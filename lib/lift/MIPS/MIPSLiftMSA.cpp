@@ -175,7 +175,14 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
                                *Kind == Instruction::RoundAverageUnsignedVector;
   const bool RoundAverage = *Kind == Instruction::RoundAverageSignedVector ||
                             *Kind == Instruction::RoundAverageUnsignedVector;
-  const bool ImmediateBit = (Shift || Bit) && (Word & 63) == 9;
+  const bool SaturateImmediate =
+      *Kind == Instruction::SaturateSignedImmediate ||
+      *Kind == Instruction::SaturateUnsignedImmediate;
+  const bool AbsoluteDifference =
+      *Kind == Instruction::AbsoluteDifferenceSigned ||
+      *Kind == Instruction::AbsoluteDifferenceUnsigned;
+  const bool ImmediateBit =
+      ((Shift || Bit) && (Word & 63) == 9) || SaturateImmediate;
   const bool CountBits = *Kind == Instruction::PopulationCount ||
                          *Kind == Instruction::LeadingZeroCount ||
                          *Kind == Instruction::LeadingOneCount;
@@ -208,6 +215,37 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
       S.emit(*Kind == Instruction::PopulationCount ? NdOp::POPCOUNT
                                                    : NdOp::LZCOUNT,
              Values[I], {Input});
+    } else if (SaturateImmediate) {
+      const auto A = Lane(WS, I, Bytes);
+      const unsigned Count = Field & (Bytes * 8 - 1);
+      const bool Signed = *Kind == Instruction::SaturateSignedImmediate;
+      const uint64_t Maximum =
+          Signed ? (UINT64_C(1) << Count) - 1 : UINT64_MAX >> (63 - Count);
+      const auto Upper = NdVar::cst(Maximum, Bytes);
+      auto Result = S.makeTemp(Bytes);
+      S.emit(NdOp::SELECT, Result,
+             {S.binary(Signed ? NdOp::INT_SLESS : NdOp::INT_LESS, Upper, A, 1),
+              Upper, A});
+      if (Signed) {
+        const auto Lower = NdVar::cst(~Maximum, Bytes);
+        const auto Clamped = S.makeTemp(Bytes);
+        S.emit(NdOp::SELECT, Clamped,
+               {S.binary(NdOp::INT_SLESS, A, Lower, 1), Lower, Result});
+        Result = Clamped;
+      }
+      Values[I] = Result;
+    } else if (AbsoluteDifference) {
+      const auto A = Lane(WS, I, Bytes), B = Lane(WT, I, Bytes);
+      const auto Less = S.binary(*Kind == Instruction::AbsoluteDifferenceSigned
+                                     ? NdOp::INT_SLESS
+                                     : NdOp::INT_LESS,
+                                 A, B, 1);
+      // Decide the sign before the modular subtraction; the true magnitude
+      // fits an unsigned lane even at signed min/max and in 64-bit lanes.
+      Values[I] = S.makeTemp(Bytes);
+      S.emit(
+          NdOp::SELECT, Values[I],
+          {Less, S.binary(NdOp::INT_SUB, B, A), S.binary(NdOp::INT_SUB, A, B)});
     } else if (Shift || Bit) {
       const auto A = Lane(WS, I, Bytes);
       const auto Count = ImmediateBit

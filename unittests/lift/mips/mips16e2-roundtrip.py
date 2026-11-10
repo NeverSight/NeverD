@@ -28,6 +28,7 @@ FUNCTIONS = ('andi', 'ori', 'xori', 'lui', 'ext', 'ins', 'ins_zero',
              'load_pair_reverse', 'store_pair', 'store_pair_reverse', 'gp_add', 'gp_lb', 'gp_lbu',
              'gp_lh', 'gp_lhu', 'gp_lw', 'gp_sb', 'gp_sh', 'gp_sw')
 FUNCTIONS += ("ehb",) + tuple(f"sync{i}" for i in range(32))
+STATEFUL = ('ll', 'sc', 'rdhwr', 'di', 'ei', 'di_discard', 'ei_discard')
 INPUTS = [(0, 0), (1, 0xffffffff), (0xffffffff, 1), (0x80000000, 0x7fffffff),
           (0x89abcdef, 0x12345678), (0x80000000, 0), (0x7fffffff, 0x80000000)]
 rng = random.Random(0x16e2)
@@ -114,7 +115,7 @@ def observe(path, name, inputs, little, tag):
 
 def run(args, artifacts):
     fixture = Path(__file__).with_name('mips16e2.S')
-    report = {'complete':False, 'passed':[], 'failures':[],
+    report = {'complete':False, 'passed':[], 'failures':[], 'stateful_source_refusals':[],
               'reference':'MD01172 rev 1.00; generated-code execution only; no original-e2 engine',
               'fixture_sha256':digest(fixture),'neverd_sha256':digest(args.neverd)}
     artifacts.write('results.json', report)
@@ -136,6 +137,23 @@ def run(args, artifacts):
             raise RuntimeError('GNU input lost explicit e2 ABI evidence')
         original_hash = digest(original)
         artifacts.discard(obj,log)
+        for name, backend in product(STATEFUL, ('highc', 'llvmc')):
+            function = 'm16e2_state_' + name
+            source = artifacts.work / f'{profile}-{function}-{backend}.c'
+            log = source.with_suffix('.log')
+            argv = [args.neverd, 'decompile', '--func', function,
+                    *(['--llvm'] if backend == 'llvmc' else []), '-o', source, original]
+            with artifacts.process(argv, log) as (process, _):
+                process.wait()
+            diagnostic = log.read_text()
+            if process.returncode == 0 or 'MIPS system/reservation state requires an authenticated execution context' not in diagnostic:
+                artifacts.keep_source(source)
+                raise RuntimeError(f'{function}/{backend}: expected stateful source refusal: {diagnostic}')
+            report['stateful_source_refusals'].append({'profile': profile,
+                'function': function, 'backend': backend, 'exit': process.returncode,
+                'diagnostic_sha256': digest(log), 'input_sha256': original_hash})
+            artifacts.write('results.json', report)
+            artifacts.discard(source, log)
         for name,backend,opt in product(FUNCTIONS,('highc','llvmc'),('-O0','-O2')):
             function = 'm16e2_'+name
             stem = artifacts.work/f'{profile}-{function}-{backend}-{opt[1:]}'

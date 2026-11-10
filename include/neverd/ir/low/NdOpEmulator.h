@@ -24,6 +24,7 @@
 
 #include "neverd/ir/X86/X86LegacySegments.h"
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/low/MIPS/MIPSSystemContext.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/symbolic/SymExplore.h"
 
@@ -169,6 +170,22 @@ public:
   /// Without those bindings step() refuses before any effect.
   bool step(const LowOp &Op);
 
+  /// Execute one MIPS32 RDHWR/DI/EI or EHB with a caller-authenticated context.
+  /// A successful RDHWR consumes the observation. Pending hazards require EHB
+  /// before another system observation; SYNC does not clear them. Failed
+  /// admission leaves both context and architectural outputs unchanged.
+  bool stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context);
+
+  /// Declare a concrete MIPS32 ordinary-RAM profile: identity VA/PA,
+  /// synchronizable memory, Config5.LLB=1, the given power-of-two reservation
+  /// granule (>=4), and no unreported interference/cache evictions. This is
+  /// not a general SMP or device model. Incoming LL state remains unknown.
+  /// Configuration survives reset; reservation knowledge does not.
+  bool setMIPSReservationModel(uint32_t GranuleBytes);
+  /// Report an observed reservation-clear event (ERET, coherent interference
+  /// or spurious failure). This does not modify memory or enable the profile.
+  void clearMIPSReservation();
+
   /// Execute one native CS/ES/SS memory intrinsic with an authenticated legacy
   /// protected-mode cache. The binding applies only to this call; it cannot
   /// survive a segment reload, unknown call or later instruction. Ordinary
@@ -270,6 +287,9 @@ private:
   std::optional<uint8_t> X86LinearAddressBits;
   const X86LegacySegmentCache *X86OperandSegment = nullptr;
   std::optional<X86FullSegmentLimitChoice> X86OperandSegmentChoice;
+  std::optional<uint32_t> MIPSReservationGranule;
+  bool MIPSReservationKnown = false;
+  std::optional<uint32_t> MIPSReservationAddress;
   bool StepOverCalls = false;
   bool StrictMode = false;
   bool X86Approx12ReferenceMode = false;
