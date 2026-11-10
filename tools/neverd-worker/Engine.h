@@ -743,6 +743,7 @@ private:
   /// done.  False where it cannot, and the files are read after those writes.
   bool restoreDataItems(const Json &committed) noexcept;
   bool restoreFunctionEdits(const Json &committed) noexcept;
+  bool restoreOperandFormats(const Json &committed) noexcept;
   /// Before a failed edit reads the project's files to undo what it changed:
   /// the writes queued behind earlier replies go first.
   void catchUpWrites() noexcept;

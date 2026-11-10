@@ -990,6 +990,51 @@ Json Engine::operandFormatRows() const {
   const auto &formats = operandFormats();
   return formats ? backendJson(formats.rows(session_)) : Json::array();
 }
+bool Engine::restoreOperandFormats(const Json &committed) noexcept {
+  const auto &formats = operandFormats();
+  if (!formats || !committed.is_array())
+    return false;
+  try {
+    const auto keyed = [](const Json &rows) {
+      std::map<std::uint64_t, const Json *> byAddress;
+      for (const auto &row : rows)
+        byAddress[parseAddress(row.at("addr").get<std::string>())] = &row;
+      return byAddress;
+    };
+    const Json now = operandFormatRows();
+    const auto want = keyed(committed), have = keyed(now);
+    static const Json none = Json::object();
+    std::set<std::uint64_t> addresses;
+    for (const auto &[address, row] : want)
+      addresses.insert(address);
+    for (const auto &[address, row] : have)
+      addresses.insert(address);
+    for (const auto address : addresses) {
+      const auto &row = want.contains(address) ? *want.at(address) : none;
+      const auto &held = have.contains(address) ? *have.at(address) : none;
+      if (row == held)
+        continue;
+      // Each operand as the committed row shows it, and the listing's own
+      // number for one it does not.
+      std::map<int, Json> shown;
+      for (const auto &operand : held.value("operands", Json::array()))
+        shown[operand.at("operand").get<int>()] = nullptr;
+      for (const auto &operand : row.value("operands", Json::array())) {
+        Json format = operand;
+        format.erase("operand");
+        shown[operand.at("operand").get<int>()] = std::move(format);
+      }
+      for (const auto &[operand, format] : shown)
+        if (formats.set(session_, address, operand,
+                        format.is_null() ? nullptr : format.dump().c_str()) !=
+            0)
+          return false;
+    }
+    return operandFormatRows() == committed;
+  } catch (...) {
+    return false;
+  }
+}
 bool Engine::reloadDataItems() {
   const auto &items = dataItems();
   if (!items)
@@ -3848,24 +3893,17 @@ namespace {
 /// and the listing alone, or queue their own.  Anything else may read the
 /// project's files, and sees them written.
 bool readsNoProjectFile(std::string_view operation) {
-  static constexpr std::string_view Operations[] = {"annotation_set",
-                                                    "cfg_summary",
-                                                    "cfg_viewport",
-                                                    "decompile",
-                                                    "function_edit",
-                                                    "function_type",
-                                                    "functions",
-                                                    "item_define",
-                                                    "kept_renders",
-                                                    "listing",
-                                                    "local_types_declare",
-                                                    "metadata",
-                                                    "prepare_function",
-                                                    "names",
-                                                    "rename",
-                                                    "resolve",
-                                                    "strings",
-                                                    "xrefs"};
+  static constexpr std::string_view Operations[] = {
+      "annotation_set", "cfg_summary",
+      "cfg_viewport",   "code_edit",
+      "decompile",      "function_edit",
+      "function_type",  "functions",
+      "item_define",    "kept_renders",
+      "listing",        "local_types_declare",
+      "metadata",       "prepare_function",
+      "names",          "operand_format",
+      "rename",         "resolve",
+      "strings",        "xrefs"};
   return std::find(std::begin(Operations), std::end(Operations), operation) !=
          std::end(Operations);
 }
@@ -5930,7 +5968,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                    {"address", hexAddress(owner)},
                    {"before", before},
                    {"after", after}});
-      store.persistTable("code_edits", std::move(rows));
+      persistTableEdit(store, "code_edits", std::move(rows));
     } catch (...) {
       store = checkpoint;
       throw;
@@ -6848,8 +6886,12 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                         next.dump().c_str()) != 0)
           throw Error("invalid_request", error());
     } catch (...) {
-      // The sidecar still holds the formats before these.
-      (void)formats.load(session_);
+      // What it set goes back to the rows the history holds, which the files
+      // may not hold yet.
+      if (!restoreOperandFormats(committedFormats)) {
+        catchUpWrites();
+        (void)formats.load(session_);
+      }
       throw;
     }
     // One history step holds every row the change made, the instruction's
@@ -6879,11 +6921,15 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     const auto checkpoint = store;
     try {
       store.stage(std::move(command));
-      store.persistTable("operands", std::move(rows));
+      persistTableEdit(store, "operands", std::move(rows));
     } catch (...) {
       store = checkpoint;
-      // The sidecar still holds the formats before this one.
-      (void)formats.load(session_);
+      // The formats go back to the rows the history holds, as the files do
+      // once the writes queued before this edit are done.
+      if (!restoreOperandFormats(store.committedTable("operands"))) {
+        catchUpWrites();
+        (void)formats.load(session_);
+      }
       operandFormatsChanged();
       throw;
     }

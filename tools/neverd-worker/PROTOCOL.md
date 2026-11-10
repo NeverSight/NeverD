@@ -106,7 +106,8 @@ derived listing or reference index has been rebuilt. The executor admits
 requests for up to its existing 150 ms idle grace at that transition, waking
 as soon as one arrives, before continuing derived background work.
 `open.write_behind:true` lets the reply to an edit that names data or a
-function, defines data, edits a function or declares a type go before its write:
+function, defines data, edits a function, declares a type, edits source
+(`code_edit`, a local's name among them) or formats an operand go before its write:
 the same journaled transaction runs on a thread of its own, joined with edits
 queued behind one already writing, in the few milliseconds after the reply.  A
 kill in that time leaves the project's files as they were, or a journal that
@@ -114,8 +115,8 @@ completes them; a clean exit, `save` (except `save.write_behind`), `analysis_sna
 and any operation that may read the project's files wait for the write first.  A write that fails stays
 queued and fails the next edit or waiting operation with its error, and goes
 through once it can.  An edit refused meanwhile takes back what it changed of
-the session's data items and function edits as its history holds them, never
-as the files, which lag behind it, do.  By default the reply follows the write.
+the session's data items, function edits and operand formats as its history
+holds them, never as the files, which lag behind it, do.  By default the reply follows the write.
 `analysis_snapshot` with `in_memory:true` does not wait: while a write is on its
 way the snapshot says `written:false`, for a replica that takes it in place
 (`analysis_update_names`).

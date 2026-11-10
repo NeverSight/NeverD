@@ -64,6 +64,38 @@ def colour_of(client, address):
     return ok(client, "function_attributes", {"address": hex(address)}).get("color")
 
 
+def source_of(client, address):
+    return ok(client, "decompile", {"address": hex(address), "representation": "source",
+                                    "offset": 0, "limit": 200})["text"]
+
+
+def local_of(client, address):
+    view = ok(client, "decompile", {"address": hex(address), "representation": "source",
+                                    "offset": 0, "limit": 200})
+    return next(name for name in view["code_names"] if name["kind"] == "local")
+
+
+def local_name(address, local, name):
+    return {"address": hex(address), "representation": "source", "kind": "name",
+            "original": local["original"], "identity": local["identity"], "name": name}
+
+
+def numbered_elf():
+    """global_elf with mov eax, 0xB; ret at its entry: a number to format."""
+    image, entry = global_elf()
+    image = bytearray(image)
+    image[176:182] = bytes.fromhex("b80b000000c3")
+    return bytes(image), entry
+
+
+def number_shown(client, address):
+    lines = ok(client, "listing", {"address": hex(address), "before": 0, "after": 16})["lines"]
+    shown = [line["text"] for line in lines
+             if line.get("kind") == "insn" and int(line["address"], 16) == address]
+    assert shown, lines
+    return shown[0]
+
+
 def run(executable):
     with tempfile.TemporaryDirectory(prefix="neverd-edit-writes-") as folder:
         path = Path(folder) / "named.elf"
@@ -141,6 +173,22 @@ def run(executable):
         assert not any(row.get("text") == "committed behind" for row in notes), notes
         client.close()
 
+        # A local's new name goes behind the reply as a name does, and a view
+        # right behind it reads it.
+        client = opened(executable, path)
+        local = local_of(client, entry)
+        ok(client, "code_edit", local_name(entry, local, "behind_local"))
+        assert "behind_local" in source_of(client, entry)
+        ok(client, "undo")
+        assert "behind_local" not in source_of(client, entry)
+        ok(client, "redo")
+        client.close()
+        assert not journal(path), journal(path)
+        assert "behind_local" in (project_folder(path) / "code.json").read_text()
+        client = opened(executable, path)
+        assert "behind_local" in source_of(client, entry)
+        client.close()
+
         # A kill at any moment leaves a project that opens and takes edits.
         for round_number in range(12):
             client = opened(executable, path)
@@ -149,6 +197,10 @@ def run(executable):
                 ok(client, "annotation_set",
                    {"address": hex(GLOBAL), "text": f"killed note {round_number}"})
                 ok(client, "save", {"write_behind": True})
+            if round_number % 3 == 2:
+                # A local's name behind the reply too.
+                ok(client, "code_edit", local_name(entry, local_of(client, entry),
+                                                   f"killed_local_{round_number}"))
             last = None
             for index in range(1 + round_number % 3):
                 last = f"killed_{round_number}_{index}"
@@ -258,6 +310,61 @@ def run(executable):
                                      "offset": 0, "limit": 200})
             assert colour_of(client, entry) == taken[-1]
             assert qword_at(client, ITEM)
+            client.close()
+
+            # A local's name goes behind the reply: it is taken while the files
+            # take nothing, and written once they take writes again.
+            client = opened(executable, path)
+            local = local_of(client, entry)
+            ok(client, "analysis_snapshot")
+            folder_path.chmod(0o500)
+            try:
+                ok(client, "code_edit", local_name(entry, local, "taken_behind"))
+                assert "taken_behind" in source_of(client, entry)
+            finally:
+                folder_path.chmod(mode)
+            ok(client, "analysis_snapshot")
+            client.close()
+            assert not journal(path), journal(path)
+            client = opened(executable, path)
+            assert "taken_behind" in source_of(client, entry)
+            client.close()
+
+            # So do operand formats, which go behind the reply too.
+            numbered = Path(folder) / "numbered.elf"
+            image, start = numbered_elf()
+            numbered.write_bytes(image)
+            client = opened(executable, numbered)
+            # Its instructions are the listing's once a view has prepared it.
+            source_of(client, start)
+            ok(client, "operand_format", {"address": hex(start), "action": "decimal"})
+            ok(client, "analysis_snapshot")
+            numbered_folder = project_folder(numbered)
+            mode = stat.S_IMODE(numbered_folder.stat().st_mode)
+            numbered_folder.chmod(0o500)
+            spelled = {"hex": "0Bh", "binary": "1011b"}
+            try:
+                formats = []
+                for index in range(200):
+                    action = ("hex", "binary")[index % 2]
+                    reply = client.call("operand_format", {"address": hex(start), "action": action})
+                    if reply["status"] != "ok":
+                        break
+                    formats.append(action)
+                    time.sleep(0.01)
+                assert reply["status"] != "ok", reply
+                assert reply["error"]["code"] == "save_failed", reply
+                assert formats, reply
+            finally:
+                numbered_folder.chmod(mode)
+            assert spelled[formats[-1]] in number_shown(client, start), number_shown(client, start)
+            # What waits for the files writes them now.
+            ok(client, "analysis_snapshot")
+            client.close()
+            assert not journal(numbered), journal(numbered)
+            client = opened(executable, numbered)
+            source_of(client, start)
+            assert spelled[formats[-1]] in number_shown(client, start), number_shown(client, start)
             client.close()
 
         # Files changed behind the worker stop the next edit.
