@@ -14283,12 +14283,20 @@ x64 machine code and both optimized/unoptimized lifted LLVM at O0/O2, checking
 1024 selectors plus the two-level default boundary against independent results.
 
 `MedABIPass.PairAlignedWideStackStoreKeepsItsLanes` covers the pair-aligned
-conventions (ARM AAPCS and little-endian MIPS o32). One aligned store of a
+conventions (ARM AAPCS and both byte orders of MIPS o32). One aligned store of a
 stack `double` keeps both slot lanes when a loop surrounds the call, and when an
 earlier call leaves a later slot unproven; that slot stays unknown.
 `MedABIPass.CoveredCallSetupNeedsNoPredecessor` checks that stores covering
-every slot in the call block keep the stack proof complete, and that the proof
-names the slots of such a wide store for the block scan to split.
+every slot in the call block keep the stack proof complete. Wide-lane evidence
+retains the actual stored value and its memory offset; incoming register saves
+do not supply argument evidence.
+`PairAlignedWideStackLanesIgnoreOlderPackedStores` checks complete/incomplete
+proofs and later scalar overwrites: old byte-store packing cannot replace the
+owner's scalar or wide values. Both lane materialization paths convert memory
+offsets to numeric SUBBYTES positions in the target's byte order.
+`PairAlignedPredecessorWideStoreRequiresLaneEvidence` keeps required lanes
+unknown when a predecessor wide store has no published lane proof; a later
+proven scalar remains available. Missing evidence never becomes padding zero.
 
 `MedABIPass.SplitStackArgumentSetupRequiresEveryIncomingPath` checks all twelve
 architecture/format cells, block-order changes, conflicting or missing stores,

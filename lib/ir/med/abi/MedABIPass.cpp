@@ -1889,7 +1889,7 @@ void recoverCallAbi(
           Op.CalleeVectorArgs <= 0 && !Op.CalleeVectorSlots &&
           CalleeArgs > int(IntParamRegs.size());
       bool StackSetupIncomplete = false;
-      std::set<int64_t> WideStackSlots;
+      std::map<int64_t, CallSetupStackLane> WideStackSlots;
       const bool NeedsStackBoundary =
           Convention && Convention->PairAlignedWideArguments &&
           !CI.IsIndirect && !HeaderVariadic && !OpenVariadicArity &&
@@ -2348,6 +2348,42 @@ void recoverCallAbi(
       // order (see the FP overflow run after the FP-register scan).
       std::map<int64_t, MedVar> FPStackByOff;
 
+      // STORE byte positions and SUBBYTES numeric positions differ on a
+      // big-endian target. Both local scanning and certified lanes use this
+      // one projection, including a short final lane of a wide store.
+      const auto ExtractStackLane = [&](const MedVar &Stored,
+                                        unsigned MemoryOffset, unsigned Bytes,
+                                        unsigned SlotBytes) {
+        MedVar Lane;
+        Lane.Kind = MedVar::Temp;
+        Lane.Id = FreshId++;
+        Lane.SSAVer = 0;
+        Lane.Size = static_cast<uint16_t>(Bytes);
+        Lane.TheArch = TheArch;
+        MedOp Sub;
+        Sub.Opcode = NdOp::SUBBYTES;
+        Sub.Addr = Op.Addr;
+        Sub.Output = Lane;
+        Sub.addInput(Stored);
+        const unsigned NumericOffset = archLittleEndian(TheArch)
+                                           ? MemoryOffset
+                                           : Stored.Size - MemoryOffset - Bytes;
+        Sub.addInput(MedVar::makeConst(NumericOffset, 4));
+        CallLaneOps.push_back(std::move(Sub));
+        if (Bytes < SlotBytes) {
+          MedOp Widen;
+          Widen.Opcode = NdOp::INT_ZEXT;
+          Widen.Addr = Op.Addr;
+          Widen.Output = Lane;
+          Widen.Output.Id = FreshId++;
+          Widen.Output.Size = static_cast<uint16_t>(SlotBytes);
+          Widen.addInput(Lane);
+          Lane = Widen.Output;
+          CallLaneOps.push_back(std::move(Widen));
+        }
+        return Lane;
+      };
+
       // Integer outgoing stack stores of a DIRECT call, keyed by byte offset
       // from the call SP and recorded at store granularity.  Apple's arm64 ABI
       // packs two sub-8-byte integer stack arguments into one 8-byte slot (`int
@@ -2484,31 +2520,8 @@ void recoverCallAbi(
               if (FoundMask[SlotIdx + L])
                 continue;
               const int Bytes = std::min<int>(SlotSize, SV.Size - L * SlotSize);
-              MedVar Lane;
-              Lane.Kind = MedVar::Temp;
-              Lane.Id = FreshId++;
-              Lane.SSAVer = 0;
-              Lane.Size = static_cast<uint16_t>(Bytes);
-              Lane.TheArch = TheArch;
-              MedOp Sub;
-              Sub.Opcode = NdOp::SUBBYTES;
-              Sub.Addr = Op.Addr;
-              Sub.Output = Lane;
-              Sub.addInput(SV);
-              Sub.addInput(
-                  MedVar::makeConst(static_cast<uint64_t>(L * SlotSize), 4));
-              CallLaneOps.push_back(std::move(Sub));
-              if (Bytes < SlotSize) {
-                MedOp Widen;
-                Widen.Opcode = NdOp::INT_ZEXT;
-                Widen.Addr = Op.Addr;
-                Widen.Output = Lane;
-                Widen.Output.Id = FreshId++;
-                Widen.Output.Size = static_cast<uint16_t>(SlotSize);
-                Widen.addInput(Lane);
-                Lane = Widen.Output;
-                CallLaneOps.push_back(std::move(Widen));
-              }
+              const MedVar Lane =
+                  ExtractStackLane(SV, L * SlotSize, Bytes, SlotSize);
               Found[SlotIdx + L] = Lane;
               FoundMask[SlotIdx + L] = true;
               FromStackScan[SlotIdx + L] = true;
@@ -3333,25 +3346,31 @@ void recoverCallAbi(
                                : DarwinVarArgBase >= 0
                                    ? DarwinVarArgBase
                                    : static_cast<int>(IntParamRegs.size());
-      if (NeedsStackBoundary && StackSetupIncomplete) {
-        // The local scan, packed-store reconstruction and tail forwarding
-        // cannot restore evidence lost by the shared reaching-memory proof.
-        // Keep only complete required carriers certified by that owner.
+      if (NeedsStackBoundary) {
+        // Restore the owner's actual values after local packing/forwarding.
+        // Even a complete proof cannot certify a different value solely
+        // because it happens to occupy the same slot. An incomplete proof
+        // additionally refuses all required carriers it did not establish.
         for (int K = StackArgBase; K < std::min(CalleeArgs, MaxArgs); ++K) {
           const int64_t Offset = CallLayout.CallStackBase +
                                  (K - StackArgBase) * CallLayout.SlotBytes;
-          // The owner certified the call block's own complete wide store
-          // here (an AAPCS `double` stack argument); the block scan above
-          // split exactly that store into this slot's lane.
-          if (WideStackSlots.count(Offset) && FoundMask[K] &&
-              FromStackScan[K] && Found[K].Size == CallLayout.SlotBytes)
+          const auto Wide = WideStackSlots.find(Offset);
+          if (Wide != WideStackSlots.end() &&
+              !UndefinedScratchSlot(Wide->second.StoredValue)) {
+            Found[K] = ExtractStackLane(
+                Wide->second.StoredValue, Wide->second.MemoryOffset,
+                CallLayout.SlotBytes, CallLayout.SlotBytes);
+            FoundMask[K] = FromStackScan[K] = true;
             continue;
+          }
           const auto Reaching = ReachingStackStores.find(Offset);
           const bool Proven = Reaching != ReachingStackStores.end() &&
                               Reaching->second.Size == CallLayout.SlotBytes &&
                               !UndefinedScratchSlot(Reaching->second);
-          Found[K] = Proven ? Reaching->second : MedVar{};
-          FoundMask[K] = FromStackScan[K] = Proven;
+          if (Proven || StackSetupIncomplete) {
+            Found[K] = Proven ? Reaching->second : MedVar{};
+            FoundMask[K] = FromStackScan[K] = Proven;
+          }
         }
       }
       // Assemble up to the highest recovered lane so interior gaps are filled

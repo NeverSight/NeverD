@@ -3495,6 +3495,15 @@ graph; `COFFExceptionPatch` continues to require that evidence for lifted code.
 
 Recovered indirect-call arguments retain separate integer and floating register runs and the remaining stack bytes. Each stack value also keeps the offset it was stored at, so a value narrower than its slot leaves the rest of the slot as padding: -O0 x86-64 code passes an `int` with `mov [rsp+8], r10d` in an eight-byte slot. `LLVMCallContract` uses one binder during emission and after LLVM target resolution: surplus registers cannot shift another bank, packed 32-bit stores are assembled into the callee’s complete stack slots, a narrower value fills only its own slot, and a slot that no value was stored to refuses. A callback table cannot replace an already recovered first argument with an inferred object pointer. AArch64 copy-initialized tables authenticate the native BL/import identity, MOVZ length, ADRP/ADD source and complete immutable span; publication and jump-table proof replay check the same witness.
 
+For fixed pair-aligned stack arguments, the reaching-store owner publishes
+concrete scalar values and local wide-store lanes with their memory offsets.
+The final argument boundary reapplies these values after local packing, even
+when the proof is complete; matching a slot number alone does not authenticate
+a candidate. Local scanning and certified lanes share the target-endian
+conversion from memory bytes to numeric SUBBYTES offsets. A predecessor wide
+store without published lane evidence makes the proof incomplete, so required
+unknown arguments cannot become alignment padding.
+
 ## Manual PDB presentation boundary
 
 `lib/debug/PDBIdentity.h` owns RSDS build identity for full loading, symbol-store

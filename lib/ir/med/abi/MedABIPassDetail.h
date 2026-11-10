@@ -173,6 +173,13 @@ struct CallSetupStackJoins {
   std::map<int64_t, size_t> Slots;
 };
 
+/// One complete slot from the closest wide store in the call's own block.
+/// MemoryOffset is a byte position in stored memory, not a numeric bit index.
+struct CallSetupStackLane {
+  MedVar StoredValue;
+  uint16_t MemoryOffset;
+};
+
 /// Outgoing scalar stores that agree along every predecessor path
 /// to a call. Unknown writes, calls, independent entries and cycles stop the
 /// proof. Offsets are relative to the call's SP, using its exact SSA basis.
@@ -186,13 +193,13 @@ struct CallSetupStackJoins {
 /// padding. Once a block's own stores cover every slot, nothing before them
 /// reaches the call, so the walk stops there.
 /// WideSlots receives each slot whose closest store in the call's block is one
-/// aligned store of several whole slots. The result holds no scalar for such a
-/// slot; the caller's scan of that block splits the store into its slot lanes.
-std::map<int64_t, MedVar>
-callSetupStackStores(const AbiCallContext &C,
-                     CallSetupStackJoins *Joins = nullptr,
-                     size_t *SharedWork = nullptr, bool *Incomplete = nullptr,
-                     std::set<int64_t> *WideSlots = nullptr);
+/// aligned store of several whole slots, with that store's value and memory
+/// offset. A later candidate with the same slot number does not inherit this
+/// proof; the caller materializes the certified lane itself.
+std::map<int64_t, MedVar> callSetupStackStores(
+    const AbiCallContext &C, CallSetupStackJoins *Joins = nullptr,
+    size_t *SharedWork = nullptr, bool *Incomplete = nullptr,
+    std::map<int64_t, CallSetupStackLane> *WideSlots = nullptr);
 
 /// Every reaching path leaves this incoming argument register untouched.
 bool incomingArgumentReachesCall(const AbiCallContext &C, int ArgIndex);
