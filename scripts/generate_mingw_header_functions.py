@@ -83,8 +83,11 @@ def declared_functions(clang, target, headers, scratch, directory):
     current = None
     for decl in json.loads(result.stdout).get("inner", []):
         loc = decl.get("loc", {})
-        for where in (loc, loc.get("spellingLoc", {}),
-                      loc.get("expansionLoc", {})):
+        # A macro's declaration belongs to its expansion site. Its name may
+        # be spelled in <scratch space>; remembering that synthetic file
+        # would also discard subsequent declarations whose file is elided.
+        for where in (loc, loc.get("expansionLoc", {}),
+                      loc.get("spellingLoc", {})):
             if "file" in where:
                 current = str(Path(where["file"]).resolve())
                 break

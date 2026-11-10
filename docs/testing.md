@@ -1455,6 +1455,37 @@ incomplete exception contracts retain their diagnostics without modifying the
 input module. `NeverDSemanticCAPI.LLVMContractFailureRetainsFunctionAndReason`
 checks the same function and refusal detail through both public C and JSON APIs.
 Run `NeverDPipelineOutcomeTests` for whole-module and sharded failure propagation.
+`NeverDPipelineLLVMShardingTests` checks fixed-budget partitioning, native C++
+and shared SEH callback groups, and scalar/data address counterexamples.
+`PipelineOutcome.ShardsRetainCrossFunctionInteriorCodeIdentity` exercises actual
+multiple shards at 1/2/4 worker settings across x86, x64, ARM and AArch64 in COFF, ELF
+and Mach-O, reverses function order, compares optimized x64 IR, and retains
+ambiguous-label refusal. Compare whole-image LLVM C at the same worker counts
+when changing the planner; admission, body contents and declarations all matter.
+`LLVMCValues.EarlyBodyRefusalRetainsTheCalleeDeclaration` rejects an unsupported
+interior block address during expression planning, then compiles and executes
+its retained caller against an independent callee at O0/O2 with UBSan, in both
+function orders. `SavedFrameAddressKeepsItsIntegerCarrier` covers saved register
+homes in unoptimized x64/AArch64 callbacks across COFF, ELF and Mach-O; omitted
+restore operations cannot make surviving integer assignments take pointer text.
+`WindowsCRTEnumsAndCallbacksAgreeWithHeaderDeclarations` checks the shared CRT
+table against independent enum, on-exit table and callback declarations, then
+executes both direct and import-table calls at O0/O2 with UBSan for all four
+architecture projections. TLS callbacks retain the header's unsigned-long
+parameter and x86 stdcall convention; Linux x64 also executes the x86 cases as
+freestanding 32-bit programs. With includes enabled it checks that local debug
+types cannot redefine the runtime headers' types. The corresponding
+`HighCSourceCalls.RuntimeHeaderOwnsItsEnumerationDefinitions` check, in
+`NeverDSourceEntryBindingTests`, retains local enum definitions for an actual
+program-defined callee. Whole-unit Windows syntax checks additionally use the
+real headers.
+`COFFExceptionIR.LLVMCCRTArgumentsKeepTheRuntimeType` keeps a mismatched debug
+enum out of a runtime argument and prevents displayed header enumerators from
+requesting duplicate local definitions.
+`NativePointerRelocationBoundary.MinGWProgramWholeModuleLLVMCCompiles` compiles
+the complete runtime-linked output at O0/O2. Regenerate its header-name inventory
+with `scripts/generate_mingw_header_functions.py`; the corresponding Python
+unit test checks macro expansion locations and subsequent elided file names.
 
 `*LookupFailures*` and `ProcessReport.AndroidLoaderFailures*` cover strict
 binary names and literal `exact_query` strings, whitespace preservation,
