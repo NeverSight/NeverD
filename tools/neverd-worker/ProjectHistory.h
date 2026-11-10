@@ -80,6 +80,11 @@ public:
   /// sooner leaves them as they were before it, or a journal that completes it.
   /// A write that fails stays queued and fails the next edit that finds it.
   void persistLater(Json state);
+  /// As persist and persistLater, for an edit that changes \p table alone:
+  /// \p rows are its rows after the edit, and every other table is the
+  /// committed one, neither copied nor read again.
+  void persistTable(const std::string &table, Json rows);
+  void persistTableLater(const std::string &table, Json rows);
   /// Waits for the writes persistLater queued.  Throws what fails them, and the
   /// next call tries them again.
   void finishWrites();
@@ -138,7 +143,9 @@ private:
   std::size_t commandTextSize() const;
   std::string document(std::string_view encodedState) const;
   void recover();
-  void persist(Json state, std::optional<PatchRows> patches, bool later);
+  /// \p state is the whole state, or where \p table is given that table's rows.
+  void persist(Json state, std::optional<PatchRows> patches, bool later,
+               const std::string *table = nullptr);
 };
 } // namespace neverd::worker
 

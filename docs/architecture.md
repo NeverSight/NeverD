@@ -5121,7 +5121,9 @@ and formats only the tables the edit changed: a table whose rows print as the
 committed ones do (a zero's sign included) copies its committed encoding and keeps
 its file, checked against the file budget at the size this history last wrote, and a
 row equal to the committed row at its address keeps its admission wherever it moved
-(`normalizeTable`). A document of a view
+(`normalizeTable`). An edit hands the history the one table it changed
+(`ProjectHistory::persistTable`), whose state keeps each table shared with every state
+that leaves it as it was: the others are neither copied nor read again. A document of a view
 notes the addresses its render read, whether the engine rendered it then or a store
 kept it (`neverd_user_reads`), and those its decoration looked up, and reads what such
 an edit reached when it is next asked for, so the edit leaves the owner's other

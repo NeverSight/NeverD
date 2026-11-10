@@ -2824,11 +2824,12 @@ void Engine::reloadCodeEdits() {
   codeEdits_ = readCodeEdits(ownedString(neverd_session_file_path(session_)));
 }
 
-void Engine::persistEdit(ProjectHistory &store, Json state) {
+void Engine::persistTableEdit(ProjectHistory &store, const std::string &table,
+                              Json rows) {
   if (writeBehind_)
-    store.persistLater(std::move(state));
+    store.persistTableLater(table, std::move(rows));
   else
-    store.persist(std::move(state));
+    store.persistTable(table, std::move(rows));
 }
 
 void Engine::recordProject() {
@@ -4681,7 +4682,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     if (tables) {
       std::map<std::uint64_t, std::string> committed, staged;
       if (dirty_) {
-        for (const auto &row : store.committedState().at("annotations"))
+        for (const auto &row : store.committedTable("annotations"))
           committed[parseAddress(row.at("addr").get<std::string>())] =
               row.at("text").get<std::string>();
         std::set<std::uint64_t> current;
@@ -4788,7 +4789,11 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
         }
       };
       const bool patch = command.at("kind") == "patch";
-      Json state;
+      const std::string table =
+          patch ? std::string()
+                : ProjectHistory::tableOfKind(
+                      command.at("kind").get<std::string>());
+      Json rows;
       ProjectHistory::PatchRows patches;
       if (patch) {
         patches = store.committedPatches();
@@ -4796,9 +4801,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
             patches, [](const auto &row) { return row->address(); },
             ProjectHistory::patchRow);
       } else {
-        state = store.committedState();
-        auto &rows = state[ProjectHistory::tableOfKind(
-            command.at("kind").get<std::string>())];
+        rows = store.committedTable(table);
         replay(
             rows,
             [](const Json &row) {
@@ -4813,7 +4816,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
         if (patch)
           store.persistPatches(std::move(patches));
         else
-          store.persist(std::move(state));
+          store.persistTable(table, std::move(rows));
       } catch (...) {
         store = checkpoint;
         throw;
@@ -5066,7 +5069,6 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       auto &store = *history_;
       const auto checkpoint = store;
       try {
-        auto state = store.committedState();
         Json declared = typeDeclarationRows();
         if (declared.empty())
           throw Error("engine_error", "Engine kept no declaration");
@@ -5076,8 +5078,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                      {"after", declared.back()}});
         if (identityBefore)
           declaredRows = declared;
-        state["types"] = std::move(declared);
-        persistEdit(store, state);
+        persistTableEdit(store, "types", std::move(declared));
       } catch (...) {
         store = checkpoint;
         (void)load(session_);
@@ -5848,8 +5849,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     if (before == after)
       return {{"saved", false}, {"address", hexAddress(address)}};
     const auto checkpoint = store;
-    auto state = store.committedState();
-    auto &rows = state["code_edits"];
+    Json rows = store.committedTable("code_edits");
     rows.erase(std::remove_if(rows.begin(), rows.end(),
                               [&](const Json &row) {
                                 return parseAddress(
@@ -5858,17 +5858,19 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                               }),
                rows.end());
     rows.push_back(after);
+    // The session's edits from here on, as this edit leaves them.
+    auto edits = rows;
     try {
       store.stage({{"kind", "code"},
                    {"address", hexAddress(owner)},
                    {"before", before},
                    {"after", after}});
-      store.persist(state);
+      store.persistTable("code_edits", std::move(rows));
     } catch (...) {
       store = checkpoint;
       throw;
     }
-    codeEdits_ = std::move(rows);
+    codeEdits_ = std::move(edits);
     const bool localName = p.value("kind", std::string()) == "name";
     if (localName)
       localNamesChanged();
@@ -5885,11 +5887,10 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     auto &store = history();
     // What saves reads the project's files after this, written or not.
     store.finishWrites();
-    auto state = store.committedState();
-    state["annotations"] = backendJson(neverd_annotations_json(session_));
+    auto annotations = backendJson(neverd_annotations_json(session_));
     saveAnalysisSections();
     sectionsDirty_ = false;
-    store.persist(std::move(state));
+    store.persistTable("annotations", std::move(annotations));
     dirty_ = false;
     return {{"saved", true}, {"dirty", false}};
   }
@@ -6175,8 +6176,8 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                   "The name " + name + " is used at " + hexAddress(*other));
     const int index = neverd_func_find_by_addr(session_, address);
     auto &store = history();
-    auto state = store.committedState();
-    auto &renames = state["renames"].get_ref<Json::array_t &>();
+    Json table = store.committedTable("renames");
+    auto &renames = table.get_ref<Json::array_t &>();
     // The committed rows lie in address order: the row of this address, or
     // the place a new one takes, as the history would sort it.
     const auto rowAddress = [](const Json &row) {
@@ -6211,9 +6212,9 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                  {"after", after}});
     try {
       if (take)
-        persistEdit(store, state);
+        persistTableEdit(store, "renames", std::move(table));
       else
-        store.persist(state);
+        store.persistTable("renames", std::move(table));
     } catch (...) {
       store = checkpoint;
       throw;
@@ -6352,17 +6353,16 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
           return row;
       return nullptr;
     };
-    auto state = store.committedState();
-    const Json before = rowAt(state.at("functions"));
-    state["functions"] = functionEditRows();
-    const Json after = rowAt(state.at("functions"));
+    const Json before = rowAt(store.committedTable("functions"));
+    Json rows = functionEditRows();
+    const Json after = rowAt(rows);
     const auto checkpoint = store;
     store.stage({{"kind", "function"},
                  {"address", hexAddress(address)},
                  {"before", before},
                  {"after", after}});
     try {
-      persistEdit(store, state);
+      persistTableEdit(store, "functions", std::move(rows));
     } catch (...) {
       store = checkpoint;
       // The sidecar still holds the edits before this one.
@@ -6556,7 +6556,8 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                   "action is \"code\", \"data\", \"string\" or \"undefine\"");
     }
     auto &store = history();
-    auto state = store.committedState();
+    // The committed rows stand until this edit persists its own.
+    const Json &committedItems = store.committedTable("items");
     // The engine checks the item against the image and the other items;
     // undefined bytes it covers stay undefined around it.
     if (code.empty())
@@ -6572,10 +6573,10 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     }
     // One history step holds every row the edit changed, the item's first.
     std::map<std::uint64_t, std::pair<Json, Json>> changed;
-    for (const auto &item : state.at("items"))
+    for (const auto &item : committedItems)
       changed[parseAddress(item.at("addr").get<std::string>())].first = item;
-    state["items"] = dataItemRows();
-    for (const auto &item : state.at("items"))
+    Json rows = dataItemRows();
+    for (const auto &item : rows)
       changed[parseAddress(item.at("addr").get<std::string>())].second = item;
     const Json after = changed[start].second;
     Json command{{"kind", "item"},
@@ -6590,7 +6591,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     const auto checkpoint = store;
     try {
       store.stage(std::move(command));
-      persistEdit(store, state);
+      persistTableEdit(store, "items", std::move(rows));
     } catch (...) {
       store = checkpoint;
       // The sidecar still holds the items before this one.
@@ -6665,14 +6666,15 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                                  : " has no number to format"));
     const auto operand = *chosen;
     auto &store = history();
-    auto state = store.committedState();
+    // The committed rows stand until this edit persists its own.
+    const Json &committedFormats = store.committedTable("operands");
     const auto rowAt = [&](const Json &rows) -> Json {
       for (const auto &row : rows)
         if (parseAddress(row.at("addr").get<std::string>()) == address)
           return row;
       return nullptr;
     };
-    const Json before = rowAt(state.at("operands"));
+    const Json before = rowAt(committedFormats);
     // The operand's format so far, then the action's change to it: a base,
     // the sign, the bits, or the listing's own number again.
     const std::string number(numberBaseName(NumberBase::Number));
@@ -6771,10 +6773,10 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     // One history step holds every row the change made, the instruction's
     // first.
     std::map<std::uint64_t, std::pair<Json, Json>> changed;
-    for (const auto &row : state.at("operands"))
+    for (const auto &row : committedFormats)
       changed[parseAddress(row.at("addr").get<std::string>())].first = row;
-    state["operands"] = operandFormatRows();
-    for (const auto &row : state.at("operands"))
+    Json rows = operandFormatRows();
+    for (const auto &row : rows)
       changed[parseAddress(row.at("addr").get<std::string>())].second = row;
     const Json after = changed[address].second;
     Json command{{"kind", "operand"},
@@ -6795,7 +6797,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     const auto checkpoint = store;
     try {
       store.stage(std::move(command));
-      store.persist(state);
+      store.persistTable("operands", std::move(rows));
     } catch (...) {
       store = checkpoint;
       // The sidecar still holds the formats before this one.

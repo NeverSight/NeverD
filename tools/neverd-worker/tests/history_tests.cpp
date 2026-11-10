@@ -619,6 +619,83 @@ void unchangedTablesKeepTheirBytes() {
                 .committedState() == state,
         "Reopening changed the committed tables");
 }
+void tableEditsPersistAsTheirState() {
+  // An edit of one table persists as the whole state with that table's rows
+  // does: the same files, the same history, the other tables untouched.
+  const auto files = [](const Fixture &fixture) {
+    std::vector<std::string> texts;
+    for (const auto id :
+         {files::File::Annotations, files::File::Renames, files::File::Items,
+          files::File::Types, files::File::History})
+      texts.push_back(fs::exists(fixture.path(id)) ? text(fixture.path(id))
+                                                   : std::string());
+    return texts;
+  };
+  Fixture whole, table;
+  auto wholeStore = whole.open(), tableStore = table.open();
+  const auto start = initial(wholeStore);
+  initial(tableStore);
+  auto renames = start.at("renames");
+  renames.push_back({{"addr", "0x500"}, {"original", "f"}, {"renamed", "g"}});
+  auto state = start;
+  state["renames"] = renames;
+  const Json command{{"kind", "rename"},
+                     {"address", "0x500"},
+                     {"before", nullptr},
+                     {"after", renames.back()}};
+  wholeStore.stage(command);
+  wholeStore.persist(state);
+  tableStore.stage(command);
+  table.writer.clear();
+  tableStore.persistTable("renames", renames);
+  check(files(whole) == files(table) &&
+            tableStore.committedState() == wholeStore.committedState(),
+        "A table's edit persisted otherwise than its whole state");
+  check(table.writer.calls ==
+            std::vector<fs::path>{table.path(files::File::Journal),
+                                  table.path(files::File::Renames),
+                                  table.path(files::File::History)},
+        "A table's edit wrote files outside its table and journal/history");
+  // Behind the reply, the same once written.
+  auto items = Json::array(
+      {{{"addr", "0x2000"}, {"kind", "data"}, {"size", std::uint64_t(4)}}});
+  state["items"] = items;
+  wholeStore.persist(state);
+  tableStore.persistTableLater("items", items);
+  tableStore.finishWrites();
+  check(files(whole) == files(table), "A table's later edit wrote otherwise");
+  // What is no table of rows, or is the patches', is refused unwritten.
+  table.writer.clear();
+  rejects([&] { tableStore.persistTable("unknown", Json::array()); },
+          "history_invalid");
+  rejects([&] { tableStore.persistTable("patches", Json::array()); },
+          "history_invalid");
+  rejects([&] { tableStore.persistTable("renames", Json::object()); },
+          "history_invalid");
+  check(table.writer.calls.empty() && files(whole) == files(table),
+        "A refused table edit wrote");
+  // An interrupted table write completes with the next one, which keeps the
+  // tables it found.
+  table.writer.clear();
+  table.writer.failAt = 1;
+  auto later = renames;
+  later[0]["renamed"] = "interrupted";
+  rejects([&] { tableStore.persistTable("renames", later); },
+          "injected_failure");
+  table.writer.clear();
+  auto annotations = start.at("annotations");
+  annotations[0]["text"] = "after the interruption";
+  tableStore.persistTable("annotations", annotations);
+  state["renames"] = later;
+  state["annotations"] = annotations;
+  wholeStore.persist(state);
+  auto reopened = table.open();
+  check(reopened.committedState() == wholeStore.committedState() &&
+            reopened.committedState().at("renames")[1].at("renamed") ==
+                "interrupted" &&
+            !ProjectHistory::recoveryPending(table.binary),
+        "An interrupted table write lost a table");
+}
 void changedAddressSequence() {
   Fixture fixture;
   auto store = fixture.open();
@@ -1050,6 +1127,7 @@ int main() {
     commandEncodingAndBranches();
     stateEncodingAndSidecars();
     unchangedTablesKeepTheirBytes();
+    tableEditsPersistAsTheirState();
     changedAddressSequence();
     commandBudgetCountsEncodedBytes();
     budgetBeforePublication();
