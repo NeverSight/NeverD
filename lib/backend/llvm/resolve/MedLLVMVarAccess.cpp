@@ -30,6 +30,8 @@
 #include "neverd/support/Diagnostic.h"
 
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Instructions.h"
@@ -37,8 +39,10 @@
 
 #include <algorithm>
 #include <set>
+#include <string>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 namespace neverd {
 
@@ -730,36 +734,88 @@ llvm::Value *MedLLVMEmitter::getPhiIncomingValue(const MedVar &V,
 
 llvm::Value *MedLLVMEmitter::getRawSegmentOffset(const MedVar &V,
                                                  llvm::IRBuilder<> &Builder) {
+  return getRawInteger(V, RawIntegerRole::SegmentOffset, Builder);
+}
+
+llvm::Value *MedLLVMEmitter::getRawRepeatCount(const MedVar &V,
+                                               llvm::IRBuilder<> &Builder) {
+  return getRawInteger(V, RawIntegerRole::RepeatCount, Builder);
+}
+
+llvm::Value *MedLLVMEmitter::getRawInteger(const MedVar &V, RawIntegerRole Role,
+                                           llvm::IRBuilder<> &Builder) {
   using Key = std::tuple<int, int, int, uint16_t>;
   std::set<Key> Active;
   int Budget = ::neverd::limits::backend::
       kMedLLVMVarAccessMedLLVMEmitterGetRawSegmentOffsetBudget;
+  const bool ForCount = Role == RawIntegerRole::RepeatCount;
+  const llvm::StringRef Noun = ForCount ? "REP count" : "FS/GS offset";
+  const llvm::StringRef Prefix = ForCount ? "REP count" : "FS/GS";
+  const llvm::StringRef ANoun = ForCount ? "a REP count" : "an FS/GS offset";
+  // A REP count may take a process pointer's runtime bits. The raw constants
+  // beside such a pointer are checked once the expression is complete.
+  bool SawProcessPointer = false;
+  std::vector<const MedVar *> Constants;
 
+  // An integer that cannot be rebuilt exactly refuses its body, not the unit:
+  // the first reason is reported, emission stops at the body's next
+  // operation, and a unit that names what it leaves out omits the body.
+  auto refuse = [&](llvm::Type *Ty,
+                    const llvm::Twine &Reason) -> llvm::Value * {
+    if (!FatalDataPointerResolution && !FatalCodePointerResolution)
+      syncError() << "med_llvm_emitter: " << Reason.str() << " in "
+                  << (CurMedFunc ? CurMedFunc->Name : "<unknown>")
+                  << "; refusing raw-integer reconstruction\n";
+    FatalDataPointerResolution = true;
+    return llvm::PoisonValue::get(Ty);
+  };
   auto rawConstant = [&](const MedVar &C) -> llvm::Value * {
+    if (ForCount)
+      Constants.push_back(&C);
     return rawIntegerConstant(*Ctx, sizeToType(C.Size), C.ConstVal);
   };
   auto asInteger = [&](llvm::Value *Value, llvm::IntegerType *Ty,
                        bool Signed) -> llvm::Value * {
     if (!Value || !Value->getType()->isIntegerTy())
-      llvm::report_fatal_error(
-          "FS/GS offset depends on a non-integer process pointer");
+      return refuse(Ty, Noun + " depends on a non-integer process pointer");
     if (Value->getType() == Ty)
       return Value;
     return Builder.CreateIntCast(Value, Ty, Signed, "segment_offset_cast");
+  };
+  // getVar gives a process pointer as a pointer or a ptrtoint. A segment
+  // offset is not one. A REP count reads the same register bits whether the
+  // value is typed as a pointer or as an integer, as a pointer difference is.
+  auto runtimeValue = [&](llvm::Value *Value, llvm::Type *Ty,
+                          const llvm::Twine &OffsetReason) -> llvm::Value * {
+    if (Value && Value->getType()->isIntegerTy() &&
+        !llvm::isa<llvm::PtrToIntInst>(Value))
+      return Value;
+    if (!ForCount)
+      return refuse(Ty, OffsetReason);
+    if (Value && Value->getType()->isPointerTy()) {
+      SawProcessPointer = true;
+      return Builder.CreatePtrToInt(Value, Ty, "rep_count_pointer");
+    }
+    if (Value && Value->getType()->isIntegerTy()) {
+      SawProcessPointer = true;
+      return Value;
+    }
+    return refuse(Ty, Noun + " is neither an integer nor a process pointer");
   };
 
   std::function<llvm::Value *(const MedVar &)> materialize =
       [&](const MedVar &Cur) -> llvm::Value * {
     if (--Budget < 0)
-      llvm::report_fatal_error("FS/GS offset expression is too deep");
+      return refuse(sizeToType(Cur.Size), Noun + " expression is too deep");
     if (Cur.isConst())
       return rawConstant(Cur);
 
     Key K = std::make_tuple(static_cast<int>(Cur.Kind), Cur.Id, Cur.SSAVer,
                             Cur.Size);
     if (!Active.insert(K).second)
-      llvm::report_fatal_error(
-          "cyclic FS/GS offset cannot be materialized as a raw integer");
+      return refuse(sizeToType(Cur.Size),
+                    "cyclic " + Noun +
+                        " cannot be materialized as a raw integer");
     struct EraseOnExit {
       std::set<Key> &Set;
       Key Value;
@@ -777,25 +833,23 @@ llvm::Value *MedLLVMEmitter::getRawSegmentOffset(const MedVar &V,
             Summary.SawAddressFragment ||
             constantOccurrenceMayRelocate(
                 Arg, /*DirectPhiConstantBypassesGetVar=*/true))
-          llvm::report_fatal_error(
-              "FS/GS offset PHI has an unproven or relocatable incoming arm");
+          return refuse(sizeToType(Cur.Size),
+                        Noun +
+                            " PHI has an unproven or relocatable incoming arm");
       }
       llvm::Value *Value = getVar(Cur, Builder);
       if (!Value || !Value->getType()->isIntegerTy())
-        llvm::report_fatal_error(
-            "FS/GS offset PHI was not materialized as an integer");
+        return refuse(sizeToType(Cur.Size),
+                      Noun + " PHI was not materialized as an integer");
       return Value;
     }
 
+    const char *LiveInReason =
+        "FS/GS live-in offset was inferred as a process pointer";
     const MedOp *Def = lookupDef(Cur);
-    if (!Def) {
-      llvm::Value *Value = getVar(Cur, Builder);
-      if (!Value || !Value->getType()->isIntegerTy() ||
-          llvm::isa<llvm::PtrToIntInst>(Value))
-        llvm::report_fatal_error(
-            "FS/GS live-in offset was inferred as a process pointer");
-      return Value;
-    }
+    if (!Def)
+      return runtimeValue(getVar(Cur, Builder), sizeToType(Cur.Size),
+                          LiveInReason);
 
     // SSA construction represents an architectural live-in with a canonical
     // self COPY.  It is a source value, not a recursive expression; following
@@ -804,25 +858,20 @@ llvm::Value *MedLLVMEmitter::getRawSegmentOffset(const MedVar &V,
       const MedVar &Input = Def->Inputs[0];
       const Key InputKey = std::make_tuple(static_cast<int>(Input.Kind),
                                            Input.Id, Input.SSAVer, Input.Size);
-      if (InputKey == K) {
-        llvm::Value *Value = getVar(Cur, Builder);
-        if (!Value || !Value->getType()->isIntegerTy() ||
-            llvm::isa<llvm::PtrToIntInst>(Value))
-          llvm::report_fatal_error(
-              "FS/GS live-in offset was inferred as a process pointer");
-        return Value;
-      }
+      if (InputKey == K)
+        return runtimeValue(getVar(Cur, Builder), sizeToType(Cur.Size),
+                            LiveInReason);
     }
 
     auto *OutTy = llvm::cast<llvm::IntegerType>(sizeToType(Cur.Size));
     auto unary = [&](bool Signed) -> llvm::Value * {
       if (Def->NumInputs < 1)
-        llvm::report_fatal_error("malformed unary FS/GS offset expression");
+        return refuse(OutTy, "malformed unary " + Noun + " expression");
       return asInteger(materialize(Def->Inputs[0]), OutTy, Signed);
     };
     auto binary = [&](auto Emit) -> llvm::Value * {
       if (Def->NumInputs < 2)
-        llvm::report_fatal_error("malformed binary FS/GS offset expression");
+        return refuse(OutTy, "malformed binary " + Noun + " expression");
       llvm::Value *L = asInteger(materialize(Def->Inputs[0]), OutTy, false);
       llvm::Value *R = asInteger(materialize(Def->Inputs[1]), OutTy, false);
       return Emit(L, R);
@@ -884,21 +933,21 @@ llvm::Value *MedLLVMEmitter::getRawSegmentOffset(const MedVar &V,
       });
     case NdOp::SUBBYTES: {
       if (Def->NumInputs < 2 || !Def->Inputs[1].isConst())
-        llvm::report_fatal_error(
-            "dynamic byte extraction in an FS/GS offset is unsupported");
+        return refuse(OutTy, "dynamic byte extraction in " + ANoun +
+                                 " is unsupported");
       llvm::Value *Source = materialize(Def->Inputs[0]);
       if (!Source->getType()->isIntegerTy())
-        llvm::report_fatal_error("invalid FS/GS byte-extraction source");
+        return refuse(OutTy, "invalid " + Prefix + " byte-extraction source");
       const uint64_t Shift = Def->Inputs[1].ConstVal * 8;
       if (Shift >= Source->getType()->getIntegerBitWidth())
-        llvm::report_fatal_error("FS/GS byte extraction is out of range");
+        return refuse(OutTy, Prefix + " byte extraction is out of range");
       if (Shift)
         Source = Builder.CreateLShr(Source, Shift, "segment_offset_extract");
       return asInteger(Source, OutTy, false);
     }
     case NdOp::SELECT: {
       if (Def->NumInputs < 3)
-        llvm::report_fatal_error("malformed SELECT in an FS/GS offset");
+        return refuse(OutTy, "malformed SELECT in " + ANoun);
       llvm::Value *Cond = getVar(Def->Inputs[0], Builder);
       if (!Cond->getType()->isIntegerTy(1))
         Cond = Builder.CreateICmpNE(Cond,
@@ -913,18 +962,26 @@ llvm::Value *MedLLVMEmitter::getRawSegmentOffset(const MedVar &V,
       // bits.  They are safe only when their occurrence is not itself a
       // relocation-aware constant forwarder.
       if (constantOccurrenceMayRelocate(Cur))
-        llvm::report_fatal_error(
-            "FS/GS offset depends on a relocatable process address");
-      llvm::Value *Value = getVar(Cur, Builder);
-      if (!Value || !Value->getType()->isIntegerTy() ||
-          llvm::isa<llvm::PtrToIntInst>(Value))
-        llvm::report_fatal_error(
-            "FS/GS offset cannot be represented as a raw integer");
-      return asInteger(Value, OutTy, false);
+        return refuse(OutTy,
+                      Noun + " depends on a relocatable process address");
+      return asInteger(
+          runtimeValue(getVar(Cur, Builder), OutTy,
+                       Noun + " cannot be represented as a raw integer"),
+          OutTy, false);
     }
   };
 
-  return materialize(V);
+  llvm::Value *Result = materialize(V);
+  // getVar emits these constants raw too unless they name an image address.
+  // Such an address beside a process pointer would mix the original and the
+  // runtime coordinates in one count.
+  if (SawProcessPointer)
+    for (const MedVar *C : Constants)
+      if (isExactAddressProvenance(C->Provenance) ||
+          constantOccurrenceMayRelocate(*C))
+        return refuse(Result->getType(),
+                      Noun + " mixes a process pointer with an image address");
+  return Result;
 }
 
 llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
