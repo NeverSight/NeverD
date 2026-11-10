@@ -10869,4 +10869,11 @@ Su grafo anterior sigue disponible.</translation>
         <translation>Desacoplar ventana</translation>
     </message>
 </context>
+<context>
+    <name>CloseButton</name>
+    <message>
+        <source>Close Tab</source>
+        <translation>Cerrar pestaña</translation>
+    </message>
+</context>
 </TS>

@@ -26,6 +26,12 @@ namespace neverd::gui {
 namespace {
 using namespace unwind_info;
 
+// lupdate collects a table's words from the source files that include it,
+// and this file reaches UnwindInfo.def otherwise only through
+// UnwindInfoWords.h, a header.  Included again here with its entries left
+// empty, the table puts the dialog's words in the catalogs.
+#include "UnwindInfo.def"
+
 QString translated(const char *Text) {
   return QCoreApplication::translate(kContext, Text);
 }

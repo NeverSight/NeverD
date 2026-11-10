@@ -10833,4 +10833,11 @@ Your previous graph is still available.</source>
         <translation>ウィンドウを切り離す</translation>
     </message>
 </context>
+<context>
+    <name>CloseButton</name>
+    <message>
+        <source>Close Tab</source>
+        <translation>タブを閉じる</translation>
+    </message>
+</context>
 </TS>

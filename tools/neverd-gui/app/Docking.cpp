@@ -430,6 +430,17 @@ protected:
     TitleBar::focusInEvent(event);
   }
 
+  // The words the docking library gives the buttons below itself, listed so
+  // that lupdate keeps their translations in the workbench catalogs.
+  static constexpr const char *LibraryWords[] = {
+      QT_TRANSLATE_NOOP("KDDockWidgets::Core::TitleBar", "Dock window"),
+      QT_TRANSLATE_NOOP("KDDockWidgets::Core::TitleBar", "Undock window"),
+      QT_TRANSLATE_NOOP("KDDockWidgets::QtWidgets::TitleBar", "Auto-hide"),
+      QT_TRANSLATE_NOOP("KDDockWidgets::QtWidgets::TitleBar",
+                        "Disable auto-hide"),
+      QT_TRANSLATE_NOOP("KDDockWidgets::QtWidgets::TitleBar", "Maximize"),
+      QT_TRANSLATE_NOOP("KDDockWidgets::QtWidgets::TitleBar", "Restore")};
+
   void changeEvent(QEvent *event) override {
     // The docking library words its buttons as it builds them and as their
     // states change; word them again in a new language.
