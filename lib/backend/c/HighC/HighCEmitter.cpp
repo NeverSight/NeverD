@@ -34,6 +34,7 @@
 #include "HighCWriter.h"
 
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/MIPS/MIPSSourceCompiler.h"
 #include "neverd/backend/c/FloatingPointContract.h"
 #include "neverd/backend/c/render/AArch64/AArch64AddressMemoryC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
@@ -911,7 +912,7 @@ void HighCWriter::writeMemoryHelpers() {
   for (const auto &[Key, Name] : SaturatingLaneHelpers)
     writeX86SaturatingLaneHelper(OS, Name, Key.first, Key.second);
   writeScalarLSEFallbacks(OS, ScalarLSEBuiltins);
-  writeMIPSScalarHelpers(OS, Opts.TheArch, MIPSScalarHelpers);
+  writeMIPSScalarHelpers(OS, Opts.TheArch, MIPSScalarHelpers, Opts.Image);
   // The accesses' types or assumptions are written only when an access can
   // name a type; otherwise every access keeps its portable byte copy.
   UnalignedTypesWritten = Opts.UseUnalignedPointers && NeedsUnalignedTypes;
@@ -2045,7 +2046,7 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
 void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   const auto NativeFrameConvention = [&](const HighFunc &Function) {
     if (isMIPS(Opts.TheArch))
-      OS << mips::dspSourceCAttribute(
+      OS << mips::sourceCompilerCAttribute(
           Opts.TheArch, Opts.Image,
           MIPSScalarHelpers.count(Intrinsic::MIPSReadDSPControl) ||
               MIPSScalarHelpers.count(Intrinsic::MIPSWriteDSPControl));
@@ -5170,8 +5171,10 @@ void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
       (mips::sourcePreservesDSPControl(Opts.TheArch, Opts.Image) ||
        MIPSScalarHelpers.count(Intrinsic::MIPSReadDSPControl) ||
        MIPSScalarHelpers.count(Intrinsic::MIPSWriteDSPControl));
-  if (PreserveDSPControl)
-    OS << mips::DSPSourceCBegin;
+  const bool AvoidMSA = mips::sourceAvoidsMSA(Opts.TheArch, Opts.Image);
+  if (isMIPS(Opts.TheArch))
+    OS << mips::sourceCompilerCBegin(Opts.TheArch, Opts.Image,
+                                     PreserveDSPControl, AvoidMSA);
   std::set<std::string> Records;
   std::function<void(const TypeRef &)> RecordType = [&](const TypeRef &Type) {
     if (Type && Type->Kind == NdTypeKind::Array) {
@@ -5271,7 +5274,7 @@ void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
         OS << "\n";
     }
   recordSourceNames(Funcs);
-  if (PreserveDSPControl)
+  if (PreserveDSPControl || AvoidMSA)
     OS << mips::DSPSourceCEnd;
 }
 

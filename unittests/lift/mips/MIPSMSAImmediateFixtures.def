@@ -1,0 +1,13 @@
+// Independent GNU binutils 2.47 I5 instruction words (wd=0, ws=1).
+MSA_I5(Add, 0x78000806, false)
+MSA_I5(Sub, 0x78800806, false)
+MSA_I5(Equal, 0x78000807, true)
+MSA_I5(SignedLess, 0x79000807, true)
+MSA_I5(UnsignedLess, 0x79800807, false)
+MSA_I5(SignedLessEqual, 0x7a000807, true)
+MSA_I5(UnsignedLessEqual, 0x7a800807, false)
+MSA_I5(SignedMaximum, 0x79000806, true)
+MSA_I5(UnsignedMaximum, 0x79800806, false)
+MSA_I5(SignedMinimum, 0x7a000806, true)
+MSA_I5(UnsignedMinimum, 0x7a800806, false)
+#undef MSA_I5

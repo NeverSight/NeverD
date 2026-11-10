@@ -28,8 +28,8 @@
 #include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/MIPS/MIPSBarrierSource.h"
-#include "neverd/backend/MIPS/MIPSDSPSource.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
+#include "neverd/backend/MIPS/MIPSSourceCompiler.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/llvm/AArch64/LLVMEntryABI.h"
 #include "neverd/backend/llvm/LLVMCallContract.h"
@@ -747,6 +747,8 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
       FuncTy, llvm::GlobalValue::ExternalLinkage, EmittedName, Mod);
   if (mips::imagePreservesDSPControl(Img))
     mips::applyDSPSourceAttributes(*LLVMFunc);
+  if (mips::sourceAvoidsMSA(TargetArch, Img))
+    mips::applyNoMSASourceAttributes(*LLVMFunc);
   if (Img && isMIPS(TargetArch))
     if (const auto Mode = Img->instructionModeAt(Func.Entry))
       mips::applyInstructionModeLLVMAttributes(*LLVMFunc, *Mode);
@@ -1771,10 +1773,15 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   std::string VerifyErr;
   // The module is one DSP state context, including ordinary sibling bodies
   // and declarations whose state operations belong to another source shard.
-  if (PreserveDSPControl)
+  const bool AvoidMSA = mips::sourceAvoidsMSA(TheArch, Img_);
+  if (PreserveDSPControl || AvoidMSA)
     for (llvm::Function &Function : *Mod_)
-      if (!Function.isIntrinsic())
-        mips::applyDSPSourceAttributes(Function);
+      if (!Function.isIntrinsic()) {
+        if (PreserveDSPControl)
+          mips::applyDSPSourceAttributes(Function);
+        if (AvoidMSA)
+          mips::applyNoMSASourceAttributes(Function);
+      }
   llvm::raw_string_ostream VES(VerifyErr);
   if (llvm::verifyModule(*Mod_, &VES))
     syncWarning() << "med_llvm_emitter: verification: " << VerifyErr << "\n";

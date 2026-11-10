@@ -107,14 +107,26 @@ constexpr bool isReservationIntrinsic(Intrinsic Id) {
 constexpr bool isSystemIntrinsic(Intrinsic Id) {
   return Id == Intrinsic::MIPSReadHardwareRegister ||
          Id == Intrinsic::MIPSDisableInterrupts ||
-         Id == Intrinsic::MIPSEnableInterrupts;
+         Id == Intrinsic::MIPSEnableInterrupts ||
+         Id == Intrinsic::MIPSReadCP0Word || Id == Intrinsic::MIPSWriteCP0Word;
 }
 constexpr bool scalarMayWriteMemory(Intrinsic Id) {
   return mergeStore(Id).has_value() ||
          Id == Intrinsic::MIPSStoreConditionalWord;
 }
 constexpr bool isStatefulScalar(Intrinsic Id) {
-  return isReservationIntrinsic(Id) || isSystemIntrinsic(Id);
+  return isReservationIntrinsic(Id) || isSystemIntrinsic(Id) ||
+         Id == Intrinsic::MIPSPause;
+}
+constexpr bool supportedCP0Word(uint64_t Index, bool Write) {
+  switch (Index) {
+#define NEVERD_MIPS_CP0(Index, Name, Writable)                                 \
+  case Index:                                                                  \
+    return !Write || Writable;
+#include "neverd/ir/intrinsics/MIPS/MIPSCP0.def"
+  default:
+    return false;
+  }
 }
 constexpr bool supportedHardwareRegister(uint64_t Index) {
   return Index < 4 || Index == 29;
@@ -145,12 +157,23 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
       (S.Target != Arch::Unknown && !isMIPS(S.Target)))
     return false;
   if (isStatefulScalar(Id)) {
-    if (isMIPS64(S.Target) || !S.OutputWritable || S.OutputBytes != 4)
+    if (isMIPS64(S.Target))
+      return false;
+    if (Id == Intrinsic::MIPSPause)
+      return S.Inputs == 1 && !S.OutputBytes;
+    if (Id == Intrinsic::MIPSWriteCP0Word)
+      return S.Inputs == 3 && !S.OutputBytes && S.FirstBytes == 1 &&
+             S.SecondBytes == 4 && S.FirstConstant &&
+             supportedCP0Word(*S.FirstConstant, true);
+    if (!S.OutputWritable || S.OutputBytes != 4)
       return false;
     if (Id == Intrinsic::MIPSLoadLinkedWord)
       return S.Inputs == 2 && S.FirstBytes == 4;
     if (Id == Intrinsic::MIPSStoreConditionalWord)
       return S.Inputs == 3 && S.FirstBytes == 4 && S.SecondBytes == 4;
+    if (Id == Intrinsic::MIPSReadCP0Word)
+      return S.Inputs == 2 && S.FirstBytes == 1 && S.FirstConstant &&
+             supportedCP0Word(*S.FirstConstant, false);
     if (Id == Intrinsic::MIPSReadHardwareRegister)
       return S.Inputs == 2 && S.FirstBytes == 1 && S.FirstConstant &&
              supportedHardwareRegister(*S.FirstConstant);

@@ -83,6 +83,12 @@ MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
   const uint16_t SignedImmediate =
       Extended ? Immediate : uint16_t(int16_t(int8_t(Immediate)));
   if (Extended && HasMIPS16E2) {
+    if (First == 0xf140 && Half == 0x3018)
+      return Encoding{0x00000140}; // PAUSE
+    if ((First == 0xf000 || First == 0xf001) && (Half & 0xff00) == 0x6700 &&
+        mips::supportedCP0Word(Half & 31, First & 1))
+      return Encoding{uint32_t(0x40000000 | ((First & 1) << 23) | (RY << 16) |
+                               ((Half & 31) << 11))};
     if (First == 0xf0c0 && Half == 0x3010)
       return Encoding{0x000000c0}; // EHB
     if (!(First & 63) && Half == 0x3014)

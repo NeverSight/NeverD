@@ -1,0 +1,168 @@
+{
+  "schema": 1,
+  "scope": "MIPS16e2 bounded CP0 word transfers and PAUSE; four DSP forms; eleven MSA I5 integer families in four lane widths; composed source compiler constraint",
+  "source_head": "37ee30b14863e031d8715a744cb428123fb61cbd",
+  "post_qualification_base_review": {
+    "qualified_source_head": "37ee30b14863e031d8715a744cb428123fb61cbd",
+    "qualified_dev": "081112044b98c21d15e480aabe5f5e7e1c703d90",
+    "later_dev": "7036d0fe4e3031cf0a3ffa774b7e3530750ed2fb",
+    "later_pr": 2305,
+    "paths": [
+      "docs/architecture.md",
+      "docs/testing.md",
+      "lib/ir/low/X86/RegistrationDisplayFrame.cpp",
+      "unittests/lift/eh/X86SEHDisplayTests.cpp"
+    ],
+    "assessment": "Only x86 SEH finally-body display range indexing and its tests/documentation; no MIPS, generic C source or compiler contract changes. Owner requires complete x86 registration scopes and ExceptHandler3/4 metadata, absent from qualified MIPS ELF inputs. Prior validated MIPS paths remain applicable; measured binaries retain their exact qualified source head rather than claiming timings for the later merge binary."
+  },
+  "feature_base": "9d19cc4eb7bae81d71aa4bdba911ef3e6a6276b7",
+  "feature_head": "2d4c5031661e8b783fd80a2131d7b26e2a25e9ba",
+  "integrated_dev": "081112044b98c21d15e480aabe5f5e7e1c703d90",
+  "host": "Apple M4 Max, 16 logical CPUs, 128 GiB RAM, macOS 15.6.1 arm64; shared host, no affinity pinning",
+  "build": "Release; AppleClang 17; NeverD prebuilt LLVM 23 r6; enabled Highway, mimalloc, simdjson, simdutf and TBB; CPU emulation disabled; semantic tests enabled",
+  "products": {
+    "neverd": {
+      "sha256": "35c423a448993dd25a0d308230abef7d52c8924561c827953da1aa5eeb0b255f",
+      "bytes": 3679656
+    },
+    "libneverd.dylib": {
+      "sha256": "b118294d771049f938712c7d384d7cd01897fa46a76dca614d5582eee2ab759e",
+      "bytes": 171714400
+    },
+    "neverd-mips-bench": {
+      "sha256": "99f5c1ef68dccb67f67d9fa7714e054a69478034926d3e24637a85946234072f",
+      "bytes": 20222240
+    }
+  },
+  "dependencies": {
+    "capstone": {
+      "pr": 26,
+      "leaf": "b7b610ceb1c4242b6c02184e611dd3c862fa8963",
+      "merge": "f2d8eda9946ee061ba03b22604e7ebcc9e1fae37",
+      "normal_tests": 7,
+      "diet_tests": 7
+    },
+    "unicorn": {
+      "pr": 19,
+      "leaf": "f00305569977bfcb30b8867824235f00ab536b40",
+      "tests": 3,
+      "merge": "0f0be86ffd674092061e63b7a50e82505475c756"
+    }
+  },
+  "reference_library": {
+    "source": "f00305569977bfcb30b8867824235f00ab536b40",
+    "old_sha256": "f9f05ab2544f60acb25b2c08c3eb1a346c26962dcb6c05521fb90e933549f8cf",
+    "sha256": "978571a25ef478998393c60ddf13ea5a08e1771348632ec46f2b6336e31f60c1",
+    "path": "build-mips/roundtrip/libunicorn.2.dylib"
+  },
+  "ctest": {
+    "integrated_e4863bb64": {
+      "tests": 1614,
+      "failures": 0,
+      "skipped": 36,
+      "passed": 1578
+    },
+    "helper_45dba3a94": {
+      "tests": 126,
+      "failures": 0,
+      "skipped": 0,
+      "passed": 126
+    },
+    "delivery": {
+      "tests": 1316,
+      "failures": 0,
+      "skipped": 73,
+      "passed": 1243
+    }
+  },
+  "source": {
+    "fresh_execution_groups": {
+      "classic": 400,
+      "micro": 20,
+      "mips16": 312,
+      "mips16e2": 520
+    },
+    "identical_source_execution_reuse": {
+      "dsp": {
+        "identical_generated_sources": 324,
+        "prior_execution_groups": 648,
+        "prior_report": "feature-source-dsp/results.json",
+        "prior_report_sha256": "8de1e09ab23122be5248f5d80699433426e680e24953c276c5562a915b75d656"
+      },
+      "msa": {
+        "identical_generated_sources": 1412,
+        "prior_execution_groups": 2824,
+        "prior_report": "integrated-source-msa-sharded-results.json",
+        "prior_report_sha256": "569e509d9af229a8796cdeb9c7406fcee3e157110b7d5a1eaa1e8a4c6f4a19fa"
+      }
+    },
+    "total_qualified_groups": 4724,
+    "stateful_e2_refusals": 52,
+    "mips16_qualification_refusals": 16,
+    "standalone_dsp_execution_groups": 24,
+    "actual_compiler_feature_probes": 12,
+    "msa_wide_execution_groups": 4,
+    "msa_storage_declaration_checks": 4,
+    "original_reference_observations": 7464
+  },
+  "limitations": [
+    "Generic CP0, cache/MT, DSP accumulators/revisions and remaining MSA operations are not completed.",
+    "No original MIPS16e2 reference engine or hardware execution; manual/encoding/LowIR model checks and generated-source execution are distinct.",
+    "Stateful CP0/PAUSE native source is explicitly refused; no scheduler, interrupts, exception delivery or blocked-path EPC behavior inferred.",
+    "Source execution reuse requires identical input ELF, complete C, toolchain and reference hashes; it is not counted as fresh execution.",
+    "Linux/Windows hosts, disabled acceleration/allocator configurations, MSA floating point/control state and universal performance superiority were not qualified in this increment."
+  ],
+  "local_evidence_root": "build-mips/mips-cp0-immediate",
+  "recovery_index": "recovery-index.json",
+  "cleanup_receipt": "cleanup-summary.json",
+  "firmware": {
+    "sha256": "6e1129aa58cb398a2453876ea4aa2395feecc84ecf78ed8ab43efd534b40e475",
+    "outputs": [
+      {
+        "backend": "highc",
+        "selection": "call",
+        "equal": true,
+        "output": {
+          "sha256": "746482c701b92ddc0e77a202028fe20ec48232597fc05dbf175209dae56158e4",
+          "bytes": 3038
+        }
+      },
+      {
+        "backend": "highc",
+        "selection": "discovered",
+        "equal": true,
+        "output": {
+          "sha256": "30a79315c656ec1d1d124120928864b0a784ed1215bd1156c2d98d713708db87",
+          "bytes": 9323
+        }
+      },
+      {
+        "backend": "llvmc",
+        "selection": "call",
+        "equal": true,
+        "output": {
+          "sha256": "f6a00e8664b28617f13e289fbee1067450351f3d5fabd5b291d62c7876305a96",
+          "bytes": 4099
+        }
+      },
+      {
+        "backend": "llvmc",
+        "selection": "discovered",
+        "equal": true,
+        "output": {
+          "sha256": "ea9cb10ed758722f9bf8d8678e9f8b66010c1432332417739e55821f9d809f33",
+          "bytes": 8453
+        }
+      }
+    ]
+  },
+  "performance": {
+    "same_base_feature_measured": true,
+    "warmed_alternating_pairs": 7,
+    "primitive_delivery_binary_identical_to_measured": true,
+    "matched_firmware_requests_per_sample": 20,
+    "non_timing_outputs_identical": true,
+    "raw_samples_and_timing_summaries": "local evidence only",
+    "cross_tool_ranking": false
+  }
+}

@@ -883,6 +883,94 @@ TEST_P(MIPSMSA, ImmediateLogicalBytesAndThreeInputMasksPreserveEveryBit) {
   }
 }
 
+TEST_P(MIPSMSA, IntegerImmediatesCoverEveryValueAndFullLanePredicates) {
+  enum class Operation {
+#define MSA_I5(Name, Word, Signed) Name,
+#include "MIPSMSAImmediateFixtures.def"
+  };
+  const struct {
+    Operation Op;
+    uint32_t Word;
+    bool Signed;
+  } Cases[] = {
+#define MSA_I5(Name, Word, Signed) {Operation::Name, Word, Signed},
+#include "MIPSMSAImmediateFixtures.def"
+  };
+  auto Image = msaImage(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  for (auto C : Cases)
+    for (unsigned Format = 0; Format != 4; ++Format)
+      for (unsigned Immediate = 0; Immediate != 32; ++Immediate)
+        for (unsigned Destination : {1u, 31u}) {
+          unsigned Bytes = 1u << Format, Bits = Bytes * 8;
+          const int64_t Imm =
+              C.Signed ? int(Immediate ^ 16) - 16 : int(Immediate);
+          for (unsigned Pattern = 0; Pattern != 6; ++Pattern) {
+            std::vector<uint8_t> Input(16), Expected(16);
+            for (unsigned At = 0; At != 16; At += Bytes) {
+              const llvm::APInt B(Bits, uint64_t(Imm));
+              const auto A =
+                  Pattern == 0   ? B
+                  : Pattern == 1 ? B + 1
+                  : Pattern == 2 ? B - 1
+                  : Pattern == 3 ? llvm::APInt::getSignedMinValue(Bits)
+                  : Pattern == 4 ? llvm::APInt::getSignedMaxValue(Bits)
+                                 : llvm::APInt::getAllOnes(Bits);
+              const auto X = C.Signed ? A.sext(128) : A.zext(128),
+                         Y = C.Signed ? B.sext(128) : B.zext(128);
+              llvm::APInt Result(128, 0);
+              bool Predicate = false, Compare = false;
+              switch (C.Op) {
+              case Operation::Add:
+                Result = X + Y;
+                break;
+              case Operation::Sub:
+                Result = X - Y;
+                break;
+              case Operation::Equal:
+                Predicate = X == Y;
+                Compare = true;
+                break;
+              case Operation::SignedLess:
+              case Operation::UnsignedLess:
+                Predicate = X.slt(Y);
+                Compare = true;
+                break;
+              case Operation::SignedLessEqual:
+              case Operation::UnsignedLessEqual:
+                Predicate = X.sle(Y);
+                Compare = true;
+                break;
+              case Operation::SignedMaximum:
+              case Operation::UnsignedMaximum:
+                Result = X.sgt(Y) ? X : Y;
+                break;
+              case Operation::SignedMinimum:
+              case Operation::UnsignedMinimum:
+                Result = X.slt(Y) ? X : Y;
+                break;
+              }
+              if (Compare)
+                Result = Predicate ? llvm::APInt::getAllOnes(128)
+                                   : llvm::APInt(128, 0);
+              for (unsigned N = 0; N != Bytes; ++N) {
+                Input[At + N] = A.extractBitsAsZExtValue(8, N * 8);
+                Expected[At + N] = Result.extractBitsAsZExtValue(8, N * 8);
+              }
+            }
+            NdOpEmulator E(Image);
+            E.setStrictMode(true);
+            E.setRegisterBytes(mipsreg::w(1), Input);
+            ASSERT_TRUE(msaExecute(D, GetParam(),
+                                   C.Word | (Format << 21) | (Immediate << 16) |
+                                       (Destination << 6),
+                                   E));
+            EXPECT_EQ(E.getRegisterBytes(mipsreg::w(Destination)), Expected);
+          }
+        }
+}
+
 INSTANTIATE_TEST_SUITE_P(Endian, MIPSMSA,
                          ::testing::Values(Arch::MIPS32, Arch::MIPS32EL));
 } // namespace
