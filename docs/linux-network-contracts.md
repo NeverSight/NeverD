@@ -315,7 +315,10 @@ socket reuse stop explicitly. Descriptor aliases share the failed description.
 The failure count accepts 1 through `UINT32_MAX`, independently of the 4,096
 stored TCP/UDP entries. It retains one counter and creates no per-attempt
 inventory. The exhausted count is checked before incrementing, including at
-`UINT32_MAX`. Execution instruction, event and time budgets still bound each
+`UINT32_MAX`. Its diagnostic reports the number of consumed failures and states
+that the next result is not supplied. The pending `connect` retains no result;
+exhaustion supplies neither another errno nor a successful connection.
+Execution instruction, event and time budgets still bound each
 run. JSON and typed input use the shared validator; decimal strings follow the
 existing integer wire contract. Allowed errors match explicit TCP attempts:
 EINTR, ECONNREFUSED, ETIMEDOUT, ENETUNREACH, EHOSTUNREACH and EACCES. The guest must
