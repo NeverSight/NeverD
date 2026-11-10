@@ -1072,7 +1072,9 @@ again; a function's new name usually does not.  `metadata.named_view_comment_pat
 documents written from the one a view had with the image's comments, functions' new
 names, or data's new names, taken into it, where those alone reached it since it was
 decorated.  `metadata.named_view_renders` counts the documents the engine rendered a
-function for, rather than built from pages kept.  `metadata.local_type_names_prepared`
+function for, rather than built from pages kept.  `metadata.view_store_name_reads` counts
+the times an owner's views read which store they are kept under, which an edit that
+keeps the stores for what it changed says as it takes it.  `metadata.local_type_names_prepared`
 counts the idle steps that found read what a declaration of local types checks its
 names against (`neverd_local_types_prepare`), which the step after each request and
 after each other idle step reads once the session has read its local types.  A replica that takes a function's

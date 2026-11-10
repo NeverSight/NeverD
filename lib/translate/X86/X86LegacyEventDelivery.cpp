@@ -396,6 +396,12 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
     return invalid("resume the pending legacy event before accepting another");
   if (!validEvent(Input))
     return invalid("invalid legacy event classification or frame data");
+  if (State.Halted &&
+      (Input.SavedEIP != State.EIP ||
+       (Input.Kind != Kind::Interrupt && Input.Kind != Kind::NMI &&
+        !(Input.Kind == Kind::Trap && Input.Vector == 1))))
+    return invalid(
+        "legacy halt wake requires IRQ, NMI or #DB at the saved EIP");
   if (Input.Kind == Kind::NMI && State.STIBlocked && !State.SSBlocked &&
       !State.NMIBlocked && !Options.NMIBlockedBySTI)
     return invalid("legacy NMI under STI requires a bound inhibition policy");
@@ -418,6 +424,7 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
   if (State.Debug && Input.Kind != Kind::Software)
     State.Debug->PendingData = 0;
   State.STIBlocked = State.SSBlocked = false;
+  State.Halted = false;
   if (Input.Kind == Kind::NMI)
     State.NMIBlocked = true;
   if (Input.Kind == Kind::Fault && Input.Vector == 14)

@@ -231,6 +231,17 @@ FFFFh in 16-bit code, MOV/POP SS, LSS, CLI/STI and pending IRQ/NMI shadows.
 INT1, INT3 and INTO cases disable KVM guest debugging and stop through HLT,
 so the original #DB reaches its real IDT entry instead of a debugger intercept.
 They compare saved RF and fallthrough, including a failed INT1 gate.
+
+`X86LegacyHaltTest.*` checks HLT's persistent wait state, fetch/fault priority,
+IRQ/NMI masking, single-step and execution-breakpoint ordering, and retained
+wake acceptance across delivery work/backing stops. `LegacyPaging/X86LegacyHaltNativeTest.*`
+compares original HLT prefixes, CPL0..3, flags, SS/STI shadows, debug traps and
+IRQ/NMI wake against KVM in legacy and PAE paging. The real IDT handlers stop
+with OUT markers; KVM guest debugging is disabled so #DB reaches the guest.
+`X86LegacySourceTest.Halt*` compiles exported host-x64 C at O0/O2 with Clang
+and NeverC, including an unselected fallthrough, repeated idle calls, handler
+IRET and delivery resume without another HLT attempt. This does not qualify
+SMI/INIT/RESET wake or change NeverC's supported source targets.
 IRQ injection waits for `KVM_EXIT_IRQ_WINDOW_OPEN`. The native debugger's RF
 bit and shutdown's undefined register bank are excluded; saved frame flags,
 CR2 and retained ordinary RAM remain checked. Repeat these tests on the
@@ -850,12 +861,26 @@ state are separate coverage.
 
 `MedTypePass.StackTopResultsAreNotRegisterRestores` distinguishes computed,
 partial and disjoint stack writes from unchanged saves on i386/x64, within a
-block and across predecessors. `I386CallContract.X87StoredBitsReturnThroughTheIntegerRegister`
+block and across predecessors. Byte-wise full and incomplete restoration,
+F16C writes and floating memory reads are included.
+`MedTypePass.PartialStackRestoresKeepIndependentBytesAcrossPaths` checks
+diamonds, reversed predecessor order and a backedge: one restored byte may
+not hide another byte's computed value. `I386CallContract.X87StoredBitsReturnThroughTheIntegerRegister`
 and `Win64CallContract.StackTransportedIntegerWinsOverAScratchFloat` cover
 COFF/ELF/Mach-O, HighC/LLVMC and default/NoOpt. On Linux x86 they compare both
 C routes at O0/O2 under UBSan with original i386/x64 instructions. Results
 are observed through integer registers, including raw x87-converted NaN bits;
 an unused floating temporary must not determine the source return type.
+The x64 test also executes F16C stores and reads when the host supports AVX
+and F16C; hosts without those features still check both source projections.
+
+`MedABIPass.IntrinsicStoresInvalidateStackSetupButPreserveRegisters` checks
+i386/x64 F16C and ARM64 writeback calls in COFF, ELF and Mach-O. Local and
+predecessor register setup survives, overwritten stack inputs remain unknown,
+and a later ordinary store can establish a fresh argument. Invalid shapes
+remain barriers. `AArch64WritebackMemory.CallSetupDistinguishesEveryStoreFamilyFromLoads`
+covers the scalar, vector, pair and structure fixture inventories; forwarded
+scalar FP parameters also retain their independent register proof.
 
 `NeverDLocalTypesDebugContextTests` also checks recursive callback borrows and
 portable parameter qualifiers. Its recursive-record case checks that both
@@ -14266,6 +14291,14 @@ with Clang for all twelve target/format combinations, without host headers.
 `OptimizedSwitchTablesPreservePhysicalAndTwoLevelSelectors` executes original
 x64 machine code and both optimized/unoptimized lifted LLVM at O0/O2, checking
 1024 selectors plus the two-level default boundary against independent results.
+
+`MedABIPass.PairAlignedWideStackStoreKeepsItsLanes` covers the pair-aligned
+conventions (ARM AAPCS and little-endian MIPS o32). One aligned store of a
+stack `double` keeps both slot lanes when a loop surrounds the call, and when an
+earlier call leaves a later slot unproven; that slot stays unknown.
+`MedABIPass.CoveredCallSetupNeedsNoPredecessor` checks that stores covering
+every slot in the call block keep the stack proof complete, and that the proof
+names the slots of such a wide store for the block scan to split.
 
 `MedABIPass.SplitStackArgumentSetupRequiresEveryIncomingPath` checks all twelve
 architecture/format cells, block-order changes, conflicting or missing stores,

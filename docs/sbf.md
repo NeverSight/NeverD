@@ -663,6 +663,16 @@ payload when the caller selects that tag. The existing four-alternative limit
 still applies: if another split exceeds it, the incoming bounds are retained
 without that refinement. Unknown ordinary scalars and 32-bit comparisons gain
 no full-width exclusion from this rule.
+A repeated comparison can also select a Boolean register assigned on its earlier
+edges. The local state retains one comparison over unchanged register contents,
+including its opcode, width and normalized operand. At a join it keeps only
+Boolean correlations established on every incoming path; repeating that
+comparison then restores the matching zero or one. Full-width register copies
+preserve these carriers. Writes to either compared operand, carrier redefinition,
+projection of an operand, calls and loop backedges discard the affected facts.
+A different comparison replaces the relation. The relation stays within one
+invocation and uses fixed state storage charged to the existing memory budget;
+it adds no path specializations or input-validity assumptions.
 If the same block stores the compared register as a full 64-bit word immediately
 before the comparison, the selected edge also narrows that stored value. The
 typed scratch value, its formal origin and the returned memory postcondition

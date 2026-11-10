@@ -85,7 +85,7 @@ bool recoverI386RegistrationCookieCall(const MedFunc &Func,
   std::optional<MedVar> Argument;
   for (size_t I = CallIndex; I != 0; --I) {
     const auto &Op = Block.Ops[I - 1];
-    if (isAbiRecoveryBarrier(Op))
+    if (isAbiRecoveryBarrier(Op, /*RegistersOnly=*/true))
       break;
     if (Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == x86reg::RCX &&
         Op.Output.Size == 4) {

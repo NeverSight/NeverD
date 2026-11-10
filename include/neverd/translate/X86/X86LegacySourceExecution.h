@@ -50,8 +50,9 @@ public:
                            const X86LegacyExecutionOptions &Options)
       : State(State), Memory(Memory), Options(Options) {}
 
-  /// No guest accesses. Pending delivery blocks selection. A successful
-  /// selection preserves the previous instruction receipt for inspection.
+  /// No guest accesses. Pending delivery and a halted CPU block selection.
+  /// Selection and waiting preserve the previous instruction receipt for
+  /// inspection; neither starts an instruction or spends its budget.
   uint32_t select(uint64_t &Key);
   uint32_t step(uint64_t Key, llvm::ArrayRef<uint8_t> Bytes);
   uint32_t deliver(const X86LegacyEvent &Event);
