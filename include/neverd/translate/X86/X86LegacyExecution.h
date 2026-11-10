@@ -32,7 +32,7 @@ namespace neverd::translate {
 namespace detail {
 struct X86LegacyTaskContinuation;
 struct X86LegacyTransferContinuation;
-}
+} // namespace detail
 
 /// Low 32-bit architectural inputs for non-IA-32e SYSENTER/SYSEXIT.
 struct X86LegacySysenterState {
