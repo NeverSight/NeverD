@@ -1738,6 +1738,18 @@ conditional memory, invocation lifetime and both C routes remain open.
   `LLVMCPointerAddresses.*`, `COFFExceptionIR.*`, and the Windows EH corpus.
   Use `docs/testing.md` to select affected lift, patch, and store-forward checks.
 
+FS/GS scalar reads now share target-aware C rendering. Windows intrinsics
+are used only when their segment, target and 32-bit offset agree; other
+representable reads retain the complete address register through native
+assembly. Zero remains a segment offset, and LLVM integer-to-pointer offsets
+keep their unsigned source width in both loads and stores. Pointer results
+convert through `uintptr_t`; HighC floating loads retain typed memory helpers.
+Unsupported LLVMC segmented types, atomic reads and non-x86 targets fail
+explicitly instead of becoming ordinary memory accesses. Native Linux GS
+execution at O0/O2 and Windows x86/x64 target compilation cover this boundary;
+these checks do not qualify Windows runtime behavior or add general LLVMC
+segmented floating/aggregate or x86 assembly qword support.
+
 ## Workflow
 
 1. Capture the smallest public reproduction and the before/after C output.

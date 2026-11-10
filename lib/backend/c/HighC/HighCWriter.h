@@ -285,7 +285,7 @@ public:
   /// (exceptionEncodingIsOutsideWindows).
   static bool hidesRegistrationMemory(const HighFunc &Func);
   /// Use the same segmented-read spelling for declarations and expressions.
-  bool useMsvcSegmentedRead() const;
+  bool useMsvcSegmentedRead(const TypeRef &Ty) const;
   bool isEmbeddedRegistrationCallback(const HighStmt &Stmt, size_t I) const;
   bool isEmbeddedWindowsCallback(const HighStmt &Stmt, size_t I) const;
   void writeEmbeddedNativeCallbacks(const HighStmt &Stmt, int Indent);
@@ -305,7 +305,8 @@ public:
       NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None,
       NdMemoryAddressSpace MemoryAddressSpace = NdMemoryAddressSpace::Default,
       bool ExactImageBytes = false,
-      MemoryLoadDestination *Destination = nullptr);
+      MemoryLoadDestination *Destination = nullptr,
+      std::optional<uint64_t> ConstantOffset = std::nullopt);
   std::string memoryStoreExpr(
       const TypeRef &Ty, llvm::StringRef Addr, llvm::StringRef Val,
       NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None,

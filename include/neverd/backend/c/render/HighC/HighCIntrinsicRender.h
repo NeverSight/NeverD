@@ -225,13 +225,6 @@ std::string renderX86InterruptStatement(
     Arch TheArch, const HighExpr &Call, llvm::StringRef ResultVar,
     unsigned ResultSize, std::function<std::string(const HighExpr &)> ExprFn);
 
-/// MSVC `<intrin.h>` GS/FS scalar load, or empty when this access is not that
-/// x86 form.
-std::string renderX86MsvcSegmentedLoad(Arch TheArch, unsigned SizeBytes,
-                                       llvm::StringRef Addr,
-                                       NdMemoryOrdering Ordering,
-                                       NdMemoryAddressSpace AddressSpace);
-
 const char *hiloCollapseExpr(Intrinsic Id);
 
 /// Format a raw mnemonic + operands as an MSVC `__asm { ... }` statement.
