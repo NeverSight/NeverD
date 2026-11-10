@@ -87,8 +87,37 @@ A64_ENTRY_TEXT(kAll, "all")
 A64_ENTRY_TEXT(kTrue, "true")
 A64_ENTRY_TEXT(kNativeABIVersion, "ptrauth.abi-version")
 A64_ENTRY_VALUE(unsigned, kClassicABIVersion, 0)
+A64_ENTRY_TEXT(kBackendExport, "NEVERD_ARM64E_ENTRY_BACKEND")
+A64_ENTRY_TEXT(kBackendObject, "entry-backend.o")
+A64_ENTRY_TEXT(kBackendDwarfObject, "entry-backend-dwarf.o")
+A64_ENTRY_TEXT(kOriginalIR, "entry-original.ll")
+A64_ENTRY_TEXT(kOriginalDwarfIR, "entry-original-dwarf.ll")
+A64_ENTRY_TEXT(kOriginalTrap, "brk #0; brk #0; brk #0; brk #0")
+A64_ENTRY_TEXT(kIncompatibleCFI, "classic arm64e requires the LLVM fork's "
+                                 "native B-key unwind ABI; r6 is not qualified")
+A64_ENTRY_TEXT(kPublicationInput, "NEVERD_ARM64E_ENTRY_ORIGINAL")
+A64_ENTRY_TEXT(kPublicationOutput, "NEVERD_ARM64E_ENTRY_INSTALLED")
+A64_ENTRY_TEXT(kPublicationReceipt, "NEVERD_ARM64E_ENTRY_RECEIPT")
+A64_ENTRY_TEXT(kPublicationDwarf, "NEVERD_ARM64E_ENTRY_DWARF")
+A64_ENTRY_TEXT(kPublicationUnavailable,
+               "explicit native entry publication inputs are required")
+A64_ENTRY_TEXT(kMachOPrefix, "_")
+A64_ENTRY_VALUE(unsigned, kPublicEntryCount, 26)
+A64_ENTRY_TEXT(kLayoutRefusalProperty, "entry_publication_layout_refusal")
+A64_ENTRY_TEXT(kReceiptRejected, "entry publication receipt rejected")
+A64_ENTRY_TEXT(kReceiptSymbol, "symbol")
+A64_ENTRY_TEXT(kReceiptOriginal, "original")
+A64_ENTRY_TEXT(kReceiptInstalled, "installed")
+A64_ENTRY_TEXT(kReceiptEntries, "entries")
+A64_ENTRY_TEXT(kReceiptFunctions, "functions")
+A64_ENTRY_TEXT(kReceiptText, "text")
+A64_ENTRY_TEXT(kReceiptAddress, "address")
+A64_ENTRY_TEXT(kReceiptOffset, "offset")
+A64_ENTRY_TEXT(kReceiptSize, "size")
+A64_ENTRY_TEXT(kNativeTextSection, "__text")
 A64_ENTRY_TEXT(kNativeCaller, R"cpp(
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #ifdef NEVERD_ENTRY_DWARF
 #define ENTRY_DWARF() asm volatile(".cfi_escape 0x2e, 0")
@@ -187,8 +216,10 @@ template<class T> T rotated(T value) {
   value.v[count-1] = first;
   return value;
 }
-int main() {
+int main(int, char **) {
   ENTRY_DWARF();
+  fputs("neverd-entry-caller-entered\n", stdout);
+  fflush(stdout);
   if (ENTRY_INVOKE(entry_scalar)(0x8123456789abcdefULL) != 0x8123456789abcdefULL) return 1;
   __uint128_t w = (__uint128_t(0x9876543210fedcbaULL) << 64) |
                   0x123456789abcdef0ULL;
@@ -251,6 +282,8 @@ int main() {
   HVA16 after_hva_throw = ENTRY_INVOKE(entry_hva_throwing)(0,e);
   if (memcmp(&g, &after_large_throw, sizeof(g)) ||
       memcmp(&expected_e, &after_hva_throw, sizeof(e))) return 29;
+  fputs("neverd-entry-caller-passed\n", stdout);
+  fflush(stdout);
   return 0;
 }
 )cpp")

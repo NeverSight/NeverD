@@ -555,3 +555,77 @@ delivered to the runners; this was not a cold source build there. The local
 case hashes. Both hosts reported Apple M1 (Virtual); CPA/CPA2 remained absent
 or zero, and no self-hosted runner was registered, so native CPTA-on remains
 unqualified.
+
+## Reconstructed entries through NeverD codegen and publication
+
+Use `--producer neverd` with `scripts/verify_arm64e_entry.py` to export the
+reconstructed entry objects through `Codegen::compile`. The independent Apple
+compiler builds the caller and links the image. The exported objects must
+already have the classic arm64e subtype and compatible signed-return CFI;
+neither the verifier nor linker repairs those identities. In particular, r6
+is rejected when it emits `DW_CFA_AARCH64_negate_ra_state`. Use a separate
+source build of the pinned NeverSight LLVM fork for this qualification; the
+default r6 selection stays unchanged.
+
+Add `--publish` to exercise `bindSourcePatch` and `installSourcePatch` on the
+same reconstructed fixed-C entry matrix. The admitted original dylib reserves
+TEXT/header capacity and contains 26
+public trapping entries and the independently compiled native caller/thrower.
+Native validation first requires that original image to enter its caller and
+then trap before the completion marker; a startup trap is insufficient. It
+installs all 26 reconstructed entries, preserving the original caller and its
+address-diverse signed entry pointers. The installed image must pass every
+value, catch, cleanup, post-exception and corrupted-pointer check. This is a
+complete published fixture image, not automatic admission of arbitrary lifted
+modules.
+
+The same matrix first checks refusal of dylibs with `-Wl,-headerpad,0` and no
+such reservation. The initial default-linked local dylib also lacked capacity.
+Their DATA mapping blocks TEXT growth, and the current installer has no
+complete relocation contract to move those original addresses. The
+publication lane explicitly links with `-Wl,-headerpad,0x8000`; it does not
+qualify arbitrary tightly packed dylibs. Closing that layout gap remains
+required for general whole-image publication.
+
+The publication test also checks rejection before the receipt commits,
+unchanged input bytes, exact installed entry receipts and refusal to overwrite
+an existing output. Analysis-marked modules remain rejected. The verifier
+uses the installed function addresses from the receipt to check both signed
+frames and final compact/DWARF lookup encodings. Installed code occupies an RX
+segment without a section descriptor, so ordinary object disassembly only
+shows the original sections. The verifier extracts the loader-validated final
+text range, hashes it, and places those exact bytes in a temporary
+inspection-only object for the independent disassembler. That object is never
+executed; the signed published image remains the runtime input. Inspecting the
+original symbol table would otherwise check the old code. All 26 public identities and
+all exceptional carrier frames must be present.
+
+The matrix remains eight combinations per route: caller O0/O2, IA/IB stored
+entry pointers and compact/indexed-DWARF frames. NeverD's current
+`Codegen::compile` uses `CodeGenOptLevel::Less`; the caller optimization axis
+must not be reported as two NeverD optimization levels. Reports record that
+scope, the producer, the original trap status, installed addresses and image
+hashes. `--compile-only` exercises emission and publication checks without
+claiming native execution. Executable products are removed on success and
+failure, including partially exported backend objects.
+
+`neverd_codegen_qualified` requires native execution with the NeverD producer.
+`reconstructed_entry_publication_qualified` additionally requires the complete
+publication matrix. These fields concern the declared fixed-C fixture. They
+do not set `whole_image_publication_qualified` or `native_apple_cpta_qualified`:
+prototype recovery, asynchronous interruption through prologues/epilogues,
+variadic/non-C entries and general lifted-image admission still require their
+own implementation and native evidence.
+
+The [native backend/publication run](https://github.com/gmh5225/test_mac_intel/actions/runs/42877451388)
+passed on both macos-26 and xcode-27. Each host executed eight direct backend
+cases and eight installed-image cases, with six independent compiler-original
+PAC/unwind controls. All eight original images per host reached the caller
+marker and trapped; all eight unreserved layouts were refused without output.
+The [evidence record](evidence/arm64e-backend-publication-2026-11-11.json)
+binds source `3f5513c8e936cc057326213abfe976748c98ee50`, the source LLVM fork
+`5676029e378c9e37adc16c8216a8e8453ffafcae`, the local Release host and both
+runner reports. This was source-bound replay of a locally built host, not a
+cold runner build. The fork checkout was clean and prebuilt mode was disabled
+only in that separate build. The runners still reported no CPA/CPA2 feature;
+native Apple CPTA-on remains unqualified.

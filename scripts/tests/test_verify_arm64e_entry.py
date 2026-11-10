@@ -63,10 +63,15 @@ class EntryQualificationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             entry.check_disassembly(CASES["assembly"].replace("blrab", "blr"), 1)
 
-    def test_complete_matrix_cleanup_and_no_codegen_or_cpta_claim(self):
+    def test_complete_matrix_cleanup_and_qualified_producer_scope(self):
         contract = entry.native.fixture_contract()
-        for compile_only, fail in ((False, False), (True, False), (False, True)):
-            with self.subTest(compile_only=compile_only, fail=fail), tempfile.TemporaryDirectory() as temp:
+        for compile_only, fail, backend, publish in (
+                (False, False, False, False), (True, False, False, False),
+                (False, True, False, False), (False, False, True, False),
+                (False, False, True, True), (True, False, True, True),
+                (False, True, True, True)):
+            producer = entry.POLICY["backend_producer"] if backend else entry.POLICY["producers"][0]
+            with self.subTest(compile_only=compile_only, fail=fail, backend=backend, publish=publish), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
                 output = root / CASES["output_name"]
                 output.mkdir()
@@ -80,9 +85,26 @@ class EntryQualificationTests(unittest.TestCase):
                 def command(products, directory, label, argv, timeout, env=None):
                     stdout, code = CASES["compiler_version"], 0
                     if argv[0] == str(binary):
-                        (output / entry.POLICY["export_xml"]).write_text(CASES["export_xml"])
-                        for name in entry.POLICY["export_sources"]:
-                            (output / name).write_text(CASES["binary_bytes"])
+                        if entry.POLICY["unreserved_filter"] in argv:
+                            self.assertTrue(publish)
+                            self.assertTrue(Path(env[entry.POLICY["publication_input_environment"]]).exists())
+                            xml = CASES["export_xml"].replace(entry.POLICY["export_case"], entry.POLICY["unreserved_case"])
+                            Path(argv[-1].removeprefix(entry.POLICY["export_xml_option"])).write_text(xml)
+                        elif entry.POLICY["publication_filter"] in argv:
+                            self.assertTrue(publish)
+                            self.assertTrue(Path(env[entry.POLICY["publication_input_environment"]]).exists())
+                            Path(env[entry.POLICY["publication_output_environment"]]).write_text(
+                                CASES["binary_bytes"] * CASES["publication_image_repeats"])
+                            Path(env[entry.POLICY["publication_receipt_environment"]]).write_text(json.dumps(CASES["receipt"]))
+                            Path(argv[-1].removeprefix(entry.POLICY["export_xml_option"])).write_text(CASES["publication_xml"])
+                        else:
+                            (output / entry.POLICY["export_xml"]).write_text(CASES["export_xml"])
+                            for name in entry.POLICY["export_sources"]:
+                                (output / name).write_text(CASES["binary_bytes"])
+                            self.assertEqual(entry.POLICY["backend_environment"] in env, backend)
+                            if backend:
+                                for key in ("backend_object", "backend_dwarf_object", "original_ir", "original_dwarf_ir"):
+                                    (output / entry.POLICY[key]).write_text(CASES["binary_bytes"])
                     elif entry.POLICY["output_option"] in argv:
                         self.assertIn(entry.POLICY["sysroot_option"], argv)
                         self.assertEqual(argv[argv.index(entry.POLICY["sysroot_option"]) + 1], CASES["sdk_path"])
@@ -90,15 +112,20 @@ class EntryQualificationTests(unittest.TestCase):
                     elif label == entry.POLICY["sdk_label"]:
                         stdout = CASES["sdk_path"]
                     elif label.endswith(entry.native.POLICY["disassembly_suffix"]):
-                        stdout = CASES["assembly"]
+                        stdout = (CASES["inspection_assembly"] if entry.POLICY["inspection_suffix"] in label else CASES["assembly"])
                     elif label.endswith(entry.POLICY["sections_suffix"]):
                         stdout = CASES["sections_dwarf"] if CASES["dwarf_name_fragment"] in label else CASES["sections_compact"]
                     elif label.endswith(entry.POLICY["unwind_suffix"]):
                         stdout = CASES["unwind_dwarf"] if CASES["dwarf_name_fragment"] in label else CASES["unwind_compact"]
                     elif argv[0] == str(output / entry.POLICY["loader_binary"]):
-                        executed.append(label)
-                        if fail:
-                            code = CASES["failure_code"]
+                        if label.endswith(entry.POLICY["baseline_suffix"]):
+                            code = entry.POLICY["baseline_returncodes"][0]
+                            stdout = entry.POLICY["caller_entry_marker"]
+                        else:
+                            stdout = entry.POLICY["caller_entry_marker"] + entry.POLICY["caller_pass_marker"]
+                            executed.append(label)
+                            if fail:
+                                code = CASES["failure_code"]
                     return subprocess.CompletedProcess(argv, code, stdout, "")
 
                 policy = {**entry.POLICY, "source_files": [CASES["source_name"]]}
@@ -110,18 +137,60 @@ class EntryQualificationTests(unittest.TestCase):
                         mock.patch.object(entry.native, "command", side_effect=command):
                     if fail:
                         with self.assertRaises(subprocess.CalledProcessError):
-                            entry.run(output, binary, compiler, probe)
+                            entry.run(output, binary, compiler, probe, producer=producer, publish=publish)
                     else:
                         entry.run(output, binary, compiler, None if compile_only else probe,
-                                  compile_only=compile_only)
+                                  compile_only=compile_only, producer=producer, publish=publish)
                 report = json.loads((output / entry.POLICY["report_name"]).read_text())
                 self.assertEqual(report["native_reconstructed_entry_qualified"], not compile_only and not fail)
-                self.assertFalse(report["neverd_codegen_qualified"])
+                self.assertEqual(report["neverd_codegen_qualified"], backend and not compile_only and not fail)
+                self.assertEqual(report["reconstructed_entry_publication_qualified"], publish and not compile_only and not fail)
                 self.assertFalse(report["native_apple_cpta_qualified"])
                 self.assertFalse(report["whole_image_publication_qualified"])
                 self.assertEqual(len(executed), 0 if compile_only else 1 if fail else CASES["case_count"])
                 for path in output.iterdir():
                     self.assertNotIn(path.suffix, (".out", ".o", ".dylib"))
+
+    def test_receipt_cannot_omit_duplicate_or_alias_entries(self):
+        entry.check_receipt(CASES["receipt"])
+        variants = []
+        missing = json.loads(json.dumps(CASES["receipt"]))
+        missing["entries"].pop()
+        variants.append(missing)
+        duplicate = json.loads(json.dumps(CASES["receipt"]))
+        duplicate["entries"][-1] = duplicate["entries"][0]
+        variants.append(duplicate)
+        alias = json.loads(json.dumps(CASES["receipt"]))
+        alias["entries"][0]["original"] = alias["entries"][0]["installed"]
+        variants.append(alias)
+        for name in entry.exception_frames():
+            missing_frame = json.loads(json.dumps(CASES["receipt"]))
+            missing_frame["functions"].pop(name)
+            variants.append(missing_frame)
+        for receipt in variants:
+            with self.subTest(receipt=receipt), self.assertRaises(ValueError):
+                entry.check_receipt(receipt)
+
+    def test_installed_frames_require_the_receipt_addresses(self):
+        functions = entry.check_receipt(CASES["receipt"])
+        entry.check_disassembly(CASES["installed_assembly"], 0, functions)
+        entry.check_unwind(CASES["unwind_dwarf"], True, functions)
+        moved = {name: address + 1 for name, address in functions.items()}
+        with self.assertRaises(ValueError):
+            entry.check_disassembly(CASES["installed_assembly"], 0, moved)
+        with self.assertRaises(ValueError):
+            entry.check_unwind(CASES["unwind_dwarf"], True, moved)
+
+    def test_startup_traps_and_early_returns_do_not_qualify(self):
+        started = entry.POLICY["caller_entry_marker"]
+        passed = entry.POLICY["caller_pass_marker"]
+        trap = entry.POLICY["baseline_returncodes"][0]
+        entry.check_execution(subprocess.CompletedProcess([], trap, started), original=True)
+        entry.check_execution(subprocess.CompletedProcess([], 0, started + passed))
+        for code, output, original in ((trap, "", True), (trap, started + passed, True),
+                                        (0, started, True), (0, "", False), (0, started, False)):
+            with self.subTest(code=code, output=output, original=original), self.assertRaises(ValueError):
+                entry.check_execution(subprocess.CompletedProcess([], code, output), original=original)
 
     def test_requested_unwind_mode_matches_image_sections(self):
         entry.check_sections(CASES["sections_dwarf"], True)
@@ -135,6 +204,8 @@ class EntryQualificationTests(unittest.TestCase):
     def test_unwind_encoding_covers_each_exception_frame(self):
         entry.check_unwind(CASES["unwind_dwarf"], True)
         entry.check_unwind(CASES["unwind_compact"], False)
+        entry.check_unwind(CASES["unwind_regular_dwarf"], True)
+        entry.check_unwind(CASES["unwind_regular_compact"], False)
         for text, dwarf in ((CASES["unwind_dwarf"], False),
                             (CASES["unwind_compact"], True), ("", True)):
             with self.subTest(dwarf=dwarf), self.assertRaises(ValueError):
