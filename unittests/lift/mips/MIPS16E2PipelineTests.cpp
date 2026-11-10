@@ -27,6 +27,78 @@
 #include <vector>
 using namespace neverd;
 namespace {
+TEST(MIPS16E2Pipeline,
+     StatefulInstructionsSurviveDeadResultsAndRefuseNativeSource) {
+  const struct {
+    uint32_t Word;
+    Intrinsic Id;
+  } Cases[] = {{0xf00492c0, Intrinsic::MIPSLoadLinkedWord},
+               {0xf004d2c0, Intrinsic::MIPSStoreConditionalWord},
+               {0xf000304c, Intrinsic::MIPSReadHardwareRegister},
+               {0xf002674c, Intrinsic::MIPSDisableInterrupts},
+               {0xf003674c, Intrinsic::MIPSEnableInterrupts},
+               {0xf006670c, Intrinsic::MIPSDisableInterrupts},
+               {0xf007670c, Intrinsic::MIPSEnableInterrupts}};
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL})
+    for (auto C : Cases)
+      for (bool Dead : {false, true}) {
+        SCOPED_TRACE(C.Word);
+        SCOPED_TRACE(Dead);
+        mips_test::ELFBytes F(A);
+        F.abiFlags();
+        F.put(36, 0x74001000, 4);
+        F.put(24, 0x10101, 4);
+        F.put(0xec, 0x4400, 4);
+        F.put(0x100, C.Word >> 16, 2);
+        F.put(0x102, C.Word & 65535, 2);
+        F.put(0x104, Dead ? 0x6a07 : 0x6500, 2); // overwrite result or NOP
+        F.put(0x106, 0xe8a0, 2);
+        ELFLoader Loader;
+        auto I = Loader.loadBuffer(F.buffer());
+        ASSERT_TRUE(bool(I)) << llvm::toString(I.takeError());
+        for (bool LLVM : {false, true}) {
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.OnlyFunctionEntries = {I->Entry};
+          Options.LiftMode = LLVM;
+          Options.EmitDumpOutput = false;
+          auto Result = Pipeline().run(*I, Context, Options);
+          if (LLVM) {
+            EXPECT_FALSE(Result.Success);
+            EXPECT_NE(Result.Error.find(mips::kStatefulSourceUnsupported),
+                      std::string::npos)
+                << Result.Error;
+            continue;
+          }
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          EXPECT_EQ(Result.MedIRVerifierFailures, 0u);
+          unsigned Count = 0;
+          for (const auto &Function : Result.MedFuncs)
+            for (const auto &Block : Function.Blocks)
+              for (const auto &Op : Block.Ops)
+                if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+                    Op.Inputs[0].isConst() &&
+                    Op.Inputs[0].ConstVal == uint64_t(C.Id))
+                  ++Count;
+          EXPECT_EQ(Count, 1u);
+          CEmitterOptions Emit;
+          Emit.TheArch = A;
+          Emit.Format = BinaryFormat::ELF;
+          Emit.Image = &*I;
+          std::string Text;
+          llvm::raw_string_ostream Out(Text);
+          try {
+            (void)HighCEmitter().emit(Result.HighFuncs, Out, Emit);
+            FAIL() << "stateful intrinsic unexpectedly lowered to C";
+          } catch (const std::runtime_error &Error) {
+            EXPECT_NE(std::string(Error.what())
+                          .find(mips::kStatefulSourceUnsupported),
+                      std::string::npos);
+          }
+        }
+      }
+}
+
 TEST(MIPS16E2Pipeline, BarrierNamesDoNotCaptureDeferredNativeCallees) {
   const auto Name =
       std::string(mips::BarrierHelperPrefix) + mips::ExecutionHazardAsm;

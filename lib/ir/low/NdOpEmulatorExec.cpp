@@ -577,8 +577,13 @@ bool NdOpEmulator::executeStore(const LowOp &Op) {
   Value.resize(Size);
   if (!archLittleEndian(Img.Arch))
     std::reverse(Value.begin(), Value.end());
-  if (!storeMemoryBytes(*Addr, Value))
+  if (!storeMemoryBytes(*Addr, Value)) {
+    if (!strictMode()) {
+      MIPSReservationKnown = false;
+      MIPSReservationAddress.reset();
+    }
     return !strictMode();
+  }
   return true;
 }
 
@@ -586,6 +591,11 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
   if (Op.NumInputs < 1 || !Op.Inputs[0].isConst())
     return false;
   const Intrinsic Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+  // MIPS scalar intrinsics have their own executor. The reservation profile
+  // admits only the shared alignment check here, not foreign-ISA state or
+  // masked-memory executors with different memory ownership.
+  if (MIPSReservationGranule && Id != Intrinsic::RequireAligned)
+    return false;
   if (Id == Intrinsic::X86AMXState) {
     const auto Shape = x86AmxLowShape(Op, Img.Arch);
     if (Img.Arch != Arch::X64 || !x86AmxShapeIsValid(Shape))

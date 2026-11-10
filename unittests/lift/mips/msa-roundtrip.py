@@ -31,6 +31,8 @@ VECTOR_FUNCTIONS = ("msa_add_b", "msa_add_h", "msa_add_d", "msa_sub_b", "msa_sub
     for width in ("b", "h", "w", "d"))
 VECTOR_FUNCTIONS += tuple(f"msa_{op}_same_{w}" for op in ("add_a", "adds_a") for w in ("b", "h", "w", "d"))
 VECTOR_FUNCTIONS += ('msa_andi_b', 'msa_ori_b', 'msa_nori_b', 'msa_xori_b', 'msa_bsel', 'msa_bmnz', 'msa_bmz', 'msa_pcnt_b', 'msa_pcnt_h', 'msa_pcnt_w', 'msa_pcnt_d', 'msa_nlzc_b', 'msa_nlzc_h', 'msa_nlzc_w', 'msa_nlzc_d', 'msa_nloc_b', 'msa_nloc_h', 'msa_nloc_w', 'msa_nloc_d', 'msa_slli_b', 'msa_slli_h', 'msa_slli_w', 'msa_slli_d', 'msa_srli_b', 'msa_srli_h', 'msa_srli_w', 'msa_srli_d', 'msa_srai_b', 'msa_srai_h', 'msa_srai_w', 'msa_srai_d', 'msa_bclri_b', 'msa_bclri_h', 'msa_bclri_w', 'msa_bclri_d', 'msa_bseti_b', 'msa_bseti_h', 'msa_bseti_w', 'msa_bseti_d', 'msa_bnegi_b', 'msa_bnegi_h', 'msa_bnegi_w', 'msa_bnegi_d')
+VECTOR_FUNCTIONS += tuple(f"msa_{op}_{w}" for op in ("asub_s", "asub_u") for w in ("b", "h", "w", "d"))
+VECTOR_FUNCTIONS += tuple(f"msa_{op}_{m}_{w}" for op in ("sat_s", "sat_u") for w, bits in zip(("b", "h", "w", "d"), (8, 16, 32, 64)) for m in (0, bits//2, bits-1))
 FUNCTIONS = tuple(f"msa_lane{i}" for i in range(4)) + ("msa_mix", "msa_store", "msa_return_slot") + VECTOR_FUNCTIONS
 INPUTS = [(0, 0, 0, 0), (0xffffffff, 0x7fffffff, 0x80000000, 1),
           (0x11223344, 0x55667788, 0x99aabbcc, 0xddeeff00), (1, 2, 3, 4), (0, 1, 0xffffffff, 0), (0, 0x80000000, 0, 0x80000000)]
@@ -83,6 +85,20 @@ def expected(function, arguments, little):
                 elif op == "bseti": lane = x | (1 << count)
                 else: lane = x ^ (1 << count)
                 value |= (lane & mask) << shift
+        elif operation.startswith(("asub_", "sat_")):
+            bits = {"b": 8, "h": 16, "w": 32, "d": 64}[operation[-1]]
+            mask, value = (1 << bits) - 1, 0
+            for shift in range(0, 128, bits):
+                x, y = (left >> shift) & mask, (right >> shift) & mask
+                if "_s_" in operation:
+                    if x & (1 << (bits-1)): x -= 1 << bits
+                    if y & (1 << (bits-1)): y -= 1 << bits
+                if operation.startswith("asub_"): result = abs(x - y)
+                else:
+                    width = int(operation.split("_")[2]) + 1
+                    low, high = (-(1 << (width-1)), (1 << (width-1))-1) if "_s_" in operation else (0, (1 << width)-1)
+                    result = max(low, min(high, x))
+                value |= (result & mask) << shift
         elif operation.startswith(("add_a_", "adds_", "subs_", "ave_", "aver_")):
             bits = {"b": 8, "h": 16, "w": 32, "d": 64}[operation[-1]]
             mask, value = (1 << bits) - 1, 0

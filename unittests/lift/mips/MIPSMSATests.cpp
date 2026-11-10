@@ -109,7 +109,9 @@ enum class VectorOperation {
   AverageSigned,
   AverageUnsigned,
   RoundAverageSigned,
-  RoundAverageUnsigned
+  RoundAverageUnsigned,
+  AbsoluteDifferenceSigned,
+  AbsoluteDifferenceUnsigned
 };
 struct VectorCase {
   uint32_t Encoding;
@@ -160,6 +162,12 @@ std::vector<uint8_t> vectorExpected(const VectorCase &Case,
       const auto UMax = llvm::APInt::getMaxValue(Bits).zext(128);
       llvm::APInt V(128, 0);
       switch (Case.Operation) {
+      case VectorOperation::AbsoluteDifferenceSigned:
+        V = (SA - SB).abs();
+        break;
+      case VectorOperation::AbsoluteDifferenceUnsigned:
+        V = (UA - UB).abs();
+        break;
       case VectorOperation::AddAbsolute:
       case VectorOperation::AddSaturatedAbsolute:
         V = SA.abs() + SB.abs();
@@ -689,11 +697,13 @@ TEST_P(MIPSMSA, ImmediateBitFormatsExhaustEveryPrefixAndCaptureAliases) {
   ASSERT_TRUE(D.init(Image));
   MIPSLifter L(GetParam());
   L.setMSAEnabled(true);
-  for (unsigned Operation = 0; Operation != 6; ++Operation)
+  for (unsigned Operation = 0; Operation != 8; ++Operation)
     for (unsigned Field = 0; Field != 128; ++Field)
       for (unsigned Destination : {0u, 2u}) {
         const uint32_t Word =
-            0x78000009 | (Operation << 23) | (Field << 16) | (Destination << 6);
+            (Operation < 6 ? 0x78000009 | (Operation << 23)
+                           : 0x7800000a | ((Operation - 6) << 23)) |
+            (Field << 16) | (Destination << 6);
         if (Field >= 120) {
           const auto Bytes = msaBytes({Word}, archLittleEndian(GetParam()));
           cs_insn Raw{};
@@ -742,6 +752,26 @@ TEST_P(MIPSMSA, ImmediateBitFormatsExhaustEveryPrefixAndCaptureAliases) {
             case 5:
               Result = V ^ (UINT64_C(1) << Count);
               break;
+            case 6:
+            case 7: {
+              const auto InputValue = llvm::APInt(Bits, V);
+              auto Extended =
+                  Operation == 6 ? InputValue.sext(128) : InputValue.zext(128);
+              const auto Low =
+                  Operation == 6
+                      ? llvm::APInt::getSignedMinValue(Count + 1).sext(128)
+                      : llvm::APInt(128, 0);
+              const auto High =
+                  Operation == 6
+                      ? llvm::APInt::getSignedMaxValue(Count + 1).sext(128)
+                      : llvm::APInt::getMaxValue(Count + 1).zext(128);
+              if (Extended.slt(Low))
+                Extended = Low;
+              if (Extended.sgt(High))
+                Extended = High;
+              Result = Extended.trunc(Bits).getZExtValue();
+              break;
+            }
             }
             for (unsigned B = 0; B != Bits / 8; ++B)
               Expected[I + B] = Result >> (8 * B);

@@ -10,6 +10,7 @@
 
 #include "neverd/ir/intrinsics/MIPS/MIPSDSP.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
+#include "neverd/lift/MIPS/MIPSRegs.h"
 
 #include <optional>
 
@@ -57,6 +58,58 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
                        S.binary(NdOp::INT_AND, ReadControl(),
                                 NdVar::cst(mips::DSPControlBits & ~Bits, 4)));
     WriteControl(Value);
+    return true;
+  }
+
+  const bool FractionalMultiply =
+      *Kind == mips::DSPInstruction::MultiplyRoundedHalfwords;
+  if (FractionalMultiply || *Kind == mips::DSPInstruction::MultiplyLeftBytes ||
+      *Kind == mips::DSPInstruction::MultiplyRightBytes) {
+    const auto A = S.read(RS), B = S.read(RT);
+    NdVar Result = NdVar::cst(0, 4), Overflow = NdVar::cst(0, 1);
+    for (unsigned I = 0; I != 2; ++I) {
+      const auto X = S.makeTemp(FractionalMultiply ? 2 : 1);
+      const auto Y = S.makeTemp(2);
+      const unsigned Offset =
+          FractionalMultiply
+              ? 2 * I
+              : I + (*Kind == mips::DSPInstruction::MultiplyLeftBytes ? 2 : 0);
+      S.emit(NdOp::SUBBYTES, X, {A, NdVar::cst(Offset, 4)});
+      S.emit(NdOp::SUBBYTES, Y, {B, NdVar::cst(2 * I, 4)});
+      auto Product =
+          S.binary(NdOp::INT_MULT, S.resize(X, 8, FractionalMultiply),
+                   S.resize(Y, 8, FractionalMultiply));
+      NdVar Saturated;
+      if (FractionalMultiply) {
+        Saturated =
+            S.binary(NdOp::BOOL_AND,
+                     S.binary(NdOp::INT_EQUAL, X, NdVar::cst(0x8000, 2), 1),
+                     S.binary(NdOp::INT_EQUAL, Y, NdVar::cst(0x8000, 2), 1), 1);
+        // Widen before rounding, including negative halfway products.
+        Product =
+            S.binary(NdOp::INT_ASHR,
+                     S.binary(NdOp::INT_ADD, Product, NdVar::cst(0x4000, 8)),
+                     NdVar::cst(15, 8));
+      } else {
+        Saturated = S.binary(NdOp::INT_LESS, NdVar::cst(0xffff, 8), Product, 1);
+      }
+      Overflow = S.binary(NdOp::BOOL_OR, Overflow, Saturated, 1);
+      const auto Lane = S.makeTemp(2);
+      S.emit(NdOp::SELECT, Lane,
+             {Saturated, NdVar::cst(FractionalMultiply ? 0x7fff : 0xffff, 2),
+              S.resize(Product, 2)});
+      Result = S.binary(
+          NdOp::INT_OR, Result,
+          S.binary(NdOp::INT_LEFT, S.resize(Lane, 4), NdVar::cst(16 * I, 4)));
+    }
+    WriteControl(S.binary(
+        NdOp::INT_OR, ReadControl(),
+        S.binary(NdOp::INT_LEFT, S.resize(Overflow, 4), NdVar::cst(21, 4))));
+    S.write(RD, Result);
+    // DSP r1 preserves ac1-ac3, but every GPR-targeting multiply invalidates
+    // ac0, even if the destination is zero. Do not expose stale HI/LO values.
+    S.emitIntrinsic(Intrinsic::MIPSUnpredictable, NdVar::reg(mipsreg::HI, 4));
+    S.emitIntrinsic(Intrinsic::MIPSUnpredictable, NdVar::reg(mipsreg::LO, 4));
     return true;
   }
 
