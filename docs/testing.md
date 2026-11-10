@@ -19509,6 +19509,14 @@ table in `.text` as GNU ld keeps `__CTOR_LIST__`: the table is data, the
 pointer to it in `.data` points to data, and its entry is a slot that holds
 code.
 
+`X86SEHDisplay.FinallyCallMembershipPreservesRangeUnions` checks LowIR call
+membership across interior addresses, half-open ends, gaps, nested/overlapping
+and adjacent extents, empty/reversed extents and reversed block storage.
+`OverlappingFinallyBodiesKeepRootOrder` checks that shared call targets retain
+root-address precedence even when scope records are reversed and the bodies
+disagree on returning to the caller. Both run in
+`NeverDSEHTerminationHandlerTests`.
+
 `unittests/lift/eh/X86SEHDisplayTests.cpp`, in the same binary, gives the pipeline
 an x86 `_except_handler3` frame byte for byte: `X86SEHDisplay.*` pins the `__finally`
 holding its body with the `call` gone and the address comment kept, the abnormal

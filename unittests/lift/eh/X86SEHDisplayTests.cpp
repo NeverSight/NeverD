@@ -14,16 +14,21 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/ir/low/X86/RegistrationDisplayFrame.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
+#include <array>
 #include <initializer_list>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -285,6 +290,155 @@ BinaryImage makeFinally(bool ClearsFlag = false) {
   F.epilogue();
   F.scope(-1, 0, Body);
   return F.build();
+}
+
+/// A minimal runtime-compatible frame for checking LowIR display ownership
+/// independently of the decoder's choice of block boundaries.
+LowFunc displayFrameForRanges() {
+  LowFunc Func;
+  Func.Entry = kText;
+  auto &EH = Func.ExceptionMetadata.emplace();
+  EH.CodeRange = {kText, kText + 16};
+  EH.ParseStatus = ExceptionParseStatus::Complete;
+  EH.Personality = ExceptionPersonality::ExceptHandler3;
+  EH.Registration.emplace().SeededTryLevel = -1;
+  Func.RegistrationStates.emplace();
+  LowBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = kText;
+  Entry.EndAddr = kText + 16;
+  const NdVar FP = NdVar::reg(x86reg::RBP, 4);
+  LowOp Frame;
+  Frame.Opcode = NdOp::COPY;
+  Frame.Addr = kText;
+  Frame.Output = FP;
+  Frame.addInput(NdVar::reg(x86reg::RSP, 4));
+  Entry.Ops.push_back(Frame);
+  LowOp Record;
+  Record.Opcode = NdOp::INT_SUB;
+  Record.Addr = kText + 4;
+  Record.Output = NdVar::tmp(0, 4);
+  Record.addInput(FP);
+  Record.addInput(NdVar::scalar(16, 4));
+  Entry.Ops.push_back(Record);
+  LowOp Install;
+  Install.Opcode = NdOp::STORE;
+  Install.Addr = kText + 8;
+  Install.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+  Install.addInput(NdVar::scalar(0, 4));
+  Install.addInput(Record.Output);
+  Entry.Ops.push_back(Install);
+  Func.Blocks.push_back(std::move(Entry));
+  return Func;
+}
+
+TEST(X86SEHDisplay, FinallyCallMembershipPreservesRangeUnions) {
+  constexpr va_t Root = kText + 0x100;
+  // Nested, overlapping, adjacent and separated blocks in non-address ID
+  // order. Empty and reversed extents contain no call target.
+  const std::array<ExceptionAddressRange, 7> Ranges = {
+      {{Root, Root + 40},
+       {Root + 8, Root + 16},
+       {Root + 64, Root + 80},
+       {Root + 36, Root + 48},
+       {Root + 48, Root + 56},
+       {Root + 60, Root + 60},
+       {Root + 90, Root + 85}}};
+  for (bool Reverse : {false, true}) {
+    SCOPED_TRACE(Reverse);
+    LowFunc Func = displayFrameForRanges();
+    Func.ExceptionMetadata->Registration->Scopes.push_back({-1, 0, Root, true});
+    for (size_t I = 0; I < Ranges.size(); ++I) {
+      LowBlock Body;
+      Body.Id = static_cast<int>(I) + 1;
+      Body.StartAddr = Ranges[I].Begin;
+      Body.EndAddr = Ranges[I].End;
+      if (!I)
+        for (size_t J = 1; J < Ranges.size(); ++J)
+          Body.Succs.push_back(static_cast<int>(J) + 1);
+      else
+        Body.Preds = {1};
+      if (I == 2) {
+        LowOp Return;
+        Return.Opcode = NdOp::RETURN;
+        Return.Addr = Body.StartAddr;
+        Body.Ops.push_back(Return);
+      }
+      Func.Blocks.push_back(std::move(Body));
+    }
+    std::set<va_t> ExpectedCalls;
+    for (unsigned Offset = 0; Offset < 100; ++Offset) {
+      const va_t Target = Root - 1 + Offset;
+      LowBlock Site;
+      Site.Id = static_cast<int>(Ranges.size()) + 1 + Offset;
+      Site.StartAddr = kText + 0x200 + Offset * 8;
+      Site.EndAddr = Site.StartAddr + 8;
+      Site.Preds = {0};
+      Func.Blocks[0].Succs.push_back(Site.Id);
+      LowOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.Addr = Site.StartAddr;
+      Call.addInput(NdVar::scalar(Target, 4));
+      Site.Ops.push_back(Call);
+      if (std::any_of(Ranges.begin(), Ranges.end(), [&](const auto &Range) {
+            return Target >= Range.Begin && Target < Range.End;
+          }))
+        ExpectedCalls.insert(Call.Addr);
+      Func.Blocks.push_back(std::move(Site));
+    }
+    if (Reverse)
+      std::reverse(Func.Blocks.begin(), Func.Blocks.end());
+    x86_registration::prepareRegistrationDisplayFrame(Func, nullptr);
+    ASSERT_TRUE(Func.RegistrationStates->Display);
+    EXPECT_EQ(Func.RegistrationStates->Display->NoValueCalls, ExpectedCalls);
+  }
+}
+
+TEST(X86SEHDisplay, OverlappingFinallyBodiesKeepRootOrder) {
+  for (bool FirstReturns : {false, true}) {
+    SCOPED_TRACE(FirstReturns);
+    LowFunc Func = displayFrameForRanges();
+    constexpr va_t Root = kText + 0x100;
+    auto &Scopes = Func.ExceptionMetadata->Registration->Scopes;
+    Scopes = {{-1, 0, Root + 16, true}, {-1, 0, Root, true}};
+    for (int I = 0; I < 2; ++I) {
+      LowBlock Body;
+      Body.Id = I + 1;
+      Body.StartAddr = Root + I * 16;
+      Body.EndAddr = Root + 64;
+      if ((I == 0) == FirstReturns) {
+        LowOp Return;
+        Return.Opcode = NdOp::RETURN;
+        Return.Addr = Body.StartAddr;
+        Body.Ops.push_back(Return);
+      }
+      Func.Blocks.push_back(std::move(Body));
+    }
+    LowBlock Site;
+    Site.Id = 3;
+    Site.StartAddr = kText + 0x200;
+    Site.EndAddr = Site.StartAddr + 16;
+    Site.Preds = {0};
+    Func.Blocks[0].Succs = {3};
+    LowOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.Addr = Site.StartAddr;
+    Call.addInput(NdVar::scalar(Root + 24, 4));
+    Site.Ops.push_back(Call);
+    LowOp After;
+    After.Opcode = NdOp::COPY;
+    After.Addr = Site.StartAddr + 8;
+    After.Output = NdVar::reg(x86reg::RAX, 4);
+    After.addInput(NdVar::scalar(7, 4));
+    Site.Ops.push_back(After);
+    Func.Blocks.push_back(std::move(Site));
+    x86_registration::prepareRegistrationDisplayFrame(Func, nullptr);
+    ASSERT_TRUE(Func.RegistrationStates->Display);
+    EXPECT_TRUE(
+        Func.RegistrationStates->Display->NoValueCalls.count(Call.Addr));
+    EXPECT_EQ(Func.Blocks.back().Ops.back().Opcode,
+              FirstReturns ? NdOp::COPY : NdOp::NOP);
+  }
 }
 
 TEST(X86SEHDisplay, FinallyHoldsItsBodyAndTheCallGoes) {

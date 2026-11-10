@@ -43,6 +43,7 @@
 
 #include <algorithm>
 #include <array>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <set>
@@ -204,9 +205,21 @@ private:
   struct FinallyBody {
     va_t Root = 0;
     std::set<int> Blocks;
+    /// The union of the blocks' half-open address ranges. Calls can enter a
+    /// body's interior, including an overlapping instruction stream.
+    std::vector<ExceptionAddressRange> Ranges;
     bool Back = false;
     /// The blocks with a `call` of this body, on the normal path.
     std::vector<LowBlock *> Calls;
+
+    bool contains(va_t Address) const {
+      const auto After =
+          std::upper_bound(Ranges.begin(), Ranges.end(), Address,
+                           [](va_t At, const ExceptionAddressRange &Range) {
+                             return At < Range.Begin;
+                           });
+      return After != Ranges.begin() && std::prev(After)->contains(Address);
+    }
   };
   std::vector<FinallyBody> Bodies;
   RegistrationDisplayFacts Facts;
@@ -785,8 +798,11 @@ private:
       FinallyBody Body;
       Body.Root = RootVA;
       Body.Blocks = reachedFrom(Root->second->Id);
+      Body.Ranges.reserve(Body.Blocks.size());
       for (int Id : Body.Blocks) {
         const LowBlock &Block = *ById.at(Id);
+        if (Block.StartAddr < Block.EndAddr)
+          Body.Ranges.push_back({Block.StartAddr, Block.EndAddr});
         if (leavesFunction(Block))
           continue;
         for (const LowOp &Op : Block.Ops)
@@ -795,14 +811,21 @@ private:
             Body.Back = true;
           }
       }
+      llvm::sort(Body.Ranges, [](const ExceptionAddressRange &A,
+                                 const ExceptionAddressRange &B) {
+        return A.Begin < B.Begin;
+      });
+      size_t Count = 0;
+      for (const ExceptionAddressRange Range : Body.Ranges) {
+        if (Count && Range.Begin <= Body.Ranges[Count - 1].End)
+          Body.Ranges[Count - 1].End =
+              std::max(Body.Ranges[Count - 1].End, Range.End);
+        else
+          Body.Ranges[Count++] = Range;
+      }
+      Body.Ranges.resize(Count);
       Bodies.push_back(std::move(Body));
     }
-    auto Within = [&](const FinallyBody &Body, va_t Address) {
-      return llvm::any_of(Body.Blocks, [&](int Id) {
-        const LowBlock &Block = *ById.at(Id);
-        return Address >= Block.StartAddr && Address < Block.EndAddr;
-      });
-    };
     for (LowBlock &Block : Func.Blocks)
       for (size_t I = 0; I < Block.Ops.size(); ++I) {
         const LowOp &Op = Block.Ops[I];
@@ -810,7 +833,7 @@ private:
             !Op.Inputs[0].isConst())
           continue;
         const auto Called = llvm::find_if(Bodies, [&](const FinallyBody &Body) {
-          return Within(Body, Op.Inputs[0].Offset);
+          return Body.contains(Op.Inputs[0].Offset);
         });
         if (Called == Bodies.end())
           continue;
@@ -1035,12 +1058,7 @@ private:
       for (LowBlock *Site : Body.Calls) {
         const auto CallAt = llvm::find_if(Site->Ops, [&](const LowOp &Op) {
           return Op.Opcode == NdOp::CALL && Op.NumInputs == 1 &&
-                 Op.Inputs[0].isConst() &&
-                 llvm::any_of(Body.Blocks, [&](int Id) {
-                   const LowBlock &B = *ById.at(Id);
-                   return Op.Inputs[0].Offset >= B.StartAddr &&
-                          Op.Inputs[0].Offset < B.EndAddr;
-                 });
+                 Op.Inputs[0].isConst() && Body.contains(Op.Inputs[0].Offset);
         });
         if (CallAt == Site->Ops.end())
           continue;
