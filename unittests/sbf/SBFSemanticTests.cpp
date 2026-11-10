@@ -140,6 +140,10 @@ TEST(SBFSemantics, EvaluatesScalarWidthsWrappingAndShiftMasks) {
       {Operation::Sub, 64, 3, 10, false, UINT64_MAX - 6},
       {Operation::Mul, 32, 0x40000000, 3, false, 0xc0000000},
       {Operation::Mul, 64, 15, UINT64_MAX - 6, false, UINT64_MAX - 104},
+      {Operation::UDiv, 32, UINT64_MAX, 0x100000003, false, 1431655765},
+      {Operation::URem, 32, UINT64_MAX, 0x100000002, false, 1},
+      {Operation::UDiv, 64, UINT64_MAX, 100, false, 184467440737095516},
+      {Operation::URem, 64, UINT64_MAX, 100, false, 15},
       {Operation::Or, 64, 0, 0, false, 0},
       {Operation::And, 32, UINT64_MAX, 0x80000000, false, 0x80000000},
       {Operation::Xor, 64, UINT64_MAX, UINT64_MAX, false, 0},
@@ -157,6 +161,9 @@ TEST(SBFSemantics, EvaluatesScalarWidthsWrappingAndShiftMasks) {
   }
   EXPECT_FALSE(evaluateScalarALU(Operation::Load, 64, 0, 0));
   EXPECT_FALSE(evaluateScalarALU(Operation::UDiv, 64, 1, 0));
+  EXPECT_FALSE(evaluateScalarALU(Operation::URem, 64, 1, 0));
+  EXPECT_FALSE(evaluateScalarALU(Operation::UDiv, 32, 1, 0x100000000));
+  EXPECT_FALSE(evaluateScalarALU(Operation::URem, 32, 1, 0x100000000));
   EXPECT_FALSE(evaluateScalarALU(Operation::SDiv, 64, 1, 0));
   EXPECT_FALSE(evaluateScalarALU(Operation::Add, 8, 1, 1));
 }
