@@ -4650,7 +4650,12 @@ code calls (`NoReturnTargetIndex`). Its declaration query uses
 The local-type provider can reject missing or returning declarations directly
 from its immutable library, without converting and caching every image symbol's
 parameter/return graph. Positive declarations still pass full prototype
-validation; an unsupported type cannot terminate a CFG path.
+validation without C name-table construction; an unsupported type cannot
+terminate a CFG path. `DebugContext::resolvePrototypeABI` provides the same
+validated types, calling convention and declaration origin for structural
+queries. The x86 import-return inventory uses it without spelling every
+library type. Both local-type queries use the ordinary signature converter;
+source emitters retain `resolvePrototype` and its complete C spellings.
 A name a program may also give a routine
 of its own decides only together with the module that exports it
 (`isNoReturnImport`, `WindowsNoReturnImports.inc`): the Universal CRT's

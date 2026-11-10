@@ -8078,6 +8078,11 @@ parameters, enums, typedefs, unavailable values and their valid pointers.
 Repeated predicates and opposite query orders retain the full resolver's
 declarations, portable parameter spellings and ABI. No-return queries must
 not construct library-wide naming tables just to validate these types.
+`LocalTypesDebugContext.ABIQueriesPreserveFloatingCallContracts` compares
+complete scalar FP descriptors before and after declaration rendering across
+three data models, four architectures and COFF/ELF/Mach-O, including variadic,
+fastcall, record, pointer and long-double declarations. The header-origin
+regression also compares the ABI-only query with the full resolver.
 `HighCReturnJoin.BareReturnBesideATailCallReturnsTheParameter` decompiles
 `if (b) return g(b); return a;` with a direct and an indirect tail call for
 x86-64, i386, ARM and AArch64 (`test_return_join.c`) and requires

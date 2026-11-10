@@ -1180,6 +1180,30 @@ std::optional<types::HeaderLibrary> LocalTypesDebugContext::prototypeHeader(
   return std::nullopt;
 }
 
+std::optional<FunctionSym> LocalTypesDebugContext::prototypeSignature(
+    llvm::StringRef Name, const types::FunctionDef &Function,
+    const types::TypeSpeller *Speller) const {
+  auto Signature = signatureOf(*Types, Function, Name, Speller);
+  if (!Signature)
+    return Signature;
+  const auto Header = prototypeHeader(Name, &Function);
+  Signature->PrototypeLibrary = Header ? types::headerLibraryName(*Header).str()
+                                       : UserPrototypeLibrary.str();
+  Signature->PrototypeFromHeader = Header.has_value();
+  Signature->PrototypeFromCLibrary =
+      Header && types::headerLibrarySystem(*Header).has_value();
+  return Signature;
+}
+
+std::optional<FunctionSym>
+LocalTypesDebugContext::resolvePrototypeABI(llvm::StringRef Name) const {
+  std::lock_guard<std::mutex> Guard(Mutex);
+  if (auto Known = Signatures.find(Name); Known != Signatures.end())
+    return Known->second;
+  const auto *Function = Types->findPrototype(Name);
+  return Function ? prototypeSignature(Name, *Function) : std::nullopt;
+}
+
 std::optional<FunctionSym>
 LocalTypesDebugContext::resolvePrototype(llvm::StringRef Name) const {
   std::lock_guard<std::mutex> Guard(Mutex);
@@ -1196,16 +1220,11 @@ LocalTypesDebugContext::resolvePrototype(llvm::StringRef Name) const {
   auto &Portable = PortablePrototypeSpeller;
   if (!Portable)
     Portable = std::make_unique<types::TypeSpeller>(*Types, PortableOptions);
-  Signature = signatureOf(*Types, *Function->second, Name, Portable.get());
+  Signature = prototypeSignature(Name, *Function->second, Portable.get());
   if (!Signature)
     return Signature;
   const std::optional<types::HeaderLibrary> Header =
       prototypeHeader(Name, Function->second.get());
-  Signature->PrototypeLibrary = Header ? types::headerLibraryName(*Header).str()
-                                       : UserPrototypeLibrary.str();
-  Signature->PrototypeFromHeader = Header.has_value();
-  Signature->PrototypeFromCLibrary =
-      Header && types::headerLibrarySystem(*Header).has_value();
   types::RenderOptions Options;
   Options.Lang = types::Language::C;
   if (Header)

@@ -10,6 +10,7 @@
 #include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceCallABI.h"
+#include "neverd/libc/LibCFloatingArguments.h"
 #include "neverd/types/TypeParse.h"
 
 #include <algorithm>
@@ -66,6 +67,9 @@ TEST(DebugContext, NoReturnQueryUsesTheProvidersValidatedPrototype) {
   EXPECT_TRUE(Context.prototypeDoesNotReturn("stop"));
   EXPECT_FALSE(Context.prototypeDoesNotReturn("returning"));
   EXPECT_FALSE(Context.prototypeDoesNotReturn("missing"));
+  ASSERT_TRUE(Context.resolvePrototypeABI("stop"));
+  EXPECT_TRUE(Context.resolvePrototypeABI("stop")->NoReturn);
+  EXPECT_FALSE(Context.resolvePrototypeABI("missing"));
 }
 
 TEST(LocalTypesDebugContext, TakesDeclarationsAndNewTypesInPlace) {
@@ -387,6 +391,8 @@ TEST(LocalTypesDebugContext, NoReturnValidationRetainsTypeBoundaries) {
       SCOPED_TRACE(Name);
       EXPECT_EQ(Queried.prototypeDoesNotReturn(Name), Item.Valid);
       EXPECT_EQ(Queried.prototypeDoesNotReturn(Name), Item.Valid);
+      const auto ABI = Queried.resolvePrototypeABI(Name);
+      ASSERT_EQ(ABI.has_value(), Item.Valid);
       const auto Expected = Resolved.resolvePrototype(Name);
       const auto Actual = Queried.resolvePrototype(Name);
       ASSERT_EQ(Expected.has_value(), Item.Valid);
@@ -400,7 +406,58 @@ TEST(LocalTypesDebugContext, NoReturnValidationRetainsTypeBoundaries) {
         EXPECT_EQ(Actual->PortableParameterTypes,
                   Expected->PortableParameterTypes);
         EXPECT_TRUE(sdk::passesAlike(*Actual, *Expected));
+        EXPECT_TRUE(sdk::passesAlike(*ABI, *Expected));
+        EXPECT_EQ(ABI->PrototypeLibrary, Expected->PrototypeLibrary);
+        EXPECT_EQ(ABI->NoReturn, Expected->NoReturn);
       }
+    }
+  }
+}
+
+TEST(LocalTypesDebugContext, ABIQueriesPreserveFloatingCallContracts) {
+  using namespace neverd;
+  for (auto Model : {types::DataModel::ILP32, types::DataModel::LLP64,
+                     types::DataModel::LP64}) {
+    auto Library = std::make_shared<types::TypeLibrary>(Model);
+    ASSERT_TRUE(types::parseCTypes(R"(
+      float Single(float Value, int Count);
+      double Double(long Count, double Value);
+      long double Extended(void);
+      void Nothing(void);
+      int Integer(void);
+      float *Pointer(double Value);
+      double Variadic(const char *Format, ...);
+      double __fastcall Registers(double Value);
+      struct Pair { double X, Y; };
+      struct Pair Record(struct Pair Value);
+    )",
+                                   *Library)
+                    .ok());
+    NamesOnlyDebugContext Names;
+    sdk::LocalTypesDebugContext Context(Names, Library);
+    for (const char *Name :
+         {"Single", "Double", "Extended", "Nothing", "Integer", "Pointer",
+          "Variadic", "Registers", "Record"}) {
+      SCOPED_TRACE(Name);
+      const auto ABI = Context.resolvePrototypeABI(Name);
+      const auto Full = Context.resolvePrototype(Name);
+      ASSERT_TRUE(ABI && Full);
+      EXPECT_EQ(ABI->PrototypeLibrary, Full->PrototypeLibrary);
+      EXPECT_EQ(ABI->PrototypeFromHeader, Full->PrototypeFromHeader);
+      EXPECT_EQ(ABI->PrototypeFromCLibrary, Full->PrototypeFromCLibrary);
+      EXPECT_EQ(ABI->CallConv, Full->CallConv);
+      EXPECT_EQ(ABI->IsVariadic, Full->IsVariadic);
+      EXPECT_TRUE(sdk::passesAlike(*ABI, *Full));
+      for (auto Arch : {Arch::X86, Arch::X86_64, Arch::ARM, Arch::AArch64})
+        for (auto Format :
+             {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+          const auto Expected =
+              libc::floatingCallArguments(*Full, Arch, Format);
+          EXPECT_EQ(libc::floatingCallArguments(*ABI, Arch, Format), Expected);
+          EXPECT_EQ(libc::floatingCallArguments(
+                        *Context.resolvePrototypeABI(Name), Arch, Format),
+                    Expected);
+        }
     }
   }
 }

@@ -366,6 +366,14 @@ public:
   }
 
   virtual bool hasInfo() const = 0;
+
+  /// The same validated ABI and declaration origin as resolvePrototype,
+  /// without requiring C declarations or scalar source spellings. Use the
+  /// ordinary resolver when a consumer needs to emit source types.
+  virtual std::optional<FunctionSym>
+  resolvePrototypeABI(llvm::StringRef Name) const {
+    return resolvePrototype(Name);
+  }
 };
 
 class NullDebugContext : public DebugContext {
