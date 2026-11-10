@@ -1582,11 +1582,16 @@ input orders, and one or two shards. Decompile a whole
 x86-64 libsqlite3 or Rust binary, and an AArch64 Rust Mach-O, through `--llvm`
 after changing that retry: one such body used to fail the unit.
 
-`Native/SourcePatchArm64e.SourceCompilerRetainsAuthenticatedProviders` exercises
+`Native/SourcePatchArm64e.SourceCompilerEnforcesAuthenticatedProviderABI` exercises
 both SDK source artifacts (canonical Clang IR and Apple native objects), new
 function/data provider declarations, three entry mappings, exclusive publication
 and unchanged input bytes. The original dylib has no `__eh_frame`; canonical
-IR publication must register new native DWARF storage automatically.
+IR publication with forced DWARF must register new native EH storage automatically.
+A third producer profile deliberately supplies incompatible generic RA-state CFI
+and must fail without creating an output or changing the input. The r6 generated
+profile first checks this transactional refusal, then reports producer availability
+as skipped; the strict native qualification gate rejects any such skip. Only a
+source build with the LLVM fork's Darwin CFI correction can qualify generation.
 Set `NEVERD_ARM64E_IR_COMPILER` to the compatible
 Clang++ frontend for the canonical case. These are offline SDK integration tests;
 the independent generated dylib/main execution gates are documented in

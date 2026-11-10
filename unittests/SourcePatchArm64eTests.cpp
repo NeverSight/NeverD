@@ -11,6 +11,7 @@
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -29,14 +30,17 @@ namespace {
   constexpr llvm::StringLiteral Name[] = {__VA_ARGS__};
 #include "lift/format/MachOAuthenticatedNativeFixtures.def"
 
-class SourcePatchArm64e : public testing::TestWithParam<bool> {};
+enum class ArtifactProfile { GeneratedIR, NativeObject, IncompatibleCFI };
+class SourcePatchArm64e : public testing::TestWithParam<ArtifactProfile> {};
 
-TEST_P(SourcePatchArm64e, SourceCompilerRetainsAuthenticatedProviders) {
+TEST_P(SourcePatchArm64e, SourceCompilerEnforcesAuthenticatedProviderABI) {
 #ifndef __APPLE__
   GTEST_SKIP() << kMissingHost;
 #else
   const auto *IRCompiler = std::getenv(kIRCompilerEnvironment);
-  if (!GetParam() && !IRCompiler)
+  const bool Generated = GetParam() == ArtifactProfile::GeneratedIR;
+  const bool Incompatible = GetParam() == ArtifactProfile::IncompatibleCFI;
+  if (Generated && !IRCompiler)
     GTEST_SKIP() << kMissingIRCompiler;
   llvm::SmallString<kPathCapacity> Directory;
   ASSERT_FALSE(
@@ -97,9 +101,15 @@ TEST_P(SourcePatchArm64e, SourceCompilerRetainsAuthenticatedProviders) {
   neverd_source_patch_options_v1 Options{};
   Options.struct_size = sizeof(Options);
   Options.language = NEVERD_SOURCE_PATCH_CXX;
-  Options.compiler_path = GetParam() ? kCompiler : IRCompiler;
-  Options.artifact = GetParam() ? NEVERD_SOURCE_PATCH_ARTIFACT_OBJECT
-                                : NEVERD_SOURCE_PATCH_ARTIFACT_IR;
+  Options.compiler_path = Generated ? IRCompiler : kCompiler;
+  Options.artifact = Generated ? NEVERD_SOURCE_PATCH_ARTIFACT_IR
+                               : NEVERD_SOURCE_PATCH_ARTIFACT_OBJECT;
+  const char *CompilerArgs[] = {Incompatible ? kExplicitReturnCFIOption
+                                             : kDwarfLanguageOption};
+  if (Generated || Incompatible) {
+    Options.compiler_args = CompilerArgs;
+    Options.compiler_arg_count = std::size(CompilerArgs);
+  }
   Options.mappings = Mappings;
   Options.mapping_count = std::size(Mappings);
   const neverd_source_patch_dependency_v1 Dependencies[] = {
@@ -107,13 +117,26 @@ TEST_P(SourcePatchArm64e, SourceCompilerRetainsAuthenticatedProviders) {
       {kProviderLibrary, kProviderData, NEVERD_SOURCE_DEPENDENCY_DATA}};
   Options.dependencies = Dependencies;
   Options.dependency_count = std::size(Dependencies);
-  ASSERT_EQ(neverd_patch_source(Session, kObjectSource,
-                                sizeof(kObjectSource) - 1, &Options,
-                                Output.c_str()),
-            1)
-      << neverd_last_error(Session);
+  const auto Result =
+      neverd_patch_source(Session, kObjectSource, sizeof(kObjectSource) - 1,
+                          &Options, Output.c_str());
+  auto After = llvm::MemoryBuffer::getFile(Original);
+  ASSERT_TRUE(bool(After));
+  EXPECT_EQ((*After)->getBuffer(), (*Before)->getBuffer());
+  if (Incompatible || (Generated && !Result &&
+                       llvm::StringRef(neverd_last_error(Session))
+                           .contains(kClassicReturnCFIDiagnostic))) {
+    EXPECT_EQ(Result, 0);
+    EXPECT_FALSE(llvm::sys::fs::exists(Output));
+    EXPECT_TRUE(llvm::StringRef(neverd_last_error(Session))
+                    .contains(kClassicReturnCFIDiagnostic));
+    if (Generated)
+      GTEST_SKIP() << kMissingCompatibleIRProducer;
+    return;
+  }
+  ASSERT_EQ(Result, 1) << neverd_last_error(Session);
   EXPECT_TRUE(llvm::sys::fs::exists(Output));
-  if (!GetParam()) {
+  if (Generated) {
     auto Installed = llvm::object::ObjectFile::createObjectFile(Output);
     ASSERT_TRUE(bool(Installed)) << llvm::toString(Installed.takeError());
     bool Found = false;
@@ -124,9 +147,6 @@ TEST_P(SourcePatchArm64e, SourceCompilerRetainsAuthenticatedProviders) {
     }
     EXPECT_TRUE(Found);
   }
-  auto After = llvm::MemoryBuffer::getFile(Original);
-  ASSERT_TRUE(bool(After));
-  EXPECT_EQ((*After)->getBuffer(), (*Before)->getBuffer());
   EXPECT_EQ(neverd_patch_source(Session, kObjectSource,
                                 sizeof(kObjectSource) - 1, &Options,
                                 Output.c_str()),
@@ -134,5 +154,8 @@ TEST_P(SourcePatchArm64e, SourceCompilerRetainsAuthenticatedProviders) {
 #endif
 }
 
-INSTANTIATE_TEST_SUITE_P(Native, SourcePatchArm64e, ::testing::Bool());
+INSTANTIATE_TEST_SUITE_P(Native, SourcePatchArm64e,
+                         ::testing::Values(ArtifactProfile::GeneratedIR,
+                                           ArtifactProfile::NativeObject,
+                                           ArtifactProfile::IncompatibleCFI));
 } // namespace

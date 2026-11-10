@@ -1426,7 +1426,10 @@ verifyNativeObjectUnwind(const BinaryImage &Image,
                Native.PersonalitySlots[Index - 1] != *Range.PersonalitySlotVA)
             : Index != 0)
       return fail(kLanguageReplay);
-    if (!Range.PersonalitySlotVA && !Range.LSDAVA)
+    const bool Arm64eDwarf =
+        Image.isArm64e() && (Range.Encoding & macho_unwind::kModeMask) ==
+                                macho_unwind::kARM64ModeDwarf;
+    if (!Range.PersonalitySlotVA && !Range.LSDAVA && !Arm64eDwarf)
       continue;
     const auto *Function = Image.ExceptionMetadata.findFunction(Range.BeginVA);
     if (!Function || Function->CodeRange.Begin != Range.BeginVA ||
@@ -1435,11 +1438,27 @@ verifyNativeObjectUnwind(const BinaryImage &Image,
         (Range.LSDAVA &&
          (Function->HandlerDataVA != *Range.LSDAVA || !Function->Itanium)))
       return fail(kLanguageReplay);
-    if (Function->Dwarf && Range.PersonalitySlotVA) {
+    if (Arm64eDwarf && !Function->Dwarf)
+      return fail(kPublishedRange);
+    if (Function->Dwarf) {
       const auto *CIE =
           Image.ExceptionMetadata.findCIE(Function->Dwarf->CIESectionOffset);
-      if (!CIE || CIE->PersonalitySlotVA != *Range.PersonalitySlotVA)
+      if (!CIE || (Range.PersonalitySlotVA &&
+                   CIE->PersonalitySlotVA != *Range.PersonalitySlotVA))
         return fail(kLanguageReplay);
+      if (Arm64eDwarf) {
+        const auto HasClassicToggle = [](const auto &Program) {
+          return llvm::any_of(Program, [](const auto &Instruction) {
+            return Instruction.Kind == CFIOpKind::NegateRAState;
+          });
+        };
+        // Classic Darwin already authenticates saved LR with the B key.
+        // Explicit generic RA toggles break older system unwinders. Preserve
+        // the producer bytes and reject the incompatible ABI at publication.
+        if (HasClassicToggle(CIE->InitialInstructions) ||
+            HasClassicToggle(Function->Dwarf->Instructions))
+          return fail(kClassicReturnCFI);
+      }
     }
   }
   return llvm::Error::success();

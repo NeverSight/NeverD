@@ -123,7 +123,7 @@ pass. A failing executable never retries through `dlopen`. The installed-dylib
 runner requires its matching `dlopen` probe, so a startup report cannot substitute
 for it. Neither probe grants whole-image publication qualification; that also
 requires a qualified producer and complete rebuild/signing transaction. The
-canonical-IR path below uses r6 native MC objects; the raw MC rewrite callback
+canonical-IR path below uses native MC objects from a compatible producer; the raw MC rewrite callback
 and arbitrary lifted modules retain separate requirements.
 
 The [separate startup run](https://github.com/gmh5225/test_mac_intel/actions/runs/42646758724)
@@ -327,7 +327,7 @@ python3 scripts/verify_arm64e_native.py run-default-executable \
 
 `installSourcePatch` admits canonical arm64e replacement IR for classic macOS
 images and ABI1 macOS main executables. It verifies the exact arm64e target,
-platform and layout, then emits a native Mach-O object with the existing r6
+platform and layout, then emits a native Mach-O object with the
 `Codegen::compile` backend. The native object installer owns final placement,
 authenticated and ordinary pointer relocations, new providers, RELRO, signed
 language frames and the publication transaction. The SDK preserves provider
@@ -342,19 +342,36 @@ Use a frontend that emits LLVM's standard
 such as the tested Clang 22 frontend, selected explicitly with `--compiler-path`.
 Apple's older synthetic `llvm.ptrauth` globals remain unsupported IR input;
 its native object artifact uses the separately qualified object installer.
-Compiler selection never silently changes. LLVM stays at prebuilt r6; this
-path needs no patch, fork revision change, or raw MC final-address callback.
+Compiler selection never silently changes. The default prebuilt package remains
+r6. Its explicit classic signed-return CFI is incompatible with the macOS 26
+system unwinder, so publication rejects those objects transactionally. The
+Apple-native object route remains available. Canonical generation requires the
+Darwin CFI correction committed directly to the NeverSight LLVM fork; it does
+not strip assembly or patch LLVM during the NeverD build. A separate source
+build validates that correction without changing the prebuilt release selection.
+The native object route does not require the raw MC final-address callback.
 
 The generated fixtures cover O0/O2, four authentication keys, address diversity,
 local and new external data/code pointers, ordinary pointer addends, new writable
 storage, three original-entry replacements, C++ catches, cleanup/resume and
-transaction rollback. In r6 the canonical producer emits explicit signed-return
-CFI and DWARF language frames even without the forced GNU_args_size fixture row.
-The Apple-native object fixtures separately retain compact-language coverage.
+transaction rollback. A compatible producer exercises both compact language
+frames and explicit DWARF language frames. The latter forces a GNU_args_size
+row, including creation of previously absent EH storage. A deliberate generic
+RA-state toggle is a negative producer control: both the native installer and
+SDK must refuse publication without changing the original image.
 The offline checks compare native object/final unwind metadata and Apple's
 `dwarfdump` output; only execution on a qualified host can certify runtime use.
 
-Run the new matrices with a successful same-source system preflight:
+The [producer diagnosis](https://github.com/gmh5225/test_mac_intel/actions/runs/42756197099)
+retains an independent Apple-linker control: r6 and Clang 22 objects failed to
+catch an exception on macOS 26 even without NeverD installation. Removing only
+the generic RA-state directives in the diagnostic assembly restored the catch
+and cleanup. This isolated the producer ABI defect; the diagnostic ablation is
+not a production transformation. Xcode 27 accepting the original bytes does
+not establish compatibility with the earlier deployment target.
+
+Run the new matrices using a source build of the corrected fork and a successful
+same-source system preflight:
 
 ```sh
 python3 scripts/verify_arm64e_native.py run-generated \

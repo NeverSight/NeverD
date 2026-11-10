@@ -1610,10 +1610,15 @@ insertion, including segmented pointers whose target ordinal would otherwise
 change when a new load command is inserted. Such a changed target is rejected
 without publishing any bytes.
 
-Canonical replacement IR now uses r6 native MC object emission and this
+Canonical replacement IR uses native MC object emission and this
 installer through `installSourcePatch`, including deferred provider declarations
 from the SDK. This admits the macOS classic/ABI1 source profile without clearing
-analysis-only lifted-module flags. The raw MC rewrite interface still requires
+analysis-only lifted-module flags. The publication owner rejects explicit generic
+RA-state toggles in classic arm64e DWARF: Darwin already authenticates saved LR
+with its implicit B-key ABI, and r6's extra toggle breaks the macOS 26 unwinder.
+The rejection covers the CIE and FDE programs of new object ranges, before
+committing any bytes. Canonical emission requires the direct LLVM fork CFI fix;
+the prebuilt default remains r6. The raw MC rewrite interface still requires
 qualification with a post-r6 toolchain; arbitrary lifted-image publication has
 its own ABI reconstruction boundary. The
 [native installation record](evidence/arm64e-native-installation-2026-11-09.json)

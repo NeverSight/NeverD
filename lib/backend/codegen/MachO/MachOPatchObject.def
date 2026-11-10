@@ -12,6 +12,10 @@
 #define MACHO_OBJECT_TEXT(Name, Text)
 #endif
 
+MACHO_OBJECT_TEXT(kClassicReturnCFI,
+                  "classic arm64e requires implicit signed-return CFI; "
+                  "use a compatible native object producer or fixed LLVM fork")
+
 MACHO_OBJECT_TEXT(
     kSubtype,
     "native object pointer-authentication ABI does not match the image")

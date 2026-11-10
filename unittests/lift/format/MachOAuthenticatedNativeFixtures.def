@@ -44,6 +44,11 @@ MACHO_AUTH_NATIVE_TEXT(kCompiler, "/usr/bin/clang++")
 MACHO_AUTH_NATIVE_TEXT(kIRCompilerEnvironment, "NEVERD_ARM64E_IR_COMPILER")
 MACHO_AUTH_NATIVE_TEXT(kMissingIRCompiler,
                        "requires an explicit canonical LLVM IR frontend")
+MACHO_AUTH_NATIVE_TEXT(kClassicReturnCFIDiagnostic,
+                       "classic arm64e requires implicit signed-return CFI")
+MACHO_AUTH_NATIVE_TEXT(kMissingCompatibleIRProducer,
+                       "requires the LLVM fork's Darwin signed-return CFI fix")
+MACHO_AUTH_NATIVE_TEXT(kExplicitReturnCFIOption, "-DNEVERD_EXPLICIT_RETURN_CFI")
 MACHO_AUTH_NATIVE_TEXT(kObjectIRFile, "native-object.ll")
 MACHO_AUTH_NATIVE_TEXT(kGeneratedIRProperty, "neverd_generated_ir")
 MACHO_AUTH_NATIVE_TEXT(kIRCompilerProperty, "neverd_ir_compiler")
@@ -553,6 +558,9 @@ extern int * __ptrauth(2, 1, 4660) const native_local_data
 extern int * __ptrauth(3, 1, 4660) const native_external_data
   = &neverd_provider_data[1];
 __attribute__((noinline)) int native_dispatch() {
+#ifdef NEVERD_EXPLICIT_RETURN_CFI
+  asm volatile(".cfi_negate_ra_state");
+#endif
   return native_local_code() + native_external_code();
 }
 extern int *const volatile native_plain_local = &native_values[1];
