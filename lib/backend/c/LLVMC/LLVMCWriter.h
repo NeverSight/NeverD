@@ -1162,7 +1162,12 @@ public:
   /// Different overlapping memory extents cannot become independent scalar
   /// locals. Keep unnamed views of those bytes in the shared backing frame.
   std::set<uint64_t> OverlappingFrameAccessOffsets;
-  mutable std::map<int64_t, std::optional<VariableSym>> FrameDebugCache;
+  /// Exact displacement queries only; no emission order depends on this cache.
+  /// The zero tag keeps every signed displacement distinct from DenseMap's
+  /// empty and tombstone keys, including on hosts with a different int64_t.
+  mutable llvm::DenseMap<std::pair<int64_t, unsigned>,
+                         std::optional<VariableSym>>
+      FrameDebugCache;
   /// Allocas whose current value is exactly `this` (ptrtoint). Survives
   /// per-block `AllocaLastValues` resets so `this+imm` in a later block
   /// still names the field.
