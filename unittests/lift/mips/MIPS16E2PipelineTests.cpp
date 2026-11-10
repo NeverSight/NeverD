@@ -32,7 +32,13 @@ TEST(MIPS16E2Pipeline,
   const struct {
     uint32_t Word;
     Intrinsic Id;
-  } Cases[] = {{0xf00492c0, Intrinsic::MIPSLoadLinkedWord},
+  } Cases[] = {{0xf000674c, Intrinsic::MIPSReadCP0Word},
+               {0xf000674e, Intrinsic::MIPSReadCP0Word},
+               {0xf000675e, Intrinsic::MIPSReadCP0Word},
+               {0xf001674e, Intrinsic::MIPSWriteCP0Word},
+               {0xf001675e, Intrinsic::MIPSWriteCP0Word},
+               {0xf1403018, Intrinsic::MIPSPause},
+               {0xf00492c0, Intrinsic::MIPSLoadLinkedWord},
                {0xf004d2c0, Intrinsic::MIPSStoreConditionalWord},
                {0xf000304c, Intrinsic::MIPSReadHardwareRegister},
                {0xf002674c, Intrinsic::MIPSDisableInterrupts},

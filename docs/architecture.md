@@ -15935,11 +15935,15 @@ at partial stores, while queries confined to registers retain their existing
 values across these memory effects.
 
 The qualified MIPS16e2 system/atomic slice shares scalar shape admission but
-retains separate effectful IDs. `MIPSSystemContext` authenticates one system
-observation; `NdOpEmulatorMIPS` owns permission/hazard consumption and the opt-in
+retains separate effectful IDs. `MIPSSystemContext` authenticates a system step;
+`MIPSCP0.def` owns the admitted CP0 word selectors, context fields and write
+permissions. Status shares the DI/EI owner; EPC/ErrorEPC words preserve all bits.
+`NdOpEmulatorMIPS` owns permission/hazard consumption and the opt-in
 flat Config5.LLB=1 reservation model. `storeMemoryBytes` invalidates overlapping
-reservation granules only on committed stores. Calls/reset and lenient unknown
-operations discard reservation knowledge. `scalarMayWriteMemory` is shared with
+reservation granules only on committed stores. PAUSE is effectful and completes
+only with a configured, known-clear reservation; scheduling is not inferred.
+Calls/reset and lenient unknown operations discard reservation knowledge.
+`scalarMayWriteMemory` is shared with
 ABI setup recovery so SC cannot preserve a stale outgoing stack value. HighC and
 LLVM reject stateful native-source lowering until an execution-region contract
 can preserve the reservation or privileged state; no helper approximates it.
@@ -15959,6 +15963,14 @@ storage and low F views without assigning a floating ABI to ordinary integers.
 `MedMIPSSourceVectors` refuses unknown entry vectors, calls, saved FPR writes
 and multi-block source before optimization. It does not narrow LowIR register
 coverage or invent initial machine state.
+
+`MIPSSourceCompiler` composes source-only compiler constraints across the LLVM
+emitter and both C backends. Big-endian MSA scalar source disables automatic
+MSA selection after a reproduced Clang constant-splat bitcast miscompile;
+image-less big-endian MIPS32 also retains DSPControl preservation. One complete
+target attribute covers declarations, source shards and helpers, since separate
+Clang target attributes do not compose. Instruction decoding and LowIR vector
+semantics remain owned by the lifter and are not changed by this compiler rule.
 
 `MedMIPSSourceAccumulators` checks HI/LO inputs immediately after SSA and before
 propagation or return inference. It follows read PHIs and the shared call-clobber
@@ -17260,6 +17272,14 @@ says by the saved stack pointer. `lib/ir/med/X86/RegistrationDisplayJoins.cpp` t
 gives each PHI of the stack or frame pointer that every way in agrees on that one
 distance from the entry stack pointer: these joins chain through a whole function,
 and no bounded proof of where the frame is follows them.
+
+Within this display-frame pass, a finally body with one block uses its extent
+directly; multiple block extents form a sorted, merged union for call-target
+lookup. Half-open endpoints, gaps and overlapping
+instruction streams retain the original membership rule, and bodies retain
+root-address precedence. The union is private to the pass; later call erasure
+and register reload insertion do not change its block extents. This lookup
+supplies no additional native frame or control-flow proof.
 
 For LLVM-to-C, `MedLLVMRegistrationSourceSEH.cpp` consumes these display facts
 in the private source module. It preflights distinct, closed finally bodies,

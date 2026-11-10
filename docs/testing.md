@@ -19509,6 +19509,15 @@ table in `.text` as GNU ld keeps `__CTOR_LIST__`: the table is data, the
 pointer to it in `.data` points to data, and its entry is a slot that holds
 code.
 
+`X86SEHDisplay.FinallyCallMembershipPreservesRangeUnions` checks LowIR call
+membership across interior addresses, half-open ends, gaps, nested/overlapping
+and adjacent extents, empty/reversed extents and reversed block storage.
+`OverlappingFinallyBodiesKeepRootOrder` checks that shared call targets retain
+root-address precedence even when scope records are reversed and the bodies
+disagree on returning to the caller. `SingleBlockFinallyKeepsHalfOpenMembership`
+checks the direct single-block path, including empty and reversed extents. All run in
+`NeverDSEHTerminationHandlerTests`.
+
 `unittests/lift/eh/X86SEHDisplayTests.cpp`, in the same binary, gives the pipeline
 an x86 `_except_handler3` frame byte for byte: `X86SEHDisplay.*` pins the `__finally`
 holding its body with the `call` gone and the address comment kept, the abnormal
@@ -23653,6 +23662,31 @@ arguments across SC. These are model-contract tests, not original-e2 execution.
 DSP multiply tests observe OUFLAG21 and unknown HI/LO even for a zero target;
 MSA tests cover every SAT immediate field and full-vector ASUB extrema, with
 independent widened arithmetic and source roundtrip expectations.
+
+The CP0/PAUSE increment checks all CP0 register/selector combinations, all
+compact GPRs, privilege independent of HWREna, unknown inputs, no-output shapes,
+odd EPC word roundtrips, unrelated context preservation, and bound EHB hazards.
+PAUSE tests distinguish disabled, unknown, held and cleared reservation models;
+refusal preserves a subsequent successful SC, stores invalidate, and reset
+forgets knowledge. Pipeline and GNU source fixtures check retained effects and
+explicit native-source refusal. These remain model tests, not original-e2 hardware.
+DSP expanded multiplication and both saturating pack forms have independent
+lane/flag results, aliases, zero targets, rounding thresholds and HI/LO checks.
+MSA I5 tests exercise all 32 immediates in all four widths, aliases, equality
+hits, adjacent values and extrema; source fixtures include signed negative and
+unsigned endpoint immediates in HighC/LLVM-derived C at O0/O2 in both byte orders.
+The `CLEI_U.D 31` source fixture catches Clang 22's big-endian MSA constant-splat
+miscompile at O2. Source retains scalar optimization with explicit `no-msa`
+target attributes. Pipeline checks cover image/standalone profiles and the
+combined DSP/MSA constraint; the source runners execute the exported wide
+helpers too. Disabling vectorization only in the test command is not the
+qualification contract: the generated source itself carries the constraint.
+Standalone DSP controls include pure, wide-carrier and DSPControl-transfer
+functions. Twelve external Clang probes compile their HighC/LLVMC output with
+`-mdsp -mmsa` and inspect every retained LLVM definition, including read/write
+helpers, for the composed negative feature attributes. These compiler probes
+complement 24 standalone execution groups; checking the source spelling alone
+would miss Clang's declaration-versus-pragma attribute replacement.
 
 ### MIPS decode/lift and firmware performance
 

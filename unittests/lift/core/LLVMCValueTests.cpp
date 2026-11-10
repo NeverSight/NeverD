@@ -21,6 +21,7 @@
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
+#include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
 #include "neverd/backend/llvm/X86/LLVMX86BitTest.h"
 #include "neverd/backend/llvm/X86/LLVMX86DivRem.h"
 #include "neverd/backend/llvm/X86/X86APXAtomic.h"
@@ -8613,4 +8614,127 @@ int main(void) {
 )c";
   for (llvm::StringRef Level : {"-O0", "-O2"})
     compileAndRun(Source, Level, {}, true);
+}
+
+TEST(LLVMCValues, SegmentedLoadsKeepFullOffsetsAndPointerBits) {
+#if defined(__x86_64__) && defined(__linux__)
+  llvm::LLVMContext Context;
+  llvm::Module Module("segmented-offsets", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<> B(Context);
+  auto *Pointer =
+      llvm::PointerType::get(Context, neverd::kLLVMX86GSAddressSpace);
+  std::string Checks;
+  for (unsigned Bits : {8u, 16u, 32u, 64u, 0u})
+    for (bool Volatile : {false, true})
+      for (unsigned OffsetKind : {0u, 1u, 2u, 3u, 4u, 5u}) {
+        const std::string Name = "read_segment_" + std::to_string(Bits) + "_" +
+                                 std::to_string(Volatile) + "_" +
+                                 std::to_string(OffsetKind);
+        auto *Function = llvm::Function::Create(
+            llvm::FunctionType::get(B.getInt64Ty(), {B.getInt64Ty()}, false),
+            llvm::GlobalValue::ExternalLinkage, Name, Module);
+        B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Function));
+        llvm::Value *Offset = Function->getArg(0);
+        if (OffsetKind == 0)
+          Offset = B.getInt64(0);
+        else if (OffsetKind == 2)
+          Offset = B.getInt64(0x100000020);
+        else if (OffsetKind == 3)
+          Offset = B.CreateZExt(B.CreateTrunc(Offset, B.getInt32Ty()),
+                                B.getInt64Ty());
+        if (OffsetKind == 4)
+          Offset = B.getInt32(0xfffffff0);
+        else if (OffsetKind == 5)
+          Offset = B.getInt16(0xfff0);
+        auto *Address = B.CreateIntToPtr(Offset, Pointer);
+        llvm::Type *Type =
+            Bits ? static_cast<llvm::Type *>(B.getIntNTy(Bits)) : B.getPtrTy();
+        auto *Value = B.CreateLoad(Type, Address);
+        Value->setAlignment(llvm::Align(1));
+        Value->setVolatile(Volatile);
+        B.CreateRet(Bits ? B.CreateZExtOrTrunc(Value, B.getInt64Ty())
+                         : B.CreatePtrToInt(Value, B.getInt64Ty()));
+        const char *ExpectedOffset = OffsetKind == 4   ? "0xfffffff0"
+                                     : OffsetKind == 5 ? "0xfff0"
+                                     : OffsetKind == 0 ? "0"
+                                     : OffsetKind == 3 ? "0x20"
+                                                       : "0x100000020";
+        const char *ExpectedValue = Bits == 8    ? "0xef"
+                                    : Bits == 16 ? "0xcdef"
+                                    : Bits == 32 ? "0x89abcdef"
+                                                 : "0x1234567889abcdef";
+        Checks +=
+            "if (syscall(SYS_arch_prctl, ARCH_SET_GS, (uintptr_t)bytes + 1 - "
+            "UINT64_C(" +
+            std::string(ExpectedOffset) + "))) return 3;\n";
+        Checks += "if (" + Name + "(UINT64_C(0x100000020)) != UINT64_C(" +
+                  ExpectedValue + ")) failed = 1;\n";
+      }
+  auto *Store = llvm::Function::Create(
+      llvm::FunctionType::get(B.getVoidTy(), {B.getInt32Ty()}, false),
+      llvm::GlobalValue::ExternalLinkage, "write_segment_narrow", Module);
+  B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Store));
+  B.CreateStore(Store->getArg(0), B.CreateIntToPtr(B.getInt16(0xfff0), Pointer))
+      ->setVolatile(true);
+  B.CreateRetVoid();
+  Checks += R"(
+  if (syscall(SYS_arch_prctl, ARCH_SET_GS,
+              (uintptr_t)bytes + 1 - UINT64_C(0xfff0))) return 3;
+  write_segment_narrow(0x76543210);
+  failed |= bytes[1] != 0x10 || bytes[2] != 0x32 ||
+            bytes[3] != 0x54 || bytes[4] != 0x76;
+)";
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  // A 32-bit observer matches the Windows intrinsic's offset contract while
+  // executing real GS memory on the host. Expected bytes are independent of
+  // the emitter and include an unaligned pointer load and a zero offset.
+  const std::string Harness = R"(
+#define _GNU_SOURCE 1
+#include <stdint.h>
+#include <asm/prctl.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#define SEG_READ(name, type, opcode, constraint) \
+static type name(uint32_t offset) { \
+  type value; \
+  __asm__ volatile(opcode " %%gs:(%1), %0" : constraint(value) \
+                   : "r"((uintptr_t)offset) : "memory"); \
+  return value; \
+}
+SEG_READ(__readgsbyte, uint8_t, "movb", "=q")
+SEG_READ(__readgsword, uint16_t, "movw", "=r")
+SEG_READ(__readgsdword, uint32_t, "movl", "=r")
+SEG_READ(__readgsqword, uint64_t, "movq", "=r")
+)";
+  const std::string Main = R"(
+int main(void) {
+  uintptr_t saved_gs;
+  static unsigned char bytes[] = {0, 0xef, 0xcd, 0xab, 0x89, 0x78, 0x56, 0x34, 0x12};
+  int failed = 0;
+  if (syscall(SYS_arch_prctl, ARCH_GET_GS, &saved_gs)) return 2;
+)";
+  for (auto Format : {neverd::BinaryFormat::COFF, neverd::BinaryFormat::ELF}) {
+    SCOPED_TRACE(static_cast<unsigned>(Format));
+    neverd::CEmitterOptions Options;
+    Options.TheArch = neverd::Arch::X64;
+    Options.Format = Format;
+    Options.EmitIncludes = false;
+    std::string Source;
+    llvm::raw_string_ostream Stream(Source);
+    ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Stream, Options));
+    for (llvm::StringRef Level : {"-O0", "-O2"})
+      source_call_execution_test::compileAndRun(
+          Harness + Source + Main + Checks +
+              "if (syscall(SYS_arch_prctl, ARCH_SET_GS, saved_gs)) return 4;\n"
+              "return failed; }\n",
+          {Level, "-fPIE", "-pie", "-Werror=int-conversion"});
+  }
+  RecordProperty("native_gs_loads", 240);
+  RecordProperty("native_gs_stores", 4);
+  RecordProperty("native_executables", 4);
+#else
+  GTEST_SKIP() << "native GS-base execution requires Linux x86-64";
+#endif
 }

@@ -105,20 +105,38 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
     S.emit(NdOp::COPY, NdVar::reg(mipsreg::w(WD), 16), {Result});
     return true;
   }
+  // I5 shares the integer lane semantics with 3R; only its right operand
+  // differs. The descriptor has already validated the opcode/function bits.
+  const bool ImmediateInteger = (Word & 63) == 6 || (Word & 63) == 7;
+  const bool SignedImmediate = *Kind == Instruction::EqualImmediate ||
+                               *Kind == Instruction::SignedLessImmediate ||
+                               *Kind == Instruction::SignedLessEqualImmediate ||
+                               *Kind == Instruction::SignedMaximumImmediate ||
+                               *Kind == Instruction::SignedMinimumImmediate;
+  const int64_t Immediate = SignedImmediate ? int(WT ^ 16) - 16 : int(WT);
+  const auto Right = [&](unsigned I, uint16_t Bytes) {
+    return ImmediateInteger ? NdVar::cst(uint64_t(Immediate), Bytes)
+                            : Lane(WT, I, Bytes);
+  };
   std::optional<NdOp> Comparison;
   switch (*Kind) {
+  case Instruction::EqualImmediate:
   case Instruction::EqualVector:
     Comparison = NdOp::INT_EQUAL;
     break;
+  case Instruction::SignedLessImmediate:
   case Instruction::SignedLessVector:
     Comparison = NdOp::INT_SLESS;
     break;
+  case Instruction::UnsignedLessImmediate:
   case Instruction::UnsignedLessVector:
     Comparison = NdOp::INT_LESS;
     break;
+  case Instruction::SignedLessEqualImmediate:
   case Instruction::SignedLessEqualVector:
     Comparison = NdOp::INT_SLESSEQUAL;
     break;
+  case Instruction::UnsignedLessEqualImmediate:
   case Instruction::UnsignedLessEqualVector:
     Comparison = NdOp::INT_LESSEQUAL;
     break;
@@ -155,11 +173,17 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
     break;
   }
   const bool Minimum = *Kind == Instruction::SignedMinimumVector ||
-                       *Kind == Instruction::UnsignedMinimumVector;
+                       *Kind == Instruction::UnsignedMinimumVector ||
+                       *Kind == Instruction::SignedMinimumImmediate ||
+                       *Kind == Instruction::UnsignedMinimumImmediate;
   const bool Maximum = *Kind == Instruction::SignedMaximumVector ||
-                       *Kind == Instruction::UnsignedMaximumVector;
+                       *Kind == Instruction::UnsignedMaximumVector ||
+                       *Kind == Instruction::SignedMaximumImmediate ||
+                       *Kind == Instruction::UnsignedMaximumImmediate;
   const bool SignedExtremum = *Kind == Instruction::SignedMinimumVector ||
-                              *Kind == Instruction::SignedMaximumVector;
+                              *Kind == Instruction::SignedMaximumVector ||
+                              *Kind == Instruction::SignedMinimumImmediate ||
+                              *Kind == Instruction::SignedMaximumImmediate;
   const bool Absolute = *Kind == Instruction::AbsoluteMinimumVector ||
                         *Kind == Instruction::AbsoluteMaximumVector;
   const bool AddAbsolute = *Kind == Instruction::AddAbsoluteVector ||
@@ -346,7 +370,7 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
         S.emit(NdOp::SELECT, Values[I], {Condition, A, B}); // Ties choose WT.
       }
     } else if (Minimum || Maximum) {
-      const auto A = Lane(WS, I, Bytes), B = Lane(WT, I, Bytes);
+      const auto A = Lane(WS, I, Bytes), B = Right(I, Bytes);
       const auto Condition =
           S.binary(SignedExtremum ? NdOp::INT_SLESS : NdOp::INT_LESS, A, B, 1);
       Values[I] = S.makeTemp(Bytes);
@@ -354,14 +378,16 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
              {Condition, Minimum ? A : B, Minimum ? B : A});
     } else if (Comparison) {
       const auto Condition =
-          S.binary(*Comparison, Lane(WS, I, Bytes), Lane(WT, I, Bytes), 1);
+          S.binary(*Comparison, Lane(WS, I, Bytes), Right(I, Bytes), 1);
       // Comparisons replicate their predicate across every bit of the lane.
       Values[I] = S.binary(NdOp::INT_SUB, NdVar::cst(0, Bytes),
                            S.resize(Condition, Bytes));
     } else
-      Values[I] = S.binary(*Kind == Instruction::SubVector ? NdOp::INT_SUB
-                                                           : NdOp::INT_ADD,
-                           Lane(WS, I, Bytes), Lane(WT, I, Bytes));
+      Values[I] = S.binary(*Kind == Instruction::SubVector ||
+                                   *Kind == Instruction::SubImmediate
+                               ? NdOp::INT_SUB
+                               : NdOp::INT_ADD,
+                           Lane(WS, I, Bytes), Right(I, Bytes));
   }
   for (unsigned Count = 16u / Bytes; Count > 1; Count /= 2)
     for (unsigned I = 0; I != Count / 2; ++I)

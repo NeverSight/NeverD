@@ -1941,20 +1941,16 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
     return;
   }
   if (auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst);
-      Load && !Load->isSimple() &&
-      isLLVMX86SegmentedAddressSpace(Load->getPointerAddressSpace())) {
-    if (Load->isAtomic())
-      throw std::runtime_error("unsupported atomic segmented C load");
+      Load && isLLVMX86SegmentedAddressSpace(Load->getPointerAddressSpace())) {
     auto Segment = renderX86SegmentedLoad(
-        Opts.TheArch, *Load,
-        [this](const llvm::Value *Value) { return valueStr(Value); });
-    if (Segment.empty())
-      throw std::runtime_error(
-          "unsupported segmented C load width or architecture");
+        Opts.TheArch, Opts.Format, *Load, freshVar("segment_value"),
+        [this](const llvm::Value *Value) {
+          return integerPointerOperandStr(Value);
+        });
     if (Load->getType()->isPointerTy())
       Segment =
           "(" + typeToCLLVM(Load->getType()) + ")(uintptr_t)(" + Segment + ")";
-    // Ordered loads receive a materialized ValueTexts name. That name is
+    // Segmented loads receive a materialized ValueTexts name. That name is
     // their future use, not a replacement for the effect defining it.
     emitIndent(Indent);
     OS << getName(Load) << " = " << Segment << ";\n";
@@ -2102,14 +2098,6 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
     if (writeRawMemoryCopy(Inst, Indent))
       return;
     emitIndent(Indent);
-    if (std::string Seg = renderX86SegmentedLoad(
-            Opts.TheArch, *LI,
-            [this](const llvm::Value *V) { return valueStr(V); });
-        !Seg.empty()) {
-      OS << Name << " = " << Seg << ";\n";
-      HasCIntrinsics = true;
-      return;
-    }
     if (auto VA = imageDataVA(LI->getPointerOperand())) {
       const auto *LoadTy = LI->getType();
       const uint16_t Size =
@@ -2140,9 +2128,11 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
   }
 
   if (auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst)) {
-    if (const std::string Segment = renderX86SegmentedStore(
-            Opts.TheArch, *SI,
-            [this](const llvm::Value *Value) { return valueStr(Value); });
+    if (const std::string Segment =
+            renderX86SegmentedStore(Opts.TheArch, *SI,
+                                    [this](const llvm::Value *Value) {
+                                      return integerPointerOperandStr(Value);
+                                    });
         !Segment.empty()) {
       emitIndent(Indent);
       OS << Segment << "\n";

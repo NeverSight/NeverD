@@ -167,6 +167,23 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
   const bool Wide = S.Width == 8;
 
   if (Mode == InstructionMode::MIPS16 && HasMIPS16E2 && !Wide) {
+    if (Word == 0x00000140) {
+      S.emitIntrinsic(Intrinsic::MIPSPause, {});
+      return true;
+    }
+    if (Opcode == 16 && (RS == 0 || RS == 4) && !(Word & 0x7ff) &&
+        mips::supportedCP0Word(RD, RS == 4)) {
+      if (RS == 4)
+        S.emitIntrinsic(Intrinsic::MIPSWriteCP0Word, {},
+                        {NdVar::cst(RD, 1), S.read(RT)});
+      else {
+        const auto Result = S.makeTemp(4);
+        S.emitIntrinsic(Intrinsic::MIPSReadCP0Word, Result,
+                        {NdVar::cst(RD, 1)});
+        S.write(RT, Result);
+      }
+      return true;
+    }
     if (Opcode == 48 || Opcode == 56) {
       const auto Address =
           S.binary(NdOp::INT_ADD, S.read(RS), NdVar::cst(Immediate, 4));
@@ -195,6 +212,8 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
       return true;
     }
   }
+  if (Word == 0x00000140)
+    return false;           // PAUSE requires an admitted execution profile.
   if (Word == 0x000000c0) { // EHB, before the generic SLL zero destination.
     S.emitIntrinsic(Intrinsic::MIPSExecutionHazardBarrier, {});
     return true;
@@ -490,6 +509,7 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
   const auto SlotCode = Slot ? encoding(*Slot) : std::nullopt;
   if (Slot &&
       (!SlotCode || (!SlotCode->Frame && (hasDelaySlot(SlotCode->Word) ||
+                                          SlotCode->Word == 0x00000140 ||
                                           SlotCode->Word >> 26 == 29))))
     throw UnliftedInstruction(
         Slot->address, Slot->mnemonic,

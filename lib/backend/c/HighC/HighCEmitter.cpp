@@ -27,12 +27,14 @@
 #include "../render/X86/X86FPStateHelpers.h"
 #include "../render/X86/X86Flags.h"
 #include "../render/X86/X86ScalarSystem.h"
+#include "../render/X86/X86SegmentMemory.h"
 #include "../render/X86/X86SystemRegister.h"
 #include "../render/X86/X86SystemState.h"
 #include "../render/X86/X86Virtualization.h"
 #include "HighCWriter.h"
 
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/MIPS/MIPSSourceCompiler.h"
 #include "neverd/backend/c/FloatingPointContract.h"
 #include "neverd/backend/c/render/AArch64/AArch64AddressMemoryC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
@@ -353,7 +355,10 @@ bool hasMainSignature(const HighFunc &Func,
 }
 } // namespace
 
-bool HighCWriter::useMsvcSegmentedRead() const {
+bool HighCWriter::useMsvcSegmentedRead(const TypeRef &Ty) const {
+  if (!Ty || (Ty->Kind != NdTypeKind::Int && Ty->Kind != NdTypeKind::Ptr) ||
+      !x86SegmentedReadIntrinsic(false, Ty->Size))
+    return false;
   // Realigned registration frames keep their explicit FS memory helpers.
   // Collection must choose those helpers whenever expression rendering does.
   if (CurrentFunc && preservesRegistrationMemory(*CurrentFunc))
@@ -741,7 +746,7 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
         E.MemoryOrdering == NdMemoryOrdering::None &&
         E.MemoryAddressSpace != NdMemoryAddressSpace::Default &&
         (Opts.TheArch == Arch::X86 || Opts.TheArch == Arch::X64) &&
-        E.Kind == ExprKind::Load && useMsvcSegmentedRead();
+        E.Kind == ExprKind::Load && useMsvcSegmentedRead(E.Type);
     if (E.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
       validateMemoryAddressSpaceForC(E.MemoryAddressSpace, Opts.TheArch);
       // These renderers pass raw offsets to native instructions. They do not
@@ -907,7 +912,7 @@ void HighCWriter::writeMemoryHelpers() {
   for (const auto &[Key, Name] : SaturatingLaneHelpers)
     writeX86SaturatingLaneHelper(OS, Name, Key.first, Key.second);
   writeScalarLSEFallbacks(OS, ScalarLSEBuiltins);
-  writeMIPSScalarHelpers(OS, Opts.TheArch, MIPSScalarHelpers);
+  writeMIPSScalarHelpers(OS, Opts.TheArch, MIPSScalarHelpers, Opts.Image);
   // The accesses' types or assumptions are written only when an access can
   // name a type; otherwise every access keeps its portable byte copy.
   UnalignedTypesWritten = Opts.UseUnalignedPointers && NeedsUnalignedTypes;
@@ -1029,11 +1034,11 @@ void HighCWriter::writeMemoryHelpers() {
   }
 }
 
-std::string HighCWriter::memoryLoadExpr(const TypeRef &Ty, llvm::StringRef Addr,
-                                        NdMemoryOrdering Ordering,
-                                        NdMemoryAddressSpace AddressSpace,
-                                        bool ExactImageBytes,
-                                        MemoryLoadDestination *Destination) {
+std::string HighCWriter::memoryLoadExpr(
+    const TypeRef &Ty, llvm::StringRef Addr, NdMemoryOrdering Ordering,
+    NdMemoryAddressSpace AddressSpace, bool ExactImageBytes,
+    MemoryLoadDestination *Destination,
+    std::optional<uint64_t> ConstantOffset) {
   validateMemoryAddressSpaceForC(AddressSpace, Opts.TheArch);
   // An image object's bytes are in this program's memory, which no segment
   // register reaches; an atomic access to them keeps the image's alignment
@@ -1044,11 +1049,14 @@ std::string HighCWriter::memoryLoadExpr(const TypeRef &Ty, llvm::StringRef Addr,
   // MSVC's FS/GS read intrinsics are a useful source-level spelling for
   // Windows targets. Other formats keep the target address-space-qualified
   // helper, so the segment remains explicit in the C memory type.
-  if (useMsvcSegmentedRead()) {
-    if (std::string Seg = renderX86MsvcSegmentedLoad(
-            Opts.TheArch, Ty ? Ty->Size : 0, Addr, Ordering, AddressSpace);
-        !Seg.empty())
-      return Seg;
+  if (useMsvcSegmentedRead(Ty) && Ordering == NdMemoryOrdering::None &&
+      AddressSpace != NdMemoryAddressSpace::Default) {
+    auto Read = renderX86SegmentedRead(
+        Opts.TheArch, Ty->Size, Addr, AddressSpace, true, ConstantOffset,
+        MemoryIdentifiers.allocate("segment_value"));
+    if (Ty->Kind == NdTypeKind::Ptr)
+      Read = "(" + typeToC(Ty) + ")(uintptr_t)(" + Read + ")";
+    return Read;
   }
   if (UnalignedTypesWritten && Ordering == NdMemoryOrdering::None &&
       AddressSpace == NdMemoryAddressSpace::Default)
@@ -2038,7 +2046,7 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
 void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   const auto NativeFrameConvention = [&](const HighFunc &Function) {
     if (isMIPS(Opts.TheArch))
-      OS << mips::dspSourceCAttribute(
+      OS << mips::sourceCompilerCAttribute(
           Opts.TheArch, Opts.Image,
           MIPSScalarHelpers.count(Intrinsic::MIPSReadDSPControl) ||
               MIPSScalarHelpers.count(Intrinsic::MIPSWriteDSPControl));
@@ -5163,8 +5171,10 @@ void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
       (mips::sourcePreservesDSPControl(Opts.TheArch, Opts.Image) ||
        MIPSScalarHelpers.count(Intrinsic::MIPSReadDSPControl) ||
        MIPSScalarHelpers.count(Intrinsic::MIPSWriteDSPControl));
-  if (PreserveDSPControl)
-    OS << mips::DSPSourceCBegin;
+  const bool AvoidMSA = mips::sourceAvoidsMSA(Opts.TheArch, Opts.Image);
+  if (isMIPS(Opts.TheArch))
+    OS << mips::sourceCompilerCBegin(Opts.TheArch, Opts.Image,
+                                     PreserveDSPControl, AvoidMSA);
   std::set<std::string> Records;
   std::function<void(const TypeRef &)> RecordType = [&](const TypeRef &Type) {
     if (Type && Type->Kind == NdTypeKind::Array) {
@@ -5264,7 +5274,7 @@ void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
         OS << "\n";
     }
   recordSourceNames(Funcs);
-  if (PreserveDSPControl)
+  if (PreserveDSPControl || AvoidMSA)
     OS << mips::DSPSourceCEnd;
 }
 

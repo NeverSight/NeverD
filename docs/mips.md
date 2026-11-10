@@ -180,6 +180,16 @@ all-ones pseudocode is not used as the oracle.
 DSPControl. `CMP.EQ/LT/LE.PH` remains unsupported: its upper condition bits become
 UNPREDICTABLE, requiring a partial-known state transport/source contract.
 
+`MULEQ_S.W.PHL/PHR` expand a signed Q15 product to Q31, saturating
+negative-one times negative-one to `0x7fffffff` and setting sticky OUFLAG21.
+Like the other GPR-targeting multiplies, they invalidate HI/LO even for `$zero`.
+`PRECRQ_RS.PH.W` widens before adding `0x8000`, saturates positive overflow,
+and packs the high halfwords. `PRECRQU_S.QB.PH` does not round: negative Q15
+values become zero, values above `0x7f80` become 255, and the remainder contributes
+bits 14..7. Both pack operations set sticky OUFLAG22 on saturation, including
+when the destination is `$zero`; `0x7f80` and `0x7f81` produce equal bytes but
+different flag updates. HI/LO are preserved by these pack operations.
+
 `MULEU_S.PH.QBL/QBR` saturate unsigned byte-by-halfword products to 65535.
 `MULQ_RS.PH` rounds signed Q15 products toward positive infinity at halfway
 values and saturates the pair of -1 operands to 32767. Both families set sticky
@@ -224,8 +234,8 @@ link spills remain outside the current source proof.
 The operation rules follow the
 [MIPS32 DSP ASE manual, revision 1.00](https://0x04.net/~mwk/doc/mips/MD00374-2B-MIPS32DSP-AFP-01.00.pdf).
 The pinned Unicorn model is checked with Status.MX enabled. Its packed
-arithmetic, shift and the three packed-multiply translators preserve DSPControl effects for zero
-destinations and still check the enabled state. The source runner rejects any
+arithmetic, shift and admitted GPR-multiply translators preserve DSPControl
+effects for zero destinations and still check the enabled state. The source runner rejects any
 original/generated disagreement with the independent expectations. Historical
 receipts below retain the zero-destination defect of the older reference.
 
@@ -367,15 +377,15 @@ GNU `-mmips16e2` supplies explicit ELF evidence for the owned fixtures; a local
 The pinned Unicorn predates e2, so it is **not** an original-e2 oracle. Literal
 GNU bytes, independent LowIR expectations and execution of generated old-MIPS16
 source are separate checks. Hardware or independent original-e2 execution
-remains unavailable. General CP0 transfers, MT, cache/hint/PAUSE forms and
+remains unavailable. General CP0 transfers beyond the word views below, MT, cache/hint forms and
 MIPS16 on MIPS64 remain unsupported. The following system/atomic slice is
 qualified at LowIR, not as native source or original-e2 hardware execution. No path treats a misdecoded operand or unknown instruction as
 valid semantics. The immediate, memory, call and slot rules follow
 [MIPS16e Volume IV-a, revision 2.63](https://jnastarot.io/arch_index/pdf/MD00076-2B-MIPS1632-AFP-02.63.pdf)
 and were cross-checked against the pinned Ghidra definitions linked above.
 
-MIPS16e2 `LL`/`SC`, `RDHWR` (indices 0–3 and 29), and `DI`/`EI` (with or
-without a result) retain explicit effectful intrinsics. Reserved fields and
+MIPS16e2 `LL`/`SC`, `RDHWR` (indices 0–3 and 29), `DI`/`EI` (with or
+without a result), the admitted `MFC0`/`MTC0` word views, and `PAUSE` retain explicit effectful intrinsics. Reserved fields and
 feature evidence are checked before effects. SC captures the original address
 and stored value before overwriting its GPR with 0/1. An unused result cannot
 remove the memory/reservation or system effect. SC ends stack-memory argument
@@ -411,6 +421,24 @@ While that obligation is pending, only a bound EHB can clear it; SYNC cannot.
 Unbound system execution refuses. Context authentication and interrupt/event
 sequencing belong to the caller; this API does not simulate interrupt delivery,
 CP0 pipeline timing or privilege transitions.
+
+`MIPSCP0.def` admits selector-zero reads of Status (12), EPC (14), and
+ErrorEPC (30), and writes to EPC/ErrorEPC. These are explicit software-visible
+32-bit word views: all bits, including the low ISA-mode marker, are preserved.
+They do not change the current decode mode or implement exception return.
+Status reads share the DI/EI state owner. CP0 usability is required independently
+of HWREna; an unknown read or write operand refuses. A successful write establishes
+that view and an execution-hazard obligation, discharged by bound EHB. General
+Status writes, Count, Config/TLB and other CP0 selectors remain unsupported.
+The EPC/ErrorEPC software word view is also described in the vendor
+[CPU reference manual, sections 50.13.25 and 50.13.55](https://ww1.microchip.com/downloads/aemDocuments/documents/WSG/ProductDocuments/ReferenceManuals/PIC32_Family_Reference_Manual_CPU.pdf).
+
+`PAUSE` retains an effectful intrinsic and is forbidden in a delay slot. In the
+explicit reservation model it completes only when LLBit is known clear; a held
+or unknown reservation refuses without changing it. An observed external clear
+may then permit execution. No scheduling, interrupt wakeup, or EPC update on the
+blocked/descheduling path is inferred. Classic PAUSE is also refused outside
+this admitted profile, rather than falling through the zero-destination SLL rule.
 
 HighC, LLVM and LLVMC explicitly refuse native lowering of this stateful slice.
 An isolated LL/SC asm helper would permit compiler spills or calls inside the
@@ -450,7 +478,11 @@ MSA. Other revisions, MSA64, microMIPS/MSA and DSP/MSA combinations are refused.
 `AVE_S`/`AVE_U`, `AVER_S`/`AVER_U`, and `AND.V`/`OR.V`/`NOR.V`/`XOR.V` use exact encoding descriptors in
 `MIPSMSA.def`. Additional forms are `ANDI/ORI/NORI/XORI.B`,
 `BSEL/BMNZ/BMZ.V`, and B/H/W/D formats of `PCNT`, `NLZC`, `NLOC`,
-`SLLI/SRLI/SRAI`, `BCLRI/BSETI/BNEGI`, `ASUB_S/ASUB_U` and `SAT_S/SAT_U`.
+`SLLI/SRLI/SRAI`, `BCLRI/BSETI/BNEGI`, `ASUB_S/ASUB_U`, `SAT_S/SAT_U`,
+`ADDVI/SUBVI`, `CEQI`, `CLTI_S/U`, `CLEI_S/U`, `MAXI_S/U` and `MINI_S/U`.
+The I5 arithmetic operands are unsigned; CEQI and the signed comparisons/extrema
+sign-extend the five-bit immediate. Comparison masks cover the entire element,
+including 64-bit lanes.
 Absolute difference preserves the full unsigned magnitude, including signed
 min/max pairs. Saturation clamps to the signed/unsigned range of m+1 bits while
 retaining the lane width; m=0 and full-width saturation are defined. BIT immediates have a prefix-coded
@@ -492,12 +524,31 @@ vector ABI, saved-FPR restoration and multi-block source proofs remain future
 work. Both C paths use Clang's bit-precise integer support for any surviving
 128-bit scalar temporaries on MIPS32.
 
+Big-endian MSA scalar source carries a `-msa` LLVM feature and a Clang
+`target("no-msa")` C constraint, including helper functions. Clang 22.1.6
+miscompiles a vectorized unsigned 64-bit comparison against 32: its MSA
+constant-splat bitcast emits `LDI.D 32; SHF.W 0xb1`, changing the bound to
+`32 << 32`. The scalar C and optimized LLVM comparison remain correct; the
+constraint prevents that instruction selection while retaining scalar
+optimization. The compiler's
+[constant-splat selector](https://github.com/llvm/llvm-project/blob/llvmorg-22.1.6/llvm/lib/Target/Mips/MipsSEISelDAGToDAG.cpp)
+also documents big-endian bitcast limitations. This is a source-compiler
+boundary, not a change to MSA instruction semantics. Little-endian and known
+non-MSA images keep their existing profile.
+
+`MIPSSourceCompiler.h` composes this constraint with DSPControl preservation.
+Image-less big-endian MIPS32 source needs both; one complete target attribute
+is emitted because separate declaration and pragma attributes do not compose
+in Clang. LLVM functions, declarations, C source shards and helpers retain the
+same constraints. The original-versus-generated source matrix includes the
+`CLEI_U.D 31` case that exposed the compiler defect.
+
 The execution contract requires MSA enabled with CU1/FR configured. It does not
 model disabled-MSA exceptions, MSA floating point/control state or arbitrary
 MSA guest execution. The operation and alias rules follow the MIPS32 MSA manual
 (MD00866, revision 1.12), sections ADDV, SUBV, CEQ, CLT/CLE, MIN/MAX,
 SLL/SRL/SRA, BCLR/BSET/BNEG, MULV/MADDV/MSUBV, MAX_A/MIN_A, ADD_A/ADDS_A, ADDS/SUBS, AVE/AVER,
-AND/OR/NOR/XOR,
+AND/OR/NOR/XOR, ADDVI/SUBVI, CEQI, CLTI/CLEI, MAXI/MINI,
 COPY_S, FILL and INSERT. Owned execution
 fixtures validate scalar results, output bytes and the ABI-preserved low FPR
 views against an enabled P5600 reference. The pinned Unicorn includes fixes
@@ -713,6 +764,40 @@ feature products. Exact receipts and compressed source evidence remain in
 `final-integration.json`. Test executables and one-use comparison/dependency
 builds are removed after their last readers; the current CLI/SDK, incremental
 cache and qualified reference library are retained.
+
+The [CP0/PAUSE, DSP packing and MSA I5 increment](https://github.com/NeverSight/NeverD/pull/2301)
+adds the bounded CP0 word views and PAUSE model above, four DSP forms and
+eleven MSA immediate families in all four lane widths. Independent original
+DSP/MSA instruction checks passed 7,464 observations before the source
+comparisons. The full integrated Release selection passed 1,578 cases with
+36 explicit host/compiler/fixture skips. The subsequent compiler-helper fix
+passed all 126 MIPS pipeline cases. The later shared C integration selection
+passed 1,243 cases with 73 explicit skips. The qualification and build identities
+are recorded in the [qualification receipt](evidence/mips-cp0-immediate-2026-11-11.json).
+
+The six source matrices qualify 4,724 groups. The 1,252 classic, microMIPS,
+MIPS16 and MIPS16e2 groups execute on the final products; the 648 DSP and 2,824
+MSA groups retain their completed execution evidence only after regenerating
+all 1,736 distinct C outputs and matching complete source, input ELF,
+toolchain and reference-library hashes. This is explicit reuse of identical
+source evidence, not a claim that those executions were repeated. There are
+also 52 stateful e2 source refusals, 24 standalone DSP execution groups,
+12 external compiler feature probes, four live MSA wide-carrier groups and
+four wide-storage/declaration checks. The compiler probes include DSPControl
+read/write helpers under adverse `-mdsp -mmsa` defaults. All four Archer C7
+`ubus` outputs retain their previous hashes.
+
+Performance evidence separates the same-base feature comparison, long/mixed
+compressed streams, newly admitted instruction throughput and the later shared
+dev/source-compiler changes. Seven warmed alternating pairs retain CPU,
+wall time, memory and output fingerprints; the final firmware comparison uses
+20 complete requests per sample with matching snapshot layouts. These runs
+do not establish universal improvement or a cross-tool ranking. Raw reports,
+compiler-failure traces, recovery indexes and cleanup receipts remain in
+`build-mips/mips-cp0-immediate/`; completed raw reports are compressed and
+reproducible test/snapshot products are retired after their final readers.
+Generic CP0/cache/MT behavior, DSP accumulator/revision coverage, remaining MSA
+operations and original-e2 hardware execution remain outside this increment.
 
 ## TP-Link firmware workflow
 

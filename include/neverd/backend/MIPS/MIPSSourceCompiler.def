@@ -1,0 +1,24 @@
+//===- MIPSSourceCompiler.def - MIPS source compiler constraints --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+NEVERD_MIPS_SOURCE_TEXT(NoMSAMarker, "neverd.mips.no-msa")
+NEVERD_MIPS_SOURCE_TEXT(NoMSAFeatures, "-msa")
+NEVERD_MIPS_SOURCE_TEXT(NoMSACAttribute, "__attribute__((target(\"no-msa\"))) ")
+NEVERD_MIPS_SOURCE_TEXT(DSPNoMSACAttribute,
+                        "__attribute__((target(\"no-dsp,no-dspr2,no-msa\"))) ")
+NEVERD_MIPS_SOURCE_TEXT(
+    NoMSACBegin, "#if !defined(__clang__)\n"
+                 "#error \"MIPS source requires Clang target attributes\"\n"
+                 "#endif\n"
+                 "#pragma clang attribute push "
+                 "(__attribute__((target(\"no-msa\"))), apply_to=function)\n\n")
+NEVERD_MIPS_SOURCE_TEXT(
+    DSPNoMSACBegin, "#if !defined(__clang__)\n"
+                    "#error \"MIPS source requires Clang target attributes\"\n"
+                    "#endif\n"
+                    "#pragma clang attribute push "
+                    "(__attribute__((target(\"no-dsp,no-dspr2,no-msa\"))), "
+                    "apply_to=function)\n\n")
+#undef NEVERD_MIPS_SOURCE_TEXT

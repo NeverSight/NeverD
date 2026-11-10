@@ -12,6 +12,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/ArchSupport.h"
+#include "neverd/backend/MIPS/MIPSSourceCompiler.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/decode/Decoder.h"
@@ -85,12 +86,25 @@ TEST(MIPSMSAPipeline, InitializedIntegerLeavesEmitBothSourceRoutes) {
       if (LLVM) {
         ASSERT_NE(Result.LlvmModule, nullptr);
         EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+        const auto *Body = Result.LlvmModule->getFunction("msa_leaf");
+        ASSERT_NE(Body, nullptr);
+        EXPECT_EQ(Body->hasFnAttribute(mips::NoMSAMarker),
+                  Target == Arch::MIPS32);
+        if (Target == Arch::MIPS32)
+          EXPECT_EQ(Body->getFnAttribute("target-features").getValueAsString(),
+                    "-msa");
         ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Stream, Emit,
                                         nullptr, &*Image));
       } else {
         ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Stream, Emit));
       }
       EXPECT_NE(Text.find("msa_leaf"), std::string::npos) << Text;
+      EXPECT_EQ(Text.find(mips::NoMSACBegin) != std::string::npos,
+                Target == Arch::MIPS32)
+          << Text;
+      EXPECT_EQ(Text.find(mips::NoMSACAttribute) != std::string::npos,
+                Target == Arch::MIPS32)
+          << Text;
     }
 }
 
@@ -200,6 +214,12 @@ TEST(MIPSMSAPipeline, LLVMCWideIntegerCarrier) {
     std::string Text;
     llvm::raw_string_ostream Stream(Text);
     ASSERT_TRUE(LLVMCEmitter().emit(Module, Stream, Options));
+    // No image can rule out externally enabled DSP/MSA. The one attribute
+    // must carry both constraints, including for compiler-generated helpers.
+    EXPECT_NE(Text.find(Target == Arch::MIPS32 ? mips::DSPNoMSACBegin
+                                               : mips::DSPSourceCBegin),
+              std::string::npos)
+        << Text;
     EXPECT_NE(Text.find("_BitInt(128)"), std::string::npos) << Text;
     EXPECT_NE(Text.find("__uint128_t"), std::string::npos) << Text;
     if (const char *Directory = std::getenv("NEVERD_MIPS_CARRIER_OUTPUT")) {

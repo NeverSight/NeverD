@@ -1,0 +1,11 @@
+//===- MIPSCP0.def - Admitted MIPS32 CP0 word views ----------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Register index, software-visible word, and whether MTC0 is admitted.
+// Selector zero only. EPC words preserve the low ISA-mode bit verbatim.
+NEVERD_MIPS_CP0(12, Status, false)
+NEVERD_MIPS_CP0(14, EPC, true)
+NEVERD_MIPS_CP0(30, ErrorEPC, true)
+#undef NEVERD_MIPS_CP0
