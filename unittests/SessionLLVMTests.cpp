@@ -716,7 +716,12 @@ TEST_F(SessionLLVMTest, RejectedEmissionDoesNotPublishAModule) {
 
   EXPECT_FALSE(State.ensureLlvmModule());
   EXPECT_EQ(State.PipeResult.LlvmModule, nullptr);
-  EXPECT_EQ(State.LastError, "native LLVM emission failed");
+  // The refused body says why.
+  EXPECT_TRUE(llvm::StringRef(State.LastError)
+                  .starts_with("native LLVM emission failed: "))
+      << State.LastError;
+  EXPECT_NE(State.LastError.find("source_function"), std::string::npos)
+      << State.LastError;
   EXPECT_TRUE(State.PipeResult.Success);
 }
 
@@ -757,7 +762,11 @@ TEST_F(SessionLLVMTest, OneFunctionsModuleDoesNotEmitItsSiblings) {
   // The refused function and an unknown one still fail clearly.
   State.clearError();
   EXPECT_EQ(State.ensureFunctionLlvmModule(0x1040, false), nullptr);
-  EXPECT_EQ(State.LastError, "native LLVM emission failed");
+  EXPECT_TRUE(llvm::StringRef(State.LastError)
+                  .starts_with("native LLVM emission failed: "))
+      << State.LastError;
+  EXPECT_NE(State.LastError.find("refused_sibling"), std::string::npos)
+      << State.LastError;
   State.clearError();
   EXPECT_EQ(State.ensureFunctionLlvmModule(0x2000, false), nullptr);
   EXPECT_EQ(State.LastError, "LLVM function not found at 0x2000");

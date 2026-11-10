@@ -331,6 +331,28 @@ protected:
     return exec(ndBin(), {"lift", "-no-opt", Binary.string()});
   }
 
+  // The note a lifted module carries at its head for \p Name when it leaves
+  // that function out, or an empty string when it has none.
+  static std::string notLiftedNote(const std::string &IR,
+                                   const std::string &Name) {
+    const std::string::size_type Begin =
+        IR.find("; neverd.not-lifted: " + Name + " at ");
+    if (Begin == std::string::npos)
+      return {};
+    return IR.substr(Begin, IR.find('\n', Begin) - Begin);
+  }
+
+  // Whether the lifted module defines \p Name rather than only declaring it.
+  static bool definesLLVMFunction(const std::string &IR,
+                                  const std::string &Name) {
+    std::istringstream Lines(IR);
+    for (std::string Line; std::getline(Lines, Line);)
+      if (Line.rfind("define ", 0) == 0 &&
+          Line.find("@" + Name + "(") != std::string::npos)
+        return true;
+    return false;
+  }
+
   // Host clang does not know NeverD LLVM-fork builtins.  Keep HighC emitting
   // those names, and only stub them for syntax-only checking.
   RunResult

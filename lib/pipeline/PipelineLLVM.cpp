@@ -179,8 +179,12 @@ Pipeline::LLVMEmissionResult Pipeline::emitLLVMSharded(
       }
       Result.UnhandledValueIntrinsics = Emitter.unhandledValueIntrinsicCount();
       if (Result.Module || !OmitRefusedBodies ||
-          Emitter.refusedBodies().empty())
+          Emitter.refusedBodies().empty()) {
+        // A unit that cannot leave a refused body out fails with why.
+        if (!Result.Module && !Emitter.refusedBodies().empty())
+          Result.Error = Emitter.refusedBodies().front().Reason;
         break;
+      }
       for (const MedLLVMEmitter::RefusedBody &Refused :
            Emitter.refusedBodies()) {
         Mask[Refused.Index] = 0;

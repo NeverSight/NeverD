@@ -666,6 +666,15 @@ int runLift(neverd_session_t Sess) {
     WithColor::error() << "lift failed: " << takeLastError(Sess) << "\n";
     return 1;
   }
+  // The module names each function it leaves out at its head.
+  size_t LeftOut = 0;
+  for (StringRef Rest(IR); Rest.consume_front("; neverd.not-lifted: ");
+       ++LeftOut)
+    Rest = Rest.split('\n').second;
+  if (LeftOut)
+    WithColor::warning() << LeftOut
+                         << " function(s) left out of the lifted module; its "
+                            "neverd.not-lifted comments say why\n";
   if (!OutputFile.empty()) {
     std::error_code EC;
     raw_fd_ostream OS(OutputFile, EC);

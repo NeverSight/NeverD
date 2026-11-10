@@ -441,6 +441,11 @@ NEVERD_API int neverd_patch_trampoline_count(neverd_session_t Sess);
 // duplication across shared-library boundaries.
 // ===--------------------------------------------------------------------===//
 
+/// Lift a native binary to LLVM IR text. A function the pipeline refuses,
+/// or whose body LLVM emission refuses, is left out (the module declares a
+/// refused body only) and named, with why, by a comment line at the text's
+/// head: `; neverd.not-lifted: <name> at 0x<entry>: <reason>`. The other
+/// functions are lifted. Returns null on failure (see neverd_last_error).
 NEVERD_API const char *neverd_lift_module(neverd_session_t Sess,
                                           const char *InputPath, int NoOpt,
                                           int MaxFunctions);

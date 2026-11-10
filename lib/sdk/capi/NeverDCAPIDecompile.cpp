@@ -2325,6 +2325,44 @@ const char *neverd_ir_llvm(neverd_session_t Sess, neverd_va_t FuncEntry) {
 // High-level pipeline: lift module
 // ===--------------------------------------------------------------------===//
 
+namespace {
+
+/// The functions a lifted module leaves out, as comments at its head: each
+/// the pipeline refused, and each whose body LLVM emission refused, which the
+/// module declares only.
+std::string notLiftedNotes(const PipelineResult &Result) {
+  std::vector<std::pair<const PipelineFunctionAudit *, std::string>> LeftOut;
+  for (const PipelineFunctionAudit &Audit : Result.FunctionAudits)
+    switch (Audit.Disposition) {
+    case PipelineFunctionDisposition::RejectedLowIR:
+    case PipelineFunctionDisposition::RejectedIncomplete:
+    case PipelineFunctionDisposition::RejectedUnwindlessNonLeaf:
+    case PipelineFunctionDisposition::MedIRFailed:
+      LeftOut.emplace_back(&Audit, functionAuditReason(Audit));
+      break;
+    default:
+      if (!Audit.LLVMDiagnostic.empty())
+        LeftOut.emplace_back(&Audit,
+                             "llvm-emission-failed; " + Audit.LLVMDiagnostic);
+      break;
+    }
+  llvm::stable_sort(LeftOut, [](const auto &A, const auto &B) {
+    return A.first->Entry < B.first->Entry;
+  });
+  std::string Notes;
+  for (auto &[Audit, Reason] : LeftOut) {
+    // A comment ends with its line.
+    std::replace(Reason.begin(), Reason.end(), '\n', ' ');
+    Notes += "; neverd.not-lifted: " +
+             (Audit->Name.empty() ? "sub_" + llvm::utohexstr(Audit->Entry)
+                                  : Audit->Name) +
+             " at 0x" + llvm::utohexstr(Audit->Entry) + ": " + Reason + "\n";
+  }
+  return Notes;
+}
+
+} // namespace
+
 const char *neverd_lift_module(neverd_session_t Sess, const char *InputPath,
                                int NoOpt, int MaxFunctions) {
   auto *S = static_cast<Session *>(Sess);
@@ -2338,6 +2376,10 @@ const char *neverd_lift_module(neverd_session_t Sess, const char *InputPath,
 
   PipelineOptions Opts;
   Opts.LiftMode = true;
+  // A body the LLVM emitter refuses is declared only and named at the text's
+  // head, as a function the pipeline refuses is, instead of failing the
+  // lift of every other function.
+  Opts.OmitRefusedLLVMBodies = true;
   Opts.NoOpt = NoOpt != 0;
   Opts.MaxFunctions = MaxFunctions > 0 ? static_cast<size_t>(MaxFunctions) : 0;
   if (S) {
@@ -2353,6 +2395,7 @@ const char *neverd_lift_module(neverd_session_t Sess, const char *InputPath,
 
   std::string Buf;
   llvm::raw_string_ostream OS(Buf);
+  OS << notLiftedNotes(R.Result);
   R.Result.LlvmModule->print(OS, nullptr);
   return dupStr(Buf);
 }

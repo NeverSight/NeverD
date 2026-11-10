@@ -2438,6 +2438,57 @@ TEST_F(SessionCAPITest,
   }
 }
 
+// main calls taker and keep; taker returns the address inside main's first
+// call, code no lifted function owns: main at the entry, taker at +0xb and
+// keep at +0x13.
+constexpr char MidCodeAddressBytes[] =
+    "\xe8\x06\x00\x00\x00"         // main+0x00: call taker
+    "\xe8\x09\x00\x00\x00"         // main+0x05: call keep
+    "\xc3"                         // main+0x0a: ret
+    "\x48\x8d\x05\xef\xff\xff\xff" // taker: lea rax, [main+1]
+    "\xc3"                         //        ret
+    "\xb8\x07\x00\x00\x00\xc3";    // keep: mov eax, 7; ret
+constexpr std::string_view MidCodeAddressCode(MidCodeAddressBytes,
+                                              sizeof(MidCodeAddressBytes) - 1);
+
+TEST_F(SessionCAPITest, LiftModuleNamesTheFunctionsItLeavesOut) {
+  const auto Input =
+      write("lift-left-out.elf",
+            makeNativeELF(false, 0x400000, {}, MidCodeAddressCode));
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1)
+      << takeString(neverd_last_error(Session));
+  const uint64_t Main = neverd_session_entry_addr(Session);
+  const uint64_t Taker = Main + 0xb, Keep = Main + 0x13;
+  for (const uint64_t Entry : {Main, Taker, Keep})
+    if (neverd_func_find_by_addr(Session, Entry) < 0)
+      ASSERT_EQ(neverd_func_create(Session, Entry), 0)
+          << takeString(neverd_last_error(Session));
+  const auto Name = [](uint64_t Address) {
+    return "sub_" + llvm::utohexstr(Address);
+  };
+  // The module declares the body LLVM emission refuses and names it at its
+  // head, with why, and lifts the others.
+  const auto IR =
+      takeString(neverd_lift_module(Session, Input.c_str(), /*NoOpt=*/1, 0));
+  ASSERT_FALSE(IR.empty()) << takeString(neverd_last_error(Session));
+  EXPECT_EQ(IR.rfind("; neverd.not-lifted: " + Name(Taker) + " at 0x" +
+                         llvm::utohexstr(Taker) + ": llvm-emission-failed",
+                     0),
+            0u)
+      << IR;
+  EXPECT_NE(IR.find("no unique lifted code identity"), std::string::npos) << IR;
+  const auto Defines = [&](uint64_t Address) {
+    for (llvm::StringRef Line : llvm::split(IR, '\n'))
+      if (Line.starts_with("define") &&
+          Line.contains("@" + Name(Address) + "("))
+        return true;
+    return false;
+  };
+  EXPECT_TRUE(Defines(Main)) << IR;
+  EXPECT_TRUE(Defines(Keep)) << IR;
+  EXPECT_FALSE(Defines(Taker)) << IR;
+}
+
 // main calls stale and keep. stale adjusts RSP by an unconstrained input, so
 // its CALL slot may overlap the fixed read below its saved frame. main is at
 // the entry, stale at +0xb and keep at +0x20.

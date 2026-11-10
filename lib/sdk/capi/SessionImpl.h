@@ -1337,7 +1337,11 @@ struct Session {
     if (Sources)
       Sources->preserveExpressionOrigins(PipeResult.LibraryRecognitions);
     if (!Candidate) {
-      setError("native LLVM emission failed");
+      // A refused body says why.
+      setError(Emitter.refusedBodies().empty()
+                   ? std::string("native LLVM emission failed")
+                   : "native LLVM emission failed: " +
+                         Emitter.refusedBodies().front().Reason);
       return nullptr;
     }
     // The native emitter can return a module after reporting verifier errors.

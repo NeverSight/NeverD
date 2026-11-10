@@ -189,11 +189,11 @@ struct PipelineOptions {
   /// instead leaves each refused one out and names it in its audit, as a
   /// whole-image run does.
   bool OmitRefusedFunctions = false;
-  /// A unit that names each function it leaves out (a whole LLVM C unit)
-  /// declares a function only when the LLVM emitter refuses its body for a
-  /// stale code or data address, and emits the others, recording why in the
-  /// function's audit (LLVMDiagnostic). Lifting and patching, whose output
-  /// names nothing it leaves out, fail at such a body instead.
+  /// A unit that names each function it leaves out (a whole LLVM C unit,
+  /// lifted IR text) declares a function only when the LLVM emitter refuses
+  /// its body, and emits the others, recording why in the function's audit
+  /// (LLVMDiagnostic). Patching, whose output names nothing it leaves out,
+  /// fails at such a body instead.
   bool OmitRefusedLLVMBodies = false;
   /// The user's function edits: an address made the entry of a function
   /// (true) or no longer one (false).  Whole-program detection follows them;

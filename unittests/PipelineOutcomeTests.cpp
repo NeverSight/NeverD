@@ -3281,8 +3281,11 @@ TEST(PipelineOutcome, LiftPreservesTheFailedShardDiagnostic) {
   EXPECT_FALSE(Result.LLVMVerifierFailed);
   EXPECT_NE(Result.Error.find("LLVM shard "), std::string::npos)
       << Result.Error;
-  EXPECT_NE(Result.Error.find("emission failed: emitter returned no module"),
-            std::string::npos)
+  // The shard's diagnostic is the refused body's own.
+  EXPECT_NE(Result.Error.find("emission failed: "), std::string::npos)
+      << Result.Error;
+  EXPECT_NE(Result.Error.find("source_1"), std::string::npos) << Result.Error;
+  EXPECT_EQ(Result.Error.find("emitter returned no module"), std::string::npos)
       << Result.Error;
 }
 
