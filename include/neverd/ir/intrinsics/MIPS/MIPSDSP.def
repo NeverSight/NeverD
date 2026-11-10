@@ -19,7 +19,7 @@
 #endif
 
 #ifndef NEVERD_MIPS_DSP_LEFT
-#define NEVERD_MIPS_DSP_LEFT(Name, Mask, Value, Bytes, Variable, Saturated) \
+#define NEVERD_MIPS_DSP_LEFT(Name, Mask, Value, Bytes, Variable, Saturated)    \
   NEVERD_MIPS_DSP_INSTRUCTION(Name, Mask, Value)
 #endif
 
@@ -103,13 +103,20 @@ NEVERD_MIPS_DSP_INSTRUCTION(CompareGPRBytesEqual, 0xfc0007ff, 0x7c000111)
 NEVERD_MIPS_DSP_INSTRUCTION(CompareGPRBytesLess, 0xfc0007ff, 0x7c000151)
 NEVERD_MIPS_DSP_INSTRUCTION(CompareGPRBytesLessEqual, 0xfc0007ff, 0x7c000191)
 NEVERD_MIPS_DSP_LEFT(ShiftLeftBytes, 0xff0007ff, 0x7c000013, 1, false, false)
-NEVERD_MIPS_DSP_LEFT(ShiftLeftVariableBytes, 0xfc0007ff, 0x7c000093, 1, true, false)
-NEVERD_MIPS_DSP_LEFT(ShiftLeftHalfwords, 0xfe0007ff, 0x7c000213, 2, false, false)
-NEVERD_MIPS_DSP_LEFT(ShiftLeftVariableHalfwords, 0xfc0007ff, 0x7c000293, 2, true, false)
-NEVERD_MIPS_DSP_LEFT(ShiftLeftSaturatedHalfwords, 0xfe0007ff, 0x7c000313, 2, false, true)
-NEVERD_MIPS_DSP_LEFT(ShiftLeftSaturatedVariableHalfwords, 0xfc0007ff, 0x7c000393, 2, true, true)
-NEVERD_MIPS_DSP_LEFT(ShiftLeftSaturatedWord, 0xfc0007ff, 0x7c000513, 4, false, true)
-NEVERD_MIPS_DSP_LEFT(ShiftLeftSaturatedVariableWord, 0xfc0007ff, 0x7c000593, 4, true, true)
+NEVERD_MIPS_DSP_LEFT(ShiftLeftVariableBytes, 0xfc0007ff, 0x7c000093, 1, true,
+                     false)
+NEVERD_MIPS_DSP_LEFT(ShiftLeftHalfwords, 0xfe0007ff, 0x7c000213, 2, false,
+                     false)
+NEVERD_MIPS_DSP_LEFT(ShiftLeftVariableHalfwords, 0xfc0007ff, 0x7c000293, 2,
+                     true, false)
+NEVERD_MIPS_DSP_LEFT(ShiftLeftSaturatedHalfwords, 0xfe0007ff, 0x7c000313, 2,
+                     false, true)
+NEVERD_MIPS_DSP_LEFT(ShiftLeftSaturatedVariableHalfwords, 0xfc0007ff,
+                     0x7c000393, 2, true, true)
+NEVERD_MIPS_DSP_LEFT(ShiftLeftSaturatedWord, 0xfc0007ff, 0x7c000513, 4, false,
+                     true)
+NEVERD_MIPS_DSP_LEFT(ShiftLeftSaturatedVariableWord, 0xfc0007ff, 0x7c000593, 4,
+                     true, true)
 
 #undef NEVERD_MIPS_DSP_LEFT
 #undef NEVERD_MIPS_DSP_EXPAND

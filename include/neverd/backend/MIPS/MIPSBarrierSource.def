@@ -11,5 +11,6 @@ NEVERD_MIPS_BARRIER_TEXT(BarrierConstraints, "~{memory}")
 NEVERD_MIPS_BARRIER_TEXT(BarrierSourceMarker, "neverd.mips.barrier")
 NEVERD_MIPS_BARRIER_TEXT(BarrierHelperPrefix, "neverd.mips.barrier.")
 NEVERD_MIPS_BARRIER_TEXT(BarrierNoInlineC, "__attribute__((noinline)) ")
-NEVERD_MIPS_BARRIER_TEXT(MalformedBarrierSource, "invalid native MIPS barrier source contract")
+NEVERD_MIPS_BARRIER_TEXT(MalformedBarrierSource,
+                         "invalid native MIPS barrier source contract")
 #undef NEVERD_MIPS_BARRIER_TEXT
