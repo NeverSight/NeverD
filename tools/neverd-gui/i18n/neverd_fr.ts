@@ -10869,4 +10869,11 @@ Votre graphe précédent reste disponible.</translation>
         <translation>Détacher la fenêtre</translation>
     </message>
 </context>
+<context>
+    <name>CloseButton</name>
+    <message>
+        <source>Close Tab</source>
+        <translation>Fermer l&apos;onglet</translation>
+    </message>
+</context>
 </TS>

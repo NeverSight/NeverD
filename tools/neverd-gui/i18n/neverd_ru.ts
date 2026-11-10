@@ -10905,4 +10905,11 @@ Your previous graph is still available.</source>
         <translation>Открепить окно</translation>
     </message>
 </context>
+<context>
+    <name>CloseButton</name>
+    <message>
+        <source>Close Tab</source>
+        <translation>Закрыть вкладку</translation>
+    </message>
+</context>
 </TS>
