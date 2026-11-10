@@ -1689,5 +1689,13 @@
     "passed_executions": 463,
     "skipped_executions": 1,
     "skip_reason": "The production r6 SDK has no llvm.x86.rep.movs.state; its native-contract test skips. The same test passes on the local LLVM fork. No skipped REP native-contract check is counted as passing."
+  },
+  "compatibility_paging_integration": {
+    "evidence": "x86-compatibility-paging-2026-11-10.json",
+    "validated_commit": "057f0e0d4be5df51580bca0f7557c0cb5cdf5c81",
+    "integrated_dev": "0d5ad949491ccb2ad5cc799cf8d9f994d839201b",
+    "passing_generated_return_executions": 20,
+    "identical_c_header_manifest_files_per_sdk": 260,
+    "previous_integration_artifacts_unchanged": true
   }
 }

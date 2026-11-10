@@ -108,6 +108,16 @@ comparisons within that total), and the existing 440 continuation regressions.
 The only hardware-mode skip is LA57 on the local CPU. The same 282 generated
 C/header/manifest artifacts are byte-identical across the SDKs.
 
+The [November 10 compatibility qualification](evidence/x86-compatibility-paging-2026-11-10.json)
+records 1,764 passing executions on both SDKs, including the complete 848-case
+paging matrices and separately bound P/E-core CALL checks. Eight initial
+CALL-profile skips were subsequently requalified; eight LA57 hardware execution
+skips remain. Explicit compatibility operands use IA-32e page tables with
+32-bit segment-linear wrapping while implicit system-table operands retain
+full-width addresses. The 260 generated return C/header/manifest artifacts per
+SDK are identical to each other and to the prior return integration. This
+qualifies operand formation, not a mixed-mode instruction dispatcher.
+
 The subsequent [generated scalar executor](x86-paged-execution.md) binds both
 C routes through an explicit memory context, instruction commit boundaries and
 restart state. Partial completion for REP, gather/scatter, XSAVE and related

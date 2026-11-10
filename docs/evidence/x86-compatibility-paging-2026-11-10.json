@@ -1,0 +1,1139 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-10",
+  "artifact_root": "/mnt/data/neverd-ia32e-mode-20261110",
+  "source_sha256": {
+    "include/neverd/translate/X86/X86Paging.h": "eab6aef0af8dada4f28dcb15f67f82e588fe7e9b938364049dc8a2d101c377d7",
+    "include/neverd/translate/X86/X86PagedMemory.h": "6ec33ba08e1cbd95467487fbdd9a01325358bc65a52170e5cd62894efc386055",
+    "lib/translate/X86/X86Paging.cpp": "c82e194442bc8ed789c429cb44a050c27ba840ef46ec76bdd3dc159d6be26aa4",
+    "lib/translate/X86/X86PagedMemory.cpp": "8c39398814ed98466eaf9935916151cbb82e89d2e7265e2606178a2d070621ae",
+    "unittests/translate/x86/X86CompatibilityPagingTests.cpp": "40a97a8ce0b3f8dda4c416887ca99922949c0d78c2559bed57f235d8c2c44867",
+    "unittests/translate/x86/X86CompatibilityPagingNativeTests.inc": "5b0ad2914d5312888a82609f92cedcef1e280361da0c9325b6bec2110022d5c4",
+    "unittests/translate/x86/X86PagingNativeTests.cpp": "fc4b9fcd4491caa2832235ada7a4c0af8f0917292efd96310c4a4da3f11fac3b",
+    "unittests/translate/CMakeLists.txt": "a187efcea8c89b62a25b0832038c77366cb64bf0a25d76d37141efcd6ca3cc3b"
+  },
+  "validated_commit": "057f0e0d4be5df51580bca0f7557c0cb5cdf5c81",
+  "validated_tree": "efe04c0f81fd9f02aaabad41b404a72a473b83af",
+  "integrated_dev": "0d5ad949491ccb2ad5cc799cf8d9f994d839201b",
+  "scope": "Explicit compatibility segmented operands over IA-32e paging; not mixed-mode instruction dispatch.",
+  "red": {
+    "build-x86-native": {
+      "source_head": "22668c49cdb308930a0114d9f7a2f4fcb67b0186",
+      "source_tree": "29dc18ab455488d21e86764df83cb19e9b452e89",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "120",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86-native/bin/NeverDX86PagingTests",
+        "--gtest_filter=*X86CompatibilityPaging*",
+        "--gtest_output=xml:/mnt/data/neverd-ia32e-mode-20261110/build-x86-native-red.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1"
+      },
+      "binaries": {
+        "build-x86-native/bin/NeverDX86PagingTests": "f234208abf24f341365d7affc458747616f8317e6bcd020282db9a6a55950349"
+      },
+      "exit_code": 1,
+      "seconds": 0.10399773705285043,
+      "log": "build-x86-native-red.log",
+      "log_sha256": "9597d3c916052f701801913ecb72d52225a9fbed0c931977e3d9ea0228c64bc3",
+      "tests": {
+        "tests": "12",
+        "failures": "7",
+        "disabled": "0",
+        "errors": "0",
+        "time": "0.031",
+        "timestamp": "2026-11-10T06:30:04.887",
+        "name": "AllTests"
+      },
+      "skipped": [
+        {
+          "name": "WrapPermissionsAndLimitsMatchCPU/1",
+          "value_param": "5",
+          "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86CompatibilityPagingNativeTests.inc",
+          "line": "13",
+          "status": "run",
+          "result": "skipped",
+          "time": "0.013",
+          "timestamp": "2026-11-10T06:30:04.904",
+          "classname": "IA32e/X86CompatibilityPagingNativeTest"
+        }
+      ],
+      "properties": {},
+      "report": "build-x86-native-red.xml",
+      "report_sha256": "d9fc73483bc95f788d3a92d82356b57749a646b98efcd256ec9996b959ec1e25"
+    },
+    "build-x86": {
+      "source_head": "22668c49cdb308930a0114d9f7a2f4fcb67b0186",
+      "source_tree": "29dc18ab455488d21e86764df83cb19e9b452e89",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "120",
+        "taskset",
+        "-c",
+        "12",
+        "build-x86/bin/NeverDX86PagingTests",
+        "--gtest_filter=*X86CompatibilityPaging*",
+        "--gtest_output=xml:/mnt/data/neverd-ia32e-mode-20261110/build-x86-red.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1"
+      },
+      "binaries": {
+        "build-x86/bin/NeverDX86PagingTests": "f412cd8a8428b439d1ccf1888d39facf2a79050f462860d2b5e1858b607707e8"
+      },
+      "exit_code": 1,
+      "seconds": 0.10448863205965608,
+      "log": "build-x86-red.log",
+      "log_sha256": "6ba7f01d40b283f456c2d4b2a145c144ee866759d27c75b5017bde64592aa36b",
+      "tests": {
+        "tests": "12",
+        "failures": "7",
+        "disabled": "0",
+        "errors": "0",
+        "time": "0.037",
+        "timestamp": "2026-11-10T06:29:52.288",
+        "name": "AllTests"
+      },
+      "skipped": [
+        {
+          "name": "WrapPermissionsAndLimitsMatchCPU/1",
+          "value_param": "5",
+          "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86CompatibilityPagingNativeTests.inc",
+          "line": "13",
+          "status": "run",
+          "result": "skipped",
+          "time": "0.02",
+          "timestamp": "2026-11-10T06:29:52.305",
+          "classname": "IA32e/X86CompatibilityPagingNativeTest"
+        }
+      ],
+      "properties": {},
+      "report": "build-x86-red.xml",
+      "report_sha256": "a6a8b40f9b562d889b78054d4f0eb55201890c05cd112bbd95b82faa74c3e883"
+    }
+  },
+  "builds": {
+    "build-x86-native": {
+      "source_head": "057f0e0d4be5df51580bca0f7557c0cb5cdf5c81",
+      "source_tree": "efe04c0f81fd9f02aaabad41b404a72a473b83af",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "env",
+        "GIT_CONFIG_COUNT=2",
+        "GIT_CONFIG_KEY_0=http.curloptResolve",
+        "GIT_CONFIG_VALUE_0=github.com:443:4.237.22.38",
+        "GIT_CONFIG_KEY_1=http.proxy",
+        "GIT_CONFIG_VALUE_1=",
+        "python3",
+        "scripts/build.py",
+        "build-x86-native",
+        "--target",
+        "NeverDX86PagingTests",
+        "NeverDX64PagedExecutionTests",
+        "--parallel",
+        "4"
+      ],
+      "environment": {},
+      "binaries": {},
+      "exit_code": 0,
+      "seconds": 61.652611255063675,
+      "log": "build-x86-native-green-build.log",
+      "log_sha256": "20724711a0b9214f19473e598bad32a9d60f9f88418812d5f8aff4cf5db164f1",
+      "dependency_inputs": {
+        "purpose": "configure_inputs",
+        "schema": 1,
+        "sources": {
+          "neverd_highway": {
+            "selection": "disabled",
+            "used": false
+          },
+          "neverd_mimalloc": {
+            "selection": "disabled",
+            "used": false
+          },
+          "neverd_simdjson": {
+            "selection": "disabled",
+            "used": false
+          },
+          "neverd_simdutf": {
+            "selection": "disabled",
+            "used": false
+          },
+          "neverd_tbb": {
+            "selection": "disabled",
+            "used": false
+          }
+        }
+      },
+      "build_receipt_sha256": "2af6abc8cad4b16e19c53c0b7ecd3b0b95947f7f2c2772eacbc2d2a4cbe5dcd3"
+    },
+    "build-x86": {
+      "source_head": "057f0e0d4be5df51580bca0f7557c0cb5cdf5c81",
+      "source_tree": "efe04c0f81fd9f02aaabad41b404a72a473b83af",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "env",
+        "GIT_CONFIG_COUNT=2",
+        "GIT_CONFIG_KEY_0=http.curloptResolve",
+        "GIT_CONFIG_VALUE_0=github.com:443:4.237.22.38",
+        "GIT_CONFIG_KEY_1=http.proxy",
+        "GIT_CONFIG_VALUE_1=",
+        "python3",
+        "scripts/build.py",
+        "build-x86",
+        "--target",
+        "NeverDX86PagingTests",
+        "NeverDX64PagedExecutionTests",
+        "--parallel",
+        "4"
+      ],
+      "environment": {},
+      "binaries": {},
+      "exit_code": 0,
+      "seconds": 63.92188241891563,
+      "log": "build-x86-green-build.log",
+      "log_sha256": "63b396a9dad904f9bc6b5580eda14d894413184e032005e41fdc28a423394a98",
+      "dependency_inputs": {
+        "purpose": "configure_inputs",
+        "schema": 1,
+        "sources": {
+          "neverd_highway": {
+            "selection": "disabled",
+            "used": false
+          },
+          "neverd_mimalloc": {
+            "selection": "disabled",
+            "used": false
+          },
+          "neverd_simdjson": {
+            "selection": "disabled",
+            "used": false
+          },
+          "neverd_simdutf": {
+            "selection": "disabled",
+            "used": false
+          },
+          "neverd_tbb": {
+            "selection": "disabled",
+            "used": false
+          }
+        }
+      },
+      "build_receipt_sha256": "0f987c4d123b615ebb767e0efb3341fe89ad94da20390fa1ca3c99f5fc060c43"
+    }
+  },
+  "runs": {
+    "build-x86-native-focused": {
+      "source_head": "057f0e0d4be5df51580bca0f7557c0cb5cdf5c81",
+      "source_tree": "efe04c0f81fd9f02aaabad41b404a72a473b83af",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86-native/bin/NeverDX86PagingTests",
+        "--gtest_filter=*X86CompatibilityPaging*",
+        "--gtest_output=xml:/mnt/data/neverd-ia32e-mode-20261110/build-x86-native-focused.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-ia32e-mode-20261110/build-x86-native-focused-tmp",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before"
+      },
+      "binaries": {
+        "build-x86-native/bin/NeverDX86PagingTests": "3d928c9c944738a8c6b4a47b43ccaaace871d87b2f4fb0a993705901801128dd",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f"
+      },
+      "exit_code": 0,
+      "seconds": 0.1035130510572344,
+      "log": "build-x86-native-focused.log",
+      "log_sha256": "ad036f1a6a1eb85a1c2f0bb8acc385ff64d8ddca0028e0b605c8a5b3b61c7cdd",
+      "tests": {
+        "tests": "12",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "0.043",
+        "timestamp": "2026-11-10T06:32:18.700",
+        "name": "AllTests"
+      },
+      "skipped": [
+        {
+          "name": "WrapPermissionsAndLimitsMatchCPU/1",
+          "value_param": "5",
+          "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86CompatibilityPagingNativeTests.inc",
+          "line": "13",
+          "status": "run",
+          "result": "skipped",
+          "time": "0.013",
+          "timestamp": "2026-11-10T06:32:18.729",
+          "classname": "IA32e/X86CompatibilityPagingNativeTest"
+        }
+      ],
+      "properties": {
+        "original_comparisons": 7
+      },
+      "report": "build-x86-native-focused.xml",
+      "report_sha256": "fa2cb70dca4398c3dbeecdd18be1a0a61bd559da5ab3e5718db4f2159bd030c6",
+      "skip_reasons": {
+        "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n"
+      }
+    },
+    "build-x86-native-focused-alternate": {
+      "source_head": "057f0e0d4be5df51580bca0f7557c0cb5cdf5c81",
+      "source_tree": "efe04c0f81fd9f02aaabad41b404a72a473b83af",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "12",
+        "build-x86-native/bin/NeverDX86PagingTests",
+        "--gtest_filter=*X86CompatibilityPaging*",
+        "--gtest_output=xml:/mnt/data/neverd-ia32e-mode-20261110/build-x86-native-focused-alternate.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-ia32e-mode-20261110/build-x86-native-focused-alternate-tmp",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before"
+      },
+      "binaries": {
+        "build-x86-native/bin/NeverDX86PagingTests": "3d928c9c944738a8c6b4a47b43ccaaace871d87b2f4fb0a993705901801128dd",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f"
+      },
+      "exit_code": 0,
+      "seconds": 0.10426209901925176,
+      "log": "build-x86-native-focused-alternate.log",
+      "log_sha256": "9424cee31608e8c97baff14e988e2b49846cafbda300402f56247647bf1fcefc",
+      "tests": {
+        "tests": "12",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "0.056",
+        "timestamp": "2026-11-10T06:32:19.053",
+        "name": "AllTests"
+      },
+      "skipped": [
+        {
+          "name": "WrapPermissionsAndLimitsMatchCPU/1",
+          "value_param": "5",
+          "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86CompatibilityPagingNativeTests.inc",
+          "line": "13",
+          "status": "run",
+          "result": "skipped",
+          "time": "0.017",
+          "timestamp": "2026-11-10T06:32:19.093",
+          "classname": "IA32e/X86CompatibilityPagingNativeTest"
+        }
+      ],
+      "properties": {
+        "original_comparisons": 7
+      },
+      "report": "build-x86-native-focused-alternate.xml",
+      "report_sha256": "b0f12f644a30684f55fa6875402fd0627996870046c9ff203cbd77d5a5d10c40",
+      "skip_reasons": {
+        "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n"
+      }
+    },
+    "build-x86-native-paging": {
+      "source_head": "057f0e0d4be5df51580bca0f7557c0cb5cdf5c81",
+      "source_tree": "efe04c0f81fd9f02aaabad41b404a72a473b83af",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86-native/bin/NeverDX86PagingTests",
+        "--gtest_filter=*",
+        "--gtest_output=xml:/mnt/data/neverd-ia32e-mode-20261110/build-x86-native-paging.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-ia32e-mode-20261110/build-x86-native-paging-tmp",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before"
+      },
+      "binaries": {
+        "build-x86-native/bin/NeverDX86PagingTests": "3d928c9c944738a8c6b4a47b43ccaaace871d87b2f4fb0a993705901801128dd",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f"
+      },
+      "exit_code": 0,
+      "seconds": 1451.6169307330856,
+      "log": "build-x86-native-paging.log",
+      "log_sha256": "c27feca722ea32f817ad82682b49d0de095c762ad0efc7e078fe9479cee0b602",
+      "tests": {
+        "tests": "848",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "1451.182",
+        "timestamp": "2026-11-10T06:32:19.419",
+        "name": "AllTests"
+      },
+      "skipped": [
+        {
+          "name": "OriginalInstructionsMatchPagingFaultsAndCommit/3",
+          "value_param": "5",
+          "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp",
+          "line": "559",
+          "status": "run",
+          "result": "skipped",
+          "time": "0.011",
+          "timestamp": "2026-11-10T06:32:20.898",
+          "classname": "PagingModes/X86PagingNativeTest"
+        },
+        {
+          "name": "WrapPermissionsAndLimitsMatchCPU/1",
+          "value_param": "5",
+          "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86CompatibilityPagingNativeTests.inc",
+          "line": "13",
+          "status": "run",
+          "result": "skipped",
+          "time": "0.011",
+          "timestamp": "2026-11-10T06:32:20.934",
+          "classname": "IA32e/X86CompatibilityPagingNativeTest"
+        },
+        {
+          "name": "NearBranchesCallsReturnsAndEveryCondition/0",
+          "value_param": "2",
+          "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc",
+          "line": "142",
+          "status": "run",
+          "result": "skipped",
+          "time": "0.015",
+          "timestamp": "2026-11-10T06:50:53.053",
+          "classname": "LegacyScalars/X86LegacyScalarNativeTest"
+        },
+        {
+          "name": "NearBranchesCallsReturnsAndEveryCondition/1",
+          "value_param": "3",
+          "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc",
+          "line": "142",
+          "status": "run",
+          "result": "skipped",
+          "time": "0.012",
+          "timestamp": "2026-11-10T06:50:53.069",
+          "classname": "LegacyScalars/X86LegacyScalarNativeTest"
+        },
+        {
+          "name": "BranchLimitsPrecedeOrFollowStackFaults/0",
+          "value_param": "2",
+          "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc",
+          "line": "200",
+          "status": "run",
+          "result": "skipped",
+          "time": "0.01",
+          "timestamp": "2026-11-10T06:50:53.193",
+          "classname": "LegacyScalars/X86LegacyScalarNativeTest"
+        },
+        {
+          "name": "BranchLimitsPrecedeOrFollowStackFaults/1",
+          "value_param": "3",
+          "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc",
+          "line": "200",
+          "status": "run",
+          "result": "skipped",
+          "time": "0.011",
+          "timestamp": "2026-11-10T06:50:53.203",
+          "classname": "LegacyScalars/X86LegacyScalarNativeTest"
+        }
+      ],
+      "properties": {
+        "branch_selection_comparisons": 64,
+        "cpu_comparisons": 736370,
+        "event_cpu_comparisons": 292,
+        "original_comparisons": 8071,
+        "round_trip_comparisons": 992,
+        "kvm_port_comparisons": 4584,
+        "kvm_input_batch_restart_discrepancies": 16,
+        "vmx_ac_nmi_recoveries": 24,
+        "software_reference_comparisons": 28,
+        "original_sequence_comparisons": 57
+      },
+      "report": "build-x86-native-paging.xml",
+      "report_sha256": "072d17a27b3f9c7b90f2705c1c4734a690301d3a25e3e5badcaeb897d81f18da",
+      "skip_reasons": {
+        "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n",
+        "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n",
+        "LegacyScalars/X86LegacyScalarNativeTest.NearBranchesCallsReturnsAndEveryCondition/0": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:144\nBind the processor's CALL stack publication profile\n",
+        "LegacyScalars/X86LegacyScalarNativeTest.NearBranchesCallsReturnsAndEveryCondition/1": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:144\nBind the processor's CALL stack publication profile\n",
+        "LegacyScalars/X86LegacyScalarNativeTest.BranchLimitsPrecedeOrFollowStackFaults/0": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:202\nBind the processor's CALL stack publication profile\n",
+        "LegacyScalars/X86LegacyScalarNativeTest.BranchLimitsPrecedeOrFollowStackFaults/1": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:202\nBind the processor's CALL stack publication profile\n"
+      }
+    },
+    "build-x86-native-returns": {
+      "source_head": "057f0e0d4be5df51580bca0f7557c0cb5cdf5c81",
+      "source_tree": "efe04c0f81fd9f02aaabad41b404a72a473b83af",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86-native/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=X64PagedReturnContinuationTest.*:*PendingHandlerResumesReturnWithoutAnotherAttempt:X64PagedWatchpointTest.OriginalRepeat*",
+        "--gtest_output=xml:/mnt/data/neverd-ia32e-mode-20261110/build-x86-native-returns.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-ia32e-mode-20261110/build-x86-native-returns-tmp",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-ia32e-mode-20261110/build-x86-native-returns-exports"
+      },
+      "binaries": {
+        "build-x86-native/bin/NeverDX64PagedExecutionTests": "a8c95868fcb13256665e663b19b25d22c969bea7f3ad310d411a2b372b5976fc",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f"
+      },
+      "exit_code": 0,
+      "seconds": 11.614200431969948,
+      "log": "build-x86-native-returns.log",
+      "log_sha256": "0e9aab4904c59f0100ce1a5f8c8b46046fd4fed079f7aec6eaa1a81b748f4db0",
+      "tests": {
+        "tests": "10",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "11.555",
+        "timestamp": "2026-11-10T06:56:31.791",
+        "name": "AllTests"
+      },
+      "skipped": [],
+      "properties": {
+        "original_comparisons": 580
+      },
+      "report": "build-x86-native-returns.xml",
+      "report_sha256": "44c86ddb8e524383cd777ad6bcc4ee72b0d4781977b7dcf2f1deb8a35458b552",
+      "skip_reasons": {}
+    },
+    "build-x86-native-call-4": {
+      "source_head": "057f0e0d4be5df51580bca0f7557c0cb5cdf5c81",
+      "source_tree": "efe04c0f81fd9f02aaabad41b404a72a473b83af",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "600",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86-native/bin/NeverDX86PagingTests",
+        "--gtest_filter=*NearBranchesCallsReturnsAndEveryCondition*:*BranchLimitsPrecedeOrFollowStackFaults*",
+        "--gtest_output=xml:/mnt/data/neverd-ia32e-mode-20261110/build-x86-native-call-4.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_LEGACY_CALL": "store"
+      },
+      "binaries": {
+        "build-x86-native/bin/NeverDX86PagingTests": "3d928c9c944738a8c6b4a47b43ccaaace871d87b2f4fb0a993705901801128dd"
+      },
+      "exit_code": 0,
+      "seconds": 13.417413358925842,
+      "log": "build-x86-native-call-4.log",
+      "log_sha256": "7351ed3a9d69ff369d52a464a9da4b75235784081b279887c3f9efdfb0a4ba13",
+      "tests": {
+        "tests": "4",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "13.379",
+        "timestamp": "2026-11-10T07:00:51.701",
+        "name": "AllTests"
+      },
+      "skipped": [],
+      "properties": {
+        "cpu_comparisons": 8368
+      },
+      "report": "build-x86-native-call-4.xml",
+      "report_sha256": "26dce505fafc4ce13cd04c770d42258c2d4a8dafd5ba8f834f401b5b6971b0d5",
+      "skip_reasons": {}
+    },
+    "build-x86-native-call-12": {
+      "source_head": "057f0e0d4be5df51580bca0f7557c0cb5cdf5c81",
+      "source_tree": "efe04c0f81fd9f02aaabad41b404a72a473b83af",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "600",
+        "taskset",
+        "-c",
+        "12",
+        "build-x86-native/bin/NeverDX86PagingTests",
+        "--gtest_filter=*NearBranchesCallsReturnsAndEveryCondition*:*BranchLimitsPrecedeOrFollowStackFaults*",
+        "--gtest_output=xml:/mnt/data/neverd-ia32e-mode-20261110/build-x86-native-call-12.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_LEGACY_CALL": "check"
+      },
+      "binaries": {
+        "build-x86-native/bin/NeverDX86PagingTests": "3d928c9c944738a8c6b4a47b43ccaaace871d87b2f4fb0a993705901801128dd"
+      },
+      "exit_code": 0,
+      "seconds": 39.63858476490714,
+      "log": "build-x86-native-call-12.log",
+      "log_sha256": "83fbb1642e7f79987769614d16137f26d8bdbf3ae4afa2491a8f8f3164eb1cfc",
+      "tests": {
+        "tests": "4",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "39.589",
+        "timestamp": "2026-11-10T07:01:05.251",
+        "name": "AllTests"
+      },
+      "skipped": [],
+      "properties": {
+        "cpu_comparisons": 8368
+      },
+      "report": "build-x86-native-call-12.xml",
+      "report_sha256": "fcd0c102bf11bc3c5fd5c600f16c863e0fff211f2e68da493c32d4a4ff1a74fe",
+      "skip_reasons": {}
+    },
+    "build-x86-focused": {
+      "source_head": "057f0e0d4be5df51580bca0f7557c0cb5cdf5c81",
+      "source_tree": "efe04c0f81fd9f02aaabad41b404a72a473b83af",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "12",
+        "build-x86/bin/NeverDX86PagingTests",
+        "--gtest_filter=*X86CompatibilityPaging*",
+        "--gtest_output=xml:/mnt/data/neverd-ia32e-mode-20261110/build-x86-focused.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-ia32e-mode-20261110/build-x86-focused-tmp",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before"
+      },
+      "binaries": {
+        "build-x86/bin/NeverDX86PagingTests": "ff6fe630abc73f91bdf6a4696c405722fbf5a266c6c0a0d76b5631c92669828c",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f"
+      },
+      "exit_code": 0,
+      "seconds": 0.10389719309750944,
+      "log": "build-x86-focused.log",
+      "log_sha256": "aa1bede7cc60400eb0fd8c580ea23164f09d4e656306bb025737290825adcdda",
+      "tests": {
+        "tests": "12",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "0.055",
+        "timestamp": "2026-11-10T06:32:18.673",
+        "name": "AllTests"
+      },
+      "skipped": [
+        {
+          "name": "WrapPermissionsAndLimitsMatchCPU/1",
+          "value_param": "5",
+          "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86CompatibilityPagingNativeTests.inc",
+          "line": "13",
+          "status": "run",
+          "result": "skipped",
+          "time": "0.017",
+          "timestamp": "2026-11-10T06:32:18.710",
+          "classname": "IA32e/X86CompatibilityPagingNativeTest"
+        }
+      ],
+      "properties": {
+        "original_comparisons": 7
+      },
+      "report": "build-x86-focused.xml",
+      "report_sha256": "ea8496e0feef728d6ec06a1bd80c8e2c21289baa607209dce16258b0c7d7e1d1",
+      "skip_reasons": {
+        "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n"
+      }
+    },
+    "build-x86-focused-alternate": {
+      "source_head": "057f0e0d4be5df51580bca0f7557c0cb5cdf5c81",
+      "source_tree": "efe04c0f81fd9f02aaabad41b404a72a473b83af",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86/bin/NeverDX86PagingTests",
+        "--gtest_filter=*X86CompatibilityPaging*",
+        "--gtest_output=xml:/mnt/data/neverd-ia32e-mode-20261110/build-x86-focused-alternate.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-ia32e-mode-20261110/build-x86-focused-alternate-tmp",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before"
+      },
+      "binaries": {
+        "build-x86/bin/NeverDX86PagingTests": "ff6fe630abc73f91bdf6a4696c405722fbf5a266c6c0a0d76b5631c92669828c",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f"
+      },
+      "exit_code": 0,
+      "seconds": 0.10452166909817606,
+      "log": "build-x86-focused-alternate.log",
+      "log_sha256": "ae8102256a0e79db3b537553f4d6434f2d5c4905b8c18377163b4a2a8e035e30",
+      "tests": {
+        "tests": "12",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "0.044",
+        "timestamp": "2026-11-10T06:32:19.019",
+        "name": "AllTests"
+      },
+      "skipped": [
+        {
+          "name": "WrapPermissionsAndLimitsMatchCPU/1",
+          "value_param": "5",
+          "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86CompatibilityPagingNativeTests.inc",
+          "line": "13",
+          "status": "run",
+          "result": "skipped",
+          "time": "0.014",
+          "timestamp": "2026-11-10T06:32:19.049",
+          "classname": "IA32e/X86CompatibilityPagingNativeTest"
+        }
+      ],
+      "properties": {
+        "original_comparisons": 7
+      },
+      "report": "build-x86-focused-alternate.xml",
+      "report_sha256": "342db2e0087f2d12a93efcf22a20536c0645a9af7c7b03fddc16539c1f529d3c",
+      "skip_reasons": {
+        "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n"
+      }
+    },
+    "build-x86-paging": {
+      "source_head": "057f0e0d4be5df51580bca0f7557c0cb5cdf5c81",
+      "source_tree": "efe04c0f81fd9f02aaabad41b404a72a473b83af",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "12",
+        "build-x86/bin/NeverDX86PagingTests",
+        "--gtest_filter=*",
+        "--gtest_output=xml:/mnt/data/neverd-ia32e-mode-20261110/build-x86-paging.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-ia32e-mode-20261110/build-x86-paging-tmp",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before"
+      },
+      "binaries": {
+        "build-x86/bin/NeverDX86PagingTests": "ff6fe630abc73f91bdf6a4696c405722fbf5a266c6c0a0d76b5631c92669828c",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f"
+      },
+      "exit_code": 0,
+      "seconds": 2237.464745344012,
+      "log": "build-x86-paging.log",
+      "log_sha256": "07096827aef564529e1b85424b7b73141d229d97de39a2b5e5b8c135e32fe799",
+      "tests": {
+        "tests": "848",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "2236.963",
+        "timestamp": "2026-11-10T06:32:19.383",
+        "name": "AllTests"
+      },
+      "skipped": [
+        {
+          "name": "OriginalInstructionsMatchPagingFaultsAndCommit/3",
+          "value_param": "5",
+          "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp",
+          "line": "559",
+          "status": "run",
+          "result": "skipped",
+          "time": "0.016",
+          "timestamp": "2026-11-10T06:32:21.704",
+          "classname": "PagingModes/X86PagingNativeTest"
+        },
+        {
+          "name": "WrapPermissionsAndLimitsMatchCPU/1",
+          "value_param": "5",
+          "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86CompatibilityPagingNativeTests.inc",
+          "line": "13",
+          "status": "run",
+          "result": "skipped",
+          "time": "0.016",
+          "timestamp": "2026-11-10T06:32:21.755",
+          "classname": "IA32e/X86CompatibilityPagingNativeTest"
+        },
+        {
+          "name": "NearBranchesCallsReturnsAndEveryCondition/0",
+          "value_param": "2",
+          "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc",
+          "line": "142",
+          "status": "run",
+          "result": "skipped",
+          "time": "0.024",
+          "timestamp": "2026-11-10T06:59:56.573",
+          "classname": "LegacyScalars/X86LegacyScalarNativeTest"
+        },
+        {
+          "name": "NearBranchesCallsReturnsAndEveryCondition/1",
+          "value_param": "3",
+          "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc",
+          "line": "142",
+          "status": "run",
+          "result": "skipped",
+          "time": "0.011",
+          "timestamp": "2026-11-10T06:59:56.597",
+          "classname": "LegacyScalars/X86LegacyScalarNativeTest"
+        },
+        {
+          "name": "BranchLimitsPrecedeOrFollowStackFaults/0",
+          "value_param": "2",
+          "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc",
+          "line": "200",
+          "status": "run",
+          "result": "skipped",
+          "time": "0.018",
+          "timestamp": "2026-11-10T06:59:56.731",
+          "classname": "LegacyScalars/X86LegacyScalarNativeTest"
+        },
+        {
+          "name": "BranchLimitsPrecedeOrFollowStackFaults/1",
+          "value_param": "3",
+          "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc",
+          "line": "200",
+          "status": "run",
+          "result": "skipped",
+          "time": "0.017",
+          "timestamp": "2026-11-10T06:59:56.750",
+          "classname": "LegacyScalars/X86LegacyScalarNativeTest"
+        }
+      ],
+      "properties": {
+        "branch_selection_comparisons": 64,
+        "cpu_comparisons": 736370,
+        "event_cpu_comparisons": 292,
+        "original_comparisons": 8071,
+        "round_trip_comparisons": 992,
+        "kvm_port_comparisons": 4584,
+        "kvm_input_batch_restart_discrepancies": 16,
+        "vmx_ac_nmi_recoveries": 24,
+        "software_reference_comparisons": 28,
+        "original_sequence_comparisons": 57
+      },
+      "report": "build-x86-paging.xml",
+      "report_sha256": "dd70bb188fff3c9e6f7e8d4e4e46fa6ab66014457806e15f7dd06a59d1889310",
+      "skip_reasons": {
+        "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n",
+        "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n",
+        "LegacyScalars/X86LegacyScalarNativeTest.NearBranchesCallsReturnsAndEveryCondition/0": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:144\nBind the processor's CALL stack publication profile\n",
+        "LegacyScalars/X86LegacyScalarNativeTest.NearBranchesCallsReturnsAndEveryCondition/1": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:144\nBind the processor's CALL stack publication profile\n",
+        "LegacyScalars/X86LegacyScalarNativeTest.BranchLimitsPrecedeOrFollowStackFaults/0": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:202\nBind the processor's CALL stack publication profile\n",
+        "LegacyScalars/X86LegacyScalarNativeTest.BranchLimitsPrecedeOrFollowStackFaults/1": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86LegacyScalarNativeTests.inc:202\nBind the processor's CALL stack publication profile\n"
+      }
+    },
+    "build-x86-returns": {
+      "source_head": "057f0e0d4be5df51580bca0f7557c0cb5cdf5c81",
+      "source_tree": "efe04c0f81fd9f02aaabad41b404a72a473b83af",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "12",
+        "build-x86/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=X64PagedReturnContinuationTest.*:*PendingHandlerResumesReturnWithoutAnotherAttempt:X64PagedWatchpointTest.OriginalRepeat*",
+        "--gtest_output=xml:/mnt/data/neverd-ia32e-mode-20261110/build-x86-returns.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-ia32e-mode-20261110/build-x86-returns-tmp",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-ia32e-mode-20261110/build-x86-returns-exports"
+      },
+      "binaries": {
+        "build-x86/bin/NeverDX64PagedExecutionTests": "830c36f64052624889e4b66655e61ae7cdd7defdd251001c6ad58359f62904d3",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f"
+      },
+      "exit_code": 0,
+      "seconds": 16.71988665603567,
+      "log": "build-x86-returns.log",
+      "log_sha256": "8f030c7ed4705bbb433faa7d6c78f23f43c5bbfa0d56e7d7e21da025770f2eb9",
+      "tests": {
+        "tests": "10",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "16.678",
+        "timestamp": "2026-11-10T07:09:37.513",
+        "name": "AllTests"
+      },
+      "skipped": [],
+      "properties": {
+        "original_comparisons": 580
+      },
+      "report": "build-x86-returns.xml",
+      "report_sha256": "51ee465462596b148d11a0eeabaa56b70af6c261d3b1af848df8852815094b1f",
+      "skip_reasons": {}
+    },
+    "build-x86-call-4": {
+      "source_head": "057f0e0d4be5df51580bca0f7557c0cb5cdf5c81",
+      "source_tree": "efe04c0f81fd9f02aaabad41b404a72a473b83af",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "600",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86/bin/NeverDX86PagingTests",
+        "--gtest_filter=*NearBranchesCallsReturnsAndEveryCondition*:*BranchLimitsPrecedeOrFollowStackFaults*",
+        "--gtest_output=xml:/mnt/data/neverd-ia32e-mode-20261110/build-x86-call-4.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_LEGACY_CALL": "store"
+      },
+      "binaries": {
+        "build-x86/bin/NeverDX86PagingTests": "ff6fe630abc73f91bdf6a4696c405722fbf5a266c6c0a0d76b5631c92669828c"
+      },
+      "exit_code": 0,
+      "seconds": 18.832968388916925,
+      "log": "build-x86-call-4.log",
+      "log_sha256": "2798fa126d28765a02fe047d4a8668a08bfd22a35a584dbc3b93338004918202",
+      "tests": {
+        "tests": "4",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "18.738",
+        "timestamp": "2026-11-10T07:02:25.568",
+        "name": "AllTests"
+      },
+      "skipped": [],
+      "properties": {
+        "cpu_comparisons": 8368
+      },
+      "report": "build-x86-call-4.xml",
+      "report_sha256": "62462414cfcbc7eaa3b5075e5282af6142197c5f0c64ebb2dbdae29a32d06926",
+      "skip_reasons": {}
+    },
+    "build-x86-call-12": {
+      "source_head": "057f0e0d4be5df51580bca0f7557c0cb5cdf5c81",
+      "source_tree": "efe04c0f81fd9f02aaabad41b404a72a473b83af",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "600",
+        "taskset",
+        "-c",
+        "12",
+        "build-x86/bin/NeverDX86PagingTests",
+        "--gtest_filter=*NearBranchesCallsReturnsAndEveryCondition*:*BranchLimitsPrecedeOrFollowStackFaults*",
+        "--gtest_output=xml:/mnt/data/neverd-ia32e-mode-20261110/build-x86-call-12.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_LEGACY_CALL": "check"
+      },
+      "binaries": {
+        "build-x86/bin/NeverDX86PagingTests": "ff6fe630abc73f91bdf6a4696c405722fbf5a266c6c0a0d76b5631c92669828c"
+      },
+      "exit_code": 0,
+      "seconds": 21.826027115923353,
+      "log": "build-x86-call-12.log",
+      "log_sha256": "6bd0c3c71508196a99d62d4f09c601ae69d0e57c16bee15bb19973523184a957",
+      "tests": {
+        "tests": "4",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "21.741",
+        "timestamp": "2026-11-10T07:10:10.932",
+        "name": "AllTests"
+      },
+      "skipped": [],
+      "properties": {
+        "cpu_comparisons": 8368
+      },
+      "report": "build-x86-call-12.xml",
+      "report_sha256": "8e80c245e675714e60a7c081beae3afe7c442a51d31fd0a42e305eed7e9fa011",
+      "skip_reasons": {}
+    }
+  },
+  "repository_checks": {
+    "format": {
+      "source_head": "057f0e0d4be5df51580bca0f7557c0cb5cdf5c81",
+      "source_tree": "efe04c0f81fd9f02aaabad41b404a72a473b83af",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "python3",
+        "scripts/check_clang_format.py",
+        "--base",
+        "0d5ad949491ccb2ad5cc799cf8d9f994d839201b",
+        "--clang-format",
+        "/mnt/data/neverd-branch-debug-20261106/formatter/runtime/clang_format/data/bin/clang-format"
+      ],
+      "environment": {},
+      "binaries": {},
+      "exit_code": 0,
+      "seconds": 0.4672346489969641,
+      "log": "format.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "provenance": {
+      "source_head": "057f0e0d4be5df51580bca0f7557c0cb5cdf5c81",
+      "source_tree": "efe04c0f81fd9f02aaabad41b404a72a473b83af",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "python3",
+        "scripts/check_source_provenance.py"
+      ],
+      "environment": {},
+      "binaries": {},
+      "exit_code": 0,
+      "seconds": 9.717365429038182,
+      "log": "provenance.log",
+      "log_sha256": "071ed81215db28e40b9c8f37b17213087af9b1914fd30e504f14234e9bbe818f"
+    },
+    "docs": {
+      "source_head": "057f0e0d4be5df51580bca0f7557c0cb5cdf5c81",
+      "source_tree": "efe04c0f81fd9f02aaabad41b404a72a473b83af",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "python3",
+        "scripts/check_docs_i18n.py"
+      ],
+      "environment": {},
+      "binaries": {},
+      "exit_code": 0,
+      "seconds": 5.267031295108609,
+      "log": "docs.log",
+      "log_sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14"
+    },
+    "whitespace": {
+      "source_head": "057f0e0d4be5df51580bca0f7557c0cb5cdf5c81",
+      "source_tree": "efe04c0f81fd9f02aaabad41b404a72a473b83af",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "environment": {},
+      "binaries": {},
+      "exit_code": 0,
+      "seconds": 0.03515583591070026,
+      "log": "whitespace.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "source_compilers": {
+    "build-x86-native": {
+      "configured": "<host>/.local/bin/clang",
+      "resolved": "/usr/lib/llvm-23/bin/clang",
+      "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "version": "Ubuntu clang version 23.1.2 (++20260910044155+069ef0e7cb36-1~exp1~20260910044205.69)\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /usr/lib/llvm-23/bin\n"
+    },
+    "build-x86": {
+      "configured": "<host>/.local/bin/clang",
+      "resolved": "/usr/lib/llvm-23/bin/clang",
+      "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "version": "Ubuntu clang version 23.1.2 (++20260910044155+069ef0e7cb36-1~exp1~20260910044205.69)\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /usr/lib/llvm-23/bin\n"
+    }
+  },
+  "totals": {
+    "passing_executions": 1764,
+    "skipped_executions": 16,
+    "failures": 0,
+    "initial_unbound_call_skips_requalified": 8,
+    "remaining_hardware_skip_executions": 8
+  },
+  "return_artifacts": {
+    "identical_files_per_sdk": 260,
+    "identical_to_prior_integration": "2e4268b9e1e36197281515e4d60515ca918f44f3",
+    "index": "/mnt/data/neverd-ia32e-mode-20261110/return-artifact-hashes.json",
+    "index_sha256": "a6d4d867591b28f19606fe2e8e5857d21d0feacaa5dced944061d4e5ecc27f7e"
+  },
+  "boundaries": [
+    "Native LA57 unavailable; software four/five-level coverage both passes.",
+    "Initial paging matrices skipped four CALL-profile tests per SDK; separate store/check P/E runs qualify every skipped CALL case on both SDKs.",
+    "Native comparisons cover data pages, low register result, FS/GS full bases, fault frames and CR2; no fault-time A/D ordering claim.",
+    "KVM original instruction comparisons are separate from generated host-x64 C execution.",
+    "NeverC stays at its 64-bit-only source-target cleanup ac2335646fb80d749066029ba5ccfdfdc6bbec80.",
+    "No LLVM release, production SDK pin or LLVM gitlink change."
+  ]
+}
