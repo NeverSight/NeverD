@@ -10869,4 +10869,11 @@ Il grafo precedente è ancora disponibile.</translation>
         <translation>Sgancia finestra</translation>
     </message>
 </context>
+<context>
+    <name>CloseButton</name>
+    <message>
+        <source>Close Tab</source>
+        <translation>Chiudi scheda</translation>
+    </message>
+</context>
 </TS>

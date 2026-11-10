@@ -959,6 +959,9 @@ the generator unit test requires a failed check to leave the input unchanged.
 `TypeRender.KeywordNamespacesKeepTheirDistinctSpellings` checks the shared
 keyword index across all seven output languages, including C++'s C keywords
 and Rust's raw-identifier exceptions.
+`TypeRender.UnchangedNamesReserveTheOrdinaryNamespace` checks unchanged names,
+sanitized names, chained suffix collisions and enumerators in all seven
+languages, plus reverse-order C/C++ queries and undeclared names.
 `HighCSourceCalls.CallbackBorrowsDeclareNestedRecordTags` additionally checks
 that records used only inside callbacks receive the correct struct/union
 forward declarations, without reconstructing their layouts.
@@ -6955,7 +6958,12 @@ not fit it, and loses only the record an index misplaces. An index whose page
 count exceeds its record's length is discarded; complete records in the original
 file still reproduce their exact source without asking the engine.
 `WorkbenchTests::pseudocodeViewReadsWhatAnEarlierSessionRendered` checks that
-through a real view.
+through a real view. `QueryServiceTests::sourcePageKeptAcrossAReadContextIsNamed`
+checks that a replica's dispatcher names the page it kept after its owner's change
+starts its read context anew, and names none of another project's.
+`WorkbenchTests::ownerAnswersForItsPagesWhileAReplicaIsReady` checks that the owner
+still answers for the page it gave after a note, with a replica ready, and that a
+graph is still the replica's.
 `NeverDWorkerListingFacts` runs that job over a real PE: the owner of the same
 session takes up what the replica keeps of a function's first look, a later session
 lists what asking the engine lists, a new name of a function or of data keeps the
@@ -7299,7 +7307,9 @@ source comments cannot enter the name-only refresh path, and a stale committed
 sidecar is refused without changing the replica. The workbench's
 `localNameEditsReuseTheIdleAnalysisReplica` also checks the process identity and
 unchanged preparation counters through a source comment, a function's new name and
-an image comment, and full retirement after a deleted function.
+an image comment, and full retirement after a deleted function. The owner answers
+first what it keeps of the edited view, so those come from a C view of the function,
+which only the replica answers.
 `analysisReplicaOutlivesAReadNobodyWaitsFor` checks that going to another function
 during a read keeps the replica, and `cancellingOneAnalysisLeavesTheOtherRunning`
 that one still running well past what restoring took is stopped.
@@ -8126,6 +8136,19 @@ complete scalar FP descriptors before and after declaration rendering across
 three data models, four architectures and COFF/ELF/Mach-O, including variadic,
 fastcall, record, pointer and long-double declarations. The header-origin
 regression also compares the ABI-only query with the full resolver.
+`PipelineOutcome.ImportSummariesNeedABIWithoutSourceDeclarations` checks the
+import inventory on x86, x64 and ARM64, including omitted imports and computed
+call targets. Cold and cached selections retain fixed argument counts and
+widths, variadic prefixes, missing declarations and user/header provenance
+without requesting C declarations. Run the
+Win64, i386, AAPCS64, System V and record-call suites alongside this shared
+consumer; emitters still require the ordinary source-bearing resolver.
+`LocalTypesDebugContext.ABIQueriesShareConversionWithSourceDeclarations`
+checks that repeated ABI queries and later C declarations share the same
+converted types while retaining a fresh resolver's declarations and scalar
+spellings. `NewTypesInvalidateUnrenderedABISignatures` adds an opaque
+pointee's layout before rendering, both with stable C names and with a name
+table reset; an earlier query cannot retain the old layout for later callers.
 `TypeRender.ScalarSpellingsPreserveLaterNameCollisions` starts with scalar
 prototypes, then queries colliding named records in opposite orders and
 repeats the scalar prototype. C and C++ retain their parameter keyword rules;
@@ -21608,6 +21631,22 @@ in both vector counts and outgoing stack writes. `CallRegisterConstant` checks
 physical byte lanes, exact occurrence identity, ambiguity and exact/exhausted
 work boundaries. `NeverDWorkerCallSiteTypes` also executes both C routes when
 the original x64 caller computes its variadic vector count by subtraction.
+
+`AArch64EntryABI.*` in `NeverDArm64eAnalysisTests` checks declared native entry
+reconstruction, physical parameter reordering, signed/unsigned 8/16-bit values,
+scalar floating-point and pointers, native SIMD64/SIMD128 and vector spills,
+odd-register and stack i128, ordinary records, HFA, 64/128-bit HVA, stack spills
+and indirect values with x8 result storage. Independent Clang O0/O2 callers
+compare values and C++ exception propagation through the generated entry.
+Separate tests preserve authenticated pointer schemas, interior labels and
+invoke successors, distinguish canonical and physical direct calls, and reject
+incomplete declarations or carriers without mutation. Unused attributed inputs
+still require a source value, and aggregate physical result fields fail before
+mutation. A decoded AArch64 body
+exercises the emitter integration and retains the arm64e publication refusal.
+These are ordinary native Darwin ABI tests, not CPTA-on or a qualification of
+arbitrary lifted-image publication. Their temporary objects and executables
+are removed after execution.
 
 `AArch64WritebackMemory.*` in `NeverDArm64eAnalysisTests` covers GPR single
 pre/post-index operations with 130 independent LLVM MC 22.1.6 samples: 13

@@ -2439,6 +2439,7 @@ add_neverd_unittest(NeverDDyldSharedCacheTests
 )
 
 add_neverd_unittest(NeverDArm64eAnalysisTests
+  aarch64/AArch64EntryABITests.cpp
   aarch64/AArch64AddressMemoryTests.cpp
   aarch64/AArch64RawSPProvenanceTests.cpp
   aarch64/AArch64PAuthSemanticTests.cpp

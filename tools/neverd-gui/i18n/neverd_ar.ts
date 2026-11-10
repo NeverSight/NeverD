@@ -11013,4 +11013,11 @@ Your previous graph is still available.</source>
         <translation>فصل النافذة</translation>
     </message>
 </context>
+<context>
+    <name>CloseButton</name>
+    <message>
+        <source>Close Tab</source>
+        <translation>إغلاق علامة التبويب</translation>
+    </message>
+</context>
 </TS>

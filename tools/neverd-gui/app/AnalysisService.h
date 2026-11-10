@@ -4,6 +4,7 @@
 #include "QueryService.h"
 
 #include <QElapsedTimer>
+#include <QSet>
 #include <array>
 #include <memory>
 #include <optional>
@@ -57,6 +58,9 @@ private:
   /// Asks the owner for the running read from what is kept, and starts the
   /// replica for what is not.
   void readKept();
+  /// The owner's answer to the running read from what it keeps; what it does
+  /// not keep goes to the replica, or starts it.
+  void askOwner();
   void forgetKeptRequests();
   void stopWorker();
   /// Leaves what the worker is answering to run to its end, unanswered.
@@ -84,6 +88,10 @@ private:
   enum class KeptState { Unknown, Asked, Whole, Part };
   KeptState keptState_ = KeptState::Unknown;
   bool ownerReadsKept_ = false;
+  /// The names (etags) of the source pages the owner gave.  One a view keeps
+  /// names a document the owner kept, which a ready replica would read whole,
+  /// so the owner answers for it while it keeps it.
+  QSet<QString> ownerPages_;
   quint64 serial_ = 0, next_ = 0;
   bool ready_ = false;
   bool snapshotBlocked_ = false, startingReplica_ = false;

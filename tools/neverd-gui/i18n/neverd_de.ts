@@ -10869,4 +10869,11 @@ Ihr vorheriger Graph ist weiterhin verfügbar.</translation>
         <translation>Fenster abdocken</translation>
     </message>
 </context>
+<context>
+    <name>CloseButton</name>
+    <message>
+        <source>Close Tab</source>
+        <translation>Tab schließen</translation>
+    </message>
+</context>
 </TS>

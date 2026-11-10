@@ -10869,4 +10869,11 @@ Your previous graph is still available.</translation>
         <translation>Undock window</translation>
     </message>
 </context>
+<context>
+    <name>CloseButton</name>
+    <message>
+        <source>Close Tab</source>
+        <translation>Close Tab</translation>
+    </message>
+</context>
 </TS>

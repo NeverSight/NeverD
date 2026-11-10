@@ -4697,14 +4697,30 @@ parameter/return graph. Positive declarations still pass full prototype
 validation without C name-table construction; an unsupported type cannot
 terminate a CFG path. `DebugContext::resolvePrototypeABI` provides the same
 validated types, calling convention and declaration origin for structural
-queries. The x86 import-return inventory uses it without spelling every
-library type. Both local-type queries use the ordinary signature converter;
-source emitters retain `resolvePrototype` and its complete C spellings.
+queries. The x86 import-return inventory and LowIR import-argument summaries
+use it without spelling every library type, including declarations outside
+the selected function. An import's return, scalar, variadic and record
+adapters share one converted declaration. User declarations retain their
+existing precedence over header and runtime tables. Both local-type queries
+use the ordinary signature converter; source emitters retain
+`resolvePrototype` and its complete C spellings. ABI queries retain validated
+graphs with the ordinary portable scalar spellings, which need no global
+name table. Rendering moves the same graph into the full-signature cache and
+adds declarations without changing previously returned types. Only valid
+prototype names in the context's library enter this intermediate cache;
+adding types clears it even when C names remain stable, so an opaque pointee
+can acquire its newly recovered layout.
 C declaration writers build their library-wide name table only when a named
 type or enumerator needs it. Scalar and parameter spelling use the same
 identifier rules directly. The deferred table still consumes the whole
 library in its canonical order, preserving collisions independently of
 which type is requested first. Shared embedded-name tables remain reusable.
+The naming table retains changed type spellings and an empty identity marker
+for each unchanged name. Repeated queries use that marker without normalizing
+the name again or retaining a second copy of it. Every type still takes its
+place in the ordinary namespace before enumerators, including unchanged
+identifiers and generated collision suffixes. Undeclared names follow the
+ordinary identifier rules.
 A name a program may also give a routine
 of its own decides only together with the module that exports it
 (`isNoReturnImport`, `WindowsNoReturnImports.inc`): the Universal CRT's
@@ -5036,7 +5052,12 @@ render as it was, and a file beside the folders (`.same`) says the folder holds 
 the inputs after them too. A session whose job starts over after it began no longer
 reads as a new session does, and stops reading and adding to the store.
 With a store that reaches every function, the owner answers those views itself
-(`kept_only`), and a replica starts only for what the store does not answer.
+(`kept_only`), and a replica starts only for what the store does not answer. A page
+the owner gave stays the owner's to answer for while it keeps it, even once a replica
+is ready (`AnalysisService::askOwner`), since the replica would read it from the store
+and send it whole; a graph, and a page a replica gave, stay with the replica. The
+owner answers the read before it says what the store holds (`kept_renders`), which
+decides only whether a replica starts beside that answer.
 The job also keeps what a function's first look in the listing asks the engine, its
 recovered instructions and its stack frame, in `local/listing-facts` under the same
 identity without the names of data, which those answers do not spell either. The
@@ -5092,7 +5113,9 @@ names that changed row by row (`Engine::takeNames`), so its name index stands, a
 does the function list the next selection reads (`Session::functionListCurrent`). A page the
 GUI keeps is named by the document and lines it came from; a later read names it
 (`if_none_match`), and while the document stands the worker says so instead of sending
-the page again (`QueryService::State::keptPages`). Where an edit built the document
+the page again (`QueryService::State::keptPages`). A replica's dispatcher keeps its
+pages across the read context it starts at each change of its owner's, so the read
+after an edit names them too. Where an edit built the document
 again, a worker that still has the old one sends what changed of the page
 (`page_delta`: lines replaced and the offsets after them shifted, `pageDelta`), which the
 GUI applies to the page it keeps (`page_delta::apply`); a reply the kept page does not

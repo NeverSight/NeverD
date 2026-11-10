@@ -99,6 +99,41 @@ class QueryServiceTests final : public QObject {
   }
 
 private slots:
+  void sourcePageKeptAcrossAReadContextIsNamed() {
+    // A replica's dispatcher starts its read context anew at every change of
+    // its owner's (AnalysisService::reset): the page it kept is named still,
+    // where the same project goes on.
+    Harness h;
+    h.service.resetReadContext("project-one", "1");
+    QJsonObject first;
+    h.service.subscribe(text(), &h.owner,
+                        [&](const QJsonObject &response) { first = response; });
+    QTRY_COMPARE(h.sent.size(), 1);
+    QCOMPARE(h.sent[0].payload["if_none_match"].toString(), QString());
+    h.reply(0,
+            {{"text", "kept text"}, {"etag", "tag-7-0-3"}, {"revision", "1"}});
+    QTRY_COMPARE(first["payload"].toObject()["text"].toString(), "kept text");
+    h.service.resetReadContext("project-one", "2");
+    QJsonObject second;
+    h.service.subscribe(text(), &h.owner, [&](const QJsonObject &response) {
+      second = response;
+    });
+    QTRY_COMPARE(h.sent.size(), 2);
+    QCOMPARE(h.sent[1].payload["if_none_match"].toString(), "tag-7-0-3");
+    h.reply(1, {{"unchanged", true}, {"etag", "tag-7-0-3"}, {"revision", "2"}},
+            "2");
+    QTRY_COMPARE(second["status"].toString(), "ok");
+    QCOMPARE(second["payload"].toObject()["text"].toString(), "kept text");
+    QCOMPARE(second["revision"].toString(), "2");
+    // Another project's read names none of this one's pages.
+    h.service.resetReadContext("project-two", "1");
+    QJsonObject third;
+    h.service.subscribe(text(), &h.owner,
+                        [&](const QJsonObject &response) { third = response; });
+    QTRY_COMPARE(h.sent.size(), 3);
+    QCOMPARE(h.sent[2].payload["if_none_match"].toString(), QString());
+  }
+
   void sourcePageKeptAcrossARevisionIsNamedAndTakenBack() {
     Harness h;
     establish(h);

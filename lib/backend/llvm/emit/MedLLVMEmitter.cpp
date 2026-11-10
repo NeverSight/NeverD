@@ -31,14 +31,17 @@
 #include "neverd/backend/MIPS/MIPSDSPSource.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
+#include "neverd/backend/llvm/AArch64/LLVMEntryABI.h"
 #include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMName.h"
+#include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/LLVMSourceTypeHints.h"
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
 #include "neverd/backend/llvm/PEImportShadow.h"
 #include "neverd/backend/llvm/SourceFrameBytes.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/X86/X86RegistrationEntry.h"
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64ExceptionReturn.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
@@ -712,7 +715,10 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
     std::vector<llvm::Type *> FieldTypes;
     for (const auto &RR : Func.MultiReturn) {
       uint16_t Sz = RR.Size ? RR.Size : 8;
-      if (RR.IsFP)
+      if (RR.IsFP && TargetArch == Arch::AArch64 &&
+          Sz == kSourceAArch64Vector128Bytes)
+        FieldTypes.push_back(Vec2I64);
+      else if (RR.IsFP)
         FieldTypes.push_back(Sz <= 4 ? llvm::Type::getFloatTy(*Ctx)
                                      : llvm::Type::getDoubleTy(*Ctx));
       else
@@ -1714,8 +1720,26 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
             language_eh_md::InternalCxxContinuationReturnAttachment, nullptr);
       }
 
-  if (FatalCodePointerResolution || FatalDataPointerResolution ||
-      !normalizeResolvedLLVMCalls(*Mod_, SourceMap, AnalystSourceProjection) ||
+  if (FatalCodePointerResolution || FatalDataPointerResolution)
+    return nullptr;
+
+  if (ReconstructAArch64SourceEntries)
+    for (const MedFunc &Function : Funcs) {
+      auto Name = EmittedFuncNames.find(Function.Entry);
+      auto *Body = Mod_->getFunction(
+          Name == EmittedFuncNames.end() ? Function.Name : Name->second);
+      if (!Body || Body->isDeclaration())
+        continue;
+      auto Entry = reconstructDarwinAArch64Entry(*Body, Function);
+      if (!Entry) {
+        syncError() << llvm::toString(Entry.takeError()) << '\n';
+        return nullptr;
+      }
+      if (SourceMap)
+        SourceMap->Functions[Function.Entry] = *Entry;
+    }
+
+  if (!normalizeResolvedLLVMCalls(*Mod_, SourceMap, AnalystSourceProjection) ||
       !validateResolvedLLVMCallSignatures(*Mod_, AnalystSourceProjection))
     return nullptr;
 

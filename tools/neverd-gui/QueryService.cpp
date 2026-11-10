@@ -274,10 +274,12 @@ struct QueryService::State {
             {"error", QJsonObject{{"code", code}, {"message", message}}}};
   }
 
-  /// A source page's place apart from the revision it was read at.
+  /// A source page's place apart from the revision it was read at, and apart
+  /// from the session: a replica's dispatcher starts one at every change of
+  /// its owner's, and a page stands only where the worker that named it says
+  /// so, whose names no other worker gives.
   QByteArray keptPageKey(const Job &job) const {
-    return QJsonDocument(QJsonArray{QString::number(epoch), project,
-                                    QString::number(job.listing),
+    return QJsonDocument(QJsonArray{project, QString::number(job.listing),
                                     job.spec.operation, job.spec.payload})
         .toJson(QJsonDocument::Compact);
   }

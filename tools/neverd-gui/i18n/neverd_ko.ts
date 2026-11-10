@@ -10833,4 +10833,11 @@ Your previous graph is still available.</source>
         <translation>창 분리</translation>
     </message>
 </context>
+<context>
+    <name>CloseButton</name>
+    <message>
+        <source>Close Tab</source>
+        <translation>탭 닫기</translation>
+    </message>
+</context>
 </TS>
