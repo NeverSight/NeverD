@@ -301,10 +301,10 @@ NameSpelling::NameSpelling(const TypeLibrary &Library, Language Lang,
         ++Number;
       Spelled += "_" + std::to_string(Number);
     }
-    if (Spelled != Type->Name) {
+    const bool Changed = Spelled != Type->Name;
+    if (Changed)
       Renamed.push_back({Type->Name, Spelled});
-      Types[Type->Name] = std::move(Spelled);
-    }
+    Types[Type->Name] = Changed ? std::move(Spelled) : std::string();
   }
   if (IncludeEnumerators)
     for (const LocalType *Type : All) {
@@ -377,11 +377,10 @@ void NameSpelling::inlineEnums(const RecordDef &Record, llvm::StringRef Owner,
 
 std::string NameSpelling::type(llvm::StringRef Name) const {
   auto Found = Types.find(Name);
-  // An unchanged library name or an undeclared reference needs no stored
-  // spelling.
-  return Found != Types.end()
-             ? Found->second
-             : identifier(Name, /*TypeName=*/true, Lang, Reserved);
+  if (Found == Types.end())
+    return identifier(Name, /*TypeName=*/true, Lang, Reserved);
+  // Known unchanged names need no second string or repeated normalization.
+  return Found->second.empty() ? Name.str() : Found->second;
 }
 
 std::string NameSpelling::enumerator(const EnumDef &Enum, size_t Index) const {
