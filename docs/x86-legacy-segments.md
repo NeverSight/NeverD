@@ -1569,3 +1569,54 @@ After the later SBF-only dev integration, both rebuilt SDKs pass another 260
 source and ordinary system-state checks, retaining 280 additional compiled
 libraries. The paging executables remain byte-identical to the complete
 qualification. The evidence records this integration commit separately.
+
+## Protected task transfers
+
+The `X86LegacyExecutionOptions::Tasks` binding with `OrderedTSS` connects far CALL/JMP
+through available TSS descriptors and GDT/LDT task gates, IDT task gates, and
+nested-task IRET to one task-switch owner. Both 16-bit and 32-bit TSS layouts
+are represented independently of the source code's CS.D and operand prefix.
+Generated host-x64 Clang/NeverC dispatch uses that same owner; this adds no
+NeverC 32-bit source target.
+
+The binding requires a valid debug bank/profile and an explicit full-limit stack
+choice. Word TSS loads also require eight explicit GPR upper-half values; their
+FS/GS selectors become null/unusable. Outgoing saves include dynamic GPRs,
+selectors, EIP and flags, while CR3 and LDTR remain static TSS inputs. CALL and
+interrupts set the incoming backlink/NT; JMP and IRET clear the outgoing busy
+bit; IRET clears NT in the outgoing saved image. All transfers set CR0.TS and
+clear DR7 local enables/LE. Incoming RF is retained, old TF is saved without
+an entry single-step trap, incoming TF affects its first instruction, and TSS.T
+produces a separate DR6.BT cause, including coincident data breakpoints.
+
+This is one CPU over exclusive ordinary RAM with a declared access order.
+Guest page residency/permissions for TSS regions and busy updates are probed
+before task stores. Outgoing stores precede incoming TSS reads; LDT, CS, SS,
+ES, DS, FS and GS descriptor loads follow incoming register publication. PAE
+PDPTEs reload only when CR3 changes. An invalid reload publishes the incoming
+task, a cleared PDPTE bank and #TS(0) in this profile. Task-gate error-code
+stores precede the late target-EIP limit check. This does not infer a physical
+CPU's TSS microcode access widths, contiguous-physical TSS behavior, TLB effects,
+undefined fault state or every competing-fault priority.
+
+Incoming TR, controls, registers and selectors remain published when a later
+segment check faults. The private continuation admits that fault context
+without weakening ordinary loaded-cache validation. A following interrupt gate
+can load a valid inner stack; a task gate can enter a recovery task. Completed
+RAM effects and the original instruction are retained across host backing
+stops, including aliases and a changed address space. Event-owned continuations
+keep the already accepted event and never reread its old IDT gate after commit.
+
+A VM86 task image stops with `ModeUnavailable`, retaining `PendingTask` and any
+accepted event before destination descriptor processing. It is neither an
+instruction completion nor a fabricated guest fault. Real/VM86 execution,
+IA-32e transitions, software SMM/SGX and the broader outstanding state matrix
+remain open. The LLVM release, production SDK pin and submodule are unchanged.
+
+The contract follows [Intel SDM, task management and exception delivery](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
+`X86LegacyTaskTest` covers publication, faults, both TSS widths, aliasing,
+address-space changes and suspension; generated-source cases run with host-x64
+Clang/NeverC at O0/O2. `KVMTaskSoftwareReference` compares original 32-bit TSS
+CALL/JMP, direct/task-gate/INT paths and nested IRET under legacy and PAE paging.
+VMX exits task switches to KVM software, so those comparisons are independent
+software evidence, not physical task-switch or task-debug qualification.

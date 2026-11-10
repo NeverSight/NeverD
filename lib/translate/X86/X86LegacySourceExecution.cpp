@@ -10,6 +10,7 @@
 #include "neverd/translate/X86/X86LegacySourceExecution.h"
 
 #include "X86LegacyExecutionInternal.h"
+#include "X86LegacyTaskSwitch.h"
 
 #include "llvm/Support/Errc.h"
 
@@ -18,6 +19,8 @@
 namespace neverd::translate {
 
 uint64_t X86LegacySourceExecution::key() const {
+  if (detail::legacyTaskInstructionPending(State))
+    return detail::legacyTaskInstructionKey(State);
   const auto &CS = State.Core.Segments[1];
   return x86LegacySourceKey(uint32_t(CS.Base + State.EIP),
                             bool(CS.Attributes & 0x4000));
@@ -39,6 +42,11 @@ uint32_t X86LegacySourceExecution::record(
 }
 
 uint32_t X86LegacySourceExecution::select(uint64_t &Key) {
+  if (detail::legacyTaskModeUnavailable(State)) {
+    if (auto Failure = detail::validateLegacyTaskState(State, Memory))
+      return fail(std::move(Failure));
+    return uint32_t(X86LegacyExecutionStatus::ModeUnavailable);
+  }
   if (State.PendingEvent)
     return uint32_t(X86LegacySourceExit::PendingEvent);
   if (auto Failure = detail::admitLegacyExecution(State, Memory, Options))

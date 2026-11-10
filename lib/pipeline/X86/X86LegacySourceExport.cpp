@@ -146,6 +146,7 @@ extern uint32_t neverd_x86_legacy_attempted_v1(void *);
   EmitExit("DEVICE_UNAVAILABLE", Status::DeviceUnavailable);
   EmitExit("EVENT_BUDGET_EXHAUSTED", Status::EventBudgetExhausted);
   EmitExit("HALTED", Status::Halted);
+  EmitExit("MODE_UNAVAILABLE", Status::ModeUnavailable);
   EmitExit("INVALID_STATE", Exit::InvalidState);
   EmitExit("UNSELECTED", Exit::Unselected);
   EmitExit("BUDGET_EXHAUSTED", Exit::BudgetExhausted);

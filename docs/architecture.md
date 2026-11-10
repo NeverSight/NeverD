@@ -158,7 +158,16 @@ state, memory, options and result at its private bridge. Selection keys combine
 the live linear instruction address with CS.D; the dispatcher does not duplicate
 instruction semantics or infer an ordinary C ABI. Event delivery always stops;
 pending entry resumes through the existing owner before more source dispatch.
-This path supplies neither IA-32e compatibility state nor task transitions.
+This path does not supply IA-32e compatibility state. Protected task transfers
+are owned by `translate/X86/X86LegacyTaskSwitch`, shared by far CALL/JMP,
+NT IRET and IDT task gates. It separates outgoing TSS effects from incoming
+register/address-space publication and retains a private, immutable continuation
+for backing stops and incoming-task faults. Ordinary instruction admission stays
+strict; only this owner can admit its partially loaded CS/SS fault context.
+Source selection uses the retained original instruction key during a suspended
+task switch, so it neither fetches overwritten bytes nor charges another attempt.
+VM86 destinations stop at an explicit `ModeUnavailable` boundary; their execution
+and event routing still require a complete mode owner.
 `translate/X86/X86LegacyFrameReturn` adds protected 16/32-bit IRET/RETF to that
 executor, retaining ordered descriptor writes and IRET NMI unblocking on later
 faults. `ir/X86/X86ReturnRules` shares code-return privilege checks, inaccessible

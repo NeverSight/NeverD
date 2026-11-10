@@ -211,6 +211,17 @@ in `NeverDX64PagedExecutionTests` exercise the runtime transaction and fault
 delivery; compiling those cases alone does not qualify their execution or an
 original-CPU comparison. Keep that limitation explicit in static-only runs.
 
+`X86LegacyTaskTest.*` in `NeverDX86PagingTests` checks protected task
+CALL/JMP, GDT/LDT/IDT gates and NT IRET, both TSS widths, pre/post-publication
+fault ownership, busy/backlink/static fields, debug causes, incoming address
+spaces and retained backing progress. `KVMTaskSoftwareReference/*` compares
+32-bit TSS transfers and returns with KVM's task-switch emulator under legacy
+and PAE paging. This is software-reference evidence, not physical task-switch
+qualification. `Compilers/X86LegacySourceTest.Task*` runs the same owner through
+generated host-x64 Clang/NeverC C at O0/O2, checking code-mode redispatch,
+uncharged continuation attempts and incoming-task exception frames. VM86 mode
+stops remain explicit; these tests do not qualify a complete mode machine.
+
 `X86LegacyExecutionTest`, `LegacyEvents/*` and `LegacySteps/*` in
 `NeverDX86PagingTests` cover original-byte protected legacy execution and
 16/32-bit IDT entry. The independent KVM oracle compares code/stack caches,
