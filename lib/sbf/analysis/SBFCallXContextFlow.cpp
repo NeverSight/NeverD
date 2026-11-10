@@ -295,6 +295,9 @@ struct ContextState {
   // A finite must-fact domain. No numeric interval is retained for an otherwise
   // unknown scalar, including a guarded product that cannot wrap to zero.
   uint16_t NonzeroRegisters = 0;
+  // Private full-word nonzero markers, not the stored VM bits. Canonical
+  // typed memory owns address alternatives, overlap and may-alias invalidation.
+  StoredRegisterMemory NonzeroSpills;
 
   void forgetScalarRegisters(uint16_t Written) {
     NonzeroRegisters &= ~Written;
@@ -341,6 +344,7 @@ struct ContextState {
             const std::shared_ptr<const StoredMemoryCoordinates> &Coordinates,
             MemoryPostconditions::ExpressionJoin MergeExpression = nullptr) {
     NonzeroRegisters &= Other.NonzeroRegisters;
+    NonzeroSpills.meet(Other.NonzeroSpills);
     if (Predicate && Other.Predicate &&
         Predicate->sameCondition(*Other.Predicate->Comparison)) {
       const auto Left = Predicate->carriers(Registers);
@@ -573,6 +577,7 @@ void renameCapturedValue(ContextState &State, uint64_t From, uint64_t To) {
   State.Scratch.Values.renameCapture(From, To);
   State.OriginScratch.Values.renameCapture(From, To);
   State.InputSpills.renameCapture(From, To);
+  State.NonzeroSpills.renameCapture(From, To);
   State.Postconditions.transformSymbols(Rename);
   RenameDefinitions(State.DefinedCaptures);
   if (State.Nullable) {
@@ -614,6 +619,7 @@ void widenCapturedValues(ContextState &State,
   State.Scratch.Values.transformSymbols(Widen);
   State.OriginScratch.Values.transformSymbols(Widen);
   State.InputSpills.transformSymbols(Widen);
+  State.NonzeroSpills.transformSymbols(Widen);
   State.Postconditions.transformSymbols(Widen);
 }
 
@@ -1143,6 +1149,7 @@ uint64_t stateBytes(const ContextState &State) {
                    State.OriginScratch.retainedByteEstimate() +
                    State.Postconditions.retainedByteEstimate() +
                    State.InputSpills.retainedByteEstimate() +
+                   State.NonzeroSpills.retainedByteEstimate() +
                    State.InputWrites.Writes.capacity() * sizeof(MemoryWrite) +
                    State.DefinedCaptures.capacity() * sizeof(uint64_t);
   if (State.Tagged)
@@ -3542,9 +3549,46 @@ void ContextFlow::transferValues(const MedInstruction &Instruction,
   const bool Copy = Instruction.Op == Operation::Mov &&
                     Instruction.Form == OperandForm::DstSrc &&
                     Instruction.Width == kDoubleWordBitWidth;
-  const bool Nonzero =
+  bool Nonzero =
       (Copy && (State.NonzeroRegisters & registerBit(Instruction.Src))) ||
       guardedProductIsNonzero(Instruction, State);
+  if (Instruction.Op == Operation::Load &&
+      Instruction.Semantics.MemoryWidth == kDoubleWordBitWidth &&
+      !State.NonzeroSpills.empty())
+    Nonzero = llvm::all_of(
+        possibleValues(State.Registers[Instruction.Src]),
+        [&](const auto &Base) {
+          const auto Address = memoryAddress(Base, Instruction.Offset);
+          return Address &&
+                 State.NonzeroSpills.readValues(*Address).singleton() ==
+                     RegisterValue{RegisterValue::Kind::Constant, 1, 0};
+        });
+  if (Instruction.Op == Operation::Store) {
+    const bool StoresNonzero =
+        Instruction.Form == OperandForm::StoreReg &&
+        Instruction.Width == kDoubleWordBitWidth &&
+        (State.NonzeroRegisters & registerBit(Instruction.Src));
+    if (StoresNonzero || !State.NonzeroSpills.empty()) {
+      MedInstruction Store = Instruction;
+      Store.Form = OperandForm::StoreReg;
+      Store.Src = Store.Dst == 0 ? 1 : 0;
+      std::optional<StoredRegisterMemory> Output;
+      for (const auto &Base : possibleValues(State.Registers[Store.Dst])) {
+        MachineState Spill;
+        Spill.Registers[Store.Dst] = Base;
+        if (StoresNonzero)
+          Spill.Registers[Store.Src] = {RegisterValue::Kind::Constant, 1, 0};
+        Spill.Scratch.Values = State.NonzeroSpills;
+        applyTransfer(Store, Spill, Program.ExecutableImage,
+                      ScratchLoadPolicy::ProvenValues);
+        if (!Output)
+          Output = std::move(Spill.Scratch.Values);
+        else
+          Output->meet(Spill.Scratch.Values);
+      }
+      State.NonzeroSpills = std::move(*Output);
+    }
+  }
   const bool Positive =
       Copy && State.Predicate &&
       (State.Predicate->Positive & registerBit(Instruction.Src));
@@ -3572,7 +3616,10 @@ void ContextFlow::transferValues(const MedInstruction &Instruction,
     State.NonzeroRegisters |= registerBit(Instruction.Dst);
   if (Instruction.Call != CallKind::None) {
     State.Predicate.reset();
-    State.NonzeroRegisters = 0;
+    if (Instruction.Call == CallKind::Syscall &&
+        (!Instruction.Syscall ||
+         !preservesCallerMemory(Instruction.Syscall->ID)))
+      State.NonzeroSpills.clear();
   }
   const auto OriginAddress = [&](unsigned Register) {
     RegisterState Entry{};
@@ -4461,10 +4508,13 @@ llvm::Expected<bool> ContextFlow::call(FunctionContext &Context,
                                        ContextState &State, bool Collect) {
   State.Tagged.reset();
   State.Predicate.reset();
-  State.NonzeroRegisters = 0;
-  const auto ForgetScalarFacts = llvm::scope_exit([&] {
+  const uint16_t PreservedNonzero =
+      State.NonzeroRegisters &
+      ~((uint16_t{1} << callClobberedRegisterCount(Instruction.Call)) - 1);
+  State.NonzeroRegisters = PreservedNonzero;
+  const auto RestoreScalarFacts = llvm::scope_exit([&] {
     State.Predicate.reset();
-    State.NonzeroRegisters = 0;
+    State.NonzeroRegisters = PreservedNonzero;
   });
   if (Instruction.Call != CallKind::Indirect)
     return callTarget(Context, Instruction, State, Collect);
@@ -4664,6 +4714,9 @@ ContextFlow::instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
   auto &State = Result.Output;
   State.Predicate.reset();
   State.NonzeroRegisters = 0;
+  // This matched replay uses the caller's current memory. Its canonical stores
+  // update nonzero cells just like concrete cells, including across nested
+  // calls.
   const auto RetainState = [&]() -> llvm::Error {
     const uint64_t NewBytes =
         stateBytes(State) + ResultOverhead +
@@ -5733,6 +5786,13 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
         Callee->Effects.WritesFrames;
   }
   if (!PreserveInput) {
+    ScratchState NonzeroSpills;
+    NonzeroSpills.Values = std::move(State.NonzeroSpills);
+    if (Callee && !Edge.LegacyRuntime)
+      Callee->Effects.invalidate(NonzeroSpills, ValueEntry.Registers, Program);
+    else
+      NonzeroSpills.clear();
+    State.NonzeroSpills = std::move(NonzeroSpills.Values);
     ScratchState Spills;
     Spills.Values = std::move(State.InputSpills);
     if (Callee && !Edge.LegacyRuntime)
@@ -6266,6 +6326,8 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
   Input.Tagged.reset();
   Input.Predicate.reset();
   Input.NonzeroRegisters = 0;
+  Input.NonzeroSpills.clear();
+  Input.NonzeroSpills.setCoordinates(Coordinates);
   // Incoming names belong to callers, not to the invocation being summarized.
   // Their fields still use the ordinary must-fact join within this summary.
   Input.DefinedCaptures = std::vector<uint64_t>{};
@@ -6589,6 +6651,7 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
         Merged.Nullable == It->second.Entry.Nullable &&
         Merged.Predicate == It->second.Entry.Predicate &&
         Merged.NonzeroRegisters == It->second.Entry.NonzeroRegisters &&
+        Merged.NonzeroSpills == It->second.Entry.NonzeroSpills &&
         MergedDefinitions == It->second.DefinitelyWritten)
       return llvm::Error::success();
     const uint64_t OldCharge = StateCharge(It->second.Entry);
