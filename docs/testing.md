@@ -872,12 +872,26 @@ state are separate coverage.
 
 `MedTypePass.StackTopResultsAreNotRegisterRestores` distinguishes computed,
 partial and disjoint stack writes from unchanged saves on i386/x64, within a
-block and across predecessors. `I386CallContract.X87StoredBitsReturnThroughTheIntegerRegister`
+block and across predecessors. Byte-wise full and incomplete restoration,
+F16C writes and floating memory reads are included.
+`MedTypePass.PartialStackRestoresKeepIndependentBytesAcrossPaths` checks
+diamonds, reversed predecessor order and a backedge: one restored byte may
+not hide another byte's computed value. `I386CallContract.X87StoredBitsReturnThroughTheIntegerRegister`
 and `Win64CallContract.StackTransportedIntegerWinsOverAScratchFloat` cover
 COFF/ELF/Mach-O, HighC/LLVMC and default/NoOpt. On Linux x86 they compare both
 C routes at O0/O2 under UBSan with original i386/x64 instructions. Results
 are observed through integer registers, including raw x87-converted NaN bits;
 an unused floating temporary must not determine the source return type.
+The x64 test also executes F16C stores and reads when the host supports AVX
+and F16C; hosts without those features still check both source projections.
+
+`MedABIPass.IntrinsicStoresInvalidateStackSetupButPreserveRegisters` checks
+i386/x64 F16C and ARM64 writeback calls in COFF, ELF and Mach-O. Local and
+predecessor register setup survives, overwritten stack inputs remain unknown,
+and a later ordinary store can establish a fresh argument. Invalid shapes
+remain barriers. `AArch64WritebackMemory.CallSetupDistinguishesEveryStoreFamilyFromLoads`
+covers the scalar, vector, pair and structure fixture inventories; forwarded
+scalar FP parameters also retain their independent register proof.
 
 `NeverDLocalTypesDebugContextTests` also checks recursive callback borrows and
 portable parameter qualifiers. Its recursive-record case checks that both
@@ -14278,6 +14292,14 @@ with Clang for all twelve target/format combinations, without host headers.
 `OptimizedSwitchTablesPreservePhysicalAndTwoLevelSelectors` executes original
 x64 machine code and both optimized/unoptimized lifted LLVM at O0/O2, checking
 1024 selectors plus the two-level default boundary against independent results.
+
+`MedABIPass.PairAlignedWideStackStoreKeepsItsLanes` covers the pair-aligned
+conventions (ARM AAPCS and little-endian MIPS o32). One aligned store of a
+stack `double` keeps both slot lanes when a loop surrounds the call, and when an
+earlier call leaves a later slot unproven; that slot stays unknown.
+`MedABIPass.CoveredCallSetupNeedsNoPredecessor` checks that stores covering
+every slot in the call block keep the stack proof complete, and that the proof
+names the slots of such a wide store for the block scan to split.
 
 `MedABIPass.SplitStackArgumentSetupRequiresEveryIncomingPath` checks all twelve
 architecture/format cells, block-order changes, conflicting or missing stores,

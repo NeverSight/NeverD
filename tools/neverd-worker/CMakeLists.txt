@@ -293,6 +293,10 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/local_type_names_test.py"
                 "$<TARGET_FILE:neverd-worker>")
       set_tests_properties(NeverDWorkerLocalTypeNames PROPERTIES TIMEOUT 120)
+      add_test(NAME NeverDWorkerNamesPrepare
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/names_prepare_test.py"
+                "$<TARGET_FILE:neverd-worker>")
+      set_tests_properties(NeverDWorkerNamesPrepare PROPERTIES TIMEOUT 120)
       add_test(NAME NeverDWorkerEditWrites
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/edit_writes_test.py"
                 "$<TARGET_FILE:neverd-worker>")

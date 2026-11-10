@@ -5070,7 +5070,9 @@ prototype, while callee effects, no-return proofs and call graphs read bodies. T
 to the library that nothing names do the same (`Session::takeUnreadTypes`); what
 that checks their names against, the names the library spells and those its types
 and prototypes mention, a worker reads while it idles once the session has read its
-types (`neverd_local_types_prepare`), and a declaration keeps it as it adds types. Other
+types (`neverd_local_types_prepare`), and a declaration keeps it as it adds types; the
+same step reads the image's symbol names a rename checks against
+(`neverd_names_prepare`). Other
 types let go of what read them, and the summaries, the job and the store start over,
 while the process and its image stand. The owner keeps its listing and reference index
 for those, and reads what a function was declared as when it next decodes it.
@@ -11874,10 +11876,22 @@ context and explicit-state paths.
 entry-register save. A known reaching stack store of a computed value,
 including a partial overwrite, prevents the load from being ignored as an
 epilogue restore. Both the ordinary return scan and merged-epilogue scan use
-this decision. Entry-stack offsets and ordered memory accesses are indexed
+this decision. A partial identity restore covers only its own bytes; each
+predecessor retains the uncovered-byte mask, and revisits process only new
+bytes. A validated F16C store supplies computed bytes, while a validated
+floating-point memory read cannot hide an earlier write. Entry-stack offsets
+and ordered memory accesses are indexed
 lazily once per function, and repeated views reuse the load result. Unknown
 aliases, calls and exceptional predecessors end that path without inventing
 a stored value; this does not establish arbitrary function ABI contracts.
+
+`endsCallArgumentSetup` owns the distinction between register and memory
+effects during ABI recovery. Validated F16C conversions that store half values
+and ARM64 scalar, vector, pair and structure stores invalidate earlier stack
+setup. Register-only scans preserve that setup across these operations while
+still observing their explicit outputs. Invalid shapes remain barriers for
+both queries; an overwritten stack argument is not replaced with its stale
+earlier value.
 
 An internal i386 helper may instead consume one incoming logical ST0 and
 return an integer. The same machine graph proves that every return consumes

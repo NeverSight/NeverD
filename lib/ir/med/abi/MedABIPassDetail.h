@@ -52,8 +52,9 @@ class MedEntryStackOffsets;
 
 /// Whether an operation prevents recovering an earlier ABI value: where it
 /// ends a later call's argument setup (endsCallArgumentSetup), as call
-/// argument collection in MedToHigh has it too.
-bool isAbiRecoveryBarrier(const MedOp &Op);
+/// argument collection in MedToHigh has it too. Memory queries must retain
+/// the default; a register-only scan separately observes explicit outputs.
+bool isAbiRecoveryBarrier(const MedOp &Op, bool RegistersOnly = false);
 
 /// Recover the sole ECX argument of an exact, source-checked PE32 cookie call.
 /// Incidental register values and inferred callee signatures do not extend it.
@@ -182,11 +183,16 @@ struct CallSetupStackJoins {
 /// operation and edge to that proof. The per-call limit still applies.
 /// Incomplete records memory barriers and bounded walks that could not finish.
 /// Missing required inputs then remain unknown, rather than pair-alignment
-/// padding.
+/// padding. Once a block's own stores cover every slot, nothing before them
+/// reaches the call, so the walk stops there.
+/// WideSlots receives each slot whose closest store in the call's block is one
+/// aligned store of several whole slots. The result holds no scalar for such a
+/// slot; the caller's scan of that block splits the store into its slot lanes.
 std::map<int64_t, MedVar>
 callSetupStackStores(const AbiCallContext &C,
                      CallSetupStackJoins *Joins = nullptr,
-                     size_t *SharedWork = nullptr, bool *Incomplete = nullptr);
+                     size_t *SharedWork = nullptr, bool *Incomplete = nullptr,
+                     std::set<int64_t> *WideSlots = nullptr);
 
 /// Every reaching path leaves this incoming argument register untouched.
 bool incomingArgumentReachesCall(const AbiCallContext &C, int ArgIndex);

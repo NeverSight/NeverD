@@ -485,6 +485,11 @@ private:
   std::uint64_t localTypeNamesPrepared_ = 0;
   /// Reads those names once the session has read its local types.
   void prepareLocalTypeNames();
+  /// The times the same step found read what naming an address checks the
+  /// name against of the image's symbols (neverd_names_prepare,
+  /// metadata.names_prepared).
+  std::uint64_t namesPrepared_ = 0;
+  void prepareNames();
   /// The function a request last prepared and how long that took.
   std::optional<std::uint64_t> requestPrepared_;
   std::chrono::steady_clock::duration requestPrepareTime_{};
@@ -648,6 +653,9 @@ private:
   std::uint64_t commentPatches_ = 0, namePatches_ = 0, dataNamePatches_ = 0;
   /// Documents the engine rendered for, rather than built from kept pages.
   std::uint64_t namedViewRenders_ = 0;
+  /// The times an owner's views read which store they are kept under
+  /// (storeOfViews).
+  std::uint64_t viewStoreNameReads_ = 0;
   /// Takes the document at \p position out of the documents kept, as one for
   /// the page deltas of what clients keep.
   void dropNamedView(NamedViewPosition position);

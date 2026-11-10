@@ -2074,6 +2074,7 @@ _declare(
 _declare(
     "neverd_name_check", "int", ["neverd_session_t", "neverd_va_t", "const char *"]
 )
+_declare("neverd_names_prepare", "int", ["neverd_session_t"])
 _declare(
     "neverd_rename_addr", "int", ["neverd_session_t", "neverd_va_t", "const char *"]
 )

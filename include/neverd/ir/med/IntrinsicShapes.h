@@ -697,11 +697,12 @@ inline X86FPStateShape x86FPStateMedShape(const MedOp &Op,
 /// are not known.  The x87 wait and context transport (preservesCallSetup),
 /// the explicit numerical and MXCSR effects of the x86 floating-state
 /// intrinsics and the checks that only fault (onlyChecksForAFault) call no
-/// callee and write no argument storage, so a compiler may schedule argument
+/// callee, so a compiler may schedule register argument
 /// setup across them (`mov edi, 2; cvtsi2sd xmm1, ebp; call f`, or the
 /// `movdqa` of a record copied to the stack after `mov %rbx, %rdi`).
-/// A validated address store preserves register setup, but may overwrite an
-/// outgoing stack argument; RegistersOnly must be false for memory queries.
+/// A validated memory store preserves register setup, but may overwrite an
+/// outgoing stack argument, including F16C conversions and ARM64 writeback
+/// stores. RegistersOnly must be false for memory queries.
 inline bool endsCallArgumentSetup(const MedOp &Op, bool RegistersOnly = false) {
   if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
     return true;
@@ -717,12 +718,14 @@ inline bool endsCallArgumentSetup(const MedOp &Op, bool RegistersOnly = false) {
            (RegistersOnly || !mips::mergeStore(Id))) &&
          !aarch64PAuthMedShapeIsValid(Op) &&
          !aarch64PAuthLoadMedShapeIsValid(Op) &&
-         !aarch64WritebackMemoryMedShapeIsValid(Op) &&
+         !(aarch64WritebackMemoryMedShapeIsValid(Op) &&
+           (RegistersOnly || !isAArch64WritebackStoreIntrinsic(Id))) &&
          !(RegistersOnly ? aarch64AddressMemoryMedShapeIsValid(Op)
                          : aarch64AddressLoadMedShapeIsValid(Op)) &&
          !aarch64CPAMedShapeIsValid(Op) && !aarch64SVECPAMedShapeIsValid(Op) &&
          !aarch64SVEPrefixMedShapeIsValid(Op) &&
-         !x86FPStateShapeIsValid(Id, x86FPStateMedShape(Op));
+         !(x86FPStateShapeIsValid(Id, x86FPStateMedShape(Op)) &&
+           (RegistersOnly || Id != Intrinsic::X86F16CStoreState));
 }
 
 inline ApxAtomicIntrinsicShape

@@ -79,6 +79,12 @@ NEVERD_API int neverd_rename_func(neverd_session_t Sess, const char *OldName,
 /// this refuses; a front end asks it before it names an address itself.
 NEVERD_API int neverd_name_check(neverd_session_t Sess, neverd_va_t Addr,
                                  const char *Name);
+/// Reads, while nothing waits, what neverd_name_check reads of the image's
+/// symbols for any name: their names, and the C names its functions link by.
+/// A check reads them itself where they do not hold for the image's symbols,
+/// so no answer changes.  Returns 1 once they hold, 0 when no binary is
+/// loaded.  Leaves neverd_last_error() as it was.
+NEVERD_API int neverd_names_prepare(neverd_session_t Sess);
 /// Give \p Addr the user's name \p Name, or take the user's name away when
 /// \p Name is NULL or empty.  The name replaces a function's, a symbol's or
 /// an automatic name wherever the session names the address: the function
