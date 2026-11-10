@@ -462,6 +462,75 @@ TEST(LocalTypesDebugContext, ABIQueriesPreserveFloatingCallContracts) {
   }
 }
 
+TEST(LocalTypesDebugContext, ABIQueriesShareConversionWithSourceDeclarations) {
+  using namespace neverd;
+  auto Library = std::make_shared<types::TypeLibrary>(types::DataModel::LLP64);
+  ASSERT_TRUE(types::parseCTypes(R"(
+    struct Payload { unsigned long Count; double Value; };
+    long Read(struct Payload *Input, unsigned long Count);
+  )",
+                                 *Library)
+                  .ok());
+  NamesOnlyDebugContext Names;
+  sdk::LocalTypesDebugContext Context(Names, Library);
+  sdk::LocalTypesDebugContext Fresh(Names, Library);
+  const auto ABI = Context.resolvePrototypeABI("Read");
+  const auto Again = Context.resolvePrototypeABI("Read");
+  ASSERT_TRUE(ABI && Again);
+  EXPECT_TRUE(ABI->PrototypeDeclaration.empty());
+  EXPECT_TRUE(ABI->PortablePrototypeDeclaration.empty());
+  EXPECT_EQ(ABI->ReturnType, Again->ReturnType);
+  EXPECT_EQ(ABI->Params.front().second, Again->Params.front().second);
+  const auto Full = Context.resolvePrototype("Read");
+  const auto Expected = Fresh.resolvePrototype("Read");
+  ASSERT_TRUE(Full && Expected);
+  EXPECT_EQ(Full->ReturnType, ABI->ReturnType);
+  EXPECT_EQ(Full->Params.front().second, ABI->Params.front().second);
+  EXPECT_EQ(Full->ReturnType->SourceName, Expected->ReturnType->SourceName);
+  EXPECT_EQ(Full->PrototypeDeclaration, Expected->PrototypeDeclaration);
+  EXPECT_EQ(Full->PortablePrototypeDeclaration,
+            Expected->PortablePrototypeDeclaration);
+  EXPECT_EQ(Full->PortableParameterTypes, Expected->PortableParameterTypes);
+  EXPECT_TRUE(sdk::passesAlike(*Full, *Expected));
+  // Completing the cache entry must not mutate an earlier returned value.
+  EXPECT_TRUE(ABI->PrototypeDeclaration.empty());
+  EXPECT_EQ(Context.resolvePrototypeABI("Read")->ReturnType, Full->ReturnType);
+}
+
+TEST(LocalTypesDebugContext, NewTypesInvalidateUnrenderedABISignatures) {
+  using namespace neverd;
+  for (bool NamesHold : {false, true}) {
+    SCOPED_TRACE(NamesHold);
+    auto Library =
+        std::make_shared<types::TypeLibrary>(types::DataModel::LLP64);
+    ASSERT_TRUE(types::parseCTypes(
+                    "struct Payload; struct Payload *Read(void);", *Library)
+                    .ok());
+    NamesOnlyDebugContext Names;
+    sdk::LocalTypesDebugContext Context(Names, Library);
+    const auto Before = Context.resolvePrototypeABI("Read");
+    ASSERT_TRUE(Before && Before->ReturnType);
+    const auto BeforePointee = Before->ReturnType->Pointee;
+    EXPECT_FALSE(BeforePointee && BeforePointee->Size);
+    auto Grown = std::make_shared<types::TypeLibrary>(*Library);
+    ASSERT_TRUE(
+        types::parseCTypes(
+            "struct Payload { long long First; long long Second; };", *Grown)
+            .ok());
+    Context.takeNewTypes(*Grown, {"Payload"}, NamesHold);
+    sdk::LocalTypesDebugContext Fresh(Names, Grown);
+    const auto Actual = Context.resolvePrototype("Read");
+    const auto Expected = Fresh.resolvePrototype("Read");
+    ASSERT_TRUE(Actual && Expected && Actual->ReturnType);
+    ASSERT_TRUE(Actual->ReturnType->Pointee);
+    EXPECT_EQ(Actual->ReturnType->Pointee->Size, 16);
+    EXPECT_EQ(Actual->PrototypeDeclaration, Expected->PrototypeDeclaration);
+    EXPECT_EQ(Actual->PortablePrototypeDeclaration,
+              Expected->PortablePrototypeDeclaration);
+    EXPECT_FALSE(BeforePointee && BeforePointee->Size);
+  }
+}
+
 TEST(LocalTypesDebugContext, SourceCallDeclarationsRetainCompleteValueLayouts) {
   using namespace neverd;
   types::TypeLibrary Library(types::DataModel::LP64);

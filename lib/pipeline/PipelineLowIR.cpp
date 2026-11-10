@@ -3667,18 +3667,19 @@ struct ImportPrototypeArguments {
 /// one of the image format's own runtime (LibCPrototype, such as the Windows C
 /// runtime's `_initterm`), else one the arity tables give (LibCNames.h), by the
 /// exact name where the import entry is the C name, else one the program's
-/// types declare (\p Dbg's resolvePrototype), as the Windows kernel's headers
-/// declare the routines a driver imports.  A routine the image exports whose
-/// name binds a prototype (\p Dbg's resolveFunction) is listed too: where \p
-/// Effects summarizes its body, in DeclaredReads and DeclaredStackArgs, which
-/// join what the body reads, otherwise as an import is. Each integer register
-/// argument is read pointer-wide.  A floating argument is listed only under
-/// System V, which passes it in the next vector register at its width, and only
-/// when every argument has a register. The arguments past the registers are on
-/// the stack, which only a convention that summarizes stack arguments (\p
-/// StackArguments) counts; elsewhere such a routine is not listed.  Without
-/// \p RegisterArguments an import takes every argument on the stack.  A call
-/// to one of \p DispatchThunks, where given, calls its target register.
+/// types declare (\p Dbg's resolvePrototypeABI), as the Windows kernel's
+/// headers declare the routines a driver imports.  A routine the image exports
+/// whose name binds a prototype (\p Dbg's resolveFunction) is listed too: where
+/// \p Effects summarizes its body, in DeclaredReads and DeclaredStackArgs,
+/// which join what the body reads, otherwise as an import is. Each integer
+/// register argument is read pointer-wide.  A floating argument is listed only
+/// under System V, which passes it in the next vector register at its width,
+/// and only when every argument has a register. The arguments past the
+/// registers are on the stack, which only a convention that summarizes stack
+/// arguments (\p StackArguments) counts; elsewhere such a routine is not
+/// listed. Without \p RegisterArguments an import takes every argument on the
+/// stack. A call to one of \p DispatchThunks, where given, calls its target
+/// register.
 ImportPrototypeArguments importPrototypeArguments(
     const BinaryImage &Img, const std::vector<LowFunc> &Funcs,
     const LocalRegisterEffectRefs &Effects, bool StackArguments,
@@ -3727,7 +3728,8 @@ ImportPrototypeArguments importPrototypeArguments(
   auto Declared = [&](const std::string &Name) -> std::optional<FunctionSym> {
     if (!Dbg)
       return std::nullopt;
-    return Dbg->resolvePrototype(cNameOfStatedName(Name, Img.Format, Img.Arch));
+    return Dbg->resolvePrototypeABI(
+        cNameOfStatedName(Name, Img.Format, Img.Arch));
   };
   auto SignatureArguments =
       [&](const FunctionSym &Function) -> std::optional<Arguments> {
@@ -3788,20 +3790,14 @@ ImportPrototypeArguments importPrototypeArguments(
     }
     return Result;
   };
-  auto DeclaredArguments =
-      [&](const std::string &Name) -> std::optional<Arguments> {
-    const std::optional<FunctionSym> Function = Declared(Name);
-    return Function ? SignatureArguments(*Function) : std::nullopt;
-  };
   // The prototype the user declares for a routine of another module, where
   // it takes only integer arguments: the user may declare a routine of a C
   // library's name that a library of the program's own exports.
-  auto UserArguments =
-      [&](const std::string &Name) -> std::optional<Arguments> {
-    const std::optional<FunctionSym> Function =
-        userPrototype(Dbg, cNameOfStatedName(Name, Img.Format, Img.Arch));
-    std::optional<Arguments> Result =
-        Function ? SignatureArguments(*Function) : std::nullopt;
+  auto UserArguments = [&](const std::optional<FunctionSym> &Function)
+      -> std::optional<Arguments> {
+    if (!Function || Function->PrototypeLibrary != UserPrototypeLibrary)
+      return std::nullopt;
+    std::optional<Arguments> Result = SignatureArguments(*Function);
     if (Result && !Result->Floats.empty())
       return std::nullopt;
     return Result;
@@ -3829,8 +3825,9 @@ ImportPrototypeArguments importPrototypeArguments(
   };
   // A runtime's own prototype names its routine exactly, where stripping
   // leading underscores for the arity tables could reach another runtime's.
-  auto RoutineArguments =
-      [&](const std::string &Name) -> std::optional<Arguments> {
+  auto RoutineArguments = [&](const std::string &Name,
+                              const std::optional<FunctionSym> &Function)
+      -> std::optional<Arguments> {
     if (const libc::LibCPrototype *Prototype =
             libc::libcPrototype(Name, Img.abiFormat())) {
       if (Prototype->Variadic)
@@ -3868,8 +3865,9 @@ ImportPrototypeArguments importPrototypeArguments(
             ? libc::libcArity(Name, libc::libcVariantOf(Img))
             : libc::libcArityForSymbol(Name, libc::libcVariantOf(Img));
     if (!Arity || Arity->IntArgs < 0) {
-      if (std::optional<Arguments> Declared = DeclaredArguments(Name))
-        return Declared;
+      if (Function)
+        if (std::optional<Arguments> Declared = SignatureArguments(*Function))
+          return Declared;
       // A variadic routine reads its fixed parameters, integers all, where
       // its variadic arguments follow them in the argument registers
       // (`open(path, flags, ...)`): a caller passing one on untouched passes
@@ -3923,7 +3921,9 @@ ImportPrototypeArguments importPrototypeArguments(
     return Result;
   };
   // The floating type the routine returns, by the same declarations.
-  auto RoutineFloatReturn = [&](const std::string &Name) -> uint16_t {
+  auto RoutineFloatReturn =
+      [&](const std::string &Name,
+          const std::optional<FunctionSym> &Function) -> uint16_t {
     if (const libc::LibCPrototype *Prototype =
             libc::libcPrototype(Name, Img.Format))
       return libc::floatReturnBytes(*Prototype);
@@ -3933,8 +3933,7 @@ ImportPrototypeArguments importPrototypeArguments(
             : libc::libcArityForSymbol(Name, libc::libcVariantOf(Img));
     if (Arity)
       return libc::floatReturnBytes(*Arity);
-    if (const std::optional<FunctionSym> Function = Declared(Name);
-        Function && Function->ReturnType &&
+    if (Function && Function->ReturnType &&
         Function->ReturnType->Kind == NdTypeKind::Float &&
         (Function->ReturnType->Size == sizeof(float) ||
          Function->ReturnType->Size == sizeof(double)))
@@ -3959,18 +3958,21 @@ ImportPrototypeArguments importPrototypeArguments(
     bool PrototypeOwnsArguments = false;
     bool UserDeclared = false;
     if (!Name.empty()) {
+      // Every adapter reads this same declaration. Convert its type graph
+      // once, including a missing declaration, before classifying its parts.
+      const std::optional<FunctionSym> Function = Declared(Name);
       // The base AAPCS returns a routine's floating value in the integer
       // registers the call already writes: the floating bank holds none of it.
       const bool ReturnsInCoreRegisters =
           Convention && Convention->ExternalFloatsInCoreRegisters &&
           Convention->ExternalFloatsInCoreRegisters(Img);
-      if (const uint16_t Bytes = RoutineFloatReturn(Name);
+      if (const uint16_t Bytes = RoutineFloatReturn(Name, Function);
           Bytes && !ReturnsInCoreRegisters)
         Result.FloatReturns[Addr] = Bytes;
       // Bind a complete fixed declaration before SSA, including stack values
       // written in predecessor blocks. Counts alone cannot retain those uses.
       if (Convention && Convention->ImportArgumentsFromPrototype)
-        if (const auto Function = Declared(Name))
+        if (Function)
           if (auto Integer = libc::fixedIntegerCallArguments(
                   *Function, Img.Arch, Img.abiFormat())) {
             Result.IntegerArguments.emplace(Addr, std::move(*Integer));
@@ -3984,12 +3986,12 @@ ImportPrototypeArguments importPrototypeArguments(
           !Result.IntegerArguments.count(Addr))
         if (auto Integer = Convention->PrototypeIntegerArguments(Name))
           Result.IntegerArguments.emplace(Addr, std::move(*Integer));
-      Routine = UserArguments(Name);
+      Routine = UserArguments(Function);
       UserDeclared = Routine.has_value();
       PrototypeOwnsArguments = Routine.has_value();
       // A variadic header declares a minimum prefix, never an exact arity.
       if (!Routine)
-        if (const auto Function = Declared(Name))
+        if (Function)
           if (auto Prefix = libc::variadicCallArguments(*Function, Img.Arch,
                                                         Img.abiFormat())) {
             GPRReadWidths Widths{};
@@ -4008,7 +4010,7 @@ ImportPrototypeArguments importPrototypeArguments(
       if (!Routine && Convention &&
           (Convention->ArgumentsFromCallSetup ||
            Convention->RegisterArgumentsFromCalleeSummary))
-        if (const auto Function = Declared(Name))
+        if (Function)
           if (auto Floating = libc::floatingCallArguments(*Function, Img.Arch,
                                                           Img.abiFormat())) {
             Result.FloatingArguments.emplace(Addr, std::move(*Floating));
@@ -4022,7 +4024,7 @@ ImportPrototypeArguments importPrototypeArguments(
       // Header arity is a count of source parameters. A record's pieces take
       // the target ABI's registers or stack positions before those tables.
       if (!Routine)
-        if (const auto Function = Declared(Name))
+        if (Function)
           if (const auto Layout = libc::recordCallArguments(
                   *Function, Img.Arch, Img.abiFormat(),
                   libc::libcVariantOf(Img))) {
@@ -4037,7 +4039,7 @@ ImportPrototypeArguments importPrototypeArguments(
             PrototypeOwnsArguments = true;
           }
       if (!Routine)
-        Routine = RoutineArguments(Name);
+        Routine = RoutineArguments(Name, Function);
       if (!Routine)
         Routine = DecoratedArguments(Addr);
     } else {
