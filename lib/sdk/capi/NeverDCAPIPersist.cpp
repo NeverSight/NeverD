@@ -1369,24 +1369,27 @@ overlappingItem(const std::map<va_t, Session::DataItem> &Items, va_t Addr,
   return std::nullopt;
 }
 
+llvm::json::Object dataItemRow(va_t Addr, const Session::DataItem &Item) {
+  llvm::json::Object Row{{"addr", vaHex(Addr)},
+                         {"kind", Item.Kind},
+                         {"size", static_cast<int64_t>(Item.Size)}};
+  if (!Item.Encoding.empty())
+    Row["encoding"] = Item.Encoding;
+  if (Item.Kind == "array") {
+    Row["element_size"] = Item.ElementSize;
+    Row["count"] = Item.Count;
+    if (!Item.Type.empty())
+      Row["type"] = Item.Type;
+  }
+  if (Item.Kind == "alignment")
+    Row["alignment"] = Item.Alignment;
+  return Row;
+}
+
 llvm::json::Array dataItemRows(const Session *S) {
   llvm::json::Array Rows;
-  for (const auto &[Addr, Item] : S->DataItems) {
-    llvm::json::Object Row{{"addr", vaHex(Addr)},
-                           {"kind", Item.Kind},
-                           {"size", static_cast<int64_t>(Item.Size)}};
-    if (!Item.Encoding.empty())
-      Row["encoding"] = Item.Encoding;
-    if (Item.Kind == "array") {
-      Row["element_size"] = Item.ElementSize;
-      Row["count"] = Item.Count;
-      if (!Item.Type.empty())
-        Row["type"] = Item.Type;
-    }
-    if (Item.Kind == "alignment")
-      Row["alignment"] = Item.Alignment;
-    Rows.push_back(std::move(Row));
-  }
+  for (const auto &[Addr, Item] : S->DataItems)
+    Rows.push_back(dataItemRow(Addr, Item));
   return Rows;
 }
 } // namespace
@@ -1710,6 +1713,24 @@ const char *neverd_items_json(neverd_session_t Sess) {
   if (!S)
     return nullptr;
   return dupStr(jsonToString(llvm::json::Value(dataItemRows(S))));
+}
+
+const char *neverd_items_range_json(neverd_session_t Sess, neverd_va_t Begin,
+                                    neverd_va_t End) {
+  auto *S = toSession(Sess);
+  if (!S)
+    return nullptr;
+  llvm::json::Array Rows;
+  if (Begin < End) {
+    // The item before Begin reaches into the span where it ends past Begin.
+    auto It = S->DataItems.upper_bound(Begin);
+    if (It != S->DataItems.begin() &&
+        std::prev(It)->second.Size > Begin - std::prev(It)->first)
+      --It;
+    for (; It != S->DataItems.end() && It->first < End; ++It)
+      Rows.push_back(dataItemRow(It->first, It->second));
+  }
+  return dupStr(jsonToString(llvm::json::Value(std::move(Rows))));
 }
 
 int neverd_items_save(neverd_session_t Sess) {

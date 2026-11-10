@@ -2126,6 +2126,12 @@ _declare(
     ["neverd_session_t"],
     ownership=Ownership.OWNED_STRING,
 )
+_declare(
+    "neverd_items_range_json",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t", "neverd_va_t"],
+    ownership=Ownership.OWNED_STRING,
+)
 _declare("neverd_items_save", "int", ["neverd_session_t"])
 _declare("neverd_items_load", "int", ["neverd_session_t"])
 _declare(

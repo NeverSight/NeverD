@@ -13013,6 +13013,31 @@ TEST_F(SessionCAPITest, UserDataItemsDefineBytesAndPersist) {
                 WordHex + "\",\"kind\":\"undefined\",\"size\":1},{\"addr\":\"" +
                 ByteHex + "\",\"kind\":\"byte\",\"size\":1},{\"addr\":\"" +
                 RestHex + "\",\"kind\":\"undefined\",\"size\":2}]");
+  // A span lists the items that share a byte with it, those reaching into it
+  // from before included, and nothing past them.
+  const auto range = [&](neverd_va_t Begin, neverd_va_t End) {
+    return takeString(neverd_items_range_json(Session, Begin, End));
+  };
+  const std::string UndefinedRow =
+      "{\"addr\":\"" + WordHex + "\",\"kind\":\"undefined\",\"size\":1}";
+  const std::string ByteRow =
+      "{\"addr\":\"" + ByteHex + "\",\"kind\":\"byte\",\"size\":1}";
+  const std::string RestRow =
+      "{\"addr\":\"" + RestHex + "\",\"kind\":\"undefined\",\"size\":2}";
+  EXPECT_EQ(range(Word, Word + 1), "[" + UndefinedRow + "]");
+  EXPECT_EQ(range(Word + 1, Word + 2), "[" + ByteRow + "]");
+  EXPECT_EQ(range(Word, Word + 3),
+            "[" + UndefinedRow + "," + ByteRow + "," + RestRow + "]");
+  EXPECT_EQ(range(Word + 3, Word + 4), "[" + RestRow + "]");
+  // The string's terminator is the byte before the word.
+  const std::string TextRow = "{\"addr\":\"" + TextHex +
+                              "\",\"encoding\":\"utf-8\",\"kind\":"
+                              "\"string\",\"size\":6}";
+  EXPECT_EQ(range(Word - 1, Word), "[" + TextRow + "]");
+  EXPECT_EQ(range(Text + 3, Text + 4), "[" + TextRow + "]");
+  EXPECT_EQ(range(Word + 4, Word + 8), "[]");
+  EXPECT_EQ(range(Word, Word), "[]");
+  EXPECT_EQ(range(Word + 2, Word), "[]");
 
   // Saved, the items come back with the input.
   ASSERT_EQ(neverd_items_save(Session), 0)

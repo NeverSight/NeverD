@@ -7101,6 +7101,9 @@ session and reach the files once they take writes again, a local's new name is t
 while the project's folder takes no write and reaches the files afterwards, an undo past
 a staged comment's step is refused unless it commits the comments first
 (`commit_staged`), its reply lists as many history entries as `limit` asks, and files changed behind the worker stop the next edit.
+`NeverDSessionCAPITests` lists the user's data items of a span with
+`neverd_items_range_json`: those sharing a byte with it, one reaching in from before
+included, none past them, and none for an empty or reversed span.
 `NeverDWorkerViewEdits` also undoes a local's name, data items and names of data step by
 step and redoes them, each step reading as a new reader of the project does. The
 workbench's `undoTakesBackANameAfterAComment` undoes a comment and then the name before

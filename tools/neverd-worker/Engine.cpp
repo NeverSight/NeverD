@@ -6827,6 +6827,31 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     auto &store = history();
     // The committed rows stand until this edit persists its own.
     const Json &committedItems = store.committedTable("items");
+    // What the edit can change: the rows that share a byte with what it
+    // defines, and what is left of them around it, which lies from the first
+    // of them to the end of the last.  The engine lists that span's rows
+    // before and after the edit (neverd_items_range_json); without them the
+    // whole table is read.
+    using ItemsRange =
+        const char *(*)(neverd_session_t, neverd_va_t, neverd_va_t);
+    static const auto itemsRange =
+        engineSymbol<ItemsRange>("neverd_items_range_json");
+    const auto itemAddress = [](const Json &item) {
+      return parseAddress(item.at("addr").get_ref<const std::string &>());
+    };
+    std::optional<std::pair<std::uint64_t, std::uint64_t>> span;
+    Json spanBefore;
+    if (itemsRange && size &&
+        size <= std::numeric_limits<std::uint64_t>::max() - start) {
+      spanBefore = backendJson(itemsRange(session_, start, start + size));
+      auto low = start, high = start + size;
+      for (const auto &item : spanBefore) {
+        const auto at = itemAddress(item);
+        low = std::min(low, at);
+        high = std::max(high, at + item.at("size").get<std::uint64_t>());
+      }
+      span = {low, high};
+    }
     // The engine checks the item against the image and the other items;
     // undefined bytes it covers stay undefined around it.
     if (code.empty())
@@ -6847,11 +6872,41 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     }
     // One history step holds every row the edit changed, the item's first.
     std::map<std::uint64_t, std::pair<Json, Json>> changed;
-    for (const auto &item : committedItems)
-      changed[parseAddress(item.at("addr").get<std::string>())].first = item;
-    Json rows = dataItemRows();
-    for (const auto &item : rows)
-      changed[parseAddress(item.at("addr").get<std::string>())].second = item;
+    Json rows;
+    if (span) {
+      // The committed rows of the span are the engine's before the edit: the
+      // table after it is theirs with the span's rows the engine now holds.
+      const Json spanAfter =
+          backendJson(itemsRange(session_, span->first, span->second));
+      const auto &committed = committedItems.get_ref<const Json::array_t &>();
+      const auto below = [&](const Json &item, std::uint64_t at) {
+        return itemAddress(item) < at;
+      };
+      const auto first = std::lower_bound(committed.begin(), committed.end(),
+                                          span->first, below);
+      const auto last =
+          std::lower_bound(first, committed.end(), span->second, below);
+      if (spanBefore.is_array() && spanAfter.is_array() &&
+          std::equal(first, last, spanBefore.begin(), spanBefore.end())) {
+        for (auto item = first; item != last; ++item)
+          changed[itemAddress(*item)].first = *item;
+        for (const auto &item : spanAfter)
+          changed[itemAddress(item)].second = item;
+        Json::array_t table;
+        table.reserve(committed.size() - (last - first) + spanAfter.size());
+        table.insert(table.end(), committed.begin(), first);
+        table.insert(table.end(), spanAfter.begin(), spanAfter.end());
+        table.insert(table.end(), last, committed.end());
+        rows = std::move(table);
+      }
+    }
+    if (rows.is_null()) {
+      for (const auto &item : committedItems)
+        changed[itemAddress(item)].first = item;
+      rows = dataItemRows();
+      for (const auto &item : rows)
+        changed[itemAddress(item)].second = item;
+    }
     const Json after = changed[start].second;
     Json command{{"kind", "item"},
                  {"address", hexAddress(start)},
