@@ -246,6 +246,7 @@ uint32_t neverd_x86_legacy_attempted_v1(void *context) {
   }
 };
 
+#include "X86LegacyHaltSourceTests.inc"
 #include "X86LegacyMpxSourceTests.inc"
 
 TEST_P(X86LegacySourceTest, ModesAliasesAndBudgetsUseLiveCaches) {

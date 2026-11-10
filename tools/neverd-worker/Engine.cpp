@@ -2317,11 +2317,12 @@ bool Engine::idleStep() {
     return true;
   }
   // Once after a request or another step, either of which may have read the
-  // local types or changed them; it costs nothing while the names hold or the
-  // session has not read its types.
+  // local types or changed them, or the image's symbols; it costs nothing
+  // while the names hold or the session has not read its types.
   if (localTypeNamesPending_) {
     localTypeNamesPending_ = false;
     prepareLocalTypeNames();
+    prepareNames();
     return true;
   }
   localTypeNamesPending_ = true;
@@ -2343,6 +2344,12 @@ void Engine::prepareLocalTypeNames() {
       engineSymbol<Prepare>("neverd_local_types_prepare");
   if (prepare && neverd_session_is_loaded(session_) && prepare(session_))
     ++localTypeNamesPrepared_;
+}
+void Engine::prepareNames() {
+  using Prepare = int (*)(neverd_session_t);
+  static const auto prepare = engineSymbol<Prepare>("neverd_names_prepare");
+  if (prepare && neverd_session_is_loaded(session_) && prepare(session_))
+    ++namesPrepared_;
 }
 bool Engine::summaryWorkPending() const {
   return summaryState_ == SummaryState::Pending ||
@@ -2783,7 +2790,9 @@ Json Engine::metadata() const {
           {"named_view_name_patches", namePatches_},
           {"named_view_data_name_patches", dataNamePatches_},
           {"named_view_renders", namedViewRenders_},
+          {"view_store_name_reads", viewStoreNameReads_},
           {"local_type_names_prepared", localTypeNamesPrepared_},
+          {"names_prepared", namesPrepared_},
           {"dirty", dirty_},
           // How the file was read: for a binary file, its processor,
           // placement and platform, and whether detection chose the platform.

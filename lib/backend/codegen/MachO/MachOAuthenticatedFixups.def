@@ -20,12 +20,15 @@ MACHO_AUTH_FIXUP_VALUE(int64_t, kMaxLibraryOrdinal, 0xfff0)
 MACHO_AUTH_FIXUP_VALUE(unsigned, kImportWeakBit, 16)
 MACHO_AUTH_FIXUP_VALUE(unsigned, kImportNameBit, 32)
 MACHO_AUTH_FIXUP_VALUE(unsigned, kCodeSignatureAlignment, 16)
+MACHO_AUTH_FIXUP_VALUE(unsigned, kBKeyMask, 1)
 MACHO_AUTH_FIXUP_VALUE(uint16_t, kDefaultPointerFormat,
                        llvm::MachO::DYLD_CHAINED_PTR_ARM64E_USERLAND)
 MACHO_AUTH_FIXUP_TEXT(kErrorPrefix, "Mach-O authenticated fixup: ")
 MACHO_AUTH_FIXUP_TEXT(kImageABI,
                       "requires a linked arm64e chained or threaded image")
 MACHO_AUTH_FIXUP_TEXT(kPointerFormat, "unsupported authenticated chain format")
+MACHO_AUTH_FIXUP_TEXT(kStartupFormat,
+                      "default startup requires userland arm64e chain formats")
 MACHO_AUTH_FIXUP_TEXT(kRecipe, "incomplete or contradictory signing recipe")
 MACHO_AUTH_FIXUP_TEXT(kStorage, "storage is not aligned writable image data")
 MACHO_AUTH_FIXUP_TEXT(kOverlap, "new storage overlaps an existing or new fixup")

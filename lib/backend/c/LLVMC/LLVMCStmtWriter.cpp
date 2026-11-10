@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../CRecordCall.h"
+#include "../CVaList.h"
 #include "../HeaderPrototype.h"
 #include "../LibraryPrototype.h"
 #include "../UnalignedMemory.h"
@@ -6326,6 +6327,10 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
   std::string Expr = CalleeName + "(";
   const unsigned Limit = printedCallArgLimit(Call, CalleeName);
   const LibraryCallee Library = libraryCallee(Call);
+  const auto VaListParameter =
+      Library && !Library.Prototype
+          ? libc::vaListParameter(Library.Name, libcVariant())
+          : std::nullopt;
   // Import-slot calls already have a checked source declaration even when
   // debug lookup cannot name their loaded LLVM operand. Use that same
   // declaration for record arguments and results, as for scalar conversions.
@@ -6408,6 +6413,13 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
       Argument = "(" + Spelling.str() + ")(" + Argument + ")";
     }
     const bool Integer = Operand->getType()->isIntegerTy();
+    if (VaListParameter && ArgIdx == *VaListParameter &&
+        (Integer || Operand->getType()->isPointerTy())) {
+      Expr += imagePointerArgument(
+          Operand,
+          c_detail::vaListArgument(Opts.TheArch, Opts.Format, Argument));
+      continue;
+    }
     if (SourceImport && ArgIdx < SourceImport->Params.size()) {
       const auto &Type = SourceImport->Params[ArgIdx].second;
       const std::string Bridge =

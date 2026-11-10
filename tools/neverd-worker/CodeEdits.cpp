@@ -13,6 +13,7 @@
 #include <string_view>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace neverd::worker {
@@ -135,11 +136,23 @@ bool mayHoldToken(const std::string &text, const std::string &name) {
   return false;
 }
 
+/// std::isspace, std::isalpha and std::isalnum as the "C" locale reads them,
+/// which the worker never leaves, without a library call for each byte.
+constexpr bool spaceByte(unsigned char c) {
+  return c == ' ' || (c >= '\t' && c <= '\r');
+}
+constexpr bool letterByte(unsigned char c) {
+  return (c | 0x20) >= 'a' && (c | 0x20) <= 'z';
+}
+constexpr bool wordByte(unsigned char c) {
+  return letterByte(c) || (c >= '0' && c <= '9') || c == '_';
+}
+
 /// Calls \p emit with the begin and end of each token of \p text, as tokens()
 /// reads them.
 template <class Emit> void eachToken(const std::string &text, Emit &&emit) {
   for (std::size_t i = 0; i < text.size();) {
-    if (std::isspace(static_cast<unsigned char>(text[i]))) {
+    if (spaceByte(static_cast<unsigned char>(text[i]))) {
       ++i;
       continue;
     }
@@ -201,11 +214,9 @@ template <class Emit> void eachToken(const std::string &text, Emit &&emit) {
       continue;
     }
     const auto begin = i++;
-    if (std::isalpha(static_cast<unsigned char>(text[begin])) ||
+    if (letterByte(static_cast<unsigned char>(text[begin])) ||
         text[begin] == '_')
-      while (
-          i < text.size() &&
-          (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_'))
+      while (i < text.size() && wordByte(static_cast<unsigned char>(text[i])))
         ++i;
     emit(begin, i);
   }
@@ -237,8 +248,9 @@ std::vector<TokenView> tokenViews(const std::string &text) {
 // Find compiler-spelled function linkage using the existing literal/comment
 // aware tokens. A regex search across the entire document revisits long
 // comments even when there is no asm label anywhere in the source.
+template <class Tokens>
 std::unordered_map<std::string, std::string>
-sourceLinks(const std::string &text, const std::vector<Token> &ts) {
+sourceLinks(const std::string &text, const Tokens &ts) {
   std::vector<std::size_t> close(ts.size(), ts.size()), stack;
   for (std::size_t i = 0; i < ts.size(); ++i) {
     if (ts[i].text == "(")
@@ -271,12 +283,12 @@ sourceLinks(const std::string &text, const std::vector<Token> &ts) {
     literal.remove_suffix(1);
     // Escaped/concatenated labels need a C string decoder; never guess them.
     if (literal.find_first_of("\\\"\r\n") == literal.npos)
-      links[ts[i].text] = std::string(literal);
+      links[std::string(ts[i].text)] = std::string(literal);
   }
   return links;
 }
-bool type(const std::string &name) {
-  static const std::set<std::string> types = {
+bool type(std::string_view name) {
+  static const std::set<std::string, std::less<>> types = {
       "int",    "char",     "short",  "long",    "float",  "double",  "bool",
       "auto",   "unsigned", "signed", "void",    "size_t", "ssize_t", "i8",
       "i16",    "i32",      "i64",    "u8",      "u16",    "u32",     "u64",
@@ -377,12 +389,14 @@ std::vector<DeclaredGlobal> declaredGlobals(const std::string &text) {
   bool bare = false;
   for (std::size_t start = 0; start < text.size();) {
     const auto newline = text.find('\n', start);
-    const auto line =
-        text.substr(start, newline == std::string::npos ? std::string::npos
-                                                        : newline - start);
-    std::smatch match;
-    if (line.find("neverd.image:") != std::string::npos &&
-        std::regex_search(line, match, imageMarker,
+    // Each line is read in place.
+    const char *first = text.data() + start;
+    const char *last =
+        text.data() + (newline == std::string::npos ? text.size() : newline);
+    const std::string_view line(first, static_cast<std::size_t>(last - first));
+    std::cmatch match;
+    if (line.find("neverd.image:") != std::string_view::npos &&
+        std::regex_search(first, last, match, imageMarker,
                           std::regex_constants::match_continuous)) {
       pending = parseAddress(match[1].str());
       // The address alone, or the range a backing holds from it.
@@ -392,10 +406,10 @@ std::vector<DeclaredGlobal> declaredGlobals(const std::string &text) {
     } else {
       auto address = std::exchange(pending, std::nullopt);
       const bool marked = address.has_value();
-      if (!address && line.find("extern") != std::string::npos &&
-          std::regex_search(line, match, trailingAddress))
+      if (!address && line.find("extern") != std::string_view::npos &&
+          std::regex_search(first, last, match, trailingAddress))
         address = parseAddress(match[1].str());
-      if (address && std::regex_search(line, match, declared)) {
+      if (address && std::regex_search(first, last, match, declared)) {
         auto before = match.prefix().str();
         if (before.starts_with("_Alignas("))
           before.erase(0, before.find(')') + 1);
@@ -1242,6 +1256,32 @@ void CodeEdits::ImageFacts::commented(std::uint64_t address,
     comments[address] = text;
 }
 
+namespace {
+/// A token of a text decorate reads, in place, with what it asks of each most
+/// often: whether it is an identifier, and the byte of a token one byte long.
+struct ReadToken {
+  std::size_t begin, end;
+  std::string_view text;
+  bool identifier;
+  char byte;
+};
+std::vector<ReadToken> readTokens(const std::string &text) {
+  std::vector<ReadToken> result;
+  eachToken(text, [&](std::size_t begin, std::size_t end) {
+    const std::string_view token(text.data() + begin, end - begin);
+    result.push_back({begin, end, token, identifier(token),
+                      token.size() == 1 ? token[0] : '\0'});
+  });
+  return result;
+}
+/// member() of tokens read in place.
+bool member(const std::vector<ReadToken> &ts, std::size_t i) {
+  return i && (ts[i - 1].byte == '.' ||
+               (i > 1 && ts[i - 2].byte == '-' && ts[i - 1].byte == '>') ||
+               (i > 1 && ts[i - 2].byte == ':' && ts[i - 1].byte == ':'));
+}
+} // namespace
+
 void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
                          const std::string &representation,
                          const ImageFacts &image,
@@ -1258,25 +1298,53 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
   };
   const auto &original = view.at("text").get_ref<const std::string &>();
   const auto identity = sourceIdentity(original);
-  const auto ts = tokens(original);
-  std::set<std::string> identifiers;
-  for (const auto &token : ts)
-    if (identifier(token.text))
-      identifiers.insert(token.text);
-  std::unordered_map<std::string, std::uint64_t> globals;
+  // The tokens are read in place: the text stays as it is until the decorated
+  // one replaces it, last.
+  const auto ts = readTokens(original);
+  const auto is = [&ts](std::size_t at, char byte) {
+    return ts[at].byte == byte;
+  };
+  // The identifiers the text spells, read where a local's alias could collide
+  // with one.
+  std::vector<std::string_view> identifiers;
+  bool identifiersRead = false;
+  const auto spellsIdentifier = [&](std::string_view name) {
+    if (!identifiersRead) {
+      identifiersRead = true;
+      for (const auto &token : ts)
+        if (token.identifier)
+          identifiers.push_back(token.text);
+      std::sort(identifiers.begin(), identifiers.end());
+      identifiers.erase(std::unique(identifiers.begin(), identifiers.end()),
+                        identifiers.end());
+    }
+    return std::binary_search(identifiers.begin(), identifiers.end(), name);
+  };
+  std::map<std::string, std::uint64_t, std::less<>> globals;
   for (auto &global : declaredGlobals(original))
     globals[std::move(global.name)] = global.address;
   const auto links = sourceLinks(original, ts);
+  const auto linked = [&links](std::string_view name) -> const std::string * {
+    if (links.empty())
+      return nullptr;
+    const auto link = links.find(std::string(name));
+    return link != links.end() ? &link->second : nullptr;
+  };
   const auto &originalAddresses = image.originals;
-  std::unordered_map<std::string, std::optional<std::uint64_t>> resolved;
-  const auto imageAddress = [&](const std::string &name) {
-    const auto symbol = links.contains(name) ? links.at(name) : name;
-    if (!resolved.contains(symbol))
-      resolved[symbol] =
-          originalAddresses.contains(symbol)
-              ? std::optional<std::uint64_t>(originalAddresses.at(symbol))
-              : resolve(symbol);
-    return resolved.at(symbol);
+  std::map<std::string, std::optional<std::uint64_t>, std::less<>> resolved;
+  const auto imageAddress =
+      [&](std::string_view name) -> std::optional<std::uint64_t> {
+    const auto *link = linked(name);
+    const std::string_view symbol = link ? std::string_view(*link) : name;
+    if (const auto known = resolved.find(symbol); known != resolved.end())
+      return known->second;
+    std::string key(symbol);
+    const auto stated = originalAddresses.find(key);
+    const auto at = stated != originalAddresses.end()
+                        ? std::optional<std::uint64_t>(stated->second)
+                        : resolve(key);
+    resolved.emplace(std::move(key), at);
+    return at;
   };
   const auto prelude = view.find("prelude");
   const std::size_t bodyStart =
@@ -1285,26 +1353,24 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
   std::size_t body = ts.size();
   std::size_t bodyEnd = ts.size();
   for (std::size_t i = 0; i + 1 < ts.size(); ++i) {
-    if (ts[i].begin < bodyStart || !identifier(ts[i].text) ||
-        ts[i + 1].text != "(")
+    if (ts[i].begin < bodyStart || !ts[i].identifier || !is(i + 1, '('))
       continue;
     int depth = 0;
     auto end = i + 1;
     for (; end < ts.size(); ++end) {
-      if (ts[end].text == "(")
+      if (is(end, '('))
         ++depth;
-      else if (ts[end].text == ")" && --depth == 0)
+      else if (is(end, ')') && --depth == 0)
         break;
     }
     auto brace = end + 1;
     while (brace < ts.size() &&
            brace - end <= ::neverd::limits::worker::kMaxSourceDecoratorTokens &&
-           ts[brace].text != "{" && ts[brace].text != ";" &&
-           ts[brace].text != "=")
+           !is(brace, '{') && !is(brace, ';') && !is(brace, '='))
       ++brace;
     if (brace < ts.size() &&
         brace - end <= ::neverd::limits::worker::kMaxSourceDecoratorTokens &&
-        ts[brace].text == "{") {
+        is(brace, '{')) {
       // A prelude can be followed by synthetic helper definitions. Only a
       // resolved image name or an explicit SDK name span identifies this body.
       const auto at = imageAddress(ts[i].text);
@@ -1322,9 +1388,9 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
         body = i + 2;
         int braces = 1;
         for (auto at = brace + 1; at < ts.size(); ++at) {
-          if (ts[at].text == "{")
+          if (is(at, '{'))
             ++braces;
-          else if (ts[at].text == "}" && --braces == 0) {
+          else if (is(at, '}') && --braces == 0) {
             bodyEnd = at;
             break;
           }
@@ -1333,36 +1399,36 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
       }
     }
   }
-  std::unordered_map<std::string, unsigned> declarations;
-  std::set<std::string> types;
+  std::unordered_map<std::string_view, unsigned> declarations;
+  std::set<std::string_view> types;
   for (std::size_t i = 0; i + 1 < ts.size(); ++i) {
-    if (ts[i].text == "struct" || ts[i].text == "class" ||
-        ts[i].text == "union" || ts[i].text == "enum" ||
-        ts[i].text == "using") {
-      if (identifier(ts[i + 1].text))
+    if (!ts[i].identifier)
+      continue;
+    const auto text = ts[i].text;
+    if (text == "struct" || text == "class" || text == "union" ||
+        text == "enum" || text == "using") {
+      if (ts[i + 1].identifier)
         types.insert(ts[i + 1].text);
-    } else if (ts[i].text == "typedef") {
+    } else if (text == "typedef") {
       auto end = i + 1;
-      while (end < ts.size() && ts[end].text != ";")
+      while (end < ts.size() && !is(end, ';'))
         ++end;
-      if (end > i + 1 && identifier(ts[end - 1].text))
+      if (end > i + 1 && ts[end - 1].identifier)
         types.insert(ts[end - 1].text);
     }
   }
-  const auto isType = [&](const std::string &name) {
+  const auto isType = [&](std::string_view name) {
     return type(name) || types.contains(name);
   };
   for (std::size_t i = body; i + 1 < bodyEnd; ++i) {
-    if (!identifier(ts[i].text) || member(ts, i))
+    if (!ts[i].identifier || member(ts, i))
       continue;
+    const bool declares = is(i + 1, '=') || is(i + 1, ';') || is(i + 1, ',') ||
+                          is(i + 1, ')') || is(i + 1, '[');
     auto previous = i;
-    while (previous &&
-           (ts[previous - 1].text == "*" || ts[previous - 1].text == "&"))
+    while (previous && (is(previous - 1, '*') || is(previous - 1, '&')))
       --previous;
-    const bool typed = previous && isType(ts[previous - 1].text) &&
-                       (ts[i + 1].text == "=" || ts[i + 1].text == ";" ||
-                        ts[i + 1].text == "," || ts[i + 1].text == ")" ||
-                        ts[i + 1].text == "[");
+    const bool typed = declares && previous && isType(ts[previous - 1].text);
     const bool binding =
         i && (ts[i - 1].text == "let" || ts[i - 1].text == "mut" ||
               ts[i - 1].text == "var");
@@ -1373,35 +1439,37 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
   // them, and what its locals are: their names in the order the code
   // declares them, and how many parameters it takes.  A type change, its
   // own or a callee's, rewrites the text but keeps them.
-  std::unordered_map<std::string, std::size_t> parameters;
+  std::unordered_map<std::string_view, std::size_t> parameters;
   std::string shape;
   if (definition) {
     int depth = 0;
     std::size_t position = 0;
-    std::optional<std::string> named;
+    std::optional<std::string_view> named;
     auto at = *definition + 1;
     for (; at < bodyEnd; ++at) {
-      const auto &text = ts[at].text;
-      if (text == "(" && ++depth == 1)
+      if (is(at, '(') && ++depth == 1)
         continue;
-      if (text == ")" && --depth == 0)
+      if (is(at, ')') && --depth == 0)
         break;
-      if (depth == 1 && text == ",") {
+      if (depth == 1 && is(at, ',')) {
         if (named)
           parameters.emplace(*named, position);
         named.reset();
         ++position;
-      } else if (depth == 1 && identifier(text) && declarations.contains(text))
-        named = text;
+      } else if (depth == 1 && ts[at].identifier &&
+                 declarations.contains(ts[at].text))
+        named = ts[at].text;
     }
     if (named)
       parameters.emplace(*named, position);
-    std::set<std::string> seen;
+    std::unordered_set<std::string_view> seen;
     for (auto i = at; i + 1 < bodyEnd; ++i)
-      if (identifier(ts[i].text) && declarations.contains(ts[i].text) &&
+      if (ts[i].identifier && declarations.contains(ts[i].text) &&
           !parameters.contains(ts[i].text) && !member(ts, i) &&
-          seen.insert(ts[i].text).second)
-        shape += ts[i].text + ",";
+          seen.insert(ts[i].text).second) {
+        shape += ts[i].text;
+        shape += ',';
+      }
     shape = sourceIdentity(shape + "|" + std::to_string(parameters.size()));
   }
   if (!shape.empty())
@@ -1425,11 +1493,13 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
   // sub_ name of the function the C runtime's start routine calls.
   const auto shownName =
       [&](std::uint64_t address,
-          const std::string &spelling) -> std::optional<std::string> {
+          std::string_view spelling) -> std::optional<std::string> {
     if (const auto rename = imageNames.find(address);
         rename != imageNames.end())
       return rename->second;
-    if (const auto display = displayNames.find(spelling);
+    if (displayNames.empty())
+      return std::nullopt;
+    if (const auto display = displayNames.find(std::string(spelling));
         display != displayNames.end())
       return display->second;
     return std::nullopt;
@@ -1454,22 +1524,24 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
     if ((following != spelled.end() && following->first < end) ||
         (following != spelled.begin() && std::prev(following)->second > begin))
       throw Error("invalid_engine_result", "Overlapping source name spans");
+    auto spelling = original.substr(begin, end - begin);
+    const auto shown = shownName(*at, spelling);
     names.push_back({{"begin_byte", begin},
                      {"end_byte", end},
                      {"kind", "address"},
                      {"address", hexAddress(*at)},
-                     {"original", original.substr(begin, end - begin)}});
+                     {"original", std::move(spelling)}});
     spelled.emplace(begin, end);
-    if (const auto shown = shownName(*at, original.substr(begin, end - begin)))
+    if (shown)
       replacements.push_back({begin, end, *shown});
   }
   const SourceSpanIndex covered(spelled.begin(), spelled.end());
   // A name the view calls or declares as a function names that function at
   // every use, also where the code takes its address: in an initializer, or
   // as an argument.  Each use then shows the name its declaration shows.
-  std::set<std::string> functionNames;
-  std::map<std::string, Json> sourceVariables;
-  std::set<std::string> ambiguousVariables;
+  std::unordered_set<std::string_view> functionNames;
+  std::map<std::string, Json, std::less<>> sourceVariables;
+  std::set<std::string, std::less<>> ambiguousVariables;
   for (const auto &variable : listed("source_variables")) {
     const auto name = variable.value("name", std::string());
     if (variable.value("ambiguous", true) ||
@@ -1477,24 +1549,44 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
       ambiguousVariables.insert(name);
   }
   for (std::size_t i = 0; i + 1 < ts.size(); ++i)
-    if (identifier(ts[i].text) && ts[i + 1].text == "(" && !member(ts, i))
+    if (ts[i].identifier && is(i + 1, '(') && !member(ts, i))
       functionNames.insert(ts[i].text);
+  // The address of an object the view names: a global it declares, else a
+  // variable the engine placed at one.
+  const auto objectAddress =
+      [&](std::string_view name) -> std::optional<std::uint64_t> {
+    if (const auto global = globals.find(name); global != globals.end())
+      return global->second;
+    if (const auto variable = sourceVariables.find(name);
+        variable != sourceVariables.end() &&
+        variable->second.contains("address"))
+      return parseAddress(variable->second.at("address").get<std::string>());
+    return std::nullopt;
+  };
+  std::optional<std::string> snapshot;
+  const auto variableSnapshot = [&]() -> const std::string & {
+    if (!snapshot)
+      snapshot = view.value("variable_snapshot", std::string());
+    return *snapshot;
+  };
   for (std::size_t i = 0; i < ts.size(); ++i) {
     const auto &token = ts[i];
-    if (covered.contains(token.begin, token.end))
-      continue;
-    if (!identifier(token.text) || member(ts, i))
+    if (!token.identifier || covered.contains(token.begin, token.end) ||
+        member(ts, i))
       continue;
     // Most identifiers name nothing (a hex literal's digits read as one), so
     // a name is filled in only once a kind below claims the identifier.
-    Json name = Json::object();
-    std::string display = token.text;
+    Json name;
+    std::string display(token.text);
     if (definition == i) {
       name["address"] = hexAddress(function);
       name["kind"] = "address";
       if (const auto shown = shownName(function, token.text))
         display = *shown;
-    } else if (i >= body && i < bodyEnd && declarations[token.text] == 1) {
+    } else if (i >= body && i < bodyEnd && [&] {
+                 const auto declared = declarations.find(token.text);
+                 return declared != declarations.end() && declared->second == 1;
+               }()) {
       name["kind"] = "local";
       const auto found = sourceVariables.find(token.text);
       const Json *binding = found != sourceVariables.end() &&
@@ -1503,29 +1595,21 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
                                 : nullptr;
       if (binding && !binding->value("parameter", true)) {
         name["variable_id"] = binding->at("id");
-        name["snapshot"] = view.value("variable_snapshot", std::string());
+        name["snapshot"] = variableSnapshot();
       }
       name["identity"] = identity;
       if (const auto parameter = parameters.find(token.text);
           parameter != parameters.end())
         name["parameter"] = parameter->second;
-      if (aliases.contains(token.text))
-        display = aliases.at(token.text).get<std::string>();
-    } else if (globals.contains(token.text) ||
-               (sourceVariables.contains(token.text) &&
-                sourceVariables.at(token.text).contains("address"))) {
+      if (const auto alias = aliases.find(display); alias != aliases.end())
+        display = alias->get<std::string>();
+    } else if (const auto object = objectAddress(token.text)) {
       name["kind"] = "address";
-      const auto address = globals.contains(token.text)
-                               ? globals.at(token.text)
-                               : parseAddress(sourceVariables.at(token.text)
-                                                  .at("address")
-                                                  .get<std::string>());
-      name["address"] = hexAddress(address);
+      name["address"] = hexAddress(*object);
       name["object"] = true;
-      if (const auto shown = shownName(address, token.text))
+      if (const auto shown = shownName(*object, token.text))
         display = *shown;
-    } else if ((i + 1 < ts.size() &&
-                (ts[i + 1].text == "(" || links.contains(token.text))) ||
+    } else if ((i + 1 < ts.size() && (is(i + 1, '(') || linked(token.text))) ||
                functionNames.contains(token.text)) {
       const auto at = imageAddress(token.text);
       if (!at)
@@ -1542,15 +1626,15 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
           !ambiguousVariables.contains(token.text) &&
           binding->second.contains("address")) {
         name["variable_id"] = binding->second.at("id");
-        name["snapshot"] = view.value("variable_snapshot", std::string());
+        name["snapshot"] = variableSnapshot();
       }
     }
     name["begin_byte"] = token.begin;
     name["end_byte"] = token.end;
-    name["original"] = token.text;
+    name["original"] = std::string(token.text);
     if (display != token.text) {
       // Never collide a local alias with any other identifier in the view.
-      if (name.at("kind") == "local" && identifiers.contains(display))
+      if (name.at("kind") == "local" && spellsIdentifier(display))
         continue;
       replacements.push_back({token.begin, token.end, display});
     }
@@ -1581,9 +1665,11 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
     auto end = original.find('\n', starts[line]);
     if (end == std::string::npos)
       end = original.size();
-    const auto anchor = original.substr(starts[line], end - starts[line]);
-    mapping["code_anchor"] = anchor;
-    if (const auto entry = numbers.find(std::to_string(line));
+    const std::string_view anchor(original.data() + starts[line],
+                                  end - starts[line]);
+    mapping["code_anchor"] = std::string(anchor);
+    if (const auto entry = numbers.empty() ? numbers.end()
+                                           : numbers.find(std::to_string(line));
         entry != numbers.end() &&
         entry->value("anchor", std::string()) == anchor) {
       const auto state = startsInComment.find(line);
@@ -1605,7 +1691,8 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
       mapping["code_number_radixes"] = radixes;
     }
     std::string comment;
-    if (const auto note = notes.find(std::to_string(line));
+    if (const auto note =
+            notes.empty() ? notes.end() : notes.find(std::to_string(line));
         note != notes.end() && note->value("anchor", std::string()) == anchor)
       comment = note->value("text", std::string());
     mapping["code_comment_is_source"] = !comment.empty();
@@ -1614,15 +1701,17 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
           addresses != mapping.end())
         for (const auto &at : *addresses) {
           const auto address = parseAddress(at.get<std::string>());
-          if (imageComments.contains(address)) {
-            comment = imageComments.at(address);
+          if (const auto noted = imageComments.find(address);
+              noted != imageComments.end()) {
+            comment = noted->second;
             break;
           }
         }
       if (comment.empty() && definition &&
-          ts[*definition].begin >= starts[line] &&
-          ts[*definition].begin <= end && imageComments.contains(function))
-        comment = imageComments.at(function);
+          ts[*definition].begin >= starts[line] && ts[*definition].begin <= end)
+        if (const auto noted = imageComments.find(function);
+            noted != imageComments.end())
+          comment = noted->second;
     }
     mapping["code_comment"] = comment;
     if (!comment.empty())
@@ -1630,17 +1719,29 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
   }
   std::sort(replacements.begin(), replacements.end(),
             [](const auto &a, const auto &b) { return a.begin < b.begin; });
-  const ByteShifts shifted(replacements);
-  auto remap = [&](Json &span) {
-    for (const char *field : {"begin_byte", "end_byte"})
-      if (span.contains(field))
-        span[field] = shifted(span[field].get<std::size_t>());
-  };
-  for (auto &name : names)
-    remap(name);
-  remapPageSpans(view, shifted);
-  std::string decorated = replaced(original, replacements);
-  view["text"] = std::move(decorated);
+  // Replacements that write what their spans read already, one after another,
+  // leave the text and every span as they are.
+  bool rewrites = false;
+  for (std::size_t at = 0; at < replacements.size() && !rewrites; ++at) {
+    const auto &replacement = replacements[at];
+    rewrites =
+        original.compare(replacement.begin, replacement.end - replacement.begin,
+                         replacement.text) != 0 ||
+        (at && replacement.begin < replacements[at - 1].end);
+  }
+  if (rewrites) {
+    const ByteShifts shifted(replacements);
+    auto remap = [&](Json &span) {
+      for (const char *field : {"begin_byte", "end_byte"})
+        if (span.contains(field))
+          span[field] = shifted(span[field].get<std::size_t>());
+    };
+    for (auto &name : names)
+      remap(name);
+    remapPageSpans(view, shifted);
+    std::string decorated = replaced(original, replacements);
+    view["text"] = std::move(decorated);
+  }
   view["code_names"] = std::move(names);
 }
 

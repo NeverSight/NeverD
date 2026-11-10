@@ -29,6 +29,8 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/ADT/SmallBitVector.h"
+#include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
 #include <deque>
@@ -331,6 +333,7 @@ class ReturnStackWrites {
     const MedOp *Op;
     size_t Position;
     std::optional<int64_t> Offset;
+    uint16_t IntrinsicWriteBytes = 0;
   };
   struct LoadSite {
     size_t Block;
@@ -387,12 +390,18 @@ public:
         if (const auto *Address = safety::detail::memoryAddress(Op)) {
           Addresses.push_back(*Address);
           Accesses.push_back({B, {&Op, I, std::nullopt}});
+        } else if (hasValidMedIntrinsicId(Op) &&
+                   Op.Inputs[0].ConstVal ==
+                       unsigned(Intrinsic::X86F16CStoreState) &&
+                   x86FPStateShapeIsValid(Intrinsic::X86F16CStoreState,
+                                          x86FPStateMedShape(Op))) {
+          Addresses.push_back(Op.Inputs[1]);
+          Accesses.push_back(
+              {B,
+               {&Op, I, std::nullopt,
+                uint16_t(x86F16CStoreBytes(Op.Inputs[3].ConstVal))}});
         } else if (endsCallArgumentSetup(Op) ||
-                   safety::detail::isStackMemoryWrite(Op.Opcode) ||
-                   (Op.Opcode == NdOp::INTRINSIC &&
-                    hasValidMedIntrinsicId(Op) &&
-                    isX86FPStateMemoryIntrinsic(
-                        static_cast<Intrinsic>(Op.Inputs[0].ConstVal)))) {
+                   safety::detail::isStackMemoryWrite(Op.Opcode)) {
           Writes[B].push_back({&Op, I, std::nullopt});
         }
       }
@@ -404,7 +413,8 @@ public:
       Access.Offset = Offsets[I];
       if (Access.Op->Opcode == NdOp::LOAD)
         Loads.try_emplace(Access.Op, LoadSite{Block, Access});
-      else if (safety::detail::isStackMemoryWrite(Access.Op->Opcode))
+      else if (safety::detail::isStackMemoryWrite(Access.Op->Opcode) ||
+               Access.IntrinsicWriteBytes)
         Writes[Block].push_back(Access);
     }
     for (auto &Block : Writes)
@@ -425,13 +435,23 @@ public:
     if (Found == Loads.end() || !Found->second.Read.Offset)
       return Finish(false);
     const auto &Site = Found->second;
-    std::vector<std::pair<size_t, size_t>> Pending{
-        {Site.Block, Site.Read.Position}};
-    llvm::DenseSet<std::pair<size_t, size_t>> Seen;
+    struct State {
+      size_t Block, Before;
+      llvm::SmallBitVector Bytes;
+    };
+    llvm::SmallVector<State, 4> Pending{
+        {Site.Block, Site.Read.Position,
+         llvm::SmallBitVector(Load.Output.Size, true)}};
+    llvm::DenseMap<std::pair<size_t, size_t>, llvm::SmallBitVector> Seen;
     while (!Pending.empty()) {
-      const auto [B, Before] = Pending.back();
+      auto [B, Before, Remaining] = std::move(Pending.back());
       Pending.pop_back();
-      if (!Seen.insert({B, Before}).second)
+      const auto [Visited, New] = Seen.try_emplace({B, Before}, Remaining);
+      if (!New) {
+        Remaining.reset(Visited->second);
+        Visited->second |= Remaining;
+      }
+      if (Remaining.none())
         continue;
       const auto &Stores = Writes[B];
       auto At = std::lower_bound(Stores.begin(), Stores.end(), Before,
@@ -442,35 +462,54 @@ public:
       while (At != Stores.begin()) {
         const auto &Write = *--At;
         const auto &Op = *Write.Op;
-        if (!Write.Offset || Op.Opcode != NdOp::STORE ||
+        if (!Write.Offset ||
+            (Op.Opcode != NdOp::STORE && !Write.IntrinsicWriteBytes) ||
             Op.MemoryOrdering != NdMemoryOrdering::None ||
             Op.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
           Stopped = true;
           break;
         }
-        const auto &Value = *safety::detail::storedValue(Op);
+        const auto *Value = safety::detail::storedValue(Op);
+        const auto Bytes = Value ? Value->Size : Write.IntrinsicWriteBytes;
+        if (!Bytes) {
+          Stopped = true;
+          break;
+        }
         if (!safety::detail::stackRangesOverlap(
-                *Write.Offset, Value.Size, *Site.Read.Offset, Load.Output.Size))
+                *Write.Offset, Bytes, *Site.Read.Offset, Load.Output.Size))
           continue;
-        const auto SavedOffset = entryReturnOffset(Value);
-        if (!SavedOffset || *Write.Offset < *Site.Read.Offset ||
-            static_cast<uint64_t>(*Write.Offset) -
-                    static_cast<uint64_t>(*Site.Read.Offset) !=
-                *SavedOffset)
+        const auto ReadStart = uint64_t(*Site.Read.Offset);
+        const auto WriteStart = uint64_t(*Write.Offset);
+        const unsigned First =
+            *Write.Offset > *Site.Read.Offset ? WriteStart - ReadStart : 0;
+        const unsigned Source =
+            *Write.Offset < *Site.Read.Offset ? ReadStart - WriteStart : 0;
+        const unsigned End =
+            First +
+            std::min<unsigned>(Load.Output.Size - First, Bytes - Source);
+        llvm::SmallBitVector Reached(Load.Output.Size);
+        Reached.set(First, End);
+        Reached &= Remaining;
+        if (Reached.none())
+          continue;
+        const auto SavedOffset =
+            Value ? entryReturnOffset(*Value) : std::nullopt;
+        if (!SavedOffset || *SavedOffset + Source != First)
           return Finish(true);
-        // Even a partial rewrite of the same saved bytes does not establish
-        // a computed result. Leave the original heuristic when the rest of
-        // the load is not proved by this write.
-
-        Stopped = true;
-        break;
+        // A partial restore proves only its bytes. Older writes may still
+        // supply the rest; each predecessor carries its own remaining mask.
+        Remaining.reset(Reached);
+        if (Remaining.none())
+          break;
       }
-      if (Stopped || !Func.Blocks[B].ExceptionalPreds.empty())
+      if (Stopped || Remaining.none() ||
+          !Func.Blocks[B].ExceptionalPreds.empty())
         continue;
       for (int Pred : Func.Blocks[B].Preds) {
         const auto It = Blocks.find(Pred);
         if (It != Blocks.end())
-          Pending.push_back({It->second, Func.Blocks[It->second].Ops.size()});
+          Pending.push_back(
+              {It->second, Func.Blocks[It->second].Ops.size(), Remaining});
       }
     }
     return Finish(false);
@@ -984,7 +1023,11 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
   bool HasStackStoreCandidate = false;
   for (const auto &Blk : Func.Blocks)
     for (const auto &Op : Blk.Ops) {
-      HasStackStoreCandidate |= Op.Opcode == NdOp::STORE;
+      if (!HasStackStoreCandidate &&
+          (Op.Opcode == NdOp::STORE ||
+           (hasValidMedIntrinsicId(Op) &&
+            Op.Inputs[0].ConstVal == unsigned(Intrinsic::X86F16CStoreState))))
+        HasStackStoreCandidate = true;
       if (Op.Output.Size > 0)
         Defs[{Op.Output.Id, Op.Output.SSAVer}] = &Op;
     }

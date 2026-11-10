@@ -281,6 +281,14 @@ int neverd_name_check(neverd_session_t Sess, neverd_va_t Addr,
   return 0;
 }
 
+int neverd_names_prepare(neverd_session_t Sess) {
+  auto *S = toSession(Sess);
+  if (!S || !S->Loaded)
+    return 0;
+  (void)S->symbolNames();
+  return 1;
+}
+
 int neverd_rename_func(neverd_session_t Sess, const char *OldName,
                        const char *NewName) {
   auto *S = toSession(Sess);

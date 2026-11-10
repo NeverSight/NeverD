@@ -289,7 +289,8 @@
     "run",
     "legacy",
     "probe-startup",
-    "run-executable"
+    "run-executable",
+    "run-default-executable"
   ],
   "probe_mode": "probe",
   "output_argument": "--output",
@@ -305,7 +306,7 @@
     "probe": "Current-source PAC and compiler-original call/unwind preflight must pass before installation qualification",
     "discovery": "Registered CTest native runtime commands are unavailable or invalid",
     "ctest": "Native runtime CTest invocation failed",
-    "arguments": "run and run-executable require --build-dir and --probe-report",
+    "arguments": "installation modes require --build-dir and --probe-report",
     "legacy": "Legacy fixtures are missing, stale, or do not match their recorded arm64e binaries",
     "legacy_linker": "A successful lookup of a real ld-classic is required",
     "syscall": "SDK must define exactly one map_with_linking_np syscall number",
@@ -357,6 +358,8 @@
   ],
   "publication_qualification_key": "native_object_publication_qualified",
   "executable_mode": "run-executable",
+  "default_executable_mode": "run-default-executable",
+  "default_executable_qualification_key": "native_default_executable_publication_qualified",
   "executable_families": [
     "PublishedExecutableStarts"
   ],

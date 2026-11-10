@@ -296,20 +296,23 @@ def check_runtime_report(xml, executable=False):
     return names
 
 
-def run_installation(output, build, probe_report, legacy_fixtures=None, *, executable=False):
+def run_installation(output, build, probe_report, legacy_fixtures=None, *,
+                     executable=False, system_startup=False):
+    userspace = executable and not system_startup
     report = {**provenance(), "status": POLICY["failed"],
               "native_installer_call_unwind_qualified": False,
               POLICY["publication_qualification_key"]: False,
               POLICY["executable_qualification_key"]: False,
+              POLICY["default_executable_qualification_key"]: False,
               "whole_image_publication_qualified": False}
     try:
         control = json.loads(probe_report.read_text())
         if (control.get("status") != POLICY["passed"] or
                 control.get("control_loading") != POLICY[
-                    "startup_loading" if executable else "control_loading"] or
+                    "startup_loading" if userspace else "control_loading"] or
                 control.get(POLICY["fixup_loader_key"]) != POLICY[
-                    "userspace_fixup_loader" if executable else "system_fixup_loader"] or
-                (executable and not control.get(POLICY["startup_qualification_key"])) or
+                    "userspace_fixup_loader" if userspace else "system_fixup_loader"] or
+                (userspace and not control.get(POLICY["startup_qualification_key"])) or
                 not control.get("native_pac_qualified") or
                 not control.get("compiler_original_call_unwind_qualified") or
                 any(control.get(key) != report[key] for key in POLICY["provenance_keys"])):
@@ -322,7 +325,8 @@ def run_installation(output, build, probe_report, legacy_fixtures=None, *, execu
                     "executable_test_regex" if executable else "test_regex"]]
         with OwnedProducts(output, False) as products:
             execution_prefix = []
-            if executable:
+            report[POLICY["fixup_loader_key"]] = POLICY["system_fixup_loader"]
+            if userspace:
                 profile = startup_profile(products, output)
                 if control.get(POLICY["startup_profile_key"]) != profile:
                     raise ValueError(POLICY["errors"]["startup_profile"])
@@ -352,7 +356,8 @@ def run_installation(output, build, probe_report, legacy_fixtures=None, *, execu
                 env.pop(POLICY["artifact_environment"], None)
                 env.pop(POLICY["executable_environment"], None)
                 if executable:
-                    env[POLICY["executable_environment"]] = POLICY["executable_environment_value"]
+                    env[POLICY["executable_environment"]] = POLICY[
+                        "executable_environment_value" if userspace else "system_fixup_loader"]
                 legacy_environment = fixture_contract()["legacy_environment"]
                 env.pop(legacy_environment, None)
                 if legacy_fixtures is not None:
@@ -368,6 +373,7 @@ def run_installation(output, build, probe_report, legacy_fixtures=None, *, execu
             report["native_installer_call_unwind_qualified"] = not executable
             report[POLICY["publication_qualification_key"]] = not executable
             report[POLICY["executable_qualification_key"]] = executable
+            report[POLICY["default_executable_qualification_key"]] = executable and system_startup
             report["status"] = POLICY["passed"]
         return report
     finally:
@@ -402,7 +408,9 @@ def main():
                 raise ValueError(POLICY["errors"]["arguments"])
             report = run_installation(output, args.build_dir.resolve(), args.probe_report.resolve(),
                                       args.legacy_fixtures,
-                                      executable=args.mode == POLICY["executable_mode"])
+                                      executable=args.mode in (POLICY["executable_mode"],
+                                                               POLICY["default_executable_mode"]),
+                                      system_startup=args.mode == POLICY["default_executable_mode"])
         print(json.dumps({"status": report["status"], "report": str(output / POLICY["report_name"])}))
         return POLICY["exit_codes"][report["status"]]
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:

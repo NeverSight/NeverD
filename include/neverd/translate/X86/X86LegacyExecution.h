@@ -129,6 +129,11 @@ struct X86LegacyExecutionState {
   std::optional<X86LegacyDebugState> Debug;
   std::optional<X86LegacyStackContinuation> PendingStack;
   std::optional<X86LegacyMpxContinuation> PendingMpx;
+  /// HLT has completed at CPL0; EIP names its following instruction. No
+  /// instruction may fetch until an eligible IRQ, NMI or debug trap is
+  /// accepted. Event entry clears this before touching the IDT, including
+  /// failed entry. SMI/INIT/RESET require their separate machine-state owner.
+  bool Halted = false;
 };
 
 /// One CPU, ordinary RAM, 16/32-bit gates, qword accessed writes, offset-first
@@ -350,6 +355,9 @@ enum class X86LegacyExecutionStatus : uint8_t {
   DeviceUnavailable,
   /// Resume PendingEvent; this is a host work boundary, not a CPU exception.
   EventBudgetExhausted,
+  /// HLT completed, or the CPU is still waiting without another attempt.
+  /// Consult InstructionAttempted/Completed to distinguish those cases.
+  Halted,
 };
 
 struct X86LegacyExecutionResult {
@@ -393,7 +401,9 @@ resumeX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 
 /// Authenticates original bytes through CS and paging, then executes the
 /// segment-transition owner, the explicit ordinary-RAM scalar owner, or
-/// NOP/CLI/STI/INT/INT3/INTO/INT1/UD2/IRET/RETF. Scalars include
+/// NOP/CLI/STI/HLT/INT/INT3/INTO/INT1/UD2/IRET/RETF. HLT retains a halt
+/// state across calls; waiting performs no fetch and consumes no attempt.
+/// Scalars include
 /// MOV/MOVSX/MOVZX, LEA, ARPL, ADD/ADC/SUB/SBB/CMP, AND/OR/XOR/TEST,
 /// INC/DEC/NEG/NOT, MUL/IMUL, DIV/IDIV, CBW/CWDE/CWD/CDQ, LAHF/SAHF,
 /// CLC/STC/CMC/CLD/STD, BSWAP (dword), XLAT, LEAVE, SETcc/CMOVcc,

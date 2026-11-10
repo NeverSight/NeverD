@@ -14,6 +14,7 @@
 #include "X86LegacyDescriptorTestEncoding.h"
 #include "X86LegacyMachineStatusTestEncoding.h"
 #include "X86LegacySystemSelectorTestEncoding.h"
+#include "X86LegacyTestState.h"
 #include "X86PortDevice.h"
 #include "gtest/gtest.h"
 
@@ -670,6 +671,7 @@ TEST_P(X86PagingNativeTest, OriginalInstructionsMatchPagingFaultsAndCommit) {
 #include "X86LegacyFarNativeTests.inc"
 #include "X86LegacyFastSystemNativeTests.inc"
 #include "X86LegacyFlagsNativeTests.inc"
+#include "X86LegacyHaltNativeTests.inc"
 #include "X86LegacyImplicitNativeTests.inc"
 #include "X86LegacyIntegerNativeTests.inc"
 #include "X86LegacyMachineStatusNativeTests.inc"

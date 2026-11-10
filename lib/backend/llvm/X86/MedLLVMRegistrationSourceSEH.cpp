@@ -378,7 +378,7 @@ bool MedLLVMEmitter::emitSourceX86RegistrationSEH(
           continue;
         Last = &S;
         if (!S.Quiet)
-          Loud.insert(S.Levels);
+          Loud.insert(sourceLevels(S.Levels));
       }
       if (Loud.empty())
         return Last ? innermostCommonScope(Last->Levels, Scopes) : kNoScope;
@@ -387,11 +387,20 @@ bool MedLLVMEmitter::emitSourceX86RegistrationSEH(
       return Loud.begin()->front();
     };
     const auto Before = LevelOf(true);
-    if (!Before) {
+    Plan.ExitLevels = sourceLevels(In.back().Levels);
+    std::vector<int32_t> Levels;
+    if (!Before ||
+        (!Plan.Owner && !Plan.Special && Plan.ExitLevels.size() > 1 &&
+         In.front().Levels.size() > 1 &&
+         llvm::all_of(In, [](const Stretch &S) { return S.Quiet; })))
+      Levels = sourceLevels(In.front().Levels);
+    if (!Before || Levels.size() > 1) {
       // Ordinary paths can share an exit while retaining different active
       // scopes. Specialize only a uniform state: changing or handler-owned
       // code needs a different proof, not a guessed common ancestor.
-      const auto Levels = sourceLevels(In.front().Levels);
+      // Quiet bridges carry those levels to later calls too, even though
+      // their own instructions cannot raise. A quiet reset to one known
+      // exit level already selects the next scope without copies.
       if (Plan.Owner || Plan.Special || Levels.size() < 2 ||
           !llvm::all_of(In,
                         [&](const Stretch &S) {
@@ -405,7 +414,6 @@ bool MedLLVMEmitter::emitSourceX86RegistrationSEH(
       Plan.Level = *Before;
     }
     Plan.After = Plan.Level;
-    Plan.ExitLevels = sourceLevels(In.back().Levels);
     if (Plan.Special && Boundary < Block.EndAddr) {
       const auto After = LevelOf(false);
       if (!After)
@@ -484,7 +492,7 @@ bool MedLLVMEmitter::emitSourceX86RegistrationSEH(
       for (const int Id : Body) {
         const MedBlock &Block = *ById.at(Id);
         const BlockPlan &Plan = *PlanOf(Id);
-        if (Plan.Special || Plan.Level != Scope.EnclosingLevel)
+        if (Plan.Special || Plan.Level != R.Parent)
           return false;
         for (const int Succ : Block.Succs)
           if (!Body.count(Succ))

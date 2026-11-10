@@ -4385,3 +4385,31 @@ publication and BNDMOV alignment are explicit software-profile choices. Full
 mode/task transitions, remaining original-machine banks/providers, software
 SMM/SGX and unbound asynchronous producers remain global gaps. No LLVM
 release is declared, and the production r6 pin and LLVM gitlink remain unchanged.
+
+## Protected HLT, persistent waiting and event wake (2026-11-09)
+
+The protected original-byte executor now owns HLT completion and a persistent
+halted CPU state. It authenticates the complete instruction before LOCK/CPL
+faults, retains the following EIP on success and performs no next fetch while
+waiting. Existing IRQ/NMI inhibition and debug completion rules decide wake;
+event acceptance clears the halt before IDT entry, including failed or paused
+entry. Delivery resume cannot replay the instruction or accept an event twice.
+The generated C dispatcher uses the same state and counts only the original
+HLT attempt, including when its following code is unselected or unavailable.
+See [the halt contract](x86-legacy-segments.md#protected-hlt-and-event-wake).
+
+The integrated local full-SDK build passes 407 distinct execution, event and
+generated-source cases, with no skips. The new native HLT matrix performs
+344 original-instruction comparisons on each of the Intel P-core and E-core
+lanes. Its 8 E-core test replays are not added to the distinct-case count.
+All 268 generated dispatch libraries are host x64, using Clang/NeverC at
+O0/O2. The pinned r6 SDK was not rerun for this change. Build identities,
+commands, reports and the corrected KVM fixture diagnostics are recorded in
+[the qualification evidence](evidence/x86-legacy-halt-2026-11-09.json).
+
+Native HLT already has an LLVM intrinsic and NeverC x64 builtin. This change
+adds owned software execution and keeps both generated-C compiler lanes on
+x64. It adds no NeverC 32-bit target. SMI/INIT/RESET and machine-check wake,
+full mode/task transitions, software SMM/SGX and unbound event producers remain
+separate completion work. The final LLVM release and production pin are
+unchanged.

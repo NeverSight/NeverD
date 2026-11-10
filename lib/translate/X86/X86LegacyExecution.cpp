@@ -10,6 +10,7 @@
 #include "neverd/translate/X86/X86LegacyExecution.h"
 
 #include "X86LegacyControlRegisters.h"
+#include "X86LegacyEncoding.h"
 #include "X86LegacyExecutionInternal.h"
 #include "X86LegacyFarTransfer.h"
 #include "X86LegacyFastSystem.h"
@@ -49,7 +50,7 @@ struct LegacyInstruction {
   std::optional<X86MpxEncoding> Mpx;
   llvm::ArrayRef<uint8_t> Body;
   unsigned Width;
-  bool IRET, RETF, INT, UD2;
+  bool IRET, RETF, INT, UD2, HLT = false, LockedHLT = false;
 };
 
 llvm::Expected<LegacyInstruction>
@@ -91,9 +92,14 @@ decodeInstruction(llvm::ArrayRef<uint8_t> Instruction, bool Code32) {
   I.IRET = I.Body.size() == 1 && I.Body[0] == 0xcf;
   I.RETF = (I.Body.size() == 1 && I.Body[0] == 0xcb) ||
            (I.Body.size() == 3 && I.Body[0] == 0xca);
+  if (Instruction.back() == 0xf4) {
+    detail::X86LegacyEncoding HaltEncoding(Instruction, Code32);
+    I.HLT = HaltEncoding.byte() == 0xf4 && HaltEncoding.done();
+    I.LockedHLT = HaltEncoding.Group1Prefix == 0xf0;
+  }
   if (!I.Segment && !I.Scalar && !I.FastSystem && !I.String && !I.Port &&
       !I.Far && !Single && !I.INT && !I.UD2 && !I.IRET && !I.RETF &&
-      !I.DebugRegister && !I.ControlRegister && !I.Mpx)
+      !I.DebugRegister && !I.ControlRegister && !I.Mpx && !I.HLT)
     return invalid("unsupported or malformed legacy step instruction");
   return I;
 }
@@ -114,6 +120,9 @@ llvm::Error detail::admitLegacyExecution(const X86LegacyExecutionState &S,
                                          const X86LegacyExecutionOptions &O) {
   if (!O.EventDelivery.MaxAttempts)
     return invalid("event delivery requires a positive work budget");
+  if (S.Halted && (S.Core.CPL || S.STIBlocked || S.SSBlocked ||
+                   S.PendingStack || S.PendingMpx || S.PendingEvent))
+    return invalid("legacy halt state requires completed CPL0 HLT state");
   if (bool(S.Debug) != bool(O.Debug) ||
       (S.PendingEvent && S.PendingEvent->DataBreakpoints &&
        (!S.Debug || !x86DebugWatchpoints(*O.Debug) ||
@@ -151,6 +160,13 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   if (State.PendingEvent)
     return invalid(
         "resume the pending legacy event before another instruction");
+  if (State.Halted) {
+    if (auto Error = detail::admitLegacyExecution(State, Memory, Options))
+      return std::move(Error);
+    X86LegacyExecutionResult R;
+    R.Status = X86LegacyExecutionStatus::Halted;
+    return R;
+  }
   if (auto Error = detail::validateLegacyStackContinuation(State, Instruction))
     return std::move(Error);
   if (auto Error =
@@ -163,7 +179,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   if (!Decoded)
     return Decoded.takeError();
   auto &[DebugRegister, ControlRegister, Segment, Scalar, FastSystem, String,
-         Port, Far, Mpx, Body, Width, IRET, RETF, INT, UD2] = *Decoded;
+         Port, Far, Mpx, Body, Width, IRET, RETF, INT, UD2, HLT, LockedHLT] =
+      *Decoded;
   if (ControlRegister) {
     if (!Options.ControlRegisters)
       return invalid("MOV-CR requires a bound Intel control-register profile");
@@ -595,7 +612,10 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     }
   } else if (!R.Exception) {
     const auto Opcode = Body.front();
-    if (Opcode == 0xfa || Opcode == 0xfb) {
+    if (HLT) {
+      if (LockedHLT || State.Core.CPL)
+        R.Exception = X86MemoryException{uint8_t(LockedHLT ? 6 : 13), 0, {}};
+    } else if (Opcode == 0xfa || Opcode == 0xfb) {
       const bool Set = Opcode == 0xfb;
       if (State.Core.CPL <= ((Flags >> 12) & 3)) {
         STI = Set && !(Flags & 0x200);
@@ -651,8 +671,11 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     State.Mpx = std::move(NextMpx);
   State.SSBlocked = SS;
   State.STIBlocked = STI;
+  State.Halted = HLT;
   R.InstructionCompleted = !RepeatContinue;
-  if (RepeatContinue)
+  if (HLT)
+    R.Status = X86LegacyExecutionStatus::Halted;
+  else if (RepeatContinue)
     R.Status = X86LegacyExecutionStatus::RepeatContinue;
   bool RepeatGroupContinues = false;
   if (RepeatContinue && String && Options.Debug &&

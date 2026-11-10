@@ -827,15 +827,24 @@ the signed 32-bit disposition, independently of the parent's return ABI.
 Shared filter writes and exception-pointer setup survive outlining; disjoint
 protected ranges keep intervening code outside `__try`. Normal cleanup calls
 and local unwinds retain their cleanup order. The 84 public x86 corpus images
-export 463 structured SEH functions. Uniform shared tails now have one CFG copy
-per proven incoming scope, including cycles and quiet scope resets; this closes
-80 additional functions. The remaining 259 retain explicit refusal notes for
+export 480 structured SEH functions. Uniform shared tails have one CFG copy
+per proven incoming scope, including cycles, quiet bridges and scope resets.
+EH3/EH4 negative sentinels share one no-scope state, including quiet cleanup
+entries. The remaining 242 retain explicit refusal notes for
 unproved scope state, ambiguous ownership, unowned cleanup calls
 or non-closed cleanup paths. Source helper execution and Windows object
 compilation do not qualify native Windows exception dispatch or resumption.
 Some newly complete modules can now enter LLVM optimization. If its candidate
 violates the strict exception contract, the source route promotes the retained
 input and preserves the rejection diagnostic without relaxing native validation.
+
+Both C routes now adapt recovered machine arguments to the header's target
+`va_list` ABI. A shared C-backend owner handles pointer, AAPCS32 one-pointer
+record and AAPCS64 indirect-record transport in both directions. Actual
+`va_start` forwarders and runtime-table carrier declarations keep their own
+contracts. Cross-compilation covers fourteen target/format combinations;
+host execution checks integer, floating, string and overflow-stack arguments.
+This also closes the MinGW whole-module LLVM C `vfprintf` compile failure.
 
 Large LLVM source functions no longer retain redundant entry stores on private
 SSA temporaries whose single later definition dominates every read. The proof
@@ -1673,6 +1682,11 @@ conditional memory, invocation lifetime and both C routes remain open.
   these bits because the return transport may quiet the NaN itself.
   Computed stack values reloaded into EAX/RAX no longer inherit the
   POP-shaped restore heuristic merely because an FP temporary remains.
+  Partial identity restores now account for each byte independently across
+  predecessors and loops. Validated F16C memory stores supply computed bytes;
+  floating memory reads preserve earlier reaching stores. The shared call
+  setup effect rule also separates register arguments from memory overwritten
+  by F16C and ARM64 scalar/vector/pair/structure stores.
   Native integer-return oracles cover both C routes across COFF/ELF/Mach-O;
   unknown reaching writes and arbitrary ABI inference remain separate work.
 
