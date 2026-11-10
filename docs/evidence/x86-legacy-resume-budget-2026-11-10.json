@@ -673,5 +673,791 @@
     "index_sha256": "f93375e3f3cab0a18158c8a9c76137858fc538eb43bca50e1b1d7579b7f35b5d",
     "archive_sha256": "1b5d480376757d0919536bd6af3a011a61765d34d9f6d04f0e33c0e21b955597",
     "verified_decompressed_files": 2504
+  },
+  "mips_dependency_integration": {
+    "validated_commit": "3470cb2604d577ffe6d182042913e7b1875e76df",
+    "validated_tree": "79d50fa4742231357d45a776b7c38a78a83a7e4d",
+    "merged_dev_commit": "9d19cc4eb7bae81d71aa4bdba911ef3e6a6276b7",
+    "reason": "New MIPS intrinsic/emulator changes and Capstone/Unicorn revisions required rebuilding shared consumers and requalifying affected x86 paths.",
+    "builds": {
+      "build-x86-native": {
+        "source_head": "3470cb2604d577ffe6d182042913e7b1875e76df",
+        "source_tree": "79d50fa4742231357d45a776b7c38a78a83a7e4d",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "env",
+          "GIT_CONFIG_COUNT=2",
+          "GIT_CONFIG_KEY_0=http.curloptResolve",
+          "GIT_CONFIG_VALUE_0=github.com:443:4.237.22.38",
+          "GIT_CONFIG_KEY_1=http.proxy",
+          "GIT_CONFIG_VALUE_1=",
+          "python3",
+          "scripts/build.py",
+          "build-x86-native",
+          "--target",
+          "NeverDX86LegacySourceTests",
+          "NeverDX86PagingTests",
+          "NeverDX64PagedExecutionTests",
+          "NeverDLowInstructionBoundaryTests",
+          "--parallel",
+          "4"
+        ],
+        "environment": {},
+        "binaries": {},
+        "exit_code": 0,
+        "seconds": 1511.8356281809974,
+        "log": "build-x86-native-integration-build.log",
+        "log_sha256": "10f73e02a84acf1973e1524f46303af151dee2c429a0bf2e7640a6c5b184d188",
+        "dependency_inputs": {
+          "purpose": "configure_inputs",
+          "schema": 1,
+          "sources": {
+            "neverd_highway": {
+              "selection": "disabled",
+              "used": false
+            },
+            "neverd_mimalloc": {
+              "selection": "disabled",
+              "used": false
+            },
+            "neverd_simdjson": {
+              "selection": "disabled",
+              "used": false
+            },
+            "neverd_simdutf": {
+              "selection": "disabled",
+              "used": false
+            },
+            "neverd_tbb": {
+              "selection": "disabled",
+              "used": false
+            }
+          }
+        },
+        "build_receipt_sha256": "be5ee561b4c15b2ca9bce1d76236cf3dd12486472488000edc005c1b199645b7"
+      },
+      "build-x86": {
+        "source_head": "3470cb2604d577ffe6d182042913e7b1875e76df",
+        "source_tree": "79d50fa4742231357d45a776b7c38a78a83a7e4d",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "env",
+          "GIT_CONFIG_COUNT=2",
+          "GIT_CONFIG_KEY_0=http.curloptResolve",
+          "GIT_CONFIG_VALUE_0=github.com:443:4.237.22.38",
+          "GIT_CONFIG_KEY_1=http.proxy",
+          "GIT_CONFIG_VALUE_1=",
+          "python3",
+          "scripts/build.py",
+          "build-x86",
+          "--target",
+          "NeverDX86LegacySourceTests",
+          "NeverDX86PagingTests",
+          "NeverDX64PagedExecutionTests",
+          "NeverDLowInstructionBoundaryTests",
+          "--parallel",
+          "4"
+        ],
+        "environment": {},
+        "binaries": {},
+        "exit_code": 0,
+        "seconds": 1484.628869859036,
+        "log": "build-x86-integration-build.log",
+        "log_sha256": "ff17d78d605a2d206ea44383fe1787c03e86ed882eb5dd56e094a7de85b07241",
+        "dependency_inputs": {
+          "purpose": "configure_inputs",
+          "schema": 1,
+          "sources": {
+            "neverd_highway": {
+              "selection": "disabled",
+              "used": false
+            },
+            "neverd_mimalloc": {
+              "selection": "disabled",
+              "used": false
+            },
+            "neverd_simdjson": {
+              "selection": "disabled",
+              "used": false
+            },
+            "neverd_simdutf": {
+              "selection": "disabled",
+              "used": false
+            },
+            "neverd_tbb": {
+              "selection": "disabled",
+              "used": false
+            }
+          }
+        },
+        "build_receipt_sha256": "e619384e391fdb9b8cfa7a5f1ca366a55b78a49da0570e6493f0af8f267b38d2"
+      }
+    },
+    "runs": {
+      "build-x86-native-software": {
+        "source_head": "3470cb2604d577ffe6d182042913e7b1875e76df",
+        "source_tree": "79d50fa4742231357d45a776b7c38a78a83a7e4d",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "timeout",
+          "1200",
+          "taskset",
+          "-c",
+          "4",
+          "build-x86-native/bin/NeverDX86PagingTests",
+          "--gtest_filter=X86Legacy*",
+          "--gtest_output=xml:/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-native-integration-software.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "TMPDIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-native-integration-software-tmp",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-native-integration-software-exports"
+        },
+        "binaries": {
+          "build-x86-native/bin/NeverDX86PagingTests": "c93ecec06eaef42e650a0deab20998213424704903e8d6134ba767dd7365dc5e",
+          "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+          "build-x86-native/bin/libneverd.so": "6b77617e8772182a343e074d328d6b1704539d1fa49d5a72c31de1bd9bb1fc3d",
+          "build-x86-native/bin/neverd": "a172d8ec65618244da897e5e3bee04d5f282e3027803a632850bbcf193f97fe9"
+        },
+        "exit_code": 0,
+        "seconds": 0.5038999060634524,
+        "log": "build-x86-native-integration-software.log",
+        "log_sha256": "9c53b6450f5ca6ebb92e89bd46d2dc9602400bffc110875be7f4b9dfd97e79a3",
+        "tests": {
+          "tests": "396",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "0.462",
+          "timestamp": "2026-11-10T07:55:53.301",
+          "name": "AllTests"
+        },
+        "skipped": [],
+        "properties": {
+          "branch_selection_comparisons": 64
+        },
+        "report": "build-x86-native-integration-software.xml",
+        "report_sha256": "92741d3a7fa0e6ddcb8de21f81c4e2a6ec86ff984f5cd00890f9f5b29888e057"
+      },
+      "build-x86-native-source": {
+        "source_head": "3470cb2604d577ffe6d182042913e7b1875e76df",
+        "source_tree": "79d50fa4742231357d45a776b7c38a78a83a7e4d",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "timeout",
+          "1200",
+          "taskset",
+          "-c",
+          "4",
+          "build-x86-native/bin/NeverDX86LegacySourceTests",
+          "--gtest_filter=*",
+          "--gtest_output=xml:/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-native-integration-source.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "TMPDIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-native-integration-source-tmp",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-native-integration-source-exports"
+        },
+        "binaries": {
+          "build-x86-native/bin/NeverDX86LegacySourceTests": "3d692dcfdd15c939a9f3a6b364b52f89e262e127a76304e970a43e00f0950e5d",
+          "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+          "build-x86-native/bin/libneverd.so": "6b77617e8772182a343e074d328d6b1704539d1fa49d5a72c31de1bd9bb1fc3d",
+          "build-x86-native/bin/neverd": "a172d8ec65618244da897e5e3bee04d5f282e3027803a632850bbcf193f97fe9"
+        },
+        "exit_code": 0,
+        "seconds": 15.016262067016214,
+        "log": "build-x86-native-integration-source.log",
+        "log_sha256": "64f06950f6fcf2331f793be57d355a4e217059fdbbddac16e72fbc9ed4b86a87",
+        "tests": {
+          "tests": "237",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "14.941",
+          "timestamp": "2026-11-10T07:55:54.419",
+          "name": "AllTests"
+        },
+        "skipped": [],
+        "properties": {
+          "branch_selection_comparisons": 256
+        },
+        "report": "build-x86-native-integration-source.xml",
+        "report_sha256": "234c94ea71edc5fc8d538d8d8bf3a1981bf108b0648323fa4c30c684fbff641c"
+      },
+      "build-x86-native-compatibility": {
+        "source_head": "3470cb2604d577ffe6d182042913e7b1875e76df",
+        "source_tree": "79d50fa4742231357d45a776b7c38a78a83a7e4d",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "timeout",
+          "1200",
+          "taskset",
+          "-c",
+          "4",
+          "build-x86-native/bin/NeverDX86PagingTests",
+          "--gtest_filter=*X86CompatibilityPaging*",
+          "--gtest_output=xml:/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-native-integration-compatibility.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "TMPDIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-native-integration-compatibility-tmp",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-native-integration-compatibility-exports"
+        },
+        "binaries": {
+          "build-x86-native/bin/NeverDX86PagingTests": "c93ecec06eaef42e650a0deab20998213424704903e8d6134ba767dd7365dc5e",
+          "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+          "build-x86-native/bin/libneverd.so": "6b77617e8772182a343e074d328d6b1704539d1fa49d5a72c31de1bd9bb1fc3d",
+          "build-x86-native/bin/neverd": "a172d8ec65618244da897e5e3bee04d5f282e3027803a632850bbcf193f97fe9"
+        },
+        "exit_code": 0,
+        "seconds": 0.1032561759930104,
+        "log": "build-x86-native-integration-compatibility.log",
+        "log_sha256": "11b25ae635b721b7b716b7e8dda6dbaa1ee2a88a21a548d0123699a1dbd33d7e",
+        "tests": {
+          "tests": "12",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "0.034",
+          "timestamp": "2026-11-10T07:56:09.985",
+          "name": "AllTests"
+        },
+        "skipped": [
+          {
+            "name": "WrapPermissionsAndLimitsMatchCPU/1",
+            "value_param": "5",
+            "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86CompatibilityPagingNativeTests.inc",
+            "line": "13",
+            "status": "run",
+            "result": "skipped",
+            "time": "0.009",
+            "timestamp": "2026-11-10T07:56:10.010",
+            "classname": "IA32e/X86CompatibilityPagingNativeTest"
+          }
+        ],
+        "properties": {
+          "original_comparisons": 7
+        },
+        "report": "build-x86-native-integration-compatibility.xml",
+        "report_sha256": "9e6d5df66039ec9350b36c69098a6b74f79639b1ed2f8726d71da9b9ea37f301"
+      },
+      "build-x86-native-returns": {
+        "source_head": "3470cb2604d577ffe6d182042913e7b1875e76df",
+        "source_tree": "79d50fa4742231357d45a776b7c38a78a83a7e4d",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "timeout",
+          "1200",
+          "taskset",
+          "-c",
+          "4",
+          "build-x86-native/bin/NeverDX64PagedExecutionTests",
+          "--gtest_filter=X64PagedReturnContinuationTest.*:*PendingHandlerResumesReturnWithoutAnotherAttempt:X64PagedWatchpointTest.OriginalRepeat*",
+          "--gtest_output=xml:/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-native-integration-returns.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "TMPDIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-native-integration-returns-tmp",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-native-integration-returns-exports",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1"
+        },
+        "binaries": {
+          "build-x86-native/bin/NeverDX64PagedExecutionTests": "cdbe37b52e0f939eb4e91acb10bde585429d17e35ce86adbab86c75562dc0554",
+          "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+          "build-x86-native/bin/libneverd.so": "6b77617e8772182a343e074d328d6b1704539d1fa49d5a72c31de1bd9bb1fc3d",
+          "build-x86-native/bin/neverd": "a172d8ec65618244da897e5e3bee04d5f282e3027803a632850bbcf193f97fe9"
+        },
+        "exit_code": 0,
+        "seconds": 10.31271432095673,
+        "log": "build-x86-native-integration-returns.log",
+        "log_sha256": "2d2e5c0814db0f2a8a521a1f4f7e260a43d8a5b7a9af87f5ec394e2209b2f8bd",
+        "tests": {
+          "tests": "10",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "10.256",
+          "timestamp": "2026-11-10T07:56:10.774",
+          "name": "AllTests"
+        },
+        "skipped": [],
+        "properties": {
+          "original_comparisons": 580
+        },
+        "report": "build-x86-native-integration-returns.xml",
+        "report_sha256": "270a45c060df3e3569a8d0e35fa9dcc66f7a4d7ba32594e5344c22080776c8ac"
+      },
+      "build-x86-native-boundary": {
+        "source_head": "3470cb2604d577ffe6d182042913e7b1875e76df",
+        "source_tree": "79d50fa4742231357d45a776b7c38a78a83a7e4d",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "timeout",
+          "1200",
+          "taskset",
+          "-c",
+          "4",
+          "build-x86-native/bin/NeverDLowInstructionBoundaryTests",
+          "--gtest_filter=*",
+          "--gtest_output=xml:/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-native-integration-boundary.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "TMPDIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-native-integration-boundary-tmp",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-native-integration-boundary-exports"
+        },
+        "binaries": {
+          "build-x86-native/bin/NeverDLowInstructionBoundaryTests": "a6f809ffff03f2d5c68698589db9150250a61f000ebd45f957d340f4654651bd",
+          "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+          "build-x86-native/bin/libneverd.so": "6b77617e8772182a343e074d328d6b1704539d1fa49d5a72c31de1bd9bb1fc3d",
+          "build-x86-native/bin/neverd": "a172d8ec65618244da897e5e3bee04d5f282e3027803a632850bbcf193f97fe9"
+        },
+        "exit_code": 0,
+        "seconds": 2.4056560539174825,
+        "log": "build-x86-native-integration-boundary.log",
+        "log_sha256": "abbe94b435d549c230aae234974bfd4ad20598bcc99bbf375ca8e47ff78d121a",
+        "tests": {
+          "tests": "89",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "2.356",
+          "timestamp": "2026-11-10T07:56:21.724",
+          "name": "AllTests"
+        },
+        "skipped": [],
+        "properties": {},
+        "report": "build-x86-native-integration-boundary.xml",
+        "report_sha256": "152ac61d34acd0e338bcde36e8eeccf2f4a096fee81514f25b1dd0708dc64051"
+      },
+      "build-x86-native-sdk": {
+        "source_head": "3470cb2604d577ffe6d182042913e7b1875e76df",
+        "source_tree": "79d50fa4742231357d45a776b7c38a78a83a7e4d",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "timeout",
+          "1200",
+          "taskset",
+          "-c",
+          "4",
+          "/usr/bin/python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "pluginsdk/python/tests",
+          "-p",
+          "test_legacy_source_integration.py",
+          "-v"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "TMPDIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-native-integration-sdk-tmp",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-native-integration-sdk-exports",
+          "NEVERD_TEST_LIBNEVERD": "build-x86-native/bin/libneverd.so",
+          "PYTHONPATH": "pluginsdk/python"
+        },
+        "binaries": {
+          "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+          "build-x86-native/bin/libneverd.so": "6b77617e8772182a343e074d328d6b1704539d1fa49d5a72c31de1bd9bb1fc3d",
+          "build-x86-native/bin/neverd": "a172d8ec65618244da897e5e3bee04d5f282e3027803a632850bbcf193f97fe9"
+        },
+        "exit_code": 0,
+        "seconds": 0.10329360293690115,
+        "log": "build-x86-native-integration-sdk.log",
+        "log_sha256": "ba818d393b3412a96b830cb7196173249e569a0fbafe11df10f9ac0860297c0e",
+        "unittest_passing_cases": 2
+      },
+      "build-x86-software": {
+        "source_head": "3470cb2604d577ffe6d182042913e7b1875e76df",
+        "source_tree": "79d50fa4742231357d45a776b7c38a78a83a7e4d",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "timeout",
+          "1200",
+          "taskset",
+          "-c",
+          "12",
+          "build-x86/bin/NeverDX86PagingTests",
+          "--gtest_filter=X86Legacy*",
+          "--gtest_output=xml:/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-integration-software.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "TMPDIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-integration-software-tmp",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-integration-software-exports"
+        },
+        "binaries": {
+          "build-x86/bin/NeverDX86PagingTests": "3b4d15f3e900f47e7cca9509c82a1f81bc959272ec1f863e72fc1660163daefd",
+          "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+          "build-x86/bin/libneverd.so": "64f2c0f3641987608875e59409747e04c6de3cb03cbcb6009b1728cdf9e04a01",
+          "build-x86/bin/neverd": "5dd91936b4d6b8721620cf377f22e478a7388bea678b56fbef4bbf2c2b9ad5f8"
+        },
+        "exit_code": 0,
+        "seconds": 0.6060064249904826,
+        "log": "build-x86-integration-software.log",
+        "log_sha256": "81c12157b39f681c7a19c1912dccf037ec7b6d050ab72f9806bc150ee1beb57a",
+        "tests": {
+          "tests": "396",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "0.492",
+          "timestamp": "2026-11-10T07:55:37.868",
+          "name": "AllTests"
+        },
+        "skipped": [],
+        "properties": {
+          "branch_selection_comparisons": 64
+        },
+        "report": "build-x86-integration-software.xml",
+        "report_sha256": "0d4a6d0e246e43d035ca0f26ae919cc3b2d0656c74b16fe1601900739f510d18"
+      },
+      "build-x86-source": {
+        "source_head": "3470cb2604d577ffe6d182042913e7b1875e76df",
+        "source_tree": "79d50fa4742231357d45a776b7c38a78a83a7e4d",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "timeout",
+          "1200",
+          "taskset",
+          "-c",
+          "12",
+          "build-x86/bin/NeverDX86LegacySourceTests",
+          "--gtest_filter=*",
+          "--gtest_output=xml:/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-integration-source.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "TMPDIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-integration-source-tmp",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-integration-source-exports"
+        },
+        "binaries": {
+          "build-x86/bin/NeverDX86LegacySourceTests": "c7056030d4da02130db9fac9de0d9e8c80c769d41c62e15909910deb641e64a0",
+          "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+          "build-x86/bin/libneverd.so": "64f2c0f3641987608875e59409747e04c6de3cb03cbcb6009b1728cdf9e04a01",
+          "build-x86/bin/neverd": "5dd91936b4d6b8721620cf377f22e478a7388bea678b56fbef4bbf2c2b9ad5f8"
+        },
+        "exit_code": 0,
+        "seconds": 27.52725135406945,
+        "log": "build-x86-integration-source.log",
+        "log_sha256": "09eed2e818f55e53d4ca7882a87f360393cdf2712981c023f199d2aa2189ab94",
+        "tests": {
+          "tests": "237",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "27.462",
+          "timestamp": "2026-11-10T07:55:38.993",
+          "name": "AllTests"
+        },
+        "skipped": [],
+        "properties": {
+          "branch_selection_comparisons": 256
+        },
+        "report": "build-x86-integration-source.xml",
+        "report_sha256": "1f35e6d724fadc1bc291c2c3d907602dd6694915ac2274a6f781c809e22caf85"
+      },
+      "build-x86-compatibility": {
+        "source_head": "3470cb2604d577ffe6d182042913e7b1875e76df",
+        "source_tree": "79d50fa4742231357d45a776b7c38a78a83a7e4d",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "timeout",
+          "1200",
+          "taskset",
+          "-c",
+          "12",
+          "build-x86/bin/NeverDX86PagingTests",
+          "--gtest_filter=*X86CompatibilityPaging*",
+          "--gtest_output=xml:/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-integration-compatibility.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "TMPDIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-integration-compatibility-tmp",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-integration-compatibility-exports"
+        },
+        "binaries": {
+          "build-x86/bin/NeverDX86PagingTests": "3b4d15f3e900f47e7cca9509c82a1f81bc959272ec1f863e72fc1660163daefd",
+          "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+          "build-x86/bin/libneverd.so": "64f2c0f3641987608875e59409747e04c6de3cb03cbcb6009b1728cdf9e04a01",
+          "build-x86/bin/neverd": "5dd91936b4d6b8721620cf377f22e478a7388bea678b56fbef4bbf2c2b9ad5f8"
+        },
+        "exit_code": 0,
+        "seconds": 0.10433756990823895,
+        "log": "build-x86-integration-compatibility.log",
+        "log_sha256": "e63b11b2c0c0890ad91dc71f63b1431aff5c9f09bd03ed4608f89efd8a27b3e6",
+        "tests": {
+          "tests": "12",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "0.053",
+          "timestamp": "2026-11-10T07:56:07.281",
+          "name": "AllTests"
+        },
+        "skipped": [
+          {
+            "name": "WrapPermissionsAndLimitsMatchCPU/1",
+            "value_param": "5",
+            "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86CompatibilityPagingNativeTests.inc",
+            "line": "13",
+            "status": "run",
+            "result": "skipped",
+            "time": "0.018",
+            "timestamp": "2026-11-10T07:56:07.316",
+            "classname": "IA32e/X86CompatibilityPagingNativeTest"
+          }
+        ],
+        "properties": {
+          "original_comparisons": 7
+        },
+        "report": "build-x86-integration-compatibility.xml",
+        "report_sha256": "14cc4f6910c46640563988bd6cc3d9c09796c471130e49511e57c95d058b2a2a"
+      },
+      "build-x86-returns": {
+        "source_head": "3470cb2604d577ffe6d182042913e7b1875e76df",
+        "source_tree": "79d50fa4742231357d45a776b7c38a78a83a7e4d",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "timeout",
+          "1200",
+          "taskset",
+          "-c",
+          "12",
+          "build-x86/bin/NeverDX64PagedExecutionTests",
+          "--gtest_filter=X64PagedReturnContinuationTest.*:*PendingHandlerResumesReturnWithoutAnotherAttempt:X64PagedWatchpointTest.OriginalRepeat*",
+          "--gtest_output=xml:/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-integration-returns.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "TMPDIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-integration-returns-tmp",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-integration-returns-exports",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16"
+        },
+        "binaries": {
+          "build-x86/bin/NeverDX64PagedExecutionTests": "44519ff71d05d41fe835d4e8116271878bf1f6da87a044760dd59bc55dea92cd",
+          "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+          "build-x86/bin/libneverd.so": "64f2c0f3641987608875e59409747e04c6de3cb03cbcb6009b1728cdf9e04a01",
+          "build-x86/bin/neverd": "5dd91936b4d6b8721620cf377f22e478a7388bea678b56fbef4bbf2c2b9ad5f8"
+        },
+        "exit_code": 0,
+        "seconds": 17.419464171980508,
+        "log": "build-x86-integration-returns.log",
+        "log_sha256": "e5f90ceaee4e51dc6db3180236e08a462f21f0b52dac770348e9cf59efcacffd",
+        "tests": {
+          "tests": "10",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "17.364",
+          "timestamp": "2026-11-10T07:56:08.089",
+          "name": "AllTests"
+        },
+        "skipped": [],
+        "properties": {
+          "original_comparisons": 580
+        },
+        "report": "build-x86-integration-returns.xml",
+        "report_sha256": "335b96e4df0b1ef39ef07dde6dabc12de54e4ce0a234d3d7edc5c377b0d5dafa"
+      },
+      "build-x86-boundary": {
+        "source_head": "3470cb2604d577ffe6d182042913e7b1875e76df",
+        "source_tree": "79d50fa4742231357d45a776b7c38a78a83a7e4d",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "timeout",
+          "1200",
+          "taskset",
+          "-c",
+          "12",
+          "build-x86/bin/NeverDLowInstructionBoundaryTests",
+          "--gtest_filter=*",
+          "--gtest_output=xml:/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-integration-boundary.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "TMPDIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-integration-boundary-tmp",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-integration-boundary-exports"
+        },
+        "binaries": {
+          "build-x86/bin/NeverDLowInstructionBoundaryTests": "f254c78545f76dfa9b7f6466206e5cf3b212443224457ad86679ef1b7c7882a4",
+          "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+          "build-x86/bin/libneverd.so": "64f2c0f3641987608875e59409747e04c6de3cb03cbcb6009b1728cdf9e04a01",
+          "build-x86/bin/neverd": "5dd91936b4d6b8721620cf377f22e478a7388bea678b56fbef4bbf2c2b9ad5f8"
+        },
+        "exit_code": 0,
+        "seconds": 4.809254962019622,
+        "log": "build-x86-integration-boundary.log",
+        "log_sha256": "de7f7671f7132eb62e5d3b6ba0b33800aa44c0f92c439c39e14bbbd5a2e8d3cd",
+        "tests": {
+          "tests": "89",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "4.729",
+          "timestamp": "2026-11-10T07:56:26.148",
+          "name": "AllTests"
+        },
+        "skipped": [],
+        "properties": {},
+        "report": "build-x86-integration-boundary.xml",
+        "report_sha256": "53fcbf34f0e31f6eea5dd22e47310968e99bb021fc30a71cdae0091b7f41c0af"
+      },
+      "build-x86-sdk": {
+        "source_head": "3470cb2604d577ffe6d182042913e7b1875e76df",
+        "source_tree": "79d50fa4742231357d45a776b7c38a78a83a7e4d",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "timeout",
+          "1200",
+          "taskset",
+          "-c",
+          "12",
+          "/usr/bin/python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "pluginsdk/python/tests",
+          "-p",
+          "test_legacy_source_integration.py",
+          "-v"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "TMPDIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-integration-sdk-tmp",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-resume-budget-20261110/build-x86-integration-sdk-exports",
+          "NEVERD_TEST_LIBNEVERD": "build-x86/bin/libneverd.so",
+          "PYTHONPATH": "pluginsdk/python"
+        },
+        "binaries": {
+          "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+          "build-x86/bin/libneverd.so": "64f2c0f3641987608875e59409747e04c6de3cb03cbcb6009b1728cdf9e04a01",
+          "build-x86/bin/neverd": "5dd91936b4d6b8721620cf377f22e478a7388bea678b56fbef4bbf2c2b9ad5f8"
+        },
+        "exit_code": 0,
+        "seconds": 0.20315443293657154,
+        "log": "build-x86-integration-sdk.log",
+        "log_sha256": "81dbd3a4aec47bee196e629e6b34060d8dbc0827987a22500d5785bfff4782ac",
+        "unittest_passing_cases": 2
+      }
+    },
+    "checks": {
+      "format": {
+        "source_head": "3470cb2604d577ffe6d182042913e7b1875e76df",
+        "source_tree": "79d50fa4742231357d45a776b7c38a78a83a7e4d",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "python3",
+          "scripts/check_clang_format.py",
+          "--base",
+          "9d19cc4eb7",
+          "--clang-format",
+          "/mnt/data/neverd-branch-debug-20261106/formatter/runtime/clang_format/data/bin/clang-format"
+        ],
+        "environment": {},
+        "binaries": {},
+        "exit_code": 0,
+        "seconds": 0.19420207804068923,
+        "log": "integration-format.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "provenance": {
+        "source_head": "3470cb2604d577ffe6d182042913e7b1875e76df",
+        "source_tree": "79d50fa4742231357d45a776b7c38a78a83a7e4d",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "python3",
+          "scripts/check_source_provenance.py"
+        ],
+        "environment": {},
+        "binaries": {},
+        "exit_code": 0,
+        "seconds": 13.733847903902642,
+        "log": "integration-provenance.log",
+        "log_sha256": "1a16f5630e08bbf61aad52398f3bded07c6d5240d327d8601f80d1ab47b01d86"
+      },
+      "docs": {
+        "source_head": "3470cb2604d577ffe6d182042913e7b1875e76df",
+        "source_tree": "79d50fa4742231357d45a776b7c38a78a83a7e4d",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "python3",
+          "scripts/check_docs_i18n.py"
+        ],
+        "environment": {},
+        "binaries": {},
+        "exit_code": 0,
+        "seconds": 2.98581101000309,
+        "log": "integration-docs.log",
+        "log_sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14"
+      },
+      "whitespace": {
+        "source_head": "3470cb2604d577ffe6d182042913e7b1875e76df",
+        "source_tree": "79d50fa4742231357d45a776b7c38a78a83a7e4d",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "environment": {},
+        "binaries": {},
+        "exit_code": 0,
+        "seconds": 0.03450154804158956,
+        "log": "integration-whitespace.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    "gitlinks": [
+      "160000 commit 6a7d5deb1d72d1201cd72df71212b6829b40dbeb\tthird_party/capstone",
+      "160000 commit 5676029e378c9e37adc16c8216a8e8453ffafcae\tthird_party/llvm-project",
+      "160000 commit 6de91515772ba90bd16df8a22565c9282a5fa082\tthird_party/unicorn"
+    ],
+    "artifacts": {
+      "identical_source_files_per_sdk": 1362,
+      "identical_source_shared_libraries_per_sdk": 340,
+      "identical_return_c_header_manifest_files_per_sdk": 260,
+      "source_index": "integration-source-artifact-hashes.json",
+      "source_index_sha256": "b6a18cc2a1e2021baa45ba069b02f31422edf6c05f610382ec7e257466863ccc",
+      "return_index": "integration-return-artifact-hashes.json",
+      "return_index_sha256": "a6d4d867591b28f19606fe2e8e5857d21d0feacaa5dced944061d4e5ecc27f7e"
+    },
+    "totals": {
+      "passing_executions": 1490,
+      "skipped_executions": 2,
+      "failures": 0
+    }
   }
 }
