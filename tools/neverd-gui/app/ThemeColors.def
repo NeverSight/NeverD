@@ -6,150 +6,189 @@
 ///
 /// \file
 /// Color roles of the custom-painted analysis views and their values in the
-/// Light and Dark themes.  The palettes follow the Visual Studio Code Light+
-/// and Dark+ color themes (token colors and editor surfaces); widget chrome is
+/// Light, Dark and the two high contrast themes.  The palettes follow the
+/// Visual Studio Code Light+, Dark+, Light High Contrast and Dark High
+/// Contrast color themes (token colors and editor surfaces); widget chrome is
 /// in ChromeColors.def.
 ///
 //===----------------------------------------------------------------------===//
 
-// NEVERD_THEME_COLOR(Role, Light, Dark)
+// NEVERD_THEME_COLOR(Role, Light, Dark, LightHighContrast, DarkHighContrast)
 #ifndef NEVERD_THEME_COLOR
 #error "Define NEVERD_THEME_COLOR before including ThemeColors.def"
 #endif
 
 // Listing spans: one role per entry of ListingRoles.def, named Listing<Role>.
-NEVERD_THEME_COLOR(ListingPlain, "#3B3B3B", "#D4D4D4")
-NEVERD_THEME_COLOR(ListingMnemonic, "#0000FF", "#569CD6")
-NEVERD_THEME_COLOR(ListingRegister, "#001080", "#9CDCFE")
-NEVERD_THEME_COLOR(ListingNumber, "#098658", "#B5CEA8")
-NEVERD_THEME_COLOR(ListingKeyword, "#0000FF", "#569CD6")
-NEVERD_THEME_COLOR(ListingPunctuation, "#3B3B3B", "#D4D4D4")
-NEVERD_THEME_COLOR(ListingCodeName, "#795E26", "#DCDCAA")
-NEVERD_THEME_COLOR(ListingDummyCodeName, "#795E26", "#DCDCAA")
-NEVERD_THEME_COLOR(ListingDataName, "#0070C1", "#4FC1FF")
-NEVERD_THEME_COLOR(ListingDummyDataName, "#0070C1", "#4FC1FF")
-NEVERD_THEME_COLOR(ListingImportName, "#AF00DB", "#C586C0")
-NEVERD_THEME_COLOR(ListingLibraryName, "#267F99", "#4EC9B0")
-NEVERD_THEME_COLOR(ListingString, "#A31515", "#CE9178")
-NEVERD_THEME_COLOR(ListingComment, "#008000", "#6A9955")
-NEVERD_THEME_COLOR(ListingAutoComment, "#808080", "#858585")
-NEVERD_THEME_COLOR(ListingXref, "#008000", "#6A9955")
-NEVERD_THEME_COLOR(ListingDirective, "#0000FF", "#569CD6")
-NEVERD_THEME_COLOR(ListingSeparator, "#7FAA7F", "#4E6E3E")
-NEVERD_THEME_COLOR(ListingSegmentName, "#267F99", "#4EC9B0")
-NEVERD_THEME_COLOR(ListingOpcodeBytes, "#808080", "#858585")
-NEVERD_THEME_COLOR(ListingLabel, "#795E26", "#DCDCAA")
-NEVERD_THEME_COLOR(ListingError, "#CD3131", "#F44747")
-NEVERD_THEME_COLOR(ListingFlowMnemonic, "#AF00DB", "#C586C0")
-NEVERD_THEME_COLOR(ListingStructOffset, "#267F99", "#4EC9B0")
+NEVERD_THEME_COLOR(ListingPlain, "#3B3B3B", "#D4D4D4", "#292929", "#FFFFFF")
+NEVERD_THEME_COLOR(ListingMnemonic, "#0000FF", "#569CD6", "#0F4A85", "#569CD6")
+NEVERD_THEME_COLOR(ListingRegister, "#001080", "#9CDCFE", "#001080", "#9CDCFE")
+NEVERD_THEME_COLOR(ListingNumber, "#098658", "#B5CEA8", "#096D48", "#B5CEA8")
+NEVERD_THEME_COLOR(ListingKeyword, "#0000FF", "#569CD6", "#0F4A85", "#569CD6")
+NEVERD_THEME_COLOR(ListingPunctuation, "#3B3B3B", "#D4D4D4", "#292929",
+                   "#FFFFFF")
+NEVERD_THEME_COLOR(ListingCodeName, "#795E26", "#DCDCAA", "#5E2CBC", "#DCDCAA")
+NEVERD_THEME_COLOR(ListingDummyCodeName, "#795E26", "#DCDCAA", "#5E2CBC",
+                   "#DCDCAA")
+NEVERD_THEME_COLOR(ListingDataName, "#0070C1", "#4FC1FF", "#02715D", "#4FC1FF")
+NEVERD_THEME_COLOR(ListingDummyDataName, "#0070C1", "#4FC1FF", "#02715D",
+                   "#4FC1FF")
+NEVERD_THEME_COLOR(ListingImportName, "#AF00DB", "#C586C0", "#811F3F",
+                   "#C586C0")
+NEVERD_THEME_COLOR(ListingLibraryName, "#267F99", "#4EC9B0", "#185E73",
+                   "#4EC9B0")
+NEVERD_THEME_COLOR(ListingString, "#A31515", "#CE9178", "#0F4A85", "#CE9178")
+NEVERD_THEME_COLOR(ListingComment, "#008000", "#6A9955", "#515151", "#7CA668")
+NEVERD_THEME_COLOR(ListingAutoComment, "#808080", "#858585", "#5A5A5A",
+                   "#A5A5A5")
+NEVERD_THEME_COLOR(ListingXref, "#008000", "#6A9955", "#515151", "#7CA668")
+NEVERD_THEME_COLOR(ListingDirective, "#0000FF", "#569CD6", "#0F4A85", "#569CD6")
+NEVERD_THEME_COLOR(ListingSeparator, "#7FAA7F", "#4E6E3E", "#0F4A85", "#6FC3DF")
+NEVERD_THEME_COLOR(ListingSegmentName, "#267F99", "#4EC9B0", "#185E73",
+                   "#4EC9B0")
+NEVERD_THEME_COLOR(ListingOpcodeBytes, "#808080", "#858585", "#5A5A5A",
+                   "#A5A5A5")
+NEVERD_THEME_COLOR(ListingLabel, "#795E26", "#DCDCAA", "#5E2CBC", "#DCDCAA")
+NEVERD_THEME_COLOR(ListingError, "#CD3131", "#F44747", "#B5200D", "#F48771")
+NEVERD_THEME_COLOR(ListingFlowMnemonic, "#AF00DB", "#C586C0", "#811F3F",
+                   "#C586C0")
+NEVERD_THEME_COLOR(ListingStructOffset, "#267F99", "#4EC9B0", "#185E73",
+                   "#4EC9B0")
 
 // How well a type fits the code's accesses, and the characters a search
 // matched, as Visual Studio Code's testing and list highlight colors.
-NEVERD_THEME_COLOR(FitExact, "#388A34", "#89D185")
-NEVERD_THEME_COLOR(FitPartial, "#BF8803", "#CCA700")
-NEVERD_THEME_COLOR(FitOutside, "#CD3131", "#F48771")
-NEVERD_THEME_COLOR(MatchHighlight, "#0066BF", "#2AAAFF")
+NEVERD_THEME_COLOR(FitExact, "#388A34", "#89D185", "#007100", "#73C991")
+NEVERD_THEME_COLOR(FitPartial, "#BF8803", "#CCA700", "#895503", "#FFD370")
+NEVERD_THEME_COLOR(FitOutside, "#CD3131", "#F48771", "#B5200D", "#F48771")
+NEVERD_THEME_COLOR(MatchHighlight, "#0066BF", "#2AAAFF", "#0F4A85", "#21A6FF")
 
 // Listing surfaces.
-NEVERD_THEME_COLOR(ListingBackground, "#FFFFFF", "#1E1E1E")
-NEVERD_THEME_COLOR(ListingPatched, "#FFF1C2", "#4B3B17")
-NEVERD_THEME_COLOR(ListingPatchedSelection, "#E8CD82", "#725620")
-NEVERD_THEME_COLOR(HexPatched, "#FFF1C2", "#4B3B17")
-NEVERD_THEME_COLOR(ListingCurrentLine, "#F0F0F0", "#2A2D2E")
-NEVERD_THEME_COLOR(ListingSelection, "#ADD6FF", "#264F78")
-NEVERD_THEME_COLOR(ListingHighlight, "#F8C9AA", "#623314")
-NEVERD_THEME_COLOR(ListingHighlightText, "#000000", "#FFFFFF")
+NEVERD_THEME_COLOR(ListingBackground, "#FFFFFF", "#1E1E1E", "#FFFFFF",
+                   "#000000")
+NEVERD_THEME_COLOR(ListingPatched, "#FFF1C2", "#4B3B17", "#FFF1C2", "#4B3B17")
+NEVERD_THEME_COLOR(ListingPatchedSelection, "#E8CD82", "#725620", "#E8CD82",
+                   "#725620")
+NEVERD_THEME_COLOR(HexPatched, "#FFF1C2", "#4B3B17", "#FFF1C2", "#4B3B17")
+NEVERD_THEME_COLOR(ListingCurrentLine, "#F0F0F0", "#2A2D2E", "#00000000",
+                   "#00000000")
+NEVERD_THEME_COLOR(ListingCurrentLineBorder, "#00000000", "#00000000",
+                   "#0F4A85", "#F38518")
+NEVERD_THEME_COLOR(ListingSelection, "#ADD6FF", "#264F78", "#0F4A85", "#FFFFFF")
+NEVERD_THEME_COLOR(ListingSelectionText, "#00000000", "#00000000", "#FFFFFF",
+                   "#000000")
+// The cursor's highlight and search matches: a fill, or in a high contrast
+// theme an outline, as Visual Studio Code's editor.wordHighlightBorder.
+NEVERD_THEME_COLOR(ListingHighlight, "#F8C9AA", "#623314", "#00000000",
+                   "#00000000")
+NEVERD_THEME_COLOR(ListingHighlightBorder, "#00000000", "#00000000", "#006BBD",
+                   "#F38518")
+NEVERD_THEME_COLOR(ListingHighlightText, "#000000", "#FFFFFF", "#FFFFFF",
+                   "#000000")
 // Lock highlight's colors, in the order of its Ctrl+Alt+1..8 commands; each
 // stands apart from the moving highlight above.
-NEVERD_THEME_COLOR(HighlightLock1, "#DCC7F2", "#55307A")
-NEVERD_THEME_COLOR(HighlightLock2, "#BFE8E2", "#1F5A54")
-NEVERD_THEME_COLOR(HighlightLock3, "#CFEBC1", "#2F5A24")
-NEVERD_THEME_COLOR(HighlightLock4, "#C6DBF7", "#24476F")
-NEVERD_THEME_COLOR(HighlightLock5, "#F6C6DD", "#6E2A4B")
-NEVERD_THEME_COLOR(HighlightLock6, "#F3E7A6", "#5E5418")
-NEVERD_THEME_COLOR(HighlightLock7, "#F4C3C0", "#6E2623")
-NEVERD_THEME_COLOR(HighlightLock8, "#C9D6DF", "#3A4B57")
-NEVERD_THEME_COLOR(ListingCursor, "#000000", "#AEAFAD")
-NEVERD_THEME_COLOR(ArrowsBackground, "#F7F7F7", "#1E1E1E")
-NEVERD_THEME_COLOR(ArrowJump, "#6E6E6E", "#808080")
-NEVERD_THEME_COLOR(ArrowConditional, "#0070C1", "#569CD6")
-NEVERD_THEME_COLOR(ArrowCurrent, "#E51400", "#F48771")
-NEVERD_THEME_COLOR(ArrowMarker, "#007ACC", "#007ACC")
+NEVERD_THEME_COLOR(HighlightLock1, "#DCC7F2", "#55307A", "#DCC7F2", "#55307A")
+NEVERD_THEME_COLOR(HighlightLock2, "#BFE8E2", "#1F5A54", "#BFE8E2", "#1F5A54")
+NEVERD_THEME_COLOR(HighlightLock3, "#CFEBC1", "#2F5A24", "#CFEBC1", "#2F5A24")
+NEVERD_THEME_COLOR(HighlightLock4, "#C6DBF7", "#24476F", "#C6DBF7", "#24476F")
+NEVERD_THEME_COLOR(HighlightLock5, "#F6C6DD", "#6E2A4B", "#F6C6DD", "#6E2A4B")
+NEVERD_THEME_COLOR(HighlightLock6, "#F3E7A6", "#5E5418", "#F3E7A6", "#5E5418")
+NEVERD_THEME_COLOR(HighlightLock7, "#F4C3C0", "#6E2623", "#F4C3C0", "#6E2623")
+NEVERD_THEME_COLOR(HighlightLock8, "#C9D6DF", "#3A4B57", "#C9D6DF", "#3A4B57")
+NEVERD_THEME_COLOR(ListingCursor, "#000000", "#AEAFAD", "#0F4A85", "#FFFFFF")
+NEVERD_THEME_COLOR(ArrowsBackground, "#F7F7F7", "#1E1E1E", "#FFFFFF", "#000000")
+NEVERD_THEME_COLOR(ArrowJump, "#6E6E6E", "#808080", "#292929", "#FFFFFF")
+NEVERD_THEME_COLOR(ArrowConditional, "#0070C1", "#569CD6", "#0F4A85", "#569CD6")
+NEVERD_THEME_COLOR(ArrowCurrent, "#E51400", "#F48771", "#B5200D", "#F48771")
+NEVERD_THEME_COLOR(ArrowMarker, "#007ACC", "#007ACC", "#006BBD", "#F38518")
 
 // Listing prefix colors: one per entry of AddressClasses.def.
-NEVERD_THEME_COLOR(PrefixUnmapped, "#A0A0A0", "#5A5A5A")
-NEVERD_THEME_COLOR(PrefixRegularFunction, "#237893", "#858585")
-NEVERD_THEME_COLOR(PrefixLibraryFunction, "#267F99", "#4EC9B0")
-NEVERD_THEME_COLOR(PrefixInstruction, "#A31515", "#CE9178")
-NEVERD_THEME_COLOR(PrefixData, "#808080", "#6E7681")
-NEVERD_THEME_COLOR(PrefixUnexplored, "#8A8A3C", "#9A9A5A")
-NEVERD_THEME_COLOR(PrefixExternal, "#AF00DB", "#C586C0")
+NEVERD_THEME_COLOR(PrefixUnmapped, "#A0A0A0", "#5A5A5A", "#7F7F7F", "#A5A5A5")
+NEVERD_THEME_COLOR(PrefixRegularFunction, "#237893", "#858585", "#292929",
+                   "#FFFFFF")
+NEVERD_THEME_COLOR(PrefixLibraryFunction, "#267F99", "#4EC9B0", "#185E73",
+                   "#4EC9B0")
+NEVERD_THEME_COLOR(PrefixInstruction, "#A31515", "#CE9178", "#0F4A85",
+                   "#CE9178")
+NEVERD_THEME_COLOR(PrefixData, "#808080", "#6E7681", "#5A5A5A", "#A5A5A5")
+NEVERD_THEME_COLOR(PrefixUnexplored, "#8A8A3C", "#9A9A5A", "#6E6A00", "#D7D700")
+NEVERD_THEME_COLOR(PrefixExternal, "#AF00DB", "#C586C0", "#811F3F", "#C586C0")
 
 // Navigation band: one per entry of AddressClasses.def, plus markers.
-NEVERD_THEME_COLOR(NavUnmapped, "#E5E5E5", "#252526")
-NEVERD_THEME_COLOR(NavRegularFunction, "#007ACC", "#3F85C4")
-NEVERD_THEME_COLOR(NavLibraryFunction, "#4EC9B0", "#53AB97")
-NEVERD_THEME_COLOR(NavInstruction, "#C97C55", "#BA836D")
-NEVERD_THEME_COLOR(NavData, "#A0A0A0", "#696969")
-NEVERD_THEME_COLOR(NavUnexplored, "#B4B464", "#77784E")
-NEVERD_THEME_COLOR(NavExternal, "#C586C0", "#B17EAD")
-NEVERD_THEME_COLOR(NavCursor, "#FFCC00", "#FFD700")
-NEVERD_THEME_COLOR(NavCursorOutline, "#3B3B3B", "#000000")
+NEVERD_THEME_COLOR(NavUnmapped, "#E5E5E5", "#252526", "#E5E5E5", "#252526")
+NEVERD_THEME_COLOR(NavRegularFunction, "#007ACC", "#3F85C4", "#007ACC",
+                   "#3F85C4")
+NEVERD_THEME_COLOR(NavLibraryFunction, "#4EC9B0", "#53AB97", "#4EC9B0",
+                   "#53AB97")
+NEVERD_THEME_COLOR(NavInstruction, "#C97C55", "#BA836D", "#C97C55", "#BA836D")
+NEVERD_THEME_COLOR(NavData, "#A0A0A0", "#696969", "#A0A0A0", "#696969")
+NEVERD_THEME_COLOR(NavUnexplored, "#B4B464", "#77784E", "#B4B464", "#77784E")
+NEVERD_THEME_COLOR(NavExternal, "#C586C0", "#B17EAD", "#C586C0", "#B17EAD")
+NEVERD_THEME_COLOR(NavCursor, "#FFCC00", "#FFD700", "#FFCC00", "#FFD700")
+NEVERD_THEME_COLOR(NavCursorOutline, "#3B3B3B", "#000000", "#292929", "#000000")
 
 // Choosers: row tints for import thunks and recognized library functions.
-NEVERD_THEME_COLOR(ChooserThunkRow, "#F8ECF7", "#312630")
-NEVERD_THEME_COLOR(ChooserLibraryRow, "#E7F6F3", "#1F2D2B")
+NEVERD_THEME_COLOR(ChooserThunkRow, "#F8ECF7", "#312630", "#F8ECF7", "#312630")
+NEVERD_THEME_COLOR(ChooserLibraryRow, "#E7F6F3", "#1F2D2B", "#E7F6F3",
+                   "#1F2D2B")
 
 // Graph view.
-NEVERD_THEME_COLOR(GraphBackground, "#F3F3F3", "#181818")
-NEVERD_THEME_COLOR(GraphNodeBody, "#FFFFFF", "#1E1E1E")
-NEVERD_THEME_COLOR(GraphNodeTitle, "#E8E8E8", "#2D2D2D")
-NEVERD_THEME_COLOR(GraphNodeTitleCurrent, "#CCE4F7", "#04395E")
-NEVERD_THEME_COLOR(GraphNodeBorder, "#C8C8C8", "#454545")
-NEVERD_THEME_COLOR(GraphNodeBorderSelected, "#0090F1", "#007FD4")
-NEVERD_THEME_COLOR(GraphNodeShadow, "#D6D6D6", "#0A0A0A")
-NEVERD_THEME_COLOR(GraphEdgeNormal, "#0070C1", "#569CD6")
-NEVERD_THEME_COLOR(GraphEdgeTrue, "#388A34", "#89D185")
-NEVERD_THEME_COLOR(GraphEdgeFalse, "#CD3131", "#F48771")
-NEVERD_THEME_COLOR(GraphEdgeHighlight, "#E2A700", "#FFD700")
+NEVERD_THEME_COLOR(GraphBackground, "#F3F3F3", "#181818", "#FFFFFF", "#000000")
+NEVERD_THEME_COLOR(GraphNodeBody, "#FFFFFF", "#1E1E1E", "#FFFFFF", "#000000")
+NEVERD_THEME_COLOR(GraphNodeTitle, "#E8E8E8", "#2D2D2D", "#FFFFFF", "#000000")
+NEVERD_THEME_COLOR(GraphNodeTitleCurrent, "#CCE4F7", "#04395E", "#1A0F4A85",
+                   "#1AFFFFFF")
+NEVERD_THEME_COLOR(GraphNodeBorder, "#C8C8C8", "#454545", "#0F4A85", "#6FC3DF")
+NEVERD_THEME_COLOR(GraphNodeBorderSelected, "#0090F1", "#007FD4", "#006BBD",
+                   "#F38518")
+NEVERD_THEME_COLOR(GraphNodeShadow, "#D6D6D6", "#0A0A0A", "#00000000",
+                   "#00000000")
+NEVERD_THEME_COLOR(GraphEdgeNormal, "#0070C1", "#569CD6", "#0F4A85", "#569CD6")
+NEVERD_THEME_COLOR(GraphEdgeTrue, "#388A34", "#89D185", "#007100", "#73C991")
+NEVERD_THEME_COLOR(GraphEdgeFalse, "#CD3131", "#F48771", "#B5200D", "#F48771")
+NEVERD_THEME_COLOR(GraphEdgeHighlight, "#E2A700", "#FFD700", "#895503",
+                   "#FFD370")
 // The edge a click selected, apart from the current block's edges.
-NEVERD_THEME_COLOR(GraphEdgeSelected, "#E8590C", "#FF922B")
-NEVERD_THEME_COLOR(GraphOverviewViewport, "#0090F1", "#007FD4")
-NEVERD_THEME_COLOR(GraphOverviewNode, "#A6A6A6", "#6E7681")
+NEVERD_THEME_COLOR(GraphEdgeSelected, "#E8590C", "#FF922B", "#006BBD",
+                   "#F38518")
+NEVERD_THEME_COLOR(GraphOverviewViewport, "#0090F1", "#007FD4", "#006BBD",
+                   "#F38518")
+NEVERD_THEME_COLOR(GraphOverviewNode, "#A6A6A6", "#6E7681", "#7F7F7F",
+                   "#A5A5A5")
 
 // Hex view.
-NEVERD_THEME_COLOR(HexBackground, "#FFFFFF", "#1E1E1E")
-NEVERD_THEME_COLOR(HexAddress, "#237893", "#858585")
-NEVERD_THEME_COLOR(HexByte, "#3B3B3B", "#D4D4D4")
-NEVERD_THEME_COLOR(HexZero, "#A0A0A0", "#6E6E6E")
-NEVERD_THEME_COLOR(HexAscii, "#A31515", "#CE9178")
-NEVERD_THEME_COLOR(HexUnmapped, "#C8C8C8", "#4A4A4A")
-NEVERD_THEME_COLOR(HexCurrent, "#ADD6FF", "#264F78")
-NEVERD_THEME_COLOR(HexCurrentText, "#000000", "#FFFFFF")
+NEVERD_THEME_COLOR(HexBackground, "#FFFFFF", "#1E1E1E", "#FFFFFF", "#000000")
+NEVERD_THEME_COLOR(HexAddress, "#237893", "#858585", "#292929", "#FFFFFF")
+NEVERD_THEME_COLOR(HexByte, "#3B3B3B", "#D4D4D4", "#292929", "#FFFFFF")
+NEVERD_THEME_COLOR(HexZero, "#A0A0A0", "#6E6E6E", "#7F7F7F", "#A5A5A5")
+NEVERD_THEME_COLOR(HexAscii, "#A31515", "#CE9178", "#0F4A85", "#CE9178")
+NEVERD_THEME_COLOR(HexUnmapped, "#C8C8C8", "#4A4A4A", "#7F7F7F", "#A5A5A5")
+NEVERD_THEME_COLOR(HexCurrent, "#ADD6FF", "#264F78", "#0F4A85", "#FFFFFF")
+NEVERD_THEME_COLOR(HexCurrentText, "#000000", "#FFFFFF", "#FFFFFF", "#000000")
 
 // Pseudocode and IR text.
-NEVERD_THEME_COLOR(CodeBackground, "#FFFFFF", "#1E1E1E")
-NEVERD_THEME_COLOR(CodeDefault, "#3B3B3B", "#D4D4D4")
-NEVERD_THEME_COLOR(CodeKeyword, "#0000FF", "#569CD6")
-NEVERD_THEME_COLOR(CodeControl, "#AF00DB", "#C586C0")
-NEVERD_THEME_COLOR(CodeType, "#267F99", "#4EC9B0")
-NEVERD_THEME_COLOR(CodeNumber, "#098658", "#B5CEA8")
-NEVERD_THEME_COLOR(CodeString, "#A31515", "#CE9178")
-NEVERD_THEME_COLOR(CodeComment, "#008000", "#6A9955")
-NEVERD_THEME_COLOR(CodeFunction, "#795E26", "#DCDCAA")
-NEVERD_THEME_COLOR(CodeVariable, "#001080", "#9CDCFE")
-NEVERD_THEME_COLOR(CodeConstant, "#0070C1", "#4FC1FF")
-NEVERD_THEME_COLOR(CodePunctuation, "#3B3B3B", "#D4D4D4")
-NEVERD_THEME_COLOR(CodePreprocessor, "#AF00DB", "#C586C0")
-NEVERD_THEME_COLOR(CodeLineNumber, "#237893", "#858585")
-NEVERD_THEME_COLOR(CodeFold, "#E8F0FE", "#2A3A4A")
+NEVERD_THEME_COLOR(CodeBackground, "#FFFFFF", "#1E1E1E", "#FFFFFF", "#000000")
+NEVERD_THEME_COLOR(CodeDefault, "#3B3B3B", "#D4D4D4", "#292929", "#FFFFFF")
+NEVERD_THEME_COLOR(CodeKeyword, "#0000FF", "#569CD6", "#0F4A85", "#569CD6")
+NEVERD_THEME_COLOR(CodeControl, "#AF00DB", "#C586C0", "#0F4A85", "#569CD6")
+NEVERD_THEME_COLOR(CodeType, "#267F99", "#4EC9B0", "#185E73", "#4EC9B0")
+NEVERD_THEME_COLOR(CodeNumber, "#098658", "#B5CEA8", "#096D48", "#B5CEA8")
+NEVERD_THEME_COLOR(CodeString, "#A31515", "#CE9178", "#0F4A85", "#CE9178")
+NEVERD_THEME_COLOR(CodeComment, "#008000", "#6A9955", "#515151", "#7CA668")
+NEVERD_THEME_COLOR(CodeFunction, "#795E26", "#DCDCAA", "#5E2CBC", "#DCDCAA")
+NEVERD_THEME_COLOR(CodeVariable, "#001080", "#9CDCFE", "#001080", "#9CDCFE")
+NEVERD_THEME_COLOR(CodeConstant, "#0070C1", "#4FC1FF", "#02715D", "#4FC1FF")
+NEVERD_THEME_COLOR(CodePunctuation, "#3B3B3B", "#D4D4D4", "#292929", "#FFFFFF")
+NEVERD_THEME_COLOR(CodePreprocessor, "#AF00DB", "#C586C0", "#0F4A85", "#569CD6")
+NEVERD_THEME_COLOR(CodeLineNumber, "#237893", "#858585", "#292929", "#FFFFFF")
+NEVERD_THEME_COLOR(CodeFold, "#E8F0FE", "#2A3A4A", "#1A0F4A85", "#1AFFFFFF")
 // The bracket under the cursor and its partner, as the editor's bracket match.
-NEVERD_THEME_COLOR(CodeBracketMatch, "#E5EFE5", "#1B251B")
-NEVERD_THEME_COLOR(CodeBracketMatchBorder, "#B9B9B9", "#888888")
+NEVERD_THEME_COLOR(CodeBracketMatch, "#E5EFE5", "#1B251B", "#00000000",
+                   "#1A006400")
+NEVERD_THEME_COLOR(CodeBracketMatchBorder, "#B9B9B9", "#888888", "#0F4A85",
+                   "#6FC3DF")
 
 // Structural comparison states also carry a text label.
-NEVERD_THEME_COLOR(DiffAdded, "#26712A", "#89D185")
-NEVERD_THEME_COLOR(DiffRemoved, "#B92338", "#F48791")
-NEVERD_THEME_COLOR(DiffChanged, "#875C00", "#E2C08D")
+NEVERD_THEME_COLOR(DiffAdded, "#26712A", "#89D185", "#007100", "#73C991")
+NEVERD_THEME_COLOR(DiffRemoved, "#B92338", "#F48791", "#B5200D", "#F48771")
+NEVERD_THEME_COLOR(DiffChanged, "#875C00", "#E2C08D", "#895503", "#FFD370")
 
 #undef NEVERD_THEME_COLOR

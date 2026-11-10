@@ -179,6 +179,8 @@ private:
   unsigned commands_ = 0;
   ChooserModel *model_;
   QTreeView *table_;
+  /// Holds the filter with its margins, and hides with it.
+  QWidget *filterRow_;
   QLineEdit *filter_;
   QLabel *status_;
   QTimer filterTimer_;

@@ -2,6 +2,8 @@
 
 #include "../Config.h"
 #include "../ResourceLimits.h"
+#include "DevicePixels.h"
+#include "HighlightLocks.h"
 #include "Icons.h"
 #include "InterpreterRecoveryDialog.h"
 #include "Session.h"
@@ -1834,9 +1836,14 @@ void CodeText::paintEvent(QPaintEvent *) {
   for (int i = first; i <= last; ++i) {
     const int y = (i - first) * lineHeight_;
     const QRect row(0, y, area.width(), lineHeight_);
-    if (i == cursorLine_)
+    if (i == cursorLine_) {
       painter.fillRect(row, theme.color(ColorRole::ListingCurrentLine));
-    else if (marked_.contains(i) || lines_[i].folded)
+      // A high contrast theme outlines the line instead.
+      paintDeviceBox(
+          painter, row,
+          DeviceBox{QColor(),
+                    theme.color(ColorRole::ListingCurrentLineBorder)});
+    } else if (marked_.contains(i) || lines_[i].folded)
       painter.fillRect(row, theme.color(ColorRole::CodeFold));
     const int gutterRight = ::neverd::limits::gui_config::kCodeViewMargin +
                             int((gutterChars_ + 2) * charWidth_);
@@ -1849,8 +1856,8 @@ void CodeText::paintEvent(QPaintEvent *) {
       const auto fill = [&](int first, int last, ColorRole role) {
         const qreal x0 = textLine.cursorToX(first);
         const qreal x1 = textLine.cursorToX(last);
-        painter.fillRect(QRectF(left + x0, y, x1 - x0, lineHeight_),
-                         theme.color(role));
+        paintHighlight(painter, QRectF(left + x0, y, x1 - x0, lineHeight_),
+                       role);
       };
       if (!SearchHighlight.Text.isEmpty()) {
         for (const int at : SearchHighlight.matches(lines_[i].styled.text))
@@ -1895,6 +1902,10 @@ void CodeText::paintEvent(QPaintEvent *) {
                           : int(lines_[i].styled.text.size());
       range.length = std::max(0, end - range.start);
       range.format.setBackground(theme.color(ColorRole::ListingSelection));
+      // A high contrast theme's selection takes a text color of its own.
+      if (const QColor text = theme.color(ColorRole::ListingSelectionText);
+          text.alpha() > 0)
+        range.format.setForeground(text);
       selection.append(range);
     }
     layout.draw(&painter, QPointF(left, y), selection);

@@ -362,7 +362,11 @@ void HexView::paintEvent(QPaintEvent *) {
       painter.fillRect(QRectF(::neverd::limits::gui_config::kHexViewMargin, y,
                               digits * charWidth_, lineHeight_),
                        theme.color(ColorRole::ListingSelection));
-    painter.setPen(theme.color(ColorRole::HexAddress));
+    // A high contrast theme's selection takes a text color of its own.
+    const QColor selectionText = theme.color(ColorRole::ListingSelectionText);
+    painter.setPen(addressRow_ == rowAddress && selectionText.alpha() > 0
+                       ? selectionText
+                       : theme.color(ColorRole::HexAddress));
     painter.drawText(
         QPointF(::neverd::limits::gui_config::kHexViewMargin, y + ascent_),
         displayAddress(*rowAddress, digits));
@@ -418,17 +422,22 @@ void HexView::paintEvent(QPaintEvent *) {
         continue;
       }
       const auto value = static_cast<unsigned char>(source->data.at(offset));
-      painter.setPen(current ? theme.color(ColorRole::HexCurrentText)
-                     : value ? theme.color(ColorRole::HexByte)
-                             : theme.color(ColorRole::HexZero));
+      const bool selected = !current && isSelected(address) &&
+                            !session_.hasBytePatch(address) &&
+                            selectionText.alpha() > 0;
+      painter.setPen(current    ? theme.color(ColorRole::HexCurrentText)
+                     : selected ? selectionText
+                     : value    ? theme.color(ColorRole::HexByte)
+                                : theme.color(ColorRole::HexZero));
       if (session_.hasBytePatch(address))
         painter.drawLine(QPointF(x, y + lineHeight_ - 1),
                          QPointF(x + 2 * charWidth_, y + lineHeight_ - 1));
       painter.drawText(
           QPointF(x, y + ascent_),
           QStringLiteral("%1").arg(value, 2, 16, QLatin1Char('0')).toUpper());
-      painter.setPen(current ? theme.color(ColorRole::HexCurrentText)
-                             : theme.color(ColorRole::HexAscii));
+      painter.setPen(current    ? theme.color(ColorRole::HexCurrentText)
+                     : selected ? selectionText
+                                : theme.color(ColorRole::HexAscii));
       if (!source->cells.isEmpty()) {
         // A character's continuation bytes show nothing of their own.
         if (const auto &cell = source->cells.at(offset); !cell.isEmpty())

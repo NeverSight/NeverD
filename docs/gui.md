@@ -5,7 +5,8 @@ The desktop workbench is a Qt Widgets application with separate
 in the classic interactive disassembler layout and keeps that layout's window
 names, menus and default shortcuts, so
 existing muscle memory carries over; colors follow the Visual Studio Code Dark+
-(default) and Light+ themes, and every icon is original NeverD artwork. The
+(default), Light+ and high contrast themes, and every icon is original NeverD
+artwork. The
 workers link the same `libneverd` shared library as the CLI through its public C
 ABI: analysis, function discovery and decompilation stay in that library, and Qt
 owns presentation and request coordination. Source and graph requests use a
@@ -1604,6 +1605,14 @@ reason in Output. No missing argument is filled with an invented value.
 The UI starts in English and bundles all 11 project languages; **Options →
 Language** switches immediately without reloading the analysis, and Arabic
 mirrors the window chrome while code and addresses stay left to right.
+
+**Options → General → Theme** chooses Visual Studio Code's Dark+, Light+, Dark
+High Contrast or Light High Contrast colors, or **System**, which follows the
+desktop's light or dark mode and switches to the high contrast theme of the
+same brightness while Windows runs a High Contrast theme or macOS has Increase
+Contrast on, as Visual Studio Code's `window.autoDetectColorScheme` and
+`window.autoDetectHighContrast` do. The high contrast themes outline the
+selected or hovered item where the others fill it.
 
 **View → Open subviews → Analysis queries** runs the built-in image metadata,
 functions and strings queries. **Import queries…** adds query definitions from

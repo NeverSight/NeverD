@@ -1,11 +1,14 @@
 #include "WorkbenchStyle.h"
 
 #include "../Config.h"
+#include "DevicePixels.h"
 #include "Icons.h"
 #include "Theme.h"
 
 #include <QAbstractButton>
 #include <QAbstractItemView>
+#include <QAbstractScrollArea>
+#include <QAbstractSpinBox>
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
@@ -17,21 +20,28 @@
 #include <QHeaderView>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
 #include <QPainter>
+#include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QScreen>
+#include <QSplitter>
+#include <QSplitterHandle>
+#include <QStatusBar>
 #include <QStyleFactory>
 #include <QStyleOption>
 #include <QStyledItemDelegate>
 #include <QTabBar>
+#include <QTextEdit>
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeView>
 #include <algorithm>
+#include <optional>
 
 namespace neverd::gui {
 namespace {
@@ -43,6 +53,13 @@ constexpr char FileDialogDetails[] = "treeView";
 constexpr char FittedColumns[] = "neverdFittedColumns";
 /// Marks a header whose columns keep their headings whole.
 constexpr char FittedHeadings[] = "neverdFittedHeadings";
+/// The object names of the widgets whose boxes the theme style sheet names:
+/// the Quick Start dialog's actions, which paint themselves, the patch
+/// editor, the card a file's loading shows on, and the command palette.
+constexpr char QuickStartAction[] = "quickStartAction";
+constexpr char PatchEditor[] = "patchEditor";
+constexpr char LoadProgressCard[] = "loadProgressCard";
+constexpr char CommandPalette[] = "commandPalette";
 
 /// Lets a file dialog's names take the width its size, type and date leave.
 /// Qt sizes those three from samples narrower than what it shows ("128.88
@@ -93,8 +110,8 @@ void openWithRoom(QDialog &dialog) {
 
 /// Where keyboard focus frames a control: a button's whole face, a check
 /// box's or radio button's box with its label, a tab; the rectangle Qt gives
-/// hugs only the label.
-QRectF focusFrame(const QStyleOption &option, const QWidget *widget) {
+/// hugs only the label.  The frame's line runs just inside it.
+QRect focusFrame(const QStyleOption &option, const QWidget *widget) {
   QRect frame = option.rect;
   if (qobject_cast<const QPushButton *>(widget) ||
       qobject_cast<const QToolButton *>(widget)) {
@@ -120,9 +137,7 @@ QRectF focusFrame(const QStyleOption &option, const QWidget *widget) {
     if (const int tab = tabs->tabAt(option.rect.center()); tab >= 0)
       frame = tabs->tabRect(tab);
   }
-  const qreal inset =
-      ::neverd::limits::gui_config::kWorkbenchStyleFocusFrameWidth / 2;
-  return QRectF(frame).adjusted(inset, inset, -inset, -inset);
+  return frame;
 }
 
 /// Keeps each column a person can resize at least as wide as its heading:
@@ -251,6 +266,268 @@ bool drawsMnemonics(const QWidget *widget) {
          qobject_cast<const QGroupBox *>(widget) ||
          qobject_cast<const QTabBar *>(widget);
 }
+
+/// A color of the theme's chrome (ChromeColors.def).
+QColor chrome(const char *name) {
+  return Theme::instance().chrome(QLatin1String(name));
+}
+
+/// The chrome color \p name where the theme draws it, as a high contrast
+/// theme outlines what the others fill, or else \p otherwise.
+QColor chromeOr(const char *name, const QColor &otherwise) {
+  const QColor color = chrome(name);
+  return color.alpha() > 0 ? color : otherwise;
+}
+
+/// The style option \p widget hands the style as it paints itself, with the
+/// state the style sheet's pseudo-states read: a tool button counts as
+/// pressed while its menu shows, a push button as a dialog's default while it
+/// has focus.
+template <typename Widget, typename Option>
+Option paintedOption(const Widget &widget) {
+  // Qt lets only the widget's subclasses fill one in.
+  struct Access : Widget {
+    using Widget::initStyleOption;
+  };
+  Option option;
+  (widget.*(&Access::initStyleOption))(&option);
+  return option;
+}
+
+/// Whether \p widget stands inside an \p Ancestor, as a style sheet's
+/// descendant selector matches it.
+template <typename Ancestor> bool inside(const QWidget &widget) {
+  for (const QWidget *parent = widget.parentWidget(); parent;
+       parent = parent->parentWidget())
+    if (qobject_cast<const Ancestor *>(parent))
+      return true;
+  return false;
+}
+
+/// Whether \p widget is a field: a line edit other than a combo box's or spin
+/// box's own editor, a combo box, a spin box, or a text edit that takes
+/// typing.  A text edit that only shows text has no box.
+bool isField(const QWidget &widget) {
+  if (qobject_cast<const QComboBox *>(&widget) ||
+      qobject_cast<const QAbstractSpinBox *>(&widget))
+    return true;
+  if (qobject_cast<const QLineEdit *>(&widget))
+    return !inside<QComboBox>(widget) &&
+           !qobject_cast<const QAbstractSpinBox *>(widget.parentWidget());
+  if (const auto *plain = qobject_cast<const QPlainTextEdit *>(&widget))
+    return !plain->isReadOnly();
+  if (const auto *rich = qobject_cast<const QTextEdit *>(&widget))
+    return !rich->isReadOnly();
+  return false;
+}
+
+/// A field's box: the input fill and gray outline, the focus color's outline
+/// while it has focus, and only a quieter outline while it cannot take input,
+/// as Windows 11 draws a disabled text box.  A text edit, which the style
+/// sheet frames as it frames every scroll area, takes its outline only with
+/// focus and shows nothing while it cannot take input.
+DeviceBox fieldFace(const QWidget &field) {
+  DeviceBox face;
+  face.radius = ::neverd::limits::gui_config::kWorkbenchStyleControlRadius;
+  const bool editor = qobject_cast<const QAbstractScrollArea *>(&field);
+  if (!field.isEnabled()) {
+    face.border = editor ? QColor() : chrome("DisabledBorder");
+    face.borderWidth = editor ? 0 : 1;
+    return face;
+  }
+  face.fill = chrome("Input");
+  if (editor && !field.hasFocus())
+    face.borderWidth = 0;
+  else
+    face.border = chrome(field.hasFocus() ? "Focus" : "InputBorder");
+  return face;
+}
+
+/// A push button's face: a dialog's default in the accent, any other in the
+/// button gray, each a shade darker under the pointer.  One that cannot act
+/// gives up its fill and keeps its outline; a default one keeps a faint
+/// accent instead, so the dialog's default action stays recognizable.  A
+/// high contrast theme outlines a button under the pointer in place of the
+/// darker shade.
+DeviceBox pushButtonFace(const QPushButton &button) {
+  const auto option = paintedOption<QPushButton, QStyleOptionButton>(button);
+  const bool enabled = option.state & QStyle::State_Enabled;
+  const bool hover = enabled && (option.state & QStyle::State_MouseOver);
+  DeviceBox face;
+  face.radius = ::neverd::limits::gui_config::kWorkbenchStyleControlRadius;
+  if (option.features & QStyleOptionButton::DefaultButton) {
+    if (!enabled) {
+      face.fill = chrome("ButtonPrimaryDisabled");
+      face.border = chrome("ButtonPrimaryDisabledBorder");
+      return face;
+    }
+    face.fill = chrome(hover ? "ButtonPrimaryHover" : "ButtonPrimary");
+    face.border =
+        hover ? chromeOr("ButtonHoverBorder", chrome("ButtonPrimaryBorder"))
+              : chrome("ButtonPrimaryBorder");
+    return face;
+  }
+  if (!enabled) {
+    face.border = chrome("DisabledBorder");
+    return face;
+  }
+  face.fill = chrome(hover ? "ButtonHover" : "Button");
+  face.border = hover ? chromeOr("ButtonHoverBorder", chrome("Border"))
+                      : chrome("Border");
+  return face;
+}
+
+/// A tool button's face, flat until the pointer is over it: the hover gray
+/// then, the selection color while it is pressed or on, and an outline of the
+/// focus color while it has focus.  A toggle whose glyph shows its state, as
+/// a disclosure's chevron points, takes no fill for it; one that is on but
+/// cannot act keeps an outline in place of its fill.  A tab bar's scroll
+/// arrows are square and fill with the bar.
+DeviceBox toolButtonFace(const QToolButton &button) {
+  const auto option =
+      paintedOption<QToolButton, QStyleOptionToolButton>(button);
+  const bool enabled = option.state & QStyle::State_Enabled;
+  const bool hover = enabled && (option.state & QStyle::State_MouseOver);
+  const bool pressed = option.state & QStyle::State_Sunken;
+  const bool on = option.state & QStyle::State_On;
+  DeviceBox face;
+  if (inside<QTabBar>(button)) {
+    face.fill = chrome(hover             ? "ToolBarHover"
+                       : (pressed || on) ? "ToolButtonChecked"
+                                         : "TabBar");
+    // Inside the button; the style sheet gives these arrows no border.
+    if (hover)
+      face.border = chrome("ToolBarHoverBorder");
+    return face;
+  }
+  face.radius = ::neverd::limits::gui_config::kWorkbenchStyleToolButtonRadius;
+  const bool glyph = button.property("glyphToggle").toBool();
+  if (glyph && hover)
+    face.fill = chrome("ToolBarHover");
+  else if (!glyph && (pressed || on) && enabled)
+    face.fill = chrome("ToolButtonChecked");
+  else if (!glyph && hover)
+    face.fill = chrome("ToolBarHover");
+  if (on && !enabled)
+    face.border = glyph ? QColor() : chrome("DisabledBorder");
+  else if (option.state & QStyle::State_HasFocus)
+    face.border = chrome("Focus");
+  else if (hover)
+    face.border = chrome("ToolBarHoverBorder");
+  return face;
+}
+
+/// The box the workbench paints under \p widget's own painting, in place of
+/// the one its style sheet rule describes: a field's, a button's and a tool
+/// button's face, and the frames of a combo box's list, the patch editor, the
+/// load card and the command palette.  Their rules keep the box model, with a
+/// transparent border of the same width, and the colors are the rules' that
+/// came before.  Qt would draw the box across device pixels at a fractional
+/// scale (DevicePixels).  None: the widget's own rule paints it, if any.
+std::optional<DeviceBox> faceOf(const QWidget &widget) {
+  namespace config = ::neverd::limits::gui_config;
+  if (isField(widget))
+    return fieldFace(widget);
+  if (const auto *button = qobject_cast<const QPushButton *>(&widget)) {
+    if (button->objectName() == QLatin1String(QuickStartAction))
+      return std::nullopt;
+    return pushButtonFace(*button);
+  }
+  if (const auto *button = qobject_cast<const QToolButton *>(&widget)) {
+    // A line edit's clear button paints only its glyph.
+    if (button->inherits("QLineEditIconButton"))
+      return std::nullopt;
+    return toolButtonFace(*button);
+  }
+  if (qobject_cast<const QAbstractItemView *>(&widget) &&
+      inside<QComboBox>(widget))
+    return DeviceBox{chrome("Menu"), chrome("MenuSeparator")};
+  const QString name = widget.objectName();
+  if (name == QLatin1String(PatchEditor))
+    return DeviceBox{chrome("Window"), chrome("Border")};
+  if (name == QLatin1String(LoadProgressCard))
+    return DeviceBox{chrome("Menu"), chrome("Border"), 1, DeviceBox().edges,
+                     config::kWorkbenchStyleCardRadius};
+  // The palette is a window; its own fill is the window's.
+  if (name == QLatin1String(CommandPalette))
+    return DeviceBox{QColor(), chrome("MenuSeparator")};
+  return std::nullopt;
+}
+
+/// A check box's, radio button's or list item's box and its mark, as the
+/// theme drew them through the style sheet: the accent and a white mark while
+/// on, the focus color's outline under the pointer, and only an outline while
+/// it cannot act.  A list's boxes neither answer the pointer nor dim.
+void paintIndicator(QStyle::PrimitiveElement element,
+                    const QStyleOption &option, QPainter &painter) {
+  namespace config = ::neverd::limits::gui_config;
+  const bool radio = element == QStyle::PE_IndicatorRadioButton;
+  const bool item = element == QStyle::PE_IndicatorItemViewItemCheck;
+  const bool enabled = item || (option.state & QStyle::State_Enabled);
+  const bool partial = !radio && (option.state & QStyle::State_NoChange);
+  const bool marked = partial || (option.state & QStyle::State_On);
+  const bool hover =
+      !item && enabled && (option.state & QStyle::State_MouseOver);
+  DeviceBox box;
+  box.radius =
+      radio ? option.rect.width() / 2.0 : config::kWorkbenchStyleCheckBoxRadius;
+  if (!enabled) {
+    box.fill = marked ? chrome("DisabledText") : QColor();
+    box.border = chrome(marked ? "DisabledText" : "DisabledBorder");
+  } else if (marked) {
+    box.fill = chrome("CheckboxChecked");
+    box.border = chrome("CheckboxCheckedBorder");
+  } else {
+    box.fill = chrome("CheckboxBackground");
+    box.border = chrome(hover ? "Focus" : "CheckboxBorder");
+  }
+  paintDeviceBox(painter, option.rect, box);
+  if (!marked)
+    return;
+  // The style sheet drew the mark from its image inside the box's border.
+  const QIcon mark(QStringLiteral(":/neverd/icons/%1.svg")
+                       .arg(QLatin1String(radio     ? "radio_dot"
+                                          : partial ? "check_partial"
+                                                    : "check")));
+  DevicePixels device(painter);
+  const QRect area = device.rect(option.rect);
+  const int width = device.width(box.borderWidth);
+  const QRect inner = area.adjusted(width, width, -width, -width);
+  if (!device.snaps()) {
+    mark.paint(&painter, inner, Qt::AlignCenter);
+    return;
+  }
+  // On device pixels the mark is drawn at their size, one to one.
+  painter.drawPixmap(inner.topLeft(), mark.pixmap(inner.size(), 1.0));
+}
+
+/// Where a tab's label goes: inside the line along its top and the
+/// separator at its end, and inside its padding.
+QRect tabContents(const QRect &tab) {
+  namespace config = ::neverd::limits::gui_config;
+  return tab.adjusted(config::kWorkbenchStyleTabPadding.left(),
+                      1 + config::kWorkbenchStyleTabPadding.top(),
+                      -1 - config::kWorkbenchStyleTabPadding.right(),
+                      -config::kWorkbenchStyleTabPadding.bottom());
+}
+
+/// A tab's label color: the active text on the selected tab and under the
+/// pointer, the inactive text on the others, and the disabled text on one
+/// that cannot be chosen.
+QColor tabText(const QStyleOptionTab &tab) {
+  if (!(tab.state & QStyle::State_Enabled))
+    return chrome("DisabledText");
+  return chrome(tab.state & (QStyle::State_Selected | QStyle::State_MouseOver)
+                    ? "TabActiveText"
+                    : "TabInactiveText");
+}
+
+bool verticalTab(const QStyleOptionTab &tab) {
+  return tab.shape == QTabBar::RoundedEast ||
+         tab.shape == QTabBar::RoundedWest ||
+         tab.shape == QTabBar::TriangularEast ||
+         tab.shape == QTabBar::TriangularWest;
+}
 } // namespace
 
 WorkbenchStyle::WorkbenchStyle()
@@ -258,15 +535,98 @@ WorkbenchStyle::WorkbenchStyle()
 
 int WorkbenchStyle::pixelMetric(PixelMetric metric, const QStyleOption *option,
                                 const QWidget *widget) const {
-  if (metric == PM_ToolBarIconSize)
+  switch (metric) {
+  case PM_ToolBarIconSize:
     return ::neverd::limits::gui_config::kWorkbenchStyleSmallIconSize;
-  return QProxyStyle::pixelMetric(metric, option, widget);
+  // A tab's padding is its room (CT_TabBarTab), and its label stays put when
+  // it is selected.
+  case PM_TabBarTabHSpace:
+  case PM_TabBarTabVSpace:
+  case PM_TabBarTabShiftHorizontal:
+  case PM_TabBarTabShiftVertical:
+    return 0;
+  default:
+    return QProxyStyle::pixelMetric(metric, option, widget);
+  }
+}
+
+QRect WorkbenchStyle::subElementRect(SubElement element,
+                                     const QStyleOption *option,
+                                     const QWidget *widget) const {
+  // A tab's label fits inside its padding, measured on the tab where it rests
+  // in the bar, as Qt elides it.
+  if (const auto *tab = qstyleoption_cast<const QStyleOptionTab *>(option);
+      tab && element == SE_TabBarTabText) {
+    const auto *bar = qobject_cast<const QTabBar *>(widget);
+    QStyleOptionTab label(*tab);
+    label.rect = tabContents(
+        bar && tab->tabIndex != -1 ? bar->tabRect(tab->tabIndex) : tab->rect);
+    return QProxyStyle::subElementRect(element, &label, widget);
+  }
+  return QProxyStyle::subElementRect(element, option, widget);
 }
 
 void WorkbenchStyle::drawPrimitive(PrimitiveElement element,
                                    const QStyleOption *option,
                                    QPainter *painter,
                                    const QWidget *widget) const {
+  namespace config = ::neverd::limits::gui_config;
+  // The style paints these boxes on device pixels, in the theme's colors,
+  // where the style sheet's rules keep only their size: its native border
+  // hands them to the style.
+  if (option) {
+    switch (element) {
+    case PE_IndicatorCheckBox:
+    case PE_IndicatorRadioButton:
+    case PE_IndicatorItemViewItemCheck:
+      paintIndicator(element, *option, *painter);
+      return;
+    case PE_FrameGroupBox:
+      paintDeviceBox(*painter, option->rect,
+                     DeviceBox{QColor(), chrome("Border"), 1, DeviceBox().edges,
+                               config::kWorkbenchStyleGroupBoxRadius});
+      return;
+    case PE_PanelMenu:
+    case PE_FrameMenu:
+      // A menu fills first and frames last, over its items.
+      if (qobject_cast<const QMenu *>(widget)) {
+        paintDeviceBox(*painter, option->rect,
+                       element == PE_PanelMenu
+                           ? DeviceBox{chrome("Menu"), QColor()}
+                           : DeviceBox{QColor(), chrome("MenuSeparator")});
+        return;
+      }
+      break;
+    case PE_PanelTipLabel:
+      // The style sheet fills a tooltip.
+      paintDeviceBox(*painter, option->rect,
+                     DeviceBox{QColor(), chrome("MenuSeparator")});
+      return;
+    case PE_PanelStatusBar:
+      paintDeviceBox(*painter, option->rect,
+                     DeviceBox{chrome("StatusBar"), chrome("StatusBarBorder"),
+                               1, Qt::TopEdge});
+      return;
+    case PE_IndicatorToolBarSeparator: {
+      // A hairline across the bar, in the middle of the room the style sheet
+      // gives it and short of the bar's edges.
+      const QRect &room = option->rect;
+      const int inset = config::kWorkbenchStyleToolBarSeparatorInset;
+      const bool across = option->state & State_Horizontal;
+      fillDeviceLine(
+          *painter,
+          across
+              ? QRect(room.left() + (room.width() - 1) / 2, room.top() + inset,
+                      1, room.height() - 2 * inset)
+              : QRect(room.left() + inset, room.top() + (room.height() - 1) / 2,
+                      room.width() - 2 * inset, 1),
+          across ? Qt::Vertical : Qt::Horizontal, chrome("Separator"));
+      return;
+    }
+    default:
+      break;
+    }
+  }
   // Keyboard focus frames the control with a thin line of the focus color, as
   // Visual Studio Code draws its focus border, in place of Fusion's tinted box
   // behind the label.  The fields' focus border is the same color.  As in
@@ -274,29 +634,29 @@ void WorkbenchStyle::drawPrimitive(PrimitiveElement element,
   if (element == PE_FrameFocusRect && option) {
     if (!(option->state & State_KeyboardFocusChange))
       return;
-    painter->save();
+    DevicePixels device(*painter);
     painter->setRenderHint(QPainter::Antialiasing);
+    const qreal width = device.width(config::kWorkbenchStyleFocusFrameWidth);
     QPen pen(Theme::instance().chrome(QStringLiteral("Focus")));
-    pen.setWidthF(::neverd::limits::gui_config::kWorkbenchStyleFocusFrameWidth);
+    pen.setWidthF(width);
     painter->setPen(pen);
     painter->setBrush(Qt::NoBrush);
-    const QRectF frame = focusFrame(*option, widget);
-    const qreal radius =
-        ::neverd::limits::gui_config::kWorkbenchStyleFocusFrameRadius;
+    const qreal inset = width / 2;
+    const QRectF frame = QRectF(device.rect(focusFrame(*option, widget)))
+                             .adjusted(inset, inset, -inset, -inset);
+    const qreal radius = device.length(config::kWorkbenchStyleFocusFrameRadius);
     painter->drawRoundedRect(frame, radius, radius);
     // A push button keeps a line of the surface it stands on between the
     // frame and its face, as Visual Studio Code sets its focus border off a
     // button, so the frame shows on a primary button's accent too.
     if (qobject_cast<const QPushButton *>(widget)) {
-      const qreal gap =
-          ::neverd::limits::gui_config::kWorkbenchStyleFocusFrameGap;
+      const qreal gap = device.width(config::kWorkbenchStyleFocusFrameGap);
       pen.setColor(surfaceBehind(widget));
       painter->setPen(pen);
       painter->drawRoundedRect(frame.adjusted(gap, gap, -gap, -gap),
                                std::max<qreal>(0, radius - gap),
                                std::max<qreal>(0, radius - gap));
     }
-    painter->restore();
     return;
   }
   QProxyStyle::drawPrimitive(element, option, painter, widget);
@@ -305,11 +665,78 @@ void WorkbenchStyle::drawPrimitive(PrimitiveElement element,
 void WorkbenchStyle::drawControl(ControlElement element,
                                  const QStyleOption *option, QPainter *painter,
                                  const QWidget *widget) const {
+  namespace config = ::neverd::limits::gui_config;
+  // A tab as Visual Studio Code draws an editor tab: the selected one in the
+  // editor's color with the accent along its top, the others a shade off the
+  // bar, each ending in a line of the bar's color.  The style draws tabs whole,
+  // on device pixels, with the geometry the style sheet gave them before.
+  if (const auto *tab = qstyleoption_cast<const QStyleOptionTab *>(option)) {
+    if (element == CE_TabBarTabShape) {
+      const bool selected = tab->state & State_Selected;
+      paintDeviceBox(*painter, tab->rect,
+                     DeviceBox{chrome(selected ? "TabActive" : "TabInactive"),
+                               chrome("TabSeparator"), 1, Qt::RightEdge});
+      if (selected)
+        paintDeviceBox(
+            *painter, tab->rect,
+            DeviceBox{QColor(), chrome("TabActiveBorder"), 1, Qt::TopEdge});
+      return;
+    }
+    if (element == CE_TabBarTabLabel) {
+      QStyleOptionTab label(*tab);
+      label.rect = tabContents(tab->rect);
+      label.palette.setColor(widget ? widget->foregroundRole()
+                                    : QPalette::WindowText,
+                             tabText(*tab));
+      // Qt's own label code would frame focus with the base style's frame.
+      label.state &= ~State_HasFocus;
+      QProxyStyle::drawControl(element, &label, painter, widget);
+      if (tab->state & State_HasFocus) {
+        QStyleOptionFocusRect focus;
+        focus.QStyleOption::operator=(label);
+        focus.rect = label.rect;
+        proxy()->drawPrimitive(PE_FrameFocusRect, &focus, painter, widget);
+      }
+      return;
+    }
+  }
+  // A heading fills with the header and ends in a line along its end and its
+  // foot, on device pixels.  The style sheet gives the fill.
+  if (element == CE_HeaderSection && option &&
+      qobject_cast<const QHeaderView *>(widget)) {
+    paintDeviceBox(*painter, option->rect,
+                   DeviceBox{option->palette.color(QPalette::Button),
+                             chrome("Border"), 1,
+                             Qt::RightEdge | Qt::BottomEdge});
+    return;
+  }
+  // A splitter's handle is a hairline, the focus color under the pointer.  A
+  // handle paints itself on behalf of its splitter.
+  if (element == CE_Splitter && option &&
+      (qobject_cast<const QSplitter *>(widget) ||
+       qobject_cast<const QSplitterHandle *>(widget))) {
+    fillDeviceLine(*painter, option->rect,
+                   option->state & State_Horizontal ? Qt::Vertical
+                                                    : Qt::Horizontal,
+                   chrome(option->state & (State_MouseOver | State_Sunken)
+                              ? "DockSeparatorHover"
+                              : "DockSeparator"));
+    return;
+  }
   // The style paints a menu's items, so a shortcut can read quieter than its
   // command, as in Visual Studio Code; a style sheet paints both with one
   // pen.  The geometry is the style sheet's that came before: the padding,
   // the icon and check mark columns, and the chevron.
   const auto *item = qstyleoption_cast<const QStyleOptionMenuItem *>(option);
+  if (element == CE_MenuItem && item && qobject_cast<const QMenu *>(widget) &&
+      item->menuItemType == QStyleOptionMenuItem::Separator) {
+    const int inset = config::kWorkbenchStyleMenuSeparatorInset;
+    const int margin = config::kWorkbenchStyleMenuSeparatorMargin;
+    fillDeviceLine(*painter,
+                   item->rect.adjusted(inset, margin, -inset, -margin),
+                   Qt::Horizontal, chrome("MenuSeparator"));
+    return;
+  }
   if (element != CE_MenuItem || !item || !qobject_cast<const QMenu *>(widget) ||
       (item->menuItemType != QStyleOptionMenuItem::Normal &&
        item->menuItemType != QStyleOptionMenuItem::DefaultItem &&
@@ -317,7 +744,6 @@ void WorkbenchStyle::drawControl(ControlElement element,
     QProxyStyle::drawControl(element, option, painter, widget);
     return;
   }
-  namespace config = ::neverd::limits::gui_config;
   const Theme &theme = Theme::instance();
   const Qt::LayoutDirection direction = item->direction;
   const QRect rect = item->rect;
@@ -326,13 +752,22 @@ void WorkbenchStyle::drawControl(ControlElement element,
   painter->save();
   painter->setFont(item->font);
   if (selected) {
+    DevicePixels device(*painter);
     painter->setRenderHint(QPainter::Antialiasing);
     painter->setPen(Qt::NoPen);
     painter->setBrush(theme.chrome(QStringLiteral("MenuSelection")));
-    painter->drawRoundedRect(QRectF(rect),
-                             config::kWorkbenchStyleMenuItemRadius,
-                             config::kWorkbenchStyleMenuItemRadius);
-    painter->setRenderHint(QPainter::Antialiasing, false);
+    const qreal radius = device.length(config::kWorkbenchStyleMenuItemRadius);
+    painter->drawRoundedRect(QRectF(device.rect(rect)), radius, radius);
+    // A high contrast theme outlines the item it does not fill.
+    if (const QColor outline =
+            theme.chrome(QStringLiteral("MenuSelectionBorder"));
+        outline.alpha() > 0) {
+      const qreal width = device.width(1);
+      painter->setPen(QPen(outline, width));
+      painter->setBrush(Qt::NoBrush);
+      painter->drawRoundedRect(device.outline(rect, 1), radius - width / 2,
+                               radius - width / 2);
+    }
   }
   const bool checked =
       item->checkType != QStyleOptionMenuItem::NotCheckable && item->checked;
@@ -345,13 +780,19 @@ void WorkbenchStyle::drawControl(ControlElement element,
         direction, rect, size + 2 * config::kWorkbenchStyleMenuIconBorder,
         config::kWorkbenchStyleMenuIconInset);
     if (checked) {
+      DevicePixels device(*painter);
       painter->setRenderHint(QPainter::Antialiasing);
-      painter->setPen(theme.chrome(QStringLiteral("OptionActiveBorder")));
+      const qreal width = device.width(config::kWorkbenchStyleMenuIconBorder);
+      QPen pen(theme.chrome(QStringLiteral("OptionActiveBorder")));
+      pen.setWidthF(width);
+      painter->setPen(pen);
       painter->setBrush(theme.chrome(QStringLiteral("OptionActiveBackground")));
-      const qreal radius = config::kWorkbenchStyleMenuItemRadius - 0.5;
-      painter->drawRoundedRect(QRectF(box).adjusted(0.5, 0.5, -0.5, -0.5),
-                               radius, radius);
-      painter->setRenderHint(QPainter::Antialiasing, false);
+      const qreal inset = width / 2;
+      const qreal radius =
+          device.length(config::kWorkbenchStyleMenuItemRadius) - inset;
+      painter->drawRoundedRect(
+          QRectF(device.rect(box)).adjusted(inset, inset, -inset, -inset),
+          radius, radius);
     }
     const QIcon::Mode mode = !enabled   ? QIcon::Disabled
                              : selected ? QIcon::Active
@@ -379,7 +820,7 @@ void WorkbenchStyle::drawControl(ControlElement element,
   if (!styleHint(SH_UnderlineShortcut, item, widget))
     flags |= Qt::TextHideMnemonic;
   painter->setPen(theme.chrome(!enabled   ? QStringLiteral("DisabledText")
-                               : selected ? QStringLiteral("HighlightedText")
+                               : selected ? QStringLiteral("MenuSelectionText")
                                           : QStringLiteral("MenuText")));
   QStringView label(item->text);
   // Quieter until the item is highlighted; a disabled item's shortcut is
@@ -412,13 +853,27 @@ QSize WorkbenchStyle::sizeFromContents(ContentsType type,
                                        const QStyleOption *option,
                                        const QSize &contents,
                                        const QWidget *widget) const {
+  namespace config = ::neverd::limits::gui_config;
+  // A tab holds its label and padding, the line along its top and the
+  // separator at its end, and room for its icon as Qt's common style leaves.
+  if (const auto *tab = qstyleoption_cast<const QStyleOptionTab *>(option);
+      tab && type == CT_TabBarTab) {
+    QSize size = contents;
+    if (!tab->icon.isNull())
+      (verticalTab(*tab) ? size.rheight() : size.rwidth()) +=
+          config::kWorkbenchStyleTabIconRoom;
+    const QMargins &padding = config::kWorkbenchStyleTabPadding;
+    return size + QSize(padding.left() + padding.right() + 1,
+                        padding.top() + padding.bottom() + 1);
+  }
   const auto *item = qstyleoption_cast<const QStyleOptionMenuItem *>(option);
-  if (type != CT_MenuItem || !item || !qobject_cast<const QMenu *>(widget) ||
-      item->menuItemType == QStyleOptionMenuItem::Separator)
+  if (type != CT_MenuItem || !item || !qobject_cast<const QMenu *>(widget))
     return QProxyStyle::sizeFromContents(type, option, contents, widget);
+  if (item->menuItemType == QStyleOptionMenuItem::Separator)
+    return QSize(contents.width(),
+                 1 + 2 * config::kWorkbenchStyleMenuSeparatorMargin);
   // As the style sheet sized an item it painted: the shortcut's gap, the
   // icon or check mark column, and the padding.
-  namespace config = ::neverd::limits::gui_config;
   QSize size = contents;
   if (item->text.contains(u'\t'))
     size.rwidth() += config::kWorkbenchStyleMenuShortcutGap;
@@ -597,6 +1052,16 @@ QPixmap WorkbenchStyle::standardPixmap(StandardPixmap pixmap,
 
 void WorkbenchStyle::polish(QWidget *widget) {
   QProxyStyle::polish(widget);
+  // A button or a check box lights under the pointer only over the part that
+  // takes a click, which Qt tracks only while the mouse is tracked; the style
+  // sheet's hover rules, which these boxes no longer have, turned it on.
+  if (qobject_cast<QPushButton *>(widget) ||
+      qobject_cast<QCheckBox *>(widget) ||
+      qobject_cast<QRadioButton *>(widget) ||
+      qobject_cast<QGroupBox *>(widget)) {
+    widget->setAttribute(Qt::WA_Hover);
+    widget->setMouseTracking(true);
+  }
   if (auto *menus = qobject_cast<QMenuBar *>(widget))
     menus->setNativeMenuBar(false);
   if (widget->isWindow() && (widget->windowType() == Qt::Popup ||
@@ -695,6 +1160,16 @@ bool WorkbenchStyle::eventFilter(QObject *watched, QEvent *event) {
               button && button->inherits("CloseButton"))
             button->setToolTip(
                 QCoreApplication::translate("CloseButton", "Close Tab"));
+    break;
+  case QEvent::Paint:
+    // Before the widget paints what lies on its box.
+    if (watched->isWidgetType()) {
+      auto *widget = static_cast<QWidget *>(watched);
+      if (const std::optional<DeviceBox> face = faceOf(*widget)) {
+        QPainter painter(widget);
+        paintDeviceBox(painter, widget->rect(), *face);
+      }
+    }
     break;
   case QEvent::ApplicationStateChange:
     if (QGuiApplication::applicationState() != Qt::ApplicationActive) {

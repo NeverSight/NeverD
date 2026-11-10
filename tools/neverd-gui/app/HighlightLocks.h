@@ -15,9 +15,12 @@
 #include "Theme.h"
 
 #include <QObject>
+#include <QRectF>
 #include <QString>
 #include <array>
 #include <optional>
+
+class QPainter;
 
 namespace neverd::gui {
 
@@ -53,6 +56,11 @@ private:
 
 /// The theme color painting lock color \p slot.
 ColorRole highlightLockRole(int slot);
+
+/// Marks \p box behind a highlighted word in \p role's color: a locked word,
+/// or the cursor's highlight and search matches (ListingHighlight), which a
+/// high contrast theme outlines instead of filling.
+void paintHighlight(QPainter &painter, const QRectF &box, ColorRole role);
 
 } // namespace neverd::gui
 

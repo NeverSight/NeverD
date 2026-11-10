@@ -10,6 +10,7 @@
 #include "Docking.h"
 
 #include "../Config.h"
+#include "DevicePixels.h"
 #include "Icons.h"
 #include "Theme.h"
 #include "TitleBar.h"
@@ -159,32 +160,17 @@ protected:
     const int line = config.layoutSpacing();
     const int inset = (config.separatorThickness() - line) / 2;
     QPainter painter(this);
-    painter.fillRect(horizontal() ? QRect(0, inset, width(), line)
-                                  : QRect(inset, 0, line, height()),
-                     theme.chrome(QStringLiteral("DockSeparator")));
-    if (highlight_ <= 0)
-      return;
     QColor accent = theme.chrome(QStringLiteral("DockSeparatorHover"));
-    accent.setAlphaF(accent.alphaF() * highlight_);
-    const qreal start =
-        inset +
-        (line - ::neverd::limits::gui_config::kDockingSeparatorHighlightWidth) /
-            2;
-    const QRectF bar =
-        horizontal()
-            ? QRectF(
-                  0, start, width(),
-                  ::neverd::limits::gui_config::kDockingSeparatorHighlightWidth)
-            : QRectF(
-                  start, 0,
-                  ::neverd::limits::gui_config::kDockingSeparatorHighlightWidth,
-                  height());
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(accent);
-    painter.drawRoundedRect(
-        bar, ::neverd::limits::gui_config::kDockingSeparatorHighlightWidth / 2,
-        ::neverd::limits::gui_config::kDockingSeparatorHighlightWidth / 2);
+    accent.setAlphaF(accent.alphaF() * std::max(0.0, highlight_));
+    // On whole device pixels, so the hairline stays one pixel at any scale.
+    paintDeviceSeparator(
+        painter,
+        horizontal() ? QRect(0, inset, width(), line)
+                     : QRect(inset, 0, line, height()),
+        horizontal() ? Qt::Horizontal : Qt::Vertical,
+        theme.chrome(QStringLiteral("DockSeparator")),
+        ::neverd::limits::gui_config::kDockingSeparatorHighlightWidth,
+        highlight_ > 0 ? accent : QColor());
   }
 
   void enterEvent(QEnterEvent *event) override {
@@ -628,9 +614,9 @@ protected:
     if (frame_)
       return;
     QPainter painter(this);
-    painter.setPen(
-        Theme::instance().chrome(QStringLiteral("FloatingWindowBorder")));
-    painter.drawRect(rect().adjusted(0, 0, -1, -1));
+    paintDeviceBox(painter, rect(),
+                   DeviceBox{QColor(), Theme::instance().chrome(QStringLiteral(
+                                           "FloatingWindowBorder"))});
   }
 
 private:

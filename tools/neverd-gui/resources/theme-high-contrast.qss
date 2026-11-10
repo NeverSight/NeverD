@@ -1,0 +1,24 @@
+/* Rules the two high contrast themes add over theme.qss, after Visual Studio
+   Code's Dark High Contrast and Light High Contrast themes: where the other
+   themes fill a selection or a hovered target, these outline it in the active
+   contrast border (orange in the dark theme, blue in the light one), a dashed
+   one for what is only under the pointer.  Placeholders are entries of
+   app/ChromeColors.def, as in theme.qss, whose fills these themes leave clear
+   or faintly tinted.  An item that can take an outline keeps a transparent one
+   at rest, so outlining it moves nothing. */
+QMenuBar::item { border: 1px solid transparent; padding: 3px 7px; }
+QMenuBar::item:selected, QMenuBar::item:pressed { border-color: ${MenuBarSelectionBorder}; }
+QTreeView::item, QListView::item { border: 1px solid transparent; padding: 0; }
+QTreeView::item:hover, QListView::item:hover { border: 1px dashed ${ListSelectionBorder}; }
+QTreeView::item:selected, QListView::item:selected { border: 1px solid ${ListSelectionBorder}; }
+/* A row of several columns takes one outline: its cells give up the sides
+   they share. */
+QTreeView::item:first { border-right-color: transparent; }
+QTreeView::item:middle { border-left-color: transparent; border-right-color: transparent; }
+QTreeView::item:last { border-left-color: transparent; }
+QComboBox QAbstractItemView::item { border: 1px solid transparent; padding: 0 11px 0 7px; }
+QComboBox QAbstractItemView::item:hover, QComboBox QAbstractItemView::item:selected { border-color: ${MenuSelectionBorder}; }
+QTabBar::close-button { border: 1px solid transparent; padding: 0; }
+QTabBar::close-button:hover { border-color: ${ToolBarHoverBorder}; }
+QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover { border: 1px solid ${ToolBarHoverBorder}; }
+QToolButton::menu-button:hover { border: 1px solid ${ToolBarHoverBorder}; }

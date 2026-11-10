@@ -54,8 +54,8 @@ private:
   QToolButton *language_;
   QStringList history_;
   int historyIndex_ = 0;
-  /// Whether the log's lines are colored for the dark theme.
-  bool coloredDark_ = false;
+  /// The theme whose colors the log's lines show (Theme::Mode), if any.
+  int coloredMode_ = -1;
   std::function<std::optional<Address>()> location_;
 };
 

@@ -2653,6 +2653,18 @@ Signé : %4</translation>
         <translation>Clair (Visual Studio Code Light+)</translation>
     </message>
     <message>
+        <source>Dark High Contrast (Visual Studio Code)</source>
+        <translation>Sombre à contraste élevé (Visual Studio Code)</translation>
+    </message>
+    <message>
+        <source>Light High Contrast (Visual Studio Code)</source>
+        <translation>Clair à contraste élevé (Visual Studio Code)</translation>
+    </message>
+    <message>
+        <source>System (follows the desktop)</source>
+        <translation>Système (suit le bureau)</translation>
+    </message>
+    <message>
         <source>Colors</source>
         <translation>Couleurs</translation>
     </message>

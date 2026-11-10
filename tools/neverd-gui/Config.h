@@ -13,6 +13,7 @@
 #ifndef NEVERD_TOOLS_NEVERD_GUI_CONFIG_H
 #define NEVERD_TOOLS_NEVERD_GUI_CONFIG_H
 
+#include <QMargins>
 #include <QSize>
 #include <QtGlobal>
 #include <cstddef>
@@ -115,6 +116,11 @@ inline constexpr int kMainDefaultHeightPercent = 80;
 
 // tools/neverd-gui/app/SetTypeDialog.cpp
 inline constexpr int kSetTypeDialogCompletedWidthMaxArgument1 = 320;
+
+// tools/neverd-gui/app/ChooserView.cpp
+/// A list's filter keeps clear of the scroll bar above it, whose slider is
+/// nearly the field's gray, and lines up with the status line below.
+inline constexpr QMargins kChooserViewFilterMargins{6, 4, 6, 0};
 
 // tools/neverd-gui/app/CodeView.cpp
 inline constexpr int kCodeViewMargin = 6;
@@ -288,11 +294,11 @@ inline constexpr QSize kWorkbenchStyleFontDialogSize{600, 460};
 inline constexpr int kWorkbenchStyleFileColumnMaximumWidth = 200;
 /// Keyboard focus frames a control with a line of the focus color this wide
 /// and corners of this radius, as Visual Studio Code draws its focus border.
-inline constexpr qreal kWorkbenchStyleFocusFrameWidth = 1.0;
+inline constexpr int kWorkbenchStyleFocusFrameWidth = 1;
 inline constexpr qreal kWorkbenchStyleFocusFrameRadius = 2.0;
 /// The line of the surface a push button's focus frame keeps from the
 /// button's face, as Visual Studio Code sets its focus border off a button.
-inline constexpr qreal kWorkbenchStyleFocusFrameGap = 1.0;
+inline constexpr int kWorkbenchStyleFocusFrameGap = 1;
 /// The room a check box's or radio button's focus frame leaves around its
 /// box and label.
 inline constexpr int kWorkbenchStyleFocusFrameMargin = 2;
@@ -318,6 +324,25 @@ inline constexpr int kWorkbenchStyleMenuColumnGap = 4;
 /// A menu item's shortcut and submenu chevron draw at this opacity until the
 /// item is highlighted, as Visual Studio Code dims a keybinding.
 inline constexpr qreal kWorkbenchStyleMenuSecondaryOpacity = 0.7;
+/// A menu's separator is a line one pixel high, this far in from the menu's
+/// sides and with this much room above and below it.
+inline constexpr int kWorkbenchStyleMenuSeparatorInset = 6;
+inline constexpr int kWorkbenchStyleMenuSeparatorMargin = 4;
+/// The corners of the boxes the workbench style paints, as Visual Studio Code
+/// rounds them: a field's and a push button's, a tool button's, a check box's,
+/// a group's frame, and a card's that stands on a view.  A radio button is a
+/// circle, half of its box.
+inline constexpr qreal kWorkbenchStyleControlRadius = 2.0;
+inline constexpr qreal kWorkbenchStyleToolButtonRadius = 3.0;
+inline constexpr qreal kWorkbenchStyleCheckBoxRadius = 3.0;
+inline constexpr qreal kWorkbenchStyleGroupBoxRadius = 3.0;
+inline constexpr qreal kWorkbenchStyleCardRadius = 6.0;
+/// A tab's padding around its label, as Visual Studio Code pads an editor
+/// tab, and the room Qt's common style leaves beside it for an icon.
+inline constexpr QMargins kWorkbenchStyleTabPadding{10, 5, 10, 5};
+inline constexpr int kWorkbenchStyleTabIconRoom = 12;
+/// A toolbar's separator stops this far short of the bar's edges.
+inline constexpr int kWorkbenchStyleToolBarSeparatorInset = 3;
 
 inline constexpr QSize kQuickStartDialogSize{900, 560};
 inline constexpr QSize kQuickStartMinimumDialogSize{720, 460};

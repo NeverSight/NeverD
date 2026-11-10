@@ -2,6 +2,7 @@
 
 #include "../Config.h"
 #include "BidiText.h"
+#include "DevicePixels.h"
 #include "Icons.h"
 #include "ItemViewActivation.h"
 #include "ProjectDatabase.h"
@@ -221,10 +222,13 @@ QString folderOf(const QString &path) {
 /// A compact, flat keycap.
 void drawKey(QPainter &painter, const QRect &cap, const QString &key,
              const QFont &font) {
-  const QRectF edge = QRectF(cap).adjusted(0.5, 0.5, -0.5, -0.5);
-  painter.setPen(QPen(chrome("QuickStartKeyBorder"), 1));
-  painter.setBrush(Qt::NoBrush);
-  painter.drawRoundedRect(edge, 3, 3);
+  {
+    DevicePixels device(painter);
+    painter.setPen(QPen(chrome("QuickStartKeyBorder"), device.width(1)));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRoundedRect(device.outline(cap, 1), device.length(3),
+                            device.length(3));
+  }
   painter.setFont(font);
   painter.setPen(chrome("QuickStartKeyText"));
   painter.drawText(cap, Qt::AlignCenter, key);
@@ -274,8 +278,11 @@ protected:
   void paintEvent(QPaintEvent *) override {
     QPainter painter(this);
     painter.fillRect(rect(), chrome("QuickStartSide"));
-    painter.fillRect(QRect(width() - 1, 0, 1, height()),
-                     blend(chrome("QuickStartSide"), chrome("Border"), 0.6));
+    paintDeviceBox(
+        painter, rect(),
+        DeviceBox{QColor(),
+                  blend(chrome("QuickStartSide"), chrome("Border"), 0.6), 1,
+                  Qt::RightEdge});
   }
 };
 
@@ -344,11 +351,12 @@ protected:
         row, ::neverd::limits::gui_config::kQuickStartDialogRowRadius,
         ::neverd::limits::gui_config::kQuickStartDialogRowRadius);
     if (hasFocus() && window()->testAttribute(Qt::WA_KeyboardFocusChange)) {
-      painter.setPen(QPen(chrome("QuickStartFocus"), 1));
+      DevicePixels device(painter);
+      painter.setPen(QPen(chrome("QuickStartFocus"), device.width(1)));
       painter.setBrush(Qt::NoBrush);
-      painter.drawRoundedRect(
-          row, ::neverd::limits::gui_config::kQuickStartDialogRowRadius,
+      const qreal radius = device.length(
           ::neverd::limits::gui_config::kQuickStartDialogRowRadius);
+      painter.drawRoundedRect(device.outline(rect(), 1), radius, radius);
     }
 
     const int middle = height() / 2;
@@ -441,12 +449,13 @@ public:
     }
     if ((option.state & QStyle::State_HasFocus) && option.widget &&
         option.widget->window()->testAttribute(Qt::WA_KeyboardFocusChange)) {
-      painter->setPen(QPen(chrome("QuickStartFocus"), 1));
+      DevicePixels device(*painter);
+      painter->setPen(QPen(chrome("QuickStartFocus"), device.width(1)));
       painter->setBrush(Qt::NoBrush);
-      painter->drawRoundedRect(
-          QRectF(option.rect).adjusted(0.5, 2.5, -0.5, -2.5),
-          ::neverd::limits::gui_config::kQuickStartDialogRowRadius,
+      const qreal radius = device.length(
           ::neverd::limits::gui_config::kQuickStartDialogRowRadius);
+      painter->drawRoundedRect(
+          device.outline(option.rect.adjusted(0, 2, 0, -2), 1), radius, radius);
     }
     const QRect content = option.rect.adjusted(12, 0, -12, 0);
     const int middle = content.center().y();

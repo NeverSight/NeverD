@@ -84,15 +84,19 @@ target_link_libraries(neverd_gui_app PUBLIC neverd_gui_core neverd_gui_web Qt6::
 target_link_libraries(neverd_gui_app PRIVATE Qt6::GuiPrivate)
 # How a window loses the system's title bar differs by platform
 # (app/WindowFramePlatform.h).
+# So does whether the desktop asks for high contrast (app/DesktopContrast.h).
 if(WIN32)
-  target_sources(neverd_gui_app PRIVATE app/platform/WindowFrameWindows.cpp)
+  target_sources(neverd_gui_app PRIVATE app/platform/WindowFrameWindows.cpp
+    app/platform/DesktopContrastWindows.cpp)
   target_link_libraries(neverd_gui_app PRIVATE dwmapi)
 elseif(APPLE)
   enable_language(OBJCXX)
-  target_sources(neverd_gui_app PRIVATE app/platform/WindowFrameMac.mm)
+  target_sources(neverd_gui_app PRIVATE app/platform/WindowFrameMac.mm
+    app/platform/DesktopContrastMac.mm)
   target_link_libraries(neverd_gui_app PRIVATE "-framework AppKit")
 else()
-  target_sources(neverd_gui_app PRIVATE app/platform/WindowFrameUnix.cpp)
+  target_sources(neverd_gui_app PRIVATE app/platform/WindowFrameUnix.cpp
+    app/platform/DesktopContrastUnix.cpp)
 endif()
 file(GLOB NEVERD_GUI_ICONS CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/*.svg")
@@ -104,7 +108,8 @@ file(GLOB NEVERD_GUI_FONTS CONFIGURE_DEPENDS
 qt_add_resources(neverd_gui_app "workbench_assets" PREFIX /neverd
   BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources"
   FILES ${NEVERD_GUI_ICONS} ${NEVERD_GUI_FONTS}
-        "${CMAKE_CURRENT_SOURCE_DIR}/resources/theme.qss")
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/theme.qss"
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/theme-high-contrast.qss")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../../docs/assets/neverd-logo-dark.svg"
   PROPERTIES QT_RESOURCE_ALIAS "icons/app.svg")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../../docs/assets/neverd-logo-light.svg"

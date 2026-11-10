@@ -2647,6 +2647,18 @@ Signed: %4</source>
         <translation>밝게 (Visual Studio Code Light+)</translation>
     </message>
     <message>
+        <source>Dark High Contrast (Visual Studio Code)</source>
+        <translation>고대비 어둡게 (Visual Studio Code)</translation>
+    </message>
+    <message>
+        <source>Light High Contrast (Visual Studio Code)</source>
+        <translation>고대비 밝게 (Visual Studio Code)</translation>
+    </message>
+    <message>
+        <source>System (follows the desktop)</source>
+        <translation>시스템 (데스크톱을 따름)</translation>
+    </message>
+    <message>
         <source>Colors</source>
         <translation>색상</translation>
     </message>
