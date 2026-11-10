@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -234,8 +235,134 @@ void generatedArrays() {
   rejects([&] { EncodedJson({}, "items", 1, TextItem); },
           "Escaping exceeded the generated payload budget");
 }
+void writtenText() {
+  // Every string the writer copies, the serializer would have copied; every
+  // other it prints as the serializer does, invalid UTF-8 included.
+  const std::vector<std::string> Pieces{"a",
+                                        "~",
+                                        "\x7f",
+                                        "\"",
+                                        "\\",
+                                        "/",
+                                        "\n",
+                                        "\t",
+                                        "\b",
+                                        "\f",
+                                        "\r",
+                                        std::string("\0", 1),
+                                        "\x1f",
+                                        "\xc2\x80",
+                                        "\xdf\xbf",
+                                        "\xe0\xa0\x80",
+                                        "\xe2\x86\x91",
+                                        "\xed\x9f\xbf",
+                                        "\xef\xbf\xbf",
+                                        "\xf0\x90\x80\x80",
+                                        "\xf4\x8f\xbf\xbf",
+                                        "\x80",
+                                        "\xc0\x80",
+                                        "\xc1\xbf",
+                                        "\xe0\x80\x80",
+                                        "\xed\xa0\x80",
+                                        "\xf0\x80\x80\x80",
+                                        "\xf4\x90\x80\x80",
+                                        "\xf5\x80",
+                                        "\xff",
+                                        "\xc2",
+                                        "\xe2\x86",
+                                        "\xf0\x90\x80"};
+  std::mt19937_64 Random(7);
+  for (int Round = 0; Round < 200000; ++Round) {
+    std::string Text;
+    for (int Part = int(Random() % 10); Part > 0; --Part)
+      Text += Pieces[Random() % Pieces.size()];
+    JsonWriter Out;
+    Out.string(Text);
+    check(EncodedJson(std::move(Out)).text() ==
+              Json(Text).dump(-1, ' ', false, Json::error_handler_t::replace),
+          "Written string differs from the serializer's");
+  }
+  // A document's members in its own order, as a listing page writes them.
+  const Json Expected{
+      {"anchor", 2u},
+      {"at_end", false},
+      {"at_start", true},
+      {"generation", "7"},
+      {"index", Json{{"state", "ready"}, {"done", 3}}},
+      {"lines",
+       Json::array(
+           {Json{{"address", hexAddress(0x140001000)},
+                 {"cls", 4},
+                 {"spans",
+                  Json::array({Json::array({0u, 3u, 15}),
+                               Json::array({4u, 6u, 16, hexAddress(0)})})},
+                 {"text", "mov \"\xe2\x86\x91\xff"}},
+            Json{{"kind", "blank"}, {"spans", Json::array()}, {"text", ""}}})}};
+  JsonWriter Out;
+  Out.beginObject();
+  Out.key("anchor");
+  Out.number(std::uint64_t(2));
+  Out.key("at_end");
+  Out.boolean(false);
+  Out.key("at_start");
+  Out.boolean(true);
+  Out.key("generation");
+  Out.string("7");
+  Out.key("index");
+  Out.value(Expected.at("index"));
+  Out.key("lines");
+  Out.beginArray();
+  Out.beginObject();
+  Out.key("address");
+  Out.address(0x140001000);
+  Out.key("cls");
+  Out.number(std::int64_t(4));
+  Out.key("spans");
+  Out.beginArray();
+  Out.beginArray();
+  Out.number(std::uint64_t(0));
+  Out.number(std::uint64_t(3));
+  Out.number(std::int64_t(15));
+  Out.endArray();
+  Out.beginArray();
+  Out.number(std::uint64_t(4));
+  Out.number(std::uint64_t(6));
+  Out.number(std::int64_t(16));
+  Out.address(0);
+  Out.endArray();
+  Out.endArray();
+  Out.key("text");
+  Out.string("mov \"\xe2\x86\x91\xff");
+  Out.endObject();
+  Out.beginObject();
+  Out.key("kind");
+  Out.string("blank");
+  Out.key("spans");
+  Out.beginArray();
+  Out.endArray();
+  Out.key("text");
+  Out.string("");
+  Out.endObject();
+  Out.endArray();
+  Out.endObject();
+  const EncodedJson Encoded(std::move(Out));
+  check(Encoded.text() ==
+            Expected.dump(-1, ' ', false, Json::error_handler_t::replace),
+        "Written document differs from the serializer's bytes");
+  const auto Wire = frame(Json{{"request_id", "written"}}, Encoded);
+  check(parseJson(std::string_view(Wire).substr(4)).at("payload") ==
+            parseJson(Encoded.text()),
+        "Written payload did not frame as its document");
+  // No more than a frame's payload.
+  JsonWriter Large;
+  Large.string(std::string(MaxFrameBytes, 'x'));
+  rejects([&] { EncodedJson(std::move(Large)); },
+          "Written text exceeded the payload budget");
+}
+
 int main() {
   generatedArrays();
+  writtenText();
   {
     using namespace std::chrono_literals;
     LoadProgress progress;

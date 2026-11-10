@@ -4786,6 +4786,61 @@ struct Listing::Impl {
     return json;
   }
 
+  /// lineJson's document, written as text: its keys in the order the
+  /// document keeps them.
+  void lineText(JsonWriter &out, const Line &line) {
+    const int region =
+        regionIndex(line.address < regions.back().end ? line.address
+                                                      : regions.back().end - 1);
+    const int owner = region >= 0 ? region : regionIndex(line.item);
+    out.beginObject();
+    out.key("address");
+    out.address(line.address);
+    out.key("cls");
+    out.number(std::int64_t(static_cast<int>(line.cls)));
+    if (!line.flow.empty()) {
+      out.key("flow");
+      out.string(line.flow);
+    }
+    if (line.function >= 0 &&
+        static_cast<std::size_t>(line.function) < functions.size()) {
+      const auto &function = ownerOf(line.function);
+      out.key("function");
+      out.string(function.name);
+      out.key("function_address");
+      out.address(function.entry);
+    }
+    out.key("item");
+    out.address(line.item);
+    out.key("item_size");
+    out.address(line.itemSize);
+    out.key("kind");
+    out.string(line.kind);
+    out.key("prefix");
+    out.string(prefixOf(line.address, owner >= 0 ? owner : 0));
+    out.key("spans");
+    out.beginArray();
+    for (const auto &span : line.text.spans()) {
+      out.beginArray();
+      out.number(std::uint64_t(span.start));
+      out.number(std::uint64_t(span.length));
+      out.number(std::int64_t(static_cast<int>(span.role)));
+      if (span.address)
+        out.address(*span.address);
+      out.endArray();
+    }
+    out.endArray();
+    out.key("sub");
+    out.number(std::uint64_t(line.sub));
+    if (line.target) {
+      out.key("target");
+      out.address(*line.target);
+    }
+    out.key("text");
+    out.string(line.text.text());
+    out.endObject();
+  }
+
   //===--------------------------------------------------------------------===//
   // Reference index
   //===--------------------------------------------------------------------===//
@@ -5969,7 +6024,8 @@ Json Listing::indexState() const {
   return state;
 }
 
-Json Listing::page(const Json &payload) {
+Json Listing::page(const Json &payload,
+                   std::shared_ptr<const EncodedJson> *encoded) {
   auto &d = *impl_;
   const bool initial = std::exchange(d.initialPage, false) && !d.discovered &&
                        d.decoded.empty() && d.recoveredReferences.empty();
@@ -5977,7 +6033,7 @@ Json Listing::page(const Json &payload) {
   // whole browsing index. Later queries use the live listing. Only a page
   // produced from the untouched loader catalog is eligible for this shortcut.
   if (!initial)
-    return uncachedPage(payload);
+    return uncachedPage(payload, encoded);
   const auto count = neverd_func_count(d.session);
   auto result = d.cache.query(
       "initial-page-" + std::to_string(count) + "-" + payload.dump(),
@@ -5995,7 +6051,8 @@ Json Listing::page(const Json &payload) {
   return result;
 }
 
-Json Listing::uncachedPage(const Json &payload) {
+Json Listing::uncachedPage(const Json &payload,
+                           std::shared_ptr<const EncodedJson> *encoded) {
   auto &d = *impl_;
   d.build();
   if (d.regions.empty())
@@ -6112,6 +6169,32 @@ Json Listing::uncachedPage(const Json &payload) {
     reversed.resize(before);
   if (forward.size() > after)
     forward.resize(after);
+  if (encoded) {
+    // Its rows cost several times more built as a document than written as
+    // the text a document prints.
+    JsonWriter out;
+    out.beginObject();
+    out.key("anchor");
+    out.number(std::uint64_t(reversed.size()));
+    out.key("at_end");
+    out.boolean(atEnd);
+    out.key("at_start");
+    out.boolean(atStart);
+    out.key("generation");
+    out.string(std::to_string(d.generation));
+    out.key("index");
+    out.value(indexState());
+    out.key("lines");
+    out.beginArray();
+    for (auto it = reversed.rbegin(); it != reversed.rend(); ++it)
+      d.lineText(out, *it);
+    for (const auto &line : forward)
+      d.lineText(out, line);
+    out.endArray();
+    out.endObject();
+    *encoded = std::make_shared<const EncodedJson>(std::move(out));
+    return Json(nullptr);
+  }
   Json lines = Json::array();
   for (auto it = reversed.rbegin(); it != reversed.rend(); ++it)
     lines.push_back(d.lineJson(*it));

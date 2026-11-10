@@ -6643,7 +6643,10 @@ parseable journals and survive an interrupted first save and same-session retry.
 `NeverDWorkerProtocol` compares backend parsing with native JSON values, types,
 encoding and error IDs, while retaining strict external-frame admission.
 `NeverDWorkerProtocolFallback` runs the same cases with SIMD parsing disabled.
-Both include exact sidecar escaping for control characters and literal escapes.
+Both include exact sidecar escaping for control characters and literal escapes,
+and check that what `JsonWriter` writes equals the serializer's bytes for random
+strings with control characters, quotes and malformed UTF-8, and for a listing
+page's members, within a frame's payload budget.
 `NeverDWorkerNativePatch` checks split and merged rows through complete undo,
 redo, batch removal, export and reopening, without modifying the input binary.
 `tools/neverd-bench/patch-paired.py --worker-history` adds durable undo and redo

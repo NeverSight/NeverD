@@ -2733,7 +2733,11 @@ the SDK metadata snapshot alive through encoding. Small inventories keep one
 DOM encoding with their envelope; the crossover lives in worker resource
 limits. DOM callers and older SDKs retain their existing paths.
 `EncodedJson` accepts typed values only and keeps
-worker UTF-8 replacement behavior. Framing still accounts for the complete
+worker UTF-8 replacement behavior. A listing page the live listing answers is
+written as text (`JsonWriter`): keys in the order its document keeps them, and
+every string escaped as the serializer escapes it (copied only where the
+serializer copies it), so the page's bytes are its document's without building
+one. Framing still accounts for the complete
 response envelope; shared ordinary JSON output retains strict UTF-8 errors.
 Disposable worker envelopes preserve non-payload metadata for error responses.
 After admission, framing reserves its known final size and copies encoded
