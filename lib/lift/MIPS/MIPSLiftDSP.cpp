@@ -60,12 +60,17 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
     return true;
   }
 
+  const bool CompareGPR =
+      *Kind == mips::DSPInstruction::CompareGPRBytesEqual ||
+      *Kind == mips::DSPInstruction::CompareGPRBytesLess ||
+      *Kind == mips::DSPInstruction::CompareGPRBytesLessEqual;
   const bool Compare = *Kind == mips::DSPInstruction::CompareEqualBytes ||
                        *Kind == mips::DSPInstruction::CompareLessBytes ||
                        *Kind == mips::DSPInstruction::CompareLessEqualBytes;
   const bool Pick = *Kind == mips::DSPInstruction::PickBytes ||
                     *Kind == mips::DSPInstruction::PickHalfwords;
-  if (Compare || Pick || *Kind == mips::DSPInstruction::ModularSubtract) {
+  if (Compare || CompareGPR || Pick ||
+      *Kind == mips::DSPInstruction::ModularSubtract) {
     if (!Compare && !RD) {
       S.emit(NdOp::NOP, {}, {});
       return true;
@@ -84,7 +89,7 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
       S.write(RD, Result);
       return true;
     }
-    const auto Control = ReadControl();
+    const auto Control = CompareGPR ? NdVar{} : ReadControl();
     const uint16_t Bytes = *Kind == mips::DSPInstruction::PickHalfwords ? 2 : 1;
     NdVar Result = NdVar::cst(0, 4);
     for (unsigned I = 0; I != 4u / Bytes; ++I) {
@@ -94,12 +99,15 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
         return Part;
       };
       NdVar Value;
-      if (Compare) {
-        const NdOp Opcode = *Kind == mips::DSPInstruction::CompareEqualBytes
-                                ? NdOp::INT_EQUAL
-                            : *Kind == mips::DSPInstruction::CompareLessBytes
-                                ? NdOp::INT_LESS
-                                : NdOp::INT_LESSEQUAL;
+      if (Compare || CompareGPR) {
+        const NdOp Opcode =
+            *Kind == mips::DSPInstruction::CompareEqualBytes ||
+                    *Kind == mips::DSPInstruction::CompareGPRBytesEqual
+                ? NdOp::INT_EQUAL
+            : *Kind == mips::DSPInstruction::CompareLessBytes ||
+                    *Kind == mips::DSPInstruction::CompareGPRBytesLess
+                ? NdOp::INT_LESS
+                : NdOp::INT_LESSEQUAL;
         Value = S.resize(S.binary(Opcode, Lane(A), Lane(B), 1), 4);
       } else {
         const auto Condition =
@@ -110,10 +118,12 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
         S.emit(NdOp::SELECT, Selected, {Condition, Lane(A), Lane(B)});
         Value = S.resize(Selected, 4);
       }
-      Result =
-          S.binary(NdOp::INT_OR, Result,
-                   S.binary(NdOp::INT_LEFT, Value,
-                            NdVar::cst(Compare ? 24 + I : I * Bytes * 8, 4)));
+      Result = S.binary(NdOp::INT_OR, Result,
+                        S.binary(NdOp::INT_LEFT, Value,
+                                 NdVar::cst(Compare      ? 24 + I
+                                            : CompareGPR ? I
+                                                         : I * Bytes * 8,
+                                            4)));
     }
     if (Compare)
       WriteControl(S.binary(
@@ -170,6 +180,78 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
       }
     }
     S.write(RD, S.resize(Sum, 4));
+    return true;
+  }
+
+  struct LeftForm {
+    uint16_t Bytes;
+    bool Variable, Saturated;
+  };
+  std::optional<LeftForm> LeftShift;
+  switch (*Kind) {
+#define NEVERD_MIPS_DSP_LEFT(Name, Mask, Value, Bytes, Variable, Saturated)    \
+  case mips::DSPInstruction::Name:                                             \
+    LeftShift = LeftForm{Bytes, Variable, Saturated};                          \
+    break;
+#include "neverd/ir/intrinsics/MIPS/MIPSDSP.def"
+  default:
+    break;
+  }
+  const bool Absolute =
+      *Kind == mips::DSPInstruction::AbsoluteSaturatedHalfwords ||
+      *Kind == mips::DSPInstruction::AbsoluteSaturatedWord;
+  if (Absolute || LeftShift) {
+    const uint16_t Bytes =
+        LeftShift ? LeftShift->Bytes
+        : *Kind == mips::DSPInstruction::AbsoluteSaturatedWord ? 4
+                                                               : 2;
+    const unsigned Bits = Bytes * 8;
+    const auto Source = S.read(RT);
+    const auto Count = !LeftShift ? NdVar::cst(0, 8)
+                       : LeftShift->Variable
+                           ? S.resize(S.binary(NdOp::INT_AND, S.read(RS),
+                                               NdVar::cst(Bits - 1, 4)),
+                                      8)
+                           : NdVar::cst(RS, 8);
+    NdVar Result = NdVar::cst(0, 4), Overflow = NdVar::cst(0, 1);
+    for (unsigned I = 0; I != 4u / Bytes; ++I) {
+      const auto Lane = S.makeTemp(Bytes);
+      S.emit(NdOp::SUBBYTES, Lane, {Source, NdVar::cst(I * Bytes, 4)});
+      const auto Wide = S.resize(Lane, 8, Bytes != 1);
+      auto Value = S.binary(NdOp::INT_LEFT, Wide, Count);
+      const auto Negative =
+          S.binary(NdOp::INT_SLESS, Wide, NdVar::cst(0, 8), 1);
+      if (Absolute) {
+        Value = S.makeTemp(8);
+        S.emit(
+            NdOp::SELECT, Value,
+            {Negative, S.binary(NdOp::INT_SUB, NdVar::cst(0, 8), Wide), Wide});
+      }
+      // The widened shift has at most 63 significant bits. Comparing it to
+      // the reconstructed lane detects every lost sign/unsigned bit, also at
+      // count zero, without an undefined shift by the lane width.
+      const auto Truncated = S.resize(Value, Bytes);
+      const auto Lost = S.binary(NdOp::INT_NOTEQUAL, Value,
+                                 S.resize(Truncated, 8, Bytes != 1), 1);
+      Overflow = S.binary(NdOp::BOOL_OR, Overflow, Lost, 1);
+      auto Packed = Truncated;
+      if (Absolute || LeftShift->Saturated) {
+        const auto Bound = S.makeTemp(Bytes);
+        const uint64_t Sign = UINT64_C(1) << (Bits - 1);
+        S.emit(NdOp::SELECT, Bound,
+               {Absolute ? NdVar::cst(0, 1) : Negative, NdVar::cst(Sign, Bytes),
+                NdVar::cst(Sign - 1, Bytes)});
+        Packed = S.makeTemp(Bytes);
+        S.emit(NdOp::SELECT, Packed, {Lost, Bound, Truncated});
+      }
+      Result = S.binary(NdOp::INT_OR, Result,
+                        S.binary(NdOp::INT_LEFT, S.resize(Packed, 4),
+                                 NdVar::cst(I * Bits, 4)));
+    }
+    WriteControl(S.binary(NdOp::INT_OR, ReadControl(),
+                          S.binary(NdOp::INT_LEFT, S.resize(Overflow, 4),
+                                   NdVar::cst(Absolute ? 20 : 22, 4))));
+    S.write(RD, Result);
     return true;
   }
 

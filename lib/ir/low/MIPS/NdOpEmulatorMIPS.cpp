@@ -22,6 +22,11 @@ bool NdOpEmulator::executeMIPSScalar(const LowOp &Op) {
   if (!mipsScalarLowShapeIsValid(Op, Img.Arch))
     return false;
   const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+  // Sequential ordinary-memory execution has no pending accesses or
+  // execution hazards. Retain the operation in IR and native source; this
+  // observation does not model devices, speculation or multiple processors.
+  if (mips::isBarrier(Id))
+    return true;
   if (Id == Intrinsic::MIPSReadDSPControl) {
     const auto State = NdVar::reg(mipsreg::DSPControl, 4);
     if (!knownOperandBytes(State, 0, 4))

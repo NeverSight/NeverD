@@ -23291,7 +23291,7 @@ These functions do not qualify omitted MIPS16 instructions or general ABI forms.
 
 ### MIPS16e2 and additional DSP/MSA arithmetic
 
-`MIPS16E2` checks all 28 admitted encoding forms in both byte orders, compact
+`MIPS16E2` checks all 30 admitted encoding forms in both byte orders, compact
 register aliases, bitfield limits, zero sources, GP memory widths, partial merge
 footprints and reused-decoder feature evidence. `MIPS16E2Pipeline` checks exact
 physical delay-slot widths and writable image-store bindings. Shared scalar
@@ -23321,12 +23321,30 @@ DSPControl and saved low FPR views. The pinned reference fixes MSA signed-limit
 construction and absolute `INT64_MIN` magnitudes, with QEMU's required wrapping
 arithmetic enabled in CMake builds. All regenerated execution and the newly
 added original-instruction fixtures must match independent results. The
-existing DSP zero-destination reference defect remains explicitly recorded;
-see the [DSP reference boundary](mips.md#classic-mips32-dsp-state-and-packed-arithmetic).
+reference also fixes discarded packed-DSP/shift results: helpers still update
+DSPControl and enforce DSP enablement. The source runner permits no original
+zero-destination mismatch; see the [DSP reference boundary](mips.md#classic-mips32-dsp-state-and-packed-arithmetic).
 Reports identify the source revision and actual loaded native-library hash.
 Ordinary pair padding, predecessor memory barriers,
 single-sided barriers at joins, depth/work exhaustion and non-entry analysis
 roots or exceptional/disconnected paths have separate call-recovery regressions.
+
+MIPS16 delay-slot classification exhausts all 65,536 halfwords, both byte orders
+and physical sizes. A shared jump normalizer avoids full scalar normalization
+in slot queries. EHB/SYNC tests retain every stype, reject malformed shapes and
+reserved fields, and prove SAVE/barrier/RESTORE source output in HighC and
+LLVMC. The e2 runner compiles and executes each barrier's generated source and
+checks its native assembly at O0/O2. This is not original-e2 or multiprocessor
+ordering execution evidence.
+Selected-function LLVMC regressions require the source-only helper definitions,
+including when an input function collides with a barrier helper's name.
+Deferred imports and named call hints are checked in both instruction/function
+orders, including reserved suffixes and canonical import-storage-only evidence.
+DSP ABS/SHLL tests cover signed extrema, every count, sticky fields, aliases,
+zero destinations and missing state; CMPGU requires no DSPControl input.
+MSA tests enumerate all 128 BIT fields and 256 byte immediates, unary count
+extrema, all vector bytes, old-destination dependence and three-register aliases.
+The source fixtures observe complete output memory and post-return state.
 
 ### MIPS decode/lift and firmware performance
 

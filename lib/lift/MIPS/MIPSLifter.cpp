@@ -58,7 +58,9 @@ MIPSLifter::encoding(const cs_insn &Instruction) const {
 }
 
 unsigned MIPSLifter::delaySlotBytes(const cs_insn &Instruction) const {
-  const auto Code = encoding(Instruction);
+  const auto Code = Mode == InstructionMode::MIPS16
+                        ? mips16JumpEncoding(Instruction)
+                        : encoding(Instruction);
   return Code ? Code->SlotBytes : 0;
 }
 
@@ -164,6 +166,14 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
   const uint64_t Immediate = static_cast<uint64_t>(int64_t(int16_t(Word)));
   const bool Wide = S.Width == 8;
 
+  if (Word == 0x000000c0) { // EHB, before the generic SLL zero destination.
+    S.emitIntrinsic(Intrinsic::MIPSExecutionHazardBarrier, {});
+    return true;
+  }
+  if ((Word & 0xfffff83f) == 0x0000000f) { // SYNC stype
+    S.emitIntrinsic(Intrinsic::MIPSSync, {}, {NdVar::cst(SA, 1)});
+    return true;
+  }
   if (Word == 0) {
     S.emit(NdOp::NOP, {}, {});
     return true;

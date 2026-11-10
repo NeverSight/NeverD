@@ -80,7 +80,7 @@ msa_return_slot:
 
 
 // Store every bit so small-lane carry/borrow and the high half remain observed.
-.macro vector_leaf name,operation, right=$w1
+.macro vector_leaf name,operation, right=$w1, unary=0, destination=$w0
 .globl \name
 .type \name,@function
 .ent \name
@@ -95,14 +95,23 @@ msa_return_slot:
   insert.w $w1[2], $a2
   xor $t1, $a2, $a3
   insert.w $w1[3], $t1
-  \operation $w0, $w0, \right
-  copy_s.w $t0, $w0[0]
+  .ifc \destination,$w2
+  lui $t2,0x5a5a
+  ori $t2,$t2,0x5a5a
+  fill.w $w2,$t2
+  .endif
+  .if \unary
+  \operation \destination, $w0
+  .else
+  \operation \destination, $w0, \right
+  .endif
+  copy_s.w $t0, \destination[0]
   sw $t0, 0($a0)
-  copy_s.w $t0, $w0[1]
+  copy_s.w $t0, \destination[1]
   sw $t0, 4($a0)
-  copy_s.w $t0, $w0[2]
+  copy_s.w $t0, \destination[2]
   sw $t0, 8($a0)
-  copy_s.w $t0, $w0[3]
+  copy_s.w $t0, \destination[3]
   sw $t0, 12($a0)
   jr $ra
   addiu $v0, $zero, 7
@@ -252,3 +261,48 @@ vector_leaf msa_adds_a_same_b,adds_a.b,$w0
 vector_leaf msa_adds_a_same_h,adds_a.h,$w0
 vector_leaf msa_adds_a_same_w,adds_a.w,$w0
 vector_leaf msa_adds_a_same_d,adds_a.d,$w0
+
+// Immediate, unary and non-degenerate three-input masks.
+vector_leaf msa_andi_b,andi.b,165
+vector_leaf msa_ori_b,ori.b,165
+vector_leaf msa_nori_b,nori.b,165
+vector_leaf msa_xori_b,xori.b,165
+vector_leaf msa_bsel,bsel.v,$w1,0,$w2
+vector_leaf msa_bmnz,bmnz.v,$w1,0,$w2
+vector_leaf msa_bmz,bmz.v,$w1,0,$w2
+vector_leaf msa_pcnt_b,pcnt.b,$w1,1
+vector_leaf msa_pcnt_h,pcnt.h,$w1,1
+vector_leaf msa_pcnt_w,pcnt.w,$w1,1
+vector_leaf msa_pcnt_d,pcnt.d,$w1,1
+vector_leaf msa_nlzc_b,nlzc.b,$w1,1
+vector_leaf msa_nlzc_h,nlzc.h,$w1,1
+vector_leaf msa_nlzc_w,nlzc.w,$w1,1
+vector_leaf msa_nlzc_d,nlzc.d,$w1,1
+vector_leaf msa_nloc_b,nloc.b,$w1,1
+vector_leaf msa_nloc_h,nloc.h,$w1,1
+vector_leaf msa_nloc_w,nloc.w,$w1,1
+vector_leaf msa_nloc_d,nloc.d,$w1,1
+vector_leaf msa_slli_b,slli.b,7
+vector_leaf msa_slli_h,slli.h,15
+vector_leaf msa_slli_w,slli.w,31
+vector_leaf msa_slli_d,slli.d,63
+vector_leaf msa_srli_b,srli.b,7
+vector_leaf msa_srli_h,srli.h,15
+vector_leaf msa_srli_w,srli.w,31
+vector_leaf msa_srli_d,srli.d,63
+vector_leaf msa_srai_b,srai.b,7
+vector_leaf msa_srai_h,srai.h,15
+vector_leaf msa_srai_w,srai.w,31
+vector_leaf msa_srai_d,srai.d,63
+vector_leaf msa_bclri_b,bclri.b,7
+vector_leaf msa_bclri_h,bclri.h,15
+vector_leaf msa_bclri_w,bclri.w,31
+vector_leaf msa_bclri_d,bclri.d,63
+vector_leaf msa_bseti_b,bseti.b,7
+vector_leaf msa_bseti_h,bseti.h,15
+vector_leaf msa_bseti_w,bseti.w,31
+vector_leaf msa_bseti_d,bseti.d,63
+vector_leaf msa_bnegi_b,bnegi.b,7
+vector_leaf msa_bnegi_h,bnegi.h,15
+vector_leaf msa_bnegi_w,bnegi.w,31
+vector_leaf msa_bnegi_d,bnegi.d,63

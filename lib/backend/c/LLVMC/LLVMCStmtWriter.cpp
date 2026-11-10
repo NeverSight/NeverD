@@ -45,6 +45,7 @@
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/MIPS/MIPSBarrierSource.h"
 #include "neverd/backend/MIPS/MIPSDSPSource.h"
 #include "neverd/backend/MachineInstructionText.h"
 #include "neverd/backend/c/render/AArch64/AArch64ExclusiveC.h"
@@ -4804,6 +4805,13 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
   auto *IA = llvm::dyn_cast<llvm::InlineAsm>(Call.getCalledOperand());
   if (!IA)
     return false;
+  if (const auto Assembly = mips::nativeBarrierSource(Call)) {
+    if (!isMIPS(Opts.TheArch))
+      throw std::invalid_argument(mips::MalformedBarrierSource);
+    emitIndent(Indent);
+    OS << "__asm__ volatile(\"" << *Assembly << "\" ::: \"memory\");\n";
+    return true;
+  }
   if (const auto Write = mips::dspControlSourceWrite(Call)) {
     if (!Call.getFunction()->hasFnAttribute(mips::DSPSourceMarker) &&
         !mips::imagePreservesDSPControl(Opts.Image))

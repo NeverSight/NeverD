@@ -431,3 +431,57 @@ li $2,7
 jrc $31
 .end m16e2_gp_sw
 .size m16e2_gp_sw, .-m16e2_gp_sw
+
+# Barrier leaves retain a saved incoming link across the ordering operation.
+.macro barrier_leaf name,stype=-1
+.align 1
+.globl \name
+.type \name,@function
+.ent \name
+\name:
+.insn
+.half 0x64c4 # SAVE ra,32
+.if \stype < 0
+  ehb
+.else
+  sync \stype
+.endif
+li $2,7
+.half 0x6444 # RESTORE ra,32
+jrc $31
+.end \name
+.size \name, .-\name
+.endm
+barrier_leaf m16e2_ehb
+barrier_leaf m16e2_sync0,0
+barrier_leaf m16e2_sync1,1
+barrier_leaf m16e2_sync2,2
+barrier_leaf m16e2_sync3,3
+barrier_leaf m16e2_sync4,4
+barrier_leaf m16e2_sync5,5
+barrier_leaf m16e2_sync6,6
+barrier_leaf m16e2_sync7,7
+barrier_leaf m16e2_sync8,8
+barrier_leaf m16e2_sync9,9
+barrier_leaf m16e2_sync10,10
+barrier_leaf m16e2_sync11,11
+barrier_leaf m16e2_sync12,12
+barrier_leaf m16e2_sync13,13
+barrier_leaf m16e2_sync14,14
+barrier_leaf m16e2_sync15,15
+barrier_leaf m16e2_sync16,16
+barrier_leaf m16e2_sync17,17
+barrier_leaf m16e2_sync18,18
+barrier_leaf m16e2_sync19,19
+barrier_leaf m16e2_sync20,20
+barrier_leaf m16e2_sync21,21
+barrier_leaf m16e2_sync22,22
+barrier_leaf m16e2_sync23,23
+barrier_leaf m16e2_sync24,24
+barrier_leaf m16e2_sync25,25
+barrier_leaf m16e2_sync26,26
+barrier_leaf m16e2_sync27,27
+barrier_leaf m16e2_sync28,28
+barrier_leaf m16e2_sync29,29
+barrier_leaf m16e2_sync30,30
+barrier_leaf m16e2_sync31,31

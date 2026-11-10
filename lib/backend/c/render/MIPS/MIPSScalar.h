@@ -10,6 +10,7 @@
 #ifndef NEVERD_LIB_BACKEND_C_RENDER_MIPS_MIPSSCALAR_H
 #define NEVERD_LIB_BACKEND_C_RENDER_MIPS_MIPSSCALAR_H
 
+#include "neverd/backend/MIPS/MIPSBarrierSource.h"
 #include "neverd/backend/MIPS/MIPSDSPSource.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/ir/high/HighIR.h"
@@ -43,7 +44,10 @@ inline bool mipsScalarHighShapeIsValid(const HighExpr &E, Arch Target) {
        E.Operands.size() > 2 ? uint16_t(E.Operands[2]->Type->Size)
                              : uint16_t{0},
        E.MemoryOrdering == NdMemoryOrdering::None &&
-           E.MemoryAddressSpace == NdMemoryAddressSpace::Default});
+           E.MemoryAddressSpace == NdMemoryAddressSpace::Default,
+       !E.Operands.empty() && E.Operands[0]->Kind == ExprKind::Const
+           ? std::optional<uint64_t>(E.Operands[0]->ConstVal)
+           : std::nullopt});
 }
 
 template <typename Stream>
@@ -53,6 +57,20 @@ void writeMIPSScalarHelpers(Stream &OS, Arch Target,
   const bool Little = archLittleEndian(Target);
   const char *Reg = Wide ? "uint64_t" : "uint32_t";
   for (const auto &[Id, Name] : Helpers) {
+    if (mips::isBarrier(Id)) {
+      for (unsigned Stype = 0; Stype != (Id == Intrinsic::MIPSSync ? 32u : 1u);
+           ++Stype) {
+        OS << "static " << mips::BarrierNoInlineC
+           << mips::instructionModeCAttribute(InstructionMode::MIPSClassic)
+           << "void " << Name;
+        if (Id == Intrinsic::MIPSSync)
+          OS << "_" << Stype;
+        OS << "(void) { __asm__ volatile(\"" << mips::barrierAssembly(Id, Stype)
+           << "\" ::: \"memory\"); }\n";
+      }
+      OS << "\n";
+      continue;
+    }
     if (Id == Intrinsic::MIPSReadDSPControl) {
       OS << "static inline " << mips::DSPSourceCAttribute << "uint32_t " << Name
          << "(void) {\n    uint32_t value;\n    __asm__ volatile("
@@ -146,6 +164,8 @@ renderMIPSScalar(const HighExpr &E, Arch Target, const std::string &Name,
     throw std::runtime_error(mips::kUnpredictableResult);
   if (E.IntrinsicId == Intrinsic::MIPSLwrUpper)
     throw std::runtime_error(mips::kPartialLwrRequiresWord);
+  if (E.IntrinsicId == Intrinsic::MIPSSync)
+    return Name + "_" + std::to_string(E.Operands[0]->ConstVal) + "()";
   std::string Result = Name + "(";
   const char *Reg = isMIPS64(Target) ? "uint64_t" : "uint32_t";
   for (unsigned I = 0; I != E.Operands.size(); ++I) {

@@ -1,0 +1,15 @@
+//===- MIPSDSPLeftFixtures.def - Independent GNU/manual shift words -----===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Name, word with rd/rt/rs zero, lane bytes, variable count, saturation.
+MIPS_DSP_LEFT(shll_qb, 0x7c000013, 1, false, false)
+MIPS_DSP_LEFT(shllv_qb, 0x7c000093, 1, true, false)
+MIPS_DSP_LEFT(shll_ph, 0x7c000213, 2, false, false)
+MIPS_DSP_LEFT(shllv_ph, 0x7c000293, 2, true, false)
+MIPS_DSP_LEFT(shll_s_ph, 0x7c000313, 2, false, true)
+MIPS_DSP_LEFT(shllv_s_ph, 0x7c000393, 2, true, true)
+MIPS_DSP_LEFT(shll_s_w, 0x7c000513, 4, false, true)
+MIPS_DSP_LEFT(shllv_s_w, 0x7c000593, 4, true, true)
+#undef MIPS_DSP_LEFT

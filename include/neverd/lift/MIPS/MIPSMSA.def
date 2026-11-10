@@ -50,4 +50,23 @@ NEVERD_MIPS_MSA(AverageUnsignedVector, 0xff80003f, 0x7a800010)
 NEVERD_MIPS_MSA(RoundAverageSignedVector, 0xff80003f, 0x7b000010)
 NEVERD_MIPS_MSA(RoundAverageUnsignedVector, 0xff80003f, 0x7b800010)
 
+NEVERD_MIPS_MSA(AndImmediate, 0xff00003f, 0x78000000)
+NEVERD_MIPS_MSA(OrImmediate, 0xff00003f, 0x79000000)
+NEVERD_MIPS_MSA(NorImmediate, 0xff00003f, 0x7a000000)
+NEVERD_MIPS_MSA(XorImmediate, 0xff00003f, 0x7b000000)
+NEVERD_MIPS_MSA(MergeNonzeroVector, 0xffe0003f, 0x7880001e)
+NEVERD_MIPS_MSA(MergeZeroVector, 0xffe0003f, 0x78a0001e)
+NEVERD_MIPS_MSA(SelectVector, 0xffe0003f, 0x78c0001e)
+NEVERD_MIPS_MSA(PopulationCount, 0xfffc003f, 0x7b04001e)
+NEVERD_MIPS_MSA(LeadingOneCount, 0xfffc003f, 0x7b08001e)
+NEVERD_MIPS_MSA(LeadingZeroCount, 0xfffc003f, 0x7b0c001e)
+// BIT uses a prefix-coded lane width and count in bits22..16. The lifter
+// rejects the reserved 1111xxx prefix before emitting any operations.
+NEVERD_MIPS_MSA(ShiftLeftImmediate, 0xff80003f, 0x78000009)
+NEVERD_MIPS_MSA(ShiftRightSignedImmediate, 0xff80003f, 0x78800009)
+NEVERD_MIPS_MSA(ShiftRightImmediate, 0xff80003f, 0x79000009)
+NEVERD_MIPS_MSA(ClearBitImmediate, 0xff80003f, 0x79800009)
+NEVERD_MIPS_MSA(SetBitImmediate, 0xff80003f, 0x7a000009)
+NEVERD_MIPS_MSA(NegateBitImmediate, 0xff80003f, 0x7a800009)
+
 #undef NEVERD_MIPS_MSA

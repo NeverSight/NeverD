@@ -15797,7 +15797,14 @@ through normalization so CFG does not visit a nonexistent fallthrough.
 MIPS16 symbols are classified before their overlapping microMIPS flag bit.
 MIPS16e2 is an explicit ABI-record feature on that same instruction mode;
 `ELFMIPSProfile` owns the GNU e2 ASE bit and `Decoder::configureFor` refreshes it.
-Its integer/memory EXTEND forms reuse the classic semantic owners. The pinned
+Its integer/memory EXTEND forms reuse the classic semantic owners. Delay-slot
+queries reuse the small MIPS16 jump normalizer instead of normalizing all scalar
+instructions. EHB/SYNC are effectful native barriers with an independent
+no-data-write contract for saved returns; their exact stype and source mode are
+validated at the owning shape/source boundaries. Module name planning reserves
+native symbols, deferred call hints and import-storage names before allocating
+barrier helpers. Source-body markers own their selected-definition closure;
+matching a symbol's spelling does not establish helper identity. The pinned
 Unicorn does not implement e2; GNU bytes, independent LowIR checks and execution
 of regenerated old-MIPS16 source remain distinct evidence.
 Both source routes emit the positive encoding attribute and explicitly exclude
