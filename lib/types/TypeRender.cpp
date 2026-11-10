@@ -82,6 +82,19 @@ bool reserved(Language Lang, llvm::StringRef Name) {
   return Index < ByLanguage.size() && ByLanguage[Index].contains(Name);
 }
 
+std::string escapeIdentifier(Language Lang, std::string Name) {
+  if (!reserved(Lang, Name))
+    return Name;
+  // A raw identifier keeps a Rust name as it was, except for the few that
+  // cannot be raw.
+  if (Lang == Language::Rust && Name != "self" && Name != "Self" &&
+      Name != "crate" && Name != "super" && Name != "_")
+    Name.insert(0, "r#");
+  else
+    Name += '_';
+  return Name;
+}
+
 } // namespace
 
 llvm::StringRef spellingId(BuiltinSpelling Spelling) {
@@ -217,14 +230,7 @@ std::string bitText(uint64_t BitInUnit, uint32_t Width) {
 }
 
 std::string escapedName(Language Lang, llvm::StringRef Name) {
-  if (!reserved(Lang, Name))
-    return Name.str();
-  // A raw identifier keeps a Rust name as it was, except for the few that
-  // cannot be raw.
-  if (Lang == Language::Rust && Name != "self" && Name != "Self" &&
-      Name != "crate" && Name != "super" && Name != "_")
-    return "r#" + Name.str();
-  return Name.str() + "_";
+  return escapeIdentifier(Lang, Name.str());
 }
 
 /// Names Go declares in the universe scope, and the package local types
@@ -295,9 +301,10 @@ NameSpelling::NameSpelling(const TypeLibrary &Library, Language Lang,
         ++Number;
       Spelled += "_" + std::to_string(Number);
     }
-    if (Spelled != Type->Name)
+    const bool Changed = Spelled != Type->Name;
+    if (Changed)
       Renamed.push_back({Type->Name, Spelled});
-    Types[Type->Name] = std::move(Spelled);
+    Types[Type->Name] = Changed ? std::move(Spelled) : std::string();
   }
   if (IncludeEnumerators)
     for (const LocalType *Type : All) {
@@ -312,9 +319,10 @@ NameSpelling::NameSpelling(const TypeLibrary &Library, Language Lang,
 
 std::string NameSpelling::identifier(llvm::StringRef Name, bool TypeName,
                                      Language Lang, Language Reserved) {
-  std::string Text;
-  for (char C : Name)
-    Text += llvm::isAlnum(C) || C == '_' ? C : '_';
+  std::string Text = Name.str();
+  for (char &C : Text)
+    if (!llvm::isAlnum(C) && C != '_')
+      C = '_';
   if (Text.empty() || llvm::isDigit(Text.front()))
     Text.insert(Text.begin(), '_');
   if (TypeName && Lang == Language::Go)
@@ -333,7 +341,7 @@ std::string NameSpelling::identifier(llvm::StringRef Name, bool TypeName,
     for (const char *Word : JavaScriptPredeclared)
       if (Text == Word)
         return Text + "_";
-  return escapedName(Reserved, Text);
+  return escapeIdentifier(Reserved, std::move(Text));
 }
 
 void NameSpelling::enumeration(const EnumDef &Enum, llvm::StringRef Owner,
@@ -369,10 +377,10 @@ void NameSpelling::inlineEnums(const RecordDef &Record, llvm::StringRef Owner,
 
 std::string NameSpelling::type(llvm::StringRef Name) const {
   auto Found = Types.find(Name);
-  // A name the library lacks, such as a declared-only reference.
-  return Found != Types.end()
-             ? Found->second
-             : identifier(Name, /*TypeName=*/true, Lang, Reserved);
+  if (Found == Types.end())
+    return identifier(Name, /*TypeName=*/true, Lang, Reserved);
+  // Known unchanged names need no second string or repeated normalization.
+  return Found->second.empty() ? Name.str() : Found->second;
 }
 
 std::string NameSpelling::enumerator(const EnumDef &Enum, size_t Index) const {

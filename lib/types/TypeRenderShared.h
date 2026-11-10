@@ -90,6 +90,8 @@ private:
   /// The language whose keywords the names step around: C++'s for C that
   /// C++ reads too.
   Language Reserved;
+  /// Every library name, with only changed spellings stored as values.
+  /// An empty value identifies an unchanged name without normalizing it again.
   llvm::StringMap<std::string> Types;
   std::map<const EnumDef *, std::vector<std::string>> Enumerators;
   std::vector<std::pair<std::string, std::string>> Renamed;

@@ -4728,6 +4728,12 @@ type or enumerator needs it. Scalar and parameter spelling use the same
 identifier rules directly. The deferred table still consumes the whole
 library in its canonical order, preserving collisions independently of
 which type is requested first. Shared embedded-name tables remain reusable.
+The naming table retains changed type spellings and an empty identity marker
+for each unchanged name. Repeated queries use that marker without normalizing
+the name again or retaining a second copy of it. Every type still takes its
+place in the ordinary namespace before enumerators, including unchanged
+identifiers and generated collision suffixes. Undeclared names follow the
+ordinary identifier rules.
 A name a program may also give a routine
 of its own decides only together with the module that exports it
 (`isNoReturnImport`, `WindowsNoReturnImports.inc`): the Universal CRT's
