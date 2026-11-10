@@ -30,6 +30,7 @@ VECTOR_FUNCTIONS = ("msa_add_b", "msa_add_h", "msa_add_d", "msa_sub_b", "msa_sub
         "add_a", "adds_a", "adds_s", "adds_u", "subs_s", "subs_u", "ave_s", "ave_u", "aver_s", "aver_u")
     for width in ("b", "h", "w", "d"))
 VECTOR_FUNCTIONS += tuple(f"msa_{op}_same_{w}" for op in ("add_a", "adds_a") for w in ("b", "h", "w", "d"))
+VECTOR_FUNCTIONS += ('msa_andi_b', 'msa_ori_b', 'msa_nori_b', 'msa_xori_b', 'msa_bsel', 'msa_bmnz', 'msa_bmz', 'msa_pcnt_b', 'msa_pcnt_h', 'msa_pcnt_w', 'msa_pcnt_d', 'msa_nlzc_b', 'msa_nlzc_h', 'msa_nlzc_w', 'msa_nlzc_d', 'msa_nloc_b', 'msa_nloc_h', 'msa_nloc_w', 'msa_nloc_d', 'msa_slli_b', 'msa_slli_h', 'msa_slli_w', 'msa_slli_d', 'msa_srli_b', 'msa_srli_h', 'msa_srli_w', 'msa_srli_d', 'msa_srai_b', 'msa_srai_h', 'msa_srai_w', 'msa_srai_d', 'msa_bclri_b', 'msa_bclri_h', 'msa_bclri_w', 'msa_bclri_d', 'msa_bseti_b', 'msa_bseti_h', 'msa_bseti_w', 'msa_bseti_d', 'msa_bnegi_b', 'msa_bnegi_h', 'msa_bnegi_w', 'msa_bnegi_d')
 FUNCTIONS = tuple(f"msa_lane{i}" for i in range(4)) + ("msa_mix", "msa_store", "msa_return_slot") + VECTOR_FUNCTIONS
 INPUTS = [(0, 0, 0, 0), (0xffffffff, 0x7fffffff, 0x80000000, 1),
           (0x11223344, 0x55667788, 0x99aabbcc, 0xddeeff00), (1, 2, 3, 4), (0, 1, 0xffffffff, 0), (0, 0x80000000, 0, 0x80000000)]
@@ -57,7 +58,32 @@ def expected(function, arguments, little):
         if "_same_" in operation:
             right = left
             operation = operation.replace("_same_", "_")
-        if operation.startswith(("add_a_", "adds_", "subs_", "ave_", "aver_")):
+        if operation in ("andi_b", "ori_b", "nori_b", "xori_b"):
+            immediate = int.from_bytes(bytes([0xa5]) * 16, "little")
+            value = left & immediate if operation == "andi_b" else left | immediate if operation == "ori_b" else ~(left | immediate) if operation == "nori_b" else left ^ immediate
+            value &= (1 << 128) - 1
+        elif operation in ("bsel", "bmnz", "bmz"):
+            old = int.from_bytes(bytes([0x5a]) * 16, "little")
+            value = ((right & old) | (left & ~old)) if operation == "bsel" else ((left & right) | (old & ~right)) if operation == "bmnz" else ((left & ~right) | (old & right))
+        elif operation.startswith(("pcnt_", "nlzc_", "nloc_", "slli_", "srli_", "srai_", "bclri_", "bseti_", "bnegi_")):
+            bits = {"b": 8, "h": 16, "w": 32, "d": 64}[operation[-1]]
+            mask, value = (1 << bits) - 1, 0
+            op = operation[:-2]
+            for shift in range(0, 128, bits):
+                x = (left >> shift) & mask
+                signed = x - (1 << bits) if x & (1 << (bits - 1)) else x
+                count = bits - 1
+                if op == "pcnt": lane = x.bit_count()
+                elif op == "nlzc": lane = bits - x.bit_length()
+                elif op == "nloc": lane = bits - (x ^ mask).bit_length()
+                elif op == "slli": lane = x << count
+                elif op == "srli": lane = x >> count
+                elif op == "srai": lane = signed >> count
+                elif op == "bclri": lane = x & ~(1 << count)
+                elif op == "bseti": lane = x | (1 << count)
+                else: lane = x ^ (1 << count)
+                value |= (lane & mask) << shift
+        elif operation.startswith(("add_a_", "adds_", "subs_", "ave_", "aver_")):
             bits = {"b": 8, "h": 16, "w": 32, "d": 64}[operation[-1]]
             mask, value = (1 << bits) - 1, 0
             minimum, maximum = -(1 << (bits - 1)), (1 << (bits - 1)) - 1

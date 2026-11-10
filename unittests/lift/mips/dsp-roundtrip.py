@@ -33,6 +33,7 @@ FUNCTIONS = ("dsp_read", "dsp_write", "dsp_partial", "dsp_add",
              "dsp_shrl", "dsp_shrlv", "dsp_shra", "dsp_shrav", "dsp_shra_r",
              "dsp_shrav_r", "dsp_shra_rw", "dsp_shrav_rw", "dsp_pack_h", "dsp_pack_b",
              "dsp_bitrev", "dsp_raddu", "dsp_repl_qb", "dsp_repl_ph", "dsp_replv_qb", "dsp_replv_ph", "dsp_preceq_phl", "dsp_preceq_phr", "dsp_precequ_qbl", "dsp_precequ_qbr", "dsp_precequ_qbla", "dsp_precequ_qbra", "dsp_preceu_qbl", "dsp_preceu_qbr", "dsp_preceu_qbla", "dsp_preceu_qbra", "dsp_addq_w", "dsp_subq_w", "dsp_addsc", "dsp_addwc", "dsp_modsub", "dsp_cmpeq", "dsp_cmplt", "dsp_cmple", "dsp_pick_b", "dsp_pick_h")
+FUNCTIONS += ('dsp_abs_ph', 'dsp_abs_w', 'dsp_abs_zero', 'dsp_cmpgueq', 'dsp_cmpgult', 'dsp_cmpgule', 'dsp_shll_qb', 'dsp_shllv_qb', 'dsp_shll_ph', 'dsp_shllv_ph', 'dsp_shll_s_ph', 'dsp_shllv_s_ph', 'dsp_shll_s_w', 'dsp_shllv_s_w', 'dsp_shll_zero')
 INITIAL_STATES = (0, 0x01100021, 0x0fff7fbf)
 INPUTS = ((0, 0), (0xff01807f, 0x02018081), (0x11223344, 0x55667788),
           (0xffffffff, 1), (0x80808080, 0x80808080),
@@ -47,6 +48,29 @@ def digest(path):
 
 def expected(function, initial, arguments):
     a, b = arguments
+    if function.startswith("dsp_abs") or function.startswith("dsp_shll"):
+        absolute = function.startswith("dsp_abs")
+        bits = 32 if function.endswith("_w") else 8 if function.endswith("_qb") else 16
+        count = 0 if absolute else b & (bits - 1) if "shllv" in function else bits - 1
+        value, state = 0, initial
+        for shift in range(0, 32, bits):
+            x = (a >> shift) & ((1 << bits) - 1)
+            if bits != 8 and x & (1 << (bits - 1)): x -= 1 << bits
+            y = abs(x) if absolute else x * (1 << count)
+            minimum = -(1 << (bits-1)) if bits != 8 else 0
+            maximum = (1 << (bits - (bits != 8))) - 1
+            if y < minimum or y > maximum: state |= 1 << (20 if absolute else 22)
+            if absolute or "_s_" in function or function.endswith("zero"):
+                y = max(minimum, min(maximum, y))
+            value |= (y & ((1 << bits) - 1)) << shift
+        return (7 if function.endswith("zero") else value), state
+    if function.startswith("dsp_cmpgu"):
+        value = 0
+        for lane in range(4):
+            x, y = (a >> (8*lane)) & 255, (b >> (8*lane)) & 255
+            predicate = x == y if function.endswith("eq") else x < y if function.endswith("lt") else x <= y
+            value |= int(predicate) << lane
+        return value, initial
     if function in ("dsp_addq_w", "dsp_subq_w", "dsp_addsc", "dsp_addwc"):
         sa, sb = (v - 0x100000000 if v & 0x80000000 else v for v in (a, b))
         if function == "dsp_addsc":
@@ -222,13 +246,10 @@ def run(args, artifacts):
                             after = observe(rebuilt, little, function, initial, inputs)
                             if after != wanted:
                                 raise RuntimeError(f"{stem.name}: state={initial:#x}, input={inputs}, generated={after}, expected={wanted}")
-                            limitation = before != wanted
-                            if limitation and not (function in ("dsp_zero", "dsp_sub_zero") and before == (7, initial)
-                                                   and wanted[1] == initial | 0x100000):
+                            if before != wanted:
                                 raise RuntimeError(f"{stem.name}: original={before}, expected={wanted}")
                             observations.append({"initial_dspcontrol": initial, "inputs": inputs,
-                                                 "expected": wanted, "original": before, "generated": after,
-                                                 "known_zero_destination_oracle_defect": limitation})
+                                                 "expected": wanted, "original": before, "generated": after})
                     report["passed"].append({"profile": profile, "function": function, "backend": backend,
                                              "optimization": optimization,
                                              "original_sha256": original_hash, "source_sha256": digest(source),
@@ -283,12 +304,8 @@ def run(args, artifacts):
             artifacts.discard(obj, rebuilt, log)
         artifacts.discard(source)
     report["complete"] = True
-    report["known_oracle_disagreements"] = sum(
-        observation["known_zero_destination_oracle_defect"]
-        for group in report["passed"] for observation in group["observations"])
     artifacts.write("results.json", report)
-    print(len(report["passed"]), "source groups passed;",
-          report["known_oracle_disagreements"], "known reference disagreements recorded", flush=True)
+    print(len(report["passed"]), "source groups passed; all original/generated observations matched independent expectations", flush=True)
 
 
 def main():

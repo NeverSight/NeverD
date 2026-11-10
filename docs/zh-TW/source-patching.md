@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](../zh-CN/source-patching.md) | [繁體中文](source-patching.md) | [日本語](../ja/source-patching.md) | [한국어](../ko/source-patching.md) | [Français](../fr/source-patching.md) | [Deutsch](../de/source-patching.md) | [Español](../es/source-patching.md) | [Italiano](../it/source-patching.md) | [Русский](../ru/source-patching.md) | [العربية](../ar/source-patching.md)
 
-<!-- i18n-source: 40bc95b0497bcc23428886f1765116ce87275a1507ae139a70be4896271650a7 -->
+<!-- i18n-source: 360a0b82872370d45ddc1c55aa575e69255af24af028a4744f51c8cc2034de02 -->
 
 [← Documentation Index](README.md)
 
@@ -40,6 +40,8 @@ clang --target=x86_64-unknown-linux-gnu -fPIC -fno-lto -c replacement.c -o repla
 neverd patch app --from-object=replacement.o --entry=replacement \
   --func=0x401140 --patch-report -o app.object
 ```
+
+對於傳統 ABI 的 macOS arm64e 映像與 ABI1 macOS 主執行檔，NeverD 先透過原生 MC 物件寫入器產生標準 LLVM IR 對應的物件，再進行安裝。請明確選擇相容的前端（驗證使用 Clang 22），並使用包含 Darwin 簽章返回 CFI 修正的 LLVM fork 建置 NeverD。預設預編譯版本仍為 r6；它會拒絕不相容的傳統 ABI 簽章返回 CFI，避免發布原生例外處理失敗的映像。原生物件產物也會保留 Apple 原有的驗證重定位與展開約定。提供者宣告、簽章、支援的 ABI 及驗證命令見 [arm64e 產生端與執行邊界](../arm64e-native-validation.md#canonical-ir-through-native-mc-objects)。此原始碼約定不開放任意提升映像的整體重建。
 
 <!-- i18n-section: profiles -->
 ## 已驗證設定與限制

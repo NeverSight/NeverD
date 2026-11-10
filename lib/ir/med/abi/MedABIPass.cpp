@@ -1013,7 +1013,8 @@ void recoverCallAbi(
     while (Current && Seen.insert(Current->Id).second) {
       for (size_t I = Before; I-- > 0;) {
         const auto &Previous = Current->Ops[I];
-        if (isAbiRecoveryBarrier(Previous) || Writes(Previous.Output) ||
+        if (isAbiRecoveryBarrier(Previous, /*RegistersOnly=*/true) ||
+            Writes(Previous.Output) ||
             llvm::any_of(Previous.IntrinsicOutputs, Writes))
           return false;
       }
@@ -1888,6 +1889,7 @@ void recoverCallAbi(
           Op.CalleeVectorArgs <= 0 && !Op.CalleeVectorSlots &&
           CalleeArgs > int(IntParamRegs.size());
       bool StackSetupIncomplete = false;
+      std::map<int64_t, CallSetupStackLane> WideStackSlots;
       const bool NeedsStackBoundary =
           Convention && Convention->PairAlignedWideArguments &&
           !CI.IsIndirect && !HeaderVariadic && !OpenVariadicArity &&
@@ -1901,7 +1903,8 @@ void recoverCallAbi(
       const auto ReachingStackStores = callSetupStackStores(
           StackContext ? *StackContext : Ctx,
           RecoverStackJoins ? &StackJoins : nullptr, nullptr,
-          NeedsStackBoundary ? &StackSetupIncomplete : nullptr);
+          NeedsStackBoundary ? &StackSetupIncomplete : nullptr,
+          NeedsStackBoundary ? &WideStackSlots : nullptr);
       std::erase_if(StackJoins.Slots, [&](const auto &Item) {
         const int64_t Slot =
             int64_t(IntParamRegs.size()) +
@@ -2012,7 +2015,8 @@ void recoverCallAbi(
                                       bool ForwardCallResult) {
           for (int J = static_cast<int>(Setup.Ops.size()) - 1; J >= 0; --J) {
             const auto &Prev = Setup.Ops[J];
-            const bool Barrier = isAbiRecoveryBarrier(Prev);
+            const bool Barrier =
+                isAbiRecoveryBarrier(Prev, /*RegistersOnly=*/true);
             if (Barrier && !ForwardCallResult)
               break;
             if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size) {
@@ -2296,7 +2300,7 @@ void recoverCallAbi(
         bool HasFPSetup = false;
         for (int J = static_cast<int>(OI) - 1; J >= 0; --J) {
           const auto &Prev = Blk.Ops[J];
-          if (isAbiRecoveryBarrier(Prev))
+          if (isAbiRecoveryBarrier(Prev, /*RegistersOnly=*/true))
             break;
           if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size > 0 &&
               isFPValueReg(Prev.Output.RegOff)) {
@@ -2343,6 +2347,42 @@ void recoverCallAbi(
       // record lets the FP-argument assembly recover every overflow value in
       // order (see the FP overflow run after the FP-register scan).
       std::map<int64_t, MedVar> FPStackByOff;
+
+      // STORE byte positions and SUBBYTES numeric positions differ on a
+      // big-endian target. Both local scanning and certified lanes use this
+      // one projection, including a short final lane of a wide store.
+      const auto ExtractStackLane = [&](const MedVar &Stored,
+                                        unsigned MemoryOffset, unsigned Bytes,
+                                        unsigned SlotBytes) {
+        MedVar Lane;
+        Lane.Kind = MedVar::Temp;
+        Lane.Id = FreshId++;
+        Lane.SSAVer = 0;
+        Lane.Size = static_cast<uint16_t>(Bytes);
+        Lane.TheArch = TheArch;
+        MedOp Sub;
+        Sub.Opcode = NdOp::SUBBYTES;
+        Sub.Addr = Op.Addr;
+        Sub.Output = Lane;
+        Sub.addInput(Stored);
+        const unsigned NumericOffset = archLittleEndian(TheArch)
+                                           ? MemoryOffset
+                                           : Stored.Size - MemoryOffset - Bytes;
+        Sub.addInput(MedVar::makeConst(NumericOffset, 4));
+        CallLaneOps.push_back(std::move(Sub));
+        if (Bytes < SlotBytes) {
+          MedOp Widen;
+          Widen.Opcode = NdOp::INT_ZEXT;
+          Widen.Addr = Op.Addr;
+          Widen.Output = Lane;
+          Widen.Output.Id = FreshId++;
+          Widen.Output.Size = static_cast<uint16_t>(SlotBytes);
+          Widen.addInput(Lane);
+          Lane = Widen.Output;
+          CallLaneOps.push_back(std::move(Widen));
+        }
+        return Lane;
+      };
 
       // Integer outgoing stack stores of a DIRECT call, keyed by byte offset
       // from the call SP and recorded at store granularity.  Apple's arm64 ABI
@@ -2480,31 +2520,8 @@ void recoverCallAbi(
               if (FoundMask[SlotIdx + L])
                 continue;
               const int Bytes = std::min<int>(SlotSize, SV.Size - L * SlotSize);
-              MedVar Lane;
-              Lane.Kind = MedVar::Temp;
-              Lane.Id = FreshId++;
-              Lane.SSAVer = 0;
-              Lane.Size = static_cast<uint16_t>(Bytes);
-              Lane.TheArch = TheArch;
-              MedOp Sub;
-              Sub.Opcode = NdOp::SUBBYTES;
-              Sub.Addr = Op.Addr;
-              Sub.Output = Lane;
-              Sub.addInput(SV);
-              Sub.addInput(
-                  MedVar::makeConst(static_cast<uint64_t>(L * SlotSize), 4));
-              CallLaneOps.push_back(std::move(Sub));
-              if (Bytes < SlotSize) {
-                MedOp Widen;
-                Widen.Opcode = NdOp::INT_ZEXT;
-                Widen.Addr = Op.Addr;
-                Widen.Output = Lane;
-                Widen.Output.Id = FreshId++;
-                Widen.Output.Size = static_cast<uint16_t>(SlotSize);
-                Widen.addInput(Lane);
-                Lane = Widen.Output;
-                CallLaneOps.push_back(std::move(Widen));
-              }
+              const MedVar Lane =
+                  ExtractStackLane(SV, L * SlotSize, Bytes, SlotSize);
               Found[SlotIdx + L] = Lane;
               FoundMask[SlotIdx + L] = true;
               FromStackScan[SlotIdx + L] = true;
@@ -2837,7 +2854,7 @@ void recoverCallAbi(
             ForwardsCallResult = true;
             break;
           }
-          if (isAbiRecoveryBarrier(After))
+          if (isAbiRecoveryBarrier(After, /*RegistersOnly=*/true))
             break;
           if (After.Output.Kind == MedVar::Reg &&
               (After.Output.RegOff == TRI.IntReturnReg ||
@@ -3329,19 +3346,31 @@ void recoverCallAbi(
                                : DarwinVarArgBase >= 0
                                    ? DarwinVarArgBase
                                    : static_cast<int>(IntParamRegs.size());
-      if (NeedsStackBoundary && StackSetupIncomplete) {
-        // The local scan, packed-store reconstruction and tail forwarding
-        // cannot restore evidence lost by the shared reaching-memory proof.
-        // Keep only complete required carriers certified by that owner.
+      if (NeedsStackBoundary) {
+        // Restore the owner's actual values after local packing/forwarding.
+        // Even a complete proof cannot certify a different value solely
+        // because it happens to occupy the same slot. An incomplete proof
+        // additionally refuses all required carriers it did not establish.
         for (int K = StackArgBase; K < std::min(CalleeArgs, MaxArgs); ++K) {
           const int64_t Offset = CallLayout.CallStackBase +
                                  (K - StackArgBase) * CallLayout.SlotBytes;
+          const auto Wide = WideStackSlots.find(Offset);
+          if (Wide != WideStackSlots.end() &&
+              !UndefinedScratchSlot(Wide->second.StoredValue)) {
+            Found[K] = ExtractStackLane(
+                Wide->second.StoredValue, Wide->second.MemoryOffset,
+                CallLayout.SlotBytes, CallLayout.SlotBytes);
+            FoundMask[K] = FromStackScan[K] = true;
+            continue;
+          }
           const auto Reaching = ReachingStackStores.find(Offset);
           const bool Proven = Reaching != ReachingStackStores.end() &&
                               Reaching->second.Size == CallLayout.SlotBytes &&
                               !UndefinedScratchSlot(Reaching->second);
-          Found[K] = Proven ? Reaching->second : MedVar{};
-          FoundMask[K] = FromStackScan[K] = Proven;
+          if (Proven || StackSetupIncomplete) {
+            Found[K] = Proven ? Reaching->second : MedVar{};
+            FoundMask[K] = FromStackScan[K] = Proven;
+          }
         }
       }
       // Assemble up to the highest recovered lane so interior gaps are filled

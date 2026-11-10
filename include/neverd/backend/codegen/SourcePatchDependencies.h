@@ -41,6 +41,11 @@ struct SourcePatchDependencies {
 llvm::Error validateSourcePatchDependencyRequests(
     llvm::ArrayRef<SourcePatchDependency> Requests);
 
+/// Native object emission retains symbolic initializers and declarations.
+/// Validate providers without replacing them with ordinary indirect loads.
+llvm::Error validateSourcePatchDependencyDeclarations(
+    const llvm::Module &Module, llvm::ArrayRef<SourcePatchDependency> Requests);
+
 /// Append real native loader metadata, preserving all original import slots.
 /// Requests have exact symbol identities; TLS, ordinal and version guessing
 /// are not part of this contract. No filesystem output is produced.

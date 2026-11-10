@@ -16,9 +16,10 @@ import verify_arm64e_native as native
 CASES = json.loads(Path(__file__).with_suffix(".def").read_text())
 
 
-def runtime_xml(executable=False):
+def runtime_xml(executable=False, generated=False):
+    key = "expected_" + ("generated_" if generated else "") + ("executable_" if executable else "") + "tests"
     root = ET.Element(CASES["suite_tag"])
-    for name in CASES["expected_executable_tests" if executable else "expected_tests"]:
+    for name in CASES[key]:
         ET.SubElement(root, CASES["case_tag"], name=name,
                       status=CASES["run_status"])
     return root
@@ -279,6 +280,125 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                     command.assert_not_called()
                 actual = json.loads((root / native.POLICY["report_name"]).read_text())
                 self.assertFalse(actual[CASES["qualification_key"]])
+
+    def test_default_executable_requires_current_system_pac_and_unwind_controls(self):
+        for mutation in CASES["probe_mutations"]:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                probe = root / CASES["probe_file"]
+                native.save(probe, dict(CASES["passed_probe"], **mutation))
+                with mock.patch.object(native, "provenance", return_value=CASES["provenance"]), \
+                        mock.patch.object(native, "command") as command:
+                    with self.assertRaises(ValueError):
+                        native.run_installation(root, root, probe, executable=True,
+                                                system_startup=True)
+                    command.assert_not_called()
+
+    def test_default_executable_runs_without_a_profile_and_checks_every_case(self):
+        for skipped in (False, True):
+            with self.subTest(skipped=skipped), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                probe = root / CASES["probe_file"]
+                native.save(probe, CASES["passed_probe"])
+                binary = root / native.POLICY["test_binary"]
+                binary.write_text(CASES["test_binary_bytes"])
+
+                def run(products, output, label, argv, timeout, env=None):
+                    self.assertEqual(argv[:len(native.POLICY["ctest_command"])],
+                                     native.POLICY["ctest_command"])
+                    if label == native.POLICY["selection_label"]:
+                        stdout = json.dumps({"tests": [
+                            {"command": [str(binary), native.POLICY["gtest_prefix"] + name]}
+                            for name in CASES["expected_executable_tests"]]})
+                    else:
+                        self.assertEqual(label, native.POLICY["runtime_label_name"])
+                        self.assertEqual(env[native.POLICY["executable_environment"]],
+                                         native.POLICY["system_fixup_loader"])
+                        xml = runtime_xml(True)
+                        if skipped:
+                            ET.SubElement(xml[0], CASES["failure_tags"][-1])
+                        (output / native.POLICY["xml_name"]).write_bytes(ET.tostring(xml))
+                        stdout = ""
+                    return subprocess.CompletedProcess(argv, 0, stdout, "")
+
+                with mock.patch.object(native, "provenance", return_value=CASES["provenance"]), \
+                        mock.patch.object(native, "command", side_effect=run):
+                    if skipped:
+                        with self.assertRaises(ValueError):
+                            native.run_installation(root, root, probe, executable=True,
+                                                    system_startup=True)
+                    else:
+                        native.run_installation(root, root, probe, executable=True,
+                                                system_startup=True)
+                report = json.loads((root / native.POLICY["report_name"]).read_text())
+                self.assertEqual(report[native.POLICY["default_executable_qualification_key"]],
+                                 not skipped)
+                self.assertFalse(report["whole_image_publication_qualified"])
+                self.assertNotIn(native.POLICY["startup_profile_key"], report)
+
+    def test_generated_matrices_require_exact_cases_and_explicit_frontend(self):
+        for executable in (False, True):
+            for skipped in (False, True):
+                with self.subTest(executable=executable, skipped=skipped), tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    probe = root / CASES["probe_file"]
+                    native.save(probe, CASES["passed_probe"])
+                    binary = root / native.POLICY["test_binary"]
+                    binary.write_text(CASES["test_binary_bytes"])
+                    compiler = root / CASES["ir_compiler_file"]
+                    compiler.write_text(CASES["ir_compiler_bytes"])
+                    compiler.chmod(compiler.stat().st_mode | 0o100)
+                    matrix = runtime_xml(executable, True)
+                    names = [case.attrib[CASES["name_key"]] for case in matrix]
+                    with self.assertRaises(ValueError):
+                        native.check_runtime_report(ET.tostring(runtime_xml(executable)), executable, True)
+
+                    def run(products, output, label, argv, timeout, env=None):
+                        if label == native.POLICY["ir_compiler_label"]:
+                            self.assertEqual(argv, [str(compiler.resolve()), *native.POLICY["ir_compiler_version_args"]])
+                            stdout = CASES["ir_compiler_version"]
+                        elif label == native.POLICY["selection_label"]:
+                            stdout = json.dumps({"tests": [
+                                {"command": [str(binary), native.POLICY["gtest_prefix"] + name]}
+                                for name in names]})
+                        else:
+                            self.assertEqual(label, native.POLICY["runtime_label_name"])
+                            self.assertEqual(argv[:len(native.POLICY["ctest_command"])], native.POLICY["ctest_command"])
+                            self.assertEqual(env[native.fixture_contract()["ir_compiler_environment"]], str(compiler.resolve()))
+                            if executable:
+                                self.assertEqual(env[native.POLICY["executable_environment"]], native.POLICY["system_fixup_loader"])
+                            if skipped:
+                                ET.SubElement(matrix[0], CASES["failure_tags"][-1])
+                            (output / native.POLICY["xml_name"]).write_bytes(ET.tostring(matrix))
+                            stdout = ""
+                        return subprocess.CompletedProcess(argv, 0, stdout, "")
+
+                    with mock.patch.object(native, "provenance", return_value=CASES["provenance"]), \
+                            mock.patch.object(native, "command", side_effect=run):
+                        if skipped:
+                            with self.assertRaises(ValueError):
+                                native.run_installation(root, root, probe, executable=executable,
+                                                        system_startup=True, ir_compiler=compiler)
+                        else:
+                            native.run_installation(root, root, probe, executable=executable,
+                                                    system_startup=True, ir_compiler=compiler)
+                    report = json.loads((root / native.POLICY["report_name"]).read_text())
+                    key = "generated_executable_qualification_key" if executable else "generated_qualification_key"
+                    self.assertEqual(report[native.POLICY[key]], not skipped)
+                    self.assertEqual(report[native.POLICY["ir_compiler_key"]]["sha256"], native.digest(compiler))
+                    self.assertFalse(report["whole_image_publication_qualified"])
+                    self.assertFalse(report[native.POLICY["default_executable_qualification_key"]])
+
+    def test_unavailable_generated_frontend_stops_before_ctest(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(native, "provenance", return_value=CASES["provenance"]), \
+                mock.patch.object(native, "command") as command:
+            root = Path(temporary)
+            probe = root / CASES["probe_file"]
+            native.save(probe, CASES["passed_probe"])
+            with self.assertRaises(ValueError):
+                native.run_installation(root, root, probe, ir_compiler=root / CASES["ir_compiler_file"])
+            command.assert_not_called()
 
 
 if __name__ == "__main__":

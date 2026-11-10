@@ -10780,4 +10780,129 @@ Your previous graph is still available.</source>
         <translation>Граф результатов плагина</translation>
     </message>
 </context>
+<context>
+    <name>UnwindInfoDialog</name>
+    <message>
+        <source>Unwind information at %1</source>
+        <translation>Сведения о раскрутке стека по адресу %1</translation>
+    </message>
+    <message>
+        <source>DWARF state at the selected PC</source>
+        <translation>Состояние DWARF для выбранного PC</translation>
+    </message>
+    <message>
+        <source>Compact unwind: completed-prologue recipe</source>
+        <translation>Компактная раскрутка: рецепт для завершённого пролога</translation>
+    </message>
+    <message>
+        <source>The compact recipe describes the completed prologue; it does not establish the return-address state at the selected PC.</source>
+        <translation>Компактный рецепт описывает завершённый пролог; он не определяет состояние адреса возврата для выбранного PC.</translation>
+    </message>
+    <message>
+        <source>Refresh</source>
+        <translation>Обновить</translation>
+    </message>
+    <message>
+        <source>Loading unwind information…</source>
+        <translation>Загрузка сведений о раскрутке стека…</translation>
+    </message>
+    <message>
+        <source>The analysis worker is disconnected.</source>
+        <translation>Соединение с процессом анализа разорвано.</translation>
+    </message>
+    <message>
+        <source>This engine does not provide unwind information.</source>
+        <translation>Этот движок не предоставляет сведения о раскрутке стека.</translation>
+    </message>
+    <message>
+        <source>The program changed. Open unwind information again at the desired address.</source>
+        <translation>Программа изменилась. Снова откройте сведения о раскрутке стека по нужному адресу.</translation>
+    </message>
+    <message>
+        <source>No unwind frame contains this address.</source>
+        <translation>Ни один кадр раскрутки не содержит этот адрес.</translation>
+    </message>
+    <message>
+        <source>This frame has no return-address signing report.</source>
+        <translation>Для этого кадра нет отчёта о подписи адреса возврата.</translation>
+    </message>
+    <message>
+        <source>No metadata from this source.</source>
+        <translation>Нет метаданных из этого источника.</translation>
+    </message>
+    <message>
+        <source>The engine returned an incompatible unwind report.</source>
+        <translation>Движок вернул несовместимый отчёт о раскрутке.</translation>
+    </message>
+    <message>
+        <source>Could not load unwind information: %1</source>
+        <translation>Не удалось загрузить сведения о раскрутке стека: %1</translation>
+    </message>
+    <message>
+        <source>Frame: [%1, %2)</source>
+        <translation>Кадр: [%1, %2)</translation>
+    </message>
+    <message>
+        <source>Status: %1</source>
+        <translation>Состояние: %1</translation>
+    </message>
+    <message>
+        <source>Signing kind: %1</source>
+        <translation>Тип подписи: %1</translation>
+    </message>
+    <message>
+        <source>Key: %1</source>
+        <translation>Ключ: %1</translation>
+    </message>
+    <message>
+        <source>Recipe: %1</source>
+        <translation>Рецепт: %1</translation>
+    </message>
+    <message>
+        <source>Signing PC: %1</source>
+        <translation>PC подписи: %1</translation>
+    </message>
+    <message>
+        <source>Diagnostic: %1</source>
+        <translation>Диагностика: %1</translation>
+    </message>
+</context>
+<context>
+    <name>KDDockWidgets::QtWidgets::TitleBar</name>
+    <message>
+        <source>Minimize</source>
+        <translation>Свернуть</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>Закрыть</translation>
+    </message>
+    <message>
+        <source>Maximize</source>
+        <translation>Развернуть</translation>
+    </message>
+    <message>
+        <source>Restore</source>
+        <translation>Восстановить</translation>
+    </message>
+    <message>
+        <source>Auto-hide</source>
+        <translation>Автоматически скрывать</translation>
+    </message>
+    <message>
+        <source>Disable auto-hide</source>
+        <translation>Отключить автоскрытие</translation>
+    </message>
+</context>
+<context>
+    <name>KDDockWidgets::Core::TitleBar</name>
+    <message>
+        <source>Dock window</source>
+        <translation>Закрепить окно</translation>
+    </message>
+    <message>
+        <source>Undock window</source>
+        <translation>Открепить окно</translation>
+    </message>
+</context>
 </TS>

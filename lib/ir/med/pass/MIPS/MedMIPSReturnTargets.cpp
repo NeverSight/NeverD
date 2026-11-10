@@ -63,10 +63,11 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
       return false;
     BlockIndices.emplace(&Block, I);
     for (const auto &Op : Block.Ops) {
-      const bool NoMemoryEffect =
+      const bool NoDataWrite =
           Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
           Op.Inputs[0].isConst() &&
-          (mips::isDSPControlIntrinsic(
+          (mips::isBarrier(static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) ||
+           mips::isDSPControlIntrinsic(
                static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) ||
            mips::isPureScalarValue(
                static_cast<Intrinsic>(Op.Inputs[0].ConstVal))) &&
@@ -74,7 +75,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
       if ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) && Op.NumInputs)
         MemoryAddresses.push_back(Op.Inputs[0]);
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
-          (Op.Opcode == NdOp::INTRINSIC && !NoMemoryEffect &&
+          (Op.Opcode == NdOp::INTRINSIC && !NoDataWrite &&
            (Op.NumInputs != 3 || !Op.Inputs[0].isConst() ||
             Op.Inputs[0].ConstVal != uint64_t(Intrinsic::RequireAligned))) ||
           Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||

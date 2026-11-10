@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](../zh-CN/source-patching.md) | [繁體中文](../zh-TW/source-patching.md) | [日本語](../ja/source-patching.md) | [한국어](../ko/source-patching.md) | [Français](source-patching.md) | [Deutsch](../de/source-patching.md) | [Español](../es/source-patching.md) | [Italiano](../it/source-patching.md) | [Русский](../ru/source-patching.md) | [العربية](../ar/source-patching.md)
 
-<!-- i18n-source: 40bc95b0497bcc23428886f1765116ce87275a1507ae139a70be4896271650a7 -->
+<!-- i18n-source: 360a0b82872370d45ddc1c55aa575e69255af24af028a4744f51c8cc2034de02 -->
 
 [← Documentation Index](README.md)
 
@@ -40,6 +40,8 @@ clang --target=x86_64-unknown-linux-gnu -fPIC -fno-lto -c replacement.c -o repla
 neverd patch app --from-object=replacement.o --entry=replacement \
   --func=0x401140 --patch-report -o app.object
 ```
+
+Pour les images macOS arm64e avec l’ABI classique et les exécutables principaux macOS ABI1, NeverD émet l’IR LLVM canonique via son générateur d’objets MC natifs avant l’installation. Sélectionnez explicitement un frontal compatible (la validation utilise Clang 22) et compilez NeverD avec le fork LLVM contenant la correction CFI Darwin pour les adresses de retour signées. Le paquet précompilé par défaut reste r6 ; il refuse les CFI incompatibles de retour signé de l’ABI classique au lieu de publier une image dont la gestion native des exceptions échoue. L’artefact objet natif préserve également les contrats Apple d’origine pour les relocalisations authentifiées et le déroulement de pile. Consultez les [limites du producteur et de l’exécution arm64e](../arm64e-native-validation.md#canonical-ir-through-native-mc-objects) pour les déclarations de fournisseurs, la signature, les ABI prises en charge et les commandes de validation. Ce contrat source n’autorise pas la reconstruction complète d’images arbitraires issues du lifting.
 
 <!-- i18n-section: profiles -->
 ## Profils vérifiés et limites

@@ -610,6 +610,135 @@ TEST_P(MIPSDSP, LiteralArithmeticAndStateMatchThePinnedEnabledCPU) {
 #endif
 }
 
+TEST_P(MIPSDSP, LeftShiftEveryCountSaturatesAndSetsOnlyStickyBit22) {
+  const struct {
+    const char *Name;
+    uint32_t Encoding;
+    unsigned Bytes;
+    bool Variable, Saturated;
+  } Cases[] = {
+#define MIPS_DSP_LEFT(Name, Encoding, Bytes, Variable, Saturated)              \
+  {#Name, Encoding, Bytes, Variable, Saturated},
+#include "MIPSDSPLeftFixtures.def"
+  };
+  auto Image = dspImage(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  for (const auto &C : Cases)
+    for (unsigned Count = 0; Count != C.Bytes * 8; ++Count)
+      for (uint32_t Input : {0u, 1u, 0xffffffffu, 0x80000000u, 0x7fffffffu,
+                             0x80007fffu, 0x00018000u, 0x89abcdefu})
+        for (unsigned RD : {0u, 2u, 4u, 5u}) {
+          SCOPED_TRACE(::testing::Message()
+                       << C.Name << " count=" << Count << " input=" << Input
+                       << " rd=" << RD);
+          const unsigned Bits = C.Bytes * 8;
+          const uint64_t Modulus = UINT64_C(1) << Bits, Mask = Modulus - 1;
+          uint32_t Result = 0;
+          bool Overflow = false;
+          for (unsigned I = 0; I != 32 / Bits; ++I) {
+            const uint64_t Lane = (Input >> (I * Bits)) & Mask;
+            const int64_t Value = C.Bytes == 1 || Lane < Modulus / 2
+                                      ? int64_t(Lane)
+                                      : int64_t(Lane) - int64_t(Modulus);
+            int64_t Shifted = Value * (INT64_C(1) << Count);
+            const int64_t Min = C.Bytes == 1 ? 0 : -int64_t(Modulus / 2);
+            const int64_t Max =
+                C.Bytes == 1 ? int64_t(Mask) : int64_t(Modulus / 2 - 1);
+            Overflow |= Shifted < Min || Shifted > Max;
+            if (C.Saturated)
+              Shifted = std::clamp(Shifted, Min, Max);
+            Result |= uint32_t(uint64_t(Shifted) & Mask) << (I * Bits);
+          }
+          NdOpEmulator E(Image);
+          E.setStrictMode(true);
+          const uint32_t Control = Count & 1 ? 0x05ab51a5 : 0;
+          E.setRegister(mipsreg::DSPControl, Control);
+          E.setRegister(mipsreg::A0, Input);
+          E.setRegister(mipsreg::A1, 0xffffffe0u | Count);
+          const uint32_t Word = C.Encoding | (RD << 11) | (4 << 16) |
+                                ((C.Variable ? 5 : Count) << 21);
+          ASSERT_TRUE(executeDSP(D, GetParam(), Word, E));
+          if (RD)
+            EXPECT_EQ(E.getRegister(mipsreg::r(RD)), Result);
+          EXPECT_EQ(E.getRegister(mipsreg::DSPControl),
+                    Control | (Overflow ? 1u << 22 : 0));
+        }
+  for (uint32_t Word : {0x7c041013u, 0x7c041213u, 0x7c041313u, 0x7c041513u}) {
+    NdOpEmulator E(Image);
+    E.setStrictMode(true);
+    E.setRegister(mipsreg::A0, 0);
+    EXPECT_FALSE(executeDSP(D, GetParam(), Word, E));
+  }
+  MIPSLifter L(GetParam());
+  L.setDSPEnabled(true);
+  for (uint32_t Word : {0x7d041013u, 0x7e041213u, 0x7e041313u}) {
+    const auto Bytes = encodeDSP({Word}, GetParam());
+    cs_insn Raw{};
+    Raw.size = 4;
+    std::copy(Bytes.begin(), Bytes.end(), Raw.bytes);
+    std::vector<LowOp> Ops;
+    EXPECT_THROW(L.lift(Raw, Ops), std::runtime_error);
+    EXPECT_TRUE(Ops.empty());
+  }
+}
+
+TEST_P(MIPSDSP, SaturatedAbsoluteAndPureGPRPredicatesHaveDistinctStateEffects) {
+  auto Image = dspImage(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  for (unsigned Bytes : {2u, 4u})
+    for (uint32_t Input : {0u, 1u, 0xffffffffu, 0x80000000u, 0x80008000u,
+                           0x7ffffffeu, 0x89abcdefu})
+      for (unsigned RD : {0u, 2u, 4u}) {
+        const unsigned Bits = Bytes * 8;
+        const uint64_t Modulus = UINT64_C(1) << Bits;
+        uint32_t Result = 0;
+        bool Overflow = false;
+        for (unsigned I = 0; I != 32 / Bits; ++I) {
+          uint64_t Lane = (Input >> (I * Bits)) & (Modulus - 1);
+          const uint64_t Magnitude =
+              Lane & (Modulus / 2) ? Modulus - Lane : Lane;
+          Overflow |= Magnitude == Modulus / 2;
+          Result |= uint32_t(std::min(Magnitude, Modulus / 2 - 1))
+                    << (I * Bits);
+        }
+        NdOpEmulator E(Image);
+        E.setStrictMode(true);
+        E.setRegister(mipsreg::DSPControl, 0x054b51a5);
+        E.setRegister(mipsreg::A0, Input);
+        ASSERT_TRUE(executeDSP(D, GetParam(),
+                               (Bytes == 2 ? 0x7c000252 : 0x7c000452) |
+                                   (4 << 16) | (RD << 11),
+                               E));
+        if (RD)
+          EXPECT_EQ(E.getRegister(mipsreg::r(RD)), Result);
+        EXPECT_EQ(E.getRegister(mipsreg::DSPControl),
+                  0x054b51a5u | (Overflow ? 1u << 20 : 0));
+      }
+  for (unsigned Kind = 0; Kind < 3; ++Kind)
+    for (uint32_t A : {0u, 0xffffffffu, 0x80ff007fu, 0x12345678u})
+      for (uint32_t B : {0u, 0xffffffffu, 0x807fff00u, 0x12345678u})
+        for (unsigned RD : {0u, 2u, 4u, 5u}) {
+          unsigned Result = 0;
+          for (unsigned I = 0; I != 4; ++I) {
+            const auto X = uint8_t(A >> (8 * I)), Y = uint8_t(B >> (8 * I));
+            Result |= unsigned(Kind == 0   ? X == Y
+                               : Kind == 1 ? X < Y
+                                           : X <= Y)
+                      << I;
+          }
+          NdOpEmulator E(Image);
+          E.setStrictMode(true);
+          E.setRegister(mipsreg::A0, A);
+          E.setRegister(mipsreg::A1, B);
+          ASSERT_TRUE(executeDSP(D, GetParam(),
+                                 0x7c850111 | (Kind << 6) | (RD << 11), E));
+          if (RD)
+            EXPECT_EQ(E.getRegister(mipsreg::r(RD)), Result);
+        }
+}
+
 INSTANTIATE_TEST_SUITE_P(ByteOrders, MIPSDSP,
                          ::testing::Values(Arch::MIPS32, Arch::MIPS32EL));
 

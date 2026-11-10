@@ -233,5 +233,20 @@
       "foreign"
     ]
   },
-  "test_binary_bytes": "owned verifier fixture"
+  "test_binary_bytes": "owned verifier fixture",
+  "expected_generated_tests": [
+    "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/0",
+    "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/1",
+    "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/2",
+    "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/3"
+  ],
+  "expected_generated_executable_tests": [
+    "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/0",
+    "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/1",
+    "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/2",
+    "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/3"
+  ],
+  "ir_compiler_file": "clang++",
+  "ir_compiler_bytes": "independent-test-frontend",
+  "ir_compiler_version": "test canonical IR frontend"
 }

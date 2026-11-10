@@ -938,6 +938,168 @@ TEST(MachOArm64eInstallation, ConvertsThreadedWithoutChangingSlotIdentity) {
 }
 
 TEST(MachOArm64eInstallation,
+     DefaultStartupRepartitionsPagesWithoutChangingABI) {
+  for (const auto &Chain : Chains) {
+    if (Chain.Format != DYLD_CHAINED_PTR_ARM64E &&
+        Chain.Format != DYLD_CHAINED_PTR_ARM64E_USERLAND &&
+        Chain.Format != DYLD_CHAINED_PTR_ARM64E_USERLAND24)
+      continue;
+    for (bool MultiStart : {false, true}) {
+      SCOPED_TRACE(Chain.Format);
+      SCOPED_TRACE(MultiStart);
+      auto Bytes = largePageImage(MultiStart ? multiStartImage(Chain)
+                                             : linkedImage(Chain));
+      auto Last = installedFixup();
+      Last.Address = kBase + kLargePage + kPage - kSlotBytes;
+      Last.Recipe.Key = kDataBKey;
+      Last.Recipe.AddressDiversity = true;
+      auto First = installedFixup(true);
+      First.Address = Last.Address + kSlotBytes;
+      auto Far = First;
+      Far.Address = kBase + kLargePage + kFarSlot;
+      Far.Recipe.LibraryOrdinal = BIND_SPECIAL_DYLIB_WEAK_LOOKUP;
+      Far.Recipe.Module.clear();
+      Far.Recipe.Addend = -int64_t(kNewImportAddend);
+      auto Plain = Last;
+      Plain.Address = Far.Address + kSlotBytes;
+      Plain.Recipe = {};
+      Plain.Authenticated = false;
+      Plain.Recipe.Target = kBase + kOrdinaryRebaseTarget;
+      auto Error =
+          installMachOAuthenticatedFixups(Bytes, {Last, First, Far, Plain});
+      ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+      auto Before = readMachODependencyState(Bytes);
+      ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
+      const auto Original = Bytes;
+      Error = prepareMachOAuthenticatedStartup(Bytes);
+      ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+      MachOChainedFixups Facts;
+      auto After = readMachODependencyState(Bytes, &Facts);
+      ASSERT_TRUE(bool(After)) << llvm::toString(After.takeError());
+      EXPECT_FALSE(Facts.Threaded);
+      EXPECT_EQ(Before->Slots, After->Slots);
+      Error = preserveMachODependencyState(*Before, *After);
+      ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+      Error = verifyMachOAuthenticatedFixups(Bytes, {Last, First, Far, Plain});
+      ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+      const auto &Data = Facts.Segments[1];
+      EXPECT_EQ(Data.PageSize, kPage);
+      ASSERT_EQ(Data.Slots.size(), 6u);
+      const auto Format = *macho_loader::arm64e::chainFormat(Chain.Format);
+      for (const auto &Slot : Data.Slots) {
+        const auto Word =
+            *macho_loader::arm64e::decodePointerWord(Slot.Raw, Format);
+        if (Slot.Offset == kPage - kSlotBytes || Slot.Offset == kPage)
+          EXPECT_EQ(Word.Next, 0u);
+      }
+      // Repacking must not change instructions, segment placement/protections,
+      // or the now-unreferenced original metadata.
+      EXPECT_TRUE(std::equal(Original.begin() + kOrdinaryRebaseTarget,
+                             Original.begin() + kLargePage,
+                             Bytes.begin() + kOrdinaryRebaseTarget));
+      const auto Prepared = Bytes;
+      Error = prepareMachOAuthenticatedStartup(Bytes);
+      ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+      EXPECT_EQ(Bytes, Prepared);
+    }
+  }
+}
+
+TEST(MachOArm64eInstallation, DefaultStartupMigratesThreadedAndIsIdempotent) {
+  auto Bytes = largePageImage(threadedImage());
+  auto Before = readMachODependencyState(Bytes);
+  ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
+  auto Error = prepareMachOAuthenticatedStartup(Bytes);
+  ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+  MachOChainedFixups Facts;
+  auto After = readMachODependencyState(Bytes, &Facts);
+  ASSERT_TRUE(bool(After)) << llvm::toString(After.takeError());
+  EXPECT_FALSE(Facts.Threaded);
+  EXPECT_EQ(Facts.Segments[1].PageSize, kPage);
+  EXPECT_EQ(Before->Slots, After->Slots);
+  Error = preserveMachODependencyState(*Before, *After);
+  ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+  const auto Prepared = Bytes;
+  Error = prepareMachOAuthenticatedStartup(Bytes);
+  ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+  EXPECT_EQ(Bytes, Prepared);
+}
+
+TEST(MachOArm64eInstallation,
+     DefaultStartupKeepsAKeyAndSmallPageImagesUnchanged) {
+  for (bool Small : {false, true}) {
+    auto Bytes =
+        Small ? linkedImage(Chains[0]) : largePageImage(linkedImage(Chains[0]));
+    if (!Small) {
+      auto *Slot = Bytes.data() + kLargePage + kSlotBytes;
+      writeLE<uint64_t>(Slot, readLE<uint64_t>(Slot) & ~kBKeyBit);
+    }
+    const auto Original = Bytes;
+    auto Error = prepareMachOAuthenticatedStartup(Bytes);
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    EXPECT_EQ(Bytes, Original);
+  }
+  for (unsigned Format : {DYLD_CHAINED_PTR_64, DYLD_CHAINED_PTR_64_OFFSET}) {
+    const auto Target =
+        kOrdinaryRebaseTarget + (Format == DYLD_CHAINED_PTR_64 ? kBase : 0);
+    auto Bytes =
+        largePageImage(multiStartImage({Format, Target, kOrdinaryBind}));
+    const auto Original = Bytes;
+    auto Error = prepareMachOAuthenticatedStartup(Bytes);
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    EXPECT_EQ(Bytes, Original);
+  }
+}
+
+TEST(MachOArm64eInstallation,
+     DefaultStartupRejectsUnrepresentableInputsAtomically) {
+  for (const auto &Chain : Chains) {
+    if (Chain.Format == DYLD_CHAINED_PTR_ARM64E ||
+        Chain.Format == DYLD_CHAINED_PTR_ARM64E_USERLAND ||
+        Chain.Format == DYLD_CHAINED_PTR_ARM64E_USERLAND24)
+      continue;
+    auto Bytes = largePageImage(linkedImage(Chain));
+    const auto Original = Bytes;
+    auto Error = prepareMachOAuthenticatedStartup(Bytes);
+    EXPECT_TRUE(bool(Error));
+    llvm::consumeError(std::move(Error));
+    EXPECT_EQ(Bytes, Original);
+  }
+  auto Bytes = threadedImage();
+  Bytes[kChains + kThreadedSymbolFlagsOffset] |=
+      BIND_SYMBOL_FLAGS_NON_WEAK_DEFINITION;
+  const auto Original = Bytes;
+  auto Error = prepareMachOAuthenticatedStartup(Bytes);
+  EXPECT_TRUE(bool(Error));
+  llvm::consumeError(std::move(Error));
+  EXPECT_EQ(Bytes, Original);
+}
+
+TEST(MachOArm64eInstallation, DefaultStartupDistinguishesEverySigningKey) {
+  const struct {
+    uint64_t Word;
+    unsigned PageSize;
+  } Cases[] = {
+#define ARM64E_STARTUP_CASE(Word, PageSize) {Word, PageSize},
+#include "MachOArm64eDependencyFixtures.def"
+  };
+  for (const auto &Case : Cases) {
+    auto Chain = Chains[0];
+    Chain.Second = Case.Word;
+    auto Bytes = largePageImage(linkedImage(Chain));
+    auto Before = readMachODependencyState(Bytes);
+    ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
+    auto Error = prepareMachOAuthenticatedStartup(Bytes);
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    MachOChainedFixups Facts;
+    auto After = readMachODependencyState(Bytes, &Facts);
+    ASSERT_TRUE(bool(After)) << llvm::toString(After.takeError());
+    EXPECT_EQ(Facts.Segments[1].PageSize, Case.PageSize);
+    EXPECT_EQ(Before->Slots, After->Slots);
+  }
+}
+
+TEST(MachOArm64eInstallation,
      RejectsIncompleteThreadedProgramsTransactionally) {
   const auto Check = [&](auto Change) {
     auto Bytes = threadedImage();

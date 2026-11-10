@@ -6,7 +6,10 @@
 #include "MIPSFixtures.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/MIPS/MIPSBarrierSource.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
+#include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/loader/ELF/ELFLoader.h"
@@ -24,6 +27,192 @@
 #include <vector>
 using namespace neverd;
 namespace {
+TEST(MIPS16E2Pipeline, BarrierNamesDoNotCaptureDeferredNativeCallees) {
+  const auto Name =
+      std::string(mips::BarrierHelperPrefix) + mips::ExecutionHazardAsm;
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL})
+    for (bool BarrierFirst : {false, true})
+      for (bool NamedHint : {false, true})
+        for (bool SeparateFunction : {false, true}) {
+          SCOPED_TRACE(int(Target));
+          SCOPED_TRACE(BarrierFirst);
+          SCOPED_TRACE(NamedHint);
+          SCOPED_TRACE(SeparateFunction);
+          MedFunc Function;
+          Function.Name = "barrier_caller";
+          Function.Entry = 0x1000;
+          Function.ReturnType = NdType::makeVoid();
+          auto &Block = Function.Blocks.emplace_back();
+          Block.Id = 0;
+          Block.StartAddr = 0x1000;
+          MedOp Barrier;
+          Barrier.Opcode = NdOp::INTRINSIC;
+          Barrier.addInput(
+              MedVar::makeConst(uint64_t(Intrinsic::MIPSExecutionHazardBarrier),
+                                sizeof(Intrinsic)));
+          MedOp Call;
+          Call.Opcode = NdOp::CALL;
+          Call.addInput(MedVar::makeConst(0x2000, 4));
+          Block.Ops = BarrierFirst ? std::vector<MedOp>{Barrier, Call}
+                                   : std::vector<MedOp>{Call, Barrier};
+          MedOp Return;
+          Return.Opcode = NdOp::RETURN;
+          Block.Ops.push_back(Return);
+          std::vector<std::pair<va_t, std::string>> Imports = {
+              {0x3000, Name + ".1"}};
+          if (NamedHint) {
+            MedCallInfo Info;
+            Info.BlockId = 0;
+            Info.OpIdx = BarrierFirst ? 1 : 0;
+            Info.TargetAddr = 0x2000;
+            Info.TargetName = Name;
+            Function.CallInfos.push_back(Info);
+          } else {
+            Imports.emplace_back(0x2000, Name);
+          }
+          std::vector<MedFunc> Functions = {Function};
+          if (SeparateFunction) {
+            auto Caller = Function;
+            Caller.Name = "native_caller";
+            Caller.Entry = 0x1100;
+            Caller.Blocks[0].StartAddr = Caller.Entry;
+            Caller.Blocks[0].Ops = {Call, Return};
+            if (NamedHint)
+              Caller.CallInfos[0].OpIdx = 0;
+            Function.Blocks[0].Ops = {Barrier, Return};
+            Function.CallInfos.clear();
+            Functions = BarrierFirst ? std::vector<MedFunc>{Function, Caller}
+                                     : std::vector<MedFunc>{Caller, Function};
+          }
+          BinaryImage Image;
+          Image.Arch = Target;
+          Image.Bits = Bitness::Bits32;
+          Image.Format = BinaryFormat::ELF;
+          Segment Storage;
+          Storage.VA = 0x4000;
+          Storage.Size = Storage.FileSz = 4;
+          Storage.Data.resize(4);
+          Storage.Flags = SegmentFlags::Readable;
+          Image.Segments.push_back(std::move(Storage));
+          // Canonical storage evidence need not have a matching Imports row.
+          ASSERT_TRUE(Image.recordImportStorageSlot(
+              0x4000, Name + ".2", 0, ImportStorageEvidence::LoaderBind));
+          llvm::LLVMContext Context;
+          const auto Module =
+              MedLLVMEmitter().emit(Functions, Context, "barrier_names", Target,
+                                    Imports, &Image, BinaryFormat::ELF);
+          ASSERT_NE(Module, nullptr);
+          ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+          const auto *Native = Module->getFunction(Name);
+          ASSERT_NE(Native, nullptr);
+          EXPECT_TRUE(Native->isDeclaration());
+          EXPECT_FALSE(Native->hasFnAttribute(mips::BarrierSourceMarker));
+          const auto *Body = Module->getFunction(Function.Name);
+          ASSERT_NE(Body, nullptr);
+          std::vector<const llvm::Function *> Calls;
+          for (const auto &B : *Body)
+            for (const auto &Instruction : B)
+              if (const auto *C = llvm::dyn_cast<llvm::CallBase>(&Instruction))
+                Calls.push_back(C->getCalledFunction());
+          if (SeparateFunction)
+            for (const auto &B : *Module->getFunction("native_caller"))
+              for (const auto &Instruction : B)
+                if (const auto *C =
+                        llvm::dyn_cast<llvm::CallBase>(&Instruction))
+                  Calls.push_back(C->getCalledFunction());
+          ASSERT_EQ(Calls.size(), 2u);
+          const unsigned HelperIndex = SeparateFunction || BarrierFirst ? 0 : 1;
+          EXPECT_EQ(Calls[1 - HelperIndex], Native);
+          const auto *Helper = Calls[HelperIndex];
+          ASSERT_NE(Helper, nullptr);
+          EXPECT_NE(Helper, Native);
+          EXPECT_NE(Helper->getName(), Name + ".1");
+          EXPECT_NE(Helper->getName(), Name + ".2");
+          EXPECT_TRUE(Helper->hasFnAttribute(mips::BarrierSourceMarker));
+          CEmitterOptions Options;
+          Options.TheArch = Target;
+          std::string Text;
+          llvm::raw_string_ostream Out(Text);
+          ASSERT_TRUE(LLVMCEmitter().emit(*Module, Out, Options, nullptr,
+                                          nullptr, Body));
+          EXPECT_NE(Text.find("__asm__ volatile(\"ehb\""), std::string::npos)
+              << Text;
+        }
+}
+
+TEST(MIPS16E2Pipeline,
+     SavedReturnAcrossBarriersKeepsNativeOrderingInBothSources) {
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL})
+    for (unsigned Stype = 0; Stype != 32; ++Stype) {
+      mips_test::ELFBytes F(Target);
+      F.abiFlags();
+      F.put(36, 0x74001000, 4);
+      F.put(24, 0x10101, 4);
+      F.put(0xec, 0x4400, 4);
+      const uint16_t Code[] = {
+          0x64c4, 0xf0c0, 0x3010, uint16_t(0xf000 | (Stype << 6)),
+          0x3014, 0x6a07, 0x6444, 0xe8a0};
+      for (unsigned N = 0; N != std::size(Code); ++N)
+        F.put(0x100 + 2 * N, Code[N], 2);
+      ELFLoader Loader;
+      auto I = Loader.loadBuffer(F.buffer());
+      ASSERT_TRUE(bool(I)) << llvm::toString(I.takeError());
+      const auto FunctionName = Stype == 31
+                                    ? std::string(mips::BarrierHelperPrefix) +
+                                          mips::ExecutionHazardAsm
+                                    : std::string("barrier_leaf");
+      auto Symbol = Symbol::makeFunc(I->Entry, sizeof(Code));
+      Symbol.Name = FunctionName;
+      I->Symbols.push_back(std::move(Symbol));
+      for (bool LLVM : {false, true}) {
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.OnlyFunctionEntries = {I->Entry};
+        Options.LiftMode = LLVM;
+        Options.EmitDumpOutput = false;
+        auto Result = Pipeline().run(*I, Context, Options);
+        ASSERT_TRUE(Result.Success) << Result.Error;
+        EXPECT_EQ(Result.MedIRVerifierFailures, 0u);
+        CEmitterOptions Emit;
+        Emit.TheArch = Target;
+        Emit.Format = BinaryFormat::ELF;
+        Emit.Image = &*I;
+        std::string Text;
+        llvm::raw_string_ostream Out(Text);
+        if (LLVM) {
+          ASSERT_TRUE(Result.LlvmModule);
+          EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+          unsigned Barriers = 0;
+          for (const auto &Function : *Result.LlvmModule)
+            for (const auto &Block : Function)
+              for (const auto &Instruction : Block)
+                if (const auto *Call =
+                        llvm::dyn_cast<llvm::CallInst>(&Instruction))
+                  if (mips::nativeBarrierSource(*Call))
+                    ++Barriers;
+          EXPECT_EQ(Barriers, 2u);
+          const auto *Selected = Result.LlvmModule->getFunction(FunctionName);
+          ASSERT_NE(Selected, nullptr);
+          // The CLI's selected-function projection must retain source-only
+          // helper definitions, not just their external declarations.
+          ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Out, Emit,
+                                          nullptr, &*I, Selected));
+        } else {
+          ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, Emit));
+        }
+        EXPECT_NE(Text.find("__asm__ volatile(\"ehb\""), std::string::npos)
+            << Text;
+        EXPECT_NE(Text.find("__asm__ volatile(\"sync " + std::to_string(Stype) +
+                            "\""),
+                  std::string::npos)
+            << Text;
+        EXPECT_NE(Text.find("__attribute__((noinline))"), std::string::npos)
+            << Text;
+        EXPECT_NE(Text.find("nomicromips,nomips16"), std::string::npos) << Text;
+      }
+    }
+}
+
 TEST(MIPS16E2Pipeline, PartialImageStoresBindOnlyWritableSelectedBytes) {
   for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL})
     for (bool Left : {false, true})

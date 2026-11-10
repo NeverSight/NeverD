@@ -71,6 +71,11 @@ public:
   load(const X86LinearAccess &Access, llvm::MutableArrayRef<uint8_t> Output);
   llvm::Expected<X86MemoryAccessResult> store(const X86LinearAccess &Access,
                                               llvm::ArrayRef<uint8_t> Input);
+  /// Check guest translation and permission without reading or writing data.
+  /// Page-table A/D effects remain visible; data backing is checked by the
+  /// eventual load/store, and no data-access observer is called here.
+  llvm::Expected<X86MemoryAccessResult> probe(const X86LinearAccess &Access,
+                                              uint64_t Bytes);
 
   /// Protected legacy 16/32-bit operands with already loaded caches. Segment
   /// checks precede all page walks; linear wrap still retains whole-operand

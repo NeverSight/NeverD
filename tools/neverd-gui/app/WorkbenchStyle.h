@@ -25,6 +25,12 @@ public:
   void drawPrimitive(PrimitiveElement element, const QStyleOption *option,
                      QPainter *painter,
                      const QWidget *widget = nullptr) const override;
+  void drawControl(ControlElement element, const QStyleOption *option,
+                   QPainter *painter,
+                   const QWidget *widget = nullptr) const override;
+  QSize sizeFromContents(ContentsType type, const QStyleOption *option,
+                         const QSize &contents,
+                         const QWidget *widget = nullptr) const override;
   QIcon standardIcon(StandardPixmap pixmap,
                      const QStyleOption *option = nullptr,
                      const QWidget *widget = nullptr) const override;

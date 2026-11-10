@@ -27,6 +27,7 @@
 #include <array>
 #include <bit>
 #include <deque>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
@@ -133,6 +134,11 @@ void pushAbstractFrame(RegisterState &State, const SBFProgram &Program) {
   }
 }
 
+struct CaptureDefinition {
+  size_t Owner;
+  size_t BlockOrder;
+};
+
 struct TaggedMemoryCase {
   ProvenValueSet Tags;
   StoredRegisterMemory Values;
@@ -211,6 +217,65 @@ void joinDefinedObjectFields(StoredRegisterMemory &Values,
   Values.includeCells(ConditionalObjects, [](const auto &) { return true; });
 }
 
+// One current comparison and its Boolean carriers. Operands name the current
+// register contents, not equal-looking unknown values. Definitions invalidate
+// the relation; joins retain only facts supplied by every incoming path.
+struct ScalarPredicate {
+  const MedInstruction *Comparison;
+  std::optional<bool> Taken;
+  uint16_t Positive = 0;
+  uint16_t Negative = 0;
+  uint16_t LeftAliases;
+  uint16_t RightAliases;
+
+  ScalarPredicate(const MedInstruction &Instruction, bool Outcome)
+      : Comparison(&Instruction), Taken(Outcome),
+        LeftAliases(registerBit(Instruction.Dst)),
+        RightAliases(Instruction.Semantics.Source ==
+                             OperandSourceKind::SourceRegister
+                         ? registerBit(Instruction.Src)
+                         : 0) {}
+
+  bool sameCondition(const MedInstruction &Other) const {
+    return Comparison->Op == Other.Op && Comparison->Width == Other.Width &&
+           Comparison->Dst == Other.Dst &&
+           Comparison->Semantics.Source == Other.Semantics.Source &&
+           (Comparison->Semantics.Source == OperandSourceKind::SourceRegister
+                ? Comparison->Src == Other.Src
+                : normalizeImmediate(Comparison->Immediate,
+                                     Comparison->Semantics.Immediate) ==
+                      normalizeImmediate(Other.Immediate,
+                                         Other.Semantics.Immediate));
+  }
+
+  uint16_t operands() const {
+    return registerBit(Comparison->Dst) |
+           (Comparison->Semantics.Source == OperandSourceKind::SourceRegister
+                ? registerBit(Comparison->Src)
+                : 0);
+  }
+
+  std::pair<uint16_t, uint16_t>
+  carriers(const std::array<ProvenValueSet, kRegisterCount> &Registers) const {
+    uint16_t True = Positive, False = Negative;
+    if (Taken)
+      for (unsigned R = 0; R < kRegisterCount; ++R) {
+        const auto Value = Registers[R].singleton();
+        if (Value.ValueKind != RegisterValue::Kind::Constant || Value.Value > 1)
+          continue;
+        (Value.Value == *Taken ? True : False) |= registerBit(R);
+      }
+    return {True, False};
+  }
+
+  bool operator==(const ScalarPredicate &Other) const {
+    return sameCondition(*Other.Comparison) && Taken == Other.Taken &&
+           Positive == Other.Positive && Negative == Other.Negative &&
+           LeftAliases == Other.LeftAliases &&
+           RightAliases == Other.RightAliases;
+  }
+};
+
 struct ContextState {
   std::array<ProvenValueSet, kRegisterCount> Registers{};
   ScratchState Scratch;
@@ -232,6 +297,27 @@ struct ContextState {
   // of that identity. Copies retain the relation until their next definition.
   // A null branch removes a name only if its definition was also conditional.
   std::optional<NullableCapture> Nullable;
+  std::optional<ScalarPredicate> Predicate;
+  // A finite must-fact domain. No numeric interval is retained for an otherwise
+  // unknown scalar, including a guarded product that cannot wrap to zero.
+  uint16_t NonzeroRegisters = 0;
+  // Private full-word nonzero markers, not the stored VM bits. Canonical
+  // typed memory owns address alternatives, overlap and may-alias invalidation.
+  StoredRegisterMemory NonzeroSpills;
+
+  void forgetScalarRegisters(uint16_t Written) {
+    NonzeroRegisters &= ~Written;
+    if (!Predicate)
+      return;
+    if (Predicate->operands() & Written) {
+      Predicate.reset();
+    } else {
+      Predicate->Positive &= ~Written;
+      Predicate->Negative &= ~Written;
+      Predicate->LeftAliases &= ~Written;
+      Predicate->RightAliases &= ~Written;
+    }
+  }
 
   bool definesCapture(uint64_t Capture) const {
     return std::binary_search(DefinedCaptures.begin(), DefinedCaptures.end(),
@@ -263,6 +349,21 @@ struct ContextState {
   void join(const ContextState &Other, const SBFProgram &Program,
             const std::shared_ptr<const StoredMemoryCoordinates> &Coordinates,
             MemoryPostconditions::ExpressionJoin MergeExpression = nullptr) {
+    NonzeroRegisters &= Other.NonzeroRegisters;
+    NonzeroSpills.meet(Other.NonzeroSpills);
+    if (Predicate && Other.Predicate &&
+        Predicate->sameCondition(*Other.Predicate->Comparison)) {
+      const auto Left = Predicate->carriers(Registers);
+      const auto Right = Other.Predicate->carriers(Other.Registers);
+      Predicate->Positive = Left.first & Right.first;
+      Predicate->Negative = Left.second & Right.second;
+      Predicate->LeftAliases &= Other.Predicate->LeftAliases;
+      Predicate->RightAliases &= Other.Predicate->RightAliases;
+      if (Predicate->Taken != Other.Predicate->Taken)
+        Predicate->Taken.reset();
+    } else {
+      Predicate.reset();
+    }
     const auto IsNull = [](const ContextState &State) {
       const auto Value = State.Registers[0].singleton();
       return Value.ValueKind == RegisterValue::Kind::Constant &&
@@ -482,6 +583,7 @@ void renameCapturedValue(ContextState &State, uint64_t From, uint64_t To) {
   State.Scratch.Values.renameCapture(From, To);
   State.OriginScratch.Values.renameCapture(From, To);
   State.InputSpills.renameCapture(From, To);
+  State.NonzeroSpills.renameCapture(From, To);
   State.Postconditions.transformSymbols(Rename);
   RenameDefinitions(State.DefinedCaptures);
   if (State.Nullable) {
@@ -503,13 +605,25 @@ void renameCapturedValue(ContextState &State, uint64_t From, uint64_t To) {
 
 void widenCapturedValues(ContextState &State,
                          const SymbolicAddressSpace &Addresses,
-                         llvm::ArrayRef<size_t> CaptureOwners, size_t Owner) {
+                         llvm::ArrayRef<CaptureDefinition> Definitions,
+                         size_t Owner, size_t NextOrder,
+                         llvm::ArrayRef<uint64_t> WordObjects) {
   State.Tagged.reset();
   State.Nullable.reset();
+  State.Predicate.reset();
+  State.NonzeroRegisters = 0;
   const auto Widen = [&](RegisterValue Value) {
-    // An incoming capture names one fixed value throughout this invocation.
-    // Keeping its identity does not preserve fields erased by may-alias writes.
-    if (CaptureOwners[Value.Value] != Owner)
+    // Repeating a definition must cross an edge to its order or earlier.
+    // An inner backedge cannot repeat an earlier definition. Keep that
+    // identity while it carries full-word fields, matching the facts retained
+    // at summary entries. Narrow-only buffers still widen.
+    // Incoming names stay fixed throughout this invocation. Keeping either
+    // identity does not preserve fields erased by may-alias writes.
+    const auto &Definition = Definitions[Value.Value];
+    if (Definition.Owner != Owner ||
+        (Definition.BlockOrder < NextOrder &&
+         std::binary_search(WordObjects.begin(), WordObjects.end(),
+                            Value.Value)))
       return Value;
     const auto Range = unsignedValueRange(Value, &Addresses);
     return Range ? unsignedRangeValue(*Range) : RegisterValue{};
@@ -518,10 +632,11 @@ void widenCapturedValues(ContextState &State,
     State.Registers[R] = mapSymbolicValues(State.Registers[R], Widen);
     State.Origins[R] = mapSymbolicValues(State.Origins[R], Widen);
   }
-  State.Scratch.Values.transformSymbols(Widen);
   State.OriginScratch.Values.transformSymbols(Widen);
   State.InputSpills.transformSymbols(Widen);
+  State.NonzeroSpills.transformSymbols(Widen);
   State.Postconditions.transformSymbols(Widen);
+  State.Scratch.Values.transformSymbols(Widen);
 }
 
 // Formal entry-relative origins and immutable captures name one value.
@@ -608,6 +723,51 @@ refineSubtractionGuard(const MedBlock &Block, const MedInstructionIndex &Index,
   return true;
 }
 
+bool refinePredicateBranch(const MedInstruction &Branch, size_t Successor,
+                           ContextState &State) {
+  // A conditional jump to its own fallthrough selects neither outcome.
+  if (*Branch.BranchTarget == Branch.Slot + Branch.SlotWidth)
+    return true;
+  const bool Taken = Successor == *Branch.BranchTarget;
+  if (State.Predicate && State.Predicate->sameCondition(Branch)) {
+    if (State.Predicate->Taken && *State.Predicate->Taken != Taken)
+      return false;
+    for (unsigned R = 0; R < kRegisterCount; ++R) {
+      const uint16_t Bit = registerBit(R);
+      if (!((State.Predicate->Positive | State.Predicate->Negative) & Bit))
+        continue;
+      const RegisterValue Value{
+          RegisterValue::Kind::Constant,
+          (State.Predicate->Positive & Bit) ? Taken : !Taken, 0};
+      State.Registers[R] = Value;
+      State.Origins[R] = Value;
+      State.InputExpressions[R].reset();
+    }
+    State.Predicate->Taken = Taken;
+  } else {
+    State.Predicate.emplace(Branch, Taken);
+  }
+  const bool RegisterSource =
+      Branch.Semantics.Source == OperandSourceKind::SourceRegister;
+  const auto Right =
+      RegisterSource
+          ? State.Registers[Branch.Src].singleton()
+          : RegisterValue{RegisterValue::Kind::Constant,
+                          normalizeImmediate(Branch.Immediate,
+                                             Branch.Semantics.Immediate),
+                          0};
+  if (Right.ValueKind == RegisterValue::Kind::Constant &&
+      (!RegisterSource || Branch.Dst != Branch.Src) &&
+      evaluateBranchCondition(Branch.Op, Branch.Width, 0, Right.Value) != Taken)
+    State.NonzeroRegisters |= registerBit(Branch.Dst);
+  const auto Left = State.Registers[Branch.Dst].singleton();
+  if (RegisterSource && Branch.Dst != Branch.Src &&
+      Left.ValueKind == RegisterValue::Kind::Constant &&
+      evaluateBranchCondition(Branch.Op, Branch.Width, Left.Value, 0) != Taken)
+    State.NonzeroRegisters |= registerBit(Branch.Src);
+  return true;
+}
+
 /// Narrow only scalar, unsigned comparisons. Unknown scalars acquire bounds
 /// here only when the comparison constrains a potential heap address, or in
 /// an acyclic fixed-cell replay. No ordinary integer-range fixed point is
@@ -620,8 +780,11 @@ bool refineAddressBranch(const MedBlock &Block,
                          bool PreserveCapturedIdentity = false,
                          bool RefineUnknownScalars = false) {
   const auto *Last = Index.find(Block.EndSlot - 1);
-  if (!Last || Last->Width != kDoubleWordBitWidth ||
-      Last->Semantics.Terminator != TerminatorKind::ConditionalJump)
+  if (!Last || Last->Semantics.Terminator != TerminatorKind::ConditionalJump)
+    return true;
+  if (!refinePredicateBranch(*Last, Successor, State))
+    return false;
+  if (Last->Width != kDoubleWordBitWidth)
     return true;
   const bool Taken = Successor == *Last->BranchTarget;
   RegisterValue Right =
@@ -832,9 +995,16 @@ std::optional<size_t> knownBranchSuccessor(const MedInstruction *Last,
   const ProvenValueSet Immediate(RegisterValue{
       RegisterValue::Kind::Constant,
       normalizeImmediate(Last->Immediate, Last->Semantics.Immediate), 0});
+  const ProvenValueSet Nonzero(unsignedRangeValue({1, UINT64_MAX}));
+  const auto Values = [&](unsigned Register) -> const ProvenValueSet & {
+    return State.Registers[Register].unknown() &&
+                   (State.NonzeroRegisters & registerBit(Register))
+               ? Nonzero
+               : State.Registers[Register];
+  };
   const auto &Right =
       Last->Semantics.Source == OperandSourceKind::SourceRegister
-          ? State.Registers[Last->Src]
+          ? Values(Last->Src)
           : Immediate;
   const auto Outcome = [&](const RegisterValue &Left,
                            const RegisterValue &RHS) -> std::optional<bool> {
@@ -910,7 +1080,7 @@ std::optional<size_t> knownBranchSuccessor(const MedInstruction *Last,
     return Result;
   };
   std::optional<bool> Taken;
-  for (const auto &Left : State.Registers[Last->Dst].values())
+  for (const auto &Left : Values(Last->Dst).values())
     for (const auto &RHS : Right.values()) {
       const auto Value = Outcome(Left, RHS);
       if (!Value || (Taken && *Taken != *Value))
@@ -920,6 +1090,54 @@ std::optional<size_t> knownBranchSuccessor(const MedInstruction *Last,
   if (!Taken)
     return std::nullopt;
   return *Taken ? *Last->BranchTarget : Last->Slot + Last->SlotWidth;
+}
+
+bool guardedProductIsNonzero(const MedInstruction &Instruction,
+                             const ContextState &State) {
+  if (Instruction.Op != Operation::Mul ||
+      Instruction.Width != kDoubleWordBitWidth ||
+      !(State.NonzeroRegisters & registerBit(Instruction.Dst)))
+    return false;
+  const auto Factor =
+      Instruction.Semantics.Source == OperandSourceKind::SourceRegister
+          ? State.Registers[Instruction.Src].singleton()
+          : RegisterValue{RegisterValue::Kind::Constant,
+                          normalizeImmediate(Instruction.Immediate,
+                                             Instruction.Semantics.Immediate),
+                          0};
+  if (Factor.ValueKind != RegisterValue::Kind::Constant || !Factor.Value)
+    return false;
+  if (Factor.Value == 1)
+    return true;
+  if (!State.Predicate || !State.Predicate->Taken ||
+      State.Predicate->Comparison->Width != kDoubleWordBitWidth)
+    return false;
+  const auto &Predicate = *State.Predicate;
+  const auto &Comparison = *Predicate.Comparison;
+  const bool Left = Predicate.LeftAliases & registerBit(Instruction.Dst);
+  const bool Right = Predicate.RightAliases & registerBit(Instruction.Dst);
+  if (Left == Right)
+    return false;
+  ContextState Probe;
+  if (Left &&
+      Comparison.Semantics.Source == OperandSourceKind::SourceRegister) {
+    const auto Other = State.Registers[Comparison.Src].singleton();
+    if (Other.ValueKind != RegisterValue::Kind::Constant)
+      return false;
+    Probe.Registers[Comparison.Src] = Other;
+  } else if (Right) {
+    const auto Other = State.Registers[Comparison.Dst].singleton();
+    if (Other.ValueKind != RegisterValue::Kind::Constant)
+      return false;
+    Probe.Registers[Comparison.Dst] = Other;
+  }
+  // Reuse the branch owner to exclude every overflowing operand. This probe
+  // is temporary: only the resulting nonzero fact enters the CFG fixed point.
+  Probe.Registers[Left ? Comparison.Dst : Comparison.Src] =
+      unsignedRangeValue({UINT64_MAX / Factor.Value + 1, UINT64_MAX});
+  const auto Selected = knownBranchSuccessor(&Comparison, Probe);
+  return Selected &&
+         (*Selected == *Comparison.BranchTarget) != *Predicate.Taken;
 }
 
 void pushAbstractFrame(std::array<ProvenValueSet, kRegisterCount> &State,
@@ -947,6 +1165,7 @@ uint64_t stateBytes(const ContextState &State) {
                    State.OriginScratch.retainedByteEstimate() +
                    State.Postconditions.retainedByteEstimate() +
                    State.InputSpills.retainedByteEstimate() +
+                   State.NonzeroSpills.retainedByteEstimate() +
                    State.InputWrites.Writes.capacity() * sizeof(MemoryWrite) +
                    State.DefinedCaptures.capacity() * sizeof(uint64_t);
   if (State.Tagged)
@@ -1123,6 +1342,8 @@ private:
                                          bool &CoveringInputs);
   llvm::Error computeInputDependencies();
   llvm::Error computeReturnReachability();
+  llvm::Error widenCapturedState(ContextState &State, size_t Owner,
+                                 size_t NextOrder);
   uint16_t usedCalleeInputs(const MedInstruction &Call, size_t Entry,
                             uint16_t Inputs) const {
     // EXIT alone observes only its scalar result. If the caller discards
@@ -1303,7 +1524,7 @@ private:
       std::make_shared<StoredMemoryCoordinates>(StoredMemoryCoordinates{
           frameTranslationLimit(Program.Low.TheVersion, Program.Config),
           CapturedAddresses});
-  std::vector<size_t> CaptureOwners;
+  std::vector<CaptureDefinition> CaptureDefinitions;
   std::map<std::tuple<size_t, size_t, uint64_t, uint64_t, uint64_t>, size_t>
       CaptureIndex;
   // A join identity is scoped to one owner/block and its complete source set.
@@ -1606,7 +1827,7 @@ bool ContextFlow::hasCompletedObjectResult(
     return false;
   const auto Object = Context.Return->Registers[kReturnRegister].singleton();
   return Object.ValueKind == RegisterValue::Kind::SymbolicAddress &&
-         CaptureOwners[Object.Value] == Context.ID &&
+         CaptureDefinitions[Object.Value].Owner == Context.ID &&
          Context.Return->Origins[kReturnRegister] ==
              Context.Return->Registers[kReturnRegister];
 }
@@ -2273,21 +2494,46 @@ ContextState ContextFlow::genericInput() const {
   return Input;
 }
 
+llvm::Error ContextFlow::widenCapturedState(ContextState &State, size_t Owner,
+                                            size_t NextOrder) {
+  // Build this lookup once for all register and memory lanes. Walking an
+  // object's byte cells for every occurrence would make buffer widening
+  // quadratic. The temporary index uses the existing retained-state budget.
+  const uint64_t Bytes = sizeof(std::vector<uint64_t>) +
+                         2 * State.Scratch.Values.size() * sizeof(uint64_t);
+  if (auto Error = retain(Bytes))
+    return Error;
+  const auto Release = llvm::scope_exit([&] { RetainedBytes -= Bytes; });
+  std::vector<uint64_t> WordObjects;
+  WordObjects.reserve(State.Scratch.Values.size());
+  State.Scratch.Values.visitCells([&](const auto &Address, const auto &) {
+    if (Address.ValueKind == RegisterValue::Kind::SymbolicAddress)
+      WordObjects.push_back(Address.Value);
+  });
+  llvm::sort(WordObjects);
+  WordObjects.erase(std::unique(WordObjects.begin(), WordObjects.end()),
+                    WordObjects.end());
+  widenCapturedValues(State, *CapturedAddresses, CaptureDefinitions, Owner,
+                      NextOrder, WordObjects);
+  return llvm::Error::success();
+}
+
 llvm::Expected<RegisterValue>
 ContextFlow::captureAddress(size_t Owner, size_t Slot, uint64_t Source,
                             UnsignedValueRange Bounds) {
   const auto Key = std::tuple(Owner, Slot, Source, Bounds.Lower, Bounds.Upper);
   if (const auto It = CaptureIndex.find(Key); It != CaptureIndex.end())
     return RegisterValue{RegisterValue::Kind::SymbolicAddress, It->second, 0};
-  const uint64_t Bytes = 2 * sizeof(UnsignedValueRange) + 2 * sizeof(size_t) +
-                         sizeof(decltype(CaptureIndex)::value_type) +
-                         6 * sizeof(void *);
+  const uint64_t Bytes =
+      2 * sizeof(UnsignedValueRange) + 2 * sizeof(CaptureDefinition) +
+      sizeof(decltype(CaptureIndex)::value_type) + 6 * sizeof(void *);
   if (auto Error = retain(Bytes))
     return std::move(Error);
   const size_t ID = CapturedAddresses->size();
   CaptureIndex.emplace(Key, ID);
   CapturedAddresses->push_back(Bounds);
-  CaptureOwners.push_back(Owner);
+  const size_t Block = std::prev(ByEntry.upper_bound(Slot))->second;
+  CaptureDefinitions.push_back({Owner, BlockOrder[Block]});
   return RegisterValue{RegisterValue::Kind::SymbolicAddress, ID, 0};
 }
 
@@ -2708,10 +2954,10 @@ llvm::Error ContextFlow::joinCapturedStates(const FunctionContext &Owner,
            A.ValueKind == RegisterValue::Kind::SymbolicAddress &&
            B.ValueKind == RegisterValue::Kind::SymbolicAddress &&
            A.Value != B.Value && A.Offset == B.Offset &&
-           CaptureOwners[A.Value] == Owner.ID &&
-           CaptureOwners[B.Value] == Owner.ID && Left.definesCapture(A.Value) &&
-           Right.definesCapture(B.Value) && !Left.definesCapture(B.Value) &&
-           !Right.definesCapture(A.Value);
+           CaptureDefinitions[A.Value].Owner == Owner.ID &&
+           CaptureDefinitions[B.Value].Owner == Owner.ID &&
+           Left.definesCapture(A.Value) && Right.definesCapture(B.Value) &&
+           !Left.definesCapture(B.Value) && !Right.definesCapture(A.Value);
   };
   bool Needed = false;
   for (unsigned R = 0; R < kRegisterCount; ++R)
@@ -2755,7 +3001,7 @@ llvm::Error ContextFlow::joinCapturedStates(const FunctionContext &Owner,
         Bounds.Upper = std::max(Bounds.Upper, (*CapturedAddresses)[ID].Upper);
       }
       const uint64_t Bytes =
-          2 * sizeof(UnsignedValueRange) + 2 * sizeof(size_t) +
+          2 * sizeof(UnsignedValueRange) + 2 * sizeof(CaptureDefinition) +
           sizeof(decltype(JoinedCaptureIndex)::value_type) +
           sizeof(decltype(JoinedCaptureMembers)::value_type) +
           8 * sizeof(void *) +
@@ -2764,7 +3010,7 @@ llvm::Error ContextFlow::joinCapturedStates(const FunctionContext &Owner,
         return Error;
       Joined = CapturedAddresses->size();
       CapturedAddresses->push_back(Bounds);
-      CaptureOwners.push_back(Owner.ID);
+      CaptureDefinitions.push_back({Owner.ID, BlockOrder[Block]});
       JoinedCaptureIndex.emplace(std::move(Key), Joined);
       JoinedCaptureMembers.emplace(Joined, std::move(Members));
     }
@@ -3343,6 +3589,81 @@ ContextFlow::refineTaggedBranch(const FunctionContext &Context,
 
 void ContextFlow::transferValues(const MedInstruction &Instruction,
                                  ContextState &State) {
+  const bool Copy = Instruction.Op == Operation::Mov &&
+                    Instruction.Form == OperandForm::DstSrc &&
+                    Instruction.Width == kDoubleWordBitWidth;
+  bool Nonzero =
+      (Copy && (State.NonzeroRegisters & registerBit(Instruction.Src))) ||
+      guardedProductIsNonzero(Instruction, State);
+  if (Instruction.Op == Operation::Load &&
+      Instruction.Semantics.MemoryWidth == kDoubleWordBitWidth &&
+      !State.NonzeroSpills.empty())
+    Nonzero = llvm::all_of(
+        possibleValues(State.Registers[Instruction.Src]),
+        [&](const auto &Base) {
+          const auto Address = memoryAddress(Base, Instruction.Offset);
+          return Address &&
+                 State.NonzeroSpills.readValues(*Address).singleton() ==
+                     RegisterValue{RegisterValue::Kind::Constant, 1, 0};
+        });
+  if (Instruction.Op == Operation::Store) {
+    const bool StoresNonzero =
+        Instruction.Form == OperandForm::StoreReg &&
+        Instruction.Width == kDoubleWordBitWidth &&
+        (State.NonzeroRegisters & registerBit(Instruction.Src));
+    if (StoresNonzero || !State.NonzeroSpills.empty()) {
+      MedInstruction Store = Instruction;
+      Store.Form = OperandForm::StoreReg;
+      Store.Src = Store.Dst == 0 ? 1 : 0;
+      std::optional<StoredRegisterMemory> Output;
+      for (const auto &Base : possibleValues(State.Registers[Store.Dst])) {
+        MachineState Spill;
+        Spill.Registers[Store.Dst] = Base;
+        if (StoresNonzero)
+          Spill.Registers[Store.Src] = {RegisterValue::Kind::Constant, 1, 0};
+        Spill.Scratch.Values = State.NonzeroSpills;
+        applyTransfer(Store, Spill, Program.ExecutableImage,
+                      ScratchLoadPolicy::ProvenValues);
+        if (!Output)
+          Output = std::move(Spill.Scratch.Values);
+        else
+          Output->meet(Spill.Scratch.Values);
+      }
+      State.NonzeroSpills = std::move(*Output);
+    }
+  }
+  const bool Positive =
+      Copy && State.Predicate &&
+      (State.Predicate->Positive & registerBit(Instruction.Src));
+  const bool Negative =
+      Copy && State.Predicate &&
+      (State.Predicate->Negative & registerBit(Instruction.Src));
+  const bool Left =
+      Copy && State.Predicate &&
+      (State.Predicate->LeftAliases & registerBit(Instruction.Src));
+  const bool Right =
+      Copy && State.Predicate &&
+      (State.Predicate->RightAliases & registerBit(Instruction.Src));
+  State.forgetScalarRegisters(instructionDependencies(Instruction).Writes);
+  if (State.Predicate) {
+    if (Positive)
+      State.Predicate->Positive |= registerBit(Instruction.Dst);
+    if (Negative)
+      State.Predicate->Negative |= registerBit(Instruction.Dst);
+    if (Left)
+      State.Predicate->LeftAliases |= registerBit(Instruction.Dst);
+    if (Right)
+      State.Predicate->RightAliases |= registerBit(Instruction.Dst);
+  }
+  if (Nonzero)
+    State.NonzeroRegisters |= registerBit(Instruction.Dst);
+  if (Instruction.Call != CallKind::None) {
+    State.Predicate.reset();
+    if (Instruction.Call == CallKind::Syscall &&
+        (!Instruction.Syscall ||
+         !preservesCallerMemory(Instruction.Syscall->ID)))
+      State.NonzeroSpills.clear();
+  }
   const auto OriginAddress = [&](unsigned Register) {
     RegisterState Entry{};
     Entry[0] = State.Origins[Register].singleton();
@@ -4229,6 +4550,15 @@ llvm::Expected<bool> ContextFlow::call(FunctionContext &Context,
                                        const MedInstruction &Instruction,
                                        ContextState &State, bool Collect) {
   State.Tagged.reset();
+  State.Predicate.reset();
+  const uint16_t PreservedNonzero =
+      State.NonzeroRegisters &
+      ~((uint16_t{1} << callClobberedRegisterCount(Instruction.Call)) - 1);
+  State.NonzeroRegisters = PreservedNonzero;
+  const auto RestoreScalarFacts = llvm::scope_exit([&] {
+    State.Predicate.reset();
+    State.NonzeroRegisters = PreservedNonzero;
+  });
   if (Instruction.Call != CallKind::Indirect)
     return callTarget(Context, Instruction, State, Collect);
   const auto Targets = State.Registers[Instruction.CallRegister].values();
@@ -4425,6 +4755,11 @@ ContextFlow::instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
   MemoryPathInstantiation Result;
   Result.Output = Input;
   auto &State = Result.Output;
+  State.Predicate.reset();
+  State.NonzeroRegisters = 0;
+  // This matched replay uses the caller's current memory. Its canonical stores
+  // update nonzero cells just like concrete cells, including across nested
+  // calls.
   const auto RetainState = [&]() -> llvm::Error {
     const uint64_t NewBytes =
         stateBytes(State) + ResultOverhead +
@@ -4523,6 +4858,8 @@ ContextFlow::instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
           State.Origins[R] = Input.Origins[R];
           State.InputExpressions[R] = Input.InputExpressions[R];
         }
+        State.Predicate.reset();
+        State.NonzeroRegisters = 0;
         if (auto Error = RetainState())
           return std::move(Error);
         if (MergeScalarBranches) {
@@ -5220,7 +5557,7 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
       llvm::scope_exit([&] { RetainedBytes -= NewCaptureBytes; });
   const auto BindCapture = [&](RegisterValue Value) {
     if (Edge.LegacyRuntime || !Callee ||
-        CaptureOwners[Value.Value] != Callee->ID)
+        CaptureDefinitions[Value.Value].Owner != Callee->ID)
       return Value;
     auto Bound = captureAddress(Context.ID, Instruction.Slot, Value.Value,
                                 (*CapturedAddresses)[Value.Value]);
@@ -5492,6 +5829,13 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
         Callee->Effects.WritesFrames;
   }
   if (!PreserveInput) {
+    ScratchState NonzeroSpills;
+    NonzeroSpills.Values = std::move(State.NonzeroSpills);
+    if (Callee && !Edge.LegacyRuntime)
+      Callee->Effects.invalidate(NonzeroSpills, ValueEntry.Registers, Program);
+    else
+      NonzeroSpills.clear();
+    State.NonzeroSpills = std::move(NonzeroSpills.Values);
     ScratchState Spills;
     Spills.Values = std::move(State.InputSpills);
     if (Callee && !Edge.LegacyRuntime)
@@ -6023,6 +6367,10 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
   Input.OriginScratch.clear();
   Input.Postconditions.clear();
   Input.Tagged.reset();
+  Input.Predicate.reset();
+  Input.NonzeroRegisters = 0;
+  Input.NonzeroSpills.clear();
+  Input.NonzeroSpills.setCoordinates(Coordinates);
   // Incoming names belong to callers, not to the invocation being summarized.
   // Their fields still use the ordinary must-fact join within this summary.
   Input.DefinedCaptures = std::vector<uint64_t>{};
@@ -6281,8 +6629,18 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
   const auto Enqueue = [&](size_t BlockID, const ContextState &Incoming,
                            uint16_t Defined) -> llvm::Error {
     const auto ProjectInputs = [&](ContextState &State) {
-      const uint16_t Inputs =
+      uint16_t Inputs =
           InputRegisters[BlockID] | registerBit(kFramePointerRegister);
+      // A literal comparand is still read by the local scalar proof while
+      // the tested value is live, even if machine instructions next redefine
+      // that literal's register. Other dead values still project to unknown.
+      if (State.Predicate && (State.Predicate->operands() & Inputs))
+        for (unsigned R = 0; R < kRegisterCount; ++R)
+          if ((State.Predicate->operands() & registerBit(R)) &&
+              State.Registers[R].singleton().ValueKind ==
+                  RegisterValue::Kind::Constant)
+            Inputs |= registerBit(R);
+      State.forgetScalarRegisters(AllRegisters & ~Inputs);
       for (unsigned R = 0; R < kRegisterCount; ++R)
         if (!(Inputs & registerBit(R))) {
           State.Registers[R] = {};
@@ -6334,6 +6692,9 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
         Merged.Tagged == It->second.Entry.Tagged &&
         Merged.DefinedCaptures == It->second.Entry.DefinedCaptures &&
         Merged.Nullable == It->second.Entry.Nullable &&
+        Merged.Predicate == It->second.Entry.Predicate &&
+        Merged.NonzeroRegisters == It->second.Entry.NonzeroRegisters &&
+        Merged.NonzeroSpills == It->second.Entry.NonzeroSpills &&
         MergedDefinitions == It->second.DefinitelyWritten)
       return llvm::Error::success();
     const uint64_t OldCharge = StateCharge(It->second.Entry);
@@ -6400,11 +6761,12 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
           continue;
         // Reverse postorder identifies a DFS backedge even when the bytecode
         // places an acyclic continuation before its allocating predecessor.
-        // Every cycle still crosses such an edge and widens locally defined
-        // captures. Incoming identities remain fixed within this invocation.
+        // Every repeated definition crosses such an edge to its rank or
+        // earlier. Captures defined before an inner loop remain fixed.
         if (BlockOrder[Successors[E]] <= BlockOrder[BlockID])
-          widenCapturedValues(SuccessorState, *CapturedAddresses, CaptureOwners,
-                              Context.ID);
+          if (auto Error = widenCapturedState(SuccessorState, Context.ID,
+                                              BlockOrder[Successors[E]]))
+            return std::move(Error);
         if (auto Error = Enqueue(Successors[E], SuccessorState, Defined))
           return std::move(Error);
       }
@@ -6478,7 +6840,9 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
                              *CapturedAddresses, ReturnCarriers[*TaggedTail]))
       return llvm::Error::success();
     if (BlockOrder[*TaggedTail] <= BlockOrder[BlockID])
-      widenCapturedValues(Path, *CapturedAddresses, CaptureOwners, Context.ID);
+      if (auto Error =
+              widenCapturedState(Path, Context.ID, BlockOrder[*TaggedTail]))
+        return Error;
     unsigned Width;
     ProvenValueSet Tag;
     RegisterValue Address;
@@ -6528,12 +6892,12 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
     Case.Values.includeCells(Path.Scratch.Values, [&](const auto &Cell) {
       return Cell.ValueKind == RegisterValue::Kind::Constant ||
              (Cell.ValueKind == RegisterValue::Kind::SymbolicAddress &&
-              CaptureOwners[Cell.Value] == Context.ID);
+              CaptureDefinitions[Cell.Value].Owner == Context.ID);
     });
     Case.Values.refineCapturedRanges(Path.Scratch.Values);
     Case.DefinedCaptures = std::move(Path.DefinedCaptures);
     std::erase_if(Case.DefinedCaptures, [&](uint64_t Capture) {
-      return CaptureOwners[Capture] != Context.ID;
+      return CaptureDefinitions[Capture].Owner != Context.ID;
     });
     auto Existing = llvm::find_if(TaggedReturn->Cases, [&](const auto &Old) {
       return Old.Tags == Case.Tags;

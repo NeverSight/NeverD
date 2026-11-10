@@ -516,6 +516,78 @@ private slots:
     QCOMPARE(comment->shortcuts().size(), 2);
   }
 
+  void menuShortcutsReadQuieterThanCommands_data() {
+    QTest::addColumn<bool>("dark");
+    QTest::newRow("light") << false;
+    QTest::newRow("dark") << true;
+  }
+
+  void menuShortcutsReadQuieterThanCommands() {
+    QFETCH(bool, dark);
+    Theme::instance().setMode(dark ? Theme::Mode::Dark : Theme::Mode::Light);
+    Theme::instance().apply();
+    QMenu menu;
+    auto *quiet = menu.addAction(QStringLiteral("Menu entry"));
+    quiet->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_O));
+    auto *highlighted = menu.addAction(QStringLiteral("Menu entry"));
+    highlighted->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_O));
+    menu.ensurePolished();
+    menu.resize(menu.sizeHint());
+    menu.setActiveAction(highlighted);
+    const auto capture = menu.grab().toImage();
+    const qreal dpr = capture.devicePixelRatio();
+    // The label and the shortcut are the two runs of ink the widest gap in a
+    // row separates; each reads by its strongest contrast with the row.
+    const auto contrasts = [&](QAction *action, const QColor &background) {
+      // Inside the row, clear of the highlight's rounded corners and of the
+      // menu's padding, only text differs from the row's background.
+      const QRect row = menu.actionGeometry(action).adjusted(3, 3, -3, -3);
+      const auto distance = [&](const QColor &pixel) {
+        return std::max({qAbs(pixel.red() - background.red()),
+                         qAbs(pixel.green() - background.green()),
+                         qAbs(pixel.blue() - background.blue())});
+      };
+      const int left = qRound(row.left() * dpr);
+      const int right = qRound((row.right() + 1) * dpr);
+      QVector<int> columns(right - left);
+      for (int y = qRound(row.top() * dpr);
+           y < qRound((row.bottom() + 1) * dpr); ++y)
+        for (int x = left; x < right; ++x)
+          columns[x - left] =
+              std::max(columns[x - left], distance(capture.pixelColor(x, y)));
+      int split = -1, widest = 0, last = -1;
+      for (int x = 0; x < columns.size(); ++x) {
+        if (columns[x] <= 24)
+          continue;
+        if (last >= 0 && x - last > widest) {
+          widest = x - last;
+          split = x;
+        }
+        last = x;
+      }
+      int label = 0, shortcut = 0;
+      for (int x = 0; x < columns.size(); ++x)
+        (x < split ? label : shortcut) =
+            std::max(x < split ? label : shortcut, columns[x]);
+      return std::pair(label, shortcut);
+    };
+    // Visual Studio Code dims a keybinding to 70% until its item is
+    // highlighted; a style sheet rule for menu items would paint it with
+    // the label's pen again.
+    const auto [label, shortcut] =
+        contrasts(quiet, Theme::instance().chrome("Menu"));
+    QVERIFY2(
+        shortcut < label * 0.85,
+        qPrintable(
+            QStringLiteral("label %1, shortcut %2").arg(label).arg(shortcut)));
+    const auto [activeLabel, activeShortcut] =
+        contrasts(highlighted, Theme::instance().chrome("MenuSelection"));
+    QVERIFY2(activeShortcut >= activeLabel * 0.9,
+             qPrintable(QStringLiteral("label %1, shortcut %2")
+                            .arg(activeLabel)
+                            .arg(activeShortcut)));
+  }
+
   void longMenusScrollWithinOneColumn_data() {
     QTest::addColumn<bool>("dark");
     QTest::newRow("light") << false;

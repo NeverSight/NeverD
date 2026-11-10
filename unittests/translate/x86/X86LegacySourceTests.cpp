@@ -15,7 +15,7 @@
 #include "X86LegacyDescriptorTestEncoding.h"
 #include "X86LegacyMachineStatusTestEncoding.h"
 #include "X86LegacySystemSelectorTestEncoding.h"
-#include "X86LegacyTestState.h"
+#include "X86LegacyTaskTestState.h"
 #include "X86PortDevice.h"
 
 #include "neverd/loader/BinaryImage.h"
@@ -129,7 +129,7 @@ TEST(X86LegacySourceContract, RejectsMalformedAndUnsupportedSelections) {
 }
 
 class X86LegacySourceTest : public NeverDLiftTest,
-                            public X86LegacyTestState,
+                            public X86LegacyTaskTestState,
                             public testing::WithParamInterface<unsigned> {
 protected:
   using Driver = uint32_t (*)(void *, uint64_t *);
@@ -246,7 +246,9 @@ uint32_t neverd_x86_legacy_attempted_v1(void *context) {
   }
 };
 
+#include "X86LegacyHaltSourceTests.inc"
 #include "X86LegacyMpxSourceTests.inc"
+#include "X86LegacyTaskSourceTests.inc"
 
 TEST_P(X86LegacySourceTest, ModesAliasesAndBudgetsUseLiveCaches) {
   Driver Run = nullptr;

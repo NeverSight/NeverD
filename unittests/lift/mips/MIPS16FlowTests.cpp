@@ -18,6 +18,7 @@
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/LowToMedError.h"
+#include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/MIPSCodeMode.h"
 
@@ -30,6 +31,33 @@
 using namespace neverd;
 
 namespace {
+
+TEST(MIPS16Decode, EveryHalfwordHasTheExactPhysicalDelaySlotWidth) {
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL}) {
+    MIPSLifter Lifter(Target, InstructionMode::MIPS16);
+    cs_insn Instruction{};
+    Instruction.address = 0x1002;
+    for (unsigned Half = 0; Half <= 0xffff; ++Half) {
+      Instruction.bytes[0] = Half >> (archLittleEndian(Target) ? 0 : 8);
+      Instruction.bytes[1] = Half >> (archLittleEndian(Target) ? 8 : 0);
+      Instruction.bytes[2] = 0xa5;
+      Instruction.bytes[3] = 0x5a;
+      for (unsigned Size : {0u, 1u, 2u, 3u, 4u, 6u}) {
+        Instruction.size = Size;
+        // Manual: JAL/JALX consist of two halfwords. Short JR and JALR
+        // use one halfword slot; compact branches and EXTEND pairs do not.
+        bool Slotted = Size == 4 && Half >= 0x1800 && Half <= 0x1fff;
+        if (Size == 2) {
+          Slotted = Half == 0xe820;
+          for (unsigned R = 0; R != 8; ++R)
+            Slotted |= Half == 0xe800 + (R << 8) || Half == 0xe840 + (R << 8);
+        }
+        ASSERT_EQ(Lifter.delaySlotBytes(Instruction), Slotted ? 2u : 0u)
+            << "halfword=" << Half << " size=" << Size;
+      }
+    }
+  }
+}
 
 TEST(MIPS16Decode, EncodingModeRequiresTheAdmittedMIPS32Revision) {
   for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64,

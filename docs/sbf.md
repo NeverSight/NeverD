@@ -663,6 +663,37 @@ payload when the caller selects that tag. The existing four-alternative limit
 still applies: if another split exceeds it, the incoming bounds are retained
 without that refinement. Unknown ordinary scalars and 32-bit comparisons gain
 no full-width exclusion from this rule.
+A repeated comparison can also select a Boolean register assigned on its earlier
+edges. The local state retains one comparison over unchanged register contents,
+including its opcode, width and normalized operand. At a join it keeps only
+Boolean correlations established on every incoming path; repeating that
+comparison then restores the matching zero or one. Full-width register copies
+preserve these carriers. Writes to either compared operand, carrier redefinition,
+projection of an operand, calls and loop backedges discard the affected facts.
+A different comparison replaces the relation. The relation stays within one
+invocation and uses fixed state storage charged to the existing memory budget;
+it adds no path specializations or input-validity assumptions.
+An edge that excludes zero also records a local nonzero register fact. Exact
+64-bit copies preserve it. A 64-bit multiplication by a positive literal keeps
+it only when the current comparison excludes every operand that could overflow.
+That check reuses the known-successor evaluator with a temporary interval;
+ordinary unknown scalars acquire no persistent numeric range. Compared-operand
+aliases require exact copies, and joins retain only facts present on every path.
+Liveness projection retains a literal comparison operand while the tested
+register remains live, because the local proof still reads that literal.
+Register definitions, projection, invocation boundaries and loop backedges
+discard the affected register facts. A returning call preserves nonzero facts
+only for registers preserved by the canonical SBF call ABI. Full-width stores
+can save a nonzero fact in a private typed-cell lane; complete reloads restore
+it without inventing the stored numeric value. Joins meet these facts, and the
+canonical store and callee memory effects invalidate overlapping or possibly
+aliasing cells. Unknown memory effects and writing syscalls discard them.
+Matched memory-path replay carries the caller's current cells through those
+same store transfers before replacing its state with the completed return.
+Unchanged cells can retain the fact across a loop even when register facts are
+widened. Narrow stores or loads do not transfer a full-word nonzero fact.
+Truncating copies, truncated guards and potentially wrapping products cannot
+establish the full-width product proof.
 If the same block stores the compared register as a full 64-bit word immediately
 before the comparison, the selected edge also narrows that stored value. The
 typed scratch value, its formal origin and the returned memory postcondition
@@ -967,10 +998,17 @@ of fresh allocation. Distinct captures can alias. The canonical typed-memory
 owner checks their complete numeric footprints, including modular offsets,
 before preserving a frame or another object field. A partial write invalidates
 the overlapping field. Captures are rebound at caller boundaries and widened
-to bounds across CFG back edges, so successive calls or loop iterations cannot
-reuse an old object's equality identity. The existing reverse-postorder index
-identifies these edges; an acyclic jump to a smaller instruction slot retains
-its capture. Coordinate configuration is shared
+to bounds at CFG backedges. A locally defined capture with full-word fields keeps
+its identity across an inner loop that cannot repeat its definition. The
+existing reverse-postorder index establishes this boundary: any cycle repeating
+the definition crosses an edge to its rank or earlier. Other local captures
+still widen, and may-alias writes still invalidate their fields. Narrow-only
+buffers keep the existing widening: their byte facts are projected out at
+summary entries and must not introduce extra object-input variants there.
+All memory lanes consult one index of pre-widening full-word objects. This
+temporary index and the definition index use the existing retained-state budget.
+An acyclic jump to a smaller instruction slot also retains its capture.
+Coordinate configuration is shared
 across the analysis and charged at its owner.
 
 A forward join keeps captured identities while its complete disjunction fits
@@ -1208,10 +1246,12 @@ captured object's fields when its capture was introduced on only one incoming
 path. The pointer and its fields
 remain conditional on that path. A capture already introduced on both paths
 still loses a field if either path forgets it. Possible-alias writes
-continue to invalidate every overlapping capture. Backedges widen identities
-created by the current invocation; incoming captures name fixed values for that
-invocation and keep fields that survived ordinary write invalidation. The caller
-still widens its own captures when its loop invokes the callee again. This is
+continue to invalidate every overlapping capture. Backedges widen local
+identities when they can repeat their definition; an earlier definition with
+full-word fields keeps its identity through an inner loop. Incoming captures name
+fixed values for that invocation and keep fields that survived ordinary write
+invalidation. The caller still widens its own captures when its loop invokes
+the callee again. This is
 not an allocation freshness or non-aliasing proof.
 The local definition history is charged to retained state and is reset at a
 summary entry; incoming captures keep the ordinary must-fact join there.

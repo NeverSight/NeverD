@@ -344,6 +344,7 @@ Apply section 4 constraints first if the target is embedded.
 - [ ] Crispness: at 100% scale, do straight icon strokes and 1 px lines cover whole pixels, so thin elements show their real colour?
 - [ ] States: does every control read differently at rest, under the pointer, pressed, with keyboard focus, checked and disabled, in every theme, and does a disabled control stay legible rather than vanish or look enabled?
 - [ ] Localisation: do all user-visible strings use locale-aware formatting? Are containers able to expand 30–40% for translated text?
+- [ ] Languages: does every window fit its texts in every bundled language, does a live language switch reword every pane, and do layouts placed by hand mirror right to left?
 - [ ] AI features: are latency patterns, uncertainty, and consent handled per section 3?
 ---
 

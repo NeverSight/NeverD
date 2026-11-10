@@ -38,6 +38,10 @@ NEVERD_MIPS_SCALAR_INTRINSIC(MIPSDivUnsignedWord, 16010,
 NEVERD_MIPS_MERGE_STORE(MIPSSwl, 16011, 0x2a, 4, true, "neverd_mips_swl")
 NEVERD_MIPS_MERGE_STORE(MIPSSwr, 16012, 0x2e, 4, false, "neverd_mips_swr")
 
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSExecutionHazardBarrier, 16013,
+                             "neverd_mips_ehb")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSSync, 16014, "neverd_mips_sync")
+
 NEVERD_MIPS_SCALAR_TEXT(kMalformedScalar,
                         "invalid MIPS scalar intrinsic operand/output contract")
 NEVERD_MIPS_SCALAR_TEXT(

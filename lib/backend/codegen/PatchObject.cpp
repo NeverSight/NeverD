@@ -6,6 +6,8 @@
 
 #include "neverd/backend/codegen/PatchObject.h"
 
+#include "MachO/MachOArm64eABI.h"
+
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/codegen/DwarfEHFrame.h"
 #include "neverd/backend/codegen/ELF/ELFARMEHABIPatch.h"
@@ -1249,9 +1251,12 @@ llvm::Expected<PatchResult> installObjectPatch(
     const std::filesystem::path &Output,
     llvm::function_ref<llvm::Error(const PatchResult &)> PrepareReceipt,
     const DynCodePatchEvidence *DynCode,
-    const SourcePatchPreparation *Preparation) {
+    const SourcePatchPreparation *Preparation,
+    llvm::ArrayRef<SourcePatchDependency> Dependencies) {
   const BinaryImage &Original =
       Preparation ? Preparation->Image : OriginalInput;
+  if (!Dependencies.empty() && !Original.isArm64e())
+    return fail(macho_arm64e_abi::kDependencies);
   if (Original.Format == BinaryFormat::COFF)
     return installCOFFObjectPatch(Bytes, OriginalInput, Mappings,
                                   RequestedBindings, Output, PrepareReceipt,
@@ -1259,7 +1264,7 @@ llvm::Expected<PatchResult> installObjectPatch(
   if (Original.Format == BinaryFormat::MachO)
     return installMachOObjectPatch(Bytes, OriginalInput, Mappings,
                                    RequestedBindings, Output, PrepareReceipt,
-                                   DynCode, Preparation);
+                                   DynCode, Preparation, Dependencies);
   if (Original.Format != BinaryFormat::ELF)
     return fail("native object format is unsupported");
   if (Mappings.empty())

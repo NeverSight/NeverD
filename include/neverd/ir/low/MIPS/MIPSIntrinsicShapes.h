@@ -34,7 +34,10 @@ inline bool mipsScalarLowShapeIsValid(const LowOp &Op,
        Op.NumInputs > 2 ? Op.Inputs[2].Size : uint16_t{0},
        Op.NumInputs > 3 ? Op.Inputs[3].Size : uint16_t{0},
        Op.MemoryOrdering == NdMemoryOrdering::None &&
-           Op.MemoryAddressSpace == NdMemoryAddressSpace::Default});
+           Op.MemoryAddressSpace == NdMemoryAddressSpace::Default,
+       Op.NumInputs > 1 && Op.Inputs[1].isConst()
+           ? std::optional<uint64_t>(Op.Inputs[1].Offset)
+           : std::nullopt});
 }
 
 } // namespace neverd

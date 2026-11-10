@@ -26,6 +26,7 @@
 #include "neverd/backend/LLVMAnalysisDispatch.h"
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/MIPS/MIPSBarrierSource.h"
 #include "neverd/backend/MIPS/MIPSDSPSource.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/ParameterSites.h"
@@ -10406,6 +10407,8 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
     if (Fn.hasFnAttribute(LLVMSourceBody))
       SignatureOS << "static ";
     if (isMIPS(Opts.TheArch)) {
+      if (Fn.hasFnAttribute(mips::BarrierSourceMarker))
+        SignatureOS << mips::BarrierNoInlineC;
       SignatureOS << mips::dspSourceCAttribute(
           Opts.TheArch, Img ? Img : Opts.Image,
           Fn.hasFnAttribute(mips::DSPSourceMarker));

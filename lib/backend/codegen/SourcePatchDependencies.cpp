@@ -34,6 +34,19 @@ llvm::Error fail(const llvm::Twine &Message) {
                                  "source dependency: " + Message);
 }
 
+llvm::Error validateDeclaration(const llvm::Module &Module,
+                                const SourcePatchDependency &Request) {
+  const auto *Value = Module.getNamedValue(Request.Symbol);
+  if (!Value || !Value->isDeclaration() || Value->getAddressSpace() ||
+      (llvm::isa<llvm::Function>(Value) !=
+       (Request.Kind == SourcePatchDependencyKind::Function)))
+    return fail(kDeclaration + Request.Symbol);
+  if (const auto *Global = llvm::dyn_cast<llvm::GlobalVariable>(Value))
+    if (Global->isThreadLocal())
+      return fail(kTLSDeclaration);
+  return llvm::Error::success();
+}
+
 llvm::Expected<std::vector<uint8_t>>
 appendCOFFImports(const BinaryImage &Original,
                   std::vector<SourcePatchImport> &Imports) {
@@ -201,6 +214,19 @@ llvm::Error validateSourcePatchDependencyRequests(
         !Names.insert(Request.Symbol).second)
       return fail(kRequestShape);
   }
+  return llvm::Error::success();
+}
+
+llvm::Error validateSourcePatchDependencyDeclarations(
+    const llvm::Module &Module,
+    llvm::ArrayRef<SourcePatchDependency> Requests) {
+  if (Requests.empty())
+    return llvm::Error::success();
+  if (auto Error = validateSourcePatchDependencyRequests(Requests))
+    return Error;
+  for (const auto &Request : Requests)
+    if (auto Error = validateDeclaration(Module, Request))
+      return Error;
   return llvm::Error::success();
 }
 
@@ -379,15 +405,9 @@ bindSourcePatchDependencies(llvm::Module &Module,
                             llvm::ArrayRef<SourcePatchImport> Imports,
                             bool RewriteDeclarations) {
   for (const auto &Import : Imports) {
+    if (auto Error = validateDeclaration(Module, Import.Request))
+      return Error;
     auto *Value = Module.getNamedValue(Import.Request.Symbol);
-    if (!Value || !Value->isDeclaration() || Value->getAddressSpace() ||
-        (llvm::isa<llvm::Function>(Value) !=
-         (Import.Request.Kind == SourcePatchDependencyKind::Function)))
-      return fail("request does not match an external declaration: " +
-                  Import.Request.Symbol);
-    if (const auto *Global = llvm::dyn_cast<llvm::GlobalVariable>(Value))
-      if (Global->isThreadLocal())
-        return fail("new TLS imports require a native TLS allocation contract");
     for (const auto &Use : Value->uses())
       if (!llvm::isa<llvm::Instruction>(Use.getUser()))
         return fail("new imports in constant initializers are not modeled");

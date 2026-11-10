@@ -49,6 +49,47 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
       S.emit(NdOp::NOP, {}, {});
     return true;
   }
+  const bool ImmediateLogic =
+      *Kind == Instruction::AndImmediate || *Kind == Instruction::OrImmediate ||
+      *Kind == Instruction::NorImmediate || *Kind == Instruction::XorImmediate;
+  if (ImmediateLogic) {
+    const auto Byte = uint64_t((Word >> 16) & 255);
+    const auto Repeated = NdVar::cst(Byte * UINT64_C(0x0101010101010101), 8);
+    const auto Mask = S.makeTemp(16);
+    S.emit(NdOp::CONCAT, Mask, {Repeated, Repeated});
+    const NdOp Opcode = *Kind == Instruction::AndImmediate   ? NdOp::INT_AND
+                        : *Kind == Instruction::XorImmediate ? NdOp::INT_XOR
+                                                             : NdOp::INT_OR;
+    auto Result = S.binary(Opcode, NdVar::reg(mipsreg::w(WS), 16), Mask);
+    if (*Kind == Instruction::NorImmediate) {
+      const auto Inverted = S.makeTemp(16);
+      S.emit(NdOp::INT_NOT, Inverted, {Result});
+      Result = Inverted;
+    }
+    S.emit(NdOp::COPY, NdVar::reg(mipsreg::w(WD), 16), {Result});
+    return true;
+  }
+  if (*Kind == Instruction::SelectVector ||
+      *Kind == Instruction::MergeNonzeroVector ||
+      *Kind == Instruction::MergeZeroVector) {
+    const auto Old = NdVar::reg(mipsreg::w(WD), 16);
+    const auto Source = NdVar::reg(mipsreg::w(WS), 16);
+    const auto Other = NdVar::reg(mipsreg::w(WT), 16);
+    const bool Select = *Kind == Instruction::SelectVector;
+    const bool Zero = *Kind == Instruction::MergeZeroVector;
+    const auto Mask = Select ? Old : Other;
+    const auto Inverted = S.makeTemp(16);
+    S.emit(NdOp::INT_NOT, Inverted, {Mask});
+    const auto Yes = S.binary(NdOp::INT_AND, Mask,
+                              Select ? Other
+                              : Zero ? Old
+                                     : Source);
+    const auto No =
+        S.binary(NdOp::INT_AND, Inverted, Select || Zero ? Source : Old);
+    const auto Result = S.binary(NdOp::INT_OR, Yes, No);
+    S.emit(NdOp::COPY, NdVar::reg(mipsreg::w(WD), 16), {Result});
+    return true;
+  }
   if (*Kind == Instruction::AndVector || *Kind == Instruction::OrVector ||
       *Kind == Instruction::NorVector || *Kind == Instruction::XorVector) {
     const NdOp Opcode = *Kind == Instruction::AndVector   ? NdOp::INT_AND
@@ -86,21 +127,27 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
   }
   std::optional<NdOp> Shift, Bit;
   switch (*Kind) {
+  case Instruction::ShiftLeftImmediate:
   case Instruction::ShiftLeftVector:
     Shift = NdOp::INT_LEFT;
     break;
+  case Instruction::ShiftRightImmediate:
   case Instruction::ShiftRightVector:
     Shift = NdOp::INT_RIGHT;
     break;
+  case Instruction::ShiftRightSignedImmediate:
   case Instruction::ShiftRightSignedVector:
     Shift = NdOp::INT_ASHR;
     break;
+  case Instruction::ClearBitImmediate:
   case Instruction::ClearBitVector:
     Bit = NdOp::INT_AND;
     break;
+  case Instruction::SetBitImmediate:
   case Instruction::SetBitVector:
     Bit = NdOp::INT_OR;
     break;
+  case Instruction::NegateBitImmediate:
   case Instruction::NegateBitVector:
     Bit = NdOp::INT_XOR;
     break;
@@ -128,8 +175,20 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
                                *Kind == Instruction::RoundAverageUnsignedVector;
   const bool RoundAverage = *Kind == Instruction::RoundAverageSignedVector ||
                             *Kind == Instruction::RoundAverageUnsignedVector;
+  const bool ImmediateBit = (Shift || Bit) && (Word & 63) == 9;
+  const bool CountBits = *Kind == Instruction::PopulationCount ||
+                         *Kind == Instruction::LeadingZeroCount ||
+                         *Kind == Instruction::LeadingOneCount;
+  const unsigned Field = (Word >> 16) & 127;
+  if (ImmediateBit && Field >= 120)
+    return false;
   const uint16_t Bytes =
-      *Kind == Instruction::FillWord || *Kind == Instruction::InsertWord
+      ImmediateBit ? (Field < 64    ? 8
+                      : Field < 96  ? 4
+                      : Field < 112 ? 2
+                                    : 1)
+      : CountBits  ? 1u << ((Word >> 16) & 3)
+      : *Kind == Instruction::FillWord || *Kind == Instruction::InsertWord
           ? 4
           : 1u << ((Word >> 21) & 3);
   std::array<NdVar, 16> Values;
@@ -138,15 +197,29 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
       Values[I] = S.read(WS);
     else if (*Kind == Instruction::InsertWord)
       Values[I] = I == Index ? S.read(WS) : Lane(WD, I);
-    else if (Shift || Bit) {
+    else if (CountBits) {
+      auto Input = Lane(WS, I, Bytes);
+      if (*Kind == Instruction::LeadingOneCount) {
+        const auto Inverted = S.makeTemp(Bytes);
+        S.emit(NdOp::INT_NOT, Inverted, {Input});
+        Input = Inverted;
+      }
+      Values[I] = S.makeTemp(Bytes);
+      S.emit(*Kind == Instruction::PopulationCount ? NdOp::POPCOUNT
+                                                   : NdOp::LZCOUNT,
+             Values[I], {Input});
+    } else if (Shift || Bit) {
       const auto A = Lane(WS, I, Bytes);
-      const auto Count = S.binary(NdOp::INT_AND, Lane(WT, I, Bytes),
-                                  NdVar::cst(Bytes * 8 - 1, Bytes));
+      const auto Count = ImmediateBit
+                             ? NdVar::cst(Field & (Bytes * 8 - 1), Bytes)
+                             : S.binary(NdOp::INT_AND, Lane(WT, I, Bytes),
+                                        NdVar::cst(Bytes * 8 - 1, Bytes));
       if (Shift)
         Values[I] = S.binary(*Shift, A, Count);
       else {
         auto Mask = S.binary(NdOp::INT_LEFT, NdVar::cst(1, Bytes), Count);
-        if (*Kind == Instruction::ClearBitVector) {
+        if (*Kind == Instruction::ClearBitVector ||
+            *Kind == Instruction::ClearBitImmediate) {
           const auto Inverted = S.makeTemp(Bytes);
           S.emit(NdOp::INT_NOT, Inverted, {Mask});
           Mask = Inverted;

@@ -77,6 +77,7 @@ private:
   bool liftNonControl(State &S, Encoding Code, va_t BasePC) const;
   std::optional<Encoding> encoding(const cs_insn &Instruction) const;
   std::optional<Encoding> microEncoding(const cs_insn &Instruction) const;
+  std::optional<Encoding> mips16JumpEncoding(const cs_insn &Instruction) const;
   std::optional<Encoding> mips16Encoding(const cs_insn &Instruction) const;
   LowDelaySlot liftControl(const cs_insn &Head, const cs_insn *Slot,
                            Encoding Code, std::vector<LowOp> &Ops) const;

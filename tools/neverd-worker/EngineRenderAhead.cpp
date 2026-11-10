@@ -300,6 +300,20 @@ void Engine::keepStoresFor(const StoreNames &before, const StoreNames &after) {
   } catch (const std::exception &) {
     // Later sessions render again.
   }
+  // The names after are those the stores' identity reads now: where what is
+  // open holds for them, an owner's views read it under them without reading
+  // the identity again (storeOfViews, keptListingFacts).
+  if (!listing_)
+    return;
+  const auto generation = listing_->cacheGeneration();
+  if (!after.renders.empty() && rendersStoreName_ == after.renders) {
+    rendersStoreRead_ = true;
+    rendersStoreGeneration_ = generation;
+  }
+  if (!after.facts.empty() && factsStoreName_ == after.facts) {
+    factsStoreRead_ = true;
+    factsStoreGeneration_ = generation;
+  }
 }
 
 RenderStore *Engine::storeOfViews() {
@@ -309,6 +323,7 @@ RenderStore *Engine::storeOfViews() {
   if (!rendersStoreRead_ || rendersStoreGeneration_ != generation) {
     rendersStoreRead_ = true;
     rendersStoreGeneration_ = generation;
+    ++viewStoreNameReads_;
     try {
       const auto name = storeNames().renders;
       if (name.empty()) {

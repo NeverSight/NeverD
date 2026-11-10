@@ -47,6 +47,13 @@ execute-breakpoint profile compares original linear instruction starts before
 fetch, after pending virtual-interrupt selection. `ir/X86/X86DebugRules` owns
 the shared legacy/x64 control validation, RF/SS suppression, matching and DR6
 status, including coincident single-step and next-PC breakpoint causes.
+The legacy executor owns HLT's persistent `Halted` cell. Completion publishes
+the following EIP and expires SS/STI inhibition; waiting performs no fetch.
+Only the event owner clears the halt when accepting IRQ/NMI or a debug trap,
+before any IDT access. Its existing continuation then retains wake acceptance
+across delivery faults and backing/work stops. Source selection checks this
+cell before selecting the next code extent, so compiled dispatch cannot turn
+HLT into fallthrough or charge repeated instruction attempts while waiting.
 `ir/X86/X86DebugRegisterRules` owns MOV-DR access priority and normalization;
 `lift/X86/X86DebugRegisterEncoding` owns its register-only byte grammar.
 The paged continuation provider retains these bytes with a dedicated projection
@@ -151,7 +158,16 @@ state, memory, options and result at its private bridge. Selection keys combine
 the live linear instruction address with CS.D; the dispatcher does not duplicate
 instruction semantics or infer an ordinary C ABI. Event delivery always stops;
 pending entry resumes through the existing owner before more source dispatch.
-This path supplies neither IA-32e compatibility state nor task transitions.
+This path does not supply IA-32e compatibility state. Protected task transfers
+are owned by `translate/X86/X86LegacyTaskSwitch`, shared by far CALL/JMP,
+NT IRET and IDT task gates. It separates outgoing TSS effects from incoming
+register/address-space publication and retains a private, immutable continuation
+for backing stops and incoming-task faults. Ordinary instruction admission stays
+strict; only this owner can admit its partially loaded CS/SS fault context.
+Source selection uses the retained original instruction key during a suspended
+task switch, so it neither fetches overwritten bytes nor charges another attempt.
+VM86 destinations stop at an explicit `ModeUnavailable` boundary; their execution
+and event routing still require a complete mode owner.
 `translate/X86/X86LegacyFrameReturn` adds protected 16/32-bit IRET/RETF to that
 executor, retaining ordered descriptor writes and IRET NMI unblocking on later
 faults. `ir/X86/X86ReturnRules` shares code-return privilege checks, inaccessible
@@ -1424,8 +1440,11 @@ collector uses exact local symbol addresses and addends, one unambiguous existin
 dyld provider, or an explicit provider declaration for an external symbol.
 Missing/conflicting providers, unresolved or
 subtracted expressions, non-writable storage and stale placement fail before
-mutation. The r6 build cannot exercise this MC callback path; its integration
-test is explicitly skipped until a toolchain exposing the fork interface is used.
+mutation. A source build of the fork exercises both IR and assembly producers
+through final placement in chained and threaded images. The bounded handoff
+retains nested signing constants and verifies the installed recipes. The r6
+build lacks the callback and explicitly skips that integration test; this
+handoff does not reconstruct the ABI of arbitrary lifted modules.
 
 `MachOAuthenticatedFixups` installs final-address signing recipes in linked
 arm64e chained and legacy threaded images. It reuses the strict dependency
@@ -1568,6 +1587,26 @@ for legacy inputs because the Xcode 27 runner also drops authenticated bind
 addends in a compiler-original threaded control; original-format installation
 and inspection remain separate offline coverage.
 
+`prepareMachOAuthenticatedStartup` is the publication-time owner for default
+dyld startup. It migrates legacy threaded metadata and repartitions userland
+arm64e chains containing IB/DB slots into valid 4 KiB chain pages. The shared
+publication transaction invokes it before final signing, including when no
+new signing recipes were added. It rebuilds page roots and next fields while
+retaining storage VAs, targets, imports/addends, signing parameters, code and
+segment protections. Existing 4 KiB chains and A-key-only chained images are
+unchanged. Kernel/firmware formats and unrepresentable legacy imports reject
+transactionally. CodeDirectory page size is a separate signing contract and
+is preserved.
+
+This follows the default dyld fallback contract: XNU's
+[page-in signer supports only A keys](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/osfmk/vm/vm_dyld_pager.c),
+and its [mapping syscall rejects a non-native chain page size](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/vm/vm_unix.c).
+[dyld falls back to its in-process fixup implementation](https://github.com/apple-oss-distributions/dyld/blob/fd8d0c4d52320ebf64db34f3cb280310d905c5ae/dyld/Loader.cpp)
+when that mapping fails. On the qualified 16 KiB Apple hosts this retains all
+four keys without a launcher profile, environment override or protection change.
+Default startup qualification is separate from the explicit userspace diagnostic
+profile and from arbitrary lifted-image rebuilding.
+
 Installation is transactional, including automatic producer receipts and the
 optional explicit recipe handoff in `MachOPatcher::appendReplacementImage`.
 Failed placement planning cannot authorize installation at the zero error
@@ -1583,9 +1622,23 @@ insertion, including segmented pointers whose target ordinal would otherwise
 change when a new load command is inserted. Such a changed target is rejected
 without publishing any bytes.
 
-This installation phase does not enable whole-image arm64e publication. The
-new MC interface still requires qualification with a post-r6 toolchain and
-the complete publication pipeline. The
+Canonical replacement IR uses native MC object emission and this
+installer through `installSourcePatch`, including deferred provider declarations
+from the SDK. This admits the macOS classic/ABI1 source profile without clearing
+analysis-only lifted-module flags. The publication owner rejects explicit generic
+RA-state toggles in classic arm64e DWARF: Darwin already authenticates saved LR
+with its implicit B-key ABI, and r6's extra toggle breaks the macOS 26 unwinder.
+The rejection covers the CIE and FDE programs of new object ranges, before
+committing any bytes. Canonical emission requires the direct LLVM fork CFI fix;
+the prebuilt default remains r6. The source fork also passes the bounded raw
+MC handoff tests described above. The
+[generated-image record](evidence/arm64e-generated-image-2026-11-10.json)
+binds independent source builds on macOS 26 and Xcode 27: each passes 36 native
+installation/publication cases, 33 signing tests and both six-control
+prerequisites, with no failures or skips. Canonical IR publication covers O0/O2
+compact and DWARF language frames in both dylibs and default-system main
+executables. Arbitrary lifted-image publication retains its separate ABI
+reconstruction boundary. The
 [native installation record](evidence/arm64e-native-installation-2026-11-09.json)
 qualifies twelve installed-dylib cases on each of macOS 26 and Xcode 27, with
 zero failures or skips. It covers O0/O2 authenticated calls, compact/DWARF
@@ -2197,9 +2250,10 @@ authenticated imports or authorize whole-image rebuilding.
 
 This support covers static loading, lifting and C/LLVM inspection, together
 with the separately qualified native object installation contract above.
-General rebuilding and source replacement of an arm64e image fail explicitly
-until their complete signing, fixup and publication pipeline is qualified;
-the emitted module retains that requirement. Checked emulation's existing
+Canonical arm64e source replacement uses the bounded macOS native-object
+publication profile described in [native validation](arm64e-native-validation.md#canonical-ir-through-native-mc-objects).
+General lifted rebuilding still fails explicitly, and its emitted module
+retains the analysis-only requirement. Checked emulation's existing
 disabled-key profile does not become an arm64e execution environment. Separate
 Apple Silicon tests compare both C projections with native PACGA. The full PAC/AUT/XPAC oracle
 requires an executable arm64e process and checks that each signing key changes
@@ -3468,6 +3522,15 @@ graph; `COFFExceptionPatch` continues to require that evidence for lifted code.
 
 Recovered indirect-call arguments retain separate integer and floating register runs and the remaining stack bytes. Each stack value also keeps the offset it was stored at, so a value narrower than its slot leaves the rest of the slot as padding: -O0 x86-64 code passes an `int` with `mov [rsp+8], r10d` in an eight-byte slot. `LLVMCallContract` uses one binder during emission and after LLVM target resolution: surplus registers cannot shift another bank, packed 32-bit stores are assembled into the callee’s complete stack slots, a narrower value fills only its own slot, and a slot that no value was stored to refuses. A callback table cannot replace an already recovered first argument with an inferred object pointer. AArch64 copy-initialized tables authenticate the native BL/import identity, MOVZ length, ADRP/ADD source and complete immutable span; publication and jump-table proof replay check the same witness.
 
+For fixed pair-aligned stack arguments, the reaching-store owner publishes
+concrete scalar values and local wide-store lanes with their memory offsets.
+The final argument boundary reapplies these values after local packing, even
+when the proof is complete; matching a slot number alone does not authenticate
+a candidate. Local scanning and certified lanes share the target-endian
+conversion from memory bytes to numeric SUBBYTES offsets. A predecessor wide
+store without published lane evidence makes the proof incomplete, so required
+unknown arguments cannot become alignment padding.
+
 ## Manual PDB presentation boundary
 
 `lib/debug/PDBIdentity.h` owns RSDS build identity for full loading, symbol-store
@@ -4623,7 +4686,17 @@ code calls (`NoReturnTargetIndex`). Its declaration query uses
 The local-type provider can reject missing or returning declarations directly
 from its immutable library, without converting and caching every image symbol's
 parameter/return graph. Positive declarations still pass full prototype
-validation; an unsupported type cannot terminate a CFG path.
+validation without C name-table construction; an unsupported type cannot
+terminate a CFG path. `DebugContext::resolvePrototypeABI` provides the same
+validated types, calling convention and declaration origin for structural
+queries. The x86 import-return inventory uses it without spelling every
+library type. Both local-type queries use the ordinary signature converter;
+source emitters retain `resolvePrototype` and its complete C spellings.
+C declaration writers build their library-wide name table only when a named
+type or enumerator needs it. Scalar and parameter spelling use the same
+identifier rules directly. The deferred table still consumes the whole
+library in its canonical order, preserving collisions independently of
+which type is requested first. Shared embedded-name tables remain reusable.
 A name a program may also give a routine
 of its own decides only together with the module that exports it
 (`isNoReturnImport`, `WindowsNoReturnImports.inc`): the Universal CRT's
@@ -5034,7 +5107,9 @@ prototype, while callee effects, no-return proofs and call graphs read bodies. T
 to the library that nothing names do the same (`Session::takeUnreadTypes`); what
 that checks their names against, the names the library spells and those its types
 and prototypes mention, a worker reads while it idles once the session has read its
-types (`neverd_local_types_prepare`), and a declaration keeps it as it adds types. Other
+types (`neverd_local_types_prepare`), and a declaration keeps it as it adds types; the
+same step reads the image's symbol names a rename checks against
+(`neverd_names_prepare`). Other
 types let go of what read them, and the summaries, the job and the store start over,
 while the process and its image stand. The owner keeps its listing and reference index
 for those, and reads what a function was declared as when it next decodes it.
@@ -11869,10 +11944,22 @@ context and explicit-state paths.
 entry-register save. A known reaching stack store of a computed value,
 including a partial overwrite, prevents the load from being ignored as an
 epilogue restore. Both the ordinary return scan and merged-epilogue scan use
-this decision. Entry-stack offsets and ordered memory accesses are indexed
+this decision. A partial identity restore covers only its own bytes; each
+predecessor retains the uncovered-byte mask, and revisits process only new
+bytes. A validated F16C store supplies computed bytes, while a validated
+floating-point memory read cannot hide an earlier write. Entry-stack offsets
+and ordered memory accesses are indexed
 lazily once per function, and repeated views reuse the load result. Unknown
 aliases, calls and exceptional predecessors end that path without inventing
 a stored value; this does not establish arbitrary function ABI contracts.
+
+`endsCallArgumentSetup` owns the distinction between register and memory
+effects during ABI recovery. Validated F16C conversions that store half values
+and ARM64 scalar, vector, pair and structure stores invalidate earlier stack
+setup. Register-only scans preserve that setup across these operations while
+still observing their explicit outputs. Invalid shapes remain barriers for
+both queries; an overwritten stack argument is not replaced with its stale
+earlier value.
 
 An internal i386 helper may instead consume one incoming logical ST0 and
 return an integer. The same machine graph proves that every return consumes
@@ -15828,7 +15915,14 @@ through normalization so CFG does not visit a nonexistent fallthrough.
 MIPS16 symbols are classified before their overlapping microMIPS flag bit.
 MIPS16e2 is an explicit ABI-record feature on that same instruction mode;
 `ELFMIPSProfile` owns the GNU e2 ASE bit and `Decoder::configureFor` refreshes it.
-Its integer/memory EXTEND forms reuse the classic semantic owners. The pinned
+Its integer/memory EXTEND forms reuse the classic semantic owners. Delay-slot
+queries reuse the small MIPS16 jump normalizer instead of normalizing all scalar
+instructions. EHB/SYNC are effectful native barriers with an independent
+no-data-write contract for saved returns; their exact stype and source mode are
+validated at the owning shape/source boundaries. Module name planning reserves
+native symbols, deferred call hints and import-storage names before allocating
+barrier helpers. Source-body markers own their selected-definition closure;
+matching a symbol's spelling does not establish helper identity. The pinned
 Unicorn does not implement e2; GNU bytes, independent LowIR checks and execution
 of regenerated old-MIPS16 source remain distinct evidence.
 Both source routes emit the positive encoding attribute and explicitly exclude

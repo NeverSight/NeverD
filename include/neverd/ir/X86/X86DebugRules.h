@@ -34,7 +34,8 @@ enum class X86InstructionDebugProfile : uint8_t {
   /// replace their B0..B3 status. Other debug extensions remain unbound.
   Watchpoints,
   /// Watchpoints plus nontransactional Intel branch single-stepping (BTF).
-  /// LBR/trace stores, task switches and RTM remain outside this binding.
+  /// LBR/trace stores and RTM remain outside this binding. Task publication
+  /// additionally requires the execution owner's task-state contract.
   BranchWatchpoints,
 };
 
@@ -209,6 +210,18 @@ inline void x86PublishInstructionDebug(Bank &Debug, bool SingleStep,
 template <typename Bank> inline void x86AcceptDebugException(Bank &Debug) {
   Debug.DR7 &= ~uint64_t{0x2000};
   Debug.DebugCTL &= ~kX86BranchTraceFlag;
+}
+
+/// Hardware task publication disables local comparators. Global enables and
+/// sticky debug status survive; the incoming TSS's TF affects its first step.
+template <typename Bank> inline void x86CommitTaskDebug(Bank &Debug) {
+  Debug.DR7 &= ~uint64_t{0x155};
+}
+
+/// A TSS T-bit trap is independent of DR7 enables and ordinary TF stepping.
+template <typename Bank> inline void x86PublishTaskDebug(Bank &Debug) {
+  x86PublishInstructionDebug(Debug, false);
+  Debug.DR6 |= 0x8000;
 }
 
 /// Accepted event entry consumes the old delayed cause. Software entry keeps

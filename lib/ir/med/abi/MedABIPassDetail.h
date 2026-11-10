@@ -52,8 +52,9 @@ class MedEntryStackOffsets;
 
 /// Whether an operation prevents recovering an earlier ABI value: where it
 /// ends a later call's argument setup (endsCallArgumentSetup), as call
-/// argument collection in MedToHigh has it too.
-bool isAbiRecoveryBarrier(const MedOp &Op);
+/// argument collection in MedToHigh has it too. Memory queries must retain
+/// the default; a register-only scan separately observes explicit outputs.
+bool isAbiRecoveryBarrier(const MedOp &Op, bool RegistersOnly = false);
 
 /// Recover the sole ECX argument of an exact, source-checked PE32 cookie call.
 /// Incidental register values and inferred callee signatures do not extend it.
@@ -172,6 +173,13 @@ struct CallSetupStackJoins {
   std::map<int64_t, size_t> Slots;
 };
 
+/// One complete slot from the closest wide store in the call's own block.
+/// MemoryOffset is a byte position in stored memory, not a numeric bit index.
+struct CallSetupStackLane {
+  MedVar StoredValue;
+  uint16_t MemoryOffset;
+};
+
 /// Outgoing scalar stores that agree along every predecessor path
 /// to a call. Unknown writes, calls, independent entries and cycles stop the
 /// proof. Offsets are relative to the call's SP, using its exact SSA basis.
@@ -182,11 +190,16 @@ struct CallSetupStackJoins {
 /// operation and edge to that proof. The per-call limit still applies.
 /// Incomplete records memory barriers and bounded walks that could not finish.
 /// Missing required inputs then remain unknown, rather than pair-alignment
-/// padding.
-std::map<int64_t, MedVar>
-callSetupStackStores(const AbiCallContext &C,
-                     CallSetupStackJoins *Joins = nullptr,
-                     size_t *SharedWork = nullptr, bool *Incomplete = nullptr);
+/// padding. Once a block's own stores cover every slot, nothing before them
+/// reaches the call, so the walk stops there.
+/// WideSlots receives each slot whose closest store in the call's block is one
+/// aligned store of several whole slots, with that store's value and memory
+/// offset. A later candidate with the same slot number does not inherit this
+/// proof; the caller materializes the certified lane itself.
+std::map<int64_t, MedVar> callSetupStackStores(
+    const AbiCallContext &C, CallSetupStackJoins *Joins = nullptr,
+    size_t *SharedWork = nullptr, bool *Incomplete = nullptr,
+    std::map<int64_t, CallSetupStackLane> *WideSlots = nullptr);
 
 /// Every reaching path leaves this incoming argument register untouched.
 bool incomingArgumentReachesCall(const AbiCallContext &C, int ArgIndex);

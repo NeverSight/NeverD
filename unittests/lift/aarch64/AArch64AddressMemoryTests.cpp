@@ -8506,3 +8506,27 @@ TEST(AArch64StackPAuthLoad, BothCProjectionsAndLLVMExecuteCombinedSPAccesses) {
                                 kStackPAuthArtifactEnvironment,
                                 kStackPAuthArtifactProperty);
 }
+
+TEST(AArch64WritebackMemory, CallSetupDistinguishesEveryStoreFamilyFromLoads) {
+  const auto Check = [](const MedFunc &Function, bool Load) {
+    const auto &Ops = Function.Blocks.front().Ops;
+    const auto At = std::find_if(Ops.begin(), Ops.end(),
+                                 aarch64WritebackMemoryMedShapeIsValid);
+    ASSERT_NE(At, Ops.end());
+    SCOPED_TRACE(Function.Name);
+    EXPECT_EQ(endsCallArgumentSetup(*At), !Load);
+    EXPECT_FALSE(endsCallArgumentSetup(*At, /*RegistersOnly=*/true));
+    auto Invalid = *At;
+    Invalid.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+    EXPECT_TRUE(endsCallArgumentSetup(Invalid));
+    EXPECT_TRUE(endsCallArgumentSetup(Invalid, /*RegistersOnly=*/true));
+  };
+  for (const auto &Case : WritebackCases)
+    Check(writebackFunction(Case, 0), Case.Result != 0);
+  for (const auto &Case : VectorWritebackCases)
+    Check(vectorWritebackFunction(Case, 0), Case.Load);
+  for (const auto &Case : PairMemoryCases)
+    Check(pairMemoryFunction(Case, 0), Case.Load);
+  for (const auto &Case : StructureMemoryCases)
+    Check(structureMemoryFunction(Case, 0), Case.Load);
+}

@@ -47,6 +47,8 @@ namespace {
 #define MACHO_AUTH_FIXUP_TEXT(Name, Text) constexpr char Name[] = Text;
 #include "MachOAuthenticatedFixups.def"
 
+enum class FixupAction { Install, ConvertThreaded, PrepareStartup };
+
 llvm::Error fail(llvm::StringRef Message) {
   return llvm::createStringError(llvm::errc::not_supported,
                                  llvm::Twine(kErrorPrefix) + Message);
@@ -347,8 +349,8 @@ neverd::collectMachOAuthenticatedFixups(
 
 static llvm::Error installFixups(std::vector<uint8_t> &Binary,
                                  llvm::ArrayRef<MachOAuthenticatedFixup> Fixups,
-                                 bool ConvertThreaded) {
-  if (Fixups.empty() && !ConvertThreaded)
+                                 FixupAction Action) {
+  if (Fixups.empty() && Action == FixupAction::Install)
     return llvm::Error::success();
   if (Binary.size() > UINT32_MAX)
     return fail(kExtent);
@@ -357,10 +359,41 @@ static llvm::Error installFixups(std::vector<uint8_t> &Binary,
   if (!Before)
     return Before.takeError();
   if (Before->CPUType != CPU_TYPE_ARM64 ||
-      !arm64e::isSubtype(Before->CPUSubtype) || !Chains.CommandOffset)
+      !arm64e::isSubtype(Before->CPUSubtype))
     return fail(kImageABI);
-  if (ConvertThreaded && !Chains.Threaded)
+  if (!Chains.CommandOffset)
+    return Action == FixupAction::PrepareStartup ? llvm::Error::success()
+                                                 : fail(kImageABI);
+  if (Action == FixupAction::ConvertThreaded && !Chains.Threaded)
     return llvm::Error::success();
+  const bool ConvertThreaded =
+      Chains.Threaded && Action != FixupAction::Install;
+  if (Action == FixupAction::PrepareStartup) {
+    bool HasBKey = false, NeedsSmallPages = false;
+    for (const auto &Segment : Chains.Segments) {
+      if (Segment.Slots.empty())
+        continue;
+      if (Segment.PointerFormat == DYLD_CHAINED_PTR_64 ||
+          Segment.PointerFormat == DYLD_CHAINED_PTR_64_OFFSET)
+        continue;
+      if (Segment.PointerFormat != DYLD_CHAINED_PTR_ARM64E &&
+          Segment.PointerFormat != DYLD_CHAINED_PTR_ARM64E_USERLAND &&
+          Segment.PointerFormat != DYLD_CHAINED_PTR_ARM64E_USERLAND24)
+        return fail(kStartupFormat);
+      const auto Format = *arm64e::chainFormat(Segment.PointerFormat);
+      for (const auto &Slot : Segment.Slots) {
+        const auto Word = *arm64e::decodePointerWord(Slot.Raw, Format);
+        HasBKey |= Word.Authenticated && (Word.Key & kBKeyMask);
+      }
+      NeedsSmallPages |= Segment.PageSize != arm64e::kSmallPageBytes;
+    }
+    if (!ConvertThreaded && (!HasBKey || !NeedsSmallPages))
+      return llvm::Error::success();
+    if (HasBKey)
+      for (auto &Segment : Chains.Segments)
+        if (!Segment.Slots.empty())
+          Segment.PageSize = arm64e::kSmallPageBytes;
+  }
   const bool ThreadedOutput = Chains.Threaded && !ConvertThreaded;
   std::optional<dyld_info_command> Legacy;
   if (ConvertThreaded) {
@@ -688,12 +721,17 @@ static llvm::Error installFixups(std::vector<uint8_t> &Binary,
 llvm::Error neverd::installMachOAuthenticatedFixups(
     std::vector<uint8_t> &Binary,
     llvm::ArrayRef<MachOAuthenticatedFixup> Fixups) {
-  return installFixups(Binary, Fixups, false);
+  return installFixups(Binary, Fixups, FixupAction::Install);
 }
 
 llvm::Error
 neverd::convertMachOThreadedFixupsToChains(std::vector<uint8_t> &Binary) {
-  return installFixups(Binary, {}, true);
+  return installFixups(Binary, {}, FixupAction::ConvertThreaded);
+}
+
+llvm::Error
+neverd::prepareMachOAuthenticatedStartup(std::vector<uint8_t> &Binary) {
+  return installFixups(Binary, {}, FixupAction::PrepareStartup);
 }
 
 llvm::Error neverd::verifyMachOAuthenticatedFixups(

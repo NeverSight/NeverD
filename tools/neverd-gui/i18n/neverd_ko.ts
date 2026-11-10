@@ -10708,4 +10708,129 @@ Your previous graph is still available.</source>
         <translation>플러그인 결과 그래프</translation>
     </message>
 </context>
+<context>
+    <name>UnwindInfoDialog</name>
+    <message>
+        <source>Unwind information at %1</source>
+        <translation>%1의 스택 해제 정보</translation>
+    </message>
+    <message>
+        <source>DWARF state at the selected PC</source>
+        <translation>선택한 PC의 DWARF 상태</translation>
+    </message>
+    <message>
+        <source>Compact unwind: completed-prologue recipe</source>
+        <translation>컴팩트 언와인드: 프롤로그 완료 후 레시피</translation>
+    </message>
+    <message>
+        <source>The compact recipe describes the completed prologue; it does not establish the return-address state at the selected PC.</source>
+        <translation>컴팩트 레시피는 완료된 프롤로그를 설명하며, 선택한 PC에서의 반환 주소 상태를 확정하지 않습니다.</translation>
+    </message>
+    <message>
+        <source>Refresh</source>
+        <translation>새로 고침</translation>
+    </message>
+    <message>
+        <source>Loading unwind information…</source>
+        <translation>스택 해제 정보를 불러오는 중…</translation>
+    </message>
+    <message>
+        <source>The analysis worker is disconnected.</source>
+        <translation>분석 작업자 연결이 끊어졌습니다.</translation>
+    </message>
+    <message>
+        <source>This engine does not provide unwind information.</source>
+        <translation>이 엔진은 스택 해제 정보를 제공하지 않습니다.</translation>
+    </message>
+    <message>
+        <source>The program changed. Open unwind information again at the desired address.</source>
+        <translation>프로그램이 변경되었습니다. 원하는 주소에서 스택 해제 정보를 다시 여세요.</translation>
+    </message>
+    <message>
+        <source>No unwind frame contains this address.</source>
+        <translation>이 주소를 포함하는 스택 해제 프레임이 없습니다.</translation>
+    </message>
+    <message>
+        <source>This frame has no return-address signing report.</source>
+        <translation>이 프레임에는 반환 주소 서명 보고서가 없습니다.</translation>
+    </message>
+    <message>
+        <source>No metadata from this source.</source>
+        <translation>이 소스의 메타데이터가 없습니다.</translation>
+    </message>
+    <message>
+        <source>The engine returned an incompatible unwind report.</source>
+        <translation>엔진이 호환되지 않는 스택 해제 보고서를 반환했습니다.</translation>
+    </message>
+    <message>
+        <source>Could not load unwind information: %1</source>
+        <translation>스택 해제 정보를 불러올 수 없습니다: %1</translation>
+    </message>
+    <message>
+        <source>Frame: [%1, %2)</source>
+        <translation>프레임: [%1, %2)</translation>
+    </message>
+    <message>
+        <source>Status: %1</source>
+        <translation>상태: %1</translation>
+    </message>
+    <message>
+        <source>Signing kind: %1</source>
+        <translation>서명 종류: %1</translation>
+    </message>
+    <message>
+        <source>Key: %1</source>
+        <translation>키: %1</translation>
+    </message>
+    <message>
+        <source>Recipe: %1</source>
+        <translation>레시피: %1</translation>
+    </message>
+    <message>
+        <source>Signing PC: %1</source>
+        <translation>서명 PC: %1</translation>
+    </message>
+    <message>
+        <source>Diagnostic: %1</source>
+        <translation>진단: %1</translation>
+    </message>
+</context>
+<context>
+    <name>KDDockWidgets::QtWidgets::TitleBar</name>
+    <message>
+        <source>Minimize</source>
+        <translation>최소화</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>닫기</translation>
+    </message>
+    <message>
+        <source>Maximize</source>
+        <translation>최대화</translation>
+    </message>
+    <message>
+        <source>Restore</source>
+        <translation>이전 크기로 복원</translation>
+    </message>
+    <message>
+        <source>Auto-hide</source>
+        <translation>자동 숨기기</translation>
+    </message>
+    <message>
+        <source>Disable auto-hide</source>
+        <translation>자동 숨기기 해제</translation>
+    </message>
+</context>
+<context>
+    <name>KDDockWidgets::Core::TitleBar</name>
+    <message>
+        <source>Dock window</source>
+        <translation>창 도킹</translation>
+    </message>
+    <message>
+        <source>Undock window</source>
+        <translation>창 분리</translation>
+    </message>
+</context>
 </TS>

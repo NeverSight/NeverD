@@ -408,7 +408,7 @@ families remain separate work.
 | ENCLU outside explicit native bindings | The [native SGX V13 profile](x86-sgx-transfer.md) imports GPR/flags/x87/SSE/AVX and transfers leaves 2/3/4 to the immutable original executable ENCLU, preserving its PC-dependent result and native enclave/AEP continuation. Actual SGX success and AEX are unqualified on the local non-SGX host; software EPC/SSA/AEX, transport faults/events and ordinary relocated ABI remain separate. Leaves 0, 1 and 5..11 use the bounded contract below when natural-width AX is proven constant. |
 | ERETS, ERETU beyond explicit V9 | Native compiler interfaces and exact object encodings are available. Decoding now owns both IDs, and the explicit V9 continuation owns successful canonical returns, including ERETU compatibility targets, descriptor/caches, GS-base exchange, stack level and event outputs through both C routes. Conditional compatibility choices are profile-owned; ordinary source, CET, fault/event delivery and physical CPU transitions remain unqualified. |
 | UIRET faulting/native execution | Decoding and the explicit V8 continuation now own the successful canonical return, UIF feature selection, monitor invalidation and complete represented state through both C routes. Ordinary source, CET, fault delivery, RTM aborts and physical UINTR execution remain unqualified. |
-| RETF/RETFQ, IRET/IRETD/IRETQ | Ordinary source still lacks complete frame, privilege, segment and flag restoration. The separate [explicit x64 continuation](x64-continuation-source.md) V6 profile owns canonical 16/32/64-bit IRET and RETF (with or without imm16) from 64-bit entry to long-mode or compatibility CPL0..3, including hidden caches, descriptor accesses and outer-return segment invalidation. Compatibility returns own eight conditional GPR high-half choices and SS.B-dependent stack restoration/cleanup. All IRET widths pop five fields; word IRET retains AC/ID/VIF/VIP and clears RF. The no-fault returns accept RF, all IOPL values and VIF/VIP on entry while excluding TF; the optional paged-debug binding separately owns entry-TF traps. Raw frame RIP must be canonical before truncation. These instructions have no unconditional empty undefined-output audit. RETFQ preserves NMI blocking; IRETQ unblocks NMIs. The [paged binding](x86-paged-execution.md#faultable-iret-iretd-and-iretq) separately owns long-mode entry faults, retained descriptor effects, handler repair/retry and event composition, with explicit local processor profiles. The separate [legacy return owner](x86-legacy-segments.md#protected-iret-and-far-returns) now executes same/outer-CPL IRET/RETF in 16/32-bit protected entry, with word-sized CS/SS reads, descriptor effects and restartable IDT faults. The explicit protected source dispatcher retains these returns and event stops. CET/FRED, nested-task/VM86 returns, ordinary legacy function projection and compatibility source contexts remain outside these bindings. |
+| RETF/RETFQ, IRET/IRETD/IRETQ | Ordinary source still lacks complete frame, privilege, segment and flag restoration. The separate [explicit x64 continuation](x64-continuation-source.md) V6 profile owns canonical 16/32/64-bit IRET and RETF (with or without imm16) from 64-bit entry to long-mode or compatibility CPL0..3, including hidden caches, descriptor accesses and outer-return segment invalidation. Compatibility returns own eight conditional GPR high-half choices and SS.B-dependent stack restoration/cleanup. All IRET widths pop five fields; word IRET retains AC/ID/VIF/VIP and clears RF. The no-fault returns accept RF, all IOPL values and VIF/VIP on entry while excluding TF; the optional paged-debug binding separately owns entry-TF traps. Raw frame RIP must be canonical before truncation. These instructions have no unconditional empty undefined-output audit. RETFQ preserves NMI blocking; IRETQ unblocks NMIs. The [paged binding](x86-paged-execution.md#faultable-iret-iretd-and-iretq) separately owns long-mode entry faults, retained descriptor effects, handler repair/retry and event composition, with explicit local processor profiles. The separate [legacy return owner](x86-legacy-segments.md#protected-iret-and-far-returns) now executes same/outer-CPL IRET/RETF in 16/32-bit protected entry, with word-sized CS/SS reads, descriptor effects and restartable IDT faults. The explicit protected source dispatcher retains these returns and event stops. The additional [protected task binding](x86-legacy-segments.md#protected-task-transfers) owns NT IRET, TSS CALL/JMP and task gates, including incoming-task faults and retained backing progress. CET/FRED, VM86 execution, ordinary legacy function projection and compatibility source contexts remain outside these bindings. |
 | SYSENTER, SYSEXIT/SYSEXITQ, SYSRET/SYSRETQ, RSM | Ordinary source still lacks complete register, privilege, segment and SMM continuation state. The separate explicit x64 continuation V5/V6 profiles own canonical SYSRET/SYSRETQ with live STAR and CS/SS caches, flags and compatibility/64-bit target state. SYSRET explicitly consumes eight arbitrary values for the legacy GPR high halves; all defined bits are preserved or assigned as specified. The Intel V7 profile additionally owns canonical SYSENTER from CPL0–3 and SYSEXIT/SYSEXITQ from CPL0, with live CS/ESP/EIP MSRs, complete target caches, state and explicit stops. Unprefixed SYSENTER/SYSEXIT also accept flat compatibility entry with either CS.D and a complete in-limit instruction. RF, all IOPL values and VIF/VIP are admitted on entry; TF still requires debug-trap delivery. Nonflat compatibility entry and faulting IA-32e transfers remain unqualified; SYSRET is architecturally invalid in compatibility mode. The [protected Intel SEP executor](x86-legacy-segments.md#protected-sysenter-and-sysexit) now owns i386 SYSENTER/SYSEXIT from nonflat 16/32-bit entry, with explicit MSRs, fixed caches, ignored prefixes, LOCK #UD, privilege/null-MSR #GP and restartable original-fetch faults. The explicit protected source dispatcher now connects that owner; ordinary function projection remains separate. The separate [native SMM V12 profile](x86-smm-return.md) now owns software-state transport before hardware RSM; SMI entry, other software-managed banks and fault/event routing remain outside that profile. |
 | MPX outside explicit state profiles | The [V11 source profile](x86-mpx-source.md) owns all seven qualified long-mode families, bounds, enable state, tables, BNDSTATUS, original branch initialization and a pending-#BR stop through both C routes. The [protected code32 RAM profile](x86-legacy-segments.md#protected-mpx-instructions-and-branch-effects) adds original instructions, memory faults, IDT delivery, retained backing continuation and branch effects through the protected C dispatcher. Ordinary function ABI, compatibility source entry, code16 MPX, 16-bit addresses, non-flat-DS tables, other memory/fault profiles, transactions and physical MPX remain unqualified. |
 | XACQUIRE/XRELEASE outside explicit native steps | The [HLE source binding](x86-hle-state.md) retains 19 memory-operation families through native LLVM/NeverC contexts and both C routes. PAUSE forces a native abort/retry before publishing state; original registers, widths, bit indexes and addr32/FS/GS addressing remain explicit. Ordinary ABI lifting, external active transactions, full RTM checkpoints, native fault continuation and physical HLE commit/rollback remain unqualified. |
@@ -3884,8 +3884,9 @@ shares DR0–DR3 matching and DR6 status with paged x64, including RF/SS inhibit
 coincident single stepping, pending virtual-interrupt priority and accepted
 fault continuation. The shared MOV-DR/GD binding adds protected register
 access and restart, including explicit saved-RF choices. The shared watchpoint
-profile adds data/I/O causes and delayed/event-entry state. Branch stepping and
-task traps remain outside these bindings.
+profile adds data/I/O causes and delayed/event-entry state. Branch stepping
+requires the additional branch-watchpoint binding. Task traps require the
+[Tasks binding](x86-legacy-segments.md#protected-task-transfers).
 
 [Protected legacy returns](x86-legacy-segments.md#protected-iret-and-far-returns)
 now connect IDT entry back to the interrupted code. The explicit return profile
@@ -3894,7 +3895,8 @@ widths, flags, descriptor access ordering, NMI unblocking and restartable faults
 The native oracle covers INT/IRQ/NMI round trips, page-repair/IRET/retry and
 descriptor/frame aliasing; shared return rules keep x64 concrete and source
 execution consistent. This closes the protected legacy return boundary;
-nested-task and VM86 returns still require their separate machine-state owners.
+nested-task returns use the separate [Tasks binding](x86-legacy-segments.md#protected-task-transfers).
+VM86 returns still require their execution-mode owner.
 
 ### Native memory bit strings and protected scans
 
@@ -4385,3 +4387,50 @@ publication and BNDMOV alignment are explicit software-profile choices. Full
 mode/task transitions, remaining original-machine banks/providers, software
 SMM/SGX and unbound asynchronous producers remain global gaps. No LLVM
 release is declared, and the production r6 pin and LLVM gitlink remain unchanged.
+
+## Protected HLT, persistent waiting and event wake (2026-11-09)
+
+The protected original-byte executor now owns HLT completion and a persistent
+halted CPU state. It authenticates the complete instruction before LOCK/CPL
+faults, retains the following EIP on success and performs no next fetch while
+waiting. Existing IRQ/NMI inhibition and debug completion rules decide wake;
+event acceptance clears the halt before IDT entry, including failed or paused
+entry. Delivery resume cannot replay the instruction or accept an event twice.
+The generated C dispatcher uses the same state and counts only the original
+HLT attempt, including when its following code is unselected or unavailable.
+See [the halt contract](x86-legacy-segments.md#protected-hlt-and-event-wake).
+
+The integrated local full-SDK build passes 407 distinct execution, event and
+generated-source cases, with no skips. The new native HLT matrix performs
+344 original-instruction comparisons on each of the Intel P-core and E-core
+lanes. Its 8 E-core test replays are not added to the distinct-case count.
+All 268 generated dispatch libraries are host x64, using Clang/NeverC at
+O0/O2. The pinned r6 SDK was not rerun for this change. Build identities,
+commands, reports and the corrected KVM fixture diagnostics are recorded in
+[the qualification evidence](evidence/x86-legacy-halt-2026-11-09.json).
+
+Native HLT already has an LLVM intrinsic and NeverC x64 builtin. This change
+adds owned software execution and keeps both generated-C compiler lanes on
+x64. It adds no NeverC 32-bit target. SMI/INIT/RESET and machine-check wake,
+full mode/task transitions, software SMM/SGX and unbound event producers remain
+separate completion work. The final LLVM release and production pin are
+unchanged.
+
+## Protected task transfers (2026-11-09)
+
+The explicit [OrderedTSS binding](x86-legacy-segments.md#protected-task-transfers)
+connects protected task CALL/JMP, GDT/LDT/IDT task gates and NT IRET to one
+execution owner. It retains outgoing stores, incoming register/address-space
+publication, task/debug causes, fault recovery and host-backing continuation.
+Generated host-x64 C uses that owner; NeverC remains a 64-bit source compiler.
+The [merged qualification](evidence/x86-legacy-tasks-2026-11-09.json) records
+2,402 passing checks across both SDKs and qualified P/E cores. KVM's 28 task
+comparisons per SDK/core are software-reference evidence, because KVM emulates
+VMX task-switch exits. They do not establish physical task microcode or debug
+behavior. VM86 task destinations stop explicitly with retained state; full mode
+transitions, software SMM/SGX and unbound event/state owners remain open.
+
+The [Actions runner discovery](evidence/x86-sgx-runner-discovery-2026-11-09.json)
+also found no usable SGX1/EPC/device on Ubuntu 24.04 or Intel macOS 15/26. It
+executed zero enclave instructions. No final LLVM release, production pin or
+LLVM gitlink update is implied by either result.

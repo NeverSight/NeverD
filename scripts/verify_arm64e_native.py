@@ -179,6 +179,7 @@ def probe(output, *, startup=False, userspace_fixups=False):
               POLICY["fixup_loader_key"]: POLICY[
                   "userspace_fixup_loader" if userspace_fixups else "system_fixup_loader"],
               POLICY["startup_qualification_key"]: False,
+              POLICY["cpta_qualification_key"]: False,
               "whole_image_publication_qualified": False,
               "platform": platform.platform(), "machine": platform.machine(),
               "controls": []}
@@ -277,17 +278,18 @@ def probe(output, *, startup=False, userspace_fixups=False):
         save(output / POLICY["report_name"], report)
 
 
-def expected_cases(executable=False):
+def expected_cases(executable=False, generated=False):
+    key = ("generated_" if generated else "") + ("executable_" if executable else "") + "families"
     return {POLICY["case_format"].format(family=family, index=index)
-            for family in POLICY["executable_families" if executable else "families"]
+            for family in POLICY[key]
             for index in POLICY["indices"]}
 
 
-def check_runtime_report(xml, executable=False):
+def check_runtime_report(xml, executable=False, generated=False):
     cases = list(ET.fromstring(xml).iter(POLICY["testcase_tag"]))
     names = [case.attrib["name"].split(POLICY["parameter_separator"], 1)[0].rstrip()
              for case in cases]
-    if len(names) != len(expected_cases(executable)) or set(names) != expected_cases(executable):
+    if len(names) != len(expected_cases(executable, generated)) or set(names) != expected_cases(executable, generated):
         raise ValueError(POLICY["errors"]["cases"])
     for case in cases:
         if (case.attrib.get("status") != POLICY["run_status"] or
@@ -296,20 +298,27 @@ def check_runtime_report(xml, executable=False):
     return names
 
 
-def run_installation(output, build, probe_report, legacy_fixtures=None, *, executable=False):
+def run_installation(output, build, probe_report, legacy_fixtures=None, *,
+                     executable=False, system_startup=False, ir_compiler=None):
+    generated = ir_compiler is not None
+    userspace = executable and not system_startup
     report = {**provenance(), "status": POLICY["failed"],
               "native_installer_call_unwind_qualified": False,
               POLICY["publication_qualification_key"]: False,
               POLICY["executable_qualification_key"]: False,
+              POLICY["default_executable_qualification_key"]: False,
+              POLICY["generated_qualification_key"]: False,
+              POLICY["generated_executable_qualification_key"]: False,
+              POLICY["cpta_qualification_key"]: False,
               "whole_image_publication_qualified": False}
     try:
         control = json.loads(probe_report.read_text())
         if (control.get("status") != POLICY["passed"] or
                 control.get("control_loading") != POLICY[
-                    "startup_loading" if executable else "control_loading"] or
+                    "startup_loading" if userspace else "control_loading"] or
                 control.get(POLICY["fixup_loader_key"]) != POLICY[
-                    "userspace_fixup_loader" if executable else "system_fixup_loader"] or
-                (executable and not control.get(POLICY["startup_qualification_key"])) or
+                    "userspace_fixup_loader" if userspace else "system_fixup_loader"] or
+                (userspace and not control.get(POLICY["startup_qualification_key"])) or
                 not control.get("native_pac_qualified") or
                 not control.get("compiler_original_call_unwind_qualified") or
                 any(control.get(key) != report[key] for key in POLICY["provenance_keys"])):
@@ -317,12 +326,25 @@ def run_installation(output, build, probe_report, legacy_fixtures=None, *, execu
         report["probe_report_sha256"] = digest(probe_report)
         if legacy_fixtures is not None:
             report["legacy_fixtures"] = verify_legacy_fixtures(legacy_fixtures)
+        regex_key = (("generated_" if generated else "") +
+                     ("executable_" if executable else "") + "test_regex")
         argv = [*POLICY["ctest_command"], POLICY["build_dir_flag"], str(build),
-                POLICY["test_regex_flag"], POLICY[
-                    "executable_test_regex" if executable else "test_regex"]]
+                POLICY["test_regex_flag"], POLICY[regex_key]]
         with OwnedProducts(output, False) as products:
+            if generated:
+                ir_compiler = ir_compiler.resolve()
+                if not ir_compiler.is_file() or not os.access(ir_compiler, os.X_OK):
+                    raise ValueError(POLICY["errors"]["ir_compiler"])
+                version = command(products, output, POLICY["ir_compiler_label"],
+                                  [str(ir_compiler), *POLICY["ir_compiler_version_args"]],
+                                  POLICY["tool_timeout"])
+                if version.returncode:
+                    raise ValueError(POLICY["errors"]["ir_compiler"])
+                report[POLICY["ir_compiler_key"]] = {"path": str(ir_compiler), "sha256": digest(ir_compiler),
+                                         "version": version.stdout}
             execution_prefix = []
-            if executable:
+            report[POLICY["fixup_loader_key"]] = POLICY["system_fixup_loader"]
+            if userspace:
                 profile = startup_profile(products, output)
                 if control.get(POLICY["startup_profile_key"]) != profile:
                     raise ValueError(POLICY["errors"]["startup_profile"])
@@ -343,7 +365,7 @@ def run_installation(output, build, probe_report, legacy_fixtures=None, *, execu
                 binaries.add(Path(cmd[0]).resolve())
                 filters.extend(arg.removeprefix(POLICY["gtest_prefix"])
                                for arg in cmd if arg.startswith(POLICY["gtest_prefix"]))
-            if len(filters) != len(expected_cases(executable)) or set(filters) != expected_cases(executable) or len(binaries) != 1:
+            if len(filters) != len(expected_cases(executable, generated)) or set(filters) != expected_cases(executable, generated) or len(binaries) != 1:
                 raise ValueError(POLICY["errors"]["cases"])
             report["test_binary_sha256"] = digest(next(iter(binaries)))
             xml = output / POLICY["xml_name"]
@@ -351,9 +373,14 @@ def run_installation(output, build, probe_report, legacy_fixtures=None, *, execu
                 env = dict(os.environ, **POLICY["test_environment"])
                 env.pop(POLICY["artifact_environment"], None)
                 env.pop(POLICY["executable_environment"], None)
+                contract = fixture_contract()
+                env.pop(contract["ir_compiler_environment"], None)
+                if generated:
+                    env[contract["ir_compiler_environment"]] = str(ir_compiler)
                 if executable:
-                    env[POLICY["executable_environment"]] = POLICY["executable_environment_value"]
-                legacy_environment = fixture_contract()["legacy_environment"]
+                    env[POLICY["executable_environment"]] = POLICY[
+                        "executable_environment_value" if userspace else "system_fixup_loader"]
+                legacy_environment = contract["legacy_environment"]
                 env.pop(legacy_environment, None)
                 if legacy_fixtures is not None:
                     env[legacy_environment] = str(legacy_fixtures.resolve())
@@ -361,13 +388,16 @@ def run_installation(output, build, probe_report, legacy_fixtures=None, *, execu
                 result = command(products, output, POLICY["runtime_label_name"],
                                  [*execution_prefix, *argv, *POLICY["ctest_run_flags"], str(xml)],
                                  POLICY["suite_timeout"], env)
-            report["tests"] = check_runtime_report(xml.read_text(), executable)
+            report["tests"] = check_runtime_report(xml.read_text(), executable, generated)
             if result.returncode:
                 raise RuntimeError(POLICY["errors"]["ctest"])
             report["runtime_report_sha256"] = digest(xml)
             report["native_installer_call_unwind_qualified"] = not executable
-            report[POLICY["publication_qualification_key"]] = not executable
-            report[POLICY["executable_qualification_key"]] = executable
+            report[POLICY["publication_qualification_key"]] = not executable and not generated
+            report[POLICY["executable_qualification_key"]] = executable and not generated
+            report[POLICY["default_executable_qualification_key"]] = executable and system_startup and not generated
+            report[POLICY["generated_qualification_key"]] = generated and not executable
+            report[POLICY["generated_executable_qualification_key"]] = generated and executable
             report["status"] = POLICY["passed"]
         return report
     finally:
@@ -381,6 +411,7 @@ def main():
     parser.add_argument(POLICY["build_argument"], type=Path)
     parser.add_argument(POLICY["probe_argument"], type=Path)
     parser.add_argument(POLICY["legacy_argument"], type=Path)
+    parser.add_argument(POLICY["ir_compiler_argument"], type=Path)
     parser.add_argument(POLICY["startup_fixups_argument"],
                         choices=POLICY["startup_fixup_loaders"],
                         default=POLICY["system_fixup_loader"])
@@ -400,9 +431,17 @@ def main():
         else:
             if not args.build_dir or not args.probe_report:
                 raise ValueError(POLICY["errors"]["arguments"])
+            generated = args.mode in (POLICY["generated_mode"], POLICY["generated_executable_mode"])
+            if generated != (args.ir_compiler is not None):
+                raise ValueError(POLICY["errors"]["ir_compiler"])
             report = run_installation(output, args.build_dir.resolve(), args.probe_report.resolve(),
                                       args.legacy_fixtures,
-                                      executable=args.mode == POLICY["executable_mode"])
+                                      executable=args.mode in (POLICY["executable_mode"],
+                                                               POLICY["default_executable_mode"],
+                                                               POLICY["generated_executable_mode"]),
+                                      system_startup=args.mode in (POLICY["default_executable_mode"],
+                                                                   POLICY["generated_executable_mode"]),
+                                      ir_compiler=args.ir_compiler)
         print(json.dumps({"status": report["status"], "report": str(output / POLICY["report_name"])}))
         return POLICY["exit_codes"][report["status"]]
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:

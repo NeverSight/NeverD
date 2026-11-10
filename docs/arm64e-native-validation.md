@@ -6,8 +6,11 @@ Xcode 27 runners, with zero failures or skips. It identifies the locally built
 Release test host, exact source revision, binary/fixture hashes and each
 case's PAC, compiler-original, migration and unwind properties. The execution
 hosts compile their own replacement objects and controls. This qualifies the
-documented dylib installation matrix; whole-image rebuilding, startup loading
-and the post-r6 LLVM MC interface remain separate publication requirements.
+documented dylib installation matrix. Later sections record default startup
+and the canonical-IR producer separately. The
+[generated-image record](evidence/arm64e-generated-image-2026-11-10.json)
+qualifies the canonical source pipeline on both hosts; arbitrary lifted-image
+rebuilding retains its separate ABI reconstruction boundary.
 
 The same record includes independent Release/r6
 [cold source builds on both runners](https://github.com/gmh5225/test_mac_intel/actions/runs/42641592355).
@@ -121,7 +124,9 @@ as `exec` and sets `compiler_original_startup_qualified` only when all controls
 pass. A failing executable never retries through `dlopen`. The installed-dylib
 runner requires its matching `dlopen` probe, so a startup report cannot substitute
 for it. Neither probe grants whole-image publication qualification; that also
-requires the post-r6 MC producer and complete rebuild/signing transaction.
+requires a qualified producer and complete rebuild/signing transaction. The
+canonical-IR path below uses native MC objects from a compatible producer; the raw MC rewrite callback
+and arbitrary lifted modules retain separate requirements.
 
 The [separate startup run](https://github.com/gmh5225/test_mac_intel/actions/runs/42646758724)
 passed both PAC controls and all four `dlopen` controls on each native host.
@@ -157,9 +162,9 @@ launcher; an unsuccessful or ambiguous SDK query fails before execution.
 The [maintained verifier run](https://github.com/gmh5225/test_mac_intel/actions/runs/42659921245)
 passed all six controls in each of the system/dlopen and userspace/exec profiles
 on both hosts, with exact source/report identities in the page-in evidence.
-The default `system` profile retains its observed failure. The installer still
+The unchanged compiler-original `system` startup profile retains its observed failure. The installer still
 requires its matching system/dlopen probe, and neither profile qualifies a
-rebuilt image or the missing post-r6 MC publication path.
+rebuilt image or arbitrary lifted-image publication.
 
 The [compiler ABI comparison](evidence/arm64e-compiler-abi-2026-11-10.json)
 records nine compiler-only observations on each current native host. Both Apple
@@ -202,8 +207,9 @@ for main executables; the installer preserves RELRO rather than removing flags.
 The verifier independently derives the SDK syscall restriction and compares it
 to that report before launching CTest inside the declared profile. It rejects
 missing, skipped or failed cases. The result is separately named
-`native_executable_publication_qualified`; system-default startup and general
-lifted-image publication retain their own unqualified boundaries.
+`native_executable_publication_qualified`; default startup uses the separate
+`run-default-executable` gate described below. General lifted-image publication
+retains its own unqualified boundary.
 
 The [main-executable cold-build record](evidence/arm64e-native-executable-publication-2026-11-10.json)
 binds source `3e5fb93c816902d4b9893c1a54ffb353e3e3f117` and the environment revision
@@ -279,3 +285,156 @@ Each native child now receives freshly truncated diagnostic output, preventing
 an earlier child's success marker from satisfying a later run. Pair owned-image
 checks also run as 215 individual words, retaining all range/provenance checks
 and both source routes at O0/O2 for the original execution subset.
+
+Default startup publication now prepares authenticated userland chains in the
+shared signing transaction. B-key chains are repartitioned into valid 4 KiB
+chain pages, preserving their targets, signing recipes, code, RELRO and the
+original CodeDirectory page size. On 16 KiB hosts the default dyld fallback
+applies all four keys; no sandbox launcher is used by this publication gate.
+`run-default-executable` requires a successful same-source system `probe`,
+then all four O0/O2 compact/DWARF executable publication cases. Each also runs
+its unchanged original main before the replacement. The result is named
+`native_default_executable_publication_qualified`, independently of the
+compiler-original B-key startup failure and the userspace diagnostic profile.
+
+The [default-startup comparison](evidence/arm64e-default-startup-2026-11-10.json)
+records four O0/O2 compact/DWARF controls on each native host: the original
+SIGTRAPs, the same code with 4 KiB chain pages succeeds, and the byte-identical
+original SIGTRAPs again. Only chain page-size fields change before re-signing;
+the original signature page size is retained. This isolates the format/loader
+boundary from code generation and authentication semantics. The Xcode 27 host
+reports `FEAT_CPA=0` and `FEAT_CPA2=0` on an Apple M1 virtual CPU. The separately
+recorded FVP EL0/EL1 controls qualify that model environment, not native Apple
+CPTA-on or new NeverD output.
+
+The same record binds the [production publication replay](https://github.com/gmh5225/test_mac_intel/actions/runs/42746949630)
+at `e5a0fddc68b2fd03c2f25445aca674cef32ab3e6`. Each host passes twenty dylib,
+four userspace-profile main and four default-system main cases, with no failures
+or skips. The default command starts CTest directly; its successful system PAC
+and original-dylib report is separately hashed from the userspace prerequisite.
+Both hosts use the same identified local Release/r6 test binary, which is
+removed after execution. This is a delivered-host replay, not a cold source
+build. The ordinary original main, authenticated replacement calls, RELRO,
+compact/DWARF catches and cleanup all execute under the default loader.
+
+```sh
+python3 scripts/verify_arm64e_native.py run-default-executable \
+  --build-dir build-release \
+  --probe-report native-evidence/probe/report.json \
+  --output native-evidence/default-executable
+```
+
+
+## Canonical IR through native MC objects
+
+`installSourcePatch` admits canonical arm64e replacement IR for classic macOS
+images and ABI1 macOS main executables. It verifies the exact arm64e target,
+platform and layout, then emits a native Mach-O object with the
+`Codegen::compile` backend. The native object installer owns final placement,
+authenticated and ordinary pointer relocations, new providers, RELRO, signed
+language frames and the publication transaction. The SDK preserves provider
+and original binding symbols through this handoff instead of first replacing
+them with ordinary pointer loads. Layout planning checks section and loader ownership, then reuses
+available TEXT padding before requesting prefix growth, including creation of a missing
+`__eh_frame` section in a dylib. Deferred authenticated function providers do
+not reserve ordinary import-thunk frames.
+
+Use a frontend that emits LLVM's standard
+[pointer-authentication constants and call bundles](https://llvm.org/docs/PointerAuth.html),
+such as the tested Clang 22 frontend, selected explicitly with `--compiler-path`.
+Apple's older synthetic `llvm.ptrauth` globals remain unsupported IR input;
+its native object artifact uses the separately qualified object installer.
+Compiler selection never silently changes. The default prebuilt package remains
+r6. Its explicit classic signed-return CFI is incompatible with the macOS 26
+system unwinder, so publication rejects those objects transactionally. The
+Apple-native object route remains available. Canonical generation requires the
+[Darwin CFI correction](https://github.com/NeverSight/llvm-project/pull/8)
+committed directly to the NeverSight LLVM fork; it does
+not strip assembly or patch LLVM during the NeverD build. A separate source
+build validates that correction without changing the prebuilt release selection.
+The prebuilt audit checks the tag, release commit, all archive digests and checksum
+sidecars against the r6 snapshot. The source gitlink may advance only when the
+fork's authoritative comparison proves that snapshot is its ancestor; older,
+divergent or unavailable ancestry fails the audit. The report prints both
+identities. A source fix does not qualify the unchanged prebuilt package.
+The native object route does not require the raw MC final-address callback.
+
+The generated fixtures cover O0/O2, four authentication keys, address diversity,
+local and new external data/code pointers, ordinary pointer addends, new writable
+storage, three original-entry replacements, C++ catches, cleanup/resume and
+transaction rollback. A compatible producer exercises both compact language
+frames and explicit DWARF language frames. The latter forces a GNU_args_size
+row, including creation of previously absent EH storage. A deliberate generic
+RA-state toggle is a negative producer control: both the native installer and
+SDK must refuse publication without changing the original image.
+The offline checks compare native object/final unwind metadata and Apple's
+`dwarfdump` output; only execution on a qualified host can certify runtime use.
+
+The [producer diagnosis](https://github.com/gmh5225/test_mac_intel/actions/runs/42756197099)
+retains an independent Apple-linker control: r6 and Clang 22 objects failed to
+catch an exception on macOS 26 even without NeverD installation. Removing only
+the generic RA-state directives in the diagnostic assembly restored the catch
+and cleanup. This isolated the producer ABI defect; the diagnostic ablation is
+not a production transformation. Xcode 27 accepting the original bytes does
+not establish compatibility with the earlier deployment target.
+
+The [fixed-fork direct-link controls](https://github.com/gmh5225/test_mac_intel/actions/runs/42761893719)
+pass all four O0/O2 compact/DWARF call/catch/cleanup cases on each host, along
+with all six compiler-original prerequisites. LLVM's 68 return-signing,
+pointer-authentication and arm64e regressions also pass. These direct-link
+controls establish the producer correction independently of NeverD installation.
+
+The [cold source run](https://github.com/gmh5225/test_mac_intel/actions/runs/42762192123)
+then builds NeverD `eabb96c44b7abaac2f628851968c05a090de5b5d` with the merged
+LLVM fork `5676029e378c9e37adc16c8216a8e8453ffafcae` on both hosts. Each passes
+all 36 native cases (20 dylib, four userspace-main, four default-main, four
+generated-dylib and four generated-main), 33 signing tests and two groups of
+six preflight controls, without failures or skips. The generated cases use
+Clang 22.1.8 as the explicit IR frontend and NeverD's source-built LLVM backend.
+Source, frontend, test-binary, preflight and runtime XML identities are bound in
+the record; both controllers remove their owned builds. These runs qualify the
+bounded canonical source pipeline, including real authenticated calls and C++
+catch/cleanup through newly generated signed frames.
+
+The [integrated replay](https://github.com/gmh5225/test_mac_intel/actions/runs/42772199612)
+uses the local Release host built from `0d3511620291254bffcaa90a356870016f2741f4`
+after merging dev and recording the corrected LLVM gitlink. Both hosts again
+pass all 36 native cases and both six-control prerequisites, with no failures
+or skips. The temporary delivery binds source-file, manifest, archive and
+test-binary hashes; it is recorded separately from the cold builds.
+
+A source build also exercises `MCProducerCapturesRecipesThroughFinalPlacement`
+for IR and assembly producers with chained and threaded installers, plus
+nested signing constants. This proves the bounded raw MC signing-recipe
+handoff offline. r6 lacks that callback. Neither this handoff nor canonical
+replacement IR supplies the missing ABI reconstruction for arbitrary
+`neverd.arm64e-analysis` lifted modules.
+
+Run the new matrices using a source build of the corrected fork and a successful
+same-source system preflight:
+
+```sh
+python3 scripts/verify_arm64e_native.py run-generated \
+  --build-dir build-arm64e-native --probe-report native-evidence/probe/report.json \
+  --ir-compiler "$(brew --prefix llvm@22)/bin/clang++" \
+  --output native-evidence/generated
+python3 scripts/verify_arm64e_native.py run-generated-executable \
+  --build-dir build-arm64e-native --probe-report native-evidence/probe/report.json \
+  --ir-compiler "$(brew --prefix llvm@22)/bin/clang++" \
+  --output native-evidence/generated-executable
+```
+
+Each gate requires its exact four unskipped cases, records frontend version/hash,
+NeverD test-binary hash, source identities and preflight/XML hashes, and removes
+owned temporary products. The executable gate uses the system loader without
+a userspace launcher profile. Qualification flags are
+`native_generated_ir_publication_qualified` and
+`native_generated_executable_publication_qualified`; neither changes
+`whole_image_publication_qualified` or `native_apple_cpta_qualified`.
+
+`neverd.arm64e-analysis` lifted modules, foreign platforms, unqualified ABI
+subtypes (including x1), shared-cache publication, TLS and runtime constructors
+keep explicit refusal paths. Native CPTA-on additionally requires actual CPA/CPA2
+hardware and a controlled enabling/readback contract. The system probe records
+both feature sysctls independently of PAC execution; FVP results do not qualify
+an Apple native execution environment.

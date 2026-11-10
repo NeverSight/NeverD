@@ -211,6 +211,17 @@ in `NeverDX64PagedExecutionTests` exercise the runtime transaction and fault
 delivery; compiling those cases alone does not qualify their execution or an
 original-CPU comparison. Keep that limitation explicit in static-only runs.
 
+`X86LegacyTaskTest.*` in `NeverDX86PagingTests` checks protected task
+CALL/JMP, GDT/LDT/IDT gates and NT IRET, both TSS widths, pre/post-publication
+fault ownership, busy/backlink/static fields, debug causes, incoming address
+spaces and retained backing progress. `KVMTaskSoftwareReference/*` compares
+32-bit TSS transfers and returns with KVM's task-switch emulator under legacy
+and PAE paging. This is software-reference evidence, not physical task-switch
+qualification. `Compilers/X86LegacySourceTest.Task*` runs the same owner through
+generated host-x64 Clang/NeverC C at O0/O2, checking code-mode redispatch,
+uncharged continuation attempts and incoming-task exception frames. VM86 mode
+stops remain explicit; these tests do not qualify a complete mode machine.
+
 `X86LegacyExecutionTest`, `LegacyEvents/*` and `LegacySteps/*` in
 `NeverDX86PagingTests` cover original-byte protected legacy execution and
 16/32-bit IDT entry. The independent KVM oracle compares code/stack caches,
@@ -231,6 +242,17 @@ FFFFh in 16-bit code, MOV/POP SS, LSS, CLI/STI and pending IRQ/NMI shadows.
 INT1, INT3 and INTO cases disable KVM guest debugging and stop through HLT,
 so the original #DB reaches its real IDT entry instead of a debugger intercept.
 They compare saved RF and fallthrough, including a failed INT1 gate.
+
+`X86LegacyHaltTest.*` checks HLT's persistent wait state, fetch/fault priority,
+IRQ/NMI masking, single-step and execution-breakpoint ordering, and retained
+wake acceptance across delivery work/backing stops. `LegacyPaging/X86LegacyHaltNativeTest.*`
+compares original HLT prefixes, CPL0..3, flags, SS/STI shadows, debug traps and
+IRQ/NMI wake against KVM in legacy and PAE paging. The real IDT handlers stop
+with OUT markers; KVM guest debugging is disabled so #DB reaches the guest.
+`X86LegacySourceTest.Halt*` compiles exported host-x64 C at O0/O2 with Clang
+and NeverC, including an unselected fallthrough, repeated idle calls, handler
+IRET and delivery resume without another HLT attempt. This does not qualify
+SMI/INIT/RESET wake or change NeverC's supported source targets.
 IRQ injection waits for `KVM_EXIT_IRQ_WINDOW_OPEN`. The native debugger's RF
 bit and shutdown's undefined register bank are excluded; saved frame flags,
 CR2 and retained ordinary RAM remain checked. Repeat these tests on the
@@ -850,12 +872,26 @@ state are separate coverage.
 
 `MedTypePass.StackTopResultsAreNotRegisterRestores` distinguishes computed,
 partial and disjoint stack writes from unchanged saves on i386/x64, within a
-block and across predecessors. `I386CallContract.X87StoredBitsReturnThroughTheIntegerRegister`
+block and across predecessors. Byte-wise full and incomplete restoration,
+F16C writes and floating memory reads are included.
+`MedTypePass.PartialStackRestoresKeepIndependentBytesAcrossPaths` checks
+diamonds, reversed predecessor order and a backedge: one restored byte may
+not hide another byte's computed value. `I386CallContract.X87StoredBitsReturnThroughTheIntegerRegister`
 and `Win64CallContract.StackTransportedIntegerWinsOverAScratchFloat` cover
 COFF/ELF/Mach-O, HighC/LLVMC and default/NoOpt. On Linux x86 they compare both
 C routes at O0/O2 under UBSan with original i386/x64 instructions. Results
 are observed through integer registers, including raw x87-converted NaN bits;
 an unused floating temporary must not determine the source return type.
+The x64 test also executes F16C stores and reads when the host supports AVX
+and F16C; hosts without those features still check both source projections.
+
+`MedABIPass.IntrinsicStoresInvalidateStackSetupButPreserveRegisters` checks
+i386/x64 F16C and ARM64 writeback calls in COFF, ELF and Mach-O. Local and
+predecessor register setup survives, overwritten stack inputs remain unknown,
+and a later ordinary store can establish a fresh argument. Invalid shapes
+remain barriers. `AArch64WritebackMemory.CallSetupDistinguishesEveryStoreFamilyFromLoads`
+covers the scalar, vector, pair and structure fixture inventories; forwarded
+scalar FP parameters also retain their independent register proof.
 
 `NeverDLocalTypesDebugContextTests` also checks recursive callback borrows and
 portable parameter qualifiers. Its recursive-record case checks that both
@@ -1556,6 +1592,21 @@ target. It covers x86/x64/ARM32/AArch64 across COFF, ELF and Mach-O, both
 input orders, and one or two shards. Decompile a whole
 x86-64 libsqlite3 or Rust binary, and an AArch64 Rust Mach-O, through `--llvm`
 after changing that retry: one such body used to fail the unit.
+
+`Native/SourcePatchArm64e.SourceCompilerEnforcesAuthenticatedProviderABI` exercises
+both SDK source artifacts (canonical Clang IR and Apple native objects), new
+function/data provider declarations, three entry mappings, exclusive publication
+and unchanged input bytes. The original dylib has no `__eh_frame`; canonical
+IR publication with forced DWARF must register new native EH storage automatically.
+A third producer profile deliberately supplies incompatible generic RA-state CFI
+and must fail without creating an output or changing the input. The r6 generated
+profile first checks this transactional refusal, then reports producer availability
+as skipped; the strict native qualification gate rejects any such skip. Only a
+source build with the LLVM fork's Darwin CFI correction can qualify generation.
+Set `NEVERD_ARM64E_IR_COMPILER` to the compatible
+Clang++ frontend for the canonical case. These are offline SDK integration tests;
+the independent generated dylib/main execution gates are documented in
+[arm64e native validation](arm64e-native-validation.md#canonical-ir-through-native-mc-objects).
 
 `NeverDAArch64ReturnProtectionTests` exercises decoded leaf and saved-LR
 recipes for ELF, Mach-O and COFF, including key/leaf attributes, preserved
@@ -8072,6 +8123,21 @@ providers' declaration behavior. `LocalTypesDebugContext.NoReturnQueryMatchesVal
 compares the cheap declaration query with the full resolver across ILP32, LLP64
 and LP64, including recursive pointer records, variadic declarations, missing
 names and invalid no-return parameter/return types before and after cache fill.
+`LocalTypesDebugContext.NoReturnValidationRetainsTypeBoundaries` checks the
+same converter without C spelling, including callback and recursive record
+parameters, enums, typedefs, unavailable values and their valid pointers.
+Repeated predicates and opposite query orders retain the full resolver's
+declarations, portable parameter spellings and ABI. No-return queries must
+not construct library-wide naming tables just to validate these types.
+`LocalTypesDebugContext.ABIQueriesPreserveFloatingCallContracts` compares
+complete scalar FP descriptors before and after declaration rendering across
+three data models, four architectures and COFF/ELF/Mach-O, including variadic,
+fastcall, record, pointer and long-double declarations. The header-origin
+regression also compares the ABI-only query with the full resolver.
+`TypeRender.ScalarSpellingsPreserveLaterNameCollisions` starts with scalar
+prototypes, then queries colliding named records in opposite orders and
+repeats the scalar prototype. C and C++ retain their parameter keyword rules;
+deferred name-table construction cannot change canonical type names.
 `HighCReturnJoin.BareReturnBesideATailCallReturnsTheParameter` decompiles
 `if (b) return g(b); return a;` with a direct and an indirect tail call for
 x86-64, i386, ARM and AArch64 (`test_return_join.c`) and requires
@@ -14288,6 +14354,22 @@ with Clang for all twelve target/format combinations, without host headers.
 `OptimizedSwitchTablesPreservePhysicalAndTwoLevelSelectors` executes original
 x64 machine code and both optimized/unoptimized lifted LLVM at O0/O2, checking
 1024 selectors plus the two-level default boundary against independent results.
+
+`MedABIPass.PairAlignedWideStackStoreKeepsItsLanes` covers the pair-aligned
+conventions (ARM AAPCS and both byte orders of MIPS o32). One aligned store of a
+stack `double` keeps both slot lanes when a loop surrounds the call, and when an
+earlier call leaves a later slot unproven; that slot stays unknown.
+`MedABIPass.CoveredCallSetupNeedsNoPredecessor` checks that stores covering
+every slot in the call block keep the stack proof complete. Wide-lane evidence
+retains the actual stored value and its memory offset; incoming register saves
+do not supply argument evidence.
+`PairAlignedWideStackLanesIgnoreOlderPackedStores` checks complete/incomplete
+proofs and later scalar overwrites: old byte-store packing cannot replace the
+owner's scalar or wide values. Both lane materialization paths convert memory
+offsets to numeric SUBBYTES positions in the target's byte order.
+`PairAlignedPredecessorWideStoreRequiresLaneEvidence` keeps required lanes
+unknown when a predecessor wide store has no published lane proof; a later
+proven scalar remains available. Missing evidence never becomes padding zero.
 
 `MedABIPass.SplitStackArgumentSetupRequiresEveryIncomingPath` checks all twelve
 architecture/format cells, block-order changes, conflicting or missing stores,
@@ -21945,6 +22027,28 @@ sandbox launcher again from the current SDK and rejects a different profile;
 its separate `native_executable_publication_qualified` result cannot satisfy
 the twenty-case dylib gate or general lifted-image publication.
 
+`run-default-executable` executes those same four main-executable cases with
+the system's default loader and no sandbox launcher. It requires a same-source
+successful `probe` for real four-key PAC and compiler-original dylib call/unwind
+controls; each case additionally executes its unchanged original main before
+publishing and executing the replacement. Publication automatically prepares
+4 KiB chains when B keys require dyld's fallback. The separate
+`native_default_executable_publication_qualified` flag requires all four cases
+to run without skips. It does not assert that an unmodified compiler-original
+main containing B-key chains can start, or qualify arbitrary lifted-image code.
+
+```bash
+python3 scripts/verify_arm64e_native.py probe --output native-probe
+python3 scripts/verify_arm64e_native.py run-default-executable \
+  --build-dir build-release --probe-report native-probe/report.json \
+  --output native-default-executable
+```
+
+`MachOArm64eInstallation.DefaultStartup*` tests 16-to-4 KiB repartitioning,
+page-edge chain termination, empty intervening pages, multi-start input,
+ordinary/authenticated slots, large positive/negative import addends, special
+ordinals, legacy migration, idempotence and unchanged bytes on rejection.
+
 `MachOArm64eInstallation.*` exercises transactional authenticated dyld
 installation in the six arm64e chain formats. It covers all keys and address
 diversity settings, local/import identities, special library ordinals,
@@ -23323,7 +23427,7 @@ These functions do not qualify omitted MIPS16 instructions or general ABI forms.
 
 ### MIPS16e2 and additional DSP/MSA arithmetic
 
-`MIPS16E2` checks all 28 admitted encoding forms in both byte orders, compact
+`MIPS16E2` checks all 30 admitted encoding forms in both byte orders, compact
 register aliases, bitfield limits, zero sources, GP memory widths, partial merge
 footprints and reused-decoder feature evidence. `MIPS16E2Pipeline` checks exact
 physical delay-slot widths and writable image-store bindings. Shared scalar
@@ -23353,12 +23457,38 @@ DSPControl and saved low FPR views. The pinned reference fixes MSA signed-limit
 construction and absolute `INT64_MIN` magnitudes, with QEMU's required wrapping
 arithmetic enabled in CMake builds. All regenerated execution and the newly
 added original-instruction fixtures must match independent results. The
-existing DSP zero-destination reference defect remains explicitly recorded;
-see the [DSP reference boundary](mips.md#classic-mips32-dsp-state-and-packed-arithmetic).
+reference also fixes discarded packed-DSP/shift results: helpers still update
+DSPControl and enforce DSP enablement. The source runner permits no original
+zero-destination mismatch; see the [DSP reference boundary](mips.md#classic-mips32-dsp-state-and-packed-arithmetic).
 Reports identify the source revision and actual loaded native-library hash.
 Ordinary pair padding, predecessor memory barriers,
 single-sided barriers at joins, depth/work exhaustion and non-entry analysis
 roots or exceptional/disconnected paths have separate call-recovery regressions.
+
+MIPS16 delay-slot classification exhausts all 65,536 halfwords, both byte orders
+and physical sizes. A shared jump normalizer avoids full scalar normalization
+in slot queries. EHB/SYNC tests retain every stype, reject malformed shapes and
+reserved fields, and prove SAVE/barrier/RESTORE source output in HighC and
+LLVMC. The e2 runner compiles and executes each barrier's generated source and
+checks its native assembly at O0/O2. This is not original-e2 or multiprocessor
+ordering execution evidence.
+Selected-function LLVMC regressions require the source-only helper definitions,
+including when an input function collides with a barrier helper's name.
+Deferred imports and named call hints are checked in both instruction/function
+orders, including reserved suffixes and canonical import-storage-only evidence.
+DSP ABS/SHLL tests cover signed extrema, every count, sticky fields, aliases,
+zero destinations and missing state; CMPGU requires no DSPControl input.
+MSA tests enumerate all 128 BIT fields and 256 byte immediates, unary count
+extrema, all vector bytes, old-destination dependence and three-register aliases.
+The source fixtures observe complete output memory and post-return state.
+
+The [2026-11-10 evidence](evidence/mips16e2-dsp-msa-2026-11-10.json) separates
+the final dev/ABI integration's correctness runs from the same-base feature
+performance measurements. It includes the four failing-then-passing stack-lane
+regressions, exact product/dependency hashes, six fresh source matrices, the
+firmware output comparison and the location of local optimization controls.
+Original e2 hardware execution and SMP/device ordering remain outside this
+qualification.
 
 ### MIPS decode/lift and firmware performance
 

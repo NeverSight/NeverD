@@ -30,6 +30,7 @@ add_neverd_component_library(NeverDTranslate
   X86/X86LegacySegmentExecution.cpp
   X86/X86LegacyExecution.cpp
   X86/X86LegacyControlRegisters.cpp
+  X86/X86LegacyTaskSwitch.cpp
   X86/X86LegacyMpx.cpp
   X86/X86LegacySourceExecution.cpp
   X86/X86LegacyScalarEncoding.cpp

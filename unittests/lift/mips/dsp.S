@@ -528,3 +528,155 @@ dsp_pick_h:
   nop
 .end dsp_pick_h
 .size dsp_pick_h, .-dsp_pick_h
+
+.globl dsp_abs_ph
+.type dsp_abs_ph,@function
+.ent dsp_abs_ph
+dsp_abs_ph:
+  absq_s.ph $v0,$a0
+  jr $ra
+  nop
+.end dsp_abs_ph
+.size dsp_abs_ph, .-dsp_abs_ph
+
+.globl dsp_abs_w
+.type dsp_abs_w,@function
+.ent dsp_abs_w
+dsp_abs_w:
+  absq_s.w $v0,$a0
+  jr $ra
+  nop
+.end dsp_abs_w
+.size dsp_abs_w, .-dsp_abs_w
+
+.globl dsp_abs_zero
+.type dsp_abs_zero,@function
+.ent dsp_abs_zero
+dsp_abs_zero:
+  absq_s.ph $zero,$a0
+  addiu $v0,$zero,7
+  jr $ra
+  nop
+.end dsp_abs_zero
+.size dsp_abs_zero, .-dsp_abs_zero
+
+.globl dsp_cmpgueq
+.type dsp_cmpgueq,@function
+.ent dsp_cmpgueq
+dsp_cmpgueq:
+  cmpgu.eq.qb $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_cmpgueq
+.size dsp_cmpgueq, .-dsp_cmpgueq
+
+.globl dsp_cmpgult
+.type dsp_cmpgult,@function
+.ent dsp_cmpgult
+dsp_cmpgult:
+  cmpgu.lt.qb $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_cmpgult
+.size dsp_cmpgult, .-dsp_cmpgult
+
+.globl dsp_cmpgule
+.type dsp_cmpgule,@function
+.ent dsp_cmpgule
+dsp_cmpgule:
+  cmpgu.le.qb $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_cmpgule
+.size dsp_cmpgule, .-dsp_cmpgule
+
+.globl dsp_shll_qb
+.type dsp_shll_qb,@function
+.ent dsp_shll_qb
+dsp_shll_qb:
+  shll.qb $v0,$a0,7
+  jr $ra
+  nop
+.end dsp_shll_qb
+.size dsp_shll_qb, .-dsp_shll_qb
+
+.globl dsp_shllv_qb
+.type dsp_shllv_qb,@function
+.ent dsp_shllv_qb
+dsp_shllv_qb:
+  shllv.qb $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_shllv_qb
+.size dsp_shllv_qb, .-dsp_shllv_qb
+
+.globl dsp_shll_ph
+.type dsp_shll_ph,@function
+.ent dsp_shll_ph
+dsp_shll_ph:
+  shll.ph $v0,$a0,15
+  jr $ra
+  nop
+.end dsp_shll_ph
+.size dsp_shll_ph, .-dsp_shll_ph
+
+.globl dsp_shllv_ph
+.type dsp_shllv_ph,@function
+.ent dsp_shllv_ph
+dsp_shllv_ph:
+  shllv.ph $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_shllv_ph
+.size dsp_shllv_ph, .-dsp_shllv_ph
+
+.globl dsp_shll_s_ph
+.type dsp_shll_s_ph,@function
+.ent dsp_shll_s_ph
+dsp_shll_s_ph:
+  shll_s.ph $v0,$a0,15
+  jr $ra
+  nop
+.end dsp_shll_s_ph
+.size dsp_shll_s_ph, .-dsp_shll_s_ph
+
+.globl dsp_shllv_s_ph
+.type dsp_shllv_s_ph,@function
+.ent dsp_shllv_s_ph
+dsp_shllv_s_ph:
+  shllv_s.ph $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_shllv_s_ph
+.size dsp_shllv_s_ph, .-dsp_shllv_s_ph
+
+.globl dsp_shll_s_w
+.type dsp_shll_s_w,@function
+.ent dsp_shll_s_w
+dsp_shll_s_w:
+  shll_s.w $v0,$a0,31
+  jr $ra
+  nop
+.end dsp_shll_s_w
+.size dsp_shll_s_w, .-dsp_shll_s_w
+
+.globl dsp_shllv_s_w
+.type dsp_shllv_s_w,@function
+.ent dsp_shllv_s_w
+dsp_shllv_s_w:
+  shllv_s.w $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_shllv_s_w
+.size dsp_shllv_s_w, .-dsp_shllv_s_w
+
+.globl dsp_shll_zero
+.type dsp_shll_zero,@function
+.ent dsp_shll_zero
+dsp_shll_zero:
+  shll_s.ph $zero,$a0,15
+  addiu $v0,$zero,7
+  jr $ra
+  nop
+.end dsp_shll_zero
+.size dsp_shll_zero, .-dsp_shll_zero

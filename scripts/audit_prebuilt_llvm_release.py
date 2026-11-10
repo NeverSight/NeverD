@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit published prebuilt LLVM assets against NeverD's source pins."""
+"""Audit prebuilt LLVM packages and their ancestry in the selected source fork."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
 
+POLICY = json.loads(Path(__file__).with_suffix(".def").read_text(encoding="utf-8"))
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONSUMER = ROOT / "cmake" / "NeverDLLVMPrebuilt.cmake"
 GITLINK_PATH = "third_party/llvm-project"
@@ -88,7 +89,7 @@ def parse_pins(source: str) -> PinSet:
     return PinSet(repository, pinned_tag, commit, tuple(assets))
 
 
-def audit_gitlink(pins: PinSet, tree_entry: str) -> str:
+def parse_gitlink(tree_entry: str) -> str:
     lines = tree_entry.splitlines()
     if len(lines) != 1:
         raise AuditError(
@@ -101,13 +102,21 @@ def audit_gitlink(pins: PinSet, tree_entry: str) -> str:
     if match is None:
         raise AuditError(f"invalid LLVM gitlink entry: {lines[0]!r}")
 
-    gitlink = match.group(1)
-    if gitlink != pins.commit:
-        raise AuditError(
-            "pinned LLVM commit does not match the submodule gitlink: "
-            f"expected {gitlink}, got {pins.commit}"
-        )
-    return gitlink
+    return match.group(1)
+
+
+def audit_source_ancestry(pins: PinSet, source: str, comparison: object) -> None:
+    if source == pins.commit:
+        return
+    if isinstance(comparison, Mapping):
+        base = comparison.get("base_commit")
+        common = comparison.get("merge_base_commit")
+        if (comparison.get("status") == POLICY["source_ancestor_status"] and
+                isinstance(base, Mapping) and base.get("sha") == pins.commit and
+                isinstance(common, Mapping) and common.get("sha") == pins.commit):
+            return
+    raise AuditError(POLICY["source_ancestry_error"].format(
+        prebuilt=pins.commit, source=source))
 
 
 def read_gitlink(repository_root: Path) -> str:
@@ -162,8 +171,8 @@ def audit_release(
         )
     if release.get("target_commitish") != pins.commit:
         raise AuditError(
-            "release target commit does not match the pinned LLVM gitlink: "
-            f"expected {pins.commit}, got {release.get('target_commitish')!r}"
+            POLICY["release_target_error"].format(
+                expected=pins.commit, actual=release.get("target_commitish"))
         )
 
     if not isinstance(tag_ref, Mapping):
@@ -173,8 +182,7 @@ def audit_release(
         raise AuditError("Git tag reference has no target object")
     if tag_target.get("type") != "commit" or tag_target.get("sha") != pins.commit:
         raise AuditError(
-            "Git tag target does not match the pinned LLVM gitlink: "
-            f"expected commit {pins.commit}, got {tag_target!r}"
+            POLICY["tag_target_error"].format(expected=pins.commit, actual=tag_target)
         )
 
     release_assets = _release_assets(release)
@@ -274,6 +282,16 @@ def fetch_tag_ref(pins: PinSet, token: str | None) -> object:
     return _fetch_json(url, token, "GitHub tag reference metadata")
 
 
+def fetch_source_ancestry(pins: PinSet, source: str, token: str | None) -> object:
+    if source == pins.commit:
+        return None
+    # Comparison metadata is repeated on every page. Page two omits the file
+    # patches returned on page one, keeping this ancestry-only request bounded.
+    url = POLICY["source_ancestry_url"].format(
+        api=_repository_api_url(pins), base=pins.commit, head=source)
+    return _fetch_json(url, token, POLICY["source_ancestry_description"])
+
+
 def fetch_sidecars(pins: PinSet, release: object) -> dict[str, str]:
     release_assets = _release_assets(release)
     sidecars = {}
@@ -317,8 +335,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = create_argument_parser().parse_args(argv)
     try:
         pins = parse_pins(args.consumer.read_text(encoding="utf-8"))
-        audit_gitlink(pins, read_gitlink(args.repository_root))
+        source = parse_gitlink(read_gitlink(args.repository_root))
         token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+        audit_source_ancestry(pins, source, fetch_source_ancestry(pins, source, token))
         release = fetch_release(pins, token)
         tag_ref = fetch_tag_ref(pins, token)
         sidecars = fetch_sidecars(pins, release)
@@ -330,10 +349,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"prebuilt LLVM release audit could not run: {error}", file=sys.stderr)
         return 2
 
-    print(
-        f"prebuilt LLVM release valid: {pins.tag} at {pins.commit}; "
-        f"{len(audited)} archives"
-    )
+    print(POLICY["success"].format(
+        tag=pins.tag, prebuilt=pins.commit, count=len(audited), source=source))
     return 0
 
 

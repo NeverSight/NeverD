@@ -11,6 +11,7 @@
 #define NEVERD_LIB_TRANSLATE_X86_X86LEGACYFARTRANSFER_H
 
 #include "X86LegacyEncoding.h"
+#include "X86LegacyTaskSwitch.h"
 
 #include "neverd/translate/X86/X86LegacyExecution.h"
 
@@ -33,12 +34,13 @@ struct X86LegacyFarTransfer {
 std::optional<X86LegacyFarTransfer>
 decodeLegacyFarTransfer(llvm::ArrayRef<uint8_t> Bytes, bool Code32);
 
-/// State commits only after the complete transfer. Earlier ordinary-RAM
-/// effects survive a fault; the caller routes architectural faults to the IDT.
-llvm::Expected<X86MemoryAccessResult>
+/// Ordinary far branches stage caches until completion. Hardware task branches
+/// publish their incoming state at the task owner's commit point, including
+/// when a subsequent descriptor load faults.
+llvm::Expected<X86LegacyTaskResult>
 executeLegacyFarTransfer(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                          const X86LegacyFarTransfer &Instruction,
-                         uint32_t NextIP,
+                         uint32_t NextIP, llvm::ArrayRef<uint8_t> Bytes,
                          const X86LegacyExecutionOptions &Options);
 
 } // namespace neverd::translate::detail

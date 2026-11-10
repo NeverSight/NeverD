@@ -167,6 +167,19 @@ index from RT[23:8] when RS is zero, otherwise subtracts RT[7:0].
 complete lane from RS or RT using condition bits 24 upward. Other state stays
 unchanged, and pure MODSUB needs no incoming DSPControl.
 
+`ABSQ_S.PH/W` clamp the minimum signed input to the signed maximum and set
+sticky bit 20. `SHLL.QB/PH`, `SHLL_S.PH/W` and their variable forms set sticky
+bit 22 when significant bits are lost; saturated signed results clamp to their
+lane's signed limits. Counts are masked to the lane width, while reserved
+immediate bits are rejected. All these state effects survive `$zero` outputs.
+The revision 1.00 manual's SHLL_S positive-overflow pseudocode conflicts with
+its signed-saturation description. The admitted result is `0x7fff`/`0x7fffffff`,
+checked against independent original-target execution; the contradictory
+all-ones pseudocode is not used as the oracle.
+`CMPGU.EQ/LT/LE.QB` return four predicates in GPR bits 3..0 without observing
+DSPControl. `CMP.EQ/LT/LE.PH` remains unsupported: its upper condition bits become
+UNPREDICTABLE, requiring a partial-known state transport/source contract.
+
 The ten-bit control selector selects six field groups; its upper four bits are
 ignored. Partial writes preserve unselected fields, and packed byte additions
 and subtractions set the sticky overflow flag even when the destination is
@@ -203,10 +216,11 @@ link spills remain outside the current source proof.
 
 The operation rules follow the
 [MIPS32 DSP ASE manual, revision 1.00](https://0x04.net/~mwk/doc/mips/MD00374-2B-MIPS32DSP-AFP-01.00.pdf).
-The pinned Unicorn model is checked with Status.MX enabled. Its zero-destination
-packed arithmetic incorrectly omits the overflow update; independent manual
-expectations cover that case, and source roundtrip receipts record the oracle
-disagreement explicitly.
+The pinned Unicorn model is checked with Status.MX enabled. Its packed
+arithmetic and shift translators preserve DSPControl effects for zero
+destinations and still check the enabled state. The source runner rejects any
+original/generated disagreement with the independent expectations. Historical
+receipts below retain the zero-destination defect of the older reference.
 
 ## microMIPS32 instruction and source boundaries
 
@@ -333,7 +347,11 @@ LB/LBU/LH/LHU/LW/SB/SH/SW, LWL/LWR/SWL/SWR, EXT/INS (including zero-source INS),
 and MOVZ/MOVN/MOVTZ/MOVTN (including zero sources). Field limits and reserved
 bits are checked before normalization into the existing classic owners.
 T moves use register 24; their physical text spelling does not replace the
-canonical condition operand. No e2 form fits a two-byte delay slot.
+canonical condition operand. EHB and all 32 SYNC stypes are admitted as
+ordering intrinsics shared with classic MIPS32/64. The current compressed slot
+path requires exactly two physical bytes and refuses four-byte e2 slots; this
+is a support boundary, not a claim that every such slot is architecturally
+invalid.
 
 The encoding/operation authority is
 [MIPS16e2 Volume IV-a, MD01172 revision 1.00](https://jnastarot.io/arch_index/pdf/MD01172-2B-MIPS16e2-AFP-01.00.pdf).
@@ -342,11 +360,26 @@ GNU `-mmips16e2` supplies explicit ELF evidence for the owned fixtures; a local
 The pinned Unicorn predates e2, so it is **not** an original-e2 oracle. Literal
 GNU bytes, independent LowIR expectations and execution of generated old-MIPS16
 source are separate checks. Hardware or independent original-e2 execution
-remains unavailable. E2 system/MT, atomic, cache/hint/barrier forms and MIPS16
+remains unavailable. Other e2 system/MT, atomic, cache/hint forms and MIPS16
 on MIPS64 remain unsupported. No path treats a misdecoded operand or unknown instruction as
 valid semantics. The immediate, memory, call and slot rules follow
 [MIPS16e Volume IV-a, revision 2.63](https://jnastarot.io/arch_index/pdf/MD00076-2B-MIPS1632-AFP-02.63.pdf)
 and were cross-checked against the pinned Ghidra definitions linked above.
+
+EHB/SYNC remain effectful through SSA and dead-code elimination. They order
+execution or memory but do not overwrite saved data, so a saved-return proof
+can cross them. Native source uses non-inlined classic-mode helpers containing
+the original barrier and exact stype, including under compressed compiler
+defaults. The LowIR emulator observes only its sequential ordinary-memory
+contract; it has no pending accesses or execution hazards. No multicore,
+device/cache, privileged hazard, or original-e2 execution equivalence is
+claimed. In particular the qualified native-source domain has no incoming
+CP0/privileged execution hazard: helper calls and their instruction fetches
+precede the EHB and cannot establish equivalence for arbitrary hazard states.
+Source inspection checks that the barriers and helper noinline attributes
+survive optimization without a global `-fno-inline` option.
+Selected-function output includes its helper definitions. Input symbols with
+the same spelling cannot be reused as an internal barrier implementation.
 
 ## Classic MIPS32 MSA integer vectors
 
@@ -361,7 +394,13 @@ MSA. Other revisions, MSA64, microMIPS/MSA and DSP/MSA combinations are refused.
 `MAX_S`/`MAX_U`, `SLL`/`SRL`/`SRA`, `BCLR`/`BSET`/`BNEG`, `MULV`/`MADDV`/`MSUBV`, `MAX_A`/`MIN_A`,
 `ADD_A`/`ADDS_A`, `ADDS_S`/`ADDS_U`, `SUBS_S`/`SUBS_U`,
 `AVE_S`/`AVE_U`, `AVER_S`/`AVER_U`, and `AND.V`/`OR.V`/`NOR.V`/`XOR.V` use exact encoding descriptors in
-`MIPSMSA.def`. The 32 W registers are 128-bit containers. Lane zero occupies
+`MIPSMSA.def`. Additional forms are `ANDI/ORI/NORI/XORI.B`,
+`BSEL/BMNZ/BMZ.V`, and B/H/W/D formats of `PCNT`, `NLZC`, `NLOC`,
+`SLLI/SRLI/SRAI`, and `BCLRI/BSETI/BNEGI`. BIT immediates have a prefix-coded
+width; the reserved `1111xxx` field is rejected. Counts define the zero/full
+lane cases without poison. BSEL uses old WD as its mask; BMNZ/BMZ use WT and
+merge selected WS bits with old WD. Every input is captured before writing an
+aliased destination. The 32 W registers are 128-bit containers. Lane zero occupies
 the low bits in both byte orders; addition and subtraction wrap independently
 within each 8/16/32/64-bit lane. Integer comparisons set every bit of a true
 lane to one and every bit of a false lane to zero; signed and unsigned ordering
@@ -576,6 +615,26 @@ probes separately execute guarded wide arithmetic and non-inlined helpers.
 Raw results and managed cleanup receipts remain under
 `build-mips/compressed-ase/` and `build-mips/roundtrip-dsp-final/`; this does not
 qualify the DSP/MSA families listed as unsupported above.
+
+The [2026-11-10 qualification](evidence/mips16e2-dsp-msa-2026-11-10.json)
+records EHB/SYNC, 13 additional DSP forms and 43 additional MSA forms. It also
+records the shared ABI repair found during dev integration: pair-aligned stack
+arguments retain their actual reaching stores, wide lanes follow target byte
+order, and missing predecessor lane evidence leaves required arguments unknown.
+The final integration has separate build, dependency and executable hashes from
+the performance comparison. Both C backends still produce byte-identical Archer
+C7 `ubus` call-handler and discovered-function output against the baseline.
+
+MIPS16 delay-slot queries now use the shared jump normalizer instead of fully
+normalizing each scalar instruction. The performance qualification separates an
+identical-dependency normalizer control from the complete feature increment,
+using seven warmed, alternating pairs on the same Release baseline. It covers
+short and mixed MIPS16 streams, 12 decode/lift profiles and complete firmware
+requests, retaining CPU, wall, RSS and output fingerprints separately. Newly
+supported forms have their own throughput measurements. Local results and a
+rejected barrier-dispatch experiment remain in the ignored
+`build-mips/mips16e2-next/qualification.json`; they do not establish universal
+improvement or a cross-tool speed ranking.
 
 ## TP-Link firmware workflow
 
