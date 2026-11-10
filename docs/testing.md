@@ -231,6 +231,17 @@ FFFFh in 16-bit code, MOV/POP SS, LSS, CLI/STI and pending IRQ/NMI shadows.
 INT1, INT3 and INTO cases disable KVM guest debugging and stop through HLT,
 so the original #DB reaches its real IDT entry instead of a debugger intercept.
 They compare saved RF and fallthrough, including a failed INT1 gate.
+
+`X86LegacyHaltTest.*` checks HLT's persistent wait state, fetch/fault priority,
+IRQ/NMI masking, single-step and execution-breakpoint ordering, and retained
+wake acceptance across delivery work/backing stops. `LegacyPaging/X86LegacyHaltNativeTest.*`
+compares original HLT prefixes, CPL0..3, flags, SS/STI shadows, debug traps and
+IRQ/NMI wake against KVM in legacy and PAE paging. The real IDT handlers stop
+with OUT markers; KVM guest debugging is disabled so #DB reaches the guest.
+`X86LegacySourceTest.Halt*` compiles exported host-x64 C at O0/O2 with Clang
+and NeverC, including an unselected fallthrough, repeated idle calls, handler
+IRET and delivery resume without another HLT attempt. This does not qualify
+SMI/INIT/RESET wake or change NeverC's supported source targets.
 IRQ injection waits for `KVM_EXIT_IRQ_WINDOW_OPEN`. The native debugger's RF
 bit and shutdown's undefined register bank are excluded; saved frame flags,
 CR2 and retained ordinary RAM remain checked. Repeat these tests on the

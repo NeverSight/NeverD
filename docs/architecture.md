@@ -47,6 +47,13 @@ execute-breakpoint profile compares original linear instruction starts before
 fetch, after pending virtual-interrupt selection. `ir/X86/X86DebugRules` owns
 the shared legacy/x64 control validation, RF/SS suppression, matching and DR6
 status, including coincident single-step and next-PC breakpoint causes.
+The legacy executor owns HLT's persistent `Halted` cell. Completion publishes
+the following EIP and expires SS/STI inhibition; waiting performs no fetch.
+Only the event owner clears the halt when accepting IRQ/NMI or a debug trap,
+before any IDT access. Its existing continuation then retains wake acceptance
+across delivery faults and backing/work stops. Source selection checks this
+cell before selecting the next code extent, so compiled dispatch cannot turn
+HLT into fallthrough or charge repeated instruction attempts while waiting.
 `ir/X86/X86DebugRegisterRules` owns MOV-DR access priority and normalization;
 `lift/X86/X86DebugRegisterEncoding` owns its register-only byte grammar.
 The paged continuation provider retains these bytes with a dedicated projection

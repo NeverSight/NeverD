@@ -4385,3 +4385,22 @@ publication and BNDMOV alignment are explicit software-profile choices. Full
 mode/task transitions, remaining original-machine banks/providers, software
 SMM/SGX and unbound asynchronous producers remain global gaps. No LLVM
 release is declared, and the production r6 pin and LLVM gitlink remain unchanged.
+
+## Protected HLT, persistent waiting and event wake (2026-11-09)
+
+The protected original-byte executor now owns HLT completion and a persistent
+halted CPU state. It authenticates the complete instruction before LOCK/CPL
+faults, retains the following EIP on success and performs no next fetch while
+waiting. Existing IRQ/NMI inhibition and debug completion rules decide wake;
+event acceptance clears the halt before IDT entry, including failed or paused
+entry. Delivery resume cannot replay the instruction or accept an event twice.
+The generated C dispatcher uses the same state and counts only the original
+HLT attempt, including when its following code is unselected or unavailable.
+See [the halt contract](x86-legacy-segments.md#protected-hlt-and-event-wake).
+
+Native HLT already has an LLVM intrinsic and NeverC x64 builtin. This change
+adds owned software execution and keeps both generated-C compiler lanes on
+x64. It adds no NeverC 32-bit target. SMI/INIT/RESET and machine-check wake,
+full mode/task transitions, software SMM/SGX and unbound event producers remain
+separate completion work. The final LLVM release and production pin are
+unchanged.
