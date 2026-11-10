@@ -715,7 +715,7 @@ inline bool endsCallArgumentSetup(const MedOp &Op, bool RegistersOnly = false) {
     return true;
   return !preservesCallSetup(Id) && !onlyChecksForAFault(Id) &&
          !(mipsScalarMedShapeIsValid(Op) &&
-           (RegistersOnly || !mips::mergeStore(Id))) &&
+           (RegistersOnly || !mips::scalarMayWriteMemory(Id))) &&
          !aarch64PAuthMedShapeIsValid(Op) &&
          !aarch64PAuthLoadMedShapeIsValid(Op) &&
          !(aarch64WritebackMemoryMedShapeIsValid(Op) &&

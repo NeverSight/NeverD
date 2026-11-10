@@ -100,10 +100,31 @@ constexpr bool isBarrier(Intrinsic Id) {
          Id == Intrinsic::MIPSSync;
 }
 
+constexpr bool isReservationIntrinsic(Intrinsic Id) {
+  return Id == Intrinsic::MIPSLoadLinkedWord ||
+         Id == Intrinsic::MIPSStoreConditionalWord;
+}
+constexpr bool isSystemIntrinsic(Intrinsic Id) {
+  return Id == Intrinsic::MIPSReadHardwareRegister ||
+         Id == Intrinsic::MIPSDisableInterrupts ||
+         Id == Intrinsic::MIPSEnableInterrupts;
+}
+constexpr bool scalarMayWriteMemory(Intrinsic Id) {
+  return mergeStore(Id).has_value() ||
+         Id == Intrinsic::MIPSStoreConditionalWord;
+}
+constexpr bool isStatefulScalar(Intrinsic Id) {
+  return isReservationIntrinsic(Id) || isSystemIntrinsic(Id);
+}
+constexpr bool supportedHardwareRegister(uint64_t Index) {
+  return Index < 4 || Index == 29;
+}
+
 constexpr bool isScalarIntrinsic(Intrinsic Id) {
   return mergeMemory(Id).has_value() || Id == Intrinsic::MIPSUnpredictable ||
          Id == Intrinsic::MIPSRequireWord || Id == Intrinsic::MIPSLwrUpper ||
-         isDSPControlIntrinsic(Id) || isWordDivision(Id) || isBarrier(Id);
+         isDSPControlIntrinsic(Id) || isWordDivision(Id) || isBarrier(Id) ||
+         isStatefulScalar(Id);
 }
 
 struct ScalarShape {
@@ -123,6 +144,18 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
   if (!S.IdIsValid || !S.Ordinary ||
       (S.Target != Arch::Unknown && !isMIPS(S.Target)))
     return false;
+  if (isStatefulScalar(Id)) {
+    if (isMIPS64(S.Target) || !S.OutputWritable || S.OutputBytes != 4)
+      return false;
+    if (Id == Intrinsic::MIPSLoadLinkedWord)
+      return S.Inputs == 2 && S.FirstBytes == 4;
+    if (Id == Intrinsic::MIPSStoreConditionalWord)
+      return S.Inputs == 3 && S.FirstBytes == 4 && S.SecondBytes == 4;
+    if (Id == Intrinsic::MIPSReadHardwareRegister)
+      return S.Inputs == 2 && S.FirstBytes == 1 && S.FirstConstant &&
+             supportedHardwareRegister(*S.FirstConstant);
+    return S.Inputs == 1;
+  }
   if (Id == Intrinsic::MIPSExecutionHazardBarrier)
     return S.Inputs == 1 && !S.OutputBytes;
   if (Id == Intrinsic::MIPSSync)

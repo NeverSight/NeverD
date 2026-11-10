@@ -15909,6 +15909,16 @@ general source memory-fault equivalence guarantee. ABI memory recovery stops
 at partial stores, while queries confined to registers retain their existing
 values across these memory effects.
 
+The qualified MIPS16e2 system/atomic slice shares scalar shape admission but
+retains separate effectful IDs. `MIPSSystemContext` authenticates one system
+observation; `NdOpEmulatorMIPS` owns permission/hazard consumption and the opt-in
+flat Config5.LLB=1 reservation model. `storeMemoryBytes` invalidates overlapping
+reservation granules only on committed stores. Calls/reset and lenient unknown
+operations discard reservation knowledge. `scalarMayWriteMemory` is shared with
+ABI setup recovery so SC cannot preserve a stale outgoing stack value. HighC and
+LLVM reject stateful native-source lowering until an execution-region contract
+can preserve the reservation or privileged state; no helper approximates it.
+
 The DSP32 scalar slice keeps feature admission in `ELFMIPSProfile` and carries
 it through decoder reuse. `MIPSDSP.def` owns control field groups and instruction
 encodings. `MIPSLiftDSP` emits ordinary lane arithmetic plus effectful

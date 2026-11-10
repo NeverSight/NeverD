@@ -23599,6 +23599,18 @@ firmware output comparison and the location of local optimization controls.
 Original e2 hardware execution and SMP/device ordering remain outside this
 qualification.
 
+The MIPS16e2 system/atomic tests independently check GNU literal encodings,
+all compact LL/SC base/destination combinations, signed offsets, address/result
+aliasing, granule overlap, ABA, known failure with unknown store data, mapping
+and permissions in both emulator modes, unknown calls/skips and reset. System
+tests check permission OR, consumed HWR observations, previous Status and hazard
+obligations. Pipeline tests retain dead-result effects and require explicit
+HighC/LLVM source refusals. The o32 call-memory tests also reject stale stack
+arguments across SC. These are model-contract tests, not original-e2 execution.
+DSP multiply tests observe OUFLAG21 and unknown HI/LO even for a zero target;
+MSA tests cover every SAT immediate field and full-vector ASUB extrema, with
+independent widened arithmetic and source roundtrip expectations.
+
 ### MIPS decode/lift and firmware performance
 
 `neverd-mips-bench` is an opt-in target, excluded from the default build:

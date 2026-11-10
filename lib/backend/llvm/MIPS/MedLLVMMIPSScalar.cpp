@@ -31,6 +31,8 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
     throw std::runtime_error(mips::kUnpredictableResult);
   if (Id == Intrinsic::MIPSLwrUpper)
     throw std::runtime_error(mips::kPartialLwrRequiresWord);
+  if (mips::isStatefulScalar(Id))
+    throw std::runtime_error(mips::kStatefulSourceUnsupported);
   if (mips::isBarrier(Id)) {
     const auto Assembly = mips::barrierAssembly(
         Id, Id == Intrinsic::MIPSSync ? Op.Inputs[1].ConstVal : 0);
