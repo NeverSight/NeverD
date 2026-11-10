@@ -448,7 +448,7 @@ TEST(LocalTypesDebugContext, ABIQueriesPreserveFloatingCallContracts) {
       EXPECT_EQ(ABI->CallConv, Full->CallConv);
       EXPECT_EQ(ABI->IsVariadic, Full->IsVariadic);
       EXPECT_TRUE(sdk::passesAlike(*ABI, *Full));
-      for (auto Arch : {Arch::X86, Arch::X86_64, Arch::ARM, Arch::AArch64})
+      for (auto Arch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
         for (auto Format :
              {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
           const auto Expected =
@@ -1112,9 +1112,15 @@ TEST(LocalTypesDebugContext, NamesTheHeaderLibraryAPrototypeComesFrom) {
   NamesOnlyDebugContext Names;
   sdk::LocalTypesDebugContext Context(Names, Library, {}, &Image,
                                       {types::HeaderLibrary::WindowsKernelX64});
+  const auto ABI = Context.resolvePrototypeABI("IoThreadToProcess");
+  ASSERT_TRUE(ABI);
   std::optional<FunctionSym> Owner = Context.resolveFunction(0x1000);
   ASSERT_TRUE(Owner.has_value());
   EXPECT_EQ(Owner->PrototypeLibrary, "windows-kernel-x64");
+  EXPECT_EQ(ABI->PrototypeLibrary, Owner->PrototypeLibrary);
+  EXPECT_EQ(ABI->PrototypeFromHeader, Owner->PrototypeFromHeader);
+  EXPECT_EQ(ABI->PrototypeFromCLibrary, Owner->PrototypeFromCLibrary);
+  EXPECT_TRUE(sdk::passesAlike(*ABI, *Owner));
   EXPECT_TRUE(Owner->PrototypeFromHeader);
   EXPECT_FALSE(Owner->PrototypeFromCLibrary);
   EXPECT_EQ(Owner->PrototypeDeclaration,
