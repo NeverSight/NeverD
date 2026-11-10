@@ -5061,7 +5061,9 @@ prototype, while callee effects, no-return proofs and call graphs read bodies. T
 to the library that nothing names do the same (`Session::takeUnreadTypes`); what
 that checks their names against, the names the library spells and those its types
 and prototypes mention, a worker reads while it idles once the session has read its
-types (`neverd_local_types_prepare`), and a declaration keeps it as it adds types. Other
+types (`neverd_local_types_prepare`), and a declaration keeps it as it adds types; the
+same step reads the image's symbol names a rename checks against
+(`neverd_names_prepare`). Other
 types let go of what read them, and the summaries, the job and the store start over,
 while the process and its image stand. The owner keeps its listing and reference index
 for those, and reads what a function was declared as when it next decodes it.

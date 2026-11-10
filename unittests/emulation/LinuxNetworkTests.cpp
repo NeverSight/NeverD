@@ -406,6 +406,8 @@ TEST_P(LinuxNetwork, TCPConnectFailuresPreserveAdmissionAndBoundedOwnership) {
   EXPECT_FALSE(call(ServiceKind::Connect, FD, Base, 16));
   EXPECT_NE(Report.Diagnostic.find("failure contract exhausted"),
             std::string::npos);
+  EXPECT_NE(Report.Diagnostic.find("after 2 supplied failures"),
+            std::string::npos);
 }
 
 TEST_P(LinuxNetwork, TCPConnectFailuresReachConfiguredBoundThenStop) {
@@ -427,6 +429,8 @@ TEST_P(LinuxNetwork, TCPConnectFailuresReachConfiguredBoundThenStop) {
   const auto FD = open();
   EXPECT_FALSE(call(ServiceKind::Connect, FD, Base, 16));
   EXPECT_NE(Report.Diagnostic.find("failure contract exhausted"),
+            std::string::npos);
+  EXPECT_NE(Report.Diagnostic.find("after 4097 supplied failures"),
             std::string::npos);
 }
 

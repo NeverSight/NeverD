@@ -308,8 +308,14 @@ LinuxFiles::network(ServiceKind Kind, const ProcessServiceEvent &Event,
     if (NextConnection == Network->Connections.size() &&
         Network->TCPConnectFailures) {
       const auto &F = *Network->TCPConnectFailures;
-      if (TCPConnectFailuresConsumed == F.Count)
-        return unsupported(Result, "TCP connection failure contract exhausted");
+      if (TCPConnectFailuresConsumed == F.Count) {
+        const auto Reason =
+            llvm::formatv("TCP connection failure contract exhausted after {0} "
+                          "supplied failures; next result is not supplied",
+                          TCPConnectFailuresConsumed)
+                .str();
+        return unsupported(Result, Reason.c_str());
+      }
       ++TCPConnectFailuresConsumed;
       Socket->Failed = true;
       return Reply(uint64_t(0) - F.Error);

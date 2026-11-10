@@ -22,6 +22,9 @@
 {"llvm.bswap.i64",                 "__builtin_bswap64"},
 {"llvm.fabs.f32",                  "fabsf"},
 {"llvm.fabs.f64",                  "fabs"},
+// x87 values reach C as long double; fabsl clears only the sign bit, as FABS
+// does.
+{"llvm.fabs.f80",                  "fabsl"},
 {"llvm.sqrt.f32",                  "sqrtf"},
 {"llvm.sqrt.f64",                  "sqrt"},
 {"llvm.ceil.f32",                  "ceilf"},

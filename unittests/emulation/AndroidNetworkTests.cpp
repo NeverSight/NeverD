@@ -150,6 +150,9 @@ TEST_P(AndroidNetwork, TCPConnectFailuresShareRawNamedDynamicAndVariadicCalls) {
       EXPECT_NE(R.Diagnostic.find(Mode == 1 ? "failure contract exhausted"
                                             : "closed before reuse"),
                 std::string::npos);
+      if (Mode == 1)
+        EXPECT_NE(R.Diagnostic.find("after 4 supplied failures"),
+                  std::string::npos);
       ASSERT_FALSE(R.NativeCalls.empty());
       EXPECT_EQ(R.NativeCalls.back().Name, "connect");
       EXPECT_FALSE(R.NativeCalls.back().Result);

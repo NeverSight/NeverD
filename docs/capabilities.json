@@ -98,6 +98,7 @@
           "neverd_map_reference_json",
           "neverd_metadata_items_json",
           "neverd_name_check",
+          "neverd_names_prepare",
           "neverd_operand_format_set",
           "neverd_operand_formats_json",
           "neverd_operand_formats_load",
