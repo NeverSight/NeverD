@@ -208,11 +208,15 @@ private:
     /// The union of the blocks' half-open address ranges. Calls can enter a
     /// body's interior, including an overlapping instruction stream.
     std::vector<ExceptionAddressRange> Ranges;
+    const LowBlock *SingleBlock = nullptr;
     bool Back = false;
     /// The blocks with a `call` of this body, on the normal path.
     std::vector<LowBlock *> Calls;
 
     bool contains(va_t Address) const {
+      if (SingleBlock)
+        return Address >= SingleBlock->StartAddr &&
+               Address < SingleBlock->EndAddr;
       const auto After =
           std::upper_bound(Ranges.begin(), Ranges.end(), Address,
                            [](va_t At, const ExceptionAddressRange &Range) {
@@ -798,10 +802,13 @@ private:
       FinallyBody Body;
       Body.Root = RootVA;
       Body.Blocks = reachedFrom(Root->second->Id);
-      Body.Ranges.reserve(Body.Blocks.size());
+      if (Body.Blocks.size() == 1)
+        Body.SingleBlock = ById.at(*Body.Blocks.begin());
+      else
+        Body.Ranges.reserve(Body.Blocks.size());
       for (int Id : Body.Blocks) {
         const LowBlock &Block = *ById.at(Id);
-        if (Block.StartAddr < Block.EndAddr)
+        if (!Body.SingleBlock && Block.StartAddr < Block.EndAddr)
           Body.Ranges.push_back({Block.StartAddr, Block.EndAddr});
         if (leavesFunction(Block))
           continue;

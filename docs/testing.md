@@ -19514,7 +19514,8 @@ membership across interior addresses, half-open ends, gaps, nested/overlapping
 and adjacent extents, empty/reversed extents and reversed block storage.
 `OverlappingFinallyBodiesKeepRootOrder` checks that shared call targets retain
 root-address precedence even when scope records are reversed and the bodies
-disagree on returning to the caller. Both run in
+disagree on returning to the caller. `SingleBlockFinallyKeepsHalfOpenMembership`
+checks the direct single-block path, including empty and reversed extents. All run in
 `NeverDSEHTerminationHandlerTests`.
 
 `unittests/lift/eh/X86SEHDisplayTests.cpp`, in the same binary, gives the pipeline

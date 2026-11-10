@@ -17261,8 +17261,9 @@ gives each PHI of the stack or frame pointer that every way in agrees on that on
 distance from the entry stack pointer: these joins chain through a whole function,
 and no bounded proof of where the frame is follows them.
 
-Within this display-frame pass, each finally body's block extents form a sorted,
-merged union for call-target lookup. Half-open endpoints, gaps and overlapping
+Within this display-frame pass, a finally body with one block uses its extent
+directly; multiple block extents form a sorted, merged union for call-target
+lookup. Half-open endpoints, gaps and overlapping
 instruction streams retain the original membership rule, and bodies retain
 root-address precedence. The union is private to the pass; later call erasure
 and register reload insertion do not change its block extents. This lookup

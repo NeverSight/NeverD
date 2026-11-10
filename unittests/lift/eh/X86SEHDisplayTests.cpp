@@ -394,6 +394,45 @@ TEST(X86SEHDisplay, FinallyCallMembershipPreservesRangeUnions) {
   }
 }
 
+TEST(X86SEHDisplay, SingleBlockFinallyKeepsHalfOpenMembership) {
+  constexpr va_t Root = kText + 0x100;
+  for (va_t End : {Root + 16, Root, Root - 8}) {
+    SCOPED_TRACE(End);
+    LowFunc Func = displayFrameForRanges();
+    Func.ExceptionMetadata->Registration->Scopes.push_back({-1, 0, Root, true});
+    LowBlock Body;
+    Body.Id = 1;
+    Body.StartAddr = Root;
+    Body.EndAddr = End;
+    LowOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.Addr = Root;
+    Body.Ops.push_back(Return);
+    Func.Blocks.push_back(std::move(Body));
+    std::set<va_t> ExpectedCalls;
+    for (unsigned Offset = 0; Offset < 19; ++Offset) {
+      const va_t Target = Root - 1 + Offset;
+      LowBlock Site;
+      Site.Id = 2 + Offset;
+      Site.StartAddr = kText + 0x200 + Offset * 8;
+      Site.EndAddr = Site.StartAddr + 8;
+      Site.Preds = {0};
+      Func.Blocks[0].Succs.push_back(Site.Id);
+      LowOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.Addr = Site.StartAddr;
+      Call.addInput(NdVar::scalar(Target, 4));
+      Site.Ops.push_back(Call);
+      if (Target >= Root && Target < End)
+        ExpectedCalls.insert(Call.Addr);
+      Func.Blocks.push_back(std::move(Site));
+    }
+    x86_registration::prepareRegistrationDisplayFrame(Func, nullptr);
+    ASSERT_TRUE(Func.RegistrationStates->Display);
+    EXPECT_EQ(Func.RegistrationStates->Display->NoValueCalls, ExpectedCalls);
+  }
+}
+
 TEST(X86SEHDisplay, OverlappingFinallyBodiesKeepRootOrder) {
   for (bool FirstReturns : {false, true}) {
     SCOPED_TRACE(FirstReturns);
