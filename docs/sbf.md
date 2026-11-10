@@ -673,6 +673,17 @@ projection of an operand, calls and loop backedges discard the affected facts.
 A different comparison replaces the relation. The relation stays within one
 invocation and uses fixed state storage charged to the existing memory budget;
 it adds no path specializations or input-validity assumptions.
+An edge that excludes zero also records a local nonzero register fact. Exact
+64-bit copies preserve it. A 64-bit multiplication by a positive literal keeps
+it only when the current comparison excludes every operand that could overflow.
+That check reuses the known-successor evaluator with a temporary interval;
+ordinary unknown scalars acquire no persistent numeric range. Compared-operand
+aliases require exact copies, and joins retain only facts present on every path.
+Liveness projection retains a literal comparison operand while the tested
+register remains live, because the local proof still reads that literal.
+Register definitions, projection, calls, invocation boundaries and loop
+backedges discard the affected facts. Truncating copies, truncated guards and
+potentially wrapping products cannot establish the full-width product proof.
 If the same block stores the compared register as a full 64-bit word immediately
 before the comparison, the selected edge also narrows that stored value. The
 typed scratch value, its formal origin and the returned memory postcondition
