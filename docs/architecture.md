@@ -4768,6 +4768,9 @@ the name again or retaining a second copy of it. Every type still takes its
 place in the ordinary namespace before enumerators, including unchanged
 identifiers and generated collision suffixes. Undeclared names follow the
 ordinary identifier rules.
+Name-map entries share an allocator owned by the table and are released with
+it. Returned spellings remain owned strings, and the library's canonical
+insertion order still decides collisions.
 A name a program may also give a routine
 of its own decides only together with the module that exports it
 (`isNoReturnImport`, `WindowsNoReturnImports.inc`): the Universal CRT's
@@ -5960,6 +5963,10 @@ a prefix-cache entry; wide literals retain their accounted APInt path.
 Ordinary HighIR expression cleanup also uses an iterative operand walk, keeping
 its large local-rewrite frame off nested worker stacks. Operand order, shared
 node visitation and ordered-memory guards remain unchanged.
+Ordered-memory ancestry records boundary-bearing leaves directly and seeds
+their parents for propagation. Only expressions with children need reverse
+edges; indirect call targets remain children. Each invocation rebuilds its
+facts from the current graph.
 Long odd-product blocks can recursively pair exact modular signatures. A
 signature preserves the complete word except for its highest observed bit;
 that bit's correction may itself depend on the inputs. Addition, XOR, constant

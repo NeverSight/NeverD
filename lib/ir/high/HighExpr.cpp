@@ -372,26 +372,47 @@ bool HighExpr::hasOrderedMemoryAccess() const {
 }
 
 HighExprSet findOrderedMemoryAncestors(const std::vector<ExprPtr> &Roots) {
+  // Leaves have no descendants to analyze. Record their own boundaries
+  // directly, without adding them to the reverse-edge graph.
+  auto HasChildren = [](const HighExpr &Expr) {
+    return !Expr.Operands.empty() || Expr.IndirectTarget;
+  };
+  HighExprSet Result;
   llvm::DenseMap<const HighExpr *, llvm::SmallVector<const HighExpr *, 2>>
       Parents;
   std::vector<const HighExpr *> Nodes, Ordered;
-  for (const auto &Root : Roots)
-    if (Root && Parents.try_emplace(Root.get()).second)
+  for (const auto &Root : Roots) {
+    if (!Root)
+      continue;
+    if (!HasChildren(*Root)) {
+      if (hasMemoryBoundary(*Root))
+        Result.insert(Root.get());
+    } else if (Parents.try_emplace(Root.get()).second) {
       Nodes.push_back(Root.get());
+    }
+  }
   // Record every edge before propagating effects. A recursive memo can mark
   // a shared cycle pure before discovering the ordered access it reaches.
   for (size_t I = 0; I < Nodes.size(); ++I) {
     const HighExpr *Expr = Nodes[I];
-    if (hasMemoryBoundary(*Expr))
-      Ordered.push_back(Expr);
+    bool Boundary = hasMemoryBoundary(*Expr);
     Expr->forEachChildExpr([&](const ExprPtr &Child) {
+      if (!HasChildren(*Child)) {
+        if (hasMemoryBoundary(*Child)) {
+          Result.insert(Child.get());
+          Boundary = true;
+        }
+        return;
+      }
       auto [It, Added] = Parents.try_emplace(Child.get());
       It->second.push_back(Expr);
       if (Added)
         Nodes.push_back(Child.get());
     });
+    if (Boundary)
+      Ordered.push_back(Expr);
   }
-  HighExprSet Result(Ordered.begin(), Ordered.end());
+  Result.insert(Ordered.begin(), Ordered.end());
   for (size_t I = 0; I < Ordered.size(); ++I)
     for (const HighExpr *Parent : Parents.find(Ordered[I])->second)
       if (Result.insert(Parent).second)
