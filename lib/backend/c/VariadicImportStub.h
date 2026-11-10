@@ -18,6 +18,7 @@
 #ifndef NEVERD_BACKEND_C_VARIADICIMPORTSTUB_H
 #define NEVERD_BACKEND_C_VARIADICIMPORTSTUB_H
 
+#include "CVaList.h"
 #include "LibraryPrototype.h"
 
 #include "neverd/libc/LibCNames.h"
@@ -98,23 +99,6 @@ inline std::string stubParameterName(const libc::LibCVariadicForward &Forward,
       Index + 1 == Forward.FixedCount)
     return "format";
   return "arg" + std::to_string(Index);
-}
-
-/// The machine word a call passes the va_list \p VaList as, which a runtime
-/// table's prototype that takes the list as `void *` (LibCFortify.h) takes:
-/// the pointer it is, or its array decays to, on x86, x86-64 and the AArch64
-/// ABIs of Darwin and Windows; the address of AAPCS64's record, which a call
-/// passes by reference; and the one pointer AAPCS's record holds, which a
-/// call passes in a register.
-inline std::string vaListWord(Arch TheArch, BinaryFormat Format,
-                              llvm::StringRef VaList) {
-  const bool OwnABI =
-      Format == BinaryFormat::MachO || Format == BinaryFormat::COFF;
-  if (TheArch == Arch::AArch64 && !OwnABI)
-    return "(void *)&" + VaList.str();
-  if (TheArch == Arch::ARM && !OwnABI)
-    return "*(void **)&" + VaList.str();
-  return VaList.str();
 }
 
 /// Writes \p Stub, a stub of the variadic import \p Import that jumps through
@@ -206,7 +190,8 @@ inline void writeVariadicImportStub(llvm::raw_ostream &OS, llvm::StringRef Stub,
     if (Returns)
       OS << stubDeclarator(F.Return, "result") << " = ";
     OS << F.Target << "(" << Names << ", "
-       << (Tabled ? vaListWord(TheArch, Format, "arguments") : "arguments")
+       << (Tabled ? c_detail::vaListWord(TheArch, Format, "arguments")
+                  : "arguments")
        << ");\n";
     OS << "    va_end(arguments);\n";
     if (Returns)
