@@ -975,6 +975,7 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 #include "X64PagedRegisterDebugTests.inc"
 #include "X64PagedRepeatedStringBoundaryTests.inc"
 #include "X64PagedRepeatedStringTests.inc"
+#include "X64PagedReturnContinuationTests.inc"
 #include "X64PagedReturnTests.inc"
 #include "X64PagedScheduleTests.inc"
 #include "X64PagedSegmentMoveBoundaryTests.inc"
