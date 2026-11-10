@@ -115,6 +115,10 @@
     "threaded_info_args": {
       "kind": "args",
       "symbol": "kThreadedInfoArgs"
+    },
+    "ir_compiler_environment": {
+      "kind": "text",
+      "symbol": "kIRCompilerEnvironment"
     }
   },
   "symbol_placeholder": "{symbol}",
@@ -175,6 +179,21 @@
       "--sdk",
       "macosx",
       "--show-sdk-version"
+    ],
+    "cpu": [
+      "/usr/sbin/sysctl",
+      "-n",
+      "machdep.cpu.brand_string"
+    ],
+    "feat-cpa": [
+      "/usr/sbin/sysctl",
+      "-n",
+      "hw.optional.arm.FEAT_CPA"
+    ],
+    "feat-cpa2": [
+      "/usr/sbin/sysctl",
+      "-n",
+      "hw.optional.arm.FEAT_CPA2"
     ]
   },
   "source_names": {
@@ -290,7 +309,9 @@
     "legacy",
     "probe-startup",
     "run-executable",
-    "run-default-executable"
+    "run-default-executable",
+    "run-generated",
+    "run-generated-executable"
   ],
   "probe_mode": "probe",
   "output_argument": "--output",
@@ -311,7 +332,8 @@
     "legacy_linker": "A successful lookup of a real ld-classic is required",
     "syscall": "SDK must define exactly one map_with_linking_np syscall number",
     "startup_fixups": "userspace startup fixups require probe-startup",
-    "startup_profile": "Executable publication requires the matching SDK-derived userspace startup profile"
+    "startup_profile": "Executable publication requires the matching SDK-derived userspace startup profile",
+    "ir_compiler": "Generated IR qualification requires an explicit executable --ir-compiler with a successful version query"
   },
   "library_suffix": ".dylib",
   "loader_suffix": "-loader",
@@ -366,5 +388,24 @@
   "executable_test_regex": "^AppleClang/MachOArm64eNativeObjectInstallation[.]PublishedExecutableStarts/",
   "executable_qualification_key": "native_executable_publication_qualified",
   "executable_environment": "NEVERD_ARM64E_EXECUTABLE_PROFILE",
-  "executable_environment_value": "userspace"
+  "executable_environment_value": "userspace",
+  "generated_mode": "run-generated",
+  "generated_executable_mode": "run-generated-executable",
+  "ir_compiler_argument": "--ir-compiler",
+  "ir_compiler_label": "ir-compiler-version",
+  "ir_compiler_version_args": [
+    "--version"
+  ],
+  "generated_qualification_key": "native_generated_ir_publication_qualified",
+  "generated_executable_qualification_key": "native_generated_executable_publication_qualified",
+  "generated_families": [
+    "GeneratedIREntriesExecute"
+  ],
+  "generated_executable_families": [
+    "GeneratedExecutableStarts"
+  ],
+  "generated_test_regex": "^AppleClang/MachOArm64eNativeObjectInstallation[.]GeneratedIREntriesExecute/",
+  "generated_executable_test_regex": "^AppleClang/MachOArm64eNativeObjectInstallation[.]GeneratedExecutableStarts/",
+  "ir_compiler_key": "ir_compiler",
+  "cpta_qualification_key": "native_apple_cpta_qualified"
 }

@@ -19,6 +19,7 @@
 #include "neverd/backend/codegen/MachO/MachOSigner.h"
 #include "neverd/backend/codegen/PatchObject.h"
 #include "neverd/backend/codegen/SourcePatchDependencies.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/loader/DWARF/AArch64ReturnAddressState.h"
 #include "neverd/loader/LanguageRuntime.h"
 #include "neverd/loader/Loader.h"
@@ -31,13 +32,23 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/BinaryFormat/Dwarf.h"
+#include "llvm/DebugInfo/DWARF/DWARFContext.h"
+#include "llvm/DebugInfo/DWARF/DWARFDebugFrame.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IRReader/IRReader.h"
+#include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Triple.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 
 #include <cstdlib>
 #include <iterator>
@@ -486,7 +497,13 @@ INSTANTIATE_TEST_SUITE_P(AppleClang, MachOArm64eNativeInstallation,
 class MachOArm64eNativeObjectInstallation
     : public ::testing::TestWithParam<std::tuple<const char *, bool>> {};
 
-enum class NativeObjectOperation { Append, Publish, PublishExecutable };
+enum class NativeObjectOperation {
+  Append,
+  Publish,
+  PublishExecutable,
+  PublishGeneratedIR,
+  PublishGeneratedExecutable
+};
 
 void checkNativeObjectInstallation(
     const char *Optimization, bool Threaded, bool ExecuteNative,
@@ -496,7 +513,17 @@ void checkNativeObjectInstallation(
 #ifndef __APPLE__
   GTEST_SKIP() << kMissingHost;
 #else
-  const bool Executable = Operation == NativeObjectOperation::PublishExecutable;
+  const bool Generated =
+      Operation == NativeObjectOperation::PublishGeneratedIR ||
+      Operation == NativeObjectOperation::PublishGeneratedExecutable;
+  const bool Executable =
+      Operation == NativeObjectOperation::PublishExecutable ||
+      Operation == NativeObjectOperation::PublishGeneratedExecutable;
+  const auto *IRCompiler = std::getenv(kIRCompilerEnvironment);
+  if (Generated && !IRCompiler)
+    GTEST_SKIP() << kMissingIRCompiler;
+  if (Generated)
+    ASSERT_TRUE(llvm::sys::fs::can_execute(IRCompiler));
   const bool Publish = Operation != NativeObjectOperation::Append;
   if (Executable && ExecuteNative && !std::getenv(kExecutableEnvironment))
     GTEST_SKIP() << kExecutableUnavailable;
@@ -535,7 +562,8 @@ void checkNativeObjectInstallation(
   };
   const auto Source = Path(kSourceFile), Dwarf = Path(kDwarfSourceFile),
              ObjectSource = Path(kObjectSourceFile),
-             ObjectPath = Path(kObjectFile), OriginalPath = Path(kOriginalFile),
+             IRPath = Path(kObjectIRFile), ObjectPath = Path(kObjectFile),
+             OriginalPath = Path(kOriginalFile),
              InstalledPath = Path(kInstalledFile), Log = Path(kToolLog),
              InfoPath = Path(kDyldInfoFile);
   const auto Run =
@@ -695,14 +723,36 @@ void checkNativeObjectInstallation(
     Args.push_back(OriginalPath);
     ASSERT_EQ(Run(kCompiler, Args), 0);
   }
-  Args.assign({kCompiler});
-  Args.append(std::begin(kObjectCompileArgs), std::end(kObjectCompileArgs));
+  llvm::LLVMContext Context;
+  std::unique_ptr<llvm::Module> GeneratedModule;
+  const llvm::StringRef Producer = Generated ? IRCompiler : kCompiler;
+  Args.assign({Producer});
+  if (Generated)
+    Args.append(std::begin(kIRCompileArgs), std::end(kIRCompileArgs));
+  else
+    Args.append(std::begin(kObjectCompileArgs), std::end(kObjectCompileArgs));
   if (DwarfLanguage)
     Args.push_back(kDwarfLanguageOption);
   Args.append({Optimization, ObjectSource});
   Args.append(std::begin(kOutputArgs), std::end(kOutputArgs));
-  Args.push_back(ObjectPath);
-  ASSERT_EQ(Run(kCompiler, Args), 0);
+  Args.push_back(Generated ? IRPath : ObjectPath);
+  ASSERT_EQ(Run(Producer, Args), 0);
+  if (Generated) {
+    llvm::SMDiagnostic Diagnostic;
+    GeneratedModule = llvm::parseIRFile(IRPath, Diagnostic, Context);
+    ASSERT_TRUE(GeneratedModule) << Diagnostic.getMessage().str();
+    auto Copy = llvm::CloneModule(*GeneratedModule);
+    auto Compiled = Codegen().compile(*Copy, Arch::AArch64, BinaryFormat::MachO,
+                                      Copy->getTargetTriple().str());
+    ASSERT_TRUE(Compiled.Success);
+    ASSERT_FALSE(Compiled.ObjectData.empty());
+    ASSERT_FALSE(
+        Write(ObjectPath, llvm::StringRef(reinterpret_cast<const char *>(
+                                              Compiled.ObjectData.data()),
+                                          Compiled.ObjectData.size())));
+    ::testing::Test::RecordProperty(kGeneratedIRProperty, true);
+    ::testing::Test::RecordProperty(kIRCompilerProperty, IRCompiler);
+  }
   Args.assign({kXcrun});
   Args.append(std::begin(kObjectDisassemblyArgs),
               std::end(kObjectDisassemblyArgs));
@@ -765,6 +815,33 @@ void checkNativeObjectInstallation(
   if (FreshPersonality)
     Dependencies.push_back(
         {kCxxLibrary, kCxxPersonality, SourcePatchDependencyKind::Function});
+  if (Generated) {
+    auto NativeObject = llvm::object::ObjectFile::createObjectFile(ObjectPath);
+    ASSERT_TRUE(bool(NativeObject)) << llvm::toString(NativeObject.takeError());
+    auto Debug = llvm::DWARFContext::create(
+        *NativeObject->getBinary(),
+        llvm::DWARFContext::ProcessDebugRelocations::Ignore);
+    auto Frames = Debug->getEHFrame();
+    ASSERT_TRUE(bool(Frames)) << llvm::toString(Frames.takeError());
+    const bool Incompatible = llvm::any_of((*Frames)->entries(), [](auto &F) {
+      return llvm::any_of(F.cfis(), [](const auto &Instruction) {
+        return Instruction.Opcode ==
+               llvm::dwarf::DW_CFA_AARCH64_negate_ra_state;
+      });
+    });
+    if (Incompatible) {
+      auto Candidate = Bytes;
+      auto Rejected = appendMachOObjectImage(Candidate, (*Object)->getBuffer(),
+                                             Dependencies);
+      ASSERT_FALSE(bool(Rejected));
+      EXPECT_TRUE(llvm::StringRef(llvm::toString(Rejected.takeError()))
+                      .contains(kClassicReturnCFIDiagnostic));
+      EXPECT_EQ(Candidate, Bytes);
+      // The native verifier rejects this skipped producer profile. Refusing
+      // incompatible bytes is required even on a newer forgiving unwinder.
+      GTEST_SKIP() << kMissingCompatibleIRProducer;
+    }
+  }
   if (!Executable && !RelocateOriginalLanguage && !Threaded &&
       llvm::StringRef(Optimization) == kO0) {
     uint64_t Tail = 0, TextEnd = 0;
@@ -1184,30 +1261,71 @@ void checkNativeObjectInstallation(
   if (Publish) {
     const auto Snapshot = Before->Raw;
     bool ReceiptSeen = false;
-    auto Rejected = installMachOObjectPatch(
-        (*Object)->getBuffer(), *Before, Mappings, {}, InstalledPath,
-        [&](const PatchResult &) -> llvm::Error {
-          ReceiptSeen = true;
-          return llvm::createStringError(llvm::errc::not_supported,
-                                         kReceiptRejected);
-        },
-        nullptr, nullptr, Dependencies);
+    if (Generated) {
+      const auto Triple = GeneratedModule->getTargetTriple();
+      GeneratedModule->setTargetTriple(llvm::Triple(kWrongIRTriple));
+      auto Wrong = bindSourcePatch(*GeneratedModule, *Before, Mappings);
+      EXPECT_FALSE(bool(Wrong));
+      llvm::consumeError(Wrong.takeError());
+      GeneratedModule->setTargetTriple(Triple);
+      auto Bound = bindSourcePatch(*GeneratedModule, *Before, Mappings);
+      ASSERT_TRUE(bool(Bound)) << llvm::toString(Bound.takeError());
+      Mappings = std::move(*Bound);
+      auto Foreign = *Before;
+      Foreign.DynInfo.MachOPlatforms = {llvm::MachO::PLATFORM_IOS};
+      auto BadPlatform = sourcePatchTargetTriple(Foreign);
+      EXPECT_FALSE(bool(BadPlatform));
+      llvm::consumeError(BadPlatform.takeError());
+      Foreign = *Before;
+      Foreign.MachOCPUSubtype = kUnsupportedObjectSubtype;
+      auto BadABI = sourcePatchTargetTriple(Foreign);
+      EXPECT_FALSE(bool(BadABI));
+      llvm::consumeError(BadABI.takeError());
+      auto Analysis = llvm::CloneModule(*GeneratedModule);
+      Analysis->addModuleFlag(llvm::Module::Error, kArm64eAnalysisModuleFlag,
+                              true);
+      auto Refused =
+          installSourcePatch(*Analysis, *Before, Mappings, InstalledPath, {},
+                             {}, nullptr, Dependencies);
+      EXPECT_FALSE(bool(Refused));
+      llvm::consumeError(Refused.takeError());
+      auto WrongProviders = Dependencies;
+      WrongProviders.front().Kind = SourcePatchDependencyKind::Data;
+      auto BadProvider =
+          installSourcePatch(*GeneratedModule, *Before, Mappings, InstalledPath,
+                             {}, {}, nullptr, WrongProviders);
+      EXPECT_FALSE(bool(BadProvider));
+      llvm::consumeError(BadProvider.takeError());
+      EXPECT_FALSE(llvm::sys::fs::exists(InstalledPath));
+      EXPECT_EQ(Before->Raw, Snapshot);
+    }
+    const auto Install =
+        [&](llvm::function_ref<llvm::Error(const PatchResult &)> Receipt = {}) {
+          if (Generated)
+            return installSourcePatch(*GeneratedModule, *Before, Mappings,
+                                      InstalledPath, {}, Receipt, nullptr,
+                                      Dependencies);
+          return installMachOObjectPatch((*Object)->getBuffer(), *Before,
+                                         Mappings, {}, InstalledPath, Receipt,
+                                         nullptr, nullptr, Dependencies);
+        };
+    auto Rejected = Install([&](const PatchResult &) -> llvm::Error {
+      ReceiptSeen = true;
+      return llvm::createStringError(llvm::errc::not_supported,
+                                     kReceiptRejected);
+    });
     ASSERT_FALSE(bool(Rejected));
     EXPECT_EQ(llvm::toString(Rejected.takeError()), kReceiptRejected);
     EXPECT_TRUE(ReceiptSeen);
     EXPECT_FALSE(llvm::sys::fs::exists(InstalledPath));
-    auto Published = installMachOObjectPatch((*Object)->getBuffer(), *Before,
-                                             Mappings, {}, InstalledPath, {},
-                                             nullptr, nullptr, Dependencies);
+    auto Published = Install();
     ASSERT_TRUE(bool(Published)) << llvm::toString(Published.takeError());
     ASSERT_TRUE(Published->Success);
     EXPECT_EQ(Published->TrampolineCount, Mappings.size());
     for (const auto &Entry : Published->PatchedFunctions)
       EXPECT_EQ(Entry.OwnerVA, Image->SymbolAddrs.at(Entry.SourceFunction));
     EXPECT_EQ(Before->Raw, Snapshot);
-    auto Again = installMachOObjectPatch((*Object)->getBuffer(), *Before,
-                                         Mappings, {}, InstalledPath, {},
-                                         nullptr, nullptr, Dependencies);
+    auto Again = Install();
     EXPECT_FALSE(bool(Again));
     llvm::consumeError(Again.takeError());
     ::testing::Test::RecordProperty(kPublishedProperty, true);
@@ -1336,8 +1454,9 @@ void checkNativeObjectInstallation(
     return Entry.CodeRange.Begin == Image->SymbolAddrs.at(kObjectDispatch) &&
            Entry.SemanticStatus == CompactUnwindSemanticStatus::Complete;
   }));
+  const bool ObjectDwarfLanguage = DwarfLanguage;
   std::string DwarfInfo;
-  if (DwarfLanguage) {
+  if (ObjectDwarfLanguage) {
     const auto DwarfInfoPath = Path(kDwarfInfoFile);
     Args.assign({kXcrun});
     Args.append(std::begin(kDwarfInfoArgs), std::end(kDwarfInfoArgs));
@@ -1359,7 +1478,7 @@ void checkNativeObjectInstallation(
     EXPECT_FALSE(Function->Itanium->CallSites.empty());
     ASSERT_TRUE(Function->Compact);
     EXPECT_TRUE(Function->Compact->HasLSDA);
-    EXPECT_EQ(Function->Dwarf.has_value(), DwarfLanguage);
+    EXPECT_EQ(Function->Dwarf.has_value(), ObjectDwarfLanguage);
     if (Function->Dwarf) {
       const auto *CIE =
           Parsed->ExceptionMetadata.findCIE(Function->Dwarf->CIESectionOffset);
@@ -1506,6 +1625,34 @@ TEST_P(MachOArm64eNativeObjectInstallation, PublishedExecutableStarts) {
   checkNativeObjectInstallation(Optimization, false, true, DwarfLanguage, false,
                                 false, false,
                                 NativeObjectOperation::PublishExecutable);
+}
+
+TEST_P(MachOArm64eNativeObjectInstallation, PublishesGeneratedIR) {
+  const auto [Optimization, DwarfLanguage] = GetParam();
+  checkNativeObjectInstallation(Optimization, false, false, DwarfLanguage,
+                                false, false, false,
+                                NativeObjectOperation::PublishGeneratedIR);
+}
+
+TEST_P(MachOArm64eNativeObjectInstallation, GeneratedIREntriesExecute) {
+  const auto [Optimization, DwarfLanguage] = GetParam();
+  checkNativeObjectInstallation(Optimization, false, true, DwarfLanguage, false,
+                                false, false,
+                                NativeObjectOperation::PublishGeneratedIR);
+}
+
+TEST_P(MachOArm64eNativeObjectInstallation, PublishesGeneratedExecutable) {
+  const auto [Optimization, DwarfLanguage] = GetParam();
+  checkNativeObjectInstallation(
+      Optimization, false, false, DwarfLanguage, false, false, false,
+      NativeObjectOperation::PublishGeneratedExecutable);
+}
+
+TEST_P(MachOArm64eNativeObjectInstallation, GeneratedExecutableStarts) {
+  const auto [Optimization, DwarfLanguage] = GetParam();
+  checkNativeObjectInstallation(
+      Optimization, false, true, DwarfLanguage, false, false, false,
+      NativeObjectOperation::PublishGeneratedExecutable);
 }
 
 INSTANTIATE_TEST_SUITE_P(AppleClang, MachOArm64eNativeObjectInstallation,

@@ -1,0 +1,601 @@
+{
+  "date": "2026-11-10",
+  "source_pr": "https://github.com/NeverSight/NeverD/pull/2286",
+  "llvm_pr": "https://github.com/NeverSight/llvm-project/pull/8",
+  "llvm_merge_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+  "default_prebuilt_tag": "neverd-llvm-v23.0.0-r6",
+  "pipeline": "Canonical arm64e replacement IR -> native MC object -> authenticated and ordinary relocations -> signed installed dylib or main executable.",
+  "whole_image_publication_qualified": false,
+  "native_apple_cpta_qualified": false,
+  "limits": [
+    "Arbitrary neverd.arm64e-analysis lifted modules require a separate complete ABI reconstruction and publication contract.",
+    "Native Apple CPTA-on requires a CPU reporting CPA/CPA2 and controlled enabling/readback evidence.",
+    "The r6 prebuilt lacks the MC signing callback and its explicit generic classic-return CFI is rejected before publication.",
+    "Foreign platforms, x1 ABI, shared-cache publication, TLS and runtime constructors are outside the admitted source profile."
+  ],
+  "producer_regressions": {
+    "llvm_lit_passed": 68,
+    "native_direct_control_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42761893719",
+    "cases_per_host": 4,
+    "preflight_per_host": 6,
+    "failed": 0,
+    "skipped": 0
+  },
+  "cold_source": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42762192123",
+    "environment_revision": "d63b77d26bcbdcfce39705ac4ce3d3c5ba249137",
+    "source_revision": "eabb96c44b7abaac2f628851968c05a090de5b5d",
+    "runners": {
+      "macos-26": {
+        "source_revision": "eabb96c44b7abaac2f628851968c05a090de5b5d",
+        "llvm_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+        "environment_report_sha256": "c915c6f6bcde43716961e2694752b90ce27e5e3f0b9e36d6323a6f7fc415a3a2",
+        "probes": {
+          "probe": {
+            "sha256": "d2b6c1f8a70545dacef65d954b6360e1ff7da30986305f7238e06f2d5038cfdc",
+            "passed": 6
+          },
+          "startup": {
+            "sha256": "c86152c3b5a6f3de1faab0ef35b5cbba422f169a10d43646bc9d4369085dd7e1",
+            "passed": 6
+          }
+        },
+        "matrices": {
+          "installation": {
+            "passed": 20,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "f169ed18fd1ae87f3b711a5bf0635e9d20b65e07315991d56c57841aa63009e1",
+            "xml_sha256": "00b5218f94a133be6db6f41cdc0f7f7c05d17b87f567eabe7f7f15f8199a809c",
+            "cases": [
+              "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/0",
+              "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/1",
+              "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/2",
+              "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/3",
+              "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/0",
+              "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/1",
+              "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/2",
+              "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/3",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/0",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/1",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/2",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/3",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/0",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/1",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/2",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/3",
+              "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/0",
+              "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/1",
+              "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/2",
+              "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/3"
+            ]
+          },
+          "executable": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "fe9fb363c6c625d7c6d2dae23ce31550e698ec4f52b04af993cf42e200e9212b",
+            "xml_sha256": "f7a2bfc91b3edb69f4d4d5b5dbb181bfabeddd3de819226878b645519af27709",
+            "cases": [
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/0",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/1",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/2",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/3"
+            ]
+          },
+          "default-executable": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "203439659059955582ed08237b3c06ae61408181f9225859863552ef1bf41dbe",
+            "xml_sha256": "8caf08bbecd750f9334409d50ca96eaf39376d4ab6f15333b2da0fd34d7fd255",
+            "cases": [
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/0",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/1",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/2",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/3"
+            ]
+          },
+          "generated": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "12491aa717ed036ad6818d991232ad31da80dc9358f6c717e1db8809779c57a1",
+            "xml_sha256": "8a801500c7e18d3883c86f2e7a2384320578a9d2840c13d444cc6b76267c38f8",
+            "cases": [
+              "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/0",
+              "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/1",
+              "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/2",
+              "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/3"
+            ],
+            "frontend": {
+              "sha256": "012b35304481c5d5db6b57f20e144fb78f198ca9db14aa0b8db72cd2e493e12d",
+              "version": "Homebrew clang version 22.1.8\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm@22/22.1.8/bin\nConfiguration file: /opt/homebrew/Cellar/llvm@22/22.1.8/etc/clang/arm64-apple-darwin25.cfg\n"
+            }
+          },
+          "generated-executable": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "ff0c9d82bf4e0220f82f2d95b659265b9931b7bea15b827fcf7491169d2fe78e",
+            "xml_sha256": "897281509bf08392eb32716066e75b937ec6a3e3f0484760d104c2974248a8a3",
+            "cases": [
+              "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/0",
+              "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/1",
+              "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/2",
+              "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/3"
+            ],
+            "frontend": {
+              "sha256": "012b35304481c5d5db6b57f20e144fb78f198ca9db14aa0b8db72cd2e493e12d",
+              "version": "Homebrew clang version 22.1.8\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm@22/22.1.8/bin\nConfiguration file: /opt/homebrew/Cellar/llvm@22/22.1.8/etc/clang/arm64-apple-darwin25.cfg\n"
+            }
+          }
+        },
+        "owned_build_removed": true,
+        "native_apple_cpta_qualified": false,
+        "whole_image_publication_qualified": false,
+        "test_binary_sha256": "d73b9a525cd3076cd2fdd5a6bba026150ac3cbb0f19ef0840640354c9a8c0c8b",
+        "source_sha256": {
+          "scripts/verify_arm64e_native.py": "240ba23bdcb63bd8a59ecb8ed14b3bdc01bd5a5b71300f8b1acf7439c6c1f8e1",
+          "scripts/verify_arm64e_native.def": "40b1edccd85fc303cc9db292c15044ba7b6dc136a2eef5515d25a008584a4c13",
+          "scripts/arm64e_artifacts.py": "ad55c17899d8a75fa12392100d782555c5f177955caaddc98c51163af659aff0",
+          "scripts/arm64e_artifacts.def": "c7748b446d2d7e9677d73b7dc6fb365c2521cc03eb6c06e50c75e6f8479bbd66",
+          "unittests/lift/format/MachOAuthenticatedNativeFixtures.def": "d1628d586e9733be6511cf100d5e2190f65931fad3ea76d590063d988d996997"
+        },
+        "signing": {
+          "passed": 33,
+          "failed": 0,
+          "skipped": 0,
+          "xml_sha256": "95822ad96f72d6b8d20f6272536b2fdb52cffcd56532869aa66665eab09972a9"
+        },
+        "environment": {
+          "cpu": {
+            "returncode": 0,
+            "stdout": "Apple M1 (Virtual)\n",
+            "stderr": ""
+          },
+          "model": {
+            "returncode": 0,
+            "stdout": "VirtualMac2,1\n",
+            "stderr": ""
+          },
+          "feat-cpa": {
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA'\n"
+          },
+          "feat-cpa2": {
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA2'\n"
+          },
+          "sdk": {
+            "returncode": 0,
+            "stdout": "26.5\n",
+            "stderr": ""
+          }
+        },
+        "initial_submodule_checkout": {
+          "signatures": "254a63f839f27348badbabdd14f9d15f7d65ee37",
+          "third_party/capstone": "906d2255c892e960d593d6b6b806fc13b0f3cec7",
+          "third_party/highway": "1693ca7926ed12c5520623564e465cff97d93374",
+          "third_party/llvm-project": "b726cb0425bc7e1f7e2753972a748ebcfa8b5741",
+          "third_party/mimalloc": "e8e7bc41ce904b4c83fe20e87d93f24d5286315a",
+          "third_party/oneTBB": "d26e0502ca39f888c1266cbbf1e2c2226d31e41b",
+          "third_party/simdjson": "edb7016c62efbe6155226896cdba5736307190e3",
+          "third_party/simdutf": "8d82299606e675b50de8dc16fd118aae4b65bfde",
+          "third_party/unicorn": "6dbdc470767c9503841023e0e16edbe6c2af914c",
+          "third_party/unicorn/docs/Unicorn_Engine_Documentation": "db5434ad4e40c6657766aa6a54eafd92af38192e"
+        },
+        "dependency_checkout_log_sha256": "25889feea3b1cbf04fa08e6b8805e6a15ff33153a595fac37eba4ead6d27a3b7",
+        "llvm_verified_after_checkout": "5676029e378c9e37adc16c8216a8e8453ffafcae"
+      },
+      "xcode-27": {
+        "source_revision": "eabb96c44b7abaac2f628851968c05a090de5b5d",
+        "llvm_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+        "environment_report_sha256": "67df0275210242f8abf3234587c3b16fab09394b4ea1e2e41be5a193771d69df",
+        "probes": {
+          "probe": {
+            "sha256": "4df9f3a44c6e0856b1f0ef63235478eafc63b27a6fe46ec37c993023aed4121a",
+            "passed": 6
+          },
+          "startup": {
+            "sha256": "af150cab28920b2ae999eb5df9117eeada3bc44d603f40e8bd434e0af73c3e9c",
+            "passed": 6
+          }
+        },
+        "matrices": {
+          "installation": {
+            "passed": 20,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "cc86459cc75d01c5d472766ec061de79f93ceb364009449f53957ca2ccadcd0c",
+            "xml_sha256": "67331b8503147296f7ef7a37cc466a06500193294547e5e6aa3fa10edc9c1705",
+            "cases": [
+              "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/0",
+              "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/1",
+              "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/2",
+              "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/3",
+              "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/0",
+              "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/1",
+              "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/2",
+              "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/3",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/0",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/1",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/2",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/3",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/0",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/1",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/2",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/3",
+              "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/0",
+              "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/1",
+              "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/2",
+              "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/3"
+            ]
+          },
+          "executable": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "794658016dcb3a9b085c24ec05a495389552fd2b1755a00b049d94e8acb10254",
+            "xml_sha256": "2a4ad67efb51abb3a6bd3be2f54ed08a9371285777a96369c6948b6dbcec9f4a",
+            "cases": [
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/0",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/1",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/2",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/3"
+            ]
+          },
+          "default-executable": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "81bdf3fc5e89d73051e81dba980c1180974c57a5816d588ff0594bfcc376c9a5",
+            "xml_sha256": "9f55ea9cc5fe3c353b014fcc48df8494a2b5bf06d7ad3dbe333780acd767a627",
+            "cases": [
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/0",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/1",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/2",
+              "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/3"
+            ]
+          },
+          "generated": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "7b9cd6c4675c621b410b6de580923c0c144a9da12a5b914579fc8529b3088277",
+            "xml_sha256": "81ce442dc2a133276342daabdb7161e55a0ce9655209d402973d447cc0d60383",
+            "cases": [
+              "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/0",
+              "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/1",
+              "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/2",
+              "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/3"
+            ],
+            "frontend": {
+              "sha256": "5ff8c034eab4eef825e353dbb0d602b5422236e1e2db77fd45933a42c5ccffad",
+              "version": "Homebrew clang version 22.1.8\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm@22/22.1.8/bin\nConfiguration file: /opt/homebrew/Cellar/llvm@22/22.1.8/etc/clang/arm64-apple-darwin27.cfg\n"
+            }
+          },
+          "generated-executable": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "83eefad7a783b29442682c9ee243a860244428827c7109de8e8d26fb773a2a31",
+            "xml_sha256": "489d479a392aab5926b5519abd3aa7b904d92cbee2c80a99774e9d2165cf4cf7",
+            "cases": [
+              "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/0",
+              "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/1",
+              "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/2",
+              "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/3"
+            ],
+            "frontend": {
+              "sha256": "5ff8c034eab4eef825e353dbb0d602b5422236e1e2db77fd45933a42c5ccffad",
+              "version": "Homebrew clang version 22.1.8\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm@22/22.1.8/bin\nConfiguration file: /opt/homebrew/Cellar/llvm@22/22.1.8/etc/clang/arm64-apple-darwin27.cfg\n"
+            }
+          }
+        },
+        "owned_build_removed": true,
+        "native_apple_cpta_qualified": false,
+        "whole_image_publication_qualified": false,
+        "test_binary_sha256": "afcb17e2f5dcc49ddac1799a579045c3397eac1c154baaa35aeb0c550cc02955",
+        "source_sha256": {
+          "scripts/verify_arm64e_native.py": "240ba23bdcb63bd8a59ecb8ed14b3bdc01bd5a5b71300f8b1acf7439c6c1f8e1",
+          "scripts/verify_arm64e_native.def": "40b1edccd85fc303cc9db292c15044ba7b6dc136a2eef5515d25a008584a4c13",
+          "scripts/arm64e_artifacts.py": "ad55c17899d8a75fa12392100d782555c5f177955caaddc98c51163af659aff0",
+          "scripts/arm64e_artifacts.def": "c7748b446d2d7e9677d73b7dc6fb365c2521cc03eb6c06e50c75e6f8479bbd66",
+          "unittests/lift/format/MachOAuthenticatedNativeFixtures.def": "d1628d586e9733be6511cf100d5e2190f65931fad3ea76d590063d988d996997"
+        },
+        "signing": {
+          "passed": 33,
+          "failed": 0,
+          "skipped": 0,
+          "xml_sha256": "d901721a035344d105dbd0c1eb9f01a2caef013badfb2473dc2e442e9c662ab8"
+        },
+        "environment": {
+          "cpu": {
+            "returncode": 0,
+            "stdout": "Apple M1 (Virtual)\n",
+            "stderr": ""
+          },
+          "model": {
+            "returncode": 0,
+            "stdout": "VirtualMac2,1\n",
+            "stderr": ""
+          },
+          "feat-cpa": {
+            "returncode": 0,
+            "stdout": "0\n",
+            "stderr": ""
+          },
+          "feat-cpa2": {
+            "returncode": 0,
+            "stdout": "0\n",
+            "stderr": ""
+          },
+          "sdk": {
+            "returncode": 0,
+            "stdout": "27.0\n",
+            "stderr": ""
+          }
+        },
+        "initial_submodule_checkout": {
+          "signatures": "254a63f839f27348badbabdd14f9d15f7d65ee37",
+          "third_party/capstone": "906d2255c892e960d593d6b6b806fc13b0f3cec7",
+          "third_party/highway": "1693ca7926ed12c5520623564e465cff97d93374",
+          "third_party/llvm-project": "b726cb0425bc7e1f7e2753972a748ebcfa8b5741",
+          "third_party/mimalloc": "e8e7bc41ce904b4c83fe20e87d93f24d5286315a",
+          "third_party/oneTBB": "d26e0502ca39f888c1266cbbf1e2c2226d31e41b",
+          "third_party/simdjson": "edb7016c62efbe6155226896cdba5736307190e3",
+          "third_party/simdutf": "8d82299606e675b50de8dc16fd118aae4b65bfde",
+          "third_party/unicorn": "6dbdc470767c9503841023e0e16edbe6c2af914c",
+          "third_party/unicorn/docs/Unicorn_Engine_Documentation": "db5434ad4e40c6657766aa6a54eafd92af38192e"
+        },
+        "dependency_checkout_log_sha256": "25889feea3b1cbf04fa08e6b8805e6a15ff33153a595fac37eba4ead6d27a3b7",
+        "llvm_verified_after_checkout": "5676029e378c9e37adc16c8216a8e8453ffafcae"
+      }
+    },
+    "artifacts": [
+      {
+        "id": 13741695693,
+        "name": "neverd-arm64e-native-macos-26-1",
+        "size_in_bytes": 298313,
+        "digest": "sha256:b89d5c31d8cfb9c6ff250eea59c832f33c07bdb92d385b53567f12de0681d91f"
+      },
+      {
+        "id": 13740503721,
+        "name": "neverd-arm64e-native-xcode-27-1",
+        "size_in_bytes": 297660,
+        "digest": "sha256:4d8c63e15589e71fb4c582b58e859512306f8fb04a5529961abb32bd1930d781"
+      },
+      {
+        "id": 13738421071,
+        "name": "legacy-fixtures",
+        "size_in_bytes": 17605,
+        "digest": "sha256:e7b02aa8c395534e781716b660a336d36a48884daaacc27234dd8cccba86ec24"
+      }
+    ]
+  },
+  "local_source_arm64e": {
+    "implementation_revision": "0d3511620291254bffcaa90a356870016f2741f4",
+    "llvm_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+    "total": 753,
+    "passed": 716,
+    "failed": 0,
+    "skipped": 37,
+    "xml_sha256": "1ff3a1532d494d30356e543a1546ceb433d39e9c93f8d2c059508005739cd973",
+    "mc_callback_tests_skipped": false,
+    "skip_scope": "32 opt-in native publication cases; unavailable local ordered-memory/PAC/PAuth_LR/PACM execution; optional external-binary parity input. Native publication has separate complete GitHub matrices.",
+    "skipped_cases": [
+      "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+      "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+      "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+      "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+      "A64FastClassifyParity.OptionalRealBinaryWalk",
+      "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/3"
+    ]
+  },
+  "local_source_sdk_unwind": {
+    "implementation_revision": "0d3511620291254bffcaa90a356870016f2741f4",
+    "frontend": "Clang 22.1.6",
+    "configuration": "NEVERD_SOURCE_PATCH_TEST_CLANG_EXECUTABLE and NEVERD_ARM64E_IR_COMPILER explicitly select the compatible upstream frontend.",
+    "passed": 340,
+    "failed": 0,
+    "skipped": 7,
+    "total": 347,
+    "xml_sha256": "8151088f964da90089f6b3890ba9174c661d78d2dd5f1f7242b867dd58f9b26d",
+    "skipped_cases": [
+      "SourcePatch.NeverCNormalModeExecutesWhenAvailable",
+      "SourcePatchObject.NeverCEntryTableCannotLoseItsLoadTimeRelocations",
+      "SourcePatchException.NativeObjectRetainsCrossBoundaryExceptionSemantics",
+      "SourcePatchException.GCCObjectRetainsCrossBoundaryExceptionSemantics",
+      "SourcePatchException.NeverCCSourcesExecuteInNativeProcesses",
+      "SourcePatchException.NeverCHostedDynCodeUnwindsThroughTwoNativeFrames",
+      "SourcePatchPE.FH3RuntimePreservesCatchesCleanupRethrowAndNoexcept"
+    ]
+  },
+  "local_dependency_revisions": {
+    "signatures": "20b9036f4367e1308a3d2f0b214e06859090a7af",
+    "third_party/capstone": "b8c22e0c16b1769dfa712547d4a5c5d49560ae46",
+    "third_party/llvm-project": "5676029e378c9e37adc16c8216a8e8453ffafcae"
+  },
+  "local_source_checks": {
+    "native_verifier_and_artifact_controllers_passed": 26,
+    "documentation_tests_passed": 134,
+    "environment_controller_tests_passed": 11,
+    "clang_format": "22.1.2",
+    "source_provenance": "passed",
+    "diff_check": "passed",
+    "prebuilt_release_and_ancestry_tests_passed": 33
+  },
+  "integrated_replay": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42772199612",
+    "environment_revision": "415a110c1b8ed6494901f16ba08ed83ab7f44714",
+    "source_revision": "0d3511620291254bffcaa90a356870016f2741f4",
+    "llvm_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+    "delivery": "Temporary immutable local Release test host, not an independent cold build. Per-stage strict NeverD verifiers validate complete native matrices.",
+    "archive_sha256": "7476e9284e5358843f048757d55689e2c626bd6c534b74d4aea09e811745baf0",
+    "manifest_sha256": "e5e57d46666bff6a957e11ba2274e5ea203dce30a6c290656bb53a6715466d1d",
+    "runners": {
+      "macos-26": {
+        "replay_report_sha256": "30a930824e40356ac8921872c0725374ae3a2f8a390a93ffa684919cb150b388",
+        "manifest_sha256": "e5e57d46666bff6a957e11ba2274e5ea203dce30a6c290656bb53a6715466d1d",
+        "test_binary_sha256": "eb981eec998aa8fc30a4420a432e1f11c1981db1db852646f8b75c8d3f8a8836",
+        "probes": {
+          "probe": {
+            "passed": 6,
+            "report_sha256": "4f52884a12a8f9c4232320a6222fbed4f0f1455ff891ab3e18469274dba0ec5f"
+          },
+          "startup": {
+            "passed": 6,
+            "report_sha256": "3d4b3b5e9f2b9f8ddbdcfe581596cf5ce1cfcaf71b42e03002115d22bc67a503"
+          }
+        },
+        "matrices": {
+          "dylib-installation": {
+            "passed": 20,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "3ef34b447a1245b5c986a85dff5115dde54cc8ad7505ba4624abbbe469dae155",
+            "xml_sha256": "16f8aa842d7cce6e009bab9482299902e132ad101c659738182589d12d51bf67"
+          },
+          "installation": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "8739aa68944a43fcf9639c861cf78ac6be3cce90537879a3a8fadd547be4ca51",
+            "xml_sha256": "f8b9005b590bca3ed0775597aeb828fe7a4068f6b9823c911512da6ef64aae6e"
+          },
+          "default-installation": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "30d850103824dd184f1dfd4245a7f60611110efa2a9983a0890745ede30806de",
+            "xml_sha256": "2ce4a505d7e98d7d08241c46a3e8b5966c34dde928bcc670a0f14f04c4c8059c"
+          },
+          "generated": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "d7fe815462c6690e2994513e3d4fa204b48434f20a939784bf7ef18bfbab0572",
+            "xml_sha256": "6c2eeaf769c06cc907649b3a729b53ab7daeafc661b10d4b7ac6143437c6f34f",
+            "frontend": {
+              "sha256": "012b35304481c5d5db6b57f20e144fb78f198ca9db14aa0b8db72cd2e493e12d",
+              "version": "Homebrew clang version 22.1.8\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm@22/22.1.8/bin\nConfiguration file: /opt/homebrew/Cellar/llvm@22/22.1.8/etc/clang/arm64-apple-darwin25.cfg\n"
+            }
+          },
+          "generated-executable": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "d280e988d1aa56f97f0bbd59c8374fb6bbdff5272efc6dad2415c6c76322061b",
+            "xml_sha256": "ae590089f159e922eb07e40bd85ec0e38545e5aeb859965a0167c2be8dbab02b",
+            "frontend": {
+              "sha256": "012b35304481c5d5db6b57f20e144fb78f198ca9db14aa0b8db72cd2e493e12d",
+              "version": "Homebrew clang version 22.1.8\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm@22/22.1.8/bin\nConfiguration file: /opt/homebrew/Cellar/llvm@22/22.1.8/etc/clang/arm64-apple-darwin25.cfg\n"
+            }
+          }
+        }
+      },
+      "xcode-27": {
+        "replay_report_sha256": "30a930824e40356ac8921872c0725374ae3a2f8a390a93ffa684919cb150b388",
+        "manifest_sha256": "e5e57d46666bff6a957e11ba2274e5ea203dce30a6c290656bb53a6715466d1d",
+        "test_binary_sha256": "eb981eec998aa8fc30a4420a432e1f11c1981db1db852646f8b75c8d3f8a8836",
+        "probes": {
+          "probe": {
+            "passed": 6,
+            "report_sha256": "af7947164222292ab96b15b9940315ae8ae230303d0b357c5c85061f58538b34"
+          },
+          "startup": {
+            "passed": 6,
+            "report_sha256": "cfa3f48da67832c5c2a2cd1f685e9e8e7d7a5d0a5ad1ea331300230034c37c7d"
+          }
+        },
+        "matrices": {
+          "dylib-installation": {
+            "passed": 20,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "fc8fe176a96b952e8c24c67559617652f8721ccb30301729a31af8c290445680",
+            "xml_sha256": "060fda56f1e7cf030df0928b9ce5f7dbeb133f0af5a3ced625d0904834c7f680"
+          },
+          "installation": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "dbf04f499d77ca3c64509e481ffd8b843c8f2fe6d2f7f7fae1714764283033cc",
+            "xml_sha256": "a043b98deb7885c1866228866983990e239012ecead04adff21e54fbb3a05644"
+          },
+          "default-installation": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "e64bb2bbf2fab656cc0278f1db03a47ac932904dae01039e173e3c49c1c7f40e",
+            "xml_sha256": "e2415b7fb6a5df88c2cbcc585dca7bdadfb6768fc1e7bed6a7dd3e04acff0d9e"
+          },
+          "generated": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "72a1efdbd22ede6bfbd4b49047ab275c3d09b91cdb12b42a136a375837a519b6",
+            "xml_sha256": "70769284e565c0ba618c8c2bf1933a0b291213a081a7bd32610557c17b342564",
+            "frontend": {
+              "sha256": "5ff8c034eab4eef825e353dbb0d602b5422236e1e2db77fd45933a42c5ccffad",
+              "version": "Homebrew clang version 22.1.8\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm@22/22.1.8/bin\nConfiguration file: /opt/homebrew/Cellar/llvm@22/22.1.8/etc/clang/arm64-apple-darwin27.cfg\n"
+            }
+          },
+          "generated-executable": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "report_sha256": "ae9412ce36590336bf531266a9c3fccfd99b4ce3e6391d2d6d4c734877bd27ed",
+            "xml_sha256": "0a1fa465684b7fedf32f601c4342bbd3c57ab6d53a07f10ea257f60e49882c3c",
+            "frontend": {
+              "sha256": "5ff8c034eab4eef825e353dbb0d602b5422236e1e2db77fd45933a42c5ccffad",
+              "version": "Homebrew clang version 22.1.8\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm@22/22.1.8/bin\nConfiguration file: /opt/homebrew/Cellar/llvm@22/22.1.8/etc/clang/arm64-apple-darwin27.cfg\n"
+            }
+          }
+        }
+      }
+    }
+  },
+  "prebuilt_audit": {
+    "tag": "neverd-llvm-v23.0.0-r6",
+    "prebuilt_snapshot": "06788fb19109851e6a6b9f109a2b8027a606f0c6",
+    "source_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+    "archives_verified": 3,
+    "live_audit_passed": true,
+    "source_ancestry_sha256": "3f091d76b7974a0295a9f43a5bd9d9a3a3d2532aad4f0ba93e6ee583decbfa32"
+  }
+}

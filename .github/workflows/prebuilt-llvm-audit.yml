@@ -11,6 +11,8 @@ on:
       - 'CMakeLists.txt'
       - 'cmake/NeverDLLVMPrebuilt.cmake'
       - 'scripts/audit_prebuilt_llvm_release.py'
+      - 'scripts/audit_prebuilt_llvm_release.def'
+      - 'scripts/tests/test_audit_prebuilt_llvm_release.def'
       - 'scripts/tests/test_audit_prebuilt_llvm_release.py'
   pull_request:
     # closed cancels this PR's run through its concurrency group; no job runs.
@@ -22,6 +24,8 @@ on:
       - 'CMakeLists.txt'
       - 'cmake/NeverDLLVMPrebuilt.cmake'
       - 'scripts/audit_prebuilt_llvm_release.py'
+      - 'scripts/audit_prebuilt_llvm_release.def'
+      - 'scripts/tests/test_audit_prebuilt_llvm_release.def'
       - 'scripts/tests/test_audit_prebuilt_llvm_release.py'
   workflow_dispatch:
 

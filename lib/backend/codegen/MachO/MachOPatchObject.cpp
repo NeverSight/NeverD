@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "MachOArm64eABI.h"
 #include "MachODependencyState.h"
 
 #include "neverd/backend/Limits.h"
@@ -201,8 +202,8 @@ bool matchesArm64eABI(const llvm::object::MachOObjectFile &Object,
     return true;
   // Darwin links classic ABI0 objects into ABI1 macOS main executables.
   // The executable ABI tag is not an instruction to compile ABI1 objects.
-  if (Subtype != kClassicObjectSubtype ||
-      Original.MachOCPUSubtype != kMacOSMainSubtype ||
+  if (Subtype != macho_arm64e_abi::kClassicObjectSubtype ||
+      Original.MachOCPUSubtype != macho_arm64e_abi::kMacOSMainSubtype ||
       Original.DynInfo.MachOFileType != MH_EXECUTE ||
       Original.DynInfo.MachOPlatforms.size() != 1 ||
       Original.DynInfo.MachOPlatforms.front() != PLATFORM_MACOS)
@@ -1425,7 +1426,10 @@ verifyNativeObjectUnwind(const BinaryImage &Image,
                Native.PersonalitySlots[Index - 1] != *Range.PersonalitySlotVA)
             : Index != 0)
       return fail(kLanguageReplay);
-    if (!Range.PersonalitySlotVA && !Range.LSDAVA)
+    const bool Arm64eDwarf =
+        Image.isArm64e() && (Range.Encoding & macho_unwind::kModeMask) ==
+                                macho_unwind::kARM64ModeDwarf;
+    if (!Range.PersonalitySlotVA && !Range.LSDAVA && !Arm64eDwarf)
       continue;
     const auto *Function = Image.ExceptionMetadata.findFunction(Range.BeginVA);
     if (!Function || Function->CodeRange.Begin != Range.BeginVA ||
@@ -1434,11 +1438,27 @@ verifyNativeObjectUnwind(const BinaryImage &Image,
         (Range.LSDAVA &&
          (Function->HandlerDataVA != *Range.LSDAVA || !Function->Itanium)))
       return fail(kLanguageReplay);
-    if (Function->Dwarf && Range.PersonalitySlotVA) {
+    if (Arm64eDwarf && !Function->Dwarf)
+      return fail(kPublishedRange);
+    if (Function->Dwarf) {
       const auto *CIE =
           Image.ExceptionMetadata.findCIE(Function->Dwarf->CIESectionOffset);
-      if (!CIE || CIE->PersonalitySlotVA != *Range.PersonalitySlotVA)
+      if (!CIE || (Range.PersonalitySlotVA &&
+                   CIE->PersonalitySlotVA != *Range.PersonalitySlotVA))
         return fail(kLanguageReplay);
+      if (Arm64eDwarf) {
+        const auto HasClassicToggle = [](const auto &Program) {
+          return llvm::any_of(Program, [](const auto &Instruction) {
+            return Instruction.Kind == CFIOpKind::NegateRAState;
+          });
+        };
+        // Classic Darwin already authenticates saved LR with the B key.
+        // Explicit generic RA toggles break older system unwinders. Preserve
+        // the producer bytes and reject the incompatible ABI at publication.
+        if (HasClassicToggle(CIE->InitialInstructions) ||
+            HasClassicToggle(Function->Dwarf->Instructions))
+          return fail(kClassicReturnCFI);
+      }
     }
   }
   return llvm::Error::success();
@@ -1463,7 +1483,7 @@ appendMachOObjectImage(std::vector<uint8_t> &Binary, llvm::StringRef Bytes,
     return Original.takeError();
   if (!Original->isArm64e() || Original->MachOSharedCache)
     return fail(kNativeStorage);
-  auto Object = readObject(Bytes, *Original, kArm64eTriple);
+  auto Object = readObject(Bytes, *Original, macho_arm64e_abi::kTriple);
   if (!Object)
     return Object.takeError();
   auto Candidate = Binary;
@@ -1532,8 +1552,9 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
     return fail(kSharedCache);
   if (!Dependencies.empty() && !Original.isArm64e())
     return fail(kDependencyProfile);
-  auto Triple = Original.isArm64e() ? llvm::Expected<std::string>(kArm64eTriple)
-                                    : sourcePatchTargetTriple(Original);
+  auto Triple = Original.isArm64e()
+                    ? llvm::Expected<std::string>(macho_arm64e_abi::kTriple)
+                    : sourcePatchTargetTriple(Original);
   if (!Triple)
     return Triple.takeError();
   auto Object = readObject(Bytes, Original, *Triple);

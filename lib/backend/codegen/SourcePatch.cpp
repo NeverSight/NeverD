@@ -6,6 +6,8 @@
 
 #include "neverd/backend/codegen/SourcePatch.h"
 
+#include "MachO/MachOArm64eABI.h"
+
 #include "neverd/ArchSupport.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/BinaryRewriter.h"
@@ -17,7 +19,6 @@
 #include "neverd/backend/codegen/MachO/MachOSigner.h"
 #include "neverd/backend/codegen/PatchObject.h"
 #include "neverd/backend/codegen/SourcePatchPreparation.h"
-#include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/loader/MachO/DyldCacheLoad.h"
 #include "neverd/loader/MachO/MachOARM32Mode.h"
@@ -32,6 +33,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 
 #include <algorithm>
 #include <map>
@@ -85,6 +87,8 @@ llvm::Error validateTarget(const llvm::Module &Module,
       Actual.getObjectFormat() != Expected.getObjectFormat() ||
       Actual.isOSWindows() != Expected.isOSWindows() ||
       Actual.isOSDarwin() != Expected.isOSDarwin() ||
+      Actual.isArm64e() != Expected.isArm64e() ||
+      (Image.isArm64e() && !Actual.isMacOSX()) ||
       (Image.Arch == Arch::ARM &&
        (Actual.getEnvironment() != Expected.getEnvironment() ||
         Actual.isWatchABI() != Expected.isWatchABI())))
@@ -126,8 +130,16 @@ llvm::Expected<va_t> legacyTarget(llvm::StringRef Name,
 llvm::Expected<std::string> sourcePatchTargetTriple(const BinaryImage &Image) {
   if (Image.MachOSharedCache)
     return patchError(macho_loader::cache_load::kSourceUnsupported);
-  if (Image.isArm64e())
-    return patchError(kArm64eSourceReplacementUnsupported);
+  if (Image.isArm64e()) {
+    using namespace macho_arm64e_abi;
+    if (Image.DynInfo.MachOPlatforms.size() != 1 ||
+        Image.DynInfo.MachOPlatforms.front() != llvm::MachO::PLATFORM_MACOS ||
+        (Image.MachOCPUSubtype != kClassicObjectSubtype &&
+         !(Image.MachOCPUSubtype == kMacOSMainSubtype &&
+           Image.DynInfo.MachOFileType == llvm::MachO::MH_EXECUTE)))
+      return patchError(kUnsupported);
+    return std::string(kTriple);
+  }
   const char *Default = llvmCodegenTriple(Image.Arch, Image.Format);
   if (!Default)
     return patchError("unsupported native target");
@@ -471,7 +483,14 @@ llvm::Expected<PatchResult> installSourcePatch(
     llvm::ArrayRef<SourcePatchMapping> Mappings,
     const std::filesystem::path &OutputPath, llvm::StringRef TextSection,
     llvm::function_ref<llvm::Error(const PatchResult &)> PrepareReceipt,
-    const SourcePatchPreparation *Preparation) {
+    const SourcePatchPreparation *Preparation,
+    llvm::ArrayRef<SourcePatchDependency> Dependencies) {
+  if (!Dependencies.empty() && !Image.isArm64e())
+    return patchError(macho_arm64e_abi::kDependencies);
+  if (Image.isArm64e() && !TextSection.empty())
+    return patchError(macho_arm64e_abi::kTextOverride);
+  if (auto E = validateSourcePatchDependencyDeclarations(Module, Dependencies))
+    return E;
   // Each admitted format must install persistent state in writable storage.
   // Address initializers additionally need load-time relocation registration;
   // until that contract is installed, never freeze an ASLR-sensitive pointer.
@@ -495,27 +514,32 @@ llvm::Expected<PatchResult> installSourcePatch(
           "writable patch storage is not installed for this format: " +
           Global.getName());
     if (hasAddressInitializer(*Global.getInitializer()) &&
-        Image.Format != BinaryFormat::ELF && !PESource)
+        Image.Format != BinaryFormat::ELF && !PESource && !Image.isArm64e())
       return patchError(
           "address initializer requires load-time relocation registration: " +
           Global.getName());
   }
 
-  if (Image.isMachO() && Preparation && !Preparation->Imports.empty()) {
+  if (Image.isArm64e() ||
+      (Image.isMachO() && Preparation && !Preparation->Imports.empty())) {
     if (auto E = validateTarget(Module, Image))
       return E;
     Codegen Generator;
-    // Native indirect-symbol directives must survive emission. MC rewrite's
-    // raw section stream is insufficient for Mach-O's non-lazy pointer tables.
-    auto Object = Generator.compile(Module, Image.Arch, Image.Format,
+    // The MC object writer owns signing recipes, symbols and native unwind
+    // relocations. Retain them until the object installer knows final VAs.
+    auto Copy = llvm::CloneModule(Module);
+    auto Object = Generator.compile(*Copy, Image.Arch, Image.Format,
                                     Module.getTargetTriple().str());
     if (!Object.Success || Object.ObjectData.empty())
-      return patchError("native dependency object emission failed");
-    return installObjectPatch(llvm::StringRef(reinterpret_cast<const char *>(
-                                                  Object.ObjectData.data()),
-                                              Object.ObjectData.size()),
-                              Image, Mappings, Preparation->Bindings,
-                              OutputPath, PrepareReceipt, nullptr, Preparation);
+      return patchError(macho_arm64e_abi::kEmissionFailed);
+    return installObjectPatch(
+        llvm::StringRef(
+            reinterpret_cast<const char *>(Object.ObjectData.data()),
+            Object.ObjectData.size()),
+        Image, Mappings,
+        Preparation ? llvm::ArrayRef(Preparation->Bindings)
+                    : llvm::ArrayRef<SourcePatchBinding>(),
+        OutputPath, PrepareReceipt, nullptr, Preparation, Dependencies);
   }
   return publishSourcePatch(
       Image, Mappings, OutputPath,

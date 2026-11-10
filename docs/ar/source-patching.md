@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](../zh-CN/source-patching.md) | [繁體中文](../zh-TW/source-patching.md) | [日本語](../ja/source-patching.md) | [한국어](../ko/source-patching.md) | [Français](../fr/source-patching.md) | [Deutsch](../de/source-patching.md) | [Español](../es/source-patching.md) | [Italiano](../it/source-patching.md) | [Русский](../ru/source-patching.md) | [العربية](source-patching.md)
 
-<!-- i18n-source: 40bc95b0497bcc23428886f1765116ce87275a1507ae139a70be4896271650a7 -->
+<!-- i18n-source: 360a0b82872370d45ddc1c55aa575e69255af24af028a4744f51c8cc2034de02 -->
 
 [← Documentation Index](README.md)
 
@@ -40,6 +40,8 @@ clang --target=x86_64-unknown-linux-gnu -fPIC -fno-lto -c replacement.c -o repla
 neverd patch app --from-object=replacement.o --entry=replacement \
   --func=0x401140 --patch-report -o app.object
 ```
+
+بالنسبة إلى صور macOS arm64e ذات ABI التقليدي والملفات التنفيذية الرئيسية لـ macOS ذات ABI1، يُصدر NeverD صيغة LLVM IR القياسية عبر كاتب كائنات MC الأصلية قبل التثبيت. اختر واجهة أمامية متوافقة صراحةً (يستخدم التحقق Clang 22)، وابنِ NeverD باستخدام تفرّع LLVM الذي يتضمن إصلاح Darwin CFI لعناوين العودة الموقّعة. تظل الحزمة المبنية مسبقًا الافتراضية r6؛ وهي ترفض CFI غير المتوافقة للعودة الموقّعة في ABI التقليدي بدلًا من نشر صورة تفشل فيها معالجة الاستثناءات الأصلية. كما يحافظ ناتج الكائن الأصلي على عقود Apple الأصلية لإعادة التموضع الموثَّقة وفك المكدس. راجع [حدود مُنتِج arm64e والتنفيذ](../arm64e-native-validation.md#canonical-ir-through-native-mc-objects) للاطلاع على تصريحات المزوّدين والتوقيع وواجهات ABI المدعومة وأوامر التحقق. لا يتيح عقد المصدر هذا إعادة بناء كاملة لصور عشوائية ناتجة عن الرفع.
 
 <!-- i18n-section: profiles -->
 ## الملفات المتحققة والقيود

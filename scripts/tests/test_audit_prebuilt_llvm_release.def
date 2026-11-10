@@ -1,0 +1,11 @@
+{
+  "source_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "unrelated_commit": "cccccccccccccccccccccccccccccccccccccccc",
+  "rejected_statuses": [
+    "behind",
+    "diverged",
+    "identical"
+  ],
+  "accepted_status": "ahead",
+  "gitlink_pattern": "[0-9a-f]{40}"
+}

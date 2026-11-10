@@ -1440,8 +1440,11 @@ collector uses exact local symbol addresses and addends, one unambiguous existin
 dyld provider, or an explicit provider declaration for an external symbol.
 Missing/conflicting providers, unresolved or
 subtracted expressions, non-writable storage and stale placement fail before
-mutation. The r6 build cannot exercise this MC callback path; its integration
-test is explicitly skipped until a toolchain exposing the fork interface is used.
+mutation. A source build of the fork exercises both IR and assembly producers
+through final placement in chained and threaded images. The bounded handoff
+retains nested signing constants and verifies the installed recipes. The r6
+build lacks the callback and explicitly skips that integration test; this
+handoff does not reconstruct the ABI of arbitrary lifted modules.
 
 `MachOAuthenticatedFixups` installs final-address signing recipes in linked
 arm64e chained and legacy threaded images. It reuses the strict dependency
@@ -1619,9 +1622,23 @@ insertion, including segmented pointers whose target ordinal would otherwise
 change when a new load command is inserted. Such a changed target is rejected
 without publishing any bytes.
 
-This installation phase does not enable whole-image arm64e publication. The
-new MC interface still requires qualification with a post-r6 toolchain and
-the complete publication pipeline. The
+Canonical replacement IR uses native MC object emission and this
+installer through `installSourcePatch`, including deferred provider declarations
+from the SDK. This admits the macOS classic/ABI1 source profile without clearing
+analysis-only lifted-module flags. The publication owner rejects explicit generic
+RA-state toggles in classic arm64e DWARF: Darwin already authenticates saved LR
+with its implicit B-key ABI, and r6's extra toggle breaks the macOS 26 unwinder.
+The rejection covers the CIE and FDE programs of new object ranges, before
+committing any bytes. Canonical emission requires the direct LLVM fork CFI fix;
+the prebuilt default remains r6. The source fork also passes the bounded raw
+MC handoff tests described above. The
+[generated-image record](evidence/arm64e-generated-image-2026-11-10.json)
+binds independent source builds on macOS 26 and Xcode 27: each passes 36 native
+installation/publication cases, 33 signing tests and both six-control
+prerequisites, with no failures or skips. Canonical IR publication covers O0/O2
+compact and DWARF language frames in both dylibs and default-system main
+executables. Arbitrary lifted-image publication retains its separate ABI
+reconstruction boundary. The
 [native installation record](evidence/arm64e-native-installation-2026-11-09.json)
 qualifies twelve installed-dylib cases on each of macOS 26 and Xcode 27, with
 zero failures or skips. It covers O0/O2 authenticated calls, compact/DWARF
@@ -2233,9 +2250,10 @@ authenticated imports or authorize whole-image rebuilding.
 
 This support covers static loading, lifting and C/LLVM inspection, together
 with the separately qualified native object installation contract above.
-General rebuilding and source replacement of an arm64e image fail explicitly
-until their complete signing, fixup and publication pipeline is qualified;
-the emitted module retains that requirement. Checked emulation's existing
+Canonical arm64e source replacement uses the bounded macOS native-object
+publication profile described in [native validation](arm64e-native-validation.md#canonical-ir-through-native-mc-objects).
+General lifted rebuilding still fails explicitly, and its emitted module
+retains the analysis-only requirement. Checked emulation's existing
 disabled-key profile does not become an arm64e execution environment. Separate
 Apple Silicon tests compare both C projections with native PACGA. The full PAC/AUT/XPAC oracle
 requires an executable arm64e process and checks that each signing key changes

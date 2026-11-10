@@ -196,6 +196,9 @@ int patchSource(Session &S, const void *Input, size_t InputSize,
                      [&](const auto &B) { return B.Symbol == D.symbol; }))
       return Fail("a dependency conflicts with an original binding");
   }
+  const llvm::ArrayRef<SourcePatchDependency> NativeDependencies =
+      S.Img.isArm64e() ? llvm::ArrayRef(Dependencies)
+                       : llvm::ArrayRef<SourcePatchDependency>();
   auto Prepare = [&](llvm::ArrayRef<SourcePatchMapping> Mappings,
                      llvm::StringRef LayoutObject = {}) -> llvm::Error {
     const bool Callbacks = llvm::any_of(Bindings, [](const auto &Binding) {
@@ -220,9 +223,11 @@ int patchSource(Session &S, const void *Input, size_t InputSize,
                              return B.Kind ==
                                     SourcePatchBindingKind::OriginalFunction;
                            }),
-            llvm::count_if(Dependencies, [](const auto &D) {
-              return D.Kind == SourcePatchDependencyKind::Function;
-            }));
+            S.Img.isArm64e()
+                ? 0
+                : llvm::count_if(Dependencies, [](const auto &D) {
+                    return D.Kind == SourcePatchDependencyKind::Function;
+                  }));
         if (!R)
           return R.takeError();
       }
@@ -243,7 +248,7 @@ int patchSource(Session &S, const void *Input, size_t InputSize,
         return P.takeError();
       Preparation = std::move(*P);
     }
-    if (!Dependencies.empty()) {
+    if (!Dependencies.empty() && !S.Img.isArm64e()) {
       auto New = prepareSourcePatchDependencies(Preparation ? Preparation->Image
                                                 : Reserved  ? *Reserved
                                                             : S.Img,
@@ -338,7 +343,8 @@ int patchSource(Session &S, const void *Input, size_t InputSize,
     auto Installed = installObjectPatch(
         Artifact, S.Img, Requested,
         Preparation ? Preparation->Bindings : Bindings, Output, PrepareReceipt,
-        DynCode ? &*DynCode : nullptr, Preparation ? &*Preparation : nullptr);
+        DynCode ? &*DynCode : nullptr, Preparation ? &*Preparation : nullptr,
+        NativeDependencies);
     if (!Installed)
       return Error(Installed.takeError());
     S.commitObfuscationCounts({});
@@ -381,18 +387,19 @@ int patchSource(Session &S, const void *Input, size_t InputSize,
   if (auto E = Prepare(*Bound, LayoutObject))
     return Error(std::move(E));
   const auto &EffectiveImage = Preparation ? Preparation->Image : S.Img;
-  const bool NativeImports =
-      EffectiveImage.isMachO() && Preparation && !Preparation->Imports.empty();
+  const bool NativeObject =
+      EffectiveImage.isArm64e() || (EffectiveImage.isMachO() && Preparation &&
+                                    !Preparation->Imports.empty());
   if (Preparation)
     if (auto E = bindSourcePatchDependencies(*Module, Preparation->Imports,
-                                             !NativeImports))
+                                             !NativeObject))
       return Error(std::move(E));
   auto References = bindSourcePatchReferences(
       *Module, EffectiveImage, *Bound,
-      Preparation ? Preparation->Bindings : Bindings, !NativeImports);
+      Preparation ? Preparation->Bindings : Bindings, !NativeObject);
   if (!References)
     return Error(References.takeError());
-  if (NativeImports)
+  if (NativeObject)
     Preparation->Bindings = *References;
   llvm::json::Array BindingReport;
   for (const auto &Binding : *References) {
@@ -411,14 +418,14 @@ int patchSource(Session &S, const void *Input, size_t InputSize,
   Report["language"] = Options->language;
   Report["source_name"] = Options->source_name ? Options->source_name : "";
 
-  if (!NativeImports)
+  if (!NativeObject)
     symbolizeImageAbsolutePointers(*Module, EffectiveImage);
   else
     Report["emission"] = "native-object-with-indirect-symbols";
   const auto ObfuscationCounts = S.runSessionObfuscation(*Module);
-  auto Installed =
-      installSourcePatch(*Module, S.Img, *Bound, Output, S.TextSectionOverride,
-                         PrepareReceipt, Preparation ? &*Preparation : nullptr);
+  auto Installed = installSourcePatch(
+      *Module, S.Img, *Bound, Output, S.TextSectionOverride, PrepareReceipt,
+      Preparation ? &*Preparation : nullptr, NativeDependencies);
   if (!Installed)
     return Error(Installed.takeError());
   S.commitObfuscationCounts(ObfuscationCounts);

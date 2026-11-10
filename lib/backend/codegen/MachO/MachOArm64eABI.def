@@ -1,0 +1,31 @@
+//===- MachOArm64eABI.def - Native source ABI contracts -------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Define MACHO_ARM64E_ABI_VALUE and/or MACHO_ARM64E_ABI_TEXT to expand this
+// table. Each expansion undefines both macros.
+
+#ifndef MACHO_ARM64E_ABI_VALUE
+#define MACHO_ARM64E_ABI_VALUE(Type, Name, Value)
+#endif
+#ifndef MACHO_ARM64E_ABI_TEXT
+#define MACHO_ARM64E_ABI_TEXT(Name, Text)
+#endif
+
+MACHO_ARM64E_ABI_TEXT(kTriple, "arm64e-apple-macosx")
+// Darwin links classic ABI0 objects into ABI1 macOS main executables.
+MACHO_ARM64E_ABI_VALUE(uint32_t, kClassicObjectSubtype, 0x80000002u)
+MACHO_ARM64E_ABI_VALUE(uint32_t, kMacOSMainSubtype, 0x81000002u)
+MACHO_ARM64E_ABI_TEXT(kUnsupported,
+                      "arm64e source ABI requires a classic macOS image or "
+                      "ABI1 macOS main executable")
+MACHO_ARM64E_ABI_TEXT(kEmissionFailed,
+                      "native replacement object emission failed")
+MACHO_ARM64E_ABI_TEXT(
+    kTextOverride, "native arm64e objects retain their compiler section names")
+MACHO_ARM64E_ABI_TEXT(
+    kDependencies, "deferred pointer providers require a native arm64e image")
+
+#undef MACHO_ARM64E_ABI_TEXT
+#undef MACHO_ARM64E_ABI_VALUE

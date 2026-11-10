@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](../zh-CN/source-patching.md) | [繁體中文](../zh-TW/source-patching.md) | [日本語](source-patching.md) | [한국어](../ko/source-patching.md) | [Français](../fr/source-patching.md) | [Deutsch](../de/source-patching.md) | [Español](../es/source-patching.md) | [Italiano](../it/source-patching.md) | [Русский](../ru/source-patching.md) | [العربية](../ar/source-patching.md)
 
-<!-- i18n-source: 40bc95b0497bcc23428886f1765116ce87275a1507ae139a70be4896271650a7 -->
+<!-- i18n-source: 360a0b82872370d45ddc1c55aa575e69255af24af028a4744f51c8cc2034de02 -->
 
 [← Documentation Index](README.md)
 
@@ -40,6 +40,8 @@ clang --target=x86_64-unknown-linux-gnu -fPIC -fno-lto -c replacement.c -o repla
 neverd patch app --from-object=replacement.o --entry=replacement \
   --func=0x401140 --patch-report -o app.object
 ```
+
+従来の ABI を使用する macOS arm64e イメージと ABI1 の macOS メイン実行ファイルでは、NeverD は標準 LLVM IR からネイティブ MC オブジェクトライターでオブジェクトを生成してからインストールします。互換性のあるフロントエンドを明示的に選び（検証では Clang 22 を使用）、Darwin の署名付きリターン CFI 修正を含む LLVM fork で NeverD をビルドしてください。既定のビルド済み版は r6 のままです。互換性のない従来 ABI の署名付きリターン CFI は拒否され、ネイティブ例外処理に失敗するイメージは公開されません。ネイティブオブジェクト成果物も Apple 本来の認証付き再配置とアンワインドの契約を維持します。プロバイダー宣言、署名、対応 ABI、検証コマンドは [arm64e の生成側と実行時の境界](../arm64e-native-validation.md#canonical-ir-through-native-mc-objects)を参照してください。このソース契約は任意のリフト済みイメージ全体の再構築を有効にしません。
 
 <!-- i18n-section: profiles -->
 ## 検証済みプロファイルと制限

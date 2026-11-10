@@ -526,13 +526,20 @@ llvm::Expected<uint64_t> declareMachOMetadata(std::vector<uint8_t> &Binary,
                  kMachOLayoutGrowthDeclareMachOTextMetadataSizeLimit)
     return fail("invalid metadata section request");
   auto B = Binary;
+  std::optional<TextMetadataStorage> Storage;
   if (!Relro) {
+    // A dylib cannot grow a PAGEZERO prefix. Reuse authenticated TEXT padding
+    // before requesting prefix growth for metadata, retaining command room.
+    Storage = findTextMetadataStorage(B, Size);
     auto Header = reserveMachOHeaderStorage(
         B, A,
-        (A == Arch::X64 || A == Arch::AArch64) ? kMetadataCommandReserve + Size
-                                               : kMetadataCommandReserve);
+        !Storage && (A == Arch::X64 || A == Arch::AArch64)
+            ? kMetadataCommandReserve + Size
+            : kMetadataCommandReserve);
     if (!Header)
       return Header.takeError();
+    if (*Header)
+      Storage = findTextMetadataStorage(B, Size);
   }
   std::vector<macho_patch_detail::MachOFileRange> Segments, Sections;
   if (!macho_patch_detail::collectMachOFileRanges(B, Segments, Sections))
@@ -635,15 +642,8 @@ llvm::Expected<uint64_t> declareMachOMetadata(std::vector<uint8_t> &Binary,
       llvm::any_of(llvm::ArrayRef<uint8_t>(B).slice(End, SS),
                    [](uint8_t V) { return V != 0; }))
     return fail(kMetadataCapacity);
-  // reserveMachOHeaderStorage authenticates this entire prefix as unowned.
-  const uint64_t Prefix = llvm::alignTo(End + kMetadataCommandReserve, 8);
-  const bool PrefixFits =
-      !Relro && Prefix <= First && Size <= First - Prefix &&
-      rangeInBounds(Prefix, Size, B.size()) &&
-      llvm::all_of(llvm::ArrayRef<uint8_t>(B).slice(Prefix, Size),
-                   [](uint8_t V) { return !V; });
-  uint64_t Off = PrefixFits
-                     ? Prefix
+  uint64_t Off = Storage
+                     ? Storage->FileOffset
                      : llvm::alignTo(std::max({Last, TextOff, End + SS}), 8);
   uint64_t VA = TextVA + Off - TextOff;
   if (Off < TextOff || !rangeInBounds(Off - TextOff, Size, TextSize) ||
@@ -871,9 +871,10 @@ llvm::Expected<bool> reserveMachOSourceUnwind(
   if (AdditionalEHBytes) {
     auto R = findMachOEHFrameRegion(Candidate);
     if (!R) {
-      auto Declared =
-          declareMachOTextMetadata(Candidate, A, "__eh_frame",
-                                   llvm::alignTo(AdditionalEHBytes + 4, 4096));
+      auto Declared = declareMachOTextMetadata(
+          Candidate, A, "__eh_frame",
+          llvm::alignTo(AdditionalEHBytes + sizeof(uint32_t),
+                        alignof(uint64_t)));
       if (!Declared)
         return Declared.takeError();
       R = findMachOEHFrameRegion(Candidate);
