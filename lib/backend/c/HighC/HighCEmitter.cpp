@@ -1920,7 +1920,8 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
       Headers.insert("stdarg.h");
 
   for (auto &Name : CallTargets) {
-    if (isOwnFunctionName(Name, Funcs))
+    if (DefinedFunctionsByIdentifier.count(Name) ||
+        isOwnFunctionName(Name, Funcs))
       continue;
     // A routine the user declares is declared as the user declares it
     // (writeForwardDecls), not by the header that declares the C library's.

@@ -4443,7 +4443,7 @@ define i32 @configure_crt(i32 %mode, ptr %callback) {
       // The native stubs also observe the enum values and invoke the callback.
       const std::string Prelude = R"c(
 #include <stdint.h>
-enum _crt_app_type { app_unknown, app_console, app_gui };
+enum _crt_app_type { _crt_unknown_app, _crt_console_app, _crt_gui_app };
 enum _crt_argv_mode { argv_none, argv_plain, argv_expanded };
 struct _exception { int type; };
 void _set_app_type(enum _crt_app_type);
@@ -4476,6 +4476,27 @@ int main(void) {
 )c";
       for (llvm::StringRef Level : {"-O0", "-O2"})
         compileAndRun(Prelude + Source + Harness, Level, {}, true);
+
+      // With headers enabled, a PDB may offer the same named definitions.
+      // Asking for them would duplicate both the tags and their enumerators.
+      Options.EmitIncludes = true;
+      bool AskedForTypes = false;
+      Options.RecordDefinitions =
+          [&](const std::vector<neverd::TypeRef> &Types) {
+            AskedForTypes = true;
+            for (const auto &Type : Types)
+              for (const char *Name : {"_crt_app_type", "_crt_argv_mode",
+                                       "_exception", "_crt_console_app"})
+                EXPECT_NE(Type->SourceName, Name);
+            return neverd::CRecordDefinitions{};
+          };
+      std::string WithHeaders;
+      llvm::raw_string_ostream HeaderOS(WithHeaders);
+      ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, HeaderOS, Options));
+      EXPECT_TRUE(AskedForTypes);
+      EXPECT_NE(WithHeaders.find("#include <corecrt_startup.h>"),
+                std::string::npos);
+      EXPECT_NE(WithHeaders.find("#include <math.h>"), std::string::npos);
     }
   }
 }

@@ -1432,7 +1432,15 @@ restore operations cannot make surviving integer assignments take pointer text.
 `WindowsCRTEnumsAndCallbacksAgreeWithHeaderDeclarations` checks the shared CRT
 table against independent enum and callback declarations, then executes both
 direct and import-table calls at O0/O2 with UBSan for all four architecture
-projections. Whole-unit Windows syntax checks additionally use the real headers.
+projections. With includes enabled it also checks that local debug types cannot
+redefine the runtime headers' tags. The corresponding
+`HighCSourceCalls.RuntimeHeaderOwnsItsEnumerationDefinitions` check, in
+`NeverDSourceEntryBindingTests`, retains local enum definitions for an actual
+program-defined callee. Whole-unit Windows syntax checks additionally use the
+real headers.
+`COFFExceptionIR.LLVMCCRTArgumentsKeepTheRuntimeType` keeps a mismatched debug
+enum out of a runtime argument and prevents displayed header enumerators from
+requesting duplicate local definitions.
 
 `*LookupFailures*` and `ProcessReport.AndroidLoaderFailures*` cover strict
 binary names and literal `exact_query` strings, whitespace preservation,

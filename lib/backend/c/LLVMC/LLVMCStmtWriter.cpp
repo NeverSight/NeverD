@@ -6775,6 +6775,8 @@ std::optional<std::string> LLVMCWriter::enumeratorDisplay(const TypeRef &Ty,
     return std::nullopt;
   if (canonicalizeCProjectionIdentifier(*Name, "") != *Name)
     return std::nullopt;
+  if (HeaderCallRecords.count(cNamedTypeSpelling(Ty->SourceName)))
+    HeaderCallRecords.insert(*Name);
   return Name;
 }
 
@@ -7006,24 +7008,35 @@ std::string LLVMCWriter::callArgStr(const llvm::Value *Arg,
   // A runtime declaration's plain int parameter is already the source
   // contract. Importing a debug enum here can define the CRT's own enum a
   // second time beside stdlib.h when optimization exposes its constant.
-  if (const LibraryCallee Runtime = libraryCallee(Call);
-      Runtime.Prototype && ArgIdx < Runtime.Prototype->ParamCount &&
+  const LibraryCallee Runtime = libraryCallee(Call);
+  if (Runtime.Prototype && ArgIdx < Runtime.Prototype->ParamCount &&
       Runtime.Prototype->Params[ArgIdx] == "int")
     return valueStr(Arg, PointerSpelling);
+  const auto DisplayEnum = [&](uint64_t Value) -> std::optional<std::string> {
+    const auto Function = debugCallee(Call);
+    if (!Function)
+      return std::nullopt;
+    const TypeRef Type = debugCallArgType(*Function, ArgIdx, Opts);
+    if (Runtime.Prototype && ArgIdx < Runtime.Prototype->ParamCount) {
+      llvm::StringRef Parameter = Runtime.Prototype->Params[ArgIdx];
+      // A debug enum cannot replace the runtime's different enum merely
+      // because both transport the same integer bits.
+      if (Parameter.consume_front("enum ") &&
+          (!Type || cNamedTypeSpelling(Type->SourceName) != Parameter))
+        return std::nullopt;
+    }
+    return enumeratorDisplay(Type, Value);
+  };
   if (const auto *CI =
           llvm::dyn_cast<llvm::ConstantInt>(peelIntegerView(Arg))) {
-    if (const auto FS = debugCallee(Call))
-      if (auto Name = enumeratorDisplay(debugCallArgType(*FS, ArgIdx, Opts),
-                                        CI->getZExtValue()))
-        return *Name;
+    if (auto Name = DisplayEnum(CI->getZExtValue()))
+      return *Name;
   }
   if (auto Imm = foldImmediate(Arg)) {
     uint64_t Val = 0;
     if (!llvm::StringRef(*Imm).getAsInteger(0, Val))
-      if (const auto FS = debugCallee(Call))
-        if (auto Name =
-                enumeratorDisplay(debugCallArgType(*FS, ArgIdx, Opts), Val))
-          return *Name;
+      if (auto Name = DisplayEnum(Val))
+        return *Name;
   }
   return valueStr(Arg, PointerSpelling);
 }

@@ -904,6 +904,13 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
       NoteWideInteger(Global.getValueType());
   Win64CallABI.clear();
   std::set<std::string> Headers;
+  std::set<const libc::LibCPrototype *> HeaderPrototypes;
+  const auto NotePrototype = [&](const libc::LibCPrototype *Prototype) {
+    if (Prototype && !Prototype->Header.empty()) {
+      Headers.insert(std::string(Prototype->Header));
+      HeaderPrototypes.insert(Prototype);
+    }
+  };
   // The routines the user declares that the unit calls: directly, and
   // through their imports.
   std::set<const llvm::Function *> UserFunctions;
@@ -935,6 +942,12 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
         NoteWideInteger(Arg.getType());
     if (!SelectedFunctions.contains(Fn))
       continue;
+    if (Fn.isDeclaration() && !Fn.isIntrinsic() &&
+        !Opts.PreserveLLVMFunctionTypes) {
+      const llvm::StringRef Name = cNameOfGlobal(Fn.getName(), true);
+      if (!userDeclaresRoutine(Name))
+        NotePrototype(libc::libcPrototype(Name, Opts.Format));
+    }
     // Windows exception handling prints as `__try` with the filter
     // dispositions and intrinsics <excpt.h> defines.
     if (Opts.Format == BinaryFormat::COFF && !Fn.isDeclaration() &&
@@ -988,13 +1001,12 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
         // A library routine called through its import takes the header that
         // declares it, as a direct call does, and one the runtime's tables
         // type the header its prototype's types need (`FILE`).
-        if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Inst);
-            Call && !Call->getCalledFunction()) {
+        if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Inst); Call) {
           if (const LibraryCallee Library = libraryCallee(*Call)) {
             if (!Library.Prototype)
               Headers.insert(libc::headerFor(Library.Name));
-            else if (!Library.Prototype->Header.empty())
-              Headers.insert(std::string(Library.Prototype->Header));
+            else
+              NotePrototype(Library.Prototype);
           } else if (std::string Name =
                          importCalleeCName(Call->getCalledOperand());
                      !Name.empty() && userDeclaresRoutine(Name))
@@ -1264,9 +1276,7 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     (void)Identifier;
     if (OnlyFunction && !SelectedGlobals.count(Global))
       continue;
-    if (const auto *Prototype = addressedImportPrototype(*Global);
-        Prototype && !Prototype->Header.empty())
-      Headers.insert(std::string(Prototype->Header));
+    NotePrototype(addressedImportPrototype(*Global));
   }
 
   if (HasCIntrinsics)
@@ -1283,6 +1293,8 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
       OS << "#include <" << H << ">\n";
     OS << "\n";
     IncludedHeaders.insert(Headers.begin(), Headers.end());
+    for (const auto *Prototype : HeaderPrototypes)
+      c_library::appendHeaderTags(*Prototype, HeaderCallRecords);
   }
   if (isMIPS(Opts.TheArch) && mips::modulePreservesDSPControl(
                                   Mod, Img ? Img : Opts.Image, Opts.TheArch))

@@ -7085,11 +7085,11 @@ double widen(float value) {
       << Unsupported.Error;
 }
 
-TEST(COFFExceptionIR, LLVMCCRTIntegerArgumentsKeepTheRuntimeDeclaration) {
+TEST(COFFExceptionIR, LLVMCCRTArgumentsKeepTheRuntimeType) {
   class EnumDebug final : public NullDebugContext {
   public:
     std::optional<FunctionSym> resolveFunction(va_t Address) const override {
-      if (Address < 0x402000 || Address > 0x402020)
+      if (Address < 0x402000 || Address > 0x402030)
         return std::nullopt;
       auto Type = NdType::makeNamedRecord("_crt_app_type", 4, true);
       Type->FieldDisplayNames = {"_crt_console_app"};
@@ -7098,6 +7098,7 @@ TEST(COFFExceptionIR, LLVMCCRTIntegerArgumentsKeepTheRuntimeDeclaration) {
       Function.Addr = Address;
       Function.Name = Address == 0x402000   ? "_set_app_type"
                       : Address == 0x402010 ? "_configure_narrow_argv"
+                      : Address == 0x402020 ? "_set_fmode"
                                             : "user_enum";
       Function.ReturnType = NdType::makeVoid();
       Function.Params.emplace_back("kind", Type);
@@ -7114,8 +7115,8 @@ TEST(COFFExceptionIR, LLVMCCRTIntegerArgumentsKeepTheRuntimeDeclaration) {
   Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Caller));
   va_t Address = 0x402000;
   // i386 COFF adds one decoration underscore to each C symbol.
-  for (const char *Name :
-       {"__set_app_type", "__configure_narrow_argv", "_user_enum"}) {
+  for (const char *Name : {"__set_app_type", "__configure_narrow_argv",
+                           "__set_fmode", "_user_enum"}) {
     auto Callee = Module.getOrInsertFunction(Name, Builder.getVoidTy(),
                                              Builder.getInt32Ty());
     rewrite_source::setOriginalVA(
@@ -7132,11 +7133,30 @@ TEST(COFFExceptionIR, LLVMCCRTIntegerArgumentsKeepTheRuntimeDeclaration) {
   std::string Source;
   llvm::raw_string_ostream Output(Source);
   ASSERT_TRUE(LLVMCEmitter().emit(Module, Output, Options, &Debug));
-  EXPECT_NE(Source.find("_set_app_type(1);"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("_set_app_type(_crt_console_app);"), std::string::npos)
+      << Source;
   EXPECT_NE(Source.find("_configure_narrow_argv(1);"), std::string::npos)
       << Source;
+  EXPECT_NE(Source.find("_set_fmode(1);"), std::string::npos) << Source;
   EXPECT_NE(Source.find("user_enum(_crt_console_app);"), std::string::npos)
       << Source;
+  Options.EmitIncludes = true;
+  bool Requested = false;
+  Options.RecordDefinitions = [&](const std::vector<TypeRef> &Types) {
+    Requested = true;
+    for (const auto &Type : Types) {
+      EXPECT_NE(Type->SourceName, "_crt_app_type");
+      EXPECT_NE(Type->SourceName, "_crt_console_app");
+    }
+    return CRecordDefinitions{};
+  };
+  std::string WithHeaders;
+  llvm::raw_string_ostream HeaderOutput(WithHeaders);
+  ASSERT_TRUE(LLVMCEmitter().emit(Module, HeaderOutput, Options, &Debug));
+  EXPECT_TRUE(Requested);
+  EXPECT_NE(WithHeaders.find("_set_app_type(_crt_console_app);"),
+            std::string::npos)
+      << WithHeaders;
 }
 
 TEST(COFFExceptionIR, SourceX86FilterCapturesAnIncomingArgumentThroughStorage) {

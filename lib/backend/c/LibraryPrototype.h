@@ -17,6 +17,36 @@
 #include <vector>
 
 namespace neverd::c_library {
+/// The explicit tags in a runtime prototype come from its named header,
+/// including tags nested inside callback parameters. Callers use this only
+/// when they include that header, so local debug types must not redefine them.
+inline void appendHeaderTags(const libc::LibCPrototype &Prototype,
+                             std::set<std::string> &Tags) {
+  if (Prototype.Header.empty())
+    return;
+  const auto Visit = [&](std::string_view Type) {
+    std::string_view Previous;
+    for (size_t I = 0; I < Type.size();) {
+      if (!llvm::isAlpha(Type[I]) && Type[I] != '_') {
+        ++I;
+        continue;
+      }
+      size_t End = I + 1;
+      while (End < Type.size() &&
+             (llvm::isAlnum(Type[End]) || Type[End] == '_'))
+        ++End;
+      const std::string_view Word = Type.substr(I, End - I);
+      if (Previous == "struct" || Previous == "union" || Previous == "enum")
+        Tags.emplace(Word);
+      Previous = Word;
+      I = End;
+    }
+  };
+  Visit(Prototype.Return);
+  for (unsigned I = 0; I < Prototype.ParamCount; ++I)
+    Visit(Prototype.Params[I]);
+}
+
 /// Whether \p Declaration, a C library's own declaration of the routine
 /// \p Name, names only what every unit that includes headers has: C's own
 /// types, <stdint.h>'s, and record and enumeration tags.  Such a unit then
