@@ -126,7 +126,8 @@ private:
           S.Core.Segments[unsigned(Segment)],
           {Segment,
            Write ? X86SegmentAccessKind::Write : X86SegmentAccessKind::Read,
-           uint32_t(A.Address), Size, O.Segments.FullLimitChoice});
+           uint32_t(A.Address), Size, O.Segments.FullLimitChoice,
+           bool(S.EFlags & 0x20000)});
       if (!Checked) {
         Failure = Checked.takeError();
         return {};

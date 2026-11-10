@@ -68,6 +68,12 @@ public:
         Result.CR0 = (Controls.CR0 & ~uint64_t{14}) | (B & 14);
       return;
     }
+    if ((S.EFlags & 0x20000) &&
+        (F.SystemSelector || F.DescriptorQuery ||
+         F.Operation == X86LegacyScalarOperation::AdjustPrivilege)) {
+      fault(6);
+      return;
+    }
     if (F.SystemSelector) {
       using System = X86LegacySystemSelector;
       const auto Operation = *F.SystemSelector;
@@ -305,16 +311,32 @@ public:
       S.EFlags = (S.EFlags & ~64u) | (Equal ? 64 : 0);
       return;
     }
-    if (F.Operation == Op::PushFlags) {
-      adjustStack(-N);
-      write(stack(), N, S.EFlags & ~uint32_t{0x30000});
-      return;
-    }
-    if (F.Operation == Op::PopFlags) {
+    if (F.Operation == Op::PushFlags || F.Operation == Op::PopFlags) {
+      const bool VirtualFlags =
+          (S.EFlags & 0x20000) && (S.EFlags & 0x3000) != 0x3000;
+      if (VirtualFlags && (N != 2 || !(M.controls().CR4 & 1))) {
+        fault(13);
+        return;
+      }
+      if (F.Operation == Op::PushFlags) {
+        A = S.EFlags & ~uint32_t{0x30000};
+        if (VirtualFlags)
+          A = (A & ~0x200u) | 0x3000 | ((S.EFlags >> 10) & 0x200);
+        adjustStack(-N);
+        write(stack(), N, A);
+        return;
+      }
       if (!read(stack(), N, A))
         return;
+      if (VirtualFlags &&
+          ((A & 0x100) || ((A & 0x200) && (S.EFlags & 0x100000)))) {
+        fault(13);
+        return;
+      }
       const auto Mask = x86PopFlagsMask(S.Core.CPL, S.EFlags, N);
       S.EFlags = (S.EFlags & ~Mask) | (A & Mask);
+      if (VirtualFlags)
+        S.EFlags = (S.EFlags & ~0x80000u) | ((A & 0x200) << 10);
       adjustStack(N);
       return;
     }
@@ -753,7 +775,8 @@ private:
         Cache,
         {Segment,
          Write ? X86SegmentAccessKind::Write : X86SegmentAccessKind::Read,
-         A.offset(S.Core.GPR), Bytes, O.Segments.FullLimitChoice});
+         A.offset(S.Core.GPR), Bytes, O.Segments.FullLimitChoice,
+         bool(S.EFlags & 0x20000)});
     if (!Checked) {
       Failure = Checked.takeError();
       return false;

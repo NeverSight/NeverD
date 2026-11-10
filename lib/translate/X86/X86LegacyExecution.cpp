@@ -79,20 +79,20 @@ decodeInstruction(llvm::ArrayRef<uint8_t> Instruction, bool Code32) {
       false};
   if (I.Mpx && I.Mpx->Size != Instruction.size())
     return invalid("MPX binding contains trailing bytes");
-  if (I.Body.front() == 0x66) {
-    I.Width = 6 - I.Width;
-    I.Body = I.Body.drop_front();
-  }
-  const bool Single = Instruction.size() == 1 &&
-                      (Instruction[0] == 0x90 || Instruction[0] == 0xfa ||
-                       Instruction[0] == 0xfb || Instruction[0] == 0xcc ||
-                       Instruction[0] == 0xce || Instruction[0] == 0xf1);
-  I.INT = Instruction.size() == 2 && Instruction[0] == 0xcd;
-  I.UD2 = Instruction.size() == 2 && Instruction[0] == 0x0f &&
-          Instruction[1] == 0x0b;
-  I.IRET = I.Body.size() == 1 && I.Body[0] == 0xcf;
-  I.RETF = (I.Body.size() == 1 && I.Body[0] == 0xcb) ||
-           (I.Body.size() == 3 && I.Body[0] == 0xca);
+  detail::X86LegacyEncoding Control(Instruction, Code32);
+  I.Body = Control.body();
+  I.Width = Control.OperandBytes;
+  const bool Unlocked = !Control.Group1Prefix;
+  const bool Single =
+      Unlocked && I.Body.size() == 1 &&
+      (I.Body[0] == 0x90 || I.Body[0] == 0xfa || I.Body[0] == 0xfb ||
+       I.Body[0] == 0xcc || I.Body[0] == 0xce || I.Body[0] == 0xf1);
+  I.INT = Unlocked && I.Body.size() == 2 && I.Body[0] == 0xcd;
+  I.UD2 =
+      Unlocked && I.Body.size() == 2 && I.Body[0] == 0x0f && I.Body[1] == 0x0b;
+  I.IRET = Unlocked && I.Body.size() == 1 && I.Body[0] == 0xcf;
+  I.RETF = Unlocked && ((I.Body.size() == 1 && I.Body[0] == 0xcb) ||
+                        (I.Body.size() == 3 && I.Body[0] == 0xca));
   if (Instruction.back() == 0xf4) {
     detail::X86LegacyEncoding HaltEncoding(Instruction, Code32);
     I.HLT = HaltEncoding.byte() == 0xf4 && HaltEncoding.done();
@@ -119,11 +119,13 @@ validateX86LegacyInstructionEncoding(llvm::ArrayRef<uint8_t> Instruction,
 llvm::Error detail::admitLegacyExecution(const X86LegacyExecutionState &S,
                                          X86PagedMemory &M,
                                          const X86LegacyExecutionOptions &O) {
+  if ((S.EFlags & 0x20000) && O.Virtual8086 != X86LegacyVM86Profile::IntelVME)
+    return invalid("VM86 execution requires a bound Intel VME profile");
   if (!O.EventDelivery.MaxAttempts)
     return invalid("event delivery requires a positive work budget");
   if (S.Halted &&
       (S.Core.CPL || S.STIBlocked || S.SSBlocked || S.PendingStack ||
-       S.PendingMpx || S.PendingTask || S.PendingEvent))
+       S.PendingMpx || S.PendingTask || S.PendingFar || S.PendingEvent))
     return invalid("legacy halt state requires completed CPL0 HLT state");
   if (bool(S.Debug) != bool(O.Debug) ||
       (S.PendingEvent && S.PendingEvent->DataBreakpoints &&
@@ -143,10 +145,10 @@ llvm::Error detail::admitLegacyExecution(const X86LegacyExecutionState &S,
     if (auto Error = validateX86LegacySegmentState(S.Core, Controls))
       return Error;
   }
-  if (!(S.EFlags & 2) || (S.EFlags & ~uint32_t{0x3d7fd7}) ||
+  if (!(S.EFlags & 2) || (S.EFlags & ~uint32_t{0x3f7fd7}) ||
       (Controls.CR4 & ((uint64_t{1} << 23) | (uint64_t{1} << 32))))
-    return invalid(
-        "legacy execution requires ordinary protected flags and no CET/FRED");
+    return invalid("legacy execution requires ordinary protected/VM86 flags "
+                   "and no CET/FRED");
   const auto &CS = S.Core.Segments[1];
   const unsigned DPL = (CS.Attributes >> 5) & 3;
   if (!S.PendingTask &&
@@ -165,7 +167,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
                             X86PagedMemory &Memory,
                             llvm::ArrayRef<uint8_t> Instruction,
                             const X86LegacyExecutionOptions &Options) {
-  if (detail::legacyTaskModeUnavailable(State)) {
+  if (detail::legacyTaskModeUnavailable(State) &&
+      Options.Virtual8086 != X86LegacyVM86Profile::IntelVME) {
     if (auto Error = detail::validateLegacyTaskState(State, Memory))
       return std::move(Error);
     X86LegacyExecutionResult R;
@@ -190,10 +193,13 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   if (auto Error =
           detail::validateLegacyMpxContinuation(State, Memory, Instruction))
     return std::move(Error);
+  if (auto Error = detail::validateLegacyFarContinuation(State, Memory,
+                                                         Instruction, Options))
+    return std::move(Error);
   const bool ResumingStack = State.PendingStack.has_value();
   const bool ResumingTask = detail::legacyTaskInstructionPending(State);
-  const bool Resuming =
-      ResumingStack || State.PendingMpx.has_value() || ResumingTask;
+  const bool Resuming = ResumingStack || State.PendingMpx.has_value() ||
+                        State.PendingFar.has_value() || ResumingTask;
   const bool Code32 = ResumingTask
                           ? bool(detail::legacyTaskInstructionKey(State) >> 32)
                           : bool(State.Core.Segments[1].Attributes & 0x4000);
@@ -343,7 +349,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
                                           : 0;
   if (SingleStep && (!State.Debug || !Options.Debug))
     return invalid("legacy TF stepping requires a debug-event producer");
-  const bool TaskReturn = IRET && (EntryFlags & 0x4000);
+  const bool TaskReturn =
+      IRET && !(EntryFlags & 0x20000) && (EntryFlags & 0x4000);
   if (TaskReturn && !Options.Tasks)
     return invalid("legacy nested-task IRET requires task-switch state");
   if (((IRET && !TaskReturn) || RETF) &&
@@ -377,6 +384,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     Observation.Matches = State.PendingStack->DataBreakpoints;
   if (State.PendingMpx)
     Observation.Matches = State.PendingMpx->DataBreakpoints;
+  if (State.PendingFar)
+    Observation.Matches = State.PendingFar->DataBreakpoints;
   if (ResumingTask)
     Observation.Matches = detail::legacyTaskWatchpoints(State);
   const auto Accept = [&](const X86MemoryAccessResult &Got) {
@@ -612,6 +621,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   } else if (!R.Exception && Far) {
     auto Got = detail::executeLegacyFarTransfer(State, Memory, *Far, NextIP,
                                                 Instruction, Options);
+    if (State.PendingFar)
+      State.PendingFar->DataBreakpoints = Observation.Matches;
     if (!Got)
       return Got.takeError();
     if (Got->Committed || detail::legacyTaskInstructionPending(State))
@@ -701,7 +712,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       if (State.Core.CPL <= ((Flags >> 12) & 3)) {
         STI = Set && !(Flags & 0x200);
         Flags = Set ? Flags | 0x200 : Flags & ~0x200u;
-      } else if (State.Core.CPL == 3 && (Memory.controls().CR4 & 2) &&
+      } else if (State.Core.CPL == 3 &&
+                 (Memory.controls().CR4 & (Flags & 0x20000 ? 1 : 2)) &&
                  (!Set || !(Flags & 0x100000))) {
         Flags = Set ? Flags | 0x80000 : Flags & ~0x80000u;
       } else {
@@ -712,7 +724,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       if (Opcode == 0xf1 && State.SSBlocked && !State.Debug)
         return invalid(
             "ICEBP under MOV-SS inhibition requires deferred debug state");
-      const uint8_t Vector = INT              ? Instruction[1]
+      const uint8_t Vector = INT              ? Body[1]
                              : Opcode == 0xcc ? 3
                              : Opcode == 0xce ? 4
                                               : 1;
@@ -727,7 +739,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
                         : 0;
         return EnterDebug(false, true, Data, true);
       }
-      return Enter({NextIP, 0, 0, Vector, X86LegacyEventKind::Software}, true);
+      return Enter({NextIP, 0, 0, Vector, X86LegacyEventKind::Software, INT},
+                   true);
     } else if (UD2) {
       R.Exception = X86MemoryException{6, 0, {}};
     }

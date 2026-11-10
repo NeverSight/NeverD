@@ -13,9 +13,11 @@
 
 #include "llvm/Support/Errc.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <tuple>
 #include <utility>
 
 namespace neverd::translate {
@@ -54,9 +56,21 @@ public:
   run(const detail::X86LegacyFarTransfer &F, uint32_t NextIP,
       llvm::ArrayRef<uint8_t> Bytes) {
     Original = Bytes;
+    if ((S.EFlags & 0x20000) && !S.PendingFar) {
+      S.PendingFar.emplace();
+      auto &P = *S.PendingFar;
+      P.Entry = S.Core;
+      P.Controls = M.controls();
+      P.EIP = S.EIP;
+      P.EFlags = S.EFlags;
+      P.Instruction.assign(Bytes.begin(), Bytes.end());
+      P.AlignmentPriority = O.Segments.AlignmentPriority;
+    }
     execute(F, NextIP);
     if (Failure)
       return std::move(*Failure);
+    if (!R.BackingFault)
+      S.PendingFar.reset();
     return std::move(R);
   }
 
@@ -67,6 +81,7 @@ private:
   detail::X86LegacyTaskResult R;
   std::optional<llvm::Error> Failure;
   llvm::ArrayRef<uint8_t> Original;
+  size_t NextAccess = 0;
 
   bool accept(llvm::Expected<X86MemoryAccessResult> Got) {
     if (!Got) {
@@ -86,6 +101,19 @@ private:
 
   bool access(uint32_t Address, unsigned Bytes, Value &V, bool Write = false,
               bool Implicit = true, uint8_t CPL = 0, bool Stack = false) {
+    if (S.PendingFar && NextAccess < S.PendingFar->CompletedAccesses.size()) {
+      const auto &Done = S.PendingFar->CompletedAccesses[NextAccess++];
+      if (Done.Address != Address || Done.Bytes != Bytes ||
+          Done.Write != Write || (Write && Done.Value != V)) {
+        Failure = llvm::createStringError(
+            llvm::errc::invalid_argument,
+            "far-transfer journal disagrees with access");
+        return false;
+      }
+      if (!Write)
+        V = Done.Value;
+      return true;
+    }
     const bool Misaligned = !Implicit && CPL == 3 &&
                             (M.controls().CR0 & 0x40000) &&
                             (S.EFlags & 0x40000) && (Address & (Bytes - 1));
@@ -117,6 +145,11 @@ private:
       for (unsigned I = 0; I != Bytes; ++I)
         V |= Value(Buffer[I]) << (I * 8);
     }
+    if (S.PendingFar) {
+      S.PendingFar->CompletedAccesses.push_back(
+          {Address, V, uint8_t(Bytes), Write});
+      ++NextAccess;
+    }
     return true;
   }
 
@@ -125,7 +158,7 @@ private:
     auto Range = checkX86LegacySegmentAccess(
         S.Core.Segments[unsigned(Segment)],
         {Segment, X86SegmentAccessKind::Read, Offset, Bytes,
-         O.Segments.FullLimitChoice});
+         O.Segments.FullLimitChoice, bool(S.EFlags & 0x20000)});
     if (!Range) {
       Failure = Range.takeError();
       return false;
@@ -163,6 +196,37 @@ private:
             Selector, uint16_t(Rules::attributes(*this, D)), false};
   }
 
+  void virtualTransfer(bool Call, unsigned Width, Value IP, uint16_t Selector,
+                       uint32_t NextIP) {
+    const auto &SS = S.Core.Segments[2];
+    uint32_t SP = S.Core.GPR[4];
+    if (Call)
+      for (Value V : {Value(S.Core.Segments[1].Selector), Value(NextIP)}) {
+        SP = (SP & 0xffff0000) | uint16_t(SP - Width);
+        auto Range =
+            checkX86LegacySegmentAccess(SS, {X86SegmentRegister::SS,
+                                             X86SegmentAccessKind::Write,
+                                             uint16_t(SP),
+                                             Width,
+                                             {},
+                                             true});
+        if (!Range) {
+          Failure = Range.takeError();
+          return;
+        }
+        if (faultIf(bool(Range->FaultVector), 12, 0))
+          return;
+        if (!access(SS.Base + uint16_t(SP), Width, V, true, false, 3, true))
+          return;
+      }
+    // The Intel VM86 profile checks the target after both CALL stores.
+    if (faultIf(IP > UINT16_MAX, 13, 0))
+      return;
+    S.Core.GPR[4] = SP;
+    S.Core.Segments[1] = x86VM86SegmentCache(Selector);
+    S.EIP = IP;
+  }
+
   void execute(const detail::X86LegacyFarTransfer &F, uint32_t NextIP) {
     if (faultIf(F.Locked, 6, 0))
       return;
@@ -175,6 +239,10 @@ private:
           !operand(F.Address.MemorySegment, (Offset + F.Bytes) & Mask, 2,
                    Selector))
         return;
+    }
+    if (S.EFlags & 0x20000) {
+      virtualTransfer(F.Call, F.Bytes, IP, Selector, NextIP);
+      return;
     }
     Value Code = 0;
     uint32_t CodeAddress = 0;
@@ -288,7 +356,7 @@ private:
       auto Range = checkX86LegacySegmentAccess(
           SS, {X86SegmentRegister::SS, X86SegmentAccessKind::Write,
                (SP - Count * Width) & Mask, Count * Width,
-               O.Segments.FullLimitChoice});
+               O.Segments.FullLimitChoice, bool(S.EFlags & 0x20000)});
       if (!Range) {
         Failure = Range.takeError();
         return;
@@ -354,6 +422,37 @@ detail::decodeLegacyFarTransfer(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
     return std::nullopt;
   }
   return E.done() ? std::optional(F) : std::nullopt;
+}
+
+llvm::Error detail::validateLegacyFarContinuation(
+    const X86LegacyExecutionState &S, const X86PagedMemory &M,
+    llvm::ArrayRef<uint8_t> Bytes, const X86LegacyExecutionOptions &O) {
+  if (!S.PendingFar)
+    return llvm::Error::success();
+  const auto &P = *S.PendingFar;
+  const auto &C = S.Core;
+  const auto SameCache = [](const X86LegacySegmentCache &A,
+                            const X86LegacySegmentCache &B) {
+    return std::tie(A.Base, A.Limit, A.Selector, A.Attributes, A.Unusable) ==
+           std::tie(B.Base, B.Limit, B.Selector, B.Attributes, B.Unusable);
+  };
+  const auto Controls = [](const X86PagingState &A) {
+    return std::tie(A.CR0, A.CR3, A.CR4, A.EFER, A.RFlags, A.PKRU, A.PKRS,
+                    A.PDPTE);
+  };
+  if (S.PendingEvent || S.PendingStack || S.PendingMpx || S.PendingTask ||
+      P.EIP != S.EIP || P.EFlags != S.EFlags || C.GPR != P.Entry.GPR ||
+      C.CPL != P.Entry.CPL || C.GDTRBase != P.Entry.GDTRBase ||
+      C.GDTRLimit != P.Entry.GDTRLimit || !SameCache(C.LDTR, P.Entry.LDTR) ||
+      !std::equal(C.Segments.begin(), C.Segments.end(),
+                  P.Entry.Segments.begin(), SameCache) ||
+      Controls(M.controls()) != Controls(P.Controls) ||
+      O.Segments.AlignmentPriority != P.AlignmentPriority ||
+      Bytes != llvm::ArrayRef(P.Instruction) || (P.DataBreakpoints & ~15u))
+    return llvm::createStringError(
+        llvm::errc::invalid_argument,
+        "resume the retained VM86 far transfer and state");
+  return llvm::Error::success();
 }
 
 llvm::Expected<detail::X86LegacyTaskResult> detail::executeLegacyFarTransfer(

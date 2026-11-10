@@ -48,6 +48,8 @@ struct X86LegacyEvent {
   uint32_t FaultAddress = 0;
   uint8_t Vector = 0;
   X86LegacyEventKind Kind = X86LegacyEventKind::Fault;
+  /// Only INT imm8 uses the VM86 IOPL check and VME redirection map.
+  bool SoftwareINT = false;
 };
 
 /// Pending event retained across backing or work-budget stops. Repair backing
@@ -112,6 +114,25 @@ struct X86LegacyMpxContinuation {
   uint8_t DataBreakpoints = 0;
 };
 
+/// VM86 far-transfer RAM progress, including an operand aliased by its frame.
+/// Repair only unavailable backing, retaining the CPU, bindings and original
+/// bytes. Completed accesses are replayed from this journal, never repeated.
+struct X86LegacyFarContinuation {
+  struct Access {
+    uint32_t Address;
+    uint64_t Value;
+    uint8_t Bytes;
+    bool Write;
+  };
+  X86LegacySegmentState Entry;
+  X86PagingState Controls;
+  uint32_t EIP = 0, EFlags = 0;
+  llvm::SmallVector<uint8_t> Instruction;
+  llvm::SmallVector<Access> CompletedAccesses;
+  std::optional<X86AlignmentPriority> AlignmentPriority;
+  uint8_t DataBreakpoints = 0;
+};
+
 /// Debug bank shared with the paged x64 owner, with 32-bit address wrap.
 using X86LegacyDebugState = X86InstructionDebugState<uint32_t>;
 
@@ -143,17 +164,19 @@ struct X86LegacyExecutionState {
   /// stop or a fault after loading the incoming task. Preserve this with the
   /// CPU and RAM; only that owner may resume or retire it.
   std::shared_ptr<const detail::X86LegacyTaskContinuation> PendingTask;
+  std::optional<X86LegacyFarContinuation> PendingFar;
 };
 
 /// One CPU, ordinary RAM, 16/32-bit gates, qword accessed writes, offset-first
 /// TSS reads and ordered frame pushes. A 16-bit target stack preserves old
 /// ESP high bits. Consecutive MOV/POP SS does not extend an incoming shadow.
-/// Target IP-limit validation follows the frame stores. Recursive #DF retains
+/// Protected target IP checks follow frame stores; VM86 exit checks first.
+/// Recursive #DF retains
 /// the failed fault's saved RF image; its saved PC/caches use the original
 /// state. These #DF choices bind otherwise architecturally undefined program
 /// state. The producer owns event selection, APIC/debug state and machine-check
-/// recovery. Task gates use the additional Tasks binding; VM86 and CET need
-/// separate execution-mode owners.
+/// recovery. Task gates use the additional Tasks binding; VM86 uses
+/// Virtual8086. CET needs its separate execution-mode owner.
 enum class X86LegacyEventProfile : uint8_t { OrderedFrame };
 
 /// IRET reads FLAGS/CS/IP, RETF reads CS/IP; descriptor accessed writes precede
@@ -161,6 +184,13 @@ enum class X86LegacyEventProfile : uint8_t { OrderedFrame };
 /// their selector word, independently of the frame slot width. Ordinary RAM,
 /// one CPU.
 enum class X86LegacyReturnProfile : uint8_t { OrderedFrame };
+
+/// Intel VM86 execution with VME word IRET and low-word IRETD entry IP.
+/// Ordinary RAM; interrupt redirection reads the TSS/IVT as supervisor and
+/// pushes words on the user stack, with independent slot wrap/faults. CALL
+/// checks its target after both pushes. VIF/VIP conflicts use either VME or
+/// PVI, independently of IOPL. These CPU choices need explicit target binding.
+enum class X86LegacyVM86Profile : uint8_t { IntelVME };
 
 /// Confined ordinary RAM. POP memory uses incremented ESP, with SS.B-sized
 /// stack advancement preserving high ESP on a word wrap. PUSHA/ENTER stores
@@ -367,6 +397,7 @@ struct X86LegacyExecutionOptions {
   std::optional<X86LegacyMachineStatusProfile> MachineStatus;
   std::optional<X86LegacyControlRegisterBinding> ControlRegisters;
   std::optional<X86LegacyMpxProfile> MpxMemory;
+  std::optional<X86LegacyVM86Profile> Virtual8086;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {

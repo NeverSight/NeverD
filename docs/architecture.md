@@ -166,8 +166,15 @@ for backing stops and incoming-task faults. Ordinary instruction admission stays
 strict; only this owner can admit its partially loaded CS/SS fault context.
 Source selection uses the retained original instruction key during a suspended
 task switch, so it neither fetches overwritten bytes nor charges another attempt.
-VM86 destinations stop at an explicit `ModeUnavailable` boundary; their execution
-and event routing still require a complete mode owner.
+The optional `IntelVME` binding extends those same owners to VM86. EFLAGS.VM,
+not the cache attribute pattern, selects paragraph-based caches and CPL3
+permissions. The segment authority validates and constructs all six caches;
+IRETD and task entry reuse it, and the event owner saves the four extra data
+selectors on exit. VME software INT records its bitmap, IVT and completed stack
+accesses in the existing event journal. Only an unbound VM86 task destination
+stops at `ModeUnavailable`; adding the binding resumes that original task without
+another attempt. This does not add a second source instruction interpreter or
+an IA-32e/real-mode bridge.
 `translate/X86/X86LegacyFrameReturn` adds protected 16/32-bit IRET/RETF to that
 executor, retaining ordered descriptor writes and IRET NMI unblocking on later
 faults. `ir/X86/X86ReturnRules` shares code-return privilege checks, inaccessible

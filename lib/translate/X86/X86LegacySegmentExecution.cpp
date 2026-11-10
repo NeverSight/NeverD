@@ -183,7 +183,8 @@ private:
         cache(Segment),
         {Segment,
          Write ? X86SegmentAccessKind::Write : X86SegmentAccessKind::Read,
-         Offset, Bytes, O.FullLimitChoice});
+         Offset, Bytes, O.FullLimitChoice,
+         bool(M.controls().RFlags & 0x20000)});
     if (!Address) {
       Failure = Address.takeError();
       return false;
@@ -202,6 +203,10 @@ private:
 
   bool loadSegment(X86SegmentRegister Segment, uint16_t Selector,
                    X86LegacySegmentCache &Next) {
+    if (M.controls().RFlags & 0x20000) {
+      Next = x86VM86SegmentCache(Selector);
+      return true;
+    }
     const bool Stack = Segment == X86SegmentRegister::SS;
     if (!(Selector & 0xfffc)) {
       if (Stack) {
@@ -248,13 +253,14 @@ private:
 
 llvm::Error validateX86LegacySegmentState(const X86LegacySegmentState &State,
                                           const X86PagingState &Controls) {
-  if (!(Controls.CR0 & 1) || (Controls.EFER & 0x400) ||
-      (Controls.RFlags & 0x20000) || State.CPL > 3)
+  if (!(Controls.CR0 & 1) || (Controls.EFER & 0x400) || State.CPL > 3 ||
+      ((Controls.RFlags & 0x20000) && State.CPL != 3))
     return invalid(
         "legacy segment execution requires bound protected-mode state");
   for (unsigned I = 0; I != State.Segments.size(); ++I)
     if (auto Error = validateX86LegacySegmentCache(
-            static_cast<X86SegmentRegister>(I), State.Segments[I]))
+            static_cast<X86SegmentRegister>(I), State.Segments[I],
+            bool(Controls.RFlags & 0x20000)))
       return std::move(Error);
   // Protected LLDT retains the descriptor's flag nibble, including the
   // otherwise unused L bit. It does not make the LDT a long code segment.
@@ -262,7 +268,7 @@ llvm::Error validateX86LegacySegmentState(const X86LegacySegmentState &State,
                                (State.LDTR.Attributes & 0x0f00)))
     return invalid("legacy segment execution requires a loaded LDT cache");
   const auto &CS = State.Segments[unsigned(X86SegmentRegister::CS)];
-  if ((CS.Selector & 3) != State.CPL)
+  if (!(Controls.RFlags & 0x20000) && (CS.Selector & 3) != State.CPL)
     return invalid("legacy segment execution CPL disagrees with CS");
   return llvm::Error::success();
 }

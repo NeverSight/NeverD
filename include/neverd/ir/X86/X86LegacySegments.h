@@ -45,6 +45,8 @@ struct X86LegacySegmentAccess {
   uint32_t Offset;
   uint32_t Bytes;
   std::optional<X86FullSegmentLimitChoice> FullLimitChoice;
+  /// The live EFLAGS.VM mode, never inferred from cached attributes.
+  bool Virtual8086 = false;
 };
 
 struct X86LegacySegmentResult {
@@ -57,9 +59,15 @@ struct X86LegacySegmentResult {
 /// present checks, accessed writes and cache invalidation belong to the
 /// instruction that installs the cache, not to each subsequent operand.
 llvm::Error validateX86LegacySegmentCache(X86SegmentRegister Segment,
-                                          const X86LegacySegmentCache &Cache);
+                                          const X86LegacySegmentCache &Cache,
+                                          bool Virtual8086 = false);
 
-/// Protected 16/32-bit operands only. Long mode, real mode and VM86 are not
+/// Canonical VM86 hidden state shared by task, IRET and selector loads.
+inline X86LegacySegmentCache x86VM86SegmentCache(uint16_t Selector) {
+  return {uint32_t(Selector) << 4, UINT16_MAX, Selector, 0xf3, false};
+}
+
+/// Protected or explicitly selected VM86 operands. Long/real mode is not
 /// inferred from cache bits. Checks the whole offset extent before base
 /// addition; successful linear addition wraps modulo 2^32. The memory owner
 /// must preserve that wrap across all operand bytes as well.

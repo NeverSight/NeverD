@@ -55,7 +55,7 @@ executeLegacyPortIO(X86LegacyExecutionState &S, X86PagedMemory &M,
   }
   const uint16_t Port =
       F.ImmediatePort ? uint16_t(*F.ImmediatePort) : uint16_t(S.Core.GPR[2]);
-  if (S.Core.CPL > ((S.EFlags >> 12) & 3)) {
+  if ((S.EFlags & 0x20000) || S.Core.CPL > ((S.EFlags >> 12) & 3)) {
     const unsigned Type = S.TR.Attributes & 0x9f;
     if (S.TR.Unusable || (Type != 0x83 && Type != 0x8b))
       return llvm::createStringError(
@@ -87,7 +87,8 @@ executeLegacyPortIO(X86LegacyExecutionState &S, X86PagedMemory &M,
         S.Core.Segments[unsigned(F.Segment)],
         {F.Segment,
          F.Input ? X86SegmentAccessKind::Write : X86SegmentAccessKind::Read,
-         Offset, F.Bytes, O.Segments.FullLimitChoice});
+         Offset, F.Bytes, O.Segments.FullLimitChoice,
+         bool(S.EFlags & 0x20000)});
     if (!Checked)
       return Checked.takeError();
     Operand = X86PortMemoryOperand{

@@ -374,24 +374,30 @@ TEST_F(X86LegacyTaskTest, TaskErrorStackBackingPauseWritesAndAdvancesOnce) {
   EXPECT_FALSE(S.PendingEvent);
 }
 
-TEST_F(X86LegacyTaskTest, VM86DestinationStopsAtExplicitModeBoundary) {
+TEST_F(X86LegacyTaskTest, VM86DestinationInstallsCachesAndDispatches) {
   put(0x8024, 0x20202, GuestScalarWidth::I32);
   const auto R = run(Call);
-  ASSERT_EQ(R.Status, X86LegacyExecutionStatus::ModeUnavailable);
+  ASSERT_EQ(R.Status, X86LegacyExecutionStatus::Completed);
   EXPECT_TRUE(R.InstructionAttempted);
-  EXPECT_FALSE(R.InstructionCompleted);
+  EXPECT_TRUE(R.InstructionCompleted);
   EXPECT_FALSE(R.Exception);
   EXPECT_EQ(S.TR.Selector, 48);
   EXPECT_EQ(S.EFlags, 0x24202u);
-  ASSERT_TRUE(S.PendingTask);
+  EXPECT_FALSE(S.PendingTask);
+  for (const auto &C : S.Core.Segments) {
+    EXPECT_EQ(C.Base, uint32_t(C.Selector) * 16);
+    EXPECT_EQ(C.Limit, 65535u);
+    EXPECT_EQ(C.Attributes, 0xf3);
+    EXPECT_FALSE(C.Unusable);
+  }
   X86LegacySourceExecution Source(S, *M, O);
   uint64_t Key = 0;
-  EXPECT_EQ(Source.select(Key),
-            uint32_t(X86LegacyExecutionStatus::ModeUnavailable));
-  const auto Again =
-      llvm::cantFail(executeX86LegacyInstruction(S, *M, Call, O));
-  EXPECT_EQ(Again.Status, X86LegacyExecutionStatus::ModeUnavailable);
-  EXPECT_FALSE(Again.InstructionAttempted);
+  EXPECT_EQ(Source.select(Key), uint32_t(X86LegacyExecutionStatus::Completed));
+  EXPECT_EQ(Key, 0x31b0u);
+  put(0x31b0, 0x90, GuestScalarWidth::I8);
+  EXPECT_EQ(Source.step(Key, {0x90}),
+            uint32_t(X86LegacyExecutionStatus::Completed));
+  EXPECT_EQ(S.EIP, 0x3001u);
 }
 
 TEST_F(X86LegacyTaskTest, MissingFullLimitBindingRefusesBeforeTaskEffects) {

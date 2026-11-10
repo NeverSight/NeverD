@@ -219,8 +219,23 @@ spaces and retained backing progress. `KVMTaskSoftwareReference/*` compares
 and PAE paging. This is software-reference evidence, not physical task-switch
 qualification. `Compilers/X86LegacySourceTest.Task*` runs the same owner through
 generated host-x64 Clang/NeverC C at O0/O2, checking code-mode redispatch,
-uncharged continuation attempts and incoming-task exception frames. VM86 mode
-stops remain explicit; these tests do not qualify a complete mode machine.
+uncharged continuation attempts and incoming-task exception frames. An unbound
+VM86 destination retains an explicit mode stop; adding the `IntelVME` binding
+resumes the same task. These tests do not qualify a complete mode machine.
+
+`X86LegacyVM86Test.*` checks IRETD/task entry, paragraph caches, word defaults,
+CS writes, protected event frames, far returns, VME flags/redirection, TSS I/O
+permissions and retained access progress. `VM86Native/*` executes original
+IRETD/VM86/protected-handler sequences with KVM guest debugging disabled,
+comparing GPRs, flags, cache fields, CR2 and RAM (only page-table A/D excluded).
+The matrix includes supervisor IVT reads, stack/IVT aliasing, the TSS bitmap's
+final offset, low-IOPL word IRET, and Intel high-EIP truncation on VM86 entry.
+Run it on both qualified P/E cores and both SDKs. VME misaligned-stack execution
+can stop at KVM's internal emulator boundary and is not a passing physical
+reference; explicit software tests own its declared fault-order contract.
+`Compilers/X86LegacySourceTest.VM86*` compiles host-x64 drivers with Clang/NeverC
+at O0/O2, including event/task/backing resume and exact attempt budgets. These
+are VM86 guest-state tests, not NeverC 32-bit source-target support.
 
 `X86LegacyExecutionTest`, `LegacyEvents/*` and `LegacySteps/*` in
 `NeverDX86PagingTests` cover original-byte protected legacy execution and

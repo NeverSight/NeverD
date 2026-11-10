@@ -28,6 +28,7 @@ protected:
   void taskState(bool Wide = true, bool OldWide = true) {
     resetLegacyState();
     O.Tasks = X86LegacyTaskBinding{};
+    O.Virtual8086 = X86LegacyVM86Profile::IntelVME;
     O.Tasks->WordGPRHigh = std::array<uint16_t, 8>{};
     O.Debug = X86LegacyDebugProfile::BranchWatchpoints;
     O.FarTransfers = X86LegacyFarTransferProfile::OrderedFrame;
