@@ -998,10 +998,17 @@ of fresh allocation. Distinct captures can alias. The canonical typed-memory
 owner checks their complete numeric footprints, including modular offsets,
 before preserving a frame or another object field. A partial write invalidates
 the overlapping field. Captures are rebound at caller boundaries and widened
-to bounds across CFG back edges, so successive calls or loop iterations cannot
-reuse an old object's equality identity. The existing reverse-postorder index
-identifies these edges; an acyclic jump to a smaller instruction slot retains
-its capture. Coordinate configuration is shared
+to bounds at CFG backedges. A locally defined capture with full-word fields keeps
+its identity across an inner loop that cannot repeat its definition. The
+existing reverse-postorder index establishes this boundary: any cycle repeating
+the definition crosses an edge to its rank or earlier. Other local captures
+still widen, and may-alias writes still invalidate their fields. Narrow-only
+buffers keep the existing widening: their byte facts are projected out at
+summary entries and must not introduce extra object-input variants there.
+All memory lanes consult one index of pre-widening full-word objects. This
+temporary index and the definition index use the existing retained-state budget.
+An acyclic jump to a smaller instruction slot also retains its capture.
+Coordinate configuration is shared
 across the analysis and charged at its owner.
 
 A forward join keeps captured identities while its complete disjunction fits
@@ -1239,10 +1246,12 @@ captured object's fields when its capture was introduced on only one incoming
 path. The pointer and its fields
 remain conditional on that path. A capture already introduced on both paths
 still loses a field if either path forgets it. Possible-alias writes
-continue to invalidate every overlapping capture. Backedges widen identities
-created by the current invocation; incoming captures name fixed values for that
-invocation and keep fields that survived ordinary write invalidation. The caller
-still widens its own captures when its loop invokes the callee again. This is
+continue to invalidate every overlapping capture. Backedges widen local
+identities when they can repeat their definition; an earlier definition with
+full-word fields keeps its identity through an inner loop. Incoming captures name
+fixed values for that invocation and keep fields that survived ordinary write
+invalidation. The caller still widens its own captures when its loop invokes
+the callee again. This is
 not an allocation freshness or non-aliasing proof.
 The local definition history is charged to retained state and is reset at a
 summary entry; incoming captures keep the ordinary must-fact join there.
