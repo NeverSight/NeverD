@@ -6938,7 +6938,9 @@ not fit it, and loses only the record an index misplaces. An index whose page
 count exceeds its record's length is discarded; complete records in the original
 file still reproduce their exact source without asking the engine.
 `WorkbenchTests::pseudocodeViewReadsWhatAnEarlierSessionRendered` checks that
-through a real view.
+through a real view. `QueryServiceTests::sourcePageKeptAcrossAReadContextIsNamed`
+checks that a replica's dispatcher names the page it kept after its owner's change
+starts its read context anew, and names none of another project's.
 `NeverDWorkerListingFacts` runs that job over a real PE: the owner of the same
 session takes up what the replica keeps of a function's first look, a later session
 lists what asking the engine lists, a new name of a function or of data keeps the
