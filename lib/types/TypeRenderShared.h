@@ -56,8 +56,11 @@ public:
   /// \p CppToo, for C: names C++ reads too, which step around C++'s
   /// keywords as well, as the C a C/C++ view shows must; the C a decompiled
   /// unit embeds keeps the names C allows, as its code spells them.
+  /// Type declarations can omit enumerators: type names are assigned first
+  /// and never depend on enumerator spellings. Definition writers keep them.
   NameSpelling(const TypeLibrary &Library, Language Lang, bool CppToo = false,
-               llvm::StringSet<> *TakenNames = nullptr);
+               llvm::StringSet<> *TakenNames = nullptr,
+               bool IncludeEnumerators = true);
 
   Language language() const { return Lang; }
   /// The spelling of the type named \p Name.
@@ -66,6 +69,9 @@ public:
   std::string enumerator(const EnumDef &Enum, size_t Index) const;
   /// The spelling of a member, a parameter or an accessor named \p Name.
   std::string member(llvm::StringRef Name) const;
+  /// Member names do not depend on the library's type or enumerator names.
+  /// \p Reserved selects the language whose keywords must be escaped.
+  static std::string member(llvm::StringRef Name, Language Reserved);
   /// The names spelled otherwise than they are, with their spellings, in
   /// the library's order.
   const std::vector<std::pair<std::string, std::string>> &renamed() const {
@@ -73,7 +79,8 @@ public:
   }
 
 private:
-  std::string identifier(llvm::StringRef Name, bool TypeName) const;
+  static std::string identifier(llvm::StringRef Name, bool TypeName,
+                                Language Lang, Language Reserved);
   void enumeration(const EnumDef &Enum, llvm::StringRef Owner,
                    llvm::StringSet<> &Taken);
   void inlineEnums(const RecordDef &Record, llvm::StringRef Owner,
