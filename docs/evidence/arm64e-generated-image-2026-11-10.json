@@ -375,5 +375,87 @@
         "digest": "sha256:e7b02aa8c395534e781716b660a336d36a48884daaacc27234dd8cccba86ec24"
       }
     ]
+  },
+  "local_source_arm64e": {
+    "implementation_revision": "0d3511620291254bffcaa90a356870016f2741f4",
+    "llvm_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+    "total": 753,
+    "passed": 716,
+    "failed": 0,
+    "skipped": 37,
+    "xml_sha256": "1ff3a1532d494d30356e543a1546ceb433d39e9c93f8d2c059508005739cd973",
+    "mc_callback_tests_skipped": false,
+    "skip_scope": "32 opt-in native publication cases; unavailable local ordered-memory/PAC/PAuth_LR/PACM execution; optional external-binary parity input. Native publication has separate complete GitHub matrices.",
+    "skipped_cases": [
+      "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+      "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+      "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+      "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+      "A64FastClassifyParity.OptionalRealBinaryWalk",
+      "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/3"
+    ]
+  },
+  "local_source_sdk_unwind": {
+    "implementation_revision": "0d3511620291254bffcaa90a356870016f2741f4",
+    "frontend": "Clang 22.1.6",
+    "configuration": "NEVERD_SOURCE_PATCH_TEST_CLANG_EXECUTABLE and NEVERD_ARM64E_IR_COMPILER explicitly select the compatible upstream frontend.",
+    "passed": 340,
+    "failed": 0,
+    "skipped": 7,
+    "total": 347,
+    "xml_sha256": "8151088f964da90089f6b3890ba9174c661d78d2dd5f1f7242b867dd58f9b26d",
+    "skipped_cases": [
+      "SourcePatch.NeverCNormalModeExecutesWhenAvailable",
+      "SourcePatchObject.NeverCEntryTableCannotLoseItsLoadTimeRelocations",
+      "SourcePatchException.NativeObjectRetainsCrossBoundaryExceptionSemantics",
+      "SourcePatchException.GCCObjectRetainsCrossBoundaryExceptionSemantics",
+      "SourcePatchException.NeverCCSourcesExecuteInNativeProcesses",
+      "SourcePatchException.NeverCHostedDynCodeUnwindsThroughTwoNativeFrames",
+      "SourcePatchPE.FH3RuntimePreservesCatchesCleanupRethrowAndNoexcept"
+    ]
+  },
+  "local_dependency_revisions": {
+    "signatures": "20b9036f4367e1308a3d2f0b214e06859090a7af",
+    "third_party/capstone": "b8c22e0c16b1769dfa712547d4a5c5d49560ae46",
+    "third_party/llvm-project": "5676029e378c9e37adc16c8216a8e8453ffafcae"
+  },
+  "local_source_checks": {
+    "native_verifier_and_artifact_controllers_passed": 26,
+    "documentation_tests_passed": 134,
+    "environment_controller_tests_passed": 11,
+    "clang_format": "22.1.2",
+    "source_provenance": "passed",
+    "diff_check": "passed"
   }
 }
