@@ -407,17 +407,21 @@ TEST_F(X86LegacyExecutionTest, BackingStopKeepsDescriptorEffectsAndCanRetry) {
   EXPECT_FALSE(S.SSBlocked);
 }
 
-TEST_F(X86LegacyExecutionTest, VM86ReturnRequiresItsOwnStateAfterFrameRead) {
+TEST_F(X86LegacyExecutionTest, VM86ReturnLoadsExtendedFrameAfterNMI) {
+  O.Virtual8086 = X86LegacyVM86Profile::IntelVME;
   auto Entered = llvm::cantFail(deliverX86LegacyEvent(
       S, *M, {S.EIP, 0, 0, 2, X86LegacyEventKind::NMI}, O));
   ASSERT_EQ(Entered.Status, X86LegacyExecutionStatus::EventDelivered);
   put(S.Core.GPR[4] + 8, 0x20202, GuestScalarWidth::I32);
   put(S.EIP, 0xcf, GuestScalarWidth::I8);
   auto R = executeX86LegacyInstruction(S, *M, {0xcf}, O);
-  ASSERT_FALSE(bool(R));
-  EXPECT_NE(llvm::toString(R.takeError()).find("VM86"), std::string::npos);
-  EXPECT_EQ(S.EIP, 0x2000u);
-  EXPECT_EQ(S.Core.CPL, 0);
+  ASSERT_TRUE(bool(R));
+  EXPECT_EQ(R->Status, X86LegacyExecutionStatus::Completed);
+  EXPECT_EQ(S.EIP, 0x1000u);
+  EXPECT_EQ(S.Core.CPL, 3);
+  EXPECT_EQ(S.EFlags, 0x20202u);
+  EXPECT_EQ(S.Core.Segments[1].Base, 27u * 16);
+  EXPECT_EQ(S.Core.Segments[1].Limit, 65535u);
   EXPECT_FALSE(S.NMIBlocked);
 }
 

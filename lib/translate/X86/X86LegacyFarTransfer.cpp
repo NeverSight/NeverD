@@ -9,6 +9,8 @@
 
 #include "X86LegacyFarTransfer.h"
 
+#include "X86LegacyTransferJournal.h"
+
 #include "neverd/ir/X86/X86SegmentDescriptorRules.h"
 
 #include "llvm/Support/Errc.h"
@@ -54,7 +56,10 @@ public:
   run(const detail::X86LegacyFarTransfer &F, uint32_t NextIP,
       llvm::ArrayRef<uint8_t> Bytes) {
     Original = Bytes;
+    Journal.emplace(S, M, O, Bytes, detail::X86LegacyTransferKind::Far,
+                    bool(S.EFlags & 0x20000));
     execute(F, NextIP);
+    Journal->finish(Failure ? X86PageWalkStatus::Completed : R.Status);
     if (Failure)
       return std::move(*Failure);
     return std::move(R);
@@ -67,6 +72,7 @@ private:
   detail::X86LegacyTaskResult R;
   std::optional<llvm::Error> Failure;
   llvm::ArrayRef<uint8_t> Original;
+  std::optional<detail::X86LegacyTransferJournal> Journal;
 
   bool accept(llvm::Expected<X86MemoryAccessResult> Got) {
     if (!Got) {
@@ -86,6 +92,13 @@ private:
 
   bool access(uint32_t Address, unsigned Bytes, Value &V, bool Write = false,
               bool Implicit = true, uint8_t CPL = 0, bool Stack = false) {
+    auto Replayed = Journal->replay(Address, Bytes, Write, V);
+    if (!Replayed) {
+      Failure = Replayed.takeError();
+      return false;
+    }
+    if (*Replayed)
+      return true;
     const bool Misaligned = !Implicit && CPL == 3 &&
                             (M.controls().CR0 & 0x40000) &&
                             (S.EFlags & 0x40000) && (Address & (Bytes - 1));
@@ -117,6 +130,7 @@ private:
       for (unsigned I = 0; I != Bytes; ++I)
         V |= Value(Buffer[I]) << (I * 8);
     }
+    Journal->record(Address, Bytes, Write, V);
     return true;
   }
 
@@ -125,7 +139,7 @@ private:
     auto Range = checkX86LegacySegmentAccess(
         S.Core.Segments[unsigned(Segment)],
         {Segment, X86SegmentAccessKind::Read, Offset, Bytes,
-         O.Segments.FullLimitChoice});
+         O.Segments.FullLimitChoice, bool(S.EFlags & 0x20000)});
     if (!Range) {
       Failure = Range.takeError();
       return false;
@@ -163,6 +177,37 @@ private:
             Selector, uint16_t(Rules::attributes(*this, D)), false};
   }
 
+  void virtualTransfer(bool Call, unsigned Width, Value IP, uint16_t Selector,
+                       uint32_t NextIP) {
+    const auto &SS = S.Core.Segments[2];
+    uint32_t SP = S.Core.GPR[4];
+    if (Call)
+      for (Value V : {Value(S.Core.Segments[1].Selector), Value(NextIP)}) {
+        SP = (SP & 0xffff0000) | uint16_t(SP - Width);
+        auto Range =
+            checkX86LegacySegmentAccess(SS, {X86SegmentRegister::SS,
+                                             X86SegmentAccessKind::Write,
+                                             uint16_t(SP),
+                                             Width,
+                                             {},
+                                             true});
+        if (!Range) {
+          Failure = Range.takeError();
+          return;
+        }
+        if (faultIf(bool(Range->FaultVector), 12, 0))
+          return;
+        if (!access(SS.Base + uint16_t(SP), Width, V, true, false, 3, true))
+          return;
+      }
+    // The Intel VM86 profile checks the target after both CALL stores.
+    if (faultIf(IP > UINT16_MAX, 13, 0))
+      return;
+    S.Core.GPR[4] = SP;
+    S.Core.Segments[1] = x86VM86SegmentCache(Selector);
+    S.EIP = IP;
+  }
+
   void execute(const detail::X86LegacyFarTransfer &F, uint32_t NextIP) {
     if (faultIf(F.Locked, 6, 0))
       return;
@@ -175,6 +220,10 @@ private:
           !operand(F.Address.MemorySegment, (Offset + F.Bytes) & Mask, 2,
                    Selector))
         return;
+    }
+    if (S.EFlags & 0x20000) {
+      virtualTransfer(F.Call, F.Bytes, IP, Selector, NextIP);
+      return;
     }
     Value Code = 0;
     uint32_t CodeAddress = 0;
@@ -288,7 +337,7 @@ private:
       auto Range = checkX86LegacySegmentAccess(
           SS, {X86SegmentRegister::SS, X86SegmentAccessKind::Write,
                (SP - Count * Width) & Mask, Count * Width,
-               O.Segments.FullLimitChoice});
+               O.Segments.FullLimitChoice, bool(S.EFlags & 0x20000)});
       if (!Range) {
         Failure = Range.takeError();
         return;

@@ -31,7 +31,8 @@ namespace neverd::translate {
 
 namespace detail {
 struct X86LegacyTaskContinuation;
-}
+struct X86LegacyTransferContinuation;
+} // namespace detail
 
 /// Low 32-bit architectural inputs for non-IA-32e SYSENTER/SYSEXIT.
 struct X86LegacySysenterState {
@@ -48,6 +49,8 @@ struct X86LegacyEvent {
   uint32_t FaultAddress = 0;
   uint8_t Vector = 0;
   X86LegacyEventKind Kind = X86LegacyEventKind::Fault;
+  /// Only INT imm8 uses the VM86 IOPL check and VME redirection map.
+  bool SoftwareINT = false;
 };
 
 /// Pending event retained across backing or work-budget stops. Repair backing
@@ -143,24 +146,37 @@ struct X86LegacyExecutionState {
   /// stop or a fault after loading the incoming task. Preserve this with the
   /// CPU and RAM; only that owner may resume or retire it.
   std::shared_ptr<const detail::X86LegacyTaskContinuation> PendingTask;
+  /// Return and VM86 far-transfer progress across unavailable backing. Retain
+  /// this opaque state with the CPU, bindings and original instruction bytes;
+  /// repair only backing. Completed RAM accesses are never repeated.
+  std::shared_ptr<const detail::X86LegacyTransferContinuation> PendingTransfer;
 };
 
 /// One CPU, ordinary RAM, 16/32-bit gates, qword accessed writes, offset-first
 /// TSS reads and ordered frame pushes. A 16-bit target stack preserves old
 /// ESP high bits. Consecutive MOV/POP SS does not extend an incoming shadow.
-/// Target IP-limit validation follows the frame stores. Recursive #DF retains
+/// Protected target IP checks follow frame stores; VM86 exit checks first.
+/// Recursive #DF retains
 /// the failed fault's saved RF image; its saved PC/caches use the original
 /// state. These #DF choices bind otherwise architecturally undefined program
 /// state. The producer owns event selection, APIC/debug state and machine-check
-/// recovery. Task gates use the additional Tasks binding; VM86 and CET need
-/// separate execution-mode owners.
+/// recovery. Task gates use the additional Tasks binding; VM86 uses
+/// Virtual8086. CET needs its separate execution-mode owner.
 enum class X86LegacyEventProfile : uint8_t { OrderedFrame };
 
 /// IRET reads FLAGS/CS/IP, RETF reads CS/IP; descriptor accessed writes precede
 /// outer SS/SP reads and late target-limit checks. CS/SS accesses cover only
 /// their selector word, independently of the frame slot width. Ordinary RAM,
-/// one CPU.
+/// one CPU. Host backing stops retain private frame/descriptor access progress
+/// and IRET NMI unblocking; resumption does not repeat an instruction attempt.
 enum class X86LegacyReturnProfile : uint8_t { OrderedFrame };
+
+/// Intel VM86 execution with VME word IRET and low-word IRETD entry IP.
+/// Ordinary RAM; interrupt redirection reads the TSS/IVT as supervisor and
+/// pushes words on the user stack, with independent slot wrap/faults. CALL
+/// checks its target after both pushes. VIF/VIP conflicts use either VME or
+/// PVI, independently of IOPL. These CPU choices need explicit target binding.
+enum class X86LegacyVM86Profile : uint8_t { IntelVME };
 
 /// Confined ordinary RAM. POP memory uses incremented ESP, with SS.B-sized
 /// stack advancement preserving high ESP on a word wrap. PUSHA/ENTER stores
@@ -367,6 +383,7 @@ struct X86LegacyExecutionOptions {
   std::optional<X86LegacyMachineStatusProfile> MachineStatus;
   std::optional<X86LegacyControlRegisterBinding> ControlRegisters;
   std::optional<X86LegacyMpxProfile> MpxMemory;
+  std::optional<X86LegacyVM86Profile> Virtual8086;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {
@@ -441,9 +458,10 @@ resumeX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// BT/BTS/BTR/BTC, BSF/BSR, XCHG/XADD/CMPXCHG/CMPXCHG8B,
 /// AAA/AAS/DAA/DAS and AAM/AAD with every immediate base,
 /// PUSH/POP, PUSHF/POPF and near CALL/JMP/Jcc/RET.
-/// Code32 MPX uses the shared bounds context; memory additionally requires
-/// MpxMemory. PendingMpx retains host backing progress. Original near branch
-/// BNDINIT commits only on success, including untaken Jcc, before debug entry.
+/// Protected code16/code32 and VM86 MPX use the shared bounds context.
+/// Enabled address16 memory forms raise #UD; legal memory requires MpxMemory.
+/// PendingMpx retains host backing progress. Original near branch BNDINIT
+/// commits only on success, including untaken Jcc, before debug entry.
 /// FarTransfers adds direct and memory far CALL/JMP and 16/32-bit call gates,
 /// including inner-ring stack switches and parameter copying. Transfers stop
 /// before fetching the destination. Tasks additionally owns protected TSS

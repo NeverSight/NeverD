@@ -31,7 +31,8 @@ llvm::Error admitLegacyMpxMemory(const X86MpxEncoding &Encoding,
 
 llvm::Expected<X86MemoryAccessResult>
 executeLegacyMpx(X86LegacyExecutionState &State, X86PagedMemory &Memory,
-                 llvm::ArrayRef<uint8_t> Bytes, X86MpxContext &Context,
+                 llvm::ArrayRef<uint8_t> Bytes, bool Code32,
+                 X86MpxContext &Context,
                  const X86LegacyExecutionOptions &Options);
 
 } // namespace neverd::translate::detail

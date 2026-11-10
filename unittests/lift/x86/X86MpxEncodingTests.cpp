@@ -594,4 +594,89 @@ TEST(X86MpxEncoding, LightDecodingDoesNotReusePriorOperandsOrText) {
     }
 }
 
+TEST(X86MpxEncoding, ExplicitCodeModesKeepBoundsAndAddressOperands) {
+  for (auto Mode : {X86MpxCodeMode::Legacy16, X86MpxCodeMode::Legacy32,
+                    X86MpxCodeMode::Long64})
+    for (const auto &F : MemoryFixtures) {
+      const bool Wide = Mode == X86MpxCodeMode::Long64;
+      const unsigned PrefixBytes = Mode == X86MpxCodeMode::Legacy16 ? 1 : 0;
+      auto Bytes = F.Bytes;
+      if (PrefixBytes)
+        Bytes.insert(Bytes.begin(), 0x67);
+      const auto E = decodeX86MpxEncoding(Bytes, Mode);
+      ASSERT_TRUE(E);
+      EXPECT_EQ(E->Id, F.Id);
+      EXPECT_EQ(E->Size, Bytes.size());
+      EXPECT_EQ(E->Detail.addr_size, Wide ? 8 : 4);
+      EXPECT_EQ(E->Detail.operands[F.BoundOperand].reg, F.Bound);
+      const auto &M = E->Detail.operands[1 - F.BoundOperand].mem;
+      EXPECT_EQ(M.base, Wide ? F.Base64 : F.Base32);
+      EXPECT_EQ(M.index, Wide ? F.Index64 : F.Index32);
+      EXPECT_EQ(M.scale, F.Scale);
+      EXPECT_EQ(M.disp, F.Displacement);
+      const auto Ordinary =
+          decodeX86MpxEncoding(F.Bytes, Wide ? Arch::X64 : Arch::X86);
+      ASSERT_TRUE(Ordinary);
+      EXPECT_EQ(E->Detail.modrm, Ordinary->Detail.modrm);
+      EXPECT_EQ(E->Detail.sib, Ordinary->Detail.sib);
+      EXPECT_EQ(E->Detail.encoding.modrm_offset,
+                Ordinary->Detail.encoding.modrm_offset + PrefixBytes);
+      EXPECT_EQ(E->Detail.encoding.disp_size,
+                Ordinary->Detail.encoding.disp_size);
+      if (E->Detail.encoding.disp_size)
+        EXPECT_EQ(E->Detail.encoding.disp_offset,
+                  Ordinary->Detail.encoding.disp_offset + PrefixBytes);
+      for (unsigned I = 0; I != E->Detail.op_count; ++I) {
+        EXPECT_EQ(E->Detail.operands[I].size,
+                  Ordinary->Detail.operands[I].size);
+        EXPECT_EQ(E->Detail.operands[I].access,
+                  Ordinary->Detail.operands[I].access);
+      }
+      for (unsigned I = 0; I != Bytes.size(); ++I)
+        EXPECT_FALSE(
+            decodeX86MpxEncoding(llvm::ArrayRef(Bytes).take_front(I), Mode));
+    }
+}
+
+TEST(X86MpxEncoding, Address16FaultFormsHaveExactLengthWithoutSIB) {
+  for (auto Mode : {X86MpxCodeMode::Legacy16, X86MpxCodeMode::Legacy32})
+    for (unsigned Mod = 0; Mod != 3; ++Mod)
+      for (unsigned RM = 0; RM != 8; ++RM)
+        for (unsigned Kind = 0; Kind != 8; ++Kind) {
+          std::vector<uint8_t> Bytes;
+          if (Mode == X86MpxCodeMode::Legacy32)
+            Bytes.push_back(0x67);
+          if (Kind < 6)
+            Bytes.push_back(Kind < 2 ? 0xf3 : Kind < 4 ? 0xf2 : 0x66);
+          Bytes.insert(Bytes.end(), {0x0f, uint8_t(Kind % 2 ? 0x1b : 0x1a),
+                                     uint8_t(Mod << 6 | 0x18 | RM)});
+          const unsigned Disp = Mod == 1 ? 1 : Mod == 2 || RM == 6 ? 2 : 0;
+          for (unsigned I = 0; I != Disp; ++I)
+            Bytes.push_back(I ? 0x80 : 0x82);
+          const auto E = decodeX86MpxEncoding(Bytes, Mode);
+          ASSERT_TRUE(E);
+          EXPECT_EQ(E->Size, Bytes.size());
+          EXPECT_EQ(E->Detail.addr_size, 2);
+          EXPECT_EQ(E->Detail.encoding.disp_size, Disp);
+          EXPECT_EQ(E->Detail.sib, 0);
+          const bool Store = Kind == 5 || Kind == 7;
+          const auto &M = E->Detail.operands[Store ? 0 : 1].mem;
+          if (RM == 4) {
+            EXPECT_EQ(M.base, X86_REG_SI);
+            EXPECT_EQ(M.index, X86_REG_INVALID);
+          }
+          if (Mod == 0 && RM == 6)
+            EXPECT_EQ(M.base, X86_REG_INVALID);
+          if (Mode == X86MpxCodeMode::Legacy32)
+            EXPECT_FALSE(decodeX86MpxEncoding(Bytes, Arch::X86));
+          for (unsigned I = 0; I != Bytes.size(); ++I)
+            EXPECT_FALSE(decodeX86MpxEncoding(
+                llvm::ArrayRef(Bytes).take_front(I), Mode));
+          Bytes.push_back(0xcc);
+          const auto Followed = decodeX86MpxEncoding(Bytes, Mode);
+          ASSERT_TRUE(Followed);
+          EXPECT_EQ(Followed->Size, Bytes.size() - 1);
+        }
+}
+
 } // namespace

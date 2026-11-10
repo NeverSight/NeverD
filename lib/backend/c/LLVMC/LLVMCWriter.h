@@ -775,6 +775,7 @@ public:
   bool isThisFieldValueHome(const llvm::AllocaInst *Slot) const;
   /// Last home is a load of a named synthetic-frame record field.
   bool isFrameFieldValueHome(const llvm::AllocaInst *Slot) const;
+  TypeRef recordPointerAllocaType(const llvm::AllocaInst *Slot) const;
   bool isTypedRecordCursorSlot(const llvm::AllocaInst *Slot) const;
   bool isTypedRecordCursorValue(const llvm::Value *V) const;
   bool allocaHasLoad(const llvm::AllocaInst *Slot) const;
@@ -966,9 +967,9 @@ public:
   /// source, which writeRecordDefinitions has the local types define: the
   /// text reaches them through members and need not spell them.
   mutable std::set<std::string> MemberRecords;
-  /// Record call adapters use types already declared by an included header.
-  /// The textual type scan must not define those records a second time.
-  std::set<std::string> HeaderCallRecords;
+  /// Tags and displayed enumerators supplied by included library headers.
+  /// The textual type scan must not request their local definitions again.
+  mutable std::set<std::string> HeaderCallRecords;
   mutable std::map<const llvm::Value *, std::string> KnownImmediates;
   bool UseScalarExpressionTypes = false;
   std::set<std::string> ScopedScalarNames;

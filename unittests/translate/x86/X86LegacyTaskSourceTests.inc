@@ -90,24 +90,21 @@ TEST_P(X86LegacySourceTest, TaskIncomingFaultDispatchesHandlerWithNewFrame) {
   EXPECT_EQ(S.Core.GPR[0], 0x12345678u);
 }
 
-TEST_P(X86LegacySourceTest, TaskModeBoundaryRetainsBudgetAndStateOnRetry) {
+TEST_P(X86LegacySourceTest, TaskVM86DestinationExecutesWithParagraphBase) {
   taskState();
   put(0x8024, 0x20202, GuestScalarWidth::I32);
   const std::vector<SourceUnit> Units{{0x1000, 32, {0x9a, 0, 0, 0, 0, 0x30, 0}},
-                                      {0x3000, 16, {0x90}}};
+                                      {0x31b0, 16, {0xb8, 0x34, 0x12}}};
   Driver Run = nullptr;
   ASSERT_NO_FATAL_FAILURE(compile(Units, Run));
   install(Units);
   X86LegacySourceExecution Context(S, *M, O);
   uint64_t Budget = 2;
   EXPECT_EQ(Run(&Context, &Budget),
-            uint32_t(X86LegacyExecutionStatus::ModeUnavailable));
-  EXPECT_EQ(Budget, 1u);
+            uint32_t(X86LegacySourceExit::BudgetExhausted));
+  EXPECT_EQ(Budget, 0u);
   EXPECT_EQ(S.TR.Selector, 48);
-  EXPECT_EQ(S.EIP, 0x3000u);
-  ASSERT_TRUE(S.PendingTask);
-  EXPECT_EQ(Run(&Context, &Budget),
-            uint32_t(X86LegacyExecutionStatus::ModeUnavailable));
-  EXPECT_EQ(Budget, 1u);
-  EXPECT_EQ(S.EIP, 0x3000u);
+  EXPECT_EQ(S.EIP, 0x3003u);
+  EXPECT_EQ(S.Core.GPR[0], 0x1234u);
+  EXPECT_FALSE(S.PendingTask);
 }

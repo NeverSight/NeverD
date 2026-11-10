@@ -8,7 +8,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "X86LegacyExecutionInternal.h"
+#include "X86LegacyTransferJournal.h"
 
+#include "neverd/ir/X86/X86PopFlagsRules.h"
 #include "neverd/ir/X86/X86ReturnRules.h"
 #include "neverd/ir/X86/X86SegmentDescriptorRules.h"
 
@@ -53,9 +55,15 @@ public:
     return Bad;
   }
 
-  llvm::Expected<X86MemoryAccessResult> run(unsigned Bytes, uint16_t Discard,
-                                            bool Interrupt) {
+  llvm::Expected<X86MemoryAccessResult>
+  run(unsigned Bytes, uint16_t Discard, bool Interrupt,
+      llvm::ArrayRef<uint8_t> Instruction) {
+    if (Interrupt)
+      S.NMIBlocked = false;
+    Journal.emplace(S, M, O, Instruction,
+                    detail::X86LegacyTransferKind::Return);
     execute(Bytes, Discard, Interrupt);
+    Journal->finish(Failure ? X86PageWalkStatus::Completed : R.Status);
     if (Failure)
       return std::move(*Failure);
     return std::move(R);
@@ -67,6 +75,7 @@ private:
   const X86LegacyExecutionOptions &O;
   X86MemoryAccessResult R;
   std::optional<llvm::Error> Failure;
+  std::optional<detail::X86LegacyTransferJournal> Journal;
 
   void unsupported(const char *Message) {
     Failure = llvm::createStringError(llvm::errc::not_supported, Message);
@@ -74,6 +83,13 @@ private:
 
   bool access(uint32_t Address, unsigned Bytes, Value &V, bool Implicit,
               bool Write = false) {
+    auto Replayed = Journal->replay(Address, Bytes, Write, V);
+    if (!Replayed) {
+      Failure = Replayed.takeError();
+      return false;
+    }
+    if (*Replayed)
+      return true;
     const bool Misaligned = !Implicit && S.Core.CPL == 3 &&
                             (M.controls().CR0 & 0x40000) &&
                             (S.EFlags & 0x40000) && (Address & (Bytes - 1));
@@ -113,6 +129,7 @@ private:
       for (unsigned I = 0; I != Bytes; ++I)
         V |= Value(Buffer[I]) << (I * 8);
     }
+    Journal->record(Address, Bytes, Write, V);
     return true;
   }
 
@@ -120,9 +137,9 @@ private:
     const auto &SS = S.Core.Segments[2];
     const uint32_t Mask = SS.Attributes & 0x4000 ? UINT32_MAX : UINT16_MAX;
     auto Range = checkX86LegacySegmentAccess(
-        SS,
-        {X86SegmentRegister::SS, X86SegmentAccessKind::Read,
-         (S.Core.GPR[4] + Offset) & Mask, Bytes, O.Segments.FullLimitChoice});
+        SS, {X86SegmentRegister::SS, X86SegmentAccessKind::Read,
+             (S.Core.GPR[4] + Offset) & Mask, Bytes, O.Segments.FullLimitChoice,
+             bool(S.EFlags & 0x20000)});
     if (!Range) {
       Failure = Range.takeError();
       return false;
@@ -159,20 +176,78 @@ private:
             uint16_t(Descriptors::attributes(*this, D)), false};
   }
 
+  void enterVM86(Value IP, Value Selector, Value Flags) {
+    if (O.Virtual8086 != X86LegacyVM86Profile::IntelVME) {
+      unsupported("IRETD to VM86 requires a bound Intel VME profile");
+      return;
+    }
+    Value SP = 0;
+    std::array<Value, 6> Selectors{};
+    Selectors[1] = Selector;
+    // OrderedFrame reads selector words, including in dword frame slots.
+    if (!frame(16, 2, Selectors[2]) || !frame(12, 4, SP))
+      return;
+    unsigned Offset = 20;
+    for (unsigned I : {0u, 3u, 4u, 5u}) {
+      if (!frame(Offset, 2, Selectors[I]))
+        return;
+      Offset += 4;
+    }
+    for (unsigned I = 0; I != Selectors.size(); ++I)
+      S.Core.Segments[I] = x86VM86SegmentCache(Selectors[I]);
+    S.Core.CPL = 3;
+    S.Core.GPR[4] = SP;
+    S.EIP = uint16_t(IP);
+    S.EFlags = (Flags & 0x3f7fd7u) | 2;
+  }
+
+  void returnVM86(unsigned Bytes, uint16_t Discard, bool Interrupt, Value IP,
+                  Value Selector, Value Flags) {
+    const bool VirtualFlags = Interrupt && (S.EFlags & 0x3000) != 0x3000;
+    if (faultIf(VirtualFlags && ((Flags & 0x100) ||
+                                 ((Flags & 0x200) && (S.EFlags & 0x100000))),
+                13, 0) ||
+        faultIf(IP > UINT16_MAX, 13, 0))
+      return;
+    auto &SP = S.Core.GPR[4];
+    SP = (SP & 0xffff0000) |
+         uint16_t(SP + (Interrupt ? 3 : 2) * Bytes + Discard);
+    S.Core.Segments[1] = x86VM86SegmentCache(Selector);
+    S.EIP = IP;
+    if (Interrupt) {
+      const uint32_t Mask =
+          x86PopFlagsMask(3, S.EFlags, Bytes) | (Bytes == 4 ? 0x10000 : 0);
+      S.EFlags = (S.EFlags & ~Mask) | (Flags & Mask);
+      if (Bytes == 2)
+        S.EFlags &= ~0x10000u;
+      if (VirtualFlags)
+        S.EFlags = (S.EFlags & ~0x80000u) | ((Flags & 0x200) << 10);
+    } else {
+      S.EFlags &= ~0x10000u;
+    }
+  }
+
   void execute(unsigned Bytes, uint16_t Discard, bool Interrupt) {
-    if (Interrupt)
-      S.NMIBlocked = false;
+    const bool VM86 = S.EFlags & 0x20000;
+    if (faultIf(Interrupt && VM86 && (S.EFlags & 0x3000) != 0x3000 &&
+                    (Bytes != 2 || !(M.controls().CR4 & 1)),
+                13, 0))
+      return;
     Value Flags = 0, Selector = 0, IP = 0;
     if (Interrupt && !frame(2 * Bytes, Bytes, Flags))
       return;
-    if (Interrupt && S.Core.CPL == 0 && (Flags & 0x20000)) {
-      unsupported("legacy IRET to VM86 requires virtual-mode state");
-      return;
-    }
     // Selector accesses are words even in dword frame slots. Their padding
     // does not participate in segment, page or alignment checks.
     if (!frame(Bytes, 2, Selector) || !frame(0, Bytes, IP))
       return;
+    if (VM86) {
+      returnVM86(Bytes, Discard, Interrupt, IP, Selector, Flags);
+      return;
+    }
+    if (Interrupt && S.Core.CPL == 0 && (Flags & 0x20000)) {
+      enterVM86(IP, Selector, Flags);
+      return;
+    }
     Value Code = 0;
     uint32_t CodeAddress = 0;
     if (!descriptor(Selector, Code, CodeAddress))
@@ -238,12 +313,12 @@ private:
 
 } // namespace
 
-llvm::Expected<X86MemoryAccessResult>
-detail::returnLegacyFrame(X86LegacyExecutionState &State,
-                          X86PagedMemory &Memory, unsigned Bytes,
-                          uint16_t Discard, bool Interrupt,
-                          const X86LegacyExecutionOptions &Options) {
-  return FrameReturn(State, Memory, Options).run(Bytes, Discard, Interrupt);
+llvm::Expected<X86MemoryAccessResult> detail::returnLegacyFrame(
+    X86LegacyExecutionState &State, X86PagedMemory &Memory, unsigned Bytes,
+    uint16_t Discard, bool Interrupt, llvm::ArrayRef<uint8_t> Instruction,
+    const X86LegacyExecutionOptions &Options) {
+  return FrameReturn(State, Memory, Options)
+      .run(Bytes, Discard, Interrupt, Instruction);
 }
 
 } // namespace neverd::translate

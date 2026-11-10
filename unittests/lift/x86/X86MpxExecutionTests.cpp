@@ -565,4 +565,56 @@ TEST(X86MpxExecution,
     }
 }
 
+TEST(X86MpxExecution, Code16RegisterFormsIgnoreAddressOverride) {
+  for (unsigned Register = 0; Register != 8; ++Register)
+    for (unsigned Bound = 0; Bound != 4; ++Bound)
+      for (bool Prefix : {false, true}) {
+        auto C = context();
+        const auto Before = C;
+        X86MpxExecutionInputs I;
+        I.GPR[Register] = 0xfeedabcd00000100ULL + Bound;
+        Memory M;
+        std::vector<uint8_t> Bytes{0xf3, 0x0f, 0x1a,
+                                   uint8_t(0xc0 | Bound << 3 | Register)};
+        if (Prefix)
+          Bytes.insert(Bytes.begin(), 0x67);
+        auto R = executeX86MpxInstruction(Bytes, X86MpxCodeMode::Legacy16,
+                                          Entry, C, I, M);
+        EXPECT_EQ(R.Result, Result::Completed);
+        EXPECT_EQ(R.Size, Bytes.size());
+        EXPECT_EQ(C, Before);
+        --*I.GPR[Register];
+        R = executeX86MpxInstruction(Bytes, X86MpxCodeMode::Legacy16, Entry, C,
+                                     I, M);
+        EXPECT_EQ(R.Result, Result::BoundsFault);
+        EXPECT_EQ(C.status(), 1u);
+        EXPECT_EQ(bank(C), bank(Before));
+        EXPECT_TRUE(M.Requests.empty());
+      }
+}
+
+TEST(X86MpxExecution, Address16FaultsOrDisabledNOPNeverReadOperands) {
+  for (auto Mode : {X86MpxCodeMode::Legacy16, X86MpxCodeMode::Legacy32})
+    for (unsigned Kind = 0; Kind != 8; ++Kind)
+      for (bool Enabled : {false, true}) {
+        std::vector<uint8_t> Bytes;
+        if (Mode == X86MpxCodeMode::Legacy32)
+          Bytes.push_back(0x67);
+        if (Kind < 6)
+          Bytes.push_back(Kind < 2 ? 0xf3 : Kind < 4 ? 0xf2 : 0x66);
+        Bytes.insert(Bytes.end(), {0x0f, uint8_t(Kind % 2 ? 0x1b : 0x1a), 4});
+        auto C = context();
+        if (!Enabled)
+          ASSERT_TRUE(C.configure({.Supported = false}));
+        const auto Before = C;
+        Memory M;
+        const auto R = executeX86MpxInstruction(Bytes, Mode, Entry, C, {}, M);
+        EXPECT_EQ(R.Size, Bytes.size());
+        EXPECT_EQ(R.Result,
+                  Enabled ? Result::UndefinedOpcode : Result::Disabled);
+        EXPECT_EQ(C, Before);
+        EXPECT_TRUE(M.Requests.empty());
+      }
+}
+
 } // namespace

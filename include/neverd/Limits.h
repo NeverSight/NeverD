@@ -593,9 +593,11 @@ constexpr int kFullBankCallArgStoreScanWindow = 64;
 /// optimized IR).  Bounding a shard's slice therefore bounds that transient
 /// emission component to roughly (worker threads) x (this budget), rather than
 /// keeping the whole input's unoptimized LLVM IR resident at once.  Retained
-/// Low/MedIR, bitcode, and the final module still scale with the input.  The
-/// budget is large enough that per-shard setup and extra link steps stay noise.
-constexpr uint64_t kMaxShardOps = 8000;
+/// Low/MedIR, bitcode, and the final module still scale with the input.
+/// A 2,000-op target also divides medium inputs into concurrent slices without
+/// making their optimization context depend on the worker count. Native
+/// dependency groups are indivisible and may exceed this soft target.
+inline constexpr uint64_t kMaxShardOps = 2000;
 
 /// Addresses below this threshold are not considered valid global data
 /// references.

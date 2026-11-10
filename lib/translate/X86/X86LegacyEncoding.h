@@ -78,6 +78,7 @@ public:
     return V;
   }
 
+  llvm::ArrayRef<uint8_t> body() const { return Rest; }
   uint8_t byte() { return value(1); }
   bool done() const { return Valid && Rest.empty(); }
 

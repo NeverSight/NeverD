@@ -73,8 +73,10 @@ public:
   void setPdbDisplayNames(const Json &names);
   /// An imported display-only data name that the listing currently shows.
   std::optional<std::string> pdbDataName(std::uint64_t address);
-  /// `listing`: lines around an address.
-  Json page(const Json &payload);
+  /// `listing`: lines around an address.  Given \p encoded, a page the live
+  /// listing answers is written there as text, and the result is null.
+  Json page(const Json &payload,
+            std::shared_ptr<const EncodedJson> *encoded = nullptr);
   /// `overview`: address classes in equal linear buckets.
   Json overview(const Json &payload);
   /// `xrefs` from the reference index or, for "from", the instruction's lift.
@@ -205,7 +207,8 @@ public:
   std::uint64_t viewGeneration() const;
 
 private:
-  Json uncachedPage(const Json &payload);
+  Json uncachedPage(const Json &payload,
+                    std::shared_ptr<const EncodedJson> *encoded = nullptr);
   Json uncachedOverview(const Json &payload);
   const Json &uncachedFunctionRows();
   struct Impl;

@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Execute explicit protected-mode segment transfers over owned paged RAM.
+/// Execute explicit protected/VM86 segment transfers over owned paged RAM.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_TRANSLATE_X86_X86LEGACYSEGMENTEXECUTION_H
@@ -66,7 +66,8 @@ llvm::Error validateX86LegacySegmentState(const X86LegacySegmentState &State,
 /// One confined CPU and ordinary RAM, no concurrent table mutation or MMIO.
 /// An unusable null-loaded cache retains opaque old fields; only its selector
 /// and unusable state are defined. No consumer may observe those old fields
-/// as a usable segment. Real/VM86/IA-32e and unbound profiles fail explicitly.
+/// as a usable segment. VM86 uses paragraph caches selected by RFlags.VM;
+/// real/IA-32e and unbound profiles fail explicitly.
 llvm::Expected<X86LegacySegmentExecutionResult>
 executeX86LegacySegmentInstruction(
     X86LegacySegmentState &State, X86PagedMemory &Memory,

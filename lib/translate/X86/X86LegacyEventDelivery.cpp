@@ -47,7 +47,7 @@ bool validEvent(const X86LegacyEvent &E) {
                      (E.Kind == Kind::Fault && Member(kX86FaultVectors)) ||
                      (E.Kind == Kind::Trap && Member(kX86TrapVectors)) ||
                      (E.Kind == Kind::Abort && Member(kX86AbortVectors));
-  return Valid &&
+  return Valid && (!E.SoftwareINT || E.Kind == Kind::Software) &&
          (!E.ErrorCode || (x86EventHasErrorCode(E.Kind, E.Vector) &&
                            E.Vector != 8 && E.Vector != 17)) &&
          (!E.FaultAddress || (E.Kind == Kind::Fault && E.Vector == 14));
@@ -79,7 +79,8 @@ public:
   bool faultIf(bool Bad, uint8_t Vector, uint32_t Error) {
     if (Bad && R.Status == X86PageWalkStatus::Completed) {
       R.Status = X86PageWalkStatus::Exception;
-      R.Exception = X86MemoryException{Vector, Error | External, {}};
+      R.Exception =
+          X86MemoryException{Vector, Vector == 17 ? 0u : Error | External, {}};
     }
     return Bad;
   }
@@ -127,22 +128,49 @@ private:
         CPL,       Implicit,
         !Implicit, true};
     auto Span = llvm::MutableArrayRef(Buffer).take_front(Bytes);
-    auto Got = Write ? M.store(A, Span) : M.load(A, Span);
-    if (!Got) {
-      Failure = Got.takeError();
+    const bool Misaligned = !Implicit && CPL == 3 &&
+                            (M.controls().CR0 & 0x40000) &&
+                            (S.EFlags & 0x40000) && (Address & (Bytes - 1));
+    if (Misaligned &&
+        O.Segments.AlignmentPriority != X86AlignmentPriority::BeforePaging &&
+        O.Segments.AlignmentPriority != X86AlignmentPriority::AfterPaging) {
+      Failure = invalid("VM86 frame requires an alignment-priority binding");
       return false;
+    }
+    if (Misaligned &&
+        O.Segments.AlignmentPriority == X86AlignmentPriority::BeforePaging)
+      return !faultIf(true, 17, 0);
+    X86MemoryAccessResult Got;
+    if (Write) {
+      auto Store = M.prepareStore(A, Bytes);
+      if (!Store) {
+        Failure = Store.takeError();
+        return false;
+      }
+      Got = static_cast<const X86MemoryAccessResult &>(*Store);
+      if (Store->Status == X86PageWalkStatus::Completed && !Misaligned)
+        M.commitStore(*Store, Span);
+    } else {
+      auto Read = M.load(A, Span);
+      if (!Read) {
+        Failure = Read.takeError();
+        return false;
+      }
+      Got = std::move(*Read);
     }
     R.SelfModifications.insert(R.SelfModifications.end(),
-                               Got->SelfModifications.begin(),
-                               Got->SelfModifications.end());
-    if (Got->Status != X86PageWalkStatus::Completed) {
-      R.Status = Got->Status;
-      R.Exception = Got->Exception;
-      R.BackingFault = Got->BackingFault;
-      if (Got->Exception && Got->Exception->CR2)
-        S.CR2 = *Got->Exception->CR2;
+                               Got.SelfModifications.begin(),
+                               Got.SelfModifications.end());
+    if (Got.Status != X86PageWalkStatus::Completed) {
+      R.Status = Got.Status;
+      R.Exception = Got.Exception;
+      R.BackingFault = Got.BackingFault;
+      if (Got.Exception && Got.Exception->CR2)
+        S.CR2 = *Got.Exception->CR2;
       return false;
     }
+    if (faultIf(Misaligned, 17, 0))
+      return false;
     if (!Write) {
       V = 0;
       for (unsigned I = 0; I != Bytes; ++I)
@@ -178,7 +206,71 @@ private:
             Selector, uint16_t(Rules::attributes(*this, D)), false};
   }
 
+  // Return true when redirection completed or stopped. A set bitmap bit
+  // leaves normal protected IDT delivery to the caller.
+  bool redirectVM86() {
+    const auto &TR = S.TR;
+    if (TR.Unusable ||
+        ((TR.Attributes & 0x9f) != 0x8b && (TR.Attributes & 0x9f) != 0x83)) {
+      Failure = invalid("VM86 redirection requires an authenticated TSS");
+      return true;
+    }
+    if (faultIf(TR.Limit < 0x67, 13, 0))
+      return true;
+    Value Base = 0, Bits = 0;
+    if (!access(TR.Base + 0x66, 2, Base))
+      return true;
+    const uint32_t Offset = uint32_t(Base) - 32 + (E.Vector >> 3);
+    if (faultIf(Offset > TR.Limit, 13, 0) || !access(TR.Base + Offset, 1, Bits))
+      return true;
+    if (Bits & (1u << (E.Vector & 7)))
+      return false;
+    // The bound Intel profile captures the IVT before its frame stores,
+    // including when the VM86 stack aliases that vector. It ignores IDTR.
+    Value Target = 0;
+    if (!access(unsigned(E.Vector) * 4, 4, Target))
+      return true;
+    const auto &SS = S.Core.Segments[2];
+    const bool VirtualFlags = (S.EFlags & 0x3000) != 0x3000;
+    const uint16_t Saved =
+        VirtualFlags ? (Flags & ~0x200u) | 0x3000 | ((Flags >> 10) & 0x200)
+                     : Flags;
+    uint32_t SP = S.Core.GPR[4];
+    for (Value V : {Value(Saved), Value(S.Core.Segments[1].Selector),
+                    Value(uint16_t(E.SavedEIP))}) {
+      SP = (SP & 0xffff0000) | uint16_t(SP - 2);
+      // Each word wraps its starting SP independently. A later #SS keeps
+      // earlier stores, just like a later page or backing fault.
+      auto Range = checkX86LegacySegmentAccess(SS, {X86SegmentRegister::SS,
+                                                    X86SegmentAccessKind::Write,
+                                                    uint16_t(SP),
+                                                    2,
+                                                    {},
+                                                    true});
+      if (!Range) {
+        Failure = Range.takeError();
+        return true;
+      }
+      if (faultIf(bool(Range->FaultVector), 12, 0))
+        return true;
+      if (!access(SS.Base + uint16_t(SP), 2, V, true, false, 3))
+        return true;
+    }
+    S.Core.GPR[4] = SP;
+    S.Core.Segments[1] = x86VM86SegmentCache(Target >> 16);
+    S.EIP = uint16_t(Target);
+    S.EFlags &= ~(0x10100u | (VirtualFlags ? 0x80000u : 0x200u));
+    return true;
+  }
+
   void execute() {
+    const bool VM86 = S.EFlags & 0x20000;
+    if (VM86 && E.SoftwareINT) {
+      if ((M.controls().CR4 & 1) && redirectVM86())
+        return;
+      if (faultIf((S.EFlags & 0x3000) != 0x3000, 13, 0))
+        return;
+    }
     const uint32_t GateOffset = unsigned(E.Vector) * 8;
     const uint32_t GateError = GateOffset | 2;
     if (faultIf(GateOffset + 7 > S.IDTRLimit, 13, GateError))
@@ -229,6 +321,8 @@ private:
     if (faultIf((Attributes & 0x18) != 0x18 || DPL > S.Core.CPL, 13,
                 Selector & 0xfffc) ||
         faultIf(!(Attributes & 0x80), 11, Selector & 0xfffc))
+      return;
+    if (faultIf(VM86 && (DPL || (Attributes & 4)), 13, Selector & 0xfffc))
       return;
     if (Attributes & 0x2000) {
       Failure = invalid("legacy event target has unsupported reserved L bit");
@@ -284,7 +378,7 @@ private:
     // context can reach this path with an unusable stack cache.
     if (faultIf(SS.Unusable, 12, 0))
       return;
-    const unsigned Count = (Inner ? 5 : 3) + HasError;
+    const unsigned Count = (VM86 ? 9 : Inner ? 5 : 3) + HasError;
     const uint32_t Mask = SS.Attributes & 0x4000 ? UINT32_MAX : UINT16_MAX;
     const uint32_t Bottom = (SP - Count * Width) & Mask;
     auto Range = checkX86LegacySegmentAccess(
@@ -296,10 +390,23 @@ private:
     }
     if (faultIf(bool(Range->FaultVector), 12, Inner ? SS.Selector & 0xfffc : 0))
       return;
-    const uint32_t Values[]{
-        S.Core.Segments[2].Selector, S.Core.GPR[4], Flags,
-        S.Core.Segments[1].Selector, E.SavedEIP,    E.ErrorCode};
-    for (unsigned I = Inner ? 0 : 2; I != (HasError ? 6u : 5u); ++I) {
+    // VM86 checks the destination before publishing its extended frame.
+    if (VM86 && faultIf(IP > CS.Limit, 13, 0))
+      return;
+    const uint32_t Values[]{S.Core.Segments[5].Selector,
+                            S.Core.Segments[4].Selector,
+                            S.Core.Segments[3].Selector,
+                            S.Core.Segments[0].Selector,
+                            S.Core.Segments[2].Selector,
+                            S.Core.GPR[4],
+                            Flags,
+                            S.Core.Segments[1].Selector,
+                            E.SavedEIP,
+                            E.ErrorCode};
+    for (unsigned I = VM86    ? 0
+                      : Inner ? 4
+                              : 6;
+         I != (HasError ? 10u : 9u); ++I) {
       SP = (SP & ~Mask) | ((SP - Width) & Mask);
       Value V = Values[I];
       if (!access(SS.Base + (SP & Mask), Width, V, true, false, CPL))
@@ -309,6 +416,11 @@ private:
     // error code. Earlier stores and a competing stack #PF take precedence.
     if (faultIf(IP > CS.Limit, 13, 0))
       return;
+    if (VM86)
+      for (unsigned I : {0u, 3u, 4u, 5u}) {
+        S.Core.Segments[I].Selector = 0;
+        S.Core.Segments[I].Unusable = true;
+      }
     S.Core.Segments[1] = CS;
     S.Core.Segments[2] = SS;
     S.Core.CPL = CPL;
@@ -428,7 +540,7 @@ llvm::Expected<X86LegacyExecutionResult>
 deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                       const X86LegacyEvent &Input,
                       const X86LegacyExecutionOptions &Options) {
-  if (State.PendingStack || State.PendingMpx ||
+  if (State.PendingStack || State.PendingMpx || State.PendingTransfer ||
       detail::legacyTaskInstructionPending(State) ||
       detail::legacyTaskEventPending(State))
     return invalid("resume the pending legacy instruction before events");
@@ -479,14 +591,15 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 llvm::Expected<X86LegacyExecutionResult>
 resumeX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                      const X86LegacyExecutionOptions &Options) {
-  if (detail::legacyTaskModeUnavailable(State)) {
+  if (detail::legacyTaskModeUnavailable(State) &&
+      Options.Virtual8086 != X86LegacyVM86Profile::IntelVME) {
     if (auto Error = detail::validateLegacyTaskState(State, Memory))
       return std::move(Error);
     X86LegacyExecutionResult R;
     R.Status = X86LegacyExecutionStatus::ModeUnavailable;
     return R;
   }
-  if (State.PendingStack || State.PendingMpx ||
+  if (State.PendingStack || State.PendingMpx || State.PendingTransfer ||
       detail::legacyTaskInstructionPending(State))
     return invalid("resume the pending legacy instruction before events");
   if (!State.PendingEvent || !validEvent(State.PendingEvent->Event))

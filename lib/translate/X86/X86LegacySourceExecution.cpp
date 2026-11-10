@@ -42,7 +42,8 @@ uint32_t X86LegacySourceExecution::record(
 }
 
 uint32_t X86LegacySourceExecution::select(uint64_t &Key) {
-  if (detail::legacyTaskModeUnavailable(State)) {
+  if (detail::legacyTaskModeUnavailable(State) &&
+      Options.Virtual8086 != X86LegacyVM86Profile::IntelVME) {
     if (auto Failure = detail::validateLegacyTaskState(State, Memory))
       return fail(std::move(Failure));
     return uint32_t(X86LegacyExecutionStatus::ModeUnavailable);

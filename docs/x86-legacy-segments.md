@@ -1,4 +1,4 @@
-# Legacy protected-mode operands
+# Legacy protected and VM86 execution
 
 `ir/X86/X86LegacySegments.h` owns operand checks against an authenticated,
 already loaded 16/32-bit protected-mode segment cache. The cache has a base,
@@ -29,8 +29,9 @@ precede all page-table observations and A/D writes. After a successful segment
 check, a linear range crossing FFFFFFFFh continues at zero. A subsequent #PF
 retains the translated fault address and earlier A/D effects without publishing
 a partial load result or ordinary store. Missing physical backing remains an
-embedding failure. These entry points require CR0.PE, no EFER.LMA, and no VM86;
-they supply no guessed real-mode or compatibility-mode environment. Alignment,
+embedding failure. These entry points require CR0.PE and no EFER.LMA. An
+explicit EFLAGS.VM selects the VM86 cache contract below and requires CPL3;
+real-mode and IA-32e compatibility environments remain separate. Alignment,
 instruction commit, event delivery and partial-progress instruction policy
 remain separate owners.
 
@@ -83,8 +84,9 @@ and LDS/LES/LSS/LFS/LGS. It accepts complete instruction bytes, an explicit
 GPR/segment/GDTR/LDTR/CPL snapshot, owned paged RAM and a target profile. A
 strict prefix/ModRM/SIB grammar retains independent code, operand, address
 and stack sizes, all six segment overrides, signed displacements and captured
-source registers. It refuses malformed forms, real/VM86/IA-32e state, and
-missing or invalid profiles before any RAM access.
+source registers. It refuses malformed forms, real/IA-32e state, and missing
+or invalid profiles before any RAM access. Explicit VM86 state uses the same
+operand grammar and the paragraph-cache loading rules below.
 
 `ir/X86/X86SegmentDescriptorRules` is the shared owner of data/stack type,
 privilege, present checks and descriptor field extraction. The existing x64
@@ -232,9 +234,10 @@ matrices, corrected probes and regression results.
 This is a bounded internal execution interface. The scalar binding below
 extends its ordinary instruction execution. The explicit source dispatcher
 below connects selected original instructions to this owner. Ordinary i386
-function projection, task transitions, real/VM86, CET/FRED, software
-SMM, enclave/AEX/EPCM and the remaining device/partial-progress contracts are
-not completed by it. No new LLVM or NeverC intrinsic is required for these
+function projection, real/IA-32e transitions, CET/FRED, software SMM,
+enclave/AEX/EPCM and the remaining device/partial-progress contracts are not
+completed by it. Task transfers and VM86 have explicit additional bindings
+below. No new LLVM or NeverC intrinsic is required for these
 runtime state transitions. The final LLVM release, SDK pin and NeverD LLVM
 gitlink remain unchanged pending global completion.
 
@@ -336,7 +339,10 @@ Changed code, pre-attempt fetch backing stops and refused steps consume none.
 An ordered stack instruction consumes one unit when first attempted, including
 when an operand subsequently stops on host backing. Resuming `PendingStack`
 does not consume another unit; an architectural fault followed by handler
-retry is a new attempt. IRET retains its existing attempted-frame semantics.
+retry is a new attempt. Ordinary IRET/RETF and VM86 far transfers similarly retain
+their original attempt in `PendingTransfer`, including completed frame and
+descriptor accesses. A subsequent debug-event backing stop belongs to the event
+continuation and does not repeat the completed return.
 Zero budget returns 258
 without selection or guest accesses; a null context/budget returns 256.
 
@@ -1073,7 +1079,8 @@ increment. The fault path enters the existing IDT owner with the original EIP.
 
 Nested-task IRET requires the separate [Tasks binding](#protected-task-transfers);
 it does not use the protected stack-frame return path. A CPL0 frame requesting
-VM86 is refused after reading its flags, retaining NMI unblocking; it is not
+VM86 requires the [Virtual8086 binding](#explicit-vm86-execution). Without it,
+the return is refused after reading flags, retaining NMI unblocking; it is not
 misreported as an ordinary protected return. Restored TF is preserved; the
 instruction-step binding samples entry TF independently of the restored frame.
 Reserved legacy descriptor bits, CET/FRED and unbound profiles remain explicit
@@ -1182,8 +1189,14 @@ from the [Intel manual page](https://www.intel.com/content/www/us/en/developer/a
 
 ## Protected MPX instructions and branch effects
 
-Protected code32 execution admits BNDCL, BNDCU, BNDCN, BNDMK, BNDMOV,
+Protected code16/code32 and explicit VM86 execution admit BNDCL, BNDCU,
+BNDCN, BNDMK, BNDMOV,
 BNDLDX and BNDSTX through the shared original-byte MPX reader and context.
+Memory forms use 32-bit addresses: code16/VM86 requires 67H, while code32
+requires its absence. Enabled address16 memory forms raise #UD after fetch
+without reading an operand or requiring a RAM profile. Disabled forms complete
+without operand access. Register forms ignore 67H and still use 32-bit GPRs
+and bounds, as specified separately in SDM Volume 1 E.5.1.
 Checks and BNDMK consume unsigned effective values without reading memory or
 adding a segment base. BNDMOV retains the selected segment and default SS;
 32-bit writes qualify only the low 32 bits of each bounds field. Register NOP
@@ -1225,8 +1238,9 @@ observes the completed bank.
 The `protected-legacy-v1` C dispatcher uses this same stateful executor.
 Its C callbacks retain guest state and faults; they are distinct from native
 MPX intrinsic emission into the ambient host bank. Existing LLVM and NeverC
-native APIs remain independent. This profile does not admit code16 MPX
-operands, non-flat-DS table accesses, 16-bit address forms, RTM/HLE aborts,
+native APIs remain independent. VM86 table accesses still require DS.Base=0
+and obey its 64 KiB limit; other VM86 segment bases remain effective for BNDMOV.
+This profile does not admit non-flat-DS table accesses, RTM/HLE aborts,
 MMIO or physical MPX hardware. Unsupported forms fail explicitly. The
 architectural reference is Intel SDM Volume 1 Appendix E and Volume 2A BND*,
 available from the [Intel manual page](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
@@ -1582,7 +1596,8 @@ Generated host-x64 Clang/NeverC dispatch uses that same owner; this adds no
 NeverC 32-bit source target.
 
 The binding requires a valid debug bank/profile and an explicit full-limit stack
-choice. Word TSS loads also require eight explicit GPR upper-half values; their
+choice. Task-gate error pushes with CR0.AM additionally require a valid
+alignment priority before any task writes. Word TSS loads also require eight explicit GPR upper-half values; their
 FS/GS selectors become null/unusable. Outgoing saves include dynamic GPRs,
 selectors, EIP and flags, while CR3 and LDTR remain static TSS inputs. CALL and
 interrupts set the incoming backlink/NT; JMP and IRET clear the outgoing busy
@@ -1609,11 +1624,14 @@ RAM effects and the original instruction are retained across host backing
 stops, including aliases and a changed address space. Event-owned continuations
 keep the already accepted event and never reread its old IDT gate after commit.
 
-A VM86 task image stops with `ModeUnavailable`, retaining `PendingTask` and any
-accepted event before destination descriptor processing. It is neither an
-instruction completion nor a fabricated guest fault. Real/VM86 execution,
-IA-32e transitions, software SMM/SGX and the broader outstanding state matrix
-remain open. The LLVM release, production SDK pin and submodule are unchanged.
+Without `Virtual8086`, a VM86 task image stops with `ModeUnavailable`, retaining
+`PendingTask` and any accepted event before destination descriptor processing.
+It is neither an instruction completion nor a fabricated guest fault. Adding
+`IntelVME` resumes that task: LDT loads normally, all six VM86 caches are
+installed without segment descriptor lookups, and destination dispatch proceeds.
+Real/IA-32e transitions, software SMM/SGX and the broader outstanding state
+matrix remain open. This execution extension requires no new LLVM intrinsic,
+LLVM release or production SDK pin.
 
 The contract follows [Intel SDM, task management and exception delivery](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 `X86LegacyTaskTest` covers publication, faults, both TSS widths, aliasing,
@@ -1641,3 +1659,90 @@ x87 `fabs` C-name update. Task-owner source hashes and all 1,140 source/export
 artifacts remain unchanged; both SDKs pass another 1,182 affected software,
 generated-C and C/Python bridge checks with no skips. The evidence records this
 integration separately from the complete P/E-core qualification.
+
+
+## Explicit VM86 execution
+
+`X86LegacyExecutionOptions::Virtual8086 = X86LegacyVM86Profile::IntelVME`
+connects VM86 to the existing legacy execution, event, task and generated-source
+owners. The mode remains CR0.PE=1, EFER.LMA=0 and CPL3. EFLAGS.VM is authoritative:
+each cache has selector*16 base, FFFFh limit, word defaults and read/write data
+access rights, including CS. Selector loads never consult GDT/LDT. A malformed
+externally supplied cache remains a binding error; a legitimate operand beyond
+its limit raises #GP or #SS before paging. All explicit VM86 operands use user
+page permissions, independently of IOPL.
+
+CPL0 IRETD consumes the extended ESP/SS/ES/DS/FS/GS frame and installs the whole
+mode image together; backing failures preserve the protected register image and
+IRET's NMI-unblock effect. Ordinary IRET/RETF and VM86 far branches share a private
+transfer journal. Frame reads and descriptor accessed writes that have completed
+are not repeated after backing repair, even if later page A/D or descriptor
+writes alias the saved IP or selector. An empty journal still retains an attempt
+once instruction authentication has completed. Source resumption skips a second
+fetch and budget charge; a pre-attempt fetch stop does neither.
+Admission errors leave the suspended journal intact. Completion and guest faults
+retire it before publishing a target or entering an event. An owner-level refusal
+(for example, discovering an unbound VM86 destination) also retires it, allowing
+a new attempt after the missing binding is supplied. Registers remain staged on
+failure; completed RAM effects and IRET's NMI unblock remain visible.
+Task entry publishes incoming registers before LDT
+validation, preserving incoming-task fault ownership. VM86 IRET ignores NT.
+VM86 far CALL/JMP/RETF use paragraph selectors and word stack offsets, with
+independent operand-size overrides. VM86 CALL and redirected INT check each
+stack slot in order, allowing SP to wrap between slots; a later #SS preserves
+earlier writes. The Intel CALL profile checks target EIP after both frame
+stores. A private far-transfer journal retains operand reads and completed
+stores across host backing stops, including a stack that overwrites its own
+far pointer or instruction bytes. Source resume keeps the original attempt
+budget and data-breakpoint observations. Existing scalar, selector, stack, string,
+port and event owners continue to supply their admitted instruction semantics.
+Real-mode execution and IA-32e mode transitions remain
+outside this binding; unsupported instructions still fail explicitly.
+
+Normal VM86 interrupts require a nonconforming CPL0 code target, switch to its
+TSS stack, save GS/FS/DS/ES before SS/ESP/flags/CS/IP, then invalidate the four
+data caches. IRETD restores that frame. INT imm8 has a separate classification
+from INT3/INTO: below IOPL3 it traps unless VME permits software redirection.
+VME reads the TSS redirection-map byte and IVT using supervisor permissions;
+a clear bit selects the fixed IVT, a word user-stack frame and a VM86 target.
+A set bit uses the protected IDT at IOPL3 or raises #GP below IOPL3. The final
+bitmap-byte offset is checked against the TSS limit, including underflow;
+IOBase<32 alone does not imply a fault. Completed bitmap/IVT reads and frame
+stores survive a host backing stop and are not repeated after repair.
+
+At low IOPL, word PUSHF/POPF/IRET and CLI/STI use VME/VIF rules. Word flag loads
+reject TF and an attempt to set VIF while VIP is set. Dword PUSHFD/POPFD/IRETD
+at low IOPL raise #GP. IOPL3 continues to use hardware IF. VM86 port instructions
+always consult the TSS I/O bitmap, including IOPL3 and zero-count REP forms.
+Protected-only selector/query instructions raise #UD before their operand;
+privileged control-register instructions retain #GP. Task-gate error pushes and
+VME user frames use the bound alignment-vs-paging priority and do not publish an
+operand store on #AC.
+
+The profile binds observed Intel behavior where the SDM pseudocode is not a
+complete executable specification: word IRET with VME succeeds below IOPL3;
+IRETD entry truncates the target EIP to 16 bits; a VM86 VIF+VIP conflict uses either
+CR4.VME or CR4.PVI even at IOPL3; redirected INT reads its IVT before stack
+stores, including aliasing. Original instruction comparisons on both local
+core types qualify these choices. They are not an inferred universal AMD or
+future-Intel policy. See [Intel SDM revision 093, volume 3B chapter 23 and the
+INT/IRET/PUSHF/POPF instruction references](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
+
+The generated drivers remain host-x64 Clang/NeverC programs over explicit guest
+state. This adds no NeverC 32-bit target. Physical SGX/EPC/AEX, software SMM/SGX,
+real/IA-32e transitions, CET/FRED and other outstanding execution contracts still
+prevent a global completion claim or final LLVM release.
+
+The [November 10 qualification](evidence/x86-vm86-returns-mpx-2026-11-10.json)
+records 2,764 passing executions with no skips on the full local SDK and
+production r6 SDK: 548 paging/execution checks on each SDK and P/E-core pair,
+229 generated-source checks per SDK, eight C/Python bridge checks and 106
+shared MPX checks. Each original VM86 comparison runs 57 instruction streams;
+the four added MPX streams cover OSXSAVE-disabled behavior only. The two SDKs
+produce 1,284 identical exported artifacts each. The evidence retains the
+failing IRETD frame/PTE-alias reproducer, corrected test-fixture failures,
+source and binary identities, and the separate hardware limitations above.
+After integrating dev's type-name rendering changes, both SDKs pass another
+862 type, generated-source and C/Python bridge checks, retaining identical
+exports. Ten optional UCRT/provider and kernel-PDB fixture checks are skipped
+across the two SDKs; the evidence lists their exact missing inputs separately.

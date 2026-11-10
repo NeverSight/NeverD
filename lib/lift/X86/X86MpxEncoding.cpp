@@ -107,10 +107,24 @@ std::optional<X86MpxEncoding>
 decodeX86MpxEncoding(llvm::ArrayRef<uint8_t> Bytes, Arch Target) {
   if (Target != Arch::X86 && Target != Arch::X64)
     return std::nullopt;
+  auto E = decodeX86MpxEncoding(Bytes, Target == Arch::X64
+                                           ? X86MpxCodeMode::Long64
+                                           : X86MpxCodeMode::Legacy32);
+  // Ordinary decode/lift does not bind enablement or a #UD continuation.
+  if (E && E->Detail.addr_size == 2)
+    return std::nullopt;
+  return E;
+}
+
+std::optional<X86MpxEncoding>
+decodeX86MpxEncoding(llvm::ArrayRef<uint8_t> Bytes, X86MpxCodeMode Mode) {
+  if (Mode != X86MpxCodeMode::Legacy16 && Mode != X86MpxCodeMode::Legacy32 &&
+      Mode != X86MpxCodeMode::Long64)
+    return std::nullopt;
   Bytes = Bytes.take_front(x86::kMaxInstructionLen);
   X86MpxEncoding E;
   auto &X = E.Detail;
-  const bool Mode64 = Target == Arch::X64;
+  const bool Mode64 = Mode == X86MpxCodeMode::Long64;
   const unsigned WordBytes = Mode64 ? 8 : 4;
   size_t Offset = 0;
   while (Offset < Bytes.size()) {
@@ -169,7 +183,7 @@ decodeX86MpxEncoding(llvm::ArrayRef<uint8_t> Bytes, Arch Target) {
     E.Size = Offset;
     return E;
   }
-  if (Reg >= X86MpxRegisterCount || (!Mode64 && Mod != 3 && X.prefix[3]))
+  if (Reg >= X86MpxRegisterCount)
     return std::nullopt;
   const bool Store = Opcode == 0x1b && (Mandatory == 0x66 || !Mandatory);
   if (Locked && !(Store && Mandatory == 0x66 && Mod != 3))
@@ -214,9 +228,27 @@ decodeX86MpxEncoding(llvm::ArrayRef<uint8_t> Bytes, Arch Target) {
   auto &Memory = Operand.mem;
   Memory.segment = segmentRegister(X.prefix[1]);
   Memory.scale = 1;
+  const bool Address16 =
+      !Mode64 && ((Mode == X86MpxCodeMode::Legacy16) != bool(X.prefix[3]));
+  X.addr_size = Address16 ? 2 : WordBytes;
   const bool HasSIB = (X.modrm & 7) == 4;
   unsigned DispBytes = Mod == 1 ? 1 : Mod == 2 ? 4 : 0;
-  if (HasSIB) {
+  if (Address16) {
+    constexpr std::array<x86_reg, 8> Base = {X86_REG_BX, X86_REG_BX, X86_REG_BP,
+                                             X86_REG_BP, X86_REG_SI, X86_REG_DI,
+                                             X86_REG_BP, X86_REG_BX};
+    constexpr std::array<x86_reg, 8> Index = {
+        X86_REG_SI,      X86_REG_DI,      X86_REG_SI,      X86_REG_DI,
+        X86_REG_INVALID, X86_REG_INVALID, X86_REG_INVALID, X86_REG_INVALID};
+    Memory.base = Base[RM];
+    Memory.index = Index[RM];
+    if (Mod == 2)
+      DispBytes = 2;
+    else if (Mod == 0 && RM == 6) {
+      DispBytes = 2;
+      Memory.base = X86_REG_INVALID;
+    }
+  } else if (HasSIB) {
     if (Offset == Bytes.size())
       return std::nullopt;
     X.sib = Bytes[Offset++];
@@ -249,8 +281,9 @@ decodeX86MpxEncoding(llvm::ArrayRef<uint8_t> Bytes, Arch Target) {
     uint32_t Value = 0;
     for (unsigned I = 0; I != DispBytes; ++I)
       Value |= uint32_t(Bytes[Offset + I]) << (8 * I);
-    X.disp = DispBytes == 1 ? int64_t(static_cast<int8_t>(Value))
-                            : int64_t(static_cast<int32_t>(Value));
+    X.disp = DispBytes == 1   ? int64_t(static_cast<int8_t>(Value))
+             : DispBytes == 2 ? int64_t(static_cast<int16_t>(Value))
+                              : int64_t(static_cast<int32_t>(Value));
     Memory.disp = X.disp;
   }
   E.Size = Offset + DispBytes;

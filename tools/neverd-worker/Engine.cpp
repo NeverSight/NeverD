@@ -5369,7 +5369,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     return page(items, p, {"name"}, PageAddressMatch::SegmentRange);
   }
   if (operation == "listing")
-    return listing().page(p);
+    return listing().page(p, encoded);
   if (operation == "string_references")
     return listing().stringReferences(p);
   if (operation == "overview")

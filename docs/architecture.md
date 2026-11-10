@@ -166,14 +166,29 @@ for backing stops and incoming-task faults. Ordinary instruction admission stays
 strict; only this owner can admit its partially loaded CS/SS fault context.
 Source selection uses the retained original instruction key during a suspended
 task switch, so it neither fetches overwritten bytes nor charges another attempt.
-VM86 destinations stop at an explicit `ModeUnavailable` boundary; their execution
-and event routing still require a complete mode owner.
+The optional `IntelVME` binding extends those same owners to VM86. EFLAGS.VM,
+not the cache attribute pattern, selects paragraph-based caches and CPL3
+permissions. The segment authority validates and constructs all six caches;
+IRETD and task entry reuse it, and the event owner saves the four extra data
+selectors on exit. VME software INT records its bitmap, IVT and completed stack
+accesses in the existing event journal. Only an unbound VM86 task destination
+stops at `ModeUnavailable`; adding the binding resumes that original task without
+another attempt. This does not add a second source instruction interpreter or
+an IA-32e/real-mode bridge.
 `translate/X86/X86LegacyFrameReturn` adds protected 16/32-bit IRET/RETF to that
 executor, retaining ordered descriptor writes and IRET NMI unblocking on later
 faults. `ir/X86/X86ReturnRules` shares code-return privilege checks, inaccessible
 data-cache invalidation and IRET flag restoration with the x64 source and
 faultable owners. Frame access order and mode-specific stack transitions remain
 in their respective owners, with explicit target profiles.
+`translate/X86/X86LegacyTransferJournal` retains completed frame/descriptor
+accesses for ordinary IRET/RETF and VM86 far branches across host backing stops.
+Its immutable private continuation is shared by copied execution states; each
+resumption works on its own journal copy. Admission refusals preserve it, while
+completion, guest faults and owner-level binding refusals retire it. The caller
+still publishes IRET NMI unblocking on every attempted return. Source budgets and
+watchpoint observations follow the original attempt through return completion
+and any separately suspended debug-event entry.
 `translate/X86/X86LegacyFarTransfer` owns protected far CALL/JMP and 16/32-bit
 call-gate entry in the same executor. It authenticates descriptors, stages
 coupled CS/SS/CPL/SP/EIP publication and retains ordered descriptor/frame/argument
@@ -495,7 +510,8 @@ long-mode RAM and pending #BR, including original-transfer effects. Ordinary
 function-ABI lifting and transactional completion remain closed.
 
 `translate/X86/X86LegacyMpx` adapts the same byte, bank and memory owners to
-protected code32 execution. Its explicit `WholeOperandRAM` profile supplies
+protected code16/code32 and VM86 execution. Its explicit `WholeOperandRAM`
+profile supplies
 segmented BNDMOV and flat-DS linear BDE/BTE accesses through `X86PagedMemory`.
 `PendingMpx` retains the authenticated instruction, original inputs, completed
 directory value and debug matches across host backing stops. A BDE can alias
@@ -522,7 +538,12 @@ and the architectural register NOP forms. Encoded MIB index, scale and absent
 base remain distinct; they do not authorize an ordinary memory operation at
 the displayed expression. Invalid banks, 16-bit memory forms, prohibited
 RIP-relative forms and competing mandatory prefixes do not acquire a qualified
-shape. Decoding a valid stateful instruction does not enable its strict lifter.
+shape through the ordinary Arch adapter. The explicit code-mode reader uses
+the same parser and retains complete address16 memory encodings, including
+ModRM/disp16 extents without a SIB. The concrete executor distinguishes enabled
+#UD from disabled no-op before evaluating operands. Register-only forms ignore
+67H in every mode. Decoding a valid stateful instruction does not enable its
+strict lifter.
 
 `lift/X86/X86MpxExecution.h` connects that byte reader to the shared context and
 memory provider for concrete single-instruction execution. Its explicit GPR
@@ -2337,6 +2358,14 @@ not establish a scalable calling convention or physical register aliasing.
 Serial and sharded LLVM pipelines both return semantic refusals through the
 pipeline result without publishing a partial module or source map.
 
+LLVM emission shards use a fixed MedIR work budget; worker count changes only
+their execution schedule. Native C++ FuncInfo groups, SEH parents and callbacks,
+and consumers of interior code identities remain together through emission and
+optimization. `MedCodeIdentity` shares the retained label and extent definitions
+between scheduling and materialization. The planner's conservative address
+index grants no pointer provenance; ambiguous or unsupported identities still
+fail in the emitter. An indivisible group may exceed the soft shard budget.
+
 Plain ERET is an operand-free terminal intrinsic, rendered as the external
 no-return helper `neverd_exception_return()`. It cannot become an ordinary
 return or a zero-valued unimplemented intrinsic. All emission routes reject
@@ -2706,7 +2735,11 @@ the SDK metadata snapshot alive through encoding. Small inventories keep one
 DOM encoding with their envelope; the crossover lives in worker resource
 limits. DOM callers and older SDKs retain their existing paths.
 `EncodedJson` accepts typed values only and keeps
-worker UTF-8 replacement behavior. Framing still accounts for the complete
+worker UTF-8 replacement behavior. A listing page the live listing answers is
+written as text (`JsonWriter`): keys in the order its document keeps them, and
+every string escaped as the serializer escapes it (copied only where the
+serializer copies it), so the page's bytes are its document's without building
+one. Framing still accounts for the complete
 response envelope; shared ordinary JSON output retains strict UTF-8 errors.
 Disposable worker envelopes preserve non-payload metadata for error responses.
 After admission, framing reserves its known final size and copies encoded
@@ -4689,14 +4722,30 @@ parameter/return graph. Positive declarations still pass full prototype
 validation without C name-table construction; an unsupported type cannot
 terminate a CFG path. `DebugContext::resolvePrototypeABI` provides the same
 validated types, calling convention and declaration origin for structural
-queries. The x86 import-return inventory uses it without spelling every
-library type. Both local-type queries use the ordinary signature converter;
-source emitters retain `resolvePrototype` and its complete C spellings.
+queries. The x86 import-return inventory and LowIR import-argument summaries
+use it without spelling every library type, including declarations outside
+the selected function. An import's return, scalar, variadic and record
+adapters share one converted declaration. User declarations retain their
+existing precedence over header and runtime tables. Both local-type queries
+use the ordinary signature converter; source emitters retain
+`resolvePrototype` and its complete C spellings. ABI queries retain validated
+graphs with the ordinary portable scalar spellings, which need no global
+name table. Rendering moves the same graph into the full-signature cache and
+adds declarations without changing previously returned types. Only valid
+prototype names in the context's library enter this intermediate cache;
+adding types clears it even when C names remain stable, so an opaque pointee
+can acquire its newly recovered layout.
 C declaration writers build their library-wide name table only when a named
 type or enumerator needs it. Scalar and parameter spelling use the same
 identifier rules directly. The deferred table still consumes the whole
 library in its canonical order, preserving collisions independently of
 which type is requested first. Shared embedded-name tables remain reusable.
+The naming table retains changed type spellings and an empty identity marker
+for each unchanged name. Repeated queries use that marker without normalizing
+the name again or retaining a second copy of it. Every type still takes its
+place in the ordinary namespace before enumerators, including unchanged
+identifiers and generated collision suffixes. Undeclared names follow the
+ordinary identifier rules.
 A name a program may also give a routine
 of its own decides only together with the module that exports it
 (`isNoReturnImport`, `WindowsNoReturnImports.inc`): the Universal CRT's
@@ -5028,7 +5077,12 @@ render as it was, and a file beside the folders (`.same`) says the folder holds 
 the inputs after them too. A session whose job starts over after it began no longer
 reads as a new session does, and stops reading and adding to the store.
 With a store that reaches every function, the owner answers those views itself
-(`kept_only`), and a replica starts only for what the store does not answer.
+(`kept_only`), and a replica starts only for what the store does not answer. A page
+the owner gave stays the owner's to answer for while it keeps it, even once a replica
+is ready (`AnalysisService::askOwner`), since the replica would read it from the store
+and send it whole; a graph, and a page a replica gave, stay with the replica. The
+owner answers the read before it says what the store holds (`kept_renders`), which
+decides only whether a replica starts beside that answer.
 The job also keeps what a function's first look in the listing asks the engine, its
 recovered instructions and its stack frame, in `local/listing-facts` under the same
 identity without the names of data, which those answers do not spell either. The
@@ -5084,7 +5138,9 @@ names that changed row by row (`Engine::takeNames`), so its name index stands, a
 does the function list the next selection reads (`Session::functionListCurrent`). A page the
 GUI keeps is named by the document and lines it came from; a later read names it
 (`if_none_match`), and while the document stands the worker says so instead of sending
-the page again (`QueryService::State::keptPages`). Where an edit built the document
+the page again (`QueryService::State::keptPages`). A replica's dispatcher keeps its
+pages across the read context it starts at each change of its owner's, so the read
+after an edit names them too. Where an edit built the document
 again, a worker that still has the old one sends what changed of the page
 (`page_delta`: lines replaced and the offsets after them shifted, `pageDelta`), which the
 GUI applies to the page it keeps (`page_delta::apply`); a reply the kept page does not

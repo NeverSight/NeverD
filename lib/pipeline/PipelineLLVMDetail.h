@@ -34,10 +34,11 @@ struct LLVMShardPlan {
   std::vector<unsigned> ShardOf;
 };
 
-/// Plan deterministic LPT emission shards. C++ EH contributions with the same
-/// nonzero native FuncInfo identity are one indivisible weighted unit.
+/// Plan work-budget LPT emission shards independently of worker count. Native
+/// C++ groups, SEH parent/callback closure and interior-code dependencies stay
+/// in one weighted unit. Image supplies instruction-mode address normalization.
 LLVMShardPlan planLLVMEmissionShards(const std::vector<MedFunc> &Funcs,
-                                     unsigned NumThreads);
+                                     const BinaryImage *Image = nullptr);
 
 } // namespace pipeline_detail
 } // namespace neverd

@@ -80,8 +80,108 @@ std::uint32_t frameSize(const unsigned char *header) {
   return size;
 }
 
+namespace {
+/// Whether the serializer, which escapes no non-ASCII character, copies \p
+/// text byte for byte: it holds no control character, quote or backslash, and
+/// only well-formed UTF-8 (which the serializer would otherwise replace).
+bool copiedVerbatim(std::string_view text) {
+  const auto *at = reinterpret_cast<const unsigned char *>(text.data());
+  const auto *const end = at + text.size();
+  while (at != end) {
+    const unsigned char lead = *at;
+    if (lead < 0x80) {
+      if (lead < 0x20 || lead == '"' || lead == '\\')
+        return false;
+      ++at;
+      continue;
+    }
+    // A continuation byte at \p offset, within [low, high].
+    const auto follows = [&](std::ptrdiff_t offset, unsigned char low = 0x80,
+                             unsigned char high = 0xbf) {
+      return end - at > offset && at[offset] >= low && at[offset] <= high;
+    };
+    std::ptrdiff_t length = 0;
+    if (lead >= 0xc2 && lead <= 0xdf)
+      length = follows(1) ? 2 : 0;
+    else if (lead == 0xe0)
+      length = follows(1, 0xa0) && follows(2) ? 3 : 0;
+    else if ((lead >= 0xe1 && lead <= 0xec) || lead == 0xee || lead == 0xef)
+      length = follows(1) && follows(2) ? 3 : 0;
+    else if (lead == 0xed)
+      length = follows(1, 0x80, 0x9f) && follows(2) ? 3 : 0;
+    else if (lead == 0xf0)
+      length = follows(1, 0x90) && follows(2) && follows(3) ? 4 : 0;
+    else if (lead >= 0xf1 && lead <= 0xf3)
+      length = follows(1) && follows(2) && follows(3) ? 4 : 0;
+    else if (lead == 0xf4)
+      length = follows(1, 0x80, 0x8f) && follows(2) && follows(3) ? 4 : 0;
+    if (!length)
+      return false;
+    at += length;
+  }
+  return true;
+}
+} // namespace
+
+void JsonWriter::escaped(std::string_view text) {
+  if (copiedVerbatim(text)) {
+    text_ += '"';
+    text_.append(text);
+    text_ += '"';
+    return;
+  }
+  text_ += Json(std::string(text))
+               .dump(-1, ' ', false, Json::error_handler_t::replace);
+}
+
+void JsonWriter::key(std::string_view name) {
+  separate();
+  escaped(name);
+  text_ += ':';
+  first_ = true;
+}
+
+void JsonWriter::string(std::string_view text) {
+  separate();
+  escaped(text);
+}
+
+void JsonWriter::address(std::uint64_t value) {
+  separate();
+  // The quotes, the prefix and 16 hexadecimal digits.
+  char buffer[20] = {'"', '0', 'x'};
+  auto *end =
+      std::to_chars(buffer + 3, buffer + sizeof buffer - 1, value, 16).ptr;
+  *end++ = '"';
+  text_.append(buffer, end);
+}
+
+void JsonWriter::number(std::uint64_t value) {
+  separate();
+  char buffer[24];
+  text_.append(buffer,
+               std::to_chars(buffer, buffer + sizeof buffer, value).ptr);
+}
+
+void JsonWriter::number(std::int64_t value) {
+  separate();
+  char buffer[24];
+  text_.append(buffer,
+               std::to_chars(buffer, buffer + sizeof buffer, value).ptr);
+}
+
+void JsonWriter::value(const Json &value) {
+  separate();
+  text_ += value.dump(-1, ' ', false, Json::error_handler_t::replace);
+}
+
 EncodedJson::EncodedJson(const Json &value)
     : text_(value.dump(-1, ' ', false, Json::error_handler_t::replace)) {}
+
+EncodedJson::EncodedJson(JsonWriter &&writer) : text_(std::move(writer.text_)) {
+  if (text_.size() > MaxFrameBytes)
+    throw Error("budget_exceeded", "Encoded JSON exceeds the output budget");
+}
 
 EncodedJson::EncodedJson(const Json::object_t &fields,
                          const std::string &arrayKey, std::size_t count,

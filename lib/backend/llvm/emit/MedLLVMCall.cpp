@@ -16,6 +16,7 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/llvm/AArch64/AArch64SourceResultCall.h"
+#include "neverd/backend/llvm/AArch64/LLVMEntryABI.h"
 #include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMFloatingCall.h"
 #include "neverd/backend/llvm/LLVMName.h"
@@ -1027,7 +1028,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         Values.push_back(Packed);
         continue;
       }
-      const bool Floating = Members.front().Type->Kind == NdTypeKind::Float;
+      const bool Floating = Members.front().Type->Kind == NdTypeKind::Float ||
+                            isSourceAArch64VectorType(Members.front().Type);
       auto *Array = llvm::cast<llvm::ArrayType>(
           llvmSourceCallValueType(*Ctx, Parameter.Type, /*Parameter=*/true));
       const unsigned Count = Array->getNumElements();
@@ -1039,6 +1041,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                            Builder.CreateLShr(Packed, I * kSourceCallWordBytes *
                                                           kSourceCallByteBits),
                            I64Ty);
+        if (Part->getType() != Array->getElementType())
+          Part = Builder.CreateBitCast(Part, Array->getElementType());
         Value = Builder.CreateInsertValue(Value, Part, {I});
       }
       Types.push_back(Array);
@@ -1166,6 +1170,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       }
     } else {
       Call = Builder.CreateCall(FT, Callable, Values, AuthenticationBundles);
+      if (TargetArch == Arch::AArch64 && TargetFormat == BinaryFormat::MachO)
+        Call->setMetadata(kAArch64SourceEntryCall, llvm::MDNode::get(*Ctx, {}));
     }
     if (!MachineCall && Hint.Signature.ReturnType->Kind == NdTypeKind::Int &&
         Hint.Signature.ReturnType->IsSigned)

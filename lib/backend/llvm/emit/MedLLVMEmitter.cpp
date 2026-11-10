@@ -31,14 +31,17 @@
 #include "neverd/backend/MIPS/MIPSDSPSource.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
+#include "neverd/backend/llvm/AArch64/LLVMEntryABI.h"
 #include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMName.h"
+#include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/LLVMSourceTypeHints.h"
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
 #include "neverd/backend/llvm/PEImportShadow.h"
 #include "neverd/backend/llvm/SourceFrameBytes.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/X86/X86RegistrationEntry.h"
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64ExceptionReturn.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
@@ -46,6 +49,7 @@
 #include "neverd/ir/med/AArch64/AArch64SVEState.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
+#include "neverd/ir/med/MedCodeIdentity.h"
 #include "neverd/ir/med/MedRawEnvironment.h"
 #include "neverd/ir/med/X86/X86CompactShape.h"
 #include "neverd/ir/med/X86/X86FourSourceShape.h"
@@ -711,7 +715,10 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
     std::vector<llvm::Type *> FieldTypes;
     for (const auto &RR : Func.MultiReturn) {
       uint16_t Sz = RR.Size ? RR.Size : 8;
-      if (RR.IsFP)
+      if (RR.IsFP && TargetArch == Arch::AArch64 &&
+          Sz == kSourceAArch64Vector128Bytes)
+        FieldTypes.push_back(Vec2I64);
+      else if (RR.IsFP)
         FieldTypes.push_back(Sz <= 4 ? llvm::Type::getFloatTy(*Ctx)
                                      : llvm::Type::getDoubleTy(*Ctx));
       else
@@ -1519,38 +1526,9 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
     // addresses cannot be reconstructed from the declaration alone.
     if (BodyMask && !(*BodyMask)[FuncIndex])
       continue;
-    std::vector<std::pair<va_t, va_t>> Ranges;
-    const auto Add = [&](va_t Begin, va_t End) {
-      if (End > Begin)
-        Ranges.emplace_back(Begin, End);
-    };
-    // A sized body runs on from its entry; where unwind records describe
-    // it, only as far as they do without a gap, since its size then reaches
-    // its farthest part across other functions' code.
-    if (Func.OriginalSize) {
-      va_t End = Func.Entry + Func.OriginalSize;
-      if (Func.ExceptionMetadata)
-        End = std::min(End, Func.ExceptionMetadata->contiguousEnd());
-      Add(Func.Entry, End);
-    }
-    if (Func.ExceptionMetadata) {
-      Add(Func.ExceptionMetadata->CodeRange.Begin,
-          Func.ExceptionMetadata->CodeRange.End);
-      for (const ExceptionAddressRange &Fragment :
-           Func.ExceptionMetadata->FragmentRanges)
-        Add(Fragment.Begin, Fragment.End);
-    }
-    for (const MedBlock &Block : Func.Blocks)
-      Add(Block.StartAddr, Block.EndAddr);
-    llvm::sort(Ranges);
-    std::vector<std::pair<va_t, va_t>> Merged;
-    for (const auto &Range : Ranges)
-      if (!Merged.empty() && Range.first <= Merged.back().second)
-        Merged.back().second = std::max(Merged.back().second, Range.second);
-      else
-        Merged.push_back(Range);
-    if (!Merged.empty())
-      EmittedFuncCodeRanges[Func.Entry] = std::move(Merged);
+    auto Ranges = medFunctionCodeRanges(Func);
+    if (!Ranges.empty())
+      EmittedFuncCodeRanges[Func.Entry] = std::move(Ranges);
   }
   // Definitions selected for this module own their types. Omitted declarations
   // supply no implementation, interior-code range or exception contract.
@@ -1630,9 +1608,7 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
       auto *BB = llvm::BasicBlock::Create(
           *Ctx, "bb_" + std::to_string(Block.Id), LLVMFunc);
       PreparedFuncBlocks[{Func.Entry, Block.Id}] = BB;
-      const va_t Address = Block.StartAddr != 0 || Block.Ops.empty()
-                               ? Block.StartAddr
-                               : Block.Ops.front().Addr;
+      const va_t Address = medBlockCodeAddress(Block);
       auto [It, Inserted] = LiftedCodeBlocks.try_emplace(Address, BB);
       if (!Inserted && It->second != BB)
         ConflictingLiftedCodeBlocks.insert(Address);
@@ -1744,8 +1720,26 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
             language_eh_md::InternalCxxContinuationReturnAttachment, nullptr);
       }
 
-  if (FatalCodePointerResolution || FatalDataPointerResolution ||
-      !normalizeResolvedLLVMCalls(*Mod_, SourceMap, AnalystSourceProjection) ||
+  if (FatalCodePointerResolution || FatalDataPointerResolution)
+    return nullptr;
+
+  if (ReconstructAArch64SourceEntries)
+    for (const MedFunc &Function : Funcs) {
+      auto Name = EmittedFuncNames.find(Function.Entry);
+      auto *Body = Mod_->getFunction(
+          Name == EmittedFuncNames.end() ? Function.Name : Name->second);
+      if (!Body || Body->isDeclaration())
+        continue;
+      auto Entry = reconstructDarwinAArch64Entry(*Body, Function);
+      if (!Entry) {
+        syncError() << llvm::toString(Entry.takeError()) << '\n';
+        return nullptr;
+      }
+      if (SourceMap)
+        SourceMap->Functions[Function.Entry] = *Entry;
+    }
+
+  if (!normalizeResolvedLLVMCalls(*Mod_, SourceMap, AnalystSourceProjection) ||
       !validateResolvedLLVMCallSignatures(*Mod_, AnalystSourceProjection))
     return nullptr;
 

@@ -23,6 +23,8 @@ add_neverd_unittest(NeverDX86PagingTests
   x86/X86LegacySegmentExecutionTests.cpp
   x86/X86LegacyExecutionTests.cpp
   x86/X86LegacyTaskTests.cpp
+  x86/X86LegacyVM86Tests.cpp
+  x86/X86LegacyReturnContinuationTests.cpp
   x86/X86PagingNativeTests.cpp
   x86/X64PagedEventDeliveryTests.cpp
 

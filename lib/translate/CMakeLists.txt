@@ -43,6 +43,7 @@ add_neverd_component_library(NeverDTranslate
   X86/X86LegacyEventDelivery.cpp
   X86/X86LegacyFrameReturn.cpp
   X86/X86LegacyFarTransfer.cpp
+  X86/X86LegacyTransferJournal.cpp
   X86/X87PortableRuntime.cpp
 
   LINK_COMPONENTS
