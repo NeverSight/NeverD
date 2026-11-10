@@ -569,3 +569,75 @@ li $v0,7
 jrc $ra
 .end m16e2_state_ei_discard
 .size m16e2_state_ei_discard, .-m16e2_state_ei_discard
+
+.align 1
+.globl m16e2_state_mfc0_status
+.type m16e2_state_mfc0_status,@function
+.ent m16e2_state_mfc0_status
+m16e2_state_mfc0_status:
+.insn
+mfc0 $v0,$12,0
+li $v0,7
+jrc $ra
+.end m16e2_state_mfc0_status
+.size m16e2_state_mfc0_status, .-m16e2_state_mfc0_status
+
+.align 1
+.globl m16e2_state_mfc0_epc
+.type m16e2_state_mfc0_epc,@function
+.ent m16e2_state_mfc0_epc
+m16e2_state_mfc0_epc:
+.insn
+mfc0 $v0,$14,0
+li $v0,7
+jrc $ra
+.end m16e2_state_mfc0_epc
+.size m16e2_state_mfc0_epc, .-m16e2_state_mfc0_epc
+
+.align 1
+.globl m16e2_state_mfc0_error_epc
+.type m16e2_state_mfc0_error_epc,@function
+.ent m16e2_state_mfc0_error_epc
+m16e2_state_mfc0_error_epc:
+.insn
+mfc0 $v0,$30,0
+li $v0,7
+jrc $ra
+.end m16e2_state_mfc0_error_epc
+.size m16e2_state_mfc0_error_epc, .-m16e2_state_mfc0_error_epc
+
+.align 1
+.globl m16e2_state_mtc0_epc
+.type m16e2_state_mtc0_epc,@function
+.ent m16e2_state_mtc0_epc
+m16e2_state_mtc0_epc:
+.insn
+mtc0 $v0,$14,0
+li $v0,7
+jrc $ra
+.end m16e2_state_mtc0_epc
+.size m16e2_state_mtc0_epc, .-m16e2_state_mtc0_epc
+
+.align 1
+.globl m16e2_state_mtc0_error_epc
+.type m16e2_state_mtc0_error_epc,@function
+.ent m16e2_state_mtc0_error_epc
+m16e2_state_mtc0_error_epc:
+.insn
+mtc0 $v0,$30,0
+li $v0,7
+jrc $ra
+.end m16e2_state_mtc0_error_epc
+.size m16e2_state_mtc0_error_epc, .-m16e2_state_mtc0_error_epc
+
+.align 1
+.globl m16e2_state_pause
+.type m16e2_state_pause,@function
+.ent m16e2_state_pause
+m16e2_state_pause:
+.insn
+pause
+li $v0,7
+jrc $ra
+.end m16e2_state_pause
+.size m16e2_state_pause, .-m16e2_state_pause

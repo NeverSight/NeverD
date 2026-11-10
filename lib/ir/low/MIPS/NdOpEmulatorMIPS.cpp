@@ -53,6 +53,30 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
     Context.Hardware.reset();
     return true;
   }
+  if (Id == Intrinsic::MIPSReadCP0Word || Id == Intrinsic::MIPSWriteCP0Word) {
+    if (!Context.CP0Usable)
+      return false;
+    std::optional<uint32_t> *Value = nullptr;
+    switch (Op.Inputs[1].Offset) {
+#define NEVERD_MIPS_CP0(Index, Name, Writable)                                 \
+  case Index:                                                                  \
+    Value = &Context.Name;                                                     \
+    break;
+#include "neverd/ir/intrinsics/MIPS/MIPSCP0.def"
+    }
+    // The shared shape contract has already admitted this exact word view.
+    if (Id == Intrinsic::MIPSReadCP0Word) {
+      if (!*Value)
+        return false;
+      writeOutput(Op.Output, **Value);
+    } else {
+      if (!knownOperandBytes(Op.Inputs[2], 0, 4))
+        return false;
+      *Value = uint32_t(readOperand(Op.Inputs[2]));
+      Context.ExecutionHazardPending = true;
+    }
+    return true;
+  }
   if (!Context.CP0Usable || !Context.Status)
     return false;
   const uint32_t Old = *Context.Status;
@@ -69,6 +93,9 @@ bool NdOpEmulator::executeMIPSScalar(const LowOp &Op) {
   const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
   if (mips::isSystemIntrinsic(Id))
     return false; // Explicit, single-step context required in either mode.
+  if (Id == Intrinsic::MIPSPause)
+    return MIPSReservationGranule && MIPSReservationKnown &&
+           !MIPSReservationAddress;
   if (mips::isReservationIntrinsic(Id)) {
     if (!MIPSReservationGranule || !knownOperandBytes(Op.Inputs[1], 0, 4))
       return false;

@@ -23603,6 +23603,19 @@ DSP multiply tests observe OUFLAG21 and unknown HI/LO even for a zero target;
 MSA tests cover every SAT immediate field and full-vector ASUB extrema, with
 independent widened arithmetic and source roundtrip expectations.
 
+The CP0/PAUSE increment checks all CP0 register/selector combinations, all
+compact GPRs, privilege independent of HWREna, unknown inputs, no-output shapes,
+odd EPC word roundtrips, unrelated context preservation, and bound EHB hazards.
+PAUSE tests distinguish disabled, unknown, held and cleared reservation models;
+refusal preserves a subsequent successful SC, stores invalidate, and reset
+forgets knowledge. Pipeline and GNU source fixtures check retained effects and
+explicit native-source refusal. These remain model tests, not original-e2 hardware.
+DSP expanded multiplication and both saturating pack forms have independent
+lane/flag results, aliases, zero targets, rounding thresholds and HI/LO checks.
+MSA I5 tests exercise all 32 immediates in all four widths, aliases, equality
+hits, adjacent values and extrema; source fixtures include signed negative and
+unsigned endpoint immediates in HighC/LLVM-derived C at O0/O2 in both byte orders.
+
 ### MIPS decode/lift and firmware performance
 
 `neverd-mips-bench` is an opt-in target, excluded from the default build:

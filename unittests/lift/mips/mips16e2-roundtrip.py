@@ -28,7 +28,7 @@ FUNCTIONS = ('andi', 'ori', 'xori', 'lui', 'ext', 'ins', 'ins_zero',
              'load_pair_reverse', 'store_pair', 'store_pair_reverse', 'gp_add', 'gp_lb', 'gp_lbu',
              'gp_lh', 'gp_lhu', 'gp_lw', 'gp_sb', 'gp_sh', 'gp_sw')
 FUNCTIONS += ("ehb",) + tuple(f"sync{i}" for i in range(32))
-STATEFUL = ('ll', 'sc', 'rdhwr', 'di', 'ei', 'di_discard', 'ei_discard')
+STATEFUL = ('ll', 'sc', 'rdhwr', 'di', 'ei', 'di_discard', 'ei_discard', 'mfc0_status', 'mfc0_epc', 'mfc0_error_epc', 'mtc0_epc', 'mtc0_error_epc', 'pause')
 INPUTS = [(0, 0), (1, 0xffffffff), (0xffffffff, 1), (0x80000000, 0x7fffffff),
           (0x89abcdef, 0x12345678), (0x80000000, 0), (0x7fffffff, 0x80000000)]
 rng = random.Random(0x16e2)

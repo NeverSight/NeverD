@@ -121,6 +121,14 @@ NEVERD_MIPS_DSP_LEFT(ShiftLeftSaturatedWord, 0xfc0007ff, 0x7c000513, 4, false,
 NEVERD_MIPS_DSP_LEFT(ShiftLeftSaturatedVariableWord, 0xfc0007ff, 0x7c000593, 4,
                      true, true)
 
+NEVERD_MIPS_DSP_INSTRUCTION(MultiplyExpandedLeftHalfword, 0xfc0007ff,
+                            0x7c000710)
+NEVERD_MIPS_DSP_INSTRUCTION(MultiplyExpandedRightHalfword, 0xfc0007ff,
+                            0x7c000750)
+NEVERD_MIPS_DSP_INSTRUCTION(PackRoundedSaturatedHalfwords, 0xfc0007ff,
+                            0x7c000551)
+NEVERD_MIPS_DSP_INSTRUCTION(PackSaturatedUnsignedBytes, 0xfc0007ff, 0x7c0003d1)
+
 #undef NEVERD_MIPS_DSP_LEFT
 #undef NEVERD_MIPS_DSP_EXPAND
 #undef NEVERD_MIPS_DSP_SHIFT

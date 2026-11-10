@@ -61,21 +61,30 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
     return true;
   }
 
+  const bool ExpandedMultiply =
+      *Kind == mips::DSPInstruction::MultiplyExpandedLeftHalfword ||
+      *Kind == mips::DSPInstruction::MultiplyExpandedRightHalfword;
   const bool FractionalMultiply =
+      ExpandedMultiply ||
       *Kind == mips::DSPInstruction::MultiplyRoundedHalfwords;
   if (FractionalMultiply || *Kind == mips::DSPInstruction::MultiplyLeftBytes ||
       *Kind == mips::DSPInstruction::MultiplyRightBytes) {
     const auto A = S.read(RS), B = S.read(RT);
     NdVar Result = NdVar::cst(0, 4), Overflow = NdVar::cst(0, 1);
-    for (unsigned I = 0; I != 2; ++I) {
+    for (unsigned I = 0; I != (ExpandedMultiply ? 1u : 2u); ++I) {
       const auto X = S.makeTemp(FractionalMultiply ? 2 : 1);
       const auto Y = S.makeTemp(2);
       const unsigned Offset =
-          FractionalMultiply
+          ExpandedMultiply
+              ? (*Kind == mips::DSPInstruction::MultiplyExpandedLeftHalfword
+                     ? 2
+                     : 0)
+          : FractionalMultiply
               ? 2 * I
               : I + (*Kind == mips::DSPInstruction::MultiplyLeftBytes ? 2 : 0);
       S.emit(NdOp::SUBBYTES, X, {A, NdVar::cst(Offset, 4)});
-      S.emit(NdOp::SUBBYTES, Y, {B, NdVar::cst(2 * I, 4)});
+      S.emit(NdOp::SUBBYTES, Y,
+             {B, NdVar::cst(ExpandedMultiply ? Offset : 2 * I, 4)});
       auto Product =
           S.binary(NdOp::INT_MULT, S.resize(X, 8, FractionalMultiply),
                    S.resize(Y, 8, FractionalMultiply));
@@ -86,18 +95,25 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
                      S.binary(NdOp::INT_EQUAL, X, NdVar::cst(0x8000, 2), 1),
                      S.binary(NdOp::INT_EQUAL, Y, NdVar::cst(0x8000, 2), 1), 1);
         // Widen before rounding, including negative halfway products.
-        Product =
-            S.binary(NdOp::INT_ASHR,
-                     S.binary(NdOp::INT_ADD, Product, NdVar::cst(0x4000, 8)),
-                     NdVar::cst(15, 8));
+        Product = ExpandedMultiply
+                      ? S.binary(NdOp::INT_LEFT, Product, NdVar::cst(1, 8))
+                      : S.binary(NdOp::INT_ASHR,
+                                 S.binary(NdOp::INT_ADD, Product,
+                                          NdVar::cst(0x4000, 8)),
+                                 NdVar::cst(15, 8));
       } else {
         Saturated = S.binary(NdOp::INT_LESS, NdVar::cst(0xffff, 8), Product, 1);
       }
       Overflow = S.binary(NdOp::BOOL_OR, Overflow, Saturated, 1);
-      const auto Lane = S.makeTemp(2);
+      const uint16_t Bytes = ExpandedMultiply ? 4 : 2;
+      const auto Lane = S.makeTemp(Bytes);
       S.emit(NdOp::SELECT, Lane,
-             {Saturated, NdVar::cst(FractionalMultiply ? 0x7fff : 0xffff, 2),
-              S.resize(Product, 2)});
+             {Saturated,
+              NdVar::cst(ExpandedMultiply     ? 0x7fffffff
+                         : FractionalMultiply ? 0x7fff
+                                              : 0xffff,
+                         Bytes),
+              S.resize(Product, Bytes)});
       Result = S.binary(
           NdOp::INT_OR, Result,
           S.binary(NdOp::INT_LEFT, S.resize(Lane, 4), NdVar::cst(16 * I, 4)));
@@ -110,6 +126,56 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
     // ac0, even if the destination is zero. Do not expose stale HI/LO values.
     S.emitIntrinsic(Intrinsic::MIPSUnpredictable, NdVar::reg(mipsreg::HI, 4));
     S.emitIntrinsic(Intrinsic::MIPSUnpredictable, NdVar::reg(mipsreg::LO, 4));
+    return true;
+  }
+
+  const bool PackRounded =
+      *Kind == mips::DSPInstruction::PackRoundedSaturatedHalfwords;
+  if (PackRounded ||
+      *Kind == mips::DSPInstruction::PackSaturatedUnsignedBytes) {
+    const auto A = S.read(RS), B = S.read(RT);
+    NdVar Result = NdVar::cst(0, 4), Overflow = NdVar::cst(0, 1);
+    const unsigned Count = PackRounded ? 2 : 4;
+    for (unsigned I = 0; I != Count; ++I) {
+      const auto Source = I < Count / 2 ? B : A;
+      NdVar Value, Saturated;
+      if (PackRounded) {
+        const auto Rounded = S.binary(NdOp::INT_ADD, S.resize(Source, 8, true),
+                                      NdVar::cst(0x8000, 8));
+        Saturated =
+            S.binary(NdOp::INT_SLESS, NdVar::cst(0x7fffffff, 8), Rounded, 1);
+        Value = S.makeTemp(4);
+        S.emit(NdOp::SELECT, Value,
+               {Saturated, NdVar::cst(0x7fff, 4),
+                S.binary(NdOp::INT_AND,
+                         S.resize(S.binary(NdOp::INT_ASHR, Rounded,
+                                           NdVar::cst(16, 8)),
+                                  4),
+                         NdVar::cst(0xffff, 4))});
+      } else {
+        const auto Lane = S.makeTemp(2);
+        S.emit(NdOp::SUBBYTES, Lane, {Source, NdVar::cst((I % 2) * 2, 4)});
+        const auto Negative =
+            S.binary(NdOp::INT_SLESS, Lane, NdVar::cst(0, 2), 1);
+        const auto High =
+            S.binary(NdOp::INT_SLESS, NdVar::cst(0x7f80, 2), Lane, 1);
+        Saturated = S.binary(NdOp::BOOL_OR, Negative, High, 1);
+        const auto Positive = S.makeTemp(2), Clamped = S.makeTemp(2);
+        S.emit(NdOp::SELECT, Positive,
+               {High, NdVar::cst(255, 2),
+                S.binary(NdOp::INT_RIGHT, Lane, NdVar::cst(7, 2))});
+        S.emit(NdOp::SELECT, Clamped, {Negative, NdVar::cst(0, 2), Positive});
+        Value = S.resize(Clamped, 4);
+      }
+      Overflow = S.binary(NdOp::BOOL_OR, Overflow, Saturated, 1);
+      Result = S.binary(NdOp::INT_OR, Result,
+                        S.binary(NdOp::INT_LEFT, Value,
+                                 NdVar::cst(I * (PackRounded ? 16 : 8), 4)));
+    }
+    WriteControl(S.binary(
+        NdOp::INT_OR, ReadControl(),
+        S.binary(NdOp::INT_LEFT, S.resize(Overflow, 4), NdVar::cst(22, 4))));
+    S.write(RD, Result);
     return true;
   }
 

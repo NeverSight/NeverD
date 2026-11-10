@@ -74,4 +74,16 @@ NEVERD_MIPS_MSA(AbsoluteDifferenceUnsigned, 0xff80003f, 0x7a800011)
 NEVERD_MIPS_MSA(SaturateSignedImmediate, 0xff80003f, 0x7800000a)
 NEVERD_MIPS_MSA(SaturateUnsignedImmediate, 0xff80003f, 0x7880000a)
 
+NEVERD_MIPS_MSA(AddImmediate, 0xff80003f, 0x78000006)
+NEVERD_MIPS_MSA(SubImmediate, 0xff80003f, 0x78800006)
+NEVERD_MIPS_MSA(EqualImmediate, 0xff80003f, 0x78000007)
+NEVERD_MIPS_MSA(SignedLessImmediate, 0xff80003f, 0x79000007)
+NEVERD_MIPS_MSA(UnsignedLessImmediate, 0xff80003f, 0x79800007)
+NEVERD_MIPS_MSA(SignedLessEqualImmediate, 0xff80003f, 0x7a000007)
+NEVERD_MIPS_MSA(UnsignedLessEqualImmediate, 0xff80003f, 0x7a800007)
+NEVERD_MIPS_MSA(SignedMaximumImmediate, 0xff80003f, 0x79000006)
+NEVERD_MIPS_MSA(UnsignedMaximumImmediate, 0xff80003f, 0x79800006)
+NEVERD_MIPS_MSA(SignedMinimumImmediate, 0xff80003f, 0x7a000006)
+NEVERD_MIPS_MSA(UnsignedMinimumImmediate, 0xff80003f, 0x7a800006)
+
 #undef NEVERD_MIPS_MSA

@@ -35,6 +35,7 @@ FUNCTIONS = ("dsp_read", "dsp_write", "dsp_partial", "dsp_add",
              "dsp_bitrev", "dsp_raddu", "dsp_repl_qb", "dsp_repl_ph", "dsp_replv_qb", "dsp_replv_ph", "dsp_preceq_phl", "dsp_preceq_phr", "dsp_precequ_qbl", "dsp_precequ_qbr", "dsp_precequ_qbla", "dsp_precequ_qbra", "dsp_preceu_qbl", "dsp_preceu_qbr", "dsp_preceu_qbla", "dsp_preceu_qbra", "dsp_addq_w", "dsp_subq_w", "dsp_addsc", "dsp_addwc", "dsp_modsub", "dsp_cmpeq", "dsp_cmplt", "dsp_cmple", "dsp_pick_b", "dsp_pick_h")
 FUNCTIONS += ('dsp_abs_ph', 'dsp_abs_w', 'dsp_abs_zero', 'dsp_cmpgueq', 'dsp_cmpgult', 'dsp_cmpgule', 'dsp_shll_qb', 'dsp_shllv_qb', 'dsp_shll_ph', 'dsp_shllv_ph', 'dsp_shll_s_ph', 'dsp_shllv_s_ph', 'dsp_shll_s_w', 'dsp_shllv_s_w', 'dsp_shll_zero')
 FUNCTIONS += tuple(f"dsp_{op}{suffix}" for op in ("muleu_l", "muleu_r", "mulq_rs") for suffix in ("", "_zero"))
+FUNCTIONS += tuple(f"dsp_{op}{suffix}" for op in ("muleq_l", "muleq_r", "precrq_rs", "precrqu_s") for suffix in ("", "_zero"))
 INITIAL_STATES = (0, 0x01100021, 0x0fff7fbf)
 INPUTS = ((0, 0), (0xff01807f, 0x02018081), (0x11223344, 0x55667788),
           (0xffffffff, 1), (0x80808080, 0x80808080),
@@ -42,6 +43,7 @@ INPUTS = ((0, 0), (0xff01807f, 0x02018081), (0x11223344, 0x55667788),
           (0x80008000, 0x80008000), (0x7fffffff, 1), (0xfffffffd, 1),
           (0x7fff7fff, 1), (0x80000000, 31), (0x80008000, 15))
 
+INPUTS += ((0x7fff7fff, 0xffff7fff), (0x7fff8000, 0xffff8000), (0x7f807f80, 0x7f807f80), (0x7f817f81, 0x7f817f81), (0xffff0000, 0x0080007f))
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -49,6 +51,26 @@ def digest(path):
 
 def expected(function, initial, arguments):
     a, b = arguments
+    if function.startswith(("dsp_muleq_", "dsp_precrq_rs", "dsp_precrqu_s")):
+        value, state = 0, initial
+        signed = lambda v, bits: v - (1 << bits) if v & (1 << (bits-1)) else v
+        if function.startswith("dsp_muleq_"):
+            shift = 16 if "muleq_l" in function else 0
+            x, y = (signed((v >> shift) & 65535, 16) for v in (a,b))
+            if x == y == -32768: value, state = 0x7fffffff, state | (1 << 21)
+            else: value = (x*y*2) & 0xffffffff
+        elif function.startswith("dsp_precrq_rs"):
+            for v in (a,b):
+                rounded = signed(v,32) + 32768
+                if rounded > 0x7fffffff: rounded, state = 0x7fffffff, state | (1 << 22)
+                value = (value << 16) | ((rounded >> 16) & 65535)
+        else:
+            for v in (a,b):
+                for shift in (16,0):
+                    x = signed((v >> shift) & 65535,16)
+                    if x < 0 or x > 32640: state |= 1 << 22
+                    value = (value << 8) | max(0,min(255,x // 128))
+        return (7 if function.endswith("zero") else value), state
     if function.startswith(("dsp_muleu_", "dsp_mulq_")):
         value, state = 0, initial
         for lane in range(2):
