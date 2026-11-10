@@ -204,5 +204,112 @@
     "el0_passed_cases": 82,
     "neverd_output_qualified": false,
     "scope": "Official FVP environment controls only; four CPTA/CPTA0 combinations have hardware-register readback in the model. Native hosted M1 cannot qualify CPA2."
+  },
+  "native_publication": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42746949630",
+    "environment_revision": "5e466f3a7035a5ac8e06a21d675f21a450326454",
+    "scope": "Exact local Release/r6 test host replay on two native hosts; not a cold source build. Each host executes 20 dylib, 4 userspace-main and 4 default-system-main cases with no failures or skips.",
+    "source_revision": "e5a0fddc68b2fd03c2f25445aca674cef32ab3e6",
+    "llvm": "v23.0.0-r6",
+    "hosts": [
+      {
+        "host": "macos-26",
+        "source_revision": "e5a0fddc68b2fd03c2f25445aca674cef32ab3e6",
+        "manifest_sha256": "b8b7c1942a7ffbf689c1671ebbac79ba42403f8cb3233d935cdc34048a5d67a9",
+        "binary_sha256": "e479ab5d605533ab15a6b21d89f81afced5811070fd02221f510e618359c911e",
+        "owned_test_host_removed": true,
+        "profiles": {
+          "dylib-installation": {
+            "passed": 20,
+            "failed": 0,
+            "skipped": 0,
+            "fixup_loader": "system",
+            "report_sha256": "6295897996b3f8aa859401f7caefa0be21e6d08a4ab20614464439433209171e",
+            "probe_report_sha256": "29f6b99bc3b9e053d35d100aa114a36c598ce72ca8ed83435d76f5654d2d6c89",
+            "xml_sha256": "031317ddafa5d43937a7d31c27c93e3d817d6640fa8ad5974136265cdc4b890e",
+            "runtime_launcher": "ctest"
+          },
+          "installation": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "fixup_loader": "userspace",
+            "report_sha256": "6aebfe2cb9e7ffd5e601b81c266a8ff01f631c7f1c4cece4d2ddbebdecfe32d7",
+            "probe_report_sha256": "f9e5f71980b659d2f9c290982e770dbe724e33ccdc7ccaccbe9d2e25bf9409db",
+            "xml_sha256": "9ba26a4e83766a77b4cad474cdcfcf2e12b36de5a3f531e168972bb6890b9f4f",
+            "runtime_launcher": "/usr/bin/sandbox-exec"
+          },
+          "default-installation": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "fixup_loader": "system",
+            "report_sha256": "9ecd5c8b2c456330c07ce28b57e8b034f68d55e88274cbb3bab40dfcb0bb83c0",
+            "probe_report_sha256": "29f6b99bc3b9e053d35d100aa114a36c598ce72ca8ed83435d76f5654d2d6c89",
+            "xml_sha256": "085e1b44aca111b55699d2cf34a0b90e108638ca36b3329215006f5c7cc87867",
+            "runtime_launcher": "ctest"
+          }
+        }
+      },
+      {
+        "host": "xcode-27",
+        "source_revision": "e5a0fddc68b2fd03c2f25445aca674cef32ab3e6",
+        "manifest_sha256": "b8b7c1942a7ffbf689c1671ebbac79ba42403f8cb3233d935cdc34048a5d67a9",
+        "binary_sha256": "e479ab5d605533ab15a6b21d89f81afced5811070fd02221f510e618359c911e",
+        "owned_test_host_removed": true,
+        "profiles": {
+          "dylib-installation": {
+            "passed": 20,
+            "failed": 0,
+            "skipped": 0,
+            "fixup_loader": "system",
+            "report_sha256": "1b8abb56f7b9c298092210f8d3883457bdf49a97147440c9531025cc1ae8ba3b",
+            "probe_report_sha256": "b4eac67d473c1c1c44b80493e26ee936c9ecc92ec481c4a5174a9c2a614ef6f0",
+            "xml_sha256": "5fecd41b9766419cc25d03d312d82108311dfcddf652c40477a5d96cd0daf18e",
+            "runtime_launcher": "ctest"
+          },
+          "installation": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "fixup_loader": "userspace",
+            "report_sha256": "23227967cb657fc30a998f3affd35de6242b29169678a80a16da9cf44da7b115",
+            "probe_report_sha256": "d72b22f3c35be2e7837cbdda4a9bc6767ae8cf942dc828064e8220410ea6e876",
+            "xml_sha256": "a848a698e668ba63aa07058df672de60aab31c649c4caad209f1493f6ed24838",
+            "runtime_launcher": "/usr/bin/sandbox-exec"
+          },
+          "default-installation": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "fixup_loader": "system",
+            "report_sha256": "079e2f653e6c1133f1cdbde3f43eab39c3bab5fa7746be1261c6fe2a66e8e1df",
+            "probe_report_sha256": "b4eac67d473c1c1c44b80493e26ee936c9ecc92ec481c4a5174a9c2a614ef6f0",
+            "xml_sha256": "5143bdbc167d5883898e62d174d661adc2b4a9e63df6eb1d0b80ff6536913cee",
+            "runtime_launcher": "ctest"
+          }
+        }
+      }
+    ],
+    "native_default_executable_publication_qualified": true,
+    "whole_image_publication_qualified": false,
+    "native_apple_cpta_qualified": false
+  },
+  "local_validation": {
+    "expanded": {
+      "total": 768,
+      "passed": 738,
+      "skipped": 30,
+      "failed": 0
+    },
+    "final_macho": {
+      "total": 147,
+      "passed": 122,
+      "skipped": 25,
+      "failed": 0
+    },
+    "native_verifier_unit_tests": 16,
+    "artifact_lifecycle_tests": 5,
+    "environment_controller_tests": 9
   }
 }

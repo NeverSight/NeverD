@@ -302,6 +302,16 @@ reports `FEAT_CPA=0` and `FEAT_CPA2=0` on an Apple M1 virtual CPU. The separatel
 recorded FVP EL0/EL1 controls qualify that model environment, not native Apple
 CPTA-on or new NeverD output.
 
+The same record binds the [production publication replay](https://github.com/gmh5225/test_mac_intel/actions/runs/42746949630)
+at `e5a0fddc68b2fd03c2f25445aca674cef32ab3e6`. Each host passes twenty dylib,
+four userspace-profile main and four default-system main cases, with no failures
+or skips. The default command starts CTest directly; its successful system PAC
+and original-dylib report is separately hashed from the userspace prerequisite.
+Both hosts use the same identified local Release/r6 test binary, which is
+removed after execution. This is a delivered-host replay, not a cold source
+build. The ordinary original main, authenticated replacement calls, RELRO,
+compact/DWARF catches and cleanup all execute under the default loader.
+
 ```sh
 python3 scripts/verify_arm64e_native.py run-default-executable \
   --build-dir build-release \
