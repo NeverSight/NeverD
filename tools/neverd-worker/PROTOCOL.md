@@ -1077,7 +1077,9 @@ the times an owner's views read which store they are kept under, which an edit t
 keeps the stores for what it changed says as it takes it.  `metadata.local_type_names_prepared`
 counts the idle steps that found read what a declaration of local types checks its
 names against (`neverd_local_types_prepare`), which the step after each request and
-after each other idle step reads once the session has read its local types.  A replica that takes a function's
+after each other idle step reads once the session has read its local types.
+`metadata.names_prepared` counts the same steps that found read what naming an
+address checks the name against of the image's symbols (`neverd_names_prepare`).  A replica that takes a function's
 declaration hiding no prototype keeps the documents that did not read it, as the
 owner does.
 
