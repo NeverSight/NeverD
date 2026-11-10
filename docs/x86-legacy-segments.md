@@ -29,9 +29,13 @@ precede all page-table observations and A/D writes. After a successful segment
 check, a linear range crossing FFFFFFFFh continues at zero. A subsequent #PF
 retains the translated fault address and earlier A/D effects without publishing
 a partial load result or ordinary store. Missing physical backing remains an
-embedding failure. These entry points require CR0.PE and no EFER.LMA. An
-explicit EFLAGS.VM selects the VM86 cache contract below and requires CPL3;
-real-mode and IA-32e compatibility environments remain separate. Alignment,
+embedding failure. These entry points require CR0.PE. With EFER.LMA they
+represent explicitly selected compatibility operands, retaining four/five-level
+paging and using low-32-bit segment-cache views. The mode owner retains the
+complete architectural FS/GS bases; it must not truncate the stored bank or
+implicit system-table addresses. An explicit EFLAGS.VM selects the VM86 cache
+contract below and requires CPL3 and no EFER.LMA. Real-mode execution and
+mixed-mode instruction dispatch remain separate. Alignment,
 instruction commit, event delivery and partial-progress instruction policy
 remain separate owners.
 

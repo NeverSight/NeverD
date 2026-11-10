@@ -37,10 +37,11 @@ X86MemoryAccessResult backingFault(const GuestMemoryAccessResult &Access) {
 llvm::Expected<X86LegacySegmentResult>
 segmentAccess(const X86PagingState &State, const X86SegmentedAccess &A,
               uint64_t Bytes) {
-  if (!(State.CR0 & 1) || (State.EFER & 0x400) ||
-      ((State.RFlags & 0x20000) && A.CPL != 3) || A.CPL > 3 || !Bytes ||
-      Bytes > kMemoryFaultMaxAccessBytes)
-    return invalid("segmented operands require legacy protected-mode state");
+  if (!(State.CR0 & 1) ||
+      ((State.RFlags & 0x20000) && ((State.EFER & 0x400) || A.CPL != 3)) ||
+      A.CPL > 3 || !Bytes || Bytes > kMemoryFaultMaxAccessBytes)
+    return invalid(
+        "segmented operands require protected or compatibility state");
   X86SegmentAccessKind Kind;
   switch (A.Kind) {
   case MemoryAccessKind::Read:

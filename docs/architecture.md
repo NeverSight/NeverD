@@ -31,7 +31,10 @@ symbols or instruction semantics.
 
 `ir/X86/X86LegacySegments` owns already-loaded protected 16/32-bit segment
 operand permissions and complete offset bounds. `X86PagedMemory` composes this
-owner with page walks and 32-bit linear wrap; the native-memory concrete
+owner with page walks and 32-bit linear wrap. Compatibility operands retain
+IA-32e paging controls and use an explicit low-width segment-cache view;
+implicit IA-32e system-table operands retain full-width addresses. The
+native-memory concrete
 adapter applies it to one explicitly bound CS/ES/SS operation. Descriptor
 loading uses `translate/X86/X86LegacySegmentExecution` for explicit legacy
 selector MOV/PUSH/POP and LxS. `ir/X86/X86SegmentDescriptorRules` shares data/stack

@@ -43,7 +43,7 @@ Faults report the vector, error code and optional new CR2. Missing physical
 backing is an embedding failure and never fabricated as a guest page fault.
 Canonicality is checked for the whole operand before the first walk: a
 noncanonical tail reports #GP/#SS even if its canonical first page is absent.
-IA-32e operands wrap modulo 2^64 across the last and first linear pages.
+Full-width IA-32e operands wrap modulo 2^64 across the last and first linear pages.
 Descriptor base/index addition, wrapped descriptor cells and interrupt frames
 use the same modular linear-address domain.
 
@@ -54,9 +54,13 @@ regions use read/write backing permissions; guest execution permission is owned
 by paging. Stores that alias their own paging structures use the translations
 established before operand publication.
 
-The explicit legacy `loadSegment`/`storeSegment` binding applies cached segment
+The explicit legacy/compatibility `loadSegment`/`storeSegment` binding applies cached segment
 permissions and bounds before any page walk, and preserves modulo-2^32 linear
-wrap after base addition. Full-limit crossings require a per-execution choice.
+wrap after base addition. Compatibility keeps EFER.LMA and the four/five-level
+page-table format. Its caller supplies low-width segment-cache views while
+preserving the complete architectural bank, including FS/GS bases. Implicit
+IA-32e system-table accesses retain full-width canonical addresses and cannot
+select `Wrap32`. Full-limit crossings require a per-execution choice.
 See [legacy segment operands](x86-legacy-segments.md) for mode, cache-loading
 and instruction-boundary responsibilities.
 

@@ -691,6 +691,15 @@ LA57 are explicit skips. Shared event-template edits also run the full
 `NeverDX64ContinuationSourceTests` and `NeverDX64ContinuationExportTests` on the
 native-intrinsic SDK and pinned r6 SDK. See [the contract](x86-paged-memory.md).
 
+`IA32e/X86CompatibilityPagingTest.*` checks segmented operands with four/five-
+level paging, low-width base addition and wrap, complete operand publication,
+fault CR2, earlier A/D effects and full-width implicit table accesses. Its
+separate KVM MOV oracle compares FS/GS base preservation, data pages and
+ordinary fault frames for successful wrap, missing pages, write protection
+and segment limits. Native fault-time A/D ordering is not equated. Five-level
+software checks run even when native LA57 is unavailable. These operand tests
+do not qualify mixed-mode instruction dispatch or a NeverC 32-bit target.
+
 `X86LegacySegments.*` and `LegacyPagingModes/X86LegacySegmentNativeTest.*`
 in `NeverDX86PagingTests` check cached protected segments, whole-offset bounds,
 expand-down D/B behavior, per-execution full-limit choices and linear wrap.

@@ -77,10 +77,13 @@ public:
   llvm::Expected<X86MemoryAccessResult> probe(const X86LinearAccess &Access,
                                               uint64_t Bytes);
 
-  /// Protected legacy 16/32-bit operands with already loaded caches. Segment
-  /// checks precede all page walks; linear wrap still retains whole-operand
-  /// publication. Alignment, instruction commit and exception delivery remain
-  /// the caller's owners. No selector reload or GDT lookup is inferred.
+  /// Protected legacy/compatibility operands with already loaded caches. The
+  /// caller selects this address domain explicitly; CS.L is not inferred.
+  /// Compatibility uses a low-32-bit cache view while retaining the full bank
+  /// and IA-32e paging controls. Segment checks precede all page walks; linear
+  /// wrap retains whole-operand publication. Alignment, instruction commit and
+  /// exception delivery remain the caller's owners. No selector reload or GDT
+  /// lookup is inferred.
   llvm::Expected<X86MemoryAccessResult>
   loadSegment(const X86SegmentedAccess &Access,
               llvm::MutableArrayRef<uint8_t> Output);

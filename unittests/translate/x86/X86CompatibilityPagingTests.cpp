@@ -209,7 +209,10 @@ TEST_P(X86CompatibilityPagingTest, AdmissionRejectsWideAndVM86Operands) {
   InvalidControls.RFlags |= 0x20000;
   llvm::cantFail(Memory->bindControls(InvalidControls));
   std::array<uint8_t, 4> Bytes{};
-  auto Invalid = Memory->loadSegment(access(), Bytes);
+  auto VM86 = access();
+  VM86.CPL = 3;
+  VM86.Cache = x86VM86SegmentCache(0x20);
+  auto Invalid = Memory->loadSegment(VM86, Bytes);
   ASSERT_FALSE(bool(Invalid));
   llvm::consumeError(Invalid.takeError());
   EXPECT_EQ(Memory->physicalMemory().snapshotMemoryRegions().front().Bytes,

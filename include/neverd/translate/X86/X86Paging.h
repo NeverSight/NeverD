@@ -70,9 +70,10 @@ struct X86LinearAccess {
   bool ImplicitSupervisor = false;
   /// Noncanonical stack addresses raise #SS(0), other addresses #GP(0).
   bool Stack = false;
-  /// Legacy operands after whole-segment/table checking may cross the
-  /// 32-bit linear wrap. IA-32e references cannot select
-  /// this flag. It does not waive segment-offset limit checks.
+  /// Checked legacy/compatibility segment operands, and legacy table operands,
+  /// may cross the 32-bit linear wrap. Paging mode is unchanged; IA-32e
+  /// implicit system-table references retain full-width addresses. This flag
+  /// does not waive segment-offset limits or truncate a wide starting address.
   bool Wrap32 = false;
 };
 
@@ -111,8 +112,9 @@ llvm::Error validateX86PagingState(const X86PagingFeatures &Features,
 /// Check an operand's entire linear extent before any page-table access.
 /// Controls have already passed validateX86PagingState. Noncanonical operands
 /// report #GP/#SS before any #PF, even when the first byte has no translation.
-/// IA-32e operands wrap modulo 2^64; both ends must remain canonical.
-/// Legacy linear wrap requires explicit Wrap32 after segment checks.
+/// Full-width IA-32e operands wrap modulo 2^64; both ends must remain
+/// canonical. Legacy/compatibility linear wrap requires explicit Wrap32 after
+/// segment checks, independently of the page-table format.
 llvm::Expected<std::optional<X86MemoryException>>
 checkX86LinearAccess(const X86PagingState &State, const X86LinearAccess &Access,
                      uint64_t Bytes);

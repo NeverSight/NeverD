@@ -259,16 +259,16 @@ checkX86LinearAccess(const X86PagingState &S, const X86LinearAccess &A,
     return invalid("invalid x86 paging access kind or privilege");
   if (A.Kind == MemoryAccessKind::Execute && (A.ImplicitSupervisor || A.Stack))
     return invalid("instruction fetch cannot be an implicit or stack access");
-  if (A.Wrap32 && (S.EFER & LMA))
-    return invalid("32-bit linear wrap requires a legacy operand");
+  if (A.Wrap32 && (S.EFER & LMA) && A.ImplicitSupervisor)
+    return invalid("IA-32e system-table operands require full-width addresses");
   if (!Bytes || Bytes > kMemoryFaultMaxAccessBytes)
     return invalid(
         "x86 paged operand requires a nonempty representable extent");
-  if (!(S.EFER & LMA)) {
+  if (!(S.EFER & LMA) || A.Wrap32) {
     if (A.Address > UINT32_MAX ||
         (!A.Wrap32 && Bytes - 1 > UINT32_MAX - A.Address))
       return invalid(
-          "legacy x86 wrap requires a checked segment or table operand");
+          "32-bit x86 wrap requires a checked segment or legacy table operand");
   } else {
     const unsigned Width = S.CR4 & LA57 ? 57 : 48;
     for (uint64_t Address : {A.Address, A.Address + Bytes - 1}) {
