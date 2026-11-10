@@ -60,7 +60,7 @@ windowsAPIPrototype(std::string_view Name, std::string_view Return,
 /// stdio.h, vcruntime.h and the Windows SDK.
 ///
 /// A `_PVFV`, `_PIFV` or `_onexit_t` is the function pointer it is; a
-/// `_startupinfo *`, `_onexit_table_t *`,
+/// `_startupinfo *`,
 /// `struct _EXCEPTION_POINTERS *` or a pointer to another structure the
 /// routine fills or reads (`STARTUPINFOW`, `FILETIME`, `SLIST_HEADER`,
 /// `CONTEXT`, `RUNTIME_FUNCTION`) a `void *`; a `va_list` the `char *` it is
@@ -70,6 +70,8 @@ windowsAPIPrototype(std::string_view Name, std::string_view Return,
 /// `uint16_t` it is on Windows.  They apply to a PE image alone, and no arity
 /// is derived from them: `_lock` or `terminate` is a different routine of
 /// another runtime.
+/// Header-owned records and callback typedefs retain their source types:
+/// equal integer widths alone do not make function-pointer types compatible.
 inline constexpr auto kWindowsCRTPrototypes = std::to_array<LibCPrototype>({
     // MSVC's scalar/array allocation and unsized release on 32-bit x86.
     // Exact decorated names distinguish these one-argument cdecl overloads
@@ -155,14 +157,17 @@ inline constexpr auto kWindowsCRTPrototypes = std::to_array<LibCPrototype>({
     windowsCRTPrototype("_get_initial_narrow_environment", "char **", {}),
     windowsCRTPrototype("_get_initial_wide_environment", "wchar_t **", {},
                         "stddef.h"),
-    windowsCRTPrototype("_initialize_onexit_table", "int", {"void *"}),
+    windowsCRTPrototype("_initialize_onexit_table", "int",
+                        {"struct _onexit_table_t *"}, "corecrt_startup.h"),
     windowsCRTPrototype("_register_onexit_function", "int",
-                        {"void *", "int (*)(void)"}),
-    windowsCRTPrototype("_execute_onexit_table", "int", {"void *"}),
+                        {"struct _onexit_table_t *", "int (*)(void)"},
+                        "corecrt_startup.h"),
+    windowsCRTPrototype("_execute_onexit_table", "int",
+                        {"struct _onexit_table_t *"}, "corecrt_startup.h"),
     windowsCRTPrototype("_crt_atexit", "int", {"void (*)(void)"}),
     windowsCRTPrototype("_crt_at_quick_exit", "int", {"void (*)(void)"}),
     windowsCRTPrototype("_register_thread_local_exe_atexit_callback", "void",
-                        {"void (WINAPI *)(void *, uint32_t, void *)"}),
+                        {"_tls_callback_type"}, "process.h"),
     windowsCRTPrototype("_seh_filter_exe", "int", {"uint32_t", "void *"}),
     windowsCRTPrototype("_seh_filter_dll", "int", {"uint32_t", "void *"}),
     windowsCRTPrototype("_set_fmode", "int", {"int"}),

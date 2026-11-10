@@ -17,11 +17,11 @@
 #include <vector>
 
 namespace neverd::c_library {
-/// The explicit tags in a runtime prototype come from its named header,
-/// including tags nested inside callback parameters. Callers use this only
-/// when they include that header, so local debug types must not redefine them.
-inline void appendHeaderTags(const libc::LibCPrototype &Prototype,
-                             std::set<std::string> &Tags) {
+/// Tags and known pointer typedefs in a runtime prototype come from its named
+/// header, including tags nested inside callback parameters. Callers use this
+/// only when they include that header, so debug types must not redefine them.
+inline void appendHeaderTypeNames(const libc::LibCPrototype &Prototype,
+                                  std::set<std::string> &Names) {
   if (Prototype.Header.empty())
     return;
   const auto Visit = [&](std::string_view Type) {
@@ -36,8 +36,9 @@ inline void appendHeaderTags(const libc::LibCPrototype &Prototype,
              (llvm::isAlnum(Type[End]) || Type[End] == '_'))
         ++End;
       const std::string_view Word = Type.substr(I, End - I);
-      if (Previous == "struct" || Previous == "union" || Previous == "enum")
-        Tags.emplace(Word);
+      if (Previous == "struct" || Previous == "union" || Previous == "enum" ||
+          libc::isPointerType(Word))
+        Names.emplace(Word);
       Previous = Word;
       I = End;
     }

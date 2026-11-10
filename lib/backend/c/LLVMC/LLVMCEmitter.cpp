@@ -1294,7 +1294,7 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     OS << "\n";
     IncludedHeaders.insert(Headers.begin(), Headers.end());
     for (const auto *Prototype : HeaderPrototypes)
-      c_library::appendHeaderTags(*Prototype, HeaderCallRecords);
+      c_library::appendHeaderTypeNames(*Prototype, HeaderCallRecords);
   }
   if (isMIPS(Opts.TheArch) && mips::modulePreservesDSPControl(
                                   Mod, Img ? Img : Opts.Image, Opts.TheArch))

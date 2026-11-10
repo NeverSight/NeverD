@@ -4401,20 +4401,36 @@ TEST(LLVMCValues, WindowsCRTEnumsAndCallbacksAgreeWithHeaderDeclarations) {
 @_configure_narrow_argv = external global i8, !neverd.data-symbol !0
 @_configure_wide_argv = external global i8, !neverd.data-symbol !0
 @__setusermatherr = external global i8, !neverd.data-symbol !0
+@_initialize_onexit_table = external global i8, !neverd.data-symbol !0
+@_register_onexit_function = external global i8, !neverd.data-symbol !0
+@_execute_onexit_table = external global i8, !neverd.data-symbol !0
+@_register_thread_local_exe_atexit_callback = external global i8, !neverd.data-symbol !0
 )ir"
                                            : R"ir(
 declare void @_set_app_type(i32)
 declare i32 @_configure_narrow_argv(i32)
 declare i32 @_configure_wide_argv(i32)
 declare void @__setusermatherr(ptr)
+declare i32 @_initialize_onexit_table(ptr)
+declare i32 @_register_onexit_function(ptr, ptr)
+declare i32 @_execute_onexit_table(ptr)
+declare void @_register_thread_local_exe_atexit_callback(ptr)
 )ir";
       auto Module = llvm::parseAssemblyString(Imports + R"ir(
-define i32 @configure_crt(i32 %mode, ptr %callback) {
+define i32 @configure_crt(i32 %mode, ptr %callback, ptr %table,
+                          ptr %onexit, ptr %tls) {
   call void @_set_app_type(i32 %mode)
   %narrow = call i32 @_configure_narrow_argv(i32 %mode)
   %wide = call i32 @_configure_wide_argv(i32 %mode)
   call void @__setusermatherr(ptr %callback)
-  %result = add i32 %narrow, %wide
+  %init = call i32 @_initialize_onexit_table(ptr %table)
+  %reg = call i32 @_register_onexit_function(ptr %table, ptr %onexit)
+  %exec = call i32 @_execute_onexit_table(ptr %table)
+  call void @_register_thread_local_exe_atexit_callback(ptr %tls)
+  %argv = add i32 %narrow, %wide
+  %registered = add i32 %init, %reg
+  %executed = add i32 %registered, %exec
+  %result = add i32 %argv, %executed
   ret i32 %result
 }
 !0 = !{}
@@ -4439,20 +4455,34 @@ define i32 @configure_crt(i32 %mode, ptr %callback) {
       std::string Source;
       llvm::raw_string_ostream OS(Source);
       ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options));
-      // Independent source declarations model corecrt_startup.h and math.h.
-      // The native stubs also observe the enum values and invoke the callback.
+      // Independent source declarations model corecrt_startup.h, process.h
+      // and math.h. Native stubs observe enum values, table writes and calls.
       const std::string Prelude = R"c(
 #include <stdint.h>
 enum _crt_app_type { _crt_unknown_app, _crt_console_app, _crt_gui_app };
 enum _crt_argv_mode { argv_none, argv_plain, argv_expanded };
 struct _exception { int type; };
+typedef void (*_PVFV)(void);
+typedef int (*_onexit_t)(void);
+typedef struct _onexit_table_t {
+  _PVFV *_first, *_last, *_end;
+} _onexit_table_t;
+typedef void (__attribute__((stdcall)) *_tls_callback_type)(
+    void *, unsigned long, void *);
 void _set_app_type(enum _crt_app_type);
 int _configure_narrow_argv(enum _crt_argv_mode);
 int _configure_wide_argv(enum _crt_argv_mode);
 void __setusermatherr(int (*)(struct _exception *));
+int _initialize_onexit_table(_onexit_table_t *);
+int _register_onexit_function(_onexit_table_t *, _onexit_t);
+int _execute_onexit_table(_onexit_table_t *);
+void _register_thread_local_exe_atexit_callback(_tls_callback_type);
 )c";
       const std::string Harness = R"c(
-static int app, narrow, wide, observed;
+static int app, narrow, wide, observed, exit_observed, tls_observed;
+static _onexit_table_t *initialized;
+static _PVFV exit_slot;
+static _onexit_t exit_callback;
 void _set_app_type(enum _crt_app_type value) { app = value; }
 int _configure_narrow_argv(enum _crt_argv_mode value) {
   narrow = value;
@@ -4469,13 +4499,53 @@ void __setusermatherr(int (*callback)(struct _exception *)) {
 static int handle_math_error(struct _exception *error) {
   return error->type + 1;
 }
+int _initialize_onexit_table(_onexit_table_t *table) {
+  initialized = table;
+  table->_first = &exit_slot;
+  table->_last = table->_first;
+  table->_end = table->_first + 1;
+  return 3;
+}
+int _register_onexit_function(_onexit_table_t *table, _onexit_t callback) {
+  if (table != initialized || table->_first != &exit_slot ||
+      table->_last != table->_first || table->_end != table->_first + 1)
+    __builtin_trap();
+  exit_callback = callback;
+  return 5;
+}
+int _execute_onexit_table(_onexit_table_t *table) {
+  if (table != initialized) __builtin_trap();
+  return exit_callback();
+}
+static int handle_exit(void) {
+  ++exit_observed;
+  return 11;
+}
+void _register_thread_local_exe_atexit_callback(_tls_callback_type callback) {
+  callback(initialized, 0x12345678UL, &exit_slot);
+}
+static void __attribute__((stdcall)) handle_tls(
+    void *module, unsigned long reason, void *reserved) {
+  tls_observed = module == initialized && reason == 0x12345678UL &&
+                 reserved == &exit_slot;
+}
 int main(void) {
-  return configure_crt(2, (void *)handle_math_error) != 7 ||
-         app != 2 || narrow != 2 || wide != 2 || observed != 42;
+  _onexit_table_t table;
+  return configure_crt(2, (void *)handle_math_error, &table,
+                       (void *)handle_exit, (void *)handle_tls) != 26 ||
+         app != 2 || narrow != 2 || wide != 2 || observed != 42 ||
+         exit_observed != 1 || tls_observed != 1;
 }
 )c";
-      for (llvm::StringRef Level : {"-O0", "-O2"})
+      for (llvm::StringRef Level : {"-O0", "-O2"}) {
         compileAndRun(Prelude + Source + Harness, Level, {}, true);
+#if defined(__linux__) && defined(__x86_64__)
+        // Exercise stdcall's actual stack cleanup, not only its spelling in
+        // a 64-bit host projection where the compiler ignores the attribute.
+        if (Arch == neverd::Arch::X86)
+          compileAndRun(Prelude + Source + Harness, Level, {}, true, true);
+#endif
+      }
 
       // With headers enabled, a PDB may offer the same named definitions.
       // Asking for them would duplicate both the tags and their enumerators.
@@ -4486,7 +4556,8 @@ int main(void) {
             AskedForTypes = true;
             for (const auto &Type : Types)
               for (const char *Name : {"_crt_app_type", "_crt_argv_mode",
-                                       "_exception", "_crt_console_app"})
+                                       "_exception", "_crt_console_app",
+                                       "_onexit_table_t", "_tls_callback_type"})
                 EXPECT_NE(Type->SourceName, Name);
             return neverd::CRecordDefinitions{};
           };
@@ -4497,6 +4568,7 @@ int main(void) {
       EXPECT_NE(WithHeaders.find("#include <corecrt_startup.h>"),
                 std::string::npos);
       EXPECT_NE(WithHeaders.find("#include <math.h>"), std::string::npos);
+      EXPECT_NE(WithHeaders.find("#include <process.h>"), std::string::npos);
     }
   }
 }

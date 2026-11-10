@@ -1430,10 +1430,12 @@ function orders. `SavedFrameAddressKeepsItsIntegerCarrier` covers saved register
 homes in unoptimized x64/AArch64 callbacks across COFF, ELF and Mach-O; omitted
 restore operations cannot make surviving integer assignments take pointer text.
 `WindowsCRTEnumsAndCallbacksAgreeWithHeaderDeclarations` checks the shared CRT
-table against independent enum and callback declarations, then executes both
-direct and import-table calls at O0/O2 with UBSan for all four architecture
-projections. With includes enabled it also checks that local debug types cannot
-redefine the runtime headers' tags. The corresponding
+table against independent enum, on-exit table and callback declarations, then
+executes both direct and import-table calls at O0/O2 with UBSan for all four
+architecture projections. TLS callbacks retain the header's unsigned-long
+parameter and x86 stdcall convention; Linux x64 also executes the x86 cases as
+freestanding 32-bit programs. With includes enabled it checks that local debug
+types cannot redefine the runtime headers' types. The corresponding
 `HighCSourceCalls.RuntimeHeaderOwnsItsEnumerationDefinitions` check, in
 `NeverDSourceEntryBindingTests`, retains local enum definitions for an actual
 program-defined callee. Whole-unit Windows syntax checks additionally use the

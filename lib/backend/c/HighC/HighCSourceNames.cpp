@@ -192,7 +192,7 @@ void HighCWriter::prepareRecordDefinitions(const std::vector<HighFunc> &Funcs) {
   // LLVM C. Debug parameter and local types can name those tags too.
   std::set<std::string> HeaderTags;
   for (const auto *Prototype : HeaderPrototypes)
-    c_library::appendHeaderTags(*Prototype, HeaderTags);
+    c_library::appendHeaderTypeNames(*Prototype, HeaderTags);
   llvm::erase_if(Records, [&](const TypeRef &Type) {
     const TypeRef &Record =
         Type->Kind == NdTypeKind::Ptr ? Type->Pointee : Type;
