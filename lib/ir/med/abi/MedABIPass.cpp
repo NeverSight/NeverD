@@ -1889,6 +1889,7 @@ void recoverCallAbi(
           Op.CalleeVectorArgs <= 0 && !Op.CalleeVectorSlots &&
           CalleeArgs > int(IntParamRegs.size());
       bool StackSetupIncomplete = false;
+      std::set<int64_t> WideStackSlots;
       const bool NeedsStackBoundary =
           Convention && Convention->PairAlignedWideArguments &&
           !CI.IsIndirect && !HeaderVariadic && !OpenVariadicArity &&
@@ -1902,7 +1903,8 @@ void recoverCallAbi(
       const auto ReachingStackStores = callSetupStackStores(
           StackContext ? *StackContext : Ctx,
           RecoverStackJoins ? &StackJoins : nullptr, nullptr,
-          NeedsStackBoundary ? &StackSetupIncomplete : nullptr);
+          NeedsStackBoundary ? &StackSetupIncomplete : nullptr,
+          NeedsStackBoundary ? &WideStackSlots : nullptr);
       std::erase_if(StackJoins.Slots, [&](const auto &Item) {
         const int64_t Slot =
             int64_t(IntParamRegs.size()) +
@@ -3338,6 +3340,12 @@ void recoverCallAbi(
         for (int K = StackArgBase; K < std::min(CalleeArgs, MaxArgs); ++K) {
           const int64_t Offset = CallLayout.CallStackBase +
                                  (K - StackArgBase) * CallLayout.SlotBytes;
+          // The owner certified the call block's own complete wide store
+          // here (an AAPCS `double` stack argument); the block scan above
+          // split exactly that store into this slot's lane.
+          if (WideStackSlots.count(Offset) && FoundMask[K] &&
+              FromStackScan[K] && Found[K].Size == CallLayout.SlotBytes)
+            continue;
           const auto Reaching = ReachingStackStores.find(Offset);
           const bool Proven = Reaching != ReachingStackStores.end() &&
                               Reaching->second.Size == CallLayout.SlotBytes &&

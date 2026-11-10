@@ -105,12 +105,15 @@ bool incomingArgumentReachesCall(const AbiCallContext &C, int ArgIndex) {
 std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C,
                                                CallSetupStackJoins *Joins,
                                                size_t *SharedWork,
-                                               bool *Incomplete) {
+                                               bool *Incomplete,
+                                               std::set<int64_t> *WideSlots) {
   using Stores = std::map<int64_t, CallSetupStackValue>;
   if (Joins)
     *Joins = {};
   if (Incomplete)
     *Incomplete = false;
+  if (WideSlots)
+    WideSlots->clear();
   const auto markIncomplete = [&] {
     if (Incomplete)
       *Incomplete = true;
@@ -122,6 +125,7 @@ std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C,
     return {};
   }
   const int64_t Limit = Base + Word * C.MaxArgs;
+  const size_t SlotCount = static_cast<size_t>(C.MaxArgs);
   // A per-call bound also limits path duplication in diamonds. Exhaustion
   // publishes no partial predecessor proof.
   size_t Remaining = limits::kMaxCallSetupStackProofWork;
@@ -178,6 +182,10 @@ std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C,
     std::set<int64_t> Overwritten;
     bool Inherit = true;
     for (size_t I = End; I > 0; --I) {
+      // Every slot already has its closest store on this path, so no earlier
+      // operation, predecessor or cycle reaches the call through it.
+      if (Overwritten.size() == SlotCount)
+        break;
       if (!Remaining) {
         markIncomplete();
         Inherit = false;
@@ -218,16 +226,18 @@ std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C,
         // A partial scalar write cannot prove an entire required carrier.
         // Preserve the existing local multi-slot wide-store path only for
         // complete aligned words; it is separately certified by that scan.
-        if (Incomplete) {
-          const bool WholeWideStore = *Offset % Word == 0 &&
-                                      Op.Inputs[1].Size > Word &&
-                                      Op.Inputs[1].Size % Word == 0;
-          if ((!Local.count(Slot) || Op.Inputs[1].Size < Word) &&
-              !WholeWideStore)
-            markIncomplete();
-        }
+        const bool WholeWideStore = *Offset % Word == 0 &&
+                                    Op.Inputs[1].Size > Word &&
+                                    Op.Inputs[1].Size % Word == 0;
+        if (WholeWideStore && Depth == 0 && WideSlots)
+          WideSlots->insert(Slot);
+        if (Incomplete && (!Local.count(Slot) || Op.Inputs[1].Size < Word) &&
+            !WholeWideStore)
+          markIncomplete();
       }
     }
+    if (Overwritten.size() == SlotCount)
+      Inherit = false;
     Stores Common;
     std::map<int64_t, std::vector<std::pair<int, CallSetupStackValue>>>
         IncomingJoins;
@@ -327,6 +337,8 @@ std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C,
     markIncomplete();
     if (Joins)
       *Joins = {};
+    if (WideSlots)
+      WideSlots->clear();
     return {};
   }
   std::map<int64_t, MedVar> Result;
