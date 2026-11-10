@@ -8109,6 +8109,13 @@ complete scalar FP descriptors before and after declaration rendering across
 three data models, four architectures and COFF/ELF/Mach-O, including variadic,
 fastcall, record, pointer and long-double declarations. The header-origin
 regression also compares the ABI-only query with the full resolver.
+`PipelineOutcome.ImportSummariesNeedABIWithoutSourceDeclarations` checks the
+import inventory on x86, x64 and ARM64, including omitted imports and computed
+call targets. Cold and cached selections retain fixed argument counts and
+widths, variadic prefixes, missing declarations and user/header provenance
+without requesting C declarations. Run the
+Win64, i386, AAPCS64, System V and record-call suites alongside this shared
+consumer; emitters still require the ordinary source-bearing resolver.
 `TypeRender.ScalarSpellingsPreserveLaterNameCollisions` starts with scalar
 prototypes, then queries colliding named records in opposite orders and
 repeats the scalar prototype. C and C++ retain their parameter keyword rules;

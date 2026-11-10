@@ -3667,18 +3667,19 @@ struct ImportPrototypeArguments {
 /// one of the image format's own runtime (LibCPrototype, such as the Windows C
 /// runtime's `_initterm`), else one the arity tables give (LibCNames.h), by the
 /// exact name where the import entry is the C name, else one the program's
-/// types declare (\p Dbg's resolvePrototype), as the Windows kernel's headers
-/// declare the routines a driver imports.  A routine the image exports whose
-/// name binds a prototype (\p Dbg's resolveFunction) is listed too: where \p
-/// Effects summarizes its body, in DeclaredReads and DeclaredStackArgs, which
-/// join what the body reads, otherwise as an import is. Each integer register
-/// argument is read pointer-wide.  A floating argument is listed only under
-/// System V, which passes it in the next vector register at its width, and only
-/// when every argument has a register. The arguments past the registers are on
-/// the stack, which only a convention that summarizes stack arguments (\p
-/// StackArguments) counts; elsewhere such a routine is not listed.  Without
-/// \p RegisterArguments an import takes every argument on the stack.  A call
-/// to one of \p DispatchThunks, where given, calls its target register.
+/// types declare (\p Dbg's resolvePrototypeABI), as the Windows kernel's
+/// headers declare the routines a driver imports.  A routine the image exports
+/// whose name binds a prototype (\p Dbg's resolveFunction) is listed too: where
+/// \p Effects summarizes its body, in DeclaredReads and DeclaredStackArgs,
+/// which join what the body reads, otherwise as an import is. Each integer
+/// register argument is read pointer-wide.  A floating argument is listed only
+/// under System V, which passes it in the next vector register at its width,
+/// and only when every argument has a register. The arguments past the
+/// registers are on the stack, which only a convention that summarizes stack
+/// arguments (\p StackArguments) counts; elsewhere such a routine is not
+/// listed. Without \p RegisterArguments an import takes every argument on the
+/// stack. A call to one of \p DispatchThunks, where given, calls its target
+/// register.
 ImportPrototypeArguments importPrototypeArguments(
     const BinaryImage &Img, const std::vector<LowFunc> &Funcs,
     const LocalRegisterEffectRefs &Effects, bool StackArguments,
@@ -3727,7 +3728,8 @@ ImportPrototypeArguments importPrototypeArguments(
   auto Declared = [&](const std::string &Name) -> std::optional<FunctionSym> {
     if (!Dbg)
       return std::nullopt;
-    return Dbg->resolvePrototype(cNameOfStatedName(Name, Img.Format, Img.Arch));
+    return Dbg->resolvePrototypeABI(
+        cNameOfStatedName(Name, Img.Format, Img.Arch));
   };
   auto SignatureArguments =
       [&](const FunctionSym &Function) -> std::optional<Arguments> {
@@ -3798,10 +3800,10 @@ ImportPrototypeArguments importPrototypeArguments(
   // library's name that a library of the program's own exports.
   auto UserArguments =
       [&](const std::string &Name) -> std::optional<Arguments> {
-    const std::optional<FunctionSym> Function =
-        userPrototype(Dbg, cNameOfStatedName(Name, Img.Format, Img.Arch));
-    std::optional<Arguments> Result =
-        Function ? SignatureArguments(*Function) : std::nullopt;
+    const std::optional<FunctionSym> Function = Declared(Name);
+    if (!Function || Function->PrototypeLibrary != UserPrototypeLibrary)
+      return std::nullopt;
+    std::optional<Arguments> Result = SignatureArguments(*Function);
     if (Result && !Result->Floats.empty())
       return std::nullopt;
     return Result;
