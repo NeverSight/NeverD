@@ -156,7 +156,7 @@ MACHO_AUTH_NATIVE_TEXT(kExecutableEnvironment,
                        "NEVERD_ARM64E_EXECUTABLE_PROFILE")
 MACHO_AUTH_NATIVE_TEXT(
     kExecutableUnavailable,
-    "run-executable requires qualified userspace startup fixups")
+    "executable runtime requires a qualified native verifier profile")
 MACHO_AUTH_NATIVE_TEXT(kExecutableBaselineMarker, "native-original-startup-ok")
 MACHO_AUTH_NATIVE_TEXT(kExecutableProperty, "native_executable_published")
 MACHO_AUTH_NATIVE_TEXT(kOriginalSubtypeProperty, "original_cpu_subtype")

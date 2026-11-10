@@ -1575,6 +1575,26 @@ for legacy inputs because the Xcode 27 runner also drops authenticated bind
 addends in a compiler-original threaded control; original-format installation
 and inspection remain separate offline coverage.
 
+`prepareMachOAuthenticatedStartup` is the publication-time owner for default
+dyld startup. It migrates legacy threaded metadata and repartitions userland
+arm64e chains containing IB/DB slots into valid 4 KiB chain pages. The shared
+publication transaction invokes it before final signing, including when no
+new signing recipes were added. It rebuilds page roots and next fields while
+retaining storage VAs, targets, imports/addends, signing parameters, code and
+segment protections. Existing 4 KiB chains and A-key-only chained images are
+unchanged. Kernel/firmware formats and unrepresentable legacy imports reject
+transactionally. CodeDirectory page size is a separate signing contract and
+is preserved.
+
+This follows the default dyld fallback contract: XNU's
+[page-in signer supports only A keys](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/osfmk/vm/vm_dyld_pager.c),
+and its [mapping syscall rejects a non-native chain page size](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/vm/vm_unix.c).
+[dyld falls back to its in-process fixup implementation](https://github.com/apple-oss-distributions/dyld/blob/fd8d0c4d52320ebf64db34f3cb280310d905c5ae/dyld/Loader.cpp)
+when that mapping fails. On the qualified 16 KiB Apple hosts this retains all
+four keys without a launcher profile, environment override or protection change.
+Default startup qualification is separate from the explicit userspace diagnostic
+profile and from arbitrary lifted-image rebuilding.
+
 Installation is transactional, including automatic producer receipts and the
 optional explicit recipe handoff in `MachOPatcher::appendReplacementImage`.
 Failed placement planning cannot authorize installation at the zero error

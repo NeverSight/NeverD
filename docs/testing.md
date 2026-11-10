@@ -21924,6 +21924,28 @@ sandbox launcher again from the current SDK and rejects a different profile;
 its separate `native_executable_publication_qualified` result cannot satisfy
 the twenty-case dylib gate or general lifted-image publication.
 
+`run-default-executable` executes those same four main-executable cases with
+the system's default loader and no sandbox launcher. It requires a same-source
+successful `probe` for real four-key PAC and compiler-original dylib call/unwind
+controls; each case additionally executes its unchanged original main before
+publishing and executing the replacement. Publication automatically prepares
+4 KiB chains when B keys require dyld's fallback. The separate
+`native_default_executable_publication_qualified` flag requires all four cases
+to run without skips. It does not assert that an unmodified compiler-original
+main containing B-key chains can start, or qualify arbitrary lifted-image code.
+
+```bash
+python3 scripts/verify_arm64e_native.py probe --output native-probe
+python3 scripts/verify_arm64e_native.py run-default-executable \
+  --build-dir build-release --probe-report native-probe/report.json \
+  --output native-default-executable
+```
+
+`MachOArm64eInstallation.DefaultStartup*` tests 16-to-4 KiB repartitioning,
+page-edge chain termination, empty intervening pages, multi-start input,
+ordinary/authenticated slots, large positive/negative import addends, special
+ordinals, legacy migration, idempotence and unchanged bytes on rejection.
+
 `MachOArm64eInstallation.*` exercises transactional authenticated dyld
 installation in the six arm64e chain formats. It covers all keys and address
 diversity settings, local/import identities, special library ordinals,
