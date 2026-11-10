@@ -7,6 +7,7 @@
 #include "TypeLibrariesView.h"
 
 #include "Icons.h"
+#include "KeepTranslated.h"
 #include "ModelessDialog.h"
 #include "Session.h"
 #include "ShortcutHint.h"
@@ -49,21 +50,16 @@ TypeLibrariesView::TypeLibrariesView(Session &session, QWidget *parent)
   commandLayout->setContentsMargins(0, 0, 0, 0);
   const QKeySequence addKey(Qt::Key_Insert);
   const QKeySequence removeKey(QKeySequence::Delete);
-  const auto commandButton = [&](const char *iconName, const QString &text,
-                                 const QKeySequence &key) {
+  const auto commandButton = [&](const char *iconName) {
     auto *button = new QToolButton(commands);
     button->setIcon(icon(QString::fromLatin1(iconName)));
-    button->setToolTip(QStringLiteral("%1 (%2)").arg(
-        text, key.toString(QKeySequence::NativeText)));
-    setShortcutHint(*button, key);
     button->setAutoRaise(true);
     commandLayout->addWidget(button);
     return button;
   };
-  add_ = commandButton("local_types_add", tr("Add a type library"), addKey);
+  add_ = commandButton("local_types_add");
   add_->setObjectName(QStringLiteral("typeLibrariesAdd"));
-  remove_ = commandButton("local_types_delete",
-                          tr("Leave the selected library out"), removeKey);
+  remove_ = commandButton("local_types_delete");
   remove_->setObjectName(QStringLiteral("typeLibrariesRemove"));
   commandLayout->addStretch(1);
   makeRowShrinkable(*commands);
@@ -72,9 +68,6 @@ TypeLibrariesView::TypeLibrariesView(Session &session, QWidget *parent)
   table_ = new QTreeWidget(this);
   table_->setObjectName(QStringLiteral("typeLibrariesList"));
   table_->setColumnCount(Columns);
-  table_->setHeaderLabels({tr("Library"), tr("Origin"), tr("Data model"),
-                           tr("Record ABI"), tr("Types"), tr("Prototypes"),
-                           tr("Conflicts")});
   table_->setRootIsDecorated(false);
   table_->setUniformRowHeights(true);
   table_->setAllColumnsShowFocus(true);
@@ -124,7 +117,22 @@ TypeLibrariesView::TypeLibrariesView(Session &session, QWidget *parent)
   connect(&session_, &Session::unloaded, this, &TypeLibrariesView::reload);
   // The first catalogue arrives asynchronously; no choice is available yet.
   updateButtons();
-  reload();
+  // The list is read again in the new language: its origins and its status
+  // are worded as it arrives.
+  keepTranslated(*this, [this, addKey, removeKey] {
+    const auto command = [](QToolButton *button, const QString &text,
+                            const QKeySequence &key) {
+      button->setToolTip(QStringLiteral("%1 (%2)").arg(
+          text, key.toString(QKeySequence::NativeText)));
+      setShortcutHint(*button, key);
+    };
+    command(add_, tr("Add a type library"), addKey);
+    command(remove_, tr("Leave the selected library out"), removeKey);
+    table_->setHeaderLabels({tr("Library"), tr("Origin"), tr("Data model"),
+                             tr("Record ABI"), tr("Types"), tr("Prototypes"),
+                             tr("Conflicts")});
+    reload();
+  });
 }
 
 void TypeLibrariesView::reload() {

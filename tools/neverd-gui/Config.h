@@ -296,6 +296,28 @@ inline constexpr qreal kWorkbenchStyleFocusFrameGap = 1.0;
 /// The room a check box's or radio button's focus frame leaves around its
 /// box and label.
 inline constexpr int kWorkbenchStyleFocusFrameMargin = 2;
+/// A menu item's padding: before its icon column, after its shortcut, and
+/// above and below its text.
+inline constexpr int kWorkbenchStyleMenuItemPaddingLeft = 8;
+inline constexpr int kWorkbenchStyleMenuItemPaddingRight = 24;
+inline constexpr int kWorkbenchStyleMenuItemPaddingVertical = 4;
+/// The corners of a menu item's highlight and of a toggled icon's box.
+inline constexpr qreal kWorkbenchStyleMenuItemRadius = 3.0;
+/// How far a menu item's icon and its check mark sit in from its edge, and
+/// the line a toggled icon's box keeps around the icon.
+inline constexpr int kWorkbenchStyleMenuIconInset = 3;
+inline constexpr int kWorkbenchStyleMenuIconBorder = 1;
+inline constexpr int kWorkbenchStyleMenuCheckInset = 4;
+/// The size of a menu's check mark and of its submenu chevron.
+inline constexpr int kWorkbenchStyleMenuCheckSize = 16;
+inline constexpr int kWorkbenchStyleMenuArrowSize = 10;
+/// The room between a menu item's label and its shortcut, as QCommonStyle
+/// leaves it, and after its icon or check mark column.
+inline constexpr int kWorkbenchStyleMenuShortcutGap = 12;
+inline constexpr int kWorkbenchStyleMenuColumnGap = 4;
+/// A menu item's shortcut and submenu chevron draw at this opacity until the
+/// item is highlighted, as Visual Studio Code dims a keybinding.
+inline constexpr qreal kWorkbenchStyleMenuSecondaryOpacity = 0.7;
 
 inline constexpr QSize kQuickStartDialogSize{900, 560};
 inline constexpr QSize kQuickStartMinimumDialogSize{720, 460};

@@ -25,6 +25,19 @@ uint64_t sourcePatchStorageAlignment(Arch Architecture, BinaryFormat Format) {
   return 64 * 1024;
 }
 
+bool isExternalMachORelro(const CompiledImage &Image,
+                          const CompiledSection &Section) {
+  return Image.Format == BinaryFormat::MachO &&
+         Image.InputKind == RewriteInputKind::ReplacementObject &&
+         Section.IsAllocated && !Section.IsInImage &&
+         Section.ReadOnlyAfterFixups &&
+         (Section.Kind == llvm::mc_rewrite::RewriteSectionKind::WritableData ||
+          Section.Kind ==
+              llvm::mc_rewrite::RewriteSectionKind::UninitializedData) &&
+         Section.VA && Section.Size <= InvalidVA - Section.VA &&
+         Section.ExternalBytes.size() == Section.Size;
+}
+
 llvm::Expected<PatchStorageLayout>
 validatePatchStorageLayout(const CompiledImage &Image, uint64_t PageAlignment) {
   auto Fail = [](const llvm::Twine &Detail) {
@@ -46,11 +59,13 @@ validatePatchStorageLayout(const CompiledImage &Image, uint64_t PageAlignment) {
     const bool Write =
         Section.Kind == llvm::mc_rewrite::RewriteSectionKind::WritableData ||
         Section.Kind == llvm::mc_rewrite::RewriteSectionKind::UninitializedData;
+    const bool ExternalRelro = isExternalMachORelro(Image, Section);
     if (Section.ReadOnlyAfterFixups &&
-        (Image.Format != BinaryFormat::MachO || !Write || !Section.IsInImage))
+        (Image.Format != BinaryFormat::MachO || !Write ||
+         (!Section.IsInImage && !ExternalRelro)))
       return Fail(kRelro);
     if (!Section.IsInImage) {
-      if (Write)
+      if (Write && !ExternalRelro)
         return Fail(kExternal);
       continue;
     }

@@ -120,6 +120,29 @@ TEST_P(MIPSMergeValues, BothOrdersDiscardOnlyTheFirstOldValue) {
   }
 }
 
+TEST_P(MIPSMergeValues, MIPS16PairsRequireFourBytePhysicalInstructions) {
+  for (bool Reverse : {false, true}) {
+    Pair P(GetParam(), 4, Reverse);
+    for (auto &B : P.Physical.Blocks[0].InstructionBoundaries)
+      B.Mode = InstructionMode::MIPS16;
+    EXPECT_EQ(P.run(), isMIPS64(GetParam()) ? 0u : 1u);
+    for (unsigned Case = 0; Case < 3; ++Case) {
+      Pair Bad(GetParam(), 4, Reverse);
+      auto &Boundaries = Bad.Physical.Blocks[0].InstructionBoundaries;
+      for (auto &B : Boundaries)
+        B.Mode = InstructionMode::MIPS16;
+      if (Case == 0)
+        Boundaries[1].Size = 2;
+      if (Case == 1)
+        Boundaries[1].DelaySlot = LowDelaySlot{};
+      if (Case == 2)
+        Boundaries[1].Mode = InstructionMode::MicroMIPS;
+      EXPECT_EQ(Bad.run(), 0u);
+      EXPECT_FALSE(Bad.first().Inputs[2].isConst());
+    }
+  }
+}
+
 TEST_P(MIPSMergeValues, RefusesUnprovedAddressAndOccurrenceRelations) {
   for (unsigned Case = 0; Case < 12; ++Case) {
     SCOPED_TRACE(Case);

@@ -22,32 +22,59 @@ namespace neverd::mips {
 #define NEVERD_MIPS_SCALAR_TEXT(Name, Text) inline constexpr char Name[] = Text;
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.def"
 
-struct MergeLoad {
+struct MergeTransfer {
   Intrinsic Id;
   uint8_t Bytes;
   bool Left;
 };
 
-constexpr std::optional<MergeLoad> mergeLoad(Intrinsic Id) {
+constexpr std::optional<MergeTransfer> mergeLoad(Intrinsic Id) {
   switch (Id) {
 #define NEVERD_MIPS_MERGE_LOAD(Id, Value, Opcode, Bytes, Left, CName)          \
   case Intrinsic::Id:                                                          \
-    return MergeLoad{Intrinsic::Id, Bytes, Left};
+    return MergeTransfer{Intrinsic::Id, Bytes, Left};
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.def"
   default:
     return std::nullopt;
   }
 }
 
-constexpr std::optional<MergeLoad> mergeLoadOpcode(unsigned Opcode) {
+constexpr std::optional<MergeTransfer> mergeLoadOpcode(unsigned Opcode) {
   switch (Opcode) {
 #define NEVERD_MIPS_MERGE_LOAD(Id, Value, Opcode, Bytes, Left, CName)          \
   case Opcode:                                                                 \
-    return MergeLoad{Intrinsic::Id, Bytes, Left};
+    return MergeTransfer{Intrinsic::Id, Bytes, Left};
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.def"
   default:
     return std::nullopt;
   }
+}
+
+constexpr std::optional<MergeTransfer> mergeStore(Intrinsic Id) {
+  switch (Id) {
+#define NEVERD_MIPS_MERGE_STORE(Id, Value, Opcode, Bytes, Left, CName)         \
+  case Intrinsic::Id:                                                          \
+    return MergeTransfer{Intrinsic::Id, Bytes, Left};
+#include "neverd/ir/intrinsics/MIPS/MIPSScalar.def"
+  default:
+    return std::nullopt;
+  }
+}
+
+constexpr std::optional<MergeTransfer> mergeStoreOpcode(unsigned Opcode) {
+  switch (Opcode) {
+#define NEVERD_MIPS_MERGE_STORE(Id, Value, Opcode, Bytes, Left, CName)         \
+  case Opcode:                                                                 \
+    return MergeTransfer{Intrinsic::Id, Bytes, Left};
+#include "neverd/ir/intrinsics/MIPS/MIPSScalar.def"
+  default:
+    return std::nullopt;
+  }
+}
+
+constexpr std::optional<MergeTransfer> mergeMemory(Intrinsic Id) {
+  const auto Load = mergeLoad(Id);
+  return Load ? Load : mergeStore(Id);
 }
 
 constexpr bool isDSPControlIntrinsic(Intrinsic Id) {
@@ -67,7 +94,7 @@ constexpr bool isPureScalarValue(Intrinsic Id) {
 }
 
 constexpr bool isScalarIntrinsic(Intrinsic Id) {
-  return mergeLoad(Id).has_value() || Id == Intrinsic::MIPSUnpredictable ||
+  return mergeMemory(Id).has_value() || Id == Intrinsic::MIPSUnpredictable ||
          Id == Intrinsic::MIPSRequireWord || Id == Intrinsic::MIPSLwrUpper ||
          isDSPControlIntrinsic(Id) || isWordDivision(Id);
 }
@@ -97,6 +124,11 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
   if (Id == Intrinsic::MIPSReadDSPControl)
     return S.Inputs == 1 && S.OutputWritable && S.OutputBytes == 4 &&
            !isMIPS64(S.Target);
+  if (const auto Store = mergeStore(Id))
+    return S.Inputs == 3 && !S.OutputBytes && S.SecondBytes == Store->Bytes &&
+           (S.FirstBytes == 4 || S.FirstBytes == 8) &&
+           (S.Target == Arch::Unknown ||
+            S.FirstBytes == (isMIPS64(S.Target) ? 8 : 4));
   if (!S.OutputWritable || (S.OutputBytes != 4 && S.OutputBytes != 8))
     return false;
   if (Id == Intrinsic::MIPSUnpredictable)
@@ -118,15 +150,16 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
           S.FirstBytes == (isMIPS64(S.Target) ? 8 : 4));
 }
 
-/// Exact contiguous bytes within the aligned source word. These are ordinary
-/// memory reads; this contract does not describe device bus transactions.
+/// Exact contiguous bytes within the aligned memory word. RegisterByte is
+/// the first numeric register lane read by a store or written by a load.
+/// This ordinary-memory contract does not describe device bus transactions.
 struct MergeAccess {
   uint64_t First;
   uint8_t Count;
-  uint8_t DestinationByte;
+  uint8_t RegisterByte;
 };
 
-constexpr MergeAccess mergeAccess(MergeLoad Load, uint64_t Address,
+constexpr MergeAccess mergeAccess(MergeTransfer Load, uint64_t Address,
                                   bool LittleEndian) {
   const uint8_t Offset = Address & (Load.Bytes - 1);
   const bool Forward = Load.Left != LittleEndian;

@@ -16,6 +16,20 @@ using namespace neverd::symbolic;
 
 namespace {
 
+// A bounded search must still find these questions hard after symbolic
+// construction, which cancels a summand both sides of an equality share.
+// Each subexpression is built in its own statement: argument evaluation order
+// differs between compilers and node order changes the search.
+enum class Shape {
+  // y odd, x * y + z == w + bias with w == z bounded from both sides.
+  Product,
+  // y odd, x * y + z == 3 * z + bias; the low bits disagree for an odd x
+  // exactly when bias is even.
+  Parity,
+  // x == y with x * z + bias != y * z.
+  EqualProducts,
+};
+
 struct OrderedProblem {
   SymContext Ctx;
   SolverOptions Options;
@@ -23,26 +37,49 @@ struct OrderedProblem {
   unsigned RetryCharges = 0;
 
   OrderedProblem(unsigned Width = 4, unsigned Bias = 0,
-                 bool EqualProducts = false) {
+                 Shape Kind = Shape::Product) {
     Options.BuildModel = false;
     Options.Blast.MaxGates = 262144;
     Options.Sat.MaxConflicts = 10000;
-    Options.Sat.MaxPropagations = EqualProducts ? 10425 : (Bias ? 228 : 64);
+    Options.Sat.MaxPropagations = Kind == Shape::EqualProducts ? 10425
+                                  : Kind == Shape::Parity      ? 246
+                                                               : 64;
     Options.Sat.MaxWatchVisits = 10000000;
     X = Ctx.mkVar("x", Width);
     Y = Ctx.mkVar("y", Width);
     Z = Ctx.mkVar("z", Width);
-    if (EqualProducts) {
+    const auto One = Ctx.mkConst(Width, 1);
+    if (Kind == Shape::EqualProducts) {
       Domain = Ctx.mkEq(X, Y);
-      First = Ctx.mkNe(Ctx.mkAdd(Ctx.mkMul(X, Z), Ctx.mkConst(Width, Bias)),
-                       Ctx.mkMul(Y, Z));
+      const auto Left = Ctx.mkMul(X, Z);
+      const auto Biased = Ctx.mkAdd(Left, Ctx.mkConst(Width, Bias));
+      const auto Right = Ctx.mkMul(Y, Z);
+      First = Ctx.mkNe(Biased, Right);
+    } else if (Kind == Shape::Parity) {
+      const auto LowY = Ctx.mkAnd(Y, One);
+      const auto Odd = Ctx.mkEq(LowY, One);
+      const auto Product = Ctx.mkMul(X, Y);
+      const auto Left = Ctx.mkAdd(Product, Z);
+      const auto Triple = Ctx.mkMul(Z, Ctx.mkConst(Width, 3));
+      const auto Right = Ctx.mkAdd(Triple, Ctx.mkConst(Width, Bias));
+      const auto Equal = Ctx.mkEq(Left, Right);
+      Domain = Ctx.mkAnd(Odd, Equal);
+      const auto LowX = Ctx.mkAnd(X, One);
+      First = Ctx.mkEq(LowX, One);
     } else {
-      const auto Odd =
-          Ctx.mkEq(Ctx.mkAnd(Y, Ctx.mkConst(Width, 1)), Ctx.mkConst(Width, 1));
-      const auto Product = Ctx.mkAdd(Ctx.mkMul(X, Y), Z);
-      Domain = Ctx.mkAnd(
-          Odd, Ctx.mkEq(Product, Ctx.mkAdd(Z, Ctx.mkConst(Width, Bias))));
-      First = Ctx.mkNot(Ctx.mkEq(X, Ctx.mkZero(Width)));
+      const auto W = Ctx.mkVar("w", Width);
+      const auto LowY = Ctx.mkAnd(Y, One);
+      const auto Odd = Ctx.mkEq(LowY, One);
+      const auto Below = Ctx.mkUle(W, Z);
+      const auto Above = Ctx.mkUle(Z, W);
+      const auto Product = Ctx.mkMul(X, Y);
+      const auto Left = Ctx.mkAdd(Product, Z);
+      const auto Right = Ctx.mkAdd(W, Ctx.mkConst(Width, Bias));
+      const auto Equal = Ctx.mkEq(Left, Right);
+      Domain = Ctx.mkAnd({Odd, Below, Above, Equal});
+      const auto Zero = Ctx.mkZero(Width);
+      const auto IsZero = Ctx.mkEq(X, Zero);
+      First = Ctx.mkNot(IsZero);
     }
     Full = Ctx.mkAnd(Domain, First);
   }
@@ -74,10 +111,20 @@ TEST(OrderedQuery, IndependentExhaustiveArithmeticOracle) {
       }
   EXPECT_EQ(EqualProductViolations, 0u);
   EXPECT_EQ(BiasedProductWitnesses, 1024u);
+  // The parity question at the width its retry tests use: odd x and y leave
+  // x * y odd, so only an odd bias has witnesses.
+  for (unsigned Bias : {0u, 3u}) {
+    unsigned Witnesses = 0;
+    for (unsigned X = 1; X < 256; X += 2)
+      for (unsigned Y = 1; Y < 256; Y += 2)
+        for (unsigned Z = 0; Z != 256; ++Z)
+          Witnesses += ((X * Y + Z) & 255) == ((3 * Z + Bias) & 255);
+    EXPECT_EQ(Witnesses, Bias ? 32768u : 0u);
+  }
 }
 
 TEST(OrderedQuery, CompleteUnsatRetriesExactlyOnce) {
-  OrderedProblem P(5, 0, true);
+  OrderedProblem P(5, 0, Shape::EqualProducts);
   ASSERT_EQ(checkSat(P.Ctx, P.Full, nullptr, P.Options), SatResult::Unknown);
   ASSERT_EQ(checkSat(P.Ctx, P.First, nullptr, P.Options), SatResult::Sat);
   EXPECT_EQ(P.check(P.First), SatResult::Unsat);
@@ -85,14 +132,14 @@ TEST(OrderedQuery, CompleteUnsatRetriesExactlyOnce) {
 }
 
 TEST(OrderedQuery, CompleteSatRetriesExactlyOnce) {
-  OrderedProblem P(6, 1);
+  OrderedProblem P(8, 3, Shape::Parity);
   ASSERT_EQ(checkSat(P.Ctx, P.Full, nullptr, P.Options), SatResult::Unknown);
   EXPECT_EQ(P.check(P.First), SatResult::Sat);
   EXPECT_EQ(P.RetryCharges, 1u);
 }
 
 TEST(OrderedQuery, UndecidedSatisfiableQuestionRemainsUnknown) {
-  OrderedProblem P(6, 1);
+  OrderedProblem P(8, 3, Shape::Parity);
   P.Options.Sat.MaxPropagations = 1;
   ASSERT_EQ(checkSat(P.Ctx, P.Full, nullptr, P.Options), SatResult::Unknown);
   EXPECT_EQ(P.check(P.First), SatResult::Unknown);
@@ -108,7 +155,7 @@ TEST(OrderedQuery, OptOutKeepsTheOriginalRefusal) {
 }
 
 TEST(OrderedQuery, UnrelatedConditionCannotStrengthenTheQuestion) {
-  OrderedProblem P(6, 1);
+  OrderedProblem P(8, 3, Shape::Parity);
   EXPECT_EQ(P.check(P.Ctx.mkNot(P.First)), SatResult::Unknown);
   EXPECT_EQ(P.RetryCharges, 0u);
 }

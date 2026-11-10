@@ -16,7 +16,15 @@
     "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/0",
     "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/1",
     "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/2",
-    "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/3"
+    "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/3",
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/0",
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/1",
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/2",
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/3",
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/0",
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/1",
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/2",
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/3"
   ],
   "failure_tags": [
     "failure",
@@ -182,5 +190,48 @@
       "startup": true,
       "userspace_fixups": true
     }
-  ]
+  ],
+  "expected_executable_tests": [
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/0",
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/1",
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/2",
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/3"
+  ],
+  "passed_startup_probe": {
+    "source_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "source_sha256": {
+      "fixture": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "status": "passed",
+    "native_pac_qualified": true,
+    "compiler_original_call_unwind_qualified": true,
+    "control_loading": "exec",
+    "fixup_loader": "userspace",
+    "compiler_original_startup_qualified": true
+  },
+  "executable_probe_mutations": [
+    {
+      "control_loading": "dlopen"
+    },
+    {
+      "fixup_loader": "system"
+    },
+    {
+      "compiler_original_startup_qualified": false
+    },
+    {
+      "status": "unavailable"
+    },
+    {
+      "source_revision": "stale"
+    }
+  ],
+  "foreign_profile": {
+    "syscall_number": -1,
+    "profile": "foreign",
+    "launcher": [
+      "foreign"
+    ]
+  },
+  "test_binary_bytes": "owned verifier fixture"
 }

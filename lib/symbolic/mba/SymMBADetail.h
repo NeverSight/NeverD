@@ -285,6 +285,8 @@ SymRef cheapestOf(const SymContext &Ctx, llvm::ArrayRef<SymRef> Candidates);
 struct ArithmeticMemo;
 struct RegionMemo;
 struct AbstractionMemo;
+struct LinearProofMemo;
+struct LinearCandidateMemo;
 struct ParityMemo;
 struct ResidueMemo;
 
@@ -329,6 +331,12 @@ public:
   std::shared_ptr<ArithmeticMemo> Arithmetic;
   std::shared_ptr<RegionMemo> Regions;
   std::shared_ptr<AbstractionMemo> Abstractions;
+  // Successful full-width linear identities over immutable nodes in this
+  // context. Refused or incomplete proofs never enter this request's memo.
+  std::shared_ptr<LinearProofMemo> LinearProofs;
+  // Candidate synthesis over the same independent body and resolved limits.
+  // Every reused candidate still passes the separate identity verifier.
+  std::shared_ptr<LinearCandidateMemo> LinearCandidates;
   std::shared_ptr<ParityMemo> Parities;
   // Optional search attempts, including declines. A declined attempt grants
   // no equality; it only avoids repeating the same search under fewer
@@ -689,10 +697,10 @@ SymRef foldProductValuations(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
 SymRef foldProductParity(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
                          size_t &Storage);
 
-/// Recognize a three-node reading whose free inputs rule out every cheaper
-/// same-width expression. Shared by deep and post-arithmetic region checks.
-bool isMinimalBinaryLeafExpression(const SymContext &Ctx, SymRef E,
-                                   const MBAOptions &Opts);
+/// Recognize a reading whose free inputs rule out every cheaper MBA form.
+/// Shared by deep and post-arithmetic region checks.
+bool isMinimalLeafExpression(const SymContext &Ctx, SymRef E,
+                             const MBAOptions &Opts);
 
 /// Solve independent summand groups before measuring \p E as one region.
 /// This is the mask-free half of the region solver; \c solveMasked reduces to

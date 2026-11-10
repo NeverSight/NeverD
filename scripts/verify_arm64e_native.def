@@ -234,7 +234,9 @@
   "families": [
     "AuthenticatedCallsAndSignedUnwindExecute",
     "NativeDwarfLanguageCallsAndCleanup",
-    "RelocatedSignedLanguageFramesExecute"
+    "RelocatedSignedLanguageFramesExecute",
+    "PublishedEntriesExecute",
+    "PublishedThreadedEntriesExecute"
   ],
   "indices": [
     0,
@@ -257,7 +259,7 @@
   ],
   "build_dir_flag": "--test-dir",
   "test_regex_flag": "-R",
-  "test_regex": "^AppleClang/MachOArm64eNativeObjectInstallation[.](AuthenticatedCallsAndSignedUnwindExecute|NativeDwarfLanguageCallsAndCleanup|RelocatedSignedLanguageFramesExecute)/",
+  "test_regex": "^AppleClang/MachOArm64eNativeObjectInstallation[.](AuthenticatedCallsAndSignedUnwindExecute|NativeDwarfLanguageCallsAndCleanup|RelocatedSignedLanguageFramesExecute|PublishedEntriesExecute|PublishedThreadedEntriesExecute)/",
   "selection_label": "ctest-selection",
   "discovery_flag": "--show-only=json-v1",
   "test_binary": "NeverDArm64eAnalysisTests",
@@ -286,7 +288,8 @@
     "probe",
     "run",
     "legacy",
-    "probe-startup"
+    "probe-startup",
+    "run-executable"
   ],
   "probe_mode": "probe",
   "output_argument": "--output",
@@ -297,16 +300,17 @@
     "binary": "Compiler output is not a thin arm64e Mach-O binary",
     "compile": "Compiler-original control failed to build: {label}",
     "signature": "Compiler-original signature verification failed: {label}",
-    "cases": "Native runtime selection is not the exact twelve-case signed language matrix",
+    "cases": "Native runtime selection is not the exact signed language and publication matrix",
     "runtime": "Native runtime case failed, skipped or did not run: {name}",
     "probe": "Current-source PAC and compiler-original call/unwind preflight must pass before installation qualification",
     "discovery": "Registered CTest native runtime commands are unavailable or invalid",
     "ctest": "Native runtime CTest invocation failed",
-    "arguments": "run requires --build-dir and --probe-report",
+    "arguments": "run and run-executable require --build-dir and --probe-report",
     "legacy": "Legacy fixtures are missing, stale, or do not match their recorded arm64e binaries",
     "legacy_linker": "A successful lookup of a real ld-classic is required",
     "syscall": "SDK must define exactly one map_with_linking_np syscall number",
-    "startup_fixups": "userspace startup fixups require probe-startup"
+    "startup_fixups": "userspace startup fixups require probe-startup",
+    "startup_profile": "Executable publication requires the matching SDK-derived userspace startup profile"
   },
   "library_suffix": ".dylib",
   "loader_suffix": "-loader",
@@ -350,5 +354,14 @@
     "/usr/bin/sandbox-exec",
     "-p",
     "{profile}"
-  ]
+  ],
+  "publication_qualification_key": "native_object_publication_qualified",
+  "executable_mode": "run-executable",
+  "executable_families": [
+    "PublishedExecutableStarts"
+  ],
+  "executable_test_regex": "^AppleClang/MachOArm64eNativeObjectInstallation[.]PublishedExecutableStarts/",
+  "executable_qualification_key": "native_executable_publication_qualified",
+  "executable_environment": "NEVERD_ARM64E_EXECUTABLE_PROFILE",
+  "executable_environment_value": "userspace"
 }

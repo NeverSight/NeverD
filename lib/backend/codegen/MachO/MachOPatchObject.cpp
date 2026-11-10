@@ -7,6 +7,7 @@
 #include "MachODependencyState.h"
 
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/codegen/MachO/MachOAuthenticatedFixups.h"
 #include "neverd/backend/codegen/MachO/MachOCompactUnwindPatch.h"
 #include "neverd/backend/codegen/MachO/MachOExceptionPatch.h"
 #include "neverd/backend/codegen/MachO/MachOLayoutGrowth.h"
@@ -17,6 +18,7 @@
 #include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
+#include "neverd/loader/MachO/MachOPlatform.h"
 #include "neverd/object/MachOLayout.h"
 #include "neverd/support/DwarfEH.h"
 #include "neverd/support/TargetCodegenInfo.h"
@@ -26,6 +28,7 @@
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/MathExtras.h"
 
+#include <algorithm>
 #include <climits>
 #include <map>
 #include <set>
@@ -192,6 +195,30 @@ prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
   return llvm::Error::success();
 }
 
+bool matchesArm64eABI(const llvm::object::MachOObjectFile &Object,
+                      uint32_t Subtype, const BinaryImage &Original) {
+  if (Subtype == Original.MachOCPUSubtype)
+    return true;
+  // Darwin links classic ABI0 objects into ABI1 macOS main executables.
+  // The executable ABI tag is not an instruction to compile ABI1 objects.
+  if (Subtype != kClassicObjectSubtype ||
+      Original.MachOCPUSubtype != kMacOSMainSubtype ||
+      Original.DynInfo.MachOFileType != MH_EXECUTE ||
+      Original.DynInfo.MachOPlatforms.size() != 1 ||
+      Original.DynInfo.MachOPlatforms.front() != PLATFORM_MACOS)
+    return false;
+  bool HasPlatform = false;
+  for (const auto &Command : Object.load_commands()) {
+    auto Platform = machOCommandPlatform(Object, Command, Original.Arch);
+    if (!Platform)
+      continue;
+    if (HasPlatform || *Platform != PLATFORM_MACOS)
+      return false;
+    HasPlatform = true;
+  }
+  return HasPlatform;
+}
+
 llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
                                        const BinaryImage &Original,
                                        llvm::StringRef Triple) {
@@ -224,10 +251,7 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
       M->is64Bit() ? M->getHeader64().cpusubtype : M->getHeader().cpusubtype;
   if (Original.Arch == Arch::AArch64 &&
       (arm64e::isSubtype(RawSubtype) != Original.isArm64e() ||
-       (Original.isArm64e() &&
-        RawSubtype !=
-            reinterpret_cast<const mach_header_64 *>(Original.Raw.data())
-                ->cpusubtype)))
+       (Original.isArm64e() && !matchesArm64eABI(*M, RawSubtype, Original))))
     return fail(kSubtype);
   if (Original.Arch == Arch::ARM) {
     const bool Watch = llvm::Triple(Triple).isWatchOS();
@@ -650,6 +674,55 @@ llvm::Error finalizeImports(NativeMachO &Object,
   return llvm::Error::success();
 }
 
+llvm::Error prepareMainRelro(NativeMachO &Object, std::vector<uint8_t> &Binary,
+                             const BinaryImage &Original) {
+  if (!Original.isArm64e() || Original.DynInfo.MachOFileType != MH_EXECUTE)
+    return llvm::Error::success();
+  unsigned ReadOnlySegments = 0;
+  forEachMachOLoadCommand(
+      Binary.data(), Binary.size(),
+      [&](const uint8_t *Command, uint32_t ID, uint32_t, bool) {
+        if (ID == LC_SEGMENT_64)
+          ReadOnlySegments +=
+              (reinterpret_cast<const segment_command_64 *>(Command)->flags &
+               SG_READ_ONLY) != 0;
+      });
+  if (!ReadOnlySegments)
+    return llvm::Error::success();
+  if (ReadOnlySegments != 1)
+    return fail(kMainRelro);
+  uint64_t Size = 0, Alignment = 1;
+  constexpr auto Limit = ::neverd::limits::backend::kMachOPatchObjectMaxStorage;
+  for (const auto &Section : Object.Image.Sections)
+    if (Section.ReadOnlyAfterFixups && Section.IsInImage) {
+      if (Section.Alignment > Limit)
+        return fail(kMainRelroExtent);
+      Alignment = std::max(Alignment, Section.Alignment);
+      Size = llvm::alignTo(Size, Section.Alignment);
+      if (Size > Limit || Section.Size > Limit - Size)
+        return fail(kMainRelroExtent);
+      Size += Section.Size;
+    }
+  if (!Size)
+    return llvm::Error::success();
+  if (Size > Limit - Alignment)
+    return fail(kMainRelroExtent);
+  auto Storage = declareMachOReadOnlyData(
+      Binary, Original.Arch, kNativeRelroSection, Size + Alignment);
+  if (!Storage)
+    return Storage.takeError();
+  uint64_t Cursor = *Storage;
+  for (auto &Section : Object.Image.Sections)
+    if (Section.ReadOnlyAfterFixups && Section.IsInImage) {
+      Cursor = llvm::alignTo(Cursor, Section.Alignment);
+      Section.VA = Cursor;
+      Section.Offset = 0;
+      Section.IsInImage = false;
+      Cursor += Section.Size;
+    }
+  return llvm::Error::success();
+}
+
 llvm::Error place(NativeMachO &Object, uint64_t Base,
                   const std::optional<MachOEHFrameRegion> &EH) {
   auto &Image = Object.Image;
@@ -812,7 +885,9 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
     if (A == Arch::AArch64 && R.Type == ARM64_RELOC_AUTHENTICATED_POINTER) {
       if (!Original.isArm64e() || R.Width != arm64e::kPointerBytes || R.PCRel ||
           R.Scattered || !R.External || R.SubtractVA || R.SubtractSymbol ||
-          !S.IsAllocated || !S.IsInImage || S.Kind != Kind::WritableData)
+          !S.IsAllocated ||
+          (!S.IsInImage && !isExternalMachORelro(Object.Image, S)) ||
+          S.Kind != Kind::WritableData)
         return fail(kAuthMetadata);
       const auto Word = arm64e::decodeObjectPointerWord(Raw);
       if (!Word)
@@ -872,7 +947,8 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
       continue;
     }
     if (Original.isArm64e() && R.Type == ARM64_RELOC_UNSIGNED &&
-        !R.SubtractSymbol && !R.SubtractVA && S.IsAllocated && S.IsInImage) {
+        !R.SubtractSymbol && !R.SubtractVA && S.IsAllocated &&
+        (S.IsInImage || isExternalMachORelro(Object.Image, S))) {
       if (R.PCRel || R.Scattered || R.Width != arm64e::kPointerBytes ||
           S.Kind != Kind::WritableData)
         return fail(kOrdinaryStorage);
@@ -904,8 +980,10 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
         const auto &Target =
             Object.Image.Sections[Object.Sections.at(R.SymbolIndex)];
         const auto Old = Object.OldSectionVAs.at(R.SymbolIndex);
-        if (!Target.IsAllocated || !Target.IsInImage || Raw < Old ||
-            Raw - Old > Target.Size)
+        if (!Target.IsAllocated ||
+            (!Target.IsInImage &&
+             !isExternalMachORelro(Object.Image, Target)) ||
+            Raw < Old || Raw - Old > Target.Size)
           return fail(kOrdinaryTarget);
         Reference.ResolvedValue = Target.VA + Raw - Old;
       }
@@ -1324,6 +1402,47 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
       return fail("native unwind has no exact function symbol");
   return llvm::Error::success();
 }
+llvm::Error
+verifyNativeObjectUnwind(const BinaryImage &Image,
+                         llvm::ArrayRef<NativeMachOCompactRange> Ranges) {
+  const auto Native = macho_unwind::parseCompactUnwind(Image);
+  if (Native.ParseStatus != ExceptionParseStatus::Complete)
+    return fail(kPublishedCompact);
+  for (const auto &Range : Ranges) {
+    const auto It = llvm::find_if(Native.Entries, [&](const auto &Entry) {
+      return Entry.CodeRange.Begin == Range.BeginVA &&
+             Entry.CodeRange.End == Range.EndVA;
+    });
+    if (It == Native.Entries.end() ||
+        It->SemanticStatus != CompactUnwindSemanticStatus::Complete ||
+        (It->NativeEncoding & ~macho_unwind::kPersonalityMask) !=
+            (Range.Encoding & ~macho_unwind::kPersonalityMask))
+      return fail(kPublishedRange);
+    const auto Index = (It->NativeEncoding & macho_unwind::kPersonalityMask) >>
+                       macho_unwind::kPersonalityShift;
+    if (Range.PersonalitySlotVA
+            ? (!Index || Index > Native.PersonalitySlots.size() ||
+               Native.PersonalitySlots[Index - 1] != *Range.PersonalitySlotVA)
+            : Index != 0)
+      return fail(kLanguageReplay);
+    if (!Range.PersonalitySlotVA && !Range.LSDAVA)
+      continue;
+    const auto *Function = Image.ExceptionMetadata.findFunction(Range.BeginVA);
+    if (!Function || Function->CodeRange.Begin != Range.BeginVA ||
+        Function->CodeRange.End != Range.EndVA ||
+        Function->ParseStatus != ExceptionParseStatus::Complete ||
+        (Range.LSDAVA &&
+         (Function->HandlerDataVA != *Range.LSDAVA || !Function->Itanium)))
+      return fail(kLanguageReplay);
+    if (Function->Dwarf && Range.PersonalitySlotVA) {
+      const auto *CIE =
+          Image.ExceptionMetadata.findCIE(Function->Dwarf->CIESectionOffset);
+      if (!CIE || CIE->PersonalitySlotVA != *Range.PersonalitySlotVA)
+        return fail(kLanguageReplay);
+    }
+  }
+  return llvm::Error::success();
+}
 } // namespace
 
 llvm::Expected<CompiledImage>
@@ -1367,6 +1486,8 @@ appendMachOObjectImage(std::vector<uint8_t> &Binary, llvm::StringRef Bytes,
   scanImportThunks(*Layout);
   if (auto Error = prepareArm64eGOT(*Object, *Layout, Dependencies))
     return Error;
+  if (auto Error = prepareMainRelro(*Object, Candidate, *Layout))
+    return Error;
   if (auto Error = place(*Object, Base, EH))
     return Error;
   if (auto Error = relocate(*Object, *Layout, {}))
@@ -1387,25 +1508,11 @@ appendMachOObjectImage(std::vector<uint8_t> &Binary, llvm::StringRef Bytes,
     return After.takeError();
   if (auto Error = preserveMachODependencyState(*Before, *After))
     return Error;
-  if (llvm::any_of(Object->Compact, [](const auto &R) {
-        return R.PersonalitySlotVA || R.LSDAVA;
-      })) {
-    auto Installed = Load(Candidate);
-    if (!Installed)
-      return Installed.takeError();
-    for (const auto &Range : Object->Compact) {
-      if (!Range.PersonalitySlotVA && !Range.LSDAVA)
-        continue;
-      const auto *Function =
-          Installed->ExceptionMetadata.findFunction(Range.BeginVA);
-      if (!Function || Function->CodeRange.Begin != Range.BeginVA ||
-          Function->CodeRange.End != Range.EndVA ||
-          Function->ParseStatus != ExceptionParseStatus::Complete ||
-          (Range.LSDAVA &&
-           (Function->HandlerDataVA != *Range.LSDAVA || !Function->Itanium)))
-        return fail(kLanguageReplay);
-    }
-  }
+  auto Installed = Load(Candidate);
+  if (!Installed)
+    return Installed.takeError();
+  if (auto Error = verifyNativeObjectUnwind(*Installed, Object->Compact))
+    return Error;
   Binary.swap(Candidate);
   return std::move(Object->Image);
 }
@@ -1417,10 +1524,16 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
     const std::filesystem::path &Output,
     llvm::function_ref<llvm::Error(const PatchResult &)> PrepareReceipt,
     const DynCodePatchEvidence *DynCode,
-    const SourcePatchPreparation *Preparation) {
+    const SourcePatchPreparation *Preparation,
+    llvm::ArrayRef<SourcePatchDependency> Dependencies) {
   const BinaryImage &Original =
       Preparation ? Preparation->Image : OriginalInput;
-  auto Triple = sourcePatchTargetTriple(Original);
+  if (Original.MachOSharedCache)
+    return fail(kSharedCache);
+  if (!Dependencies.empty() && !Original.isArm64e())
+    return fail(kDependencyProfile);
+  auto Triple = Original.isArm64e() ? llvm::Expected<std::string>(kArm64eTriple)
+                                    : sourcePatchTargetTriple(Original);
   if (!Triple)
     return Triple.takeError();
   auto Object = readObject(Bytes, Original, *Triple);
@@ -1468,8 +1581,6 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
   const auto EH = findMachOEHFrameRegion(LayoutBytes);
   if (!Base)
     return fail("original Mach-O has no safe placement");
-  if (auto E = place(*Object, Base, EH))
-    return std::move(E);
   auto LayoutReader = Loader::create(BinaryFormat::MachO);
   auto LayoutImage = LayoutReader->loadBuffer(llvm::MemoryBufferRef(
       llvm::StringRef(reinterpret_cast<const char *>(LayoutBytes.data()),
@@ -1478,6 +1589,13 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
   if (!LayoutImage)
     return LayoutImage.takeError();
   scanImportThunks(*LayoutImage);
+  if (Original.isArm64e())
+    if (auto E = prepareArm64eGOT(*Object, *LayoutImage, Dependencies))
+      return E;
+  if (auto E = prepareMainRelro(*Object, LayoutBytes, *LayoutImage))
+    return E;
+  if (auto E = place(*Object, Base, EH))
+    return std::move(E);
   if (auto E = relocate(*Object, *LayoutImage, Bindings))
     return std::move(E);
   if (!Object->Thunks.empty()) {
@@ -1491,6 +1609,7 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
             validateDynCodePatchImage(*DynCode, Bytes, Original, Object->Image,
                                       Mappings, RequestedBindings))
       return std::move(E);
+  std::vector<MachOAuthenticatedFixup> Fixups;
   return publishSourcePatch(
       OriginalInput, Mappings, Output,
       [&](const std::filesystem::path &Input,
@@ -1507,14 +1626,24 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
               Binary = LayoutBytes;
               if (Object->EH && !Object->CompactOnly)
                 if (auto E = installNativeMachOEHFrame(
-                        Binary, *EH, Object->Image.Sections[*Object->EH]))
+                        Binary, *EH, Object->Image.Sections[*Object->EH],
+                        Object->Compact))
                   return Reject(std::move(E));
               if (auto E = installNativeMachOCompactUnwind(
                       Binary, Original.Arch, Object->Compact))
                 return Reject(std::move(E));
-              if (auto E =
-                      Patcher.appendReplacementImage(Binary, Object->Image))
+              if (auto E = Patcher.appendReplacementImage(Binary, Object->Image,
+                                                          {}, Dependencies))
                 return Reject(std::move(E));
+              if (Original.isArm64e()) {
+                if (auto E = convertMachOThreadedFixupsToChains(Binary))
+                  return Reject(std::move(E));
+                auto Collected = collectMachOAuthenticatedFixups(
+                    Binary, Object->Image, Dependencies);
+                if (!Collected)
+                  return Reject(Collected.takeError());
+                Fixups = std::move(*Collected);
+              }
               for (const auto &M : Mappings) {
                 const auto &S = Object->Symbols.at(Object->Names.at(M.Symbol));
                 const auto Mode = Original.instructionModeAt(M.OriginalVA);
@@ -1546,28 +1675,46 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
       },
       PrepareReceipt, Preparation,
       [&](const BinaryImage &Final) -> llvm::Error {
-        for (const auto &S : Object->Image.Sections) {
+        if (auto E = verifyMachOAuthenticatedFixups(Final.Raw, Fixups))
+          return E;
+        // Dyld recipes replace producer-owned pointer placeholders. Only
+        // these replayed slots may differ from the relocated object bytes.
+        auto Expected = Object->Image;
+        for (auto &S : Expected.Sections) {
+          if (!S.IsAllocated)
+            continue;
+          for (const auto &F : Fixups) {
+            if (F.Address < S.VA ||
+                !rangeInBounds(F.Address - S.VA, arm64e::kPointerBytes, S.Size))
+              continue;
+            const auto *Bytes = Final.readVA(F.Address, arm64e::kPointerBytes);
+            if (!Bytes)
+              return fail(kPublishedPointer);
+            auto *Storage = S.IsInImage ? Expected.Bytes.data() + S.Offset
+                                        : S.ExternalBytes.data();
+            std::copy_n(Bytes, arm64e::kPointerBytes,
+                        Storage + F.Address - S.VA);
+          }
+        }
+        for (const auto &S : Expected.Sections) {
           if (!S.IsAllocated || !S.Size ||
               (Object->CompactOnly && Object->EH &&
-               &S == &Object->Image.Sections[*Object->EH]))
+               &S == &Expected.Sections[*Object->EH]))
             continue;
-          if (auto E =
-                  validateInstalledSourcePatchSection(Final, Object->Image, S))
+          if (auto E = validateInstalledSourcePatchSection(Final, Expected, S))
             return E;
         }
-        const auto Native = macho_unwind::parseCompactUnwind(Final);
-        if (Native.ParseStatus != ExceptionParseStatus::Complete)
-          return fail(
-              "final native compact table cannot be decoded completely");
-        for (const auto &C : Object->Compact) {
-          const auto It = llvm::find_if(Native.Entries, [&](const auto &E) {
-            return E.CodeRange.Begin == C.BeginVA &&
-                   E.CodeRange.End == C.EndVA && E.NativeEncoding == C.Encoding;
-          });
-          if (It == Native.Entries.end() ||
-              It->SemanticStatus != CompactUnwindSemanticStatus::Complete)
-            return fail(
-                "final native compact encoding or range is not registered");
+        if (auto E = verifyNativeObjectUnwind(Final, Object->Compact))
+          return E;
+        if (Original.isArm64e()) {
+          auto Before = readMachODependencyState(Original.Raw);
+          if (!Before)
+            return Before.takeError();
+          auto After = readMachODependencyState(Final.Raw);
+          if (!After)
+            return After.takeError();
+          if (auto E = preserveMachODependencyState(*Before, *After))
+            return E;
         }
         return llvm::Error::success();
       });

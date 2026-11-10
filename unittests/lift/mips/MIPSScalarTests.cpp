@@ -73,6 +73,195 @@ protected:
   }
 };
 
+TEST_P(MIPSScalar, MergeStoresWriteOnlySelectedBytesWithoutReadingNeighbors) {
+  const bool Little = archLittleEndian(GetParam());
+  for (bool Left : {false, true})
+    for (unsigned Offset = 0; Offset < 4; ++Offset)
+      for (unsigned Register : {0u, 2u, 4u}) {
+        const unsigned Count = Left == Little ? Offset + 1 : 4 - Offset;
+        const unsigned First = Left == Little ? 0 : Offset;
+        const uint32_t Value = Register == 0   ? 0
+                               : Register == 4 ? 0x2000 + Offset
+                                               : 0x89abcdef;
+        const uint32_t Word =
+            ((Left ? 42u : 46u) << 26) | (4u << 21) | (Register << 16);
+        auto Image = image(0x2000 + First, std::vector<uint8_t>(Count, 0xa5));
+        Image.Segments[0].Flags = SegmentFlags::Writable; // no reads permitted
+        NdOpEmulator E(Image);
+        E.setStrictMode(true);
+        E.setLoadCollect(true);
+        E.setRegister(mipsreg::V0, Value);
+        E.setRegister(mipsreg::A0, 0x2000 + Offset);
+        ASSERT_TRUE(execute(E, Word));
+        EXPECT_TRUE(E.getLoadRecords().empty());
+        for (unsigned I = 0; I < Count; ++I) {
+          LowOp Read;
+          Read.Opcode = NdOp::LOAD;
+          Read.Output = NdVar::tmp(0x9000, 1);
+          Read.addInput(
+              NdVar::cst(0x2000 + First + I, isMIPS64(GetParam()) ? 8 : 4));
+          ASSERT_TRUE(E.step(Read));
+          const unsigned Lane =
+              (Left ? 4 - Count : 0) + (Little ? I : Count - 1 - I);
+          EXPECT_EQ(E.getRegister(0x9000), uint8_t(Value >> (Lane * 8)));
+        }
+        for (unsigned Cut = 0; Cut < Count; ++Cut) {
+          auto Short = image(0x2000 + First, std::vector<uint8_t>(Cut, 0xa5));
+          NdOpEmulator Bad(Short);
+          Bad.setStrictMode(true);
+          Bad.setRegister(mipsreg::A0, 0x2000 + Offset);
+          Bad.setRegister(mipsreg::V0, Value);
+          EXPECT_FALSE(execute(Bad, Word));
+          for (unsigned I = 0; I < Cut; ++I) {
+            LowOp Read;
+            Read.Opcode = NdOp::LOAD;
+            Read.Output = NdVar::tmp(0x9000, 1);
+            Read.addInput(
+                NdVar::cst(0x2000 + First + I, isMIPS64(GetParam()) ? 8 : 4));
+            ASSERT_TRUE(Bad.step(Read));
+            EXPECT_EQ(Bad.getRegister(0x9000), 0xa5u);
+          }
+        }
+      }
+}
+
+TEST_P(MIPSScalar, MergeStoreRejectsMissingStateAndMalformedContracts) {
+  auto Image = image(0x2000, std::vector<uint8_t>(4, 0xa5));
+  for (Intrinsic Id : {Intrinsic::MIPSSwl, Intrinsic::MIPSSwr}) {
+    LowOp Base;
+    Base.Opcode = NdOp::INTRINSIC;
+    Base.addInput(NdVar::cst(uint64_t(Id), sizeof(Intrinsic)));
+    Base.addInput(NdVar::reg(mipsreg::A0, isMIPS64(GetParam()) ? 8 : 4));
+    Base.addInput(NdVar::reg(mipsreg::V0, 4));
+    NdOpEmulator Valid(Image);
+    Valid.setStrictMode(true);
+    Valid.setRegister(mipsreg::A0, 0x2001);
+    Valid.setRegister(mipsreg::V0, 0x12345678);
+    ASSERT_TRUE(Valid.step(Base));
+    LowOp ReadValid;
+    ReadValid.Opcode = NdOp::LOAD;
+    ReadValid.Output = NdVar::tmp(0x9000, 4);
+    ReadValid.addInput(NdVar::cst(0x2000, isMIPS64(GetParam()) ? 8 : 4));
+    ASSERT_TRUE(Valid.step(ReadValid));
+    ASSERT_NE(Valid.getRegister(0x9000), 0xa5a5a5a5u);
+    for (unsigned Case = 0; Case < 7; ++Case) {
+      LowOp Op = Base;
+      NdOpEmulator E(Image);
+      E.setStrictMode(true);
+      if (Case != 0)
+        E.setRegister(mipsreg::A0, 0x2001);
+      if (Case != 1)
+        E.setRegister(mipsreg::V0, 0x12345678);
+      if (Case == 2)
+        Op.Output = NdVar::reg(mipsreg::V1, 4);
+      if (Case == 3)
+        Op.Inputs[2].Size = 8;
+      if (Case == 4)
+        Op.Inputs[1].Size = 2;
+      if (Case == 5)
+        Op.MemoryOrdering = NdMemoryOrdering::Acquire;
+      if (Case == 6)
+        Op.MemoryAddressSpace = NdMemoryAddressSpace::X86GS;
+      EXPECT_FALSE(E.step(Op));
+      LowOp Read;
+      Read.Opcode = NdOp::LOAD;
+      Read.Output = NdVar::tmp(0x9000, 4);
+      Read.addInput(NdVar::cst(0x2000, isMIPS64(GetParam()) ? 8 : 4));
+      ASSERT_TRUE(E.step(Read));
+      EXPECT_EQ(E.getRegister(0x9000), 0xa5a5a5a5u);
+    }
+  }
+}
+
+TEST_P(MIPSScalar, MergeStoreObservesOnlyWrittenSourceBytes) {
+  const unsigned Width = isMIPS64(GetParam()) ? 8 : 4;
+  for (bool Left : {false, true}) {
+    auto Image = image(0x2000, std::vector<uint8_t>(4, 0xa5));
+    NdOpEmulator E(Image);
+    E.setStrictMode(true);
+    LowOp Unknown;
+    Unknown.Opcode = NdOp::INTRINSIC;
+    Unknown.Output = NdVar::reg(mipsreg::V0, Width);
+    Unknown.addInput(
+        NdVar::cst(uint64_t(Intrinsic::MIPSUnpredictable), sizeof(Intrinsic)));
+    ASSERT_TRUE(E.step(Unknown));
+    LowOp Byte;
+    Byte.Opcode = NdOp::COPY;
+    Byte.Output = NdVar::reg(mipsreg::V0, 1);
+    Byte.addInput(NdVar::cst(0x78, 1));
+    ASSERT_TRUE(E.step(Byte));
+    // Both stores select one byte: SWR observes the known low byte; SWL
+    // observes the unknown high byte and must leave memory unchanged.
+    const unsigned Offset = Left == archLittleEndian(GetParam()) ? 0 : 3;
+    LowOp Store;
+    Store.Opcode = NdOp::INTRINSIC;
+    Store.addInput(
+        NdVar::cst(uint64_t(Left ? Intrinsic::MIPSSwl : Intrinsic::MIPSSwr),
+                   sizeof(Intrinsic)));
+    Store.addInput(NdVar::cst(0x2000 + Offset, Width));
+    Store.addInput(NdVar::reg(mipsreg::V0, 4));
+    EXPECT_EQ(E.step(Store), !Left);
+    for (unsigned I = 0; I < 4; ++I) {
+      LowOp Read;
+      Read.Opcode = NdOp::LOAD;
+      Read.Output = NdVar::tmp(0x9000, 1);
+      Read.addInput(NdVar::cst(0x2000 + I, Width));
+      ASSERT_TRUE(E.step(Read));
+      EXPECT_EQ(E.getRegister(0x9000), !Left && I == Offset ? 0x78u : 0xa5u);
+    }
+  }
+}
+
+TEST_P(MIPSScalar, EveryMergeStoreOffsetMatchesPinnedUnicorn) {
+#ifndef NEVERD_MIPS_UNICORN_REFERENCE
+  GTEST_SKIP() << "The pinned Unicorn reference was not built";
+#else
+  const bool Wide = isMIPS64(GetParam()), Little = archLittleEndian(GetParam());
+  const std::array<uint8_t, 8> Data = {0x83, 0x21, 0x46, 0x65,
+                                       0x9a, 0xbc, 0xde, 0xf1};
+  for (bool Left : {false, true})
+    for (unsigned Offset = 0; Offset < 4; ++Offset) {
+      uc_engine *Raw = nullptr;
+      const auto Mode = static_cast<uc_mode>(
+          (Wide ? UC_MODE_MIPS64 : UC_MODE_MIPS32) |
+          (Little ? UC_MODE_LITTLE_ENDIAN : UC_MODE_BIG_ENDIAN));
+      ASSERT_EQ(uc_open(UC_ARCH_MIPS, Mode, &Raw), UC_ERR_OK);
+      std::unique_ptr<uc_engine, decltype(&uc_close)> Reference(Raw, uc_close);
+      ASSERT_EQ(
+          uc_ctl_set_cpu_model(Raw, Wide ? int(UC_CPU_MIPS64_MIPS64R2_GENERIC)
+                                         : int(UC_CPU_MIPS32_24KC)),
+          UC_ERR_OK);
+      ASSERT_EQ(uc_mem_map(Raw, 0x1000, 0x2000, UC_PROT_ALL), UC_ERR_OK);
+      const uint32_t Word =
+          ((Left ? 42u : 46u) << 26) | (4u << 21) | (2u << 16) | Offset;
+      const auto Code = bytes(Word);
+      ASSERT_EQ(uc_mem_write(Raw, 0x1000, Code.data(), Code.size()), UC_ERR_OK);
+      ASSERT_EQ(uc_mem_write(Raw, 0x2000, Data.data(), Data.size()), UC_ERR_OK);
+      uint64_t Base = 0x2000, Value = UINT64_C(0xdeadbeef89abcdef);
+      ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_A0, &Base), UC_ERR_OK);
+      ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_V0, &Value), UC_ERR_OK);
+      ASSERT_EQ(uc_emu_start(Raw, 0x1000, 0x1004, 0, 1), UC_ERR_OK);
+      std::array<uint8_t, 8> Expected;
+      ASSERT_EQ(uc_mem_read(Raw, 0x2000, Expected.data(), Expected.size()),
+                UC_ERR_OK);
+      auto Image = image(0x2000, Data);
+      NdOpEmulator E(Image);
+      E.setStrictMode(true);
+      E.setRegister(mipsreg::A0, Base);
+      E.setRegister(mipsreg::V0, Wide ? Value : uint32_t(Value));
+      ASSERT_TRUE(execute(E, Word));
+      for (unsigned I = 0; I < Data.size(); ++I) {
+        LowOp Read;
+        Read.Opcode = NdOp::LOAD;
+        Read.Output = NdVar::tmp(0x9000, 1);
+        Read.addInput(NdVar::cst(Base + I, Wide ? 8 : 4));
+        ASSERT_TRUE(E.step(Read));
+        EXPECT_EQ(E.getRegister(0x9000), Expected[I]);
+      }
+    }
+#endif
+}
+
 TEST_P(MIPSScalar, WordDivisionPreservesQuotientRemainderAndUndefinedResults) {
   auto Image = image(0x2000, {});
   const bool Wide = isMIPS64(GetParam());

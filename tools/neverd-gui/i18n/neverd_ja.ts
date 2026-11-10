@@ -10708,4 +10708,129 @@ Your previous graph is still available.</source>
         <translation>プラグイン結果グラフ</translation>
     </message>
 </context>
+<context>
+    <name>UnwindInfoDialog</name>
+    <message>
+        <source>Unwind information at %1</source>
+        <translation>%1 のアンワインド情報</translation>
+    </message>
+    <message>
+        <source>DWARF state at the selected PC</source>
+        <translation>選択した PC での DWARF 状態</translation>
+    </message>
+    <message>
+        <source>Compact unwind: completed-prologue recipe</source>
+        <translation>コンパクトアンワインド: プロローグ完了後のレシピ</translation>
+    </message>
+    <message>
+        <source>The compact recipe describes the completed prologue; it does not establish the return-address state at the selected PC.</source>
+        <translation>コンパクトレシピはプロローグ完了後の状態を表します。選択した PC での戻りアドレスの状態は確定しません。</translation>
+    </message>
+    <message>
+        <source>Refresh</source>
+        <translation>更新</translation>
+    </message>
+    <message>
+        <source>Loading unwind information…</source>
+        <translation>アンワインド情報を読み込み中…</translation>
+    </message>
+    <message>
+        <source>The analysis worker is disconnected.</source>
+        <translation>解析ワーカーとの接続が切れています。</translation>
+    </message>
+    <message>
+        <source>This engine does not provide unwind information.</source>
+        <translation>このエンジンはアンワインド情報を提供しません。</translation>
+    </message>
+    <message>
+        <source>The program changed. Open unwind information again at the desired address.</source>
+        <translation>プログラムが変更されました。目的のアドレスでアンワインド情報をもう一度開いてください。</translation>
+    </message>
+    <message>
+        <source>No unwind frame contains this address.</source>
+        <translation>このアドレスを含むアンワインドフレームはありません。</translation>
+    </message>
+    <message>
+        <source>This frame has no return-address signing report.</source>
+        <translation>このフレームには戻りアドレス署名のレポートがありません。</translation>
+    </message>
+    <message>
+        <source>No metadata from this source.</source>
+        <translation>このソースからのメタデータはありません。</translation>
+    </message>
+    <message>
+        <source>The engine returned an incompatible unwind report.</source>
+        <translation>エンジンが互換性のないアンワインドレポートを返しました。</translation>
+    </message>
+    <message>
+        <source>Could not load unwind information: %1</source>
+        <translation>アンワインド情報を読み込めませんでした: %1</translation>
+    </message>
+    <message>
+        <source>Frame: [%1, %2)</source>
+        <translation>フレーム: [%1, %2)</translation>
+    </message>
+    <message>
+        <source>Status: %1</source>
+        <translation>状態: %1</translation>
+    </message>
+    <message>
+        <source>Signing kind: %1</source>
+        <translation>署名の種類: %1</translation>
+    </message>
+    <message>
+        <source>Key: %1</source>
+        <translation>キー: %1</translation>
+    </message>
+    <message>
+        <source>Recipe: %1</source>
+        <translation>レシピ: %1</translation>
+    </message>
+    <message>
+        <source>Signing PC: %1</source>
+        <translation>署名 PC: %1</translation>
+    </message>
+    <message>
+        <source>Diagnostic: %1</source>
+        <translation>診断: %1</translation>
+    </message>
+</context>
+<context>
+    <name>KDDockWidgets::QtWidgets::TitleBar</name>
+    <message>
+        <source>Minimize</source>
+        <translation>最小化</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>閉じる</translation>
+    </message>
+    <message>
+        <source>Maximize</source>
+        <translation>最大化</translation>
+    </message>
+    <message>
+        <source>Restore</source>
+        <translation>元のサイズに戻す</translation>
+    </message>
+    <message>
+        <source>Auto-hide</source>
+        <translation>自動的に隠す</translation>
+    </message>
+    <message>
+        <source>Disable auto-hide</source>
+        <translation>自動的に隠すのをやめる</translation>
+    </message>
+</context>
+<context>
+    <name>KDDockWidgets::Core::TitleBar</name>
+    <message>
+        <source>Dock window</source>
+        <translation>ウィンドウをドッキング</translation>
+    </message>
+    <message>
+        <source>Undock window</source>
+        <translation>ウィンドウを切り離す</translation>
+    </message>
+</context>
 </TS>

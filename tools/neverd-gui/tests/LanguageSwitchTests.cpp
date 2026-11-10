@@ -54,8 +54,11 @@ private slots:
             std::pair{"Actions", "Version comparison &graph…"},
             std::pair{"neverd::gui::LineageDialog", "Version comparison graph"},
             std::pair{"neverd::gui::LineagePageView", "Rows per page"},
-            std::pair{"neverd::gui::LineageSession",
-                      "Version graph loaded."}}) {
+            std::pair{"neverd::gui::LineageSession", "Version graph loaded."},
+            // The unwind dialog keeps its texts in a .def table; they once
+            // missed every catalog.
+            std::pair{"UnwindInfoDialog", "Unwind information at %1"},
+            std::pair{"UnwindInfoDialog", "Refresh"}}) {
         const auto text = translator.translate(context, source);
         QVERIFY2(!text.isEmpty(),
                  qPrintable(language.code + QStringLiteral(": ") +

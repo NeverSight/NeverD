@@ -438,6 +438,28 @@ TEST(SymParse, StructuredInputRoundTripPreservesExactIdentity) {
   expectRoundTrip(Mixed, NonIdentifier);
 }
 
+TEST(SymParse, LargeSharedFragmentsKeepPrecedenceAfterTableGrowth) {
+  for (unsigned Gap : {0u, 65u})
+    for (unsigned Width : {32u, 64u, 257u}) {
+      SCOPED_TRACE(::testing::Message() << Width << ':' << Gap);
+      SymContext Ctx;
+      const auto X = Ctx.mkVar("x", Width);
+      auto Root = X;
+      std::string Expected = "x";
+      for (unsigned I = 2; I < 99; ++I) {
+        // Unreachable nodes keep source handles distinct from compact slots.
+        for (unsigned J = 0; J < Gap; ++J)
+          (void)Ctx.mkConst(Width, 10000 + I * Gap + J);
+        Root = Ctx.mkUDiv(Root, Ctx.mkAdd(X, Ctx.mkConst(Width, I)));
+        Expected += " / (" + std::to_string(I) + " + x)";
+      }
+      EXPECT_EQ(Ctx.toString(Root), Expected);
+      expectRoundTrip(Ctx, Root);
+      // A second rendering must own its fragments independently of the first.
+      EXPECT_EQ(Ctx.toString(Root), Expected);
+    }
+}
+
 TEST(SymParse, HandWrittenShapesSurviveTheRoundTrip) {
   SymContext Ctx;
   static constexpr const char *Cases[] = {

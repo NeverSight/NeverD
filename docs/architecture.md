@@ -1458,6 +1458,28 @@ the signed addend and exact provider. Writable storage is required even when
 the final mapping is RELRO. An absolute constant (`N_ABS`) is not inferred to
 be a slid address.
 
+`installMachOObjectPatch` also connects this native object profile to the shared
+publication transaction. Before final signing, native arm64e publication
+migrates threaded inputs through the existing checked chained-fixup converter;
+already chained inputs are unchanged. It prepares authenticated GOT slots before placement,
+installs compact/DWARF language records, and redirects each selected original
+entry with a single relative branch. The new function owns its signing prologue;
+the branch does not change LR. Explicit pointer providers are admitted by the
+existing dependency owner. The shared signing transaction passes the input
+CodeDirectory page size explicitly to codesign and retains exact page-size
+validation after reloading. After signing, recipe replay verifies every pointer
+slot and its RELRO contract, while the remaining section bytes must match the
+relocated object exactly. Both staging and publication use the same final
+unwind validator, including exact personality slot and LSDA identities.
+Failed receipts and pre-existing output paths do not publish or overwrite a
+file. This native C++ API does not enable the source/IR or lifted-image rebuild
+routes, nor the SDK compiler adapter's separate arm64e admission.
+The native object reader also accepts the Darwin linker contract from classic
+userspace ABI0 objects (`0x80000002`) to ABI1 macOS main executables
+(`0x81000002`). Both object and image must name only macOS, and the image must
+be `MH_EXECUTE`. Other differing raw subtypes remain rejected. This does not
+rewrite the output subtype or change the original `LC_MAIN` entry.
+
 Native compact language records retain LSDA addresses and personality slots.
 The arm64e personality slot uses IA/address diversity with zero discriminator;
 RTTI slots remain ordinary pointers. Existing unambiguous personality slots
@@ -1508,8 +1530,17 @@ Inline `LC_ID_DYLIB` metadata does not block otherwise available header space.
 
 Typed `ReadOnlyAfterFixups` storage is page-separated from both code and ordinary
 mutable data. Native `__AUTH_CONST`, `__DATA_CONST` and `__DATA,__const` inputs
-use a dedicated `__ND_CONST` segment with writable initial protections and
-`SG_READ_ONLY`; final recipe replay also checks that flag. Apple's
+use `SG_READ_ONLY` storage with writable initial protections; final recipe
+replay also checks that flag. Dylibs use a dedicated `__ND_CONST` segment.
+A main executable with an existing read-only segment reserves a new section in
+its verified, unowned zero tail, because XNU rejects a second
+`SG_READ_ONLY` segment. The compiled section retains its format-owned external
+placement and bytes through native relocation and authenticated fixup collection.
+Installation verifies its declared backing and zero destination before copying
+those bytes. The shared strict dyld reader supplies existing slot ownership,
+including zero-valued rebases beyond section boundaries. Existing addresses
+remain fixed and later symbol section ordinals are adjusted; occupied payloads
+and insufficient capacity reject without mutation. Apple's
 [linker maps the default constant section to read-only-after-fixup storage](https://github.com/apple-oss-distributions/ld64/blob/main/src/ld/Options.cpp),
 and [dyld uses the segment flag when applying its read-only protections](https://github.com/apple-oss-distributions/dyld/blob/main/mach_o/UnsafeHeader.h).
 ELF RELRO and automatic classification of MC-produced constant sections remain
@@ -1573,8 +1604,14 @@ Tests check both raw key bits for all four keys and the decoded names for IA/DA;
 the latter tool cannot independently qualify IB/DB or legacy rebases. Rebase
 replay and per-PC signed CFI comparisons retain their independent offline
 checks. Native execution qualifies the observed call/exception paths, not every
-possible frame state. Whole-image rebuilding and startup executable loading
-remain unqualified; the publication guard stays in place.
+possible frame state. General lifted-image rebuilding remains unqualified.
+Main executable publication has a separate four-case native object gate,
+covering the retained startup entry, new authenticated calls, RELRO, catches
+and cleanup at O0/O2 with compact/DWARF language records. That gate requires
+successful same-source compiler-original startup controls under the
+[explicit userspace-fixup profile](arm64e-native-validation.md); default system
+startup retains its observed B-key page-in fixup failure. Passing the
+prerequisite controls alone cannot qualify a published main executable.
 
 The shared AAPCS64 parameter placement owner describes Darwin fixed value
 spills with their natural size and alignment after either register bank is
@@ -5031,7 +5068,13 @@ Within one LowIR build, module jump-table arbitration is reused while its
 function bodies remain unchanged. Any body rebuild retires that result before
 parallel builders run. Continuation discovery still runs normally, and image
 publication follows both fixed points; budget refusals and proof requirements
-remain the same.
+remain the same. A function asked to rebuild under the protected relocation
+slots, unsafe branches, branch preservation, continuation roots and published
+branch history of its previous rebuild keeps that body: a build is a function
+of those inputs and the image. The slot, branch and history sets only grow
+within the build, so their sizes identify them; continuation roots are kept
+whole. When arbitration stays incomplete after the fallback rebuild, the
+continuation closure's second identical rebuild therefore lifts nothing again.
 
 PE32 returning-stack queries also share a run-local memo across ordinary
 callers and independent jump-table queries. Each answer retains its import
@@ -5781,9 +5824,11 @@ Full-block two-bit admission caches structural identities before constructing
 Boolean corrections. Partial cache entries can answer only identity queries
 and must be completed before arithmetic reads their correction. A full block
 can search past a failed positional probe without repeatedly materializing
-upper carries. Partial factor blocks retain complete probes, preserving their
-existing work headroom. These rules remain in the shared symbolic owner used
-by CLI and GUI source optimization.
+upper carries. Sparse partial blocks can also defer corrections when the
+unmatched period remainder exceeds the number of pairs; dense partial blocks
+keep complete probes. Only a matched pair requests its corrections, and each
+unmatched word stays complete. These rules remain in the shared symbolic owner
+used by CLI and GUI source optimization.
 Complete blocks and odd residual blocks combine two-bit correction columns
 before constructing their carry graph. Literal corrections sum directly modulo
 four; repeated or complementary variable bits cancel or move to the next
@@ -5792,6 +5837,47 @@ need only their shared square, with no zero correction to accumulate.
 Partial even blocks preserve
 streaming accumulation so unfinished proofs leave the established headroom
 for child rewrites. Both strategies retain the same cumulative resource limits.
+Low-word multiplication compresses exact partial products in columns before
+one carry-propagating sum. Three- and four-bit odd products use sign and short
+exponent coordinates; modulo eight, odd multiplication is XOR of the upper
+bits. Summation counts complete complemented edges in dense tables, then sorts
+each finished column before reduction. Final columns balance their parity
+without constructing an unobservable carry. Signature keys occupy stable pages
+whose storage is charged before allocation. These operations retain the full
+identity checks, cumulative allowances and decision-node ceiling.
+Expression restoration skips nodes older than every substitution key: immutable
+children precede their parents, and simultaneous replacement bodies remain
+unchanged. Rendering appends fragments directly into their parent's text and
+stores them in contiguous slots indexed by the same dense table used for
+discovery. Slots are sized from the reachable count before rendering, so
+completed child references remain stable. Text and precedence stay unchanged.
+Rendering gathers children before parents with an iterative postorder instead
+of sorting node IDs; a leaf root renders directly. MBA abstraction reuses the
+original DAG when its existing classification requires no hidden inputs,
+literal-mask carriers or arithmetic-complement rewrite. Independent identity
+verification and work accounting remain unchanged.
+Literal offsets and scales of an already opaque affine base are read directly
+into the coefficient result, avoiding a temporary pending tree. Linear
+children retain the general traversal; result storage and word operations
+remain charged before a complete relation is published.
+
+Successful full-width linear identities are retained within one deep request,
+keyed by their immutable difference in the owning context. Reuse still admits
+the input count, work and storage; incomplete or refused proofs grant no
+equality. Candidate synthesis for identical opaque abstractions reuses its
+ordered forms only under the same term budget and resolved synthesis limits.
+Each caller still passes the independent equality verifier and restores its
+own hidden inputs. Both memos use shares of the existing bounded request
+storage.
+
+Entries also retain requested measurement weights; the last admitted proof
+query avoids reconstructing its difference. For a free variable X at widths of
+at least three, C + (X ^ 1) already meets its five-node MBA reading bound when
+C is even, nonzero and different from the highest bit. This skips candidate
+construction without changing the expression. Highest-bit offsets instead
+merge into the XOR mask under the existing resource allowances; opaque inputs
+and other offsets keep their search.
+
 Boolean polynomial reconstruction can factor shared cofactors across groups
 with disjoint remaining variables. Exact symmetric differences retain every
 unmatched term. Larger decision graphs try this construction before expanding
@@ -11298,7 +11384,9 @@ support. See [the KVM domain](x86-kvm-hypercalls.md). This inventory does not
 imply coverage of every newer SEV/SNP instruction.
 
 `backend/llvm/X86/X86VirtualizationNative.h` owns native LLVM names and
-available NeverC source spellings together. Mode-sized i386 VMCS and address
+compiler source spellings together. NeverC's x86 source targets are x64;
+legacy builtins remain available through the full fork or assembly fallback.
+Mode-sized i386 VMCS and address
 APIs use the full fork's `32` names in both C renderers; management memory
 operands retain m64. SVM default-address i386 APIs also use `32`; address-size
 overrides use `.addr16` on i386 and `.addr32` on x64. Their address inputs remain
@@ -11739,9 +11827,12 @@ Actual x87 FLD/FST precision conversions remain numerical operations.
 HighIR cannot cancel its numerical round trip, and LLVM uses constrained
 extension/truncation with dynamic rounding. Both C routes use the same native
 FLD/FSTP helpers, so C optimization cannot erase signaling-NaN quieting or
-replace x87 store rounding with an ordinary cast. This covers the observable
-converted value; full x87 exception, stack-tag and status state still belongs
-to the existing context and explicit-state paths.
+replace x87 store rounding with an ordinary cast. These helpers require an
+x87 extended `long double`, but scalar conversions do not require its ABI
+padding to match `_BitInt(80)`. Actual `__builtin_bit_cast` expressions retain
+the compiler's storage-size check. This covers the observable converted value;
+full x87 exception, stack-tag and status state still belongs to the existing
+context and explicit-state paths.
 
 `MedTypePass` distinguishes a POP-shaped integer return from an unchanged
 entry-register save. A known reaching stack store of a computed value,
@@ -15649,8 +15740,17 @@ MIPS64 word-input contract; source backends do not reinterpret instruction bits.
 `MedMIPSMergeValues` owns the source-only proof for adjacent complementary
 merge loads in a single ordinary leaf block. It runs after SSA/projection/DCE
 and before ABI recovery, binds physical LowIR occurrences to MedIR, and removes
-only a first load's unobserved old-value operand. Both reads remain ordered;
+only a first load's unobserved old-value operand. Four-byte MIPS16e2
+occurrences use the same address/use proof as classic instructions. Both reads remain ordered;
 calls, PHIs, exceptional flow and unproved uses retain their original inputs.
+
+`MIPSScalar.def`/`MIPSScalar.h` own merge load/store IDs, shapes and exact byte
+spans. Partial stores observe only selected register bytes and never read
+neighboring memory. LowIR commits a validated full span; HighC and LLVM retain
+byte writes and original-image backing qualification. This differs from a
+general source memory-fault equivalence guarantee. ABI memory recovery stops
+at partial stores, while queries confined to registers retain their existing
+values across these memory effects.
 
 The DSP32 scalar slice keeps feature admission in `ELFMIPSProfile` and carries
 it through decoder reuse. `MIPSDSP.def` owns control field groups and instruction
@@ -15695,6 +15795,11 @@ address, and delegate accesses to `MIPSLiftMemory`. CFG and function discovery
 validate the entire unit against local mode evidence. B carries unconditional control semantics
 through normalization so CFG does not visit a nonexistent fallthrough.
 MIPS16 symbols are classified before their overlapping microMIPS flag bit.
+MIPS16e2 is an explicit ABI-record feature on that same instruction mode;
+`ELFMIPSProfile` owns the GNU e2 ASE bit and `Decoder::configureFor` refreshes it.
+Its integer/memory EXTEND forms reuse the classic semantic owners. The pinned
+Unicorn does not implement e2; GNU bytes, independent LowIR checks and execution
+of regenerated old-MIPS16 source remain distinct evidence.
 Both source routes emit the positive encoding attribute and explicitly exclude
 the other compressed family. GNU as/ld and original-target execution qualify
 the MIPS16 source path separately from LLVM's incomplete assembler support.
@@ -16960,8 +17065,14 @@ and no bounded proof of where the frame is follows them.
 For LLVM-to-C, `MedLLVMRegistrationSourceSEH.cpp` consumes these display facts
 in the private source module. It preflights distinct, closed finally bodies,
 their normal calls, local-unwind ancestors and owned filter CFGs before
-changing any blocks. Unsupported ownership, ambiguous levels, shared cleanup
+changing any blocks. Unsupported ownership, unproved levels, shared cleanup
 bodies and unrepresentable callback dependencies retain the unlowered source CFG.
+Ordinary shared tails whose stretches retain the same set of possible levels
+receive one CFG copy per active scope. Every incoming edge must establish its
+level, including quiet trailing state changes. Shared cycles redirect to the
+same level's copy; captured parent storage remains shared. Address-taken blocks,
+escaping SSA values, unsupported PHIs and unproved entries refuse the complete
+transformation before mutation. These copies share the cleanup expansion budget.
 Normal calls receive a copy of their finally body; a local unwind receives the
 exited bodies in inner-to-outer order, each under its enclosing scope. The
 exceptional copy lives in a cleanup pad. Clone work is bounded per function by
@@ -16981,6 +17092,12 @@ helper and capture allocas, which LLVMC
 prints as a call inside `__except`. Selected-source emission includes these
 helper definitions. The marker grants no Windows native callback ABI, and
 native outlining keeps its independent personality and frame checks.
+
+Source optimization remains transactional. If the optimized candidate fails
+verification, the source view conservatively promotes the retained input and
+checks its exception contract again. The result retains the rejection diagnostic;
+native optimization still reports the failed transaction. In particular, source
+fallback does not relax protected-call counters after LLVM removes an invoke.
 
 LLVMC can print a closed, branching cleanup CFG in each fragmented `__finally`.
 Each printed copy has private C labels and explicit PHI edge assignments. The

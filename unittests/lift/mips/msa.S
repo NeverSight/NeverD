@@ -80,7 +80,7 @@ msa_return_slot:
 
 
 // Store every bit so small-lane carry/borrow and the high half remain observed.
-.macro vector_leaf name,operation
+.macro vector_leaf name,operation, right=$w1
 .globl \name
 .type \name,@function
 .ent \name
@@ -95,7 +95,7 @@ msa_return_slot:
   insert.w $w1[2], $a2
   xor $t1, $a2, $a3
   insert.w $w1[3], $t1
-  \operation $w0, $w0, $w1
+  \operation $w0, $w0, \right
   copy_s.w $t0, $w0[0]
   sw $t0, 0($a0)
   copy_s.w $t0, $w0[1]
@@ -202,3 +202,53 @@ vector_leaf msa_min_a_b,min_a.b
 vector_leaf msa_min_a_h,min_a.h
 vector_leaf msa_min_a_w,min_a.w
 vector_leaf msa_min_a_d,min_a.d
+
+vector_leaf msa_add_a_b,add_a.b
+vector_leaf msa_add_a_h,add_a.h
+vector_leaf msa_add_a_w,add_a.w
+vector_leaf msa_add_a_d,add_a.d
+vector_leaf msa_adds_a_b,adds_a.b
+vector_leaf msa_adds_a_h,adds_a.h
+vector_leaf msa_adds_a_w,adds_a.w
+vector_leaf msa_adds_a_d,adds_a.d
+vector_leaf msa_adds_s_b,adds_s.b
+vector_leaf msa_adds_s_h,adds_s.h
+vector_leaf msa_adds_s_w,adds_s.w
+vector_leaf msa_adds_s_d,adds_s.d
+vector_leaf msa_adds_u_b,adds_u.b
+vector_leaf msa_adds_u_h,adds_u.h
+vector_leaf msa_adds_u_w,adds_u.w
+vector_leaf msa_adds_u_d,adds_u.d
+vector_leaf msa_subs_s_b,subs_s.b
+vector_leaf msa_subs_s_h,subs_s.h
+vector_leaf msa_subs_s_w,subs_s.w
+vector_leaf msa_subs_s_d,subs_s.d
+vector_leaf msa_subs_u_b,subs_u.b
+vector_leaf msa_subs_u_h,subs_u.h
+vector_leaf msa_subs_u_w,subs_u.w
+vector_leaf msa_subs_u_d,subs_u.d
+vector_leaf msa_ave_s_b,ave_s.b
+vector_leaf msa_ave_s_h,ave_s.h
+vector_leaf msa_ave_s_w,ave_s.w
+vector_leaf msa_ave_s_d,ave_s.d
+vector_leaf msa_ave_u_b,ave_u.b
+vector_leaf msa_ave_u_h,ave_u.h
+vector_leaf msa_ave_u_w,ave_u.w
+vector_leaf msa_ave_u_d,ave_u.d
+vector_leaf msa_aver_s_b,aver_s.b
+vector_leaf msa_aver_s_h,aver_s.h
+vector_leaf msa_aver_s_w,aver_s.w
+vector_leaf msa_aver_s_d,aver_s.d
+vector_leaf msa_aver_u_b,aver_u.b
+vector_leaf msa_aver_u_h,aver_u.h
+vector_leaf msa_aver_u_w,aver_u.w
+vector_leaf msa_aver_u_d,aver_u.d
+
+vector_leaf msa_add_a_same_b,add_a.b,$w0
+vector_leaf msa_add_a_same_h,add_a.h,$w0
+vector_leaf msa_add_a_same_w,add_a.w,$w0
+vector_leaf msa_add_a_same_d,add_a.d,$w0
+vector_leaf msa_adds_a_same_b,adds_a.b,$w0
+vector_leaf msa_adds_a_same_h,adds_a.h,$w0
+vector_leaf msa_adds_a_same_w,adds_a.w,$w0
+vector_leaf msa_adds_a_same_d,adds_a.d,$w0

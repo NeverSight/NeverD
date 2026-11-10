@@ -12,6 +12,7 @@
 #include "MachODependencyState.h"
 
 #include "neverd/backend/codegen/BinaryRewriter.h"
+#include "neverd/backend/codegen/PatchStorage.h"
 #include "neverd/backend/codegen/SourcePatchDependencies.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
 #include "neverd/loader/MachO/MachOThreadedBind.h"
@@ -267,16 +268,21 @@ neverd::collectMachOAuthenticatedFixups(
     Providers[Name] = Provider{Library->second, false};
   }
   for (const auto &Section : Image.Sections) {
+    const bool ExternalRelro = isExternalMachORelro(Image, Section);
+    const auto Storage = llvm::ArrayRef<uint8_t>(
+        Section.IsInImage ? Image.Bytes : Section.ExternalBytes);
+    const uint64_t Offset = Section.IsInImage ? Section.Offset : 0;
     for (const auto &Reference : Section.FixupReferences) {
       if (!Reference.PointerAuth && !Reference.OrdinaryPointer)
         continue;
-      if (!Section.IsAllocated || !Section.IsInImage ||
+      if (!Section.IsAllocated || (!Section.IsInImage && !ExternalRelro) ||
           Section.Kind != llvm::mc_rewrite::RewriteSectionKind::WritableData ||
-          !rangeInBounds(Section.Offset, Section.Size, Image.Bytes.size()) ||
+          !rangeInBounds(Offset, Section.Size, Storage.size()) ||
           !rangeInBounds(Reference.Offset, arm64e::kPointerBytes,
                          Section.Size) ||
-          Section.Offset > UINT64_MAX - Image.BaseVA ||
-          Section.VA != Image.BaseVA + Section.Offset ||
+          (Section.IsInImage &&
+           (Section.Offset > UINT64_MAX - Image.BaseVA ||
+            Section.VA != Image.BaseVA + Section.Offset)) ||
           Reference.Offset > UINT64_MAX - Section.VA ||
           Reference.BitWidth != arm64e::kPointerBytes * CHAR_BIT ||
           !Reference.IsResolved || Reference.IsPCRel ||
@@ -285,8 +291,7 @@ neverd::collectMachOAuthenticatedFixups(
           (Reference.OrdinaryPointer &&
            Image.InputKind != RewriteInputKind::ReplacementObject) ||
           !Reference.SubtractSymbol.empty() ||
-          readLE<uint64_t>(Image.Bytes.data() + Section.Offset +
-                           Reference.Offset))
+          readLE<uint64_t>(Storage.data() + Offset + Reference.Offset))
         return fail(kProducer);
       MachOAuthenticatedFixup Fixup;
       Fixup.Address = Section.VA + Reference.Offset;

@@ -1,0 +1,189 @@
+{
+  "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42670455005",
+  "environment_revision": "497294ccfc2d7ad58ccfb1286a13202f9409b7a2",
+  "source_revision": "6b3ec9c6e7b9bbb592576f611b326df60aba79f6",
+  "native_execution_qualified": false,
+  "runners": {
+    "macos-26": {
+      "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "report_sha256": "962eadae2c8f38d18dcd4e9b88d503131d3cc8bc26626d5983f7b338e5f4ebb1",
+      "owned_products_removed": 8,
+      "cases": [
+        {
+          "name": "default-object",
+          "returncode": 0,
+          "cpu_subtype": 2147483650,
+          "flags": 8192,
+          "bytes": 2280,
+          "sha256": "09707f7462049cd0a2604773204d0f05f236c444b2ad0234bf5b970436b63f30",
+          "entry_retained": true
+        },
+        {
+          "name": "default-dylib",
+          "returncode": 0,
+          "cpu_subtype": 2147483650,
+          "flags": 1048709,
+          "bytes": 50656,
+          "sha256": "77e2f8ca253f1871290b8a0d7badd226de05d1a8db2de2496796dcb9385c8ead",
+          "entry_retained": true
+        },
+        {
+          "name": "default-executable",
+          "returncode": 0,
+          "cpu_subtype": 2164260866,
+          "flags": 2097285,
+          "bytes": 50720,
+          "sha256": "3dfa80432e926583cf61c2e36817e3b4a6a2c2e95f9e10fa864335f1ce6a0066",
+          "entry_retained": true
+        },
+        {
+          "name": "abi0-object",
+          "returncode": 0,
+          "cpu_subtype": 2147483650,
+          "flags": 8192,
+          "bytes": 2280,
+          "sha256": "09707f7462049cd0a2604773204d0f05f236c444b2ad0234bf5b970436b63f30",
+          "entry_retained": true
+        },
+        {
+          "name": "abi0-dylib",
+          "returncode": 0,
+          "cpu_subtype": 2147483650,
+          "flags": 1048709,
+          "bytes": 50648,
+          "sha256": "d62f06bc63082175fc46b58c33bc35469c330f3fbb26b629a1e0dd3b2f6e6f7c",
+          "entry_retained": true
+        },
+        {
+          "name": "abi0-executable",
+          "returncode": 0,
+          "cpu_subtype": 2164260866,
+          "flags": 2097285,
+          "bytes": 50720,
+          "sha256": "a137fa60fa729ed22c161f869fb31593610c961dfa7913603a8474331e06078c",
+          "entry_retained": true
+        },
+        {
+          "name": "abi1-object",
+          "returncode": 0,
+          "cpu_subtype": 2164260866,
+          "flags": 8192,
+          "bytes": 2280,
+          "sha256": "c9343e4a2f1c55ac7cf0ead2c2a4597fc8f0719bda336d896545ebb3d3d63cd8",
+          "entry_retained": true
+        },
+        {
+          "name": "abi1-dylib",
+          "returncode": 0,
+          "cpu_subtype": 2147483650,
+          "flags": 1048709,
+          "bytes": 16744,
+          "sha256": "5df29d512dae5dc6b448508076c5169420c2851a9a066b4db9d2d0d20e5de626",
+          "entry_retained": false
+        },
+        {
+          "name": "abi1-executable",
+          "returncode": 1
+        }
+      ]
+    },
+    "xcode-27": {
+      "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+      "report_sha256": "83099773842fe5c7a24703295040852e638d16346480dbbab09fe70cff85df54",
+      "owned_products_removed": 8,
+      "cases": [
+        {
+          "name": "default-object",
+          "returncode": 0,
+          "cpu_subtype": 2147483650,
+          "flags": 8192,
+          "bytes": 2280,
+          "sha256": "58814a0ffd4abe440d5871ea439ff42fe4521f10b772484ca05ef946075700f7",
+          "entry_retained": true
+        },
+        {
+          "name": "default-dylib",
+          "returncode": 0,
+          "cpu_subtype": 2147483650,
+          "flags": 1048709,
+          "bytes": 50656,
+          "sha256": "203d5af7c4ff4803ec21eb0182b8c2bc9ed128e2baafaf49e4aa997a1ff129e7",
+          "entry_retained": true
+        },
+        {
+          "name": "default-executable",
+          "returncode": 0,
+          "cpu_subtype": 2164260866,
+          "flags": 2097285,
+          "bytes": 50720,
+          "sha256": "527a1e2091cd66da68133bbecc6b94a1a422b6dbb4ccbad91ecb2b899bc4259f",
+          "entry_retained": true
+        },
+        {
+          "name": "abi0-object",
+          "returncode": 0,
+          "cpu_subtype": 2147483650,
+          "flags": 8192,
+          "bytes": 2280,
+          "sha256": "58814a0ffd4abe440d5871ea439ff42fe4521f10b772484ca05ef946075700f7",
+          "entry_retained": true
+        },
+        {
+          "name": "abi0-dylib",
+          "returncode": 0,
+          "cpu_subtype": 2147483650,
+          "flags": 1048709,
+          "bytes": 50648,
+          "sha256": "6dc44e08b292f9e50366cbd3692ef43c68d361b52dc6560e6498e36fd4000e58",
+          "entry_retained": true
+        },
+        {
+          "name": "abi0-executable",
+          "returncode": 0,
+          "cpu_subtype": 2164260866,
+          "flags": 2097285,
+          "bytes": 50720,
+          "sha256": "5becc269506a0eb14d5a632b5594cf45db667edff69be824394ea5e49edecdaf",
+          "entry_retained": true
+        },
+        {
+          "name": "abi1-object",
+          "returncode": 0,
+          "cpu_subtype": 2164260866,
+          "flags": 8192,
+          "bytes": 2280,
+          "sha256": "743165931aba9fc39ff92bc44bbb5bbc6c08cb7c80fa01fad550e1ac918985bc",
+          "entry_retained": true
+        },
+        {
+          "name": "abi1-dylib",
+          "returncode": 0,
+          "cpu_subtype": 2147483650,
+          "flags": 1048709,
+          "bytes": 16744,
+          "sha256": "79038e7ccac65b7d188ff350c7207f0d7541221bc285f2a0bef6dd7e693ab50f",
+          "entry_retained": false
+        },
+        {
+          "name": "abi1-executable",
+          "returncode": 1
+        }
+      ]
+    }
+  },
+  "archive_sha256": "9582d7c165cfb1d007dbab658e06d96de8552d9493ecd75bbfecb6fec6a96030",
+  "date": "2026-11-10",
+  "compiler_observations_complete": true,
+  "native_executable_publication_qualified": false,
+  "interpretation": [
+    "Both current Apple compiler hosts emit ABI0 default objects and dylibs but ABI1 default executables, including when ABI0 is explicitly requested.",
+    "Explicit ABI1 objects compile. Their dylib link ignores the input and returns success without retaining the entry; their executable link fails.",
+    "These are producer observations with no execution. Exact native-object subtype admission remains unchanged pending a qualified executable ABI handoff."
+  ],
+  "experiment_source_sha256": {
+    ".github/workflows/arm64e-abi-contract.yml": "3adbbb691171635f8001eb45903f11cefcf708b08589ab629ec49ae955a540ab",
+    "arm64e-abi-contract/Experiment.def": "81fbbd19ed6ac3e19b4e414182d21b36e4d85499aa465746c569249050af2e85",
+    "arm64e-abi-contract/run.py": "a8cfb6ba6405f574be60d7e7e9153a077d86de109f920553ac77fb484a079688"
+  },
+  "compiler_input_sha256": "18fc046fc9882b3912b40d29b2ebf856a678fe77c73283a1aa7be7891ce55fe6"
+}

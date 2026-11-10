@@ -14,9 +14,10 @@
 #include "../SymPrintShape.h"
 #include "SymParseDetail.h"
 
+#include "neverd/symbolic/Limits.h"
 #include "neverd/symbolic/SymExpr.h"
 
-#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
@@ -24,9 +25,7 @@
 
 #include <optional>
 #include <string>
-#include <unordered_map>
 #include <utility>
-#include <vector>
 
 namespace neverd::symbolic {
 
@@ -52,6 +51,16 @@ std::string wrap(const Fragment &F, int Need) {
   return "(" + F.Text + ")";
 }
 
+// Append directly to the parent's buffer. Materializing a wrapped copy for
+// every child allocates and copies long MBA subexpressions twice.
+void appendWrapped(std::string &Out, const Fragment &F, int Need) {
+  if (F.Prec < Need)
+    Out += '(';
+  Out += F.Text;
+  if (F.Prec < Need)
+    Out += ')';
+}
+
 void appendDigits(std::string &Out, const llvm::APInt &V) {
   llvm::SmallString<48> S;
   // Small numbers read as quantities and belong in decimal.  Larger ones are
@@ -74,7 +83,9 @@ public:
   std::string run(SymRef Root);
 
 private:
-  const Fragment &frag(SymRef R) const { return Memo.at(R.index()); }
+  const Fragment &frag(SymRef R) const {
+    return Fragments[Memo.find(R.index())->second];
+  }
   /// A child in a comma-separated argument list, which never needs brackets.
   const std::string &arg(SymRef R) const { return frag(R).Text; }
   std::string sub(SymRef R, int Need) const { return wrap(frag(R), Need); }
@@ -113,7 +124,14 @@ private:
 
   const SymContext &Ctx;
   uint32_t Ambient;
-  std::unordered_map<uint32_t, Fragment> Memo;
+  // The discovery table also indexes fragment slots. Keeping strings out of
+  // empty buckets reduces the table's footprint. Slots are sized once before
+  // postorder rendering; completed child references remain stable.
+  // Wide keys keep every valid node handle distinct from the sentinels.
+  llvm::SmallDenseMap<uint64_t, uint32_t,
+                      limits::symbolic::kSymExprTraversalInlineBuckets>
+      Memo;
+  llvm::SmallVector<Fragment, 32> Fragments;
 };
 
 std::string Printer::join(llvm::ArrayRef<SymRef> Ops, const char *Sep,
@@ -122,7 +140,7 @@ std::string Printer::join(llvm::ArrayRef<SymRef> Ops, const char *Sep,
   for (unsigned I = 0, E = Ops.size(); I < E; ++I) {
     if (I)
       T += Sep;
-    T += sub(Ops[I], Need);
+    appendWrapped(T, frag(Ops[I]), Need);
   }
   return T;
 }
@@ -238,7 +256,7 @@ Fragment Printer::render(SymRef R) const {
         continue;
       std::optional<Magnitude> Neg = negatedTerm(Ops[I]);
       T += Neg ? " - " : " + ";
-      T += wrap(Neg ? Neg->Frag : frag(Ops[I]), PrecAdditive + 1);
+      appendWrapped(T, Neg ? Neg->Frag : frag(Ops[I]), PrecAdditive + 1);
     }
     return {std::move(T), PrecAdditive};
   }
@@ -328,28 +346,37 @@ Fragment Printer::render(SymRef R) const {
 }
 
 std::string Printer::run(SymRef Root) {
-  // Interning appends a node only once its operands exist, so ascending index
-  // order over the reachable set reaches every child before its parent.  The
-  // walk is iterative and the memo is keyed per node, so a DAG that an
-  // obfuscator made deep or wide costs stack proportional to nothing and time
-  // proportional to its node count rather than its tree size.
-  std::vector<uint32_t> Order;
-  llvm::DenseSet<uint32_t> Seen;
-  llvm::SmallVector<SymRef, 64> Work{Root};
-  while (!Work.empty()) {
-    SymRef R = Work.pop_back_val();
-    if (!Seen.insert(R.index()).second)
-      continue;
-    Order.push_back(R.index());
-    for (SymRef C : Ctx.operands(R))
-      Work.push_back(C);
-  }
-  llvm::sort(Order);
+  if (Ctx.operands(Root).empty())
+    return render(Root).Text;
 
-  Memo.reserve(Order.size());
+  // Visit operands before completing their parent. Interned nodes form a DAG,
+  // so an already visited operand is complete, never an active ancestor.
+  // Iterative postorder avoids both recursion on deep expressions and sorting
+  // the reachable set, while rendering each shared node only once.
+  llvm::SmallVector<uint32_t, 64> Order;
+  struct Frame {
+    SymRef Ref;
+    bool Expanded;
+  };
+  llvm::SmallVector<Frame, 64> Work{{Root, false}};
+  while (!Work.empty()) {
+    auto [R, Expanded] = Work.pop_back_val();
+    if (Expanded) {
+      Order.push_back(R.index());
+      continue;
+    }
+    if (!Memo.try_emplace(R.index(), uint32_t(Memo.size())).second)
+      continue;
+    Work.push_back({R, true});
+    for (SymRef C : Ctx.operands(R))
+      Work.push_back({C, false});
+  }
+
+  Fragments.resize(Order.size());
   for (uint32_t I : Order)
-    Memo.emplace(I, render(SymRef(I)));
-  return Memo.at(Root.index()).Text;
+    Fragments[Memo.find(I)->second] = render(SymRef(I));
+  // The root is discovered first and completed last.
+  return std::move(Fragments.front().Text);
 }
 
 } // namespace

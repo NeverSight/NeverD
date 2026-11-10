@@ -29,7 +29,9 @@
 #include <bit>
 #include <cassert>
 #include <map>
+#include <memory>
 #include <optional>
+#include <vector>
 
 namespace neverd::symbolic::detail {
 
@@ -50,14 +52,27 @@ struct RegionMemo {
   llvm::DenseMap<uint32_t, Entry> Entries;
 };
 
-// These forms already meet a three-node, one-operation reading bound. Two
+struct LinearCandidateMemo {
+  struct Entry {
+    size_t TermBudget;
+    SolverLimits Limits;
+    std::vector<SymRef> Forms;
+    std::vector<llvm::APInt> Weights;
+    size_t Bytes;
+  };
+  llvm::SmallDenseMap<uint64_t, Entry, 2> Entries;
+  size_t Bytes = 0;
+};
+
+// Recognize forms that already meet a reading bound over free inputs. Two
 // independent variables both need a leaf; a nontrivial constant transform is
 // neither a literal, a variable, its complement nor its negation (the only
-// cheaper same-width forms). Reject the coefficients and masks that can be
-// one of those forms. Only actual variables establish this bound: opaque
+// cheaper same-width forms below its three-node, one-operation bound). Reject
+// coefficients and masks that can be one of those forms. Only actual variables
+// establish these bounds: opaque
 // arithmetic inputs can be related and still need the complete region solver.
-bool isMinimalBinaryLeafExpression(const SymContext &Ctx, SymRef E,
-                                   const MBAOptions &Opts) {
+bool isMinimalLeafExpression(const SymContext &Ctx, SymRef E,
+                             const MBAOptions &Opts) {
   const SymOp Op = Ctx.op(E);
   if ((Op != SymOp::Add && Op != SymOp::Mul && Op != SymOp::And &&
        Op != SymOp::Or && Op != SymOp::Xor) ||
@@ -77,6 +92,22 @@ bool isMinimalBinaryLeafExpression(const SymContext &Ctx, SymRef E,
   if (Op == SymOp::Add && Ctx.op(B) == SymOp::Mul && Ctx.numOperands(B) == 2 &&
       Ctx.isConstOnes(Ctx.operand(B, 0)) && Ctx.isVar(Ctx.operand(B, 1)))
     return !Ctx.isConstOnes(A);
+  if (Op == SymOp::Add && Ctx.width(E) >= 3 && Ctx.op(B) == SymOp::Xor &&
+      Ctx.numOperands(B) == 2 && Ctx.isConst(Ctx.operand(B, 0)) &&
+      Ctx.constValue(Ctx.operand(B, 0)).isOne() &&
+      Ctx.isVar(Ctx.operand(B, 1))) {
+    const auto &Offset = Ctx.constValue(A);
+    // C+(X xor 1), for even C, is a bijection. Its successive differences
+    // at X=0,1,2 are -1 and 3, so it is not affine at widths >=3. A nonzero
+    // C other than the sign bit introduces a carry above its lowest set bit,
+    // excluding every per-bit bijection X xor K too. The remaining cheaper
+    // bijections, -(X xor K) and (-X) xor K, disagree at X=0 or X=1:
+    // C is even and the target starts at C+1, then C. All other cheaper
+    // one-variable MBA forms are affine, per-bit or nonbijective.
+    // This five-node, two-operation form therefore already meets its bound.
+    // Keep zero/sign-bit offsets and narrow words in the complete solver.
+    return !Offset[0] && !Offset.isMinSignedValue();
+  }
   if (!Ctx.isVar(B))
     return false;
   if (Op == SymOp::Mul)
@@ -106,6 +137,82 @@ struct Region {
   llvm::SmallVector<uint32_t, 16> AtomIds;
   llvm::SmallVector<SymRef, 16> Atoms;
 };
+
+// Different opaque source words often produce the same independent body.
+// Keep its independent forms and optional measured weights; restoration and
+// equality proof still belong to each caller. The region's atoms are collected
+// from that immutable body, so its identity also fixes their order and the
+// measured weights.
+void regionLinearCandidates(SymContext &Ctx, const Region &Reading,
+                            size_t TermBudget, const SolverLimits &Limits,
+                            WorkBudget &Budget, size_t MaxBytes,
+                            bool RetainWeights,
+                            std::vector<llvm::APInt> &ResidualWeights,
+                            llvm::SmallVectorImpl<SymRef> &Forms) {
+  const bool Cacheable = !Reading.Abstract.Hidden.empty() &&
+                         Budget.MemoOwner == &Ctx && Budget.MemoCapacity &&
+                         MaxBytes >= limits::kCompletedMemoEntryBytes;
+  const uint64_t Key = Reading.Abstract.Body.index();
+  bool Present = false;
+  if (Cacheable && Budget.LinearCandidates) {
+    const auto Found = Budget.LinearCandidates->Entries.find(Key);
+    Present = Found != Budget.LinearCandidates->Entries.end();
+    if (Present) {
+      const auto &Entry = Found->second;
+      const auto &Previous = Entry.Limits;
+      if (Entry.TermBudget == TermBudget &&
+          Previous.MaxAtoms == Limits.MaxAtoms &&
+          Previous.MaxSynthesisAtoms == Limits.MaxSynthesisAtoms &&
+          Previous.MaxOptimalSynthesisAtoms ==
+              Limits.MaxOptimalSynthesisAtoms &&
+          Previous.SynthesisWork == Limits.SynthesisWork &&
+          RetainWeights == !Entry.Weights.empty() && MaxBytes >= Entry.Bytes &&
+          Budget.canConsume(1)) {
+        Budget.consume();
+        Forms.append(Entry.Forms.begin(), Entry.Forms.end());
+        if (RetainWeights)
+          ResidualWeights = Entry.Weights;
+        return;
+      }
+    }
+  }
+  auto Weights = measure(Ctx, Reading.Abstract.Body, Reading.AtomIds);
+  if (RetainWeights)
+    ResidualWeights = Weights;
+  linearCandidates(Ctx, std::move(Weights), Reading.Atoms, TermBudget, Limits,
+                   Forms);
+  if (!Cacheable || Present || Forms.empty() || Budget.exhausted() ||
+      !Budget.canConsume(1))
+    return;
+  const size_t Limit = Budget.MemoCapacity * limits::kCompletedMemoEntryBytes;
+  const size_t Used =
+      Budget.LinearCandidates ? Budget.LinearCandidates->Bytes : 0;
+  size_t Bytes =
+      limits::kCompletedMemoEntryBytes + Forms.size() * sizeof(SymRef);
+  const size_t Available = std::min(MaxBytes, Limit - Used);
+  if (Bytes > Available)
+    return;
+  if (RetainWeights) {
+    const size_t WordBytes =
+        sizeof(llvm::APInt) +
+        ((size_t(Ctx.width(Reading.Abstract.Body)) + 63) / 64) *
+            sizeof(uint64_t);
+    if (ResidualWeights.size() > (Available - Bytes) / WordBytes)
+      return;
+    Bytes += ResidualWeights.size() * WordBytes;
+  }
+  Budget.consume();
+  if (!Budget.LinearCandidates)
+    Budget.LinearCandidates = std::make_shared<LinearCandidateMemo>();
+  Budget.LinearCandidates->Entries.try_emplace(
+      Key, LinearCandidateMemo::Entry{
+               TermBudget,
+               Limits,
+               {Forms.begin(), Forms.end()},
+               RetainWeights ? ResidualWeights : std::vector<llvm::APInt>{},
+               Bytes});
+  Budget.LinearCandidates->Bytes += Bytes;
+}
 
 bool isMinimalUnaryVariable(const SymContext &Ctx, SymRef E) {
   // These forms cost two: one free-variable leaf and one operation. A cheaper
@@ -372,8 +479,6 @@ SymRef solveRegion(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
       if (Direct || Linear->AtomIds.empty())
         Forms.push_back(Linear->Abstract.Body);
       else {
-        std::vector<llvm::APInt> Weights =
-            measure(Ctx, Linear->Abstract.Body, Linear->AtomIds);
         // A tiny corner count can still hold very wide heap-backed APInts.
         // Reserve room for the retained weights, half sets, coefficients,
         // residuals and arithmetic temporaries before making the extra copy.
@@ -383,14 +488,15 @@ SymRef solveRegion(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
             sizeof(llvm::APInt) +
             (Width / 64 + (Width % 64 != 0)) * sizeof(uint64_t);
         const bool ResidualStorageFits = WordBytes <= Opts.MaxTableBytes / 64;
-        if (NumAtoms >= 2 &&
+        const bool RetainWeights =
+            NumAtoms >= 2 &&
             NumAtoms <= std::min({limits::kMaxResidualSynthesisAtoms,
                                   Limits.MaxOptimalSynthesisAtoms,
                                   Limits.MaxSynthesisAtoms}) &&
-            ResidualStorageFits)
-          ResidualWeights = Weights;
-        linearCandidates(Ctx, std::move(Weights), Linear->Atoms,
-                         termBudget(Ctx, E, Opts), Limits, Forms);
+            ResidualStorageFits;
+        regionLinearCandidates(Ctx, *Linear, termBudget(Ctx, E, Opts), Limits,
+                               Budget, Opts.MaxTableBytes, RetainWeights,
+                               ResidualWeights, Forms);
       }
       for (SymRef Form : Forms) {
         // Prove the identity over independent inputs before restoring their
@@ -1240,10 +1346,10 @@ static SymRef solveOneRegionImpl(SymContext &Ctx, SymRef E,
   if (Budget.exhausted() || Ctx.isConst(Arithmetic) ||
       (Arithmetic != E && Ctx.op(Arithmetic) == SymOp::Var) ||
       isMinimalUnaryVariable(Ctx, Arithmetic) ||
-      isMinimalBinaryLeafExpression(Ctx, Arithmetic, Opts)) {
+      isMinimalLeafExpression(Ctx, Arithmetic, Opts)) {
     Rep = ArithmeticRep;
     if (Arithmetic == E && !Budget.exhausted() &&
-        isMinimalBinaryLeafExpression(Ctx, Arithmetic, Opts))
+        isMinimalLeafExpression(Ctx, Arithmetic, Opts))
       Rep.Outcome = MBAOutcome::AlreadyShortest;
     return Arithmetic;
   }

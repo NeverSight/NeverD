@@ -20,6 +20,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QPainter>
+#include <QPointer>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QScreen>
@@ -40,6 +41,8 @@ constexpr char FileDialogPlaces[] = "sidebar";
 constexpr char FileDialogDetails[] = "treeView";
 /// Marks a detail view whose columns already follow its folders.
 constexpr char FittedColumns[] = "neverdFittedColumns";
+/// Marks a header whose columns keep their headings whole.
+constexpr char FittedHeadings[] = "neverdFittedHeadings";
 
 /// Lets a file dialog's names take the width its size, type and date leave.
 /// Qt sizes those three from samples narrower than what it shows ("128.88
@@ -122,6 +125,124 @@ QRectF focusFrame(const QStyleOption &option, const QWidget *widget) {
   return QRectF(frame).adjusted(inset, inset, -inset, -inset);
 }
 
+/// Keeps each column a person can resize at least as wide as its heading:
+/// when the header first shows, when its columns or headings change and when
+/// the language changes.  A person can still narrow a column afterwards.
+class HeadingFitter final : public QObject {
+public:
+  explicit HeadingFitter(QHeaderView *header)
+      : QObject(header), header_(header) {
+    header->installEventFilter(this);
+    connect(header, &QHeaderView::sectionCountChanged, this,
+            &HeadingFitter::schedule);
+    schedule();
+  }
+
+  bool eventFilter(QObject *, QEvent *event) override {
+    switch (event->type()) {
+    case QEvent::Show:
+      if (!shown_) {
+        shown_ = true;
+        schedule();
+      }
+      break;
+    case QEvent::LanguageChange:
+    case QEvent::FontChange:
+    case QEvent::StyleChange:
+      schedule();
+      break;
+    default:
+      break;
+    }
+    return false;
+  }
+
+private:
+  void schedule() {
+    if (pending_)
+      return;
+    pending_ = true;
+    // After the models answer in the new language and the style sheet sets
+    // the headings' font and padding.
+    QTimer::singleShot(0, this, [this] {
+      pending_ = false;
+      fit();
+    });
+  }
+
+  void fit() {
+    if (model_ != header_->model()) {
+      if (model_)
+        disconnect(model_, nullptr, this, nullptr);
+      model_ = header_->model();
+      if (model_) {
+        connect(model_, &QAbstractItemModel::headerDataChanged, this,
+                &HeadingFitter::schedule);
+        connect(model_, &QAbstractItemModel::modelReset, this,
+                &HeadingFitter::schedule);
+      }
+    }
+    if (!model_)
+      return;
+    for (int logical = 0; logical < header_->count(); ++logical) {
+      if (header_->isSectionHidden(logical) ||
+          header_->sectionResizeMode(logical) != QHeaderView::Interactive)
+        continue;
+      // A last column that stretches takes the size it is given as the least
+      // it shrinks to, so it keeps its heading too, and a table narrower than
+      // its headings scrolls sideways.
+      if (const int heading = header_->sectionSizeHint(logical);
+          header_->sectionSize(logical) < heading)
+        header_->resizeSection(logical, heading);
+    }
+  }
+
+  QHeaderView *header_;
+  QPointer<QAbstractItemModel> model_;
+  bool shown_ = false;
+  bool pending_ = false;
+};
+
+/// The color of the surface \p widget stands on: its nearest ancestor that
+/// paints an opaque background.  A style sheet's background reaches the
+/// palette of the widget it styles.
+QColor surfaceBehind(const QWidget *widget) {
+  for (const QWidget *ancestor = widget ? widget->parentWidget() : nullptr;
+       ancestor; ancestor = ancestor->parentWidget()) {
+    const QColor color = ancestor->palette().color(ancestor->backgroundRole());
+    if (color.alpha() == 255 &&
+        (ancestor->autoFillBackground() ||
+         ancestor->testAttribute(Qt::WA_StyledBackground) ||
+         ancestor->isWindow()))
+      return color;
+  }
+  return Theme::instance().chrome(QStringLiteral("Window"));
+}
+
+/// A theme glyph of the chrome, in the current theme's variant.
+QIcon chromeGlyph(const char *name) {
+  return icon(QLatin1String(name) + QLatin1Char('-') +
+              Theme::modeName(Theme::instance().mode()));
+}
+
+/// A menu item's padding box, before its direction mirrors it: room before
+/// the icon column, after the shortcut, and above and below the text.
+QRect menuItemContents(const QRect &rect) {
+  return rect.adjusted(
+      ::neverd::limits::gui_config::kWorkbenchStyleMenuItemPaddingLeft,
+      ::neverd::limits::gui_config::kWorkbenchStyleMenuItemPaddingVertical,
+      -::neverd::limits::gui_config::kWorkbenchStyleMenuItemPaddingRight,
+      -::neverd::limits::gui_config::kWorkbenchStyleMenuItemPaddingVertical);
+}
+
+/// A square of \p size at the leading edge of \p rect, \p inset in from it.
+QRect leadingSquare(Qt::LayoutDirection direction, const QRect &rect, int size,
+                    int inset) {
+  return QStyle::alignedRect(direction, Qt::AlignLeft | Qt::AlignVCenter,
+                             QSize(size, size), rect)
+      .translated(direction == Qt::LeftToRight ? inset : -inset, 0);
+}
+
 bool drawsMnemonics(const QWidget *widget) {
   return qobject_cast<const QMenuBar *>(widget) ||
          qobject_cast<const QMenu *>(widget) ||
@@ -163,13 +284,13 @@ void WorkbenchStyle::drawPrimitive(PrimitiveElement element,
     const qreal radius =
         ::neverd::limits::gui_config::kWorkbenchStyleFocusFrameRadius;
     painter->drawRoundedRect(frame, radius, radius);
-    // A push button keeps a line of the surface between the frame and its
-    // face, as Visual Studio Code sets its focus border off a button, so the
-    // frame shows on a primary button's accent too.
+    // A push button keeps a line of the surface it stands on between the
+    // frame and its face, as Visual Studio Code sets its focus border off a
+    // button, so the frame shows on a primary button's accent too.
     if (qobject_cast<const QPushButton *>(widget)) {
       const qreal gap =
           ::neverd::limits::gui_config::kWorkbenchStyleFocusFrameGap;
-      pen.setColor(Theme::instance().chrome(QStringLiteral("Window")));
+      pen.setColor(surfaceBehind(widget));
       painter->setPen(pen);
       painter->drawRoundedRect(frame.adjusted(gap, gap, -gap, -gap),
                                std::max<qreal>(0, radius - gap),
@@ -179,6 +300,144 @@ void WorkbenchStyle::drawPrimitive(PrimitiveElement element,
     return;
   }
   QProxyStyle::drawPrimitive(element, option, painter, widget);
+}
+
+void WorkbenchStyle::drawControl(ControlElement element,
+                                 const QStyleOption *option, QPainter *painter,
+                                 const QWidget *widget) const {
+  // The style paints a menu's items, so a shortcut can read quieter than its
+  // command, as in Visual Studio Code; a style sheet paints both with one
+  // pen.  The geometry is the style sheet's that came before: the padding,
+  // the icon and check mark columns, and the chevron.
+  const auto *item = qstyleoption_cast<const QStyleOptionMenuItem *>(option);
+  if (element != CE_MenuItem || !item || !qobject_cast<const QMenu *>(widget) ||
+      (item->menuItemType != QStyleOptionMenuItem::Normal &&
+       item->menuItemType != QStyleOptionMenuItem::DefaultItem &&
+       item->menuItemType != QStyleOptionMenuItem::SubMenu)) {
+    QProxyStyle::drawControl(element, option, painter, widget);
+    return;
+  }
+  namespace config = ::neverd::limits::gui_config;
+  const Theme &theme = Theme::instance();
+  const Qt::LayoutDirection direction = item->direction;
+  const QRect rect = item->rect;
+  const bool enabled = item->state & State_Enabled;
+  const bool selected = item->state & State_Selected;
+  painter->save();
+  painter->setFont(item->font);
+  if (selected) {
+    painter->setRenderHint(QPainter::Antialiasing);
+    painter->setPen(Qt::NoPen);
+    painter->setBrush(theme.chrome(QStringLiteral("MenuSelection")));
+    painter->drawRoundedRect(QRectF(rect),
+                             config::kWorkbenchStyleMenuItemRadius,
+                             config::kWorkbenchStyleMenuItemRadius);
+    painter->setRenderHint(QPainter::Antialiasing, false);
+  }
+  const bool checked =
+      item->checkType != QStyleOptionMenuItem::NotCheckable && item->checked;
+  int textOffset = item->maxIconWidth;
+  if (!item->icon.isNull()) {
+    // A toggle with an icon shows it boxed while on, as Visual Studio Code
+    // shows an active input option.
+    const int size = pixelMetric(PM_SmallIconSize, item, widget);
+    const QRect box = leadingSquare(
+        direction, rect, size + 2 * config::kWorkbenchStyleMenuIconBorder,
+        config::kWorkbenchStyleMenuIconInset);
+    if (checked) {
+      painter->setRenderHint(QPainter::Antialiasing);
+      painter->setPen(theme.chrome(QStringLiteral("OptionActiveBorder")));
+      painter->setBrush(theme.chrome(QStringLiteral("OptionActiveBackground")));
+      const qreal radius = config::kWorkbenchStyleMenuItemRadius - 0.5;
+      painter->drawRoundedRect(QRectF(box).adjusted(0.5, 0.5, -0.5, -0.5),
+                               radius, radius);
+      painter->setRenderHint(QPainter::Antialiasing, false);
+    }
+    const QIcon::Mode mode = !enabled   ? QIcon::Disabled
+                             : selected ? QIcon::Active
+                                        : QIcon::Normal;
+    const QPixmap pixmap = item->icon.pixmap(
+        QSize(size, size), painter->device()->devicePixelRatio(), mode,
+        checked ? QIcon::On : QIcon::Off);
+    QRect place(QPoint(), pixmap.deviceIndependentSize().toSize());
+    place.moveCenter(box.center());
+    painter->drawPixmap(place.topLeft(), pixmap);
+  } else if (item->menuHasCheckableItems) {
+    const QRect mark =
+        leadingSquare(direction, rect, config::kWorkbenchStyleMenuCheckSize,
+                      config::kWorkbenchStyleMenuCheckInset);
+    if (checked)
+      chromeGlyph("menu_check").paint(painter, mark);
+    textOffset = std::max(textOffset, mark.width());
+  }
+  const QRect contents = menuItemContents(rect);
+  QRect text = contents;
+  text.setLeft(text.left() + textOffset);
+  text.setWidth(text.width() - item->reservedShortcutWidth);
+  int flags = Qt::AlignLeft | Qt::AlignVCenter | Qt::TextShowMnemonic |
+              Qt::TextDontClip | Qt::TextSingleLine;
+  if (!styleHint(SH_UnderlineShortcut, item, widget))
+    flags |= Qt::TextHideMnemonic;
+  painter->setPen(theme.chrome(!enabled   ? QStringLiteral("DisabledText")
+                               : selected ? QStringLiteral("HighlightedText")
+                                          : QStringLiteral("MenuText")));
+  QStringView label(item->text);
+  // Quieter until the item is highlighted; a disabled item's shortcut is
+  // already the disabled color.
+  const qreal secondary =
+      enabled && !selected ? config::kWorkbenchStyleMenuSecondaryOpacity : 1.0;
+  if (const qsizetype tab = label.indexOf(u'\t'); tab >= 0) {
+    const QRect shortcut(text.topRight(),
+                         QPoint(contents.right(), text.bottom()));
+    painter->setOpacity(secondary);
+    painter->drawText(visualRect(direction, contents, shortcut), flags,
+                      label.mid(tab + 1).toString());
+    painter->setOpacity(1.0);
+    label = label.left(tab);
+  }
+  painter->drawText(visualRect(direction, rect, text), flags, label.toString());
+  if (item->menuItemType == QStyleOptionMenuItem::SubMenu) {
+    const int size = config::kWorkbenchStyleMenuArrowSize;
+    const QRect arrow = alignedRect(
+        direction, Qt::AlignRight | Qt::AlignVCenter, QSize(size, size), rect);
+    painter->setOpacity(secondary);
+    chromeGlyph(direction == Qt::LeftToRight ? "chevron_right" : "chevron_left")
+        .paint(painter, arrow, Qt::AlignCenter,
+               enabled ? QIcon::Normal : QIcon::Disabled);
+  }
+  painter->restore();
+}
+
+QSize WorkbenchStyle::sizeFromContents(ContentsType type,
+                                       const QStyleOption *option,
+                                       const QSize &contents,
+                                       const QWidget *widget) const {
+  const auto *item = qstyleoption_cast<const QStyleOptionMenuItem *>(option);
+  if (type != CT_MenuItem || !item || !qobject_cast<const QMenu *>(widget) ||
+      item->menuItemType == QStyleOptionMenuItem::Separator)
+    return QProxyStyle::sizeFromContents(type, option, contents, widget);
+  // As the style sheet sized an item it painted: the shortcut's gap, the
+  // icon or check mark column, and the padding.
+  namespace config = ::neverd::limits::gui_config;
+  QSize size = contents;
+  if (item->text.contains(u'\t'))
+    size.rwidth() += config::kWorkbenchStyleMenuShortcutGap;
+  if (!item->icon.isNull()) {
+    const int small = pixelMetric(PM_SmallIconSize, nullptr, widget);
+    size.rwidth() +=
+        std::max(item->maxIconWidth,
+                 item->icon.actualSize(QSize(small, small)).width()) +
+        config::kWorkbenchStyleMenuColumnGap;
+  } else if (item->menuHasCheckableItems) {
+    size.rwidth() +=
+        std::max(item->maxIconWidth, config::kWorkbenchStyleMenuCheckSize) +
+        config::kWorkbenchStyleMenuColumnGap;
+  } else {
+    size.rwidth() += item->maxIconWidth;
+  }
+  return size + QSize(config::kWorkbenchStyleMenuItemPaddingLeft +
+                          config::kWorkbenchStyleMenuItemPaddingRight,
+                      2 * config::kWorkbenchStyleMenuItemPaddingVertical);
 }
 
 int WorkbenchStyle::styleHint(StyleHint hint, const QStyleOption *option,
@@ -349,9 +608,16 @@ void WorkbenchStyle::polish(QWidget *widget) {
       combo && !qobject_cast<QStyledItemDelegate *>(combo->itemDelegate()))
     combo->setItemDelegate(new QStyledItemDelegate(combo));
   // A heading too long for its column ends in an ellipsis; Qt's header
-  // otherwise centers it and cuts off both of its ends.
-  if (auto *header = qobject_cast<QHeaderView *>(widget))
+  // otherwise centers it and cuts off both of its ends.  A column across a
+  // table starts as wide as its heading, in every language.
+  if (auto *header = qobject_cast<QHeaderView *>(widget)) {
     header->setTextElideMode(Qt::ElideRight);
+    if (header->orientation() == Qt::Horizontal &&
+        !header->property(FittedHeadings).toBool()) {
+      header->setProperty(FittedHeadings, true);
+      new HeadingFitter(header);
+    }
+  }
   // Qt's own file dialog lists folders and files with the icon theme's
   // icons unless it is given others.
   if (auto *files = qobject_cast<QFileDialog *>(widget);
@@ -419,6 +685,16 @@ bool WorkbenchStyle::eventFilter(QObject *watched, QEvent *event) {
                                 : nullptr)
         fitFileColumns(*files, *details);
     }
+    break;
+  case QEvent::LanguageChange:
+    // Qt words a tab's close button only as it builds it.
+    if (auto *tabs = qobject_cast<QTabBar *>(watched))
+      for (int tab = 0; tab < tabs->count(); ++tab)
+        for (const auto side : {QTabBar::LeftSide, QTabBar::RightSide})
+          if (QWidget *button = tabs->tabButton(tab, side);
+              button && button->inherits("CloseButton"))
+            button->setToolTip(
+                QCoreApplication::translate("CloseButton", "Close Tab"));
     break;
   case QEvent::ApplicationStateChange:
     if (QGuiApplication::applicationState() != Qt::ApplicationActive) {

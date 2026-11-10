@@ -44,17 +44,20 @@ struct RegisterExit {
   MedVar Widest;
 };
 
-std::optional<mips::MergeLoad> mergeLoad(const MedOp &Op) {
+std::optional<mips::MergeTransfer> mergeLoad(const MedOp &Op) {
   if (Op.Opcode != NdOp::INTRINSIC || !Op.NumInputs || !Op.Inputs[0].isConst())
     return std::nullopt;
   return mips::mergeLoad(static_cast<Intrinsic>(Op.Inputs[0].ConstVal));
 }
 
 const LowOp *physicalMerge(const LowBlock &Block,
-                           const LowInstructionBoundary &Boundary) {
+                           const LowInstructionBoundary &Boundary,
+                           Arch Target) {
   if (Boundary.Control != LowInstructionControl::None || Boundary.DelaySlot ||
       (Boundary.Mode != InstructionMode::Default &&
-       Boundary.Mode != InstructionMode::MIPSClassic))
+       Boundary.Mode != InstructionMode::MIPSClassic &&
+       !(Boundary.Mode == InstructionMode::MIPS16 && !isMIPS64(Target) &&
+         Boundary.Size == 4)))
     return nullptr;
   const LowOp *Found = nullptr;
   for (uint64_t I = Boundary.FirstOp; I < Boundary.FirstOp + Boundary.OpCount;
@@ -95,7 +98,7 @@ unsigned discardUnobservedMIPSMergeInputs(MedFunc &Function,
     if (Boundary.Control != LowInstructionControl::None &&
         Boundary.Control != LowInstructionControl::Return)
       return 0;
-    const LowOp *Current = physicalMerge(Low, Boundary);
+    const LowOp *Current = physicalMerge(Low, Boundary, Target);
     if (Previous && Current && PreviousEnd == Boundary.Address)
       Candidates.push_back({Previous, Current});
     Previous = Current;

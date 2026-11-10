@@ -100,10 +100,8 @@ std::string preamble(const std::set<std::string> &Amx, bool Sgx, bool Rep,
             "#endif\n#endif\n";
   if (Rep)
     Text += "#ifndef NEVERD_X86_REP\n"
-            "#if (defined(__NEVERC_X86_REP_STATE__) && "
-            "__NEVERC_X86_REP_STATE__ >= 1) || "
-            "(defined(__NEVERC_X86_REP_STATE32__) && "
-            "__NEVERC_X86_REP_STATE32__ >= 1)\n"
+            "#if defined(__NEVERC_X86_REP_STATE__) && "
+            "__NEVERC_X86_REP_STATE__ >= 1\n"
             "#define NEVERD_X86_REP(native, ...) native\n"
             "#else\n"
             "#define NEVERD_X86_REP(native, ...) __VA_ARGS__\n"

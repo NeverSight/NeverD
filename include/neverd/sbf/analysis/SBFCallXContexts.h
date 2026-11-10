@@ -169,6 +169,10 @@ struct CallXSummaryEdge {
   bool GeneralizedInputs = false;
   CallXInputGeneralization InputGeneralization = CallXInputGeneralization::None;
   std::optional<CallXCompletedResultBinding> CompletedResultBinding;
+  // A completed edge kept its original opaque memory transfer while moving
+  // its equal scalar result and fully covered target proofs to a sibling.
+  // The sibling's additional memory facts do not apply to this old call.
+  bool CompletedOpaqueMemory = false;
 };
 
 enum class CallXMemoryWriteBase : uint8_t {

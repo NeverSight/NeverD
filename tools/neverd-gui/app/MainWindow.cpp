@@ -4,6 +4,7 @@
 #include "../ResourceLimits.h"
 #include "AnalysisPlugins.h"
 #include "AnalysisProgress.h"
+#include "BidiText.h"
 #include "ChooserView.h"
 #include "CodeView.h"
 #include "ComparisonDialog.h"
@@ -722,8 +723,8 @@ void MainWindow::fillPlaceholder(QMenu *menu, const QString &name) {
           before = action;
       int index = 0;
       for (const auto &file : files) {
-        auto *action =
-            new QAction(QStringLiteral("&%1 %2").arg(index++).arg(file), menu);
+        auto *action = new QAction(
+            QStringLiteral("&%1 %2").arg(index++).arg(leftToRight(file)), menu);
         action->setProperty("recent", true);
         connect(action, &QAction::triggered, this, [this, file] {
           if (!openElsewhere(file, false))
@@ -6377,11 +6378,17 @@ void MainWindow::retranslateUi() {
   }
   retitleCodeDocks();
   disassembly_->setSyncName(tr("Hex View-1"));
+  // The Toolbars menu names the band by its title.
+  if (auto *band =
+          findChild<QToolBar *>(QStringLiteral("toolbarNavigationBand")))
+    band->setWindowTitle(tr("Navigation band"));
   updateTitle();
   analysisIndicator_->setIdleToolTip(
       tr("Background analysis: references and labels are indexed while you "
          "browse"));
   progress_->retranslate();
+  // The free space is worded again now, not at the next periodic refresh.
+  diskStatusAge_.invalidate();
   updateStatusBar();
 }
 

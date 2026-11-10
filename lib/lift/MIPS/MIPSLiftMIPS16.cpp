@@ -59,6 +59,49 @@ MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
                : Half & 255;
   const uint16_t SignedImmediate =
       Extended ? Immediate : uint16_t(int16_t(int8_t(Immediate)));
+  if (Extended && HasMIPS16E2) {
+    switch ((Major << 3) | ((Half >> 5) & 7)) {
+#define NEVERD_MIPS16E2_IMMEDIATE(Major, Selector, Classic, Source)            \
+  case ((Major) << 3) | (Selector):                                            \
+    return Encoding{immediateForm(Classic, RX, Source, Immediate)};
+#include "neverd/lift/MIPS/MIPS16Integer.def"
+    case (0x12 << 3) | 7:
+    case (0x1a << 3) | 7: {
+      if (First & 0x608)
+        return std::nullopt;
+      const unsigned Opcode =
+          Major == 0x12 ? (First & 16 ? 38 : 34) : (First & 16 ? 46 : 42);
+      const int Offset = int(((First & 0x1e0) | (Half & 31)) ^ 0x100) - 0x100;
+      return Encoding{immediateForm(Opcode, RX, compactRegister(First & 7),
+                                    uint16_t(Offset))};
+    }
+    }
+    if (Major == 6 && (Half & 0x1c)) {
+      const unsigned Selector = (Half >> 2) & 7;
+      if (!(Half & 3) && (Selector == 1 || Selector == 2)) {
+        const bool Insert = Selector == 1;
+        const unsigned Position = (First >> 6) & 31;
+        const unsigned Limit = First & 31;
+        const bool Source = First & 32;
+        if ((!Source && (!Insert || (Half & 0x700))) ||
+            (Insert ? Limit < Position : Limit + Position > 31))
+          return std::nullopt;
+        return Encoding{0x7c000000u | ((Source ? RX : 0) << 21) | (RY << 16) |
+                        (Limit << 11) | (Position << 6) | (Insert ? 4u : 0u)};
+      }
+      if ((Half & 3) == 2 &&
+          (Selector == 1 || Selector == 2 || Selector == 5 || Selector == 6)) {
+        if ((First & 0x7d8) || (!(First & 32) && (First & 7)) ||
+            (Selector >= 5 && (Half & 0xe0)))
+          return std::nullopt;
+        return Encoding{
+            registerForm(Selector & 1 ? 10 : 11, RX,
+                         First & 32 ? compactRegister(First & 7) : 0,
+                         Selector >= 5 ? 24 : RY)};
+      }
+      return std::nullopt;
+    }
+  }
   switch (Major) {
 #define NEVERD_MIPS16_MEMORY(Major, Classic, Scale)                            \
   case Major:                                                                  \

@@ -26,6 +26,11 @@ struct PatchStorageLayout {
   uint64_t RelroSize = 0;
 };
 
+/// Native Mach-O readonly data may occupy format-reserved original storage.
+/// This checks the producer representation; the Mach-O owner checks backing.
+bool isExternalMachORelro(const CompiledImage &Image,
+                          const CompiledSection &Section);
+
 /// Validate section extents and a complete permission split before writing
 /// any format headers. No writable section may share a page with new code.
 llvm::Expected<PatchStorageLayout>

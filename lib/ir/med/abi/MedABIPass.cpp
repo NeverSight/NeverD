@@ -1887,8 +1887,21 @@ void recoverCallAbi(
           !Op.IsTailCall && !HeaderVariadic && !OpenVariadicArity &&
           Op.CalleeVectorArgs <= 0 && !Op.CalleeVectorSlots &&
           CalleeArgs > int(IntParamRegs.size());
-      const auto ReachingStackStores =
-          callSetupStackStores(Ctx, RecoverStackJoins ? &StackJoins : nullptr);
+      bool StackSetupIncomplete = false;
+      const bool NeedsStackBoundary =
+          Convention && Convention->PairAlignedWideArguments &&
+          !CI.IsIndirect && !HeaderVariadic && !OpenVariadicArity &&
+          CalleeArgs > int(IntParamRegs.size());
+      std::optional<AbiCallContext> StackContext;
+      if (NeedsStackBoundary) {
+        StackContext.emplace(Ctx);
+        StackContext->MaxArgs =
+            std::min(CalleeArgs, MaxArgs) - int(IntParamRegs.size());
+      }
+      const auto ReachingStackStores = callSetupStackStores(
+          StackContext ? *StackContext : Ctx,
+          RecoverStackJoins ? &StackJoins : nullptr, nullptr,
+          NeedsStackBoundary ? &StackSetupIncomplete : nullptr);
       std::erase_if(StackJoins.Slots, [&](const auto &Item) {
         const int64_t Slot =
             int64_t(IntParamRegs.size()) +
@@ -3312,6 +3325,25 @@ void recoverCallAbi(
           ((Convention && Convention->PairAlignedWideArguments) ||
            LeadingGap) &&
           !CI.IsIndirect && CalleeArgs >= 0;
+      const int StackArgBase = StackAfterUsedRegisters ? FirstStackSlot
+                               : DarwinVarArgBase >= 0
+                                   ? DarwinVarArgBase
+                                   : static_cast<int>(IntParamRegs.size());
+      if (NeedsStackBoundary && StackSetupIncomplete) {
+        // The local scan, packed-store reconstruction and tail forwarding
+        // cannot restore evidence lost by the shared reaching-memory proof.
+        // Keep only complete required carriers certified by that owner.
+        for (int K = StackArgBase; K < std::min(CalleeArgs, MaxArgs); ++K) {
+          const int64_t Offset = CallLayout.CallStackBase +
+                                 (K - StackArgBase) * CallLayout.SlotBytes;
+          const auto Reaching = ReachingStackStores.find(Offset);
+          const bool Proven = Reaching != ReachingStackStores.end() &&
+                              Reaching->second.Size == CallLayout.SlotBytes &&
+                              !UndefinedScratchSlot(Reaching->second);
+          Found[K] = Proven ? Reaching->second : MedVar{};
+          FoundMask[K] = FromStackScan[K] = Proven;
+        }
+      }
       // Assemble up to the highest recovered lane so interior gaps are filled
       // but no trailing argument is invented.  A reliable callee arity (>0; a
       // not-yet-promoted forwarder still reports 0 at this point) additionally
@@ -3325,6 +3357,13 @@ void recoverCallAbi(
           if (FoundMask[K])
             LastFound = K;
         AssembleEnd = LastFound + 1;
+        // A known fixed stack argument remains required when a memory effect
+        // or an incomplete proof prevents recovering its value. Pair-aligned
+        // register padding does not authorize omitting the callee's trailing
+        // stack inputs.
+        if (StackSetupIncomplete && !HeaderVariadic && !OpenVariadicArity &&
+            CalleeArgs > StackArgBase)
+          AssembleEnd = std::max(AssembleEnd, std::min(CalleeArgs, MaxArgs));
         if (!HeaderVariadic && CalleeArgs > 0 && CalleeArgs < AssembleEnd)
           AssembleEnd = CalleeArgs;
       }
@@ -3333,10 +3372,6 @@ void recoverCallAbi(
       std::vector<int> IntPartSlots;
       // Each stack argument's offset from the first stack argument: the
       // slot the stack scan found it in.
-      const int StackArgBase = StackAfterUsedRegisters ? FirstStackSlot
-                               : DarwinVarArgBase >= 0
-                                   ? DarwinVarArgBase
-                                   : static_cast<int>(IntParamRegs.size());
       std::vector<int64_t> StackPartOffsets;
       for (int K = 0; K < AssembleEnd; ++K) {
         const bool SummarizedPadding = SummarizedRegisterPadding &&
@@ -3391,7 +3426,7 @@ void recoverCallAbi(
         }
         MedVar A =
             !Gap ? Found[K]
-            : RequiredStackPosition && !FillGaps
+            : RequiredStackPosition && (!FillGaps || StackSetupIncomplete)
                 ? MedVar::makeUnspecified(
                       static_cast<uint16_t>(TRI.PointerSize), TheArch)
                 : MedVar::makeConst(0, static_cast<uint16_t>(TRI.PointerSize));

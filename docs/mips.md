@@ -2,7 +2,7 @@
 
 The experimental MIPS analysis path targets linked ELF programs with classic
 MIPS32 Release 2/o32 or MIPS64 Release 2/n64 instructions, in either byte order,
-the bounded microMIPS32 and MIPS16e32 Release 2/o32 subsets, and the MIPS32
+the bounded microMIPS32, MIPS16e32 and MIPS16e2 Release 2/o32 subsets, and the MIPS32
 Release 5/o32 integer MSA slice described below.
 The selected ELF profile determines register width, byte order, stack layout
 and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
@@ -47,6 +47,19 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   into a wider speculative read. Source lowering retains guest alignment bits
   when direct image data is rebound. Indexed merge reads into rebuilt image
   storage still require an explicit address contract.
+- `SWL`/`SWR` share a partial-store contract across classic and MIPS16e2
+  encodings. Only selected bytes are written; no neighboring read or whole-word
+  read/modify/write is introduced. The emulator validates the full write span
+  and observed source bytes before committing. Source image stores require a
+  bounded writable backing and preserve guest alignment separately from its
+  relocated host address. Source helpers use explicit classic MIPS mode when
+  called from compressed code.
+  A partial store also ends stack-memory argument recovery. If a known callee
+  requires a slot whose value can no longer be proved, source retains an
+  explicit unknown-value trap instead of omitting it or inventing zero. This
+  also preserves required unknown slots when the bounded setup proof cannot
+  finish. Unproved padding is conservatively refused in either case; ordinary
+  pair padding from a complete setup walk keeps the existing ABI path.
 - SPECIAL2 `MUL` computes the low word and explicitly invalidates both HI and
   LO. Dead unpredictable results can be removed; an observed result cannot
   become an old value or zero. MIPS64 word-input restrictions are checked.
@@ -80,6 +93,8 @@ may become zero; the second still consumes the first result. Both reads and
 their fault order remain. Calls, PHIs, exceptional edges, other control flow,
 observed partial results and unproved address relationships retain the original
 dependency. Multi-block and nonadjacent pairs remain outside this proof.
+The physical occurrence proof also accepts four-byte MIPS16e2 merge loads;
+two-byte slots and unproved instruction modes remain excluded.
 Concrete LowIR transport and source parameter inference have separate validation
 boundaries; this source proof does not initialize absent machine registers.
 
@@ -106,7 +121,7 @@ remain a separate contract.
 This is a strict subset. n32, historical MIPS I–V profiles, Release 6,
 microMIPS64, floating point, MSA/DSP forms beyond the slices below, privileged
 instructions, LL/SC reservations,
-unaligned merge stores, doubleword division and trapping arithmetic are not admitted by
+doubleword merge stores (`SDL`/`SDR`), doubleword division and trapping arithmetic are not admitted by
 the current lifter. Unsupported instructions, missing slots and transfers in a
 delay slot produce errors, not replacement NOPs. Floating/aggregate source ABI
 classification, arbitrary PIC/gp recovery, raw-input target selection and
@@ -142,6 +157,15 @@ their destination is `$zero`. Decoder reuse consumes the current
 image's feature evidence; Capstone recognizing an encoding without that
 evidence does not authorize its lift. DSPR2, DSP64, microMIPS DSP, accumulators and other DSP instructions remain
 unsupported.
+
+`ADDQ_S.W`/`SUBQ_S.W` saturate signed words and set sticky overflow bit 20.
+`ADDSC` replaces carry bit 13 with unsigned carry-out; `ADDWC` adds that input
+carry, wraps its word result and sets signed overflow without replacing carry.
+These effects survive a `$zero` destination. `MODSUB` selects the 16-bit last
+index from RT[23:8] when RS is zero, otherwise subtracts RT[7:0].
+`CMPU.EQ/LT/LE.QB` replace the four condition bits; `PICK.QB/PH` select each
+complete lane from RS or RT using condition bits 24 upward. Other state stays
+unchanged, and pure MODSUB needs no incoming DSPControl.
 
 The ten-bit control selector selects six field groups; its upper four bits are
 ignored. Partial writes preserve unselected fields, and packed byte additions
@@ -302,8 +326,24 @@ verify ELF flags, symbol tags, memory, saved registers and actual callee entry.
 The GNU assembler's [`.insn` directive](https://sourceware.org/binutils/docs-2.29/as/MIPS-insn.html)
 marks literal instruction fixtures so their symbols retain the code mode.
 
-MIPS16e2 and MIPS16 on MIPS64 remain
-unsupported. No path treats a misdecoded operand or unknown instruction as
+MIPS16e2 r2/o32 requires both MIPS16 (0x400) and MIPS16e2 (0x4000) in an
+explicit ABI-flags record. Reused decoders refresh this evidence. The admitted
+four-byte EXTEND forms are GP-based ADDIU, ANDI/ORI/XORI/LUI, GP-relative
+LB/LBU/LH/LHU/LW/SB/SH/SW, LWL/LWR/SWL/SWR, EXT/INS (including zero-source INS),
+and MOVZ/MOVN/MOVTZ/MOVTN (including zero sources). Field limits and reserved
+bits are checked before normalization into the existing classic owners.
+T moves use register 24; their physical text spelling does not replace the
+canonical condition operand. No e2 form fits a two-byte delay slot.
+
+The encoding/operation authority is
+[MIPS16e2 Volume IV-a, MD01172 revision 1.00](https://jnastarot.io/arch_index/pdf/MD01172-2B-MIPS16e2-AFP-01.00.pdf).
+GNU `-mmips16e2` supplies explicit ELF evidence for the owned fixtures; a local
+`.set mips16e2` alone need not retain that evidence in the whole object.
+The pinned Unicorn predates e2, so it is **not** an original-e2 oracle. Literal
+GNU bytes, independent LowIR expectations and execution of generated old-MIPS16
+source are separate checks. Hardware or independent original-e2 execution
+remains unavailable. E2 system/MT, atomic, cache/hint/barrier forms and MIPS16
+on MIPS64 remain unsupported. No path treats a misdecoded operand or unknown instruction as
 valid semantics. The immediate, memory, call and slot rules follow
 [MIPS16e Volume IV-a, revision 2.63](https://jnastarot.io/arch_index/pdf/MD00076-2B-MIPS1632-AFP-02.63.pdf)
 and were cross-checked against the pinned Ghidra definitions linked above.
@@ -318,8 +358,9 @@ MSA. Other revisions, MSA64, microMIPS/MSA and DSP/MSA combinations are refused.
 
 `FILL.W`, `INSERT.W`, `COPY_S.W`, all four B/H/W/D formats of `ADDV` and
 `SUBV`, `CEQ`, `CLT_S`/`CLT_U`, `CLE_S`/`CLE_U`, `MIN_S`/`MIN_U`,
-`MAX_S`/`MAX_U`, `SLL`/`SRL`/`SRA`, `BCLR`/`BSET`/`BNEG`, `MULV`/`MADDV`/`MSUBV`, `MAX_A`/`MIN_A`, and
-`AND.V`/`OR.V`/`NOR.V`/`XOR.V` use exact encoding descriptors in
+`MAX_S`/`MAX_U`, `SLL`/`SRL`/`SRA`, `BCLR`/`BSET`/`BNEG`, `MULV`/`MADDV`/`MSUBV`, `MAX_A`/`MIN_A`,
+`ADD_A`/`ADDS_A`, `ADDS_S`/`ADDS_U`, `SUBS_S`/`SUBS_U`,
+`AVE_S`/`AVE_U`, `AVER_S`/`AVER_U`, and `AND.V`/`OR.V`/`NOR.V`/`XOR.V` use exact encoding descriptors in
 `MIPSMSA.def`. The 32 W registers are 128-bit containers. Lane zero occupies
 the low bits in both byte orders; addition and subtraction wrap independently
 within each 8/16/32/64-bit lane. Integer comparisons set every bit of a true
@@ -331,7 +372,12 @@ retains the low lane-width product independently for every lane. MADDV/MSUBV
 add/subtract it from the captured old destination lane. Absolute min/max uses
 unsigned magnitudes, so the minimum signed value has the greatest magnitude;
 equal magnitudes select WT, including opposite signs. Logical
-operations consume all 128 bits.
+operations consume all 128 bits. Absolute addition uses unsigned magnitudes;
+ADD_A wraps, while ADDS_A clamps their sum to the signed maximum, including
+MIN+MIN. Signed and unsigned saturating add/subtract use their respective lane
+ranges. AVE rounds the widened sum down; AVER rounds it up, including negative
+signed ties. The implementation avoids overflowing a host signed integer or
+requiring a 128-bit carrier for each 64-bit-lane sum.
 Inputs are captured before an overlapping destination is written. F registers
 share the low 64 bits of their corresponding W register.
 Scalar floating instructions remain unsupported: their future implementation
@@ -354,11 +400,15 @@ The execution contract requires MSA enabled with CU1/FR configured. It does not
 model disabled-MSA exceptions, MSA floating point/control state or arbitrary
 MSA guest execution. The operation and alias rules follow the MIPS32 MSA manual
 (MD00866, revision 1.12), sections ADDV, SUBV, CEQ, CLT/CLE, MIN/MAX,
-SLL/SRL/SRA, BCLR/BSET/BNEG, MULV/MADDV/MSUBV, MAX_A/MIN_A, AND/OR/NOR/XOR,
+SLL/SRL/SRA, BCLR/BSET/BNEG, MULV/MADDV/MSUBV, MAX_A/MIN_A, ADD_A/ADDS_A, ADDS/SUBS, AVE/AVER,
+AND/OR/NOR/XOR,
 COPY_S, FILL and INSERT. Owned execution
 fixtures validate scalar results, output bytes and the ABI-preserved low FPR
-views against an enabled P5600 reference; no unimplemented W-register API is
-used as an oracle.
+views against an enabled P5600 reference. The pinned Unicorn includes fixes
+for signed host-limit construction and absolute `INT64_MIN` magnitudes, and
+preserves QEMU's wrapping-arithmetic build contract. Every reference lane,
+saved register and regenerated result must match the independent expectation.
+No unimplemented W-register API is used as an oracle.
 
 ## Ordinary memory source qualification
 

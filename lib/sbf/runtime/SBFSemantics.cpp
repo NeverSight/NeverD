@@ -25,6 +25,11 @@ std::optional<uint64_t> evaluateScalarALUImpl(Operation Op, UInt Left,
     return static_cast<UInt>(SwapOperands ? Right - Left : Left - Right);
   case Operation::Mul:
     return static_cast<UInt>(Left * Right);
+  case Operation::UDiv:
+  case Operation::URem:
+    if (Right == 0)
+      return std::nullopt;
+    return Op == Operation::UDiv ? Left / Right : Left % Right;
   case Operation::Or:
     return Left | Right;
   case Operation::And:

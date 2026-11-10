@@ -65,7 +65,7 @@ python3 scripts/verify_arm64e_native.py run \
 ```
 
 The runner requires the probe's exact current revision and source hashes. It
-checks the twelve registered CTest commands before execution, records the owning
+checks the twenty registered CTest commands before execution, records the owning
 test binary hash and runs with the registered CTest deadlines. Every chained and
 threaded-input O0/O2 case must execute successfully: authenticated calls and signed
 compact unwind, native DWARF catches/cleanup, and relocated original signed
@@ -73,11 +73,34 @@ language frames. Missing, duplicate, foreign, failed or skipped cases fail the
 qualification even if CTest itself returns success. Temporary fixture storage
 is private to the invocation and is removed afterward.
 
+The matrix additionally requires four `PublishedEntriesExecute` cases at O0/O2
+with compact/DWARF language records. Four additional publication cases start
+with original threaded images and migrate them to chained metadata inside the
+publication transaction. These use the native publication API,
+check failed-receipt rollback and exclusive output creation, and enter the new
+authenticated call/catch/cleanup functions through the original addresses.
+`native_object_publication_qualified` names this additional native object
+contract. The matrix now requires twenty cases with no failures or skips.
+
+Publication passes the admitted input CodeDirectory page size explicitly to
+`codesign`. Host signing defaults can differ from the compiler linker's defaults;
+the transaction keeps its exact page-size postcondition. The signer regression
+uses real `codesign` to check both 4 KiB and 16 KiB signatures without executing
+the fixture.
+
 `native_installer_call_unwind_qualified` covers this native installation matrix.
 General whole-image publication keeps its separate false qualification field;
 neither this profile nor the controlled FVP call matrix establishes that broader
 contract. Keep the configured LLVM r6 package until a separately qualified fork
 release replaces it.
+
+The [cold-build publication run](evidence/arm64e-native-publication-2026-11-10.json)
+qualifies the native dylib transaction on both macOS 26 and Xcode 27: each host
+passes 33 signer/signature tests, 16 installed-call/unwind cases and both sets of
+six prerequisite controls, without failures or skips. The reports bind source
+revision and prerequisite hashes and confirm removal of their owned build.
+That run predates the four migrated-threaded publication cases and the separate
+main executable gate; it does not establish those additions.
 
 Native macOS 26 and Xcode 27 runners execute the four-key PAC controls, including
 checked-authentication traps. The compiler-original call/unwind control passes
@@ -131,9 +154,76 @@ checks that denial, and its
 selects userspace fixups. Every PAC and language control runs under the declared
 launcher. The report records `fixup_loader`, the SDK syscall number, profile and
 launcher; an unsuccessful or ambiguous SDK query fails before execution.
+The [maintained verifier run](https://github.com/gmh5225/test_mac_intel/actions/runs/42659921245)
+passed all six controls in each of the system/dlopen and userspace/exec profiles
+on both hosts, with exact source/report identities in the page-in evidence.
 The default `system` profile retains its observed failure. The installer still
 requires its matching system/dlopen probe, and neither profile qualifies a
 rebuilt image or the missing post-r6 MC publication path.
+
+The [compiler ABI comparison](evidence/arm64e-compiler-abi-2026-11-10.json)
+records nine compiler-only observations on each current native host. Both Apple
+Clang 21 toolchains produce the following headers from the same source:
+
+| Compiler profile | Object subtype | Dylib subtype | Executable subtype |
+| --- | --- | --- | --- |
+| Default or explicit ABI0 | `0x80000002` | `0x80000002` | `0x81000002` |
+| Explicit ABI1 | `0x81000002` | `0x80000002`, entry discarded | Link failure |
+
+In the explicit ABI1 linked cases, the linker reports that it ignored the
+object. A successful dylib link therefore does not establish retained code or
+ABI compatibility. Reports bind the compiler, command traces, disassembly and
+product hashes; all produced objects and images were removed. No product was
+executed by that compiler comparison. The native installer now admits exactly
+this ABI0-object/ABI1-macOS-main handoff when both platform commands name macOS.
+Other subtype differences remain unsupported. This matches LLVM's
+[Darwin linker subtype test](https://github.com/llvm/llvm-project/blob/b1dc6f680e37cbb19b2ee5ee4195635229c4f6c3/lld/test/MachO/arm64e-cpu-subtype.s);
+the executable test matrix separately establishes execution, not the header alone.
+
+Run the four executable publication cases with the successful same-source
+userspace startup report:
+
+```sh
+python3 scripts/verify_arm64e_native.py run-executable \
+  --build-dir build-release \
+  --probe-report native-evidence/startup/report.json \
+  --output native-evidence/executable
+```
+
+Main executable publication retains one `SG_READ_ONLY` segment. The native
+installer declares new authenticated/ordinary pointer storage in its unowned,
+zero-filled tail, preserving existing addresses and adjusting symbol section
+ordinals. Existing dyld slots remain occupied even when their encoded words are
+zero and their storage lies beyond the original sections. Insufficient capacity,
+occupied bytes and `LC_NOTE` owners reject the transaction.
+[XNU rejects a second read-only segment](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/mach_loader.c#L2499)
+for main executables; the installer preserves RELRO rather than removing flags.
+
+The verifier independently derives the SDK syscall restriction and compares it
+to that report before launching CTest inside the declared profile. It rejects
+missing, skipped or failed cases. The result is separately named
+`native_executable_publication_qualified`; system-default startup and general
+lifted-image publication retain their own unqualified boundaries.
+
+The [main-executable cold-build record](evidence/arm64e-native-executable-publication-2026-11-10.json)
+binds source `3e5fb93c816902d4b9893c1a54ffb353e3e3f117` and the environment revision
+to independent Release/r6 builds on macOS 26 and Xcode 27. Each host passed 33
+signature/signer tests, all twenty dylib cases and all four executable cases,
+without failures or skips. Both prerequisite profiles passed all six controls.
+The reports verify source hashes, prerequisite-report hashes and test-binary
+identity, and confirm removal of each owned build. This qualifies the native
+object transaction under its declared profiles; system-default startup and
+the post-r6 lifted-image producer remain separate requirements.
+
+The same record separately identifies the later loader-slot fix at
+`6eb5e0af5333e7419f402fa3704a6c2f523dcec9`. A legal zero-valued rebase beyond the
+section inventory reproduced overlapping allocation before the fix; all four
+offline executable cases pass afterward. Its 143-case local Mach-O regression
+has 118 passes, 25 explicit environment/optional-interface skips and no failures.
+The [delivered-host replay](https://github.com/gmh5225/test_mac_intel/actions/runs/42704012121)
+passes all twenty dylib and four main cases, plus both prerequisite profiles,
+on each native host without skips. Its separate source, binary and report hashes
+retain the distinction from the earlier cold source build.
 
 A supplemental linker diagnostic did not stop when `ld-classic` lookup failed
 and therefore does not establish legacy threaded execution. Xcode 27 no longer

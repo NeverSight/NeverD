@@ -2,6 +2,7 @@
 
 #include "../Config.h"
 #include "ItemViewActivation.h"
+#include "KeepTranslated.h"
 #include "Session.h"
 #include "ShrinkableRow.h"
 #include "Theme.h"
@@ -16,6 +17,7 @@
 #include <QPushButton>
 #include <QSplitter>
 #include <QVBoxLayout>
+#include <algorithm>
 
 namespace neverd::gui {
 namespace {
@@ -34,10 +36,9 @@ ExtensionsView::ExtensionsView(Session &session, QWidget *parent)
   auto *buttonRow = new QWidget(left);
   auto *buttons = new QHBoxLayout(buttonRow);
   buttons->setContentsMargins(0, 0, 0, 0);
-  import_ = new QPushButton(tr("Import queries…"), buttonRow);
-  run_ = new QPushButton(tr("Run"), buttonRow);
-  unload_ = new QPushButton(tr("Remove group"), buttonRow);
-  unload_->setToolTip(tr("Remove all queries in the selected group."));
+  import_ = new QPushButton(buttonRow);
+  run_ = new QPushButton(buttonRow);
+  unload_ = new QPushButton(buttonRow);
   buttons->addWidget(import_);
   buttons->addWidget(run_);
   buttons->addWidget(unload_);
@@ -48,24 +49,35 @@ ExtensionsView::ExtensionsView(Session &session, QWidget *parent)
   list_->setMinimumWidth(
       ::neverd::limits::gui_config::kExtensionsViewMinimumPaneWidth);
   activateOnReturn(*list_);
-  list_->setToolTip(tr("Run built-in analysis queries or import query "
-                       "definitions from a JSON file."));
   leftLayout->addWidget(list_, 1);
   result_ = new QPlainTextEdit(splitter);
   result_->setMinimumWidth(
       ::neverd::limits::gui_config::kExtensionsViewMinimumPaneWidth);
   result_->setReadOnly(true);
   result_->setFont(Theme::instance().codeFont());
-  result_->setPlaceholderText(
-      tr("Select a query and choose Run to view its result."));
   splitter->setStretchFactor(1, 1);
   layout->addWidget(splitter);
-  // Start wide enough for the translated actions, while keeping the pane
-  // shrinkable when the user drags its splitter or docks it in a narrow area.
-  const auto margins = leftLayout->contentsMargins();
-  splitter->setSizes(
-      {buttonRow->sizeHint().width() + margins.left() + margins.right(),
-       result_->sizeHint().width()});
+  keepTranslated(*this, [this, splitter, buttonRow, leftLayout] {
+    import_->setText(tr("Import queries…"));
+    run_->setText(tr("Run"));
+    unload_->setText(tr("Remove group"));
+    unload_->setToolTip(tr("Remove all queries in the selected group."));
+    list_->setToolTip(tr("Run built-in analysis queries or import query "
+                         "definitions from a JSON file."));
+    result_->setPlaceholderText(
+        tr("Select a query and choose Run to view its result."));
+    // Start wide enough for the translated actions, and widen again for a
+    // language whose actions are longer, while keeping the pane shrinkable
+    // when the user drags its splitter or docks it in a narrow area.
+    const auto margins = leftLayout->contentsMargins();
+    const int actions =
+        buttonRow->sizeHint().width() + margins.left() + margins.right();
+    const QList<int> sizes = splitter->sizes();
+    if (sizes.size() != 2 || sizes[0] + sizes[1] <= 0)
+      splitter->setSizes({actions, result_->sizeHint().width()});
+    else if (sizes[0] < actions)
+      splitter->setSizes({actions, std::max(0, sizes[0] + sizes[1] - actions)});
+  });
   connect(import_, &QPushButton::clicked, this,
           &ExtensionsView::importManifest);
   connect(run_, &QPushButton::clicked, this, &ExtensionsView::run);

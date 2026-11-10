@@ -1,0 +1,13 @@
+//===- MIPSDSPWordFixtures.def - Independent DSP r1 encodings ------------===//
+// GNU/Clang assembled operands a0,a1; destination field is supplied by tests.
+MIPS_DSP_WORD(AddSat, 0x7c850590)
+MIPS_DSP_WORD(SubSat, 0x7c8505d0)
+MIPS_DSP_WORD(AddCarry, 0x7c850410)
+MIPS_DSP_WORD(UseCarry, 0x7c850450)
+MIPS_DSP_WORD(ModSub, 0x7c850490)
+MIPS_DSP_WORD(Equal, 0x7c850011)
+MIPS_DSP_WORD(Less, 0x7c850051)
+MIPS_DSP_WORD(LessEqual, 0x7c850091)
+MIPS_DSP_WORD(PickBytes, 0x7c8500d1)
+MIPS_DSP_WORD(PickHalves, 0x7c8502d1)
+#undef MIPS_DSP_WORD

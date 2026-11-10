@@ -97,10 +97,13 @@ void writeMIPSScalarHelpers(Stream &OS, Arch Target,
       OS << "    return ((uint64_t)r << 32) | q;\n}\n\n";
       continue;
     }
-    const auto Load = *mips::mergeLoad(Id);
+    const auto Load = *mips::mergeMemory(Id);
+    const bool Store = mips::mergeStore(Id).has_value();
     const bool Forward = Load.Left != Little;
     const char *Value = Load.Bytes == 8 ? "uint64_t" : "uint32_t";
-    OS << "static inline " << Value << " " << Name << "(" << Reg << " address, "
+    OS << "static inline "
+       << mips::instructionModeCAttribute(InstructionMode::MIPSClassic)
+       << (Store ? "void" : Value) << " " << Name << "(" << Reg << " address, "
        << Value << " old, unsigned offset) {\n"
        << "    if (offset == " << unsigned(Load.Bytes)
        << "u) offset = address & " << unsigned(Load.Bytes - 1)
@@ -111,14 +114,20 @@ void writeMIPSScalarHelpers(Stream &OS, Arch Target,
       OS << "offset + 1u";
     OS << ";\n    " << Reg << " first = address" << (Forward ? "" : " - offset")
        << ";\n";
-    OS << "    " << Value << " result = old;\n"
-       << "    for (unsigned i = 0; i != count; ++i) {\n"
+    if (!Store)
+      OS << "    " << Value << " result = old;\n";
+    OS << "    for (unsigned i = 0; i != count; ++i) {\n"
        << "        unsigned lane = ";
     if (Load.Left)
       OS << unsigned(Load.Bytes) << "u - count + ";
     OS << (Little ? "i" : "(count - 1u - i)")
-       << ";\n        unsigned shift = lane * 8u;\n"
-       << "        " << Value
+       << ";\n        unsigned shift = lane * 8u;\n";
+    if (Store) {
+      OS << "        *(volatile uint8_t *)(uintptr_t)(" << Reg
+         << ")(first + i) = (uint8_t)(old >> shift);\n    }\n}\n\n";
+      continue;
+    }
+    OS << "        " << Value
        << " byte = *(const volatile uint8_t *)(uintptr_t)"
        << "(" << Reg << ")(first + i);\n"
        << "        result = (result & ~((" << Value << ")255u << shift)) | "
@@ -147,7 +156,7 @@ renderMIPSScalar(const HighExpr &E, Arch Target, const std::string &Name,
       Result += "(uintptr_t)";
     Result += "(" + Expression(*E.Operands[I], I) + ")";
   }
-  if (const auto Load = mips::mergeLoad(E.IntrinsicId))
+  if (const auto Load = mips::mergeMemory(E.IntrinsicId))
     Result += ", " +
               std::to_string(GuestAddress ? *GuestAddress & (Load->Bytes - 1)
                                           : Load->Bytes) +

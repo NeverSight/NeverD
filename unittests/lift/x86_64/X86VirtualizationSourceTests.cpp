@@ -944,15 +944,6 @@ void _start(void) {
       if (!IR && !NativeCCompiler.empty())
         Arguments.insert(Arguments.end(),
                          {"-fno-lto", "-fno-builtin-mimalloc"});
-      std::string FullBackend;
-      if (!IR && !NativeCCompiler.empty() && Image.Arch == Arch::X86) {
-        const auto *LLC = std::getenv("NEVERD_TEST_NEVERC_LLC");
-        ASSERT_TRUE(LLC && *LLC)
-            << "NEVERD_TEST_NEVERC_LLC must select the full NeverSight LLVM "
-               "backend for NeverC i386 object generation";
-        FullBackend = std::string("-fllvm-backend=") + LLC;
-        Arguments.push_back(FullBackend);
-      }
       // Match Codegen's x86 SSE2 baseline. Clang's plain i386 target has no
       // XMM register class for the emitted floating-point assembly operands.
       if (Image.Arch == Arch::X86)
@@ -1280,8 +1271,7 @@ void compileNativeC(const std::string &Compiler, llvm::StringRef Directory,
                     BinaryFormat Format, const std::string &Source,
                     const std::string &LLVMName, unsigned &Cases,
                     std::optional<uint16_t> RequiredPort = std::nullopt,
-                    bool CompileObject = false, bool NeverC = true,
-                    Arch TargetArch = Arch::X64) {
+                    bool CompileObject = false, bool NeverC = true) {
   llvm::SmallString<128> Input(Directory), Output(Directory), Errors(Directory);
   llvm::sys::path::append(Input, "source.c");
   llvm::sys::path::append(Output, "source.ll");
@@ -1294,8 +1284,7 @@ void compileNativeC(const std::string &Compiler, llvm::StringRef Directory,
   for (const char *Opt : {"-O0", "-O2"}) {
     SCOPED_TRACE(Opt);
     const char *Target =
-        TargetArch == Arch::X86         ? "--target=i386-unknown-linux-gnu"
-        : Format == BinaryFormat::COFF  ? "--target=x86_64-pc-windows-msvc"
+        Format == BinaryFormat::COFF    ? "--target=x86_64-pc-windows-msvc"
         : Format == BinaryFormat::MachO ? "--target=x86_64-apple-darwin"
                                         : "--target=x86_64-linux-gnu";
     std::vector<llvm::StringRef> Arguments = {
@@ -1331,17 +1320,8 @@ void compileNativeC(const std::string &Compiler, llvm::StringRef Directory,
       ObjectArguments.erase(std::find(ObjectArguments.begin(),
                                       ObjectArguments.end(), "-emit-llvm"));
       *std::find(ObjectArguments.begin(), ObjectArguments.end(), "-S") = "-c";
-      std::string BackendOption;
-      if (NeverC && TargetArch == Arch::X86) {
-        const char *Backend = std::getenv("NEVERD_TEST_NEVERC_LLC");
-        ASSERT_TRUE(Backend && llvm::sys::fs::exists(Backend))
-            << "set NEVERD_TEST_NEVERC_LLC to the full i386 LLVM backend";
-        BackendOption = std::string("-fllvm-backend=") + Backend;
-        ObjectArguments.push_back(BackendOption);
-      } else {
-        ObjectArguments.emplace_back("-mllvm");
-        ObjectArguments.emplace_back("-verify-machineinstrs");
-      }
+      ObjectArguments.emplace_back("-mllvm");
+      ObjectArguments.emplace_back("-verify-machineinstrs");
       const int ObjectStatus = llvm::sys::ExecuteAndWait(
           Compiler, ObjectArguments, std::nullopt, Redirects, 30);
       const auto ObjectDiagnostics = llvm::MemoryBuffer::getFile(Errors);

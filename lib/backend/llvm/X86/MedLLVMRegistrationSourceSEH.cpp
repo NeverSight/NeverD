@@ -68,6 +68,17 @@ using Stretch = RegistrationDisplayFacts::Stretch;
 /// No scope: a level below zero, as the table's sentinels are.
 constexpr int32_t kNoScope = -1;
 
+/// EH3 and EH4 use different negative sentinels for the same unguarded state.
+std::vector<int32_t> sourceLevels(llvm::ArrayRef<int32_t> Levels) {
+  std::vector<int32_t> Result;
+  for (int32_t Level : Levels) {
+    Level = Level < 0 ? kNoScope : Level;
+    if (Result.empty() || Result.back() != Level)
+      Result.push_back(Level);
+  }
+  return Result;
+}
+
 /// The stretches holding any byte of [Begin, End), in address order.
 llvm::ArrayRef<Stretch> stretchesIn(const RegistrationDisplayFacts &Facts,
                                     va_t Begin, va_t End) {
@@ -303,8 +314,11 @@ bool MedLLVMEmitter::emitSourceX86RegistrationSEH(
     const MedOp *Special = nullptr;
     llvm::CallInst *Call = nullptr;
     std::vector<size_t> UnwindScopes;
+    /// Levels at the outgoing edge, including a quiet trailing state change.
+    std::vector<int32_t> ExitLevels;
   };
   std::map<int, BlockPlan> Plans;
+  std::map<int, std::vector<int32_t>> SharedLevels;
   for (const MedBlock &Block : Func.Blocks) {
     if (!Mapped.count(Block.Id) || Block.StartAddr >= Block.EndAddr)
       continue;
@@ -373,10 +387,25 @@ bool MedLLVMEmitter::emitSourceX86RegistrationSEH(
       return Loud.begin()->front();
     };
     const auto Before = LevelOf(true);
-    if (!Before)
-      return false;
-    Plan.Level = *Before;
+    if (!Before) {
+      // Ordinary paths can share an exit while retaining different active
+      // scopes. Specialize only a uniform state: changing or handler-owned
+      // code needs a different proof, not a guessed common ancestor.
+      const auto Levels = sourceLevels(In.front().Levels);
+      if (Plan.Owner || Plan.Special || Levels.size() < 2 ||
+          !llvm::all_of(In,
+                        [&](const Stretch &S) {
+                          return sourceLevels(S.Levels) == Levels;
+                        }) ||
+          Levels.back() >= static_cast<int32_t>(Scopes.size()))
+        return false;
+      SharedLevels.emplace(Block.Id, Levels);
+      Plan.Level = Levels.front();
+    } else {
+      Plan.Level = *Before;
+    }
     Plan.After = Plan.Level;
+    Plan.ExitLevels = sourceLevels(In.back().Levels);
     if (Plan.Special && Boundary < Block.EndAddr) {
       const auto After = LevelOf(false);
       if (!After)
@@ -597,6 +626,39 @@ bool MedLLVMEmitter::emitSourceX86RegistrationSEH(
     if (!Block->getTerminator())
       return false;
 
+  // Before copying a shared tail, prove every entering edge's active level.
+  // This is deliberately independent of layout and follows cycles as well as
+  // acyclic tails. LLVM emission keeps cross-block state in parent allocas.
+  std::map<int, std::vector<llvm::BasicBlock *>> SharedBlocks;
+  for (llvm::BasicBlock *Block : Layout) {
+    const auto Home = HomeOf.find(Block);
+    if (Home != HomeOf.end() && SharedLevels.count(Home->second))
+      SharedBlocks[Home->second].push_back(Block);
+  }
+  for (const auto &[Id, Blocks] : SharedBlocks) {
+    if (!keepsItsValues(Blocks))
+      return false;
+    for (llvm::BasicBlock *Block : Blocks) {
+      if (Block == &Parent.getEntryBlock() || Block->hasAddressTaken() ||
+          !Block->phis().empty() || Block->isEHPad())
+        return false;
+      for (llvm::BasicBlock *Succ : llvm::successors(Block))
+        if (!Succ->phis().empty())
+          return false;
+      for (llvm::BasicBlock *Pred : llvm::predecessors(Block)) {
+        const auto Home = HomeOf.find(Pred);
+        const BlockPlan *Plan =
+            Home == HomeOf.end() ? nullptr : PlanOf(Home->second);
+        if (!Plan || Plan->ExitLevels.empty() ||
+            (Plan->ExitLevels.size() != 1 && !SharedLevels.count(Home->second)))
+          return false;
+        for (int32_t Level : Plan->ExitLevels)
+          if (!llvm::is_contained(SharedLevels.at(Id), Level))
+            return false;
+      }
+    }
+  }
+
   // Charge the complete expansion before changing the parent. One large
   // cleanup called at many sites must not multiply the source IR unchecked.
   std::vector<size_t> BodySizes(Regions.size());
@@ -604,6 +666,15 @@ bool MedLLVMEmitter::emitSourceX86RegistrationSEH(
     for (const llvm::BasicBlock *Block : R.Body)
       BodySizes[R.Index] += Block->size();
   size_t Remaining = limits::backend::kMaxSourceX86SEHClonedInstructions;
+  for (const auto &[Id, Blocks] : SharedBlocks) {
+    size_t Size = 0;
+    for (const llvm::BasicBlock *Block : Blocks)
+      Size += Block->size();
+    const size_t Copies = SharedLevels.at(Id).size() - 1;
+    if (Size > Remaining / Copies)
+      return false;
+    Remaining -= Size * Copies;
+  }
   auto Charge = [&](size_t Index) {
     if (BodySizes[Index] > Remaining)
       return false;
@@ -674,6 +745,52 @@ bool MedLLVMEmitter::emitSourceX86RegistrationSEH(
     Builder.CreateRet(Builder.getInt32(*Filter.Constant));
   }
 
+  // Make all variants before redirecting any edge, so loops and shared
+  // successors select the same level throughout. The original is one variant.
+  std::map<llvm::BasicBlock *, std::map<int32_t, llvm::BasicBlock *>> Variants;
+  for (const auto &[Id, Blocks] : SharedBlocks) {
+    const auto &Levels = SharedLevels.at(Id);
+    for (llvm::BasicBlock *Block : Blocks)
+      Variants[Block][Levels.front()] = Block;
+    for (int32_t Level : llvm::drop_begin(Levels)) {
+      llvm::ValueToValueMapTy Copies;
+      llvm::SmallVector<llvm::BasicBlock *, 8> Cloned;
+      for (llvm::BasicBlock *Block : Blocks) {
+        auto *Copy = llvm::CloneBasicBlock(
+            Block, Copies, ".seh.level." + std::to_string(Level), &Parent);
+        Copy->moveAfter(Block);
+        Copies[Block] = Copy;
+        Variants[Block][Level] = Copy;
+        Cloned.push_back(Copy);
+      }
+      llvm::remapInstructionsInBlocks(Cloned, Copies);
+      for (llvm::BasicBlock *Copy : Cloned)
+        for (llvm::Instruction &Inst : *Copy)
+          Inst.setMetadata(language_eh_md::InternalSourceCallAttachment,
+                           nullptr);
+    }
+  }
+  for (llvm::BasicBlock *Block : Layout) {
+    const auto Home = HomeOf.find(Block);
+    const BlockPlan *Plan =
+        Home == HomeOf.end() ? nullptr : PlanOf(Home->second);
+    if (!Plan)
+      continue;
+    // Read the original targets before redirecting the original variant.
+    llvm::SmallVector<llvm::BasicBlock *, 4> Targets(llvm::successors(Block));
+    auto Redirect = [&](llvm::BasicBlock *From, int32_t Level) {
+      for (size_t I = 0; I < Targets.size(); ++I)
+        if (const auto It = Variants.find(Targets[I]); It != Variants.end())
+          From->getTerminator()->setSuccessor(I, It->second.at(Level));
+    };
+    if (const auto It = Variants.find(Block); It != Variants.end()) {
+      for (const auto &[Level, Copy] : It->second)
+        Redirect(Copy, Level);
+    } else if (Plan->ExitLevels.size() == 1) {
+      Redirect(Block, Plan->ExitLevels.front());
+    }
+  }
+
   const std::set<llvm::BasicBlock *> RemovedSet(Removed.begin(), Removed.end());
   std::map<llvm::BasicBlock *, int32_t> LevelOfBlock;
   for (llvm::BasicBlock *Block : Layout) {
@@ -681,7 +798,10 @@ bool MedLLVMEmitter::emitSourceX86RegistrationSEH(
     if (Home == HomeOf.end() || Funclets.count(Block) ||
         RemovedSet.count(Block))
       continue;
-    if (const BlockPlan *Plan = PlanOf(Home->second))
+    if (const auto It = Variants.find(Block); It != Variants.end()) {
+      for (const auto &[Level, Copy] : It->second)
+        LevelOfBlock[Copy] = Level;
+    } else if (const BlockPlan *Plan = PlanOf(Home->second))
       LevelOfBlock[Block] =
           PHICopyEdges.count(Block) ? Plan->After : Plan->Level;
   }

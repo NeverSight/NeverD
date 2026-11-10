@@ -238,5 +238,60 @@
       "debugger_sha256": "97b69c537faf6f75cf7ef03ee866d8704e0a1665618f3367216a7c5c2a507844",
       "owned_executables_removed": true
     }
+  },
+  "maintained_verifier": {
+    "source_revision": "024602c9149fb0796df91ace97288f5b19e02e6d",
+    "environment_revision": "916e4de2dc552fa77d821acde5acfe811266c049",
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42659921245",
+    "results": [
+      {
+        "runner": "macos-26",
+        "profile": "maintained-dlopen",
+        "report_sha256": "f5d701c684a924e02665874a2cf429c0c5a045b850c274e2e2d02da65bb2d91d",
+        "control_loading": "dlopen",
+        "fixup_loader": "system",
+        "native_pac_qualified": true,
+        "compiler_original_startup_qualified": false,
+        "whole_image_publication_qualified": false,
+        "passed_controls": 6,
+        "removed_products": 10
+      },
+      {
+        "runner": "macos-26",
+        "profile": "maintained-startup",
+        "report_sha256": "9fbe43cf9737eadabe0c9e306ccfe7dd8349816b20dbb0c8f679780d855d06da",
+        "control_loading": "exec",
+        "fixup_loader": "userspace",
+        "native_pac_qualified": true,
+        "compiler_original_startup_qualified": true,
+        "whole_image_publication_qualified": false,
+        "passed_controls": 6,
+        "removed_products": 6
+      },
+      {
+        "runner": "xcode-27",
+        "profile": "maintained-dlopen",
+        "report_sha256": "849a358f3cadf17a3a6ec760635c863823b3ac842d6bfde459c29263a0a5a9a5",
+        "control_loading": "dlopen",
+        "fixup_loader": "system",
+        "native_pac_qualified": true,
+        "compiler_original_startup_qualified": false,
+        "whole_image_publication_qualified": false,
+        "passed_controls": 6,
+        "removed_products": 10
+      },
+      {
+        "runner": "xcode-27",
+        "profile": "maintained-startup",
+        "report_sha256": "cfedd7b69c960e4d86c86da096996784b83a05cde4f07a45965355fb0887942f",
+        "control_loading": "exec",
+        "fixup_loader": "userspace",
+        "native_pac_qualified": true,
+        "compiler_original_startup_qualified": true,
+        "whole_image_publication_qualified": false,
+        "passed_controls": 6,
+        "removed_products": 6
+      }
+    ]
   }
 }

@@ -15,6 +15,7 @@
 #include "ActionRegistry.h"
 #include "FlowLayout.h"
 #include "Icons.h"
+#include "KeepTranslated.h"
 #include "PluginServices.h"
 #include "Session.h"
 #include "ShrinkableRow.h"
@@ -121,17 +122,17 @@ AnalysisPlugins::AnalysisPlugins(Session &session, ActionRegistry &actions,
                                  QWidget *parent)
     : QWidget(parent), session_(session), actions_(actions),
       services_(session.pluginServices()), jobs_(services_.jobs()),
-      menu_(new QMenu(tr("Plu&gins"), this)) {
+      menu_(new QMenu(this)) {
   setObjectName(QStringLiteral("analysisPlugins"));
   menu_->setObjectName(QStringLiteral("processPluginsMenu"));
   auto *layout = new QVBoxLayout(this);
   auto *management = new QWidget(this);
   management->setObjectName(QStringLiteral("pluginManagement"));
   auto *buttons = new FlowLayout(management);
-  auto *import = new QPushButton(tr("&Import plugin…"), management);
-  auto *manage = new QPushButton(tr("Plugin manager…"), management);
+  auto *import = new QPushButton(management);
+  auto *manage = new QPushButton(management);
   manage->setObjectName(QStringLiteral("pluginOpenManager"));
-  auto *menus = new QPushButton(tr("Menu settings…"), management);
+  auto *menus = new QPushButton(management);
   menus->setObjectName(QStringLiteral("pluginMenuSettings"));
   buttons->addWidget(import);
   buttons->addWidget(manage);
@@ -142,9 +143,7 @@ AnalysisPlugins::AnalysisPlugins(Session &session, ActionRegistry &actions,
   auto *splitter = new QSplitter(Qt::Vertical, this);
   tasks_ = new QTreeWidget(splitter);
   tasks_->setObjectName(QStringLiteral("pluginTasks"));
-  tasks_->setAccessibleName(tr("Tasks grouped by plugin"));
-  tasks_->setHeaderLabels(
-      {tr("Plugin / task"), tr("State"), tr("Progress"), tr("Elapsed")});
+  tasks_->setColumnCount(4);
   tasks_->setRootIsDecorated(true);
   tasks_->setUniformRowHeights(true);
   tasks_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Ignored);
@@ -161,7 +160,7 @@ AnalysisPlugins::AnalysisPlugins(Session &session, ActionRegistry &actions,
   results->setObjectName(QStringLiteral("pluginTaskResultPane"));
   auto *resultLayout = new QVBoxLayout(results);
   resultLayout->setContentsMargins(0, 0, 0, 0);
-  resultTitle_ = new QLabel(tr("Task results"), results);
+  resultTitle_ = new QLabel(results);
   resultTitle_->setObjectName(QStringLiteral("pluginTaskTitle"));
   resultTitle_->setTextFormat(Qt::PlainText);
   resultTitle_->setWordWrap(true);
@@ -179,15 +178,13 @@ AnalysisPlugins::AnalysisPlugins(Session &session, ActionRegistry &actions,
   resultActions_->setObjectName(QStringLiteral("pluginTaskActions"));
   auto *resultButtons = new FlowLayout(resultActions_);
   resultLayout->addWidget(resultActions_);
-  cancel_ = new QPushButton(tr("&Cancel task"), resultActions_);
-  export_ = new QPushButton(tr("&Export artifact…"), resultActions_);
-  importImage_ = new QPushButton(tr("Import code into image"), resultActions_);
+  cancel_ = new QPushButton(resultActions_);
+  export_ = new QPushButton(resultActions_);
+  importImage_ = new QPushButton(resultActions_);
   importImage_->setObjectName(QStringLiteral("pluginImportImage"));
-  importImage_->setToolTip(tr("Add recovered code as an analysis section, then "
-                              "open its first function"));
   connect(importImage_, &QPushButton::clicked, this,
           &AnalysisPlugins::importImageAddition);
-  showLog_ = new QPushButton(tr("Show &log"), resultActions_);
+  showLog_ = new QPushButton(resultActions_);
   showLog_->setObjectName(QStringLiteral("pluginShowLog"));
   showLog_->setCheckable(true);
   resultButtons->addWidget(cancel_);
@@ -200,7 +197,6 @@ AnalysisPlugins::AnalysisPlugins(Session &session, ActionRegistry &actions,
   makeStatusLine(*status_);
   resultLayout->addWidget(status_);
   progress_ = new QProgressBar(results);
-  progress_->setAccessibleName(tr("Selected plugin task progress"));
   resultLayout->addWidget(progress_);
   views_ = new QTabWidget(results);
   views_->setObjectName(QStringLiteral("pluginResultViews"));
@@ -298,6 +294,23 @@ AnalysisPlugins::AnalysisPlugins(Session &session, ActionRegistry &actions,
   rebuildActions();
   refreshContext();
   refreshJobs();
+  keepTranslated(*this, [this, import, manage, menus] {
+    menu_->setTitle(tr("Plu&gins"));
+    import->setText(tr("&Import plugin…"));
+    manage->setText(tr("Plugin manager…"));
+    menus->setText(tr("Menu settings…"));
+    tasks_->setAccessibleName(tr("Tasks grouped by plugin"));
+    tasks_->setHeaderLabels(
+        {tr("Plugin / task"), tr("State"), tr("Progress"), tr("Elapsed")});
+    cancel_->setText(tr("&Cancel task"));
+    export_->setText(tr("&Export artifact…"));
+    importImage_->setText(tr("Import code into image"));
+    importImage_->setToolTip(tr("Add recovered code as an analysis section, "
+                                "then open its first function"));
+    showLog_->setText(tr("Show &log"));
+    progress_->setAccessibleName(tr("Selected plugin task progress"));
+    // The theme's change after a new language words the selected task again.
+  });
 }
 bool AnalysisPlugins::installPlugin(const QString &path, QString &error) {
   return services_.installPlugin(path, error);

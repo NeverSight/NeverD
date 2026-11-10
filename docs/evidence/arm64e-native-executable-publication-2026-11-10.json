@@ -1,0 +1,186 @@
+{
+  "date": "2026-11-10",
+  "timezone": "Asia/Singapore",
+  "source_revision": "3e5fb93c816902d4b9893c1a54ffb353e3e3f117",
+  "environment_revision": "b0ca283b93547b95394f42be8d4d978467f316c1",
+  "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42694273043",
+  "startup_fixup_loader": "userspace",
+  "native_object_publication_qualified": true,
+  "native_executable_publication_qualified": true,
+  "system_startup_qualified": false,
+  "whole_image_publication_qualified": false,
+  "hosts": {
+    "macos-26": {
+      "environment_report_sha256": "3306f0296fc7367c80d3880d32fe8cdf658a2d5b2c0b86c37db1cffa0d8e4001",
+      "reports": {
+        "probe": "8eb54b600a49ae155669a80df3f0ade0f29a12b416a4f396134eecb1d336ec46",
+        "startup": "17e3233e58d8175f8fa993820b0718a7df3fb2b7a27801b44a33e795fb21ff45",
+        "installation": "88fdbdfe08b5e0f5f0665f2de1b6d626bc54af803640dc56d726ad09c6afe11d",
+        "executable": "921aa04d9bf881fd72f4d5d3752a97d5b4beddae9855345d9f697933d0e197d7"
+      },
+      "test_binary_sha256": "899c4305f5fd63603d574a34247b309b5d8dd19626486083c4d18517a0641a16",
+      "owned_build_removed": true,
+      "tests": {
+        "signing.xml": {
+          "count": 33,
+          "passed": 33,
+          "failed": 0,
+          "skipped": 0,
+          "sha256": "9699fb6ac483d528430057709fb4432115803c34d3d04758d41550a606d051b5"
+        },
+        "installation/native-runtime.xml": {
+          "count": 20,
+          "passed": 20,
+          "failed": 0,
+          "skipped": 0,
+          "sha256": "720df3b30ac8a1820bcdbdcd26d2836fcbf03173846edf2aa5ede19b242c28fc"
+        },
+        "executable/native-runtime.xml": {
+          "count": 4,
+          "passed": 4,
+          "failed": 0,
+          "skipped": 0,
+          "sha256": "1ceb1ec31d43ec19a602751fbb8803e0f0472e60045d94a79a9f4dd0889034f8"
+        }
+      }
+    },
+    "xcode-27": {
+      "environment_report_sha256": "ee4be7d412a46115723f2ed3b6119f0f8cddba89b964aa3adddf6a16257271e6",
+      "reports": {
+        "probe": "abca19701e40d093504c0f8925938728519559083677dc35a606a7a80d7bca4b",
+        "startup": "7aceb341d53042d3b1514748710fea15b6a5006bf24051161b9e4e38f7f93b7b",
+        "installation": "6d583b83930d0b0b3fc623f81d6ec92a5cea3de89f7dd63d529b7708617803b9",
+        "executable": "679c563f576c669a5e654a1e17d3ee92221566a410192440b0eebab528f84353"
+      },
+      "test_binary_sha256": "ef9164da1964704a925c919275141b7a5403a49efa366d6b7c28ab7e01bb42a1",
+      "owned_build_removed": true,
+      "tests": {
+        "signing.xml": {
+          "count": 33,
+          "passed": 33,
+          "failed": 0,
+          "skipped": 0,
+          "sha256": "6361e018d672c63600c0ac73a182a6df27e1f6037d0bfd1b0bb2d283cd5693b9"
+        },
+        "installation/native-runtime.xml": {
+          "count": 20,
+          "passed": 20,
+          "failed": 0,
+          "skipped": 0,
+          "sha256": "6f17b2fc745fe56bfec7d63a6cee01614e528fb0b6b234b7919c11cfc3461b86"
+        },
+        "executable/native-runtime.xml": {
+          "count": 4,
+          "passed": 4,
+          "failed": 0,
+          "skipped": 0,
+          "sha256": "83a9d1cedcb65570c6561d4abcd61a5c710361631b49d0ee6f8f4397aaf476de"
+        }
+      }
+    }
+  },
+  "loader_slot_followup": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42704012121",
+    "source_revision": "6eb5e0af5333e7419f402fa3704a6c2f523dcec9",
+    "environment_revision": "42e4aceff34d3154a60fe23b497572b9f1f0f980",
+    "diagnostic_delivery_only": true,
+    "test_binary_sha256": "916bdde9a0c78acc2760d8339ed5f2d0a195678738634c47fba451535714efcc",
+    "local_regression": {
+      "source_revision": "6eb5e0af5333e7419f402fa3704a6c2f523dcec9",
+      "tests": 143,
+      "passed": 118,
+      "skipped": 25,
+      "failed": 0,
+      "xml_sha256": "453dd6763eec1c9a0d8c7e614734f423306830368853fff15bc8208ab8526827"
+    },
+    "hosts": {
+      "macos-26": {
+        "reports": {
+          "probe": "7ce2aac19ea0f25c25a650baf25ee0f78bfc75369661ecfcbd7edda2d11006b9",
+          "startup": "a6543433d63388a4e1120b3acdfa9febd27227d736979472734cb97370bec2a0",
+          "dylib-installation": "572a2f5872d2d89635dc8a656ef7a50a498c0acdbb3c6170b4b4a964b1b9f219",
+          "installation": "0af2dfa7d1cf7d631a4849d3b310b5f221e7eb5bf45617555118b81af845fa57"
+        },
+        "tests": {
+          "dylib-installation": {
+            "tests": 20,
+            "passed": 20,
+            "failed": 0,
+            "skipped": 0,
+            "xml_sha256": "54de14db85e2fe9c060139b179ce74428ac539df6560b1a8fa80d85c061198ea"
+          },
+          "installation": {
+            "tests": 4,
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "xml_sha256": "cbab9b3c460b92f541c5c94e81e84dc96db2211d913432ec6c3ad2c0cd6efda2"
+          }
+        },
+        "test_host_removed": true
+      },
+      "xcode-27": {
+        "reports": {
+          "probe": "7860aeed46387ba8a91e40ff212f63273c9756cf971cc69f4c953ae5c1589cd5",
+          "startup": "3b63d3044a3c7a935aee2e4f037cda3a39a6521a78a780eee07b647ba1ec5837",
+          "dylib-installation": "49529a8ffa816c93d04dbfb240142974c735cd825ae4710d385accf41972babf",
+          "installation": "391c55ff741e661d228c11107f507e1590a1582fb0a2d80999c5143f03785280"
+        },
+        "tests": {
+          "dylib-installation": {
+            "tests": 20,
+            "passed": 20,
+            "failed": 0,
+            "skipped": 0,
+            "xml_sha256": "366c0a24fae96b6553b106aec699844a8e190715d874b37b9f672047e1ac3cf2"
+          },
+          "installation": {
+            "tests": 4,
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "xml_sha256": "2808c32e42382d0238e79c16caceb4aedc862c70a447fdccc2da1c35ac8dbc94"
+          }
+        },
+        "test_host_removed": true
+      }
+    }
+  },
+  "local_integrated_regression": {
+    "compiled_source_revision": "9435500895fb530ea825b626e21b558d92c4b6ba",
+    "cold_build_source_revision": "3e5fb93c816902d4b9893c1a54ffb353e3e3f117",
+    "binary_sha256": "0d4622ec3fa967b4eb95f1cccc446a516eb6ae23e14ce4ead4530d5e2deb3864",
+    "tests": 1054,
+    "passed": 1014,
+    "skipped": 40,
+    "failed": 0,
+    "stages": {
+      "integrated-immediate-memory": {
+        "tests": 1,
+        "passed": 1,
+        "skipped": 0,
+        "failed": 0,
+        "xml_sha256": "46751cc9cbe51ebe382572386560dc8737c92b51485f6068bc559a8648fa05dd"
+      },
+      "integrated-arm64e-analysis": {
+        "tests": 730,
+        "passed": 700,
+        "skipped": 30,
+        "failed": 0,
+        "xml_sha256": "15ad9f8101795daebcea4ab5b4968ec66aaaaf51e08f15a4cec52865c2cc632c"
+      },
+      "integrated-macho-publication": {
+        "tests": 323,
+        "passed": 313,
+        "skipped": 10,
+        "failed": 0,
+        "xml_sha256": "9300b254477578f4fd4722b9a9936619c341611f9e638cbb9070bd084fdf9ed9"
+      }
+    }
+  },
+  "limits": [
+    "Native main execution requires the explicit userspace dyld startup profile; system-default startup remains unqualified.",
+    "The post-cold-build loader-slot fix uses a separately identified delivered-host replay, not a second cold build.",
+    "The r6 LLVM package does not qualify the general lifted/source/IR publication producer; native CPTA-on remains a separate gate."
+  ]
+}

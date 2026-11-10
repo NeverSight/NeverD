@@ -158,6 +158,19 @@ def verify_legacy_fixtures(directory):
     return report
 
 
+def startup_profile(products, output):
+    macros = command(products, output, POLICY["syscall_label"],
+                     POLICY["syscall_command"], POLICY["tool_timeout"])
+    macros.check_returncode()
+    numbers = re.findall(POLICY["syscall_pattern"], macros.stdout, re.MULTILINE)
+    if len(numbers) != 1:
+        raise ValueError(POLICY["errors"]["syscall"])
+    profile = POLICY["startup_sandbox_profile"].format(number=numbers[0])
+    return {"syscall_number": int(numbers[0]), "profile": profile,
+            "launcher": [arg.format(profile=profile)
+                         for arg in POLICY["startup_launcher"]]}
+
+
 def probe(output, *, startup=False, userspace_fixups=False):
     report = {**provenance(), "status": POLICY["failed"],
               "native_pac_qualified": False,
@@ -183,18 +196,9 @@ def probe(output, *, startup=False, userspace_fixups=False):
                     "stdout": result.stdout, "stderr": result.stderr}
             execution_prefix = []
             if userspace_fixups:
-                macros = command(products, output, POLICY["syscall_label"],
-                                 POLICY["syscall_command"], POLICY["tool_timeout"])
-                macros.check_returncode()
-                numbers = re.findall(POLICY["syscall_pattern"], macros.stdout, re.MULTILINE)
-                if len(numbers) != 1:
-                    raise ValueError(POLICY["errors"]["syscall"])
-                profile = POLICY["startup_sandbox_profile"].format(number=numbers[0])
-                execution_prefix = [arg.format(profile=profile)
-                                    for arg in POLICY["startup_launcher"]]
-                report[POLICY["startup_profile_key"]] = {
-                    "syscall_number": int(numbers[0]), "profile": profile,
-                    "launcher": execution_prefix}
+                profile = startup_profile(products, output)
+                execution_prefix = profile["launcher"]
+                report[POLICY["startup_profile_key"]] = profile
             sources = {}
             for name, filename in POLICY["source_names"].items():
                 path = output / filename
@@ -273,16 +277,17 @@ def probe(output, *, startup=False, userspace_fixups=False):
         save(output / POLICY["report_name"], report)
 
 
-def expected_cases():
+def expected_cases(executable=False):
     return {POLICY["case_format"].format(family=family, index=index)
-            for family in POLICY["families"] for index in POLICY["indices"]}
+            for family in POLICY["executable_families" if executable else "families"]
+            for index in POLICY["indices"]}
 
 
-def check_runtime_report(xml):
+def check_runtime_report(xml, executable=False):
     cases = list(ET.fromstring(xml).iter(POLICY["testcase_tag"]))
     names = [case.attrib["name"].split(POLICY["parameter_separator"], 1)[0].rstrip()
              for case in cases]
-    if len(names) != len(expected_cases()) or set(names) != expected_cases():
+    if len(names) != len(expected_cases(executable)) or set(names) != expected_cases(executable):
         raise ValueError(POLICY["errors"]["cases"])
     for case in cases:
         if (case.attrib.get("status") != POLICY["run_status"] or
@@ -291,15 +296,20 @@ def check_runtime_report(xml):
     return names
 
 
-def run_installation(output, build, probe_report, legacy_fixtures=None):
+def run_installation(output, build, probe_report, legacy_fixtures=None, *, executable=False):
     report = {**provenance(), "status": POLICY["failed"],
               "native_installer_call_unwind_qualified": False,
+              POLICY["publication_qualification_key"]: False,
+              POLICY["executable_qualification_key"]: False,
               "whole_image_publication_qualified": False}
     try:
         control = json.loads(probe_report.read_text())
         if (control.get("status") != POLICY["passed"] or
-                control.get("control_loading") != POLICY["control_loading"] or
-                control.get(POLICY["fixup_loader_key"]) != POLICY["system_fixup_loader"] or
+                control.get("control_loading") != POLICY[
+                    "startup_loading" if executable else "control_loading"] or
+                control.get(POLICY["fixup_loader_key"]) != POLICY[
+                    "userspace_fixup_loader" if executable else "system_fixup_loader"] or
+                (executable and not control.get(POLICY["startup_qualification_key"])) or
                 not control.get("native_pac_qualified") or
                 not control.get("compiler_original_call_unwind_qualified") or
                 any(control.get(key) != report[key] for key in POLICY["provenance_keys"])):
@@ -308,8 +318,17 @@ def run_installation(output, build, probe_report, legacy_fixtures=None):
         if legacy_fixtures is not None:
             report["legacy_fixtures"] = verify_legacy_fixtures(legacy_fixtures)
         argv = [*POLICY["ctest_command"], POLICY["build_dir_flag"], str(build),
-                POLICY["test_regex_flag"], POLICY["test_regex"]]
+                POLICY["test_regex_flag"], POLICY[
+                    "executable_test_regex" if executable else "test_regex"]]
         with OwnedProducts(output, False) as products:
+            execution_prefix = []
+            if executable:
+                profile = startup_profile(products, output)
+                if control.get(POLICY["startup_profile_key"]) != profile:
+                    raise ValueError(POLICY["errors"]["startup_profile"])
+                report[POLICY["startup_profile_key"]] = profile
+                report[POLICY["fixup_loader_key"]] = POLICY["userspace_fixup_loader"]
+                execution_prefix = profile["launcher"]
             selected = command(products, output, POLICY["selection_label"],
                                [*argv, POLICY["discovery_flag"]], POLICY["discovery_timeout"])
             if selected.returncode:
@@ -324,26 +343,31 @@ def run_installation(output, build, probe_report, legacy_fixtures=None):
                 binaries.add(Path(cmd[0]).resolve())
                 filters.extend(arg.removeprefix(POLICY["gtest_prefix"])
                                for arg in cmd if arg.startswith(POLICY["gtest_prefix"]))
-            if len(filters) != len(expected_cases()) or set(filters) != expected_cases() or len(binaries) != 1:
+            if len(filters) != len(expected_cases(executable)) or set(filters) != expected_cases(executable) or len(binaries) != 1:
                 raise ValueError(POLICY["errors"]["cases"])
             report["test_binary_sha256"] = digest(next(iter(binaries)))
             xml = output / POLICY["xml_name"]
             with tempfile.TemporaryDirectory(prefix=POLICY["temporary_prefix"], dir=output) as temporary:
                 env = dict(os.environ, **POLICY["test_environment"])
                 env.pop(POLICY["artifact_environment"], None)
+                env.pop(POLICY["executable_environment"], None)
+                if executable:
+                    env[POLICY["executable_environment"]] = POLICY["executable_environment_value"]
                 legacy_environment = fixture_contract()["legacy_environment"]
                 env.pop(legacy_environment, None)
                 if legacy_fixtures is not None:
                     env[legacy_environment] = str(legacy_fixtures.resolve())
                 env[POLICY["temporary_environment"]] = temporary
                 result = command(products, output, POLICY["runtime_label_name"],
-                                 [*argv, *POLICY["ctest_run_flags"], str(xml)],
+                                 [*execution_prefix, *argv, *POLICY["ctest_run_flags"], str(xml)],
                                  POLICY["suite_timeout"], env)
-            report["tests"] = check_runtime_report(xml.read_text())
+            report["tests"] = check_runtime_report(xml.read_text(), executable)
             if result.returncode:
                 raise RuntimeError(POLICY["errors"]["ctest"])
             report["runtime_report_sha256"] = digest(xml)
-            report["native_installer_call_unwind_qualified"] = True
+            report["native_installer_call_unwind_qualified"] = not executable
+            report[POLICY["publication_qualification_key"]] = not executable
+            report[POLICY["executable_qualification_key"]] = executable
             report["status"] = POLICY["passed"]
         return report
     finally:
@@ -377,7 +401,8 @@ def main():
             if not args.build_dir or not args.probe_report:
                 raise ValueError(POLICY["errors"]["arguments"])
             report = run_installation(output, args.build_dir.resolve(), args.probe_report.resolve(),
-                                      args.legacy_fixtures)
+                                      args.legacy_fixtures,
+                                      executable=args.mode == POLICY["executable_mode"])
         print(json.dumps({"status": report["status"], "report": str(output / POLICY["report_name"])}))
         return POLICY["exit_codes"][report["status"]]
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
