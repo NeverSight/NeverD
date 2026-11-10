@@ -85,10 +85,16 @@ class EntryQualificationTests(unittest.TestCase):
                 def command(products, directory, label, argv, timeout, env=None):
                     stdout, code = CASES["compiler_version"], 0
                     if argv[0] == str(binary):
-                        if entry.POLICY["publication_filter"] in argv:
+                        if entry.POLICY["unreserved_filter"] in argv:
                             self.assertTrue(publish)
                             self.assertTrue(Path(env[entry.POLICY["publication_input_environment"]]).exists())
-                            Path(env[entry.POLICY["publication_output_environment"]]).write_text(CASES["binary_bytes"])
+                            xml = CASES["export_xml"].replace(entry.POLICY["export_case"], entry.POLICY["unreserved_case"])
+                            Path(argv[-1].removeprefix(entry.POLICY["export_xml_option"])).write_text(xml)
+                        elif entry.POLICY["publication_filter"] in argv:
+                            self.assertTrue(publish)
+                            self.assertTrue(Path(env[entry.POLICY["publication_input_environment"]]).exists())
+                            Path(env[entry.POLICY["publication_output_environment"]]).write_text(
+                                CASES["binary_bytes"] * CASES["publication_image_repeats"])
                             Path(env[entry.POLICY["publication_receipt_environment"]]).write_text(json.dumps(CASES["receipt"]))
                             Path(argv[-1].removeprefix(entry.POLICY["export_xml_option"])).write_text(CASES["publication_xml"])
                         else:
@@ -106,7 +112,7 @@ class EntryQualificationTests(unittest.TestCase):
                     elif label == entry.POLICY["sdk_label"]:
                         stdout = CASES["sdk_path"]
                     elif label.endswith(entry.native.POLICY["disassembly_suffix"]):
-                        stdout = CASES["installed_assembly"] if publish else CASES["assembly"]
+                        stdout = (CASES["inspection_assembly"] if entry.POLICY["inspection_suffix"] in label else CASES["assembly"])
                     elif label.endswith(entry.POLICY["sections_suffix"]):
                         stdout = CASES["sections_dwarf"] if CASES["dwarf_name_fragment"] in label else CASES["sections_compact"]
                     elif label.endswith(entry.POLICY["unwind_suffix"]):
@@ -198,6 +204,8 @@ class EntryQualificationTests(unittest.TestCase):
     def test_unwind_encoding_covers_each_exception_frame(self):
         entry.check_unwind(CASES["unwind_dwarf"], True)
         entry.check_unwind(CASES["unwind_compact"], False)
+        entry.check_unwind(CASES["unwind_regular_dwarf"], True)
+        entry.check_unwind(CASES["unwind_regular_compact"], False)
         for text, dwarf in ((CASES["unwind_dwarf"], False),
                             (CASES["unwind_compact"], True), ("", True)):
             with self.subTest(dwarf=dwarf), self.assertRaises(ValueError):

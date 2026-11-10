@@ -2,6 +2,7 @@
 """Validate reconstructed entries through native compilation and image publication."""
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -106,11 +107,16 @@ def check_classic(binary):
 def check_receipt(receipt):
     entries = receipt.get("entries", [])
     functions = receipt.get("functions", {})
+    text = receipt.get("text", {})
+    if (any(type(text.get(key)) is not int for key in ("address", "offset", "size")) or
+            text["address"] <= 0 or text["offset"] < 0 or text["size"] <= 0):
+        raise ValueError(POLICY["errors"]["receipt"])
     if (len(entries) != POLICY["public_entry_count"] or
             set(row.get("symbol") for row in entries) != set(POLICY["public_entries"]) or
             len({row.get("original") for row in entries}) != len(entries) or
             len({row.get("installed") for row in entries}) != len(entries) or
-            not all(type(address) is int and address > 0 for address in functions.values()) or
+            not all(type(address) is int and text["address"] <= address < text["address"] + text["size"]
+                    for address in functions.values()) or
             not set(exception_frames()).issubset(functions) or
             any(type(row.get("original")) is not int or row["original"] <= 0 or
                 row.get("original") == row.get("installed") or
@@ -126,6 +132,30 @@ def check_execution(result, *, original=False):
         raise ValueError(POLICY["errors"]["baseline" if original else "execution"])
 
 
+def inspect_installed_text(output, library, receipt, compiler, compile_args, command, products, label):
+    # Installed code is an RX segment without a section descriptor. Package
+    # its exact final bytes in an inspection-only object for Apple's disassembler;
+    # neither the published image nor its instructions are modified.
+    region = receipt["text"]
+    contents = library.read_bytes()[region["offset"]:region["offset"] + region["size"]]
+    if len(contents) != region["size"]:
+        raise ValueError(POLICY["errors"]["inspection"])
+    source = output / (label + POLICY["inspection_source_suffix"])
+    rows = [POLICY["inspection_prefix"]]
+    width = POLICY["inspection_row_bytes"]
+    for offset in range(0, len(contents), width):
+        data = ",".join(POLICY["inspection_byte"].format(byte=byte) for byte in contents[offset:offset + width])
+        rows.append(POLICY["inspection_row"].format(data=data))
+    source.write_text("".join(rows))
+    obj = output / (label + POLICY["inspection_object_suffix"])
+    products.append(obj)
+    command(label + POLICY["inspection_suffix"] + native.POLICY["compile_suffix"],
+            [compiler, *compile_args, *POLICY["object_args"], source, POLICY["output_option"], obj])
+    assembly = command(label + POLICY["inspection_suffix"] + native.POLICY["disassembly_suffix"],
+                       [*POLICY["publication_disassembly_command"], obj])
+    return assembly.stdout, hashlib.sha256(contents).hexdigest()
+
+
 def run(output, binary, compiler, probe_report=None, *, compile_only=False, producer=None, publish=False):
     producer = producer or POLICY["producers"][0]
     backend = producer == POLICY["backend_producer"]
@@ -139,6 +169,7 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
               "whole_image_publication_qualified": False,
               "compile_only": compile_only, "producer": producer, "publish": publish,
               "optimization_scope": POLICY["optimization_scopes"].get(producer),
+              "publication_layout": POLICY["publication_layout"] if publish else None,
               "reconstructed_entry_publication_qualified": False, "cases": []}
     try:
         if producer not in POLICY["producers"] or (publish and not backend):
@@ -222,26 +253,39 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                         receipt = None
                         baseline = None
                         if publish:
+                            library = output / POLICY["installed_library_name"].format(**fields)
+                            products.append(library)
+                            receipt_path = output / (label + POLICY["receipt_suffix"])
+                            publication_xml = output / (label + POLICY["publication_xml_suffix"])
+                            env = {**os.environ, POLICY["publication_output_environment"]: str(library),
+                                   POLICY["publication_receipt_environment"]: str(receipt_path)}
+                            env.pop(POLICY["publication_dwarf_environment"], None)
+                            if dwarf:
+                                env[POLICY["publication_dwarf_environment"]] = POLICY["enabled_environment_value"]
+                            unreserved = output / POLICY["unreserved_library_name"].format(**fields)
+                            products.append(unreserved)
+                            command(label + POLICY["unreserved_suffix"] + native.POLICY["compile_suffix"],
+                                    [*args, *POLICY["unreserved_header_args"], output / POLICY["caller_source"], original_obj,
+                                     POLICY["output_option"], unreserved])
+                            refusal_xml = output / (label + POLICY["unreserved_suffix"] + POLICY["publication_xml_suffix"])
+                            env[POLICY["publication_input_environment"]] = str(unreserved)
+                            command(label + POLICY["unreserved_suffix"],
+                                    [binary, POLICY["unreserved_filter"],
+                                     POLICY["export_xml_option"] + str(refusal_xml)],
+                                    POLICY["export_timeout"], env)
+                            check_export(refusal_xml.read_text(), POLICY["unreserved_case"])
                             original = output / POLICY["original_library_name"].format(**fields)
                             products.append(original)
                             command(label + POLICY["baseline_suffix"] + native.POLICY["compile_suffix"],
-                                    [*args, output / POLICY["caller_source"], original_obj,
+                                    [*args, *POLICY["publication_header_args"],
+                                     output / POLICY["caller_source"], original_obj,
                                      POLICY["output_option"], original])
                             if not compile_only:
                                 control = native.command(products, output, label + POLICY["baseline_suffix"],
                                                          [str(loader), str(original)], POLICY["execute_timeout"])
                                 baseline = control.returncode
                                 check_execution(control, original=True)
-                            library = output / POLICY["installed_library_name"].format(**fields)
-                            products.append(library)
-                            receipt_path = output / (label + POLICY["receipt_suffix"])
-                            publication_xml = output / (label + POLICY["publication_xml_suffix"])
-                            env = {**os.environ, POLICY["publication_input_environment"]: str(original),
-                                   POLICY["publication_output_environment"]: str(library),
-                                   POLICY["publication_receipt_environment"]: str(receipt_path)}
-                            env.pop(POLICY["publication_dwarf_environment"], None)
-                            if dwarf:
-                                env[POLICY["publication_dwarf_environment"]] = POLICY["enabled_environment_value"]
+                            env[POLICY["publication_input_environment"]] = str(original)
                             command(label + POLICY["publication_suffix"],
                                     [binary, POLICY["publication_filter"],
                                      POLICY["export_xml_option"] + str(publication_xml)],
@@ -252,9 +296,16 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                         command(label + native.POLICY["signature_suffix"],
                                 [*native.POLICY["signature_command"], library])
                         assembly = command(label + native.POLICY["disassembly_suffix"],
-                                           [*(POLICY["publication_disassembly_command"] if publish else
-                                              native.POLICY["disassembly_command"]), library])
-                        check_disassembly(assembly.stdout, key, installed)
+                                           [*native.POLICY["disassembly_command"], library])
+                        text_hash = None
+                        if publish:
+                            text_assembly, text_hash = inspect_installed_text(
+                                output, library, receipt, compiler, compile_args, command, products, label)
+                            relative = {name: address - receipt["text"]["address"]
+                                        for name, address in installed.items()}
+                            check_disassembly(text_assembly + assembly.stdout, key, relative)
+                        else:
+                            check_disassembly(assembly.stdout, key)
                         sections = command(label + POLICY["sections_suffix"],
                                            [*POLICY["sections_command"], library])
                         check_sections(sections.stdout, dwarf)
@@ -263,7 +314,8 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                         check_unwind(unwind.stdout, dwarf, installed)
                         row = {**fields, **check_classic(library),
                                "object": object_identity, "executed": False,
-                               "publication": receipt, "baseline_returncode": baseline}
+                               "publication": receipt, "baseline_returncode": baseline,
+                               "unreserved_original_rejected": publish, "installed_text_sha256": text_hash}
                         report["cases"].append(row)
                         if not compile_only:
                             execution = command(label, [loader, library], POLICY["execute_timeout"])

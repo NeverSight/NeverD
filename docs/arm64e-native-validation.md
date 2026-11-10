@@ -568,7 +568,7 @@ source build of the pinned NeverSight LLVM fork for this qualification; the
 default r6 selection stays unchanged.
 
 Add `--publish` to exercise `bindSourcePatch` and `installSourcePatch` on the
-same reconstructed fixed-C entry matrix. The original dylib contains 26
+same reconstructed fixed-C entry matrix. The admitted original dylib reserves TEXT/header capacity and contains 26
 public trapping entries and the independently compiled native caller/thrower.
 Native validation first requires that original image to enter its caller and
 then trap before the completion marker; a startup trap is insufficient. It installs
@@ -578,11 +578,23 @@ value, catch, cleanup, post-exception and corrupted-pointer check. This is a
 complete published fixture image, not automatic admission of arbitrary lifted
 modules.
 
+The same matrix first checks refusal of dylibs with `-Wl,-headerpad,0` and no
+such reservation. The initial default-linked local dylib also lacked capacity. Their DATA mapping blocks TEXT growth, and the current installer
+has no complete relocation contract to move those original addresses. The
+publication lane explicitly links with `-Wl,-headerpad,0x8000`; it does not
+qualify arbitrary tightly packed dylibs. Closing that layout gap remains
+required for general whole-image publication.
+
 The publication test also checks rejection before the receipt commits,
 unchanged input bytes, exact installed entry receipts and refusal to overwrite
 an existing output. Analysis-marked modules remain rejected. The verifier
 uses the installed function addresses from the receipt to check both signed
-frames and final compact/DWARF lookup encodings; inspecting the original
+frames and final compact/DWARF lookup encodings. Installed code occupies an RX
+segment without a section descriptor, so ordinary object disassembly only
+shows the original sections. The verifier extracts the loader-validated final
+text range, hashes it, and places those exact bytes in a temporary
+inspection-only object for the independent disassembler. That object is never
+executed; the signed published image remains the runtime input. Inspecting the original
 symbol table would otherwise check the old code. All 26 public identities and
 all exceptional carrier frames must be present.
 

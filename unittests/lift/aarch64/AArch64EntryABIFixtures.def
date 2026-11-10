@@ -103,12 +103,18 @@ A64_ENTRY_TEXT(kPublicationUnavailable,
                "explicit native entry publication inputs are required")
 A64_ENTRY_TEXT(kMachOPrefix, "_")
 A64_ENTRY_VALUE(unsigned, kPublicEntryCount, 26)
+A64_ENTRY_TEXT(kLayoutRefusalProperty, "entry_publication_layout_refusal")
 A64_ENTRY_TEXT(kReceiptRejected, "entry publication receipt rejected")
 A64_ENTRY_TEXT(kReceiptSymbol, "symbol")
 A64_ENTRY_TEXT(kReceiptOriginal, "original")
 A64_ENTRY_TEXT(kReceiptInstalled, "installed")
 A64_ENTRY_TEXT(kReceiptEntries, "entries")
 A64_ENTRY_TEXT(kReceiptFunctions, "functions")
+A64_ENTRY_TEXT(kReceiptText, "text")
+A64_ENTRY_TEXT(kReceiptAddress, "address")
+A64_ENTRY_TEXT(kReceiptOffset, "offset")
+A64_ENTRY_TEXT(kReceiptSize, "size")
+A64_ENTRY_TEXT(kNativeTextSection, "__text")
 A64_ENTRY_TEXT(kNativeCaller, R"cpp(
 #include <stdint.h>
 #include <stdio.h>

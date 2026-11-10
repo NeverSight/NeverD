@@ -757,7 +757,7 @@ TEST(AArch64EntryABI, ExportSignedNativeInputs) {
   ASSERT_TRUE(Caller);
 }
 
-TEST(AArch64EntryABI, PublishSignedNativeInputs) {
+void publishNativeInputs(bool ExpectLayoutRefusal) {
   const char *Input = std::getenv(kPublicationInput);
   if (!Input)
     GTEST_SKIP() << kPublicationUnavailable;
@@ -771,7 +771,7 @@ TEST(AArch64EntryABI, PublishSignedNativeInputs) {
   llvm::LLVMContext Context;
   auto Module = module(Context);
   addFixtures(*Module);
-  ASSERT_FALSE(HasFailure());
+  ASSERT_FALSE(::testing::Test::HasFailure());
   prepareNativeModule(*Module, Dwarf);
   std::vector<SourcePatchMapping> Mappings;
   for (auto &Function : *Module) {
@@ -800,6 +800,15 @@ TEST(AArch64EntryABI, PublishSignedNativeInputs) {
   ASSERT_FALSE(bool(Refused));
   llvm::consumeError(Refused.takeError());
   ASSERT_FALSE(std::filesystem::exists(Output));
+  if (ExpectLayoutRefusal) {
+    auto Unsupported = installSourcePatch(*Module, *Image, *Bound, Output);
+    ASSERT_FALSE(bool(Unsupported));
+    ::testing::Test::RecordProperty(kLayoutRefusalProperty,
+                                    llvm::toString(Unsupported.takeError()));
+    EXPECT_FALSE(std::filesystem::exists(Output));
+    EXPECT_EQ(Image->Raw, Snapshot);
+    return;
+  }
   bool ReceiptSeen = false;
   auto Rejected =
       installSourcePatch(*Module, *Image, *Bound, Output, {},
@@ -843,13 +852,47 @@ TEST(AArch64EntryABI, PublishSignedNativeInputs) {
   llvm::json::Object Functions;
   for (const auto &Function : Object.Functions)
     Functions[Function.Name] = *TextBase + Function.Offset;
+  auto Native = llvm::object::ObjectFile::createObjectFile(
+      llvm::MemoryBufferRef(llvm::StringRef(reinterpret_cast<const char *>(
+                                                Object.ObjectData.data()),
+                                            Object.ObjectData.size()),
+                            kModule));
+  ASSERT_TRUE(bool(Native)) << llvm::toString(Native.takeError());
+  auto Final = Loader::create(BinaryFormat::MachO)->load(Output);
+  ASSERT_TRUE(bool(Final)) << llvm::toString(Final.takeError());
+  llvm::json::Object Text;
+  for (const auto &Section : (*Native)->sections()) {
+    auto Name = Section.getName();
+    ASSERT_TRUE(bool(Name)) << llvm::toString(Name.takeError());
+    if (*Name != kNativeTextSection)
+      continue;
+    ASSERT_TRUE(Text.empty());
+    const uint64_t Address = *TextBase + Section.getAddress();
+    const uint64_t Size = Section.getSize();
+    const uint64_t Offset = Final->vaToFileOffset(Address);
+    ASSERT_GT(Size, 0u);
+    ASSERT_LT(Offset, Final->Raw.size());
+    ASSERT_LE(Size, Final->Raw.size() - Offset);
+    ASSERT_EQ(Final->vaToFileOffset(Address + Size - 1), Offset + Size - 1);
+    Text = llvm::json::Object{{kReceiptAddress, Address},
+                              {kReceiptOffset, Offset},
+                              {kReceiptSize, Size}};
+  }
+  ASSERT_FALSE(Text.empty());
   std::error_code Error;
   llvm::raw_fd_ostream Record(Receipt, Error);
   ASSERT_FALSE(Error);
   Record << llvm::json::Value(
       llvm::json::Object{{kReceiptEntries, std::move(Entries)},
-                         {kReceiptFunctions, std::move(Functions)}});
+                         {kReceiptFunctions, std::move(Functions)},
+                         {kReceiptText, std::move(Text)}});
   Record.close();
   ASSERT_FALSE(Record.has_error());
+}
+
+TEST(AArch64EntryABI, PublishSignedNativeInputs) { publishNativeInputs(false); }
+
+TEST(AArch64EntryABI, RejectsUnreservedNativeInputs) {
+  publishNativeInputs(true);
 }
 } // namespace

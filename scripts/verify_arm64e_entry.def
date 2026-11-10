@@ -111,7 +111,8 @@
     "producer": "Image publication requires the NeverD backend producer",
     "baseline": "The original entry must trap after entering the independent caller and before completing it",
     "receipt": "Publication must replace every declared public entry with a unique generated address and retain every exception frame",
-    "execution": "The independent caller must enter and finish the complete entry matrix"
+    "execution": "The independent caller must enter and finish the complete entry matrix",
+    "inspection": "The installed text range must be completely backed by the final published image"
   },
   "dwarf_entry_source": "entry-dwarf.ll",
   "unwind_command": [
@@ -123,7 +124,7 @@
   ],
   "unwind_suffix": "-unwind",
   "symbol_pattern": "^([0-9a-fA-F]+)\\s+.*\\bF\\s+__TEXT,__text\\s+(\\S+)\\s*$",
-  "unwind_pattern": "function offset=(0x[0-9a-fA-F]+), encoding\\[\\d+\\]=(0x[0-9a-fA-F]+)",
+  "unwind_pattern": "function offset=(0x[0-9a-fA-F]+), encoding(?:\\[\\d+\\])?=(0x[0-9a-fA-F]+)",
   "hex_radix": 16,
   "unwind_mode_mask": 251658240,
   "dwarf_unwind_modes": [
@@ -183,7 +184,7 @@
   "publication_disassembly_command": [
     "/usr/bin/xcrun",
     "llvm-objdump",
-    "--disassemble",
+    "--disassemble-all",
     "--no-show-raw-insn"
   ],
   "addressed_instruction_pattern": "^\\s*([0-9a-fA-F]+):\\s+(.*)$",
@@ -221,5 +222,23 @@
     "neverd": "native caller; NeverD Codegen::compile uses CodeGenOptLevel::Less"
   },
   "caller_entry_marker": "neverd-entry-caller-entered\n",
-  "caller_pass_marker": "neverd-entry-caller-passed\n"
+  "caller_pass_marker": "neverd-entry-caller-passed\n",
+  "publication_header_args": [
+    "-Wl,-headerpad,0x8000"
+  ],
+  "publication_layout": "reserved TEXT/header capacity",
+  "unreserved_library_name": "unreserved-{optimization}-key-{key}-dwarf-{dwarf}.dylib",
+  "unreserved_suffix": "-unreserved",
+  "unreserved_case": "RejectsUnreservedNativeInputs",
+  "unreserved_filter": "--gtest_filter=AArch64EntryABI.RejectsUnreservedNativeInputs",
+  "inspection_source_suffix": "-installed-text.s",
+  "inspection_object_suffix": "-installed-text.o",
+  "inspection_suffix": "-installed-text",
+  "inspection_prefix": ".section __TEXT,__text,regular,pure_instructions\n",
+  "inspection_row": ".byte {data}\n",
+  "inspection_byte": "0x{byte:02x}",
+  "inspection_row_bytes": 16,
+  "unreserved_header_args": [
+    "-Wl,-headerpad,0"
+  ]
 }
