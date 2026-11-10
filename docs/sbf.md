@@ -681,9 +681,19 @@ ordinary unknown scalars acquire no persistent numeric range. Compared-operand
 aliases require exact copies, and joins retain only facts present on every path.
 Liveness projection retains a literal comparison operand while the tested
 register remains live, because the local proof still reads that literal.
-Register definitions, projection, calls, invocation boundaries and loop
-backedges discard the affected facts. Truncating copies, truncated guards and
-potentially wrapping products cannot establish the full-width product proof.
+Register definitions, projection, invocation boundaries and loop backedges
+discard the affected register facts. A returning call preserves nonzero facts
+only for registers preserved by the canonical SBF call ABI. Full-width stores
+can save a nonzero fact in a private typed-cell lane; complete reloads restore
+it without inventing the stored numeric value. Joins meet these facts, and the
+canonical store and callee memory effects invalidate overlapping or possibly
+aliasing cells. Unknown memory effects and writing syscalls discard them.
+Matched memory-path replay carries the caller's current cells through those
+same store transfers before replacing its state with the completed return.
+Unchanged cells can retain the fact across a loop even when register facts are
+widened. Narrow stores or loads do not transfer a full-word nonzero fact.
+Truncating copies, truncated guards and potentially wrapping products cannot
+establish the full-width product proof.
 If the same block stores the compared register as a full 64-bit word immediately
 before the comparison, the selected edge also narrows that stored value. The
 typed scratch value, its formal origin and the returned memory postcondition
