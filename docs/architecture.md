@@ -5132,7 +5132,10 @@ reads against the library without copying it, its prototype the parse's own; one
 would define a type reads again on a copy (`parseFunctionDeclaration`). The GUI opens with `write_behind`: the reply to such an edit goes before
 its write, which runs the same journaled transaction in order on a thread of its own
 (`ProjectHistory::persistLater`), joined with what is queued behind one already
-writing. What may read the project's files waits for it first. A transaction encodes
+writing. What may read the project's files waits for it first. Staged comments an edit
+must not pass are committed ahead of it the same way (`save.write_behind`,
+`Session::commitComments`, counting comments still on their way to the worker), while
+the user's Save, closing and packing a database send a plain save that waits. A transaction encodes
 and formats only the tables the edit changed: a table whose rows print as the
 committed ones do (a zero's sign included) copies its committed encoding and keeps
 its file, checked against the file budget at the size this history last wrote, and a

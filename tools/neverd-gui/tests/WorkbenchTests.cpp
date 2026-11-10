@@ -11032,6 +11032,40 @@ private slots:
         log->toPlainText().contains(QStringLiteral("Reloaded the input file")));
   }
 
+  void commentsCommittedAheadOfAnEditAreNotASave() {
+    // A comment stays staged until it is saved.  An edit the worker refuses
+    // over staged comments commits them first, one more step written behind
+    // the reply as the edit is, which the files then hold.  The user did not
+    // save: nothing says so, and Save still answers once the files hold it.
+    QTemporaryDir directory;
+    const auto path = writeFixture(directory, QStringLiteral("fixture.bin"));
+    Workbench bench;
+    bench.window->openFile(path);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *log = bench.window->findChild<OutputWindow *>()
+                    ->findChild<QPlainTextEdit *>();
+    QVERIFY(log);
+    const auto saved = QStringLiteral("Project changes saved");
+    bench.session.setComment(Base, QStringLiteral("committed ahead"));
+    QTRY_VERIFY(bench.session.dirty());
+    bench.session.rename(Base + 16, QStringLiteral("after_the_comment"));
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.dirty() &&
+                                 !bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(readAll(path + ".neverd/annotations.json")
+                                     .contains("committed ahead") &&
+                                 readAll(path + ".neverd/renames.json")
+                                     .contains("after_the_comment"),
+                             OpenTimeoutMs);
+    QVERIFY(!log->toPlainText().contains(saved));
+    bench.session.setComment(Base, QStringLiteral("saved by the user"));
+    QTRY_VERIFY(bench.session.dirty());
+    bench.session.save();
+    QTRY_VERIFY_WITH_TIMEOUT(log->toPlainText().contains(saved), OpenTimeoutMs);
+    QVERIFY(readAll(path + ".neverd/annotations.json")
+                .contains("saved by the user"));
+  }
+
   void fileInAReadOnlyFolderKeepsItsProjectInTheDataDirectory() {
     // IDA asks for another place for its database when the input's folder
     // is read-only.  The workbench opens the file anyway: its database,

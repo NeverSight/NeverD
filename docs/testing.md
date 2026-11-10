@@ -7091,9 +7091,14 @@ replica does, a visit keeps what it rendered in place, a declaration reaches the
 function and its callers and no other, and the store's folder never moves.
 `NeverDWorkerEditWrites` opens with `write_behind`: a burst of names ends in one exit
 with all of them written and each a step of the history, a view, an undo, a snapshot a
-replica restores from and a save each find what was queued, a kill at any moment leaves
+replica restores from and a save each find what was queued, a save written behind its
+reply (`save.write_behind`, a boolean) makes staged comments the step before the edit
+that follows and both reach the files and undo in order, a kill at any moment leaves
 a project that opens and takes edits, a write that fails fails a later edit and goes
-through once it can, and files changed behind the worker stop the next edit.
+through once it can, and files changed behind the worker stop the next edit. The
+workbench's `commentsCommittedAheadOfAnEditAreNotASave` renames while a comment is
+still on its way: the comment is committed first, the files hold both without the
+project being reported saved, and Save still answers once the files hold it.
 `NeverDWorkerViewEdits` also checks a prepared function, a page named as kept, and a
 replica taking a function's and data's names in one update without reading names again.
 `NeverDWorkerViewEdits` reads every view after each edit an owner takes while keeping

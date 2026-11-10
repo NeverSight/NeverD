@@ -3821,14 +3821,25 @@ bool readsNoProjectFile(std::string_view operation) {
   return std::find(std::begin(Operations), std::end(Operations), operation) !=
          std::end(Operations);
 }
+
+/// A save that commits staged comments ahead of an edit, as that edit commits:
+/// on a project opened with write_behind, behind its reply.
+bool savesBehind(std::string_view operation, const Json &p) {
+  if (operation != "save" || !p.is_object() || !p.contains("write_behind"))
+    return false;
+  if (!p.at("write_behind").is_boolean())
+    throw Error("invalid_request", "write_behind must be boolean");
+  return p.at("write_behind").get<bool>();
+}
 } // namespace
 
 Json Engine::executeImpl(const std::string &operation, const Json &p,
                          EncodedPayload *encoded) {
   if (encoded)
     encoded->reset();
+  const bool behindSave = savesBehind(operation, p) && writeBehind_;
   if (history_ && !readsNoProjectFile(operation) && operation != "reload" &&
-      operation != "open" &&
+      operation != "open" && !behindSave &&
       !(operation == "analysis_snapshot" && p.is_object() &&
         p.value("in_memory", false)))
     history_->finishWrites();
@@ -5888,12 +5899,17 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
   if (operation == "save") {
     requireWriter();
     auto &store = history();
-    // What saves reads the project's files after this, written or not.
-    store.finishWrites();
+    // What saves reads the project's files after this, written or not; staged
+    // comments committed ahead of an edit go behind the reply as it will.
+    if (!behindSave)
+      store.finishWrites();
     auto annotations = backendJson(neverd_annotations_json(session_));
     saveAnalysisSections();
     sectionsDirty_ = false;
-    store.persistTable("annotations", std::move(annotations));
+    if (behindSave)
+      store.persistTableLater("annotations", std::move(annotations));
+    else
+      store.persistTable("annotations", std::move(annotations));
     dirty_ = false;
     return {{"saved", true}, {"dirty", false}};
   }

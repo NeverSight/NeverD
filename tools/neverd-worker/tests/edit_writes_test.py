@@ -101,9 +101,42 @@ def run(executable):
         assert resolves(client, "before_save_7")
         client.close()
 
+        # Staged comments committed ahead of an edit go behind the reply as the
+        # edit does: the history holds them at once, before the edit, and a clean
+        # exit writes both.
+        client = opened(executable, path)
+        refused = client.call("save", {"write_behind": "yes"})
+        assert refused["status"] != "ok", refused
+        assert refused["error"]["code"] == "invalid_request", refused
+        ok(client, "annotation_set", {"address": hex(GLOBAL), "text": "committed behind"})
+        assert ok(client, "save", {"write_behind": True}) == {"saved": True, "dirty": False}
+        ok(client, "rename", {"address": hex(GLOBAL), "name": "after_behind_save"})
+        steps = ok(client, "history", {"offset": 0, "limit": 512})
+        kinds = [step["kind"] for step in steps["items"]]
+        assert kinds[-2:] == ["annotation", "rename"], kinds
+        client.close()
+        assert not journal(path), journal(path)
+        notes = json.loads((project_folder(path) / "annotations.json").read_text())
+        assert any(row.get("text") == "committed behind" for row in notes), notes
+        client = opened(executable, path)
+        assert resolves(client, "after_behind_save")
+        # Undo takes the edit away, then the comment.
+        ok(client, "undo")
+        assert resolves(client, "before_save_7")
+        ok(client, "undo")
+        ok(client, "save")
+        notes = json.loads((project_folder(path) / "annotations.json").read_text())
+        assert not any(row.get("text") == "committed behind" for row in notes), notes
+        client.close()
+
         # A kill at any moment leaves a project that opens and takes edits.
         for round_number in range(12):
             client = opened(executable, path)
+            if round_number % 2:
+                # Comments committed behind the reply, then names behind them.
+                ok(client, "annotation_set",
+                   {"address": hex(GLOBAL), "text": f"killed note {round_number}"})
+                ok(client, "save", {"write_behind": True})
             last = None
             for index in range(1 + round_number % 3):
                 last = f"killed_{round_number}_{index}"

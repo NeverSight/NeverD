@@ -1331,7 +1331,9 @@ not a NeverD database.
 ## Edits, history and analysis
 
 Comments are staged and saved explicitly; renames, function edits and data
-items commit at once (staged comments are saved first). Opening another file, restarting the
+items commit at once (staged comments, even those still on their way to the worker,
+are committed first, written behind like the edit; only Save and the questions
+below wait for the files). Opening another file, restarting the
 worker or quitting with unsaved comments, or with edits a database you opened
 lacks, offers Save, Discard and Cancel. Edits
 prepared for a session that has since closed are refused, never applied to the
