@@ -6960,7 +6960,12 @@ not fit it, and loses only the record an index misplaces. An index whose page
 count exceeds its record's length is discarded; complete records in the original
 file still reproduce their exact source without asking the engine.
 `WorkbenchTests::pseudocodeViewReadsWhatAnEarlierSessionRendered` checks that
-through a real view.
+through a real view. `QueryServiceTests::sourcePageKeptAcrossAReadContextIsNamed`
+checks that a replica's dispatcher names the page it kept after its owner's change
+starts its read context anew, and names none of another project's.
+`WorkbenchTests::ownerAnswersForItsPagesWhileAReplicaIsReady` checks that the owner
+still answers for the page it gave after a note, with a replica ready, and that a
+graph is still the replica's.
 `NeverDWorkerListingFacts` runs that job over a real PE: the owner of the same
 session takes up what the replica keeps of a function's first look, a later session
 lists what asking the engine lists, a new name of a function or of data keeps the
@@ -7304,7 +7309,9 @@ source comments cannot enter the name-only refresh path, and a stale committed
 sidecar is refused without changing the replica. The workbench's
 `localNameEditsReuseTheIdleAnalysisReplica` also checks the process identity and
 unchanged preparation counters through a source comment, a function's new name and
-an image comment, and full retirement after a deleted function.
+an image comment, and full retirement after a deleted function. The owner answers
+first what it keeps of the edited view, so those come from a C view of the function,
+which only the replica answers.
 `analysisReplicaOutlivesAReadNobodyWaitsFor` checks that going to another function
 during a read keeps the replica, and `cancellingOneAnalysisLeavesTheOtherRunning`
 that one still running well past what restoring took is stopped.
@@ -8131,6 +8138,19 @@ complete scalar FP descriptors before and after declaration rendering across
 three data models, four architectures and COFF/ELF/Mach-O, including variadic,
 fastcall, record, pointer and long-double declarations. The header-origin
 regression also compares the ABI-only query with the full resolver.
+`PipelineOutcome.ImportSummariesNeedABIWithoutSourceDeclarations` checks the
+import inventory on x86, x64 and ARM64, including omitted imports and computed
+call targets. Cold and cached selections retain fixed argument counts and
+widths, variadic prefixes, missing declarations and user/header provenance
+without requesting C declarations. Run the
+Win64, i386, AAPCS64, System V and record-call suites alongside this shared
+consumer; emitters still require the ordinary source-bearing resolver.
+`LocalTypesDebugContext.ABIQueriesShareConversionWithSourceDeclarations`
+checks that repeated ABI queries and later C declarations share the same
+converted types while retaining a fresh resolver's declarations and scalar
+spellings. `NewTypesInvalidateUnrenderedABISignatures` adds an opaque
+pointee's layout before rendering, both with stable C names and with a name
+table reset; an earlier query cannot retain the old layout for later callers.
 `TypeRender.ScalarSpellingsPreserveLaterNameCollisions` starts with scalar
 prototypes, then queries colliding named records in opposite orders and
 repeats the scalar prototype. C and C++ retain their parameter keyword rules;

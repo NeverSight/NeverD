@@ -291,12 +291,15 @@ private:
   std::optional<types::HeaderLibrary>
   prototypeHeader(llvm::StringRef Name,
                   const types::FunctionDef *Function) const;
-  /// Converts and identifies the prototype, with optional source spellings.
+  /// The portable scalar spelling shared by ABI graphs and C declarations.
+  /// Holds Mutex.
+  const types::TypeSpeller &portablePrototypeSpeller() const;
+  /// Converts and identifies the prototype, including scalar spellings.
   /// Both ABI queries and emitted declarations use this validation. Holds
   /// Mutex.
   std::optional<FunctionSym>
-  prototypeSignature(llvm::StringRef Name, const types::FunctionDef &Function,
-                     const types::TypeSpeller *Speller = nullptr) const;
+  prototypeSignature(llvm::StringRef Name,
+                     const types::FunctionDef &Function) const;
 
   /// The function at \p Addr as the context gives it without a declaration.
   std::optional<FunctionSym> undeclared(va_t Addr) const;
@@ -318,6 +321,10 @@ private:
   std::optional<FunctionSym> mainSignature() const;
   mutable std::mutex Mutex;
   mutable llvm::StringMap<std::optional<FunctionSym>> Signatures;
+  /// Valid declarations of this library, converted before C text is needed.
+  /// Entries move to Signatures on rendering and expire when types are added.
+  /// Only existing, valid prototype names are retained.
+  mutable llvm::StringMap<FunctionSym> ABISignatures;
   /// What spells the prototypes' declarations, by the spelling of builtins
   /// their libraries' headers use: spelling one alone would name every type
   /// of the libraries joined again.

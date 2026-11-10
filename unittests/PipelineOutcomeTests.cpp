@@ -16,6 +16,7 @@
 #include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/debug/UserPrototype.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/X86/X87Context.h"
@@ -105,7 +106,8 @@ public:
              const std::vector<va_t> &Entries,
              PipelineAnalysisCache *Cache = nullptr,
              std::optional<size_t> JumpTableEvidenceBudget = std::nullopt,
-             bool LiftMode = false, size_t *RebuiltFunctions = nullptr) {
+             bool LiftMode = false, size_t *RebuiltFunctions = nullptr,
+             DebugContext *Debug = nullptr) {
     PipelineOptions Options;
     Options.AnalysisCache = Cache;
     Options.JumpTableEvidenceBudgetForTesting = JumpTableEvidenceBudget;
@@ -115,7 +117,7 @@ public:
     std::vector<std::pair<va_t, std::string>> Candidates;
     for (va_t Entry : Entries)
       Candidates.emplace_back(Entry, Image.getFunctionNameAt(Entry));
-    Pipeline().buildLowIR(Image, Candidates, Options, nullptr, Result);
+    Pipeline().buildLowIR(Image, Candidates, Options, Debug, Result);
   }
 
   static std::shared_ptr<const void>
@@ -207,6 +209,121 @@ TEST(PipelineOutcome, UnsupportedArchitectureRetainsDecoderDiagnostic) {
   EXPECT_NE(Result.Error.find("decoder"), std::string::npos);
   EXPECT_TRUE(Result.HighFuncs.empty());
   EXPECT_EQ(Result.LlvmModule, nullptr);
+}
+
+TEST(PipelineOutcome, ImportSummariesNeedABIWithoutSourceDeclarations) {
+  class Prototypes : public NullDebugContext {
+  public:
+    bool Local = false;
+    uint16_t PointerBytes = 8;
+    mutable unsigned FullQueries = 0;
+    mutable unsigned ABIQueries = 0;
+
+    bool prototypeDoesNotReturn(llvm::StringRef) const override {
+      return false;
+    }
+
+    std::optional<FunctionSym>
+    resolvePrototype(llvm::StringRef Name) const override {
+      ++FullQueries;
+      return resolvePrototypeABI(Name);
+    }
+
+    std::optional<FunctionSym>
+    resolvePrototypeABI(llvm::StringRef Name) const override {
+      ++ABIQueries;
+      if (Name != "fixture_fixed" && Name != "fixture_variadic")
+        return std::nullopt;
+      FunctionSym Function;
+      Function.Name = Name.str();
+      Function.PrototypeLibrary =
+          Local ? UserPrototypeLibrary.str() : "test-header";
+      Function.PrototypeFromHeader = !Local;
+      Function.ReturnType = NdType::makeInt(4);
+      Function.Params = {{"value", NdType::makeInt(2)}};
+      if (Name == "fixture_fixed") {
+        auto Pointer = NdType::makePtr();
+        Pointer->Size = PointerBytes;
+        Function.Params.emplace_back("output", std::move(Pointer));
+      } else {
+        Function.IsVariadic = true;
+      }
+      return Function;
+    }
+  } Debug;
+
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::AArch64})
+    for (bool Local : {false, true}) {
+      SCOPED_TRACE(static_cast<unsigned>(Architecture));
+      SCOPED_TRACE(Local);
+      Debug.Local = Local;
+      Debug.PointerBytes = Architecture == Arch::X86 ? 4 : 8;
+      Debug.FullQueries = Debug.ABIQueries = 0;
+      BinaryImage Image;
+      Image.Arch = Architecture;
+      Image.Bits =
+          Architecture == Arch::X86 ? Bitness::Bits32 : Bitness::Bits64;
+      Image.Format = BinaryFormat::COFF;
+      Image.Entry = 0x1000;
+      Segment Text;
+      Text.Name = ".text";
+      Text.VA = Image.Entry;
+      Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+      Text.Data = Architecture == Arch::AArch64
+                      ? std::vector<uint8_t>{0xc0, 0x03, 0x5f, 0xd6}
+                  : Architecture == Arch::X64
+                      ? std::vector<uint8_t>{0xff, 0xd0, 0xc3}
+                      : std::vector<uint8_t>{0xc3};
+      Text.Size = Text.FileSz = Text.Data.size();
+      Image.Segments.push_back(std::move(Text));
+      // No call names these imports. Win64's computed call admits them as
+      // possible targets; x86 and ARM64 retain an omitted-callee inventory.
+      // Both need their widths and provenance, never C spelling.
+      for (const auto &[Name, Slot] :
+           {std::pair{"fixture_fixed", va_t{0x2000}},
+            std::pair{"fixture_variadic", va_t{0x2010}},
+            std::pair{"fixture_absent", va_t{0x2020}}}) {
+        Import Imp;
+        Imp.Name = Name;
+        Imp.IATAddr = Slot;
+        Image.Imports.push_back(std::move(Imp));
+      }
+      PipelineAnalysisCache Cache;
+      for (bool Cached : {false, true, true}) {
+        PipelineResult Result;
+        PipelineTestPeer::buildLowIR(Image, Result, {Image.Entry},
+                                     Cached ? &Cache : nullptr, std::nullopt,
+                                     false, nullptr, &Debug);
+        ASSERT_EQ(Result.LowFuncs.size(), 1u);
+        if (Architecture == Arch::X64) {
+          const auto &Arguments = Result.CallEntryIntegerArguments;
+          ASSERT_TRUE(Arguments.contains(0x2000));
+          const auto &Parameters = Arguments.at(0x2000).Parameters;
+          ASSERT_EQ(Parameters.size(), 2u);
+          EXPECT_EQ(Parameters[0].Bytes, 2);
+          EXPECT_EQ(Parameters[1].Bytes, 8);
+          EXPECT_FALSE(Arguments.contains(0x2020));
+          EXPECT_EQ(Result.CallUserPrototypes.contains(0x2000), Local);
+        } else {
+          const auto Counts = Architecture == Arch::X86
+                                  ? Result.OmittedCalleeStackArgs
+                                  : Result.OmittedCalleeArgumentCounts;
+          ASSERT_TRUE(Counts);
+          ASSERT_TRUE(Counts->contains(0x2000));
+          EXPECT_EQ(Counts->at(0x2000), 2);
+          EXPECT_FALSE(Counts->contains(0x2020));
+          ASSERT_TRUE(Result.OmittedCalleeVariadicArguments);
+        }
+        const auto &Variadic = Architecture == Arch::X64
+                                   ? Result.CallEntryVariadicArguments.get()
+                                   : *Result.OmittedCalleeVariadicArguments;
+        EXPECT_EQ(Variadic.contains(0x2010), !Local);
+        if (!Local)
+          EXPECT_EQ(Variadic.at(0x2010), (std::vector<uint16_t>{2}));
+      }
+      EXPECT_GT(Debug.ABIQueries, 0u);
+      EXPECT_EQ(Debug.FullQueries, 0u);
+    }
 }
 
 BinaryImage selectionCacheImage(bool Floating) {

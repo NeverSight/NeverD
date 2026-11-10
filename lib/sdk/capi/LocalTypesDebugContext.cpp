@@ -768,6 +768,9 @@ void LocalTypesDebugContext::takeNewTypes(const types::TypeLibrary &Library,
   for (const std::string &Name : Names)
     if (const types::LocalType *Type = Library.find(Name))
       Types->define(*Type);
+  // A previously opaque pointee may now have members, even when its C name
+  // stays the same. An ABI-only read must not freeze that earlier layout.
+  ABISignatures.clear();
   // These read every name of the library they were made of.  A name their
   // tables lack they spell as it is, as a library that gives it no other
   // spelling does; what they rendered names none of the new types.
@@ -1180,10 +1183,23 @@ std::optional<types::HeaderLibrary> LocalTypesDebugContext::prototypeHeader(
   return std::nullopt;
 }
 
+const types::TypeSpeller &
+LocalTypesDebugContext::portablePrototypeSpeller() const {
+  if (!PortablePrototypeSpeller) {
+    types::RenderOptions Options;
+    Options.Lang = types::Language::C;
+    Options.Spelling = types::BuiltinSpelling::Portable;
+    Options.PrototypeIntegerIdentity = true;
+    PortablePrototypeSpeller =
+        std::make_unique<types::TypeSpeller>(*Types, Options);
+  }
+  return *PortablePrototypeSpeller;
+}
+
 std::optional<FunctionSym> LocalTypesDebugContext::prototypeSignature(
-    llvm::StringRef Name, const types::FunctionDef &Function,
-    const types::TypeSpeller *Speller) const {
-  auto Signature = signatureOf(*Types, Function, Name, Speller);
+    llvm::StringRef Name, const types::FunctionDef &Function) const {
+  auto Signature =
+      signatureOf(*Types, Function, Name, &portablePrototypeSpeller());
   if (!Signature)
     return Signature;
   const auto Header = prototypeHeader(Name, &Function);
@@ -1200,8 +1216,16 @@ LocalTypesDebugContext::resolvePrototypeABI(llvm::StringRef Name) const {
   std::lock_guard<std::mutex> Guard(Mutex);
   if (auto Known = Signatures.find(Name); Known != Signatures.end())
     return Known->second;
+  if (auto Known = ABISignatures.find(Name); Known != ABISignatures.end())
+    return Known->second;
   const auto *Function = Types->findPrototype(Name);
-  return Function ? prototypeSignature(Name, *Function) : std::nullopt;
+  if (Function)
+    if (auto Signature = prototypeSignature(Name, *Function)) {
+      auto [Known, Inserted] =
+          ABISignatures.try_emplace(Name, std::move(*Signature));
+      return Known->second;
+    }
+  return std::nullopt;
 }
 
 std::optional<FunctionSym>
@@ -1213,16 +1237,15 @@ LocalTypesDebugContext::resolvePrototype(llvm::StringRef Name) const {
   const auto Function = Types->prototypes().find(Name);
   if (Function == Types->prototypes().end() || !Function->second)
     return Signature;
-  types::RenderOptions PortableOptions;
-  PortableOptions.Lang = types::Language::C;
-  PortableOptions.Spelling = types::BuiltinSpelling::Portable;
-  PortableOptions.PrototypeIntegerIdentity = true;
-  auto &Portable = PortablePrototypeSpeller;
-  if (!Portable)
-    Portable = std::make_unique<types::TypeSpeller>(*Types, PortableOptions);
-  Signature = prototypeSignature(Name, *Function->second, Portable.get());
+  if (auto Known = ABISignatures.find(Name); Known != ABISignatures.end()) {
+    Signature = std::move(Known->second);
+    ABISignatures.erase(Known);
+  } else {
+    Signature = prototypeSignature(Name, *Function->second);
+  }
   if (!Signature)
     return Signature;
+  const auto &Portable = portablePrototypeSpeller();
   const std::optional<types::HeaderLibrary> Header =
       prototypeHeader(Name, Function->second.get());
   types::RenderOptions Options;
@@ -1245,10 +1268,10 @@ LocalTypesDebugContext::resolvePrototype(llvm::StringRef Name) const {
   }
   Signature->PortablePrototypeDeclaration =
       (PortableFunction->NoReturn ? "_Noreturn " : "") +
-      Portable->spell(*types::makeFunction(PortableFunction), Name.str());
+      Portable.spell(*types::makeFunction(PortableFunction), Name.str());
   for (const auto &Parameter : PortableFunction->Params)
     Signature->PortableParameterTypes.push_back(
-        Portable->spell(*Parameter.Type));
+        Portable.spell(*Parameter.Type));
   return Signature;
 }
 

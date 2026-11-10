@@ -87,6 +87,9 @@ void AnalysisService::reset() {
     snapshot_ = {};
   } else
     stopWorker();
+  // Another project's owner gave none of the pages its views will keep.
+  if (queries_.projectId() != owner_.projectId())
+    ownerPages_.clear();
   queries_.resetReadContext(owner_.projectId(), owner_.revision());
 }
 
@@ -140,6 +143,14 @@ QString AnalysisService::send(const QString &operation,
       return;
     }
     if (ready_) {
+      // A page the owner gave names the document the owner kept, which the
+      // replica would read whole: the owner answers for it while it keeps
+      // it.  A graph stays with the replica.
+      if (ownerReadsKept_ && operation_ == QLatin1String("decompile") &&
+          ownerPages_.contains(payload_.value("if_none_match").toString())) {
+        askOwner();
+        return;
+      }
       dispatch();
       return;
     }
@@ -155,29 +166,34 @@ QString AnalysisService::send(const QString &operation,
 }
 
 void AnalysisService::readKept() {
-  if (keptState_ == KeptState::Unknown) {
-    keptState_ = KeptState::Asked;
-    const auto serial = serial_;
-    keptStateRequest_ = owner_.subscribe(
-        {QStringLiteral("kept_renders"), {}}, this,
-        [this, serial](const QJsonObject &response) {
-          if (serial != serial_)
-            return;
-          keptStateRequest_ = 0;
-          keptState_ =
-              response.value("payload").toObject().value("complete").toBool()
-                  ? KeptState::Whole
-                  : KeptState::Part;
-          if (!active_.isEmpty() && !ready_)
-            readKept();
-        });
-    return;
-  }
-  if (keptState_ == KeptState::Asked)
-    return;
   // Part of the renders leaves a job to go on with, whatever this read finds.
   if (keptState_ == KeptState::Part)
     requestSnapshot();
+  askOwner();
+  // What the store holds says only whether a replica starts beside the owner's
+  // answer, so the owner, which answers one request at a time, answers the read
+  // first.
+  if (keptState_ != KeptState::Unknown)
+    return;
+  keptState_ = KeptState::Asked;
+  const auto serial = serial_;
+  keptStateRequest_ = owner_.subscribe(
+      {QStringLiteral("kept_renders"), {}}, this,
+      [this, serial](const QJsonObject &response) {
+        if (serial != serial_)
+          return;
+        keptStateRequest_ = 0;
+        keptState_ =
+            response.value("payload").toObject().value("complete").toBool()
+                ? KeptState::Whole
+                : KeptState::Part;
+        // The read that asked may have its answer already.
+        if (keptState_ == KeptState::Part)
+          startReplica();
+      });
+}
+
+void AnalysisService::askOwner() {
   auto payload = payload_;
   payload["kept_only"] = true;
   const auto serial = serial_;
@@ -191,10 +207,25 @@ void AnalysisService::readKept() {
         keptRead_ = 0;
         if (read != active_)
           return;
+        if (response.value("status") == QLatin1String("ok")) {
+          // The page the view keeps from here on is the owner's to answer
+          // for.
+          if (operation_ == QLatin1String("decompile")) {
+            const auto name =
+                response.value("payload").toObject().value("etag").toString();
+            if (!name.isEmpty()) {
+              if (ownerPages_.size() >=
+                  ::neverd::limits::gui::kAnalysisOwnerPageNames)
+                ownerPages_.clear();
+              ownerPages_.insert(name);
+            }
+          }
+          finish(response);
+          return;
+        }
         // A graph the owner has let go of is the query's to ask for again.
-        if (response.value("status") == QLatin1String("ok") ||
-            response.value("error").toObject().value("code") ==
-                QLatin1String("stale_layout")) {
+        if (response.value("error").toObject().value("code") ==
+            QLatin1String("stale_layout")) {
           finish(response);
           return;
         }
