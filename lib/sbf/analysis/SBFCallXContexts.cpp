@@ -480,6 +480,8 @@ llvm::json::Object callXContextReportJSON(const SBFProgram &Program,
         Edge.InstantiatedReturnInputExpression;
     Row["generalized_unknown_inputs"] = Edge.GeneralizedInputs;
     Row["input_generalization"] = generalizationName(Edge.InputGeneralization);
+    if (Edge.CompletedOpaqueMemory)
+      Row["completed_opaque_memory_transfer"] = true;
     if (Edge.CompletedResultBinding) {
       const auto &Binding = *Edge.CompletedResultBinding;
       Row["completed_result_binding"] = llvm::json::Object{

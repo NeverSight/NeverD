@@ -538,15 +538,87 @@ bool hasHeapAddressLowerBound(uint64_t Lower) {
   return Lower >= kHeapStart && Lower < kHeapStart + kMemoryRegionSize;
 }
 
+// In an acyclic scalar replay, x - n > x is exactly the unsigned borrow
+// test. Recover the missing result bound only when this block proves both
+// operands still refer to that subtraction. Equal unknown values or ranges
+// alone never establish this relationship.
+llvm::Expected<bool>
+refineSubtractionGuard(const MedBlock &Block, const MedInstructionIndex &Index,
+                       size_t Successor, ContextState &State,
+                       llvm::function_ref<llvm::Error()> Visit) {
+  const auto *Branch = Index.find(Block.EndSlot - 1);
+  if (!Branch || Branch->Width != kDoubleWordBitWidth ||
+      Branch->Semantics.Source != OperandSourceKind::SourceRegister ||
+      (Branch->Op != Operation::UGt && Branch->Op != Operation::ULe) ||
+      Branch->Dst == Branch->Src || !State.Registers[Branch->Dst].unknown())
+    return true;
+  const MedInstruction *Subtract = nullptr;
+  uint16_t Changed = 0;
+  uint64_t Amount = 0;
+  for (size_t Slot = Block.EndSlot - 1; Slot-- > Block.StartSlot;) {
+    const auto *Instruction = Index.find(Slot);
+    if (!Instruction)
+      continue;
+    if (auto Error = Visit())
+      return std::move(Error);
+    if (Instruction->Call != CallKind::None)
+      return true;
+    if (!Instruction->Semantics.WritesDestination)
+      continue;
+    if (Instruction->Dst != Branch->Dst) {
+      Changed |= registerBit(Instruction->Dst);
+      continue;
+    }
+    if (!Subtract) {
+      if (Instruction->Op != Operation::Sub ||
+          Instruction->Width != kDoubleWordBitWidth ||
+          Instruction->Semantics.SwapOperands)
+        return true;
+      if (Instruction->Semantics.Source == OperandSourceKind::SourceRegister) {
+        if (Instruction->Src == Branch->Dst ||
+            (Changed & registerBit(Instruction->Src)))
+          return true;
+        const auto Value = State.Registers[Instruction->Src].singleton();
+        if (Value.ValueKind != RegisterValue::Kind::Constant)
+          return true;
+        Amount = Value.Value;
+      } else {
+        Amount = normalizeImmediate(Instruction->Immediate,
+                                    Instruction->Semantics.Immediate);
+      }
+      Subtract = Instruction;
+      continue;
+    }
+    if (Instruction->Op != Operation::Mov ||
+        Instruction->Width != kDoubleWordBitWidth ||
+        Instruction->Semantics.Source != OperandSourceKind::SourceRegister ||
+        Instruction->Src != Branch->Src || (Changed & registerBit(Branch->Src)))
+      return true;
+    const bool Borrow =
+        (Successor == *Branch->BranchTarget) == (Branch->Op == Operation::UGt);
+    if (Borrow && Amount == 0)
+      return false;
+    const auto Bounds =
+        Borrow ? UnsignedValueRange{UINT64_MAX - Amount + 1, UINT64_MAX}
+               : UnsignedValueRange{0, UINT64_MAX - Amount};
+    State.Registers[Branch->Dst] = unsignedRangeValue(Bounds);
+    State.Origins[Branch->Dst] = State.Registers[Branch->Dst];
+    return true;
+  }
+  return true;
+}
+
 /// Narrow only scalar, unsigned comparisons. Unknown scalars acquire bounds
-/// here only when the comparison constrains a potential heap address. This
-/// domain does not introduce ordinary integer-range fixed points.
+/// here only when the comparison constrains a potential heap address, or in
+/// an acyclic fixed-cell replay. No ordinary integer-range fixed point is
+/// added.
 bool refineAddressBranch(const MedBlock &Block,
                          const MedInstructionIndex &Index, size_t Successor,
                          ContextState &State, const SBFProgram &Program,
                          const SymbolicAddressSpace &Addresses,
                          uint16_t ReturnCarriers,
-                         bool PreserveCapturedIdentity = false) {
+                         bool PreserveCapturedIdentity = false,
+                         bool RefineUnknownScalars = false) {
   const auto *Last = Index.find(Block.EndSlot - 1);
   if (!Last || Last->Width != kDoubleWordBitWidth ||
       Last->Semantics.Terminator != TerminatorKind::ConditionalJump)
@@ -585,7 +657,7 @@ bool refineAddressBranch(const MedBlock &Block,
     }
   }
   const uint64_t Constant = Right.Value;
-  if (State.Registers[Register].unknown() &&
+  if (!RefineUnknownScalars && State.Registers[Register].unknown() &&
       (!(ReturnCarriers & registerBit(Register)) ||
        !hasHeapAddressLowerBound(Constant)))
     return true;
@@ -661,7 +733,8 @@ bool refineAddressBranch(const MedBlock &Block,
         State.Scratch.Values.refineCapturedRange(Value, Part);
       RegisterValue Narrowed =
           Part == Before || KeepIdentity ? Value : unsignedRangeValue(Part);
-      if (Value.ValueKind == RegisterValue::Kind::Unknown &&
+      if (!RefineUnknownScalars &&
+          Value.ValueKind == RegisterValue::Kind::Unknown &&
           Part.Lower < kHeapStart)
         Narrowed = {};
       if (!Refined)
@@ -1953,7 +2026,12 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
     return false;
   };
 
-  for (auto *Candidate : Specializations.at(Entry)) {
+  // Preserve the established replacement order before considering an opaque
+  // projection. An earlier projection can otherwise consume space that an
+  // equivalent opaque sibling would have released for a later caller.
+  for (size_t Selection = 0; Selection < 2 * Variants.size(); ++Selection) {
+    const bool ProjectOpaqueMemory = Selection >= Variants.size();
+    auto *Candidate = Variants[Selection % Variants.size()];
     const bool ReplaceRoot = UnknownRoot(*Candidate);
     if ((Retry && Candidate != Retry->Summary) ||
         (!Retry && (!Candidate->Published ||
@@ -1994,6 +2072,8 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
                      });
         });
     const bool GenericEquivalent = GenericKeepsResult && GenericKeepsSites;
+    if (ProjectOpaqueMemory && (!OpaqueResult || GenericEquivalent))
+      continue;
     if (!GenericEquivalent && (Retry || ReplaceRoot))
       continue;
     const auto SameSites = [&](const FunctionContext &Sibling) {
@@ -2042,7 +2122,8 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
           continue;
         Binding = **Matched;
       } else if (!GenericEquivalent &&
-                 (!OpaqueReturn(*Sibling) ||
+                 (!Sibling->Return || Sibling->TaggedReturn ||
+                  ProjectOpaqueMemory == OpaqueReturn(*Sibling) ||
                   Sibling->Return->Registers[0] !=
                       Candidate->Return->Registers[0] ||
                   Sibling->Return->Origins[0] !=
@@ -2127,6 +2208,12 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
       if (Context)
         for (auto &Edge : Context->Calls)
           if (Edge.CalleeSummaryID == Candidate->ID) {
+            // These callers already consumed the original opaque memory
+            // transfer. A sibling with the same scalar return and complete
+            // target witnesses can own their proof graph, but its additional
+            // memory facts do not apply retroactively to these old inputs.
+            Edge.CompletedOpaqueMemory |=
+                OpaqueResult && !OpaqueReturn(*Replacement);
             Edge.CalleeSummaryID = Replacement->ID;
             Edge.GeneralizedInputs = Replacement->Generic;
             Edge.InputGeneralization =
@@ -4306,14 +4393,18 @@ ContextFlow::instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
              Value.ValueKind == RegisterValue::Kind::SymbolicAddress;
     });
   };
+  bool UnknownRead = false;
   bool MergeScalarBranches = false;
   if (FixedMemory) {
     for (unsigned R = 0; R < kRegisterCount; ++R)
       MergeScalarBranches |= (InputRegisters[Entry] & registerBit(R)) &&
                              HasRange(Input.Registers[R]);
-    for (const auto &Read : GenericContexts.at(Entry)->ReadEffects.Writes)
-      MergeScalarBranches |= HasRange(Input.Scratch.Values.readValues(
-          Read.Address, static_cast<unsigned>(Read.Size)));
+    for (const auto &Read : GenericContexts.at(Entry)->ReadEffects.Writes) {
+      const auto Values = Input.Scratch.Values.readValues(
+          Read.Address, static_cast<unsigned>(Read.Size));
+      UnknownRead |= Values.unknown();
+      MergeScalarBranches |= Values.unknown() || HasRange(Values);
+    }
   }
   // Literal inputs already select a complete scalar path. Preserve that
   // transfer without introducing CFG-join refinements or pending states;
@@ -4378,8 +4469,13 @@ ContextFlow::instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
     }
   };
   std::set<PathState> Seen;
-  using PendingKey = std::pair<size_t, size_t>;
+  // An unknown fixed cell denotes every scalar value. Keep its acyclic
+  // paths separate until return: joining a saved borrow flag before testing
+  // it would discard the result bound proved on the corresponding edge.
+  // This is uncached work charged to the existing visit and memory budgets.
+  using PendingKey = std::tuple<size_t, size_t, size_t>;
   std::map<PendingKey, ContextState> Pending;
+  size_t NextPath = 0;
   constexpr uint64_t PendingOverhead = sizeof(decltype(Pending)::value_type) -
                                        sizeof(ContextState) +
                                        4 * sizeof(void *);
@@ -4571,9 +4667,17 @@ ContextFlow::instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
             continue;
           if (auto Error = refineLoadedEquality(Block, NextSlot, Successor))
             return std::move(Error);
+          if (UnknownRead) {
+            auto Refined = refineSubtractionGuard(
+                Block, Index, NextSlot, Successor, [&] { return visit(); });
+            if (!Refined)
+              return Refined.takeError();
+            if (!*Refined)
+              continue;
+          }
           if (!refineAddressBranch(Block, Index, NextSlot, Successor, Program,
                                    *CapturedAddresses, ReturnCarriers[Next],
-                                   FixedMemory))
+                                   FixedMemory, UnknownRead))
             continue;
           // Every CFG cycle crosses a reverse-postorder backedge. Reject it
           // rather than starting a second loop solver at the summary limit.
@@ -4588,7 +4692,8 @@ ContextFlow::instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
             RetainedBytes -= Temporary - SuccessorBytes;
           }
           Temporary = SuccessorBytes;
-          const PendingKey Key{BlockOrder[Next], Next};
+          const PendingKey Key{BlockOrder[Next], Next,
+                               UnknownRead ? ++NextPath : 0};
           const auto It = Pending.find(Key);
           if (It == Pending.end()) {
             if (auto Error = retain(PendingOverhead))
@@ -4622,7 +4727,7 @@ ContextFlow::instantiateMemoryPath(const FunctionContext &Owner, size_t Entry,
         return std::optional<MemoryPathInstantiation>(std::move(Result));
       }
       const auto Next = Pending.begin();
-      BlockID = Next->first.second;
+      BlockID = std::get<1>(Next->first);
       const uint64_t Bytes = stateBytes(Next->second) + PendingOverhead;
       State = std::move(Next->second);
       Pending.erase(Next);
@@ -4944,9 +5049,9 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
     FixedMemory =
         llvm::all_of(Callee->Effects.Writes, FixedCell) &&
         llvm::all_of(Callee->ReadEffects.Writes, [&](const MemoryWrite &Read) {
-          return FixedCell(Read) &&
-                 NumericInputs(State.Scratch.Values.readValues(
-                     Read.Address, static_cast<unsigned>(Read.Size)));
+          const auto Values = State.Scratch.Values.readValues(
+              Read.Address, static_cast<unsigned>(Read.Size));
+          return FixedCell(Read) && (Values.unknown() || NumericInputs(Values));
         });
     for (unsigned R = 0; R < kRegisterCount; ++R)
       if ((InputRegisters[Callee->EntryBlock] & registerBit(R)) &&
@@ -4970,7 +5075,7 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
         const auto &Values = Output.Registers[kReturnRegister];
         std::optional<UnsignedValueRange> Bounds;
         bool Complete = !Values.unknown();
-        bool HasNull = false, HasOtherResult = false;
+        bool HasNull = false, HasOtherResult = false, HasLiteralResult = false;
         std::optional<RegisterValue> ReturnedCapture;
         for (const auto &Value : Values.values()) {
           auto Range = Output.Scratch.Values.valueRange(Value);
@@ -4990,6 +5095,7 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
             Complete = false;
             break;
           }
+          HasLiteralResult |= Value.ValueKind == RegisterValue::Kind::Constant;
           if (Value.ValueKind == RegisterValue::Kind::SymbolicAddress &&
               (!ReturnedCapture || *ReturnedCapture == Value))
             ReturnedCapture = Value;
@@ -5002,14 +5108,19 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
             Bounds->Upper = std::max(Bounds->Upper, Range->Upper);
           }
         }
-        // Keep a pre-existing identity when no new conditional return name
-        // is needed. Also preserve disjunctions of distinct captured values.
+        // Keep an existing single identity, including its conditional fields,
+        // and disjunctions containing only captured values. A literal/capture
+        // mixture from complete paths still denotes one actual returned value.
+        // Name that value without importing any alternative's private fields
+        // or claiming freshness relative to an incoming captured pointer.
         if (ReturnedCapture &&
-            (HasOtherResult || !HasNull ||
-             (Output.Nullable &&
-              (Output.Nullable->Registers & registerBit(kReturnRegister)) &&
-              Output.Nullable->Value == *ReturnedCapture &&
-              Output.Nullable->ConditionalDefinition)))
+            ((HasOtherResult && !HasLiteralResult) ||
+             (!HasOtherResult &&
+              (!HasNull ||
+               (Output.Nullable &&
+                (Output.Nullable->Registers & registerBit(kReturnRegister)) &&
+                Output.Nullable->Value == *ReturnedCapture &&
+                Output.Nullable->ConditionalDefinition)))))
           Complete = false;
         if (Complete && Bounds) {
           // Name the one actual returned pointer after proving every input
@@ -6903,6 +7014,7 @@ llvm::Expected<CallXContextReport> ContextFlow::run() {
       AddSites(*Context, nullptr);
     for (const auto &Edge : Context->Calls) {
       if (auto Error = retain(sizeof(Edge.CompletedResultBinding) +
+                              sizeof(Edge.CompletedOpaqueMemory) +
                               sizeof(Edge.InstantiatedTaggedOutputCases)))
         return std::move(Error);
       Report.SummaryEdges.push_back(Edge);

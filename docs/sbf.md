@@ -533,13 +533,22 @@ charges its target index to the retained-state budget. A node's own proven
 targets must also be established by the generic replacement. If the generic
 summary cannot preserve either the return alternatives or those targets,
 a completed independently published sibling may instead receive the old
-incoming edges only when its opaque memory transfer, complete return values
-and origins, own site results, expressions and missing-fact diagnostics agree
-exactly. Equal finite return sets remain eligible even when the generic return
+incoming edges when the complete return values and origins, own site results,
+expressions and missing-fact diagnostics agree exactly. The old opaque memory
+transfer is preserved even if the sibling retains additional memory facts. Equal finite return sets remain eligible even when the generic return
 is unknown; different finite sets cannot be merged just because neither has a
 singleton return value. Descendant proof coverage is still required. This
 coalesces results already computed for those callers; it does
 not broaden the sibling's input cache key or authorize reuse for new inputs.
+Completed caller edges whose original result had opaque memory can share an
+independently published sibling's proof graph when the scalar return, its input
+expression and origins, and all target witnesses agree. The sibling may retain
+additional memory facts, but they never apply retroactively to the completed
+call. Such an edge records `completed_opaque_memory_transfer`; its caller keeps
+the original memory invalidation. This coalescence does not change the sibling's
+input key or authorize reuse for new inputs. Existing equal-transfer replacements
+are considered first; opaque projection is attempted only if none can release
+an entry, preserving the established admission order for those replacements.
 A standalone root with the generic unknown entry facts can also demand its
 ordinary exploration by coalescing such equal published results. Its locally
 known nested call inputs are not analyzed in generic mode. This preserves the
@@ -1047,12 +1056,19 @@ an unknown branch or write.
 
 When all four specializations are occupied, a caller can also replay an acyclic
 scalar graph that reads and writes fixed scratch cells. Every required input
-register and read cell must contain complete literal, nonwrapping unsigned
-range, or bounded captured-value alternatives. The replay partitions these inputs independently and proves
+register must contain complete literal, nonwrapping unsigned range, or bounded
+captured-value alternatives. A fixed read cell can also be unknown, representing
+all possible scalar bits rather than an assumed initial value. The replay partitions these inputs independently and proves
 every combination; a failed case rejects the complete joined result. Literal
 inputs keep the existing path with known branch successors. Range inputs use
 the canonical branch refinements, join forward CFG edges, and join every
-reachable return. Any reachable reverse-postorder backedge rejects the graph
+reachable return. For an unknown fixed cell, forward paths remain separate until
+return so a saved condition does not lose its associated value bound at a join.
+Within these acyclic paths, an unsigned subtraction followed by its borrow
+comparison bounds the result using the known subtrahend. The local instruction
+chain must prove that neither comparison operand nor the subtrahend was
+redefined; equal unknown register values are not such a proof.
+Any reachable reverse-postorder backedge rejects the graph
 instead of starting another loop solver. These cases share the existing
 work and retained-state budgets and do not add cached specializations. The
 completed generic summary must bound every read and write to a fixed
@@ -1079,7 +1095,12 @@ nonwrapping numeric enclosure, including path-local bounds. The result is a
 numeric range, not the original pointer identity.
 
 A complete set of successful heap-derived numeric returns names the one actual
-returned value with a captured identity and enclosing numeric bounds. Ordinary
+returned value with a captured identity and enclosing numeric bounds.
+This also applies when complete replay paths return a mixture of a literal
+address and captured addresses. The new name describes the actual returned
+value, without importing fields from any individual alternative or asserting
+that it differs from incoming objects. A single existing capture and a union
+containing only captured identities retain their original representation. Ordinary
 summaries, stored return carriers, and scalar replay share the heap lower-bound
 eligibility rule. A full-width stored return carrier is named before the
 canonical store in both ordinary summaries and acyclic fixed-cell replay.
