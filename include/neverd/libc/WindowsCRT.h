@@ -140,9 +140,12 @@ inline constexpr auto kWindowsCRTPrototypes = std::to_array<LibCPrototype>({
     windowsCRTPrototype("wcsncpy_s", "int",
                         {"wchar_t *", "size_t", "const wchar_t *", "size_t"},
                         "wchar.h"),
-    // excpt.h: EXCEPTION_DISPOSITION and four exception-context pointers.
-    windowsCRTPrototype("__C_specific_handler", "int",
-                        {"void *", "void *", "void *", "void *"}),
+    // Preserve the header's disposition type (an enum in MSVC, an int macro
+    // in MinGW) and nominal context pointers, including address-only uses.
+    windowsCRTPrototype("__C_specific_handler", "EXCEPTION_DISPOSITION",
+                        {"struct _EXCEPTION_RECORD *", "void *",
+                         "struct _CONTEXT *", "struct _DISPATCHER_CONTEXT *"},
+                        "excpt.h"),
     // Universal CRT start-up and exit.
     // These source enums still occupy one integer argument, but a separate
     // signed-int prototype need not be compatible with the header's enum.

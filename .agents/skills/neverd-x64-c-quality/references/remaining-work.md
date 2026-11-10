@@ -1348,6 +1348,21 @@ conditional memory, invocation lifetime and both C routes remain open.
 
 ## CRT and catch-continuation repairs
 
+- LLVM C keeps recovered frame addresses in the integer carriers used by
+  image byte stores, including unaligned ordinary and volatile stores. Public
+  execution checks preserve the address and adjacent bytes on both 32-bit and
+  64-bit C targets; this does not recover unknown entry-frame state.
+- Image initializer dependencies now include external storage and interior
+  aliases reached through constant aggregates and GEPs. Their declarations
+  precede the initializers in whole, selected and data-only units. Actual C
+  execution checks address identity; header functions retain their own owner.
+- `__C_specific_handler` uses the runtime header's disposition and nominal
+  context types. LLVM C also keeps header tags distinct from same-name typedefs
+  when a debug signature forwards a context pointer. HighC includes a runtime
+  prototype's header when only the routine's address is taken. Independent
+  enum/int header providers check arguments and results, not native exception
+  dispatch.
+
 - Return contracts require the shared no-return proof before interpreting an
   absent ordinary RETURN as void. An external catch/continuation keeps the
   parent result unknown until attachment, so nested rethrows retain the

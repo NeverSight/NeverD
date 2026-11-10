@@ -30,6 +30,7 @@
 namespace neverd::translate {
 
 namespace detail {
+struct X86LegacyControlContinuation;
 struct X86LegacyTaskContinuation;
 struct X86LegacyTransferContinuation;
 } // namespace detail
@@ -150,6 +151,16 @@ struct X86LegacyExecutionState {
   /// this opaque state with the CPU, bindings and original instruction bytes;
   /// repair only backing. Completed RAM accesses are never repeated.
   std::shared_ptr<const detail::X86LegacyTransferContinuation> PendingTransfer;
+  /// MOV-CR retains original inputs and completed physical PDPTE reads
+  /// across unavailable backing. Controls publish atomically after all four
+  /// reads. Preserve this immutable token with CPU/RAM when rebuilding a
+  /// source context; only the control owner may retire it.
+  std::shared_ptr<const detail::X86LegacyControlContinuation> PendingControl;
+  /// Resource receipt for a retained instruction, not guest CPU state. A
+  /// journal can exist after an owner Error before an attempt was reported.
+  /// Preserve this with instruction progress across context reconstruction;
+  /// only the public instruction boundary publishes or retires this receipt.
+  bool PendingInstructionAttempted = false;
 };
 
 /// One CPU, ordinary RAM, 16/32-bit gates, qword accessed writes, offset-first
@@ -409,6 +420,9 @@ enum class X86LegacyExecutionStatus : uint8_t {
 
 struct X86LegacyExecutionResult {
   X86LegacyExecutionStatus Status = X86LegacyExecutionStatus::Completed;
+  /// Newly reported attempt for this invocation. An already charged retained
+  /// instruction resumes without another attempt; a journal retained by an
+  /// earlier owner Error still needs its first reported attempt.
   bool InstructionAttempted = false;
   bool InstructionCompleted = false;
   bool EventAccepted = false;
@@ -507,7 +521,9 @@ resumeX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// sampling and instruction #DB causes; data/I/O producers remain external.
 /// Returns stop at their destination, preserve RF restored by IRETD, and
 /// end SS/STI inhibition. IRET unblocks NMI after fetch, including on a later
-/// fault; RETF preserves NMI blocking.
+/// fault; RETF preserves NMI blocking. Preserve PendingInstructionAttempted
+/// with retained instruction journals across source-context reconstruction;
+/// this boundary alone publishes or retires the resource receipt.
 llvm::Expected<X86LegacyExecutionResult>
 executeX86LegacyInstruction(X86LegacyExecutionState &State,
                             X86PagedMemory &Memory,

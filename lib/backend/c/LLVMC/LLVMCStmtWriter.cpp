@@ -1762,7 +1762,8 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
         const std::string Bits = freshVar("image_bits");
         emitIndent(Indent);
         OS << "{ " << typeToCLLVM(Store->getValueOperand()->getType()) << " "
-           << Bits << " = " << valueStr(Store->getValueOperand()) << ";\n";
+           << Bits << " = "
+           << integerPointerOperandStr(Store->getValueOperand()) << ";\n";
         if (Store->isVolatile()) {
           const std::string Index = freshVar("image_byte");
           emitIndent(Indent + 1);

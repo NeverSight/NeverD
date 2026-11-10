@@ -9,6 +9,7 @@
 
 #include "neverd/translate/X86/X86LegacySourceExecution.h"
 
+#include "X86LegacyControlRegisters.h"
 #include "X86LegacyExecutionInternal.h"
 #include "X86LegacyTaskSwitch.h"
 
@@ -19,6 +20,8 @@
 namespace neverd::translate {
 
 uint64_t X86LegacySourceExecution::key() const {
+  if (State.PendingControl)
+    return detail::legacyControlInstructionKey(State);
   if (detail::legacyTaskInstructionPending(State))
     return detail::legacyTaskInstructionKey(State);
   const auto &CS = State.Core.Segments[1];
@@ -59,6 +62,11 @@ uint32_t X86LegacySourceExecution::select(uint64_t &Key) {
   Key = key();
   Error.clear();
   return uint32_t(X86LegacyExecutionStatus::Completed);
+}
+
+bool X86LegacySourceExecution::pendingAttemptConsumed() const {
+  return detail::legacyInstructionPending(State) &&
+         State.PendingInstructionAttempted;
 }
 
 uint32_t X86LegacySourceExecution::step(uint64_t Key,
@@ -102,6 +110,11 @@ extern "C" uint32_t neverd_x86_legacy_attempted_v1(void *Context) {
   return Context && static_cast<X86LegacySourceExecution *>(Context)
                         ->lastResult()
                         .InstructionAttempted;
+}
+
+extern "C" uint32_t neverd_x86_legacy_pending_v1(void *Context) {
+  return Context && static_cast<X86LegacySourceExecution *>(Context)
+                        ->pendingAttemptConsumed();
 }
 
 } // namespace neverd::translate

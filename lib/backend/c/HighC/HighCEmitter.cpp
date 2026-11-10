@@ -1905,6 +1905,15 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
     const std::string Identifier = functionIdentifier(Symbol);
     CallTargets.insert(Identifier);
     ExternalCallSources[Identifier].insert(Symbol);
+    // The address-only declaration below can use a runtime prototype even
+    // when this image names the routine itself. Include that prototype's
+    // types before the declaration, just as for an actual external call.
+    if (!DefinedFunctionsByIdentifier.count(Identifier) &&
+        !SourceNativeSignatures.count(Identifier) &&
+        !DebugExternSigs.count(Identifier) && !userDeclaresCallee(Identifier))
+      if (const auto *Prototype = prototypeForSymbol(Symbol);
+          Prototype && !Prototype->Header.empty())
+        Headers.insert(std::string(Prototype->Header));
   }
 
   // A stub of a variadic import passes its arguments on through stdarg.h.

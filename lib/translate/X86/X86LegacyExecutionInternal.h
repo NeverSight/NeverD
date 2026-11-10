@@ -16,6 +16,10 @@
 
 namespace neverd::translate::detail {
 
+/// Retained instruction progress, including an owner Error before an attempt
+/// receipt. Pending event delivery and task fault/event owners are separate.
+bool legacyInstructionPending(const X86LegacyExecutionState &State);
+
 llvm::Error admitLegacyExecution(const X86LegacyExecutionState &State,
                                  X86PagedMemory &Memory,
                                  const X86LegacyExecutionOptions &Options);

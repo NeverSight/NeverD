@@ -486,7 +486,15 @@ LowIR stack semantics and compares original and identity-patched ELF32/ELF64
 programs on the host CPU. `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` retains the three
 original/rewritten binaries, assembly and patch logs. The protected source suite
 also compiles stack round trips, partial-fault handlers and aliased backing
-continuations with Clang and NeverC at O0/O2. Its i386 object checks remain
+continuations with Clang and NeverC at O0/O2. The source budget cases pause
+stack, MPX, task and VM86 return owners after exactly one attempt, retry at zero,
+repair backing, rebuild the host context and complete without another charge.
+Separate full-limit binding-error cases retain uncharged journals, including an
+already committed PUSHAD store; a positive budget must publish their first
+attempt without replaying that store. The combined error/backing case then
+finishes at zero. Refused rebinds preserve an earlier charge, while event-owned
+tasks, return-triggered #DB delivery and stale receipts cannot authorize a new
+instruction. Its i386 object checks remain
 compile-only; they do not qualify a 32-bit host runtime library.
 
 `LegacyShifts/*` compares protected SHL/SAL/SHR/SAR and ROL/ROR/RCL/RCR with
@@ -588,7 +596,17 @@ Run these with both SDKs and qualified P/E cores, plus shared scalar,
 segment/query and ordinary system-state regressions.
 
 `X86LegacyControlTest.*`, `LegacyControl/*` and the `ControlRegister*` cases in
-`NeverDX86LegacySourceTests` cover protected MOV-CR. The fixed-value and
+`NeverDX86LegacySourceTests` cover protected MOV-CR. The `ControlReload*`
+cases also exercise all four backing stops for CR0/CR3/CR4 in code16/code32,
+retained read prefixes, original code authentication, changed input/profile
+refusals, reconstructed contexts and exact one-attempt/zero-budget completion.
+Inactive malformed old PDPTE caches must not reject a valid reload. Separate
+cases prove #GP uses the old address space and post-completion #DB uses the new
+one, including a second event backing stop; RF/SS/STI and physical-read watchpoint
+exclusion remain checked across suspension. Controlled code/PDPTE fault injection
+proves reads are retained; this is not a concurrent-memory execution contract.
+Candidate unbound CET or I/O-debug controls refuse before PDPT reads, even when
+that physical backing is unavailable. The fixed-value and
 original KVM cases vary code width, prefixes, all GPRs and ignored ModR/M mod
 bits; test CR0 normalization, privilege/#UD/#GP ordering and CR3/CR4 changes;
 and compare full controls, registers and flags. Software and generated C also
@@ -6672,7 +6690,14 @@ unchanged journal, preserves newer staged edits and undo/redo, and refuses forei
 sidecars. Reopening also recovers the pending edit.
 `NeverDWorkerHistory` injects failure before and after each transaction write,
 checks unchanged sidecars and foreign-edit refusal, and retries newer staged
-edits. It compares complete published journals for first and later saves with
+edits. A table equal to the committed one but printing otherwise (a zero's sign) is
+encoded anew, a table left as it was keeps its bytes while another changes, and a
+row put between others or rows out of order take their place by address. A table's edit
+persists exactly as its whole state does and writes only its table, what is no table
+of rows is refused unwritten, and after an interrupted table write the next one keeps
+the tables that write completed. Renames kept row by row persist as their whole state
+does, write only their file, leave the rows they keep the same objects, and survive
+an interrupted rows write. It compares complete published journals for first and later saves with
 escaped/Unicode annotation text, then verifies retry and reopening. History and
 journal budget cases must refuse before publishing any transaction file.
 It also checks independent rollback checkpoints, equivalent file reformatting,
@@ -6821,7 +6846,11 @@ tests count engine calls separately for each option set. `HighExprSimplify.*`
 checks exact masked status bits, signed extensions, shared expressions and
 effect preservation without the symbolic bridge. An 8,192-level worker-thread
 regression checks iterative operand traversal for both pure rewrites and
-ordered-memory ancestors that must remain intact. The x87 classification test
+ordered-memory ancestors that must remain intact.
+`HighControlFlowSemantics.MemoryBoundaryLeavesRetainTheirAncestors` checks
+boundary-bearing leaves, shared parents and indirect call targets, including
+fresh analysis after boundary metadata changes and root-order reversal.
+The x87 classification test
 executes ordinary HighC against native extended-precision encodings; ARM mode
 tests execute both ordinary and explicitly enhanced source.
 
@@ -16924,6 +16953,14 @@ raw executions check the callback or loop, and the reported generic return
 remains unknown even when the first-call address is recovered.
 The pinned 72-file native-object scan described in [sbf-corpus.md](sbf-corpus.md)
 is separate from these synthetic execution tests and from official VM gates.
+`InitializedIndexGuardRefinesBothBoundedOperands` checks finite and interval
+count guards with strict and non-strict unsigned ordering, both operand orders,
+both branch directions, and reversed CFG edges. Low and near-`UINT64_MAX`
+domains each execute raw bytecode for accepted and rejected indices; a genuine
+two-element choice must not become a singleton callback proof.
+`FallthroughComparisonDoesNotSelectAnOutcome` checks that a conditional jump
+to its next instruction cannot exclude either input value, using immediate
+and register comparisons and independent raw returns.
 
 ## One-shot targets
 

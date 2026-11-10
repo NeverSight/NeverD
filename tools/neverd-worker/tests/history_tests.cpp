@@ -569,6 +569,207 @@ void stateEncodingAndSidecars() {
   state["unknown\"key"] = {{"value", "nested\n[]"}, {"float", -0.0}};
   verify();
 }
+void unchangedTablesKeepTheirBytes() {
+  Fixture fixture;
+  auto store = fixture.open();
+  auto state = store.committedState();
+  const auto history = [&] { return text(fixture.path(files::File::History)); };
+  const auto expected = [&] {
+    return Json{{"commands", Json::array()},
+                {"cursor", 0},
+                {"engine_version", "fixture"},
+                {"schema_version", 1},
+                {"source_sha256", std::string(64, '0')},
+                {"state", state}}
+        .dump();
+  };
+  state["annotations"] = Json::array({annotation("signed")});
+  state["annotations"][0]["extra"] = {{"zero", 0.0}};
+  store.persist(state);
+  check(history() == expected(), "First state lost its bytes");
+  // A row equal to the committed one but printing otherwise, a zero's sign,
+  // is encoded anew rather than copied.
+  state["annotations"][0]["extra"]["zero"] = -0.0;
+  store.persist(state);
+  check(history() == expected() &&
+            history().find("\"zero\":-0.0") != std::string::npos,
+        "A zero's sign was taken from the committed bytes");
+  // A table left as it was keeps the committed bytes while another changes,
+  // including a row put between the committed ones, which moves the rest.
+  state["renames"] =
+      Json::array({rename("first"),
+                   {{"addr", "0x3000"}, {"original", "f"}, {"renamed", "c"}}});
+  store.persist(state);
+  check(history() == expected(), "Another table's edit changed these bytes");
+  auto renames = state["renames"];
+  renames.insert(renames.begin() + 1,
+                 Json{{"addr", "0x2000"}, {"original", "f"}, {"renamed", "b"}});
+  state["renames"] = renames;
+  store.persist(state);
+  check(history() == expected() && text(fixture.path(files::File::Renames)) ==
+                                       sidecarText(state["renames"]),
+        "A row put between others changed the table's bytes");
+  // Rows out of order take the order of addresses, once each.
+  auto unordered = state;
+  std::swap(unordered["renames"][0], unordered["renames"][2]);
+  store.persist(unordered);
+  check(history() == expected(), "Rows out of order kept their order");
+  check(ProjectHistory(fixture.binary, std::string(64, '0'), "fixture", false,
+                       Writer::write)
+                .committedState() == state,
+        "Reopening changed the committed tables");
+}
+void tableEditsPersistAsTheirState() {
+  // An edit of one table persists as the whole state with that table's rows
+  // does: the same files, the same history, the other tables untouched.
+  const auto files = [](const Fixture &fixture) {
+    std::vector<std::string> texts;
+    for (const auto id :
+         {files::File::Annotations, files::File::Renames, files::File::Items,
+          files::File::Types, files::File::History})
+      texts.push_back(fs::exists(fixture.path(id)) ? text(fixture.path(id))
+                                                   : std::string());
+    return texts;
+  };
+  Fixture whole, table;
+  auto wholeStore = whole.open(), tableStore = table.open();
+  const auto start = initial(wholeStore);
+  initial(tableStore);
+  auto renames = start.at("renames");
+  renames.push_back({{"addr", "0x500"}, {"original", "f"}, {"renamed", "g"}});
+  auto state = start;
+  state["renames"] = renames;
+  const Json command{{"kind", "rename"},
+                     {"address", "0x500"},
+                     {"before", nullptr},
+                     {"after", renames.back()}};
+  wholeStore.stage(command);
+  wholeStore.persist(state);
+  tableStore.stage(command);
+  table.writer.clear();
+  tableStore.persistTable("renames", renames);
+  check(files(whole) == files(table) &&
+            tableStore.committedState() == wholeStore.committedState(),
+        "A table's edit persisted otherwise than its whole state");
+  check(table.writer.calls ==
+            std::vector<fs::path>{table.path(files::File::Journal),
+                                  table.path(files::File::Renames),
+                                  table.path(files::File::History)},
+        "A table's edit wrote files outside its table and journal/history");
+  // Behind the reply, the same once written.
+  auto items = Json::array(
+      {{{"addr", "0x2000"}, {"kind", "data"}, {"size", std::uint64_t(4)}}});
+  state["items"] = items;
+  wholeStore.persist(state);
+  tableStore.persistTableLater("items", items);
+  tableStore.finishWrites();
+  check(files(whole) == files(table), "A table's later edit wrote otherwise");
+  // What is no table of rows, or is the patches', is refused unwritten.
+  table.writer.clear();
+  rejects([&] { tableStore.persistTable("unknown", Json::array()); },
+          "history_invalid");
+  rejects([&] { tableStore.persistTable("patches", Json::array()); },
+          "history_invalid");
+  rejects([&] { tableStore.persistTable("renames", Json::object()); },
+          "history_invalid");
+  check(table.writer.calls.empty() && files(whole) == files(table),
+        "A refused table edit wrote");
+  // An interrupted table write completes with the next one, which keeps the
+  // tables it found.
+  table.writer.clear();
+  table.writer.failAt = 1;
+  auto later = renames;
+  later[0]["renamed"] = "interrupted";
+  rejects([&] { tableStore.persistTable("renames", later); },
+          "injected_failure");
+  table.writer.clear();
+  auto annotations = start.at("annotations");
+  annotations[0]["text"] = "after the interruption";
+  tableStore.persistTable("annotations", annotations);
+  state["renames"] = later;
+  state["annotations"] = annotations;
+  wholeStore.persist(state);
+  auto reopened = table.open();
+  check(reopened.committedState() == wholeStore.committedState() &&
+            reopened.committedState().at("renames")[1].at("renamed") ==
+                "interrupted" &&
+            !ProjectHistory::recoveryPending(table.binary),
+        "An interrupted table write lost a table");
+}
+void rowEditsPersistAsTheirState() {
+  // Renames are kept row by row: an edit of their rows persists as the whole
+  // state with those rows does, and the rows it leaves stay the same objects.
+  const auto files = [](const Fixture &fixture) {
+    std::vector<std::string> texts;
+    for (const auto id :
+         {files::File::Annotations, files::File::Renames, files::File::History})
+      texts.push_back(fs::exists(fixture.path(id)) ? text(fixture.path(id))
+                                                   : std::string());
+    return texts;
+  };
+  Fixture whole, rows;
+  auto wholeStore = whole.open(), rowStore = rows.open();
+  auto state = initial(wholeStore);
+  initial(rowStore);
+  check(ProjectHistory::keepsRows("renames") &&
+            ProjectHistory::keepsRows("patches") &&
+            !ProjectHistory::keepsRows("items"),
+        "Wrong tables kept row by row");
+  rejects([&] { ProjectHistory::tableRow("items", Json::object()); },
+          "history_invalid");
+  rejects([&] { (void)rowStore.committedRows("items"); }, "history_invalid");
+  rejects([&] { rowStore.persistRows("items", {}); }, "history_invalid");
+  auto renames = rowStore.committedRows("renames");
+  const auto first = renames.front();
+  for (const char *address : {"0x500", "0x2000"})
+    renames.push_back(ProjectHistory::tableRow(
+        "renames", {{"addr", address}, {"original", "f"}, {"renamed", "g"}}));
+  for (const char *address : {"0x500", "0x2000"})
+    state["renames"].push_back(
+        {{"addr", address}, {"original", "f"}, {"renamed", "g"}});
+  wholeStore.persist(state);
+  rows.writer.clear();
+  rowStore.persistRows("renames", renames);
+  check(files(whole) == files(rows) &&
+            rowStore.committedState() == wholeStore.committedState(),
+        "Rows persisted otherwise than their whole state");
+  check(rows.writer.calls ==
+            std::vector<fs::path>{rows.path(files::File::Journal),
+                                  rows.path(files::File::Renames),
+                                  rows.path(files::File::History)},
+        "Rows wrote files outside their table and journal/history");
+  const auto &kept = rowStore.committedRows("renames");
+  check(kept.size() == 3 && kept[1] == first &&
+            kept.front()->address() == 0x500,
+        "Rows left as they were did not stay the same objects in order");
+  // Behind the reply, the same once written.
+  auto later = rowStore.committedRows("renames");
+  later[1] = ProjectHistory::tableRow(
+      "renames",
+      {{"addr", "0x1000"}, {"original", "function"}, {"renamed", "later"}});
+  state["renames"][0]["renamed"] = "later";
+  wholeStore.persist(state);
+  rowStore.persistRowsLater("renames", later);
+  rowStore.finishWrites();
+  check(files(whole) == files(rows), "Rows written later wrote otherwise");
+  // An interrupted rows write completes with the next one, which keeps it.
+  rows.writer.clear();
+  rows.writer.failAt = 1;
+  auto interrupted = rowStore.committedRows("renames");
+  interrupted.pop_back();
+  rejects([&] { rowStore.persistRows("renames", interrupted); },
+          "injected_failure");
+  rows.writer.clear();
+  auto annotations = state.at("annotations");
+  annotations[0]["text"] = "after the interruption";
+  rowStore.persistTable("annotations", annotations);
+  state["renames"].erase(state["renames"].end() - 1);
+  state["annotations"] = annotations;
+  wholeStore.persist(state);
+  check(rows.open().committedState() == wholeStore.committedState() &&
+            !ProjectHistory::recoveryPending(rows.binary),
+        "An interrupted rows write lost its rows");
+}
 void changedAddressSequence() {
   Fixture fixture;
   auto store = fixture.open();
@@ -999,6 +1200,9 @@ int main() {
     normalization();
     commandEncodingAndBranches();
     stateEncodingAndSidecars();
+    unchangedTablesKeepTheirBytes();
+    tableEditsPersistAsTheirState();
+    rowEditsPersistAsTheirState();
     changedAddressSequence();
     commandBudgetCountsEncodedBytes();
     budgetBeforePublication();

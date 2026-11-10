@@ -127,13 +127,32 @@ walkX86PageTables(GuestMemoryRuntime &PhysicalMemory,
                   const X86PagingFeatures &Features,
                   const X86PagingState &State, const X86LinearAccess &Access);
 
+/// Host-owned progress for a physical PDPTE read. Preserve unchanged across
+/// backing repair, including the already read prefix. No guest register bank
+/// is published by this object; its instruction owner retires it on completion
+/// or a guest fault. Completed reads remain reusable until retirement.
+class X86PAEPDPTEContinuation {
+public:
+  X86PAEPDPTEContinuation() = default;
+
+private:
+  friend llvm::Expected<X86PageWalkResult>
+  loadX86PAEPDPTE(GuestMemoryRuntime &, const X86PagingFeatures &, uint64_t,
+                  std::array<uint64_t, 4> &, X86PAEPDPTEContinuation *);
+  std::optional<X86PagingFeatures> Features;
+  uint64_t CR3 = 0;
+  std::array<uint64_t, 4> Entries{};
+  unsigned Next = 0;
+};
+
 /// Load all four PAE PDPTE registers transactionally. Reserved bits in a
 /// present entry produce #GP(0); backing failures stay distinct. The previous
 /// register bank is preserved on either failure. CR3 is the requested new CR3.
 llvm::Expected<X86PageWalkResult>
 loadX86PAEPDPTE(GuestMemoryRuntime &PhysicalMemory,
                 const X86PagingFeatures &Features, uint64_t CR3,
-                std::array<uint64_t, 4> &PDPTE);
+                std::array<uint64_t, 4> &PDPTE,
+                X86PAEPDPTEContinuation *Continuation = nullptr);
 
 } // namespace neverd::translate
 

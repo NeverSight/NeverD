@@ -69,7 +69,12 @@ reads, writes and debug matches across host backing stops. Resumption uses
 already authenticated bytes and retained inputs, so self-modifying code and
 overlapping ENTER frames cannot cause replay. Architectural faults release this
 continuation before entering the existing event owner. New external events
-cannot interrupt a suspended host access. `ir/X86/X86StackFrameRules` shares
+cannot interrupt a suspended host access. The public instruction boundary also
+owns `PendingInstructionAttempted`, a host resource receipt retained alongside
+stack, MPX, transfer or instruction-owned task progress. A journal can survive
+an owner error before reporting an attempt; it does not itself authorize
+zero-budget resumption. The source bridge uses this same ownership predicate.
+Pending events and task event/fault owners never grant instruction budget. `ir/X86/X86StackFrameRules` shares
 ENTER nesting selection with the ordinary lifter; the paged owner additionally
 owns segment/page faults and the final stack permission probe.
 Protected scalar count and carry-chain instructions retain their exact prefixes
@@ -119,7 +124,15 @@ the register transfer's 32-bit width or add a memory operand. The owner checks
 architectural faults before staging CR0/CR2/CR3/CR4, uses `loadX86PAEPDPTE` for
 the specified PAE reload triggers, and publishes the complete control bank
 before post-instruction debug delivery. Failed loads retain the previous
-CR3 and all four PDPTEs. The following fetch uses the new mapping. Generated
+CR3 and all four PDPTEs. `PendingControl` freezes the original bytes, complete
+entry CPU/debug/shadow state, paging features and control/debug bindings across
+host backing stops. The paging owner retains its four-entry physical read prefix;
+resumption does not refetch, repeat execution-breakpoint checks or spend another
+reported instruction attempt. Candidate paging/debug domains are admitted before
+PDPT reads, independently of the old inactive PDPTE cache. Instruction fetch can
+already have changed A/D bits before this domain check. Guest faults retire the
+instruction token before old-address-space event entry; completion publishes the
+new bank before post-step #DB. The following fetch uses the new mapping. Generated
 protected C reuses this owner. Valid real/IA-32e transfers and unbound memory
 domains refuse explicitly; they are not converted into invented #GP faults.
 CLAC/STAC use the existing target SMAP capability and raise #UD when it is
@@ -4755,6 +4768,9 @@ the name again or retaining a second copy of it. Every type still takes its
 place in the ordinary namespace before enumerators, including unchanged
 identifiers and generated collision suffixes. Undeclared names follow the
 ordinary identifier rules.
+Name-map entries share an allocator owned by the table and are released with
+it. Returned spellings remain owned strings, and the library's canonical
+insertion order still decides collisions.
 A name a program may also give a routine
 of its own decides only together with the module that exports it
 (`isNoReturnImport`, `WindowsNoReturnImports.inc`): the Universal CRT's
@@ -5116,7 +5132,17 @@ reads against the library without copying it, its prototype the parse's own; one
 would define a type reads again on a copy (`parseFunctionDeclaration`). The GUI opens with `write_behind`: the reply to such an edit goes before
 its write, which runs the same journaled transaction in order on a thread of its own
 (`ProjectHistory::persistLater`), joined with what is queued behind one already
-writing. What may read the project's files waits for it first. A document of a view
+writing. What may read the project's files waits for it first. A transaction encodes
+and formats only the tables the edit changed: a table whose rows print as the
+committed ones do (a zero's sign included) copies its committed encoding and keeps
+its file, checked against the file budget at the size this history last wrote, and a
+row equal to the committed row at its address keeps its admission wherever it moved
+(`normalizeTable`). An edit hands the history the one table it changed
+(`ProjectHistory::persistTable`), whose state keeps each table shared with every state
+that leaves it as it was: the others are neither copied nor read again. Patches and
+names are kept row by row (`ProjectHistory::keepsRows`): an edit of them shares every
+row it leaves, each printed once, so a rename costs the same with thousands of names
+as with none. A document of a view
 notes the addresses its render read, whether the engine rendered it then or a store
 kept it (`neverd_user_reads`), and those its decoration looked up, and reads what such
 an edit reached when it is next asked for, so the edit leaves the owner's other
@@ -5937,6 +5963,10 @@ a prefix-cache entry; wide literals retain their accounted APInt path.
 Ordinary HighIR expression cleanup also uses an iterative operand walk, keeping
 its large local-rewrite frame off nested worker stacks. Operand order, shared
 node visitation and ordered-memory guards remain unchanged.
+Ordered-memory ancestry records boundary-bearing leaves directly and seeds
+their parents for propagation. Only expressions with children need reverse
+edges; indirect call targets remain children. Each invocation rebuilds its
+facts from the current graph.
 Long odd-product blocks can recursively pair exact modular signatures. A
 signature preserves the complete word except for its highest observed bit;
 that bit's correction may itself depend on the inputs. Addition, XOR, constant

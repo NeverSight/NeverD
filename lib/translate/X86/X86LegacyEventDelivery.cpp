@@ -541,7 +541,7 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                       const X86LegacyEvent &Input,
                       const X86LegacyExecutionOptions &Options) {
   if (State.PendingStack || State.PendingMpx || State.PendingTransfer ||
-      detail::legacyTaskInstructionPending(State) ||
+      State.PendingControl || detail::legacyTaskInstructionPending(State) ||
       detail::legacyTaskEventPending(State))
     return invalid("resume the pending legacy instruction before events");
   if (State.PendingEvent)
@@ -600,7 +600,7 @@ resumeX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
     return R;
   }
   if (State.PendingStack || State.PendingMpx || State.PendingTransfer ||
-      detail::legacyTaskInstructionPending(State))
+      State.PendingControl || detail::legacyTaskInstructionPending(State))
     return invalid("resume the pending legacy instruction before events");
   if (!State.PendingEvent || !validEvent(State.PendingEvent->Event))
     return invalid("no valid pending legacy event to resume");

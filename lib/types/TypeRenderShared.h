@@ -20,6 +20,7 @@
 
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/Support/Allocator.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -92,7 +93,9 @@ private:
   Language Reserved;
   /// Every library name, with only changed spellings stored as values.
   /// An empty value identifies an unchanged name without normalizing it again.
-  llvm::StringMap<std::string> Types;
+  /// Map entries share the table's lifetime; returned spellings own their
+  /// bytes.
+  llvm::StringMap<std::string, llvm::BumpPtrAllocator> Types;
   std::map<const EnumDef *, std::vector<std::string>> Enumerators;
   std::vector<std::pair<std::string, std::string>> Renamed;
 };

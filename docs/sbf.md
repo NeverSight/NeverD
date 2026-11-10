@@ -1106,6 +1106,14 @@ inputs keep the existing path with known branch successors. Range inputs use
 the canonical branch refinements, join forward CFG edges, and join every
 reachable return. For an unknown fixed cell, forward paths remain separate until
 return so a saved condition does not lose its associated value bound at a join.
+Full-width unsigned ordering comparisons also narrow both bounded operands,
+using the least restrictive endpoint of every alternative on the opposite side.
+For example, `index < {0, 1}` permits only index zero. The endpoints are captured
+before either operand's aliases change. This introduces no range for an
+otherwise unknown ordinary scalar and no new loop state or budget. Equality and
+inequality still require a literal opposite operand; a jump to its own
+fallthrough establishes neither outcome. Signed and truncated comparisons do
+not inherit these unsigned bounds.
 Within these acyclic paths, an unsigned subtraction followed by its borrow
 comparison bounds the result using the known subtrahend. The local instruction
 chain must prove that neither comparison operand nor the subtrahend was

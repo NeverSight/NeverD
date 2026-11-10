@@ -149,7 +149,8 @@ llvm::Error validateLegacyTransferContinuation(
     return llvm::Error::success();
   const auto &P = *S.PendingTransfer;
   if (S.PendingEvent || S.PendingStack || S.PendingMpx || S.PendingTask ||
-      Instruction != llvm::ArrayRef(P.Instruction) || !P.matches(S, M, O) ||
+      S.PendingControl || Instruction != llvm::ArrayRef(P.Instruction) ||
+      !P.matches(S, M, O) ||
       (P.Kind == X86LegacyTransferKind::Far
            ? O.FarTransfers != X86LegacyFarTransferProfile::OrderedFrame
            : O.Returns != X86LegacyReturnProfile::OrderedFrame))

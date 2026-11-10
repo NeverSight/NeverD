@@ -78,6 +78,12 @@ TEST_P(X86CompatibilityPagingNativeTest, WrapPermissionsAndLimitsMatchCPU) {
     Registers.rsp = Stack;
     Registers.rflags = 2;
     Registers.rax = 0x44332211;
+    // The fixture rewrites page tables between independent cases. Restoring
+    // the same CR3 through SET_SREGS need not invalidate cached translations.
+    // Change roots before restoring the tested state, as compare() does.
+    auto Flush = Native;
+    Flush.cr3 = 0x90000;
+    ASSERT_EQ(ioctl(CPU, KVM_SET_SREGS, &Flush), 0) << errno;
     ASSERT_EQ(ioctl(CPU, KVM_SET_SREGS, &Native), 0) << errno;
     ASSERT_EQ(ioctl(CPU, KVM_SET_REGS, &Registers), 0) << errno;
     kvm_guest_debug Debug{};

@@ -124,9 +124,11 @@ restart state. Partial completion for REP, gather/scatter, XSAVE and related
 instructions remains separate; the failure-atomic operand primitive alone is
 not their instruction model.
 
-Other remaining domains include legacy i386 segment/task-gate execution,
-SMI entry, SGX AEX/enclave execution, APIC/device arrival, MMIO, EPT/NPT/HLAT,
-LAM/LASS, bus-lock/split-lock fault routing and CET/FRED entry. The wrapped GDT
+Protected segment and task-gate execution use the separate
+[legacy owner](x86-legacy-segments.md). Mixed-mode instruction dispatch, SMI
+entry, SGX AEX/enclave execution, APIC/device arrival, MMIO, EPT/NPT/HLAT,
+LAM/LASS, bus-lock/split-lock fault routing and CET/FRED entry remain separate
+domains. The wrapped GDT
 CPU case binds A=1: with A=0 the host raises #AC on its split locked descriptor
 update, and KVM exits with `KVM_INTERNAL_ERROR_SIMUL_EX` during #PF entry.
 That failed oracle is retained, not counted as a passing A-bit update.

@@ -41,17 +41,22 @@ decodeLegacyControlRegister(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
                                      R.Group1Prefix == 0xf0};
 }
 
+llvm::Error validateLegacyControlContinuation(
+    const X86LegacyExecutionState &State, const X86PagedMemory &Memory,
+    const X86LegacyExecutionOptions &Options,
+    std::optional<llvm::ArrayRef<uint8_t>> Instruction = std::nullopt);
+uint64_t legacyControlInstructionKey(const X86LegacyExecutionState &State);
+
 llvm::Error
 validateLegacyControlBinding(const X86PagedMemory &Memory,
                              const X86LegacyControlRegisterBinding &Binding);
 
 /// The caller commits these staged banks only on success, before post-step
 /// events. Physical PDPTE reads never produce linear data breakpoints.
-llvm::Expected<X86MemoryAccessResult>
-executeLegacyControlRegister(X86LegacyExecutionState &Next,
-                             X86PagingState &Controls, X86PagedMemory &Memory,
-                             const X86LegacyControlInstruction &Instruction,
-                             const X86LegacyControlRegisterBinding &Binding);
+llvm::Expected<X86MemoryAccessResult> executeLegacyControlRegister(
+    X86LegacyExecutionState &Next, X86PagingState &Controls,
+    X86PagedMemory &Memory, const X86LegacyControlInstruction &Instruction,
+    llvm::ArrayRef<uint8_t> Bytes, const X86LegacyExecutionOptions &Options);
 
 } // namespace neverd::translate::detail
 

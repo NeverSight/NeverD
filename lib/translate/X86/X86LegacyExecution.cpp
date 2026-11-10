@@ -121,13 +121,15 @@ validateX86LegacyInstructionEncoding(llvm::ArrayRef<uint8_t> Instruction,
 llvm::Error detail::admitLegacyExecution(const X86LegacyExecutionState &S,
                                          X86PagedMemory &M,
                                          const X86LegacyExecutionOptions &O) {
+  if (auto Error = detail::validateLegacyControlContinuation(S, M, O))
+    return Error;
   if ((S.EFlags & 0x20000) && O.Virtual8086 != X86LegacyVM86Profile::IntelVME)
     return invalid("VM86 execution requires a bound Intel VME profile");
   if (!O.EventDelivery.MaxAttempts)
     return invalid("event delivery requires a positive work budget");
-  if (S.Halted &&
-      (S.Core.CPL || S.STIBlocked || S.SSBlocked || S.PendingStack ||
-       S.PendingMpx || S.PendingTask || S.PendingTransfer || S.PendingEvent))
+  if (S.Halted && (S.Core.CPL || S.STIBlocked || S.SSBlocked ||
+                   S.PendingStack || S.PendingMpx || S.PendingTask ||
+                   S.PendingTransfer || S.PendingControl || S.PendingEvent))
     return invalid("legacy halt state requires completed CPL0 HLT state");
   if (bool(S.Debug) != bool(O.Debug) ||
       (S.PendingEvent && S.PendingEvent->DataBreakpoints &&
@@ -164,11 +166,22 @@ llvm::Error detail::admitLegacyExecution(const X86LegacyExecutionState &S,
   return M.bindControls(Controls);
 }
 
-llvm::Expected<X86LegacyExecutionResult>
-executeX86LegacyInstruction(X86LegacyExecutionState &State,
-                            X86PagedMemory &Memory,
-                            llvm::ArrayRef<uint8_t> Instruction,
-                            const X86LegacyExecutionOptions &Options) {
+static bool retainsLegacyInstruction(const X86LegacyExecutionState &State) {
+  return State.PendingStack || State.PendingMpx || State.PendingTransfer ||
+         State.PendingControl || detail::legacyTaskInstructionPending(State);
+}
+
+bool detail::legacyInstructionPending(const X86LegacyExecutionState &State) {
+  return !State.PendingEvent && retainsLegacyInstruction(State);
+}
+
+static llvm::Expected<X86LegacyExecutionResult>
+executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
+                         llvm::ArrayRef<uint8_t> Instruction,
+                         const X86LegacyExecutionOptions &Options) {
+  if (auto Error = detail::validateLegacyControlContinuation(
+          State, Memory, Options, Instruction))
+    return std::move(Error);
   if (detail::legacyTaskModeUnavailable(State) &&
       Options.Virtual8086 != X86LegacyVM86Profile::IntelVME) {
     if (auto Error = detail::validateLegacyTaskState(State, Memory))
@@ -200,8 +213,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     return std::move(Error);
   const bool ResumingStack = State.PendingStack.has_value();
   const bool ResumingTask = detail::legacyTaskInstructionPending(State);
-  const bool Resuming = ResumingStack || State.PendingMpx.has_value() ||
-                        bool(State.PendingTransfer) || ResumingTask;
+  const bool Resuming = detail::legacyInstructionPending(State);
+  const bool Attempted = !(Resuming && State.PendingInstructionAttempted);
   const bool Code32 = ResumingTask
                           ? bool(detail::legacyTaskInstructionKey(State) >> 32)
                           : bool(State.Core.Segments[1].Attributes & 0x4000);
@@ -409,7 +422,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       return Delivered.takeError();
     Delivered->DeviceTransferCompleted = R.DeviceTransferCompleted;
     Delivered->PortInputBytesWritten = R.PortInputBytesWritten;
-    Delivered->InstructionAttempted = !Resuming;
+    Delivered->InstructionAttempted = Attempted;
     Delivered->InstructionCompleted =
         Completed && (Event.Kind == X86LegacyEventKind::Trap ||
                       Delivered->SoftwareCompleted);
@@ -441,7 +454,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   const auto FinishTask = [&](const detail::X86LegacyTaskResult &Got)
       -> llvm::Expected<X86LegacyExecutionResult> {
     Accept(Got);
-    R.InstructionAttempted = !Resuming;
+    R.InstructionAttempted = Attempted;
     if (Got.ModeUnavailable) {
       detail::retainLegacyTaskWatchpoints(State, Observation.Matches);
       R.Status = X86LegacyExecutionStatus::ModeUnavailable;
@@ -534,7 +547,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     detail::retainLegacyTransferWatchpoints(State, Observation.Matches);
     if (!Got)
       return Got.takeError();
-    R.InstructionAttempted = !Resuming;
+    R.InstructionAttempted = Attempted;
     if (Accept(*Got)) {
       State = Returned;
       State.SSBlocked = State.STIBlocked = false;
@@ -565,17 +578,12 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   auto NextIP = uint32_t(State.EIP + Instruction.size());
   if (!R.Exception && ControlRegister) {
     auto Staged = State;
-    auto Got = detail::executeLegacyControlRegister(Staged, NextControls,
-                                                    Memory, *ControlRegister,
-                                                    *Options.ControlRegisters);
+    auto Got = detail::executeLegacyControlRegister(
+        Staged, NextControls, Memory, *ControlRegister, Instruction, Options);
+    State.PendingControl = Staged.PendingControl;
     if (!Got)
       return Got.takeError();
     if (Accept(*Got)) {
-      if (State.Debug &&
-          !x86InstructionDebugValid(State.Debug->DR6, State.Debug->DR7,
-                                    State.Debug->DebugCTL, *Options.Debug,
-                                    NextControls.CR4, State.Debug->PendingData))
-        return invalid("MOV-CR requests unbound debug controls");
       Next = Staged.Core;
       NextCR2 = Staged.CR2;
     }
@@ -748,7 +756,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       R.Exception = X86MemoryException{6, 0, {}};
     }
   }
-  R.InstructionAttempted = !Resuming;
+  R.InstructionAttempted = Attempted;
   if (R.Exception)
     return Enter({State.EIP, R.Exception->ErrorCode,
                   uint32_t(R.Exception->CR2.value_or(0)), R.Exception->Vector,
@@ -800,6 +808,25 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   if (Step || Data)
     return EnterDebug(Step, !RepeatContinue, Data);
   return R;
+}
+
+llvm::Expected<X86LegacyExecutionResult>
+executeX86LegacyInstruction(X86LegacyExecutionState &State,
+                            X86PagedMemory &Memory,
+                            llvm::ArrayRef<uint8_t> Instruction,
+                            const X86LegacyExecutionOptions &Options) {
+  const bool Consumed =
+      retainsLegacyInstruction(State) && State.PendingInstructionAttempted;
+  auto Result = executeLegacyInstruction(State, Memory, Instruction, Options);
+  // Owner Error may retain real progress without reporting a new attempt.
+  // Entry refusal (including conflicting journals) preserves a consumed
+  // receipt. Only an accepted result can transfer ownership to an event.
+  // Completion or event ownership retires it. It must not be derived from
+  // the source lastResult.
+  State.PendingInstructionAttempted =
+      retainsLegacyInstruction(State) && (!Result || !State.PendingEvent) &&
+      (Consumed || (Result && Result->InstructionAttempted));
+  return Result;
 }
 
 } // namespace neverd::translate

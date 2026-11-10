@@ -341,14 +341,22 @@ REP consumes one per completed element, including its zero-count completion.
 Faulting attempts consume a unit even when fault entry subsequently stops.
 Changed code, pre-attempt fetch backing stops and refused steps consume none.
 An ordered stack instruction consumes one unit when first attempted, including
-when an operand subsequently stops on host backing. Resuming `PendingStack`
-does not consume another unit; an architectural fault followed by handler
-retry is a new attempt. Ordinary IRET/RETF and VM86 far transfers similarly retain
+when an operand subsequently stops on host backing. Resuming an already
+reported `PendingStack` attempt does not consume another unit; an architectural
+fault followed by handler retry is a new attempt. The resource receipt
+`PendingInstructionAttempted` stays with the instruction journal across host
+context reconstruction. Owner errors can retain real memory progress before
+reporting an attempt. Such a journal requires positive budget on resumption,
+then reports exactly one attempt; completed accesses are not replayed. Ordinary IRET/RETF and VM86 far transfers similarly retain
 their original attempt in `PendingTransfer`, including completed frame and
 descriptor accesses. A subsequent debug-event backing stop belongs to the event
 continuation and does not repeat the completed return.
-Zero budget returns 258
-without selection or guest accesses; a null context/budget returns 256.
+Zero budget permits only an instruction continuation whose attempt was already
+reported and charged. Completion stops before selecting another instruction;
+missing backing or refused bindings preserve the retained charge. Without that
+continuation, zero budget returns 258 without selection or guest accesses.
+Pending event delivery, including a task-gate event or a completed return's
+#DB, does not grant instruction budget. A null context/budget returns 256.
 
 Every delivered event stops before executing its handler. A caller can then
 invoke the dispatcher to execute a selected original handler, including a PTE
@@ -372,10 +380,23 @@ events and inhibition remain owned by the existing event implementation.
 No asynchronous event producer or polling interval is inferred.
 
 This provides source selection/continuation for selected, admitted protected
-16/32-bit instructions within complete image extents. It does not supply
-unimplemented instruction banks, ordinary i386 function C, IA-32e compatibility
-mode, task/real/VM86 execution, software SMM/SGX, or native device qualification.
+16/32-bit instructions within complete image extents, including the explicit
+task and VM86 bindings documented below. Unimplemented instruction banks,
+ordinary i386 function C, IA-32e compatibility dispatch, real-mode execution,
+software SMM/SGX and native device qualification remain separate work.
 Global LLVM release remains gated on those separately documented contracts.
+
+The [November 10 resumption qualification](evidence/x86-legacy-resume-budget-2026-11-10.json)
+records 1,350 passing executions with no skips or failures across both SDKs:
+40 focused, 396 related software, 237 complete source and two SDK ownership
+checks per SDK. The red checkpoint fails 28 of the 40 focused cases on each
+SDK before the resource-receipt fix. Both protected and genuine VM86 returns
+continue through paused #DB delivery, with the VM86 path checking all nine
+saved frame fields. Each SDK produces the same 1,022 C/manifest files and 340
+compiled host-x64 libraries. This closes instruction-attempt accounting for
+those covered continuation owners; the later MOV-CR reload contract below adds
+its own retained physical-read progress. This qualification
+does not qualify the remaining mixed-mode or physical execution domains.
 
 The [November 7 source qualification](evidence/x86-legacy-source-2026-11-07.json)
 records 2,075 source, semantic and interface executions across qualification
@@ -1228,9 +1249,10 @@ published before IDT entry and survive failed delivery.
 retains fetched bytes, original inputs, an already-read BDE and data-breakpoint
 matches. Repair only backing while retaining CPU/profile state and RAM, then
 retry the same instruction. Re-reading a BDE is incorrect when the BTE page
-walk has changed its aliased PTE storage. A resumed step consumes no second
-instruction-attempt budget; new external events cannot interrupt this host
-pause. Architectural faults clear the continuation before event delivery.
+walk has changed its aliased PTE storage. An already reported attempt resumes
+without a second instruction-budget charge. An owner error can instead retain
+an uncharged journal, governed by the shared source-resumption rule above. New
+external events cannot interrupt this host pause. Architectural faults clear the continuation before event delivery.
 
 Near CALL/RET/JMP and both short/near Jcc use the original byte-owned BNDINIT
 rule after successful completion, including an untaken Jcc. F2 preserves the
@@ -1590,6 +1612,57 @@ source and ordinary system-state checks, retaining 280 additional compiled
 libraries. The paging executables remain byte-identical to the complete
 qualification. The evidence records this integration commit separately.
 
+## Protected control-register reloads
+
+`X86LegacyExecutionOptions::ControlRegisters` binds the Intel MOV-CR profile
+for CR0, CR2, CR3 and CR4. The existing original-byte decoder fixes the operand
+width at 32 bits in both guest code16 and code32. The selected profile preserves
+undefined arithmetic flags, fixes CR0.ET, retains ignored CR3 source bits and
+checks reserved bits in present PAE entries. Paging features remain owned by
+`X86PagingFeatures`; other CR4 capabilities come from the explicit binding.
+
+A CR0/CR3/CR4 operation that reloads PAE PDPTEs publishes the entire new control
+and four-entry cache bank only after all physical reads succeed. Missing backing
+retains an immutable `PendingControl` token with the original bytes, CPU state,
+paging features, control/debug bindings and completed read prefix. Preserve this
+with RAM when reconstructing the source context and repair unavailable backing.
+The same accepted instruction resumes at zero remaining instruction budget,
+without refetching, rechecking execution breakpoints or rereading completed
+entries. No following instruction executes at zero budget.
+
+Changed inputs or conflicting continuation state produce a checked refusal.
+An entry refusal retains the accepted instruction's resource receipt; removing
+the conflict does not require another attempt. A reserved new PDPTE instead
+raises architectural #GP, retires the instruction token, and enters the event
+owner using the complete old control bank. A successful reload commits before
+post-step #DB and selects the new address space for that event. Either event
+can pause independently; event progress never grants another instruction budget.
+PDPTE physical reads do not count as linear data-watchpoint accesses.
+
+Candidate paging and debug domains are admitted before PDPT reads. Initial
+instruction fetch can already have published A/D effects. A valid request for
+an unbound CET or debug domain produces an embedding error, without creating
+an unresumable read journal. An inactive old cached PDPTE bank is irrelevant to
+this admission; it is replaced only by the validated newly read values.
+
+The architectural control rules are described by
+[Intel SDM Volume 2B](https://cdrdv2.intel.com/v1/dl/getContent/671241) and the
+[PDPTE/paging-mode rules in Volume 3A](https://cdrdv2.intel.com/v1/dl/getContent/671190).
+Host backing continuations are an explicit runtime contract, separate from the
+original KVM instruction comparisons. These changes add no NeverC 32-bit source
+target and do not admit real/IA-32e execution-mode transitions, software SMM/SGX,
+TLB timing or external memory writers.
+
+The [November 10 MOV-CR qualification](evidence/x86-control-resume-2026-11-10.json)
+records 1,594 passing executions across both SDKs, including 11,096 original
+control-register comparisons on both bound CPU core types. Two native LA57
+cases are unavailable. All 16 focused cases fail before the fix on each SDK
+and pass after it. The full host-x64 Clang/NeverC O0/O2 source suite produces
+1,810 identical files per SDK, including 452 shared libraries; all 1,362 prior
+source artifacts and 260 return C/header/manifest files remain unchanged.
+Build failures and the superseded stale-object attempt are retained separately
+from the passing qualification, with exact source and binary identities.
+
 ## Protected task transfers
 
 The `X86LegacyExecutionOptions::Tasks` binding with `OrderedTSS` connects far CALL/JMP
@@ -1750,3 +1823,12 @@ After integrating dev's type-name rendering changes, both SDKs pass another
 862 type, generated-source and C/Python bridge checks, retaining identical
 exports. Ten optional UCRT/provider and kernel-PDB fixture checks are skipped
 across the two SDKs; the evidence lists their exact missing inputs separately.
+
+The same evidence records subsequent integration of the concurrent MIPS/dependency
+and C backend changes. Each integration passed 1,490 checks across both SDKs,
+with two unavailable LA57 cases. C integration also exposed stale native-oracle
+translations between independently rewritten compatibility page tables. The
+fixture now changes CR3 before restoring each case. Both SDKs then passed 100
+repetitions on each of the two bound CPU core types: 400 executions and 2,800
+original instruction comparisons. Initial failures remain in the evidence.
+The source and return exports stayed byte-identical to their qualified baselines.
