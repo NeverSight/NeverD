@@ -124,7 +124,15 @@ the register transfer's 32-bit width or add a memory operand. The owner checks
 architectural faults before staging CR0/CR2/CR3/CR4, uses `loadX86PAEPDPTE` for
 the specified PAE reload triggers, and publishes the complete control bank
 before post-instruction debug delivery. Failed loads retain the previous
-CR3 and all four PDPTEs. The following fetch uses the new mapping. Generated
+CR3 and all four PDPTEs. `PendingControl` freezes the original bytes, complete
+entry CPU/debug/shadow state, paging features and control/debug bindings across
+host backing stops. The paging owner retains its four-entry physical read prefix;
+resumption does not refetch, repeat execution-breakpoint checks or spend another
+reported instruction attempt. Candidate paging/debug domains are admitted before
+PDPT reads, independently of the old inactive PDPTE cache. Instruction fetch can
+already have changed A/D bits before this domain check. Guest faults retire the
+instruction token before old-address-space event entry; completion publishes the
+new bank before post-step #DB. The following fetch uses the new mapping. Generated
 protected C reuses this owner. Valid real/IA-32e transfers and unbound memory
 domains refuse explicitly; they are not converted into invented #GP faults.
 CLAC/STAC use the existing target SMAP capability and raise #UD when it is

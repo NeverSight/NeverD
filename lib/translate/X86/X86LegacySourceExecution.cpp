@@ -9,6 +9,7 @@
 
 #include "neverd/translate/X86/X86LegacySourceExecution.h"
 
+#include "X86LegacyControlRegisters.h"
 #include "X86LegacyExecutionInternal.h"
 #include "X86LegacyTaskSwitch.h"
 
@@ -19,6 +20,8 @@
 namespace neverd::translate {
 
 uint64_t X86LegacySourceExecution::key() const {
+  if (State.PendingControl)
+    return detail::legacyControlInstructionKey(State);
   if (detail::legacyTaskInstructionPending(State))
     return detail::legacyTaskInstructionKey(State);
   const auto &CS = State.Core.Segments[1];

@@ -301,14 +301,21 @@ llvm::Expected<X86PageWalkResult> walkX86PageTables(GuestMemoryRuntime &Memory,
 
 llvm::Expected<X86PageWalkResult>
 loadX86PAEPDPTE(GuestMemoryRuntime &Memory, const X86PagingFeatures &F,
-                uint64_t CR3, std::array<uint64_t, 4> &PDPTE) {
+                uint64_t CR3, std::array<uint64_t, 4> &PDPTE,
+                X86PAEPDPTEContinuation *Continuation) {
   if (!validFeatures(F))
     return invalid("x86 paging requires MAXPHYADDR in 32..52");
   if (!F.PAE)
     return invalid("PDPTE reload requires a CPU with PAE");
+  X86PAEPDPTEContinuation Local;
+  auto &P = Continuation ? *Continuation : Local;
+  if (P.Features && (*P.Features != F || P.CR3 != CR3))
+    return invalid("resume the retained PDPTE read with the same CPU and CR3");
+  P.Features = F;
+  P.CR3 = CR3;
   X86PageWalkResult Result;
-  std::array<uint64_t, 4> Loaded{};
-  for (unsigned I = 0; I != Loaded.size(); ++I) {
+  for (; P.Next != P.Entries.size(); ++P.Next) {
+    const unsigned I = P.Next;
     auto Read =
         Memory.loadScalar((CR3 & 0xffffffe0) + I * 8, GuestScalarWidth::I64);
     if (Read.Status == GuestMemoryAccessStatus::Fault) {
@@ -316,14 +323,15 @@ loadX86PAEPDPTE(GuestMemoryRuntime &Memory, const X86PagingFeatures &F,
       Result.BackingFault = Read.Fault;
       return Result;
     }
-    Loaded[I] = Read.Value;
-    if ((Loaded[I] & Present) && (Loaded[I] & paeReserved(F))) {
+    P.Entries[I] = Read.Value;
+    if ((P.Entries[I] & Present) && (P.Entries[I] & paeReserved(F))) {
+      P = {};
       Result.Status = X86PageWalkStatus::Exception;
       Result.Exception = X86MemoryException{13, 0, std::nullopt};
       return Result;
     }
   }
-  PDPTE = Loaded;
+  PDPTE = P.Entries;
   return Result;
 }
 

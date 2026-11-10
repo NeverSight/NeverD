@@ -596,7 +596,17 @@ Run these with both SDKs and qualified P/E cores, plus shared scalar,
 segment/query and ordinary system-state regressions.
 
 `X86LegacyControlTest.*`, `LegacyControl/*` and the `ControlRegister*` cases in
-`NeverDX86LegacySourceTests` cover protected MOV-CR. The fixed-value and
+`NeverDX86LegacySourceTests` cover protected MOV-CR. The `ControlReload*`
+cases also exercise all four backing stops for CR0/CR3/CR4 in code16/code32,
+retained read prefixes, original code authentication, changed input/profile
+refusals, reconstructed contexts and exact one-attempt/zero-budget completion.
+Inactive malformed old PDPTE caches must not reject a valid reload. Separate
+cases prove #GP uses the old address space and post-completion #DB uses the new
+one, including a second event backing stop; RF/SS/STI and physical-read watchpoint
+exclusion remain checked across suspension. Controlled code/PDPTE fault injection
+proves reads are retained; this is not a concurrent-memory execution contract.
+Candidate unbound CET or I/O-debug controls refuse before PDPT reads, even when
+that physical backing is unavailable. The fixed-value and
 original KVM cases vary code width, prefixes, all GPRs and ignored ModR/M mod
 bits; test CR0 normalization, privilege/#UD/#GP ordering and CR3/CR4 changes;
 and compare full controls, registers and flags. Software and generated C also

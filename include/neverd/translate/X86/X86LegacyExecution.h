@@ -30,6 +30,7 @@
 namespace neverd::translate {
 
 namespace detail {
+struct X86LegacyControlContinuation;
 struct X86LegacyTaskContinuation;
 struct X86LegacyTransferContinuation;
 } // namespace detail
@@ -150,6 +151,11 @@ struct X86LegacyExecutionState {
   /// this opaque state with the CPU, bindings and original instruction bytes;
   /// repair only backing. Completed RAM accesses are never repeated.
   std::shared_ptr<const detail::X86LegacyTransferContinuation> PendingTransfer;
+  /// MOV-CR retains original inputs and completed physical PDPTE reads
+  /// across unavailable backing. Controls publish atomically after all four
+  /// reads. Preserve this immutable token with CPU/RAM when rebuilding a
+  /// source context; only the control owner may retire it.
+  std::shared_ptr<const detail::X86LegacyControlContinuation> PendingControl;
   /// Resource receipt for a retained instruction, not guest CPU state. A
   /// journal can exist after an owner Error before an attempt was reported.
   /// Preserve this with instruction progress across context reconstruction;

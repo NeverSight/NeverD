@@ -393,7 +393,9 @@ checks per SDK. The red checkpoint fails 28 of the 40 focused cases on each
 SDK before the resource-receipt fix. Both protected and genuine VM86 returns
 continue through paused #DB delivery, with the VM86 path checking all nine
 saved frame fields. Each SDK produces the same 1,022 C/manifest files and 340
-compiled host-x64 libraries. This closes instruction-attempt accounting; it
+compiled host-x64 libraries. This closes instruction-attempt accounting for
+those covered continuation owners; the later MOV-CR reload contract below adds
+its own retained physical-read progress. This qualification
 does not qualify the remaining mixed-mode or physical execution domains.
 
 The [November 7 source qualification](evidence/x86-legacy-source-2026-11-07.json)
@@ -1609,6 +1611,47 @@ After the later SBF-only dev integration, both rebuilt SDKs pass another 260
 source and ordinary system-state checks, retaining 280 additional compiled
 libraries. The paging executables remain byte-identical to the complete
 qualification. The evidence records this integration commit separately.
+
+## Protected control-register reloads
+
+`X86LegacyExecutionOptions::ControlRegisters` binds the Intel MOV-CR profile
+for CR0, CR2, CR3 and CR4. The existing original-byte decoder fixes the operand
+width at 32 bits in both guest code16 and code32. The selected profile preserves
+undefined arithmetic flags, fixes CR0.ET, retains ignored CR3 source bits and
+checks reserved bits in present PAE entries. Paging features remain owned by
+`X86PagingFeatures`; other CR4 capabilities come from the explicit binding.
+
+A CR0/CR3/CR4 operation that reloads PAE PDPTEs publishes the entire new control
+and four-entry cache bank only after all physical reads succeed. Missing backing
+retains an immutable `PendingControl` token with the original bytes, CPU state,
+paging features, control/debug bindings and completed read prefix. Preserve this
+with RAM when reconstructing the source context and repair unavailable backing.
+The same accepted instruction resumes at zero remaining instruction budget,
+without refetching, rechecking execution breakpoints or rereading completed
+entries. No following instruction executes at zero budget.
+
+Changed inputs or conflicting continuation state produce a checked refusal.
+An entry refusal retains the accepted instruction's resource receipt; removing
+the conflict does not require another attempt. A reserved new PDPTE instead
+raises architectural #GP, retires the instruction token, and enters the event
+owner using the complete old control bank. A successful reload commits before
+post-step #DB and selects the new address space for that event. Either event
+can pause independently; event progress never grants another instruction budget.
+PDPTE physical reads do not count as linear data-watchpoint accesses.
+
+Candidate paging and debug domains are admitted before PDPT reads. Initial
+instruction fetch can already have published A/D effects. A valid request for
+an unbound CET or debug domain produces an embedding error, without creating
+an unresumable read journal. An inactive old cached PDPTE bank is irrelevant to
+this admission; it is replaced only by the validated newly read values.
+
+The architectural control rules are described by
+[Intel SDM Volume 2B](https://cdrdv2.intel.com/v1/dl/getContent/671241) and the
+[PDPTE/paging-mode rules in Volume 3A](https://cdrdv2.intel.com/v1/dl/getContent/671190).
+Host backing continuations are an explicit runtime contract, separate from the
+original KVM instruction comparisons. These changes add no NeverC 32-bit source
+target and do not admit real/IA-32e execution-mode transitions, software SMM/SGX,
+TLB timing or external memory writers.
 
 ## Protected task transfers
 
