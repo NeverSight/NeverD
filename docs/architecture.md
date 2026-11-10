@@ -5123,7 +5123,10 @@ its file, checked against the file budget at the size this history last wrote, a
 row equal to the committed row at its address keeps its admission wherever it moved
 (`normalizeTable`). An edit hands the history the one table it changed
 (`ProjectHistory::persistTable`), whose state keeps each table shared with every state
-that leaves it as it was: the others are neither copied nor read again. A document of a view
+that leaves it as it was: the others are neither copied nor read again. Patches and
+names are kept row by row (`ProjectHistory::keepsRows`): an edit of them shares every
+row it leaves, each printed once, so a rename costs the same with thousands of names
+as with none. A document of a view
 notes the addresses its render read, whether the engine rendered it then or a store
 kept it (`neverd_user_reads`), and those its decoration looked up, and reads what such
 an edit reached when it is next asked for, so the edit leaves the owner's other

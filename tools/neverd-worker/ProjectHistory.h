@@ -54,6 +54,12 @@ public:
   };
   using PatchRows = std::vector<std::shared_ptr<const PatchRow>>;
   static std::shared_ptr<const PatchRow> patchRow(Json row);
+  /// A row of \p table, admitted, where the history keeps that table row by
+  /// row (keepsRows): patches and renames, each row shared by every state that
+  /// keeps it and printed once.
+  static std::shared_ptr<const PatchRow> tableRow(const std::string &table,
+                                                  Json row);
+  static bool keepsRows(std::string_view table);
 
   ProjectHistory(std::filesystem::path binary, std::string sourceHash,
                  std::string engineVersion, bool readOnly, AtomicWriter writer);
@@ -62,6 +68,8 @@ public:
   const Json &committedState() const;
   const Json &committedTable(const std::string &name) const;
   const PatchRows &committedPatches() const;
+  /// The committed rows of a table kept row by row.
+  const PatchRows &committedRows(const std::string &table) const;
   Json listing(std::size_t offset, std::size_t limit) const;
   /// Navigation/logging uses a patch row's virtual address, not its file key.
   static std::uint64_t displayAddress(const Json &command);
@@ -96,6 +104,11 @@ public:
   /// Reuse admitted rows, retaining all other tables. Sequence ordering,
   /// uniqueness, file checks and transaction budgets still apply.
   void persistPatches(PatchRows rows);
+  /// As persistTable and persistTableLater, for a table kept row by row: \p
+  /// rows are its rows after the edit, the unchanged ones shared and printed
+  /// once.
+  void persistRows(const std::string &table, PatchRows rows);
+  void persistRowsLater(const std::string &table, PatchRows rows);
   /// Called after each persist commits the project's files.
   void onCommit(std::function<void()> hook) { committed_ = std::move(hook); }
   void reset();

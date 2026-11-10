@@ -696,6 +696,80 @@ void tableEditsPersistAsTheirState() {
             !ProjectHistory::recoveryPending(table.binary),
         "An interrupted table write lost a table");
 }
+void rowEditsPersistAsTheirState() {
+  // Renames are kept row by row: an edit of their rows persists as the whole
+  // state with those rows does, and the rows it leaves stay the same objects.
+  const auto files = [](const Fixture &fixture) {
+    std::vector<std::string> texts;
+    for (const auto id :
+         {files::File::Annotations, files::File::Renames, files::File::History})
+      texts.push_back(fs::exists(fixture.path(id)) ? text(fixture.path(id))
+                                                   : std::string());
+    return texts;
+  };
+  Fixture whole, rows;
+  auto wholeStore = whole.open(), rowStore = rows.open();
+  auto state = initial(wholeStore);
+  initial(rowStore);
+  check(ProjectHistory::keepsRows("renames") &&
+            ProjectHistory::keepsRows("patches") &&
+            !ProjectHistory::keepsRows("items"),
+        "Wrong tables kept row by row");
+  rejects([&] { ProjectHistory::tableRow("items", Json::object()); },
+          "history_invalid");
+  rejects([&] { (void)rowStore.committedRows("items"); }, "history_invalid");
+  rejects([&] { rowStore.persistRows("items", {}); }, "history_invalid");
+  auto renames = rowStore.committedRows("renames");
+  const auto first = renames.front();
+  for (const char *address : {"0x500", "0x2000"})
+    renames.push_back(ProjectHistory::tableRow(
+        "renames", {{"addr", address}, {"original", "f"}, {"renamed", "g"}}));
+  for (const char *address : {"0x500", "0x2000"})
+    state["renames"].push_back(
+        {{"addr", address}, {"original", "f"}, {"renamed", "g"}});
+  wholeStore.persist(state);
+  rows.writer.clear();
+  rowStore.persistRows("renames", renames);
+  check(files(whole) == files(rows) &&
+            rowStore.committedState() == wholeStore.committedState(),
+        "Rows persisted otherwise than their whole state");
+  check(rows.writer.calls ==
+            std::vector<fs::path>{rows.path(files::File::Journal),
+                                  rows.path(files::File::Renames),
+                                  rows.path(files::File::History)},
+        "Rows wrote files outside their table and journal/history");
+  const auto &kept = rowStore.committedRows("renames");
+  check(kept.size() == 3 && kept[1] == first &&
+            kept.front()->address() == 0x500,
+        "Rows left as they were did not stay the same objects in order");
+  // Behind the reply, the same once written.
+  auto later = rowStore.committedRows("renames");
+  later[1] = ProjectHistory::tableRow(
+      "renames",
+      {{"addr", "0x1000"}, {"original", "function"}, {"renamed", "later"}});
+  state["renames"][0]["renamed"] = "later";
+  wholeStore.persist(state);
+  rowStore.persistRowsLater("renames", later);
+  rowStore.finishWrites();
+  check(files(whole) == files(rows), "Rows written later wrote otherwise");
+  // An interrupted rows write completes with the next one, which keeps it.
+  rows.writer.clear();
+  rows.writer.failAt = 1;
+  auto interrupted = rowStore.committedRows("renames");
+  interrupted.pop_back();
+  rejects([&] { rowStore.persistRows("renames", interrupted); },
+          "injected_failure");
+  rows.writer.clear();
+  auto annotations = state.at("annotations");
+  annotations[0]["text"] = "after the interruption";
+  rowStore.persistTable("annotations", annotations);
+  state["renames"].erase(state["renames"].end() - 1);
+  state["annotations"] = annotations;
+  wholeStore.persist(state);
+  check(rows.open().committedState() == wholeStore.committedState() &&
+            !ProjectHistory::recoveryPending(rows.binary),
+        "An interrupted rows write lost its rows");
+}
 void changedAddressSequence() {
   Fixture fixture;
   auto store = fixture.open();
@@ -1128,6 +1202,7 @@ int main() {
     stateEncodingAndSidecars();
     unchangedTablesKeepTheirBytes();
     tableEditsPersistAsTheirState();
+    rowEditsPersistAsTheirState();
     changedAddressSequence();
     commandBudgetCountsEncodedBytes();
     budgetBeforePublication();

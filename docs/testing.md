@@ -6677,7 +6677,9 @@ encoded anew, a table left as it was keeps its bytes while another changes, and 
 row put between others or rows out of order take their place by address. A table's edit
 persists exactly as its whole state does and writes only its table, what is no table
 of rows is refused unwritten, and after an interrupted table write the next one keeps
-the tables that write completed. It compares complete published journals for first and later saves with
+the tables that write completed. Renames kept row by row persist as their whole state
+does, write only their file, leave the rows they keep the same objects, and survive
+an interrupted rows write. It compares complete published journals for first and later saves with
 escaped/Unicode annotation text, then verifies retry and reopening. History and
 journal budget cases must refuse before publishing any transaction file.
 It also checks independent rollback checkpoints, equivalent file reformatting,

@@ -4790,16 +4790,17 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       };
       const bool patch = command.at("kind") == "patch";
       const std::string table =
-          patch ? std::string()
-                : ProjectHistory::tableOfKind(
-                      command.at("kind").get<std::string>());
+          ProjectHistory::tableOfKind(command.at("kind").get<std::string>());
+      const bool byRow = ProjectHistory::keepsRows(table);
       Json rows;
       ProjectHistory::PatchRows patches;
-      if (patch) {
-        patches = store.committedPatches();
+      if (byRow) {
+        patches = store.committedRows(table);
         replay(
             patches, [](const auto &row) { return row->address(); },
-            ProjectHistory::patchRow);
+            [&](const Json &side) {
+              return ProjectHistory::tableRow(table, side);
+            });
       } else {
         rows = store.committedTable(table);
         replay(
@@ -4815,6 +4816,8 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       try {
         if (patch)
           store.persistPatches(std::move(patches));
+        else if (byRow)
+          store.persistRows(table, std::move(patches));
         else
           store.persistTable(table, std::move(rows));
       } catch (...) {
@@ -6176,30 +6179,29 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                   "The name " + name + " is used at " + hexAddress(*other));
     const int index = neverd_func_find_by_addr(session_, address);
     auto &store = history();
-    Json table = store.committedTable("renames");
-    auto &renames = table.get_ref<Json::array_t &>();
     // The committed rows lie in address order: the row of this address, or
-    // the place a new one takes, as the history would sort it.
-    const auto rowAddress = [](const Json &row) {
-      return parseAddress(row.at("addr").get_ref<const std::string &>());
-    };
+    // the place a new one takes, each row shared with the committed state.
+    auto renames = store.committedRows("renames");
     auto at = std::lower_bound(renames.begin(), renames.end(), address,
-                               [&](const Json &row, std::uint64_t key) {
-                                 return rowAddress(row) < key;
+                               [](const auto &row, std::uint64_t key) {
+                                 return row->address() < key;
                                });
-    const bool found = at != renames.end() && rowAddress(*at) == address;
-    Json before = found ? *at : Json(nullptr);
+    const bool found = at != renames.end() && (*at)->address() == address;
+    const Json before = found ? (*at)->value() : Json(nullptr);
+    Json row =
+        found
+            ? before
+            : Json{{"addr", hexAddress(address)},
+                   {"original",
+                    index >= 0 ? ownedString(neverd_func_name(session_, index))
+                               : listing().nameAt(address)}};
+    row["renamed"] = name;
+    auto admitted = ProjectHistory::tableRow("renames", std::move(row));
+    const Json after = admitted->value();
     if (found)
-      (*at)["renamed"] = name;
-    else {
-      Json row = {{"addr", hexAddress(address)},
-                  {"original",
-                   index >= 0 ? ownedString(neverd_func_name(session_, index))
-                              : listing().nameAt(address)},
-                  {"renamed", name}};
-      at = renames.insert(at, std::move(row));
-    }
-    const Json after = *at;
+      *at = std::move(admitted);
+    else
+      renames.insert(at, std::move(admitted));
     settleNamedViews();
     // The session takes the name from here, so the reply need not wait for the
     // disk (ProjectHistory::persistLater).
@@ -6211,10 +6213,10 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                  {"before", before},
                  {"after", after}});
     try {
-      if (take)
-        persistTableEdit(store, "renames", std::move(table));
+      if (take && writeBehind_)
+        store.persistRowsLater("renames", std::move(renames));
       else
-        store.persistTable("renames", std::move(table));
+        store.persistRows("renames", std::move(renames));
     } catch (...) {
       store = checkpoint;
       throw;
