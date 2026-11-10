@@ -52,8 +52,9 @@ class MedEntryStackOffsets;
 
 /// Whether an operation prevents recovering an earlier ABI value: where it
 /// ends a later call's argument setup (endsCallArgumentSetup), as call
-/// argument collection in MedToHigh has it too.
-bool isAbiRecoveryBarrier(const MedOp &Op);
+/// argument collection in MedToHigh has it too. Memory queries must retain
+/// the default; a register-only scan separately observes explicit outputs.
+bool isAbiRecoveryBarrier(const MedOp &Op, bool RegistersOnly = false);
 
 /// Recover the sole ECX argument of an exact, source-checked PE32 cookie call.
 /// Incidental register values and inferred callee signatures do not extend it.

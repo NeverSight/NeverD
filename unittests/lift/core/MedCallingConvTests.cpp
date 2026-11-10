@@ -436,12 +436,15 @@ TEST(MedABIPass, ForwardedFPParametersRequireAnUnclobberedEntryPath) {
     PriorCall,
     PredecessorCall,
     Join,
-    Exception
+    Exception,
+    IntrinsicStore,
+    PredecessorStore
   };
   for (BinaryFormat Format :
        {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
     for (Path P : {Path::Entry, Path::Linear, Path::PriorCall,
-                   Path::PredecessorCall, Path::Join, Path::Exception}) {
+                   Path::PredecessorCall, Path::Join, Path::Exception,
+                   Path::IntrinsicStore, Path::PredecessorStore}) {
       SCOPED_TRACE(static_cast<unsigned>(P));
       BinaryImage Image;
       Image.Arch = A;
@@ -449,8 +452,8 @@ TEST(MedABIPass, ForwardedFPParametersRequireAnUnclobberedEntryPath) {
       MedFunc F;
       F.Entry = 0x1000;
       F.CC = *callingConventionOf(A, Image.Format);
-      const bool Separate =
-          P == Path::Linear || P == Path::PredecessorCall || P == Path::Join;
+      const bool Separate = P == Path::Linear || P == Path::PredecessorCall ||
+                            P == Path::Join || P == Path::PredecessorStore;
       F.Blocks.resize(Separate ? 2 : 1);
       for (size_t I = 0; I < F.Blocks.size(); ++I)
         F.Blocks[I].Id = I;
@@ -473,6 +476,17 @@ TEST(MedABIPass, ForwardedFPParametersRequireAnUnclobberedEntryPath) {
         Prior.addInput(MedVar::makeConst(0x3000, 8));
         Entry.Ops.push_back(Prior);
       }
+      if (P == Path::IntrinsicStore || P == Path::PredecessorStore) {
+        MedOp Store;
+        Store.Opcode = NdOp::INTRINSIC;
+        Store.Output = temp(30, 0, 8, A);
+        Store.addInput(
+            MedVar::makeConst(unsigned(Intrinsic::A64_StoreWriteback), 2));
+        Store.addInput(MedVar::makeConst(0x6000, 8));
+        Store.addInput(MedVar::makeConst(0xf8008420, 4));
+        Store.addInput(MedVar::makeConst(0, 8));
+        Entry.Ops.push_back(Store);
+      }
       MedOp Call;
       Call.Opcode = NdOp::CALL;
       Call.Addr = 0x1010;
@@ -486,7 +500,9 @@ TEST(MedABIPass, ForwardedFPParametersRequireAnUnclobberedEntryPath) {
                      &FPWidths);
       const auto *Info = F.findCall(Block.Id, Block.Ops.size() - 1);
       ASSERT_NE(Info, nullptr);
-      const bool Incoming = P == Path::Entry || P == Path::Linear;
+      const bool Incoming = P == Path::Entry || P == Path::Linear ||
+                            P == Path::IntrinsicStore ||
+                            P == Path::PredecessorStore;
       const bool AfterCall = P == Path::PriorCall || P == Path::PredecessorCall;
       EXPECT_EQ(Info->Args.size(), Incoming || AfterCall ? 2u : 0u);
       if (Incoming) {
@@ -2187,6 +2203,125 @@ TEST(MedABIPass, AFaultingCheckLeavesEarlierCallSetupInPlace) {
                   (Args[0].isConst() && Args[0].ConstVal == 42))
           << int(Args[0].Kind) << ':' << Args[0].Id << ':' << Args[0].SSAVer;
     }
+}
+
+TEST(MedABIPass, IntrinsicStoresInvalidateStackSetupButPreserveRegisters) {
+  constexpr va_t Callee = 0x2000;
+  for (Arch A : {Arch::X86, Arch::X64, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+      for (bool SeparateBlock : {false, true})
+        for (bool Store : {false, true})
+          for (bool Rewrite : {false, true})
+            for (bool Wide : {false, true}) {
+              if (A == Arch::AArch64 && Wide)
+                continue;
+              SCOPED_TRACE(testing::Message()
+                           << unsigned(A) << ':' << unsigned(Format) << ':'
+                           << SeparateBlock << ':' << Store << ':' << Rewrite
+                           << ':' << Wide);
+              const auto &TRI = getTargetRegInfo(A);
+              const auto Layout = TRI.integerArgumentLayout(Format);
+              const auto Word = TRI.PointerSize;
+              const int Registers =
+                  A == Arch::X86 ? 0 : Layout.Registers.size();
+              MedFunc F;
+              F.Entry = 0x1000;
+              F.Blocks.resize(SeparateBlock ? 2 : 1);
+              auto &Entry = F.Blocks.front();
+              auto &Exit = F.Blocks.back();
+              Entry.Id = 0;
+              Entry.StartAddr = F.Entry;
+              if (SeparateBlock) {
+                Exit.Id = 17;
+                Exit.StartAddr = F.Entry + 16;
+                Entry.Succs = {17};
+                Exit.Preds = {0};
+              }
+              const auto SP = reg(1, 0, Word, TRI.StackPointer, A);
+              addLiveIn(Entry, SP);
+              const auto CallSP = reg(1, 1, Word, TRI.StackPointer, A);
+              Entry.Ops.push_back(binary(NdOp::INT_SUB, CallSP, SP,
+                                         MedVar::makeConst(64, Word)));
+              const auto Address = temp(2, 0, Word, A);
+              Entry.Ops.push_back(
+                  binary(NdOp::INT_ADD, Address, CallSP,
+                         MedVar::makeConst(Layout.CallStackBase, Word)));
+              for (int I = 0; I < Registers; ++I)
+                Entry.Ops.push_back(unary(
+                    NdOp::COPY, reg(10 + I, 1, Word, Layout.Registers[I], A),
+                    MedVar::makeConst(100 + I, Word)));
+              const auto Write =
+                  binary(NdOp::STORE, {}, Address, MedVar::makeConst(42, Word));
+              Entry.Ops.push_back(Write);
+              MedOp Memory;
+              Memory.Opcode = NdOp::INTRINSIC;
+              if (A == Arch::AArch64) {
+                // str/ldr x0,[x1],#8, represented as one memory operation.
+                Memory.Output = temp(30, 0, Store ? 8 : 16, A);
+                Memory.addInput(MedVar::makeConst(
+                    unsigned(Store ? Intrinsic::A64_StoreWriteback
+                                   : Intrinsic::A64_LoadWriteback),
+                    2));
+                Memory.addInput(Address);
+                Memory.addInput(
+                    MedVar::makeConst(Store ? 0xf8008420 : 0xf8408420, 4));
+                if (Store)
+                  Memory.addInput(MedVar::makeConst(0, 8));
+                ASSERT_TRUE(aarch64WritebackMemoryMedShapeIsValid(Memory));
+              } else {
+                // VCVTPS2PH writes 8/16 bytes; VCVTPH2PS only reads them.
+                auto EffectiveAddress = Address;
+                if (A == Arch::X86) {
+                  EffectiveAddress = temp(31, 0, 8, A);
+                  Exit.Ops.push_back(
+                      unary(NdOp::INT_ZEXT, EffectiveAddress, Address));
+                }
+                Memory.Output = temp(30, 0, Store ? 4 : (Wide ? 36 : 20), A);
+                Memory.addInput(MedVar::makeConst(
+                    unsigned(Store ? Intrinsic::X86F16CStoreState
+                                   : Intrinsic::X86F16CReadState),
+                    2));
+                Memory.addInput(EffectiveAddress);
+                if (Store)
+                  Memory.addInput(MedVar::makeConst(0, Wide ? 32 : 16));
+                Memory.addInput(MedVar::makeConst((Wide ? 2 : 0) | Store, 1));
+                Memory.addInput(MedVar::makeConst(0, 1));
+                Memory.addInput(MedVar::makeConst(0x1f80, 4));
+                ASSERT_TRUE(x86FPStateShapeIsValid(
+                    static_cast<Intrinsic>(Memory.Inputs[0].ConstVal),
+                    x86FPStateMedShape(Memory)));
+              }
+              EXPECT_EQ(endsCallArgumentSetup(Memory), Store);
+              EXPECT_FALSE(endsCallArgumentSetup(Memory, true));
+              auto Malformed = Memory;
+              Malformed.MemoryOrdering = NdMemoryOrdering::Acquire;
+              EXPECT_TRUE(endsCallArgumentSetup(Malformed));
+              EXPECT_TRUE(endsCallArgumentSetup(Malformed, true));
+              Exit.Ops.push_back(Memory);
+              if (Rewrite)
+                Exit.Ops.push_back(Write);
+              MedOp Call;
+              Call.Opcode = NdOp::CALL;
+              Call.addInput(MedVar::makeConst(Callee, Word));
+              Exit.Ops.push_back(Call);
+              BinaryImage Image;
+              Image.Arch = A;
+              Image.Format = Format;
+              std::map<va_t, int> RegArity{{Callee, Registers}};
+              std::map<va_t, int> TotalArity{{Callee, Registers + 1}};
+              recoverCallAbi(F, A, {{Callee, "callee"}}, &Image, &RegArity,
+                             &TotalArity);
+              ASSERT_EQ(F.CallInfos.size(), 1u);
+              const auto &Args = F.CallInfos.front().Args;
+              ASSERT_EQ(Args.size(), size_t(Registers + 1));
+              for (int I = 0; I < Registers; ++I)
+                EXPECT_EQ(Args[I], MedVar::makeConst(100 + I, Word));
+              if (Store && !Rewrite)
+                EXPECT_EQ(Args.back().Kind, MedVar::Unspecified);
+              else
+                EXPECT_EQ(Args.back(), MedVar::makeConst(42, Word));
+            }
 }
 
 TEST(MedABIPass, I386TailJumpPassesItsIncomingStackSlots) {
@@ -4543,7 +4678,7 @@ TEST(MedABIPass,
 TEST(MedTypePass, StackTopResultsAreNotRegisterRestores) {
   for (Arch Architecture : {Arch::X86, Arch::X64})
     for (bool SeparateBlock : {false, true})
-      for (unsigned Case = 0; Case != 8; ++Case) {
+      for (unsigned Case = 0; Case != 16; ++Case) {
         SCOPED_TRACE(testing::Message() << unsigned(Architecture) << ':'
                                         << SeparateBlock << ':' << Case);
         const auto &TRI = getTargetRegInfo(Architecture);
@@ -4600,11 +4735,59 @@ TEST(MedTypePass, StackTopResultsAreNotRegisterRestores) {
           Entry.Ops.push_back(unary(NdOp::COPY, Saved, Incoming));
           Store(Slot, Saved);
         }
-        if (Case == 7) {
+        if (Case >= 8 && Case != 15)
+          Store(Slot, MedVar::makeConst(17, Bytes));
+        if (Case == 7 || Case == 8 || Case == 9) {
           const auto Byte = temp(7, 0, 1, Architecture);
           Entry.Ops.push_back(binary(NdOp::SUBBYTES, Byte, Incoming,
                                      MedVar::makeConst(0, Bytes)));
           Store(Slot, Byte);
+        }
+        if (Case == 9)
+          Store(Slot, Incoming);
+        if (Case == 10 || Case == 11)
+          for (unsigned I = 0; I < Bytes - (Case == 11); ++I) {
+            const auto Byte = temp(10 + I, 0, 1, Architecture);
+            const auto Address = temp(20 + I, 0, Bytes, Architecture);
+            Entry.Ops.push_back(binary(NdOp::SUBBYTES, Byte, Incoming,
+                                       MedVar::makeConst(I, Bytes)));
+            Entry.Ops.push_back(binary(NdOp::INT_ADD, Address, Slot,
+                                       MedVar::makeConst(I, Bytes)));
+            Store(Address, Byte);
+          }
+        if (Case >= 12) {
+          const bool StoreHalf = Case != 13;
+          MedOp Half;
+          Half.Opcode = NdOp::INTRINSIC;
+          Half.Output = temp(40, 0, StoreHalf ? 4 : 20, Architecture);
+          Half.addInput(MedVar::makeConst(
+              unsigned(StoreHalf ? Intrinsic::X86F16CStoreState
+                                 : Intrinsic::X86F16CReadState),
+              2));
+          auto Address = Slot;
+          if (Case == 15) {
+            Address = temp(41, 0, Bytes, Architecture);
+            Entry.Ops.push_back(binary(NdOp::INT_SUB, Address, Slot,
+                                       MedVar::makeConst(8, Bytes)));
+          }
+          if (Architecture == Arch::X86) {
+            const auto EffectiveAddress = temp(42, 0, 8, Architecture);
+            Entry.Ops.push_back(
+                unary(NdOp::INT_ZEXT, EffectiveAddress, Address));
+            Address = EffectiveAddress;
+          }
+          Half.addInput(Address);
+          if (StoreHalf)
+            Half.addInput(MedVar::makeConst(0, 16));
+          Half.addInput(MedVar::makeConst(StoreHalf, 1));
+          Half.addInput(MedVar::makeConst(0, 1));
+          Half.addInput(MedVar::makeConst(0x1f80, 4));
+          ASSERT_TRUE(x86FPStateShapeIsValid(
+              static_cast<Intrinsic>(Half.Inputs[0].ConstVal),
+              x86FPStateMedShape(Half)));
+          Entry.Ops.push_back(Half);
+          if (Case == 14)
+            Store(Slot, Incoming);
         }
         const auto Result = reg(2, 1, Bytes, TRI.IntReturnReg, Architecture);
         Exit.Ops.push_back(unary(NdOp::LOAD, Result, Slot));
@@ -4619,11 +4802,97 @@ TEST(MedTypePass, StackTopResultsAreNotRegisterRestores) {
         inferMedTypes(Func, Architecture);
 
         ASSERT_TRUE(Func.ReturnType);
-        const bool Restores =
-            Case == 0 || Case == 3 || Case == 5 || Case == 6 || Case == 7;
+        const bool Restores = Case == 0 || Case == 3 || Case == 5 ||
+                              Case == 6 || Case == 7 || Case == 9 ||
+                              Case == 10 || Case == 14 || Case == 15;
         EXPECT_EQ(Func.ReturnType->Kind,
                   Restores ? NdTypeKind::Float : NdTypeKind::Int);
         EXPECT_EQ(Func.ReturnType->Size, Restores ? 8u : Bytes);
+      }
+}
+
+TEST(MedTypePass, PartialStackRestoresKeepIndependentBytesAcrossPaths) {
+  for (Arch A : {Arch::X86, Arch::X64})
+    for (bool Reverse : {false, true})
+      for (unsigned Case = 0; Case != 6; ++Case) {
+        SCOPED_TRACE(testing::Message()
+                     << unsigned(A) << ':' << Reverse << ':' << Case);
+        const auto &TRI = getTargetRegInfo(A);
+        const auto Bytes = TRI.PointerSize;
+        MedFunc F;
+        F.Entry = 0x1000;
+        F.Blocks.resize(4);
+        for (int I = 0; I != 4; ++I) {
+          F.Blocks[I].Id = I;
+          F.Blocks[I].StartAddr = F.Entry + I * 16;
+          F.Blocks[I].EndAddr = F.Entry + (I + 1) * 16;
+        }
+        F.Blocks[0].Succs = {1, 2};
+        F.Blocks[1].Preds = F.Blocks[2].Preds = {0};
+        F.Blocks[1].Succs = F.Blocks[2].Succs = {3};
+        F.Blocks[3].Preds =
+            Reverse ? std::vector<int>{2, 1} : std::vector<int>{1, 2};
+        if (Case == 5) {
+          F.Blocks[1].Preds.push_back(1);
+          F.Blocks[1].Succs.push_back(1);
+        }
+        auto &Entry = F.Blocks[0];
+        auto &Exit = F.Blocks[3];
+        const auto SP = reg(1, 0, Bytes, TRI.StackPointer, A);
+        const auto Incoming = reg(2, 0, Bytes, TRI.IntReturnReg, A);
+        addLiveIn(Entry, SP);
+        addLiveIn(Entry, Incoming);
+        const auto Slot = reg(1, 1, Bytes, TRI.StackPointer, A);
+        Entry.Ops.push_back(
+            binary(NdOp::INT_SUB, Slot, SP, MedVar::makeConst(Bytes, Bytes)));
+        Entry.Ops.push_back(binary(
+            NdOp::STORE, {}, Slot,
+            Case == 1 || Case == 2 ? MedVar::makeConst(17, Bytes) : Incoming));
+        int NextId = 10;
+        auto ByteStore = [&](int Block, unsigned Byte, bool Restore) {
+          const auto Address = temp(NextId++, 0, Bytes, A);
+          auto &Ops = F.Blocks[Block].Ops;
+          Ops.push_back(binary(NdOp::INT_ADD, Address, Slot,
+                               MedVar::makeConst(Byte, Bytes)));
+          auto Value = MedVar::makeConst(99, 1);
+          if (Restore) {
+            Value = temp(NextId++, 0, 1, A);
+            Ops.push_back(binary(NdOp::SUBBYTES, Value, Incoming,
+                                 MedVar::makeConst(Byte, Bytes)));
+          }
+          Ops.push_back(binary(NdOp::STORE, {}, Address, Value));
+        };
+        if (Case == 1 || Case == 2) {
+          for (unsigned I = 0; I != Bytes; ++I) {
+            if (Case == 1 || I < Bytes / 2)
+              ByteStore(1, I, true);
+            if (Case == 1 || I >= Bytes / 2)
+              ByteStore(2, I, true);
+          }
+        } else {
+          ByteStore(1, 1, false);
+          if (Case == 3)
+            ByteStore(1, 1, true);
+          if (Case == 4)
+            ByteStore(3, 1, true);
+        }
+        // Rewriting byte zero cannot hide a computed byte on either arm.
+        ByteStore(3, 0, true);
+        Exit.Ops.push_back(unary(NdOp::FLOAT_INT2FLOAT,
+                                 reg(3, 1, 8, TRI.FPReturnReg, A),
+                                 MedVar::makeConst(42, 4)));
+        const auto Result = reg(2, 1, Bytes, TRI.IntReturnReg, A);
+        Exit.Ops.push_back(unary(NdOp::LOAD, Result, Slot));
+        Exit.Ops.push_back(binary(NdOp::INT_ADD,
+                                  reg(1, 2, Bytes, TRI.StackPointer, A), Slot,
+                                  MedVar::makeConst(Bytes, Bytes)));
+        Exit.Ops.push_back(unary(NdOp::RETURN, {}, Result));
+        inferMedTypes(F, A);
+        ASSERT_TRUE(F.ReturnType);
+        const bool Restores = Case == 1 || Case == 3 || Case == 4;
+        EXPECT_EQ(F.ReturnType->Kind,
+                  Restores ? NdTypeKind::Float : NdTypeKind::Int);
+        EXPECT_EQ(F.ReturnType->Size, Restores ? 8u : Bytes);
       }
 }
 
