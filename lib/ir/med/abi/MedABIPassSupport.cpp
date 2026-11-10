@@ -44,7 +44,9 @@
 
 namespace neverd {
 
-bool isAbiRecoveryBarrier(const MedOp &Op) { return endsCallArgumentSetup(Op); }
+bool isAbiRecoveryBarrier(const MedOp &Op, bool RegistersOnly) {
+  return endsCallArgumentSetup(Op, RegistersOnly);
+}
 
 bool incomingArgumentReachesCall(const AbiCallContext &C, int ArgIndex) {
   if (C.Func.Blocks.empty() || C.CallIdx < 0)
@@ -1562,7 +1564,7 @@ int wholeArgRegWriteInBlock(const MedBlock &Blk, int J,
   const uint64_t Register = Layout.Registers[ArgIdx];
   for (int K = J - 1; K >= 0; --K) {
     const MedOp &W = Blk.Ops[K];
-    if (isAbiRecoveryBarrier(W))
+    if (isAbiRecoveryBarrier(W, /*RegistersOnly=*/true))
       break;
     if (W.Output.Kind != MedVar::Reg || W.Output.Size == 0)
       continue;

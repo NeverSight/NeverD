@@ -1013,7 +1013,8 @@ void recoverCallAbi(
     while (Current && Seen.insert(Current->Id).second) {
       for (size_t I = Before; I-- > 0;) {
         const auto &Previous = Current->Ops[I];
-        if (isAbiRecoveryBarrier(Previous) || Writes(Previous.Output) ||
+        if (isAbiRecoveryBarrier(Previous, /*RegistersOnly=*/true) ||
+            Writes(Previous.Output) ||
             llvm::any_of(Previous.IntrinsicOutputs, Writes))
           return false;
       }
@@ -2012,7 +2013,8 @@ void recoverCallAbi(
                                       bool ForwardCallResult) {
           for (int J = static_cast<int>(Setup.Ops.size()) - 1; J >= 0; --J) {
             const auto &Prev = Setup.Ops[J];
-            const bool Barrier = isAbiRecoveryBarrier(Prev);
+            const bool Barrier =
+                isAbiRecoveryBarrier(Prev, /*RegistersOnly=*/true);
             if (Barrier && !ForwardCallResult)
               break;
             if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size) {
@@ -2296,7 +2298,7 @@ void recoverCallAbi(
         bool HasFPSetup = false;
         for (int J = static_cast<int>(OI) - 1; J >= 0; --J) {
           const auto &Prev = Blk.Ops[J];
-          if (isAbiRecoveryBarrier(Prev))
+          if (isAbiRecoveryBarrier(Prev, /*RegistersOnly=*/true))
             break;
           if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size > 0 &&
               isFPValueReg(Prev.Output.RegOff)) {
@@ -2837,7 +2839,7 @@ void recoverCallAbi(
             ForwardsCallResult = true;
             break;
           }
-          if (isAbiRecoveryBarrier(After))
+          if (isAbiRecoveryBarrier(After, /*RegistersOnly=*/true))
             break;
           if (After.Output.Kind == MedVar::Reg &&
               (After.Output.RegOff == TRI.IntReturnReg ||
