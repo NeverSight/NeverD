@@ -23435,6 +23435,14 @@ MSA tests enumerate all 128 BIT fields and 256 byte immediates, unary count
 extrema, all vector bytes, old-destination dependence and three-register aliases.
 The source fixtures observe complete output memory and post-return state.
 
+The [2026-11-10 evidence](evidence/mips16e2-dsp-msa-2026-11-10.json) separates
+the final dev/ABI integration's correctness runs from the same-base feature
+performance measurements. It includes the four failing-then-passing stack-lane
+regressions, exact product/dependency hashes, six fresh source matrices, the
+firmware output comparison and the location of local optimization controls.
+Original e2 hardware execution and SMP/device ordering remain outside this
+qualification.
+
 ### MIPS decode/lift and firmware performance
 
 `neverd-mips-bench` is an opt-in target, excluded from the default build:

@@ -616,6 +616,26 @@ Raw results and managed cleanup receipts remain under
 `build-mips/compressed-ase/` and `build-mips/roundtrip-dsp-final/`; this does not
 qualify the DSP/MSA families listed as unsupported above.
 
+The [2026-11-10 qualification](evidence/mips16e2-dsp-msa-2026-11-10.json)
+records EHB/SYNC, 13 additional DSP forms and 43 additional MSA forms. It also
+records the shared ABI repair found during dev integration: pair-aligned stack
+arguments retain their actual reaching stores, wide lanes follow target byte
+order, and missing predecessor lane evidence leaves required arguments unknown.
+The final integration has separate build, dependency and executable hashes from
+the performance comparison. Both C backends still produce byte-identical Archer
+C7 `ubus` call-handler and discovered-function output against the baseline.
+
+MIPS16 delay-slot queries now use the shared jump normalizer instead of fully
+normalizing each scalar instruction. The performance qualification separates an
+identical-dependency normalizer control from the complete feature increment,
+using seven warmed, alternating pairs on the same Release baseline. It covers
+short and mixed MIPS16 streams, 12 decode/lift profiles and complete firmware
+requests, retaining CPU, wall, RSS and output fingerprints separately. Newly
+supported forms have their own throughput measurements. Local results and a
+rejected barrier-dispatch experiment remain in the ignored
+`build-mips/mips16e2-next/qualification.json`; they do not establish universal
+improvement or a cross-tool speed ranking.
+
 ## TP-Link firmware workflow
 
 Start with the actual extracted ELF profile instead of assuming a device is
