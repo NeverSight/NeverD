@@ -41,6 +41,7 @@
 #include "neverd/backend/llvm/LLVMSourceTypeHints.h"
 #include "neverd/backend/llvm/SourceFrameBytes.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
+#include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
 #include "neverd/debug/UserPrototype.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/libc/LibCRecordArguments.h"
@@ -3948,7 +3949,8 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
   for (auto &BB : Fn) {
     for (auto &Inst : BB) {
       if (auto *LI = llvm::dyn_cast<llvm::LoadInst>(&Inst)) {
-        if (!LI->isSimple()) {
+        if (!LI->isSimple() ||
+            isLLVMX86SegmentedAddressSpace(LI->getPointerAddressSpace())) {
           ValueTexts[LI] = getName(LI);
           continue;
         }
@@ -4392,7 +4394,8 @@ void LLVMCWriter::markComposedPrints(llvm::Function &Fn) {
           isFloatingPointBitcast(Inst))
         continue;
       if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst))
-        if (!Load->isSimple())
+        if (!Load->isSimple() ||
+            isLLVMX86SegmentedAddressSpace(Load->getPointerAddressSpace()))
           continue;
       if (auto Text = ValueTexts.find(&Inst);
           Text != ValueTexts.end() && !Text->second.empty())
@@ -9351,7 +9354,8 @@ void LLVMCWriter::emitFunctionDecls(llvm::Function &Fn) {
             continue;
         }
         if (auto *LI = llvm::dyn_cast<llvm::LoadInst>(&Inst)) {
-          if (!LI->isSimple()) {
+          if (!LI->isSimple() ||
+              isLLVMX86SegmentedAddressSpace(LI->getPointerAddressSpace())) {
             if (!isImportCalleeOnlyLoad(LI))
               NeedsDecl.insert(LI);
             continue;

@@ -114,7 +114,8 @@ std::string renderX86Fence(llvm::AtomicOrdering Ordering);
 const char *renderX86DebugBreak(BinaryFormat Format);
 bool isX86FastFailName(llvm::StringRef Name);
 std::string renderX86SegmentedLoad(
-    Arch TheArch, const llvm::LoadInst &LI,
+    Arch TheArch, BinaryFormat Format, const llvm::LoadInst &LI,
+    llvm::StringRef ResultName,
     const std::function<std::string(const llvm::Value *)> &ValueStr);
 std::string renderX86SegmentedStore(
     Arch TheArch, const llvm::StoreInst &Store,

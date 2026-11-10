@@ -16,6 +16,7 @@
 #include "X86FPStateHelpers.h"
 #include "X86Flags.h"
 #include "X86ScalarSystem.h"
+#include "X86SegmentMemory.h"
 #include "X86SystemRegister.h"
 #include "X87NativeState.h"
 
@@ -1614,22 +1615,45 @@ std::string renderX86InterruptStatement(
   return renderX86InterruptAsm(Vec->ConstVal & 0xFF, {}, ResultVar, Reg);
 }
 
-std::string renderX86MsvcSegmentedLoad(Arch TheArch, unsigned SizeBytes,
-                                       llvm::StringRef Addr,
-                                       NdMemoryOrdering Ordering,
-                                       NdMemoryAddressSpace AddressSpace) {
-  if (Ordering != NdMemoryOrdering::None)
-    return {};
-  if (TheArch != Arch::X86 && TheArch != Arch::X64)
-    return {};
-  if (AddressSpace != NdMemoryAddressSpace::X86GS &&
-      AddressSpace != NdMemoryAddressSpace::X86FS)
-    return {};
-  const char *Name = x86SegmentedReadIntrinsic(
-      AddressSpace == NdMemoryAddressSpace::X86GS, SizeBytes);
+std::string renderX86SegmentedRead(Arch TheArch, unsigned SizeBytes,
+                                   llvm::StringRef Addr,
+                                   NdMemoryAddressSpace AddressSpace,
+                                   bool MsvcIntrinsics,
+                                   std::optional<uint64_t> ConstantOffset,
+                                   llvm::StringRef ResultName) {
+  if ((TheArch != Arch::X86 && TheArch != Arch::X64) ||
+      (AddressSpace != NdMemoryAddressSpace::X86GS &&
+       AddressSpace != NdMemoryAddressSpace::X86FS))
+    throw std::runtime_error("unsupported non-x86 segmented C load");
+  const bool GS = AddressSpace == NdMemoryAddressSpace::X86GS;
+  const char *Name = x86SegmentedReadIntrinsic(GS, SizeBytes);
   if (!Name)
-    return {};
-  return std::string(Name) + "(" + Addr.str() + ")";
+    throw std::runtime_error("unsupported segmented C load width");
+  // <intrin.h> exposes FS reads on x86 and GS reads on x64. Its unsigned
+  // long offset is 32 bits on Windows, even for a 64-bit address register.
+  if (MsvcIntrinsics &&
+      ((TheArch == Arch::X86 && !GS) ||
+       (TheArch == Arch::X64 && GS && ConstantOffset &&
+        *ConstantOffset <= std::numeric_limits<uint32_t>::max()))) {
+    const auto Offset =
+        ConstantOffset
+            ? "0x" + llvm::utohexstr(static_cast<uint32_t>(*ConstantOffset))
+            : "(uint32_t)(uintptr_t)(" + Addr.str() + ")";
+    return std::string(Name) + "(" + Offset + ")";
+  }
+  if (SizeBytes == 8 && TheArch == Arch::X86)
+    throw std::runtime_error("unsupported 64-bit segmented C load on x86");
+  const char *Opcode = SizeBytes == 1   ? "movb"
+                       : SizeBytes == 2 ? "movw"
+                       : SizeBytes == 4 ? "movl"
+                                        : "movq";
+  const std::string Result = ResultName.str();
+  return "__extension__ ({ uint" + std::to_string(SizeBytes * 8) + "_t " +
+         Result + "; __asm__ volatile(\"" + Opcode + " %%" +
+         (GS ? "gs" : "fs") +
+         ":(%1), %0\" : \"=" + (SizeBytes == 1 ? "q" : "r") + "\"(" + Result +
+         ") : \"r\"((uintptr_t)(" + Addr.str() + ")) : \"memory\"); " + Result +
+         "; })";
 }
 
 std::optional<X86WidenedIntrinsic> x86WidenedIntrinsic(Intrinsic Id,

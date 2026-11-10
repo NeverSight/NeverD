@@ -26,6 +26,7 @@
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Linker/Linker.h"
@@ -35,6 +36,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -141,8 +143,11 @@ Fixture identity(llvm::Module &Module, llvm::StringRef Name, TypeRef Type,
     auto *Input =
         Builder.CreateIntToPtr(Find(Bindings.back().Location), Pointer);
     auto *Output = Builder.CreateIntToPtr(Find(Hint.ReturnLocation), Pointer);
-    Builder.CreateMemCpy(Output, llvm::MaybeAlign(), Input, llvm::MaybeAlign(),
-                         Type->Size);
+    // Keep this independent entry fixture usable by Apple's native IR
+    // reader without version-specific memcpy intrinsic attributes.
+    auto *Bytes = Builder.getIntNTy(Type->Size * kByteBits);
+    auto *Value = Builder.CreateAlignedLoad(Bytes, Input, llvm::Align(1));
+    Builder.CreateAlignedStore(Value, Output, llvm::Align(1));
     Builder.CreateRetVoid();
   } else {
     llvm::Value *Result = llvm::PoisonValue::get(ResultType);
@@ -282,6 +287,22 @@ void addFixtures(llvm::Module &Module) {
   Throwing.Body->setUWTableKind(llvm::UWTableKind::Async);
   auto Entry = reconstructDarwinAArch64Entry(*Throwing.Body, Throwing.Source);
   ASSERT_TRUE(bool(Entry)) << llvm::toString(Entry.takeError());
+  auto AddThrowing = [&](llvm::StringRef Name, TypeRef ValueType) {
+    auto F = identity(Module, Name, ValueType, 1);
+    llvm::IRBuilder<> CallBuilder(
+        &*F.Body->getEntryBlock().getFirstInsertionPt());
+    // Reversed carriers put the first logical argument (the throw selector)
+    // last, including when the result uses x8. Values must survive the call.
+    CallBuilder.CreateCall(Module.getOrInsertFunction(kThrow, Type),
+                           {F.Body->getArg(F.Body->arg_size() - 1)});
+    F.Body->setUWTableKind(llvm::UWTableKind::Async);
+    auto Result = reconstructDarwinAArch64Entry(*F.Body, F.Source);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  };
+  AddThrowing(kWideThrowing, NdType::makeInt(kWideBytes, false));
+  AddThrowing(kLargeThrowing,
+              record(NdType::makeFloat(sizeof(double)), kLargeElements));
+  AddThrowing(kHVAThrowing, record(Vector(kWideBytes), kHVAElements));
 }
 
 std::unique_ptr<llvm::Module> module(llvm::LLVMContext &Context) {
@@ -605,5 +626,71 @@ TEST(AArch64EntryABI, IndependentNativeCallersAgreeAtO0AndO2) {
 #else
   GTEST_SKIP() << kUnavailable;
 #endif
+}
+
+TEST(AArch64EntryABI, ExportSignedNativeInputs) {
+  llvm::LLVMContext Context;
+  auto Module = module(Context);
+  addFixtures(*Module);
+  ASSERT_FALSE(HasFailure());
+  Module->setTargetTriple(llvm::Triple(kArm64eTriple));
+  // Apple's native IR reader requires the explicit classic arm64e contract
+  // emitted by its frontend, otherwise it produces an arm64e.old object.
+  auto *ABI = llvm::MDNode::get(
+      Context,
+      {llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
+           llvm::Type::getInt32Ty(Context), kClassicABIVersion)),
+       llvm::ConstantAsMetadata::get(llvm::ConstantInt::getFalse(Context))});
+  Module->addModuleFlag(llvm::Module::AppendUnique, kNativeABIVersion,
+                        llvm::MDNode::get(Context, {ABI}));
+  for (auto &Function : *Module) {
+    if (Function.isDeclaration())
+      continue;
+    Function.addFnAttr(kReturnSigningArm64eAttribute);
+    Function.addFnAttr(llvm::Attribute::NoInline);
+    Function.addFnAttr(kDisableTailCalls, kTrue);
+    Function.addFnAttr(kFramePointer, kAll);
+    // Match the native C++ frontend's synchronous exception-table contract.
+    // Async epilogue CFI forces DWARF even without the explicit escape below.
+    Function.setUWTableKind(llvm::UWTableKind::Sync);
+  }
+  const char *Directory = std::getenv(kExportDirectory);
+  std::filesystem::path Root;
+  if (Directory && *Directory) {
+    Root = Directory;
+    ASSERT_TRUE(std::filesystem::is_directory(Root));
+  }
+  for (bool Dwarf : {false, true}) {
+    if (Dwarf) {
+      // Force per-function DWARF while retaining Darwin's lookup index.
+      // Removing __unwind_info prevents even compiler-only C++ unwinding.
+      auto *Type =
+          llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
+      auto *CFI = llvm::InlineAsm::get(Type, kDwarfCFI, {}, true);
+      for (auto &Function : *Module) {
+        if (Function.isDeclaration())
+          continue;
+        llvm::IRBuilder<> Builder(
+            &*Function.getEntryBlock().getFirstInsertionPt());
+        Builder.CreateCall(CFI);
+      }
+    }
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    if (Root.empty())
+      continue;
+    std::error_code Error;
+    llvm::raw_fd_ostream IR(
+        (Root / (Dwarf ? kExportDwarfIR : kExportIR)).string(), Error);
+    ASSERT_FALSE(Error);
+    Module->print(IR, nullptr);
+    IR.close();
+    ASSERT_FALSE(IR.has_error());
+  }
+  if (Root.empty())
+    return;
+  std::ofstream Caller(Root / kExportCaller);
+  Caller << kNativeCaller;
+  Caller.close();
+  ASSERT_TRUE(Caller);
 }
 } // namespace

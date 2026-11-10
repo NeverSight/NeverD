@@ -1,0 +1,74 @@
+{
+  "export_xml": "<testsuites><testsuite><testcase classname=\"AArch64EntryABI\" name=\"ExportSignedNativeInputs\" status=\"run\"/></testsuite></testsuites>",
+  "assembly": "_entry_throwing:\n pacibsp\n bl _entry_throw\n retab\n_entry_throwing.neverd.carriers:\n pacibsp\n bl _entry_throw\n retab\n_entry_wide_throwing:\n pacibsp\n bl _entry_throw\n retab\n_entry_wide_throwing.neverd.carriers:\n pacibsp\n bl _entry_throw\n retab\n_entry_large_throwing:\n pacibsp\n bl _entry_throw\n retab\n_entry_large_throwing.neverd.carriers:\n pacibsp\n bl _entry_throw\n retab\n_entry_hva_throwing:\n pacibsp\n bl _entry_throw\n retab\n_entry_hva_throwing.neverd.carriers:\n pacibsp\n bl _entry_throw\n retab\n_entry_throw:\n pacibsp\n bl _entry_throw\n retab\n_main:\n pacibsp\n bl _entry_throw\n retab\n blraaz x16\n blraa x16, x17\n blrab x16, x17\n",
+  "missing_frame_tokens": [
+    "_entry_throwing:",
+    "_entry_throwing.neverd.carriers:",
+    "_entry_wide_throwing:",
+    "_entry_wide_throwing.neverd.carriers:",
+    "_entry_large_throwing:",
+    "_entry_large_throwing.neverd.carriers:",
+    "_entry_hva_throwing:",
+    "_entry_hva_throwing.neverd.carriers:",
+    "pacibsp",
+    "retab"
+  ],
+  "invalid_probe_overrides": [
+    {
+      "status": "unavailable"
+    },
+    {
+      "native_pac_qualified": false
+    },
+    {
+      "compiler_original_call_unwind_qualified": false
+    },
+    {
+      "control_loading": "exec"
+    },
+    {
+      "fixup_loader": "userspace"
+    },
+    {
+      "source_revision": "foreign"
+    },
+    {
+      "source_sha256": {}
+    }
+  ],
+  "provenance": {
+    "source_revision": "exact",
+    "source_sha256": {
+      "fixture": "identity"
+    }
+  },
+  "probe": {
+    "source_revision": "exact",
+    "source_sha256": {
+      "fixture": "identity"
+    },
+    "status": "passed",
+    "native_pac_qualified": true,
+    "compiler_original_call_unwind_qualified": true,
+    "control_loading": "dlopen",
+    "fixup_loader": "system"
+  },
+  "fake_binary": "test-host",
+  "fake_compiler": "compiler",
+  "probe_name": "probe.json",
+  "output_name": "output",
+  "source_name": "source",
+  "binary_bytes": "disposable-test-product",
+  "compiler_version": "independent test compiler",
+  "sections_dwarf": " sectname __eh_frame\n sectname __unwind_info\n",
+  "sections_compact": " sectname __unwind_info\n",
+  "dwarf_name_fragment": "dwarf-True",
+  "failure_code": 17,
+  "case_count": 8,
+  "sections_no_index": " sectname __eh_frame\n",
+  "unwind_compact": "00000100 g F __TEXT,__text _entry_throwing\n00000200 g F __TEXT,__text _entry_throwing.neverd.carriers\n00000300 g F __TEXT,__text _entry_wide_throwing\n00000400 g F __TEXT,__text _entry_wide_throwing.neverd.carriers\n00000500 g F __TEXT,__text _entry_large_throwing\n00000600 g F __TEXT,__text _entry_large_throwing.neverd.carriers\n00000700 g F __TEXT,__text _entry_hva_throwing\n00000800 g F __TEXT,__text _entry_hva_throwing.neverd.carriers\n00000900 g F __TEXT,__text _entry_throw\n00000a00 g F __TEXT,__text _main\n[0]: function offset=0x00000100, encoding[0]=0x04000000\n",
+  "unwind_dwarf": "00000100 g F __TEXT,__text _entry_throwing\n00000200 g F __TEXT,__text _entry_throwing.neverd.carriers\n00000300 g F __TEXT,__text _entry_wide_throwing\n00000400 g F __TEXT,__text _entry_wide_throwing.neverd.carriers\n00000500 g F __TEXT,__text _entry_large_throwing\n00000600 g F __TEXT,__text _entry_large_throwing.neverd.carriers\n00000700 g F __TEXT,__text _entry_hva_throwing\n00000800 g F __TEXT,__text _entry_hva_throwing.neverd.carriers\n00000900 g F __TEXT,__text _entry_throw\n00000a00 g F __TEXT,__text _main\n[0]: function offset=0x00000100, encoding[0]=0x03000001\n[1]: function offset=0x00000200, encoding[1]=0x03000002\n[2]: function offset=0x00000300, encoding[2]=0x03000003\n[3]: function offset=0x00000400, encoding[3]=0x03000004\n[4]: function offset=0x00000500, encoding[4]=0x03000005\n[5]: function offset=0x00000600, encoding[5]=0x03000006\n[6]: function offset=0x00000700, encoding[6]=0x03000007\n[7]: function offset=0x00000800, encoding[7]=0x03000008\n[8]: function offset=0x00000900, encoding[8]=0x03000009\n[9]: function offset=0x00000a00, encoding[9]=0x0300000a\n",
+  "compiler_target": "clang",
+  "compiler_symlink": "clang++",
+  "sdk_path": "/independent-macos-sdk"
+}
