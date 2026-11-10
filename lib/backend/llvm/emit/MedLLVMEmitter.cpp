@@ -1741,9 +1741,28 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
         SourceMap->Functions[Function.Entry] = *Entry;
     }
 
-  if (!normalizeResolvedLLVMCalls(*Mod_, SourceMap, AnalystSourceProjection) ||
-      !validateResolvedLLVMCallSignatures(*Mod_, AnalystSourceProjection))
+  // A body whose resolved call the module cannot reconcile is refused, as one
+  // that refuses an address is: a unit that names what it leaves out emits
+  // again without it.
+  std::vector<ResolvedCallRefusal> CallRefusals;
+  if (!normalizeResolvedLLVMCalls(*Mod_, SourceMap, AnalystSourceProjection,
+                                  &CallRefusals) ||
+      !validateResolvedLLVMCallSignatures(*Mod_, AnalystSourceProjection,
+                                          &CallRefusals)) {
+    for (ResolvedCallRefusal &Refusal : CallRefusals)
+      for (size_t I = 0; I < Funcs.size(); ++I) {
+        const auto Emitted = EmittedFuncNames.find(Funcs[I].Entry);
+        const llvm::StringRef Name = Emitted == EmittedFuncNames.end()
+                                         ? llvm::StringRef(Funcs[I].Name)
+                                         : llvm::StringRef(Emitted->second);
+        if ((!BodyMask || (*BodyMask)[I]) && !Name.empty() &&
+            Refusal.Caller->getName() == Name) {
+          RefusedBodies.push_back({I, std::move(Refusal.Reason)});
+          break;
+        }
+      }
     return nullptr;
+  }
 
   // Mark the producer schema independently of per-function attachments.  A
   // later pass that drops one attachment must be distinguishable from a

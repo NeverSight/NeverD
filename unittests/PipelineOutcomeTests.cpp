@@ -82,9 +82,10 @@ public:
       const std::vector<MedFunc> &Functions, llvm::LLVMContext &Context,
       unsigned Shards, unsigned Threads, bool NoOpt,
       llvm::function_ref<LLVMEmissionResult(unsigned, llvm::LLVMContext &)>
-          Emit) {
+          Emit,
+      bool OmitRefusedBodies = false) {
     return Pipeline::runLLVMShardPipeline(Functions, Context, Shards, Threads,
-                                          NoOpt, Emit);
+                                          NoOpt, Emit, {}, OmitRefusedBodies);
   }
 
   static LLVMEmissionResult
@@ -1889,6 +1890,130 @@ TEST(PipelineOutcome, ResolvedSignaturesAreReconciledBeforeShardPublication) {
           EXPECT_EQ(Calls, 1u);
         }
       }
+}
+
+// Where the unit names what it leaves out, a body whose call the linked
+// declaration cannot take is declared only, with its source identity and the
+// reason, and the other shards' bodies are kept.  The body is found by its
+// source identity, also under a name a shard disambiguated.
+TEST(PipelineOutcome, UnreconciledLinkedCallLeavesOnlyItsBodyOut) {
+  for (bool NoOpt : {false, true}) {
+    SCOPED_TRACE(NoOpt);
+    std::vector<MedFunc> Functions(2);
+    Functions[0].Entry = 0x1000;
+    Functions[0].Name = "caller";
+    Functions[1].Entry = 0x2000;
+    Functions[1].Name = "other";
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Result = PipelineTestPeer::runShards(
+        Functions, Context, 2, 2, NoOpt,
+        [&](unsigned Shard, llvm::LLVMContext &C) {
+          PipelineTestPeer::LLVMEmissionResult E;
+          // As the emitter writes them: each body carries its entry, and the
+          // caller's name is one its shard disambiguated.
+          const char *Name = Shard ? "other" : "caller_1000";
+          E.Module = shardModule(C, Name);
+          E.Module->setDataLayout("e-p:64:64");
+          rewrite_source::setOriginalVA(*E.Module->getFunction(Name),
+                                        Shard ? 0x2000 : 0x1000);
+          // Each shard declares the import as its own calls pass it; only
+          // the linked definition shows the call an argument short.
+          auto *I64 = llvm::Type::getInt64Ty(C);
+          auto *Target = llvm::Function::Create(
+              llvm::FunctionType::get(
+                  I64, std::vector<llvm::Type *>(Shard ? 2 : 1, I64), false),
+              llvm::GlobalValue::ExternalLinkage, "late_import", *E.Module);
+          if (Shard == 1) {
+            llvm::IRBuilder<> Builder(
+                llvm::BasicBlock::Create(C, "entry", Target));
+            Builder.CreateRet(Builder.getInt64(42));
+          } else {
+            auto *F = E.Module->getFunction(Name);
+            llvm::IRBuilder<> Builder(F->getEntryBlock().getTerminator());
+            Builder.CreateCall(Target, {Builder.getInt64(7)});
+          }
+          return E;
+        },
+        /*OmitRefusedBodies=*/true);
+    const auto Diagnostic = testing::internal::GetCapturedStderr();
+    ASSERT_NE(Result.Module, nullptr) << Result.Error;
+    EXPECT_TRUE(Result.Error.empty()) << Result.Error;
+    EXPECT_FALSE(llvm::verifyModule(*Result.Module, &llvm::errs()));
+    const llvm::Function *Caller = Result.Module->getFunction("caller_1000");
+    ASSERT_NE(Caller, nullptr);
+    EXPECT_TRUE(Caller->isDeclaration());
+    auto Entry = rewrite_source::getOriginalVA(*Caller);
+    ASSERT_TRUE(bool(Entry));
+    EXPECT_EQ(*Entry, std::optional<uint64_t>(0x1000));
+    const llvm::Function *Other = Result.Module->getFunction("other");
+    ASSERT_NE(Other, nullptr);
+    EXPECT_FALSE(Other->isDeclaration());
+    ASSERT_EQ(Result.LeftOut.size(), 1u);
+    EXPECT_EQ(Result.LeftOut.front().first, 0u);
+    EXPECT_NE(Result.LeftOut.front().second.find("lacks recovered arguments"),
+              std::string::npos)
+        << Result.LeftOut.front().second;
+    EXPECT_NE(Diagnostic.find("lacks recovered arguments"), std::string::npos)
+        << Diagnostic;
+  }
+}
+
+// A list of refusals names each function with a call its target cannot take
+// once, with why, and the calls of the other functions are still reconciled.
+TEST(PipelineOutcome, ResolvedCallRefusalsNameEachFunctionOnce) {
+  llvm::LLVMContext C;
+  llvm::Module Module("refusals", C);
+  Module.setDataLayout("e-p:64:64");
+  auto *I64 = llvm::Type::getInt64Ty(C);
+  auto *Two = llvm::FunctionType::get(I64, {I64, I64}, false);
+  auto *Target = llvm::Function::Create(Two, llvm::GlobalValue::ExternalLinkage,
+                                        "target", Module);
+  const auto Caller = [&](const char *Name, std::vector<unsigned> Arities) {
+    auto *F = llvm::Function::Create(
+        llvm::FunctionType::get(llvm::Type::getVoidTy(C), false),
+        llvm::GlobalValue::ExternalLinkage, Name, Module);
+    llvm::IRBuilder<> Builder(llvm::BasicBlock::Create(C, "entry", F));
+    for (unsigned Arity : Arities)
+      Builder.CreateCall(
+          llvm::FunctionType::get(I64, std::vector<llvm::Type *>(Arity, I64),
+                                  false),
+          Target, std::vector<llvm::Value *>(Arity, Builder.getInt64(7)));
+    Builder.CreateRetVoid();
+    return F;
+  };
+  llvm::Function *Short = Caller("short_caller", {1, 1});
+  llvm::Function *Long = Caller("long_caller", {3});
+  std::vector<ResolvedCallRefusal> Refusals;
+  testing::internal::CaptureStderr();
+  EXPECT_FALSE(normalizeResolvedLLVMCalls(Module, nullptr, false, &Refusals));
+  testing::internal::GetCapturedStderr();
+  ASSERT_EQ(Refusals.size(), 1u);
+  EXPECT_EQ(Refusals.front().Caller, Short);
+  EXPECT_NE(Refusals.front().Reason.find(
+                "resolved call in short_caller to target lacks recovered "
+                "arguments"),
+            std::string::npos)
+      << Refusals.front().Reason;
+  // The other function's call drops its surplus argument.
+  for (auto &Instruction : Long->getEntryBlock())
+    if (auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction))
+      EXPECT_EQ(Call->getFunctionType(), Two);
+  // Validation names the refused function once too.
+  Refusals.clear();
+  testing::internal::CaptureStderr();
+  EXPECT_FALSE(validateResolvedLLVMCallSignatures(Module, false, &Refusals));
+  testing::internal::GetCapturedStderr();
+  ASSERT_EQ(Refusals.size(), 1u);
+  EXPECT_EQ(Refusals.front().Caller, Short);
+  EXPECT_NE(Refusals.front().Reason.find("disagrees with the ABI of target"),
+            std::string::npos)
+      << Refusals.front().Reason;
+  // Without a list, the first refusal fails the module as before.
+  testing::internal::CaptureStderr();
+  EXPECT_FALSE(normalizeResolvedLLVMCalls(Module));
+  EXPECT_FALSE(validateResolvedLLVMCallSignatures(Module));
+  testing::internal::GetCapturedStderr();
 }
 
 TEST(PipelineOutcome,

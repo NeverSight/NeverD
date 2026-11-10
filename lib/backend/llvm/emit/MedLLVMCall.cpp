@@ -51,6 +51,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/Loads.h"
 #include "llvm/IR/Constants.h"
@@ -59,6 +60,7 @@
 #include <algorithm>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -301,7 +303,8 @@ std::optional<LLVMArgumentBinding> bindResolvedLLVMArguments(
 }
 
 bool normalizeResolvedLLVMCalls(llvm::Module &Module, LLVMSourceMap *Sources,
-                                bool AnalystSourceProjection) {
+                                bool AnalystSourceProjection,
+                                std::vector<ResolvedCallRefusal> *Refusals) {
   const auto &Layout = Module.getDataLayout();
   const unsigned PointerBits = Layout.getPointerSizeInBits();
   auto Compatible = [&](llvm::Type *From, llvm::Type *To) {
@@ -330,19 +333,24 @@ bool normalizeResolvedLLVMCalls(llvm::Module &Module, LLVMSourceMap *Sources,
       for (auto &I : B)
         if (auto *Call = llvm::dyn_cast<llvm::CallBase>(&I))
           Calls.push_back(Call);
-  for (auto *Call : Calls) {
+  // One call: true when it stands or is reconciled, else false with the
+  // diagnostic in \p Reason.
+  const auto NormalizeCall = [&](llvm::CallBase *Call,
+                                 std::string &Reason) -> bool {
     if (AnalystSourceProjection &&
         Call->getMetadata("neverd.source.analyst-call"))
-      continue;
+      return true;
     auto *Target = llvm::dyn_cast_or_null<llvm::Function>(
         constantCallIdentity(Call->getCalledOperand(), Layout, PointerBits));
     if (!Target || (Call->getFunctionType() == Target->getFunctionType() &&
                     Call->getCallingConv() == Target->getCallingConv()))
-      continue;
-    auto Refuse = [&](llvm::StringRef Reason) {
-      syncError() << "med_llvm_emitter: resolved call in "
-                  << Call->getFunction()->getName() << " to "
-                  << Target->getName() << " " << Reason << "\n";
+      return true;
+    auto Refuse = [&](llvm::StringRef Why) {
+      Reason = ("med_llvm_emitter: resolved call in " +
+                Call->getFunction()->getName() + " to " + Target->getName() +
+                " " + Why)
+                   .str();
+      syncError() << Reason << "\n";
       return false;
     };
     auto *Type = Target->getFunctionType();
@@ -442,12 +450,29 @@ bool normalizeResolvedLLVMCalls(llvm::Module &Module, LLVMSourceMap *Sources,
     if (!Call->use_empty())
       Call->replaceAllUsesWith(Convert(Builder, Replacement, Call->getType()));
     Call->eraseFromParent();
+    return true;
+  };
+  bool Normalized = true;
+  std::set<const llvm::Function *> RefusedCallers;
+  for (auto *Call : Calls) {
+    // A refused call refuses its function, whose other calls then stand.
+    if (RefusedCallers.count(Call->getFunction()))
+      continue;
+    std::string Reason;
+    if (NormalizeCall(Call, Reason))
+      continue;
+    if (!Refusals)
+      return false;
+    Normalized = false;
+    RefusedCallers.insert(Call->getFunction());
+    Refusals->push_back({Call->getFunction(), std::move(Reason)});
   }
-  return true;
+  return Normalized;
 }
 
-bool validateResolvedLLVMCallSignatures(llvm::Module &Module,
-                                        bool AnalystSourceProjection) {
+bool validateResolvedLLVMCallSignatures(
+    llvm::Module &Module, bool AnalystSourceProjection,
+    std::vector<ResolvedCallRefusal> *Refusals) {
   const auto &Layout = Module.getDataLayout();
   // Binding passed zero for integer positions the call does not set. Now that
   // the body is known, it must not read them. A callee defined in another
@@ -465,32 +490,45 @@ bool validateResolvedLLVMCallSignatures(llvm::Module &Module,
         return true;
     return false;
   };
-  for (auto &Function : Module)
+  // Why the first call of \p Function that disagrees with its target fails,
+  // or nothing.
+  const auto FirstRefusal = [&](llvm::Function &Function) -> std::string {
     for (auto &Block : Function)
       for (auto &Instruction : Block)
         if (auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction))
           if (auto *Target = llvm::dyn_cast_or_null<llvm::Function>(
                   constantCallIdentity(Call->getCalledOperand(), Layout,
                                        Layout.getPointerSizeInBits()))) {
-            if (ReadsUnsetInteger(*Call, *Target)) {
-              syncError() << "med_llvm_emitter: resolved call in "
-                          << Function.getName()
-                          << " does not set a register argument "
-                          << Target->getName() << " reads\n";
-              return false;
-            }
+            if (ReadsUnsetInteger(*Call, *Target))
+              return ("med_llvm_emitter: resolved call in " +
+                      Function.getName() +
+                      " does not set a register argument " + Target->getName() +
+                      " reads")
+                  .str();
             if (Call->getFunctionType() == Target->getFunctionType() &&
                 Call->getCallingConv() == Target->getCallingConv())
               continue;
             if (AnalystSourceProjection &&
                 Call->getMetadata("neverd.source.analyst-call"))
               continue;
-            syncError() << "med_llvm_emitter: resolved call in "
-                        << Function.getName() << " disagrees with the ABI of "
-                        << Target->getName() << "\n";
-            return false;
+            return ("med_llvm_emitter: resolved call in " + Function.getName() +
+                    " disagrees with the ABI of " + Target->getName())
+                .str();
           }
-  return true;
+    return {};
+  };
+  bool Valid = true;
+  for (auto &Function : Module) {
+    std::string Reason = FirstRefusal(Function);
+    if (Reason.empty())
+      continue;
+    syncError() << Reason << "\n";
+    if (!Refusals)
+      return false;
+    Valid = false;
+    Refusals->push_back({&Function, std::move(Reason)});
+  }
+  return Valid;
 }
 
 //===----------------------------------------------------------------------===//

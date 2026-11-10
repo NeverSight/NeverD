@@ -11,6 +11,7 @@
 
 #include "PipelineLLVMDetail.h"
 
+#include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
@@ -191,14 +192,14 @@ Pipeline::LLVMEmissionResult Pipeline::emitLLVMSharded(
     return Result;
   };
   return runLLVMShardPipeline(Funcs, Ctx, ShardPlan.NumShards, NumThreads,
-                              NoOpt, EmitShard, View);
+                              NoOpt, EmitShard, View, OmitRefusedBodies);
 }
 
 Pipeline::LLVMEmissionResult Pipeline::runLLVMShardPipeline(
     const std::vector<MedFunc> &Funcs, llvm::LLVMContext &Ctx,
     unsigned NumShards, unsigned NumThreads, bool NoOpt,
     llvm::function_ref<LLVMEmissionResult(unsigned, llvm::LLVMContext &)> Emit,
-    const SourceViewOptions &View) {
+    const SourceViewOptions &View, bool OmitRefusedBodies) {
   LLVMEmissionResult Result;
   if (NumShards == 0) {
     Result.Error = "LLVM shard planning failed: no shards";
@@ -384,8 +385,53 @@ Pipeline::LLVMEmissionResult Pipeline::runLLVMShardPipeline(
       Result.Error = "LLVM shard linking failed: incomplete module";
       return Result;
     }
-    if (!normalizeResolvedLLVMCalls(*Linked, Result.Sources.get()) ||
-        !validateResolvedLLVMCallSignatures(*Linked)) {
+    // A body whose resolved call the declaration another shard linked
+    // cannot take is left out, as a shard leaves out a body it refuses, where
+    // the unit names what it leaves out: it stays declared, with its source
+    // identity, and why is noted.  The body is found by that identity, which
+    // a name a shard disambiguated (`write_str_10002F90C`) still carries.
+    std::map<va_t, size_t> IndexOf;
+    if (OmitRefusedBodies)
+      for (size_t I = 0; I < Funcs.size(); ++I)
+        IndexOf.emplace(Funcs[I].Entry, I);
+    std::vector<ResolvedCallRefusal> Refusals;
+    auto *Collect = OmitRefusedBodies ? &Refusals : nullptr;
+    bool LeftOutBodies = false;
+    const auto Reconciled = [&](bool Kept) {
+      if (Kept)
+        return true;
+      if (!Collect)
+        return false;
+      for (ResolvedCallRefusal &Refusal : Refusals) {
+        llvm::Function &Body = *Refusal.Caller;
+        auto Identity = rewrite_source::getOriginalVA(Body);
+        if (!Identity) {
+          llvm::consumeError(Identity.takeError());
+          return false;
+        }
+        const auto Index = *Identity ? IndexOf.find(**Identity) : IndexOf.end();
+        if (Index == IndexOf.end() || Body.isDeclaration())
+          return false;
+        const va_t Entry = Funcs[Index->second].Entry;
+        if (Result.Sources)
+          for (auto It = Result.Sources->Functions.begin();
+               It != Result.Sources->Functions.end();)
+            It = It->second == &Body ? Result.Sources->Functions.erase(It)
+                                     : std::next(It);
+        LinkedFunctionNames.erase(Entry);
+        Body.deleteBody();
+        rewrite_source::setOriginalVA(Body, Entry);
+        Result.LeftOut.emplace_back(Index->second, std::move(Refusal.Reason));
+      }
+      Refusals.clear();
+      LeftOutBodies = true;
+      return true;
+    };
+    if (!Reconciled(normalizeResolvedLLVMCalls(*Linked, Result.Sources.get(),
+                                               false, Collect)) ||
+        !Reconciled(
+            validateResolvedLLVMCallSignatures(*Linked, false, Collect)) ||
+        (LeftOutBodies && !validateResolvedLLVMCallSignatures(*Linked))) {
       Result.Error =
           "LLVM shard linking failed: resolved call signature mismatch";
       return Result;

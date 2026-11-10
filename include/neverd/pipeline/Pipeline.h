@@ -935,13 +935,15 @@ private:
   /// Execute the common shard lifecycle. The emitter creates each module in
   /// its worker's context; only a complete linked module is returned in the
   /// caller's context. All workers finish before diagnostics or output are
-  /// published.
+  /// published. With \p OmitRefusedBodies, a body of \p Funcs whose resolved
+  /// call the linked module cannot reconcile is declared only and listed in
+  /// LeftOut instead of failing the unit.
   static LLVMEmissionResult runLLVMShardPipeline(
       const std::vector<MedFunc> &Funcs, llvm::LLVMContext &Ctx,
       unsigned NumShards, unsigned NumThreads, bool NoOpt,
       llvm::function_ref<LLVMEmissionResult(unsigned, llvm::LLVMContext &)>
           Emit,
-      const SourceViewOptions &View = {});
+      const SourceViewOptions &View = {}, bool OmitRefusedBodies = false);
 
   /// Shared source call/return recovery before either HighIR or LLVM emission.
   /// \p Cache keeps the image's import-address names when this run shares one.
