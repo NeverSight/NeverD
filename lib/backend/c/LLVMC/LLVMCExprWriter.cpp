@@ -1543,7 +1543,7 @@ void LLVMCWriter::discoverSyntheticFrame(llvm::Function &Fn) {
 }
 
 std::optional<VariableSym> LLVMCWriter::debugFrameVariable(int64_t Disp) const {
-  if (auto Hit = FrameDebugCache.find(Disp); Hit != FrameDebugCache.end())
+  if (auto Hit = FrameDebugCache.find({Disp, 0}); Hit != FrameDebugCache.end())
     return Hit->second;
   auto Accept =
       [this](std::optional<VariableSym> Var) -> std::optional<VariableSym> {
@@ -1591,7 +1591,7 @@ std::optional<VariableSym> LLVMCWriter::debugFrameVariable(int64_t Disp) const {
         Found = std::nullopt;
     }
   }
-  FrameDebugCache[Disp] = Found;
+  FrameDebugCache[{Disp, 0}] = Found;
   return Found;
 }
 
@@ -1912,7 +1912,7 @@ LLVMCWriter::frameSlotAccess(const llvm::Value *Ptr, uint16_t AccessSize,
       Rel = Candidate;
     }
   }
-  if (!Owner && !Container) {
+  if (!Owner && !Container && Dbg && FunctionEntry) {
     for (uint64_t Candidate = 1;
          Candidate <= ::neverd::limits::backend::kLLVMCExprWriterMaxInterior;
          ++Candidate) {

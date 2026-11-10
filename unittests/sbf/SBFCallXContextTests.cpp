@@ -13904,6 +13904,224 @@ TEST(SBFCallXContexts, IncomingCapturedFieldsSurviveCalleeBackedges) {
   RecordProperty("raw_executions", static_cast<int>(RawExecutions));
 }
 
+TEST(SBFCallXContexts, GuardedProductsExcludeZeroOnlyWithoutWrapping) {
+  enum class Case {
+    Bounded,
+    MissingNonzero,
+    LooseBound,
+    ClobberedCopy,
+    ClobberedProduct,
+    ClobberedOperand,
+    ReloadedCopy,
+    CallClobber,
+    Mul32,
+    Guard32,
+    Copy32,
+    LoopClobber,
+    CopyChain,
+    MixedJoin,
+    ImmediateBound,
+    ProjectedBound,
+    RightOperand,
+    RegisterFactor,
+    UnknownFactor,
+  };
+  constexpr uint64_t CountLimit = 0x02AAAAAAAAAAAAAB;
+  unsigned RawExecutions = 0;
+  for (Case Kind :
+       {Case::Bounded, Case::MissingNonzero, Case::LooseBound,
+        Case::ClobberedCopy, Case::ClobberedProduct, Case::ClobberedOperand,
+        Case::ReloadedCopy, Case::CallClobber, Case::Mul32, Case::Guard32,
+        Case::Copy32, Case::LoopClobber, Case::CopyChain, Case::MixedJoin,
+        Case::ImmediateBound, Case::ProjectedBound, Case::RightOperand,
+        Case::RegisterFactor, Case::UnknownFactor})
+    for (bool Reverse : {false, true}) {
+      SCOPED_TRACE(static_cast<unsigned>(Kind));
+      SCOPED_TRACE(Reverse);
+      std::vector<test::EncodedInstruction> Text;
+      const auto Literal = [&](unsigned Register, uint64_t Value) {
+        const size_t Slot = Text.size();
+        const auto Words = test::loadImm64(Register, Value);
+        Text.insert(Text.end(), Words.begin(), Words.end());
+        return Slot;
+      };
+      const unsigned Count = Kind == Case::CallClobber ? 1 : 6;
+      const uint64_t Limit = Kind == Case::LooseBound       ? UINT64_MAX
+                             : Kind == Case::Guard32        ? 4
+                             : Kind == Case::ImmediateBound ? 4660
+                                                            : CountLimit;
+      Literal(4, kInputStart);
+      Text.push_back(encode(Opcode::LD_DW_REG, Count, 4));
+      std::optional<size_t> ZeroGuard;
+      if (Kind != Case::MissingNonzero) {
+        ZeroGuard = Text.size();
+        Text.push_back({});
+      }
+      Literal(2, Limit);
+      const size_t UpperGuard = Text.size();
+      Text.push_back({});
+      std::optional<size_t> Call;
+      if (Kind == Case::CallClobber) {
+        Call = Text.size();
+        Text.push_back({});
+      }
+      if (Kind == Case::ClobberedOperand)
+        Literal(Count, uint64_t{1} << 60);
+      if (Kind == Case::CopyChain) {
+        Text.push_back(encode(Opcode::MOV64_REG, 9, Count));
+        Text.push_back(encode(Opcode::MOV64_REG, 8, 9));
+        Text.push_back(encode(Opcode::MOV64_IMM, 9));
+      } else {
+        Text.push_back(
+            encode(Kind == Case::Copy32 ? Opcode::MOV32_REG : Opcode::MOV64_REG,
+                   8, Count));
+      }
+      if (Kind == Case::LoopClobber) {
+        Text.push_back(encode(Opcode::MOV64_IMM, 9, 0, 0, 2));
+        Text.push_back(encode(Opcode::SUB64_IMM, 8, 0, 0, 1));
+        Text.push_back(encode(Opcode::SUB64_IMM, 9, 0, 0, 1));
+        Text.push_back(encode(Opcode::JNE64_IMM, 9, 0, -3));
+      }
+      if (Kind == Case::ClobberedCopy)
+        Text.push_back(encode(Opcode::MOV64_IMM, 8));
+      if (Kind == Case::ReloadedCopy)
+        Text.push_back(encode(Opcode::LD_DW_REG, 8, 4, 8));
+      if (Kind == Case::MixedJoin) {
+        Text.push_back(encode(Opcode::MOV64_REG, 5, Count));
+        Text.push_back(encode(Opcode::AND64_IMM, 5, 0, 0, 1));
+        Text.push_back(encode(Opcode::JEQ64_IMM, 5, 0, 1));
+        Text.push_back(encode(Opcode::MOV64_IMM, 8));
+      }
+      if (Kind == Case::RegisterFactor || Kind == Case::UnknownFactor) {
+        Text.push_back(Kind == Case::RegisterFactor
+                           ? encode(Opcode::MOV64_IMM, 3, 0, 0, 48)
+                           : encode(Opcode::LD_DW_REG, 3, 4, 8));
+        Text.push_back(encode(Opcode::MUL64_REG, 8, 3));
+      } else {
+        Text.push_back(
+            encode(Kind == Case::Mul32 ? Opcode::MUL32_IMM : Opcode::MUL64_IMM,
+                   8, 0, 0, 48));
+      }
+      if (Kind == Case::ClobberedProduct)
+        Text.push_back(encode(Opcode::MOV64_IMM, 8));
+      if (Kind == Case::ProjectedBound || Kind == Case::RightOperand)
+        Text.push_back(encode(Opcode::MOV64_IMM, 2));
+      const size_t ProductGuard = Text.size();
+      Text.push_back({});
+      const size_t Good = Literal(7, 0);
+      const size_t Join = Text.size();
+      Text.push_back({});
+      const size_t Bad = Literal(7, 0);
+      const size_t CallX = Text.size();
+      Text.push_back(encode(Opcode::CALL_REG, 7));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t Reject = Text.size();
+      Text.push_back(encode(Opcode::MOV64_IMM, 0));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t Helper = Text.size();
+      Literal(1, uint64_t{1} << 60);
+      Text.push_back(encode(Opcode::MOV64_IMM, 0));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t FirstTarget = Text.size();
+      Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t SecondTarget = Text.size();
+      Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 43));
+      Text.push_back(encode(Opcode::EXIT));
+      if (ZeroGuard)
+        Text[*ZeroGuard] =
+            encode(Opcode::JEQ64_IMM, Count, 0, Reject - *ZeroGuard - 1);
+      Text[UpperGuard] =
+          Kind == Case::RightOperand
+              ? encode(Opcode::JLE64_REG, 2, Count, Reject - UpperGuard - 1)
+          : Kind == Case::ImmediateBound
+              ? encode(Opcode::JGE64_IMM, Count, 0, Reject - UpperGuard - 1,
+                       Limit)
+              : encode(Kind == Case::Guard32 ? Opcode::JGE32_REG
+                                             : Opcode::JGE64_REG,
+                       Count, 2, Reject - UpperGuard - 1);
+      if (Call)
+        Text[*Call] = encode(Opcode::CALL_IMM, 0, 1, 0, Helper - *Call - 1);
+      Text[ProductGuard] =
+          encode(Opcode::JEQ64_IMM, 8, 0, Bad - ProductGuard - 1);
+      Text[Join] = encode(Opcode::JA, 0, 0, CallX - Join - 1);
+      for (const auto &[Slot, Target] :
+           {std::pair{Good, FirstTarget}, std::pair{Bad, SecondTarget}}) {
+        const auto Words = test::loadImm64(7, kBytecodeStart + Target * 8);
+        std::copy(Words.begin(), Words.end(), Text.begin() + Slot);
+      }
+      auto Program = analyze(test::makeImage(Text, {}));
+      ASSERT_TRUE(static_cast<bool>(Program))
+          << llvm::toString(Program.takeError());
+      if (Reverse)
+        std::reverse(Program->Low.Edges.begin(), Program->Low.Edges.end());
+      auto Report = recoverCallXContexts(*Program);
+      ASSERT_TRUE(static_cast<bool>(Report))
+          << llvm::toString(Report.takeError());
+      checkSummaryReferences(*Report);
+      EXPECT_FALSE(Report->SpecializationBudgetExhausted);
+      const bool OnlyFirst =
+          llvm::any_of(Report->Contexts, [&](const auto &Site) {
+            return !Site.EntryPrefixOnly && Site.CallXSlot == CallX &&
+                   Site.TargetSlot == FirstTarget;
+          });
+      EXPECT_EQ(OnlyFirst, Kind == Case::Bounded || Kind == Case::CopyChain ||
+                               Kind == Case::ImmediateBound ||
+                               Kind == Case::ProjectedBound ||
+                               Kind == Case::RightOperand ||
+                               Kind == Case::RegisterFactor);
+      bool ObservedZero = false;
+      for (uint64_t Value :
+           {uint64_t{0}, uint64_t{1}, uint64_t{2}, uint64_t{3},
+            uint64_t{1} << 28, uint64_t{1} << 32, uint64_t{1} << 60,
+            CountLimit - 1, CountLimit, UINT64_MAX})
+        for (uint64_t Second : {uint64_t{0}, uint64_t{48}}) {
+          ExecutionEnvironment Environment;
+          std::vector<uint8_t> Input(16);
+          llvm::support::endian::write64le(Input.data(), Value);
+          llvm::support::endian::write64le(Input.data() + 8, Second);
+          Environment.Memory.push_back({kInputStart, Input, false, "input"});
+          auto Raw = executeRaw(*Program, std::move(Environment));
+          ASSERT_TRUE(static_cast<bool>(Raw))
+              << llvm::toString(Raw.takeError());
+          EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+          uint64_t Operand = Value;
+          if (Kind == Case::ClobberedOperand || Kind == Case::CallClobber)
+            Operand = uint64_t{1} << 60;
+          if (Kind == Case::ClobberedCopy ||
+              (Kind == Case::MixedJoin && (Value & 1)))
+            Operand = 0;
+          if (Kind == Case::ReloadedCopy)
+            Operand = Second;
+          if (Kind == Case::Copy32)
+            Operand = static_cast<uint32_t>(Operand);
+          if (Kind == Case::LoopClobber)
+            Operand -= 2;
+          uint64_t Product =
+              Operand * (Kind == Case::UnknownFactor ? Second : 48);
+          if (Kind == Case::Mul32)
+            Product = static_cast<uint32_t>(Product);
+          if (Kind == Case::ClobberedProduct)
+            Product = 0;
+          const bool Rejected =
+              (Kind != Case::MissingNonzero && Value == 0) ||
+              (Kind == Case::Guard32 ? static_cast<uint32_t>(Value) : Value) >=
+                  Limit;
+          const uint64_t Expected = Rejected ? 0 : Product ? 42 : 43;
+          EXPECT_EQ(Raw->ReturnValue, Expected) << Value << ", " << Second;
+          ObservedZero |= Expected == 43;
+          ++RawExecutions;
+        }
+      EXPECT_EQ(ObservedZero,
+                !(Kind == Case::Bounded || Kind == Case::CopyChain ||
+                  Kind == Case::ImmediateBound ||
+                  Kind == Case::ProjectedBound || Kind == Case::RightOperand ||
+                  Kind == Case::RegisterFactor));
+    }
+  EXPECT_EQ(RawExecutions, 760u);
+  RecordProperty("raw_executions", static_cast<int>(RawExecutions));
+}
+
 TEST(SBFCallXContexts, RepeatedGuardsPreserveOnlyUnchangedBooleanCarriers) {
   unsigned RawExecutions = 0;
   for (unsigned Mode = 0; Mode != 12; ++Mode)

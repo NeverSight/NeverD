@@ -10,6 +10,7 @@
 #include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceCallABI.h"
+#include "neverd/libc/LibCFloatingArguments.h"
 #include "neverd/types/TypeParse.h"
 
 #include <algorithm>
@@ -66,6 +67,9 @@ TEST(DebugContext, NoReturnQueryUsesTheProvidersValidatedPrototype) {
   EXPECT_TRUE(Context.prototypeDoesNotReturn("stop"));
   EXPECT_FALSE(Context.prototypeDoesNotReturn("returning"));
   EXPECT_FALSE(Context.prototypeDoesNotReturn("missing"));
+  ASSERT_TRUE(Context.resolvePrototypeABI("stop"));
+  EXPECT_TRUE(Context.resolvePrototypeABI("stop")->NoReturn);
+  EXPECT_FALSE(Context.resolvePrototypeABI("missing"));
 }
 
 TEST(LocalTypesDebugContext, TakesDeclarationsAndNewTypesInPlace) {
@@ -328,6 +332,133 @@ TEST(LocalTypesDebugContext, NoReturnQueryMatchesValidatedPrototype) {
     EXPECT_TRUE(Context.prototypeDoesNotReturn("Stop"));
     EXPECT_FALSE(Context.prototypeDoesNotReturn("BadReturn"));
     EXPECT_FALSE(Context.prototypeDoesNotReturn("BadParameter"));
+  }
+}
+
+TEST(LocalTypesDebugContext, NoReturnValidationRetainsTypeBoundaries) {
+  using namespace neverd;
+  for (auto Model : {types::DataModel::ILP32, types::DataModel::LLP64,
+                     types::DataModel::LP64}) {
+    auto Library = std::make_shared<types::TypeLibrary>(Model);
+    ASSERT_TRUE(types::parseCTypes(R"(
+      typedef long Count;
+      typedef struct Node { struct Node *Next; Count Value; } Node;
+      enum Mode { StopNow, StopLater };
+      typedef void (*Callback)(Node *Input, Count Value);
+    )",
+                                   *Library)
+                    .ok());
+    auto Callback = std::make_shared<types::FunctionDef>();
+    Callback->Return = types::makeBuiltin(types::Builtin::Void);
+    const auto Missing = types::makeNamed("Missing", types::TypeKind::Typedef);
+    // The display type stores object sizes in uint16_t. A value beyond that
+    // boundary is unavailable, but a pointer to it still has a valid ABI.
+    const auto Oversized =
+        types::makeArray(types::makeBuiltin(types::Builtin::UChar), 0x10000);
+    struct Case {
+      const char *Name;
+      types::TypeExprRef Type;
+      bool Valid;
+    };
+    const std::vector<Case> Cases = {
+        {"Count", types::makeNamed("Count", types::TypeKind::Typedef), true},
+        {"Node", types::makeNamed("Node", types::TypeKind::Typedef), true},
+        {"Mode", types::makeNamed("Mode", types::TypeKind::Enum), true},
+        {"Callback", types::makeNamed("Callback", types::TypeKind::Typedef),
+         true},
+        {"Missing", Missing, false},
+        {"Oversized", Oversized, false},
+        {"OpaquePointer",
+         types::makePointer(Missing, types::pointerBytes(Model)), true},
+        {"LargePointer",
+         types::makePointer(Oversized, types::pointerBytes(Model)), true},
+        {"Function", types::makeFunction(Callback), false},
+        {"Void", types::makeBuiltin(types::Builtin::Void), false},
+        {"Null", nullptr, false}};
+    for (const auto &Item : Cases) {
+      auto Function = std::make_shared<types::FunctionDef>();
+      Function->NoReturn = true;
+      Function->Return = types::makeBuiltin(types::Builtin::Void);
+      Function->Params.push_back({"Input", Item.Type});
+      Library->definePrototype(std::string("Stop") + Item.Name,
+                               std::move(Function));
+    }
+    NamesOnlyDebugContext Names;
+    sdk::LocalTypesDebugContext Queried(Names, Library);
+    sdk::LocalTypesDebugContext Resolved(Names, Library);
+    for (const auto &Item : Cases) {
+      const std::string Name = std::string("Stop") + Item.Name;
+      SCOPED_TRACE(Name);
+      EXPECT_EQ(Queried.prototypeDoesNotReturn(Name), Item.Valid);
+      EXPECT_EQ(Queried.prototypeDoesNotReturn(Name), Item.Valid);
+      const auto ABI = Queried.resolvePrototypeABI(Name);
+      ASSERT_EQ(ABI.has_value(), Item.Valid);
+      const auto Expected = Resolved.resolvePrototype(Name);
+      const auto Actual = Queried.resolvePrototype(Name);
+      ASSERT_EQ(Expected.has_value(), Item.Valid);
+      ASSERT_EQ(Actual.has_value(), Item.Valid);
+      EXPECT_EQ(Queried.prototypeDoesNotReturn(Name), Item.Valid);
+      EXPECT_EQ(Resolved.prototypeDoesNotReturn(Name), Item.Valid);
+      if (Expected && Actual) {
+        EXPECT_EQ(Actual->PrototypeDeclaration, Expected->PrototypeDeclaration);
+        EXPECT_EQ(Actual->PortablePrototypeDeclaration,
+                  Expected->PortablePrototypeDeclaration);
+        EXPECT_EQ(Actual->PortableParameterTypes,
+                  Expected->PortableParameterTypes);
+        EXPECT_TRUE(sdk::passesAlike(*Actual, *Expected));
+        EXPECT_TRUE(sdk::passesAlike(*ABI, *Expected));
+        EXPECT_EQ(ABI->PrototypeLibrary, Expected->PrototypeLibrary);
+        EXPECT_EQ(ABI->NoReturn, Expected->NoReturn);
+      }
+    }
+  }
+}
+
+TEST(LocalTypesDebugContext, ABIQueriesPreserveFloatingCallContracts) {
+  using namespace neverd;
+  for (auto Model : {types::DataModel::ILP32, types::DataModel::LLP64,
+                     types::DataModel::LP64}) {
+    auto Library = std::make_shared<types::TypeLibrary>(Model);
+    ASSERT_TRUE(types::parseCTypes(R"(
+      float Single(float Value, int Count);
+      double Double(long Count, double Value);
+      long double Extended(void);
+      void Nothing(void);
+      int Integer(void);
+      float *Pointer(double Value);
+      double Variadic(const char *Format, ...);
+      double __fastcall Registers(double Value);
+      struct Pair { double X, Y; };
+      struct Pair Record(struct Pair Value);
+    )",
+                                   *Library)
+                    .ok());
+    NamesOnlyDebugContext Names;
+    sdk::LocalTypesDebugContext Context(Names, Library);
+    for (const char *Name :
+         {"Single", "Double", "Extended", "Nothing", "Integer", "Pointer",
+          "Variadic", "Registers", "Record"}) {
+      SCOPED_TRACE(Name);
+      const auto ABI = Context.resolvePrototypeABI(Name);
+      const auto Full = Context.resolvePrototype(Name);
+      ASSERT_TRUE(ABI && Full);
+      EXPECT_EQ(ABI->PrototypeLibrary, Full->PrototypeLibrary);
+      EXPECT_EQ(ABI->PrototypeFromHeader, Full->PrototypeFromHeader);
+      EXPECT_EQ(ABI->PrototypeFromCLibrary, Full->PrototypeFromCLibrary);
+      EXPECT_EQ(ABI->CallConv, Full->CallConv);
+      EXPECT_EQ(ABI->IsVariadic, Full->IsVariadic);
+      EXPECT_TRUE(sdk::passesAlike(*ABI, *Full));
+      for (auto Arch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+        for (auto Format :
+             {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+          const auto Expected =
+              libc::floatingCallArguments(*Full, Arch, Format);
+          EXPECT_EQ(libc::floatingCallArguments(*ABI, Arch, Format), Expected);
+          EXPECT_EQ(libc::floatingCallArguments(
+                        *Context.resolvePrototypeABI(Name), Arch, Format),
+                    Expected);
+        }
+    }
   }
 }
 
@@ -981,9 +1112,15 @@ TEST(LocalTypesDebugContext, NamesTheHeaderLibraryAPrototypeComesFrom) {
   NamesOnlyDebugContext Names;
   sdk::LocalTypesDebugContext Context(Names, Library, {}, &Image,
                                       {types::HeaderLibrary::WindowsKernelX64});
+  const auto ABI = Context.resolvePrototypeABI("IoThreadToProcess");
+  ASSERT_TRUE(ABI);
   std::optional<FunctionSym> Owner = Context.resolveFunction(0x1000);
   ASSERT_TRUE(Owner.has_value());
   EXPECT_EQ(Owner->PrototypeLibrary, "windows-kernel-x64");
+  EXPECT_EQ(ABI->PrototypeLibrary, Owner->PrototypeLibrary);
+  EXPECT_EQ(ABI->PrototypeFromHeader, Owner->PrototypeFromHeader);
+  EXPECT_EQ(ABI->PrototypeFromCLibrary, Owner->PrototypeFromCLibrary);
+  EXPECT_TRUE(sdk::passesAlike(*ABI, *Owner));
   EXPECT_TRUE(Owner->PrototypeFromHeader);
   EXPECT_FALSE(Owner->PrototypeFromCLibrary);
   EXPECT_EQ(Owner->PrototypeDeclaration,

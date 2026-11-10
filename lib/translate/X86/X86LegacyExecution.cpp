@@ -19,6 +19,7 @@
 #include "X86LegacyScalar.h"
 #include "X86LegacySegmentEncoding.h"
 #include "X86LegacyString.h"
+#include "X86LegacyTaskSwitch.h"
 
 #include "neverd/ir/X86/X86DebugRules.h"
 #include "neverd/ir/X86/X86ExceptionDelivery.h"
@@ -120,8 +121,9 @@ llvm::Error detail::admitLegacyExecution(const X86LegacyExecutionState &S,
                                          const X86LegacyExecutionOptions &O) {
   if (!O.EventDelivery.MaxAttempts)
     return invalid("event delivery requires a positive work budget");
-  if (S.Halted && (S.Core.CPL || S.STIBlocked || S.SSBlocked ||
-                   S.PendingStack || S.PendingMpx || S.PendingEvent))
+  if (S.Halted &&
+      (S.Core.CPL || S.STIBlocked || S.SSBlocked || S.PendingStack ||
+       S.PendingMpx || S.PendingTask || S.PendingEvent))
     return invalid("legacy halt state requires completed CPL0 HLT state");
   if (bool(S.Debug) != bool(O.Debug) ||
       (S.PendingEvent && S.PendingEvent->DataBreakpoints &&
@@ -134,15 +136,21 @@ llvm::Error detail::admitLegacyExecution(const X86LegacyExecutionState &S,
                    "profile, DR6 and supported DR7/DEBUGCTL");
   auto Controls = M.controls();
   Controls.RFlags = S.EFlags;
-  if (auto Error = validateX86LegacySegmentState(S.Core, Controls))
-    return Error;
+  if (S.PendingTask) {
+    if (auto Error = detail::validateLegacyTaskState(S, M))
+      return Error;
+  } else {
+    if (auto Error = validateX86LegacySegmentState(S.Core, Controls))
+      return Error;
+  }
   if (!(S.EFlags & 2) || (S.EFlags & ~uint32_t{0x3d7fd7}) ||
       (Controls.CR4 & ((uint64_t{1} << 23) | (uint64_t{1} << 32))))
     return invalid(
         "legacy execution requires ordinary protected flags and no CET/FRED");
   const auto &CS = S.Core.Segments[1];
   const unsigned DPL = (CS.Attributes >> 5) & 3;
-  if (DPL > S.Core.CPL || (!(CS.Attributes & 4) && DPL != S.Core.CPL))
+  if (!S.PendingTask &&
+      (DPL > S.Core.CPL || (!(CS.Attributes & 4) && DPL != S.Core.CPL)))
     return invalid("legacy execution requires an authenticated code privilege");
   if (O.Events != X86LegacyEventProfile::OrderedFrame ||
       (O.Segments.FullLimitChoice &&
@@ -157,9 +165,19 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
                             X86PagedMemory &Memory,
                             llvm::ArrayRef<uint8_t> Instruction,
                             const X86LegacyExecutionOptions &Options) {
+  if (detail::legacyTaskModeUnavailable(State)) {
+    if (auto Error = detail::validateLegacyTaskState(State, Memory))
+      return std::move(Error);
+    X86LegacyExecutionResult R;
+    R.Status = X86LegacyExecutionStatus::ModeUnavailable;
+    return R;
+  }
   if (State.PendingEvent)
     return invalid(
         "resume the pending legacy event before another instruction");
+  if (detail::legacyTaskFaultContext(State))
+    return invalid(
+        "deliver the incoming task fault before another instruction");
   if (State.Halted) {
     if (auto Error = detail::admitLegacyExecution(State, Memory, Options))
       return std::move(Error);
@@ -173,8 +191,12 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
           detail::validateLegacyMpxContinuation(State, Memory, Instruction))
     return std::move(Error);
   const bool ResumingStack = State.PendingStack.has_value();
-  const bool Resuming = ResumingStack || State.PendingMpx.has_value();
-  const bool Code32 = State.Core.Segments[1].Attributes & 0x4000;
+  const bool ResumingTask = detail::legacyTaskInstructionPending(State);
+  const bool Resuming =
+      ResumingStack || State.PendingMpx.has_value() || ResumingTask;
+  const bool Code32 = ResumingTask
+                          ? bool(detail::legacyTaskInstructionKey(State) >> 32)
+                          : bool(State.Core.Segments[1].Attributes & 0x4000);
   auto Decoded = decodeInstruction(Instruction, Code32);
   if (!Decoded)
     return Decoded.takeError();
@@ -312,13 +334,19 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     if (Branch)
       NextMpx->completeBranch(*Branch);
   }
-  const bool SingleStep = State.EFlags & 0x100;
-  const uint64_t DebugCTL = State.Debug ? State.Debug->DebugCTL : 0;
+  const uint32_t EntryFlags =
+      ResumingTask ? detail::legacyTaskEntryFlags(State) : State.EFlags;
+  const bool SingleStep = EntryFlags & 0x100;
+  const uint64_t DebugCTL = ResumingTask
+                                ? detail::legacyTaskEntryDebugControl(State)
+                            : State.Debug ? State.Debug->DebugCTL
+                                          : 0;
   if (SingleStep && (!State.Debug || !Options.Debug))
     return invalid("legacy TF stepping requires a debug-event producer");
-  if (IRET && (State.EFlags & 0x4000))
+  const bool TaskReturn = IRET && (EntryFlags & 0x4000);
+  if (TaskReturn && !Options.Tasks)
     return invalid("legacy nested-task IRET requires task-switch state");
-  if ((IRET || RETF) &&
+  if (((IRET && !TaskReturn) || RETF) &&
       (Options.Returns != X86LegacyReturnProfile::OrderedFrame ||
        (Options.Segments.AlignmentPriority &&
         *Options.Segments.AlignmentPriority !=
@@ -349,6 +377,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     Observation.Matches = State.PendingStack->DataBreakpoints;
   if (State.PendingMpx)
     Observation.Matches = State.PendingMpx->DataBreakpoints;
+  if (ResumingTask)
+    Observation.Matches = detail::legacyTaskWatchpoints(State);
   const auto Accept = [&](const X86MemoryAccessResult &Got) {
     R.SelfModifications.insert(R.SelfModifications.end(),
                                Got.SelfModifications.begin(),
@@ -397,6 +427,45 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     State.SSBlocked = State.STIBlocked = false;
     return Enter({State.EIP, 0, 0, 1, X86LegacyEventKind::Trap}, Completed);
   };
+  const auto FinishTask = [&](const detail::X86LegacyTaskResult &Got)
+      -> llvm::Expected<X86LegacyExecutionResult> {
+    Accept(Got);
+    R.InstructionAttempted = !Resuming;
+    if (Got.ModeUnavailable) {
+      detail::retainLegacyTaskWatchpoints(State, Observation.Matches);
+      R.Status = X86LegacyExecutionStatus::ModeUnavailable;
+      return R;
+    }
+    if (R.BackingFault) {
+      detail::retainLegacyTaskWatchpoints(State, Observation.Matches);
+      return R;
+    }
+    if (R.Exception)
+      return Enter({State.EIP, R.Exception->ErrorCode,
+                    uint32_t(R.Exception->CR2.value_or(0)), R.Exception->Vector,
+                    X86LegacyEventKind::Fault},
+                   false);
+    // The task owner has published TR, the address space and incoming FLAGS.
+    // Do not apply ordinary instruction RF clearing to this new task image.
+    R.InstructionCompleted = true;
+    if (State.Mpx && NextMpx)
+      State.Mpx = std::move(NextMpx);
+    const uint8_t Data =
+        x86CompleteDataBreakpoints(*State.Debug, Observation.Matches, false);
+    if (Got.DebugTrap)
+      x86PublishTaskDebug(*State.Debug);
+    // TF is saved with the old task; incoming TF starts after its first
+    // instruction. Task-switch debug is independently selected by TSS.T.
+    if (Got.DebugTrap || Data)
+      return EnterDebug(false, true, Data);
+    return R;
+  };
+  if (ResumingTask) {
+    auto Got = detail::resumeLegacyTask(State, Memory, Instruction, Options);
+    if (!Got)
+      return Got.takeError();
+    return FinishTask(*Got);
+  }
   if (!Resuming && x86PendingVirtualInterrupt(
                        State.Core.CPL, Memory.controls().CR4, State.EFlags))
     R.Exception = X86MemoryException{13, 0, {}};
@@ -431,6 +500,17 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   }
   if (R.BackingFault)
     return R;
+  if (!R.Exception && TaskReturn) {
+    State.NMIBlocked = false;
+    detail::X86LegacyTaskRequest Request{detail::X86LegacyTaskReason::Return};
+    Request.SavedEIP = State.EIP + Instruction.size();
+    Request.SavedFlags = State.EFlags;
+    auto Got =
+        detail::switchLegacyTask(State, Memory, Request, Instruction, Options);
+    if (!Got)
+      return Got.takeError();
+    return FinishTask(*Got);
+  }
   if (!R.Exception && (IRET || RETF)) {
     auto Returned = State;
     const uint16_t Discard = RETF && Body[0] == 0xca
@@ -530,14 +610,15 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
                                                   State.Sysenter, *FastSystem);
     TakenBranch = !R.Exception;
   } else if (!R.Exception && Far) {
-    auto Staged = State;
-    auto Got =
-        detail::executeLegacyFarTransfer(Staged, Memory, *Far, NextIP, Options);
+    auto Got = detail::executeLegacyFarTransfer(State, Memory, *Far, NextIP,
+                                                Instruction, Options);
     if (!Got)
       return Got.takeError();
+    if (Got->Committed || detail::legacyTaskInstructionPending(State))
+      return FinishTask(*Got);
     if (Accept(*Got)) {
-      Next = Staged.Core;
-      NextIP = Staged.EIP;
+      Next = State.Core;
+      NextIP = State.EIP;
       TakenBranch = true;
     }
   } else if (!R.Exception && Segment) {

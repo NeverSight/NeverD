@@ -211,6 +211,17 @@ in `NeverDX64PagedExecutionTests` exercise the runtime transaction and fault
 delivery; compiling those cases alone does not qualify their execution or an
 original-CPU comparison. Keep that limitation explicit in static-only runs.
 
+`X86LegacyTaskTest.*` in `NeverDX86PagingTests` checks protected task
+CALL/JMP, GDT/LDT/IDT gates and NT IRET, both TSS widths, pre/post-publication
+fault ownership, busy/backlink/static fields, debug causes, incoming address
+spaces and retained backing progress. `KVMTaskSoftwareReference/*` compares
+32-bit TSS transfers and returns with KVM's task-switch emulator under legacy
+and PAE paging. This is software-reference evidence, not physical task-switch
+qualification. `Compilers/X86LegacySourceTest.Task*` runs the same owner through
+generated host-x64 Clang/NeverC C at O0/O2, checking code-mode redispatch,
+uncharged continuation attempts and incoming-task exception frames. VM86 mode
+stops remain explicit; these tests do not qualify a complete mode machine.
+
 `X86LegacyExecutionTest`, `LegacyEvents/*` and `LegacySteps/*` in
 `NeverDX86PagingTests` cover original-byte protected legacy execution and
 16/32-bit IDT entry. The independent KVM oracle compares code/stack caches,
@@ -8087,6 +8098,21 @@ providers' declaration behavior. `LocalTypesDebugContext.NoReturnQueryMatchesVal
 compares the cheap declaration query with the full resolver across ILP32, LLP64
 and LP64, including recursive pointer records, variadic declarations, missing
 names and invalid no-return parameter/return types before and after cache fill.
+`LocalTypesDebugContext.NoReturnValidationRetainsTypeBoundaries` checks the
+same converter without C spelling, including callback and recursive record
+parameters, enums, typedefs, unavailable values and their valid pointers.
+Repeated predicates and opposite query orders retain the full resolver's
+declarations, portable parameter spellings and ABI. No-return queries must
+not construct library-wide naming tables just to validate these types.
+`LocalTypesDebugContext.ABIQueriesPreserveFloatingCallContracts` compares
+complete scalar FP descriptors before and after declaration rendering across
+three data models, four architectures and COFF/ELF/Mach-O, including variadic,
+fastcall, record, pointer and long-double declarations. The header-origin
+regression also compares the ABI-only query with the full resolver.
+`TypeRender.ScalarSpellingsPreserveLaterNameCollisions` starts with scalar
+prototypes, then queries colliding named records in opposite orders and
+repeats the scalar prototype. C and C++ retain their parameter keyword rules;
+deferred name-table construction cannot change canonical type names.
 `HighCReturnJoin.BareReturnBesideATailCallReturnsTheParameter` decompiles
 `if (b) return g(b); return a;` with a direct and an indirect tail call for
 x86-64, i386, ARM and AArch64 (`test_return_join.c`) and requires

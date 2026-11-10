@@ -50,8 +50,10 @@ public:
     return Bad;
   }
 
-  llvm::Expected<X86MemoryAccessResult>
-  run(const detail::X86LegacyFarTransfer &F, uint32_t NextIP) {
+  llvm::Expected<detail::X86LegacyTaskResult>
+  run(const detail::X86LegacyFarTransfer &F, uint32_t NextIP,
+      llvm::ArrayRef<uint8_t> Bytes) {
+    Original = Bytes;
     execute(F, NextIP);
     if (Failure)
       return std::move(*Failure);
@@ -62,8 +64,9 @@ private:
   X86LegacyExecutionState &S;
   X86PagedMemory &M;
   const X86LegacyExecutionOptions &O;
-  X86MemoryAccessResult R;
+  detail::X86LegacyTaskResult R;
   std::optional<llvm::Error> Failure;
+  llvm::ArrayRef<uint8_t> Original;
 
   bool accept(llvm::Expected<X86MemoryAccessResult> Got) {
     if (!Got) {
@@ -178,6 +181,33 @@ private:
     if (!descriptor(Selector, 13, Code, CodeAddress))
       return;
     const unsigned Type = (Code >> 40) & 31;
+    if (Type == 1 || Type == 3 || Type == 5 || Type == 9 || Type == 11) {
+      if (Type == 5 &&
+          (faultIf(((Code >> 45) & 3) < S.Core.CPL ||
+                       ((Code >> 45) & 3) < (Selector & 3),
+                   13, Selector & 0xfffc) ||
+           faultIf(!(Code & (Value{1} << 47)), 11, Selector & 0xfffc)))
+        return;
+      detail::X86LegacyTaskRequest Request{
+          F.Call ? detail::X86LegacyTaskReason::Call
+                 : detail::X86LegacyTaskReason::Jump};
+      Request.Selector = Type == 5 ? uint16_t(Code >> 16) : uint16_t(Selector);
+      Request.SavedEIP = NextIP;
+      Request.SavedFlags = S.EFlags;
+      Request.ThroughGate = Type == 5;
+      if (Type != 5)
+        Request.Descriptor = Code;
+      auto Got = detail::switchLegacyTask(S, M, Request, Original, O);
+      if (!Got) {
+        Failure = Got.takeError();
+        return;
+      }
+      Got->SelfModifications.insert(Got->SelfModifications.begin(),
+                                    R.SelfModifications.begin(),
+                                    R.SelfModifications.end());
+      R = std::move(*Got);
+      return;
+    }
     const bool Gate = Type == 4 || Type == 12;
     unsigned Width = F.Bytes, Parameters = 0;
     if (Gate) {
@@ -193,11 +223,6 @@ private:
       Selector = uint16_t(Code >> 16);
       if (!descriptor(Selector, 13, Code, CodeAddress))
         return;
-    } else if (Type == 1 || Type == 3 || Type == 5 || Type == 9 || Type == 11) {
-      Failure = llvm::createStringError(
-          llvm::errc::not_supported,
-          "legacy far task transfer requires task-switch state");
-      return;
     }
     const uint16_t Attributes = Code >> 40;
     const uint8_t DPL = (Attributes >> 5) & 3;
@@ -331,11 +356,11 @@ detail::decodeLegacyFarTransfer(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
   return E.done() ? std::optional(F) : std::nullopt;
 }
 
-llvm::Expected<X86MemoryAccessResult> detail::executeLegacyFarTransfer(
+llvm::Expected<detail::X86LegacyTaskResult> detail::executeLegacyFarTransfer(
     X86LegacyExecutionState &State, X86PagedMemory &Memory,
     const X86LegacyFarTransfer &Instruction, uint32_t NextIP,
-    const X86LegacyExecutionOptions &Options) {
-  return FarTransfer(State, Memory, Options).run(Instruction, NextIP);
+    llvm::ArrayRef<uint8_t> Bytes, const X86LegacyExecutionOptions &Options) {
+  return FarTransfer(State, Memory, Options).run(Instruction, NextIP, Bytes);
 }
 
 } // namespace neverd::translate

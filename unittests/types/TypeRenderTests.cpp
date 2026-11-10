@@ -1054,6 +1054,50 @@ TEST(TypeRender, KeywordNamespacesKeepTheirDistinctSpellings) {
   }
 }
 
+TEST(TypeRender, ScalarSpellingsPreserveLaterNameCollisions) {
+  TypeLibrary Library;
+  Library.define(structure("Scope::Item", 4, {}));
+  Library.define(structure("Scope__Item", 4, {}));
+  LocalType Enumeration;
+  Enumeration.Name = "Choices";
+  Enumeration.Kind = TypeKind::Enum;
+  auto Values = std::make_shared<EnumDef>();
+  Values->Values = {{"Scope__Item", 0, ""}, {"Scope__Item_2", 1, ""}};
+  Enumeration.Enum = std::move(Values);
+  Library.define(std::move(Enumeration));
+  auto Function = std::make_shared<FunctionDef>();
+  Function->Return = makeBuiltin(Builtin::Int);
+  for (const char *Name : {"switch", "class", "9-value", ""})
+    Function->Params.push_back({Name, makeBuiltin(Builtin::Int)});
+  const auto Signature = makeFunction(Function);
+  const auto First = makeNamed("Scope::Item", TypeKind::Struct);
+  const auto Second = makeNamed("Scope__Item", TypeKind::Struct);
+  for (auto Lang : {Language::C, Language::Cpp}) {
+    RenderOptions Options = in(Lang);
+    Options.Spelling = BuiltinSpelling::Keywords;
+    TypeSpeller ScalarFirst(Library, Options);
+    TypeSpeller NamedFirst(Library, Options);
+    const std::string Expected =
+        Lang == Language::C
+            ? "int query(int switch_, int class, int _9_value, int)"
+            : "int query(int switch_, int class_, int _9_value, int)";
+    EXPECT_EQ(ScalarFirst.spell(*Signature, "query"), Expected);
+    const std::string Tag = Lang == Language::C ? "struct " : "";
+    // Lookup order cannot decide which colliding type keeps its spelling.
+    EXPECT_EQ(ScalarFirst.spell(*Second), Tag + "Scope__Item_2");
+    EXPECT_EQ(NamedFirst.spell(*First), Tag + "Scope__Item");
+    EXPECT_EQ(ScalarFirst.spell(*First), Tag + "Scope__Item");
+    EXPECT_EQ(NamedFirst.spell(*Second), Tag + "Scope__Item_2");
+    EXPECT_EQ(ScalarFirst.spell(*Signature, "query"), Expected);
+    EXPECT_EQ(NamedFirst.spell(*Signature, "query"), Expected);
+    // A definition still gives colliding enumerators their qualified names.
+    const std::string Definition =
+        renderType(Library, *Library.find("Choices"), Options);
+    EXPECT_TRUE(contains(Definition, "Choices_Scope__Item = 0"));
+    EXPECT_TRUE(contains(Definition, "Choices_Scope__Item_2 = 1"));
+  }
+}
+
 TEST(TypeRender, UnitsSpellReservedTypedefsInExactWidths) {
   // Darwin's headers define __darwin_size_t as unsigned long, which
   // uint64_t, an unsigned long long there, is not: a decompiled unit that

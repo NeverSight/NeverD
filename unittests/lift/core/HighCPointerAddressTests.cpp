@@ -50556,3 +50556,147 @@ TEST(HighCPointerAddresses, PlatformRegisterReadRequiresAReservingABI) {
     }
   }
 }
+
+namespace {
+std::string headerVaListSource(bool LLVM, Arch TheArch, BinaryFormat Format,
+                               bool Pointer, llvm::StringRef Callee) {
+  const unsigned Bytes = getTargetRegInfo(TheArch).PointerSize;
+  const unsigned Count = Callee == "vfprintf" ? 3 : 4;
+  CEmitterOptions Options;
+  Options.TheArch = TheArch;
+  Options.Format = Format;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  if (LLVM) {
+    llvm::LLVMContext Context;
+    llvm::Module Module("va-list-call", Context);
+    Module.setDataLayout(Bytes == 4 ? "e-p:32:32" : "e-p:64:64");
+    auto *Word = llvm::Type::getIntNTy(Context, Bytes * 8);
+    std::vector<llvm::Type *> Parameters(Count, Word);
+    if (Pointer)
+      Parameters.back() = llvm::PointerType::get(Context, 0);
+    auto *Type = llvm::FunctionType::get(llvm::Type::getInt32Ty(Context),
+                                         Parameters, false);
+    auto *Target = llvm::Function::Create(
+        Type, llvm::GlobalValue::ExternalLinkage, Callee, Module);
+    auto *Caller = llvm::Function::Create(
+        Type, llvm::GlobalValue::ExternalLinkage, "format_arguments", Module);
+    llvm::IRBuilder<> B(llvm::BasicBlock::Create(Context, "entry", Caller));
+    std::vector<llvm::Value *> Arguments;
+    for (auto &Argument : Caller->args())
+      Arguments.push_back(&Argument);
+    B.CreateRet(B.CreateCall(Target, Arguments));
+    EXPECT_FALSE(llvm::verifyModule(Module));
+    EXPECT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
+  } else {
+    HighFunc Caller;
+    Caller.Name = "format_arguments";
+    Caller.Entry = 0x1000;
+    Caller.ReturnType = NdType::makeInt(4, true);
+    std::vector<ExprPtr> Arguments;
+    for (unsigned I = 0; I < Count; ++I) {
+      auto Type = Pointer && I + 1 == Count ? NdType::makePtr()
+                                            : NdType::makeInt(Bytes, false);
+      Type->Size = Bytes;
+      Caller.Params.push_back({"arg" + std::to_string(I), Type});
+      MedVar Parameter;
+      Parameter.Kind = MedVar::Param;
+      Parameter.Id = I;
+      Parameter.Size = Bytes;
+      Parameter.TheArch = TheArch;
+      Arguments.push_back(HighExpr::makeVar(Parameter, Type));
+    }
+    auto Call = HighExpr::makeCall(Callee.str(), 0x2000, Arguments);
+    Call->Type = Caller.ReturnType;
+    returnValue(Caller, std::move(Call));
+    EXPECT_TRUE(HighCEmitter().emit({Caller}, OS, Options));
+  }
+  OS.flush();
+  return Source;
+}
+} // namespace
+
+TEST(HighCPointerAddresses, HeaderVaListsKeepTheOriginalVariadicValues) {
+  if (llvm::Triple(llvm::sys::getDefaultTargetTriple()).getArch() !=
+      llvm::Triple::x86_64)
+    GTEST_SKIP() << "the execution oracle uses x86-64's va_list transport";
+  for (bool LLVM : {false, true})
+    for (bool Pointer : {false, true}) {
+      SCOPED_TRACE(LLVM);
+      SCOPED_TRACE(Pointer);
+      std::string Source = headerVaListSource(
+          LLVM, Arch::X64, BinaryFormat::ELF, Pointer, "vsnprintf");
+      Source += Pointer ? "\n#define LIST_ARGUMENT ((void *)arguments)\n"
+                        : "\n#define LIST_ARGUMENT ((uintptr_t)arguments)\n";
+      compileAndRunCallOrdering(Source + R"c(
+#include <stdarg.h>
+#include <string.h>
+static int compare(const char *format, ...) {
+  char expected[128], actual[128];
+  va_list arguments, reference;
+  va_start(arguments, format);
+  va_copy(reference, arguments);
+  int wanted = vsnprintf(expected, sizeof(expected), format, reference);
+  va_end(reference);
+  int got = format_arguments((uintptr_t)actual, sizeof(actual),
+                            (uintptr_t)format, LIST_ARGUMENT);
+  va_end(arguments);
+  return got != wanted || strcmp(expected, actual) != 0;
+}
+int main(void) {
+  return compare("%d/%.1f/%s", -17, 2.5, "kept") ||
+         compare("%d/%d/%d/%d/%d/%d/%d/%d/%.1f", 1, 2, 3, 4, 5, 6, 7, 8, 9.5);
+}
+)c",
+                                true);
+    }
+}
+
+TEST(HighCPointerAddresses, HeaderVaListsUseTheTargetsParameterABI) {
+  struct Target {
+    Arch TheArch;
+    BinaryFormat Format;
+    const char *Triple;
+  };
+  const Target Targets[] = {
+      {Arch::X64, BinaryFormat::COFF, "x86_64-w64-windows-gnu"},
+      {Arch::X86, BinaryFormat::COFF, "i686-pc-windows-msvc"},
+      {Arch::X86, BinaryFormat::ELF, "i386-unknown-linux-gnu"},
+      {Arch::X64, BinaryFormat::ELF, "x86_64-unknown-linux-gnu"},
+      {Arch::AArch64, BinaryFormat::COFF, "aarch64-pc-windows-msvc"},
+      {Arch::AArch64, BinaryFormat::MachO, "arm64-apple-macosx"},
+      {Arch::AArch64, BinaryFormat::ELF, "aarch64-unknown-linux-gnu"},
+      {Arch::ARM, BinaryFormat::ELF, "armv7-unknown-linux-gnueabihf"},
+      {Arch::ARM, BinaryFormat::COFF, "armv7-pc-windows-msvc"},
+      {Arch::ARM, BinaryFormat::MachO, "armv7-apple-ios"},
+      {Arch::MIPS32, BinaryFormat::ELF, "mips-unknown-linux-gnu"},
+      {Arch::MIPS32EL, BinaryFormat::ELF, "mipsel-unknown-linux-gnu"},
+      {Arch::MIPS64, BinaryFormat::ELF, "mips64-unknown-linux-gnuabi64"},
+      {Arch::MIPS64EL, BinaryFormat::ELF, "mips64el-unknown-linux-gnuabi64"}};
+  for (const auto &Target : Targets)
+    for (bool LLVM : {false, true})
+      for (bool Pointer : {false, true})
+        for (const char *Callee : {"vfprintf", "vsnprintf"}) {
+          SCOPED_TRACE(Target.Triple);
+          SCOPED_TRACE(LLVM);
+          SCOPED_TRACE(Pointer);
+          SCOPED_TRACE(Callee);
+          const auto Source = headerVaListSource(
+              LLVM, Target.TheArch, Target.Format, Pointer, Callee);
+          // Keep the target compiler's real va_list layout without needing
+          // a hosted SDK for every cross target. The generated calls and
+          // their machine carriers stay intact.
+          std::string Unit =
+              "#include <stdint.h>\n#include <stdarg.h>\n"
+              "extern int vfprintf(void *, const char *, va_list);\n"
+              "extern int vsnprintf(char *, __SIZE_TYPE__, const char *, "
+              "va_list);\n";
+          std::istringstream Lines(Source);
+          for (std::string Line; std::getline(Lines, Line);)
+            if (!llvm::StringRef(Line).starts_with("#include"))
+              Unit += Line + "\n";
+          const std::string Triple = "--target=" + std::string(Target.Triple);
+          source_call_execution_test::checkSyntax(
+              Unit, {Triple, "-ffreestanding", "-fno-builtin"});
+        }
+}

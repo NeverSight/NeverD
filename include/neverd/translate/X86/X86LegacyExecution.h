@@ -23,10 +23,15 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <vector>
 
 namespace neverd::translate {
+
+namespace detail {
+struct X86LegacyTaskContinuation;
+}
 
 /// Low 32-bit architectural inputs for non-IA-32e SYSENTER/SYSEXIT.
 struct X86LegacySysenterState {
@@ -134,6 +139,10 @@ struct X86LegacyExecutionState {
   /// accepted. Event entry clears this before touching the IDT, including
   /// failed entry. SMI/INIT/RESET require their separate machine-state owner.
   bool Halted = false;
+  /// The task owner retains private publication/replay state across a backing
+  /// stop or a fault after loading the incoming task. Preserve this with the
+  /// CPU and RAM; only that owner may resume or retire it.
+  std::shared_ptr<const detail::X86LegacyTaskContinuation> PendingTask;
 };
 
 /// One CPU, ordinary RAM, 16/32-bit gates, qword accessed writes, offset-first
@@ -143,7 +152,8 @@ struct X86LegacyExecutionState {
 /// the failed fault's saved RF image; its saved PC/caches use the original
 /// state. These #DF choices bind otherwise architecturally undefined program
 /// state. The producer owns event selection, APIC/debug state and machine-check
-/// recovery. Task gates, VM86 and CET need separate bindings.
+/// recovery. Task gates use the additional Tasks binding; VM86 and CET need
+/// separate execution-mode owners.
 enum class X86LegacyEventProfile : uint8_t { OrderedFrame };
 
 /// IRET reads FLAGS/CS/IP, RETF reads CS/IP; descriptor accessed writes precede
@@ -275,11 +285,26 @@ enum class X86LegacyFarTransferProfile : uint8_t { OrderedFrame };
 /// Transfers install fixed caches without reading descriptors or either stack.
 enum class X86LegacyFastSystemProfile : uint8_t { IntelSEP };
 
+/// One CPU, exclusive ordinary RAM, outgoing TSS stores before incoming state
+/// reads, then LDT/CS/SS/data descriptor loads. This specifies an access order;
+/// it does not infer a physical processor's microcode ordering. Guest TSS
+/// residency is checked before stores. Invalid changed PAE roots publish the
+/// new task, a cleared PDPTE bank and #TS(0). Requires a debug bank and an
+/// explicit Segments.FullLimitChoice before task effects.
+enum class X86LegacyTaskProfile : uint8_t { OrderedTSS };
+
+struct X86LegacyTaskBinding {
+  X86LegacyTaskProfile Profile = X86LegacyTaskProfile::OrderedTSS;
+  /// A word TSS does not preserve GPR upper halves. Bind their arbitrary
+  /// incoming values explicitly; dword tasks do not consume this choice.
+  std::optional<std::array<uint16_t, 8>> WordGPRHigh;
+};
+
 /// Shared legacy/x64 instruction-step and execute-comparator profiles. MOV/POP
 /// SS suppresses its own TF trap and the following instruction breakpoint.
 /// DebugRegisters additionally owns MOV-DR/GD with a bound frame policy.
 /// Watchpoints additionally owns data/I/O causes and delayed SS state. Task
-/// traps and branch stepping are not inferred.
+/// traps require Tasks; branch stepping requires BranchWatchpoints.
 using X86LegacyDebugProfile = X86InstructionDebugProfile;
 
 struct X86LegacyExecutionOptions {
@@ -295,6 +320,7 @@ struct X86LegacyExecutionOptions {
   std::optional<X86LegacyScalarProfile> Scalars;
   std::optional<X86LegacyCallProfile> Calls;
   std::optional<X86LegacyFastSystemProfile> FastSystem;
+  std::optional<X86LegacyTaskBinding> Tasks;
   /// Explicit CF/PF/AF/ZF/SF/OF image after successful DIV/IDIV. No other
   /// bits are permitted. Faults preserve the original arithmetic flags.
   std::optional<uint32_t> DivisionArithmeticFlags;
@@ -358,6 +384,10 @@ enum class X86LegacyExecutionStatus : uint8_t {
   /// HLT completed, or the CPU is still waiting without another attempt.
   /// Consult InstructionAttempted/Completed to distinguish those cases.
   Halted,
+  /// A task has published a destination outside the protected executor's
+  /// mode contract. Retain PendingTask (and any PendingEvent); no instruction
+  /// or event completion is implied, and this is not a guest exception.
+  ModeUnavailable,
 };
 
 struct X86LegacyExecutionResult {
@@ -416,7 +446,10 @@ resumeX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// BNDINIT commits only on success, including untaken Jcc, before debug entry.
 /// FarTransfers adds direct and memory far CALL/JMP and 16/32-bit call gates,
 /// including inner-ring stack switches and parameter copying. Transfers stop
-/// before fetching the destination. Task gates and TSS transfers refuse.
+/// before fetching the destination. Tasks additionally owns protected TSS
+/// CALL/JMP, task gates and NT IRET. PendingTask retains pre/post-publication
+/// memory progress; failures after publication belong to the incoming task.
+/// VM86 destinations stop with ModeUnavailable and retained state.
 /// The explicit Strings profile adds MOVS/STOS/LODS/CMPS/SCAS, with REP or
 /// REPE/REPNE as appropriate, in both address and operand widths. Each call
 /// commits at most one element; RepeatContinue retains EIP, sets RF, ends
