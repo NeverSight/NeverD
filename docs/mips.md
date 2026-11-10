@@ -765,6 +765,40 @@ feature products. Exact receipts and compressed source evidence remain in
 builds are removed after their last readers; the current CLI/SDK, incremental
 cache and qualified reference library are retained.
 
+The [CP0/PAUSE, DSP packing and MSA I5 increment](https://github.com/NeverSight/NeverD/pull/2301)
+adds the bounded CP0 word views and PAUSE model above, four DSP forms and
+eleven MSA immediate families in all four lane widths. Independent original
+DSP/MSA instruction checks passed 7,464 observations before the source
+comparisons. The full integrated Release selection passed 1,578 cases with
+36 explicit host/compiler/fixture skips. The subsequent compiler-helper fix
+passed all 126 MIPS pipeline cases. The later shared C integration selection
+passed 1,243 cases with 73 explicit skips. The qualification and build identities
+are recorded in the [qualification receipt](evidence/mips-cp0-immediate-2026-11-11.json).
+
+The six source matrices qualify 4,724 groups. The 1,252 classic, microMIPS,
+MIPS16 and MIPS16e2 groups execute on the final products; the 648 DSP and 2,824
+MSA groups retain their completed execution evidence only after regenerating
+all 1,736 distinct C outputs and matching complete source, input ELF,
+toolchain and reference-library hashes. This is explicit reuse of identical
+source evidence, not a claim that those executions were repeated. There are
+also 52 stateful e2 source refusals, 24 standalone DSP execution groups,
+12 external compiler feature probes, four live MSA wide-carrier groups and
+four wide-storage/declaration checks. The compiler probes include DSPControl
+read/write helpers under adverse `-mdsp -mmsa` defaults. All four Archer C7
+`ubus` outputs retain their previous hashes.
+
+Performance evidence separates the same-base feature comparison, long/mixed
+compressed streams, newly admitted instruction throughput and the later shared
+dev/source-compiler changes. Seven warmed alternating pairs retain CPU,
+wall time, memory and output fingerprints; the final firmware comparison uses
+20 complete requests per sample with matching snapshot layouts. These runs
+do not establish universal improvement or a cross-tool ranking. Raw reports,
+compiler-failure traces, recovery indexes and cleanup receipts remain in
+`build-mips/mips-cp0-immediate/`; completed raw reports are compressed and
+reproducible test/snapshot products are retired after their final readers.
+Generic CP0/cache/MT behavior, DSP accumulator/revision coverage, remaining MSA
+operations and original-e2 hardware execution remain outside this increment.
+
 ## TP-Link firmware workflow
 
 Start with the actual extracted ELF profile instead of assuming a device is

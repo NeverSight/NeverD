@@ -23672,6 +23672,12 @@ target attributes. Pipeline checks cover image/standalone profiles and the
 combined DSP/MSA constraint; the source runners execute the exported wide
 helpers too. Disabling vectorization only in the test command is not the
 qualification contract: the generated source itself carries the constraint.
+Standalone DSP controls include pure, wide-carrier and DSPControl-transfer
+functions. Twelve external Clang probes compile their HighC/LLVMC output with
+`-mdsp -mmsa` and inspect every retained LLVM definition, including read/write
+helpers, for the composed negative feature attributes. These compiler probes
+complement 24 standalone execution groups; checking the source spelling alone
+would miss Clang's declaration-versus-pragma attribute replacement.
 
 ### MIPS decode/lift and firmware performance
 
