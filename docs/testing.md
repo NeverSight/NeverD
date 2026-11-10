@@ -21762,6 +21762,20 @@ These are ordinary native Darwin ABI tests, not CPTA-on or a qualification of
 arbitrary lifted-image publication. Their temporary objects and executables
 are removed after execution.
 
+`AArch64EntryABI.ExportSignedNativeInputs` verifies and optionally exports the
+actual reconstructed entry IR and its independent caller for
+`scripts/verify_arm64e_entry.py`. The explicit native-compiler matrix covers
+O0/O2 IA/IB address-diverse calls, a corrupted-entry-signature negative control
+and compact/forced-DWARF exception propagation. Both profiles retain Darwin's
+unwind lookup index; the DWARF profile verifies the final per-function encoding
+for scalar/i128/HVA128/x8 entries, their carrier bodies, the thrower and catcher.
+Each exception case checks destructor cleanup and the subsequent normal value.
+Its Python tests reject missing
+or skipped exports, stale/system-profile mismatches and missing signed frames;
+they also check partial-run cleanup and prevent offline execution, NeverD
+codegen or CPTA qualification from being inferred. Run
+`python3 -m unittest scripts.tests.test_verify_arm64e_entry scripts.tests.test_verify_arm64e_native scripts.tests.test_arm64e_artifact_lifecycle -q`.
+
 `AArch64WritebackMemory.*` in `NeverDArm64eAnalysisTests` covers GPR single
 pre/post-index operations with 130 independent LLVM MC 22.1.6 samples: 13
 load/store classes, both modes and five signed imm9 boundary values. Its

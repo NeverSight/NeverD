@@ -1,0 +1,536 @@
+{
+  "date": "2026-11-11",
+  "implementation_revision": "2201fbe2f1291e61ebca8856b3f726d314cdda21",
+  "scope": "Fixed classic arm64e Darwin C entries exported by NeverD and compiled by the selected Apple compiler; synchronous C++ exceptions with explicit frame pointers",
+  "native_reconstructed_entry_qualified": true,
+  "neverd_codegen_qualified": false,
+  "native_apple_cpta_qualified": false,
+  "whole_image_publication_qualified": false,
+  "not_qualified": [
+    "NeverD LLVM backend execution of this reconstructed-entry matrix",
+    "Asynchronous and signal unwinding",
+    "Variadic and non-C language ABI recovery",
+    "Arbitrary lifted-image publication",
+    "Native Apple CPTA-on"
+  ],
+  "local_test_host": {
+    "source_revision": "2201fbe2f1291e61ebca8856b3f726d314cdda21",
+    "binary_sha256": "f95216fc52cbdb2a1aac831db6a6cbe7d48dda26508a1439f6aeb369b9fbcfb0",
+    "build_profile": "Release",
+    "prebuilt_tag": "neverd-llvm-v23.0.0-r6",
+    "llvm_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+    "source_sha256": {
+      "include/neverd/backend/llvm/AArch64/LLVMEntryABI.def": "926048e4cb5377490ead784eda3167581089165ce401607bcd5592bb52de972b",
+      "include/neverd/backend/llvm/AArch64/LLVMEntryABI.h": "a3cc4fa331fa1f843f1361b4ea5f871f68e392ce9cc7632fa0c80d0231f1b35e",
+      "include/neverd/backend/llvm/LLVMSourceCallValue.def": "72fb7ccb8155a79176b862f9775eb256608612801c0f3370418403dbec298335",
+      "include/neverd/backend/llvm/LLVMSourceCallValue.h": "6698219867725f32d6667ddcef89087c9193c8640de089d03ccd249f860ff748",
+      "lib/backend/llvm/AArch64/LLVMEntryABI.cpp": "cc9e4ae4c3868e4669dc986fd0fde133ace7e0b059e7511932e270d911834431",
+      "lib/backend/llvm/emit/MedLLVMEmitter.cpp": "193b02d163831fb89ea2180655dd6b6498528a5c854beca5cfdcb80a60447a8d",
+      "lib/ir/SourceABI.cpp": "3452f57574a1134b22215fec530c8940093a6cfdad6f53219c6001318b0e5321",
+      "scripts/arm64e_artifacts.def": "c7748b446d2d7e9677d73b7dc6fb365c2521cc03eb6c06e50c75e6f8479bbd66",
+      "scripts/arm64e_artifacts.py": "ad55c17899d8a75fa12392100d782555c5f177955caaddc98c51163af659aff0",
+      "scripts/verify_arm64e_entry.def": "cdbfc570e2fa5099a7714661a287bf7b774a98a927c9d12f5ca5feca2f0d02fe",
+      "scripts/verify_arm64e_entry.py": "7ea73be4118f790f1f614d6cda2e3ef8337204528a713f810bb12c5d7be08edd",
+      "scripts/verify_arm64e_native.def": "40b1edccd85fc303cc9db292c15044ba7b6dc136a2eef5515d25a008584a4c13",
+      "scripts/verify_arm64e_native.py": "240ba23bdcb63bd8a59ecb8ed14b3bdc01bd5a5b71300f8b1acf7439c6c1f8e1",
+      "unittests/lift/aarch64/AArch64EntryABIFixtures.def": "b1f9915e4d65f47aab8151a052c9b08d6e2c857dbac8ab98cbc3317d76328647",
+      "unittests/lift/aarch64/AArch64EntryABITests.cpp": "e3265f767a139e9b818e8f5e8a67a280b5e9bd220cd46f09862c377c8c629180",
+      "unittests/lift/format/MachOAuthenticatedNativeFixtures.def": "d1628d586e9733be6511cf100d5e2190f65931fad3ea76d590063d988d996997"
+    },
+    "dependency_checkouts": {
+      "signatures": "20b9036f4367e1308a3d2f0b214e06859090a7af",
+      "third_party/capstone": "b8c22e0c16b1769dfa712547d4a5c5d49560ae46",
+      "third_party/unicorn": "6dbdc470767c9503841023e0e16edbe6c2af914c"
+    }
+  },
+  "llvm_revision_note": "The manifest llvm_revision is the fork checkout; the test host links the retained r6 package, not a source build of that checkout.",
+  "cold_source_build_on_runner": false,
+  "native_run": {
+    "databaseId": 42859085649,
+    "headSha": "db03530facf61b8b32fed85bd7f1c0f00c2adc72",
+    "createdAt": "2026-11-10T16:52:52Z",
+    "updatedAt": "2026-11-10T16:54:33Z",
+    "status": "completed",
+    "conclusion": "success",
+    "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/42859085649"
+  },
+  "delivery_asset_sha256": "2015e959682df00214c9a1e707fd940035f3efccb18d5af2310e915f614c97a5",
+  "coverage": [
+    "IA/IB address-diverse authenticated function pointer calls",
+    "PAC-bit corruption must fault in a child process",
+    "Scalar, i128, HVA128 and indirect aggregate/x8 signed exception frames, catches and destructor cleanup",
+    "Normal values after each caught exception",
+    "All existing fixed entry value/carrier families, including MedIR-emitted HVA and packed stack arguments",
+    "Exact final compact and indexed-DWARF modes for each exception entry, carrier body, thrower and catcher"
+  ],
+  "local_checks": {
+    "entry_tests": 12,
+    "entry_tests_failed": 0,
+    "entry_tests_skipped": 0,
+    "verifier_tests": 31,
+    "offline_cases": 8,
+    "format_version": "22.1.2",
+    "documentation_files": 309,
+    "documentation_locales": 10
+  },
+  "local_log_sha256": {
+    "entry-sync.xml": "86b2cb9d415b9b04e58cc92cf45903eaa4d7f5eaef85e5c1f80c79a0c20edebf",
+    "entry-sync.log": "67640edd7f1d6dea09a146dde3683fc09a1c10922cc80ed945dbd01efe4aefba",
+    "python-indexed-dwarf-final.log": "102b1bd2ceabb0bd688e45010f4c38fd6ba28eb667d8719ee793195b88efa79d",
+    "offline-sync/report.json": "739f95f655639c85763aefe37fc96cbbd85d33e013a495010ae0a1a66235174f",
+    "format-final.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "docs-final.log": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14",
+    "source-provenance-final.log": "61541ba60d6ee35ffd5cb30e858b7e023a8c8364f275841ebf3e2ba5024cb662",
+    "sync-build.log": "681e4cc0f3d8174a54b659bc4dec289c6cce0faa188b66a1bbcef139b2a5aec3"
+  },
+  "root_cause": {
+    "control_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42849216672",
+    "finding": "Both compiler-only native hosts passed compact and indexed DWARF; removing __unwind_info with -no_compact_unwind aborted with an uncaught int. Async epilogue CFI also invalidated the nominal compact profile; explicit synchronous IR tables and per-function record checks now distinguish both modes."
+  },
+  "available_self_hosted_runners": {
+    "total_count": 0,
+    "runners": []
+  },
+  "native_hosts": {
+    "native-entry-macos-26": {
+      "platform": "macOS-26.7.2-arm64-arm-64bit-Mach-O",
+      "environment": {
+        "kernel": {
+          "returncode": 0,
+          "stdout": "Darwin Kernel Version 25.6.0: Mon Oct 12 00:39:04 PDT 2026; root:xnu-12377.161.15.701.48~2/RELEASE_ARM64_VMAPPLE\n",
+          "stderr": ""
+        },
+        "model": {
+          "returncode": 0,
+          "stdout": "VirtualMac2,1\n",
+          "stderr": ""
+        },
+        "effective-boot-args": {
+          "returncode": 0,
+          "stdout": "\n",
+          "stderr": ""
+        },
+        "sip": {
+          "returncode": 0,
+          "stdout": "System Integrity Protection status: disabled.\n",
+          "stderr": ""
+        },
+        "compiler": {
+          "returncode": 0,
+          "stdout": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n",
+          "stderr": ""
+        },
+        "sdk": {
+          "returncode": 0,
+          "stdout": "26.5\n",
+          "stderr": ""
+        },
+        "cpu": {
+          "returncode": 0,
+          "stdout": "Apple M1 (Virtual)\n",
+          "stderr": ""
+        },
+        "feat-cpa": {
+          "returncode": 1,
+          "stdout": "",
+          "stderr": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA'\n"
+        },
+        "feat-cpa2": {
+          "returncode": 1,
+          "stdout": "",
+          "stderr": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA2'\n"
+        }
+      },
+      "entry_report_sha256": "f3c40e5672be4c0fe7b433e40246701315fa528f941676c9cc9ae0e69dc7b3b7",
+      "probe_report_sha256": "315a2a219e28c131c945464391208f7f7b4f9f9d66bdba59480a7973c73cb049",
+      "delivery_report_sha256": "d549373b486118b8f3917f1c8ee7d2c0b0682785ab2ecbdfe7157cfc701b1528",
+      "probe_controls_passed": 6,
+      "compiler": {
+        "path": "/Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++",
+        "sha256": "d2e4bf622758eee1bf7267c060497fb2c41e098d37b0fca8be73898dc7e14eda",
+        "version": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n"
+      },
+      "sdk_path": "/Applications/Xcode_26.6.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+      "export_sources_sha256": {
+        "entry.ll": "81bdba0a15bd98d7762457c7d98af597fcdeb15b083997736318a5772899cefb",
+        "entry-dwarf.ll": "f0273400ba88683082bd5d08c16c4fe6d2c694a82e13f6a9e7ec61c5c4462f1b",
+        "caller.cpp": "b09e529c5cf22f3c47d59db5e136b350c5d1f699efb11697d539ff69d6749462"
+      },
+      "cases": [
+        {
+          "optimization": "-O0",
+          "key": 0,
+          "dwarf": false,
+          "sha256": "8536e847750413e4f41baca5038f2df1ea789cf074dff24bee5b5eb872e309e7",
+          "bytes": 56528,
+          "cpu_subtype": 2147483650,
+          "object": {
+            "sha256": "9069e2380ecb8aae9fbcecd3537efd308ac7944400a022d43b4e23dd7ab908ad",
+            "bytes": 9016,
+            "cpu_subtype": 2147483650
+          },
+          "executed": true
+        },
+        {
+          "optimization": "-O0",
+          "key": 1,
+          "dwarf": false,
+          "sha256": "52003c44e00405bb699432a20aecd60388fecafe6acd824a4d3a8bbd4413f86d",
+          "bytes": 56528,
+          "cpu_subtype": 2147483650,
+          "object": {
+            "sha256": "9069e2380ecb8aae9fbcecd3537efd308ac7944400a022d43b4e23dd7ab908ad",
+            "bytes": 9016,
+            "cpu_subtype": 2147483650
+          },
+          "executed": true
+        },
+        {
+          "optimization": "-O0",
+          "key": 0,
+          "dwarf": true,
+          "sha256": "1fccc57ec82d112e94dc91f6a6f440689b2650af57970fb2b6112aa0c1e2c9f8",
+          "bytes": 56528,
+          "cpu_subtype": 2147483650,
+          "object": {
+            "sha256": "dd7d0891b2c23c76c7aeab1eba32ebc0ad28c687ebb3d0973d1645947b68fbcd",
+            "bytes": 12040,
+            "cpu_subtype": 2147483650
+          },
+          "executed": true
+        },
+        {
+          "optimization": "-O0",
+          "key": 1,
+          "dwarf": true,
+          "sha256": "a1295a2ca717834e6666730327570d7ec57c4551c80d530d5ca6eebf9bc9b10c",
+          "bytes": 56528,
+          "cpu_subtype": 2147483650,
+          "object": {
+            "sha256": "dd7d0891b2c23c76c7aeab1eba32ebc0ad28c687ebb3d0973d1645947b68fbcd",
+            "bytes": 12040,
+            "cpu_subtype": 2147483650
+          },
+          "executed": true
+        },
+        {
+          "optimization": "-O2",
+          "key": 0,
+          "dwarf": false,
+          "sha256": "a73a94bf426097b2b2307d5629aeabc61450c3010d733669e847f8e8fead08f0",
+          "bytes": 37936,
+          "cpu_subtype": 2147483650,
+          "object": {
+            "sha256": "ceed60d67de83b2a887800f67f8cb2dcd11a7102e61b0ee1c3c29cffd8fdaa8d",
+            "bytes": 6576,
+            "cpu_subtype": 2147483650
+          },
+          "executed": true
+        },
+        {
+          "optimization": "-O2",
+          "key": 1,
+          "dwarf": false,
+          "sha256": "02ab77ac25485ec9c0123f8953368db2dbe89a964f2209a3495b351a57c814d4",
+          "bytes": 37936,
+          "cpu_subtype": 2147483650,
+          "object": {
+            "sha256": "ceed60d67de83b2a887800f67f8cb2dcd11a7102e61b0ee1c3c29cffd8fdaa8d",
+            "bytes": 6576,
+            "cpu_subtype": 2147483650
+          },
+          "executed": true
+        },
+        {
+          "optimization": "-O2",
+          "key": 0,
+          "dwarf": true,
+          "sha256": "47f8253d4067a1bcc8480d1e0b7fa42fa62d08861ea1db60de9098facb32ddc6",
+          "bytes": 37936,
+          "cpu_subtype": 2147483650,
+          "object": {
+            "sha256": "7e4ffe15543ebf44264b5d4834c766f31dc3b74e0827a3ecc8d481b6b4814ee3",
+            "bytes": 9608,
+            "cpu_subtype": 2147483650
+          },
+          "executed": true
+        },
+        {
+          "optimization": "-O2",
+          "key": 1,
+          "dwarf": true,
+          "sha256": "4486eabb3283cc5830ea06c24ac4714dba923d8f8bdff6ecaaa937704627a55c",
+          "bytes": 37936,
+          "cpu_subtype": 2147483650,
+          "object": {
+            "sha256": "7e4ffe15543ebf44264b5d4834c766f31dc3b74e0827a3ecc8d481b6b4814ee3",
+            "bytes": 9608,
+            "cpu_subtype": 2147483650
+          },
+          "executed": true
+        }
+      ],
+      "compiler_only_unwind_control": [
+        {
+          "profile": "compact.dylib",
+          "returncode": 0,
+          "stderr": "",
+          "sha256": "f2a4cd55f5b4e7663f871c82ac43fd326a0af15c42704f58889b0dbd7b3f9699",
+          "bytes": 33952,
+          "cpu_subtype": 2147483650
+        },
+        {
+          "profile": "no-index.dylib",
+          "returncode": -6,
+          "stderr": "libc++abi: terminating due to uncaught exception of type int\n",
+          "sha256": "cdd087e726bd2c78049c23a1dc1bc5fbded1819b5d969efd7ed6ca6ff9be53f3",
+          "bytes": 33952,
+          "cpu_subtype": 2147483650
+        },
+        {
+          "profile": "indexed-dwarf.dylib",
+          "returncode": 0,
+          "stderr": "",
+          "sha256": "719583cba06dfaeb3adc3a7526e1bd414d90d18a9a841a13878d58a6a18e431f",
+          "bytes": 33952,
+          "cpu_subtype": 2147483650
+        }
+      ],
+      "owned_host_removed": true,
+      "executable_products_in_downloaded_artifacts": 0
+    },
+    "native-entry-xcode-27": {
+      "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+      "environment": {
+        "kernel": {
+          "returncode": 0,
+          "stdout": "Darwin Kernel Version 27.0.0: Tue Aug 11 21:00:07 PDT 2026; root:xnu-13432.1.9~1/RELEASE_ARM64_VMAPPLE\n",
+          "stderr": ""
+        },
+        "model": {
+          "returncode": 0,
+          "stdout": "VirtualMac2,1\n",
+          "stderr": ""
+        },
+        "effective-boot-args": {
+          "returncode": 0,
+          "stdout": "\n",
+          "stderr": ""
+        },
+        "sip": {
+          "returncode": 0,
+          "stdout": "System Integrity Protection status: disabled.\n",
+          "stderr": ""
+        },
+        "compiler": {
+          "returncode": 0,
+          "stdout": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode_27.1.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n",
+          "stderr": ""
+        },
+        "sdk": {
+          "returncode": 0,
+          "stdout": "27.0\n",
+          "stderr": ""
+        },
+        "cpu": {
+          "returncode": 0,
+          "stdout": "Apple M1 (Virtual)\n",
+          "stderr": ""
+        },
+        "feat-cpa": {
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": ""
+        },
+        "feat-cpa2": {
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": ""
+        }
+      },
+      "entry_report_sha256": "9bb9f7f6006bdba9e8b9eb008e721cb8973e511f245a669f55d8b7c553a901cc",
+      "probe_report_sha256": "cce329a22dd0fee0f45ed8de9d7eb96b7dd1ede314966402e2e411aeef1f656d",
+      "delivery_report_sha256": "24fc99b80fb8e2bddda43d71231e300ff0de2d639b81c24a0b18b4a2867cd36a",
+      "probe_controls_passed": 6,
+      "compiler": {
+        "path": "/Applications/Xcode_27.1.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++",
+        "sha256": "06e3d64f541c65a93acd176690bdaae13a3d7db092c8b98b392d4c6d0d03f176",
+        "version": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode_27.1.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n"
+      },
+      "sdk_path": "/Applications/Xcode_27.1.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk",
+      "export_sources_sha256": {
+        "entry.ll": "81bdba0a15bd98d7762457c7d98af597fcdeb15b083997736318a5772899cefb",
+        "entry-dwarf.ll": "f0273400ba88683082bd5d08c16c4fe6d2c694a82e13f6a9e7ec61c5c4462f1b",
+        "caller.cpp": "b09e529c5cf22f3c47d59db5e136b350c5d1f699efb11697d539ff69d6749462"
+      },
+      "cases": [
+        {
+          "optimization": "-O0",
+          "key": 0,
+          "dwarf": false,
+          "sha256": "66eb541a64e410a51c46c60205d73dddba026c0f91598fda8f7101efe0c2d277",
+          "bytes": 56528,
+          "cpu_subtype": 2147483650,
+          "object": {
+            "sha256": "f5900a61b3c81aacff90c34c2b49b3d99eeec6de1e9d1de1558f78b463283cd6",
+            "bytes": 9016,
+            "cpu_subtype": 2147483650
+          },
+          "executed": true
+        },
+        {
+          "optimization": "-O0",
+          "key": 1,
+          "dwarf": false,
+          "sha256": "17c821d1f47a5aa93247418d19ed453bffdcd47b83902ae8259bd109378f5774",
+          "bytes": 56528,
+          "cpu_subtype": 2147483650,
+          "object": {
+            "sha256": "f5900a61b3c81aacff90c34c2b49b3d99eeec6de1e9d1de1558f78b463283cd6",
+            "bytes": 9016,
+            "cpu_subtype": 2147483650
+          },
+          "executed": true
+        },
+        {
+          "optimization": "-O0",
+          "key": 0,
+          "dwarf": true,
+          "sha256": "ab2d30f3c9d4f0891ef3350d00da77ff32d05240aa14be5d9946cf4e7443b296",
+          "bytes": 56528,
+          "cpu_subtype": 2147483650,
+          "object": {
+            "sha256": "2d82d3ac94d94f173b795b6e2a5f577ca2914a204d493598b420a70b8f3001b0",
+            "bytes": 12040,
+            "cpu_subtype": 2147483650
+          },
+          "executed": true
+        },
+        {
+          "optimization": "-O0",
+          "key": 1,
+          "dwarf": true,
+          "sha256": "35a3594d6f19b0369303d6272b0546c259e89c4943342ba13d15a7752ab9188c",
+          "bytes": 56528,
+          "cpu_subtype": 2147483650,
+          "object": {
+            "sha256": "2d82d3ac94d94f173b795b6e2a5f577ca2914a204d493598b420a70b8f3001b0",
+            "bytes": 12040,
+            "cpu_subtype": 2147483650
+          },
+          "executed": true
+        },
+        {
+          "optimization": "-O2",
+          "key": 0,
+          "dwarf": false,
+          "sha256": "8868b85498fdec3c07a00abcafa5125f50d84c3d2730108bdfbad45b8db5fcd1",
+          "bytes": 37936,
+          "cpu_subtype": 2147483650,
+          "object": {
+            "sha256": "c6292c3ef85bdf18c62660dc2004da7773ba19eccd23b01f4b984c35c3a53e75",
+            "bytes": 6576,
+            "cpu_subtype": 2147483650
+          },
+          "executed": true
+        },
+        {
+          "optimization": "-O2",
+          "key": 1,
+          "dwarf": false,
+          "sha256": "d48fa661b6baf2256a0230895140f49df7ae6774e1c140d99ba07cc69f8942e9",
+          "bytes": 37936,
+          "cpu_subtype": 2147483650,
+          "object": {
+            "sha256": "c6292c3ef85bdf18c62660dc2004da7773ba19eccd23b01f4b984c35c3a53e75",
+            "bytes": 6576,
+            "cpu_subtype": 2147483650
+          },
+          "executed": true
+        },
+        {
+          "optimization": "-O2",
+          "key": 0,
+          "dwarf": true,
+          "sha256": "b1c18d72bbf320c4c03872a8b0dd6db0ba51ae472549c8d5fd40cd90052d4652",
+          "bytes": 37936,
+          "cpu_subtype": 2147483650,
+          "object": {
+            "sha256": "998f44734d4dffae17bed5d66a7f863cecf7e73914c829f2973bf29f4a89249a",
+            "bytes": 9608,
+            "cpu_subtype": 2147483650
+          },
+          "executed": true
+        },
+        {
+          "optimization": "-O2",
+          "key": 1,
+          "dwarf": true,
+          "sha256": "51133fba7830efcca58edcad8fdc05a9c3ad658e680fa9926cef95fe782eccb1",
+          "bytes": 37936,
+          "cpu_subtype": 2147483650,
+          "object": {
+            "sha256": "998f44734d4dffae17bed5d66a7f863cecf7e73914c829f2973bf29f4a89249a",
+            "bytes": 9608,
+            "cpu_subtype": 2147483650
+          },
+          "executed": true
+        }
+      ],
+      "compiler_only_unwind_control": [
+        {
+          "profile": "compact.dylib",
+          "returncode": 0,
+          "stderr": "",
+          "sha256": "7bc0b4b9e96b5db70628f37c72b5e3a76c491d6c4c495ac8b051c34b4e0294b9",
+          "bytes": 33952,
+          "cpu_subtype": 2147483650
+        },
+        {
+          "profile": "no-index.dylib",
+          "returncode": -6,
+          "stderr": "libc++abi: terminating due to uncaught exception of type int\n",
+          "sha256": "4c0097de83f34769bb9074193b879e1a9954354be45737a9c5531de2c521b4bc",
+          "bytes": 33952,
+          "cpu_subtype": 2147483650
+        },
+        {
+          "profile": "indexed-dwarf.dylib",
+          "returncode": 0,
+          "stderr": "",
+          "sha256": "985639d4a3fafb5e9d695e75e84065d3c390bc0ac787df8d6ce7fb85c014e28e",
+          "bytes": 33952,
+          "cpu_subtype": 2147483650
+        }
+      ],
+      "owned_host_removed": true,
+      "executable_products_in_downloaded_artifacts": 0
+    }
+  },
+  "cleanup": {
+    "local_products_removed": [
+      {
+        "path": "build-arm64e/arm64e-native-entry-evidence/entry-host.tar.gz",
+        "sha256": "362e95a38197ea433e1d971adf6b133a3ab79247ad7aa2402069422a4c42fcf2",
+        "bytes": 40264629,
+        "reason": "Completed original native attempts; diagnostics and remote baseline retained"
+      },
+      {
+        "path": "build-arm64e/bin/NeverDArm64eAnalysisTests",
+        "sha256": "f95216fc52cbdb2a1aac831db6a6cbe7d48dda26508a1439f6aeb369b9fbcfb0",
+        "bytes": 122324664
+      },
+      {
+        "path": "build-arm64e/arm64e-native-entry-evidence/entry-host-indexed.tar.gz",
+        "sha256": "2015e959682df00214c9a1e707fd940035f3efccb18d5af2310e915f614c97a5",
+        "bytes": 40178151
+      }
+    ],
+    "current_build_cache_retained": true,
+    "diagnostics_retained": true,
+    "remote_delivery_removal_pending": false,
+    "draft_release_removed": true,
+    "temporary_workflow_removed": true,
+    "temporary_workflow_cleanup_revision": "36f89ed41f53b92a1ac2fa39a784cec4efdac459"
+  }
+}

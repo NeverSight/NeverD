@@ -485,3 +485,73 @@ exception coverage, address ownership or publication closure. Arbitrary lifted
 images still need those proofs, including variadic and non-C entries. The
 previous canonical-IR installation qualification and pinned r6 package remain
 unchanged; source-fork-only producer features still require the source build.
+
+## Reconstructed entries through the native compiler
+
+`scripts/verify_arm64e_entry.py` separately validates the entry reconstruction
+IR with an explicitly selected native compiler. It uses the actual
+`AArch64EntryABI.ExportSignedNativeInputs` producer, including the MedIR HVA
+case, rather than a handwritten replacement IR fixture. A same-source system
+PAC and compiler-original unwind preflight is mandatory for execution:
+
+```sh
+python3 scripts/verify_arm64e_native.py probe --output entry-evidence/probe
+python3 scripts/verify_arm64e_entry.py \
+  --test-binary build-release/bin/NeverDArm64eAnalysisTests \
+  --compiler "$(xcrun --find clang++)" \
+  --probe-report entry-evidence/probe/report.json \
+  --output entry-evidence/native
+```
+
+The eight combinations cover O0/O2, IA/IB address-diverse pointer storage and
+compact/forced-DWARF unwind. The independent caller checks the logical values,
+C++ catch and destructor cleanup through scalar, i128, HVA128 and indirect
+aggregate/x8 entries, including their normal values after catching. Every
+generated exception entry and its private carrier body must retain signed
+return sequences and separate calls; the
+caller must contain authenticated branches. A valid signed pointer to the
+reconstructed scalar entry executes first; flipping one observed signature bit
+must then fault in a child process. Missing signing, skipped export tests,
+stale preflight identities and nonzero execution outcomes fail qualification.
+The exported fixture explicitly declares classic `ptrauth.abi-version`, as
+Apple's frontend does; without it the native IR reader produces `arm64e.old`.
+The verifier requires the exact classic object/dylib subtype and performs no
+Mach-O header conversion. Its explicit indirect-value loads/stores avoid
+version-specific `memcpy` intrinsic attributes in older native IR readers.
+The fixture sets `frame-pointer=all` and the native frontend's `uwtable(sync)`
+contract in the IR itself. Frontend flags alone do not establish the IR frame
+policy, and asynchronous epilogue CFI forced DWARF in the nominal compact
+profile. Final per-function encoding checks reject that mismatch; asynchronous
+unwinding remains outside this synchronous C++ matrix. The verifier
+also records and passes the selected macOS SDK, preserving the `clang++`
+invocation name when it is a symlink to `clang`.
+
+The DWARF profile keeps `__unwind_info` and forces per-function FDEs with
+`DW_CFA_GNU_args_size`. The verifier checks the final indexed encoding for the
+entries, carrier bodies, thrower and catching caller. Merely retaining `__eh_frame`
+does not establish a usable Darwin lookup path: the compiler-only controls in
+[run 42849216672](https://github.com/gmh5225/test_mac_intel/actions/runs/42849216672)
+passed compact and indexed DWARF on both native hosts, but removing the index
+with `-no_compact_unwind` caused an uncaught-exception abort on both. That
+unsupported link profile is retained as diagnostic evidence, not counted as a
+DWARF execution test.
+
+`--compile-only` checks objects, signatures and disassembly without claiming
+execution. Reports bind the source, exported IR, caller, selected compiler,
+test host, loader and each object/dylib. Owned executable products are removed
+on success and failure. `native_reconstructed_entry_qualified` refers only to
+the selected compiler's execution of this fixed entry matrix. It does not
+qualify NeverD's LLVM backend, original prototype recovery, arbitrary lifted
+image publication or native CPTA-on; these remain separate report fields and
+requirements. The r6 package selection does not change.
+
+[Run 42859085649](https://github.com/gmh5225/test_mac_intel/actions/runs/42859085649)
+passed all eight entry combinations and six prerequisite PAC/unwind controls
+on each of macos-26 and xcode-27. The source-bound Release/r6 test host was
+delivered to the runners; this was not a cold source build there. The local
+12-entry, 31-script and eight offline checks also passed. The
+[recorded evidence](evidence/arm64e-native-entry-2026-11-11.json) binds commit
+`2201fbe2f1291e61ebca8856b3f726d314cdda21`, compiler/SDK identities, exports and
+case hashes. Both hosts reported Apple M1 (Virtual); CPA/CPA2 remained absent
+or zero, and no self-hosted runner was registered, so native CPTA-on remains
+unqualified.
