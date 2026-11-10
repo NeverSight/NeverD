@@ -41,6 +41,16 @@ MACHO_AUTH_NATIVE_VALUE(unsigned, kImportSymbol, 1)
 MACHO_AUTH_NATIVE_VALUE(unsigned, kImportFrom, 2)
 MACHO_AUTH_NATIVE_VALUE(unsigned, kImportModule, 3)
 MACHO_AUTH_NATIVE_TEXT(kCompiler, "/usr/bin/clang++")
+MACHO_AUTH_NATIVE_TEXT(kIRCompilerEnvironment, "NEVERD_ARM64E_IR_COMPILER")
+MACHO_AUTH_NATIVE_TEXT(kMissingIRCompiler,
+                       "requires an explicit canonical LLVM IR frontend")
+MACHO_AUTH_NATIVE_TEXT(kObjectIRFile, "native-object.ll")
+MACHO_AUTH_NATIVE_TEXT(kGeneratedIRProperty, "neverd_generated_ir")
+MACHO_AUTH_NATIVE_TEXT(kIRCompilerProperty, "neverd_ir_compiler")
+MACHO_AUTH_NATIVE_TEXT(kWrongIRTriple, "arm64-apple-macosx14.0.0")
+MACHO_AUTH_NATIVE_ARGS(kIRCompileArgs, "-target", "arm64e-apple-macosx14.0.0",
+                       "-std=c++20", "-fno-omit-frame-pointer",
+                       "-fno-optimize-sibling-calls", "-S", "-emit-llvm")
 MACHO_AUTH_NATIVE_TEXT(kXcrun, "/usr/bin/xcrun")
 MACHO_AUTH_NATIVE_TEXT(kTemporaryPrefix, "neverd-dyld-install")
 MACHO_AUTH_NATIVE_TEXT(kArtifactEnvironment, "NEVERD_ARM64E_DYLD_ARTIFACT_DIR")

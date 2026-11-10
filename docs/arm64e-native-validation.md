@@ -6,8 +6,9 @@ Xcode 27 runners, with zero failures or skips. It identifies the locally built
 Release test host, exact source revision, binary/fixture hashes and each
 case's PAC, compiler-original, migration and unwind properties. The execution
 hosts compile their own replacement objects and controls. This qualifies the
-documented dylib installation matrix; whole-image rebuilding, startup loading
-and the post-r6 LLVM MC interface remain separate publication requirements.
+documented dylib installation matrix. Later sections record default startup
+and the canonical-IR producer separately; arbitrary lifted-image rebuilding
+and the post-r6 MC rewrite interface retain their own qualification boundary.
 
 The same record includes independent Release/r6
 [cold source builds on both runners](https://github.com/gmh5225/test_mac_intel/actions/runs/42641592355).
@@ -121,7 +122,9 @@ as `exec` and sets `compiler_original_startup_qualified` only when all controls
 pass. A failing executable never retries through `dlopen`. The installed-dylib
 runner requires its matching `dlopen` probe, so a startup report cannot substitute
 for it. Neither probe grants whole-image publication qualification; that also
-requires the post-r6 MC producer and complete rebuild/signing transaction.
+requires a qualified producer and complete rebuild/signing transaction. The
+canonical-IR path below uses r6 native MC objects; the raw MC rewrite callback
+and arbitrary lifted modules retain separate requirements.
 
 The [separate startup run](https://github.com/gmh5225/test_mac_intel/actions/runs/42646758724)
 passed both PAC controls and all four `dlopen` controls on each native host.
@@ -318,3 +321,63 @@ python3 scripts/verify_arm64e_native.py run-default-executable \
   --probe-report native-evidence/probe/report.json \
   --output native-evidence/default-executable
 ```
+
+
+## Canonical IR through native MC objects
+
+`installSourcePatch` admits canonical arm64e replacement IR for classic macOS
+images and ABI1 macOS main executables. It verifies the exact arm64e target,
+platform and layout, then emits a native Mach-O object with the existing r6
+`Codegen::compile` backend. The native object installer owns final placement,
+authenticated and ordinary pointer relocations, new providers, RELRO, signed
+language frames and the publication transaction. The SDK preserves provider
+and original binding symbols through this handoff instead of first replacing
+them with ordinary pointer loads. Layout planning checks section and loader ownership, then reuses
+available TEXT padding before requesting prefix growth, including creation of a missing
+`__eh_frame` section in a dylib. Deferred authenticated function providers do
+not reserve ordinary import-thunk frames.
+
+Use a frontend that emits LLVM's standard
+[pointer-authentication constants and call bundles](https://llvm.org/docs/PointerAuth.html),
+such as the tested Clang 22 frontend, selected explicitly with `--compiler-path`.
+Apple's older synthetic `llvm.ptrauth` globals remain unsupported IR input;
+its native object artifact uses the separately qualified object installer.
+Compiler selection never silently changes. LLVM stays at prebuilt r6; this
+path needs no patch, fork revision change, or raw MC final-address callback.
+
+The generated fixtures cover O0/O2, four authentication keys, address diversity,
+local and new external data/code pointers, ordinary pointer addends, new writable
+storage, three original-entry replacements, C++ catches, cleanup/resume and
+transaction rollback. In r6 the canonical producer emits explicit signed-return
+CFI and DWARF language frames even without the forced GNU_args_size fixture row.
+The Apple-native object fixtures separately retain compact-language coverage.
+The offline checks compare native object/final unwind metadata and Apple's
+`dwarfdump` output; only execution on a qualified host can certify runtime use.
+
+Run the new matrices with a successful same-source system preflight:
+
+```sh
+python3 scripts/verify_arm64e_native.py run-generated \
+  --build-dir build-arm64e-native --probe-report native-evidence/probe/report.json \
+  --ir-compiler "$(brew --prefix llvm@22)/bin/clang++" \
+  --output native-evidence/generated
+python3 scripts/verify_arm64e_native.py run-generated-executable \
+  --build-dir build-arm64e-native --probe-report native-evidence/probe/report.json \
+  --ir-compiler "$(brew --prefix llvm@22)/bin/clang++" \
+  --output native-evidence/generated-executable
+```
+
+Each gate requires its exact four unskipped cases, records frontend version/hash,
+NeverD test-binary hash, source identities and preflight/XML hashes, and removes
+owned temporary products. The executable gate uses the system loader without
+a userspace launcher profile. Qualification flags are
+`native_generated_ir_publication_qualified` and
+`native_generated_executable_publication_qualified`; neither changes
+`whole_image_publication_qualified` or `native_apple_cpta_qualified`.
+
+`neverd.arm64e-analysis` lifted modules, foreign platforms, unqualified ABI
+subtypes (including x1), shared-cache publication, TLS and runtime constructors
+keep explicit refusal paths. Native CPTA-on additionally requires actual CPA/CPA2
+hardware and a controlled enabling/readback contract. The system probe records
+both feature sysctls independently of PAC execution; FVP results do not qualify
+an Apple native execution environment.

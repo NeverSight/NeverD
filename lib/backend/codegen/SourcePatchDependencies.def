@@ -14,4 +14,9 @@ SOURCE_DEPENDENCY_TEXT(kRequestCount,
 SOURCE_DEPENDENCY_TEXT(kRequestShape,
                        "empty, duplicate or invalid dependency request")
 
+SOURCE_DEPENDENCY_TEXT(kDeclaration,
+                       "request does not match an external declaration: ")
+SOURCE_DEPENDENCY_TEXT(
+    kTLSDeclaration, "new TLS imports require a native TLS allocation contract")
+
 #undef SOURCE_DEPENDENCY_TEXT

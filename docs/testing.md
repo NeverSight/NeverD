@@ -1557,6 +1557,16 @@ input orders, and one or two shards. Decompile a whole
 x86-64 libsqlite3 or Rust binary, and an AArch64 Rust Mach-O, through `--llvm`
 after changing that retry: one such body used to fail the unit.
 
+`Native/SourcePatchArm64e.SourceCompilerRetainsAuthenticatedProviders` exercises
+both SDK source artifacts (canonical Clang IR and Apple native objects), new
+function/data provider declarations, three entry mappings, exclusive publication
+and unchanged input bytes. The original dylib has no `__eh_frame`; canonical
+IR publication must register new native DWARF storage automatically.
+Set `NEVERD_ARM64E_IR_COMPILER` to the compatible
+Clang++ frontend for the canonical case. These are offline SDK integration tests;
+the independent generated dylib/main execution gates are documented in
+[arm64e native validation](arm64e-native-validation.md#canonical-ir-through-native-mc-objects).
+
 `NeverDAArch64ReturnProtectionTests` exercises decoded leaf and saved-LR
 recipes for ELF, Mach-O and COFF, including key/leaf attributes, preserved
 return values, observable signatures, wrong modifiers, incomplete recipes

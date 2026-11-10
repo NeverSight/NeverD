@@ -290,6 +290,7 @@ if(TARGET neverd_shared)
     "Clang executable for the source-patch LLVM IR compatibility profile")
   add_neverd_unittest(NeverDSourcePatchTests
     SourcePatchCAPITests.cpp
+    SourcePatchArm64eTests.cpp
     SourcePatchObjectTests.cpp
     SourcePatchExceptionTests.cpp
     SourcePatchPETests.cpp

@@ -12,10 +12,6 @@
 #define MACHO_OBJECT_TEXT(Name, Text)
 #endif
 
-MACHO_OBJECT_TEXT(kArm64eTriple, "arm64e-apple-macosx")
-// The versioned userspace ABI tags emitted by Darwin's object/main linker.
-MACHO_OBJECT_VALUE(uint32_t, kClassicObjectSubtype, 0x80000002u)
-MACHO_OBJECT_VALUE(uint32_t, kMacOSMainSubtype, 0x81000002u)
 MACHO_OBJECT_TEXT(
     kSubtype,
     "native object pointer-authentication ABI does not match the image")

@@ -26,6 +26,7 @@ llvm::Error validateSourcePatchTarget(Arch Architecture, BinaryFormat Format);
 
 struct BinaryImage;
 struct SourcePatchPreparation;
+struct SourcePatchDependency;
 
 /// Select the frontend ABI from loader-owned image evidence. The same triple
 /// must be used by the frontend, supplied-IR validation and final codegen.
@@ -50,12 +51,15 @@ bindSourcePatch(llvm::Module &Module, const BinaryImage &Image,
 /// rewriting deliberately keeps its separate preserve-original/no-op policy.
 /// PrepareReceipt runs after verification but before publication so caller
 /// reporting allocations cannot fail after committing the output.
+/// Native arm64e emission retains symbolic pointer providers in Dependencies
+/// until the MC object relocations are placed, signed and replayed.
 llvm::Expected<PatchResult> installSourcePatch(
     llvm::Module &Module, const BinaryImage &Image,
     llvm::ArrayRef<SourcePatchMapping> Mappings,
     const std::filesystem::path &OutputPath, llvm::StringRef TextSection = {},
     llvm::function_ref<llvm::Error(const PatchResult &)> PrepareReceipt = {},
-    const SourcePatchPreparation *Preparation = nullptr);
+    const SourcePatchPreparation *Preparation = nullptr,
+    llvm::ArrayRef<SourcePatchDependency> Dependencies = {});
 
 struct CompiledImage;
 struct CompiledSection;

@@ -1603,9 +1603,12 @@ insertion, including segmented pointers whose target ordinal would otherwise
 change when a new load command is inserted. Such a changed target is rejected
 without publishing any bytes.
 
-This installation phase does not enable whole-image arm64e publication. The
-new MC interface still requires qualification with a post-r6 toolchain and
-the complete publication pipeline. The
+Canonical replacement IR now uses r6 native MC object emission and this
+installer through `installSourcePatch`, including deferred provider declarations
+from the SDK. This admits the macOS classic/ABI1 source profile without clearing
+analysis-only lifted-module flags. The raw MC rewrite interface still requires
+qualification with a post-r6 toolchain; arbitrary lifted-image publication has
+its own ABI reconstruction boundary. The
 [native installation record](evidence/arm64e-native-installation-2026-11-09.json)
 qualifies twelve installed-dylib cases on each of macOS 26 and Xcode 27, with
 zero failures or skips. It covers O0/O2 authenticated calls, compact/DWARF
@@ -2217,9 +2220,10 @@ authenticated imports or authorize whole-image rebuilding.
 
 This support covers static loading, lifting and C/LLVM inspection, together
 with the separately qualified native object installation contract above.
-General rebuilding and source replacement of an arm64e image fail explicitly
-until their complete signing, fixup and publication pipeline is qualified;
-the emitted module retains that requirement. Checked emulation's existing
+Canonical arm64e source replacement uses the bounded macOS native-object
+publication profile described in [native validation](arm64e-native-validation.md#canonical-ir-through-native-mc-objects).
+General lifted rebuilding still fails explicitly, and its emitted module
+retains the analysis-only requirement. Checked emulation's existing
 disabled-key profile does not become an arm64e execution environment. Separate
 Apple Silicon tests compare both C projections with native PACGA. The full PAC/AUT/XPAC oracle
 requires an executable arm64e process and checks that each signing key changes
