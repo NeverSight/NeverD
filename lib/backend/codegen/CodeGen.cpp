@@ -332,8 +332,8 @@ static void expandNarrowFunnelShifts(llvm::Module &Mod) {
 
   // --- Part 2: Widen narrow return values ---
   // ARM/AArch64 backends may leave upper register bits undefined for
-  // sub-32-bit return types. Replace each narrow `ret iN` with
-  // `ret i32 (zext iN to i32)` using a new function clone.
+  // sub-32-bit return types. Keep an explicit signext ABI when widening;
+  // otherwise preserve the lifted register model's zero extension.
   llvm::SmallVector<llvm::Function *, 4> NarrowRetFuncs;
   for (auto &Fn : Mod)
     if (Fn.getReturnType()->isIntegerTy() &&
@@ -360,7 +360,9 @@ static void expandNarrowFunnelShifts(llvm::Module &Mod) {
                             Returns);
     for (auto *RI : Returns) {
       llvm::IRBuilder<> B(RI);
-      llvm::Value *Wide = B.CreateZExt(RI->getReturnValue(), I32);
+      llvm::Value *Wide =
+          B.CreateIntCast(RI->getReturnValue(), I32,
+                          OldFn->hasRetAttribute(llvm::Attribute::SExt));
       B.CreateRet(Wide);
       RI->eraseFromParent();
     }
