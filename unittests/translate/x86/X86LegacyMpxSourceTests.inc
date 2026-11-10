@@ -91,6 +91,8 @@ TEST_P(X86LegacySourceTest,
     uint64_t Budget = 1;
     ASSERT_EQ(Run(&Context, &Budget), 4u) << Context.lastError().str();
     EXPECT_EQ(Budget, 0u);
+    EXPECT_EQ(Run(&Context, &Budget), 4u);
+    EXPECT_EQ(Budget, 0u);
     ASSERT_TRUE(S.PendingMpx);
     EXPECT_EQ(S.PendingMpx->Directory->Value, 0x21007u);
   }
@@ -99,9 +101,11 @@ TEST_P(X86LegacySourceTest,
   put(0x2100c, 0x1234, GuestScalarWidth::I32);
   put(0x1000, 0xcc, GuestScalarWidth::I8);
   X86LegacySourceExecution Context(S, *M, O);
-  uint64_t Budget = 1;
-  ASSERT_EQ(Run(&Context, &Budget), 257u) << Context.lastError().str();
-  EXPECT_EQ(Budget, 1u);
+  uint64_t Budget = 0;
+  ASSERT_EQ(Run(&Context, &Budget), 258u) << Context.lastError().str();
+  EXPECT_EQ(Budget, 0u);
+  EXPECT_TRUE(Context.lastResult().InstructionCompleted);
+  EXPECT_FALSE(Context.lastResult().InstructionAttempted);
   EXPECT_FALSE(S.PendingMpx);
   EXPECT_EQ(*S.Mpx->bounds(0),
             (X86MpxBounds{{0x11111111, UINT32_MAX}, {0x22222222, UINT32_MAX}}));
@@ -174,12 +178,15 @@ TEST_P(X86LegacySourceTest, Code16MpxResumeRetainsAliasAndBudget) {
   put(0x1000, 0xcc, GuestScalarWidth::I8);
   X86LegacySourceExecution Context(S, *M, O);
   uint64_t Budget = 0;
-  EXPECT_EQ(Run(&Context, &Budget), 258u);
-  EXPECT_TRUE(S.PendingMpx);
+  ASSERT_EQ(Run(&Context, &Budget), 258u) << Context.lastError().str();
+  EXPECT_EQ(Budget, 0u);
+  EXPECT_TRUE(Context.lastResult().InstructionCompleted);
+  EXPECT_FALSE(Context.lastResult().InstructionAttempted);
+  EXPECT_FALSE(S.PendingMpx);
+  EXPECT_EQ(S.EIP, 0x1005u);
   Budget = 1;
   ASSERT_EQ(Run(&Context, &Budget), 257u) << Context.lastError().str();
   EXPECT_EQ(Budget, 1u);
-  EXPECT_FALSE(S.PendingMpx);
   EXPECT_EQ(*S.Mpx->bounds(0),
             (X86MpxBounds{{0x11111111, UINT32_MAX}, {0x22222222, UINT32_MAX}}));
   EXPECT_EQ(S.EIP, 0x1005u);

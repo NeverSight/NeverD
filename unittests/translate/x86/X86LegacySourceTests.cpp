@@ -376,23 +376,132 @@ TEST_P(X86LegacySourceTest, StackBackingContinuationRetainsAliasedCodeAndRAM) {
   put(0xcffc, 0x99aabbcc, GuestScalarWidth::I32);
   put(0x11030, 0x40007, GuestScalarWidth::I32);
   X86LegacySourceExecution Context(S, *M, O);
-  uint64_t Budget = 2;
+  uint64_t Budget = 1;
   ASSERT_EQ(Run(&Context, &Budget), 4u) << Context.lastError().str();
   ASSERT_TRUE(S.PendingStack);
-  EXPECT_EQ(Budget, 1u);
+  EXPECT_EQ(Budget, 0u);
   EXPECT_EQ(get(0xd004), 0x55667788u);
   EXPECT_EQ(get(0xd00c), 0xd008u);
-  put(0x11030, 0xc007, GuestScalarWidth::I32);
-  ASSERT_EQ(Run(&Context, &Budget), 257u) << Context.lastError().str();
-  EXPECT_EQ(Budget, 1u); // Resuming one attempted instruction is not another.
-  EXPECT_TRUE(Context.lastResult().InstructionCompleted);
+  const auto Before = M->physicalMemory().snapshotMemoryRegions().front().Bytes;
+  EXPECT_EQ(Run(&Context, &Budget), 4u);
+  EXPECT_EQ(Budget, 0u);
+  EXPECT_EQ(M->physicalMemory().snapshotMemoryRegions().front().Bytes, Before);
+  auto Rejected = executeX86LegacyInstruction(S, *M, {0x90}, O);
+  ASSERT_FALSE(bool(Rejected));
+  llvm::consumeError(Rejected.takeError());
+  EXPECT_TRUE(S.PendingStack);
+  EXPECT_EQ(M->physicalMemory().snapshotMemoryRegions().front().Bytes, Before);
+  auto UnboundOptions = O;
+  UnboundOptions.Scalars.reset();
+  X86LegacySourceExecution Unbound(S, *M, UnboundOptions);
+  EXPECT_EQ(Run(&Unbound, &Budget),
+            uint32_t(X86LegacySourceExit::InvalidState));
+  EXPECT_EQ(Budget, 0u);
+  EXPECT_TRUE(S.PendingStack);
+  EXPECT_EQ(M->physicalMemory().snapshotMemoryRegions().front().Bytes, Before);
+  auto RAM = llvm::cantFail(createZeroedGuestState(GuestArchitecture::X86_64));
+  RAM.Memory = M->physicalMemory().snapshotMemoryRegions();
+  RAM.Memory.push_back(
+      {0x40000, MemoryPermission::Read | MemoryPermission::Write, 0,
+       std::vector<uint8_t>(Before.begin() + 0xc000, Before.begin() + 0xd000)});
+  M = llvm::cantFail(X86PagedMemory::create(RAM, M->features(), M->controls()));
+  X86LegacySourceExecution Restored(S, *M, O);
+  ASSERT_EQ(Run(&Restored, &Budget), 258u) << Restored.lastError().str();
+  EXPECT_EQ(Budget, 0u); // Resuming one attempted instruction is not another.
+  EXPECT_TRUE(Restored.lastResult().InstructionCompleted);
+  EXPECT_FALSE(Restored.lastResult().InstructionAttempted);
   EXPECT_FALSE(S.PendingStack);
   EXPECT_EQ(get(0xd008), 0x11223344u);
   EXPECT_EQ(get(0xd004), 0x55667788u);
   EXPECT_EQ(get(0xd000), 0x99aabbccu);
-  EXPECT_EQ(get(0xcffc), 0xd00cu);
+  EXPECT_EQ(get(0x40ffc), 0xd00cu);
   EXPECT_EQ(S.Core.GPR[4], 0xcffcu);
   EXPECT_EQ(S.Core.GPR[5], 0xd00cu);
+}
+
+TEST_P(X86LegacySourceTest, UnchargedOwnerErrorRequiresBudgetBeforeResume) {
+  for (unsigned Case = 0; Case != 3; ++Case) {
+    SCOPED_TRACE(Case);
+    const bool Mpx = Case == 2;
+    resetLegacyState();
+    Driver Run = nullptr;
+    const std::vector<uint8_t> Bytes =
+        Mpx ? std::vector<uint8_t>{0x66, 0x0f, 0x1a, 0x03}
+            : std::vector<uint8_t>{0x60};
+    ASSERT_NO_FATAL_FAILURE(compile({{0x1000, 32, Bytes}}, Run));
+    if (Mpx) {
+      bindMpx();
+      S.Core.Segments[3].Base = 0x4000;
+      S.Core.GPR[3] = 0xfffffffc;
+      put(0x3ffc, 0x2222222211111111ULL);
+    } else {
+      S.Core.Segments[2].Base = 0x4000;
+      S.Core.GPR[4] = 1 + Case * 4;
+    }
+    O.Segments.FullLimitChoice.reset();
+    X86LegacySourceExecution Context(S, *M, O);
+    uint64_t Budget = 1;
+    ASSERT_EQ(Run(&Context, &Budget),
+              uint32_t(X86LegacySourceExit::InvalidState));
+    EXPECT_FALSE(Context.lastResult().InstructionAttempted);
+    EXPECT_EQ(Budget, 1u);
+    ASSERT_TRUE(Mpx ? S.PendingMpx.has_value() : S.PendingStack.has_value());
+    if (!Mpx) {
+      EXPECT_EQ(S.PendingStack->CompletedAccesses.size(), Case);
+      if (Case == 1) {
+        EXPECT_EQ(get(0x4001), 35u);
+        put(0x4001, 0xcafebabe, GuestScalarWidth::I32);
+      }
+    }
+    const auto Before =
+        M->physicalMemory().snapshotMemoryRegions().front().Bytes;
+    O.Segments.FullLimitChoice = X86FullSegmentLimitChoice::Wrap;
+    X86LegacySourceExecution Restored(S, *M, O);
+    Budget = 0;
+    EXPECT_EQ(Run(&Restored, &Budget),
+              uint32_t(X86LegacySourceExit::BudgetExhausted));
+    EXPECT_EQ(S.EIP, 0x1000u);
+    EXPECT_EQ(M->physicalMemory().snapshotMemoryRegions().front().Bytes,
+              Before);
+    if (Case == 0) {
+      put(0x1100c, 0x40007, GuestScalarWidth::I32);
+      Budget = 1;
+      ASSERT_EQ(Run(&Restored, &Budget),
+                uint32_t(X86LegacyExecutionStatus::BackingFault))
+          << Restored.lastError().str();
+      EXPECT_EQ(Budget, 0u);
+      EXPECT_TRUE(Restored.lastResult().InstructionAttempted);
+      ASSERT_TRUE(S.PendingStack);
+      auto RAM =
+          llvm::cantFail(createZeroedGuestState(GuestArchitecture::X86_64));
+      RAM.Memory = M->physicalMemory().snapshotMemoryRegions();
+      RAM.Memory.push_back({0x40000,
+                            MemoryPermission::Read | MemoryPermission::Write, 0,
+                            std::vector<uint8_t>(Before.begin() + 0x3000,
+                                                 Before.begin() + 0x4000)});
+      M = llvm::cantFail(
+          X86PagedMemory::create(RAM, M->features(), M->controls()));
+      put(0x1000, 0xcc, GuestScalarWidth::I8);
+    }
+    X86LegacySourceExecution Completed(S, *M, O);
+    Budget = Case == 0 ? 0 : 1;
+    EXPECT_EQ(Run(&Completed, &Budget),
+              uint32_t(X86LegacySourceExit::BudgetExhausted))
+        << Completed.lastError().str();
+    EXPECT_EQ(Budget, 0u);
+    EXPECT_EQ(Completed.lastResult().InstructionAttempted, Case != 0);
+    EXPECT_TRUE(Completed.lastResult().InstructionCompleted);
+    EXPECT_EQ(S.EIP, 0x1000u + Bytes.size());
+    EXPECT_FALSE(S.PendingStack);
+    EXPECT_FALSE(S.PendingMpx);
+    if (Mpx)
+      EXPECT_EQ(*S.Mpx->bounds(0), (X86MpxBounds{{0x11111111, UINT32_MAX},
+                                                 {0x22222222, UINT32_MAX}}));
+    else
+      EXPECT_EQ(S.Core.GPR[4], 0xffffffe1u + Case * 4);
+    if (Case == 1)
+      EXPECT_EQ(get(0x4001), 0xcafebabeu);
+  }
 }
 
 TEST_P(X86LegacySourceTest, PartialPopAllFaultHandlerRepairsAndRetries) {
@@ -1089,6 +1198,14 @@ TEST_P(X86LegacySourceTest, DeviceInputSurvivesPendingDebugEntryWithoutReplay) {
   EXPECT_TRUE(Context.lastResult().DeviceTransferCompleted);
   EXPECT_TRUE(Context.lastResult().InstructionCompleted);
   EXPECT_EQ(Budget, 1u);
+  uint64_t Empty = 0;
+  const auto Before = M->physicalMemory().snapshotMemoryRegions().front().Bytes;
+  EXPECT_EQ(Run(&Context, &Empty),
+            uint32_t(X86LegacySourceExit::BudgetExhausted));
+  EXPECT_EQ(Empty, 0u);
+  EXPECT_EQ(M->physicalMemory().snapshotMemoryRegions().front().Bytes, Before);
+  EXPECT_EQ(Tape.Transfers.size(), 1u);
+  ASSERT_TRUE(S.PendingEvent);
   EXPECT_EQ(Run(&Context, &Budget), 259u);
   EXPECT_EQ(Budget, 1u);
   EXPECT_EQ(Tape.Transfers.size(), 1u);
