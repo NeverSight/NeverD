@@ -7,8 +7,10 @@ Release test host, exact source revision, binary/fixture hashes and each
 case's PAC, compiler-original, migration and unwind properties. The execution
 hosts compile their own replacement objects and controls. This qualifies the
 documented dylib installation matrix. Later sections record default startup
-and the canonical-IR producer separately; arbitrary lifted-image rebuilding
-and the post-r6 MC rewrite interface retain their own qualification boundary.
+and the canonical-IR producer separately. The
+[generated-image record](evidence/arm64e-generated-image-2026-11-10.json)
+qualifies the canonical source pipeline on both hosts; arbitrary lifted-image
+rebuilding retains its separate ABI reconstruction boundary.
 
 The same record includes independent Release/r6
 [cold source builds on both runners](https://github.com/gmh5225/test_mac_intel/actions/runs/42641592355).
@@ -162,7 +164,7 @@ passed all six controls in each of the system/dlopen and userspace/exec profiles
 on both hosts, with exact source/report identities in the page-in evidence.
 The unchanged compiler-original `system` startup profile retains its observed failure. The installer still
 requires its matching system/dlopen probe, and neither profile qualifies a
-rebuilt image or the missing post-r6 MC publication path.
+rebuilt image or arbitrary lifted-image publication.
 
 The [compiler ABI comparison](evidence/arm64e-compiler-abi-2026-11-10.json)
 records nine compiler-only observations on each current native host. Both Apple
@@ -375,8 +377,26 @@ The [fixed-fork direct-link controls](https://github.com/gmh5225/test_mac_intel/
 pass all four O0/O2 compact/DWARF call/catch/cleanup cases on each host, along
 with all six compiler-original prerequisites. LLVM's 68 return-signing,
 pointer-authentication and arm64e regressions also pass. These direct-link
-controls establish the producer correction; NeverD's generated publication
-matrices remain a separate qualification.
+controls establish the producer correction independently of NeverD installation.
+
+The [cold source run](https://github.com/gmh5225/test_mac_intel/actions/runs/42762192123)
+then builds NeverD `eabb96c44b7abaac2f628851968c05a090de5b5d` with the merged
+LLVM fork `5676029e378c9e37adc16c8216a8e8453ffafcae` on both hosts. Each passes
+all 36 native cases (20 dylib, four userspace-main, four default-main, four
+generated-dylib and four generated-main), 33 signing tests and two groups of
+six preflight controls, without failures or skips. The generated cases use
+Clang 22.1.8 as the explicit IR frontend and NeverD's source-built LLVM backend.
+Source, frontend, test-binary, preflight and runtime XML identities are bound in
+the record; both controllers remove their owned builds. These runs qualify the
+bounded canonical source pipeline, including real authenticated calls and C++
+catch/cleanup through newly generated signed frames.
+
+A source build also exercises `MCProducerCapturesRecipesThroughFinalPlacement`
+for IR and assembly producers with chained and threaded installers, plus
+nested signing constants. This proves the bounded raw MC signing-recipe
+handoff offline. r6 lacks that callback. Neither this handoff nor canonical
+replacement IR supplies the missing ABI reconstruction for arbitrary
+`neverd.arm64e-analysis` lifted modules.
 
 Run the new matrices using a source build of the corrected fork and a successful
 same-source system preflight:

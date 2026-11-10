@@ -1440,8 +1440,11 @@ collector uses exact local symbol addresses and addends, one unambiguous existin
 dyld provider, or an explicit provider declaration for an external symbol.
 Missing/conflicting providers, unresolved or
 subtracted expressions, non-writable storage and stale placement fail before
-mutation. The r6 build cannot exercise this MC callback path; its integration
-test is explicitly skipped until a toolchain exposing the fork interface is used.
+mutation. A source build of the fork exercises both IR and assembly producers
+through final placement in chained and threaded images. The bounded handoff
+retains nested signing constants and verifies the installed recipes. The r6
+build lacks the callback and explicitly skips that integration test; this
+handoff does not reconstruct the ABI of arbitrary lifted modules.
 
 `MachOAuthenticatedFixups` installs final-address signing recipes in linked
 arm64e chained and legacy threaded images. It reuses the strict dependency
@@ -1627,9 +1630,15 @@ RA-state toggles in classic arm64e DWARF: Darwin already authenticates saved LR
 with its implicit B-key ABI, and r6's extra toggle breaks the macOS 26 unwinder.
 The rejection covers the CIE and FDE programs of new object ranges, before
 committing any bytes. Canonical emission requires the direct LLVM fork CFI fix;
-the prebuilt default remains r6. The raw MC rewrite interface still requires
-qualification with a post-r6 toolchain; arbitrary lifted-image publication has
-its own ABI reconstruction boundary. The
+the prebuilt default remains r6. The source fork also passes the bounded raw
+MC handoff tests described above. The
+[generated-image record](evidence/arm64e-generated-image-2026-11-10.json)
+binds independent source builds on macOS 26 and Xcode 27: each passes 36 native
+installation/publication cases, 33 signing tests and both six-control
+prerequisites, with no failures or skips. Canonical IR publication covers O0/O2
+compact and DWARF language frames in both dylibs and default-system main
+executables. Arbitrary lifted-image publication retains its separate ABI
+reconstruction boundary. The
 [native installation record](evidence/arm64e-native-installation-2026-11-09.json)
 qualifies twelve installed-dylib cases on each of macOS 26 and Xcode 27, with
 zero failures or skips. It covers O0/O2 authenticated calls, compact/DWARF
