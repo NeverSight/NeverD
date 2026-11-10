@@ -4313,12 +4313,15 @@ void MainWindow::chooseFont() {
 namespace {
 /// The themes a person can choose, in the order the choosers list them.
 constexpr Theme::Choice ThemeChoices[] = {
-    Theme::Choice::Dark, Theme::Choice::Light, Theme::Choice::System};
+    Theme::Choice::Dark, Theme::Choice::Light, Theme::Choice::HighContrastDark,
+    Theme::Choice::HighContrastLight, Theme::Choice::System};
 
 QStringList themeChoiceNames() {
   return {MainWindow::tr("Dark (Visual Studio Code Dark+)"),
           MainWindow::tr("Light (Visual Studio Code Light+)"),
-          MainWindow::tr("System (follows the desktop's light or dark mode)")};
+          MainWindow::tr("Dark High Contrast (Visual Studio Code)"),
+          MainWindow::tr("Light High Contrast (Visual Studio Code)"),
+          MainWindow::tr("System (follows the desktop)")};
 }
 
 int themeChoiceIndex() {

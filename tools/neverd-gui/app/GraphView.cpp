@@ -1,6 +1,7 @@
 #include "GraphView.h"
 
 #include "../Config.h"
+#include "HighlightLocks.h"
 #include "Session.h"
 #include "Theme.h"
 #include "WorkerCodes.h"
@@ -579,8 +580,8 @@ void GraphView::paintNode(QPainter &painter, int index, bool text) const {
                    row.styled, word, static_cast<int>(ListingRole::Register))) {
             const qreal x0 = line.cursorToX(first);
             const qreal x1 = line.cursorToX(last);
-            painter.fillRect(QRectF(x + x0, y, x1 - x0, lineHeight_),
-                             theme.color(role));
+            paintHighlight(painter, QRectF(x + x0, y, x1 - x0, lineHeight_),
+                           role);
           }
         };
         const auto &locks = session_.highlightLocks();

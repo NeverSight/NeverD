@@ -179,6 +179,35 @@ looked unfinished to the user once pointed out.
   `window.autoDetectColorScheme` does; an unknown scheme keeps the theme shown,
   and a theme chosen by name ignores the desktop. Paint code reads
   `Theme::mode()`, the palette shown, never the choice.
+- Keep the high contrast themes Visual Studio Code's. Dark and Light High
+  Contrast take their values from its `hc_black.json` and `hc_light.json`
+  and from the `hcDark` and `hcLight` defaults of its color registry
+  (`registerColor` calls in `workbench.desktop.main.js`, whose defaults refer
+  to other colors and transform them). A registry color is `#RRGGBBAA`; Qt
+  reads eight digits as `#AARRGGBB`, so convert before writing a `.def` entry.
+- Where a high contrast theme outlines what the others fill (a hovered button
+  or tool button, a menu or menu bar selection, a list selection, the current
+  line, the word under the cursor), give it a border token that is
+  transparent in Dark+ and Light+, and have the face or view always paint it;
+  a fill or text color it changes gets its own token that repeats the old
+  value in Dark+ and Light+ (`ListSelection`, `MenuSelectionText`,
+  `ToolButtonChecked`). No `if (highContrast)` in paint code, and the normal
+  themes paint as before. Rules that only the high contrast themes need live
+  in `theme-high-contrast.qss`, appended to the style sheet in those themes;
+  an item that can take an outline keeps a transparent one at rest, and a
+  tree row's cells give up the sides they share (`:first`, `:middle`,
+  `:last`) so the row takes one outline. A selection that fills with the text
+  color needs its own text color (`ListingSelectionText`), and a highlight
+  behind syntax colors (`paintHighlight`) outlines rather than fills.
+- The System theme switches to the high contrast theme of the desktop's
+  brightness when Windows runs a High Contrast theme or macOS has Increase
+  Contrast on (`platform::desktopContrast()`), as Visual Studio Code's
+  `window.autoDetectHighContrast` does. Qt reports an unknown color scheme and
+  a theme change when Windows' High Contrast turns on; on Linux a person
+  chooses a high contrast theme by name.
+- `AppearanceTests::highContrastThemesReadClearly` holds the high contrast
+  themes to WCAG's contrast: text at 7:1, secondary text and syntax at 4.5:1,
+  lines and outlines at 3:1, translucent colors composited over their surface.
 - Scroll sideways rather than cut content off. A view that paints rows of a
   fixed width, as the hex view does, scrolls horizontally when its pane is
   narrower than a row, keeps the byte the keys reach in view, and maps clicks

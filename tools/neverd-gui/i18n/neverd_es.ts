@@ -2653,8 +2653,16 @@ Con signo: %4</translation>
         <translation>Claro (Visual Studio Code Light+)</translation>
     </message>
     <message>
-        <source>System (follows the desktop&apos;s light or dark mode)</source>
-        <translation>Sistema (sigue el modo claro u oscuro del escritorio)</translation>
+        <source>Dark High Contrast (Visual Studio Code)</source>
+        <translation>Oscuro de alto contraste (Visual Studio Code)</translation>
+    </message>
+    <message>
+        <source>Light High Contrast (Visual Studio Code)</source>
+        <translation>Claro de alto contraste (Visual Studio Code)</translation>
+    </message>
+    <message>
+        <source>System (follows the desktop)</source>
+        <translation>Sistema (sigue al escritorio)</translation>
     </message>
     <message>
         <source>Colors</source>

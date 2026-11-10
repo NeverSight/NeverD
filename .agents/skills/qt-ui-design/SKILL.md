@@ -202,6 +202,7 @@ Colour should communicate meaning consistently across the entire interface. Avoi
 - **Distinguish interactive colour from decorative colour.** A colour used on a button to signal "this is tappable" must not also be used as a background accent that doesn't invite interaction. Reusing interactive colour decoratively trains users to tap things that aren't tappable.
 - **Colour is never the sole carrier of state.** Already covered in section 2 (WCAG), but applies equally to non-disabled states: success, warning, and error must always pair colour with an icon or text label.
 - **Dark mode:** Design for both light and dark themes from the start. Token-based colour systems handle this automatically — if hardcoded colours are used, a dark variant must be explicitly defined.
+- **High contrast:** Where the platform has a high contrast mode (Windows High Contrast themes, macOS Increase Contrast), ship high contrast themes and follow the setting. They mark hover, selection and the current item with an outline rather than a fill, draw every edge in one contrast border colour, and keep text at 7:1. Give each outline its own token, transparent in the other themes, so those paint exactly as before.
 - **Culturally variable colour meanings** (see also §1.5): Red = danger in Western contexts but good fortune in some East Asian contexts. White = purity in Western contexts but mourning in some East Asian contexts. For safety-critical or internationally shipped products, do not rely on colour alone to convey critical meaning — always pair with text or universal iconography.
 ### 1.5 Localisation and RTL layout
 
@@ -343,6 +344,7 @@ Apply section 4 constraints first if the target is embedded.
 - [ ] Colour: are all colours token-based or semantically named? Is colour paired with a second cue for all state changes?
 - [ ] Crispness: at 100% scale, do straight icon strokes and 1 px lines cover whole pixels, so thin elements show their real colour? At 125%, does each border and hairline still take one whole device pixel?
 - [ ] States: does every control read differently at rest, under the pointer, pressed, with keyboard focus, checked and disabled, in every theme, and does a disabled control stay legible rather than vanish or look enabled?
+- [ ] High contrast: in the high contrast themes, does each state still read by its outline, is text at least 7:1 and every line at least 3:1, and does selected or highlighted text keep a colour of its own?
 - [ ] Localisation: do all user-visible strings use locale-aware formatting? Are containers able to expand 30–40% for translated text?
 - [ ] Languages: does every window fit its texts in every bundled language, does a live language switch reword every pane, and do layouts placed by hand mirror right to left?
 - [ ] AI features: are latency patterns, uncertainty, and consent handled per section 3?

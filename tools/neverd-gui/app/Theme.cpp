@@ -14,6 +14,7 @@
 #include "WorkbenchStyle.h"
 
 #include <QApplication>
+#include <QEvent>
 #include <QFile>
 #include <QFontDatabase>
 #include <QFontInfo>
@@ -23,23 +24,28 @@
 #include <QStringList>
 #include <QStyle>
 #include <QStyleHints>
+#include <QWidget>
 #include <algorithm>
 
 namespace neverd::gui {
 namespace {
-struct ColorPair {
+/// A color's value in each theme, in the order of Theme::Mode.
+struct ThemedColor {
   const char *name;
-  const char *light;
-  const char *dark;
+  std::array<const char *, 4> values;
 };
-constexpr ColorPair ViewColors[] = {
-#define NEVERD_THEME_COLOR(Role, Light, Dark) {#Role, Light, Dark},
+constexpr ThemedColor ViewColors[] = {
+#define NEVERD_THEME_COLOR(Role, Light, Dark, LightHighContrast,               \
+                           DarkHighContrast)                                   \
+  {#Role, {Dark, Light, DarkHighContrast, LightHighContrast}},
 #include "ThemeColors.def"
 };
 static_assert(std::size(ViewColors) ==
               static_cast<std::size_t>(ColorRole::Count));
-constexpr ColorPair ChromeColors[] = {
-#define NEVERD_CHROME_COLOR(Name, Light, Dark) {#Name, Light, Dark},
+constexpr ThemedColor ChromeColors[] = {
+#define NEVERD_CHROME_COLOR(Name, Light, Dark, LightHighContrast,              \
+                            DarkHighContrast)                                  \
+  {#Name, {Dark, Light, DarkHighContrast, LightHighContrast}},
 #include "ChromeColors.def"
 };
 
@@ -73,8 +79,43 @@ constexpr auto navigationColors() {
 }
 
 constexpr char ModeKey[] = "appearance/theme";
+
+/// The mode a theme chosen by name shows.
+Theme::Mode chosenMode(Theme::Choice choice) {
+  switch (choice) {
+  case Theme::Choice::Light:
+    return Theme::Mode::Light;
+  case Theme::Choice::HighContrastDark:
+    return Theme::Mode::HighContrastDark;
+  case Theme::Choice::HighContrastLight:
+    return Theme::Mode::HighContrastLight;
+  case Theme::Choice::Dark:
+  case Theme::Choice::System:
+    break;
+  }
+  return Theme::Mode::Dark;
+}
+
+/// The mode the system's theme shows for the desktop's \p scheme and
+/// \p contrast, or \p shown where the desktop does not say.
+Theme::Mode desktopMode(Qt::ColorScheme scheme,
+                        platform::DesktopContrast contrast, Theme::Mode shown) {
+  if (contrast == platform::DesktopContrast::HighDark)
+    return Theme::Mode::HighContrastDark;
+  if (contrast == platform::DesktopContrast::HighLight)
+    return Theme::Mode::HighContrastLight;
+  if (scheme == Qt::ColorScheme::Unknown)
+    return shown;
+  return scheme == Qt::ColorScheme::Light ? Theme::Mode::Light
+                                          : Theme::Mode::Dark;
+}
+
 constexpr char FontKey[] = "appearance/codeFont";
 constexpr char StyleSheetResource[] = ":/neverd/theme.qss";
+/// Rules a high contrast theme adds over the style sheet: outlines where the
+/// other themes fill (theme-high-contrast.qss).
+constexpr char HighContrastStyleSheetResource[] =
+    ":/neverd/theme-high-contrast.qss";
 // ${Mode} in the style sheet stands for the theme's name, and ${CodeFont} for
 // the code font at its default size, in which text fields type.
 constexpr char ModePlaceholder[] = "Mode";
@@ -178,7 +219,7 @@ Theme::Theme() {
   QSettings settings;
   choice_ = choiceFromName(settings.value(ModeKey).toString());
   // The desktop's scheme is known once the application starts (apply()).
-  mode_ = choice_ == Choice::Light ? Mode::Light : Mode::Dark;
+  mode_ = chosenMode(choice_);
   codeFont_ = defaultCodeFont();
   if (const auto saved = settings.value(FontKey).toString(); !saved.isEmpty()) {
     QFont font;
@@ -189,17 +230,36 @@ Theme::Theme() {
 }
 
 QString Theme::modeName(Mode mode) {
-  return mode == Mode::Light ? QStringLiteral("light") : QStringLiteral("dark");
+  return mode == Mode::Light || mode == Mode::HighContrastLight
+             ? QStringLiteral("light")
+             : QStringLiteral("dark");
 }
 
 void Theme::setMode(Mode mode) {
-  setChoice(mode == Mode::Light ? Choice::Light : Choice::Dark);
+  switch (mode) {
+  case Mode::Dark:
+    setChoice(Choice::Dark);
+    return;
+  case Mode::Light:
+    setChoice(Choice::Light);
+    return;
+  case Mode::HighContrastDark:
+    setChoice(Choice::HighContrastDark);
+    return;
+  case Mode::HighContrastLight:
+    setChoice(Choice::HighContrastLight);
+    return;
+  }
 }
 
 QString Theme::choiceName(Choice choice) {
   switch (choice) {
   case Choice::Light:
     return QStringLiteral("light");
+  case Choice::HighContrastDark:
+    return QStringLiteral("hc-dark");
+  case Choice::HighContrastLight:
+    return QStringLiteral("hc-light");
   case Choice::System:
     return QStringLiteral("system");
   case Choice::Dark:
@@ -209,10 +269,10 @@ QString Theme::choiceName(Choice choice) {
 }
 
 Theme::Choice Theme::choiceFromName(const QString &name) {
-  if (name == QLatin1String("light"))
-    return Choice::Light;
-  if (name == QLatin1String("system"))
-    return Choice::System;
+  for (const auto choice : {Choice::Light, Choice::HighContrastDark,
+                            Choice::HighContrastLight, Choice::System})
+    if (name == choiceName(choice))
+      return choice;
   return Choice::Dark;
 }
 
@@ -223,23 +283,36 @@ void Theme::setChoice(Choice choice) {
   QSettings().setValue(ModeKey, choiceName(choice));
   const Mode shown = mode_;
   if (choice == Choice::System) {
-    if (const auto *hints = QGuiApplication::styleHints())
-      followColorScheme(hints->colorScheme());
+    followColorScheme(QGuiApplication::styleHints()->colorScheme());
     return;
   }
-  mode_ = choice == Choice::Light ? Mode::Light : Mode::Dark;
+  mode_ = chosenMode(choice);
   if (mode_ != shown)
     apply();
 }
 
 void Theme::followColorScheme(Qt::ColorScheme scheme) {
-  if (choice_ != Choice::System || scheme == Qt::ColorScheme::Unknown)
+  if (choice_ == Choice::System)
+    followDesktop(scheme, platform::desktopContrast());
+}
+
+void Theme::followDesktop(Qt::ColorScheme scheme,
+                          platform::DesktopContrast contrast) {
+  if (choice_ != Choice::System)
     return;
-  const Mode mode = scheme == Qt::ColorScheme::Light ? Mode::Light : Mode::Dark;
+  const Mode mode = desktopMode(scheme, contrast, mode_);
   if (mode == mode_)
     return;
   mode_ = mode;
   apply();
+}
+
+bool Theme::eventFilter(QObject *watched, QEvent *event) {
+  if ((event->type() == QEvent::ThemeChange && watched->isWidgetType() &&
+       static_cast<QWidget *>(watched)->isWindow()) ||
+      event->type() == QEvent::ApplicationStateChange)
+    followColorScheme(QGuiApplication::styleHints()->colorScheme());
+  return QObject::eventFilter(watched, event);
 }
 
 QFont Theme::defaultCodeFont() {
@@ -287,13 +360,13 @@ void Theme::resetCodeFontSize() {
 }
 
 void Theme::loadColors() {
-  const bool darkMode = mode_ == Mode::Dark;
+  const auto column = static_cast<std::size_t>(mode_);
   for (std::size_t i = 0; i < std::size(ViewColors); ++i)
-    colors_[i] = QColor(darkMode ? ViewColors[i].dark : ViewColors[i].light);
+    colors_[i] = QColor(ViewColors[i].values[column]);
   chrome_.clear();
   for (const auto &entry : ChromeColors)
     chrome_.insert(QString::fromLatin1(entry.name),
-                   QColor(darkMode ? entry.dark : entry.light));
+                   QColor(entry.values[column]));
 }
 
 void Theme::apply() {
@@ -302,13 +375,15 @@ void Theme::apply() {
   // The system's theme takes the desktop's light or dark mode now and
   // whenever it changes.
   if (application) {
-    connect(application->styleHints(), &QStyleHints::colorSchemeChanged, this,
-            &Theme::followColorScheme, Qt::UniqueConnection);
-    if (choice_ == Choice::System &&
-        application->styleHints()->colorScheme() != Qt::ColorScheme::Unknown)
-      mode_ = application->styleHints()->colorScheme() == Qt::ColorScheme::Light
-                  ? Mode::Light
-                  : Mode::Dark;
+    if (!followsDesktop_) {
+      followsDesktop_ = true;
+      connect(application->styleHints(), &QStyleHints::colorSchemeChanged, this,
+              &Theme::followColorScheme);
+      application->installEventFilter(this);
+    }
+    if (choice_ == Choice::System)
+      mode_ = desktopMode(application->styleHints()->colorScheme(),
+                          platform::desktopContrast(), mode_);
   }
   loadColors();
   if (!application) {
@@ -340,6 +415,11 @@ void Theme::apply() {
   QFile file(StyleSheetResource);
   if (file.open(QIODevice::ReadOnly)) {
     QString sheet = QString::fromUtf8(file.readAll());
+    if (highContrast()) {
+      QFile overlay(HighContrastStyleSheetResource);
+      if (overlay.open(QIODevice::ReadOnly))
+        sheet += QLatin1Char('\n') + QString::fromUtf8(overlay.readAll());
+    }
     static const QRegularExpression placeholder(R"(\$\{([A-Za-z]+)\})");
     QString resolved;
     resolved.reserve(sheet.size());

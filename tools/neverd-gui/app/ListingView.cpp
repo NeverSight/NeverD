@@ -12,6 +12,8 @@
 #include "../Config.h"
 #include "../ResourceLimits.h"
 #include "AddressSpace.h"
+#include "DevicePixels.h"
+#include "HighlightLocks.h"
 #include "Session.h"
 #include "Theme.h"
 #include "WorkerCodes.h"
@@ -996,8 +998,14 @@ void ListingView::paintEvent(QPaintEvent *) {
     const bool patched =
         contentKind(line.kind) &&
         session_.hasBytePatch(line.item, std::max<Address>(1, line.itemSize));
-    if (i == cursorLine_)
+    if (i == cursorLine_) {
       painter.fillRect(row, theme.color(ColorRole::ListingCurrentLine));
+      // A high contrast theme outlines the line instead.
+      paintDeviceBox(
+          painter, row,
+          DeviceBox{QColor(),
+                    theme.color(ColorRole::ListingCurrentLineBorder)});
+    }
     // The active row must reveal a committed patch without moving the cursor.
     if (patched) {
       painter.fillRect(row, theme.color(ColorRole::ListingPatched));
@@ -1011,8 +1019,8 @@ void ListingView::paintEvent(QPaintEvent *) {
         const qreal x0 = columnX(line, at + firstColumn(line));
         const qreal x1 =
             columnX(line, at + SearchHighlight.Text.size() + firstColumn(line));
-        painter.fillRect(QRectF(x0, y, x1 - x0, lineHeight_),
-                         theme.color(ColorRole::ListingHighlight));
+        paintHighlight(painter, QRectF(x0, y, x1 - x0, lineHeight_),
+                       ColorRole::ListingHighlight);
       }
     }
     const bool selected = anchor_ && selectionFirst != selectionLast &&
@@ -1044,8 +1052,8 @@ void ListingView::paintEvent(QPaintEvent *) {
                  line.styled, word, static_cast<int>(ListingRole::Register))) {
           const qreal x0 = textLine.cursorToX(first);
           const qreal x1 = textLine.cursorToX(last);
-          painter.fillRect(QRectF(left + x0, y, x1 - x0, lineHeight_),
-                           theme.color(role));
+          paintHighlight(painter, QRectF(left + x0, y, x1 - x0, lineHeight_),
+                         role);
         }
       };
       const auto &locks = session_.highlightLocks();
@@ -1061,6 +1069,10 @@ void ListingView::paintEvent(QPaintEvent *) {
       range.start = std::max(0, begin);
       range.length = std::max(0, end - range.start);
       range.format.setBackground(selectionColor);
+      // A high contrast theme's selection takes a text color of its own.
+      if (const QColor text = theme.color(ColorRole::ListingSelectionText);
+          text.alpha() > 0 && !patched)
+        range.format.setForeground(text);
       selection.append(range);
     }
     layout.draw(&painter, QPointF(left, y), selection);

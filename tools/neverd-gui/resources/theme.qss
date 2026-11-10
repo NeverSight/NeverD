@@ -33,7 +33,7 @@ QToolBar::handle:vertical { image: url(:/neverd/icons/grip_horizontal-${Mode}.sv
 /* The style fills a tool button under the pointer, while pressed or on, and
    frames it while it has focus, which it takes only from the keyboard. */
 QToolButton { background: transparent; color: ${WindowText}; border: 1px solid transparent; padding: 2px; }
-QToolButton:pressed, QToolButton:checked { color: ${HighlightedText}; }
+QToolButton:pressed, QToolButton:checked { color: ${ToolButtonCheckedText}; }
 QToolButton::menu-indicator { image: none; width: 0; }
 /* A button with a list beside its command, as Back lists its stops, opens the
    list from a narrow chevron, flat as the button; a disabled one shows none. */
@@ -62,12 +62,12 @@ QFrame#loadProgressCard { background: transparent; border: 1px solid transparent
 QFrame#loadProgressCard QLabel { background: transparent; color: ${MenuText}; }
 QFrame#loadProgressCard QLabel#loadProgressTitle { font-weight: 600; }
 QFrame#loadProgressCard QLabel#loadProgressStep, QFrame#loadProgressCard QLabel#loadProgressElapsed { color: ${SecondaryText}; }
-QTreeView, QListView, QTableView { background: ${Base}; alternate-background-color: ${AlternateBase}; color: ${Text}; border: none; selection-background-color: ${Highlight}; selection-color: ${HighlightedText}; outline: none; }
+QTreeView, QListView, QTableView { background: ${Base}; alternate-background-color: ${AlternateBase}; color: ${Text}; border: none; selection-background-color: ${ListSelection}; selection-color: ${ListSelectionText}; outline: none; }
 /* Items keep Qt's own text margin: horizontal padding applies only to the
    items the style sheet paints, so hovered and selected text would shift. */
 QTreeView::item, QListView::item { padding: 1px 0; }
 QTreeView::item:hover, QListView::item:hover { background: ${Hover}; }
-QTreeView::item:selected, QListView::item:selected { background: ${Highlight}; color: ${HighlightedText}; }
+QTreeView::item:selected, QListView::item:selected { background: ${ListSelection}; color: ${ListSelectionText}; }
 QTreeView:disabled, QListView:disabled, QTableView:disabled { color: ${DisabledText}; }
 /* Branches open and close with the chevrons the other controls draw. */
 QTreeView::branch:selected { background: ${Highlight}; }
@@ -104,9 +104,9 @@ QAbstractSpinBox::down-arrow { image: url(:/neverd/icons/chevron_down-${Mode}.sv
 QComboBox::down-arrow:disabled, QAbstractSpinBox::down-arrow:disabled, QAbstractSpinBox::down-arrow:off { image: url(:/neverd/icons/chevron_down_disabled-${Mode}.svg); }
 QAbstractSpinBox::up-arrow:disabled, QAbstractSpinBox::up-arrow:off { image: url(:/neverd/icons/chevron_up_disabled-${Mode}.svg); }
 QComboBoxPrivateContainer { background: ${Menu}; border: none; }
-QComboBox QAbstractItemView { background: transparent; color: ${MenuText}; border: 1px solid transparent; padding: 4px; outline: none; selection-background-color: ${MenuSelection}; selection-color: ${HighlightedText}; }
+QComboBox QAbstractItemView { background: transparent; color: ${MenuText}; border: 1px solid transparent; padding: 4px; outline: none; selection-background-color: ${MenuSelection}; selection-color: ${MenuSelectionText}; }
 QComboBox QAbstractItemView::item { min-height: 22px; padding: 0 12px 0 8px; border-radius: 3px; }
-QComboBox QAbstractItemView::item:hover, QComboBox QAbstractItemView::item:selected { background: ${MenuSelection}; color: ${HighlightedText}; }
+QComboBox QAbstractItemView::item:hover, QComboBox QAbstractItemView::item:selected { background: ${MenuSelection}; color: ${MenuSelectionText}; }
 QComboBox QAbstractItemView::item:disabled { color: ${DisabledText}; }
 /* The style paints a push button's face: a dialog's default in the accent,
    any other in the button gray.  One that cannot act gives up its fill and

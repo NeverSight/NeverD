@@ -12,6 +12,7 @@
 #include "DevicePixels.h"
 #include "Docking.h"
 #include "GnomeModalDialogs.h"
+#include "HighlightLocks.h"
 #include "Language.h"
 #include "OutputWindow.h"
 #include "QuickStartDialog.h"
@@ -38,6 +39,7 @@
 #include <QHeaderView>
 #include <QImage>
 #include <QInputDialog>
+#include <QItemSelectionModel>
 #include <QKeySequence>
 #include <QLineEdit>
 #include <QMenu>
@@ -66,6 +68,7 @@
 #include <QWheelEvent>
 #include <QWindow>
 #include <algorithm>
+#include <cmath>
 #include <kddockwidgets/qtwidgets/views/DockWidget.h>
 #include <kddockwidgets/qtwidgets/views/MainWindow.h>
 #include <memory>
@@ -78,6 +81,38 @@
 #endif
 
 using namespace neverd::gui;
+
+namespace {
+/// \p color composited over the opaque \p surface.
+QColor over(const QColor &color, const QColor &surface) {
+  const qreal a = color.alphaF();
+  return QColor::fromRgbF(color.redF() * a + surface.redF() * (1 - a),
+                          color.greenF() * a + surface.greenF() * (1 - a),
+                          color.blueF() * a + surface.blueF() * (1 - a));
+}
+
+/// WCAG's relative luminance of the opaque \p color.
+qreal luminance(const QColor &color) {
+  const auto channel = [](qreal c) {
+    return c <= 0.03928 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * channel(color.redF()) + 0.7152 * channel(color.greenF()) +
+         0.0722 * channel(color.blueF());
+}
+
+/// WCAG's contrast ratio of \p ink, composited over the opaque \p surface.
+qreal contrast(const QColor &ink, const QColor &surface) {
+  const qreal a = luminance(over(ink, surface)), b = luminance(surface);
+  return (std::max(a, b) + 0.05) / (std::min(a, b) + 0.05);
+}
+
+/// Whether \p a and \p b differ by at most \p tolerance in every channel.
+bool near(const QColor &a, const QColor &b, int tolerance) {
+  return std::abs(a.red() - b.red()) <= tolerance &&
+         std::abs(a.green() - b.green()) <= tolerance &&
+         std::abs(a.blue() - b.blue()) <= tolerance;
+}
+} // namespace
 
 class AppearanceTests final : public QObject {
   Q_OBJECT
@@ -650,6 +685,257 @@ private slots:
              Theme::Choice::System);
     QCOMPARE(Theme::choiceFromName(QStringLiteral("bogus")),
              Theme::Choice::Dark);
+  }
+
+  void highContrastThemesReadClearly_data() {
+    QTest::addColumn<bool>("dark");
+    QTest::newRow("dark") << true;
+    QTest::newRow("light") << false;
+  }
+
+  void highContrastThemesReadClearly() {
+    QFETCH(bool, dark);
+    Theme &theme = Theme::instance();
+    const auto restore = qScopeGuard([&] { theme.setMode(Theme::Mode::Dark); });
+    theme.setMode(dark ? Theme::Mode::HighContrastDark
+                       : Theme::Mode::HighContrastLight);
+    QVERIFY(theme.highContrast());
+    QCOMPARE(theme.dark(), dark);
+    QCOMPARE(Theme::modeName(theme.mode()),
+             dark ? QStringLiteral("dark") : QStringLiteral("light"));
+    // A translucent color is composited over its surface first; a tint
+    // \p under text, over the surface \p under itself sits on.
+    const auto check = [&](const char *ink, const char *surface, qreal least,
+                           const char *under = nullptr) {
+      QColor behind = theme.chrome(QLatin1String(surface));
+      if (under)
+        behind = over(behind, theme.chrome(QLatin1String(under)));
+      const qreal value = contrast(theme.chrome(QLatin1String(ink)), behind);
+      QVERIFY2(value >= least,
+               qPrintable(QStringLiteral("%1 on %2: %3:1, under %4:1")
+                              .arg(QLatin1String(ink), QLatin1String(surface))
+                              .arg(value, 0, 'f', 2)
+                              .arg(least)));
+    };
+    // Text, at the 7:1 of WCAG's enhanced contrast.
+    for (const auto &[ink, surface] : {std::pair{"WindowText", "Window"},
+                                       {"Text", "Base"},
+                                       {"Text", "Input"},
+                                       {"MenuText", "Menu"},
+                                       {"ButtonText", "Button"},
+                                       {"ButtonPrimaryText", "ButtonPrimary"},
+                                       {"TabActiveText", "TabActive"},
+                                       {"TabInactiveText", "TabInactive"},
+                                       {"StatusBarText", "StatusBar"},
+                                       {"TitleBarText", "TitleBar"},
+                                       {"MenuBarText", "MenuBar"},
+                                       {"HeaderText", "HeaderBackground"},
+                                       {"ToolTipText", "ToolTipBase"},
+                                       {"DockTitleText", "DockTitle"},
+                                       {"QuickStartTitle", "QuickStartSide"}})
+      check(ink, surface, 7.0);
+    // Highlighted and hovered items keep their text at 7:1 on their tint.
+    check("MenuSelectionText", "MenuSelection", 7.0, "Menu");
+    check("ListSelectionText", "ListSelection", 7.0, "Base");
+    check("Text", "Hover", 7.0, "Base");
+    check("ToolButtonCheckedText", "ToolButtonChecked", 7.0);
+    // Secondary text, links and selections, at the 4.5:1 of the minimum.
+    for (const auto &[ink, surface] :
+         {std::pair{"SecondaryText", "Window"},
+          {"PlaceholderText", "Input"},
+          {"Link", "Base"},
+          {"HighlightedText", "Highlight"},
+          {"QuickStartSelectionText", "QuickStartSelection"}})
+      check(ink, surface, 4.5);
+    // WCAG exempts what cannot be used; Visual Studio Code's disabled gray is
+    // 4:1 on the light theme's white, still legible.
+    check("DisabledText", "Window", 3.0);
+    // Every line and outline, at the 3:1 of non-text contrast.
+    for (const auto &[line, surface] :
+         {std::pair{"Border", "Window"},
+          {"InputBorder", "Input"},
+          {"Focus", "Window"},
+          {"CheckboxBorder", "CheckboxBackground"},
+          {"MenuSeparator", "Menu"},
+          {"MenuSelectionBorder", "Menu"},
+          {"OptionActiveBorder", "Menu"},
+          {"MenuBarSelectionBorder", "MenuBar"},
+          {"StatusBarBorder", "StatusBar"},
+          {"TabSeparator", "TabBar"},
+          {"TabActiveBorder", "TabActive"},
+          {"ListSelectionBorder", "Base"},
+          {"ToolBarHoverBorder", "ToolBar"},
+          {"ButtonHoverBorder", "Window"},
+          {"ButtonPrimaryBorder", "Window"},
+          {"DockSeparator", "Window"},
+          {"WindowEdge", "Window"},
+          {"Separator", "ToolBar"},
+          {"ScrollbarSliderActive", "Base"}})
+      check(line, surface, 3.0);
+    // The analysis views' text on their surfaces.
+    const auto view = [&](ColorRole ink, ColorRole surface, qreal least) {
+      const qreal value = contrast(theme.color(ink), theme.color(surface));
+      QVERIFY2(value >= least,
+               qPrintable(QStringLiteral("view role %1 on %2: %3:1")
+                              .arg(int(ink))
+                              .arg(int(surface))
+                              .arg(value, 0, 'f', 2)));
+    };
+    view(ColorRole::ListingPlain, ColorRole::ListingBackground, 7.0);
+    view(ColorRole::CodeDefault, ColorRole::CodeBackground, 7.0);
+    view(ColorRole::HexByte, ColorRole::HexBackground, 7.0);
+    view(ColorRole::ListingSelectionText, ColorRole::ListingSelection, 7.0);
+    view(ColorRole::HexCurrentText, ColorRole::HexCurrent, 7.0);
+    for (const auto role :
+         {ColorRole::ListingMnemonic, ColorRole::ListingRegister,
+          ColorRole::ListingNumber, ColorRole::ListingCodeName,
+          ColorRole::ListingDataName, ColorRole::ListingString,
+          ColorRole::ListingComment, ColorRole::ListingLibraryName,
+          ColorRole::ListingImportName, ColorRole::ListingError,
+          ColorRole::ListingAutoComment})
+      view(role, ColorRole::ListingBackground, 4.5);
+    for (const auto role :
+         {ColorRole::CodeKeyword, ColorRole::CodeControl, ColorRole::CodeType,
+          ColorRole::CodeNumber, ColorRole::CodeString, ColorRole::CodeComment,
+          ColorRole::CodeFunction, ColorRole::CodeVariable,
+          ColorRole::CodeConstant, ColorRole::CodeLineNumber})
+      view(role, ColorRole::CodeBackground, 4.5);
+    view(ColorRole::ListingCurrentLineBorder, ColorRole::ListingBackground,
+         3.0);
+    view(ColorRole::ListingHighlightBorder, ColorRole::ListingBackground, 3.0);
+    // The cursor's highlight outlines a word and leaves its syntax colors on
+    // the view's own background.
+    QCOMPARE(theme.color(ColorRole::ListingHighlight).alpha(), 0);
+  }
+
+  void highContrastFollowsTheDesktop() {
+    Theme &theme = Theme::instance();
+    const auto restore = qScopeGuard([&] { theme.setMode(Theme::Mode::Dark); });
+    theme.setMode(Theme::Mode::Dark);
+    theme.setChoice(Theme::Choice::System);
+    using platform::DesktopContrast;
+    // A desktop that asks for high contrast gets the high contrast theme of
+    // its brightness, whatever its color scheme says.
+    theme.followDesktop(Qt::ColorScheme::Light, DesktopContrast::HighDark);
+    QCOMPARE(theme.mode(), Theme::Mode::HighContrastDark);
+    QCOMPARE(theme.chrome(QStringLiteral("Window")), QColor(Qt::black));
+    theme.followDesktop(Qt::ColorScheme::Unknown, DesktopContrast::HighLight);
+    QCOMPARE(theme.mode(), Theme::Mode::HighContrastLight);
+    QCOMPARE(theme.chrome(QStringLiteral("Window")), QColor(Qt::white));
+    // Turning high contrast off returns to the scheme's theme.
+    theme.followDesktop(Qt::ColorScheme::Dark, DesktopContrast::Normal);
+    QCOMPARE(theme.mode(), Theme::Mode::Dark);
+    // A high contrast theme chosen by name stays.
+    theme.setChoice(Theme::Choice::HighContrastLight);
+    QCOMPARE(QSettings().value(QStringLiteral("appearance/theme")).toString(),
+             QStringLiteral("hc-light"));
+    theme.followDesktop(Qt::ColorScheme::Dark, DesktopContrast::HighDark);
+    QCOMPARE(theme.mode(), Theme::Mode::HighContrastLight);
+    QCOMPARE(Theme::choiceFromName(QStringLiteral("hc-dark")),
+             Theme::Choice::HighContrastDark);
+    // Only a high contrast theme adds its style sheet, which keeps an outline
+    // around every menu bar item.
+    const QString overlay =
+        QStringLiteral("QMenuBar::item { border: 1px solid transparent");
+    QVERIFY(qApp->styleSheet().contains(overlay));
+    theme.setMode(Theme::Mode::Light);
+    QVERIFY(!qApp->styleSheet().contains(overlay));
+  }
+
+  void highContrastOutlinesWhatOthersFill_data() {
+    QTest::addColumn<bool>("dark");
+    QTest::newRow("dark") << true;
+    QTest::newRow("light") << false;
+  }
+
+  void highContrastOutlinesWhatOthersFill() {
+    QFETCH(bool, dark);
+    Theme &theme = Theme::instance();
+    const auto restore = qScopeGuard([&] { theme.setMode(Theme::Mode::Dark); });
+    theme.setMode(dark ? Theme::Mode::HighContrastDark
+                       : Theme::Mode::HighContrastLight);
+    {
+      QMenu menu;
+      menu.addAction(QStringLiteral("First"));
+      auto *highlighted = menu.addAction(QStringLiteral("Second"));
+      menu.ensurePolished();
+      menu.resize(menu.sizeHint());
+      menu.setActiveAction(highlighted);
+      const QImage image = menu.grab().toImage();
+      const QRect row = menu.actionGeometry(highlighted);
+      const qreal dpr = image.devicePixelRatio();
+      const auto at = [&](int x, int y) {
+        return image.pixelColor(qRound(x * dpr), qRound(y * dpr));
+      };
+      // The highlighted item keeps the menu's color, at most tinted, and takes
+      // an outline along its middle row's ends.
+      const QColor outline =
+          theme.chrome(QStringLiteral("MenuSelectionBorder"));
+      const QColor tint = over(theme.chrome(QStringLiteral("MenuSelection")),
+                               theme.chrome(QStringLiteral("Menu")));
+      const int middle = row.top() + row.height() / 2;
+      QCOMPARE(at(row.left(), middle), outline);
+      QCOMPARE(at(row.right(), middle), outline);
+      QVERIFY(near(at(row.left() + 2, middle), tint, 1));
+      // Its text stays legible on the tint.
+      qreal best = 1;
+      for (int y = row.top() + 3; y <= row.bottom() - 3; ++y)
+        for (int x = row.left() + 3; x <= row.right() - 3; ++x)
+          best = std::max(best, contrast(at(x, y), tint));
+      QVERIFY2(best >= 7, qPrintable(QString::number(best)));
+    }
+    // The views' highlight of the word under the cursor, and of search
+    // matches, outlines the word and keeps the background.
+    {
+      QImage canvas(40, 20, QImage::Format_ARGB32);
+      const QColor background = theme.color(ColorRole::ListingBackground);
+      canvas.fill(background);
+      QPainter painter(&canvas);
+      paintHighlight(painter, QRectF(4.5, 2, 20.25, 16),
+                     ColorRole::ListingHighlight);
+      painter.end();
+      const QColor outline = theme.color(ColorRole::ListingHighlightBorder);
+      QCOMPARE(canvas.pixelColor(4, 10), outline);
+      QCOMPARE(canvas.pixelColor(12, 2), outline);
+      QCOMPARE(canvas.pixelColor(24, 10), outline);
+      QCOMPARE(canvas.pixelColor(12, 10), background);
+    }
+    // A list's selected row takes one outline around all its cells, with its
+    // text in the list's color.
+    QStandardItemModel model(3, 2);
+    for (int row = 0; row < model.rowCount(); ++row)
+      for (int column = 0; column < model.columnCount(); ++column)
+        model.setItem(row, column, new QStandardItem(QStringLiteral("Cell")));
+    QTreeView view;
+    view.setModel(&model);
+    view.setRootIsDecorated(false);
+    view.header()->hide();
+    view.resize(320, 120);
+    view.setColumnWidth(0, 160);
+    view.selectionModel()->select(model.index(1, 0),
+                                  QItemSelectionModel::Select |
+                                      QItemSelectionModel::Rows);
+    // Item delegates draw a selected row's own text in this color.
+    view.ensurePolished();
+    QCOMPARE(view.palette().color(QPalette::HighlightedText),
+             theme.chrome(QStringLiteral("ListSelectionText")));
+    const QImage image = view.grab().toImage();
+    const QPoint origin = view.viewport()->mapTo(&view, QPoint());
+    const qreal dpr = image.devicePixelRatio();
+    const auto at = [&](const QPoint &point) {
+      return image.pixelColor(qRound((point.x() + origin.x()) * dpr),
+                              qRound((point.y() + origin.y()) * dpr));
+    };
+    const QRect first = view.visualRect(model.index(1, 0));
+    const QRect second = view.visualRect(model.index(1, 1));
+    const QColor outline = theme.chrome(QStringLiteral("ListSelectionBorder"));
+    const int middle = first.center().y();
+    QCOMPARE(at(QPoint(first.center().x(), first.top())), outline);
+    QCOMPARE(at(QPoint(second.center().x(), second.bottom())), outline);
+    QCOMPARE(at(QPoint(first.left(), middle)), outline);
+    QCOMPARE(at(QPoint(second.right(), middle)), outline);
+    QVERIFY(at(QPoint(first.right(), middle)) != outline);
+    QVERIFY(at(QPoint(second.left(), middle)) != outline);
   }
 
   void deviceBoxesPaintAsStyleSheetsAtWholeScales_data() {

@@ -272,6 +272,13 @@ QColor chrome(const char *name) {
   return Theme::instance().chrome(QLatin1String(name));
 }
 
+/// The chrome color \p name where the theme draws it, as a high contrast
+/// theme outlines what the others fill, or else \p otherwise.
+QColor chromeOr(const char *name, const QColor &otherwise) {
+  const QColor color = chrome(name);
+  return color.alpha() > 0 ? color : otherwise;
+}
+
 /// The style option \p widget hands the style as it paints itself, with the
 /// state the style sheet's pseudo-states read: a tool button counts as
 /// pressed while its menu shows, a push button as a dialog's default while it
@@ -324,7 +331,7 @@ DeviceBox fieldFace(const QWidget &field) {
   face.radius = ::neverd::limits::gui_config::kWorkbenchStyleControlRadius;
   const bool editor = qobject_cast<const QAbstractScrollArea *>(&field);
   if (!field.isEnabled()) {
-    face.border = editor ? QColor() : chrome("Border");
+    face.border = editor ? QColor() : chrome("DisabledBorder");
     face.borderWidth = editor ? 0 : 1;
     return face;
   }
@@ -339,7 +346,9 @@ DeviceBox fieldFace(const QWidget &field) {
 /// A push button's face: a dialog's default in the accent, any other in the
 /// button gray, each a shade darker under the pointer.  One that cannot act
 /// gives up its fill and keeps its outline; a default one keeps a faint
-/// accent instead, so the dialog's default action stays recognizable.
+/// accent instead, so the dialog's default action stays recognizable.  A
+/// high contrast theme outlines a button under the pointer in place of the
+/// darker shade.
 DeviceBox pushButtonFace(const QPushButton &button) {
   const auto option = paintedOption<QPushButton, QStyleOptionButton>(button);
   const bool enabled = option.state & QStyle::State_Enabled;
@@ -349,15 +358,22 @@ DeviceBox pushButtonFace(const QPushButton &button) {
   if (option.features & QStyleOptionButton::DefaultButton) {
     if (!enabled) {
       face.fill = chrome("ButtonPrimaryDisabled");
+      face.border = chrome("ButtonPrimaryDisabledBorder");
       return face;
     }
     face.fill = chrome(hover ? "ButtonPrimaryHover" : "ButtonPrimary");
-    face.border = chrome("ButtonPrimary");
+    face.border =
+        hover ? chromeOr("ButtonHoverBorder", chrome("ButtonPrimaryBorder"))
+              : chrome("ButtonPrimaryBorder");
     return face;
   }
-  face.border = chrome("Border");
-  if (enabled)
-    face.fill = chrome(hover ? "ButtonHover" : "Button");
+  if (!enabled) {
+    face.border = chrome("DisabledBorder");
+    return face;
+  }
+  face.fill = chrome(hover ? "ButtonHover" : "Button");
+  face.border = hover ? chromeOr("ButtonHoverBorder", chrome("Border"))
+                      : chrome("Border");
   return face;
 }
 
@@ -376,10 +392,12 @@ DeviceBox toolButtonFace(const QToolButton &button) {
   const bool on = option.state & QStyle::State_On;
   DeviceBox face;
   if (inside<QTabBar>(button)) {
-    face.borderWidth = 0;
     face.fill = chrome(hover             ? "ToolBarHover"
-                       : (pressed || on) ? "Highlight"
+                       : (pressed || on) ? "ToolButtonChecked"
                                          : "TabBar");
+    // Inside the button; the style sheet gives these arrows no border.
+    if (hover)
+      face.border = chrome("ToolBarHoverBorder");
     return face;
   }
   face.radius = ::neverd::limits::gui_config::kWorkbenchStyleToolButtonRadius;
@@ -387,13 +405,15 @@ DeviceBox toolButtonFace(const QToolButton &button) {
   if (glyph && hover)
     face.fill = chrome("ToolBarHover");
   else if (!glyph && (pressed || on) && enabled)
-    face.fill = chrome("Highlight");
+    face.fill = chrome("ToolButtonChecked");
   else if (!glyph && hover)
     face.fill = chrome("ToolBarHover");
   if (on && !enabled)
-    face.border = glyph ? QColor() : chrome("Border");
+    face.border = glyph ? QColor() : chrome("DisabledBorder");
   else if (option.state & QStyle::State_HasFocus)
     face.border = chrome("Focus");
+  else if (hover)
+    face.border = chrome("ToolBarHoverBorder");
   return face;
 }
 
@@ -453,9 +473,10 @@ void paintIndicator(QStyle::PrimitiveElement element,
       radio ? option.rect.width() / 2.0 : config::kWorkbenchStyleCheckBoxRadius;
   if (!enabled) {
     box.fill = marked ? chrome("DisabledText") : QColor();
-    box.border = chrome(marked ? "DisabledText" : "Border");
+    box.border = chrome(marked ? "DisabledText" : "DisabledBorder");
   } else if (marked) {
-    box.fill = box.border = chrome("CheckboxChecked");
+    box.fill = chrome("CheckboxChecked");
+    box.border = chrome("CheckboxCheckedBorder");
   } else {
     box.fill = chrome("CheckboxBackground");
     box.border = chrome(hover ? "Focus" : "CheckboxBorder");
@@ -654,7 +675,7 @@ void WorkbenchStyle::drawControl(ControlElement element,
       const bool selected = tab->state & State_Selected;
       paintDeviceBox(*painter, tab->rect,
                      DeviceBox{chrome(selected ? "TabActive" : "TabInactive"),
-                               chrome("TabBar"), 1, Qt::RightEdge});
+                               chrome("TabSeparator"), 1, Qt::RightEdge});
       if (selected)
         paintDeviceBox(
             *painter, tab->rect,
@@ -737,6 +758,16 @@ void WorkbenchStyle::drawControl(ControlElement element,
     painter->setBrush(theme.chrome(QStringLiteral("MenuSelection")));
     const qreal radius = device.length(config::kWorkbenchStyleMenuItemRadius);
     painter->drawRoundedRect(QRectF(device.rect(rect)), radius, radius);
+    // A high contrast theme outlines the item it does not fill.
+    if (const QColor outline =
+            theme.chrome(QStringLiteral("MenuSelectionBorder"));
+        outline.alpha() > 0) {
+      const qreal width = device.width(1);
+      painter->setPen(QPen(outline, width));
+      painter->setBrush(Qt::NoBrush);
+      painter->drawRoundedRect(device.outline(rect, 1), radius - width / 2,
+                               radius - width / 2);
+    }
   }
   const bool checked =
       item->checkType != QStyleOptionMenuItem::NotCheckable && item->checked;
@@ -789,7 +820,7 @@ void WorkbenchStyle::drawControl(ControlElement element,
   if (!styleHint(SH_UnderlineShortcut, item, widget))
     flags |= Qt::TextHideMnemonic;
   painter->setPen(theme.chrome(!enabled   ? QStringLiteral("DisabledText")
-                               : selected ? QStringLiteral("HighlightedText")
+                               : selected ? QStringLiteral("MenuSelectionText")
                                           : QStringLiteral("MenuText")));
   QStringView label(item->text);
   // Quieter until the item is highlighted; a disabled item's shortcut is

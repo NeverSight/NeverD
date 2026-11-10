@@ -2659,8 +2659,16 @@ Signed: %4</source>
         <translation>Светлая (Visual Studio Code Light+)</translation>
     </message>
     <message>
-        <source>System (follows the desktop&apos;s light or dark mode)</source>
-        <translation>Системная (следует светлому или тёмному режиму рабочего стола)</translation>
+        <source>Dark High Contrast (Visual Studio Code)</source>
+        <translation>Тёмная высококонтрастная (Visual Studio Code)</translation>
+    </message>
+    <message>
+        <source>Light High Contrast (Visual Studio Code)</source>
+        <translation>Светлая высококонтрастная (Visual Studio Code)</translation>
+    </message>
+    <message>
+        <source>System (follows the desktop)</source>
+        <translation>Системная (как на рабочем столе)</translation>
     </message>
     <message>
         <source>Colors</source>
