@@ -7098,8 +7098,13 @@ a project that opens and takes edits, a write that fails fails a later edit and 
 through once it can, a data item refused right behind one whose write fails and
 function edits and operand formats taken before a failed write is found stay in the
 session and reach the files once they take writes again, a local's new name is taken
-while the project's folder takes no write and reaches the files afterwards, and files
-changed behind the worker stop the next edit. The
+while the project's folder takes no write and reaches the files afterwards, an undo past
+a staged comment's step is refused unless it commits the comments first
+(`commit_staged`), and files changed behind the worker stop the next edit.
+`NeverDWorkerViewEdits` also undoes a local's name, data items and names of data step by
+step and redoes them, each step reading as a new reader of the project does. The
+workbench's `undoTakesBackANameAfterAComment` undoes a comment and then the name before
+it, with no refusal on the way. The
 workbench's `commentsCommittedAheadOfAnEditAreNotASave` renames while a comment is
 still on its way: the comment is committed first, the files hold both without the
 project being reported saved, and Save still answers once the files hold it.

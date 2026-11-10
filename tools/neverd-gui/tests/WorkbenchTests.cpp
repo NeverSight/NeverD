@@ -11066,6 +11066,46 @@ private slots:
                 .contains("saved by the user"));
   }
 
+  void undoTakesBackANameAfterAComment() {
+    // As IDA's Undo does: a name, then a comment, then Undo twice takes back
+    // the comment and then the name, the staged comments committed on the way
+    // rather than blocking the second step.
+    QTemporaryDir directory;
+    const auto path = writeFixture(directory, QStringLiteral("fixture.bin"));
+    Workbench bench;
+    bench.window->openFile(path);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *log = bench.window->findChild<OutputWindow *>()
+                    ->findChild<QPlainTextEdit *>();
+    QVERIFY(log);
+    const auto settled = [&] {
+      return !bench.session.queries().hasPending() &&
+             bench.session.history().contains("cursor");
+    };
+    bench.session.rename(Base + 16, QStringLiteral("taken_back_name"));
+    QTRY_VERIFY_WITH_TIMEOUT(settled() && bench.session.canUndo(),
+                             OpenTimeoutMs);
+    bench.session.setComment(Base, QStringLiteral("taken back comment"));
+    QTRY_VERIFY_WITH_TIMEOUT(settled() && bench.session.dirty(), OpenTimeoutMs);
+    const auto steps = bench.session.history().value("cursor").toInt();
+    bench.session.undo();
+    QTRY_VERIFY_WITH_TIMEOUT(
+        settled() &&
+            bench.session.history().value("cursor").toInt() == steps - 1,
+        OpenTimeoutMs);
+    bench.session.undo();
+    QTRY_VERIFY_WITH_TIMEOUT(
+        settled() &&
+            bench.session.history().value("cursor").toInt() == steps - 2,
+        OpenTimeoutMs);
+    QVERIFY(!log->toPlainText().contains(QStringLiteral("staged annotations")));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        !readAll(path + ".neverd/renames.json").contains("taken_back_name"),
+        OpenTimeoutMs);
+    QVERIFY(!readAll(path + ".neverd/annotations.json")
+                 .contains("taken back comment"));
+  }
+
   void fileInAReadOnlyFolderKeepsItsProjectInTheDataDirectory() {
     // IDA asks for another place for its database when the input's folder
     // is read-only.  The workbench opens the file anyway: its database,

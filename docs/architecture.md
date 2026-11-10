@@ -5135,7 +5135,11 @@ edit such as a local's name and an operand's format among them, goes before its 
 writing. What may read the project's files waits for it first. Staged comments an edit
 must not pass are committed ahead of it the same way (`save.write_behind`,
 `Session::commitComments`, counting comments still on their way to the worker), while
-the user's Save, closing and packing a database send a plain save that waits. A refused
+the user's Save, closing and packing a database send a plain save that waits. Undo and redo take a step as its edit took it, in place
+and written behind the reply (`Engine::takeName`, shared with the rename, and the
+restores below), and read every table again only for a types or patch step; the
+GUI's undo commits staged comments the step would otherwise be refused over
+(`commit_staged`). A refused
 edit takes back what it changed of the engine's data items, function edits and operand
 formats from the rows the history holds (`Engine::restoreDataItems`,
 `Engine::restoreFunctionEdits`, `Engine::restoreOperandFormats`),

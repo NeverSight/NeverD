@@ -1657,23 +1657,30 @@ void Session::setComment(Address address, const QString &text,
 void Session::undo() {
   if (!canUndo())
     return;
-  command(QStringLiteral("undo"), {}, [this](const QJsonObject &payload) {
-    emit message(
-        tr("Undid edit at %1.").arg(payload.value("address").toString()), 0);
-    history_ = payload;
-    emit historyChanged();
-  });
+  // A step past staged comments commits them first, as an edit does.
+  command(
+      QStringLiteral("undo"), {{"commit_staged", true}},
+      [this](const QJsonObject &payload) {
+        emit message(
+            tr("Undid edit at %1.").arg(payload.value("address").toString()),
+            0);
+        history_ = payload;
+        emit historyChanged();
+      });
 }
 
 void Session::redo() {
   if (!canRedo())
     return;
-  command(QStringLiteral("redo"), {}, [this](const QJsonObject &payload) {
-    emit message(
-        tr("Redid edit at %1.").arg(payload.value("address").toString()), 0);
-    history_ = payload;
-    emit historyChanged();
-  });
+  command(
+      QStringLiteral("redo"), {{"commit_staged", true}},
+      [this](const QJsonObject &payload) {
+        emit message(
+            tr("Redid edit at %1.").arg(payload.value("address").toString()),
+            0);
+        history_ = payload;
+        emit historyChanged();
+      });
 }
 
 void Session::loadSignatures(const QString &path, bool tree) {

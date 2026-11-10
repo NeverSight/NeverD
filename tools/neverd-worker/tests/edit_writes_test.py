@@ -173,6 +173,30 @@ def run(executable):
         assert not any(row.get("text") == "committed behind" for row in notes), notes
         client.close()
 
+        # Undo past a staged comment's own step commits the comments first when
+        # asked to, and otherwise refuses as an edit does.
+        client = opened(executable, path)
+        ok(client, "rename", {"address": hex(GLOBAL), "name": "before_staged"})
+        ok(client, "annotation_set", {"address": hex(GLOBAL), "text": "staged then undone"})
+        assert ok(client, "undo")["dirty"]
+        refused = client.call("undo")
+        assert refused["status"] != "ok", refused
+        assert refused["error"]["code"] == "unsaved_changes", refused
+        refused = client.call("undo", {"commit_staged": "yes"})
+        assert refused["error"]["code"] == "invalid_request", refused
+        undone = ok(client, "undo", {"commit_staged": True})
+        assert not undone["dirty"] and undone["saved"], undone
+        assert resolves(client, "before_save_7")
+        ok(client, "redo", {"commit_staged": True})
+        assert resolves(client, "before_staged")
+        client.close()
+        assert not journal(path), journal(path)
+        notes = json.loads((project_folder(path) / "annotations.json").read_text())
+        assert not any(row.get("text") == "staged then undone" for row in notes), notes
+        client = opened(executable, path)
+        assert resolves(client, "before_staged")
+        client.close()
+
         # A local's new name goes behind the reply as a name does, and a view
         # right behind it reads it.
         client = opened(executable, path)

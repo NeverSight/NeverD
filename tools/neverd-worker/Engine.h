@@ -182,6 +182,14 @@ private:
   /// file.  Declarations of types it reads from the file: one that names a type
   /// taken away and declared again reads otherwise taken in place.
   bool takeFunctionRows(const Json &before, const Json &after);
+  /// How the session took a name: in place in the listing and kept views, as a
+  /// function's or as data's, or by reading every name again.
+  enum class NameTaken { Again, Function, Data };
+  /// The session takes the name a rename, or its undo or redo, leaves at
+  /// \p address: \p after's row, or with none the name analysis gives it, which
+  /// \p before kept as its original; in place where the listing can.
+  NameTaken takeName(std::uint64_t address, const Json &before,
+                     const Json &after);
   /// A replica takes the names that changed as the owner took them, row by row,
   /// and false where it must read the table again.
   bool takeNames(const std::map<std::uint64_t, std::string> &before,

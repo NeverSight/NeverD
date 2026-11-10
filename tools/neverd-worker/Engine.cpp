@@ -3368,6 +3368,62 @@ bool Engine::takeFunctionRows(const Json &before, const Json &after) {
   return functionEditRows() == after;
 }
 
+Engine::NameTaken Engine::takeName(std::uint64_t address, const Json &before,
+                                   const Json &after) {
+  using RenameTake = int (*)(neverd_session_t, neverd_va_t, const char *);
+  static const auto take = engineSymbol<RenameTake>("neverd_rename_take");
+  const bool named = after.is_object();
+  const std::string name =
+      named ? after.value("renamed", std::string()) : std::string();
+  const std::string original = named ? after.value("original", std::string())
+                               : before.is_object()
+                                   ? before.value("original", std::string())
+                                   : std::string();
+  const int index = neverd_func_find_by_addr(session_, address);
+  if ((take ? take(session_, address, named ? name.c_str() : nullptr)
+            : neverd_renames_load(session_)) != 0)
+    throw Error("reload_failed", "Rename was saved but could not be reloaded",
+                {{"saved", true}});
+  // What it is called now, and what a view may spell of it: that, the name
+  // the engine has for it, and the one given up.
+  const std::string &shown = named ? name : original;
+  const std::vector<std::string> spellings{
+      shown, original,
+      before.is_object() ? before.value("renamed", std::string())
+                         : std::string()};
+  // As the engine's row now reads; a name given up reads every row again.
+  using RenameOriginal = const char *(*)(neverd_session_t, neverd_va_t);
+  static const auto engineOriginal =
+      engineSymbol<RenameOriginal>("neverd_rename_original");
+  if (named && imageFactsHeld_ && engineOriginal)
+    imageFacts_.renamed(address, ownedString(engineOriginal(session_, address)),
+                        name);
+  else
+    imageFactsHeld_ = false;
+  const bool functionInPlace = listing_ && listing_->functionRenamed(address);
+  // Data that goes back to an automatic name holds no name of the listing's.
+  const bool dataInPlace = !functionInPlace && listing_ && index < 0 &&
+                           (named || !parseDummyName(original)) &&
+                           listing_->dataRenamed(address, shown);
+  if (functionInPlace) {
+    // Decoration reads a function's name.
+    functionNamesChanged(false);
+    keepNamedViewsThrough(address, spellings, false,
+                          ViewEditKind::FunctionName);
+    return NameTaken::Function;
+  }
+  if (dataInPlace) {
+    // The pages of what read it spell a name of data, which the engine text
+    // its decoration read respells.
+    imageFactsRevision_.reset();
+    forgetGraphsAndText();
+    keepNamedViewsThrough(address, spellings, false, ViewEditKind::DataName);
+    return NameTaken::Data;
+  }
+  namesChanged();
+  return NameTaken::Again;
+}
+
 bool Engine::takeNames(const std::map<std::uint64_t, std::string> &before,
                        const std::map<std::uint64_t, std::string> &after) {
   using RenameTake = int (*)(neverd_session_t, neverd_va_t, const char *);
@@ -3902,10 +3958,20 @@ bool readsNoProjectFile(std::string_view operation) {
       "listing",        "local_types_declare",
       "metadata",       "prepare_function",
       "names",          "operand_format",
-      "rename",         "resolve",
-      "strings",        "xrefs"};
+      "redo",           "rename",
+      "resolve",        "strings",
+      "undo",           "xrefs"};
   return std::find(std::begin(Operations), std::end(Operations), operation) !=
          std::end(Operations);
+}
+
+/// An undo or redo that commits staged comments ahead of a step they block.
+bool commitsStaged(const Json &p) {
+  if (!p.is_object() || !p.contains("commit_staged"))
+    return false;
+  if (!p.at("commit_staged").is_boolean())
+    throw Error("invalid_request", "commit_staged must be boolean");
+  return p.at("commit_staged").get<bool>();
 }
 
 /// A save that commits staged comments ahead of an edit, as that edit commits:
@@ -4850,19 +4916,34 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     requireWriter();
     auto &store = history();
     const bool redo = operation == "redo";
+    const bool commitStaged = commitsStaged(p);
     const auto command = store.next(redo);
     const auto value = command.at(redo ? "after" : "before");
     const auto address = parseAddress(command.at("address").get<std::string>());
-    if (command.at("kind") == "annotation") {
+    const std::string kind = command.at("kind").get<std::string>();
+    // A step the session takes in place takes its table's rows alone, as the
+    // edit took them, and writes them as the project writes edits; any other
+    // reads every table again from the files once they are written.
+    bool inPlace = false;
+    if (kind == "annotation") {
       store.advance(redo);
       neverd_annotation_set(session_, address,
                             value.get_ref<const std::string &>().c_str());
       dirty_ = true;
     } else {
-      if (dirty_)
+      // Staged comments block any other step, unless the request commits
+      // them first, as a save written behind its reply does.
+      if (dirty_ && !commitStaged)
         throw Error("unsaved_changes",
                     "Save or reload staged annotations before undoing a "
                     "rename or a function edit");
+      if (dirty_) {
+        auto annotations = backendJson(neverd_annotations_json(session_));
+        saveAnalysisSections();
+        sectionsDirty_ = false;
+        persistTableEdit(store, "annotations", std::move(annotations));
+        dirty_ = false;
+      }
       // Replay only the changed rows. Patch handles retain immutable values
       // across checkpoints; other edits keep their existing JSON path.
       Json changes = command.value("rows", Json::array());
@@ -4885,9 +4966,8 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
             rows.insert(position, own(side));
         }
       };
-      const bool patch = command.at("kind") == "patch";
-      const std::string table =
-          ProjectHistory::tableOfKind(command.at("kind").get<std::string>());
+      const bool patch = kind == "patch";
+      const std::string table = ProjectHistory::tableOfKind(kind);
       const bool byRow = ProjectHistory::keepsRows(table);
       Json rows;
       ProjectHistory::PatchRows patches;
@@ -4908,35 +4988,137 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
             },
             [](const Json &row) { return row; });
       }
+      // The step's rows on either side.
+      const Json &before = command.at(redo ? "before" : "after");
+      const Json &after = command.at(redo ? "after" : "before");
+      using RenameTake = int (*)(neverd_session_t, neverd_va_t, const char *);
+      static const auto take = engineSymbol<RenameTake>("neverd_rename_take");
+      inPlace = (kind == "rename" && take && !command.contains("rows")) ||
+                kind == "item" || kind == "operand" || kind == "code" ||
+                kind == "function";
+      // What analysis reads of a function decides which views its step
+      // reaches, as the edit's did.
+      const auto rowRead = [&](const Json &row, bool declarations) {
+        return functionRowsRead(
+            row.is_null() ? Json::array() : Json::array({row}), declarations);
+      };
+      const auto stateOf = [](const Json &row) {
+        return row.is_object() ? row.value("state", Json()) : Json();
+      };
+      const auto analysisReads = [this]() -> std::optional<Json> {
+        try {
+          return userFactsAnalysisReads();
+        } catch (const std::exception &) {
+          // Every view reads anew.
+        }
+        return std::nullopt;
+      };
+      const bool function = kind == "function";
+      if (inPlace && (kind == "rename" || kind == "item" || function))
+        settleNamedViews();
+      const bool stated = function && stateOf(before) == stateOf(after);
+      const bool noted =
+          stated && rowRead(before, true) == rowRead(after, true);
+      const bool reaches = function && (!stated || rowRead(before, false) !=
+                                                       rowRead(after, false));
+      const auto readBefore =
+          function && !reaches && !noted && rendersSayTheirReads()
+              ? analysisReads()
+              : std::nullopt;
       const auto checkpoint = store;
       store.advance(redo);
       try {
         if (patch)
           store.persistPatches(std::move(patches));
+        else if (byRow && inPlace && writeBehind_)
+          store.persistRowsLater(table, std::move(patches));
         else if (byRow)
           store.persistRows(table, std::move(patches));
+        else if (inPlace)
+          persistTableEdit(store, table, std::move(rows));
         else
           store.persistTable(table, std::move(rows));
       } catch (...) {
         store = checkpoint;
         throw;
       }
-      if (!reloadUserState(command.at("kind") == "patch"))
-        throw Error("reload_failed",
-                    "History operation was saved but cannot be reloaded",
-                    {{"saved", true}});
+      if (!inPlace) {
+        if (!reloadUserState(patch))
+          throw Error("reload_failed",
+                      "History operation was saved but cannot be reloaded",
+                      {{"saved", true}});
+      } else if (kind == "rename") {
+        const auto taken = takeName(address, before, after);
+        ++revision_;
+        if (taken != NameTaken::Again)
+          namedViewsTakeRevision(taken == NameTaken::Data);
+      } else {
+        // The engine takes the rows the history now holds, or where it cannot
+        // reads them from the files once those are written.
+        const Json &committed = store.committedTable(table);
+        const bool taken = kind == "item" ? restoreDataItems(committed)
+                           : kind == "operand"
+                               ? restoreOperandFormats(committed)
+                           : function ? restoreFunctionEdits(committed)
+                                      : true;
+        if (kind == "code")
+          codeEdits_ = committed;
+        if (!taken) {
+          catchUpWrites();
+          if (!(kind == "item"      ? reloadDataItems()
+                : kind == "operand" ? reloadOperandFormats()
+                                    : reloadFunctionEdits()))
+            throw Error("reload_failed",
+                        "History operation was saved but cannot be reloaded",
+                        {{"saved", true}});
+        }
+        if (kind == "item") {
+          // Items over bytes no string or code holds stay where they are.
+          const bool itemsInPlace = listing_ && listing_->dataItemsChanged();
+          if (itemsInPlace)
+            dataItemsChanged();
+          else
+            namesChanged();
+          ++revision_;
+          if (itemsInPlace)
+            namedViewsTakeRevision(true);
+        } else if (kind == "operand") {
+          // Reading the formats again shows them already.
+          if (taken)
+            operandFormatsChanged();
+          ++revision_;
+        } else if (function) {
+          bool viewsReadIt = false;
+          if (reaches) {
+            functionsChanged();
+          } else if (!noted) {
+            const auto readAfter = readBefore ? analysisReads() : std::nullopt;
+            viewsReadIt = readAfter && *readAfter == *readBefore;
+            if (viewsReadIt)
+              keepNamedViewsThrough(address, {}, true);
+            declarationsChanged(viewsReadIt);
+          }
+          ++revision_;
+          if (noted || viewsReadIt)
+            namedViewsTakeRevision(true);
+        } else {
+          invalidate();
+          ++revision_;
+        }
+      }
     }
-    // Reloading operand formats shows them already, and names and data items
-    // leave the string scan as it is; a function edit changes what the
-    // listing lays out.
-    if (const auto kind = command.at("kind");
-        kind == "rename" || kind == "item")
-      namesChanged();
-    else if (kind == "annotation")
-      commentsChanged();
-    else if (kind != "operand")
-      invalidate();
-    ++revision_;
+    if (!inPlace) {
+      // Reloading operand formats shows them already, and names and data
+      // items leave the string scan as it is; a function edit changes what
+      // the listing lays out.
+      if (kind == "rename" || kind == "item")
+        namesChanged();
+      else if (kind == "annotation")
+        commentsChanged();
+      else if (kind != "operand")
+        invalidate();
+      ++revision_;
+    }
     auto result = store.listing(0, 128);
     result["dirty"] = dirty_;
     result["saved"] = !dirty_;
@@ -6326,45 +6508,11 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       store = checkpoint;
       throw;
     }
-    if ((take ? take(session_, address, name.c_str())
-              : neverd_renames_load(session_)) != 0)
-      throw Error("reload_failed", "Rename was saved but could not be reloaded",
-                  {{"saved", true}});
-    // What a view may spell of it: the name, the one given up, and the one the
-    // engine has for it.
-    const std::vector<std::string> spellings{
-        name, after.value("original", std::string()),
-        before.is_object() ? before.value("renamed", std::string())
-                           : std::string()};
-    // As the engine's row now reads.
-    using RenameOriginal = const char *(*)(neverd_session_t, neverd_va_t);
-    static const auto engineOriginal =
-        engineSymbol<RenameOriginal>("neverd_rename_original");
-    if (imageFactsHeld_ && engineOriginal)
-      imageFacts_.renamed(address,
-                          ownedString(engineOriginal(session_, address)), name);
-    else
-      imageFactsHeld_ = false;
-    const bool functionInPlace = listing_ && listing_->functionRenamed(address);
-    const bool dataInPlace = !functionInPlace && listing_ && index < 0 &&
-                             listing_->dataRenamed(address, name);
-    if (functionInPlace) {
-      // Decoration reads a function's name.
-      functionNamesChanged(false);
-      keepNamedViewsThrough(address, spellings, false,
-                            ViewEditKind::FunctionName);
-    } else if (dataInPlace) {
-      // The pages of what read it spell a name of data, which the engine
-      // text its decoration read respells.
-      imageFactsRevision_.reset();
-      forgetGraphsAndText();
-      keepNamedViewsThrough(address, spellings, false, ViewEditKind::DataName);
-    } else
-      namesChanged();
+    const auto taken = takeName(address, before, after);
     ++revision_;
     // A function's name may bind a prototype its declaration then hides.
-    if (functionInPlace || dataInPlace)
-      namedViewsTakeRevision(dataInPlace);
+    if (taken != NameTaken::Again)
+      namedViewsTakeRevision(taken == NameTaken::Data);
     return {{"address", hexAddress(address)}, {"name", name}, {"saved", true}};
   }
   if (operation == "function_attributes") {
