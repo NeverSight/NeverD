@@ -1742,3 +1742,7 @@ the four added MPX streams cover OSXSAVE-disabled behavior only. The two SDKs
 produce 1,284 identical exported artifacts each. The evidence retains the
 failing IRETD frame/PTE-alias reproducer, corrected test-fixture failures,
 source and binary identities, and the separate hardware limitations above.
+After integrating dev's type-name rendering changes, both SDKs pass another
+862 type, generated-source and C/Python bridge checks, retaining identical
+exports. Ten optional UCRT/provider and kernel-PDB fixture checks are skipped
+across the two SDKs; the evidence lists their exact missing inputs separately.
