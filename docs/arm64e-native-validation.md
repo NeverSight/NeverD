@@ -157,7 +157,7 @@ launcher; an unsuccessful or ambiguous SDK query fails before execution.
 The [maintained verifier run](https://github.com/gmh5225/test_mac_intel/actions/runs/42659921245)
 passed all six controls in each of the system/dlopen and userspace/exec profiles
 on both hosts, with exact source/report identities in the page-in evidence.
-The default `system` profile retains its observed failure. The installer still
+The unchanged compiler-original `system` startup profile retains its observed failure. The installer still
 requires its matching system/dlopen probe, and neither profile qualifies a
 rebuilt image or the missing post-r6 MC publication path.
 
@@ -202,8 +202,9 @@ for main executables; the installer preserves RELRO rather than removing flags.
 The verifier independently derives the SDK syscall restriction and compares it
 to that report before launching CTest inside the declared profile. It rejects
 missing, skipped or failed cases. The result is separately named
-`native_executable_publication_qualified`; system-default startup and general
-lifted-image publication retain their own unqualified boundaries.
+`native_executable_publication_qualified`; default startup uses the separate
+`run-default-executable` gate described below. General lifted-image publication
+retains its own unqualified boundary.
 
 The [main-executable cold-build record](evidence/arm64e-native-executable-publication-2026-11-10.json)
 binds source `3e5fb93c816902d4b9893c1a54ffb353e3e3f117` and the environment revision
@@ -279,3 +280,41 @@ Each native child now receives freshly truncated diagnostic output, preventing
 an earlier child's success marker from satisfying a later run. Pair owned-image
 checks also run as 215 individual words, retaining all range/provenance checks
 and both source routes at O0/O2 for the original execution subset.
+
+Default startup publication now prepares authenticated userland chains in the
+shared signing transaction. B-key chains are repartitioned into valid 4 KiB
+chain pages, preserving their targets, signing recipes, code, RELRO and the
+original CodeDirectory page size. On 16 KiB hosts the default dyld fallback
+applies all four keys; no sandbox launcher is used by this publication gate.
+`run-default-executable` requires a successful same-source system `probe`,
+then all four O0/O2 compact/DWARF executable publication cases. Each also runs
+its unchanged original main before the replacement. The result is named
+`native_default_executable_publication_qualified`, independently of the
+compiler-original B-key startup failure and the userspace diagnostic profile.
+
+The [default-startup comparison](evidence/arm64e-default-startup-2026-11-10.json)
+records four O0/O2 compact/DWARF controls on each native host: the original
+SIGTRAPs, the same code with 4 KiB chain pages succeeds, and the byte-identical
+original SIGTRAPs again. Only chain page-size fields change before re-signing;
+the original signature page size is retained. This isolates the format/loader
+boundary from code generation and authentication semantics. The Xcode 27 host
+reports `FEAT_CPA=0` and `FEAT_CPA2=0` on an Apple M1 virtual CPU. The separately
+recorded FVP EL0/EL1 controls qualify that model environment, not native Apple
+CPTA-on or new NeverD output.
+
+The same record binds the [production publication replay](https://github.com/gmh5225/test_mac_intel/actions/runs/42746949630)
+at `e5a0fddc68b2fd03c2f25445aca674cef32ab3e6`. Each host passes twenty dylib,
+four userspace-profile main and four default-system main cases, with no failures
+or skips. The default command starts CTest directly; its successful system PAC
+and original-dylib report is separately hashed from the userspace prerequisite.
+Both hosts use the same identified local Release/r6 test binary, which is
+removed after execution. This is a delivered-host replay, not a cold source
+build. The ordinary original main, authenticated replacement calls, RELRO,
+compact/DWARF catches and cleanup all execute under the default loader.
+
+```sh
+python3 scripts/verify_arm64e_native.py run-default-executable \
+  --build-dir build-release \
+  --probe-report native-evidence/probe/report.json \
+  --output native-evidence/default-executable
+```

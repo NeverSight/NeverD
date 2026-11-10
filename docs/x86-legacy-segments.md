@@ -238,6 +238,44 @@ not completed by it. No new LLVM or NeverC intrinsic is required for these
 runtime state transitions. The final LLVM release, SDK pin and NeverD LLVM
 gitlink remain unchanged pending global completion.
 
+## Protected HLT and event wake
+
+The protected executor admits HLT in both code widths, including one prefix
+from each existing legacy prefix group. LOCK produces #UD after original-byte
+fetch; otherwise CPL1..3 produces #GP(0), independently of IOPL. Unsupported
+duplicate prefixes or trailing bytes fail the shared extent grammar.
+
+Successful HLT advances EIP, clears RF as an ordinary completion, expires
+STI/MOV-SS inhibition and sets `X86LegacyExecutionState::Halted`. It returns
+`X86LegacyExecutionStatus::Halted` with one completed instruction attempt.
+While halted, further instruction calls return that status without an attempt,
+fetch, operand access or instruction-debug comparison. The following code page
+need not be present. The shared debug owner still processes HLT's completion:
+an entry-TF single-step trap can immediately wake the processor at fallthrough.
+
+The embedding supplies an IRQ, NMI or debug trap at the retained EIP through
+the existing event interface. IF and NMI blocking decide eligibility before
+table access. An inhibited event leaves the processor halted. Acceptance
+clears `Halted` before IDT access, even when delivery faults, shuts down or
+pauses for backing/work. Resume consumes the existing pending event; it cannot
+replay HLT or accept the producer's event again. Software entry and instruction
+faults are not valid external wake requests for an already halted processor.
+
+Generated `protected-legacy-v1` C publishes `NEVERD_X86_LEGACY_HALTED` and
+checks the same state before code selection. HLT consumes one instruction
+budget unit; subsequent wait calls consume none. A zero incoming budget still
+returns the existing budget-exhausted status. An event handler can IRET to the
+instruction following HLT without re-entering the halt state. Both host source
+compiler lanes remain x64; the explicit guest code width does not add a
+NeverC source target.
+
+The architectural reference is HLT in
+[Intel SDM Volume 2A](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-2a-manual.pdf).
+The existing event producer owns arrival and selection. SMI, INIT, RESET,
+BINIT, machine-check wake, VMX/SVM intercepts, real/VM86/IA-32e transitions
+and physical power-management effects require their separate owners. This
+protected execution contract does not close those machine-state gaps.
+
 ## Protected source dispatch
 
 `--x86-legacy-source` exports a bounded C dispatcher over the protected

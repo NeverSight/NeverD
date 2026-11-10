@@ -6535,6 +6535,81 @@ TEST(COFFExceptionIR, SourceX86FinallyAndLocalUnwindKeepOneNormalCopy) {
   }
 }
 
+TEST(COFFExceptionIR, SourceX86QuietCleanupEntryUsesTheSameNoScopeState) {
+  for (int32_t Sentinel : {-1, -2})
+    for (bool MixedSentinels : {false, true}) {
+      SCOPED_TRACE(Sentinel);
+      SCOPED_TRACE(MixedSentinels);
+      auto Func = sourceRegistrationFinally(false);
+      auto &EH = *Func.ExceptionMetadata;
+      EH.Personality = Sentinel == -2 ? ExceptionPersonality::ExceptHandler4
+                                      : ExceptionPersonality::ExceptHandler3;
+      EH.Encoding = Sentinel == -2 ? ExceptionEncoding::X86ScopeTableEH4
+                                   : ExceptionEncoding::X86ScopeTableEH3;
+      EH.Registration->SeededTryLevel = Sentinel;
+      EH.Registration->Scopes.front().EnclosingLevel = Sentinel;
+      auto &Facts = *Func.RegistrationStates->Display;
+      for (auto &Stretch : Facts.Stretches)
+        if (Stretch.Levels == std::vector<int32_t>{-1})
+          Stretch.Levels = MixedSentinels ? std::vector<int32_t>{-2, -1}
+                                          : std::vector<int32_t>{Sentinel};
+      // MSVC can keep a quiet frame reload at the exceptional entry and
+      // place the cleanup's effects in its successor. Both blocks still
+      // run outside every try for an outermost EH3 or EH4 finally.
+      auto Body = Func.Blocks[1];
+      Body.Id = 3;
+      Body.StartAddr = 0x401028;
+      Body.Preds = {1};
+      Body.Ops[0].Addr = Body.StartAddr;
+      Body.Ops[1].Addr = Body.StartAddr + 4;
+      Func.Blocks[1].EndAddr = Body.StartAddr;
+      Func.Blocks[1].Ops.clear();
+      Func.Blocks[1].Succs = {Body.Id};
+      Func.Blocks.push_back(std::move(Body));
+      Facts.FinallyReturns = {0x40102c};
+      auto Entry = Facts.Stretches[2];
+      Entry.Range.End = 0x401028;
+      Entry.Quiet = true;
+      Facts.Stretches[2].Range.Begin = 0x401028;
+      Facts.Stretches.insert(Facts.Stretches.begin() + 2, std::move(Entry));
+      llvm::LLVMContext Context;
+      MedLLVMEmitter Emitter;
+      Emitter.setAnalysisRecoveryForSource(true);
+      Emitter.setPreserveUnknownSourceValues(true);
+      auto Module = Emitter.emit(
+          {Func}, Context, "quiet_cleanup", Arch::X86,
+          {{0x408000, "protected_effect"}, {0x409000, "cleanup_effect"}},
+          nullptr, BinaryFormat::COFF);
+      ASSERT_NE(Module, nullptr);
+      ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+      const auto *Parent = Module->getFunction("source_registration");
+      ASSERT_NE(Parent, nullptr);
+      ASSERT_TRUE(Parent->hasPersonalityFn());
+      const std::string Source = emitLLVMC(*Module);
+      EXPECT_EQ(Source.find("neverd.seh: not lowered"), std::string::npos)
+          << Source;
+      if (hasHostFixtureCompiler())
+        checkStandaloneSEHSource("#include <stdint.h>\n#include <excpt.h>\n" +
+                                     Source,
+                                 true, "--target=i686-pc-windows-msvc");
+      const std::string Harness = R"c(
+#include <stdint.h>
+#define __try if (1)
+#define __finally else
+#define AbnormalTermination() 0
+static unsigned sequence;
+uint32_t protected_effect(void) { sequence = sequence * 10 + 1; return 0; }
+uint32_t cleanup_effect(void) { sequence = sequence * 10 + 2; return 0; }
+)c";
+      for (llvm::StringRef Level : {"-O0", "-O2"})
+        source_call_execution_test::compileAndRun(
+            Harness + Source +
+                "int main(void) { source_registration(); return sequence != "
+                "12; }\n",
+            {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+    }
+}
+
 TEST(COFFExceptionIR, SourceX86LocalUnwindExecutesInnerThenOuterExactlyOnce) {
   auto Func = sourceRegistrationFinally(true);
   Func.ExceptionMetadata->CodeRange.End = 0x401060;
@@ -6747,7 +6822,11 @@ TEST(COFFExceptionIR, SourceX86ConstantFilterPreservesAllDispositions) {
   }
 }
 
-MedFunc sourceRegistrationSharedTail(bool Loop, bool QuietExit) {
+enum class SharedTailBridge { None, PreserveScope, ResetScope };
+
+MedFunc sourceRegistrationSharedTail(
+    bool Loop, bool QuietExit,
+    SharedTailBridge BridgeKind = SharedTailBridge::None) {
   constexpr va_t F = 0x401000;
   auto Func = sourceRegistrationFinally(false);
   Func.Name = "source_shared_tail";
@@ -6808,6 +6887,28 @@ MedFunc sourceRegistrationSharedTail(bool Loop, bool QuietExit) {
     }
     Func.Blocks.push_back(Block);
   }
+  if (BridgeKind != SharedTailBridge::None) {
+    // Even a shared block with no raising operation carries the incoming
+    // scope through to the next call. Keep both paths, including loops.
+    MedBlock Bridge;
+    Bridge.Id = 7;
+    Bridge.StartAddr = F + 0x70;
+    Bridge.EndAddr = F + 0x80;
+    Bridge.Succs = {3};
+    Func.Blocks[1].Succs = {Bridge.Id};
+    Func.Blocks[2].Succs = {Bridge.Id};
+    Facts.Stretches.push_back(
+        {{Bridge.StartAddr, Bridge.EndAddr}, {-1, 0}, 0, true});
+    if (BridgeKind == SharedTailBridge::ResetScope) {
+      // MSVC also joins paths before a quiet reset to a single exit level.
+      // The next call then runs outside the try on either incoming path.
+      Facts.Stretches.back().Range.End -= 8;
+      Facts.Stretches.push_back(
+          {{Bridge.EndAddr - 8, Bridge.EndAddr}, {-2}, 0, true});
+    }
+    Func.ExceptionMetadata->CodeRange.End = Bridge.EndAddr;
+    Func.Blocks.push_back(Bridge);
+  }
   for (const auto &Block : Func.Blocks)
     for (int Succ : Block.Succs)
       Func.Blocks[Succ].Preds.push_back(Block.Id);
@@ -6821,74 +6922,79 @@ MedFunc sourceRegistrationSharedTail(bool Loop, bool QuietExit) {
 
 TEST(COFFExceptionIR, SourceX86SharedTailPreservesEachIncomingScope) {
   for (bool Loop : {false, true})
-    for (bool QuietExit : {false, true}) {
-      SCOPED_TRACE(Loop);
-      SCOPED_TRACE(QuietExit);
-      auto Func = sourceRegistrationSharedTail(Loop, QuietExit);
-      llvm::LLVMContext Context;
-      MedLLVMEmitter Emitter;
-      Emitter.setAnalysisRecoveryForSource(true);
-      Emitter.setPreserveUnknownSourceValues(true);
-      auto Module = Emitter.emit({Func}, Context, "shared_tail", Arch::X86,
-                                 {{0x409010, "outside_effect"},
-                                  {0x409020, "inside_effect"},
-                                  {0x409030, "shared_effect"},
-                                  {0x409040, "tail_effect"},
-                                  {0x409050, "catch_effect"}},
-                                 nullptr, BinaryFormat::COFF);
-      ASSERT_NE(Module, nullptr);
-      ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
-      auto *Parent = Module->getFunction(Func.Name);
-      ASSERT_NE(Parent, nullptr);
-      ASSERT_TRUE(Parent->hasPersonalityFn());
-      // Follow normal edges from each arm. Its first shared call must keep
-      // precisely that arm's exception routing, even after a quiet reset.
-      for (unsigned Arm : {1u, 2u}) {
-        llvm::BasicBlock *Start = nullptr;
-        for (auto &Block : *Parent)
-          if (Block.getName() == "bb_" + std::to_string(Arm))
-            Start = &Block;
-        ASSERT_NE(Start, nullptr);
-        std::set<llvm::BasicBlock *> Seen;
-        std::vector<llvm::BasicBlock *> Work{Start};
-        unsigned Found = 0;
-        while (!Work.empty()) {
-          auto *Block = Work.back();
-          Work.pop_back();
-          if (!Seen.insert(Block).second)
-            continue;
-          bool Shared = false;
-          for (auto &Inst : *Block)
-            if (auto *Call = llvm::dyn_cast<llvm::CallBase>(&Inst);
-                Call && Call->getCalledFunction() &&
-                Call->getCalledFunction()->getName() == "shared_effect") {
-              EXPECT_EQ(llvm::isa<llvm::InvokeInst>(Call), Arm == 2);
-              Shared = true;
-              ++Found;
-            }
-          if (Shared)
-            continue;
-          if (auto *Invoke =
-                  llvm::dyn_cast<llvm::InvokeInst>(Block->getTerminator()))
-            Work.push_back(Invoke->getNormalDest());
-          else
-            for (auto *Succ : llvm::successors(Block))
-              Work.push_back(Succ);
+    for (bool QuietExit : {false, true})
+      for (auto Bridge :
+           {SharedTailBridge::None, SharedTailBridge::PreserveScope,
+            SharedTailBridge::ResetScope}) {
+        SCOPED_TRACE(Loop);
+        SCOPED_TRACE(QuietExit);
+        SCOPED_TRACE(static_cast<unsigned>(Bridge));
+        auto Func = sourceRegistrationSharedTail(Loop, QuietExit, Bridge);
+        llvm::LLVMContext Context;
+        MedLLVMEmitter Emitter;
+        Emitter.setAnalysisRecoveryForSource(true);
+        Emitter.setPreserveUnknownSourceValues(true);
+        auto Module = Emitter.emit({Func}, Context, "shared_tail", Arch::X86,
+                                   {{0x409010, "outside_effect"},
+                                    {0x409020, "inside_effect"},
+                                    {0x409030, "shared_effect"},
+                                    {0x409040, "tail_effect"},
+                                    {0x409050, "catch_effect"}},
+                                   nullptr, BinaryFormat::COFF);
+        ASSERT_NE(Module, nullptr);
+        ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+        auto *Parent = Module->getFunction(Func.Name);
+        ASSERT_NE(Parent, nullptr);
+        ASSERT_TRUE(Parent->hasPersonalityFn());
+        // Follow normal edges from each arm. Its first shared call must keep
+        // precisely that arm's exception routing, even after a quiet reset.
+        for (unsigned Arm : {1u, 2u}) {
+          llvm::BasicBlock *Start = nullptr;
+          for (auto &Block : *Parent)
+            if (Block.getName() == "bb_" + std::to_string(Arm))
+              Start = &Block;
+          ASSERT_NE(Start, nullptr);
+          std::set<llvm::BasicBlock *> Seen;
+          std::vector<llvm::BasicBlock *> Work{Start};
+          unsigned Found = 0;
+          while (!Work.empty()) {
+            auto *Block = Work.back();
+            Work.pop_back();
+            if (!Seen.insert(Block).second)
+              continue;
+            bool Shared = false;
+            for (auto &Inst : *Block)
+              if (auto *Call = llvm::dyn_cast<llvm::CallBase>(&Inst);
+                  Call && Call->getCalledFunction() &&
+                  Call->getCalledFunction()->getName() == "shared_effect") {
+                EXPECT_EQ(llvm::isa<llvm::InvokeInst>(Call),
+                          Arm == 2 && Bridge != SharedTailBridge::ResetScope);
+                Shared = true;
+                ++Found;
+              }
+            if (Shared)
+              continue;
+            if (auto *Invoke =
+                    llvm::dyn_cast<llvm::InvokeInst>(Block->getTerminator()))
+              Work.push_back(Invoke->getNormalDest());
+            else
+              for (auto *Succ : llvm::successors(Block))
+                Work.push_back(Succ);
+          }
+          EXPECT_EQ(Found, 1u);
         }
-        EXPECT_EQ(Found, 1u);
-      }
-      // Use the source pipeline's SSA promotion before printing. The two
-      // path copies write the same logical register, so its entry seed is
-      // eliminated by promotion rather than the single-definition shortcut.
-      Pipeline::optimizeModule(*Module, /*Conservative=*/true);
-      ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
-      const std::string Source = emitLLVMC(*Module);
-      EXPECT_EQ(Source.find("neverd.seh: not lowered"), std::string::npos);
-      if (hasHostFixtureCompiler())
-        checkStandaloneSEHSource("#include <stdint.h>\n#include <excpt.h>\n" +
-                                     Source,
-                                 true, "--target=i686-pc-windows-msvc");
-      const std::string Harness = R"(
+        // Use the source pipeline's SSA promotion before printing. The two
+        // path copies write the same logical register, so its entry seed is
+        // eliminated by promotion rather than the single-definition shortcut.
+        Pipeline::optimizeModule(*Module, /*Conservative=*/true);
+        ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+        const std::string Source = emitLLVMC(*Module);
+        EXPECT_EQ(Source.find("neverd.seh: not lowered"), std::string::npos);
+        if (hasHostFixtureCompiler())
+          checkStandaloneSEHSource("#include <stdint.h>\n#include <excpt.h>\n" +
+                                       Source,
+                                   true, "--target=i686-pc-windows-msvc");
+        const std::string Harness = R"(
 #include <stdint.h>
 #define __try if (1)
 #define __except(x) else
@@ -6899,18 +7005,18 @@ uint32_t shared_effect(void) { sequence = sequence * 10 + 3; return --remaining;
 uint32_t tail_effect(void) { sequence = sequence * 10 + 4; return 0; }
 uint32_t catch_effect(void) { sequence = sequence * 10 + 9; return 0; }
 )";
-      const std::string Main =
-          Loop ? "int main(void) { remaining=2; source_shared_tail(0); "
-                 "if(sequence!=1334)return 1; sequence=0; remaining=2; "
-                 "source_shared_tail(1); return sequence!=2334; }\n"
-               : "int main(void) { remaining=1; source_shared_tail(0); "
-                 "if(sequence!=134)return 1; sequence=0; remaining=1; "
-                 "source_shared_tail(1); return sequence!=234; }\n";
-      for (llvm::StringRef Level : {"-O0", "-O2"})
-        source_call_execution_test::compileAndRun(
-            Harness + Source + Main,
-            {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
-    }
+        const std::string Main =
+            Loop ? "int main(void) { remaining=2; source_shared_tail(0); "
+                   "if(sequence!=1334)return 1; sequence=0; remaining=2; "
+                   "source_shared_tail(1); return sequence!=2334; }\n"
+                 : "int main(void) { remaining=1; source_shared_tail(0); "
+                   "if(sequence!=134)return 1; sequence=0; remaining=1; "
+                   "source_shared_tail(1); return sequence!=234; }\n";
+        for (llvm::StringRef Level : {"-O0", "-O2"})
+          source_call_execution_test::compileAndRun(
+              Harness + Source + Main,
+              {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+      }
 }
 
 TEST(COFFExceptionIR, SourceX86SharedTailRefusesUnprovedEdgesWithoutMutation) {
@@ -6922,9 +7028,11 @@ TEST(COFFExceptionIR, SourceX86SharedTailRefusesUnprovedEdgesWithoutMutation) {
       // An edge from an unclassified predecessor cannot choose a copy.
       Stretches.erase(Stretches.begin() + 1);
     } else if (Case == 1) {
-      // A quiet predecessor can itself merge levels; no unique exit proof.
-      Stretches[1].Levels = {-1, 0};
+      // A quiet state change with a merged exit cannot select a shared copy.
       Stretches[1].Quiet = true;
+      Stretches[1].Range.End -= 8;
+      Stretches.insert(Stretches.begin() + 2,
+                       {{0x401018, 0x401020}, {-1, 0}, 0, true});
     } else {
       // Different stretches are different states, not a uniform shared tail.
       Stretches[3].Range.End -= 8;

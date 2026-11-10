@@ -1,0 +1,311 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-09",
+  "scope": "Protected original-byte HLT, persistent halt state, IRQ/NMI/debug wake and host-x64 generated C; original code16/code32 guest semantics do not add NeverC source targets.",
+  "artifact_root": "/mnt/data/neverd-halt-20261109",
+  "feature_commit": "148f4abe047727332f6eea92bd3be04eed3f250a",
+  "integrated_dev": "8beae9ff94ee4bfd922e20394c5955c3a8259c9b",
+  "validated_commit": "a66df0de749d6d9dc9de193fdbe037a957cc384c",
+  "validated_tree": "d3adb4af604ab5dd383171b8e4ee945f22f59b10",
+  "source_sha256": {
+    "include/neverd/translate/X86/X86LegacyExecution.h": "63b7244d9f9e9ae135acd99332fb0d7a62e60797968415f5a297a401dc9dfdd8",
+    "include/neverd/translate/X86/X86LegacySourceExecution.h": "9879c4dd811e585398b403493f119c898c04d27f6aeda2f08758581d95fca177",
+    "lib/pipeline/X86/X86LegacySourceExport.cpp": "04f519a3fd8957098543079e1498d88536f619a601993ab0f8324d84bdfaff8b",
+    "lib/translate/X86/X86LegacyEventDelivery.cpp": "5f10e497b1895e348d41bef124f5d856df9aa7d40076365c9da72e4e77edc891",
+    "lib/translate/X86/X86LegacyExecution.cpp": "5cdce3e426f16c0116586eda6330375a5f816d050e3031101885f130df8f69b6",
+    "lib/translate/X86/X86LegacySourceExecution.cpp": "9a51f5010f12e3e40fa2492ceb60970ac4c6587cc7b003db72aab21b27574164",
+    "unittests/translate/x86/X86LegacyExecutionTests.cpp": "a0dd8d7e044615d59fa87de9865657d1c6738141048ce5565d078c07d8662218",
+    "unittests/translate/x86/X86LegacyHaltNativeTests.inc": "bc3f078fed834f3c584aec7d80c796b9da48588d768d7f5cdd5f50f8254a6460",
+    "unittests/translate/x86/X86LegacyHaltSourceTests.inc": "8e519a29751e1c7ebb52ff9e52e5c09a436b3894f9c9d68f701f8a02bccaf9de",
+    "unittests/translate/x86/X86LegacyHaltTests.inc": "a2b88adb69d1999db48f149c8e7ba7ca46df84a450b6b1d85c6d9d8aacbc223f",
+    "unittests/translate/x86/X86LegacySourceTests.cpp": "cdb35227fc74edcd3e25b14c4f6bd7ca34b6afd271f6abecb184efbc593315f3",
+    "unittests/translate/x86/X86PagingNativeTests.cpp": "40d2cbb52c15852a57bca722245e0a21aea11ff2fa3d02d650cd03f0646f4d1f"
+  },
+  "build": {
+    "source_head": "a66df0de749d6d9dc9de193fdbe037a957cc384c",
+    "source_status": "",
+    "command": [
+      "python3",
+      "scripts/build.py",
+      "build-x86-native",
+      "--target",
+      "NeverDX86PagingTests",
+      "NeverDX86LegacySourceTests",
+      "--parallel",
+      "4"
+    ],
+    "exit_code": 0,
+    "seconds": 38.516217180062085,
+    "outputs": {
+      "NeverDX86PagingTests": "7c9db17f6fc661a7c43d08d6a70fa83e365517d9313134d8425416fff98e45d3",
+      "NeverDX86LegacySourceTests": "7011f106344dcb920d82976439b8eac132d5889f40cf8bd3b427458fb6c41e85",
+      "neverd": "a172d8ec65618244da897e5e3bee04d5f282e3027803a632850bbcf193f97fe9",
+      "libneverd.so": "a9922d4daa62f0b37257b4787acc520b90291451fc0b186c1e02127804e6138b"
+    },
+    "log": "build-publish.log",
+    "log_sha256": "1d313059e4a760074551ecca75920075b5aaebf4faccc113d5086edee29ed31f",
+    "configuration": {
+      "CMAKE_BUILD_TYPE:STRING": "Release",
+      "CMAKE_CXX_COMPILER:STRING": "<host>/.local/bin/clang++",
+      "LLVM_DIR:PATH": "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/llvm-cache/neverd-native-local/x86_64/neverd-llvm-linux-x86_64/lib/cmake/llvm",
+      "NEVERD_LLVM_PREBUILT:BOOL": "ON",
+      "NEVERD_LLVM_PREBUILT_SHA256:STRING": "",
+      "NEVERD_LLVM_PREBUILT_TAG:STRING": "neverd-native-local"
+    }
+  },
+  "compilers": {
+    "clang": {
+      "path": "/usr/lib/llvm-23/bin/clang",
+      "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "mtime_ns": 1789015325000000000,
+      "version": [
+        "Ubuntu clang version 23.1.2 (++20260910044155+069ef0e7cb36-1~exp1~20260910044205.69)",
+        "Target: x86_64-pc-linux-gnu",
+        "Thread model: posix",
+        "InstalledDir: /usr/lib/llvm-23/bin"
+      ]
+    },
+    "clang++": {
+      "path": "/usr/lib/llvm-23/bin/clang",
+      "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "mtime_ns": 1789015325000000000,
+      "version": [
+        "Ubuntu clang version 23.1.2 (++20260910044155+069ef0e7cb36-1~exp1~20260910044205.69)",
+        "Target: x86_64-pc-linux-gnu",
+        "Thread model: posix",
+        "InstalledDir: /usr/lib/llvm-23/bin"
+      ]
+    },
+    "NeverC": {
+      "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+      "sha256": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+      "mtime_ns": 1794242000602703725,
+      "version": [
+        "neverc version 3389.1.5",
+        "Target: x86_64-unknown-linux-gnu",
+        "Thread model: posix",
+        "InstalledDir: <host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin"
+      ]
+    }
+  },
+  "neverc_dev_cleanup": "ac2335646fb80d749066029ba5ccfdfdc6bbec80",
+  "cpu": {
+    "model": "13th Gen Intel(R) Core(TM) i9-13900H",
+    "kernel": "7.0.0-42-generic",
+    "architecture": "x86_64",
+    "lanes": {
+      "4": "P-core, topology core_id 8, siblings 4-5",
+      "12": "E-core, topology core_id 24, sibling 12"
+    }
+  },
+  "tests": {
+    "publish-paging": {
+      "source_head": "a66df0de749d6d9dc9de193fdbe037a957cc384c",
+      "command": [
+        "taskset",
+        "-c",
+        "4",
+        "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86PagingTests",
+        "--gtest_filter=X86LegacyHaltTest.*:LegacyPaging/X86LegacyHaltNativeTest.*:X86LegacyExecutionTest.*:X86LegacyDebugTest.*:X86LegacyEventReplayTest.*:X86LegacyBranchDebugTest.*:LegacyEvents/*:LegacySteps/*",
+        "--gtest_output=xml:/mnt/data/neverd-halt-20261109/publish-paging.xml"
+      ],
+      "environment": {},
+      "binary_sha256": "7c9db17f6fc661a7c43d08d6a70fa83e365517d9313134d8425416fff98e45d3",
+      "exit_code": 0,
+      "seconds": 28.47983512398787,
+      "log_sha256": "28d142e16d2d7a997b1a677ef6fc483fdd796e2161ab24c3df92fd142e4de0b6",
+      "report_sha256": "fea9fca229eede85dfc8960d59bc3c0f99defad5e87f086fcf58534ed782c825",
+      "tests": {
+        "tests": "230",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "28.471",
+        "timestamp": "2026-11-09T19:20:53.586",
+        "name": "AllTests"
+      },
+      "skipped": [],
+      "properties": {
+        "branch_selection_comparisons": 64,
+        "cpu_comparisons": 15244
+      },
+      "log": "publish-paging.log",
+      "report": "publish-paging.xml"
+    },
+    "publish-source": {
+      "source_head": "a66df0de749d6d9dc9de193fdbe037a957cc384c",
+      "command": [
+        "taskset",
+        "-c",
+        "12",
+        "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86LegacySourceTests",
+        "--gtest_filter=*",
+        "--gtest_output=xml:/mnt/data/neverd-halt-20261109/publish-source.xml"
+      ],
+      "environment": {
+        "TMPDIR": "/mnt/data/neverd-halt-20261109/publish-tmp",
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-halt-20261109/publish-exports"
+      },
+      "binary_sha256": "7011f106344dcb920d82976439b8eac132d5889f40cf8bd3b427458fb6c41e85",
+      "exit_code": 0,
+      "seconds": 17.599329564953223,
+      "log_sha256": "2cc5b6ff5a90eaa8136953296e104a2291f5ffeb130aca1a526825e5921885de",
+      "report_sha256": "769a47d7de73c60dae88ceb5163c9757bd3b4f6af79c893219657587266f8bd1",
+      "tests": {
+        "tests": "177",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "17.568",
+        "timestamp": "2026-11-09T19:20:53.583",
+        "name": "AllTests"
+      },
+      "skipped": [],
+      "properties": {
+        "branch_selection_comparisons": 256
+      },
+      "log": "publish-source.log",
+      "report": "publish-source.xml"
+    },
+    "publish-halt-ecore": {
+      "source_head": "a66df0de749d6d9dc9de193fdbe037a957cc384c",
+      "command": [
+        "taskset",
+        "-c",
+        "12",
+        "<host>/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86PagingTests",
+        "--gtest_filter=LegacyPaging/X86LegacyHaltNativeTest.*",
+        "--gtest_output=xml:/mnt/data/neverd-halt-20261109/publish-halt-ecore.xml"
+      ],
+      "environment": {},
+      "binary_sha256": "7c9db17f6fc661a7c43d08d6a70fa83e365517d9313134d8425416fff98e45d3",
+      "exit_code": 0,
+      "seconds": 0.24142723297700286,
+      "log_sha256": "6ee7d19b101553f09c1c2247591c0eca2c18291e743cea5f470351e0133275b6",
+      "report_sha256": "1cabd48c9764a815b82a219721212dc63b64ee6a3dcf19d4adad7f5e6f483200",
+      "tests": {
+        "tests": "8",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "0.232",
+        "timestamp": "2026-11-09T19:21:11.186",
+        "name": "AllTests"
+      },
+      "skipped": [],
+      "properties": {
+        "cpu_comparisons": 344
+      },
+      "log": "publish-halt-ecore.log",
+      "report": "publish-halt-ecore.xml"
+    }
+  },
+  "counts": {
+    "distinct_passed": 407,
+    "distinct_new_halt_cases": 30,
+    "failed": 0,
+    "skipped": 0,
+    "additional_ecore_replays": 8,
+    "new_halt_native_comparisons_per_core": 344,
+    "new_halt_native_comparisons_across_cores": 688
+  },
+  "count_definition": "230 paging/execution/event cases plus 177 generated-source cases. Eight E-core HLT cases repeat existing identities and are not added to 407. The HLT matrix includes original STI/MOV-SS prefixes; TF after STI correctly traps before HLT begins. Development and pre-integration runs are not added again.",
+  "source_exports": {
+    "directory": "publish-exports",
+    "index": "publish-exports-index.json",
+    "index_sha256": "c170065ae975293d1bcfb8dcd1d121aa8731073e24bdc815a4ca1965b789823a",
+    "files": 1076,
+    "host_x64_shared_objects": 268,
+    "clang_only_i386_route_objects": 2,
+    "generated_sources_and_manifests_identical_before_and_after_integration": 806,
+    "llvm_and_neverc_native_hlt_already_available": true
+  },
+  "checks": {
+    "clang_format": {
+      "version": "22.1.2",
+      "exit_code": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "documentation": {
+      "exit_code": 0,
+      "result": "localized documentation check passed: 309 Markdown files, 10 locales"
+    },
+    "source_provenance": {
+      "exit_code": 0,
+      "result": "source provenance check passed: 12023 worktree files scanned"
+    },
+    "git_diff_check": 0
+  },
+  "development_witness": {
+    "retained_reports": [
+      {
+        "report": "native-halt-first.xml",
+        "failed_cases": 8,
+        "report_sha256": "a329d38bf2871c818f0ae6df509eb22b76809c1df5223effb7d232d4cf6a7216",
+        "log_sha256": "0e583a7e3a7d678faf3b18a9d64983d8377ba6cad330d8473a00fc4b2807ca4d"
+      },
+      {
+        "report": "native-halt-fixed.xml",
+        "failed_cases": 2,
+        "report_sha256": "af678f1a1491988fb8584143d1d09a30deb558c407cf09eb21aa5aa34fa39df4",
+        "log_sha256": "90d1537761b94bf5bf0d1931237f822557de6af3609dd20694c2c9d113545e2a"
+      },
+      {
+        "report": "native-halt-final.xml",
+        "failed_cases": 2,
+        "report_sha256": "444fc765b0b3e8e169a6bd12c546d78587abf154ce7f3d4538e4b1cdc81880ed",
+        "log_sha256": "a3fd210193a112e6c10cce221aac2c245881239e91c4f9be45227b3003c8e593"
+      }
+    ],
+    "diagnosis": [
+      "KVM_EXIT_IO reports an unfinished OUT; complete it with immediate_exit before comparing the handler PC.",
+      "HLT may exit to userspace with an already queued original TF #DB; re-enter only when KVM reports that actual pending cause.",
+      "Artificial STI shadow plus TF fails VM entry before HLT. Execute original STI/MOV-SS on both CPU and model to establish interrupt/debug state."
+    ],
+    "probe_source": "kvm_trace.c",
+    "probe_source_sha256": "b5b54bfb844acf202aba0041e68ca8359b1995c18997f164d9d572cab7e30172",
+    "trace_log": "kvm-trace.log",
+    "trace_log_sha256": "9027ebc3f56966789fed163a4808ea9dbe5d3d5670221246f80d2401e7725cfa"
+  },
+  "cleanup": [
+    {
+      "directory": "source-exports",
+      "archive": "source-exports-prepublish.tar.gz",
+      "files": 1076,
+      "archive_sha256": "6dbce9cb0690145150243da6b642d7ae47ca3685c363bbebcf43d7bf286c66e1",
+      "index": "source-exports-prepublish-index.json",
+      "index_sha256": "39391ce038036a2e58edc6ca0969f04216751bc5b486c82cfbf39a8d4a12f3b1",
+      "decompressed_hashes_verified": true,
+      "original_directory_removed": true
+    },
+    {
+      "directory": "tmp-source",
+      "archive": "tmp-source-prepublish.tar.gz",
+      "files": 0,
+      "archive_sha256": "9e77c7f5fee83dfeb160c55873fa2b44d3318e6589e802bf3ed19b1fe9092178",
+      "index": "tmp-source-prepublish-index.json",
+      "index_sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "decompressed_hashes_verified": true,
+      "original_directory_removed": true
+    },
+    {
+      "removed_reproducible_probe": "kvm_trace.so",
+      "sha256": "0d86c4b5a4791d3d8f93fb081f60df9da824910a05ca927da9a87f92187ec205",
+      "source": "kvm_trace.c",
+      "diagnostic": "kvm-trace.log"
+    }
+  ],
+  "limitations": [
+    "Qualification uses the local full LLVM SDK, Linux x64 and this Intel KVM host. The pinned r6 SDK and other hosts were not rerun for this change.",
+    "SMI/INIT/RESET/BINIT/machine-check wake, VMX/SVM interception and physical power-management behavior are outside this protected profile.",
+    "Full mode/task transitions, software SMM/SGX and unbound asynchronous producers remain global work."
+  ],
+  "release": {
+    "llvm_released": false,
+    "production_pin_changed": false,
+    "llvm_gitlink_changed": false,
+    "llvm_gitlink": "b726cb0425bc7e1f7e2753972a748ebcfa8b5741"
+  }
+}

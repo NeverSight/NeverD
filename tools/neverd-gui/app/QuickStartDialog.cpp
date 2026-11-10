@@ -1,6 +1,7 @@
 #include "QuickStartDialog.h"
 
 #include "../Config.h"
+#include "BidiText.h"
 #include "Icons.h"
 #include "ItemViewActivation.h"
 #include "ProjectDatabase.h"
@@ -502,11 +503,11 @@ public:
     }
     const int folderWidth = width - (whenWidth ? whenWidth + 16 : 0);
     painter->setPen(secondary);
-    painter->drawText(
-        QRect(left, top, folderWidth, smallMetrics.height()),
-        Qt::AlignLeft | Qt::AlignVCenter,
-        smallMetrics.elidedText(folderOf(index.data(PathRole).toString()),
-                                Qt::ElideMiddle, folderWidth));
+    painter->drawText(QRect(left, top, folderWidth, smallMetrics.height()),
+                      Qt::AlignLeft | Qt::AlignVCenter,
+                      leftToRight(smallMetrics.elidedText(
+                          folderOf(index.data(PathRole).toString()),
+                          Qt::ElideMiddle, folderWidth)));
     painter->restore();
   }
 };
@@ -891,7 +892,7 @@ void QuickStartDialog::fillRecent() {
     item->setData(WhenRole, missing
                                 ? tr("Missing")
                                 : whenOpened(opened.value(path).toDateTime()));
-    QString details = QDir::toNativeSeparators(path);
+    QString details = leftToRight(QDir::toNativeSeparators(path));
     if (const QString when = item->data(WhenRole).toString(); !when.isEmpty())
       details += u'\n' + (missing ? when : tr("Last opened: %1").arg(when));
     item->setToolTip(details);

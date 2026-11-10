@@ -11,20 +11,13 @@ QMenuBar::item:selected, QMenuBar::item:pressed { background: ${MenuBarSelection
 /* The menus in a title bar the window draws itself, dimmed while inactive. */
 QWidget#titleBar QMenuBar { background: transparent; color: ${TitleBarText}; }
 QWidget#titleBar[active="false"] QMenuBar { color: ${TitleBarInactiveText}; }
-QMenu { background: ${Menu}; color: ${MenuText}; border: 1px solid ${MenuSeparator}; padding: 4px; }
-/* Qt already reserves the widest icon/check column. The remaining leading
-   padding gives its 16px content an 8px gap to the label, not a second column. */
-QMenu::item { padding: 4px 24px 4px 8px; border-radius: 3px; }
-QMenu::item:selected { background: ${MenuSelection}; color: ${HighlightedText}; }
-QMenu::item:disabled { color: ${DisabledText}; }
+/* The workbench style paints a menu's items, from their padding and icon
+   column to a shortcut quieter than its command, which a style sheet would
+   paint with the command's pen.  The feature lets the style paint them over
+   the menu's background; with any item rule here the style sheet takes the
+   items back. */
+QMenu { background: ${Menu}; color: ${MenuText}; border: 1px solid ${MenuSeparator}; padding: 4px; -qt-style-features: background-color; }
 QMenu::separator { height: 1px; background: ${MenuSeparator}; margin: 4px 6px; }
-QMenu::icon { left: 3px; border: 1px solid transparent; border-radius: 3px; }
-QMenu::indicator { width: 16px; height: 16px; left: 4px; }
-QMenu::indicator:checked { image: url(:/neverd/icons/menu_check-${Mode}.svg); }
-/* A toggle with an icon shows it boxed while on, as VS Code shows an active
-   input option. */
-QMenu::icon:checked { background: ${OptionActiveBackground}; border-color: ${OptionActiveBorder}; }
-QMenu::right-arrow { image: url(:/neverd/icons/chevron_right-${Mode}.svg); width: 10px; height: 10px; }
 QToolBar { background: ${ToolBar}; border: none; spacing: 1px; padding: 2px 4px; }
 QToolBar#focusToolbar { background: transparent; padding: 0; }
 QToolBar::separator { background: ${Separator}; width: 1px; margin: 3px 4px; }
@@ -126,6 +119,10 @@ QPushButton:disabled { background: transparent; color: ${DisabledText}; }
 /* A primary button that cannot act keeps a faint accent, so a dialog's
    default action stays recognizable, and its label stays legible on it. */
 QPushButton:default:disabled { background: ${ButtonPrimaryDisabled}; border: 1px solid transparent; color: ${ButtonPrimaryDisabledText}; }
+/* A button that opens a list points to it with the chevron a combo box draws,
+   inside its own padding, in place of Fusion's corner triangle. */
+QPushButton::menu-indicator { image: url(:/neverd/icons/chevron_down-${Mode}.svg); subcontrol-origin: padding; subcontrol-position: center right; right: 4px; width: 10px; height: 10px; }
+QPushButton::menu-indicator:disabled { image: url(:/neverd/icons/chevron_down_disabled-${Mode}.svg); }
 QDialogButtonBox { dialogbuttonbox-buttons-have-icons: 0; }
 /* A dialog's buttons are at least as wide as a standard Windows command
    button, 75 pixels with their padding and border, so OK and Cancel, or Yes

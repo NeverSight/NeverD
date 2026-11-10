@@ -13904,6 +13904,133 @@ TEST(SBFCallXContexts, IncomingCapturedFieldsSurviveCalleeBackedges) {
   RecordProperty("raw_executions", static_cast<int>(RawExecutions));
 }
 
+TEST(SBFCallXContexts, RepeatedGuardsPreserveOnlyUnchangedBooleanCarriers) {
+  unsigned RawExecutions = 0;
+  for (unsigned Mode = 0; Mode != 12; ++Mode)
+    for (bool Reverse : {false, true}) {
+      SCOPED_TRACE(Mode);
+      SCOPED_TRACE(Reverse);
+      std::vector<test::EncodedInstruction> Text;
+      const auto Literal = [&](unsigned Register, uint64_t Value) {
+        const size_t Slot = Text.size();
+        const auto Words = test::loadImm64(Register, Value);
+        Text.insert(Text.end(), Words.begin(), Words.end());
+        return Slot;
+      };
+      Literal(1, kInputStart);
+      Text.push_back(encode(Opcode::LD_DW_REG, 6, 1));
+      Text.push_back(encode(Opcode::MOV64_IMM, 2, 0, 0, 2));
+      Text.push_back(encode(Opcode::MOV64_IMM, 7, 0, 0, Mode == 9 ? 0 : 1));
+      const size_t FirstGuard = Text.size();
+      Text.push_back({});
+      Text.push_back(encode(Opcode::MOV64_IMM, 7, 0, 0, Mode == 9 ? 1 : 0));
+      const size_t Merge = Text.size();
+      if (Mode == 1)
+        Text.push_back(encode(Opcode::MOV64_IMM, 6));
+      if (Mode == 2)
+        Text.push_back(encode(Opcode::MOV64_IMM, 2, 0, 0, 4));
+      if (Mode == 3)
+        Text.push_back(encode(Opcode::MOV64_IMM, 7));
+      std::optional<size_t> Call;
+      if (Mode == 4) {
+        Call = Text.size();
+        Text.push_back({});
+      }
+      if (Mode == 5) {
+        Text.push_back(encode(Opcode::MOV64_IMM, 9, 0, 0, 2));
+        const size_t Loop = Text.size();
+        Text.push_back(encode(Opcode::ADD64_IMM, 6, 0, 0, 1));
+        Text.push_back(encode(Opcode::SUB64_IMM, 9, 0, 0, 1));
+        Text.push_back(encode(Opcode::JNE64_IMM, 9, 0, Loop - Text.size() - 1));
+      }
+      if (Mode == 8) {
+        Text.push_back(encode(Opcode::MOV64_REG, 8, 7));
+        Text.push_back(encode(Opcode::MOV64_IMM, 7));
+      }
+      const size_t SecondGuard = Text.size();
+      Text.push_back({});
+      Text.push_back(encode(Opcode::MOV64_IMM, 0));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t Continue = Text.size();
+      const size_t Select = Text.size();
+      Text.push_back({});
+      const size_t Bad = Literal(8, 0);
+      const size_t Join = Text.size();
+      Text.push_back({});
+      const size_t Good = Literal(8, 0);
+      const size_t CallX = Text.size();
+      Text.push_back(encode(Opcode::CALL_REG, 8));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t Helper = Text.size();
+      Text.push_back(encode(Opcode::MOV64_IMM, 2, 0, 0, 4));
+      Text.push_back(encode(Opcode::MOV64_IMM, 0));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t FirstTarget = Text.size();
+      Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t SecondTarget = Text.size();
+      Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 43));
+      Text.push_back(encode(Opcode::EXIT));
+      Text[FirstGuard] =
+          Mode == 10
+              ? encode(Opcode::JLT64_IMM, 6, 0, Merge - FirstGuard - 1, 2)
+              : encode(Mode == 11 ? Opcode::JGT32_REG : Opcode::JGT64_REG, 2, 6,
+                       Merge - FirstGuard - 1);
+      Text[SecondGuard] =
+          Mode == 7 || Mode == 10
+              ? encode(Opcode::JLT64_IMM, 6, 0, Continue - SecondGuard - 1,
+                       Mode == 7 ? 3 : 2)
+              : encode(Mode == 6 || Mode == 11 ? Opcode::JGT32_REG
+                                               : Opcode::JGT64_REG,
+                       2, 6, Continue - SecondGuard - 1);
+      Text[Select] = encode(Mode == 9 ? Opcode::JEQ64_IMM : Opcode::JNE64_IMM,
+                            Mode == 8 ? 8 : 7, 0, Good - Select - 1);
+      Text[Join] = encode(Opcode::JA, 0, 0, CallX - Join - 1);
+      if (Call)
+        Text[*Call] = encode(Opcode::CALL_IMM, 0, 1, 0, Helper - *Call - 1);
+      for (const auto &[Slot, Target] :
+           {std::pair{Good, FirstTarget}, std::pair{Bad, SecondTarget}}) {
+        const auto Words = test::loadImm64(8, kBytecodeStart + Target * 8);
+        std::copy(Words.begin(), Words.end(), Text.begin() + Slot);
+      }
+      auto Program = analyze(test::makeImage(Text, {}));
+      ASSERT_TRUE(static_cast<bool>(Program))
+          << llvm::toString(Program.takeError());
+      if (Reverse)
+        std::reverse(Program->Low.Edges.begin(), Program->Low.Edges.end());
+      auto Report = recoverCallXContexts(*Program);
+      ASSERT_TRUE(static_cast<bool>(Report))
+          << llvm::toString(Report.takeError());
+      checkSummaryReferences(*Report);
+      EXPECT_FALSE(Report->SpecializationBudgetExhausted);
+      bool OnlyFirst = false;
+      for (const auto &Site : Report->Contexts)
+        if (!Site.EntryPrefixOnly && Site.CallXSlot == CallX &&
+            Site.TargetSlot == FirstTarget)
+          OnlyFirst = true;
+      EXPECT_EQ(OnlyFirst, Mode == 0 || Mode >= 8);
+      for (uint64_t Value : {uint64_t{0}, uint64_t{1}, uint64_t{2}, uint64_t{3},
+                             uint64_t{1} << 32, UINT64_MAX}) {
+        auto Raw = executeSelector(*Program, Value);
+        ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
+        EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+        const uint64_t Compared = Mode == 1                 ? 0
+                                  : Mode == 5               ? Value + 2
+                                  : Mode == 6 || Mode == 11 ? uint32_t(Value)
+                                                            : Value;
+        const uint64_t Bound = Mode == 2 || Mode == 4 ? 4 : Mode == 7 ? 3 : 2;
+        const uint64_t Expected =
+            Compared >= Bound                                         ? 0
+            : (Mode == 11 ? uint32_t(Value) : Value) < 2 && Mode != 3 ? 42
+                                                                      : 43;
+        EXPECT_EQ(Raw->ReturnValue, Expected) << Value;
+        ++RawExecutions;
+      }
+    }
+  EXPECT_EQ(RawExecutions, 144u);
+  RecordProperty("raw_executions", static_cast<int>(RawExecutions));
+}
+
 TEST(SBFCallXContexts, GuardRefinesTheValueJustStoredByTheSameBlock) {
   unsigned RawExecutions = 0;
   for (unsigned Mode = 0; Mode != 8; ++Mode)

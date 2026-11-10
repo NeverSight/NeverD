@@ -145,6 +145,7 @@ extern uint32_t neverd_x86_legacy_attempted_v1(void *);
   EmitExit("REPEAT_CONTINUE", Status::RepeatContinue);
   EmitExit("DEVICE_UNAVAILABLE", Status::DeviceUnavailable);
   EmitExit("EVENT_BUDGET_EXHAUSTED", Status::EventBudgetExhausted);
+  EmitExit("HALTED", Status::Halted);
   EmitExit("INVALID_STATE", Exit::InvalidState);
   EmitExit("UNSELECTED", Exit::Unselected);
   EmitExit("BUDGET_EXHAUSTED", Exit::BudgetExhausted);
@@ -198,6 +199,8 @@ uint32_t neverd_x86_legacy_continue_v1(void *context, uint64_t *budget) {
           {"selection", "uint32(CS.base + EIP) and CS.D"},
           {"instruction_budget", "attempts; one per REP element"},
           {"event_policy", "stop; retain delivery before resume"},
+          {"halt_policy", "HLT commits once; wait without fetch; eligible "
+                          "IRQ/NMI/debug trap wakes before IDT access"},
           {"state_abi", "private C++ embedding; no serialized layout"},
           {"source_sha256",
            llvm::toHex(sha256(llvm::arrayRefFromStringRef(Result.Source)),

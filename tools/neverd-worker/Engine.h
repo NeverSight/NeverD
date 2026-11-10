@@ -648,6 +648,9 @@ private:
   std::uint64_t commentPatches_ = 0, namePatches_ = 0, dataNamePatches_ = 0;
   /// Documents the engine rendered for, rather than built from kept pages.
   std::uint64_t namedViewRenders_ = 0;
+  /// The times an owner's views read which store they are kept under
+  /// (storeOfViews).
+  std::uint64_t viewStoreNameReads_ = 0;
   /// Takes the document at \p position out of the documents kept, as one for
   /// the page deltas of what clients keep.
   void dropNamedView(NamedViewPosition position);

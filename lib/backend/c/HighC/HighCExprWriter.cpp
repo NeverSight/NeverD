@@ -13,6 +13,7 @@
 #include "../CDisplayFieldPath.h"
 #include "../CDisplayFrameRecord.h"
 #include "../CRecordCall.h"
+#include "../CVaList.h"
 #include "../HeaderPrototype.h"
 #include "../LibraryPrototype.h"
 #include "../UnalignedMemory.h"
@@ -2596,6 +2597,16 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
     return I < ArityFloats ? ArityIntegers + I : I - ArityFloats;
   };
   const llvm::StringRef HeaderCallee = headerDeclaredCallee(E);
+  const llvm::StringRef VaListCallee =
+      !HeaderCallee.empty() ? HeaderCallee
+      : !Defined && Callee && Callee->PrototypeFromCLibrary &&
+              Name == Callee->Name && includesHeaderOf(Name)
+          ? llvm::StringRef(Name)
+          : llvm::StringRef();
+  const auto VaListParameter =
+      VaListCallee.empty()
+          ? std::nullopt
+          : libc::vaListParameter(VaListCallee, Opts.libcVariant());
   // Whether the argument at \p I passes to an object pointer of the routine
   // the header declares: one the unit declares no other way (HeaderCallee),
   // or a C library routine the type library declares, called by its own
@@ -2748,6 +2759,14 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
                ? "(" + typeToC(Expected) + ")(uintptr_t)arguments"
            : OtherPointer ? "(" + declaredAs(Expected, "") + ")arguments"
                           : std::string("arguments");
+      continue;
+    }
+    // A recovered machine word does not have the C header's va_list type.
+    // Keep an actual va_start forwarder above in its existing C form.
+    if (VaListParameter && I == *VaListParameter && Op->Type &&
+        (Op->Type->Kind == NdTypeKind::Int ||
+         Op->Type->Kind == NdTypeKind::Ptr)) {
+      S += c_detail::vaListArgument(Opts.TheArch, Opts.Format, exprStr(*Op));
       continue;
     }
     if (VaCallee && I >= VaCallee->NamedParams &&

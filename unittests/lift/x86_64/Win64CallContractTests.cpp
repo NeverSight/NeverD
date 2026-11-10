@@ -1172,50 +1172,72 @@ PipelineResult run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
 }
 
 TEST(Win64CallContract, StackTransportedIntegerWinsOverAScratchFloat) {
-  for (BinaryFormat Format :
-       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
-    const bool Windows = Format == BinaryFormat::COFF;
-    // Save the integer argument, compute an unused double in XMM0, then
-    // return the saved integer through RAX. POP is not a register restore.
-    const std::vector<uint8_t> Code = {
-        uint8_t(Windows ? 0x51 : 0x57), 0xf2, 0x48, 0x0f, 0x2a,
-        uint8_t(Windows ? 0xc1 : 0xc7), 0x58, 0xc3};
-    auto Image = makeImage(Code, {{Text, "wrap"}}, {});
-    Image.Format = Format;
-    for (bool LLVM : {false, true})
-      for (bool NoOpt : {false, true}) {
-        SCOPED_TRACE(testing::Message()
-                     << unsigned(Format) << ':' << LLVM << ':' << NoOpt);
-        llvm::LLVMContext Context;
-        PipelineOptions Options;
-        Options.EmitDumpOutput = false;
-        Options.OnlyFunctionEntries = {Text};
-        Options.SourceProjection = true;
-        Options.LiftMode = LLVM;
-        Options.NoOpt = NoOpt;
-        auto Result = Pipeline().run(Image, Context, Options);
-        ASSERT_TRUE(Result.Success) << Result.Error;
-        ASSERT_EQ(Result.MedFuncs.size(), 1u);
-        ASSERT_TRUE(Result.MedFuncs.front().ReturnType);
-        ASSERT_EQ(Result.MedFuncs.front().ReturnType->Kind, NdTypeKind::Int);
-        EXPECT_EQ(Result.MedFuncs.front().ReturnType->Size, 8u);
-        CEmitterOptions COptions;
-        COptions.TheArch = Image.Arch;
-        COptions.Format = Format;
-        COptions.Image = &Image;
-        std::string Source;
-        llvm::raw_string_ostream Out(Source);
-        if (LLVM) {
-          ASSERT_TRUE(Result.LlvmModule);
-          ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
-          ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Out, COptions));
-        } else
-          ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, COptions));
-        EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  for (unsigned Mode = 0; Mode != 3; ++Mode)
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+      const bool Windows = Format == BinaryFormat::COFF;
+      // Save the integer argument, compute an unused double in XMM0, then
+      // return the saved integer through RAX. POP is not a register restore.
+      std::vector<uint8_t> Code = {
+          uint8_t(Windows ? 0x51 : 0x57), 0xf2, 0x48, 0x0f, 0x2a,
+          uint8_t(Windows ? 0xc1 : 0xc7), 0x58, 0xc3};
+      if (Mode == 1) {
+        // sub rsp,8; pxor xmm0,xmm0; cvtsi2ss xmm0,ecx/edi;
+        // vcvtps2ph [rsp],xmm0,0; pop rax; ret. A memory intrinsic
+        // supplies the integer result even with no ordinary STORE in MedIR.
+        Code = {0x48, 0x83, 0xec, 8,    0x66, 0x0f,
+                0xef, 0xc0, 0xf3, 0x0f, 0x2a, uint8_t(Windows ? 0xc1 : 0xc7),
+                0xc4, 0xe3, 0x79, 0x1d, 0x04, 0x24,
+                0,    0x58, 0xc3};
+      } else if (Mode == 2) {
+        // push rcx/rdi; vcvtph2ps xmm0,[rsp]; pop rax; ret. Reading
+        // floating values from the slot does not change its saved bytes.
+        Code = {uint8_t(Windows ? 0x51 : 0x57),
+                0xc4,
+                0xe2,
+                0x79,
+                0x13,
+                0x04,
+                0x24,
+                0x58,
+                0xc3};
+      }
+      auto Image = makeImage(Code, {{Text, "wrap"}}, {});
+      Image.Format = Format;
+      for (bool LLVM : {false, true})
+        for (bool NoOpt : {false, true}) {
+          SCOPED_TRACE(testing::Message() << Mode << ':' << unsigned(Format)
+                                          << ':' << LLVM << ':' << NoOpt);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Text};
+          Options.SourceProjection = true;
+          Options.LiftMode = LLVM;
+          Options.NoOpt = NoOpt;
+          auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          ASSERT_EQ(Result.MedFuncs.size(), 1u);
+          ASSERT_TRUE(Result.MedFuncs.front().ReturnType);
+          ASSERT_EQ(Result.MedFuncs.front().ReturnType->Kind, NdTypeKind::Int);
+          EXPECT_EQ(Result.MedFuncs.front().ReturnType->Size, 8u);
+          CEmitterOptions COptions;
+          COptions.TheArch = Image.Arch;
+          COptions.Format = Format;
+          COptions.Image = &Image;
+          std::string Source;
+          llvm::raw_string_ostream Out(Source);
+          if (LLVM) {
+            ASSERT_TRUE(Result.LlvmModule);
+            ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+            ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Out, COptions));
+          } else
+            ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, COptions));
+          EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
 #if defined(__linux__) && defined(__x86_64__)
-        std::string Oracle;
-        llvm::raw_string_ostream Native(Oracle);
-        Native << R"(
+          std::string Oracle;
+          llvm::raw_string_ostream Native(Oracle);
+          Native << R"(
 #include <string.h>
 #include <sys/mman.h>
 int main(void) {
@@ -1224,9 +1246,9 @@ int main(void) {
     0x123456789abcdef, -0x123456789abcdef
   };
   static const uint8_t original[] = {)";
-        for (uint8_t Byte : Code)
-          Native << unsigned(Byte) << ',';
-        Native << R"(};
+          for (uint8_t Byte : Code)
+            Native << unsigned(Byte) << ',';
+          Native << R"(};
   uint8_t *mapping = mmap(0, sizeof(original) + 16,
                           PROT_READ | PROT_WRITE | PROT_EXEC,
                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -1236,25 +1258,31 @@ int main(void) {
   int failed = 0;
   for (unsigned i = 0; i < sizeof(inputs) / sizeof(*inputs); ++i) {
     int64_t expected = ((int64_t ()";
-        if (Windows)
-          Native << "__attribute__((ms_abi)) ";
-        Native << R"(*)(int64_t))code)(inputs[i]);
+          if (Windows)
+            Native << "__attribute__((ms_abi)) ";
+          Native << R"(*)(int64_t))code)(inputs[i]);
     int64_t actual = wrap(inputs[i]);
     failed |= actual != expected;
   }
   return munmap(mapping, sizeof(original) + 16) != 0 || failed;
 }
 )";
-        for (llvm::StringRef Level : {"-O0", "-O2"})
-          source_call_execution_test::compileAndRun(
-              "#define _GNU_SOURCE\n" + Source + Oracle,
-              {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+          if (Mode == 0 || (__builtin_cpu_supports("avx") &&
+                            __builtin_cpu_supports("f16c"))) {
+            for (llvm::StringRef Level : {"-O0", "-O2"})
+              source_call_execution_test::compileAndRun(
+                  "#define _GNU_SOURCE\n" + Source + Oracle,
+                  {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+          } else {
+            RecordProperty("native_f16c_integer_return_execution",
+                           "requires AVX and F16C");
+          }
 #else
-        RecordProperty("native_x64_integer_return_execution",
-                       "requires Linux x86-64");
+          RecordProperty("native_x64_integer_return_execution",
+                         "requires Linux x86-64");
 #endif
-      }
-  }
+        }
+    }
 }
 
 TEST(Win64CallContract, ImmutableNoReturnSlotsEndBothSourcePaths) {

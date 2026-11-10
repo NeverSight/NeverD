@@ -10708,4 +10708,129 @@ Your previous graph is still available.</source>
         <translation>外掛結果圖</translation>
     </message>
 </context>
+<context>
+    <name>UnwindInfoDialog</name>
+    <message>
+        <source>Unwind information at %1</source>
+        <translation>%1 處的堆疊展開資訊</translation>
+    </message>
+    <message>
+        <source>DWARF state at the selected PC</source>
+        <translation>所選 PC 處的 DWARF 狀態</translation>
+    </message>
+    <message>
+        <source>Compact unwind: completed-prologue recipe</source>
+        <translation>精簡展開：序言完成後的規則</translation>
+    </message>
+    <message>
+        <source>The compact recipe describes the completed prologue; it does not establish the return-address state at the selected PC.</source>
+        <translation>精簡規則描述的是序言執行完成後的狀態，無法確定所選 PC 處的返回位址狀態。</translation>
+    </message>
+    <message>
+        <source>Refresh</source>
+        <translation>重新整理</translation>
+    </message>
+    <message>
+        <source>Loading unwind information…</source>
+        <translation>正在載入堆疊展開資訊…</translation>
+    </message>
+    <message>
+        <source>The analysis worker is disconnected.</source>
+        <translation>分析程序已中斷連線。</translation>
+    </message>
+    <message>
+        <source>This engine does not provide unwind information.</source>
+        <translation>目前的引擎不提供堆疊展開資訊。</translation>
+    </message>
+    <message>
+        <source>The program changed. Open unwind information again at the desired address.</source>
+        <translation>程式已變更。請在目標位址重新開啟堆疊展開資訊。</translation>
+    </message>
+    <message>
+        <source>No unwind frame contains this address.</source>
+        <translation>沒有包含此位址的堆疊展開框架。</translation>
+    </message>
+    <message>
+        <source>This frame has no return-address signing report.</source>
+        <translation>此框架沒有返回位址簽署報告。</translation>
+    </message>
+    <message>
+        <source>No metadata from this source.</source>
+        <translation>此來源沒有中繼資料。</translation>
+    </message>
+    <message>
+        <source>The engine returned an incompatible unwind report.</source>
+        <translation>引擎傳回了不相容的堆疊展開報告。</translation>
+    </message>
+    <message>
+        <source>Could not load unwind information: %1</source>
+        <translation>無法載入堆疊展開資訊：%1</translation>
+    </message>
+    <message>
+        <source>Frame: [%1, %2)</source>
+        <translation>框架：[%1, %2)</translation>
+    </message>
+    <message>
+        <source>Status: %1</source>
+        <translation>狀態：%1</translation>
+    </message>
+    <message>
+        <source>Signing kind: %1</source>
+        <translation>簽署類型：%1</translation>
+    </message>
+    <message>
+        <source>Key: %1</source>
+        <translation>金鑰：%1</translation>
+    </message>
+    <message>
+        <source>Recipe: %1</source>
+        <translation>規則：%1</translation>
+    </message>
+    <message>
+        <source>Signing PC: %1</source>
+        <translation>簽署 PC：%1</translation>
+    </message>
+    <message>
+        <source>Diagnostic: %1</source>
+        <translation>診斷：%1</translation>
+    </message>
+</context>
+<context>
+    <name>KDDockWidgets::QtWidgets::TitleBar</name>
+    <message>
+        <source>Minimize</source>
+        <translation>最小化</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>關閉</translation>
+    </message>
+    <message>
+        <source>Maximize</source>
+        <translation>最大化</translation>
+    </message>
+    <message>
+        <source>Restore</source>
+        <translation>還原</translation>
+    </message>
+    <message>
+        <source>Auto-hide</source>
+        <translation>自動隱藏</translation>
+    </message>
+    <message>
+        <source>Disable auto-hide</source>
+        <translation>取消自動隱藏</translation>
+    </message>
+</context>
+<context>
+    <name>KDDockWidgets::Core::TitleBar</name>
+    <message>
+        <source>Dock window</source>
+        <translation>停駐視窗</translation>
+    </message>
+    <message>
+        <source>Undock window</source>
+        <translation>取消停駐視窗</translation>
+    </message>
+</context>
 </TS>

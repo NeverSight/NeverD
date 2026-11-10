@@ -10708,4 +10708,129 @@ Your previous graph is still available.</source>
         <translation>插件结果图</translation>
     </message>
 </context>
+<context>
+    <name>UnwindInfoDialog</name>
+    <message>
+        <source>Unwind information at %1</source>
+        <translation>%1 处的栈展开信息</translation>
+    </message>
+    <message>
+        <source>DWARF state at the selected PC</source>
+        <translation>所选 PC 处的 DWARF 状态</translation>
+    </message>
+    <message>
+        <source>Compact unwind: completed-prologue recipe</source>
+        <translation>紧凑展开：序言完成后的规则</translation>
+    </message>
+    <message>
+        <source>The compact recipe describes the completed prologue; it does not establish the return-address state at the selected PC.</source>
+        <translation>紧凑规则描述的是序言执行完成后的状态，不能确定所选 PC 处的返回地址状态。</translation>
+    </message>
+    <message>
+        <source>Refresh</source>
+        <translation>刷新</translation>
+    </message>
+    <message>
+        <source>Loading unwind information…</source>
+        <translation>正在加载栈展开信息…</translation>
+    </message>
+    <message>
+        <source>The analysis worker is disconnected.</source>
+        <translation>分析进程已断开连接。</translation>
+    </message>
+    <message>
+        <source>This engine does not provide unwind information.</source>
+        <translation>当前引擎不提供栈展开信息。</translation>
+    </message>
+    <message>
+        <source>The program changed. Open unwind information again at the desired address.</source>
+        <translation>程序已更改。请在目标地址重新打开栈展开信息。</translation>
+    </message>
+    <message>
+        <source>No unwind frame contains this address.</source>
+        <translation>没有包含此地址的栈展开帧。</translation>
+    </message>
+    <message>
+        <source>This frame has no return-address signing report.</source>
+        <translation>此帧没有返回地址签名报告。</translation>
+    </message>
+    <message>
+        <source>No metadata from this source.</source>
+        <translation>此来源没有元数据。</translation>
+    </message>
+    <message>
+        <source>The engine returned an incompatible unwind report.</source>
+        <translation>引擎返回了不兼容的栈展开报告。</translation>
+    </message>
+    <message>
+        <source>Could not load unwind information: %1</source>
+        <translation>无法加载栈展开信息：%1</translation>
+    </message>
+    <message>
+        <source>Frame: [%1, %2)</source>
+        <translation>帧：[%1, %2)</translation>
+    </message>
+    <message>
+        <source>Status: %1</source>
+        <translation>状态：%1</translation>
+    </message>
+    <message>
+        <source>Signing kind: %1</source>
+        <translation>签名类型：%1</translation>
+    </message>
+    <message>
+        <source>Key: %1</source>
+        <translation>密钥：%1</translation>
+    </message>
+    <message>
+        <source>Recipe: %1</source>
+        <translation>规则：%1</translation>
+    </message>
+    <message>
+        <source>Signing PC: %1</source>
+        <translation>签名 PC：%1</translation>
+    </message>
+    <message>
+        <source>Diagnostic: %1</source>
+        <translation>诊断：%1</translation>
+    </message>
+</context>
+<context>
+    <name>KDDockWidgets::QtWidgets::TitleBar</name>
+    <message>
+        <source>Minimize</source>
+        <translation>最小化</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>关闭</translation>
+    </message>
+    <message>
+        <source>Maximize</source>
+        <translation>最大化</translation>
+    </message>
+    <message>
+        <source>Restore</source>
+        <translation>还原</translation>
+    </message>
+    <message>
+        <source>Auto-hide</source>
+        <translation>自动隐藏</translation>
+    </message>
+    <message>
+        <source>Disable auto-hide</source>
+        <translation>取消自动隐藏</translation>
+    </message>
+</context>
+<context>
+    <name>KDDockWidgets::Core::TitleBar</name>
+    <message>
+        <source>Dock window</source>
+        <translation>停靠窗口</translation>
+    </message>
+    <message>
+        <source>Undock window</source>
+        <translation>取消停靠窗口</translation>
+    </message>
+</context>
 </TS>
