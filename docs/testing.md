@@ -4183,6 +4183,31 @@ blocks of degree 15/23/31 retain unpaired source words and low-bit disturbances.
 Tests exhaust all three six-bit inputs for a degree-15 block, check complete
 8–257-bit words and retain every factor under short work/storage allowances.
 A degree-23 machine-code fixture executes all six source routes at O0/O2.
+`SymMBASparseUnits` requires a reordered 64-factor product to complete its
+residue proof and reduce cofactor cost by more than half at 8/16/32/64 bits.
+Its independent oracle enumerates every observed byte pair, including populated
+high bits. Short-prefix powers check correlated bits through an entire unit
+period, including its neighboring exponents.
+`SymMBASample.LongChecksRetainEveryOriginalRandomAssignment` pins the original
+counterexample points around 312 and 624 generator words with dense/sparse IDs
+and 8/64/65/257-bit inputs. Independent standard-engine comparisons cover all
+8192 cached words, the cache boundary and large dense/sparse input unions.
+`SymExpr.CollectVarsUnionsSharedRootsAndExistingSparseIds` checks overlapping
+roots, unused wide inputs and the union with previously collected variables.
+Degree-23 fixtures cover disturbed neighbors, 8–257-bit inputs, cumulative
+work/storage refusals and independent full-width Z3 proofs at 8 and 64 bits.
+The existing 31-factor byte cases check all 16,777,216 input triples for each
+observation-width and parity-neighbor configuration. This complete finite-domain
+proof avoids relying on the runtime of a high-degree SMT query.
+Degree-49 and permuted degree-64 machine-code fixtures execute all six
+HighC/LLVMC CLI and worker source routes at O0/O2.
+Recursive square retention checks degrees 25/31/49/63 with full 8–257-bit
+arithmetic and parity neighbors. Native-width degree-49/63 cases must reduce
+cost within the default allowance; wider cases may decline while preserving
+every original bit. Degree 49 enumerates all seven-bit input
+triples, with populated high bits; degree 25 remains a preservation case without
+claiming a completed reduction. A degree-33 single-pair boundary must keep the
+original global work allowance below exhaustion.
 Reassociated complemented blocks check XOR identity reuse with independent
 8–257-bit arithmetic and an exhaustive three-input six-bit oracle. Degree-192
 mixed products at both mask precisions must preserve their independent linear

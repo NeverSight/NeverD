@@ -24,6 +24,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
 #include <array>
@@ -184,16 +185,37 @@ class LowWordDecisions {
 
   // These maps never erase individual keys. Prepay the complete bucket
   // allocation at the dense map's 3/4 load boundary, including its initial
-  // table. Existing per-entry charges still cover keys and node storage.
+  // table. Packed Boolean caches skip one rehash generation; wider entries
+  // retain the smaller growth step. Existing entry charges still cover keys
+  // and node storage, and the complete new allocation is prepaid either way.
   template <typename Map> bool reserveEntry(Map &Cache) {
     const auto Buckets =
         Cache.getMemorySize() / sizeof(typename Map::value_type);
     if ((Cache.size() + 1) * 4 < Buckets * 3)
       return true;
-    const auto Next = std::max(limits::kResidueMinDenseMapBuckets, 2 * Buckets);
+    constexpr size_t Growth =
+        sizeof(typename Map::value_type) == 2 * sizeof(uint32_t)
+            ? limits::kResiduePackedMapGrowth
+            : 2;
+    const auto Next =
+        std::max(limits::kResidueMinDenseMapBuckets, Growth * Buckets);
     if (!charge(0, Next * sizeof(typename Map::value_type)))
       return false;
-    Cache.reserve(Cache.size() + 1);
+    Cache.reserve(Next * 3 / 4 - 1);
+    return true;
+  }
+
+  // There can be at most one insertion per factor. Reserve that complete
+  // bound once: matched erasures cannot exhaust the empty buckets or cause
+  // rehashing, and pairing needs no per-entry heap allocation. Unlike the
+  // append-only caches, this table pays for its buckets before the first pair.
+  template <typename Map> bool reservePairTable(Map &Table, size_t Factors) {
+    const size_t Buckets =
+        std::max(limits::kResidueMinDenseMapBuckets,
+                 size_t(llvm::NextPowerOf2(Factors * 4 / 3 + 1)));
+    if (!charge(0, Buckets * sizeof(typename Map::value_type)))
+      return false;
+    Table.reserve(Factors);
     return true;
   }
 
@@ -1336,6 +1358,29 @@ class LowWordDecisions {
   }
 
   Bits power(Bits Value, size_t Exponent) {
+    // All possible odd four-bit prefixes, raised through one complete
+    // modulo-256 unit period. Generate exact Boolean coefficients at compile
+    // time; a request only substitutes its proved input bits into this table.
+    static_assert(limits::kMaxAffineResidueTableBits <=
+                  std::numeric_limits<uint8_t>::digits);
+    static constexpr auto PrefixPowers = [] {
+      constexpr size_t Period = size_t(1)
+                                << (std::numeric_limits<uint8_t>::digits - 2);
+      constexpr size_t Values = 8;
+      std::array<std::array<uint8_t, Values>, Period> Table{};
+      std::array<uint8_t, Values> Powers;
+      Powers.fill(1);
+      for (auto &Row : Table) {
+        Row = Powers;
+        for (unsigned Bit = 1; Bit < Values; Bit <<= 1)
+          for (unsigned Mask = 0; Mask < Values; ++Mask)
+            if (Mask & Bit)
+              Row[Mask] ^= Row[Mask ^ Bit];
+        for (unsigned Mask = 0; Mask < Values; ++Mask)
+          Powers[Mask] *= 2 * Mask + 1;
+      }
+      return Table;
+    }();
     const size_t Width = Value.size();
     if (Exponent >= Width) {
       // Words have at most kMaxAffineResidueTableBits bits. Odd residues have
@@ -1366,6 +1411,56 @@ class LowWordDecisions {
           return Bits(Width, 0);
         Exponent = Reduced;
       }
+    }
+    // Odd three- and four-bit prefixes have four and eight complete input
+    // valuations. Substitute their exact Boolean coefficients into the
+    // decision graph without repeating native exponentiation. Input bits may
+    // be correlated: the identity holds for every valuation, not samples.
+    // Unsigned wraparound preserves all observed bits (at most eight).
+    if (Exponent >= 2 && Width >= 3 && Value.front() == 1 &&
+        std::all_of(Value.begin() + 3, Value.end(),
+                    [](uint32_t Bit) { return Bit == 0; })) {
+      if (!charge(Width + 4))
+        return Bits(Width, 0);
+      const auto &Coefficients =
+          PrefixPowers[Exponent & (PrefixPowers.size() - 1)];
+      const auto A = Coefficients[1], B = Coefficients[2];
+      const auto Cross = Coefficients[3] & ((uint64_t(1) << Width) - 1);
+      const auto Both = Cross ? apply<And>(Value[1], Value[2]) : 0;
+      Bits Result(Width, 0);
+      for (unsigned I = 0; I < Width; ++I)
+        Result[I] =
+            parity(((A >> I) & 1) ? Value[1] : 0, ((B >> I) & 1) ? Value[2] : 0,
+                   ((Cross >> I) & 1) ? Both : 0) ^
+            unsigned(I == 0);
+      return Result;
+    }
+    if (Exponent >= 2 && Width >= 4 && Value.front() == 1 && Value[3] != 0 &&
+        std::all_of(Value.begin() + 4, Value.end(),
+                    [](uint32_t Bit) { return Bit == 0; })) {
+      if (!charge(Width + PrefixPowers.front().size()))
+        return Bits(Width, 0);
+      const auto &Coefficients =
+          PrefixPowers[Exponent & (PrefixPowers.size() - 1)];
+      std::array<uint32_t, 8> Monomials;
+      Monomials.fill(UINT32_MAX);
+      Monomials[0] = 1;
+      auto Term = [&](auto &&Self, unsigned Mask) -> uint32_t {
+        if (Monomials[Mask] != UINT32_MAX)
+          return Monomials[Mask];
+        const auto Rest = Mask & (Mask - 1);
+        const auto Input = Value[1 + std::countr_zero(Mask)];
+        return Monomials[Mask] =
+                   Rest ? apply<And>(Self(Self, Rest), Input) : Input;
+      };
+      Bits Result(Width, 0);
+      for (unsigned I = 0; I < Width; ++I) {
+        Result[I] = (Coefficients[0] >> I) & 1;
+        for (unsigned Mask = 1; Mask < 8; ++Mask)
+          if ((Coefficients[Mask] >> I) & 1)
+            Result[I] = apply<Xor>(Result[I], Term(Term, Mask));
+      }
+      return Result;
     }
     Bits Term(Value.size(), 0);
     Term.front() = 1;
@@ -1477,9 +1572,13 @@ class LowWordDecisions {
     if (Factors.size() == 1)
       return Bits(word(Factors.front(), Observed));
     // Write every group as (L + 2^Split H_i). Since 3*Split >= Observed,
-    // only the constant, linear and quadratic elementary sums survive.
+    // only the constant, linear and quadratic elementary sums survive. At
+    // byte precision, equal halves remove the quadratic term entirely;
+    // six-bit products keep the smaller two-bit prefix grouping.
     // Group equality comes from complete decision words, never from samples.
-    const unsigned Split = (Observed + 2) / 3;
+    const unsigned Split = Observed == limits::kResidueEqualHalfBits
+                               ? Observed / 2
+                               : (Observed + 2) / 3;
     struct ProductGroup {
       std::vector<Bits> Values;
       std::vector<size_t> Multiplicities;
@@ -2243,8 +2342,7 @@ class LowWordDecisions {
 
   template <typename Signature>
   bool appendUnpaired(
-      const std::unordered_map<uint32_t, std::pair<SymRef, Signature>>
-          &Unpaired,
+      const llvm::DenseMap<uint64_t, std::pair<SymRef, Signature>> &Unpaired,
       llvm::SmallVectorImpl<SymRef> &Rest) {
     if (Unpaired.empty())
       return true;
@@ -2260,7 +2358,7 @@ class LowWordDecisions {
     llvm::SmallVector<std::pair<uint32_t, SymRef>, 16> Ordered;
     Ordered.reserve(Unpaired.size());
     for (const auto &[Identity, Value] : Unpaired)
-      Ordered.emplace_back(Identity, Value.first);
+      Ordered.emplace_back(uint32_t(Identity), Value.first);
     std::sort(Ordered.begin(), Ordered.end(),
               [](const auto &A, const auto &B) { return A.first < B.first; });
     for (const auto &[Identity, Factor] : Ordered)
@@ -2303,6 +2401,20 @@ class LowWordDecisions {
     return Result;
   }
 
+  bool hasMixedUnitPrefix(SymRef Factor) {
+    assert(PriorityInput && "paired units have a parity assumption");
+    const auto Prefix = word(Factor, 3);
+    auto Other = [&](auto &&Self, uint32_t Edge) -> bool {
+      if (!charge() || Edge <= 1)
+        return false;
+      const auto D = decision(Edge);
+      if (variableInput(D.Variable) != *PriorityInput)
+        return true;
+      return Self(Self, D.Low) || Self(Self, D.High);
+    };
+    return !Failed && Other(Other, Prefix[2]);
+  }
+
   // With U=2^(N-2), matched odd factors satisfy B=A+U*d. Thus
   // AB=A^2+U*A*d. For N>=4, U^2 vanishes and every odd square is 1 mod 4:
   // all paired corrections add modulo 4, multiplied only by unpaired factors.
@@ -2327,7 +2439,11 @@ class LowWordDecisions {
     const size_t Remainder = Factors.size() % Block;
     const size_t Unmatched = std::min(Remainder, Block - Remainder);
     const bool Defer = Retained && Unmatched > (Factors.size() - Unmatched) / 2;
-    std::unordered_map<uint32_t, std::pair<SymRef, WideSignature>> Unpaired;
+    // Signature identities are 32-bit. Widen keys so both dense sentinels
+    // remain outside their complete domain, including erased entries.
+    llvm::DenseMap<uint64_t, std::pair<SymRef, WideSignature>> Unpaired;
+    if (!reservePairTable(Unpaired, Factors.size()))
+      return {};
     llvm::SmallVector<SymRef, 16> Pairs, Rest;
     Bits Correction(2, 0);
     llvm::SmallVector<Bits, 16> Corrections;
@@ -2349,10 +2465,9 @@ class LowWordDecisions {
         return {};
       auto It = Unpaired.find(S.Identity);
       if (It == Unpaired.end()) {
-        if (!charge(1, sizeof(decltype(Unpaired)::value_type) +
-                           4 * sizeof(void *)))
+        if (!charge())
           return {};
-        Unpaired.emplace(S.Identity, std::make_pair(Factor, S));
+        Unpaired.try_emplace(S.Identity, std::make_pair(Factor, S));
       } else {
         auto A = It->second.first;
         if (Defer) {
@@ -2432,7 +2547,29 @@ class LowWordDecisions {
         I = End;
       }
     }
-    auto Inner = widePairedProduct<BatchCorrections>(State, Pairs, Count - 1);
+    // Fewer than three representatives cannot leave a paired square and an
+    // unmatched factor. Avoid a new prefix reading in that completed case.
+    // Simple prefixes keep their short exact decision product; mixed prefixes
+    // can otherwise build a large temporary graph for the restored square.
+    llvm::SmallVector<SymRef, 16> InnerRetained;
+    auto Inner = widePairedProduct<BatchCorrections>(
+        State, Pairs, Count - 1,
+        Retained && Pairs.size() > 2 &&
+                Count >= limits::kMinResidueRetainedSquareBits &&
+                hasMixedUnitPrefix(Factors.front())
+            ? &InnerRetained
+            : nullptr);
+    if (!Failed && !InnerRetained.empty()) {
+      if (!charge(2 * InnerRetained.size(),
+                  2 * InnerRetained.size() * sizeof(SymRef)))
+        return {};
+      // The restored odd product has square 1 modulo eight. Moving that
+      // square outside a correction scaled by 2^(Count-2) is exact.
+      for (auto Factor : InnerRetained) {
+        Retained->push_back(Factor);
+        Retained->push_back(Factor);
+      }
+    }
     if (Failed || Inner.empty())
       return {};
     Inner.push_back(0);
@@ -2469,7 +2606,9 @@ class LowWordDecisions {
       return oddUnitProduct(Factors, Count);
     if (!charge(Factors.size(), 2 * Factors.size() * sizeof(SymRef)))
       return {};
-    std::unordered_map<uint32_t, std::pair<SymRef, uint32_t>> Unpaired;
+    llvm::DenseMap<uint64_t, std::pair<SymRef, uint32_t>> Unpaired;
+    if (!reservePairTable(Unpaired, Factors.size()))
+      return {};
     llvm::SmallVector<SymRef, 16> Pairs, Rest;
     uint32_t Correction = 0;
     // Complete-domain projection can expose repeated words. Their squares
@@ -2510,11 +2649,10 @@ class LowWordDecisions {
         return {};
       auto It = Unpaired.find(Signature.Identity);
       if (It == Unpaired.end()) {
-        if (!charge(1, sizeof(decltype(Unpaired)::value_type) +
-                           4 * sizeof(void *)))
+        if (!charge())
           return {};
-        Unpaired.emplace(Signature.Identity,
-                         std::make_pair(Factor, Signature.Flip));
+        Unpaired.try_emplace(Signature.Identity,
+                             std::make_pair(Factor, Signature.Flip));
         continue;
       }
       Pairs.push_back(Factor);

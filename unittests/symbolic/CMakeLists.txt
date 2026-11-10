@@ -53,6 +53,7 @@ add_neverd_unittest(NeverDSymbolicTests
   SymMBAAffineResidueTests.cpp
   SymMBAPrefixResidueTests.cpp
   SymMBAWidePairTests.cpp
+  SymMBASparseUnitTests.cpp
   SymMBAWitnessTests.cpp
   SymMBAResidueCacheTests.cpp
   SymMBAResiduePowerTests.cpp
@@ -132,6 +133,7 @@ add_neverd_unittest(NeverDSymMBAQuadraticTests
   SymMBAAffineResidueTests.cpp
   SymMBAPrefixResidueTests.cpp
   SymMBAWidePairTests.cpp
+  SymMBASparseUnitTests.cpp
   SymMBAWitnessTests.cpp
   SymMBAResidueCacheTests.cpp
   SymMBAResiduePowerTests.cpp

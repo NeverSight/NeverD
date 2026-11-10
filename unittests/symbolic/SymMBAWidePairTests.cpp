@@ -564,12 +564,22 @@ TEST(SymMBAWidePairs, FiveAndSixBitUnitsKeepWideInputsAndRefusals) {
             }
             EXPECT_EQ(Reduced.eval(Values), F.oracle(Values));
           }
-          if (Width == 8 && Allowance == 65536 &&
-              solver::proofBackendAvailable(solver::ProofBackend::Z3)) {
-            solver::SymSynthVerifier Verifier({}, solver::ProofBackend::Z3,
-                                              10000);
-            EXPECT_EQ(Verifier(Ctx, F.Input, Result),
-                      SynthVerification::Equivalent);
+          if (Width == 8 && Allowance == 65536) {
+            // This byte-sized domain is small enough for an independent
+            // complete proof, including all high bits above Observed.
+            // Enumerate every input rather than making this regression
+            // depend on a high-degree SAT search finishing before a timer.
+            for (uint64_t X = 0; X < 256; ++X)
+              for (uint64_t Y = 0; Y < 256; ++Y)
+                for (uint64_t Z = 0; Z < 256; ++Z) {
+                  uint64_t Expected = uint64_t(3) << (8 - Observed);
+                  for (unsigned I = 0; I < 31; ++I)
+                    Expected *= ((~X) + 2 * I + unsigned(Neighbor && I == 0)) ^
+                                (((Y + I) & ~uint64_t(1)) *
+                                 ((Z + 2 * I) & ~uint64_t(1)));
+                  ASSERT_EQ(Reduced.evalU64({X, Y, Z}), Expected & 255)
+                      << X << ':' << Y << ':' << Z;
+                }
           }
         }
       }

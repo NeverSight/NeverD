@@ -5845,6 +5845,30 @@ each finished column before reduction. Final columns balance their parity
 without constructing an unobservable carry. Signature keys occupy stable pages
 whose storage is charged before allocation. These operations retain the full
 identity checks, cumulative allowances and decision-node ceiling.
+Products observed at eight bits use equal-width low and high halves, eliminating
+quadratic high terms exactly. For proved odd three- or four-bit prefixes with
+zero upper bits, powers evaluate all four or eight possible values and
+substitute their exact Boolean coefficients into the decision graph. Input
+bits may be correlated; this is a complete identity, not sampling. Work, node
+and storage ceilings stay unchanged. Pairing tables prepay one dense bucket
+allocation from the factor count; erased matches cannot trigger rehashing.
+Packed Boolean tables skip one rehash generation while charging the full new
+allocation to the existing storage budget. Six-bit products keep two-bit
+prefix groups to avoid doubling their number. CLI and GUI share these core
+paths.
+The fixed power coefficients are generated at compile time. The optional
+deterministic cross-check reuses a compile-time prefix of 8192 generator words
+when all native input assignments fit; longer and arbitrary-width checks retain
+the original generator. Shared subexpressions collect their variables together, preserving
+the sorted, unique input union and original assignments. Equivalence continues
+to require the existing exact proofs.
+Recursive paired products can retain unmatched odd factors as complete words.
+Their square equals one modulo eight, so it can be factored out of the two-bit
+high correction without expanding the complete mixed product. The original
+full-width factors and parity selector remain in the result. This reading is
+reserved for mixed three-bit prefixes whose recursive precision is at least
+six bits. Fewer than three representatives cannot leave both a pair and an
+unmatched word, so they do not start this additional prefix reading.
 Expression restoration skips nodes older than every substitution key: immutable
 children precede their parents, and simultaneous replacement bodies remain
 unchanged. Rendering appends fragments directly into their parent's text and

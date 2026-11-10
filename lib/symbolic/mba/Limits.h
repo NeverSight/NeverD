@@ -18,6 +18,14 @@
 
 namespace neverd::symbolic::detail::limits {
 
+// Preserve the original deterministic assignment stream in native and AP
+// cross-checks, including the shared immutable native prefix.
+inline constexpr uint64_t kVerificationSampleSeed = 0x9E3779B97F4A7C15ull;
+// A fixed 64 KiB prefix covers the measured 14–20-input native checks at
+// both 64 and 256 samples. Larger requests keep the original seeded engine;
+// this changes neither the sample count nor the assignment sequence.
+inline constexpr std::size_t kVerificationCachedWords = 8192;
+
 /// Residual recovery reuses the small exact Boolean recipes without building
 /// the four-input exhaustive table.
 inline constexpr unsigned kMaxResidualSynthesisAtoms = 3;
@@ -83,6 +91,14 @@ inline constexpr unsigned kMaxAffineResidueDepth = 8;
 inline constexpr unsigned kMinAffineResidueScaledFactors = 1;
 inline constexpr std::size_t kMaxAffineResidueEdges = 64;
 inline constexpr unsigned kMaxAffineResidueTableBits = 8;
+// Equal halves eliminate quadratic high terms at byte precision. Six-bit
+// products retain two-bit prefixes, avoiding twice as many prefix groups.
+inline constexpr unsigned kResidueEqualHalfBits = 8;
+// Squaring a recursive mixed product of six or more observed bits can grow
+// its decision graph. Preserve its complete odd factors across that square;
+// smaller recursive products keep their inexpensive complete decision words.
+inline constexpr unsigned kMinResidueRetainedSquareBits = 7;
+
 /// Stable low-word results share small pages instead of per-word hash nodes.
 inline constexpr std::size_t kResidueWordPageEntries = 16;
 /// Pairing signatures keep stable inline keys in small, prepaid pages.
@@ -104,6 +120,9 @@ inline constexpr std::size_t kResidueDecisionPolynomialFirstNodes = 512;
 // LLVM dense maps start with 64 buckets. Residue caches prepay each complete
 // bucket allocation before insertion, including this initial table.
 inline constexpr std::size_t kResidueMinDenseMapBuckets = 64;
+// Eight-byte Boolean buckets dominate rehashing in deep carry proofs. Skip
+// one growth generation, funding the full table from the same storage budget.
+inline constexpr std::size_t kResiduePackedMapGrowth = 4;
 inline constexpr unsigned kMaxResidueDecisionSynthesisInputs = 6;
 inline constexpr unsigned kMaxUnconditionedResidueDecisionBits = 3;
 inline constexpr std::size_t kMaxResidueDecisionPolynomialTerms = 256;
