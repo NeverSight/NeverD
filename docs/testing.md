@@ -7287,7 +7287,9 @@ source comments cannot enter the name-only refresh path, and a stale committed
 sidecar is refused without changing the replica. The workbench's
 `localNameEditsReuseTheIdleAnalysisReplica` also checks the process identity and
 unchanged preparation counters through a source comment, a function's new name and
-an image comment, and full retirement after a deleted function.
+an image comment, and full retirement after a deleted function. The owner answers
+first what it keeps of the edited view, so those come from a C view of the function,
+which only the replica answers.
 `analysisReplicaOutlivesAReadNobodyWaitsFor` checks that going to another function
 during a read keeps the replica, and `cancellingOneAnalysisLeavesTheOtherRunning`
 that one still running well past what restoring took is stopped.

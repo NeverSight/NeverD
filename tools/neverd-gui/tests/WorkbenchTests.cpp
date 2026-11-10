@@ -6773,6 +6773,20 @@ private slots:
     bench.session.read("decompile", payload, &reader,
                        [&](const QJsonObject &page) { first = page; });
     QTRY_VERIFY_WITH_TIMEOUT(!first.isEmpty(), OpenTimeoutMs);
+    // The owner answers first what it keeps of a view, which an edit's own
+    // view often is.  Which replica runs, and what it rendered, a read only
+    // the replica answers says: the owner keeps no C of the function.
+    const QJsonObject engineRead{{"address", hexAddress(Base)},
+                                 {"representation", "c"}};
+    const auto replicaPage = [&] {
+      QJsonObject page;
+      bench.session.read("decompile", engineRead, &reader,
+                         [&](const QJsonObject &read) { page = read; });
+      (void)QTest::qWaitFor([&] { return !page.isEmpty(); }, OpenTimeoutMs);
+      return page;
+    };
+    const auto replica = replicaPage();
+    QVERIFY(!replica.value("fixture_instance").toString().isEmpty());
     QSignalSpy listResets(&functions->model(), &QAbstractItemModel::modelReset);
     QSignalSpy listingMoves(listing, &ListingView::jumpSettled);
     QSignalSpy graphChanges(&graph, &GraphView::viewChanged);
@@ -6792,9 +6806,11 @@ private slots:
                          [&](const QJsonObject &page) { current = page; });
       QTRY_VERIFY_WITH_TIMEOUT(!current.isEmpty(), OpenTimeoutMs);
       QVERIFY(current.value("text").toString().contains(name + " = 1"));
+      // The same replica took the commit in place and rendered nothing anew.
+      const auto after = replicaPage();
       for (const auto *field :
            {"fixture_instance", "fixture_prepares", "fixture_pages"})
-        QCOMPARE(current.value(field), first.value(field));
+        QCOMPARE(after.value(field), replica.value(field));
       QCOMPARE(listResets.count(), 0);
       QCOMPARE(listingMoves.count(), 0);
       QCOMPARE(graphChanges.count(), 0);
@@ -6818,9 +6834,10 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(!changed.isEmpty(), OpenTimeoutMs);
     QVERIFY(
         changed.value("text").toString().contains("checked source comment"));
+    const auto commented = replicaPage();
     for (const auto *field :
          {"fixture_instance", "fixture_prepares", "fixture_pages"})
-      QCOMPARE(changed.value(field), first.value(field));
+      QCOMPARE(commented.value(field), replica.value(field));
     // So does a new name of another function, and a comment on the image.
     QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
                              OpenTimeoutMs);
@@ -6838,9 +6855,10 @@ private slots:
     bench.session.read("decompile", payload, &reader,
                        [&](const QJsonObject &page) { kept = page; });
     QTRY_VERIFY_WITH_TIMEOUT(!kept.isEmpty(), OpenTimeoutMs);
+    const auto renamed = replicaPage();
     for (const auto *field :
          {"fixture_instance", "fixture_prepares", "fixture_pages"})
-      QCOMPARE(kept.value(field), first.value(field));
+      QCOMPARE(renamed.value(field), replica.value(field));
     // So does a note on a function, and a declaration, whose views start anew.
     QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
                              OpenTimeoutMs);
@@ -6852,9 +6870,10 @@ private slots:
     bench.session.read("decompile", payload, &reader,
                        [&](const QJsonObject &page) { noted = page; });
     QTRY_VERIFY_WITH_TIMEOUT(!noted.isEmpty(), OpenTimeoutMs);
+    const auto colored = replicaPage();
     for (const auto *field :
          {"fixture_instance", "fixture_prepares", "fixture_pages"})
-      QCOMPARE(noted.value(field), first.value(field));
+      QCOMPARE(colored.value(field), replica.value(field));
     QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
                              OpenTimeoutMs);
     current = bench.session.revision();
@@ -6866,10 +6885,11 @@ private slots:
     bench.session.read("decompile", payload, &reader,
                        [&](const QJsonObject &page) { declared = page; });
     QTRY_VERIFY_WITH_TIMEOUT(!declared.isEmpty(), OpenTimeoutMs);
-    QCOMPARE(declared.value("fixture_instance"),
-             first.value("fixture_instance"));
-    QVERIFY(declared.value("fixture_pages").toInteger() >
-            first.value("fixture_pages").toInteger());
+    const auto redrawn = replicaPage();
+    QCOMPARE(redrawn.value("fixture_instance"),
+             replica.value("fixture_instance"));
+    QVERIFY(redrawn.value("fixture_pages").toInteger() >
+            replica.value("fixture_pages").toInteger());
     QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
                              OpenTimeoutMs);
     bool typesDeclared = false;
@@ -6883,7 +6903,8 @@ private slots:
     bench.session.read("decompile", payload, &reader,
                        [&](const QJsonObject &page) { typed = page; });
     QTRY_VERIFY_WITH_TIMEOUT(!typed.isEmpty(), OpenTimeoutMs);
-    QCOMPARE(typed.value("fixture_instance"), first.value("fixture_instance"));
+    QCOMPARE(replicaPage().value("fixture_instance"),
+             replica.value("fixture_instance"));
     // An edit to what the engine reads restores a fresh replica.
     QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
                              OpenTimeoutMs);
@@ -6895,7 +6916,8 @@ private slots:
     bench.session.read("decompile", payload, &reader,
                        [&](const QJsonObject &page) { fresh = page; });
     QTRY_VERIFY_WITH_TIMEOUT(!fresh.isEmpty(), OpenTimeoutMs);
-    QVERIFY(fresh.value("fixture_instance") != first.value("fixture_instance"));
+    QVERIFY(replicaPage().value("fixture_instance") !=
+            replica.value("fixture_instance"));
   }
 
   void functionsClicksKeepTheLoadedListAndDocument_data() {
@@ -15777,7 +15799,8 @@ private slots:
         writeFixture(directory, QStringLiteral("pseudocode-parallel.bin")));
     QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
     QObject view;
-    // Hold the project dispatcher busy so the replica's snapshot remains
+    // Hold the project dispatcher busy so what the replica's dispatcher asks
+    // the owner (its kept read, the store's state, then the snapshot) remains
     // queued when Cancel is pressed, rather than relying on a timing race.
     session.queries().subscribe(
         {"decompile",
@@ -15791,7 +15814,7 @@ private slots:
     session.externalQuery(
         "external-analysis", "decompile",
         {{"address", hexAddress(Base + 32)}, {"representation", "source"}}, {});
-    QTRY_COMPARE_WITH_TIMEOUT(session.queries().pendingReadCount(), 2, 1000);
+    QTRY_VERIFY_WITH_TIMEOUT(session.queries().pendingReadCount() >= 2, 1000);
     session.cancelReads();
     QTRY_COMPARE_WITH_TIMEOUT(replies.size(), 1, OpenTimeoutMs);
     QCOMPARE(replies.front()[0].toString(),

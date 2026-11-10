@@ -166,30 +166,31 @@ QString AnalysisService::send(const QString &operation,
 }
 
 void AnalysisService::readKept() {
-  if (keptState_ == KeptState::Unknown) {
-    keptState_ = KeptState::Asked;
-    const auto serial = serial_;
-    keptStateRequest_ = owner_.subscribe(
-        {QStringLiteral("kept_renders"), {}}, this,
-        [this, serial](const QJsonObject &response) {
-          if (serial != serial_)
-            return;
-          keptStateRequest_ = 0;
-          keptState_ =
-              response.value("payload").toObject().value("complete").toBool()
-                  ? KeptState::Whole
-                  : KeptState::Part;
-          if (!active_.isEmpty() && !ready_)
-            readKept();
-        });
-    return;
-  }
-  if (keptState_ == KeptState::Asked)
-    return;
   // Part of the renders leaves a job to go on with, whatever this read finds.
   if (keptState_ == KeptState::Part)
     requestSnapshot();
   askOwner();
+  // What the store holds says only whether a replica starts beside the owner's
+  // answer, so the owner, which answers one request at a time, answers the read
+  // first.
+  if (keptState_ != KeptState::Unknown)
+    return;
+  keptState_ = KeptState::Asked;
+  const auto serial = serial_;
+  keptStateRequest_ = owner_.subscribe(
+      {QStringLiteral("kept_renders"), {}}, this,
+      [this, serial](const QJsonObject &response) {
+        if (serial != serial_)
+          return;
+        keptStateRequest_ = 0;
+        keptState_ =
+            response.value("payload").toObject().value("complete").toBool()
+                ? KeptState::Whole
+                : KeptState::Part;
+        // The read that asked may have its answer already.
+        if (keptState_ == KeptState::Part)
+          startReplica();
+      });
 }
 
 void AnalysisService::askOwner() {
