@@ -6836,7 +6836,11 @@ tests count engine calls separately for each option set. `HighExprSimplify.*`
 checks exact masked status bits, signed extensions, shared expressions and
 effect preservation without the symbolic bridge. An 8,192-level worker-thread
 regression checks iterative operand traversal for both pure rewrites and
-ordered-memory ancestors that must remain intact. The x87 classification test
+ordered-memory ancestors that must remain intact.
+`HighControlFlowSemantics.MemoryBoundaryLeavesRetainTheirAncestors` checks
+boundary-bearing leaves, shared parents and indirect call targets, including
+fresh analysis after boundary metadata changes and root-order reversal.
+The x87 classification test
 executes ordinary HighC against native extended-precision encodings; ARM mode
 tests execute both ordinary and explicitly enhanced source.
 
