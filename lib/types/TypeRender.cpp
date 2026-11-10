@@ -280,7 +280,8 @@ constexpr const char *RustPrimitives[] = {
 };
 
 NameSpelling::NameSpelling(const TypeLibrary &Library, Language Lang,
-                           bool CppToo, llvm::StringSet<> *TakenNames)
+                           bool CppToo, llvm::StringSet<> *TakenNames,
+                           bool IncludeEnumerators)
     : Lang(Lang),
       Reserved(CppToo && Lang == Language::C ? Language::Cpp : Lang) {
   const std::vector<const LocalType *> All = Library.types();
@@ -298,12 +299,13 @@ NameSpelling::NameSpelling(const TypeLibrary &Library, Language Lang,
       Renamed.push_back({Type->Name, Spelled});
     Types[Type->Name] = std::move(Spelled);
   }
-  for (const LocalType *Type : All) {
-    if (Type->Enum)
-      enumeration(*Type->Enum, type(Type->Name), Taken);
-    if (Type->Record)
-      inlineEnums(*Type->Record, type(Type->Name), Taken);
-  }
+  if (IncludeEnumerators)
+    for (const LocalType *Type : All) {
+      if (Type->Enum)
+        enumeration(*Type->Enum, type(Type->Name), Taken);
+      if (Type->Record)
+        inlineEnums(*Type->Record, type(Type->Name), Taken);
+    }
   if (TakenNames)
     *TakenNames = std::move(Taken);
 }

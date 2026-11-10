@@ -1058,6 +1058,13 @@ TEST(TypeRender, ScalarSpellingsPreserveLaterNameCollisions) {
   TypeLibrary Library;
   Library.define(structure("Scope::Item", 4, {}));
   Library.define(structure("Scope__Item", 4, {}));
+  LocalType Enumeration;
+  Enumeration.Name = "Choices";
+  Enumeration.Kind = TypeKind::Enum;
+  auto Values = std::make_shared<EnumDef>();
+  Values->Values = {{"Scope__Item", 0, ""}, {"Scope__Item_2", 1, ""}};
+  Enumeration.Enum = std::move(Values);
+  Library.define(std::move(Enumeration));
   auto Function = std::make_shared<FunctionDef>();
   Function->Return = makeBuiltin(Builtin::Int);
   for (const char *Name : {"switch", "class", "9-value", ""})
@@ -1083,6 +1090,11 @@ TEST(TypeRender, ScalarSpellingsPreserveLaterNameCollisions) {
     EXPECT_EQ(NamedFirst.spell(*Second), Tag + "Scope__Item_2");
     EXPECT_EQ(ScalarFirst.spell(*Signature, "query"), Expected);
     EXPECT_EQ(NamedFirst.spell(*Signature, "query"), Expected);
+    // A definition still gives colliding enumerators their qualified names.
+    const std::string Definition =
+        renderType(Library, *Library.find("Choices"), Options);
+    EXPECT_TRUE(contains(Definition, "Choices_Scope__Item = 0"));
+    EXPECT_TRUE(contains(Definition, "Choices_Scope__Item_2 = 1"));
   }
 }
 

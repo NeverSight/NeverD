@@ -112,15 +112,17 @@ public:
   /// writer names, such as a long double exactly as large.
   /// \p Shared: the spelling of the names of \p Library that this writer
   /// would make itself, made once for many writers.
+  /// \p DeclarationsOnly: the writer only spells types, never definitions
+  /// or enumerator values, as CSpeller does.
   CWriter(const TypeLibrary &Library, const RenderOptions &Options,
           bool Embedded = false, bool Prelude = false,
-          const NameSpelling *Shared = nullptr)
+          const NameSpelling *Shared = nullptr, bool DeclarationsOnly = false)
       : Library(Library), Options(Options), Cpp(Options.Lang == Language::Cpp),
         Embedded(Embedded), Prelude(Prelude && !Embedded),
         System(!Embedded && Options.SystemLibrary
                    ? headerLibrary(*Options.SystemLibrary)
                    : nullptr),
-        Shared(Shared) {}
+        Shared(Shared), DeclarationsOnly(DeclarationsOnly) {}
   CWriter(const CWriter &) = delete;
   CWriter &operator=(const CWriter &) = delete;
 
@@ -168,7 +170,8 @@ public:
     if (Shared)
       return *Shared;
     if (!Own)
-      Own.emplace(Library, Options.Lang, /*CppToo=*/!Embedded);
+      Own.emplace(Library, Options.Lang, /*CppToo=*/!Embedded, nullptr,
+                  /*IncludeEnumerators=*/!DeclarationsOnly);
     return *Own;
   }
   /// In a decompiled unit, the type a typedef of a name the implementation
@@ -236,6 +239,7 @@ private:
   /// Scalar declarations and member names do not need the library-wide
   /// collision table. Build it only when a named type or enumerator is read.
   const NameSpelling *const Shared;
+  const bool DeclarationsOnly;
   mutable std::optional<NameSpelling> Own;
   bool DeclaredAhead = false;
   bool SeparateAsserts = false;
@@ -1151,7 +1155,9 @@ struct CSpeller::Impl {
   // Types spelled as decompiled code spells them, beside the definitions
   // its unit embeds.
   Impl(const TypeLibrary &Library, const RenderOptions &Options)
-      : Options(Options), Writer(Library, this->Options, /*Embedded=*/true) {}
+      : Options(Options),
+        Writer(Library, this->Options, /*Embedded=*/true, /*Prelude=*/false,
+               nullptr, /*DeclarationsOnly=*/true) {}
   RenderOptions Options;
   CWriter Writer;
 };

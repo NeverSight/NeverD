@@ -56,8 +56,11 @@ public:
   /// \p CppToo, for C: names C++ reads too, which step around C++'s
   /// keywords as well, as the C a C/C++ view shows must; the C a decompiled
   /// unit embeds keeps the names C allows, as its code spells them.
+  /// Type declarations can omit enumerators: type names are assigned first
+  /// and never depend on enumerator spellings. Definition writers keep them.
   NameSpelling(const TypeLibrary &Library, Language Lang, bool CppToo = false,
-               llvm::StringSet<> *TakenNames = nullptr);
+               llvm::StringSet<> *TakenNames = nullptr,
+               bool IncludeEnumerators = true);
 
   Language language() const { return Lang; }
   /// The spelling of the type named \p Name.
