@@ -122,6 +122,7 @@ exportX86LegacySource(const BinaryImage &Image, llvm::StringRef RequestJSON) {
  * Context borrows X86LegacySourceExecution with complete state and profiles.
  * Calls/returns follow selected targets. Events stop before handler execution.
  * Retain all state and RAM on every stop; resume a pending event before retry.
+ * A retained, consumed instruction attempt may resume at zero budget.
  * Budget is separate host storage, disjoint from state/RAM and callback writes.
  * This is runtime-backed C, not an inferred ordinary function ABI. */
 #include <stdint.h>
@@ -129,6 +130,7 @@ extern uint32_t neverd_x86_legacy_select_v1(void *, uint64_t *);
 extern uint32_t neverd_x86_legacy_step_v1(void *, uint64_t,
                                         const uint8_t *, uint32_t);
 extern uint32_t neverd_x86_legacy_attempted_v1(void *);
+extern uint32_t neverd_x86_legacy_pending_v1(void *);
 )C";
   llvm::json::Object Exits;
   const auto EmitExit = [&](llvm::StringRef Name, auto Value) {
@@ -154,7 +156,7 @@ extern uint32_t neverd_x86_legacy_attempted_v1(void *);
   OS << R"C(
 uint32_t neverd_x86_legacy_continue_v1(void *context, uint64_t *budget) {
     if (!context || !budget) return NEVERD_X86_LEGACY_INVALID_STATE;
-    while (*budget) {
+    while (*budget || neverd_x86_legacy_pending_v1(context)) {
         uint64_t key;
         uint32_t status = neverd_x86_legacy_select_v1(context, &key);
         if (status != NEVERD_X86_LEGACY_COMPLETED) return status;
@@ -199,6 +201,9 @@ uint32_t neverd_x86_legacy_continue_v1(void *context, uint64_t *budget) {
           {"driver", "neverd_x86_legacy_continue_v1"},
           {"selection", "uint32(CS.base + EIP) and CS.D"},
           {"instruction_budget", "attempts; one per REP element"},
+          {"instruction_resume", "only a retained consumed attempt resumes at "
+                                 "zero budget; owner errors preserve progress "
+                                 "without inventing an attempt receipt"},
           {"event_policy", "stop; retain delivery before resume"},
           {"halt_policy", "HLT commits once; wait without fetch; eligible "
                           "IRQ/NMI/debug trap wakes before IDT access"},

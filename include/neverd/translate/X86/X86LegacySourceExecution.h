@@ -54,6 +54,9 @@ public:
   /// Selection and waiting preserve the previous instruction receipt for
   /// inspection; neither starts an instruction or spends its budget.
   uint32_t select(uint64_t &Key);
+  /// A retained instruction whose attempt receipt was already published may
+  /// resume at zero budget. No accesses, validation or event progress here.
+  bool pendingAttemptConsumed() const;
   uint32_t step(uint64_t Key, llvm::ArrayRef<uint8_t> Bytes);
   uint32_t deliver(const X86LegacyEvent &Event);
   uint32_t resume();
@@ -79,6 +82,7 @@ extern "C" uint32_t neverd_x86_legacy_step_v1(void *Context, uint64_t Key,
                                               const uint8_t *Bytes,
                                               uint32_t Size);
 extern "C" uint32_t neverd_x86_legacy_attempted_v1(void *Context);
+extern "C" uint32_t neverd_x86_legacy_pending_v1(void *Context);
 
 } // namespace neverd::translate
 

@@ -61,6 +61,11 @@ uint32_t X86LegacySourceExecution::select(uint64_t &Key) {
   return uint32_t(X86LegacyExecutionStatus::Completed);
 }
 
+bool X86LegacySourceExecution::pendingAttemptConsumed() const {
+  return detail::legacyInstructionPending(State) &&
+         State.PendingInstructionAttempted;
+}
+
 uint32_t X86LegacySourceExecution::step(uint64_t Key,
                                         llvm::ArrayRef<uint8_t> Bytes) {
   Last = {};
@@ -102,6 +107,11 @@ extern "C" uint32_t neverd_x86_legacy_attempted_v1(void *Context) {
   return Context && static_cast<X86LegacySourceExecution *>(Context)
                         ->lastResult()
                         .InstructionAttempted;
+}
+
+extern "C" uint32_t neverd_x86_legacy_pending_v1(void *Context) {
+  return Context && static_cast<X86LegacySourceExecution *>(Context)
+                        ->pendingAttemptConsumed();
 }
 
 } // namespace neverd::translate

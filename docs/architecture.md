@@ -69,7 +69,12 @@ reads, writes and debug matches across host backing stops. Resumption uses
 already authenticated bytes and retained inputs, so self-modifying code and
 overlapping ENTER frames cannot cause replay. Architectural faults release this
 continuation before entering the existing event owner. New external events
-cannot interrupt a suspended host access. `ir/X86/X86StackFrameRules` shares
+cannot interrupt a suspended host access. The public instruction boundary also
+owns `PendingInstructionAttempted`, a host resource receipt retained alongside
+stack, MPX, transfer or instruction-owned task progress. A journal can survive
+an owner error before reporting an attempt; it does not itself authorize
+zero-budget resumption. The source bridge uses this same ownership predicate.
+Pending events and task event/fault owners never grant instruction budget. `ir/X86/X86StackFrameRules` shares
 ENTER nesting selection with the ordinary lifter; the paged owner additionally
 owns segment/page faults and the final stack permission probe.
 Protected scalar count and carry-chain instructions retain their exact prefixes

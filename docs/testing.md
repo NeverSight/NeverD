@@ -486,7 +486,15 @@ LowIR stack semantics and compares original and identity-patched ELF32/ELF64
 programs on the host CPU. `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` retains the three
 original/rewritten binaries, assembly and patch logs. The protected source suite
 also compiles stack round trips, partial-fault handlers and aliased backing
-continuations with Clang and NeverC at O0/O2. Its i386 object checks remain
+continuations with Clang and NeverC at O0/O2. The source budget cases pause
+stack, MPX, task and VM86 return owners after exactly one attempt, retry at zero,
+repair backing, rebuild the host context and complete without another charge.
+Separate full-limit binding-error cases retain uncharged journals, including an
+already committed PUSHAD store; a positive budget must publish their first
+attempt without replaying that store. The combined error/backing case then
+finishes at zero. Refused rebinds preserve an earlier charge, while event-owned
+tasks, return-triggered #DB delivery and stale receipts cannot authorize a new
+instruction. Its i386 object checks remain
 compile-only; they do not qualify a 32-bit host runtime library.
 
 `LegacyShifts/*` compares protected SHL/SAL/SHR/SAR and ROL/ROR/RCL/RCR with

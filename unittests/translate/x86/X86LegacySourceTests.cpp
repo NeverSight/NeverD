@@ -136,7 +136,8 @@ protected:
   using Select = decltype(&neverd_x86_legacy_select_v1);
   using Step = decltype(&neverd_x86_legacy_step_v1);
   using Attempted = decltype(&neverd_x86_legacy_attempted_v1);
-  using Bind = void (*)(Select, Step, Attempted);
+  using Pending = decltype(&neverd_x86_legacy_pending_v1);
+  using Bind = void (*)(Select, Step, Attempted, Pending);
   std::string Compiler;
   unsigned Compilation = 0;
 
@@ -196,10 +197,12 @@ protected:
 static uint32_t (*select_bridge)(void *, uint64_t *);
 static uint32_t (*step_bridge)(void *, uint64_t, const uint8_t *, uint32_t);
 static uint32_t (*attempted_bridge)(void *);
+static uint32_t (*pending_bridge)(void *);
 void bind_legacy(uint32_t (*select)(void *, uint64_t *),
     uint32_t (*step)(void *, uint64_t, const uint8_t *, uint32_t),
-    uint32_t (*attempted)(void *)) {
+    uint32_t (*attempted)(void *), uint32_t (*pending)(void *)) {
     select_bridge = select; step_bridge = step; attempted_bridge = attempted;
+    pending_bridge = pending;
 }
 uint32_t neverd_x86_legacy_select_v1(void *context, uint64_t *key) {
     return select_bridge(context, key);
@@ -210,6 +213,9 @@ uint32_t neverd_x86_legacy_step_v1(void *context, uint64_t key,
 }
 uint32_t neverd_x86_legacy_attempted_v1(void *context) {
     return attempted_bridge(context);
+}
+uint32_t neverd_x86_legacy_pending_v1(void *context) {
+    return pending_bridge(context);
 }
 )C";
     File.close();
@@ -238,7 +244,7 @@ uint32_t neverd_x86_legacy_attempted_v1(void *context) {
     auto Binder = reinterpret_cast<Bind>(DL.getAddressOfSymbol("bind_legacy"));
     ASSERT_NE(Binder, nullptr);
     Binder(&neverd_x86_legacy_select_v1, &neverd_x86_legacy_step_v1,
-           &neverd_x86_legacy_attempted_v1);
+           &neverd_x86_legacy_attempted_v1, &neverd_x86_legacy_pending_v1);
     Run = reinterpret_cast<Driver>(
         DL.getAddressOfSymbol("neverd_x86_legacy_continue_v1"));
     ASSERT_NE(Run, nullptr);
@@ -279,6 +285,8 @@ TEST_P(X86LegacySourceTest, ModesAliasesAndBudgetsUseLiveCaches) {
       EXPECT_EQ(Run(&Context, &Budget), 257u);
       EXPECT_EQ(Budget, 2u);
       S.EFlags = 0;
+      // A stale resource receipt without an instruction journal grants nothing.
+      S.PendingInstructionAttempted = true;
       Budget = 0;
       EXPECT_EQ(Run(&Context, &Budget), 258u);
       Budget = 1;
@@ -288,6 +296,7 @@ TEST_P(X86LegacySourceTest, ModesAliasesAndBudgetsUseLiveCaches) {
     }
   uint64_t Budget = 1;
   EXPECT_EQ(Run(nullptr, &Budget), 256u);
+  EXPECT_EQ(neverd_x86_legacy_pending_v1(nullptr), 0u);
   X86LegacySourceExecution Context(S, *M, O);
   EXPECT_EQ(Run(&Context, nullptr), 256u);
 }

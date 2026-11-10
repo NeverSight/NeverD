@@ -341,14 +341,22 @@ REP consumes one per completed element, including its zero-count completion.
 Faulting attempts consume a unit even when fault entry subsequently stops.
 Changed code, pre-attempt fetch backing stops and refused steps consume none.
 An ordered stack instruction consumes one unit when first attempted, including
-when an operand subsequently stops on host backing. Resuming `PendingStack`
-does not consume another unit; an architectural fault followed by handler
-retry is a new attempt. Ordinary IRET/RETF and VM86 far transfers similarly retain
+when an operand subsequently stops on host backing. Resuming an already
+reported `PendingStack` attempt does not consume another unit; an architectural
+fault followed by handler retry is a new attempt. The resource receipt
+`PendingInstructionAttempted` stays with the instruction journal across host
+context reconstruction. Owner errors can retain real memory progress before
+reporting an attempt. Such a journal requires positive budget on resumption,
+then reports exactly one attempt; completed accesses are not replayed. Ordinary IRET/RETF and VM86 far transfers similarly retain
 their original attempt in `PendingTransfer`, including completed frame and
 descriptor accesses. A subsequent debug-event backing stop belongs to the event
 continuation and does not repeat the completed return.
-Zero budget returns 258
-without selection or guest accesses; a null context/budget returns 256.
+Zero budget permits only an instruction continuation whose attempt was already
+reported and charged. Completion stops before selecting another instruction;
+missing backing or refused bindings preserve the retained charge. Without that
+continuation, zero budget returns 258 without selection or guest accesses.
+Pending event delivery, including a task-gate event or a completed return's
+#DB, does not grant instruction budget. A null context/budget returns 256.
 
 Every delivered event stops before executing its handler. A caller can then
 invoke the dispatcher to execute a selected original handler, including a PTE
@@ -372,9 +380,10 @@ events and inhibition remain owned by the existing event implementation.
 No asynchronous event producer or polling interval is inferred.
 
 This provides source selection/continuation for selected, admitted protected
-16/32-bit instructions within complete image extents. It does not supply
-unimplemented instruction banks, ordinary i386 function C, IA-32e compatibility
-mode, task/real/VM86 execution, software SMM/SGX, or native device qualification.
+16/32-bit instructions within complete image extents, including the explicit
+task and VM86 bindings documented below. Unimplemented instruction banks,
+ordinary i386 function C, IA-32e compatibility dispatch, real-mode execution,
+software SMM/SGX and native device qualification remain separate work.
 Global LLVM release remains gated on those separately documented contracts.
 
 The [November 7 source qualification](evidence/x86-legacy-source-2026-11-07.json)
@@ -1228,9 +1237,10 @@ published before IDT entry and survive failed delivery.
 retains fetched bytes, original inputs, an already-read BDE and data-breakpoint
 matches. Repair only backing while retaining CPU/profile state and RAM, then
 retry the same instruction. Re-reading a BDE is incorrect when the BTE page
-walk has changed its aliased PTE storage. A resumed step consumes no second
-instruction-attempt budget; new external events cannot interrupt this host
-pause. Architectural faults clear the continuation before event delivery.
+walk has changed its aliased PTE storage. An already reported attempt resumes
+without a second instruction-budget charge. An owner error can instead retain
+an uncharged journal, governed by the shared source-resumption rule above. New
+external events cannot interrupt this host pause. Architectural faults clear the continuation before event delivery.
 
 Near CALL/RET/JMP and both short/near Jcc use the original byte-owned BNDINIT
 rule after successful completion, including an untaken Jcc. F2 preserves the

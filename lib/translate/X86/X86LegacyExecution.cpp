@@ -164,11 +164,16 @@ llvm::Error detail::admitLegacyExecution(const X86LegacyExecutionState &S,
   return M.bindControls(Controls);
 }
 
-llvm::Expected<X86LegacyExecutionResult>
-executeX86LegacyInstruction(X86LegacyExecutionState &State,
-                            X86PagedMemory &Memory,
-                            llvm::ArrayRef<uint8_t> Instruction,
-                            const X86LegacyExecutionOptions &Options) {
+bool detail::legacyInstructionPending(const X86LegacyExecutionState &State) {
+  return !State.PendingEvent &&
+         (State.PendingStack || State.PendingMpx || State.PendingTransfer ||
+          legacyTaskInstructionPending(State));
+}
+
+static llvm::Expected<X86LegacyExecutionResult>
+executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
+                         llvm::ArrayRef<uint8_t> Instruction,
+                         const X86LegacyExecutionOptions &Options) {
   if (detail::legacyTaskModeUnavailable(State) &&
       Options.Virtual8086 != X86LegacyVM86Profile::IntelVME) {
     if (auto Error = detail::validateLegacyTaskState(State, Memory))
@@ -200,8 +205,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     return std::move(Error);
   const bool ResumingStack = State.PendingStack.has_value();
   const bool ResumingTask = detail::legacyTaskInstructionPending(State);
-  const bool Resuming = ResumingStack || State.PendingMpx.has_value() ||
-                        bool(State.PendingTransfer) || ResumingTask;
+  const bool Resuming = detail::legacyInstructionPending(State);
+  const bool Attempted = !(Resuming && State.PendingInstructionAttempted);
   const bool Code32 = ResumingTask
                           ? bool(detail::legacyTaskInstructionKey(State) >> 32)
                           : bool(State.Core.Segments[1].Attributes & 0x4000);
@@ -409,7 +414,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       return Delivered.takeError();
     Delivered->DeviceTransferCompleted = R.DeviceTransferCompleted;
     Delivered->PortInputBytesWritten = R.PortInputBytesWritten;
-    Delivered->InstructionAttempted = !Resuming;
+    Delivered->InstructionAttempted = Attempted;
     Delivered->InstructionCompleted =
         Completed && (Event.Kind == X86LegacyEventKind::Trap ||
                       Delivered->SoftwareCompleted);
@@ -441,7 +446,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   const auto FinishTask = [&](const detail::X86LegacyTaskResult &Got)
       -> llvm::Expected<X86LegacyExecutionResult> {
     Accept(Got);
-    R.InstructionAttempted = !Resuming;
+    R.InstructionAttempted = Attempted;
     if (Got.ModeUnavailable) {
       detail::retainLegacyTaskWatchpoints(State, Observation.Matches);
       R.Status = X86LegacyExecutionStatus::ModeUnavailable;
@@ -534,7 +539,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     detail::retainLegacyTransferWatchpoints(State, Observation.Matches);
     if (!Got)
       return Got.takeError();
-    R.InstructionAttempted = !Resuming;
+    R.InstructionAttempted = Attempted;
     if (Accept(*Got)) {
       State = Returned;
       State.SSBlocked = State.STIBlocked = false;
@@ -748,7 +753,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       R.Exception = X86MemoryException{6, 0, {}};
     }
   }
-  R.InstructionAttempted = !Resuming;
+  R.InstructionAttempted = Attempted;
   if (R.Exception)
     return Enter({State.EIP, R.Exception->ErrorCode,
                   uint32_t(R.Exception->CR2.value_or(0)), R.Exception->Vector,
@@ -800,6 +805,23 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   if (Step || Data)
     return EnterDebug(Step, !RepeatContinue, Data);
   return R;
+}
+
+llvm::Expected<X86LegacyExecutionResult>
+executeX86LegacyInstruction(X86LegacyExecutionState &State,
+                            X86PagedMemory &Memory,
+                            llvm::ArrayRef<uint8_t> Instruction,
+                            const X86LegacyExecutionOptions &Options) {
+  const bool Consumed = detail::legacyInstructionPending(State) &&
+                        State.PendingInstructionAttempted;
+  auto Result = executeLegacyInstruction(State, Memory, Instruction, Options);
+  // Owner Error may retain real progress without reporting a new attempt.
+  // Entry refusal preserves an already consumed receipt; completion or event
+  // ownership retires it. It must not be derived from the source lastResult.
+  State.PendingInstructionAttempted =
+      detail::legacyInstructionPending(State) &&
+      (Consumed || (Result && Result->InstructionAttempted));
+  return Result;
 }
 
 } // namespace neverd::translate
