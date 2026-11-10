@@ -19,6 +19,7 @@ target_compile_definitions(NeverDX64PagedExecutionTests PRIVATE
 
 add_neverd_unittest(NeverDX86PagingTests
   x86/X86PagingTests.cpp
+  x86/X86CompatibilityPagingTests.cpp
   x86/X86LegacySegmentTests.cpp
   x86/X86LegacySegmentExecutionTests.cpp
   x86/X86LegacyExecutionTests.cpp
