@@ -415,6 +415,59 @@ TEST(MIPSDSPPipeline, ExplicitImageArgumentDeterminesTheLLVMSourceProfile) {
   }
 }
 
+TEST(MIPSDSPPipeline, StandaloneStateHelpersKeepCombinedCompilerConstraints) {
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL})
+    for (bool LLVM : {false, true}) {
+      mips_test::ELFBytes File(Target);
+      File.abiFlags();
+      File.put(0xec, 1, 4);
+      const uint32_t Words[] = {0x7c850010, 0x03e00008, 0x24020007};
+      for (unsigned I = 0; I != std::size(Words); ++I)
+        File.put(0x100 + I * 4, Words[I], 4);
+      ELFLoader Loader;
+      auto Image = Loader.loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      auto Symbol = Symbol::makeFunc(Image->Entry, sizeof(Words));
+      Symbol.Name = "dsp_standalone_state";
+      Image->Symbols.push_back(std::move(Symbol));
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.OnlyFunctionEntries = {Image->Entry};
+      Options.LiftMode = LLVM;
+      Options.EmitDumpOutput = false;
+      auto Result = Pipeline().run(*Image, Context, Options);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      CEmitterOptions Emit;
+      Emit.TheArch = Target;
+      Emit.Format = BinaryFormat::ELF;
+      std::string Text;
+      llvm::raw_string_ostream Stream(Text);
+      if (LLVM)
+        ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Stream, Emit));
+      else
+        ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Stream, Emit));
+      if (!LLVM) {
+        const std::string Attribute =
+            std::string("static inline ") + (Target == Arch::MIPS32
+                                                 ? mips::DSPNoMSACAttribute
+                                                 : mips::DSPSourceCAttribute);
+        EXPECT_NE(Text.find(Attribute + "uint32_t"), std::string::npos) << Text;
+        EXPECT_NE(Text.find(Attribute + "void"), std::string::npos) << Text;
+      }
+      if (const char *Directory =
+              std::getenv("NEVERD_MIPS_DSP_SOURCE_OUTPUT")) {
+        llvm::SmallString<256> Path(Directory);
+        llvm::sys::path::append(
+            Path, std::string(archLittleEndian(Target) ? "mipsel" : "mips") +
+                      (LLVM ? "-llvmc-state.c" : "-highc-state.c"));
+        std::error_code Error;
+        llvm::raw_fd_ostream Output(Path, Error);
+        ASSERT_FALSE(Error);
+        Output << Text;
+      }
+    }
+}
+
 TEST(MIPSDSPPipeline, StandaloneWideHelpersHaveTheSameCompilerContract) {
   EXPECT_FALSE(mips::sourcePreservesDSPControl(Arch::X64, nullptr));
   EXPECT_FALSE(mips::sourcePreservesDSPControl(Arch::MIPS64, nullptr));

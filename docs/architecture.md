@@ -15964,6 +15964,14 @@ storage and low F views without assigning a floating ABI to ordinary integers.
 and multi-block source before optimization. It does not narrow LowIR register
 coverage or invent initial machine state.
 
+`MIPSSourceCompiler` composes source-only compiler constraints across the LLVM
+emitter and both C backends. Big-endian MSA scalar source disables automatic
+MSA selection after a reproduced Clang constant-splat bitcast miscompile;
+image-less big-endian MIPS32 also retains DSPControl preservation. One complete
+target attribute covers declarations, source shards and helpers, since separate
+Clang target attributes do not compose. Instruction decoding and LowIR vector
+semantics remain owned by the lifter and are not changed by this compiler rule.
+
 `MedMIPSSourceAccumulators` checks HI/LO inputs immediately after SSA and before
 propagation or return inference. It follows read PHIs and the shared call-clobber
 identities, refusing entry or call-clobbered state without a C ABI carrier.

@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import io
 import os
+import re
 from itertools import product
 from pathlib import Path
 import subprocess
@@ -306,17 +307,45 @@ def run(args, artifacts):
     pipeline_tests = args.neverd.with_name("NeverDMIPSPipelineTests")
     log = artifacts.work / "standalone-export.log"
     env = dict(os.environ, NEVERD_MIPS_DSP_SOURCE_OUTPUT=str(artifacts.work.resolve()))
-    with artifacts.process([pipeline_tests, "--gtest_filter=MIPSDSPPipeline.PureStandaloneSource*:MIPSDSPPipeline.StandaloneWideHelpers*"],
+    with artifacts.process([pipeline_tests, "--gtest_filter=MIPSDSPPipeline.PureStandaloneSource*:MIPSDSPPipeline.StandaloneWideHelpers*:MIPSDSPPipeline.StandaloneStateHelpers*"],
                            log, env=env) as (process, _):
         process.wait(timeout=60)
     if process.returncode:
         raise RuntimeError(log.read_text())
     artifacts.discard(log)
     report["standalone"] = []
-    for little, backend, kind in product((False, True), ("highc", "llvmc"), ("pure", "wide")):
+    report["compiler_constraints"] = []
+    for little, backend, kind in product((False, True), ("highc", "llvmc"), ("pure", "wide", "state")):
         profile = "mipsel" if little else "mips"
         source = artifacts.work / f"{profile}-{backend}-{kind}.c"
-        function = "dsp_pure_round" if kind == "pure" else "dsp_standalone_wide"
+        function = {"pure": "dsp_pure_round", "wide": "dsp_standalone_wide", "state": "dsp_standalone_state"}[kind]
+        # External feature flags must not replace either source constraint.
+        # Inspect the actual compiler attributes on every retained definition;
+        # this is a compiler-contract probe, not a DSP+MSA guest profile claim.
+        probe, probe_log = source.with_suffix(".ll"), source.with_suffix(".log")
+        command([args.clang, f"--target={profile}-linux-gnu", "-march=mips32r5",
+                 "-mabi=32", "-mdsp", "-mmsa", "-mfp64", "-O2", "-fno-inline",
+                 "-ffreestanding", "-nostdinc", "-isystem", resource + "/include",
+                 "-I", headers, "-S", "-emit-llvm", source, "-o", probe], probe_log)
+        text = probe.read_text()
+        attributes = dict(re.findall(r'^attributes #(\d+) = \{(.*)\}$', text, re.M))
+        definitions = re.findall(r'^define .* #(\d+) \{', text, re.M)
+        if not definitions:
+            raise RuntimeError("compiler constraint probe lost its definitions")
+        required = {"-dsp", "-dspr2"} | ({"-msa"} if not little else set())
+        for identifier in definitions:
+            match = re.search(r'"target-features"="([^"]*)"', attributes[identifier])
+            features = set(match.group(1).split(",")) if match else set()
+            if not required <= features or any("+" + f[1:] in features for f in required):
+                artifacts.keep_source(source)
+                artifacts.keep_source(probe)
+                raise RuntimeError(f"compiler dropped source constraints: {profile}/{backend}/{kind}: {features}")
+        report["compiler_constraints"].append({"profile": profile, "backend": backend,
+                                               "kind": kind, "definitions": len(definitions),
+                                               "required_features": sorted(required),
+                                               "llvm_sha256": digest(probe)})
+        artifacts.write("results.json", report)
+        artifacts.discard(probe, probe_log)
         for optimization in ("-O0", "-O2"):
             obj, rebuilt, log = (source.with_suffix(ext) for ext in (".o", ".elf", ".log"))
             flags = [f"--target={profile}-linux-gnu", "-march=mips32r2", "-mabi=32", "-mdsp",
@@ -330,6 +359,7 @@ def run(args, artifacts):
                 observations = []
                 for initial, inputs in product(INITIAL_STATES, INPUTS):
                     wanted = (expected("dsp_shrav_rw", initial, inputs) if kind == "pure" else
+                              expected("dsp_zero", initial, inputs) if kind == "state" else
                               ((((inputs[0] << 32) | inputs[1]) + 0xffffffff) & ((1 << 64) - 1), initial))
                     actual = observe(rebuilt, little, function, initial, inputs)
                     if actual != wanted:

@@ -908,7 +908,7 @@ void HighCWriter::writeMemoryHelpers() {
   for (const auto &[Key, Name] : SaturatingLaneHelpers)
     writeX86SaturatingLaneHelper(OS, Name, Key.first, Key.second);
   writeScalarLSEFallbacks(OS, ScalarLSEBuiltins);
-  writeMIPSScalarHelpers(OS, Opts.TheArch, MIPSScalarHelpers);
+  writeMIPSScalarHelpers(OS, Opts.TheArch, MIPSScalarHelpers, Opts.Image);
   // The accesses' types or assumptions are written only when an access can
   // name a type; otherwise every access keeps its portable byte copy.
   UnalignedTypesWritten = Opts.UseUnalignedPointers && NeedsUnalignedTypes;

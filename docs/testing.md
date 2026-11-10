@@ -23652,6 +23652,12 @@ lane/flag results, aliases, zero targets, rounding thresholds and HI/LO checks.
 MSA I5 tests exercise all 32 immediates in all four widths, aliases, equality
 hits, adjacent values and extrema; source fixtures include signed negative and
 unsigned endpoint immediates in HighC/LLVM-derived C at O0/O2 in both byte orders.
+The `CLEI_U.D 31` source fixture catches Clang 22's big-endian MSA constant-splat
+miscompile at O2. Source retains scalar optimization with explicit `no-msa`
+target attributes. Pipeline checks cover image/standalone profiles and the
+combined DSP/MSA constraint; the source runners execute the exported wide
+helpers too. Disabling vectorization only in the test command is not the
+qualification contract: the generated source itself carries the constraint.
 
 ### MIPS decode/lift and firmware performance
 
