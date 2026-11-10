@@ -438,3 +438,45 @@ keep explicit refusal paths. Native CPTA-on additionally requires actual CPA/CPA
 hardware and a controlled enabling/readback contract. The system probe records
 both feature sysctls independently of PAC execution; FVP results do not qualify
 an Apple native execution environment.
+
+## Lifted source entry reconstruction
+
+`MedLLVMEmitter::setReconstructAArch64SourceEntries(true)` projects a complete
+fixed Darwin C declaration onto each emitted body's recovered carriers. The
+shared ABI owner must reproduce exactly the declared register and stack layout;
+an arbitrary observed-register list cannot become a native C signature. Missing
+declarations, incompatible result banks, variadic entries and uncovered input
+bytes fail before the entry is installed. Narrow register values retain their
+declared extension; unobserved upper bytes require the existing MedIR demand
+proof. Incoming stack slots require complete byte coverage.
+Unused synthetic parameters can receive zero only when they have no parameter
+attributes; a contract such as `noundef` still requires the declared carrier.
+Non-scalar physical result fields fail before any entry is changed.
+
+The public entry groups i128 values, ordinary records, HFA and HVA values and
+binds incoming stack pieces by byte offset. An indirect input retains its
+original pointer, and an indirect result uses an explicit `sret` parameter in
+x8 without inventing `noalias` or making a second result object. The private
+body keeps its physical parameter interface. Direct physical calls, recursion
+and invokes retain that body; calls marked by the canonical source-call producer
+and stored function pointers use the public entry. Interior block addresses
+remain in the body, and pointer-authentication constants retain their signing
+schema while changing the entry target. Function signing and unwind attributes
+remain with the body and its generated entry.
+
+The carrier rules follow [Apple's documented ARM64 ABI](https://developer.apple.com/documentation/xcode/writing-arm64-code-for-apple-platforms),
+including odd-register i128 pairs and packed stack arguments. The owning
+`AArch64EntryABI` tests include independent Clang O0/O2 callers and a decoded
+machine-code-to-MedIR-to-entry case. These tests distinguish ordinary native
+Darwin ABI execution from native arm64e signing and CPTA execution.
+The HVA case also executes a MedIR-emitted three-vector result. Records return
+reordered members, so an empty identity stub cannot satisfy the comparison.
+Codegen's narrow-return widening preserves an explicit `signext` contract;
+zero-extending every narrow result had changed signed byte returns.
+
+Entry reconstruction does **not** remove `neverd.arm64e-analysis`. A declaration
+does not prove the original image's prototype, physical-frame observations,
+exception coverage, address ownership or publication closure. Arbitrary lifted
+images still need those proofs, including variadic and non-C entries. The
+previous canonical-IR installation qualification and pinned r6 package remain
+unchanged; source-fork-only producer features still require the source build.

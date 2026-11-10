@@ -21592,6 +21592,22 @@ physical byte lanes, exact occurrence identity, ambiguity and exact/exhausted
 work boundaries. `NeverDWorkerCallSiteTypes` also executes both C routes when
 the original x64 caller computes its variadic vector count by subtraction.
 
+`AArch64EntryABI.*` in `NeverDArm64eAnalysisTests` checks declared native entry
+reconstruction, physical parameter reordering, signed/unsigned 8/16-bit values,
+scalar floating-point and pointers, native SIMD64/SIMD128 and vector spills,
+odd-register and stack i128, ordinary records, HFA, 64/128-bit HVA, stack spills
+and indirect values with x8 result storage. Independent Clang O0/O2 callers
+compare values and C++ exception propagation through the generated entry.
+Separate tests preserve authenticated pointer schemas, interior labels and
+invoke successors, distinguish canonical and physical direct calls, and reject
+incomplete declarations or carriers without mutation. Unused attributed inputs
+still require a source value, and aggregate physical result fields fail before
+mutation. A decoded AArch64 body
+exercises the emitter integration and retains the arm64e publication refusal.
+These are ordinary native Darwin ABI tests, not CPTA-on or a qualification of
+arbitrary lifted-image publication. Their temporary objects and executables
+are removed after execution.
+
 `AArch64WritebackMemory.*` in `NeverDArm64eAnalysisTests` covers GPR single
 pre/post-index operations with 130 independent LLVM MC 22.1.6 samples: 13
 load/store classes, both modes and five signed imm9 boundary values. Its

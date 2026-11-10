@@ -1,0 +1,34 @@
+//===- LLVMEntryABI.def - Darwin entry ABI diagnostics --------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// LLVM_ENTRY_ABI_TEXT defines diagnostics; LLVM_ENTRY_ABI_CALL defines the
+/// call producer's canonical source-ABI marker, without publication authority.
+//===----------------------------------------------------------------------===//
+
+#ifndef LLVM_ENTRY_ABI_TEXT
+#define LLVM_ENTRY_ABI_TEXT(Name, Text)
+#endif
+#ifndef LLVM_ENTRY_ABI_CALL
+#define LLVM_ENTRY_ABI_CALL(Name, Text)
+#endif
+
+LLVM_ENTRY_ABI_CALL(kAArch64SourceEntryCall, "neverd.aarch64.source-entry-call")
+
+LLVM_ENTRY_ABI_TEXT(kInvalidSignature,
+                    "Darwin AArch64 entry requires a complete fixed C ABI")
+LLVM_ENTRY_ABI_TEXT(kMissingCarrier,
+                    "Darwin AArch64 entry has an uncovered physical argument")
+LLVM_ENTRY_ABI_TEXT(kMissingResult,
+                    "Darwin AArch64 entry has an incompatible result carrier")
+LLVM_ENTRY_ABI_TEXT(kWrongSource,
+                    "Darwin AArch64 entry does not match its lifted source")
+LLVM_ENTRY_ABI_TEXT(kUnsupportedUse,
+                    "Darwin AArch64 entry has an incompatible direct call")
+LLVM_ENTRY_ABI_TEXT(kBodySuffix, ".neverd.carriers")
+LLVM_ENTRY_ABI_TEXT(kEntryBlock, "abi.entry")
+
+#undef LLVM_ENTRY_ABI_TEXT
+#undef LLVM_ENTRY_ABI_CALL
