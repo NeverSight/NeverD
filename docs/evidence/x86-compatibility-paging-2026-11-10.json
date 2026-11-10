@@ -1135,5 +1135,37 @@
     "KVM original instruction comparisons are separate from generated host-x64 C execution.",
     "NeverC stays at its 64-bit-only source-target cleanup ac2335646fb80d749066029ba5ccfdfdc6bbec80.",
     "No LLVM release, production SDK pin or LLVM gitlink change."
-  ]
+  ],
+  "gui_integration": {
+    "commit": "be2d25a17b7b03ced78e88361840884f6dea6446",
+    "integrated_dev": "c1b6780a309076034c52e706dc1133ed2eaffac5",
+    "unchanged_subtrees": [
+      "include",
+      "lib",
+      "unittests",
+      "scripts",
+      "CMakeLists.txt"
+    ],
+    "docs_check": {
+      "source_head": "be2d25a17b7b03ced78e88361840884f6dea6446",
+      "source_tree": "5e9c87bec4b07d727fff9901123f05d170185fe6",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "python3",
+        "scripts/check_docs_i18n.py"
+      ],
+      "environment": {},
+      "binaries": {},
+      "exit_code": 0,
+      "seconds": 3.4032421819865704,
+      "log": "final-docs.log",
+      "log_sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14"
+    }
+  },
+  "cleanup": {
+    "index": "/mnt/data/neverd-ia32e-mode-20261110/duplicate-compatibility-return-products-index.json",
+    "index_sha256": "1b53c053f5bcfce935521d424be5a5b4d440b9256f7b552b6dc68229f5ab198f",
+    "verified_files": 260
+  }
 }
