@@ -1078,6 +1078,21 @@ TEST(X86RepState, ImageCopiesRetainEveryAccessedByte) {
             EXPECT_THROW(
                 HighCEmitter().emit(Result.HighFuncs, RefusedOut, COptions),
                 std::invalid_argument);
+            // A HighC unit that names what it leaves out omits the function,
+            // with the reason, instead of failing.
+            std::vector<CEmitterOptions::RefusedDefinition> Definitions;
+            CEmitterOptions UnitOptions = COptions;
+            UnitOptions.RefusedDefinitions = &Definitions;
+            std::string Unit;
+            llvm::raw_string_ostream UnitOut(Unit);
+            ASSERT_NO_THROW(
+                HighCEmitter().emit(Result.HighFuncs, UnitOut, UnitOptions));
+            ASSERT_EQ(Definitions.size(), 1u);
+            EXPECT_EQ(Definitions.front().Name, "copy_image_words");
+            EXPECT_NE(
+                Definitions.front().Reason.find("crosses its mapped storage"),
+                std::string::npos)
+                << Definitions.front().Reason;
             // LLVM refuses the body, which a unit leaves out with the reason.
             MedLLVMEmitter ShortEmitter;
             std::unique_ptr<llvm::Module> Short;

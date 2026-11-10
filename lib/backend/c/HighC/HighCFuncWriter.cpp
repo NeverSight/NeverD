@@ -1160,6 +1160,11 @@ void HighCWriter::writeFunction(const HighFunc &Func) {
     throw std::invalid_argument("escaped image address 0x" +
                                 llvm::utohexstr(Unbacked->second) +
                                 " has no materializable storage extent");
+  if (const auto Unmapped = UnmappedRepeatedAccesses.find(&Func);
+      Unmapped != UnmappedRepeatedAccesses.end())
+    throw std::invalid_argument("repeated image access at 0x" +
+                                llvm::utohexstr(Unmapped->second) +
+                                " crosses its mapped storage");
   const auto SourceBody = sourceBodyOrigin(Func);
   llvm::SaveAndRestore<CSourceMap *> SourceMapScope(
       Opts.SourceMap, SourceBody ? nullptr : Opts.SourceMap);

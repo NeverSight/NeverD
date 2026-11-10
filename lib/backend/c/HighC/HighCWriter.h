@@ -1688,6 +1688,9 @@ public:
   /// Functions keeping an image address as a value that no storage can back,
   /// with the first such address. Each refuses when it renders.
   std::map<const HighFunc *, va_t> UnbackedEscapes;
+  /// Functions with a repeated image access past its mapped storage, with
+  /// the first such address. Each refuses when it renders.
+  std::map<const HighFunc *, va_t> UnmappedRepeatedAccesses;
   /// The access width that names the unnamed object \p Obj at \p Addr, as
   /// the listing names it: the width every access the image's code states
   /// there shares (CEmitterOptions::AccessWidths), else, without those, the

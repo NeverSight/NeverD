@@ -2748,6 +2748,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
 void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
   ImageObjects.clear();
   UnbackedEscapes.clear();
+  UnmappedRepeatedAccesses.clear();
   ImageBackings.clear();
   ReachesImageBase = false;
   ReachedObjectExterns.clear();
@@ -3888,9 +3889,15 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
           const auto Span =
               x86RepAccessSpan(*Address, Count->ConstVal, *Control, Backward,
                                Segment->VA, Segment->Size);
-          if (!Span)
-            throw std::invalid_argument(
-                "repeated image access crosses its mapped storage");
+          // No object can back it: its function refuses when it renders,
+          // where a unit that names what it leaves out omits it.
+          if (!Span) {
+            if (!Reading)
+              throw std::invalid_argument(
+                  "repeated image access crosses its mapped storage");
+            UnmappedRepeatedAccesses.try_emplace(Reading, *Address);
+            continue;
+          }
           const bool Written = !Copy || I == 1;
           const auto ElementType =
               NdType::makeInt(Control->ElementBytes, false);
