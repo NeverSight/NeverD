@@ -1054,6 +1054,48 @@ TEST(TypeRender, KeywordNamespacesKeepTheirDistinctSpellings) {
   }
 }
 
+TEST(TypeRender, UnchangedNamesReserveTheOrdinaryNamespace) {
+  TypeLibrary Library;
+  for (const char *Name : {"UnchangedLongIdentifierBeyondInlineStringStorage",
+                           "Scope_Item", "Scope.Item", "Scope_Item_2"})
+    Library.define(structure(Name, 4, {}));
+  LocalType Enumeration;
+  Enumeration.Name = "Choices";
+  Enumeration.Kind = TypeKind::Enum;
+  auto Values = std::make_shared<EnumDef>();
+  Values->Values = {
+      {"Scope_Item", 0, ""}, {"Scope_Item_2", 1, ""}, {"OrdinaryValue", 2, ""}};
+  Enumeration.Enum = std::move(Values);
+  Library.define(std::move(Enumeration));
+  const std::vector<std::pair<std::string, std::string>> Expected = {
+      {"Scope.Item", "Scope_Item_2"},
+      {"Scope_Item_2", "Scope_Item_2_2"},
+      {"Choices::Scope_Item", "Choices_Scope_Item"},
+      {"Choices::Scope_Item_2", "Choices_Scope_Item_2"}};
+  for (auto Lang : {Language::C, Language::Cpp, Language::Rust, Language::Go,
+                    Language::Python, Language::JavaScript, Language::Lua}) {
+    SCOPED_TRACE(languageId(Lang).str());
+    EXPECT_EQ(renamedNames(Library, Lang), Expected);
+  }
+  for (auto Lang : {Language::C, Language::Cpp}) {
+    TypeSpeller Speller(Library, in(Lang));
+    const std::string Tag = Lang == Language::C ? "struct " : "";
+    // Read renamed and unchanged types in reverse library order.
+    EXPECT_EQ(Speller.spell(*makeNamed("Scope_Item_2", TypeKind::Struct)),
+              Tag + "Scope_Item_2_2");
+    EXPECT_EQ(Speller.spell(*makeNamed("Scope.Item", TypeKind::Struct)),
+              Tag + "Scope_Item_2");
+    EXPECT_EQ(Speller.spell(*makeNamed("Scope_Item", TypeKind::Struct)),
+              Tag + "Scope_Item");
+    EXPECT_EQ(Speller.spell(
+                  *makeNamed("UnchangedLongIdentifierBeyondInlineStringStorage",
+                             TypeKind::Struct)),
+              Tag + "UnchangedLongIdentifierBeyondInlineStringStorage");
+    EXPECT_EQ(Speller.spell(*makeNamed("Missing.Type", TypeKind::Struct)),
+              Tag + "Missing_Type");
+  }
+}
+
 TEST(TypeRender, ScalarSpellingsPreserveLaterNameCollisions) {
   TypeLibrary Library;
   Library.define(structure("Scope::Item", 4, {}));

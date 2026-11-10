@@ -90,6 +90,8 @@ private:
   /// The language whose keywords the names step around: C++'s for C that
   /// C++ reads too.
   Language Reserved;
+  /// Only changed spellings. Unchanged names still reserve their place in
+  /// the ordinary namespace, but type() can spell them directly.
   llvm::StringMap<std::string> Types;
   std::map<const EnumDef *, std::vector<std::string>> Enumerators;
   std::vector<std::pair<std::string, std::string>> Renamed;

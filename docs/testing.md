@@ -959,6 +959,9 @@ the generator unit test requires a failed check to leave the input unchanged.
 `TypeRender.KeywordNamespacesKeepTheirDistinctSpellings` checks the shared
 keyword index across all seven output languages, including C++'s C keywords
 and Rust's raw-identifier exceptions.
+`TypeRender.UnchangedNamesReserveTheOrdinaryNamespace` checks unchanged names,
+sanitized names, chained suffix collisions and enumerators in all seven
+languages, plus reverse-order C/C++ queries and undeclared names.
 `HighCSourceCalls.CallbackBorrowsDeclareNestedRecordTags` additionally checks
 that records used only inside callbacks receive the correct struct/union
 forward declarations, without reconstructing their layouts.
