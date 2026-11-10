@@ -1,0 +1,315 @@
+{
+  "scope": "Default system startup page-format experiment; native publication qualification is recorded separately. Original instruction and slot words are identical before re-signing. Four-key PAC and original dylib controls pass first.",
+  "llvm": "v23.0.0-r6 unchanged",
+  "experiments": [
+    {
+      "host": "macos-26",
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42742692682",
+      "environment_revision": "ead191a5f70785c790b5c5ea39095c1dd4090679",
+      "source_revision": "0094b433d350a72424c578da5879878d621be6d2",
+      "report_sha256": "55df0cf5b772e6f7361c35bffc93b635032ccb7e62c90efa81dbfd5c3f0d0c7b",
+      "native_features": [
+        "hw.optional.arm.FEAT_PACIMP: 1",
+        "hw.optional.arm.FEAT_PAuth: 1",
+        "hw.optional.arm.FEAT_PAuth2: 0",
+        "hw.optional.arm.FEAT_FPAC: 0",
+        "hw.optional.arm.FEAT_FPACCOMBINE: 0",
+        "machdep.cpu.brand_string: Apple M1 (Virtual)"
+      ],
+      "cases": [
+        {
+          "case": "startup-O0-dwarf-False",
+          "chain_page_sizes": [
+            16384,
+            4096,
+            16384
+          ],
+          "signature_page_size": 4096,
+          "returncodes": [
+            -5,
+            0,
+            -5
+          ],
+          "binary_sha256": [
+            "3f6e6e09257c0d6adee7bc893e532adde02335bc80b21acc588b05f1c20b1fd4",
+            "824ac1b9a2d482f63e6c65ea8c9629a5333ac30377b81b7e6ab745c53a1f1e9c",
+            "3f6e6e09257c0d6adee7bc893e532adde02335bc80b21acc588b05f1c20b1fd4"
+          ]
+        },
+        {
+          "case": "startup-O0-dwarf-True",
+          "chain_page_sizes": [
+            16384,
+            4096,
+            16384
+          ],
+          "signature_page_size": 4096,
+          "returncodes": [
+            -5,
+            0,
+            -5
+          ],
+          "binary_sha256": [
+            "3554e0b1f2b2ff4fb683c723f1ba3be413475ba6b5f389f42aa1b9f367c43503",
+            "fccf848bf2b0f32171909bf2bcc00791c9d2becff253455c0892ebcb4e9cdbcd",
+            "3554e0b1f2b2ff4fb683c723f1ba3be413475ba6b5f389f42aa1b9f367c43503"
+          ]
+        },
+        {
+          "case": "startup-O2-dwarf-False",
+          "chain_page_sizes": [
+            16384,
+            4096,
+            16384
+          ],
+          "signature_page_size": 4096,
+          "returncodes": [
+            -5,
+            0,
+            -5
+          ],
+          "binary_sha256": [
+            "53399ed01dc24a4cc1761165923ae19ec21466254ed638062b53fd503d324d1e",
+            "16be49cf028746509f6af702d1b2290d04d85a750018c3e5b0f39249165e186f",
+            "53399ed01dc24a4cc1761165923ae19ec21466254ed638062b53fd503d324d1e"
+          ]
+        },
+        {
+          "case": "startup-O2-dwarf-True",
+          "chain_page_sizes": [
+            16384,
+            4096,
+            16384
+          ],
+          "signature_page_size": 4096,
+          "returncodes": [
+            -5,
+            0,
+            -5
+          ],
+          "binary_sha256": [
+            "86d8c47b7afdc917cf1c2ec7a36453cb98cd3839d6024ca30aa93259c07a0603",
+            "8333455881e94675db728d9d328057e65da44517b81e9c3ccab9cab7416b7282",
+            "86d8c47b7afdc917cf1c2ec7a36453cb98cd3839d6024ca30aa93259c07a0603"
+          ]
+        }
+      ],
+      "products_removed": true
+    },
+    {
+      "host": "xcode-27",
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42742900020",
+      "environment_revision": "ed0fcb722401920e616a26c58e0aec225978f4fc",
+      "source_revision": "0094b433d350a72424c578da5879878d621be6d2",
+      "report_sha256": "1a454e85ba4fdd5e7f871a7c6b67ffbba9e57775d1e43395c63f6c8443326f26",
+      "native_features": [
+        "hw.optional.arm.FEAT_PACIMP: 1",
+        "hw.optional.arm.FEAT_PAuth: 1",
+        "hw.optional.arm.FEAT_PAuth2: 0",
+        "hw.optional.arm.FEAT_FPAC: 0",
+        "hw.optional.arm.FEAT_FPACCOMBINE: 0",
+        "hw.optional.arm.FEAT_PAuth_LR: 0",
+        "hw.optional.arm.FEAT_CPA: 0",
+        "hw.optional.arm.FEAT_CPA2: 0",
+        "machdep.cpu.brand_string: Apple M1 (Virtual)"
+      ],
+      "cases": [
+        {
+          "case": "startup-O0-dwarf-False",
+          "chain_page_sizes": [
+            16384,
+            4096,
+            16384
+          ],
+          "signature_page_size": 4096,
+          "returncodes": [
+            -5,
+            0,
+            -5
+          ],
+          "binary_sha256": [
+            "ecdfd6f462b9e75cba5ce7063d6e0c706e2501d0d918624cd8ac62e104a6014a",
+            "7f386d77a153ad11296815f082000961a440fca2d0987564753c342dc1ea114f",
+            "ecdfd6f462b9e75cba5ce7063d6e0c706e2501d0d918624cd8ac62e104a6014a"
+          ]
+        },
+        {
+          "case": "startup-O0-dwarf-True",
+          "chain_page_sizes": [
+            16384,
+            4096,
+            16384
+          ],
+          "signature_page_size": 4096,
+          "returncodes": [
+            -5,
+            0,
+            -5
+          ],
+          "binary_sha256": [
+            "caf11cce8e27fc9ea6fe7d05f5408190597101a7d34c6db66a4d8d27d00c5bff",
+            "6bb3d9ea6f7091bba6cb935600c5173c8f0f252c57dd11f29649dc35461703cc",
+            "caf11cce8e27fc9ea6fe7d05f5408190597101a7d34c6db66a4d8d27d00c5bff"
+          ]
+        },
+        {
+          "case": "startup-O2-dwarf-False",
+          "chain_page_sizes": [
+            16384,
+            4096,
+            16384
+          ],
+          "signature_page_size": 4096,
+          "returncodes": [
+            -5,
+            0,
+            -5
+          ],
+          "binary_sha256": [
+            "90ca4148baacb497076e55288f701862d8075d2d721d273a35af9d48672ca787",
+            "49a97ddf84af7e63affba88376bf1c53812ae35ab0866ac731b3fdff2c2dfd5c",
+            "90ca4148baacb497076e55288f701862d8075d2d721d273a35af9d48672ca787"
+          ]
+        },
+        {
+          "case": "startup-O2-dwarf-True",
+          "chain_page_sizes": [
+            16384,
+            4096,
+            16384
+          ],
+          "signature_page_size": 4096,
+          "returncodes": [
+            -5,
+            0,
+            -5
+          ],
+          "binary_sha256": [
+            "e8234a028a8b99617498edea23ae8e1616e57399e480b4c1b5569f710d47a0c8",
+            "2bda444d28afed36ab6b1fd004dce2bac2911e66a7e5fef1bdf66277bbe78fad",
+            "e8234a028a8b99617498edea23ae8e1616e57399e480b4c1b5569f710d47a0c8"
+          ]
+        }
+      ],
+      "products_removed": true
+    }
+  ],
+  "native_apple_cpta_qualified": false,
+  "whole_image_publication_qualified": false,
+  "cpta_environment": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42482544120",
+    "environment_revision": "71b8ed7301f4e73fe63e1519fe926ba9405da55b",
+    "model_only": true,
+    "el1_passed_cases": 74,
+    "el0_passed_cases": 82,
+    "neverd_output_qualified": false,
+    "scope": "Official FVP environment controls only; four CPTA/CPTA0 combinations have hardware-register readback in the model. Native hosted M1 cannot qualify CPA2."
+  },
+  "native_publication": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42746949630",
+    "environment_revision": "5e466f3a7035a5ac8e06a21d675f21a450326454",
+    "scope": "Exact local Release/r6 test host replay on two native hosts; not a cold source build. Each host executes 20 dylib, 4 userspace-main and 4 default-system-main cases with no failures or skips.",
+    "source_revision": "e5a0fddc68b2fd03c2f25445aca674cef32ab3e6",
+    "llvm": "v23.0.0-r6",
+    "hosts": [
+      {
+        "host": "macos-26",
+        "source_revision": "e5a0fddc68b2fd03c2f25445aca674cef32ab3e6",
+        "manifest_sha256": "b8b7c1942a7ffbf689c1671ebbac79ba42403f8cb3233d935cdc34048a5d67a9",
+        "binary_sha256": "e479ab5d605533ab15a6b21d89f81afced5811070fd02221f510e618359c911e",
+        "owned_test_host_removed": true,
+        "profiles": {
+          "dylib-installation": {
+            "passed": 20,
+            "failed": 0,
+            "skipped": 0,
+            "fixup_loader": "system",
+            "report_sha256": "6295897996b3f8aa859401f7caefa0be21e6d08a4ab20614464439433209171e",
+            "probe_report_sha256": "29f6b99bc3b9e053d35d100aa114a36c598ce72ca8ed83435d76f5654d2d6c89",
+            "xml_sha256": "031317ddafa5d43937a7d31c27c93e3d817d6640fa8ad5974136265cdc4b890e",
+            "runtime_launcher": "ctest"
+          },
+          "installation": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "fixup_loader": "userspace",
+            "report_sha256": "6aebfe2cb9e7ffd5e601b81c266a8ff01f631c7f1c4cece4d2ddbebdecfe32d7",
+            "probe_report_sha256": "f9e5f71980b659d2f9c290982e770dbe724e33ccdc7ccaccbe9d2e25bf9409db",
+            "xml_sha256": "9ba26a4e83766a77b4cad474cdcfcf2e12b36de5a3f531e168972bb6890b9f4f",
+            "runtime_launcher": "/usr/bin/sandbox-exec"
+          },
+          "default-installation": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "fixup_loader": "system",
+            "report_sha256": "9ecd5c8b2c456330c07ce28b57e8b034f68d55e88274cbb3bab40dfcb0bb83c0",
+            "probe_report_sha256": "29f6b99bc3b9e053d35d100aa114a36c598ce72ca8ed83435d76f5654d2d6c89",
+            "xml_sha256": "085e1b44aca111b55699d2cf34a0b90e108638ca36b3329215006f5c7cc87867",
+            "runtime_launcher": "ctest"
+          }
+        }
+      },
+      {
+        "host": "xcode-27",
+        "source_revision": "e5a0fddc68b2fd03c2f25445aca674cef32ab3e6",
+        "manifest_sha256": "b8b7c1942a7ffbf689c1671ebbac79ba42403f8cb3233d935cdc34048a5d67a9",
+        "binary_sha256": "e479ab5d605533ab15a6b21d89f81afced5811070fd02221f510e618359c911e",
+        "owned_test_host_removed": true,
+        "profiles": {
+          "dylib-installation": {
+            "passed": 20,
+            "failed": 0,
+            "skipped": 0,
+            "fixup_loader": "system",
+            "report_sha256": "1b8abb56f7b9c298092210f8d3883457bdf49a97147440c9531025cc1ae8ba3b",
+            "probe_report_sha256": "b4eac67d473c1c1c44b80493e26ee936c9ecc92ec481c4a5174a9c2a614ef6f0",
+            "xml_sha256": "5fecd41b9766419cc25d03d312d82108311dfcddf652c40477a5d96cd0daf18e",
+            "runtime_launcher": "ctest"
+          },
+          "installation": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "fixup_loader": "userspace",
+            "report_sha256": "23227967cb657fc30a998f3affd35de6242b29169678a80a16da9cf44da7b115",
+            "probe_report_sha256": "d72b22f3c35be2e7837cbdda4a9bc6767ae8cf942dc828064e8220410ea6e876",
+            "xml_sha256": "a848a698e668ba63aa07058df672de60aab31c649c4caad209f1493f6ed24838",
+            "runtime_launcher": "/usr/bin/sandbox-exec"
+          },
+          "default-installation": {
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+            "fixup_loader": "system",
+            "report_sha256": "079e2f653e6c1133f1cdbde3f43eab39c3bab5fa7746be1261c6fe2a66e8e1df",
+            "probe_report_sha256": "b4eac67d473c1c1c44b80493e26ee936c9ecc92ec481c4a5174a9c2a614ef6f0",
+            "xml_sha256": "5143bdbc167d5883898e62d174d661adc2b4a9e63df6eb1d0b80ff6536913cee",
+            "runtime_launcher": "ctest"
+          }
+        }
+      }
+    ],
+    "native_default_executable_publication_qualified": true,
+    "whole_image_publication_qualified": false,
+    "native_apple_cpta_qualified": false
+  },
+  "local_validation": {
+    "expanded": {
+      "total": 768,
+      "passed": 738,
+      "skipped": 30,
+      "failed": 0
+    },
+    "final_macho": {
+      "total": 147,
+      "passed": 122,
+      "skipped": 25,
+      "failed": 0
+    },
+    "native_verifier_unit_tests": 16,
+    "artifact_lifecycle_tests": 5,
+    "environment_controller_tests": 9
+  }
+}

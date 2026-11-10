@@ -11,6 +11,7 @@
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/codegen/COFF/PESignaturePolicy.h"
 #include "neverd/backend/codegen/ELF/ELFSourceSymbols.h"
+#include "neverd/backend/codegen/MachO/MachOAuthenticatedFixups.h"
 #include "neverd/backend/codegen/MachO/MachOLayoutGrowth.h"
 #include "neverd/backend/codegen/MachO/MachOSignaturePolicy.h"
 #include "neverd/backend/codegen/MachO/MachOSigner.h"
@@ -379,6 +380,9 @@ llvm::Expected<PatchResult> publishSourcePatch(
     // Release any file mapping before truncating the candidate on Windows.
     if (auto E = completeMachOChainedSegmentTable(Raw, Image.Arch))
       return E;
+    if (Image.isArm64e())
+      if (auto E = prepareMachOAuthenticatedStartup(Raw))
+        return E;
     if (auto E = writeBytes(Candidate, Raw))
       return E;
   }

@@ -58,6 +58,13 @@ installMachOAuthenticatedFixups(std::vector<uint8_t> &Binary,
 /// mutation. The caller must replace the code signature after conversion.
 llvm::Error convertMachOThreadedFixupsToChains(std::vector<uint8_t> &Binary);
 
+/// Prepare userland fixups for default dyld startup. B-key chains use 4 KiB
+/// pages so dyld can apply the full signing recipe when the native pager
+/// cannot. Legacy threaded metadata is migrated to modern chained metadata.
+/// Slot identities, protections and code are preserved; the caller owns
+/// signing.
+llvm::Error prepareMachOAuthenticatedStartup(std::vector<uint8_t> &Binary);
+
 /// Replay installed recipes after subsequent image edits, retaining exact
 /// storage addresses, import identities, signing discriminators and requested
 /// post-fixup read-only protection.
