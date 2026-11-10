@@ -2337,6 +2337,14 @@ not establish a scalable calling convention or physical register aliasing.
 Serial and sharded LLVM pipelines both return semantic refusals through the
 pipeline result without publishing a partial module or source map.
 
+LLVM emission shards use a fixed MedIR work budget; worker count changes only
+their execution schedule. Native C++ FuncInfo groups, SEH parents and callbacks,
+and consumers of interior code identities remain together through emission and
+optimization. `MedCodeIdentity` shares the retained label and extent definitions
+between scheduling and materialization. The planner's conservative address
+index grants no pointer provenance; ambiguous or unsupported identities still
+fail in the emitter. An indivisible group may exceed the soft shard budget.
+
 Plain ERET is an operand-free terminal intrinsic, rendered as the external
 no-return helper `neverd_exception_return()`. It cannot become an ordinary
 return or a zero-valued unimplemented intrinsic. All emission routes reject

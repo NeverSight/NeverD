@@ -33,6 +33,7 @@ add_neverd_component_library(NeverDPipeline
   PipelineSourceInline.cpp
   PipelineSourceInlineHigh.cpp
   PipelineLLVM.cpp
+  PipelineLLVMPlan.cpp
   PipelineLibraryRecognition.cpp
   PipelineLowIR.cpp
   PipelineSEHRuntimeMemory.cpp

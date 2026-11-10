@@ -775,6 +775,7 @@ public:
   bool isThisFieldValueHome(const llvm::AllocaInst *Slot) const;
   /// Last home is a load of a named synthetic-frame record field.
   bool isFrameFieldValueHome(const llvm::AllocaInst *Slot) const;
+  TypeRef recordPointerAllocaType(const llvm::AllocaInst *Slot) const;
   bool isTypedRecordCursorSlot(const llvm::AllocaInst *Slot) const;
   bool isTypedRecordCursorValue(const llvm::Value *V) const;
   bool allocaHasLoad(const llvm::AllocaInst *Slot) const;

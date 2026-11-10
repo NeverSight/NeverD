@@ -3071,20 +3071,6 @@ void LLVMCWriter::setupFunction(llvm::Function &Fn) {
 
   if (ReturnsNoValue)
     analyzeVoidDeadChain(Analysis, Fn);
-  collectOmittedUnknowns(Fn);
-  collectOmittedInlinedImmediates(Fn);
-  if (!ExplicitSEHBlockScopes)
-    collectTypedHomes(Fn);
-  markSinglePrintedUseCalls(Fn);
-  planRawMemoryUpdates(Fn);
-  scanReferencedBlocks(Fn);
-  // The scan predicts references and layout; it has not emitted any region.
-  // Re-evaluate ownership during the statement walk, where folded conditions
-  // and call results can cause a predicted inline region to be declined.
-  InlinedFallthroughBlocks.clear();
-  DuplicatedAssignBlocks.clear();
-  ConditionChainBodies.clear();
-  collectDeferredUnknowns(Fn);
 }
 
 std::optional<DebugParamBindings>
@@ -9471,13 +9457,8 @@ void LLVMCWriter::emitFunctionDecls(llvm::Function &Fn) {
           OS << typeToCLLVM(ArrTy->getElementType()) << " " << AllocName << "["
              << ArrTy->getNumElements() << "];\n";
         } else {
-          if (auto It = AllocaTypes.find(AI);
-              It != AllocaTypes.end() && It->second &&
-              It->second->Kind == NdTypeKind::Ptr && It->second->Pointee &&
-              It->second->Pointee->Kind == NdTypeKind::Struct &&
-              !It->second->Pointee->SourceName.empty()) {
-            if (std::string Pointer =
-                    recordPointerSpelling(*It->second->Pointee);
+          if (const TypeRef Type = recordPointerAllocaType(AI)) {
+            if (std::string Pointer = recordPointerSpelling(*Type->Pointee);
                 !Pointer.empty()) {
               OS << Pointer << " " << AllocName << ";\n";
               continue;
@@ -10477,6 +10458,23 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
       ++ParamIdx;
     }
   }
+
+  // Expression planning can reject an unsupported body. Capture its actual
+  // projected signature first so callers still have that same declaration.
+  collectOmittedUnknowns(Fn);
+  collectOmittedInlinedImmediates(Fn);
+  if (!ExplicitSEHBlockScopes)
+    collectTypedHomes(Fn);
+  markSinglePrintedUseCalls(Fn);
+  planRawMemoryUpdates(Fn);
+  scanReferencedBlocks(Fn);
+  // The scan predicts references and layout; it has not emitted any region.
+  // Re-evaluate ownership during the statement walk, where folded conditions
+  // and call results can cause a predicted inline region to be declined.
+  InlinedFallthroughBlocks.clear();
+  DuplicatedAssignBlocks.clear();
+  ConditionChainBodies.clear();
+  collectDeferredUnknowns(Fn);
 
   if (Opts.EmitComments)
     for (const auto &Bytes : readSourceFrameBytes(Fn))
@@ -11561,13 +11559,9 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
                           std::to_string(Array->getNumElements()) + "];\n";
           } else {
             std::string Type = typeToCLLVM(Allocated);
-            if (auto Found = AllocaTypes.find(AI);
-                Found != AllocaTypes.end() && Found->second &&
-                Found->second->Kind == NdTypeKind::Ptr &&
-                Found->second->Pointee &&
-                Found->second->Pointee->Kind == NdTypeKind::Struct) {
+            if (const TypeRef PointerType = recordPointerAllocaType(AI)) {
               if (std::string Pointer =
-                      recordPointerSpelling(*Found->second->Pointee);
+                      recordPointerSpelling(*PointerType->Pointee);
                   !Pointer.empty())
                 Type = std::move(Pointer);
             }

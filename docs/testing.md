@@ -1413,6 +1413,23 @@ incomplete exception contracts retain their diagnostics without modifying the
 input module. `NeverDSemanticCAPI.LLVMContractFailureRetainsFunctionAndReason`
 checks the same function and refusal detail through both public C and JSON APIs.
 Run `NeverDPipelineOutcomeTests` for whole-module and sharded failure propagation.
+`NeverDPipelineLLVMShardingTests` checks fixed-budget partitioning, native C++
+and shared SEH callback groups, and scalar/data address counterexamples.
+`PipelineOutcome.ShardsRetainCrossFunctionInteriorCodeIdentity` exercises actual
+multiple shards at 1/2/4 worker settings across x86, x64, ARM and AArch64 in COFF, ELF
+and Mach-O, reverses function order, compares optimized x64 IR, and retains
+ambiguous-label refusal. Compare whole-image LLVM C at the same worker counts
+when changing the planner; admission, body contents and declarations all matter.
+`LLVMCValues.EarlyBodyRefusalRetainsTheCalleeDeclaration` rejects an unsupported
+interior block address during expression planning, then compiles and executes
+its retained caller against an independent callee at O0/O2 with UBSan, in both
+function orders. `SavedFrameAddressKeepsItsIntegerCarrier` covers saved register
+homes in unoptimized x64/AArch64 callbacks across COFF, ELF and Mach-O; omitted
+restore operations cannot make surviving integer assignments take pointer text.
+`WindowsCRTEnumsAndCallbacksAgreeWithHeaderDeclarations` checks the shared CRT
+table against independent enum and callback declarations, then executes both
+direct and import-table calls at O0/O2 with UBSan for all four architecture
+projections. Whole-unit Windows syntax checks additionally use the real headers.
 
 `*LookupFailures*` and `ProcessReport.AndroidLoaderFailures*` cover strict
 binary names and literal `exact_query` strings, whitespace preservation,

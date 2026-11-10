@@ -89,9 +89,10 @@ public:
   static LLVMEmissionResult
   emitShards(const std::vector<MedFunc> &Functions, llvm::LLVMContext &Context,
              const BinaryImage &Image, unsigned Threads,
-             bool OmitRefusedBodies = false, bool AnalysisSource = false) {
+             bool OmitRefusedBodies = false, bool AnalysisSource = false,
+             bool NoOpt = true) {
     return Pipeline::emitLLVMSharded(Functions, Context, Image.Arch, {}, Image,
-                                     Image.Format, true, Threads, false, {},
+                                     Image.Format, NoOpt, Threads, false, {},
                                      nullptr, {}, nullptr, AnalysisSource, {},
                                      OmitRefusedBodies, AnalysisSource);
   }
@@ -2635,6 +2636,150 @@ TEST(PipelineOutcome, FunctionAddressSuffixesDoNotAliasExistingNames) {
             }
           }
         }
+      }
+    }
+  }
+}
+
+TEST(PipelineOutcome, ShardsRetainCrossFunctionInteriorCodeIdentity) {
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+      BinaryImage Image;
+      Image.Arch = Architecture;
+      Image.Bits = Architecture == Arch::X86 || Architecture == Arch::ARM
+                       ? Bitness::Bits32
+                       : Bitness::Bits64;
+      Image.Format = Format;
+      const auto &Registers = getTargetRegInfo(Architecture);
+      const auto Width = static_cast<uint16_t>(Image.getPointerSize());
+      std::vector<MedFunc> Functions;
+      for (unsigned I = 0; I != 8; ++I) {
+        MedFunc Function =
+            sourceFunction(0x1000 + I * 0x100, "source_" + std::to_string(I));
+        Function.ReturnType = NdType::makeInt(Width);
+        MedBlock Block;
+        Block.Id = 0;
+        Block.StartAddr = Function.Entry;
+        Block.EndAddr = Function.Entry + 4;
+        // The consumer precedes its owner. The exact non-entry label must
+        // remain a blockaddress after bitcode transfer into the caller context.
+        if (I == 1) {
+          Block.Succs = {1};
+          Function.Blocks.push_back(std::move(Block));
+          Block = {};
+          Block.Id = 1;
+          Block.Preds = {0};
+          Block.StartAddr = Function.Entry + 4;
+          Block.EndAddr = Function.Entry + 8;
+        }
+        MedVar Value;
+        Value.Kind = MedVar::Reg;
+        Value.TheArch = Architecture;
+        Value.Id = 1;
+        Value.SSAVer = 1;
+        Value.Size = Width;
+        Value.RegOff = Registers.IntReturnReg;
+        // Keep an independent body larger than a normal shard so this matrix
+        // exercises real cross-context emission even with the fixed budget.
+        if (I == 7)
+          for (unsigned J = 0; J != 8500; ++J) {
+            MedOp Padding;
+            Padding.Opcode = NdOp::COPY;
+            Padding.Addr = Block.StartAddr;
+            Padding.Output = Value;
+            Padding.Output.Kind = MedVar::Temp;
+            Padding.Output.Id = 2 + J;
+            Padding.addInput(
+                MedVar::makeConst(J, Width, ConstantAddressProvenance::Scalar));
+            Block.Ops.push_back(std::move(Padding));
+          }
+        MedOp Produce;
+        Produce.Opcode = NdOp::COPY;
+        Produce.Addr = Block.StartAddr;
+        Produce.Output = Value;
+        Produce.addInput(
+            MedVar::makeConst(I == 0 ? 0x1104 : I, Width,
+                              I == 0 ? ConstantAddressProvenance::CodeAddress
+                                     : ConstantAddressProvenance::Scalar));
+        Block.Ops.push_back(std::move(Produce));
+        MedOp Return;
+        Return.Opcode = NdOp::RETURN;
+        Return.Addr = Block.EndAddr - 1;
+        if (Registers.ReturnOperandIsValue)
+          Return.addInput(Value);
+        Block.Ops.push_back(std::move(Return));
+        Function.Blocks.push_back(std::move(Block));
+        Functions.push_back(std::move(Function));
+      }
+      ASSERT_GT(
+          pipeline_detail::planLLVMEmissionShards(Functions, &Image).NumShards,
+          1u);
+      for (bool Reverse : {false, true}) {
+        if (Reverse)
+          std::reverse(Functions.begin(), Functions.end());
+        for (unsigned Threads : {1u, 2u, 4u}) {
+          SCOPED_TRACE(::testing::Message()
+                       << unsigned(Architecture) << ':' << unsigned(Format)
+                       << ':' << Reverse << ':' << Threads);
+          llvm::LLVMContext Context;
+          auto Result =
+              PipelineTestPeer::emitShards(Functions, Context, Image, Threads);
+          ASSERT_NE(Result.Module, nullptr) << Result.Error;
+          ASSERT_FALSE(llvm::verifyModule(*Result.Module, &llvm::errs()));
+          auto *Consumer = Result.Module->getFunction("source_0");
+          auto *Owner = Result.Module->getFunction("source_1");
+          ASSERT_NE(Consumer, nullptr);
+          ASSERT_NE(Owner, nullptr);
+          auto *Return = llvm::dyn_cast<llvm::ReturnInst>(
+              Consumer->getEntryBlock().getTerminator());
+          ASSERT_NE(Return, nullptr);
+          auto *Cast = llvm::dyn_cast_or_null<llvm::ConstantExpr>(
+              Return->getReturnValue());
+          ASSERT_NE(Cast, nullptr);
+          ASSERT_EQ(Cast->getOpcode(), llvm::Instruction::PtrToInt);
+          auto *Address =
+              llvm::dyn_cast<llvm::BlockAddress>(Cast->getOperand(0));
+          ASSERT_NE(Address, nullptr);
+          EXPECT_EQ(Address->getFunction(), Owner);
+          EXPECT_EQ(Address->getBasicBlock()->getName(), "bb_1");
+        }
+      }
+      if (Architecture != Arch::X64 || Format != BinaryFormat::ELF)
+        continue;
+      std::string Reference;
+      for (unsigned Threads : {1u, 2u, 4u}) {
+        llvm::LLVMContext Context;
+        auto Result = PipelineTestPeer::emitShards(
+            Functions, Context, Image, Threads, false, false, /*NoOpt=*/false);
+        ASSERT_NE(Result.Module, nullptr) << Result.Error;
+        std::string Text;
+        llvm::raw_string_ostream Stream(Text);
+        Result.Module->print(Stream, nullptr);
+        if (Threads == 1)
+          Reference = Text;
+        else
+          EXPECT_EQ(Text, Reference);
+      }
+      // Both owners of an ambiguous label must remain visible together. A
+      // shard mask must not manufacture uniqueness by hiding one of them.
+      for (MedFunc &Function : Functions)
+        if (Function.Name == "source_2") {
+          Function.Blocks[0].StartAddr = 0x1104;
+          Function.Blocks[0].EndAddr = 0x1108;
+        }
+      for (unsigned Threads : {1u, 2u, 4u}) {
+        llvm::LLVMContext Context;
+        testing::internal::CaptureStderr();
+        auto Result = PipelineTestPeer::emitShards(
+            Functions, Context, Image, Threads, /*OmitRefusedBodies=*/true);
+        const auto Diagnostic = testing::internal::GetCapturedStderr();
+        ASSERT_NE(Result.Module, nullptr) << Result.Error << Diagnostic;
+        ASSERT_EQ(Result.LeftOut.size(), 1u) << Diagnostic;
+        EXPECT_EQ(Functions[Result.LeftOut[0].first].Name, "source_0");
+        EXPECT_NE(
+            Result.LeftOut[0].second.find("refusing stale-address fallback"),
+            std::string::npos);
       }
     }
   }

@@ -60,7 +60,7 @@ windowsAPIPrototype(std::string_view Name, std::string_view Return,
 /// stdio.h, vcruntime.h and the Windows SDK.
 ///
 /// A `_PVFV`, `_PIFV` or `_onexit_t` is the function pointer it is; a
-/// `_startupinfo *`, `_onexit_table_t *`, `struct _exception *`,
+/// `_startupinfo *`, `_onexit_table_t *`,
 /// `struct _EXCEPTION_POINTERS *` or a pointer to another structure the
 /// routine fills or reads (`STARTUPINFOW`, `FILETIME`, `SLIST_HEADER`,
 /// `CONTEXT`, `RUNTIME_FUNCTION`) a `void *`; a `va_list` the `char *` it is
@@ -87,7 +87,10 @@ inline constexpr auto kWindowsCRTPrototypes = std::to_array<LibCPrototype>({
         "__wgetmainargs", "int",
         {"int *", "wchar_t ***", "wchar_t ***", "int", "void *"}, "stddef.h"),
     windowsCRTPrototype("__set_app_type", "void", {"int"}),
-    windowsCRTPrototype("__setusermatherr", "void", {"int (*)(void *)"}),
+    // A callback's record pointer must agree with math.h's declaration;
+    // replacing its pointee by void changes the C function-pointer type.
+    windowsCRTPrototype("__setusermatherr", "void",
+                        {"int (*)(struct _exception *)"}, "math.h"),
     windowsCRTPrototype("_initterm", "void",
                         {"void (**)(void)", "void (**)(void)"}),
     windowsCRTPrototype("_initterm_e", "int",
@@ -139,9 +142,14 @@ inline constexpr auto kWindowsCRTPrototypes = std::to_array<LibCPrototype>({
     windowsCRTPrototype("__C_specific_handler", "int",
                         {"void *", "void *", "void *", "void *"}),
     // Universal CRT start-up and exit.
-    windowsCRTPrototype("_set_app_type", "void", {"int"}),
-    windowsCRTPrototype("_configure_narrow_argv", "int", {"int"}),
-    windowsCRTPrototype("_configure_wide_argv", "int", {"int"}),
+    // These source enums still occupy one integer argument, but a separate
+    // signed-int prototype need not be compatible with the header's enum.
+    windowsCRTPrototype("_set_app_type", "void", {"enum _crt_app_type"},
+                        "corecrt_startup.h"),
+    windowsCRTPrototype("_configure_narrow_argv", "int",
+                        {"enum _crt_argv_mode"}, "corecrt_startup.h"),
+    windowsCRTPrototype("_configure_wide_argv", "int", {"enum _crt_argv_mode"},
+                        "corecrt_startup.h"),
     windowsCRTPrototype("_initialize_narrow_environment", "int", {}),
     windowsCRTPrototype("_initialize_wide_environment", "int", {}),
     windowsCRTPrototype("_get_initial_narrow_environment", "char **", {}),
