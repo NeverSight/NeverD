@@ -214,7 +214,7 @@ TEST_P(X86LegacySourceTest, ControlReloadResumesOriginalAttemptAndReadPrefix) {
         EXPECT_EQ(M->controls().CR4, C.CR4);
         EXPECT_EQ(M->controls().PDPTE, C.PDPTE);
         ASSERT_TRUE(Context.lastResult().BackingFault);
-        EXPECT_EQ(Context.lastResult().BackingFault->Address,
+        EXPECT_EQ(Context.lastResult().BackingFault->Exit.Address,
                   0x13020 + Read * 8);
         EXPECT_EQ(Run(&Context, &Budget), 4u);
         EXPECT_EQ(Budget, 0u);
@@ -408,7 +408,7 @@ TEST_P(X86LegacySourceTest, ControlReloadRetiresIntoFaultOrDebugEvent) {
     ASSERT_TRUE(S.PendingEvent);
     EXPECT_EQ(S.PendingEvent->Event.Vector, Fault ? 13 : 1);
     ASSERT_TRUE(Continued.lastResult().BackingFault);
-    EXPECT_EQ(Continued.lastResult().BackingFault->Address,
+    EXPECT_EQ(Continued.lastResult().BackingFault->Exit.Address,
               (Fault ? 0x40000u : 0x50000u) + (Fault ? 13u : 1u) * 8);
     EXPECT_EQ(M->controls().CR3, Fault ? 0x10000u : 0x20000u);
     EXPECT_EQ(M->controls().PDPTE[0], Fault ? 0x11001u : 0x14001u);
