@@ -523,7 +523,9 @@ and the runner artifacts.
 The exact-PC unwind query reports an unknown DWARF state when a classic
 arm64e frame relies on Darwin's implicit signing ABI and supplies no rule
 for the signing column. A compact prologue recipe can still be available.
-Explicit DWARF rows retain their instruction-boundary signing state.
+Explicit DWARF rows retain their instruction-boundary signing state. The
+fixture decodes the original and installed CFA and LR stack rules through LLVM
+and checks both against the interrupted stack, including the saved slot.
 
 `AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions`
 compares an original indexed-DWARF function with its installed native object.

@@ -46,6 +46,8 @@ ASYNC_FRAME_TEXT(kUnavailable,
                  "native Darwin AArch64 and Apple Clang are required")
 ASYNC_FRAME_VALUE(unsigned, kStages, 5)
 ASYNC_FRAME_VALUE(unsigned, kSpillStage, 3)
+ASYNC_FRAME_VALUE(unsigned, kDwarfSP, 31)
+ASYNC_FRAME_VALUE(unsigned, kDwarfLR, 30)
 ASYNC_FRAME_VALUE(unsigned, kFrameSize, 16)
 ASYNC_FRAME_VALUE(uint32_t, kSignLR, 0xd503237f)
 ASYNC_FRAME_VALUE(uint32_t, kAuthenticateLR, 0xd50323ff)
