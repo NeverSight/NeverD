@@ -486,6 +486,24 @@ images still need those proofs, including variadic and non-C entries. The
 previous canonical-IR installation qualification and pinned r6 package remain
 unchanged; source-fork-only producer features still require the source build.
 
+## Publishing register-only lifted dylibs
+
+The ordinary segment patch pipeline can publish a classic macOS arm64e image
+whose entire instruction section consists of frameless integer leaf functions.
+It matches lifted definitions to original entries, then checks the relocated
+machine instructions and compact unwind coverage for every body. The original
+entries forward to the emitted RX addresses. The private native emission uses
+the classic ABI version. The input IR retains its analysis marker.
+
+`NeverDArm64eLiftedImageTests` compiles an unreserved Apple Clang dylib,
+lifts it through the normal patch pipeline and compares the result against
+the original image. A missing definition or a changed arithmetic result fails
+before an output file is created. Set `NEVERD_ARM64E_LIFTED_NATIVE=1` on a
+host that executes arm64e to run the independently compiled authenticated
+caller against both images. The strict instruction check currently covers
+register-only integer arithmetic, logical operations and moves ending in RET.
+Functions with calls, signed frames or stack accesses need additional proofs.
+
 ## Reconstructed entries through the native compiler
 
 `scripts/verify_arm64e_entry.py` separately validates the entry reconstruction

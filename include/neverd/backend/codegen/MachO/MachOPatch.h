@@ -63,6 +63,10 @@ public:
       llvm::ArrayRef<SourcePatchDependency> Dependencies = {});
 
 private:
+  llvm::Expected<PatchResult>
+  installLiftedLeaves(llvm::Module &Module, const BinaryImage &Image,
+                      const std::filesystem::path &Output);
+
   struct PatchLayout : PatchLayoutBase {
     uint32_t NCmds = 0;
     uint32_t SizeOfCmds = 0;
