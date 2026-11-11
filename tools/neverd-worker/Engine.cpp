@@ -519,7 +519,7 @@ std::size_t namedViewJsonBytes(const Json &value, unsigned depth = 0) {
   } else if (value.is_object()) {
     if (!add(sizeof(Json::object_t)))
       return OverBudget;
-    for (const auto &[key, item] : value.items())
+    for (const auto &[key, item] : value.get_ref<const Json::object_t &>())
       if (!add(sizeof(Json::object_t::value_type) + 4 * sizeof(void *)) ||
           !add(key.capacity() + 1) || !add(namedViewJsonBytes(item, depth + 1)))
         return OverBudget;
@@ -1912,9 +1912,10 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
     }
     // What a data's new name respells, of an engine document of C on one
     // page, as respell reads its kept page (renderedAheadPages).
+    std::shared_ptr<CodeEdits::EngineText> engineText;
     if (sourceView && !recovery && document->enginePages.size() == 1)
-      document->engineText = std::make_shared<const CodeEdits::EngineText>(
-          CodeEdits::engineText(full));
+      engineText =
+          std::make_shared<CodeEdits::EngineText>(CodeEdits::engineText(full));
     if (sourceView && !recovery)
       CodeEdits::decorate(
           full, codeEditRow(address), address, representation, imageFacts(),
@@ -1939,7 +1940,8 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
               return std::nullopt;
             }
           },
-          &document->definitionLine);
+          &document->definitionLine, engineText.get());
+    document->engineText = std::move(engineText);
     if (document->readsKnown)
       noteDecorationReads(*document, full, address);
     std::vector<std::pair<std::size_t, std::ptrdiff_t>> shift;
@@ -2040,10 +2042,17 @@ Engine::keepNamedView(std::shared_ptr<NamedView> document, Json full,
         document->enginePages.capacity() * sizeof(std::string);
     for (const auto &page : document->enginePages)
       overhead += page.capacity() + 1;
-    if (const auto &engine = document->engineText)
+    if (const auto &engine = document->engineText) {
       overhead += sizeof(CodeEdits::EngineText) + engine->text.capacity() + 1 +
                   engine->sourceNames.capacity() *
                       sizeof(decltype(engine->sourceNames)::value_type);
+      if (engine->globals) {
+        overhead +=
+            engine->globals->capacity() * sizeof(CodeEdits::EngineText::Global);
+        for (const auto &global : *engine->globals)
+          overhead += global.name.capacity() + 1;
+      }
+    }
     overhead += document->renderReads.capacity() + 1;
     for (const auto *bounds :
          {&document->rowBounds, &document->referenceBounds,

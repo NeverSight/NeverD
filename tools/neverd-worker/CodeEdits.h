@@ -41,6 +41,8 @@ public:
   /// Decorate a complete source view, preserving its lines and remapping every
   /// UTF-8 span. Edit targets come from declared locals or resolved image
   /// names. An image name shows its rename, otherwise its display name.
+  /// \p engine, where given, is what engineText read of the view as it is
+  /// passed, and takes the globals its text declares.
   /// Spells \p renamed, rows of what data is called now, in an engine page of C
   /// rendered under the names before them, as a render under these reads.
   /// False, with the page as it was, unless its text shows a spelling is all
@@ -50,9 +52,22 @@ public:
   /// its text, where its body begins and the spans its source names cover, as
   /// the engine wrote them, before decorate moves them.
   struct EngineText {
+    /// A global as the text declares it, by a marker or an extern's trailing
+    /// address.
+    struct Global {
+      std::uint64_t address;
+      std::string name;
+      /// By a marker that says only the address, on a line where nothing
+      /// before the name could hold another: all a name reaches of the
+      /// declaration.
+      bool plain;
+    };
     std::string text;
     std::size_t bodyStart = 0;
     std::vector<std::pair<std::size_t, std::size_t>> sourceNames;
+    /// The globals the text declares, where decorate read them of it: what
+    /// respelling asks first, read once.  None where no one read them.
+    std::optional<std::vector<Global>> globals;
   };
   /// Of an engine view about to be decorated.
   static EngineText engineText(const Json &view);
@@ -78,7 +93,8 @@ public:
                        const ImageFacts &image,
                        const FunctionAliases &displayNames,
                        const Resolver &resolve,
-                       std::optional<std::size_t> *definitionLine = nullptr);
+                       std::optional<std::size_t> *definitionLine = nullptr,
+                       EngineText *engine = nullptr);
   /// A view decorate wrote for \p function, its definition on
   /// \p definitionLine, after the image's comments changed and nothing else it
   /// reads: each row's comment is read again as decorate reads it, and where

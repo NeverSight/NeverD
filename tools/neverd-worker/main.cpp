@@ -737,7 +737,10 @@ int main(int argc, char **argv) {
           validateRequest(value);
           const auto op = value["operation"].get<std::string>();
           const auto id = value["request_id"].get<std::string>();
-          const auto payload = value.value("payload", Json::object());
+          // Read in place: a request that waits is moved to the queue whole.
+          static const Json noPayload = Json::object();
+          const auto held = value.find("payload");
+          const Json &payload = held != value.end() ? *held : noPayload;
           std::unique_lock lock(state.mutex);
           if (state.finished)
             throw Error("engine_unavailable", "Session executor has exited");

@@ -493,6 +493,88 @@ void dataNames() {
       {{{"identifier", "total"}, {"symbol", "_total"}, {"address", "0x3000"}}});
   check(!takesDataName(symbol, nullptr, "", "total"),
         "A data took a name an identifier symbol spells");
+  // A name another is numbered after, in the text or about to be: a render
+  // under the new names would number them otherwise.
+  const auto body = [](const std::string &line) {
+    return "int target(int value) {\n  " + line +
+           "\n  counter = value;\n  return counter;\n}\n";
+  };
+  check(takesDataName(dataPage(body("int other_x = value;")), nullptr, "",
+                      "total"),
+        "A data's new name was not taken beside a name that numbers nothing");
+  check(!takesDataName(dataPage(body("int counter_2 = value;")), nullptr, "",
+                       "total"),
+        "A data gave up a name another is numbered after");
+  check(!takesDataName(dataPage(body("int counter_ = value;")), nullptr, "",
+                       "total"),
+        "A data gave up a name another is numbered after with no number");
+  check(takesDataName(dataPage(body("int counter_x2 = value;")), nullptr, "",
+                      "total"),
+        "A name that only begins as the data's was read as numbered after it");
+  check(!takesDataName(dataPage(body("int total_1 = value;")), nullptr, "",
+                       "total"),
+        "A data took a name another is numbered after");
+  check(takesDataName(dataPage(body("int total_a = value;")), nullptr, "",
+                      "total"),
+        "A name that only begins as the new one was read as numbered after it");
+  {
+    // The data's own name numbered after one the text spells.
+    const std::string prelude = "/* neverd.image: 0x2000 */\nint value_1;\n";
+    auto numbered = page(prelude + "int target(int value) {\n"
+                                   "  value_1 = value;\n"
+                                   "  return value_1;\n}\n");
+    numbered["prelude"]["end_byte"] = prelude.size();
+    auto view = numbered;
+    CodeEdits::decorate(view, nullptr, 0x1000, "c", CodeEdits::ImageFacts(), {},
+                        resolve);
+    auto patched = view;
+    check(!CodeEdits::takeDataNames(patched, CodeEdits::engineText(numbered),
+                                    dataRenamed("total"), nullptr, "c") &&
+              patched == view,
+          "A data numbered after a name the text spells gave its name up");
+    auto respelled = numbered;
+    check(!CodeEdits::respell(respelled, dataRenamed("total")) &&
+              respelled == numbered,
+          "Respell gave up a name numbered after one the text spells");
+  }
+  // The globals decorate read of the engine text are those a rename reads:
+  // kept with what engineText read of the same view, they give what reading
+  // them again gives, and it is they that are read.
+  {
+    auto kept = CodeEdits::engineText(engine);
+    check(!kept.globals, "An engine text holds globals no one read");
+    auto view = engine;
+    CodeEdits::decorate(view, nullptr, 0x1000, "c", dataFacts(""), {}, resolve,
+                        nullptr, &kept);
+    check(kept.globals && kept.globals->size() == 1 &&
+              kept.globals->front().address == 0x2000 &&
+              kept.globals->front().name == "counter" &&
+              kept.globals->front().plain,
+          "Decoration did not keep the globals it read");
+    auto fresh = view, reused = view;
+    const auto read =
+        CodeEdits::takeDataNames(fresh, CodeEdits::engineText(engine),
+                                 dataRenamed("total"), nullptr, "c");
+    const auto again = CodeEdits::takeDataNames(
+        reused, kept, dataRenamed("total"), nullptr, "c");
+    check(read && again && fresh == reused && read->text == again->text &&
+              read->bodyStart == again->bodyStart &&
+              read->sourceNames == again->sourceNames && !again->globals,
+          "The globals kept give another view than those read again");
+    auto elsewhere = kept;
+    elsewhere.globals->front().address = 0x9000;
+    auto refused = view;
+    check(!CodeEdits::takeDataNames(refused, elsewhere, dataRenamed("total"),
+                                    nullptr, "c") &&
+              refused == view,
+          "A rename read the text's globals again where they were kept");
+    // An engine text of another view takes none.
+    auto other = CodeEdits::engineText(dataPage(body("int more = value;")));
+    auto unrelated = engine;
+    CodeEdits::decorate(unrelated, nullptr, 0x1000, "c", dataFacts(""), {},
+                        resolve, nullptr, &other);
+    check(!other.globals, "An engine text took the globals of another text");
+  }
   // Its name again, from the engine text the first gave.
   {
     auto view = engine;

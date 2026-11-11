@@ -156,15 +156,17 @@ template <class Emit> void eachToken(const std::string &text, Emit &&emit) {
       ++i;
       continue;
     }
-    if (text.compare(i, 2, "//") == 0) {
-      const auto end = text.find('\n', i);
-      i = end == std::string::npos ? text.size() : end;
-      continue;
-    }
-    if (text.compare(i, 2, "/*") == 0) {
-      const auto end = text.find("*/", i + 2);
-      i = end == std::string::npos ? text.size() : end + 2;
-      continue;
+    if (text[i] == '/' && i + 1 < text.size()) {
+      if (text[i + 1] == '/') {
+        const auto end = text.find('\n', i);
+        i = end == std::string::npos ? text.size() : end;
+        continue;
+      }
+      if (text[i + 1] == '*') {
+        const auto end = text.find("*/", i + 2);
+        i = end == std::string::npos ? text.size() : end + 2;
+        continue;
+      }
     }
     // C++ raw strings can contain quotes and identifier-looking text.
     auto raw = i;
@@ -174,7 +176,7 @@ template <class Emit> void eachToken(const std::string &text, Emit &&emit) {
           raw += prefix.size() - 2;
           break;
         }
-    if (text.compare(raw, 2, "R\"") == 0) {
+    if (text[raw] == 'R' && text.compare(raw, 2, "R\"") == 0) {
       const auto open = text.find('(', raw + 2);
       if (open != std::string::npos && open - raw <= 18) {
         const auto delimiter = text.substr(raw + 2, open - raw - 2);
@@ -370,13 +372,7 @@ void remapPageSpans(Json &view, const ByteShifts &shifted) {
 }
 /// A global as a source text declares it, by a marker or an extern's trailing
 /// address.
-struct DeclaredGlobal {
-  std::uint64_t address;
-  std::string name;
-  /// By a marker that says only the address, on a line where nothing before the
-  /// name could hold another: all a name reaches of the declaration.
-  bool plain;
-};
+using DeclaredGlobal = CodeEdits::EngineText::Global;
 std::vector<DeclaredGlobal> declaredGlobals(const std::string &text) {
   static const std::regex imageMarker(
       R"(^\s*/\*\s*neverd\.image:\s*(0x[0-9A-Fa-f]+)\b)");
@@ -993,33 +989,33 @@ struct Respelling {
 /// Respelling \p text, its body from \p bodyStart, its source names covering
 /// \p sourceNames and its variables \p sourceVariables, under \p renamed, rows
 /// of what data is called now: nothing unless the text shows a spelling is all
-/// that moves (CodeEdits::respell).
+/// that moves (CodeEdits::respell).  \p declared, where given, is the globals
+/// the text declares, as declaredGlobals reads them of it.
 std::optional<Respelling>
 respelling(const std::string &text, std::size_t bodyStart,
            const std::vector<std::pair<std::size_t, std::size_t>> &sourceNames,
-           const Json &sourceVariables, const Json &renamed) {
+           const Json &sourceVariables, const Json &renamed,
+           const std::vector<DeclaredGlobal> *declared = nullptr) {
   const auto ts = tokenViews(text);
-  // The identifiers it spells, sorted as a set of them would be.
-  std::vector<std::string_view> identifiers;
-  identifiers.reserve(ts.size());
-  for (const auto &token : ts)
-    if (identifier(token.text))
-      identifiers.push_back(token.text);
-  std::sort(identifiers.begin(), identifiers.end());
-  identifiers.erase(std::unique(identifiers.begin(), identifiers.end()),
-                    identifiers.end());
+  // The identifiers it spells are asked of its tokens: the few names a rename
+  // asks about read them faster than a set of them is made.
   const auto spells = [&](std::string_view name) {
-    return std::binary_search(identifiers.begin(), identifiers.end(), name);
+    if (!identifier(name))
+      return false;
+    for (const auto &token : ts)
+      if (token.text == name)
+        return true;
+    return false;
   };
   // A name another is numbered after: the allocator steps around it, so a
   // render under other names numbers it otherwise.
   const auto numberedAfter = [&](const std::string &name) {
     const auto prefix = name + "_";
-    for (auto at = std::lower_bound(identifiers.begin(), identifiers.end(),
-                                    std::string_view(prefix));
-         at != identifiers.end() && at->starts_with(prefix); ++at)
-      if (at->find_first_not_of("0123456789", prefix.size()) ==
-          std::string_view::npos)
+    for (const auto &token : ts)
+      if (token.text.starts_with(prefix) &&
+          token.text.find_first_not_of("0123456789", prefix.size()) ==
+              std::string_view::npos &&
+          identifier(token.text))
         return true;
     return false;
   };
@@ -1036,7 +1032,10 @@ respelling(const std::string &text, std::size_t bodyStart,
   for (const auto &variable : sourceVariables)
     if (!variable.contains("address"))
       others.insert(variable.value("name", std::string()));
-  const auto globals = declaredGlobals(text);
+  std::vector<DeclaredGlobal> read;
+  if (!declared)
+    read = declaredGlobals(text);
+  const auto &globals = declared ? *declared : read;
   // How often the text spells \p spelled, an address as hexAddress writes it
   // ("0x" and lower case digits), in either case and not followed by another
   // hexadecimal digit.
@@ -1287,7 +1286,8 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
                          const ImageFacts &image,
                          const FunctionAliases &displayNames,
                          const Resolver &resolve,
-                         std::optional<std::size_t> *definitionLine) {
+                         std::optional<std::size_t> *definitionLine,
+                         EngineText *engine) {
   if (!source(representation))
     return;
   // A view's lists are read in place: each may hold a row for every line.
@@ -1321,8 +1321,14 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
     return std::binary_search(identifiers.begin(), identifiers.end(), name);
   };
   std::map<std::string, std::uint64_t, std::less<>> globals;
-  for (auto &global : declaredGlobals(original))
-    globals[std::move(global.name)] = global.address;
+  {
+    auto declared = declaredGlobals(original);
+    // The text engineText read is this one: what it declares is read once.
+    if (engine && engine->text == original)
+      engine->globals = declared;
+    for (auto &global : declared)
+      globals[std::move(global.name)] = global.address;
+  }
   const auto links = sourceLinks(original, ts);
   const auto linked = [&links](std::string_view name) -> const std::string * {
     if (links.empty())
@@ -1901,8 +1907,9 @@ CodeEdits::takeDataNames(Json &view, const EngineText &engine,
         newNames.contains(symbol["identifier"].get<std::string>()))
       return std::nullopt;
   const auto &variables = listed(view, "source_variables");
-  const auto respelled = respelling(engine.text, engine.bodyStart,
-                                    engine.sourceNames, variables, renamed);
+  const auto respelled =
+      respelling(engine.text, engine.bodyStart, engine.sourceNames, variables,
+                 renamed, engine.globals ? &*engine.globals : nullptr);
   if (!respelled)
     return std::nullopt;
   // Each data's names before and after, by its address.
