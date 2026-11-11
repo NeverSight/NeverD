@@ -1353,8 +1353,10 @@ conditional memory, invocation lifetime and both C routes remain open.
   count and every recovered tail argument through direct, loaded-IAT and
   veneer calls, with the returns-twice declaration retained. `_longjmpex`
   shares the header-compatible integer jump-buffer pointer. Original i386
-  instructions and recompiled source check argument transport at O0/O2;
-  full nonlocal unwinding and jump-buffer lifetime remain separate work.
+  instructions and recompiled source check argument transport at O0/O2.
+  LLVM C also converts frame-member and interior-byte addresses to the
+  runtime's declared pointee without changing the backing storage.
+  Full nonlocal unwinding and jump-buffer lifetime remain separate work.
 - LLVM C keeps recovered frame addresses in the integer carriers used by
   image byte stores, including unaligned ordinary and volatile stores. Public
   execution checks preserve the address and adjacent bytes on both 32-bit and

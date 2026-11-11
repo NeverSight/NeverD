@@ -3143,7 +3143,11 @@ instructions using an independent provider that checks the buffer pointer,
 each high-bit argument, writes and return value. The paired
 `NonlocalJumpBufferAgreesWithItsRuntimeHeader` case checks `_longjmpex` against
 an independent i386 `jmp_buf` declaration. These are call-transport and source
-type checks, not native Windows unwind execution. Older MinGW headers that
+type checks, not native Windows unwind execution.
+`LLVMCValues.RuntimeVariadicFramePointersTakeTheirDeclaredPointee` additionally
+compiles frame-member and interior-byte addresses against that independent
+declaration and executes buffer writes and the return value at O0/O2.
+Older MinGW headers that
 declare `_setjmp3` with two fixed parameters do not describe the
 [documented runtime signature](https://learn.microsoft.com/en-us/cpp/c-runtime-library/setjmp3).
 
