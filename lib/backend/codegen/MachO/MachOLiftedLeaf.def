@@ -55,6 +55,8 @@ MACHO_LEAF_TEXT(
     "arm64e lifted ADRP does not reproduce the original data page and register")
 MACHO_LEAF_TEXT(kDataBinding,
                 "arm64e lifted global needs an original image data address")
+MACHO_LEAF_TEXT(kTailBranchAsm, "b ${0:c}")
+MACHO_LEAF_TEXT(kTailBranchSymbol, "s")
 MACHO_LEAF_TEXT(kFramePointerAttribute, "frame-pointer")
 MACHO_LEAF_TEXT(kNonLeafFrame, "non-leaf")
 MACHO_LEAF_VALUE(unsigned, kFrameRecordWords, 5)

@@ -25,6 +25,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -156,6 +157,36 @@ bool matchesDirectTransfer(llvm::ArrayRef<uint8_t> Source, va_t OriginalPC,
   return Owner != Generated.SymbolAddrs.end() && Owner->second == *After;
 }
 
+// LLVM lowers a swiftcc call with a writable error result as a call and
+// return. A transparent forwarding entry can transfer every incoming
+// register, including X21 and LR, directly to the callee. Emit the native
+// branch with a symbol relocation and check its final target in verifyLeaves.
+void emitSwiftErrorForwarder(llvm::Function &Entry) {
+  if (Entry.size() != 1 || Entry.front().size() != 2)
+    return;
+  auto *Call = llvm::dyn_cast<llvm::CallInst>(&Entry.front().front());
+  auto *Ret = llvm::dyn_cast<llvm::ReturnInst>(Entry.front().getTerminator());
+  if (!Call || !Ret || !Call->isTailCall() || !Call->getCalledFunction() ||
+      Call->getCallingConv() != llvm::CallingConv::Swift ||
+      Call->getFunctionType() != Entry.getFunctionType() ||
+      (Call->getType()->isVoidTy() ? Ret->getReturnValue() != nullptr
+                                   : Ret->getReturnValue() != Call))
+    return;
+  for (auto [I, Argument] : llvm::enumerate(Entry.args()))
+    if (Call->getArgOperand(I) != &Argument)
+      return;
+  llvm::IRBuilder<> B(Call);
+  auto *Target = Call->getCalledFunction();
+  auto *Ty = llvm::FunctionType::get(B.getVoidTy(), {Target->getType()}, false);
+  auto *Asm = llvm::InlineAsm::get(Ty, kTailBranchAsm, kTailBranchSymbol, true);
+  B.CreateCall(Asm, {Target})->setDoesNotReturn();
+  B.CreateUnreachable();
+  Ret->eraseFromParent();
+  Call->eraseFromParent();
+  Entry.addFnAttr(llvm::Attribute::Naked);
+  Entry.setUWTableKind(llvm::UWTableKind::Sync);
+}
+
 // Darwin's ordinary calling convention restores X21 in the epilogue. A leaf
 // with an observable X21 write needs the target's writable error carrier.
 llvm::Error bindLeafErrorResults(llvm::Module &Module) {
@@ -261,6 +292,7 @@ llvm::Error bindLeafErrorResults(llvm::Module &Module) {
     }
   }
   for (auto *Old : Writers) {
+    emitSwiftErrorForwarder(*Entries.lookup(Old));
     Old->replaceAllUsesWith(Entries.lookup(Old));
     Old->eraseFromParent();
   }
