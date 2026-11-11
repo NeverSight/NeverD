@@ -16,6 +16,7 @@
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
+#include "llvm/ADT/APInt.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
@@ -100,14 +101,17 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
     }
     return Context.Cache->apply({Op.Addr, VA, *T, Code, Action});
   }
-  if (mips::isMSAFloat(Id)) {
+  if (mips::isMSADivision(Id) && !Context.MSAFloatingPointException &&
+      Img.MIPS && Img.MIPS->HasMSA && executeMIPSScalar(Op))
+    return true;
+  if (mips::isMSANativeVector(Id)) {
     if (!Img.MIPS || !Img.MIPS->HasMSA || Img.MIPS->ISARevision != 5 ||
         !Context.MSAFloat || !Context.MSAImplementation ||
         (*Context.MSAImplementation & (1u << 16)) || !Context.MSAControl ||
         Context.MSAFloatingPointException)
       return false;
     std::array<MIPSVector, 3> Inputs;
-    const unsigned N = mips::msaFloatOperation(Id).Arity;
+    const unsigned N = mips::msaNativeOperation(Id).Arity;
     for (unsigned I = 0; I < N; ++I) {
       const auto &V = Op.Inputs[I + 1];
       if (!knownOperandBytes(V, 0, 16))
@@ -120,6 +124,12 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
         llvm::ArrayRef(Inputs).take_front(N));
     if (!R)
       return false;
+    if (mips::isMSADivision(Id)) {
+      if (!R->Destination || R->Control != *Context.MSAControl)
+        return false;
+      writeOutputBytes(Op.Output, *R->Destination);
+      return true;
+    }
     Context.MSAControl = R->Control;
     Context.MSAFloatingPointException = !R->Destination;
     if (!R->Destination)
@@ -221,9 +231,27 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
     if (!Context.CP0Usable ||
         (mips::cp0RequiresMT(Op.Inputs[1].Offset) && !Context.ImplementedMT))
       return false;
+    const uint8_t Key = Op.Inputs[1].Offset;
+    const bool Write = Id == Intrinsic::MIPSWriteCP0Word;
+    if (!mips::localCP0Word(Key, Write)) {
+      if (!Context.CP0)
+        return false;
+      if (Write) {
+        if (!knownOperandBytes(Op.Inputs[2], 0, 4) ||
+            !Context.CP0->writeWord(Key, readOperand(Op.Inputs[2]), Context))
+          return false;
+        Context.ExecutionHazardPending = true;
+      } else {
+        const auto Observed = Context.CP0->readWord(Key, Context);
+        if (!Observed)
+          return false;
+        writeOutput(Op.Output, *Observed);
+      }
+      return true;
+    }
     std::optional<uint32_t> *Value = nullptr;
     switch (Op.Inputs[1].Offset) {
-#define NEVERD_MIPS_CP0(Index, Selector, Name, Writable, MT)                   \
+#define NEVERD_MIPS_CP0(Index, Selector, Name, Writable)                       \
   case ((Selector << 5) | Index):                                              \
     Value = &Context.Name;                                                     \
     break;
@@ -280,6 +308,35 @@ bool NdOpEmulator::executeMIPSScalar(const LowOp &Op) {
   if (mips::isSystemIntrinsic(Id) || mips::isCacheIntrinsic(Id) ||
       mips::isMSAControl(Id) || mips::isMSAFloat(Id))
     return false; // Explicit, single-step context required in either mode.
+  if (mips::isMSADivision(Id)) {
+    const auto &A = Op.Inputs[1], &B = Op.Inputs[2];
+    if (!knownOperandBytes(A, 0, 16) || !knownOperandBytes(B, 0, 16))
+      return false;
+    const auto X = readOperandBytes(A), Y = readOperandBytes(B);
+    const auto Index = unsigned(Id) - unsigned(Intrinsic::MIPSMSADIV_S_B);
+    const unsigned Bytes = 1u << (Index & 3);
+    MIPSVector Output{};
+    const auto Lane = [&](const std::vector<uint8_t> &Data, unsigned Start) {
+      uint64_t V = 0;
+      for (unsigned J = 0; J != Bytes; ++J)
+        V |= uint64_t(Data[Start + J]) << (J * 8);
+      return llvm::APInt(Bytes * 8, V);
+    };
+    for (unsigned I = 0; I != 16; I += Bytes) {
+      const auto Numerator = Lane(X, I), Divisor = Lane(Y, I);
+      if (!Divisor)
+        return false; // Requires the issuing CPU's unpredictable lane result.
+      const bool Rem = Index & 8, Unsigned = Index & 4;
+      const auto V =
+          (Unsigned ? (Rem ? Numerator.urem(Divisor) : Numerator.udiv(Divisor))
+                    : (Rem ? Numerator.srem(Divisor) : Numerator.sdiv(Divisor)))
+              .getZExtValue();
+      for (unsigned J = 0; J != Bytes; ++J)
+        Output[I + J] = V >> (J * 8);
+    }
+    writeOutputBytes(Op.Output, Output);
+    return true;
+  }
   if (Id == Intrinsic::MIPSPause)
     return MIPSReservationGranule && MIPSReservationKnown &&
            !MIPSReservationAddress;
@@ -326,11 +383,37 @@ bool NdOpEmulator::executeMIPSScalar(const LowOp &Op) {
   // observation does not model devices, speculation or multiple processors.
   if (mips::isBarrier(Id))
     return true;
-  if (Id == Intrinsic::MIPSReadDSPControl) {
+  if (mips::isDSPControlIntrinsic(Id)) {
     const auto State = NdVar::reg(mipsreg::DSPControl, 4);
-    if (!knownOperandBytes(State, 0, 4))
+    const auto Source =
+        Id == Intrinsic::MIPSWriteDSPControl ? Op.Inputs[1] : State;
+    if (!availableOperandBytes(Source, 0, 4))
       return false;
-    writeOutput(Op.Output, readOperand(State) & mips::DSPControlBits);
+    auto Value = uint32_t(readOperand(Source)) & mips::DSPControlBits;
+    auto Unknown = uint32_t(unknownOperandBits(Source)) & mips::DSPControlBits;
+    if (mips::isDSPHalfCompare(Id)) {
+      if (!knownOperandBytes(Op.Inputs[1], 0, 4) ||
+          !knownOperandBytes(Op.Inputs[2], 0, 4))
+        return false;
+      Value &= ~0x0f000000u;
+      Unknown = (Unknown & ~0x0f000000u) | 0x0c000000u;
+      for (unsigned I = 0; I != 2; ++I) {
+        const auto A = int16_t(readOperand(Op.Inputs[1]) >> (16 * I));
+        const auto B = int16_t(readOperand(Op.Inputs[2]) >> (16 * I));
+        const bool Match = Id == Intrinsic::MIPSCmpEqPH   ? A == B
+                           : Id == Intrinsic::MIPSCmpLtPH ? A < B
+                                                          : A <= B;
+        Value |= uint32_t(Match) << (24 + I);
+      }
+    } else if (Id == Intrinsic::MIPSMthlipPosition) {
+      const auto Pos = Value & 63;
+      if ((Unknown & 63) || Pos > 32)
+        Unknown |= 63;
+      else
+        Value = (Value & ~63u) | ((Pos + 32) & 63);
+    }
+    writeOutput(Id == Intrinsic::MIPSReadDSPControl ? Op.Output : State, Value,
+                Unknown);
     return true;
   }
   if (Id == Intrinsic::MIPSExtractResult) {
@@ -388,11 +471,7 @@ bool NdOpEmulator::executeMIPSScalar(const LowOp &Op) {
     writeOutput(Op.Output, (uint64_t(Remainder) << 32) | Quotient);
     return true;
   }
-  if (Id == Intrinsic::MIPSWriteDSPControl) {
-    writeOutput(NdVar::reg(mipsreg::DSPControl, 4),
-                First & mips::DSPControlBits);
-    return true;
-  }
+
   if (Id == Intrinsic::MIPSRequireWord)
     return First == mips::signExtendWord(First);
   if (Id == Intrinsic::MIPSLwrUpper) {

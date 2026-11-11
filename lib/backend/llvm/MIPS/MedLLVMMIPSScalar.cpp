@@ -34,7 +34,7 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
     throw std::runtime_error(mips::kAccumulatorHistoryUnknown);
   if (Id == Intrinsic::MIPSLwrUpper)
     throw std::runtime_error(mips::kPartialLwrRequiresWord);
-  if (mips::isMSAFloat(Id) || mips::isMSAControl(Id)) {
+  if (mips::isMSANativeVector(Id) || mips::isMSAControl(Id)) {
     if (!Img || !Img->MIPS || !Img->MIPS->HasMSA || Img->MIPS->ISARevision != 5)
       throw std::runtime_error(
           "MSA native source requires an enabled MIPS32r5 MSA image");
@@ -114,6 +114,21 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
       HB.CreateRetVoid();
     }
     return B.CreateCall(Helper);
+  }
+  if (mips::isDSPPartialControl(Id)) {
+    mips::applyDSPSourceAttributes(*B.GetInsertBlock()->getParent());
+    const auto &A = mips::dspPartialOperation(Id);
+    llvm::SmallVector<llvm::Type *, 2> Types(A.Inputs, B.getInt32Ty());
+    llvm::SmallVector<llvm::Value *, 2> Args;
+    for (unsigned I = 0; I != A.Inputs; ++I) {
+      auto *V = getVar(Op.Inputs[I + 1], B);
+      Args.push_back(V->getType()->isPointerTy()
+                         ? B.CreatePtrToInt(V, B.getInt32Ty())
+                         : B.CreateZExtOrTrunc(V, B.getInt32Ty()));
+    }
+    auto *Ty = llvm::FunctionType::get(B.getVoidTy(), Types, false);
+    return B.CreateCall(llvm::InlineAsm::get(Ty, A.LLVM, A.Constraints, true),
+                        Args);
   }
   if (Id == Intrinsic::MIPSReadDSPControl ||
       Id == Intrinsic::MIPSWriteDSPControl) {

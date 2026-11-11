@@ -67,7 +67,7 @@ void writeMIPSScalarHelpers(
   const char *Reg = Wide ? "uint64_t" : "uint32_t";
   for (const auto &[Key, Name] : Helpers) {
     const auto [Id, Selector] = Key;
-    if (mips::isMSAFloat(Id) || mips::isMSAControl(Id)) {
+    if (mips::isMSANativeVector(Id) || mips::isMSAControl(Id)) {
       if (!Image || !Image->MIPS || !Image->MIPS->HasMSA ||
           Image->MIPS->ISARevision != 5)
         throw std::runtime_error(
@@ -109,6 +109,14 @@ void writeMIPSScalarHelpers(
            << "\" ::: \"memory\"); }\n";
       }
       OS << "\n";
+      continue;
+    }
+    if (mips::isDSPPartialControl(Id)) {
+      const auto &A = mips::dspPartialOperation(Id);
+      OS << "static inline "
+         << mips::sourceCompilerCAttribute(Target, Image, true) << "void "
+         << Name << (A.Inputs ? "(uint32_t a, uint32_t b)" : "(void)") << " { "
+         << mips::dspPartialC(A, "a", "b") << " }\n\n";
       continue;
     }
     if (Id == Intrinsic::MIPSReadDSPControl) {
@@ -215,7 +223,7 @@ renderMIPSScalar(const HighExpr &E, Arch Target, const std::string &Name,
                        ? "()"
                        : "(" + Expression(*E.Operands[1], 1) + ")");
   }
-  if (mips::isMSAFloat(E.IntrinsicId)) {
+  if (mips::isMSANativeVector(E.IntrinsicId)) {
     std::string Call = Name + "(";
     for (unsigned I = 0; I < E.Operands.size(); ++I) {
       if (I)

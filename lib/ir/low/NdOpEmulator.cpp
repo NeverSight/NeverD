@@ -599,6 +599,21 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following) {
           mips::isScalarIntrinsic(static_cast<Intrinsic>(Op.Inputs[0].Offset)))
         return executeMIPSScalar(Op);
       switch (Op.Opcode) {
+      case NdOp::INT_AND:
+      case NdOp::INT_OR: {
+        const auto &A = Op.Inputs[0], &B = Op.Inputs[1];
+        if (Op.NumInputs != 2 || !A.Size || A.Size > 8 || B.Size != A.Size ||
+            Op.Output.Size != A.Size || !availableOperandBytes(A, 0, A.Size) ||
+            !availableOperandBytes(B, 0, B.Size))
+          return false;
+        const uint64_t X = readOperand(A), Y = readOperand(B);
+        const uint64_t U = unknownOperandBits(A), V = unknownOperandBits(B);
+        const bool And = Op.Opcode == NdOp::INT_AND;
+        const uint64_t Unknown = And ? (U & (Y | V)) | (V & (X | U))
+                                     : (U & (~Y | V)) | (V & (~X | U));
+        writeOutput(Op.Output, And ? X & Y : X | Y, Unknown);
+        return true;
+      }
       case NdOp::SELECT:
         return executeMisc(Op);
       case NdOp::COPY:

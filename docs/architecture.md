@@ -16076,8 +16076,8 @@ values across these memory effects.
 
 The qualified MIPS16e2 system/atomic slice shares scalar shape admission but
 retains separate effectful IDs. `MIPSSystemContext` authenticates a system step;
-`MIPSCP0.def` owns the admitted CP0 word selectors, context fields and write
-permissions and MT requirements. Selector keys are `(sel << 5) | reg`;
+`MIPSCP0.def` owns built-in CP0 word views, context fields and write
+permissions and MT requirements. Board-owned views go through `MIPSCP0Platform` on the same issuing context. Selector keys are `(sel << 5) | reg`;
 Status shares the DI/EI owner, EPC/ErrorEPC words preserve all bits, and the
 three MT control views remain read-only outside typed MT operations. MT uses
 explicit ABI evidence and bound implementation/master permission. CACHE/PREF
@@ -16110,8 +16110,7 @@ The MSA integer-vector slice consumes explicit r5/o32/FP64 metadata. Decoder han
 reuse includes the ISA revision; `MIPSMSA.def` and `MIPSLiftMSA` own raw
 encodings and full-vector arithmetic. `MIPSRegs`/`TargetRegInfoMIPS` share W
 storage and low F views without assigning a floating ABI to ordinary integers.
-`MedMIPSSourceVectors` refuses unknown entry vectors, calls, saved FPR writes
-and multi-block source before optimization. It does not narrow LowIR register
+`MedMIPSSourceVectors` intersects reaching vector definitions at leaf joins and refuses unknown entry vectors, calls and saved FPR writes before optimization. It does not narrow LowIR register
 coverage or invent initial machine state.
 
 `MIPSSourceCompiler` composes source-only compiler constraints across the LLVM

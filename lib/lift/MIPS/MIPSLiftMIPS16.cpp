@@ -70,7 +70,7 @@ MIPSLifter::mips16E2Encoding(uint16_t First, uint16_t Half) const {
     return Encoding{0x00000140}; // PAUSE
   const unsigned CP0Key = (((First >> 5) & 7) << 5) | (Half & 31);
   if ((First & 0xff1e) == 0xf000 && (Half & 0xff00) == 0x6700 &&
-      mips::supportedCP0Word(CP0Key, First & 1) &&
+
       (HasMT || !mips::cp0RequiresMT(CP0Key)))
     return Encoding{uint32_t(0x40000000 | ((First & 1) << 23) | (RY << 16) |
                              ((Half & 31) << 11) | ((First >> 5) & 7))};

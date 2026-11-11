@@ -4823,7 +4823,8 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
         isMIPS64(Opts.TheArch))
       throw std::runtime_error("invalid native MSA assembly metadata");
     const auto Id = static_cast<Intrinsic>(I->getZExtValue());
-    if (!mips::isMSAControl(Id) && (!mips::isMSAFloat(Id) || !K->isZero()))
+    if (!mips::isMSAControl(Id) &&
+        (!mips::isMSANativeVector(Id) || !K->isZero()))
       throw std::runtime_error("invalid native MSA instruction");
     const auto A = mips::msaAssembly(Id, K->getZExtValue(),
                                      archLittleEndian(Opts.TheArch));
@@ -4850,6 +4851,26 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
       emitIndent(Indent);
     }
     OS << A.cStatement(Args, Out) << "\n";
+    return true;
+  }
+  for (const auto &A : mips::DSPPartialOperations) {
+    if (IA->getAsmString() != A.LLVM)
+      continue;
+    if ((!Call.getFunction()->hasFnAttribute(mips::DSPSourceMarker) &&
+         !mips::imagePreservesDSPControl(Opts.Image)) ||
+        (Opts.TheArch != Arch::MIPS32 && Opts.TheArch != Arch::MIPS32EL) ||
+        !IA->hasSideEffects() || IA->isAlignStack() || IA->canThrow() ||
+        IA->getDialect() != llvm::InlineAsm::AD_ATT ||
+        IA->getConstraintString() != A.Constraints ||
+        !Call.getType()->isVoidTy() || Call.arg_size() != A.Inputs)
+      throw std::invalid_argument(mips::MalformedDSPSource);
+    for (auto &Arg : Call.args())
+      if (!Arg->getType()->isIntegerTy(32))
+        throw std::invalid_argument(mips::MalformedDSPSource);
+    emitIndent(Indent);
+    OS << mips::dspPartialC(A, A.Inputs ? valueStr(Call.getArgOperand(0)) : "",
+                            A.Inputs ? valueStr(Call.getArgOperand(1)) : "")
+       << "\n";
     return true;
   }
   if (const auto Write = mips::dspControlSourceWrite(Call)) {

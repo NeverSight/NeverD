@@ -153,6 +153,32 @@ TEST(MIPSMSAPipeline, MissingImageCannotBypassVectorAndReturnQualification) {
     }
 }
 
+TEST(MIPSMSAPipeline, BranchJoinRequiresEveryReachingVectorDefinition) {
+  LowFunc F;
+  F.Blocks.resize(4);
+  for (unsigned I = 0; I != 4; ++I)
+    F.Blocks[I].Id = I;
+  F.Blocks[0].Succs = {1, 2};
+  F.Blocks[1].Succs = F.Blocks[2].Succs = {3};
+  LowOp Write;
+  Write.Opcode = NdOp::COPY;
+  Write.Output = NdVar::reg(mipsreg::w(1), 16);
+  Write.Inputs[0] = NdVar::cst(0, 16);
+  Write.NumInputs = 1;
+  LowOp Read = Write;
+  Read.Inputs[0] = Write.Output;
+  Read.Output = NdVar::reg(mipsreg::w(0), 16);
+  F.Blocks[1].Ops.push_back(Write);
+  F.Blocks[3].Ops.push_back(Read);
+  EXPECT_THROW(requireMIPSSourceVectors(F, Arch::MIPS32, nullptr),
+               LowToMedConversionError);
+  F.Blocks[2].Ops.push_back(Write);
+  EXPECT_NO_THROW(requireMIPSSourceVectors(F, Arch::MIPS32, nullptr));
+  F.Blocks[0].Ops.push_back(Read);
+  F.Blocks[3].Succs = {0};
+  EXPECT_THROW(requireMIPSSourceVectors(F, Arch::MIPS32, nullptr),
+               LowToMedConversionError);
+}
 TEST(MIPSMSAPipeline, StandaloneArchitectureAndFPABIHaveDistinctSaveViews) {
   for (Arch Target :
        {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL})

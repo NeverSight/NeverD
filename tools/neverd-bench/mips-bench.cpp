@@ -62,7 +62,7 @@ int main(int Argc, char **Argv) try {
                                 "capstone|decode|lift RAW_CODE REPEATS");
   Arch Target = Arch::Unknown;
   InstructionMode Encoding = InstructionMode::Default;
-  bool DSP = false, MSA = false, MIPS16E2 = false;
+  bool DSP = false, DSPR2 = false, MSA = false, MIPS16E2 = false;
 #define NEVERD_MIPS_BENCH_PROFILE(Name, Value)                                 \
   if (std::string_view(Argv[1]) == #Name)                                      \
     Target = Arch::Value;
@@ -90,6 +90,12 @@ int main(int Argc, char **Argv) try {
   if (std::string_view(Argv[1]) == #Name) {                                    \
     Target = Arch::Value;                                                      \
     DSP = true;                                                                \
+  }
+#include "mips-bench.def"
+#define NEVERD_MIPS_DSPR2_BENCH_PROFILE(Name, Value)                           \
+  if (std::string_view(Argv[1]) == #Name) {                                    \
+    Target = Arch::Value;                                                      \
+    DSP = DSPR2 = true;                                                        \
   }
 #include "mips-bench.def"
 #define NEVERD_MIPS_MSA_BENCH_PROFILE(Name, Value)                             \
@@ -127,6 +133,7 @@ int main(int Argc, char **Argv) try {
   Profile.Mode = Encoding;
   Profile.MIPS.emplace();
   Profile.MIPS->HasDSP = DSP;
+  Profile.MIPS->HasDSPR2 = DSPR2;
   Profile.MIPS->HasMIPS16E2 = MIPS16E2;
   Profile.MIPS->HasMSA = MSA;
   Profile.MIPS->ISARevision = MSA ? 5 : 2;

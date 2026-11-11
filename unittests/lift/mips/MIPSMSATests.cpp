@@ -365,6 +365,37 @@ std::vector<uint8_t> vectorExpected(const VectorCase &Case,
 
 class MIPSMSA : public ::testing::TestWithParam<Arch> {};
 
+TEST_P(MIPSMSA, WideningAliasesAndSignedUnsignedSaturationUseFullLaneWidths) {
+  auto I = msaImage(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(I));
+  NdOpEmulator E(I);
+  E.setStrictMode(true);
+  const auto W0 = mipsreg::w(0), W1 = mipsreg::w(1);
+  const auto Repeated = [](uint8_t Lo, uint8_t Hi) {
+    std::vector<uint8_t> V(16);
+    for (unsigned I = 0; I != 16; ++I)
+      V[I] = I % 2 ? Hi : Lo;
+    return V;
+  };
+  E.setRegisterBytes(W0, Repeated(0x7f, 0x80));
+  E.setRegisterBytes(W1, Repeated(0xff, 0x40));
+  ASSERT_TRUE(msaExecute(D, GetParam(), 0x7a210015, E)); // hadd_s.h w0,w0,w1
+  EXPECT_EQ(E.getRegisterBytes(W0), Repeated(0x7f, 0xff));
+  E.setRegisterBytes(W0, Repeated(0x7f, 0x80));
+  ASSERT_TRUE(msaExecute(D, GetParam(), 0x78210013, E)); // dotp_s.h w0,w0,w1
+  EXPECT_EQ(E.getRegisterBytes(W0), Repeated(0x81, 0xdf));
+  E.setRegisterBytes(W0, Repeated(0xff, 0));
+  E.setRegisterBytes(W1, Repeated(0x80, 1));
+  ASSERT_TRUE(msaExecute(D, GetParam(), 0x79010011, E)); // subsus_u.b w0,w0,w1
+  EXPECT_EQ(E.getRegisterBytes(W0), Repeated(0xff, 0));
+  ASSERT_TRUE(msaExecute(D, GetParam(), 0x79810011, E)); // subsuu_s.b w0,w0,w1
+  EXPECT_EQ(E.getRegisterBytes(W0), Repeated(0x7f, 0xff));
+  E.setRegisterBytes(W0, Repeated(0, 0x80));
+  E.setRegisterBytes(W1, Repeated(0, 0x80));
+  ASSERT_TRUE(msaExecute(D, GetParam(), 0x7901001c, E)); // mul_q.h w0,w0,w1
+  EXPECT_EQ(E.getRegisterBytes(W0), Repeated(0xff, 0x7f));
+}
 TEST_P(MIPSMSA, FillInsertCopyEveryWordAndSharedLowViews) {
   auto Image = msaImage(GetParam());
   Decoder Decode;
@@ -1268,6 +1299,32 @@ TEST_P(MIPSMSA, PartitionSelectorsEnforcePrivilegeAndPhysicalRegisterCapacity) {
 }
 
 #ifdef NEVERD_MIPS_UNICORN_REFERENCE
+TEST_P(MIPSMSA, ZeroDivisorsUseTheBoundIntegerImplementationWithoutFPTraps) {
+  auto CPU = emulation::createP5600MSAExecutor(GetParam());
+  ASSERT_TRUE(bool(CPU)) << llvm::toString(CPU.takeError());
+  const auto Image = msaImage(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  NdOpEmulator E(Image);
+  E.setStrictMode(true);
+  E.setRegisterBytes(mipsreg::w(0), std::vector<uint8_t>(16, 0x80));
+  E.setRegisterBytes(mipsreg::w(1), std::vector<uint8_t>(16, 0xff));
+  auto Ops = msaLift(D, GetParam(), 0x7a010092); // div_s.b w2,w0,w1
+  ASSERT_EQ(Ops.size(), 1u);
+  ASSERT_TRUE(E.step(Ops[0]));
+  EXPECT_EQ(E.getRegisterBytes(mipsreg::w(2)), std::vector<uint8_t>(16, 0x80));
+  E.setRegisterBytes(mipsreg::w(1), std::vector<uint8_t>(16));
+  EXPECT_FALSE(E.step(Ops[0]));
+  EXPECT_EQ(E.getRegisterBytes(mipsreg::w(2)), std::vector<uint8_t>(16, 0x80));
+  MIPSSystemContext C;
+  C.MSAFloat = CPU->get();
+  C.MSAImplementation = 0; // P5600 MSAIR
+  C.MSAControl = 0x405;
+  ASSERT_TRUE(E.stepMIPSSystem(Ops[0], C));
+  EXPECT_EQ(C.MSAControl, 0x405u);
+  EXPECT_FALSE(C.MSAFloatingPointException);
+  EXPECT_EQ(E.getRegisterBytes(mipsreg::w(2)), std::vector<uint8_t>(16, 1));
+}
 TEST_P(MIPSMSA,
        ConcreteFloatingPointUsesBoundCSRAndCommitsTrapWithoutDestination) {
   auto CPU = emulation::createP5600MSAExecutor(GetParam());

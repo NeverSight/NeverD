@@ -51,7 +51,7 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
     break;
 #include "neverd/ir/intrinsics/MIPS/MIPSMSAFloat.def"
     default:
-      return false;
+      return liftMSAAdditional(S, Word);
     }
     if (Id == Intrinsic::MIPSMSAFCLASS_W || Id == Intrinsic::MIPSMSAFCLASS_D) {
       const uint16_t Bytes = Id == Intrinsic::MIPSMSAFCLASS_W ? 4 : 8;
@@ -95,7 +95,7 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
     const auto D = NdVar::reg(mipsreg::w(WD), 16),
                A = NdVar::reg(mipsreg::w(WS), 16),
                B = NdVar::reg(mipsreg::w(WT), 16);
-    switch (mips::msaFloatOperation(Id).Arity) {
+    switch (mips::msaNativeOperation(Id).Arity) {
     case 1:
       S.emitIntrinsic(Id, D, {A});
       break;
@@ -144,7 +144,7 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
     Kind = Instruction::Name;
 #include "neverd/lift/MIPS/MIPSMSA.def"
   if (!Kind)
-    return false;
+    return liftMSAAdditional(S, Word);
   const unsigned Index = WT & 3;
   const auto Lane = [&](unsigned Reg, unsigned I, uint16_t Bytes = 4) {
     return S.vectorElement(Reg, I, Bytes);
