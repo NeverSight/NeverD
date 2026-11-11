@@ -7,6 +7,7 @@
 
 #include "MachOLiftedObject.h"
 
+#include "neverd/analysis/LLVMPrivateFrameAccesses.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/MachO/MachOCompactUnwindPatch.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
@@ -26,8 +27,11 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Transforms/Scalar/DCE.h"
+#include "llvm/Transforms/Scalar/SROA.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
 namespace neverd {
@@ -533,10 +537,18 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
   for (const auto &Mapping : Mappings) {
     const auto *Frame =
         Image.ExceptionMetadata.findFunction(Mapping.OriginalVA);
-    if (Frame && Frame->Compact &&
-        Frame->Compact->NativeEncoding == macho_unwind::kARM64ModeFrame)
-      Candidate->getFunction(Mapping.Symbol)
-          ->addFnAttr(kFramePointerAttribute, kNonLeafFrame);
+    if (!Frame || !Frame->Compact ||
+        Frame->Compact->NativeEncoding != macho_unwind::kARM64ModeFrame)
+      continue;
+    // The source supplies a compact X29 record. An additional FDE may
+    // specify distinct asynchronous locations and needs its own replay.
+    if (llvm::any_of(Image.ExceptionMetadata.Functions, [&](const auto &F) {
+          return F.Dwarf && F.CodeRange.contains(Mapping.OriginalVA);
+        }))
+      return refuse(kLeafFrame);
+    auto *Entry = Candidate->getFunction(Mapping.Symbol);
+    Entry->addFnAttr(kFramePointerAttribute, kNonLeafFrame);
+    Entry->setUWTableKind(llvm::UWTableKind::Sync);
   }
   llvm::SmallVector<llvm::Module::ModuleFlagEntry> Flags;
   Candidate->getModuleFlagsMetadata(Flags);
@@ -559,6 +571,19 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
   } else {
     Candidate->addModuleFlag(llvm::Module::AppendUnique, kLeafABIFlag,
                              ExpectedFlag);
+  }
+  // The native prologue saves FP/LR itself. Remove only unobservable
+  // accesses to the lifter's private frame before emitting that prologue.
+  if (canonicalizePrivateFrameAccesses(*Candidate)) {
+    llvm::FunctionAnalysisManager Analyses;
+    llvm::PassBuilder().registerFunctionAnalyses(Analyses);
+    llvm::FunctionPassManager Cleanup;
+    Cleanup.addPass(llvm::DCEPass());
+    Cleanup.addPass(llvm::SROAPass(llvm::SROAOptions::PreserveCFG));
+    Cleanup.addPass(llvm::DCEPass());
+    for (auto &F : *Candidate)
+      if (!F.isDeclaration())
+        Cleanup.run(F, Analyses);
   }
   auto Object =
       Codegen().compile(*Candidate, Image.Arch, Image.Format, *Triple);

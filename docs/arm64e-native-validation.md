@@ -564,7 +564,12 @@ unwind coverage. Removing the return-signing policy refuses publication.
 For standard X29 compact frames, the publisher also checks the PACIBSP,
 saved X29/X30 pair, X29 setup, pair restore and RETAB at their final PCs.
 A direct BL in such a frame must still reach its original dyld stub or the
-installed owner of its source callee. The framed import fixture calls
+installed owner of its source callee. A compact-only input retains its compact
+unwind mode. The optimizer and publisher share the same bounds check when
+they turn accesses to the lifter's private stack into LLVM frame slots. The
+backend can then remove an unobservable spill before creating its native
+frame. A separate FDE for the same frame requires its own replay.
+The framed import fixture calls
 `getpid`, reads an exported variable after the call and returns their sum.
 The caller changes that variable between invocations. Other stack layouts
 and PC-dependent signing need their own instruction and unwind coverage.

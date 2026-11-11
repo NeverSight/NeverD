@@ -13,6 +13,8 @@
 #ifndef NEVERD_PIPELINE_LIMITS_H
 #define NEVERD_PIPELINE_LIMITS_H
 
+#include "neverd/analysis/LLVMPrivateFrameAccesses.h"
+
 #include <cstddef>
 #include <cstdint>
 
@@ -306,11 +308,12 @@ inline constexpr int kPipelineLowIRComputeCallRegisterEffectsBatchSizeDefault =
     8;
 
 // lib/pipeline/PipelineOptimize.cpp
-inline constexpr int kPipelineOptimizePrivateFrameDisplacementWorkLimit = 1024;
+inline constexpr int kPipelineOptimizePrivateFrameDisplacementWorkLimit =
+    frame_access::kMaxFrameAddressSteps;
 inline constexpr int kPipelineOptimizeReturnDependsOnProvenLoadSeenSizeLimit =
-    512;
+    frame_access::kMaxReturnVisited;
 inline constexpr int kPipelineOptimizeReturnDependsOnProvenLoadWorkSizeLimit =
-    512;
+    frame_access::kMaxReturnWork;
 
 // lib/pipeline/PipelineSEHRuntimeMemory.cpp
 inline constexpr int
