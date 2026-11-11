@@ -307,6 +307,14 @@ bool Decoder::decodeArchitectureFallback(const uint8_t *Bytes, size_t Len,
 LLVM_ATTRIBUTE_ALWAYS_INLINE bool
 Decoder::decodePhysical(const uint8_t *Bytes, size_t Len, va_t Addr) {
   InsnBuf->illegal = false;
+  if (MIPSISARevision == 6 && Len >= 4) {
+    const auto Word =
+        readTargetEndian<uint32_t>(Bytes, archLittleEndian(TargetArch));
+    // The physical decoder aliases paired LL/SC to an offset form and swaps the
+    // n64 SC operands. Own this small SPECIAL3 group before public decoding.
+    if ((Word & 0xfc00002e) == 0x7c000026)
+      return decodeMIPSReservation(Bytes, Word, Addr);
+  }
   // POOL32S vector forms have no microMIPS entries in Capstone. Avoid a
   // failed physical decode for every vector arithmetic or load/store opcode.
   const bool VectorPool =

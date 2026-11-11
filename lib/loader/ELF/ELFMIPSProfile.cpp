@@ -234,7 +234,8 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
     Profile.HasDSPR2 = ASE & llvm::Mips::AFL_ASE_DSPR2;
     Profile.HasDSP = Profile.HasDSPR2 || (ASE & llvm::Mips::AFL_ASE_DSP);
     Profile.HasMSA = ASE & llvm::Mips::AFL_ASE_MSA;
-    if (R6 && ASE)
+    const uint32_t AllowedXPA = R6 ? uint32_t(llvm::Mips::AFL_ASE_XPA) : 0u;
+    if (R6 && (ASE & ~AllowedXPA))
       return profileError("unsupported Release 6 extension profile");
     if (Profile.HasMSA &&
         (ELFT::Is64Bits || Profile.HasMIPS16 || Profile.HasDSP ||
@@ -249,9 +250,9 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
       return profileError("ABI flags conflict with the admitted GPR profile");
     if (Bytes[5] > (Profile.HasMSA ? 3 : 2) || Bytes[6] != 0 || Bytes[7] > 7 ||
         Read32(8) != 0 ||
-        (ASE &
-         ~(llvm::Mips::AFL_ASE_DSP | llvm::Mips::AFL_ASE_DSPR2 |
-           llvm::Mips::AFL_ASE_MSA | llvm::Mips::AFL_ASE_MT | kMIPS16E2ASE)) !=
+        (ASE & ~(llvm::Mips::AFL_ASE_DSP | llvm::Mips::AFL_ASE_DSPR2 |
+                 llvm::Mips::AFL_ASE_MSA | llvm::Mips::AFL_ASE_MT |
+                 kMIPS16E2ASE | AllowedXPA)) !=
             (Profile.HasMicroMIPS ? llvm::Mips::AFL_ASE_MICROMIPS
              : Profile.HasMIPS16  ? llvm::Mips::AFL_ASE_MIPS16
                                   : 0u) ||

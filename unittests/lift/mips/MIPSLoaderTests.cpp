@@ -165,6 +165,23 @@ TEST_P(MIPSLoader, Release6HeaderAndABIFlagsMustAgree) {
   }
 }
 
+TEST_P(MIPSLoader, XPAHighWordTransferFlagRequiresRelease6) {
+  for (bool R6 : {false, true}) {
+    ELFBytes File(GetParam());
+    File.abiFlags();
+    if (R6) {
+      File.put(File.Is64 ? 48 : 36, File.Is64 ? 0xa0000000u : 0x90001000u, 4);
+      File.Bytes[0xe3] = 6;
+    }
+    File.put(0xec, 0x1000, 4); // AFL_ASE_XPA
+    ELFLoader Loader;
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_EQ(bool(Image), R6);
+    if (!Image)
+      llvm::consumeError(Image.takeError());
+  }
+}
+
 TEST_P(MIPSLoader, DynamicProgramTagsUseTheImageByteOrder) {
   ELFBytes File(GetParam());
   File.dynamicSymbols(0);

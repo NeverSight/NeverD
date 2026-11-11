@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ArchSupport.h"
+#include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -218,7 +219,39 @@ bool MIPSLifter::liftRelease6(State &S, uint32_t Word) const {
     S.write(RS, Value, Kind != 2);
     return true;
   }
+  if (Op == 16 || (Op == 31 && (Fn == 0x25 || Fn == 0x35 || Fn == 0x3b)))
+    return liftSystem(S, Word);
   if (Op == 31) {
+    if (const auto R = mips::r6Reservation(Word)) {
+      if (R->ElementBytes > S.Width ||
+          (!R->Store && R->Paired && RT && RT == RD))
+        return false;
+      auto Address = S.read(RS);
+      if (!R->Paired) {
+        const auto Offset = llvm::SignExtend64<9>(Word >> 7);
+        if (Offset)
+          Address =
+              S.binary(NdOp::INT_ADD, Address, NdVar::cst(Offset, S.Width));
+      }
+      if (R->Store) {
+        const auto Result = S.makeTemp(4);
+        if (R->Paired)
+          S.emitIntrinsic(R->Id, Result, {Address, S.read(RT), S.read(RD)});
+        else
+          S.emitIntrinsic(R->Id, Result, {Address, S.read(RT)});
+        S.write(RT, Result);
+      } else {
+        const auto Value = S.makeTemp(R->bytes());
+        S.emitIntrinsic(R->Id, Value, {Address});
+        S.write(RT, S.resize(Value, R->ElementBytes));
+        if (R->Paired && RD) {
+          const auto High = S.makeTemp(R->ElementBytes);
+          S.emit(NdOp::SUBBYTES, High, {Value, NdVar::cst(R->ElementBytes, 4)});
+          S.write(RD, High);
+        }
+      }
+      return true;
+    }
     const uint16_t Bytes = Fn == 36 ? 8 : 4;
     if ((Fn == 32 || Fn == 36) && Bytes <= S.Width) {
       const unsigned BP = SA & (Bytes - 1);

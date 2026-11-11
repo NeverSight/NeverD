@@ -6,17 +6,99 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
+#include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/Support/MathExtras.h"
+
 #include <algorithm>
+#include <array>
+#include <cstdio>
 
 namespace neverd {
 namespace {
+const char *physicalMnemonic(csh Handle, unsigned ID) {
+  switch (ID) {
 #define NEVERD_MIPS_PHYSICAL_FORM(Name, Offset, Text)                          \
-  constexpr char Name##Mnemonic[] = Text;
+  case MIPSLifter::Name##ID:                                                   \
+    return Text;
 #include "neverd/lift/MIPS/MIPSPhysicalForms.def"
+  default:
+    return cs_insn_name(Handle, ID);
+  }
+}
+constexpr std::array<mips_reg, 32> GPR = {
+#define NEVERD_MIPS_GPR(Name, Index, O32, N64, Reg) Reg,
+#include "neverd/lift/MIPS/MIPSRegisters.def"
+};
 } // namespace
+
+bool Decoder::decodeMIPSReservation(const uint8_t *Bytes, uint32_t Word,
+                                    va_t Addr) {
+  const auto R = mips::r6Reservation(Word);
+  const bool Wide = isMIPS64(TargetArch);
+  if (!R || (!Wide && R->ElementBytes == 8))
+    return false;
+  unsigned ID;
+  switch (R->Id) {
+#define NEVERD_MIPS_RESERVATION(Code, Width, Pair, Load, LID, LM, Store, SID,  \
+                                SM, CSLoad, CSStore)                           \
+  case Intrinsic::Load:                                                        \
+    ID = CSLoad;                                                               \
+    break;                                                                     \
+  case Intrinsic::Store:                                                       \
+    ID = CSStore;                                                              \
+    break;
+#include "neverd/ir/intrinsics/MIPS/MIPSReservation.def"
+  default:
+    llvm_unreachable("unknown MIPS reservation transfer");
+  }
+  auto *DetailBuf = InsnBuf->detail;
+  *InsnBuf = {};
+  InsnBuf->detail = DetailBuf;
+  InsnBuf->id = ID;
+  InsnBuf->address = Addr;
+  InsnBuf->size = 4;
+  std::copy_n(Bytes, 4, InsnBuf->bytes);
+  const unsigned RS = (Word >> 21) & 31, RT = (Word >> 16) & 31,
+                 RD = (Word >> 11) & 31;
+  const auto Offset = R->Paired ? 0 : int(llvm::SignExtend64<9>(Word >> 7));
+  if (Text) {
+    const auto RegName = [&](unsigned Reg) {
+      return Wide ? getMIPS64RegName(mipsreg::r(Reg), 8)
+                  : getMIPS32RegName(mipsreg::r(Reg), 4);
+    };
+    std::snprintf(InsnBuf->mnemonic, sizeof(InsnBuf->mnemonic), "%s",
+                  physicalMnemonic(Handle, ID));
+    if (R->Paired)
+      std::snprintf(InsnBuf->op_str, sizeof(InsnBuf->op_str), "$%s, $%s, ($%s)",
+                    RegName(RT), RegName(RD), RegName(RS));
+    else
+      std::snprintf(InsnBuf->op_str, sizeof(InsnBuf->op_str), "$%s, %d($%s)",
+                    RegName(RT), Offset, RegName(RS));
+  }
+  if (Detail) {
+    *DetailBuf = {};
+    auto &M = DetailBuf->mips;
+    auto &First = M.operands[M.op_count++];
+    First.type = MIPS_OP_REG;
+    First.reg = GPR[RT];
+    First.access = R->Store ? CS_AC_READ_WRITE : CS_AC_WRITE;
+    if (R->Paired) {
+      auto &Second = M.operands[M.op_count++];
+      Second.type = MIPS_OP_REG;
+      Second.reg = GPR[RD];
+      Second.access = R->Store ? CS_AC_READ : CS_AC_WRITE;
+    }
+    auto &Mem = M.operands[M.op_count++];
+    Mem.type = MIPS_OP_MEM;
+    Mem.mem = {GPR[RS], Offset};
+    Mem.access = R->Store ? CS_AC_WRITE : CS_AC_READ;
+  }
+  return true;
+}
 
 bool Decoder::decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr) {
   if (Len < 4)
@@ -34,8 +116,8 @@ bool Decoder::decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr) {
     InsnBuf->size = 4;
     std::copy_n(Bytes, 4, InsnBuf->bytes);
     if (Text)
-      std::copy_n(NoOpAndLinkMnemonic, sizeof(NoOpAndLinkMnemonic),
-                  InsnBuf->mnemonic);
+      std::snprintf(InsnBuf->mnemonic, sizeof(InsnBuf->mnemonic), "%s",
+                    physicalMnemonic(Handle, InsnBuf->id));
     if (Detail) {
       *D = {};
       D->regs_read[D->regs_read_count++] = MIPS_REG_PC;
@@ -43,14 +125,10 @@ bool Decoder::decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr) {
     }
     return true;
   }
-  if (isMIPS64(TargetArch)) {
-    const auto Physical = readTargetEndian<uint32_t>(Bytes, Little);
-    if (!MIPS->isDSPIndexedDoubleword(Physical))
-      return false;
-    // LDX has the identical operand layout and access roles as LWX. Capstone
-    // provides the operand detail. Keep LDX's own physical identity and bytes.
+  const auto Physical = readTargetEndian<uint32_t>(Bytes, Little);
+  const auto DecodeEquivalent = [&](uint32_t Word) {
     uint8_t Encoded[4];
-    llvm::support::endian::write32(Encoded, Physical & ~0x200u,
+    llvm::support::endian::write32(Encoded, Word,
                                    Little ? llvm::endianness::little
                                           : llvm::endianness::big);
     const uint8_t *Code = Encoded;
@@ -59,19 +137,74 @@ bool Decoder::decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr) {
     InsnBuf->illegal = false;
     if (!cs_disasm_iter(Handle, &Code, &Size, &PC, InsnBuf))
       return false;
+    std::copy_n(Bytes, 4, InsnBuf->bytes);
+    return true;
+  };
+  if (MIPSISARevision == 6) {
+    const unsigned RS = (Physical >> 21) & 31;
+    if ((Physical & 0xfc0007f8) == 0x40000000 && (RS == 2 || RS == 6)) {
+      // MFHC0/MTHC0 have the same operand roles as MFC0/MTC0.
+      if (!DecodeEquivalent(Physical & ~(2u << 21)))
+        return false;
+      InsnBuf->id = RS == 2 ? MIPS_INS_MFHC0 : MIPS_INS_MTHC0;
+      if (Text)
+        std::snprintf(InsnBuf->mnemonic, sizeof(InsnBuf->mnemonic), "%s",
+                      cs_insn_name(Handle, InsnBuf->id));
+      return true;
+    }
+    if ((Physical & 0xffe0063f) == 0x7c00003b) {
+      const unsigned RD = (Physical >> 11) & 31, RT = (Physical >> 16) & 31;
+      const unsigned Selector = (Physical >> 6) & 7;
+      if (!mips::supportedR6HardwareRegister((Selector << 5) | RD) ||
+          !DecodeEquivalent(0x7c00e83b | (RT << 16)))
+        return false;
+      if (Detail) {
+        auto &M = InsnBuf->detail->mips;
+        M.op_count = 2;
+        M.operands[0].type = MIPS_OP_REG;
+        M.operands[0].reg = GPR[RT];
+        M.operands[0].access = CS_AC_WRITE;
+        M.operands[1].type = MIPS_OP_REG;
+        M.operands[1].reg = static_cast<mips_reg>(MIPS_REG_HWR0 + RD);
+        M.operands[1].access = CS_AC_READ;
+        if (Selector) {
+          auto &Sel = M.operands[M.op_count++];
+          Sel = {};
+          Sel.type = MIPS_OP_IMM;
+          Sel.imm = Selector;
+          Sel.access = CS_AC_READ;
+        }
+      }
+      if (Text) {
+        const auto Name = isMIPS64(TargetArch)
+                              ? getMIPS64RegName(mipsreg::r(RT), 8)
+                              : getMIPS32RegName(mipsreg::r(RT), 4);
+        if (Selector)
+          std::snprintf(InsnBuf->op_str, sizeof(InsnBuf->op_str),
+                        "$%s, $%u, %u", Name, RD, Selector);
+        else
+          std::snprintf(InsnBuf->op_str, sizeof(InsnBuf->op_str), "$%s, $%u",
+                        Name, RD);
+      }
+      return true;
+    }
+  }
+  if (isMIPS64(TargetArch)) {
+    if (!MIPS->isDSPIndexedDoubleword(Physical) ||
+        !DecodeEquivalent(Physical & ~0x200u))
+      return false;
     InsnBuf->id = MIPSLifter::IndexedLoadDoublewordID;
     if (Text)
-      std::copy_n(IndexedLoadDoublewordMnemonic,
-                  sizeof(IndexedLoadDoublewordMnemonic), InsnBuf->mnemonic);
-    std::copy_n(Bytes, 4, InsnBuf->bytes);
+      std::snprintf(InsnBuf->mnemonic, sizeof(InsnBuf->mnemonic), "%s",
+                    physicalMnemonic(Handle, InsnBuf->id));
     return true;
   }
   if (CurrentMode != InstructionMode::MicroMIPS)
     return false;
-  const uint32_t Physical = uint32_t(readTargetEndian<uint16_t>(Bytes, Little))
-                                << 16 |
-                            readTargetEndian<uint16_t>(Bytes + 2, Little);
-  const auto Classic = MIPS->microASEWord(Physical);
+  const uint32_t MicroPhysical =
+      uint32_t(readTargetEndian<uint16_t>(Bytes, Little)) << 16 |
+      readTargetEndian<uint16_t>(Bytes + 2, Little);
+  const auto Classic = MIPS->microASEWord(MicroPhysical);
   if (!Classic)
     return false;
   // Capstone has classic MSA and DSP tables for forms missing in its

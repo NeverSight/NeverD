@@ -13,6 +13,13 @@ from elftools.elf.elffile import ELFFile
 
 
 R6 = (
+    ("", "pause"),
+    ("$2", "di ei"),
+    ("$2,$12,0", "mfc0 mtc0 mfhc0 mthc0"),
+    ("$2,$4,3", "rdhwr"),
+    ("3,-8($4)", "cache pref"),
+    ("$2,-8($4)", "ll sc"),
+    ("$2,$3,($4)", "llwp scwp"),
     ("", "nal"),
     ("$2,$4,$5", "selnez seleqz mul muh mulu muhu div mod divu modu"),
     ("$2,$4", "clz clo bitswap"),
@@ -30,6 +37,9 @@ R6 = (
     ("$4,4", "jic jialc"),
 )
 R6_DOUBLE = (
+    ("$2,$14,0", "dmfc0 dmtc0"),
+    ("$2,248($4)", "lld scd"),
+    ("$2,$3,($4)", "lldp scdp"),
     ("$2,$4,$5", "dmul dmuh dmulu dmuhu ddiv dmod ddivu dmodu"),
     ("$2,$4", "dclo dclz dbitswap"),
     ("$2,$4,$5,3", "dlsa dalign"),
@@ -89,6 +99,8 @@ def assemble(tools, directory, profile, cpu, feature, instructions, little):
         + ".size entry,.-entry\n"
     )
     options = ["-m" + feature] if feature else []
+    if cpu.endswith("r6"):
+        options.append("-mxpa")  # High CP0 transfers carry the GNU XPA flag.
     if feature == "msa":
         options.append("-mfp64")
     subprocess.run(

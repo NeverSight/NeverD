@@ -185,73 +185,10 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
   const uint64_t Immediate = static_cast<uint64_t>(int64_t(int16_t(Word)));
   const bool Wide = S.Width == 8;
 
-  if (Mode == InstructionMode::MIPS16 && HasMIPS16E2 && !Wide) {
-    if (Word == 0x00000140) {
-      S.emitIntrinsic(Intrinsic::MIPSPause, {});
-      return true;
-    }
-    const unsigned CP0Key = ((Word & 7) << 5) | RD;
-    if (Opcode == 16 && (RS == 0 || RS == 4) && !(Word & 0x7f8) &&
-        (HasMT || !mips::cp0RequiresMT(CP0Key))) {
-      if (RS == 4)
-        S.emitIntrinsic(Intrinsic::MIPSWriteCP0Word, {},
-                        {NdVar::cst(CP0Key, 1), S.read(RT)});
-      else {
-        const auto Result = S.makeTemp(4);
-        S.emitIntrinsic(Intrinsic::MIPSReadCP0Word, Result,
-                        {NdVar::cst(CP0Key, 1)});
-        S.write(RT, Result);
-      }
-      return true;
-    }
-    if (Opcode == 47 || Opcode == 51) {
-      const auto Address =
-          S.binary(NdOp::INT_ADD, S.read(RS), NdVar::cst(Immediate, 4));
-      S.emitIntrinsic(Opcode == 47 ? Intrinsic::MIPSCache
-                                   : Intrinsic::MIPSPrefetch,
-                      {}, {NdVar::cst(RT, 1), Address});
-      return true;
-    }
-    if (HasMT && ((Word & 0xffe0ffdf) == 0x41600bc1 ||
-                  (Word & 0xffe0ffdf) == 0x41600001)) {
-      const bool Thread = Word & 0x800;
-      const auto Id = Thread ? (Word & 32 ? Intrinsic::MIPSEnableMT
-                                          : Intrinsic::MIPSDisableMT)
-                             : (Word & 32 ? Intrinsic::MIPSEnableVPE
-                                          : Intrinsic::MIPSDisableVPE);
-      const auto Result = S.makeTemp(4);
-      S.emitIntrinsic(Id, Result);
-      S.write(RT, Result);
-      return true;
-    }
-    if (Opcode == 48 || Opcode == 56) {
-      const auto Address =
-          S.binary(NdOp::INT_ADD, S.read(RS), NdVar::cst(Immediate, 4));
-      const auto Result = S.makeTemp(4);
-      if (Opcode == 48)
-        S.emitIntrinsic(Intrinsic::MIPSLoadLinkedWord, Result, {Address});
-      else
-        S.emitIntrinsic(Intrinsic::MIPSStoreConditionalWord, Result,
-                        {Address, S.read(RT)});
-      S.write(RT, Result);
-      return true;
-    }
-    if ((Word & 0xffe007ff) == 0x7c00003b) {
-      const auto Result = S.makeTemp(4);
-      S.emitIntrinsic(Intrinsic::MIPSReadHardwareRegister, Result,
-                      {NdVar::cst(RD, 1)});
-      S.write(RT, Result);
-      return true;
-    }
-    if ((Word & 0xffe0ffdf) == 0x41606000) {
-      const auto Result = S.makeTemp(4);
-      S.emitIntrinsic(Word & 32 ? Intrinsic::MIPSEnableInterrupts
-                                : Intrinsic::MIPSDisableInterrupts,
-                      Result);
-      S.write(RT, Result);
-      return true;
-    }
-  }
+  if (((Mode == InstructionMode::MIPS16 && HasMIPS16E2 && !Wide) ||
+       (ISARevision == 6 && Word == 0x140)) &&
+      liftSystem(S, Word))
+    return true;
   if (Word == 0x00000140)
     return false;           // PAUSE requires an admitted execution profile.
   if (Word == 0x000000c0) { // EHB, before the generic SLL zero destination.

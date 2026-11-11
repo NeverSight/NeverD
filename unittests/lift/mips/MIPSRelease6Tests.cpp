@@ -8,6 +8,7 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/low/MIPS/MIPSCachePlatform.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -40,6 +41,21 @@ protected:
                                        ? llvm::endianness::little
                                        : llvm::endianness::big);
     return Decode.decodeUnitForLift(Bytes, sizeof(Bytes), PC, Unit);
+  }
+  bool runSystem(uint32_t Word, NdOpEmulator &Emu, MIPSSystemContext &Context) {
+    if (decode(Word) != 4)
+      return false;
+    Ops.clear();
+    Decode.liftUnitToLow(Unit, Ops);
+    for (const auto &Op : Ops) {
+      if (Op.Opcode == NdOp::INTRINSIC &&
+          Op.Inputs[0].Offset != unsigned(Intrinsic::MIPSPause)) {
+        if (!Emu.stepMIPSSystem(Op, Context))
+          return false;
+      } else if (!Emu.step(Op))
+        return false;
+    }
+    return true;
   }
   void run(uint32_t Word, NdOpEmulator &Emu) {
     ASSERT_EQ(decode(Word), 4);
@@ -270,6 +286,338 @@ TEST_P(MIPSRelease6, ForbiddenSlotFaultDependsOnFallthrough) {
   EXPECT_TRUE(Ops.empty());
 }
 
+TEST_P(MIPSRelease6, AtomicDisassemblyAndRegisterAccessMatchThePhysicalBytes) {
+  // GNU binutils 2.47, identical words in o32 and n64 objects.
+  const bool Wide = isMIPS64(GetParam());
+  struct Row {
+    uint32_t Word;
+    const char *Name;
+    bool Paired;
+    bool Store;
+    bool Double;
+  };
+  constexpr Row Rows[] = {
+      {0x7c82fc36, "ll", false, false, false},
+      {0x7c82fc26, "sc", false, true, false},
+      {0x7c82fc37, "lld", false, false, true},
+      {0x7c82fc27, "scd", false, true, true},
+      {0x7c821876, "llwp", true, false, false},
+      {0x7c821866, "scwp", true, true, false},
+      {0x7c821877, "lldp", true, false, true},
+      {0x7c821867, "scdp", true, true, true},
+  };
+  for (const auto &R : Rows) {
+    SCOPED_TRACE(R.Name);
+    if (!Wide && R.Double) {
+      EXPECT_EQ(decode(R.Word), 0);
+      continue;
+    }
+    ASSERT_EQ(decode(R.Word), 4);
+    const auto *Raw = Unit.Head.Raw;
+    ASSERT_STREQ(Raw->mnemonic, R.Name);
+    EXPECT_STREQ(Raw->op_str, R.Paired ? "$v0, $v1, ($a0)" : "$v0, -8($a0)");
+    ASSERT_NE(Raw->detail, nullptr);
+    const auto &M = Raw->detail->mips;
+    ASSERT_EQ(M.op_count, R.Paired ? 3 : 2);
+    EXPECT_EQ(M.operands[0].reg, MIPS_REG_V0);
+    EXPECT_EQ(M.operands[0].access, R.Store ? CS_AC_READ_WRITE : CS_AC_WRITE);
+    if (R.Paired) {
+      EXPECT_EQ(M.operands[1].reg, MIPS_REG_V1);
+      EXPECT_EQ(M.operands[1].access, R.Store ? CS_AC_READ : CS_AC_WRITE);
+    }
+    const auto &Mem = M.operands[M.op_count - 1];
+    EXPECT_EQ(Mem.type, MIPS_OP_MEM);
+    EXPECT_EQ(Mem.mem.base, MIPS_REG_A0);
+    EXPECT_EQ(Mem.mem.disp, R.Paired ? 0 : -8);
+    EXPECT_EQ(Mem.access, R.Store ? CS_AC_WRITE : CS_AC_READ);
+  }
+  EXPECT_EQ(decode(0x7c8218f6), 0); // reserved bits 10:7 in paired LL
+  ASSERT_EQ(decode(0x7c821076), 4); // LLWP v0,v0,(a0) is unpredictable
+  Ops.clear();
+  EXPECT_THROW(Decode.liftUnitToLow(Unit, Ops), UnliftedInstruction);
+  EXPECT_TRUE(Ops.empty());
+}
+
+TEST_P(MIPSRelease6,
+       LoadLinkedAndStoreConditionalRespectWidthByteOrderAndInterference) {
+  const bool Wide = isMIPS64(GetParam()), Little = archLittleEndian(GetParam());
+  const va_t VA = Wide ? 0x100002000ull : 0x2000;
+  Segment Data;
+  Data.VA = VA;
+  Data.Size = Data.FileSz = 64;
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  for (unsigned I = 0; I < Data.Size; ++I)
+    Data.Data.push_back(0x81 + I);
+  Image.Segments.push_back(Data);
+  for (bool Double : {false, true}) {
+    if (Double && !Wide)
+      continue;
+    const uint16_t Element = Double ? 8 : 4;
+    for (bool Paired : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << Element << " paired " << Paired);
+      const uint32_t LL = (Paired ? 0x7c821876 : 0x7c82fc36) + Double;
+      const uint32_t SC = LL ^ 0x10;
+      NdOpEmulator E(Image);
+      E.setStrictMode(true);
+      ASSERT_TRUE(E.setMIPSReservationModel(4, Paired));
+      E.setRegister(mipsreg::A0, VA + (Paired ? 0 : 8));
+      const auto Half = [&](unsigned Index) {
+        const unsigned Position = Paired && !Little ? 1 - Index : Index;
+        uint64_t V = 0;
+        for (unsigned I = 0; I < Element; ++I)
+          V |= uint64_t(Data.Data[Position * Element +
+                                  (Little ? I : Element - I - 1)])
+               << (8 * I);
+        return Wide && !Double ? uint64_t(int64_t(int32_t(V))) : V;
+      };
+      run(LL, E);
+      EXPECT_EQ(E.getRegister(mipsreg::V0), Half(0));
+      if (Paired)
+        EXPECT_EQ(E.getRegister(mipsreg::V1), Half(1));
+      constexpr uint64_t NewLow = 0x0172635485abcdefull,
+                         NewHigh = 0xf987654387654321ull;
+      E.setRegister(mipsreg::V0, Wide ? NewLow : uint32_t(NewLow));
+      E.setRegister(mipsreg::V1, Wide ? NewHigh : uint32_t(NewHigh));
+      run(SC, E);
+      EXPECT_EQ(E.getRegister(mipsreg::V0), 1u);
+      EXPECT_EQ(E.getRegister(mipsreg::V1), Wide ? NewHigh : uint32_t(NewHigh));
+      // A new linked read checks all bytes of the atomic write and its order.
+      run(LL, E);
+      const auto GPR = [&](uint64_t V) -> uint64_t {
+        return Double ? V : Wide ? uint64_t(int64_t(int32_t(V))) : uint32_t(V);
+      };
+      EXPECT_EQ(E.getRegister(mipsreg::V0), GPR(NewLow));
+      if (Paired)
+        EXPECT_EQ(E.getRegister(mipsreg::V1), GPR(NewHigh));
+      LowOp Write;
+      Write.Opcode = NdOp::STORE;
+      Write.addInput(
+          NdVar::cst(VA + Element * (Paired ? 2 : 1) - 1, Wide ? 8 : 4));
+      Write.addInput(NdVar::cst(0x12, 1));
+      ASSERT_TRUE(E.step(Write));
+      run(SC, E);
+      EXPECT_EQ(E.getRegister(mipsreg::V0), 0u);
+      run(SC, E);
+      EXPECT_EQ(E.getRegister(mipsreg::V0), 0u);
+    }
+  }
+}
+
+TEST_P(MIPSRelease6, PairedReservationNeedsXNPAndValidMappingBeforeAnyEffect) {
+  const bool Wide = isMIPS64(GetParam());
+  const va_t VA = Wide ? 0x200002000ull : 0x2000;
+  Segment Data;
+  Data.VA = VA;
+  Data.Size = Data.FileSz = 32;
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Data.Data.assign(32, 0x34);
+  Image.Segments.push_back(Data);
+  NdOpEmulator E(Image);
+  auto Execute = [&](uint32_t Word) {
+    EXPECT_EQ(decode(Word), 4);
+    Ops.clear();
+    Decode.liftUnitToLow(Unit, Ops);
+    return llvm::all_of(Ops, [&](const auto &Op) { return E.step(Op); });
+  };
+  ASSERT_TRUE(E.setMIPSReservationModel(16));
+  E.setRegister(mipsreg::A0, VA);
+  EXPECT_FALSE(Execute(0x7c821876)); // Config5.XNP unknown
+  ASSERT_TRUE(E.setMIPSReservationModel(16, true));
+  E.setRegister(mipsreg::V0, 91);
+  E.setRegister(mipsreg::V1, 92);
+  EXPECT_FALSE(Execute(0x7c821866)); // no incoming LLBit evidence
+  EXPECT_EQ(E.getRegister(mipsreg::V0), 91u);
+  ASSERT_TRUE(Execute(0x7c800076)); // zero,zero still establishes LLBit
+  E.setRegister(mipsreg::A0, VA + 1);
+  EXPECT_FALSE(Execute(0x7c821866)); // rejected SC leaves the old reservation
+  E.setRegister(mipsreg::A0, VA + 32);
+  EXPECT_FALSE(Execute(0x7c821866));
+  E.setRegister(mipsreg::A0, VA);
+  EXPECT_FALSE(Execute(Wide ? 0x7c820027 : 0x7c820026)); // mismatch, same VA
+  ASSERT_TRUE(Execute(0x7c821866));
+  EXPECT_EQ(E.getRegister(mipsreg::V0), 1u);
+  ASSERT_TRUE(Execute(0x7c821876));
+  E.setRegister(mipsreg::A0, VA + 16);
+  ASSERT_TRUE(Execute(0x7c821866)); // a different mapped VA gives known failure
+  EXPECT_EQ(E.getRegister(mipsreg::V0), 0u);
+}
+
+TEST_P(MIPSRelease6, SelectedHardwareRegisterDetailDoesNotRequireText) {
+  for (bool Text : {false, true}) {
+    Decode.setText(Text);
+    ASSERT_EQ(decode(0x7c0220fb), 4); // RDHWR v0,$4,3
+    auto *Raw = Unit.Head.Raw;
+    ASSERT_NE(Raw->detail, nullptr);
+    const auto &Operands = Raw->detail->mips;
+    ASSERT_EQ(Operands.op_count, 3);
+    EXPECT_EQ(Operands.operands[0].reg, MIPS_REG_V0);
+    EXPECT_EQ(Operands.operands[0].access, CS_AC_WRITE);
+    EXPECT_EQ(Operands.operands[1].reg, MIPS_REG_HWR4);
+    EXPECT_EQ(Operands.operands[1].access, CS_AC_READ);
+    EXPECT_EQ(Operands.operands[2].type, MIPS_OP_IMM);
+    EXPECT_EQ(Operands.operands[2].imm, 3);
+    if (Text)
+      EXPECT_STREQ(Raw->op_str, "$v0, $4, 3");
+  }
+}
+
+TEST_P(MIPSRelease6, CP0UsesTheRequestedViewAndHardwareSelector) {
+  class Board final : public MIPSCP0Platform {
+  public:
+    uint64_t Entry = 0xfedcba9887654321ull;
+    bool MVH = false;
+    std::optional<uint32_t> readWord(uint8_t Key,
+                                     MIPSSystemContext &) override {
+      if (Key != 2)
+        return std::nullopt;
+      // MFC0 of EntryLo moves RI/XI from bits 63:62 to bits 31:30.
+      return uint32_t(Entry & 0x3fffffff) | uint32_t(Entry >> 32 & 0xc0000000);
+    }
+    bool writeWord(uint8_t Key, uint32_t V, MIPSSystemContext &) override {
+      if (Key != 2)
+        return false;
+      Entry = (Entry & 0x3fffffff00000000ull) |
+              (uint64_t(V & 0xc0000000) << 32) | (V & 0x3fffffff);
+      return true;
+    }
+    std::optional<uint64_t> readExtended(uint8_t Key, MIPSCP0ExtendedView View,
+                                         MIPSSystemContext &) override {
+      if (Key != 2 || (View == MIPSCP0ExtendedView::HighWord && !MVH))
+        return std::nullopt;
+      return View == MIPSCP0ExtendedView::Doubleword ? Entry
+                                                     : uint32_t(Entry >> 32);
+    }
+    bool writeExtended(uint8_t Key, MIPSCP0ExtendedView View, uint64_t Value,
+                       MIPSSystemContext &) override {
+      if (Key != 2 || (View == MIPSCP0ExtendedView::HighWord && !MVH))
+        return false;
+      Entry = View == MIPSCP0ExtendedView::Doubleword
+                  ? Value
+                  : ((Entry & UINT32_MAX) | (Value << 32));
+      return true;
+    }
+  } B;
+  const bool Wide = isMIPS64(GetParam());
+  auto SignWord = [&](uint32_t V) -> uint64_t {
+    return Wide ? uint64_t(int64_t(int32_t(V))) : V;
+  };
+  NdOpEmulator E(Image);
+  E.setStrictMode(true);
+  MIPSSystemContext C;
+  C.CP0 = &B;
+  C.Status = 0x80000001;
+  EXPECT_FALSE(runSystem(0x40021000, E, C));
+  C.CP0Usable = true;
+  ASSERT_TRUE(runSystem(0x40021000, E, C)); // MFC0, full declared word view
+  EXPECT_EQ(E.getRegister(mipsreg::V0), SignWord(0xc7654321));
+  EXPECT_FALSE(runSystem(0x40421000, E, C)); // MFHC0 without MVH observation
+  B.MVH = true;
+  ASSERT_TRUE(runSystem(0x40421000, E, C));
+  EXPECT_EQ(E.getRegister(mipsreg::V0), SignWord(0xfedcba98));
+  E.setRegister(mipsreg::V0, 0x11223344);
+  ASSERT_TRUE(runSystem(0x40c21000, E, C)); // MTHC0
+  EXPECT_TRUE(C.ExecutionHazardPending);
+  EXPECT_FALSE(runSystem(0x40021000, E, C));
+  ASSERT_TRUE(runSystem(0xc0, E, C)); // EHB
+  EXPECT_EQ(B.Entry, 0x1122334487654321ull);
+  E.setRegister(mipsreg::V0, 0xc1122334);
+  ASSERT_TRUE(runSystem(0x40821000, E, C));
+  ASSERT_TRUE(runSystem(0xc0, E, C));
+  EXPECT_EQ(B.Entry, 0xd122334401122334ull);
+  if (Wide) {
+    constexpr uint64_t Full = 0x8011223344556677;
+    E.setRegister(mipsreg::V0, Full);
+    ASSERT_TRUE(runSystem(0x40a21000, E, C)); // DMTC0
+    ASSERT_TRUE(runSystem(0xc0, E, C));
+    ASSERT_TRUE(runSystem(0x40221000, E, C)); // DMFC0
+    EXPECT_EQ(E.getRegister(mipsreg::V0), Full);
+  }
+  ASSERT_TRUE(
+      runSystem(0x41626000, E, C)); // DI, then EI after resolving hazard
+  EXPECT_EQ(E.getRegister(mipsreg::V0), SignWord(0x80000001));
+  EXPECT_EQ(C.Status, 0x80000000u);
+  ASSERT_TRUE(runSystem(0xc0, E, C));
+  ASSERT_TRUE(runSystem(0x41626020, E, C));
+  EXPECT_EQ(C.Status, 0x80000001u);
+  ASSERT_TRUE(runSystem(0xc0, E, C));
+  C.CP0Usable = false;
+  C.Hardware = MIPSHardwareObservation{4, 0xabcdef0187654321, 3};
+  EXPECT_FALSE(runSystem(0x7c0220fb, E, C));
+  C.HWREna = 1u << 4;
+  EXPECT_FALSE(runSystem(0x7c0220bb, E, C)); // correct register, wrong selector
+  ASSERT_TRUE(runSystem(0x7c0220fb, E, C));
+  EXPECT_EQ(E.getRegister(mipsreg::V0),
+            Wide ? 0xabcdef0187654321ull : 0x87654321u);
+  EXPECT_FALSE(C.Hardware.has_value());
+  C.HWREna = 1u << 5;
+  C.Hardware = MIPSHardwareObservation{5, 1, 0};
+  ASSERT_TRUE(runSystem(0x7c02283b, E, C));
+  EXPECT_EQ(E.getRegister(mipsreg::V0), 1u);
+  ASSERT_TRUE(E.setMIPSReservationModel(16, true));
+  C.Hardware = MIPSHardwareObservation{5, 1, 0};
+  EXPECT_FALSE(runSystem(0x7c02283b, E, C)); // contradicts the bound XNP=0
+  C.Hardware = MIPSHardwareObservation{5, 0, 0};
+  ASSERT_TRUE(runSystem(0x7c02283b, E, C));
+}
+
+TEST_P(MIPSRelease6, CacheAndPrefetchKeepRevisionAndTheEntireAddress) {
+  class Board final : public MIPSCachePlatform {
+  public:
+    uint64_t Last = 0;
+    bool Wide = false;
+    MIPSCacheMapping Mapping = MIPSCacheMapping::Cached;
+    std::optional<MIPSCacheRequest> Request;
+    std::optional<MIPSCacheTranslation> translateDataRead(uint32_t V) override {
+      Last = V;
+      Wide = false;
+      return MIPSCacheTranslation{Mapping, V};
+    }
+    std::optional<MIPSCacheTranslation>
+    translateDataRead64(uint64_t V) override {
+      Last = V;
+      Wide = true;
+      return MIPSCacheTranslation{Mapping, V};
+    }
+    bool apply(const MIPSCacheRequest &R) override {
+      Request = R;
+      return true;
+    }
+  } B;
+  const bool Wide = isMIPS64(GetParam());
+  const uint64_t VA = Wide ? 0x123400002008ull : 0x2008;
+  NdOpEmulator E(Image);
+  E.setRegister(mipsreg::A0, VA);
+  MIPSSystemContext C;
+  C.Cache = &B;
+  EXPECT_FALSE(runSystem(0x7c83fc25, E, C));
+  C.CP0Usable = true;
+  ASSERT_TRUE(runSystem(0x7c83fc25, E, C)); // CACHE 3,-8(a0)
+  EXPECT_EQ(B.Wide, Wide);
+  EXPECT_EQ(B.Last, VA - 8);
+  ASSERT_TRUE(B.Request);
+  EXPECT_EQ(B.Request->VirtualAddress, VA - 8);
+  EXPECT_EQ(B.Request->Action, MIPSCacheAction::IndexWritebackInvalidate);
+  EXPECT_EQ(B.Request->ISARevision, 6);
+  B.Request.reset();
+  C.CP0Usable = false;
+  ASSERT_TRUE(runSystem(0x7c91fc35, E, C)); // PREF L3 store, -8(a0)
+  ASSERT_TRUE(B.Request);
+  EXPECT_EQ(B.Request->Encoding, 17);
+  EXPECT_EQ(B.Request->Action, MIPSCacheAction::Prefetch);
+  B.Request.reset();
+  B.Mapping = MIPSCacheMapping::AddressException;
+  EXPECT_TRUE(runSystem(0x7c91fc35, E, C));
+  EXPECT_FALSE(B.Request);
+  ASSERT_EQ(decode(0x7c98fc35), 4);
+  Ops.clear();
+  EXPECT_THROW(Decode.liftUnitToLow(Unit, Ops),
+               UnliftedInstruction); // reserved R6 hint 24
+  ASSERT_TRUE(E.setMIPSReservationModel(16));
+  EXPECT_FALSE(runSystem(0x140, E, C)); // PAUSE needs a cleared LLBit
+  E.clearMIPSReservation();
+  EXPECT_TRUE(runSystem(0x140, E, C));
+}
+
 TEST_P(MIPSRelease6, RemovedLegacyEncodingsNeverGetTheirOldSemantics) {
   for (const auto Word :
        {0x00850018u, 0x70001002u, 0x88820000u, 0x0085100au, 0x03e00008u}) {
@@ -335,6 +683,52 @@ TEST_P(MIPSRelease6, IntegerKernelsMatchRelease6HardwareModel) {
         run(Words[I], E);
         EXPECT_EQ(E.getRegister(mipsreg::V0), Expected)
             << std::hex << Words[I] << " inputs " << A << ", " << B;
+      }
+    }
+  }
+  // Run real LL/SC at one PC interval. Compare the success bit, the value
+  // observed by LL, and a second linked read of the committed memory.
+  Segment Data;
+  Data.VA = 0x20000;
+  Data.Size = Data.FileSz = 32;
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Data.Data.resize(Data.Size);
+  Image.Segments.push_back(Data);
+  ASSERT_EQ(uc_mem_map(Raw, Data.VA, 0x1000, UC_PROT_ALL), UC_ERR_OK);
+  const auto Order = Little ? llvm::endianness::little : llvm::endianness::big;
+  for (bool Double : {false, true}) {
+    if (Double && !Wide)
+      continue;
+    const uint32_t LL = 0x7c82fc36 + Double, SC = 0x7ca2fc26 + Double;
+    const auto PC = 0x10800 + (Double ? 0x40 : 0);
+    uint8_t Code[20];
+    const uint32_t Insns[] = {LL, 0x00401825, 0x38420055, SC, LL};
+    for (unsigned J = 0; J < std::size(Insns); ++J)
+      llvm::support::endian::write32(Code + 4 * J, Insns[J], Order);
+    ASSERT_EQ(uc_mem_write(Raw, PC, Code, sizeof(Code)), UC_ERR_OK);
+    for (unsigned Seed : {0u, 0x70u, 0x80u, 0xffu}) {
+      for (bool Same : {false, true}) {
+        auto &Bytes = Image.Segments.back().Data;
+        for (unsigned I = 0; I < Bytes.size(); ++I)
+          Bytes[I] = Seed + 31 * I;
+        ASSERT_EQ(uc_mem_write(Raw, Data.VA, Bytes.data(), Bytes.size()),
+                  UC_ERR_OK);
+        const auto Base = Data.VA + 8, Destination = Base + (Same ? 0 : 16);
+        Set(UC_MIPS_REG_A0, Base);
+        Set(UC_MIPS_REG_A1, Destination);
+        ASSERT_EQ(uc_emu_start(Raw, PC, PC + 16, 0, 4), UC_ERR_OK);
+        NdOpEmulator E(Image);
+        E.setStrictMode(true);
+        ASSERT_TRUE(E.setMIPSReservationModel(16));
+        E.setRegister(mipsreg::A0, Base);
+        E.setRegister(mipsreg::A1, Destination);
+        for (unsigned I = 0; I < 4; ++I)
+          run(Insns[I], E);
+        EXPECT_EQ(E.getRegister(mipsreg::V1), Get(UC_MIPS_REG_V1));
+        EXPECT_EQ(E.getRegister(mipsreg::V0), Get(UC_MIPS_REG_V0));
+        ASSERT_EQ(uc_emu_start(Raw, PC + 16, PC + 20, 0, 1), UC_ERR_OK);
+        run(LL, E);
+        EXPECT_EQ(E.getRegister(mipsreg::V0), Get(UC_MIPS_REG_V0));
       }
     }
   }

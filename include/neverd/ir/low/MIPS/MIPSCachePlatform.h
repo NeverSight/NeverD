@@ -37,10 +37,11 @@ enum class MIPSCacheAction {
 };
 struct MIPSCacheRequest {
   uint64_t InstructionAddress;
-  uint32_t VirtualAddress;
+  uint64_t VirtualAddress;
   MIPSCacheTranslation Translation;
   uint8_t Encoding;
   MIPSCacheAction Action;
+  uint8_t ISARevision = 2;
 };
 struct MIPSCacheLine {
   uint64_t PhysicalBase = 0;
@@ -58,6 +59,11 @@ public:
   /// nullopt means insufficient translation evidence, even for a prefetch.
   virtual std::optional<MIPSCacheTranslation>
   translateDataRead(uint32_t VA) = 0;
+  virtual std::optional<MIPSCacheTranslation> translateDataRead64(uint64_t VA) {
+    if (VA > UINT32_MAX)
+      return std::nullopt;
+    return translateDataRead(uint32_t(VA));
+  }
   /// Apply one cache transaction atomically. Return false for a fault, an
   /// unsupported cache, or an undefined operation. The board determines the
   /// addressed set/way and any writeback, fill, tag and coherence effects.

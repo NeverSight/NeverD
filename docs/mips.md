@@ -119,8 +119,7 @@ have the extension a narrow C parameter would require. Declared source types
 remain a separate contract.
 
 The n32 ABI, historical MIPS I–V profiles,
-microMIPS64, scalar floating point, MSA/DSP forms beyond the slices below, privileged
-instructions and LL/SC reservations outside the qualified MIPS16e2 LowIR slice below,
+microMIPS64, scalar floating point, MSA/DSP forms beyond the slices below, privileged instructions and reservations outside the MIPS16e2 and classic Release 6 LowIR coverage below,
 doubleword merge stores (`SDL`/`SDR`), pre-R6 doubleword division and trapping arithmetic are not admitted by
 the current lifter. Unsupported instructions, missing slots and transfers in a
 delay slot produce errors, not replacement NOPs. Floating/aggregate source ABI
@@ -447,9 +446,9 @@ feature evidence are checked before effects. SC captures the original address
 and stored value before overwriting its GPR with 0/1. An unused result cannot
 remove the memory/reservation or system effect. SC ends stack-memory argument
 recovery, so an earlier outgoing stack value cannot survive a conditional write.
-Classic LL/SC and general privileged instruction admission are unchanged.
+Classic Release 6 reservations and CP0 transfers are described below.
 
-`NdOpEmulator::setMIPSReservationModel` explicitly selects a MIPS32 flat,
+`NdOpEmulator::setMIPSReservationModel` explicitly selects a flat,
 synchronizable ordinary-RAM model with identity virtual/physical addresses,
 Config5.LLB=1 and a supplied power-of-two coherence granule of at least four
 bytes. It assumes no unreported interference or cache eviction. Incoming
@@ -970,7 +969,7 @@ The comparison uses classic MIPS32r2/o32 DSP, MIPS32r5/o32 MSA, and compressed
 MIPS16e2 r2/o32. DSP64, compressed DSP/MSA and the Release 6 DSP compact
 branch BPOSGE32C have separate ISA and ABI requirements.
 
-## Classic Release 6 integer instructions
+## Classic Release 6 instructions
 
 Linked MIPS32r6/o32 and MIPS64r6/n64 ELF select a revision-specific integer
 decoder. It covers three-register multiply, multiply-high, divide and modulo,
@@ -986,12 +985,26 @@ Surviving legacy delayed transfers retain their slot. NAL writes PC+8 before
 executing its delay slot. Removed HI/LO and branch-likely encodings
 cannot use the Release 2 lifter through this profile.
 
-The current Release 6 path covers classic integer code. microMIPSr6, optional
-Release 6 ASEs, scalar floating point and general privileged/system execution
-still require separate implementation. See the linked GNU fixture in the
-[testing guide](testing.md) for the enumerated instruction forms and the
-[MIPS64 Instruction Set Reference Manual, revision 6.06](https://docs.alexrp.com/mips/mips64_insns_v6_06.pdf)
-for encodings, input restrictions and compact transfer semantics.
+Release 6 also lifts signed nine-bit-offset `LL/SC` and `LLD/SCD`, and
+offset-free `LLWP/SCWP` and `LLDP/SCDP`. Doubleword elements require n64.
+The first GPR in a pair carries the least significant element in either byte
+order. The emulator checks the full naturally aligned memory span, including
+write permission on a failed conditional store. Its flat-memory reservation
+model takes the target coherence granule. The two-argument overload with
+`PairedTransfers=true` also binds Config5.XNP=0. An unresolved reservation or
+an inconsistent same-address pairing stops evaluation. A failed comparison
+against a different mapped address returns zero and leaves memory untouched.
+
+`MFC0/MTC0`, `MFHC0/MTHC0`, n64 `DMFC0/DMTC0`, `RDHWR`, `DI/EI`,
+`EHB`, `PAUSE`, `CACHE` and `PREF` retain their machine-state dependencies
+in LowIR. A board supplies implemented CP0 views, including MVH support for
+high-word transfers. Selected performance registers use the encoded RDHWR
+selector. A cache request includes the ISA revision and full virtual address.
+Source generation currently declines live reservation and board-state effects.
+General privileged execution, scalar floating point, microMIPSr6 and optional
+Release 6 ASEs require additional coverage. The [testing guide](testing.md)
+covers the linked GNU fixtures. The encoding and execution rules follow the
+[MIPS64 Instruction Set Reference Manual, revision 6.06](https://docs.alexrp.com/mips/mips64_insns_v6_06.pdf).
 
 The [MIPS64 DSP, microMIPS ASE and Release 6 qualification](evidence/mips64-micro-r6-2026-11-11.json)
 records the linked big- and little-endian corpora, per-form comparisons and

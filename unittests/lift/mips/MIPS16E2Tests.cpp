@@ -836,7 +836,9 @@ TEST_P(MIPS16E2, CP0SelectorsAndStatefulShapesRejectUnsupportedContracts) {
                 ++Op.NumInputs;
               EXPECT_FALSE(mipsScalarLowShapeIsValid(Op, GetParam()));
             }
-            EXPECT_FALSE(mipsScalarLowShapeIsValid(Ops[0], Arch::MIPS64));
+            // R6 n64 shares the same architectural CP0 word view.
+            EXPECT_TRUE(mipsScalarLowShapeIsValid(Ops[0], Arch::MIPS64));
+            EXPECT_FALSE(mipsScalarLowShapeIsValid(Ops[0], Arch::X64));
           } else
             EXPECT_THROW(e2Lift(D, GetParam(), Word), UnliftedInstruction);
         }
@@ -900,7 +902,8 @@ TEST_P(MIPS16E2, PauseCompletesOnlyWithExplicitlyKnownClearReservation) {
   auto Bad = Ops[0];
   Bad.Output = NdVar::tmp(1, 4);
   EXPECT_FALSE(mipsScalarLowShapeIsValid(Bad, GetParam()));
-  EXPECT_FALSE(mipsScalarLowShapeIsValid(Ops[0], Arch::MIPS64));
+  EXPECT_TRUE(mipsScalarLowShapeIsValid(Ops[0], Arch::MIPS64));
+  EXPECT_FALSE(mipsScalarLowShapeIsValid(Ops[0], Arch::X64));
   MIPSLifter L(GetParam(), InstructionMode::MIPS16);
   L.setMIPS16E2Enabled(true);
   cs_insn Head{}, Slot{};

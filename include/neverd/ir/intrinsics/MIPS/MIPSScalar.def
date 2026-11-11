@@ -42,14 +42,20 @@ NEVERD_MIPS_SCALAR_INTRINSIC(MIPSExecutionHazardBarrier, 16013,
                              "neverd_mips_ehb")
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSSync, 16014, "neverd_mips_sync")
 
-NEVERD_MIPS_SCALAR_INTRINSIC(MIPSLoadLinkedWord, 16015, "neverd_mips_ll")
-NEVERD_MIPS_SCALAR_INTRINSIC(MIPSStoreConditionalWord, 16016, "neverd_mips_sc")
+#define NEVERD_MIPS_RESERVATION(Code, Width, Paired, Load, LID, LM, Store,     \
+                                SID, SM, CSLoad, CSStore)                      \
+  NEVERD_MIPS_SCALAR_INTRINSIC(Load, LID, "neverd_mips_" #LM)                  \
+  NEVERD_MIPS_SCALAR_INTRINSIC(Store, SID, "neverd_mips_" #SM)
+#include "neverd/ir/intrinsics/MIPS/MIPSReservation.def"
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSReadHardwareRegister, 16017,
                              "neverd_mips_rdhwr")
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSDisableInterrupts, 16018, "neverd_mips_di")
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSEnableInterrupts, 16019, "neverd_mips_ei")
-NEVERD_MIPS_SCALAR_INTRINSIC(MIPSReadCP0Word, 16020, "neverd_mips_mfc0")
-NEVERD_MIPS_SCALAR_INTRINSIC(MIPSWriteCP0Word, 16021, "neverd_mips_mtc0")
+#define NEVERD_MIPS_CP0_TRANSFER(RS, Bytes, Write, Name, Value, Mnemonic)      \
+  NEVERD_MIPS_SCALAR_INTRINSIC(Name, Value, "neverd_mips_" #Mnemonic)
+#include "neverd/ir/intrinsics/MIPS/MIPSCP0Transfer.def"
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSReadR6HardwareRegister, 16049,
+                             "neverd_mips_r6_rdhwr")
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSPause, 16022, "neverd_mips_pause")
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSDisableMT, 16023, "neverd_mips_dmt")
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSEnableMT, 16024, "neverd_mips_emt")

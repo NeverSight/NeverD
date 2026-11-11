@@ -1,6 +1,7 @@
 add_neverd_component_library(NeverDLift
   MIPS/MIPSLifter.cpp
   MIPS/MIPSLiftR6.cpp
+  MIPS/MIPSLiftSystem.cpp
   MIPS/MIPSLiftBitfield.cpp
   MIPS/MIPSLiftDSP.cpp
   MIPS/MIPSLiftDSPAdditional.cpp

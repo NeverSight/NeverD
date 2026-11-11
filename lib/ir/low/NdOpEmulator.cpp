@@ -120,7 +120,7 @@ predicatedInstructionEnd(llvm::ArrayRef<LowOp> Ops,
 
 void NdOpEmulator::reset() {
   MIPSReservationKnown = false;
-  MIPSReservationAddress.reset();
+  MIPSReservation.reset();
   UnknownBits.clear();
   Registers.clear();
   WideRegisters.clear();
@@ -487,13 +487,14 @@ bool NdOpEmulator::storeMemoryBytes(uint64_t Addr,
   std::memcpy(&Low, Value.data(), std::min<size_t>(Value.size(), sizeof(Low)));
   // All committed ordinary writes share this owner, including partial and
   // vector stores. Comparing the granule rather than the old word detects ABA.
-  if (MIPSReservationAddress) {
-    const uint64_t Block = uint64_t(*MIPSReservationAddress) &
-                           ~(uint64_t(*MIPSReservationGranule) - 1);
+  if (MIPSReservation) {
+    const uint64_t Span =
+        std::max<uint64_t>(*MIPSReservationGranule, MIPSReservation->Bytes);
+    const uint64_t Block = MIPSReservation->Address & ~(Span - 1);
     for (uint16_t I = 0; I < Size; ++I) {
       const uint64_t Byte = Wrap32 ? uint32_t(Addr + I) : Addr + I;
-      if (Byte >= Block && Byte - Block < *MIPSReservationGranule) {
-        MIPSReservationAddress.reset();
+      if (Byte >= Block && Byte - Block < Span) {
+        MIPSReservation.reset();
         break;
       }
     }
@@ -523,7 +524,7 @@ void NdOpEmulator::setCallPreservedRegisters(std::vector<uint64_t> Regs) {
 
 void NdOpEmulator::clobberVolatileRegisters() {
   MIPSReservationKnown = false;
-  MIPSReservationAddress.reset();
+  MIPSReservation.reset();
   // An unknown callee may change MXCSR status. Do not publish the stale word
   // as an authenticated input to an explicit FP state operation.
   MXCSRKnown = false;
@@ -1076,7 +1077,7 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following) {
     if (StrictMode)
       return false;
     MIPSReservationKnown = false;
-    MIPSReservationAddress.reset();
+    MIPSReservation.reset();
     ++Skips.ApproximatedOps;
     if (Op.Output.isReg() || Op.Output.isTemp()) {
       Registers.erase(Op.Output.Offset);
@@ -1257,7 +1258,7 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following) {
     ++Skips.UnsupportedOps;
     if (!StrictMode) {
       MIPSReservationKnown = false;
-      MIPSReservationAddress.reset();
+      MIPSReservation.reset();
     }
     return !StrictMode;
   }
