@@ -568,8 +568,7 @@ source build of the pinned NeverSight LLVM fork for this qualification; the
 default r6 selection stays unchanged.
 
 Add `--publish` to exercise `bindSourcePatch` and `installSourcePatch` on the
-same reconstructed fixed-C entry matrix. The admitted original dylib reserves
-TEXT/header capacity and contains 26
+same reconstructed fixed-C entry matrix. Each original dylib contains 26
 public trapping entries and the independently compiled native caller/thrower.
 Native validation first requires that original image to enter its caller and
 then trap before the completion marker; a startup trap is insufficient. It
@@ -579,13 +578,13 @@ value, catch, cleanup, post-exception and corrupted-pointer check. This is a
 complete published fixture image, not automatic admission of arbitrary lifted
 modules.
 
-The same matrix first checks refusal of dylibs with `-Wl,-headerpad,0` and no
-such reservation. The initial default-linked local dylib also lacked capacity.
-Their DATA mapping blocks TEXT growth, and the current installer has no
-complete relocation contract to move those original addresses. The
-publication lane explicitly links with `-Wl,-headerpad,0x8000`; it does not
-qualify arbitrary tightly packed dylibs. Closing that layout gap remains
-required for general whole-image publication.
+The linker receives `-Wl,-headerpad,0` for all four compact cases and both O2
+indexed-DWARF cases. NeverD fits the regular unwind table into checked TEXT
+storage and preserves the UUID and code-signing command capacity. The two O0
+DWARF cases still need `-Wl,-headerpad,0x8000`. Their existing TEXT mapping
+ends at live DATA and cannot hold the combined unwind records. Each case also
+fills the remaining TEXT tail of a private input copy and requires refusal
+before producing an output.
 
 The publication test also checks rejection before the receipt commits,
 unchanged input bytes, exact installed entry receipts and refusal to overwrite
@@ -621,7 +620,7 @@ The [native backend/publication run](https://github.com/gmh5225/test_mac_intel/a
 passed on both macos-26 and xcode-27. Each host executed eight direct backend
 cases and eight installed-image cases, with six independent compiler-original
 PAC/unwind controls. All eight original images per host reached the caller
-marker and trapped; all eight unreserved layouts were refused without output.
+marker and trapped; all eight unreserved layouts were refused by that revision.
 The [evidence record](evidence/arm64e-backend-publication-2026-11-11.json)
 binds source `3f5513c8e936cc057326213abfe976748c98ee50`, the source LLVM fork
 `5676029e378c9e37adc16c8216a8e8453ffafcae`, the local Release host and both
@@ -629,3 +628,13 @@ runner reports. This was source-bound replay of a locally built host, not a
 cold runner build. The fork checkout was clean and prebuilt mode was disabled
 only in that separate build. The runners still reported no CPA/CPA2 feature;
 native Apple CPTA-on remains unqualified.
+
+The [compact layout run](https://github.com/gmh5225/test_mac_intel/actions/runs/42946894626)
+executed the eight direct cases and eight installed images on both macos-26
+and xcode-27. Per host, all eight original callers reached their trap and all
+eight occupied inputs failed the TEXT capacity check. Each installed image ran
+the native caller against its 26 replaced public entries. Six images per host
+linked with zero header reservation. The
+[run record](evidence/arm64e-compact-layout-2026-11-11.json) binds the source
+revision, Release host, LLVM fork, GitHub artifacts and signed image hashes.
+Both runners reported Apple M1 (Virtual).

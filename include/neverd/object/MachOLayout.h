@@ -375,12 +375,11 @@ constexpr uint32_t kDroppableLinkEditCmds[] = {
 /// Commands only tools read: dyld needs none of them to run an image.
 /// Apple's linker can leave less room after the commands than one new segment
 /// takes, and a DATA segment normally sits between __TEXT and __LINKEDIT. A
-/// whole-image rewrite therefore gives these up when it must, in this order and
-/// no further than it has to. A source patch keeps them.
+/// native installation therefore gives these up when it must, in this order and
+/// no further than it has to. Symbol, dependency and unwind tables stay live.
 constexpr uint32_t kToolOnlyLoadCmds[] = {
-    llvm::MachO::LC_SOURCE_VERSION,
-    llvm::MachO::LC_DATA_IN_CODE,
-    llvm::MachO::LC_FUNCTION_STARTS,
+#define MACHO_TOOL_ONLY_COMMAND(Command) Command,
+#include "neverd/object/MachOLayout.def"
 };
 
 inline bool shouldDropLoadCommand(uint32_t Cmd) {

@@ -2196,11 +2196,13 @@ PageSource Engine::namedViewLines(const NamedView &document, std::size_t start,
   return page;
 }
 
-std::optional<Json>
-Engine::namedViewPage(std::uint64_t address, const std::string &representation,
-                      std::size_t offset, std::size_t limit,
-                      const Json &options, EncodedPayload *encoded,
-                      const std::string *ifNoneMatch, bool pageDelta) {
+std::optional<Json> Engine::namedViewPage(std::uint64_t address,
+                                          const std::string &representation,
+                                          std::size_t offset, std::size_t limit,
+                                          const Json &options,
+                                          EncodedPayload *encoded,
+                                          const std::string *ifNoneMatch,
+                                          bool pageDelta, const Json *request) {
   const auto document = namedView(address, representation, options);
   if (!document)
     return std::nullopt;
@@ -2221,6 +2223,15 @@ Engine::namedViewPage(std::uint64_t address, const std::string &representation,
   // The same lines of the same document read the same: the client keeps them.
   const auto etag = instanceTag_ + "-" + std::to_string(document->id) + "-" +
                     std::to_string(start) + "-" + std::to_string(end);
+  // A kept-only read a client makes again names this page and asks for what
+  // changed of it.
+  served_.reset();
+  if (request && ifNoneMatch && request->value("kept_only", false)) {
+    Json next = *request;
+    next["if_none_match"] = etag;
+    next["page_delta"] = true;
+    served_ = ServedPage{document, std::move(next)};
+  }
   if (ifNoneMatch && *ifNoneMatch == etag)
     return Json{{"unchanged", true},
                 {"etag", etag},
@@ -2402,6 +2413,8 @@ bool Engine::hasIdleWork() const {
            warmState_ == WarmState::Running));
 }
 bool Engine::idleStep() {
+  // What background work changes no answer read before it holds for.
+  forgetPreparedViews();
   if (!hasIdleWork())
     return false;
   if (listing_ && listing_->cachePending()) {
@@ -2884,6 +2897,8 @@ Json Engine::metadata() const {
           {"listing_facts", listingFactsJson()},
           {"listing_name_builds", listing_ ? listing_->nameBuilds() : 0},
           {"named_view_comment_patches", commentPatches_},
+          {"prepared_views_made", preparedMade_},
+          {"prepared_views_given", preparedGiven_},
           {"named_view_name_patches", namePatches_},
           {"named_view_data_name_patches", dataNamePatches_},
           {"named_view_renders", namedViewRenders_},
@@ -3938,9 +3953,120 @@ Engine::Reply Engine::executeResponse(const std::string &operation,
       }
     }
   } restart{*this, before};
+  viewEditsAtRequest_ = viewEditCount_;
+  requestRevision_ = revision_;
+  served_.reset();
+  if (!preparedViews_.empty()) {
+    // An answer made for the state the read finds, and for this read.
+    if (preparedRevision_ != revision_ || !listing_ ||
+        listing_->viewGeneration() != preparedGeneration_)
+      forgetPreparedViews();
+    else if (operation == "decompile") {
+      const auto request = p.dump();
+      const auto made = std::find_if(
+          preparedViews_.begin(), preparedViews_.end(),
+          [&](const PreparedView &view) { return view.request == request; });
+      if (made != preparedViews_.end()) {
+        Reply reply{std::move(made->reply), {}};
+        if (made->served)
+          keepServed(std::move(*made->served));
+        preparedViews_.erase(made);
+        ++preparedGiven_;
+        return reply;
+      }
+    }
+  }
   Reply reply;
   reply.value = executeImpl(operation, p, &reply.encoded);
+  if (served_)
+    keepServed(std::move(*std::exchange(served_, std::nullopt)));
   return reply;
+}
+
+void Engine::forgetPreparedViews() {
+  if (preparedViews_.empty())
+    return;
+  releases_.retire(std::make_shared<const std::vector<PreparedView>>(
+      std::exchange(preparedViews_, {})));
+}
+
+void Engine::keepServed(ServedPage served) {
+  served.document->nextRead = std::move(served.next);
+  served.document->servedAt = ++servedPages_;
+  served.document->servedRevision = revision_;
+}
+
+void Engine::prepareFollowingViews(
+    const std::function<bool()> &requestWaiting) {
+  // Only an edit views keep through reaches a view a client reads again soon:
+  // a comment or a name, whose views are written from what is kept.
+  const auto made = viewEditCount_ - viewEditsAtRequest_;
+  if (!made || !session_ || !listing_)
+    return;
+  forgetPreparedViews();
+  std::vector<std::uint64_t> addresses;
+  for (auto edit = viewEdits_.end() -
+                   static_cast<std::ptrdiff_t>(
+                       std::min<std::uint64_t>(made, viewEdits_.size()));
+       edit != viewEdits_.end(); ++edit)
+    addresses.push_back(edit->address);
+  // The documents a client was given a page of with kept_only that the edit
+  // reaches by what they read, the last given first.
+  std::vector<std::shared_ptr<const NamedView>> reached;
+  for (const auto &document : namedViews_) {
+    if (!document->servedAt || !document->nextRead.is_object())
+      continue;
+    bool reaches = !document->readsKnown;
+    for (const auto address : addresses)
+      reaches = reaches || std::binary_search(document->reads.begin(),
+                                              document->reads.end(), address);
+    if (reaches)
+      reached.push_back(document);
+  }
+  // A view the client shows it reads again after each change, so it read those
+  // at the revision this edit left; else the one document the edit reaches
+  // alone is the one it reads next.  Any other read is the client's to ask.
+  std::vector<std::shared_ptr<const NamedView>> shown;
+  for (const auto &document : reached)
+    if (document->servedRevision == requestRevision_)
+      shown.push_back(document);
+  if (!shown.empty())
+    reached = std::move(shown);
+  else if (reached.size() > 1)
+    reached.clear();
+  std::sort(reached.begin(), reached.end(), [](const auto &a, const auto &b) {
+    return a->servedAt > b->servedAt;
+  });
+  if (reached.size() > ::neverd::limits::worker::kEngineMaxPreparedViews)
+    reached.resize(::neverd::limits::worker::kEngineMaxPreparedViews);
+  const auto revision = revision_;
+  const auto generation = listing_->viewGeneration();
+  for (const auto &document : reached) {
+    if (requestWaiting && requestWaiting())
+      break;
+    const Json read = document->nextRead;
+    try {
+      served_.reset();
+      EncodedPayload encoded;
+      auto answer = executeImpl("decompile", read, &encoded);
+      // What the client keeps a page of reads as a page; the page it is given
+      // is kept on the document once it is.
+      if (!encoded && answer.is_object() && served_) {
+        preparedViews_.push_back({read.dump(), std::move(answer),
+                                  std::exchange(served_, std::nullopt)});
+        ++preparedMade_;
+      }
+    } catch (const std::exception &) {
+      // The read asks for itself.
+    }
+    served_.reset();
+  }
+  // Answers read for one state only.
+  if (revision_ != revision || !listing_ ||
+      listing_->viewGeneration() != generation)
+    forgetPreparedViews();
+  preparedRevision_ = revision_;
+  preparedGeneration_ = listing_ ? listing_->viewGeneration() : 0;
 }
 
 void Engine::analyzeBeforeFunctionQueries() {
@@ -7293,7 +7419,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       const bool deltas = etags && p.value("page_delta", false);
       if (auto named = namedViewPage(entry, representation, offset, limit,
                                      options, etags ? nullptr : encoded,
-                                     etags ? &known : nullptr, deltas))
+                                     etags ? &known : nullptr, deltas, &p))
         return std::move(*named);
       if (keptOnly_)
         throw Error("not_kept", "No session has kept this view");

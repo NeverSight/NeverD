@@ -1529,35 +1529,29 @@ uint64_t MachOPatcher::appendExecSegmentImpl(std::vector<uint8_t> &Binary,
     llvm::WithColor::error() << "macho_patch: no header space\n";
     return 0;
   }
+  // Sections and external payloads can own zero bytes immediately following
+  // the load commands. Unknown payload owners rule out using that padding.
+  std::vector<macho_patch_detail::MachOFileRange> Payloads;
+  if (!macho_patch_detail::collectMachOPayloadRanges(Binary, Payloads))
+    FirstDataOff = HdrPlusCmds;
+  for (const auto &Range : Payloads) {
+    if (Range.Begin < HdrPlusCmds)
+      return 0;
+    FirstDataOff = std::min(FirstDataOff, Range.Begin);
+  }
   const uint64_t Avail = FirstDataOff - HdrPlusCmds;
-  uint32_t Freed = 0;
   std::set<uint64_t> DroppedCommands;
-  for (const CmdInfo &Command : Cmds)
-    if (shouldDropLoadCommand(Command.Cmd)) {
-      if (!checkedAddU32(Freed, Command.Size, Freed))
-        return 0;
-      DroppedCommands.insert(Command.Off);
-    }
-  uint64_t AvailableWithFreed = 0;
-  if (!macho_patch_detail::checkedAdd(Avail, Freed, AvailableWithFreed))
-    return 0;
-  std::optional<uint64_t> ExtendCommand;
-  MachOSegFields Extended{};
-  const uint64_t Needed = NewSegCmdSize * AddedSegmentCount;
-  const bool CleanPadding =
-      Needed <= Avail &&
-      llvm::all_of(llvm::ArrayRef<uint8_t>(Binary).slice(HdrPlusCmds, Needed),
-                   [](uint8_t B) { return B == 0; });
-  bool NoRoom = SegmentNameConflict || AvailableWithFreed < Needed ||
-                (Needed > Freed && !CleanPadding);
-  if (!SegmentNameConflict && !WritableOffset &&
-      InputKind == RewriteInputKind::LiftedIR) {
-    // A rewritten image is signed again, and codesign writes its command after
-    // the table without looking at what is there. That room is part of the
-    // table: the signature command dropped above freed nothing for long. The
-    // table reaches into the padding only by what its dropped commands do not
-    // cover, and the padding it reaches into must be unused.
+  const auto MakeRoom = [&](uint64_t Needed) {
+    // codesign appends a new command after the table. Count it even when the
+    // original image was unsigned, and keep every tool command that fits.
     const uint64_t Reach = Needed + sizeof(linkedit_data_command);
+    uint64_t Freed = 0;
+    DroppedCommands.clear();
+    for (const auto &Command : Cmds)
+      if (shouldDropLoadCommand(Command.Cmd)) {
+        Freed += Command.Size;
+        DroppedCommands.insert(Command.Off);
+      }
     const auto Fits = [&] {
       const uint64_t FromPadding = Reach > Freed ? Reach - Freed : 0;
       return FromPadding <= Avail &&
@@ -1568,21 +1562,23 @@ uint64_t MachOPatcher::appendExecSegmentImpl(std::vector<uint8_t> &Binary,
     for (uint32_t ToolOnly : kToolOnlyLoadCmds) {
       if (Fits())
         break;
-      for (const CmdInfo &Command : Cmds)
+      for (const auto &Command : Cmds)
         if (Command.Cmd == ToolOnly) {
-          if (!checkedAddU32(Freed, Command.Size, Freed))
-            return 0;
+          Freed += Command.Size;
           DroppedCommands.insert(Command.Off);
         }
     }
-    NoRoom = !Fits();
-  }
-  if (NoRoom) {
+    return Fits();
+  };
+  std::optional<uint64_t> ExtendCommand;
+  MachOSegFields Extended{};
+  if (SegmentNameConflict || !MakeRoom(NewSegCmdSize * AddedSegmentCount)) {
     // With no command capacity, grow an adjacent existing RX mapping instead.
     // The Mach header and every live original VA stay fixed. Only __LINKEDIT
     // moves; a DATA segment between the RX tail and __LINKEDIT prevents this
     // operation, rather than being silently relocated across code references.
-    if (WritableOffset || InputKind == RewriteInputKind::LiftedIR)
+    if (WritableOffset || InputKind == RewriteInputKind::LiftedIR ||
+        !MakeRoom(0))
       return 0;
     for (const auto &Command : Cmds) {
       if (Command.Cmd != SegCmdID)

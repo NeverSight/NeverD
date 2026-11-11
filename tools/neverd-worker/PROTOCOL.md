@@ -1074,8 +1074,16 @@ again; a function's new name usually does not.  `metadata.named_view_comment_pat
 `metadata.named_view_name_patches` and `metadata.named_view_data_name_patches` count the
 documents written from the one a view had with the image's comments, functions' new
 names, or data's new names, taken into it, where those alone reached it since it was
-decorated.  `metadata.named_view_renders` counts the documents the engine rendered a
-function for, rather than built from pages kept.  `metadata.view_store_name_reads` counts
+decorated.  After an edit views keep through, a comment or a name, the owner reads
+again right behind its reply the pages of the documents it reaches that a client read
+with `kept_only`: those read at the revision the edit left, as a view the client shows
+is read again after each change, or else the one such document it reaches alone, at
+most two, each as the client's next read of it asks (`if_none_match` naming the page
+it was given, `page_delta`), until a request waits.  A read that asks the same while
+the revision and the listing's view generation stand takes that answer, which reads
+as one made then would.  `metadata.prepared_views_made` and
+`metadata.prepared_views_given` count them.  `metadata.named_view_renders` counts the
+documents the engine rendered a function for, rather than built from pages kept.  `metadata.view_store_name_reads` counts
 the times an owner's views read which store they are kept under, which an edit that
 keeps the stores for what it changed says as it takes it.  `metadata.local_type_names_prepared`
 counts the idle steps that found read what a declaration of local types checks its
