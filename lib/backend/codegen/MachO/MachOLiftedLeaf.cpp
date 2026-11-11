@@ -1,4 +1,5 @@
-//===- MachOLiftedLeaf.cpp - Verified Darwin integer leaf images ----------===//
+//===- MachOLiftedLeaf.cpp - Verified Darwin register-only leaf images
+//----------===//
 //
 // NeverD Decompiler
 //
@@ -28,31 +29,63 @@ namespace {
 #define MACHO_LEAF_VALUE(Type, Name, Value) constexpr Type Name = Value;
 #include "MachOLiftedLeaf.def"
 
+enum class SigningHint : uint32_t {
+#define NEVERD_A64_PAUTH_HINT(Name, Word, Operation, Pointer, Modifier)        \
+  Name = Word,
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuth.def"
+};
+
 llvm::Error refuse(const char *Reason) {
   return llvm::createStringError(llvm::errc::not_supported, Reason);
 }
 
-bool registerOnly(const DecodedInsn &I) {
+bool leafRegister(aarch64_reg R, bool ReadOnly) {
+  if (ReadOnly) {
+    switch (R) {
+#define NEVERD_DARWIN_ENTRY_REGISTER(X, W, Name, Reservation)                  \
+  case AARCH64_REG_##X:                                                        \
+  case AARCH64_REG_##W:                                                        \
+    return true;
+#include "neverd/backend/llvm/AArch64/LLVMDarwinEntryRegister.def"
+    default:
+      break;
+    }
+  }
+  return (R >= AARCH64_REG_X0 && R <= AARCH64_REG_X17) ||
+         (R >= AARCH64_REG_W0 && R <= AARCH64_REG_W17) ||
+         (R >= AARCH64_REG_S0 && R <= AARCH64_REG_S7) ||
+         (R >= AARCH64_REG_D0 && R <= AARCH64_REG_D7) || R == AARCH64_REG_XZR ||
+         R == AARCH64_REG_WZR;
+}
+
+bool isPositionIndependentLeafInstruction(const DecodedInsn &I) {
+  const auto &Detail = I.Raw->detail->aarch64;
   switch (I.Id) {
 #define MACHO_LEAF_INSTRUCTION(Name) case Name:
 #include "MachOLiftedLeaf.def"
-    break;
+    return llvm::all_of(
+        llvm::ArrayRef(Detail.operands, Detail.op_count),
+        [](const cs_aarch64_op &Op) {
+          return Op.type == AARCH64_OP_IMM ||
+                 (Op.type == AARCH64_OP_REG &&
+                  leafRegister(Op.reg, Op.access == CS_AC_READ));
+        });
+#define MACHO_LEAF_MEMORY(Name) case Name:
+#include "MachOLiftedLeaf.def"
+    // A literal LDR has the same instruction ID. Insist on an actual base
+    // register and displacement, with neither PC-relative addressing nor
+    // an implicit write to the base.
+    return Detail.op_count == kMemoryOperandCount &&
+           !I.Raw->detail->writeback && !Detail.post_index &&
+           Detail.operands[0].type == AARCH64_OP_REG &&
+           leafRegister(Detail.operands[0].reg,
+                        Detail.operands[0].access == CS_AC_READ) &&
+           Detail.operands[1].type == AARCH64_OP_MEM &&
+           Detail.operands[1].mem.index == AARCH64_REG_INVALID &&
+           leafRegister(Detail.operands[1].mem.base, true);
   default:
     return false;
   }
-  const auto &Detail = I.Raw->detail->aarch64;
-  for (const auto &Op : llvm::ArrayRef(Detail.operands, Detail.op_count)) {
-    if (Op.type == AARCH64_OP_IMM)
-      continue;
-    if (Op.type != AARCH64_OP_REG)
-      return false;
-    const auto R = Op.reg;
-    if (!((R >= AARCH64_REG_X0 && R <= AARCH64_REG_X17) ||
-          (R >= AARCH64_REG_W0 && R <= AARCH64_REG_W17) ||
-          R == AARCH64_REG_XZR || R == AARCH64_REG_WZR))
-      return false;
-  }
-  return true;
 }
 
 llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
@@ -116,17 +149,28 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
     const auto Emitted =
         llvm::ArrayRef(Generated.Bytes)
             .slice(Code->Offset + Owner->second - Code->VA, End - Start);
-    if (Source != Emitted || Source.size() % aarch64::kInsnSize ||
-        readLE<uint32_t>(Source.take_back(aarch64::kInsnSize).data()) !=
-            kReturnToLR)
+    if (Source != Emitted || Source.empty() ||
+        Source.size() % aarch64::kInsnSize)
       return refuse(kLeafCode);
-    for (size_t Offset = 0; Offset < Source.size() - aarch64::kInsnSize;
+    bool Signed = false;
+    for (size_t Offset = 0; Offset < Source.size();
          Offset += aarch64::kInsnSize) {
       DecodedInsn Insn{};
       if (Decode.decodeOne(Source.data() + Offset, aarch64::kInsnSize,
                            Start + Offset, Insn) != aarch64::kInsnSize ||
-          !Insn.Raw || !Insn.Raw->detail || !registerOnly(Insn))
+          !Insn.Raw || !Insn.Raw->detail)
         return refuse(kLeafCode);
+      if (Offset + aarch64::kInsnSize == Source.size()) {
+        // Plain RET must select LR. RETAB has an implicit LR, SP and B key.
+        if (Signed ? Insn.Id != AARCH64_INS_RETAB
+                   : readLE<uint32_t>(Source.data() + Offset) != kReturnToLR)
+          return refuse(kLeafCode);
+      } else if (!Offset && readLE<uint32_t>(Source.data()) ==
+                                static_cast<uint32_t>(SigningHint::PACIBSP)) {
+        Signed = true;
+      } else if (!isPositionIndependentLeafInstruction(Insn)) {
+        return refuse(kLeafCode);
+      }
     }
   }
   return llvm::Error::success();

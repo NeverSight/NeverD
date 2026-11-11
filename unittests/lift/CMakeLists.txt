@@ -2445,6 +2445,7 @@ add_neverd_unittest(NeverDDyldSharedCacheTests
 )
 
 add_neverd_unittest(NeverDArm64eLiftedImageTests
+  aarch64/AArch64AsyncUnwindTests.cpp
   aarch64/AArch64LiftedLeafTests.cpp
   LINK_COMPONENTS CodeGen Pipeline
 )

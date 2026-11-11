@@ -37,5 +37,9 @@ NEVERD_RA_QUERY_TEXT(
     kNoCompactRecipe,
     "compact encoding does not declare a return-address signing recipe")
 
+NEVERD_RA_QUERY_TEXT(
+    kImplicitDarwinState,
+    "implicit arm64e return signing has no exact-PC DWARF rule")
+
 #undef NEVERD_RA_QUERY_TEXT
 #undef NEVERD_RA_QUERY_LIMIT

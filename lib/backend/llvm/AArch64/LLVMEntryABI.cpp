@@ -14,6 +14,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/MedSourceParameterUses.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLExtras.h"
@@ -22,7 +23,10 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
+#include "llvm/TargetParser/SubtargetFeature.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -417,6 +421,36 @@ reconstructDarwinAArch64Entry(llvm::Function &Body, const MedFunc &Source) {
     }
   }
   return Entry;
+}
+
+// Read the architectural value once, on entry, before any lifted calls or
+// assignments. Reserving the register also keeps instruction selection from
+// assigning an unrelated temporary to the incoming value's location.
+llvm::Value *readDarwinAArch64EntryRegister(llvm::Function &F,
+                                            uint64_t Offset) {
+  llvm::StringRef Register;
+  llvm::StringRef Feature;
+#define NEVERD_DARWIN_ENTRY_TEXT(Name, Text) constexpr char Name[] = Text;
+#define NEVERD_DARWIN_ENTRY_REGISTER(X, W, Spelling, Reservation)              \
+  if (Offset == a64reg::X) {                                                   \
+    Register = Spelling;                                                       \
+    Feature = Reservation;                                                     \
+  }
+#include "neverd/backend/llvm/AArch64/LLVMDarwinEntryRegister.def"
+  if (Register.empty())
+    return nullptr;
+  llvm::SubtargetFeatures Features(
+      F.getFnAttribute(kDarwinFeatureAttribute).getValueAsString());
+  Features.AddFeature(Feature);
+  F.addFnAttr(kDarwinFeatureAttribute, Features.getString());
+  llvm::IRBuilder<> Entry(&F.getEntryBlock(),
+                          F.getEntryBlock().getFirstInsertionPt());
+  auto &Context = F.getContext();
+  auto *Name = llvm::MetadataAsValue::get(
+      Context,
+      llvm::MDNode::get(Context, llvm::MDString::get(Context, Register)));
+  return Entry.CreateIntrinsic(llvm::Intrinsic::read_register,
+                               {Entry.getInt64Ty()}, {Name});
 }
 
 } // namespace neverd

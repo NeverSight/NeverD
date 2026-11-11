@@ -7,6 +7,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
+#include "neverd/backend/llvm/AArch64/LLVMAArch64ReturnProtection.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/loader/Loader.h"
@@ -27,6 +28,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <string_view>
 
 namespace {
 using namespace neverd;
@@ -34,17 +36,19 @@ using namespace neverd;
 #define A64_LEAF_VALUE(Type, Name, Value) constexpr Type Name = Value;
 #include "AArch64LiftedLeafFixtures.def"
 
-TEST(AArch64LiftedImage, VerifiedLeafBodiesUseTheNormalPatchPipeline) {
+void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
+                           const char *SourceName = kSource,
+                           std::string_view Preamble = {}) {
 #if defined(__APPLE__) && defined(__aarch64__)
   llvm::SmallString<128> Directory;
   ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kTemporary, Directory));
   const std::filesystem::path Root(Directory.str().str());
   auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
-  const auto Source = (Root / kSource).string();
+  const auto Source = (Root / SourceName).string();
   const auto Input = (Root / kOriginal).string();
   const auto Output = (Root / kOutput).string();
   const auto Rejected = (Root / kRejected).string();
-  std::ofstream(Source) << kLeaves;
+  std::ofstream(Source) << Preamble << Leaves;
   ASSERT_EQ(llvm::sys::ExecuteAndWait(
                 kCompiler, {kCompiler, kTargetFlag, kTarget, kOptimize,
                             kOmitFrame, kDylib, kTight, Source, kOut, Input}),
@@ -61,6 +65,7 @@ TEST(AArch64LiftedImage, VerifiedLeafBodiesUseTheNormalPatchPipeline) {
   ASSERT_TRUE(Lifted.Success) << Lifted.Error;
   ASSERT_TRUE(Lifted.LlvmModule);
   auto &Module = *Lifted.LlvmModule;
+  symbolizeImageAbsolutePointers(Module, *Image);
   ASSERT_TRUE(Module.getModuleFlag(kArm64eAnalysisModuleFlag));
 
   MachOPatcher Patcher;
@@ -74,13 +79,26 @@ TEST(AArch64LiftedImage, VerifiedLeafBodiesUseTheNormalPatchPipeline) {
   auto Changed = llvm::CloneModule(Module);
   auto *Sum = Changed->getFunction(kSum);
   ASSERT_NE(Sum, nullptr);
-  ASSERT_TRUE(Sum->getReturnType()->isIntegerTy());
+  auto *Result = Sum->getReturnType();
+  ASSERT_TRUE(Result->isIntegerTy() || Result->isFloatingPointTy());
+  auto *Wrong = Result->isIntegerTy()
+                    ? llvm::ConstantInt::get(Result, kTamperedResult)
+                    : llvm::ConstantFP::get(Result, kTamperedResult);
   for (auto &Block : *Sum)
     if (auto *R = llvm::dyn_cast<llvm::ReturnInst>(Block.getTerminator()))
-      R->setOperand(
-          0, llvm::ConstantInt::get(Sum->getReturnType(), kTamperedResult));
+      R->setOperand(0, Wrong);
   EXPECT_FALSE(Patcher.patch(Input, Rejected, *Changed, Image->Arch).Success);
   EXPECT_FALSE(std::filesystem::exists(Rejected));
+
+  if (Module.getFunction(kSum)->hasFnAttribute(kReturnSigningScopeAttribute)) {
+    auto Unsigned = llvm::CloneModule(Module);
+    auto *Entry = Unsigned->getFunction(kSum);
+    Entry->removeFnAttr(kReturnSigningScopeAttribute);
+    Entry->removeFnAttr(kReturnSigningKeyAttribute);
+    EXPECT_FALSE(
+        Patcher.patch(Input, Rejected, *Unsigned, Image->Arch).Success);
+    EXPECT_FALSE(std::filesystem::exists(Rejected));
+  }
 
   auto Installed = Patcher.patch(Input, Output, Module, Image->Arch);
   ASSERT_TRUE(Installed.Success);
@@ -98,13 +116,13 @@ TEST(AArch64LiftedImage, VerifiedLeafBodiesUseTheNormalPatchPipeline) {
   EXPECT_EQ(Original->Raw, Snapshot);
   EXPECT_TRUE(Module.getModuleFlag(kArm64eAnalysisModuleFlag));
   EXPECT_FALSE(Codegen().compile(Module, Image->Arch, Image->Format).Success);
-  RecordProperty(kOriginalHash,
-                 llvm::toHex(llvm::SHA256::hash(Snapshot), true));
-  RecordProperty(kPublishedHash,
-                 llvm::toHex(llvm::SHA256::hash(Final->Raw), true));
+  testing::Test::RecordProperty(
+      kOriginalHash, llvm::toHex(llvm::SHA256::hash(Snapshot), true));
+  testing::Test::RecordProperty(
+      kPublishedHash, llvm::toHex(llvm::SHA256::hash(Final->Raw), true));
   const auto Caller = (Root / kDriverSource).string();
   const auto Driver = (Root / kDriver).string();
-  std::ofstream(Caller) << kCaller;
+  std::ofstream(Caller) << Preamble << CallerSource;
   ASSERT_EQ(
       llvm::sys::ExecuteAndWait(kCompiler, {kCompiler, kTargetFlag, kTarget,
                                             kOptimize, Caller, kOut, Driver}),
@@ -128,14 +146,38 @@ TEST(AArch64LiftedImage, VerifiedLeafBodiesUseTheNormalPatchPipeline) {
       ++AuthenticatedCalls;
   }
   ASSERT_GE(AuthenticatedCalls, kCount);
-  RecordProperty(kAuthenticatedSites, AuthenticatedCalls);
+  testing::Test::RecordProperty(kAuthenticatedSites, AuthenticatedCalls);
   if (std::getenv(kExecute)) {
     ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Input}), 0);
     ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Output}), 0);
-    RecordProperty(kNativeImages, kCount);
+    testing::Test::RecordProperty(kNativeImages, kCount);
   }
 #else
   GTEST_SKIP() << kUnavailable;
 #endif
+}
+
+TEST(AArch64LiftedImage, VerifiedLeafBodiesUseTheNormalPatchPipeline) {
+  verifyPublishedLeaves(kLeaves, kCaller);
+}
+
+TEST(AArch64DarwinEntry, SwiftContextSurvivesNativeLeafPublication) {
+  verifyPublishedLeaves(kSwiftLeaves, kSwiftCaller, kSource, kSwiftABI);
+}
+
+TEST(AArch64DarwinEntry, SwiftAsyncContextSurvivesNativeLeafPublication) {
+  verifyPublishedLeaves(kSwiftLeaves, kSwiftCaller, kSource, kSwiftAsyncABI);
+}
+
+TEST(AArch64DarwinEntry, ScalarFPParametersAndResultsSurvivePublication) {
+  verifyPublishedLeaves(kScalarFPLeaves, kScalarFPCaller);
+}
+
+TEST(AArch64DarwinEntry, SignedLeafUsesTheIncomingSPAtItsNewAddress) {
+  verifyPublishedLeaves(kSignedLeaves, kCaller, kAssemblyName);
+}
+
+TEST(AArch64LiftedMemory, BaseAndDisplacementRetainLoadAndStoreEffects) {
+  verifyPublishedLeaves(kMemoryLeaves, kMemoryCaller);
 }
 } // namespace

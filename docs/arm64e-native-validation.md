@@ -486,10 +486,10 @@ images still need those proofs, including variadic and non-C entries. The
 previous canonical-IR installation qualification and pinned r6 package remain
 unchanged; source-fork-only producer features still require the source build.
 
-## Publishing register-only lifted dylibs
+## Publishing position-independent lifted dylibs
 
 The ordinary segment patch pipeline can publish a classic macOS arm64e image
-whose entire instruction section consists of frameless integer leaf functions.
+whose entire instruction section consists of verified frameless leaf functions.
 It matches lifted definitions to original entries, then checks the relocated
 machine instructions and compact unwind coverage for every body. The original
 entries forward to the emitted RX addresses. The private native emission uses
@@ -500,9 +500,28 @@ lifts it through the normal patch pipeline and compares the result against
 the original image. A missing definition or a changed arithmetic result fails
 before an output file is created. Set `NEVERD_ARM64E_LIFTED_NATIVE=1` on a
 host that executes arm64e to run the independently compiled authenticated
-caller against both images. The strict instruction check currently covers
-register-only integer arithmetic, logical operations and moves ending in RET.
-Functions with calls, signed frames or stack accesses need additional proofs.
+caller against both images. The strict instruction check accepts
+register-only integer arithmetic, logical operations, moves, and scalar
+floating-point add/subtract ending in RET. Plain LDR and STR can use a live
+base register and displacement. A typed caller compares loaded values and
+checks both neighboring slots after stores. Literal or register-indexed
+addressing, writeback and SP-based memory operands require separate proofs.
+
+Unassigned incoming reads of X20 and X22 use LLVM's reserved physical
+registers. These carry Swift self and the asynchronous context, respectively.
+The lifter preserves the observed register even when the image omits its
+source calling convention. Apple Clang builds the independent typed callers
+and callees with `swiftcall` and `swiftasynccall`. The latter verifies the
+context passed to a leaf before any suspension or continuation switch.
+These register assignments are documented in the
+[Swift ARM64 ABI](https://github.com/swiftlang/swift/blob/main/docs/ABI/CallingConventionSummary.rst#arm64).
+The floating-point caller checks the exact result bits, including signed zero.
+
+Frameless bodies may also preserve a matching entry PACIBSP and terminal
+RETAB. SP and LR remain untouched between those instructions. The relocated
+machine bytes and frameless compact unwind coverage must match, and removing
+the return-signing policy refuses publication. Functions with calls, stack
+accesses or PC-dependent signing need additional proofs.
 
 The [native lifted-image run](https://github.com/gmh5225/test_mac_intel/actions/runs/42957645426)
 executed the original and installed images on both macos-26 and xcode-27.
@@ -510,6 +529,59 @@ Each caller checked both entries for 25 ordered argument pairs. The
 [evidence record](evidence/arm64e-lifted-leaves-2026-11-11.json) identifies the
 source-bound Release host, local LLVM fork, original and published image hashes,
 and the runner artifacts.
+
+## Interrupted return-address signing
+
+The exact-PC unwind query reports an unknown DWARF state when a classic
+arm64e frame relies on Darwin's implicit signing ABI and supplies no rule
+for the signing column. A compact prologue recipe can still be available.
+Explicit DWARF rows retain their instruction-boundary signing state. The
+fixture decodes the original and installed CFA and LR stack rules through LLVM
+and checks both against the interrupted stack, including the saved slot.
+
+`AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions`
+compares an original indexed-DWARF function with its installed native object.
+The original carries explicit signing transitions and the replacement uses
+Darwin-compatible implicit CFI. Both functions have identical instructions.
+With `NEVERD_ARM64E_ASYNC_NATIVE=1`, a second thread interrupts the active
+function before and after PACIBSP, with LR spilled, after restoring SP, and
+after AUTIBSP. Before execution, the test host decodes CFA and LR locations
+from that image's FDE. The handler selects the row by interrupted PC and
+recovers the return address from the Darwin thread state's LR or the saved
+stack slot. When the address carries the test's nonzero signature, the handler
+authenticates it with the derived CFA. The caller preserves a signed parent
+LR in its standard frame record. The handler uses the interrupted FP to
+recover and authenticate this second return. Both addresses must equal
+independent assembly return sites. The test also checks the original's
+explicit signing rows and executes a changed companion entry in the installed
+image. The two-frame hardware check covers this controlled call chain.
+
+Both the [native publication and interruption run](https://github.com/gmh5225/test_mac_intel/actions/runs/42969858410)
+and the [compiler-original frame controls](https://github.com/gmh5225/test_mac_intel/actions/runs/42967877615)
+ran on macos-26 and xcode-27. Each runner executed all six lifted original
+and installed image pairs. Five signals reached each of the original and
+installed unwind bodies. All ten samples recovered the interrupted return
+and authenticated the saved parent return. The
+[evidence record](evidence/arm64e-interrupted-frames-2026-11-11.json)
+includes the per-PC rows, caller checks, host and source revisions, and image
+hashes. The two Apple M1 virtual runners replayed a locally built Release
+host from the pinned LLVM fork.
+
+The default r6 CLI lifted six fixture images, published 5 of them, and
+verified the signed outputs and complete relocated entry bodies. For the
+compact-only signed input, r6 emitted DWARF and reported that the original
+contained no registered eh_frame section. The Release test suite also
+exercised the arm64e slice of the system dyld and decoded 138,671 real
+instruction words. The command-line symbolization regression separately
+covers unused function addresses and scalar values in a zero-based dylib.
+
+An independent [system cursor control](https://github.com/gmh5225/test_mac_intel/actions/runs/42967112065)
+starts Darwin's public `unw_init_local` in the signal handler. It reaches
+`_sigtramp` for all four compiler-original combinations of frame pointers
+and signing CFI. Before PAC or after authentication it skips the interrupted
+PC and reaches the caller. At the three signed positions it traps while
+stepping from the trampoline. A general walk from that signal handler
+remains unqualified on the two measured systems.
 
 ## Reconstructed entries through the native compiler
 
