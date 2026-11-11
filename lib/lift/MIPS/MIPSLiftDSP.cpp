@@ -16,12 +16,39 @@
 
 namespace neverd {
 
+NdVar MIPSLifter::State::select(NdVar Condition, NdVar Yes, NdVar No) {
+  const auto Result = makeTemp(Yes.Size);
+  emit(NdOp::SELECT, Result, {Condition, Yes, No});
+  return Result;
+}
+
+NdVar MIPSLifter::State::accumulator(unsigned Bank) {
+  return binary(NdOp::CONCAT, NdVar::reg(mipsreg::accumulatorHI(Bank), 4),
+                NdVar::reg(mipsreg::accumulatorLO(Bank), 4), 8);
+}
+
+void MIPSLifter::State::writeAccumulator(unsigned Bank, NdVar Value) {
+  const auto High = makeTemp(4);
+  emit(NdOp::SUBBYTES, High, {Value, NdVar::cst(4, 4)});
+  emit(NdOp::COPY, NdVar::reg(mipsreg::accumulatorHI(Bank), 4), {High});
+  emit(NdOp::COPY, NdVar::reg(mipsreg::accumulatorLO(Bank), 4),
+       {resize(Value, 4)});
+  if (!Bank)
+    emit(NdOp::COPY, NdVar::reg(mipsreg::AC0Pending, 1), {NdVar::cst(0, 1)});
+}
+
+void MIPSLifter::State::discardHILO() {
+  emitIntrinsic(Intrinsic::MIPSUnpredictable, NdVar::reg(mipsreg::HI, 4));
+  emitIntrinsic(Intrinsic::MIPSUnpredictable, NdVar::reg(mipsreg::LO, 4));
+  emit(NdOp::COPY, NdVar::reg(mipsreg::AC0Pending, 1), {NdVar::cst(0, 1)});
+}
+
 bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
   if (!HasDSP || S.Width != 4 || isMIPSCompressedMode(Mode))
     return false;
   const auto Kind = mips::dspInstruction(Word);
   if (!Kind)
-    return false;
+    return liftDSPAdditional(S, Word);
   const unsigned RS = (Word >> 21) & 31;
   const unsigned RT = (Word >> 16) & 31;
   const unsigned RD = (Word >> 11) & 31;
@@ -35,25 +62,7 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
   };
   using DSP = mips::DSPInstruction;
   const unsigned Bank = RD & 3;
-  const auto ReadAccumulator = [&] {
-    return S.binary(NdOp::CONCAT, NdVar::reg(mipsreg::accumulatorHI(Bank), 4),
-                    NdVar::reg(mipsreg::accumulatorLO(Bank), 4), 8);
-  };
-  const auto WriteAccumulator = [&](NdVar Value) {
-    const auto High = S.makeTemp(4);
-    S.emit(NdOp::SUBBYTES, High, {Value, NdVar::cst(4, 4)});
-    S.emit(NdOp::COPY, NdVar::reg(mipsreg::accumulatorHI(Bank), 4), {High});
-    S.emit(NdOp::COPY, NdVar::reg(mipsreg::accumulatorLO(Bank), 4),
-           {S.resize(Value, 4)});
-    if (!Bank)
-      S.emit(NdOp::COPY, NdVar::reg(mipsreg::AC0Pending, 1),
-             {NdVar::cst(0, 1)});
-  };
-  const auto Select = [&](NdVar Condition, NdVar Yes, NdVar No) {
-    const auto Result = S.makeTemp(Yes.Size);
-    S.emit(NdOp::SELECT, Result, {Condition, Yes, No});
-    return Result;
-  };
+
   const auto Sticky = [&](NdVar Set, unsigned Bit) {
     WriteControl(S.binary(
         NdOp::INT_OR, ReadControl(),
@@ -92,9 +101,9 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
                      S.binary(NdOp::INT_AND, SuccessState, NdVar::cst(~63u, 4)),
                      S.binary(NdOp::INT_AND, Next, NdVar::cst(63, 4)));
       }
-      WriteControl(
-          Select(Failed, S.binary(NdOp::INT_OR, Control, NdVar::cst(0x4000, 4)),
-                 SuccessState));
+      WriteControl(S.select(
+          Failed, S.binary(NdOp::INT_OR, Control, NdVar::cst(0x4000, 4)),
+          SuccessState));
       if (RT) {
         const auto Mask =
             S.binary(NdOp::INT_RIGHT, NdVar::cst(UINT32_MAX, 4),
@@ -102,7 +111,7 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
         const auto SafeOffset =
             S.binary(NdOp::INT_AND, Offset, NdVar::cst(63, 4));
         const auto Part = [&](unsigned Reg) {
-          return Select(Failed, NdVar::cst(0, 4), NdVar::reg(Reg, 4));
+          return S.select(Failed, NdVar::cst(0, 4), NdVar::reg(Reg, 4));
         };
         const auto Acc =
             S.binary(NdOp::CONCAT, Part(mipsreg::accumulatorHI(Bank)),
@@ -119,7 +128,7 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
 
     const bool Half = *Kind == DSP::ExtractSaturatedHalf ||
                       *Kind == DSP::ExtractVariableSaturatedHalf;
-    const auto Acc = ReadAccumulator();
+    const auto Acc = S.accumulator(Bank);
     const auto Truncated = S.binary(NdOp::INT_ASHR, Acc, S.resize(Size, 8));
     auto Rounded = Truncated;
     if (!Half) {
@@ -132,8 +141,8 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
           NdVar::cst(1, 8));
       Rounded = S.binary(
           NdOp::INT_ADD, Truncated,
-          Select(S.binary(NdOp::INT_NOTEQUAL, Size, NdVar::cst(0, 4), 1), Round,
-                 NdVar::cst(0, 8)));
+          S.select(S.binary(NdOp::INT_NOTEQUAL, Size, NdVar::cst(0, 4), 1),
+                   Round, NdVar::cst(0, 8)));
     }
     const auto Min = NdVar::cst(Half ? INT16_MIN : INT32_MIN, 8);
     const auto Max = NdVar::cst(Half ? INT16_MAX : INT32_MAX, 8);
@@ -149,7 +158,7 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
             ? Truncated
             : Rounded;
     if (Saturate)
-      Result = Select(Above, Max, Select(Below, Min, Result));
+      Result = S.select(Above, Max, S.select(Below, Min, Result));
     S.write(RT, S.resize(Result, 4));
     return true;
   }
@@ -178,30 +187,30 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
     const auto Product =
         S.binary(NdOp::INT_MULT, S.resize(A, 8, true), S.resize(B, 8, true));
     const auto Fraction =
-        Select(Overflow, NdVar::cst(Long ? INT64_MAX : INT32_MAX, 8),
-               S.binary(NdOp::INT_LEFT, Product, NdVar::cst(1, 8)));
-    const auto Old = ReadAccumulator();
+        S.select(Overflow, NdVar::cst(Long ? INT64_MAX : INT32_MAX, 8),
+                 S.binary(NdOp::INT_LEFT, Product, NdVar::cst(1, 8)));
+    const auto Old = S.accumulator(Bank);
     const bool Sub = *Kind == DSP::DotSubSaturatedLong;
     auto Sum = S.binary(Sub ? NdOp::INT_SUB : NdOp::INT_ADD, Old, Fraction);
     if (Long) {
       const auto Range =
           S.binary(Sub ? NdOp::INT_SBOR : NdOp::INT_SOVF, Old, Fraction, 1);
       const auto Limit =
-          Select(S.binary(NdOp::INT_SLESS, Old, NdVar::cst(0, 8), 1),
-                 NdVar::cst(INT64_MIN, 8), NdVar::cst(INT64_MAX, 8));
-      Sum = Select(Range, Limit, Sum);
+          S.select(S.binary(NdOp::INT_SLESS, Old, NdVar::cst(0, 8), 1),
+                   NdVar::cst(INT64_MIN, 8), NdVar::cst(INT64_MAX, 8));
+      Sum = S.select(Range, Limit, Sum);
       Overflow = S.binary(NdOp::BOOL_OR, Range, Overflow, 1);
     } else if (*Kind == DSP::MultiplyAccumulateSaturatedLeft ||
                *Kind == DSP::MultiplyAccumulateSaturatedRight) {
       const auto Min = NdVar::cst(INT32_MIN, 8), Max = NdVar::cst(INT32_MAX, 8);
       const auto Low = S.binary(NdOp::INT_SLESS, Sum, Min, 1),
                  High = S.binary(NdOp::INT_SLESS, Max, Sum, 1);
-      Sum = Select(Low, Min, Select(High, Max, Sum));
+      Sum = S.select(Low, Min, S.select(High, Max, Sum));
       Overflow = S.binary(NdOp::BOOL_OR, Overflow,
                           S.binary(NdOp::BOOL_OR, Low, High, 1), 1);
     }
     Sticky(Overflow, 16 + Bank);
-    WriteAccumulator(Sum);
+    S.writeAccumulator(Bank, Sum);
     return true;
   }
   default:
@@ -217,7 +226,7 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
       *Kind == mips::DSPInstruction::MultiplySubtractFractionalHalfwords;
   if (DotBytes || DotFractional) {
     const auto A = S.read(RS), B = S.read(RT);
-    const auto Old = ReadAccumulator();
+    const auto Old = S.accumulator(Bank);
     const bool Left = *Kind == mips::DSPInstruction::DotAddLeftBytes ||
                       *Kind == mips::DSPInstruction::DotSubLeftBytes;
     const bool Subtract =
@@ -257,7 +266,7 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
         S.binary(Subtract ? NdOp::INT_SUB : NdOp::INT_ADD, Old, Sum);
     if (DotFractional)
       Sticky(Overflow, 16 + Bank);
-    WriteAccumulator(Result);
+    S.writeAccumulator(Bank, Result);
     return true;
   }
   if (*Kind == mips::DSPInstruction::ReadControl) {
@@ -351,8 +360,7 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
     S.write(RD, Result);
     // DSP r1 preserves ac1-ac3, but every GPR-targeting multiply invalidates
     // ac0, even if the destination is zero. Do not expose stale HI/LO values.
-    S.emitIntrinsic(Intrinsic::MIPSUnpredictable, NdVar::reg(mipsreg::HI, 4));
-    S.emitIntrinsic(Intrinsic::MIPSUnpredictable, NdVar::reg(mipsreg::LO, 4));
+    S.discardHILO();
     return true;
   }
 

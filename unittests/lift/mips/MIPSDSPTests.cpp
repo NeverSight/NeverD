@@ -91,6 +91,91 @@ constexpr PureCase PureCases[] = {
 #define MIPS_DSP_PURE(Name, Word, Result, Source) {#Name, Word, Result, Source},
 #include "MIPSDSPExpandFixtures.def"
 };
+TEST_P(MIPSDSP, RevisionTwoMatchesEveryIndependentMachineRecord) {
+  struct Record {
+    const char *Mnemonic;
+    uint32_t Word, V0, Control, HI2, LO2;
+  };
+  static constexpr Record Cases[] = {
+#define MIPS_DSPR2_CASE(Name, Word, V0, Control, HI2, LO2)                     \
+  {#Name, Word, V0, Control, HI2, LO2},
+#include "MIPSDSPR2Fixtures.def"
+  };
+  static_assert(std::size(Cases) == 46);
+  auto Image = dspImage(GetParam());
+  Image.MIPS->HasDSPR2 = true;
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  for (const auto &R : Cases) {
+    SCOPED_TRACE(R.Mnemonic);
+    NdOpEmulator E(Image);
+    E.setStrictMode(true);
+    E.setRegister(mipsreg::A1, 0x80007fff);
+    E.setRegister(mipsreg::A2, 0x80ff8000);
+    E.setRegister(mipsreg::A3, 0x8000ffff);
+    E.setRegister(mipsreg::V0, 0x80ff8000);
+    E.setRegister(mipsreg::DSPControl, 0x01004005);
+    E.setRegister(mipsreg::AC2HI, 0x80007fff);
+    E.setRegister(mipsreg::AC2LO, 0x80ff8000);
+    ASSERT_TRUE(executeDSP(D, GetParam(), R.Word, E));
+    EXPECT_EQ(E.getRegister(mipsreg::V0), R.V0);
+    EXPECT_EQ(E.getRegister(mipsreg::DSPControl), R.Control);
+    EXPECT_EQ(E.getRegister(mipsreg::AC2HI), R.HI2);
+    EXPECT_EQ(E.getRegister(mipsreg::AC2LO), R.LO2);
+  }
+}
+TEST_P(MIPSDSP, RevisionTwoRequiresEvidenceAndPreservesLaneEffects) {
+  auto Image = dspImage(GetParam());
+  Decoder D;
+  const auto Word = [](unsigned Fields, unsigned Destination) {
+    return 0x7c000000u | (4u << 21) | (5u << 16) | (Destination << 11) | Fields;
+  };
+  ASSERT_TRUE(D.init(Image));
+  EXPECT_THROW(liftDSP(D, GetParam(), Word(0x18, 2)), UnliftedInstruction);
+  Image.MIPS->HasDSPR2 = true;
+  ASSERT_TRUE(D.init(Image));
+  NdOpEmulator E(Image);
+  E.setStrictMode(true);
+  E.setRegister(mipsreg::DSPControl, 0x04004012);
+  E.setRegister(mipsreg::A0, 0x8000ffff);
+  E.setRegister(mipsreg::A1, 0xffff0001);
+  ASSERT_TRUE(executeDSP(D, GetParam(), Word(0x18, 2), E));
+  EXPECT_EQ(E.getRegister(mipsreg::V0), 0xbf7f7f80u);
+  ASSERT_TRUE(executeDSP(D, GetParam(), Word(0x310, 0), E));
+  EXPECT_EQ(E.getRegister(mipsreg::DSPControl), 0x04104012u);
+  ASSERT_TRUE(executeDSP(D, GetParam(), Word(0x651, 2), E));
+  EXPECT_EQ(E.getRegister(mipsreg::V0), 12u);
+  EXPECT_EQ(E.getRegister(mipsreg::DSPControl), 0x0c104012u);
+  // Two physical inputs, an aliased destination and no carry across lanes.
+  ASSERT_TRUE(executeDSP(D, GetParam(), Word(0x218, 4), E));
+  EXPECT_EQ(E.getRegister(mipsreg::A0), 0xbfff0000u);
+  Image.MIPS->HasDSPR2 = false;
+  ASSERT_TRUE(D.init(Image));
+  EXPECT_THROW(liftDSP(D, GetParam(), Word(0x310, 2)), UnliftedInstruction);
+}
+
+TEST_P(MIPSDSP, PartialControlTracksOnlyArchitecturallyUndefinedFields) {
+  auto Image = dspImage(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  NdOpEmulator E(Image);
+  E.setStrictMode(true);
+  E.setRegister(mipsreg::DSPControl, 0x02104021);
+  E.setRegister(mipsreg::A0, 0x8000ffff);
+  E.setRegister(mipsreg::A1, 0x7fffffff);
+  ASSERT_TRUE(executeDSP(D, GetParam(), 0x7c850251, E)); // cmp.lt.ph
+  EXPECT_FALSE(E.getRegister(mipsreg::DSPControl));
+  ASSERT_TRUE(executeDSP(D, GetParam(), 0x7c0114b8, E)); // rddsp v0,1 (POS)
+  EXPECT_EQ(E.getRegister(mipsreg::V0), 33u);
+  E.setRegister(mipsreg::AC2LO, 0x13572468);
+  ASSERT_TRUE(
+      executeDSP(D, GetParam(), 0x7c8017f8, E)); // mthlip a0,ac2: POS > 32
+  EXPECT_EQ(E.getRegister(mipsreg::AC2HI), 0x13572468u);
+  EXPECT_EQ(E.getRegister(mipsreg::AC2LO), 0x8000ffffu);
+  ASSERT_TRUE(executeDSP(D, GetParam(), 0x7c0814b8, E)); // rddsp v0,8 (OUflag)
+  EXPECT_EQ(E.getRegister(mipsreg::V0), 0x00100000u);
+}
+
 TEST_P(MIPSDSP, ExpansionReplicationAndReductionHaveNoControlDependency) {
   auto Image = dspImage(GetParam());
   Decoder Decode;

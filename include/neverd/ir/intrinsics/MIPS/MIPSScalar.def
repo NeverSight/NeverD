@@ -61,11 +61,19 @@ NEVERD_MIPS_SCALAR_INTRINSIC(MIPSAccumulatorAfterWrite, 16029,
                              "neverd_mips_accumulator_after_write")
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSReadMSAControl, 16030, "neverd_mips_cfcmsa")
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSWriteMSAControl, 16031, "neverd_mips_ctcmsa")
+#define NEVERD_DSP_COMPARE(Name, Value, Helper, Mnemonic)                      \
+  NEVERD_MIPS_SCALAR_INTRINSIC(Name, Value, Helper)
+#include "neverd/ir/intrinsics/MIPS/MIPSDSPControlEffects.def"
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSMthlipPosition, 16036,
+                             "neverd_mips_mthlip_pos")
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSExtractResult, 16032,
                              "neverd_mips_extract_result")
 #define NEVERD_MSA_FLOAT(Name, Value, Encoding, Arity, Mnemonic)               \
   NEVERD_MIPS_SCALAR_INTRINSIC(MIPSMSA##Name, Value, "neverd_msa_" #Name)
 #include "neverd/ir/intrinsics/MIPS/MIPSMSAFloat.def"
+#define NEVERD_MSA_DIVISION(Name, Value, Encoding, Mnemonic)                   \
+  NEVERD_MIPS_SCALAR_INTRINSIC(MIPSMSA##Name, Value, "neverd_msa_" #Name)
+#include "neverd/ir/intrinsics/MIPS/MIPSMSADivision.def"
 
 NEVERD_MIPS_SCALAR_TEXT(
     kAccumulatorHistoryUnknown,

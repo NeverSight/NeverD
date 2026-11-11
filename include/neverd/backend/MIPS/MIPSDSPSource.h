@@ -9,6 +9,7 @@
 #ifndef NEVERD_BACKEND_MIPS_MIPSDSP_SOURCE_H
 #define NEVERD_BACKEND_MIPS_MIPSDSP_SOURCE_H
 
+#include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
 #include "neverd/loader/BinaryImageModel.h"
 
 #include "llvm/IR/InlineAsm.h"
@@ -24,6 +25,32 @@ namespace neverd::mips {
 #define NEVERD_MIPS_DSP_SOURCE_TEXT(Name, Text)                                \
   inline constexpr char Name[] = Text;
 #include "neverd/backend/MIPS/MIPSDSPSource.def"
+
+struct DSPPartialAssembly {
+  Intrinsic Id;
+  const char *LLVM, *C, *Constraints;
+  unsigned Inputs;
+};
+inline constexpr DSPPartialAssembly DSPPartialOperations[] = {
+#define NEVERD_DSP_COMPARE(Name, Value, Helper, Mnemonic)                      \
+  {Intrinsic::Name, ".set push\n.set dsp\n" Mnemonic " $0,$1\n.set pop",       \
+   "\".set push\\n.set dsp\\n" Mnemonic " %0,%1\\n.set pop\"",                 \
+   DSPCompareConstraints, 2},
+#include "neverd/ir/intrinsics/MIPS/MIPSDSPControlEffects.def"
+    {Intrinsic::MIPSMthlipPosition, DSPPositionAsm, DSPPositionCAsm,
+     DSPPositionConstraints, 0}};
+
+inline const DSPPartialAssembly &dspPartialOperation(Intrinsic Id) {
+  return DSPPartialOperations[unsigned(Id) - unsigned(Intrinsic::MIPSCmpEqPH)];
+}
+inline std::string dspPartialC(const DSPPartialAssembly &A, std::string X,
+                               std::string Y) {
+  std::string S = std::string("__asm__ volatile(") + A.C;
+  if (!A.Inputs)
+    return S + " ::: \"$8\", \"$9\", \"memory\");";
+  return S + " :: \"r\"((uint32_t)(" + X + ")), \"r\"((uint32_t)(" + Y +
+         ")) : \"memory\");";
+}
 
 inline bool imagePreservesDSPControl(const BinaryImage *Image) {
   return Image && Image->MIPS && Image->MIPS->HasDSP;

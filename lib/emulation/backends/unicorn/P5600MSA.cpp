@@ -63,7 +63,7 @@ public:
       Install(OutputPC + 4 * I, 0x78b00019 | (I << 16) | ((4 + I) << 6));
     Install(OutputPC + 16, 0x787e0a19);
     unsigned Index = 0;
-    for (const auto &Op : mips::MSAFloatOperations) {
+    for (const auto &Op : mips::MSANativeOperations) {
       const unsigned WS = Op.Arity == 3 ? 1 : 0, WT = Op.Arity == 3 ? 2 : 1;
       Install(OperationsPC + 4 * Index++,
               Op.Encoding | (WS << 11) | (Op.Arity > 1 ? WT << 16 : 0));
@@ -83,13 +83,14 @@ public:
   std::optional<MIPSMSAResult>
   execute(Intrinsic Id, uint32_t Model, uint32_t CSR,
           llvm::ArrayRef<MIPSVector> Inputs) override {
-    if (!mips::isMSAFloat(Id) ||
-        Inputs.size() != mips::msaFloatOperation(Id).Arity ||
+    if (!mips::isMSANativeVector(Id) ||
+        Inputs.size() != mips::msaNativeOperation(Id).Arity ||
         Model != Implementation || (CSR & ~0x0107ffffu) ||
         uc_context_restore(CPU, Initial) != UC_ERR_OK)
       return std::nullopt;
-    const bool Class =
-        Id == Intrinsic::MIPSMSAFCLASS_W || Id == Intrinsic::MIPSMSAFCLASS_D;
+    const bool PreserveCSR = mips::isMSADivision(Id) ||
+                             Id == Intrinsic::MIPSMSAFCLASS_W ||
+                             Id == Intrinsic::MIPSMSAFCLASS_D;
     // FP arithmetic replaces Cause. Reinstalling stale enabled Cause via
     // CTCMSA would itself trap before evaluating the requested instruction.
     uint32_t InitialCSR = CSR & ~0x3f000u;
@@ -122,7 +123,7 @@ public:
     const bool Traps = ((State >> 12) & ((State >> 7 & 31) | 32) & 63) != 0;
     if (Status == UC_ERR_EXCEPTION && !Traps)
       return std::nullopt;
-    MIPSMSAResult Result{Class ? CSR : uint32_t(State), std::nullopt};
+    MIPSMSAResult Result{PreserveCSR ? CSR : uint32_t(State), std::nullopt};
     if (Status == UC_ERR_OK) {
       Result.Destination.emplace();
       for (unsigned I = 0; I < 4; ++I) {

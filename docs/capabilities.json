@@ -2210,6 +2210,15 @@
           "runner": "gtest",
           "target": "NeverDMIPSIntegerTests",
           "source": "unittests/lift/mips/MIPS16E2Tests.cpp",
+          "filter": "*/MIPS16E2.CP0PlatformHonorsWriteMasksAndSharedStatus/*",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPS16E2Tests.cpp",
           "filter": "*/MIPS16E2.MTControlUsesBoundViewsMasterPermissionAndHazards/*",
           "platforms": [
             "darwin"
@@ -2274,7 +2283,7 @@
       "limitations": [
         "linked classic MIPS32r2/o32 ELF with DSP ASE evidence. The qualified packed arithmetic, DSPControl and accumulator forms are listed in docs/mips.md",
         "explicit DSPControl state requires an enabled DSP execution environment; no disabled-DSP exception delivery or invented initial state",
-        "AC0 aliases HI/LO. AC1 through AC3 have independent high and low halves. Saturating fractional accumulation, EXTR and position-based extraction observe DSPControl. DSPR2, DSP64 and compressed DSP require separate qualification",
+        "AC0 aliases HI/LO. AC1 through AC3 have independent high and low halves. Saturating fractional accumulation, EXTR and position-based extraction observe DSPControl. The 46 DSPR2 instructions require revision-two ABI evidence. DSP64 and compressed DSP require separate qualification",
         "original-target source preserves DSPControl after return; no portable-host execution or floating/vector ABI claim"
       ],
       "tests": [
@@ -2283,6 +2292,15 @@
           "target": "NeverDMIPSPipelineTests",
           "source": "unittests/lift/mips/MIPSDSPPipelineTests.cpp",
           "filter": "MIPSDSPPipeline.DiscardedPackedResultStillPublishesMachineState",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPSDSPTests.cpp",
+          "filter": "*/MIPSDSP.RevisionTwoMatchesEveryIndependentMachineRecord/*",
           "platforms": [
             "darwin"
           ]
@@ -2345,10 +2363,19 @@
       ],
       "limitations": [
         "linked classic MIPS32r5/o32 ELF with MSA, FP64 ABI and 128-bit CPR1 evidence in either byte order",
-        "integer B/H/W/D lane permutations and slides, W/D floating point, and CFCMSA/CTCMSA. Native floating point requires defined vector inputs, an enabled original-target FP environment and WRP clear",
+        "integer lane arithmetic, Q-format products, vector memory, conditional branches, permutations and slides, W/D floating point, and CFCMSA/CTCMSA. Native floating point requires defined vector inputs, an enabled original-target FP environment and WRP clear",
         "concrete FP requires a bound executor and MSACSR. General partitioned vector execution, disabled-MSA exception delivery, MSA64 and compressed MSA remain outside this profile"
       ],
       "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPSMSATests.cpp",
+          "filter": "*/MIPSMSA.WideningAliasesAndSignedUnsignedSaturationUseFullLaneWidths/*",
+          "platforms": [
+            "darwin"
+          ]
+        },
         {
           "runner": "gtest",
           "target": "NeverDMIPSIntegerTests",

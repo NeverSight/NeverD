@@ -155,8 +155,19 @@ Pack operations select the upper half of each source lane. These forms leave
 DSPControl untouched and need no incoming DSPControl value, including when
 their destination is `$zero`. Decoder reuse consumes the current
 image's feature evidence; Capstone recognizing an encoding without that
-evidence does not authorize its lift. DSPR2, DSP64, microMIPS DSP and DSP instructions beyond the families below remain
-unsupported.
+evidence does not authorize its lift. DSPR2 is admitted when the ABI flags contain bit 0x2, alone or with the DSP bit.
+The 46 revision-two instructions cover packed halving add/subtract, wrapping and
+saturating halfword arithmetic, fractional multiplication, byte comparisons with
+both GPR and DSPControl results, shifts, packing/alignment and cross-lane dot
+products in all four accumulators. Discarding a GPR destination preserves sticky
+flags and the specified AC0 clobbers. The 74Kf reference exercises all three
+CMPGDU predicates with zero, ordinary and aliased destinations, including the
+DSP-disabled exception. BALIGN positions 0 and 2 produce an
+unpredictable destination. The classic DSP profile also includes indexed
+loads, INSV, accumulator shifts, banked multiply/accumulate, CMP.PH, MTHLIP
+and BPOSGE32. For CMP.PH only the two low condition bits are specified.
+For MTHLIP an incoming POS greater than 32 makes only POS unpredictable.
+The classic MIPS32/o32 profile covers both byte orders. [MIPS DSP instruction manual](https://docs.alexrp.com/mips/mips32_dsp_v3_01.pdf)
 
 `ADDQ_S.W`/`SUBQ_S.W` saturate signed words and set sticky overflow bit 20.
 `ADDSC` replaces carry bit 13 with unsigned carry-out; `ADDWC` adds that input
@@ -177,8 +188,9 @@ its signed-saturation description. The admitted result is `0x7fff`/`0x7fffffff`,
 checked against independent original-target execution; the contradictory
 all-ones pseudocode is not used as the oracle.
 `CMPGU.EQ/LT/LE.QB` return four predicates in GPR bits 3..0 without observing
-DSPControl. `CMP.EQ/LT/LE.PH` remains unsupported: its upper condition bits become
-UNPREDICTABLE, requiring a partial-known state transport/source contract.
+DSPControl. `CMP.EQ/LT/LE.PH` replace the two low condition bits. LowIR
+tracks the two unpredictable upper condition bits separately. Native source
+observes those bits on the issuing processor when they are used.
 
 `MULEQ_S.W.PHL/PHR` expand a signed Q15 product to Q31, saturating
 negative-one times negative-one to `0x7fffffff` and setting sticky OUFLAG21.
@@ -248,7 +260,7 @@ value for OUTFLAG[23], including when the returned word is unrounded.
 EXTP[V] and EXTPDP[V] extract size + 1 bits ending at POS. Failure sets EFI,
 preserves POS and yields an unknown GPR value. A successful DP extraction
 advances POS modulo 64. Source code traps if it needs an undefined result.
-DSP revision 2, DSP64 and compressed DSP still require qualification.
+DSP64 and compressed DSP still require qualification.
 
 Classic AC0 partial writes preserve the pre-R6 unread-result restriction:
 MULT/MULTU/DIV/DIVU (and supported doubleword multiply) establish pending
@@ -405,15 +417,14 @@ The GNU fixture uses `-mmips16e2 -mmt` to publish both features in ELF
 The pinned Unicorn predates e2, so it is **not** an original-e2 oracle. Literal
 GNU bytes, independent LowIR expectations and execution of generated old-MIPS16
 source are separate checks. Hardware or independent original-e2 execution
-remains unavailable. General CP0 transfers beyond the word views below and
-MIPS16 on MIPS64 remain unsupported. The following system/atomic slice is
+remains unavailable. These compressed system operations use the MIPS32/o32 profile. The following system/atomic slice is
 qualified at LowIR, not as native source or original-e2 hardware execution. No path treats a misdecoded operand or unknown instruction as
 valid semantics. The immediate, memory, call and slot rules follow
 [MIPS16e Volume IV-a, revision 2.63](https://jnastarot.io/arch_index/pdf/MD00076-2B-MIPS1632-AFP-02.63.pdf)
 and were cross-checked against the pinned Ghidra definitions linked above.
 
-MIPS16e2 `LL`/`SC`, `RDHWR` (indices 0–3 and 29), `DI`/`EI` (with or
-without a result), the admitted `MFC0`/`MTC0` word views, and `PAUSE` retain explicit effectful intrinsics. Reserved fields and
+MIPS16e2 `LL`/`SC`, `RDHWR` (indices 0–3 and 29–31), `DI`/`EI` (with or
+without a result), `MFC0`/`MTC0` with a five-bit register and three-bit selector, and `PAUSE` retain explicit effectful intrinsics. Reserved fields and
 feature evidence are checked before effects. SC captures the original address
 and stored value before overwriting its GPR with 0/1. An unused result cannot
 remove the memory/reservation or system effect. SC ends stack-memory argument
@@ -456,9 +467,8 @@ ErrorEPC (30), and writes to EPC/ErrorEPC. These are explicit software-visible
 They do not change the current decode mode or implement exception return.
 Status reads share the DI/EI state owner. CP0 usability is required independently
 of HWREna; an unknown read or write operand refuses. A successful write establishes
-that view and an execution-hazard obligation, discharged by bound EHB. General
-Status writes, Count, Config/TLB and other CP0 selectors remain unsupported.
-The explicit MT ABI feature (0x40) additionally admits read-only MVPControl
+that view and an execution-hazard obligation, discharged by bound EHB. Board-specific CP0 reads and writes, including masked Status writes and Count or Config views, require a bound `MIPSCP0Platform`. Its callback performs the transfer on the issuing context and can decline unsupported views. RDHWR 30/31 consume a matching implementation-specific observation.
+The explicit MT ABI feature (0x40) additionally enables the built-in read views of MVPControl
 (0,1), VPEControl (1,1) and VPEConf0 (1,2). The intrinsic key is `(sel << 5) | reg`,
 so existing selector-zero identities remain stable. DMT/EMT update only TE;
 DVPE/EVPE update only EVP when VPEConf0.MVP is set. Each returns the prior
@@ -520,6 +530,20 @@ the same spelling cannot be reused as an internal barrier implementation.
 
 ## Classic MIPS32 MSA vectors and control registers
 
+The r5/o32 integer profile includes horizontal add/subtract, widening dot
+products and their accumulates, mixed-signedness saturated subtraction, and
+Q-format multiply/add/subtract with optional rounding. DIV/MOD observe the
+issuing CPU's result for a zero divisor lane. Concrete portable evaluation
+covers defined inputs, and original-target source uses the MSA instruction.
+LD/ST use signed element-scaled offsets, allow unaligned addresses, and
+preserve target byte order within each element. Each LowIR memory operation
+accesses a complete element. Both C views use byte-aligned scalar aliases
+for ordinary RAM in an MSA image so the target compiler can generate legal
+loads and stores at odd addresses. LDI, MOVE.V, scalar element
+moves and the immediate mask operations share the vector register bank.
+BZ/BNZ test their predicate before the delay slot. The element forms test
+for any zero or all nonzero lanes, while .V tests the whole register.
+
 The initial MSA slice requires classic MIPS32 Release 5/o32 ELF in either byte
 order, with `.MIPS.abiflags` explicitly declaring MSA, 128-bit CPR1 registers
 and FP64 ABI tag 6. A reused decoder consumes the current revision as well as
@@ -576,15 +600,13 @@ must model the unpredictable remaining W bits, not preserve or zero them by
 assuming a generic subregister write.
 
 LowIR accepts all 32 W registers. Source qualification is narrower and runs
-before SSA/dead-code elimination: it accepts one ordinary leaf block with fully
-initialized vector dependencies, no calls, and no writes to the saved
-F20/F22/.../F30 low views. Without an Image, all
+before SSA/dead-code elimination. Each vector input must be initialized on every incoming leaf path. Calls and writes to the saved
+F20/F22/.../F30 low views require a separate ABI proof. Without an Image, all
 W20..W31 writes are refused because other o32 FPABIs preserve additional views.
 MSA64 source is refused at this boundary too; no extra vector parameter is
 invented. Returns must retain the
 captured entry RA, including when `COPY_S.W` writes RA in a delay slot. General
-vector ABI, saved-FPR restoration and multi-block source proofs remain future
-work. Both C paths use Clang's bit-precise integer support for any surviving
+vector ABI and saved-FPR restoration remain future work. Both C paths use Clang's bit-precise integer support for any surviving
 128-bit scalar temporaries on MIPS32.
 
 Big-endian MSA scalar source carries a `-msa` LLVM feature and a Clang
@@ -912,6 +934,23 @@ The receipt includes the input bytes and LowIR fingerprints for the
 decode/lift benchmarks. Local paired timings and the single-function Archer
 C7 comparison with Ghidra are in
 `build-mips/mips-cache-mt-dsp-msa/qualification.json`.
+
+### Classic DSPR2, MSA and compressed system validation
+
+The [DSPR2/MSA execution and performance receipt](evidence/mips-dspr2-msa-2026-11-11.json)
+records both byte orders. LLVM assembled 113 classic DSP forms, all 46 DSPR2
+forms and 526 MIPS32 MSA mnemonic/width combinations. NeverD lifted both
+copies of each stream with matching LowIR fingerprints. The 74Kf and P5600
+execution suites compared 1,552 HighC/LLVMC builds with the original ELF
+across 18,080 inputs, including unaligned vector loads/stores at odd addresses.
+The MIPS16e2 fixture independently assembled the board CP0 and RDHWR transfers.
+Its generated MIPS16 code passed 16,640 executions against the ISA expectations.
+
+The receipt includes paired CPU-time samples against the previous NeverD
+baseline and Ghidra SLEIGH, with separate Capstone physical decode timings.
+The comparison uses classic MIPS32r2/o32 DSP, MIPS32r5/o32 MSA, and compressed
+MIPS16e2 r2/o32. DSP64, compressed DSP/MSA and the Release 6 DSP compact
+branch BPOSGE32C have separate ISA and ABI requirements.
 
 ## TP-Link firmware workflow
 

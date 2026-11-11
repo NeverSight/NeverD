@@ -2,7 +2,7 @@
 """Compare extracted MIPS ASE leaves and their HighC/LLVMC rebuilds on 74K/P5600."""
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
 from pathlib import Path
 import re
@@ -66,6 +66,113 @@ ENABLE_DSP = (0x40086000, 0x3C090100, 0x01094025, 0x40886000, 0xC0)
 
 
 def leaves(group):
+    if group == "msa-int":
+        for stem in "hadd_s hadd_u hsub_s hsub_u dotp_s dotp_u dpadd_s dpadd_u dpsub_s dpsub_u".split():
+            for width in "hwd":
+                yield f"{stem}_{width}", vector(f"{stem}.{width} $w2,$w0,$w1")
+        for stem in "madd_q maddr_q msub_q msubr_q mul_q mulr_q".split():
+            for width in "hw":
+                yield f"{stem}_{width}", vector(f"{stem}.{width} $w2,$w0,$w1")
+        for stem in "div_s div_u mod_s mod_u subsus_u subsuu_s".split():
+            for width in "bhwd":
+                yield f"{stem}_{width}", vector(f"{stem}.{width} $w2,$w0,$w1")
+        for stem in ("bmzi", "bmnzi", "bseli"):
+            yield stem, vector(f"{stem}.b $w2,$w0,165")
+        for width, count in zip("bhwd", (16, 8, 4, 2)):
+            yield "ldi_" + width, vector(f"ldi.{width} $w2,-257")
+            # Deliberately unaligned, using bytes populated by the caller.
+            yield "ld_" + width, vector(f"addiu $t0,$a0,1\nld.{width} $w2,0($t0)")
+            yield (
+                "st_" + width,
+                VECTOR_SETUP + f"addiu $t0,$a0,1\nst.{width} $w2,0($t0)\nli $v0,3",
+            )
+            if width in "bh":
+                yield "fill_" + width, vector(f"fill.{width} $w2,$a3")
+                yield "insert_" + width, vector(f"insert.{width} $w2[{count - 1}],$a3")
+                for sign in ("s", "u"):
+                    yield (
+                        f"copy_{sign}_{width}",
+                        VECTOR_SETUP + f"copy_{sign}.{width} $v0,$w2[{count - 1}]",
+                    )
+        yield "move_v", vector("move.v $w2,$w0")
+        yield "lsa", "lsa $v0,$a1,$a2,3"
+        for stem in ("bz", "bnz"):
+            for width in "vbhwd":
+                yield (
+                    f"{stem}_{width}",
+                    VECTOR_SETUP
+                    + (
+                        f"li $v0,3\n{stem}.{width} $w0,1f\naddiu $v0,$v0,4\n"
+                        "addiu $v0,$v0,8\n1:"
+                    ),
+                )
+        return
+    if group == "dsp-extra":
+        yield "packrl", "packrl.ph $v0,$a1,$a2"
+        for op in ("cmp.eq.ph", "cmp.lt.ph", "cmp.le.ph"):
+            yield op.replace(".", "_"), f"{op} $a1,$a2\nrddsp $v0,16"
+        for op, offset in (("lbux", 1), ("lhx", 2), ("lwx", 4)):
+            yield op, f"li $t0,{offset}\n{op} $v0,$t0($a0)"
+        yield "insv", "li $t0,0x407\nwrdsp $t0,3\nmove $v0,$a2\ninsv $v0,$a1"
+        for op, args in (
+            ("shilo", "$ac2,-32"),
+            ("shilov", "$ac2,$a3"),
+            ("mthlip", "$a3,$ac2"),
+            ("mult", "$ac2,$a2,$a3"),
+            ("multu", "$ac2,$a2,$a3"),
+            ("madd", "$ac2,$a2,$a3"),
+            ("maddu", "$ac2,$a2,$a3"),
+            ("msub", "$ac2,$a2,$a3"),
+            ("msubu", "$ac2,$a2,$a3"),
+        ):
+            yield (
+                op,
+                (
+                    f"mthi $a1,$ac2\nmtlo $a2,$ac2\n{op} {args}\n"
+                    "mfhi $v0,$ac2\nmflo $t0,$ac2\nsw $t0,0($a0)"
+                ),
+            )
+        yield "bposge32", "li $v0,3\nbposge32 1f\naddiu $v0,$v0,4\naddiu $v0,$v0,8\n1:"
+        return
+    if group == "dspr2":
+        for stem in ("adduh", "subuh", "adduh_r", "subuh_r"):
+            yield stem + "_qb", f"{stem}.qb $v0,$a1,$a2"
+        for width in ("ph", "w"):
+            for stem in ("addqh", "subqh", "addqh_r", "subqh_r"):
+                yield stem + "_" + width, f"{stem}.{width} $v0,$a1,$a2"
+        for op in (
+            "addu.ph subu.ph addu_s.ph subu_s.ph mul.ph mul_s.ph mulq_s.w "
+            "mulq_rs.w mulq_s.ph cmpgdu.eq.qb cmpgdu.lt.qb cmpgdu.le.qb precr.qb.ph"
+        ).split():
+            yield op.replace(".", "_"), f"{op} $v0,$a1,$a2"
+        yield "absq_s_qb", "absq_s.qb $v0,$a1"
+        for op in (
+            "shra.qb",
+            "shra_r.qb",
+            "shrl.ph",
+            "shrav.qb",
+            "shrav_r.qb",
+            "shrlv.ph",
+        ):
+            shift = "$a2" if "v" in op else "7"
+            yield op.replace(".", "_"), f"{op} $v0,$a1,{shift}"
+        for op in ("precr_sra.ph.w", "precr_sra_r.ph.w", "append", "prepend", "balign"):
+            shift = 3 if op == "balign" else 17
+            yield op.replace(".", "_"), f"move $v0,$a2\n{op} $v0,$a1,{shift}"
+        for op in (
+            "dpa.w.ph dps.w.ph mulsa.w.ph dpax.w.ph dpsx.w.ph dpaqx_s.w.ph "
+            "dpsqx_s.w.ph dpaqx_sa.w.ph dpsqx_sa.w.ph"
+        ).split():
+            yield (
+                op.replace(".", "_"),
+                (
+                    f"mthi $a1,$ac2\nmtlo $a2,$ac2\n{op} $ac2,$a2,$a3\n"
+                    "mfhi $v0,$ac2\nmflo $t0,$ac2\nsw $t0,0($a0)"
+                ),
+            )
+        yield "discard_saturated", "absq_s.qb $zero,$a1\nli $v0,7"
+        yield "discard_cmp", "cmpgdu.lt.qb $zero,$a1,$a2\nli $v0,7"
+        return
     if group == "dsp":
         for op in (
             "extr.w",
@@ -156,7 +263,7 @@ def vector(instruction):
 
 
 def observe(elf, name, little, group, args, csr):
-    is_msa = group == "msa"
+    is_msa = group.startswith("msa")
     cpu, entry = roundtrip.emulator(
         elf,
         32,
@@ -165,6 +272,7 @@ def observe(elf, name, little, group, args, csr):
         cpu_model=(mips.UC_CPU_MIPS32_P5600 if is_msa else mips.UC_CPU_MIPS32_74KF),
     )
     order = "little" if little else "big"
+    cpu.mem_write(roundtrip.DATA, bytes((i * 29 + 5) & 255 for i in range(32)))
 
     def instructions(address, words):
         cpu.mem_write(address, b"".join(x.to_bytes(4, order) for x in words))
@@ -195,12 +303,12 @@ def observe(elf, name, little, group, args, csr):
         raise AssertionError(
             f"unexpected guest exception at {name} with MSACSR={control:#x}"
         )
-    return value, memory, control
+    return value, bytes(cpu.mem_read(roundtrip.DATA, 32)).hex(), control
 
 
 def run(args, artifacts):
     cases = [
-        (args.group + "_" + n, body)
+        (args.group.replace("-", "_") + "_" + n, body)
         for n, body in leaves(args.group)
         if re.search(args.match, n)
     ]
@@ -224,14 +332,17 @@ def run(args, artifacts):
         [args.clang, "-print-resource-dir"], text=True
     ).strip()
     report = {
+        "complete": False,
         "neverd_sha256": digest(args.neverd),
         "fixture_sha256": digest(fixture),
         "unicorn_sha256": digest(Path(uclib._name)),
         "cases": [],
     }
+    artifacts.write("results.json", report)
+    artifacts.write("failures.json", [])
     for little in (False, True):
         profile = "mipsel" if little else "mips"
-        msa = args.group == "msa"
+        msa = args.group.startswith("msa")
         flags = [
             f"--target={profile}-linux-gnu",
             "-march=mips32r5" if msa else "-march=mips32r2",
@@ -240,7 +351,11 @@ def run(args, artifacts):
             "-fno-pic",
             "-G0",
             "-ffreestanding",
-            *(["-mmsa", "-mfp64", "-mhard-float"] if msa else ["-mdsp"]),
+            *(
+                ["-mmsa", "-mfp64", "-mhard-float"]
+                if msa
+                else ["-mdspr2" if args.group == "dspr2" else "-mdsp"]
+            ),
         ]
         link = [args.ld, "-m", f"elf32{'l' if little else 'b'}tsmip", "-static"]
         original = artifacts.work / f"{profile}.elf"
@@ -255,6 +370,15 @@ def run(args, artifacts):
         def test(name):
             if msa:
                 values = VECTOR_INPUTS
+                if args.group == "msa-int":
+                    values += (
+                        (0x80008000, 0x7FFF7FFF, 0xFFFFFFFF),
+                        (0x7FFFFFFF, 0x80000000, 0x80000000),
+                        (0xFF01FF01, 0x01010101, 0x807F0101),
+                    )
+                    if name.startswith(("msa_int_bz_", "msa_int_bnz_")):
+                        # One completely zero vector, one nonzero in every byte.
+                        values += ((0, 0, 0), (0x01010101, 0x02020202, 0x04040404))
                 if name.endswith("_d"):
                     values += (
                         (1, 0x7FF00000, 0),
@@ -270,7 +394,8 @@ def run(args, artifacts):
                 )
                 inputs = [(v, c) for v in values for c in states]
             else:
-                inputs = [(v, 0x0520403F) for v in DSP_INPUTS]
+                states = (0, 0x0520403F) if args.group != "dsp" else (0x0520403F,)
+                inputs = [(v, c) for v in DSP_INPUTS for c in states]
             before = [
                 observe(original, name, little, args.group, v, c) for v, c in inputs
             ]
@@ -352,9 +477,18 @@ def run(args, artifacts):
                 artifacts.discard(source, log)
             return records
 
+        failures = []
         with ThreadPoolExecutor(args.jobs) as pool:
-            for records in pool.map(test, (n for n, _ in cases)):
-                report["cases"].extend(records)
+            pending = {pool.submit(test, name): name for name, _ in cases}
+            for task in as_completed(pending):
+                try:
+                    report["cases"].extend(task.result())
+                except Exception as error:
+                    failures.append(f"{profile} {pending[task]}: {error}")
+        report["cases"].sort()
+        if failures:
+            artifacts.write("failures.json", sorted(failures))
+            raise RuntimeError("\n".join(sorted(failures)))
         artifacts.discard(original)
         artifacts.write("results.json", report)
     report["complete"] = True
@@ -373,7 +507,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--views", nargs="+", choices=("highc", "llvmc"), default=("highc", "llvmc")
     )
-    parser.add_argument("--group", choices=("msa", "dsp"), required=True)
+    parser.add_argument(
+        "--group",
+        choices=("msa", "msa-int", "dsp", "dsp-extra", "dspr2"),
+        required=True,
+    )
     parser.add_argument("--match", default=".")
     parser.add_argument("--jobs", type=int, default=1)
     args = parser.parse_args()

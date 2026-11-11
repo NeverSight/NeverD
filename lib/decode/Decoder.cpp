@@ -196,7 +196,8 @@ void Decoder::configureFor(const BinaryImage &Img) {
     MIPS->setMTEnabled(Img.MIPS && Img.MIPS->HasMT);
     MIPS->setMIPS16E2Enabled(Img.MIPS && Img.MIPS->HasMIPS16 &&
                              Img.MIPS->HasMIPS16E2);
-    MIPS->setDSPEnabled(Img.MIPS && Img.MIPS->HasDSP);
+    MIPS->setDSPEnabled(Img.MIPS && Img.MIPS->HasDSP,
+                        Img.MIPS && Img.MIPS->HasDSPR2);
     MIPS->setMSAEnabled(Img.MIPS && Img.MIPS->HasMSA && MIPSISARevision == 5);
   }
   if (AArch64)

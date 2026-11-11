@@ -619,7 +619,7 @@ TEST_P(MIPS16E2,
   Decoder D;
   ASSERT_TRUE(D.init(I));
   for (bool Strict : {false, true})
-    for (unsigned Index : {0u, 1u, 2u, 3u, 29u})
+    for (unsigned Index : {0u, 1u, 2u, 3u, 29u, 30u, 31u})
       for (unsigned RY = 0; RY != 8; ++RY)
         for (bool CP0 : {false, true}) {
           NdOpEmulator E(I);
@@ -693,7 +693,7 @@ TEST_P(MIPS16E2, InterruptUpdatesReturnOldStatusAndRequireAnExecutionBarrier) {
         EXPECT_FALSE(C.ExecutionHazardPending);
         ASSERT_TRUE(E.stepMIPSSystem(Ops[0], C));
       }
-  for (unsigned Index : {4u, 5u, 28u, 30u, 31u}) {
+  for (unsigned Index : {4u, 5u, 6u, 28u}) {
     auto Invalid = stateOp(Intrinsic::MIPSReadHardwareRegister,
                            NdVar::reg(mipsreg::V0, 4), {NdVar::cst(Index, 1)});
     NdOpEmulator E(I);
@@ -767,38 +767,80 @@ TEST_P(MIPS16E2, CP0WordViewsPreserveAllBitsAndRequireBoundPrivilege) {
           EXPECT_EQ(I.Mode, InstructionMode::MIPS16);
         }
 }
-TEST_P(MIPS16E2, CP0SelectorsAndStatefulShapesRejectUnsupportedContracts) {
+TEST_P(MIPS16E2, CP0PlatformHonorsWriteMasksAndSharedStatus) {
+  struct Platform final : MIPSCP0Platform {
+    std::optional<uint32_t> readWord(uint8_t Key,
+                                     MIPSSystemContext &Context) override {
+      return Key == 0xfd ? Context.Status : std::nullopt;
+    }
+    bool writeWord(uint8_t Key, uint32_t Value,
+                   MIPSSystemContext &Context) override {
+      if (Key != 12 || !Context.Status)
+        return false;
+      Context.Status = (*Context.Status & ~3u) | (Value & 3);
+      return true;
+    }
+  } Board;
   auto I = e2Image(GetParam());
   Decoder D;
   ASSERT_TRUE(D.init(I));
-  for (unsigned Write = 0; Write != 2; ++Write)
-    for (unsigned Selector = 0; Selector != 8; ++Selector)
-      for (unsigned Index = 0; Index != 32; ++Index) {
-        const uint32_t Word =
-            0xf0006740 | (Write << 16) | (Selector << 21) | Index;
-        const bool Admitted = Selector == 0 && (Index == 14 || Index == 30 ||
-                                                (!Write && Index == 12));
-        if (Admitted) {
-          auto Ops = e2Lift(D, GetParam(), Word);
-          EXPECT_TRUE(mipsScalarLowShapeIsValid(Ops[0], GetParam()));
-          for (unsigned Bad = 0; Bad != 5; ++Bad) {
-            auto Op = Ops[0];
-            if (Bad == 0)
-              Op.Inputs[1] = NdVar::cst(13, 1);
-            if (Bad == 1)
-              Op.Inputs[1] = NdVar::reg(mipsreg::A0, 1);
-            if (Bad == 2)
-              Op.Inputs[1].Size = 4;
-            if (Bad == 3)
-              Op.Output = Write ? NdVar::tmp(999, 4) : NdVar{};
-            if (Bad == 4)
-              ++Op.NumInputs;
-            EXPECT_FALSE(mipsScalarLowShapeIsValid(Op, GetParam()));
-          }
-          EXPECT_FALSE(mipsScalarLowShapeIsValid(Ops[0], Arch::MIPS64));
-        } else
-          EXPECT_THROW(e2Lift(D, GetParam(), Word), UnliftedInstruction);
-      }
+  NdOpEmulator E(I);
+  E.setStrictMode(true);
+  E.setRegister(mipsreg::V0, 0xfffffff2);
+  MIPSSystemContext C;
+  C.Status = 0x2135;
+  C.CP0Usable = true;
+  const auto Write = e2Lift(D, GetParam(), 0xf001674c);
+  EXPECT_FALSE(E.stepMIPSSystem(Write[0], C));
+  C.CP0 = &Board;
+  ASSERT_TRUE(E.stepMIPSSystem(Write[0], C));
+  EXPECT_EQ(C.Status, 0x2136u);
+  const auto Read = e2Lift(D, GetParam(), 0xf0e0675d);
+  EXPECT_FALSE(E.stepMIPSSystem(Read[0], C));
+  ASSERT_TRUE(
+      E.stepMIPSSystem(stateOp(Intrinsic::MIPSExecutionHazardBarrier, {}), C));
+  ASSERT_TRUE(E.stepMIPSSystem(Read[0], C));
+  ASSERT_TRUE(run(E, llvm::ArrayRef(Read).drop_front()));
+  EXPECT_EQ(E.getRegister(mipsreg::V0), 0x2136u);
+}
+TEST_P(MIPS16E2, CP0SelectorsAndStatefulShapesRejectUnsupportedContracts) {
+  auto I = e2Image(GetParam());
+  Decoder D;
+  for (bool MT : {false, true}) {
+    I.MIPS->HasMT = MT;
+    ASSERT_TRUE(D.init(I));
+    for (unsigned Write = 0; Write != 2; ++Write)
+      for (unsigned Selector = 0; Selector != 8; ++Selector)
+        for (unsigned Index = 0; Index != 32; ++Index) {
+          const uint32_t Word =
+              0xf0006740 | (Write << 16) | (Selector << 21) | Index;
+          const bool ThreadView =
+              (Index == 0 && Selector >= 1 && Selector <= 3) ||
+              ((Index == 1 || Index == 2) && Selector != 0) ||
+              (Index == 3 && Selector == 7);
+          const bool Admitted = MT || !ThreadView;
+          if (Admitted) {
+            auto Ops = e2Lift(D, GetParam(), Word);
+            EXPECT_TRUE(mipsScalarLowShapeIsValid(Ops[0], GetParam()));
+            for (unsigned Bad = 0; Bad != 5; ++Bad) {
+              auto Op = Ops[0];
+              if (Bad == 0)
+                Op.Inputs[1] = NdVar::cst(256, 1);
+              if (Bad == 1)
+                Op.Inputs[1] = NdVar::reg(mipsreg::A0, 1);
+              if (Bad == 2)
+                Op.Inputs[1].Size = 4;
+              if (Bad == 3)
+                Op.Output = Write ? NdVar::tmp(999, 4) : NdVar{};
+              if (Bad == 4)
+                ++Op.NumInputs;
+              EXPECT_FALSE(mipsScalarLowShapeIsValid(Op, GetParam()));
+            }
+            EXPECT_FALSE(mipsScalarLowShapeIsValid(Ops[0], Arch::MIPS64));
+          } else
+            EXPECT_THROW(e2Lift(D, GetParam(), Word), UnliftedInstruction);
+        }
+  }
   for (uint32_t Word : {0xf000674cu, 0xf001674eu, 0xf000679eu, 0xf1403018u}) {
     MIPSLifter L(GetParam(), InstructionMode::MIPS16);
     cs_insn Raw{};
@@ -941,9 +983,9 @@ TEST_P(MIPS16E2, MTControlUsesBoundViewsMasterPermissionAndHazards) {
     ASSERT_TRUE(E.stepMIPSSystem(Ops[0], C));
     ASSERT_TRUE(run(E, llvm::ArrayRef(Ops).drop_front()));
     EXPECT_EQ(E.getRegister(mipsreg::V0), 0x87654321u);
-    EXPECT_THROW(
-        e2Lift(D, GetParam(), 0xf0016740 | ((Key >> 5) << 21) | (Key & 31)),
-        UnliftedInstruction);
+    const auto Write =
+        e2Lift(D, GetParam(), 0xf0016740 | ((Key >> 5) << 21) | (Key & 31));
+    EXPECT_FALSE(E.stepMIPSSystem(Write[0], C));
   }
   I.MIPS->HasMT = false;
   ASSERT_TRUE(D.init(I));

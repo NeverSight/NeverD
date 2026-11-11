@@ -225,10 +225,11 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
     Profile.HasMT = ASE & llvm::Mips::AFL_ASE_MT;
     if (Profile.HasMT && (!Profile.HasMIPS16E2 || ELFT::Is64Bits))
       return profileError("MT currently requires MIPS16e2/o32");
+    Profile.HasDSPR2 = ASE & llvm::Mips::AFL_ASE_DSPR2;
+    Profile.HasDSP = Profile.HasDSPR2 || (ASE & llvm::Mips::AFL_ASE_DSP);
     Profile.HasMSA = ASE & llvm::Mips::AFL_ASE_MSA;
-    if (Profile.HasMSA &&
-        (ELFT::Is64Bits || Compressed || (ASE & llvm::Mips::AFL_ASE_DSP) ||
-         Bytes[3] != 5 || Bytes[5] != 3 || Bytes[7] != 6))
+    if (Profile.HasMSA && (ELFT::Is64Bits || Compressed || Profile.HasDSP ||
+                           Bytes[3] != 5 || Bytes[5] != 3 || Bytes[7] != 6))
       return profileError("MSA requires classic MIPS32r5/o32 FP64 profile");
     if (Bytes[2] != (ELFT::Is64Bits ? 64 : 32) ||
         Bytes[3] != (Profile.HasMSA ? 5 : 2) ||
@@ -236,14 +237,15 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
       return profileError("ABI flags conflict with the admitted GPR profile");
     if (Bytes[5] > (Profile.HasMSA ? 3 : 2) || Bytes[6] != 0 || Bytes[7] > 7 ||
         Read32(8) != 0 ||
-        (ASE & ~(llvm::Mips::AFL_ASE_DSP | llvm::Mips::AFL_ASE_MSA |
-                 llvm::Mips::AFL_ASE_MT | kMIPS16E2ASE)) !=
+        (ASE &
+         ~(llvm::Mips::AFL_ASE_DSP | llvm::Mips::AFL_ASE_DSPR2 |
+           llvm::Mips::AFL_ASE_MSA | llvm::Mips::AFL_ASE_MT | kMIPS16E2ASE)) !=
             (Profile.HasMicroMIPS ? llvm::Mips::AFL_ASE_MICROMIPS
              : Profile.HasMIPS16  ? llvm::Mips::AFL_ASE_MIPS16
                                   : 0u) ||
         (Read32(16) & ~1u) != 0 || Read32(20) != 0)
       return profileError("unsupported ABI flags or instruction extensions");
-    Profile.HasDSP = ASE & llvm::Mips::AFL_ASE_DSP;
+
     if (Profile.HasDSP && (ELFT::Is64Bits || Compressed))
       return profileError("DSP currently requires classic MIPS32r2/o32");
     Profile.ISARevision = Bytes[3];
