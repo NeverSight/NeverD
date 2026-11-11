@@ -5,9 +5,10 @@
 //===----------------------------------------------------------------------===//
 
 /// \file
-/// Swift uses X20 for self and X22 for its asynchronous context. A read
-/// keeps its physical entry value even when the image omits the source
-/// calling convention.
+/// Swift carries self, the error result and the asynchronous context in
+/// X20, X21 and X22. Reads preserve the physical entry values even when
+/// the image omits the source calling convention. The error result can also
+/// be returned in the same register.
 #ifndef NEVERD_DARWIN_ENTRY_TEXT
 #define NEVERD_DARWIN_ENTRY_TEXT(Name, Text)
 #endif
@@ -16,8 +17,12 @@
 #endif
 
 NEVERD_DARWIN_ENTRY_TEXT(kDarwinFeatureAttribute, "target-features")
-NEVERD_DARWIN_ENTRY_REGISTER(X20, W20, "x20", "reserve-x20")
-NEVERD_DARWIN_ENTRY_REGISTER(X22, W22, "x22", "reserve-x22")
+NEVERD_DARWIN_ENTRY_TEXT(kDarwinErrorRegister, "x21")
+NEVERD_DARWIN_ENTRY_TEXT(kDarwinErrorReservation, "reserve-x21")
+NEVERD_DARWIN_ENTRY_REGISTER(X20, W20, "x20", "reserve-x20", false)
+NEVERD_DARWIN_ENTRY_REGISTER(X21, W21, kDarwinErrorRegister,
+                             kDarwinErrorReservation, true)
+NEVERD_DARWIN_ENTRY_REGISTER(X22, W22, "x22", "reserve-x22", false)
 
 #undef NEVERD_DARWIN_ENTRY_TEXT
 #undef NEVERD_DARWIN_ENTRY_REGISTER

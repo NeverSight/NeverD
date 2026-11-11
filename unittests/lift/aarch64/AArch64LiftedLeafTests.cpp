@@ -21,6 +21,7 @@
 #include "llvm/BinaryFormat/Magic.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Program.h"
@@ -92,10 +93,12 @@ void verifyTailTargets(llvm::Module &Module, MachOPatcher &Patcher,
 }
 #endif
 
+enum class LeafCheck { None, TailTarget, ErrorResult };
+
 void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
                            const char *SourceName = kSource,
                            std::string_view Preamble = {},
-                           bool TailForwarder = false) {
+                           LeafCheck Check = LeafCheck::None) {
 #if defined(__APPLE__) && defined(__aarch64__)
   llvm::SmallString<128> Directory;
   ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kTemporary, Directory));
@@ -147,8 +150,24 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   EXPECT_FALSE(Patcher.patch(Input, Rejected, *Changed, Image->Arch).Success);
   EXPECT_FALSE(std::filesystem::exists(Rejected));
 
+  if (Check == LeafCheck::ErrorResult) {
+    auto MissingWrite = llvm::CloneModule(Module);
+    auto *Writer = MissingWrite->getFunction(kDifference);
+    ASSERT_NE(Writer, nullptr);
+    llvm::SmallVector<llvm::IntrinsicInst *> Writes;
+    for (auto &BB : *Writer)
+      for (auto &I : BB)
+        if (auto *Call = llvm::dyn_cast<llvm::IntrinsicInst>(&I);
+            Call && Call->getIntrinsicID() == llvm::Intrinsic::write_register)
+          Writes.push_back(Call);
+    ASSERT_EQ(Writes.size(), 1u);
+    Writes.front()->eraseFromParent();
+    EXPECT_FALSE(
+        Patcher.patch(Input, Rejected, *MissingWrite, Image->Arch).Success);
+    EXPECT_FALSE(std::filesystem::exists(Rejected));
+  }
   const auto ReorderedPath = (Root / kReorderedOutput).string();
-  if (TailForwarder)
+  if (Check == LeafCheck::TailTarget)
     verifyTailTargets(Module, Patcher, Input, Rejected, ReorderedPath,
                       Image->Arch);
   if (Module.getFunction(kSum)->hasFnAttribute(kReturnSigningScopeAttribute)) {
@@ -211,7 +230,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   if (std::getenv(kExecute)) {
     ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Input}), 0);
     ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Output}), 0);
-    if (TailForwarder) {
+    if (Check == LeafCheck::TailTarget) {
       ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, ReorderedPath}), 0);
       testing::Test::RecordProperty(kReorderedTail, true);
     }
@@ -320,11 +339,24 @@ TEST(AArch64LiftedImage, VerifiedLeafBodiesUseTheNormalPatchPipeline) {
 }
 
 TEST(AArch64LiftedImage, DirectTailTransferPreservesItsInstalledCallee) {
-  verifyPublishedLeaves(kTailLeaves, kCaller, kAssemblyName, kTailSum, true);
+  verifyPublishedLeaves(kTailLeaves, kCaller, kAssemblyName, kTailSum,
+                        LeafCheck::TailTarget);
 }
 
 TEST(AArch64LiftedImage, EquivalentWAndXZeroingPreservesTheWholeRegister) {
   verifyPublishedLeaves(kZeroLeaves, kCaller, kAssemblyName, kZeroResults);
+}
+
+TEST(AArch64DarwinEntry,
+     SwiftErrorReturnsBothTheOldValueAndTheUpdatedRegister) {
+  verifyPublishedLeaves(kErrorLeaves, kErrorCaller, kSource, kErrorABI,
+                        LeafCheck::ErrorResult);
+}
+
+TEST(AArch64DarwinEntry, SwiftErrorCanClearTheRegisterWithoutReadingIt) {
+  verifyPublishedLeaves(kErrorLeaves, kErrorCaller, kSource,
+                        std::string(kErrorABI) + kClearError,
+                        LeafCheck::ErrorResult);
 }
 
 TEST(AArch64DarwinEntry, SwiftContextSurvivesNativeLeafPublication) {

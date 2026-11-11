@@ -16,6 +16,7 @@
 #include "neverd/Limits.h"
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
+#include "neverd/backend/llvm/AArch64/LLVMEntryABI.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
@@ -26,6 +27,7 @@
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/X86/I386PicAddress.h"
 #include "neverd/libc/LibCNames.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/loader/ELF/MIPSCodeMode.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-op-emitter"
@@ -154,6 +156,14 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           "memory address space is attached to a non-memory operation");
   }
 
+  // Only machine instruction outputs write the physical error result. SSA edge
+  // copies and call-clobber bookkeeping update the value map independently.
+  auto SetOutput = [&](const MedVar &Output, llvm::Value *Value) {
+    setVar(Output, Value, Builder);
+    if (Op.OriginSeq >= 0 && Output.Kind == MedVar::Reg &&
+        Output.RegOff == a64reg::X21 && Img && Img->isArm64e())
+      writeDarwinAArch64ErrorRegister(Builder, getVar(Output, Builder));
+  };
   auto GetInput = [&](uint8_t Idx) -> llvm::Value * {
     if (Idx >= Op.NumInputs)
       return llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx), 0);
@@ -1428,7 +1438,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
             {CurMedFunc->Entry, {Op.Addr, Op.OriginSeq}, Result});
     }
     if (Result && Op.Output.Size > 0)
-      setVar(Op.Output, Result, Builder);
+      SetOutput(Op.Output, Result);
 
     if (PendingIntrinsicCount > 0) {
       for (auto &Blk : CurMedFunc->Blocks) {
@@ -1439,7 +1449,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         for (size_t I = 0; I < Bindings.size(); ++I) {
           if (!PendingIntrinsicOutputs[I])
             llvm::report_fatal_error("intrinsic output is missing a value");
-          setVar(Bindings[I].Source, PendingIntrinsicOutputs[I], Builder);
+          SetOutput(Bindings[I].Source, PendingIntrinsicOutputs[I]);
         }
         break;
       }
@@ -1474,7 +1484,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     SourceMap->Observations.push_back(
         {CurMedFunc->Entry, {Op.Addr, Op.OriginSeq}, Result});
   if (Result && Op.Output.Size > 0)
-    setVar(Op.Output, Result, Builder);
+    SetOutput(Op.Output, Result);
 }
 
 } // namespace neverd
