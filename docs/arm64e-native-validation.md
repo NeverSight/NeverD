@@ -548,6 +548,24 @@ copies explicitly. The tests verify both signatures and the new owner of
 the main entry. With `NEVERD_ARM64E_LIFTED_NATIVE=1` they also require the
 two original and two published processes to return their expected exit codes.
 
+The [native executable run](https://github.com/gmh5225/test_mac_intel/actions/runs/42985655565) qualified both system-image copies on
+macos-26 and xcode-27. On each runner, both baselines and both
+installed copies returned their expected exit statuses. Each runner also
+executed eight original/installed image pairs, verified a reordered direct tail caller,
+recovered ten interrupted frames and their signed callers, and passed
+40 native object installation cases. Those cases include authenticated
+indirect calls, language exceptions, legacy threaded fixups and default
+executable startup. The unmodified compiler-original B-key startup control
+failed on both hosts before emitting a control marker. The separate diagnostic
+runs recorded SIGTRAP on both and a SIGSEGV on one Xcode 27 repeat.
+Their reports and fixup disassemblies accompany the installed-default-startup
+results. Independent HighC and LLVM C projections were also
+checked against all four pointer-signing keys and PACGA on each host. The default r6 CLI also installed both system
+copies locally and verified the relocated entries and final signatures. The
+[execution record](evidence/arm64e-darwin-executables-2026-11-11.json)
+identifies the source-built Release hosts, the IR frontend and the image
+hashes for each runner.
+
 ## Interrupted return-address signing
 
 The exact-PC unwind query reports an unknown DWARF state when a classic
