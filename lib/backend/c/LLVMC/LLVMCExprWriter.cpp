@@ -725,8 +725,16 @@ LLVMCWriter::declaredImageDataVA(const llvm::Value *V) const {
   // with runtime-filled slots, such as an i386 GOT run and the data after
   // it), which it does not define.
   // Taking an integer view of a pointer does not transfer its storage to
-  // a separate object or a string literal.
+  // a separate object or a string literal, and neither does the constant sum
+  // imageDataVA follows (`&mirror + 268`): it is an offset into that object.
   const llvm::Value *Pointer = V;
+  while (const auto *Sum = llvm::dyn_cast<llvm::ConstantExpr>(Pointer)) {
+    if ((Sum->getOpcode() != llvm::Instruction::Add &&
+         Sum->getOpcode() != llvm::Instruction::Sub) ||
+        !llvm::isa<llvm::ConstantInt>(Sum->getOperand(1)))
+      break;
+    Pointer = Sum->getOperand(0);
+  }
   if (const auto *Cast = llvm::dyn_cast<llvm::PtrToIntOperator>(Pointer))
     Pointer = Cast->getPointerOperand();
   if (!OnlyFunction && Pointer->getType()->isPointerTy())

@@ -1302,6 +1302,11 @@ LLVM C's constant printer preserves storage and aggregate integer constants
 as literal bits, including values that coincide with image string or function
 addresses. Scalars, arrays, records and vector lanes share this rule. Explicit
 pointer constant expressions retain their symbolic addresses and relocations.
+An address into image bytes the module itself defines is an offset into that
+object however it is formed, as the integer sum `&mirror + 8` an i386
+GOT-relative access folds is: zero bytes there are a table entry, never the
+empty string literal the same address would read as in an image the unit only
+declares.
 
 Both C routes use the shared string scanner to annotate image objects read
 as scalar or vector blocks. Comments show the encoding and text without

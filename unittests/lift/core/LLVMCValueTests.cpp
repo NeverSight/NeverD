@@ -8811,6 +8811,68 @@ int main(void) {
 #endif
 }
 
+TEST(LLVMCValues, AnOffsetIntoAnOwnedImageObjectIsNoStringLiteral) {
+  // A whole module defines the image bytes it reads. A table's address taken
+  // as an integer and moved by a constant is still an offset into that
+  // object: the zero word there is an entry, not an empty wide string whose
+  // literal the index would then run past.
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diagnostic;
+  auto Module = llvm::parseAssemblyString(R"(
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+@__nd_data_5000 = internal constant [20 x i8] c"\00\00\80\3F\07\00\00\00\00\00\00\00\05\00\00\00\09\00\00\00", align 16
+define i32 @entry_after(i64 %index) {
+  %scaled = shl i64 %index, 2
+  %address = add i64 %scaled, add (i64 ptrtoint (ptr getelementptr inbounds (i8, ptr @__nd_data_5000, i64 4) to i64), i64 4)
+  %pointer = inttoptr i64 %address to ptr
+  %value = load i32, ptr %pointer, align 4
+  ret i32 %value
+}
+define i32 @entry_before(i64 %index) {
+  %scaled = shl i64 %index, 2
+  %address = add i64 %scaled, sub (i64 ptrtoint (ptr getelementptr inbounds (i8, ptr @__nd_data_5000, i64 12) to i64), i64 4)
+  %pointer = inttoptr i64 %address to ptr
+  %value = load i32, ptr %pointer, align 4
+  ret i32 %value
+}
+)",
+                                          Diagnostic, Context);
+  ASSERT_TRUE(Module) << Diagnostic.getMessage().str();
+  neverd::BinaryImage Img;
+  Img.Arch = neverd::Arch::X64;
+  Img.Bits = neverd::Bitness::Bits64;
+  Img.Format = neverd::BinaryFormat::ELF;
+  neverd::Segment Data;
+  Data.Name = ".rodata";
+  Data.VA = 0x5000;
+  Data.Size = 20;
+  Data.Flags = neverd::SegmentFlags::Readable;
+  Data.Data = {0, 0, 0x80, 0x3F, 7, 0, 0, 0, 0, 0,
+               0, 0, 5,    0,    0, 0, 9, 0, 0, 0};
+  Img.Segments.push_back(std::move(Data));
+  // The bytes at 0x5008 read alone as an empty wide string.
+  ASSERT_TRUE(neverd::stringLiteralAt(&Img, nullptr, 0x5008,
+                                      /*AllowEmpty=*/true));
+  neverd::CEmitterOptions Options;
+  Options.Format = neverd::BinaryFormat::ELF;
+  Options.TheArch = neverd::Arch::X64;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options, nullptr, &Img));
+  EXPECT_EQ(Source.find("\"\""), std::string::npos) << Source;
+  Source += R"c(
+int main(void) {
+  if (entry_after(0) != 0 || entry_after(1) != 5 || entry_after(2) != 9)
+    return 1;
+  return entry_before(0) == 0 && entry_before(-1) == 7 && entry_before(1) == 5
+             ? 0
+             : 2;
+}
+)c";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndRun(Source, Optimization);
+}
+
 TEST(LLVMCValues, UnextendedNarrowArgumentsArriveAsWholeWords) {
   // The code reads only the low byte and the low half of its first two
   // arguments, as code an int was declared to take may: its callers leave the
