@@ -1484,6 +1484,62 @@ SymRef detail::completeComplementarySums(SymContext &Ctx, SymRef Root,
 
 namespace {
 
+// For one pair of inputs the 01 and 10 rows of AND, OR and XOR agree.
+// Their weighted sum is X + Y when each one-set row weighs one and the
+// both-set row weighs two. Each column then has the same contribution at
+// full word width, including carries. Disjoint pairs can be added directly.
+SymRef independentPairSum(SymContext &Ctx, llvm::ArrayRef<SymRef> Terms,
+                          llvm::ArrayRef<SymRef> Inputs, size_t Words,
+                          WorkBudget &Budget) {
+  if (Inputs.size() < 2 || (Inputs.size() & 1) || Inputs.size() > Terms.size())
+    return {};
+  struct PairWeights {
+    SymRef X, Y;
+    llvm::APInt One, Both;
+  };
+  llvm::SmallVector<PairWeights, 4> Pairs;
+  const unsigned Width = Ctx.width(Inputs.front());
+  for (auto T : Terms) {
+    // The tail collector admitted only unscaled terms or one literal
+    // coefficient multiplying a single bitwise term.
+    const bool Scaled = Ctx.op(T) == SymOp::Mul;
+    auto B = Scaled ? Ctx.operand(T, 1) : T;
+    const auto Op = Ctx.op(B);
+    if ((Op != SymOp::And && Op != SymOp::Or && Op != SymOp::Xor) ||
+        Ctx.numOperands(B) != 2)
+      return {};
+    auto X = Ctx.operand(B, 0), Y = Ctx.operand(B, 1);
+    if (!Ctx.isVar(X) || !Ctx.isVar(Y) ||
+        !Budget.consume(Pairs.size() + 2 * Words + 1))
+      return {};
+    if (Y < X)
+      std::swap(X, Y);
+    auto P = llvm::find_if(Pairs, [&](const PairWeights &Row) {
+      return Row.X == X && Row.Y == Y;
+    });
+    if (P == Pairs.end()) {
+      // At most one accumulator per input fits the tail's word storage.
+      if (Pairs.size() == Inputs.size() / 2)
+        return {};
+      Pairs.push_back({X, Y, llvm::APInt(Width, 0), llvm::APInt(Width, 0)});
+      P = std::prev(Pairs.end());
+    }
+    auto C = Scaled ? Ctx.constValue(Ctx.operand(T, 0)) : llvm::APInt(Width, 1);
+    if (Op != SymOp::And)
+      P->One += C;
+    if (Op != SymOp::Xor)
+      P->Both += C;
+  }
+  // Every input occurs in a pair. Two distinct input slots per pair
+  // therefore also proves that no input occurs in a second pair.
+  if (Pairs.size() * 2 != Inputs.size() ||
+      !llvm::all_of(Pairs, [](const PairWeights &P) {
+        return P.One.isOne() && P.Both == 2;
+      }))
+    return {};
+  return Ctx.mkAdd(Inputs);
+}
+
 // Read a small linear tail separately from a large product frontier. Those
 // summands remain additive even when the nonlinear terms use the same inputs.
 // This is a decomposition of the sum, not an independence assumption.
@@ -1558,9 +1614,15 @@ SymRef simplifyLinearTail(
       return Root;
     Pending.append(Ctx.operands(R).begin(), Ctx.operands(R).end());
   }
-  auto Tail = Ctx.mkAdd(Linear);
   MBAOptions Inner = Opts;
   Inner.MaxTableBytes -= Storage;
+  if (Ctx.width(Root) > 64 && resolveLimits(Inner).MaxAtoms >= 2) {
+    if (auto Sum = independentPairSum(Ctx, Linear, Inputs, Words, Budget)) {
+      Other.push_back(Sum);
+      Rep.NumAtoms = std::max(Rep.NumAtoms, 2u);
+      return Ctx.mkAdd(Other);
+    }
+  }
   SolveReport Report;
   if (Inputs.size() > detail::limits::kMaxLinearTailInputs) {
     // Preserve the per-region arity bound, but let disjoint small kernels
@@ -1568,6 +1630,7 @@ SymRef simplifyLinearTail(
     Inner.MaxAtoms = std::min(resolveLimits(Inner).MaxAtoms,
                               detail::limits::kMaxLinearTailInputs);
   }
+  auto Tail = Ctx.mkAdd(Linear);
   const SymRef Reduced = solveOneRegion(Ctx, Tail, Inner, Budget, Report);
   Rep.BudgetExhausted |= Report.BudgetExhausted;
   Rep.NumAtoms = std::max(Rep.NumAtoms, Report.NumAtoms);

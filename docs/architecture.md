@@ -6098,6 +6098,11 @@ solver verifies the offsets of each factor modulo the observed word. The full
 period reduces to a square, and the half-period includes a two-bit correction.
 An incomplete interval keeps its extra factors and compensates for each missing
 odd factor with a modular inverse. Each recurrence uses the proved parity gate.
+A wide product can also have an input-dependent coefficient whose summands
+have guaranteed trailing zeros. Evaluation retains the full coefficient and
+computes each other factor to the highest bit observed by any consumer.
+For disjoint pairs in an additive tail, the solver checks the weights of the
+one-set and both-set bit rows at full width before replacing them with a sum.
 The SDK renders both sides of a rewrite together when their widths agree, so
 a shared fragment is formatted once with the original precedence.
 Expression restoration skips nodes older than every substitution key: immutable

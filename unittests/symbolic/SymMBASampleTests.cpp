@@ -514,3 +514,14 @@ TEST(SymMBASample, ChecksOnBothSidesOfTheCachedPrefixKeepAllAssignments) {
       expectAtSample(Ctx, Sum, Selector, Sample);
   }
 }
+
+TEST(SymMBASample, MixedWidthsKeepHighLimbsAcrossTheCachedSequenceBoundary) {
+  SymContext C;
+  const auto Selector = C.mkVar("selector", 65);
+  const auto X = C.mkVar("x", 257), Y = C.mkVar("y", 64);
+  const auto Sum = C.mkAdd(X, C.mkZExt(Y, 257));
+  // Eight generator words per random assignment. Samples 0 through 2 are
+  // corners, so index 1026 consumes the last word of the cached sequence.
+  for (unsigned Sample : {1025u, 1026u, 1027u})
+    expectAtSample(C, Sum, Selector, Sample);
+}

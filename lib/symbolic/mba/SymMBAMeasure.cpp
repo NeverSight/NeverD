@@ -254,13 +254,6 @@ std::optional<SymRef> conjunctionForm(SymContext &Ctx,
   return Ctx.mkAdd(Terms);
 }
 
-llvm::APInt randomWord(std::mt19937_64 &Rng, uint32_t Width) {
-  llvm::SmallVector<uint64_t, 4> Words((Width + 63) / 64);
-  for (uint64_t &Word : Words)
-    Word = Rng();
-  return llvm::APInt(Width, Words);
-}
-
 // Both complete plans and additive residuals use the same original variable
 // union and deterministic assignments. A canceled term can still be the only
 // use of a variable whose random words precede a surviving input's words.
@@ -336,32 +329,41 @@ bool agreeOnAssignments(const SymContext &Ctx,
     return &Assignment[Position(Id)];
   };
 
-  std::mt19937_64 Rng(limits::kVerificationSampleSeed);
-  for (unsigned S = 0; S < Samples; ++S) {
-    for (size_t I = 0; I < Assignment.size(); ++I) {
-      uint32_t W = Assignment[I].getBitWidth();
-      // The first few rounds pin every input to a corner of the space, where a
-      // mistake in the corner arithmetic itself would show; the rest are
-      // ordinary values, where a mistake in the algebra would.
-      switch (S) {
-      case 0:
-        Assignment[I] = llvm::APInt(W, 0);
-        break;
-      case 1:
-        Assignment[I] = llvm::APInt::getAllOnes(W);
-        break;
-      case 2:
-        Assignment[I] = llvm::APInt(W, 1);
-        break;
-      default:
-        Assignment[I] = randomWord(Rng, W);
-        break;
+  // Fill the existing wide buffers, keeping the original little-endian
+  // generator order even when adjacent variables have different widths.
+  auto Run = [&](auto &&NextWord) {
+    for (unsigned S = 0; S < Samples; ++S) {
+      for (auto &V : Assignment) {
+        if (!S)
+          V.clearAllBits();
+        else if (S == 1)
+          V.setAllBits();
+        else if (S == 2)
+          V = 1;
+        else {
+          for (unsigned J = 0; J < V.getNumWords(); ++J) {
+            const unsigned Offset = J * 64,
+                           Count = std::min(64u, V.getBitWidth() - Offset);
+            V.insertBits(NextWord() & (~uint64_t(0) >> (64 - Count)), Offset,
+                         Count);
+          }
+        }
       }
+      if (!CheckWide(Lookup))
+        return false;
     }
-    if (!CheckWide(Lookup))
-      return false;
+    return true;
+  };
+  size_t Words = 0;
+  for (const auto &V : Assignment)
+    Words += V.getNumWords();
+  const unsigned Rounds = Samples > 3 ? Samples - 3 : 0;
+  if (!Rounds || Words <= kVerificationSampleWords.size() / Rounds) {
+    size_t Next = 0;
+    return Run([&] { return kVerificationSampleWords[Next++]; });
   }
-  return true;
+  std::mt19937_64 Rng(limits::kVerificationSampleSeed);
+  return Run(Rng);
 }
 
 bool splitCommonOperands(const SymContext &Ctx, SymRef A, SymRef B,

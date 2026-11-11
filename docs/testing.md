@@ -10743,6 +10743,10 @@ full, half, and incomplete products for all 65-bit inputs. The wide-pair
 masked-product proof partitions the full input by the eight low-three-bit
 values of one operand, with the other operands unrestricted. The source-route
 fixtures also execute 64-factor and 126-factor windows through CLI and worker.
+Wide-product tests compare dynamic coefficients and shared consumers with full
+multiplication through 257 bits. Mixed-width verification crosses the cached
+random-word boundary in both directions. Independent word arithmetic checks
+weighted Boolean tails, overlapping inputs, and a changed high coefficient.
 
 `SymMBALinearProofMemo` checks successful full-width proof reuse, alternating
 queries with the same difference, context isolation, incomplete proofs and
