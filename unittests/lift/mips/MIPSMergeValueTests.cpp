@@ -143,6 +143,24 @@ TEST_P(MIPSMergeValues, MIPS16PairsRequireFourBytePhysicalInstructions) {
   }
 }
 
+TEST_P(MIPSMergeValues, MicroPairsRequireTwoFullInstructionsInTheSameMode) {
+  const unsigned Bytes = isMIPS64(GetParam()) ? 8 : 4;
+  for (bool Reverse : {false, true}) {
+    for (unsigned Bad = 0; Bad < 4; ++Bad) {
+      Pair P(GetParam(), Bytes, Reverse);
+      auto &B = P.Physical.Blocks[0].InstructionBoundaries;
+      B[0].Mode = B[1].Mode = InstructionMode::MicroMIPS;
+      if (Bad == 1)
+        B[0].Size = 2;
+      if (Bad == 2)
+        B[1].Mode = InstructionMode::MIPSClassic;
+      if (Bad == 3)
+        B[1].DelaySlot = LowDelaySlot{};
+      EXPECT_EQ(P.run(), Bad == 0 ? 1u : 0u);
+    }
+  }
+}
+
 TEST_P(MIPSMergeValues, RefusesUnprovedAddressAndOccurrenceRelations) {
   for (unsigned Case = 0; Case < 12; ++Case) {
     SCOPED_TRACE(Case);

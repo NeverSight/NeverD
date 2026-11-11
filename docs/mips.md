@@ -346,9 +346,9 @@ addresses retain all 64 bits. The r2 scalar subset adds doubleword arithmetic,
 shifts, rotates, bit fields, byte shuffles, LD/SD, LWU and the LDL/LDR merge
 loads. Both r2 widths also lift LWL/LWR and SWL/SWR with a signed 12-bit
 displacement. The source fixtures compare the returned word and surrounding
-bytes for aligned and unaligned pairs. Word DSP and DSPR2 instructions use the same revision 3.02 accumulator
-rules as classic n64. GNU as encodes the 113 DSP and 46 DSPR2 forms in micro
-mode. Indexed doubleword LDX has a qualified classic encoding.
+bytes for aligned and unaligned pairs. Word DSP and DSPR2 instructions use
+the same revision 3.02 accumulator rules as classic n64. GNU as encodes the
+113 DSP and 46 DSPR2 forms in micro mode. Indexed doubleword LDX has a qualified classic encoding.
 
 microMIPS32r6 compact transfers use halfword displacements, the physical
 length of the instruction and tagged return links. A second branch may
@@ -365,6 +365,8 @@ selected RDHWR, CP0 word/high transfers, DI/EI, CACHE, PREF, EHB and PAUSE.
 The physical decoder corrects the register fields for LSA/ALIGN and signed
 nine-bit offsets for CACHE/PREF. The encoding source is the
 [microMIPS32 Instruction Set Reference Manual, revision 6.05](https://docs.alexrp.com/mips/micromips32_insns_v6_05.pdf).
+The compact register lists and pre-R6 merge fields were also checked against
+[Ghidra’s microMIPS SLEIGH definitions](https://github.com/NationalSecurityAgency/ghidra/blob/42db038f3c88c6bd7e9bedbb919138111f8b77fd/Ghidra/Processors/MIPS/data/languages/mipsmicro.sinc).
 
 The n64 Release 6 profile adds the doubleword multiply, high multiply, divide,
 remainder, count, shuffle and align encodings, DAHI/DATI/DAUI, DMFC0/DMTC0,
@@ -704,7 +706,8 @@ with the number of free physical registers. Native floating-point helpers
 require WRP clear because their scratch register numbers differ from the
 original. The vector execution profile requires MSA enabled with CU1/FR
 configured. General partitioned vector execution, disabled-unit exception
-delivery, scalar FPU, MSA64 and compressed MSA remain outside this profile. The operation and alias rules follow the
+delivery, scalar FPU and MSA64 remain outside this profile. microMIPS32r5/o32
+reuses these vector semantics. The operation and alias rules follow the
 [MIPS32 MSA manual, revision 1.12](https://docs.alexrp.com/mips/mips32_simd.pdf), sections ADDV, SUBV, CEQ, CLT/CLE, MIN/MAX,
 SLL/SRL/SRA, BCLR/BSET/BNEG, MULV/MADDV/MSUBV, MAX_A/MIN_A, ADD_A/ADDS_A, ADDS/SUBS, AVE/AVER,
 AND/OR/NOR/XOR, ADDVI/SUBVI, CEQI, CLTI/CLEI, MAXI/MINI,

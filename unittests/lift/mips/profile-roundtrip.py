@@ -40,7 +40,7 @@ def kernels():
         "micromips32r6frame",
         "mips32r6",
         "",
-        ".2byte 0x4ff9,0xca00,0xcbe1,0x0e04,0x0c50,0x4402,0x4493",
+        ".2byte 0x4ff9,0xca00,0xcbe1\nmove16 $16,$4\n.2byte 0x0c50,0x4402,0x4493",
     )
     for bits, multiply in ((32, "mul"), (64, "dmulu")):
         cpu = f"mips{bits}r6"

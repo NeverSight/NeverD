@@ -330,6 +330,7 @@ TEST_P(MIPSLoader, CompletePLTVeneerNamesOnlyItsBoundImportSlot) {
 
 TEST_P(MIPSLoader, RejectsConflictingOrUnsupportedProfilesInBothEntrypoints) {
   const auto Reject = [&](ELFBytes &File, llvm::StringRef Expected) {
+    SCOPED_TRACE(Expected.str());
     ELFLoader Loader;
     auto Image = Loader.loadBuffer(File.buffer());
     ASSERT_FALSE(bool(Image));
@@ -345,12 +346,12 @@ TEST_P(MIPSLoader, RejectsConflictingOrUnsupportedProfilesInBothEntrypoints) {
   for (const auto &[Bits, Reason] :
        std::array<std::pair<uint32_t, const char *>, 4>{
            {{0x20, "n32"},
-            {0x02000000, "microMIPS"},
+            {0x06000000, "MIPS16"},
             {0x04000000, "MIPS16"},
             {0x00000100, "ABI"}}}) {
     ELFBytes File(GetParam());
-    if ((Bits == 0x02000000 || Bits == 0x04000000) && !File.Is64)
-      continue; // Compressed MIPS32 has separate admission/occurrence tests.
+    if (Bits == 0x04000000 && !File.Is64)
+      continue; // MIPS16/o32 has separate admission and occurrence tests.
     File.put(File.Is64 ? 48 : 36, (File.Is64 ? 0x80000000 : 0x70001000) | Bits,
              4);
     Reject(File, Reason);
