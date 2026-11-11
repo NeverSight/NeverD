@@ -31,8 +31,9 @@ public:
       : Target(Target), Mode(Mode), ISARevision(Revision) {}
 
   void lift(const cs_insn &Instruction, std::vector<LowOp> &Ops,
-            bool ForbiddenFollower = false) const;
-  static bool hasR6ForbiddenFollower(uint32_t Branch, uint32_t Follower);
+            std::optional<bool> ForbiddenFollower = std::nullopt) const;
+  static std::optional<bool> r6ForbiddenFollower(llvm::ArrayRef<uint8_t> Code,
+                                                 bool Little);
   LowDelaySlot liftUnit(const cs_insn &Head, const cs_insn &Slot,
                         std::vector<LowOp> &Ops) const;
   uint32_t word(const cs_insn &Instruction) const;
@@ -100,6 +101,7 @@ private:
   };
   Encoding release6Encoding(uint32_t Word) const;
   static bool isR6Compact(uint32_t Word);
+  static bool isR6ConditionalCompact(uint32_t Word);
   uint64_t r6BranchTarget(uint32_t Word, uint64_t PC) const;
   bool liftR6Compact(State &S, uint32_t Word, bool ForbiddenFollower) const;
   bool liftRelease6(State &S, uint32_t Word) const;

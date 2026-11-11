@@ -127,6 +127,23 @@ TEST_P(MIPSDSPRegisterWidth, IndexedDoublewordUsesTheEntireEffectiveAddress) {
       llvm::find_if(Ops, [](const auto &O) { return O.Opcode == NdOp::LOAD; });
   ASSERT_NE(Load, Ops.end());
   EXPECT_EQ(Load->Output.Size, 8);
+  Segment Data;
+  Data.VA = 0x100002000ull;
+  Data.Data = {0x81, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef};
+  Data.Size = Data.FileSz = Data.Data.size();
+  Data.Flags = SegmentFlags::Readable;
+  Image.Segments.push_back(std::move(Data));
+  NdOpEmulator E(Image);
+  E.setStrictMode(true);
+  E.setRegister(mipsreg::A0, 0x100001ff8ull);
+  E.setRegister(mipsreg::A1, 8);
+  ASSERT_TRUE(llvm::all_of(Ops, [&](const auto &O) { return E.step(O); }));
+  const auto Expected = archLittleEndian(GetParam()) ? 0xefcdab8967452381ull
+                                                     : 0x8123456789abcdefull;
+  EXPECT_EQ(E.getRegister(mipsreg::V0), Expected);
+  E.setRegister(mipsreg::A1, 9);
+  EXPECT_FALSE(llvm::all_of(Ops, [&](const auto &O) { return E.step(O); }));
+  EXPECT_EQ(E.getRegister(mipsreg::V0), Expected);
 }
 
 TEST_P(MIPSDSPRegisterWidth, InsertValidatesBothWordInputsOnN64) {

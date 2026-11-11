@@ -7,6 +7,7 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/Support/MathExtras.h"
 
@@ -64,13 +65,22 @@ uint64_t MIPSLifter::r6BranchTarget(uint32_t Word, uint64_t PC) const {
   return isMIPS64(Target) ? Address : uint32_t(Address);
 }
 
-bool MIPSLifter::hasR6ForbiddenFollower(uint32_t Branch, uint32_t Next) {
-  if (!isR6Compact(Branch))
+bool MIPSLifter::isR6ConditionalCompact(uint32_t Branch) {
+  const unsigned Op = Branch >> 26;
+  return isR6Compact(Branch) && Op != 50 && Op != 58 &&
+         !((Op == 54 || Op == 62) && !(Branch & 0x03e00000));
+}
+
+std::optional<bool>
+MIPSLifter::r6ForbiddenFollower(llvm::ArrayRef<uint8_t> Code, bool Little) {
+  if (Code.size() < 4)
+    return std::nullopt;
+  const auto Branch = readTargetEndian<uint32_t>(Code.data(), Little);
+  if (!isR6ConditionalCompact(Branch))
     return false;
-  const unsigned Head = Branch >> 26;
-  if (Head == 50 || Head == 58 ||
-      ((Head == 54 || Head == 62) && !(Branch & 0x03e00000)))
-    return false;
+  if (Code.size() < 8)
+    return std::nullopt;
+  const auto Next = readTargetEndian<uint32_t>(Code.data() + 4, Little);
   const unsigned Op = Next >> 26, RT = (Next >> 16) & 31,
                  RS = (Next >> 21) & 31;
   return isR6Compact(Next) || (Op >= 2 && Op <= 7) ||

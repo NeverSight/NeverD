@@ -971,7 +971,8 @@ compact conditional, unconditional and indirect transfers. Word and doubleword
 results retain their specified GPR width. A zero divisor produces an explicit
 unpredictable result. Compact links save PC+4, use the physical immediate
 scale and do not consume a delay slot. A control transfer in a conditional
-compact branch's forbidden slot faults on fallthrough. Surviving legacy
+compact branch's forbidden slot faults on fallthrough. Lifting a conditional compact
+branch requires the following instruction's bytes to check that constraint. Surviving legacy
 delayed transfers retain their slot. Removed HI/LO and branch-likely encodings
 cannot use the Release 2 lifter through this profile.
 

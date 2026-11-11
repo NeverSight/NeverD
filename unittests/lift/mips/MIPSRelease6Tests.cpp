@@ -100,6 +100,22 @@ TEST_P(MIPSRelease6, IntegerResultsAndArchitecturalState) {
   EXPECT_FALSE(E.getRegister(mipsreg::V0));
 }
 
+TEST_P(MIPSRelease6, UnalignedWordLoadUsesTargetOrder) {
+  Segment Data;
+  Data.VA = 0x2000;
+  Data.Data = {0, 0x81, 0x72, 0x63, 0xf4};
+  Data.Size = Data.FileSz = Data.Data.size();
+  Data.Flags = SegmentFlags::Readable;
+  Image.Segments.push_back(std::move(Data));
+  NdOpEmulator E(Image);
+  E.setStrictMode(true);
+  E.setRegister(mipsreg::A0, 0x2000);
+  run(0x8c820001, E); // LW v0,1(a0)
+  const uint32_t V = archLittleEndian(GetParam()) ? 0xf4637281 : 0x817263f4;
+  EXPECT_EQ(E.getRegister(mipsreg::V0),
+            isMIPS64(GetParam()) ? uint64_t(int64_t(int32_t(V))) : V);
+}
+
 TEST_P(MIPSRelease6, DoublewordOperationsAndPCRelativeBaseRetainHighBits) {
   if (!isMIPS64(GetParam())) {
     for (const auto Word : {0x008510ddu, 0x7c8512e4u, 0xec580001u}) {
@@ -203,7 +219,7 @@ TEST_P(MIPSRelease6, ForbiddenSlotFaultDependsOnFallthrough) {
   llvm::support::endian::write32(Code, 0x20850002, Order);     // BEQC a0,a1
   llvm::support::endian::write32(Code + 4, 0xd81f0000, Order); // JRC ra
   ASSERT_EQ(Decode.decodeUnitForLift(Code, sizeof(Code), 0x10000, Unit), 4);
-  ASSERT_TRUE(Unit.Head.MIPSForbiddenFollower);
+  ASSERT_EQ(Unit.Head.MIPSForbiddenFollower, true);
   Decode.liftUnitToLow(Unit, Ops);
   for (bool Taken : {false, true}) {
     NdOpEmulator E(Image);
@@ -225,7 +241,12 @@ TEST_P(MIPSRelease6, ForbiddenSlotFaultDependsOnFallthrough) {
   }
   // An independent entry to that same JRC has no forbidden predecessor.
   ASSERT_EQ(Decode.decodeUnitForLift(Code + 4, 4, 0x10004, Unit), 4);
-  EXPECT_FALSE(Unit.Head.MIPSForbiddenFollower);
+  EXPECT_EQ(Unit.Head.MIPSForbiddenFollower, false);
+  ASSERT_EQ(Decode.decodeUnitForLift(Code, 4, 0x10000, Unit), 4);
+  EXPECT_FALSE(Unit.Head.MIPSForbiddenFollower.has_value());
+  Ops.clear();
+  EXPECT_THROW(Decode.liftUnitToLow(Unit, Ops), UnliftedInstruction);
+  EXPECT_TRUE(Ops.empty());
 }
 
 TEST_P(MIPSRelease6, RemovedLegacyEncodingsNeverGetTheirOldSemantics) {
@@ -252,6 +273,22 @@ TEST_P(MIPSRelease6, IntegerKernelsMatchRelease6HardwareModel) {
       Wide ? int(UC_CPU_MIPS64_I6400) : int(UC_CPU_MIPS32_MIPS32R6_GENERIC);
   ASSERT_EQ(uc_ctl_set_cpu_model(Raw, CPU), UC_ERR_OK);
   ASSERT_EQ(uc_mem_map(Raw, 0x10000, 0x1000, UC_PROT_ALL), UC_ERR_OK);
+  const auto Set = [&](int Reg, uint64_t Full) {
+    const uint32_t Low = Full;
+    ASSERT_EQ(uc_reg_write(Raw, Reg,
+                           Wide ? static_cast<const void *>(&Full)
+                                : static_cast<const void *>(&Low)),
+              UC_ERR_OK);
+  };
+  const auto Get = [&](int Reg) -> uint64_t {
+    uint64_t Full = 0;
+    uint32_t Low = 0;
+    EXPECT_EQ(uc_reg_read(Raw, Reg,
+                          Wide ? static_cast<void *>(&Full)
+                               : static_cast<void *>(&Low)),
+              UC_ERR_OK);
+    return Wide ? Full : Low;
+  };
   constexpr uint32_t Words[] = {0x00851098, 0x008510d8, 0x008510d9, 0x0085109a,
                                 0x008510da, 0x0085109b, 0x008510db, 0x00851035,
                                 0x00851037, 0x7c041020, 0x7c8512a0, 0x00851045};
@@ -266,19 +303,79 @@ TEST_P(MIPSRelease6, IntegerKernelsMatchRelease6HardwareModel) {
       for (uint32_t Y : {1u, 3u, 0x80000000u, 0xffffffffu}) {
         const uint64_t A = uint64_t(int64_t(int32_t(X))),
                        B = uint64_t(int64_t(int32_t(Y)));
-        ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_A0, &A), UC_ERR_OK);
-        ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_A1, &B), UC_ERR_OK);
+        Set(UC_MIPS_REG_A0, A);
+        Set(UC_MIPS_REG_A1, B);
         ASSERT_EQ(uc_emu_start(Raw, PC, PC + 4, 0, 1), UC_ERR_OK) << I;
-        uint64_t Expected = 0;
-        ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_V0, &Expected), UC_ERR_OK);
+        const auto Expected = Get(UC_MIPS_REG_V0);
         NdOpEmulator E(Image);
         E.setStrictMode(true);
         E.setRegister(mipsreg::A0, A);
         E.setRegister(mipsreg::A1, B);
         run(Words[I], E);
-        EXPECT_EQ(E.getRegister(mipsreg::V0),
-                  Wide ? Expected : uint32_t(Expected))
+        EXPECT_EQ(E.getRegister(mipsreg::V0), Expected)
             << std::hex << Words[I] << " inputs " << A << ", " << B;
+      }
+    }
+  }
+  // Linked GNU branch encodings. Use distinct target/fallthrough addresses:
+  // the reference can issue a non-taken branch's following NOP in one step.
+  constexpr uint32_t Branches[] = {0xd8800007, 0xf8800007, 0x20040007,
+                                   0x60040007, // EQZ/NEZ, with and without link
+                                   0x5c040007, 0x58040007, 0x58840007,
+                                   0x5c840007, // GTZ/LEZ/GEZ/LTZ
+                                   0x18040007, 0x18840007, 0x1c040007,
+                                   0x1c840007, // LEZ/GEZ/GTZ/LTZ with link
+                                   0x20850007, 0x60850007, 0x5c850007,
+                                   0x58850007, // EQ/NE/LT/GE
+                                   0x1c850007, 0x18850007, 0x20a40007,
+                                   0x60a40007}; // LTU/GEU/OV/NOV
+  for (unsigned I = 0; I < std::size(Branches); ++I) {
+    const uint64_t PC = 0x10400 + 32 * I;
+    uint8_t Code[8]{};
+    llvm::support::endian::write32(Code, Branches[I],
+                                   Little ? llvm::endianness::little
+                                          : llvm::endianness::big);
+    ASSERT_EQ(uc_mem_write(Raw, PC, Code, sizeof(Code)), UC_ERR_OK);
+    ASSERT_EQ(Decode.decodeUnitForLift(Code, sizeof(Code), PC, Unit), 4);
+    Ops.clear();
+    Decode.liftUnitToLow(Unit, Ops);
+    for (int64_t X :
+         {int64_t(INT32_MIN), int64_t(-1), int64_t(0), int64_t(INT32_MAX)}) {
+      for (int64_t Y :
+           {int64_t(-1), int64_t(0), int64_t(1), int64_t(INT32_MAX)}) {
+        SCOPED_TRACE(::testing::Message() << std::hex << Branches[I]
+                                          << " inputs " << X << ", " << Y);
+        const uint64_t Sentinel = 0x5555;
+        Set(UC_MIPS_REG_A0, X);
+        Set(UC_MIPS_REG_A1, Y);
+        Set(UC_MIPS_REG_RA, Sentinel);
+        ASSERT_EQ(uc_emu_start(Raw, PC, PC + 128, 0, 1), UC_ERR_OK);
+        const auto Next = Get(UC_MIPS_REG_PC);
+        const auto ReturnAddress = Get(UC_MIPS_REG_RA);
+        NdOpEmulator E(Image);
+        E.setStrictMode(true);
+        E.setRegister(mipsreg::A0, X);
+        E.setRegister(mipsreg::A1, Y);
+        E.setRegister(mipsreg::RA, Sentinel);
+        bool Taken = false;
+        for (const auto &O : Ops) {
+          if (O.Opcode == NdOp::COND_BR) {
+            const auto Condition = E.getRegister(O.Inputs[1].Offset);
+            ASSERT_TRUE(Condition.has_value());
+            if (*Condition) {
+              Taken = O.Inputs[0].Offset == PC + 32;
+              break;
+            }
+          } else if (O.Opcode == NdOp::CALL) {
+            EXPECT_EQ(O.Inputs[0].Offset, PC + 32);
+            Taken = true;
+            break;
+          } else {
+            ASSERT_TRUE(E.step(O));
+          }
+        }
+        EXPECT_EQ(Taken, Next == PC + 32);
+        EXPECT_EQ(E.getRegister(mipsreg::RA), ReturnAddress);
       }
     }
   }

@@ -90,8 +90,9 @@ struct DecodedInsn {
   /// Native decoding can supply complete detail without rendered text.
   std::optional<AArch64DecodeOccurrence> AArch64Occurrence = std::nullopt;
   /// A Release 6 conditional compact branch with a CTI at PC+4 faults only
-  /// on the fallthrough path. This bit belongs to the decoded occurrence.
-  bool MIPSForbiddenFollower = false;
+  /// on the fallthrough path. An absent value means the follower was outside
+  /// the supplied byte window. Disassembly still returns the physical head.
+  std::optional<bool> MIPSForbiddenFollower;
 };
 
 /// A semantic unit with truthful physical-instruction identities. MIPS delayed

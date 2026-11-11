@@ -320,10 +320,9 @@ int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
   Out.Id = InsnBuf->id;
   Out.Raw = InsnBuf;
   Out.MIPSForbiddenFollower =
-      MIPSISARevision == 6 && Len >= 8 &&
-      MIPSLifter::hasR6ForbiddenFollower(
-          readTargetEndian<uint32_t>(Bytes, archLittleEndian(TargetArch)),
-          readTargetEndian<uint32_t>(Bytes + 4, archLittleEndian(TargetArch)));
+      MIPSISARevision == 6 ? MIPSLifter::r6ForbiddenFollower(
+                                 {Bytes, Len}, archLittleEndian(TargetArch))
+                           : std::nullopt;
   if (AArch64)
     recordAArch64Decode(Bytes, Len, Out, Detail && Text);
   // The lift path and CFG classification read the mnemonic (when they need it
@@ -362,10 +361,9 @@ int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
   Out.Id = InsnBuf->id;
   Out.Raw = InsnBuf;
   Out.MIPSForbiddenFollower =
-      MIPSISARevision == 6 && Len >= 8 &&
-      MIPSLifter::hasR6ForbiddenFollower(
-          readTargetEndian<uint32_t>(Bytes, archLittleEndian(TargetArch)),
-          readTargetEndian<uint32_t>(Bytes + 4, archLittleEndian(TargetArch)));
+      MIPSISARevision == 6 ? MIPSLifter::r6ForbiddenFollower(
+                                 {Bytes, Len}, archLittleEndian(TargetArch))
+                           : std::nullopt;
   if (AArch64)
     recordAArch64Decode(Bytes, Len, Out, Detail && Text);
   return Out.Size;

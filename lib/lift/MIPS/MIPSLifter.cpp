@@ -570,7 +570,7 @@ bool MIPSLifter::liftNonControl(State &S, Encoding Code, va_t BasePC) const {
 }
 
 void MIPSLifter::lift(const cs_insn &Instruction, std::vector<LowOp> &Ops,
-                      bool ForbiddenFollower) const {
+                      std::optional<bool> ForbiddenFollower) const {
   const auto Code = encoding(Instruction);
   if (!Code)
     throw UnliftedInstruction(Instruction.address, Instruction.mnemonic,
@@ -587,7 +587,10 @@ void MIPSLifter::lift(const cs_insn &Instruction, std::vector<LowOp> &Ops,
   }
   State S(Instruction.address, Ops, isMIPS64(Target) ? 8 : 4, Instruction.size);
   if (Code->R6 && isR6Compact(Word)) {
-    if (liftR6Compact(S, Word, ForbiddenFollower))
+    if (!ForbiddenFollower.has_value() && isR6ConditionalCompact(Word))
+      throw UnliftedInstruction(Instruction.address, Instruction.mnemonic,
+                                "missing Release 6 forbidden-slot instruction");
+    if (liftR6Compact(S, Word, ForbiddenFollower.value_or(false)))
       return;
   } else if (liftNonControl(S, *Code, Instruction.address))
     return;
