@@ -4982,7 +4982,7 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
     const auto BitcastInput = [&](unsigned Index) {
       return "__builtin_bit_cast(" +
              x86FPStateRawCType(x86FPStateSourceBytes(Bytes)) + ", " +
-             valueStr(Call.getArgOperand(Index)) + ")";
+             bitCastSourceStr(Call.getArgOperand(Index)) + ")";
     };
     const auto Helper = FPStateHelperNames.find(*Shape);
     if (Helper == FPStateHelperNames.end())
@@ -5006,7 +5006,7 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
       const auto RawType = x86FPStateRawCType(x86FPStateSourceBytes(Bytes));
       const auto RawInput = [&](unsigned I) {
         return "__builtin_bit_cast(" + RawType + ", " +
-               valueStr(Call.getArgOperand(I)) + ")";
+               bitCastSourceStr(Call.getArgOperand(I)) + ")";
       };
       std::string Expression = Helper->second + "(";
       if (Memory)
@@ -5028,7 +5028,7 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
       const auto RawType = x86FPStateRawCType(x86FPStateSourceBytes(Bytes));
       const auto RawInput = [&](unsigned Index) {
         return "__builtin_bit_cast(" + RawType + ", " +
-               valueStr(Call.getArgOperand(Index)) + ")";
+               bitCastSourceStr(Call.getArgOperand(Index)) + ")";
       };
       const auto Right =
           Memory ? "(void *)(uintptr_t)(" +
@@ -5055,7 +5055,7 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
             "(" + x86FPStateRawCType(x86FPStateSourceBytes(Bytes)) +
             ")__builtin_bit_cast(" +
             x86FPStateRawCType(std::max(16u, x86FPStateSourceBytes(Bytes))) +
-            ", " + valueStr(Call.getArgOperand(Store ? 1 : 0)) + "), ";
+            ", " + bitCastSourceStr(Call.getArgOperand(Store ? 1 : 0)) + "), ";
       Expression +=
           "(void*)" + valueStr(Call.getArgOperand(Store ? 2 : 1)) + ")";
       if (Store)
@@ -5076,7 +5076,7 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
                        ")__builtin_bit_cast(" +
                        x86FPStateRawCType(
                            std::max(16u, x86FPStateSourceBytes(Bytes))) +
-                       ", " + valueStr(Call.getArgOperand(0)) + ")";
+                       ", " + bitCastSourceStr(Call.getArgOperand(0)) + ")";
       const std::string Expression = Helper->second + "(" + Source +
                                      ", (void*)" +
                                      valueStr(Call.getArgOperand(1)) + ")";
@@ -5094,7 +5094,7 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
                        integerPointerOperandStr(Call.getArgOperand(1)) + ")"
                  : "__builtin_bit_cast(" +
                        x86FPStateRawCType(x86FPStateSourceBytes(Bytes)) + ", " +
-                       valueStr(Call.getArgOperand(1)) + ")";
+                       bitCastSourceStr(Call.getArgOperand(1)) + ")";
       const std::string Expression = Helper->second + "(" + Source +
                                      ", (void*)" +
                                      valueStr(Call.getArgOperand(2)) + ")";
@@ -6424,7 +6424,7 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
               : typeToC(Type);
       if (Grouped) {
         Expr += "__builtin_bit_cast(" + Spelling + ", " +
-                valueStr(Call.getArgOperand(ArgIdx)) + ")";
+                bitCastSourceStr(Call.getArgOperand(ArgIdx)) + ")";
         continue;
       }
       Expr += c_detail::recordCallArgument(

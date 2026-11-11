@@ -835,6 +835,9 @@ public:
   std::map<const llvm::Value *, std::string> SourceValueIds;
   std::string freshVar(const std::string &Hint = "v");
   std::string valueStr(const llvm::Value *V, bool *PointerSpelling = nullptr);
+  /// valueStr as a value `__builtin_bit_cast` may take: Clang 21-23 read a
+  /// vector's first element for the element lvalue `(v)[i]`.
+  std::string bitCastSourceStr(const llvm::Value *V);
   std::string globalNameStr(const llvm::GlobalValue *Global);
   /// Storage and aggregate integer constants retain their literal bits;
   /// expression uses may additionally carry an image-address spelling.

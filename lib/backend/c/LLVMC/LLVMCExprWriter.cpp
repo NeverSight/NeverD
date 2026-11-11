@@ -3272,6 +3272,16 @@ std::string LLVMCWriter::memberAsAccessed(const llvm::LoadInst &Load,
   return Text;
 }
 
+std::string LLVMCWriter::bitCastSourceStr(const llvm::Value *V) {
+  std::string Text = valueStr(V);
+  // A scalar spelled as a subscript may be a vector element: its own type's
+  // cast makes it the value rather than the lvalue Clang misreads.
+  if (!Text.empty() && Text.back() == ']' && !V->getType()->isVectorTy() &&
+      !V->getType()->isAggregateType())
+    Text = "(" + typeToCLLVM(V->getType()) + ")(" + Text + ")";
+  return Text;
+}
+
 std::string LLVMCWriter::valueStr(const llvm::Value *V, bool *PointerSpelling) {
   if (PointerSpelling)
     *PointerSpelling = false;
