@@ -643,6 +643,42 @@ private slots:
             << int(command) << open;
   }
 
+  void anEditRefreshesTheListingOnce() {
+    // An edit moves the revision and, with the same reply, the listing's
+    // generation: the rows read once for both.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loads;
+    bench.window->openFile(writeFixture(directory, "floating-code.bin"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *assembly = bench.window->disassembly();
+    assembly->navigate(Base + 0x140);
+    QTRY_COMPARE(assembly->currentFunction(),
+                 std::optional<Address>(Base + 0x140));
+    auto *listing = assembly->listing();
+    QTRY_VERIFY(ListingViewTestAccess::settled(*listing));
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    for (const auto &name :
+         {QStringLiteral("listed_once"), QStringLiteral("listed_once_again")}) {
+      const auto requests = ListingViewTestAccess::requests(*listing);
+      const auto generation = bench.session.generation();
+      const auto revision = bench.session.revision();
+      bench.session.rename(Base + 0x140, name);
+      QTRY_VERIFY_WITH_TIMEOUT(bench.session.revision() != revision &&
+                                   bench.session.generation() != generation &&
+                                   ListingViewTestAccess::settled(*listing) &&
+                                   !bench.session.queries().hasPending(),
+                               OpenTimeoutMs);
+      QCOMPARE(ListingViewTestAccess::requests(*listing), requests + 1);
+      bool shown = false;
+      for (int row = 0; row < ListingViewTestAccess::rows(*listing); ++row)
+        shown =
+            shown || ListingViewTestAccess::text(*listing, row).contains(name);
+      QVERIFY(shown);
+    }
+  }
+
   void codeOpensBesideFloatingDisassembly() {
     QFETCH(int, command);
     QFETCH(bool, alreadyOpen);
