@@ -1652,6 +1652,56 @@ SymRef simplifyLinearTail(
                                                                 : Root;
 }
 
+// At every bit, OR and AND count the two input bits exactly once each.
+// Replace matched binary views even when unrelated summands share the root.
+SymRef collectDualSummands(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
+                           size_t Storage) {
+  if (Ctx.op(Root) != SymOp::Add)
+    return Root;
+  const size_t N = Ctx.numOperands(Root);
+  if (N > limits::kMaxResidueBaseTerms || N * 2 * sizeof(SymRef) > Storage)
+    return Root;
+  const auto Terms = Ctx.operands(Root);
+  if (!llvm::any_of(Terms, [&](SymRef T) {
+        return Ctx.op(T) == SymOp::Or && Ctx.numOperands(T) == 2;
+      }))
+    return Root;
+  llvm::SmallVector<SymRef, limits::kMaxResidueBaseTerms> Combined(Terms);
+  const size_t MaxEdges = Storage / (2 * sizeof(SymRef)) - N;
+  size_t ExtraEdges = 0;
+  bool Changed = false;
+  for (auto &A : Combined) {
+    if (Ctx.op(A) != SymOp::And || Ctx.numOperands(A) != 2)
+      continue;
+    if (!Budget.canConsume(N))
+      break;
+    Budget.consume(N);
+    const auto B = llvm::find_if(Combined, [&](SymRef R) {
+      return Ctx.op(R) == SymOp::Or && Ctx.operands(R) == Ctx.operands(A);
+    });
+    if (B != Combined.end()) {
+      const auto Args = Ctx.operands(A);
+      for (auto Operand : Args) {
+        if (Ctx.op(Operand) != SymOp::Add)
+          continue;
+        const size_t Edges = Ctx.numOperands(Operand);
+        if (Edges > MaxEdges - ExtraEdges)
+          return Root;
+        ExtraEdges += Edges;
+      }
+      A = Args.front();
+      *B = Args.back();
+      Changed = true;
+    }
+  }
+  if (!Changed || !Budget.canConsume(ExtraEdges))
+    return Root;
+  Budget.consume(ExtraEdges);
+  const auto Candidate = Ctx.mkAdd(Combined);
+  return readingScore(Ctx, Candidate) < readingScore(Ctx, Root) ? Candidate
+                                                                : Root;
+}
+
 SymRef finishCompletedSums(SymContext &Ctx, SymRef Root, const MBAOptions &Opts,
                            WorkBudget &Budget, SolveReport &Rep) {
   SymRef Completed = completeComplementarySums(Ctx, Root, Opts, Budget);
@@ -2470,6 +2520,8 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
     if (doesNotGrow(Ctx, Finished, Out))
       Out = Finished;
   }
+  if (!Budget.exhausted())
+    Out = collectDualSummands(Ctx, Out, Budget, RefinementStorage);
   if (Prepared != EarlyTail && !Budget.exhausted()) {
     SolveReport Parity;
     Out =

@@ -6140,7 +6140,9 @@ of two, an odd weight is invertible at the remaining width, which lets long
 literal coefficients share one scale. The simplifier compares expression
 costs before accepting either form. When the top bit multiplies a Boolean
 correction beside an unscaled sum, the parity of the sum can be absorbed into
-its coefficient if the remaining Boolean word becomes cheaper.
+its coefficient if the remaining Boolean word becomes cheaper. A surviving
+sum can also replace a binary AND and OR of the same two words with their
+sum while preserving its other terms.
 Combining equal terms first can leave just one or two observed bits. The
 one-bit reading uses Boolean parity, and the two-bit reading uses the weights
 1, −1 and 2 modulo four. For independent masked disturbances, the bottom-up

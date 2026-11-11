@@ -541,6 +541,34 @@ TEST(SymMBAResidue, AbsorbsAnExactParityCorrectionIntoAnAdjacentSum) {
   }
 }
 
+TEST(SymMBAResidue, CollectsDualViewsBesideIndependentSummands) {
+  for (const unsigned Width : {9u, 65u}) {
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const auto Z = Ctx.mkVar("z", Width), W = Ctx.mkVar("w", Width);
+    const auto Other = Ctx.mkXor(Y, W);
+    const auto Union = Ctx.mkOr(X, Y);
+    const auto Common = Ctx.mkAnd(X, Y);
+    const auto Tail = Ctx.mkAdd({Union, Common, Other});
+    MBAOptions Opt;
+    Opt.VerifySamples = 0;
+    Opt.MaxWork = 65536;
+    const auto R = simplifyMBADeep(Ctx, Tail, Opt);
+    EXPECT_EQ(R.Expr, Ctx.mkAdd({X, Y, Other}));
+    EXPECT_LT(R.SizeAfter, R.SizeBefore);
+    // A third input on just one side makes the pair ineligible.
+    const auto Neighbor = Ctx.mkAdd({Ctx.mkOr({X, Y, Z}), Common, Other});
+    const auto Out = simplifyMBADeep(Ctx, Neighbor, Opt).Expr;
+    SymEvalPlan Before(Ctx, Neighbor), After(Ctx, Out);
+    for (unsigned I = 0; I < 16; ++I) {
+      const std::array Inputs{
+          llvm::APInt(Width, I & 1), llvm::APInt(Width, I >> 1 & 1),
+          llvm::APInt(Width, I >> 2 & 1), llvm::APInt(Width, I >> 3)};
+      EXPECT_EQ(Before.eval(Inputs), After.eval(Inputs));
+    }
+  }
+}
+
 TEST(SymMBAResidue, HasIndependentFullWidthSMTProofs) {
   if (!solver::proofBackendAvailable(solver::ProofBackend::Z3))
     GTEST_SKIP() << "Z3 unavailable";
