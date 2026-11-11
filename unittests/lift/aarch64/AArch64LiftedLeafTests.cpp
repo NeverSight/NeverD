@@ -6,10 +6,12 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
 #include "neverd/backend/llvm/AArch64/LLVMAArch64ReturnProtection.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
 #include "neverd/loader/Loader.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -99,6 +101,8 @@ void verifyTailTargets(llvm::Module &Module, MachOPatcher &Patcher,
 enum class LeafCheck {
   None,
   TailTarget,
+  StackArgument,
+  RestoringLoad,
   ErrorResult,
   Global,
   FramedImport,
@@ -191,22 +195,44 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
         Patcher.patch(Input, Rejected, *MissingWrite, Image->Arch).Success);
     EXPECT_FALSE(std::filesystem::exists(Rejected));
   }
-  if (Indexed) {
-    const auto *FrameSection =
-        Image->getSectionByName(section_names::macho::EhFrame);
-    ASSERT_NE(FrameSection, nullptr);
+  if (Indexed || Check == LeafCheck::RestoringLoad) {
     auto Bytes = Snapshot;
-    auto Frame = llvm::MutableArrayRef(Bytes).slice(FrameSection->FileOff,
-                                                    FrameSection->FileSz);
-    const auto Find = [&](auto Begin) {
-      return std::search(Begin, Frame.end(), kLinkSpillRule.begin(),
-                         kLinkSpillRule.end());
-    };
-    auto At = Find(Frame.begin());
-    ASSERT_NE(At, Frame.end());
-    ASSERT_EQ(Find(At + kLinkSpillRule.size()), Frame.end());
-    At[kLinkSpillRule.size() - 1] = kWrongLinkOffsetFactor;
-    auto Invalid = (Root / kWrongSpillInput).string();
+    if (Indexed) {
+      const auto *FrameSection =
+          Image->getSectionByName(section_names::macho::EhFrame);
+      ASSERT_NE(FrameSection, nullptr);
+      auto Frame = llvm::MutableArrayRef(Bytes).slice(FrameSection->FileOff,
+                                                      FrameSection->FileSz);
+      const auto Find = [&](auto Begin) {
+        return std::search(Begin, Frame.end(), kLinkSpillRule.begin(),
+                           kLinkSpillRule.end());
+      };
+      auto At = Find(Frame.begin());
+      ASSERT_NE(At, Frame.end());
+      ASSERT_EQ(Find(At + kLinkSpillRule.size()), Frame.end());
+      At[kLinkSpillRule.size() - 1] = kWrongLinkOffsetFactor;
+    } else {
+      // Changing pre-indexing to post-indexing restores the same SP but reads
+      // from the private frame. Check the published candidate against those
+      // actual input bytes as well.
+      const auto *Text = Image->findSectionByName(section_names::macho::Text);
+      ASSERT_NE(Text, nullptr);
+      unsigned Restores = 0;
+      for (size_t Off = 0; Off + aarch64::kInsnSize <= Text->FileSz;
+           Off += aarch64::kInsnSize) {
+        auto *At = Bytes.data() + Text->FileOff + Off;
+        const auto Word = readLE<uint32_t>(At);
+        const auto Update = aarch64WritebackMemoryInstruction(Word);
+        if (Update && Update->isLoad() && Update->stackBase() &&
+            Update->preIndex()) {
+          writeLE<uint32_t>(At, Word & ~kWritebackPreIndexBit);
+          ++Restores;
+        }
+      }
+      ASSERT_EQ(Restores, 1u);
+    }
+    const auto Invalid =
+        (Root / (Indexed ? kWrongSpillInput : kPostIndexedInput)).string();
     std::ofstream(Invalid, std::ios::binary)
         .write(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
     ASSERT_EQ(
@@ -215,18 +241,33 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
         0);
     auto Altered = Reader->load(Invalid);
     ASSERT_TRUE(bool(Altered)) << llvm::toString(Altered.takeError());
-    ASSERT_TRUE(
-        llvm::any_of(Altered->ExceptionMetadata.Functions, [&](const auto &F) {
-          return F.Dwarf &&
-                 llvm::any_of(F.Dwarf->Instructions, [](const auto &I) {
-                   return I.Kind == CFIOpKind::Offset &&
-                          I.Offset == -int64_t(sizeof(uint64_t));
-                 });
-        }));
+    if (Indexed) {
+      ASSERT_TRUE(llvm::any_of(
+          Altered->ExceptionMetadata.Functions, [&](const auto &F) {
+            return F.Dwarf &&
+                   llvm::any_of(F.Dwarf->Instructions, [](const auto &I) {
+                     return I.Kind == CFIOpKind::Offset &&
+                            I.Offset == -int64_t(sizeof(uint64_t));
+                   });
+          }));
+    }
     MachOPatcher AlteredPatcher;
     AlteredPatcher.setImageContext(&*Altered);
     EXPECT_FALSE(
         AlteredPatcher.patch(Invalid, Rejected, Module, Image->Arch).Success);
+    EXPECT_FALSE(std::filesystem::exists(Rejected));
+  }
+  if (Check == LeafCheck::StackArgument || Check == LeafCheck::RestoringLoad) {
+    // Redirect the second incoming word to the preceding fixed carrier. The
+    // native instruction still has the same load width and destination.
+    auto Shifted = llvm::CloneModule(Module);
+    auto *F = Shifted->getFunction(kDifference);
+    ASSERT_NE(F, nullptr);
+    ASSERT_GE(F->arg_size(), kCount);
+    auto *Last = F->getArg(F->arg_size() - 1);
+    ASSERT_FALSE(Last->use_empty());
+    Last->replaceAllUsesWith(F->getArg(F->arg_size() - kCount));
+    EXPECT_FALSE(Patcher.patch(Input, Rejected, *Shifted, Image->Arch).Success);
     EXPECT_FALSE(std::filesystem::exists(Rejected));
   }
   if (Check == LeafCheck::FramedImport) {
@@ -434,6 +475,130 @@ void verifyPublishedDarwinExecutable(const char *SystemPath, int ExitCode) {
 #else
   GTEST_SKIP() << kUnavailable;
 #endif
+}
+
+// An independent variadic caller exercises the public machine entry. Read
+// the input as arm64e even on developer machines booted for ordinary arm64.
+void verifyVariadicEntry(const char *Optimization) {
+#if defined(__APPLE__) && defined(__aarch64__)
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kTemporary, Directory));
+  const std::filesystem::path Root(Directory.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Source = (Root / kSource).string();
+  const auto Input = (Root / kOriginal).string();
+  const auto Control = (Root / kControl).string();
+  const auto Caller = (Root / kDriverSource).string();
+  const auto Driver = (Root / kDriver).string();
+  const bool Native = std::getenv(kExecute);
+  const char *Target = Native ? kTarget : kHostTarget;
+  std::ofstream(Source) << kVariadicLeaves;
+  std::ofstream(Caller) << kExtendedVariadics << kVariadicCaller;
+  auto Library = [&](const std::string &File, const char *Triple,
+                     const std::string &Path) {
+    return llvm::sys::ExecuteAndWait(kCompiler, {kCompiler, kTargetFlag, Triple,
+                                                 Optimization, kOmitFrame,
+                                                 kDylib, File, kOut, Path});
+  };
+  ASSERT_EQ(Library(Source, kTarget, Input), 0);
+  ASSERT_EQ(
+      llvm::sys::ExecuteAndWait(kCompiler, {kCompiler, kTargetFlag, Target,
+                                            kOptimize, Caller, kOut, Driver}),
+      0);
+  if (!Native)
+    ASSERT_EQ(Library(Source, Target, Control), 0);
+  ASSERT_EQ(
+      llvm::sys::ExecuteAndWait(Driver, {Driver, Native ? Input : Control}), 0);
+
+  auto Image = Loader::create(BinaryFormat::MachO)->load(Input);
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  ASSERT_TRUE(Image->isArm64e());
+  llvm::LLVMContext Context;
+  PipelineOptions Options;
+  Options.LiftMode = true;
+  Options.EmitDumpOutput = false;
+  auto Lifted = Pipeline().run(*Image, Context, Options);
+  ASSERT_TRUE(Lifted.Success) << Lifted.Error;
+  ASSERT_TRUE(Lifted.LlvmModule);
+  auto &Module = *Lifted.LlvmModule;
+  ASSERT_TRUE(Module.getModuleFlag(kArm64eAnalysisModuleFlag));
+  auto *Walk = Module.getFunction(kDifference);
+  ASSERT_NE(Walk, nullptr);
+  ASSERT_TRUE(Walk->isVarArg());
+  ASSERT_TRUE(Walk->hasFnAttribute(llvm::Attribute::NoInline));
+  EXPECT_TRUE(llvm::any_of(*Walk, [](const auto &Block) {
+    return llvm::any_of(Block, [](const auto &I) {
+      const auto *Call = llvm::dyn_cast<llvm::IntrinsicInst>(&I);
+      return Call && Call->getIntrinsicID() == llvm::Intrinsic::sponentry;
+    });
+  }));
+  // Apple Clang requires its frontend's classic ABI flag for arm64e IR.
+  // The analysis marker stays attached throughout this compiler control.
+  // Older system Clang IR readers lack LLVM's target_mem refinement. Removing
+  // this optional optimizer promise preserves the function's instructions.
+  for (auto &F : Module)
+    F.removeFnAttr(llvm::Attribute::Memory);
+  // A stack protector moves the cursor's synthetic local away from the
+  // caller. An out-of-bounds local load can otherwise work by coincidence.
+  for (auto &F : Module)
+    if (!F.isDeclaration())
+      F.addFnAttr(llvm::Attribute::StackProtectReq);
+  Module.setTargetTriple(llvm::Triple(Target));
+  if (Native) {
+    llvm::IRBuilder<> B(Context);
+    auto *ABI = llvm::MDNode::get(
+        Context, {llvm::ConstantAsMetadata::get(B.getInt32(kClassicABIVersion)),
+                  llvm::ConstantAsMetadata::get(B.getFalse())});
+    Module.addModuleFlag(llvm::Module::AppendUnique, kClassicABI,
+                         llvm::MDNode::get(Context, {ABI}));
+  }
+  const auto IR = (Root / kLiftedIR).string();
+  const auto C = (Root / kLiftedC).string();
+  std::error_code Error;
+  llvm::raw_fd_ostream Stream(IR, Error);
+  ASSERT_FALSE(Error);
+  Module.print(Stream, nullptr);
+  Stream.close();
+  ASSERT_FALSE(Stream.has_error());
+  CEmitterOptions COptions;
+  COptions.PreserveLLVMFunctionTypes = true;
+  COptions.TheArch = Image->Arch;
+  COptions.Format = Image->Format;
+  ASSERT_TRUE(LLVMCEmitter().emitToFile(Module, C, COptions, nullptr, &*Image));
+  const auto Output = (Root / kOutput).string();
+  for (const auto &File : {IR, C}) {
+    SCOPED_TRACE(File);
+    ASSERT_EQ(Library(File, Target, Output), 0);
+    ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Output}), 0);
+  }
+  if (Native)
+    testing::Test::RecordProperty(kNativeImages, kCount + 1);
+#else
+  GTEST_SKIP() << kUnavailable;
+#endif
+}
+
+TEST(AArch64DarwinVariadic, OptimizedCalleeWalksTheNativeArgumentArea) {
+  verifyVariadicEntry(kOptimize);
+}
+
+TEST(AArch64DarwinVariadic, UnoptimizedCalleeHomesItsNativeArgumentCursor) {
+  verifyVariadicEntry(kUnoptimized);
+}
+
+TEST(AArch64DarwinVariadic, FramelessStackLoadsSurviveImagePublication) {
+  verifyPublishedLeaves(kStackLoadLeaves, kVariadicCaller, kAssemblyName, {},
+                        LeafCheck::StackArgument);
+}
+
+TEST(AArch64DarwinVariadic, CompactLeavesElideOnlyTheUnusedStackReservation) {
+  verifyPublishedLeaves(kReservedStackLeaves, kVariadicCaller, kSource,
+                        kReservedFrame, LeafCheck::StackArgument);
+}
+
+TEST(AArch64DarwinVariadic, PreIndexedArgumentLoadRestoresTheIncomingSP) {
+  verifyPublishedLeaves(kReservedStackLeaves, kVariadicCaller, kSource,
+                        kRestoreOnLoad, LeafCheck::RestoringLoad);
 }
 
 TEST(AArch64DarwinExecutable, PublishesDarwinTrue) {

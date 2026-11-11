@@ -6131,6 +6131,18 @@ For a product of sums of a constant and a variable term, add the two smallest
 guaranteed trailing-zero counts among the variable terms. If their sum covers
 the observed width, all mixed products vanish. Prefix and suffix products then
 give the constant and linear coefficients even for noninvertible offsets.
+When some cross terms survive, collect only the factors whose disturbances
+have at least half the observed bits clear at the low end, rounding up.
+The other factors multiply the entire collected polynomial. Their mutual
+products and their interactions with the high terms survive at full width.
+Equal or opposite weights can share a factor. After removing a common power
+of two, an odd weight is invertible at the remaining width, which lets long
+literal coefficients share one scale. The simplifier compares expression
+costs before accepting either form. When the top bit multiplies a Boolean
+correction beside an unscaled sum, the parity of the sum can be absorbed into
+its coefficient if the remaining Boolean word becomes cheaper. A surviving
+sum can also replace a binary AND and OR of the same two words with their
+sum while preserving its other terms.
 Combining equal terms first can leave just one or two observed bits. The
 one-bit reading uses Boolean parity, and the two-bit reading uses the weights
 1, −1 and 2 modulo four. For independent masked disturbances, the bottom-up
@@ -6151,7 +6163,10 @@ stores them in contiguous slots indexed by the same dense table used for
 discovery. Slots are sized from the reachable count before rendering, so
 completed child references remain stable. Text and precedence stay unchanged.
 Rendering gathers children before parents with an iterative postorder instead
-of sorting node IDs; a leaf root renders directly. MBA abstraction reuses the
+of sorting node IDs; a leaf root renders directly. When the visited hash
+entries already occupy as much space as a direct index, discovery switches
+to direct lookup for the rest of the walk and subsequent fragment rendering.
+MBA abstraction reuses the
 original DAG when its existing classification requires no hidden inputs,
 literal-mask carriers or arithmetic-complement rewrite. Independent identity
 verification and work accounting remain unchanged.
@@ -15932,6 +15947,11 @@ lifting decode routes consume that result, including REX2 forms. Illegal
 encodings fail decoding even when strict lifting is disabled. UD1 remains an
 explicit invalid-opcode intrinsic; its encoded operands do not imply an
 ordinary memory access.
+
+For an x86 function-discovery scan with operand detail disabled, the decoder
+resolves a near CALL from the exact bytes of the classified instruction. The
+Capstone query uses the same relative-target arithmetic as the operand printers.
+The scan admits the result only for an executable code owner.
 
 With text and detail disabled, Capstone's native iterator uses generated
 operand terminals that share the full decoder's bounded readers and legality

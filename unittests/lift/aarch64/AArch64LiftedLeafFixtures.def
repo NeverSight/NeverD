@@ -66,6 +66,171 @@ A64_LEAF_TEXT(kSum, "leaf_sum")
 A64_LEAF_TEXT(kDifference, "leaf_difference")
 A64_LEAF_VALUE(unsigned, kCount, 2)
 A64_LEAF_VALUE(unsigned, kTamperedResult, 19)
+A64_LEAF_TEXT(kHostTarget, "arm64-apple-macosx15.0")
+A64_LEAF_TEXT(kLiftedIR, "lifted.ll")
+A64_LEAF_TEXT(kLiftedC, "lifted.c")
+A64_LEAF_TEXT(kControl, "control.dylib")
+A64_LEAF_TEXT(kUnoptimized, "-O0")
+A64_LEAF_TEXT(kClassicABI, "ptrauth.abi-version")
+A64_LEAF_VALUE(unsigned, kClassicABIVersion, 0)
+A64_LEAF_TEXT(kExtendedVariadics, "#define TEST_VARIADIC_EXTENDED 1\n")
+A64_LEAF_TEXT(kVariadicLeaves, R"c(
+#include <stdarg.h>
+typedef unsigned long word;
+word leaf_sum(word seed, ...) {
+  va_list args;
+  va_start(args, seed);
+  word first = va_arg(args, word);
+  va_end(args);
+  return seed + first;
+}
+word leaf_difference(word seed, ...) {
+  va_list args;
+  va_start(args, seed);
+  (void)va_arg(args, word);
+  word second = va_arg(args, word);
+  va_end(args);
+  return seed - second;
+}
+word va_walk(word count, ...) {
+  va_list args;
+  va_start(args, count);
+  word sum = 0;
+  while (count--)
+    sum = sum * 5 + va_arg(args, word);
+  va_end(args);
+  return sum;
+}
+word va_named(word a, word b, word c, word d, word e, word f, word g,
+              word h, word i, ...) {
+  va_list args;
+  va_start(args, i);
+  word tail = va_arg(args, word);
+  va_end(args);
+  return a + i - tail;
+}
+word va_copied(word seed, ...) {
+  va_list args, copy;
+  va_start(args, seed);
+  va_copy(copy, args);
+  word first = va_arg(args, word), second = va_arg(args, word);
+  word copied = va_arg(copy, word);
+  va_end(copy);
+  va_end(args);
+  return ((seed + second) ^ first) - copied;
+}
+word va_wide(word seed, ...) {
+  va_list args;
+  va_start(args, seed);
+  word first = va_arg(args, word);
+  unsigned __int128 wide = va_arg(args, unsigned __int128);
+  va_end(args);
+  return seed - first + (word)(wide >> 64);
+}
+double va_fp(word seed, ...) {
+  va_list args;
+  va_start(args, seed);
+  word first = va_arg(args, word);
+  double second = va_arg(args, double);
+  va_end(args);
+  return (double)(seed + first) + second;
+}
+)c")
+A64_LEAF_TEXT(kVariadicCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+typedef unsigned long word;
+typedef word operation(word, ...);
+#ifdef TEST_VARIADIC_EXTENDED
+static int check_extended(void *image) {
+  operation *walk = (operation *)dlsym(image, "va_walk");
+  operation *copy = (operation *)dlsym(image, "va_copied");
+  operation *wide = (operation *)dlsym(image, "va_wide");
+  word (*named)(word, word, word, word, word, word, word, word, word, ...) =
+      dlsym(image, "va_named");
+  double (*fp)(word, ...) = dlsym(image, "va_fp");
+  if (!walk || !copy || !wide || !named || !fp) return 5;
+  const word high = UINT64_C(0x13579bdf2468ace0);
+  const unsigned __int128 value = ((unsigned __int128)high << 64) | ~high;
+  if (walk(0) || walk(3, 3UL, 9UL, 7UL) != 127) return 6;
+  if (named(8, 2, 3, 4, 5, 6, 7, 8, 30, 11UL) != 27) return 7;
+  if (copy(6, 3UL, 4UL) != 6) return 8;
+  if (wide(10, 3UL, value) != high + 7) return 9;
+  if (fp(10, 3UL, -2.5) != 10.5) return 10;
+  return 0;
+}
+#endif
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  operation *sum = (operation *)dlsym(image, "leaf_sum");
+  operation *difference = (operation *)dlsym(image, "leaf_difference");
+  if (!sum || !difference) return 3;
+  const word values[] = {0, 1, UINT64_C(0x123456789abcdef), UINT64_MAX};
+  for (unsigned i = 0; i < sizeof(values)/sizeof(*values); ++i)
+    for (unsigned j = 0; j < sizeof(values)/sizeof(*values); ++j) {
+      word seed = values[i], a = values[j], b = ~a;
+#ifdef TEST_RESERVED_STACK
+      if (sum(seed, a, b) != seed + b ||
+#else
+      if (sum(seed, a, b) != seed + a ||
+#endif
+          difference(seed, a, b) != seed - b)
+        return 4;
+    }
+#ifdef TEST_VARIADIC_EXTENDED
+  int result = check_extended(image);
+  if (result) return result;
+#endif
+  return dlclose(image) != 0;
+}
+)c")
+A64_LEAF_TEXT(kReservedFrame, "#define TEST_RESERVED_STACK 1\n")
+A64_LEAF_TEXT(kRestoreOnLoad, "#define TEST_RESTORE_ON_LOAD 1\n")
+A64_LEAF_TEXT(kPostIndexedInput, "post-indexed.dylib")
+A64_LEAF_TEXT(kReservedStackLeaves, R"c(
+#include <stdarg.h>
+typedef unsigned long word;
+word leaf_sum(word seed, ...) {
+  va_list args;
+  va_start(args, seed);
+#ifdef TEST_RESTORE_ON_LOAD
+  word value = va_arg(args, word);
+#else
+  word value = ((const word *)args)[1];
+#endif
+  va_end(args);
+  return seed + value;
+}
+word leaf_difference(word seed, ...) {
+  va_list args;
+  va_start(args, seed);
+  word value = ((const word *)args)[1];
+  va_end(args);
+  return seed - value;
+}
+)c")
+A64_LEAF_TEXT(kStackLoadLeaves, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  ldr x8, [sp]
+  add x0, x8, x0
+  ret
+.cfi_endproc
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  ldr x8, [sp, #8]
+  sub x0, x0, x8
+  ret
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+
 A64_LEAF_TEXT(kLeaves, R"c(
 unsigned long leaf_sum(unsigned long a, unsigned long b) { return a + b; }
 unsigned long leaf_difference(unsigned long a, unsigned long b) { return a - b; }

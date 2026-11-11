@@ -84,6 +84,8 @@ inline constexpr unsigned kMaxReciprocalProductWidth = 128;
 
 inline constexpr std::size_t kMinResidueProductFactors = 4;
 inline constexpr unsigned kMinResidueShiftedFactors = 2;
+/// Reuse broad affine emissions while leaving small Boolean sums to the walker.
+inline constexpr unsigned kMinResidueReadingTerms = 4;
 inline constexpr std::size_t kMaxResidueProductFactors = 512;
 inline constexpr std::size_t kMaxResidueBaseTerms = 16;
 inline constexpr std::size_t kMaxResidueProductSummands = 128;

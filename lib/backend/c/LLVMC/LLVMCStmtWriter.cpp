@@ -91,6 +91,7 @@
 #include "llvm/IR/IntrinsicsX86.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/SaveAndRestore.h"
 
@@ -111,6 +112,9 @@ bool LLVMCWriter::needsCallSiteCType(const llvm::CallBase &Call) {
 }
 
 namespace {
+
+#define LLVMC_STACK_TEXT(Name, Text) constexpr llvm::StringLiteral Name = Text;
+#include "LLVMCStackIntrinsic.def"
 std::string retainCallSiteCType(const llvm::CallBase &Call,
                                 llvm::StringRef Type, std::string Cast) {
   if (!LLVMCWriter::needsCallSiteCType(Call))
@@ -4646,18 +4650,21 @@ bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
        << renderX86ReturnSlotAddress(freshVar("llvm_return_slot")) << ";\n";
     return true;
   }
-  if (IID == llvm::Intrinsic::localaddress) {
-    if (!SEHParentFrameName.empty()) {
+  if (IID == llvm::Intrinsic::localaddress ||
+      IID == llvm::Intrinsic::sponentry) {
+    if (IID == llvm::Intrinsic::localaddress && !SEHParentFrameName.empty()) {
       emitIndent(Indent);
       OS << getName(&Call) << " = " << SEHParentFrameName << ";\n";
       return true;
     }
-    // Keep the target-specific LLVM intrinsic: it can select SP, FP, or a base
-    // pointer depending on stack realignment. __builtin_frame_address differs.
-    const std::string IntrinsicName = freshVar("llvm_localaddress");
+    // Both addresses depend on the target's frame lowering. Let Clang lower
+    // the same intrinsic when compiling the generated C.
+    const std::string IntrinsicName = freshVar(
+        (IID == llvm::Intrinsic::sponentry ? kEntrySPName : kLocalAddressName)
+            .str());
     emitIndent(Indent);
-    OS << "extern void *" << IntrinsicName
-       << "(void) __asm__(\"llvm.localaddress\");\n";
+    OS << llvm::formatv(kStackIntrinsicDecl.data(), IntrinsicName,
+                        Callee->getName());
     emitIndent(Indent);
     OS << getName(&Call) << " = " << IntrinsicName << "();\n";
     return true;

@@ -229,9 +229,32 @@ static SymRef solveProductCofactorsImpl(
     return E;
   if (Higher == 1 && hasCompletedResidueReading(Ctx, LastHigher, Budget))
     return E;
-  if (Higher < 2)
-    return NestedSum ? solveNestedProductCofactors(Ctx, E, Opts, Budget, Rep)
-                     : E;
+  if (Higher < 2) {
+    if (!NestedSum)
+      return E;
+    // The low factors in a proved product may still contain sums. Keep
+    // that factorization beside leaves that share none of its direct factors.
+    if (Budget.Residues && Ctx.op(E) == SymOp::Add) {
+      SymRef Product;
+      bool OnlyLeafNeighbors = true;
+      for (auto Term : Ctx.operands(E)) {
+        if (Ctx.isConst(Term) || Ctx.isVar(Term))
+          continue;
+        if (Product || Ctx.op(Term) != SymOp::Mul) {
+          OnlyLeafNeighbors = false;
+          break;
+        }
+        Product = Term;
+      }
+      if (OnlyLeafNeighbors && Product &&
+          hasCompletedResidueReading(Ctx, Product, Budget, true) &&
+          llvm::none_of(Ctx.operands(Product), [&](SymRef F) {
+            return Ctx.isVar(F) && llvm::is_contained(Ctx.operands(E), F);
+          }))
+        return E;
+    }
+    return solveNestedProductCofactors(Ctx, E, Opts, Budget, Rep);
+  }
 
   size_t Storage = Opts.MaxTableBytes;
   const size_t WordBytes =

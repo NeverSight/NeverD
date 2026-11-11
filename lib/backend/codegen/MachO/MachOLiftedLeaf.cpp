@@ -15,6 +15,7 @@
 #include "neverd/backend/llvm/AArch64/LLVMEntryABI.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/DWARF/EHFrame.h"
 #include "neverd/loader/DirectBranch.h"
@@ -130,10 +131,98 @@ bool isPositionIndependentLeafInstruction(const DecodedInsn &I) {
                         Detail.operands[0].access == CS_AC_READ) &&
            Detail.operands[1].type == AARCH64_OP_MEM &&
            Detail.operands[1].mem.index == AARCH64_REG_INVALID &&
-           leafRegister(Detail.operands[1].mem.base, true);
+           (Detail.operands[1].mem.base == AARCH64_REG_SP ||
+            leafRegister(Detail.operands[1].mem.base, true));
   default:
     return false;
   }
+}
+
+// A frameless leaf may reserve stack space that it never accesses. Removing
+// a matched SP subtraction/addition preserves its register and memory effects
+// if every load still reads the same caller byte with the same instruction
+// form. The installed leaf then has its own zero-frame compact unwind row.
+bool elidesUnusedStackFrame(Decoder &Decode, llvm::ArrayRef<uint8_t> Source,
+                            llvm::ArrayRef<uint8_t> Emitted, va_t OldVA,
+                            va_t NewVA, const CompactUnwindEntry &Frame) {
+  constexpr unsigned Word = aarch64::kInsnSize;
+  if (!Frame.HasStackSize || !Frame.StackSize ||
+      (Frame.NativeEncoding & ~macho_unwind::kARM64FramelessStackSizeMask) !=
+          macho_unwind::kARM64ModeFrameless ||
+      Emitted.size() < Word || Emitted.size() % Word ||
+      Source.size() <= Emitted.size() ||
+      readLE<uint32_t>(Source.end() - Word) != kReturnToLR ||
+      readLE<uint32_t>(Emitted.end() - Word) != kReturnToLR)
+    return false;
+  const auto Read = [&](llvm::ArrayRef<uint8_t> Bytes, va_t VA, size_t Offset,
+                        DecodedInsn &I) {
+    return Decode.decodeOne(Bytes.data() + Offset, Word, VA + Offset, I) ==
+               Word &&
+           I.Raw && I.Raw->detail;
+  };
+  const auto AdjustsSP = [&](size_t Offset, unsigned Opcode) {
+    DecodedInsn I{};
+    if (!Read(Source, OldVA, Offset, I) || I.Id != Opcode)
+      return false;
+    const auto &D = I.Raw->detail->aarch64;
+    return D.op_count == kArithmeticOperandCount &&
+           D.operands[0].type == AARCH64_OP_REG &&
+           D.operands[0].reg == AARCH64_REG_SP &&
+           D.operands[1].type == AARCH64_OP_REG &&
+           D.operands[1].reg == AARCH64_REG_SP &&
+           D.operands[2].type == AARCH64_OP_IMM && !D.operands[2].shift.value &&
+           D.operands[2].imm == Frame.StackSize;
+  };
+  // Clang may restore SP with a pre-indexed load instead of a separate ADD.
+  const size_t Removed = Source.size() - Emitted.size();
+  const bool SeparateRestore = Removed == 2 * Word;
+  if ((!SeparateRestore && Removed != Word) || !AdjustsSP(0, AARCH64_INS_SUB) ||
+      (SeparateRestore &&
+       !AdjustsSP(Source.size() - 2 * Word, AARCH64_INS_ADD)))
+    return false;
+
+  const auto StackLoad = [](const DecodedInsn &I)
+      -> std::optional<std::pair<aarch64_reg, int64_t>> {
+    const auto &D = I.Raw->detail->aarch64;
+    if (I.Id != AARCH64_INS_LDR || !isPositionIndependentLeafInstruction(I) ||
+        D.operands[1].mem.base != AARCH64_REG_SP)
+      return std::nullopt;
+    return {{D.operands[0].reg, D.operands[1].mem.disp}};
+  };
+  int64_t Depth = Frame.StackSize;
+  for (size_t Off = 0; Off < Emitted.size() - Word; Off += Word) {
+    const size_t Old = Off + Word;
+    DecodedInsn I{};
+    if (!Read(Source, OldVA, Old, I))
+      return false;
+    auto Load = StackLoad(I);
+    if (I.Id == AARCH64_INS_LDR && I.Raw->detail->writeback) {
+      const auto Update = aarch64WritebackMemoryInstruction(
+          readLE<uint32_t>(Source.data() + Old));
+      if (SeparateRestore || !Depth || !Update || !Update->stackBase() ||
+          !Update->preIndex() || Update->displacement() != uint64_t(Depth))
+        return false;
+      // Pre-indexing accesses the updated base. Both the load and every
+      // subsequent SP-relative access now use the incoming SP.
+      Depth = 0;
+      Load = {{I.Raw->detail->aarch64.operands[0].reg, 0}};
+    }
+    if (Load) {
+      // Decode borrows its instruction until the next decode.
+      if (Load->second < Depth || !Read(Emitted, NewVA, Off, I))
+        return false;
+      Load->second -= Depth;
+      if (StackLoad(I) != Load)
+        return false;
+      continue;
+    }
+    if (I.Id == AARCH64_INS_LDR || I.Id == AARCH64_INS_STR ||
+        !isPositionIndependentLeafInstruction(I) ||
+        readLE<uint32_t>(Source.data() + Old) !=
+            readLE<uint32_t>(Emitted.data() + Off))
+      return false;
+  }
+  return SeparateRestore || Depth == 0;
 }
 
 bool matchesDirectTransfer(llvm::ArrayRef<uint8_t> Source, va_t OriginalPC,
@@ -433,7 +522,7 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
   for (const auto &F : LinkedFrames.FDEs)
     if (!FDEs.try_emplace(F.InitialLocation, &F).second)
       return refuse(kLeafFrame);
-  if (!Code || Ranges.size() != Mappings.size() || Code->Size != Text.Size)
+  if (!Code || Ranges.size() != Mappings.size())
     return llvm::createStringError(
         llvm::errc::not_supported,
         llvm::formatv(kGeneratedCoverage, Ranges.size(), Mappings.size(),
@@ -443,6 +532,17 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
   for (const auto &R : Ranges)
     if (!ByAddress.emplace(R.BeginVA, &R).second)
       return refuse(kLeafCoverage);
+
+  uint64_t Covered = 0;
+  for (const auto &[Start, Range] : ByAddress) {
+    if (Start < Code->VA || Start - Code->VA != Covered ||
+        Range->EndVA <= Start ||
+        !rangeInBounds(Covered, Range->EndVA - Start, Code->Size))
+      return refuse(kLeafCoverage);
+    Covered += Range->EndVA - Start;
+  }
+  if (Covered != Code->Size)
+    return refuse(kLeafCoverage);
 
   Decoder Decode;
   if (!Decode.init(Original))
@@ -459,9 +559,7 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
           llvm::errc::not_supported,
           llvm::formatv(kGeneratedSymbol, Mapping.Symbol).str());
     const auto Range = ByAddress.extract(Owner->second);
-    if (Range.empty() || Range.mapped()->EndVA - Owner->second != End - Start ||
-        Owner->second < Code->VA ||
-        !rangeInBounds(Owner->second - Code->VA, End - Start, Code->Size))
+    if (Range.empty())
       return llvm::createStringError(
           llvm::errc::not_supported,
           llvm::formatv(kGeneratedRange, Mapping.Symbol, Start, End).str());
@@ -469,6 +567,27 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
         Frame->CodeRange.End < End)
       return refuse(kLeafFrame);
     const auto Native = Range.mapped()->Encoding;
+    const auto Source = llvm::ArrayRef(Original.Raw)
+                            .slice(Text.FileOff + Start - Text.VA, End - Start);
+    const auto Emitted = llvm::ArrayRef(Generated.Bytes)
+                             .slice(Code->Offset + (Owner->second - Code->VA),
+                                    Range.mapped()->EndVA - Owner->second);
+    if (Source.empty() || Source.size() % aarch64::kInsnSize)
+      return refuse(kLeafCode);
+    if (Native == macho_unwind::kARM64ModeFrameless &&
+        Source.size() > Emitted.size() &&
+        elidesUnusedStackFrame(Decode, Source, Emitted, Start, Owner->second,
+                               *Frame->Compact)) {
+      if (llvm::any_of(Original.ExceptionMetadata.Functions,
+                       [&](const auto &F) {
+                         return F.Dwarf && F.CodeRange.Begin < End &&
+                                F.CodeRange.End > Start;
+                       }))
+        return refuse(kLeafFrame);
+      continue;
+    }
+    if (Source.size() != Emitted.size())
+      return refuse(kLeafCoverage);
     const bool Indexed = (Native & ~macho_unwind::kDwarfSectionOffsetMask) ==
                          macho_unwind::kARM64ModeDwarf;
     const auto SourceEncoding = Frame->Compact->NativeEncoding;
@@ -483,13 +602,6 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
       return refuse(kLeafFrame);
     }
 
-    const auto Source = llvm::ArrayRef(Original.Raw)
-                            .slice(Text.FileOff + Start - Text.VA, End - Start);
-    const auto Emitted =
-        llvm::ArrayRef(Generated.Bytes)
-            .slice(Code->Offset + Owner->second - Code->VA, End - Start);
-    if (Source.empty() || Source.size() % aarch64::kInsnSize)
-      return refuse(kLeafCode);
     const bool Framed =
         Range.mapped()->Encoding == macho_unwind::kARM64ModeFrame;
     std::optional<FrameBody> Body;
