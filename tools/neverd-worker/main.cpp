@@ -439,6 +439,42 @@ void collectPagesAfterIdle(State &state, std::unique_lock<std::mutex> &lock) {
 }
 #endif
 
+/// The answers to \p reads, a request's "then", each as a reply's status and
+/// payload or error: a source page's read naming the page its client keeps,
+/// which a reply carries whole, what refused it, or "later" where the client
+/// reads it itself (Engine::followingRead).
+Json followingReads(Engine &engine, const Json &reads) {
+  Json answers = Json::array();
+  for (const auto &read : reads) {
+    try {
+      if (!read.is_object() || read.value("operation", Json()) != "decompile" ||
+          !read.contains("payload") || !read.at("payload").is_object())
+        throw Error("invalid_request",
+                    "A read that follows is a decompile naming its page");
+      auto reply = engine.followingRead(read.at("payload"));
+      if (!reply) {
+        answers.push_back({{"status", "later"}});
+        continue;
+      }
+      if (reply->encoded || reply->value.dump().size() >
+                                ::neverd::limits::worker::kMainThenReadBytes)
+        throw Error("budget_exceeded", "The read's answer is read by itself");
+      answers.push_back(
+          {{"status", "ok"}, {"payload", std::move(reply->value)}});
+      engine.noteFollowingRead();
+    } catch (const Error &error) {
+      answers.push_back(
+          {{"status", "error"},
+           {"error", {{"code", error.code}, {"message", error.what()}}}});
+    } catch (const std::exception &error) {
+      answers.push_back(
+          {{"status", "error"},
+           {"error", {{"code", "engine_error"}, {"message", error.what()}}}});
+    }
+  }
+  return answers;
+}
+
 void executeLoop(State &state, Transport &transport) {
   try {
     Engine engine;
@@ -512,6 +548,8 @@ void executeLoop(State &state, Transport &transport) {
       Json result;
       Engine::EncodedPayload encodedPayload;
       LoadProgress loadProgress;
+      // The reads that follow the request, answered once it succeeded.
+      Json then;
       try {
         if (value.contains("expected_revision") &&
             value["expected_revision"] != revision())
@@ -537,12 +575,25 @@ void executeLoop(State &state, Transport &transport) {
                                    {"total", Total},
                                    {"detail", Detail ? Detail : ""}}));
         });
-        const auto input = value.value("payload", Json::object());
+        auto input = value.value("payload", Json::object());
+        if (const auto follow = input.find("then"); follow != input.end()) {
+          if (webRequest || !follow->is_array() ||
+              follow->size() > ::neverd::limits::worker::kMainThenReads)
+            throw Error(
+                "invalid_request",
+                "then is a list of at most " +
+                    std::to_string(::neverd::limits::worker::kMainThenReads) +
+                    " reads");
+          then = std::move(*follow);
+          input.erase("then");
+        }
         auto reply = webRequest ? Engine::Reply{web.execute(op, input), {}}
                                 : engine.executeResponse(op, input);
         encodedPayload = std::move(reply.encoded);
         result = response(value, revision(), project(), "ok",
                           std::move(reply.value));
+        if (then.is_array() && !then.empty())
+          result["then"] = followingReads(engine, then);
       } catch (const Error &error) {
         encodedPayload.reset();
         result = failure(value, revision(), project(), error);

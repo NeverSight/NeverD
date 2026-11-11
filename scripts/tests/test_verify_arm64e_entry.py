@@ -66,11 +66,11 @@ class EntryQualificationTests(unittest.TestCase):
 
     def test_complete_matrix_cleanup_and_qualified_producer_scope(self):
         contract = entry.native.fixture_contract()
-        for compile_only, fail, backend, publish in (
-                (False, False, False, False), (True, False, False, False),
-                (False, True, False, False), (False, False, True, False),
-                (False, False, True, True), (True, False, True, True),
-                (False, True, True, True)):
+        for compile_only, fail, backend, publish, zero_base in (
+                (False, False, False, False, False), (True, False, False, False, False),
+                (False, True, False, False, False), (False, False, True, False, False),
+                (False, False, True, True, False), (True, False, True, True, False),
+                (False, True, True, True, False), (False, False, True, True, True)):
             producer = entry.POLICY["backend_producer"] if backend else entry.POLICY["producers"][0]
             with self.subTest(compile_only=compile_only, fail=fail, backend=backend, publish=publish), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
@@ -112,7 +112,7 @@ class EntryQualificationTests(unittest.TestCase):
                         if label.endswith(entry.POLICY["baseline_suffix"] + entry.native.POLICY["compile_suffix"]):
                             dwarf = CASES["dwarf_name_fragment"] in label
                             layout = entry.publication_layout(
-                                next(opt for opt in entry.POLICY["optimizations"] if opt in argv), dwarf)
+                                next(opt for opt in entry.POLICY["optimizations"] if opt in argv), dwarf, zero_base)
                             for argument in layout["header_args"]:
                                 self.assertIn(argument, argv)
                         Path(argv[-1]).write_text(CASES["binary_bytes"])
@@ -122,7 +122,7 @@ class EntryQualificationTests(unittest.TestCase):
                         stdout = (CASES["inspection_assembly"] if entry.POLICY["inspection_suffix"] in label else CASES["assembly"])
                     elif label.endswith(entry.POLICY["sections_suffix"]):
                         original = label.endswith(entry.POLICY["baseline_suffix"] + entry.POLICY["sections_suffix"])
-                        stdout = CASES["nonzero_text_base"] if original else CASES["text_base"]
+                        stdout = CASES["nonzero_text_base"] if original and not zero_base else CASES["text_base"]
                         stdout += CASES["sections_dwarf"] if CASES["dwarf_name_fragment"] in label else CASES["sections_compact"]
                     elif label.endswith(entry.POLICY["unwind_suffix"]):
                         stdout = CASES["unwind_dwarf"] if CASES["dwarf_name_fragment"] in label else CASES["unwind_compact"]
@@ -146,10 +146,10 @@ class EntryQualificationTests(unittest.TestCase):
                         mock.patch.object(entry.native, "command", side_effect=command):
                     if fail:
                         with self.assertRaises(subprocess.CalledProcessError):
-                            entry.run(output, binary, compiler, probe, producer=producer, publish=publish)
+                            entry.run(output, binary, compiler, probe, producer=producer, publish=publish, zero_base=zero_base)
                     else:
                         entry.run(output, binary, compiler, None if compile_only else probe,
-                                  compile_only=compile_only, producer=producer, publish=publish)
+                                  compile_only=compile_only, producer=producer, publish=publish, zero_base=zero_base)
                 report = json.loads((output / entry.POLICY["report_name"]).read_text())
                 self.assertEqual(report["native_reconstructed_entry_qualified"], not compile_only and not fail)
                 self.assertEqual(report["neverd_codegen_qualified"], backend and not compile_only and not fail)
@@ -157,8 +157,10 @@ class EntryQualificationTests(unittest.TestCase):
                 self.assertFalse(report["native_apple_cpta_qualified"])
                 self.assertFalse(report["whole_image_publication_qualified"])
                 for row in report["cases"]:
-                    layout = entry.publication_layout(row["optimization"], row["dwarf"])
+                    layout = entry.publication_layout(row["optimization"], row["dwarf"], zero_base)
                     self.assertEqual(row["publication_layout"], layout if publish else None)
+                    original_opt = entry.POLICY["zero_base_original_optimization"] if zero_base else row["optimization"]
+                    self.assertEqual(row["original_entry_optimization"], original_opt if publish else None)
                 self.assertEqual(len(executed), 0 if compile_only else 1 if fail else CASES["case_count"])
                 for path in output.iterdir():
                     self.assertNotIn(path.suffix, (".out", ".o", ".dylib"))

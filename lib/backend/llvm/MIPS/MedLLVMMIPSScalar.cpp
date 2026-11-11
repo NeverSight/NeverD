@@ -11,6 +11,7 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/backend/MIPS/MIPSBarrierSource.h"
 #include "neverd/backend/MIPS/MIPSDSPSource.h"
+#include "neverd/backend/MIPS/MIPSMSASource.h"
 #include "neverd/backend/llvm/LLVMSourceBody.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
@@ -33,6 +34,51 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
     throw std::runtime_error(mips::kAccumulatorHistoryUnknown);
   if (Id == Intrinsic::MIPSLwrUpper)
     throw std::runtime_error(mips::kPartialLwrRequiresWord);
+  if (mips::isMSANativeVector(Id) || mips::isMSAControl(Id)) {
+    if (!Img || !Img->MIPS || !Img->MIPS->HasMSA || Img->MIPS->ISARevision != 5)
+      throw std::runtime_error(
+          "MSA native source requires an enabled MIPS32r5 MSA image");
+    const unsigned Selector =
+        mips::isMSAControl(Id) ? Op.Inputs[1].ConstVal : 0;
+    const auto Asm =
+        mips::msaAssembly(Id, Selector, archLittleEndian(TargetArch));
+    llvm::SmallVector<llvm::Value *, 4> Args;
+    llvm::SmallVector<llvm::Type *, 4> Types;
+    llvm::Value *Result = nullptr;
+    if (Asm.Write) {
+      auto *V = getVar(Op.Inputs[2], B);
+      Args.push_back(V->getType()->isPointerTy()
+                         ? B.CreatePtrToInt(V, B.getInt32Ty())
+                         : B.CreateZExtOrTrunc(V, B.getInt32Ty()));
+    } else if (Asm.Pointers) {
+      auto &Entry = B.GetInsertBlock()->getParent()->getEntryBlock();
+      llvm::IRBuilder<> Frame(&Entry, Entry.getFirstInsertionPt());
+      for (unsigned I = 0; I < Asm.Pointers; ++I) {
+        auto *Slot = Frame.CreateAlloca(B.getInt128Ty(), nullptr, "msa.vec");
+        Slot->setAlignment(llvm::Align(16));
+        Args.push_back(Slot);
+        if (I)
+          B.CreateStore(getVar(Op.Inputs[I], B), Slot);
+        else
+          Result = Slot;
+      }
+    }
+    for (auto *V : Args)
+      Types.push_back(V->getType());
+    auto *Ty = llvm::FunctionType::get(
+        Asm.Read ? static_cast<llvm::Type *>(B.getInt32Ty()) : B.getVoidTy(),
+        Types, false);
+    auto *Call = B.CreateCall(
+        llvm::InlineAsm::get(Ty, Asm.llvmText(), Asm.Constraints, true), Args);
+    Call->setMetadata(
+        "neverd.mips.msa",
+        llvm::MDNode::get(
+            *Ctx, {llvm::ConstantAsMetadata::get(B.getInt32(unsigned(Id))),
+                   llvm::ConstantAsMetadata::get(B.getInt32(Selector))}));
+    if (Result)
+      return B.CreateLoad(B.getInt128Ty(), Result);
+    return Call;
+  }
   if (mips::isStatefulScalar(Id))
     throw std::runtime_error(mips::kStatefulSourceUnsupported);
   if (mips::isBarrier(Id)) {
@@ -68,6 +114,21 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
       HB.CreateRetVoid();
     }
     return B.CreateCall(Helper);
+  }
+  if (mips::isDSPPartialControl(Id)) {
+    mips::applyDSPSourceAttributes(*B.GetInsertBlock()->getParent());
+    const auto &A = mips::dspPartialOperation(Id);
+    llvm::SmallVector<llvm::Type *, 2> Types(A.Inputs, B.getInt32Ty());
+    llvm::SmallVector<llvm::Value *, 2> Args;
+    for (unsigned I = 0; I != A.Inputs; ++I) {
+      auto *V = getVar(Op.Inputs[I + 1], B);
+      Args.push_back(V->getType()->isPointerTy()
+                         ? B.CreatePtrToInt(V, B.getInt32Ty())
+                         : B.CreateZExtOrTrunc(V, B.getInt32Ty()));
+    }
+    auto *Ty = llvm::FunctionType::get(B.getVoidTy(), Types, false);
+    return B.CreateCall(llvm::InlineAsm::get(Ty, A.LLVM, A.Constraints, true),
+                        Args);
   }
   if (Id == Intrinsic::MIPSReadDSPControl ||
       Id == Intrinsic::MIPSWriteDSPControl) {
@@ -107,6 +168,11 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
     B.CreateUnreachable();
     B.SetInsertPoint(Continue);
   };
+  if (Id == Intrinsic::MIPSExtractResult) {
+    auto *Failed = getVar(Op.Inputs[1], B);
+    Require(B.CreateIsNull(Failed), "mips.extract.position");
+    return getVar(Op.Inputs[2], B);
+  }
   if (Id == Intrinsic::MIPSRequireWord) {
     auto *First =
         Coerce(getVar(Op.Inputs[1], B), sizeToType(Op.Inputs[1].Size));

@@ -77,9 +77,47 @@ constexpr std::optional<MergeTransfer> mergeMemory(Intrinsic Id) {
   return Load ? Load : mergeStore(Id);
 }
 
+constexpr bool isDSPHalfCompare(Intrinsic Id) {
+  return Id >= Intrinsic::MIPSCmpEqPH && Id <= Intrinsic::MIPSCmpLePH;
+}
+constexpr bool isDSPPartialControl(Intrinsic Id) {
+  return isDSPHalfCompare(Id) || Id == Intrinsic::MIPSMthlipPosition;
+}
 constexpr bool isDSPControlIntrinsic(Intrinsic Id) {
   return Id == Intrinsic::MIPSReadDSPControl ||
-         Id == Intrinsic::MIPSWriteDSPControl;
+         Id == Intrinsic::MIPSWriteDSPControl || isDSPPartialControl(Id);
+}
+
+constexpr bool isMSAControl(Intrinsic Id) {
+  return Id == Intrinsic::MIPSReadMSAControl ||
+         Id == Intrinsic::MIPSWriteMSAControl;
+}
+
+constexpr bool isMSAFloat(Intrinsic Id) {
+  return Id >= Intrinsic::MIPSMSAFADD_W && Id <= Intrinsic::MIPSMSAFTRUNC_U_D;
+}
+
+constexpr bool isMSADivision(Intrinsic Id) {
+  return Id >= Intrinsic::MIPSMSADIV_S_B && Id <= Intrinsic::MIPSMSAMOD_U_D;
+}
+constexpr bool isMSANativeVector(Intrinsic Id) {
+  return isMSAFloat(Id) || isMSADivision(Id);
+}
+struct MSANativeOperation {
+  uint32_t Encoding;
+  unsigned Arity;
+  const char *Mnemonic;
+};
+inline constexpr MSANativeOperation MSANativeOperations[] = {
+#define NEVERD_MSA_FLOAT(Name, Value, Encoding, Arity, Mnemonic)               \
+  {Encoding, Arity, Mnemonic},
+#include "neverd/ir/intrinsics/MIPS/MIPSMSAFloat.def"
+#define NEVERD_MSA_DIVISION(Name, Value, Encoding, Mnemonic)                   \
+  {Encoding, 2, Mnemonic},
+#include "neverd/ir/intrinsics/MIPS/MIPSMSADivision.def"
+};
+constexpr const MSANativeOperation &msaNativeOperation(Intrinsic Id) {
+  return MSANativeOperations[unsigned(Id) - unsigned(Intrinsic::MIPSMSAFADD_W)];
 }
 
 constexpr bool isWordDivision(Intrinsic Id) {
@@ -90,7 +128,8 @@ constexpr bool isWordDivision(Intrinsic Id) {
 /// CSE-able.
 constexpr bool isPureScalarValue(Intrinsic Id) {
   return Id == Intrinsic::MIPSUnpredictable || Id == Intrinsic::MIPSLwrUpper ||
-         isWordDivision(Id) || Id == Intrinsic::MIPSAccumulatorAfterWrite;
+         isWordDivision(Id) || Id == Intrinsic::MIPSAccumulatorAfterWrite ||
+         Id == Intrinsic::MIPSExtractResult;
 }
 
 /// Ordering effects remain observable, but neither operation writes data.
@@ -126,9 +165,9 @@ constexpr bool isStatefulScalar(Intrinsic Id) {
   return isReservationIntrinsic(Id) || isSystemIntrinsic(Id) ||
          Id == Intrinsic::MIPSPause || isCacheIntrinsic(Id);
 }
-constexpr bool supportedCP0Word(uint64_t Index, bool Write) {
+constexpr bool localCP0Word(uint64_t Index, bool Write) {
   switch (Index) {
-#define NEVERD_MIPS_CP0(Index, Selector, Name, Writable, MT)                   \
+#define NEVERD_MIPS_CP0(Index, Selector, Name, Writable)                       \
   case ((Selector << 5) | Index):                                              \
     return !Write || Writable;
 #include "neverd/ir/intrinsics/MIPS/MIPSCP0.def"
@@ -137,24 +176,23 @@ constexpr bool supportedCP0Word(uint64_t Index, bool Write) {
   }
 }
 constexpr bool cp0RequiresMT(uint64_t Key) {
-  switch (Key) {
-#define NEVERD_MIPS_CP0(Index, Selector, Name, Writable, MT)                   \
-  case ((Selector << 5) | Index):                                              \
-    return MT;
-#include "neverd/ir/intrinsics/MIPS/MIPSCP0.def"
-  default:
-    return false;
-  }
+  const unsigned Reg = Key & 31, Sel = Key >> 5;
+  // MVP, VPE, TC and TCOpt views in MT Volume IV-f, Table 6.1.
+  return (Reg == 0 && Sel >= 1 && Sel <= 3) ||
+         ((Reg == 1 || Reg == 2) && Sel >= 1 && Sel <= 7) ||
+         (Reg == 3 && Sel == 7);
 }
 constexpr bool supportedHardwareRegister(uint64_t Index) {
-  return Index < 4 || Index == 29;
+  return Index < 4 || (Index >= 29 && Index <= 31);
 }
 
 constexpr bool isScalarIntrinsic(Intrinsic Id) {
   return mergeMemory(Id).has_value() || Id == Intrinsic::MIPSUnpredictable ||
          Id == Intrinsic::MIPSRequireWord || Id == Intrinsic::MIPSLwrUpper ||
-         isDSPControlIntrinsic(Id) || isWordDivision(Id) || isBarrier(Id) ||
-         isStatefulScalar(Id) || Id == Intrinsic::MIPSAccumulatorAfterWrite;
+         isDSPControlIntrinsic(Id) || isMSAControl(Id) ||
+         isMSANativeVector(Id) || isWordDivision(Id) || isBarrier(Id) ||
+         isStatefulScalar(Id) || Id == Intrinsic::MIPSAccumulatorAfterWrite ||
+         Id == Intrinsic::MIPSExtractResult;
 }
 
 struct ScalarShape {
@@ -174,6 +212,20 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
   if (!S.IdIsValid || !S.Ordinary ||
       (S.Target != Arch::Unknown && !isMIPS(S.Target)))
     return false;
+  if (isMSANativeVector(Id)) {
+    const unsigned N = msaNativeOperation(Id).Arity;
+    return !isMIPS64(S.Target) && S.OutputWritable && S.OutputBytes == 16 &&
+           S.Inputs == N + 1 && S.FirstBytes == 16 &&
+           (N < 2 || S.SecondBytes == 16) && (N < 3 || S.ThirdBytes == 16);
+  }
+  if (isMSAControl(Id)) {
+    if (isMIPS64(S.Target) || !S.FirstConstant || *S.FirstConstant >= 32 ||
+        S.FirstBytes != 1)
+      return false;
+    return Id == Intrinsic::MIPSReadMSAControl
+               ? S.Inputs == 2 && S.OutputWritable && S.OutputBytes == 4
+               : S.Inputs == 3 && S.SecondBytes == 4 && !S.OutputBytes;
+  }
   if (isStatefulScalar(Id)) {
     if (isMIPS64(S.Target))
       return false;
@@ -185,7 +237,7 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
     if (Id == Intrinsic::MIPSWriteCP0Word)
       return S.Inputs == 3 && !S.OutputBytes && S.FirstBytes == 1 &&
              S.SecondBytes == 4 && S.FirstConstant &&
-             supportedCP0Word(*S.FirstConstant, true);
+             *S.FirstConstant <= UINT8_MAX;
     if (!S.OutputWritable || S.OutputBytes != 4)
       return false;
     if (Id == Intrinsic::MIPSLoadLinkedWord)
@@ -194,7 +246,7 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
       return S.Inputs == 3 && S.FirstBytes == 4 && S.SecondBytes == 4;
     if (Id == Intrinsic::MIPSReadCP0Word)
       return S.Inputs == 2 && S.FirstBytes == 1 && S.FirstConstant &&
-             supportedCP0Word(*S.FirstConstant, false);
+             *S.FirstConstant <= UINT8_MAX;
     if (Id == Intrinsic::MIPSReadHardwareRegister)
       return S.Inputs == 2 && S.FirstBytes == 1 && S.FirstConstant &&
              supportedHardwareRegister(*S.FirstConstant);
@@ -208,6 +260,11 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
   if (Id == Intrinsic::MIPSRequireWord)
     return S.Inputs == 2 && !S.OutputBytes && S.FirstBytes == 8 &&
            (S.Target == Arch::Unknown || isMIPS64(S.Target));
+  if (isDSPPartialControl(Id))
+    return !isMIPS64(S.Target) && !S.OutputBytes &&
+           (isDSPHalfCompare(Id)
+                ? S.Inputs == 3 && S.FirstBytes == 4 && S.SecondBytes == 4
+                : S.Inputs == 1);
   if (Id == Intrinsic::MIPSWriteDSPControl)
     return S.Inputs == 2 && !S.OutputBytes && S.FirstBytes == 4 &&
            !isMIPS64(S.Target);
@@ -221,6 +278,9 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
             S.FirstBytes == (isMIPS64(S.Target) ? 8 : 4));
   if (!S.OutputWritable || (S.OutputBytes != 4 && S.OutputBytes != 8))
     return false;
+  if (Id == Intrinsic::MIPSExtractResult)
+    return !isMIPS64(S.Target) && S.Inputs == 3 && S.OutputBytes == 4 &&
+           S.FirstBytes == 1 && S.SecondBytes == 4;
   if (Id == Intrinsic::MIPSAccumulatorAfterWrite)
     return S.Inputs == 3 && S.FirstBytes == 1 &&
            S.SecondBytes == S.OutputBytes &&

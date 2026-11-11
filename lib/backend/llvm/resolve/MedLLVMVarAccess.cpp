@@ -22,6 +22,7 @@
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
+#include "neverd/backend/llvm/AArch64/LLVMEntryABI.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/X86/X86RepAddresses.h"
@@ -1367,6 +1368,12 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
       auto PIt = ParamArgs.find(V.display());
       if (PIt != ParamArgs.end())
         ArgVal = PIt->second;
+    }
+    if (!ArgVal && V.Kind == MedVar::Reg && Img && Img->isArm64e() && V.Size &&
+        V.Size <= getTargetRegInfo(TargetArch).PointerSize) {
+      ArgVal = readDarwinAArch64EntryRegister(*CurFunc, V.RegOff);
+      if (ArgVal)
+        ParamRegoffMap.emplace(V.RegOff, ArgVal);
     }
     if (ArgVal) {
       unsigned WantBits = V.Size > 0 ? V.Size * 8 : 64;

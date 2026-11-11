@@ -1,0 +1,439 @@
+{
+  "date": "2026-11-11",
+  "source_revision": "8c2fa6a7e61ece37d4f85be825adfb49551f6efb",
+  "llvm_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+  "configuration": "Release",
+  "runner_cold_build": false,
+  "test_host_sha256": "13e61c1e0a38e0b30aac8259f94325ec8131e528069858c4cd9ab17fdaa21efe",
+  "test_archive_sha256": "29a424fa7ccd5968c1c4246e15a45edba69645b9731875bd8f09e7f8ba71c9e4",
+  "source_build_receipt_sha256": "64712b17204459bb889a8bee6c976be00a391088ec4bed56411a44c037103383",
+  "native_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42989932233",
+  "workflow_revision": "287b1d85a902445181ede4d86a7e554bf44c54d9",
+  "entries_per_published_image": 26,
+  "source_contract": "Reconstructed fixed Darwin C entries with independent original trapping bodies and typed callers.",
+  "arbitrary_lifted_image_publication_qualified": false,
+  "native_apple_cpta_qualified": false,
+  "offline_publication": {
+    "original-profile": {
+      "images": 8,
+      "report_sha256": "cf1701f7251a58e960354ac138addab7e160878b30c42d715bbf14a369cd09c9"
+    },
+    "zero-base": {
+      "images": 8,
+      "report_sha256": "956110db171408b51dba3a74802fc386835dc321b90f594a2948c35bbdf0fbd0"
+    }
+  },
+  "local_suites": {
+    "contract": {
+      "passed": 296,
+      "xml_sha256": "1270669095adae1475275217c790f88f6d94406c75d25ea8d245d2b2ef55e03b"
+    },
+    "layout": {
+      "passed": 14,
+      "xml_sha256": "1a6d49bfb3895ff4ece4681afa577d51cfe720d41734149f28e28812f7a5132b"
+    },
+    "leaves": {
+      "passed": 13,
+      "xml_sha256": "0e83f1704494685fe9685272e51a2b6cdf2a68c80aef57ae78d3f87a4a3c7618"
+    },
+    "language": {
+      "passed": 314,
+      "xml_sha256": "2ab3a2b9901f2eab479c9bab3c2e5389d120642b17ac7739bee18cfbd24a58d8"
+    }
+  },
+  "local_verifier_tests": 35,
+  "r6_cli": {
+    "binary_sha256": "45d75eabd3f6b9de93675532ef0387c096af885e7ede2e983936934f7e5e3416",
+    "sdk_sha256": "b9166b1b4b596a9d2bdbc4559c091a34ea471268181081fec04fb2d484059857",
+    "verified_inputs": [
+      "replace",
+      "clear"
+    ]
+  },
+  "insufficient_space_control": {
+    "typed_caller_optimization": "-O0",
+    "original_entry_optimization": "-O0",
+    "preferred_base": 0,
+    "compact_size": 472,
+    "frame_size": 1192,
+    "text_tail_bytes": 752,
+    "failed_before_publication_receipt": true,
+    "command_log_sha256": "fbb8d8e3306b188992b1d7e37f4652f2bc8175c646fa0a364e6f058355d91cd7"
+  },
+  "runners": {
+    "macos-26": {
+      "cpu": "Apple M1 (Virtual)",
+      "platform": "macOS-26.7.2-arm64-arm-64bit-Mach-O",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "sdk": "MacOSX26.5.sdk",
+      "compiler_sha256": "d2e4bf622758eee1bf7267c060497fb2c41e098d37b0fca8be73898dc7e14eda",
+      "artifact_id": 13841477488,
+      "artifact_digest": "sha256:c0cb5deae7f1482369845bbe7c6b6d85fe17fcc59d2c373ae73f4029bd45e713",
+      "delivery_sha256": "dbe27c81751eb43374ae276b5a7e67c25fb88dda30175010a305d4fdc2598347",
+      "prerequisite_controls": 6,
+      "compiler_only_exception_profiles": {
+        "compact.dylib": 0,
+        "no-index.dylib": -6,
+        "indexed-dwarf.dylib": 0
+      },
+      "direct_codegen_images_executed": 8,
+      "previous_publication_profile_images_executed": 8,
+      "zero_base_images_executed": 8,
+      "zero_base_report_sha256": "4ddb99c9ca59a9c95bec2c4ca82874769a1df0905a3d40c9b41b7de2584b7c44",
+      "zero_base_O0_caller_indexed_DWARF": {
+        "before": {
+          "__unwind_info": {
+            "address": 12848,
+            "size": 168,
+            "file_offset": 12848
+          },
+          "__eh_frame": {
+            "address": 13016,
+            "size": 136,
+            "file_offset": 13016
+          }
+        },
+        "after": {
+          "__unwind_info": {
+            "address": 12848,
+            "size": 1096,
+            "file_offset": 12848
+          },
+          "__eh_frame": {
+            "address": 13944,
+            "size": 2240,
+            "file_offset": 13944
+          }
+        }
+      },
+      "zero_base_cases": [
+        {
+          "optimization": "-O0",
+          "original_entry_optimization": "-O2",
+          "key": 0,
+          "dwarf": false,
+          "baseline_returncode": -5,
+          "original_image_base": 0,
+          "image_base": 0,
+          "sha256": "1c09d94b6e95bbff08001260a3bb7d66f8605ff00a60c3817acbafd67dc675c3",
+          "occupied_original_rejected": true
+        },
+        {
+          "optimization": "-O0",
+          "original_entry_optimization": "-O2",
+          "key": 1,
+          "dwarf": false,
+          "baseline_returncode": -5,
+          "original_image_base": 0,
+          "image_base": 0,
+          "sha256": "ab303dfd71925f957d880aed4e942bd9c350b015d56722bf58a0b4574a743b62",
+          "occupied_original_rejected": true
+        },
+        {
+          "optimization": "-O0",
+          "original_entry_optimization": "-O2",
+          "key": 0,
+          "dwarf": true,
+          "baseline_returncode": -5,
+          "original_image_base": 0,
+          "image_base": 0,
+          "sha256": "bbb2ba1fe5ff1c4f3c63154c59451ca7423d3dbbb45a1fefa28347a5dd08f8e0",
+          "occupied_original_rejected": true
+        },
+        {
+          "optimization": "-O0",
+          "original_entry_optimization": "-O2",
+          "key": 1,
+          "dwarf": true,
+          "baseline_returncode": -5,
+          "original_image_base": 0,
+          "image_base": 0,
+          "sha256": "c18cd500b7a8f180a9290f5e5b62fc22e1778900bd283d07049aeae1aedb79e9",
+          "occupied_original_rejected": true
+        },
+        {
+          "optimization": "-O2",
+          "original_entry_optimization": "-O2",
+          "key": 0,
+          "dwarf": false,
+          "baseline_returncode": -5,
+          "original_image_base": 0,
+          "image_base": 0,
+          "sha256": "320146d83bf901ac28d6f608154228b8248fe46bfa50a14e1e1970dce922fc36",
+          "occupied_original_rejected": true
+        },
+        {
+          "optimization": "-O2",
+          "original_entry_optimization": "-O2",
+          "key": 1,
+          "dwarf": false,
+          "baseline_returncode": -5,
+          "original_image_base": 0,
+          "image_base": 0,
+          "sha256": "d7a693ce4afa0c8dbee20178b35e41cc6f147aff339aa07f7be6fd2b5c7f7a16",
+          "occupied_original_rejected": true
+        },
+        {
+          "optimization": "-O2",
+          "original_entry_optimization": "-O2",
+          "key": 0,
+          "dwarf": true,
+          "baseline_returncode": -5,
+          "original_image_base": 0,
+          "image_base": 0,
+          "sha256": "257dbd5eee1e5cc45fad15621027b5df5c173868beaf84c0fa8ce52e05e82a21",
+          "occupied_original_rejected": true
+        },
+        {
+          "optimization": "-O2",
+          "original_entry_optimization": "-O2",
+          "key": 1,
+          "dwarf": true,
+          "baseline_returncode": -5,
+          "original_image_base": 0,
+          "image_base": 0,
+          "sha256": "a36f8d5d87a65742db8cb49ced45ad579fe029cb26624a6c2ceec057e7775f89",
+          "occupied_original_rejected": true
+        }
+      ]
+    },
+    "xcode-27": {
+      "cpu": "Apple M1 (Virtual)",
+      "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+      "sdk": "MacOSX27.0.sdk",
+      "compiler_sha256": "06e3d64f541c65a93acd176690bdaae13a3d7db092c8b98b392d4c6d0d03f176",
+      "artifact_id": 13840393937,
+      "artifact_digest": "sha256:564c8081b867a9252f8a85c2ae7e4230819a6f54310e22ebb21f94cfe3d9065c",
+      "delivery_sha256": "af6c1e6234aef334dd9474f495f3997621b546cff34c5f7214b5837a79ab109c",
+      "prerequisite_controls": 6,
+      "compiler_only_exception_profiles": {
+        "compact.dylib": 0,
+        "no-index.dylib": -6,
+        "indexed-dwarf.dylib": 0
+      },
+      "direct_codegen_images_executed": 8,
+      "previous_publication_profile_images_executed": 8,
+      "zero_base_images_executed": 8,
+      "zero_base_report_sha256": "a705e3ac4a6188d7b08adbee94690f34872966b93fd3c55188faf7cbb0bf9a85",
+      "zero_base_O0_caller_indexed_DWARF": {
+        "before": {
+          "__unwind_info": {
+            "address": 12848,
+            "size": 168,
+            "file_offset": 12848
+          },
+          "__eh_frame": {
+            "address": 13016,
+            "size": 136,
+            "file_offset": 13016
+          }
+        },
+        "after": {
+          "__unwind_info": {
+            "address": 12848,
+            "size": 1096,
+            "file_offset": 12848
+          },
+          "__eh_frame": {
+            "address": 13944,
+            "size": 2240,
+            "file_offset": 13944
+          }
+        }
+      },
+      "zero_base_cases": [
+        {
+          "optimization": "-O0",
+          "original_entry_optimization": "-O2",
+          "key": 0,
+          "dwarf": false,
+          "baseline_returncode": -5,
+          "original_image_base": 0,
+          "image_base": 0,
+          "sha256": "0f833744f3acc3e1ef5e5133b4d715d88d8d5840b208976de7ac9234852658fe",
+          "occupied_original_rejected": true
+        },
+        {
+          "optimization": "-O0",
+          "original_entry_optimization": "-O2",
+          "key": 1,
+          "dwarf": false,
+          "baseline_returncode": -5,
+          "original_image_base": 0,
+          "image_base": 0,
+          "sha256": "51c074dc1d30fc93eb881a9a07aaff450acba696b4a5796d573ff5b2d453bcd8",
+          "occupied_original_rejected": true
+        },
+        {
+          "optimization": "-O0",
+          "original_entry_optimization": "-O2",
+          "key": 0,
+          "dwarf": true,
+          "baseline_returncode": -5,
+          "original_image_base": 0,
+          "image_base": 0,
+          "sha256": "866f0fae28dcc753b6f3a17150cf41d61884263032206371790e92f2018dd660",
+          "occupied_original_rejected": true
+        },
+        {
+          "optimization": "-O0",
+          "original_entry_optimization": "-O2",
+          "key": 1,
+          "dwarf": true,
+          "baseline_returncode": -5,
+          "original_image_base": 0,
+          "image_base": 0,
+          "sha256": "9dd0bedcb88303c5a71f644f3f7572d40aa234a3c0c61b14aad6f8a810a4cff9",
+          "occupied_original_rejected": true
+        },
+        {
+          "optimization": "-O2",
+          "original_entry_optimization": "-O2",
+          "key": 0,
+          "dwarf": false,
+          "baseline_returncode": -5,
+          "original_image_base": 0,
+          "image_base": 0,
+          "sha256": "3b79b38625be1b4d72f870c95901bb2ecd8cd36fc5851709828e9b014ae201c5",
+          "occupied_original_rejected": true
+        },
+        {
+          "optimization": "-O2",
+          "original_entry_optimization": "-O2",
+          "key": 1,
+          "dwarf": false,
+          "baseline_returncode": -5,
+          "original_image_base": 0,
+          "image_base": 0,
+          "sha256": "5260aa390556da6c824c2346380375fb46d98b4fb41a7ff7506303207542f45b",
+          "occupied_original_rejected": true
+        },
+        {
+          "optimization": "-O2",
+          "original_entry_optimization": "-O2",
+          "key": 0,
+          "dwarf": true,
+          "baseline_returncode": -5,
+          "original_image_base": 0,
+          "image_base": 0,
+          "sha256": "70dcdd2b4bce87ceb1e7600ffc23ee8b7054b79ad77ab4d783597cdb7f7a197e",
+          "occupied_original_rejected": true
+        },
+        {
+          "optimization": "-O2",
+          "original_entry_optimization": "-O2",
+          "key": 1,
+          "dwarf": true,
+          "baseline_returncode": -5,
+          "original_image_base": 0,
+          "image_base": 0,
+          "sha256": "e18a486bde4471528f8b5eb044db13b8f567f8ec5b318df92db198c5e7f4e5e7",
+          "occupied_original_rejected": true
+        }
+      ]
+    }
+  },
+  "same_linker_profile_controls": {
+    "packed": {
+      "original_entry_optimization": "-O2",
+      "caller_optimization": "-O0",
+      "original_sha256": "bbcd9fd20dd63921010236081e97aa0b33b567b940a22d4496a920babd1af613",
+      "original_bytes_unchanged": true,
+      "published": true,
+      "receipt_created": true,
+      "remaining_text_bytes": 3136,
+      "frame": {
+        "address": 13112,
+        "size": 136,
+        "offset": 13112
+      },
+      "compact": {
+        "address": 12944,
+        "size": 168,
+        "offset": 12944
+      },
+      "diagnostic_sha256": "8438ef4f7349e02b6ca31cc6f93639742238ff88b9c1699c4acbceb4fe0481a6",
+      "installed_sha256": "f641328dedc7160d957956c3d81acf72d033b14d18600997fe52d5889ef80209",
+      "installed_frame": {
+        "address": 14040,
+        "size": 2240,
+        "offset": 14040
+      },
+      "installed_compact": {
+        "address": 12944,
+        "size": 1096,
+        "offset": 12944
+      },
+      "entry_count": 26
+    },
+    "dense": {
+      "original_entry_optimization": "-O0",
+      "caller_optimization": "-O0",
+      "original_sha256": "7152ac257f7123772f92ab6aea3e75dde1c5c3f68ba224ff9b76c180ed3538de",
+      "original_bytes_unchanged": true,
+      "published": false,
+      "receipt_created": false,
+      "remaining_text_bytes": 864,
+      "frame": {
+        "address": 14328,
+        "size": 1192,
+        "offset": 14328
+      },
+      "compact": {
+        "address": 13856,
+        "size": 472,
+        "offset": 13856
+      },
+      "diagnostic_sha256": "b3856a253c829319ce540706e057e84c3393dacc463070aff169941ea3322e16"
+    },
+    "frame-payload-owner": {
+      "original_entry_optimization": "-O2",
+      "caller_optimization": "-O0",
+      "original_sha256": "4ec0d91ecd04cf23e6459b34bc198d75faa481582ca1c4361536fd1255caa375",
+      "original_bytes_unchanged": true,
+      "published": false,
+      "receipt_created": false,
+      "remaining_text_bytes": 3136,
+      "frame": {
+        "address": 13112,
+        "size": 136,
+        "offset": 13112
+      },
+      "compact": {
+        "address": 12944,
+        "size": 168,
+        "offset": 12944
+      },
+      "diagnostic_sha256": "992677c8e83fab69b93b28a9a1de80f9d25a684edacfd62dfe06b257fde9f94d"
+    },
+    "zero-payload-owner": {
+      "original_entry_optimization": "-O2",
+      "caller_optimization": "-O0",
+      "original_sha256": "9b065088539291380c81b88825894c5ad13ef5dd340234864fa0278ff447f882",
+      "original_bytes_unchanged": true,
+      "published": false,
+      "receipt_created": false,
+      "remaining_text_bytes": 3136,
+      "frame": {
+        "address": 13112,
+        "size": 136,
+        "offset": 13112
+      },
+      "compact": {
+        "address": 12944,
+        "size": 168,
+        "offset": 12944
+      },
+      "diagnostic_sha256": "9082bcf6eef104a1a31ec1f41e4ae12edd5723467631c5194411eec78baf2c7c"
+    }
+  },
+  "analysis_regression": {
+    "cases": 769,
+    "passed": 723,
+    "skipped": 46,
+    "retried": [],
+    "real_dyld_instructions": 138671,
+    "real_text_sha256": "11b82a7d642384b9a129eb031b84717813520ad7125103ac6300ce9d8d1c3fbb"
+  }
+}

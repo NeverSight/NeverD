@@ -24,6 +24,8 @@ public:
   bool ready() const { return ready_; }
   /// Whether a replica runs, or is on its way.
   bool replicaStarted() const { return ready_ || startingReplica_; }
+  /// The reads asked of the owner from what it keeps (askOwner).
+  quint64 ownerReads() const { return ownerReads_; }
   void setSnapshotBlocked(bool blocked);
   /// The user is making an edit a replica will render: it starts now, if it has
   /// not, and reads \p address, so that the read after the edit finds what this
@@ -87,12 +89,16 @@ private:
   /// What the owner says the store holds for the current project state.
   enum class KeptState { Unknown, Asked, Whole, Part };
   KeptState keptState_ = KeptState::Unknown;
+  /// What it said last for this project, which stands while it is asked again
+  /// after a change: renders a change of names or comments leaves are kept
+  /// under the names it leaves.
+  KeptState keptBefore_ = KeptState::Unknown;
   bool ownerReadsKept_ = false;
   /// The names (etags) of the source pages the owner gave.  One a view keeps
   /// names a document the owner kept, which a ready replica would read whole,
   /// so the owner answers for it while it keeps it.
   QSet<QString> ownerPages_;
-  quint64 serial_ = 0, next_ = 0;
+  quint64 serial_ = 0, next_ = 0, ownerReads_ = 0;
   bool ready_ = false;
   bool snapshotBlocked_ = false, startingReplica_ = false;
   bool updatesNames_ = false, refreshingNames_ = false;
@@ -132,6 +138,12 @@ public:
       if (lane.service->ready())
         return true;
     return false;
+  }
+  quint64 ownerReads() const {
+    quint64 reads = 0;
+    for (const auto &lane : lanes_)
+      reads += lane.service->ownerReads();
+    return reads;
   }
   void setRendersAhead(bool renders) {
     lanes_.front().service->setRendersAhead(renders);

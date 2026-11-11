@@ -273,18 +273,22 @@ TEST(SymMBAWidePairs, CorrectionsHaveIndependentFullWidthProofs) {
       size_t Storage = 1 << 24;
       auto Result = detail::foldResidueDecisions(Ctx, F.Input, Budget, Storage);
       ASSERT_NE(Result, F.Input);
-      // This independent 128-factor proof has a wall-clock timeout. Leave
-      // room for shared CI runners while still requiring an unsat result;
-      // production simplification and its resource limits are unchanged.
-      constexpr unsigned ProofTimeoutMs = 30000;
+      // The product of two masked words is the expensive correction. Fixing
+      // three low bits of X gives eight smaller, disjoint full-width proofs.
+      // Together they cover every X, with Y and Z unrestricted in each case.
+      const unsigned Cases = Kind == 3 ? 8 : 1;
+      auto Prefix = Ctx.mkExtract(Ctx.mkVar("x", Width), 0, 3);
       solver::Z3SolverOptions Options;
-      Options.TimeoutMs = ProofTimeoutMs;
-      solver::Z3Solver Verifier(Ctx, Options);
-      // Each verifier checks one complete formula, allowing one-shot
-      // preprocessing instead of treating the difference as an assumption.
-      ASSERT_TRUE(Verifier.assertDistinct(F.Input, Result));
-      EXPECT_EQ(Verifier.check(), solver::SatResult::Unsat)
-          << Verifier.reasonUnknown();
+      Options.TimeoutMs = 30000;
+      for (unsigned I = 0; I < Cases; ++I) {
+        SCOPED_TRACE(I);
+        solver::Z3Solver Verifier(Ctx, Options);
+        if (Cases > 1)
+          ASSERT_TRUE(Verifier.assertEqual(Prefix, Ctx.mkConst(3, I)));
+        ASSERT_TRUE(Verifier.assertDistinct(F.Input, Result));
+        EXPECT_EQ(Verifier.check(), solver::SatResult::Unsat)
+            << Verifier.reasonUnknown();
+      }
     }
 }
 

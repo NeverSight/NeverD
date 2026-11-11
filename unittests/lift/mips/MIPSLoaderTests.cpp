@@ -101,11 +101,12 @@ TEST_P(MIPSLoader, DSPCapabilityRequiresClassic32BitProfileEvidence) {
                (File.Is64 ? 0x80000000u : 0x70001000u) | 0x02000000, 4);
     ELFLoader Loader;
     auto Image = Loader.loadBuffer(File.buffer());
-    const bool Admitted = ASE == 1 && !File.Is64;
+    const bool Admitted = (ASE == 1 || ASE == 2 || ASE == 3) && !File.Is64;
     ASSERT_EQ(bool(Image), Admitted);
     if (Admitted) {
       ASSERT_TRUE(Image->MIPS);
       EXPECT_TRUE(Image->MIPS->HasDSP);
+      EXPECT_EQ(Image->MIPS->HasDSPR2, bool(ASE & 2));
     } else {
       llvm::consumeError(Image.takeError());
     }

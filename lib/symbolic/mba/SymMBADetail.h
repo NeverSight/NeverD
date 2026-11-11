@@ -673,6 +673,10 @@ inline size_t residueUnitPeriod(unsigned Width) {
   return size_t(1) << (Width > 2 ? Width - 2 : Width - 1);
 }
 
+/// Try the proved modular window before expanding a mixed-parity product.
+SymRef foldMixedProductProgression(SymContext &Ctx, SymRef Root,
+                                   WorkBudget &Budget, size_t &Storage);
+
 /// Complete bounded bit decisions over a product's observed low word.
 /// Complete, when supplied, records a finished search over free variables;
 /// it does not certify global minimality or an equivalence on its own.
@@ -681,6 +685,12 @@ SymRef foldResidueDecisions(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
                             size_t MaxWork = std::numeric_limits<size_t>::max(),
                             bool *StorageLimited = nullptr,
                             bool *Complete = nullptr);
+
+/// Reuse an accepted modular product reconstruction within this deep request.
+bool isReconstructedProgression(const SymContext &Ctx, SymRef Root,
+                                WorkBudget &Budget);
+void recordReconstructedProgression(const SymContext &Ctx, SymRef Root,
+                                    WorkBudget &Budget, size_t &Storage);
 
 /// Avoid rediscovering an emitted exact low-word reading. Original opaque
 /// inputs still participate in the deep walk. The canonical builder propagates

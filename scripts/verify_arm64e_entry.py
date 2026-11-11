@@ -36,7 +36,9 @@ def check_probe(control, provenance):
         raise ValueError(POLICY["errors"]["probe"])
 
 
-def publication_layout(optimization, dwarf):
+def publication_layout(optimization, dwarf, zero_base=False):
+    if zero_base:
+        return POLICY["zero_base_publication_layout"]
     for rule in POLICY["publication_layout_overrides"]:
         if rule["optimization"] == optimization and rule["dwarf"] == dwarf:
             return rule["layout"]
@@ -170,7 +172,7 @@ def inspect_installed_text(output, library, receipt, compiler, compile_args, com
     return assembly.stdout, hashlib.sha256(contents).hexdigest()
 
 
-def run(output, binary, compiler, probe_report=None, *, compile_only=False, producer=None, publish=False):
+def run(output, binary, compiler, probe_report=None, *, compile_only=False, producer=None, publish=False, zero_base=False):
     producer = producer or POLICY["producers"][0]
     backend = producer == POLICY["backend_producer"]
     provenance = native.provenance()
@@ -183,10 +185,11 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
               "whole_image_publication_qualified": False,
               "compile_only": compile_only, "producer": producer, "publish": publish,
               "optimization_scope": POLICY["optimization_scopes"].get(producer),
-              "publication_layout": POLICY["publication_layout"] if publish else None,
+              "publication_layout": POLICY["publication_layout"] if publish and not zero_base else
+                  POLICY["zero_base_publication_layout"]["name"] if publish else None,
               "reconstructed_entry_publication_qualified": False, "cases": []}
     try:
-        if producer not in POLICY["producers"] or (publish and not backend):
+        if producer not in POLICY["producers"] or (publish and not backend) or (zero_base and not publish):
             raise ValueError(POLICY["errors"]["producer"])
         if compile_only == (probe_report is not None):
             raise ValueError(POLICY["errors"]["arguments"])
@@ -242,17 +245,18 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                                            *POLICY["object_args"], output / source,
                                            POLICY["output_option"], obj])
                     original_obj = None
+                    original_optimization = POLICY["zero_base_original_optimization"] if zero_base else optimization
                     if publish:
                         original_obj = output / POLICY["original_object_name"].format(dwarf=dwarf)
                         products.append(original_obj)
                         original_ir = output / POLICY["original_dwarf_ir" if dwarf else "original_ir"]
-                        command(original_obj.name, [compiler, *compile_args, optimization,
+                        command(original_obj.name, [compiler, *compile_args, original_optimization,
                                                     *POLICY["object_args"], original_ir,
                                                     POLICY["output_option"], original_obj])
                     object_identity = check_classic(obj)
                     for key in POLICY["keys"]:
                         fields = dict(optimization=optimization, key=key, dwarf=dwarf)
-                        layout = publication_layout(optimization, dwarf)
+                        layout = publication_layout(optimization, dwarf, zero_base)
                         label = POLICY["case_name"].format(**fields)
                         library = output / POLICY["library_name"].format(**fields)
                         products.append(library)
@@ -331,6 +335,8 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                         unwind = command(label + POLICY["unwind_suffix"],
                                          [*POLICY["unwind_command"], library])
                         base = image_base(sections.stdout)
+                        if zero_base and (original_base != 0 or base != 0):
+                            raise ValueError(POLICY["errors"]["zero_base"])
                         if publish and layout.get("require_prefix") and base >= original_base:
                             raise ValueError(POLICY["errors"]["prefix"])
                         check_unwind(unwind.stdout, dwarf, installed, base)
@@ -338,6 +344,7 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                                "object": object_identity, "executed": False,
                                "publication_layout": layout if publish else None,
                                "publication": receipt, "baseline_returncode": baseline,
+                               "original_entry_optimization": original_optimization if publish else None,
                                "image_base": base, "original_image_base": original_base,
                                "occupied_original_rejected": publish, "installed_text_sha256": text_hash}
                         report["cases"].append(row)
@@ -366,6 +373,7 @@ def main():
     parser.add_argument(POLICY["producer_argument"], choices=POLICY["producers"],
                         default=POLICY["producers"][0])
     parser.add_argument(POLICY["publication_argument"], action="store_true")
+    parser.add_argument(POLICY["zero_base_argument"], action="store_true")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -373,7 +381,8 @@ def main():
         # clang++ may be a symlink to clang; argv[0] selects C++ driver mode.
         report = run(output, args.test_binary.resolve(), args.compiler.absolute(),
                      args.probe_report.resolve() if args.probe_report else None,
-                     compile_only=args.compile_only, producer=args.producer, publish=args.publish)
+                     compile_only=args.compile_only, producer=args.producer, publish=args.publish,
+                     zero_base=args.zero_base)
         print(json.dumps({"status": report["status"], "report": str(output / POLICY["report_name"])}))
         return native.POLICY["exit_codes"][report["status"]]
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:

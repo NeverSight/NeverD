@@ -500,6 +500,7 @@ bool spellsInt128Keyword(llvm::StringRef Text) {
 } // namespace
 
 void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
+  c_memory::applyMIPSVectorAlignment(Opts, Img ? Img : Opts.Image);
   OnlyFunction = Only;
   SelectedFunctions = llvmc::SourceFunctions(Only);
   SelectedGlobals.clear();

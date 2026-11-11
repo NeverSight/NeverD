@@ -72,6 +72,13 @@ evaluateAArch64ReturnAddressState(Arch Architecture, const DwarfCIE &CIE,
                                   const DwarfFDE &FDE, va_t PC,
                                   const AArch64RAQueryLimits &Limits = {});
 
+/// Also report whether the CIE or FDE supplied a signing-column rule. An
+/// absent rule has a DWARF default, but cannot establish the live state of
+/// an interrupted frame using Darwin's implicit return ABI.
+AArch64RAQueryResult evaluateAArch64ReturnAddressState(
+    Arch Architecture, const DwarfCIE &CIE, const DwarfFDE &FDE, va_t PC,
+    const AArch64RAQueryLimits &Limits, bool &HasExplicitRule);
+
 } // namespace neverd::dwarf_eh
 
 #endif // NEVERD_LOADER_DWARF_AARCH64RETURNADDRESSSTATE_H

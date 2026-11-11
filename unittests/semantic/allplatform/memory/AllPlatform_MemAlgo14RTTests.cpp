@@ -33,6 +33,13 @@ class ARM32MemAlgo14RT : public SemanticRoundTripFixture,
                          public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(ARM32MemAlgo14RT, Verify) { roundTripARM32(GetParam()); }
 
+// Its rle reads only the low byte of its int argument: the LLVM C definition
+// must take the whole word, as AAPCS lets C assume a char argument extended.
+class ARM32MemAlgo14LLVMCRT
+    : public SemanticRoundTripFixture,
+      public ::testing::WithParamInterface<RoundTripTC> {};
+TEST_P(ARM32MemAlgo14LLVMCRT, Verify) { roundTripARM32(GetParam()); }
+
 // clang-format off
 
 static std::vector<RoundTripTC> makeMem14TC(const char *prefix, const char *T,
@@ -155,9 +162,18 @@ static const std::vector<RoundTripTC> kARM32Mem14 =
 
 // clang-format on
 
+static std::vector<RoundTripTC> llvmCRoute(std::vector<RoundTripTC> Cases) {
+  for (RoundTripTC &Case : Cases)
+    Case.SourceRoute = true;
+  return Cases;
+}
+
 INSTANTIATE_TEST_SUITE_P(MemAlgo14, X64MemAlgo14RT,
                          ::testing::ValuesIn(kX64Mem14), rtTCName);
 INSTANTIATE_TEST_SUITE_P(MemAlgo14, A64MemAlgo14RT,
                          ::testing::ValuesIn(kA64Mem14), rtTCName);
 INSTANTIATE_TEST_SUITE_P(MemAlgo14, ARM32MemAlgo14RT,
                          ::testing::ValuesIn(kARM32Mem14), rtTCName);
+INSTANTIATE_TEST_SUITE_P(MemAlgo14LLVMC, ARM32MemAlgo14LLVMCRT,
+                         ::testing::ValuesIn(llvmCRoute(kARM32Mem14)),
+                         rtTCName);

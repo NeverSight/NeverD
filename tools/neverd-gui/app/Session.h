@@ -90,6 +90,8 @@ public:
   /// earlier sessions kept without one.
   bool analysisReplicaStarted() const { return analysis_.replicaStarted(); }
   bool analysisReplicaReady() const { return analysis_.replicaReady(); }
+  /// The analysis reads asked of the owner from what it keeps.
+  quint64 analysisOwnerReads() const { return analysis_.ownerReads(); }
   /// An edit the user is making will have a replica render \p address, under
   /// the \p declaration the user would state where given
   /// (AnalysisService::prepareRead).

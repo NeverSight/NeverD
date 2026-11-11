@@ -7605,9 +7605,9 @@ private slots:
     QVERIFY(!given.value("etag").toString().isEmpty());
     QVERIFY(!session.analysisReplicaStarted());
     // A comment the page shows: the owner names the page it gave, so the
-    // worker reads what changed of it, and the read it made ahead of the
-    // view answers it.
-    const auto prepared = metadata().value("prepared_views_given").toInteger();
+    // comment carries the read of what changed of it, which answers the view's
+    // read after it.
+    const auto followed = metadata().value("following_reads").toInteger();
     const auto revision = session.revision();
     session.setComment(Base + 32, QStringLiteral("seen from the owner"));
     QTRY_VERIFY_WITH_TIMEOUT(session.revision() != revision, OpenTimeoutMs);
@@ -7615,9 +7615,49 @@ private slots:
     QVERIFY(again.value("text").toString().contains(
         QStringLiteral("seen from the owner")));
     QVERIFY(again.value("etag") != given.value("etag"));
-    QCOMPARE(metadata().value("prepared_views_given").toInteger(),
-             prepared + 1);
+    QCOMPARE(metadata().value("following_reads").toInteger(), followed + 1);
     QVERIFY(!session.analysisReplicaStarted());
+  }
+
+  void aPageAReplicaGaveReadsFromTheReplicaAfterANote() {
+    QTemporaryDir directory;
+    const auto path = writeFixture(
+        directory,
+        QStringLiteral("summaries-ready-render-store-source-cache.bin"));
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    session.open(path);
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    QObject reader;
+    const auto read = [&](const QJsonObject &function) {
+      QJsonObject payload;
+      session.analysisQueries(function, &reader)
+          .subscribe({"decompile", function}, &reader,
+                     [&](const QJsonObject &response) {
+                       payload = response.value("payload").toObject();
+                     });
+      (void)QTest::qWaitFor([&] { return !payload.isEmpty(); }, OpenTimeoutMs);
+      return payload;
+    };
+    const QJsonObject function{{"address", hexAddress(Base + 32)},
+                               {"representation", "source"},
+                               {"offset", 0},
+                               {"limit", 4}};
+    // No session rendered ahead: the owner keeps none of it, and a replica
+    // gives the page.
+    const auto given = read(function);
+    QVERIFY(!given.value("etag").toString().isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(session.analysisReplicaReady(), OpenTimeoutMs);
+    // A note on it: the replica takes the note and reads the page again,
+    // without asking the owner first, which would give a document of its own
+    // whole or none.
+    const auto asked = session.analysisOwnerReads();
+    const auto revision = session.revision();
+    session.setComment(Base + 32, QStringLiteral("read from the replica"));
+    QTRY_VERIFY_WITH_TIMEOUT(session.revision() != revision, OpenTimeoutMs);
+    const auto again = read(function);
+    QVERIFY(again.value("text").toString().contains(
+        QStringLiteral("read from the replica")));
+    QCOMPARE(session.analysisOwnerReads(), asked);
   }
 
   void analysisReplicaReadsAFunctionAnEditIsAboutToChange() {

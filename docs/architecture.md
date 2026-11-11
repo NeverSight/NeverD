@@ -5119,7 +5119,10 @@ the owner gave stays the owner's to answer for while it keeps it, even once a re
 is ready (`AnalysisService::askOwner`), since the replica would read it from the store
 and send it whole; a graph, and a page a replica gave, stay with the replica. The
 owner answers the read before it says what the store holds (`kept_renders`), which
-decides only whether a replica starts beside that answer.
+decides only whether a replica starts beside that answer. After a change of names or
+comments the dispatcher goes on from what the owner said last while it asks again: with
+part of the store rendered, the replica starts taking the change at once, and a page a
+replica gave is read again from the replica without asking the owner first.
 The job also keeps what a function's first look in the listing asks the engine, its
 recovered instructions and its stack frame, in `local/listing-facts` under the same
 identity without the names of data, which those answers do not spell either. The
@@ -5217,7 +5220,13 @@ the page again (`QueryService::State::keptPages`). A replica's dispatcher keeps 
 pages across the read context it starts at each change of its owner's, so the read
 after an edit names them too, and no dispatcher's kept page moves with the listing's
 generation, which an edit moves. A read a lane hands the owner (`AnalysisService::askOwner`)
-leaves out the page the lane names, as the owner's dispatcher names its own. Where an edit built the document
+leaves out the page the lane names, as the owner's dispatcher names its own. An edit
+the owner's dispatcher sends carries the reads of the pages read at the revision it
+leaves (the worker's `then`), and their answers are cached as the reads those views make
+after it, once the reply's background state is taken. The worker answers them from the
+documents it holds, patches the edit's own view edits make included, before the store
+relabels the edit leaves for after its reply; a page of a document it does not hold is the
+client's to read. Where an edit built the document
 again, a worker that still has the old one sends what changed of the page
 (`page_delta`: lines replaced and the offsets after them shifted, `pageDelta`), which the
 GUI applies to the page it keeps (`page_delta::apply`); a reply the kept page does not
@@ -6093,6 +6102,19 @@ bit, the low product and the parity of the high bits can be proved separately.
 For products of two masked, offset inputs, packed truth rows check every
 assignment, including carries into the masks. An affine parity replaces the
 column only after all rows agree. Otherwise the original high column remains.
+For an interval of odd factors with regularly shifted masked operands, the
+solver verifies the offsets of each factor modulo the observed word. The full
+period reduces to a square, and the half-period includes a two-bit correction.
+An incomplete interval keeps its extra factors and compensates for each missing
+odd factor with a modular inverse. Each recurrence uses the proved parity gate.
+A wide product can also have an input-dependent coefficient whose summands
+have guaranteed trailing zeros. Evaluation retains the full coefficient and
+computes each other factor to the highest bit observed by any consumer.
+For disjoint pairs in an additive tail, the solver checks the weights of the
+one-set and both-set bit rows at full width before replacing them with a sum.
+A parent can reuse the modular reading of a reconstructed product after its
+children acquire shorter equivalent spellings in the same request. New
+products formed by a caller retain their own residue search.
 The SDK renders both sides of a rewrite together when their widths agree, so
 a shared fragment is formatted once with the original precedence.
 Expression restoration skips nodes older than every substitution key: immutable
@@ -9897,9 +9919,30 @@ store out, as a C function leaves its caller's registers alone, so the
 prologue neither prints the caller's register as a stale value nor keeps a
 frame in byte storage. The MedIR text view shows the mark. Operations keep
 their positions, because call records index them. A save read for anything
-else stays a store, and binary lift and patch never mark one. The restore proof
+else stays a store, and binary lift and patch never mark one. The exception is
+a save whose value is unknown machine state: an ordinary callee-saved register
+no parameter arrives in, unlike the frame pointer or link register, saved in an
+entry block nothing re-enters. A read of its bytes after the save, whose value
+the function only computes with, takes that incoming value itself, so a use of
+it fails where the save would have failed, and a read on a path that never runs,
+as an optimizer's load past an array's end into the save area, fails nothing. A
+value that leaves the function as it is, returned, passed to a call or joined
+with another, keeps the save: later analyses would read the copy as the
+incoming register and take a returned save for no result. The restore proof
 also follows unobserved zero extensions, including the Q-register update from
-an AArch64 D-register restore. A read of any derived value retains the save.
+an AArch64 D-register restore, and the Q register an ARM32 VPOP rebuilds from
+its D halves. A read of any derived value retains the save. The projection also
+leaves out a store of unknown machine state into the private frame that nothing
+observes, where either C route would fail: an ARM32 VLD1 lane load keeps the
+other half of a scratch D register, whose incoming value no caller defines, and
+the compiler spills and reloads the whole register without using that half.
+Every path from the store must overwrite the bytes or return before anything
+could read them, and every load of them must produce a value nothing observes;
+a frame address the code spilled and reloads resolves through the stores that
+reach the reload. A call, an access outside the frame other than a read of a
+complete image object or of read-only image bytes such as a literal pool, an
+operation that may fault, an escaping frame address and an exceptional edge each
+keep the store, and a store of a known value is left to the other proofs.
 HighIR removes unused restore temporaries before checking private save slots,
 while frame addresses still retain their original SSA identities. On x86 the
 projection also marks a pointer-width load of the slot at the entry stack
@@ -11899,6 +11942,16 @@ as HighC does; that type is 16 bytes there, aligned to at most 16, so the
 member keeps its frame offset. This preserves 65..128-bit value operations,
 including packed numerical/MXCSR results. It does not establish every
 wide-integer runtime or calling convention.
+
+An LLVM-to-C definition takes a char or short argument that the IR gives no
+extension attribute as a whole 32-bit word, and narrows it in its body, where
+the target's C compiler lets a definition assume its callers extended such an
+argument (AAPCS, i386, x86-64 System V, MIPS and Apple arm64): the machine code
+reads only the low bits, so a caller may leave anything above them, as one
+passing an int does. A narrow type the debug information declares is one its
+callers extend, and keeps its spelling. `__builtin_bit_cast` takes a vector
+element through a cast to the element's own type, because Clang 21 to 23 read
+the vector's first element for the element lvalue `(v)[i]`.
 
 `IntrinsicValueEffects` defines positive, shape-validated contracts for operations
 whose effects are entirely explicit values. `LowIntrinsicEffects` additionally
@@ -16050,8 +16103,8 @@ values across these memory effects.
 
 The qualified MIPS16e2 system/atomic slice shares scalar shape admission but
 retains separate effectful IDs. `MIPSSystemContext` authenticates a system step;
-`MIPSCP0.def` owns the admitted CP0 word selectors, context fields and write
-permissions and MT requirements. Selector keys are `(sel << 5) | reg`;
+`MIPSCP0.def` owns built-in CP0 word views, context fields and write
+permissions and MT requirements. Board-owned views go through `MIPSCP0Platform` on the same issuing context. Selector keys are `(sel << 5) | reg`;
 Status shares the DI/EI owner, EPC/ErrorEPC words preserve all bits, and the
 three MT control views remain read-only outside typed MT operations. MT uses
 explicit ABI evidence and bound implementation/master permission. CACHE/PREF
@@ -16084,8 +16137,7 @@ The MSA integer-vector slice consumes explicit r5/o32/FP64 metadata. Decoder han
 reuse includes the ISA revision; `MIPSMSA.def` and `MIPSLiftMSA` own raw
 encodings and full-vector arithmetic. `MIPSRegs`/`TargetRegInfoMIPS` share W
 storage and low F views without assigning a floating ABI to ordinary integers.
-`MedMIPSSourceVectors` refuses unknown entry vectors, calls, saved FPR writes
-and multi-block source before optimization. It does not narrow LowIR register
+`MedMIPSSourceVectors` intersects reaching vector definitions at leaf joins and refuses unknown entry vectors, calls and saved FPR writes before optimization. It does not narrow LowIR register
 coverage or invent initial machine state.
 
 `MIPSSourceCompiler` composes source-only compiler constraints across the LLVM

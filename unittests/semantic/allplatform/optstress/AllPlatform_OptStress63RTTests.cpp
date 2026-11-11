@@ -39,6 +39,13 @@ class ARM32OptStress63RT : public SemanticRoundTripFixture,
                            public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(ARM32OptStress63RT, Verify) { roundTripARM32(GetParam()); }
 
+// Its LLVM C passes vector lanes to __builtin_bit_cast, which Clang reads
+// as the first lane unless C spells each one as a value.
+class X86OptStress63LLVMCRT
+    : public SemanticRoundTripFixture,
+      public ::testing::WithParamInterface<RoundTripTC> {};
+TEST_P(X86OptStress63LLVMCRT, Verify) { roundTripX86(GetParam()); }
+
 // clang-format off
 static std::vector<RoundTripTC> makeOptStress63TC(const char *prefix, const char *T) {
   std::string p = prefix, t = T;
@@ -121,12 +128,26 @@ static std::vector<RoundTripTC> makeOptStress63TC(const char *prefix, const char
 }
 // clang-format on
 
-static const std::vector<RoundTripTC> kX64 = makeOptStress63TC("x64o63", "long");
+static const std::vector<RoundTripTC> kX64 =
+    makeOptStress63TC("x64o63", "long");
 static const std::vector<RoundTripTC> kX86 = makeOptStress63TC("x86o63", "int");
-static const std::vector<RoundTripTC> kA64 = makeOptStress63TC("a64o63", "long");
+static const std::vector<RoundTripTC> kA64 =
+    makeOptStress63TC("a64o63", "long");
 static const std::vector<RoundTripTC> kARM = makeOptStress63TC("armo63", "int");
 
-INSTANTIATE_TEST_SUITE_P(OptStress63, X64OptStress63RT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress63, X86OptStress63RT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress63, A64OptStress63RT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress63, ARM32OptStress63RT, ::testing::ValuesIn(kARM), rtTCName);
+static std::vector<RoundTripTC> llvmCRoute(std::vector<RoundTripTC> Cases) {
+  for (RoundTripTC &Case : Cases)
+    Case.SourceRoute = true;
+  return Cases;
+}
+
+INSTANTIATE_TEST_SUITE_P(OptStress63, X64OptStress63RT,
+                         ::testing::ValuesIn(kX64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress63, X86OptStress63RT,
+                         ::testing::ValuesIn(kX86), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress63, A64OptStress63RT,
+                         ::testing::ValuesIn(kA64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress63, ARM32OptStress63RT,
+                         ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress63LLVMC, X86OptStress63LLVMCRT,
+                         ::testing::ValuesIn(llvmCRoute(kX86)), rtTCName);

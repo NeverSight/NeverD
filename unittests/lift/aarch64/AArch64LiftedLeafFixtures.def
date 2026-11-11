@@ -18,6 +18,26 @@ A64_LEAF_TEXT(kOutput, "published.dylib")
 A64_LEAF_TEXT(kRejected, "refused.dylib")
 A64_LEAF_TEXT(kDriverSource, "driver.c")
 A64_LEAF_TEXT(kDriver, "driver")
+A64_LEAF_TEXT(kDarwinTrue, "/usr/bin/true")
+A64_LEAF_TEXT(kDarwinFalse, "/usr/bin/false")
+A64_LEAF_TEXT(kDarwinSlice, "original")
+A64_LEAF_TEXT(kUnsignedInput, "unsigned-input")
+A64_LEAF_TEXT(kDarwinOutput, "installed")
+A64_LEAF_TEXT(kLipo, "/usr/bin/lipo")
+A64_LEAF_TEXT(kThinOption, "-thin")
+A64_LEAF_TEXT(kDarwinArch, "arm64e")
+A64_LEAF_TEXT(kLipoOutput, "-output")
+A64_LEAF_TEXT(kCodesign, "/usr/bin/codesign")
+A64_LEAF_TEXT(kRemoveSignature, "--remove-signature")
+A64_LEAF_TEXT(kSign, "--sign")
+A64_LEAF_TEXT(kAdHocIdentity, "-")
+A64_LEAF_TEXT(kVerify, "--verify")
+A64_LEAF_TEXT(kStrict, "--strict")
+A64_LEAF_TEXT(kPlatformHash, "system_slice_sha256")
+A64_LEAF_TEXT(kUnsignedHash, "unsigned_input_sha256")
+A64_LEAF_TEXT(kEntryVA, "original_entry")
+A64_LEAF_TEXT(kOwnerVA, "published_entry")
+A64_LEAF_TEXT(kExitCode, "native_exit_status")
 A64_LEAF_TEXT(kOriginalHash, "original_sha256")
 A64_LEAF_TEXT(kPublishedHash, "published_sha256")
 A64_LEAF_TEXT(kAuthenticatedSites, "caller_authenticated_call_sites")
@@ -59,9 +79,240 @@ int main(int argc, char **argv) {
   const unsigned long values[] = {0, 1, 17, UINT64_MAX, UINT64_C(1) << 63};
   for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i)
     for (unsigned j = 0; j != sizeof(values) / sizeof(*values); ++j)
+#if defined(NEVERD_TEST_TAIL_SUM)
+      if (sum(values[i], values[j]) != values[i] + values[j] ||
+          difference(values[i], values[j]) != values[i] + values[j])
+#elif defined(NEVERD_TEST_ZERO_RESULTS)
+      if (sum(values[i], values[j]) != 0 || difference(values[i], values[j]) != 0)
+#else
       if (sum(values[i], values[j]) != values[i] + values[j] ||
           difference(values[i], values[j]) != values[i] - values[j])
+#endif
         return 4;
+  return dlclose(image) != 0;
+}
+)c")
+
+A64_LEAF_TEXT(kReorderedOutput, "reordered.dylib")
+A64_LEAF_TEXT(kReorderedTail, "native_reordered_tail")
+A64_LEAF_TEXT(kErrorABI, R"c(
+#define SWIFT __attribute__((swiftcall))
+#define SELF __attribute__((swift_context))
+#define ERROR __attribute__((swift_error_result))
+)c")
+A64_LEAF_TEXT(kClearError, "#define NEVERD_TEST_CLEAR_ERROR 1\n")
+A64_LEAF_TEXT(kErrorLeaves, R"c(
+SWIFT void *leaf_sum(void *next, void * SELF context, void ** ERROR error) {
+  return *error;
+}
+SWIFT void *leaf_difference(void *next, void * SELF context, void ** ERROR error) {
+#ifdef NEVERD_TEST_CLEAR_ERROR
+  *error = 0;
+  return 0;
+#else
+  void *old = *error;
+  *error = next;
+  return old;
+#endif
+}
+)c")
+A64_LEAF_TEXT(kErrorCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+typedef SWIFT void *operation(void *next, void * SELF context, void ** ERROR error);
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  operation *read = (operation *)dlsym(image, "leaf_sum");
+  operation *replace = (operation *)dlsym(image, "leaf_difference");
+  if (!read || !replace) return 3;
+  uintptr_t storage[4];
+  void *values[] = {0, &storage[0], &storage[1], &storage[2], &storage[3]};
+  for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i) {
+    for (unsigned j = 0; j != sizeof(values) / sizeof(*values); ++j) {
+      void *error = values[i];
+      if (read(values[j], storage, &error) != values[i] || error != values[i])
+        return 4;
+#ifdef NEVERD_TEST_CLEAR_ERROR
+      if (replace(values[j], storage, &error) || error)
+#else
+      if (replace(values[j], storage, &error) != values[i] || error != values[j])
+#endif
+        return 5;
+    }
+  }
+  return dlclose(image) != 0;
+}
+)c")
+A64_LEAF_TEXT(kTailSum, "#define NEVERD_TEST_TAIL_SUM 1\n")
+A64_LEAF_TEXT(kTailLeaves, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  add x0, x1, x0
+  ret
+.cfi_endproc
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  b _leaf_sum
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+
+A64_LEAF_TEXT(kZeroLeaves, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  movz w0, #0
+  ret
+.cfi_endproc
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  movz x0, #0
+  ret
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+A64_LEAF_TEXT(kZeroResults, "#define NEVERD_TEST_ZERO_RESULTS\n")
+A64_LEAF_TEXT(kSwiftABI, R"c(
+#define SWIFT __attribute__((swiftcall))
+#define CONTEXT __attribute__((swift_context))
+)c")
+A64_LEAF_TEXT(kSwiftAsyncABI, R"c(
+#define SWIFT __attribute__((swiftasynccall))
+#define CONTEXT __attribute__((swift_async_context))
+)c")
+A64_LEAF_TEXT(kSwiftLeaves, R"c(
+#include <stdint.h>
+SWIFT uintptr_t leaf_sum(uintptr_t x, void *CONTEXT self) {
+  return (uintptr_t)self + x;
+}
+SWIFT uintptr_t leaf_difference(uintptr_t x, void *CONTEXT self) {
+  return x - (uintptr_t)self;
+}
+)c")
+A64_LEAF_TEXT(kSwiftCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+typedef uintptr_t SWIFT operation(uintptr_t, void *CONTEXT);
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  operation *sum = (operation *)dlsym(image, "leaf_sum");
+  operation *difference = (operation *)dlsym(image, "leaf_difference");
+  if (!sum || !difference)
+    return 3;
+  const uintptr_t values[] = {0, 1, 17, UINTPTR_MAX, UINT64_C(1) << 63};
+  unsigned char storage[4];
+  void *contexts[] = {0, storage, storage + 1, storage + 2, storage + 3};
+  for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i)
+    for (unsigned j = 0; j != sizeof(contexts) / sizeof(*contexts); ++j) {
+      const uintptr_t context = (uintptr_t)contexts[j];
+      if (sum(values[i], contexts[j]) != context + values[i] ||
+          difference(values[i], contexts[j]) != values[i] - context)
+        return 4;
+    }
+  return dlclose(image) != 0;
+}
+)c")
+
+A64_LEAF_TEXT(kScalarFPLeaves, R"c(
+double leaf_sum(double a, double b) { return a + b; }
+float leaf_difference(float a, float b) { return a - b; }
+)c")
+A64_LEAF_TEXT(kScalarFPCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+#include <string.h>
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  typedef double (*sum_fn)(double, double);
+  typedef float (*diff_fn)(float, float);
+  sum_fn sum = (sum_fn)dlsym(image, "leaf_sum");
+  diff_fn difference = (diff_fn)dlsym(image, "leaf_difference");
+  if (!sum || !difference)
+    return 3;
+  const double values[] = {0., -0., 1.5, -2.75, 0x1.000002p+0};
+  for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i)
+    for (unsigned j = 0; j != sizeof(values) / sizeof(*values); ++j) {
+      const double a = values[i], b = values[j];
+      const double result = sum(a, b), expected = a + b;
+      const float diff = difference((float)a, (float)b);
+      const float expected_diff = (float)a - (float)b;
+      if (memcmp(&result, &expected, sizeof(result)) ||
+          memcmp(&diff, &expected_diff, sizeof(diff)))
+        return 4;
+    }
+  return dlclose(image) != 0;
+}
+)c")
+
+A64_LEAF_TEXT(kAssemblyName, "leaves.S")
+A64_LEAF_TEXT(kSignedLeaves, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  pacibsp
+  add x0, x1, x0
+  retab
+.cfi_endproc
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  pacibsp
+  sub x0, x0, x1
+  retab
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+
+A64_LEAF_TEXT(kMemoryLeaves, R"c(
+#include <stdint.h>
+uint64_t leaf_sum(const uint64_t *p) { return p[1]; }
+void leaf_difference(uint64_t *p, uint64_t v) { p[1] = v; }
+)c")
+A64_LEAF_TEXT(kMemoryCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  typedef uint64_t (*load_fn)(const uint64_t *);
+  typedef void (*store_fn)(uint64_t *, uint64_t);
+  load_fn load = (load_fn)dlsym(image, "leaf_sum");
+  store_fn store = (store_fn)dlsym(image, "leaf_difference");
+  if (!load || !store)
+    return 3;
+  const uint64_t values[] = {0, 1, 17, UINT64_MAX, UINT64_C(1) << 63};
+  for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i)
+    for (unsigned j = 0; j != sizeof(values) / sizeof(*values); ++j) {
+      uint64_t words[] = {UINT64_C(0x3210), values[i], UINT64_C(0xabcd)};
+      if (load(words) != values[i])
+        return 4;
+      store(words, values[j]);
+      if (load(words) != values[j] || words[0] != UINT64_C(0x3210) ||
+          words[1] != values[j] || words[2] != UINT64_C(0xabcd))
+        return 5;
+    }
   return dlclose(image) != 0;
 }
 )c")

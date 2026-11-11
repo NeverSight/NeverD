@@ -37,7 +37,11 @@ bool MIPSLifter::hasDelaySlot(uint32_t Word) {
     return (Word & 63) == 8 || (Word & 63) == 9;
   if (Opcode == 1) {
     const unsigned RT = (Word >> 16) & 31;
-    return RT <= 3 || (RT >= 16 && RT <= 19);
+    return RT <= 3 || (RT >= 16 && RT <= 19) || (Word >> 16) == 0x041c;
+  }
+  if (Opcode == 17) {
+    const unsigned RS = (Word >> 21) & 31;
+    return RS == 11 || RS == 15 || RS >= 24;
   }
   return (Opcode >= 2 && Opcode <= 7) || (Opcode >= 20 && Opcode <= 23);
 }
@@ -49,6 +53,9 @@ MIPSLifter::encoding(const cs_insn &Instruction) const {
   if (Mode == InstructionMode::MIPS16)
     return mips16Encoding(Instruction);
   const uint32_t Word = word(Instruction);
+  if (((Word >> 16) == 0x041c && !HasDSP) ||
+      (Word >> 26 == 17 && hasDelaySlot(Word) && !HasMSA))
+    return std::nullopt;
   if (Word >> 26 == 29) {
     if (Mode != InstructionMode::MIPSClassic)
       return std::nullopt;
@@ -173,7 +180,6 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
     }
     const unsigned CP0Key = ((Word & 7) << 5) | RD;
     if (Opcode == 16 && (RS == 0 || RS == 4) && !(Word & 0x7f8) &&
-        mips::supportedCP0Word(CP0Key, RS == 4) &&
         (HasMT || !mips::cp0RequiresMT(CP0Key))) {
       if (RS == 4)
         S.emitIntrinsic(Intrinsic::MIPSWriteCP0Word, {},
@@ -298,6 +304,14 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
       S.write(RD, Result);
       return true;
     }
+    case 5: // LSA in the MIPS32r5 MSA profile
+      if (!HasMSA || SA >= 4 || Wide || isMIPSCompressedMode(Mode))
+        return false;
+      S.write(RD, S.binary(NdOp::INT_ADD,
+                           S.binary(NdOp::INT_LEFT, S.read(RS),
+                                    NdVar::cst(SA + 1, 4)),
+                           S.read(RT)));
+      return true;
     case 10:   // MOVZ
     case 11: { // MOVN
       if (SA)
@@ -350,6 +364,14 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
     case 25:   // MULTU
     case 28:   // DMULT
     case 29: { // DMULTU
+      if (RD && HasDSP && !Wide && !isMIPSCompressedMode(Mode) && RD <= 3 &&
+          !SA && Function <= 25) {
+        const bool Signed = Function == 24;
+        S.writeAccumulator(RD, S.binary(NdOp::INT_MULT,
+                                        S.resize(S.read(RS), 8, Signed),
+                                        S.resize(S.read(RT), 8, Signed)));
+        return true;
+      }
       if (RD || SA || (Function >= 28 && !Wide))
         return false;
       const uint16_t Bytes = Function >= 28 ? 8 : 4;
@@ -465,6 +487,18 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
     S.write(RT, S.binary(NdOp::INT_ADD, S.read(RS), NdVar::cst(Immediate, 8)));
     return true;
   case 28: { // SPECIAL2: MUL, CLZ/CLO, DCLZ/DCLO
+    if ((Function == 0 || Function == 1 || Function == 4 || Function == 5) &&
+        !SA && RD <= 3 && !Wide && !isMIPSCompressedMode(Mode) &&
+        (!RD || HasDSP)) {
+      const bool Signed = !(Function & 1);
+      const auto Product =
+          S.binary(NdOp::INT_MULT, S.resize(S.read(RS), 8, Signed),
+                   S.resize(S.read(RT), 8, Signed));
+      S.writeAccumulator(RD,
+                         S.binary(Function & 4 ? NdOp::INT_SUB : NdOp::INT_ADD,
+                                  S.accumulator(RD), Product));
+      return true;
+    }
     if (Function == 2 && !SA) {
       S.requireWord(RS);
       S.requireWord(RT);
@@ -610,6 +644,25 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
     if (Code.Unconditional) {
       // Compact B shares the normalized BEQ displacement, but has no
       // predicate or fallthrough edge.
+    } else if ((Word >> 16) == 0x041c) {
+      const auto Control = S.makeTemp(4);
+      S.emitIntrinsic(Intrinsic::MIPSReadDSPControl, Control);
+      Condition = S.binary(NdOp::INT_NOTEQUAL,
+                           S.binary(NdOp::INT_AND, Control, NdVar::cst(32, 4)),
+                           NdVar::cst(0, 4), 1);
+    } else if (Opcode == 17) {
+      const bool Whole = RS == 11 || RS == 15;
+      const bool Nonzero = (RS & 4) != 0;
+      const uint16_t Bytes = Whole ? 8 : 1u << (RS & 3);
+      const bool All = Whole != Nonzero;
+      for (unsigned I = 0; I != 16u / Bytes; ++I) {
+        const auto Test =
+            S.binary(Nonzero ? NdOp::INT_NOTEQUAL : NdOp::INT_EQUAL,
+                     S.vectorElement(RT, I, Bytes), NdVar::cst(0, Bytes), 1);
+        Condition = I ? S.binary(All ? NdOp::BOOL_AND : NdOp::BOOL_OR,
+                                 Condition, Test, 1)
+                      : Test;
+      }
     } else if (Opcode == 1) {
       Link = RT >= 16 ? 31 : 0;
       if (Link && RS == 31)

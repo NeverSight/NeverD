@@ -1,0 +1,222 @@
+{
+  "date": "2026-11-11",
+  "source_revision": "c7fcf16ea43ac1457b6c6bb64195276f301a4d38",
+  "llvm_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+  "test_host_sha256": "35f948246270092aa3b92e3eebc0893bf0bcc711d2bf280ec155bf7134abc150",
+  "archive_sha256": "9818820fd5ce93b0501b311ea99efa5dc6066d9ac6e63003525dae7f2d8b310c",
+  "build_receipt_sha256": "5abcdef8d85113c192d49845b1d9c4db60baed5c58f967651282e4521b125f04",
+  "workflow_revision": "e78c38b4edc304337604bf4deb039ce8d635a8cf",
+  "native_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42984546707",
+  "runner_cold_build": false,
+  "swifterror_scope": "Incoming X21, replacement with simultaneous prior error returned in X0, write-only clear; standalone leaf writers.",
+  "cross_function_swifterror_qualified": false,
+  "general_lifted_images_qualified": false,
+  "native_apple_cpta_qualified": false,
+  "local_suites": {
+    "qualified": {
+      "tests": 13,
+      "xml_sha256": "cd03b2f46708fcf2f5cf5ee8c943139f80b4ecb1062889c6b0a8acdcbe45d66f"
+    },
+    "language": {
+      "tests": 314,
+      "xml_sha256": "e94f1cfc1718285a3c06eda668789f53ad3a6ab4f5734d2c69a5b50641e573d4"
+    },
+    "contract": {
+      "tests": 296,
+      "xml_sha256": "96f3180c9957201270d91f23beed47eea5138dd36160f14e1a6f9af9c5a60ccf"
+    },
+    "symbols": {
+      "tests": 14,
+      "xml_sha256": "8bb7c51c45e11ab49d34a57f94004476ffda7ca94322f786460b35052795f644"
+    }
+  },
+  "local_analysis": {
+    "cases": 769,
+    "passed": 723,
+    "skipped": [
+      "AArch64EntryABI.PublishSignedNativeInputs",
+      "AArch64EntryABI.RejectsOccupiedNativeInputs",
+      "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+      "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+      "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+      "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+      "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedIR/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedIR/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedIR/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedIR/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedExecutable/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedExecutable/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedExecutable/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedExecutable/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/3"
+    ],
+    "first_attempt_failures": [],
+    "real_text_words": 138671,
+    "real_text_sha256": "11b82a7d642384b9a129eb031b84717813520ad7125103ac6300ce9d8d1c3fbb",
+    "source_revision": "c7fcf16ea43ac1457b6c6bb64195276f301a4d38"
+  },
+  "r6_cli": {
+    "source_revision": "c7fcf16ea43ac1457b6c6bb64195276f301a4d38",
+    "binary_sha256": "45d75eabd3f6b9de93675532ef0387c096af885e7ede2e983936934f7e5e3416",
+    "sdk_sha256": "06f711db4abf02c73967c6243e7a8ab729283909abb798cc85d589ae264346c1",
+    "cases": {
+      "replace": {
+        "source_text": "e80300aae00315aaf50308aac0035fd6",
+        "installed_text": "e80300aae00315aaf50308aac0035fd6",
+        "llvm_reads": 2,
+        "llvm_writes": 1,
+        "llvm_sha256": "88d240e1ab08e878280ae0bcdc19677a2baabd24fd8d69acb2a395ad09de0f28",
+        "original_sha256": "1b6fc53c606300b6fa53ec7029a45d1ddecbf0a7f19b7e912dc608c01c6379e4",
+        "installed_sha256": "a0f5432dea2f0ea61352086d0201faff598ad1e308dedc433bb5144f77baec41",
+        "old_entries": {
+          "leaf_sum": 800,
+          "leaf_difference": 808
+        },
+        "new_entries": {
+          "leaf_sum": 16384,
+          "leaf_difference": 16392
+        }
+      },
+      "clear": {
+        "source_text": "000080d2150080d2c0035fd6",
+        "installed_text": "f5031faae0031faac0035fd6",
+        "llvm_reads": 1,
+        "llvm_writes": 1,
+        "llvm_sha256": "8e08ad262b9419be826a783654d22013140237dcbc8a29664bc7ed76c072fec9",
+        "original_sha256": "ec0a60efbbf8fe42b4d84d6269b30abd80e79fc8dd6af34a466daf8640d4bfcf",
+        "installed_sha256": "c17518883223c515a563c49b7d5b5fdcaff6dfe2af64244f28a07901d0cecebb",
+        "old_entries": {
+          "leaf_sum": 800,
+          "leaf_difference": 808
+        },
+        "new_entries": {
+          "leaf_sum": 16384,
+          "leaf_difference": 16392
+        }
+      }
+    }
+  },
+  "runners": {
+    "macos-26": {
+      "cpu": "Apple M1 (Virtual)",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "sdk": "26.5",
+      "artifact_id": 13838817060,
+      "artifact_digest": "sha256:1424390f8aa0ca760add1650e99daa70b412be64acf37bdf5621673af77f5989",
+      "result_sha256": "5af92b24aa6884665f79354672e0952fa65bfcb77318719f0bfa78807a164375",
+      "xml_sha256": "5c3578cf05557e06206fc2f98cfdeebf8b3adc6e8a1db8f5e079a192a6186dc7",
+      "abi_cases": {
+        "SwiftErrorReturnsBothTheOldValueAndTheUpdatedRegister": {
+          "original_sha256": "bd39e54c91dd1111177d5ee75ac285f593eeeea0f312f33b1a13e9a5355e25d8",
+          "published_sha256": "8e46b73dd6704c5ca86cd60663d3c20580df8e9566ef1e897f0db307e2a5acba",
+          "caller_authenticated_call_sites": "10",
+          "executed_native_images": "2"
+        },
+        "SwiftErrorCanClearTheRegisterWithoutReadingIt": {
+          "original_sha256": "7b78b5a3b6b24771040ab2eee57e92545cc31d3a0d1115c5733ca4a9a4c550c3",
+          "published_sha256": "e5807183be833cc6e766550ad6cc3fc19cb30d2a37969a714c015f5521e2a2fc",
+          "caller_authenticated_call_sites": "10",
+          "executed_native_images": "2"
+        }
+      },
+      "tested_error_values": [
+        null,
+        "four distinct live object addresses"
+      ],
+      "ordered_pairs_per_typed_caller": 25,
+      "compiler_swift_error": {
+        "-O0": {
+          "native_exit_status": 0,
+          "sha256": "912907b959cca452e7c7a83c5ad8d4373fd347cf9463ee45ea11cfe4ad661a3a"
+        },
+        "-O2": {
+          "native_exit_status": 0,
+          "sha256": "523015dba289b60bd6ad102fd519bfcdd2f52809842b3f881233788ab8700161"
+        }
+      },
+      "native_pac_controls": 6,
+      "authenticated_parent_frames": 10,
+      "lifted_image_pairs": 10,
+      "system_exit_status": {
+        "PublishesDarwinTrue": "0",
+        "PublishesDarwinFalse": "1"
+      }
+    },
+    "xcode-27": {
+      "cpu": "Apple M1 (Virtual)",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+      "sdk": "27.0",
+      "artifact_id": 13838384472,
+      "artifact_digest": "sha256:998b44c97dfa8a3fac5f049ca849255c89bf50a135329eab0114d391a0a9fa5a",
+      "result_sha256": "6b93d21086f2444a72e5702ad693e46d23888f4483502c8349239ee6b1673439",
+      "xml_sha256": "73179cce7fc38c0083821d7dd7e7e73f3f548db44c012344cdc74e432a41eaab",
+      "abi_cases": {
+        "SwiftErrorReturnsBothTheOldValueAndTheUpdatedRegister": {
+          "original_sha256": "0d06cb3cabd4e6fdbe746a04375545f7bbf030f7e98ae76cd3ca90cba8458b43",
+          "published_sha256": "a97b7ee76f1e564c949f5ecd1c4e96f91e82f999dd7ab3a4a8f34358d7584cf9",
+          "caller_authenticated_call_sites": "10",
+          "executed_native_images": "2"
+        },
+        "SwiftErrorCanClearTheRegisterWithoutReadingIt": {
+          "original_sha256": "016a0fcc6505b46afb82a046ebc60c0e16ec5f193d641a652a3026ac0c4582c1",
+          "published_sha256": "f326a96499848324f4d6fbdd68167df33600e5eecee71d97ef181a57b8e98695",
+          "caller_authenticated_call_sites": "10",
+          "executed_native_images": "2"
+        }
+      },
+      "tested_error_values": [
+        null,
+        "four distinct live object addresses"
+      ],
+      "ordered_pairs_per_typed_caller": 25,
+      "compiler_swift_error": {
+        "-O0": {
+          "native_exit_status": 0,
+          "sha256": "d0837d0478c711d8c38bbdd07d6d62afa16d1b41006304e6975021a2980dba05"
+        },
+        "-O2": {
+          "native_exit_status": 0,
+          "sha256": "30e1e161157a8bfd075f9d97c51d09598c1d2471fc6f84897d9389f4eecccfb6"
+        }
+      },
+      "native_pac_controls": 6,
+      "authenticated_parent_frames": 10,
+      "lifted_image_pairs": 10,
+      "system_exit_status": {
+        "PublishesDarwinTrue": "0",
+        "PublishesDarwinFalse": "1"
+      }
+    }
+  }
+}

@@ -7126,10 +7126,21 @@ checks that a replica's dispatcher names the page it kept after its owner's chan
 starts its read context anew, and names none of another project's.
 `WorkbenchTests::ownerAnswersForItsPagesWhileAReplicaIsReady` checks that the owner
 still answers for the page it gave after a note, with a replica ready, and that a
-graph is still the replica's. `WorkbenchTests::ownerReadsWhatChangedOfThePageItGave`
+graph is still the replica's. `WorkbenchTests::aPageAReplicaGaveReadsFromTheReplicaAfterANote`
+checks that, with part of the store rendered, a page a replica gave is read again from the
+replica after a note, the note showing, without asking the owner
+(`Session::analysisOwnerReads`). `WorkbenchTests::ownerReadsWhatChangedOfThePageItGave`
 comments on the function a page the owner gave shows and reads it again through the
-analysis queries: the owner's dispatcher names the page it kept, so the worker's answer
-read ahead of the view takes it (`metadata.prepared_views_given`), the comment showing.
+analysis queries: the owner's dispatcher names the page it kept, and the comment carries
+that read, whose answer the view's read takes (`metadata.following_reads`), the comment
+showing. `QueryServiceTests::anEditCarriesTheReadsOfThePagesItsViewsShow` checks that
+an edit carries the read of a page read at its revision and that the answer serves the
+view's next read with nothing sent, and `aCarriedReadTheWorkerRefusedIsMadeAgain` that a
+refused one is read again naming the page kept. `NeverDWorkerViewEdits` answers a
+comment's carried read as a whole read gets it without reading that page again behind the
+reply, leaves a page of no document it holds to the client (`later`), answers unchanged a
+page an edit reaches none of, refuses a read that is no page's alone, and answers none for
+a refused edit or for more than four.
 `NeverDWorkerListingFacts` runs that job over a real PE: the owner of the same
 session takes up what the replica keeps of a function's first look, a later session
 lists what asking the engine lists, a new name of a function or of data keeps the
@@ -7155,7 +7166,8 @@ replica restores from and a save each find what was queued, a save written behin
 reply (`save.write_behind`, a boolean) makes staged comments the step before the edit
 that follows and both reach the files and undo in order, a kill at any moment leaves
 a project that opens and takes edits, a write that fails fails a later edit and goes
-through once it can, a data item refused right behind one whose write fails and
+through once it can (the history and the byte patches answering meanwhile), a data
+item refused right behind one whose write fails and
 function edits and operand formats taken before a failed write is found stay in the
 session and reach the files once they take writes again, a local's new name is taken
 while the project's folder takes no write and reaches the files afterwards, an undo past
@@ -10736,6 +10748,19 @@ truth tables at four precisions, including perturbed offsets and short budgets.
 A 64-factor machine-code fixture checks both CLI and worker source modes against
 the original product at O0 and O2. Paired expression printing must reproduce
 both individual strings for shared roots, ancestors and different widths.
+Product-progression tests exhaust every five-bit input triple and compare
+shuffled intervals, holes, parity changes and resource limits with independent
+full-width products through 257 bits. Independent Z3 checks prove shuffled
+full, half, and incomplete products for all 65-bit inputs. The wide-pair
+masked-product proof partitions the full input by the eight low-three-bit
+values of one operand, with the other operands unrestricted. The source-route
+fixtures also execute 64-factor and 126-factor windows through CLI and worker.
+Wide-product tests compare dynamic coefficients and shared consumers with full
+multiplication through 257 bits. Mixed-width verification crosses the cached
+random-word boundary in both directions. Independent word arithmetic checks
+weighted Boolean tails, overlapping inputs, and a changed high coefficient. A shuffled
+127-factor interval with an interior hole checks that rebuilding its children
+under a parent sum stays within the default work allowance.
 
 `SymMBALinearProofMemo` checks successful full-width proof reuse, alternating
 queries with the same difference, context isolation, incomplete proofs and
@@ -23747,6 +23772,32 @@ reference also fixes discarded packed-DSP/shift results: helpers still update
 DSPControl and enforce DSP enablement. The source runner permits no original
 zero-destination mismatch; see the [DSP reference boundary](mips.md#classic-mips32-dsp-state-and-packed-arithmetic).
 Reports identify the source revision and actual loaded native-library hash.
+
+The ASE runner accepts `dsp` for extraction, `dsp-extra` for banked and
+partial-control operations, `dspr2` for all 46 revision-two instructions,
+`msa` for permutation, floating-point and control transfers, and `msa-int`
+for the remaining integer, transfer, memory and branch cases. Give each group
+a separate output directory. Use a MIPS-enabled shared build of the pinned
+Unicorn fork. The runner assembles
+both byte orders, recompiles HighC and LLVMC at `-O0` and `-O2`, and compares
+registers, output bytes, control state and enabled FP traps with the original.
+
+```bash
+LIBUNICORN_PATH=/path/to/pinned-unicorn-library-directory \
+PYTHONPATH="$PWD/third_party/unicorn/bindings/python" \
+python3 unittests/lift/mips/ase-roundtrip.py --group msa \
+  --neverd build-mips/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld \
+  --output build-mips/roundtrip-msa-ase
+```
+
+For the complete encoding check, build `neverd-mips-bench` and run
+`python3 unittests/lift/mips/ase-encoding-coverage.py --bench build-mips/bin/neverd-mips-bench`
+with `llvm-mc` and `llvm-objcopy` on the path. The fixture covers 113 classic
+DSP and 46 DSPR2 forms and 526 MIPS32 MSA mnemonic/format combinations.
+It checks distinct physical encodings and compares both byte orders. Its
+assembler objects and raw binaries are removed on exit. The execution tests
+above check register, memory and control effects for individual operations.
+
 Ordinary pair padding, predecessor memory barriers,
 single-sided barriers at joins, depth/work exhaustion and non-entry analysis
 roots or exceptional/disconnected paths have separate call-recovery regressions.
@@ -23835,10 +23886,10 @@ build-mips/bin/neverd-mips-bench mips64el lift /path/to/owned-code.bin 100000
 
 Profiles are `mips`, `mipsel`, `mips64`, `mips64el`, `micromips`,
 `micromipsel`, `mips16`, `mips16el`, `mips16e2`, `mips16e2el`, `mipsdsp`,
-`mipsdspel`, `mipsmsa` and `mipsmsael`. The e2 profiles add explicit MIPS16e2
-feature evidence to MIPS16 encoding. The DSP profiles explicitly select the admitted classic32 DSP
-capability; MSA profiles select classic32 r5/o32 FP64 with the admitted integer
-vector instructions.
+`mipsdspel`, `mipsdspr2`, `mipsdspr2el`, `mipsmsa` and `mipsmsael`. The e2
+profiles enable MIPS16e2 encoding. The DSP profiles select the named revision
+of the classic MIPS32 DSP ASE. MSA profiles select classic32 r5/o32 FP64 for the admitted integer,
+permutation, floating-point and control-transfer instructions.
 Stages are `capstone`
 (direct physical decoding), `decode` (NeverD physical decoding) and `lift`
 (decoding plus LowIR, including delay slots). Both decode paths request the same

@@ -196,7 +196,8 @@ void Decoder::configureFor(const BinaryImage &Img) {
     MIPS->setMTEnabled(Img.MIPS && Img.MIPS->HasMT);
     MIPS->setMIPS16E2Enabled(Img.MIPS && Img.MIPS->HasMIPS16 &&
                              Img.MIPS->HasMIPS16E2);
-    MIPS->setDSPEnabled(Img.MIPS && Img.MIPS->HasDSP);
+    MIPS->setDSPEnabled(Img.MIPS && Img.MIPS->HasDSP,
+                        Img.MIPS && Img.MIPS->HasDSPR2);
     MIPS->setMSAEnabled(Img.MIPS && Img.MIPS->HasMSA && MIPSISARevision == 5);
   }
   if (AArch64)
@@ -309,11 +310,12 @@ int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
 
 int Decoder::decodeOneForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
                               DecodedInsn &Out) {
-  if (!beginDecode(Out))
-    return 0;
-  if (AArch64)
+  if (AArch64) {
+    if (!beginDecode(Out))
+      return 0;
     if (const int Size = decodeAArch64ForLift(Bytes, Len, Addr, Out))
       return Size;
+  }
   return decodeOne(Bytes, Len, Addr, Out);
 }
 
@@ -333,7 +335,8 @@ int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
       !decodeArchitectureFallback(Bytes, Len, Addr))
     return 0;
 
-  fixupX86DecodeMetadata(InsnBuf);
+  if (X86)
+    fixupX86DecodeMetadata(InsnBuf);
   Out.Addr = InsnBuf->address;
   Out.Size = static_cast<uint16_t>(InsnBuf->size);
   Out.Id = InsnBuf->id;
@@ -396,10 +399,10 @@ void Decoder::liftToLow(const DecodedInsn &Insn, std::vector<LowOp> &Ops,
 void Decoder::fixupDecodedInsn(cs_insn *I) const {
   if (!I)
     return;
-  fixupX86DecodeMetadata(I);
-  if (X86)
+  if (X86) {
+    fixupX86DecodeMetadata(I);
     X86Lifter::fixupDecodedInsn(I);
-  else if (AArch64)
+  } else if (AArch64)
     AArch64Lifter::fixupDecodedInsn(I);
   else if (ARM)
     ARMLifter::fixupDecodedInsn(I);

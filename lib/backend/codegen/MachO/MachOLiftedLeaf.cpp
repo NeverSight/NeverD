@@ -1,4 +1,5 @@
-//===- MachOLiftedLeaf.cpp - Verified Darwin integer leaf images ----------===//
+//===- MachOLiftedLeaf.cpp - Verified Darwin register-only leaf images
+//----------===//
 //
 // NeverD Decompiler
 //
@@ -9,14 +10,18 @@
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
 #include "neverd/backend/codegen/PatchObject.h"
 #include "neverd/backend/codegen/SourcePatch.h"
+#include "neverd/backend/llvm/AArch64/LLVMEntryABI.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/DirectBranch.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/TargetCodegenInfo.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -28,31 +33,191 @@ namespace {
 #define MACHO_LEAF_VALUE(Type, Name, Value) constexpr Type Name = Value;
 #include "MachOLiftedLeaf.def"
 
+enum class SigningHint : uint32_t {
+#define NEVERD_A64_PAUTH_HINT(Name, Word, Operation, Pointer, Modifier)        \
+  Name = Word,
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuth.def"
+};
+
 llvm::Error refuse(const char *Reason) {
   return llvm::createStringError(llvm::errc::not_supported, Reason);
 }
 
-bool registerOnly(const DecodedInsn &I) {
+bool leafRegister(aarch64_reg R, bool ReadOnly) {
+  switch (R) {
+#define NEVERD_DARWIN_ENTRY_REGISTER(X, W, Name, Reservation, Writable)        \
+  case AARCH64_REG_##X:                                                        \
+  case AARCH64_REG_##W:                                                        \
+    return ReadOnly || Writable;
+#include "neverd/backend/llvm/AArch64/LLVMDarwinEntryRegister.def"
+  default:
+    break;
+  }
+  return (R >= AARCH64_REG_X0 && R <= AARCH64_REG_X17) ||
+         (R >= AARCH64_REG_W0 && R <= AARCH64_REG_W17) ||
+         (R >= AARCH64_REG_S0 && R <= AARCH64_REG_S7) ||
+         (R >= AARCH64_REG_D0 && R <= AARCH64_REG_D7) || R == AARCH64_REG_XZR ||
+         R == AARCH64_REG_WZR;
+}
+
+// MOVZ Wd/Xd, #0 and ORR Wd/Xd, ZR, ZR both clear the full destination
+// register and preserve NZCV. The mask ignores only the width and Rd bits.
+std::optional<unsigned> clearedRegister(uint32_t Word) {
+  const unsigned Rd = Word & kDestinationMask;
+  const uint32_t Operation = Word & kZeroOperationMask;
+  if (Rd == kDestinationMask ||
+      (Operation != kMoveWideZero && Operation != kMoveFromZero))
+    return std::nullopt;
+  return Rd;
+}
+
+bool equivalentLeafWord(uint32_t Original, uint32_t Emitted) {
+  if (Original == Emitted)
+    return true;
+  const auto Rd = clearedRegister(Original);
+  return Rd && Rd == clearedRegister(Emitted);
+}
+
+// Two adjacent zero writes to distinct GPRs have no input, flags, memory or
+// unwind effects. Both source instructions still undergo the register checks.
+bool exchangedZeroWrites(llvm::ArrayRef<uint8_t> Original,
+                         llvm::ArrayRef<uint8_t> Emitted) {
+  if (Original.size() < 2 * aarch64::kInsnSize)
+    return false;
+  const auto First = clearedRegister(readLE<uint32_t>(Original.data()));
+  const auto Second =
+      clearedRegister(readLE<uint32_t>(Original.data() + aarch64::kInsnSize));
+  return First && Second && First != Second &&
+         Second == clearedRegister(readLE<uint32_t>(Emitted.data())) &&
+         First == clearedRegister(
+                      readLE<uint32_t>(Emitted.data() + aarch64::kInsnSize));
+}
+
+bool isPositionIndependentLeafInstruction(const DecodedInsn &I) {
+  const auto &Detail = I.Raw->detail->aarch64;
   switch (I.Id) {
 #define MACHO_LEAF_INSTRUCTION(Name) case Name:
 #include "MachOLiftedLeaf.def"
-    break;
+    return llvm::all_of(
+        llvm::ArrayRef(Detail.operands, Detail.op_count),
+        [](const cs_aarch64_op &Op) {
+          return Op.type == AARCH64_OP_IMM ||
+                 (Op.type == AARCH64_OP_REG &&
+                  leafRegister(Op.reg, Op.access == CS_AC_READ));
+        });
+#define MACHO_LEAF_MEMORY(Name) case Name:
+#include "MachOLiftedLeaf.def"
+    // A literal LDR has the same instruction ID. Insist on an actual base
+    // register and displacement, with neither PC-relative addressing nor
+    // an implicit write to the base.
+    return Detail.op_count == kMemoryOperandCount &&
+           !I.Raw->detail->writeback && !Detail.post_index &&
+           Detail.operands[0].type == AARCH64_OP_REG &&
+           leafRegister(Detail.operands[0].reg,
+                        Detail.operands[0].access == CS_AC_READ) &&
+           Detail.operands[1].type == AARCH64_OP_MEM &&
+           Detail.operands[1].mem.index == AARCH64_REG_INVALID &&
+           leafRegister(Detail.operands[1].mem.base, true);
   default:
     return false;
   }
-  const auto &Detail = I.Raw->detail->aarch64;
-  for (const auto &Op : llvm::ArrayRef(Detail.operands, Detail.op_count)) {
-    if (Op.type == AARCH64_OP_IMM)
+}
+
+bool matchesTailTransfer(llvm::ArrayRef<uint8_t> Source, va_t OriginalPC,
+                         llvm::ArrayRef<uint8_t> Installed, va_t InstalledPC,
+                         llvm::ArrayRef<SourcePatchMapping> Mappings,
+                         const CompiledImage &Generated) {
+  const auto Target = [](llvm::ArrayRef<uint8_t> Word, va_t PC) {
+    auto Jump =
+        decodeDirectBranch(Arch::AArch64, InstructionMode::Default, Word.data(),
+                           Word.size(), PC, {.Jumps = true});
+    return Jump ? Jump->target() : std::nullopt;
+  };
+  const auto Before = Target(Source, OriginalPC);
+  const auto After = Target(Installed, InstalledPC);
+  if (!Before || !After)
+    return false;
+  const auto Callee = llvm::lower_bound(
+      Mappings, *Before,
+      [](const SourcePatchMapping &M, va_t VA) { return M.OriginalVA < VA; });
+  if (Callee == Mappings.end() || Callee->OriginalVA != *Before)
+    return false;
+  const auto Owner = Generated.SymbolAddrs.find(Callee->Symbol);
+  return Owner != Generated.SymbolAddrs.end() && Owner->second == *After;
+}
+
+// Darwin's ordinary calling convention restores X21 in the epilogue. A leaf
+// with an observable X21 write needs the target's writable error carrier.
+llvm::Error bindLeafErrorResults(llvm::Module &Module) {
+  auto &Context = Module.getContext();
+  auto *Register = llvm::MetadataAsValue::get(
+      Context, llvm::MDNode::get(Context, llvm::MDString::get(
+                                              Context, kDarwinErrorRegister)));
+  for (auto &F : llvm::make_early_inc_range(Module)) {
+    llvm::SmallVector<llvm::CallInst *> Accesses;
+    bool Writes = false;
+    bool HasCall = false;
+    for (auto &BB : F)
+      for (auto &I : BB) {
+        auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
+        if (!Call)
+          continue;
+        auto *Intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(Call);
+        if (!Intrinsic) {
+          HasCall = true;
+          continue;
+        }
+        const auto ID = Intrinsic->getIntrinsicID();
+        if ((ID == llvm::Intrinsic::read_register ||
+             ID == llvm::Intrinsic::write_register) &&
+            Intrinsic->getArgOperand(0) == Register) {
+          Writes |= ID == llvm::Intrinsic::write_register;
+          Accesses.push_back(Intrinsic);
+        }
+      }
+    if (!Writes)
       continue;
-    if (Op.type != AARCH64_OP_REG)
-      return false;
-    const auto R = Op.reg;
-    if (!((R >= AARCH64_REG_X0 && R <= AARCH64_REG_X17) ||
-          (R >= AARCH64_REG_W0 && R <= AARCH64_REG_W17) ||
-          R == AARCH64_REG_XZR || R == AARCH64_REG_WZR))
-      return false;
+    if (!F.use_empty() || F.isVarArg() || HasCall ||
+        F.getCallingConv() != llvm::CallingConv::C)
+      return refuse(kErrorResultABI);
+    auto *OldType = F.getFunctionType();
+    llvm::SmallVector<llvm::Type *> Params(OldType->params());
+    auto *Pointer = llvm::PointerType::getUnqual(Context);
+    Params.push_back(Pointer);
+    auto *Type =
+        llvm::FunctionType::get(OldType->getReturnType(), Params, false);
+    auto *Entry = llvm::Function::Create(Type, F.getLinkage(),
+                                         F.getAddressSpace(), {}, &Module);
+    Module.getFunctionList().splice(F.getIterator(), Module.getFunctionList(),
+                                    Entry->getIterator());
+    Entry->copyAttributesFrom(&F);
+    Entry->copyMetadata(&F, 0);
+    Entry->takeName(&F);
+    Entry->setCallingConv(llvm::CallingConv::Swift);
+    Entry->removeFnAttr(llvm::Attribute::Memory);
+    auto *Error = Entry->getArg(F.arg_size());
+    Error->addAttr(llvm::Attribute::SwiftError);
+    for (auto &Old : F.args()) {
+      auto *New = Entry->getArg(Old.getArgNo());
+      New->takeName(&Old);
+      Old.replaceAllUsesWith(New);
+    }
+    Entry->splice(Entry->begin(), &F);
+    F.replaceAllUsesWith(Entry);
+    F.eraseFromParent();
+    for (auto *Access : Accesses) {
+      llvm::IRBuilder<> B(Access);
+      if (Access->getIntrinsicID() == llvm::Intrinsic::read_register) {
+        Access->replaceAllUsesWith(
+            B.CreatePtrToInt(B.CreateLoad(Pointer, Error), Access->getType()));
+      } else {
+        B.CreateStore(B.CreateIntToPtr(Access->getArgOperand(1), Pointer),
+                      Error);
+      }
+      Access->eraseFromParent();
+    }
   }
-  return true;
+  return llvm::Error::success();
 }
 
 llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
@@ -116,17 +281,44 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
     const auto Emitted =
         llvm::ArrayRef(Generated.Bytes)
             .slice(Code->Offset + Owner->second - Code->VA, End - Start);
-    if (Source != Emitted || Source.size() % aarch64::kInsnSize ||
-        readLE<uint32_t>(Source.take_back(aarch64::kInsnSize).data()) !=
-            kReturnToLR)
+    if (Source.empty() || Source.size() % aarch64::kInsnSize)
       return refuse(kLeafCode);
-    for (size_t Offset = 0; Offset < Source.size() - aarch64::kInsnSize;
+    bool Signed = false;
+    size_t MatchedEnd = 0;
+    for (size_t Offset = 0; Offset < Source.size();
          Offset += aarch64::kInsnSize) {
       DecodedInsn Insn{};
       if (Decode.decodeOne(Source.data() + Offset, aarch64::kInsnSize,
                            Start + Offset, Insn) != aarch64::kInsnSize ||
-          !Insn.Raw || !Insn.Raw->detail || !registerOnly(Insn))
+          !Insn.Raw || !Insn.Raw->detail)
         return refuse(kLeafCode);
+      const bool Last = Offset + aarch64::kInsnSize == Source.size();
+      if (Last && !Signed && Insn.Id == AARCH64_INS_B) {
+        if (!matchesTailTransfer(Source.drop_front(Offset), Start + Offset,
+                                 Emitted.drop_front(Offset),
+                                 Owner->second + Offset, Mappings, Generated))
+          return refuse(kTailTarget);
+        continue;
+      }
+      if (Offset >= MatchedEnd &&
+          !equivalentLeafWord(readLE<uint32_t>(Source.data() + Offset),
+                              readLE<uint32_t>(Emitted.data() + Offset))) {
+        if (!exchangedZeroWrites(Source.drop_front(Offset),
+                                 Emitted.drop_front(Offset)))
+          return refuse(kLeafCode);
+        MatchedEnd = Offset + 2 * aarch64::kInsnSize;
+      }
+      if (Last) {
+        // Plain RET must select LR. RETAB has an implicit LR, SP and B key.
+        if (Signed ? Insn.Id != AARCH64_INS_RETAB
+                   : readLE<uint32_t>(Source.data() + Offset) != kReturnToLR)
+          return refuse(kLeafCode);
+      } else if (!Offset && readLE<uint32_t>(Source.data()) ==
+                                static_cast<uint32_t>(SigningHint::PACIBSP)) {
+        Signed = true;
+      } else if (!isPositionIndependentLeafInstruction(Insn)) {
+        return refuse(kLeafCode);
+      }
     }
   }
   return llvm::Error::success();
@@ -223,6 +415,8 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
   for (const auto &Flag : Flags)
     if (Flag.Key->getString() != kArm64eAnalysisModuleFlag)
       Candidate->addModuleFlag(Flag.Behavior, Flag.Key->getString(), Flag.Val);
+  if (auto Error = bindLeafErrorResults(*Candidate))
+    return Error;
   auto &Context = Candidate->getContext();
   auto *Version = llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
       llvm::Type::getInt32Ty(Context), kClassicABIVersion));

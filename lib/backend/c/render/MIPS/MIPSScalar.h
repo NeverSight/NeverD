@@ -12,6 +12,7 @@
 
 #include "neverd/backend/MIPS/MIPSBarrierSource.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
+#include "neverd/backend/MIPS/MIPSMSASource.h"
 #include "neverd/backend/MIPS/MIPSSourceCompiler.h"
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
@@ -50,14 +51,50 @@ inline bool mipsScalarHighShapeIsValid(const HighExpr &E, Arch Target) {
            : std::nullopt});
 }
 
+inline std::pair<Intrinsic, unsigned> mipsScalarHelperKey(const HighExpr &E) {
+  return {E.IntrinsicId, mips::isMSAControl(E.IntrinsicId)
+                             ? unsigned(E.Operands[0]->ConstVal)
+                             : 0};
+}
+
 template <typename Stream>
-void writeMIPSScalarHelpers(Stream &OS, Arch Target,
-                            const std::map<Intrinsic, std::string> &Helpers,
-                            const BinaryImage *Image) {
+void writeMIPSScalarHelpers(
+    Stream &OS, Arch Target,
+    const std::map<std::pair<Intrinsic, unsigned>, std::string> &Helpers,
+    const BinaryImage *Image) {
   const bool Wide = isMIPS64(Target);
   const bool Little = archLittleEndian(Target);
   const char *Reg = Wide ? "uint64_t" : "uint32_t";
-  for (const auto &[Id, Name] : Helpers) {
+  for (const auto &[Key, Name] : Helpers) {
+    const auto [Id, Selector] = Key;
+    if (mips::isMSANativeVector(Id) || mips::isMSAControl(Id)) {
+      if (!Image || !Image->MIPS || !Image->MIPS->HasMSA ||
+          Image->MIPS->ISARevision != 5)
+        throw std::runtime_error(
+            "MSA native source requires an enabled MIPS32r5 MSA image");
+      const auto Asm = mips::msaAssembly(Id, Selector, Little);
+      OS << "static __attribute__((noinline)) ";
+      if (Asm.Read || Asm.Write) {
+        OS << (Asm.Read ? "uint32_t " : "void ") << Name
+           << (Asm.Read ? "(void) { uint32_t v; " : "(uint32_t v) { ")
+           << (Asm.Read ? Asm.cStatement({}, "v")
+                        : Asm.cStatement({std::string("v")}))
+           << (Asm.Read ? " return v; }\n" : " }\n");
+        continue;
+      }
+      OS << "unsigned _BitInt(128) " << Name << "(";
+      std::vector<std::string> Pointers{"&result"};
+      for (unsigned I = 1; I < Asm.Pointers; ++I) {
+        if (I != 1)
+          OS << ", ";
+        OS << "unsigned _BitInt(128) a" << I;
+        Pointers.push_back("&a" + std::to_string(I));
+      }
+      OS << ") { unsigned _BitInt(128) result; " << Asm.cStatement(Pointers)
+         << " return result; }\n";
+      OS << "\n";
+      continue;
+    }
     if (mips::isStatefulScalar(Id))
       throw std::runtime_error(mips::kStatefulSourceUnsupported);
     if (mips::isBarrier(Id)) {
@@ -72,6 +109,14 @@ void writeMIPSScalarHelpers(Stream &OS, Arch Target,
            << "\" ::: \"memory\"); }\n";
       }
       OS << "\n";
+      continue;
+    }
+    if (mips::isDSPPartialControl(Id)) {
+      const auto &A = mips::dspPartialOperation(Id);
+      OS << "static inline "
+         << mips::sourceCompilerCAttribute(Target, Image, true) << "void "
+         << Name << (A.Inputs ? "(uint32_t a, uint32_t b)" : "(void)") << " { "
+         << mips::dspPartialC(A, "a", "b") << " }\n\n";
       continue;
     }
     if (Id == Intrinsic::MIPSReadDSPControl) {
@@ -95,6 +140,12 @@ void writeMIPSScalarHelpers(Stream &OS, Arch Target,
       throw std::runtime_error(mips::kAccumulatorHistoryUnknown);
     if (Id == Intrinsic::MIPSLwrUpper)
       throw std::runtime_error(mips::kPartialLwrRequiresWord);
+    if (Id == Intrinsic::MIPSExtractResult) {
+      OS << "static inline uint32_t " << Name
+         << "(uint32_t failed, uint32_t value) {\n"
+            "    if (failed) __builtin_trap();\n    return value;\n}\n\n";
+      continue;
+    }
     if (Id == Intrinsic::MIPSRequireWord) {
       OS << "static inline void " << Name
          << "(uint64_t value) {\n"
@@ -167,6 +218,20 @@ renderMIPSScalar(const HighExpr &E, Arch Target, const std::string &Name,
                  std::optional<uint64_t> GuestAddress, Render &&Expression) {
   if (!mipsScalarHighShapeIsValid(E, Target))
     throw std::runtime_error(mips::kMalformedScalar);
+  if (mips::isMSAControl(E.IntrinsicId)) {
+    return Name + (E.IntrinsicId == Intrinsic::MIPSReadMSAControl
+                       ? "()"
+                       : "(" + Expression(*E.Operands[1], 1) + ")");
+  }
+  if (mips::isMSANativeVector(E.IntrinsicId)) {
+    std::string Call = Name + "(";
+    for (unsigned I = 0; I < E.Operands.size(); ++I) {
+      if (I)
+        Call += ", ";
+      Call += Expression(*E.Operands[I], I);
+    }
+    return Call + ")";
+  }
   if (mips::isStatefulScalar(E.IntrinsicId))
     throw std::runtime_error(mips::kStatefulSourceUnsupported);
   if (E.IntrinsicId == Intrinsic::MIPSUnpredictable)

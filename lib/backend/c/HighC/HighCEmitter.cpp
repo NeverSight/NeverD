@@ -720,10 +720,14 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
     if (E.Kind == ExprKind::Call && mips::isScalarIntrinsic(E.IntrinsicId)) {
       if (!mipsScalarHighShapeIsValid(E, Opts.TheArch))
         throw std::runtime_error(mips::kMalformedScalar);
-      auto [It, Inserted] = MIPSScalarHelpers.try_emplace(E.IntrinsicId);
-      if (Inserted)
-        It->second = GlobalIdentifierAllocator.allocate(
-            intrinsicCName(E.IntrinsicId), "nd_mips");
+      const auto Key = mipsScalarHelperKey(E);
+      auto [It, Inserted] = MIPSScalarHelpers.try_emplace(Key);
+      if (Inserted) {
+        std::string Name = intrinsicCName(E.IntrinsicId);
+        if (mips::isMSAControl(E.IntrinsicId))
+          Name += "_" + std::to_string(Key.second);
+        It->second = GlobalIdentifierAllocator.allocate(Name, "nd_mips");
+      }
     }
     if (const auto Bits = x86SaturatingLaneBits(E)) {
       auto [It, Inserted] =
@@ -2048,8 +2052,8 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
     if (isMIPS(Opts.TheArch))
       OS << mips::sourceCompilerCAttribute(
           Opts.TheArch, Opts.Image,
-          MIPSScalarHelpers.count(Intrinsic::MIPSReadDSPControl) ||
-              MIPSScalarHelpers.count(Intrinsic::MIPSWriteDSPControl));
+          MIPSScalarHelpers.count({Intrinsic::MIPSReadDSPControl, 0}) ||
+              MIPSScalarHelpers.count({Intrinsic::MIPSWriteDSPControl, 0}));
     if (Opts.Image && isMIPS(Opts.TheArch))
       if (const auto Mode = Opts.Image->instructionModeAt(Function.Entry))
         OS << mips::instructionModeCAttribute(*Mode);
@@ -5159,6 +5163,7 @@ void HighCWriter::writeX64WindowsSyscallHelper() {
 }
 
 void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
+  c_memory::applyMIPSVectorAlignment(Opts, Opts.Image);
   // The unit spells the records it declares no typedef of, as a function or
   // an object has the name, by their tags.
   const auto TagKeyword = [this](llvm::StringRef Name) {
@@ -5176,8 +5181,8 @@ void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
   const bool PreserveDSPControl =
       isMIPS(Opts.TheArch) &&
       (mips::sourcePreservesDSPControl(Opts.TheArch, Opts.Image) ||
-       MIPSScalarHelpers.count(Intrinsic::MIPSReadDSPControl) ||
-       MIPSScalarHelpers.count(Intrinsic::MIPSWriteDSPControl));
+       MIPSScalarHelpers.count({Intrinsic::MIPSReadDSPControl, 0}) ||
+       MIPSScalarHelpers.count({Intrinsic::MIPSWriteDSPControl, 0}));
   const bool AvoidMSA = mips::sourceAvoidsMSA(Opts.TheArch, Opts.Image);
   if (isMIPS(Opts.TheArch))
     OS << mips::sourceCompilerCBegin(Opts.TheArch, Opts.Image,

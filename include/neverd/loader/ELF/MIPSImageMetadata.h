@@ -46,6 +46,7 @@ struct MIPSImageMetadata {
   bool HasMT = false;
   /// Classic MIPS32 DSP ASE; the initial slice requires DSP execution enabled.
   bool HasDSP = false;
+  bool HasDSPR2 = false;
   /// Initial classic MIPS32r5/o32 integer MSA slice, with FP64 register mode.
   bool HasMSA = false;
   std::map<uint64_t, InstructionMode> CodeModeEntries;

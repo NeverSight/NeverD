@@ -146,7 +146,8 @@ llvm::Error orderTextSections(std::vector<uint8_t> &Binary) {
 }
 
 std::optional<TextMetadataStorage>
-findTextMetadataStorage(llvm::ArrayRef<uint8_t> Binary, uint64_t Capacity) {
+findTextMetadataStorage(llvm::ArrayRef<uint8_t> Binary, uint64_t Capacity,
+                        uint64_t FirstOffset = 0) {
   std::vector<macho_patch_detail::MachOFileRange> Segments, Occupied, Payloads;
   if (!macho_patch_detail::collectMachOFileRanges(Binary, Segments, Occupied) ||
       !macho_patch_detail::collectMachOPayloadRanges(Binary, Payloads))
@@ -163,9 +164,9 @@ findTextMetadataStorage(llvm::ArrayRef<uint8_t> Binary, uint64_t Capacity) {
         readMachOSegment(Binary.data() + Segment.HeaderOff, H.Is64);
     if (readMachOName(Fields.SegName) != kMetadataTextSegment)
       continue;
-    uint64_t Cursor =
-        std::max(Segment.Begin, uint64_t(H.HeaderSize) + H.SizeOfCmds +
-                                    kMetadataCommandReserve);
+    uint64_t Cursor = std::max(
+        {Segment.Begin, FirstOffset,
+         uint64_t(H.HeaderSize) + H.SizeOfCmds + kMetadataCommandReserve});
     const auto Available = [&](uint64_t End) {
       while (macho_patch_detail::checkedAlignUp(Cursor, alignof(uint64_t),
                                                 Cursor) &&
@@ -217,7 +218,8 @@ bool growTextForMetadata(std::vector<uint8_t> &Binary, Arch A,
 llvm::Expected<uint64_t> moveTextSection(std::vector<uint8_t> &Binary, Arch A,
                                          llvm::StringRef Name,
                                          llvm::ArrayRef<uint8_t> Content,
-                                         uint64_t Capacity) {
+                                         uint64_t Capacity,
+                                         uint64_t FirstOffset = 0) {
   using namespace llvm::MachO;
   if (!Capacity ||
       Capacity > ::neverd::limits::backend::
@@ -225,7 +227,7 @@ llvm::Expected<uint64_t> moveTextSection(std::vector<uint8_t> &Binary, Arch A,
       Content.size() > Capacity)
     return fail("metadata capacity exceeds its checked limit");
   uint64_t VA = 0;
-  if (auto Storage = findTextMetadataStorage(Binary, Capacity)) {
+  if (auto Storage = findTextMetadataStorage(Binary, Capacity, FirstOffset)) {
     VA = Storage->VA;
     std::copy(Content.begin(), Content.end(),
               Binary.begin() + Storage->FileOffset);
@@ -772,13 +774,73 @@ llvm::Expected<uint64_t> declareMachOReadOnlyData(std::vector<uint8_t> &Binary,
   return declareMachOMetadata(Binary, A, Name, Size, true);
 }
 
+// Keep compact unwind at its existing VA. Move the adjacent original DWARF
+// records beyond the enlarged table only when the whole new frame section
+// fits in an audited free range in TEXT. A layout that keeps a pinned frame
+// can still succeed through the ordinary reservation path.
+static bool tryPackAdjacentFrames(std::vector<uint8_t> &Binary, Arch A,
+                                  const MachOCompactUnwindRegion &Compact,
+                                  uint64_t CompactSize, uint64_t AdditionalEH,
+                                  const MachOUnwindRelocationLimits &Limits) {
+  // A zero-base image has no address space for a downward header extension.
+  if (!AdditionalEH || Compact.MachHeaderVA)
+    return false;
+  const auto EH = findMachOEHFrameRegion(Binary);
+  uint64_t End;
+  if (!EH || EH->SectionFileOff != Compact.LimitFileOff ||
+      !macho_patch_detail::checkedAdd(Compact.SectionFileOff, CompactSize,
+                                      End) ||
+      End < EH->AppendFileOff)
+    return false;
+  const auto Used = EH->AppendFileOff - EH->SectionFileOff;
+  const auto Capacity =
+      llvm::alignTo(Used + AdditionalEH + sizeof(uint32_t), alignof(uint64_t));
+  const auto Space = findTextMetadataStorage(Binary, Capacity, End);
+  if (!Space)
+    return false;
+  auto Frames = relocatedFrames(Binary, *EH, Space->VA, Limits);
+  if (!Frames) {
+    llvm::consumeError(Frames.takeError());
+    return false;
+  }
+  auto Packed = Binary;
+  auto Moved =
+      moveTextSection(Packed, A, kFrameSection, *Frames, Capacity, End);
+  if (!Moved) {
+    llvm::consumeError(Moved.takeError());
+    return false;
+  }
+  // Only the transferred records are vacant. Compact growth checks external
+  // load-command owners and every other section before accepting these bytes.
+  std::fill_n(Packed.begin() + EH->SectionFileOff, Used, 0);
+  if (auto Error = reserveMachOCompactUnwindStorage(Packed, CompactSize)) {
+    llvm::consumeError(std::move(Error));
+    return false;
+  }
+  Binary.swap(Packed);
+  return true;
+}
+
 llvm::Expected<bool> reserveMachOSourceUnwind(
     std::vector<uint8_t> &Binary, Arch A, uint64_t AdditionalEHBytes,
     uint64_t AdditionalFunctions, const MachOUnwindRelocationLimits &Limits) {
+  return reserveMachOSourceUnwind(Binary, A, AdditionalEHBytes,
+                                  {AdditionalFunctions, AdditionalFunctions},
+                                  Limits);
+}
+
+llvm::Expected<bool>
+reserveMachOSourceUnwind(std::vector<uint8_t> &Binary, Arch A,
+                         uint64_t AdditionalEHBytes,
+                         MachOUnwindFunctionCounts Additional,
+                         const MachOUnwindRelocationLimits &Limits) {
+  const uint64_t AdditionalFunctions = Additional.Functions;
   if (AdditionalEHBytes >
           ::neverd::limits::backend::
               kMachOLayoutGrowthReserveMachOSourceUnwindAdditionalEHBytesLimit ||
       AdditionalFunctions >
+          ::neverd::limits::backend::kMaxMachOAdditionalUnwindFunctions ||
+      Additional.LSDAs >
           ::neverd::limits::backend::kMaxMachOAdditionalUnwindFunctions)
     return fail("unwind request exceeds supported bounds");
   auto Candidate = Binary;
@@ -859,7 +921,7 @@ llvm::Expected<bool> reserveMachOSourceUnwind(
     auto Size = measureMachOCompactUnwindRegular(
         Count + 2 * AdditionalFunctions + 1,
         macho_unwind::kPersonalityMask >> macho_unwind::kPersonalityShift,
-        Raw->LSDAEntries.size() + AdditionalFunctions);
+        Raw->LSDAEntries.size() + Additional.LSDAs);
     if (!Size)
       return Size.takeError();
     const uint64_t Required = *Size;
@@ -867,6 +929,11 @@ llvm::Expected<bool> reserveMachOSourceUnwind(
       if (auto E = reserveMachOCompactUnwindStorage(Candidate, Required)) {
         llvm::consumeError(std::move(E));
         const uint64_t Capacity = llvm::alignTo(Required, alignof(uint64_t));
+        if (tryPackAdjacentFrames(Candidate, A, R, Capacity, AdditionalEHBytes,
+                                  Limits)) {
+          Binary.swap(Candidate);
+          return true;
+        }
         // Adopt checked prefix growth before placing the compact registry.
         // The growth owner rebases its TEXT-relative records, so refresh the
         // payload instead of copying the pre-growth offsets into the new map.
@@ -894,7 +961,7 @@ llvm::Expected<bool> reserveMachOSourceUnwind(
     auto R = findMachOEHFrameRegion(Candidate);
     if (!R) {
       auto Declared = declareMachOTextMetadata(
-          Candidate, A, "__eh_frame",
+          Candidate, A, kFrameSection,
           llvm::alignTo(AdditionalEHBytes + sizeof(uint32_t),
                         alignof(uint64_t)));
       if (!Declared)
@@ -930,7 +997,7 @@ llvm::Expected<bool> reserveMachOSourceUnwind(
       if (!Frames)
         return Frames.takeError();
       auto Moved =
-          moveTextSection(Candidate, A, "__eh_frame", *Frames, Capacity);
+          moveTextSection(Candidate, A, kFrameSection, *Frames, Capacity);
       if (!Moved)
         return Moved.takeError();
       if (*Moved != VA)
@@ -957,7 +1024,7 @@ reserveMachONativePatchStorage(std::vector<uint8_t> &Binary, Arch A,
     auto Name = S.getName();
     if (!Name)
       return Name.takeError();
-    if (*Name == "__eh_frame")
+    if (*Name == kFrameSection)
       Frames += S.getSize();
   }
   for (const auto &S : (*File)->symbols()) {

@@ -8,6 +8,7 @@
 #define NEVERD_BACKEND_C_UNALIGNEDMEMORY_H
 
 #include "neverd/backend/c/CEmitterOptions.h"
+#include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
@@ -21,6 +22,16 @@
 namespace neverd::c_memory {
 
 using ScalarPointerSpelling = CEmitterOptions::ScalarPointerSpelling;
+
+inline void applyMIPSVectorAlignment(CEmitterOptions &Opts,
+                                     const BinaryImage *Image) {
+  // MSA LD/ST allow any byte address even when scalar LH/LW/LD would fault.
+  // A standalone MIPS32 unit has no image profile ruling those accesses out.
+  const auto Target = Image ? Image->Arch : Opts.TheArch;
+  if ((Target == Arch::MIPS32 || Target == Arch::MIPS32EL) &&
+      (!Image || (Image->MIPS && Image->MIPS->HasMSA)))
+    Opts.ScalarPointers = ScalarPointerSpelling::AliasTypes;
+}
 
 /// A scalar type an access can name directly (`*(uint64_t *)p`), and the
 /// alias that reads or writes it at any address under any GCC/Clang build:

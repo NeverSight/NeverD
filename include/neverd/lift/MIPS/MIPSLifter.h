@@ -16,6 +16,7 @@
 #include "neverd/lift/LiftCommon.h"
 
 #include "capstone/capstone.h"
+#include "llvm/ADT/ArrayRef.h"
 
 #include <cstdint>
 #include <vector>
@@ -40,7 +41,10 @@ public:
   bool isAlignmentNop(const cs_insn &Instruction) const;
   bool isFunctionTerminator(const cs_insn &Instruction) const;
   va_t directCallTarget(const cs_insn &Instruction) const;
-  void setDSPEnabled(bool Enabled) { HasDSP = Enabled; }
+  void setDSPEnabled(bool Enabled, bool Rev2 = false) {
+    HasDSP = Enabled || Rev2;
+    HasDSPR2 = Rev2;
+  }
   void setMSAEnabled(bool Enabled) { HasMSA = Enabled; }
   void setMIPS16Enabled(bool Enabled) { HasMIPS16 = Enabled; }
   void setMIPS16E2Enabled(bool Enabled) { HasMIPS16E2 = Enabled; }
@@ -54,6 +58,12 @@ private:
         : LiftStateBase(Address, Size, Ops), Width(Width) {}
 
     NdVar read(unsigned Register, uint16_t Bytes = 0);
+    NdVar select(NdVar Condition, NdVar Yes, NdVar No);
+    NdVar accumulator(unsigned Bank);
+    void writeAccumulator(unsigned Bank, NdVar Value);
+    void discardHILO();
+    NdVar vectorElement(unsigned Reg, unsigned Index, uint16_t Bytes);
+    void writeVector(unsigned Reg, llvm::MutableArrayRef<NdVar> Elements);
     void requireWord(unsigned Register);
     NdVar resize(NdVar Value, uint16_t Bytes, bool SignExtend = false);
     void write(unsigned Register, NdVar Value, bool SignExtend = true);
@@ -67,7 +77,10 @@ private:
   bool liftPCRelative(State &S, uint32_t Word, va_t BasePC) const;
   void liftMIPS16Frame(State &S, uint32_t Word) const;
   bool liftDSP(State &S, uint32_t Word) const;
+  bool liftDSPAdditional(State &S, uint32_t Word) const;
   bool liftMSA(State &S, uint32_t Word) const;
+  bool liftMSAAdditional(State &S, uint32_t Word) const;
+  bool liftMSAPermutation(State &S, uint32_t Word) const;
   struct Encoding {
     uint32_t Word;
     unsigned SlotBytes = 0;
@@ -86,6 +99,7 @@ private:
   Arch Target;
   InstructionMode Mode;
   bool HasDSP = false;
+  bool HasDSPR2 = false;
   bool HasMSA = false;
   bool HasMIPS16 = false;
   bool HasMIPS16E2 = false;

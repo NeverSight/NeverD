@@ -1,0 +1,100 @@
+//===- MIPSDSPR2Fixtures.def - LLVM encodings and 74Kf records ------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Mnemonic, original word, v0, DSPControl, HI2, LO2. Operands and entry
+// state are fixed by RevisionTwoMatchesEveryIndependentMachineRecord.
+MIPS_DSPR2_CASE(adduh_qb, 0x7ca61018, 0x807f7f7f, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(subuh_qb, 0x7ca61058, 0x0080ff7f, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(adduh_r_qb, 0x7ca61098, 0x80808080, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(subuh_r_qb, 0x7ca610d8, 0x00810080, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(addqh_ph, 0x7ca61218, 0x807fffff, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(subqh_ph, 0x7ca61258, 0xff807fff, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(addqh_r_ph, 0x7ca61298, 0x80800000, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(subqh_r_ph, 0x7ca612d8, 0xff818000, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(addqh_w, 0x7ca61418, 0x807fffff, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(subqh_w, 0x7ca61458, 0xff807fff, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(addqh_r_w, 0x7ca61498, 0x80800000, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(subqh_r_w, 0x7ca614d8, 0xff808000, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(addu_ph, 0x7ca61210, 0x00ffffff, 0x01104005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(subu_ph, 0x7ca61250, 0xff01ffff, 0x01104005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(addu_s_ph, 0x7ca61310, 0xffffffff, 0x01104005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(subu_s_ph, 0x7ca61350, 0x00000000, 0x01104005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(mul_ph, 0x7ca61318, 0x80008000, 0x01204005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(mul_s_ph, 0x7ca61398, 0x7fff8000, 0x01204005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(mulq_s_w, 0x7ca61598, 0x7f000100, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(mulq_rs_w, 0x7ca615d8, 0x7f000100, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(mulq_s_ph, 0x7ca61790, 0x7f018001, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(cmpgdu_eq_qb, 0x7ca61611, 0x00000008, 0x08004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(cmpgdu_lt_qb, 0x7ca61651, 0x00000006, 0x06004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(cmpgdu_le_qb, 0x7ca61691, 0x0000000e, 0x0e004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(precr_qb_ph, 0x7ca61351, 0x00ffff00, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(absq_s_qb, 0x7c051052, 0x7f007f01, 0x01104005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(shra_qb, 0x7ce51113, 0xff0000ff, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(shra_r_qb, 0x7ce51153, 0xff000100, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(shrl_ph, 0x7ce51653, 0x010000ff, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(shrav_qb, 0x7cc51193, 0x80007fff, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(shrav_r_qb, 0x7cc511d3, 0x80007fff, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(shrlv_ph, 0x7cc516d3, 0x80007fff, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(precr_sra_ph_w, 0x7ca28f91, 0xc07fc000, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(precr_sra_r_ph_w, 0x7ca28fd1, 0xc080c000, 0x01004005,
+                0x80007fff, 0x80ff8000)
+MIPS_DSPR2_CASE(append, 0x7ca28831, 0x00007fff, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(prepend, 0x7ca28871, 0x3fffc07f, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(balign, 0x7ca21c31, 0x0080007f, 0x01004005, 0x80007fff,
+                0x80ff8000)
+MIPS_DSPR2_CASE(dpa_w_ph, 0x7cc71030, 0x80ff8000, 0x01004005, 0x80007fff,
+                0xc0808000)
+MIPS_DSPR2_CASE(dps_w_ph, 0x7cc71070, 0x80ff8000, 0x01004005, 0x80007fff,
+                0x417e8000)
+MIPS_DSPR2_CASE(mulsa_w_ph, 0x7cc710b0, 0x80ff8000, 0x01004005, 0x80007fff,
+                0xc07f8000)
+MIPS_DSPR2_CASE(dpax_w_ph, 0x7cc71230, 0x80ff8000, 0x01004005, 0x80007fff,
+                0xc0ffff01)
+MIPS_DSPR2_CASE(dpsx_w_ph, 0x7cc71270, 0x80ff8000, 0x01004005, 0x80007fff,
+                0x40ff00ff)
+MIPS_DSPR2_CASE(dpaqx_s_w_ph, 0x7cc71630, 0x80ff8000, 0x01044005, 0x80008000,
+                0x01007e01)
+MIPS_DSPR2_CASE(dpsqx_s_w_ph, 0x7cc71670, 0x80ff8000, 0x01044005, 0x80007fff,
+                0x00fe81ff)
+MIPS_DSPR2_CASE(dpaqx_sa_w_ph, 0x7cc716b0, 0x80ff8000, 0x01044005, 0xffffffff,
+                0x80000000)
+MIPS_DSPR2_CASE(dpsqx_sa_w_ph, 0x7cc716f0, 0x80ff8000, 0x01044005, 0xffffffff,
+                0x80000000)
+#undef MIPS_DSPR2_CASE

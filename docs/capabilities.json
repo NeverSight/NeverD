@@ -2203,9 +2203,18 @@
       "limitations": [
         "linked MIPS16e32 and MIPS16e2 Release 2/o32 ELF with local mode evidence in either byte order",
         "MIPS16e2 MT controls require the MT ASE flag and a bound execution context. CP0 word views and execution hazards have explicit state contracts",
-        "CACHE and PREF retain the operation and effective address in LowIR. Cache execution, MT scheduling, privileged native-source projection and original MIPS16e2 hardware execution remain unqualified"
+        "CACHE and PREF execute with a bound board translation and cache contract. Peer-issue gates require an observed instruction hazard barrier. Board timing, general MT scheduling, privileged native source and original MIPS16e2 hardware execution remain unqualified"
       ],
       "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPS16E2Tests.cpp",
+          "filter": "*/MIPS16E2.CP0PlatformHonorsWriteMasksAndSharedStatus/*",
+          "platforms": [
+            "darwin"
+          ]
+        },
         {
           "runner": "gtest",
           "target": "NeverDMIPSIntegerTests",
@@ -2229,6 +2238,24 @@
           "target": "NeverDMIPSPipelineTests",
           "source": "unittests/lift/mips/MIPS16E2PipelineTests.cpp",
           "filter": "MIPS16E2Pipeline.StatefulInstructionsSurviveDeadResultsAndRefuseNativeSource",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPS16E2Tests.cpp",
+          "filter": "*/MIPS16E2.CacheUsesDataTranslationAndCommitsDirtyWritebackBeforeInvalidation/*",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPS16E2Tests.cpp",
+          "filter": "*/MIPS16E2.MTExecutionBarrierDoesNotCertifyPeerInstructionSuspension/*",
           "platforms": [
             "darwin"
           ]
@@ -2256,7 +2283,7 @@
       "limitations": [
         "linked classic MIPS32r2/o32 ELF with DSP ASE evidence. The qualified packed arithmetic, DSPControl and accumulator forms are listed in docs/mips.md",
         "explicit DSPControl state requires an enabled DSP execution environment; no disabled-DSP exception delivery or invented initial state",
-        "AC0 aliases HI/LO. AC1 through AC3 have independent high and low halves. Saturating accumulator, extraction, DSPR2, DSP64 and compressed DSP families require separate qualification",
+        "AC0 aliases HI/LO. AC1 through AC3 have independent high and low halves. Saturating fractional accumulation, EXTR and position-based extraction observe DSPControl. The 46 DSPR2 instructions require revision-two ABI evidence. DSP64 and compressed DSP require separate qualification",
         "original-target source preserves DSPControl after return; no portable-host execution or floating/vector ABI claim"
       ],
       "tests": [
@@ -2265,6 +2292,15 @@
           "target": "NeverDMIPSPipelineTests",
           "source": "unittests/lift/mips/MIPSDSPPipelineTests.cpp",
           "filter": "MIPSDSPPipeline.DiscardedPackedResultStillPublishesMachineState",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPSDSPTests.cpp",
+          "filter": "*/MIPSDSP.RevisionTwoMatchesEveryIndependentMachineRecord/*",
           "platforms": [
             "darwin"
           ]
@@ -2283,6 +2319,24 @@
           "target": "NeverDMIPSIntegerTests",
           "source": "unittests/lift/mips/MIPSDSPTests.cpp",
           "filter": "*/MIPSDSP.AccumulatorBanksAndDotProductsPreserveFullCarryAndStickyFlags/*",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPSDSPTests.cpp",
+          "filter": "*/MIPSDSP.ExtractsUseBothOverflowTestsAllCountsAndConditionallyAdvancePosition/*",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPSDSPTests.cpp",
+          "filter": "*/MIPSDSP.FractionalAccumulatorSaturationChecksProductAndFinalSum/*",
           "platforms": [
             "darwin"
           ]
@@ -2309,10 +2363,19 @@
       ],
       "limitations": [
         "linked classic MIPS32r5/o32 ELF with MSA, FP64 ABI and 128-bit CPR1 evidence in either byte order",
-        "qualified integer B/H/W/D operations include rounded shifts and bit insertion. Source recovery requires defined vector inputs and the original-target compiler contract",
-        "floating-point and control state, disabled-MSA exception delivery, MSA64 and compressed MSA remain outside this profile"
+        "integer lane arithmetic, Q-format products, vector memory, conditional branches, permutations and slides, W/D floating point, and CFCMSA/CTCMSA. Native floating point requires defined vector inputs, an enabled original-target FP environment and WRP clear",
+        "concrete FP requires a bound executor and MSACSR. General partitioned vector execution, disabled-MSA exception delivery, MSA64 and compressed MSA remain outside this profile"
       ],
       "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPSMSATests.cpp",
+          "filter": "*/MIPSMSA.WideningAliasesAndSignedUnsignedSaturationUseFullLaneWidths/*",
+          "platforms": [
+            "darwin"
+          ]
+        },
         {
           "runner": "gtest",
           "target": "NeverDMIPSIntegerTests",
@@ -2327,6 +2390,42 @@
           "target": "NeverDMIPSPipelineTests",
           "source": "unittests/lift/mips/MIPSMSAPipelineTests.cpp",
           "filter": "MIPSMSAPipeline.InitializedIntegerLeavesEmitBothSourceRoutes",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPSMSATests.cpp",
+          "filter": "*/MIPSMSA.PermutationsUseRegisterLanesAndSlideBytesInIndependentRows/*",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPSMSATests.cpp",
+          "filter": "*/MIPSMSA.FloatClassDistinguishesEveryIEEEClassWithoutReadingControl/*",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPSMSATests.cpp",
+          "filter": "*/MIPSMSA.ConcreteFloatingPointUsesBoundCSRAndCommitsTrapWithoutDestination/*",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPSMSATests.cpp",
+          "filter": "*/MIPSMSA.PartitionSelectorsEnforcePrivilegeAndPhysicalRegisterCapacity/*",
           "platforms": [
             "darwin"
           ]

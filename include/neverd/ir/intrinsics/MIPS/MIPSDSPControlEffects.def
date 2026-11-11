@@ -1,0 +1,11 @@
+//===- MIPSDSPControlEffects.def - Partially defined control updates ------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+// Name, stable intrinsic number, C helper name, native instruction.
+NEVERD_DSP_COMPARE(MIPSCmpEqPH, 16033, "neverd_mips_cmp_eq_ph", "cmp.eq.ph")
+NEVERD_DSP_COMPARE(MIPSCmpLtPH, 16034, "neverd_mips_cmp_lt_ph", "cmp.lt.ph")
+NEVERD_DSP_COMPARE(MIPSCmpLePH, 16035, "neverd_mips_cmp_le_ph", "cmp.le.ph")
+#undef NEVERD_DSP_COMPARE

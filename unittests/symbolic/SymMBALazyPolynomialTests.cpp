@@ -300,7 +300,7 @@ TEST(SymMBALazyPolynomial, DenseCarryEmissionKeepsMeasuredWorkCeilings) {
     const auto Result = simplifyMBADeep(Ctx, F.Input, Options);
     ASSERT_NE(Result.Expr, F.Input);
     EXPECT_EQ(Result.SizeBefore, 495u);
-    EXPECT_EQ(Result.SizeAfter, HighBits == 2 ? 325u : 321u);
+    EXPECT_LE(Result.SizeAfter, 179u);
     EXPECT_EQ(Result.Evidence, MBAEvidence::Derivation);
     EXPECT_LE(Result.Work, HighBits == 2 ? 45000u : 40000u);
     checkFullWidthOracle(Ctx, F, Result.Expr);
