@@ -16093,6 +16093,13 @@ ownership and execution order; MedIR expands predicated effects before SSA.
 The lifter validates encodings before emitting effects and reuses the explicit
 MIPS64 word-input contract; source backends do not reinterpret instruction bits.
 
+`MIPSLiftMicroASE` maps qualified microMIPS DSP, DSPR2 and MSA words to their
+classic semantic form. The physical decoder retains original bytes, mode and
+branch address, including when Capstone requires the canonical MSA encoding.
+`MIPSLiftR6` owns revision-specific integer opcodes, PC-relative addressing
+and compact transfers. The decoder records a forbidden follower independently
+of the execution unit's delay-slot ownership.
+
 `MedMIPSMergeValues` owns the source-only proof for adjacent complementary
 merge loads in a single ordinary leaf block. It runs after SSA/projection/DCE
 and before ABI recovery, binds physical LowIR occurrences to MedIR, and removes

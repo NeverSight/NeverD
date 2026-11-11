@@ -63,45 +63,17 @@ int main(int Argc, char **Argv) try {
   Arch Target = Arch::Unknown;
   InstructionMode Encoding = InstructionMode::Default;
   bool DSP = false, DSPR2 = false, MSA = false, MIPS16E2 = false;
-#define NEVERD_MIPS_BENCH_PROFILE(Name, Value)                                 \
-  if (std::string_view(Argv[1]) == #Name)                                      \
-    Target = Arch::Value;
-#include "mips-bench.def"
-#define NEVERD_MICROMIPS_BENCH_PROFILE(Name, Value)                            \
+  unsigned Revision = 2;
+#define NEVERD_MIPS_BENCH_PROFILE(Name, ArchName, Mode, Rev, Dsp, Dspr2, Msa,  \
+                                  E2)                                          \
   if (std::string_view(Argv[1]) == #Name) {                                    \
-    Target = Arch::Value;                                                      \
-    Encoding = InstructionMode::MicroMIPS;                                     \
-  }
-#include "mips-bench.def"
-#define NEVERD_MIPS16_BENCH_PROFILE(Name, Value)                               \
-  if (std::string_view(Argv[1]) == #Name) {                                    \
-    Target = Arch::Value;                                                      \
-    Encoding = InstructionMode::MIPS16;                                        \
-  }
-#include "mips-bench.def"
-#define NEVERD_MIPS16E2_BENCH_PROFILE(Name, Value)                             \
-  if (std::string_view(Argv[1]) == #Name) {                                    \
-    Target = Arch::Value;                                                      \
-    Encoding = InstructionMode::MIPS16;                                        \
-    MIPS16E2 = true;                                                           \
-  }
-#include "mips-bench.def"
-#define NEVERD_MIPS_DSP_BENCH_PROFILE(Name, Value)                             \
-  if (std::string_view(Argv[1]) == #Name) {                                    \
-    Target = Arch::Value;                                                      \
-    DSP = true;                                                                \
-  }
-#include "mips-bench.def"
-#define NEVERD_MIPS_DSPR2_BENCH_PROFILE(Name, Value)                           \
-  if (std::string_view(Argv[1]) == #Name) {                                    \
-    Target = Arch::Value;                                                      \
-    DSP = DSPR2 = true;                                                        \
-  }
-#include "mips-bench.def"
-#define NEVERD_MIPS_MSA_BENCH_PROFILE(Name, Value)                             \
-  if (std::string_view(Argv[1]) == #Name) {                                    \
-    Target = Arch::Value;                                                      \
-    MSA = true;                                                                \
+    Target = Arch::ArchName;                                                   \
+    Encoding = InstructionMode::Mode;                                          \
+    Revision = Rev;                                                            \
+    DSP = Dsp;                                                                 \
+    DSPR2 = Dspr2;                                                             \
+    MSA = Msa;                                                                 \
+    MIPS16E2 = E2;                                                             \
   }
 #include "mips-bench.def"
   if (!isMIPS(Target))
@@ -136,7 +108,7 @@ int main(int Argc, char **Argv) try {
   Profile.MIPS->HasDSPR2 = DSPR2;
   Profile.MIPS->HasMIPS16E2 = MIPS16E2;
   Profile.MIPS->HasMSA = MSA;
-  Profile.MIPS->ISARevision = MSA ? 5 : 2;
+  Profile.MIPS->ISARevision = Revision;
   Profile.MIPS->HasMicroMIPS = Encoding == InstructionMode::MicroMIPS;
   Profile.MIPS->HasMIPS16 = Encoding == InstructionMode::MIPS16;
   if (!Decode.init(Profile))
@@ -145,9 +117,11 @@ int main(int Argc, char **Argv) try {
   Decode.setText(false);
   Capstone Reference;
   const auto Mode = static_cast<cs_mode>(
-      (isMIPS64(Target) ? CS_MODE_MIPS64R2
-       : MSA            ? CS_MODE_MIPS32R5
-                        : CS_MODE_MIPS32R2) |
+      (Revision == 6 ? (isMIPS64(Target) ? CS_MODE_MIPS64R6 : CS_MODE_MIPS32R6)
+       : isMIPS64(Target) ? CS_MODE_MIPS64R2
+       : MSA              ? CS_MODE_MIPS32R5
+                          : CS_MODE_MIPS32R2) |
+      (Revision == 6 && isMIPS64(Target) ? CS_MODE_MIPS_PTR64 : 0) |
       (Encoding == InstructionMode::MicroMIPS ? CS_MODE_MICRO
        : Encoding == InstructionMode::MIPS16  ? CS_MODE_MIPS16
                                               : 0) |

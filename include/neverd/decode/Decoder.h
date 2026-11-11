@@ -89,6 +89,9 @@ struct DecodedInsn {
   /// Raw identity and operand availability captured by the producing decoder.
   /// Native decoding can supply complete detail without rendered text.
   std::optional<AArch64DecodeOccurrence> AArch64Occurrence = std::nullopt;
+  /// A Release 6 conditional compact branch with a CTI at PC+4 faults only
+  /// on the fallthrough path. This bit belongs to the decoded occurrence.
+  bool MIPSForbiddenFollower = false;
 };
 
 /// A semantic unit with truthful physical-instruction identities. MIPS delayed
@@ -339,6 +342,8 @@ private:
   static uint64_t nextAArch64DecodeIdentity();
 
   /// Apply the active architecture's fallback when Capstone rejects bytes.
+  bool decodePhysical(const uint8_t *Bytes, size_t Len, va_t Addr);
+  bool decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr);
   bool decodeArchitectureFallback(const uint8_t *Bytes, size_t Len, va_t Addr);
 
   /// Use the AArch64 native decoder, returning zero when it declines.
@@ -392,6 +397,7 @@ private:
   void fixupDecodedInsn(cs_insn *I) const;
 
   csh Handle = 0;
+  csh MicroASEHandle = 0;
   cs_insn *InsnBuf = nullptr;
   const uint64_t AArch64DecodeIdentity;
   uint64_t AArch64DecodeGeneration = 0;

@@ -8,6 +8,7 @@
 /// explicit machine state even when the integer destination is discarded.
 //===----------------------------------------------------------------------===//
 
+#include "neverd/ArchSupport.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSDSP.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
@@ -23,29 +24,41 @@ NdVar MIPSLifter::State::select(NdVar Condition, NdVar Yes, NdVar No) {
 }
 
 NdVar MIPSLifter::State::accumulator(unsigned Bank) {
-  return binary(NdOp::CONCAT, NdVar::reg(mipsreg::accumulatorHI(Bank), 4),
-                NdVar::reg(mipsreg::accumulatorLO(Bank), 4), 8);
+  return binary(NdOp::CONCAT,
+                resize(NdVar::reg(mipsreg::accumulatorHI(Bank), Width), 4),
+                resize(NdVar::reg(mipsreg::accumulatorLO(Bank), Width), 4), 8);
 }
 
 void MIPSLifter::State::writeAccumulator(unsigned Bank, NdVar Value) {
   const auto High = makeTemp(4);
   emit(NdOp::SUBBYTES, High, {Value, NdVar::cst(4, 4)});
-  emit(NdOp::COPY, NdVar::reg(mipsreg::accumulatorHI(Bank), 4), {High});
-  emit(NdOp::COPY, NdVar::reg(mipsreg::accumulatorLO(Bank), 4),
-       {resize(Value, 4)});
+  emit(NdOp::COPY, NdVar::reg(mipsreg::accumulatorHI(Bank), Width),
+       {resize(High, Width, true)});
+  emit(NdOp::COPY, NdVar::reg(mipsreg::accumulatorLO(Bank), Width),
+       {resize(resize(Value, 4), Width, true)});
   if (!Bank)
     emit(NdOp::COPY, NdVar::reg(mipsreg::AC0Pending, 1), {NdVar::cst(0, 1)});
 }
 
 void MIPSLifter::State::discardHILO() {
-  emitIntrinsic(Intrinsic::MIPSUnpredictable, NdVar::reg(mipsreg::HI, 4));
-  emitIntrinsic(Intrinsic::MIPSUnpredictable, NdVar::reg(mipsreg::LO, 4));
+  emitIntrinsic(Intrinsic::MIPSUnpredictable, NdVar::reg(mipsreg::HI, Width));
+  emitIntrinsic(Intrinsic::MIPSUnpredictable, NdVar::reg(mipsreg::LO, Width));
   emit(NdOp::COPY, NdVar::reg(mipsreg::AC0Pending, 1), {NdVar::cst(0, 1)});
 }
 
+bool MIPSLifter::isDSPIndexedDoubleword(uint32_t Word) const {
+  return HasDSP && isMIPS64(Target) && (Word & 0xfc0007ffu) == 0x7c00020au;
+}
+
 bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
-  if (!HasDSP || S.Width != 4 || isMIPSCompressedMode(Mode))
+  if (!HasDSP || Mode == InstructionMode::MIPS16)
     return false;
+  if (S.Width == 8 && isDSPIndexedDoubleword(Word)) {
+    const unsigned Base = (Word >> 21) & 31, Index = (Word >> 16) & 31;
+    const unsigned Destination = (Word >> 11) & 31;
+    return liftMemory(S, (55u << 26) | (Destination << 16),
+                      S.binary(NdOp::INT_ADD, S.read(Base), S.read(Index)));
+  }
   const auto Kind = mips::dspInstruction(Word);
   if (!Kind)
     return liftDSPAdditional(S, Word);
@@ -81,9 +94,9 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
   case DSP::ExtractVariablePosition:
   case DSP::ExtractPositionDecrement:
   case DSP::ExtractVariablePositionDecrement: {
-    const auto Size =
-        (Word & 0x40) ? S.binary(NdOp::INT_AND, S.read(RS), NdVar::cst(31, 4))
-                      : NdVar::cst(RS, 4);
+    const auto Size = (Word & 0x40) ? S.binary(NdOp::INT_AND, S.read(RS, 4),
+                                               NdVar::cst(31, 4))
+                                    : NdVar::cst(RS, 4);
     const bool Decrement = *Kind == DSP::ExtractPositionDecrement ||
                            *Kind == DSP::ExtractVariablePositionDecrement;
     if (Decrement || *Kind == DSP::ExtractPosition ||
@@ -111,7 +124,8 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
         const auto SafeOffset =
             S.binary(NdOp::INT_AND, Offset, NdVar::cst(63, 4));
         const auto Part = [&](unsigned Reg) {
-          return S.select(Failed, NdVar::cst(0, 4), NdVar::reg(Reg, 4));
+          return S.select(Failed, NdVar::cst(0, 4),
+                          S.resize(NdVar::reg(Reg, S.Width), 4));
         };
         const auto Acc =
             S.binary(NdOp::CONCAT, Part(mipsreg::accumulatorHI(Bank)),
@@ -174,9 +188,9 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
                        *Kind == DSP::MultiplyAccumulateSaturatedRight;
     const auto Part = [&](unsigned R) {
       if (Long)
-        return S.read(R);
+        return S.read(R, 4);
       const auto V = S.makeTemp(2);
-      S.emit(NdOp::SUBBYTES, V, {S.read(R), NdVar::cst(Right ? 0 : 2, 4)});
+      S.emit(NdOp::SUBBYTES, V, {S.read(R, 4), NdVar::cst(Right ? 0 : 2, 4)});
       return V;
     };
     const auto A = Part(RS), B = Part(RT);
@@ -225,7 +239,7 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
       *Kind == mips::DSPInstruction::DotSubFractionalHalfwords ||
       *Kind == mips::DSPInstruction::MultiplySubtractFractionalHalfwords;
   if (DotBytes || DotFractional) {
-    const auto A = S.read(RS), B = S.read(RT);
+    const auto A = S.read(RS, 4), B = S.read(RT, 4);
     const auto Old = S.accumulator(Bank);
     const bool Left = *Kind == mips::DSPInstruction::DotAddLeftBytes ||
                       *Kind == mips::DSPInstruction::DotSubLeftBytes;
@@ -288,7 +302,7 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
       S.emit(NdOp::NOP, {}, {});
       return true;
     }
-    auto Value = S.binary(NdOp::INT_AND, S.read(RS), NdVar::cst(Bits, 4));
+    auto Value = S.binary(NdOp::INT_AND, S.read(RS, 4), NdVar::cst(Bits, 4));
     if (Bits != mips::DSPControlBits)
       Value = S.binary(NdOp::INT_OR, Value,
                        S.binary(NdOp::INT_AND, ReadControl(),
@@ -305,7 +319,7 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
       *Kind == mips::DSPInstruction::MultiplyRoundedHalfwords;
   if (FractionalMultiply || *Kind == mips::DSPInstruction::MultiplyLeftBytes ||
       *Kind == mips::DSPInstruction::MultiplyRightBytes) {
-    const auto A = S.read(RS), B = S.read(RT);
+    const auto A = S.read(RS, 4), B = S.read(RT, 4);
     NdVar Result = NdVar::cst(0, 4), Overflow = NdVar::cst(0, 1);
     for (unsigned I = 0; I != (ExpandedMultiply ? 1u : 2u); ++I) {
       const auto X = S.makeTemp(FractionalMultiply ? 2 : 1);
@@ -368,7 +382,7 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
       *Kind == mips::DSPInstruction::PackRoundedSaturatedHalfwords;
   if (PackRounded ||
       *Kind == mips::DSPInstruction::PackSaturatedUnsignedBytes) {
-    const auto A = S.read(RS), B = S.read(RT);
+    const auto A = S.read(RS, 4), B = S.read(RT, 4);
     NdVar Result = NdVar::cst(0, 4), Overflow = NdVar::cst(0, 1);
     const unsigned Count = PackRounded ? 2 : 4;
     for (unsigned I = 0; I != Count; ++I) {
@@ -429,7 +443,7 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
       S.emit(NdOp::NOP, {}, {});
       return true;
     }
-    const auto A = S.read(RS), B = S.read(RT);
+    const auto A = S.read(RS, 4), B = S.read(RT, 4);
     if (*Kind == mips::DSPInstruction::ModularSubtract) {
       const auto Last = S.binary(NdOp::INT_AND,
                                  S.binary(NdOp::INT_RIGHT, B, NdVar::cst(8, 4)),
@@ -495,8 +509,8 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
       *Kind == mips::DSPInstruction::AddSaturatedSignedWord ||
       *Kind == mips::DSPInstruction::SubSaturatedSignedWord;
   if (SetCarry || WithCarry || WordSaturate) {
-    const auto A = S.resize(S.read(RS), 8, !SetCarry);
-    const auto B = S.resize(S.read(RT), 8, !SetCarry);
+    const auto A = S.resize(S.read(RS, 4), 8, !SetCarry);
+    const auto B = S.resize(S.read(RT, 4), 8, !SetCarry);
     const auto Control = ReadControl();
     auto Sum = S.binary(*Kind == mips::DSPInstruction::SubSaturatedSignedWord
                             ? NdOp::INT_SUB
@@ -560,10 +574,10 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
         : *Kind == mips::DSPInstruction::AbsoluteSaturatedWord ? 4
                                                                : 2;
     const unsigned Bits = Bytes * 8;
-    const auto Source = S.read(RT);
+    const auto Source = S.read(RT, 4);
     const auto Count = !LeftShift ? NdVar::cst(0, 8)
                        : LeftShift->Variable
-                           ? S.resize(S.binary(NdOp::INT_AND, S.read(RS),
+                           ? S.resize(S.binary(NdOp::INT_AND, S.read(RS, 4),
                                                NdVar::cst(Bits - 1, 4)),
                                       8)
                            : NdVar::cst(RS, 8);
@@ -637,7 +651,7 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
     }
     NdVar Result = NdVar::cst(0, 4);
     if (Expand) {
-      const auto Input = S.read(RT);
+      const auto Input = S.read(RT, 4);
       for (unsigned I = 0; I != 4u / Expand->OutBytes; ++I) {
         const auto Part = S.makeTemp(Expand->Bytes);
         S.emit(NdOp::SUBBYTES, Part,
@@ -649,7 +663,7 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
         Result = S.binary(NdOp::INT_OR, Result, Value);
       }
     } else if (Reverse) {
-      Result = S.binary(NdOp::INT_AND, S.read(RT), NdVar::cst(0xffff, 4));
+      Result = S.binary(NdOp::INT_AND, S.read(RT, 4), NdVar::cst(0xffff, 4));
       for (unsigned Shift = 1; Shift <= 8; Shift *= 2) {
         const auto Mask = NdVar::cst(0xffffu / ((1u << Shift) + 1), 4);
         Result = S.binary(
@@ -661,7 +675,7 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
                      NdVar::cst(Shift, 4)));
       }
     } else if (Reduce) {
-      const auto Input = S.read(RS);
+      const auto Input = S.read(RS, 4);
       for (unsigned I = 0; I != 4; ++I) {
         const auto Byte = S.makeTemp(1);
         S.emit(NdOp::SUBBYTES, Byte, {Input, NdVar::cst(I, 4)});
@@ -714,10 +728,10 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
       S.emit(NdOp::NOP, {}, {});
       return true;
     }
-    const auto Right = S.read(RT);
+    const auto Right = S.read(RT, 4);
     NdVar Result = NdVar::cst(0, 4);
     if (Pack) {
-      const auto Left = S.read(RS);
+      const auto Left = S.read(RS, 4);
       const unsigned Bytes =
           *Kind == mips::DSPInstruction::PackHalfwords ? 2 : 1;
       for (unsigned I = 0; I != 4 / Bytes; ++I) {
@@ -734,9 +748,10 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
     } else {
       const unsigned Bits = Shift->Bytes * 8;
       const uint16_t Wide = Shift->Bytes == 4 ? 8 : 4;
-      const auto Count = Shift->Variable ? S.binary(NdOp::INT_AND, S.read(RS),
-                                                    NdVar::cst(Bits - 1, 4))
-                                         : NdVar::cst(RS, 4);
+      const auto Count =
+          Shift->Variable
+              ? S.binary(NdOp::INT_AND, S.read(RS, 4), NdVar::cst(Bits - 1, 4))
+              : NdVar::cst(RS, 4);
       for (unsigned I = 0; I != 4 / Shift->Bytes; ++I) {
         const auto Lane = S.makeTemp(Shift->Bytes);
         S.emit(NdOp::SUBBYTES, Lane, {Right, NdVar::cst(I * Shift->Bytes, 4)});
@@ -761,8 +776,8 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
     return true;
   }
 
-  const auto Left = S.read(RS);
-  const auto Right = S.read(RT);
+  const auto Left = S.read(RS, 4);
+  const auto Right = S.read(RT, 4);
   const bool Subtract =
       *Kind == mips::DSPInstruction::SubUnsignedBytes ||
       *Kind == mips::DSPInstruction::SubSaturatedUnsignedBytes ||

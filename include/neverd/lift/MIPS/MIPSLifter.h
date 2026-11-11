@@ -26,13 +26,20 @@ namespace neverd {
 class MIPSLifter {
 public:
   explicit MIPSLifter(Arch Target,
-                      InstructionMode Mode = InstructionMode::Default)
-      : Target(Target), Mode(Mode) {}
+                      InstructionMode Mode = InstructionMode::Default,
+                      uint8_t Revision = 2)
+      : Target(Target), Mode(Mode), ISARevision(Revision) {}
 
-  void lift(const cs_insn &Instruction, std::vector<LowOp> &Ops) const;
+  void lift(const cs_insn &Instruction, std::vector<LowOp> &Ops,
+            bool ForbiddenFollower = false) const;
+  static bool hasR6ForbiddenFollower(uint32_t Branch, uint32_t Follower);
   LowDelaySlot liftUnit(const cs_insn &Head, const cs_insn &Slot,
                         std::vector<LowOp> &Ops) const;
   uint32_t word(const cs_insn &Instruction) const;
+  // Native instruction identities follow the public Capstone MIPS range.
+  static constexpr unsigned IndexedLoadDoublewordID = MIPS_INS_ENDING + 1;
+  bool isDSPIndexedDoubleword(uint32_t Word) const;
+  std::optional<uint32_t> microASEWord(uint32_t PhysicalWord) const;
   static bool hasDelaySlot(uint32_t Word);
   /// Zero: no slot; one: either physical width; two/four: required width.
   unsigned delaySlotBytes(const cs_insn &Instruction) const;
@@ -87,7 +94,13 @@ private:
     bool Unconditional = false;
     bool PCRelative = false;
     bool Frame = false;
+    bool R6 = false;
   };
+  Encoding release6Encoding(uint32_t Word) const;
+  static bool isR6Compact(uint32_t Word);
+  uint64_t r6BranchTarget(uint32_t Word, uint64_t PC) const;
+  bool liftR6Compact(State &S, uint32_t Word, bool ForbiddenFollower) const;
+  bool liftRelease6(State &S, uint32_t Word) const;
   bool liftNonControl(State &S, Encoding Code, va_t BasePC) const;
   std::optional<Encoding> encoding(const cs_insn &Instruction) const;
   std::optional<Encoding> microEncoding(const cs_insn &Instruction) const;
@@ -98,6 +111,7 @@ private:
                            Encoding Code, std::vector<LowOp> &Ops) const;
   Arch Target;
   InstructionMode Mode;
+  uint8_t ISARevision;
   bool HasDSP = false;
   bool HasDSPR2 = false;
   bool HasMSA = false;

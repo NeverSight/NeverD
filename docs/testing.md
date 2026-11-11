@@ -23806,6 +23806,21 @@ It checks distinct physical encodings and compares both byte orders. Its
 assembler objects and raw binaries are removed on exit. The execution tests
 above check register, memory and control effects for individual operations.
 
+For microMIPS32 DSP/DSPR2 and MSA, MIPS64r2 DSP/DSPR2 and classic MIPS32r6
+and MIPS64r6, use GNU binutils with all four MIPS ELF linker emulations:
+
+```bash
+python3 unittests/lift/mips/profile-encoding-coverage.py \
+  --assembler /path/to/mips-as --linker /path/to/mips-ld \
+  --bench build-mips/bin/neverd-mips-bench
+```
+
+The fixture links local branch relocations, checks physical lengths and compares
+the lifted operations across byte orders and across classic/micro ASE encodings.
+The parameterized `MIPSRelease6` and `MIPSDSPRegisterWidth` tests in
+`NeverDMIPSIntegerTests` check register values, control flow and full-width
+indexed addresses.
+
 Ordinary pair padding, predecessor memory barriers,
 single-sided barriers at joins, depth/work exhaustion and non-entry analysis
 roots or exceptional/disconnected paths have separate call-recovery regressions.

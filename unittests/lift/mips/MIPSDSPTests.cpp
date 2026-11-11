@@ -91,7 +91,45 @@ constexpr PureCase PureCases[] = {
 #define MIPS_DSP_PURE(Name, Word, Result, Source) {#Name, Word, Result, Source},
 #include "MIPSDSPExpandFixtures.def"
 };
-TEST_P(MIPSDSP, RevisionTwoMatchesEveryIndependentMachineRecord) {
+class MIPSDSPRegisterWidth : public ::testing::TestWithParam<Arch> {};
+INSTANTIATE_TEST_SUITE_P(BothWidthsAndByteOrders, MIPSDSPRegisterWidth,
+                         ::testing::Values(Arch::MIPS32, Arch::MIPS32EL,
+                                           Arch::MIPS64, Arch::MIPS64EL));
+
+TEST_P(MIPSDSPRegisterWidth, IndexedDoublewordUsesTheEntireEffectiveAddress) {
+  auto Image = dspImage(GetParam());
+  const bool Wide = isMIPS64(GetParam());
+  Image.Bits = Wide ? Bitness::Bits64 : Bitness::Bits32;
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  const auto Bytes = encodeDSP({0x7c85120a}, GetParam()); // LDX v0,a1(a0)
+  DecodedInsn I{};
+  if (!Wide) {
+    if (D.decodeOne(Bytes.data(), 4, 0x10000, I)) {
+      std::vector<LowOp> Ops;
+      EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
+    }
+    return;
+  }
+  ASSERT_EQ(D.decodeOne(Bytes.data(), 4, 0x10000, I), 4);
+  EXPECT_STREQ(I.Raw->mnemonic, "ldx");
+  EXPECT_EQ(I.Id, MIPSLifter::IndexedLoadDoublewordID);
+  EXPECT_TRUE(std::equal(Bytes.begin(), Bytes.end(), I.Raw->bytes));
+  std::vector<LowOp> Ops;
+  D.liftToLow(I, Ops);
+  const auto Address = llvm::find_if(
+      Ops, [](const auto &O) { return O.Opcode == NdOp::INT_ADD; });
+  ASSERT_NE(Address, Ops.end());
+  EXPECT_EQ(Address->Inputs[0].Size, 8);
+  EXPECT_EQ(Address->Inputs[1].Size, 8);
+  EXPECT_EQ(Address->Output.Size, 8);
+  const auto Load =
+      llvm::find_if(Ops, [](const auto &O) { return O.Opcode == NdOp::LOAD; });
+  ASSERT_NE(Load, Ops.end());
+  EXPECT_EQ(Load->Output.Size, 8);
+}
+
+TEST_P(MIPSDSPRegisterWidth, RevisionTwoMatchesEveryIndependentMachineRecord) {
   struct Record {
     const char *Mnemonic;
     uint32_t Word, V0, Control, HI2, LO2;
@@ -103,6 +141,11 @@ TEST_P(MIPSDSP, RevisionTwoMatchesEveryIndependentMachineRecord) {
   };
   static_assert(std::size(Cases) == 46);
   auto Image = dspImage(GetParam());
+  const bool Wide = isMIPS64(GetParam());
+  Image.Bits = Wide ? Bitness::Bits64 : Bitness::Bits32;
+  const auto WordValue = [Wide](uint32_t V) -> uint64_t {
+    return Wide ? uint64_t(int64_t(int32_t(V))) : V;
+  };
   Image.MIPS->HasDSPR2 = true;
   Decoder D;
   ASSERT_TRUE(D.init(Image));
@@ -110,18 +153,18 @@ TEST_P(MIPSDSP, RevisionTwoMatchesEveryIndependentMachineRecord) {
     SCOPED_TRACE(R.Mnemonic);
     NdOpEmulator E(Image);
     E.setStrictMode(true);
-    E.setRegister(mipsreg::A1, 0x80007fff);
-    E.setRegister(mipsreg::A2, 0x80ff8000);
-    E.setRegister(mipsreg::A3, 0x8000ffff);
-    E.setRegister(mipsreg::V0, 0x80ff8000);
+    E.setRegister(mipsreg::A1, WordValue(0x80007fff));
+    E.setRegister(mipsreg::A2, WordValue(0x80ff8000));
+    E.setRegister(mipsreg::A3, WordValue(0x8000ffff));
+    E.setRegister(mipsreg::V0, WordValue(0x80ff8000));
     E.setRegister(mipsreg::DSPControl, 0x01004005);
-    E.setRegister(mipsreg::AC2HI, 0x80007fff);
-    E.setRegister(mipsreg::AC2LO, 0x80ff8000);
+    E.setRegister(mipsreg::AC2HI, WordValue(0x80007fff));
+    E.setRegister(mipsreg::AC2LO, WordValue(0x80ff8000));
     ASSERT_TRUE(executeDSP(D, GetParam(), R.Word, E));
-    EXPECT_EQ(E.getRegister(mipsreg::V0), R.V0);
+    EXPECT_EQ(E.getRegister(mipsreg::V0), WordValue(R.V0));
     EXPECT_EQ(E.getRegister(mipsreg::DSPControl), R.Control);
-    EXPECT_EQ(E.getRegister(mipsreg::AC2HI), R.HI2);
-    EXPECT_EQ(E.getRegister(mipsreg::AC2LO), R.LO2);
+    EXPECT_EQ(E.getRegister(mipsreg::AC2HI), WordValue(R.HI2));
+    EXPECT_EQ(E.getRegister(mipsreg::AC2LO), WordValue(R.LO2));
   }
 }
 TEST_P(MIPSDSP, RevisionTwoRequiresEvidenceAndPreservesLaneEffects) {

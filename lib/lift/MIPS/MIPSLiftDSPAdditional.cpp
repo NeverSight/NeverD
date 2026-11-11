@@ -35,7 +35,7 @@ bool MIPSLifter::liftDSPAdditional(State &S, uint32_t Word) const {
     S.emit(NdOp::NOP, {}, {});
     return true;
   };
-  const auto A = S.read(RS), B = S.read(RT);
+  const auto A = S.read(RS, 4), B = S.read(RT, 4);
   const auto Lane = [&](NdVar Source, unsigned I, uint16_t Bytes) {
     if (!I)
       return S.resize(Source, Bytes);
@@ -314,7 +314,7 @@ bool MIPSLifter::liftDSPAdditional(State &S, uint32_t Word) const {
   case Form::Lbux: {
     const unsigned Opcode = Op == Form::Lwx ? 35 : Op == Form::Lhx ? 33 : 36;
     return liftMemory(S, (Opcode << 26) | (RD << 16),
-                      S.binary(NdOp::INT_ADD, A, B));
+                      S.binary(NdOp::INT_ADD, S.read(RS), S.read(RT)));
   }
   case Form::Shilo:
   case Form::Shilov: {
@@ -371,8 +371,10 @@ bool MIPSLifter::liftDSPAdditional(State &S, uint32_t Word) const {
     return true;
   case Form::Mthlip:
     S.writeAccumulator(
-        Bank, S.binary(NdOp::CONCAT,
-                       NdVar::reg(mipsreg::accumulatorLO(Bank), 4), A, 8));
+        Bank,
+        S.binary(NdOp::CONCAT,
+                 S.resize(NdVar::reg(mipsreg::accumulatorLO(Bank), S.Width), 4),
+                 A, 8));
     S.emitIntrinsic(Intrinsic::MIPSMthlipPosition, {});
     return true;
   }

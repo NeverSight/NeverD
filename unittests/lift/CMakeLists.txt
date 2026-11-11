@@ -39,6 +39,7 @@ add_neverd_unittest(NeverDMIPSIntegerTests
   mips/MIPSMSATests.cpp
   mips/MicroMIPSIntegerTests.cpp
   mips/MIPSBitfieldTests.cpp
+  mips/MIPSRelease6Tests.cpp
   mips/MIPSIntegerTests.cpp
   mips/MIPSScalarTests.cpp
   LINK_COMPONENTS IRLow Lift Decode)

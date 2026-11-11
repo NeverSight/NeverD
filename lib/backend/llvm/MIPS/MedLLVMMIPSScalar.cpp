@@ -168,9 +168,17 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
     B.CreateUnreachable();
     B.SetInsertPoint(Continue);
   };
-  if (Id == Intrinsic::MIPSExtractResult) {
+  if (Id == Intrinsic::MIPSRequireTakenBranch) {
+    Require(B.CreateIsNotNull(getVar(Op.Inputs[1], B)),
+            "mips.r6.forbidden.slot");
+    return nullptr;
+  }
+  if (Id == Intrinsic::MIPSExtractResult ||
+      Id == Intrinsic::MIPSRelease6DivideResult) {
     auto *Failed = getVar(Op.Inputs[1], B);
-    Require(B.CreateIsNull(Failed), "mips.extract.position");
+    Require(B.CreateIsNull(Failed), Id == Intrinsic::MIPSExtractResult
+                                        ? "mips.extract.position"
+                                        : "mips.divide.zero");
     return getVar(Op.Inputs[2], B);
   }
   if (Id == Intrinsic::MIPSRequireWord) {
