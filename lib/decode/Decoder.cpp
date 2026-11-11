@@ -23,6 +23,7 @@
 #include "neverd/support/Diagnostic.h"
 #include "neverd/support/ProloguePatterns.h"
 
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <memory>
@@ -286,12 +287,13 @@ bool Decoder::decodeArchitectureFallback(const uint8_t *Bytes, size_t Len,
   return MIPS && decodeMIPSASE(Bytes, Len, Addr);
 }
 
-bool Decoder::decodePhysical(const uint8_t *Bytes, size_t Len, va_t Addr) {
+LLVM_ATTRIBUTE_ALWAYS_INLINE bool
+Decoder::decodePhysical(const uint8_t *Bytes, size_t Len, va_t Addr) {
   InsnBuf->illegal = false;
   // POOL32S vector forms have no microMIPS entries in Capstone. Avoid a
   // failed physical decode for every vector arithmetic or load/store opcode.
   const bool VectorPool =
-      CurrentMode == InstructionMode::MicroMIPS && MIPSISARevision == 5 &&
+      MIPSISARevision == 5 && CurrentMode == InstructionMode::MicroMIPS &&
       Len >= 4 && (Bytes[archLittleEndian(TargetArch) ? 1 : 0] >> 2) == 0x16;
   if (VectorPool && decodeMIPSASE(Bytes, Len, Addr))
     return true;

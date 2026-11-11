@@ -67,7 +67,7 @@ MIPSLifter::encoding(const cs_insn &Instruction) const {
 }
 
 unsigned MIPSLifter::delaySlotBytes(const cs_insn &Instruction) const {
-  if (Mode == InstructionMode::MicroMIPS && Instruction.size == 4 &&
+  if (HasMSA && Mode == InstructionMode::MicroMIPS && Instruction.size == 4 &&
       (Instruction.bytes[archLittleEndian(Target) ? 1 : 0] >> 2) == 0x16)
     return 0; // POOL32S cannot transfer control.
   const auto Code = Mode == InstructionMode::MIPS16

@@ -61,6 +61,58 @@ LowFunc build(const BinaryImage &Image) {
 
 class MIPSControl : public ::testing::TestWithParam<Arch> {};
 
+TEST_P(MIPSControl, DelayedUnitOwnsBothInstructionsAndActiveOperandDetails) {
+  const auto Code = encode({0x0c000408, 0x8ca2fff4, 0}, GetParam());
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(GetParam()));
+  DecodedExecutionUnit Unit;
+  ASSERT_EQ(Decode.decodeUnitForLift(Code.data(), Code.size(), 0x1000, Unit),
+            8);
+  ASSERT_TRUE(Unit.HasDelaySlot);
+  DecodedInsn Other{};
+  ASSERT_EQ(Decode.decodeOne(Code.data() + 8, 4, 0x1008, Other), 4);
+
+  for (const auto *Saved : {&Unit.Head, &Unit.Slot}) {
+    DecodedInsn Physical{};
+    ASSERT_EQ(Decode.decodeOne(Code.data() + (Saved->Addr - 0x1000), 4,
+                               Saved->Addr, Physical),
+              4);
+    EXPECT_NE(Saved->Raw, Physical.Raw);
+    EXPECT_EQ(Saved->Id, Physical.Id);
+    ASSERT_NE(Saved->Raw->detail, nullptr);
+    ASSERT_NE(Physical.Raw->detail, nullptr);
+    const auto &A = *Saved->Raw->detail, &B = *Physical.Raw->detail;
+    EXPECT_NE(&A, &B);
+    EXPECT_EQ(llvm::ArrayRef(A.regs_read, A.regs_read_count),
+              llvm::ArrayRef(B.regs_read, B.regs_read_count));
+    EXPECT_EQ(llvm::ArrayRef(A.regs_write, A.regs_write_count),
+              llvm::ArrayRef(B.regs_write, B.regs_write_count));
+    EXPECT_EQ(llvm::ArrayRef(A.groups, A.groups_count),
+              llvm::ArrayRef(B.groups, B.groups_count));
+    EXPECT_EQ(A.writeback, B.writeback);
+    ASSERT_EQ(A.mips.op_count, B.mips.op_count);
+    for (unsigned I = 0; I < B.mips.op_count; ++I) {
+      const auto &X = A.mips.operands[I], &Y = B.mips.operands[I];
+      ASSERT_EQ(X.type, Y.type);
+      EXPECT_EQ(X.access, Y.access);
+      switch (X.type) {
+      case MIPS_OP_REG:
+        EXPECT_EQ(X.reg, Y.reg);
+        break;
+      case MIPS_OP_IMM:
+        EXPECT_EQ(X.imm, Y.imm);
+        break;
+      case MIPS_OP_MEM:
+        EXPECT_EQ(X.mem.base, Y.mem.base);
+        EXPECT_EQ(X.mem.disp, Y.mem.disp);
+        break;
+      default:
+        FAIL() << "unexpected operand in JAL/LW fixture";
+      }
+    }
+  }
+}
+
 TEST_P(MIPSControl, WideCallResultKeepsTheO32RegisterWordOrder) {
   if (isMIPS64(GetParam()))
     return;
