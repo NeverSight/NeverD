@@ -5215,7 +5215,12 @@ GUI keeps is named by the document and lines it came from; a later read names it
 (`if_none_match`), and while the document stands the worker says so instead of sending
 the page again (`QueryService::State::keptPages`). A replica's dispatcher keeps its
 pages across the read context it starts at each change of its owner's, so the read
-after an edit names them too. Where an edit built the document
+after an edit names them too, and no dispatcher's kept page moves with the listing's
+generation, which an edit moves. A read a lane hands the owner (`AnalysisService::askOwner`)
+leaves out the page the lane names, as the owner's dispatcher names its own. An edit
+the owner's dispatcher sends carries the reads of the pages read at the revision it
+leaves (the worker's `then`), and their answers are cached as the reads those views make
+after it, once the reply's background state is taken. Where an edit built the document
 again, a worker that still has the old one sends what changed of the page
 (`page_delta`: lines replaced and the offsets after them shifted, `pageDelta`), which the
 GUI applies to the page it keeps (`page_delta::apply`); a reply the kept page does not
@@ -5698,6 +5703,13 @@ Support discovery consumes the shared work allowance, and constants keep a
 single coefficient with the minterm basis's negative sign. Projection does
 not authorize a replacement: the complete polynomial difference must still
 be proved before CLI or GUI source output uses the result.
+Within one admitted polynomial expansion, factor slots reuse their minterm
+selections while the factor identity is unchanged. The context and atom order
+are fixed for that call; changing or removing a factor invalidates its slot.
+Selection storage is reserved from the exact table population. Tables fitting
+one machine word enumerate set bits in ascending order; larger tables retain
+the complete entry scan. This preserves term order, coefficients and work
+accounting, with no state retained between calls.
 Cubic recovery uses a minterm shared by all three factors as an anchor. Its
 diagonal coefficient fixes the scale; coefficients with two copies of the
 anchor identify how many factors select each other minterm. Coefficients with
@@ -6055,6 +6067,37 @@ each finished column before reduction. Final columns balance their parity
 without constructing an unobservable carry. Signature keys occupy stable pages
 whose storage is charged before allocation. These operations retain the full
 identity checks, cumulative allowances and decision-node ceiling.
+Products observed at eight bits use equal-width low and high halves, eliminating
+quadratic high terms exactly. For proved odd three- or four-bit prefixes with
+zero upper bits, powers evaluate all four or eight possible values and
+substitute their exact Boolean coefficients into the decision graph. Input
+bits may be correlated; this is a complete identity, not sampling. Work, node
+and storage ceilings stay unchanged. Pairing tables prepay one dense bucket
+allocation from the factor count; erased matches cannot trigger rehashing.
+Packed Boolean tables skip one rehash generation while charging the full new
+allocation to the existing storage budget. Six-bit products keep two-bit
+prefix groups to avoid doubling their number. CLI and GUI share these core
+paths.
+The fixed power coefficients are generated at compile time. The optional
+deterministic cross-check reuses a compile-time prefix of 8192 generator words
+when all native input assignments fit; longer and arbitrary-width checks retain
+the original generator. Shared subexpressions collect their variables together, preserving
+the sorted, unique input union and original assignments. Equivalence continues
+to require the existing exact proofs.
+Recursive paired products can retain unmatched odd factors as complete words.
+Their square equals one modulo eight, so it can be factored out of the two-bit
+high correction without expanding the complete mixed product. The original
+full-width factors and parity selector remain in the result. This reading is
+reserved for mixed three-bit prefixes whose recursive precision is at least
+six bits. Fewer than three representatives cannot leave both a pair and an
+unmatched word, so they do not start this additional prefix reading.
+When each odd factor exposes only a short low mask and its highest observed
+bit, the low product and the parity of the high bits can be proved separately.
+For products of two masked, offset inputs, packed truth rows check every
+assignment, including carries into the masks. An affine parity replaces the
+column only after all rows agree. Otherwise the original high column remains.
+The SDK renders both sides of a rewrite together when their widths agree, so
+a shared fragment is formatted once with the original precedence.
 Expression restoration skips nodes older than every substitution key: immutable
 children precede their parents, and simultaneous replacement bodies remain
 unchanged. Rendering appends fragments directly into their parent's text and
@@ -9857,9 +9900,19 @@ store out, as a C function leaves its caller's registers alone, so the
 prologue neither prints the caller's register as a stale value nor keeps a
 frame in byte storage. The MedIR text view shows the mark. Operations keep
 their positions, because call records index them. A save read for anything
-else stays a store, and binary lift and patch never mark one. The restore proof
+else stays a store, and binary lift and patch never mark one. The exception is
+a save whose value is unknown machine state: an ordinary callee-saved register
+no parameter arrives in, unlike the frame pointer or link register, saved in an
+entry block nothing re-enters. A read of its bytes after the save, whose value
+the function only computes with, takes that incoming value itself, so a use of
+it fails where the save would have failed, and a read on a path that never runs,
+as an optimizer's load past an array's end into the save area, fails nothing. A
+value that leaves the function as it is, returned, passed to a call or joined
+with another, keeps the save: later analyses would read the copy as the
+incoming register and take a returned save for no result. The restore proof
 also follows unobserved zero extensions, including the Q-register update from
-an AArch64 D-register restore. A read of any derived value retains the save.
+an AArch64 D-register restore, and the Q register an ARM32 VPOP rebuilds from
+its D halves. A read of any derived value retains the save.
 HighIR removes unused restore temporaries before checking private save slots,
 while frame addresses still retain their original SSA identities. On x86 the
 projection also marks a pointer-width load of the slot at the entry stack
@@ -11859,6 +11912,16 @@ as HighC does; that type is 16 bytes there, aligned to at most 16, so the
 member keeps its frame offset. This preserves 65..128-bit value operations,
 including packed numerical/MXCSR results. It does not establish every
 wide-integer runtime or calling convention.
+
+An LLVM-to-C definition takes a char or short argument that the IR gives no
+extension attribute as a whole 32-bit word, and narrows it in its body, where
+the target's C compiler lets a definition assume its callers extended such an
+argument (AAPCS, i386, x86-64 System V, MIPS and Apple arm64): the machine code
+reads only the low bits, so a caller may leave anything above them, as one
+passing an int does. A narrow type the debug information declares is one its
+callers extend, and keeps its spelling. `__builtin_bit_cast` takes a vector
+element through a cast to the element's own type, because Clang 21 to 23 read
+the vector's first element for the element lvalue `(v)[i]`.
 
 `IntrinsicValueEffects` defines positive, shape-validated contracts for operations
 whose effects are entirely explicit values. `LowIntrinsicEffects` additionally

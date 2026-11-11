@@ -59,8 +59,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
 
 namespace neverd::symbolic {
+
+/// Print both sides of a rewrite with the same spelling as individual
+/// toString calls. Equal-width expressions share their rendered subexpressions.
+std::pair<std::string, std::string>
+printSymExprPair(const SymContext &Ctx, SymRef Before, SymRef After);
 
 /// Outcome of a parse: either a root expression or a diagnostic.
 struct SymParseResult {

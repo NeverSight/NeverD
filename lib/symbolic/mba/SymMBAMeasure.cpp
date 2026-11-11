@@ -37,6 +37,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Limits.h"
+#include "SampleWords.h"
 #include "SymMBADetail.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -296,19 +297,29 @@ bool agreeOnAssignments(const SymContext &Ctx,
     }
     llvm::SmallVector<uint64_t, 8> Assignment(Masks.size());
     auto CheckSamples = [&](auto &&Lookup) {
-      std::mt19937_64 Rng(0x9E3779B97F4A7C15ull);
-      for (unsigned S = 0; S < Samples; ++S) {
-        // The first three points and one generator word per narrow input match
-        // the arbitrary-width path. Only referenced inputs advance the stream.
-        for (size_t I = 0; I < Assignment.size(); ++I)
-          Assignment[I] = S == 0   ? 0
-                          : S == 1 ? Masks[I]
-                          : S == 2 ? 1
-                                   : Rng() & Masks[I];
-        if (!CheckNative(Lookup))
-          return false;
+      auto Run = [&](auto &&NextWord) {
+        for (unsigned S = 0; S < Samples; ++S) {
+          // The first three points and one generator word per narrow input
+          // match the arbitrary-width path. Only referenced inputs advance the
+          // stream.
+          for (size_t I = 0; I < Assignment.size(); ++I)
+            Assignment[I] = S == 0   ? 0
+                            : S == 1 ? Masks[I]
+                            : S == 2 ? 1
+                                     : NextWord() & Masks[I];
+          if (!CheckNative(Lookup))
+            return false;
+        }
+        return true;
+      };
+      const auto RandomRounds = Samples > 3 ? Samples - 3 : 0;
+      if (!RandomRounds ||
+          Assignment.size() <= kVerificationSampleWords.size() / RandomRounds) {
+        size_t Next = 0;
+        return Run([&] { return kVerificationSampleWords[Next++]; });
       }
-      return true;
+      std::mt19937_64 Rng(limits::kVerificationSampleSeed);
+      return Run(Rng);
     };
     // Select the lookup once, outside both evaluation loops. Dense samples
     // need neither the position table nor a per-variable layout branch.
@@ -325,7 +336,7 @@ bool agreeOnAssignments(const SymContext &Ctx,
     return &Assignment[Position(Id)];
   };
 
-  std::mt19937_64 Rng(0x9E3779B97F4A7C15ull);
+  std::mt19937_64 Rng(limits::kVerificationSampleSeed);
   for (unsigned S = 0; S < Samples; ++S) {
     for (size_t I = 0; I < Assignment.size(); ++I) {
       uint32_t W = Assignment[I].getBitWidth();
@@ -400,10 +411,9 @@ agreeAfterFactoringProducts(const SymContext &Ctx, SymRef A, SymRef B,
 
   const uint32_t Width = Ctx.width(A);
   llvm::SmallVector<uint32_t, 16> Vars;
-  for (SymRef R : Canceled)
-    Ctx.collectVars(R, Vars);
-  for (SymRef R : Common)
-    Ctx.collectVars(R, Vars);
+  llvm::SmallVector<SymRef, 16> Unchanged(Canceled);
+  Unchanged.append(Common.begin(), Common.end());
+  Ctx.collectVars(Unchanged, Vars);
   bool Native = Width <= 64 && llvm::all_of(Vars, [&](uint32_t Id) {
                   return Ctx.varInfo(Id).Width <= 64;
                 });
@@ -526,8 +536,7 @@ std::optional<bool> agreeAfterCancelingAddends(const SymContext &Ctx, SymRef A,
     return std::nullopt;
 
   llvm::SmallVector<uint32_t, 16> Vars;
-  for (SymRef R : Common)
-    Ctx.collectVars(R, Vars);
+  Ctx.collectVars(Common, Vars);
   bool Native = Ctx.width(A) <= 64 && llvm::all_of(Vars, [&](uint32_t Id) {
                   return Ctx.varInfo(Id).Width <= 64;
                 });

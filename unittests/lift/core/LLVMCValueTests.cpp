@@ -8810,3 +8810,78 @@ int main(void) {
   GTEST_SKIP() << "native GS-base execution requires Linux x86-64";
 #endif
 }
+
+TEST(LLVMCValues, UnextendedNarrowArgumentsArriveAsWholeWords) {
+  // The code reads only the low byte and the low half of its first two
+  // arguments, as code an int was declared to take may: its callers leave the
+  // upper bits as they are. Where C would let the definition assume them
+  // zero, the definition takes whole words and narrows them itself. The
+  // third argument says its callers extend it, and keeps its narrow type.
+  llvm::LLVMContext Context;
+  llvm::Module Module("narrow-arguments", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<> B(Context);
+  auto *Fn = llvm::Function::Create(
+      llvm::FunctionType::get(B.getInt32Ty(),
+                              {B.getInt8Ty(), B.getInt16Ty(), B.getInt8Ty()},
+                              false),
+      llvm::GlobalValue::ExternalLinkage, "spread", Module);
+  Fn->getArg(2)->addAttr(llvm::Attribute::ZExt);
+  B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
+  auto *Bytes = B.CreateMul(B.CreateZExt(Fn->getArg(0), B.getInt32Ty()),
+                            B.getInt32(0x01010101));
+  auto *Half = B.CreateShl(B.CreateZExt(Fn->getArg(1), B.getInt32Ty()), 3);
+  B.CreateRet(B.CreateAdd(
+      B.CreateXor(Bytes, Half),
+      B.CreateMul(B.CreateZExt(Fn->getArg(2), B.getInt32Ty()), B.getInt32(7))));
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  using neverd::Arch;
+  using neverd::BinaryFormat;
+  for (const auto &[TheArch, Format, Widened] :
+       {std::tuple{Arch::ARM, BinaryFormat::ELF, true},
+        std::tuple{Arch::X86, BinaryFormat::COFF, true},
+        std::tuple{Arch::X64, BinaryFormat::ELF, true},
+        std::tuple{Arch::X64, BinaryFormat::MachO, true},
+        std::tuple{Arch::AArch64, BinaryFormat::MachO, true},
+        std::tuple{Arch::MIPS32, BinaryFormat::ELF, true},
+        std::tuple{Arch::X64, BinaryFormat::COFF, false},
+        std::tuple{Arch::AArch64, BinaryFormat::ELF, false}}) {
+    SCOPED_TRACE(static_cast<unsigned>(TheArch));
+    SCOPED_TRACE(static_cast<unsigned>(Format));
+    neverd::CEmitterOptions Options;
+    Options.TheArch = TheArch;
+    Options.Format = Format;
+    Options.EmitIncludes = false;
+    std::string Source;
+    llvm::raw_string_ostream Stream(Source);
+    ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Stream, Options));
+    const bool Words =
+        Source.find("uint32_t spread(uint32_t arg0_word, uint32_t arg1_word, "
+                    "uint8_t arg2)") != std::string::npos;
+    EXPECT_EQ(Words, Widened) << Source;
+    EXPECT_EQ(Source.find("uint8_t arg0 = (uint8_t)arg0_word;") !=
+                  std::string::npos,
+              Widened)
+        << Source;
+    EXPECT_EQ(Source.find("uint16_t arg1 = (uint16_t)arg1_word;") !=
+                  std::string::npos,
+              Widened)
+        << Source;
+    if (TheArch != Arch::X64 || Format != BinaryFormat::ELF)
+      continue;
+    // A caller of the original's int prototype passes bits above the byte
+    // and the half, through no C conversion; the result is the one their low
+    // bits give. A volatile pointer keeps the compiler from seeing the callee.
+    for (llvm::StringRef Level : {"-O0", "-O2"})
+      source_call_execution_test::compileAndRun("#include <stdint.h>\n" +
+                                                    Source + R"(
+typedef uint32_t (*int_prototype)(uint32_t, uint32_t, uint8_t);
+static int_prototype volatile call_as_int = (int_prototype)spread;
+int main(void) {
+  return call_as_int(0x4455667u, 0x12340005u, 1) !=
+         ((0x67u * 0x01010101u) ^ (5u << 3)) + 7u;
+}
+)",
+                                                {Level});
+  }
+}

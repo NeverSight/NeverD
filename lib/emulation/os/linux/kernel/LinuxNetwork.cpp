@@ -95,6 +95,8 @@ llvm::Error validateNetworkOptions(const LinuxNetworkOptions &Options) {
   if (const auto &F = Options.TCPConnectFailures) {
     if (!F->Count || !F->Error || !connectError(F->Error))
       return failure("invalid offline TCP connection failure contract");
+    if (F->AfterConnections && *F->AfterConnections > Streams)
+      return failure("after_connections exceeds the number of TCP connections");
     // Counted failures retain only a uint32_t cursor, not connection entries.
     // The explicit count and the execution budget bound their consumption.
   }
@@ -305,10 +307,15 @@ LinuxFiles::network(ServiceKind Kind, const ProcessServiceEvent &Event,
       Socket->Datagram = &C;
       return Reply(0);
     }
-    if (NextConnection == Network->Connections.size() &&
-        Network->TCPConnectFailures) {
-      const auto &F = *Network->TCPConnectFailures;
-      if (TCPConnectFailuresConsumed == F.Count) {
+    if (const auto &F = Network->TCPConnectFailures;
+        F && NextConnection ==
+                 F->AfterConnections.value_or(Network->Connections.size())) {
+      if (TCPConnectFailuresConsumed < F->Count) {
+        ++TCPConnectFailuresConsumed;
+        Socket->Failed = true;
+        return Reply(uint64_t(0) - F->Error);
+      }
+      if (NextConnection == Network->Connections.size()) {
         const auto Reason =
             llvm::formatv("TCP connection failure contract exhausted after {0} "
                           "supplied failures; next result is not supplied",
@@ -316,9 +323,6 @@ LinuxFiles::network(ServiceKind Kind, const ProcessServiceEvent &Event,
                 .str();
         return unsupported(Result, Reason.c_str());
       }
-      ++TCPConnectFailuresConsumed;
-      Socket->Failed = true;
-      return Reply(uint64_t(0) - F.Error);
     }
     if (NextConnection == Network->Connections.size() ||
         Network->Connections[NextConnection].Peer != Peer)

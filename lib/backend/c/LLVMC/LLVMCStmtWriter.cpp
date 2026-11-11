@@ -48,6 +48,7 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/MIPS/MIPSBarrierSource.h"
 #include "neverd/backend/MIPS/MIPSDSPSource.h"
+#include "neverd/backend/MIPS/MIPSMSASource.h"
 #include "neverd/backend/MachineInstructionText.h"
 #include "neverd/backend/c/render/AArch64/AArch64ExclusiveC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
@@ -4808,6 +4809,49 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
     OS << "__asm__ volatile(\"" << *Assembly << "\" ::: \"memory\");\n";
     return true;
   }
+  if (auto *MD = Call.getMetadata("neverd.mips.msa")) {
+    const auto *I =
+        MD->getNumOperands() == 2
+            ? llvm::mdconst::dyn_extract<llvm::ConstantInt>(MD->getOperand(0))
+            : nullptr;
+    const auto *K =
+        MD->getNumOperands() == 2
+            ? llvm::mdconst::dyn_extract<llvm::ConstantInt>(MD->getOperand(1))
+            : nullptr;
+    if (!I || !K || I->getValue().uge(unsigned(Intrinsic::_Count)) ||
+        K->getValue().uge(32) || !isMIPS(Opts.TheArch) ||
+        isMIPS64(Opts.TheArch))
+      throw std::runtime_error("invalid native MSA assembly metadata");
+    const auto Id = static_cast<Intrinsic>(I->getZExtValue());
+    if (!mips::isMSAControl(Id) && (!mips::isMSAFloat(Id) || !K->isZero()))
+      throw std::runtime_error("invalid native MSA instruction");
+    const auto A = mips::msaAssembly(Id, K->getZExtValue(),
+                                     archLittleEndian(Opts.TheArch));
+    if (!IA->hasSideEffects() || IA->isAlignStack() || IA->canThrow() ||
+        IA->getDialect() != llvm::InlineAsm::AD_ATT ||
+        IA->getAsmString() != A.llvmText() ||
+        IA->getConstraintString() != A.Constraints ||
+        Call.arg_size() != (A.Pointers + unsigned(A.Write)) ||
+        (A.Read ? !Call.getType()->isIntegerTy(32)
+                : !Call.getType()->isVoidTy()))
+      throw std::runtime_error("invalid native MSA assembly contract");
+    std::vector<std::string> Args;
+    for (const auto &Arg : Call.args()) {
+      if (A.Write ? !Arg->getType()->isIntegerTy(32)
+                  : !Arg->getType()->isPointerTy())
+        throw std::runtime_error("invalid native MSA assembly operand");
+      Args.push_back(valueStr(Arg.get()));
+    }
+    emitIndent(Indent);
+    std::string Out = Name;
+    if (A.Read && Call.use_empty()) {
+      Out = freshVar("nd_msa_control");
+      OS << "uint32_t " << Out << ";\n";
+      emitIndent(Indent);
+    }
+    OS << A.cStatement(Args, Out) << "\n";
+    return true;
+  }
   if (const auto Write = mips::dspControlSourceWrite(Call)) {
     if (!Call.getFunction()->hasFnAttribute(mips::DSPSourceMarker) &&
         !mips::imagePreservesDSPControl(Opts.Image))
@@ -4938,7 +4982,7 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
     const auto BitcastInput = [&](unsigned Index) {
       return "__builtin_bit_cast(" +
              x86FPStateRawCType(x86FPStateSourceBytes(Bytes)) + ", " +
-             valueStr(Call.getArgOperand(Index)) + ")";
+             bitCastSourceStr(Call.getArgOperand(Index)) + ")";
     };
     const auto Helper = FPStateHelperNames.find(*Shape);
     if (Helper == FPStateHelperNames.end())
@@ -4962,7 +5006,7 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
       const auto RawType = x86FPStateRawCType(x86FPStateSourceBytes(Bytes));
       const auto RawInput = [&](unsigned I) {
         return "__builtin_bit_cast(" + RawType + ", " +
-               valueStr(Call.getArgOperand(I)) + ")";
+               bitCastSourceStr(Call.getArgOperand(I)) + ")";
       };
       std::string Expression = Helper->second + "(";
       if (Memory)
@@ -4984,7 +5028,7 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
       const auto RawType = x86FPStateRawCType(x86FPStateSourceBytes(Bytes));
       const auto RawInput = [&](unsigned Index) {
         return "__builtin_bit_cast(" + RawType + ", " +
-               valueStr(Call.getArgOperand(Index)) + ")";
+               bitCastSourceStr(Call.getArgOperand(Index)) + ")";
       };
       const auto Right =
           Memory ? "(void *)(uintptr_t)(" +
@@ -5011,7 +5055,7 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
             "(" + x86FPStateRawCType(x86FPStateSourceBytes(Bytes)) +
             ")__builtin_bit_cast(" +
             x86FPStateRawCType(std::max(16u, x86FPStateSourceBytes(Bytes))) +
-            ", " + valueStr(Call.getArgOperand(Store ? 1 : 0)) + "), ";
+            ", " + bitCastSourceStr(Call.getArgOperand(Store ? 1 : 0)) + "), ";
       Expression +=
           "(void*)" + valueStr(Call.getArgOperand(Store ? 2 : 1)) + ")";
       if (Store)
@@ -5032,7 +5076,7 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
                        ")__builtin_bit_cast(" +
                        x86FPStateRawCType(
                            std::max(16u, x86FPStateSourceBytes(Bytes))) +
-                       ", " + valueStr(Call.getArgOperand(0)) + ")";
+                       ", " + bitCastSourceStr(Call.getArgOperand(0)) + ")";
       const std::string Expression = Helper->second + "(" + Source +
                                      ", (void*)" +
                                      valueStr(Call.getArgOperand(1)) + ")";
@@ -5050,7 +5094,7 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
                        integerPointerOperandStr(Call.getArgOperand(1)) + ")"
                  : "__builtin_bit_cast(" +
                        x86FPStateRawCType(x86FPStateSourceBytes(Bytes)) + ", " +
-                       valueStr(Call.getArgOperand(1)) + ")";
+                       bitCastSourceStr(Call.getArgOperand(1)) + ")";
       const std::string Expression = Helper->second + "(" + Source +
                                      ", (void*)" +
                                      valueStr(Call.getArgOperand(2)) + ")";
@@ -6380,7 +6424,7 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
               : typeToC(Type);
       if (Grouped) {
         Expr += "__builtin_bit_cast(" + Spelling + ", " +
-                valueStr(Call.getArgOperand(ArgIdx)) + ")";
+                bitCastSourceStr(Call.getArgOperand(ArgIdx)) + ")";
         continue;
       }
       Expr += c_detail::recordCallArgument(

@@ -138,6 +138,30 @@ NEVERD_MIPS_DSP_INSTRUCTION(DotSubFractionalHalfwords, 0xfc00e7ff, 0x7c000170)
 NEVERD_MIPS_DSP_INSTRUCTION(MultiplySubtractFractionalHalfwords, 0xfc00e7ff,
                             0x7c0001b0)
 
+NEVERD_MIPS_DSP_INSTRUCTION(ExtractWord, 0xfc00e7ff, 0x7c000038)
+NEVERD_MIPS_DSP_INSTRUCTION(ExtractRoundedWord, 0xfc00e7ff, 0x7c000138)
+NEVERD_MIPS_DSP_INSTRUCTION(ExtractSaturatedWord, 0xfc00e7ff, 0x7c0001b8)
+NEVERD_MIPS_DSP_INSTRUCTION(ExtractSaturatedHalf, 0xfc00e7ff, 0x7c0003b8)
+NEVERD_MIPS_DSP_INSTRUCTION(ExtractVariableWord, 0xfc00e7ff, 0x7c000078)
+NEVERD_MIPS_DSP_INSTRUCTION(ExtractVariableRoundedWord, 0xfc00e7ff, 0x7c000178)
+NEVERD_MIPS_DSP_INSTRUCTION(ExtractVariableSaturatedWord, 0xfc00e7ff,
+                            0x7c0001f8)
+NEVERD_MIPS_DSP_INSTRUCTION(ExtractVariableSaturatedHalf, 0xfc00e7ff,
+                            0x7c0003f8)
+NEVERD_MIPS_DSP_INSTRUCTION(ExtractPosition, 0xfc00e7ff, 0x7c0000b8)
+NEVERD_MIPS_DSP_INSTRUCTION(ExtractVariablePosition, 0xfc00e7ff, 0x7c0000f8)
+NEVERD_MIPS_DSP_INSTRUCTION(ExtractPositionDecrement, 0xfc00e7ff, 0x7c0002b8)
+NEVERD_MIPS_DSP_INSTRUCTION(ExtractVariablePositionDecrement, 0xfc00e7ff,
+                            0x7c0002f8)
+NEVERD_MIPS_DSP_INSTRUCTION(DotAddSaturatedLong, 0xfc00e7ff, 0x7c000330)
+NEVERD_MIPS_DSP_INSTRUCTION(DotSubSaturatedLong, 0xfc00e7ff, 0x7c000370)
+NEVERD_MIPS_DSP_INSTRUCTION(MultiplyAccumulateSaturatedLeft, 0xfc00e7ff,
+                            0x7c000430)
+NEVERD_MIPS_DSP_INSTRUCTION(MultiplyAccumulateSaturatedRight, 0xfc00e7ff,
+                            0x7c0004b0)
+NEVERD_MIPS_DSP_INSTRUCTION(MultiplyAccumulateLeft, 0xfc00e7ff, 0x7c000530)
+NEVERD_MIPS_DSP_INSTRUCTION(MultiplyAccumulateRight, 0xfc00e7ff, 0x7c0005b0)
+
 #undef NEVERD_MIPS_DSP_LEFT
 #undef NEVERD_MIPS_DSP_EXPAND
 #undef NEVERD_MIPS_DSP_SHIFT

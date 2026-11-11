@@ -594,11 +594,28 @@ TruthTable monomialSupport(const Monomial &Key, unsigned NumVars) {
   return Support;
 }
 
-llvm::SmallVector<MintermIndex, 8> selectedMinterms(const TruthTable &Table) {
-  llvm::SmallVector<MintermIndex, 8> Out;
+namespace {
+void readSelectedMinterms(const TruthTable &Table,
+                          llvm::SmallVectorImpl<MintermIndex> &Out) {
+  Out.clear();
+  Out.reserve(Table.count());
+  if (Table.entries() <= std::numeric_limits<uint64_t>::digits) {
+    auto Bits = Table.packed();
+    while (Bits) {
+      Out.push_back(std::countr_zero(Bits));
+      Bits &= Bits - 1;
+    }
+    return;
+  }
   for (size_t M = 0, E = Table.entries(); M < E; ++M)
     if (Table.at(M))
       Out.push_back(static_cast<MintermIndex>(M));
+}
+} // namespace
+
+llvm::SmallVector<MintermIndex, 8> selectedMinterms(const TruthTable &Table) {
+  llvm::SmallVector<MintermIndex, 8> Out;
+  readSelectedMinterms(Table, Out);
   return Out;
 }
 
@@ -763,16 +780,25 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
   Form.Linear.assign(Corners, Constant);
 
   llvm::SmallVector<llvm::SmallVector<MintermIndex, 8>, 4> Selected;
+  llvm::SmallVector<SymRef, 4> SelectionOwners;
   for (const PolyTerm &Term : Terms) {
     if (Term.Factors.empty())
       continue;
 
-    Selected.clear();
-    for (SymRef Factor : Term.Factors) {
+    // Keep the slots' storage across terms. The context and atom order are
+    // fixed for this expansion, so an unchanged factor also keeps its exact
+    // selection without another table lookup or corner scan.
+    Selected.resize(Term.Factors.size());
+    SelectionOwners.resize(Term.Factors.size());
+    for (size_t I = 0; I != Term.Factors.size(); ++I) {
+      const auto Factor = Term.Factors[I];
+      if (SelectionOwners[I] == Factor)
+        continue;
       const TruthTable *Table = tableOf(Factor);
       if (!Table)
         return std::nullopt;
-      Selected.push_back(selectedMinterms(*Table));
+      readSelectedMinterms(*Table, Selected[I]);
+      SelectionOwners[I] = Factor;
     }
 
     if (Term.Factors.size() == 1) {

@@ -117,8 +117,17 @@ ListingView::ListingView(Session &session, const AddressSpace &space,
   });
   connect(&session_, &Session::generationChanged, this, [this] {
     // A reply can publish the generation of the rows it just delivered.
-    if (generation_ != session_.generation())
-      refresh();
+    if (generation_ == session_.generation())
+      return;
+    // Rows asked for since the revision moved, which the same reply moved
+    // the generation with, come at least as new; they are checked when they
+    // arrive rather than asked for again.
+    if (contentSerial_ != serial_ &&
+        requestedRevision_ == session_.revision()) {
+      generationBehind_ = true;
+      return;
+    }
+    refresh();
   });
   connect(&session_, &Session::opened, this, &ListingView::clear);
   connect(&session_, &Session::unloaded, this, &ListingView::clear);
@@ -283,6 +292,8 @@ void ListingView::request(Fetch kind, Address address, int sub, int before,
     fetchingAfter_ = true;
   }
   const quint64 serial = serial_;
+  if (kind == Fetch::Jump || kind == Fetch::Refresh)
+    requestedRevision_ = session_.revision();
   QJsonObject payload{{"address", hexAddress(address)},
                       {"sub", sub},
                       {"before", before},
@@ -358,6 +369,14 @@ void ListingView::accept(Fetch kind, const QJsonObject &payload, quint64 serial,
     generation_ = generation;
     revision_ = session_.revision();
     contentSerial_ = serial;
+    // A generation that moved while these rows were on their way and that
+    // they do not read is asked for now.
+    if (std::exchange(generationBehind_, false) &&
+        generation_ != session_.generation())
+      QTimer::singleShot(0, this, [this] {
+        if (generation_ != session_.generation())
+          refresh();
+      });
     lines_ = std::move(fresh);
     atStart_ = payload.value("at_start").toBool();
     atEnd_ = payload.value("at_end").toBool();

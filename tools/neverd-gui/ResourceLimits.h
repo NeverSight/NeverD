@@ -142,6 +142,9 @@ inline constexpr int kAnalysisAbandonedReadRestores = 2;
 /// the pages its views keep (kQueryServiceKeptPages); past this it forgets
 /// them all, and those pages go to the replica.
 inline constexpr int kAnalysisOwnerPageNames = 256;
+/// The pages read at the revision an edit leaves whose reads the edit carries
+/// to answer after it (QueryService, the worker's "then").
+inline constexpr int kQueryServiceThenReads = 2;
 /// A completed function's display-name refresh can batch existing text. Keep
 /// the interactive first load small, and retry it if a batch exceeds bytes.
 inline constexpr int kCodeViewNameRefreshPageLines =

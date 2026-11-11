@@ -304,20 +304,27 @@ Semantics are independently implemented from
 
 ### Counted TCP failures
 
-An explicit `tcp_connect_failures` object contains a nonzero `errno` and finite
-nonzero `count`. It becomes available only after all ordered TCP attempts have
-been consumed. It admits canonical IPv4/IPv6 peers matching the socket family
-and returns only the supplied failure; it creates no route, connection, bytes
-or readiness and never contacts the host network. Missing or exhausted input,
-wrong peers while exact attempts remain, nonblocking completion and failed
-socket reuse stop explicitly. Descriptor aliases share the failed description.
+An explicit `tcp_connect_failures` object contains a nonzero `errno` and a
+finite nonzero `count`. By default these failures follow all attempts in
+`connections`. The optional `after_connections` gives the number of exact TCP
+attempts to consume before the failures begin, from zero through the length of
+`connections`. For example, with two exact attempts, `after_connections: 1`
+and `count: 3`, the guest gets the first exact result, three supplied failures,
+then the second exact result.
+
+During the failure run, each admitted blocking TCP connect to a canonical
+IPv4/IPv6 peer of the socket's family receives the supplied errno. Once the
+count is consumed, the next exact attempt requires its declared peer and owns
+its normal stream data and readiness. Invalid addresses, wrong peers at exact
+attempts and UDP calls do not advance the TCP sequence. Descriptor aliases
+share the failed description.
 
 The failure count accepts 1 through `UINT32_MAX`, independently of the 4,096
 stored TCP/UDP entries. It retains one counter and creates no per-attempt
 inventory. The exhausted count is checked before incrementing, including at
-`UINT32_MAX`. Its diagnostic reports the number of consumed failures and states
-that the next result is not supplied. The pending `connect` retains no result;
-exhaustion supplies neither another errno nor a successful connection.
+`UINT32_MAX`. If the failures end the sequence, the exhaustion diagnostic
+reports the number consumed. A pending `connect` retains no result until a
+matching outcome is supplied in the input.
 Execution instruction, event and time budgets still bound each
 run. JSON and typed input use the shared validator; decimal strings follow the
 existing integer wire contract. Allowed errors match explicit TCP attempts:

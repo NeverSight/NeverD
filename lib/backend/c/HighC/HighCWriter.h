@@ -1291,7 +1291,7 @@ public:
   std::map<std::tuple<Intrinsic, uint32_t, NdMemoryAddressSpace>, std::string>
       X87ContextHelperNames;
   std::map<std::pair<Intrinsic, unsigned>, std::string> X86FPStateHelpers;
-  std::map<Intrinsic, std::string> MIPSScalarHelpers;
+  std::map<std::pair<Intrinsic, unsigned>, std::string> MIPSScalarHelpers;
   bool UsesX87Extended = false;
   /// Checked addition of the dynamic frame's outgoing call storage.
   std::string StackAllocationSizeHelper;

@@ -4366,6 +4366,31 @@ blocks of degree 15/23/31 retain unpaired source words and low-bit disturbances.
 Tests exhaust all three six-bit inputs for a degree-15 block, check complete
 8–257-bit words and retain every factor under short work/storage allowances.
 A degree-23 machine-code fixture executes all six source routes at O0/O2.
+`SymMBASparseUnits` requires a reordered 64-factor product to complete its
+residue proof and reduce cofactor cost by more than half at 8/16/32/64 bits.
+Its independent oracle enumerates every observed byte pair, including populated
+high bits. Short-prefix powers check correlated bits through an entire unit
+period, including its neighboring exponents.
+`SymMBASample.LongChecksRetainEveryOriginalRandomAssignment` pins the original
+counterexample points around 312 and 624 generator words with dense/sparse IDs
+and 8/64/65/257-bit inputs. Independent standard-engine comparisons cover all
+8192 cached words, the cache boundary and large dense/sparse input unions.
+`SymExpr.CollectVarsUnionsSharedRootsAndExistingSparseIds` checks overlapping
+roots, unused wide inputs and the union with previously collected variables.
+Degree-23 fixtures cover disturbed neighbors, 8–257-bit inputs, cumulative
+work/storage refusals and independent full-width Z3 proofs at 8 and 64 bits.
+The existing 31-factor byte cases check all 16,777,216 input triples for each
+observation-width and parity-neighbor configuration. This complete finite-domain
+proof avoids relying on the runtime of a high-degree SMT query.
+Degree-49 and permuted degree-64 machine-code fixtures execute all six
+HighC/LLVMC CLI and worker source routes at O0/O2.
+Recursive square retention checks degrees 25/31/49/63 with full 8–257-bit
+arithmetic and parity neighbors. Native-width degree-49/63 cases must reduce
+cost within the default allowance; wider cases may decline while preserving
+every original bit. Degree 49 enumerates all seven-bit input
+triples, with populated high bits; degree 25 remains a preservation case without
+claiming a completed reduction. A degree-33 single-pair boundary must keep the
+original global work allowance below exhaustion.
 Reassociated complemented blocks check XOR identity reuse with independent
 8–257-bit arithmetic and an exhaustive three-input six-bit oracle. Degree-192
 mixed products at both mask precisions must preserve their independent linear
@@ -7101,7 +7126,16 @@ checks that a replica's dispatcher names the page it kept after its owner's chan
 starts its read context anew, and names none of another project's.
 `WorkbenchTests::ownerAnswersForItsPagesWhileAReplicaIsReady` checks that the owner
 still answers for the page it gave after a note, with a replica ready, and that a
-graph is still the replica's.
+graph is still the replica's. `WorkbenchTests::ownerReadsWhatChangedOfThePageItGave`
+comments on the function a page the owner gave shows and reads it again through the
+analysis queries: the owner's dispatcher names the page it kept, and the comment carries
+that read, whose answer the view's read takes (`metadata.following_reads`), the comment
+showing. `QueryServiceTests::anEditCarriesTheReadsOfThePagesItsViewsShow` checks that
+an edit carries the read of a page read at its revision and that the answer serves the
+view's next read with nothing sent, and `aCarriedReadTheWorkerRefusedIsMadeAgain` that a
+refused one is read again naming the page kept. `NeverDWorkerViewEdits` answers a
+comment's carried read as a whole read gets it, refuses a read that is no page's alone,
+and answers none for a refused edit or for more than four.
 `NeverDWorkerListingFacts` runs that job over a real PE: the owner of the same
 session takes up what the replica keeps of a function's first look, a later session
 lists what asking the engine lists, a new name of a function or of data keeps the
@@ -10695,6 +10729,19 @@ formula at `-O0` and `-O2`, preserving the high-bit remainder and toggle/cache
 isolation.
 
 ## Modular MBA simplification
+
+`SymMBAHigherProduct.MintermSelectionsKeepEveryBoundaryCorner` checks empty,
+singleton and complete tables across the 64-entry storage boundary.
+`MixedDegreeExpansionPreservesIndependentWordValues` checks changing factor
+counts, repeated and replaced factors, constants, cancellation and zero products
+against an independent word oracle. It exhausts two-bit triples and populates
+all limbs through 257 bits, including single-term expansion and budget refusal.
+
+The isolated-column tests compare the packed proof with exhaustive scalar
+truth tables at four precisions, including perturbed offsets and short budgets.
+A 64-factor machine-code fixture checks both CLI and worker source modes against
+the original product at O0 and O2. Paired expression printing must reproduce
+both individual strings for shared roots, ancestors and different widths.
 
 `SymMBALinearProofMemo` checks successful full-width proof reuse, alternating
 queries with the same difference, context isolation, incomplete proofs and
@@ -21569,9 +21616,12 @@ exercise named, dynamic, variadic and raw ARM64 connect calls with independent
 errno and guarded-memory expectations. Run both Linux and Android network owners
 after changing connection admission. All transport tests are offline.
 
-`ProcessPublic.AndroidConnectionFailuresMatchSDKAndCLI` compares ten complete
-SDK/CLI reports and guarded memory across O0/O2 callers, large finite counts,
-exhausted providers and failed-description reuse.
+`LinuxNetwork.TCPConnectFailuresResumeAtTheNextExactPeer` checks both sides
+of a positioned failure run, including rejected peers and stream reads on the
+subsequent connection. `ProcessPublic.AndroidConnectionFailuresMatchSDKAndCLI`
+compares complete SDK/CLI reports and guarded memory across O0/O2 callers,
+large finite counts, recovery at an exact IPv6 peer, exhausted inputs and
+failed-description reuse.
 
 `ProcessPublic.AndroidApplicationValuesMatchSDKAndCLI` compares 84 complete
 SDK/CLI reports across O0/O2 JNI callers. Resolver identity, UTF-16 builders,
@@ -23699,6 +23749,22 @@ reference also fixes discarded packed-DSP/shift results: helpers still update
 DSPControl and enforce DSP enablement. The source runner permits no original
 zero-destination mismatch; see the [DSP reference boundary](mips.md#classic-mips32-dsp-state-and-packed-arithmetic).
 Reports identify the source revision and actual loaded native-library hash.
+
+To reproduce the DSP extraction and MSA permutation, floating-point and
+control-transfer comparisons, run the following command for each of
+`--group dsp` and `--group msa` with a separate output directory. Use a
+MIPS-enabled shared build of the pinned Unicorn fork. The runner assembles
+both byte orders, recompiles HighC and LLVMC at `-O0` and `-O2`, and compares
+registers, output bytes, control state and enabled FP traps with the original.
+
+```bash
+LIBUNICORN_PATH=/path/to/pinned-unicorn-library-directory \
+PYTHONPATH="$PWD/third_party/unicorn/bindings/python" \
+python3 unittests/lift/mips/ase-roundtrip.py --group msa \
+  --neverd build-mips/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld \
+  --output build-mips/roundtrip-msa-ase
+```
+
 Ordinary pair padding, predecessor memory barriers,
 single-sided barriers at joins, depth/work exhaustion and non-entry analysis
 roots or exceptional/disconnected paths have separate call-recovery regressions.
@@ -23789,8 +23855,8 @@ Profiles are `mips`, `mipsel`, `mips64`, `mips64el`, `micromips`,
 `micromipsel`, `mips16`, `mips16el`, `mips16e2`, `mips16e2el`, `mipsdsp`,
 `mipsdspel`, `mipsmsa` and `mipsmsael`. The e2 profiles add explicit MIPS16e2
 feature evidence to MIPS16 encoding. The DSP profiles explicitly select the admitted classic32 DSP
-capability; MSA profiles select classic32 r5/o32 FP64 with the admitted integer
-vector instructions.
+capability. MSA profiles select classic32 r5/o32 FP64 for the admitted integer,
+permutation, floating-point and control-transfer instructions.
 Stages are `capstone`
 (direct physical decoding), `decode` (NeverD physical decoding) and `lift`
 (decoding plus LowIR, including delay slots). Both decode paths request the same

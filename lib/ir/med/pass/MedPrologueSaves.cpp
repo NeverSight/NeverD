@@ -150,9 +150,11 @@ struct ValueReads {
   }
 
   /// Callee-save restores may flow through dead copies, zero extensions and
-  /// joins. Scratch restores still use unread(): later ABI recovery can observe
-  /// their register writes implicitly, so they need the separate overwrite
-  /// proof.
+  /// joins, and through the CONCAT that rebuilds a wider register from its
+  /// restored halves (ARM32 VPOP of D8-D15 writes Q4-Q7 too). Each such value
+  /// must be dead itself. Scratch restores still use unread(): later ABI
+  /// recovery can observe their register writes implicitly, so they need the
+  /// separate overwrite proof.
   bool onlyDeadCopiesAndExtensions(const MedVar &V, size_t &Budget) const {
     std::vector<ValueKey> Pending{keyOf(V)};
     std::set<ValueKey> Seen;
@@ -168,9 +170,12 @@ struct ValueReads {
         return false;
       if (const auto It = Ops.find(Key); It != Ops.end())
         for (const MedOp *Read : It->second) {
-          if (!Budget ||
-              (Read->Opcode != NdOp::COPY && Read->Opcode != NdOp::INT_ZEXT) ||
-              Read->NumInputs != 1 || Read->Output.Id < 0)
+          const bool Unary =
+              (Read->Opcode == NdOp::COPY || Read->Opcode == NdOp::INT_ZEXT) &&
+              Read->NumInputs == 1;
+          const bool Join =
+              Read->Opcode == NdOp::CONCAT && Read->NumInputs == 2;
+          if (!Budget || !(Unary || Join) || Read->Output.Id < 0)
             return false;
           --Budget;
           Pending.push_back(keyOf(Read->Output));
@@ -266,10 +271,135 @@ void frameAccessesOf(MedFunc &Func, Arch Architecture, BinaryFormat Format,
   }
 }
 
+/// A load the body uses of a callee-save slot. It reads the incoming register
+/// value the prologue save stored there.
+struct CalleeSaveRead {
+  MedOp *Load = nullptr;
+  MedVar Saved;
+};
+
+using OpPositions = std::map<const MedOp *, std::pair<size_t, size_t>>;
+
+/// Whether the register value \p Value, which \p Definition writes, is
+/// overwritten on every path before a return, call, intrinsic or indirect
+/// branch could read the register implicitly.
+bool registerDiesInside(const MedFunc &Func, const OpPositions &Positions,
+                        const MedVar &Value, const MedOp &Definition,
+                        size_t &Budget) {
+  const auto At = Positions.find(&Definition);
+  if (At == Positions.end())
+    return false;
+  std::vector<std::pair<size_t, size_t>> Pending{
+      {At->second.first, At->second.second + 1}};
+  std::set<size_t> Entered;
+  while (!Pending.empty()) {
+    const auto [B, Begin] = Pending.back();
+    Pending.pop_back();
+    const MedBlock &Block = Func.Blocks[B];
+    bool Overwritten = false;
+    for (size_t I = Begin; I < Block.Ops.size() && !Overwritten; ++I) {
+      if (!Budget)
+        return false;
+      --Budget;
+      const MedOp &Op = Block.Ops[I];
+      if (Op.Opcode == NdOp::RETURN || Op.Opcode == NdOp::CALL ||
+          Op.Opcode == NdOp::INDIR_CALL || Op.Opcode == NdOp::INDIR_BR ||
+          Op.Opcode == NdOp::INTRINSIC)
+        return false;
+      Overwritten = Op.Output.Kind == MedVar::Reg &&
+                    Op.Output.RegOff == Value.RegOff &&
+                    Op.Output.Size >= Value.Size;
+    }
+    if (Overwritten)
+      continue;
+    if (Block.Succs.empty())
+      return false;
+    for (int Successor : Block.Succs) {
+      const auto Next =
+          llvm::find_if(Func.Blocks, [&](const MedBlock &Candidate) {
+            return Candidate.Id == Successor;
+          });
+      if (Next == Func.Blocks.end())
+        return false;
+      const size_t Index = static_cast<size_t>(Next - Func.Blocks.begin());
+      if (Entered.insert(Index).second)
+        Pending.emplace_back(Index, 0);
+    }
+  }
+  return true;
+}
+
+/// Whether the value a body read takes stays in the function's own
+/// computation: no copy, extension, join or piece of it reaches a return,
+/// call, intrinsic, PHI or call clobber, and no register holding one reaches
+/// such an operation before it is overwritten. Later analyses read a value
+/// leaving the function that way as the incoming register it copies, which
+/// would take a returned save for no result at all.
+bool staysInside(const MedFunc &Func, const ValueReads &Reads,
+                 const OpPositions &Positions, const MedOp &Read,
+                 size_t &Budget) {
+  std::vector<std::pair<MedVar, const MedOp *>> Pending{{Read.Output, &Read}};
+  std::set<ValueKey> Seen;
+  while (!Pending.empty()) {
+    if (!Budget)
+      return false;
+    --Budget;
+    const auto [Value, Definition] = Pending.back();
+    Pending.pop_back();
+    const ValueKey Key = keyOf(Value);
+    if (!Seen.insert(Key).second)
+      continue;
+    if (Reads.Others.count(Key) || Reads.ImplicitReads.count(Key) ||
+        Reads.PhiOutputs.count(Key))
+      return false;
+    if (const auto It = Reads.Ops.find(Key); It != Reads.Ops.end())
+      for (const MedOp *Reader : It->second) {
+        switch (Reader->Opcode) {
+        case NdOp::RETURN:
+        case NdOp::CALL:
+        case NdOp::INDIR_CALL:
+        case NdOp::INDIR_BR:
+        case NdOp::INTRINSIC:
+          return false;
+        case NdOp::COPY:
+        case NdOp::INT_ZEXT:
+        case NdOp::INT_SEXT:
+        case NdOp::CONCAT:
+        case NdOp::SUBBYTES:
+          // These carry its bits unchanged into another value.
+          if (Reader->Output.Id < 0)
+            return false;
+          Pending.emplace_back(Reader->Output, Reader);
+          break;
+        default:
+          // A computation, a store or a test consumes it.
+          break;
+        }
+      }
+    if (Value.Kind == MedVar::Reg &&
+        !registerDiesInside(Func, Positions, Value, *Definition, Budget))
+      return false;
+  }
+  return true;
+}
+
+/// Each body read takes the saved incoming value itself, so the save is the
+/// prologue transport its restores already make it. Operations keep their
+/// definitions and positions: call records name both.
+void forwardCalleeSaveReads(llvm::ArrayRef<CalleeSaveRead> BodyReads) {
+  for (const CalleeSaveRead &Read : BodyReads) {
+    if (Read.Load->Opcode != NdOp::LOAD)
+      continue;
+    Read.Load->Opcode = NdOp::COPY;
+    Read.Load->NumInputs = 1;
+    Read.Load->Inputs[0] = Read.Saved;
+  }
+}
+
 void markCalleeSavePrologueSaves(
     MedFunc &Func, Arch Architecture, BinaryFormat Format, StackEntryKind Entry,
     std::vector<FrameAccess> &Loads, std::vector<FrameAccess> &Stores,
-    const ValueReads &Reads,
+    const ValueReads &Reads, std::vector<CalleeSaveRead> &BodyReads,
     std::vector<FrameAccess> *NeutralAtomics = nullptr) {
   const auto &TRI = getTargetRegInfo(Architecture);
   const BinaryFormat Convention =
@@ -282,8 +412,31 @@ void markCalleeSavePrologueSaves(
   frameAccessesOf(Func, Architecture, Format, Entry, Loads, Stores,
                   NeutralAtomics);
 
+  // A save in an entry block nothing re-enters runs before every other block,
+  // unless an exceptional edge brings in another frame context.
+  const MedBlock *EntryBlock = nullptr;
+  if (!Func.Blocks.empty() && !Func.SkippedSSA && !Func.AnalystStackFrame &&
+      Func.Blocks.front().Preds.empty() &&
+      Func.Blocks.front().StartAddr == Func.Entry &&
+      llvm::none_of(Func.Blocks, [](const MedBlock &Block) {
+        return !Block.ExceptionalPreds.empty() ||
+               !Block.ExceptionalSuccs.empty();
+      }))
+    EntryBlock = &Func.Blocks.front();
+  const auto EntryPosition = [&](const MedOp *Op) -> std::optional<size_t> {
+    const std::less<const MedOp *> Before;
+    if (!EntryBlock || EntryBlock->Ops.empty() ||
+        Before(Op, EntryBlock->Ops.data()) ||
+        !Before(Op, EntryBlock->Ops.data() + EntryBlock->Ops.size()))
+      return std::nullopt;
+    return static_cast<size_t>(Op - EntryBlock->Ops.data());
+  };
+
   size_t ReadBudget = limits::ir::kSourceEntrySpillWork;
+  size_t ForwardBudget = limits::ir::kSourceEntrySpillWork;
+  OpPositions Positions;
   std::vector<MedOp *> Saves;
+  std::vector<MedOp *> Uses;
   for (const FrameAccess &Save : Stores) {
     const MedVar &Saved = Save.Op->Inputs[1];
     if (Saved.Kind != MedVar::Reg || !Saved.Size ||
@@ -303,9 +456,28 @@ void markCalleeSavePrologueSaves(
       return V.Kind == MedVar::Reg && V.RegOff == Saved.RegOff &&
              V.Size == Saved.Size;
     };
+    // A body read takes the saved value only where that value is unknown
+    // machine state: an ordinary callee-saved register no parameter arrives
+    // in, unlike the frame pointer or the link register, whose incoming value
+    // C can name. A use of the read then fails as the save itself would, and
+    // a read on a path that never runs (a load an optimizer placed past an
+    // array's end) fails nothing. A read whose value leaves the function as
+    // it is keeps the save (staysInside).
+    const std::optional<size_t> SaveAt = EntryPosition(Save.Op);
+    const bool Forwardable =
+        SaveAt && TRI.isCallPreserved(Saved.RegOff, Saved.Size) &&
+        !TRI.isFramePointer(Saved.RegOff) &&
+        !TRI.isLinkRegister(Saved.RegOff) &&
+        llvm::none_of(Func.Params, [&](const MedVar &Param) {
+          return Param.RegOff != kNoParamReg &&
+                 Param.RegOff < Saved.RegOff + Saved.Size &&
+                 Saved.RegOff < Param.RegOff + Param.Size;
+        });
+    Uses.clear();
     // Each read of the bytes is a restore nothing uses: a load into that
     // register, or into a value only a copy into it takes, or a load no one
-    // reads.  Those loads read nothing a source statement uses either.
+    // reads.  Those loads read nothing a source statement uses either.  Any
+    // other read the save precedes takes the saved value.
     const bool OnlyRestored = llvm::all_of(Loads, [&](const FrameAccess &Read) {
       if (!Read.overlaps(Save.Offset, End))
         return true;
@@ -314,16 +486,29 @@ void markCalleeSavePrologueSaves(
       const MedVar &Out = Read.Op->Output;
       if (Reads.onlyDeadCopiesAndExtensions(Out, ReadBudget))
         return true;
-      const MedOp *Reader = Reads.singleReader(Out);
-      if (SameRegister(Out) || !Reader)
+      if (const MedOp *Copy = Reads.singleReader(Out);
+          Copy && !SameRegister(Out) && Copy->Opcode == NdOp::COPY &&
+          Copy->NumInputs == 1 && SameRegister(Copy->Output) &&
+          Reads.onlyDeadCopiesAndExtensions(Copy->Output, ReadBudget))
+        return true;
+      if (!Forwardable)
         return false;
-      const MedOp &Copy = *Reader;
-      return Copy.Opcode == NdOp::COPY && Copy.NumInputs == 1 &&
-             SameRegister(Copy.Output) &&
-             Reads.onlyDeadCopiesAndExtensions(Copy.Output, ReadBudget);
+      if (const auto At = EntryPosition(Read.Op); At && *At <= *SaveAt)
+        return false;
+      if (Positions.empty())
+        for (size_t B = 0; B < Func.Blocks.size(); ++B)
+          for (size_t I = 0; I < Func.Blocks[B].Ops.size(); ++I)
+            Positions.emplace(&Func.Blocks[B].Ops[I], std::pair{B, I});
+      if (!staysInside(Func, Reads, Positions, *Read.Op, ForwardBudget))
+        return false;
+      Uses.push_back(Read.Op);
+      return true;
     });
-    if (OnlyRestored)
-      Saves.push_back(Save.Op);
+    if (!OnlyRestored)
+      continue;
+    Saves.push_back(Save.Op);
+    for (MedOp *Use : Uses)
+      BodyReads.push_back({Use, Saved});
   }
   for (MedOp *Save : Saves)
     Save->PrologueSave = true;
@@ -1150,9 +1335,11 @@ bool isSourcePrivateFrameAccess(const MedFunc &Func, Arch Architecture,
 void markCalleeSavePrologueSaves(MedFunc &Func, Arch Architecture,
                                  BinaryFormat Format, StackEntryKind Entry) {
   std::vector<FrameAccess> Loads, Stores;
+  std::vector<CalleeSaveRead> BodyReads;
   const ValueReads Reads(Func);
   markCalleeSavePrologueSaves(Func, Architecture, Format, Entry, Loads, Stores,
-                              Reads);
+                              Reads, BodyReads);
+  forwardCalleeSaveReads(BodyReads);
 }
 
 void markReturnAddressReads(MedFunc &Func, Arch Architecture,
@@ -1180,9 +1367,10 @@ void markSourceStackAccesses(MedFunc &Func, Arch Architecture,
       Op.SourceReturnSlotOffset.reset();
     }
   std::vector<FrameAccess> Loads, Stores, NeutralAtomics;
+  std::vector<CalleeSaveRead> BodyReads;
   const ValueReads Reads(Func);
   markCalleeSavePrologueSaves(Func, Architecture, Format, Entry, Loads, Stores,
-                              Reads, &NeutralAtomics);
+                              Reads, BodyReads, &NeutralAtomics);
   // Annotate before source-only replacement. No access proof survives the
   // replacements at the end of this preparation.
   if (hasStackReturnAddress(Architecture, Entry))
@@ -1193,6 +1381,7 @@ void markSourceStackAccesses(MedFunc &Func, Arch Architecture,
   markUnobservedStackSpills(Func, Architecture, Format, Loads, Stores, Reads,
                             Image, Overwritten, /*SettledReturns=*/false);
   replaceUnwrittenCallFrameReads(Func, Architecture, Loads, Stores);
+  forwardCalleeSaveReads(BodyReads);
 }
 
 void markSettledSourceStackSpills(MedFunc &Func, Arch Architecture,

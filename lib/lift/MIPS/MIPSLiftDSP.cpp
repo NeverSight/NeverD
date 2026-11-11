@@ -33,6 +33,180 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
   const auto WriteControl = [&](NdVar Value) {
     S.emitIntrinsic(Intrinsic::MIPSWriteDSPControl, {}, {Value});
   };
+  using DSP = mips::DSPInstruction;
+  const unsigned Bank = RD & 3;
+  const auto ReadAccumulator = [&] {
+    return S.binary(NdOp::CONCAT, NdVar::reg(mipsreg::accumulatorHI(Bank), 4),
+                    NdVar::reg(mipsreg::accumulatorLO(Bank), 4), 8);
+  };
+  const auto WriteAccumulator = [&](NdVar Value) {
+    const auto High = S.makeTemp(4);
+    S.emit(NdOp::SUBBYTES, High, {Value, NdVar::cst(4, 4)});
+    S.emit(NdOp::COPY, NdVar::reg(mipsreg::accumulatorHI(Bank), 4), {High});
+    S.emit(NdOp::COPY, NdVar::reg(mipsreg::accumulatorLO(Bank), 4),
+           {S.resize(Value, 4)});
+    if (!Bank)
+      S.emit(NdOp::COPY, NdVar::reg(mipsreg::AC0Pending, 1),
+             {NdVar::cst(0, 1)});
+  };
+  const auto Select = [&](NdVar Condition, NdVar Yes, NdVar No) {
+    const auto Result = S.makeTemp(Yes.Size);
+    S.emit(NdOp::SELECT, Result, {Condition, Yes, No});
+    return Result;
+  };
+  const auto Sticky = [&](NdVar Set, unsigned Bit) {
+    WriteControl(S.binary(
+        NdOp::INT_OR, ReadControl(),
+        S.binary(NdOp::INT_LEFT, S.resize(Set, 4), NdVar::cst(Bit, 4))));
+  };
+  switch (*Kind) {
+  case DSP::ExtractWord:
+  case DSP::ExtractVariableWord:
+  case DSP::ExtractRoundedWord:
+  case DSP::ExtractVariableRoundedWord:
+  case DSP::ExtractSaturatedWord:
+  case DSP::ExtractVariableSaturatedWord:
+  case DSP::ExtractSaturatedHalf:
+  case DSP::ExtractVariableSaturatedHalf:
+  case DSP::ExtractPosition:
+  case DSP::ExtractVariablePosition:
+  case DSP::ExtractPositionDecrement:
+  case DSP::ExtractVariablePositionDecrement: {
+    const auto Size =
+        (Word & 0x40) ? S.binary(NdOp::INT_AND, S.read(RS), NdVar::cst(31, 4))
+                      : NdVar::cst(RS, 4);
+    const bool Decrement = *Kind == DSP::ExtractPositionDecrement ||
+                           *Kind == DSP::ExtractVariablePositionDecrement;
+    if (Decrement || *Kind == DSP::ExtractPosition ||
+        *Kind == DSP::ExtractVariablePosition) {
+      const auto Control = ReadControl();
+      const auto Position = S.binary(NdOp::INT_AND, Control, NdVar::cst(63, 4));
+      const auto Failed = S.binary(NdOp::INT_LESS, Position, Size, 1);
+      const auto Offset = S.binary(NdOp::INT_SUB, Position, Size);
+      auto SuccessState =
+          S.binary(NdOp::INT_AND, Control, NdVar::cst(~0x4000u, 4));
+      if (Decrement) {
+        const auto Next = S.binary(NdOp::INT_SUB, Offset, NdVar::cst(1, 4));
+        SuccessState =
+            S.binary(NdOp::INT_OR,
+                     S.binary(NdOp::INT_AND, SuccessState, NdVar::cst(~63u, 4)),
+                     S.binary(NdOp::INT_AND, Next, NdVar::cst(63, 4)));
+      }
+      WriteControl(
+          Select(Failed, S.binary(NdOp::INT_OR, Control, NdVar::cst(0x4000, 4)),
+                 SuccessState));
+      if (RT) {
+        const auto Mask =
+            S.binary(NdOp::INT_RIGHT, NdVar::cst(UINT32_MAX, 4),
+                     S.binary(NdOp::INT_SUB, NdVar::cst(31, 4), Size));
+        const auto SafeOffset =
+            S.binary(NdOp::INT_AND, Offset, NdVar::cst(63, 4));
+        const auto Part = [&](unsigned Reg) {
+          return Select(Failed, NdVar::cst(0, 4), NdVar::reg(Reg, 4));
+        };
+        const auto Acc =
+            S.binary(NdOp::CONCAT, Part(mipsreg::accumulatorHI(Bank)),
+                     Part(mipsreg::accumulatorLO(Bank)), 8);
+        const auto Bits = S.resize(
+            S.binary(NdOp::INT_RIGHT, Acc, S.resize(SafeOffset, 8)), 4);
+        const auto Result = S.makeTemp(4);
+        S.emitIntrinsic(Intrinsic::MIPSExtractResult, Result,
+                        {Failed, S.binary(NdOp::INT_AND, Bits, Mask)});
+        S.write(RT, Result);
+      }
+      return true;
+    }
+
+    const bool Half = *Kind == DSP::ExtractSaturatedHalf ||
+                      *Kind == DSP::ExtractVariableSaturatedHalf;
+    const auto Acc = ReadAccumulator();
+    const auto Truncated = S.binary(NdOp::INT_ASHR, Acc, S.resize(Size, 8));
+    auto Rounded = Truncated;
+    if (!Half) {
+      // Read the discarded bit without a negative shift when the count is zero.
+      const auto Previous = S.binary(
+          NdOp::INT_AND, S.binary(NdOp::INT_SUB, Size, NdVar::cst(1, 4)),
+          NdVar::cst(31, 4));
+      const auto Round = S.binary(
+          NdOp::INT_AND, S.binary(NdOp::INT_RIGHT, Acc, S.resize(Previous, 8)),
+          NdVar::cst(1, 8));
+      Rounded = S.binary(
+          NdOp::INT_ADD, Truncated,
+          Select(S.binary(NdOp::INT_NOTEQUAL, Size, NdVar::cst(0, 4), 1), Round,
+                 NdVar::cst(0, 8)));
+    }
+    const auto Min = NdVar::cst(Half ? INT16_MIN : INT32_MIN, 8);
+    const auto Max = NdVar::cst(Half ? INT16_MAX : INT32_MAX, 8);
+    const auto Below = S.binary(NdOp::INT_SLESS, Truncated, Min, 1);
+    const auto Above = S.binary(NdOp::INT_SLESS, Max, Rounded, 1);
+    // EXTR.W also reports overflow of the rounded alternative. A negative
+    // value that rounds back into range still sets OUflag from the first test.
+    Sticky(S.binary(NdOp::BOOL_OR, Below, Above, 1), 23);
+    const bool Saturate = Half || *Kind == DSP::ExtractSaturatedWord ||
+                          *Kind == DSP::ExtractVariableSaturatedWord;
+    auto Result =
+        (*Kind == DSP::ExtractWord || *Kind == DSP::ExtractVariableWord)
+            ? Truncated
+            : Rounded;
+    if (Saturate)
+      Result = Select(Above, Max, Select(Below, Min, Result));
+    S.write(RT, S.resize(Result, 4));
+    return true;
+  }
+  case DSP::DotAddSaturatedLong:
+  case DSP::DotSubSaturatedLong:
+  case DSP::MultiplyAccumulateSaturatedLeft:
+  case DSP::MultiplyAccumulateSaturatedRight:
+  case DSP::MultiplyAccumulateLeft:
+  case DSP::MultiplyAccumulateRight: {
+    const bool Long =
+        *Kind == DSP::DotAddSaturatedLong || *Kind == DSP::DotSubSaturatedLong;
+    const bool Right = *Kind == DSP::MultiplyAccumulateRight ||
+                       *Kind == DSP::MultiplyAccumulateSaturatedRight;
+    const auto Part = [&](unsigned R) {
+      if (Long)
+        return S.read(R);
+      const auto V = S.makeTemp(2);
+      S.emit(NdOp::SUBBYTES, V, {S.read(R), NdVar::cst(Right ? 0 : 2, 4)});
+      return V;
+    };
+    const auto A = Part(RS), B = Part(RT);
+    const auto Minimum = NdVar::cst(Long ? 0x80000000u : 0x8000u, A.Size);
+    auto Overflow =
+        S.binary(NdOp::BOOL_AND, S.binary(NdOp::INT_EQUAL, A, Minimum, 1),
+                 S.binary(NdOp::INT_EQUAL, B, Minimum, 1), 1);
+    const auto Product =
+        S.binary(NdOp::INT_MULT, S.resize(A, 8, true), S.resize(B, 8, true));
+    const auto Fraction =
+        Select(Overflow, NdVar::cst(Long ? INT64_MAX : INT32_MAX, 8),
+               S.binary(NdOp::INT_LEFT, Product, NdVar::cst(1, 8)));
+    const auto Old = ReadAccumulator();
+    const bool Sub = *Kind == DSP::DotSubSaturatedLong;
+    auto Sum = S.binary(Sub ? NdOp::INT_SUB : NdOp::INT_ADD, Old, Fraction);
+    if (Long) {
+      const auto Range =
+          S.binary(Sub ? NdOp::INT_SBOR : NdOp::INT_SOVF, Old, Fraction, 1);
+      const auto Limit =
+          Select(S.binary(NdOp::INT_SLESS, Old, NdVar::cst(0, 8), 1),
+                 NdVar::cst(INT64_MIN, 8), NdVar::cst(INT64_MAX, 8));
+      Sum = Select(Range, Limit, Sum);
+      Overflow = S.binary(NdOp::BOOL_OR, Range, Overflow, 1);
+    } else if (*Kind == DSP::MultiplyAccumulateSaturatedLeft ||
+               *Kind == DSP::MultiplyAccumulateSaturatedRight) {
+      const auto Min = NdVar::cst(INT32_MIN, 8), Max = NdVar::cst(INT32_MAX, 8);
+      const auto Low = S.binary(NdOp::INT_SLESS, Sum, Min, 1),
+                 High = S.binary(NdOp::INT_SLESS, Max, Sum, 1);
+      Sum = Select(Low, Min, Select(High, Max, Sum));
+      Overflow = S.binary(NdOp::BOOL_OR, Overflow,
+                          S.binary(NdOp::BOOL_OR, Low, High, 1), 1);
+    }
+    Sticky(Overflow, 16 + Bank);
+    WriteAccumulator(Sum);
+    return true;
+  }
+  default:
+    break;
+  }
   const bool DotBytes = *Kind == mips::DSPInstruction::DotAddLeftBytes ||
                         *Kind == mips::DSPInstruction::DotAddRightBytes ||
                         *Kind == mips::DSPInstruction::DotSubLeftBytes ||
@@ -42,12 +216,8 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
       *Kind == mips::DSPInstruction::DotSubFractionalHalfwords ||
       *Kind == mips::DSPInstruction::MultiplySubtractFractionalHalfwords;
   if (DotBytes || DotFractional) {
-    const unsigned Bank = RD & 3;
     const auto A = S.read(RS), B = S.read(RT);
-    const auto Old = S.makeTemp(8);
-    S.emit(NdOp::CONCAT, Old,
-           {NdVar::reg(mipsreg::accumulatorHI(Bank), 4),
-            NdVar::reg(mipsreg::accumulatorLO(Bank), 4)});
+    const auto Old = ReadAccumulator();
     const bool Left = *Kind == mips::DSPInstruction::DotAddLeftBytes ||
                       *Kind == mips::DSPInstruction::DotSubLeftBytes;
     const bool Subtract =
@@ -86,17 +256,8 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
     const auto Result =
         S.binary(Subtract ? NdOp::INT_SUB : NdOp::INT_ADD, Old, Sum);
     if (DotFractional)
-      WriteControl(S.binary(NdOp::INT_OR, ReadControl(),
-                            S.binary(NdOp::INT_LEFT, S.resize(Overflow, 4),
-                                     NdVar::cst(16 + Bank, 4))));
-    const auto High = S.makeTemp(4);
-    S.emit(NdOp::SUBBYTES, High, {Result, NdVar::cst(4, 4)});
-    S.emit(NdOp::COPY, NdVar::reg(mipsreg::accumulatorHI(Bank), 4), {High});
-    S.emit(NdOp::COPY, NdVar::reg(mipsreg::accumulatorLO(Bank), 4),
-           {S.resize(Result, 4)});
-    if (!Bank)
-      S.emit(NdOp::COPY, NdVar::reg(mipsreg::AC0Pending, 1),
-             {NdVar::cst(0, 1)});
+      Sticky(Overflow, 16 + Bank);
+    WriteAccumulator(Result);
     return true;
   }
   if (*Kind == mips::DSPInstruction::ReadControl) {

@@ -594,6 +594,10 @@ inline constexpr int
 
 // tools/neverd-worker/main.cpp
 inline constexpr int kMainIdleGracePeriodMilliseconds = 150;
+/// The reads a request may carry to follow it ("then"), and the bytes each
+/// answer may take in its reply.
+inline constexpr std::size_t kMainThenReads = 4;
+inline constexpr std::size_t kMainThenReadBytes = 1024 * 1024;
 inline constexpr int kMainExecuteLoopMilliseconds = 10;
 inline constexpr int kMainMainHeartbeatSeconds = 1;
 inline constexpr int kMainMainHelloCancelTargetRequestIdStringFieldMax = 128;
