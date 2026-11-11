@@ -34,6 +34,18 @@ class ARM32Wide64MemRT : public SemanticRoundTripFixture,
                          public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(ARM32Wide64MemRT, Verify) { roundTripARM32(GetParam()); }
 
+// The LLVM C route once split a stack array the code writes through a
+// joined pointer into separate locals. No environment selects that route in
+// every run, so these do.
+class X86Wide64MemLLVMCRT : public SemanticRoundTripFixture,
+                            public ::testing::WithParamInterface<RoundTripTC> {
+};
+TEST_P(X86Wide64MemLLVMCRT, Verify) { roundTripX86(GetParam()); }
+class ARM32Wide64MemLLVMCRT
+    : public SemanticRoundTripFixture,
+      public ::testing::WithParamInterface<RoundTripTC> {};
+TEST_P(ARM32Wide64MemLLVMCRT, Verify) { roundTripARM32(GetParam()); }
+
 // clang-format off
 static std::vector<RoundTripTC> makeW64Mem(const char *prefix, const char *T) {
   std::string p = prefix, t = T;
@@ -122,7 +134,21 @@ static const std::vector<RoundTripTC> kX86 = makeW64Mem("x86w64m", "int");
 static const std::vector<RoundTripTC> kA64 = makeW64Mem("a64w64m", "long");
 static const std::vector<RoundTripTC> kARM = makeW64Mem("armw64m", "int");
 
-INSTANTIATE_TEST_SUITE_P(Wide64Mem, X64Wide64MemRT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(Wide64Mem, X86Wide64MemRT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(Wide64Mem, A64Wide64MemRT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(Wide64Mem, ARM32Wide64MemRT, ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(Wide64Mem, X64Wide64MemRT, ::testing::ValuesIn(kX64),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(Wide64Mem, X86Wide64MemRT, ::testing::ValuesIn(kX86),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(Wide64Mem, A64Wide64MemRT, ::testing::ValuesIn(kA64),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(Wide64Mem, ARM32Wide64MemRT, ::testing::ValuesIn(kARM),
+                         rtTCName);
+
+static std::vector<RoundTripTC> llvmCRoute(std::vector<RoundTripTC> Cases) {
+  for (RoundTripTC &Case : Cases)
+    Case.SourceRoute = true;
+  return Cases;
+}
+INSTANTIATE_TEST_SUITE_P(Wide64MemLLVMC, X86Wide64MemLLVMCRT,
+                         ::testing::ValuesIn(llvmCRoute(kX86)), rtTCName);
+INSTANTIATE_TEST_SUITE_P(Wide64MemLLVMC, ARM32Wide64MemLLVMCRT,
+                         ::testing::ValuesIn(llvmCRoute(kARM)), rtTCName);
