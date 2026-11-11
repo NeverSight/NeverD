@@ -580,7 +580,7 @@ bool NdOpEmulator::executeStore(const LowOp &Op) {
   if (!storeMemoryBytes(*Addr, Value)) {
     if (!strictMode()) {
       MIPSReservationKnown = false;
-      MIPSReservationAddress.reset();
+      MIPSReservation.reset();
     }
     return !strictMode();
   }

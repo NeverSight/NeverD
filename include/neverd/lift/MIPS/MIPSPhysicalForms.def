@@ -6,4 +6,6 @@
 // Name, offset from MIPS_INS_ENDING, public disassembly spelling.
 NEVERD_MIPS_PHYSICAL_FORM(IndexedLoadDoubleword, 1, "ldx")
 NEVERD_MIPS_PHYSICAL_FORM(NoOpAndLink, 2, "nal")
+NEVERD_MIPS_PHYSICAL_FORM(LoadLinkedDoublePair, 3, "lldp")
+NEVERD_MIPS_PHYSICAL_FORM(StoreConditionalDoublePair, 4, "scdp")
 #undef NEVERD_MIPS_PHYSICAL_FORM

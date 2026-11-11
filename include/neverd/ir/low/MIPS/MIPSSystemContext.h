@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// One-step MIPS32 observations. No interrupt delivery, CP0 timing or exception
+/// One-step MIPS observations. No interrupt delivery, CP0 timing or exception
 /// entry is inferred. The caller authenticates privilege and register values.
 //===----------------------------------------------------------------------===//
 #ifndef NEVERD_IR_LOW_MIPS_MIPSSYSTEMCONTEXT_H
@@ -18,18 +18,30 @@ struct MIPSSystemContext;
 /// Board-specific CP0 views can have read side effects, writable masks and
 /// aliases with status or MT state. A successful transfer updates that same
 /// context. An unimplemented transfer returns failure without changing it.
+enum class MIPSCP0ExtendedView { HighWord, Doubleword };
 class MIPSCP0Platform {
 public:
   virtual ~MIPSCP0Platform() = default;
   virtual std::optional<uint32_t> readWord(uint8_t Key,
                                            MIPSSystemContext &) = 0;
   virtual bool writeWord(uint8_t Key, uint32_t Value, MIPSSystemContext &) = 0;
+  /// The board owns MVH, XPA, EntryLo RI/XI bit placement, writable fields,
+  /// and implementation-specific views. A missing observation preserves state.
+  virtual std::optional<uint64_t> readExtended(uint8_t, MIPSCP0ExtendedView,
+                                               MIPSSystemContext &) {
+    return std::nullopt;
+  }
+  virtual bool writeExtended(uint8_t, MIPSCP0ExtendedView, uint64_t,
+                             MIPSSystemContext &) {
+    return false;
+  }
 };
 class MIPSCachePlatform;
 class MIPSMSAExecutor;
 struct MIPSHardwareObservation {
   uint8_t Index;
-  uint32_t Value;
+  uint64_t Value;
+  uint8_t Selector = 0;
 };
 /// Observed state of the issuing TC and the currently free physical WR pool.
 /// Other TCs must not change the pool during one bound transition.

@@ -81,6 +81,7 @@ private:
   };
 
   bool liftInteger(State &S, uint32_t Word) const;
+  bool liftSystem(State &S, uint32_t Word) const;
   bool liftBitfield(State &S, uint32_t Word) const;
   bool liftMemory(State &S, uint32_t Word,
                   std::optional<NdVar> BaseOverride = std::nullopt) const;

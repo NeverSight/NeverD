@@ -23841,7 +23841,12 @@ The fixture links local branch relocations, checks physical lengths and compares
 the lifted operations across byte orders and across classic/micro ASE encodings.
 The parameterized `MIPSRelease6` and `MIPSDSPRegisterWidth` tests in
 `NeverDMIPSIntegerTests` check register values, control flow and full-width
-indexed addresses.
+indexed addresses. The R6 fixtures include scalar and paired linked loads and
+conditional stores, selected hardware registers, CP0 word/high/doubleword
+transfers and cache requests. The tests check permission and alignment
+failures, partial-register aliases, interference, an inactive Config5.XNP
+feature, and n64 addresses above 4 GiB. The reference CPU test also runs
+ordinary R6 word and doubleword LL/SC sequences and compares their memory.
 
 Use `profile-roundtrip.py` in the same directory to recompile both emitted C
 views at `-O0` and `-O2`. Pass `--assembler`, `--linker`, `--neverd`,
