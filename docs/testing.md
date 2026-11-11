@@ -24023,6 +24023,16 @@ both C backends. New instruction coverage and additional strict checks are
 different work and require separate reporting, not same-output speedup claims.
 This small corpus and a shared host do not establish a cross-tool ranking.
 
+To reproduce the compact o32 corpora and compare LowIR and SLEIGH P-code,
+run `tools/neverd-bench/mips-compressed.py` with Python 3.12 or newer,
+pypcode 4.1.0, pyelftools, `--assembler PATH/TO/mips-as` and
+`--bench build-mips/bin/neverd-mips-bench`. The optional `--save-inputs DIR`
+writes the four full byte streams for `mips-paired.py`. The cross-tool run
+compares decoded and translated physical spans, including delay slots, before
+timing nine alternating pairs. It records excluded functions. With pypcode
+4.1.0, the four-byte delay slot in `mips_stack` produces two halfword source
+marks. That function still participates in the NeverD baseline comparison.
+
 Both MIPS Python drivers reuse their `--output` directory through
 `scripts/mips_validation_artifacts.py`. A new output must be empty; older,
 unmarked reports are never adopted or deleted. Keep SDKs, firmware, fixture

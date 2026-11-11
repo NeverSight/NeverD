@@ -103,7 +103,9 @@ private:
   };
   struct Encoding {
     uint32_t Word;
-    unsigned SlotBytes = 0;
+    // 0, either width (1), or a required 2/4 bytes. Keep the optional
+    // encoding within the two-register aggregate return on 64-bit hosts.
+    unsigned SlotBytes : 8 = 0;
     bool Unconditional = false;
     bool PCRelative = false;
     SequenceKind Sequence = SequenceKind::None;
