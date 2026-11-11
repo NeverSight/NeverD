@@ -17,6 +17,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/loader/BinaryImage.h"
 
+#include <array>
 #include <atomic>
 #include <functional>
 #include <map>
@@ -79,13 +80,26 @@ checkedUnwindTailTargetsX64(const BinaryImage &Img,
                             const std::set<va_t> &Entries,
                             const Cancellation *Control = nullptr);
 
-/// The step a sweep of [..., \p End) of \p Seg takes at \p Cur, or nothing
-/// where the segment's bytes end.  A sweep is these steps from its start, so
-/// two sweeps of one range that reach the same address agree from there on.
-/// \p Known caches the code stretch the sweep is in.
-std::optional<CallScanStep> stepCallsX86(const BinaryImage &Img, Decoder &Dec,
-                                         const Segment *Seg, va_t Cur, va_t End,
-                                         CodeInterval &Known);
+/// A call-target sweep of one immutable segment with a fixed decode bound.
+class X86CallScan {
+public:
+  X86CallScan(const BinaryImage &Img, Decoder &Dec, const Segment &Seg,
+              va_t Start, va_t End);
+  /// Return the step at Cur. The parallel merge can resume at a new boundary.
+  std::optional<CallScanStep> step(va_t Cur);
+
+private:
+  const BinaryImage &Img;
+  Decoder &Dec;
+  const Segment &Seg;
+  va_t End;
+  CodeInterval Known;
+  // Only the entries in [Index, Count) starting at Next are reusable.
+  std::array<uint32_t, 64> Instructions;
+  size_t Index = 0;
+  size_t Count = 0;
+  va_t Next = 0;
+};
 
 /// Functions x86-64 code takes the address of with RIP-relative `lea`, such
 /// as main handed to __libc_start_main: each target that starts with a

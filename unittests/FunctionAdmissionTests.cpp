@@ -10,6 +10,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../lib/ir/low/FuncDetectorDetail.h"
 #include "gtest/gtest.h"
 
 #include "neverd/decode/Decoder.h"
@@ -69,6 +70,45 @@ TEST(FunctionAdmission, CompactCallQueryUsesOnlyTheExactInstruction) {
       }
     }
   }
+}
+
+TEST(FunctionAdmission, CallScanResumesAtTheRequestedBoundary) {
+  constexpr va_t Base = 0x140001000;
+  // The MOV immediate contains the start of another valid near CALL.
+  BinaryImage Img =
+      makeCodeFixture(Base, {0x90, 0xe8, 0, 0, 0, 0, 0x66, 0x0f, 0xae, 0xe8,
+                             0xb8, 0xe8, 0, 0, 0, 0, 0xc3});
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Img));
+  Dec.setText(false);
+  Dec.setDetail(false);
+  const Segment &Seg = Img.Segments.front();
+  func_detect_detail::X86CallScan Scan(Img, Dec, Seg, Base, Base + Seg.Size);
+  const auto Check = [&](unsigned Offset, unsigned Size, va_t Target) {
+    const auto Step = Scan.step(Base + Offset);
+    ASSERT_TRUE(Step);
+    EXPECT_EQ(Step->Next, Base + Offset + Size);
+    EXPECT_EQ(Step->Target, Target);
+  };
+  Check(0, 1, InvalidVA);
+  // A caller requesting detail must get the CALL's actual immediate.
+  Dec.setText(true);
+  Dec.setDetail(true);
+  Check(1, 5, Base + 6);
+  Dec.setText(false);
+  Dec.setDetail(false);
+  Check(6, 4, InvalidVA);
+  Check(10, 5, InvalidVA);
+  Check(11, 5, Base + 16);
+  Check(16, 1, InvalidVA);
+
+  func_detect_detail::X86CallScan Truncated(Img, Dec, Seg, Base, Base + 4);
+  const auto Step = Truncated.step(Base + 1);
+  ASSERT_TRUE(Step);
+  EXPECT_EQ(Step->Next, Base + 2);
+  EXPECT_EQ(Step->Target, InvalidVA);
+  EXPECT_FALSE(Truncated.step(Base + 4));
+  EXPECT_FALSE(Truncated.step(Base + 5));
 }
 
 TEST(FunctionAdmission, UnwindlessNonLeafCandidateRemainsAFunction) {

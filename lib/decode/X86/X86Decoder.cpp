@@ -107,6 +107,14 @@ bool isX86AlignmentNop(const DecodedInsn &Insn) {
 
 } // namespace decoder_detail
 
+size_t
+Decoder::classifyX86Prefix(llvm::ArrayRef<uint8_t> Bytes, va_t Addr,
+                           llvm::MutableArrayRef<uint32_t> Output) const {
+  return X86_scanBatch(Handle, Bytes.data(), Bytes.size(), Addr, Output.data(),
+                       Output.size())
+      .count;
+}
+
 va_t Decoder::directX86CallTarget(llvm::ArrayRef<uint8_t> Bytes,
                                  va_t Addr) const {
   va_t Target;

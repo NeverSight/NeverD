@@ -186,23 +186,46 @@ CodeInterval codeIntervalAround(const BinaryImage &Img, va_t Addr) {
   return Known;
 }
 
-std::optional<CallScanStep> stepCallsX86(const BinaryImage &Img, Decoder &Dec,
-                                         const Segment *Seg, va_t Cur, va_t End,
-                                         CodeInterval &Known) {
-  const size_t Off = static_cast<size_t>(Cur - Seg->VA);
-  if (Off >= Seg->Data.size())
+X86CallScan::X86CallScan(const BinaryImage &Img, Decoder &Dec,
+                         const Segment &Seg, va_t Start, va_t End)
+    : Img(Img), Dec(Dec), Seg(Seg), End(End),
+      Known(codeIntervalAround(Img, Start)) {}
+
+std::optional<CallScanStep> X86CallScan::step(va_t Cur) {
+  const size_t Off = static_cast<size_t>(Cur - Seg.VA);
+  if (Cur >= End || Off >= Seg.Data.size())
     return std::nullopt;
+  const auto Bytes = llvm::ArrayRef(Seg.Data).slice(
+      Off,
+      static_cast<size_t>(std::min<va_t>(Seg.Data.size() - Off, End - Cur)));
   CallScanStep Step;
   Step.Addr = Cur;
   DecodedInsn DI;
-  const size_t Remain =
-      static_cast<size_t>(std::min<va_t>(Seg->Data.size() - Off, End - Cur));
-  const int Sz = Dec.decodeOneLight(Seg->Data.data() + Off, Remain, Cur, DI);
-  if (Sz <= 0) {
-    Step.Next = Cur + 1;
-    return Step;
+  unsigned Id;
+  unsigned Sz;
+  if (Dec.detailEnabled() || Dec.textEnabled()) {
+    Index = Count = 0;
+  } else if (Index == Count || Next != Cur) {
+    Count = Dec.classifyX86Prefix(Bytes, Cur, Instructions);
+    Index = 0;
   }
-  Step.Next = Cur + static_cast<va_t>(Sz);
+  if (Index < Count) {
+    const uint32_t Item = Instructions[Index++];
+    Id = Item >> 8;
+    Sz = Item & 0xff;
+  } else {
+    // The physical decoder may stop at a prefixed fence or MPX form that
+    // NeverD owns. Also use the ordinary path when text or detail is enabled.
+    const int Size = Dec.decodeOneLight(Bytes.data(), Bytes.size(), Cur, DI);
+    if (Size <= 0) {
+      Step.Next = Cur + 1;
+      return Step;
+    }
+    Sz = static_cast<unsigned>(Size);
+    Id = DI.Id;
+  }
+  Step.Next = Cur + Sz;
+  Next = Step.Next;
   if (Known.Lo != Known.Hi && Cur >= Known.Hi)
     Known = codeIntervalAround(Img, Cur);
   const bool Owned = Known.Lo != Known.Hi && Cur >= Known.Lo &&
@@ -213,25 +236,25 @@ std::optional<CallScanStep> stepCallsX86(const BinaryImage &Img, Decoder &Dec,
   // Linked PE/ELF callbacks need not have unwind metadata or a prologue.
   // The size/id sweep already proves the instruction boundary. Its canonical
   // RIP-relative encoding supplies the target without a second decode.
-  if (DI.Id == X86_INS_LEA && Img.Arch == Arch::X64 &&
+  if (Id == X86_INS_LEA && Img.Arch == Arch::X64 &&
       (Img.Format == BinaryFormat::COFF || Img.Format == BinaryFormat::ELF) &&
       !Img.IsRelocatable) {
-    const auto Bytes = llvm::ArrayRef(Seg->Data).slice(Off, Sz);
-    if (x86::isRipRelativeAddressInstruction(Bytes)) {
+    const auto Instruction = Bytes.take_front(Sz);
+    if (x86::isRipRelativeAddressInstruction(Instruction)) {
       const va_t Target =
-          Step.Next + static_cast<va_t>(readLE<int32_t>(
-                          Bytes.data() + x86::kAddressDisplacementOffset));
+          Step.Next +
+          static_cast<va_t>(readLE<int32_t>(Instruction.data() +
+                                            x86::kAddressDisplacementOffset));
       if (Img.hasExecutableCodeOwnerAt(Target))
         Step.CodeTarget = Target;
     }
     return Step;
   }
-  if (DI.Id != X86_INS_CALL)
+  if (Id != X86_INS_CALL)
     return Step;
   const va_t Tgt = Dec.detailEnabled()
                        ? Dec.directCallTarget(DI)
-                       : Dec.directX86CallTarget({Seg->Data.data() + Off,
-                                                  static_cast<size_t>(Sz)}, Cur);
+                       : Dec.directX86CallTarget(Bytes.take_front(Sz), Cur);
   if (Tgt != InvalidVA && Img.hasExecutableCodeOwnerAt(Tgt))
     Step.Target = Tgt;
   return Step;
@@ -366,11 +389,10 @@ void scanSegmentCallsX86(const BinaryImage &Img, Decoder &Dec,
                          std::set<va_t> &Out,
                          std::vector<std::pair<va_t, va_t>> &CodeAddresses,
                          const Cancellation *Control) {
-  CodeInterval Known = codeIntervalAround(Img, Start);
+  X86CallScan Scan(Img, Dec, *Seg, Start, End);
   for (va_t Cur = Start; Cur < End;) {
     func_detect_detail::checkCancellation(Control);
-    const std::optional<CallScanStep> Step =
-        stepCallsX86(Img, Dec, Seg, Cur, End, Known);
+    const auto Step = Scan.step(Cur);
     if (!Step)
       break;
     if (Step->Target != InvalidVA)

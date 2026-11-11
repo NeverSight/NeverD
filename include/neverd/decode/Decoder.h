@@ -296,6 +296,13 @@ public:
   /// not a direct call.  Dispatches to the active architecture lifter.
   va_t directCallTarget(const DecodedInsn &Insn) const;
 
+  /// Classify a contiguous prefix for a textless, detailless x86 sweep.
+  /// Each word holds the physical instruction ID above its low length byte.
+  /// Stops at the first rejected input or when Output fills. A rejection may
+  /// still have a NeverD-specific decode in decodeOneLight().
+  size_t classifyX86Prefix(llvm::ArrayRef<uint8_t> Bytes, va_t Addr,
+                           llvm::MutableArrayRef<uint32_t> Output) const;
+
   /// Resolve one complete x86 near CALL without touching the borrowed decode.
   /// Returns InvalidVA for indirect calls, incomplete or surplus bytes.
   va_t directX86CallTarget(llvm::ArrayRef<uint8_t> Bytes, va_t Addr) const;
