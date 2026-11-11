@@ -1,0 +1,1 @@
+import fixture.*;public final class CarrierAccessorNameCaller {public static Object box(float f){return ValuesKt.boxed(f);}public static int compare(Object a,Object b){return((Comparable)a).compareTo(b);} }

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "compiler_version": "2.0.21-release-482",
+  "compiler_sha256": "67d9b72f6016e418446c60abadb876fed9ff8bc802f3701748b9706ead3d3b30",
+  "source_sha256": "6f4f391f90701e84dd370188b32d4446c5b4add77601fd3bada87955aa6cc193",
+  "witness_method": "adapt(Lfixture/Box;Lfixture/Callback;)Lfixture/Box;",
+  "unconstrained_formals": [
+    "X",
+    "Y"
+  ],
+  "metadata": {
+    "k": 2,
+    "mv": [
+      2,
+      0,
+      0
+    ],
+    "xi": 48,
+    "d1": [
+      "\u0000\u000e\n\u0000\n\u0002\u0018\u0002\n\u0002\b\u0004\n\u0002\u0018\u0002\u001a@\u0010\u0000\u001a\b\u0012\u0004\u0012\u0002H\u00020\u0001\"\u0004\b\u0000\u0010\u0003\"\u0004\b\u0001\u0010\u00022\f\u0010\u0004\u001a\b\u0012\u0004\u0012\u0002H\u00030\u00012\u0018\u0010\u0005\u001a\u0014\u0012\u0004\u0012\u0002H\u0003\u0012\n\u0012\b\u0012\u0004\u0012\u0002H\u00020\u00010\u0006"
+    ],
+    "d2": [
+      "adapt",
+      "Lfixture/Box;",
+      "Y",
+      "X",
+      "input",
+      "action",
+      "Lfixture/Callback;"
+    ]
+  }
+}

@@ -1,0 +1,1 @@
+Independent invariant list and contravariant predicate with a covariant closed Boolean result. The immutable iterator observer validates order, removals, input identity, nulls, partial mutations and original exception identity. No application input is executed.

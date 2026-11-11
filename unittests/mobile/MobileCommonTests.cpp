@@ -154,6 +154,17 @@ TEST_F(MobileCommonTest, WorkOutputAndTimeBudgetsReject) {
   budget.deadline = std::chrono::steady_clock::now() - std::chrono::seconds(1);
   EXPECT_THROW(budget.check(), Error);
 }
+TEST_F(MobileCommonTest, LargerAnalysisBudgetsRetainWorkAndByteBounds) {
+  Budget ordinary;
+  EXPECT_EQ(ordinary.remaining, 20000000u);
+  Budget larger({1800, 20000, UINT64_C(2147483648)});
+  EXPECT_EQ(larger.remaining, 120000000u);
+  larger.tick(larger.remaining);
+  EXPECT_THROW(larger.tick(), Error);
+  Budget small({1800, 10, 100000});
+  EXPECT_EQ(small.remaining, 400000u);
+}
+
 TEST_F(MobileCommonTest, ExtractsStoredDeflatedEmptyAndUnicodeZip64) {
   auto archive = root / "input.zip", output = root / "output";
   writeFile(archive, zip({{"empty", ""},

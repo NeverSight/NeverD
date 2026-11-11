@@ -9,8 +9,87 @@ add_neverd_unittest(NeverDMobileTests
   MobileCLITests.cpp
   MobileAndroidTests.cpp
   MobileDalvikReaderTests.cpp
+  MobileJavaClassTests.cpp
   MobileDalvikSignatureTests.cpp
+  MobileDalvikAncestorSuperTests.cpp
+  MobileDalvikObjectScalarTests.cpp
+  MobileDalvikAllocatedContextTests.cpp
+  MobileDalvikComputedAllocationTests.cpp
+  MobileDalvikNestedFactoryTests.cpp
+  MobileDalvikBoundedPairTests.cpp
+  MobileDalvikCallbackArrayFactoryTests.cpp
+  MobileDalvikTypedVariadicConstructorTests.cpp
+  MobileDalvikScopedCaptureSuperTests.cpp
+  MobileDalvikScopedNullSuperTests.cpp
+  MobileDalvikArrayObjectScalarTests.cpp
+  MobileDalvikClosedBoundSuperTests.cpp
+  MobileDalvikInstanceFormalContextTests.cpp
+  MobileDalvikEnumTokenDefaultTests.cpp
+  MobileDalvikPairedRawTokenContextTests.cpp
+  MobileDalvikObjectPrimitiveArrayTests.cpp
+  MobileDalvikEnumTokenScalarTests.cpp
+  MobileDalvikEnumClosedContextTests.cpp
+  MobileDalvikBoundedTokenPrimitiveArrayTests.cpp
+  MobileDalvikInheritedProtectedAllocationTests.cpp
+  MobileDalvikConstructorStaticNominalTests.cpp
+  MobileDalvikInterfaceSeedVarargsTests.cpp
+  MobileDalvikReusedAllocationReadTests.cpp
+  MobileDalvikRecursiveCarrierFactoryTests.cpp
+  MobileDalvikPrivateInterfaceContextTests.cpp
+  MobileDalvikBinaryClosedContextTests.cpp
+  MobileDalvikArrayCallbackIndexTests.cpp
+  MobileDalvikEnumInterfaceKeyTests.cpp
+  MobileDalvikArrayBooleanVarargsTests.cpp
+  MobileDalvikCarrierNominalContextTests.cpp
+  MobileDalvikProducerThrowsTests.cpp
+  MobileDalvikParameterizedInterfaceSeedTests.cpp
+  MobileDalvikInterfaceTokenContextTests.cpp
+  MobileDalvikArrayOverloadSeparationTests.cpp
+  MobileDalvikProtectedStaticFinalsTests.cpp
+  MobileDalvikReifiableArrayDelegationTests.cpp
+  MobileDalvikNominalSuperResultTests.cpp
+  MobileDalvikThrowableCarrierScalarTests.cpp
+  MobileDalvikArrayTransferContextTests.cpp
+  MobileDalvikDependentSeedBoundTests.cpp
+  MobileDalvikClosedMapSuperTests.cpp
+  MobileDalvikDirectSeedNominalTests.cpp
+  MobileDalvikBooleanSuperResultTests.cpp
+  MobileDalvikClassThrowableContextTests.cpp
+  MobileDalvikScopedNullDelegationTests.cpp
+  MobileDalvikArrayNominalContextTests.cpp
+  MobileDalvikComparableMapTransferTests.cpp
+  MobileDalvikDirectSeedRawCarrierTests.cpp
+  MobileDalvikNestedSeedTransferTests.cpp
+  MobileDalvikSeededNestedCallbackTests.cpp
+  MobileDalvikSeededCarrierCallbackTests.cpp
+  MobileDalvikReversedCarrierSlotsTests.cpp
+  MobileDalvikPrimitiveMapSuperTests.cpp
+  MobileDalvikFloatingConstructorDefaultTests.cpp
+  MobileDalvikScopedBuilderCallbackSuperTests.cpp
+  MobileDalvikScopedComparatorAllocationTests.cpp
+  MobileDalvikScopedMapInitializerUpcastTests.cpp
+  MobileDalvikScopedSupplierDelegationTests.cpp
+  MobileDalvikCarrierNominalVarargsTests.cpp
+  MobileDalvikCarrierScalarVarargsTests.cpp
+  MobileDalvikPairedSeedElementTests.cpp
+  MobileDalvikPairedSeedScalarTests.cpp
+  MobileDalvikTokenSeedUncheckedTests.cpp
+  MobileDalvikPairedKeyConsumerTests.cpp
+  MobileDalvikComparablePairFactoryTests.cpp
+  MobileDalvikScopedStaticFieldSuperTests.cpp
+  MobileDalvikDependentCarrierAllocationTests.cpp
+  MobileDalvikSyntheticNullaryAllocationTests.cpp
+  MobileDalvikScopedIntegerGetterDelegationTests.cpp
+  MobileDalvikCapturedSyntheticIdentifiersTests.cpp
   MobileDalvikJavaTests.cpp
+  MobileDalvikDiscardedResultTests.cpp
+  MobileDalvikScopedCarrierTests.cpp
+  MobileDalvikConditionalReceiverTests.cpp
+  MobileDalvikConstructorRegionTests.cpp
+  MobileDalvikFinalStageTests.cpp
+  MobileDalvikArrayNominalTests.cpp
+  MobileDalvikConstructorBindingTests.cpp
+  MobileDalvikScopedCallbackTests.cpp
   MobileIOSTests.cpp
   MobileSwiftDemangleTests.cpp
   MobileProcessTests.cpp

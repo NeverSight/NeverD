@@ -1,0 +1,2 @@
+package fixture;
+public final class Token { public int writes, reads; public @PRIMITIVE@ bits; public @PRIMITIVE@ accepted; public Object receiver; public Carrier saved; }

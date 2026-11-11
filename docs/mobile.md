@@ -54,6 +54,8 @@ Original comments, formatting, removed identifiers, and compilation-lost source 
 
 The defaults are 20,000 entries, 2 GiB of input/extracted or final output data, and 300 seconds for built-in Android/iOS analysis or each explicit JADX process. iOS child processes receive the remaining total analysis budget. The built-in reader and emitter also enforce a bounded work budget. Set `--max-files`, `--max-bytes`, and `--timeout` to adjust these positive limits. The temporary work area is monitored while backends run, with up to three times the entry/byte limits to allow staged input and intermediate output to coexist. Diagnostics are capped at 16 MiB per process.
 
+The default analysis work ceiling is 20 million units. A `--timeout` above 300 seconds increases that ceiling proportionally; the input-byte-derived work bound and wall-clock deadline still apply. Increasing only the output byte allowance does not remove the work ceiling.
+
 APK staging writes only root `classes.dex`, `classes2.dex`, and subsequent numbered DEX files. Every ZIP member still undergoes header/range checks, decompression, length and CRC validation, and counts toward archive entry and uncompressed-byte limits. Unwritten resources may have distinct case-sensitive names such as `res/-A.xml` and `res/-a.xml`. Exact duplicate ZIP names and file/directory identity conflicts remain errors; portable filesystem case-collision checks apply to members actually written. Full extraction, including IPA input, still rejects such output collisions. Traversal paths, links, special files, and encrypted ZIP entries remain rejected throughout the archive. Directory inputs also reject symbolic links and special files.
 
 These limits are robustness controls, not a sandbox for third-party backend code. Explicit JADX and native source-export commands run as local child processes. Failed staging output is removed. Nonzero backend exits include a bounded diagnostic tail. Backend timeouts preserve the timeout message and append a bounded tail when captured log text is available. Launch failures and budget violations retain their own error messages.
@@ -66,6 +68,7 @@ Python is used only by the development test harnesses below; built-in mobile rec
 cmake --build build --target check-neverd-mobile
 ctest --test-dir build -L NeverDMobileTests --output-on-failure
 python3 scripts/test_mobile_android_internal.py --d8 PATH --neverd build/bin/neverd
+python3 scripts/test_mobile_android_indexed_covariant_returns.py --inherited-bridge --android-jar PATH --d8 PATH --neverd build/bin/neverd
 python3 scripts/test_mobile_android_backend.py --jadx /opt/jadx/bin/jadx --neverd build/bin/neverd
 ```
 
@@ -85,3 +88,40 @@ The independent Swift recovery runner is `python3 scripts/test_mobile_swift_back
 The [Mobile Real Applications workflow](../.github/workflows/mobile-real-apps.yml) uses public applications pinned in the [corpus manifest](../scripts/mobile_real_apps.json). Its acceptance gate requires independent inventories of every DEX in each APK and every Mach-O in each complete iOS bundle, independent rebuilding of originals and generated source, and behavior comparisons. Missing stages, unknown inventory coverage, or missing required cases fail the gate. Real-app recompile and behavior stages remain incomplete, so support retains the Experimental label; passing harness guard tests does not establish real-app success.
 
 Android cases attempt to compile the entire inventoried generated Java set with javac and D8, using only Android SDK declarations. Original application bytecode, dependency implementations, and replacement stubs cannot fill missing recovery. Partial recovery and compiler errors remain in the evidence; successful compilation still requires independent verification, complete APK reconstruction, and ART behavior comparison. The iOS oracle reconciles disk Objective-C method records against Apple tool output, preserving class, metaclass, category, list and ordinal identities. Unresolved pointers or omitted slots keep the inventory unknown. Separate device and simulator SDK declaration inventories support framework-import work without treating headers as proof of instance layout or behavior.
+
+A single independent allocation may select between its exact public no-argument
+constructor and same-type copy constructor through one local null test. This
+closed diamond requires unchanged ordered handlers, a common join and no
+outside entries. Both original arms remain type-checked; the emitted conditional
+creates exactly one selected object at the original allocation point. Shared
+allocation-handler visibility checks reject paths that can observe the receiver
+before initialization. Generic, varargs or checked-throwing constructor contracts
+and other branch or argument shapes remain outside this proof.
+
+Monitor cleanup may have multiple catch-all landing pads when each captures
+into the same exception register and follows only total local copies, padding
+or forward jumps to one exact release and rethrow. The graph proof preserves
+the acquired lock and captured exception, including implicit wide-word writes.
+Original CFG verification still checks all register types. Synchronized owns
+the emitted exceptional release only after this proof; observable cleanup,
+changed exceptions, lock writes, cycles and entries without acquisition reject.
+The same total-copy classification admits uncovered normal register transfers
+between protected monitor intervals.
+
+Owned private methods may share one Object-bounded method formal across two
+invariant or covariant inputs of the same known unary carrier and its invariant
+result. The signature planner proves both complete input declarations, the
+original descriptor erasures and exact formal scope before recording an erased
+call binding. Body retains exact same-owner private access and static/direct
+dispatch checks. No input merge, callback evaluation, result identity or cast
+is inferred from this contract; the original provider body still executes.
+
+A constructor may retain single blank-final stores inside protected intervals
+when every original handler is one trailing catch-all that captures an exception,
+calls its original void cleanup and rethrows the same untouched register. The
+stage proof still requires one write per field and rejects skipped/revisited
+writes or handler re-entry. Body independently requires each store's receiver
+to be exactly this and verifies its precomputed register value: that assignment
+cannot throw. Throwing getters and cleanup calls retain the original exception
+dispatch and partial object visibility. Static final stores and other protected
+cleanup shapes require separate proofs.

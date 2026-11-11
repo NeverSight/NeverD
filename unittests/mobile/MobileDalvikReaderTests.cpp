@@ -102,6 +102,7 @@ struct FixtureOptions {
   unsigned class_flags = 1;
   std::vector<std::string> interfaces;
   bool define_method = true;
+  std::optional<std::string> debug_info;
 };
 struct Fixture {
   std::string data;
@@ -337,6 +338,10 @@ Fixture fixture(FixtureOptions options = {}) {
     code = section(0x2001, 1, raw);
   }
   at["code"] = code;
+  if (options.debug_info) {
+    at["debug_info"] = section(0x2003, 1, *options.debug_info);
+    patch(out, code + 8, at["debug_info"]);
+  }
   bool direct = options.flags & (8 | 2 | 0x10000);
   raw.clear();
   uleb(raw, bool(options.static_value));
@@ -799,6 +804,124 @@ TEST(MobileDalvikReader, DexVersionsAndExactMethodInventory) {
     EXPECT_EQ(m.instructions[0].registers, std::vector<unsigned>{0});
   }
 }
+TEST(MobileDalvikReader, DexSyntheticDebugPositionsKeepExactParameterCount) {
+  FixtureOptions options;
+  // Synthetic D8 method: line zero, one unnamed parameter, position at pc 0.
+  options.debug_info = std::string("\0\1\0\x0e\0", 5);
+  EXPECT_NO_THROW(parse(fixture(options).data));
+  options.debug_info = std::string("\0\0\0", 3);
+  EXPECT_THROW(parse(fixture(options).data), Error);
+  options.debug_info = std::string("\0\2\0\0\0", 5);
+  EXPECT_THROW(parse(fixture(options).data), Error);
+  // Neither a negative position nor an address outside the code is valid.
+  options.debug_info = std::string("\0\1\0\x0d\0", 5);
+  EXPECT_THROW(parse(fixture(options).data), Error);
+  options.debug_info = std::string("\0\1\0\1\2\0", 6);
+  EXPECT_THROW(parse(fixture(options).data), Error);
+}
+
+TEST(MobileDalvikReader, DexClassInitializerAllowsVisibilityWithConstructor) {
+  FixtureOptions options;
+  options.method_name = "<clinit>";
+  options.params.clear();
+  options.returns = "V";
+  options.words = {0x000e};
+  options.registers = 0;
+  for (unsigned visibility : {0u, 1u, 2u, 4u}) {
+    options.flags = 0x10008 | visibility;
+    EXPECT_NO_THROW(linkedDex(options));
+  }
+  for (unsigned flags : {0x10009u | 2u, 0x10001u, 0x10008u | 0x10u}) {
+    options.flags = flags;
+    EXPECT_THROW(linkedDex(options), Error);
+  }
+}
+
+TEST(MobileDalvikReader, DexAnnotationDefaultRetainsTypedStringArray) {
+  FixtureOptions options = markerOptions();
+  options.define_method = true;
+  options.method_name = "value";
+  options.flags = 0x401;
+  options.params.clear();
+  options.returns = "[Ljava/lang/String;";
+  FixtureAnnotation defaults{"Ldalvik/annotation/AnnotationDefault;", 2};
+  defaults.extra_strings = {u"value", u"first", u"second"};
+  defaults.elements = [](std::string &out, const Fixture &f) {
+    uleb(out, 1);
+    uleb(out, fixtureStringIndex(f, "value"));
+    append(out, 0x1d, 1);
+    uleb(out, fixtureTypeIndex(f, "Lfixture/ZMarker;"));
+    uleb(out, 1);
+    uleb(out, fixtureStringIndex(f, "value"));
+    append(out, 0x1c, 1);
+    uleb(out, 2);
+    for (auto text : {"first", "second"})
+      annotationIndex(out, 0x17, fixtureStringIndex(f, text));
+  };
+  options.annotations = {defaults};
+  options.annotation_sets = {{0}};
+  options.class_annotations = 0;
+  auto classes = linkedDex(options);
+  const auto &value =
+      classes.at(options.owner).methods.at(0).annotation_default;
+  ASSERT_TRUE(value);
+  EXPECT_EQ(value->kind, 0x1cu);
+  ASSERT_EQ(value->array.size(), 2u);
+  EXPECT_EQ(std::get<std::string>(value->array[1].value), "second");
+  options.returns = "[I";
+  EXPECT_THROW(linkedDex(options), Error);
+}
+
+TEST(MobileDalvikReader, DexSourceMapAndParameterMetadataRemainAvailable) {
+  FixtureOptions options;
+  options.params = {"I", "J"};
+  options.registers = 3;
+  FixtureAnnotation source_map{"Ldalvik/annotation/SourceDebugExtension;", 2};
+  source_map.extra_strings = {u"value", u"SMAP\nSource.kt\nKotlin\n*E\n"};
+  source_map.elements = [](std::string &out, const Fixture &f) {
+    uleb(out, 1);
+    uleb(out, fixtureStringIndex(f, "value"));
+    annotationIndex(out, 0x17,
+                    fixtureStringIndex(f, "SMAP\nSource.kt\nKotlin\n*E\n"));
+  };
+  FixtureAnnotation parameters{"Ldalvik/annotation/MethodParameters;", 2};
+  parameters.extra_strings = {u"accessFlags", u"names", u"count"};
+  parameters.elements = [](std::string &out, const Fixture &f) {
+    uleb(out, 2);
+    uleb(out, fixtureStringIndex(f, "accessFlags"));
+    append(out, 0x1c, 1);
+    uleb(out, 2);
+    append(out, 0x24, 1);
+    append(out, 0x10, 2);
+    append(out, 0x24, 1);
+    append(out, 0x1000, 2);
+    uleb(out, fixtureStringIndex(f, "names"));
+    append(out, 0x1c, 1);
+    uleb(out, 2);
+    annotationIndex(out, 0x17, fixtureStringIndex(f, "count"));
+    append(out, 0x1e, 1);
+  };
+  options.annotations = {source_map, parameters};
+  options.annotation_sets = {{0}, {1}};
+  options.class_annotations = 0;
+  options.method_annotations = 1;
+  auto classes = parse(fixture(options).data);
+  ASSERT_EQ(classes.size(), 1u);
+  EXPECT_EQ(classes[0].source_debug_extension, "SMAP\nSource.kt\nKotlin\n*E\n");
+  const auto &metadata = classes[0].methods[0].parameter_metadata;
+  ASSERT_TRUE(metadata);
+  ASSERT_EQ(metadata->size(), 2u);
+  EXPECT_EQ((*metadata)[0].name, "count");
+  EXPECT_EQ((*metadata)[0].access, 0x10u);
+  EXPECT_FALSE((*metadata)[1].name);
+  EXPECT_EQ((*metadata)[1].access, 0x1000u);
+  options.annotations[1].visibility = 0;
+  EXPECT_THROW(parse(fixture(options).data), Error);
+  options.annotations[1].visibility = 2;
+  options.params = {"I"};
+  EXPECT_THROW(parse(fixture(options).data), Error);
+}
+
 TEST(MobileDalvikReader, DexHeaderIntegrityAndUnsupportedContainers) {
   auto f = fixture();
   EXPECT_THROW(parse(f.data.substr(0, 111)), Error);
@@ -1538,12 +1661,14 @@ TEST(MobileDalvikReader, DexAttachedUnknownAnnotationsCannotLoseSemantics) {
         options.annotations = {{type, visibility}};
         options.annotation_sets = {{0}};
         attachFixtureAnnotation(options, attachment);
-        if (std::string_view(attachment) == "class" && visibility != 2) {
+        if (visibility != 2) {
           auto classes = parse(fixture(options).data);
           ASSERT_EQ(classes.size(), 1u);
-          ASSERT_EQ(classes[0].marker_annotations.size(), 1u);
-          EXPECT_EQ(classes[0].marker_annotations[0].type, type);
-          EXPECT_EQ(classes[0].marker_annotations[0].visibility, visibility);
+          if (std::string_view(attachment) == "class") {
+            ASSERT_EQ(classes[0].marker_annotations.size(), 1u);
+            EXPECT_EQ(classes[0].marker_annotations[0].type, type);
+            EXPECT_EQ(classes[0].marker_annotations[0].visibility, visibility);
+          }
           Budget budget;
           EXPECT_THROW(linkClasses(std::move(classes), budget), Error);
           continue;
@@ -1557,9 +1682,7 @@ TEST(MobileDalvikReader, DexAttachedUnknownAnnotationsCannotLoseSemantics) {
           declaration = "method Lfixture/Sample;->value(I)I";
         else
           declaration = "parameter 0 of method Lfixture/Sample;->value(I)I";
-        expectDexError(fixture(options).data,
-                       "Invalid DEX: unsupported annotation " +
-                           std::string(type) + " on " + declaration);
+        EXPECT_THROW(parse(fixture(options).data), Error);
       }
     }
   }
@@ -1660,8 +1783,12 @@ TEST(MobileDalvikReader, DexMetaEnumsRequireExactKindOwnerTypeAndConstant) {
   }
   EXPECT_THROW(linkedDex(markerOptions({targetAnnotation({"TYPE", "TYPE"})})),
                Error);
-  for (const auto &newer : {"MODULE", "RECORD_COMPONENT"})
-    EXPECT_THROW(linkedDex(markerOptions({targetAnnotation({newer})})), Error);
+  for (const auto &newer : {"MODULE", "RECORD_COMPONENT"}) {
+    const std::vector<std::string> targets{newer};
+    auto linked = linkedDex(markerOptions({targetAnnotation(targets)}));
+    EXPECT_EQ(linked.at("Lfixture/ZMarker;").annotation_metadata.targets,
+              targets);
+  }
   const std::vector<std::string> java8_targets{
       "TYPE_USE",       "TYPE_PARAMETER",
       "PACKAGE",        "ANNOTATION_TYPE",
@@ -1788,7 +1915,10 @@ TEST(MobileDalvikReader, DexMarkerApplicationsRejectSourceAndPayloadLoss) {
       uleb(out, fixtureStringIndex(f, "value"));
       append(out, 0x1f, 1);
     };
-    EXPECT_THROW(parse(fixture(use).data), Error);
+    auto with_payload = parse(fixture(use).data);
+    with_payload.push_back(definitions[0]);
+    Budget payload_budget;
+    EXPECT_THROW(linkClasses(std::move(with_payload), payload_budget), Error);
     use.annotations[0].elements = {};
     use.annotations.push_back({definition.owner, visibility});
     use.annotation_sets[0].push_back(1);
@@ -1806,6 +1936,10 @@ TEST(MobileDalvikReader, DexReservedEmptyAnnotationsCannotBecomeMarkers) {
     use.annotations = {{Type, 1}};
     use.annotation_sets = {{0}};
     use.class_annotations = 0;
+    if (std::string_view(Type) == "Ldalvik/annotation/AnnotationDefault;") {
+      EXPECT_THROW(parse(fixture(use).data), Error);
+      continue;
+    }
     auto classes = parse(fixture(use).data);
     ASSERT_EQ(classes.size(), 1u);
     ASSERT_EQ(classes[0].marker_annotations.size(), 1u);
@@ -2669,8 +2803,8 @@ TEST(MobileDalvikReader, DexInnerClassAbsentAndNullAreDifferentModelStates) {
   } catch (const Error &error) {
     EXPECT_STREQ(error.what(),
                  "Android class Lfixture/Outer$1; from classes2.dex "
-                 "enclosing Lfixture/Outer;->factory()I: anonymous class "
-                 "source context is unsupported");
+                 "enclosing Lfixture/Outer;->factory()I: anonymous local "
+                 "projection requires an original constructor");
   }
 }
 
@@ -2749,7 +2883,7 @@ TEST(MobileDalvikReader, SmaliLocalMetadataRetainsExactMethodAndPresence) {
   EXPECT_FALSE(anonymous.inner_name);
   EXPECT_EQ(anonymous.enclosing_method, local.enclosing_method);
   expectLocalScopeError({anonymous}, anonymous,
-                        "anonymous class source context is unsupported");
+                        "exact enclosing method definition is unavailable");
 }
 
 TEST(MobileDalvikReader, SmaliEnclosingMethodRequiresOneTypedSystemContext) {

@@ -2,6 +2,7 @@
 //------===//
 #include "MobileCommon.h"
 #include "MobileDalvik.h"
+#include "MobileJavaFieldRestore.h"
 
 #include "llvm/Support/Regex.h"
 
@@ -352,6 +353,50 @@ Object builtin(const Options &options, const fs::path &staging,
     throw Error("Android staged input inventory is inconsistent");
   bool dex = inputs.kind == "apk" || inputs.kind == "dex";
   std::vector<dalvik::Class> classes;
+  Array dependencies;
+  uint64_t dependency_bytes = 0, dependency_files = 0;
+  for (size_t i = 0; i < options.classpath.size(); ++i) {
+    budget.tick();
+    const auto &jar = options.classpath[i];
+    if (lowerASCII(pathText(jar.extension())) != ".jar")
+      throw Error("Android --classpath entries must be dependency JARs");
+    auto archive = work.path / ("dependency-" + std::to_string(i) + ".jar");
+    auto bytes = readFile(jar, limits.max_bytes);
+    budget.tick(bytes.size() / 8 + 1);
+    if (bytes.size() > limits.max_bytes - dependency_bytes)
+      throw Error("Android dependency inputs exceed the byte limit");
+    dependency_bytes += bytes.size();
+    writeFile(archive, bytes);
+    auto tree = work.path / ("dependency-" + std::to_string(i));
+    auto paths = extractZip(archive, tree, limits, [](const fs::path &path) {
+      return path.extension() == ".class";
+    });
+    std::sort(paths.begin(), paths.end());
+    uint64_t count = 0;
+    for (const auto &path : paths) {
+      auto relative = pathText(path.lexically_relative(tree));
+      if (relative.starts_with("META-INF/"))
+        throw Error("Multi-release dependency JARs require an explicit "
+                    "target-specific class set");
+      if (relative == "module-info.class")
+        throw Error("Modular dependency JARs are not supported");
+      auto content = readFile(path, limits.max_bytes);
+      if (++dependency_files > limits.max_files ||
+          content.size() > limits.max_bytes - dependency_bytes)
+        throw Error("Android dependency declarations exceed resource limits");
+      dependency_bytes += content.size();
+      auto cls = dalvik::parseClassDeclaration(
+          content, pathText(jar.filename()) + "!" + relative, budget);
+      if (relative != cls.name.substr(1, cls.name.size() - 2) + ".class")
+        throw Error("Dependency classfile path disagrees with its identity");
+      classes.push_back(std::move(cls));
+      ++count;
+    }
+    if (!count)
+      throw Error("Android dependency JAR contains no class declarations");
+    dependencies.push_back(
+        Object{{"name", pathText(jar.filename())}, {"class_count", count}});
+  }
   for (size_t i = 0; i < paths.size(); ++i) {
     auto content = readFile(paths[i], limits.max_bytes);
     // Each reader charges byte scanning and structural work to this budget.
@@ -374,6 +419,11 @@ Object builtin(const Options &options, const fs::path &staging,
     throw Error("Android native emitter produced no source inventory");
   Array units = std::move(*source_units);
   object->erase("source_units");
+  Array rebuild_artifacts;
+  if (auto *artifacts = object->getArray("java_rebuild_artifacts")) {
+    rebuild_artifacts = std::move(*artifacts);
+    object->erase("java_rebuild_artifacts");
+  }
   work.clear();
   auto metadata_path = pathFromUTF8("metadata/android-methods.json");
   auto metadata = jsonText(coverage);
@@ -394,6 +444,19 @@ Object builtin(const Options &options, const fs::path &staging,
   reserve(metadata_path.parent_path(), true);
   reserve(metadata_path, false);
   std::vector<std::pair<fs::path, std::string>> pending;
+  auto append_artifact = [&](const fs::path &relative,
+                             std::string_view source) {
+    for (auto parent = relative.parent_path(); !parent.empty() && parent != ".";
+         parent = parent.parent_path())
+      reserve(parent, true);
+    reserve(relative, false);
+    budget.tick(source.size());
+    if (source.size() >
+        limits.max_bytes - std::min(total_bytes, limits.max_bytes))
+      throw Error("Android source and metadata output exceed the byte limit");
+    total_bytes += source.size();
+    pending.emplace_back(relative, std::string(source));
+  };
   for (auto &unit_value : units) {
     auto *unit = unit_value.getAsObject();
     if (!unit)
@@ -404,16 +467,25 @@ Object builtin(const Options &options, const fs::path &staging,
     auto relative =
         fs::path("sources") /
         relativeMember(std::string_view(name->data(), name->size()));
-    for (auto parent = relative.parent_path(); !parent.empty() && parent != ".";
-         parent = parent.parent_path())
-      reserve(parent, true);
-    reserve(relative, false);
-    budget.tick(source->size());
-    if (source->size() >
-        limits.max_bytes - std::min(total_bytes, limits.max_bytes))
-      throw Error("Android source and metadata output exceed the byte limit");
-    total_bytes += source->size();
-    pending.emplace_back(relative, source->str());
+    append_artifact(relative, std::string_view(source->data(), source->size()));
+  }
+  std::vector<std::string> rebuild_paths;
+  for (auto &artifact_value : rebuild_artifacts) {
+    auto *artifact = artifact_value.getAsObject();
+    auto name = artifact ? artifact->getString("path") : std::nullopt;
+    auto content = artifact ? artifact->getString("content") : std::nullopt;
+    if (!name || !content || content->empty() || !llvm::json::isUTF8(*content))
+      throw Error(
+          "Android emitter produced an invalid metadata rebuild artifact");
+    const auto relative =
+        relativeMember(std::string_view(name->data(), name->size()));
+    if (relative != pathFromUTF8(dalvik::JavaFieldRestorePath) &&
+        relative != pathFromUTF8(dalvik::JavaFieldRestoreManifestPath))
+      throw Error(
+          "Android emitter produced an unsupported metadata rebuild path");
+    append_artifact(relative,
+                    std::string_view(content->data(), content->size()));
+    rebuild_paths.push_back(pathText(relative));
   }
   if (total_bytes > limits.max_bytes)
     throw Error("Android metadata output exceeds the byte limit");
@@ -421,11 +493,12 @@ Object builtin(const Options &options, const fs::path &staging,
   std::vector<std::string> sources;
   for (auto &[relative, source] : pending) {
     writeFile(staging / relative, source);
-    sources.push_back(pathText(relative));
+    if (relative.begin() != relative.end() && *relative.begin() == "sources")
+      sources.push_back(pathText(relative));
   }
   writeFile(staging / metadata_path, metadata);
   validateTree(staging, limits);
-  return Object{
+  Object report{
       {"status", "success"},
       {"platform", "android"},
       {"input_kind", inputs.kind},
@@ -451,6 +524,18 @@ Object builtin(const Options &options, const fs::path &staging,
              "this Java recovery workflow.",
              "Successful recovery does not certify behavior for arbitrary "
              "applications."}}};
+  if (!rebuild_paths.empty()) {
+    report["java_rebuild_artifacts"] = strings(rebuild_paths);
+    report["requires_java_rebuild_postprocessing"] = true;
+    report.getArray("limitations")
+        ->push_back(
+            "After javac, run the emitted metadata build utility before loading "
+            "the rebuilt classes. It restores the original field modifiers "
+            "recorded in the manifest.");
+  }
+  if (!dependencies.empty())
+    report["classpath"] = std::move(dependencies);
+  return report;
 }
 } // namespace
 Object recoverAndroid(const Options &options, const fs::path &staging,

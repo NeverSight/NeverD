@@ -1,0 +1,6 @@
+import fixture.*;
+public final class ScalarDefaultCaller {
+    public static Object call(ScalarApi receiver) {
+        return ScalarApi.DefaultImpls.getValue(receiver);
+    }
+}

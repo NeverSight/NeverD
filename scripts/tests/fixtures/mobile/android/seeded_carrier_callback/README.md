@@ -1,0 +1,3 @@
+This owned fixture returns the invariant seed carrier directly under the same complete two-formal input, fixed context and binary callback contract as the nested-result profile. A wrapper invokes its virtual view method and returns an opaque List. Neither the direct seed nor the callback predicts the actual returned carrier, dispatch target or List contents.
+
+Four frozen routes compare 96 cases twice with source and SDK providers, including distinct and null carriers and Lists, a future view override, callback bridge casts, partial writes, late value casts and exact checked/runtime/error identity. Original compiled entries and metadata are audited. Six wrong programs and six Code-preserving Signature controls guard the result proof.

@@ -1,0 +1,1 @@
+package fixture; public final class Core { public final Token value; public final String label; public Core(Token token,String label){Trace.partial=this;Trace.hit(3);this.value=token;Trace.hit(4);this.label=label;Trace.hit(5);} public Core(Object input,long word,String label){this(new Token(input,word),label);} }

@@ -99,13 +99,7 @@ struct DecodedString {
   std::string text;
   std::u16string units;
 };
-struct Encoded {
-  unsigned kind = 0;
-  FieldValue value;
-  std::vector<Encoded> array;
-  std::string annotation_type;
-  std::map<std::string, Encoded> elements;
-};
+using Encoded = AnnotationValue;
 using Annotation = std::pair<std::string, std::map<std::string, Encoded>>;
 struct AnnotationItem {
   unsigned visibility;
@@ -704,6 +698,7 @@ class Dex {
                          std::optional<std::vector<std::string>> *throws_types,
                          bool &deprecated,
                          std::optional<std::vector<std::string>> &suppress_lint,
+                         std::vector<AnnotationUse> &annotations,
                          const std::string &declaration) {
     for (const auto &entry : values) {
       budget.tick();
@@ -724,8 +719,12 @@ class Dex {
       }
       bool is_signature = name == "Ldalvik/annotation/Signature;";
       bool is_throws = name == "Ldalvik/annotation/Throws;" && throws_types;
-      if (!is_signature && !is_throws)
-        bad("unsupported annotation " + name + " on " + declaration);
+      if (!is_signature && !is_throws) {
+        if (entry.visibility == 2)
+          bad("unsupported annotation " + name + " on " + declaration);
+        annotations.push_back({name, entry.visibility, elements});
+        continue;
+      }
       if (entry.visibility != 2)
         bad("source annotation " + name + " on " + declaration +
             " requires system visibility");
@@ -865,6 +864,7 @@ class Dex {
           sourceAnnotations(
               annotationSet(annotation_off), found->second->generic_signature,
               nullptr, found->second->deprecated, found->second->suppress_lint,
+              found->second->annotations,
               "field " + ref.owner + "->" + ref.name + ":" + ref.type);
           continue;
         }
@@ -875,10 +875,43 @@ class Dex {
         if (found == defined_methods.end())
           bad("annotated method has no class_data definition");
         if (kind == 1) {
+          auto annotations = annotationSet(annotation_off);
+          for (auto it = annotations.begin(); it != annotations.end();) {
+            const auto &[name, elements] = it->value;
+            if (name != "Ldalvik/annotation/MethodParameters;") {
+              ++it;
+              continue;
+            }
+            auto names = elements.find("names"),
+                 flags = elements.find("accessFlags");
+            if (it->visibility != 2 || elements.size() != 2 ||
+                names == elements.end() || flags == elements.end() ||
+                names->second.kind != 0x1c || flags->second.kind != 0x1c ||
+                names->second.array.size() != ref.parameters.size() ||
+                flags->second.array.size() != ref.parameters.size())
+              bad("invalid MethodParameters on " + ref.identity());
+            std::vector<ParameterMetadata> parameters;
+            for (size_t p = 0; p < ref.parameters.size(); ++p) {
+              budget.tick();
+              const auto &n = names->second.array[p],
+                         &f = flags->second.array[p];
+              if ((n.kind != 0x17 && n.kind != 0x1e) || f.kind != 4 ||
+                  (std::get<int64_t>(f.value) & ~int64_t(0x9010)))
+                bad("invalid MethodParameters entry on " + ref.identity());
+              ParameterMetadata parameter;
+              if (n.kind == 0x17)
+                parameter.name = std::get<std::string>(n.value);
+              parameter.access = uint32_t(std::get<int64_t>(f.value));
+              parameters.push_back(std::move(parameter));
+            }
+            found->second->parameter_metadata = std::move(parameters);
+            it = annotations.erase(it);
+          }
           sourceAnnotations(
-              annotationSet(annotation_off), found->second->generic_signature,
+              annotations, found->second->generic_signature,
               &found->second->declared_throws, found->second->deprecated,
-              found->second->suppress_lint, "method " + ref.identity());
+              found->second->suppress_lint, found->second->annotations,
+              "method " + ref.identity());
           continue;
         }
         auto parameters = item<std::vector<uint32_t>>(
@@ -895,22 +928,61 @@ class Dex {
             4);
         if (parameters.size() != ref.parameters.size())
           bad("parameter annotation count mismatch");
+        auto &uses = found->second->parameter_annotations;
+        uses.resize(parameters.size());
         for (size_t p = 0; p < parameters.size(); ++p)
-          requireUnannotated(annotationSet(parameters[p]),
-                             "parameter " + std::to_string(p) + " of method " +
-                                 ref.identity());
+          for (const auto &entry : annotationSet(parameters[p])) {
+            if (entry.visibility == 2 ||
+                entry.value.first == "Landroid/annotation/SuppressLint;" ||
+                entry.value.first == "Ljava/lang/Deprecated;")
+              bad("unsupported annotation " + entry.value.first +
+                  " on parameter " + std::to_string(p) + " of method " +
+                  ref.identity());
+            uses[p].push_back(
+                {entry.value.first, entry.visibility, entry.value.second});
+          }
       }
     }
     std::map<std::string, std::map<std::string, Encoded>> values;
     for (const auto &entry : directory.classes) {
       budget.tick();
       const auto &[name, elements] = entry.value;
+      if (name == "Ldalvik/annotation/SourceDebugExtension;") {
+        auto value = elements.find("value");
+        if (entry.visibility != 2 || elements.size() != 1 ||
+            value == elements.end() || value->second.kind != 0x17)
+          bad("invalid SourceDebugExtension on " + cls.name);
+        cls.source_debug_extension = std::get<std::string>(value->second.value);
+        continue;
+      }
       if (name == "Ldalvik/annotation/Signature;" ||
           name == "Ljava/lang/Deprecated;" ||
           name == "Landroid/annotation/SuppressLint;") {
         sourceAnnotations({entry}, cls.generic_signature, nullptr,
-                          cls.deprecated, cls.suppress_lint,
+                          cls.deprecated, cls.suppress_lint, cls.annotations,
                           "class " + cls.name);
+        continue;
+      }
+      if (name == "Ldalvik/annotation/AnnotationDefault;") {
+        auto value = elements.find("value");
+        if (entry.visibility != 2 || !has(cls.access, "annotation") ||
+            elements.size() != 1 || value == elements.end() ||
+            value->second.kind != 0x1d ||
+            value->second.annotation_type != cls.name)
+          bad("invalid AnnotationDefault on " + cls.name);
+        for (const auto &[element_name, element_value] :
+             value->second.elements) {
+          auto method =
+              std::find_if(cls.methods.begin(), cls.methods.end(),
+                           [&](const Method &candidate) {
+                             return candidate.reference.name == element_name &&
+                                    candidate.reference.parameters.empty();
+                           });
+          if (method == cls.methods.end() || method->annotation_default)
+            bad("unknown or duplicate annotation default " + cls.name + "->" +
+                element_name);
+          method->annotation_default = element_value;
+        }
         continue;
       }
       if (annotationMetadata(entry, cls))
@@ -919,8 +991,12 @@ class Dex {
           name != "Ldalvik/annotation/EnclosingMethod;" &&
           name != "Ldalvik/annotation/InnerClass;" &&
           name != "Ldalvik/annotation/MemberClasses;") {
-        if (entry.visibility == 2 || !elements.empty())
+        if (entry.visibility == 2)
           bad("unsupported annotation " + name + " on class " + cls.name);
+        if (!elements.empty()) {
+          cls.annotations.push_back({name, entry.visibility, elements});
+          continue;
+        }
         // The complete input must later prove an exact marker declaration,
         // its retention and its class target. Parsing is not acceptance.
         cls.marker_annotations.push_back({name, entry.visibility});
@@ -1264,14 +1340,19 @@ class Dex {
     return result;
   }
   void debugInfo(uint32_t offset, unsigned registers, uint32_t code_end,
-                 size_t parameter_count) {
+                 const MethodRef &method) {
     if (!offset)
       return;
     cache.erase(Key{0x2003, offset});
     item<bool>(0x2003, offset, [&](Cursor &reader) {
       int64_t line = reader.leb(), count = reader.leb();
-      if (line < 1 || uint64_t(count) != parameter_count)
-        bad("debug header disagrees with method");
+      // D8/R8 use zero for synthetic methods without a source position. It
+      // does not change the parameter list; unnamed parameters still occupy
+      // their NO_INDEX slots in the header.
+      if (uint64_t(count) != method.parameters.size())
+        bad("debug parameter count " + std::to_string(count) +
+            " disagrees with method " + method.identity() + " (expected " +
+            std::to_string(method.parameters.size()) + ")");
       auto optionalString = [&] {
         auto index = reader.leb() - 1;
         if (index >= 0)
@@ -1306,8 +1387,8 @@ class Dex {
           address += (opcode - 10) / 15;
           line += int((opcode - 10) % 15) - 4;
         }
-        if (address > code_end || line < 1)
-          bad("debug position outside method");
+        if (address > code_end || line < 0 || line > UINT32_MAX)
+          bad("debug position outside method " + method.identity());
       }
       return true;
     });
@@ -1451,7 +1532,7 @@ class Dex {
             tries.push_back({start, end, found->second});
           }
           codeFlow(ins, lengths, tries);
-          debugInfo(debug, registers, size, method.reference.parameters.size());
+          debugInfo(debug, registers, size, method.reference);
           return Code{registers, incoming, std::move(ins), std::move(tries),
                       size};
         },

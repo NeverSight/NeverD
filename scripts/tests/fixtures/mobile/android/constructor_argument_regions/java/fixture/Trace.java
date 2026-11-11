@@ -1,0 +1,1 @@
+package fixture; public final class Trace { public static Probe probe; public static Object first,second,core; private Trace(){} public static void fire(int phase,Object value){if(probe!=null)probe.visit(phase,value);} }

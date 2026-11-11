@@ -1,0 +1,1 @@
+import fixture.*; public class CapturedPairConsumerCaller { public static void call(Outer outer,Outer.Member member,Object first,Object second,Spec spec,String label,int mode){Caller.call(outer,member,first,second,spec,label,mode);} }

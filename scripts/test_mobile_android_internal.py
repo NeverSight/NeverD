@@ -804,12 +804,13 @@ class Verify:
         if classpath: arguments += ["-classpath", classpath]
         self.run([*arguments, *sources], "javac")
 
-    def compile_local(self, sources, output: Path, *, classpath: Path | None = None):
+    def compile_local(self, sources, output: Path, *, classpath: Path | None = None,
+                      release: int = 8):
         empty = self.work / "local-empty-classpath"
         empty.mkdir(exist_ok=True)
         if any(empty.iterdir()): raise RuntimeError("Local fixture isolation directory is not empty")
         output.mkdir(parents=True)
-        self.run([self.javac, "--release", "8", "-encoding", "UTF-8", "-g", "-proc:none",
+        self.run([self.javac, "--release", str(release), "-encoding", "UTF-8", "-g", "-proc:none",
                   "-implicit:none", "-sourcepath", empty, "-processorpath", empty,
                   "-classpath", classpath if classpath is not None else empty,
                   "-d", output, *sources], "javac-local")

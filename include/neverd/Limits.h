@@ -590,6 +590,24 @@ constexpr unsigned kMaxRegistrationEHFixedPoint = 16;
 /// Default MXCSR value (x86 SSE control/status register).
 constexpr uint64_t kDefaultMXCSR = 0x1F80;
 
+//===----------------------------------------------------------------------===//
+// Mobile generic contracts
+//===----------------------------------------------------------------------===//
+
+/// Recursive input-carrier contracts retain each original nominal layer.
+constexpr unsigned kMaxMobileCarrierTypeVisits = 64;
+constexpr unsigned kMaxMobileCarrierTypeDepth = 8;
+constexpr unsigned kMaxMobileCarrierTypeArguments = 8;
+
+/// Same-package expression access through unchanged generic superclass edges.
+constexpr unsigned kMaxMobileExpressionMemberAncestryVisits = 64;
+constexpr unsigned kMaxMobileExpressionMemberFormals = 8;
+
+/// Shared plain-ancestry proof for closed and erased constructor delegation.
+/// Every visit also consumes the mobile recovery budget.
+constexpr unsigned kMaxMobileConstructorAncestryVisits = 256;
+constexpr unsigned kMaxMobileConstructorAncestryDepth = 64;
+
 } // namespace limits
 } // namespace neverd
 

@@ -1,0 +1,1 @@
+Independent nested covariant input retains one method formal and a fixed public nominal result. Actual returned references and all reads, input identities, mutable field observations, nulls, casts and failures remain with the provider.

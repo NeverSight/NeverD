@@ -1,0 +1,3 @@
+This owned fixture binds an invariant binary Map input and result to one Object-bound method formal and one recursive Comparable formal, alongside an original boolean argument. The provider records its arguments, invokes an opaque callback and returns an opaque Map. No comparison, traversal, copying or result identity follows from its generic signature.
+
+The frozen caller and observer check four invocation routes, raw input and result values, null and distinct maps, argument evaluation, callback mutations, late casts, partial writes and exact checked/runtime/error identity. Independent wrong programs and Code-preserving Signature controls must fail. The same original entries and metadata are compiled and audited with source and SDK providers.

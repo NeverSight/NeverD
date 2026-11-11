@@ -1,0 +1,17 @@
+.class public Lfixture/InnerHost;
+.super Ljava/lang/Object;
+.field public base:I
+
+.method public constructor <init>(I)V
+    .registers 2
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+    iput p1, p0, Lfixture/InnerHost;->base:I
+    return-void
+.end method
+
+.method public make(I)Lfixture/InnerHost$Member;
+    .registers 3
+    new-instance v0, Lfixture/InnerHost$Member;
+    invoke-direct {v0, p0, p1}, Lfixture/InnerHost$Member;-><init>(Lfixture/InnerHost;I)V
+    return-object v0
+.end method

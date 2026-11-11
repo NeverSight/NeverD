@@ -1,0 +1,3 @@
+This owned fixture retains an invariant binary Map input and a same-erasure result with the two distinct Object-bounded method formals in reversed slot order. The provider records its original input, invokes an opaque callback and returns an opaque Map. The generic signature implies no traversal, copying, key/value conversion or returned-input identity.
+
+Four frozen routes compare raw and null maps, partial writes, callback mutations, actual results, late casts and exact checked/runtime/error identity. Source and SDK providers retain all original compiled entries and metadata. Six wrong programs, six Code-preserving Signature controls and native scope/slot/erasure/role/word variants guard the complete relation.

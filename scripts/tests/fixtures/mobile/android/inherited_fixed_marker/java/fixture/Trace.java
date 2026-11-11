@@ -1,0 +1,9 @@
+package fixture;
+public final class Trace {
+    public static Object base;
+    public static Object partial;
+    public static long events;
+    public static int failAt;
+    public static RuntimeException failure;
+    public static void hit(int n) { events=events*10+n;if(failAt==n)throw failure; }
+}

@@ -1,0 +1,1 @@
+Independent two-input invariant/covariant Map factory. Both original input identities, key collisions, result mutability, partial copies, nulls, failures and arbitrary existing/null/input provider returns are observed by frozen callers.

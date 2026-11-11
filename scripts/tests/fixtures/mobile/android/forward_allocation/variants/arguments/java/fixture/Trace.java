@@ -1,0 +1,15 @@
+package fixture;
+public final class Trace {
+    public static Hook hook;
+    public static long events;
+    public static Object value;
+    public static Target partial;
+    public static RuntimeException caught;
+    public static void hit(int value) {
+        events = events * 10 + value;
+        if (hook != null) hook.event(value);
+    }
+    public static Object read() { hit(7); return value; }
+    public static String text() { hit(8); return "owned argument"; }
+    public static String message() { hit(4); return "owned sibling"; }
+}

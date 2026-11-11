@@ -38,8 +38,15 @@ add_library(NeverDMobile STATIC
   mobile/MobileRecovery.cpp
   mobile/MobileAndroid.cpp
   mobile/MobileDalvikModel.cpp
+  mobile/MobileDalvikAnonymous.cpp
+  mobile/MobileDalvikEnums.cpp
+  mobile/MobileDalvikEnumArrays.cpp
+  mobile/MobileDalvikAnnotations.cpp
   mobile/MobileDalvikSignature.cpp
+  mobile/MobileKotlinMetadata.cpp
+  mobile/MobileDalvikBridges.cpp
   mobile/MobileDalvikDex.cpp
+  mobile/MobileJavaClass.cpp
   mobile/MobileDalvikSmali.cpp
   mobile/MobileDalvikJava.cpp
   mobile/MobileIOS.cpp

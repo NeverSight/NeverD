@@ -1,0 +1,1 @@
+package fixture; public final class Client { public static void call(Carrier scope,long time,long scale,Carrier animation,Frame frame,Action action){Provider.access(scope,time,scale,animation,frame,action);} }

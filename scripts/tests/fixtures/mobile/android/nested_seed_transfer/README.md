@@ -1,0 +1,3 @@
+This owned fixture retains a direct method-owned Object seed alongside a complete two-layer invariant input and result: List<Source<T>> and List<Target<T>>. The inner result carrier has a closed generic superclass. Neither the input nor the seed determines the opaque returned List or its contents.
+
+Four frozen routes compare null and raw inputs, callback mutation, distinct results, late element/value casts, partial writes and exact checked/runtime/error identity. Source and SDK providers retain all compiled entries and metadata. Independent wrong programs, Code-preserving Signature controls and native declaration/scope/variance/erasure/role/word variants guard the proof.

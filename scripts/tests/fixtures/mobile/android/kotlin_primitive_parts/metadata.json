@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "compiler_version": "2.0.21-release-482",
+  "compiler_sha256": "67d9b72f6016e418446c60abadb876fed9ff8bc802f3701748b9706ead3d3b30",
+  "source_sha256": "0e96a0266701e1d86b7d11639b90b917ae191d39a11e186b3a325af807837663",
+  "witness_method": "repeat(Lfixture/Target;ILkotlin/coroutines/CoroutineContext;Ljava/lang/Object;)Lfixture/Target;",
+  "unconstrained_formals": [
+    "E"
+  ],
+  "metadata": {
+    "k": 5,
+    "mv": [
+      2,
+      0,
+      0
+    ],
+    "xi": 48,
+    "d1": [
+      "\u0000\u0018\n\u0000\n\u0002\u0018\u0002\n\u0002\b\u0002\n\u0002\u0010\b\n\u0000\n\u0002\u0018\u0002\n\u0002\b\u0002\u001a9\u0010\u0000\u001a\b\u0012\u0004\u0012\u0002H\u00020\u0001\"\u0004\b\u0000\u0010\u0002*\b\u0012\u0004\u0012\u0002H\u00020\u00012\u0006\u0010\u0003\u001a\u00020\u00042\u0006\u0010\u0005\u001a\u00020\u00062\u0006\u0010\u0007\u001a\u0002H\u0002\u00a2\u0006\u0002\u0010\b"
+    ],
+    "d2": [
+      "repeat",
+      "Lfixture/Target;",
+      "E",
+      "count",
+      "",
+      "context",
+      "Lkotlin/coroutines/CoroutineContext;",
+      "element",
+      "(Lfixture/Target;ILkotlin/coroutines/CoroutineContext;Ljava/lang/Object;)Lfixture/Target;"
+    ],
+    "xs": "fixture/ScopeFacade"
+  }
+}

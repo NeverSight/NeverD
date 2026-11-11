@@ -1,0 +1,1 @@
+Independent nested allocation with two conditional argument selections before the inner initializer. Original initialization order, repeated getters, captures, partial writes and poisoned initialization are observed by frozen callers.

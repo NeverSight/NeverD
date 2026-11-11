@@ -129,7 +129,9 @@ TEST_F(MobileProcessTests, BareExecutableResolutionUsesTheChildPath) {
   fs::permissions(Installed / Name, fs::perms::owner_exec,
                   fs::perm_options::add);
 #endif
-  runTool({Name, "echo", "from child path"}, Root / "log", 5, {}, {},
+  // A newly copied executable may need a slow first-launch platform check.
+  // This test checks child PATH resolution; timeout semantics have own tests.
+  runTool({Name, "echo", "from child path"}, Root / "log", 30, {}, {},
           {{"PATH", pathText(Installed)}});
   EXPECT_EQ(log(), hex("from child path") + "\n");
 }

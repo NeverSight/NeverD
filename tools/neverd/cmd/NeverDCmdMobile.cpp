@@ -13,8 +13,9 @@ int runMobile(const char *Argv0) {
     if (MobileInternalIOSWorker) {
       if (!OutputFile.empty() || MobilePlatform != "auto" ||
           MobileArch != "auto" || MobileMetadataOnly ||
-          !MobileBackend.empty() || !MobileArtifact.empty() || MaxFunc ||
-          JsonOutput || MobileTimeout.getNumOccurrences() ||
+          !MobileBackend.empty() || !MobileClasspath.empty() ||
+          !MobileArtifact.empty() || MaxFunc || JsonOutput ||
+          MobileTimeout.getNumOccurrences() ||
           MobileMaxFiles.getNumOccurrences() ||
           MobileMaxBytes.getNumOccurrences())
         throw mobile::Error("iOS worker accepts only its staging directory");
@@ -34,6 +35,8 @@ int runMobile(const char *Argv0) {
         llvm::sys::fs::getMainExecutable(Argv0, &ExecutableAnchor);
     if (!MobileBackend.empty())
       Options.jadx = MobileBackend;
+    for (const auto &Path : MobileClasspath)
+      Options.classpath.push_back(mobile::pathFromUTF8(Path));
     if (!MobileArtifact.empty())
       Options.artifact = MobileArtifact;
     auto Report = mobile::recover(Options);

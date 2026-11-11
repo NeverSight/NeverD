@@ -1,0 +1,1 @@
+package fixture; public class Value extends Parent<String> { public boolean blocked; public String item; public int length; public void clear(){item=null;length=0;} public void add(String value){if(blocked)throw new UnsupportedOperationException();item=value;length++;} public int size(){return length;} }

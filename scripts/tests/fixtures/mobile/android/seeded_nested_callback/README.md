@@ -1,0 +1,3 @@
+This owned fixture keeps two independent Object-bounded method formals. An invariant input List binds the first; a direct seed and an invariant nested result bind the second. A fixed context binds neither, while a complete binary Sink retains both roles. Its void member receives an input element and a result carrier without predicting the provider's opaque returned List.
+
+Frozen callers compare four routes, raw and null inputs, callback bridge casts, mutations and partial writes, distinct results, late value casts and exact checked/runtime/error identity. Source and SDK providers retain every original compiled entry and metadata item. Wrong programs, Code-preserving Signature controls and native scope/declaration/slot/erasure/role/word variants guard the proof.

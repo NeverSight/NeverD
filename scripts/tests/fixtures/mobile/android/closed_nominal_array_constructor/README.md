@@ -1,0 +1,3 @@
+# Closed nominal array constructor fixture
+
+These independently authored classes retain a fixed constructor with closed generic inputs beside variable-arity overloads. The array leaf has closed generic inheritance, and every original array rank and argument object is observable. The frozen harness compares direct, compiled, reflective and method-handle callers across covariance failures, partial stores, null and empty arrays, class initialization, callbacks, exact abrupt completion and late result casts. Every emitted source is compiled and its original class and method identities, Signature, access, Code roles and Exceptions are checked. Neither the fixture nor its names originate from a private application.

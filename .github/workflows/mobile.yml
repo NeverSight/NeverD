@@ -103,7 +103,9 @@ jobs:
             scripts.tests.test_mobile_real_apps_objc_inventory \
             scripts.tests.test_mobile_real_apps_matrix \
             scripts.tests.test_mobile_real_apps_trigger \
-            scripts.tests.test_mobile_release_gate -v
+            scripts.tests.test_mobile_release_gate \
+            scripts.tests.test_mobile_ci_shards \
+            scripts.tests.test_mobile_android_artifacts -v
       - name: Verify runtime with no interpreter on PATH
         shell: bash
         run: |
@@ -116,54 +118,20 @@ jobs:
             -o "$RUNNER_TEMP/mobile-no-interpreter" --json
         env:
           EXECUTABLE: ${{ matrix.executable }}
-      - name: Set up JDK for Android source compilation and execution
-        if: runner.os == 'Linux'
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-        with:
-          distribution: temurin
-          java-version: '21'
-      - name: Prepare D8 for self-owned Android fixtures
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          if [ ! -x "$ANDROID_HOME/build-tools/35.0.0/d8" ]; then
-            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "build-tools;35.0.0"
-          fi
-          test -x "$ANDROID_HOME/build-tools/35.0.0/d8"
-          if [ ! -f "$ANDROID_HOME/platforms/android-35/android.jar" ]; then
-            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-35"
-          fi
-          test -f "$ANDROID_HOME/platforms/android-35/android.jar"
-          printf 'NEVERD_D8=%s\n' "$ANDROID_HOME/build-tools/35.0.0/d8" >> "$GITHUB_ENV"
-      - name: Recover and independently execute Android sources through C++ CLI
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          python scripts/test_mobile_android_internal.py \
-            --neverd build-mobile/bin/neverd --d8 "$NEVERD_D8" \
-            --work-dir "$RUNNER_TEMP/android-native" --timeout 120
-      - name: Preserve Android SDK SuppressLint through source recovery
+      - name: Package verified Linux runtime for Android shards
+        id: package_mobile
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.build_mobile.outcome == 'success' }}
-        timeout-minutes: 10
         shell: bash
         run: |
-          python scripts/test_mobile_android_suppress_lint.py \
-            --neverd build-mobile/bin/neverd --d8 "$NEVERD_D8" \
-            --android-jar "$ANDROID_HOME/platforms/android-35/android.jar" \
-            --work-dir "$RUNNER_TEMP/android-suppress-lint"
-      - name: Prepare the pinned optional Android compatibility backend
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          curl --fail --location --retry 3 https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip --output "$RUNNER_TEMP/jadx.zip"
-          printf '%s  %s\n' "$JADX_SHA256" "$RUNNER_TEMP/jadx.zip" | sha256sum --check -
-          unzip -q "$RUNNER_TEMP/jadx.zip" -d "$RUNNER_TEMP/jadx"
-        env:
-          JADX_SHA256: '545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974'
-      - name: Verify explicit external compatibility through C++ CLI
-        if: runner.os == 'Linux'
-        shell: bash
-        run: python scripts/test_mobile_android_backend.py --neverd build-mobile/bin/neverd --jadx "$RUNNER_TEMP/jadx/bin/jadx"
+          python scripts/ci/mobile_linux_bundle.py pack \
+            --archive "$RUNNER_TEMP/neverd-mobile-linux.tar.gz" --commit "$GITHUB_SHA"
+      - name: Share the Linux runtime with Android shards
+        if: ${{ !cancelled() && steps.package_mobile.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mobile-linux-runtime
+          path: ${{ runner.temp }}/neverd-mobile-linux.tar.gz
+          if-no-files-found: error
       # Attempt every suite even when an earlier test fails. No failure is
       # ignored; separate steps retain diagnostics for all requested corpora.
       - name: Recover and independently execute Objective-C scalar sources
@@ -205,7 +173,7 @@ jobs:
           python scripts/test_mobile_ios_single_session.py \
             --neverd "$GITHUB_WORKSPACE/build-mobile/bin/neverd" \
             --work-dir "$RUNNER_TEMP/ios-native"
-      - name: Preserve validation evidence
+      - name: Preserve native validation evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -213,29 +181,172 @@ jobs:
           path: |
             build-mobile/Testing/Temporary/
             build-mobile/unittests/mobile/Testing/Temporary/
-            ${{ runner.temp }}/android-native/acceptance.json
-            ${{ runner.temp }}/android-native/logs/
-            ${{ runner.temp }}/android-native/original-local/
-            ${{ runner.temp }}/android-native/local-dex/
-            ${{ runner.temp }}/android-native/local-multidex-outer-first/
-            ${{ runner.temp }}/android-native/local-multidex-overload-first/
-            ${{ runner.temp }}/android-native/local-preparation-failure.json
-            ${{ runner.temp }}/android-native/original-generic/
-            ${{ runner.temp }}/android-native/generic-dex/
-            ${{ runner.temp }}/android-native/generic-multidex/
-            ${{ runner.temp }}/android-native/generic-preparation-failure.json
-            ${{ runner.temp }}/android-native/original-constructor/
-            ${{ runner.temp }}/android-native/constructor-dex/
-            ${{ runner.temp }}/android-native/constructor-preparation-failure.json
-            ${{ runner.temp }}/android-native/original-deprecated/
-            ${{ runner.temp }}/android-native/deprecated-dex/
-            ${{ runner.temp }}/android-native/deprecated-preparation-failure.json
-            ${{ runner.temp }}/android-native/original-marker/
-            ${{ runner.temp }}/android-native/marker-dex/
-            ${{ runner.temp }}/android-native/marker-preparation-failure.json
-            ${{ runner.temp }}/android-suppress-lint/
-            ${{ runner.temp }}/ios-native/scalar/
-            ${{ runner.temp }}/ios-native/calls/
-            ${{ runner.temp }}/ios-native/swift/
-            ${{ runner.temp }}/ios-native/single-session.json
+            ${{ runner.temp }}/ios-native/
           if-no-files-found: ignore
+
+  android:
+    name: Android semantic profiles (${{ matrix.shard }})
+    needs: native
+    # A failed native test on another OS must not hide the Linux fixture evidence.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python for independent fixture oracles
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Download the Linux runtime from this run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mobile-linux-runtime
+          path: ${{ runner.temp }}/mobile-runtime-download
+      - name: Verify and restore the complete Linux runtime
+        shell: bash
+        run: |
+          python scripts/ci/mobile_linux_bundle.py restore \
+            --archive "$RUNNER_TEMP/mobile-runtime-download/neverd-mobile-linux.tar.gz" \
+            --directory build-mobile --commit "$GITHUB_SHA"
+          printf 'LD_LIBRARY_PATH=%s\n' "$GITHUB_WORKSPACE/build-mobile/lib" >> "$GITHUB_ENV"
+      - name: Verify the restored CLI loads and recovers a mobile fixture
+        shell: bash
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/build-mobile/lib
+        run: |
+          build-mobile/bin/neverd --version
+          build-mobile/bin/neverd mobile scripts/tests/fixtures/mobile/Peer.smali \
+            -o "$RUNNER_TEMP/mobile-restored-smoke" --json
+      - name: Set up JDK for Android source compilation and execution
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Prepare D8 for self-owned Android fixtures
+        shell: bash
+        run: |
+          if [ ! -x "$ANDROID_HOME/build-tools/35.0.0/d8" ]; then
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "build-tools;35.0.0"
+          fi
+          test -x "$ANDROID_HOME/build-tools/35.0.0/d8"
+          printf 'NEVERD_KOTLIN_JAVA_HOME=%s\n' "$JAVA_HOME" >> "$GITHUB_ENV"
+          printf 'NEVERD_JAVA21_HOME=%s\n' "$JAVA_HOME" >> "$GITHUB_ENV"
+          if [ ! -f "$ANDROID_HOME/platforms/android-35/android.jar" ]; then
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-35"
+          fi
+          test -f "$ANDROID_HOME/platforms/android-35/android.jar"
+          printf 'NEVERD_D8=%s\n' "$ANDROID_HOME/build-tools/35.0.0/d8" >> "$GITHUB_ENV"
+      - name: Prepare pinned Kotlin compiler for original synthetic-method fixtures
+        shell: bash
+        run: |
+          curl --fail --location --retry 3 \
+            https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip \
+            --output "$RUNNER_TEMP/neverd-kotlin-2.0.21.zip"
+          printf '%s  %s\n' \
+            0352c0a45bd22f80f6b26e485cd04da8047baa5de54865281fb9f89a4a7bcf2a \
+            "$RUNNER_TEMP/neverd-kotlin-2.0.21.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/neverd-kotlin-2.0.21.zip" -d "$RUNNER_TEMP/neverd-kotlin-2.0.21"
+      - name: Set up JDK 25 for preserved constructor prologues
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Record the Java 25 toolchain
+        shell: bash
+        run: printf 'NEVERD_JAVA25_HOME=%s\n' "$JAVA_HOME" >> "$GITHUB_ENV"
+      - name: Prepare pinned D8 when assigned Java 25 input fixtures
+        shell: bash
+        run: |
+          java25_d8_required="$(python -c 'import os, sys; from scripts.ci.mobile_android_shards import profiles, shard_profiles; selected = shard_profiles(profiles(dict(os.environ)), int(sys.argv[1]), 32); print("required" if any("neverd-java25-d8" in arg for profile in selected for arg in profile["argv"]) else "skip")' "${{ matrix.shard }}")"
+          if [ "$java25_d8_required" = required ]; then
+            mkdir -p "$RUNNER_TEMP/neverd-java25-d8/lib"
+            curl --fail --location --retry 3 --max-time 120 \
+              https://dl.google.com/dl/android/maven2/com/android/tools/r8/9.5.23/r8-9.5.23.jar \
+              --output "$RUNNER_TEMP/neverd-java25-d8/lib/d8.jar"
+            printf '%s  %s\n' \
+              748ab0ef66e85b54cec5ad83d168999db9e3dad8c8f63170e836eff195cbd09b \
+              "$RUNNER_TEMP/neverd-java25-d8/lib/d8.jar" | sha256sum --check
+            ln -s "$ANDROID_HOME/build-tools/35.0.0/dexdump" "$RUNNER_TEMP/neverd-java25-d8/dexdump"
+          fi
+      - name: Execute each assigned profile and retain every result
+        timeout-minutes: 50
+        shell: bash
+        run: |
+          python scripts/ci/mobile_android_shards.py \
+            --shard '${{ matrix.shard }}' --shard-count 32 \
+            --output "$RUNNER_TEMP/android-shard-evidence"
+      - name: Preserve all Android profile evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-mobile-shard-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/android-*/
+            ${{ runner.temp }}/mobile-restored-smoke/
+            build-mobile/manifest.json
+          if-no-files-found: error
+
+  android_compatibility:
+    name: Android explicit external compatibility
+    needs: native
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python for independent fixture oracles
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Download the Linux runtime from this run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mobile-linux-runtime
+          path: ${{ runner.temp }}/mobile-runtime-download
+      - name: Verify and restore the complete Linux runtime
+        shell: bash
+        run: |
+          python scripts/ci/mobile_linux_bundle.py restore \
+            --archive "$RUNNER_TEMP/mobile-runtime-download/neverd-mobile-linux.tar.gz" \
+            --directory build-mobile --commit "$GITHUB_SHA"
+          printf 'LD_LIBRARY_PATH=%s\n' "$GITHUB_WORKSPACE/build-mobile/lib" >> "$GITHUB_ENV"
+      - name: Verify the restored CLI loads and recovers a mobile fixture
+        shell: bash
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/build-mobile/lib
+        run: |
+          build-mobile/bin/neverd --version
+          build-mobile/bin/neverd mobile scripts/tests/fixtures/mobile/Peer.smali \
+            -o "$RUNNER_TEMP/mobile-restored-smoke" --json
+      - name: Set up JDK for the pinned compatibility backend
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Prepare the pinned optional Android compatibility backend
+        shell: bash
+        run: |
+          curl --fail --location --retry 3 https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip --output "$RUNNER_TEMP/jadx.zip"
+          printf '%s  %s\n' "$JADX_SHA256" "$RUNNER_TEMP/jadx.zip" | sha256sum --check -
+          unzip -q "$RUNNER_TEMP/jadx.zip" -d "$RUNNER_TEMP/jadx"
+        env:
+          JADX_SHA256: '545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974'
+      - name: Verify explicit external compatibility through C++ CLI
+        shell: bash
+        run: python scripts/test_mobile_android_backend.py --neverd build-mobile/bin/neverd --jadx "$RUNNER_TEMP/jadx/bin/jadx"
+      - name: Preserve compatibility runtime evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-mobile-compatibility
+          path: |
+            ${{ runner.temp }}/mobile-restored-smoke/
+            build-mobile/manifest.json
+          if-no-files-found: error

@@ -1,0 +1,1 @@
+Independently authored covariant binary input and invariant binary result. Existing, null and incompatible provider results remain original; immutable observers validate both getter effects, late checked casts, partial fields and exact failures.

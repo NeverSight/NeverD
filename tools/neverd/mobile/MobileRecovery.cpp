@@ -79,6 +79,9 @@ llvm::json::Object recover(const Options &requested) {
                 "apply only to iOS");
   if (options.platform == "ios" && options.jadx)
     throw Error("--jadx applies only to Android");
+  if (!options.classpath.empty() &&
+      (options.platform != "android" || options.jadx))
+    throw Error("--classpath applies only to the built-in Android engine");
   fs::create_directories(options.output.parent_path());
   llvm::SmallString<256> temporary;
   auto pattern =

@@ -41,10 +41,13 @@ Budget::Budget(Limits configured) : limits(configured) {
   if (limits.timeout > static_cast<uint64_t>(available.count()))
     throw Error("mobile analysis deadline is not representable");
   deadline = now + std::chrono::seconds(limits.timeout);
-  remaining = std::min<uint64_t>(
-      20000000, std::max<uint64_t>(100000, limits.max_bytes > 5000000
-                                               ? 20000000
-                                               : limits.max_bytes * 4));
+  // A longer requested analysis must also cover larger multidex inputs.
+  // Retain the default work ceiling and the byte/deadline bounds.
+  const uint64_t time_work =
+      20000000 * std::max<uint64_t>(300, limits.timeout) / 300;
+  const uint64_t byte_work =
+      limits.max_bytes > UINT64_MAX / 4 ? UINT64_MAX : limits.max_bytes * 4;
+  remaining = std::max<uint64_t>(100000, std::min(time_work, byte_work));
 }
 
 void Budget::check() const {

@@ -1,0 +1,1 @@
+package fixture; public class Caller { public static void call(Outer outer,Outer.Member member,Object first,Object second,Spec spec,String label,int mode){Factory.access(outer,member,first,second,spec,label,mode);} }

@@ -1,0 +1,98 @@
+import fixture.*;
+import java.lang.invoke.*;
+import java.lang.reflect.*;
+public final class ScalarDefaultHarness {
+    static void require(boolean value) {
+        if (!value) throw new AssertionError("owned scalar default access");
+    }
+    static class Base implements ScalarApi {
+        public @JAVA@ getRaw() {
+            Trace.rawCalls++;
+            Trace.hit(2);
+            return Trace.input;
+        }
+    }
+    static final class Override extends Base {
+        public @BOXED@ getValue() {
+            Trace.overrideCalls++;
+            Trace.hit(9);
+            return Trace.alternate;
+        }
+    }
+    static @JAVA@ sample(int at) {
+        return new @JAVA@[]{@VALUES@}[at & 7];
+    }
+    static long bits(Object value) {
+        if (value instanceof Double) return Double.doubleToRawLongBits((Double)value);
+        if (value instanceof Float) return Float.floatToRawIntBits((Float)value) & 0xffffffffL;
+        if (value instanceof Boolean) return (Boolean)value ? 1 : 0;
+        if (value instanceof Character) return (Character)value;
+        return ((Number)value).longValue();
+    }
+    static Object call(int route, ScalarApi receiver) throws Throwable {
+        if (route == 0) return ScalarApi.DefaultImpls.getValue(receiver);
+        if (route == 1) return ScalarDefaultCaller.call(receiver);
+        if (route == 2) {
+            try {
+                return ScalarApi.class.getMethod("access$getValue$jd", ScalarApi.class).invoke(null, receiver);
+            } catch (InvocationTargetException failure) { throw failure.getCause(); }
+        }
+        MethodHandle handle = MethodHandles.publicLookup().findStatic(ScalarApi.class,
+            "access$getValue$jd", MethodType.methodType(@JAVA@.class, ScalarApi.class));
+        return (Object)handle.asType(MethodType.methodType(Object.class, ScalarApi.class)).invokeExact(receiver);
+    }
+    public static void main(String[] args) throws Throwable {
+        int route = Integer.parseInt(args[0]), variant = Integer.parseInt(args[1]), mode = Integer.parseInt(args[2]);
+        boolean original = Boolean.parseBoolean(args[3]);
+        Method accessor = ScalarApi.class.getDeclaredMethod("access$getValue$jd", ScalarApi.class);
+        require(Modifier.isPublic(accessor.getModifiers()) && Modifier.isStatic(accessor.getModifiers()) &&
+            accessor.isSynthetic() == original && !accessor.isBridge() && accessor.getReturnType() == @JAVA@.class &&
+            accessor.getTypeParameters().length == 0 && accessor.getExceptionTypes().length == 0);
+        RuntimeException failure = new IllegalStateException("owned scalar default failure");
+        Error error = new AssertionError("owned scalar default raw failure");
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            @JAVA@ input = sample(mode + attempt), late = sample(mode + attempt + 1);
+            ScalarApi receiver = mode == 8 ? null : variant == 0 ? new Base() : new Override();
+            Object sentinel = new Object();
+            Trace.events = 0; Trace.rawCalls = Trace.overrideCalls = 0;
+            Trace.failAt = mode >= 9 && mode <= 12 ? mode - 8 : mode == 13 ? 2 : 0;
+            Trace.failure = failure; Trace.error = mode == 13 ? error : null;
+            Trace.input = input; Trace.alternate = late;
+            Trace.receiver = Trace.sample = Trace.saved = sentinel;
+            Trace.observer = event -> {
+                if (event == 3) {
+                    require(Trace.saved == sentinel && bits(Trace.sample) == bits(input));
+                    Trace.input = late;
+                }
+            };
+            Object result = sentinel; Throwable caught = null;
+            try { result = call(route, receiver); } catch (Throwable value) { caught = value; }
+            long expected = 0; boolean entered = false, sampled = false, saved = false;
+            if (receiver != null) {
+                for (int event : new int[]{1, 2, 3, 4}) {
+                    expected = expected * 10 + event;
+                    if (event == 2) entered = true;
+                    if (event == 3) sampled = true;
+                    if (event == 4) saved = true;
+                    if (event == Trace.failAt) break;
+                }
+            }
+            require(Trace.events == expected && Trace.rawCalls == (entered ? 1 : 0) && Trace.overrideCalls == 0);
+            require(Trace.receiver == (entered ? receiver : sentinel));
+            require(sampled ? bits(Trace.sample) == bits(input) : Trace.sample == sentinel);
+            require(saved ? bits(Trace.saved) == bits(input) : Trace.saved == sentinel);
+            if (receiver == null) require(caught instanceof NullPointerException && result == sentinel);
+            else if (Trace.failAt != 0) require(caught == (mode == 13 ? error : failure) && result == sentinel);
+            else require(caught == null && bits(result) == bits(input));
+            System.out.println("route=" + route + ",variant=" + variant + ",mode=" + mode +
+                ",attempt=" + attempt + ",trace=" + expected + ",bits=" + Long.toHexString(bits(input)));
+            if (receiver != null) {
+                Trace.observer = null; Trace.failAt = 0; Trace.error = null;
+                Trace.events = 0; Trace.rawCalls = Trace.overrideCalls = 0; Trace.input = late;
+                Object virtual = ((ValueView<?>)receiver).getValue();
+                require(bits(virtual) == bits(late) && Trace.events == (variant == 0 ? 1234 : 9));
+                require(Trace.rawCalls == (variant == 0 ? 1 : 0) && Trace.overrideCalls == variant);
+            }
+        }
+    }
+}

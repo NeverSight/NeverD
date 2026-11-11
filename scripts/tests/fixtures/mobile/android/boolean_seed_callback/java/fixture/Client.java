@@ -1,0 +1,1 @@
+package fixture; public final class Client { public static Object call(Carrier carrier,Spec spec,boolean flag,Action action,Completion completion){return Provider.work(carrier,spec,flag,action,completion);} }

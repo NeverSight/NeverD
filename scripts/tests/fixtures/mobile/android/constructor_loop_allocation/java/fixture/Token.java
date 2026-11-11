@@ -1,0 +1,1 @@
+package fixture;public final class Token { static { Trace.initializations++; } public final Object input;public final long word;public Token(Object input,long word){Trace.token=this;Trace.hit(8);this.input=input;this.word=word;Trace.hit(9);} }

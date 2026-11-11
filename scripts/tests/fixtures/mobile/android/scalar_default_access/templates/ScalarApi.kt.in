@@ -1,0 +1,16 @@
+package fixture
+interface ValueView<T> { val value: T }
+interface ScalarApi : ValueView<@KOTLIN@> {
+    val raw: @KOTLIN@
+    override val value: @KOTLIN@
+        get() {
+            Trace.hit(1)
+            Trace.receiver = this
+            val result = raw
+            Trace.sample = result
+            Trace.hit(3)
+            Trace.saved = result
+            Trace.hit(4)
+            return result
+        }
+}

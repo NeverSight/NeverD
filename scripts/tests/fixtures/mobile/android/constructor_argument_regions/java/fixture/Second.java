@@ -1,0 +1,1 @@
+package fixture; public final class Second { static {Trace.fire(4,null);} public final int number; public final Object token; public Second(int number,Object token){Trace.second=this;Trace.fire(5,this);this.number=number;this.token=token;Trace.fire(6,this);} }
