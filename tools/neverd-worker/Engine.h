@@ -65,6 +65,10 @@ public:
   /// \p requestWaiting says a request waits.  The read that asks the same
   /// takes the answer while nothing has changed since.
   void prepareFollowingViews(const std::function<bool()> &requestWaiting);
+  /// What follows a reply before the next request: the stores' relabels the
+  /// request made are written (writeStoreKeeps), then its views read ahead
+  /// (prepareFollowingViews).
+  void afterReply(const std::function<bool()> &requestWaiting);
   /// Background work (the reference index) runs between requests.
   bool hasIdleWork() const;
   bool idleStep();
@@ -394,6 +398,19 @@ private:
   /// whose stores are named \p after where the caller knows them.
   void keepStoresFor(const StoreNames &before);
   void keepStoresFor(const StoreNames &before, const StoreNames &after);
+  /// What keepStoresFor says on the stores' folders, written once the reply is
+  /// sent (afterReply) and before anything reads those folders again: the
+  /// next request, an idle step, a store opened.
+  struct StoreKeep {
+    std::filesystem::path folder;
+    std::string from, to;
+  };
+  std::vector<StoreKeep> storeKeeps_;
+  void writeStoreKeeps() noexcept;
+  /// The debug files the session's headers say it read, for the debug inputs
+  /// it loaded (pdbInput_, dwarfInput_, mapInput_, symbolsInput_).
+  std::optional<Json> debugInfo_;
+  std::string debugInfoInputs_;
   void openFactsStore(const std::string &name, bool writable);
   std::vector<std::string> keptListingFacts(const std::string &key);
   void keepListingFact(const std::string &key, std::string bytes);

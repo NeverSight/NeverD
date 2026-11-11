@@ -600,7 +600,7 @@ void executeLoop(State &state, Transport &transport) {
       // read as it will ask for them, until a request waits.
       if (!webRequest)
         try {
-          engine.prepareFollowingViews([&state] {
+          engine.afterReply([&state] {
             std::lock_guard lock(state.mutex);
             return state.stopping || !state.queue.empty();
           });

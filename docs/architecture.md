@@ -5146,7 +5146,10 @@ reads the row at its entry alone with `neverd_functions_range_json`), the sessio
 what it read of the library once (`Session::LocalTypeNames`), on the library itself
 (`TypeLibrary::Trial`, which undoes a refused declaration), and the identity its stores
 are kept under before it with the declarations the history committed; the rows after it
-are those and the one it added (`neverd_type_declarations_range_json`). The project's
+are those and the one it added (`neverd_type_declarations_range_json`). The stores'
+relabel for such a type is written once the reply is sent, before the next request or
+idle step reads their folders (`Engine::writeStoreKeeps`), and what the session's headers
+say of its debug files is read once for the debug inputs it loaded. The project's
 input is recorded once a history first commits, since what the record says holds while
 the session keeps the input. A function's declaration
 reads against the library without copying it, its prototype the parse's own; one that

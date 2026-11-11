@@ -778,6 +778,7 @@ Engine::Engine()
   instanceTag_ = std::to_string(entropy()) + std::to_string(entropy());
 }
 Engine::~Engine() {
+  writeStoreKeeps();
   listing_.reset();
   neverd_session_destroy(session_);
 }
@@ -2428,6 +2429,7 @@ bool Engine::hasIdleWork() const {
            warmState_ == WarmState::Running));
 }
 bool Engine::idleStep() {
+  writeStoreKeeps();
   // What background work changes no answer read before it holds for.
   forgetPreparedViews();
   if (!hasIdleWork())
@@ -3199,8 +3201,16 @@ Json Engine::browseCacheIdentity(
   }
   identity["shared"] = std::move(shared);
   if (headersFunction()) {
-    const auto debug = backendJson(headersFunction()(session_))
-                           .value("debug_info", Json::object());
+    // What the headers say of the debug files reads the same while the
+    // session holds the debug inputs it loaded.
+    auto inputs = pdbInput_.dump() + '\n' + dwarfInput_.dump() + '\n' +
+                  mapInput_.dump() + '\n' + symbolsInput_.dump();
+    if (!debugInfo_ || debugInfoInputs_ != inputs) {
+      debugInfo_ = backendJson(headersFunction()(session_))
+                       .value("debug_info", Json::object());
+      debugInfoInputs_ = std::move(inputs);
+    }
+    const auto &debug = *debugInfo_;
     identity["debug"] = debug;
     for (const auto &file : debug.value("files", Json::array())) {
       const auto path = file.is_string() ? file.get<std::string>()
@@ -3678,6 +3688,7 @@ Json Engine::updateAnalysisNames(const Json &snapshot) {
     renderAheadStarts_ = 0;
     // What the store keeps answers while what each render read holds; the job
     // renders again what does not.
+    writeStoreKeeps();
     const bool sameStore = !renderStoreMode_.empty() && renderStore_ &&
                            renderStore_->keeps(storeNames().renders);
     renderAheadVerifying_ = sameStore && (dataRenamed || declared);
@@ -3971,6 +3982,7 @@ Engine::Reply Engine::executeResponse(const std::string &operation,
   viewEditsAtRequest_ = viewEditCount_;
   requestRevision_ = revision_;
   served_.reset();
+  writeStoreKeeps();
   if (!preparedViews_.empty()) {
     // An answer made for the state the read finds, and for this read.
     if (preparedRevision_ != revision_ || !listing_ ||
@@ -4009,6 +4021,11 @@ void Engine::keepServed(ServedPage served) {
   served.document->nextRead = std::move(served.next);
   served.document->servedAt = ++servedPages_;
   served.document->servedRevision = revision_;
+}
+
+void Engine::afterReply(const std::function<bool()> &requestWaiting) {
+  writeStoreKeeps();
+  prepareFollowingViews(requestWaiting);
 }
 
 void Engine::prepareFollowingViews(
@@ -4562,6 +4579,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     neverd_session_destroy(session_);
     session_ = next.release();
     projectFolder_.reset();
+    debugInfo_.reset();
     codeEdits_ = std::move(nextCodeEdits);
     // A file too large or unreadable is the next project_sync's to report.
     try {
