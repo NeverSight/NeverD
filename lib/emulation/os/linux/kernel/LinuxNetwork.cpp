@@ -397,18 +397,24 @@ LinuxFiles::transferSocket(OpenSocket &Socket, bool Send, uint64_t Address,
   }
   const auto &Bytes = Send ? C.ExpectedSend : Event ? Event->Bytes : C.Receive;
   auto &Position = Send ? Socket.Sent : Socket.Received;
-  if (Position == Bytes.size()) {
-    if (!Send && C.ReceiveEOF)
+  const uint64_t Remaining = Bytes.size() - Position;
+  if (!Send && !Remaining) {
+    if (C.ReceiveEOF)
       return Reply(0);
-    return unsupported(Result,
-                       Send ? "outgoing TCP stream exceeds its offline contract"
-                            : "TCP receive readiness has no offline input");
+    return unsupported(Result, "TCP receive readiness has no offline input");
   }
   const auto Count = std::min<uint64_t>(Size, Send ? C.MaxSend : C.MaxReceive);
-  if (Send && Count > Bytes.size() - Position)
-    return unsupported(Result,
-                       "outgoing TCP stream exceeds its offline contract");
-  const auto Transfer = std::min<uint64_t>(Count, Bytes.size() - Position);
+  if (Send && Count > Remaining) {
+    const auto Reason =
+        llvm::formatv(
+            "outgoing TCP stream exceeds its offline contract at "
+            "stream offset {0} (request size {1}, size after max_send "
+            "{2}, bytes remaining {3}, connection index {4})",
+            Position, Size, Count, Remaining, Socket.ConnectionIndex)
+            .str();
+    return unsupported(Result, Reason.c_str());
+  }
+  const auto Transfer = std::min(Count, Remaining);
   if (Address > Layout.UserLimit || Transfer > Layout.UserLimit - Address)
     return Reply(uint64_t(0) - BadAddress);
   auto Accessible =

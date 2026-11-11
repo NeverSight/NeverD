@@ -20793,6 +20793,10 @@ index after a declared failure, rejected admission, another connection, FD reuse
 and `dup3` replacement, including unchanged cursors after mismatches. Android's
 `MismatchKeepsConnectionIdentityAcrossFDReuse` exercises the same owner through
 named sends and variadic raw writes at O0/O2 with all relocation variants.
+`ExhaustedSendKeepsNamedAndRawResultsPending` checks both wrappers when a
+short write consumes the last supplied bytes. Linux tests also check a request
+with one byte remaining, retrying that byte and reporting the bound connection
+through a descriptor alias.
 
 The network fixtures also exercise TCP failure followed by connected UDP,
 IPv4/IPv6, named/raw/dynamic calls, FD reuse, packet truncation, peek, empty

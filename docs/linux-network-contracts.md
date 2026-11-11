@@ -76,6 +76,10 @@ zero-based index in `linux_network.connections`. This index belongs to the
 bound open description, so aliases retain it and a reused FD can refer to a
 different index. Declared failed connection attempts occupy indices; rejected
 peer or memory admission does not consume one.
+When a send requires more bytes than remain in the declared stream, the
+diagnostic gives the bound connection index, current stream offset, guest
+request size, size after applying `max_send`, and remaining byte count. The
+send stops before reading the guest buffer or advancing the cursor.
 Socket seek returns ESPIPE. `setsockopt`/`getsockopt` share SO_RCVTIMEO and
 SO_SNDTIMEO state across aliases, accepting whole seconds up to one day;
 negative seconds retain immediate-timeout state. Fractional timeouts stop

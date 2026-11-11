@@ -122,6 +122,11 @@ TEST_P(LinuxNetwork, FailedAdmissionDoesNotConsumeConnectionOrStream) {
   const uint8_t Right[] = {1, 2, 3};
   llvm::cantFail(cpu().write(Base + 64, Right));
   EXPECT_EQ(call(ServiceKind::Write, FD, Base + 64, 3), 2u);
+  EXPECT_FALSE(call(ServiceKind::SendTo, FD, 1, 3));
+  EXPECT_EQ(Report.Diagnostic,
+            "outgoing TCP stream exceeds its offline contract at stream "
+            "offset 2 (request size 3, size after max_send 2, bytes remaining "
+            "1, connection index 0)");
   EXPECT_EQ(call(ServiceKind::SendTo, FD, Base + 66, 1), 1u);
   EXPECT_FALSE(call(ServiceKind::SendTo, FD, Base + 64, 1));
   EXPECT_EQ(call(ServiceKind::SendTo, FD, UINT64_MAX, 0), 0u);
@@ -209,6 +214,11 @@ TEST_P(LinuxNetwork, MismatchConnectionIdentitySurvivesAliasesAndFDReuse) {
   const uint8_t Right[] = {2, 3};
   llvm::cantFail(cpu().write(Base + 65, Right));
   EXPECT_EQ(call(ServiceKind::Write, Reused, Base + 65, 2), 2u);
+  EXPECT_FALSE(call(ServiceKind::SendTo, Alias, 1, 3));
+  EXPECT_EQ(Report.Diagnostic,
+            "outgoing TCP stream exceeds its offline contract at stream "
+            "offset 3 (request size 3, size after max_send 2, bytes remaining "
+            "0, connection index 1)");
 }
 TEST_P(LinuxNetwork, SharedCursorsReplacementAndFDReuseKeepOneOwner) {
   const auto FD = open(), Other = open();
