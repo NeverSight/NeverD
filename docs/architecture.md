@@ -9900,9 +9900,19 @@ store out, as a C function leaves its caller's registers alone, so the
 prologue neither prints the caller's register as a stale value nor keeps a
 frame in byte storage. The MedIR text view shows the mark. Operations keep
 their positions, because call records index them. A save read for anything
-else stays a store, and binary lift and patch never mark one. The restore proof
+else stays a store, and binary lift and patch never mark one. The exception is
+a save whose value is unknown machine state: an ordinary callee-saved register
+no parameter arrives in, unlike the frame pointer or link register, saved in an
+entry block nothing re-enters. A read of its bytes after the save, whose value
+the function only computes with, takes that incoming value itself, so a use of
+it fails where the save would have failed, and a read on a path that never runs,
+as an optimizer's load past an array's end into the save area, fails nothing. A
+value that leaves the function as it is, returned, passed to a call or joined
+with another, keeps the save: later analyses would read the copy as the
+incoming register and take a returned save for no result. The restore proof
 also follows unobserved zero extensions, including the Q-register update from
-an AArch64 D-register restore. A read of any derived value retains the save.
+an AArch64 D-register restore, and the Q register an ARM32 VPOP rebuilds from
+its D halves. A read of any derived value retains the save.
 HighIR removes unused restore temporaries before checking private save slots,
 while frame addresses still retain their original SSA identities. On x86 the
 projection also marks a pointer-width load of the slot at the entry stack
@@ -11902,6 +11912,16 @@ as HighC does; that type is 16 bytes there, aligned to at most 16, so the
 member keeps its frame offset. This preserves 65..128-bit value operations,
 including packed numerical/MXCSR results. It does not establish every
 wide-integer runtime or calling convention.
+
+An LLVM-to-C definition takes a char or short argument that the IR gives no
+extension attribute as a whole 32-bit word, and narrows it in its body, where
+the target's C compiler lets a definition assume its callers extended such an
+argument (AAPCS, i386, x86-64 System V, MIPS and Apple arm64): the machine code
+reads only the low bits, so a caller may leave anything above them, as one
+passing an int does. A narrow type the debug information declares is one its
+callers extend, and keeps its spelling. `__builtin_bit_cast` takes a vector
+element through a cast to the element's own type, because Clang 21 to 23 read
+the vector's first element for the element lvalue `(v)[i]`.
 
 `IntrinsicValueEffects` defines positive, shape-validated contracts for operations
 whose effects are entirely explicit values. `LowIntrinsicEffects` additionally
