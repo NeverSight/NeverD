@@ -112,7 +112,8 @@ the same journaled transaction runs on a thread of its own, joined with edits
 queued behind one already writing, in the few milliseconds after the reply.  A
 kill in that time leaves the project's files as they were, or a journal that
 completes them; a clean exit, `save` (except `save.write_behind`), `analysis_snapshot`
-and any operation that may read the project's files wait for the write first.  A write that fails stays
+and any operation that may read the project's files wait for the write first; `history`
+and `patches`, which read the session's steps and byte patches, do not.  A write that fails stays
 queued and fails the next edit or waiting operation with its error, and goes
 through once it can.  An edit refused meanwhile takes back what it changed of
 the session's data items, function edits and operand formats as its history

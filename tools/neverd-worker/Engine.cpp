@@ -4171,21 +4171,34 @@ Engine::resolvedName(const std::string &name) {
 
 namespace {
 /// What an edit has queued to write stays out of these, which read the session
-/// and the listing alone, or queue their own.  Anything else may read the
-/// project's files, and sees them written.
+/// and the listing alone, or queue their own: the history's steps and the byte
+/// patches, which the workbench reads after each edit, are the session's too.
+/// Anything else may read the project's files, and sees them written.
 bool readsNoProjectFile(std::string_view operation) {
-  static constexpr std::string_view Operations[] = {
-      "annotation_set", "cfg_summary",
-      "cfg_viewport",   "code_edit",
-      "decompile",      "function_edit",
-      "function_type",  "functions",
-      "item_define",    "kept_renders",
-      "listing",        "local_types_declare",
-      "metadata",       "prepare_function",
-      "names",          "operand_format",
-      "redo",           "rename",
-      "resolve",        "strings",
-      "undo",           "xrefs"};
+  static constexpr std::string_view Operations[] = {"annotation_set",
+                                                    "cfg_summary",
+                                                    "cfg_viewport",
+                                                    "code_edit",
+                                                    "decompile",
+                                                    "function_edit",
+                                                    "function_type",
+                                                    "functions",
+                                                    "history",
+                                                    "item_define",
+                                                    "kept_renders",
+                                                    "listing",
+                                                    "local_types_declare",
+                                                    "metadata",
+                                                    "prepare_function",
+                                                    "names",
+                                                    "operand_format",
+                                                    "patches",
+                                                    "redo",
+                                                    "rename",
+                                                    "resolve",
+                                                    "strings",
+                                                    "undo",
+                                                    "xrefs"};
   return std::find(std::begin(Operations), std::end(Operations), operation) !=
          std::end(Operations);
 }

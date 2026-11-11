@@ -7166,7 +7166,8 @@ replica restores from and a save each find what was queued, a save written behin
 reply (`save.write_behind`, a boolean) makes staged comments the step before the edit
 that follows and both reach the files and undo in order, a kill at any moment leaves
 a project that opens and takes edits, a write that fails fails a later edit and goes
-through once it can, a data item refused right behind one whose write fails and
+through once it can (the history and the byte patches answering meanwhile), a data
+item refused right behind one whose write fails and
 function edits and operand formats taken before a failed write is found stay in the
 session and reach the files once they take writes again, a local's new name is taken
 while the project's folder takes no write and reaches the files afterwards, an undo past

@@ -272,6 +272,12 @@ def run(executable):
                 assert refused["error"]["code"] == "save_failed", refused
                 blocked = client.call("analysis_snapshot")
                 assert blocked["status"] != "ok", blocked
+                # The history's steps and the byte patches are the session's:
+                # they read no file, and answer while the files take nothing.
+                last = ok(client, "history", {"offset": 0, "limit": 1})["total"] - 1
+                step = ok(client, "history", {"offset": last, "limit": 1})["items"][0]
+                assert step["kind"] == "rename" and taken[-1] in json.dumps(step), step
+                assert ok(client, "patches", {"ranges_only": True})["items"] == []
             finally:
                 folder_path.chmod(mode)
             ok(client, "rename", {"address": hex(GLOBAL), "name": "out_of_trouble"})
