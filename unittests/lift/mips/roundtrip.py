@@ -31,7 +31,8 @@ from mips_validation_artifacts import MIPSValidationArtifacts
 
 PROFILES = [("mips", 32, False), ("mipsel", 32, True),
             ("mips64", 64, False), ("mips64el", 64, True)]
-MICRO_FUNCTIONS = ["mips_add", "mips_load", "mips_store", "mips_stack", "mips_branch_capture"]
+MICRO_FUNCTIONS = ["mips_add", "mips_load", "mips_store", "mips_stack", "mips_branch_capture",
+                   "mips_merge_word", "mips_merge_store_word"]
 KERNEL_FORMS = Path(__file__).with_name("MIPSBitfieldKernels.def").read_text()
 FIELDS = {name: tuple(map(int, (width, insert, pos, size)))
           for name, width, insert, pos, size in re.findall(
@@ -47,7 +48,7 @@ FUNCTIONS = ["mips_add", "mips_likely", "mips_load", "mips_store", "mips_stack",
              "mips_ro_global", "mips_rw_global", "mips_jump_slot_load",
              "mips_jalr_slot", "mips_jalr_memory", "mips_conditional_link",
              "mips_data_pointer", "mips_code_pointer", "mips_mul",
-             "mips_merge_word", "mips_merge_word_reverse", "mips_merge_full",
+             "mips_merge_word", "mips_merge_word_reverse", "mips_merge_full", "mips_merge_store_word",
              "mips_jalr_merge_slot", "mips_merge_ro_global", "mips_merge_rw_global",
              "mips_merge_discard", "mips_merge_zero", "mips_likely_load",
              "mips_uninitialized_word", "mips_uninitialized_word_reverse",

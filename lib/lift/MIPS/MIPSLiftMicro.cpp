@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ArchSupport.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/lift/MIPS/MicroMIPS64Release6.h"
 #include "neverd/lift/MIPS/MicroMIPSRelease6.h"
@@ -52,6 +53,27 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
       const unsigned Dest = R6 ? RT : compactRegister((First >> 3) & 7);
       const unsigned Source = R6 ? RS : compactRegister(First & 7);
       const unsigned Minor = R6 ? First & 15 : (First >> 6) & 15;
+      if (R6 && (First & 4)) // MOVEP moves its source selector in R6.
+        return Encoding{.Word = unsigned((First & 0x3f0) | ((First >> 1) & 4) |
+                                         (First & 3)),
+                        .Sequence = SequenceKind::MovePair};
+      if (Minor == (R6 ? 2u : 4u) || Minor == (R6 ? 10u : 5u)) {
+        const unsigned List = R6 ? (First >> 8) & 3 : (First >> 4) & 3;
+        const unsigned Offset = R6 ? (First >> 4) & 15 : First & 15;
+        const bool Store = Minor == (R6 ? 10u : 5u);
+        return Encoding{.Word = (List << 4) | Offset,
+                        .Sequence = Store ? SequenceKind::StoreMultiple
+                                          : SequenceKind::LoadMultiple};
+      }
+      if ((R6 && (First & 31) == 0x13) || (!R6 && ((First >> 5) & 31) == 24)) {
+        const unsigned Words = R6 ? (First >> 5) & 31 : First & 31;
+        return Encoding{.Word = registerForm(8, 0, 31),
+                        .StackIncrement = static_cast<uint8_t>(Words * 4)};
+      }
+      if (!R6 && ((First >> 5) & 31) == 16)
+        return Encoding{registerForm(16, First & 31, 0)}; // MFHI16
+      if (!R6 && ((First >> 5) & 31) == 18)
+        return Encoding{registerForm(18, First & 31, 0)}; // MFLO16
       if (!Minor)
         return Encoding{registerForm(39, Dest, Source)}; // NOT16
       if (Minor == (R6 ? 1u : 2u))
@@ -126,6 +148,11 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
                       : Minor == 15 ? 2u
                                     : 1u};
     }
+    case 0x21: // Pre-Release 6 MOVEP (POOL16F).
+      if (R6 || (First & 1))
+        return std::nullopt;
+      return Encoding{.Word = unsigned((First & 0x3f0) | ((First >> 1) & 7)),
+                      .Sequence = SequenceKind::MovePair};
     case 0x02: // LBU16: encoded 15 means -1.
       return Encoding{immediateForm(
           36, RT, RS, (First & 15) == 15 ? uint16_t(-1) : First & 15)};
@@ -257,6 +284,27 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
   case Micro:                                                                  \
     return Encoding{immediateForm(Classic, RT, RS, uint16_t(Word))};
 #include "neverd/lift/MIPS/MicroMIPSInteger.def"
+  case 0x18: { // Pre-R6 POOL32C, signed twelve-bit displacement.
+    const unsigned Sub = (Word >> 12) & 15;
+    unsigned Op;
+    switch (Sub) {
+    case 0:
+      Op = 34;
+      break; // LWL
+    case 1:
+      Op = 38;
+      break; // LWR
+    case 8:
+      Op = 42;
+      break; // SWL
+    case 9:
+      Op = 46;
+      break; // SWR
+    default:
+      return std::nullopt;
+    }
+    return Encoding{immediateForm(Op, RT, RS, llvm::SignExtend64<12>(Word))};
+  }
   case 0x25: // BEQ32
   case 0x2d: // BNE32
     return Encoding{
@@ -301,6 +349,34 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
   default:
     return std::nullopt;
   }
+}
+
+void MIPSLifter::liftMicroSequence(State &S, Encoding Code) const {
+  if (Code.Sequence == SequenceKind::MovePair) {
+    // microMIPS Volume II-B, tables 5.13 and 5.14. The two register sets
+    // are disjoint, so both sources remain live across the first write.
+    constexpr unsigned Destinations[][2] = {{5, 6},  {5, 7}, {6, 7}, {4, 21},
+                                            {4, 22}, {4, 5}, {4, 6}, {4, 7}};
+    constexpr unsigned Sources[] = {0, 17, 2, 3, 16, 18, 19, 20};
+    const auto &D = Destinations[(Code.Word >> 7) & 7];
+    S.write(D[0], S.read(Sources[Code.Word & 7]));
+    S.write(D[1], S.read(Sources[(Code.Word >> 4) & 7]));
+    return;
+  }
+  // LWM16/SWM16 transfer s0..sN, then ra, without changing sp. Each
+  // access commits independently. Even on R6 the stack address is aligned.
+  const bool Store = Code.Sequence == SequenceKind::StoreMultiple;
+  const unsigned Count = (Code.Word >> 4) + 1;
+  const unsigned Offset = (Code.Word & 15) * 4;
+  const auto SP = S.read(29);
+  if (ISARevision == 6)
+    S.emitIntrinsic(Intrinsic::RequireAligned, {},
+                    {S.resize(SP, 8), NdVar::scalar(4, 8)});
+  for (unsigned I = 0; I <= Count; ++I)
+    liftMemory(S,
+               immediateForm(Store ? 43 : 35, I == Count ? 31 : 16 + I, 29,
+                             Offset + 4 * I),
+               SP);
 }
 
 } // namespace neverd

@@ -94,14 +94,24 @@ private:
   bool liftMSA(State &S, uint32_t Word) const;
   bool liftMSAAdditional(State &S, uint32_t Word) const;
   bool liftMSAPermutation(State &S, uint32_t Word) const;
+  enum class SequenceKind : uint8_t {
+    None,
+    MIPS16Frame,
+    MovePair,
+    LoadMultiple,
+    StoreMultiple
+  };
   struct Encoding {
     uint32_t Word;
     unsigned SlotBytes = 0;
     bool Unconditional = false;
     bool PCRelative = false;
-    bool Frame = false;
+    SequenceKind Sequence = SequenceKind::None;
     bool R6 = false;
+    std::optional<uint8_t> StackIncrement = std::nullopt;
+    bool hasSequence() const { return Sequence != SequenceKind::None; }
   };
+  void liftMicroSequence(State &S, Encoding Code) const;
   Encoding release6Encoding(uint32_t Word) const;
   static bool isR6Compact(uint32_t Word);
   static bool isR6ConditionalCompact(uint32_t Word);

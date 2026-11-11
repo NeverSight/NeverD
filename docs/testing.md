@@ -23881,7 +23881,19 @@ for the 74Kf word calculations. Its older MIPS64DSPR2 model uses different
 accumulator and condition-code widths. `MicroMIPSRelease6` executes the
 physical o32 compact arithmetic and branches on the R6 generic core,
 including taken and fallthrough paths, the returned PC and the link register.
-The two `micromips32r6` source profiles assemble the original with Clang
+The compact sequence differential test executes every MOVEP selector,
+LWM16/SWM16 list and offset, and return stack increment on M14Kc and the R6
+generic core in both byte orders. It compares all GPRs and the PC. The pinned
+Unicorn SWM helper writes only halfwords. The test checks stored bytes against
+the full architectural words. To reproduce the independent memory check on
+Linux, assemble `unittests/lift/mips/micro-swm.S` with Clang for
+`-target mips-linux-gnu -march=mips32r2 -mabi=32 -msoft-float -mno-abicalls
+-fno-pic -G0`, link with GNU ld `-m elf32btsmip -e _start`, and execute with
+`qemu-mips -cpu M14Kc`. For little endian use `mipsel-linux-gnu`,
+`elf32ltsmip` and `qemu-mipsel`. For R6 select `mips32r6` and
+`mips32r6-generic`. QEMU linux-user 11.1.3 passes all four combinations,
+including the untouched bytes around all 64 legal stores per combination.
+The `micromips32r6` source profiles assemble the original with Clang
 and run it on the R6 generic core. They compile the emitted C unchanged
 for microMIPS32r2/o32 and compare the results under GNU sim. Clang 22's
 microR6 backend can emit legacy LUI and JRC16 in a function marked R6.

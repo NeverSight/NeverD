@@ -27,13 +27,21 @@ def kernels():
         "fill.w $w0,$4\nfill.w $w1,$5\naddv.w $w2,$w0,$w1\ncopy_s.w $2,$w2[0]",
     )
     # The R6 generic core executes the original microMIPS ELF directly.
-    yield "micromips32r6", "mips32r6", "", "mul $2,$4,$5\nbitswap $2,$2"
+    yield "micromips32r6", "mips32r6", "", "mul $2,$4,$5\nbitswap $2,$2\njrc16 $ra"
     yield (
         "micromips32r6branch",
         "mips32r6",
         "",
-        "or $2,$4,$0\n.2byte 0x74a4,2\n.2byte 0x5040,7",
+        "or $2,$4,$0\n.2byte 0x74a4,2\n.2byte 0x5040,7\njrc16 $ra",
     )  # BEQC over ORI
+    # ADDIUSP -16, SWSP16 s0/ra into successive words, MOVE16 s0,a0 and v0,s0,
+    # LWM16 s0,ra,0(sp), JRCADDIUSP 16.
+    yield (
+        "micromips32r6frame",
+        "mips32r6",
+        "",
+        ".2byte 0x4ff9,0xca00,0xcbe1,0x0e04,0x0c50,0x4402,0x4493",
+    )
     for bits, multiply in ((32, "mul"), (64, "dmulu")):
         cpu = f"mips{bits}r6"
         d = "d" if bits == 64 else ""
@@ -245,11 +253,7 @@ def run(args, artifacts):
                     )
                     + ".globl kernel\n.type kernel,@function\n.ent kernel\nkernel:\n"
                     + body
-                    + (
-                        "\njrc16 $ra"
-                        if micro_r6
-                        else "\njr $ra\nnop" if feature else "\njrc $ra"
-                    )
+                    + ("" if micro_r6 else "\njr $ra\nnop" if feature else "\njrc $ra")
                     + "\n.end kernel\n.size kernel,.-kernel\n"
                 )
                 if micro_r6:

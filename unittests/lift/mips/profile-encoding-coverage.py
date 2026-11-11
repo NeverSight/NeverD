@@ -88,6 +88,10 @@ def corpora():
     wide_scalar = [
         f"{name} {args}" for args, names in MICRO64 for name in names.split()
     ]
+    merges = [f"{name} $2,-7($4)" for name in ("lwl", "lwr", "swl", "swr")]
+    for profile in ("mips", "micromips"):
+        yield profile, "mips32r2", "", merges
+    wide_scalar.extend(merges)
     for profile in ("mips64", "micromips64"):
         yield profile, "mips64r2", "", wide_scalar
     for bits in (32, 64):

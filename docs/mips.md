@@ -294,7 +294,7 @@ receipts below retain the zero-destination defect of the older reference.
 
 ## microMIPS instruction and source boundaries
 
-The loader accepts linked r2/o32, r2/n64 and r6/o32 microMIPS ELF in either
+The loader accepts linked r2 and r6 microMIPS ELF for o32 and n64 in either
 byte order. It checks the ELF header against any available
 `.MIPS.abiflags` evidence. `st_other` supplies each defined function's encoding;
 an even `st_value` can name a microMIPS function. Entry tags, symbol ranges and
@@ -344,7 +344,9 @@ and the pinned [GNU simulator definitions](https://gnu.googlesource.com/binutils
 On n64, tagged callable addresses, computed jumps, link registers and memory
 addresses retain all 64 bits. The r2 scalar subset adds doubleword arithmetic,
 shifts, rotates, bit fields, byte shuffles, LD/SD, LWU and the LDL/LDR merge
-loads. Word DSP and DSPR2 instructions use the same revision 3.02 accumulator
+loads. Both r2 widths also lift LWL/LWR and SWL/SWR with a signed 12-bit
+displacement. The source fixtures compare the returned word and surrounding
+bytes for aligned and unaligned pairs. Word DSP and DSPR2 instructions use the same revision 3.02 accumulator
 rules as classic n64. GNU as encodes the 113 DSP and 46 DSPR2 forms in micro
 mode. Indexed doubleword LDX has a qualified classic encoding.
 
@@ -352,7 +354,12 @@ microMIPS32r6 compact transfers use halfword displacements, the physical
 length of the instruction and tagged return links. A second branch may
 immediately follow a compact branch. JIC preserves the link register and
 JIALC writes it. Both scalar micro revisions lift NOT16, AND16, OR16,
-XOR16, the ANDI16 mask table and the four compact add-immediate forms. The decoder and lifter also cover the R6 compact three-register
+XOR16, the ANDI16 mask table and the four compact add-immediate forms.
+MOVEP copies both architectural registers. LWM16/SWM16 transfer saved
+registers followed by RA in address order. A later memory fault preserves
+earlier transfers. JRADDIUSP/JRCADDIUSP return to the tagged RA and add the
+encoded word offset to SP. The pre-R6 profile also reads HI/LO through MFHI16
+and MFLO16. The decoder and lifter also cover the R6 compact three-register
 word arithmetic, PC-relative operations, scalar and paired word reservations,
 selected RDHWR, CP0 word/high transfers, DI/EI, CACHE, PREF, EHB and PAUSE.
 The physical decoder corrects the register fields for LSA/ALIGN and signed
@@ -763,7 +770,7 @@ callees. See the
 [testing guide](testing.md#mips-elf-analysis-and-source-roundtrips) for setup.
 A registered test is not a claim that it has passed on every host.
 
-Use `roundtrip.py --encoding micro` for the five microMIPS assembly leaves in
+Use `roundtrip.py --encoding micro` for the seven microMIPS assembly leaves in
 both byte orders and both C backends. The runner selects M14Kc, follows each ELF
 symbol's mode bit and recompiles each result for its original target. The
 BEQZ16 fixture specifies literal displacement bytes: the local-label spelling

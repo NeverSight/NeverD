@@ -243,8 +243,8 @@ MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
     if (Minor == 4) { // SVRS has its own EXTEND layout, not an immediate form.
       if (Extended && (First & 15) == 15)
         return std::nullopt;
-      return Encoding{(Extended ? uint32_t(First) << 16 : 0) | Half, 0, false,
-                      false, true};
+      return Encoding{.Word = (Extended ? uint32_t(First) << 16 : 0) | Half,
+                      .Sequence = SequenceKind::MIPS16Frame};
     }
     if (Extended && (Half & 0xe0))
       return std::nullopt;

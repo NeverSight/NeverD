@@ -625,3 +625,5 @@ mips_div_dead:
 .endm
 narrow_store mips_store_byte,sb,lbu
 narrow_store mips_store_half,sh,lhu
+
+#include "merge-store-word.S"
