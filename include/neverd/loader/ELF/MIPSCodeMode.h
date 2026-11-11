@@ -48,7 +48,7 @@ inline std::optional<va_t> serializedCodeTarget(const BinaryImage &Image,
                                                 va_t Raw) {
   if (!hasCompressedMIPSCode(Image.Mode))
     return normalizeCodeAddress(Raw, Image.Arch, Image.Mode);
-  if (Raw > UINT32_MAX)
+  if (!Image.is64Bit() && Raw > UINT32_MAX)
     return std::nullopt;
   const va_t Address = Raw & ~va_t{1};
   const auto Mode = Image.instructionModeAt(Address);

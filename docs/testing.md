@@ -23879,9 +23879,42 @@ DSPControl and both halves of AC2. The driver also compares NeverD LowIR for
 each classic and micro encoding of all 159 DSP/DSPR2 and 526 MSA forms in
 both byte orders.
 
+For n64, pass `--bits 64` and a GNU simulator configured for
+`mipsisa64r2-mti-elf`. The fixture executes physical microMIPS64 code in
+both byte orders and checks each full-width result against the DSP 3.02
+word result and its required sign extension. Use the pinned Unicorn build
+for the 74Kf word calculations. Its older MIPS64DSPR2 model uses different
+accumulator and condition-code widths. `MicroMIPSRelease6` executes the
+physical o32 compact arithmetic and branches on the R6 generic core,
+including taken and fallthrough paths, the returned PC and the link register.
+The compact sequence differential test executes every MOVEP selector,
+LWM16/SWM16 list and offset, and return stack increment on M14Kc and the R6
+generic core in both byte orders. It compares all GPRs and the PC. The pinned
+Unicorn SWM helper writes only halfwords. The test checks stored bytes against
+the full architectural words. To reproduce the independent memory check on
+Linux, assemble `unittests/lift/mips/micro-swm.S` with Clang for
+`-target mips-linux-gnu -march=mips32r2 -mabi=32 -msoft-float -mno-abicalls
+-fno-pic -G0`, link with GNU ld `-m elf32btsmip -e _start`, and execute with
+`qemu-mips -cpu M14Kc`. For little endian use `mipsel-linux-gnu`,
+`elf32ltsmip` and `qemu-mipsel`. For R6 select `mips32r6` and
+`mips32r6-generic`. QEMU linux-user 11.1.3 passes all four combinations,
+including the untouched bytes around all 64 legal stores per combination.
+The `micromips32r6` source profiles assemble the original with Clang
+and run it on the R6 generic core. They compile the emitted C unchanged
+for microMIPS32r2/o32 and compare the results under GNU sim. Clang 22's
+microR6 backend can emit legacy LUI and JRC16 in a function marked R6.
+The n64 compact R6 test compares 31 physical doubleword encodings with
+GNU-assembled classic R6 equivalents in both endiannesses. It checks
+disassembly, operand order and LowIR at a 64-bit PC. The n64 compact R6
+words have no native execution reference in the pinned emulator.
+
 Ordinary pair padding, predecessor memory barriers,
 single-sided barriers at joins, depth/work exhaustion and non-entry analysis
 roots or exceptional/disconnected paths have separate call-recovery regressions.
+
+microMIPS delay-slot tests enumerate all 65,536 first halfwords, both physical
+widths and both byte orders, including the DSP and MSA branch selectors. R6
+compact transfers always consume just the head.
 
 MIPS16 delay-slot classification exhausts all 65,536 halfwords, both byte orders
 and physical sizes. A shared jump normalizer avoids full scalar normalization
@@ -23999,6 +24032,16 @@ handler and discovered functions (limited to 250), with one/default threads and
 both C backends. New instruction coverage and additional strict checks are
 different work and require separate reporting, not same-output speedup claims.
 This small corpus and a shared host do not establish a cross-tool ranking.
+
+To reproduce the compact o32 corpora and compare LowIR and SLEIGH P-code,
+run `tools/neverd-bench/mips-compressed.py` with Python 3.12 or newer,
+pypcode 4.1.0, pyelftools, `--assembler PATH/TO/mips-as` and
+`--bench build-mips/bin/neverd-mips-bench`. The optional `--save-inputs DIR`
+writes the four full byte streams for `mips-paired.py`. The cross-tool run
+compares decoded and translated physical spans, including delay slots, before
+timing nine alternating pairs. It records excluded functions. With pypcode
+4.1.0, the four-byte delay slot in `mips_stack` produces two halfword source
+marks. That function still participates in the NeverD baseline comparison.
 
 Both MIPS Python drivers reuse their `--output` directory through
 `scripts/mips_validation_artifacts.py`. A new output must be empty; older,

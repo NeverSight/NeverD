@@ -47,7 +47,8 @@ void scanSegmentCallsMIPS(const BinaryImage &Img, Decoder &Dec,
       continue;
     auto Destination = canonicalizeLowControlTarget(
         Target, Dec.currentMode(),
-        Dec.controlTargetMode(Unit.Head, Dec.currentMode()));
+        Dec.controlTargetMode(Unit.Head, Dec.currentMode()),
+        Img.getPointerSize());
     if (!Destination) {
       llvm::consumeError(Destination.takeError());
       continue;

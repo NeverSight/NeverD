@@ -101,8 +101,7 @@ TEST_P(MIPSLoader, DSPCapabilityUsesWidthAndEncodingEvidence) {
                (File.Is64 ? 0x80000000u : 0x70001000u) | 0x02000000, 4);
     ELFLoader Loader;
     auto Image = Loader.loadBuffer(File.buffer());
-    const bool Admitted =
-        ASE == 1 || ASE == 2 || ASE == 3 || (ASE == 0x801 && !File.Is64);
+    const bool Admitted = ASE == 1 || ASE == 2 || ASE == 3 || ASE == 0x801;
     ASSERT_EQ(bool(Image), Admitted);
     if (Admitted) {
       ASSERT_TRUE(Image->MIPS);
@@ -163,6 +162,26 @@ TEST_P(MIPSLoader, Release6HeaderAndABIFlagsMustAgree) {
     ASSERT_FALSE(bool(Conflict));
     llvm::consumeError(Conflict.takeError());
   }
+}
+
+TEST_P(MIPSLoader, MicroRelease6TaggedELFEntryAndABIRecordAgree) {
+  ELFBytes File(GetParam());
+  File.abiFlags();
+  File.put(File.Is64 ? 48 : 36, File.Is64 ? 0xa2000000u : 0x92001000u, 4);
+  File.Bytes[0xe3] = 6;
+  File.put(0xec, 0x800, 4);
+  File.put(24, 0x10101, File.Is64 ? 8 : 4);
+  ELFLoader Loader;
+  auto Image = Loader.loadBuffer(File.buffer());
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  EXPECT_EQ(Image->MIPS->ISARevision, 6);
+  EXPECT_TRUE(Image->MIPS->HasMicroMIPS);
+  EXPECT_EQ(Image->Entry, 0x10100u);
+  EXPECT_EQ(Image->instructionModeAt(Image->Entry), InstructionMode::MicroMIPS);
+  File.put(0xec, 0, 4);
+  auto Conflict = Loader.loadBuffer(File.buffer());
+  ASSERT_FALSE(bool(Conflict));
+  llvm::consumeError(Conflict.takeError());
 }
 
 TEST_P(MIPSLoader, XPAHighWordTransferFlagRequiresRelease6) {
@@ -311,6 +330,7 @@ TEST_P(MIPSLoader, CompletePLTVeneerNamesOnlyItsBoundImportSlot) {
 
 TEST_P(MIPSLoader, RejectsConflictingOrUnsupportedProfilesInBothEntrypoints) {
   const auto Reject = [&](ELFBytes &File, llvm::StringRef Expected) {
+    SCOPED_TRACE(Expected.str());
     ELFLoader Loader;
     auto Image = Loader.loadBuffer(File.buffer());
     ASSERT_FALSE(bool(Image));
@@ -326,12 +346,12 @@ TEST_P(MIPSLoader, RejectsConflictingOrUnsupportedProfilesInBothEntrypoints) {
   for (const auto &[Bits, Reason] :
        std::array<std::pair<uint32_t, const char *>, 4>{
            {{0x20, "n32"},
-            {0x02000000, "microMIPS"},
+            {0x06000000, "MIPS16"},
             {0x04000000, "MIPS16"},
             {0x00000100, "ABI"}}}) {
     ELFBytes File(GetParam());
-    if ((Bits == 0x02000000 || Bits == 0x04000000) && !File.Is64)
-      continue; // Compressed MIPS32 has separate admission/occurrence tests.
+    if (Bits == 0x04000000 && !File.Is64)
+      continue; // MIPS16/o32 has separate admission and occurrence tests.
     File.put(File.Is64 ? 48 : 36, (File.Is64 ? 0x80000000 : 0x70001000) | Bits,
              4);
     Reject(File, Reason);

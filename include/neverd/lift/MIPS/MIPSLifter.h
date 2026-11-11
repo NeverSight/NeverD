@@ -43,9 +43,15 @@ public:
 #include "neverd/lift/MIPS/MIPSPhysicalForms.def"
   bool isDSPIndexedDoubleword(uint32_t Word) const;
   std::optional<uint32_t> microASEWord(uint32_t PhysicalWord) const;
+  /// Resolve a normalized compact branch using the physical occurrence length.
+  uint64_t r6BranchTarget(uint32_t Word, uint64_t PC, unsigned Size) const;
   static bool hasDelaySlot(uint32_t Word);
   /// Zero: no slot; one: either physical width; two/four: required width.
   unsigned delaySlotBytes(const cs_insn &Instruction) const;
+  static constexpr unsigned microInstructionBytes(uint16_t First) {
+    const unsigned LengthCode = (First >> 10) & 7;
+    return LengthCode >= 1 && LengthCode <= 3 ? 2 : 4;
+  }
   LowInstructionTargetMode controlTargetMode(const cs_insn &Instruction) const;
   bool isReturn(const cs_insn &Instruction) const;
   bool isAlignmentNop(const cs_insn &Instruction) const;
@@ -92,22 +98,36 @@ private:
   bool liftMSA(State &S, uint32_t Word) const;
   bool liftMSAAdditional(State &S, uint32_t Word) const;
   bool liftMSAPermutation(State &S, uint32_t Word) const;
+  enum class SequenceKind : uint8_t {
+    None,
+    MIPS16Frame,
+    MovePair,
+    LoadMultiple,
+    StoreMultiple
+  };
   struct Encoding {
     uint32_t Word;
-    unsigned SlotBytes = 0;
+    // 0, either width (1), or a required 2/4 bytes. Keep the optional
+    // encoding within the two-register aggregate return on 64-bit hosts.
+    unsigned SlotBytes : 8 = 0;
     bool Unconditional = false;
     bool PCRelative = false;
-    bool Frame = false;
+    SequenceKind Sequence = SequenceKind::None;
     bool R6 = false;
+    std::optional<uint8_t> StackIncrement = std::nullopt;
+    bool hasSequence() const { return Sequence != SequenceKind::None; }
   };
+  void liftMicroSequence(State &S, Encoding Code) const;
   Encoding release6Encoding(uint32_t Word) const;
   static bool isR6Compact(uint32_t Word);
   static bool isR6ConditionalCompact(uint32_t Word);
-  uint64_t r6BranchTarget(uint32_t Word, uint64_t PC) const;
   bool liftR6Compact(State &S, uint32_t Word, bool ForbiddenFollower) const;
   bool liftRelease6(State &S, uint32_t Word) const;
   bool liftNonControl(State &S, Encoding Code, va_t BasePC) const;
   std::optional<Encoding> encoding(const cs_insn &Instruction) const;
+  unsigned microDelaySlotBytes(const cs_insn &Instruction) const;
+  std::optional<Encoding> microLegacyJump(uint16_t First,
+                                          uint16_t Second) const;
   std::optional<Encoding> microEncoding(const cs_insn &Instruction) const;
   std::optional<Encoding> mips16JumpEncoding(const cs_insn &Instruction) const;
   std::optional<Encoding> mips16E2Encoding(uint16_t First, uint16_t Half) const;

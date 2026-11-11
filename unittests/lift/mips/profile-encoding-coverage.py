@@ -49,6 +49,18 @@ R6_DOUBLE = (
 )
 
 
+MICRO64 = (
+    ("$2,$4,$5", "daddu dsubu dsllv dsrlv dsrav drotrv"),
+    ("$2,$4,-53", "daddiu"),
+    ("$2,$4,5", "dsll dsrl dsra drotr dsll32 dsrl32 dsra32 drotr32"),
+    ("$2,$4", "dclz dclo dsbh dshd"),
+    ("$2,$4,5,7", "dext dins"),
+    ("$2,$4,5,40", "dextm dinsm"),
+    ("$2,$4,35,7", "dextu dinsu"),
+    ("$2,-16($4)", "ld sd lwu ldl ldr"),
+)
+
+
 def corpora():
     ase = runpy.run_path(str(Path(__file__).with_name("ase-encoding-coverage.py")))
     for feature in ("dsp", "dspr2", "msa"):
@@ -72,6 +84,16 @@ def corpora():
                 feature,
                 insns + (["ldx $2,$5($4)"] if feature == "dsp" else []),
             )
+            yield "micromips64" + feature, "mips64r2", feature, insns
+    wide_scalar = [
+        f"{name} {args}" for args, names in MICRO64 for name in names.split()
+    ]
+    merges = [f"{name} $2,-7($4)" for name in ("lwl", "lwr", "swl", "swr")]
+    for profile in ("mips", "micromips"):
+        yield profile, "mips32r2", "", merges
+    wide_scalar.extend(merges)
+    for profile in ("mips64", "micromips64"):
+        yield profile, "mips64r2", "", wide_scalar
     for bits in (32, 64):
         profile = f"mips{bits}r6"
         yield (
@@ -172,7 +194,18 @@ def main():
                 for reference in ([profile] if little else []) + (
                     [name.removeprefix("micro")] if profile.startswith("micro") else []
                 ):
-                    if result["digest"] != records[reference]["digest"]:
+                    expected = records[reference]["digest"]
+                    if profile == "micromips64dsp" and reference.startswith("mips64dsp"):
+                        # The classic catalog also has LDX. Compare the common
+                        # instructions at the same addresses in both profiles.
+                        shared = assemble(
+                            tools, Path(scratch), "mips64dsp", cpu,
+                            feature, instructions, little
+                        )
+                        expected = json.loads(subprocess.check_output(
+                            [tools.bench, reference, "lift", shared, "1"]
+                        ))["digest"]
+                    if result["digest"] != expected:
                         raise ValueError(f"{name} LowIR differs from {reference}")
     print(json.dumps(records, indent=2))
 

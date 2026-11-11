@@ -26,6 +26,22 @@ def kernels():
         "msa",
         "fill.w $w0,$4\nfill.w $w1,$5\naddv.w $w2,$w0,$w1\ncopy_s.w $2,$w2[0]",
     )
+    # The R6 generic core executes the original microMIPS ELF directly.
+    yield "micromips32r6", "mips32r6", "", "mul $2,$4,$5\nbitswap $2,$2\njrc16 $ra"
+    yield (
+        "micromips32r6branch",
+        "mips32r6",
+        "",
+        "or $2,$4,$0\n.2byte 0x74a4,2\n.2byte 0x5040,7\njrc16 $ra",
+    )  # BEQC over ORI
+    # ADDIUSP -16, SWSP16 s0/ra into successive words, MOVE16 s0,a0 and v0,s0,
+    # LWM16 s0,ra,0(sp), JRCADDIUSP 16.
+    yield (
+        "micromips32r6frame",
+        "mips32r6",
+        "",
+        ".2byte 0x4ff9,0xca00,0xcbe1\nmove16 $16,$4\n.2byte 0x0c50,0x4402,0x4493",
+    )
     for bits, multiply in ((32, "mul"), (64, "dmulu")):
         cpu = f"mips{bits}r6"
         d = "d" if bits == 64 else ""
@@ -122,7 +138,7 @@ def verify_micro(
         "la $sp,stack_top",
     ]
     for i, ((a, b), (value, control)) in enumerate(zip(cases, wanted, strict=True)):
-        if feature != "msa":
+        if feature in ("dsp", "dspr2"):
             asm.extend([f"li $4,{0x01004005 if i % 2 else 0}", "wrdsp $4,63"])
         asm.extend(
             [
@@ -135,7 +151,7 @@ def verify_micro(
                 "nop",
             ]
         )
-        if feature != "msa":
+        if feature in ("dsp", "dspr2"):
             asm.extend(
                 ["rddsp $9,63", f"li $8,{control}", f"bne $9,$8,failed_{i}", "nop"]
             )
@@ -154,7 +170,7 @@ def verify_micro(
             "-" + cpu,
             "-32",
             "-EL" if little else "-EB",
-            "-m" + feature,
+            *(["-m" + feature] if feature else []),
             *(["-mfp64"] if feature == "msa" else []),
             "-o",
             driver,
@@ -206,6 +222,11 @@ def run(args, artifacts):
             continue
         bits = 64 if "64" in cpu else 32
         micro = name.startswith("micro")
+        micro_r6 = micro and cpu.endswith("r6")
+        # Clang 22's microR6 backend emits legacy LUI and JRC16 in its
+        # prologue/epilogue. Keep the original R6 ISA and tagged entry, then
+        # execute the unedited C on the GNU sim microMIPS32r2/o32 target.
+        rebuild_cpu = "mips32r2" if micro_r6 else cpu
         cases = inputs(name, bits)
         extra = (["-m" + feature] if feature else []) + (
             ["-mfp64"] if feature == "msa" else []
@@ -225,24 +246,47 @@ def run(args, artifacts):
                 source = directory / "kernel.s"
                 source.write_text(
                     ".text\n.set noreorder\n.set noat\n"
-                    + (".set micromips\n.set insn32\n" if compressed else "")
+                    + (
+                        ".set micromips\n"
+                        if micro_r6
+                        else ".set micromips\n.set insn32\n" if compressed else ""
+                    )
                     + ".globl kernel\n.type kernel,@function\n.ent kernel\nkernel:\n"
                     + body
-                    + ("\njr $ra\nnop" if feature else "\njrc $ra")
+                    + ("" if micro_r6 else "\njr $ra\nnop" if feature else "\njrc $ra")
                     + "\n.end kernel\n.size kernel,.-kernel\n"
                 )
-                command(
-                    [
-                        args.assembler,
-                        "-" + cpu,
-                        "-EL" if little else "-EB",
-                        "-" + str(bits),
-                        *extra,
-                        "-o",
-                        obj,
-                        source,
-                    ]
-                )
+                if micro_r6:
+                    # GNU as 2.47 does not emit microMIPS Release 6.
+                    command(
+                        [
+                            args.clang,
+                            "-target",
+                            target + "-linux-gnu",
+                            "-march=" + cpu,
+                            "-mabi=o32",
+                            "-mmicromips",
+                            "-mno-abicalls",
+                            "-fno-pic",
+                            "-c",
+                            source,
+                            "-o",
+                            obj,
+                        ]
+                    )
+                else:
+                    command(
+                        [
+                            args.assembler,
+                            "-" + cpu,
+                            "-EL" if little else "-EB",
+                            "-" + str(bits),
+                            *extra,
+                            "-o",
+                            obj,
+                            source,
+                        ]
+                    )
                 command(
                     [
                         args.linker,
@@ -262,7 +306,7 @@ def run(args, artifacts):
             original = directory / "original.elf"
             assemble(original, micro)
             oracle = original
-            if micro:
+            if micro and not micro_r6:
                 # The reference cores with DSP/MSA expose the classic encoding.
                 # NeverD receives the separately assembled physical micro ELF.
                 oracle = directory / "classic.elf"
@@ -289,7 +333,7 @@ def run(args, artifacts):
                             [
                                 args.clang,
                                 f"--target={target}-linux-gnu",
-                                "-march=" + cpu,
+                                "-march=" + rebuild_cpu,
                                 f"-mabi={bits}",
                                 "-mno-abicalls",
                                 "-fno-pic",
@@ -347,6 +391,8 @@ def run(args, artifacts):
                         report["builds"].append(
                             {
                                 "profile": directory.name,
+                                "source_isa": cpu,
+                                "rebuilt_isa": rebuild_cpu,
                                 "view": view,
                                 "opt": opt,
                                 "cases": len(cases),
@@ -360,7 +406,7 @@ def run(args, artifacts):
                     raise
                 artifacts.discard(source)
             artifacts.discard(original, log)
-            if micro:
+            if micro and not micro_r6:
                 artifacts.discard(oracle)
             artifacts.write("results.json", report)
     report["complete"] = True

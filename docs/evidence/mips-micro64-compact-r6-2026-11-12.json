@@ -1,0 +1,1482 @@
+{
+  "source_commit": "73fb3012fd4806ca7613513805bbe79c55749877",
+  "baseline_commit": "272b2abf20f7122c1afa591d6acff5ea5e63cdea",
+  "host": "macOS-15.6.1-arm64-arm-64bit",
+  "cpu": "Apple M4 Max",
+  "toolchain": {
+    "compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)\nTarget: arm64-apple-darwin24.6.0\nThread model: posix\nInstalledDir: /Library/Developer/CommandLineTools/usr/bin",
+    "llvm": "neverd-llvm-v23.0.0-r6",
+    "target_compiler": "Homebrew clang version 22.1.6\nTarget: arm64-apple-darwin24.6.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm/22.1.6/bin\nConfiguration file: /opt/homebrew/Cellar/llvm/22.1.6/etc/clang/arm64-apple-darwin24.cfg",
+    "capstone": "f2f50b8fab856b374daf0e76dc3054f25de65ac9",
+    "build": {
+      "CMAKE_BUILD_TYPE:STRING": "Release",
+      "CMAKE_CXX_FLAGS:STRING": "",
+      "CMAKE_CXX_FLAGS_RELEASE:STRING": "-O3 -DNDEBUG",
+      "CMAKE_OSX_ARCHITECTURES:STRING": "",
+      "NEVERD_ENABLE_MIMALLOC:BOOL": "ON"
+    }
+  },
+  "dependency_inputs_sha256": "0a2047e110412d0ca2908fa8847878fc1e1b25d5238139c4ba78f8a6b2030dde",
+  "binary_hashes": {
+    "A": {
+      "libneverd.dylib": "64fa8071c246b0c5a3dd8ed68506ca230f30d1574061f909b31e604a617f9819",
+      "neverd": "3e3bc130749058fb5b88b407971a02441c0c0123d5f47a3c6b5095530e18aa63",
+      "neverd-mips-bench": "9298185bda892fb5b03c4a0f810ec66d632c19df5ef8c4c3327b07c7d1bfa209"
+    },
+    "B": {
+      "libneverd.dylib": "deddb0623114f9f2d6e4db23726d489600aeaf583bf281cc0220ac5d70cc465b",
+      "neverd": "3e3bc130749058fb5b88b407971a02441c0c0123d5f47a3c6b5095530e18aa63",
+      "neverd-mips-bench": "ac6cb21a6cd770ef81618c41df7cd5f63e2b58cf88f1fb2d8e16f749b13af8df"
+    }
+  },
+  "unicorn": {
+    "revision": "dab16e86b6ac4acca71c5f3ba50721efc3891a1e",
+    "dylib_sha256": "a303edc88c0d158e6fed11ae97e0350b812795bdb19c9c1fed8388d6c22ff690"
+  },
+  "gnu_assembler": "GNU assembler (GNU Binutils) 2.47.20260726",
+  "ctest": {
+    "tests": 779,
+    "failures": 0,
+    "skipped": 0,
+    "disabled": 0
+  },
+  "encoding_profiles": {
+    "mipsdsp": {
+      "forms": 113,
+      "digest": "224cb6e3ae0960d4",
+      "operations": 2280,
+      "sha256": "50ed97d564b9179744ec1557b1f3c40ec8785990cdeef68d5e428ee9695bf8ad"
+    },
+    "mipsdspel": {
+      "forms": 113,
+      "digest": "224cb6e3ae0960d4",
+      "operations": 2280,
+      "sha256": "b6431da0432c48f9c103a58852d2558b546b70062df79b81b91971def2566498"
+    },
+    "micromipsdsp": {
+      "forms": 113,
+      "digest": "224cb6e3ae0960d4",
+      "operations": 2280,
+      "sha256": "57b55ead137abcca9b0a362b07e5aca791781ce02d5ae2535982761cb650774b"
+    },
+    "micromipsdspel": {
+      "forms": 113,
+      "digest": "224cb6e3ae0960d4",
+      "operations": 2280,
+      "sha256": "3f63d2c77c808dd566554f7b08d4bd4861a34fd6ee7f2a7ac02849f1482662ac"
+    },
+    "mips64dsp": {
+      "forms": 114,
+      "digest": "014d3a49724de319",
+      "operations": 2651,
+      "sha256": "442ed41dbc19e1bb1ccf82a91725c625274f26193e7c4d22d6f3c36313d6f0d1"
+    },
+    "mips64dspel": {
+      "forms": 114,
+      "digest": "014d3a49724de319",
+      "operations": 2651,
+      "sha256": "c4f31b1e2206e5f250e1ed4c30268e753d265aeed8c5382998b31b1798654d40"
+    },
+    "micromips64dsp": {
+      "forms": 113,
+      "digest": "890643bc68ab1a20",
+      "operations": 2645,
+      "sha256": "57b55ead137abcca9b0a362b07e5aca791781ce02d5ae2535982761cb650774b"
+    },
+    "micromips64dspel": {
+      "forms": 113,
+      "digest": "890643bc68ab1a20",
+      "operations": 2645,
+      "sha256": "3f63d2c77c808dd566554f7b08d4bd4861a34fd6ee7f2a7ac02849f1482662ac"
+    },
+    "mipsdspr2": {
+      "forms": 46,
+      "digest": "0bb835116d83fb8f",
+      "operations": 996,
+      "sha256": "1a28559216f71b5d47595048331d359bfecfa5b9519d6f981073c6102027e8d8"
+    },
+    "mipsdspr2el": {
+      "forms": 46,
+      "digest": "0bb835116d83fb8f",
+      "operations": 996,
+      "sha256": "5880eed5dc70f7cb66c416103b9b32ffaa8b8c8a906dde7e586f20188dc7415e"
+    },
+    "micromipsdspr2": {
+      "forms": 46,
+      "digest": "0bb835116d83fb8f",
+      "operations": 996,
+      "sha256": "ee0416b7529d944aea3d6d86f8a3d6a710082d402f79720d27f922861bbfd332"
+    },
+    "micromipsdspr2el": {
+      "forms": 46,
+      "digest": "0bb835116d83fb8f",
+      "operations": 996,
+      "sha256": "f90e9884258277fd42e55351abc7fd7e83dc30fcd8ec0798fcaaa1fc0ec028a3"
+    },
+    "mips64dspr2": {
+      "forms": 46,
+      "digest": "2c5b7ff3e3a184ce",
+      "operations": 1160,
+      "sha256": "1a28559216f71b5d47595048331d359bfecfa5b9519d6f981073c6102027e8d8"
+    },
+    "mips64dspr2el": {
+      "forms": 46,
+      "digest": "2c5b7ff3e3a184ce",
+      "operations": 1160,
+      "sha256": "5880eed5dc70f7cb66c416103b9b32ffaa8b8c8a906dde7e586f20188dc7415e"
+    },
+    "micromips64dspr2": {
+      "forms": 46,
+      "digest": "2c5b7ff3e3a184ce",
+      "operations": 1160,
+      "sha256": "ee0416b7529d944aea3d6d86f8a3d6a710082d402f79720d27f922861bbfd332"
+    },
+    "micromips64dspr2el": {
+      "forms": 46,
+      "digest": "2c5b7ff3e3a184ce",
+      "operations": 1160,
+      "sha256": "f90e9884258277fd42e55351abc7fd7e83dc30fcd8ec0798fcaaa1fc0ec028a3"
+    },
+    "mipsmsa": {
+      "forms": 526,
+      "digest": "c064a06e1f2cd113",
+      "operations": 18140,
+      "sha256": "eb5f4295096c4386134bd97a63488edd45a1b69f8a310a946aa0218aecaadff6"
+    },
+    "mipsmsael": {
+      "forms": 526,
+      "digest": "c064a06e1f2cd113",
+      "operations": 18140,
+      "sha256": "eab6407c8da9e58fe0ff82a18244258384afcbe909cd88955640c795ce9289b3"
+    },
+    "micromipsmsa": {
+      "forms": 526,
+      "digest": "c064a06e1f2cd113",
+      "operations": 18140,
+      "sha256": "66d1288fda2e40a35e59f0ca9d4d0d31cee51feee6101852ec13922ffe84d77b"
+    },
+    "micromipsmsael": {
+      "forms": 526,
+      "digest": "c064a06e1f2cd113",
+      "operations": 18140,
+      "sha256": "a4c470ec14852215f0273e67cefe9ee70afcc6d5b8c2cb40e8c0e3742d773331"
+    },
+    "mips": {
+      "forms": 4,
+      "digest": "095a71a3dbfecb16",
+      "operations": 14,
+      "sha256": "0ee3edc571d67adff0732f61a9ad90d873b3cb06cc90bb1ef23ba2ccb2819c8d"
+    },
+    "mipsel": {
+      "forms": 4,
+      "digest": "095a71a3dbfecb16",
+      "operations": 14,
+      "sha256": "10d8e5cfef9d296602ba447d35e5fdaba0c451bf5a6c5d124eab213b1dbe993c"
+    },
+    "micromips": {
+      "forms": 4,
+      "digest": "095a71a3dbfecb16",
+      "operations": 14,
+      "sha256": "193b0defb3812a2edbcfdee2da191b630aca84cc46eed3b98cc73b6e6ab33f2a"
+    },
+    "micromipsel": {
+      "forms": 4,
+      "digest": "095a71a3dbfecb16",
+      "operations": 14,
+      "sha256": "ebc5b8263bf96dceaa7f2cbc1cd11abfba727807cc36df0067903ce8effec9b4"
+    },
+    "mips64": {
+      "forms": 34,
+      "digest": "3df3c77a43aefaf5",
+      "operations": 158,
+      "sha256": "8beddc3399acb9e3d0f03aab1af2ca7a69588d0c7805cddc1296fac9ed88c214"
+    },
+    "mips64el": {
+      "forms": 34,
+      "digest": "3df3c77a43aefaf5",
+      "operations": 158,
+      "sha256": "1151824ca84813ca9cc98ee58c9d52ea1823418bedc7c2fb20397ff383c49edc"
+    },
+    "micromips64": {
+      "forms": 34,
+      "digest": "3df3c77a43aefaf5",
+      "operations": 158,
+      "sha256": "cb41a1d643d6e09e7cb89011ca34bc7dd13d9868bfb02aa8d3ccf28d1f0a7c82"
+    },
+    "micromips64el": {
+      "forms": 34,
+      "digest": "3df3c77a43aefaf5",
+      "operations": 158,
+      "sha256": "cea444275aeeba08a51e9157440d343dd3568e4d02275fd3f75ed97137e55dde"
+    },
+    "mips32r6": {
+      "forms": 59,
+      "digest": "2bc7b3feaa4005a2",
+      "operations": 260,
+      "sha256": "d49371452742dc2c1d8e0464fb435b0a3de1881fb346e22388c8ca3c45443192"
+    },
+    "mips32r6el": {
+      "forms": 59,
+      "digest": "2bc7b3feaa4005a2",
+      "operations": 260,
+      "sha256": "a3d880592f90bda7eda47ac8924535fb4138fa2e40f757f1d129a8f545bfa3b0"
+    },
+    "mips64r6": {
+      "forms": 83,
+      "digest": "972c71e80c54d5e2",
+      "operations": 497,
+      "sha256": "5cf3ea894c95ea6d9b18ab5dd17299b86d6d826ad5813b2aacfe68c2a8d939bd"
+    },
+    "mips64r6el": {
+      "forms": 83,
+      "digest": "972c71e80c54d5e2",
+      "operations": 497,
+      "sha256": "c30f3c9ef45596d4d49248a0865e79ccc1335f1907917860a281f586b1d5f237"
+    }
+  },
+  "physical_reference": {
+    "micro64_dsp_r2_gnu_sim": {
+      "lowir_form_pairs": {
+        "micromips64dsp": 113,
+        "micromips64dspel": 113,
+        "micromips64dspr2": 46,
+        "micromips64dspr2el": 46
+      },
+      "physical_dsp_executions": {
+        "micromips64dsp": 226,
+        "micromips64dspel": 226,
+        "micromips64dspr2": 92,
+        "micromips64dspr2el": 92
+      }
+    },
+    "gnu_simulator": "GNU GDB 17.1, mipsisa64r2-mti-elf",
+    "gnu_simulator_sha256": "25cd0e30b4e8e2f18748e598ee6173175268da8822b78323f6923eee8c47ff96",
+    "o32_compact_sequences": {
+      "executions": 2816,
+      "models": [
+        "Unicorn M14Kc",
+        "Unicorn MIPS32R6_GENERIC"
+      ],
+      "checked": "All 31 writable GPRs and next PC. Full SWM words and surrounding bytes compared with the ISA and the separate Linux QEMU harness."
+    },
+    "word_stores": {
+      "emulator": "QEMU linux-user 11.1.3, Debian 1:11.1.3+ds-1, linux/arm64",
+      "source": "unittests/lift/mips/micro-swm.S",
+      "cases_per_elf": 64,
+      "checked_words_per_case": 24,
+      "elf_sha256": {
+        "mipsr2": "3e1e91528053f0b102333e229dbe46f9d5e15272b97a2d7a2147dc673b162c00",
+        "mipsr6": "24bee78d240a132ca5823796d0596846ae660aa11459271f006b7347035fd1b2",
+        "mipselr2": "d2ab13e3ab6c51fc5fcf527c2e4d1a1acaec7864ee15a121aa118fb9c8ae9a08",
+        "mipselr6": "3164fa3e7ad17ef46ec4b2522fd43e4e668483ab69c4d3dee3c0ca2e2e74d36e"
+      },
+      "result": "exit 0 for all four ELFs"
+    },
+    "micro32r6_scalar": {
+      "physical_words_per_endian": 70,
+      "register_inputs_per_word": 4,
+      "byte_orders": 2,
+      "original_reference": "Unicorn MIPS32R6_GENERIC"
+    },
+    "micro64r6_doubleword_pairs": {
+      "forms_per_byte_order": 31,
+      "reference": "microMIPS64 MD00594 rev 6.05 physical words compared with GNU-assembled classic R6 forms. Original n64 microR6 execution unavailable."
+    },
+    "sleigh_n64_micro_r6": {
+      "version": "pypcode 4.1.0",
+      "context": {
+        "ISA_MODE": 1,
+        "RELP": 0
+      },
+      "results": {
+        "MIPS:BE:64:R6": {
+          "matching_mnemonics": 29,
+          "differences": {
+            "lldp": {
+              "word": "0x60445030",
+              "sleigh_mnemonic": "lldx"
+            },
+            "scdp": {
+              "word": "0x6044d030",
+              "sleigh_mnemonic": "scdx"
+            }
+          }
+        },
+        "MIPS:LE:64:R6": {
+          "matching_mnemonics": 29,
+          "differences": {
+            "lldp": {
+              "word": "0x60445030",
+              "sleigh_mnemonic": "lldx"
+            },
+            "scdp": {
+              "word": "0x6044d030",
+              "sleigh_mnemonic": "scdx"
+            }
+          }
+        }
+      },
+      "scope": "Disassembly of the 31 MicroMIPS64Release6 test words. MD00594 revision 6.05 removes LLDX/SCDX and specifies LLDP/SCDP."
+    }
+  },
+  "source_execution": {
+    "profiles": {
+      "mips64dsp": {
+        "source": "mips64r2",
+        "rebuilt": "mips64r2",
+        "builds": 4,
+        "executions": 80
+      },
+      "mips64dspel": {
+        "source": "mips64r2",
+        "rebuilt": "mips64r2",
+        "builds": 4,
+        "executions": 80
+      },
+      "mips64dspr2": {
+        "source": "mips64r2",
+        "rebuilt": "mips64r2",
+        "builds": 4,
+        "executions": 80
+      },
+      "mips64dspr2el": {
+        "source": "mips64r2",
+        "rebuilt": "mips64r2",
+        "builds": 4,
+        "executions": 80
+      },
+      "micromipsdsp": {
+        "source": "mips32r2",
+        "rebuilt": "mips32r2",
+        "builds": 4,
+        "executions": 80
+      },
+      "micromipsdspel": {
+        "source": "mips32r2",
+        "rebuilt": "mips32r2",
+        "builds": 4,
+        "executions": 80
+      },
+      "micromipsdspr2": {
+        "source": "mips32r2",
+        "rebuilt": "mips32r2",
+        "builds": 4,
+        "executions": 80
+      },
+      "micromipsdspr2el": {
+        "source": "mips32r2",
+        "rebuilt": "mips32r2",
+        "builds": 4,
+        "executions": 80
+      },
+      "mips64dspindex": {
+        "source": "mips64r2",
+        "rebuilt": "mips64r2",
+        "builds": 4,
+        "executions": 64
+      },
+      "mips64dspindexel": {
+        "source": "mips64r2",
+        "rebuilt": "mips64r2",
+        "builds": 4,
+        "executions": 64
+      },
+      "mips64dspcompare": {
+        "source": "mips64r2",
+        "rebuilt": "mips64r2",
+        "builds": 4,
+        "executions": 80
+      },
+      "mips64dspcompareel": {
+        "source": "mips64r2",
+        "rebuilt": "mips64r2",
+        "builds": 4,
+        "executions": 80
+      },
+      "micromipsmsa": {
+        "source": "mips32r5",
+        "rebuilt": "mips32r5",
+        "builds": 4,
+        "executions": 80
+      },
+      "micromipsmsael": {
+        "source": "mips32r5",
+        "rebuilt": "mips32r5",
+        "builds": 4,
+        "executions": 80
+      },
+      "micromips32r6": {
+        "source": "mips32r6",
+        "rebuilt": "mips32r2",
+        "builds": 4,
+        "executions": 80
+      },
+      "micromips32r6el": {
+        "source": "mips32r6",
+        "rebuilt": "mips32r2",
+        "builds": 4,
+        "executions": 80
+      },
+      "micromips32r6branch": {
+        "source": "mips32r6",
+        "rebuilt": "mips32r2",
+        "builds": 4,
+        "executions": 80
+      },
+      "micromips32r6branchel": {
+        "source": "mips32r6",
+        "rebuilt": "mips32r2",
+        "builds": 4,
+        "executions": 80
+      },
+      "micromips32r6frame": {
+        "source": "mips32r6",
+        "rebuilt": "mips32r2",
+        "builds": 4,
+        "executions": 80
+      },
+      "micromips32r6frameel": {
+        "source": "mips32r6",
+        "rebuilt": "mips32r2",
+        "builds": 4,
+        "executions": 80
+      },
+      "mips32r6": {
+        "source": "mips32r6",
+        "rebuilt": "mips32r6",
+        "builds": 4,
+        "executions": 80
+      },
+      "mips32r6el": {
+        "source": "mips32r6",
+        "rebuilt": "mips32r6",
+        "builds": 4,
+        "executions": 80
+      },
+      "mips32r6div": {
+        "source": "mips32r6",
+        "rebuilt": "mips32r6",
+        "builds": 4,
+        "executions": 72
+      },
+      "mips32r6divel": {
+        "source": "mips32r6",
+        "rebuilt": "mips32r6",
+        "builds": 4,
+        "executions": 72
+      },
+      "mips32r6branch": {
+        "source": "mips32r6",
+        "rebuilt": "mips32r6",
+        "builds": 4,
+        "executions": 80
+      },
+      "mips32r6branchel": {
+        "source": "mips32r6",
+        "rebuilt": "mips32r6",
+        "builds": 4,
+        "executions": 80
+      },
+      "mips32r6nal": {
+        "source": "mips32r6",
+        "rebuilt": "mips32r6",
+        "builds": 4,
+        "executions": 80
+      },
+      "mips32r6nalel": {
+        "source": "mips32r6",
+        "rebuilt": "mips32r6",
+        "builds": 4,
+        "executions": 80
+      },
+      "mips64r6": {
+        "source": "mips64r6",
+        "rebuilt": "mips64r6",
+        "builds": 4,
+        "executions": 80
+      },
+      "mips64r6el": {
+        "source": "mips64r6",
+        "rebuilt": "mips64r6",
+        "builds": 4,
+        "executions": 80
+      },
+      "mips64r6div": {
+        "source": "mips64r6",
+        "rebuilt": "mips64r6",
+        "builds": 4,
+        "executions": 72
+      },
+      "mips64r6divel": {
+        "source": "mips64r6",
+        "rebuilt": "mips64r6",
+        "builds": 4,
+        "executions": 72
+      },
+      "mips64r6branch": {
+        "source": "mips64r6",
+        "rebuilt": "mips64r6",
+        "builds": 4,
+        "executions": 80
+      },
+      "mips64r6branchel": {
+        "source": "mips64r6",
+        "rebuilt": "mips64r6",
+        "builds": 4,
+        "executions": 80
+      },
+      "mips64r6nal": {
+        "source": "mips64r6",
+        "rebuilt": "mips64r6",
+        "builds": 4,
+        "executions": 80
+      },
+      "mips64r6nalel": {
+        "source": "mips64r6",
+        "rebuilt": "mips64r6",
+        "builds": 4,
+        "executions": 80
+      }
+    },
+    "total_profile_builds": 144,
+    "total_profile_cases": 2816,
+    "micro_r2_leaves": {
+      "groups": 28,
+      "cases": 236,
+      "source_results_sha256": "b988cf5b521e79bc41e0f8d856c545753758832e648bf796e86a4f2099cff43a"
+    },
+    "classic_merge_store_word": {
+      "groups": 8,
+      "cases": 192,
+      "source_results_sha256": "9b70c8406977538de908739b869c1c51b5db3808b921cecf12835e3ba8b834d7"
+    },
+    "ubus": {
+      "firmware_elf_sha256": "6e1129aa58cb398a2453876ea4aa2395feecc84ecf78ed8ab43efd534b40e475",
+      "address": "0x4012d0",
+      "original_cases": 12,
+      "outputs": [
+        {
+          "backend": "highc",
+          "optimization": "-O0",
+          "source_sha256": "746482c701b92ddc0e77a202028fe20ec48232597fc05dbf175209dae56158e4",
+          "elf_sha256": "29f793d11f3a0db1c58d2fb36606a99f40b5acee4838c327ca50170dde3b2cef",
+          "cases_passed": 12
+        },
+        {
+          "backend": "highc",
+          "optimization": "-O2",
+          "source_sha256": "746482c701b92ddc0e77a202028fe20ec48232597fc05dbf175209dae56158e4",
+          "elf_sha256": "eb49482494d617cfbae03916a30fb48cac4f0a764b10dd86a9a3ef17ac6a4f93",
+          "cases_passed": 12
+        },
+        {
+          "backend": "llvmc",
+          "optimization": "-O0",
+          "source_sha256": "dcba6c7b30feaf90fa02f2229d075e0dd609de5ab218770f5bb52bb094d7d349",
+          "elf_sha256": "d226f494a4e9841c5e072c1c98247f7c4bd30db5fcb7659e2510357fad6f4565",
+          "cases_passed": 12
+        },
+        {
+          "backend": "llvmc",
+          "optimization": "-O2",
+          "source_sha256": "dcba6c7b30feaf90fa02f2229d075e0dd609de5ab218770f5bb52bb094d7d349",
+          "elf_sha256": "23ba2ffc323c3f5621f2a64a27aae6a3a9a9107f07ea70fae7c2b84d2240edc0",
+          "cases_passed": 12
+        }
+      ],
+      "reference": "Official Archer C7 V5 US firmware. Original CPU execution and rebuilt native C used controlled ABI imports."
+    }
+  },
+  "paired_performance": {
+    "samples_per_variant": 15,
+    "repeats": 30000,
+    "inputs": {
+      "micromips": {
+        "functions": [
+          "mips_add",
+          "mips_load",
+          "mips_store",
+          "mips_stack",
+          "mips_branch_capture"
+        ],
+        "instructions": 19,
+        "operations": 49,
+        "sha256": "d3f77f4f8d0f1c28c1eece2dceb554c34d26cadc0bf83e403f04a05ba35967f6"
+      },
+      "mips16": {
+        "functions": [
+          "m16_add",
+          "m16_unsigned",
+          "m16_logic",
+          "m16_slot",
+          "m16_memory",
+          "m16_stack"
+        ],
+        "instructions": 21,
+        "operations": 55,
+        "sha256": "c4ec3219f426053e44892132602906a005b6d3c75028332bbee806378d4f0651"
+      },
+      "micromipsel": {
+        "functions": [
+          "mips_add",
+          "mips_load",
+          "mips_store",
+          "mips_stack",
+          "mips_branch_capture"
+        ],
+        "instructions": 19,
+        "operations": 49,
+        "sha256": "9289479df5882dab701d4f69714e9c403f5131c0cd3527c8b5a7e5893fe4ca38"
+      },
+      "mips16el": {
+        "functions": [
+          "m16_add",
+          "m16_unsigned",
+          "m16_logic",
+          "m16_slot",
+          "m16_memory",
+          "m16_stack"
+        ],
+        "instructions": 21,
+        "operations": 55,
+        "sha256": "6bf26403c9b29524ad2175b5bc9b22667103bf69f456af6e244eabcfb19362fa"
+      }
+    },
+    "jobs": [
+      {
+        "job": "micromips-capstone",
+        "cpu_A_median": 0.046456,
+        "cpu_B_median": 0.047114,
+        "paired_cpu_delta_percent_median": -0.2477559806669194,
+        "paired_cpu_delta_percent_range": [
+          -18.223699662156058,
+          12.422449174381978
+        ],
+        "wall_A_median": 0.06704820797313005,
+        "wall_B_median": 0.0800745829474181,
+        "rss_A_median": 2097152,
+        "rss_B_median": 2064384
+      },
+      {
+        "job": "micromips-decode",
+        "cpu_A_median": 0.046547,
+        "cpu_B_median": 0.047642,
+        "paired_cpu_delta_percent_median": 4.2266736492973855,
+        "paired_cpu_delta_percent_range": [
+          -10.42884807008969,
+          26.881786268266804
+        ],
+        "wall_A_median": 0.05875074991490692,
+        "wall_B_median": 0.06284004193730652,
+        "rss_A_median": 2097152,
+        "rss_B_median": 2064384
+      },
+      {
+        "job": "micromips-lift",
+        "cpu_A_median": 0.111537,
+        "cpu_B_median": 0.112345,
+        "paired_cpu_delta_percent_median": 2.129572139487901,
+        "paired_cpu_delta_percent_range": [
+          -7.524323790395593,
+          11.64679085959779
+        ],
+        "wall_A_median": 0.242096959031187,
+        "wall_B_median": 0.2545431669568643,
+        "rss_A_median": 2129920,
+        "rss_B_median": 2113536
+      },
+      {
+        "job": "micromipsel-capstone",
+        "cpu_A_median": 0.045948,
+        "cpu_B_median": 0.045573,
+        "paired_cpu_delta_percent_median": -1.4674058655015476,
+        "paired_cpu_delta_percent_range": [
+          -11.923957194993717,
+          16.80620740076886
+        ],
+        "wall_A_median": 0.06126741704065353,
+        "wall_B_median": 0.0575373750180006,
+        "rss_A_median": 2097152,
+        "rss_B_median": 2064384
+      },
+      {
+        "job": "micromipsel-decode",
+        "cpu_A_median": 0.045974,
+        "cpu_B_median": 0.046528,
+        "paired_cpu_delta_percent_median": 1.285197911553393,
+        "paired_cpu_delta_percent_range": [
+          -3.9962398161688006,
+          13.621748026892732
+        ],
+        "wall_A_median": 0.05746799998451024,
+        "wall_B_median": 0.058515749988146126,
+        "rss_A_median": 2097152,
+        "rss_B_median": 2064384
+      },
+      {
+        "job": "micromipsel-lift",
+        "cpu_A_median": 0.107668,
+        "cpu_B_median": 0.108607,
+        "paired_cpu_delta_percent_median": -0.12984965265218085,
+        "paired_cpu_delta_percent_range": [
+          -9.115137639293824,
+          9.058914280204423
+        ],
+        "wall_A_median": 0.12896366603672504,
+        "wall_B_median": 0.13417312502861023,
+        "rss_A_median": 2129920,
+        "rss_B_median": 2113536
+      },
+      {
+        "job": "mips16-capstone",
+        "cpu_A_median": 0.046269,
+        "cpu_B_median": 0.045942,
+        "paired_cpu_delta_percent_median": 1.1260384958688974,
+        "paired_cpu_delta_percent_range": [
+          -11.35892942488449,
+          11.386972835733712
+        ],
+        "wall_A_median": 0.05924641597084701,
+        "wall_B_median": 0.0592035420704633,
+        "rss_A_median": 2129920,
+        "rss_B_median": 2031616
+      },
+      {
+        "job": "mips16-decode",
+        "cpu_A_median": 0.048565,
+        "cpu_B_median": 0.051761,
+        "paired_cpu_delta_percent_median": 7.232113005683716,
+        "paired_cpu_delta_percent_range": [
+          -18.64751743947477,
+          15.105238170596614
+        ],
+        "wall_A_median": 0.06591466604731977,
+        "wall_B_median": 0.07115383294876665,
+        "rss_A_median": 2064384,
+        "rss_B_median": 2064384
+      },
+      {
+        "job": "mips16-lift",
+        "cpu_A_median": 0.130042,
+        "cpu_B_median": 0.130592,
+        "paired_cpu_delta_percent_median": -0.6105719690561395,
+        "paired_cpu_delta_percent_range": [
+          -7.199790551547592,
+          7.209914543760898
+        ],
+        "wall_A_median": 0.31782737490721047,
+        "wall_B_median": 0.26629375002812594,
+        "rss_A_median": 2113536,
+        "rss_B_median": 2097152
+      },
+      {
+        "job": "mips16el-capstone",
+        "cpu_A_median": 0.048856,
+        "cpu_B_median": 0.048146,
+        "paired_cpu_delta_percent_median": -4.241328291961199,
+        "paired_cpu_delta_percent_range": [
+          -14.833865995953033,
+          35.08809270426865
+        ],
+        "wall_A_median": 0.06575324991717935,
+        "wall_B_median": 0.06480683304835111,
+        "rss_A_median": 2064384,
+        "rss_B_median": 2031616
+      },
+      {
+        "job": "mips16el-decode",
+        "cpu_A_median": 0.050887,
+        "cpu_B_median": 0.050253,
+        "paired_cpu_delta_percent_median": -3.8310321053906526,
+        "paired_cpu_delta_percent_range": [
+          -11.666188495194374,
+          18.013189573955835
+        ],
+        "wall_A_median": 0.06632670806720853,
+        "wall_B_median": 0.06300433399155736,
+        "rss_A_median": 2064384,
+        "rss_B_median": 2031616
+      },
+      {
+        "job": "mips16el-lift",
+        "cpu_A_median": 0.126022,
+        "cpu_B_median": 0.127782,
+        "paired_cpu_delta_percent_median": 0.32454650775259886,
+        "paired_cpu_delta_percent_range": [
+          -8.294968576847273,
+          12.76952361700694
+        ],
+        "wall_A_median": 0.30110316607169807,
+        "wall_B_median": 0.31971187493763864,
+        "rss_A_median": 2179072,
+        "rss_B_median": 2097152
+      },
+      {
+        "job": "ubus-call-highc-1",
+        "cpu_A_median": 0.037112,
+        "cpu_B_median": 0.036766,
+        "paired_cpu_delta_percent_median": -0.4935808238599071,
+        "paired_cpu_delta_percent_range": [
+          -13.914272256241155,
+          15.951417004048562
+        ],
+        "wall_A_median": 0.04759487498085946,
+        "wall_B_median": 0.04982883296906948,
+        "rss_A_median": 32620544,
+        "rss_B_median": 33308672
+      },
+      {
+        "job": "ubus-discovered-highc-1",
+        "cpu_A_median": 0.04385699999999999,
+        "cpu_B_median": 0.044531,
+        "paired_cpu_delta_percent_median": -2.592090296613858,
+        "paired_cpu_delta_percent_range": [
+          -14.028234649122794,
+          17.258948560253206
+        ],
+        "wall_A_median": 0.06247054098639637,
+        "wall_B_median": 0.058757125050760806,
+        "rss_A_median": 33374208,
+        "rss_B_median": 33931264
+      },
+      {
+        "job": "ubus-call-llvmc-1",
+        "cpu_A_median": 0.036858999999999996,
+        "cpu_B_median": 0.037960999999999995,
+        "paired_cpu_delta_percent_median": -5.2812764678560775,
+        "paired_cpu_delta_percent_range": [
+          -11.867419999025863,
+          12.016957443339304
+        ],
+        "wall_A_median": 0.048341042012907565,
+        "wall_B_median": 0.05106149998027831,
+        "rss_A_median": 37208064,
+        "rss_B_median": 37617664
+      },
+      {
+        "job": "ubus-discovered-llvmc-1",
+        "cpu_A_median": 0.041287,
+        "cpu_B_median": 0.039026,
+        "paired_cpu_delta_percent_median": -2.101526262600084,
+        "paired_cpu_delta_percent_range": [
+          -9.964737208242392,
+          10.539583628381234
+        ],
+        "wall_A_median": 0.053143750061281025,
+        "wall_B_median": 0.05680216709151864,
+        "rss_A_median": 37437440,
+        "rss_B_median": 37683200
+      },
+      {
+        "job": "ubus-call-highc-default",
+        "cpu_A_median": 0.035404,
+        "cpu_B_median": 0.034137,
+        "paired_cpu_delta_percent_median": -1.7551462621885117,
+        "paired_cpu_delta_percent_range": [
+          -12.604378244188673,
+          13.584928193950962
+        ],
+        "wall_A_median": 0.04222779197152704,
+        "wall_B_median": 0.04362916690297425,
+        "rss_A_median": 32538624,
+        "rss_B_median": 33210368
+      },
+      {
+        "job": "ubus-discovered-highc-default",
+        "cpu_A_median": 0.043144999999999996,
+        "cpu_B_median": 0.04317,
+        "paired_cpu_delta_percent_median": 1.3241538129392882,
+        "paired_cpu_delta_percent_range": [
+          -15.335553057165086,
+          22.113028195162986
+        ],
+        "wall_A_median": 0.05081966600846499,
+        "wall_B_median": 0.051171707920730114,
+        "rss_A_median": 33456128,
+        "rss_B_median": 34095104
+      },
+      {
+        "job": "ubus-call-llvmc-default",
+        "cpu_A_median": 0.036182,
+        "cpu_B_median": 0.034163,
+        "paired_cpu_delta_percent_median": -5.8647946492731196,
+        "paired_cpu_delta_percent_range": [
+          -21.506569055189917,
+          15.206103327241616
+        ],
+        "wall_A_median": 0.04432324995286763,
+        "wall_B_median": 0.04240183299407363,
+        "rss_A_median": 37093376,
+        "rss_B_median": 37486592
+      },
+      {
+        "job": "ubus-discovered-llvmc-default",
+        "cpu_A_median": 0.037959,
+        "cpu_B_median": 0.035987,
+        "paired_cpu_delta_percent_median": -1.795606494746893,
+        "paired_cpu_delta_percent_range": [
+          -13.958887545344624,
+          10.55476159542681
+        ],
+        "wall_A_median": 0.045616290997713804,
+        "wall_B_median": 0.0464478749781847,
+        "rss_A_median": 37470208,
+        "rss_B_median": 37732352
+      }
+    ],
+    "toolchain_inputs_sha256": {
+      "A": "802d151efa91757d769314bcb06ed410dabc80b01865ab8fb64b1ae7102af9ca",
+      "B": "802d151efa91757d769314bcb06ed410dabc80b01865ab8fb64b1ae7102af9ca"
+    },
+    "limits": "Shared host, no CPU affinity pinning. Direct Capstone is a decode-only comparator; added word guards/new instruction forms are excluded from same-output speedup claims. No world-leading claim."
+  },
+  "sleigh_performance": {
+    "pypcode": "4.1.0",
+    "samples": 9,
+    "repeats": 128,
+    "profiles": {
+      "micromips": {
+        "language": "MIPS:BE:32:micro",
+        "sha256": "bd42f5dcd9a60efb3fc30796929ddcb920ddb106f169d1dd7bf53d74feec20b0",
+        "functions": [
+          "mips_add",
+          "mips_load",
+          "mips_store",
+          "mips_branch_capture"
+        ],
+        "excluded": {
+          "mips_stack": {
+            "disassembly": [
+              [
+                65536,
+                2
+              ],
+              [
+                65538,
+                2
+              ],
+              [
+                65540,
+                2
+              ],
+              [
+                65542,
+                2
+              ],
+              [
+                65544,
+                2
+              ],
+              [
+                65546,
+                4
+              ]
+            ],
+            "pcode_source_spans": [
+              [
+                65536,
+                2
+              ],
+              [
+                65538,
+                2
+              ],
+              [
+                65540,
+                2
+              ],
+              [
+                65542,
+                2
+              ],
+              [
+                65544,
+                2
+              ],
+              [
+                65546,
+                2
+              ],
+              [
+                65548,
+                2
+              ]
+            ]
+          }
+        },
+        "instructions_per_sample": 212992,
+        "neverd_low_ops_per_batch": 4352,
+        "sleigh_pcode_ops_per_batch": 7168,
+        "samples_cpu_seconds": {
+          "neverd": [
+            0.039928,
+            0.044278,
+            0.036775,
+            0.048323,
+            0.042055,
+            0.042311,
+            0.03753,
+            0.040193,
+            0.040095
+          ],
+          "sleigh": [
+            0.18637600000000001,
+            0.18250200000000005,
+            0.18523699999999999,
+            0.187411,
+            0.197639,
+            0.187017,
+            0.18869099999999994,
+            0.18489299999999997,
+            0.18981899999999996
+          ]
+        },
+        "median_instructions_per_cpu_second": {
+          "neverd": 5299231,
+          "sleigh": 1138891
+        }
+      },
+      "micromipsel": {
+        "language": "MIPS:LE:32:micro",
+        "sha256": "6c41d59f82127e1438fda51e9201c1b1f1756961758d6292a5ea9dfdb40686a1",
+        "functions": [
+          "mips_add",
+          "mips_load",
+          "mips_store",
+          "mips_branch_capture"
+        ],
+        "excluded": {
+          "mips_stack": {
+            "disassembly": [
+              [
+                65536,
+                2
+              ],
+              [
+                65538,
+                2
+              ],
+              [
+                65540,
+                2
+              ],
+              [
+                65542,
+                2
+              ],
+              [
+                65544,
+                2
+              ],
+              [
+                65546,
+                4
+              ]
+            ],
+            "pcode_source_spans": [
+              [
+                65536,
+                2
+              ],
+              [
+                65538,
+                2
+              ],
+              [
+                65540,
+                2
+              ],
+              [
+                65542,
+                2
+              ],
+              [
+                65544,
+                2
+              ],
+              [
+                65546,
+                2
+              ],
+              [
+                65548,
+                2
+              ]
+            ]
+          }
+        },
+        "instructions_per_sample": 212992,
+        "neverd_low_ops_per_batch": 4352,
+        "sleigh_pcode_ops_per_batch": 7168,
+        "samples_cpu_seconds": {
+          "neverd": [
+            0.039121,
+            0.03714,
+            0.037164,
+            0.039289,
+            0.037411,
+            0.040526,
+            0.041189,
+            0.041145,
+            0.042785
+          ],
+          "sleigh": [
+            0.18584500000000004,
+            0.1986920000000003,
+            0.19172900000000004,
+            0.17961500000000008,
+            0.182944,
+            0.17720100000000016,
+            0.192596,
+            0.18477299999999985,
+            0.18778700000000015
+          ]
+        },
+        "median_instructions_per_cpu_second": {
+          "neverd": 5421161,
+          "sleigh": 1146073
+        }
+      },
+      "mips16": {
+        "language": "MIPS:BE:32:default",
+        "sha256": "c4ec3219f426053e44892132602906a005b6d3c75028332bbee806378d4f0651",
+        "functions": [
+          "m16_add",
+          "m16_unsigned",
+          "m16_logic",
+          "m16_slot",
+          "m16_memory",
+          "m16_stack"
+        ],
+        "excluded": {},
+        "instructions_per_sample": 344064,
+        "neverd_low_ops_per_batch": 7040,
+        "sleigh_pcode_ops_per_batch": 10240,
+        "samples_cpu_seconds": {
+          "neverd": [
+            0.066778,
+            0.065441,
+            0.066447,
+            0.06947,
+            0.066737,
+            0.066959,
+            0.07063,
+            0.070477,
+            0.066116
+          ],
+          "sleigh": [
+            0.31800799999999985,
+            0.30541899999999966,
+            0.30881200000000053,
+            0.3230379999999995,
+            0.3181130000000003,
+            0.32723699999999933,
+            0.3287130000000005,
+            0.31531399999999987,
+            0.3208459999999995
+          ]
+        },
+        "median_instructions_per_cpu_second": {
+          "neverd": 5152356,
+          "sleigh": 1081578
+        }
+      },
+      "mips16el": {
+        "language": "MIPS:LE:32:default",
+        "sha256": "6bf26403c9b29524ad2175b5bc9b22667103bf69f456af6e244eabcfb19362fa",
+        "functions": [
+          "m16_add",
+          "m16_unsigned",
+          "m16_logic",
+          "m16_slot",
+          "m16_memory",
+          "m16_stack"
+        ],
+        "excluded": {},
+        "instructions_per_sample": 344064,
+        "neverd_low_ops_per_batch": 7040,
+        "sleigh_pcode_ops_per_batch": 10240,
+        "samples_cpu_seconds": {
+          "neverd": [
+            0.067138,
+            0.07162,
+            0.061896,
+            0.064158,
+            0.064398,
+            0.067807,
+            0.072129,
+            0.061127,
+            0.061967
+          ],
+          "sleigh": [
+            0.3214990000000002,
+            0.32314799999999977,
+            0.31870699999999985,
+            0.3222529999999999,
+            0.3149160000000002,
+            0.30892199999999903,
+            0.313858999999999,
+            0.30638199999999927,
+            0.3471480000000007
+          ]
+        },
+        "median_instructions_per_cpu_second": {
+          "neverd": 5342775,
+          "sleigh": 1079562
+        }
+      }
+    }
+  },
+  "added_profile_throughput": {
+    "samples": 7,
+    "repeats": 2000,
+    "profiles": {
+      "micromips64dsp": {
+        "semantic_forms": 113,
+        "sha256": "57b55ead137abcca9b0a362b07e5aca791781ce02d5ae2535982761cb650774b",
+        "decode": {
+          "median_instructions_per_cpu_second": 10532202,
+          "range": [
+            9981671,
+            11680492
+          ],
+          "digest": "9a672566aa8ac18f",
+          "instructions_per_repeat": 226
+        },
+        "lift": {
+          "median_instructions_per_cpu_second": 1835116,
+          "range": [
+            1806288,
+            1858270
+          ],
+          "digest": "890643bc68ab1a20",
+          "instructions_per_repeat": 226
+        }
+      },
+      "micromips64dspel": {
+        "semantic_forms": 113,
+        "sha256": "3f63d2c77c808dd566554f7b08d4bd4861a34fd6ee7f2a7ac02849f1482662ac",
+        "decode": {
+          "median_instructions_per_cpu_second": 10667170,
+          "range": [
+            10298004,
+            11660003
+          ],
+          "digest": "9a672566aa8ac18f",
+          "instructions_per_repeat": 226
+        },
+        "lift": {
+          "median_instructions_per_cpu_second": 1859355,
+          "range": [
+            1823684,
+            1978490
+          ],
+          "digest": "890643bc68ab1a20",
+          "instructions_per_repeat": 226
+        }
+      },
+      "micromips64dspr2": {
+        "semantic_forms": 46,
+        "sha256": "ee0416b7529d944aea3d6d86f8a3d6a710082d402f79720d27f922861bbfd332",
+        "decode": {
+          "median_instructions_per_cpu_second": 11858726,
+          "range": [
+            9559435,
+            13299602
+          ],
+          "digest": "3890a421c6c41b74",
+          "instructions_per_repeat": 92
+        },
+        "lift": {
+          "median_instructions_per_cpu_second": 1851293,
+          "range": [
+            1755842,
+            1970296
+          ],
+          "digest": "2c5b7ff3e3a184ce",
+          "instructions_per_repeat": 92
+        }
+      },
+      "micromips64dspr2el": {
+        "semantic_forms": 46,
+        "sha256": "f90e9884258277fd42e55351abc7fd7e83dc30fcd8ec0798fcaaa1fc0ec028a3",
+        "decode": {
+          "median_instructions_per_cpu_second": 11463460,
+          "range": [
+            10271296,
+            11862549
+          ],
+          "digest": "3890a421c6c41b74",
+          "instructions_per_repeat": 92
+        },
+        "lift": {
+          "median_instructions_per_cpu_second": 1871992,
+          "range": [
+            1829626,
+            1967073
+          ],
+          "digest": "2c5b7ff3e3a184ce",
+          "instructions_per_repeat": 92
+        }
+      },
+      "micromipsmsa": {
+        "semantic_forms": 526,
+        "sha256": "66d1288fda2e40a35e59f0ca9d4d0d31cee51feee6101852ec13922ffe84d77b",
+        "decode": {
+          "median_instructions_per_cpu_second": 10645403,
+          "range": [
+            10092047,
+            10987748
+          ],
+          "digest": "59dd5321bbc6441d",
+          "instructions_per_repeat": 1052
+        },
+        "lift": {
+          "median_instructions_per_cpu_second": 1365701,
+          "range": [
+            1324671,
+            1392797
+          ],
+          "digest": "c064a06e1f2cd113",
+          "instructions_per_repeat": 1052
+        }
+      },
+      "micromipsmsael": {
+        "semantic_forms": 526,
+        "sha256": "a4c470ec14852215f0273e67cefe9ee70afcc6d5b8c2cb40e8c0e3742d773331",
+        "decode": {
+          "median_instructions_per_cpu_second": 10861822,
+          "range": [
+            10311047,
+            11747037
+          ],
+          "digest": "59dd5321bbc6441d",
+          "instructions_per_repeat": 1052
+        },
+        "lift": {
+          "median_instructions_per_cpu_second": 1339381,
+          "range": [
+            1307405,
+            1402867
+          ],
+          "digest": "c064a06e1f2cd113",
+          "instructions_per_repeat": 1052
+        }
+      },
+      "micromips64": {
+        "semantic_forms": 34,
+        "sha256": "cb41a1d643d6e09e7cb89011ca34bc7dd13d9868bfb02aa8d3ccf28d1f0a7c82",
+        "decode": {
+          "median_instructions_per_cpu_second": 9591650,
+          "range": [
+            7413464,
+            10434249
+          ],
+          "digest": "b5e12d5b64b6e910",
+          "instructions_per_repeat": 68
+        },
+        "lift": {
+          "median_instructions_per_cpu_second": 4447351,
+          "range": [
+            4042205,
+            4777462
+          ],
+          "digest": "3df3c77a43aefaf5",
+          "instructions_per_repeat": 68
+        }
+      },
+      "micromips64el": {
+        "semantic_forms": 34,
+        "sha256": "cea444275aeeba08a51e9157440d343dd3568e4d02275fd3f75ed97137e55dde",
+        "decode": {
+          "median_instructions_per_cpu_second": 8380060,
+          "range": [
+            7525870,
+            9535829
+          ],
+          "digest": "b5e12d5b64b6e910",
+          "instructions_per_repeat": 68
+        },
+        "lift": {
+          "median_instructions_per_cpu_second": 4504803,
+          "range": [
+            4132859,
+            4634520
+          ],
+          "digest": "3df3c77a43aefaf5",
+          "instructions_per_repeat": 68
+        }
+      },
+      "micromips64r6": {
+        "semantic_forms": 31,
+        "sha256": "550eced1360a5a0827fce4c7fbf814adcfcc49d3bb1d90dd3adc8c907becedca",
+        "decode": {
+          "median_instructions_per_cpu_second": 11911623,
+          "range": [
+            8315451,
+            13113367
+          ],
+          "digest": "37d26e94a082c291",
+          "instructions_per_repeat": 31
+        },
+        "lift": {
+          "median_instructions_per_cpu_second": 3881550,
+          "range": [
+            3100155,
+            4498295
+          ],
+          "digest": "0a25bd9b57fbe403",
+          "instructions_per_repeat": 31
+        }
+      },
+      "micromips64r6el": {
+        "semantic_forms": 31,
+        "sha256": "527907c5ecf1cb598389b2a04f9df0690b6f5b16e139bcb89ab8d8a4497909cb",
+        "decode": {
+          "median_instructions_per_cpu_second": 12020163,
+          "range": [
+            8164340,
+            13299013
+          ],
+          "digest": "37d26e94a082c291",
+          "instructions_per_repeat": 31
+        },
+        "lift": {
+          "median_instructions_per_cpu_second": 4058654,
+          "range": [
+            3671246,
+            4228041
+          ],
+          "digest": "0a25bd9b57fbe403",
+          "instructions_per_repeat": 31
+        }
+      }
+    }
+  },
+  "limits": [
+    "n64 microR6 doublewords were compared with classic R6 LowIR. Clang 22.1.6 rejects n64 microMIPS code generation for r2 and r6.",
+    "The o32 microR6 originals ran on the R6 generic core. The unchanged emitted C ran as microMIPS32r2/o32 in GNU sim.",
+    "MSA LowIR equivalence uses classic versus physical micro encodings. The native MSA reference is the classic P5600.",
+    "On the external speed check a function is excluded if SLEIGH disassembly and P-code physical spans disagree. Generated IR and state models differ across tools. Absolute profile throughput includes interleaved NOPs except for the 31-word n64 R6 corpus."
+  ],
+  "dev_integration": {
+    "tested_commit": "8a4a4eb70fb399f9baea15bcd49a618ba603abbe",
+    "dev_parent": "18e932eb11aff5484cf44abdb2bf2a5505055a40",
+    "capstone": "34d9185433e1b0c1e038f874fc95b25edbac6795",
+    "ctest": {
+      "tests": 779,
+      "failures": 0,
+      "skipped": 0,
+      "disabled": 0
+    },
+    "neverd_sha256": "3e3bc130749058fb5b88b407971a02441c0c0123d5f47a3c6b5095530e18aa63",
+    "replayed": [
+      "32 encoding profile fingerprints",
+      "636 GNU sim n64 DSP/DSPR2 original instruction executions",
+      "144 profile builds and 2816 executions",
+      "28 microMIPS source groups and 236 executions",
+      "8 classic merge-store groups and 192 executions",
+      "12 original Archer C7 ubus cases and 48 rebuilt cases including source and ELF hashes"
+    ]
+  }
+}

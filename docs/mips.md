@@ -2,7 +2,7 @@
 
 The experimental MIPS analysis path targets linked ELF programs with classic
 MIPS32/o32 and MIPS64/n64 instructions in either byte order. The profiles below
-cover classic Release 2, classic Release 6 integer instructions, microMIPS32,
+cover classic Release 2, classic Release 6 integer instructions, microMIPS32 and microMIPS64 integer profiles,
 MIPS16e32 and MIPS16e2, and Release 5/o32 MSA.
 The selected ELF profile determines register width, byte order, stack layout
 and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
@@ -47,8 +47,8 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   into a wider speculative read. Source lowering retains guest alignment bits
   when direct image data is rebound. Indexed merge reads into rebuilt image
   storage still require an explicit address contract.
-- `SWL`/`SWR` share a partial-store contract across classic and MIPS16e2
-  encodings. Only selected bytes are written; no neighboring read or whole-word
+- `SWL`/`SWR` share a partial-store contract across classic, microMIPS and
+  MIPS16e2 encodings. Only selected bytes are written; no neighboring read or whole-word
   read/modify/write is introduced. The emulator validates the full write span
   and observed source bytes before committing. Source image stores require a
   bounded writable backing and preserve guest alignment separately from its
@@ -119,7 +119,7 @@ have the extension a narrow C parameter would require. Declared source types
 remain a separate contract.
 
 The n32 ABI, historical MIPS I–V profiles,
-microMIPS64, scalar floating point, MSA/DSP forms beyond the slices below, privileged instructions and reservations outside the MIPS16e2 and classic Release 6 LowIR coverage below,
+scalar floating point, MSA/DSP forms beyond the slices below, privileged instructions and reservations outside the MIPS16e2 and classic Release 6 LowIR coverage below,
 doubleword merge stores (`SDL`/`SDR`), pre-R6 doubleword division and trapping arithmetic are not admitted by
 the current lifter. Unsupported instructions, missing slots and transfers in a
 delay slot produce errors, not replacement NOPs. Floating/aggregate source ABI
@@ -292,9 +292,10 @@ effects for zero destinations and still check the enabled state. The source runn
 original/generated disagreement with the independent expectations. Historical
 receipts below retain the zero-destination defect of the older reference.
 
-## microMIPS32 instruction and source boundaries
+## microMIPS instruction and source boundaries
 
-The loader accepts linked r2/o32 ELF with consistent microMIPS header and
+The loader accepts linked r2 and r6 microMIPS ELF for o32 and n64 in either
+byte order. It checks the ELF header against any available
 `.MIPS.abiflags` evidence. `st_other` supplies each defined function's encoding;
 an even `st_value` can name a microMIPS function. Entry tags, symbol ranges and
 incoming control-flow modes must agree. Mixed images retain local mode evidence
@@ -340,7 +341,41 @@ a subsequent toolchain/source-contract increment, not merely another opcode.
 The microMIPS operation and slot rules were checked against
 [microMIPS32 Volume II, revision 5.04](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00582-2B-microMIPS32-AFP-05.04.pdf)
 and the pinned [GNU simulator definitions](https://gnu.googlesource.com/binutils-gdb/+/d01e823438c7dc264d6885fbbfeace4d8955dcb7/sim/mips/micromips.igen).
-The lifter's admitted ISA remains r2; this reference does not admit later forms.
+On n64, tagged callable addresses, computed jumps, link registers and memory
+addresses retain all 64 bits. The r2 scalar subset adds doubleword arithmetic,
+shifts, rotates, bit fields, byte shuffles, LD/SD, LWU and the LDL/LDR merge
+loads. Both r2 widths also lift LWL/LWR and SWL/SWR with a signed 12-bit
+displacement. The source fixtures compare the returned word and surrounding
+bytes for aligned and unaligned pairs. Word DSP and DSPR2 instructions use
+the same revision 3.02 accumulator rules as classic n64. GNU as encodes the
+113 DSP and 46 DSPR2 forms in micro mode. Indexed doubleword LDX has a qualified classic encoding.
+
+microMIPS32r6 compact transfers use halfword displacements, the physical
+length of the instruction and tagged return links. A second branch may
+immediately follow a compact branch. JIC preserves the link register and
+JIALC writes it. Both scalar micro revisions lift NOT16, AND16, OR16,
+XOR16, the ANDI16 mask table and the four compact add-immediate forms.
+MOVEP copies both architectural registers. LWM16/SWM16 transfer saved
+registers followed by RA in address order. A later memory fault preserves
+earlier transfers. JRADDIUSP/JRCADDIUSP return to the tagged RA and add the
+encoded word offset to SP. The pre-R6 profile also reads HI/LO through MFHI16
+and MFLO16. The decoder and lifter also cover the R6 compact three-register
+word arithmetic, PC-relative operations, scalar and paired word reservations,
+selected RDHWR, CP0 word/high transfers, DI/EI, CACHE, PREF, EHB and PAUSE.
+The physical decoder corrects the register fields for LSA/ALIGN and signed
+nine-bit offsets for CACHE/PREF. The encoding source is the
+[microMIPS32 Instruction Set Reference Manual, revision 6.05](https://docs.alexrp.com/mips/micromips32_insns_v6_05.pdf).
+The compact register lists and pre-R6 merge fields were also checked against
+[Ghidra’s microMIPS SLEIGH definitions](https://github.com/NationalSecurityAgency/ghidra/blob/42db038f3c88c6bd7e9bedbb919138111f8b77fd/Ghidra/Processors/MIPS/data/languages/mipsmicro.sinc).
+
+The n64 Release 6 profile adds the doubleword multiply, high multiply, divide,
+remainder, count, shuffle and align encodings, DAHI/DATI/DAUI, DMFC0/DMTC0,
+LDPC and scalar/paired doubleword reservations. Shared integer, shift and
+load/store forms preserve 64-bit operands. Tests compare the compact words
+with GNU-assembled classic encodings at a PC above 4 GiB in both byte orders.
+The diagrams for DLSA and DSRA32 disagree with the opcode map. One candidate
+for each overlaps DINSM. NeverD rejects those ambiguous words in the R6 profile.
+See the [microMIPS64 Instruction Set Reference Manual, revision 6.05](https://docs.alexrp.com/mips/micromips64_insns_v6_05.pdf).
 
 ## MIPS16e32 integer and control subset
 
@@ -669,7 +704,8 @@ with the number of free physical registers. Native floating-point helpers
 require WRP clear because their scratch register numbers differ from the
 original. The vector execution profile requires MSA enabled with CU1/FR
 configured. General partitioned vector execution, disabled-unit exception
-delivery, scalar FPU, MSA64 and compressed MSA remain outside this profile. The operation and alias rules follow the
+delivery, scalar FPU and MSA64 remain outside this profile. microMIPS32r5/o32
+reuses these vector semantics. The operation and alias rules follow the
 [MIPS32 MSA manual, revision 1.12](https://docs.alexrp.com/mips/mips32_simd.pdf), sections ADDV, SUBV, CEQ, CLT/CLE, MIN/MAX,
 SLL/SRL/SRA, BCLR/BSET/BNEG, MULV/MADDV/MSUBV, MAX_A/MIN_A, ADD_A/ADDS_A, ADDS/SUBS, AVE/AVER,
 AND/OR/NOR/XOR, ADDVI/SUBVI, CEQI, CLTI/CLEI, MAXI/MINI,
@@ -735,7 +771,7 @@ callees. See the
 [testing guide](testing.md#mips-elf-analysis-and-source-roundtrips) for setup.
 A registered test is not a claim that it has passed on every host.
 
-Use `roundtrip.py --encoding micro` for the five microMIPS assembly leaves in
+Use `roundtrip.py --encoding micro` for the seven microMIPS assembly leaves in
 both byte orders and both C backends. The runner selects M14Kc, follows each ELF
 symbol's mode bit and recompiles each result for its original target. The
 BEQZ16 fixture specifies literal displacement bytes: the local-label spelling
@@ -1001,7 +1037,7 @@ in LowIR. A board supplies implemented CP0 views, including MVH support for
 high-word transfers. Selected performance registers use the encoded RDHWR
 selector. A cache request includes the ISA revision and full virtual address.
 Source generation currently declines live reservation and board-state effects.
-General privileged execution, scalar floating point, microMIPSr6 and optional
+General privileged execution, scalar floating point and optional
 Release 6 ASEs require additional coverage. The [testing guide](testing.md)
 covers the linked GNU fixtures. The encoding and execution rules follow the
 [MIPS64 Instruction Set Reference Manual, revision 6.06](https://docs.alexrp.com/mips/mips64_insns_v6_06.pdf).
@@ -1010,6 +1046,18 @@ The [MIPS64 DSP, microMIPS ASE and Release 6 qualification](evidence/mips64-micr
 records the linked big- and little-endian corpora, per-form comparisons and
 independent execution checks. Both C views were recompiled at `-O0` and
 `-O2`, including the Archer C7 V5 `ubus call` handler.
+
+The [microMIPS64 and compact R6 measurements](evidence/mips-micro64-compact-r6-2026-11-12.json)
+record 779 passing tests and 636 executions of physical n64 DSP/DSPR2
+instructions in GNU sim. The source tests include 144 builds of the profile
+kernels and compare the Archer C7 V5 handler on 12 original and 48 rebuilt
+cases. On an Apple M4 Max, the four o32 compressed instruction corpora with
+matching instruction boundaries reached 5.15–5.42 million instructions per CPU
+second in NeverD and 1.08–1.15 million in SLEIGH. Against the previous NeverD
+build on the full microMIPS corpus, the median paired big-endian CPU time
+increased by 4.23% for decode and 2.13% for lift. Individual paired timings
+varied in both directions. The receipt includes little-endian results, input
+hashes and the excluded SLEIGH delay-slot case.
 
 ## TP-Link firmware workflow
 

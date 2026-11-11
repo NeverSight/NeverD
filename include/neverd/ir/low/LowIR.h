@@ -770,7 +770,8 @@ struct LowControlTarget {
 /// target-mode contract, address width, or alignment is inconsistent.
 inline llvm::Expected<LowControlTarget>
 canonicalizeLowControlTarget(uint64_t RawTarget, InstructionMode SourceMode,
-                             LowInstructionTargetMode TargetMode) {
+                             LowInstructionTargetMode TargetMode,
+                             uint16_t AddressBytes = 4) {
   const auto Invalid =
       [](const char *Message) -> llvm::Expected<LowControlTarget> {
     return llvm::createStringError(llvm::errc::invalid_argument, "%s", Message);
@@ -794,7 +795,11 @@ canonicalizeLowControlTarget(uint64_t RawTarget, InstructionMode SourceMode,
                           isMIPSCompressedMode(SourceMode);
   if (RawTarget == InvalidVA)
     return Invalid("control target uses the invalid address");
-  if ((IsAArch32 || IsMIPSMode) &&
+  if ((IsAArch32 ||
+       (IsMIPSMode &&
+        (AddressBytes != 8 || SourceMode == InstructionMode::MIPS16 ||
+         TargetMode == LowInstructionTargetMode::MIPS16 ||
+         TargetMode == LowInstructionTargetMode::FromMIPS16TargetBit0))) &&
       RawTarget > std::numeric_limits<uint32_t>::max())
     return Invalid("32-bit control target exceeds its address width");
 

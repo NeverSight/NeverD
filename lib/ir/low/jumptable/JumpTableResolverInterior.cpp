@@ -468,8 +468,8 @@ bool CFGBuilder::resolveRelocatedInteriorBranch(const BinaryImage &Img,
   va_t Target = normalizeCodeAddress(RawTarget, Img.Arch, Img.Mode);
   std::optional<InstructionMode> MIPSMode;
   if (hasCompressedMIPSCode(Img.Mode)) {
-    auto Destination =
-        canonicalizeLowControlTarget(RawTarget, Rec.Mode, Rec.TargetMode);
+    auto Destination = canonicalizeLowControlTarget(
+        RawTarget, Rec.Mode, Rec.TargetMode, Img.getPointerSize());
     if (!Destination) {
       llvm::consumeError(Destination.takeError());
       return false;

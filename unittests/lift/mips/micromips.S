@@ -62,3 +62,21 @@ mips_branch_capture:
   jrc $31
 .end mips_branch_capture
 .size mips_branch_capture,.-mips_branch_capture
+
+.globl mips_merge_word
+.type mips_merge_word,@function
+.ent mips_merge_word
+mips_merge_word:
+  move $2,$5
+#ifdef __MIPSEL__
+  lwl $2,3($4)
+  lwr $2,0($4)
+#else
+  lwl $2,0($4)
+  lwr $2,3($4)
+#endif
+  jrc $31
+.end mips_merge_word
+.size mips_merge_word,.-mips_merge_word
+
+#include "merge-store-word.S"

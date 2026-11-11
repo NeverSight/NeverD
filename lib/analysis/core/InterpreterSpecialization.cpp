@@ -2196,9 +2196,9 @@ Specializer::uniqueSuccessor(const SpecializationInstruction &Instruction,
                           : std::optional<llvm::APInt>(llvm::APInt(64, Only));
   if (!Target || Target->getBitWidth() > 64)
     return std::nullopt;
-  auto Canonical = canonicalizeLowControlTarget(Target->getZExtValue(),
-                                                Instruction.Origin.Mode,
-                                                Instruction.Origin.TargetMode);
+  auto Canonical = canonicalizeLowControlTarget(
+      Target->getZExtValue(), Instruction.Origin.Mode,
+      Instruction.Origin.TargetMode, Ctx.width(Exec.branchTarget()) / 8);
   if (!Canonical) {
     fail(SpecializationStatus::UnresolvedControl,
          llvm::toString(Canonical.takeError()));
@@ -2512,7 +2512,8 @@ bool Specializer::emitTargets(
   };
   const auto destination = [&](uint64_t Address, SymRef Guard) -> int {
     auto Target = canonicalizeLowControlTarget(Address, Instruction.Origin.Mode,
-                                               Instruction.Origin.TargetMode);
+                                               Instruction.Origin.TargetMode,
+                                               Original.Inputs[0].Size);
     if (!Target) {
       fail(SpecializationStatus::UnresolvedControl,
            llvm::toString(Target.takeError()));
