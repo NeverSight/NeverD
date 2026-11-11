@@ -17,6 +17,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../pass/MedEntryStackOffsets.h"
+
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -862,6 +864,10 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
   }
 
   using ValueKey = med_calling_conv_detail::ValueKey;
+  // Apple Clang aligns an incoming 128-bit argument with a pointer mask.
+  // Capture these proofs before rewriting loads or moving operations.
+  MedEntryStackOffsets EntryOffsets(Func, TargetArch, Fmt);
+  llvm::DenseMap<ValueKey, int64_t> AlignedSlots;
   llvm::DenseMap<ValueKey, const MedOp *> UniqueDefs;
   llvm::DenseSet<ValueKey> AmbiguousDefs;
   for (const auto &Block : Func.Blocks)
@@ -869,6 +875,10 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
       if (Op.Output.isConst())
         continue;
       const ValueKey Key = med_calling_conv_detail::valueKey(Op.Output);
+      if (TargetArch == Arch::AArch64 && Fmt == BinaryFormat::MachO &&
+          Op.Opcode == NdOp::INT_AND)
+        if (auto Offset = EntryOffsets.query(Op.Output))
+          AlignedSlots.try_emplace(Key, *Offset);
       auto [It, Inserted] = UniqueDefs.try_emplace(Key, &Op);
       if (!Inserted && It->second != &Op)
         AmbiguousDefs.insert(Key);
@@ -931,6 +941,10 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
                  : std::nullopt;
     };
     switch (Def->Opcode) {
+    case NdOp::INT_AND:
+      if (auto It = AlignedSlots.find(Key); It != AlignedSlots.end())
+        return It->second;
+      return std::nullopt;
     case NdOp::COPY:
       if (Def->NumInputs >= 1) {
         const MedVar &In = Def->Inputs[0];

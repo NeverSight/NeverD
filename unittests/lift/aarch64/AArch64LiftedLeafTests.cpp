@@ -6,6 +6,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
 #include "neverd/backend/llvm/AArch64/LLVMAArch64ReturnProtection.h"
 #include "neverd/decode/Decoder.h"
@@ -99,6 +100,7 @@ void verifyTailTargets(llvm::Module &Module, MachOPatcher &Patcher,
 enum class LeafCheck {
   None,
   TailTarget,
+  StackArgument,
   ErrorResult,
   Global,
   FramedImport,
@@ -227,6 +229,19 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     AlteredPatcher.setImageContext(&*Altered);
     EXPECT_FALSE(
         AlteredPatcher.patch(Invalid, Rejected, Module, Image->Arch).Success);
+    EXPECT_FALSE(std::filesystem::exists(Rejected));
+  }
+  if (Check == LeafCheck::StackArgument) {
+    // Redirect the second incoming word to the preceding fixed carrier. The
+    // native instruction still has the same load width and destination.
+    auto Shifted = llvm::CloneModule(Module);
+    auto *F = Shifted->getFunction(kDifference);
+    ASSERT_NE(F, nullptr);
+    ASSERT_GE(F->arg_size(), kCount);
+    auto *Last = F->getArg(F->arg_size() - 1);
+    ASSERT_FALSE(Last->use_empty());
+    Last->replaceAllUsesWith(F->getArg(F->arg_size() - kCount));
+    EXPECT_FALSE(Patcher.patch(Input, Rejected, *Shifted, Image->Arch).Success);
     EXPECT_FALSE(std::filesystem::exists(Rejected));
   }
   if (Check == LeafCheck::FramedImport) {
@@ -434,6 +449,125 @@ void verifyPublishedDarwinExecutable(const char *SystemPath, int ExitCode) {
 #else
   GTEST_SKIP() << kUnavailable;
 #endif
+}
+
+// An independent variadic caller exercises the public machine entry. Read
+// the input as arm64e even on developer machines booted for ordinary arm64.
+void verifyVariadicEntry(const char *Optimization) {
+#if defined(__APPLE__) && defined(__aarch64__)
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kTemporary, Directory));
+  const std::filesystem::path Root(Directory.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Source = (Root / kSource).string();
+  const auto Input = (Root / kOriginal).string();
+  const auto Control = (Root / kControl).string();
+  const auto Caller = (Root / kDriverSource).string();
+  const auto Driver = (Root / kDriver).string();
+  const bool Native = std::getenv(kExecute);
+  const char *Target = Native ? kTarget : kHostTarget;
+  std::ofstream(Source) << kVariadicLeaves;
+  std::ofstream(Caller) << kExtendedVariadics << kVariadicCaller;
+  auto Library = [&](const std::string &File, const char *Triple,
+                     const std::string &Path) {
+    return llvm::sys::ExecuteAndWait(kCompiler, {kCompiler, kTargetFlag, Triple,
+                                                 Optimization, kOmitFrame,
+                                                 kDylib, File, kOut, Path});
+  };
+  ASSERT_EQ(Library(Source, kTarget, Input), 0);
+  ASSERT_EQ(
+      llvm::sys::ExecuteAndWait(kCompiler, {kCompiler, kTargetFlag, Target,
+                                            kOptimize, Caller, kOut, Driver}),
+      0);
+  if (!Native)
+    ASSERT_EQ(Library(Source, Target, Control), 0);
+  ASSERT_EQ(
+      llvm::sys::ExecuteAndWait(Driver, {Driver, Native ? Input : Control}), 0);
+
+  auto Image = Loader::create(BinaryFormat::MachO)->load(Input);
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  ASSERT_TRUE(Image->isArm64e());
+  llvm::LLVMContext Context;
+  PipelineOptions Options;
+  Options.LiftMode = true;
+  Options.EmitDumpOutput = false;
+  auto Lifted = Pipeline().run(*Image, Context, Options);
+  ASSERT_TRUE(Lifted.Success) << Lifted.Error;
+  ASSERT_TRUE(Lifted.LlvmModule);
+  auto &Module = *Lifted.LlvmModule;
+  ASSERT_TRUE(Module.getModuleFlag(kArm64eAnalysisModuleFlag));
+  auto *Walk = Module.getFunction(kDifference);
+  ASSERT_NE(Walk, nullptr);
+  ASSERT_TRUE(Walk->isVarArg());
+  ASSERT_TRUE(Walk->hasFnAttribute(llvm::Attribute::NoInline));
+  EXPECT_TRUE(llvm::any_of(*Walk, [](const auto &Block) {
+    return llvm::any_of(Block, [](const auto &I) {
+      const auto *Call = llvm::dyn_cast<llvm::IntrinsicInst>(&I);
+      return Call && Call->getIntrinsicID() == llvm::Intrinsic::sponentry;
+    });
+  }));
+  // Apple Clang requires its frontend's classic ABI flag for arm64e IR.
+  // The analysis marker stays attached throughout this compiler control.
+  // Older system Clang IR readers lack LLVM's target_mem refinement. Removing
+  // this optional optimizer promise preserves the function's instructions.
+  for (auto &F : Module)
+    F.removeFnAttr(llvm::Attribute::Memory);
+  // A stack protector moves the cursor's synthetic local away from the
+  // caller. An out-of-bounds local load can otherwise work by coincidence.
+  for (auto &F : Module)
+    if (!F.isDeclaration())
+      F.addFnAttr(llvm::Attribute::StackProtectReq);
+  Module.setTargetTriple(llvm::Triple(Target));
+  if (Native) {
+    llvm::IRBuilder<> B(Context);
+    auto *ABI = llvm::MDNode::get(
+        Context, {llvm::ConstantAsMetadata::get(B.getInt32(0)),
+                  llvm::ConstantAsMetadata::get(B.getFalse())});
+    Module.addModuleFlag(llvm::Module::AppendUnique, kClassicABI,
+                         llvm::MDNode::get(Context, {ABI}));
+  }
+  const auto IR = (Root / kLiftedIR).string();
+  const auto C = (Root / kLiftedC).string();
+  std::error_code Error;
+  llvm::raw_fd_ostream Stream(IR, Error);
+  ASSERT_FALSE(Error);
+  Module.print(Stream, nullptr);
+  Stream.close();
+  ASSERT_FALSE(Stream.has_error());
+  CEmitterOptions COptions;
+  COptions.PreserveLLVMFunctionTypes = true;
+  COptions.TheArch = Image->Arch;
+  COptions.Format = Image->Format;
+  ASSERT_TRUE(LLVMCEmitter().emitToFile(Module, C, COptions, nullptr, &*Image));
+  const auto Output = (Root / kOutput).string();
+  for (const auto &File : {IR, C}) {
+    SCOPED_TRACE(File);
+    ASSERT_EQ(Library(File, Target, Output), 0);
+    ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Output}), 0);
+  }
+  if (Native)
+    testing::Test::RecordProperty(kNativeImages, kCount + 1);
+#else
+  GTEST_SKIP() << kUnavailable;
+#endif
+}
+
+TEST(AArch64DarwinVariadic, OptimizedCalleeWalksTheNativeArgumentArea) {
+  verifyVariadicEntry(kOptimize);
+}
+
+TEST(AArch64DarwinVariadic, UnoptimizedCalleeHomesItsNativeArgumentCursor) {
+  verifyVariadicEntry(kUnoptimized);
+}
+
+TEST(AArch64DarwinVariadic, FramelessStackLoadsSurviveImagePublication) {
+  verifyPublishedLeaves(kStackLoadLeaves, kVariadicCaller, kAssemblyName, {},
+                        LeafCheck::StackArgument);
+}
+
+TEST(AArch64DarwinVariadic, CompactLeavesElideOnlyTheUnusedStackReservation) {
+  verifyPublishedLeaves(kReservedStackLeaves, kVariadicCaller, kSource,
+                        kReservedFrame, LeafCheck::StackArgument);
 }
 
 TEST(AArch64DarwinExecutable, PublishesDarwinTrue) {

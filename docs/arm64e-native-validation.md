@@ -903,3 +903,29 @@ their zero preferred address. Each host also passed eight original-caller
 trap controls, eight occupied-layout refusals and six compiler controls. The
 [evidence record](evidence/arm64e-header-relocation-2026-11-11.json)
 identifies the Release host, both artifacts and their measured image bases.
+
+### Darwin variadic entry stacks
+
+For a recovered Darwin arm64 variadic entry without materialized overflow
+parameters, the LLVM emitter takes the anonymous argument cursor from
+`llvm.sponentry`. Locals and recovered named argument homes keep their own
+storage. The LLVM and LLVM-to-C outputs retain the callee boundary when the
+cursor depends on its incoming SP. Stack-parameter recovery also uses the
+target's entry alignment proof for masked pointers, including the upper word
+of a 16-byte-aligned argument after an 8-byte argument.
+
+`AArch64DarwinVariadic` compiles O0 and O2 Apple arm64e inputs and calls the
+lifted LLVM IR and the regenerated C from a separately compiled variadic
+caller. It covers a variable count, a named stack prefix, a copied cursor,
+double and a 128-bit value. The IR control enables stack protection to displace
+the private frame. Setting `NEVERD_ARM64E_LIFTED_NATIVE=1` runs the compiler
+original and both replacements as arm64e.
+
+The image publisher compares non-writeback SP accesses at their effective
+incoming byte offsets. It can remove a compact leaf's unused stack reservation
+when the exact SP adjustment and restoration agree with its unwind row, the
+surviving loads retain their widths and destinations, and every arithmetic
+instruction and the return agree. Tests redirect a load to the adjacent
+argument and require refusal. Register-walk bodies with other instruction
+changes, frame-local memory effects and additional DWARF rows need their own
+publication proof.

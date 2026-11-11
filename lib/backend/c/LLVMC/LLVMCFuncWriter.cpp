@@ -62,6 +62,7 @@
 #include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/GlobalIFunc.h"
 #include "llvm/IR/InlineAsm.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Metadata.h"
@@ -85,6 +86,8 @@
 namespace neverd {
 
 namespace {
+#define LLVMC_STACK_TEXT(Name, Text) constexpr llvm::StringLiteral Name = Text;
+#include "LLVMCStackIntrinsic.def"
 
 /// Holds the frame record's place until the body has named its members.
 constexpr llvm::StringLiteral kFrameRecordMarker = "/*@neverd-frame-record@*/";
@@ -10432,6 +10435,13 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
     llvm::raw_string_ostream SignatureOS(Signature);
     if (Fn.hasFnAttribute(LLVMSourceBody))
       SignatureOS << "static ";
+    // An inlined entry-SP read would see the caller's own argument area.
+    if (Fn.hasFnAttribute(llvm::Attribute::NoInline) &&
+        llvm::any_of(llvm::instructions(Fn), [](const auto &I) {
+          const auto *Call = llvm::dyn_cast<llvm::IntrinsicInst>(&I);
+          return Call && Call->getIntrinsicID() == llvm::Intrinsic::sponentry;
+        }))
+      SignatureOS << kRetainStackFrame;
     if (isMIPS(Opts.TheArch)) {
       if (Fn.hasFnAttribute(mips::BarrierSourceMarker))
         SignatureOS << mips::BarrierNoInlineC;
@@ -10656,10 +10666,11 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
     // Every localaddress in this LLVM function names its parent's local area,
     // not a newly outlined C helper's frame. Capture it once before outlining;
     // frameaddress(0) can name a different base after stack realignment.
-    const std::string LocalAddress = freshVar("llvm_localaddress");
+    const std::string LocalAddress = freshVar(kLocalAddressName.str());
     emitIndent(1);
-    OS << "extern void *" << LocalAddress
-       << "(void) __asm__(\"llvm.localaddress\");\n";
+    OS << llvm::formatv(
+        kStackIntrinsicDecl.data(), LocalAddress,
+        llvm::Intrinsic::getBaseName(llvm::Intrinsic::localaddress));
     emitIndent(1);
     OS << "void *" << SEHParentFrameName << " = " << LocalAddress << "();\n";
   }
