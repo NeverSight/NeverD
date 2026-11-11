@@ -33,6 +33,13 @@
 namespace neverd {
 
 namespace {
+va_t mipsInvalidAddressBits(Arch Target, InstructionMode Mode) {
+  if (!isMIPS(Target))
+    return 0;
+  const va_t AlignmentBits = isMIPSCompressedMode(Mode) ? 1 : 3;
+  return AlignmentBits | (isMIPS64(Target) ? 0 : ~va_t(UINT32_MAX));
+}
+
 /// Release a decoder handle using the active architecture's ownership rules.
 void closeHandle(csh &Handle, Arch A) {
   if (A == Arch::X64 || A == Arch::X86)
@@ -191,6 +198,7 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
   TargetArch = TheArch;
   CurrentMode = Mode;
   MIPSISARevision = Revision;
+  MIPSInvalidAddressBits = mipsInvalidAddressBits(TheArch, Mode);
   Detail = true;
   Text = true;
   X86 = std::move(NewX86);
@@ -248,8 +256,7 @@ bool Decoder::selectMode(const BinaryImage &Img, va_t Addr,
   if (Img.Arch == Arch::ARM &&
       !decoder_detail::isARMInstructionAligned(Addr, *Mode))
     return false;
-  if (isMIPS(Img.Arch) && (Addr % (isMIPSCompressedMode(*Mode) ? 2 : 4) ||
-                           (!isMIPS64(Img.Arch) && Addr > UINT32_MAX)))
+  if (Addr & mipsInvalidAddressBits(Img.Arch, *Mode))
     return false;
   const uint8_t Revision = Img.MIPS ? Img.MIPS->ISARevision : 2;
   if (Handle && TargetArch == Img.Arch && CurrentMode == *Mode &&
@@ -277,6 +284,16 @@ void Decoder::setStrict(bool S) {
     AArch64->setStrict(S);
   else if (ARM)
     ARM->setStrict(S);
+}
+
+bool Decoder::beginDecode(DecodedInsn &Out) {
+  Out.AArch64Prefix.reset();
+  Out.AArch64Occurrence.reset();
+  Out.MIPSForbiddenFollower.reset();
+  if (!AArch64)
+    return true;
+  Out.Raw = nullptr;
+  return advanceAArch64DecodeGeneration();
 }
 
 bool Decoder::decodeArchitectureFallback(const uint8_t *Bytes, size_t Len,
@@ -309,8 +326,7 @@ int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
                        DecodedInsn &Out) {
   if (!beginDecode(Out) || !Handle || !InsnBuf)
     return 0;
-  if (MIPS && ((Addr % (isMIPSCompressedMode(CurrentMode) ? 2 : 4)) ||
-               (!isMIPS64(TargetArch) && Addr > UINT32_MAX)))
+  if (Addr & MIPSInvalidAddressBits)
     return 0;
   if (!decodePhysical(Bytes, Len, Addr))
     return 0;
@@ -321,10 +337,9 @@ int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
   Out.Size = static_cast<uint16_t>(InsnBuf->size);
   Out.Id = InsnBuf->id;
   Out.Raw = InsnBuf;
-  Out.MIPSForbiddenFollower =
-      MIPSISARevision == 6 ? MIPSLifter::r6ForbiddenFollower(
-                                 {Bytes, Len}, archLittleEndian(TargetArch))
-                           : std::nullopt;
+  if (MIPSISARevision == 6)
+    Out.MIPSForbiddenFollower = MIPSLifter::r6ForbiddenFollower(
+        {Bytes, Len}, archLittleEndian(TargetArch));
   if (AArch64)
     recordAArch64Decode(Bytes, Len, Out, Detail && Text);
   // The lift path and CFG classification read the mnemonic (when they need it
@@ -350,8 +365,7 @@ int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
                             DecodedInsn &Out) {
   if (!beginDecode(Out) || !Handle || !InsnBuf)
     return 0;
-  if (MIPS && ((Addr % (isMIPSCompressedMode(CurrentMode) ? 2 : 4)) ||
-               (!isMIPS64(TargetArch) && Addr > UINT32_MAX)))
+  if (Addr & MIPSInvalidAddressBits)
     return 0;
   if (!decodePhysical(Bytes, Len, Addr))
     return 0;
@@ -362,10 +376,9 @@ int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
   Out.Size = static_cast<uint16_t>(InsnBuf->size);
   Out.Id = InsnBuf->id;
   Out.Raw = InsnBuf;
-  Out.MIPSForbiddenFollower =
-      MIPSISARevision == 6 ? MIPSLifter::r6ForbiddenFollower(
-                                 {Bytes, Len}, archLittleEndian(TargetArch))
-                           : std::nullopt;
+  if (MIPSISARevision == 6)
+    Out.MIPSForbiddenFollower = MIPSLifter::r6ForbiddenFollower(
+        {Bytes, Len}, archLittleEndian(TargetArch));
   if (AArch64)
     recordAArch64Decode(Bytes, Len, Out, Detail && Text);
   return Out.Size;

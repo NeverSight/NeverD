@@ -37,11 +37,16 @@ void snapshotMIPS(DecodedInsn &Insn, cs_insn &Storage, cs_detail &Detail) {
 
 int Decoder::decodeUnitForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
                                DecodedExecutionUnit &Out) {
-  Out.HasDelaySlot = false;
-  Out.Head = {};
-  Out.Slot = {};
+  if (Out.HasDelaySlot) {
+    Out.Slot = {};
+    Out.HasDelaySlot = false;
+  }
   const int Size = decodeOneForLift(Bytes, Len, Addr, Out.Head);
-  if (Size <= 0 || !MIPS)
+  if (Size <= 0) {
+    Out.Head = {};
+    return Size;
+  }
+  if (!MIPS)
     return Size;
   const unsigned RequiredSlot = MIPS->delaySlotBytes(*Out.Head.Raw);
   if (!RequiredSlot)
@@ -56,8 +61,10 @@ int Decoder::decodeUnitForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
   if (SlotSize <= 0 ||
       (RequiredSlot != 1 && unsigned(SlotSize) != RequiredSlot) ||
       Addr > InvalidVA - Size - SlotSize ||
-      (!isMIPS64(TargetArch) && Addr > UINT32_MAX - Size - SlotSize + 1))
+      (!isMIPS64(TargetArch) && Addr > UINT32_MAX - Size - SlotSize + 1)) {
+    Out.Slot = {};
     return 0;
+  }
   snapshotMIPS(Out.Slot, Out.SlotStorage, Out.SlotDetail);
   Out.HasDelaySlot = true;
   return Out.spanBytes();

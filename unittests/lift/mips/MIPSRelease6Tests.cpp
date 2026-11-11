@@ -213,6 +213,26 @@ TEST_P(MIPSRelease6,
   EXPECT_EQ(Ops.back().Inputs[0].Offset, PC + 12);
 }
 
+TEST_P(MIPSRelease6, FollowerEvidenceBelongsToOnePhysicalDecode) {
+  uint8_t Code[8]{};
+  const auto Order = archLittleEndian(GetParam()) ? llvm::endianness::little
+                                                  : llvm::endianness::big;
+  llvm::support::endian::write32(Code, 0x20850002, Order);
+  llvm::support::endian::write32(Code + 4, 0xd81f0000, Order);
+  DecodedInsn Physical{};
+  ASSERT_EQ(Decode.decodeOne(Code, 8, 0x1000, Physical), 4);
+  ASSERT_EQ(Physical.MIPSForbiddenFollower, true);
+  EXPECT_EQ(Decode.decodeOneLight(Code, 1, 0x1000, Physical), 0);
+  EXPECT_FALSE(Physical.MIPSForbiddenFollower.has_value());
+
+  ASSERT_EQ(Decode.decodeOne(Code, 8, 0x1000, Physical), 4);
+  ASSERT_EQ(Physical.MIPSForbiddenFollower, true);
+  ASSERT_TRUE(Decode.init(Arch::AArch64));
+  const uint8_t Add[] = {0x00, 0x04, 0x00, 0x91}; // ADD x0,x0,#1
+  ASSERT_EQ(Decode.decodeOneForLift(Add, sizeof(Add), 0x1000, Physical), 4);
+  EXPECT_FALSE(Physical.MIPSForbiddenFollower.has_value());
+}
+
 TEST_P(MIPSRelease6, ForbiddenSlotFaultDependsOnFallthrough) {
   const bool Little = archLittleEndian(GetParam());
   uint8_t Code[8];
