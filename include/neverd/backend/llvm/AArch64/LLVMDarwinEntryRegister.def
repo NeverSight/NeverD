@@ -1,0 +1,21 @@
+//===- LLVMDarwinEntryRegister.def - Physical incoming values -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+/// \file
+/// Swift passes its context in X20. A machine read establishes a physical
+/// live-in even when the image carries no source-level calling convention.
+#ifndef NEVERD_DARWIN_ENTRY_TEXT
+#define NEVERD_DARWIN_ENTRY_TEXT(Name, Text)
+#endif
+#ifndef NEVERD_DARWIN_ENTRY_REGISTER
+#error "Define NEVERD_DARWIN_ENTRY_REGISTER before including this file"
+#endif
+
+NEVERD_DARWIN_ENTRY_TEXT(kDarwinFeatureAttribute, "target-features")
+NEVERD_DARWIN_ENTRY_REGISTER(X20, W20, "x20", "reserve-x20")
+
+#undef NEVERD_DARWIN_ENTRY_TEXT
+#undef NEVERD_DARWIN_ENTRY_REGISTER

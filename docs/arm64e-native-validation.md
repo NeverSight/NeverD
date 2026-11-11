@@ -489,7 +489,8 @@ unchanged; source-fork-only producer features still require the source build.
 ## Publishing register-only lifted dylibs
 
 The ordinary segment patch pipeline can publish a classic macOS arm64e image
-whose entire instruction section consists of frameless integer leaf functions.
+whose entire instruction section consists of verified frameless register-only
+leaf functions.
 It matches lifted definitions to original entries, then checks the relocated
 machine instructions and compact unwind coverage for every body. The original
 entries forward to the emitted RX addresses. The private native emission uses
@@ -501,7 +502,13 @@ the original image. A missing definition or a changed arithmetic result fails
 before an output file is created. Set `NEVERD_ARM64E_LIFTED_NATIVE=1` on a
 host that executes arm64e to run the independently compiled authenticated
 caller against both images. The strict instruction check currently covers
-register-only integer arithmetic, logical operations and moves ending in RET.
+register-only integer arithmetic, logical operations, moves, and scalar
+floating-point add/subtract ending in RET. Unassigned incoming reads of X20
+now use LLVM's reserved physical register. This preserves a Swift context
+without requiring a stripped image to identify its source calling convention.
+Apple Clang produces both the Swift-call fixture and its independent typed
+caller. The floating-point caller checks the exact result bits, including
+signed zero.
 Functions with calls, signed frames or stack accesses need additional proofs.
 
 The [native lifted-image run](https://github.com/gmh5225/test_mac_intel/actions/runs/42957645426)
