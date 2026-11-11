@@ -12,6 +12,11 @@
 #define NEVERD_PAUTH_NATIVE_TEXT(Name, Value)
 #endif
 
+NEVERD_PAUTH_NATIVE_TEXT(kPAuthFixtureEnvironment,
+                         "NEVERD_ARM64E_PAUTH_FIXTURES")
+NEVERD_PAUTH_NATIVE_TEXT(kGenericOracle, "pacga_oracle.c")
+NEVERD_PAUTH_NATIVE_TEXT(kSigningOracle, "pauth_oracle.c")
+NEVERD_PAUTH_NATIVE_TEXT(kReturnOracle, "pauth_lr_oracle.c")
 NEVERD_PAUTH_NATIVE_TEXT(kSigningKeyTarget, "arm64e-apple-macos")
 NEVERD_PAUTH_NATIVE_TEXT(kSigningKeysUnavailable,
                          "this host cannot execute arm64e with all four active "
