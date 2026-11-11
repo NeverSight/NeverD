@@ -44,6 +44,9 @@ MACHO_LEAF_TEXT(kSourceText,
                 "starts and a single executable segment")
 MACHO_LEAF_TEXT(kSourceEntry, "arm64e lifted function {0} has no complete "
                               "definition at an original entry")
+MACHO_LEAF_TEXT(
+    kTailTarget,
+    "arm64e direct tail branch does not preserve its installed target")
 MACHO_LEAF_TEXT(kLeafABIFlag, "ptrauth.abi-version")
 MACHO_LEAF_VALUE(uint32_t, kClassicABIVersion, 0)
 MACHO_LEAF_VALUE(unsigned, kMemoryOperandCount, 2)

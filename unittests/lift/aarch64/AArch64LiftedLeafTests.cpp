@@ -38,9 +38,64 @@ using namespace neverd;
 #define A64_LEAF_VALUE(Type, Name, Value) constexpr Type Name = Value;
 #include "AArch64LiftedLeafFixtures.def"
 
+#if defined(__APPLE__) && defined(__aarch64__)
+void verifyTailTargets(llvm::Module &Module, MachOPatcher &Patcher,
+                       const std::string &Input, const std::string &Rejected,
+                       const std::string &ReorderedPath, Arch Architecture) {
+  auto Candidate = llvm::CloneModule(Module);
+  auto *Forwarder = Candidate->getFunction(kDifference);
+  auto *Callee = Candidate->getFunction(kSum);
+  ASSERT_NE(Forwarder, nullptr);
+  ASSERT_NE(Callee, nullptr);
+  auto *Return =
+      llvm::dyn_cast<llvm::ReturnInst>(Forwarder->back().getTerminator());
+  ASSERT_NE(Return, nullptr);
+  auto *Call = llvm::dyn_cast_or_null<llvm::CallInst>(Return->getReturnValue());
+  ASSERT_NE(Call, nullptr);
+  ASSERT_EQ(Call->getCalledFunction(), Callee);
+  ASSERT_TRUE(Call->isTailCall());
+  Call->setCalledFunction(Forwarder);
+  EXPECT_FALSE(
+      Patcher.patch(Input, Rejected, *Candidate, Architecture).Success);
+  EXPECT_FALSE(std::filesystem::exists(Rejected));
+
+  Call->setCalledFunction(Callee);
+  auto &Functions = Candidate->getFunctionList();
+  Functions.splice(Functions.begin(), Functions, Forwarder->getIterator());
+  auto Reordered =
+      Patcher.patch(Input, ReorderedPath, *Candidate, Architecture);
+  ASSERT_TRUE(Reordered.Success);
+  ASSERT_EQ(Reordered.PatchedFunctions.size(), kCount);
+  llvm::sort(Reordered.PatchedFunctions, [](const auto &A, const auto &B) {
+    return A.OriginalVA < B.OriginalVA;
+  });
+  const auto &Body = Reordered.PatchedFunctions.front();
+  const auto &Tail = Reordered.PatchedFunctions.back();
+  ASSERT_GT(Tail.OriginalVA, Body.OriginalVA);
+  ASSERT_LT(Tail.OwnerVA, Body.OwnerVA);
+  auto Final = Loader::create(BinaryFormat::MachO)->load(ReorderedPath);
+  ASSERT_TRUE(bool(Final)) << llvm::toString(Final.takeError());
+  auto *Word = Final->readVA(Tail.OwnerVA, aarch64::kInsnSize);
+  ASSERT_NE(Word, nullptr);
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(*Final));
+  DecodedInsn Insn{};
+  ASSERT_EQ(Decode.decodeOne(Word, aarch64::kInsnSize, Tail.OwnerVA, Insn),
+            aarch64::kInsnSize);
+  ASSERT_EQ(Insn.Id, AARCH64_INS_B);
+  ASSERT_NE(Insn.Raw, nullptr);
+  ASSERT_NE(Insn.Raw->detail, nullptr);
+  const auto &Branch = Insn.Raw->detail->aarch64;
+  ASSERT_EQ(Branch.op_count, 1);
+  ASSERT_EQ(Branch.operands[0].type, AARCH64_OP_IMM);
+  EXPECT_EQ(static_cast<va_t>(Branch.operands[0].imm), Body.OwnerVA);
+}
+#endif
+
 void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
                            const char *SourceName = kSource,
-                           std::string_view Preamble = {}) {
+                           std::string_view Preamble = {},
+                           bool TailForwarder = false) {
 #if defined(__APPLE__) && defined(__aarch64__)
   llvm::SmallString<128> Directory;
   ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kTemporary, Directory));
@@ -92,6 +147,10 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   EXPECT_FALSE(Patcher.patch(Input, Rejected, *Changed, Image->Arch).Success);
   EXPECT_FALSE(std::filesystem::exists(Rejected));
 
+  const auto ReorderedPath = (Root / kReorderedOutput).string();
+  if (TailForwarder)
+    verifyTailTargets(Module, Patcher, Input, Rejected, ReorderedPath,
+                      Image->Arch);
   if (Module.getFunction(kSum)->hasFnAttribute(kReturnSigningScopeAttribute)) {
     auto Unsigned = llvm::CloneModule(Module);
     auto *Entry = Unsigned->getFunction(kSum);
@@ -152,6 +211,10 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   if (std::getenv(kExecute)) {
     ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Input}), 0);
     ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Output}), 0);
+    if (TailForwarder) {
+      ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, ReorderedPath}), 0);
+      testing::Test::RecordProperty(kReorderedTail, true);
+    }
     testing::Test::RecordProperty(kNativeImages, kCount);
   }
 #else
@@ -254,6 +317,10 @@ TEST(AArch64DarwinExecutable, PublishesDarwinFalse) {
 
 TEST(AArch64LiftedImage, VerifiedLeafBodiesUseTheNormalPatchPipeline) {
   verifyPublishedLeaves(kLeaves, kCaller);
+}
+
+TEST(AArch64LiftedImage, DirectTailTransferPreservesItsInstalledCallee) {
+  verifyPublishedLeaves(kTailLeaves, kCaller, kAssemblyName, kTailSum, true);
 }
 
 TEST(AArch64LiftedImage, EquivalentWAndXZeroingPreservesTheWholeRegister) {

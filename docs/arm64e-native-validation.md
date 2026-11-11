@@ -489,13 +489,12 @@ unchanged; source-fork-only producer features still require the source build.
 ## Publishing position-independent lifted dylibs
 
 The ordinary segment patch pipeline can publish a classic macOS arm64e image
-whose entire instruction section consists of verified frameless leaf functions.
+whose instruction section consists of verified frameless bodies.
 It matches lifted definitions to original entries, then checks the relocated
-machine instructions and compact unwind coverage for every body. Different
-encodings are accepted for one instruction family: an unshifted MOVZ with
-immediate zero and a move from the zero register can both clear the same
-GPR. Both W and X forms write all 64 destination bits and preserve NZCV. The original
-entries forward to the emitted RX addresses. The private native emission uses
+machine instructions and compact unwind coverage for every body. An unshifted
+MOVZ with immediate zero and a move from the zero register can both clear the
+same GPR. Both W and X forms write all 64 destination bits and preserve NZCV.
+The original entries forward to the emitted RX addresses. The private native emission uses
 the classic ABI version. The input IR retains its analysis marker.
 
 `NeverDArm64eLiftedImageTests` compiles an unreserved Apple Clang dylib,
@@ -509,6 +508,14 @@ floating-point add/subtract ending in RET. Plain LDR and STR can use a live
 base register and displacement. A typed caller compares loaded values and
 checks both neighboring slots after stores. Literal or register-indexed
 addressing, writeback and SP-based memory operands require separate proofs.
+
+A frameless body can end with an unconditional direct tail branch to another
+installed entry. The lifter preserves simple argument forwarding with the same
+calling convention and prototype. The installer independently decodes the two
+branch destinations at their actual PCs and matches the original callee to its
+compiled owner. The regression reverses the two emitted functions and checks
+the relocated branch with Capstone. Redirecting the tail call to a different
+entry fails before publication.
 
 Unassigned incoming reads of X20 and X22 use LLVM's reserved physical
 registers. These carry Swift self and the asynchronous context, respectively.

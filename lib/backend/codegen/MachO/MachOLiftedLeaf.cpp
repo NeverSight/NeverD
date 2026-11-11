@@ -13,6 +13,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/DirectBranch.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/TargetCodegenInfo.h"
@@ -103,6 +104,29 @@ bool isPositionIndependentLeafInstruction(const DecodedInsn &I) {
   }
 }
 
+bool matchesTailTransfer(llvm::ArrayRef<uint8_t> Source, va_t OriginalPC,
+                         llvm::ArrayRef<uint8_t> Installed, va_t InstalledPC,
+                         llvm::ArrayRef<SourcePatchMapping> Mappings,
+                         const CompiledImage &Generated) {
+  const auto Target = [](llvm::ArrayRef<uint8_t> Word, va_t PC) {
+    auto Jump =
+        decodeDirectBranch(Arch::AArch64, InstructionMode::Default, Word.data(),
+                           Word.size(), PC, {.Jumps = true});
+    return Jump ? Jump->target() : std::nullopt;
+  };
+  const auto Before = Target(Source, OriginalPC);
+  const auto After = Target(Installed, InstalledPC);
+  if (!Before || !After)
+    return false;
+  const auto Callee = llvm::lower_bound(
+      Mappings, *Before,
+      [](const SourcePatchMapping &M, va_t VA) { return M.OriginalVA < VA; });
+  if (Callee == Mappings.end() || Callee->OriginalVA != *Before)
+    return false;
+  const auto Owner = Generated.SymbolAddrs.find(Callee->Symbol);
+  return Owner != Generated.SymbolAddrs.end() && Owner->second == *After;
+}
+
 llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
                          llvm::ArrayRef<SourcePatchMapping> Mappings,
                          const CompiledImage &Generated,
@@ -169,15 +193,23 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
     bool Signed = false;
     for (size_t Offset = 0; Offset < Source.size();
          Offset += aarch64::kInsnSize) {
-      if (!equivalentLeafWord(readLE<uint32_t>(Source.data() + Offset),
-                              readLE<uint32_t>(Emitted.data() + Offset)))
-        return refuse(kLeafCode);
       DecodedInsn Insn{};
       if (Decode.decodeOne(Source.data() + Offset, aarch64::kInsnSize,
                            Start + Offset, Insn) != aarch64::kInsnSize ||
           !Insn.Raw || !Insn.Raw->detail)
         return refuse(kLeafCode);
-      if (Offset + aarch64::kInsnSize == Source.size()) {
+      const bool Last = Offset + aarch64::kInsnSize == Source.size();
+      if (Last && !Signed && Insn.Id == AARCH64_INS_B) {
+        if (!matchesTailTransfer(Source.drop_front(Offset), Start + Offset,
+                                 Emitted.drop_front(Offset),
+                                 Owner->second + Offset, Mappings, Generated))
+          return refuse(kTailTarget);
+        continue;
+      }
+      if (!equivalentLeafWord(readLE<uint32_t>(Source.data() + Offset),
+                              readLE<uint32_t>(Emitted.data() + Offset)))
+        return refuse(kLeafCode);
+      if (Last) {
         // Plain RET must select LR. RETAB has an implicit LR, SP and B key.
         if (Signed ? Insn.Id != AARCH64_INS_RETAB
                    : readLE<uint32_t>(Source.data() + Offset) != kReturnToLR)

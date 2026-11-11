@@ -79,7 +79,10 @@ int main(int argc, char **argv) {
   const unsigned long values[] = {0, 1, 17, UINT64_MAX, UINT64_C(1) << 63};
   for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i)
     for (unsigned j = 0; j != sizeof(values) / sizeof(*values); ++j)
-#ifdef NEVERD_TEST_ZERO_RESULTS
+#if defined(NEVERD_TEST_TAIL_SUM)
+      if (sum(values[i], values[j]) != values[i] + values[j] ||
+          difference(values[i], values[j]) != values[i] + values[j])
+#elif defined(NEVERD_TEST_ZERO_RESULTS)
       if (sum(values[i], values[j]) != 0 || difference(values[i], values[j]) != 0)
 #else
       if (sum(values[i], values[j]) != values[i] + values[j] ||
@@ -89,6 +92,26 @@ int main(int argc, char **argv) {
   return dlclose(image) != 0;
 }
 )c")
+
+A64_LEAF_TEXT(kReorderedOutput, "reordered.dylib")
+A64_LEAF_TEXT(kReorderedTail, "native_reordered_tail")
+A64_LEAF_TEXT(kTailSum, "#define NEVERD_TEST_TAIL_SUM 1\n")
+A64_LEAF_TEXT(kTailLeaves, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  add x0, x1, x0
+  ret
+.cfi_endproc
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  b _leaf_sum
+.cfi_endproc
+.subsections_via_symbols
+)asm")
 
 A64_LEAF_TEXT(kZeroLeaves, R"asm(
 .text
