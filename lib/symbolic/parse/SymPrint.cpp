@@ -25,6 +25,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace neverd::symbolic {
@@ -86,14 +87,16 @@ public:
 private:
   void prepare(llvm::ArrayRef<SymRef> Roots);
 
-  const Fragment &frag(SymRef R) const {
-    return Fragments[Memo.find(R.index())->second];
+  uint32_t slot(SymRef R) const {
+    return Direct.empty() ? Memo.find(R.index())->second : Direct[R.index()];
   }
+  const Fragment &frag(SymRef R) const { return Fragments[slot(R)]; }
   /// A child in a comma-separated argument list, which never needs brackets.
   const std::string &arg(SymRef R) const { return frag(R).Text; }
   std::string sub(SymRef R, int Need) const { return wrap(frag(R), Need); }
 
-  std::string join(llvm::ArrayRef<SymRef> Ops, const char *Sep, int Need) const;
+  std::string join(llvm::ArrayRef<SymRef> Ops, std::string_view Sep,
+                   int Need) const;
   std::string call(const char *Name, llvm::ArrayRef<SymRef> Ops) const;
 
   Fragment leaf(std::string Text, uint32_t W) const {
@@ -134,10 +137,11 @@ private:
   llvm::SmallDenseMap<uint64_t, uint32_t,
                       limits::symbolic::kSymExprTraversalInlineBuckets>
       Memo;
+  llvm::SmallVector<uint32_t, 0> Direct;
   llvm::SmallVector<Fragment, 32> Fragments;
 };
 
-std::string Printer::join(llvm::ArrayRef<SymRef> Ops, const char *Sep,
+std::string Printer::join(llvm::ArrayRef<SymRef> Ops, std::string_view Sep,
                           int Need) const {
   std::string T;
   for (unsigned I = 0, E = Ops.size(); I < E; ++I) {
@@ -374,9 +378,19 @@ void Printer::prepare(llvm::ArrayRef<SymRef> Roots) {
       Work.push_back({C, false});
   }
 
+  // Interned operands precede their parent. Use direct fragment indices
+  // only when their span costs no more than the reachable hash entries.
+  const size_t Span = size_t(llvm::max_element(Roots)->index()) + 1;
+  if (Order.size() > limits::symbolic::kSymExprTraversalInlineBuckets &&
+      Span <= Order.size() *
+                  (sizeof(decltype(Memo)::value_type) / sizeof(uint32_t))) {
+    Direct.resize_for_overwrite(Span);
+    for (const auto &[Id, Position] : Memo)
+      Direct[Id] = Position;
+  }
   Fragments.resize(Order.size());
-  for (uint32_t I : Order)
-    Fragments[Memo.find(I)->second] = render(SymRef(I));
+  for (auto I : Order)
+    Fragments[slot(SymRef(I))] = render(SymRef(I));
 }
 
 std::pair<std::string, std::string> Printer::runPair(SymRef Before,
@@ -387,7 +401,7 @@ std::pair<std::string, std::string> Printer::runPair(SymRef Before,
   }
   prepare({Before, After});
   return {std::move(Fragments.front().Text),
-          std::move(Fragments[Memo.find(After.index())->second].Text)};
+          std::move(Fragments[slot(After)].Text)};
 }
 
 std::string Printer::run(SymRef Root) {

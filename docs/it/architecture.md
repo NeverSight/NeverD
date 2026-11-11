@@ -1266,6 +1266,8 @@ Quando la maschera di ogni fattore dispari conserva solo i bit bassi e il bit pi
 Per una finestra di fattori dispari con scostamenti regolari, il motore verifica gli scostamenti di ciascun fattore. Un periodo completo si riduce a un quadrato e un semiperiodo richiede una correzione dei bit alti. I fattori mancanti vengono compensati con gli inversi modulari.
 Nei prodotti larghi il coefficiente variabile con zeri finali garantiti viene mantenuto per intero. Gli altri fattori conservano i bit richiesti da tutti gli usi. Per le coppie disgiunte, i pesi delle combinazioni di bit vengono verificati prima di sostituire i termini con la somma degli ingressi. La somma che contiene il prodotto può riutilizzare la prova modulare dopo la semplificazione dei fattori nella stessa richiesta.
 
+In un prodotto di somme di una costante e un termine variabile, tutti i termini misti si annullano se la somma dei due conteggi minimi di zeri finali garantiti raggiunge la larghezza osservata. I prodotti dei prefissi e dei suffissi danno quindi i coefficienti rimanenti senza divisioni.
+
 Il rendering usa una visita iterativa in postordine, senza ordinare i nodi, e stampa direttamente le foglie. Se la classificazione esistente non richiede ingressi nascosti, ingressi per maschere letterali o riscritture di complementi aritmetici, l’astrazione MBA riutilizza il DAG originale. La verifica indipendente delle identità e il conteggio del lavoro restano invariati.
 
 Gli offset e i fattori letterali di una base affine già opaca costruiscono direttamente i coefficienti, evitando un albero temporaneo. I figli lineari mantengono la visita generale; memoria del risultato e operazioni sulle parole sono conteggiate prima di pubblicare una relazione completa.

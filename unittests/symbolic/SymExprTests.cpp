@@ -1604,6 +1604,53 @@ TEST(SymExpr, NativeResiduesKeepSharedFullWidthUses) {
   }
 }
 
+TEST(SymExpr, RepeatedProductResiduesRespectAllObserverWidths) {
+  for (unsigned Width : {8u, 16u, 64u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    auto Z = Ctx.mkVar("z", Width);
+    const uint64_t Mask = UINT64_MAX >> (64 - Width);
+    const uint64_t Scale = uint64_t(3) << (Width - 5);
+    auto Shared = Ctx.mkAdd(X, Ctx.mkConst(Width, 33));
+    llvm::SmallVector<SymRef, 64> Factors{Ctx.mkConst(Width, Scale)};
+    for (unsigned I = 0; I < 97; ++I) {
+      auto Sum = Ctx.mkAdd(X, Ctx.mkConst(Width, I));
+      auto V = (I & 1) ? Ctx.mkXor(Sum, Y) : Ctx.mkAdd(Sum, Z);
+      Factors.push_back(Ctx.mkOr(V, Ctx.mkOne(Width)));
+    }
+    const auto Root = Ctx.mkAdd(Ctx.mkMul(Factors),
+                                Ctx.mkLShr(Shared, Ctx.mkConst(Width, 3)));
+    const auto Work = Ctx.dagSize(Root);
+    SymEvalPlan Plan(Ctx, Root);
+    std::mt19937_64 Random(288);
+    for (unsigned Trial = 0; Trial < 128; ++Trial) {
+      const std::array<uint64_t, 3> Values{
+          (Trial < 2 ? uint64_t(0) - Trial : Random()) & Mask, Random() & Mask,
+          Random() & Mask};
+      auto Product = Scale;
+      for (unsigned I = 0; I < 97; ++I) {
+        const auto Sum = Values[0] + I;
+        Product *= ((I & 1) ? Sum ^ Values[1] : Sum + Values[2]) | 1;
+      }
+      const auto Expected = (Product + (((Values[0] + 33) & Mask) >> 3)) & Mask;
+      std::array<unsigned, 3> Calls{};
+      EXPECT_EQ(Plan.evalU64With([&](uint32_t Id) {
+        ++Calls.at(Id);
+        return Values.at(Id);
+      }),
+                Expected);
+      EXPECT_EQ(Calls, (std::array<unsigned, 3>{1, 1, 1}));
+      EXPECT_EQ(Plan.eval({llvm::APInt(Width, Values[0]),
+                           llvm::APInt(Width, Values[1]),
+                           llvm::APInt(Width, Values[2])})
+                    .getZExtValue(),
+                Expected);
+      EXPECT_EQ(Plan.numSteps(), Work);
+    }
+  }
+}
+
 TEST(SymExpr, EvaluationPlansReadEveryReachableInputOnce) {
   for (unsigned Width : {8u, 64u, 65u, 257u}) {
     SCOPED_TRACE(Width);
