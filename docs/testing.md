@@ -7136,6 +7136,14 @@ the store rendered, a page the owner gave is asked of the owner after a change w
 snapshot for a replica first. `QueryServiceTests::aCachedReadTakesNoTurnBehindRunningReads`
 checks that a cached page is answered while another read runs, and that one behind an
 accepted command waits for it and reads what it left.
+`QueryServiceTests::aListingsOwnPageReadsWhatChangedOfIt` checks that a listing's visible
+page is named when read again and that what changed of it is applied, a scrolled page
+naming none; `WorkbenchTests::anEditRefreshesTheListingOnce` that the refresh after a second
+rename reads only what changed of the page (`metadata.listing_page_deltas`), and
+`NeverDWorkerListingPages` that a listing page a client names reads `unchanged` while it
+stands, that what changed of it after a rename applies to the page a read naming none
+gets, and that a page the worker did not give, or a changed one asked for without
+`page_delta`, reads whole.
 `WorkbenchTests::ownerReadsWhatChangedOfThePageItGave`
 comments on the function a page the owner gave shows and reads it again through the
 analysis queries: the owner's dispatcher names the page it kept, and the comment carries

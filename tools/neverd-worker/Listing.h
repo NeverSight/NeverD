@@ -77,6 +77,10 @@ public:
   /// listing answers is written there as text, and the result is null.
   Json page(const Json &payload,
             std::shared_ptr<const EncodedJson> *encoded = nullptr);
+  /// The page `listing` reads for \p payload, for a client that keeps pages,
+  /// each line as page() writes it.  None where the loader's first viewport
+  /// answers, or the image maps nothing, which page() reads.
+  std::optional<ListingPage> pageLines(const Json &payload);
   /// `overview`: address classes in equal linear buckets.
   Json overview(const Json &payload);
   /// `xrefs` from the reference index or, for "from", the instruction's lift.
@@ -211,6 +215,10 @@ public:
 private:
   Json uncachedPage(const Json &payload,
                     std::shared_ptr<const EncodedJson> *encoded = nullptr);
+  /// The lines a page reads for \p payload, the ones before its anchor newest
+  /// first; false where the image maps nothing.
+  struct PageWindow;
+  bool pageWindow(const Json &payload, PageWindow &window);
   Json uncachedOverview(const Json &payload);
   const Json &uncachedFunctionRows();
   struct Impl;

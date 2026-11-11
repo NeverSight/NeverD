@@ -5129,7 +5129,10 @@ replica takes) goes ahead of the owner's ordinary reads, as a listing's own page
 so a view's next page does not wait behind the lists the workbench reads again after an
 edit, and a read the owner's dispatcher can answer from its cache (a page an edit's reply
 carried among them) is answered at once rather than behind the reads running or queued,
-unless an accepted command is ahead of it.
+unless an accepted command is ahead of it. The dispatcher keeps a listing's own page (a
+jump or a refresh, read as visible) as it keeps source pages and names it to the worker,
+which answers the refresh after an edit with the lines that changed of it; the pages
+scrolling adds are not kept.
 The job also keeps what a function's first look in the listing asks the engine, its
 recovered instructions and its stack frame, in `local/listing-facts` under the same
 identity without the names of data, which those answers do not spell either. The

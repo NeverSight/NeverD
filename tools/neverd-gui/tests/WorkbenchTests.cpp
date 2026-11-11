@@ -659,11 +659,20 @@ private slots:
     QTRY_VERIFY(ListingViewTestAccess::settled(*listing));
     QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
                              OpenTimeoutMs);
+    QObject reader;
+    const auto deltas = [&] {
+      QJsonObject payload;
+      bench.session.read(QStringLiteral("metadata"), {}, &reader,
+                         [&](const QJsonObject &answer) { payload = answer; });
+      (void)QTest::qWaitFor([&] { return !payload.isEmpty(); }, OpenTimeoutMs);
+      return payload.value("listing_page_deltas").toInteger(-1);
+    };
     for (const auto &name :
          {QStringLiteral("listed_once"), QStringLiteral("listed_once_again")}) {
       const auto requests = ListingViewTestAccess::requests(*listing);
       const auto generation = bench.session.generation();
       const auto revision = bench.session.revision();
+      const auto changes = deltas();
       bench.session.rename(Base + 0x140, name);
       QTRY_VERIFY_WITH_TIMEOUT(bench.session.revision() != revision &&
                                    bench.session.generation() != generation &&
@@ -676,6 +685,10 @@ private slots:
         shown =
             shown || ListingViewTestAccess::text(*listing, row).contains(name);
       QVERIFY(shown);
+      // The refresh after the first named the page it kept, and read only the
+      // rows the name changed of it.
+      if (name == QStringLiteral("listed_once_again"))
+        QCOMPARE(deltas(), changes + 1);
     }
   }
 

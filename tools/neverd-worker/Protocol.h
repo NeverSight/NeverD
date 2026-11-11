@@ -17,8 +17,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace neverd::worker {
 using transport::Error;
@@ -39,6 +41,7 @@ std::string frame(const Json &message);
 /// order a document keeps them (sorted), and every string goes through the
 /// serializer's escaping: copied where the serializer copies it, printed by
 /// the serializer otherwise.  Only EncodedJson takes what it wrote.
+class EncodedJson;
 class JsonWriter {
 public:
   void beginObject() {
@@ -71,6 +74,8 @@ public:
   }
   /// A value the serializer prints whole.
   void value(const Json &value);
+  /// A value written before, as \p piece holds it.
+  void fragment(const EncodedJson &piece);
 
 private:
   friend class EncodedJson;
@@ -103,6 +108,15 @@ public:
 
 private:
   std::string text_;
+};
+/// A listing page as `listing` writes it, for a client that keeps pages: its
+/// fields, and each line as written (Listing::pageLines).
+struct ListingPage {
+  std::uint64_t anchor = 0;
+  bool atStart = true, atEnd = true;
+  std::string generation;
+  Json index;
+  std::vector<std::shared_ptr<const EncodedJson>> lines;
 };
 std::string frame(const Json &message, const EncodedJson &payload);
 /// Avoid copying a disposable envelope. Only its payload field is removed;

@@ -2926,6 +2926,8 @@ Json Engine::metadata() const {
           {"prepared_views_made", preparedMade_},
           {"prepared_views_given", preparedGiven_},
           {"following_reads", followingReads_},
+          {"listing_pages_unchanged", listingPagesUnchanged_},
+          {"listing_page_deltas", listingPageDeltas_},
           {"named_view_name_patches", namePatches_},
           {"named_view_data_name_patches", dataNamePatches_},
           {"named_view_renders", namedViewRenders_},
@@ -4059,6 +4061,155 @@ std::optional<Engine::Reply> Engine::followingRead(const Json &p) {
   if (served_)
     keepServed(std::move(*std::exchange(served_, std::nullopt)));
   return reply;
+}
+
+Json Engine::listingReply(ListingPage page, const std::string &known,
+                          bool deltas, EncodedPayload *encoded) {
+  const auto kept =
+      known.empty()
+          ? keptListingPages_.end()
+          : std::find_if(keptListingPages_.begin(), keptListingPages_.end(),
+                         [&](const KeptListingPage &listed) {
+                           return listed.etag == known;
+                         });
+  const auto sameLine = [](const auto &a, const auto &b) {
+    return a->text() == b->text();
+  };
+  const auto answer = [&](JsonWriter &&out) -> Json {
+    auto text = std::make_shared<const EncodedJson>(std::move(out));
+    if (encoded) {
+      *encoded = std::move(text);
+      return Json(nullptr);
+    }
+    return Json::parse(text->text());
+  };
+  if (kept != keptListingPages_.end()) {
+    const auto &before = kept->page;
+    if (before.anchor == page.anchor && before.atStart == page.atStart &&
+        before.atEnd == page.atEnd && before.generation == page.generation &&
+        before.index == page.index &&
+        std::equal(before.lines.begin(), before.lines.end(), page.lines.begin(),
+                   page.lines.end(), sameLine)) {
+      ++listingPagesUnchanged_;
+      return {{"etag", known}, {"unchanged", true}};
+    }
+  }
+  const auto etag =
+      instanceTag_ + "-listing-" + std::to_string(++listingPageIds_);
+  std::optional<JsonWriter> delta;
+  if (deltas && kept != keptListingPages_.end()) {
+    const auto &before = kept->page;
+    const auto &lines = page.lines;
+    const auto &old = before.lines;
+    std::size_t prefix = 0;
+    while (prefix < old.size() && prefix < lines.size() &&
+           sameLine(old[prefix], lines[prefix]))
+      ++prefix;
+    std::size_t suffix = 0;
+    while (suffix < old.size() - prefix && suffix < lines.size() - prefix &&
+           sameLine(old[old.size() - 1 - suffix],
+                    lines[lines.size() - 1 - suffix]))
+      ++suffix;
+    const auto removed = old.size() - prefix - suffix;
+    const auto added = lines.size() - prefix - suffix;
+    // Past half of the page sent again, the page goes whole.
+    if (added * 2 <= lines.size()) {
+      delta.emplace();
+      auto &out = *delta;
+      out.beginObject();
+      out.key("base");
+      out.string(known);
+      out.key("delta");
+      out.beginArray();
+      const auto set = [&](const char *field, const auto &write) {
+        out.beginArray();
+        out.string("set");
+        out.string(field);
+        write();
+        out.endArray();
+      };
+      if (before.anchor != page.anchor)
+        set("anchor", [&] { out.number(page.anchor); });
+      if (before.atEnd != page.atEnd)
+        set("at_end", [&] { out.boolean(page.atEnd); });
+      if (before.atStart != page.atStart)
+        set("at_start", [&] { out.boolean(page.atStart); });
+      if (before.generation != page.generation)
+        set("generation", [&] { out.string(page.generation); });
+      if (before.index != page.index)
+        set("index", [&] { out.value(page.index); });
+      if (removed || added) {
+        out.beginArray();
+        out.string("items");
+        out.string("lines");
+        out.beginArray();
+        const auto run = [&](const char *how, std::size_t count) {
+          out.beginArray();
+          out.string(how);
+          out.number(std::uint64_t(count));
+          out.endArray();
+        };
+        const auto values = [&](const char *how, std::size_t from,
+                                std::size_t count) {
+          out.beginArray();
+          out.string(how);
+          out.beginArray();
+          for (std::size_t at = from; at < from + count; ++at)
+            out.fragment(*lines[at]);
+          out.endArray();
+          out.endArray();
+        };
+        if (prefix)
+          run("same", prefix);
+        const auto put = std::min(removed, added);
+        if (put)
+          values("put", prefix, put);
+        if (removed > put)
+          run("skip", removed - put);
+        if (added > put)
+          values("new", prefix + put, added - put);
+        if (suffix)
+          run("same", suffix);
+        out.endArray();
+        out.endArray();
+      }
+      out.endArray();
+      out.key("etag");
+      out.string(etag);
+      out.endObject();
+    }
+  }
+  JsonWriter whole;
+  if (!delta) {
+    whole.beginObject();
+    whole.key("anchor");
+    whole.number(page.anchor);
+    whole.key("at_end");
+    whole.boolean(page.atEnd);
+    whole.key("at_start");
+    whole.boolean(page.atStart);
+    whole.key("etag");
+    whole.string(etag);
+    whole.key("generation");
+    whole.string(page.generation);
+    whole.key("index");
+    whole.value(page.index);
+    whole.key("lines");
+    whole.beginArray();
+    for (const auto &line : page.lines)
+      whole.fragment(*line);
+    whole.endArray();
+    whole.endObject();
+  }
+  keptListingPages_.push_back({etag, std::move(page)});
+  while (keptListingPages_.size() >
+         ::neverd::limits::worker::kEngineMaxKeptListingPages)
+    keptListingPages_.pop_front();
+  if (delta) {
+    ++listingPageDeltas_;
+    return answer(std::move(*delta));
+  }
+  return answer(std::move(whole));
 }
 
 void Engine::afterReply(const std::function<bool()> &requestWaiting) {
@@ -5910,8 +6061,20 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     }
     return page(items, p, {"name"}, PageAddressMatch::SegmentRange);
   }
-  if (operation == "listing")
-    return listing().page(p, encoded);
+  if (operation == "listing") {
+    // A client that keeps pages names the one it has (if_none_match), and is
+    // told it stands, or what changed of it where it asks (page_delta).
+    if (!p.contains("if_none_match"))
+      return listing().page(p, encoded);
+    const auto known =
+        stringField(p, "if_none_match", {},
+                    ::neverd::limits::worker::kEngineMaxPageEtagBytes);
+    const bool deltas = p.value("page_delta", false);
+    auto lines = listing().pageLines(p);
+    if (!lines)
+      return listing().page(p, encoded);
+    return listingReply(std::move(*lines), known, deltas, encoded);
+  }
   if (operation == "string_references")
     return listing().stringReferences(p);
   if (operation == "overview")
