@@ -855,8 +855,10 @@ public:
   std::string castStr(unsigned Opcode, const std::string &Src,
                       llvm::Type *SrcTy, llvm::Type *DstTy);
   /// The text \p Cast reads as where its operand reads as \p Text: the
-  /// same, unless the cast moves between an integer and a pointer, whose C
-  /// types differ.
+  /// same for a pointer cast, and the conversion the cast makes between an
+  /// integer and a pointer or to, from and between floating-point numbers.
+  /// Empty where no text states the cast's value, as for the bits of a number
+  /// read as another type.
   std::string castOfText(const llvm::CastInst &Cast, const std::string &Text);
   std::string cmpStr(llvm::CmpInst::Predicate Pred, const std::string &LHS,
                      const std::string &RHS, bool IsFP,

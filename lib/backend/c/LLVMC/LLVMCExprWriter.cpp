@@ -3824,10 +3824,30 @@ std::string LLVMCWriter::castStr(unsigned Opcode, const std::string &Src,
 
 std::string LLVMCWriter::castOfText(const llvm::CastInst &Cast,
                                     const std::string &Text) {
-  if (!llvm::isa<llvm::IntToPtrInst, llvm::PtrToIntInst>(&Cast))
-    return Text;
-  return castStr(Cast.getOpcode(), "(" + Text + ")", Cast.getSrcTy(),
-                 Cast.getDestTy());
+  switch (Cast.getOpcode()) {
+  case llvm::Instruction::BitCast:
+  case llvm::Instruction::AddrSpaceCast:
+    // Only a pointer keeps its value, and so its operand's text. The bits of
+    // a number read as another type are copied (isFloatingPointBitcast).
+    return Cast.getSrcTy()->isPointerTy() && Cast.getDestTy()->isPointerTy()
+               ? Text
+               : std::string();
+  case llvm::Instruction::IntToPtr:
+  case llvm::Instruction::PtrToInt:
+  // A conversion between an integer and a floating-point number, or between
+  // two floating-point widths, changes the value: the text converts as the
+  // instruction does, signed or unsigned, whatever C type the text has.
+  case llvm::Instruction::SIToFP:
+  case llvm::Instruction::UIToFP:
+  case llvm::Instruction::FPToSI:
+  case llvm::Instruction::FPToUI:
+  case llvm::Instruction::FPExt:
+  case llvm::Instruction::FPTrunc:
+    return castStr(Cast.getOpcode(), "(" + Text + ")", Cast.getSrcTy(),
+                   Cast.getDestTy());
+  default:
+    return {};
+  }
 }
 
 bool LLVMCWriter::operandIsUnsignedWidth(const llvm::Value *V,

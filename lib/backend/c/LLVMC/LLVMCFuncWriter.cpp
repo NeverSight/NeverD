@@ -4017,7 +4017,9 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
           continue;
         if (auto Text = ValueTexts.find(Inst.getOperand(0));
             Text != ValueTexts.end() && !Text->second.empty())
-          ValueTexts[&Inst] = castOfText(*Cast, Text->second);
+          if (std::string Converted = castOfText(*Cast, Text->second);
+              !Converted.empty())
+            ValueTexts[&Inst] = std::move(Converted);
         continue;
       }
       if (auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst)) {
@@ -4168,7 +4170,9 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
         continue;
       if (auto Text = ValueTexts.find(Inst.getOperand(0));
           Text != ValueTexts.end() && !Text->second.empty())
-        ValueTexts[&Inst] = castOfText(*Cast, Text->second);
+        if (std::string Converted = castOfText(*Cast, Text->second);
+            !Converted.empty())
+          ValueTexts[&Inst] = std::move(Converted);
     }
   }
 
@@ -4425,10 +4429,12 @@ void LLVMCWriter::markComposedPrints(llvm::Function &Fn) {
         if (llvm::isa<llvm::TruncInst, llvm::ZExtInst, llvm::SExtInst>(&Inst))
           continue;
         if (auto Text = ValueTexts.find(Inst.getOperand(0));
-            Text != ValueTexts.end() && !Text->second.empty()) {
-          ValueTexts[&Inst] = castOfText(*Cast, Text->second);
-          Mark(Inst);
-        }
+            Text != ValueTexts.end() && !Text->second.empty())
+          if (std::string Converted = castOfText(*Cast, Text->second);
+              !Converted.empty()) {
+            ValueTexts[&Inst] = std::move(Converted);
+            Mark(Inst);
+          }
       }
       if (isComposedRemValue(&Inst) || isRedundantFlagAnd(Inst) ||
           (llvm::isa<llvm::ICmpInst>(&Inst) && !Inst.use_empty()))

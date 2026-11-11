@@ -8873,6 +8873,78 @@ int main(void) {
     compileAndRun(Source, Optimization);
 }
 
+TEST(LLVMCValues, AConversionOfANamedLoadConvertsAsItsInstruction) {
+  // A load that reads as its own name lends that name to a cast of it only
+  // where the cast keeps the value. A conversion to or from floating point
+  // states its signedness: C would convert the unsigned carrier as unsigned.
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diagnostic;
+  auto Module = llvm::parseAssemblyString(R"(
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+define i64 @conversions(ptr %word, ptr %real, ptr %out) {
+  %bits = load volatile i32, ptr %word, align 4
+  %signed = sitofp i32 %bits to float
+  %signed_bits = bitcast float %signed to i32
+  %unsigned = uitofp i32 %bits to float
+  %unsigned_bits = bitcast float %unsigned to i32
+  %wide = sitofp i32 %bits to double
+  %wide_bits = bitcast double %wide to i64
+  %number = load volatile double, ptr %real, align 8
+  %to_signed = fptosi double %number to i32
+  %narrow = fptrunc double %number to float
+  %narrow_bits = bitcast float %narrow to i32
+  store i32 %signed_bits, ptr %out, align 4
+  %second = getelementptr inbounds i8, ptr %out, i64 4
+  store i32 %unsigned_bits, ptr %second, align 4
+  %third = getelementptr inbounds i8, ptr %out, i64 8
+  store i32 %to_signed, ptr %third, align 4
+  %fourth = getelementptr inbounds i8, ptr %out, i64 12
+  store i32 %narrow_bits, ptr %fourth, align 4
+  ret i64 %wide_bits
+}
+)",
+                                          Diagnostic, Context);
+  ASSERT_TRUE(Module) << Diagnostic.getMessage().str();
+  neverd::CEmitterOptions Options;
+  Options.Format = neverd::BinaryFormat::ELF;
+  Options.TheArch = neverd::Arch::X64;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options));
+  Source += R"c(
+static uint32_t float_bits(float value) {
+  uint32_t bits;
+  __builtin_memcpy(&bits, &value, 4);
+  return bits;
+}
+static uint64_t double_bits(double value) {
+  uint64_t bits;
+  __builtin_memcpy(&bits, &value, 8);
+  return bits;
+}
+int main(void) {
+  const uint32_t words[] = {0, 1, 0x7FFFFFFFu, 0x80000000u, 0xFFFFFFFFu,
+                            0x01000001u, 0xA5A5A5A5u};
+  const double reals[] = {0.0, -1.5, 2147483520.0, -2147483648.0, 1e-3,
+                          16777217.0, -3.999};
+  for (unsigned i = 0; i < 7; ++i) {
+    volatile uint32_t word = words[i];
+    volatile double real = reals[i];
+    uint32_t out[4];
+    const uint64_t wide = conversions((void *)&word, (void *)&real, out);
+    if (out[0] != float_bits((float)(int32_t)words[i])) return 1 + i * 8;
+    if (out[1] != float_bits((float)words[i])) return 2 + i * 8;
+    if (wide != double_bits((double)(int32_t)words[i])) return 3 + i * 8;
+    if (out[2] != (uint32_t)(int32_t)reals[i]) return 4 + i * 8;
+    if (out[3] != float_bits((float)reals[i])) return 5 + i * 8;
+  }
+  return 0;
+}
+)c";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndRun(Source, Optimization);
+}
+
 TEST(LLVMCValues, UnextendedNarrowArgumentsArriveAsWholeWords) {
   // The code reads only the low byte and the low half of its first two
   // arguments, as code an int was declared to take may: its callers leave the
