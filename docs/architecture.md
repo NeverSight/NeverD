@@ -15041,13 +15041,24 @@ entry point, and C-source ARM Mach-O patching all fail closed before output
 mutation. Stripped inputs whose only function discovery source is
 `LC_FUNCTION_STARTS` are not yet supported.
 
-A whole-image Mach-O rewrite adds one segment command. Apple's linker can leave
-less room than that after the load commands, so the rewrite gives up
-`LC_SOURCE_VERSION`, `LC_DATA_IN_CODE` and `LC_FUNCTION_STARTS`, in that order and
-only as far as it must. dyld reads none of them. The signature command that
-`codesign` writes back after the table counts as part of what must fit, since
-`codesign` overwrites whatever follows the table. A source patch keeps them and
-grows the header instead.
+Mach-O code installation can need additional segment commands. Apple's linker
+can leave less room than that after the load commands, so both lifted rewrites
+and native source/object replacements give up `LC_SOURCE_VERSION`,
+`LC_DATA_IN_CODE` and `LC_FUNCTION_STARTS`, in that order and only as needed.
+The UUID and the symbol, dependency and unwind tables stay live.
+The signature command that `codesign` writes back after the table counts as
+part of what must fit, since `codesign` overwrites whatever follows the table.
+Every reached padding byte must be unowned and zero. Original code and data
+addresses remain fixed; occupied space still requires a complete relocation
+contract.
+
+Regular compact-unwind encoding and its reservation share one checked size
+planner. Full pages contain 511 records in 4096 bytes, while the last page ends
+after its declared records. Reservations include original records, new recipe
+and gap boundaries, personality slots and LSDAs without rounding the final
+page to 4 KiB. This permits small registries in existing TEXT capacity, but
+does not create storage for a full DWARF table when a live DATA segment blocks
+TEXT growth.
 
 PE, ELF, and Mach-O each have format-specific exception components, but NeverD
 does not yet publish an all-formats, all-exception-types end-to-end rewrite

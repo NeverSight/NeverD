@@ -768,6 +768,34 @@ void publishNativeInputs(bool ExpectLayoutRefusal) {
   const bool Dwarf = std::getenv(kPublicationDwarf) != nullptr;
   auto Image = Loader::create(BinaryFormat::MachO)->load(Input);
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  if (ExpectLayoutRefusal) {
+    const auto Text = llvm::find_if(Image->Segments, [](const auto &Segment) {
+      return Segment.Name == kNativeTextSegment;
+    });
+    ASSERT_NE(Text, Image->Segments.end());
+    uint64_t Tail = Text->FileOff;
+    for (const auto &Section : Image->Sections)
+      if (Section.SegmentName == kNativeTextSegment)
+        Tail = std::max(Tail, Section.FileOff + Section.FileSz);
+    const uint64_t End = Text->FileOff + Text->FileSz;
+    ASSERT_GT(Tail, Text->FileOff);
+    ASSERT_LT(Tail, End);
+    ASSERT_LE(End, Image->Raw.size());
+    auto Bytes = Image->Raw;
+    ASSERT_TRUE(
+        llvm::all_of(llvm::ArrayRef<uint8_t>(Bytes).slice(Tail, End - Tail),
+                     [](uint8_t Byte) { return Byte == 0; }));
+    // Leave every declared section intact, but occupy the otherwise usable
+    // TEXT tail. Reload the private image so all cached views match its bytes.
+    std::fill(Bytes.begin() + Tail, Bytes.begin() + End, kOccupiedTailByte);
+    Image =
+        Loader::create(BinaryFormat::MachO)
+            ->loadBuffer(llvm::MemoryBufferRef(
+                llvm::StringRef(reinterpret_cast<const char *>(Bytes.data()),
+                                Bytes.size()),
+                Input));
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  }
   llvm::LLVMContext Context;
   auto Module = module(Context);
   addFixtures(*Module);
@@ -892,7 +920,7 @@ void publishNativeInputs(bool ExpectLayoutRefusal) {
 
 TEST(AArch64EntryABI, PublishSignedNativeInputs) { publishNativeInputs(false); }
 
-TEST(AArch64EntryABI, RejectsUnreservedNativeInputs) {
+TEST(AArch64EntryABI, RejectsOccupiedNativeInputs) {
   publishNativeInputs(true);
 }
 } // namespace

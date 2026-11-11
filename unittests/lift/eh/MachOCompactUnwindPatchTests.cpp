@@ -1660,7 +1660,8 @@ TEST(MachOPatchSegmentInstall, HeaderSpaceFailureRollsBackTheWholeCandidate) {
 }
 
 // Apple's linker can leave less than a segment command after the table. A whole
-// image rewrite gives up the commands only tools read, as few as fit, in order.
+// native installation gives up commands only tools read, as few as fit, in
+// order.
 TEST(MachOPatchSegmentInstall, TightHeaderGivesUpOnlyToolCommandsAsNeeded) {
   using namespace llvm::MachO;
   struct Case {
@@ -1676,7 +1677,8 @@ TEST(MachOPatchSegmentInstall, TightHeaderGivesUpOnlyToolCommandsAsNeeded) {
       {55, {LC_SOURCE_VERSION, LC_DATA_IN_CODE, LC_FUNCTION_STARTS}},
       {40, {LC_SOURCE_VERSION, LC_DATA_IN_CODE, LC_FUNCTION_STARTS}},
   };
-  const auto Build = [](uint32_t Padding, bool Signed = false) {
+  const auto Build = [](uint32_t Padding, bool Signed = false,
+                        bool HasUUID = false) {
     MachOPatchTransactionFixture Fixture =
         makeMachOPatchTransactionFixture(/*CompactCapacity=*/0x2000);
     auto *Header = reinterpret_cast<mach_header_64 *>(Fixture.Binary.data());
@@ -1698,6 +1700,14 @@ TEST(MachOPatchSegmentInstall, TightHeaderGivesUpOnlyToolCommandsAsNeeded) {
     Header->ncmds += 3;
     Header->sizeofcmds +=
         sizeof(source_version_command) + 2 * sizeof(linkedit_data_command);
+    if (HasUUID) {
+      auto *UUID = reinterpret_cast<uuid_command *>(End);
+      UUID->cmd = LC_UUID;
+      UUID->cmdsize = sizeof(*UUID);
+      End += sizeof(*UUID);
+      ++Header->ncmds;
+      Header->sizeofcmds += sizeof(*UUID);
+    }
     if (Signed) {
       auto *Signature = reinterpret_cast<linkedit_data_command *>(End);
       Signature->cmd = LC_CODE_SIGNATURE;
@@ -1723,26 +1733,29 @@ TEST(MachOPatchSegmentInstall, TightHeaderGivesUpOnlyToolCommandsAsNeeded) {
     return Out;
   };
 
-  for (const Case &C : Cases) {
-    SCOPED_TRACE(C.Padding);
-    auto Fixture = Build(C.Padding);
-    ASSERT_FALSE(Fixture.Binary.empty());
-    const auto Before = Commands(Fixture.Binary);
-    MachOPatcher Patcher;
-    EXPECT_EQ(Patcher.appendExecSegment(Fixture.Binary,
-                                        {0xd6, 0x5f, 0x03, 0xc0},
-                                        kDefaultNdTextSegment, Arch::AArch64),
-              kImageBase + kTransactionLinkeditOff);
-    const auto After = Commands(Fixture.Binary);
-    EXPECT_EQ(After.size(), Before.size() + 1 - C.Dropped.size());
-    for (uint32_t Command :
-         {LC_SOURCE_VERSION, LC_DATA_IN_CODE, LC_FUNCTION_STARTS})
-      EXPECT_EQ(llvm::is_contained(After, Command),
-                !llvm::is_contained(C.Dropped, Command));
-    // The live commands the loader reads all remain.
-    for (uint32_t Command : {LC_SYMTAB, LC_DYSYMTAB})
-      EXPECT_TRUE(llvm::is_contained(After, Command));
-  }
+  for (auto Kind : {RewriteInputKind::LiftedIR, RewriteInputKind::ReplacementIR,
+                    RewriteInputKind::ReplacementObject})
+    for (const Case &C : Cases) {
+      SCOPED_TRACE(C.Padding);
+      auto Fixture = Build(C.Padding);
+      ASSERT_FALSE(Fixture.Binary.empty());
+      const auto Before = Commands(Fixture.Binary);
+      MachOPatcher Patcher;
+      Patcher.setInputKind(Kind);
+      EXPECT_EQ(Patcher.appendExecSegment(Fixture.Binary,
+                                          {0xd6, 0x5f, 0x03, 0xc0},
+                                          kDefaultNdTextSegment, Arch::AArch64),
+                kImageBase + kTransactionLinkeditOff);
+      const auto After = Commands(Fixture.Binary);
+      EXPECT_EQ(After.size(), Before.size() + 1 - C.Dropped.size());
+      for (uint32_t Command :
+           {LC_SOURCE_VERSION, LC_DATA_IN_CODE, LC_FUNCTION_STARTS})
+        EXPECT_EQ(llvm::is_contained(After, Command),
+                  !llvm::is_contained(C.Dropped, Command));
+      // The live commands the loader reads all remain.
+      for (uint32_t Command : {LC_SYMTAB, LC_DYSYMTAB})
+        EXPECT_TRUE(llvm::is_contained(After, Command));
+    }
 
   // Giving up all three leaves 48 bytes of commands for 72 and a signature.
   {
@@ -1802,12 +1815,14 @@ TEST(MachOPatchSegmentInstall, TightHeaderGivesUpOnlyToolCommandsAsNeeded) {
                                         uint32_t(LC_CODE_SIGNATURE)));
       }
     }
-  // A source patch keeps every command the image has.
-  {
-    auto Fixture = Build(56);
+  // Modern dyld requires the UUID. A signed input with no command space
+  // cannot use that command to make its segment and signature fit.
+  for (auto Kind : {RewriteInputKind::LiftedIR, RewriteInputKind::ReplacementIR,
+                    RewriteInputKind::ReplacementObject}) {
+    auto Fixture = Build(0, true, true);
     const auto Before = Fixture.Binary;
     MachOPatcher Patcher;
-    Patcher.setInputKind(RewriteInputKind::ReplacementIR);
+    Patcher.setInputKind(Kind);
     EXPECT_EQ(Patcher.appendExecSegment(Fixture.Binary,
                                         {0xd6, 0x5f, 0x03, 0xc0},
                                         kDefaultNdTextSegment, Arch::AArch64),
@@ -3701,11 +3716,11 @@ TEST(MachOCompactUnwindEncode,
   EXPECT_EQ(*EncodedAgain, *Encoded);
 
   // 28-byte header + two personalities + three index rows + two LSDAs,
-  // followed by two fixed-size regular pages.
+  // followed by a full regular page and the final two-entry page.
   constexpr uint32_t IndexOffset = 36;
   constexpr uint32_t LSDAOffset = 72;
   constexpr uint32_t PagesOffset = 88;
-  EXPECT_EQ(Encoded->size(), PagesOffset + 2 * 4096u);
+  EXPECT_EQ(Encoded->size(), PagesOffset + 4096u + 24u);
   auto Raw = macho_unwind::parseCompactUnwindRaw(*Encoded);
   ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
   EXPECT_EQ(Raw->Header.CommonEncodingsSectionOffset, 28u);
@@ -3732,7 +3747,7 @@ TEST(MachOCompactUnwindEncode,
   EXPECT_EQ(Raw->Pages[1].Kind, macho_unwind::kSecondLevelRegular);
   EXPECT_EQ(Raw->Pages[1].EntryPageOffset, 8u);
   EXPECT_EQ(Raw->Pages[1].EntryCount, 2u);
-  EXPECT_EQ((*Encoded)[PagesOffset + 4096u + 24u], 0u);
+  EXPECT_EQ(Raw->Pages[1].SectionOffset + 8u + 2u * 8u, Encoded->size());
 
   size_t RecordIndex = 0;
   for (const macho_unwind::CompactUnwindRawPage &Page : Raw->Pages) {
@@ -3755,6 +3770,52 @@ TEST(MachOCompactUnwindEncode,
   EXPECT_EQ(Raw->LSDAEntries[0].LSDAOffset, 0x9000u);
   EXPECT_EQ(Raw->LSDAEntries[1].FunctionOffset, Input.Records[511].FunctionRVA);
   EXPECT_EQ(Raw->LSDAEntries[1].LSDAOffset, 0xa000u);
+}
+
+TEST(MachOCompactUnwindEncode, FinalPageUsesOnlyItsDeclaredEntries) {
+  struct Case {
+    uint64_t Records;
+    uint64_t Bytes;
+  };
+  const Case Cases[] = {
+#define MACHO_COMPACT_LAYOUT_CASE(Records, Bytes) {Records, Bytes},
+#include "MachOCompactLayoutFixtures.def"
+  };
+  for (const auto &C : Cases) {
+    SCOPED_TRACE(C.Records);
+    const auto Input = makeMergedResult(Arch::AArch64, C.Records);
+    auto Encoded =
+        encodeMachOCompactUnwindRegular(Input, llvm::endianness::little);
+    ASSERT_TRUE(bool(Encoded)) << llvm::toString(Encoded.takeError());
+    EXPECT_EQ(Encoded->size(), C.Bytes);
+    auto Size = measureMachOCompactUnwindRegular(C.Records, 0, 0);
+    ASSERT_TRUE(bool(Size)) << llvm::toString(Size.takeError());
+    EXPECT_EQ(*Size, C.Bytes);
+    // The last byte belongs to the last recipe, not optional padding.
+    Encoded->pop_back();
+    auto Truncated = macho_unwind::parseCompactUnwindRaw(*Encoded);
+    EXPECT_FALSE(bool(Truncated));
+    llvm::consumeError(Truncated.takeError());
+  }
+}
+
+TEST(MachOCompactUnwindEncode, SizeRequestsRejectInvalidCountsAndOverflow) {
+  struct Case {
+    uint64_t Records;
+    uint64_t Personalities;
+    uint64_t LSDAs;
+  };
+  const Case Cases[] = {
+#define MACHO_COMPACT_INVALID_COUNTS(Records, Personalities, LSDAs)            \
+  {Records, Personalities, LSDAs},
+#include "MachOCompactLayoutFixtures.def"
+  };
+  for (auto Counts : Cases) {
+    auto Size = measureMachOCompactUnwindRegular(
+        Counts.Records, Counts.Personalities, Counts.LSDAs);
+    EXPECT_FALSE(bool(Size));
+    llvm::consumeError(Size.takeError());
+  }
 }
 
 TEST(MachOCompactUnwindEncode, AcceptsMergeOutputWithoutChangingItsInput) {

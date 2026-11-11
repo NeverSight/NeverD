@@ -96,7 +96,13 @@
     "lib/backend/llvm/emit/MedLLVMEmitter.cpp",
     "lib/backend/codegen/CodeGen.cpp",
     "lib/backend/codegen/SourcePatch.cpp",
-    "lib/backend/codegen/MachO/MachOPatchObject.cpp"
+    "lib/backend/codegen/MachO/MachOPatchObject.cpp",
+    "lib/backend/codegen/MachO/MachOLayoutGrowth.cpp",
+    "lib/backend/codegen/MachO/MachOCompactUnwindPatch.cpp",
+    "lib/backend/codegen/MachO/MachOCompactUnwindLayout.def",
+    "lib/backend/codegen/MachO/MachOPatch.cpp",
+    "include/neverd/object/MachOLayout.h",
+    "include/neverd/object/MachOLayout.def"
   ],
   "errors": {
     "arguments": "Native entry validation requires --probe-report; --compile-only does not accept one",
@@ -223,14 +229,7 @@
   },
   "caller_entry_marker": "neverd-entry-caller-entered\n",
   "caller_pass_marker": "neverd-entry-caller-passed\n",
-  "publication_header_args": [
-    "-Wl,-headerpad,0x8000"
-  ],
-  "publication_layout": "reserved TEXT/header capacity",
-  "unreserved_library_name": "unreserved-{optimization}-key-{key}-dwarf-{dwarf}.dylib",
-  "unreserved_suffix": "-unreserved",
-  "unreserved_case": "RejectsUnreservedNativeInputs",
-  "unreserved_filter": "--gtest_filter=AArch64EntryABI.RejectsUnreservedNativeInputs",
+  "publication_layout": "zero header reservation for compact and optimized DWARF, reserved capacity for unoptimized DWARF",
   "inspection_source_suffix": "-installed-text.s",
   "inspection_object_suffix": "-installed-text.o",
   "inspection_suffix": "-installed-text",
@@ -238,7 +237,29 @@
   "inspection_row": ".byte {data}\n",
   "inspection_byte": "0x{byte:02x}",
   "inspection_row_bytes": 16,
-  "unreserved_header_args": [
+  "occupied_library_name": "occupied-{optimization}-key-{key}-dwarf-{dwarf}.dylib",
+  "occupied_suffix": "-occupied",
+  "occupied_case": "RejectsOccupiedNativeInputs",
+  "occupied_filter": "--gtest_filter=AArch64EntryABI.RejectsOccupiedNativeInputs",
+  "occupied_header_args": [
     "-Wl,-headerpad,0"
+  ],
+  "tight_publication_layout": {
+    "name": "zero header reservation; checked existing TEXT capacity",
+    "header_args": [
+      "-Wl,-headerpad,0"
+    ]
+  },
+  "publication_layout_overrides": [
+    {
+      "dwarf": true,
+      "optimization": "-O0",
+      "layout": {
+        "name": "reserved TEXT/header capacity",
+        "header_args": [
+          "-Wl,-headerpad,0x8000"
+        ]
+      }
+    }
   ]
 }
