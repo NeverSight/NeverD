@@ -38,7 +38,7 @@ def check_probe(control, provenance):
 
 def publication_layout(optimization, dwarf, zero_base=False):
     if zero_base:
-        return POLICY["tight_publication_layout"]
+        return POLICY["zero_base_publication_layout"]
     for rule in POLICY["publication_layout_overrides"]:
         if rule["optimization"] == optimization and rule["dwarf"] == dwarf:
             return rule["layout"]
@@ -186,7 +186,7 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
               "compile_only": compile_only, "producer": producer, "publish": publish,
               "optimization_scope": POLICY["optimization_scopes"].get(producer),
               "publication_layout": POLICY["publication_layout"] if publish and not zero_base else
-                  POLICY["tight_publication_layout"]["name"] if publish else None,
+                  POLICY["zero_base_publication_layout"]["name"] if publish else None,
               "reconstructed_entry_publication_qualified": False, "cases": []}
     try:
         if producer not in POLICY["producers"] or (publish and not backend) or (zero_base and not publish):
@@ -245,11 +245,12 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                                            *POLICY["object_args"], output / source,
                                            POLICY["output_option"], obj])
                     original_obj = None
+                    original_optimization = POLICY["zero_base_original_optimization"] if zero_base else optimization
                     if publish:
                         original_obj = output / POLICY["original_object_name"].format(dwarf=dwarf)
                         products.append(original_obj)
                         original_ir = output / POLICY["original_dwarf_ir" if dwarf else "original_ir"]
-                        command(original_obj.name, [compiler, *compile_args, optimization,
+                        command(original_obj.name, [compiler, *compile_args, original_optimization,
                                                     *POLICY["object_args"], original_ir,
                                                     POLICY["output_option"], original_obj])
                     object_identity = check_classic(obj)
@@ -343,6 +344,7 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                                "object": object_identity, "executed": False,
                                "publication_layout": layout if publish else None,
                                "publication": receipt, "baseline_returncode": baseline,
+                               "original_entry_optimization": original_optimization if publish else None,
                                "image_base": base, "original_image_base": original_base,
                                "occupied_original_rejected": publish, "installed_text_sha256": text_hash}
                         report["cases"].append(row)

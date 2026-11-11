@@ -159,6 +159,8 @@ class EntryQualificationTests(unittest.TestCase):
                 for row in report["cases"]:
                     layout = entry.publication_layout(row["optimization"], row["dwarf"], zero_base)
                     self.assertEqual(row["publication_layout"], layout if publish else None)
+                    original_opt = entry.POLICY["zero_base_original_optimization"] if zero_base else row["optimization"]
+                    self.assertEqual(row["original_entry_optimization"], original_opt if publish else None)
                 self.assertEqual(len(executed), 0 if compile_only else 1 if fail else CASES["case_count"])
                 for path in output.iterdir():
                     self.assertNotIn(path.suffix, (".out", ".o", ".dylib"))

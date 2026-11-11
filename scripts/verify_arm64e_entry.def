@@ -179,6 +179,11 @@
     "neverd"
   ],
   "backend_producer": "neverd",
+  "zero_base_original_optimization": "-O2",
+  "zero_base_publication_layout": {
+    "name": "zero preferred base, optimized original trapping entries and no reserved header padding",
+    "header_args": ["-Wl,-headerpad,0", "-Wl,-install_name,@rpath/entry.dylib"]
+  },
   "zero_base_argument": "--zero-base",
   "publication_argument": "--publish",
   "backend_environment": "NEVERD_ARM64E_ENTRY_BACKEND",

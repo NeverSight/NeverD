@@ -713,9 +713,14 @@ address so NeverD can extend the front of the segment while preserving code,
 data and authenticated slot VAs. The verifier reads each actual Mach header
 base and resolves the compact index's relative offsets against the installed
 base. With `--publish --zero-base`, the same eight IA/IB and compact/DWARF
-cases require both preferred header addresses to remain zero. On the tight
-O0 image, the installer measures LSDA index demand from the native compact
-entries and FDEs. It can retain the compact table at its original VA, move
+cases require both preferred header addresses to remain zero. This profile
+uses O2 for the original trapping entries and a fixed `@rpath` install name.
+The separately compiled caller still runs at O0 and O2. When both the caller
+and the original entries use O0, the measured zero-base input has only 752
+bytes of TEXT tail after its 1,192-byte DWARF section. The additional frame
+records exceed that space, and installation fails before emitting a file.
+The installer measures LSDA index demand from the native compact entries
+and FDEs. It can retain the compact table at its original VA, move
 the adjacent DWARF records into audited free TEXT storage and reuse their
 former bytes for the enlarged compact table. Each case also
 fills the remaining TEXT tail of a zero-base input copy and requires refusal
