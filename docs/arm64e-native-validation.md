@@ -640,3 +640,12 @@ linked with zero header reservation. The
 [run record](evidence/arm64e-compact-layout-2026-11-11.json) binds the source
 revision, Release host, LLVM fork, GitHub artifacts and signed image hashes.
 Both runners reported Apple M1 (Virtual).
+
+The [header relocation run](https://github.com/gmh5225/test_mac_intel/actions/runs/42951431144)
+executed all eight published images with zero linker header reservation on
+each Apple runner. In both O0 indexed-DWARF cases the preferred header moved
+from `0x100000000` to `0xffffc000`. The six default-base images retained
+their zero preferred address. Each host also passed eight original-caller
+trap controls, eight occupied-layout refusals and six compiler controls. The
+[evidence record](evidence/arm64e-header-relocation-2026-11-11.json)
+identifies the Release host, both artifacts and their measured image bases.
