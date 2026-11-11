@@ -5,8 +5,9 @@
 //===----------------------------------------------------------------------===//
 
 /// \file
-/// Swift passes its context in X20. A machine read establishes a physical
-/// live-in even when the image carries no source-level calling convention.
+/// Swift uses X20 for self and X22 for its asynchronous context. A read
+/// keeps its physical entry value even when the image omits the source
+/// calling convention.
 #ifndef NEVERD_DARWIN_ENTRY_TEXT
 #define NEVERD_DARWIN_ENTRY_TEXT(Name, Text)
 #endif
@@ -16,6 +17,7 @@
 
 NEVERD_DARWIN_ENTRY_TEXT(kDarwinFeatureAttribute, "target-features")
 NEVERD_DARWIN_ENTRY_REGISTER(X20, W20, "x20", "reserve-x20")
+NEVERD_DARWIN_ENTRY_REGISTER(X22, W22, "x22", "reserve-x22")
 
 #undef NEVERD_DARWIN_ENTRY_TEXT
 #undef NEVERD_DARWIN_ENTRY_REGISTER

@@ -28,6 +28,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <string_view>
 
 namespace {
 using namespace neverd;
@@ -36,7 +37,8 @@ using namespace neverd;
 #include "AArch64LiftedLeafFixtures.def"
 
 void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
-                           const char *SourceName = kSource) {
+                           const char *SourceName = kSource,
+                           std::string_view Preamble = {}) {
 #if defined(__APPLE__) && defined(__aarch64__)
   llvm::SmallString<128> Directory;
   ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kTemporary, Directory));
@@ -46,7 +48,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   const auto Input = (Root / kOriginal).string();
   const auto Output = (Root / kOutput).string();
   const auto Rejected = (Root / kRejected).string();
-  std::ofstream(Source) << Leaves;
+  std::ofstream(Source) << Preamble << Leaves;
   ASSERT_EQ(llvm::sys::ExecuteAndWait(
                 kCompiler, {kCompiler, kTargetFlag, kTarget, kOptimize,
                             kOmitFrame, kDylib, kTight, Source, kOut, Input}),
@@ -119,7 +121,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
       kPublishedHash, llvm::toHex(llvm::SHA256::hash(Final->Raw), true));
   const auto Caller = (Root / kDriverSource).string();
   const auto Driver = (Root / kDriver).string();
-  std::ofstream(Caller) << CallerSource;
+  std::ofstream(Caller) << Preamble << CallerSource;
   ASSERT_EQ(
       llvm::sys::ExecuteAndWait(kCompiler, {kCompiler, kTargetFlag, kTarget,
                                             kOptimize, Caller, kOut, Driver}),
@@ -159,7 +161,11 @@ TEST(AArch64LiftedImage, VerifiedLeafBodiesUseTheNormalPatchPipeline) {
 }
 
 TEST(AArch64DarwinEntry, SwiftContextSurvivesNativeLeafPublication) {
-  verifyPublishedLeaves(kSwiftLeaves, kSwiftCaller);
+  verifyPublishedLeaves(kSwiftLeaves, kSwiftCaller, kSource, kSwiftABI);
+}
+
+TEST(AArch64DarwinEntry, SwiftAsyncContextSurvivesNativeLeafPublication) {
+  verifyPublishedLeaves(kSwiftLeaves, kSwiftCaller, kSource, kSwiftAsyncABI);
 }
 
 TEST(AArch64DarwinEntry, ScalarFPParametersAndResultsSurvivePublication) {

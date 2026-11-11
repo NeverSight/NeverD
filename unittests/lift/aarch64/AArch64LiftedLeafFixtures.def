@@ -66,10 +66,16 @@ int main(int argc, char **argv) {
 }
 )c")
 
-A64_LEAF_TEXT(kSwiftLeaves, R"c(
-#include <stdint.h>
+A64_LEAF_TEXT(kSwiftABI, R"c(
 #define SWIFT __attribute__((swiftcall))
 #define CONTEXT __attribute__((swift_context))
+)c")
+A64_LEAF_TEXT(kSwiftAsyncABI, R"c(
+#define SWIFT __attribute__((swiftasynccall))
+#define CONTEXT __attribute__((swift_async_context))
+)c")
+A64_LEAF_TEXT(kSwiftLeaves, R"c(
+#include <stdint.h>
 SWIFT uintptr_t leaf_sum(uintptr_t x, void *CONTEXT self) {
   return (uintptr_t)self + x;
 }
@@ -80,8 +86,7 @@ SWIFT uintptr_t leaf_difference(uintptr_t x, void *CONTEXT self) {
 A64_LEAF_TEXT(kSwiftCaller, R"c(
 #include <dlfcn.h>
 #include <stdint.h>
-typedef uintptr_t __attribute__((swiftcall))
-    operation(uintptr_t, void *__attribute__((swift_context)));
+typedef uintptr_t SWIFT operation(uintptr_t, void *CONTEXT);
 int main(int argc, char **argv) {
   if (argc != 2)
     return 1;

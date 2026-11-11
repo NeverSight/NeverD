@@ -507,11 +507,15 @@ base register and displacement. A typed caller compares loaded values and
 checks both neighboring slots after stores. Literal or register-indexed
 addressing, writeback and SP-based memory operands require separate proofs.
 
-Unassigned incoming reads of X20 now use LLVM's reserved physical register. This preserves a Swift context
-without requiring a stripped image to identify its source calling convention.
-Apple Clang produces both the Swift-call fixture and its independent typed
-caller. The floating-point caller checks the exact result bits, including
-signed zero.
+Unassigned incoming reads of X20 and X22 use LLVM's reserved physical
+registers. These carry Swift self and the asynchronous context, respectively.
+The lifter preserves the observed register even when the image omits its
+source calling convention. Apple Clang builds the independent typed callers
+and callees with `swiftcall` and `swiftasynccall`. The latter verifies the
+context passed to a leaf before any suspension or continuation switch.
+These register assignments are documented in the
+[Swift ARM64 ABI](https://github.com/swiftlang/swift/blob/main/docs/ABI/CallingConventionSummary.rst#arm64).
+The floating-point caller checks the exact result bits, including signed zero.
 
 Frameless bodies may also preserve a matching entry PACIBSP and terminal
 RETAB. SP and LR remain untouched between those instructions. The relocated
