@@ -228,8 +228,8 @@ llvm::Expected<MachODependencyState> slideMachOZeroBaseDylib(Bytes &Binary,
     return Before.takeError();
   const auto H = parseMachOHeader(Binary.data(), Binary.size());
   if (!H.Is64 || H.FileType != MH_DYLIB || Before->CPUType != CPU_TYPE_ARM64 ||
-      (Before->CPUSubtype & ~CPU_SUBTYPE_MASK) != CPU_SUBTYPE_ARM64E ||
-      Chains.HeaderVA || !Chains.CommandOffset || Chains.Threaded)
+      !arm64e::isSubtype(Before->CPUSubtype) || Chains.HeaderVA ||
+      !Chains.CommandOffset || Chains.Threaded)
     return fail(kSlideImage);
   // Encoded binds are independent of the preferred base. Rebases in
   // userland offset formats and authenticated rebases are image-relative.

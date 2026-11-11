@@ -211,7 +211,8 @@ int patchSource(Session &S, const void *Input, size_t InputSize,
     // A zero-base dylib may need to move its sections together. Preparing
     // addresses here would pin imports to their input locations.
     if (!Callbacks && Dependencies.empty() &&
-        (!S.Img.isMachO() || (S.Img.isArm64e() && !S.Img.Base)))
+        (!S.Img.isMachO() ||
+         (S.Img.isArm64e() && S.Img.MachOIsDylib && !S.Img.Base)))
       return llvm::Error::success();
     std::optional<BinaryImage> Reserved;
     if (S.Img.isMachO()) {
