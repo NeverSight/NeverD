@@ -4460,3 +4460,31 @@ inputs and other non64 state owners, including task/system selectors, segment
 reloads, ports/strings/MPX, legacy returns and call gates. Real/unreal execution,
 software SMM/SGX and unbound event producers remain open. The production r6 pin
 and LLVM gitlink remain unchanged; no final LLVM release is declared.
+
+
+## Continuous-mode IRQ/NMI and retained acceptance (2026-11-11)
+
+The [full-width mode owner](x86-mode-execution.md#selected-external-irqnmi)
+now accepts explicitly selected IRQ/NMI inputs in protected16/32,
+compatibility16/32 and code64. Committed LMA selects the event owner; complete
+stack witnesses, NMI blocking, accepted frame effects and frozen options
+survive backing repair. Acceptance is reported once, including secondary
+faults and zero-budget resumes. Halt wake, terminal shutdown and pending-state
+authentication precede further fetch or budget checks. Inhibited or refused
+inputs publish no trial bank or paging-control changes.
+
+At integration `b9bcfd819c`, the development SDK and production r6 SDK each
+pass 476 primary paged-source, legacy-source, boundary and SDK cases. Another
+29 alternate-core replays and five regressions from the latest upstream
+runtime-varargs/frame-pointee changes pass per SDK, counted separately; there
+are no failures or skips. Original STI/HLT wake and repeated NMI/IRETQ streams
+use one initial SREGS write and no host mode or blocker rewrites. Both C
+emitters retain identical generated artifacts across SDKs. The
+[dated evidence](evidence/x86-mode-interrupts-2026-11-11.json) records exact
+source/binary/artifact hashes and the unchanged lower-owner paging baseline.
+
+The producer still owns arrival timing and APIC/PIC/CR8 priority arbitration.
+Other non64 state-owner integrations, real/unreal execution, software SMM/SGX
+and unbound event producers remain open. NeverC remains host x64 only. The
+production r6 pin and LLVM gitlink are unchanged; no final LLVM release is
+declared.

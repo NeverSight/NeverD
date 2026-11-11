@@ -131,7 +131,11 @@ IDT/frame suspension, secondary faults, shutdown and task-owner refusal. Native
 STI/HLT wake and repeated NMI/IRETQ streams retain a single initialization,
 checking event frames, CS/SS caches, controls, inhibition and ordinary RAM.
 
-The [dated evidence](evidence/x86-mode-execution-2026-11-11.json) records the
-exact tested source, binaries, reports, generated sources and limitations.
+The [continuous-mode evidence](evidence/x86-mode-execution-2026-11-11.json)
+and [external-input evidence](evidence/x86-mode-interrupts-2026-11-11.json)
+record the exact tested source, binaries, reports, generated sources and
+limitations. The external-input qualification passes 476 primary cases per
+SDK, with 29 alternate-core replays and five upstream integration checks per
+SDK reported separately; none fails or skips.
 This checkpoint does not declare global x86 completion or authorize the final
 LLVM release. The production r6 pin and LLVM gitlink remain unchanged.
