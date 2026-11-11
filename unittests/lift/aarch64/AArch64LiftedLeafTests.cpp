@@ -169,4 +169,8 @@ TEST(AArch64DarwinEntry, ScalarFPParametersAndResultsSurvivePublication) {
 TEST(AArch64DarwinEntry, SignedLeafUsesTheIncomingSPAtItsNewAddress) {
   verifyPublishedLeaves(kSignedLeaves, kCaller, kAssemblyName);
 }
+
+TEST(AArch64LiftedMemory, BaseAndDisplacementRetainLoadAndStoreEffects) {
+  verifyPublishedLeaves(kMemoryLeaves, kMemoryCaller);
+}
 } // namespace

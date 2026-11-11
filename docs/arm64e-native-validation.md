@@ -486,11 +486,10 @@ images still need those proofs, including variadic and non-C entries. The
 previous canonical-IR installation qualification and pinned r6 package remain
 unchanged; source-fork-only producer features still require the source build.
 
-## Publishing register-only lifted dylibs
+## Publishing position-independent lifted dylibs
 
 The ordinary segment patch pipeline can publish a classic macOS arm64e image
-whose entire instruction section consists of verified frameless register-only
-leaf functions.
+whose entire instruction section consists of verified frameless leaf functions.
 It matches lifted definitions to original entries, then checks the relocated
 machine instructions and compact unwind coverage for every body. The original
 entries forward to the emitted RX addresses. The private native emission uses
@@ -501,9 +500,12 @@ lifts it through the normal patch pipeline and compares the result against
 the original image. A missing definition or a changed arithmetic result fails
 before an output file is created. Set `NEVERD_ARM64E_LIFTED_NATIVE=1` on a
 host that executes arm64e to run the independently compiled authenticated
-caller against both images. The strict instruction check currently covers
+caller against both images. The strict instruction check accepts
 register-only integer arithmetic, logical operations, moves, and scalar
-floating-point add/subtract ending in RET. Unassigned incoming reads of X20
+floating-point add/subtract ending in RET. Plain LDR and STR can use a live
+base register and displacement. A typed caller compares loaded values and
+checks both neighboring slots after stores. Literal or register-indexed
+addressing, writeback and SP-based memory operands require separate proofs. Unassigned incoming reads of X20
 now use LLVM's reserved physical register. This preserves a Swift context
 without requiring a stripped image to identify its source calling convention.
 Apple Clang produces both the Swift-call fixture and its independent typed

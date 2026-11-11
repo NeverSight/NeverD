@@ -39,40 +39,53 @@ llvm::Error refuse(const char *Reason) {
   return llvm::createStringError(llvm::errc::not_supported, Reason);
 }
 
-bool registerOnly(const DecodedInsn &I) {
-  switch (I.Id) {
-#define MACHO_LEAF_INSTRUCTION(Name) case Name:
-#include "MachOLiftedLeaf.def"
-    break;
-  default:
-    return false;
-  }
-  const auto &Detail = I.Raw->detail->aarch64;
-  for (const auto &Op : llvm::ArrayRef(Detail.operands, Detail.op_count)) {
-    if (Op.type == AARCH64_OP_IMM)
-      continue;
-    if (Op.type != AARCH64_OP_REG)
-      return false;
-    const auto R = Op.reg;
-    if (Op.access == CS_AC_READ) {
-      switch (R) {
+bool leafRegister(aarch64_reg R, bool ReadOnly) {
+  if (ReadOnly) {
+    switch (R) {
 #define NEVERD_DARWIN_ENTRY_REGISTER(X, W, Name, Reservation)                  \
   case AARCH64_REG_##X:                                                        \
   case AARCH64_REG_##W:                                                        \
-    continue;
+    return true;
 #include "neverd/backend/llvm/AArch64/LLVMDarwinEntryRegister.def"
-      default:
-        break;
-      }
+    default:
+      break;
     }
-    if (!((R >= AARCH64_REG_X0 && R <= AARCH64_REG_X17) ||
-          (R >= AARCH64_REG_W0 && R <= AARCH64_REG_W17) ||
-          (R >= AARCH64_REG_S0 && R <= AARCH64_REG_S7) ||
-          (R >= AARCH64_REG_D0 && R <= AARCH64_REG_D7) ||
-          R == AARCH64_REG_XZR || R == AARCH64_REG_WZR))
-      return false;
   }
-  return true;
+  return (R >= AARCH64_REG_X0 && R <= AARCH64_REG_X17) ||
+         (R >= AARCH64_REG_W0 && R <= AARCH64_REG_W17) ||
+         (R >= AARCH64_REG_S0 && R <= AARCH64_REG_S7) ||
+         (R >= AARCH64_REG_D0 && R <= AARCH64_REG_D7) || R == AARCH64_REG_XZR ||
+         R == AARCH64_REG_WZR;
+}
+
+bool isPositionIndependentLeafInstruction(const DecodedInsn &I) {
+  const auto &Detail = I.Raw->detail->aarch64;
+  switch (I.Id) {
+#define MACHO_LEAF_INSTRUCTION(Name) case Name:
+#include "MachOLiftedLeaf.def"
+    return llvm::all_of(
+        llvm::ArrayRef(Detail.operands, Detail.op_count),
+        [](const cs_aarch64_op &Op) {
+          return Op.type == AARCH64_OP_IMM ||
+                 (Op.type == AARCH64_OP_REG &&
+                  leafRegister(Op.reg, Op.access == CS_AC_READ));
+        });
+#define MACHO_LEAF_MEMORY(Name) case Name:
+#include "MachOLiftedLeaf.def"
+    // A literal LDR has the same instruction ID. Insist on an actual base
+    // register and displacement, with neither PC-relative addressing nor
+    // an implicit write to the base.
+    return Detail.op_count == kMemoryOperandCount &&
+           !I.Raw->detail->writeback && !Detail.post_index &&
+           Detail.operands[0].type == AARCH64_OP_REG &&
+           leafRegister(Detail.operands[0].reg,
+                        Detail.operands[0].access == CS_AC_READ) &&
+           Detail.operands[1].type == AARCH64_OP_MEM &&
+           Detail.operands[1].mem.index == AARCH64_REG_INVALID &&
+           leafRegister(Detail.operands[1].mem.base, true);
+  default:
+    return false;
+  }
 }
 
 llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
@@ -155,7 +168,7 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
       } else if (!Offset && readLE<uint32_t>(Source.data()) ==
                                 static_cast<uint32_t>(SigningHint::PACIBSP)) {
         Signed = true;
-      } else if (!registerOnly(Insn)) {
+      } else if (!isPositionIndependentLeafInstruction(Insn)) {
         return refuse(kLeafCode);
       }
     }
