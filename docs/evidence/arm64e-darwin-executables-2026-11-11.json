@@ -66,7 +66,7 @@
       "native_oracles": {
         "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM": {
           "status": "skipped",
-          "reason": "/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/unittests/lift/aarch64/AArch64AddressMemoryTests.cpp:6833\nThe execution host does not report the required ordered-memory feature\n"
+          "reason": "The execution host does not report the required ordered-memory feature"
         },
         "AArch64PAuthSemantics.NativeGenericSignaturesAgreeWithBothCProjections": {
           "status": "passed"
@@ -76,11 +76,11 @@
         },
         "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections": {
           "status": "skipped",
-          "reason": "/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/unittests/lift/aarch64/AArch64PAuthSemanticTests.cpp:1786\nthis host cannot execute arm64e PAuth_LR with active keys\n"
+          "reason": "this host cannot execute arm64e PAuth_LR with active keys"
         },
         "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections": {
           "status": "skipped",
-          "reason": "/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/unittests/lift/aarch64/AArch64PAuthSemanticTests.cpp:2660\nthis host cannot execute PACM with active IA/IB keys and a second diversifier\n"
+          "reason": "this host cannot execute PACM with active IA/IB keys and a second diversifier"
         }
       },
       "oracle_xml_sha256": "dd998cb92c60f9cb67eab9abc04aea5f3289280cc1203168b74b89f63b0bd694",
@@ -178,7 +178,7 @@
       "native_oracles": {
         "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM": {
           "status": "skipped",
-          "reason": "/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/unittests/lift/aarch64/AArch64AddressMemoryTests.cpp:6833\nThe execution host does not report the required ordered-memory feature\n"
+          "reason": "The execution host does not report the required ordered-memory feature"
         },
         "AArch64PAuthSemantics.NativeGenericSignaturesAgreeWithBothCProjections": {
           "status": "passed"
@@ -188,11 +188,11 @@
         },
         "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections": {
           "status": "skipped",
-          "reason": "/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/unittests/lift/aarch64/AArch64PAuthSemanticTests.cpp:1786\nthis host cannot execute arm64e PAuth_LR with active keys\n"
+          "reason": "this host cannot execute arm64e PAuth_LR with active keys"
         },
         "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections": {
           "status": "skipped",
-          "reason": "/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/unittests/lift/aarch64/AArch64PAuthSemanticTests.cpp:2660\nthis host cannot execute PACM with active IA/IB keys and a second diversifier\n"
+          "reason": "this host cannot execute PACM with active IA/IB keys and a second diversifier"
         }
       },
       "oracle_xml_sha256": "adefa4eef312631cc0473dfecfcbda2de10c627ea9f830820b9ef488d39dd126",
