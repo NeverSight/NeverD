@@ -522,8 +522,8 @@ The floating-point caller checks the exact result bits, including signed zero.
 
 Frameless bodies may also preserve a matching entry PACIBSP and terminal
 RETAB. SP and LR remain untouched between those instructions. The relocated
-machine bytes and frameless compact unwind coverage must match, and removing
-the return-signing policy refuses publication. Functions with calls, stack
+body must pass the instruction comparison and retain its frameless compact
+unwind coverage. Removing the return-signing policy refuses publication. Functions with calls, stack
 accesses or PC-dependent signing need additional proofs.
 
 The [native lifted-image run](https://github.com/gmh5225/test_mac_intel/actions/runs/42957645426)
