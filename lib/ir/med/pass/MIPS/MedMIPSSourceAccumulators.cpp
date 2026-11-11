@@ -28,11 +28,6 @@ void requireMIPSSourceAccumulators(const MedFunc &Function) {
     return Value.Kind == MedVar::Reg && (mipsreg::isAccumulator(Value.RegOff) ||
                                          Value.RegOff == mipsreg::AC0Pending);
   };
-  llvm::DenseSet<std::pair<int, int>> Clobbers;
-  for (const auto &Clobber : Function.CallClobbers)
-    if (IsAccumulator(Clobber.Value))
-      Clobbers.insert({Clobber.Value.Id, Clobber.Value.SSAVer});
-  MedDefSiteIndex Definitions(Function);
   llvm::SmallVector<MedVar, 8> Pending;
   for (const auto &Block : Function.Blocks) {
     for (const auto &Op : Block.Ops) {
@@ -51,6 +46,13 @@ void requireMIPSSourceAccumulators(const MedFunc &Function) {
           Pending.push_back(Op.Inputs[I]);
     }
   }
+  if (Pending.empty())
+    return;
+  llvm::DenseSet<std::pair<int, int>> Clobbers;
+  for (const auto &Clobber : Function.CallClobbers)
+    if (IsAccumulator(Clobber.Value))
+      Clobbers.insert({Clobber.Value.Id, Clobber.Value.SSAVer});
+  MedDefSiteIndex Definitions(Function);
   llvm::DenseSet<std::pair<int, int>> Seen;
   while (!Pending.empty()) {
     const MedVar Value = Pending.pop_back_val();
