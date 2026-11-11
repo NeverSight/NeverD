@@ -23,9 +23,23 @@ neverd mobile decoded/smali -o recovered-java
 
 All root `classes.dex`, `classes2.dex`, and subsequent numbered DEX files in an APK are analyzed together. A smali directory is searched recursively and all its classes are analyzed in one invocation, including nested and sibling classes. Use a directory when recovering classes that reference each other. A single smali file only supplies that class.
 
-Built-in output contains `sources/`, `metadata/android-methods.json`, and `report.json`, with `backend: {"name": "neverd", "version": "1", "execution": "builtin"}`. The report embeds `android_method_recovery`: `method_count = recovered_method_count + declaration_only_method_count`, and `unrecovered_method_count` must be zero before publication. Original `native`/`abstract` declarations are counted separately from recovered bodies. The explicit external adapter retains its own backend logs. APK resources, manifests, native libraries, and dynamically loaded code are outside this Java path; native libraries can be analyzed separately with `neverd decompile`.
+Built-in output contains `sources/`, `metadata/android-methods.json`, and `report.json`, with `backend: {"name": "neverd", "version": "1", "execution": "builtin"}`. The source report embeds `android_method_recovery`. Before compilation, its method total includes recovered bodies, declaration-only methods, and source projections. A projection records how Java represents an original definition, including compiler-managed bridges and source aliases. The exporter leaves the method report `partial` when those representations require verification. The explicit external adapter retains its own backend logs. APK resources, manifests, native libraries, and dynamically loaded code are outside this Java path; native libraries can be analyzed separately with `neverd decompile`.
 
 The built-in readers share an independently implemented typed Dalvik model and bounded Java emitter for representable ordinary DEX 035/037–040 and smali code. DEX 041, dynamic calls such as `invoke-custom`, some initialization paths, unknown operations, and identifiers unrepresentable in Java fail explicitly. Generated Java may use a dispatch loop; it does not execute the original DEX or call it through a runtime bridge. Original comments, formatting, and removed names cannot be restored. The experimental engine does not promise JADX feature parity, semantic equivalence, or complete recovery of arbitrary APKs.
+
+### Verify all recovered Android methods
+
+Compile an APK or DEX export into a new verified directory with the original input, the Android SDK's `dexdump`, and the JDK that supports the reported `minimum_java_release`. Pass the application's platform and dependency options to javac after `--`.
+
+```bash
+python3 scripts/verify_mobile_android_recovery.py recovered-java --input sample.apk \
+  --dexdump "$ANDROID_HOME/build-tools/36.0.0/dexdump" -o verified-java \
+  -- -classpath "$ANDROID_HOME/platforms/android-35/android.jar:lib/dependency.jar"
+```
+
+The verifier checks the original DEX and generated file digests, inventories the original declarations with the SDK, and compiles every source in a fresh class directory. It associates local and anonymous types with javac's actual binary names. Each original method must have a distinct compiled entry with the matching body, abstract, native, and static role. Compiler-generated bridges are checked before restoring original bridge and synthetic flags. The field rebuild utility runs when the export requires it. Add `--keep-classes` to retain the resulting class files.
+
+Both `report.json` and `metadata/android-methods.json` in the verified directory contain method coverage schema 2. A successful verification sets `status` to `recovered`. The recovered body and declaration-only counts sum to the original method count. Each row records its compiled identity and original and rebuilt access flags. Class bindings record the binary names selected by javac. For inherited bridges, `compiled_generated_bridges` records the actual JVM methods, including bridges emitted under a source alias. `source_projected_method_count`, the per-row projection reasons, and class and generic metadata differences remain available for inspecting Java representation and reflection. The verifier inspects compiled definitions without loading application classes.
 
 ## iOS
 

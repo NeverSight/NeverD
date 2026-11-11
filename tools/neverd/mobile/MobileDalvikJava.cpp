@@ -6,6 +6,7 @@
 
 #include "neverd/Limits.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/SaveAndRestore.h"
 
@@ -1364,6 +1365,10 @@ std::string sourceMethodName(const MethodRef &Ref,
   if (const auto I = Plan.void_unit_targets.find(Ref);
       I != Plan.void_unit_targets.end())
     return I->second;
+  if (const auto I = Plan.nonreturning_results.find(Ref);
+      I != Plan.nonreturning_results.end() &&
+      !I->second.target_source_name.empty())
+    return I->second.target_source_name;
   if (Ref.name == "<init>" || Ref.name == "<clinit>")
     return Ref.name;
   return javaIdentifier(Ref.name);
@@ -12732,6 +12737,18 @@ std::vector<std::string> modifiers(const Access &Flags,
 
 } // namespace
 
+std::string javaEnumLiteral(const Literal &Value, const std::string &Type) {
+  if (const auto *Text = std::get_if<std::string>(&Value))
+    return javaString(*Text);
+  if (isReference(Type))
+    return "null";
+  const auto Number = std::get<int64_t>(Value);
+  FieldValue Bits = Number;
+  if (Type == "F" || Type == "D")
+    Bits = FloatBits{uint64_t(Number), Type == "D"};
+  return *fieldValue(Bits, Type);
+}
+
 llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
   const auto PackageMetadata = planEmptyPackageMetadata(Classes, B);
   const auto SourceScopes = validateSourceScopes(Classes, B);
@@ -12753,6 +12770,26 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
       planCapturedFieldIdentifiers(Classes, Generics, Inheritance, B);
   HasFieldIdentifierProjection |=
       planPrivateFieldIdentifiers(Classes, Inheritance, B);
+  if (!Inheritance.nonreturning_results.empty()) {
+    // Return-only JVM overloads need separate Java names. Include inherited
+    // and projected declarations when reserving the name of the original body.
+    Strings Names;
+    for (const auto &[Name, C] : Classes)
+      for (const auto &M : C.methods) {
+        B.tick();
+        Names.insert(M.reference.name);
+      }
+    for (const auto &[Ref, Slot] : Inheritance.source_method_names)
+      Names.insert(Slot.name);
+    for (const auto &[Ref, Alias] : Inheritance.void_unit_targets)
+      Names.insert(Alias);
+    for (auto &[Ref, Result] : Inheritance.nonreturning_results) {
+      auto Name = "__neverdNonReturning_" + javaIdentifier(Ref.name);
+      while (!Names.insert(Name).second)
+        Name += '_';
+      Result.target_source_name = std::move(Name);
+    }
+  }
   auto SuperHelperNames = planStaticSuperHelperNames(Classes, Inheritance, B);
   for (const auto &[ref, target] : Inheritance.interface_default_accessors)
     SuperHelperNames.erase(ref);
@@ -12889,6 +12926,7 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
   }
   std::map<std::string, llvm::json::Array> EnumConstantAnnotations;
   uint64_t Recovered = 0, Declared = 0, Projected = 0;
+  llvm::json::Array OriginalClasses;
   std::set<MethodRef> emittedLocalMethods;
   unsigned MinimumJavaRelease = 8;
   LocalProjection Projection(Classes, LocalNames, SharedAnonymous,
@@ -12898,6 +12936,7 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
     B.tick();
     if (C.external)
       continue;
+    OriginalClasses.push_back(Name);
     if (C.source_debug_extension)
       DebugMetadata.push_back(llvm::json::Object{
           {"class", C.name},
@@ -13259,6 +13298,10 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
       BodyLines.append("// Named source projection of an anonymous class; see "
                        "class_source_bindings.");
     BodyLines.append(Header.empty() ? "{" : Header + " {");
+    // Javac selects the binary names of local, anonymous and enum constant
+    // classes. Encode the original descriptor so unrelated classes cannot
+    // change this source unit or introduce Java escapes in its origin marker.
+    BodyLines.append("  // NeverD class " + llvm::toHex(C.name, true));
     if (Site == DeclarationSite::Anonymous) {
       const auto &Site = Anonymous.at(C.name);
       AnonymousBindings.push_back(
@@ -13286,17 +13329,8 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
                 sourceMethodName(Constant.argument_helpers[N]->reference,
                                  Inheritance) +
                 "()";
-          else if (const auto *String = std::get_if<std::string>(&Value))
-            Expression = javaString(*String);
-          else if (isReference(Type))
-            Expression = "null";
-          else {
-            const auto Number = std::get<int64_t>(Value);
-            FieldValue Bits = Number;
-            if (Type == "F" || Type == "D")
-              Bits = FloatBits{uint64_t(Number), Type == "D"};
-            Expression = *fieldValue(Bits, Type);
-          }
+          else
+            Expression = javaEnumLiteral(Value, Type);
           Args.push_back("(" + TypeNames.render(Type, C) + ") (" + Expression +
                          ")");
         }
@@ -14281,6 +14315,48 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
                           "forwarding is supplied by "
                           "Java enum declarations; compiler-generated binary "
                           "details remain unverified.";
+          if (EnumProjection->forwarding_arguments &&
+              Enums.methods.at(*EnumProjection->target).kind ==
+                  "enum-constructor") {
+            // Enum-constant subclasses have no Java type name. The access
+            // marker can use Object in its source overload; the original
+            // descriptor and the exact target arguments remain in the report.
+            auto SourceRef = R;
+            auto sourceParameters = [&](const MethodRef &Ref) {
+              auto Types = Ref.parameters;
+              for (auto &Type : Types)
+                if (Enums.constant_classes.contains(Type))
+                  Type = "Ljava/lang/Object;";
+              return Types;
+            };
+            SourceRef.parameters = sourceParameters(R);
+            if (std::none_of(C.methods.begin(), C.methods.end(),
+                             [&](const Method &Other) {
+                               return Other.reference.name == "<init>" &&
+                                      Other.reference != R &&
+                                      sourceParameters(Other.reference) ==
+                                          SourceRef.parameters;
+                             })) {
+              std::vector<std::string> Params, Arguments;
+              for (size_t I = 2; I < R.parameters.size(); ++I)
+                Params.push_back(
+                    TypeNames.render(SourceRef.parameters[I], MethodScope) +
+                    " arg" + std::to_string(I));
+              const auto &Expressions = *EnumProjection->forwarding_arguments;
+              for (size_t I = 0; I < Expressions.size(); ++I)
+                Arguments.push_back(
+                    "(" +
+                    TypeNames.render(EnumProjection->target->parameters[I + 2],
+                                     MethodScope) +
+                    ") (" + Expressions[I] + ")");
+              BodyLines.append("  private " + Name + "(" + join(Params, ", ") +
+                               ") { this(" + join(Arguments, ", ") + "); }");
+              Row["source_identity"] = SourceRef.identity();
+              Row["reason"] = "A distinct enum constructor forwards the "
+                              "original arguments and default-mask choices to "
+                              "its original constructor target.";
+            }
+          }
           ++Projected;
           RecordReturnSlotName();
           recordMethod();
@@ -14610,6 +14686,7 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
               "in generic_signature_projections"};
         } else if (UnitBridge) {
           const auto &Result = *Bridge->second.result_field;
+          Row["regenerated_bridge"] = R.identity();
           Row["projection_kind"] = "void-unit-interface-bridge";
           Row["source_identity"] =
               MethodRef{C.name, R.name, SourceParameters, Result.type}
@@ -14627,6 +14704,9 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
                             "erasures; the renamed void target retains its "
                             "original generic parameter Signature");
         } else {
+          if (!Bridge->second.nonreturning_boolean_result ||
+              Bridge->second.target.parameters != R.parameters)
+            Row["compiler_generated_bridge"] = true;
           if (Bridge->second.boxed_reference_result) {
             Row["projection_kind"] = "boxed-covariant-interface-result-bridge";
             const auto typed = Generics.boxed_interface_results.find(
@@ -14667,25 +14747,16 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
           if (Bridge->second.nonreturning_boolean_result) {
             const bool Shared =
                 Bridge->second.target.parameters == R.parameters;
-            Row["projection_kind"] =
-                Shared ? "nonreturning-shared-boolean-result-bridge"
-                       : "nonreturning-boolean-result-bridge";
-            if (Shared)
-              Row["source_shared_with"] = Bridge->second.target.identity();
+            Row["projection_kind"] = "nonreturning-boolean-result-bridge";
+            Row["source_identity"] = R.identity();
+            Row["bridge_source_name"] =
+                sourceMethodName(Bridge->second.target, Inheritance);
             Row["metadata_differences"] = llvm::json::Array{
-                "the final owner's original target always throws after its "
-                "original static prefix and exception allocation",
-                "Java regenerates the original erased boolean descriptor and "
-                "parameter cast against the projected typed boolean result; "
-                "the original post-call cast and unbox cannot execute"};
-            if (Shared)
-              Row["metadata_differences"] = llvm::json::Array{
-                  "both original same-parameter return entries share the "
-                  "projected typed boolean source method and unchanged throw "
-                  "body",
-                  "the original erased entry acquires that full parameter "
-                  "Signature, loses bridge/synthetic flags and forwarding "
-                  "frame"};
+                Shared
+                    ? "The original boolean forwarding entry is explicit in "
+                      "Java; its bridge and synthetic flags require rebuilding."
+                    : "Javac supplies the erased boolean entry and parameter "
+                      "cast before the typed forwarding call."};
           }
           if (const auto *Target = member(Bridge->second.target, Classes, B);
               Target && !Target->annotations.empty()) {
@@ -14716,17 +14787,9 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
                     "the original typed target still declares no exceptions");
           }
           Row["reason"] =
-              Bridge->second.nonreturning_boolean_result &&
-                      Bridge->second.target.parameters == R.parameters
-                  ? "Both original same-parameter return entries "
-                    "share the proven original throw body in one "
-                    "typed boolean source entry; generic reflection "
-                    "and forwarding frame differences are reported."
-              : Bridge->second.nonreturning_boolean_result
-                  ? "The complete original parameter contract and "
-                    "unconditional throw retain invocation and "
-                    "exception order; javac supplies the erased "
-                    "boolean bridge."
+              Bridge->second.nonreturning_boolean_result
+                  ? "The boolean entry calls the distinct original Void body, "
+                    "casts its result and invokes booleanValue."
               : Bridge->second.guarded_reference_result
                   ? "The independently verified identical guard "
                     "and typed virtual call remain in the original "
@@ -14882,7 +14945,8 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
                 ? TypeNames.render(*MethodSignature, *MethodSignature->result,
                                    MethodScope)
                 : TypeNames.render(SourceReference.returns, MethodScope));
-        MethodMods.push_back(SourceName);
+        MethodMods.push_back(NonReturningResult ? javaIdentifier(R.name)
+                                                : SourceName);
         Declaration = join(MethodMods, " ") + "(" + join(Params, ", ") + ")";
       }
       if (!Throws.empty())
@@ -15104,6 +15168,26 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
           Line = "    " + Line;
         if (Emitter.sourceSynchronized())
           Declaration = "synchronized " + Declaration;
+        if (NonReturningResult) {
+          auto TargetMods = MethodMods;
+          TargetMods.back() = SourceName;
+          TargetMods[TargetMods.size() - 2] =
+              TypeNames.render(R.returns, MethodScope);
+          BodyLines.append("  " + join(TargetMods, " ") + "(" +
+                           join(Params, ", ") + ") {\n" +
+                           join(SourceLines, "\n") + "\n  }");
+          SourceLines = {"    return ((" +
+                         TypeNames.render("Ljava/lang/Boolean;", MethodScope) +
+                         ") (" +
+                         TypeNames.render("Ljava/lang/Object;", MethodScope) +
+                         ") this." + SourceName + "(arg0)).booleanValue();"};
+          if (NonReturning->second.bridge.parameters != R.parameters) {
+            auto Adapter = R;
+            Adapter.returns = NonReturning->second.source_type;
+            auxiliary(C, javaIdentifier(R.name), Adapter.signature(), false,
+                      Unit, "nonreturning-boolean-adapter");
+          }
+        }
         BodyLines.append("  " + Declaration + " {\n" + join(SourceLines, "\n") +
                          "\n  }");
         if (DefaultBody != Inheritance.interface_default_helpers.end() ||
@@ -15209,29 +15293,17 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
                   "source target requires matching public access");
           } else if (NonReturningResult) {
             auto SourceReference = R;
-            SourceReference.returns = NonReturning->second.source_type;
+            SourceReference.name = SourceName;
             Row["source_identity"] = SourceReference.identity();
             Row["projection_kind"] = "nonreturning-boolean-result";
             Row["original_bridge"] = NonReturning->second.bridge.identity();
-            if (MethodSignature && M.generic_signature)
-              Row["source_generic_signature"] =
-                  M.generic_signature->substr(
-                      0, MethodSignature->types.at(*MethodSignature->result)
-                             .offset) +
-                  NonReturning->second.source_type;
+            if (M.generic_signature)
+              Row["source_generic_signature"] = *M.generic_signature;
             Row["metadata_differences"] = llvm::json::Array{
-                "the original final-owner body has no normal return path and "
-                "retains the same static prefix, allocation, constructor and "
-                "throw",
-                "the typed result descriptor and generic result Signature "
-                "change from Void to boolean; binary ABI and return reflection "
-                "change",
-                "known source callers retain the original reference carrier; "
-                "implicit result boxing cannot execute after this proven "
-                "throw"};
-            Row["reason"] = "The proven unconditional original throw supplies "
-                            "the inherited boolean source result without "
-                            "inventing a return value.";
+                "Java uses a distinct name for the original Void entry and "
+                "retains its descriptor, generic result and throw body."};
+            Row["reason"] = "The original target and boolean forwarder retain "
+                            "distinct executable entries.";
           } else if (RetainedPlainBridge) {
             Row["reason"] =
                 ArrayCarrierSource
@@ -15746,6 +15818,7 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
                      ? "partial"
                      : "recovered"},
       {"class_count", static_cast<int64_t>(ClassCount)},
+      {"original_classes", std::move(OriginalClasses)},
       {"method_count", static_cast<int64_t>(Methods.size())},
       {"recovered_method_count", static_cast<int64_t>(Recovered)},
       {"declaration_only_method_count", static_cast<int64_t>(Declared)},

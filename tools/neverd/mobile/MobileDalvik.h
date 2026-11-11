@@ -411,7 +411,9 @@ struct EnumMethodProjection {
   std::optional<MethodRef> target;
   std::optional<uint32_t> delegation_pc;
   std::optional<uint32_t> argument_call_pc;
+  std::optional<std::vector<std::string>> forwarding_arguments;
 };
+std::string javaEnumLiteral(const Literal &value, const std::string &type);
 struct EnumPlans {
   std::map<std::string, EnumClassPlan> classes;
   std::map<std::string, std::string> constant_classes;

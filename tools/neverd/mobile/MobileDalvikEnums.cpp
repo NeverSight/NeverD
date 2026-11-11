@@ -239,6 +239,32 @@ class Planner {
   std::set<MethodRef> source_constructors;
   std::set<FieldRef> backing;
 
+  std::optional<std::string> forwardingArgument(const Value &value,
+                                                const std::string &type) {
+    budget.tick();
+    if (value.kind == Value::Parameter) {
+      if (value.number < 2)
+        return std::nullopt; // Java implicitly supplies the name and ordinal.
+      return "arg" + std::to_string(value.number);
+    }
+    if (value.kind == Value::Number)
+      return javaEnumLiteral(value.number, type);
+    if (value.kind == Value::String)
+      return javaEnumLiteral(value.text, type);
+    if (value.kind != Value::Conditional)
+      return std::nullopt;
+    const auto &choice = defaults.at(value.number);
+    auto supplied = forwardingArgument(choice.supplied, type);
+    auto replacement = forwardingArgument(choice.replacement, type);
+    if (!supplied || !replacement)
+      return std::nullopt;
+    budget.tick(supplied->size() + replacement->size());
+    return "((arg" + std::to_string(choice.mask_parameter) + " & " +
+           std::to_string(static_cast<int32_t>(choice.mask)) +
+           (choice.on_set ? ") != 0 ? " : ") == 0 ? ") + *replacement + " : " +
+           *supplied + ")";
+  }
+
   void constructor(const Class &root, const Method &method, bool child) {
     const auto &ref = method.reference;
     Frame frame(method, classes, budget, false, true);
@@ -388,11 +414,23 @@ class Planner {
           !method.instructions.back().registers.empty())
         frame.fail(
             "enum access constructor requires exact effect-free forwarding");
+      EnumMethodProjection projection{child ? "enum-constant-constructor"
+                                            : "enum-access-constructor",
+                                      true, *target, op.pc};
+      if (!child) {
+        projection.forwarding_arguments.emplace();
+        for (size_t arg = 2; arg < args.size(); ++arg) {
+          auto expression =
+              forwardingArgument(args[arg], target->parameters[arg]);
+          if (!expression) {
+            projection.forwarding_arguments.reset();
+            break;
+          }
+          projection.forwarding_arguments->push_back(std::move(*expression));
+        }
+      }
       forwards.emplace(ref, Forward{*target, std::move(args)});
-      plans.methods.emplace(
-          ref, EnumMethodProjection{child ? "enum-constant-constructor"
-                                          : "enum-access-constructor",
-                                    true, *target, op.pc});
+      plans.methods.emplace(ref, std::move(projection));
       return;
     }
     frame.fail("constructor has no initialization boundary");

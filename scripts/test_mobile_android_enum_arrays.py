@@ -874,9 +874,8 @@ public final class ArgumentSource {
             raise RuntimeError("Wide argument helper is not separately recorded")
         verify.compile_local([*sorted((output / "sources").rglob("*.java")), harness], rebuilt)
         rebuilt_classes, rebuilt_methods = compiler_inventory(verify, rebuilt)
-        projected_constructors = {default_constructor} if args.default_constructors else set()
         if (not set(classes).issubset(rebuilt_classes)
-                or not (set(methods) - projected_constructors).issubset(rebuilt_methods)):
+                or not set(methods).issubset(rebuilt_methods)):
             raise RuntimeError("Enum array fixture lost original descriptors")
         actual = verify.run([verify.java, "-cp", rebuilt, "EnumArrayHarness"], "recovered-execution")
         if actual != baseline:
@@ -1146,7 +1145,7 @@ public final class ArgumentSource {
         if args.default_constructors:
             evidence["default_argument_mask_set_and_clear"] = "matched"
             evidence["invalid_guard_or_side_effect"] = "rejected"
-            evidence["original_descriptors"] = "retained-in-inventory-with-projected-access-constructor"
+            evidence["original_descriptors"] = "present-in-compiled-classes"
         (work / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n")
         print(json.dumps(evidence))
     return 0

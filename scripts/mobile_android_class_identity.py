@@ -81,11 +81,13 @@ class Bytes:
 
 
 class ClassFile:
-    def __init__(self, data, *, owned_markers=False, platform_suppress_lint=False):
+    def __init__(self, data, *, owned_markers=False, platform_suppress_lint=False, read_annotations=True):
         require(len(data) <= 16 * 1024 * 1024, "Compiler class file exceeds its byte limit")
         require(type(owned_markers) is bool, "Invalid owned marker compiler mode")
         require(type(platform_suppress_lint) is bool, "Invalid platform annotation compiler mode")
         self.reader, self.constants, self.result = Bytes(data), {}, None
+        self.read_annotations = read_annotations
+        self.method_access_offsets = {}
         self.owned_markers = owned_markers
         self.platform_suppress_lint = platform_suppress_lint
 
@@ -163,8 +165,10 @@ class ClassFile:
 
         The default grammar accepts only empty Deprecated applications. The
         explicit owned mode adds typed class-level marker metadata; other
-        annotation payloads and attachments remain errors, never ignored facts.
+        annotation payloads and attachments remain errors in annotation-reading modes.
         """
+        if not self.read_annotations:
+            return {}
         deprecated, visible, invisible, seen, types = False, [], [], set(), set()
         for kind, data in attributes:
             if kind not in ANNOTATION_ATTRIBUTES:
@@ -233,6 +237,9 @@ class ClassFile:
             if tag == 1:
                 raw = reader.take(reader.number(2))
                 value = raw.replace(b"\xc0\x80", b"\0").decode("utf-8", errors="surrogatepass")
+                # Modified UTF-8 encodes supplementary characters as surrogate pairs.
+                if not value.isascii():
+                    value = value.encode("utf-16-le", "surrogatepass").decode("utf-16-le", "surrogatepass")
             elif tag in (7, 8, 16, 19, 20):
                 value = reader.number(2)
             elif tag in (9, 10, 11, 12, 17, 18):
@@ -276,6 +283,7 @@ class ClassFile:
             fields[identity] = {"name": name, "descriptor": descriptor, "access": flags,
                                 "constant_value": constant_value, "signature": signature, **deprecation}
         for _ in range(reader.number(2)):
+            offset = reader.offset
             flags, name, descriptor = reader.number(2), self.text(reader.number(2)), self.text(reader.number(2))
             prototype_parts(descriptor)
             attrs = self.attributes(reader)
@@ -287,6 +295,7 @@ class ClassFile:
             for data in bodies:
                 self.code(data, identity)
             require(identity not in methods, "Compiler emitted a duplicate method")
+            self.method_access_offsets[identity] = offset
             methods[identity] = {"name": name, "prototype": descriptor, "access": flags,
                                  "code": bool(bodies), "signature": self.signature(attrs),
                                  **self.deprecation(attrs, identity)}

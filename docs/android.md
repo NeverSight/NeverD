@@ -1860,13 +1860,14 @@ A final-owner Void target with a complete parameter contract can supply an
 inherited boolean source result only after proof of its exact original static
 prefix, exception allocation/constructor and unconditional throw. Its original
 boolean bridge must preserve receiver, argument cast and unreachable result
-conversion. Equal-parameter return entries share the typed boolean source
-method; that binding reports generic reflection, bridge flag and stack changes.
-The nonreturning-boolean-results JVM oracle preserves seven classes and 22
-original methods, compares 44 values, 67 identities and 38 ordered failures,
-and checks known narrow Void callers, full class/field/parameter metadata and
-only the exact reported result/shared-entry differences. Scope drift and an
-independently authored normal-return body fail recovery. Coverage stays `partial`.
+conversion. A source alias retains the Void method and its generic signature.
+The typed boolean method calls this entry and preserves the bridge conversion.
+For a distinct erased parameter descriptor, javac supplies the inherited bridge.
+The nonreturning-boolean-results JVM oracle checks all seven classes and 22
+original methods, including callers of each descriptor. It compares 44 values,
+67 identities and 38 ordered failures before and after rebuilding original bridge
+flags. Scope drift and a body that returns normally fail recovery. The verified
+report records the compiled entry and source projection for each original.
 
 An abstract owner can retain a terminal Void method and its original integer
 bridge through a disclosed source alias. The common proof requires the exact
@@ -2480,7 +2481,7 @@ A bounded subset of named, noncapturing local classes can be emitted inside thei
 
 Fieldless anonymous interface implementations allocated exactly once in their enclosing class initializer can be emitted as real Java anonymous expressions at that allocation. Their empty `Object` constructor is checked before the Java compiler supplies its implicit equivalent. Original methods and the allocating initializer are `source-projected` with `projection_kind: "anonymous-interface"`; the original class identity and allocation position are retained in `class_source_bindings`. Recompiled binary names remain unverified. Anonymous class identities used in other declaration signatures and multiple anonymous expression allocation sites still require additional source proofs.
 
-Java enums retain real enum declarations and constant-specific anonymous bodies. A shared enum plan verifies literal constructor arguments, exact name/ordinal forwarding, constant write order, a complete ordered backing array, `values()` cloning, and `valueOf()` delegation. It accepts direct array construction and a verified private synthetic array factory. Private primary constructors retain their original bodies while Java supplies the first two hidden parameters; pure synthetic access constructors and constant-subclass constructors require exact forwarding proofs. Generic constructor signatures are matched after the proven hidden prefix. This follows the [Java enum declaration rules](https://docs.oracle.com/javase/specs/jls/se25/html/jls-8.html#jls-8.9).
+Java enums retain real enum declarations and constant-specific anonymous bodies. A shared enum plan verifies literal constructor arguments, exact name/ordinal forwarding, constant write order, a complete ordered backing array, `values()` cloning, and `valueOf()` delegation. It accepts direct array construction and a verified private synthetic array factory. Private primary constructors retain their original bodies while Java supplies the first two hidden parameters; pure synthetic access constructors and constant-subclass constructors require exact forwarding proofs. A root access constructor with a distinct Java parameter list emits its own overload and delegates with the original arguments, including verified default-mask choices. An enum-constant subclass used as an access marker is recorded with its original DEX descriptor and its Java parameter type. Generic constructor signatures are matched after the proven hidden prefix. This follows the [Java enum declaration rules](https://docs.oracle.com/javase/specs/jls/se25/html/jls-8.html#jls-8.9).
 
 Private enum constructors can retain acyclic `this(...)` chains ending at a verified Enum constructor. Each forwarding constructor must have a pure return continuation; target constructors own final-field initialization. One zero-argument static call may supply one delegation argument, consumed exactly once, and is emitted directly in that argument without rematerializing its result afterward. Checked-exception contracts for this call still require a separate proof. Original constructor descriptors remain in the inventory, including hidden name/ordinal parameters.
 

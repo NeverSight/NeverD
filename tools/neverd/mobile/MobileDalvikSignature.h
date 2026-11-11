@@ -654,6 +654,7 @@ struct GenericInheritancePlan {
   struct NonReturningResult {
     MethodRef bridge;
     std::string source_type;
+    std::string target_source_name;
   };
   // Final-owner methods with a proven unconditional original throw can adopt
   // the inherited primitive source result. Input bodies/metadata stay intact.

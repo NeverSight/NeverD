@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -130,9 +131,14 @@ def main():
     parser.add_argument("--android-jar", type=Path, required=True)
     parser.add_argument("--java-home", type=Path)
     parser.add_argument("--d8", type=Path)
+    parser.add_argument("--work-dir", type=Path)
     args = parser.parse_args()
-    with tempfile.TemporaryDirectory(prefix="neverd-scoped-invocation-") as temp:
-        work = Path(temp)
+    if args.work_dir:
+        args.work_dir.mkdir(parents=True, exist_ok=False)
+    context = nullcontext(args.work_dir) if args.work_dir else tempfile.TemporaryDirectory(
+        prefix="neverd-scoped-invocation-")
+    with context as temp:
+        work = Path(temp).resolve()
         verify = Verify(work, choose_jdk(args.java_home), choose_d8(args.d8), 900)
         files = []
         for name, text in SOURCES.items():

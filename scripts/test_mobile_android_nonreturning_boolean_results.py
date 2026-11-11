@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 
 try:
@@ -79,7 +80,7 @@ def main() -> int:
         baseline = verify.run([verify.java, "-cp", os.pathsep.join(map(str, (originals, harness))),
                                "NonReturningBooleanResultsHarness"], "baseline")
         expected = ["values=44,identities=67,failures=38",
-                    "nonreturning-prefix-casts-and-exceptions=matched,typed-result-difference=reported"]
+                    "nonreturning-prefix-casts-and-exceptions=matched,distinct-void-and-boolean-entries=matched"]
         if baseline.splitlines() != expected:
             raise RuntimeError("Owned nonreturning baseline missed effect or exception cases: " + baseline)
 
@@ -116,21 +117,16 @@ def main() -> int:
                 coverage.get("generic_signature_projections") or
                 set(projected) != {typed, bridge, typed_all, bridge_all, typed_scalar, bridge_scalar}):
             raise RuntimeError("Terminal recovery lost an original declaration or undisclosed scope")
-        if (projected[typed].get("projection_kind") != "nonreturning-boolean-result" or
-                projected[typed].get("source_identity") != "Lfixture/View;->add(Lfixture/Entry;)Z" or
-                projected[typed].get("source_generic_signature") != "(Lfixture/Entry<TT;>;)Z" or
-                projected[typed].get("original_bridge") != bridge or
-                projected[bridge].get("projection_kind") != "nonreturning-boolean-result-bridge" or
-                projected[typed_all].get("source_identity") != bridge_all or
-                projected[typed_all].get("source_generic_signature") != "(Ljava/util/Collection<+Lfixture/Entry<TT;>;>;)Z" or
-                projected[bridge_all].get("projection_kind") != "nonreturning-shared-boolean-result-bridge" or
-                projected[bridge_all].get("source_shared_with") != typed_all or
-                projected[typed_scalar].get("source_identity") != bridge_scalar or
-                projected[typed_scalar].get("source_generic_signature") != "(TT;)Z" or
-                projected[bridge_scalar].get("projection_kind") != "nonreturning-shared-boolean-result-bridge" or
-                projected[bridge_scalar].get("source_shared_with") != typed_scalar or
-                any(not row.get("metadata_differences") for row in projected.values())):
-            raise RuntimeError("Terminal result projection lacks exact body/descriptor evidence")
+        for target, adapter in ((typed, bridge), (typed_all, bridge_all), (typed_scalar, bridge_scalar)):
+            row = projected[target]
+            if (row["projection_kind"] != "nonreturning-boolean-result"
+                    or row["source_identity"] != target.replace("->", "->__neverdNonReturning_", 1)
+                    or row["source_generic_signature"] != row["generic_signature"]
+                    or row["original_bridge"] != adapter
+                    or projected[adapter]["projection_kind"] != "nonreturning-boolean-result-bridge"
+                    or projected[adapter]["source_identity"] != adapter
+                    or not row["metadata_differences"] or not projected[adapter]["metadata_differences"]):
+                raise RuntimeError("Terminal target and adapter lost their distinct bodies or descriptors")
         rebuilt = work / "rebuilt"
         verify.compile_local(sorted((output / "sources").rglob("*.java")), rebuilt)
         actual_classes, actual_methods = compiler_inventory(verify, rebuilt)
@@ -147,19 +143,46 @@ def main() -> int:
                     raise RuntimeError("Original terminal class/field metadata changed: " + owner + ":" + key)
             for identity, metadata in before["methods"].items():
                 wanted = dict(metadata)
-                result_owner = {typed: typed, typed_all: typed_all, bridge_all: typed_all,
-                                typed_scalar: typed_scalar, bridge_scalar: typed_scalar}.get(identity)
-                if result_owner:
-                    wanted = dict(before["methods"][result_owner])
-                    wanted["prototype"] = source_ids[identity].split("->", 1)[1].split("(", 1)[1]
-                    wanted["prototype"] = "(" + wanted["prototype"]
-                    wanted["signature"] = projected[result_owner]["source_generic_signature"]
+                if identity in (typed, typed_all, typed_scalar):
+                    wanted["name"] = projected[identity]["source_identity"].split("->")[1].split("(")[0]
+                elif identity in (bridge_all, bridge_scalar):
+                    target = typed_all if identity == bridge_all else typed_scalar
+                    wanted["access"] &= ~0x1040
+                    wanted["signature"] = projected[target]["generic_signature"].replace(")Ljava/lang/Void;", ")Z")
                 if after["methods"][source_ids[identity]] != wanted:
                     raise RuntimeError("Terminal metadata changed beyond the exact reported result: " + identity)
         actual = verify.run([verify.java, "-cp", os.pathsep.join(map(str, (rebuilt, harness))),
                              "NonReturningBooleanResultsHarness", "boolean"], "recovered-execution")
         if actual != baseline:
             raise RuntimeError("Terminal prefix, parameter cast or exception identity/order changed")
+
+        qualified = work / "qualified"
+        verify.run([sys.executable, Path(__file__).with_name("verify_mobile_android_recovery.py"), output,
+                    "--input", dex, "--javac", verify.javac, "--dexdump", verify.dexdump,
+                    "--keep-classes", "-o", qualified], "qualify-compiled-methods")
+        final = json.loads((qualified / "metadata/android-methods.json").read_text())
+        if (final["status"] != "recovered" or final["compilation_verification"]["distinct_compiled_methods"] != len(methods)
+                or final["compilation_verification"]["restored_method_flags"] < 2
+                or len({row["compiled_identity"] for row in final["methods"]}) != len(methods)):
+            raise RuntimeError("Compiled recovery did not preserve every original entry and bridge flag")
+        result = verify.run([verify.java, "-cp", os.pathsep.join(map(str, (qualified / "classes", harness))),
+                             "NonReturningBooleanResultsHarness", "verified"], "verified-execution")
+        if result != baseline:
+            raise RuntimeError("Rebuilt bridge flags, original throw order or generic Void result changed")
+
+        # Still-compilable source edits must not inherit the verified export.
+        unit = output / "sources/fixture/View.java"
+        saved = unit.read_bytes()
+        bad = work / "modified-verified"
+        try:
+            unit.write_bytes(saved + b"\n// valid Java change\n")
+            attempt = subprocess.run([sys.executable, Path(__file__).with_name("verify_mobile_android_recovery.py"),
+                                      output, "--input", dex, "--javac", verify.javac, "--dexdump",
+                                      verify.dexdump, "-o", bad], text=True, capture_output=True)
+            if attempt.returncode == 0 or bad.exists() or "changed since decompilation" not in attempt.stderr:
+                raise RuntimeError("Modified source qualified under the original recovery report")
+        finally:
+            unit.write_bytes(saved)
 
         def reject(negative: Path, label: str) -> None:
             negative_dex = make_dex(negative, work / ("negative-" + label + "-dex"))
@@ -192,8 +215,8 @@ def main() -> int:
             raise RuntimeError("Original independently authored input or immutable harness changed")
         evidence = {"status": "success", "class_count": len(classes), "method_count": len(methods),
                     "value_cases": 44, "identity_cases": 67, "ordered_failure_cases": 38,
-                    "full_class_field_and_parameter_metadata": "unchanged", "typed_result_abi_difference": "reported",
-                    "shared_same_parameter_entry_differences": "reported",
+                    "full_class_field_and_parameter_metadata": "unchanged", "typed_void_result_and_signature": "preserved",
+                    "distinct_original_entries": "verified", "restored_bridge_flags": "verified",
                     "scope_and_normal_return_counterexamples": "rejected", "original_and_harness_bytes": "unchanged"}
         (work / "oracle-evidence.json").write_text(json.dumps(evidence, indent=2) + "\n")
         print(json.dumps(evidence))

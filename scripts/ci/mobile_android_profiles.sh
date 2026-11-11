@@ -2092,8 +2092,6 @@ python scripts/test_mobile_android_raw_marker_superclasses.py --dependency-root 
   --neverd build-mobile/bin/neverd --d8 "$NEVERD_D8" \
   --android-jar "$ANDROID_HOME/platforms/android-35/android.jar" \
   --work-dir "$RUNNER_TEMP/android-raw-marker-dependency"
-python scripts/test_mobile_android_scoped_invocations.py --neverd build-mobile/bin/neverd \
-  --d8 "$NEVERD_D8" --android-jar "$ANDROID_HOME/platforms/android-35/android.jar"
 python scripts/test_mobile_android_inherited_erased_parameters.py \
   --neverd build-mobile/bin/neverd --d8 "$NEVERD_D8" \
   --android-jar "$ANDROID_HOME/platforms/android-35/android.jar" \
@@ -12451,3 +12449,8 @@ python scripts/test_mobile_android_destination_bounds.py --dependency-provider \
   --neverd build-mobile/bin/neverd --java-home "$JAVA_HOME" --d8 "$NEVERD_D8" \
   --android-jar "$ANDROID_HOME/platforms/android-35/android.jar" \
   --work-dir "$RUNNER_TEMP/android-destination-bounds-sdk"
+
+profile_group "Compile scoped invocations with source and SDK declarations" 21 1200
+python scripts/test_mobile_android_scoped_invocations.py --neverd build-mobile/bin/neverd \
+  --d8 "$NEVERD_D8" --android-jar "$ANDROID_HOME/platforms/android-35/android.jar" \
+  --work-dir "$RUNNER_TEMP/android-scoped-invocations"

@@ -54,8 +54,9 @@ public class NonReturningBooleanResultsHarness {
             run(() -> Caller.narrowScalar(null, payload), NullPointerException.class, cause, 0);
             identity(entry.value, payload);
         }
-        Method typed = View.class.getDeclaredMethod("add", Entry.class);
-        Class<?> expectedReturn = args.length == 0 ? Void.class : boolean.class;
+        String prefix = args.length == 0 ? "" : "__neverdNonReturning_";
+        Method typed = View.class.getDeclaredMethod(prefix + "add", Entry.class);
+        Class<?> expectedReturn = Void.class;
         identity(typed.getReturnType(), expectedReturn);
         identity(typed.getGenericReturnType(), expectedReturn);
         value(!typed.isBridge());
@@ -72,14 +73,14 @@ public class NonReturningBooleanResultsHarness {
         identity(element.getActualTypeArguments()[0], View.class.getTypeParameters()[0]);
         Method typedAll = null, bridgeAll = null;
         for (Method candidate : View.class.getDeclaredMethods()) {
-            if (!candidate.getName().equals("addAll")) continue;
+            if (!candidate.getName().equals("addAll") && !candidate.getName().equals(prefix + "addAll")) continue;
             if (candidate.getReturnType() == expectedReturn) typedAll = candidate;
             if (candidate.getReturnType() == boolean.class) bridgeAll = candidate;
         }
-        if (typedAll == null || bridgeAll == null) throw new AssertionError("missing same-parameter entry");
+        if (typedAll == null || bridgeAll == null || bridgeAll.equals(typedAll)) throw new AssertionError("missing same-parameter entry");
         identity(typedAll.getReturnType(), expectedReturn);
         value(!typedAll.isBridge());
-        value(bridgeAll.isBridge() == (args.length == 0));
+        value(bridgeAll.isBridge() == (args.length == 0 || args[0].equals("verified")));
         ParameterizedType collection = (ParameterizedType) typedAll.getGenericParameterTypes()[0];
         identity(collection.getRawType(), java.util.Collection.class);
         ParameterizedType item = (ParameterizedType) ((WildcardType) collection.getActualTypeArguments()[0]).getUpperBounds()[0];
@@ -87,17 +88,17 @@ public class NonReturningBooleanResultsHarness {
         identity(item.getActualTypeArguments()[0], View.class.getTypeParameters()[0]);
         Method typedScalar = null, bridgeScalar = null;
         for (Method candidate : View.class.getDeclaredMethods()) {
-            if (!candidate.getName().equals("push")) continue;
+            if (!candidate.getName().equals("push") && !candidate.getName().equals(prefix + "push")) continue;
             if (candidate.getReturnType() == expectedReturn) typedScalar = candidate;
             if (candidate.getReturnType() == boolean.class) bridgeScalar = candidate;
         }
-        if (typedScalar == null || bridgeScalar == null) throw new AssertionError("missing class-formal entry");
+        if (typedScalar == null || bridgeScalar == null || bridgeScalar.equals(typedScalar)) throw new AssertionError("missing class-formal entry");
         identity(typedScalar.getReturnType(), expectedReturn);
         value(!typedScalar.isBridge());
-        value(bridgeScalar.isBridge() == (args.length == 0));
+        value(bridgeScalar.isBridge() == (args.length == 0 || args[0].equals("verified")));
         identity(typedScalar.getGenericParameterTypes()[0], View.class.getTypeParameters()[0]);
         identity(parent.getActualTypeArguments()[1], View.class.getTypeParameters()[0]);
         System.out.println("values=" + values + ",identities=" + identities + ",failures=" + failures);
-        System.out.println("nonreturning-prefix-casts-and-exceptions=matched,typed-result-difference=reported");
+        System.out.println("nonreturning-prefix-casts-and-exceptions=matched,distinct-void-and-boolean-entries=matched");
     }
 }

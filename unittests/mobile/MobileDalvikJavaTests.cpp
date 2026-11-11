@@ -61724,12 +61724,15 @@ TEST(MobileDalvikJava, NonReturningBooleanResultsRetainOriginalPrefixAndThrow) {
         EXPECT_EQ(Row->getString("generic_signature"),
                   "(Lfixture/Entry<TT;>;)Ljava/lang/Void;");
         EXPECT_EQ(Row->getString("source_generic_signature"),
-                  "(Lfixture/Entry<TT;>;)Z");
+                  "(Lfixture/Entry<TT;>;)Ljava/lang/Void;");
         EXPECT_EQ(Row->getString("source_identity"),
-                  "Lfixture/Core;->add(Lfixture/Entry;)Z");
+                  "Lfixture/Core;->__neverdNonReturning_add(Lfixture/"
+                  "Entry;)Ljava/lang/Void;");
         EXPECT_TRUE(Row->getArray("metadata_differences"));
       }
       EXPECT_TRUE(Found);
+      EXPECT_NE(source(R).find("this.__neverdNonReturning_add(arg0)"),
+                std::string::npos);
       EXPECT_NE(source(R).find("boolean add(fixture.Entry<T> arg0)"),
                 std::string::npos);
       EXPECT_EQ(Input[0].methods[0].reference.returns, "Ljava/lang/Void;");

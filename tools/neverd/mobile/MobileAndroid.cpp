@@ -4,7 +4,9 @@
 #include "MobileDalvik.h"
 #include "MobileJavaFieldRestore.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Regex.h"
+#include "llvm/Support/SHA256.h"
 
 #include <algorithm>
 #include <array>
@@ -18,6 +20,11 @@ namespace {
 using llvm::json::Array;
 using llvm::json::Object;
 using llvm::json::Value;
+std::string sha256(llvm::StringRef bytes) {
+  return llvm::toHex(llvm::SHA256::hash(llvm::arrayRefFromStringRef(bytes)),
+                     true);
+}
+
 struct WorkDirectory {
   fs::path path;
   bool active = true;
@@ -397,8 +404,10 @@ Object builtin(const Options &options, const fs::path &staging,
     dependencies.push_back(
         Object{{"name", pathText(jar.filename())}, {"class_count", count}});
   }
+  Object input_hashes, artifact_hashes;
   for (size_t i = 0; i < paths.size(); ++i) {
     auto content = readFile(paths[i], limits.max_bytes);
+    input_hashes[inputs.names[i]] = sha256(content);
     // Each reader charges byte scanning and structural work to this budget.
     budget.check();
     if (dex) {
@@ -455,6 +464,7 @@ Object builtin(const Options &options, const fs::path &staging,
         limits.max_bytes - std::min(total_bytes, limits.max_bytes))
       throw Error("Android source and metadata output exceed the byte limit");
     total_bytes += source.size();
+    artifact_hashes[pathText(relative)] = sha256(source);
     pending.emplace_back(relative, std::string(source));
   };
   for (auto &unit_value : units) {
@@ -510,6 +520,8 @@ Object builtin(const Options &options, const fs::path &staging,
       {"java_source_count", uint64_t(sources.size())},
       {"java_sources", strings(sources)},
       {"logs", Array{}},
+      {"input_code_sha256", std::move(input_hashes)},
+      {"java_artifact_sha256", std::move(artifact_hashes)},
       {"android_method_recovery", std::move(coverage)},
       {"limitations",
        Array{"Java is reconstructed from bytecode; compilation-lost source "
