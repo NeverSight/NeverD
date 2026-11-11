@@ -43,6 +43,7 @@ struct X86ModeState {
   bool STIBlocked = false;
   bool SSBlocked = false;
   bool Halted = false;
+  bool Shutdown = false;
   /// Private instruction/event progress and frozen execution bindings. Keep
   /// this with CPU/RAM while repairing backing or rebuilding the executor.
   std::shared_ptr<const detail::X86ModeContinuation> Pending;
@@ -110,6 +111,15 @@ public:
   llvm::Expected<X86ModeExecutionResult>
   run(X86ModeState &State, llvm::ArrayRef<X86ModeInstruction> Instructions,
       uint64_t &Budget);
+
+  /// Supply an externally selected IRQ or NMI at the current instruction
+  /// boundary. Arrival/priority/APIC policy belongs to the producer. The CPU
+  /// owns saved PC and inhibition. A deferred/refused input has no effects;
+  /// acceptance is reported exactly once, including across entry suspension.
+  /// Resume pending work with run() before supplying another input. Shutdown
+  /// is terminal until the embedding supplies an explicitly reset machine.
+  llvm::Expected<X86ModeExecutionResult>
+  interrupt(X86ModeState &State, X86EventKind Kind, uint8_t Vector);
 
 private:
   llvm::Expected<X86ModeExecutionResult>

@@ -162,10 +162,11 @@ protected:
                   "_validate_paged_adapter(s, e); }\n";
     }
     llvm::sys::DynamicLibrary DL;
-    const auto Name = std::string("mode-") + (LLVM ? "llvm" : "high") +
-                      Optimization +
-                      (Compiler == NEVERD_TEST_CLANG ? "-clang" : "-neverc") +
-                      "-" + std::to_string(Compilation++);
+    const auto Name =
+        std::string("mode-") + (LLVM ? "llvm" : "high") + Optimization +
+        (Compiler == NEVERD_TEST_CLANG ? "-clang" : "-neverc") + "-" +
+        testing::UnitTest::GetInstance()->current_test_info()->name() + "-" +
+        std::to_string(Compilation++);
     ASSERT_NO_FATAL_FAILURE(
         compileProgram(*Export, Name, Compiler, Optimization, DL, Adapters));
     unsigned Index = 0;
@@ -631,6 +632,7 @@ TEST_F(X86ModeExecutionTest,
   ASSERT_TRUE(Machine.Pending);
   EXPECT_EQ(First->Attempts, 1u);
   EXPECT_EQ(First->Completions, 1u);
+  EXPECT_TRUE(First->EventAccepted);
   EXPECT_EQ(Budget, 0u);
   for (unsigned Retry = 0; Retry != 2; ++Retry) {
     X86ModeExecution Rebuilt(*Memory, Options);
@@ -639,6 +641,7 @@ TEST_F(X86ModeExecutionTest,
     EXPECT_EQ(Again->Status, X86LegacyExecutionStatus::BackingFault);
     EXPECT_EQ(Again->Attempts, 0u);
     EXPECT_EQ(Again->Completions, 0u);
+    EXPECT_FALSE(Again->EventAccepted);
   }
   auto Snapshot = RAM;
   Snapshot.Memory = Memory->physicalMemory().snapshotMemoryRegions();

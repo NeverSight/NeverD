@@ -34,6 +34,7 @@ struct X86ModeContinuation {
   bool AttemptConsumed = false;
   bool SoftwareINT = false;
   bool CompletionReported = false;
+  bool AcceptanceReported = false;
 
   bool eventPending() const { return Event || WideEvent || Low.PendingEvent; }
   bool instructionPending() const {
@@ -48,11 +49,14 @@ llvm::Error invalid(const char *Message) {
   return llvm::createStringError(llvm::errc::invalid_argument, Message);
 }
 
-void reportCompletion(detail::X86ModeContinuation &P,
-                      X86ModeExecutionResult &R) {
+void reportReceipts(detail::X86ModeContinuation &P, X86ModeExecutionResult &R) {
   if (R.InstructionCompleted) {
     R.InstructionCompleted = !P.CompletionReported;
     P.CompletionReported = true;
+  }
+  if (R.EventAccepted) {
+    R.EventAccepted = !P.AcceptanceReported;
+    P.AcceptanceReported = true;
   }
 }
 
@@ -133,6 +137,8 @@ llvm::Error admit(const X86ModeState &S, const X86ModeExecutionOptions &O,
       std::any_of(std::begin(V.Reserved), std::end(V.Reserved),
                   [](uint8_t Byte) { return Byte != 0; }))
     return invalid("mixed-mode execution requires valid complete CPU metadata");
+  if (O.Legacy.Tasks)
+    return invalid("mixed-mode execution does not own task-state transfers");
   if (!O.Undefined || !O.MXCSRMask || O.Long.Debug || O.Legacy.Non64Mode ||
       !O.Legacy.Segments.FullLimitChoice ||
       (O.PagingAddressBits != 48 && O.PagingAddressBits != 57) ||
@@ -148,6 +154,9 @@ llvm::Error admit(const X86ModeState &S, const X86ModeExecutionOptions &O,
                                   S.Debug->PendingData))))
     return invalid(
         "mixed-mode execution requires protected flags and one debug bank");
+  if ((S.STIBlocked && !(R.RFlags & 0x200)) ||
+      (S.Halted && ((V.Core.CS.Selector & 3) || S.STIBlocked || S.SSBlocked)))
+    return invalid("mixed-mode halt/shadow state is inconsistent");
   if (!O.Legacy.EventDelivery.MaxAttempts || !O.Long.EventDelivery.MaxAttempts)
     return invalid("mixed-mode event owners require positive work budgets");
   return llvm::Error::success();
@@ -183,6 +192,7 @@ void deliver(X86ModeState &S, X86PagedMemory &M, detail::X86ModeContinuation &P,
     if (!Invalid && !P.WideEvent)
       P.Event.reset();
   } else {
+    const bool Continuing = P.Low.PendingEvent.has_value();
     auto EventOptions = O.Legacy;
     EventOptions.Non64Mode.reset();
     auto Got =
@@ -200,18 +210,22 @@ void deliver(X86ModeState &S, X86PagedMemory &M, detail::X86ModeContinuation &P,
       // Legacy entry can retain architectural CR2/NMI and journal effects even
       // when a subsequent owner refuses. Preserve its view and progress.
       if (P.Low.PendingEvent) {
+        R.EventAccepted = true;
         R.CR2Written |= P.Low.PendingEvent->CR2Written;
         R.CSWritten |= P.Low.PendingEvent->SegmentsWritten;
         R.SSWritten |= P.Low.PendingEvent->SegmentsWritten;
+        detail::publishNon64(S, P.Low, R);
       }
-      detail::publishNon64(S, P.Low, R);
       return;
     }
-    detail::publishNon64(S, P.Low, *Got);
+    if (Got->EventAccepted || Continuing)
+      detail::publishNon64(S, P.Low, *Got);
     mergeEvent(R, *Got);
     if (!P.Low.PendingEvent)
       P.Event.reset();
   }
+  if (R.Status == X86LegacyExecutionStatus::Shutdown)
+    S.Shutdown = true;
 }
 } // namespace
 
@@ -241,11 +255,6 @@ llvm::Expected<X86ModeExecutionResult>
 X86ModeExecution::step(X86ModeState &S, const X86ModeInstruction *I) {
   std::shared_ptr<detail::X86ModeContinuation> P;
   if (S.Pending) {
-    if (!detail::sameModeState(S, S.Pending->Expected) ||
-        Memory.controls() != S.Pending->Controls ||
-        Memory.features() != S.Pending->Features)
-      return invalid("resume mixed-mode progress with the retained complete "
-                     "state and controls");
     P = std::make_shared<detail::X86ModeContinuation>(*S.Pending);
   } else {
     if (!I)
@@ -260,7 +269,7 @@ X86ModeExecution::step(X86ModeState &S, const X86ModeInstruction *I) {
   X86ModeExecutionResult R;
   if (P->eventPending()) {
     deliver(S, Memory, *P, R);
-    reportCompletion(*P, R);
+    reportReceipts(*P, R);
     retain(S, Memory, std::move(P));
     return R;
   }
@@ -375,8 +384,64 @@ X86ModeExecution::step(X86ModeState &S, const X86ModeInstruction *I) {
       R.RequestedEvent.reset();
     }
   }
-  reportCompletion(*P, R);
+  if (R.Status == X86LegacyExecutionStatus::Shutdown)
+    S.Shutdown = true;
+  reportReceipts(*P, R);
   retain(S, Memory, std::move(P));
+  return R;
+}
+
+llvm::Expected<X86ModeExecutionResult>
+X86ModeExecution::interrupt(X86ModeState &S, X86EventKind Kind,
+                            uint8_t Vector) {
+  if (S.Pending)
+    return invalid(
+        "resume pending mixed-mode work before supplying an interrupt");
+  if (S.Shutdown)
+    return invalid("a shutdown CPU requires explicit reset state");
+  if ((Kind != X86EventKind::Interrupt && Kind != X86EventKind::NMI) ||
+      (Kind == X86EventKind::NMI && Vector != 2))
+    return invalid("external input requires an IRQ or vector-2 NMI");
+  if (auto Error = admit(S, Options, Memory))
+    return std::move(Error);
+  auto Current = mode(S);
+  if (!Current)
+    return Current.takeError();
+  if (Kind == X86EventKind::NMI && S.STIBlocked && !S.SSBlocked &&
+      !S.Core.Core.NMIBlocked && !Options.Legacy.NMIBlockedBySTI)
+    return invalid("NMI under STI requires a bound inhibition policy");
+
+  auto P = std::make_shared<detail::X86ModeContinuation>();
+  P->Options = Options;
+  P->Low = detail::projectNon64(S);
+  P->Event = X64ContinuationEventV1{
+      modeRegisters(S).PC,
+      0,
+      0,
+      Vector,
+      Kind,
+      uint8_t(S.STIBlocked),
+      uint8_t(S.SSBlocked),
+      uint8_t(Options.Legacy.NMIBlockedBySTI.value_or(false))};
+  auto Next = S;
+  // Compatibility interrupt entry observes complete GPRs, including the old
+  // stack pointer. Apply the supplied undefined high halves only if this
+  // event is accepted, while preserving every extended bank across LMA=1.
+  if (*Current != X86ExecutionMode::Long64)
+    detail::publishNon64(Next, P->Low, {});
+  const auto OriginalControls = Memory.controls();
+  X86ModeExecutionResult R;
+  deliver(Next, Memory, *P, R);
+  if (!R.EventAccepted) {
+    // Both lower owners synchronize their flags cache before admission or
+    // inhibition. An unaccepted event performed no RAM accesses; retain the
+    // original cache too, without publishing the trial CPU or pending input.
+    llvm::cantFail(Memory.bindControls(OriginalControls));
+    return R;
+  }
+  reportReceipts(*P, R);
+  retain(Next, Memory, std::move(P));
+  S = std::move(Next);
   return R;
 }
 
@@ -392,6 +457,17 @@ X86ModeExecution::run(X86ModeState &S,
     return Last;
   };
   for (;;) {
+    if (S.Pending) {
+      if (!detail::sameModeState(S, S.Pending->Expected) ||
+          Memory.controls() != S.Pending->Controls ||
+          Memory.features() != S.Pending->Features)
+        return invalid("resume mixed-mode progress with the retained complete "
+                       "state and controls");
+    }
+    if (S.Shutdown) {
+      Last.Status = X86LegacyExecutionStatus::Shutdown;
+      return Finish();
+    }
     const bool Event = S.Pending && S.Pending->eventPending();
     const bool Paid = S.Pending && S.Pending->instructionPending() &&
                       S.Pending->AttemptConsumed;

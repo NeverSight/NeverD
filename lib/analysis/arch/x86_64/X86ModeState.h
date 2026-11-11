@@ -26,9 +26,11 @@ inline const auto &modeRegisters(const X86ModeState &S) {
 inline bool sameModeState(const X86ModeState &A, const X86ModeState &B) {
   return A.Core.Core == B.Core.Core && A.Debug == B.Debug &&
          std::tie(A.Core.SysenterCS, A.Core.SysenterESP, A.Core.SysenterEIP,
-                  A.Core.Reserved, A.STIBlocked, A.SSBlocked, A.Halted) ==
-             std::tie(B.Core.SysenterCS, B.Core.SysenterESP, B.Core.SysenterEIP,
-                      B.Core.Reserved, B.STIBlocked, B.SSBlocked, B.Halted);
+                  A.Core.Reserved, A.STIBlocked, A.SSBlocked, A.Halted,
+                  A.Shutdown) == std::tie(B.Core.SysenterCS, B.Core.SysenterESP,
+                                          B.Core.SysenterEIP, B.Core.Reserved,
+                                          B.STIBlocked, B.SSBlocked, B.Halted,
+                                          B.Shutdown);
 }
 
 inline translate::X86LegacyExecutionState projectNon64(const X86ModeState &S) {

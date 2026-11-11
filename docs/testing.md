@@ -93,6 +93,13 @@ For a real save, compile projected bank initializers at O0/O2,
 inspect constant bytes, and keep hypothetical register transitions distinct
 from captured observations. No guest, handler or device callback need run.
 
+The `X86ModeInterruptTest.*` subset checks selected IRQ/NMI input in all five
+protected/compatibility/64-bit modes, deferred/refused inputs without effects,
+NMI-under-STI choices, high-half stack witnesses, suspended frame/event-budget
+work, zero-budget authentication, task refusal and terminal shutdown. KVM
+streams use one initial SREGS write, original mode transitions and STI/HLT wake;
+HighC/LLVM-to-C IRETQ handlers accept a second NMI without host state rewrites.
+
 The `X86ModeExecutionTest.*` subset in `NeverDX64PagedExecutionTests` checks
 continuous original protected/compatibility/code64 streams, complete register
 banks, mode-specific fault delivery and paid continuation. Its KVM fixtures set

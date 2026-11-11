@@ -19909,7 +19909,11 @@ access; analysis selects the event owner from committed controls and performs
 a terminal state handoff. `X86ControlRegisters` owns the pure CR0/CR3/CR4
 transition checks; its consumer retains physical PDPTE access and publication.
 Low-width views never replace persistent full-width banks. See the
-[continuous mode contract](x86-mode-execution.md) for admission and resumption.
+[continuous mode contract](x86-mode-execution.md) for admission and resumption. Its selected
+IRQ/NMI entry uses the same committed-mode event owner, reports original input
+acceptance once and retains full-bank progress across frame suspension. The
+mode owner authenticates pending state before stop/budget exits and keeps
+shutdown terminal; the event producer owns arrival and interrupt arbitration.
 
 The native SMM continuation projection owns canonical RSM admission in
 `X64ContinuationSmm.h`. SVM and SMM share standard XSAVE image checks and
