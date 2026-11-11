@@ -26,6 +26,7 @@ add_neverd_component_library(NeverDSymbolic
   mba/SymMBAPoly.cpp
   mba/SymMBAProduct.cpp
   mba/SymMBARegion.cpp
+  mba/SymMBAProductColumn.cpp
   mba/SymMBAResidueDecision.cpp
   mba/SymMBAResidue.cpp
   mba/SymWideArithmetic.cpp

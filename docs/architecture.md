@@ -5951,6 +5951,13 @@ full-width factors and parity selector remain in the result. This reading is
 reserved for mixed three-bit prefixes whose recursive precision is at least
 six bits. Fewer than three representatives cannot leave both a pair and an
 unmatched word, so they do not start this additional prefix reading.
+When each odd factor exposes only a short low mask and its highest observed
+bit, the low product and the parity of the high bits can be proved separately.
+For products of two masked, offset inputs, packed truth rows check every
+assignment, including carries into the masks. An affine parity replaces the
+column only after all rows agree. Otherwise the original high column remains.
+The SDK renders both sides of a rewrite together when their widths agree, so
+a shared fragment is formatted once with the original precedence.
 Expression restoration skips nodes older than every substitution key: immutable
 children precede their parents, and simultaneous replacement bodies remain
 unchanged. Rendering appends fragments directly into their parent's text and

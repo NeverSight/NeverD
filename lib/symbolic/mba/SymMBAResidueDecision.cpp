@@ -14,6 +14,7 @@
 
 #include "Limits.h"
 #include "SymMBADetail.h"
+#include "SymMBAProductColumn.h"
 
 #include "neverd/symbolic/Limits.h"
 
@@ -1710,6 +1711,175 @@ class LowWordDecisions {
     return std::move(Products.front());
   }
 
+  struct MaskedOffset {
+    SymRef Base;
+    unsigned Shift, Offset;
+  };
+
+  std::optional<MaskedOffset> maskedOffset(SymRef R, unsigned Count) {
+    const unsigned All = (1u << Count) - 1;
+    auto TakeOffset = [&](SymRef &Term) -> unsigned {
+      if (Ctx.op(Term) != SymOp::Add || Ctx.numOperands(Term) != 2 ||
+          !Ctx.isConst(Ctx.operand(Term, 0)))
+        return 0;
+      const auto Offset = unsigned(literalLowWord(Ctx.operand(Term, 0)));
+      Term = Ctx.operand(Term, 1);
+      return Offset & All;
+    };
+    const auto Outer = TakeOffset(R);
+    if (Ctx.op(R) != SymOp::And || Ctx.numOperands(R) != 2 ||
+        !Ctx.isConst(Ctx.operand(R, 0)))
+      return std::nullopt;
+    const unsigned Mask = unsigned(literalLowWord(Ctx.operand(R, 0))) & All;
+    if (!Mask || Mask == All)
+      return std::nullopt;
+    const unsigned Shift = std::countr_zero(Mask);
+    // An aligned addition commutes with clearing the low Shift bits.
+    if (Mask != (All & ~((1u << Shift) - 1)) || (Outer & ~Mask))
+      return std::nullopt;
+    auto Base = Ctx.operand(R, 1);
+    const auto Offset = (TakeOffset(Base) + Outer) & All;
+    if (!Ctx.isVar(Base))
+      return std::nullopt;
+    return MaskedOffset{Base, Shift, Offset};
+  }
+
+  // XOR distributes over extraction of a single bit. Collect just the
+  // two-coordinate products into the complete packed parity check. Every
+  // other term keeps its exact top bit under the active parity assumption.
+  std::optional<uint32_t> affineTopColumn(llvm::ArrayRef<SymRef> Sources,
+                                          unsigned Count) {
+    std::optional<MaskedOffset> X, Y;
+    llvm::SmallVector<std::pair<unsigned, unsigned>, 16> Offsets;
+    llvm::SmallVector<SymRef, 16> Other;
+    auto Collect = [&](SymRef T) {
+      if (Ctx.op(T) != SymOp::Mul) {
+        Other.push_back(T);
+        return true;
+      }
+      if (Ctx.numOperands(T) != 2)
+        return false;
+      auto A = maskedOffset(Ctx.operand(T, 0), Count);
+      auto B = maskedOffset(Ctx.operand(T, 1), Count);
+      if (!A || !B || A->Base == B->Base || A->Shift + B->Shift >= Count)
+        return false;
+      if (B->Base < A->Base)
+        std::swap(A, B);
+      if (!X) {
+        X = A;
+        Y = B;
+      } else if (A->Base != X->Base || B->Base != Y->Base ||
+                 A->Shift != X->Shift || B->Shift != Y->Shift) {
+        return false;
+      }
+      Offsets.emplace_back(A->Offset, B->Offset);
+      return true;
+    };
+    for (const auto S : Sources) {
+      const bool IsXor = Ctx.op(S) == SymOp::Xor;
+      const auto Children = IsXor ? Ctx.operands(S) : llvm::ArrayRef<SymRef>(S);
+      if (!charge(Children.size(),
+                  2 * Children.size() *
+                      (sizeof(SymRef) + sizeof(Offsets.front()))))
+        return std::nullopt;
+      for (auto Child : Children)
+        if (!Collect(Child))
+          return std::nullopt;
+    }
+    if (!X || Failed)
+      return std::nullopt;
+    const auto Column =
+        readAffineProductColumn(Count, X->Shift, Y->Shift, Offsets,
+                                [&](size_t Work) { return charge(Work); });
+    if (!Column)
+      return std::nullopt;
+    uint32_t Result = Column->Constant;
+    auto AddBits = [&](SymRef V, unsigned Mask) {
+      while (Mask && !Failed) {
+        const unsigned I = std::countr_zero(Mask);
+        Result = apply<Xor>(Result, highestBit(V, I + 1));
+        Mask &= Mask - 1;
+      }
+    };
+    AddBits(X->Base, Column->XBits);
+    AddBits(Y->Base, Column->YBits);
+    for (auto R : Other)
+      Result = apply<Xor>(Result, highestBit(R, Count));
+    return Result;
+  }
+
+  // For odd L_i and T=2^(N-1), product(L_i + T*h_i) equals
+  // product(L_i) + T*xor(h_i) modulo 2^N. Two high columns annihilate
+  // each other, and all other low factors preserve a single high column.
+  // The caller supplies the exact odd branch and restores its zero gate.
+  bool splitMaskedProduct(llvm::ArrayRef<SymRef> Factors, unsigned Count,
+                          const llvm::APInt &Scale, Bits &Product,
+                          SymRef &UpperColumn) {
+    constexpr unsigned LowBits = limits::kMaxIsolatedProductLowBits;
+    if (Count <= LowBits + 1)
+      return false;
+    const unsigned Top = 1u << (Count - 1);
+    // Check the shape before allocating any projected terms. A common case
+    // is an ordinary XOR factor, which declines on its first operand.
+    for (auto F : Factors) {
+      if (Ctx.isConst(F))
+        continue;
+      if (Ctx.op(F) != SymOp::And || Ctx.numOperands(F) != 2 ||
+          !Ctx.isConst(Ctx.operand(F, 0)))
+        return false;
+      const auto Mask = literalLowWord(Ctx.operand(F, 0));
+      if (!(Mask & Top) || (Mask & (Top - 1)) >= (1u << LowBits))
+        return false;
+    }
+    const unsigned Width = Scale.getBitWidth();
+    const size_t NodeBytes = sizeof(SymNode) + 4 * sizeof(SymRef) +
+                             sizeof(llvm::APInt) +
+                             ((size_t(Width) + 63) / 64) * 8;
+    if (!charge(4 * Factors.size(),
+                Factors.size() * (3 * NodeBytes + 2 * sizeof(SymRef))))
+      return true;
+    llvm::SmallVector<SymRef, 16> LowFactors, HighFactors;
+    LowFactors.reserve(Factors.size());
+    HighFactors.reserve(Factors.size());
+    uint64_t Coefficient = 1;
+    for (auto F : Factors) {
+      if (Ctx.isConst(F))
+        continue;
+      const auto Source = Ctx.operand(F, 1);
+      const auto LowMask = literalLowWord(Ctx.operand(F, 0)) & (Top - 1);
+      const auto Low = Ctx.mkAnd(Source, Ctx.mkConst(Width, LowMask));
+      if (Ctx.isConst(Low))
+        Coefficient *= literalLowWord(Low);
+      else
+        LowFactors.push_back(Low);
+      HighFactors.push_back(Source);
+    }
+    Product = product(LowFactors, Count, true);
+    if (Failed || Product.empty())
+      return true;
+    if (Coefficient != 1) {
+      Bits Scalar(Count, 0);
+      for (unsigned I = 0; I < Count; ++I)
+        Scalar[I] = (Coefficient >> I) & 1;
+      Product = calculate(SymOp::Mul, Product, Scalar);
+    }
+    if (auto Bit = affineTopColumn(HighFactors, Count)) {
+      Product.back() = apply<Xor>(Product.back(), *Bit);
+    } else if (!Failed) {
+      // An arbitrary high column also has an exact source spelling. Prepay
+      // flattening and sorting its XOR operands before publishing that term.
+      size_t Terms = 0;
+      for (auto F : HighFactors)
+        Terms += Ctx.op(F) == SymOp::Xor ? Ctx.numOperands(F) : 1;
+      if (!charge(Terms * (1 + std::bit_width(Terms)),
+                  4 * Terms * sizeof(SymRef) + 4 * NodeBytes))
+        return true;
+      auto High = Ctx.mkAnd(Ctx.mkXor(HighFactors), Ctx.mkConst(Width, Top));
+      UpperColumn = Ctx.mkMul(Ctx.mkConst(Scale), High);
+    }
+    return true;
+  }
+
   // Equal identities denote the same word except for the highest observed
   // bit. Flip is an exact Boolean decision for that bit's difference from
   // the shared representative; it need not be a constant.
@@ -3007,7 +3177,12 @@ public:
         WideBlock / limits::kResidueDecisionPartialPairingDivisor;
     const bool FullBlock =
         Nonconstant >= PairingBlock && !(Nonconstant % PairingBlock);
-    bool AllOdd = (RetainedFactors.empty() || !ProjectFactors) && Assumption &&
+    SymRef UpperColumn;
+    const bool IsolatedColumn =
+        AssumptionCoversFactors && !ProjectFactors && Nonconstant >= Observed &&
+        splitMaskedProduct(Factors, Observed, Scale, Product, UpperColumn);
+    bool AllOdd = !IsolatedColumn &&
+                  (RetainedFactors.empty() || !ProjectFactors) && Assumption &&
                   Observed >= limits::kMinResidueDecisionPairingBits &&
                   (FullBlock || Nonconstant > WideProbeBlock);
     llvm::SmallVector<SymRef, 16> Nonconstants;
@@ -3095,7 +3270,7 @@ public:
                                             NormalizeFactors)
                             : product(Factors, Observed);
       }
-    } else {
+    } else if (!IsolatedColumn) {
       Product =
           product(Factors, Observed,
                   Ctx.numOperands(Root) > limits::kMaxResidueProductFactors);
@@ -3849,6 +4024,8 @@ public:
                 (Terms.size() + 1) * (sizeof(SymNode) + 4 * sizeof(SymRef)))) {
       return Root;
     }
+    if (UpperColumn)
+      Terms.push_back(UpperColumn);
     SymRef OutputGate;
     if (Parity != 1) {
       OutputGate = Emit(Emit, Parity, 0);

@@ -10513,6 +10513,12 @@ counts, repeated and replaced factors, constants, cancellation and zero products
 against an independent word oracle. It exhausts two-bit triples and populates
 all limbs through 257 bits, including single-term expansion and budget refusal.
 
+The isolated-column tests compare the packed proof with exhaustive scalar
+truth tables at four precisions, including perturbed offsets and short budgets.
+A 64-factor machine-code fixture checks both CLI and worker source modes against
+the original product at O0 and O2. Paired expression printing must reproduce
+both individual strings for shared roots, ancestors and different widths.
+
 `SymMBALinearProofMemo` checks successful full-width proof reuse, alternating
 queries with the same difference, context isolation, incomplete proofs and
 input/work/storage limits through 257 bits. `SymMBALinearCandidateMemo` keeps

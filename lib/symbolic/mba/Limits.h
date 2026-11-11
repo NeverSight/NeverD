@@ -94,6 +94,9 @@ inline constexpr unsigned kMaxAffineResidueTableBits = 8;
 // Equal halves eliminate quadratic high terms at byte precision. Six-bit
 // products retain two-bit prefixes, avoiding twice as many prefix groups.
 inline constexpr unsigned kResidueEqualHalfBits = 8;
+// An isolated top bit can be accumulated separately while the low product
+// uses the three-bit odd-unit reading.
+inline constexpr unsigned kMaxIsolatedProductLowBits = 3;
 // Squaring a recursive mixed product of six or more observed bits can grow
 // its decision graph. Preserve its complete odd factors across that square;
 // smaller recursive products keep their inexpensive complete decision words.
