@@ -580,7 +580,10 @@ TEST_P(MIPSMSA, ReusedDecoderConsumesRevisionAndFeatureEvidence) {
 TEST_P(MIPSMSA, UnadmittedFormatsRefuseBeforeEmittingEffects) {
   MIPSLifter Lifter(GetParam());
   Lifter.setMSAEnabled(true);
-  for (uint32_t Word : {0x7b03201eu, 0x79342819u, 0x78f00099u, 0x7a800012u}) {
+  // FILL.D and COPY_U.W need MIPS64. The ELM tag and DOTP byte format
+  // below are reserved.
+  for (uint32_t Word : {0x7b03201eu, 0x79342819u, 0x78f00099u, 0x78000013u}) {
+    SCOPED_TRACE(llvm::utohexstr(Word));
     cs_insn Instruction{};
     Instruction.address = 0x10000;
     Instruction.size = 4;
