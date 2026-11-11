@@ -87,9 +87,12 @@ void AnalysisService::reset() {
     snapshot_ = {};
   } else
     stopWorker();
-  // Another project's owner gave none of the pages its views will keep.
-  if (queries_.projectId() != owner_.projectId())
+  // Another project's owner gave none of the pages its views will keep, and
+  // its store holds none of this one's renders.
+  if (queries_.projectId() != owner_.projectId()) {
     ownerPages_.clear();
+    keptBefore_ = KeptState::Unknown;
+  }
   queries_.resetReadContext(owner_.projectId(), owner_.revision());
 }
 
@@ -166,10 +169,20 @@ QString AnalysisService::send(const QString &operation,
 }
 
 void AnalysisService::readKept() {
-  // Part of the renders leaves a job to go on with, whatever this read finds.
-  if (keptState_ == KeptState::Part)
+  // Part of the renders leaves a job to go on with, whatever this read finds,
+  // as the owner said last while it is asked again.
+  const bool part =
+      keptState_ == KeptState::Part ||
+      ((keptState_ == KeptState::Unknown || keptState_ == KeptState::Asked) &&
+       keptBefore_ == KeptState::Part);
+  if (part)
     requestSnapshot();
-  askOwner();
+  // A page a replica gave is the replica's to read again: the owner would give
+  // a document of its own whole, or none.
+  const auto named = payload_.value("if_none_match").toString();
+  if (!part || snapshotBlocked_ || operation_ != QLatin1String("decompile") ||
+      named.isEmpty() || ownerPages_.contains(named))
+    askOwner();
   // What the store holds says only whether a replica starts beside the owner's
   // answer, so the owner, which answers one request at a time, answers the read
   // first.
@@ -187,6 +200,7 @@ void AnalysisService::readKept() {
             response.value("payload").toObject().value("complete").toBool()
                 ? KeptState::Whole
                 : KeptState::Part;
+        keptBefore_ = keptState_;
         // The read that asked may have its answer already.
         if (keptState_ == KeptState::Part)
           startReplica();
@@ -194,6 +208,7 @@ void AnalysisService::readKept() {
 }
 
 void AnalysisService::askOwner() {
+  ++ownerReads_;
   auto payload = payload_;
   // The owner's queries name the pages they keep themselves (QueryService's
   // pump): the page this lane names would make each read a new one there,

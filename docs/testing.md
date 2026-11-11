@@ -7126,7 +7126,10 @@ checks that a replica's dispatcher names the page it kept after its owner's chan
 starts its read context anew, and names none of another project's.
 `WorkbenchTests::ownerAnswersForItsPagesWhileAReplicaIsReady` checks that the owner
 still answers for the page it gave after a note, with a replica ready, and that a
-graph is still the replica's. `WorkbenchTests::ownerReadsWhatChangedOfThePageItGave`
+graph is still the replica's. `WorkbenchTests::aPageAReplicaGaveReadsFromTheReplicaAfterANote`
+checks that, with part of the store rendered, a page a replica gave is read again from the
+replica after a note, the note showing, without asking the owner
+(`Session::analysisOwnerReads`). `WorkbenchTests::ownerReadsWhatChangedOfThePageItGave`
 comments on the function a page the owner gave shows and reads it again through the
 analysis queries: the owner's dispatcher names the page it kept, and the comment carries
 that read, whose answer the view's read takes (`metadata.following_reads`), the comment

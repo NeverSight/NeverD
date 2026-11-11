@@ -5119,7 +5119,10 @@ the owner gave stays the owner's to answer for while it keeps it, even once a re
 is ready (`AnalysisService::askOwner`), since the replica would read it from the store
 and send it whole; a graph, and a page a replica gave, stay with the replica. The
 owner answers the read before it says what the store holds (`kept_renders`), which
-decides only whether a replica starts beside that answer.
+decides only whether a replica starts beside that answer. After a change of names or
+comments the dispatcher goes on from what the owner said last while it asks again: with
+part of the store rendered, the replica starts taking the change at once, and a page a
+replica gave is read again from the replica without asking the owner first.
 The job also keeps what a function's first look in the listing asks the engine, its
 recovered instructions and its stack frame, in `local/listing-facts` under the same
 identity without the names of data, which those answers do not spell either. The
