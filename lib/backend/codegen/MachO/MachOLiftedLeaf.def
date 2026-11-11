@@ -1,4 +1,5 @@
-//===- MachOLiftedLeaf.def - Darwin integer leaf publication --*- C++ -*-===//
+//===- MachOLiftedLeaf.def - Darwin register-only leaf publication --*- C++
+//-*-===//
 //
 // NeverD Decompiler
 //
@@ -55,6 +56,8 @@ MACHO_LEAF_INSTRUCTION(AARCH64_INS_MOV)
 MACHO_LEAF_INSTRUCTION(AARCH64_INS_MOVZ)
 MACHO_LEAF_INSTRUCTION(AARCH64_INS_MOVN)
 MACHO_LEAF_INSTRUCTION(AARCH64_INS_MOVK)
+MACHO_LEAF_INSTRUCTION(AARCH64_INS_FADD)
+MACHO_LEAF_INSTRUCTION(AARCH64_INS_FSUB)
 
 #undef MACHO_LEAF_INSTRUCTION
 #undef MACHO_LEAF_VALUE

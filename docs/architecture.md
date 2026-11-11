@@ -4087,6 +4087,16 @@ both C routes retain every recovered tail operand. A portable rendering of
 the original header declaration preserves qualifiers where its types are
 self-contained; the original declaration and provider remain available.
 
+On i386, a curated Windows runtime prototype with an integer/pointer word
+prefix uses the same pre-SSA variadic summary. `_setjmp3` therefore takes its
+jump buffer and count from the stack, followed by the recovered tail, through
+an IAT call, a loaded slot or an import veneer. Scratch ECX/EDX values cannot
+extend that prefix. The runtime table owns the declaration and parameter
+categories; both C writers also retain its returns-twice effect. LLVM C casts
+opaque pointer operands to the runtime's declared pointee, including addresses
+of frame members and interior frame bytes. This does not
+establish jump-buffer storage or reconstruct nonlocal exception unwinding.
+
 This is a prefix contract, not an inference of arbitrary variadic tail types.
 Windows ARM64 varargs use integer registers and stack slots rather than the
 ordinary FP register bank ([Microsoft ARM64 ABI](https://learn.microsoft.com/en-us/cpp/build/arm64-windows-abi-conventions#addendum-variadic-functions)).
@@ -4755,8 +4765,10 @@ graphs with the ordinary portable scalar spellings, which need no global
 name table. Rendering moves the same graph into the full-signature cache and
 adds declarations without changing previously returned types. Only valid
 prototype names in the context's library enter this intermediate cache;
-adding types clears it even when C names remain stable, so an opaque pointee
-can acquire its newly recovered layout.
+adding types a prototype reaches clears it even when C names remain stable, so
+an opaque pointee can acquire its newly recovered layout. Types no prototype
+reaches (`Session::takeUnreadTypes` checks the names prototypes reach) leave
+every converted signature as it is.
 C declaration writers build their library-wide name table only when a named
 type or enumerator needs it. Scalar and parameter spelling use the same
 identifier rules directly. The deferred table still consumes the whole
@@ -5125,17 +5137,30 @@ recovers every complete record.
 An edit costs what it changes. The owner's listing takes a name of data and a data
 item over bytes no string or code holds where they are (`Listing::dataRenamed`,
 `Listing::dataItemsChanged`, which reads the items from the table the history has just
-committed rather than asking the engine for all of them again; the edit itself reads only
+committed rather than asking the engine for all of them again, and whether the scan's
+strings cover an item's bytes in one search; the edit itself reads only
 the rows of the span it can change, before and after, with
-`neverd_items_range_json`, and keeps the rest of the committed table), the session a name without reading its table
+`neverd_items_range_json`, and keeps the rest of the committed table; a function edit
+reads the row at its entry alone with `neverd_functions_range_json`), the session a name without reading its table
 (`neverd_rename_take`), and a declaration of types no other names reads them against
 what it read of the library once (`Session::LocalTypeNames`), on the library itself
-(`TypeLibrary::Trial`, which undoes a refused declaration). A function's declaration
+(`TypeLibrary::Trial`, which undoes a refused declaration), and the identity its stores
+are kept under before it with the declarations the history committed; the rows after it
+are those and the one it added (`neverd_type_declarations_range_json`). The stores'
+relabel for such a type is written once the reply is sent, before the next request or
+idle step reads their folders (`Engine::writeStoreKeeps`), and what the session's headers
+say of its debug files is read once for the debug inputs it loaded. The project's
+input is recorded once a history first commits, since what the record says holds while
+the session keeps the input. A function's declaration
 reads against the library without copying it, its prototype the parse's own; one that
 would define a type reads again on a copy (`parseFunctionDeclaration`). The GUI opens with `write_behind`: the reply to such an edit, a source
 edit such as a local's name and an operand's format among them, goes before its write, which runs the same journaled transaction in order on a thread of its own
 (`ProjectHistory::persistLater`), joined with what is queued behind one already
-writing. What may read the project's files waits for it first. Staged comments an edit
+writing. What may read the project's files waits for it first. While the client takes
+in the reply to a comment or a name, the owner reads the views it reaches that the client
+shows (or the one it reaches alone) as the client will ask for them
+(`Engine::prepareFollowingViews`), and the read that asks the same takes that answer while
+nothing has changed. Staged comments an edit
 must not pass are committed ahead of it the same way (`save.write_behind`,
 `Session::commitComments`, counting comments still on their way to the worker), while
 the user's Save, closing and packing a database send a plain save that waits. Undo and redo take a step as its edit took it, in place
@@ -15986,14 +16011,18 @@ values across these memory effects.
 The qualified MIPS16e2 system/atomic slice shares scalar shape admission but
 retains separate effectful IDs. `MIPSSystemContext` authenticates a system step;
 `MIPSCP0.def` owns the admitted CP0 word selectors, context fields and write
-permissions. Status shares the DI/EI owner; EPC/ErrorEPC words preserve all bits.
+permissions and MT requirements. Selector keys are `(sel << 5) | reg`;
+Status shares the DI/EI owner, EPC/ErrorEPC words preserve all bits, and the
+three MT control views remain read-only outside typed MT operations. MT uses
+explicit ABI evidence and bound implementation/master permission. CACHE/PREF
+retain potentially writing memory effects but refuse execution and source.
 `NdOpEmulatorMIPS` owns permission/hazard consumption and the opt-in
 flat Config5.LLB=1 reservation model. `storeMemoryBytes` invalidates overlapping
 reservation granules only on committed stores. PAUSE is effectful and completes
 only with a configured, known-clear reservation; scheduling is not inferred.
 Calls/reset and lenient unknown operations discard reservation knowledge.
 `scalarMayWriteMemory` is shared with
-ABI setup recovery so SC cannot preserve a stale outgoing stack value. HighC and
+ABI setup recovery so SC/CACHE/PREF cannot preserve a stale outgoing stack value. HighC and
 LLVM reject stateful native-source lowering until an execution-region contract
 can preserve the reservation or privileged state; no helper approximates it.
 
@@ -16004,6 +16033,12 @@ DSPControl read/write intrinsics. The LowIR emulator requires supplied state;
 the source backends preserve original-machine transfers through
 `MIPSDSPSource`. These transfers remain observable independently of integer
 return values, including when packed arithmetic discards its GPR destination.
+`MIPSRegisters.def` owns AC1–AC3 storage; AC0 reuses HI/LO. The accumulator
+source proof covers all halves and ABI clobbers. AC0 unread arithmetic history
+uses one internal SSA slot and a pure unknown-value transport. Only that
+transport and SSA entry definitions bypass early observation checks; after
+propagation/DCE, the proof runs again and unresolved live transports refuse
+before ABI recovery. Native backends also reject residual transports.
 
 The MSA integer-vector slice consumes explicit r5/o32/FP64 metadata. Decoder handle
 reuse includes the ISA revision; `MIPSMSA.def` and `MIPSLiftMSA` own raw
@@ -19920,6 +19955,19 @@ previous lift calls. The signed/unsigned operations share one lifter; narrowing
 belongs to subsequent dataflow, with no decoder-local dividend cache. See
 [the event interface](x86-event-delivery.md); legacy non-IA-32e dispatch and
 SMM/SGX transitions do not acquire semantics from this interface.
+
+`X86ModeExecution` composes the protected/compatibility original-byte owner
+with paged code64 bodies over one complete V7 bank and retained debug/shadow
+state. The translate layer returns typed non-64-bit event requests before IDT
+access; analysis selects the event owner from committed controls and performs
+a terminal state handoff. `X86ControlRegisters` owns the pure CR0/CR3/CR4
+transition checks; its consumer retains physical PDPTE access and publication.
+Low-width views never replace persistent full-width banks. See the
+[continuous mode contract](x86-mode-execution.md) for admission and resumption. Its selected
+IRQ/NMI entry uses the same committed-mode event owner, reports original input
+acceptance once and retains full-bank progress across frame suspension. The
+mode owner authenticates pending state before stop/budget exits and keeps
+shutdown terminal; the event producer owns arrival and interrupt arbitration.
 
 The native SMM continuation projection owns canonical RSM admission in
 `X64ContinuationSmm.h`. SVM and SMM share standard XSAVE image checks and

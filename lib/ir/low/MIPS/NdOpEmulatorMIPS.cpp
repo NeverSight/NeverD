@@ -54,12 +54,13 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
     return true;
   }
   if (Id == Intrinsic::MIPSReadCP0Word || Id == Intrinsic::MIPSWriteCP0Word) {
-    if (!Context.CP0Usable)
+    if (!Context.CP0Usable ||
+        (mips::cp0RequiresMT(Op.Inputs[1].Offset) && !Context.ImplementedMT))
       return false;
     std::optional<uint32_t> *Value = nullptr;
     switch (Op.Inputs[1].Offset) {
-#define NEVERD_MIPS_CP0(Index, Name, Writable)                                 \
-  case Index:                                                                  \
+#define NEVERD_MIPS_CP0(Index, Selector, Name, Writable, MT)                   \
+  case ((Selector << 5) | Index):                                              \
     Value = &Context.Name;                                                     \
     break;
 #include "neverd/ir/intrinsics/MIPS/MIPSCP0.def"
@@ -77,6 +78,24 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
     }
     return true;
   }
+  if (mips::isMTIntrinsic(Id)) {
+    const bool Thread =
+        Id == Intrinsic::MIPSDisableMT || Id == Intrinsic::MIPSEnableMT;
+    auto &Control = Thread ? Context.VPEControl : Context.MVPControl;
+    if (!Context.CP0Usable || !Context.ImplementedMT || !Control ||
+        (!Thread && !Context.VPEConf0))
+      return false;
+    const uint32_t Old = *Control;
+    if (Thread || (*Context.VPEConf0 & 2)) {
+      const uint32_t Mask = Thread ? 1u << 15 : 1;
+      const bool Enable =
+          Id == Intrinsic::MIPSEnableMT || Id == Intrinsic::MIPSEnableVPE;
+      Control = Enable ? Old | Mask : Old & ~Mask;
+    }
+    writeOutput(Op.Output, Old);
+    Context.ExecutionHazardPending = true;
+    return true;
+  }
   if (!Context.CP0Usable || !Context.Status)
     return false;
   const uint32_t Old = *Context.Status;
@@ -91,7 +110,7 @@ bool NdOpEmulator::executeMIPSScalar(const LowOp &Op) {
   if (!mipsScalarLowShapeIsValid(Op, Img.Arch))
     return false;
   const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
-  if (mips::isSystemIntrinsic(Id))
+  if (mips::isSystemIntrinsic(Id) || mips::isCacheIntrinsic(Id))
     return false; // Explicit, single-step context required in either mode.
   if (Id == Intrinsic::MIPSPause)
     return MIPSReservationGranule && MIPSReservationKnown &&
@@ -144,6 +163,16 @@ bool NdOpEmulator::executeMIPSScalar(const LowOp &Op) {
     if (!knownOperandBytes(State, 0, 4))
       return false;
     writeOutput(Op.Output, readOperand(State) & mips::DSPControlBits);
+    return true;
+  }
+  if (Id == Intrinsic::MIPSAccumulatorAfterWrite) {
+    const auto &History = Op.Inputs[1], &Old = Op.Inputs[2];
+    if (knownOperandBytes(History, 0, 1) && readOperand(History) == 0 &&
+        availableOperandBytes(Old, 0, Old.Size))
+      writeOutput(Op.Output, readOperand(Old), unknownOperandBits(Old));
+    else
+      writeOutput(Op.Output, 0,
+                  llvm::maskTrailingOnes<uint64_t>(Op.Output.Size * 8));
     return true;
   }
   if (Id == Intrinsic::MIPSUnpredictable) {

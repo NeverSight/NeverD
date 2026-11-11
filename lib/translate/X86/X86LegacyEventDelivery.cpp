@@ -165,8 +165,10 @@ private:
       R.Status = Got.Status;
       R.Exception = Got.Exception;
       R.BackingFault = Got.BackingFault;
-      if (Got.Exception && Got.Exception->CR2)
+      if (Got.Exception && Got.Exception->CR2) {
         S.CR2 = *Got.Exception->CR2;
+        S.PendingEvent->CR2Written = true;
+      }
       return false;
     }
     if (faultIf(Misaligned, 17, 0))
@@ -441,10 +443,13 @@ continueEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
   R.EventAccepted = Accepted;
   R.Exception = Pending.LastException;
   R.SoftwareCompleted = Pending.SoftwareCompleted;
+  R.CR2Written = Pending.CR2Written;
+  R.CSWritten = R.SSWritten = Pending.SegmentsWritten;
   X86WatchpointObservation Observation(
       Memory, State.Debug ? &*State.Debug : nullptr,
       Options.Debug.value_or(X86InstructionDebugProfile::InstructionStep),
-      Pending.DataBreakpoints);
+      Pending.DataBreakpoints,
+      Pending.DebugAddresses ? &*Pending.DebugAddresses : nullptr);
   for (;;) {
     if (R.DeliveryAttempts == Options.EventDelivery.MaxAttempts) {
       Pending.DataBreakpoints = Observation.Matches;
@@ -461,6 +466,7 @@ continueEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
       SavedFlags &= ~0x10000u;
     ++R.DeliveryAttempts;
     auto Got = Entry(State, Memory, Event, Options, SavedFlags).run();
+    R.CR2Written = Pending.CR2Written;
     if (!Got)
       return Got.takeError();
     R.SelfModifications.insert(R.SelfModifications.end(),
@@ -482,6 +488,7 @@ continueEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
       return R;
     }
     if (Got->Status == X86PageWalkStatus::Completed) {
+      R.CSWritten = R.SSWritten = Pending.SegmentsWritten = true;
       const bool Software = Event.Kind == Kind::Software;
       R.SoftwareCompleted |= Software;
       Pending.SoftwareCompleted = R.SoftwareCompleted;
@@ -491,7 +498,8 @@ continueEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
           State.Debug &&
           x86EventDataBreakpoints(
               *State.Debug, Software, Observation.Matches,
-              uint32_t(State.Core.Segments[1].Base + State.EIP), State.EFlags);
+              uint32_t(State.Core.Segments[1].Base + State.EIP), State.EFlags,
+              Pending.DebugAddresses ? &*Pending.DebugAddresses : nullptr);
       if (DataTrap || Got->DebugTrap) {
         x86AcceptDebugException(*State.Debug);
         Observation.Matches = Pending.DataBreakpoints = 0;
@@ -539,7 +547,8 @@ continueEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 llvm::Expected<X86LegacyExecutionResult>
 deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                       const X86LegacyEvent &Input,
-                      const X86LegacyExecutionOptions &Options) {
+                      const X86LegacyExecutionOptions &Options,
+                      const std::array<uint64_t, 4> *DebugAddresses) {
   if (State.PendingStack || State.PendingMpx || State.PendingTransfer ||
       State.PendingControl || detail::legacyTaskInstructionPending(State) ||
       detail::legacyTaskEventPending(State))
@@ -585,6 +594,10 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
       Input.Kind == Kind::Software ? State.EIP : Input.SavedEIP;
   State.PendingEvent =
       X86LegacyEventContinuation{Input, FaultEIP, State.EFlags, {}};
+  State.PendingEvent->CR2Written =
+      Input.Kind == Kind::Fault && Input.Vector == 14;
+  if (DebugAddresses)
+    State.PendingEvent->DebugAddresses = *DebugAddresses;
   return continueEvent(State, Memory, Options, true);
 }
 

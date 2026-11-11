@@ -1,4 +1,5 @@
-//===- MachOLiftedLeaf.cpp - Verified Darwin integer leaf images ----------===//
+//===- MachOLiftedLeaf.cpp - Verified Darwin register-only leaf images
+//----------===//
 //
 // NeverD Decompiler
 //
@@ -47,8 +48,21 @@ bool registerOnly(const DecodedInsn &I) {
     if (Op.type != AARCH64_OP_REG)
       return false;
     const auto R = Op.reg;
+    if (Op.access == CS_AC_READ) {
+      switch (R) {
+#define NEVERD_DARWIN_ENTRY_REGISTER(X, W, Name, Reservation)                  \
+  case AARCH64_REG_##X:                                                        \
+  case AARCH64_REG_##W:                                                        \
+    continue;
+#include "neverd/backend/llvm/AArch64/LLVMDarwinEntryRegister.def"
+      default:
+        break;
+      }
+    }
     if (!((R >= AARCH64_REG_X0 && R <= AARCH64_REG_X17) ||
           (R >= AARCH64_REG_W0 && R <= AARCH64_REG_W17) ||
+          (R >= AARCH64_REG_S0 && R <= AARCH64_REG_S7) ||
+          (R >= AARCH64_REG_D0 && R <= AARCH64_REG_D7) ||
           R == AARCH64_REG_XZR || R == AARCH64_REG_WZR))
       return false;
   }

@@ -229,14 +229,17 @@ template <typename Bank> inline void x86PublishTaskDebug(Bank &Debug) {
 /// its trap request but the target reports only the entry's new data matches.
 /// A newly recognized data trap also reports next-PC execution comparators.
 template <typename Bank>
-inline bool x86EventDataBreakpoints(Bank &Debug, bool Software, uint8_t Matches,
-                                    uint64_t LinearPC, uint64_t Flags) {
+inline bool x86EventDataBreakpoints(
+    Bank &Debug, bool Software, uint8_t Matches, uint64_t LinearPC,
+    uint64_t Flags, const std::array<uint64_t, 4> *WideAddresses = nullptr) {
   const bool Deliver = Matches || (Software && Debug.PendingData);
   Debug.PendingData = 0;
   if (!Deliver)
     return false;
-  Matches |=
-      x86ExecutionBreakpoints(Debug.DR, Debug.DR7, LinearPC, Flags, false);
+  Matches |= WideAddresses ? x86ExecutionBreakpoints(*WideAddresses, Debug.DR7,
+                                                     LinearPC, Flags, false)
+                           : x86ExecutionBreakpoints(Debug.DR, Debug.DR7,
+                                                     LinearPC, Flags, false);
   x86PublishInstructionDebug(Debug, false, Matches);
   return true;
 }

@@ -42,6 +42,8 @@ struct MIPSImageMetadata {
   bool HasMIPS16 = false;
   /// MIPS16e2 requires its own .MIPS.abiflags ASE evidence.
   bool HasMIPS16E2 = false;
+  /// MT control operations require explicit ABI feature evidence.
+  bool HasMT = false;
   /// Classic MIPS32 DSP ASE; the initial slice requires DSP execution enabled.
   bool HasDSP = false;
   /// Initial classic MIPS32r5/o32 integer MSA slice, with FP64 register mode.

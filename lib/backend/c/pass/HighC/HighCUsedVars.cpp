@@ -11,6 +11,8 @@
 
 #include "neverd/backend/c/pass/HighC/HighCPasses.h"
 
+#include "llvm/ADT/SmallVector.h"
+
 #include <algorithm>
 
 namespace neverd {
@@ -18,8 +20,8 @@ namespace neverd {
 void collectUsedVarsExpr(const HighExpr &Expr,
                          std::map<std::string, TypeRef> &Vars, VarNameFn VarFn,
                          CallArgLimitFn ArgLimit) {
-  std::set<const HighExpr *> Seen;
-  std::vector<const HighExpr *> Work{&Expr};
+  HighExprSet Seen;
+  llvm::SmallVector<const HighExpr *> Work{&Expr};
   while (!Work.empty()) {
     const HighExpr *Cur = Work.back();
     Work.pop_back();

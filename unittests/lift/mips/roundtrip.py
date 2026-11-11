@@ -139,6 +139,8 @@ def emulator(path, bits, little, function, original=None, cpu_model=None):
     uc.mem_map(DATA, 4096)
     uc.mem_map(STACK - 8192, 16384)
     uc.mem_map(STOP, 4096)
+    if isinstance(function, int):  # Explicit entry in a sectionless ELF.
+        return uc, function
     symbols = elf.get_section_by_name(".symtab").get_symbol_by_name(function)
     if not symbols:
         raise RuntimeError(f"missing {function} in {path}")

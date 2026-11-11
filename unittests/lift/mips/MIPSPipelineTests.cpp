@@ -145,102 +145,118 @@ TEST_P(MIPSPipeline, AccumulatorSourceRequiresDefinedInputsAcrossEncodings) {
 }
 
 TEST_P(MIPSPipeline, AccumulatorJoinsAndCallsCannotInventSourceState) {
-  for (bool High : {false, true})
-    for (bool Defined : {false, true})
-      for (bool Call : {false, true}) {
-        const uint32_t Write = High ? 0x00800011 : 0x00800013;
-        const uint32_t Read = High ? 0x00001010 : 0x00001012;
-        // The branch's taken path skips the write. A dominating write makes
-        // both arms defined. Across a call only a fresh write is sufficient.
-        const bool Wide = isMIPS64(GetParam());
-        const std::vector<uint32_t> Words =
-            Call ? std::vector<uint32_t>{Wide ? 0x67bdfff0u : 0x27bdffe8u,
-                                         Wide ? 0xffbf0008u : 0xafbf0014u,
-                                         Write,
-                                         0x0c00404c,
-                                         0,
-                                         Defined ? Write : 0,
-                                         Read,
-                                         Wide ? 0xdfbf0008u : 0x8fbf0014u,
-                                         0x03e00008,
-                                         Wide ? 0x67bd0010u : 0x27bd0018u}
-                 : std::vector<uint32_t>{
-                       Defined ? Write : 0, 0x10a00003, 0, Write,
-                       0x10000002,          0,          0, Read,
-                       0x03e00008,          0};
-        SCOPED_TRACE(::testing::Message()
-                     << High << "/" << Defined << "/" << Call);
-        mips_test::ELFBytes File(GetParam());
-        File.Bytes.resize(0x140);
-        const unsigned Program = File.Is64 ? 64 : 52;
-        File.put(Program + (File.Is64 ? 32 : 16), File.Bytes.size(),
-                 File.Is64 ? 8 : 4);
-        File.put(Program + (File.Is64 ? 40 : 20), File.Bytes.size(),
-                 File.Is64 ? 8 : 4);
-        for (unsigned I = 0; I != Words.size(); ++I)
-          File.put(0x100 + I * 4, Words[I], 4);
-        File.put(0x130, 0x03e00008, 4);
-        File.put(0x134, 0, 4);
-        ELFLoader Loader;
-        auto Image = Loader.loadBuffer(File.buffer());
-        ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
-        Image->Symbols.push_back(
-            Symbol::makeFunc(Image->Entry, Words.size() * 4));
-        Image->Symbols.push_back(Symbol::makeFunc(0x10130, 8));
-        Decoder Decode;
-        ASSERT_TRUE(Decode.init(*Image));
-        const auto Low = CFGBuilder().build(*Image, Decode, Image->Entry,
-                                            "accumulator_paths");
-        ASSERT_TRUE(Low.hasCompleteLiftCoverage());
-        for (bool WithImage : {false, true}) {
-          LowToMedConverter Convert;
-          if (WithImage)
-            Convert.setBinaryImage(&*Image);
-          const bool MissingMode = Call && !WithImage && !Wide;
-          if (Defined && !MissingMode)
-            EXPECT_NO_THROW(
-                Convert.convert(Low, GetParam(), BinaryFormat::ELF));
-          else {
-            try {
-              Convert.convert(Low, GetParam(), BinaryFormat::ELF);
-              FAIL() << "unqualified accumulator/call source was accepted";
-            } catch (const LowToMedConversionError &Error) {
-              EXPECT_NE(std::string(Error.what())
-                            .find(MissingMode ? "instruction mode" : "HI/LO"),
-                        std::string::npos)
-                  << Error.what();
+  for (unsigned Bank = 0; Bank != (isMIPS64(GetParam()) ? 1u : 4u); ++Bank)
+    for (bool High : {false, true})
+      for (bool Defined : {false, true})
+        for (bool Call : {false, true}) {
+          const uint32_t Write =
+              (High ? 0x00800011 : 0x00800013) | (Bank << 11);
+          const uint32_t Read = (High ? 0x00001010 : 0x00001012) | (Bank << 21);
+          // The branch's taken path skips the write. A dominating write makes
+          // both arms defined. Across a call only a fresh write is sufficient.
+          const bool Wide = isMIPS64(GetParam());
+          std::vector<uint32_t> Words =
+              Call ? std::vector<uint32_t>{Wide ? 0x67bdfff0u : 0x27bdffe8u,
+                                           Wide ? 0xffbf0008u : 0xafbf0014u,
+                                           Write,
+                                           0x0c00404c,
+                                           0,
+                                           Defined ? Write : 0,
+                                           Read,
+                                           Wide ? 0xdfbf0008u : 0x8fbf0014u,
+                                           0x03e00008,
+                                           Wide ? 0x67bd0010u : 0x27bd0018u}
+                   : std::vector<uint32_t>{
+                         Defined ? Write : 0, 0x10a00003, 0, Write,
+                         0x10000002,          0,          0, Read,
+                         0x03e00008,          0};
+          if (Bank && Call)
+            // DSP source requires an authenticated return link. Carry RA in
+            // callee-saved s0; cross-call stack-link recovery is not admitted.
+            Words = {0x27bdffe8, 0xafb00014, 0x03e08025,          Write,
+                     0x0c00404c, 0,          Defined ? Write : 0, Read,
+                     0x0200f825, 0x8fb00014, 0x03e00008,          0x27bd0018};
+          SCOPED_TRACE(::testing::Message()
+                       << Bank << "/" << High << "/" << Defined << "/" << Call);
+          mips_test::ELFBytes File(GetParam());
+          if (Bank) {
+            File.abiFlags();
+            File.put(0xec, 1, 4);
+          }
+          File.Bytes.resize(0x140);
+          const unsigned Program = File.Is64 ? 64 : 52;
+          File.put(Program + (File.Is64 ? 32 : 16), File.Bytes.size(),
+                   File.Is64 ? 8 : 4);
+          File.put(Program + (File.Is64 ? 40 : 20), File.Bytes.size(),
+                   File.Is64 ? 8 : 4);
+          for (unsigned I = 0; I != Words.size(); ++I)
+            File.put(0x100 + I * 4, Words[I], 4);
+          File.put(0x130, 0x03e00008, 4);
+          File.put(0x134, 0, 4);
+          ELFLoader Loader;
+          auto Image = Loader.loadBuffer(File.buffer());
+          ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+          Image->Symbols.push_back(
+              Symbol::makeFunc(Image->Entry, Words.size() * 4));
+          Image->Symbols.push_back(Symbol::makeFunc(0x10130, 8));
+          Decoder Decode;
+          ASSERT_TRUE(Decode.init(*Image));
+          const auto Low = CFGBuilder().build(*Image, Decode, Image->Entry,
+                                              "accumulator_paths");
+          ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+          for (bool WithImage : {false, true}) {
+            LowToMedConverter Convert;
+            if (WithImage)
+              Convert.setBinaryImage(&*Image);
+            const bool MissingMode = Call && !WithImage && !Wide;
+            if (Defined && !MissingMode)
+              EXPECT_NO_THROW(
+                  Convert.convert(Low, GetParam(), BinaryFormat::ELF));
+            else {
+              try {
+                Convert.convert(Low, GetParam(), BinaryFormat::ELF);
+                FAIL() << "unqualified accumulator/call source was accepted";
+              } catch (const LowToMedConversionError &Error) {
+                EXPECT_NE(std::string(Error.what())
+                              .find(MissingMode ? "instruction mode" : "HI/LO"),
+                          std::string::npos)
+                    << Error.what();
+              }
             }
           }
         }
-      }
 }
 
 TEST_P(MIPSPipeline, AccumulatorPhiChecksOnlyReadJoinsAndRejectsAbsentEdges) {
-  MedFunc Function;
-  Function.Blocks.emplace_back();
-  auto &Block = Function.Blocks.back();
-  PhiNode Phi;
-  Phi.Output.Kind = MedVar::Reg;
-  Phi.Output.Id = 1;
-  Phi.Output.SSAVer = 0;
-  Phi.Output.RegOff = mipsreg::HI;
-  Phi.Output.Size = isMIPS64(GetParam()) ? 8 : 4;
-  Phi.Output.TheArch = GetParam();
-  Phi.Args = {{0, MedVar::makeUnspecified(Phi.Output.Size, GetParam())},
-              {1, MedVar::makeConst(7, Phi.Output.Size)}};
-  Block.Phis.push_back(Phi);
-  EXPECT_NO_THROW(requireMIPSSourceAccumulators(Function));
-  MedOp Read;
-  Read.Opcode = NdOp::COPY;
-  Read.Output = Phi.Output;
-  Read.Output.Id = 2;
-  Read.Output.RegOff = mipsreg::V0;
-  Read.addInput(Phi.Output);
-  Block.Ops.push_back(Read);
-  EXPECT_THROW(requireMIPSSourceAccumulators(Function),
-               LowToMedConversionError);
-  Block.Phis[0].Args[0].second = MedVar::makeConst(9, Phi.Output.Size);
-  EXPECT_NO_THROW(requireMIPSSourceAccumulators(Function));
+  for (uint64_t Register :
+       {mipsreg::HI, mipsreg::LO, mipsreg::AC1HI, mipsreg::AC1LO,
+        mipsreg::AC2HI, mipsreg::AC2LO, mipsreg::AC3HI, mipsreg::AC3LO}) {
+    MedFunc Function;
+    Function.Blocks.emplace_back();
+    auto &Block = Function.Blocks.back();
+    PhiNode Phi;
+    Phi.Output.Kind = MedVar::Reg;
+    Phi.Output.Id = 1;
+    Phi.Output.SSAVer = 0;
+    Phi.Output.RegOff = Register;
+    Phi.Output.Size = isMIPS64(GetParam()) ? 8 : 4;
+    Phi.Output.TheArch = GetParam();
+    Phi.Args = {{0, MedVar::makeUnspecified(Phi.Output.Size, GetParam())},
+                {1, MedVar::makeConst(7, Phi.Output.Size)}};
+    Block.Phis.push_back(Phi);
+    EXPECT_NO_THROW(requireMIPSSourceAccumulators(Function));
+    MedOp Read;
+    Read.Opcode = NdOp::COPY;
+    Read.Output = Phi.Output;
+    Read.Output.Id = 2;
+    Read.Output.RegOff = mipsreg::V0;
+    Read.addInput(Phi.Output);
+    Block.Ops.push_back(Read);
+    EXPECT_THROW(requireMIPSSourceAccumulators(Function),
+                 LowToMedConversionError);
+    Block.Phis[0].Args[0].second = MedVar::makeConst(9, Phi.Output.Size);
+    EXPECT_NO_THROW(requireMIPSSourceAccumulators(Function));
+  }
 }
 
 TEST_P(MIPSPipeline, ReturnSlotComputationReachesCAndLLVMWithCorrectABI) {
@@ -934,6 +950,55 @@ TEST_P(MIPSPipeline, ObservableMulAccumulatorsCannotBecomeStaleSourceValues) {
             << Result.Error;
     }
   }
+}
+
+TEST_P(MIPSPipeline,
+       PartialAccumulatorHistoryMustBeProvenBeforeSourceEmission) {
+  for (bool High : {false, true})
+    for (unsigned Case = 0; Case != 4; ++Case) {
+      // Case 0 observes an unread MULT result after a partial write; Case 1
+      // consumes it via MFHI $zero; Case 2 overwrites both halves; Case 3 joins
+      // the consumed/unconsumed histories and must conservatively refuse.
+      std::vector<uint32_t> Words = {0x00850018};
+      if (Case == 3)
+        Words.insert(Words.end(), {0x10c00002, 0});
+      if (Case == 1 || Case == 3)
+        Words.push_back(0x00000010);
+      Words.push_back(High ? 0x00800011 : 0x00800013);
+      if (Case == 2)
+        Words.push_back(High ? 0x00a00013 : 0x00a00011);
+      Words.insert(Words.end(),
+                   {High ? 0x00001012u : 0x00001010u, 0x03e00008, 0});
+      mips_test::ELFBytes F(GetParam());
+      for (unsigned N = 0; N < Words.size(); ++N)
+        F.put(0x100 + N * 4, Words[N], 4);
+      ELFLoader L;
+      auto I = L.loadBuffer(F.buffer());
+      ASSERT_TRUE(bool(I)) << llvm::toString(I.takeError());
+      for (bool LLVM : {false, true}) {
+        llvm::LLVMContext C;
+        PipelineOptions O;
+        O.OnlyFunctionEntries = {I->Entry};
+        O.LiftMode = LLVM;
+        O.EmitDumpOutput = false;
+        auto R = Pipeline().run(*I, C, O);
+        const bool Defined = Case == 1 || Case == 2;
+        if (Defined)
+          EXPECT_TRUE(R.Success) << R.Error;
+        else if (LLVM || !R.Success)
+          EXPECT_FALSE(R.Success);
+        else {
+          CEmitterOptions E;
+          E.TheArch = GetParam();
+          E.Format = BinaryFormat::ELF;
+          E.Image = &*I;
+          std::string Text;
+          llvm::raw_string_ostream Out(Text);
+          EXPECT_THROW(HighCEmitter().emit(R.HighFuncs, Out, E),
+                       std::runtime_error);
+        }
+      }
+    }
 }
 
 INSTANTIATE_TEST_SUITE_P(Profiles, MIPSPipeline,

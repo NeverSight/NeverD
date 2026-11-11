@@ -66,5 +66,80 @@ int main(int argc, char **argv) {
 }
 )c")
 
+A64_LEAF_TEXT(kSwiftLeaves, R"c(
+#include <stdint.h>
+#define SWIFT __attribute__((swiftcall))
+#define CONTEXT __attribute__((swift_context))
+SWIFT uintptr_t leaf_sum(uintptr_t x, void *CONTEXT self) {
+  return (uintptr_t)self + x;
+}
+SWIFT uintptr_t leaf_difference(uintptr_t x, void *CONTEXT self) {
+  return x - (uintptr_t)self;
+}
+)c")
+A64_LEAF_TEXT(kSwiftCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+typedef uintptr_t __attribute__((swiftcall))
+    operation(uintptr_t, void *__attribute__((swift_context)));
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  operation *sum = (operation *)dlsym(image, "leaf_sum");
+  operation *difference = (operation *)dlsym(image, "leaf_difference");
+  if (!sum || !difference)
+    return 3;
+  const uintptr_t values[] = {0, 1, 17, UINTPTR_MAX, UINT64_C(1) << 63};
+  unsigned char storage[4];
+  void *contexts[] = {0, storage, storage + 1, storage + 2, storage + 3};
+  for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i)
+    for (unsigned j = 0; j != sizeof(contexts) / sizeof(*contexts); ++j) {
+      const uintptr_t context = (uintptr_t)contexts[j];
+      if (sum(values[i], contexts[j]) != context + values[i] ||
+          difference(values[i], contexts[j]) != values[i] - context)
+        return 4;
+    }
+  return dlclose(image) != 0;
+}
+)c")
+
+A64_LEAF_TEXT(kScalarFPLeaves, R"c(
+double leaf_sum(double a, double b) { return a + b; }
+float leaf_difference(float a, float b) { return a - b; }
+)c")
+A64_LEAF_TEXT(kScalarFPCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+#include <string.h>
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  typedef double (*sum_fn)(double, double);
+  typedef float (*diff_fn)(float, float);
+  sum_fn sum = (sum_fn)dlsym(image, "leaf_sum");
+  diff_fn difference = (diff_fn)dlsym(image, "leaf_difference");
+  if (!sum || !difference)
+    return 3;
+  const double values[] = {0., -0., 1.5, -2.75, 0x1.000002p+0};
+  for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i)
+    for (unsigned j = 0; j != sizeof(values) / sizeof(*values); ++j) {
+      const double a = values[i], b = values[j];
+      const double result = sum(a, b), expected = a + b;
+      const float diff = difference((float)a, (float)b);
+      const float expected_diff = (float)a - (float)b;
+      if (memcmp(&result, &expected, sizeof(result)) ||
+          memcmp(&diff, &expected_diff, sizeof(diff)))
+        return 4;
+    }
+  return dlclose(image) != 0;
+}
+)c")
+
 #undef A64_LEAF_VALUE
 #undef A64_LEAF_TEXT

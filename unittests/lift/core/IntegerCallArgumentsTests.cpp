@@ -254,6 +254,31 @@ TEST(FloatingCallArguments, CompleteScalarRegistersAndConservativeBoundaries) {
       libc::floatingCallArguments(Function, Arch::X64, BinaryFormat::COFF));
 }
 
+TEST(VariadicCallArguments, RuntimePrefixKeepsItsTargetAndPointee) {
+  const auto Function =
+      libc::runtimeVariadicPrototype("_setjmp3", Arch::X86, BinaryFormat::COFF);
+  ASSERT_TRUE(Function);
+  const auto Prefix =
+      libc::variadicCallArguments(*Function, Arch::X86, BinaryFormat::COFF);
+  ASSERT_TRUE(Prefix);
+  EXPECT_EQ(*Prefix, (std::vector<uint16_t>{4, 4}));
+  ASSERT_EQ(Function->Params.size(), 2u);
+  const auto &Buffer = Function->Params[0].second;
+  ASSERT_EQ(Buffer->Kind, NdTypeKind::Ptr);
+  ASSERT_TRUE(Buffer->Pointee);
+  EXPECT_EQ(Buffer->Pointee->Kind, NdTypeKind::Int);
+  EXPECT_EQ(Buffer->Pointee->Size, 4u);
+  EXPECT_TRUE(Buffer->Pointee->IsSigned);
+  for (Arch A : {Arch::X64, Arch::AArch64, Arch::ARM})
+    EXPECT_FALSE(
+        libc::runtimeVariadicPrototype("_setjmp3", A, BinaryFormat::COFF));
+  for (BinaryFormat F : {BinaryFormat::ELF, BinaryFormat::MachO})
+    EXPECT_FALSE(libc::runtimeVariadicPrototype("_setjmp3", Arch::X86, F));
+  for (const auto *Name : {"fixture", "_longjmpex", "printf"})
+    EXPECT_FALSE(
+        libc::runtimeVariadicPrototype(Name, Arch::X86, BinaryFormat::COFF));
+}
+
 TEST(VariadicCallArguments, HeaderPrefixIsNotAnExactOrFloatingSignature) {
   for (Arch A : {Arch::X86, Arch::X64, Arch::AArch64}) {
     FunctionSym Function;

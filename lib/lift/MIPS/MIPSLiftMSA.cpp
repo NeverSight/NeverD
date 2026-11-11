@@ -205,8 +205,17 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
   const bool AbsoluteDifference =
       *Kind == Instruction::AbsoluteDifferenceSigned ||
       *Kind == Instruction::AbsoluteDifferenceUnsigned;
+  const bool RoundShift = *Kind == Instruction::RoundShiftSignedVector ||
+                          *Kind == Instruction::RoundShiftUnsignedVector ||
+                          *Kind == Instruction::RoundShiftSignedImmediate ||
+                          *Kind == Instruction::RoundShiftUnsignedImmediate;
+  const bool InsertBits = *Kind == Instruction::InsertLeftVector ||
+                          *Kind == Instruction::InsertRightVector ||
+                          *Kind == Instruction::InsertLeftImmediate ||
+                          *Kind == Instruction::InsertRightImmediate;
   const bool ImmediateBit =
-      ((Shift || Bit) && (Word & 63) == 9) || SaturateImmediate;
+      ((Shift || Bit || InsertBits) && (Word & 63) == 9) ||
+      (RoundShift && (Word & 63) == 10) || SaturateImmediate;
   const bool CountBits = *Kind == Instruction::PopulationCount ||
                          *Kind == Instruction::LeadingZeroCount ||
                          *Kind == Instruction::LeadingOneCount;
@@ -270,6 +279,48 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
       S.emit(
           NdOp::SELECT, Values[I],
           {Less, S.binary(NdOp::INT_SUB, B, A), S.binary(NdOp::INT_SUB, A, B)});
+    } else if (RoundShift || InsertBits) {
+      const auto A = Lane(WS, I, Bytes);
+      if (InsertBits && ImmediateBit &&
+          (Field & (Bytes * 8 - 1)) == Bytes * 8 - 1) {
+        // A full-lane immediate insertion does not observe the old WD.
+        Values[I] = A;
+        continue;
+      }
+      const auto Limit = NdVar::cst(Bytes * 8 - 1, Bytes);
+      const auto Count =
+          ImmediateBit ? NdVar::cst(Field & (Bytes * 8 - 1), Bytes)
+                       : S.binary(NdOp::INT_AND, Lane(WT, I, Bytes), Limit);
+      if (RoundShift) {
+        const bool Signed = *Kind == Instruction::RoundShiftSignedVector ||
+                            *Kind == Instruction::RoundShiftSignedImmediate;
+        const auto Shifted =
+            S.binary(Signed ? NdOp::INT_ASHR : NdOp::INT_RIGHT, A, Count);
+        // Mask before shifting: count zero must never evaluate a negative or
+        // full-width shift, even if a later select discards the result.
+        const auto Previous = S.binary(
+            NdOp::INT_AND, S.binary(NdOp::INT_SUB, Count, NdVar::cst(1, Bytes)),
+            Limit);
+        const auto Round =
+            S.binary(NdOp::INT_AND, S.binary(NdOp::INT_RIGHT, A, Previous),
+                     NdVar::cst(1, Bytes));
+        const auto Nonzero =
+            S.binary(NdOp::INT_NOTEQUAL, Count, NdVar::cst(0, Bytes), 1);
+        Values[I] =
+            S.binary(NdOp::INT_ADD, Shifted,
+                     S.binary(NdOp::INT_MULT, Round, S.resize(Nonzero, Bytes)));
+      } else {
+        const bool Left = *Kind == Instruction::InsertLeftVector ||
+                          *Kind == Instruction::InsertLeftImmediate;
+        const auto Complement = S.binary(NdOp::INT_SUB, Limit, Count);
+        const auto Mask = S.binary(Left ? NdOp::INT_LEFT : NdOp::INT_RIGHT,
+                                   NdVar::cst(UINT64_MAX, Bytes), Complement);
+        const auto Inverse = S.makeTemp(Bytes);
+        S.emit(NdOp::INT_NOT, Inverse, {Mask});
+        Values[I] =
+            S.binary(NdOp::INT_OR, S.binary(NdOp::INT_AND, A, Mask),
+                     S.binary(NdOp::INT_AND, Lane(WD, I, Bytes), Inverse));
+      }
     } else if (Shift || Bit) {
       const auto A = Lane(WS, I, Bytes);
       const auto Count = ImmediateBit

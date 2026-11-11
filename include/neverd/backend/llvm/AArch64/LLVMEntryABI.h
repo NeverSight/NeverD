@@ -12,8 +12,11 @@
 
 #include "llvm/Support/Error.h"
 
+#include <cstdint>
+
 namespace llvm {
 class Function;
+class Value;
 }
 
 namespace neverd {
@@ -29,6 +32,9 @@ struct MedFunc;
 /// Failure leaves the function and module unchanged.
 llvm::Expected<llvm::Function *>
 reconstructDarwinAArch64Entry(llvm::Function &Body, const MedFunc &Source);
+/// Read a Darwin ABI register with a physical live-in, or return null for
+/// other offsets. The caller first resolves ordinary parameters and local defs.
+llvm::Value *readDarwinAArch64EntryRegister(llvm::Function &F, uint64_t Offset);
 } // namespace neverd
 
 #endif // NEVERD_BACKEND_LLVM_AARCH64_LLVMENTRYABI_H
