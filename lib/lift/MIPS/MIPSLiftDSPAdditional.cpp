@@ -340,11 +340,17 @@ bool MIPSLifter::liftDSPAdditional(State &S, uint32_t Word) const {
     const auto Size =
         S.binary(NdOp::INT_AND, S.binary(NdOp::INT_RIGHT, C, NdVar::cst(7, 4)),
                  NdVar::cst(63, 4));
-    const auto Invalid = S.binary(
+    auto Invalid = S.binary(
         NdOp::BOOL_OR, S.binary(NdOp::INT_EQUAL, Size, NdVar::cst(0, 4), 1),
         S.binary(NdOp::INT_LESS, NdVar::cst(32, 4),
                  S.binary(NdOp::INT_ADD, Pos, Size), 1),
         1);
+    if (S.Width == 8)
+      for (unsigned R : {RS, RT}) {
+        const auto NotWord = S.binary(NdOp::INT_NOTEQUAL, S.read(R),
+                                      S.resize(S.read(R, 4), 8, true), 1);
+        Invalid = S.binary(NdOp::BOOL_OR, Invalid, NotWord, 1);
+      }
     const auto Last = S.binary(NdOp::INT_AND,
                                S.binary(NdOp::INT_SUB, NdVar::cst(32, 4), Size),
                                NdVar::cst(31, 4));

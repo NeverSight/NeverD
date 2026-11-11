@@ -129,6 +129,28 @@ TEST_P(MIPSDSPRegisterWidth, IndexedDoublewordUsesTheEntireEffectiveAddress) {
   EXPECT_EQ(Load->Output.Size, 8);
 }
 
+TEST_P(MIPSDSPRegisterWidth, InsertValidatesBothWordInputsOnN64) {
+  auto Image = dspImage(GetParam());
+  const bool Wide = isMIPS64(GetParam());
+  Image.Bits = Wide ? Bitness::Bits64 : Bitness::Bits32;
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  for (const auto &Bad : {mipsreg::Zero, mipsreg::A0, mipsreg::A1}) {
+    NdOpEmulator E(Image);
+    E.setStrictMode(true);
+    E.setRegister(mipsreg::A0, Bad == mipsreg::A0 ? 0x8000000000000007ull : 7);
+    E.setRegister(mipsreg::A1,
+                  Bad == mipsreg::A1 ? 0x8000000000000050ull : 0x50);
+    E.setRegister(mipsreg::DSPControl, 4u << 7);
+    ASSERT_TRUE(executeDSP(D, GetParam(), 0x7c85000c, E));
+    if (Wide && Bad != mipsreg::Zero)
+      EXPECT_FALSE(E.getRegister(mipsreg::A1));
+    else
+      EXPECT_EQ(E.getRegister(mipsreg::A1), 0x57u);
+    EXPECT_EQ(E.getRegister(mipsreg::DSPControl), 4u << 7);
+  }
+}
+
 TEST_P(MIPSDSPRegisterWidth, RevisionTwoMatchesEveryIndependentMachineRecord) {
   struct Record {
     const char *Mnemonic;

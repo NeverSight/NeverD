@@ -37,7 +37,9 @@ public:
                         std::vector<LowOp> &Ops) const;
   uint32_t word(const cs_insn &Instruction) const;
   // Native instruction identities follow the public Capstone MIPS range.
-  static constexpr unsigned IndexedLoadDoublewordID = MIPS_INS_ENDING + 1;
+#define NEVERD_MIPS_PHYSICAL_FORM(Name, Offset, Text)                          \
+  static constexpr unsigned Name##ID = MIPS_INS_ENDING + Offset;
+#include "neverd/lift/MIPS/MIPSPhysicalForms.def"
   bool isDSPIndexedDoubleword(uint32_t Word) const;
   std::optional<uint32_t> microASEWord(uint32_t PhysicalWord) const;
   static bool hasDelaySlot(uint32_t Word);

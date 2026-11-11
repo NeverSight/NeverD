@@ -166,7 +166,19 @@ TEST_P(MIPSRelease6,
   Ops.clear();
   Decode.liftUnitToLow(Unit, Ops);
   EXPECT_EQ(Ops.back().Opcode, NdOp::RETURN);
-  ASSERT_EQ(decode(0x04100000, PC), 8); // NAL, link only
+  uint8_t NAL[4];
+  llvm::support::endian::write32(NAL, 0x0410ffff,
+                                 archLittleEndian(GetParam())
+                                     ? llvm::endianness::little
+                                     : llvm::endianness::big);
+  DecodedInsn Physical{};
+  ASSERT_EQ(Decode.decodeOne(NAL, sizeof(NAL), PC, Physical), 4);
+  EXPECT_STREQ(Physical.Raw->mnemonic, "nal");
+  EXPECT_STREQ(Physical.Raw->op_str, "");
+  ASSERT_NE(Physical.Raw->detail, nullptr);
+  EXPECT_EQ(Physical.Raw->detail->mips.op_count, 0);
+  EXPECT_EQ(Physical.Raw->detail->regs_write[0], MIPS_REG_RA);
+  ASSERT_EQ(decode(0x0410ffff, PC), 8); // NAL ignores the physical offset.
   EXPECT_TRUE(Unit.HasDelaySlot);
   Ops.clear();
   Decode.liftUnitToLow(Unit, Ops);

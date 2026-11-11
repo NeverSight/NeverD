@@ -14,10 +14,6 @@
 
 namespace neverd::mips {
 
-#define NEVERD_MIPS_DSP_MNEMONIC(Name, Text)                                   \
-  inline constexpr char Name[] = Text;
-#include "neverd/ir/intrinsics/MIPS/MIPSDSP.def"
-
 enum class DSPInstruction {
 #define NEVERD_MIPS_DSP_INSTRUCTION(Name, Mask, Value) Name,
 #include "neverd/ir/intrinsics/MIPS/MIPSDSP.def"

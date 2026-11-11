@@ -6,18 +6,43 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/decode/Decoder.h"
-#include "neverd/ir/intrinsics/MIPS/MIPSDSP.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include <algorithm>
 
 namespace neverd {
+namespace {
+#define NEVERD_MIPS_PHYSICAL_FORM(Name, Offset, Text)                          \
+  constexpr char Name##Mnemonic[] = Text;
+#include "neverd/lift/MIPS/MIPSPhysicalForms.def"
+} // namespace
 
 bool Decoder::decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr) {
   if (Len < 4)
     return false;
   const bool Little = archLittleEndian(TargetArch);
+  if (MIPSISARevision == 6 &&
+      (readTargetEndian<uint32_t>(Bytes, Little) >> 16) == 0x0410) {
+    // NAL ignores its encoded offset and writes PC+8 before its delay slot.
+    // Capstone does not expose this Release 6 encoding in either GPR width.
+    cs_detail *D = InsnBuf->detail;
+    *InsnBuf = {};
+    InsnBuf->detail = D;
+    InsnBuf->id = MIPSLifter::NoOpAndLinkID;
+    InsnBuf->address = Addr;
+    InsnBuf->size = 4;
+    std::copy_n(Bytes, 4, InsnBuf->bytes);
+    if (Text)
+      std::copy_n(NoOpAndLinkMnemonic, sizeof(NoOpAndLinkMnemonic),
+                  InsnBuf->mnemonic);
+    if (Detail) {
+      *D = {};
+      D->regs_read[D->regs_read_count++] = MIPS_REG_PC;
+      D->regs_write[D->regs_write_count++] = MIPS_REG_RA;
+    }
+    return true;
+  }
   if (isMIPS64(TargetArch)) {
     const auto Physical = readTargetEndian<uint32_t>(Bytes, Little);
     if (!MIPS->isDSPIndexedDoubleword(Physical))
@@ -36,9 +61,8 @@ bool Decoder::decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr) {
       return false;
     InsnBuf->id = MIPSLifter::IndexedLoadDoublewordID;
     if (Text)
-      std::copy_n(mips::IndexedLoadDoublewordMnemonic,
-                  sizeof(mips::IndexedLoadDoublewordMnemonic),
-                  InsnBuf->mnemonic);
+      std::copy_n(IndexedLoadDoublewordMnemonic,
+                  sizeof(IndexedLoadDoublewordMnemonic), InsnBuf->mnemonic);
     std::copy_n(Bytes, 4, InsnBuf->bytes);
     return true;
   }
