@@ -160,7 +160,9 @@ The 46 revision-two instructions cover packed halving add/subtract, wrapping and
 saturating halfword arithmetic, fractional multiplication, byte comparisons with
 both GPR and DSPControl results, shifts, packing/alignment and cross-lane dot
 products in all four accumulators. Discarding a GPR destination preserves sticky
-flags and the specified AC0 clobbers. BALIGN positions 0 and 2 produce an
+flags and the specified AC0 clobbers. The 74Kf reference exercises all three
+CMPGDU predicates with zero, ordinary and aliased destinations, including the
+DSP-disabled exception. BALIGN positions 0 and 2 produce an
 unpredictable destination. The classic DSP profile also includes indexed
 loads, INSV, accumulator shifts, banked multiply/accumulate, CMP.PH, MTHLIP
 and BPOSGE32. For CMP.PH only the two low condition bits are specified.
@@ -534,7 +536,10 @@ Q-format multiply/add/subtract with optional rounding. DIV/MOD observe the
 issuing CPU's result for a zero divisor lane. Concrete portable evaluation
 covers defined inputs, and original-target source uses the MSA instruction.
 LD/ST use signed element-scaled offsets, allow unaligned addresses, and
-preserve target byte order within each element. LDI, MOVE.V, scalar element
+preserve target byte order within each element. Each LowIR memory operation
+accesses a complete element. Both C views use byte-aligned scalar aliases
+for ordinary RAM in an MSA image so the target compiler can generate legal
+loads and stores at odd addresses. LDI, MOVE.V, scalar element
 moves and the immediate mask operations share the vector register bank.
 BZ/BNZ test their predicate before the delay slot. The element forms test
 for any zero or all nonzero lanes, while .V tests the whole register.

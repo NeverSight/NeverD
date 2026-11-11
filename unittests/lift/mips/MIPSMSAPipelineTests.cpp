@@ -54,7 +54,8 @@ mips_test::ELFBytes msaFile(Arch Target, llvm::ArrayRef<uint32_t> Words) {
   return File;
 }
 
-void checkMSALeafSource(llvm::ArrayRef<uint32_t> Words, bool HasDivision) {
+void checkMSALeafSource(llvm::ArrayRef<uint32_t> Words, bool HasDivision,
+                        llvm::StringRef RequiredText = {}) {
   for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL})
     for (bool LLVM : {false, true}) {
       auto File = msaFile(Target, Words);
@@ -97,6 +98,8 @@ void checkMSALeafSource(llvm::ArrayRef<uint32_t> Words, bool HasDivision) {
         ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Stream, Emit));
       }
       EXPECT_EQ(Text.find("fdiv.w") != std::string::npos, HasDivision) << Text;
+      if (!RequiredText.empty())
+        EXPECT_TRUE(llvm::StringRef(Text).contains(RequiredText)) << Text;
       EXPECT_NE(Text.find("msa_leaf"), std::string::npos) << Text;
       EXPECT_EQ(Text.find(mips::NoMSACBegin) != std::string::npos,
                 Target == Arch::MIPS32)
@@ -117,6 +120,12 @@ TEST(MIPSMSAPipeline,
   // FILL.W w0,a0 / FILL.W w1,a1 / FDIV.W w2,w0,w1 / v0=7 / JR ra.
   checkMSALeafSource(
       {0x7b02201e, 0x7b02285e, 0x78c1009b, 0x24020007, 0x03e00008, 0}, true);
+}
+
+TEST(MIPSMSAPipeline, UnalignedVectorLoadKeepsByteAlignmentInBothCViews) {
+  // ADDIU a0,a0,1 / LD.W w2,0(a0) / COPY_S.W v0,w2[0] / JR ra.
+  checkMSALeafSource({0x24840001, 0x780020a2, 0x78b01099, 0x03e00008, 0}, false,
+                     "aligned(1), may_alias");
 }
 
 TEST(MIPSMSAPipeline, MissingImageCannotBypassVectorAndReturnQualification) {

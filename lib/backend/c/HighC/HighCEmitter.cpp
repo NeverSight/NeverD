@@ -5163,6 +5163,7 @@ void HighCWriter::writeX64WindowsSyscallHelper() {
 }
 
 void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
+  c_memory::applyMIPSVectorAlignment(Opts, Opts.Image);
   // The unit spells the records it declares no typedef of, as a function or
   // an object has the name, by their tags.
   const auto TagKeyword = [this](llvm::StringRef Name) {
