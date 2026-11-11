@@ -23769,6 +23769,14 @@ python3 unittests/lift/mips/ase-roundtrip.py --group msa \
   --output build-mips/roundtrip-msa-ase
 ```
 
+For the complete encoding check, build `neverd-mips-bench` and run
+`python3 unittests/lift/mips/ase-encoding-coverage.py --bench build-mips/bin/neverd-mips-bench`
+with `llvm-mc` and `llvm-objcopy` on the path. The fixture covers 113 classic
+DSP and 46 DSPR2 forms and 526 MIPS32 MSA mnemonic/format combinations.
+It checks distinct physical encodings and compares both byte orders. Its
+assembler objects and raw binaries are removed on exit. The execution tests
+above check register, memory and control effects for individual operations.
+
 Ordinary pair padding, predecessor memory barriers,
 single-sided barriers at joins, depth/work exhaustion and non-entry analysis
 roots or exceptional/disconnected paths have separate call-recovery regressions.
