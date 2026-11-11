@@ -1271,6 +1271,8 @@ En un producto ancho se conserva el coeficiente variable completo cuando se cono
 
 En un producto de sumas de una constante y un término variable, si los dos menores recuentos de ceros finales garantizados suman al menos el ancho observado, todos los términos cruzados se anulan. Los productos de prefijos y sufijos dan entonces los coeficientes restantes sin dividir.
 
+Si quedan términos cruzados, solo se agrupan los factores cuya perturbación tiene al menos la mitad del ancho observado (redondeada hacia arriba) de bits bajos a cero. Los demás factores multiplican el resultado completo y conservan todas las interacciones observables. Los coeficientes iguales u opuestos se pueden sacar como factor común.
+
 El texto se genera mediante un recorrido iterativo en postorden, sin ordenar nodos, y las hojas se imprimen directamente. Si la clasificación existente no requiere entradas ocultas, entradas para máscaras literales ni reescritura de complementos aritméticos, la abstracción MBA reutiliza el DAG original. La verificación independiente de identidades y la contabilidad del trabajo permanecen intactas.
 
 Los desplazamientos y factores literales de una base afín ya opaca construyen directamente los coeficientes, sin un árbol temporal de trabajo. Los hijos lineales mantienen el recorrido general; el almacenamiento y las operaciones de palabra se contabilizan antes de publicar una relación completa.

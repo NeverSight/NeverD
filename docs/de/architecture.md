@@ -1272,6 +1272,8 @@ Bei breiten Produkten bleibt ein variabler Koeffizient mit garantierten nachgest
 
 Bei Produkten aus Konstanten und additiven Störtermen verschwinden alle gemischten Terme, wenn die beiden kleinsten garantierten Anzahlen nachgestellter Nullbits zusammen die beobachtete Breite erreichen. Präfix- und Suffixprodukte liefern dann die verbleibenden Koeffizienten ohne Division.
 
+Bleiben Kreuzterme erhalten, werden nur Faktoren zusammengefasst, deren Störterm mindestens die Hälfte der beobachteten Bitbreite (aufgerundet) an niederwertigen Nullbits besitzt. Die übrigen Faktoren multiplizieren das gesamte Ergebnis und erhalten damit alle beobachtbaren Wechselwirkungen. Gleiche oder entgegengesetzte Koeffizienten lassen sich ausklammern.
+
 Die Ausgabe verwendet eine iterative Nachordnung ohne Knotensortierung und gibt Blätter direkt aus. Verlangt die bestehende Klassifikation weder verborgene Eingaben noch Träger für literale Masken oder eine Umschreibung arithmetischer Komplemente, verwendet die MBA-Abstraktion den ursprünglichen DAG wieder. Unabhängige Identitätsprüfung und Arbeitsabrechnung bleiben unverändert.
 
 Literale Offsets und Faktoren einer bereits opaken affinen Basis erzeugen das Koeffizientenergebnis direkt, ohne temporären Arbeitsbaum. Lineare Kinder behalten den allgemeinen Durchlauf; Ergebnisspeicher und Wortoperationen werden vor Veröffentlichung einer vollständigen Relation berechnet.

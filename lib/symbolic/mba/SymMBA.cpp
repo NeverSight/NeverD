@@ -2470,6 +2470,13 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
     if (doesNotGrow(Ctx, Finished, Out))
       Out = Finished;
   }
+  if (Prepared != EarlyTail && !Budget.exhausted()) {
+    SolveReport Parity;
+    Out =
+        foldResidueParitySum(Ctx, Out, Opts, Budget, RefinementStorage, Parity);
+    Result.NumAtoms = std::max(Result.NumAtoms, Parity.NumAtoms);
+    Skipped |= Parity.BudgetExhausted;
+  }
   Result.Work = Budget.used() - WorkStart;
 
   // A locally shorter child can make the composed spelling longer. Retain

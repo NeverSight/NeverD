@@ -422,6 +422,125 @@ TEST(SymMBAResidue, ProvesHighPerturbationsAtFullWidth) {
   EXPECT_EQ(Verifier(Ctx, Input, Output), SynthVerification::Equivalent);
 }
 
+TEST(SymMBAResidue, PreservesAllCrossTermsOfTheRemainingLowFactors) {
+  std::mt19937_64 Random(731);
+  for (unsigned Width : {5u, 9u, 65u, 129u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const auto U = Ctx.mkXor(X, Y), V = Ctx.mkOr(X, Y);
+    const auto Zero = llvm::APInt(Width, 0);
+    const unsigned Lost = Width / 4;
+    const auto Scale = llvm::APInt(Width, 3).shl(Lost);
+    const unsigned Shift = (Width - Lost + 1) / 2;
+    const auto High = llvm::APInt(Width, 1).shl(Shift);
+    const auto Mask = -High;
+    auto Offset = [&](unsigned C, SymRef D) {
+      return Ctx.mkAdd(Ctx.mkConst(Width, C), D);
+    };
+    // The bare word and both low perturbations are correlated with the high
+    // subset. Moving the scale into each low multiplier would be incorrect.
+    const auto Input = Ctx.mkMul(
+        {V, Offset(1, X), Offset(3, Ctx.mkMul(Ctx.mkConst(Width, 2), Y)),
+         Offset(2, Ctx.mkMul(Ctx.mkConst(High), Ctx.mkNot(U))),
+         Offset(3, Ctx.mkAnd(Ctx.mkConst(Mask), V)),
+         Offset(5, Ctx.mkMul(Ctx.mkConst(-High), U)),
+         Offset(7, Ctx.mkMul(Ctx.mkConst(High * 3), V)), Ctx.mkConst(Scale)});
+    detail::WorkBudget Budget(65536);
+    size_t Storage = 1 << 20;
+    const auto Output =
+        detail::foldProductResidues(Ctx, Input, Budget, Storage);
+    ASSERT_LT(Ctx.readabilityCost(Output), Ctx.readabilityCost(Input));
+    EXPECT_LT(Budget.used(), 8192u);
+    SymEvalPlan Plan(Ctx, Output);
+    auto Check = [&](const llvm::APInt &A, const llvm::APInt &B) {
+      const auto Uv = A ^ B, Vv = A | B;
+      const auto Expected = Scale * Vv * (A + 1) * (B * 2 + 3) *
+                            ((~Uv) * High + 2) * ((Mask & Vv) + 3) *
+                            (5 - High * Uv) * (High * 3 * Vv + 7);
+      EXPECT_EQ(Plan.eval({A, B}), Expected);
+    };
+    if (Width == 5) {
+      for (unsigned A = 0; A < 32; ++A)
+        for (unsigned B = 0; B < 32; ++B)
+          Check(llvm::APInt(Width, A), llvm::APInt(Width, B));
+    } else {
+      auto Word = [&] {
+        auto V = Zero;
+        for (unsigned Bit = 0; Bit < Width; Bit += 64)
+          V |= llvm::APInt(Width, Random(), false, true).shl(Bit);
+        return V;
+      };
+      for (unsigned I = 0; I < 64; ++I)
+        Check(Word(), Word());
+    }
+    for (auto [Work, Bytes] :
+         {std::pair<size_t, size_t>{2, 1 << 20}, {65536, 1}}) {
+      detail::WorkBudget Short(Work);
+      EXPECT_EQ(detail::foldProductResidues(Ctx, Input, Short, Bytes), Input);
+      EXPECT_LE(Short.used(), Work);
+    }
+  }
+}
+
+TEST(SymMBAResidue, ProvesAMixedSubsetWithEvenAndNegativeCoefficients) {
+  if (!solver::proofBackendAvailable(solver::ProofBackend::Z3))
+    GTEST_SKIP() << "Z3 unavailable";
+  for (const unsigned Width : {16u, 65u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    auto Offset = [&](unsigned C, int K, SymRef Word) {
+      return Ctx.mkAdd(
+          Ctx.mkConst(Width, C),
+          Ctx.mkMul(Ctx.mkConst(llvm::APInt(Width, K, true)), Word));
+    };
+    const auto Xor = Ctx.mkXor(X, Y);
+    const auto Input = Ctx.mkMul(
+        {Ctx.mkConst(llvm::APInt(Width, 3).shl(Width - 6)), Offset(3, 1, X),
+         Offset(5, 2, Y), Offset(2, -24, Ctx.mkNot(Xor)), Offset(5, 8, X),
+         Offset(7, 40, Y), Offset(9, -8, Xor)});
+    detail::WorkBudget Budget(65536);
+    size_t Storage = 1 << 20;
+    const auto Output =
+        detail::foldProductResidues(Ctx, Input, Budget, Storage);
+    ASSERT_LT(Ctx.readabilityCost(Output), Ctx.readabilityCost(Input));
+    solver::SymSynthVerifier Verify({}, solver::ProofBackend::Z3, 5000);
+    EXPECT_EQ(Verify(Ctx, Input, Output), SynthVerification::Equivalent);
+  }
+}
+
+TEST(SymMBAResidue, AbsorbsAnExactParityCorrectionIntoAnAdjacentSum) {
+  for (const unsigned Width : {8u, 65u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const auto Z = Ctx.mkVar("z", Width), W = Ctx.mkVar("w", Width);
+    const auto Kernel = Ctx.mkXor({X, Ctx.mkAnd(Y, Z), Ctx.mkOr(Z, W)});
+    const auto High = llvm::APInt::getSignMask(Width);
+    auto Make = [&](const llvm::APInt &Scale) {
+      return Ctx.mkAdd({X, Y, Ctx.mkConst(Width, 19),
+                        Ctx.mkMul(Ctx.mkConst(Scale), Kernel)});
+    };
+    const auto Input = Make(High);
+    MBAOptions Options;
+    Options.VerifySamples = 0;
+    detail::WorkBudget Budget(65536);
+    detail::SolveReport Report;
+    const auto Out = detail::foldResidueParitySum(Ctx, Input, Options, Budget,
+                                                  1 << 20, Report);
+    ASSERT_LT(Ctx.readabilityCost(Out), Ctx.readabilityCost(Input));
+    const auto Neighbor = Make(High.lshr(1));
+    EXPECT_EQ(detail::foldResidueParitySum(Ctx, Neighbor, Options, Budget,
+                                           1 << 20, Report),
+              Neighbor);
+    if (solver::proofBackendAvailable(solver::ProofBackend::Z3)) {
+      solver::SymSynthVerifier Verify({}, solver::ProofBackend::Z3, 5000);
+      EXPECT_EQ(Verify(Ctx, Input, Out), SynthVerification::Equivalent);
+    }
+  }
+}
+
 TEST(SymMBAResidue, HasIndependentFullWidthSMTProofs) {
   if (!solver::proofBackendAvailable(solver::ProofBackend::Z3))
     GTEST_SKIP() << "Z3 unavailable";

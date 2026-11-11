@@ -1278,6 +1278,8 @@ Pour un produit large, le coefficient variable dont les bits de poids faible son
 
 Dans un produit de sommes d’une constante et d’un terme variable, si la somme des deux plus petits nombres garantis de zéros de poids faible atteint la largeur observée, tous les termes croisés s’annulent. Les produits préfixes et suffixes donnent alors les coefficients restants sans division.
 
+Lorsque certains produits croisés subsistent, seuls les facteurs dont la perturbation a au moins la moitié de la largeur observée en bits de poids faible nuls (arrondie au supérieur) sont regroupés. Les autres facteurs multiplient tout le résultat, ce qui conserve les interactions observables. Les coefficients égaux ou opposés peuvent être mis en facteur.
+
 Le rendu suit un parcours postfixe itératif, sans tri des nœuds, et traite directement les feuilles. Lorsque la classification existante ne demande ni entrée cachée, ni entrée représentant un masque littéral, ni réécriture d’un complément arithmétique, l’abstraction MBA réutilise le DAG original. La vérification indépendante des identités et la comptabilisation du travail restent inchangées.
 
 Les décalages et facteurs littéraux d’une base affine déjà opaque construisent directement le résultat des coefficients, sans arbre temporaire. Les enfants linéaires conservent le parcours général ; le stockage du résultat et les opérations sur mots sont comptabilisés avant la publication d’une relation complète.

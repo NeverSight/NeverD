@@ -587,6 +587,24 @@ TEST(SymParse, PairedPrintingRetainsBothRootsAndTheirAmbientWidths) {
     }
 }
 
+TEST(SymParse, PairedPrintingPreservesSharedFragmentsAcrossDenseAndSparseIDs) {
+  for (const unsigned Padding : {0u, 2048u}) {
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", 32), Y = Ctx.mkVar("y", 32);
+    for (unsigned I = 0; I < Padding; ++I)
+      Ctx.mkConst(32, 4096 + I);
+    auto Shared = X;
+    for (unsigned I = 1; I <= 64; ++I)
+      Shared = Ctx.mkXor(Ctx.mkAdd(Shared, Ctx.mkConst(32, I)), Y);
+    const auto Outer = Ctx.mkAnd(Shared, Ctx.mkAdd(X, Y));
+    for (auto [A, B] : {std::pair{Outer, Shared}, std::pair{Shared, Outer}}) {
+      const auto [Left, Right] = printSymExprPair(Ctx, A, B);
+      EXPECT_EQ(parseSymExpr(Ctx, Left, 32).Root, A);
+      EXPECT_EQ(parseSymExpr(Ctx, Right, 32).Root, B);
+    }
+  }
+}
+
 TEST(SymParse, RandomExpressionsSurviveTheRoundTrip) {
   for (uint32_t Width : {1u, 8u, 32u, 64u, 256u}) {
     SymContext Ctx;
