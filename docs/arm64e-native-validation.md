@@ -491,7 +491,10 @@ unchanged; source-fork-only producer features still require the source build.
 The ordinary segment patch pipeline can publish a classic macOS arm64e image
 whose entire instruction section consists of verified frameless leaf functions.
 It matches lifted definitions to original entries, then checks the relocated
-machine instructions and compact unwind coverage for every body. The original
+machine instructions and compact unwind coverage for every body. Different
+encodings are accepted for one instruction family: an unshifted MOVZ with
+immediate zero and a move from the zero register can both clear the same
+GPR. Both W and X forms write all 64 destination bits and preserve NZCV. The original
 entries forward to the emitted RX addresses. The private native emission uses
 the classic ABI version. The input IR retains its analysis marker.
 
@@ -529,6 +532,14 @@ Each caller checked both entries for 25 ordered argument pairs. The
 [evidence record](evidence/arm64e-lifted-leaves-2026-11-11.json) identifies the
 source-bound Release host, local LLVM fork, original and published image hashes,
 and the runner artifacts.
+
+The two Darwin executable tests take the host's `/usr/bin/true` and
+`/usr/bin/false` as inputs. Each test extracts its arm64e slice, removes the
+platform signature from a temporary copy, then publishes it through the
+ordinary patch pipeline. Apple codesign signs the baseline and published
+copies explicitly. The tests verify both signatures and the new owner of
+the main entry. With `NEVERD_ARM64E_LIFTED_NATIVE=1` they also require the
+two original and two published processes to return their expected exit codes.
 
 ## Interrupted return-address signing
 

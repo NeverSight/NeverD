@@ -58,6 +58,21 @@ bool leafRegister(aarch64_reg R, bool ReadOnly) {
          R == AARCH64_REG_WZR;
 }
 
+// MOVZ Wd/Xd, #0 and ORR Wd/Xd, ZR, ZR both clear the full destination
+// register and preserve NZCV. The mask ignores only the width and Rd bits.
+bool equivalentLeafWord(uint32_t Original, uint32_t Emitted) {
+  if (Original == Emitted)
+    return true;
+  const uint32_t Rd = Original & kDestinationMask;
+  if (Rd == kDestinationMask || Rd != (Emitted & kDestinationMask))
+    return false;
+  const auto ClearsGPR = [](uint32_t Word) {
+    const uint32_t Operation = Word & kZeroOperationMask;
+    return Operation == kMoveWideZero || Operation == kMoveFromZero;
+  };
+  return ClearsGPR(Original) && ClearsGPR(Emitted);
+}
+
 bool isPositionIndependentLeafInstruction(const DecodedInsn &I) {
   const auto &Detail = I.Raw->detail->aarch64;
   switch (I.Id) {
@@ -149,12 +164,14 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
     const auto Emitted =
         llvm::ArrayRef(Generated.Bytes)
             .slice(Code->Offset + Owner->second - Code->VA, End - Start);
-    if (Source != Emitted || Source.empty() ||
-        Source.size() % aarch64::kInsnSize)
+    if (Source.empty() || Source.size() % aarch64::kInsnSize)
       return refuse(kLeafCode);
     bool Signed = false;
     for (size_t Offset = 0; Offset < Source.size();
          Offset += aarch64::kInsnSize) {
+      if (!equivalentLeafWord(readLE<uint32_t>(Source.data() + Offset),
+                              readLE<uint32_t>(Emitted.data() + Offset)))
+        return refuse(kLeafCode);
       DecodedInsn Insn{};
       if (Decode.decodeOne(Source.data() + Offset, aarch64::kInsnSize,
                            Start + Offset, Insn) != aarch64::kInsnSize ||

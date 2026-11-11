@@ -18,9 +18,11 @@
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/BinaryFormat/Magic.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/SHA256.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -156,8 +158,104 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
 #endif
 }
 
+// Exercise a copy of the host's own executable. The original platform
+// signature belongs to Apple; the unsigned input and the separately signed
+// test results live only in this test directory.
+void verifyPublishedDarwinExecutable(const char *SystemPath, int ExitCode) {
+#if defined(__APPLE__) && defined(__aarch64__)
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kTemporary, Directory));
+  const std::filesystem::path Root(Directory.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Slice = (Root / kDarwinSlice).string();
+  const auto Input = (Root / kUnsignedInput).string();
+  const auto Output = (Root / kDarwinOutput).string();
+  auto System = llvm::MemoryBuffer::getFile(SystemPath);
+  ASSERT_TRUE(bool(System));
+  if (llvm::identify_magic((*System)->getBuffer()) ==
+      llvm::file_magic::macho_universal_binary)
+    ASSERT_EQ(
+        llvm::sys::ExecuteAndWait(kLipo, {kLipo, SystemPath, kThinOption,
+                                          kDarwinArch, kLipoOutput, Slice}),
+        0);
+  else
+    ASSERT_TRUE(std::filesystem::copy_file(SystemPath, Slice));
+  auto Reader = Loader::create(BinaryFormat::MachO);
+  auto Platform = Reader->load(Slice);
+  ASSERT_TRUE(bool(Platform)) << llvm::toString(Platform.takeError());
+  ASSERT_TRUE(Platform->isArm64e());
+  ASSERT_TRUE(std::filesystem::copy_file(Slice, Input));
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(kCodesign,
+                                      {kCodesign, kRemoveSignature, Input}),
+            0);
+  auto Image = Reader->load(Input);
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  llvm::LLVMContext Context;
+  PipelineOptions Options;
+  Options.PatchMode = true;
+  Options.EmitDumpOutput = false;
+  auto Lifted = Pipeline().run(*Image, Context, Options);
+  ASSERT_TRUE(Lifted.Success) << Lifted.Error;
+  ASSERT_TRUE(Lifted.LlvmModule);
+  MachOPatcher Patcher;
+  Patcher.setImageContext(&*Image);
+  auto Installed =
+      Patcher.patch(Input, Output, *Lifted.LlvmModule, Image->Arch);
+  ASSERT_TRUE(Installed.Success);
+  ASSERT_EQ(Installed.PatchedFunctions.size(), 1u);
+  const auto &Entry = Installed.PatchedFunctions.front();
+  ASSERT_EQ(Entry.OriginalVA, Platform->Entry);
+  ASSERT_NE(Entry.OwnerVA, Entry.OriginalVA);
+  auto Unchanged = Reader->load(Input);
+  ASSERT_TRUE(bool(Unchanged)) << llvm::toString(Unchanged.takeError());
+  ASSERT_EQ(Unchanged->Raw, Image->Raw);
+  testing::Test::RecordProperty(
+      kPlatformHash, llvm::toHex(llvm::SHA256::hash(Platform->Raw), true));
+  testing::Test::RecordProperty(
+      kUnsignedHash, llvm::toHex(llvm::SHA256::hash(Image->Raw), true));
+  testing::Test::RecordProperty(kEntryVA, std::to_string(Entry.OriginalVA));
+  testing::Test::RecordProperty(kOwnerVA, std::to_string(Entry.OwnerVA));
+  for (const auto &Path : {Input, Output}) {
+    ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                  kCodesign, {kCodesign, kSign, kAdHocIdentity, Path}),
+              0);
+    ASSERT_EQ(llvm::sys::ExecuteAndWait(kCodesign,
+                                        {kCodesign, kVerify, kStrict, Path}),
+              0);
+    auto Signed = Reader->load(Path);
+    ASSERT_TRUE(bool(Signed)) << llvm::toString(Signed.takeError());
+    testing::Test::RecordProperty(
+        Path == Input ? kOriginalHash : kPublishedHash,
+        llvm::toHex(llvm::SHA256::hash(Signed->Raw), true));
+    if (std::getenv(kExecute)) {
+      std::filesystem::permissions(Path, std::filesystem::perms::owner_exec,
+                                   std::filesystem::perm_options::add);
+      ASSERT_EQ(llvm::sys::ExecuteAndWait(Path, {Path}), ExitCode);
+    }
+  }
+  if (std::getenv(kExecute)) {
+    testing::Test::RecordProperty(kExitCode, ExitCode);
+    testing::Test::RecordProperty(kNativeImages, kCount);
+  }
+#else
+  GTEST_SKIP() << kUnavailable;
+#endif
+}
+
+TEST(AArch64DarwinExecutable, PublishesDarwinTrue) {
+  verifyPublishedDarwinExecutable(kDarwinTrue, EXIT_SUCCESS);
+}
+
+TEST(AArch64DarwinExecutable, PublishesDarwinFalse) {
+  verifyPublishedDarwinExecutable(kDarwinFalse, EXIT_FAILURE);
+}
+
 TEST(AArch64LiftedImage, VerifiedLeafBodiesUseTheNormalPatchPipeline) {
   verifyPublishedLeaves(kLeaves, kCaller);
+}
+
+TEST(AArch64LiftedImage, EquivalentWAndXZeroingPreservesTheWholeRegister) {
+  verifyPublishedLeaves(kZeroLeaves, kCaller, kAssemblyName, kZeroResults);
 }
 
 TEST(AArch64DarwinEntry, SwiftContextSurvivesNativeLeafPublication) {

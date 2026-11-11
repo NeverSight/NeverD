@@ -18,6 +18,26 @@ A64_LEAF_TEXT(kOutput, "published.dylib")
 A64_LEAF_TEXT(kRejected, "refused.dylib")
 A64_LEAF_TEXT(kDriverSource, "driver.c")
 A64_LEAF_TEXT(kDriver, "driver")
+A64_LEAF_TEXT(kDarwinTrue, "/usr/bin/true")
+A64_LEAF_TEXT(kDarwinFalse, "/usr/bin/false")
+A64_LEAF_TEXT(kDarwinSlice, "original")
+A64_LEAF_TEXT(kUnsignedInput, "unsigned-input")
+A64_LEAF_TEXT(kDarwinOutput, "installed")
+A64_LEAF_TEXT(kLipo, "/usr/bin/lipo")
+A64_LEAF_TEXT(kThinOption, "-thin")
+A64_LEAF_TEXT(kDarwinArch, "arm64e")
+A64_LEAF_TEXT(kLipoOutput, "-output")
+A64_LEAF_TEXT(kCodesign, "/usr/bin/codesign")
+A64_LEAF_TEXT(kRemoveSignature, "--remove-signature")
+A64_LEAF_TEXT(kSign, "--sign")
+A64_LEAF_TEXT(kAdHocIdentity, "-")
+A64_LEAF_TEXT(kVerify, "--verify")
+A64_LEAF_TEXT(kStrict, "--strict")
+A64_LEAF_TEXT(kPlatformHash, "system_slice_sha256")
+A64_LEAF_TEXT(kUnsignedHash, "unsigned_input_sha256")
+A64_LEAF_TEXT(kEntryVA, "original_entry")
+A64_LEAF_TEXT(kOwnerVA, "published_entry")
+A64_LEAF_TEXT(kExitCode, "native_exit_status")
 A64_LEAF_TEXT(kOriginalHash, "original_sha256")
 A64_LEAF_TEXT(kPublishedHash, "published_sha256")
 A64_LEAF_TEXT(kAuthenticatedSites, "caller_authenticated_call_sites")
@@ -59,13 +79,35 @@ int main(int argc, char **argv) {
   const unsigned long values[] = {0, 1, 17, UINT64_MAX, UINT64_C(1) << 63};
   for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i)
     for (unsigned j = 0; j != sizeof(values) / sizeof(*values); ++j)
+#ifdef NEVERD_TEST_ZERO_RESULTS
+      if (sum(values[i], values[j]) != 0 || difference(values[i], values[j]) != 0)
+#else
       if (sum(values[i], values[j]) != values[i] + values[j] ||
           difference(values[i], values[j]) != values[i] - values[j])
+#endif
         return 4;
   return dlclose(image) != 0;
 }
 )c")
 
+A64_LEAF_TEXT(kZeroLeaves, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  movz w0, #0
+  ret
+.cfi_endproc
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  movz x0, #0
+  ret
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+A64_LEAF_TEXT(kZeroResults, "#define NEVERD_TEST_ZERO_RESULTS\n")
 A64_LEAF_TEXT(kSwiftABI, R"c(
 #define SWIFT __attribute__((swiftcall))
 #define CONTEXT __attribute__((swift_context))
